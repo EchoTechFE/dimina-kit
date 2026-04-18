@@ -69,12 +69,18 @@ function getDiminaGitHash() {
 // 0. Inject devtools API files into dimina source tree
 injectFiles()
 
+// Upstream dimina/fe vite config switches `base` to '/dimina/' when
+// GITHUB_ACTIONS is set (for their GH Pages deploy). Our packaged electron
+// container serves assets at root, so force base='/' by unsetting the flag.
+const buildEnv = { ...process.env, GITHUB_ACTIONS: '' }
+
 try {
   // 1. Main container build (upstream config, unchanged)
   const mainBuild = spawnSync('pnpm', ['build'], {
     cwd: DIMINA_FE,
     stdio: 'inherit',
     shell: true,
+    env: buildEnv,
   })
 
   if (mainBuild.status !== 0) {
@@ -84,7 +90,7 @@ try {
   // 2. Browser API build (our config, appends into same dist/)
   const apiBuild = spawnSync(
     'npx', ['vite', 'build', '--config', API_VITE_CONFIG],
-    { cwd: CONTAINER_SRC, stdio: 'inherit', shell: true },
+    { cwd: CONTAINER_SRC, stdio: 'inherit', shell: true, env: buildEnv },
   )
 
   if (apiBuild.status !== 0) {
