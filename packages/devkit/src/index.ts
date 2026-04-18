@@ -59,6 +59,7 @@ export async function openProject(opts: {
 	port?: number
 	sourcemap?: boolean
 	simulatorDir?: string
+	containerDir?: string
 	outputDir?: string
 	onRebuild?: () => void
 	onBuildError?: (err: unknown) => void
@@ -68,6 +69,7 @@ export async function openProject(opts: {
 		port = 0,
 		sourcemap = false,
 		simulatorDir,
+		containerDir: overrideContainerDir,
 		outputDir,
 		onRebuild,
 		onBuildError,
@@ -77,7 +79,7 @@ export async function openProject(opts: {
 
 	const resolvedPort = port === 0 ? await getRandomPort() : port
 
-	const containerDir = path.join(__dirname, '..', 'fe', 'dimina-fe-container')
+	const containerDir = overrideContainerDir ?? path.join(__dirname, '..', 'fe', 'dimina-fe-container')
 	const prevCwd = process.cwd()
 	const resolvedOutputDir = outputDir
 		?? path.join(os.tmpdir(), 'dimina-kit', createHash('sha1').update(projectPath).digest('hex').slice(0, 12))

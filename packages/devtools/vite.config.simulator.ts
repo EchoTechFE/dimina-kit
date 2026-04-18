@@ -20,7 +20,7 @@ function externalContainerAssets(): Plugin {
     enforce: 'pre',
     resolveId(id) {
       if (id === 'container-api') {
-        return { id: '/assets/container-api.mjs', external: true }
+        return { id: '/assets/container-api.js', external: true }
       }
       if (id.startsWith('/assets/')) {
         return { id, external: true }

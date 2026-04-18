@@ -67,14 +67,19 @@ export function useSession(props: UseSessionProps): SessionHookResult {
           return
         }
 
-        setAppInfo(result.appInfo)
-        setPort(result.port)
+        // Fetch pages + compile config BEFORE committing port/appInfo to state,
+        // so the first <webview> render already has the correct startPage. If
+        // port is set first, simulatorUrl renders with an empty startPage and
+        // falls back to the hardcoded 'pages/index/index', triggering a wasted
+        // load for a page that doesn't exist in the compiled output.
         const [pagesResult, config] = await Promise.all([
           getProjectPages(projectPath),
           getCompileConfig(projectPath),
         ])
         if (cancelled) return
 
+        setAppInfo(result.appInfo)
+        setPort(result.port)
         setPages(pagesResult.pages)
         setCompileConfig({
           startPage:
