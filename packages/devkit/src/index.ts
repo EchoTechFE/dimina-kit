@@ -14,12 +14,17 @@ const build = require('@dimina/compiler') as typeof import('@dimina/compiler').d
 // esbuild's native binary is shipped inside node_modules, but when packaged
 // via electron-builder it lives in app.asar. asarUnpack puts the real binary
 // in app.asar.unpacked — but esbuild computes its binary path from __dirname,
-// which still points inside app.asar. Redirect it explicitly.
+// which still points inside app.asar. Redirect it explicitly via require.resolve
+// so we don't hard-code the hoisting depth (pnpm vs npm layouts differ).
 if (!process.env.ESBUILD_BINARY_PATH && __dirname.includes('app.asar')) {
-	const unpackedDir = __dirname.replace(/app\.asar([\\/])/, 'app.asar.unpacked$1')
 	const platform = `${process.platform}-${process.arch}`
-	const candidate = path.join(unpackedDir, '..', '..', '@esbuild', platform, 'bin', 'esbuild')
-	process.env.ESBUILD_BINARY_PATH = candidate
+	try {
+		const resolved = require.resolve(`@esbuild/${platform}/bin/esbuild`)
+		process.env.ESBUILD_BINARY_PATH = resolved.replace(/app\.asar([\\/])/, 'app.asar.unpacked$1')
+	}
+	catch {
+		// fall through — esbuild will surface a clearer error if the binary is truly missing
+	}
 }
 
 function getRandomPort(): Promise<number> {
@@ -59,6 +64,7 @@ export async function openProject(opts: {
 	port?: number
 	sourcemap?: boolean
 	simulatorDir?: string
+	containerDir?: string
 	outputDir?: string
 	onRebuild?: () => void
 	onBuildError?: (err: unknown) => void
@@ -68,6 +74,7 @@ export async function openProject(opts: {
 		port = 0,
 		sourcemap = false,
 		simulatorDir,
+		containerDir: overrideContainerDir,
 		outputDir,
 		onRebuild,
 		onBuildError,
@@ -77,7 +84,7 @@ export async function openProject(opts: {
 
 	const resolvedPort = port === 0 ? await getRandomPort() : port
 
-	const containerDir = path.join(__dirname, '..', 'fe', 'dimina-fe-container')
+	const containerDir = overrideContainerDir ?? path.join(__dirname, '..', 'fe', 'dimina-fe-container')
 	const prevCwd = process.cwd()
 	const resolvedOutputDir = outputDir
 		?? path.join(os.tmpdir(), 'dimina-kit', createHash('sha1').update(projectPath).digest('hex').slice(0, 12))

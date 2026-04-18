@@ -126,7 +126,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "start": "electron .",
+    "start": "electron dist/main/index.js",
     "build": "pnpm build:main && pnpm build:preload && pnpm build:renderer && pnpm build:simulator",
     "build:container": "node build-container.js",
     "build:simulator": "vite build --config vite.config.simulator.ts",
@@ -136,7 +136,7 @@
     "build:main": "tsc -p tsconfig.main.json",
     "build:preload": "tsc -p tsconfig.preload.json && esbuild src/preload/windows/simulator.ts --bundle --platform=node --format=cjs --sourcemap --external:electron --outfile=dist/preload/windows/simulator.js",
     "build:renderer": "vite build",
-    "dev": "pnpm build && concurrently \"vite build --watch\" \"vite build --watch --config vite.config.simulator.ts\" \"tsc -p tsconfig.main.json --watch\" \"tsc -p tsconfig.preload.json --watch\" \"esbuild src/preload/windows/simulator.ts --bundle --platform=node --format=cjs --sourcemap --external:electron --outfile=dist/preload/windows/simulator.js --watch\" \"electron e2e/electron-entry.js\"",
+    "dev": "pnpm build && concurrently \"vite build --watch\" \"vite build --watch --config vite.config.simulator.ts\" \"tsc -p tsconfig.main.json --watch\" \"tsc -p tsconfig.preload.json --watch\" \"esbuild src/preload/windows/simulator.ts --bundle --platform=node --format=cjs --sourcemap --external:electron --outfile=dist/preload/windows/simulator.js --watch\" \"electron dist/main/index.js\"",
     "build:core": "pnpm --filter @dimina-kit/devkit build",
     "check-types": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
