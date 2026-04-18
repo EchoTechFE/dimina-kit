@@ -69,9 +69,10 @@ function getDiminaGitHash() {
 // 0. Inject devtools API files into dimina source tree
 injectFiles()
 
-// Upstream dimina/fe vite config switches `base` to '/dimina/' when
-// GITHUB_ACTIONS is set (for their GH Pages deploy). Our packaged electron
-// container serves assets at root, so force base='/' by unsetting the flag.
+// 上游 dimina/fe vite 在 GITHUB_ACTIONS 存在时把 base 改成 '/dimina/'
+// （他们自己 GH Pages demo 部署路径），会导致 CI 产物里 pageFrame.html
+// 和 BASE_URL 都被注入 /dimina/ 前缀，运行时全部 404。我们 container
+// 服务挂在根路径，必须清掉这个 env 让上游走 base='/' 分支。
 const buildEnv = { ...process.env, GITHUB_ACTIONS: '' }
 
 try {
