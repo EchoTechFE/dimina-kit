@@ -1,0 +1,3 @@
+[submodule "dimina"]
+	path = dimina
+	url = git@github.com:EchoTechFE/dimina.git

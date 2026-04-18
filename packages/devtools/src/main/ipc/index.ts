@@ -1,0 +1,8 @@
+export { registerAppIpc } from './app.js'
+export { registerSimulatorIpc } from './simulator.js'
+export { registerPanelsIpc } from './panels.js'
+export { registerPopoverIpc } from './popover.js'
+export { registerProjectsIpc } from './projects.js'
+export { registerSessionIpc } from './session.js'
+export { registerSettingsIpc } from './settings.js'
+export { registerToolbarIpc } from './toolbar.js'

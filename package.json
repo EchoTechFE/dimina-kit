@@ -1,0 +1,32 @@
+{
+  "name": "dimina-kit",
+  "private": true,
+  "description": "Dimina mini-app developer toolkit — compiler, H5 preview, and Electron DevTools.",
+  "license": "MIT",
+  "author": "EchoTechFE",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EchoTechFE/dimina-kit.git"
+  },
+  "homepage": "https://github.com/EchoTechFE/dimina-kit#readme",
+  "bugs": {
+    "url": "https://github.com/EchoTechFE/dimina-kit/issues"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "check-types": "turbo run check-types",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "dev": "turbo run dev"
+  },
+  "devDependencies": {
+    "turbo": "^2.9.6",
+    "typescript": "5.9.2"
+  },
+  "pnpm": {
+    "overrides": {
+      "minimist@<1.2.8": "^1.2.8"
+    }
+  },
+  "packageManager": "pnpm@9.0.0"
+}

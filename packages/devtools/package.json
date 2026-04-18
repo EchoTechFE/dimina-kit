@@ -1,0 +1,205 @@
+{
+  "name": "@dimina-kit/devtools",
+  "version": "0.1.0",
+  "description": "Dimina DevTools - modular developer tools for mini app debugging",
+  "keywords": [
+    "dimina",
+    "mini-app",
+    "miniprogram",
+    "devtools",
+    "electron",
+    "debugger",
+    "inspector",
+    "mcp"
+  ],
+  "license": "MIT",
+  "author": "EchoTechFE",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EchoTechFE/dimina-kit.git",
+    "directory": "packages/devtools"
+  },
+  "bugs": {
+    "url": "https://github.com/EchoTechFE/dimina-kit/issues"
+  },
+  "homepage": "https://github.com/EchoTechFE/dimina-kit/tree/main/packages/devtools#readme",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "main": "dist/main/api.js",
+  "types": "dist/main/api.d.ts",
+  "exports": {
+    ".": "./dist/main/api.js",
+    "./app": "./dist/main/app/app.js",
+    "./launch": "./dist/main/app/launch.js",
+    "./types": "./dist/shared/types.js",
+    "./context": "./dist/main/services/workbench-context.js",
+    "./view-manager": "./dist/main/services/views/view-manager.js",
+    "./create-window": "./dist/main/windows/main-window/index.js",
+    "./layout": "./dist/main/services/layout/index.js",
+    "./projects": "./dist/main/services/projects/index.js",
+    "./ipc-app": "./dist/main/ipc/app.js",
+    "./ipc-simulator": "./dist/main/ipc/simulator.js",
+    "./ipc-panels": "./dist/main/ipc/panels.js",
+    "./ipc-toolbar": "./dist/main/ipc/toolbar.js",
+    "./ipc-popover": "./dist/main/ipc/popover.js",
+    "./ipc-settings": "./dist/main/ipc/settings.js",
+    "./ipc-projects": "./dist/main/ipc/projects.js",
+    "./ipc-session": "./dist/main/ipc/session.js",
+    "./paths": "./dist/main/utils/paths.js",
+    "./workbench-settings": "./dist/main/services/settings/index.js",
+    "./preload": "./dist/preload/windows/main.js",
+    "./simulator-dir": "./dist/main/services/simulator/dir.js",
+    "./bootstrap": "./dist/main/app/bootstrap.js"
+  },
+  "typesVersions": {
+    "*": {
+      "app": [
+        "dist/main/app/app.d.ts"
+      ],
+      "launch": [
+        "dist/main/app/launch.d.ts"
+      ],
+      "types": [
+        "dist/shared/types.d.ts"
+      ],
+      "context": [
+        "dist/main/services/workbench-context.d.ts"
+      ],
+      "view-manager": [
+        "dist/main/services/views/view-manager.d.ts"
+      ],
+      "create-window": [
+        "dist/main/windows/main-window/index.d.ts"
+      ],
+      "layout": [
+        "dist/main/services/layout/index.d.ts"
+      ],
+      "projects": [
+        "dist/main/services/projects/index.d.ts"
+      ],
+      "ipc-app": [
+        "dist/main/ipc/app.d.ts"
+      ],
+      "ipc-simulator": [
+        "dist/main/ipc/simulator.d.ts"
+      ],
+      "ipc-panels": [
+        "dist/main/ipc/panels.d.ts"
+      ],
+      "ipc-toolbar": [
+        "dist/main/ipc/toolbar.d.ts"
+      ],
+      "ipc-popover": [
+        "dist/main/ipc/popover.d.ts"
+      ],
+      "ipc-settings": [
+        "dist/main/ipc/settings.d.ts"
+      ],
+      "ipc-projects": [
+        "dist/main/ipc/projects.d.ts"
+      ],
+      "ipc-session": [
+        "dist/main/ipc/session.d.ts"
+      ],
+      "paths": [
+        "dist/main/utils/paths.d.ts"
+      ],
+      "workbench-settings": [
+        "dist/main/services/settings/index.d.ts"
+      ],
+      "bootstrap": [
+        "dist/main/app/bootstrap.d.ts"
+      ],
+      "simulator-dir": [
+        "dist/main/services/simulator/dir.d.ts"
+      ],
+      "preload": [
+        "dist/preload/windows/main.d.ts"
+      ]
+    }
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "electron .",
+    "build": "pnpm build:main && pnpm build:preload && pnpm build:renderer && pnpm build:simulator",
+    "build:container": "node build-container.js",
+    "build:simulator": "vite build --config vite.config.simulator.ts",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "prepack": "pnpm run build",
+    "build:main": "tsc -p tsconfig.main.json",
+    "build:preload": "tsc -p tsconfig.preload.json && esbuild src/preload/windows/simulator.ts --bundle --platform=node --format=cjs --sourcemap --external:electron --outfile=dist/preload/windows/simulator.js",
+    "build:renderer": "vite build",
+    "dev": "pnpm build && concurrently \"vite build --watch\" \"vite build --watch --config vite.config.simulator.ts\" \"tsc -p tsconfig.main.json --watch\" \"tsc -p tsconfig.preload.json --watch\" \"esbuild src/preload/windows/simulator.ts --bundle --platform=node --format=cjs --sourcemap --external:electron --outfile=dist/preload/windows/simulator.js --watch\" \"electron e2e/electron-entry.js\"",
+    "build:core": "pnpm --filter @dimina-kit/devkit build",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run",
+    "test:dev": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@radix-ui/react-dialog": "^1.1.15",
+    "@radix-ui/react-scroll-area": "^1.2.10",
+    "@radix-ui/react-select": "^2.2.6",
+    "@radix-ui/react-separator": "^1.1.8",
+    "@radix-ui/react-switch": "^1.2.6",
+    "@radix-ui/react-tabs": "^1.1.13",
+    "@radix-ui/react-tooltip": "^1.2.8",
+    "@tanstack/react-virtual": "^3.13.24",
+    "@uiw/react-json-view": "2.0.0-alpha.41",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "chrome-remote-interface": "^0.34.0",
+    "cmdk": "^1.1.1",
+    "@dimina-kit/devkit": "workspace:*",
+    "lucide-react": "^1.8.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-resizable-panels": "^4.10.0",
+    "tailwind-merge": "^2.6.0",
+    "ws": "^8.20.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@dimina-kit/eslint-config": "workspace:*",
+    "@dimina-kit/typescript-config": "workspace:*",
+    "@playwright/test": "^1.59.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/chrome-remote-interface": "^0.33.0",
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^6.0.1",
+    "autoprefixer": "^10.5.0",
+    "concurrently": "^9.2.1",
+    "electron": "^41.2.1",
+    "electron-builder": "^26.8.1",
+    "eslint": "^10.2.1",
+    "globals": "^17.5.0",
+    "jsdom": "^29.0.2",
+    "miniprogram-automator": "^0.12.1",
+    "postcss": "^8.5.10",
+    "tailwindcss": "^3.4.17",
+    "typescript": "5.9.2",
+    "vite": "^8.0.8",
+    "esbuild": "^0.28.0",
+    "vitest": "^4.1.4"
+  },
+  "peerDependencies": {
+    "electron": ">=36"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Dimina DevTools Simulator</title>
+	<style>html, body { overflow: hidden; height: 100%; margin: 0; }</style>
+</head>
+
+<body>
+	<div id="root"></div>
+	<script>
+		// Intercept Worker creation to inject createInnerAudioContext into the
+		// service layer.  The service runs in a Web Worker so it cannot return
+		// objects synchronously through invokeAPI.  By shimming the function
+		// directly in the Worker global scope it executes in the same thread as
+		// the mini-app code and returns a proxy object that forwards operations
+		// to the container (main thread) via invokeAPI messages.
+		;(function () {
+			const _Worker = Worker
+
+			// ── SharedArrayBuffer sync invoke infrastructure ──────────────
+			// Injected BEFORE service.js so the message listener is registered
+			// early.  _syncInvoke blocks the Worker with Atomics.wait until the
+			// container writes the result into the shared buffer.
+			const SYNC_INFRA = `;(function(){
+				var _syncSAB = null;
+				self.addEventListener('message', function(e) {
+					if (e.data && e.data.type === '__sync_init__') { _syncSAB = e.data.sab; }
+				});
+				self._syncInvoke = function(name, params) {
+					if (!_syncSAB) return undefined;
+					var lock = new Int32Array(_syncSAB, 0, 1);
+					var lenArr = new Int32Array(_syncSAB, 4, 1);
+					var dataArr = new Uint8Array(_syncSAB, 8);
+					Atomics.store(lock, 0, 0);
+					self.postMessage({ method: '__sync_invoke__', body: { name: name, params: params } });
+					Atomics.wait(lock, 0, 0);
+					var len = lenArr[0];
+					var slice = dataArr.slice(0, len);
+					return JSON.parse(new TextDecoder().decode(slice));
+				};
+			})();`
+
+			// ── Patch sync APIs on wx/qd/dd after service.js loads ───────
+			const SYNC_PATCH = `;(function(){
+				function _p(ns) {
+					if (!ns) return;
+					var si = self._syncInvoke;
+					ns.getStorageSync = function(key) {
+						var r = si('getStorageSync', { key: key });
+						return r && r.data !== undefined ? r.data : '';
+					};
+					ns.setStorageSync = function(key, data) {
+						si('setStorageSync', { key: key, data: data });
+					};
+					ns.removeStorageSync = function(key) {
+						si('removeStorageSync', { key: key });
+					};
+					ns.clearStorageSync = function() {
+						si('clearStorageSync');
+					};
+					ns.getStorageInfoSync = function() {
+						return si('getStorageInfoSync') || { keys: [], currentSize: 0, limitSize: 10485760 };
+					};
+					ns.getAccountInfoSync = function() {
+						return si('getAccountInfoSync') || {};
+					};
+				}
+				_p(self.wx); _p(self.qd); _p(self.dd);
+			})();`
+
+			const SHIM = `;(function(){
+				var _seq = 0;
+				function _createInnerAudioContext() {
+					var id = '__audio_' + (++_seq) + '_' + Date.now();
+					var ns = self.wx || self.qd || self.dd;
+					if (ns) ns.__audio_create({ id: id });
+					var state = { src:'', startTime:0, autoplay:false, loop:false, volume:1, playbackRate:1, _id:id };
+					return new Proxy(state, {
+						get: function(t, k) {
+							if (k === 'play') return function(){ if(ns) ns.__audio_call({ id:id, method:'play' }); };
+							if (k === 'pause') return function(){ if(ns) ns.__audio_call({ id:id, method:'pause' }); };
+							if (k === 'stop') return function(){ if(ns) ns.__audio_call({ id:id, method:'stop' }); };
+							if (k === 'seek') return function(p){ if(ns) ns.__audio_call({ id:id, method:'seek', args:[p] }); };
+							if (k === 'destroy') return function(){ if(ns) ns.__audio_call({ id:id, method:'destroy' }); };
+							if (k === 'onCanplay' || k === 'onPlay' || k === 'onPause' || k === 'onStop' ||
+								k === 'onEnded' || k === 'onTimeUpdate' || k === 'onError' || k === 'onSeeking' ||
+								k === 'onSeeked' || k === 'onWaiting' ||
+								k === 'offCanplay' || k === 'offPlay' || k === 'offPause' || k === 'offStop' ||
+								k === 'offEnded' || k === 'offTimeUpdate' || k === 'offError' || k === 'offSeeking' ||
+								k === 'offSeeked' || k === 'offWaiting') return function(){};
+							return t[k];
+						},
+						set: function(t, k, v) {
+							t[k] = v;
+							if (ns && (k==='src'||k==='startTime'||k==='autoplay'||k==='loop'||k==='volume'||k==='playbackRate'))
+								ns.__audio_setProp({ id:id, key:k, value:v });
+							return true;
+						}
+					});
+				}
+				// importScripts is synchronous — wx/qd/dd are already set by service.js
+				if (self.wx) self.wx.createInnerAudioContext = _createInnerAudioContext;
+				if (self.qd) self.qd.createInnerAudioContext = _createInnerAudioContext;
+				if (self.dd) self.dd.createInnerAudioContext = _createInnerAudioContext;
+			})();`
+			// Read custom API namespaces from query parameter once at load time
+			// so we can inject them into every Worker before service.js runs.
+			const _nsParam = new URLSearchParams(window.location.search).get('apiNamespaces')
+			const _apiNs = _nsParam ? _nsParam.split(',').filter(Boolean) : []
+
+			window.Worker = class extends _Worker {
+				constructor(url, opts) {
+					const absUrl = new URL(url, location.href).href
+					const origin = location.origin
+					// Patch importScripts so relative URLs resolve against the
+					// original origin (Blob URLs have no usable base).
+					const patchImportScripts = `
+						var _is = importScripts;
+						importScripts = function() {
+							var a = [];
+							for (var i = 0; i < arguments.length; i++) {
+								try { new URL(arguments[i]); a.push(arguments[i]); }
+								catch(e) { a.push("${origin}" + (arguments[i][0]==="/"?"":"/") + arguments[i]); }
+							}
+							return _is.apply(self, a);
+						};
+					`
+					// Inject __diminaApiNamespaces before service.js loads so
+					// env.js picks it up without needing container-side methods.
+					const injectNs = _apiNs.length
+						? 'self.__diminaApiNamespaces=' + JSON.stringify(_apiNs) + ';'
+						: ''
+					const shimBlob = new Blob(
+						[patchImportScripts + injectNs + SYNC_INFRA + '_is("' + absUrl + '");' + SHIM + SYNC_PATCH],
+						{ type: 'application/javascript' }
+					)
+					super(URL.createObjectURL(shimBlob), { ...opts, type: 'classic' })
+
+						// ── Main-thread SAB setup ────────────────────────────
+						// Create SharedArrayBuffer, send it to Worker, and
+						// listen for __sync_invoke__ messages.  The handler
+						// (window.__handleSyncInvoke) is defined in the module
+						// script where AppManager is in scope.
+						if (typeof SharedArrayBuffer !== 'undefined') {
+							const SAB_SIZE = 4 + 4 + 65536
+							const sab = new SharedArrayBuffer(SAB_SIZE)
+							this.postMessage({ type: '__sync_init__', sab })
+							this.addEventListener('message', (e) => {
+								if (e.data?.method === '__sync_invoke__') {
+									window.__handleSyncInvoke?.(sab, e.data)
+								}
+							})
+						}
+				}
+			}
+		})()
+	</script>
+	<script type="module" src="./main.tsx"></script>
+</body>
+
+</html>

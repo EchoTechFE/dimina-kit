@@ -1,0 +1,21 @@
+appId: com.dimina.devtools
+productName: Dimina DevTools
+directories:
+  output: release
+files:
+  - dist/**/*
+  - container/**/*
+  - package.json
+  - '!**/*.map'
+asarUnpack:
+  - '**/node_modules/esbuild/**'
+  - '**/node_modules/@esbuild/**'
+linux:
+  target: dir
+  category: Development
+mac:
+  target: dmg
+  category: public.app-category.developer-tools
+win:
+  target: dir
+publish: null

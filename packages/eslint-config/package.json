@@ -1,0 +1,23 @@
+{
+  "name": "@dimina-kit/eslint-config",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "exports": {
+    "./base": "./base.js",
+    "./react-internal": "./react-internal.js"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.2.1",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-only-warn": "^1.2.1",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-turbo": "^2.9.6",
+    "globals": "^17.5.0",
+    "typescript": "5.9.2",
+    "typescript-eslint": "^8.58.2"
+  }
+}

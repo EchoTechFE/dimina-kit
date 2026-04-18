@@ -1,0 +1,181 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Design Tokens ──────────────────────────────────────────────────────────
+   Single source of truth for all visual values.
+   Use these CSS variables directly or via Tailwind aliases (bg-accent, etc.)
+ ──────────────────────────────────────────────────────────────────────────── */
+
+/* ── Dark mode (default) ────────────────────────────────────────────────── */
+:root {
+  /* Brand / Accent */
+  --color-accent:       hsl(249 100%  67%);  /* white text: 4.68:1 ✓ WCAG AA */
+  --color-accent-hover: hsl(249  79%  63%);
+
+  /* Backgrounds */
+  --color-bg:               hsl(  0  0%  10%);  /* window / page background */
+  --color-bg-panel:         hsl(  0  0%  14%);  /* header / panel background */
+  --color-surface:          hsl(  0  0%  16%);  /* card / popover surface */
+  --color-surface-2:        hsl(210  4%  18%);  /* toolbar surface */
+  --color-surface-3:        hsl(200  3%  22%);  /* hover state */
+  --color-surface-active:   hsl(210  3%  26%);  /* active/selected state */
+  --color-surface-input:    hsl(  0  0%  24%);  /* form input background */
+  --color-surface-selected: hsl(  0  0%  20%);  /* selected item */
+  --color-surface-thumb:    hsl(  0  0%  29%);  /* placeholder / thumbnail */
+  --color-surface-splitter: hsl(  0  0%  13%);  /* panel splitter */
+
+  /* Borders */
+  --color-border:        hsl(  0  0%  23%);
+  --color-border-subtle: hsl(  0  0%  18%);
+  --color-border-strong: hsl(  0  0%  27%);  /* elevated surfaces (popover, modal) */
+
+  /* Text */
+  --color-text:           hsl(  0  0%  88%);  /* primary */
+  --color-text-secondary: hsl(  0  0%  59%);  /* secondary — 4.5:1+ on all surfaces */
+  --color-text-muted:     hsl(  0  0%  40%);  /* status / timestamps */
+  --color-text-dim:       hsl(  0  0%  33%);  /* placeholders */
+  --color-text-white:     hsl(  0  0% 100%);
+
+  /* Code colors (VS Code dark+ palette) */
+  --color-code-blue:    hsl(201  98%  80%);  /* property names */
+  --color-code-orange:  hsl( 17  47%  64%);  /* strings */
+  --color-code-label:   hsl(  0   0%  52%);  /* labels */
+  --color-code-number:  hsl(100  28%  73%);  /* numeric literals */
+  --color-code-keyword: hsl(207  61%  59%);  /* booleans / null / keywords */
+
+  /* Status indicators */
+  --color-status-warn:    hsl( 41 100%  47%);
+  --color-status-error:   hsl(354 100%  67%);
+  --color-status-success: hsl(142  71%  45%);
+  --color-status-ready:   hsl(249 100%  67%);  /* same as accent */
+
+  /* Semantic backgrounds */
+  --color-danger-bg:   hsl(  0 100%  66% / 15%);
+  --color-warn-bg:     hsl( 41 100%  47% / 10%);
+  --color-warn-border: hsl( 41 100%  47% / 30%);
+
+  /* Overlays */
+  --color-overlay:       hsl(0 0% 0% / 45%);
+  --color-overlay-heavy: hsl(0 0% 0% / 70%);
+
+  /* Simulator — physical phone hardware, always dark */
+  --color-sim-bg:       hsl(  0  0%   7%);
+  --color-sim-bottom:   hsl(  0  0%   9%);
+  --color-sim-screen:   hsl(  0  0%   0%);  /* simulator screen / webview background */
+  --color-phone-shell:  hsl(240  1%  11%);
+  --color-phone-border: hsl(240  1%  18%);
+
+  /* Typography */
+  --font-family:      -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-family-mono: 'Menlo', 'Consolas', monospace;
+  --font-size-xs:   11px;
+  --font-size-sm:   12px;
+  --font-size-base: 13px;
+  --font-size-md:   14px;
+  --font-size-lg:   16px;
+
+  /* Border radii */
+  --radius:    4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+
+  /* Scrollbar */
+  --scrollbar-size:  6px;
+  --scrollbar-thumb: hsl(0 0% 27%);
+
+  /* Layout */
+  --header-h:   40px;
+  --splitter-w: 4px;
+}
+
+/* ── Light mode ─────────────────────────────────────────────────────────── */
+@media (prefers-color-scheme: light) {
+  :root {
+    /* Brand / Accent — darker for sufficient contrast on light bg */
+    --color-accent:       hsl(249 100%  67%);
+    --color-accent-hover: hsl(249  79%  63%);
+
+    /* Backgrounds */
+    --color-bg:               hsl(  0  0%  98%);
+    --color-bg-panel:         hsl(  0  0%  94%);
+    --color-surface:          hsl(  0  0%  91%);
+    --color-surface-2:        hsl(210  4%  88%);
+    --color-surface-3:        hsl(200  3%  85%);
+    --color-surface-active:   hsl(210  3%  80%);
+    --color-surface-input:    hsl(  0  0% 100%);
+    --color-surface-selected: hsl(  0  0%  86%);
+    --color-surface-thumb:    hsl(  0  0%  72%);
+    --color-surface-splitter: hsl(  0  0%  88%);
+
+    /* Borders */
+    --color-border:        hsl(  0  0%  82%);
+    --color-border-subtle: hsl(  0  0%  87%);
+    --color-border-strong: hsl(  0  0%  74%);
+
+    /* Text — all pass WCAG AA on hsl(0 0% 98%) */
+    --color-text:           hsl(  0  0%  12%);  /* 15.8:1 ✓ */
+    --color-text-secondary: hsl(  0  0%  36%);  /* 4.6:1 on surface-3 ✓ */
+    --color-text-muted:     hsl(  0  0%  42%);  /*  4.9:1 ✓ */
+    --color-text-dim:       hsl(  0  0%  50%);  /* 3.2:1 on surface — decorative */
+    --color-text-white:     hsl(  0  0% 100%);
+
+    /* Code colors (VS Code light+ palette) */
+    --color-code-blue:    hsl(207 100%  30%);  /* property names  #0074b5 */
+    --color-code-orange:  hsl(  0  72%  35%);  /* strings         #a31515 */
+    --color-code-label:   hsl(  0   0%  42%);  /* labels */
+    --color-code-number:  hsl(100  73%  28%);  /* numeric literals #098658 */
+    --color-code-keyword: hsl(240 100%  40%);  /* booleans / null  #0000cc */
+
+    /* Status indicators — darkened for text on light bg */
+    --color-status-warn:    hsl( 41 100%  30%);  /* 4.8:1 ✓ */
+    --color-status-error:   hsl(354 100%  40%);  /* 6.3:1 ✓ */
+    --color-status-success: hsl(142  71%  28%);  /* 5.1:1 ✓ */
+    --color-status-ready:   hsl(249 100%  67%);
+
+    /* Semantic backgrounds */
+    --color-danger-bg:   hsl(  0 100%  66% / 12%);
+    --color-warn-bg:     hsl( 41 100%  47% / 12%);
+    --color-warn-border: hsl( 41 100%  47% / 35%);
+
+    /* Overlays */
+    --color-overlay:       hsl(0 0% 0% / 30%);
+    --color-overlay-heavy: hsl(0 0% 0% / 60%);
+
+    /* Scrollbar */
+    --scrollbar-thumb: hsl(0 0% 70%);
+
+    /* Simulator — intentionally left dark (physical phone hardware) */
+  }
+}
+
+/* ── Base ───────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-family);
+  background: var(--color-bg);
+  color: var(--color-text);
+  height: 100vh;
+  overflow: hidden;
+}
+
+#root {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── Scrollbar ──────────────────────────────────────────────────────────── */
+::-webkit-scrollbar        { width: var(--scrollbar-size); height: var(--scrollbar-size); }
+::-webkit-scrollbar-track  { background: transparent; }
+::-webkit-scrollbar-thumb  { background: var(--scrollbar-thumb); border-radius: 3px; }
+
+/* ── Animations ─────────────────────────────────────────────────────────── */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.3; }
+}
