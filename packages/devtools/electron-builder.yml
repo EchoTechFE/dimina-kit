@@ -9,7 +9,6 @@ extraMetadata:
   main: dist/main/index.js
 files:
   - dist/**/*
-  - container/**/*
   - package.json
   - '!**/*.map'
 asarUnpack:

@@ -1,17 +1,17 @@
 #!/usr/bin/env node
 
 /**
- * Build dimina/fe/packages/container and copy dist to this package's container/ directory.
+ * Build dimina/fe/packages/container and copy dist into
+ * packages/devkit/fe/dimina-fe-container/ — devkit's openProject serves
+ * that dir as the runtime container, and ships it to npm consumers.
  *
  * Two builds run sequentially:
  *   1. Main build — upstream vite.config.mjs (index.html + pageFrame.html entries)
  *   2. Browser API build — our vite.config.api.js (src/runtime.js as ES module)
- *
- * Output is placed in container/ so it can be bundled with the published package.
  */
 
 import { spawnSync } from 'node:child_process'
-import { cpSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -22,7 +22,7 @@ const DIMINA_ROOT = join(ROOT, 'dimina')
 const CONTAINER_SRC = join(DIMINA_FE, 'packages/container')
 const SERVICE_SRC = join(DIMINA_FE, 'packages/service')
 const CONTAINER_DIST = join(CONTAINER_SRC, 'dist')
-const TARGET_DIST = join(__dirname, 'container')
+const TARGET_DIST = join(ROOT, 'packages/devkit/fe/dimina-fe-container')
 const API_VITE_CONFIG = join(__dirname, 'vite.config.api.js')
 const SIMULATOR_DIR = join(__dirname, 'src/simulator')
 
@@ -96,8 +96,13 @@ try {
   cleanupInjectedFiles()
 }
 
-// 3. Copy dist to container/
-rmSync(TARGET_DIST, { recursive: true, force: true })
+// 3. Sync build output into TARGET_DIST. Clear only the entries this build
+// actually produces so committed files in TARGET_DIST (.gitignore, favicon.ico,
+// images/) are preserved.
+mkdirSync(TARGET_DIST, { recursive: true })
+for (const entry of readdirSync(CONTAINER_DIST)) {
+  rmSync(join(TARGET_DIST, entry), { recursive: true, force: true })
+}
 cpSync(CONTAINER_DIST, TARGET_DIST, { recursive: true })
 
 const diminaGitHash = getDiminaGitHash()
@@ -105,6 +110,8 @@ writeFileSync(
   join(TARGET_DIST, 'dimina-version.json'),
   JSON.stringify({ diminaGitHash }, null, 2),
 )
+// Empty .npmignore overrides the in-tree .gitignore so npm publishes
+// the full built container (not just the committed scaffolding).
 writeFileSync(join(TARGET_DIST, '.npmignore'), '')
 console.log(`Container dist copied to ${TARGET_DIST}`)
 console.log(`Referenced dimina hash: ${diminaGitHash}`)
