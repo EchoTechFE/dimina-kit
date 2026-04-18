@@ -1,9 +1,7 @@
-// E2E test entry point — instantiates the v1 app with a stub adapter
-import { createWorkbenchApp } from '../dist/main/api.js'
+// E2E test entry — adds test-only window hiding, then delegates to the
+// real app entry (dist/main/index.js) so dev/build/E2E share one codepath.
 import electron from 'electron'
 
-// In test mode, prevent any BrowserWindow from stealing user focus by moving
-// it off-screen and blurring immediately after it becomes ready to show.
 if (process.env.NODE_ENV === 'test') {
   const moveOffscreen = (win) => {
     try {
@@ -22,22 +20,4 @@ if (process.env.NODE_ENV === 'test') {
   })
 }
 
-// Real compilation adapter backed by dimina-devkit — required for specs that
-// open demo-app and exercise the simulator / automator / devtools panels.
-import path from 'node:path'
-import { simulatorDir } from '../dist/main/api.js'
-
-const e2eAdapter = {
-  async openProject(opts) {
-    const { openProject } = await import('@dimina-kit/devkit')
-    return openProject({
-      ...opts,
-      sourcemap: !electron.app.isPackaged,
-      simulatorDir,
-      outputDir: path.join(electron.app.getPath('userData'), 'dimina-fe-output'),
-    })
-  },
-}
-
-const app = createWorkbenchApp({ adapter: e2eAdapter })
-void app.start()
+await import('../dist/main/index.js')
