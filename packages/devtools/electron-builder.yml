@@ -2,6 +2,11 @@ appId: com.dimina.devtools
 productName: Dimina DevTools
 directories:
   output: release
+# Override package.json "main" for the packaged app only.
+# Source main points to the library API (api.js), but Electron needs the
+# entry that actually calls launch() — dist/main/index.js.
+extraMetadata:
+  main: dist/main/index.js
 files:
   - dist/**/*
   - container/**/*
