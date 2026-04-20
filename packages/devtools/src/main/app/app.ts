@@ -62,7 +62,9 @@ function parseAutoArgs(): { auto: boolean; autoPort: number; projectPath: string
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === 'auto' || argv[i] === '--auto') auto = true
     if ((argv[i] === '--auto-port' || argv[i] === '--auto_port') && argv[i + 1]) {
-      autoPort = parseInt(argv[i + 1]!, 10)
+      const parsed = parseInt(argv[i + 1]!, 10)
+      // 0 → OS-assigned free port (used by parallel e2e workers)
+      if (Number.isFinite(parsed) && parsed >= 0) autoPort = parsed
     }
     if (argv[i] === '--project' && argv[i + 1]) {
       projectPath = argv[i + 1]!
@@ -132,12 +134,14 @@ function installMenu(config: WorkbenchAppConfig, mainWindow: BrowserWindow, cont
   }
 }
 
-function setupAutomation(instance: WorkbenchAppInstance): void {
+async function setupAutomation(instance: WorkbenchAppInstance): Promise<void> {
   // Start automation server if --auto flag is present
   const autoArgs = parseAutoArgs()
   if (autoArgs.auto) {
-    instance.automationServer = startAutomationServer(instance.context, autoArgs.autoPort)
-    console.log(`[Automation] WebSocket server listening on ws://127.0.0.1:${autoArgs.autoPort}`)
+    const server = await startAutomationServer(instance.context, autoArgs.autoPort)
+    instance.automationServer = server
+    // Stable, parseable line for e2e harnesses that scrape stdout.
+    console.log(`[automation] listening on ws://127.0.0.1:${server.port}`)
   }
 }
 
@@ -208,7 +212,7 @@ export function createWorkbenchApp(config: WorkbenchAppConfig = {}) {
         await config.onSetup(instance)
       }
 
-      setupAutomation(instance)
+      await setupAutomation(instance)
       setupMcp()
       wireAppWindowEvents(config, instance)
       enableDevRendererAutoReload(rendererDir)

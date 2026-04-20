@@ -3,6 +3,11 @@ import { DEMO_APP_DIR, ipcInvoke, addProject, closeProject } from './helpers'
 import { ProjectsChannel, ProjectChannel } from '../src/shared/ipc-channels'
 
 test.describe('IPC + Project Workflow', () => {
+  test.afterEach(async ({ mainWindow }) => {
+    await closeProject(mainWindow).catch(() => {})
+    await ipcInvoke(mainWindow, ProjectsChannel.Remove, DEMO_APP_DIR).catch(() => {})
+  })
+
   test('projects:list returns an array', async ({ mainWindow }) => {
     const projects = await ipcInvoke(mainWindow, ProjectsChannel.List)
     expect(Array.isArray(projects)).toBe(true)

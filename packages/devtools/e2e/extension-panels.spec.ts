@@ -1,24 +1,15 @@
-import { test, expect } from './fixtures'
+import { test, expect, useSharedProject } from './fixtures'
 import {
   DEMO_APP_DIR,
-  openProjectInUI,
-  closeProject,
   evalInSimulator,
   pollUntil,
-  waitForSimulatorWebview,
 } from './helpers'
 
 test.describe('Extension Panels Data Bridge', () => {
   test.setTimeout(90_000)
+  test.describe.configure({ mode: 'serial' })
 
-  test.beforeEach(async ({ mainWindow, electronApp }) => {
-    await openProjectInUI(mainWindow, DEMO_APP_DIR, { waitMs: 8000, waitForWebview: true })
-    await waitForSimulatorWebview(electronApp)
-  })
-
-  test.afterEach(async ({ mainWindow }) => {
-    await closeProject(mainWindow)
-  })
+  useSharedProject(test, DEMO_APP_DIR, { openOptions: { waitMs: 8000, waitForWebview: true } })
 
   test('simulator exposes compat wx APIs in webview', async ({ electronApp }) => {
     const result = await evalInSimulator<{

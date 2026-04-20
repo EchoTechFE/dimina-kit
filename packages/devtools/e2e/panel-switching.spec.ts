@@ -1,21 +1,14 @@
-import { test, expect } from './fixtures'
+import { test, expect, useSharedProject } from './fixtures'
 import {
   DEMO_APP_DIR,
-  openProjectInUI,
-  closeProject,
   ipcInvoke,
 } from './helpers'
 import { PanelChannel } from '../src/shared/ipc-channels'
 
 test.describe('Right panel switching', () => {
-  test.beforeEach(async ({ mainWindow }) => {
-    await openProjectInUI(mainWindow, DEMO_APP_DIR, { waitForWebview: true })
-    await mainWindow.waitForTimeout(1500)
-  })
+  test.describe.configure({ mode: 'serial' })
 
-  test.afterEach(async ({ mainWindow }) => {
-    await closeProject(mainWindow)
-  })
+  useSharedProject(test, DEMO_APP_DIR, { openOptions: { waitForWebview: true } })
 
   test('selecting each panel renders the correct panel in the main window', async ({
     mainWindow,

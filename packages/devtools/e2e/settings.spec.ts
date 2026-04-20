@@ -7,7 +7,7 @@ import {
   evalInWebContentsByUrl,
   pollUntil,
 } from './helpers'
-import { SettingsChannel, ProjectChannel } from '../src/shared/ipc-channels'
+import { SettingsChannel, ProjectChannel, ProjectsChannel } from '../src/shared/ipc-channels'
 
 test.describe('Settings', () => {
   test.beforeEach(async ({ mainWindow }) => {
@@ -16,6 +16,7 @@ test.describe('Settings', () => {
 
   test.afterEach(async ({ mainWindow }) => {
     await closeProject(mainWindow)
+    await ipcInvoke(mainWindow, ProjectsChannel.Remove, DEMO_APP_DIR).catch(() => {})
   })
 
   test('settings view can be shown', async ({ mainWindow, electronApp }) => {

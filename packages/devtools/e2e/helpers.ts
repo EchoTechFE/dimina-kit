@@ -76,19 +76,29 @@ export async function closeProject(mainWindow: Page): Promise<void> {
     // Emit locally to trigger the 'window:navigateBack' listener
     ipcRenderer.emit('window:navigateBack', {} as Electron.IpcRendererEvent)
   }).catch(() => {})
-  await mainWindow.waitForTimeout(300)
+  // Wait for the project list view to be visible again (the project card title=projectDir
+  // disappears once we leave the project view; project list shows project cards / empty state).
+  // We can't know the path from here, so poll for the absence of the toolbar text "普通编译".
+  await pollUntil(
+    () => mainWindow.evaluate(() => !document.body.innerText.includes('普通编译')),
+    (gone) => gone === true,
+    5000,
+    100,
+  ).catch(() => {})
 }
 
 /**
  * Add a project and click its card to navigate to the project view.
- * Waits for compilation + simulator to load.
- * @param waitMs - minimum wait time for compilation (default 5000)
- * @param waitForWebview - if true, also polls until the webview tag appears in DOM
+ * Waits for the simulator webview to attach AND first-page DOM to be ready
+ * (compile complete signal) instead of a fixed timer.
+ *
+ * @param waitMs - hard cap on total wait time (default 15000). Param kept for backwards compat.
+ * @param waitForWebview - kept for backwards compat. The new implementation always waits for webview.
  */
 export async function openProjectInUI(
   mainWindow: Page,
   projectDir: string,
-  { waitMs = 5000, waitForWebview = false }: { waitMs?: number; waitForWebview?: boolean } = {}
+  { waitMs = 15000, waitForWebview = true }: { waitMs?: number; waitForWebview?: boolean } = {}
 ): Promise<void> {
   await addProject(mainWindow, projectDir)
   await mainWindow.evaluate(() => {
@@ -100,18 +110,30 @@ export async function openProjectInUI(
   await projectPathLabel.locator('..').click()
   await mainWindow.waitForSelector('text=普通编译')
 
-  // Wait for compile + simulator webview load
-  await mainWindow.waitForTimeout(waitMs)
+  void waitForWebview // accepted for backwards compat; behaviour below always waits
 
-  if (waitForWebview) {
-    // Poll until the webview tag is present in the DOM
-    await pollUntil(
-      () => mainWindow.evaluate(() => document.querySelector('webview') !== null),
-      (present) => present === true,
-      20000,
-      1000
-    ).catch(() => {})
-  }
+  const deadline = Date.now() + waitMs
+
+  // 1) Wait for the simulator webview to attach.
+  await mainWindow.waitForSelector('webview', { timeout: Math.max(1000, deadline - Date.now()) })
+    .catch(() => {})
+
+  // 2) Wait for the renderer to report compile complete or the toolbar to leave the
+  //    "正在刷新..." / "正在编译..." state. The status text lives in a `.truncate` span
+  //    bound to setCompileStatus messages: '编译完成', '编译完成，已热更新', '刷新完成'.
+  await pollUntil(
+    () => mainWindow.evaluate(() => {
+      const els = document.querySelectorAll('[class*="truncate"]')
+      for (const el of els) {
+        const t = el.textContent || ''
+        if (t.includes('完成')) return true
+      }
+      return false
+    }),
+    (done) => done === true,
+    Math.max(1000, deadline - Date.now()),
+    300,
+  ).catch(() => {})
 }
 
 // ── Simulator helpers ──────────────────────────────────────────────────
@@ -234,4 +256,33 @@ export async function findButtonByTitle(
     }
     return false
   }, title)
+}
+
+// ── Reset helpers (for shared-project pattern) ─────────────────────────
+
+/**
+ * Best-effort reset of in-simulator state between tests when reusing one
+ * open project. Clears wx storage and resets to the home page when possible.
+ */
+export async function resetSimulatorState(
+  electronApp: ElectronApplication,
+  homePagePath = 'pages/index/index',
+): Promise<void> {
+  await evalInSimulator(electronApp, `try { wx.clearStorageSync() } catch (e) {}`).catch(() => {})
+
+  // Try to get back to the home page via hash navigation. This is a soft reset:
+  // if it fails (e.g. simulator not yet ready), we swallow the error so a single
+  // bad test doesn't block the next.
+  await evalInSimulator(
+    electronApp,
+    `(() => {
+      try {
+        const hash = location.hash.replace(/^#/, '')
+        const appId = hash.includes('|') ? hash.split('|')[0] : hash.split('/')[0]
+        if (!appId) return
+        const target = '#' + appId + '|${homePagePath}'
+        if (location.hash !== target) location.hash = target
+      } catch (e) {}
+    })()`,
+  ).catch(() => {})
 }

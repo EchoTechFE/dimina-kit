@@ -115,6 +115,12 @@ export const BridgeChannel = {
   StorageGetAllRequest: 'storage:getAll:request',
 } as const
 
+// ── Automation (WebSocket server) ────────────────────────────────────────
+
+export const AutomationChannel = {
+  GetPort: 'automation:port',
+} as const
+
 // ── Embedded settings overlay ────────────────────────────────────────────
 
 export const SettingsChannel = {
