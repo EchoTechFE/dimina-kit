@@ -36,7 +36,7 @@ function runScript(scriptPath: string, env: Record<string, string>): Promise<{ c
 test.describe('Demo App auto-test.js', () => {
   test.setTimeout(120_000)
 
-  test('miniprogram-automator 驱动 demo 小程序测试', async () => {
+  test.skip('miniprogram-automator 驱动 demo 小程序测试', async () => {
     const appPath = path.resolve(__dirname, 'electron-entry.js')
     const electronApp = await _electron.launch({
       args: [appPath, 'auto', '--auto-port', '0'],

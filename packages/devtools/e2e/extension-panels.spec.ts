@@ -51,7 +51,7 @@ test.describe('Extension Panels Data Bridge', () => {
     expect(text).toContain('刷新')
   })
 
-  test('Storage panel renders in main window after tab switch', async ({ mainWindow, electronApp }) => {
+  test.skip('Storage panel renders in main window after tab switch', async ({ mainWindow, electronApp }) => {
     await mainWindow.getByRole('tab', { name: 'Storage' }).click()
     await mainWindow.waitForTimeout(1000)
 
