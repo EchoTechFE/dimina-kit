@@ -18,15 +18,14 @@ import { test as base, expect } from '@playwright/test'
 import { Automator, MiniProgram } from './automator'
 import { DEMO_APP_DIR } from './helpers'
 
-// ── Fixture: launch once per test file ────────────────────────────────
-
 const test = base.extend<{ miniProgram: MiniProgram }>({
   // eslint-disable-next-line no-empty-pattern
-  miniProgram: async ({}, use) => {
+  miniProgram: async ({}, use, testInfo) => {
     const mp = await Automator.launch({
       projectPath: DEMO_APP_DIR,
       compileWaitMs: 10000,
       waitForWebview: true,
+      workerIndex: testInfo.workerIndex,
     })
     await use(mp)
     await mp.close()
