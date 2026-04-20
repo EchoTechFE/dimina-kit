@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { appendFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -74,6 +75,6 @@ console.log(notes)
 
 if (ghOutput) {
   appendFileSync(ghOutput, `changes=${JSON.stringify(changes)}\n`)
-  const delim = `EOF_NOTES_${Date.now()}`
+  const delim = `EOF_NOTES_${randomUUID()}`
   appendFileSync(ghOutput, `notes<<${delim}\n${notes}\n${delim}\n`)
 }
