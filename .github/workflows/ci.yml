@@ -28,7 +28,7 @@ jobs:
           cache: pnpm
 
       - name: Install workspace deps
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Lint and type-check
         run: pnpm turbo run lint check-types

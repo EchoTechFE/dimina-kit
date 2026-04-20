@@ -201,11 +201,11 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - name: Install workspace deps
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Install dimina/fe deps
         working-directory: dimina/fe
-        run: pnpm install --no-frozen-lockfile
+        run: pnpm install --no-frozen-lockfile --ignore-scripts
 
       - name: Bump versions for dev channel
         if: inputs.channel == 'dev'
