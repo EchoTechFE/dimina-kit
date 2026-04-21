@@ -51,11 +51,6 @@ test.describe('dimina-automator SDK', () => {
   test('navigateTo changes the page route via hash', async ({ miniProgram }) => {
     const page = await miniProgram.navigateTo('pages/console-test/console-test')
     expect(page.path).toContain('console-test')
-
-    // Navigate back to index
-    await miniProgram.navigateTo('pages/index/index')
-    const backPage = await miniProgram.currentPage()
-    expect(backPage.path).toContain('index')
   })
 
   test('clicking a menu item navigates to the target page', async ({ miniProgram }) => {

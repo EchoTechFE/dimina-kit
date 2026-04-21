@@ -66,52 +66,113 @@ export class MiniProgram {
   async navigateTo(url: string): Promise<Page> {
     const cleanUrl = url.startsWith('/') ? url : `/${url}`
 
-    // Count iframes before
-    const iframeCountBefore = await evalInSimulator<number>(
-      this.electronApp,
-      `document.querySelectorAll('iframe').length`,
-    )
-
-    // Try clicking a DOM element with matching data-path first
-    const clicked = await evalInSimulator<boolean>(
+    // Snapshot iframe topology before navigation so we can detect when the
+    // new page's iframe is actually attached. Dimina pushes a new iframe per
+    // page in the navigation stack; either the count goes up or the existing
+    // last iframe gets replaced (and its bodyHTML length changes).
+    const before = await evalInSimulator<{ count: number; lastLen: number }>(
       this.electronApp,
       `(() => {
-        const iframes = document.querySelectorAll('iframe')
-        const iframe = iframes[iframes.length - 1]
-        if (!iframe || !iframe.contentDocument) return false
-        const item = iframe.contentDocument.querySelector('[data-path="${cleanUrl}"]')
-        if (item) { item.click(); return true }
-        return false
+        const fs = document.querySelectorAll('iframe')
+        const last = fs[fs.length - 1]
+        const len = last && last.contentDocument && last.contentDocument.body
+          ? last.contentDocument.body.innerHTML.length : 0
+        return { count: fs.length, lastLen: len }
       })()`,
     )
+    const iframeCountBefore = before.count
+
+    // Try clicking a DOM element with matching data-path. The element may
+    // not exist yet if the source page hasn't finished its initial render —
+    // poll for up to 8s before falling back. dimina's router is bound to the
+    // wx.navigateTo handler invoked by the click; setting location.hash
+    // directly does NOT trigger navigation, so the click path is required.
+    const clicked = await pollUntil<boolean>(
+      () => evalInSimulator<boolean>(
+        this.electronApp,
+        `(() => {
+          const iframes = document.querySelectorAll('iframe')
+          const iframe = iframes[iframes.length - 1]
+          if (!iframe || !iframe.contentDocument) return false
+          const item = iframe.contentDocument.querySelector('[data-path="${cleanUrl}"]')
+          if (item) { item.click(); return true }
+          return false
+        })()`,
+      ),
+      (ok) => ok === true,
+      8000,
+      200,
+    ).catch(() => false)
 
     if (!clicked) {
-      // Fallback: change hash directly
-      const hash = await evalInSimulator<string>(this.electronApp, `location.hash`)
-      const clean = hash.replace(/^#/, '')
-      // New format: #appid|page1|page2; Legacy: #appid/page
-      const appId = clean.includes('|') ? clean.split('|')[0] : clean.split('/')[0]
-      // New format appends page as a |segment; strip leading /
-      const pageSeg = cleanUrl.replace(/^\//, '')
+      // Last-resort fallback: invoke dimina's router via wx APIs. Important:
+      // dimina injects `wx` only into the entry-page iframe (typically the
+      // first iframe = index). Child page iframes (console-test, etc.) have
+      // no wx on their contentWindow, so we scan iframes for one that does.
+      // Pick navigateBack vs reLaunch based on whether target is on the
+      // stack:
+      //   - target already on stack → navigateBack to pop to it
+      //   - target not on stack → reLaunch (works regardless of stack state)
+      // A bare location.hash = ... is NOT enough — the dimina runtime does
+      // not bind hashchange for navigation.
+      const targetSegEsc = cleanUrl.replace(/^\//, '').split('?')[0]
       await evalInSimulator(
         this.electronApp,
-        `location.hash = '#${appId}|${pageSeg}'`,
+        `(() => {
+          const iframes = Array.from(document.querySelectorAll('iframe'))
+          let win = null
+          for (const f of iframes) {
+            try {
+              if (f.contentWindow && f.contentWindow.wx) { win = f.contentWindow; break }
+            } catch (_) {}
+          }
+          if (!win) return
+          const hash = location.hash.replace(/^#/, '')
+          const segs = hash.includes('|') ? hash.split('|').slice(1).map(s => s.split('?')[0]) : []
+          const targetIdx = segs.indexOf('${targetSegEsc}')
+          try {
+            if (targetIdx >= 0 && targetIdx < segs.length - 1 && typeof win.wx.navigateBack === 'function') {
+              win.wx.navigateBack({ delta: segs.length - 1 - targetIdx })
+            } else if (typeof win.wx.reLaunch === 'function') {
+              win.wx.reLaunch({ url: '${cleanUrl}' })
+            } else if (typeof win.wx.navigateTo === 'function') {
+              win.wx.navigateTo({ url: '${cleanUrl}' })
+            }
+          } catch (e) {}
+        })()`,
       )
     }
 
-    // Wait for a new iframe to appear (dimina creates one per page)
+    const targetSeg = cleanUrl.replace(/^\//, '').split('?')[0]
     await pollUntil(
-      () => evalInSimulator<number>(
-        this.electronApp,
-        `document.querySelectorAll('iframe').length`,
-      ),
-      (count) => count > iframeCountBefore,
+      () => this.currentPagePath(),
+      (p) => p.includes(targetSeg),
       10000,
-      300,
-    ).catch(() => {})
+      200,
+    )
 
-    // Give the new page time to render
-    await this.mainWindow.waitForTimeout(1500)
+    // Hash changed — now wait for the iframe topology to reflect the new page.
+    // Either iframe count increased (page pushed) or the last iframe's body
+    // changed (page replaced in same frame). Polling on this avoids returning
+    // before dimina actually mounts the new page's DOM.
+    await pollUntil(
+      () => evalInSimulator<{ count: number; lastLen: number }>(
+        this.electronApp,
+        `(() => {
+          const fs = document.querySelectorAll('iframe')
+          const last = fs[fs.length - 1]
+          const len = last && last.contentDocument && last.contentDocument.body
+            ? last.contentDocument.body.innerHTML.length : 0
+          return { count: fs.length, lastLen: len }
+        })()`,
+      ),
+      (now) => now.count > before.count || now.lastLen !== before.lastLen,
+      8000,
+      150,
+    )
+
+    // Final settle for late wx:for / setData renders inside the new page
+    await this.mainWindow.waitForTimeout(500)
     return this.currentPage()
   }
 
