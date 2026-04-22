@@ -80,7 +80,6 @@ export class MiniProgram {
         return { count: fs.length, lastLen: len }
       })()`,
     )
-    const iframeCountBefore = before.count
 
     // Inject targets through JSON.stringify to avoid string-injection in the
     // remotely-evaluated script (the URL is user-controlled in the public

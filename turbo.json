@@ -5,7 +5,8 @@
     "ESBUILD_BINARY_PATH",
     "DIMINA_NO_OPEN_BROWSER",
     "DIMINA_DEBUG_PORT",
-    "NODE_ENV"
+    "NODE_ENV",
+    "CI"
   ],
   "tasks": {
     "build": {

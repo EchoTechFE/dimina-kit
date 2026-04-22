@@ -10,7 +10,6 @@
  * (simulator webContents, IPC handlers, etc.) without modifying dimina upstream.
  */
 
-/// <reference types="electron" />
 import { ipcMain } from 'electron'
 import type { AddressInfo } from 'net'
 import { WebSocketServer, type WebSocket } from 'ws'

@@ -103,6 +103,7 @@ async function isHealthy(app: ElectronApplication, win: Page | undefined): Promi
 
 export const test = base.extend<ElectronFixtures, ElectronWorkerFixtures>({
   _workerElectron: [
+    // eslint-disable-next-line no-empty-pattern
     async ({}, use, workerInfo) => {
       const userDataDir = userDataDirFor(workerInfo.workerIndex)
 
