@@ -5,6 +5,7 @@
 
 import { test, expect, _electron } from '@playwright/test'
 import { spawn } from 'child_process'
+import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import {
@@ -38,9 +39,14 @@ test.describe('Demo App auto-test.js', () => {
 
   test('miniprogram-automator 驱动 demo 小程序测试', async () => {
     const appPath = path.resolve(__dirname, 'electron-entry.js')
+    const userDataDir = path.resolve(
+      __dirname, '..', 'node_modules', '.cache', 'devtools-e2e', 'userdata',
+      `run-demo-${process.pid}`,
+    )
+    fs.mkdirSync(userDataDir, { recursive: true })
     const electronApp = await _electron.launch({
-      args: [appPath, 'auto', '--auto-port', '0'],
-      env: { ...process.env, NODE_ENV: 'test' },
+      args: [appPath, 'auto', '--auto-port', '0', `--user-data-dir=${userDataDir}`],
+      env: { ...process.env, NODE_ENV: 'test', DIMINA_E2E_USER_DATA_DIR: userDataDir },
     })
 
     try {

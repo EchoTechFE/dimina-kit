@@ -82,6 +82,13 @@ export class MiniProgram {
     )
     const iframeCountBefore = before.count
 
+    // Inject targets through JSON.stringify to avoid string-injection in the
+    // remotely-evaluated script (the URL is user-controlled in the public
+    // SDK API).
+    const cleanUrlJson = JSON.stringify(cleanUrl)
+    const targetSeg = cleanUrl.replace(/^\//, '').split('?')[0]
+    const targetSegJson = JSON.stringify(targetSeg)
+
     // Try clicking a DOM element with matching data-path. The element may
     // not exist yet if the source page hasn't finished its initial render —
     // poll for up to 8s before falling back. dimina's router is bound to the
@@ -94,7 +101,7 @@ export class MiniProgram {
           const iframes = document.querySelectorAll('iframe')
           const iframe = iframes[iframes.length - 1]
           if (!iframe || !iframe.contentDocument) return false
-          const item = iframe.contentDocument.querySelector('[data-path="${cleanUrl}"]')
+          const item = iframe.contentDocument.querySelector('[data-path=' + JSON.stringify(${cleanUrlJson}) + ']')
           if (item) { item.click(); return true }
           return false
         })()`,
@@ -105,17 +112,16 @@ export class MiniProgram {
     ).catch(() => false)
 
     if (!clicked) {
-      // Last-resort fallback: invoke dimina's router via wx APIs. Important:
-      // dimina injects `wx` only into the entry-page iframe (typically the
-      // first iframe = index). Child page iframes (console-test, etc.) have
-      // no wx on their contentWindow, so we scan iframes for one that does.
+      // Last-resort fallback: invoke dimina's router via wx APIs. dimina
+      // injects `wx` only into the entry-page iframe (typically the first
+      // iframe = index); child page iframes have no wx on their
+      // contentWindow, so we scan all iframes for one that exposes wx.
       // Pick navigateBack vs reLaunch based on whether target is on the
       // stack:
       //   - target already on stack → navigateBack to pop to it
       //   - target not on stack → reLaunch (works regardless of stack state)
       // A bare location.hash = ... is NOT enough — the dimina runtime does
       // not bind hashchange for navigation.
-      const targetSegEsc = cleanUrl.replace(/^\//, '').split('?')[0]
       await evalInSimulator(
         this.electronApp,
         `(() => {
@@ -129,24 +135,28 @@ export class MiniProgram {
           if (!win) return
           const hash = location.hash.replace(/^#/, '')
           const segs = hash.includes('|') ? hash.split('|').slice(1).map(s => s.split('?')[0]) : []
-          const targetIdx = segs.indexOf('${targetSegEsc}')
+          const targetIdx = segs.indexOf(${targetSegJson})
           try {
             if (targetIdx >= 0 && targetIdx < segs.length - 1 && typeof win.wx.navigateBack === 'function') {
               win.wx.navigateBack({ delta: segs.length - 1 - targetIdx })
             } else if (typeof win.wx.reLaunch === 'function') {
-              win.wx.reLaunch({ url: '${cleanUrl}' })
+              win.wx.reLaunch({ url: ${cleanUrlJson} })
             } else if (typeof win.wx.navigateTo === 'function') {
-              win.wx.navigateTo({ url: '${cleanUrl}' })
+              win.wx.navigateTo({ url: ${cleanUrlJson} })
             }
           } catch (e) {}
         })()`,
       )
     }
 
-    const targetSeg = cleanUrl.replace(/^\//, '').split('?')[0]
+    // Wait until current page is the target — match exact segment, not
+    // substring (`/pages/login` would falsely satisfy `pages/log`).
     await pollUntil(
       () => this.currentPagePath(),
-      (p) => p.includes(targetSeg),
+      (p) => {
+        const norm = p.replace(/^\//, '').split('?')[0]
+        return norm === targetSeg || norm.endsWith('/' + targetSeg) || ('/' + norm) === ('/' + targetSeg)
+      },
       10000,
       200,
     )

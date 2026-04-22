@@ -222,9 +222,14 @@ test.describe('npm miniprogram-automator package', () => {
 
   test.beforeAll(async () => {
     const appPath = path.resolve(__dirname, 'electron-entry.js')
+    const smokeUserDataDir = path.resolve(
+      __dirname, '..', 'node_modules', '.cache', 'devtools-e2e', 'userdata',
+      `compat-smoke-${process.pid}`,
+    )
+    fs.mkdirSync(smokeUserDataDir, { recursive: true })
     smokeElectronApp = await _electron.launch({
-      args: [appPath, 'auto', '--auto-port', '0'],
-      env: { ...process.env, NODE_ENV: 'test' },
+      args: [appPath, 'auto', '--auto-port', '0', `--user-data-dir=${smokeUserDataDir}`],
+      env: { ...process.env, NODE_ENV: 'test', DIMINA_E2E_USER_DATA_DIR: smokeUserDataDir },
     })
 
     smokeMainWindow = await smokeElectronApp.firstWindow()
