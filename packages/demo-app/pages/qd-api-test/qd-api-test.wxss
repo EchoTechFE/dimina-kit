@@ -1,0 +1,89 @@
+.container {
+  padding: 20rpx;
+}
+
+.page-title {
+  font-size: 36rpx;
+  font-weight: bold;
+  margin-bottom: 10rpx;
+}
+
+.page-desc {
+  font-size: 24rpx;
+  color: #888;
+  margin-bottom: 30rpx;
+}
+
+.section {
+  margin-bottom: 30rpx;
+}
+
+.section-title {
+  font-size: 28rpx;
+  font-weight: bold;
+  margin-bottom: 16rpx;
+  padding-left: 10rpx;
+  border-left: 6rpx solid #4A90D9;
+}
+
+.btn {
+  margin-bottom: 16rpx;
+  font-size: 28rpx;
+  border-radius: 8rpx;
+}
+
+.btn-primary { background-color: #4A90D9; color: #fff; }
+.btn-info { background-color: #36cfc9; color: #fff; }
+.btn-danger { background-color: #ff4d4f; color: #fff; }
+
+.empty-tip {
+  text-align: center;
+  color: #ccc;
+  padding: 40rpx;
+  font-size: 26rpx;
+}
+
+.result-item {
+  margin-bottom: 16rpx;
+  padding: 16rpx;
+  border-radius: 8rpx;
+  border: 1rpx solid #eee;
+}
+
+.result-success { border-left: 6rpx solid #52c41a; }
+.result-fail { border-left: 6rpx solid #ff4d4f; }
+
+.result-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 8rpx;
+}
+
+.result-name {
+  font-size: 26rpx;
+  font-weight: bold;
+  flex: 1;
+}
+
+.result-time {
+  font-size: 22rpx;
+  color: #aaa;
+  margin-left: 12rpx;
+}
+
+.tag {
+  font-size: 20rpx;
+  padding: 2rpx 12rpx;
+  border-radius: 4rpx;
+  color: #fff;
+}
+
+.tag-green { background-color: #52c41a; }
+.tag-red { background-color: #ff4d4f; }
+
+.result-detail {
+  font-size: 24rpx;
+  color: #666;
+  word-break: break-all;
+  white-space: pre-wrap;
+}

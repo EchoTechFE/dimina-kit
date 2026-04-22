@@ -1,0 +1,12 @@
+<view class="counter-wrapper">
+  <view class="counter-label">{{label}}</view>
+  <view class="counter-controls">
+    <view class="counter-btn counter-btn-minus" bindtap="decrement">-</view>
+    <view class="counter-value">{{value}}</view>
+    <view class="counter-btn counter-btn-plus" bindtap="increment">+</view>
+  </view>
+  <view class="counter-actions">
+    <text class="counter-reset" bindtap="reset">重置</text>
+    <text class="counter-info">步长: {{step}}</text>
+  </view>
+</view>

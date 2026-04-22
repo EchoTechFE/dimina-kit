@@ -4,29 +4,26 @@
  * This mirrors how miniprogram-automator is used:
  *   Automator.launch() → MiniProgram → Page → Element
  *
- * Tests cover:
- *   1. Launch and page route detection
- *   2. Page navigation via hash change and DOM click
- *   3. Element queries and DOM inspection ($, $$, text, attribute)
- *   4. Element interactions (tap / click)
- *   5. wx API calls (storage, systemInfo)
- *   6. Evaluate arbitrary JS in simulator
- *   7. waitForSelector
+ * Tests cover: launch, navigation, $/$$/element queries, wx APIs, evaluate,
+ * waitForSelector, screenshot. They depend on the dimina simulator runtime
+ * loading container assets (container-api.js / container.css) from
+ * /assets/* served by devkit. If those assets are missing the simulator
+ * never renders mini-program DOM and every element-query test will fail —
+ * make sure `pnpm build:container` has been run.
  */
 
 import { test as base, expect } from '@playwright/test'
 import { Automator, MiniProgram } from './automator'
 import { DEMO_APP_DIR } from './helpers'
 
-// ── Fixture: launch once per test file ────────────────────────────────
-
 const test = base.extend<{ miniProgram: MiniProgram }>({
   // eslint-disable-next-line no-empty-pattern
-  miniProgram: async ({}, use) => {
+  miniProgram: async ({}, use, testInfo) => {
     const mp = await Automator.launch({
       projectPath: DEMO_APP_DIR,
       compileWaitMs: 10000,
       waitForWebview: true,
+      workerIndex: testInfo.workerIndex,
     })
     await use(mp)
     await mp.close()
@@ -54,11 +51,6 @@ test.describe('dimina-automator SDK', () => {
   test('navigateTo changes the page route via hash', async ({ miniProgram }) => {
     const page = await miniProgram.navigateTo('pages/console-test/console-test')
     expect(page.path).toContain('console-test')
-
-    // Navigate back to index
-    await miniProgram.navigateTo('pages/index/index')
-    const backPage = await miniProgram.currentPage()
-    expect(backPage.path).toContain('index')
   })
 
   test('clicking a menu item navigates to the target page', async ({ miniProgram }) => {

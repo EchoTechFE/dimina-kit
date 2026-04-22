@@ -1,8 +1,13 @@
 import { test, expect } from './fixtures'
-import { DEMO_APP_DIR, ipcInvoke } from './helpers'
+import { DEMO_APP_DIR, ipcInvoke, addProject, closeProject } from './helpers'
 import { ProjectsChannel, ProjectChannel } from '../src/shared/ipc-channels'
 
-test.describe('IPC Integration', () => {
+test.describe('IPC + Project Workflow', () => {
+  test.afterEach(async ({ mainWindow }) => {
+    await closeProject(mainWindow).catch(() => {})
+    await ipcInvoke(mainWindow, ProjectsChannel.Remove, DEMO_APP_DIR).catch(() => {})
+  })
+
   test('projects:list returns an array', async ({ mainWindow }) => {
     const projects = await ipcInvoke(mainWindow, ProjectsChannel.List)
     expect(Array.isArray(projects)).toBe(true)
@@ -31,7 +36,7 @@ test.describe('IPC Integration', () => {
   })
 
   test('projects:add and projects:remove round-trip', async ({ mainWindow }) => {
-    await ipcInvoke(mainWindow, ProjectsChannel.Add, DEMO_APP_DIR)
+    await addProject(mainWindow, DEMO_APP_DIR)
 
     let projects = await ipcInvoke<Array<{ path: string }>>(mainWindow, ProjectsChannel.List)
     expect(projects.some((p) => p.path === DEMO_APP_DIR)).toBe(true)
@@ -43,7 +48,7 @@ test.describe('IPC Integration', () => {
   })
 
   test('project:open and project:close lifecycle', async ({ mainWindow }) => {
-    await ipcInvoke(mainWindow, ProjectsChannel.Add, DEMO_APP_DIR)
+    await addProject(mainWindow, DEMO_APP_DIR)
 
     const openResult = await ipcInvoke(mainWindow, ProjectChannel.Open, DEMO_APP_DIR)
     expect(openResult).toBeTruthy()
@@ -51,5 +56,16 @@ test.describe('IPC Integration', () => {
 
     // Close should not throw
     await ipcInvoke(mainWindow, ProjectChannel.Close)
+  })
+
+  test('can open and compile a project', async ({ mainWindow }) => {
+    await addProject(mainWindow, DEMO_APP_DIR)
+
+    const result = await ipcInvoke<{ success: boolean }>(mainWindow, ProjectChannel.Open, DEMO_APP_DIR)
+    expect(result).toBeTruthy()
+    expect(typeof result).toBe('object')
+
+    // Close the project so teardown doesn't hang
+    await closeProject(mainWindow)
   })
 })

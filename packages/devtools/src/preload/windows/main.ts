@@ -1,5 +1,4 @@
 export { installConsoleInstrumentation } from '../instrumentation/console.js'
-export { installStorageInstrumentation } from '../instrumentation/storage.js'
 export { installAppDataInstrumentation, sendAllAppData } from '../instrumentation/app-data.js'
 export { installWxmlInstrumentation, sendWxmlTree, setupWxmlObserver } from '../instrumentation/wxml.js'
 export { installSimulatorBridge } from '../runtime/bridge.js'

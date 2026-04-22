@@ -1,0 +1,7 @@
+{
+  "navigationBarTitleText": "组件 & AppData 测试",
+  "usingComponents": {
+    "counter": "/components/counter/counter",
+    "nested-item": "/components/nested-item/nested-item"
+  }
+}

@@ -1,0 +1,61 @@
+.counter-wrapper {
+  padding: 16rpx 0;
+}
+
+.counter-label {
+  font-size: 28rpx;
+  font-weight: 500;
+  color: #333;
+  margin-bottom: 12rpx;
+}
+
+.counter-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+}
+
+.counter-btn {
+  width: 72rpx;
+  height: 72rpx;
+  line-height: 72rpx;
+  text-align: center;
+  font-size: 36rpx;
+  font-weight: 600;
+  border-radius: 8rpx;
+  color: #fff;
+}
+
+.counter-btn-minus {
+  background: #ff4d4f;
+}
+
+.counter-btn-plus {
+  background: #52c41a;
+}
+
+.counter-value {
+  width: 160rpx;
+  text-align: center;
+  font-size: 40rpx;
+  font-weight: 700;
+  color: #1a1a1a;
+}
+
+.counter-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 12rpx;
+}
+
+.counter-reset {
+  font-size: 24rpx;
+  color: #1890ff;
+}
+
+.counter-info {
+  font-size: 22rpx;
+  color: #999;
+}

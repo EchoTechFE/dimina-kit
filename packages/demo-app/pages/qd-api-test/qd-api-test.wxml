@@ -1,0 +1,37 @@
+<view class="container">
+  <view class="page-title">qd.* API 命名空间测试</view>
+  <view class="page-desc">验证自定义命名空间 qd 是否正常工作</view>
+
+  <!-- 批量操作 -->
+  <view class="section">
+    <view class="section-title">批量操作</view>
+    <button class="btn btn-primary" bindtap="testAll">运行全部测试</button>
+    <button class="btn btn-danger" bindtap="clearResults">清空结果</button>
+  </view>
+
+  <!-- 单项测试 -->
+  <view class="section">
+    <view class="section-title">单项测试</view>
+    <button class="btn btn-info" bindtap="testCompareWithWx">qd === wx 引用对比</button>
+    <button class="btn btn-info" bindtap="testGetSystemInfo">qd.getSystemInfoSync</button>
+    <button class="btn btn-info" bindtap="testStorage">qd.Storage (set/get/remove)</button>
+    <button class="btn btn-info" bindtap="testRequest">qd.request (GET)</button>
+    <button class="btn btn-info" bindtap="testShowToast">qd.showToast</button>
+    <button class="btn btn-info" bindtap="testShowModal">qd.showModal</button>
+    <button class="btn btn-info" bindtap="testNavigateTo">qd.navigateTo</button>
+  </view>
+
+  <!-- 测试结果 -->
+  <view class="section">
+    <view class="section-title">测试结果 ({{results.length}})</view>
+    <view wx:if="{{results.length === 0}}" class="empty-tip">点击上方按钮开始测试</view>
+    <view wx:for="{{results}}" wx:key="index" class="result-item {{item.status === 'success' ? 'result-success' : 'result-fail'}}">
+      <view class="result-header">
+        <text class="result-name">{{item.name}}</text>
+        <text class="tag {{item.status === 'success' ? 'tag-green' : 'tag-red'}}">{{item.status === 'success' ? 'PASS' : 'FAIL'}}</text>
+        <text class="result-time">{{item.time}}</text>
+      </view>
+      <view class="result-detail">{{item.detail}}</view>
+    </view>
+  </view>
+</view>

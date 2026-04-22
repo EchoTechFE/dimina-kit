@@ -1,0 +1,86 @@
+<view class="container">
+  <view class="page-title">组件 & AppData 测试</view>
+  <view class="page-desc">测试组件状态变化和 WXML 树结构，在 AppData 和 WXML 面板查看</view>
+
+  <!-- 页面级 setData -->
+  <view class="section">
+    <view class="section-title">页面 setData 测试</view>
+    <view class="info-row">
+      <text>当前消息: {{message}}</text>
+    </view>
+    <view class="info-row">
+      <text>计数: {{count}}</text>
+    </view>
+    <view class="info-row">
+      <text>时间戳: {{timestamp}}</text>
+    </view>
+    <button class="btn btn-primary" bindtap="updateMessage">更新消息</button>
+    <button class="btn btn-info" bindtap="incrementCount">计数 +1 (当前: {{count}})</button>
+    <button class="btn btn-success" bindtap="updateTimestamp">更新时间戳</button>
+    <button class="btn btn-warning" bindtap="updateAll">一次更新多个字段</button>
+  </view>
+
+  <!-- Counter 组件 -->
+  <view class="section">
+    <view class="section-title">Counter 组件 (自定义组件测试)</view>
+    <counter label="默认计数器" initial="{{0}}" step="{{1}}" bind:change="onCounterChange" />
+    <view class="divider"></view>
+    <counter label="步长为5" initial="{{10}}" step="{{5}}" bind:change="onCounterChange" />
+    <view class="divider"></view>
+    <counter label="步长为10" initial="{{100}}" step="{{10}}" bind:change="onCounterChange" />
+  </view>
+
+  <!-- 动态列表 -->
+  <view class="section">
+    <view class="section-title">动态列表 (wx:for 渲染测试)</view>
+    <button class="btn btn-success" bindtap="addListItem">添加一项</button>
+    <button class="btn btn-danger" bindtap="removeLastItem" wx:if="{{list.length > 0}}">移除最后一项</button>
+    <button class="btn btn-warning" bindtap="shuffleList" wx:if="{{list.length > 1}}">随机排序</button>
+
+    <view wx:if="{{list.length === 0}}" class="empty-tip">
+      <text>列表为空，点击上方按钮添加</text>
+    </view>
+
+    <view class="list-item" wx:for="{{list}}" wx:key="id">
+      <view class="list-item-index">#{{index + 1}}</view>
+      <view class="list-item-content">
+        <text class="list-item-title">{{item.title}}</text>
+        <text class="list-item-desc">ID: {{item.id}} | 创建于: {{item.time}}</text>
+      </view>
+      <view class="list-item-remove" bindtap="removeItem" data-index="{{index}}">x</view>
+    </view>
+  </view>
+
+  <!-- 嵌套组件 -->
+  <view class="section">
+    <view class="section-title">嵌套组件 (WXML 树深度测试)</view>
+    <view class="nesting-info">
+      <text>以下组件嵌套了 {{nestingDepth}} 层，在 WXML 面板中查看组件树</text>
+    </view>
+    <button class="btn btn-primary" bindtap="increaseNesting" wx:if="{{nestingDepth < 6}}">增加嵌套层级 (当前: {{nestingDepth}})</button>
+    <button class="btn btn-danger" bindtap="decreaseNesting" wx:if="{{nestingDepth > 1}}">减少嵌套层级</button>
+
+    <nested-item
+      data="{{nestedData}}"
+      depth="{{nestingDepth}}"
+    />
+  </view>
+
+  <!-- 条件渲染 -->
+  <view class="section">
+    <view class="section-title">条件渲染 (wx:if 测试)</view>
+    <button class="btn btn-primary" bindtap="toggleVisibility">切换显示 (当前: {{showBlock ? '显示' : '隐藏'}})</button>
+
+    <view wx:if="{{showBlock}}" class="conditional-block block-a">
+      <text>Block A - 通过 wx:if 控制显示</text>
+    </view>
+    <view wx:elif="{{showAlternate}}" class="conditional-block block-b">
+      <text>Block B - 通过 wx:elif 显示的替代内容</text>
+    </view>
+    <view wx:else class="conditional-block block-c">
+      <text>Block C - 默认显示内容 (wx:else)</text>
+    </view>
+
+    <button class="btn btn-info" bindtap="toggleAlternate">切换替代块</button>
+  </view>
+</view>

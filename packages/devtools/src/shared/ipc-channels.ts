@@ -17,9 +17,21 @@ export const SimulatorChannel = {
   Wxml: 'simulator:wxml',
   AppData: 'simulator:appdata',
   AppDataAll: 'simulator:appdata-all',
-  Storage: 'simulator:storage',
-  StorageAll: 'simulator:storage-all',
 } as const
+
+// ── Storage (CDP-backed; main process attaches the debugger to the
+// simulator <webview> and forwards DOMStorage events to the renderer) ──
+export const SimulatorStorageChannel = {
+  GetSnapshot: 'simulator:storage:snapshot',
+  Event: 'simulator:storage:event',
+} as const
+
+export interface StorageItem { key: string; value: string }
+export type StorageEvent =
+  | { type: 'added'; key: string; newValue: string }
+  | { type: 'updated'; key: string; oldValue: string; newValue: string }
+  | { type: 'removed'; key: string }
+  | { type: 'cleared' }
 
 // ── Workbench ────────────────────────────────────────────────────────────
 
@@ -112,7 +124,12 @@ export const BridgeChannel = {
   WxmlRefreshRequest: 'wxml:refresh:request',
   AppDataGetAllRequest: 'appdata:getAll:request',
   AppDataGetAllResponse: 'appdata:getAll:response',
-  StorageGetAllRequest: 'storage:getAll:request',
+} as const
+
+// ── Automation (WebSocket server) ────────────────────────────────────────
+
+export const AutomationChannel = {
+  GetPort: 'automation:port',
 } as const
 
 // ── Embedded settings overlay ────────────────────────────────────────────

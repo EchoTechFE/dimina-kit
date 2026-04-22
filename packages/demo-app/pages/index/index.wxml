@@ -1,0 +1,46 @@
+<view class="container">
+  <view class="page-title">DevTools 功能测试</view>
+  <view class="page-desc">选择一个测试页面，验证开发者工具的各项功能</view>
+
+  <view class="section" wx:for="{{menuItems}}" wx:key="path">
+    <view class="menu-item" bindtap="navigateTo" data-path="{{item.path}}">
+      <view class="menu-icon">{{item.icon}}</view>
+      <view class="menu-content">
+        <view class="menu-title">{{item.title}}</view>
+        <view class="menu-subtitle">{{item.subtitle}}</view>
+        <view class="menu-tags">
+          <text class="tag tag-blue" wx:for="{{item.tags}}" wx:for-item="tag" wx:key="*this">{{tag}}</text>
+        </view>
+      </view>
+      <view class="menu-arrow">></view>
+    </view>
+  </view>
+
+  <view class="section">
+    <view class="section-title">设备信息 (Device Info)</view>
+    <view class="info-row">
+      <text class="info-label">屏幕宽度</text>
+      <text class="info-value">{{deviceInfo.screenWidth}}px</text>
+    </view>
+    <view class="info-row">
+      <text class="info-label">屏幕高度</text>
+      <text class="info-value">{{deviceInfo.screenHeight}}px</text>
+    </view>
+    <view class="info-row">
+      <text class="info-label">窗口宽度</text>
+      <text class="info-value">{{deviceInfo.windowWidth}}px</text>
+    </view>
+    <view class="info-row">
+      <text class="info-label">窗口高度</text>
+      <text class="info-value">{{deviceInfo.windowHeight}}px</text>
+    </view>
+    <view class="info-row">
+      <text class="info-label">像素比</text>
+      <text class="info-value">{{deviceInfo.pixelRatio}}</text>
+    </view>
+    <view class="info-row">
+      <text class="info-label">平台</text>
+      <text class="info-value">{{deviceInfo.platform}}</text>
+    </view>
+  </view>
+</view>

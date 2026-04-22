@@ -1,0 +1,5 @@
+.response-status {
+  display: flex;
+  gap: 16rpx;
+  margin-bottom: 16rpx;
+}

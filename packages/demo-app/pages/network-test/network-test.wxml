@@ -1,0 +1,53 @@
+<view class="container">
+  <view class="page-title">Network 网络测试</view>
+  <view class="page-desc">测试网络请求，在 Network 面板中查看请求详情</view>
+
+  <!-- GET 请求 -->
+  <view class="section">
+    <view class="section-title">GET 请求</view>
+    <button class="btn btn-primary" bindtap="requestGet">GET - 获取数据</button>
+    <button class="btn btn-primary" bindtap="requestGetWithParams">GET - 带参数查询</button>
+    <button class="btn btn-info" bindtap="requestGetJson">GET - 获取 JSON</button>
+  </view>
+
+  <!-- POST 请求 -->
+  <view class="section">
+    <view class="section-title">POST 请求</view>
+    <button class="btn btn-success" bindtap="requestPost">POST - 提交数据</button>
+    <button class="btn btn-success" bindtap="requestPostJson">POST - 提交 JSON</button>
+  </view>
+
+  <!-- 异常测试 -->
+  <view class="section">
+    <view class="section-title">异常场景</view>
+    <button class="btn btn-warning" bindtap="requestTimeout">请求超时 (3秒超时)</button>
+    <button class="btn btn-danger" bindtap="request404">404 错误</button>
+    <button class="btn btn-danger" bindtap="request500">500 错误</button>
+    <button class="btn btn-danger" bindtap="requestInvalidUrl">无效 URL</button>
+  </view>
+
+  <!-- 批量请求 -->
+  <view class="section">
+    <view class="section-title">批量请求</view>
+    <button class="btn btn-primary" bindtap="requestParallel">并发 5 个请求</button>
+    <button class="btn btn-info" bindtap="requestSequential">顺序 3 个请求</button>
+  </view>
+
+  <!-- 响应展示 -->
+  <view class="section">
+    <view class="section-title">最近响应</view>
+    <view class="response-status" wx:if="{{loading}}">
+      <text class="tag tag-blue">请求中...</text>
+    </view>
+    <view class="response-status" wx:elif="{{lastStatus}}">
+      <text class="tag {{lastStatus >= 200 && lastStatus < 300 ? 'tag-green' : 'tag-red'}}">
+        状态码: {{lastStatus}}
+      </text>
+      <text class="tag tag-blue">耗时: {{lastDuration}}ms</text>
+    </view>
+    <view class="result-area" wx:if="{{lastResponse}}">{{lastResponse}}</view>
+    <view class="result-area" wx:elif="{{lastError}}">
+      <text style="color: #ff4d4f;">错误: {{lastError}}</text>
+    </view>
+  </view>
+</view>
