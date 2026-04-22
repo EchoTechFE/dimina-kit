@@ -1,24 +1,15 @@
-import { test, expect } from './fixtures'
+import { test, expect, useSharedProject } from './fixtures'
 import {
   DEMO_APP_DIR,
-  openProjectInUI,
-  closeProject,
   evalInSimulator,
   pollUntil,
-  waitForSimulatorWebview,
 } from './helpers'
 
 test.describe('Extension Panels Data Bridge', () => {
   test.setTimeout(90_000)
+  test.describe.configure({ mode: 'serial' })
 
-  test.beforeEach(async ({ mainWindow, electronApp }) => {
-    await openProjectInUI(mainWindow, DEMO_APP_DIR, { waitMs: 8000, waitForWebview: true })
-    await waitForSimulatorWebview(electronApp)
-  })
-
-  test.afterEach(async ({ mainWindow }) => {
-    await closeProject(mainWindow)
-  })
+  useSharedProject(test, DEMO_APP_DIR, { openOptions: { waitMs: 8000, waitForWebview: true } })
 
   test('simulator exposes compat wx APIs in webview', async ({ electronApp }) => {
     const result = await evalInSimulator<{
@@ -49,32 +40,45 @@ test.describe('Extension Panels Data Bridge', () => {
 
   test('WXML panel renders in main window after tab switch', async ({ mainWindow }) => {
     await mainWindow.getByRole('tab', { name: 'WXML' }).click()
-    await mainWindow.waitForTimeout(500)
+    await mainWindow.locator('button:has-text("↻ 刷新")').waitFor({ timeout: 8000 })
+    // Trigger a fresh fetch — without this we'd race the initial wxml IPC.
+    await mainWindow.locator('button:has-text("↻ 刷新")').click()
 
+    // Assert the tree actually renders (not the "等待小程序加载..." empty
+    // state). demo-app index.wxml has a <view class="container">, which the
+    // panel renders as a node including the tagName 'view' and the class.
+    // This catches a regression of the usePanelData IPC-listener race —
+    // before the fix, the panel stayed in its empty state because no
+    // SimulatorChannel.Wxml events ever reached React state.
     const text = await pollUntil(
       () => mainWindow.evaluate(() => document.body.innerText),
-      (value) => value.includes('刷新'),
+      (value) => value.includes('container') && !value.includes('等待小程序加载'),
       15000
     )
 
-    expect(text).toContain('刷新')
+    expect(text).toContain('container')
+    expect(text).not.toContain('等待小程序加载')
   })
 
   test('Storage panel renders in main window after tab switch', async ({ mainWindow, electronApp }) => {
     await mainWindow.getByRole('tab', { name: 'Storage' }).click()
-    await mainWindow.waitForTimeout(1000)
+    await mainWindow.locator('button:has-text("↻ 刷新")').waitFor({ timeout: 8000 })
 
+    // Storage panel data now flows through the CDP DOMStorage domain
+    // attached by the main process — the panel sees every localStorage
+    // change in the simulator webview regardless of the writer (wx,
+    // api-compat, devtools console, etc.). Any plain localStorage write
+    // is sufficient.
     await evalInSimulator(
       electronApp,
-      `wx.setStorageSync('e2e_storage_key', 'e2e_storage_value')`
+      `localStorage.setItem('e2e_storage_key', 'e2e_storage_value')`,
     )
 
     const text = await pollUntil(
       () => mainWindow.evaluate(() => document.body.innerText),
       (value) => value.includes('e2e_storage_key'),
-      15000
+      15000,
     )
-
     expect(text).toContain('e2e_storage_key')
   })
 

@@ -10,9 +10,10 @@
  * (simulator webContents, IPC handlers, etc.) without modifying dimina upstream.
  */
 
-/// <reference types="electron" />
+import { ipcMain } from 'electron'
+import type { AddressInfo } from 'net'
 import { WebSocketServer, type WebSocket } from 'ws'
-import { SimulatorChannel } from '../../../shared/ipc-channels.js'
+import { AutomationChannel, SimulatorChannel } from '../../../shared/ipc-channels.js'
 import type { WorkbenchContext } from '../workbench-context.js'
 import type { Handler, RpcEvent, RpcRequest, RpcResponse } from './shared.js'
 import { getSimulator } from './exec.js'
@@ -37,12 +38,34 @@ export interface AutomationServer {
   port: number
 }
 
-export function startAutomationServer(
+let currentPort: number | null = null
+let portIpcRegistered = false
+
+export function getAutomationPort(): number | null {
+  return currentPort
+}
+
+export async function startAutomationServer(
   ctx: WorkbenchContext,
-  port: number,
-): AutomationServer {
+  port: number = 0,
+): Promise<AutomationServer> {
   const wss = new WebSocketServer({ port })
   const clients = new Set<WebSocket>()
+
+  await new Promise<void>((resolve, reject) => {
+    wss.once('listening', () => resolve())
+    wss.once('error', (err) => reject(err))
+  })
+
+  const addr = wss.address()
+  // ws always binds via an http.Server, so address() is AddressInfo here.
+  const resolvedPort = typeof addr === 'object' && addr ? (addr as AddressInfo).port : port
+  currentPort = resolvedPort
+
+  if (!portIpcRegistered) {
+    portIpcRegistered = true
+    ipcMain.handle(AutomationChannel.GetPort, () => currentPort)
+  }
 
   function broadcast(event: RpcEvent): void {
     const msg = JSON.stringify(event)
@@ -110,5 +133,11 @@ export function startAutomationServer(
     ws.on('close', () => clients.delete(ws))
   })
 
-  return { close: () => wss.close(), port }
+  return {
+    close: () => {
+      if (currentPort === resolvedPort) currentPort = null
+      wss.close()
+    },
+    port: resolvedPort,
+  }
 }

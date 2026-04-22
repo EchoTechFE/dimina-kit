@@ -1,0 +1,33 @@
+<view class="fullscreen-page">
+  <view class="custom-nav" style="padding-top: {{statusBarHeight}}px;">
+    <view class="nav-content">
+      <view class="nav-back" bindtap="goBack">
+        <text class="nav-back-icon">&lt;</text>
+      </view>
+      <view class="nav-title">自定义导航栏</view>
+    </view>
+  </view>
+
+  <view class="content" style="padding-top: {{navHeight}}px;">
+    <view class="section">
+      <view class="section-title">全屏模式说明</view>
+      <view class="info-row">
+        <text class="info-label">navigationStyle</text>
+        <text class="info-value">custom</text>
+      </view>
+      <view class="info-row">
+        <text class="info-label">状态栏高度</text>
+        <text class="info-value">{{statusBarHeight}}px</text>
+      </view>
+      <view class="info-row">
+        <text class="info-label">导航栏总高度</text>
+        <text class="info-value">{{navHeight}}px</text>
+      </view>
+    </view>
+
+    <view class="section">
+      <view class="section-title">功能验证</view>
+      <view class="desc">当 navigationStyle 设为 "custom" 时，内置导航栏应被隐藏，页面内容延伸至屏幕顶部。开发者需要自行实现导航栏。</view>
+    </view>
+  </view>
+</view>

@@ -1,0 +1,59 @@
+.empty-tip {
+  text-align: center;
+  padding: 40rpx;
+  color: #ccc;
+  font-size: 28rpx;
+}
+
+.storage-item {
+  background: #fafafa;
+  border-radius: 8rpx;
+  padding: 20rpx;
+  margin-top: 16rpx;
+  border: 1rpx solid #f0f0f0;
+}
+
+.storage-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8rpx;
+}
+
+.storage-key {
+  font-size: 28rpx;
+  font-weight: 600;
+  color: #1890ff;
+}
+
+.storage-actions {
+  display: flex;
+  gap: 16rpx;
+}
+
+.action-btn {
+  font-size: 24rpx;
+  padding: 4rpx 16rpx;
+  border-radius: 6rpx;
+}
+
+.action-copy {
+  color: #1890ff;
+  background: #e6f7ff;
+}
+
+.action-delete {
+  color: #ff4d4f;
+  background: #fff2f0;
+}
+
+.storage-value {
+  font-size: 26rpx;
+  color: #666;
+  word-break: break-all;
+  margin-bottom: 8rpx;
+}
+
+.storage-type {
+  margin-top: 4rpx;
+}

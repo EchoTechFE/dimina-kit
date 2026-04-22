@@ -1,20 +1,14 @@
-import { test, expect } from './fixtures'
+import { test, expect, useSharedProject } from './fixtures'
 import {
   DEMO_APP_DIR,
-  openProjectInUI,
-  closeProject,
   findButtonByText,
   findButtonByTitle,
 } from './helpers'
 
 test.describe('Simulator Panel', () => {
-  test.beforeEach(async ({ mainWindow }) => {
-    await openProjectInUI(mainWindow, DEMO_APP_DIR, { waitForWebview: true })
-  })
+  test.describe.configure({ mode: 'serial' })
 
-  test.afterEach(async ({ mainWindow }) => {
-    await closeProject(mainWindow)
-  })
+  useSharedProject(test, DEMO_APP_DIR, { openOptions: { waitForWebview: true } })
 
   test('toolbar has compile and simulator toggle buttons', async ({ mainWindow }) => {
     expect(await findButtonByText(mainWindow, '普通编译')).toBe(true)

@@ -6,6 +6,7 @@
     "DIMINA_NO_OPEN_BROWSER",
     "DIMINA_DEBUG_PORT",
     "NODE_ENV",
+    "CI",
     "GITHUB_TOKEN"
   ],
   "tasks": {

@@ -1,0 +1,63 @@
+<view class="container">
+  <view class="page-title">Console 输出测试</view>
+  <view class="page-desc">点击按钮触发不同级别的 console 输出，在 Console 面板中查看结果</view>
+
+  <!-- console.log 测试 -->
+  <view class="section">
+    <view class="section-title">console.log - 基本输出</view>
+    <button class="btn btn-primary" bindtap="logString">输出字符串</button>
+    <button class="btn btn-primary" bindtap="logNumber">输出数字</button>
+    <button class="btn btn-primary" bindtap="logObject">输出对象</button>
+    <button class="btn btn-primary" bindtap="logArray">输出数组</button>
+    <button class="btn btn-primary" bindtap="logMultiple">输出多个参数</button>
+    <button class="btn btn-primary" bindtap="logNested">输出嵌套对象</button>
+  </view>
+
+  <!-- console.warn -->
+  <view class="section">
+    <view class="section-title">console.warn - 警告</view>
+    <button class="btn btn-warning" bindtap="logWarn">触发 warn</button>
+    <button class="btn btn-warning" bindtap="logWarnObject">触发 warn (含对象)</button>
+  </view>
+
+  <!-- console.error -->
+  <view class="section">
+    <view class="section-title">console.error - 错误</view>
+    <button class="btn btn-danger" bindtap="logError">触发 error</button>
+    <button class="btn btn-danger" bindtap="logErrorObject">触发 error (含 Error 对象)</button>
+  </view>
+
+  <!-- console.info / console.debug -->
+  <view class="section">
+    <view class="section-title">console.info / console.debug</view>
+    <button class="btn btn-info" bindtap="logInfo">触发 info</button>
+    <button class="btn btn-default" bindtap="logDebug">触发 debug</button>
+  </view>
+
+  <!-- 异常测试 -->
+  <view class="section">
+    <view class="section-title">异常捕获测试</view>
+    <button class="btn btn-danger" bindtap="triggerUncaughtError">触发未捕获异常 (window.onerror)</button>
+    <button class="btn btn-danger" bindtap="triggerUnhandledRejection">触发未处理 Promise 拒绝</button>
+    <button class="btn btn-warning" bindtap="triggerTypeError">触发 TypeError</button>
+    <button class="btn btn-warning" bindtap="triggerReferenceError">触发 ReferenceError</button>
+  </view>
+
+  <!-- 定时输出 -->
+  <view class="section">
+    <view class="section-title">定时输出 (流式测试)</view>
+    <view class="timer-status">
+      <text wx:if="{{timerRunning}}" class="tag tag-green">运行中 - 已输出 {{timerCount}} 条</text>
+      <text wx:else class="tag tag-red">已停止</text>
+    </view>
+    <button class="btn btn-success" bindtap="startTimer" wx:if="{{!timerRunning}}">启动定时输出 (每2秒)</button>
+    <button class="btn btn-danger" bindtap="stopTimer" wx:if="{{timerRunning}}">停止定时输出</button>
+  </view>
+
+  <!-- 批量输出 -->
+  <view class="section">
+    <view class="section-title">批量输出测试</view>
+    <button class="btn btn-primary" bindtap="logBatch">批量输出 50 条日志</button>
+    <button class="btn btn-warning" bindtap="logMixed">混合输出所有级别</button>
+  </view>
+</view>

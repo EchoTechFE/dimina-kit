@@ -1,0 +1,14 @@
+{
+  "pages": [
+    "pages/index/index",
+    "pages/console-test/console-test",
+    "pages/storage-test/storage-test",
+    "pages/network-test/network-test",
+    "pages/component-test/component-test"
+  ],
+  "window": {
+    "navigationBarTitleText": "DevTools Feature Demo",
+    "navigationBarBackgroundColor": "#4A90D9",
+    "navigationBarTextStyle": "white"
+  }
+}

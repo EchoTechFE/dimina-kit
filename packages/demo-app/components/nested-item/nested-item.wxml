@@ -1,0 +1,28 @@
+<view class="nested-wrapper" style="border-left: 4rpx solid {{data.color || '#ccc'}};">
+  <view class="nested-header" bindtap="toggleExpand">
+    <text class="nested-arrow">{{expanded ? '▼' : '▶'}}</text>
+    <text class="nested-label" style="color: {{data.color || '#333'}};">{{data.label || '未命名节点'}}</text>
+    <text class="nested-depth">层级 {{currentDepth}}</text>
+  </view>
+
+  <view class="nested-content" wx:if="{{expanded}}">
+    <view class="nested-info">
+      <text>颜色: {{data.color}}</text>
+      <text wx:if="{{data.children.length > 0}}"> | 子节点: {{data.children.length}} 个</text>
+    </view>
+
+    <block wx:if="{{currentDepth < depth && data.children.length > 0}}">
+      <nested-item
+        wx:for="{{data.children}}"
+        wx:key="label"
+        data="{{item}}"
+        depth="{{depth}}"
+        current-depth="{{currentDepth + 1}}"
+      />
+    </block>
+
+    <view class="nested-leaf" wx:elif="{{data.children.length > 0}}">
+      <text class="nested-truncated">... 已达最大显示深度 ({{depth}} 层)</text>
+    </view>
+  </view>
+</view>

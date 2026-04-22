@@ -6,14 +6,16 @@
 // because webview sandbox cannot resolve require() for separate modules.
 import { installSimulatorBridge } from '../runtime/bridge.js'
 import { installConsoleInstrumentation } from '../instrumentation/console.js'
-import { installStorageInstrumentation } from '../instrumentation/storage.js'
 import { installAppDataInstrumentation } from '../instrumentation/app-data.js'
 import { installWxmlInstrumentation } from '../instrumentation/wxml.js'
 import { setupApiCompatHook } from '../shared/api-compat.js'
 
+// Note: storage panel data is sourced from the main process via the CDP
+// DOMStorage domain (src/main/services/simulator-storage). No preload-side
+// localStorage hook is required.
+
 setupApiCompatHook()
 installSimulatorBridge()
 installConsoleInstrumentation()
-installStorageInstrumentation()
 installAppDataInstrumentation()
 installWxmlInstrumentation()

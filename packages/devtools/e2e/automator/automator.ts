@@ -8,6 +8,7 @@
  */
 
 import { _electron, type ElectronApplication, type Page as PwPage } from '@playwright/test'
+import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { MiniProgram } from './mini-program'
@@ -24,6 +25,27 @@ export interface AutomatorLaunchOptions {
   compileWaitMs?: number
   /** Whether to wait for the simulator webview to appear. Default true. */
   waitForWebview?: boolean
+  /**
+   * Playwright worker index (or any unique slot id). Used to compute a
+   * per-worker `--user-data-dir` so parallel Electron processes don't clobber
+   * each other's projects.json / settings. Defaults to 0.
+   */
+  workerIndex?: number
+}
+
+export function automatorUserDataDir(workerIndex: number): string {
+  const dir = path.resolve(
+    __dirname,
+    '..',
+    '..',
+    'node_modules',
+    '.cache',
+    'devtools-e2e',
+    'userdata',
+    `automator-worker-${workerIndex}`,
+  )
+  fs.mkdirSync(dir, { recursive: true })
+  return dir
 }
 
 export class Automator {
@@ -36,12 +58,19 @@ export class Automator {
       electronEntry = path.resolve(__dirname, '..', 'electron-entry.js'),
       compileWaitMs = 8000,
       waitForWebview = true,
+      workerIndex = 0,
     } = options
+
+    const userDataDir = automatorUserDataDir(workerIndex)
 
     // Launch Electron
     const electronApp = await _electron.launch({
-      args: [electronEntry],
-      env: { ...process.env, NODE_ENV: 'test' },
+      args: [electronEntry, `--user-data-dir=${userDataDir}`],
+      env: {
+        ...process.env,
+        NODE_ENV: 'test',
+        DIMINA_E2E_USER_DATA_DIR: userDataDir,
+      },
     })
 
     // Wait for the main window

@@ -1,0 +1,6 @@
+{
+  "component": true,
+  "usingComponents": {
+    "nested-item": "/components/nested-item/nested-item"
+  }
+}

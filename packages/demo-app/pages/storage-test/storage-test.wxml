@@ -1,0 +1,61 @@
+<view class="container">
+  <view class="page-title">Storage 存储测试</view>
+  <view class="page-desc">测试 localStorage 的读写操作，在 Storage 面板中查看变化</view>
+
+  <!-- 添加数据 -->
+  <view class="section">
+    <view class="section-title">添加数据</view>
+    <view class="input-row">
+      <input class="input-field" placeholder="键名 (Key)" value="{{inputKey}}" bindinput="onKeyInput" />
+    </view>
+    <view class="input-row">
+      <input class="input-field" placeholder="值 (Value)" value="{{inputValue}}" bindinput="onValueInput" />
+    </view>
+    <button class="btn btn-primary" bindtap="setItem">存储数据 (setItem)</button>
+    <button class="btn btn-info" bindtap="setObjectItem">存储对象数据</button>
+  </view>
+
+  <!-- 读取数据 -->
+  <view class="section">
+    <view class="section-title">读取数据</view>
+    <view class="input-row">
+      <input class="input-field" placeholder="输入键名查询" value="{{queryKey}}" bindinput="onQueryKeyInput" />
+      <button class="btn btn-success" bindtap="getItem">查询</button>
+    </view>
+    <view class="result-area" wx:if="{{queryResult !== null}}">
+      <text>查询结果: {{queryResult}}</text>
+    </view>
+  </view>
+
+  <!-- 预设数据 -->
+  <view class="section">
+    <view class="section-title">快捷操作</view>
+    <button class="btn btn-success" bindtap="populateDemoData">填充示例数据</button>
+    <button class="btn btn-warning" bindtap="populateLargeData">填充大量数据 (20条)</button>
+    <button class="btn btn-danger" bindtap="clearAll">清空所有数据</button>
+  </view>
+
+  <!-- 数据列表 -->
+  <view class="section">
+    <view class="section-title">当前存储内容 (共 {{storageItems.length}} 项)</view>
+    <button class="btn btn-default" bindtap="refreshList">刷新列表</button>
+
+    <view wx:if="{{storageItems.length === 0}}" class="empty-tip">
+      <text>暂无数据</text>
+    </view>
+
+    <view class="storage-item" wx:for="{{storageItems}}" wx:key="key">
+      <view class="storage-item-header">
+        <text class="storage-key">{{item.key}}</text>
+        <view class="storage-actions">
+          <text class="action-btn action-copy" bindtap="copyValue" data-key="{{item.key}}">复制</text>
+          <text class="action-btn action-delete" bindtap="removeItem" data-key="{{item.key}}">删除</text>
+        </view>
+      </view>
+      <view class="storage-value">{{item.value}}</view>
+      <view class="storage-type">
+        <text class="tag tag-blue">{{item.type}}</text>
+      </view>
+    </view>
+  </view>
+</view>
