@@ -1,9 +1,8 @@
-// E2E entry for the update flow. Bypasses the default launcher so we can
-// wire a synthetic UpdateChecker (no network) with getCurrentVersion='0'.
+// E2E entry for the update flow. Hits the real GitHub Releases API for
+// EchoTechFE/dimina-kit and mocks the current version as '0' so the
+// `release-YYYYMMDD-N` scheme always resolves to an available update.
 import electron from 'electron'
-import fs from 'fs'
-import path from 'path'
-import { createWorkbenchApp } from '../dist/main/api.js'
+import { createWorkbenchApp, createGitHubReleaseChecker } from '../dist/main/api.js'
 
 if (process.env.NODE_ENV === 'test') {
   const hide = (win) => {
@@ -20,27 +19,13 @@ if (process.env.NODE_ENV === 'test') {
   })
 }
 
-const syntheticChecker = {
-  async checkForUpdates() {
-    return {
-      version: '9.9.9',
-      downloadUrl: 'synthetic://update',
-      releaseNotes: 'Synthetic release notes used by the e2e update flow.',
-    }
-  },
-  async downloadUpdate(_info, onProgress) {
-    for (const pct of [0, 25, 50, 75, 100]) {
-      onProgress?.(pct)
-      await new Promise((r) => setTimeout(r, 40))
-    }
-    const filePath = path.join(electron.app.getPath('temp'), 'dimina-update-e2e.bin')
-    fs.writeFileSync(filePath, Buffer.from('synthetic update payload'))
-    return filePath
-  },
-}
-
 createWorkbenchApp({
-  updateChecker: syntheticChecker,
+  updateChecker: createGitHubReleaseChecker({
+    owner: 'EchoTechFE',
+    repo: 'dimina-kit',
+    versionScheme: 'trailing-number',
+    token: process.env.GITHUB_TOKEN || undefined,
+  }),
   updateOptions: {
     initialDelay: 300,
     getCurrentVersion: () => '0',

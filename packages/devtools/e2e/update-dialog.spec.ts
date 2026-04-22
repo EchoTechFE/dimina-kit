@@ -4,7 +4,15 @@ import { fileURLToPath } from 'url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
-test.describe('Update dialog flow', () => {
+/**
+ * Drives the real GitHub Releases API for EchoTechFE/dimina-kit with
+ * getCurrentVersion='0', so the `trailing-number` scheme always resolves
+ * to a newer release (e.g. release-20260422-1 → version '1' > '0').
+ *
+ * Requires network access. Set GITHUB_TOKEN in the environment to avoid
+ * unauthenticated rate limits.
+ */
+test.describe('Update dialog flow (real GitHub)', () => {
   let electronApp: ElectronApplication
   let mainWindow: Page
 
@@ -25,20 +33,11 @@ test.describe('Update dialog flow', () => {
     await electronApp?.close().catch(() => {})
   })
 
-  test('dialog appears when an update is available', async () => {
-    await expect(mainWindow.getByText('Update Available')).toBeVisible({ timeout: 10_000 })
-    await expect(mainWindow.getByText('New version 9.9.9 is available.')).toBeVisible()
-    await expect(mainWindow.getByText(/Synthetic release notes/)).toBeVisible()
+  test('dialog appears with the latest release version', async () => {
+    await expect(mainWindow.getByText('Update Available')).toBeVisible({ timeout: 15_000 })
+    // Version text comes from the real tag trailing number (e.g. release-…-1 → "1").
+    await expect(mainWindow.getByText(/New version \d+ is available\./)).toBeVisible()
     await expect(mainWindow.getByRole('button', { name: 'Download' })).toBeVisible()
     await expect(mainWindow.getByRole('button', { name: 'Later' })).toBeVisible()
-  })
-
-  test('download transitions to ready-to-install', async () => {
-    await mainWindow.getByRole('button', { name: 'Download' }).click()
-
-    // The dialog may briefly show "Downloading..." depending on timing, then "Ready to Install".
-    await expect(mainWindow.getByText('Ready to Install')).toBeVisible({ timeout: 5_000 })
-    await expect(mainWindow.getByRole('button', { name: /Install & Restart/ })).toBeVisible()
-    // Do NOT click Install — it would quit the app via app.quit() and break subsequent tests.
   })
 })

@@ -33,6 +33,7 @@ export type {
   UpdateManagerOptions,
   GitHubReleaseCheckerOptions,
   PickAssetContext,
+  VersionScheme,
 } from './services/update/index.js'
 
 // ── Types (re-export for convenience) ────────────────────────────────────

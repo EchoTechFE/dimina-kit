@@ -20,6 +20,8 @@ interface GitHubRelease {
   assets: GitHubReleaseAsset[]
 }
 
+export type VersionScheme = 'semver' | 'trailing-number'
+
 export interface GitHubReleaseCheckerOptions {
   owner: string
   repo: string
@@ -30,15 +32,20 @@ export interface GitHubReleaseCheckerOptions {
   /** Mark every delivered update as mandatory. Default: false. */
   mandatory?: boolean
   /**
+   * Built-in version scheme. Ignored when `parseVersion` is supplied.
+   * - `'semver'` (default): extract `x.y.z` from `tag_name` → release name → first asset name.
+   * - `'trailing-number'`: treat the trailing `-<N>` in `tag_name` as the version
+   *   (e.g. `release-20260422-1` → `'1'`). Compared as an integer.
+   */
+  versionScheme?: VersionScheme
+  /**
    * Custom asset picker. Receives the release assets plus the current
    * process platform/arch. If omitted, a built-in picker is used that
    * matches by file extension and arch suffix.
    */
   pickAsset?: (assets: GitHubReleaseAsset[], ctx: PickAssetContext) => GitHubReleaseAsset | undefined
   /**
-   * Extract the semver version string from a release. Default strips a
-   * leading `v` from `tag_name` and falls back to scanning the release
-   * name / first asset name for a `x.y.z` pattern.
+   * Extract the version string from a release. Overrides `versionScheme`.
    */
   parseVersion?: (release: GitHubRelease) => string | null
 }
@@ -53,12 +60,14 @@ export function createGitHubReleaseChecker(opts: GitHubReleaseCheckerOptions): U
     ? `https://api.github.com/repos/${opts.owner}/${opts.repo}/releases`
     : `https://api.github.com/repos/${opts.owner}/${opts.repo}/releases/latest`
 
+  const parseVersion = opts.parseVersion ?? schemeParser(opts.versionScheme ?? 'semver')
+
   return {
     async checkForUpdates(currentVersion: string): Promise<UpdateInfo | null> {
       const release = await fetchRelease(releaseUrl, opts)
       if (!release) return null
 
-      const latestVersion = (opts.parseVersion ?? defaultParseVersion)(release)
+      const latestVersion = parseVersion(release)
       if (!latestVersion) return null
       if (compareSemver(latestVersion, stripV(currentVersion)) <= 0) return null
 
@@ -150,6 +159,17 @@ function archAliases(arch: string): string[] {
 // ── Version parsing & comparison ──────────────────────────────────────────
 
 const SEMVER_RE = /(\d+)\.(\d+)\.(\d+)(?:[-+]([0-9A-Za-z.-]+))?/
+const TRAILING_NUMBER_RE = /-(\d+)$/
+
+function schemeParser(scheme: VersionScheme): (release: GitHubRelease) => string | null {
+  if (scheme === 'trailing-number') {
+    return (release) => {
+      const m = release.tag_name.match(TRAILING_NUMBER_RE)
+      return m ? m[1]! : null
+    }
+  }
+  return defaultParseVersion
+}
 
 function defaultParseVersion(release: GitHubRelease): string | null {
   const fromTag = extractSemver(release.tag_name)

@@ -4,4 +4,5 @@ export { createGitHubReleaseChecker } from './github-release-checker.js'
 export type {
   GitHubReleaseCheckerOptions,
   PickAssetContext,
+  VersionScheme,
 } from './github-release-checker.js'
