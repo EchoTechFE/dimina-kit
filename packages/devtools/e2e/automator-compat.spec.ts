@@ -8,6 +8,7 @@
 
 import { test, expect, _electron, type ElectronApplication, type Page as PwPage } from '@playwright/test'
 import path from 'path'
+import fs from 'fs'
 import { fileURLToPath } from 'url'
 import { WebSocket } from 'ws'
 import { createRequire } from 'module'
@@ -59,9 +60,17 @@ function wsCall(method: string, params: Record<string, unknown> = {}): Promise<R
 
 test.beforeAll(async () => {
   const appPath = path.resolve(__dirname, 'electron-entry.js')
+  // Per-process user-data-dir so parallel workers don't clobber each other's
+  // Electron projects.json / settings (this spec self-launches and doesn't
+  // share the worker-scoped fixture).
+  const userDataDir = path.resolve(
+    __dirname, '..', 'node_modules', '.cache', 'devtools-e2e', 'userdata',
+    `compat-${process.pid}`,
+  )
+  fs.mkdirSync(userDataDir, { recursive: true })
   electronApp = await _electron.launch({
-    args: [appPath, 'auto', '--auto-port', '0'],
-    env: { ...process.env, NODE_ENV: 'test' },
+    args: [appPath, 'auto', '--auto-port', '0', `--user-data-dir=${userDataDir}`],
+    env: { ...process.env, NODE_ENV: 'test', DIMINA_E2E_USER_DATA_DIR: userDataDir },
   })
 
   mainWindow = await electronApp.firstWindow()
@@ -108,7 +117,20 @@ test.describe('miniprogram-automator protocol compatibility', () => {
     test.beforeAll(async () => {
       await openProjectInUI(mainWindow, DEMO_APP_DIR, { waitMs: 8000, waitForWebview: true })
       await waitForSimulatorWebview(electronApp)
-      await new Promise((r) => setTimeout(r, 2000))
+      await pollUntil(
+        () => electronApp.evaluate(({ webContents }) => {
+          const sim = webContents.getAllWebContents().find(wc => wc.getType() === 'webview')
+          if (!sim) return Promise.resolve(false)
+          return sim.executeJavaScript(`(() => {
+            const fs = document.querySelectorAll('iframe')
+            const f = fs[fs.length - 1]
+            return !!(f && f.contentDocument && f.contentDocument.querySelector('.page-title'))
+          })()`)
+        }),
+        (ok) => ok === true,
+        15000,
+        300,
+      ).catch(() => {})
     })
 
     test.afterAll(async () => {

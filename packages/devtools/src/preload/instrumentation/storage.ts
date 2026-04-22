@@ -1,4 +1,5 @@
-import { SimulatorChannel } from '../../shared/ipc-channels.js'
+import { ipcRenderer } from 'electron'
+import { BridgeChannel, SimulatorChannel } from '../../shared/ipc-channels.js'
 import { sendToHost } from '../runtime/host.js'
 import {
   setStorageSnapshot,
@@ -93,11 +94,20 @@ export function installStorageInstrumentation(): () => void {
     }
   }
 
+  const handleStorageGetAll = () => {
+    const namespace = namespaceRef.value
+    if (!namespace) return
+    const snapshot = readSnapshot(namespace)
+    const items = Object.entries(snapshot).map(([key, value]) => ({ key, value }))
+    sendToHost(SimulatorChannel.StorageAll, items)
+  }
+
   const disposables = createDisposableSet()
 
   localStorage.setItem = handleSetItem
   localStorage.removeItem = handleRemoveItem
   window.addEventListener('hashchange', handleNamespaceChange)
+  ipcRenderer.on(BridgeChannel.StorageGetAllRequest, handleStorageGetAll)
   syncSnapshot(namespaceRef.value)
 
   disposables.add(() => {
@@ -106,6 +116,9 @@ export function installStorageInstrumentation(): () => void {
   })
   disposables.add(() => {
     window.removeEventListener('hashchange', handleNamespaceChange)
+  })
+  disposables.add(() => {
+    ipcRenderer.removeListener(BridgeChannel.StorageGetAllRequest, handleStorageGetAll)
   })
   disposables.add(() => {
     clearStorageSnapshot()
