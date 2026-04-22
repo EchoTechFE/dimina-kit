@@ -110,4 +110,13 @@ export interface WorkbenchAppConfig extends WorkbenchConfig {
   onBeforeClose?: (instance: WorkbenchHostInstance) => void | Promise<void>
   /** Custom update checker. If provided, enables the check-for-updates feature. */
   updateChecker?: UpdateChecker
+  /** Extra options applied when an updateChecker is provided. */
+  updateOptions?: {
+    /** Check interval in milliseconds. Default: 1 hour */
+    checkInterval?: number
+    /** Delay before the first check after startup in ms. Default: 5000 */
+    initialDelay?: number
+    /** Override the version string passed to the checker. Default: app.getVersion() */
+    getCurrentVersion?: () => string
+  }
 }

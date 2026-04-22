@@ -219,6 +219,9 @@ export function createWorkbenchApp(config: WorkbenchAppConfig = {}) {
         instance.updateManager = new UpdateManager({
           checker: config.updateChecker,
           mainWindow,
+          checkInterval: config.updateOptions?.checkInterval,
+          initialDelay: config.updateOptions?.initialDelay,
+          getCurrentVersion: config.updateOptions?.getCurrentVersion,
         })
       }
 

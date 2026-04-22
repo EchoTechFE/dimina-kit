@@ -6,20 +6,27 @@ export interface UpdateManagerOptions {
   mainWindow: BrowserWindow
   /** Check interval in milliseconds. Default: 1 hour */
   checkInterval?: number
+  /** Delay before the first check after startup in ms. Default: 5000 */
+  initialDelay?: number
+  /** Override the version string passed to the checker. Default: app.getVersion() */
+  getCurrentVersion?: () => string
 }
 
 export class UpdateManager {
   private checker: UpdateChecker
   private mainWindow: BrowserWindow
+  private getCurrentVersion: () => string
   private latestUpdate: UpdateInfo | null = null
   private downloadedPath: string | null = null
   private timer: ReturnType<typeof setInterval> | null = null
+  private initialTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(opts: UpdateManagerOptions) {
     this.checker = opts.checker
     this.mainWindow = opts.mainWindow
+    this.getCurrentVersion = opts.getCurrentVersion ?? (() => app.getVersion())
     this.registerIpc()
-    this.startPeriodicCheck(opts.checkInterval ?? 60 * 60 * 1000)
+    this.startPeriodicCheck(opts.checkInterval ?? 60 * 60 * 1000, opts.initialDelay ?? 5000)
   }
 
   private registerIpc(): void {
@@ -38,7 +45,7 @@ export class UpdateManager {
 
   async check(): Promise<{ hasUpdate: boolean; info?: UpdateInfo }> {
     try {
-      const currentVersion = app.getVersion()
+      const currentVersion = this.getCurrentVersion()
       const info = await this.checker.checkForUpdates(currentVersion)
       if (info) {
         this.latestUpdate = info
@@ -80,14 +87,17 @@ export class UpdateManager {
       clearInterval(this.timer)
       this.timer = null
     }
+    if (this.initialTimer) {
+      clearTimeout(this.initialTimer)
+      this.initialTimer = null
+    }
     ipcMain.removeHandler('updates:check')
     ipcMain.removeHandler('updates:download')
     ipcMain.removeHandler('updates:install')
   }
 
-  private startPeriodicCheck(interval: number): void {
-    // Check once after a short delay on startup
-    setTimeout(() => void this.checkAndNotify(), 5000)
+  private startPeriodicCheck(interval: number, initialDelay: number): void {
+    this.initialTimer = setTimeout(() => void this.checkAndNotify(), initialDelay)
     this.timer = setInterval(() => void this.checkAndNotify(), interval)
   }
 
