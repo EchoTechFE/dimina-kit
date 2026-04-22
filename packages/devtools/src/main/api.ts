@@ -28,8 +28,12 @@ export { rendererDir, defaultPreloadPath, getRendererDir, getPreloadDir, getRend
 export { simulatorDir } from './services/simulator/dir.js'
 
 // ── Update checker ───────────────────────────────────────────────────────
-export { UpdateManager } from './services/update/index.js'
-export type { UpdateManagerOptions } from './services/update/index.js'
+export { UpdateManager, createGitHubReleaseChecker } from './services/update/index.js'
+export type {
+  UpdateManagerOptions,
+  GitHubReleaseCheckerOptions,
+  PickAssetContext,
+} from './services/update/index.js'
 
 // ── Types (re-export for convenience) ────────────────────────────────────
 export type {
