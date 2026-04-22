@@ -1,0 +1,281 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: 'Channel — dev: timestamp-suffix versions, npm dist-tag dev, no GitHub Release. release: package.json versions, npm dist-tag latest, time-named GitHub Release with diff-based notes.'
+        type: choice
+        options:
+          - dev
+          - release
+        default: dev
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      release_name: ${{ steps.compute.outputs.release_name }}
+      npm_tag: ${{ steps.compute.outputs.npm_tag }}
+      dev_version_suffix: ${{ steps.compute.outputs.dev_version_suffix }}
+      last_release_tag: ${{ steps.compute.outputs.last_release_tag }}
+    steps:
+      - id: compute
+        shell: bash
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ "$CHANNEL" == "dev" ]]; then
+            ts="$(date -u +%Y%m%d%H%M%S)"
+            dev_version_suffix="dev.${ts}"
+            npm_tag="dev"
+            release_name=""
+            last_release_tag=""
+          else
+            dev_version_suffix=""
+            npm_tag="latest"
+            date_part="$(date -u +%Y%m%d)"
+            last_release_tag=$(gh release list --repo "$REPO" --limit 1 --json tagName \
+              --jq '.[0].tagName // ""')
+            last_count="${last_release_tag##*-}"
+            if [[ "$last_count" =~ ^[0-9]+$ ]]; then
+              next=$((last_count + 1))
+            else
+              next=1
+            fi
+            release_name="release-${date_part}-${next}"
+          fi
+          {
+            echo "dev_version_suffix=$dev_version_suffix"
+            echo "npm_tag=$npm_tag"
+            echo "release_name=$release_name"
+            echo "last_release_tag=$last_release_tag"
+          } >> "$GITHUB_OUTPUT"
+
+  build-clients:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+          - os: macos-latest
+            platform: mac
+          - os: windows-latest
+            platform: win
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Rewrite submodule SSH URL to HTTPS
+        shell: bash
+        run: git config --global url."https://github.com/".insteadOf "git@github.com:"
+
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - uses: pnpm/action-setup@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install workspace deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Install dimina/fe deps
+        working-directory: dimina/fe
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Bump versions for dev channel
+        if: inputs.channel == 'dev'
+        shell: bash
+        env:
+          DEV_VERSION_SUFFIX: ${{ needs.prepare.outputs.dev_version_suffix }}
+        run: node .github/scripts/bump-dev-version.js
+
+      - name: Read devtools version
+        id: ver
+        shell: bash
+        run: |
+          v="$(node -p "require('./packages/devtools/package.json').version")"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Build dimina container
+        run: pnpm --filter @dimina-kit/devtools build:container
+
+      - name: Build devtools
+        run: pnpm run build
+
+      - name: Package Electron app
+        working-directory: packages/devtools
+        run: pnpm dist --${{ matrix.platform }} --publish never
+
+      - name: Archive Linux build
+        if: inputs.channel == 'release' && matrix.platform == 'linux'
+        shell: bash
+        working-directory: packages/devtools/release
+        env:
+          VER: ${{ steps.ver.outputs.version }}
+        run: tar -czf "dimina-devtools-${VER}-linux-x64.tar.gz" linux-unpacked
+
+      - name: Archive Windows build
+        if: inputs.channel == 'release' && matrix.platform == 'win'
+        shell: pwsh
+        working-directory: packages/devtools/release
+        env:
+          VER: ${{ steps.ver.outputs.version }}
+        run: Compress-Archive -Path win-unpacked -DestinationPath "dimina-devtools-$env:VER-win-x64.zip"
+
+      - name: Rename macOS dmg
+        if: inputs.channel == 'release' && matrix.platform == 'mac'
+        shell: bash
+        working-directory: packages/devtools/release
+        env:
+          VER: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          dmgs=(*.dmg)
+          if (( ${#dmgs[@]} != 1 )); then
+            echo "Expected exactly 1 dmg, found ${#dmgs[@]}: ${dmgs[*]}" >&2
+            exit 1
+          fi
+          mv "${dmgs[0]}" "dimina-devtools-${VER}-mac.dmg"
+
+      - name: Upload built client (dev)
+        if: inputs.channel == 'dev'
+        uses: actions/upload-artifact@v7
+        with:
+          name: dimina-devtools-${{ matrix.platform }}
+          path: |
+            packages/devtools/release/linux-unpacked
+            packages/devtools/release/win-unpacked
+            packages/devtools/release/*.dmg
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload archived client (release)
+        if: inputs.channel == 'release'
+        uses: actions/upload-artifact@v7
+        with:
+          name: dimina-devtools-${{ matrix.platform }}
+          path: |
+            packages/devtools/release/dimina-devtools-*.tar.gz
+            packages/devtools/release/dimina-devtools-*.zip
+            packages/devtools/release/dimina-devtools-*.dmg
+          retention-days: 30
+          if-no-files-found: error
+
+  publish-npm:
+    needs: prepare
+    runs-on: ubuntu-latest
+    outputs:
+      notes: ${{ steps.publish.outputs.notes }}
+      changes: ${{ steps.publish.outputs.changes }}
+
+    steps:
+      - name: Rewrite submodule SSH URL to HTTPS
+        shell: bash
+        run: git config --global url."https://github.com/".insteadOf "git@github.com:"
+
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - uses: pnpm/action-setup@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install workspace deps
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install dimina/fe deps
+        working-directory: dimina/fe
+        run: pnpm install --no-frozen-lockfile --ignore-scripts
+
+      - name: Bump versions for dev channel
+        if: inputs.channel == 'dev'
+        shell: bash
+        env:
+          DEV_VERSION_SUFFIX: ${{ needs.prepare.outputs.dev_version_suffix }}
+        run: node .github/scripts/bump-dev-version.js
+
+      - name: Build dimina container
+        run: pnpm --filter @dimina-kit/devtools build:container
+
+      - name: Build packages
+        run: pnpm run build
+
+      - name: Publish changed packages
+        id: publish
+        shell: bash
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          NPM_TAG: ${{ needs.prepare.outputs.npm_tag }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: node .github/scripts/publish-packages.js
+
+  release:
+    if: inputs.channel == 'release'
+    needs: [prepare, build-clients, publish-npm]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/download-artifact@v5
+        with:
+          path: artifacts
+          pattern: dimina-devtools-*
+          merge-multiple: true
+
+      - name: Build release notes
+        shell: bash
+        env:
+          NPM_NOTES: ${{ needs.publish-npm.outputs.notes }}
+          LAST_TAG: ${{ needs.prepare.outputs.last_release_tag }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$LAST_TAG" ]] && git rev-parse --verify "refs/tags/$LAST_TAG" >/dev/null 2>&1; then
+            range="${LAST_TAG}..HEAD"
+            commits=$(git log --pretty=format:'- %s (%h)' "$range")
+            commit_header="## Commits since \`${LAST_TAG}\`"
+          else
+            commits=$(git log --pretty=format:'- %s (%h)' --max-count=20)
+            commit_header="## Recent commits"
+          fi
+          [[ -z "$commits" ]] && commits="_No new commits._"
+          {
+            printf '%s\n\n' "$NPM_NOTES"
+            printf '%s\n\n%s\n' "$commit_header" "$commits"
+          } > /tmp/release-notes.md
+          cat /tmp/release-notes.md
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_NAME: ${{ needs.prepare.outputs.release_name }}
+        shell: bash
+        run: |
+          set -e
+          gh release create "$RELEASE_NAME" \
+            --title "$RELEASE_NAME" \
+            --notes-file /tmp/release-notes.md \
+            artifacts/*
