@@ -27,6 +27,15 @@ export { registerToolbarIpc } from './ipc/toolbar.js'
 export { rendererDir, defaultPreloadPath, getRendererDir, getPreloadDir, getRendererHtml } from './utils/paths.js'
 export { simulatorDir } from './services/simulator/dir.js'
 
+// ── Update checker ───────────────────────────────────────────────────────
+export { UpdateManager, createGitHubReleaseChecker } from './services/update/index.js'
+export type {
+  UpdateManagerOptions,
+  GitHubReleaseCheckerOptions,
+  PickAssetContext,
+  VersionScheme,
+} from './services/update/index.js'
+
 // ── Types (re-export for convenience) ────────────────────────────────────
 export type {
   WorkbenchConfig,
@@ -36,4 +45,6 @@ export type {
   ToolbarAction,
   BuiltinPanelId,
   BuiltinModuleId,
+  UpdateChecker,
+  UpdateInfo,
 } from '../shared/types.js'

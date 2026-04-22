@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { ProjectList } from '@/shared/components/project-list'
 import { ProjectRuntime } from '@/modules/main/features/project-runtime/project-runtime'
+import { UpdateDialog } from '@/modules/update/update-dialog'
 import {
   addProject,
   chooseProjectDirectory,
@@ -64,8 +65,18 @@ export default function Main() {
   }
 
   if (page === 'list') {
-    return <ProjectList projects={projectList} onAdd={handleAdd} onOpen={handleOpen} onRemove={handleRemove} />
+    return (
+      <>
+        <UpdateDialog />
+        <ProjectList projects={projectList} onAdd={handleAdd} onOpen={handleOpen} onRemove={handleRemove} />
+      </>
+    )
   }
 
-  return <ProjectRuntime key={currentProject?.path} project={currentProject!} />
+  return (
+    <>
+      <UpdateDialog />
+      <ProjectRuntime key={currentProject?.path} project={currentProject!} />
+    </>
+  )
 }
