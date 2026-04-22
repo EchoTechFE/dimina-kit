@@ -22,6 +22,7 @@ import {
 } from '../ipc/index.js'
 import { startAutomationServer, type AutomationServer } from '../services/automation/index.js'
 import { startMcpServer } from '../services/mcp/index.js'
+import { UpdateManager } from '../services/update/index.js'
 
 const DEFAULT_MODULES: Record<BuiltinModuleId, boolean> = {
   projects: true,
@@ -49,6 +50,7 @@ export interface WorkbenchAppInstance {
   mainWindow: BrowserWindow
   context: WorkbenchContext
   automationServer?: AutomationServer
+  updateManager?: UpdateManager
   dispose: () => Promise<void>
 }
 
@@ -79,7 +81,8 @@ function resolveModules(config: WorkbenchAppConfig): Record<BuiltinModuleId, boo
   }
 }
 
-async function disposeContext(ctx: WorkbenchContext): Promise<void> {
+async function disposeContext(ctx: WorkbenchContext, updateManager?: UpdateManager): Promise<void> {
+  updateManager?.dispose()
   await ctx.workspace.closeProject()
 }
 
@@ -202,10 +205,21 @@ export function createWorkbenchApp(config: WorkbenchAppConfig = {}) {
       registerBuiltinModules(config, context)
       installMenu(config, mainWindow, context)
 
-      const instance: WorkbenchAppInstance = { mainWindow, context, dispose: () => disposeContext(context) }
+      const instance: WorkbenchAppInstance = {
+        mainWindow,
+        context,
+        dispose: () => disposeContext(context, instance.updateManager),
+      }
 
       if (config.onSetup) {
         await config.onSetup(instance)
+      }
+
+      if (config.updateChecker) {
+        instance.updateManager = new UpdateManager({
+          checker: config.updateChecker,
+          mainWindow,
+        })
       }
 
       setupAutomation(instance)

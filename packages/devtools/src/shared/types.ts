@@ -64,6 +64,26 @@ export interface WorkbenchWindowConfig {
   minHeight?: number
 }
 
+// ── Update Checker ──────────────────────────────────────────────────────
+
+export interface UpdateInfo {
+  /** New version string (e.g. '1.2.0') */
+  version: string
+  /** URL to download the update package */
+  downloadUrl: string
+  /** Optional release notes / changelog */
+  releaseNotes?: string
+  /** If true, the user cannot dismiss the update prompt */
+  mandatory?: boolean
+}
+
+export interface UpdateChecker {
+  /** Check whether a newer version is available. Return null if up-to-date. */
+  checkForUpdates(currentVersion: string): Promise<UpdateInfo | null>
+  /** Download the update and return the local file path of the downloaded package. */
+  downloadUpdate(info: UpdateInfo, onProgress?: (percent: number) => void): Promise<string>
+}
+
 /**
  * The instance passed to host hooks (menuBuilder, onSetup, onBeforeClose).
  * `context` is a WorkbenchContext — import it from '@dimina-kit/devtools/context' for full typing.
@@ -88,4 +108,6 @@ export interface WorkbenchAppConfig extends WorkbenchConfig {
   onSetup?: (instance: WorkbenchHostInstance) => void | Promise<void>
   /** Called before window close when a session is active. Session disposal happens automatically after this hook. */
   onBeforeClose?: (instance: WorkbenchHostInstance) => void | Promise<void>
+  /** Custom update checker. If provided, enables the check-for-updates feature. */
+  updateChecker?: UpdateChecker
 }
