@@ -116,6 +116,19 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
       await disposeSession()
       currentProjectPath = ''
 
+      // Reject obviously broken projects up front so we never spin up a
+      // compile/server that the simulator will then fetch asset-by-asset.
+      // Without this guard, deleted recent-list entries and typo'd CLI paths
+      // ride all the way through to the container runtime, whose
+      // `fetch(…).then(r=>r.text()).then(JSON.parse)` pipeline dies on the
+      // dev server's HTML SPA fallback with
+      // `SyntaxError: Unexpected token '<', "<!doctype "…`.
+      const dirError = repo.validateProjectDir(projectPath)
+      if (dirError) {
+        sendStatus('error', dirError)
+        return { success: false, error: dirError }
+      }
+
       sendStatus('compiling', '正在编译...')
 
       let session: Awaited<ReturnType<typeof ctx.adapter.openProject>>

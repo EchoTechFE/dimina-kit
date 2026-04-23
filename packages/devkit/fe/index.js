@@ -76,11 +76,27 @@ export async function start({ port = 7788, containerDir, outputDir, simulatorDir
 	// Load proxy server middleware (cors, json, /proxy route)
 	await import('./dimina-fe-server/index.js')
 
-	// SPA fallback: serve index.html for all unmatched routes so that
-	// Vue Router history-mode navigation works after a hard refresh
-	// Express 5 requires a named wildcard parameter instead of bare '*'
-	app.get('/{*path}', liveReload ? liveReloadModule.injectScript(containerDir) : (_req, res) => {
-		res.sendFile('index.html', { root: containerDir })
+	// SPA fallback: serve index.html for navigation-like unmatched routes
+	// (no extension or `.html`). Asset-like misses (`.json`, `.js`, `.wxml`,
+	// `.css`, source maps, …) must return a real 404 — never HTML. The
+	// container's runtime does
+	//   fetch(url).then(r => r.text()).then(JSON.parse)
+	// for manifests like `<appId>/main/app-config.json`, and serving the SPA
+	// shell for such a miss makes `initApp()` die with
+	// `SyntaxError: Unexpected token '<', "<!doctype "…` inside an un-
+	// handled promise rejection.
+	// Express 5 requires a named wildcard parameter instead of bare '*'.
+	const spaFallback = liveReload
+		? liveReloadModule.injectScript(containerDir)
+		: (_req, res) => res.sendFile('index.html', { root: containerDir })
+
+	app.get('/{*path}', (req, res, next) => {
+		const ext = path.extname(req.path).toLowerCase()
+		if (ext && ext !== '.html') {
+			res.status(404).type('text/plain').set('cache-control', 'no-store').send('Not Found')
+			return
+		}
+		return spaFallback(req, res, next)
 	})
 
 	return new Promise((resolve, reject) => {

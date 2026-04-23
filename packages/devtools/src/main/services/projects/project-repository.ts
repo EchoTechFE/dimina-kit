@@ -47,6 +47,12 @@ export function listProjects(): Project[] {
 }
 
 export function validateProjectDir(dirPath: string): string | null {
+  if (!dirPath) {
+    return '小程序目录路径为空，请选择包含小程序源码的目录'
+  }
+  if (!fs.existsSync(dirPath)) {
+    return `小程序目录不存在：${dirPath}`
+  }
   if (!fs.existsSync(path.join(dirPath, 'app.json'))) {
     const configPath = path.join(dirPath, 'project.config.json')
     if (fs.existsSync(configPath)) {
