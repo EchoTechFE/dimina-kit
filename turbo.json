@@ -7,7 +7,8 @@
     "DIMINA_DEBUG_PORT",
     "NODE_ENV",
     "CI",
-    "GITHUB_TOKEN"
+    "GITHUB_TOKEN",
+    "DIMINA_FORCE_BUILD"
   ],
   "tasks": {
     "build": {

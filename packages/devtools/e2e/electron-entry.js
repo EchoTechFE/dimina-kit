@@ -1,5 +1,6 @@
 // E2E test entry — adds test-only window hiding, then delegates to the
-// real app entry (dist/main/index.js) so dev/build/E2E share one codepath.
+// bundled app entry (dist/main/index.bundle.js) so E2E exercises exactly
+// what electron-builder ships (electron-builder.yml extraMetadata.main).
 import electron from 'electron'
 
 if (process.env.NODE_ENV === 'test') {
@@ -20,4 +21,4 @@ if (process.env.NODE_ENV === 'test') {
   })
 }
 
-await import('../dist/main/index.js')
+await import('../dist/main/index.bundle.js')
