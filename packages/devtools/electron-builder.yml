@@ -1,16 +1,73 @@
 appId: com.dimina.devtools
 productName: Dimina DevTools
+# Skip electron-builder's implicit `npm rebuild` pass: none of devtools'
+# runtime dependencies are native addons. A preflight guard in the release
+# workflow fails the build if a .node binary shows up unexpectedly.
+npmRebuild: false
 directories:
   output: release
 # Override package.json "main" for the packaged app only.
 # Source main points to the library API (api.js), but Electron needs the
-# entry that actually calls launch() — dist/main/index.js.
+# entry that actually calls launch(). Ship the single-file esbuild bundle
+# (index.bundle.js) instead of the 55 tsc-emitted subpath outputs so that
+# packaged apps load one file and hosts embedding the library via npm keep
+# the granular subpath imports they already depend on.
 extraMetadata:
-  main: dist/main/index.js
+  main: dist/main/index.bundle.js
 files:
   - dist/**/*
   - package.json
   - '!**/*.map'
+  # @dimina/compiler (runtime dep via @dimina-kit/devkit) declares a full
+  # frontend toolchain in its "dependencies". Most of those transitives
+  # are only require()'d when a user's mini-app source triggers the
+  # matching compile path (typescript on .ts, sass on .scss, etc.).
+  #
+  # TRADE-OFF: excluding them saves ~60MB from the default asar, but a
+  # project using e.g. Sass will fail at compile time with
+  # MODULE_NOT_FOUND. If that becomes a real blocker, remove the relevant
+  # line(s) below, or send an upstream PR to @dimina/compiler moving
+  # typescript / sass / less / postcss-* / @babel / @vue to optional
+  # peer deps. We don't patch upstream locally — CLAUDE.md policy.
+  - '!**/node_modules/typescript/**'
+  - '!**/node_modules/sass/**'
+  - '!**/node_modules/less/**'
+  - '!**/node_modules/@babel/**'
+  - '!**/node_modules/@vue/**'
+  - '!**/node_modules/caniuse-lite/**'
+  - '!**/node_modules/caniuse-api/**'
+  - '!**/node_modules/browserslist/**'
+  - '!**/node_modules/update-browserslist-db/**'
+  - '!**/node_modules/electron-to-chromium/**'
+  - '!**/node_modules/autoprefixer/**'
+  - '!**/node_modules/postcss/**'
+  - '!**/node_modules/postcss-*/**'
+  - '!**/node_modules/cssnano/**'
+  - '!**/node_modules/cssnano-*/**'
+  - '!**/node_modules/css-tree/**'
+  - '!**/node_modules/css-declaration-sorter/**'
+  - '!**/node_modules/css-select/**'
+  - '!**/node_modules/css-what/**'
+  - '!**/node_modules/cssesc/**'
+  - '!**/node_modules/csso/**'
+  - '!**/node_modules/svgo/**'
+  - '!**/node_modules/stylehacks/**'
+  - '!**/node_modules/mdn-data/**'
+  - '!**/node_modules/@oxc-parser/**'
+  - '!**/node_modules/@oxc-transform/**'
+  - '!**/node_modules/@oxc-project/**'
+  - '!**/node_modules/oxc-parser/**'
+  - '!**/node_modules/oxc-transform/**'
+  - '!**/node_modules/oxc-walker/**'
+  - '!**/node_modules/magic-string/**'
+  - '!**/node_modules/magic-regexp/**'
+  - '!**/node_modules/unplugin/**'
+  - '!**/node_modules/webpack-virtual-modules/**'
+  - '!**/node_modules/estree-walker/**'
+  - '!**/node_modules/jsesc/**'
+  - '!**/node_modules/js-tokens/**'
+  - '!**/node_modules/loose-envify/**'
+  - '!**/node_modules/lilconfig/**'
 asarUnpack:
   - '**/node_modules/esbuild/**'
   - '**/node_modules/@esbuild/**'

@@ -11,8 +11,9 @@
  */
 
 import { spawnSync } from 'node:child_process'
-import { cpSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { createHash } from 'node:crypto'
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -66,6 +67,90 @@ function getDiminaGitHash() {
   return gitResult.stdout.trim() || 'unknown'
 }
 
+// Full fingerprint of every input that feeds the container build:
+//   - dimina submodule HEAD commit
+//   - dimina working-tree dirtiness (git status + diff, so uncommitted
+//     upstream edits invalidate the cache even at the same SHA)
+//   - build-container.js + vite.config.api.js
+//   - every file under src/simulator/service-apis/ (injected into dimina)
+// Kept in sync with the CI actions/cache key in .github/workflows/release.yml.
+function walkAndHash(root, hash) {
+  if (!existsSync(root)) return
+  const entries = readdirSync(root).sort()
+  for (const name of entries) {
+    const full = join(root, name)
+    const s = statSync(full)
+    if (s.isDirectory()) {
+      walkAndHash(full, hash)
+    } else if (s.isFile()) {
+      hash.update(`${relative(__dirname, full)}\0`)
+      hash.update(readFileSync(full))
+      hash.update('\0')
+    }
+  }
+}
+
+function getInputFingerprint() {
+  const hash = createHash('sha256')
+  hash.update(`dimina-sha:${getDiminaGitHash()}\n`)
+  const status = spawnSync('git', ['status', '--porcelain'], {
+    cwd: DIMINA_ROOT,
+    encoding: 'utf8',
+  })
+  if (status.status === 0 && status.stdout) {
+    hash.update(`dimina-status:\n${status.stdout}`)
+    const diff = spawnSync('git', ['diff', 'HEAD'], {
+      cwd: DIMINA_ROOT,
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+    })
+    hash.update(`dimina-diff:\n${diff.stdout ?? ''}`)
+    // git diff HEAD misses untracked files; hash their contents too.
+    for (const line of status.stdout.split('\n')) {
+      if (!line.startsWith('?? ')) continue
+      const rel = line.slice(3).trim()
+      const full = join(DIMINA_ROOT, rel)
+      if (!existsSync(full)) continue
+      const s = statSync(full)
+      if (s.isDirectory()) walkAndHash(full, hash)
+      else if (s.isFile()) {
+        hash.update(`dimina-untracked:${rel}\0`)
+        hash.update(readFileSync(full))
+        hash.update('\0')
+      }
+    }
+  }
+  for (const file of ['build-container.js', 'vite.config.api.js']) {
+    hash.update(`${file}:\n`)
+    hash.update(readFileSync(join(__dirname, file)))
+    hash.update('\0')
+  }
+  walkAndHash(join(SIMULATOR_DIR, 'service-apis'), hash)
+  return hash.digest('hex')
+}
+
+// Skip the (expensive) Vite builds when TARGET_DIST already holds an
+// output stamped for the exact same input fingerprint. Useful in CI when
+// actions/cache restores TARGET_DIST, and locally when iterating on code
+// outside the container inputs. Set DIMINA_FORCE_BUILD=1 to override.
+function isFreshBuild(fingerprint) {
+  if (process.env.DIMINA_FORCE_BUILD === '1') return false
+  const versionFile = join(TARGET_DIST, 'dimina-version.json')
+  if (!existsSync(versionFile)) return false
+  try {
+    const cached = JSON.parse(readFileSync(versionFile, 'utf8'))
+    return cached.inputFingerprint === fingerprint
+  } catch {
+    return false
+  }
+}
+
+const inputFingerprint = getInputFingerprint()
+if (isFreshBuild(inputFingerprint)) {
+  console.log(`Container already built for dimina ${getDiminaGitHash()} (fingerprint ${inputFingerprint.slice(0, 12)}), skipping.`)
+  process.exit(0)
+}
+
 // 0. Inject devtools API files into dimina source tree
 injectFiles()
 
@@ -115,7 +200,7 @@ cpSync(CONTAINER_DIST, TARGET_DIST, { recursive: true })
 const diminaGitHash = getDiminaGitHash()
 writeFileSync(
   join(TARGET_DIST, 'dimina-version.json'),
-  JSON.stringify({ diminaGitHash }, null, 2),
+  JSON.stringify({ diminaGitHash, inputFingerprint }, null, 2),
 )
 // Empty .npmignore overrides the in-tree .gitignore so npm publishes
 // the full built container (not just the committed scaffolding).

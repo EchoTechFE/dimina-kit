@@ -10,6 +10,9 @@ const isWatch = process.argv.includes('--watch')
 
 export default defineConfig({
   root: rendererRoot,
+  // Per-entry cache so the renderer and simulator configs don't fight
+  // over the same directory and invalidate each other.
+  cacheDir: resolve(__dirname, 'node_modules/.vite-cache/renderer'),
   plugins: [react()],
   server: {
     headers: {

@@ -31,6 +31,7 @@ function externalContainerAssets(): Plugin {
 
 export default defineConfig({
   root: simulatorRoot,
+  cacheDir: resolve(__dirname, 'node_modules/.vite-cache/simulator'),
   plugins: [react(), externalContainerAssets()],
   server: {
     headers: {

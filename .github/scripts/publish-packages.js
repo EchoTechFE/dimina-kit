@@ -50,7 +50,7 @@ for (const pkg of PACKAGES) {
   console.log(`Publishing ${pkg.name}: ${remoteVersion ?? 'none'} -> ${localVersion} (tag: ${npmTag})`)
   execFileSync(
     'pnpm',
-    ['publish', '--no-git-checks', '--access', 'public', '--tag', npmTag, '--ignore-scripts'],
+    ['publish', '--no-git-checks', '--access', 'public', '--provenance', '--tag', npmTag, '--ignore-scripts'],
     { cwd: pkg.dir, stdio: 'inherit' },
   )
   changes.push({ name: pkg.name, from: remoteVersion, to: localVersion })

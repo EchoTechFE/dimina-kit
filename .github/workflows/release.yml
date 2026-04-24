@@ -73,6 +73,13 @@ jobs:
 
     runs-on: ${{ matrix.os }}
 
+    env:
+      # electron-builder reads ELECTRON_BUILDER_CACHE for 7zip / app-builder-bin
+      # downloads. @electron/get (invoked by electron's postinstall) does NOT
+      # honour any env var — it downloads into the fixed per-OS path we cache
+      # below in "Cache Electron binaries".
+      ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
+
     steps:
       - name: Rewrite submodule SSH URL to HTTPS
         shell: bash
@@ -89,8 +96,50 @@ jobs:
           node-version-file: .node-version
           cache: pnpm
 
+      - name: Cache Electron binaries (macOS)
+        if: runner.os == 'macOS'
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/Library/Caches/electron
+            ${{ github.workspace }}/.cache/electron-builder
+          key: electron-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: electron-${{ runner.os }}-
+
+      - name: Cache Electron binaries (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/electron
+            ${{ github.workspace }}/.cache/electron-builder
+          key: electron-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: electron-${{ runner.os }}-
+
+      - name: Cache Electron binaries (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/AppData/Local/electron/Cache
+            ${{ github.workspace }}/.cache/electron-builder
+          key: electron-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: electron-${{ runner.os }}-
+
+      - name: Resolve dimina submodule SHA
+        id: dimina
+        shell: bash
+        run: echo "sha=$(git -C dimina rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache dimina container build
+        id: container-cache
+        uses: actions/cache@v5
+        with:
+          path: packages/devkit/fe/dimina-fe-container
+          key: dimina-container-${{ runner.os }}-${{ steps.dimina.outputs.sha }}-${{ hashFiles('packages/devtools/build-container.js', 'packages/devtools/vite.config.api.js', 'packages/devtools/src/simulator/service-apis/**') }}
+
       - name: Install workspace deps
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --prefer-offline
 
       - name: Install dimina/fe deps
         working-directory: dimina/fe
@@ -115,6 +164,29 @@ jobs:
 
       - name: Build devtools
         run: pnpm run build
+
+      - name: Guard against accidental native deps
+        shell: bash
+        run: |
+          leaks=$(find node_modules -name '*.node' \
+            -not -path '*/fsevents/**' \
+            -not -path '*/@esbuild/**' \
+            -not -path '*/esbuild-*/**' \
+            -not -path '*/@oxc-*/**' \
+            -not -path '*/oxc-*/**' \
+            -not -path '*/@rolldown/**' \
+            -not -path '*/@rolldown+*/**' \
+            -not -path '*/rolldown-*/**' \
+            -not -path '*/@parcel/watcher*/**' \
+            -not -path '*/@parcel+watcher*/**' \
+            -not -path '*/lightningcss-*/**' \
+            -not -path '*/iconv-corefoundation/**' \
+            | head -5)
+          if [ -n "$leaks" ]; then
+            echo "::error::native .node binaries found; revisit npmRebuild:false"
+            echo "$leaks"
+            exit 1
+          fi
 
       - name: Package Electron app
         working-directory: packages/devtools
@@ -179,6 +251,11 @@ jobs:
   publish-npm:
     needs: prepare
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # OIDC token for npm provenance attestations (Sigstore). Required so
+      # `npm publish --provenance` can sign the tarball with GitHub's identity.
+      id-token: write
     outputs:
       notes: ${{ steps.publish.outputs.notes }}
       changes: ${{ steps.publish.outputs.changes }}
@@ -200,8 +277,20 @@ jobs:
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
+      - name: Resolve dimina submodule SHA
+        id: dimina
+        shell: bash
+        run: echo "sha=$(git -C dimina rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache dimina container build
+        id: container-cache
+        uses: actions/cache@v5
+        with:
+          path: packages/devkit/fe/dimina-fe-container
+          key: dimina-container-${{ runner.os }}-${{ steps.dimina.outputs.sha }}-${{ hashFiles('packages/devtools/build-container.js', 'packages/devtools/vite.config.api.js', 'packages/devtools/src/simulator/service-apis/**') }}
+
       - name: Install workspace deps
-        run: pnpm install --frozen-lockfile --ignore-scripts
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Install dimina/fe deps
         working-directory: dimina/fe
