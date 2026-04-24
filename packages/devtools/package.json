@@ -1,6 +1,6 @@
 {
 	"name": "@dimina-kit/devtools",
-	"version": "0.2.0",
+	"version": "0.3.0",
 	"description": "Dimina DevTools - modular developer tools for mini app debugging",
 	"keywords": [
 		"dimina",
