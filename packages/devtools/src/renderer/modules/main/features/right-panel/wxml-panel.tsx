@@ -2,8 +2,20 @@ import React, { useState } from 'react'
 import { Button } from '@/shared/components/ui/button'
 import type { WxmlNode } from './types.js'
 
+/**
+ * 默认是否展开：对齐微信开发者工具的 wxml 面板。
+ * - `#shadow-root` 永远默认展开（组件边界标记，展开后才能看到内部结构）
+ * - 路径式 tag（含 `/`）= 页面或自定义组件，默认展开（让用户一眼看清组件层级）
+ * - 普通 DOM 节点（view/text 等）默认折叠，需要用户手动点开
+ */
+function isDefaultExpanded(node: WxmlNode): boolean {
+  if (node.tagName === '#shadow-root') return true
+  if (node.tagName.includes('/')) return true
+  return false
+}
+
 function WxmlTreeNode({ node, depth }: { node: WxmlNode; depth: number }) {
-  const [expanded, setExpanded] = useState(depth < 3)
+  const [expanded, setExpanded] = useState(() => isDefaultExpanded(node))
   const indent = depth * 16
 
   // Text node — render as plain text
@@ -27,6 +39,29 @@ function WxmlTreeNode({ node, depth }: { node: WxmlNode; depth: number }) {
           <WxmlTreeNode key={i} node={child} depth={depth} />
         ))}
       </>
+    )
+  }
+
+  // Shadow root — synthetic boundary for custom component internals.
+  // Clickable to collapse like WeChat DevTools; default expanded; no closing tag.
+  if (node.tagName === '#shadow-root') {
+    const hasShadowChildren = (node.children ?? []).length > 0
+    return (
+      <div>
+        <div
+          className="py-px leading-[18px] hover:bg-surface-2 cursor-pointer"
+          style={{ paddingLeft: indent }}
+          onClick={() => hasShadowChildren && setExpanded(!expanded)}
+        >
+          <span className="text-text-dim w-3 shrink-0 inline-block text-center select-none">
+            {hasShadowChildren ? (expanded ? '▾' : '▸') : ' '}
+          </span>
+          <span className="text-text-dim italic">#shadow-root</span>
+        </div>
+        {expanded && node.children.map((child, i) => (
+          <WxmlTreeNode key={i} node={child} depth={depth + 1} />
+        ))}
+      </div>
     )
   }
 
