@@ -1,10 +1,7 @@
 import type { CompilationAdapter } from '../../shared/types.js'
 import path from 'path'
-import { fileURLToPath } from 'url'
 import { app } from 'electron'
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const simulatorDir = path.resolve(__dirname, '../../simulator')
+import { simulatorDir } from '../utils/paths.js'
 
 type OpenProjectArgs = {
   projectPath: string

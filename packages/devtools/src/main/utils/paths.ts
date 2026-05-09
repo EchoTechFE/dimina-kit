@@ -1,21 +1,43 @@
+import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
+// Hardcoded relative jumps like '../../dist/renderer' break under the
+// esbuild single-file bundle (dist/main/index.bundle.js): every inlined
+// module ends up at the bundle's depth instead of its tsc location, so
+// the math goes off by a directory. Walk up to this package's own
+// package.json so the resolver works for tsc multi-file, the bundle,
+// npm/pnpm node_modules, and asar packaging alike.
+function resolveDevtoolsPackageRoot(): string {
+  let dir = path.dirname(fileURLToPath(import.meta.url))
+  const root = path.parse(dir).root
+  while (dir !== root) {
+    const pkgPath = path.join(dir, 'package.json')
+    try {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
+      if (pkg.name === '@dimina-kit/devtools') return dir
+    } catch {}
+    dir = path.dirname(dir)
+  }
+  throw new Error('@dimina-kit/devtools package root not found from ' + fileURLToPath(import.meta.url))
+}
 
-export const rendererDir = path.join(__dirname, '../../../dist/renderer')
+export const devtoolsPackageRoot = resolveDevtoolsPackageRoot()
 
-export const defaultPreloadPath = path.join(__dirname, '../../preload/windows/simulator.js')
+export const rendererDir = path.join(devtoolsPackageRoot, 'dist/renderer')
+
+export const defaultPreloadPath = path.join(devtoolsPackageRoot, 'dist/preload/windows/simulator.js')
+
+export const simulatorDir = path.join(devtoolsPackageRoot, 'dist/simulator')
 
 export function getRendererDir(): string {
   return rendererDir
 }
 
 export function getPreloadDir(): string {
-  return path.join(__dirname, '../../preload')
+  return path.join(devtoolsPackageRoot, 'dist/preload')
 }
 
 export function getRendererHtml(filename: string): string {
   return path.join(rendererDir, filename)
 }
-
