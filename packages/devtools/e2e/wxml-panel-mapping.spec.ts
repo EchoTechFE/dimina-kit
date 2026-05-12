@@ -462,4 +462,68 @@ test.describe('WXML Panel Component Mapping', () => {
     expect(leaked, `Leaked web tags on component-test page: ${leaked.join(', ')}`).toEqual([])
   })
 
+  test('hovering a WXML panel row drives both the footer and the simulator overlay', async ({ electronApp, mainWindow }) => {
+    // 通过真实的鼠标 hover（而非直接 IPC）驱动 WXML 面板，验证：
+    //   1. React 端 footer 出现，文本符合 `box W x H @ X, Y | styles | font Npx` 模式；
+    //   2. simulator iframe 内的 #__simulator-highlight overlay display = 'block'；
+    //   3. 鼠标移出面板后，footer 文本从 DOM 消失、overlay display 回到 'none'。
+    // hover -> rAF -> IPC，因此使用 pollUntil/expect.poll 等异步断言，而不是同步检查。
+
+    // 切到 WXML tab，等面板内容渲染
+    await mainWindow.getByRole('tab', { name: 'WXML' }).click()
+    await mainWindow.locator('button:has-text("↻ 刷新")').waitFor({ timeout: 8000 })
+
+    // 等到至少一个可 inspect 的行（带 data-wxml-sid）出现在面板里。
+    const inspectableRow = mainWindow.locator('[data-wxml-sid]').first()
+    await inspectableRow.waitFor({ timeout: 15000 })
+
+    const overlayDisplay = async () => evalInSimulator<string>(
+      electronApp,
+      `(() => {
+        const iframes = document.querySelectorAll('.dimina-native-webview__window')
+        const iframe = iframes[iframes.length - 1]
+        const overlay = iframe?.contentDocument?.getElementById('__simulator-highlight')
+        return overlay ? overlay.style.display : ''
+      })()`,
+    )
+
+    try {
+      // 触发真实 hover
+      await inspectableRow.hover()
+
+      // footer 是 rAF 防抖后异步设置的，必须轮询。
+      // 文本形如 `box 100 x 50 @ 12, 34 | block / border-box | font 14px`。
+      const footerRegex = /^box\s+\d+\s+x\s+\d+\s+@\s+\d+,\s*\d+/
+      await expect(mainWindow.getByText(footerRegex).first()).toBeVisible({ timeout: 10000 })
+
+      // overlay 在 simulator iframe 里也应当是 block
+      const display = await pollUntil(
+        overlayDisplay,
+        (v) => v === 'block',
+        10000,
+        200,
+      )
+      expect(display).toBe('block')
+
+      // ── mouse leave：移到面板外面，触发 onMouseLeave ────────────────────
+      // 移到坐标 (0, 0)（窗口左上角，肯定不在 WXML 面板内）
+      await mainWindow.mouse.move(0, 0)
+
+      // footer 文本从 DOM 消失
+      await expect(mainWindow.getByText(footerRegex).first()).toBeHidden({ timeout: 10000 })
+
+      // overlay display 回到 'none'
+      const displayAfter = await pollUntil(
+        overlayDisplay,
+        (v) => v === 'none',
+        10000,
+        200,
+      )
+      expect(displayAfter).toBe('none')
+    } finally {
+      // 失败兜底：确保 overlay 不残留到下一个测试。
+      await ipcInvoke<void>(mainWindow, SimulatorElementChannel.Clear).catch(() => {})
+    }
+  })
+
 })

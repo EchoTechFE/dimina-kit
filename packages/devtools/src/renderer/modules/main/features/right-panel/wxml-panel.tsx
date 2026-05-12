@@ -111,6 +111,7 @@ function WxmlTreeNode({ node, depth, inspectedSid, onInspect }: WxmlTreeNodeProp
         className={rowClassName}
         style={{ paddingLeft: indent }}
         onMouseEnter={inspect}
+        data-wxml-sid={node.sid}
       >
         <span className="w-3 inline-block" />
         <span className="text-code-keyword">{'<'}{node.tagName}</span>
@@ -138,6 +139,7 @@ function WxmlTreeNode({ node, depth, inspectedSid, onInspect }: WxmlTreeNodeProp
         onClick={() => {
           if (hasChildren) setExpanded(!expanded)
         }}
+        data-wxml-sid={node.sid}
       >
         <span className="text-text-dim w-3 shrink-0 text-center select-none">
           {hasChildren ? (expanded ? '\u25BE' : '\u25B8') : ' '}
