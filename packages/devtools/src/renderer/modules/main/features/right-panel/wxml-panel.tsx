@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/shared/components/ui/button'
 import type { ElementInspection } from '../../../../../shared/ipc-channels'
 import type { WxmlNode } from './types.js'
@@ -13,8 +13,8 @@ interface WxmlPanelProps {
 interface WxmlTreeNodeProps {
   node: WxmlNode
   depth: number
-  selectedSid?: string | null
-  onInspectNode?: (node: WxmlNode) => void
+  inspectedSid?: string | null
+  onInspect?: (node: WxmlNode) => void
 }
 
 /**
@@ -29,14 +29,13 @@ function isDefaultExpanded(node: WxmlNode): boolean {
   return false
 }
 
-function WxmlTreeNode({ node, depth, selectedSid, onInspectNode }: WxmlTreeNodeProps) {
+function WxmlTreeNode({ node, depth, inspectedSid, onInspect }: WxmlTreeNodeProps) {
   const [expanded, setExpanded] = useState(() => isDefaultExpanded(node))
   const indent = depth * 16
-  const isInspectable = Boolean(node.sid)
-  const isSelected = Boolean(node.sid && node.sid === selectedSid)
-  const rowClassName = `py-px leading-[18px] hover:bg-surface-2${isInspectable ? ' cursor-pointer' : ''}${isSelected ? ' bg-surface-2' : ''}`
+  const isInspected = Boolean(node.sid && node.sid === inspectedSid)
+  const rowClassName = `py-px leading-[18px] hover:bg-surface-2${isInspected ? ' bg-surface-2' : ''}`
   const inspect = () => {
-    if (node.sid) onInspectNode?.(node)
+    if (node.sid) onInspect?.(node)
   }
 
   // Text node — render as plain text
@@ -61,8 +60,8 @@ function WxmlTreeNode({ node, depth, selectedSid, onInspectNode }: WxmlTreeNodeP
             key={i}
             node={child}
             depth={depth}
-            selectedSid={selectedSid}
-            onInspectNode={onInspectNode}
+            inspectedSid={inspectedSid}
+            onInspect={onInspect}
           />
         ))}
       </>
@@ -90,8 +89,8 @@ function WxmlTreeNode({ node, depth, selectedSid, onInspectNode }: WxmlTreeNodeP
             key={i}
             node={child}
             depth={depth + 1}
-            selectedSid={selectedSid}
-            onInspectNode={onInspectNode}
+            inspectedSid={inspectedSid}
+            onInspect={onInspect}
           />
         ))}
       </div>
@@ -112,7 +111,6 @@ function WxmlTreeNode({ node, depth, selectedSid, onInspectNode }: WxmlTreeNodeP
         className={rowClassName}
         style={{ paddingLeft: indent }}
         onMouseEnter={inspect}
-        onClick={inspect}
       >
         <span className="w-3 inline-block" />
         <span className="text-code-keyword">{'<'}{node.tagName}</span>
@@ -134,11 +132,10 @@ function WxmlTreeNode({ node, depth, selectedSid, onInspectNode }: WxmlTreeNodeP
   return (
     <div>
       <div
-        className={`flex items-start hover:bg-surface-2 py-px leading-[18px]${hasChildren || isInspectable ? ' cursor-pointer' : ''}${isSelected ? ' bg-surface-2' : ''}`}
+        className={`flex items-start hover:bg-surface-2 py-px leading-[18px]${hasChildren ? ' cursor-pointer' : ''}${isInspected ? ' bg-surface-2' : ''}`}
         style={{ paddingLeft: indent }}
         onMouseEnter={inspect}
         onClick={() => {
-          inspect()
           if (hasChildren) setExpanded(!expanded)
         }}
       >
@@ -165,8 +162,8 @@ function WxmlTreeNode({ node, depth, selectedSid, onInspectNode }: WxmlTreeNodeP
               key={i}
               node={child}
               depth={depth + 1}
-              selectedSid={selectedSid}
-              onInspectNode={onInspectNode}
+              inspectedSid={inspectedSid}
+              onInspect={onInspect}
             />
           ))}
           <div style={{ paddingLeft: indent }} className="py-px leading-[18px]">
@@ -182,6 +179,11 @@ function WxmlTreeNode({ node, depth, selectedSid, onInspectNode }: WxmlTreeNodeP
 function InspectionFooter({ inspection }: { inspection: ElementInspection | null }) {
   if (!inspection) return null
   const { rect, style } = inspection
+  const styleParts = [
+    style.display,
+    style.position !== 'static' ? style.position : null,
+    style.boxSizing,
+  ].filter(Boolean)
   return (
     <div className="border-t border-border-subtle bg-bg-panel px-2.5 py-1.5 font-mono text-[11px] text-text-dim shrink-0">
       <span className="text-text">box</span>
@@ -190,9 +192,7 @@ function InspectionFooter({ inspection }: { inspection: ElementInspection | null
       {' @ '}
       {Math.round(rect.x)}, {Math.round(rect.y)}
       <span className="mx-2 text-border-subtle">|</span>
-      {style.display}
-      {style.position !== 'static' ? ` / ${style.position}` : ''}
-      {style.boxSizing ? ` / ${style.boxSizing}` : ''}
+      {styleParts.join(' / ')}
       <span className="mx-2 text-border-subtle">|</span>
       font {style.fontSize}
     </div>
@@ -206,18 +206,44 @@ export function WxmlPanel({
   onClearInspection,
 }: WxmlPanelProps) {
   const [inspection, setInspection] = useState<ElementInspection | null>(null)
+  // 序号 + rAF 用于解决 hover 触发的两个独立问题：
+  // - reqSeqRef：防止 await 完成顺序与 hover 顺序不一致导致 footer 抖动；
+  //   每次发起请求自增，写入前比对，落后的响应直接丢弃。
+  // - rafRef：把 hover 触发的 IPC 合并到下一帧，连续扫过列表只会留最后一帧。
+  const reqSeqRef = useRef(0)
+  const rafRef = useRef<number | null>(null)
 
-  const inspectNode = (node: WxmlNode) => {
+  useEffect(() => () => {
+    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
+  }, [])
+
+  const inspectNode = useCallback((node: WxmlNode) => {
     if (!node.sid || !onInspectElement) return
-    void onInspectElement(node.sid).then((next) => {
-      setInspection(next)
+    const sid = node.sid
+    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null
+      const seq = ++reqSeqRef.current
+      onInspectElement(sid).then((next) => {
+        if (seq !== reqSeqRef.current) return
+        setInspection(next)
+      }).catch(() => {
+        if (seq !== reqSeqRef.current) return
+        setInspection(null)
+      })
     })
-  }
+  }, [onInspectElement])
 
-  const clearInspection = () => {
+  const clearInspection = useCallback(() => {
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current)
+      rafRef.current = null
+    }
+    // 让所有 in-flight 响应被序号校验丢弃，避免它们在 clear 之后又把 inspection 写回来。
+    reqSeqRef.current++
     setInspection(null)
     void onClearInspection?.()
-  }
+  }, [onClearInspection])
 
   if (!tree) {
     return (
@@ -254,8 +280,8 @@ export function WxmlPanel({
         <WxmlTreeNode
           node={tree}
           depth={0}
-          selectedSid={inspection?.sid}
-          onInspectNode={inspectNode}
+          inspectedSid={inspection?.sid ?? null}
+          onInspect={inspectNode}
         />
       </div>
       <InspectionFooter inspection={inspection} />

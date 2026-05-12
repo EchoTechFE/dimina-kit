@@ -1,4 +1,4 @@
-import { type WxmlNode } from '../runtime/bridge.js'
+import { type WxmlNode, registerSyntheticSid } from '../runtime/bridge.js'
 
 export interface ComponentInstance extends Record<string, unknown> {
   type?: Record<string, unknown>
@@ -15,9 +15,6 @@ const INTERNAL_CLASSES = new Set([
 ])
 
 const FRAMEWORK_TEMPLATE_RE = /^(taro_tmpl|tmpl_\d+)/
-const SYNTHETIC_SID_ATTR = 'data-dimina-devtools-sid'
-
-let nextSyntheticSid = 1
 
 function resolveTemplateNameFromParent(instance: ComponentInstance): string | null {
   const parent = instance.parent as Record<string, unknown> | undefined
@@ -129,11 +126,7 @@ function getElementSid(instance: ComponentInstance): string | undefined {
   if (!el?.getAttribute) return undefined
   const sid = el.getAttribute('data-sid')
   if (sid) return sid
-  const existing = el.getAttribute(SYNTHETIC_SID_ATTR)
-  if (existing) return existing
-  const synthetic = `devtools-${nextSyntheticSid++}`
-  el.setAttribute(SYNTHETIC_SID_ATTR, synthetic)
-  return synthetic
+  return registerSyntheticSid(el)
 }
 
 function isTransparentComponent(instance: ComponentInstance, tagName: string): boolean {

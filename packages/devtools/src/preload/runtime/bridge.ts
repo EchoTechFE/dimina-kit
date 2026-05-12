@@ -38,6 +38,38 @@ const state: SimulatorBridgeState = {
 let highlightOverlay: HTMLDivElement | null = null
 let exposedApi: Record<string, unknown> | null = null
 
+// 合成 sid 注册表：用 WeakMap 把元素 ↔ sid 双向绑定，避免在源 DOM 上写
+// `data-*` 属性（提取本应只读，且属性形式会污染用户的快照/选择器）。
+// elBySyntheticSid 为反向查找用 WeakRef，元素被 GC 后下次 lookup 自动清理。
+const SYNTHETIC_SID_PREFIX = 'devtools-'
+const syntheticSidByEl = new WeakMap<HTMLElement, string>()
+const elBySyntheticSid = new Map<string, WeakRef<HTMLElement>>()
+let nextSyntheticSid = 1
+
+export function registerSyntheticSid(el: HTMLElement): string {
+  const existing = syntheticSidByEl.get(el)
+  if (existing) return existing
+  const synthetic = `${SYNTHETIC_SID_PREFIX}${nextSyntheticSid++}`
+  syntheticSidByEl.set(el, synthetic)
+  elBySyntheticSid.set(synthetic, new WeakRef(el))
+  return synthetic
+}
+
+function findElementBySid(doc: Document, sid: string): HTMLElement | null {
+  if (sid.startsWith(SYNTHETIC_SID_PREFIX)) {
+    const ref = elBySyntheticSid.get(sid)
+    if (!ref) return null
+    const el = ref.deref()
+    if (!el || !el.isConnected) {
+      elBySyntheticSid.delete(sid)
+      return null
+    }
+    if (el.ownerDocument !== doc) return null
+    return el
+  }
+  return doc.querySelector(`[data-sid="${CSS.escape(sid)}"]`) as HTMLElement | null
+}
+
 function clone<T>(value: T): T {
   try {
     return JSON.parse(JSON.stringify(value)) as T
@@ -68,10 +100,7 @@ function highlightElement(sid: string): ElementInspection | null {
   const iframe = getPageIframe()
   if (!iframe?.contentDocument) return null
   const doc = iframe.contentDocument
-  const el = Array.from(doc.querySelectorAll<HTMLElement>('[data-sid], [data-dimina-devtools-sid]'))
-    .find((node) =>
-      node.getAttribute('data-sid') === sid || node.getAttribute('data-dimina-devtools-sid') === sid
-    ) ?? null
+  const el = findElementBySid(doc, sid)
   if (!el) return null
   const rect = el.getBoundingClientRect()
   const overlay = ensureOverlay(doc)
