@@ -13,6 +13,10 @@ export { createMainWindow } from './windows/main-window/index.js'
 export { createViewManager } from './services/views/view-manager.js'
 export type { ViewManager } from './services/views/view-manager.js'
 
+// ── Default compilation adapter (jssdk wiring) ───────────────────────────
+export { createDefaultAdapter, defaultAdapter } from './services/default-adapter.js'
+export type { DefaultAdapterOptions } from './services/default-adapter.js'
+
 // ── IPC module registration ──────────────────────────────────────────────
 export { registerAppIpc } from './ipc/app.js'
 export { registerSimulatorIpc } from './ipc/simulator.js'

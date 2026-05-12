@@ -54,7 +54,8 @@
 		"./workbench-settings": "./dist/main/services/settings/index.js",
 		"./preload": "./dist/preload/windows/main.js",
 		"./simulator-dir": "./dist/main/services/simulator/dir.js",
-		"./bootstrap": "./dist/main/app/bootstrap.js"
+		"./bootstrap": "./dist/main/app/bootstrap.js",
+		"./default-adapter": "./dist/main/services/default-adapter.js"
 	},
 	"typesVersions": {
 		"*": {
@@ -120,6 +121,9 @@
 			],
 			"preload": [
 				"dist/preload/windows/main.d.ts"
+			],
+			"default-adapter": [
+				"dist/main/services/default-adapter.d.ts"
 			]
 		}
 	},

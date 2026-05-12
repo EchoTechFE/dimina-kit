@@ -33,6 +33,14 @@ export interface WorkbenchConfig {
   appName?: string
   /** Compilation adapter */
   adapter?: CompilationAdapter
+  /**
+   * Absolute path to the jssdk runtime directory (`dimina-fe-container` build
+   * output). When set, the built-in adapter passes it through to devkit as
+   * `containerDir`, allowing hosts to swap in their own jssdk build. Ignored
+   * when `adapter` is provided. Falls back to the container bundled with
+   * `@dimina-kit/devkit` if omitted.
+   */
+  jssdkDir?: string
   /** Built-in panel IDs to display, default all four */
   panels?: BuiltinPanelId[]
   /** Absolute path to a custom preload script (overrides built-in simulator.js) */

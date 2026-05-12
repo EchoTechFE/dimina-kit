@@ -8,6 +8,7 @@ import { rendererDir as defaultRendererDir, defaultPreloadPath } from '../utils/
 import { registerAppLifecycle } from './lifecycle.js'
 import { createMainWindow, wireMainWindowEvents } from '../windows/main-window/index.js'
 import { createWorkbenchContext, type WorkbenchContext } from '../services/workbench-context.js'
+import { createDefaultAdapter } from '../services/default-adapter.js'
 import { loadWorkbenchSettings, applyTheme } from '../services/settings/index.js'
 import { installAppMenu } from '../menu/index.js'
 import {
@@ -109,9 +110,17 @@ function createConfiguredMainWindow(config: WorkbenchAppConfig, rendererDir: str
 }
 
 function createContext(config: WorkbenchAppConfig, mainWindow: BrowserWindow, rendererDir: string): WorkbenchContext {
+  // A host-provided adapter wins; otherwise build the default with the
+  // host-supplied jssdk path so external integrators can swap in their own
+  // dimina-fe-container build without bundling devkit's default.
+  if (config.adapter && config.jssdkDir) {
+    console.warn('[dimina-devtools] `jssdkDir` is ignored when a custom `adapter` is provided; pass jssdkDir to your adapter explicitly.')
+  }
+  const adapter = config.adapter ?? createDefaultAdapter({ jssdkDir: config.jssdkDir })
+
   return createWorkbenchContext({
     mainWindow,
-    adapter: config.adapter,
+    adapter,
     preloadPath: config.preloadPath ?? defaultPreloadPath,
     rendererDir,
     panels: config.panels,

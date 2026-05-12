@@ -228,7 +228,8 @@ src/
 | 字段               | 类型                    | 默认值              | 说明                               |
 | ------------------ | ----------------------- | ------------------- | ---------------------------------- |
 | `appName`          | `string`                | `'Dimina DevTools'` | 窗口标题                           |
-| `adapter`          | `CompilationAdapter`    | 内置                | 项目编译适配器                     |
+| `adapter`          | `CompilationAdapter`    | 内置                | 项目编译适配器（设置后 `jssdkDir` 失效） |
+| `jssdkDir`         | `string`                | devkit 内置容器     | jssdk（`dimina-fe-container`）目录，外部可自行下载/解压后传入 |
 | `panels`           | `BuiltinPanelId[]`      | 全部四个            | 显示哪些内置面板                   |
 | `preloadPath`      | `string`                | 内置                | 自定义 preload 脚本路径            |
 | `apiNamespaces`    | `string[]`              | `[]`                | 自定义 API 命名空间（如 `['qd']`） |
@@ -256,6 +257,42 @@ src/
 ### 内置模块 ID
 
 `'projects'` \| `'session'` \| `'simulator'` \| `'popover'` \| `'settings'`
+
+---
+
+## 动态加载 jssdk
+
+默认情况下 devtools 会用 `@dimina-kit/devkit` 自带的 `dimina-fe-container` 作为小程序运行时（jssdk）。当外部宿主希望使用自管理的 jssdk 版本（例如线上下发、按需缓存、独立升级）时，传入 `jssdkDir` 即可，运行时会跳过内置容器：
+
+```typescript
+import { launch } from '@dimina-kit/devtools/launch'
+
+const jssdkDir = await prepareJssdk() // 自行下载、校验、解压到本地目录
+
+launch({
+  jssdkDir, // 绝对路径，目录结构需与 dimina-fe-container 构建产物一致
+})
+```
+
+需要在默认行为外加埋点 / 日志 / 条件分支时，可以直接拿到默认适配器再包一层：
+
+```typescript
+import { createDefaultAdapter } from '@dimina-kit/devtools/default-adapter'
+import type { CompilationAdapter } from '@dimina-kit/devtools/types'
+
+const base = createDefaultAdapter({ jssdkDir: '/path/to/your/dimina-fe-container' })
+const adapter: CompilationAdapter = {
+  async openProject(opts) {
+    const session = await base.openProject(opts)
+    console.log('[host] project opened on', session.port)
+    return session
+  },
+}
+
+launch({ adapter })
+```
+
+`jssdkDir` 仅在未传入 `adapter` 时生效；同时传 `adapter` 和 `jssdkDir` 会忽略 `jssdkDir` 并打印警告。需要完全替换构建/加载流程，请实现 [CompilationAdapter](#compilationadapter)。
 
 ---
 
@@ -372,6 +409,8 @@ launch({ preloadPath: '/absolute/path/to/my-preload.js' })
                                        setupWxmlObserver, installSimulatorBridge,
                                        setupApiCompatHook
 @dimina-kit/devtools/simulator-dir          simulatorDir
+@dimina-kit/devtools/default-adapter        createDefaultAdapter({ jssdkDir? }),
+                                       defaultAdapter
 ```
 
 ---
