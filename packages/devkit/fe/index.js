@@ -69,7 +69,10 @@ export async function start({ port = 7788, containerDir, outputDir, simulatorDir
 	if (simulatorDir && fs.existsSync(simulatorDir)) {
 		app.use('/simulator', express.static(simulatorDir))
 		app.get('/simulator.html', (_req, res) => {
-			res.sendFile(path.join(simulatorDir, 'simulator.html'))
+			// `send` defaults to dotfiles: 'ignore' and rejects absolute paths whose
+			// parent segments start with '.' (git worktrees under .bare/, hidden
+			// caches, etc.) — even though the file itself is not a dotfile.
+			res.sendFile(path.join(simulatorDir, 'simulator.html'), { dotfiles: 'allow' })
 		})
 	}
 
