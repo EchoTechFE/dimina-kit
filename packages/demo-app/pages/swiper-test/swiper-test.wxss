@@ -1,0 +1,20 @@
+.my-swiper {
+  height: 300rpx;
+  background: #f5f5f5;
+  border-radius: 12rpx;
+  overflow: hidden;
+}
+
+.slide {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  font-size: 36rpx;
+  color: #fff;
+}
+
+.slide-a { background: #4A90D9; }
+.slide-b { background: #52c41a; }
+.slide-c { background: #fa8c16; }

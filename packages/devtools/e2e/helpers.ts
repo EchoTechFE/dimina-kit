@@ -270,9 +270,9 @@ export async function resetSimulatorState(
 ): Promise<void> {
   await evalInSimulator(electronApp, `try { wx.clearStorageSync() } catch (e) {}`).catch(() => {})
 
-  // Try to get back to the home page via hash navigation. This is a soft reset:
-  // if it fails (e.g. simulator not yet ready), we swallow the error so a single
-  // bad test doesn't block the next.
+  // Try to get back to the home page via hash navigation first. dimina only
+  // reads `location.hash` once at boot, so this is effectively a no-op for it,
+  // but kept for any consumer that does observe hashchange.
   await evalInSimulator(
     electronApp,
     `(() => {
@@ -285,4 +285,28 @@ export async function resetSimulatorState(
       } catch (e) {}
     })()`,
   ).catch(() => {})
+
+  // The reliable path: dimina's own page stack is unwound by clicking each
+  // webview's back button (which calls miniApp.navigateBack internally). Loop
+  // until only one webview remains (= home), or we hit a small safety bound.
+  // We swallow errors so a flaky reset never blocks the next test.
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const stillNonHome = await evalInSimulator<boolean>(
+      electronApp,
+      `(() => {
+        try {
+          const webviews = document.querySelectorAll('.dimina-native-view')
+          if (webviews.length <= 1) return false
+          const top = webviews[webviews.length - 1]
+          const backBtn = top.querySelector('.dimina-native-webview__navigation-left-btn')
+          if (backBtn) (backBtn).click()
+          return true
+        } catch (e) { return false }
+      })()`,
+    ).catch(() => false)
+    if (!stillNonHome) break
+    // Small wait for dimina's exit animation; navigateBack guards on
+    // webviewAnimaEnd so back-to-back clicks otherwise no-op.
+    await new Promise((r) => setTimeout(r, 350))
+  }
 }

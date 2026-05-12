@@ -18,7 +18,9 @@
 
 import { app, ipcMain, webContents as wcStatic, type WebContents } from 'electron'
 import {
+  SimulatorElementChannel,
   SimulatorStorageChannel,
+  type ElementInspection,
   type StorageItem,
 } from '../../../shared/ipc-channels.js'
 
@@ -107,6 +109,44 @@ async function getSnapshot(): Promise<StorageItem[]> {
   }
 }
 
+// Element inspection delegates to the simulator preload's __simulatorData
+// bridge via executeJavaScript. Looked up independently from `attachedWc` so
+// it keeps working when the user opens Chrome DevTools and the storage
+// debugger detaches (debugger.attach is mutually exclusive with F12).
+function findSimulatorWebContents(): WebContents | null {
+  for (const wc of wcStatic.getAllWebContents()) {
+    if (isSimulatorWebview(wc)) return wc
+  }
+  return null
+}
+
+async function inspectElement(sid: string): Promise<ElementInspection | null> {
+  if (!sid) return null
+  const sim = findSimulatorWebContents()
+  if (!sim) return null
+  try {
+    const result = (await sim.executeJavaScript(
+      `window.__simulatorData && window.__simulatorData.highlightElement ? window.__simulatorData.highlightElement(${JSON.stringify(sid)}) : null`,
+    )) as ElementInspection | null
+    return result ?? null
+  } catch (e) {
+    console.warn('[simulator-element] inspect failed:', (e as Error).message)
+    return null
+  }
+}
+
+async function clearElementInspection(): Promise<void> {
+  const sim = findSimulatorWebContents()
+  if (!sim) return
+  try {
+    await sim.executeJavaScript(
+      'window.__simulatorData && window.__simulatorData.unhighlightElement && window.__simulatorData.unhighlightElement()',
+    )
+  } catch {
+    // best-effort
+  }
+}
+
 export function setupSimulatorStorage(host: WebContents): void {
   hostWc = host
 
@@ -134,4 +174,6 @@ export function setupSimulatorStorage(host: WebContents): void {
   })
 
   ipcMain.handle(SimulatorStorageChannel.GetSnapshot, getSnapshot)
+  ipcMain.handle(SimulatorElementChannel.Inspect, (_event, sid: string) => inspectElement(sid))
+  ipcMain.handle(SimulatorElementChannel.Clear, clearElementInspection)
 }

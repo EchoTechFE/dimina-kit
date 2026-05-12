@@ -95,7 +95,7 @@ test.describe('dimina-automator SDK', () => {
     await miniProgram.waitFor(1000)
 
     const menuItems = await page.$$('.menu-item')
-    expect(menuItems.length).toBe(4) // 4 demo pages
+    expect(menuItems.length).toBe(5) // demo pages: console / storage / network / component / swiper
   })
 
   test('element text() returns visible text', async ({ miniProgram }) => {
@@ -115,7 +115,7 @@ test.describe('dimina-automator SDK', () => {
     await miniProgram.waitFor(1000)
 
     const items = await page.$$('[bindtap="navigateTo"]')
-    expect(items.length).toBe(4)
+    expect(items.length).toBe(5)
 
     // Check data-path attributes
     const paths: string[] = []

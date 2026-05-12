@@ -8,8 +8,10 @@ import { onWorkbenchReset } from '@/shared/api'
 import { invoke as ipcInvoke, on as ipcOn } from '@/shared/api/ipc-transport'
 import {
   SimulatorChannel,
+  SimulatorElementChannel,
   SimulatorStorageChannel,
   BridgeChannel,
+  type ElementInspection,
   type StorageEvent,
   type StorageItem as StorageItemDto,
 } from '../../../../../../shared/ipc-channels'
@@ -31,6 +33,8 @@ export interface PanelDataHookResult {
   refreshWxml: () => void
   refreshAppData: () => void
   refreshStorage: () => void
+  inspectWxmlElement: (sid: string) => Promise<ElementInspection | null>
+  clearWxmlElementInspection: () => Promise<void>
 }
 
 export function usePanelData(props: UsePanelDataProps): PanelDataHookResult {
@@ -138,6 +142,12 @@ export function usePanelData(props: UsePanelDataProps): PanelDataHookResult {
     const items = await ipcInvoke<StorageItemDto[] | undefined>(SimulatorStorageChannel.GetSnapshot)
     if (items) setStorageItems(items)
   }, [])
+  const inspectWxmlElement = useCallback(async (sid: string) => {
+    return await ipcInvoke<ElementInspection | null>(SimulatorElementChannel.Inspect, sid)
+  }, [])
+  const clearWxmlElementInspection = useCallback(async () => {
+    await ipcInvoke<void>(SimulatorElementChannel.Clear)
+  }, [])
 
   // Subscribe to live storage events forwarded by the main-process CDP
   // listener. Push events keep the panel reactive without polling; the
@@ -167,5 +177,7 @@ export function usePanelData(props: UsePanelDataProps): PanelDataHookResult {
     refreshWxml,
     refreshAppData,
     refreshStorage,
+    inspectWxmlElement,
+    clearWxmlElementInspection,
   }
 }

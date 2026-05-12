@@ -4,42 +4,49 @@ Page({
       {
         path: '/pages/console-test/console-test',
         icon: '\u{1F4DD}',
-        title: 'Console \u8F93\u51FA\u6D4B\u8BD5',
-        subtitle: '\u6D4B\u8BD5 log/warn/error/info/debug \u53CA\u5F02\u5E38\u6355\u83B7',
+        title: 'Console 输出测试',
+        subtitle: '测试 log/warn/error/info/debug 及异常捕获',
         tags: ['console', 'onerror']
       },
       {
         path: '/pages/storage-test/storage-test',
         icon: '\u{1F4BE}',
-        title: 'Storage \u5B58\u50A8\u6D4B\u8BD5',
-        subtitle: '\u6D4B\u8BD5 localStorage \u7684\u589E\u5220\u6539\u67E5',
+        title: 'Storage 存储测试',
+        subtitle: '测试 localStorage 的增删改查',
         tags: ['localStorage', 'setItem', 'getItem']
       },
       {
         path: '/pages/network-test/network-test',
         icon: '\u{1F310}',
-        title: 'Network \u7F51\u7EDC\u6D4B\u8BD5',
-        subtitle: '\u6D4B\u8BD5 GET/POST \u8BF7\u6C42\u3001\u8D85\u65F6\u3001\u9519\u8BEF\u54CD\u5E94',
+        title: 'Network 网络测试',
+        subtitle: '测试 GET/POST 请求、超时、错误响应',
         tags: ['GET', 'POST', 'timeout']
       },
       {
         path: '/pages/component-test/component-test',
         icon: '\u{1F9E9}',
-        title: '\u7EC4\u4EF6 & AppData \u6D4B\u8BD5',
-        subtitle: '\u6D4B\u8BD5\u7EC4\u4EF6\u72B6\u6001\u3001\u5D4C\u5957\u7EC4\u4EF6\u3001WXML \u6811',
-        tags: ['setData', 'WXML', '\u7EC4\u4EF6']
+        title: '组件 & AppData 测试',
+        subtitle: '测试组件状态、嵌套组件、WXML 树',
+        tags: ['setData', 'WXML', '组件']
+      },
+      {
+        path: '/pages/swiper-test/swiper-test',
+        icon: '\u{1F500}',
+        title: 'Swiper 轮播测试',
+        subtitle: '验证 swiper / swiper-item 在 WXML 面板中的层级',
+        tags: ['swiper', 'swiper-item', 'WXML']
       }
     ],
     deviceInfo: {}
   },
 
   onLoad() {
-    console.log('[Index] \u9875\u9762\u52A0\u8F7D')
+    console.log('[Index] 页面加载')
     this.loadDeviceInfo()
   },
 
   onShow() {
-    console.log('[Index] \u9875\u9762\u663E\u793A')
+    console.log('[Index] 页面显示')
   },
 
   loadDeviceInfo() {
@@ -55,9 +62,9 @@ Page({
           platform: info.platform
         }
       })
-      console.log('[Index] \u8BBE\u5907\u4FE1\u606F:', info)
+      console.log('[Index] 设备信息:', info)
     } catch (e) {
-      console.error('[Index] \u83B7\u53D6\u8BBE\u5907\u4FE1\u606F\u5931\u8D25:', e)
+      console.error('[Index] 获取设备信息失败:', e)
       this.setData({
         deviceInfo: {
           screenWidth: '-',
@@ -73,7 +80,7 @@ Page({
 
   navigateTo(e) {
     const path = e.currentTarget.dataset.path
-    console.log('[Index] \u5BFC\u822A\u5230:', path)
+    console.log('[Index] 导航到:', path)
     wx.navigateTo({ url: path })
   }
 })
