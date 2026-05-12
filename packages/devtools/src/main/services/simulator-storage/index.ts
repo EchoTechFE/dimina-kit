@@ -109,82 +109,39 @@ async function getSnapshot(): Promise<StorageItem[]> {
   }
 }
 
+// Element inspection delegates to the simulator preload's __simulatorData
+// bridge via executeJavaScript. Looked up independently from `attachedWc` so
+// it keeps working when the user opens Chrome DevTools and the storage
+// debugger detaches (debugger.attach is mutually exclusive with F12).
+function findSimulatorWebContents(): WebContents | null {
+  for (const wc of wcStatic.getAllWebContents()) {
+    if (isSimulatorWebview(wc)) return wc
+  }
+  return null
+}
+
 async function inspectElement(sid: string): Promise<ElementInspection | null> {
-  if (!attachedWc || attachedWc.isDestroyed()) return null
   if (!sid) return null
+  const sim = findSimulatorWebContents()
+  if (!sim) return null
   try {
-    const result = (await attachedWc.debugger.sendCommand('Runtime.evaluate', {
-      expression: `(() => {
-        const sid = ${JSON.stringify(sid)};
-        const iframes = document.querySelectorAll('.dimina-native-webview__window');
-        const iframe = iframes[iframes.length - 1];
-        const doc = iframe && iframe.contentDocument;
-        if (!doc || !doc.body) return null;
-        const el = Array.from(doc.querySelectorAll('[data-sid], [data-dimina-devtools-sid]')).find((node) => (
-          node.getAttribute('data-sid') === sid || node.getAttribute('data-dimina-devtools-sid') === sid
-        ));
-        if (!el) return null;
-        const rect = el.getBoundingClientRect();
-        let overlay = doc.getElementById('__simulator-cdp-highlight');
-        if (!overlay) {
-          overlay = doc.createElement('div');
-          overlay.id = '__simulator-cdp-highlight';
-          overlay.style.cssText = [
-            'position:fixed',
-            'pointer-events:none',
-            'z-index:999999',
-            'border:2px solid #1a73e8',
-            'background:rgba(26,115,232,0.12)',
-            'transition:all 0.1s ease',
-            'display:none',
-            'border-radius:2px',
-            'box-sizing:border-box',
-          ].join(';');
-          doc.body.appendChild(overlay);
-        }
-        overlay.style.left = rect.left + 'px';
-        overlay.style.top = rect.top + 'px';
-        overlay.style.width = rect.width + 'px';
-        overlay.style.height = rect.height + 'px';
-        overlay.style.display = 'block';
-        const style = getComputedStyle(el);
-        return {
-          sid,
-          rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-          style: {
-            display: style.display,
-            position: style.position,
-            boxSizing: style.boxSizing,
-            margin: style.margin,
-            padding: style.padding,
-            color: style.color,
-            backgroundColor: style.backgroundColor,
-            fontSize: style.fontSize,
-          },
-        };
-      })()`,
-      returnByValue: true,
-      awaitPromise: false,
-    })) as { result?: { value?: ElementInspection | null } }
-    return result.result?.value ?? null
-  } catch {
+    const result = (await sim.executeJavaScript(
+      `window.__simulatorData && window.__simulatorData.highlightElement ? window.__simulatorData.highlightElement(${JSON.stringify(sid)}) : null`,
+    )) as ElementInspection | null
+    return result ?? null
+  } catch (e) {
+    console.warn('[simulator-element] inspect failed:', (e as Error).message)
     return null
   }
 }
 
 async function clearElementInspection(): Promise<void> {
-  if (!attachedWc || attachedWc.isDestroyed()) return
+  const sim = findSimulatorWebContents()
+  if (!sim) return
   try {
-    await attachedWc.debugger.sendCommand('Runtime.evaluate', {
-      expression: `(() => {
-        const iframes = document.querySelectorAll('.dimina-native-webview__window');
-        const iframe = iframes[iframes.length - 1];
-        const doc = iframe && iframe.contentDocument;
-        const overlay = doc && doc.getElementById('__simulator-cdp-highlight');
-        if (overlay) overlay.style.display = 'none';
-      })()`,
-      awaitPromise: false,
-    })
+    await sim.executeJavaScript(
+      'window.__simulatorData && window.__simulatorData.unhighlightElement && window.__simulatorData.unhighlightElement()',
+    )
   } catch {
     // best-effort
   }

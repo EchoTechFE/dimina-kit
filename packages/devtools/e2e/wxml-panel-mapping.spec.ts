@@ -200,33 +200,55 @@ test.describe('WXML Panel Component Mapping', () => {
     expect(leaked, `WXML panel leaked raw web tags: ${leaked.join(', ')}`).toEqual([])
   })
 
-  test('CDP inspector maps a WXML sid back to the real DOM box', async ({ electronApp, mainWindow }) => {
+  test('inspector maps a WXML sid back to the real DOM box and clears the overlay', async ({ electronApp, mainWindow }) => {
     const tree = await fetchWxmlTree(electronApp)
     const inspectable = findFirstNodeWithSid(tree)
     expect(inspectable, 'wxml tree should contain at least one sid-backed node').not.toBeNull()
 
-    const inspection = await ipcInvoke<ElementInspection | null>(
-      mainWindow,
-      SimulatorElementChannel.Inspect,
-      inspectable!.sid,
-    )
-    expect(inspection, 'CDP inspection should resolve the real DOM element').not.toBeNull()
-    expect(inspection!.sid).toBe(inspectable!.sid)
-    expect(inspection!.rect.width).toBeGreaterThan(0)
-    expect(inspection!.rect.height).toBeGreaterThan(0)
+    try {
+      const inspection = await ipcInvoke<ElementInspection | null>(
+        mainWindow,
+        SimulatorElementChannel.Inspect,
+        inspectable!.sid,
+      )
+      expect(inspection, 'inspection should resolve the real DOM element').not.toBeNull()
+      expect(inspection!.sid).toBe(inspectable!.sid)
+      expect(inspection!.rect.width).toBeGreaterThan(0)
+      expect(inspection!.rect.height).toBeGreaterThan(0)
 
-    const overlayVisible = await evalInSimulator<boolean>(
+      const overlayDisplay = await evalInSimulator<string>(
+        electronApp,
+        `(() => {
+          const iframes = document.querySelectorAll('.dimina-native-webview__window')
+          const iframe = iframes[iframes.length - 1]
+          const overlay = iframe?.contentDocument?.getElementById('__simulator-highlight')
+          return overlay ? overlay.style.display : ''
+        })()`,
+      )
+      expect(overlayDisplay).toBe('block')
+
+      // 不存在的 sid 必须返回 null（非 throw、非 stale 数据）。
+      const missing = await ipcInvoke<ElementInspection | null>(
+        mainWindow,
+        SimulatorElementChannel.Inspect,
+        '__nonexistent_sid__',
+      )
+      expect(missing).toBeNull()
+    } finally {
+      await ipcInvoke<void>(mainWindow, SimulatorElementChannel.Clear)
+    }
+
+    // Clear 之后 overlay 必须被隐藏。
+    const overlayDisplayAfter = await evalInSimulator<string>(
       electronApp,
       `(() => {
         const iframes = document.querySelectorAll('.dimina-native-webview__window')
         const iframe = iframes[iframes.length - 1]
-        const overlay = iframe?.contentDocument?.getElementById('__simulator-cdp-highlight')
-        return !!overlay && overlay.style.display === 'block'
+        const overlay = iframe?.contentDocument?.getElementById('__simulator-highlight')
+        return overlay ? overlay.style.display : ''
       })()`,
     )
-    expect(overlayVisible).toBe(true)
-
-    await ipcInvoke<void>(mainWindow, SimulatorElementChannel.Clear)
+    expect(overlayDisplayAfter).toBe('none')
   })
 
   test('page node uses full page path as tag name with #shadow-root boundary (WeChat-style)', async ({ electronApp }) => {

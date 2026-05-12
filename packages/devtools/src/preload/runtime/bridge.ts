@@ -1,4 +1,5 @@
 import { contextBridge } from 'electron'
+import type { ElementInspection } from '../../shared/ipc-channels.js'
 
 export interface WxmlNode {
   tagName: string
@@ -57,20 +58,21 @@ function ensureOverlay(doc: Document): HTMLDivElement {
   highlightOverlay.style.cssText =
     'position:fixed;pointer-events:none;z-index:999999;' +
     'border:2px solid #1a73e8;background:rgba(26,115,232,0.12);' +
-    'transition:all 0.1s ease;display:none;border-radius:2px;'
+    'transition:all 0.1s ease;display:none;border-radius:2px;box-sizing:border-box;'
   doc.body.appendChild(highlightOverlay)
   return highlightOverlay
 }
 
-function highlightElement(sid: string): void {
+function highlightElement(sid: string): ElementInspection | null {
+  if (!sid) return null
   const iframe = getPageIframe()
-  if (!iframe?.contentDocument) return
+  if (!iframe?.contentDocument) return null
   const doc = iframe.contentDocument
   const el = Array.from(doc.querySelectorAll<HTMLElement>('[data-sid], [data-dimina-devtools-sid]'))
     .find((node) =>
       node.getAttribute('data-sid') === sid || node.getAttribute('data-dimina-devtools-sid') === sid
     ) ?? null
-  if (!el) return
+  if (!el) return null
   const rect = el.getBoundingClientRect()
   const overlay = ensureOverlay(doc)
   overlay.style.left = `${rect.left}px`
@@ -78,6 +80,22 @@ function highlightElement(sid: string): void {
   overlay.style.width = `${rect.width}px`
   overlay.style.height = `${rect.height}px`
   overlay.style.display = 'block'
+  const style = el.ownerDocument.defaultView?.getComputedStyle(el)
+  if (!style) return null
+  return {
+    sid,
+    rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+    style: {
+      display: style.display,
+      position: style.position,
+      boxSizing: style.boxSizing,
+      margin: style.margin,
+      padding: style.padding,
+      color: style.color,
+      backgroundColor: style.backgroundColor,
+      fontSize: style.fontSize,
+    },
+  }
 }
 
 function unhighlightElement(): void {

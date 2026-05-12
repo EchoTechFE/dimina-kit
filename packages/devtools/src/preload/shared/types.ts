@@ -6,6 +6,7 @@
  */
 
 import type { Snapshot, StorageSnapshot, WxmlNode } from '../runtime/bridge.js'
+import type { ElementInspection } from '../../shared/ipc-channels.js'
 
 /** The simulator data bridge exposed via contextBridge. */
 export interface SimulatorDataBridge {
@@ -18,7 +19,7 @@ export interface SimulatorDataBridge {
   getWxmlSnapshot: () => Snapshot<WxmlNode | WxmlNode[] | null>
   getWxmlGen: () => number
   refresh: (type: 'wxml' | 'appdata' | 'storage') => void
-  highlightElement: (sid: string) => void
+  highlightElement: (sid: string) => ElementInspection | null
   unhighlightElement: () => void
 }
 
