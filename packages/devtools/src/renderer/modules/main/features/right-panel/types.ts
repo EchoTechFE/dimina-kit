@@ -3,4 +3,5 @@ export interface WxmlNode {
   attrs: Record<string, string>
   children: WxmlNode[]
   text?: string
+  sid?: string
 }

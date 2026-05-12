@@ -15,6 +15,9 @@ const INTERNAL_CLASSES = new Set([
 ])
 
 const FRAMEWORK_TEMPLATE_RE = /^(taro_tmpl|tmpl_\d+)/
+const SYNTHETIC_SID_ATTR = 'data-dimina-devtools-sid'
+
+let nextSyntheticSid = 1
 
 function resolveTemplateNameFromParent(instance: ComponentInstance): string | null {
   const parent = instance.parent as Record<string, unknown> | undefined
@@ -123,7 +126,14 @@ function isInternalElement(vnode: Record<string, unknown>): boolean {
 function getElementSid(instance: ComponentInstance): string | undefined {
   const subTree = instance.subTree as Record<string, unknown> | undefined
   const el = subTree?.el as HTMLElement | undefined
-  return el?.getAttribute ? el.getAttribute('data-sid') ?? undefined : undefined
+  if (!el?.getAttribute) return undefined
+  const sid = el.getAttribute('data-sid')
+  if (sid) return sid
+  const existing = el.getAttribute(SYNTHETIC_SID_ATTR)
+  if (existing) return existing
+  const synthetic = `devtools-${nextSyntheticSid++}`
+  el.setAttribute(SYNTHETIC_SID_ATTR, synthetic)
+  return synthetic
 }
 
 function isTransparentComponent(instance: ComponentInstance, tagName: string): boolean {

@@ -1,7 +1,9 @@
 import { test, expect, useSharedProject } from './fixtures'
+import { SimulatorElementChannel, type ElementInspection } from '../src/shared/ipc-channels'
 import {
   DEMO_APP_DIR,
   evalInSimulator,
+  ipcInvoke,
   pollUntil,
 } from './helpers'
 
@@ -132,6 +134,26 @@ function findNode(
   return find(tree)
 }
 
+function findFirstNodeWithSid(tree: WxmlNodeShape | WxmlNodeShape[] | null): WxmlNodeShape | null {
+  if (!tree) return null
+  const find = (node: WxmlNodeShape): WxmlNodeShape | null => {
+    if (node.sid) return node
+    for (const child of node.children ?? []) {
+      const found = find(child)
+      if (found) return found
+    }
+    return null
+  }
+  if (Array.isArray(tree)) {
+    for (const t of tree) {
+      const r = find(t)
+      if (r) return r
+    }
+    return null
+  }
+  return find(tree)
+}
+
 async function fetchWxmlTreeOnce(electronApp: import('@playwright/test').ElectronApplication): Promise<WxmlNodeShape | WxmlNodeShape[] | null> {
   const json = await evalInSimulator<string>(
     electronApp,
@@ -176,6 +198,35 @@ test.describe('WXML Panel Component Mapping', () => {
       if (FORBIDDEN_WEB_TAGS.has(tag)) leaked.push(tag)
     }
     expect(leaked, `WXML panel leaked raw web tags: ${leaked.join(', ')}`).toEqual([])
+  })
+
+  test('CDP inspector maps a WXML sid back to the real DOM box', async ({ electronApp, mainWindow }) => {
+    const tree = await fetchWxmlTree(electronApp)
+    const inspectable = findFirstNodeWithSid(tree)
+    expect(inspectable, 'wxml tree should contain at least one sid-backed node').not.toBeNull()
+
+    const inspection = await ipcInvoke<ElementInspection | null>(
+      mainWindow,
+      SimulatorElementChannel.Inspect,
+      inspectable!.sid,
+    )
+    expect(inspection, 'CDP inspection should resolve the real DOM element').not.toBeNull()
+    expect(inspection!.sid).toBe(inspectable!.sid)
+    expect(inspection!.rect.width).toBeGreaterThan(0)
+    expect(inspection!.rect.height).toBeGreaterThan(0)
+
+    const overlayVisible = await evalInSimulator<boolean>(
+      electronApp,
+      `(() => {
+        const iframes = document.querySelectorAll('.dimina-native-webview__window')
+        const iframe = iframes[iframes.length - 1]
+        const overlay = iframe?.contentDocument?.getElementById('__simulator-cdp-highlight')
+        return !!overlay && overlay.style.display === 'block'
+      })()`,
+    )
+    expect(overlayVisible).toBe(true)
+
+    await ipcInvoke<void>(mainWindow, SimulatorElementChannel.Clear)
   })
 
   test('page node uses full page path as tag name with #shadow-root boundary (WeChat-style)', async ({ electronApp }) => {

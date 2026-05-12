@@ -66,7 +66,10 @@ function highlightElement(sid: string): void {
   const iframe = getPageIframe()
   if (!iframe?.contentDocument) return
   const doc = iframe.contentDocument
-  const el = doc.querySelector(`[data-sid="${sid}"]`) as HTMLElement | null
+  const el = Array.from(doc.querySelectorAll<HTMLElement>('[data-sid], [data-dimina-devtools-sid]'))
+    .find((node) =>
+      node.getAttribute('data-sid') === sid || node.getAttribute('data-dimina-devtools-sid') === sid
+    ) ?? null
   if (!el) return
   const rect = el.getBoundingClientRect()
   const overlay = ensureOverlay(doc)

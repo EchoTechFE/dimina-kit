@@ -4,6 +4,7 @@ import type { RefObject } from 'react'
 import { DEVICES, SIM_PANEL_PADDING } from '@/shared/constants'
 import type { AppInfo, ProjectStatus } from '@/shared/api'
 import type { CompileConfig } from '@/shared/types'
+import type { ElementInspection } from '../../../../../../shared/ipc-channels'
 import type { WxmlNode } from '../../right-panel/types.js'
 import { DEFAULT_RIGHT_PANE_STATE } from '../types'
 import type { RightPaneState, RightPaneTabId } from '../types'
@@ -67,6 +68,8 @@ interface PanelDataSlice {
   refreshWxml: () => void
   refreshAppData: () => void
   refreshStorage: () => void
+  inspectWxmlElement: (sid: string) => Promise<ElementInspection | null>
+  clearWxmlElementInspection: () => Promise<void>
 }
 
 interface RightPaneSlice {
@@ -196,6 +199,8 @@ export function useProjectRuntimeController(
       refreshWxml: panelDataHook.refreshWxml,
       refreshAppData: panelDataHook.refreshAppData,
       refreshStorage: panelDataHook.refreshStorage,
+      inspectWxmlElement: panelDataHook.inspectWxmlElement,
+      clearWxmlElementInspection: panelDataHook.clearWxmlElementInspection,
     },
     rightPane: {
       rightPane: rightPaneHook.rightPane,

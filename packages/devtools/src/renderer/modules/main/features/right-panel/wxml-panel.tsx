@@ -1,6 +1,21 @@
 import React, { useState } from 'react'
 import { Button } from '@/shared/components/ui/button'
+import type { ElementInspection } from '../../../../../shared/ipc-channels'
 import type { WxmlNode } from './types.js'
+
+interface WxmlPanelProps {
+  tree: WxmlNode | null
+  onRefresh: () => void
+  onInspectElement?: (sid: string) => Promise<ElementInspection | null>
+  onClearInspection?: () => Promise<void>
+}
+
+interface WxmlTreeNodeProps {
+  node: WxmlNode
+  depth: number
+  selectedSid?: string | null
+  onInspectNode?: (node: WxmlNode) => void
+}
 
 /**
  * 默认是否展开：对齐微信开发者工具的 wxml 面板。
@@ -14,9 +29,15 @@ function isDefaultExpanded(node: WxmlNode): boolean {
   return false
 }
 
-function WxmlTreeNode({ node, depth }: { node: WxmlNode; depth: number }) {
+function WxmlTreeNode({ node, depth, selectedSid, onInspectNode }: WxmlTreeNodeProps) {
   const [expanded, setExpanded] = useState(() => isDefaultExpanded(node))
   const indent = depth * 16
+  const isInspectable = Boolean(node.sid)
+  const isSelected = Boolean(node.sid && node.sid === selectedSid)
+  const rowClassName = `py-px leading-[18px] hover:bg-surface-2${isInspectable ? ' cursor-pointer' : ''}${isSelected ? ' bg-surface-2' : ''}`
+  const inspect = () => {
+    if (node.sid) onInspectNode?.(node)
+  }
 
   // Text node — render as plain text
   if (node.tagName === '#text') {
@@ -36,7 +57,13 @@ function WxmlTreeNode({ node, depth }: { node: WxmlNode; depth: number }) {
     return (
       <>
         {(node.children ?? []).map((child, i) => (
-          <WxmlTreeNode key={i} node={child} depth={depth} />
+          <WxmlTreeNode
+            key={i}
+            node={child}
+            depth={depth}
+            selectedSid={selectedSid}
+            onInspectNode={onInspectNode}
+          />
         ))}
       </>
     )
@@ -59,7 +86,13 @@ function WxmlTreeNode({ node, depth }: { node: WxmlNode; depth: number }) {
           <span className="text-text-dim italic">#shadow-root</span>
         </div>
         {expanded && node.children.map((child, i) => (
-          <WxmlTreeNode key={i} node={child} depth={depth + 1} />
+          <WxmlTreeNode
+            key={i}
+            node={child}
+            depth={depth + 1}
+            selectedSid={selectedSid}
+            onInspectNode={onInspectNode}
+          />
         ))}
       </div>
     )
@@ -76,8 +109,10 @@ function WxmlTreeNode({ node, depth }: { node: WxmlNode; depth: number }) {
   if (inlineText) {
     return (
       <div
-        className="py-px leading-[18px] hover:bg-surface-2"
+        className={rowClassName}
         style={{ paddingLeft: indent }}
+        onMouseEnter={inspect}
+        onClick={inspect}
       >
         <span className="w-3 inline-block" />
         <span className="text-code-keyword">{'<'}{node.tagName}</span>
@@ -99,9 +134,13 @@ function WxmlTreeNode({ node, depth }: { node: WxmlNode; depth: number }) {
   return (
     <div>
       <div
-        className="flex items-start hover:bg-surface-2 cursor-pointer py-px leading-[18px]"
+        className={`flex items-start hover:bg-surface-2 py-px leading-[18px]${hasChildren || isInspectable ? ' cursor-pointer' : ''}${isSelected ? ' bg-surface-2' : ''}`}
         style={{ paddingLeft: indent }}
-        onClick={() => hasChildren && setExpanded(!expanded)}
+        onMouseEnter={inspect}
+        onClick={() => {
+          inspect()
+          if (hasChildren) setExpanded(!expanded)
+        }}
       >
         <span className="text-text-dim w-3 shrink-0 text-center select-none">
           {hasChildren ? (expanded ? '\u25BE' : '\u25B8') : ' '}
@@ -122,7 +161,13 @@ function WxmlTreeNode({ node, depth }: { node: WxmlNode; depth: number }) {
       {expanded && hasChildren && (
         <>
           {node.children.map((child, i) => (
-            <WxmlTreeNode key={i} node={child} depth={depth + 1} />
+            <WxmlTreeNode
+              key={i}
+              node={child}
+              depth={depth + 1}
+              selectedSid={selectedSid}
+              onInspectNode={onInspectNode}
+            />
           ))}
           <div style={{ paddingLeft: indent }} className="py-px leading-[18px]">
             <span className="w-3 inline-block" />
@@ -134,7 +179,46 @@ function WxmlTreeNode({ node, depth }: { node: WxmlNode; depth: number }) {
   )
 }
 
-export function WxmlPanel({ tree, onRefresh }: { tree: WxmlNode | null; onRefresh: () => void }) {
+function InspectionFooter({ inspection }: { inspection: ElementInspection | null }) {
+  if (!inspection) return null
+  const { rect, style } = inspection
+  return (
+    <div className="border-t border-border-subtle bg-bg-panel px-2.5 py-1.5 font-mono text-[11px] text-text-dim shrink-0">
+      <span className="text-text">box</span>
+      {' '}
+      {Math.round(rect.width)} x {Math.round(rect.height)}
+      {' @ '}
+      {Math.round(rect.x)}, {Math.round(rect.y)}
+      <span className="mx-2 text-border-subtle">|</span>
+      {style.display}
+      {style.position !== 'static' ? ` / ${style.position}` : ''}
+      {style.boxSizing ? ` / ${style.boxSizing}` : ''}
+      <span className="mx-2 text-border-subtle">|</span>
+      font {style.fontSize}
+    </div>
+  )
+}
+
+export function WxmlPanel({
+  tree,
+  onRefresh,
+  onInspectElement,
+  onClearInspection,
+}: WxmlPanelProps) {
+  const [inspection, setInspection] = useState<ElementInspection | null>(null)
+
+  const inspectNode = (node: WxmlNode) => {
+    if (!node.sid || !onInspectElement) return
+    void onInspectElement(node.sid).then((next) => {
+      setInspection(next)
+    })
+  }
+
+  const clearInspection = () => {
+    setInspection(null)
+    void onClearInspection?.()
+  }
+
   if (!tree) {
     return (
       <div className="flex flex-col flex-1 overflow-hidden">
@@ -155,7 +239,7 @@ export function WxmlPanel({ tree, onRefresh }: { tree: WxmlNode | null; onRefres
     )
   }
   return (
-    <div className="flex flex-col flex-1 overflow-hidden">
+    <div className="flex flex-col flex-1 overflow-hidden" onMouseLeave={clearInspection}>
       <div className="flex items-center px-2.5 py-1.5 border-b border-border-subtle shrink-0 bg-bg-panel">
         <Button
           variant="outline"
@@ -167,8 +251,14 @@ export function WxmlPanel({ tree, onRefresh }: { tree: WxmlNode | null; onRefres
         </Button>
       </div>
       <div className="flex-1 overflow-y-auto p-2 font-mono text-[12px]">
-        <WxmlTreeNode node={tree} depth={0} />
+        <WxmlTreeNode
+          node={tree}
+          depth={0}
+          selectedSid={inspection?.sid}
+          onInspectNode={inspectNode}
+        />
       </div>
+      <InspectionFooter inspection={inspection} />
     </div>
   )
 }
