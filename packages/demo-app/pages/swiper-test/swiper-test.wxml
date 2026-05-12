@@ -1,0 +1,30 @@
+<view class="container">
+  <view class="page-title">Swiper 轮播测试</view>
+  <view class="page-desc">验证 swiper / swiper-item 在 WXML 面板中的层级展示</view>
+
+  <view class="section">
+    <view class="section-title">基础 Swiper（3 个 swiper-item）</view>
+    <swiper
+      class="my-swiper"
+      indicator-dots="{{indicatorDots}}"
+      autoplay="{{false}}"
+      current="{{0}}"
+      duration="{{500}}"
+    >
+      <swiper-item>
+        <view class="slide slide-a">第一页</view>
+      </swiper-item>
+      <swiper-item>
+        <view class="slide slide-b">第二页</view>
+      </swiper-item>
+      <swiper-item>
+        <view class="slide slide-c">第三页</view>
+      </swiper-item>
+    </swiper>
+  </view>
+
+  <view class="section">
+    <view class="section-title">控制</view>
+    <button class="btn btn-primary" bindtap="toggleDots">切换指示点 (当前: {{indicatorDots ? '显示' : '隐藏'}})</button>
+  </view>
+</view>

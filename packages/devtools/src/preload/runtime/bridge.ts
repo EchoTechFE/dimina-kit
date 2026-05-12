@@ -1,4 +1,5 @@
 import { contextBridge } from 'electron'
+import type { ElementInspection } from '../../shared/ipc-channels.js'
 
 export interface WxmlNode {
   tagName: string
@@ -37,6 +38,38 @@ const state: SimulatorBridgeState = {
 let highlightOverlay: HTMLDivElement | null = null
 let exposedApi: Record<string, unknown> | null = null
 
+// 合成 sid 注册表：用 WeakMap 把元素 ↔ sid 双向绑定，避免在源 DOM 上写
+// `data-*` 属性（提取本应只读，且属性形式会污染用户的快照/选择器）。
+// elBySyntheticSid 为反向查找用 WeakRef，元素被 GC 后下次 lookup 自动清理。
+const SYNTHETIC_SID_PREFIX = 'devtools-'
+const syntheticSidByEl = new WeakMap<HTMLElement, string>()
+const elBySyntheticSid = new Map<string, WeakRef<HTMLElement>>()
+let nextSyntheticSid = 1
+
+export function registerSyntheticSid(el: HTMLElement): string {
+  const existing = syntheticSidByEl.get(el)
+  if (existing) return existing
+  const synthetic = `${SYNTHETIC_SID_PREFIX}${nextSyntheticSid++}`
+  syntheticSidByEl.set(el, synthetic)
+  elBySyntheticSid.set(synthetic, new WeakRef(el))
+  return synthetic
+}
+
+function findElementBySid(doc: Document, sid: string): HTMLElement | null {
+  if (sid.startsWith(SYNTHETIC_SID_PREFIX)) {
+    const ref = elBySyntheticSid.get(sid)
+    if (!ref) return null
+    const el = ref.deref()
+    if (!el || !el.isConnected) {
+      elBySyntheticSid.delete(sid)
+      return null
+    }
+    if (el.ownerDocument !== doc) return null
+    return el
+  }
+  return doc.querySelector(`[data-sid="${CSS.escape(sid)}"]`) as HTMLElement | null
+}
+
 function clone<T>(value: T): T {
   try {
     return JSON.parse(JSON.stringify(value)) as T
@@ -57,17 +90,18 @@ function ensureOverlay(doc: Document): HTMLDivElement {
   highlightOverlay.style.cssText =
     'position:fixed;pointer-events:none;z-index:999999;' +
     'border:2px solid #1a73e8;background:rgba(26,115,232,0.12);' +
-    'transition:all 0.1s ease;display:none;border-radius:2px;'
+    'transition:all 0.1s ease;display:none;border-radius:2px;box-sizing:border-box;'
   doc.body.appendChild(highlightOverlay)
   return highlightOverlay
 }
 
-function highlightElement(sid: string): void {
+function highlightElement(sid: string): ElementInspection | null {
+  if (!sid) return null
   const iframe = getPageIframe()
-  if (!iframe?.contentDocument) return
+  if (!iframe?.contentDocument) return null
   const doc = iframe.contentDocument
-  const el = doc.querySelector(`[data-sid="${sid}"]`) as HTMLElement | null
-  if (!el) return
+  const el = findElementBySid(doc, sid)
+  if (!el) return null
   const rect = el.getBoundingClientRect()
   const overlay = ensureOverlay(doc)
   overlay.style.left = `${rect.left}px`
@@ -75,6 +109,22 @@ function highlightElement(sid: string): void {
   overlay.style.width = `${rect.width}px`
   overlay.style.height = `${rect.height}px`
   overlay.style.display = 'block'
+  const style = el.ownerDocument.defaultView?.getComputedStyle(el)
+  if (!style) return null
+  return {
+    sid,
+    rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+    style: {
+      display: style.display,
+      position: style.position,
+      boxSizing: style.boxSizing,
+      margin: style.margin,
+      padding: style.padding,
+      color: style.color,
+      backgroundColor: style.backgroundColor,
+      fontSize: style.fontSize,
+    },
+  }
 }
 
 function unhighlightElement(): void {

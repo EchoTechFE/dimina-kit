@@ -4,7 +4,8 @@
     "pages/console-test/console-test",
     "pages/storage-test/storage-test",
     "pages/network-test/network-test",
-    "pages/component-test/component-test"
+    "pages/component-test/component-test",
+    "pages/swiper-test/swiper-test"
   ],
   "window": {
     "navigationBarTitleText": "DevTools Feature Demo",

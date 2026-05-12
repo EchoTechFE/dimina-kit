@@ -86,7 +86,7 @@ async function main() {
 
   await assert('查找所有菜单项 .menu-item', async () => {
     const items = await page.$$('.menu-item')
-    if (items.length !== 4) throw new Error('数量: ' + items.length)
+    if (items.length !== 5) throw new Error('数量: ' + items.length)
     console.log(`     → ${items.length} 个菜单项`)
   })
 

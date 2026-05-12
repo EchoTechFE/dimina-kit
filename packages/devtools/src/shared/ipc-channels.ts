@@ -33,6 +33,32 @@ export type StorageEvent =
   | { type: 'removed'; key: string }
   | { type: 'cleared' }
 
+// ── Element inspection (CDP-backed; WXML tree nodes map to real DOM by sid) ──
+export const SimulatorElementChannel = {
+  Inspect: 'simulator:element:inspect',
+  Clear: 'simulator:element:clear',
+} as const
+
+export interface ElementInspection {
+  sid: string
+  rect: {
+    x: number
+    y: number
+    width: number
+    height: number
+  }
+  style: {
+    display: string
+    position: string
+    boxSizing: string
+    margin: string
+    padding: string
+    color: string
+    backgroundColor: string
+    fontSize: string
+  }
+}
+
 // ── Workbench ────────────────────────────────────────────────────────────
 
 export const WorkbenchChannel = {

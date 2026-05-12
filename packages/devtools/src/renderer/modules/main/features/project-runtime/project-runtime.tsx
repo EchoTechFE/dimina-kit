@@ -96,7 +96,12 @@ export function ProjectRuntime({
 
         <div className="flex flex-1 overflow-hidden">
           {rightPane.rightPane.selected === 'wxml' && (
-            <WxmlPanel tree={panelData.wxmlTree} onRefresh={panelData.refreshWxml} />
+            <WxmlPanel
+              tree={panelData.wxmlTree}
+              onRefresh={panelData.refreshWxml}
+              onInspectElement={panelData.inspectWxmlElement}
+              onClearInspection={panelData.clearWxmlElementInspection}
+            />
           )}
           {rightPane.rightPane.selected === 'appdata' && (
             <AppDataPanel data={panelData.appData} onRefresh={panelData.refreshAppData} />
