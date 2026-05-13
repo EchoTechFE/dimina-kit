@@ -5,11 +5,22 @@
     "pages/storage-test/storage-test",
     "pages/network-test/network-test",
     "pages/component-test/component-test",
-    "pages/swiper-test/swiper-test"
+    "pages/swiper-test/swiper-test",
+    "pages/tabbar-me/tabbar-me"
   ],
   "window": {
     "navigationBarTitleText": "DevTools Feature Demo",
     "navigationBarBackgroundColor": "#4A90D9",
     "navigationBarTextStyle": "white"
+  },
+  "tabBar": {
+    "color": "#888888",
+    "selectedColor": "#1890ff",
+    "backgroundColor": "#ffffff",
+    "borderStyle": "black",
+    "list": [
+      { "pagePath": "pages/index/index", "text": "首页" },
+      { "pagePath": "pages/tabbar-me/tabbar-me", "text": "我的" }
+    ]
   }
 }
