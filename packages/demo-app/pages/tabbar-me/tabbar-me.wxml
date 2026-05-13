@@ -1,0 +1,26 @@
+<view class="container">
+  <view class="hero">
+    <view class="hero-emoji">👤</view>
+    <view class="hero-title">TabBar 我的</view>
+    <view class="hero-sub">tabBar.list[1] · pagePath = pages/tabbar-me/tabbar-me</view>
+  </view>
+
+  <view class="card">
+    <view class="card-title">tabBar 控制</view>
+    <button class="btn" bindtap="goHome">switchTab → 首页</button>
+    <button class="btn" bindtap="setHomeBadge">setTabBarBadge(0, 'NEW')</button>
+    <button class="btn" bindtap="clearHomeBadge">removeTabBarBadge(0)</button>
+    <button class="btn" bindtap="setTitle">setTabBarItem(0, '主页')</button>
+    <button class="btn" bindtap="resetTitle">setTabBarItem(0, '首页')</button>
+    <button class="btn warn" bindtap="hideBar">hideTabBar</button>
+    <button class="btn primary" bindtap="showBar">showTabBar</button>
+  </view>
+
+  <view class="card">
+    <view class="card-title">提示</view>
+    <view class="card-desc">
+      navigateTo 不可跳 tabBar 页面（new dimina：返回 navigateTo:fail），
+      只能通过 switchTab / reLaunch 进入。
+    </view>
+  </view>
+</view>

@@ -1,0 +1,14 @@
+.container { padding: 40rpx 32rpx; }
+
+.hero { text-align: center; padding: 60rpx 0 40rpx; }
+.hero-emoji { font-size: 96rpx; }
+.hero-title { font-size: 40rpx; font-weight: 600; margin-top: 16rpx; color: #1a1a1a; }
+.hero-sub { font-size: 24rpx; color: #888; margin-top: 12rpx; }
+
+.card { background: #fafafa; border-radius: 12rpx; padding: 24rpx; margin-top: 24rpx; }
+.card-title { font-size: 28rpx; font-weight: 600; color: #1890ff; margin-bottom: 16rpx; }
+.card-desc { font-size: 26rpx; color: #666; line-height: 1.6; }
+
+.btn { font-size: 28rpx; margin-top: 16rpx; }
+.btn.primary { background: #1890ff; color: #fff; }
+.btn.warn { background: #ff9800; color: #fff; }
