@@ -342,6 +342,33 @@ launch({ preloadPath: '/absolute/path/to/my-preload.js' })
 
 ---
 
+## Simulator 自定义 API
+
+下游可以通过 `registerSimulatorApi` 把业务 API 注入到模拟器内运行的小程序。Handler 在 Electron **主进程**执行，能用任何 Node 能力（fs、net、原生模块、持久状态）；模拟器侧拿到 `wx.<name>(params)` 调用后通过 IPC 转发到主进程，await 返回结果，handler 抛错则原型回传给小程序。
+
+```typescript
+import { registerSimulatorApi } from '@dimina-kit/devtools/simulator-apis'
+
+const dispose = registerSimulatorApi('myCompany.login', async ({ username }) => {
+  // 主进程上下文：可调用内部 HTTP、读取凭证文件、访问原生模块
+  return await callInternalAuth(username)
+})
+
+// 不再需要时取消注册（不传也行，进程退出会一起清理）
+dispose()
+```
+
+几点行为约定：
+
+- 同名重复注册：后注册的覆盖前者，静默替换。
+- `dispose()` 只会移除自己创建的那次注册——如果之后被别人覆盖了，旧的 disposer 是 no-op。
+- 调用未注册的 name：小程序侧拿到 reject，错误信息里带 name。
+- Handler 可同步或异步返回；返回值需可 JSON 序列化（IPC 限制）。
+
+对小程序侧来说，这些 name 和内置 API（`wx.getStorage` 等）走同一个 `AppManager.apiRegistry`，没有区别。
+
+---
+
 ## 模块导出一览
 
 ### Stable public exports
@@ -353,6 +380,7 @@ launch({ preloadPath: '/absolute/path/to/my-preload.js' })
                                        openSettingsWindow, suppressEpipe, setupCdpPort,
                                        createWorkbenchContext, createMainWindow,
                                        createViewManager, register*Ipc,
+                                       registerSimulatorApi,
                                        setHeaderHeight, UpdateManager,
                                        createGitHubReleaseChecker, ...
                                        （api.ts 聚合了所有公共 API；优先从根入口导入）
@@ -362,6 +390,8 @@ launch({ preloadPath: '/absolute/path/to/my-preload.js' })
 @dimina-kit/devtools/bootstrap              suppressEpipe(), setupCdpPort()
 @dimina-kit/devtools/paths                  rendererDir, defaultPreloadPath, simulatorDir,
                                        getRendererDir, getPreloadDir, getRendererHtml
+@dimina-kit/devtools/simulator-apis         registerSimulatorApi(name, handler) →
+                                       注入由主进程托管的小程序 API（详见上方"Simulator 自定义 API"）
 @dimina-kit/devtools/preload                installConsoleInstrumentation,
                                        installStorageInstrumentation,
                                        installAppDataInstrumentation, sendAllAppData,

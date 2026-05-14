@@ -19,6 +19,14 @@ export const SimulatorChannel = {
   AppDataAll: 'simulator:appdata-all',
 } as const
 
+// ── Custom simulator APIs (downstream-registered, main-process handlers) ──
+// list: simulator queries the names registered via @dimina-kit/devtools/simulator-apis.
+// invoke: simulator forwards an API call to the registry; result/reject propagates.
+export const SimulatorCustomApiChannel = {
+  List: 'simulator:custom-apis:list',
+  Invoke: 'simulator:custom-apis:invoke',
+} as const
+
 // ── Storage (CDP-backed; main process attaches the debugger to the
 // simulator <webview> and forwards DOMStorage events to the renderer) ──
 export const SimulatorStorageChannel = {

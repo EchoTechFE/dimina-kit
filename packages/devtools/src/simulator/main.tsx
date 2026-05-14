@@ -10,6 +10,10 @@ declare global {
       sab: SharedArrayBuffer,
       msg: { body: { name: string; params: unknown } },
     ) => void
+    __diminaCustomApis?: {
+      list: () => Promise<string[]>
+      invoke: (name: string, params: unknown) => Promise<unknown>
+    }
   }
 }
 
@@ -75,63 +79,56 @@ function SimulatorApp() {
       AppManager.registerApi(name, handler)
     }
 
-    // Load custom APIs injected by downstream packages.
-    // The dev server falls back to HTML for unknown paths, so probe the asset
-    // first to avoid noisy MIME-type errors in the console.
-    const run = async () => {
-      try {
-        const customApisUrl = '/simulator/custom-apis.js'
-        const probe = await fetch(customApisUrl, { method: 'GET' })
-        const contentType = probe.headers.get('content-type') || ''
-        if (probe.ok && /(?:javascript|ecmascript|module)/i.test(contentType)) {
-          const { customApis } = await import(/* @vite-ignore */ customApisUrl) as {
-            customApis?: Record<string, (...args: unknown[]) => unknown>
-          }
-          if (customApis) {
-            for (const [name, handler] of Object.entries(customApis)) {
-              AppManager.registerApi(name, handler)
-            }
-          }
+    // Register proxy handlers for downstream-registered main-process APIs.
+    // The bridge is exposed by the simulator preload (installCustomApisBridge);
+    // when running outside Electron (e.g. dev-server smoke tests) it is absent
+    // and we silently skip. Each proxy forwards (name, params) over IPC.
+    const customApisBridge = window.__diminaCustomApis
+    if (customApisBridge) {
+      customApisBridge.list().then((names) => {
+        for (const name of names) {
+          AppManager.registerApi(name, (params: unknown) =>
+            customApisBridge.invoke(name, params),
+          )
         }
-      } catch {
-        // No custom APIs configured — this is normal for dimina-devtools standalone.
-      }
-
-      // Hash format produced by buildSimulatorUrl: #{appId}|{pagePath}?{query}
-      const rawHash = window.location.hash.slice(1)
-      const pipeIdx = rawHash.indexOf('|')
-      if (pipeIdx === -1) return
-
-      const appId = rawHash.slice(0, pipeIdx)
-      const rest = rawHash.slice(pipeIdx + 1)
-      const [pagePath, queryStr] = rest.split('?')
-      const query: Record<string, string> = {}
-      if (queryStr) {
-        for (const part of queryStr.split('&')) {
-          const eqIdx = part.indexOf('=')
-          if (eqIdx === -1) continue
-          query[decodeURIComponent(part.slice(0, eqIdx))] = decodeURIComponent(part.slice(eqIdx + 1))
-        }
-      }
-      const scene = Number(query['scene']) || 1001
-      const qs = Object.entries(query)
-        .filter(([k]) => k !== 'scene')
-        .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-        .join('&')
-      const fullPath = qs ? `${pagePath}?${qs}` : pagePath
-
-      AppManager.openApp(
-        {
-          appId,
-          path: fullPath,
-          scene,
-          destroy: true,
-        },
-        application,
-      )
+      }).catch(() => {
+        // Bridge errors are non-fatal — small-app code calling the API will
+        // get the same "handler missing" path as an unregistered name.
+      })
     }
 
-    void run()
+    // Hash format produced by buildSimulatorUrl: #{appId}|{pagePath}?{query}
+    const rawHash = window.location.hash.slice(1)
+    const pipeIdx = rawHash.indexOf('|')
+    if (pipeIdx === -1) return
+
+    const appId = rawHash.slice(0, pipeIdx)
+    const rest = rawHash.slice(pipeIdx + 1)
+    const [pagePath, queryStr] = rest.split('?')
+    const query: Record<string, string> = {}
+    if (queryStr) {
+      for (const part of queryStr.split('&')) {
+        const eqIdx = part.indexOf('=')
+        if (eqIdx === -1) continue
+        query[decodeURIComponent(part.slice(0, eqIdx))] = decodeURIComponent(part.slice(eqIdx + 1))
+      }
+    }
+    const scene = Number(query['scene']) || 1001
+    const qs = Object.entries(query)
+      .filter(([k]) => k !== 'scene')
+      .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+      .join('&')
+    const fullPath = qs ? `${pagePath}?${qs}` : pagePath
+
+    AppManager.openApp(
+      {
+        appId,
+        path: fullPath,
+        scene,
+        destroy: true,
+      },
+      application,
+    )
   }, [])
 
   return <div ref={containerRef} style={{ height: '100%' }} />

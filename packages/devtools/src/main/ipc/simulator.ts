@@ -1,9 +1,11 @@
-import { SimulatorChannel, WorkbenchChannel } from '../../shared/ipc-channels.js'
+import { SimulatorChannel, SimulatorCustomApiChannel, WorkbenchChannel } from '../../shared/ipc-channels.js'
 import {
   SimulatorAttachSchema,
+  SimulatorCustomApiInvokeSchema,
   SimulatorResizeSchema,
   SimulatorSetVisibleSchema,
 } from '../../shared/ipc-schemas.js'
+import { simulatorApiRegistry } from '../services/simulator/custom-apis.js'
 import type { WorkbenchContext } from '../services/workbench-context.js'
 import type { Disposable } from '../utils/disposable.js'
 import { validate } from '../utils/ipc-schema.js'
@@ -25,6 +27,13 @@ export function registerSimulatorIpc(ctx: Pick<WorkbenchContext, 'views' | 'pane
     .handle(SimulatorChannel.SetVisible, (_, ...args: unknown[]) => {
       const [visible, simWidth] = validate(SimulatorChannel.SetVisible, SimulatorSetVisibleSchema, args)
       ctx.views.setVisible(visible, simWidth)
+    })
+    .handle(SimulatorCustomApiChannel.List, () => {
+      return simulatorApiRegistry.list()
+    })
+    .handle(SimulatorCustomApiChannel.Invoke, (_, ...args: unknown[]) => {
+      const [name, params] = validate(SimulatorCustomApiChannel.Invoke, SimulatorCustomApiInvokeSchema, args)
+      return simulatorApiRegistry.invoke(name, params)
     })
     .handle(WorkbenchChannel.GetPanelConfig, () => {
       return ctx.panels
