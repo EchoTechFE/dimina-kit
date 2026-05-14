@@ -22,8 +22,19 @@ export function registerProjectsIpc(ctx: Pick<WorkbenchContext, 'workspace' | 'm
       })
       return result.canceled ? null : result.filePaths[0]
     })
-    .handle(ProjectsChannel.Add, (_event, ...args: unknown[]) => {
+    .handle(ProjectsChannel.Add, async (_event, ...args: unknown[]) => {
       const [dirPath] = validate(ProjectsChannel.Add, ProjectsAddSchema, args)
+      const dirError = ctx.workspace.validateProjectDir(dirPath)
+      if (dirError) {
+        await dialog.showMessageBox(ctx.mainWindow, {
+          type: 'error',
+          title: '无法导入项目',
+          message: '该目录不是有效的小程序项目',
+          detail: dirError,
+          buttons: ['确定'],
+        })
+        throw new Error(dirError)
+      }
       return ctx.workspace.addProject(dirPath)
     })
     .handle(ProjectsChannel.Remove, (_event, ...args: unknown[]) => {

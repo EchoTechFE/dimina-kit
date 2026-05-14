@@ -49,7 +49,13 @@ export default function Main() {
   async function handleAdd() {
     const dirPath = await chooseProjectDirectory()
     if (!dirPath) return
-    const project = await addProject(dirPath)
+    let project: Project
+    try {
+      project = await addProject(dirPath)
+    } catch {
+      // main 端已经通过 native dialog 提示了错误（无效的小程序目录等）
+      return
+    }
     await loadProjects()
     handleOpen(project)
   }
