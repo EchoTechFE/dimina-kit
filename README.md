@@ -3,6 +3,7 @@
 [Dimina](https://github.com/didi/dimina) 小程序生态的开发者工具集。包含可独立使用的编译与预览工具包，以及基于 Electron 的模块化开发者工具。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/EchoTechFE/dimina-kit)
 
 > 由于还有一些 feature 还未向源仓库提交，当前 runtime 引用的是 [fork](https://github.com/EchoTechFE/dimina) 版本。
 
