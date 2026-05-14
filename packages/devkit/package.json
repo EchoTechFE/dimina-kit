@@ -51,6 +51,8 @@
     "build": "tsc",
     "check-types": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
+    "test": "vitest run",
+    "test:dev": "vitest",
     "prepack": "pnpm run build"
   },
   "devDependencies": {
@@ -58,7 +60,8 @@
     "@dimina-kit/typescript-config": "workspace:*",
     "@types/node": "^22.15.3",
     "eslint": "^10.2.1",
-    "typescript": "5.9.2"
+    "typescript": "5.9.2",
+    "vitest": "^4.1.4"
   },
   "dependencies": {
     "@dimina/compiler": "1.0.12",

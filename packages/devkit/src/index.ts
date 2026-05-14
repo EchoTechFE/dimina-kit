@@ -115,39 +115,31 @@ export async function openProject(opts: {
 		sessionApps,
 	})
 
-	const watcher = watch
-		? chokidar.watch(projectPath, {
-			ignored: /(^|[/\\])\../,
-			persistent: true,
-			ignoreInitial: true,
-		})
-		: null
-
-	if (watcher) {
-		let isBuilding = false
-		watcher.on('change', async () => {
-			if (isBuilding) return
-			isBuilding = true
-			try {
-				process.chdir(projectPath)
-				const rebuilt = (await build(resolvedOutputDir, projectPath, true, buildOptions)) as AppInfo | null
-				if (rebuilt) {
-					const idx = sessionApps.findIndex(a => a.appId === rebuilt.appId)
-					if (idx === -1) sessionApps.push(rebuilt)
-					else sessionApps[idx] = rebuilt
-				}
-				reload?.()
-				onRebuild?.()
+	let isBuilding = false
+	async function rebuild(): Promise<void> {
+		if (isBuilding) return
+		isBuilding = true
+		try {
+			process.chdir(projectPath)
+			const rebuilt = (await build(resolvedOutputDir, projectPath, true, buildOptions)) as AppInfo | null
+			if (rebuilt) {
+				const idx = sessionApps.findIndex(a => a.appId === rebuilt.appId)
+				if (idx === -1) sessionApps.push(rebuilt)
+				else sessionApps[idx] = rebuilt
 			}
-			catch (e) {
-				onBuildError?.(e)
-			}
-			finally {
-				process.chdir(prevCwd)
-				isBuilding = false
-			}
-		})
+			reload?.()
+			onRebuild?.()
+		}
+		catch (e) {
+			onBuildError?.(e)
+		}
+		finally {
+			process.chdir(prevCwd)
+			isBuilding = false
+		}
 	}
+
+	const watcher = watch ? createProjectWatcher(projectPath, rebuild) : null
 
 	return {
 		appInfo: initialAppInfo ?? { appId: 'unknown', name: path.basename(projectPath), path: projectPath },
@@ -157,5 +149,31 @@ export async function openProject(opts: {
 			;(server as Server & { closeAllConnections?: () => void }).closeAllConnections?.()
 			await new Promise<void>(resolve => server.close(() => resolve()))
 		},
+	}
+}
+
+/**
+ * Watch a project directory and invoke `onChange` whenever a source file is
+ * created, modified, or deleted. Returns a handle whose `close()` stops the
+ * watcher.
+ */
+export function createProjectWatcher(
+	projectPath: string,
+	onChange: () => void | Promise<void>,
+): { close: () => Promise<void> } {
+	const watcher = chokidar.watch(projectPath, {
+		ignored: /(^|[/\\])\../,
+		persistent: true,
+		ignoreInitial: true,
+	})
+	// Listen to add + change + unlink so creating, editing, and deleting a
+	// source file all surface as onChange. Listening only to 'change' silently
+	// dropped the "developer added a new page" case (a chokidar 'add' event)
+	// and made auto-compile feel broken on a common save pattern.
+	watcher.on('add', () => { void onChange() })
+	watcher.on('change', () => { void onChange() })
+	watcher.on('unlink', () => { void onChange() })
+	return {
+		close: () => watcher.close(),
 	}
 }
