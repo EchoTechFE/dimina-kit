@@ -117,7 +117,15 @@ export function ProjectRuntime({
             />
           </div>
           {rightPane.rightPane.selected === 'storage' && (
-            <StoragePanel items={panelData.storageItems} onRefresh={panelData.refreshStorage} />
+            <StoragePanel
+              items={panelData.storageItems}
+              onRefresh={panelData.refreshStorage}
+              onSet={panelData.setStorageItem}
+              onRemove={panelData.removeStorageItem}
+              onClear={panelData.clearStorage}
+              onClearAll={panelData.clearAllStorage}
+              getPrefix={panelData.getStoragePrefix}
+            />
           )}
           {rightPane.rightPane.selected === 'simulator' && (
             <div className="flex-1" />

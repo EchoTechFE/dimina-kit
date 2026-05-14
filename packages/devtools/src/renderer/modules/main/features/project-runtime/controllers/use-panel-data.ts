@@ -14,6 +14,7 @@ import {
   type ElementInspection,
   type StorageEvent,
   type StorageItem as StorageItemDto,
+  type StorageWriteResult,
 } from '../../../../../../shared/ipc-channels'
 import { ATTACH_RETRY_INTERVAL_MS, MAX_ATTACH_RETRIES } from '../../../../../../preload/shared/constants'
 import type { WxmlNode } from '../../right-panel/types.js'
@@ -51,6 +52,11 @@ export interface PanelDataHookResult {
   refreshAppData: () => void
   setActiveAppDataBridge: (id: string) => void
   refreshStorage: () => void
+  setStorageItem: (key: string, value: string) => Promise<StorageWriteResult>
+  removeStorageItem: (key: string) => Promise<StorageWriteResult>
+  clearStorage: () => Promise<StorageWriteResult>
+  clearAllStorage: () => Promise<StorageWriteResult>
+  getStoragePrefix: () => Promise<string>
   inspectWxmlElement: (sid: string) => Promise<ElementInspection | null>
   clearWxmlElementInspection: () => Promise<void>
 }
@@ -195,6 +201,29 @@ export function usePanelData(props: UsePanelDataProps): PanelDataHookResult {
     const items = await ipcInvoke<StorageItemDto[] | undefined>(SimulatorStorageChannel.GetSnapshot)
     if (items) setStorageItems(items)
   }, [])
+  // Write helpers — main process forwards CDP-emitted DOMStorage events back
+  // through `SimulatorStorageChannel.Event`, so successful writes update the
+  // panel via the existing push subscription. No optimistic local state.
+  const setStorageItem = useCallback(async (key: string, value: string) => {
+    const r = await ipcInvoke<StorageWriteResult | undefined>(SimulatorStorageChannel.Set, { key, value })
+    return r ?? { ok: false, error: 'ipc transport failed' }
+  }, [])
+  const removeStorageItem = useCallback(async (key: string) => {
+    const r = await ipcInvoke<StorageWriteResult | undefined>(SimulatorStorageChannel.Remove, { key })
+    return r ?? { ok: false, error: 'ipc transport failed' }
+  }, [])
+  const clearStorage = useCallback(async () => {
+    const r = await ipcInvoke<StorageWriteResult | undefined>(SimulatorStorageChannel.Clear)
+    return r ?? { ok: false, error: 'ipc transport failed' }
+  }, [])
+  const clearAllStorage = useCallback(async () => {
+    const r = await ipcInvoke<StorageWriteResult | undefined>(SimulatorStorageChannel.ClearAll)
+    return r ?? { ok: false, error: 'ipc transport failed' }
+  }, [])
+  const getStoragePrefix = useCallback(async () => {
+    const r = await ipcInvoke<string | undefined>(SimulatorStorageChannel.GetActivePrefix)
+    return r ?? ''
+  }, [])
   const inspectWxmlElement = useCallback(async (sid: string) => {
     return await ipcInvoke<ElementInspection | null>(SimulatorElementChannel.Inspect, sid)
   }, [])
@@ -231,6 +260,11 @@ export function usePanelData(props: UsePanelDataProps): PanelDataHookResult {
     refreshAppData,
     setActiveAppDataBridge,
     refreshStorage,
+    setStorageItem,
+    removeStorageItem,
+    clearStorage,
+    clearAllStorage,
+    getStoragePrefix,
     inspectWxmlElement,
     clearWxmlElementInspection,
   }

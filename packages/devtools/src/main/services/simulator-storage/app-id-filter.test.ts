@@ -323,3 +323,150 @@ describe('setupSimulatorStorage — getActiveAppId filter', () => {
     await d.dispose()
   })
 })
+
+describe('setupSimulatorStorage — write operations', () => {
+  function getHandler<T = unknown>(channel: string): T {
+    const fn = stub.ipcHandlers.get(channel)
+    expect(fn).toBeTruthy()
+    return fn as T
+  }
+  function sendCommandCalls(wc: SimWc, method: string) {
+    const sc = wc.debugger.sendCommand as unknown as { mock: { calls: unknown[][] } }
+    return sc.mock.calls.filter((c) => c[0] === method)
+  }
+
+  it('GetActivePrefix returns `${appId}_` or empty string', async () => {
+    const wc = makeSimWc()
+    stub.wcRegistry.push(wc)
+    let activeAppId: string | null = 'wx123'
+    const d = setupSimulatorStorage(makeHost(), { getActiveAppId: () => activeAppId })
+    await Promise.resolve(); await Promise.resolve()
+
+    const prefixHandler = getHandler<() => string>(SimulatorStorageChannel.GetActivePrefix)
+    expect(prefixHandler()).toBe('wx123_')
+    activeAppId = null
+    expect(prefixHandler()).toBe('')
+
+    await d.dispose()
+  })
+
+  it('Set forwards DOMStorage.setDOMStorageItem with the simulator origin', async () => {
+    const wc = makeSimWc()
+    stub.wcRegistry.push(wc)
+    const d = setupSimulatorStorage(makeHost(), { getActiveAppId: () => 'wx123' })
+    await Promise.resolve(); await Promise.resolve()
+
+    const setHandler = getHandler<(
+      _e: unknown,
+      payload: { key: string; value: string },
+    ) => Promise<{ ok: boolean; error?: string }>>(SimulatorStorageChannel.Set)
+    const result = await setHandler({}, { key: 'wx123_foo', value: '"bar"' })
+    expect(result).toEqual({ ok: true })
+
+    const calls = sendCommandCalls(wc, 'DOMStorage.setDOMStorageItem')
+    expect(calls).toHaveLength(1)
+    expect(calls[0]![1]).toEqual({
+      storageId: { securityOrigin: 'http://localhost', isLocalStorage: true },
+      key: 'wx123_foo',
+      value: '"bar"',
+    })
+
+    await d.dispose()
+  })
+
+  it('Set returns ok:false when no simulator is attached', async () => {
+    // No simulator webview in the registry → never attached.
+    const d = setupSimulatorStorage(makeHost(), { getActiveAppId: () => 'wx123' })
+    await Promise.resolve(); await Promise.resolve()
+
+    const setHandler = getHandler<(
+      _e: unknown,
+      payload: { key: string; value: string },
+    ) => Promise<{ ok: boolean; error?: string }>>(SimulatorStorageChannel.Set)
+    const result = await setHandler({}, { key: 'wx123_foo', value: 'bar' })
+    expect(result.ok).toBe(false)
+    expect((result as { error: string }).error).toMatch(/not attached/)
+
+    await d.dispose()
+  })
+
+  it('Remove forwards DOMStorage.removeDOMStorageItem', async () => {
+    const wc = makeSimWc()
+    stub.wcRegistry.push(wc)
+    const d = setupSimulatorStorage(makeHost(), { getActiveAppId: () => 'wx123' })
+    await Promise.resolve(); await Promise.resolve()
+
+    const removeHandler = getHandler<(
+      _e: unknown,
+      payload: { key: string },
+    ) => Promise<{ ok: boolean }>>(SimulatorStorageChannel.Remove)
+    const result = await removeHandler({}, { key: 'wx123_foo' })
+    expect(result).toEqual({ ok: true })
+
+    const calls = sendCommandCalls(wc, 'DOMStorage.removeDOMStorageItem')
+    expect(calls).toHaveLength(1)
+    expect(calls[0]![1]).toEqual({
+      storageId: { securityOrigin: 'http://localhost', isLocalStorage: true },
+      key: 'wx123_foo',
+    })
+
+    await d.dispose()
+  })
+
+  it('Clear with active prefix removes only matching keys one-by-one', async () => {
+    const wc = makeSimWc([
+      ['wx123_a', '1'],
+      ['wx999_b', '2'],
+      ['wx123_c', '3'],
+    ])
+    stub.wcRegistry.push(wc)
+    const d = setupSimulatorStorage(makeHost(), { getActiveAppId: () => 'wx123' })
+    await Promise.resolve(); await Promise.resolve()
+
+    const clearHandler = getHandler<() => Promise<{ ok: boolean }>>(SimulatorStorageChannel.Clear)
+    expect(await clearHandler()).toEqual({ ok: true })
+
+    // No origin-wide clear when a prefix is active.
+    expect(sendCommandCalls(wc, 'DOMStorage.clear')).toHaveLength(0)
+    const removed = sendCommandCalls(wc, 'DOMStorage.removeDOMStorageItem')
+    const removedKeys = removed.map((c) => (c[1] as { key: string }).key).sort()
+    expect(removedKeys).toEqual(['wx123_a', 'wx123_c'])
+
+    await d.dispose()
+  })
+
+  it('Clear without an active prefix issues an origin-wide DOMStorage.clear', async () => {
+    const wc = makeSimWc([['wx123_a', '1']])
+    stub.wcRegistry.push(wc)
+    const d = setupSimulatorStorage(makeHost(), { getActiveAppId: () => null })
+    await Promise.resolve(); await Promise.resolve()
+
+    const clearHandler = getHandler<() => Promise<{ ok: boolean }>>(SimulatorStorageChannel.Clear)
+    expect(await clearHandler()).toEqual({ ok: true })
+
+    const calls = sendCommandCalls(wc, 'DOMStorage.clear')
+    expect(calls).toHaveLength(1)
+    expect(sendCommandCalls(wc, 'DOMStorage.removeDOMStorageItem')).toHaveLength(0)
+
+    await d.dispose()
+  })
+
+  it('ClearAll always issues an origin-wide DOMStorage.clear regardless of active appId', async () => {
+    const wc = makeSimWc([
+      ['wx123_a', '1'],
+      ['wx999_b', '2'],
+    ])
+    stub.wcRegistry.push(wc)
+    const d = setupSimulatorStorage(makeHost(), { getActiveAppId: () => 'wx123' })
+    await Promise.resolve(); await Promise.resolve()
+
+    const clearAllHandler = getHandler<() => Promise<{ ok: boolean }>>(SimulatorStorageChannel.ClearAll)
+    expect(await clearAllHandler()).toEqual({ ok: true })
+
+    // Single origin-wide clear, never the prefix-scoped per-key loop.
+    expect(sendCommandCalls(wc, 'DOMStorage.clear')).toHaveLength(1)
+    expect(sendCommandCalls(wc, 'DOMStorage.removeDOMStorageItem')).toHaveLength(0)
+
+    await d.dispose()
+  })
+})

@@ -31,6 +31,11 @@ export const SimulatorCustomApiChannel = {
 // simulator <webview> and forwards DOMStorage events to the renderer) ──
 export const SimulatorStorageChannel = {
   GetSnapshot: 'simulator:storage:snapshot',
+  GetActivePrefix: 'simulator:storage:activePrefix',
+  Set: 'simulator:storage:set',
+  Remove: 'simulator:storage:remove',
+  Clear: 'simulator:storage:clear',
+  ClearAll: 'simulator:storage:clearAll',
   Event: 'simulator:storage:event',
 } as const
 
@@ -40,6 +45,10 @@ export type StorageEvent =
   | { type: 'updated'; key: string; oldValue: string; newValue: string }
   | { type: 'removed'; key: string }
   | { type: 'cleared' }
+
+export type StorageWriteResult =
+  | { ok: true }
+  | { ok: false; error: string }
 
 // ── Element inspection (CDP-backed; WXML tree nodes map to real DOM by sid) ──
 export const SimulatorElementChannel = {
