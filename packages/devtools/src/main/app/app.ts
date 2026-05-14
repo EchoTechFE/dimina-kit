@@ -168,11 +168,17 @@ function wireAppWindowEvents(config: WorkbenchAppConfig, instance: WorkbenchAppI
     onClose: async (e) => {
       if (!context.workspace.hasActiveSession()) return
 
+      // Close button while a project session is open: stay in the workbench
+      // and surface the project list. Tear down only the session — do NOT
+      // dispose `context.registry`, which owns every IPC handler (projects,
+      // dialog, settings…). Disposing it would leave the renderer alive but
+      // unable to invoke anything, so subsequent clicks on Import/etc. would
+      // raise `No handler registered for ...`.
       e.preventDefault()
       if (config.onBeforeClose) {
         await config.onBeforeClose(instance)
       }
-      await disposeContext(context)
+      await context.workspace.closeProject()
       context.notify.windowNavigateBack()
     },
   })
