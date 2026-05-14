@@ -103,9 +103,19 @@ export function ProjectRuntime({
               onClearInspection={panelData.clearWxmlElementInspection}
             />
           )}
-          {rightPane.rightPane.selected === 'appdata' && (
-            <AppDataPanel data={panelData.appData} onRefresh={panelData.refreshAppData} />
-          )}
+          {/* Keepalive: AppDataPanel stays mounted while another right-pane
+              tab is selected so the JsonView trees keep their expand/collapse
+              state. Other panels still mount/unmount on demand. */}
+          <div
+            className="flex flex-1 overflow-hidden"
+            style={{ display: rightPane.rightPane.selected === 'appdata' ? 'flex' : 'none' }}
+          >
+            <AppDataPanel
+              state={panelData.appData}
+              onRefresh={panelData.refreshAppData}
+              onSelectBridge={panelData.setActiveAppDataBridge}
+            />
+          </div>
           {rightPane.rightPane.selected === 'storage' && (
             <StoragePanel items={panelData.storageItems} onRefresh={panelData.refreshStorage} />
           )}

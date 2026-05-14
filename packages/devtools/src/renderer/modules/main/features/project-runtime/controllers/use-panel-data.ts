@@ -25,13 +25,31 @@ export interface UsePanelDataProps {
   simulatorRef: RefObject<HTMLElement | null>
 }
 
+export interface AppDataBridgeSummary {
+  id: string
+  pagePath: string | null
+}
+
+export interface AppDataState {
+  bridges: AppDataBridgeSummary[]
+  activeBridgeId: string | null
+  entries: Record<string, Record<string, unknown>>
+}
+
+const EMPTY_APP_DATA: AppDataState = {
+  bridges: [],
+  activeBridgeId: null,
+  entries: {},
+}
+
 export interface PanelDataHookResult {
   connected: boolean
   wxmlTree: WxmlNode | null
-  appData: Record<string, unknown>
+  appData: AppDataState
   storageItems: StorageItem[]
   refreshWxml: () => void
   refreshAppData: () => void
+  setActiveAppDataBridge: (id: string) => void
   refreshStorage: () => void
   inspectWxmlElement: (sid: string) => Promise<ElementInspection | null>
   clearWxmlElementInspection: () => Promise<void>
@@ -42,8 +60,16 @@ export function usePanelData(props: UsePanelDataProps): PanelDataHookResult {
 
   const [connected, setConnected] = useState(true)
   const [wxmlTree, setWxmlTree] = useState<WxmlNode | null>(null)
-  const [appData, setAppData] = useState<Record<string, unknown>>({})
+  const [appData, setAppData] = useState<AppDataState>(EMPTY_APP_DATA)
   const [storageItems, setStorageItems] = useState<StorageItem[]>([])
+
+  const setActiveAppDataBridge = useCallback((id: string) => {
+    setAppData((prev) => (
+      prev.bridges.some((b) => b.id === id) && prev.activeBridgeId !== id
+        ? { ...prev, activeBridgeId: id }
+        : prev
+    ))
+  }, [])
 
   useEffect(() => {
     if (compileStatus.status !== 'ready') return
@@ -54,17 +80,44 @@ export function usePanelData(props: UsePanelDataProps): PanelDataHookResult {
         setWxmlTree(args[0] as WxmlNode)
       } else if (channel === SimulatorChannel.AppData) {
         const payload = args[0] as {
-          componentPath?: string
-          moduleId?: string
           bridgeId?: string
+          moduleId?: string
+          componentPath?: string
           data?: unknown
         }
-        const key = payload.componentPath || payload.moduleId || payload.bridgeId
-        if (key) {
-          setAppData((prev) => ({ ...prev, [key]: payload.data }))
-        }
+        if (!payload.bridgeId || !payload.moduleId) return
+        const { bridgeId, moduleId, componentPath, data } = payload
+        const displayKey = componentPath || moduleId
+        setAppData((prev) => {
+          const known = prev.bridges.find((b) => b.id === bridgeId)
+          const isPageInit = moduleId.startsWith('page_') && Boolean(componentPath)
+          const nextPagePath = isPageInit ? componentPath ?? null : known?.pagePath ?? null
+          const bridges = known
+            ? prev.bridges.map((b) => (b.id === bridgeId ? { ...b, pagePath: nextPagePath } : b))
+            : [...prev.bridges, { id: bridgeId, pagePath: nextPagePath }]
+          const entriesForBridge = { ...(prev.entries[bridgeId] ?? {}), [displayKey]: data }
+          const entries = { ...prev.entries, [bridgeId]: entriesForBridge }
+          // Auto-switch active tab to the page that just emitted an init so
+          // the panel follows the route the user is currently on.
+          const activeBridgeId = isPageInit || prev.activeBridgeId === null
+            ? bridgeId
+            : prev.activeBridgeId
+          return { bridges, activeBridgeId, entries }
+        })
       } else if (channel === SimulatorChannel.AppDataAll) {
-        setAppData(args[0] as Record<string, unknown>)
+        const snapshot = args[0] as {
+          bridges?: AppDataBridgeSummary[]
+          entries?: Record<string, Record<string, unknown>>
+        } | null
+        const bridges = snapshot?.bridges ?? []
+        const entries = snapshot?.entries ?? {}
+        setAppData((prev) => {
+          const stillActive = prev.activeBridgeId && bridges.some((b) => b.id === prev.activeBridgeId)
+          const activeBridgeId = stillActive
+            ? prev.activeBridgeId
+            : (bridges.at(-1)?.id ?? null)
+          return { bridges, activeBridgeId, entries }
+        })
       }
     }
 
@@ -127,7 +180,7 @@ export function usePanelData(props: UsePanelDataProps): PanelDataHookResult {
     return onWorkbenchReset(() => {
       setConnected(true)
       setWxmlTree(null)
-      setAppData({})
+      setAppData(EMPTY_APP_DATA)
       setStorageItems([])
     })
   }, [])
@@ -176,6 +229,7 @@ export function usePanelData(props: UsePanelDataProps): PanelDataHookResult {
     storageItems,
     refreshWxml,
     refreshAppData,
+    setActiveAppDataBridge,
     refreshStorage,
     inspectWxmlElement,
     clearWxmlElementInspection,
