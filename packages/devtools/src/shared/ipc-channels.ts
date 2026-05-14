@@ -168,3 +168,15 @@ export const SettingsChannel = {
   Closed: 'settings:closed',
   Changed: 'settings:changed',
 } as const
+
+// ── Updates (UpdateManager) ──────────────────────────────────────────────
+//
+// String values are FROZEN: shipped builds key off them. Add new entries
+// here, never rename existing ones.
+export const UpdateChannel = {
+  Check: 'updates:check',
+  Download: 'updates:download',
+  Install: 'updates:install',
+  DownloadProgress: 'updates:downloadProgress',
+  Available: 'updates:available',
+} as const

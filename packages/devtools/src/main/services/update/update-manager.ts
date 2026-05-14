@@ -1,5 +1,7 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, shell } from 'electron'
 import type { UpdateChecker, UpdateInfo } from '../../../shared/types.js'
+import { UpdateChannel } from '../../../shared/ipc-channels.js'
+import { IpcRegistry, type SenderPolicy } from '../../utils/ipc-registry.js'
 
 export interface UpdateManagerOptions {
   checker: UpdateChecker
@@ -10,6 +12,13 @@ export interface UpdateManagerOptions {
   initialDelay?: number
   /** Override the version string passed to the checker. Default: app.getVersion() */
   getCurrentVersion?: () => string
+  /**
+   * Optional sender gate. When provided, IpcRegistry rejects invocations
+   * whose `event.sender` is not whitelisted (same C-stage policy used by
+   * every other workbench-built-in). Omitted in unit tests that mock
+   * electron without a real WebContents.
+   */
+  senderPolicy?: SenderPolicy
 }
 
 export class UpdateManager {
@@ -20,27 +29,22 @@ export class UpdateManager {
   private downloadedPath: string | null = null
   private timer: ReturnType<typeof setInterval> | null = null
   private initialTimer: ReturnType<typeof setTimeout> | null = null
+  private ipc: IpcRegistry
 
   constructor(opts: UpdateManagerOptions) {
     this.checker = opts.checker
     this.mainWindow = opts.mainWindow
     this.getCurrentVersion = opts.getCurrentVersion ?? (() => app.getVersion())
+    this.ipc = new IpcRegistry(opts.senderPolicy)
     this.registerIpc()
     this.startPeriodicCheck(opts.checkInterval ?? 60 * 60 * 1000, opts.initialDelay ?? 5000)
   }
 
   private registerIpc(): void {
-    ipcMain.handle('updates:check', async () => {
-      return this.check()
-    })
-
-    ipcMain.handle('updates:download', async () => {
-      return this.download()
-    })
-
-    ipcMain.handle('updates:install', async () => {
-      this.install()
-    })
+    this.ipc
+      .handle(UpdateChannel.Check, async () => this.check())
+      .handle(UpdateChannel.Download, async () => this.download())
+      .handle(UpdateChannel.Install, async () => this.install())
   }
 
   async check(): Promise<{ hasUpdate: boolean; info?: UpdateInfo }> {
@@ -65,7 +69,7 @@ export class UpdateManager {
     }
     try {
       const filePath = await this.checker.downloadUpdate(this.latestUpdate, (percent) => {
-        this.mainWindow.webContents.send('updates:downloadProgress', { percent })
+        this.mainWindow.webContents.send(UpdateChannel.DownloadProgress, { percent })
       })
       this.downloadedPath = filePath
       return { success: true, filePath }
@@ -82,7 +86,13 @@ export class UpdateManager {
     }
   }
 
-  dispose(): void {
+  /**
+   * Tear down timers + IPC handlers. Returns a Promise so callers that need
+   * a settled cleanup (e.g. workbench registry shutdown, the unit-test
+   * lifecycle suite) can await it; calling without await is also safe since
+   * the timer clears + handler removals are scheduled synchronously.
+   */
+  dispose(): Promise<void> {
     if (this.timer) {
       clearInterval(this.timer)
       this.timer = null
@@ -91,9 +101,7 @@ export class UpdateManager {
       clearTimeout(this.initialTimer)
       this.initialTimer = null
     }
-    ipcMain.removeHandler('updates:check')
-    ipcMain.removeHandler('updates:download')
-    ipcMain.removeHandler('updates:install')
+    return this.ipc.dispose()
   }
 
   private startPeriodicCheck(interval: number, initialDelay: number): void {
@@ -104,7 +112,7 @@ export class UpdateManager {
   private async checkAndNotify(): Promise<void> {
     const result = await this.check()
     if (result.hasUpdate && result.info) {
-      this.mainWindow.webContents.send('updates:available', result.info)
+      this.mainWindow.webContents.send(UpdateChannel.Available, result.info)
     }
   }
 }

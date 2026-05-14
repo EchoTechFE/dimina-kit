@@ -11,6 +11,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js'
 import { createServer } from 'http'
 import { createRequire } from 'node:module'
+import { toDisposable, type Disposable } from '../../utils/disposable.js'
 import { connectTarget, setCdpPort } from './target-manager.js'
 import { registerCommonTargetTools } from './tool-registry.js'
 import { registerContextTools } from './tools/context-tools.js'
@@ -40,7 +41,7 @@ function buildServer(): McpServer {
   return server
 }
 
-export function startMcpServer(resolvedCdpPort: number, mcpPort: number): void {
+export function startMcpServer(resolvedCdpPort: number, mcpPort: number): Disposable {
   setCdpPort(resolvedCdpPort)
 
   // Connect to both targets (non-blocking)
@@ -81,5 +82,10 @@ export function startMcpServer(resolvedCdpPort: number, mcpPort: number): void {
 
   httpServer.listen(mcpPort, '127.0.0.1', () => {
     console.log(`[MCP] SSE server listening on http://127.0.0.1:${mcpPort}/sse`)
+  })
+
+  return toDisposable(() => {
+    transports.clear()
+    httpServer.close()
   })
 }

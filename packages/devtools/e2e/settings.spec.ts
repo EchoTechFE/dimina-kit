@@ -66,7 +66,7 @@ test.describe('Settings', () => {
     await evalInWebContentsByUrl(
       electronApp,
       'entries/settings',
-      `window.require('electron').ipcRenderer.send('settings:configChanged', ${JSON.stringify(nextConfig)})`
+      `window.devtools.ipc.send('settings:configChanged', ${JSON.stringify(nextConfig)})`
     )
 
     const saved = await ipcInvoke<{
@@ -80,7 +80,7 @@ test.describe('Settings', () => {
     await evalInWebContentsByUrl(
       electronApp,
       'entries/settings',
-      `window.require('electron').ipcRenderer.send('settings:configChanged', ${JSON.stringify(original)})`
+      `window.devtools.ipc.send('settings:configChanged', ${JSON.stringify(original)})`
     )
   })
 })

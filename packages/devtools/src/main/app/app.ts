@@ -12,18 +12,18 @@ import { loadWorkbenchSettings, applyTheme } from '../services/settings/index.js
 import { installAppMenu } from '../menu/index.js'
 import {
   registerAppIpc,
-  registerSimulatorIpc,
-  registerPanelsIpc,
-  registerPopoverIpc,
-  registerProjectsIpc,
-  registerSessionIpc,
-  registerSettingsIpc,
-  registerToolbarIpc,
+  popoverModule,
+  projectsModule,
+  sessionModule,
+  settingsModule,
+  simulatorModule,
 } from '../ipc/index.js'
+import type { WorkbenchModule } from '../services/module.js'
 import { startAutomationServer, type AutomationServer } from '../services/automation/index.js'
 import { startMcpServer } from '../services/mcp/index.js'
 import { setupSimulatorStorage } from '../services/simulator-storage/index.js'
 import { UpdateManager } from '../services/update/index.js'
+import { toDisposable, type Disposable } from '../utils/disposable.js'
 
 const DEFAULT_MODULES: Record<BuiltinModuleId, boolean> = {
   projects: true,
@@ -33,18 +33,12 @@ const DEFAULT_MODULES: Record<BuiltinModuleId, boolean> = {
   settings: true,
 }
 
-type BuiltinRegistrar = (ctx: WorkbenchContext) => void
-
-const MODULE_REGISTRARS: Record<BuiltinModuleId, BuiltinRegistrar> = {
-  projects: registerProjectsIpc,
-  session: registerSessionIpc,
-  simulator: (ctx) => {
-    registerSimulatorIpc(ctx)
-    registerPanelsIpc(ctx)
-    registerToolbarIpc(ctx)
-  },
-  popover: registerPopoverIpc,
-  settings: registerSettingsIpc,
+const BUILTIN_MODULES: Record<BuiltinModuleId, WorkbenchModule> = {
+  projects: projectsModule,
+  session: sessionModule,
+  simulator: simulatorModule,
+  popover: popoverModule,
+  settings: settingsModule,
 }
 
 export interface WorkbenchAppInstance {
@@ -84,9 +78,11 @@ function resolveModules(config: WorkbenchAppConfig): Record<BuiltinModuleId, boo
   }
 }
 
-async function disposeContext(ctx: WorkbenchContext, updateManager?: UpdateManager): Promise<void> {
-  updateManager?.dispose()
+async function disposeContext(ctx: WorkbenchContext): Promise<void> {
   await ctx.workspace.closeProject()
+  await ctx.registry.dispose().catch((err) => {
+    console.warn('[workbench] dispose registry encountered errors:', err)
+  })
 }
 
 function createConfiguredMainWindow(config: WorkbenchAppConfig, rendererDir: string): BrowserWindow {
@@ -97,6 +93,11 @@ function createConfiguredMainWindow(config: WorkbenchAppConfig, rendererDir: str
     height: config.window?.height,
     minWidth: config.window?.minWidth,
     minHeight: config.window?.minHeight,
+    // P1: pass the same preload path the workbench context stores on
+    // ctx.preloadPath so hosts that ship a custom simulator preload are the
+    // ones registered on the persist:simulator session — otherwise the
+    // backstop wouldn't be the host's script.
+    simulatorPreloadPath: config.preloadPath ?? defaultPreloadPath,
   })
 
   // Set window/taskbar icon if provided (Linux/Windows; macOS uses app bundle icon)
@@ -125,7 +126,7 @@ function createContext(config: WorkbenchAppConfig, mainWindow: BrowserWindow, re
 function registerBuiltinModules(config: WorkbenchAppConfig, context: WorkbenchContext): void {
   const modules = resolveModules(config)
   ;(Object.keys(modules) as BuiltinModuleId[]).forEach((moduleId) => {
-    if (modules[moduleId]) MODULE_REGISTRARS[moduleId](context)
+    if (modules[moduleId]) context.registry.add(BUILTIN_MODULES[moduleId].setup(context))
   })
 }
 
@@ -144,23 +145,24 @@ async function setupAutomation(instance: WorkbenchAppInstance): Promise<void> {
   if (autoArgs.auto) {
     const server = await startAutomationServer(instance.context, autoArgs.autoPort)
     instance.automationServer = server
+    instance.context.registry.add(() => server.close())
     // Stable, parseable line for e2e harnesses that scrape stdout.
     console.log(`[automation] listening on ws://127.0.0.1:${server.port}`)
   }
 }
 
-function setupMcp(): void {
+function setupMcp(): Disposable | null {
   const settings = loadWorkbenchSettings()
-  if (!settings.mcp.enabled) return
+  if (!settings.mcp.enabled) return null
 
   const cdpPortSwitch = app.commandLine.getSwitchValue('remote-debugging-port')
   const cdpPort = cdpPortSwitch ? parseInt(cdpPortSwitch, 10) : settings.cdp.port
-  startMcpServer(cdpPort, settings.mcp.port)
+  return startMcpServer(cdpPort, settings.mcp.port)
 }
 
-function wireAppWindowEvents(config: WorkbenchAppConfig, instance: WorkbenchAppInstance): void {
+function wireAppWindowEvents(config: WorkbenchAppConfig, instance: WorkbenchAppInstance): Disposable {
   const { mainWindow, context } = instance
-  wireMainWindowEvents(mainWindow, {
+  return wireMainWindowEvents(mainWindow, {
     context,
     onResize: () => context.views.repositionAll(),
     onClose: async (e) => {
@@ -176,19 +178,29 @@ function wireAppWindowEvents(config: WorkbenchAppConfig, instance: WorkbenchAppI
   })
 }
 
-function enableDevRendererAutoReload(rendererDir: string): void {
+function enableDevRendererAutoReload(rendererDir: string): Disposable {
   // Auto-reload renderer windows when dist files change during development
-  if (!app.isPackaged) {
-    let reloadTimer: ReturnType<typeof setTimeout> | null = null
-    fs.watch(rendererDir, { recursive: true }, () => {
-      if (reloadTimer) clearTimeout(reloadTimer)
-      reloadTimer = setTimeout(() => {
-        for (const win of BrowserWindow.getAllWindows()) {
-          win.webContents.reload()
-        }
-      }, 300)
-    })
+  if (app.isPackaged) {
+    return toDisposable(() => {})
   }
+
+  let reloadTimer: ReturnType<typeof setTimeout> | null = null
+  const watcher = fs.watch(rendererDir, { recursive: true }, () => {
+    if (reloadTimer) clearTimeout(reloadTimer)
+    reloadTimer = setTimeout(() => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        win.webContents.reload()
+      }
+    }, 300)
+  })
+
+  return toDisposable(() => {
+    if (reloadTimer) {
+      clearTimeout(reloadTimer)
+      reloadTimer = null
+    }
+    watcher.close()
+  })
 }
 
 export function createWorkbenchApp(config: WorkbenchAppConfig = {}) {
@@ -206,14 +218,14 @@ export function createWorkbenchApp(config: WorkbenchAppConfig = {}) {
       const rendererDir = config.rendererDir ?? defaultRendererDir
       const mainWindow = createConfiguredMainWindow(config, rendererDir)
       const context = createContext(config, mainWindow, rendererDir)
-      registerAppIpc(context)
+      context.registry.add(registerAppIpc(context))
       registerBuiltinModules(config, context)
       installMenu(config, mainWindow, context)
 
       const instance: WorkbenchAppInstance = {
         mainWindow,
         context,
-        dispose: () => disposeContext(context, instance.updateManager),
+        dispose: () => disposeContext(context),
       }
 
       if (config.onSetup) {
@@ -228,13 +240,28 @@ export function createWorkbenchApp(config: WorkbenchAppConfig = {}) {
           initialDelay: config.updateOptions?.initialDelay,
           getCurrentVersion: config.updateOptions?.getCurrentVersion,
         })
+        context.registry.add(() => instance.updateManager!.dispose())
       }
 
       await setupAutomation(instance)
-      setupMcp()
-      setupSimulatorStorage(mainWindow.webContents)
-      wireAppWindowEvents(config, instance)
-      enableDevRendererAutoReload(rendererDir)
+      const mcp = setupMcp()
+      if (mcp) context.registry.add(mcp)
+      context.registry.add(setupSimulatorStorage(mainWindow.webContents, {
+        senderPolicy: context.senderPolicy,
+        // Per-project filter for the simulator-storage panel: the simulator
+        // uses a fixed `persist:simulator` partition + a fixed simulator.html
+        // origin, so localStorage is shared across every project that has
+        // ever opened. The dimina runtime isolates writes with `${appId}_`
+        // prefixes; this callback lets the storage panel filter the CDP
+        // snapshot/event stream to the active appId.
+        getActiveAppId: () => {
+          const session = context.workspace.getSession()
+          const appInfo = session?.appInfo as { appId?: string } | undefined
+          return appInfo?.appId ?? null
+        },
+      }))
+      context.registry.add(wireAppWindowEvents(config, instance))
+      context.registry.add(enableDevRendererAutoReload(rendererDir))
 
       return instance
     })
@@ -242,12 +269,12 @@ export function createWorkbenchApp(config: WorkbenchAppConfig = {}) {
     return setupPromise
   }
 
-  function start(): void {
-    void setup()
+  function start(): Promise<void> {
     if (!appEventsRegistered) {
       appEventsRegistered = true
       registerAppLifecycle()
     }
+    return setup().then(() => undefined)
   }
 
   return {

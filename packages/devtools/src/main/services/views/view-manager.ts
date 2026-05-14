@@ -1,6 +1,8 @@
 import type { WebContents } from 'electron'
 import { WebContentsView, webContents } from 'electron'
 import path from 'path'
+import { mainPreloadPath } from '../../utils/paths.js'
+import { applyNavigationHardening } from '../../windows/navigation-hardening.js'
 import * as layout from '../layout/index.js'
 import { getDefaultTab, type WorkbenchContext } from '../workbench-context.js'
 
@@ -86,6 +88,10 @@ export interface ViewManager {
   hasSimulatorView(): boolean
   /** Return the settings overlay's WebContents (for renderer-notifier). */
   getSettingsWebContents(): WebContents | null
+  /** Return the webContents ID of the settings overlay if alive, else null. */
+  getSettingsWebContentsId(): number | null
+  /** Return the webContents ID of the popover overlay if alive, else null. */
+  getPopoverWebContentsId(): number | null
 
   // ── Compound operations (used by IPC handlers) ────────────────────────
   /** Update lastSimWidth; reposition simulator + settings if they are added. */
@@ -241,8 +247,16 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   async function showSettings(): Promise<void> {
     if (!settingsView) {
       settingsView = new WebContentsView({
-        webPreferences: { nodeIntegration: true, contextIsolation: false },
+        webPreferences: {
+          nodeIntegration: false,
+          contextIsolation: true,
+          sandbox: false,
+          preload: mainPreloadPath,
+        },
       })
+      // Overlay loads mainPreloadPath, so the same navigation rules as the
+      // main window apply — see navigation-hardening.ts.
+      applyNavigationHardening(settingsView.webContents, ctx.rendererDir)
       await settingsView.webContents.loadFile(
         path.join(ctx.rendererDir, 'entries/settings/index.html'),
       )
@@ -266,8 +280,15 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   function showPopover(data: unknown): void {
     hidePopover()
     const popover = new WebContentsView({
-      webPreferences: { nodeIntegration: true, contextIsolation: false },
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        sandbox: false,
+        preload: mainPreloadPath,
+      },
     })
+    // Popover overlay loads mainPreloadPath — same navigation rules apply.
+    applyNavigationHardening(popover.webContents, ctx.rendererDir)
     popoverView = popover
     popover.setBackgroundColor('#00000000')
     ctx.mainWindow.contentView.addChildView(popover)
@@ -353,6 +374,16 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       if (!settingsView) return null
       if (settingsView.webContents.isDestroyed()) return null
       return settingsView.webContents
+    },
+    getSettingsWebContentsId: () => {
+      if (!settingsView) return null
+      if (settingsView.webContents.isDestroyed()) return null
+      return settingsView.webContents.id
+    },
+    getPopoverWebContentsId: () => {
+      if (!popoverView) return null
+      if (popoverView.webContents.isDestroyed()) return null
+      return popoverView.webContents.id
     },
     resize,
     setVisible,

@@ -64,14 +64,17 @@ test.describe('Extension Panels Data Bridge', () => {
     await mainWindow.getByRole('tab', { name: 'Storage' }).click()
     await mainWindow.locator('button:has-text("↻ 刷新")').waitFor({ timeout: 8000 })
 
-    // Storage panel data now flows through the CDP DOMStorage domain
-    // attached by the main process — the panel sees every localStorage
-    // change in the simulator webview regardless of the writer (wx,
-    // api-compat, devtools console, etc.). Any plain localStorage write
-    // is sufficient.
+    // Storage panel filters the CDP DOMStorage stream by the active
+    // project's appId prefix (the simulator partition is shared across
+    // every project ever opened). Write a key with the same `${appId}_`
+    // prefix the dimina runtime uses so the filter passes it through.
     await evalInSimulator(
       electronApp,
-      `localStorage.setItem('e2e_storage_key', 'e2e_storage_value')`,
+      `(() => {
+        const hash = location.hash.replace(/^#/, '')
+        const appId = hash.includes('|') ? hash.split('|')[0] : hash.split('/')[0]
+        localStorage.setItem(appId + '_e2e_storage_key', 'e2e_storage_value')
+      })()`,
     )
 
     const text = await pollUntil(

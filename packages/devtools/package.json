@@ -38,11 +38,7 @@
 		"./launch": "./dist/main/app/launch.js",
 		"./types": "./dist/shared/types.js",
 		"./context": "./dist/main/services/workbench-context.js",
-		"./view-manager": "./dist/main/services/views/view-manager.js",
 		"./create-window": "./dist/main/windows/main-window/index.js",
-		"./layout": "./dist/main/services/layout/index.js",
-		"./projects": "./dist/main/services/projects/index.js",
-		"./ipc-app": "./dist/main/ipc/app.js",
 		"./ipc-simulator": "./dist/main/ipc/simulator.js",
 		"./ipc-panels": "./dist/main/ipc/panels.js",
 		"./ipc-toolbar": "./dist/main/ipc/toolbar.js",
@@ -52,8 +48,7 @@
 		"./ipc-session": "./dist/main/ipc/session.js",
 		"./paths": "./dist/main/utils/paths.js",
 		"./workbench-settings": "./dist/main/services/settings/index.js",
-		"./preload": "./dist/preload/windows/main.js",
-		"./simulator-dir": "./dist/main/services/simulator/dir.js",
+		"./preload": "./dist/preload/index.js",
 		"./bootstrap": "./dist/main/app/bootstrap.js"
 	},
 	"typesVersions": {
@@ -70,20 +65,8 @@
 			"context": [
 				"dist/main/services/workbench-context.d.ts"
 			],
-			"view-manager": [
-				"dist/main/services/views/view-manager.d.ts"
-			],
 			"create-window": [
 				"dist/main/windows/main-window/index.d.ts"
-			],
-			"layout": [
-				"dist/main/services/layout/index.d.ts"
-			],
-			"projects": [
-				"dist/main/services/projects/index.d.ts"
-			],
-			"ipc-app": [
-				"dist/main/ipc/app.d.ts"
 			],
 			"ipc-simulator": [
 				"dist/main/ipc/simulator.d.ts"
@@ -115,11 +98,8 @@
 			"bootstrap": [
 				"dist/main/app/bootstrap.d.ts"
 			],
-			"simulator-dir": [
-				"dist/main/services/simulator/dir.d.ts"
-			],
 			"preload": [
-				"dist/preload/windows/main.d.ts"
+				"dist/preload/index.d.ts"
 			]
 		}
 	},
@@ -136,9 +116,9 @@
 		"dist": "electron-builder",
 		"prepack": "pnpm run build",
 		"build:main": "tsc -p tsconfig.main.json && esbuild src/main/index.ts --bundle --platform=node --format=esm --target=node24 --external:electron --packages=external --outfile=dist/main/index.bundle.js",
-		"build:preload": "tsc -p tsconfig.preload.json && esbuild src/preload/windows/simulator.ts --bundle --platform=node --format=cjs --sourcemap --external:electron --outfile=dist/preload/windows/simulator.js",
+		"build:preload": "tsc -p tsconfig.preload.json && esbuild src/preload/windows/simulator.ts --bundle --platform=node --format=cjs --sourcemap --external:electron --outfile=dist/preload/windows/simulator.js && esbuild src/preload/windows/main.ts --bundle --platform=node --format=cjs --sourcemap --external:electron --outfile=dist/preload/windows/main.cjs",
 		"build:renderer": "vite build",
-		"dev": "pnpm build && concurrently \"vite build --watch\" \"vite build --watch --config vite.config.simulator.ts\" \"tsc -p tsconfig.main.json --watch\" \"tsc -p tsconfig.preload.json --watch\" \"esbuild src/preload/windows/simulator.ts --bundle --platform=node --format=cjs --sourcemap --external:electron --outfile=dist/preload/windows/simulator.js --watch\" \"electron dist/main/index.js\"",
+		"dev": "pnpm build && concurrently \"vite build --watch\" \"vite build --watch --config vite.config.simulator.ts\" \"tsc -p tsconfig.main.json --watch\" \"tsc -p tsconfig.preload.json --watch\" \"esbuild src/preload/windows/simulator.ts --bundle --platform=node --format=cjs --sourcemap --external:electron --outfile=dist/preload/windows/simulator.js --watch\" \"esbuild src/preload/windows/main.ts --bundle --platform=node --format=cjs --sourcemap --external:electron --outfile=dist/preload/windows/main.cjs --watch\" \"electron dist/main/index.js\"",
 		"build:core": "pnpm --filter @dimina-kit/devkit build",
 		"check-types": "tsc --noEmit",
 		"lint": "eslint . --max-warnings 0",

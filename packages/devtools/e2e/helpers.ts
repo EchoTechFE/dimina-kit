@@ -38,7 +38,7 @@ export const DEMO_APP_NAME = readDemoProjectName(DEMO_APP_DIR)
 
 /**
  * Invoke an IPC handler from the renderer process.
- * Wraps the common `window.require('electron').ipcRenderer.invoke(...)` pattern.
+ * Uses the contextBridge-exposed `window.devtools.ipc` surface.
  */
 export async function ipcInvoke<T = unknown>(
   mainWindow: Page,
@@ -47,8 +47,9 @@ export async function ipcInvoke<T = unknown>(
 ): Promise<T> {
   return mainWindow.evaluate(
     async ({ channel, args }) => {
-      const { ipcRenderer } = window.require('electron')
-      return ipcRenderer.invoke(channel, ...args)
+      const ipc = (window as unknown as { devtools?: { ipc?: { invoke?: (c: string, ...a: unknown[]) => Promise<unknown> } } }).devtools?.ipc
+      if (!ipc?.invoke) throw new Error('[e2e] window.devtools.ipc unavailable — preload bridge missing?')
+      return ipc.invoke(channel, ...args)
     },
     { channel, args }
   ) as Promise<T>
@@ -72,9 +73,8 @@ export async function closeProject(mainWindow: Page): Promise<void> {
   await ipcInvoke(mainWindow, ProjectChannel.Close).catch(() => {})
   // Trigger the navigate-back handler in the renderer (same event handleWindowClose sends)
   await mainWindow.evaluate(() => {
-    const { ipcRenderer } = window.require('electron')
-    // Emit locally to trigger the 'window:navigateBack' listener
-    ipcRenderer.emit('window:navigateBack', {} as Electron.IpcRendererEvent)
+    const testIpc = (window as unknown as { __testIpc?: { emit: (c: string) => void } }).__testIpc
+    testIpc?.emit('window:navigateBack')
   }).catch(() => {})
   // Wait for the project list view to be visible again (the project card title=projectDir
   // disappears once we leave the project view; project list shows project cards / empty state).
@@ -102,8 +102,8 @@ export async function openProjectInUI(
 ): Promise<void> {
   await addProject(mainWindow, projectDir)
   await mainWindow.evaluate(() => {
-    const { ipcRenderer } = window.require('electron')
-    ipcRenderer.emit('window:navigateBack', {} as Electron.IpcRendererEvent)
+    const testIpc = (window as unknown as { __testIpc?: { emit: (c: string) => void } }).__testIpc
+    testIpc?.emit('window:navigateBack')
   })
   const projectPathLabel = mainWindow.locator(`[title="${projectDir}"]`).first()
   await projectPathLabel.waitFor()

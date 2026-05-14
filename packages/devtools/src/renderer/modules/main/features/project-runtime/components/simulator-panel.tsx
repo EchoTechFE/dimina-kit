@@ -86,11 +86,18 @@ export function SimulatorPanel({
                 }}
               >
                 {preloadPath && simulatorUrl && (
+                  // NOTE: no `preload=` attribute. The simulator preload is
+                  // injected exclusively at the session level (see
+                  // src/main/windows/main-window/create.ts ::
+                  // configureSimulatorSession) and any renderer-supplied
+                  // preload that doesn't match the session path is rejected
+                  // by will-attach-webview. `preloadPath` here is only used
+                  // as a readiness gate so we don't mount the webview before
+                  // the main process has resolved the bundle path; it is NOT
+                  // plumbed onto the element.
                   <webview
                     ref={simulatorRef as React.RefObject<HTMLElement>}
                     src={simulatorUrl}
-                    // eslint-disable-next-line react/no-unknown-property
-                    preload={preloadPath}
                     // eslint-disable-next-line react/no-unknown-property
                     partition="persist:simulator"
                     // eslint-disable-next-line react/no-unknown-property

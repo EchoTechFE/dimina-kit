@@ -1,5 +1,7 @@
 import type { BrowserWindow, WebContentsView } from 'electron'
+import { globalShortcut } from 'electron'
 import type { WorkbenchContext } from '../../services/workbench-context.js'
+import { DisposableRegistry, type Disposable, toDisposable } from '../../utils/disposable.js'
 
 export interface MainWindowEventState {
   context?: WorkbenchContext
@@ -10,7 +12,8 @@ export interface MainWindowEventState {
 export function wireMainWindowEvents(
   win: BrowserWindow,
   state: MainWindowEventState = {},
-): void {
+): Disposable {
+  const registry = new DisposableRegistry()
   const mainWebView = win.contentView.children[0] as WebContentsView | undefined
 
   const resizeMainWebView = () => {
@@ -23,10 +26,32 @@ export function wireMainWindowEvents(
 
   resizeMainWebView()
   win.on('resize', resizeMainWebView)
+  registry.add(toDisposable(() => {
+    win.removeListener('resize', resizeMainWebView)
+  }))
 
   if (state.onClose) {
-    win.on('close', (event) => {
+    const onCloseHandler = (event: Electron.Event) => {
       void state.onClose?.(event)
-    })
+    }
+    win.on('close', onCloseHandler)
+    registry.add(toDisposable(() => {
+      win.removeListener('close', onCloseHandler)
+    }))
   }
+
+  // DevTools shortcut: scoped to this main window so its disposal is tied
+  // to ctx.registry. `unregisterAll()` in lifecycle remains as a process-exit
+  // safety net.
+  const devToolsAccelerator = 'CommandOrControl+Shift+I'
+  const registered = globalShortcut.register(devToolsAccelerator, () => {
+    win.webContents.openDevTools({ mode: 'detach' })
+  })
+  if (registered) {
+    registry.add(toDisposable(() => {
+      globalShortcut.unregister(devToolsAccelerator)
+    }))
+  }
+
+  return registry
 }

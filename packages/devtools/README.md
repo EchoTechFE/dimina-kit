@@ -150,9 +150,6 @@ src/
       app.ts                             # createWorkbenchApp 工厂
       bootstrap.ts                       # suppressEpipe / setupCdpPort
       lifecycle.ts                       # Electron app 生命周期注册
-    windows/
-      main-window/                       # 主窗口创建 + 事件接线
-      settings-window/                   # 独立设置窗口
     ipc/                                 # 只做 handler 注册，不写业务
       index.ts                           # 聚合 register 函数导出
       simulator.ts                       # simulator attach/detach/resize
@@ -166,17 +163,33 @@ src/
       settings/                          # 用户级 workbench 设置读写 + 主题应用
       projects/                          # 项目列表 CRUD（持久化）
       layout/                            # 布局常量 + bounds 计算
+      views/                             # ViewManager（settings / popover overlay 等）
+      workspace/                         # 项目会话生命周期
+      notifications/                     # 主进程 → renderer 的事件通知
       mcp/                               # MCP server
       automation/                        # 自动化 WebSocket 服务
       simulator/                         # simulator dir / referer
+      simulator-storage/                 # CDP DOMStorage + 元素 inspect 桥接
+      update/                            # UpdateManager + GitHubReleaseChecker
       workbench-context.ts               # 共享状态类型 + 工厂 + 辅助函数
+      window-service.ts                  # main / settings 窗口聚合访问
+      module.ts                          # WorkbenchModule 协议
       default-adapter.ts                 # 默认 CompilationAdapter
     menu/                                # 应用菜单
-    utils/paths.ts                       # rendererDir / defaultPreloadPath
+    utils/
+      paths.ts                           # rendererDir / defaultPreloadPath / simulatorDir
+      disposable.ts                      # DisposableRegistry + AggregateError 聚合
+      ipc-registry.ts                    # ipcMain.handle 包装 + SenderPolicy 闸门
+      sender-policy.ts                   # sender webContents id 白名单
+      ipc-schema.ts                      # zod schema 校验工具
+    windows/
+      main-window/                       # 主窗口创建 + 事件接线
+      settings-window/                   # 独立设置窗口
+      navigation-hardening.ts            # will-navigate / setWindowOpenHandler 限流
 
   preload/                               # 按注入目标分
     windows/                             # contextBridge 类型 preload
-      main.ts                            # 主窗口 preload，可组合导出 install*Instrumentation
+      main.ts                            # workbench 三窗口 preload，仅暴露 window.devtools.ipc
       simulator.ts                       # simulator webview 的默认 preload
     shared/                              # preload 之间共享
       api-compat.ts                      # setupApiCompatHook
@@ -331,31 +344,40 @@ launch({ preloadPath: '/absolute/path/to/my-preload.js' })
 
 ## 模块导出一览
 
+### Stable public exports
+
+`@dimina-kit/devtools` 的稳定入口，签名遵循 semver；新版本不会做破坏性改动（除非 major bump）。
+
 ```
 @dimina-kit/devtools                        launch, createWorkbenchApp, buildDefaultMenu,
                                        openSettingsWindow, suppressEpipe, setupCdpPort,
-                                       createWorkbenchContext, createMainWindow, ...
-                                       （api.ts 聚合了下方全部入口）
+                                       createWorkbenchContext, createMainWindow,
+                                       createViewManager, register*Ipc,
+                                       setHeaderHeight, UpdateManager,
+                                       createGitHubReleaseChecker, ...
+                                       （api.ts 聚合了所有公共 API；优先从根入口导入）
 @dimina-kit/devtools/launch                 launch(config?), buildDefaultMenu, openSettingsWindow
 @dimina-kit/devtools/app                    createWorkbenchApp(config?)
 @dimina-kit/devtools/types                  TypeScript 类型定义
+@dimina-kit/devtools/bootstrap              suppressEpipe(), setupCdpPort()
+@dimina-kit/devtools/paths                  rendererDir, defaultPreloadPath, simulatorDir,
+                                       getRendererDir, getPreloadDir, getRendererHtml
+@dimina-kit/devtools/preload                installConsoleInstrumentation,
+                                       installStorageInstrumentation,
+                                       installAppDataInstrumentation, sendAllAppData,
+                                       installWxmlInstrumentation, sendWxmlTree,
+                                       setupWxmlObserver, installSimulatorBridge,
+                                       setupApiCompatHook
+```
+
+### Experimental exports (v0.x — signatures may change in minor versions)
+
+下列子路径主要用于"模块组装"等深度定制场景。在 0.x 阶段，函数签名和模块边界可能在 minor 版本之间调整；如果你不需要逐模块组装，请优先使用上方的 stable 入口或根 barrel。
+
+```
 @dimina-kit/devtools/context                createWorkbenchContext(opts),
                                        hasBuiltinPanel(ctx, panelId), getDefaultTab(ctx)
 @dimina-kit/devtools/create-window          createMainWindow(opts)
-@dimina-kit/devtools/view-manager           createViewManager(ctx) → ViewManager
-                                       (attachSimulator, detachSimulator, showSimulator,
-                                        hideSimulator, showSettings, hideSettings,
-                                        showPopover, hidePopover, resize,
-                                        setVisible, repositionAll, disposeAll)
-@dimina-kit/devtools/layout                 computeRightPanelBounds, computeSimulatorBounds,
-                                       computeSettingsBounds, computePopoverBounds,
-                                       setHeaderHeight, getRightX,
-                                       HEADER_H, SPLITTER_W, SETTINGS_W
-@dimina-kit/devtools/projects               listProjects, addProject, removeProject,
-                                       getCompileConfig, saveCompileConfig,
-                                       updateLastOpened
-@dimina-kit/devtools/paths                  rendererDir, defaultPreloadPath,
-                                       getRendererDir, getPreloadDir, getRendererHtml
 @dimina-kit/devtools/ipc-simulator          registerSimulatorIpc(ctx)
 @dimina-kit/devtools/ipc-panels             registerPanelsIpc(ctx)
 @dimina-kit/devtools/ipc-toolbar            registerToolbarIpc(ctx)
@@ -363,16 +385,16 @@ launch({ preloadPath: '/absolute/path/to/my-preload.js' })
 @dimina-kit/devtools/ipc-settings           registerSettingsIpc(ctx)
 @dimina-kit/devtools/ipc-projects           registerProjectsIpc(ctx)
 @dimina-kit/devtools/ipc-session            registerSessionIpc(ctx), sendStatus(ctx, status, msg)
-@dimina-kit/devtools/bootstrap              suppressEpipe(), setupCdpPort()
 @dimina-kit/devtools/workbench-settings     loadWorkbenchSettings(), saveWorkbenchSettings(), applyTheme()
-@dimina-kit/devtools/preload                installConsoleInstrumentation,
-                                       installStorageInstrumentation,
-                                       installAppDataInstrumentation, sendAllAppData,
-                                       installWxmlInstrumentation, sendWxmlTree,
-                                       setupWxmlObserver, installSimulatorBridge,
-                                       setupApiCompatHook
-@dimina-kit/devtools/simulator-dir          simulatorDir
 ```
+
+> 注：以下子路径在过去版本曾被导出，已收敛到根 barrel 或内部实现，请改从 `@dimina-kit/devtools` 根入口导入（`createViewManager`、`registerAppIpc`、`simulatorDir`、`Project` 等类型）：
+>
+> - `@dimina-kit/devtools/view-manager` → `import { createViewManager, type ViewManager } from '@dimina-kit/devtools'`
+> - `@dimina-kit/devtools/ipc-app` → `import { registerAppIpc } from '@dimina-kit/devtools'`
+> - `@dimina-kit/devtools/projects` → 通过 `ctx.workspace.listProjects()` 等服务方法访问；`Project` 类型从 `@dimina-kit/devtools` 根入口导入
+> - `@dimina-kit/devtools/layout` → `import { setHeaderHeight } from '@dimina-kit/devtools'`（其余布局细节回归内部实现）
+> - `@dimina-kit/devtools/simulator-dir` → `import { simulatorDir } from '@dimina-kit/devtools/paths'`
 
 ---
 
@@ -382,7 +404,6 @@ launch({ preloadPath: '/absolute/path/to/my-preload.js' })
 
 ```typescript
 interface WorkbenchContext {
-  mainWindow: BrowserWindow
   adapter: CompilationAdapter
   preloadPath: string
   rendererDir: string
@@ -391,12 +412,21 @@ interface WorkbenchContext {
   appName: string
   toolbarActions?: () => Promise<ToolbarAction[]> | ToolbarAction[]
   brandingProvider?: () => Promise<{ appName: string }> | { appName: string }
-  workbenchSettingsWindow: BrowserWindow | null
 
   // ── Services（运行时状态封装在内部，通过方法访问）──
+  windows: WindowService // ctx.windows.mainWindow, ctx.windows.settingsWindow, ...
   views: ViewManager // ctx.views.repositionAll(), ctx.views.getSimulatorWebContentsId(), ...
   notify: RendererNotifier // ctx.notify.projectStatus(), ctx.notify.windowNavigateBack(), ...
   workspace: WorkspaceService // ctx.workspace.getProjectPath(), ctx.workspace.hasActiveSession(), ...
+
+  // ── Internal lifecycle / security (host 不直接消费) ──
+  registry: DisposableRegistry // 框架在创建时统一聚合 dispose
+  senderPolicy: SenderPolicy   // IpcRegistry 自动校验 sender 白名单
+
+  /** @deprecated 用 ctx.windows.mainWindow */
+  mainWindow: BrowserWindow
+  /** @deprecated 用 ctx.windows.settingsWindow / setSettingsWindow */
+  workbenchSettingsWindow: BrowserWindow | null
 }
 ```
 
@@ -409,6 +439,8 @@ interface WorkbenchContext {
 | `ctx.simulatorWebContentsId` | `ctx.views.getSimulatorWebContentsId()`                           |
 | `ctx.devToolsViewAdded`      | `ctx.views.isSimulatorAdded()`                                    |
 | `ctx.lastSimWidth`           | `ctx.views.getLastSimWidth()`                                     |
+| `ctx.mainWindow`             | `ctx.windows.mainWindow`                                          |
+| `ctx.workbenchSettingsWindow`| `ctx.windows.settingsWindow`                                      |
 
 ---
 
@@ -545,18 +577,18 @@ pnpm test               # 运行测试
 
 ## 安全说明
 
-- 本工具仅用于本地开发调试，不应部署到生产环境
-- 为方便开发调试，BrowserWindow 启用了 `nodeIntegration` 并禁用了 `contextIsolation`，这在生产环境中存在安全风险
-- 仅在受信任的本地开发环境中使用本工具
-- 不要在 devtools 窗口中加载不受信任的远程内容
-- 如需在非本地环境使用，请自行评估并加固安全配置
+本工具仅用于本地开发调试。当前的安全配置：
+
+- **Workbench 窗口**（main / settings / popover overlay）均启用 `contextIsolation` 并禁用 `nodeIntegration`；renderer 通过 main preload 经 `contextBridge` 拿到 `window.devtools.ipc`，每个 IPC handler 经 sender whitelist 校验调用方
+- **Simulator 加载的小程序代码** 运行在独立 `<webview>` 中（`partition='persist:simulator'`、`nodeIntegration=false`），preload 由 `session.registerPreloadScript` 在 session 层固定，渲染进程无法替换
+- **renderer 入口** 启用了保守 CSP；`will-navigate` / `setWindowOpenHandler` 屏蔽外部跳转
+
+仍然不要在 devtools 窗口中加载不受信任的远程内容；本工具不打算在非本地环境部署。
 
 ### MCP Server 风险
 
-内置的 MCP server 默认关闭，由 `startMcpServer` 入口显式启动，或通过 workbench 设置中的 `mcp.enabled` 开启。开启后会在本机监听 SSE 端点，向任何可以连接到该端点的 MCP 客户端暴露一组工具，能力包括：在页面上下文执行任意 JS（`evaluate`）、读取 DOM 结构、截屏、拉取网络日志、触发导航等。
+内置的 MCP server 默认关闭，由 `startMcpServer` 入口显式启动，或通过 workbench 设置中的 `mcp.enabled` 开启。开启后会在本机监听 SSE 端点，向任何可以连接到该端点的 MCP 客户端暴露一组工具，能力包括：读取 DOM 结构、截屏、拉取网络日志、触发导航等。
 
-由于 workbench 主窗口出于调试需要启用了 `nodeIntegration` 并关闭了 `contextIsolation`，通过 MCP 客户端执行的 `evaluate` 实际拥有 Node API 访问权限。换言之，开启 MCP 等同于允许已连接的本机 MCP 客户端在 DevTools 进程中执行 Node 代码，读写本机文件和启动子进程均在其能力范围内。
+`workbench_evaluate` 已从 MCP 工具集中移除，workbench 只暴露只读诊断工具（截屏、console 日志、DOM、网络日志等）。`simulator_evaluate` 仍然保留，但 simulator 使用 `<webview>`、`nodeIntegration=false`，其 `evaluate` 仅在页面 JS 上下文执行，不具备 Node API 访问能力。
 
-因此仅在连接到可信的本机 MCP 客户端或被信任的 AI 工具时启用该功能；不要在公共 WiFi、共享机器或存在远程 SSH 端口转发的场景下开启，以免监听端口被非预期的客户端访问。
-
-作为收窄 RCE 面的默认策略，`workbench_evaluate` 已从 MCP 工具集中移除，workbench 只暴露只读诊断工具（截屏、console 日志、DOM、网络日志等）。`simulator_evaluate` 仍然保留，因为 simulator 使用 `<webview>`，默认 `nodeIntegration=false`，其 `evaluate` 仅在页面 JS 上下文执行，不具备 Node API 访问能力。
+仅在连接到可信的本机 MCP 客户端或被信任的 AI 工具时启用该功能；不要在公共 WiFi、共享机器或存在远程 SSH 端口转发的场景下开启，以免监听端口被非预期的客户端访问。

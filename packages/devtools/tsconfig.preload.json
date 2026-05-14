@@ -15,6 +15,7 @@
     "node_modules",
     "**/*.test.ts",
     "**/*.spec.ts",
-    "src/preload/windows/simulator.ts"
+    "src/preload/windows/simulator.ts",
+    "src/preload/windows/main.ts"
   ]
 }
