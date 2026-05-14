@@ -4,7 +4,7 @@ import type { RefObject } from 'react'
 import { DEVICES, SIM_PANEL_PADDING } from '@/shared/constants'
 import type { AppInfo, ProjectStatus } from '@/shared/api'
 import type { CompileConfig } from '@/shared/types'
-import type { ElementInspection } from '../../../../../../shared/ipc-channels'
+import type { ElementInspection, StorageWriteResult } from '../../../../../../shared/ipc-channels'
 import type { WxmlNode } from '../../right-panel/types.js'
 import { DEFAULT_RIGHT_PANE_STATE } from '../types'
 import type { RightPaneState, RightPaneTabId } from '../types'
@@ -68,6 +68,11 @@ interface PanelDataSlice {
   refreshWxml: () => void
   refreshAppData: () => void
   refreshStorage: () => void
+  setStorageItem: (key: string, value: string) => Promise<StorageWriteResult>
+  removeStorageItem: (key: string) => Promise<StorageWriteResult>
+  clearStorage: () => Promise<StorageWriteResult>
+  clearAllStorage: () => Promise<StorageWriteResult>
+  getStoragePrefix: () => Promise<string>
   inspectWxmlElement: (sid: string) => Promise<ElementInspection | null>
   clearWxmlElementInspection: () => Promise<void>
 }
@@ -199,6 +204,11 @@ export function useProjectRuntimeController(
       refreshWxml: panelDataHook.refreshWxml,
       refreshAppData: panelDataHook.refreshAppData,
       refreshStorage: panelDataHook.refreshStorage,
+      setStorageItem: panelDataHook.setStorageItem,
+      removeStorageItem: panelDataHook.removeStorageItem,
+      clearStorage: panelDataHook.clearStorage,
+      clearAllStorage: panelDataHook.clearAllStorage,
+      getStoragePrefix: panelDataHook.getStoragePrefix,
       inspectWxmlElement: panelDataHook.inspectWxmlElement,
       clearWxmlElementInspection: panelDataHook.clearWxmlElementInspection,
     },

@@ -107,7 +107,15 @@ export function ProjectRuntime({
             <AppDataPanel data={panelData.appData} onRefresh={panelData.refreshAppData} />
           )}
           {rightPane.rightPane.selected === 'storage' && (
-            <StoragePanel items={panelData.storageItems} onRefresh={panelData.refreshStorage} />
+            <StoragePanel
+              items={panelData.storageItems}
+              onRefresh={panelData.refreshStorage}
+              onSet={panelData.setStorageItem}
+              onRemove={panelData.removeStorageItem}
+              onClear={panelData.clearStorage}
+              onClearAll={panelData.clearAllStorage}
+              getPrefix={panelData.getStoragePrefix}
+            />
           )}
           {rightPane.rightPane.selected === 'simulator' && (
             <div className="flex-1" />

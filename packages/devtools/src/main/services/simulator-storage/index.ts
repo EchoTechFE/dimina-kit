@@ -22,6 +22,7 @@ import {
   SimulatorStorageChannel,
   type ElementInspection,
   type StorageItem,
+  type StorageWriteResult,
 } from '../../../shared/ipc-channels.js'
 import { DisposableRegistry, type Disposable } from '../../utils/disposable.js'
 import { IpcRegistry, type SenderPolicy } from '../../utils/ipc-registry.js'
@@ -69,6 +70,13 @@ export function setupSimulatorStorage(
   const getActiveAppId = options.getActiveAppId
   let attachedWc: WebContents | null = null
   let attachDisposables: DisposableRegistry | null = null
+  /**
+   * Cached origin discovered via `executeJavaScript('location.origin')` on
+   * first use. The simulator <webview> loads `simulator.html` from a stable
+   * scheme/host/port for the lifetime of the CDP attach, so caching avoids an
+   * extra IPC round-trip per write call. Cleared on detach.
+   */
+  let cachedOrigin: string | null = null
 
   /** Active appId prefix (e.g. `wx123_`), or null when no session is active. */
   function activePrefix(): string | null {
@@ -80,6 +88,7 @@ export function setupSimulatorStorage(
     if (!attachedWc) return
     const wc = attachedWc
     attachedWc = null
+    cachedOrigin = null
     const ad = attachDisposables
     attachDisposables = null
     if (ad) void ad.disposeAll().catch(() => {})
@@ -182,12 +191,109 @@ export function setupSimulatorStorage(
     host.send(SimulatorStorageChannel.Event, evt)
   }
 
+  async function getStorageId(): Promise<{ securityOrigin: string; isLocalStorage: true } | null> {
+    if (!attachedWc || attachedWc.isDestroyed()) return null
+    if (!cachedOrigin) {
+      try {
+        cachedOrigin = String(await attachedWc.executeJavaScript('location.origin'))
+      } catch {
+        return null
+      }
+    }
+    return { securityOrigin: cachedOrigin, isLocalStorage: true }
+  }
+
+  async function setItem(key: string, value: string): Promise<StorageWriteResult> {
+    if (!attachedWc || attachedWc.isDestroyed()) {
+      return { ok: false, error: 'simulator not attached' }
+    }
+    const storageId = await getStorageId()
+    if (!storageId) return { ok: false, error: 'failed to resolve simulator origin' }
+    try {
+      await attachedWc.debugger.sendCommand('DOMStorage.setDOMStorageItem', {
+        storageId,
+        key,
+        value,
+      })
+      return { ok: true }
+    } catch (e) {
+      return { ok: false, error: (e as Error).message }
+    }
+  }
+
+  async function removeItem(key: string): Promise<StorageWriteResult> {
+    if (!attachedWc || attachedWc.isDestroyed()) {
+      return { ok: false, error: 'simulator not attached' }
+    }
+    const storageId = await getStorageId()
+    if (!storageId) return { ok: false, error: 'failed to resolve simulator origin' }
+    try {
+      await attachedWc.debugger.sendCommand('DOMStorage.removeDOMStorageItem', {
+        storageId,
+        key,
+      })
+      return { ok: true }
+    } catch (e) {
+      return { ok: false, error: (e as Error).message }
+    }
+  }
+
+  // Scoped clear: when an appId is active, removes only its prefixed keys so
+  // we don't nuke other projects' state sharing the simulator partition.
+  // Falls back to origin-wide `DOMStorage.clear` only when no active appId is
+  // set (matches the snapshot filter's documented null-fallback).
+  async function clearScoped(): Promise<StorageWriteResult> {
+    if (!attachedWc || attachedWc.isDestroyed()) {
+      return { ok: false, error: 'simulator not attached' }
+    }
+    const storageId = await getStorageId()
+    if (!storageId) return { ok: false, error: 'failed to resolve simulator origin' }
+    const prefix = activePrefix()
+    try {
+      if (!prefix) {
+        await attachedWc.debugger.sendCommand('DOMStorage.clear', { storageId })
+        return { ok: true }
+      }
+      const result = (await attachedWc.debugger.sendCommand('DOMStorage.getDOMStorageItems', {
+        storageId,
+      })) as { entries: Array<[string, string]> }
+      for (const [key] of result.entries) {
+        if (!key.startsWith(prefix)) continue
+        await attachedWc.debugger.sendCommand('DOMStorage.removeDOMStorageItem', {
+          storageId,
+          key,
+        })
+      }
+      return { ok: true }
+    } catch (e) {
+      return { ok: false, error: (e as Error).message }
+    }
+  }
+
+  // Origin-wide clear regardless of the active appId — wipes every project's
+  // state in the shared simulator partition. The renderer guards this with a
+  // confirm dialog; we don't second-guess here.
+  async function clearAll(): Promise<StorageWriteResult> {
+    if (!attachedWc || attachedWc.isDestroyed()) {
+      return { ok: false, error: 'simulator not attached' }
+    }
+    const storageId = await getStorageId()
+    if (!storageId) return { ok: false, error: 'failed to resolve simulator origin' }
+    try {
+      await attachedWc.debugger.sendCommand('DOMStorage.clear', { storageId })
+      return { ok: true }
+    } catch (e) {
+      return { ok: false, error: (e as Error).message }
+    }
+  }
+
   async function getSnapshot(): Promise<StorageItem[]> {
     if (!attachedWc || attachedWc.isDestroyed()) return []
     try {
-      const origin = await attachedWc.executeJavaScript('location.origin')
+      const storageId = await getStorageId()
+      if (!storageId) return []
       const result = (await attachedWc.debugger.sendCommand('DOMStorage.getDOMStorageItems', {
-        storageId: { securityOrigin: origin, isLocalStorage: true },
+        storageId,
       })) as { entries: Array<[string, string]> }
       const prefix = activePrefix()
       const filtered = prefix
@@ -249,6 +355,15 @@ export function setupSimulatorStorage(
   // pass-through and still owns the removeHandler lifecycle.
   const ipc = new IpcRegistry(options.senderPolicy)
   ipc.handle(SimulatorStorageChannel.GetSnapshot, () => getSnapshot())
+  ipc.handle(SimulatorStorageChannel.GetActivePrefix, () => activePrefix() ?? '')
+  ipc.handle(SimulatorStorageChannel.Set, (_event, payload: { key: string; value: string }) =>
+    setItem(String(payload?.key ?? ''), String(payload?.value ?? '')),
+  )
+  ipc.handle(SimulatorStorageChannel.Remove, (_event, payload: { key: string }) =>
+    removeItem(String(payload?.key ?? '')),
+  )
+  ipc.handle(SimulatorStorageChannel.Clear, () => clearScoped())
+  ipc.handle(SimulatorStorageChannel.ClearAll, () => clearAll())
   ipc.handle(SimulatorElementChannel.Inspect, (_event, sid: string) => inspectElement(sid))
   ipc.handle(SimulatorElementChannel.Clear, () => clearElementInspection())
   registry.add(ipc)

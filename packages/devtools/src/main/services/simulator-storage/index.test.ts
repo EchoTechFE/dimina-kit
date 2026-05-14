@@ -128,9 +128,10 @@ describe('setupSimulatorStorage lifecycle', () => {
       await d.dispose()
       expect(ipcHandlers.has(SimulatorStorageChannel.GetSnapshot)).toBe(false)
     }
-    // 3 ipc handlers per setup (GetSnapshot + Element.Inspect + Element.Clear) × 2 cycles
-    expect(ipcMainStub.handle).toHaveBeenCalledTimes(6)
-    expect(ipcMainStub.removeHandler).toHaveBeenCalledTimes(6)
+    // 8 ipc handlers per setup (Storage.GetSnapshot + GetActivePrefix + Set
+    // + Remove + Clear + ClearAll + Element.Inspect + Element.Clear) × 2 cycles
+    expect(ipcMainStub.handle).toHaveBeenCalledTimes(16)
+    expect(ipcMainStub.removeHandler).toHaveBeenCalledTimes(16)
     expect(appStub.on).toHaveBeenCalledTimes(2)
     expect(appStub.removeListener).toHaveBeenCalledTimes(2)
   })
