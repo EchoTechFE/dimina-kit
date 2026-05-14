@@ -12,7 +12,7 @@ import type { RightPaneState, RightPaneTabId } from '../types'
 import { useDevice } from './use-device'
 import { useSession } from './use-session'
 import { useSimulator } from './use-simulator'
-import { usePanelData } from './use-panel-data'
+import { usePanelData, type AppDataState } from './use-panel-data'
 import { useRightPane } from './use-right-pane'
 import { usePopover } from './use-popover'
 
@@ -63,10 +63,11 @@ interface SimulatorSlice {
 interface PanelDataSlice {
   connected: boolean
   wxmlTree: WxmlNode | null
-  appData: Record<string, unknown>
+  appData: AppDataState
   storageItems: StorageItem[]
   refreshWxml: () => void
   refreshAppData: () => void
+  setActiveAppDataBridge: (id: string) => void
   refreshStorage: () => void
   inspectWxmlElement: (sid: string) => Promise<ElementInspection | null>
   clearWxmlElementInspection: () => Promise<void>
@@ -198,6 +199,7 @@ export function useProjectRuntimeController(
       storageItems: panelDataHook.storageItems,
       refreshWxml: panelDataHook.refreshWxml,
       refreshAppData: panelDataHook.refreshAppData,
+      setActiveAppDataBridge: panelDataHook.setActiveAppDataBridge,
       refreshStorage: panelDataHook.refreshStorage,
       inspectWxmlElement: panelDataHook.inspectWxmlElement,
       clearWxmlElementInspection: panelDataHook.clearWxmlElementInspection,

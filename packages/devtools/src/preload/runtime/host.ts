@@ -1,7 +1,23 @@
-import { ipcRenderer } from 'electron'
+import { ipcRenderer, type IpcRendererEvent } from 'electron'
 
 export function sendToHost(channel: string, data: unknown): void {
   ipcRenderer.sendToHost(channel, data)
+}
+
+export function onHostMessage(
+  channel: string,
+  handler: (...args: unknown[]) => void,
+): () => void {
+  let active = true
+  const wrapped = (_event: IpcRendererEvent, ...args: unknown[]) => {
+    if (!active) return
+    handler(...args)
+  }
+  ipcRenderer.on(channel, wrapped)
+  return () => {
+    active = false
+    ipcRenderer.removeListener(channel, wrapped)
+  }
 }
 
 export function safeSerialize(val: unknown): unknown {
