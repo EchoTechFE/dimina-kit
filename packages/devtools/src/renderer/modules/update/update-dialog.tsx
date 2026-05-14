@@ -8,10 +8,15 @@ import {
   DialogFooter,
 } from '@/shared/components/ui/dialog'
 import { Button } from '@/shared/components/ui/button'
+import { invokeStrict, on as ipcOn } from '@/shared/api/ipc-transport'
+import { UpdateChannel } from '../../../shared/ipc-channels.js'
 
-const { ipcRenderer } = window.require('electron') as {
-  ipcRenderer: import('electron').IpcRenderer
-}
+// Update dialog uses `invokeStrict` (rejects on error) so a failed download
+// surfaces as an "error" stage instead of being silently swallowed by the
+// default invoke wrapper. `ipcOn` is the renderer-side subscribe helper that
+// funnels through the same preload bridge as every other facade in this
+// folder, keeping update-dialog inside the typed transport boundary that
+// the renderer eslint rule enforces.
 
 interface UpdateInfo {
   version: string
@@ -30,46 +35,45 @@ export function UpdateDialog() {
   const [error, setError] = useState('')
 
   useEffect(() => {
-    const onAvailable = (_: unknown, updateInfo: UpdateInfo) => {
+    return ipcOn<[UpdateInfo]>(UpdateChannel.Available, (updateInfo) => {
       setInfo(updateInfo)
       setStage('prompt')
       setProgress(0)
       setError('')
       setOpen(true)
-    }
-    ipcRenderer.on('updates:available', onAvailable)
-    return () => {
-      ipcRenderer.removeListener('updates:available', onAvailable)
-    }
+    })
   }, [])
 
   useEffect(() => {
-    const onProgress = (_: unknown, data: { percent: number }) => {
+    return ipcOn<[{ percent: number }]>(UpdateChannel.DownloadProgress, (data) => {
       setProgress(Math.round(data.percent))
-    }
-    ipcRenderer.on('updates:downloadProgress', onProgress)
-    return () => {
-      ipcRenderer.removeListener('updates:downloadProgress', onProgress)
-    }
+    })
   }, [])
 
   const handleDownload = useCallback(async () => {
     setStage('downloading')
     setProgress(0)
-    const result = (await ipcRenderer.invoke('updates:download')) as {
-      success: boolean
-      error?: string
-    }
-    if (result.success) {
-      setStage('ready')
-    } else {
-      setError(result.error || 'Download failed')
+    try {
+      const result = await invokeStrict<{
+        success: boolean
+        error?: string
+      }>(UpdateChannel.Download)
+      if (result.success) {
+        setStage('ready')
+      } else {
+        setError(result.error || 'Download failed')
+        setStage('error')
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
       setStage('error')
     }
   }, [])
 
   const handleInstall = useCallback(() => {
-    ipcRenderer.invoke('updates:install')
+    void invokeStrict(UpdateChannel.Install).catch((err: unknown) => {
+      console.warn('[update] install failed:', err)
+    })
   }, [])
 
   const handleClose = useCallback(() => {

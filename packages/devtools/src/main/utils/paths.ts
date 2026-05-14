@@ -28,6 +28,13 @@ export const rendererDir = path.join(devtoolsPackageRoot, 'dist/renderer')
 
 export const defaultPreloadPath = path.join(devtoolsPackageRoot, 'dist/preload/windows/simulator.js')
 
+/**
+ * Preload bundle for the main window, settings window, and the settings /
+ * popover overlay WebContentsViews. Exposes `window.devtools.ipc` via
+ * contextBridge so the renderer never needs `window.require('electron')`.
+ */
+export const mainPreloadPath = path.join(devtoolsPackageRoot, 'dist/preload/windows/main.cjs')
+
 export const simulatorDir = path.join(devtoolsPackageRoot, 'dist/simulator')
 
 export function getRendererDir(): string {

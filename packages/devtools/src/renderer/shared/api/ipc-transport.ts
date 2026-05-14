@@ -1,14 +1,24 @@
-import type { IpcRenderer, IpcRendererEvent } from 'electron'
+import type { IpcRendererEvent } from 'electron'
 
 /**
- * The ONLY place in the renderer where we reach into `window.require('electron')`
- * to obtain `ipcRenderer`. Every typed facade in this directory funnels through
- * the helpers below so consumers never touch raw channel names or Electron types
- * themselves.
+ * The ONLY place in the renderer where we reach into the preload-injected
+ * `window.devtools.ipc` bridge. Every typed facade in this directory funnels
+ * through the helpers below so consumers never touch raw channel names or
+ * Electron types themselves.
+ *
+ * If this throws, the preload script failed to load — check that the
+ * BrowserWindow / WebContentsView was created with the correct
+ * `webPreferences.preload` (see `src/main/utils/paths.ts#mainPreloadPath`).
  */
-function getIpcRenderer(): IpcRenderer {
-  const mod = window.require('electron') as { ipcRenderer: IpcRenderer }
-  return mod.ipcRenderer
+function getIpc(): Window['devtools']['ipc'] {
+  // This is the single sanctioned site that may reach into the raw preload
+  // bridge; every renderer import path must go through the helpers below.
+  // eslint-disable-next-line no-restricted-syntax
+  const ipc = window.devtools?.ipc
+  if (!ipc) {
+    throw new Error('[devtools] preload bridge missing; check webPreferences.preload')
+  }
+  return ipc
 }
 
 /**
@@ -16,8 +26,8 @@ function getIpcRenderer(): IpcRenderer {
  * so callers can treat the result as `Promise<T | undefined>`-ish without boilerplate.
  */
 export function invoke<T = void>(channel: string, ...args: unknown[]): Promise<T> {
-  return getIpcRenderer()
-    .invoke(channel, ...args)
+  return getIpc()
+    .invoke<T>(channel, ...args)
     .catch((err: unknown) => {
       console.warn(`[ipc] ${channel} failed:`, err)
       return undefined as T
@@ -29,12 +39,12 @@ export function invoke<T = void>(channel: string, ...args: unknown[]): Promise<T
  * wants to handle the error explicitly (e.g. to show user-facing feedback).
  */
 export function invokeStrict<T = void>(channel: string, ...args: unknown[]): Promise<T> {
-  return getIpcRenderer().invoke(channel, ...args) as Promise<T>
+  return getIpc().invoke<T>(channel, ...args)
 }
 
 /** Fire-and-forget one-way send. */
 export function send(channel: string, ...args: unknown[]): void {
-  getIpcRenderer().send(channel, ...args)
+  getIpc().send(channel, ...args)
 }
 
 /**
@@ -45,12 +55,9 @@ export function on<TArgs extends unknown[] = unknown[]>(
   channel: string,
   handler: (...args: TArgs) => void,
 ): () => void {
-  const ipc = getIpcRenderer()
+  const ipc = getIpc()
   const listener = (_event: IpcRendererEvent, ...args: unknown[]) => {
     handler(...(args as TArgs))
   }
-  ipc.on(channel, listener)
-  return () => {
-    ipc.removeListener(channel, listener)
-  }
+  return ipc.on(channel, listener)
 }

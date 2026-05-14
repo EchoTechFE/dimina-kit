@@ -12,6 +12,8 @@ export type { WorkbenchContext, CreateContextOptions } from './services/workbenc
 export { createMainWindow } from './windows/main-window/index.js'
 export { createViewManager } from './services/views/view-manager.js'
 export type { ViewManager } from './services/views/view-manager.js'
+export type { WorkspaceService } from './services/workspace/workspace-service.js'
+export type { Project, ProjectPages, ProjectSettings } from './services/projects/project-repository.js'
 
 // ── IPC module registration ──────────────────────────────────────────────
 export { registerAppIpc } from './ipc/app.js'
@@ -24,8 +26,17 @@ export { registerSessionIpc } from './ipc/session.js'
 export { registerToolbarIpc } from './ipc/toolbar.js'
 
 // ── Paths ────────────────────────────────────────────────────────────────
-export { rendererDir, defaultPreloadPath, getRendererDir, getPreloadDir, getRendererHtml } from './utils/paths.js'
-export { simulatorDir } from './services/simulator/dir.js'
+export {
+  rendererDir,
+  defaultPreloadPath,
+  simulatorDir,
+  getRendererDir,
+  getPreloadDir,
+  getRendererHtml,
+} from './utils/paths.js'
+
+// ── Layout ───────────────────────────────────────────────────────────────
+export { setHeaderHeight } from './services/layout/index.js'
 
 // ── Update checker ───────────────────────────────────────────────────────
 export { UpdateManager, createGitHubReleaseChecker } from './services/update/index.js'

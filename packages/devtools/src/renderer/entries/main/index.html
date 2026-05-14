@@ -2,6 +2,13 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
+  <!--
+    CSP: deliberately permissive (B5 phase). Inline JS/CSS + eval are kept for
+    dev tooling / nodeIntegration:true; connect-src spans http/ws because
+    automation, MCP, and the simulator dev server all open sockets. Tighten in
+    C-phase once the preload bridge removes the need for `unsafe-*`.
+  -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; media-src 'self' blob: http: https:; connect-src 'self' http: https: ws: wss:;" />
   <title>Dimina DevTools</title>
 </head>
 <body>

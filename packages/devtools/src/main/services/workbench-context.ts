@@ -1,11 +1,15 @@
 import type { BrowserWindow } from 'electron'
 import type { CompilationAdapter } from '../../shared/types.js'
+import { DisposableRegistry } from '../utils/disposable.js'
+import type { SenderPolicy } from '../utils/ipc-registry.js'
+import { createWorkbenchSenderPolicy } from '../utils/sender-policy.js'
 import { defaultAdapter } from './default-adapter.js'
 import {
   createRendererNotifier,
   type RendererNotifier,
 } from './notifications/renderer-notifier.js'
 import { createViewManager, type ViewManager } from './views/view-manager.js'
+import { createWindowService, type WindowService } from './window-service.js'
 import {
   createWorkspaceService,
   type WorkspaceService,
@@ -16,6 +20,7 @@ import {
  * Passed to each IPC module so they can read/write shared state without closures.
  */
 export interface WorkbenchContext {
+  /** @deprecated use ctx.windows.mainWindow */
   mainWindow: BrowserWindow
   adapter: CompilationAdapter
   /** Absolute path to the preload script loaded into the simulator webview */
@@ -24,6 +29,7 @@ export interface WorkbenchContext {
   rendererDir: string
 
   // ── View state (managed exclusively by ViewManager) ──
+  /** @deprecated use ctx.windows.settingsWindow / setSettingsWindow / closeSettingsWindow */
   workbenchSettingsWindow: BrowserWindow | null
 
   /** Built-in panel IDs to display (default: all) */
@@ -44,11 +50,24 @@ export interface WorkbenchContext {
   /** Unified lifecycle manager for all overlay WebContentsViews */
   views: ViewManager
 
+  /** Owns BrowserWindow instances (main + settings) and their sender-id checks. */
+  windows: WindowService
+
   /** Unified main → renderer event dispatcher */
   notify: RendererNotifier
 
   /** Single source of truth for project + session + per-project settings */
   workspace: WorkspaceService
+
+  /**
+   * Trust predicate consulted by `IpcRegistry` for every incoming IPC.
+   * Resolves the currently-trusted senders (main renderer + overlays)
+   * lazily so it stays correct as windows/views come and go.
+   */
+  senderPolicy: SenderPolicy
+
+  /** Aggregates dispose handlers for every IPC handler, listener, watcher, and CDP session registered by the workbench. */
+  registry: DisposableRegistry
 }
 
 export interface CreateContextOptions {
@@ -90,8 +109,11 @@ export function createWorkbenchContext(opts: CreateContextOptions): WorkbenchCon
     workbenchSettingsWindow: null,
   } as WorkbenchContext
 
+  ctx.registry = new DisposableRegistry()
+  ctx.windows = createWindowService(ctx.mainWindow)
   ctx.views = createViewManager(ctx)
   ctx.notify = createRendererNotifier(ctx)
   ctx.workspace = createWorkspaceService(ctx)
+  ctx.senderPolicy = createWorkbenchSenderPolicy(ctx)
   return ctx
 }

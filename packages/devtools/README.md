@@ -331,31 +331,38 @@ launch({ preloadPath: '/absolute/path/to/my-preload.js' })
 
 ## 模块导出一览
 
+### Stable public exports
+
+`@dimina-kit/devtools` 的稳定入口，签名遵循 semver；新版本不会做破坏性改动（除非 major bump）。
+
 ```
 @dimina-kit/devtools                        launch, createWorkbenchApp, buildDefaultMenu,
                                        openSettingsWindow, suppressEpipe, setupCdpPort,
-                                       createWorkbenchContext, createMainWindow, ...
-                                       （api.ts 聚合了下方全部入口）
+                                       createWorkbenchContext, createMainWindow,
+                                       createViewManager, registerAppIpc, ...
+                                       （api.ts 聚合了所有公共 API；优先从根入口导入）
 @dimina-kit/devtools/launch                 launch(config?), buildDefaultMenu, openSettingsWindow
 @dimina-kit/devtools/app                    createWorkbenchApp(config?)
 @dimina-kit/devtools/types                  TypeScript 类型定义
+@dimina-kit/devtools/bootstrap              suppressEpipe(), setupCdpPort()
+@dimina-kit/devtools/paths                  rendererDir, defaultPreloadPath, simulatorDir,
+                                       getRendererDir, getPreloadDir, getRendererHtml
+@dimina-kit/devtools/preload                installConsoleInstrumentation,
+                                       installStorageInstrumentation,
+                                       installAppDataInstrumentation, sendAllAppData,
+                                       installWxmlInstrumentation, sendWxmlTree,
+                                       setupWxmlObserver, installSimulatorBridge,
+                                       setupApiCompatHook
+```
+
+### Experimental exports (v0.x — signatures may change in minor versions)
+
+下列子路径主要用于"模块组装"等深度定制场景。在 0.x 阶段，函数签名和模块边界可能在 minor 版本之间调整；如果你不需要逐模块组装，请优先使用上方的 stable 入口或根 barrel。
+
+```
 @dimina-kit/devtools/context                createWorkbenchContext(opts),
                                        hasBuiltinPanel(ctx, panelId), getDefaultTab(ctx)
 @dimina-kit/devtools/create-window          createMainWindow(opts)
-@dimina-kit/devtools/view-manager           createViewManager(ctx) → ViewManager
-                                       (attachSimulator, detachSimulator, showSimulator,
-                                        hideSimulator, showSettings, hideSettings,
-                                        showPopover, hidePopover, resize,
-                                        setVisible, repositionAll, disposeAll)
-@dimina-kit/devtools/layout                 computeRightPanelBounds, computeSimulatorBounds,
-                                       computeSettingsBounds, computePopoverBounds,
-                                       setHeaderHeight, getRightX,
-                                       HEADER_H, SPLITTER_W, SETTINGS_W
-@dimina-kit/devtools/projects               listProjects, addProject, removeProject,
-                                       getCompileConfig, saveCompileConfig,
-                                       updateLastOpened
-@dimina-kit/devtools/paths                  rendererDir, defaultPreloadPath,
-                                       getRendererDir, getPreloadDir, getRendererHtml
 @dimina-kit/devtools/ipc-simulator          registerSimulatorIpc(ctx)
 @dimina-kit/devtools/ipc-panels             registerPanelsIpc(ctx)
 @dimina-kit/devtools/ipc-toolbar            registerToolbarIpc(ctx)
@@ -363,16 +370,16 @@ launch({ preloadPath: '/absolute/path/to/my-preload.js' })
 @dimina-kit/devtools/ipc-settings           registerSettingsIpc(ctx)
 @dimina-kit/devtools/ipc-projects           registerProjectsIpc(ctx)
 @dimina-kit/devtools/ipc-session            registerSessionIpc(ctx), sendStatus(ctx, status, msg)
-@dimina-kit/devtools/bootstrap              suppressEpipe(), setupCdpPort()
 @dimina-kit/devtools/workbench-settings     loadWorkbenchSettings(), saveWorkbenchSettings(), applyTheme()
-@dimina-kit/devtools/preload                installConsoleInstrumentation,
-                                       installStorageInstrumentation,
-                                       installAppDataInstrumentation, sendAllAppData,
-                                       installWxmlInstrumentation, sendWxmlTree,
-                                       setupWxmlObserver, installSimulatorBridge,
-                                       setupApiCompatHook
-@dimina-kit/devtools/simulator-dir          simulatorDir
 ```
+
+> 注：以下子路径在过去版本曾被导出，已收敛到根 barrel 或内部实现，请改从 `@dimina-kit/devtools` 根入口导入（`createViewManager`、`registerAppIpc`、`simulatorDir`、`Project` 等类型）：
+>
+> - `@dimina-kit/devtools/view-manager` → `import { createViewManager, type ViewManager } from '@dimina-kit/devtools'`
+> - `@dimina-kit/devtools/ipc-app` → `import { registerAppIpc } from '@dimina-kit/devtools'`
+> - `@dimina-kit/devtools/projects` → 通过 `ctx.workspace.listProjects()` 等服务方法访问；`Project` 类型从 `@dimina-kit/devtools` 根入口导入
+> - `@dimina-kit/devtools/layout` → 内部布局细节，不再作为公共 API 暴露
+> - `@dimina-kit/devtools/simulator-dir` → `import { simulatorDir } from '@dimina-kit/devtools/paths'`
 
 ---
 
