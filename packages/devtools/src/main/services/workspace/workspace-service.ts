@@ -41,6 +41,7 @@ export interface WorkspaceService {
   listProjects(): Project[]
   addProject(dirPath: string): Project
   removeProject(dirPath: string): void
+  hasProject(dirPath: string): boolean
   validateProjectDir(dirPath: string): string | null
 
   // ── session lifecycle ───────────────────────────────────────────────────
@@ -110,6 +111,7 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
     listProjects: () => repo.listProjects(),
     addProject: (dirPath) => repo.addProject(dirPath),
     removeProject: (dirPath) => repo.removeProject(dirPath),
+    hasProject: (dirPath) => repo.hasProject(dirPath),
     validateProjectDir: (dirPath) => repo.validateProjectDir(dirPath),
 
     async openProject(projectPath) {

@@ -35,7 +35,18 @@ export function registerProjectsIpc(ctx: Pick<WorkbenchContext, 'workspace' | 'm
         })
         throw new Error(dirError)
       }
-      return ctx.workspace.addProject(dirPath)
+      const duplicate = ctx.workspace.hasProject(dirPath)
+      const project = ctx.workspace.addProject(dirPath)
+      if (duplicate) {
+        await dialog.showMessageBox(ctx.mainWindow, {
+          type: 'info',
+          title: '项目已存在',
+          message: '该项目已在列表中',
+          detail: dirPath,
+          buttons: ['确定'],
+        })
+      }
+      return project
     })
     .handle(ProjectsChannel.Remove, (_event, ...args: unknown[]) => {
       const [dirPath] = validate(ProjectsChannel.Remove, ProjectsRemoveSchema, args)

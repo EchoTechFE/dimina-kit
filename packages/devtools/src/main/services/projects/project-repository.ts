@@ -71,6 +71,10 @@ export function validateProjectDir(dirPath: string): string | null {
   return null
 }
 
+export function hasProject(dirPath: string): boolean {
+  return load().some((p) => p.path === dirPath)
+}
+
 export function addProject(dirPath: string): Project {
   const projects = load()
   let name = path.basename(dirPath)
