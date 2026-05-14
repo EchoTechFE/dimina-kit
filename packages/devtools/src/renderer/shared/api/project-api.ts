@@ -18,6 +18,8 @@ export interface ProjectPagesResult {
 export interface ProjectStatus {
   status: string
   message: string
+  /** True when the rebuild was triggered by the file watcher — the simulator should reload. */
+  hotReload?: boolean
 }
 
 /** Enumerate all known projects from the workspace store. */

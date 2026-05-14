@@ -18,6 +18,8 @@ import type { ProjectSettings } from '../projects/project-repository.js'
 export interface ProjectStatusPayload {
   status: string
   message: string
+  /** True when the status update is emitted by the file-watcher rebuild loop. */
+  hotReload?: boolean
 }
 
 /**

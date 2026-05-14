@@ -108,8 +108,17 @@ export function useSession(props: UseSessionProps): SessionHookResult {
   }, [])
 
   useEffect(() => {
-    return onProjectStatus((data) => setCompileStatus(data))
-  }, [])
+    return onProjectStatus((data) => {
+      setCompileStatus(data)
+      // Watch-triggered rebuild → reload the simulator so the user sees fresh
+      // pages without manually clicking "重新编译". The fe live-reload SSE only
+      // injects into the container SPA, not the simulator host page, so the
+      // reload has to come from here in the renderer.
+      if (data.hotReload) {
+        asWebview(simulatorRef)?.reload?.()
+      }
+    })
+  }, [simulatorRef])
 
   const isRefreshing = useRef(false)
   const cleanupRelaunchRef = useRef<(() => void) | null>(null)
