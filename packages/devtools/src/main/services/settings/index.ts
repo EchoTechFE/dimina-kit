@@ -13,6 +13,10 @@ export interface WorkbenchSettings {
     enabled: boolean
     port: number
   }
+  compile: {
+    /** Watch project files and auto-recompile on change. */
+    watch: boolean
+  }
   theme: ThemeSource
 }
 
@@ -24,6 +28,9 @@ const DEFAULTS: WorkbenchSettings = {
   mcp: {
     enabled: false,
     port: 7789,
+  },
+  compile: {
+    watch: true,
   },
   theme: 'system',
 }
@@ -47,10 +54,18 @@ export function loadWorkbenchSettings(): WorkbenchSettings {
         enabled: data.mcp?.enabled ?? DEFAULTS.mcp.enabled,
         port: data.mcp?.port ?? DEFAULTS.mcp.port,
       },
+      compile: {
+        watch: data.compile?.watch ?? DEFAULTS.compile.watch,
+      },
       theme,
     }
   } catch {
-    return { ...DEFAULTS, cdp: { ...DEFAULTS.cdp }, mcp: { ...DEFAULTS.mcp } }
+    return {
+      ...DEFAULTS,
+      cdp: { ...DEFAULTS.cdp },
+      mcp: { ...DEFAULTS.mcp },
+      compile: { ...DEFAULTS.compile },
+    }
   }
 }
 

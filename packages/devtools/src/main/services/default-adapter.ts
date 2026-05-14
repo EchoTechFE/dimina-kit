@@ -9,6 +9,7 @@ type OpenProjectArgs = {
   sourcemap?: boolean
   simulatorDir?: string
   outputDir?: string
+  watch?: boolean
   onRebuild?: () => void
   onBuildError?: (err: unknown) => void
 }

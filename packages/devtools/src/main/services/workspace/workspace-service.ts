@@ -10,6 +10,7 @@ import {
   clearSimulatorServicewechatReferer,
   setSimulatorServicewechatReferer,
 } from '../simulator/referer.js'
+import { loadWorkbenchSettings } from '../settings/index.js'
 
 /**
  * Result returned to the renderer after `project:open` finishes.
@@ -131,11 +132,14 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
 
       sendStatus('compiling', '正在编译...')
 
+      const { compile } = loadWorkbenchSettings()
+
       let session: Awaited<ReturnType<typeof ctx.adapter.openProject>>
       try {
         session = await ctx.adapter.openProject({
           projectPath,
           sourcemap: true,
+          watch: compile.watch,
           onRebuild: () => sendStatus('ready', '编译完成，已热更新'),
           onBuildError: (err: unknown) => sendStatus('error', String(err)),
         })

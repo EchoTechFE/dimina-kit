@@ -66,6 +66,8 @@ export async function openProject(opts: {
 	simulatorDir?: string
 	containerDir?: string
 	outputDir?: string
+	/** When false, skip the chokidar file-watcher / auto-rebuild loop. Default true. */
+	watch?: boolean
 	onRebuild?: () => void
 	onBuildError?: (err: unknown) => void
 }): Promise<ProjectSession> {
@@ -76,6 +78,7 @@ export async function openProject(opts: {
 		simulatorDir,
 		containerDir: overrideContainerDir,
 		outputDir,
+		watch = true,
 		onRebuild,
 		onBuildError,
 	} = opts
@@ -112,41 +115,45 @@ export async function openProject(opts: {
 		sessionApps,
 	})
 
-	const watcher = chokidar.watch(projectPath, {
-		ignored: /(^|[/\\])\../,
-		persistent: true,
-		ignoreInitial: true,
-	})
+	const watcher = watch
+		? chokidar.watch(projectPath, {
+			ignored: /(^|[/\\])\../,
+			persistent: true,
+			ignoreInitial: true,
+		})
+		: null
 
-	let isBuilding = false
-	watcher.on('change', async () => {
-		if (isBuilding) return
-		isBuilding = true
-		try {
-			process.chdir(projectPath)
-			const rebuilt = (await build(resolvedOutputDir, projectPath, true, buildOptions)) as AppInfo | null
-			if (rebuilt) {
-				const idx = sessionApps.findIndex(a => a.appId === rebuilt.appId)
-				if (idx === -1) sessionApps.push(rebuilt)
-				else sessionApps[idx] = rebuilt
+	if (watcher) {
+		let isBuilding = false
+		watcher.on('change', async () => {
+			if (isBuilding) return
+			isBuilding = true
+			try {
+				process.chdir(projectPath)
+				const rebuilt = (await build(resolvedOutputDir, projectPath, true, buildOptions)) as AppInfo | null
+				if (rebuilt) {
+					const idx = sessionApps.findIndex(a => a.appId === rebuilt.appId)
+					if (idx === -1) sessionApps.push(rebuilt)
+					else sessionApps[idx] = rebuilt
+				}
+				reload?.()
+				onRebuild?.()
 			}
-			reload?.()
-			onRebuild?.()
-		}
-		catch (e) {
-			onBuildError?.(e)
-		}
-		finally {
-			process.chdir(prevCwd)
-			isBuilding = false
-		}
-	})
+			catch (e) {
+				onBuildError?.(e)
+			}
+			finally {
+				process.chdir(prevCwd)
+				isBuilding = false
+			}
+		})
+	}
 
 	return {
 		appInfo: initialAppInfo ?? { appId: 'unknown', name: path.basename(projectPath), path: projectPath },
 		port: resolvedPort,
 		close: async () => {
-			await watcher.close()
+			await watcher?.close()
 			;(server as Server & { closeAllConnections?: () => void }).closeAllConnections?.()
 			await new Promise<void>(resolve => server.close(() => resolve()))
 		},

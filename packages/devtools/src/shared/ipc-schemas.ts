@@ -103,6 +103,9 @@ export const WorkbenchSettingsSaveSchema = z.tuple([
       enabled: z.boolean(),
       port: z.number().int().min(0).max(65535),
     }),
+    compile: z.looseObject({
+      watch: z.boolean(),
+    }),
     theme: z.enum(['system', 'light', 'dark']),
   }),
 ])

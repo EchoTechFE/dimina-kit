@@ -14,9 +14,14 @@ export interface McpSettings {
   port: number
 }
 
+export interface CompileSettings {
+  watch: boolean
+}
+
 export interface WorkbenchSettingsValue {
   cdp: CdpSettings
   mcp: McpSettings
+  compile: CompileSettings
   theme: ThemeSource
 }
 

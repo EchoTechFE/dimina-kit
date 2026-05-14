@@ -15,6 +15,8 @@ export interface CompilationAdapter {
     port?: number
     sourcemap?: boolean
     simulatorDir?: string
+    /** When false, skip the file-watcher / auto-recompile loop. Default true. */
+    watch?: boolean
     onRebuild?: () => void
     onBuildError?: (err: unknown) => void
   }): Promise<ProjectSession>
