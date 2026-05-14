@@ -27,7 +27,7 @@ test.describe('IPC + Project Workflow', () => {
   })
 
   test('project:getCompileConfig returns config for demo app', async ({ mainWindow }) => {
-    await ipcInvoke(mainWindow, ProjectsChannel.Add, DEMO_APP_DIR)
+    await addProject(mainWindow, DEMO_APP_DIR)
 
     const config = await ipcInvoke(mainWindow, ProjectChannel.GetCompileConfig, DEMO_APP_DIR)
 
