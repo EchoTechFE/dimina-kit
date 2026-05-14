@@ -78,16 +78,16 @@ beforeEach(async () => {
 // `.reload`; everything else is best-effort.
 type FakeWebview = {
   reload: ReturnType<typeof vi.fn>
-  getURL: () => string
+  getURL: ReturnType<typeof vi.fn>
   loadURL: ReturnType<typeof vi.fn>
   addEventListener: ReturnType<typeof vi.fn>
   removeEventListener: ReturnType<typeof vi.fn>
 }
 
-function makeFakeWebview(): FakeWebview {
+function makeFakeWebview(currentUrl = ''): FakeWebview {
   return {
     reload: vi.fn(),
-    getURL: () => '',
+    getURL: vi.fn(() => currentUrl),
     loadURL: vi.fn(),
     addEventListener: vi.fn(),
     removeEventListener: vi.fn(),
@@ -158,6 +158,88 @@ describe('useSession: hotReload signal → reload simulator webview', () => {
     expect(
       webview.reload.mock.calls.length - reloadCallsBefore,
       'expected NO webview.reload() call for status without hotReload',
+    ).toBe(0)
+  })
+})
+
+describe('useSession: hotReload collapses stacked hash before reload', () => {
+  it('stacked URL → loadURL with collapsed hash, then reload', async () => {
+    vi.useFakeTimers()
+    try {
+      const stackedUrl =
+        'http://localhost:1000/simulator.html#wx|pages/a/a|pages/b/b?scene=1001'
+      const collapsedUrl =
+        'http://localhost:1000/simulator.html#wx|pages/b/b?scene=1001'
+
+      const webview = makeFakeWebview(stackedUrl)
+      const hook = renderUseSession(webview)
+
+      // Drain the initial async load (openProject + getProjectPages + ...).
+      await vi.waitFor(() => {
+        expect(hook.result.current.appInfo?.appId).toBe('fake')
+      })
+
+      const loadUrlCallsBefore = webview.loadURL.mock.calls.length
+      const reloadCallsBefore = webview.reload.mock.calls.length
+
+      act(() => {
+        emitProjectStatus({
+          status: 'ready',
+          message: '编译完成，已热更新',
+          hotReload: true,
+        })
+      })
+
+      // loadURL fires synchronously with the collapsed URL.
+      expect(
+        webview.loadURL.mock.calls.length - loadUrlCallsBefore,
+        'expected exactly one webview.loadURL() call with the collapsed hash',
+      ).toBe(1)
+      expect(webview.loadURL).toHaveBeenLastCalledWith(collapsedUrl)
+
+      // reload runs ~100ms later. Advance fake timers past the gap.
+      act(() => {
+        vi.advanceTimersByTime(200)
+      })
+
+      expect(
+        webview.reload.mock.calls.length - reloadCallsBefore,
+        'expected exactly one webview.reload() call after the loadURL gap',
+      ).toBe(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('single-page URL → reload only, no loadURL', async () => {
+    const singleUrl =
+      'http://localhost:1000/simulator.html#wx|pages/a/a?scene=1001'
+
+    const webview = makeFakeWebview(singleUrl)
+    const hook = renderUseSession(webview)
+
+    await waitFor(() => {
+      expect(hook.result.current.appInfo?.appId).toBe('fake')
+    })
+
+    const loadUrlCallsBefore = webview.loadURL.mock.calls.length
+    const reloadCallsBefore = webview.reload.mock.calls.length
+
+    act(() => {
+      emitProjectStatus({
+        status: 'ready',
+        message: '编译完成，已热更新',
+        hotReload: true,
+      })
+    })
+
+    expect(
+      webview.reload.mock.calls.length - reloadCallsBefore,
+      'expected exactly one webview.reload() for single-page hash',
+    ).toBe(1)
+    expect(
+      webview.loadURL.mock.calls.length - loadUrlCallsBefore,
+      'expected NO webview.loadURL() call for single-page hash',
     ).toBe(0)
   })
 })
