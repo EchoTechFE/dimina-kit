@@ -43,7 +43,7 @@ export function applyNavigationHardening(
   wc.setWindowOpenHandler(({ url }) => handleWindowOpenExternal(url))
 
   wc.on('will-navigate', (event, url) => {
-    let parsed: URL | null = null
+    let parsed: URL
     try {
       parsed = new URL(url)
     } catch {

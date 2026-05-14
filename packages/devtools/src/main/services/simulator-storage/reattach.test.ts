@@ -96,9 +96,8 @@ function makeSimWc(): SimWc {
     },
     once(event, fn) {
       // Wrap so that emit removes after first call.
-      const self = this
       const wrap: Handler = (...args) => {
-        self.removeListener(event, wrap)
+        this.removeListener(event, wrap)
         fn(...args)
       }
       this.on(event, wrap)

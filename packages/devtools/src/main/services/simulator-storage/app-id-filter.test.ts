@@ -95,9 +95,8 @@ function makeSimWc(entries: Array<[string, string]> = []): SimWc {
       this._wcListeners.set(event, arr)
     },
     once(event, fn) {
-      const self = this
       const wrap: Handler = (...args) => {
-        self.removeListener(event, wrap)
+        this.removeListener(event, wrap)
         fn(...args)
       }
       this.on(event, wrap)
