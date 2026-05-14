@@ -59,8 +59,15 @@ export async function ipcInvoke<T = unknown>(
 
 /**
  * Add a project via IPC (does not navigate to project view).
+ *
+ * Skips the call when the workspace already lists the project: production
+ * `ProjectsChannel.Add` pops a blocking `dialog.showMessageBox` on duplicates,
+ * which would hang the test main process for the full hook timeout because
+ * nobody clicks the OK button in headless mode.
  */
 export async function addProject(mainWindow: Page, projectDir: string): Promise<void> {
+  const existing = await ipcInvoke<Array<{ path: string }> | undefined>(mainWindow, ProjectsChannel.List)
+  if (existing?.some((p) => p.path === projectDir)) return
   await ipcInvoke(mainWindow, ProjectsChannel.Add, projectDir)
 }
 

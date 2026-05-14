@@ -5,7 +5,7 @@ import {
   evalInSimulator,
   ipcInvoke,
 } from './helpers'
-import { PanelChannel, SimulatorStorageChannel } from '../src/shared/ipc-channels'
+import { SimulatorStorageChannel } from '../src/shared/ipc-channels'
 
 /**
  * UI-level e2e for the Storage right-panel.
@@ -26,9 +26,11 @@ const DEMO_APP_ID = 'devtools_demo_001'
 const PREFIX = `${DEMO_APP_ID}_`
 
 async function selectStorageTab(mainWindow: Page) {
-  // Use IPC instead of clicking the tab so we don't depend on tab role/ARIA
-  // wiring that lives in another component.
-  await ipcInvoke(mainWindow, PanelChannel.Select, 'storage')
+  // PanelChannel.Select only hides the simulator view; it does not flip the
+  // controlled right-pane tab. Click the actual tab so React swaps the
+  // StoragePanel into the DOM, then wait for one of its footer-only controls
+  // before the test proceeds.
+  await mainWindow.getByRole('tab', { name: 'Storage' }).click()
   await mainWindow.getByRole('button', { name: '+ 新增' }).waitFor({ state: 'visible', timeout: 5000 })
 }
 
