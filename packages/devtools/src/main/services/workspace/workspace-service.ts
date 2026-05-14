@@ -69,8 +69,8 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
   let currentSession: ProjectSession | null = null
   let currentProjectPath = ''
 
-  function sendStatus(status: string, message: string): void {
-    ctx.notify.projectStatus({ status, message })
+  function sendStatus(status: string, message: string, hotReload?: boolean): void {
+    ctx.notify.projectStatus(hotReload ? { status, message, hotReload: true } : { status, message })
   }
 
   function bestEffort(label: string, fn: () => void): void {
@@ -142,7 +142,7 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
           projectPath,
           sourcemap: true,
           watch: compile.watch,
-          onRebuild: () => sendStatus('ready', '编译完成，已热更新'),
+          onRebuild: () => sendStatus('ready', '编译完成，已热更新', true),
           onBuildError: (err: unknown) => sendStatus('error', String(err)),
         })
       } catch (err) {

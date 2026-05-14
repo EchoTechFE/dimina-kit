@@ -16,6 +16,7 @@ import {
 import type { AppInfo } from '@/shared/api'
 import {
   buildSimulatorUrl,
+  collapseHashToTopPage,
 } from '@/shared/lib/simulator-url'
 import type { CompileConfig } from '@/shared/types'
 import { DEFAULT_SCENE } from '../../../../../../shared/constants'
@@ -108,8 +109,32 @@ export function useSession(props: UseSessionProps): SessionHookResult {
   }, [])
 
   useEffect(() => {
-    return onProjectStatus((data) => setCompileStatus(data))
-  }, [])
+    return onProjectStatus((data) => {
+      setCompileStatus(data)
+      // Watch-triggered rebuild → reload the simulator so the user sees fresh
+      // pages without manually clicking "重新编译". The fe live-reload SSE only
+      // injects into the container SPA, not the simulator host page, so the
+      // reload has to come from here in the renderer.
+      if (data.hotReload) {
+        const webview = asWebview(simulatorRef)
+        if (!webview) return
+        // Collapse any accumulated page stack to the top page before reload.
+        // The compiler emits one bundle per page; a stacked hash would make
+        // pageFrame request a merged bundle that doesn't exist and render
+        // blank. Trimming preserves the current page the user is looking at.
+        const currentUrl = webview.getURL?.() ?? ''
+        const collapsed = collapseHashToTopPage(currentUrl)
+        if (collapsed !== currentUrl) {
+          webview.loadURL?.(collapsed)
+          // loadURL on a hash-only change is in-page navigation; force a
+          // full reload so pageFrame re-initialises against the new hash.
+          setTimeout(() => webview.reload?.(), 100)
+        } else {
+          webview.reload?.()
+        }
+      }
+    })
+  }, [simulatorRef])
 
   const isRefreshing = useRef(false)
   const cleanupRelaunchRef = useRef<(() => void) | null>(null)
