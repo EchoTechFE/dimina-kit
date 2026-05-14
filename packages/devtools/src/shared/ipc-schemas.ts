@@ -76,6 +76,17 @@ export const SimulatorResizeSchema = z.tuple([SimWidth])
 /** simulator:setVisible — visible flag + simulator width. */
 export const SimulatorSetVisibleSchema = z.tuple([z.boolean(), SimWidth])
 
+/**
+ * simulator:custom-apis:invoke — API name + arbitrary JSON-serialisable params.
+ *
+ * Params shape is owned by the downstream handler, so we only enforce that the
+ * name is a non-empty bounded string (cheap DoS guard) and accept any payload.
+ */
+export const SimulatorCustomApiInvokeSchema = z.tuple([
+  z.string().min(1).max(256),
+  z.unknown(),
+])
+
 /** project:getPages — absolute project path. */
 export const ProjectGetPagesSchema = z.tuple([AbsolutePath])
 
