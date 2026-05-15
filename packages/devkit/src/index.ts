@@ -101,6 +101,34 @@ export async function openProject(opts: {
 	finally {
 		process.chdir(prevCwd)
 	}
+	// When the compiler is racing (e.g. opening a project that was just
+	// closed elsewhere in the same Electron process) `build()` can return
+	// null even though the manifest on disk is perfectly readable. The
+	// pre-existing fallback to `{ appId: 'unknown' }` was load-bearing for
+	// any consumer that calls `wx.setStorageSync` — the dimina runtime
+	// stores values under `${appId}_${key}` and the devtools storage panel
+	// also derives its IPC prefix from `appInfo.appId`. A stale `unknown`
+	// appId makes the panel and the runtime disagree (panel writes
+	// `unknown_foo`, runtime reads `${realAppId}_foo`), so this falls back
+	// to the canonical id from `project.config.json` instead. The literal
+	// `'unknown'` is only used as a last resort when the manifest itself
+	// is missing/unreadable, preserving the original error path.
+	if (!initialAppInfo) {
+		try {
+			const configRaw = fs.readFileSync(path.join(projectPath, 'project.config.json'), 'utf8')
+			const config = JSON.parse(configRaw) as { appid?: string; projectname?: string }
+			if (config.appid && typeof config.appid === 'string' && config.appid.length > 0) {
+				initialAppInfo = {
+					appId: config.appid,
+					name: config.projectname ?? path.basename(projectPath),
+					path: projectPath,
+				}
+			}
+		}
+		catch {
+			// best-effort — fall through to the 'unknown' fallback below
+		}
+	}
 	const sessionApps: AppInfo[] = initialAppInfo ? [initialAppInfo] : []
 
 	process.env.DIMINA_NO_OPEN_BROWSER = '1'

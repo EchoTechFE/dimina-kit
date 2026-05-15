@@ -206,6 +206,41 @@ export async function waitForSimulatorWebview(
   )
 }
 
+/**
+ * Wait until the simulator <webview> can execute JS — i.e. it has fired
+ * `did-finish-load`. This is the signal the main-process CDP attacher uses
+ * (see simulator-storage/index.ts onFinishLoad), so once this resolves the
+ * `attachedWc` in simulator-storage is wired up and writes via the Storage
+ * panel UI will land instead of silently failing under multi-worker e2e load.
+ *
+ * Implemented as a one-shot per poll (no nested retries) so timing is
+ * predictable and the failure mode is "timed out" rather than compounding
+ * 2s × 3 inner retries × N outer polls.
+ */
+export async function waitSimulatorReady(
+  electronApp: ElectronApplication,
+  timeout = 15000
+): Promise<void> {
+  await pollUntil(
+    async () => {
+      try {
+        const out = await electronApp.evaluate(async ({ webContents }) => {
+          const all = webContents.getAllWebContents()
+          const sim = all.find((wc) => wc.getType() === 'webview')
+          if (!sim) return null
+          return sim.executeJavaScript('1')
+        })
+        return out === 1
+      } catch {
+        return false
+      }
+    },
+    (ok) => ok === true,
+    timeout,
+    250,
+  )
+}
+
 // ── Polling / async helpers ────────────────────────────────────────────
 
 /**

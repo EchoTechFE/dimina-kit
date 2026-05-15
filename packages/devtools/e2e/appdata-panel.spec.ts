@@ -22,8 +22,14 @@ import {
  */
 
 async function selectAppDataTab(mainWindow: Page) {
+  // The AppData tab is rendered by project-toolbar.tsx only after the async
+  // `panel:list` IPC resolves with at least one panel. openProjectInUI only
+  // waits for compile completion, so the tab may not exist yet when this
+  // helper runs — wait for it explicitly before clicking.
+  const tab = mainWindow.getByRole('tab', { name: 'AppData' })
+  await tab.waitFor({ state: 'visible', timeout: 15000 })
   // Playwright's getByRole handles Radix Tabs activation correctly.
-  await mainWindow.getByRole('tab', { name: 'AppData' }).click()
+  await tab.click()
   // Panel header has a "↻ 刷新" button — wait for it.
   await mainWindow.getByRole('button', { name: /刷新/ }).waitFor({ state: 'visible', timeout: 5000 })
 }

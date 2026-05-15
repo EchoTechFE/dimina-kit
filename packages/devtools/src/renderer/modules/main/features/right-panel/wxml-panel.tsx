@@ -249,7 +249,7 @@ export function WxmlPanel({
 
   if (!tree) {
     return (
-      <div className="flex flex-col flex-1 overflow-hidden">
+      <div className="flex flex-col flex-1 overflow-hidden" data-testid="wxml-panel">
         <div className="flex items-center px-2.5 py-1.5 border-b border-border-subtle shrink-0 bg-bg-panel">
           <Button
             variant="outline"
@@ -267,7 +267,7 @@ export function WxmlPanel({
     )
   }
   return (
-    <div className="flex flex-col flex-1 overflow-hidden" onMouseLeave={clearInspection}>
+    <div className="flex flex-col flex-1 overflow-hidden" onMouseLeave={clearInspection} data-testid="wxml-panel">
       <div className="flex items-center px-2.5 py-1.5 border-b border-border-subtle shrink-0 bg-bg-panel">
         <Button
           variant="outline"

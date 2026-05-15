@@ -97,7 +97,7 @@ export function StoragePanel({
   }
 
   return (
-    <div className="flex flex-col overflow-hidden flex-1">
+    <div className="flex flex-col overflow-hidden flex-1" data-testid="storage-panel">
       <div className="flex items-center gap-1.5 px-2.5 py-1.5 border-b border-border-subtle shrink-0 bg-bg-panel">
         <Button
           variant="outline"

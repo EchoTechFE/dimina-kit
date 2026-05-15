@@ -40,9 +40,12 @@ test.describe('Extension Panels Data Bridge', () => {
 
   test('WXML panel renders in main window after tab switch', async ({ mainWindow }) => {
     await mainWindow.getByRole('tab', { name: 'WXML' }).click()
-    await mainWindow.locator('button:has-text("↻ 刷新")').waitFor({ timeout: 8000 })
+    // Scope to the WXML panel: AppDataPanel stays keepalive-mounted with its
+    // own "↻ 刷新" button, so a global text locator hits 2 elements.
+    const wxmlRefresh = mainWindow.getByTestId('wxml-panel').locator('button:has-text("↻ 刷新")')
+    await wxmlRefresh.waitFor({ timeout: 8000 })
     // Trigger a fresh fetch — without this we'd race the initial wxml IPC.
-    await mainWindow.locator('button:has-text("↻ 刷新")').click()
+    await wxmlRefresh.click()
 
     // Assert the tree actually renders (not the "等待小程序加载..." empty
     // state). demo-app index.wxml has a <view class="container">, which the
@@ -62,7 +65,8 @@ test.describe('Extension Panels Data Bridge', () => {
 
   test('Storage panel renders in main window after tab switch', async ({ mainWindow, electronApp }) => {
     await mainWindow.getByRole('tab', { name: 'Storage' }).click()
-    await mainWindow.locator('button:has-text("↻ 刷新")').waitFor({ timeout: 8000 })
+    // Scope to StoragePanel：AppDataPanel keepalive 挂载着另一个「↻ 刷新」按钮。
+    await mainWindow.getByTestId('storage-panel').locator('button:has-text("↻ 刷新")').waitFor({ timeout: 8000 })
 
     // Storage panel filters the CDP DOMStorage stream by the active
     // project's appId prefix (the simulator partition is shared across
