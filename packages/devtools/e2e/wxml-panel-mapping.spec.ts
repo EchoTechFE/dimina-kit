@@ -471,7 +471,8 @@ test.describe('WXML Panel Component Mapping', () => {
 
     // 切到 WXML tab，等面板内容渲染
     await mainWindow.getByRole('tab', { name: 'WXML' }).click()
-    await mainWindow.locator('button:has-text("↻ 刷新")').waitFor({ timeout: 8000 })
+    // Scope to WxmlPanel：AppDataPanel keepalive 挂载着另一个「↻ 刷新」按钮。
+    await mainWindow.getByTestId('wxml-panel').locator('button:has-text("↻ 刷新")').waitFor({ timeout: 8000 })
 
     // 等到至少一个可 inspect 的行（带 data-wxml-sid）出现在面板里。
     const inspectableRow = mainWindow.locator('[data-wxml-sid]').first()

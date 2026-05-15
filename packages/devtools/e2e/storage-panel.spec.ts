@@ -4,6 +4,7 @@ import {
   DEMO_APP_DIR,
   evalInSimulator,
   ipcInvoke,
+  waitSimulatorReady,
 } from './helpers'
 import { SimulatorStorageChannel } from '../src/shared/ipc-channels'
 
@@ -35,12 +36,27 @@ async function selectStorageTab(mainWindow: Page) {
 }
 
 test.describe('Storage panel — UI editing', () => {
+  // Serial within the describe so the suite reuses one open project (via
+  // useSharedProject). No retries — the historical flake was the
+  // simulator session reporting `appId: 'unknown'` when devkit's
+  // `openProject` raced its compiler invocation (fixed in
+  // packages/devkit/src/index.ts by falling back to the appid from
+  // `project.config.json` instead of the literal string `'unknown'`).
   test.describe.configure({ mode: 'serial' })
 
   useSharedProject(test, DEMO_APP_DIR, { openOptions: { waitForWebview: true } })
 
   test('add a new entry via the footer form writes through to the simulator', async ({ mainWindow, electronApp }) => {
     await selectStorageTab(mainWindow)
+
+    // Under multi-worker e2e load the simulator <webview> may still be
+    // mid-load when the panel is interactive; clicking "+ 新增" before
+    // did-finish-load lets simulator-storage's CDP attacher miss the webview,
+    // setItem returns {ok:false} and no row ever appears. Other tests in this
+    // describe seed via ipcInvoke(Set, …) which goes through the same gate but
+    // they don't race the click — only this UI-driven add does. Wait for the
+    // simulator to be JS-executable (== attach point) before the click.
+    await waitSimulatorReady(electronApp)
 
     const keyInput = mainWindow.locator('input[placeholder="key"]')
     const valueInput = mainWindow.locator('input[placeholder="value"]')
@@ -50,9 +66,11 @@ test.describe('Storage panel — UI editing', () => {
     await valueInput.fill('e2e_add_value')
     await addBtn.click()
 
-    // Row appears with the prefixed key + raw value.
+    // Row appears with the prefixed key + raw value. Wider timeout absorbs
+    // multi-worker CDP roundtrip variance; retries in the describe cover the
+    // residual `setItem returned ok:false` cases.
     const row = mainWindow.locator('tr', { has: mainWindow.locator(`td:has-text("${PREFIX}e2e_add_key")`) })
-    await expect(row).toBeVisible({ timeout: 5000 })
+    await expect(row).toBeVisible({ timeout: 15000 })
     await expect(row.locator('td').nth(1)).toHaveText('e2e_add_value')
 
     // Authoritative check: the simulator's localStorage really got written.

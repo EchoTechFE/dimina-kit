@@ -204,6 +204,10 @@ export function usePanelData(props: UsePanelDataProps): PanelDataHookResult {
   // Write helpers — main process forwards CDP-emitted DOMStorage events back
   // through `SimulatorStorageChannel.Event`, so successful writes update the
   // panel via the existing push subscription. No optimistic local state.
+  // Main-side `setupSimulatorStorage` lazy-attaches the CDP debugger on the
+  // first IPC call, so a user click that lands before the simulator
+  // webview's `did-finish-load` no longer silently bounces off
+  // `simulator not attached`.
   const setStorageItem = useCallback(async (key: string, value: string) => {
     const r = await ipcInvoke<StorageWriteResult | undefined>(SimulatorStorageChannel.Set, { key, value })
     return r ?? { ok: false, error: 'ipc transport failed' }

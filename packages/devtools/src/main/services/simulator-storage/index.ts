@@ -191,6 +191,33 @@ export function setupSimulatorStorage(
     host.send(SimulatorStorageChannel.Event, evt)
   }
 
+  /**
+   * Lazy-attach guard.
+   *
+   * The `attachToSim` call inside `web-contents-created` only fires after the
+   * simulator webview emits `did-finish-load`. UI affordances (the storage
+   * panel's "+ 新增", inline edit, delete, clear) are reachable as soon as
+   * the right-pane tab renders — which can happen BEFORE that load completes.
+   * Without this hook, a fast click bounces off `!attachedWc` and the write
+   * IPC returns `{ ok:false, error:'simulator not attached' }` silently,
+   * leaving the user (and the e2e suite) staring at a no-op.
+   *
+   * Behaviour:
+   *   - If a wc is already attached, this is a fast no-op.
+   *   - If no wc is attached, scan `webContents.getAllWebContents()` for a
+   *     simulator webview and `await attachToSim()` on the first match.
+   *   - If no simulator exists at all, leave `attachedWc` null so the
+   *     caller's existing `not attached` error branch fires — preserving
+   *     the documented contract exercised by `Set returns ok:false when
+   *     no simulator is attached`.
+   */
+  async function ensureAttached(): Promise<void> {
+    if (attachedWc && !attachedWc.isDestroyed()) return
+    const sim = findSimulatorWebContents()
+    if (!sim) return
+    await attachToSim(sim)
+  }
+
   async function getStorageId(): Promise<{ securityOrigin: string; isLocalStorage: true } | null> {
     if (!attachedWc || attachedWc.isDestroyed()) return null
     if (!cachedOrigin) {
@@ -203,7 +230,30 @@ export function setupSimulatorStorage(
     return { securityOrigin: cachedOrigin, isLocalStorage: true }
   }
 
+  /**
+   * Push a storage event synthesised from the write path itself, in addition
+   * to whatever CDP forwards via `DOMStorage.domStorageItem*`. The CDP
+   * tracker has a small registration window after `DOMStorage.enable`
+   * during which the first write's notification can be dropped — the e2e
+   * `add a new entry via the footer form` case races exactly this gap when
+   * the storage tab is clicked before the simulator finishes loading and
+   * `ensureAttached()` performs the first attach. Renderer state reducers
+   * are idempotent on the same key, so an extra push from here cannot
+   * duplicate rows even when CDP also delivers.
+   *
+   * Active-prefix filtering mirrors `forwardCdpMessage` so the panel's
+   * per-appId filter behaves identically whether the event came from CDP
+   * or from this synthesised push.
+   */
+  function pushSyntheticEvent(evt: { type: 'added'; key: string; newValue: string } | { type: 'updated'; key: string; oldValue: string; newValue: string } | { type: 'removed'; key: string }): void {
+    if (host.isDestroyed()) return
+    const prefix = activePrefix()
+    if (prefix && !evt.key.startsWith(prefix)) return
+    host.send(SimulatorStorageChannel.Event, evt)
+  }
+
   async function setItem(key: string, value: string): Promise<StorageWriteResult> {
+    await ensureAttached()
     if (!attachedWc || attachedWc.isDestroyed()) {
       return { ok: false, error: 'simulator not attached' }
     }
@@ -215,6 +265,7 @@ export function setupSimulatorStorage(
         key,
         value,
       })
+      pushSyntheticEvent({ type: 'added', key, newValue: value })
       return { ok: true }
     } catch (e) {
       return { ok: false, error: (e as Error).message }
@@ -222,6 +273,7 @@ export function setupSimulatorStorage(
   }
 
   async function removeItem(key: string): Promise<StorageWriteResult> {
+    await ensureAttached()
     if (!attachedWc || attachedWc.isDestroyed()) {
       return { ok: false, error: 'simulator not attached' }
     }
@@ -232,6 +284,7 @@ export function setupSimulatorStorage(
         storageId,
         key,
       })
+      pushSyntheticEvent({ type: 'removed', key })
       return { ok: true }
     } catch (e) {
       return { ok: false, error: (e as Error).message }
@@ -243,6 +296,7 @@ export function setupSimulatorStorage(
   // Falls back to origin-wide `DOMStorage.clear` only when no active appId is
   // set (matches the snapshot filter's documented null-fallback).
   async function clearScoped(): Promise<StorageWriteResult> {
+    await ensureAttached()
     if (!attachedWc || attachedWc.isDestroyed()) {
       return { ok: false, error: 'simulator not attached' }
     }
@@ -274,6 +328,7 @@ export function setupSimulatorStorage(
   // state in the shared simulator partition. The renderer guards this with a
   // confirm dialog; we don't second-guess here.
   async function clearAll(): Promise<StorageWriteResult> {
+    await ensureAttached()
     if (!attachedWc || attachedWc.isDestroyed()) {
       return { ok: false, error: 'simulator not attached' }
     }
@@ -288,6 +343,7 @@ export function setupSimulatorStorage(
   }
 
   async function getSnapshot(): Promise<StorageItem[]> {
+    await ensureAttached()
     if (!attachedWc || attachedWc.isDestroyed()) return []
     try {
       const storageId = await getStorageId()
