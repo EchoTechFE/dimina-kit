@@ -330,8 +330,7 @@ vi.mock('fs', async () => {
     // no-op
   }
 
-  function statSync(p: import('fs').PathLike): import('fs').Stats {
-    const s = String(p)
+  function statSync(_p: import('fs').PathLike): import('fs').Stats {
     // Pretend project dirs are directories so any size/mtime probing succeeds.
     return {
       isDirectory: () => true,
