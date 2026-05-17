@@ -1,77 +1,77 @@
 {
-  "name": "@dimina-kit/devkit",
-  "version": "0.1.1",
-  "description": "Development toolkit for Dimina mini-apps with H5 container preview",
-  "keywords": [
-    "dimina",
-    "mini-app",
-    "miniprogram",
-    "h5",
-    "preview",
-    "compiler",
-    "dev-server",
-    "container"
-  ],
-  "type": "module",
-  "engines": {
-    "node": ">=20"
-  },
-  "license": "MIT",
-  "author": "EchoTechFE",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/EchoTechFE/dimina-kit.git",
-    "directory": "packages/devkit"
-  },
-  "bugs": {
-    "url": "https://github.com/EchoTechFE/dimina-kit/issues"
-  },
-  "homepage": "https://github.com/EchoTechFE/dimina-kit/tree/main/packages/devkit#readme",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
+    "name": "@dimina-kit/devkit",
+    "version": "0.1.1",
+    "description": "Development toolkit for Dimina mini-apps with H5 container preview",
+    "keywords": [
+        "dimina",
+        "mini-app",
+        "miniprogram",
+        "h5",
+        "preview",
+        "compiler",
+        "dev-server",
+        "container"
+    ],
+    "type": "module",
+    "engines": {
+        "node": ">=20"
+    },
+    "license": "MIT",
+    "author": "EchoTechFE",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/EchoTechFE/dimina-kit.git",
+        "directory": "packages/devkit"
+    },
+    "bugs": {
+        "url": "https://github.com/EchoTechFE/dimina-kit/issues"
+    },
+    "homepage": "https://github.com/EchoTechFE/dimina-kit/tree/main/packages/devkit#readme",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "default": "./dist/index.js"
+        }
+    },
+    "files": [
+        "dist",
+        "fe/index.js",
+        "fe/server.js",
+        "fe/server-container.js",
+        "fe/live-reload.js",
+        "fe/dimina-fe-container",
+        "fe/dimina-fe-server/index.js",
+        "fe/dimina-fe-server/THIRD_PARTY_NOTICES.md",
+        "README.md",
+        "LICENSE"
+    ],
+    "scripts": {
+        "build": "tsc",
+        "check-types": "tsc --noEmit",
+        "lint": "eslint . --max-warnings 0",
+        "test": "vitest run",
+        "test:dev": "vitest",
+        "prepack": "pnpm run build"
+    },
+    "devDependencies": {
+        "@dimina-kit/eslint-config": "workspace:*",
+        "@dimina-kit/typescript-config": "workspace:*",
+        "@types/node": "^22.15.3",
+        "eslint": "^10.2.1",
+        "typescript": "5.9.2",
+        "vitest": "^4.1.4"
+    },
+    "dependencies": {
+        "@dimina/compiler": "1.0.14",
+        "axios": "^1.15.0",
+        "chokidar": "^5.0.0",
+        "cors": "^2.8.6",
+        "express": "^5.2.1",
+        "open": "^11.0.0"
+    },
+    "publishConfig": {
+        "access": "public"
     }
-  },
-  "files": [
-    "dist",
-    "fe/index.js",
-    "fe/server.js",
-    "fe/server-container.js",
-    "fe/live-reload.js",
-    "fe/dimina-fe-container",
-    "fe/dimina-fe-server/index.js",
-    "fe/dimina-fe-server/THIRD_PARTY_NOTICES.md",
-    "README.md",
-    "LICENSE"
-  ],
-  "scripts": {
-    "build": "tsc",
-    "check-types": "tsc --noEmit",
-    "lint": "eslint . --max-warnings 0",
-    "test": "vitest run",
-    "test:dev": "vitest",
-    "prepack": "pnpm run build"
-  },
-  "devDependencies": {
-    "@dimina-kit/eslint-config": "workspace:*",
-    "@dimina-kit/typescript-config": "workspace:*",
-    "@types/node": "^22.15.3",
-    "eslint": "^10.2.1",
-    "typescript": "5.9.2",
-    "vitest": "^4.1.4"
-  },
-  "dependencies": {
-    "@dimina/compiler": "1.0.12",
-    "axios": "^1.15.0",
-    "chokidar": "^5.0.0",
-    "cors": "^2.8.6",
-    "express": "^5.2.1",
-    "open": "^11.0.0"
-  },
-  "publishConfig": {
-    "access": "public"
-  }
 }
