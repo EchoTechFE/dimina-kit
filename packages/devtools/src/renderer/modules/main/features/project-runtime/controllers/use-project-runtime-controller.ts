@@ -151,6 +151,7 @@ export function useProjectRuntimeController(
     appInfo: sessionHook.appInfo,
     compileConfig: sessionHook.compileConfig,
     port: sessionHook.port,
+    projectPath,
   })
 
   const panelDataHook = usePanelData({

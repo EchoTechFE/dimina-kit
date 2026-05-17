@@ -79,3 +79,13 @@ export function onProjectStatus(
 ): () => void {
   return on<[ProjectStatus]>(ProjectChannel.Status, (status) => handler(status))
 }
+
+/** Capture a screenshot of the simulator and save it as a thumbnail. */
+export function captureThumbnail(projectPath: string): Promise<string | null> {
+  return invoke<string | null>(ProjectChannel.CaptureThumbnail, projectPath)
+}
+
+/** Load a previously saved thumbnail for the given project. */
+export function getThumbnail(projectPath: string): Promise<string | null> {
+  return invoke<string | null>(ProjectChannel.GetThumbnail, projectPath)
+}

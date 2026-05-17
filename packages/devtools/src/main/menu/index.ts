@@ -26,6 +26,17 @@ export function installAppMenu(ctx: WorkbenchContext): void {
       ],
     },
     {
+      label: '项目',
+      submenu: [
+        {
+          label: '打开项目',
+          click: () => {
+            ctx.notify.windowNavigateBack()
+          },
+        },
+      ],
+    },
+    {
       label: '编辑',
       submenu: [
         { role: 'undo' },

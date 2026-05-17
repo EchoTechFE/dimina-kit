@@ -4,7 +4,7 @@ import {
   useState,
 } from 'react'
 import type { RefObject } from 'react'
-import { attachSimulator } from '@/shared/api'
+import { attachSimulator, captureThumbnail } from '@/shared/api'
 import type { AppInfo } from '@/shared/api'
 import {
   buildSimulatorUrl,
@@ -27,6 +27,7 @@ export interface UseSimulatorProps {
   appInfo: AppInfo | null
   compileConfig: CompileConfig
   port: number
+  projectPath: string
 }
 
 export interface SimulatorHookResult {
@@ -44,6 +45,7 @@ export function useSimulator(props: UseSimulatorProps): SimulatorHookResult {
     appInfo,
     compileConfig,
     port,
+    projectPath,
   } = props
 
   const simulatorUrl = useMemo(() => {
@@ -122,10 +124,22 @@ export function useSimulator(props: UseSimulatorProps): SimulatorHookResult {
       tryAttach()
     }
 
+    let captureTimer: number | null = null
+    const onFinishLoad = () => {
+      if (cancelled) return
+      if (captureTimer !== null) window.clearTimeout(captureTimer)
+      captureTimer = window.setTimeout(() => {
+        if (!cancelled) {
+          captureThumbnail(projectPath).catch(() => {})
+        }
+      }, 3000)
+    }
+
     webview.addEventListener?.('did-navigate', onNavigate as EventListener)
     webview.addEventListener?.('did-navigate-in-page', onNavigate as EventListener)
     webview.addEventListener?.('dom-ready', onDomReady as EventListener)
     webview.addEventListener?.('did-finish-load', onDomReady as EventListener)
+    webview.addEventListener?.('did-finish-load', onFinishLoad as EventListener)
 
     attachTimer = window.setInterval(tryAttach, ATTACH_RETRY_INTERVAL_MS)
     tryAttach()
@@ -135,12 +149,16 @@ export function useSimulator(props: UseSimulatorProps): SimulatorHookResult {
       if (attachTimer !== null) {
         window.clearInterval(attachTimer)
       }
+      if (captureTimer !== null) {
+        window.clearTimeout(captureTimer)
+      }
       webview.removeEventListener?.('did-navigate', onNavigate as EventListener)
       webview.removeEventListener?.('did-navigate-in-page', onNavigate as EventListener)
       webview.removeEventListener?.('dom-ready', onDomReady as EventListener)
       webview.removeEventListener?.('did-finish-load', onDomReady as EventListener)
+      webview.removeEventListener?.('did-finish-load', onFinishLoad as EventListener)
     }
-  }, [compileStatus.status, sendDeviceInfo, simulatorUrl, simulatorRef, simPanelWidthRef, deviceRef])
+  }, [compileStatus.status, sendDeviceInfo, simulatorUrl, simulatorRef, simPanelWidthRef, deviceRef, projectPath])
 
   return {
     simulatorUrl,

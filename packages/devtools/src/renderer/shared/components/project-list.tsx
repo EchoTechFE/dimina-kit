@@ -10,11 +10,13 @@ export function ProjectList({
   onAdd,
   onOpen,
   onRemove,
+  thumbnails,
 }: {
   projects: Project[]
   onAdd: () => void
   onOpen: (p: Project) => void
   onRemove: (p: Project) => void
+  thumbnails?: Record<string, string | null>
 }) {
   const [search, setSearch] = useState('')
   const filtered = useMemo(() => {
@@ -63,6 +65,7 @@ export function ProjectList({
                   project={p}
                   onOpen={onOpen}
                   onRemove={onRemove}
+                  thumbnail={thumbnails?.[p.path]}
                 />
               ))}
             </div>

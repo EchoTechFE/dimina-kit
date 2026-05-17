@@ -6,6 +6,7 @@ import {
   addProject,
   chooseProjectDirectory,
   getBranding,
+  getThumbnail,
   listProjects,
   onWindowNavigateBack,
   removeProject,
@@ -18,6 +19,7 @@ export default function Main() {
   const [page, setPage] = useState('list')
   const [currentProject, setCurrentProject] = useState<Project | null>(null)
   const [projectList, setProjectList] = useState<Project[]>([])
+  const [thumbnails, setThumbnails] = useState<Record<string, string | null>>({})
   const [appName, setAppName] = useState(DEFAULT_APP_NAME)
 
   async function loadProjects() {
@@ -35,6 +37,15 @@ export default function Main() {
       })
       .catch(() => {})
   }, [])
+
+  useEffect(() => {
+    if (projectList.length === 0) return
+    Promise.all(
+      projectList.map((p) =>
+        getThumbnail(p.path).then((t) => [p.path, t] as const),
+      ),
+    ).then((entries) => setThumbnails(Object.fromEntries(entries)))
+  }, [projectList])
 
   useEffect(() => {
     const off = onWindowNavigateBack(() => {
@@ -74,7 +85,7 @@ export default function Main() {
     return (
       <>
         <UpdateDialog />
-        <ProjectList projects={projectList} onAdd={handleAdd} onOpen={handleOpen} onRemove={handleRemove} />
+        <ProjectList projects={projectList} onAdd={handleAdd} onOpen={handleOpen} onRemove={handleRemove} thumbnails={thumbnails} />
       </>
     )
   }

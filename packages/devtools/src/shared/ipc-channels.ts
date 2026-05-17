@@ -104,6 +104,8 @@ export const ProjectChannel = {
   GetCompileConfig: 'project:getCompileConfig',
   SaveCompileConfig: 'project:saveCompileConfig',
   Status: 'project:status',
+  CaptureThumbnail: 'project:captureThumbnail',
+  GetThumbnail: 'project:getThumbnail',
 } as const
 
 // ── Project list / workspace ─────────────────────────────────────────────

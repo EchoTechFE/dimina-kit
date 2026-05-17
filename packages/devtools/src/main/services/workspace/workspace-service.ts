@@ -1,3 +1,4 @@
+import { webContents } from 'electron'
 import type { CompileConfig, ProjectSession } from '../../../shared/types.js'
 import type { WorkbenchContext } from '../workbench-context.js'
 import * as repo from '../projects/project-repository.js'
@@ -11,6 +12,7 @@ import {
   setSimulatorServicewechatReferer,
 } from '../simulator/referer.js'
 import { loadWorkbenchSettings } from '../settings/index.js'
+import { saveThumbnail, loadThumbnail } from '../projects/thumbnail.js'
 
 /**
  * Result returned to the renderer after `project:open` finishes.
@@ -52,6 +54,10 @@ export interface WorkspaceService {
   getSession(): { close: () => Promise<void>; port: number; appInfo: unknown } | null
   getProjectPath(): string
   hasActiveSession(): boolean
+
+  // ── thumbnails ──────────────────────────────────────────────────────────
+  captureThumbnail(projectPath: string): Promise<string | null>
+  getThumbnail(projectPath: string): string | null
 
   // ── per-project data ────────────────────────────────────────────────────
   getProjectPages(projectPath: string): ProjectPages
@@ -175,6 +181,23 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
     getSession: () => currentSession,
     getProjectPath: () => currentProjectPath,
     hasActiveSession: () => currentSession !== null,
+
+    async captureThumbnail(projectPath) {
+      const simWcId = ctx.views.getSimulatorWebContentsId()
+      if (!simWcId) return null
+      const wc = webContents.fromId(simWcId)
+      if (!wc || wc.isDestroyed()) return null
+      try {
+        const image = await wc.capturePage()
+        return saveThumbnail(projectPath, image)
+      } catch {
+        return null
+      }
+    },
+
+    getThumbnail(projectPath) {
+      return loadThumbnail(projectPath)
+    },
 
     getProjectPages: (projectPath) => repo.getProjectPages(projectPath),
     getCompileConfig: (projectPath) => repo.getCompileConfig(projectPath),

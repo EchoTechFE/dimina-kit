@@ -7,10 +7,12 @@ export function ProjectCard({
   project: p,
   onOpen,
   onRemove,
+  thumbnail,
 }: {
   project: Project
   onOpen: (p: Project) => void
   onRemove: (p: Project) => void
+  thumbnail?: string | null
 }) {
   const [hovered, setHovered] = useState(false)
   return (
@@ -20,7 +22,11 @@ export function ProjectCard({
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      <div className="h-20 bg-surface-thumb" />
+      {thumbnail ? (
+        <img src={thumbnail} className="h-28 w-full object-cover" alt="" />
+      ) : (
+        <div className="h-28 bg-surface-thumb" />
+      )}
       <div className="p-3">
         <div
           className="text-sm font-medium text-text-white mb-1 truncate"

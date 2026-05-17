@@ -153,3 +153,9 @@ export const SettingsProjectSettingsChangedSchema = z.tuple([
 
 /** panel:select — single panel id string. */
 export const PanelSelectSchema = z.tuple([z.string().min(1).max(200)])
+
+/** project:captureThumbnail — absolute project path. */
+export const ProjectCaptureThumbnailSchema = z.tuple([AbsolutePath])
+
+/** project:getThumbnail — absolute project path. */
+export const ProjectGetThumbnailSchema = z.tuple([AbsolutePath])

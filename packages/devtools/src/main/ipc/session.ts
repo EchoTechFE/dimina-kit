@@ -1,8 +1,10 @@
 import type { CompileConfig } from '../../shared/types.js'
 import { ProjectChannel } from '../../shared/ipc-channels.js'
 import {
+  ProjectCaptureThumbnailSchema,
   ProjectGetCompileConfigSchema,
   ProjectGetPagesSchema,
+  ProjectGetThumbnailSchema,
   ProjectOpenSchema,
   ProjectSaveCompileConfigSchema,
 } from '../../shared/ipc-schemas.js'
@@ -40,6 +42,22 @@ export function registerSessionIpc(ctx: Pick<WorkbenchContext, 'workspace' | 'se
     })
     .handle(ProjectChannel.Close, () => {
       return ctx.workspace.closeProject()
+    })
+    .handle(ProjectChannel.CaptureThumbnail, (_, ...args: unknown[]) => {
+      const [projectPath] = validate(
+        ProjectChannel.CaptureThumbnail,
+        ProjectCaptureThumbnailSchema,
+        args,
+      )
+      return ctx.workspace.captureThumbnail(projectPath)
+    })
+    .handle(ProjectChannel.GetThumbnail, (_, ...args: unknown[]) => {
+      const [projectPath] = validate(
+        ProjectChannel.GetThumbnail,
+        ProjectGetThumbnailSchema,
+        args,
+      )
+      return ctx.workspace.getThumbnail(projectPath)
     })
 }
 
