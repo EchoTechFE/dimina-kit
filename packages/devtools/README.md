@@ -83,6 +83,7 @@ import { app, globalShortcut } from 'electron'
 import path from 'path'
 import { createMainWindow } from '@dimina-kit/devtools/create-window'
 import { createWorkbenchContext } from '@dimina-kit/devtools/context'
+import { registerAppIpc } from '@dimina-kit/devtools'
 import { registerSimulatorIpc } from '@dimina-kit/devtools/ipc-simulator'
 import { registerPanelsIpc } from '@dimina-kit/devtools/ipc-panels'
 import { registerToolbarIpc } from '@dimina-kit/devtools/ipc-toolbar'
@@ -95,7 +96,7 @@ import { rendererDir, defaultPreloadPath } from '@dimina-kit/devtools/paths'
 app.whenReady().then(() => {
   const mainWindow = createMainWindow({
     title: 'My DevTools',
-    indexHtml: path.join(rendererDir, 'index.html'),
+    indexHtml: path.join(rendererDir, 'entries/main/index.html'),
   })
 
   const ctx = createWorkbenchContext({
@@ -105,12 +106,20 @@ app.whenReady().then(() => {
     rendererDir,
   })
 
+  // registerAppIpc 必装：renderer 启动时调用 app:getPreloadPath / app:getBranding，
+  // 缺它会卡在加载阶段。
+  registerAppIpc(ctx)
   registerProjectsIpc(ctx)
   registerSessionIpc(ctx)
   registerSimulatorIpc(ctx)
   registerPanelsIpc(ctx)
   registerToolbarIpc(ctx)
   registerPopoverIpc(ctx)
+
+  // Storage / 元素选区面板的后端 handler 由 setupSimulatorStorage 单独装。
+  // 该函数当前**未列入稳定公共 API**（在 `@dimina-kit/devtools` 之外）。
+  // 若需要这两个面板，建议改用上方的 `createWorkbenchApp({ onSetup })` 路线，
+  // 框架会自动注册；模块组装路线下你只能用不依赖它们的精简面板集。
 
   // 添加自定义 IPC — 通过 ctx.workspace 访问会话状态
   ipcMain.handle('my:action', () => {
@@ -197,19 +206,20 @@ src/
       types.ts
     instrumentation/                     # 注入到小程序 runtime 的探针
       console.ts                         # 控制台拦截
-      storage.ts                         # localStorage 拦截
       app-data.ts                        # Worker setData 拦截
-      wxml.ts                            # Vue 组件树提取
+      wxml.ts                            # Vue 组件树提取 + WXML 高亮 overlay
+      disposable.ts                      # instrumentation 共用的清理工具
     runtime/
-      bridge.ts                          # installSimulatorBridge
-      host.ts
+      bridge.ts                          # installSimulatorBridge → window.__simulatorData
+      custom-apis.ts                     # installCustomApisBridge → window.__diminaCustomApis
+      host.ts                            # sendToHost 推送封装
 
   renderer/
     entries/                             # 各窗口 HTML + React 挂载点
       main/ popover/ settings/ workbench-settings/
     modules/                             # 先按窗口分，再按区域
       main/
-        app/                             # 主窗口 App 根
+        main.tsx                         # 主窗口 React 根
         features/                        # 主窗口内的业务区域
           project-runtime/               # 项目视图 + 工具栏 + 右侧面板切换
           right-panel/                   # WXML / AppData / Storage 面板
@@ -261,6 +271,8 @@ src/
 | `onSetup`       | `(instance) => void`                        | —           | 窗口和 context 创建后的回调，用于注册自定义 IPC   |
 | `onBeforeClose` | `(instance) => void`                        | —           | 窗口关闭前的回调，session 关闭由框架自动处理      |
 | `window`        | `WorkbenchWindowConfig`                     | —           | 窗口尺寸覆盖                                      |
+| `updateChecker` | `UpdateChecker`                             | —           | 自定义更新检查器；提供后启用"检查更新"功能        |
+| `updateOptions` | `{ checkInterval?, initialDelay?, getCurrentVersion? }` | —  | 仅当 `updateChecker` 提供时生效，默认 1h / 5s     |
 
 ### 内置面板 ID
 
@@ -298,37 +310,56 @@ const myAdapter: CompilationAdapter = {
 
 ## Preload Instrumentation
 
-模拟器 webview 注入 preload 脚本在全局安装 instrumentation。内置 preload（`preload/windows/simulator.ts`）组装了以下模块：
+模拟器 webview 注入 preload 脚本，在 webview 全局上安装两类东西：**桥接**（把数据通道暴露到 webview）+ **instrumentation**（监听运行时事件并写入桥接）。内置 preload 见 `src/preload/windows/simulator.ts`。
 
-| Instrumentation                           | 捕获内容                                        |
-| ----------------------------------------- | ----------------------------------------------- |
-| Console (`installConsoleInstrumentation`) | `console.*`、`window.onerror`、未捕获 rejection |
-| Storage (`installStorageInstrumentation`) | `localStorage.setItem/removeItem`、全量快照     |
-| AppData (`installAppDataInstrumentation`) | Worker `type='u'` 消息、setData 调用            |
-| WXML (`installWxmlInstrumentation`)       | Vue 组件树提取、MutationObserver 自动更新       |
+### 必装：桥接
 
-所有 install\* 函数从 `@dimina-kit/devtools/preload` 统一导出，调用后通过 `installSimulatorBridge` 暴露的内部桥接通道把数据推到宿主。面板打开时调用 `panel:eval` 通过 `executeJavaScript` 拉取当前状态。
+| 函数 | 作用 | 不装会怎样 |
+| --- | --- | --- |
+| `installSimulatorBridge()` | 暴露 `window.__simulatorData`，承载 `highlightElement` / `unhighlightElement` / `getAppdata` / `getWxml` / `getStorageSnapshot` 等只读 API（供主进程 `executeJavaScript` 拉取） | 元素选区 overlay 不显示；automation `Page.getData` 返回空对象；MCP `simulator_get_overview` 在 hints 中追加 `simulator bridge not ready (window.__simulatorData missing)`。注：Storage 面板走主进程 CDP，不受影响；Console/AppData/WXML 推送走 `sendToHost`，也不受影响 |
+| `installCustomApisBridge()` | 暴露 `window.__diminaCustomApis`，承载 `list` / `invoke`，让模拟器侧把主进程注册的 API 代理回小程序 runtime | `registerSimulatorApi` 注册的业务 API 在小程序里调用全部 no-op（参见下方 "Simulator 自定义 API"） |
+| `setupApiCompatHook()` | 兼容上游 API 名称变更 | 部分 API 调用兼容性问题 |
+
+下游写自定义 preload 时，这三项原则上都要装。若不需要 `registerSimulatorApi`，`installCustomApisBridge` 可省略。
+
+### 按需：instrumentation
+
+| Instrumentation | 捕获内容 | 数据通道 |
+| --- | --- | --- |
+| `installConsoleInstrumentation` | `console.*`、`window.onerror`、未捕获 rejection | IPC sendToHost |
+| `installAppDataInstrumentation` | Worker `type='u'` 消息、setData 调用 | IPC sendToHost + 写入 bridge state |
+| `installWxmlInstrumentation` | Vue 组件树提取、MutationObserver 自动更新 | IPC sendToHost + 写入 bridge state |
+
+> Storage 面板的数据由主进程通过 CDP `DOMStorage` 域抓取（`src/main/services/simulator-storage`），**不需要 preload 侧 instrumentation**。
+
+各面板的数据流详见下方 "数据流" 章节。
 
 ### 自定义 Preload
 
-按需组合或追加自定义逻辑（`src/preload/windows/simulator.ts` 作为参考）：
+参考 `src/preload/windows/simulator.ts`：
 
 ```typescript
 // my-preload.ts
 import {
   installSimulatorBridge,
+  installCustomApisBridge,
   installConsoleInstrumentation,
-  installStorageInstrumentation,
+  installAppDataInstrumentation,
+  installWxmlInstrumentation,
   setupApiCompatHook,
 } from '@dimina-kit/devtools/preload'
-// 不需要 WXML/AppData，不导入
 
+// 1. 兼容 hook + 桥接（必装，且应在 instrumentation 之前）
 setupApiCompatHook()
 installSimulatorBridge()
-installConsoleInstrumentation()
-installStorageInstrumentation()
+installCustomApisBridge()   // 若用到 registerSimulatorApi，必装
 
-// 自定义 hook
+// 2. instrumentation（按需）
+installConsoleInstrumentation()
+installAppDataInstrumentation()
+installWxmlInstrumentation()
+
+// 3. 自定义 hook
 window.addEventListener('error', (e) => {
   console.error('[my-preload]', e.message)
 })
@@ -345,6 +376,8 @@ launch({ preloadPath: '/absolute/path/to/my-preload.js' })
 ## Simulator 自定义 API
 
 下游可以通过 `registerSimulatorApi` 把业务 API 注入到模拟器内运行的小程序。Handler 在 Electron **主进程**执行，能用任何 Node 能力（fs、net、原生模块、持久状态）；模拟器侧拿到 `wx.<name>(params)` 调用后通过 IPC 转发到主进程，await 返回结果，handler 抛错则原型回传给小程序。
+
+> ⚠️ 使用本功能要求模拟器 preload 调用 `installCustomApisBridge()`（详见上方 "Preload Instrumentation"）。内置 preload 已包含此调用；若你用了自定义 preload 又忘记调用，注册的 API 在小程序运行时**没有任何反应**，且不会报错。
 
 ```typescript
 import { registerSimulatorApi } from '@dimina-kit/devtools/simulator-apis'
@@ -392,12 +425,14 @@ dispose()
                                        getRendererDir, getPreloadDir, getRendererHtml
 @dimina-kit/devtools/simulator-apis         registerSimulatorApi(name, handler) →
                                        注入由主进程托管的小程序 API（详见上方"Simulator 自定义 API"）
-@dimina-kit/devtools/preload                installConsoleInstrumentation,
-                                       installStorageInstrumentation,
+@dimina-kit/devtools/preload                installSimulatorBridge,
+                                       installCustomApisBridge,
+                                       installConsoleInstrumentation,
                                        installAppDataInstrumentation, sendAllAppData,
                                        installWxmlInstrumentation, sendWxmlTree,
-                                       setupWxmlObserver, installSimulatorBridge,
+                                       setupWxmlObserver,
                                        setupApiCompatHook
+                                       （storage 面板数据由主进程 CDP 抓取，无 preload 侧 hook）
 ```
 
 ### Experimental exports (v0.x — signatures may change in minor versions)
@@ -414,17 +449,9 @@ dispose()
 @dimina-kit/devtools/ipc-popover            registerPopoverIpc(ctx)
 @dimina-kit/devtools/ipc-settings           registerSettingsIpc(ctx)
 @dimina-kit/devtools/ipc-projects           registerProjectsIpc(ctx)
-@dimina-kit/devtools/ipc-session            registerSessionIpc(ctx), sendStatus(ctx, status, msg)
+@dimina-kit/devtools/ipc-session            registerSessionIpc(ctx), sessionModule
 @dimina-kit/devtools/workbench-settings     loadWorkbenchSettings(), saveWorkbenchSettings(), applyTheme()
 ```
-
-> 注：以下子路径在过去版本曾被导出，已收敛到根 barrel 或内部实现，请改从 `@dimina-kit/devtools` 根入口导入（`createViewManager`、`registerAppIpc`、`simulatorDir`、`Project` 等类型）：
->
-> - `@dimina-kit/devtools/view-manager` → `import { createViewManager, type ViewManager } from '@dimina-kit/devtools'`
-> - `@dimina-kit/devtools/ipc-app` → `import { registerAppIpc } from '@dimina-kit/devtools'`
-> - `@dimina-kit/devtools/projects` → 通过 `ctx.workspace.listProjects()` 等服务方法访问；`Project` 类型从 `@dimina-kit/devtools` 根入口导入
-> - `@dimina-kit/devtools/layout` → `import { setHeaderHeight } from '@dimina-kit/devtools'`（其余布局细节回归内部实现）
-> - `@dimina-kit/devtools/simulator-dir` → `import { simulatorDir } from '@dimina-kit/devtools/paths'`
 
 ---
 
@@ -452,15 +479,10 @@ interface WorkbenchContext {
   // ── Internal lifecycle / security (host 不直接消费) ──
   registry: DisposableRegistry // 框架在创建时统一聚合 dispose
   senderPolicy: SenderPolicy   // IpcRegistry 自动校验 sender 白名单
-
-  /** @deprecated 用 ctx.windows.mainWindow */
-  mainWindow: BrowserWindow
-  /** @deprecated 用 ctx.windows.settingsWindow / setSettingsWindow */
-  workbenchSettingsWindow: BrowserWindow | null
 }
 ```
 
-会话和视图状态不再作为 ctx 的直接字段暴露，而是封装在对应 service 的私有闭包中：
+会话和视图状态封装在对应 service 的私有闭包中，通过方法访问：
 
 | 旧写法                       | 新写法                                                            |
 | ---------------------------- | ----------------------------------------------------------------- |
@@ -500,28 +522,15 @@ flowchart TB
 
 ### 数据流
 
-内置面板采用**拉取式**数据流，避免长期订阅：
+按面板拆分，分**三条独立路径**：
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor User as 用户
-    participant UI as 面板 UI (React)
-    participant R as renderer
-    participant M as main<br/>ipc/panels.ts
-    participant P as preload<br/>instrumentation
+| 面板 / 场景 | 模式 | 路径 |
+| --- | --- | --- |
+| Console / AppData / WXML 树 | 推送 | preload instrumentation 通过 `runtime/host.ts:sendToHost` 经 webview `ipcRenderer.sendToHost` 推到宿主 → renderer 监听 `ipc-message` 分发 |
+| Storage | 拉取 + 推送 | renderer `ipcInvoke(SimulatorStorageChannel.GetSnapshot)` → 主进程 CDP `DOMStorage` 域；变更事件由主进程通过 `SimulatorStorageChannel.Event` 推回 renderer |
+| 元素选区 / `Page.getData` / MCP overview | 拉取 | 主进程 `webContents.executeJavaScript(...)` 或 `Runtime.evaluate(...)` 读 `window.__simulatorData.*`（由 `installSimulatorBridge` 暴露） |
 
-    User->>UI: 打开面板 / 刷新
-    UI->>R: invokeMain('panel:eval', expression)
-    R->>M: IPC: panel:eval
-    M->>P: webContents.executeJavaScript(expression)
-    Note over P: window 上已挂好取值函数
-    P-->>M: 结构化数据
-    M-->>R: 返回结果
-    R-->>UI: 渲染
-```
-
-Console 输出等推送场景仍由 preload 通过 `installSimulatorBridge()` 经由 webview ipcRenderer 送至宿主，再由 renderer 分发到相应面板。
+> `src/main/ipc/panels.ts` 暴露 `panel:eval` handler 供外部 host 自定义面板复用，内置 renderer 不消费它。
 
 ---
 
