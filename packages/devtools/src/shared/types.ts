@@ -95,6 +95,41 @@ export interface WorkbenchHostInstance {
   context: import('../main/services/workbench-context.js').WorkbenchContext
 }
 
+/**
+ * Pluggable backend for the project-list panel. Hosts may supply this to
+ * take over project storage from the default `<userData>/dimina-projects.json`.
+ *
+ * Detailed contract lives in
+ * `@dimina-kit/devtools/projects-provider` (the runtime exports it).
+ * Repeated here as a structural type so `WorkbenchAppConfig` can reference
+ * it without a circular import from the main-process tree.
+ */
+export interface ProjectsProvider {
+  listProjects(): unknown[] | Promise<unknown[]>
+  validateProjectDir?(dirPath: string): string | null
+  addProject(dirPath: string): unknown
+  removeProject(dirPath: string): void | Promise<void>
+  updateLastOpened?(dirPath: string): void | Promise<void>
+  getCompileConfig?(dirPath: string): unknown
+  saveCompileConfig?(dirPath: string, cfg: unknown): void | Promise<void>
+}
+
+export interface ProjectTemplate {
+  id: string
+  name: string
+  description?: string
+  icon?: string
+  source?: { type: 'directory'; path: string }
+  generate?: (target: string, opts: { name: string }) => Promise<void>
+}
+
+export interface CreateProjectInput {
+  name: string
+  path: string
+  templateId?: string
+  extra?: Record<string, unknown>
+}
+
 export interface WorkbenchAppConfig extends WorkbenchConfig {
   /** Absolute path to the renderer dist directory. Defaults to dimina-devtools' built-in renderer. */
   rendererDir?: string
@@ -121,4 +156,57 @@ export interface WorkbenchAppConfig extends WorkbenchConfig {
     /** Override the version string passed to the checker. Default: app.getVersion() */
     getCurrentVersion?: () => string
   }
+
+  // ── Projects panel extension surface ──────────────────────────────────
+  //
+  // Three orthogonal extension points consumed by the create-project flow.
+  // All three can be omitted for the single-tenant default behavior.
+
+  /** Override the default `<userData>/dimina-projects.json` backend. */
+  projectsProvider?: ProjectsProvider
+  /** Templates injected at the head of the list; same-id overrides a built-in. */
+  projectTemplates?: ProjectTemplate[]
+  /** Built-in policy: 'all' (default), 'none', or an allowlist of ids. */
+  builtinTemplates?: 'all' | 'none' | string[]
+  /**
+   * Host-supplied "新建项目" dialog. When provided, the renderer routes the
+   * "+" card click through IPC into this main-process hook instead of
+   * showing the built-in dialog. Receives the parent window for native
+   * dialog parenting and the merged + sanitized template list (no
+   * `generate` functions cross the IPC boundary).
+   *
+   * Return either:
+   *  - `null` — user cancelled.
+   *  - a `CreateProjectInput` — devtools runs its built-in scaffold
+   *    (copy template → write project.config.json → provider.addProject)
+   *    on the host's behalf.
+   *  - `{ ready: Project }` — the host has ALREADY created the project
+   *    (typically via its own backend). devtools skips the scaffold and
+   *    just refreshes the list. Use this when materialization is remote
+   *    or already done.
+   */
+  customCreateProjectDialog?: (ctx: {
+    parentWindow: import('electron').BrowserWindow
+    templates: ProjectTemplate[]
+  }) => Promise<CustomCreateProjectDialogResult>
 }
+
+/**
+ * Discriminated return of `customCreateProjectDialog`. `null` = cancelled.
+ * `{ ready }` = host created the project itself; devtools just refreshes.
+ * Otherwise treated as `CreateProjectInput` and devtools materializes the
+ * template locally.
+ *
+ * The `ready.Project` shape is the structural minimum devtools needs to
+ * render the card (mirrors `Project` in `./projects-provider`).
+ */
+export type CustomCreateProjectDialogResult =
+  | null
+  | {
+      ready: {
+        name: string
+        path: string
+        lastOpened?: string | null
+      }
+    }
+  | CreateProjectInput
