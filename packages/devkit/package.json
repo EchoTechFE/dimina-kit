@@ -64,7 +64,7 @@
         "vitest": "^4.1.4"
     },
     "dependencies": {
-        "@dimina/compiler": "1.0.14",
+        "@dimina/compiler": "1.0.16",
         "axios": "^1.15.0",
         "chokidar": "^5.0.0",
         "cors": "^2.8.6",

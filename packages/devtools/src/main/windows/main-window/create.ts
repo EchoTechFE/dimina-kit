@@ -52,7 +52,7 @@ function configureSimulatorSession(simulatorPreloadPath: string): void {
     headers['access-control-allow-headers'] = ['*']
     headers['access-control-allow-methods'] = ['*']
     headers['Cross-Origin-Opener-Policy'] = ['same-origin']
-    headers['Cross-Origin-Embedder-Policy'] = ['require-corp']
+    headers['Cross-Origin-Embedder-Policy'] = ['credentialless']
     callback({ responseHeaders: headers })
   })
 }
