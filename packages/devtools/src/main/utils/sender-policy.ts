@@ -12,11 +12,13 @@ import type { SenderPolicy } from './ipc-registry.js'
  * - the settings overlay view (when open)
  * - the popover overlay view (when open)
  *
- * The simulator webview is intentionally NOT on this list: its preload
- * (`src/preload/windows/simulator.ts`) uses `ipcRenderer.sendToHost`
- * exclusively, never `invoke`/`send`, so it can't legitimately reach an
- * ipcMain handler. Including it would only widen the attack surface if
- * the guest were ever compromised.
+ * The simulator webview is intentionally NOT on this list. Anything it
+ * needs from main (currently just the custom-apis bridge — see
+ * `installCustomApisBridge` in `src/preload/runtime/custom-apis.ts` and the
+ * matching `useCustomApiProxy` host hook) proxies through the trusted
+ * main-window renderer via `ipcRenderer.sendToHost` + `<webview>.send`.
+ * Keeping the guest off this list contains the blast radius if the
+ * simulator content is ever compromised.
  *
  * Any other sender — including a stale/destroyed sender or an unknown
  * iframe — is rejected.
@@ -41,7 +43,7 @@ export function createWorkbenchSenderPolicy(
     const popoverViewId = ctx.views.getPopoverWebContentsId()
     if (popoverViewId != null && sender.id === popoverViewId) return true
 
-    // simulator preload uses sendToHost only; never reaches ipcMain handlers.
+    // simulator <webview> proxies through main-window renderer (see file header).
 
     return false
   }
