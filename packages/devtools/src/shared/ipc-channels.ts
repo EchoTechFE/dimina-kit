@@ -22,9 +22,27 @@ export const SimulatorChannel = {
 // ── Custom simulator APIs (downstream-registered, main-process handlers) ──
 // list: simulator queries the names registered via @dimina-kit/devtools/simulator-apis.
 // invoke: simulator forwards an API call to the registry; result/reject propagates.
+//
+// These are ipcMain.handle channels invoked by the **main-window renderer**
+// only (trusted host). The simulator <webview> never reaches them directly —
+// it proxies through the host via the bridge channels below, so the
+// sender-policy can keep the webview off the IPC white-list.
 export const SimulatorCustomApiChannel = {
   List: 'simulator:custom-apis:list',
   Invoke: 'simulator:custom-apis:invoke',
+} as const
+
+// ── Custom APIs bridge proxy (simulator <webview> ↔ main-window renderer) ──
+// Request:  webview → host via `ipcRenderer.sendToHost`,
+//           payload = { id, op: 'list' } | { id, op: 'invoke', name, params }
+// Response: host → webview via `<webview>.send`,
+//           payload = { id, result } | { id, error }
+//
+// Request/response are correlated by `id` so multiple concurrent invokes can
+// be in flight at once.
+export const SimulatorCustomApiBridgeChannel = {
+  Request: 'simulator:custom-apis:bridge-request',
+  Response: 'simulator:custom-apis:bridge-response',
 } as const
 
 // ── Storage (CDP-backed; main process attaches the debugger to the
