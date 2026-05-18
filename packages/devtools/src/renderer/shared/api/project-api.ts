@@ -1,4 +1,5 @@
 import type { CompileConfig, Project } from '@/shared/types'
+import type { ProjectCreateDefaults } from '../../../shared/ipc-channels'
 import { ProjectsChannel, DialogChannel, ProjectChannel } from '../../../shared/ipc-channels'
 import { invoke, invokeStrict, on } from './ipc-transport'
 
@@ -88,4 +89,55 @@ export function captureThumbnail(projectPath: string): Promise<string | null> {
 /** Load a previously saved thumbnail for the given project. */
 export function getThumbnail(projectPath: string): Promise<string | null> {
   return invoke<string | null>(ProjectChannel.GetThumbnail, projectPath)
+}
+
+// ── Phase 3: create-project IPC wrappers ────────────────────────────────
+
+/**
+ * Wire-level shape sent over IPC. Mirrors `ProjectTemplate` from the main
+ * process minus the (non-serialisable) `generate` function, which is
+ * stripped by `sanitizeTemplates` at the IPC boundary.
+ */
+export interface ProjectTemplateInfo {
+  id: string
+  name: string
+  description?: string
+  icon?: string
+  source?: { type: 'directory'; path: string }
+}
+
+export interface CreateProjectInput {
+  name: string
+  path: string
+  templateId?: string
+  extra?: Record<string, unknown>
+}
+
+/** List the merged + sanitized template catalog for the create-project dialog. */
+export function listTemplates(): Promise<ProjectTemplateInfo[]> {
+  return invokeStrict<ProjectTemplateInfo[]>(ProjectsChannel.ListTemplates)
+}
+
+/**
+ * Ask main to open the host-supplied "新建项目" dialog hook. Resolves to
+ * the input the host hook collected, or null when no hook is configured
+ * (renderer should then show the built-in dialog) or when the user
+ * cancelled the host dialog.
+ */
+export function openCreateProjectDialog(): Promise<CreateProjectInput | null> {
+  return invoke<CreateProjectInput | null>(ProjectsChannel.OpenCreateDialog)
+}
+
+/** Scaffold and register a new project. Returns the created Project. */
+export function createProject(input: CreateProjectInput): Promise<Project> {
+  return invokeStrict<Project>(ProjectsChannel.Create, input)
+}
+
+/**
+ * Get the parent-directory baseline used to pre-fill the new-project dialog.
+ * Resolves to a persisted "last used" base (after the first successful
+ * create) or a platform default (Documents/home) for the first run.
+ */
+export function getCreateProjectDefaults(): Promise<ProjectCreateDefaults> {
+  return invokeStrict<ProjectCreateDefaults>(ProjectsChannel.GetCreateDefaults)
 }

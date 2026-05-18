@@ -75,27 +75,26 @@ export function registerSettingsIpc(ctx: Pick<WorkbenchContext, 'workbenchSettin
       const [visible] = validate(SettingsChannel.SetVisible, SettingsSetVisibleSchema, args)
       if (visible) {
         await ctx.views.showSettings()
+        const projectPath = ctx.workspace.getProjectPath()
         ctx.notify.settingsInit({
-          projectPath: ctx.workspace.getProjectPath(),
-          config: ctx.workspace.getCompileConfig(ctx.workspace.getProjectPath()),
-          projectSettings: ctx.workspace.getProjectSettings(ctx.workspace.getProjectPath()),
+          projectPath,
+          config: await ctx.workspace.getCompileConfig(projectPath),
+          projectSettings: ctx.workspace.getProjectSettings(projectPath),
         })
       } else {
         ctx.views.hideSettings()
         ctx.notify.settingsClosed()
       }
     })
-    .on(SettingsChannel.ConfigChanged, (_, ...args: unknown[]) => {
+    .on(SettingsChannel.ConfigChanged, async (_, ...args: unknown[]) => {
       const [config] = validate(
         SettingsChannel.ConfigChanged,
         SettingsConfigChangedSchema,
         args,
       )
-      if (ctx.workspace.getProjectPath()) {
-        ctx.workspace.saveCompileConfig(
-          ctx.workspace.getProjectPath(),
-          config as CompileConfig,
-        )
+      const projectPath = ctx.workspace.getProjectPath()
+      if (projectPath) {
+        await ctx.workspace.saveCompileConfig(projectPath, config as CompileConfig)
       }
       ctx.notify.settingsChanged(config as CompileConfig)
     })

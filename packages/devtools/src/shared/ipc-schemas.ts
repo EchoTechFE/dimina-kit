@@ -118,6 +118,7 @@ export const WorkbenchSettingsSaveSchema = z.tuple([
       watch: z.boolean(),
     }),
     theme: z.enum(['system', 'light', 'dark']),
+    lastCreateBaseDir: z.union([z.string(), z.null()]),
   }),
 ])
 

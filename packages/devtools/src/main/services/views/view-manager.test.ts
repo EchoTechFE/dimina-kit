@@ -62,6 +62,9 @@ vi.mock('electron', () => {
 
 vi.mock('../../utils/paths.js', () => ({
   mainPreloadPath: '/stub/preload.js',
+  // Phase 3: workbench-context transitively imports builtin-templates.ts
+  // which reads this at module load to build the BUILTIN_TEMPLATES catalog.
+  devtoolsPackageRoot: '/stub/devtools-pkg-root',
 }))
 
 // Import AFTER mocks so view-manager picks up the stubs.

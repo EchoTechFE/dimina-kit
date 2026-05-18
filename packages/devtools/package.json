@@ -27,6 +27,7 @@
 		"dist",
 		"!dist/**/*.js.map",
 		"!dist/**/*.d.ts.map",
+		"templates",
 		"README.md",
 		"LICENSE"
 	],
@@ -38,6 +39,7 @@
 		"./launch": "./dist/main/app/launch.js",
 		"./types": "./dist/shared/types.js",
 		"./context": "./dist/main/services/workbench-context.js",
+		"./projects-provider": "./dist/main/services/projects/index.js",
 		"./create-window": "./dist/main/windows/main-window/index.js",
 		"./ipc-simulator": "./dist/main/ipc/simulator.js",
 		"./ipc-panels": "./dist/main/ipc/panels.js",
@@ -104,6 +106,9 @@
 			],
 			"simulator-apis": [
 				"dist/main/simulator-apis.d.ts"
+			],
+			"projects-provider": [
+				"dist/main/services/projects/index.d.ts"
 			]
 		}
 	},
