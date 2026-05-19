@@ -9,6 +9,7 @@ import {
   getThumbnail,
   listProjects,
   onWindowNavigateBack,
+  onWindowOpenProject,
   removeProject,
 } from '@/shared/api'
 import type { Project } from '@/shared/types'
@@ -56,6 +57,22 @@ export default function Main() {
     })
     return off
   }, [appName])
+
+  useEffect(() => {
+    const off = onWindowOpenProject((projectPath) => {
+      const found = projectList.find((p) => p.path === projectPath)
+      if (found) {
+        handleOpen(found)
+      } else {
+        listProjects().then((list) => {
+          setProjectList(list)
+          const p = list.find((item) => item.path === projectPath)
+          if (p) handleOpen(p)
+        })
+      }
+    })
+    return off
+  }, [projectList])
 
   async function handleAdd() {
     const dirPath = await chooseProjectDirectory()

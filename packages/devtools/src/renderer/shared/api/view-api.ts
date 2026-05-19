@@ -131,3 +131,8 @@ export function onPopoverRelaunch(
 export function onWindowNavigateBack(handler: () => void): () => void {
   return on<[]>(WindowChannel.NavigateBack, () => handler())
 }
+
+/** Listen for the "open specific project" event from the app menu. */
+export function onWindowOpenProject(handler: (projectPath: string) => void): () => void {
+  return on<[string]>(WindowChannel.OpenProject, (path) => handler(path))
+}

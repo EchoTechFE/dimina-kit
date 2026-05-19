@@ -2,6 +2,29 @@ import { Menu, type MenuItemConstructorOptions } from 'electron'
 import type { WorkbenchContext } from '../services/workbench-context.js'
 import { openSettingsWindow } from '../app/launch.js'
 
+function buildRecentProjectsSubmenu(ctx: WorkbenchContext): MenuItemConstructorOptions[] {
+  try {
+    const projects = ctx.workspace.listProjects()
+    const sorted = [...projects]
+      .filter((p) => p.lastOpened)
+      .sort((a, b) => new Date(b.lastOpened!).getTime() - new Date(a.lastOpened!).getTime())
+      .slice(0, 10)
+
+    if (sorted.length === 0) {
+      return [{ label: '无最近项目', enabled: false }]
+    }
+
+    return sorted.map((p) => ({
+      label: p.name,
+      click: () => {
+        ctx.notify.windowOpenProject(p.path)
+      },
+    }))
+  } catch {
+    return [{ label: '无最近项目', enabled: false }]
+  }
+}
+
 export function installAppMenu(ctx: WorkbenchContext): void {
   const template: MenuItemConstructorOptions[] = [
     {
@@ -33,6 +56,10 @@ export function installAppMenu(ctx: WorkbenchContext): void {
           click: () => {
             ctx.notify.windowNavigateBack()
           },
+        },
+        {
+          label: '打开最近项目',
+          submenu: buildRecentProjectsSubmenu(ctx),
         },
       ],
     },

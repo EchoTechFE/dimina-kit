@@ -137,6 +137,7 @@ function installMenu(config: WorkbenchAppConfig, mainWindow: BrowserWindow, cont
   } else {
     installAppMenu(context)
   }
+  context.refreshMenu = () => installMenu(config, mainWindow, context)
 }
 
 async function setupAutomation(instance: WorkbenchAppInstance): Promise<void> {

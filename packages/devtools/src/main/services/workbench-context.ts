@@ -68,6 +68,9 @@ export interface WorkbenchContext {
 
   /** Aggregates dispose handlers for every IPC handler, listener, watcher, and CDP session registered by the workbench. */
   registry: DisposableRegistry
+
+  /** Rebuild the application menu (e.g. to refresh recent projects). */
+  refreshMenu?: () => void
 }
 
 export interface CreateContextOptions {

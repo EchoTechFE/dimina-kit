@@ -58,6 +58,8 @@ export interface RendererNotifier {
   projectStatus(payload: ProjectStatusPayload): void
   /** Ask the main renderer to navigate back to its landing screen. */
   windowNavigateBack(): void
+  /** Ask the main renderer to open a specific project by path. */
+  windowOpenProject(projectPath: string): void
   /** Tell the main renderer the embedded settings overlay has been closed. */
   settingsClosed(): void
   /** Broadcast an updated compile config to the main renderer. */
@@ -120,6 +122,9 @@ export function createRendererNotifier(ctx: NotifierContext): RendererNotifier {
     },
     windowNavigateBack() {
       sendToMain(WindowChannel.NavigateBack)
+    },
+    windowOpenProject(projectPath) {
+      sendToMain(WindowChannel.OpenProject, projectPath)
     },
     settingsClosed() {
       sendToMain(SettingsChannel.Closed)

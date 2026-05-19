@@ -172,6 +172,7 @@ export const ToolbarChannel = {
 
 export const WindowChannel = {
   NavigateBack: 'window:navigateBack',
+  OpenProject: 'window:openProject',
 } as const
 
 // ── App ──────────────────────────────────────────────────────────────────

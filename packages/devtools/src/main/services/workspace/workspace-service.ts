@@ -160,7 +160,10 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
       currentSession = session
       currentProjectPath = projectPath
 
-      bestEffort('updateLastOpened', () => repo.updateLastOpened(projectPath))
+      bestEffort('updateLastOpened', () => {
+        repo.updateLastOpened(projectPath)
+        ctx.refreshMenu?.()
+      })
       bestEffort('sendStatus', () => sendStatus('ready', '编译完成'))
       bestEffort('applyReferer', () => applyRefererFromSession(session))
 
