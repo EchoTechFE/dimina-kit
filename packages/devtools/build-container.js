@@ -7,7 +7,9 @@
  *
  * Two builds run sequentially:
  *   1. Main build — upstream vite.config.mjs (index.html + pageFrame.html entries)
- *   2. Browser API build — our vite.config.api.js (src/runtime.js as ES module)
+ *   2. Browser API build — our vite.config.api.js using container-runtime.js
+ *      (this package, not in dimina/) as the library entry, so the submodule
+ *      can point at plain didi/dimina with zero local modifications.
  */
 
 import { spawnSync } from 'node:child_process'
@@ -32,21 +34,6 @@ const SIMULATOR_DIR = join(__dirname, 'src/simulator')
 const INJECTED_FILES = [
   { src: join(SIMULATOR_DIR, 'service-apis/file/index.js'), dest: join(SERVICE_SRC, 'src/api/core/file/index.js') },
   { src: join(SIMULATOR_DIR, 'service-apis/audio/index.js'), dest: join(SERVICE_SRC, 'src/api/core/media/audio/index.js') },
-]
-
-// String-level patches applied to upstream dimina source before build, then
-// reverted via `git checkout` afterward. Each patch must have a unique `find`
-// anchor; build aborts if the anchor is missing (so a rebase upstream loudly
-// surfaces a stale patch instead of silently no-op-ing).
-const SOURCE_PATCHES = [
-  {
-    // Upstream f431916 (tabbar PR 4e91eaf) reads this.appInfo.{pagePath,appId,…}
-    // on MiniApp but never assigns this.appInfo, so _loadApp throws on first
-    // launch and the page iframe never mounts. Alias opts so the field resolves.
-    file: join(CONTAINER_SRC, 'src/pages/miniApp/miniApp.js'),
-    find: 'this._extSubscriptions = new Map();',
-    replace: 'this._extSubscriptions = new Map();\n\t\tthis.appInfo = opts;',
-  },
 ]
 
 function injectFiles() {
@@ -79,29 +66,6 @@ function cleanupInjectedFiles() {
     }
   }
   console.log('Cleaned up injected files from dimina source')
-}
-
-function applySourcePatches() {
-  for (const p of SOURCE_PATCHES) {
-    // Reset to a clean baseline so we don't double-patch a stale file from a
-    // previous build that died before revert (e.g. ctrl-c, OOM).
-    const rel = relative(DIMINA_ROOT, p.file)
-    spawnSync('git', ['checkout', '--', rel], { cwd: DIMINA_ROOT })
-    const txt = readFileSync(p.file, 'utf8')
-    if (!txt.includes(p.find)) {
-      throw new Error(`Source patch anchor not found in ${rel}: ${JSON.stringify(p.find)}`)
-    }
-    writeFileSync(p.file, txt.replace(p.find, p.replace))
-  }
-  if (SOURCE_PATCHES.length > 0) console.log(`Applied ${SOURCE_PATCHES.length} source patch(es) to dimina`)
-}
-
-function revertSourcePatches() {
-  for (const p of SOURCE_PATCHES) {
-    const rel = relative(DIMINA_ROOT, p.file)
-    spawnSync('git', ['checkout', '--', rel], { cwd: DIMINA_ROOT })
-  }
-  if (SOURCE_PATCHES.length > 0) console.log('Reverted source patches in dimina')
 }
 
 function getDiminaGitHash() {
@@ -170,7 +134,7 @@ function getInputFingerprint() {
       }
     }
   }
-  for (const file of ['build-container.js', 'vite.config.api.js']) {
+  for (const file of ['build-container.js', 'vite.config.api.js', 'container-runtime.js']) {
     hash.update(`${file}:\n`)
     hash.update(readFileSync(join(__dirname, file)))
     hash.update('\0')
@@ -207,13 +171,10 @@ if (isFreshBuild(inputFingerprint)) {
 // 服务挂在根路径，必须清掉这个 env 让上游走 base='/' 分支。
 const buildEnv = { ...process.env, GITHUB_ACTIONS: '' }
 
-// Inject + patch + build wrapped in a single try/finally so a failure between
-// injectFiles() and the build (e.g. a stale SOURCE_PATCHES anchor that makes
-// applySourcePatches throw) still runs cleanup and leaves the submodule clean.
+// Inject + build wrapped in try/finally so cleanup always runs and leaves the
+// submodule clean even if the build fails.
 try {
-  // 0. Inject devtools API files + apply source patches to dimina source tree
   injectFiles()
-  applySourcePatches()
 
   // 1. Main container build (upstream config, unchanged)
   const mainBuild = spawnSync('pnpm', ['build'], {
@@ -238,9 +199,7 @@ try {
     process.exit(apiBuild.status ?? 1)
   }
 } finally {
-  // Always clean up injected files + revert source patches, even if build fails
   cleanupInjectedFiles()
-  revertSourcePatches()
 }
 
 // 3. Sync build output into TARGET_DIST. Clear only the entries this build

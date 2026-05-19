@@ -2,28 +2,22 @@ declare module 'container-api' {
   export class Application {
     el: HTMLElement
     parent: { root: HTMLElement | null; updateDeviceBarColor?: (color: string) => void } | null
+    presentView(view: MiniApp, useCache: boolean): Promise<void>
+    dismissView(opts?: { destroy?: boolean }): Promise<void>
   }
 
-  export const AppManager: {
-    registerApi(name: string, handler: (...args: unknown[]) => unknown): void
-    apiRegistry: Record<string, ((...args: unknown[]) => unknown) | undefined>
-    appStack: unknown[]
-    openApp(
-      opts: {
-        appId: string
-        path: string
-        scene: number
-        destroy?: boolean
-        restoreStack?: unknown[]
-      },
-      application: Application,
-    ): void
-  }
-
-  export const HashRouter: {
-    parse(hash: string): {
+  export class MiniApp {
+    constructor(opts: {
       appId: string
-      stack: Array<{ pagePath: string; query?: Record<string, string> }>
-    } | null
+      scene: number
+      name?: string
+      logo?: string
+      pagePath?: string
+      query?: Record<string, string>
+      restoreStack?: unknown[]
+    })
+    apiRegistry: Record<string, ((...args: unknown[]) => unknown) | undefined>
+    registerApi(name: string, handler: (...args: unknown[]) => unknown): void
+    invokeApi(name: string, params?: unknown): void
   }
 }

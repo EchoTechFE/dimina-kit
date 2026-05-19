@@ -5,8 +5,6 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/EchoTechFE/dimina-kit)
 
-> 由于还有一些 feature 还未向源仓库提交，当前 runtime 引用的是 [fork](https://github.com/EchoTechFE/dimina) 版本。
-
 ![Dimina DevTools](./docs/devtools.png)
 
 ## Packages
