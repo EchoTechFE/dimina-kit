@@ -1,15 +1,21 @@
 import { useState, useEffect } from 'react'
 import { ProjectList } from '@/shared/components/project-list'
+import { ProjectCreateDialog } from '@/shared/components/project-create-dialog'
+import type { ProjectTemplateInfo } from '@/shared/components/project-create-dialog'
 import { ProjectRuntime } from '@/modules/main/features/project-runtime/project-runtime'
 import { UpdateDialog } from '@/modules/update/update-dialog'
 import {
   addProject,
   chooseProjectDirectory,
+  createProject,
   getBranding,
+  getCreateProjectDefaults,
   getThumbnail,
   listProjects,
+  listTemplates,
   onWindowNavigateBack,
   onWindowOpenProject,
+  openCreateProjectDialog,
   removeProject,
 } from '@/shared/api'
 import type { Project } from '@/shared/types'
@@ -22,6 +28,13 @@ export default function Main() {
   const [projectList, setProjectList] = useState<Project[]>([])
   const [thumbnails, setThumbnails] = useState<Record<string, string | null>>({})
   const [appName, setAppName] = useState(DEFAULT_APP_NAME)
+
+  // Phase 4: local "新建项目" dialog state. Used only when the host did
+  // not supply a customCreateProjectDialog hook (openCreateProjectDialog
+  // returns null in that case).
+  const [createOpen, setCreateOpen] = useState(false)
+  const [createTemplates, setCreateTemplates] = useState<ProjectTemplateInfo[]>([])
+  const [createBaseDir, setCreateBaseDir] = useState<string>('')
 
   async function loadProjects() {
     setProjectList(await listProjects())
@@ -88,6 +101,72 @@ export default function Main() {
     handleOpen(project)
   }
 
+  async function handleCreate() {
+    // First try the host-supplied dialog (qdmp/etc.). It can return:
+    //   null              → user cancelled or no host hook → use built-in
+    //   { ready: Project} → host already created the project, just refresh
+    //   CreateProjectInput→ host collected inputs, we materialise the template
+    let result: Awaited<ReturnType<typeof openCreateProjectDialog>> = null
+    try {
+      result = await openCreateProjectDialog()
+    } catch {
+      result = null
+    }
+
+    if (result && 'ready' in result) {
+      // Host backend already created the project; just refresh and open.
+      await loadProjects()
+      handleOpen(result.ready as Project)
+      return
+    }
+
+    if (result) {
+      // CreateProjectInput shape — run our scaffold flow. Errors here are
+      // surfaced by the main process via a native dialog (mirroring the
+      // Add flow), so the renderer only needs to bail out quietly.
+      let project: Project
+      try {
+        project = await createProject(result)
+      } catch {
+        return
+      }
+      await loadProjects()
+      handleOpen(project)
+      return
+    }
+
+    // Built-in path: fetch the merged catalog and the suggested base dir
+    // in parallel, then open the local dialog.
+    const [tplsResult, defaultsResult] = await Promise.allSettled([
+      listTemplates(),
+      getCreateProjectDefaults(),
+    ])
+    setCreateTemplates(
+      tplsResult.status === 'fulfilled' ? tplsResult.value : [],
+    )
+    setCreateBaseDir(
+      defaultsResult.status === 'fulfilled' ? defaultsResult.value.baseDir : '',
+    )
+    setCreateOpen(true)
+  }
+
+  async function handleCreateSubmit(input: {
+    name: string
+    path: string
+    templateId: string
+  }) {
+    setCreateOpen(false)
+    let project: Project
+    try {
+      // Errors surfaced via native dialog from the main process; bail quietly.
+      project = await createProject(input)
+    } catch {
+      return
+    }
+    await loadProjects()
+    handleOpen(project)
+  }
+
   async function handleRemove(p: Project) {
     await removeProject(p.path)
     await loadProjects()
@@ -102,7 +181,22 @@ export default function Main() {
     return (
       <>
         <UpdateDialog />
-        <ProjectList projects={projectList} onAdd={handleAdd} onOpen={handleOpen} onRemove={handleRemove} thumbnails={thumbnails} />
+        <ProjectList
+          projects={projectList}
+          onAdd={handleAdd}
+          onCreate={handleCreate}
+          onOpen={handleOpen}
+          onRemove={handleRemove}
+          thumbnails={thumbnails}
+        />
+        <ProjectCreateDialog
+          open={createOpen}
+          templates={createTemplates}
+          defaultBaseDir={createBaseDir}
+          onSubmit={handleCreateSubmit}
+          onCancel={() => setCreateOpen(false)}
+          onBrowse={chooseProjectDirectory}
+        />
       </>
     )
   }

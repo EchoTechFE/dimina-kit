@@ -132,7 +132,21 @@ export const ProjectsChannel = {
   List: 'projects:list',
   Add: 'projects:add',
   Remove: 'projects:remove',
+  /** Phase 3: merged + sanitized template catalog for the create-project dialog. */
+  ListTemplates: 'projects:listTemplates',
+  /** Phase 3: host-supplied create-project dialog hook (returns input or null). */
+  OpenCreateDialog: 'projects:openCreateDialog',
+  /** Phase 3: server-side scaffold + register (delegates to create-project-service). */
+  Create: 'projects:create',
+  /** Default values used to pre-fill the create-project dialog (baseDir). */
+  GetCreateDefaults: 'projects:getCreateDefaults',
 } as const
+
+/** Renderer-facing payload for `projects:getCreateDefaults`. */
+export interface ProjectCreateDefaults {
+  /** Absolute directory used as the parent for new projects. */
+  baseDir: string
+}
 
 // ── Dialog ───────────────────────────────────────────────────────────────
 

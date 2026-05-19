@@ -3,17 +3,25 @@ import { Button } from '@/shared/components/ui/button'
 import { Input } from '@/shared/components/ui/input'
 import { Search } from 'lucide-react'
 import { ProjectCard } from './project-card'
+import { ProjectCreateCard } from './project-create-card'
 import type { Project } from '../types'
 
 export function ProjectList({
   projects,
   onAdd,
+  onCreate,
   onOpen,
   onRemove,
   thumbnails,
 }: {
   projects: Project[]
   onAdd: () => void
+  /**
+   * Invoked when the always-present "新建项目" card is clicked. The card is
+   * rendered as the first item of the grid and is shown even when the
+   * project list is empty.
+   */
+  onCreate?: () => void
   onOpen: (p: Project) => void
   onRemove: (p: Project) => void
   thumbnails?: Record<string, string | null>
@@ -28,6 +36,9 @@ export function ProjectList({
         (p.path || '').toLowerCase().includes(q)
     )
   }, [projects, search])
+
+  const handleCreate = onCreate ?? (() => {})
+  const noMatch = projects.length > 0 && filtered.length === 0
 
   return (
     <div className="flex flex-col h-screen bg-bg">
@@ -53,32 +64,31 @@ export function ProjectList({
             导入
           </Button>
         </div>
-        {projects.length > 0 ? (
-          filtered.length > 0 ? (
-            <div
-              className="grid gap-4"
-              style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))' }}
-            >
-              {filtered.map((p) => (
-                <ProjectCard
-                  key={p.path}
-                  project={p}
-                  onOpen={onOpen}
-                  onRemove={onRemove}
-                  thumbnail={thumbnails?.[p.path]}
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="flex flex-col items-center justify-center h-72 text-text-dim gap-3">
-              <span className="text-5xl opacity-40">🔍</span>
-              <span className="text-sm">未找到匹配的项目</span>
-            </div>
-          )
-        ) : (
+        {noMatch ? (
           <div className="flex flex-col items-center justify-center h-72 text-text-dim gap-3">
-            <span className="text-5xl opacity-40">📁</span>
-            <span className="text-sm">暂无项目，点击「导入」添加</span>
+            <span className="text-5xl opacity-40">🔍</span>
+            <span className="text-sm">未找到匹配的项目</span>
+          </div>
+        ) : (
+          <div
+            className="grid gap-4"
+            style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))' }}
+          >
+            {/*
+              The create card is always the first item (even when projects
+              is empty) so first-time users have an obvious next step.
+              Search doesn't filter the create card — it's not a project.
+            */}
+            <ProjectCreateCard onClick={handleCreate} />
+            {filtered.map((p) => (
+              <ProjectCard
+                key={p.path}
+                project={p}
+                onOpen={onOpen}
+                onRemove={onRemove}
+                thumbnail={thumbnails?.[p.path]}
+              />
+            ))}
           </div>
         )}
       </div>

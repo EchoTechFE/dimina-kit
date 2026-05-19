@@ -18,6 +18,13 @@ export interface WorkbenchSettings {
     watch: boolean
   }
   theme: ThemeSource
+  /**
+   * Parent directory used to pre-fill the "新建项目" dialog's target path.
+   * Updated whenever a project is successfully created. `null` until the
+   * first create; the dialog then falls back to a platform default
+   * (Documents).
+   */
+  lastCreateBaseDir: string | null
 }
 
 const DEFAULTS: WorkbenchSettings = {
@@ -33,6 +40,7 @@ const DEFAULTS: WorkbenchSettings = {
     watch: true,
   },
   theme: 'system',
+  lastCreateBaseDir: null,
 }
 
 function getSettingsFile(): string {
@@ -58,6 +66,10 @@ export function loadWorkbenchSettings(): WorkbenchSettings {
         watch: data.compile?.watch ?? DEFAULTS.compile.watch,
       },
       theme,
+      lastCreateBaseDir:
+        typeof data.lastCreateBaseDir === 'string'
+          ? data.lastCreateBaseDir
+          : DEFAULTS.lastCreateBaseDir,
     }
   } catch {
     return {

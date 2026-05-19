@@ -8,7 +8,7 @@ const mockProjects = [
 ]
 
 describe('ProjectList', () => {
-  it('renders empty state when no projects', () => {
+  it('renders the create card when no projects exist (Phase 4: empty-state text replaced by always-present create card)', () => {
     render(
       <ProjectList
         projects={[]}
@@ -17,7 +17,9 @@ describe('ProjectList', () => {
         onRemove={() => {}}
       />
     )
-    expect(screen.getByText('暂无项目，点击「导入」添加')).toBeInTheDocument()
+    // The legacy "暂无项目" empty state was removed in favor of the
+    // always-present "新建项目" card seeded at the head of the grid.
+    expect(screen.getByText('新建项目')).toBeInTheDocument()
   })
 
   it('renders project cards when projects exist', () => {

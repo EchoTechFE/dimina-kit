@@ -14,7 +14,7 @@ export function launch(config: WorkbenchConfig = {}): Promise<void> {
 }
 
 export function buildDefaultMenu(ctx: WorkbenchContext): void {
-  installAppMenu(ctx)
+  void installAppMenu(ctx)
 }
 
 export async function openSettingsWindow(ctx: Pick<WorkbenchContext, 'workbenchSettingsWindow' | 'mainWindow' | 'rendererDir' | 'notify' | 'windows'>): Promise<void> {

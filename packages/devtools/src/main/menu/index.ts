@@ -2,9 +2,9 @@ import { Menu, type MenuItemConstructorOptions } from 'electron'
 import type { WorkbenchContext } from '../services/workbench-context.js'
 import { openSettingsWindow } from '../app/launch.js'
 
-function buildRecentProjectsSubmenu(ctx: WorkbenchContext): MenuItemConstructorOptions[] {
+async function buildRecentProjectsSubmenu(ctx: WorkbenchContext): Promise<MenuItemConstructorOptions[]> {
   try {
-    const projects = ctx.workspace.listProjects()
+    const projects = await ctx.workspace.listProjects()
     const sorted = [...projects]
       .filter((p) => p.lastOpened)
       .sort((a, b) => new Date(b.lastOpened!).getTime() - new Date(a.lastOpened!).getTime())
@@ -25,7 +25,9 @@ function buildRecentProjectsSubmenu(ctx: WorkbenchContext): MenuItemConstructorO
   }
 }
 
-export function installAppMenu(ctx: WorkbenchContext): void {
+export async function installAppMenu(ctx: WorkbenchContext): Promise<void> {
+  const recentSubmenu = await buildRecentProjectsSubmenu(ctx)
+
   const template: MenuItemConstructorOptions[] = [
     {
       label: 'Dimina DevTools',
@@ -59,7 +61,7 @@ export function installAppMenu(ctx: WorkbenchContext): void {
         },
         {
           label: '打开最近项目',
-          submenu: buildRecentProjectsSubmenu(ctx),
+          submenu: recentSubmenu,
         },
       ],
     },

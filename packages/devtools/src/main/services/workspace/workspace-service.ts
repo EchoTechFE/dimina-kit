@@ -7,12 +7,15 @@ import type {
   ProjectPages,
   ProjectSettings,
 } from '../projects/project-repository.js'
+import type { ProjectsProvider } from '../projects/types.js'
+import { DEFAULT_COMPILE_CONFIG } from '../projects/types.js'
 import {
   clearSimulatorServicewechatReferer,
   setSimulatorServicewechatReferer,
 } from '../simulator/referer.js'
 import { loadWorkbenchSettings } from '../settings/index.js'
-import { saveThumbnail, loadThumbnail } from '../projects/thumbnail.js'
+// Thumbnail FS helpers are now consumed via LocalProjectsProvider; the
+// workspace-service only sees the ProjectsProvider hook surface.
 
 /**
  * Result returned to the renderer after `project:open` finishes.
@@ -40,11 +43,14 @@ export interface OpenProjectResult {
  */
 export interface WorkspaceService {
   // ── project list ────────────────────────────────────────────────────────
-  listProjects(): Project[]
-  addProject(dirPath: string): Project
-  removeProject(dirPath: string): void
-  hasProject(dirPath: string): boolean
-  validateProjectDir(dirPath: string): string | null
+  // Methods that flow through the host-injected ProjectsProvider are async,
+  // so a remote provider (e.g. qdmp's cloud workspace) works the same as the
+  // local FS-backed default. Callers must await.
+  listProjects(): Promise<Project[]>
+  addProject(dirPath: string): Promise<Project>
+  removeProject(dirPath: string): Promise<void>
+  hasProject(dirPath: string): Promise<boolean>
+  validateProjectDir(dirPath: string): Promise<string | null>
 
   // ── session lifecycle ───────────────────────────────────────────────────
   openProject(projectPath: string): Promise<OpenProjectResult>
@@ -56,13 +62,16 @@ export interface WorkspaceService {
   hasActiveSession(): boolean
 
   // ── thumbnails ──────────────────────────────────────────────────────────
+  // Both methods flow through the host-injected ProjectsProvider too; a
+  // remote host can store/serve screenshots from its own backend. Default
+  // (LocalProjectsProvider) round-trips through `<userData>/thumbnails/`.
   captureThumbnail(projectPath: string): Promise<string | null>
-  getThumbnail(projectPath: string): string | null
+  getThumbnail(projectPath: string): Promise<string | null>
 
   // ── per-project data ────────────────────────────────────────────────────
   getProjectPages(projectPath: string): ProjectPages
-  getCompileConfig(projectPath: string): CompileConfig
-  saveCompileConfig(projectPath: string, config: CompileConfig): void
+  getCompileConfig(projectPath: string): Promise<CompileConfig>
+  saveCompileConfig(projectPath: string, config: CompileConfig): Promise<void>
   getProjectSettings(projectPath: string): ProjectSettings
   updateProjectSettings(
     projectPath: string,
@@ -113,12 +122,39 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
     }
   }
 
-  return {
+  // Delegate to the host-injected (or default) ProjectsProvider on the
+  // context. When the host omits an optional method, we apply a safe
+  // documented default — never silently fall back to `repo.*`, because a
+  // remote provider's project paths are not on the local filesystem.
+  //
+  // The `??` here is a back-compat path for hand-rolled WorkbenchContext
+  // values (used in a couple of legacy tests). createWorkbenchContext
+  // always installs LocalProjectsProvider, so production never enters this
+  // branch.
+  const provider: ProjectsProvider = ctx.projectsProvider ?? {
     listProjects: () => repo.listProjects(),
-    addProject: (dirPath) => repo.addProject(dirPath),
-    removeProject: (dirPath) => repo.removeProject(dirPath),
-    hasProject: (dirPath) => repo.hasProject(dirPath),
-    validateProjectDir: (dirPath) => repo.validateProjectDir(dirPath),
+    addProject: (p) => repo.addProject(p),
+    removeProject: (p) => repo.removeProject(p),
+    validateProjectDir: (p) => repo.validateProjectDir(p),
+    updateLastOpened: (p) => repo.updateLastOpened(p),
+    getCompileConfig: (p) => repo.getCompileConfig(p),
+    saveCompileConfig: (p, c) => repo.saveCompileConfig(p, c),
+  }
+
+  return {
+    listProjects: async () => provider.listProjects(),
+    addProject: async (dirPath) => provider.addProject(dirPath),
+    removeProject: async (dirPath) => {
+      await provider.removeProject(dirPath)
+    },
+    hasProject: async (dirPath) => {
+      const projects = await provider.listProjects()
+      return projects.some((p) => p.path === dirPath)
+    },
+    validateProjectDir: async (dirPath) =>
+      provider.validateProjectDir
+        ? provider.validateProjectDir(dirPath)
+        : null,
 
     async openProject(projectPath) {
       clearSimulatorServicewechatReferer()
@@ -132,7 +168,9 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
       // `fetch(…).then(r=>r.text()).then(JSON.parse)` pipeline dies on the
       // dev server's HTML SPA fallback with
       // `SyntaxError: Unexpected token '<', "<!doctype "…`.
-      const dirError = repo.validateProjectDir(projectPath)
+      const dirError = provider.validateProjectDir
+        ? await provider.validateProjectDir(projectPath)
+        : null
       if (dirError) {
         sendStatus('error', dirError)
         return { success: false, error: dirError }
@@ -163,6 +201,7 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
       bestEffort('updateLastOpened', () => {
         repo.updateLastOpened(projectPath)
         ctx.refreshMenu?.()
+        if (provider.updateLastOpened) provider.updateLastOpened(projectPath)
       })
       bestEffort('sendStatus', () => sendStatus('ready', '编译完成'))
       bestEffort('applyReferer', () => applyRefererFromSession(session))
@@ -192,20 +231,42 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
       if (!wc || wc.isDestroyed()) return null
       try {
         const image = await wc.capturePage()
-        return saveThumbnail(projectPath, image)
+        const dataUrl = `data:image/png;base64,${image.toPNG().toString('base64')}`
+        if (provider.saveThumbnail) {
+          await provider.saveThumbnail(projectPath, dataUrl)
+        }
+        // Always hand the renderer back the freshly-captured frame so the
+        // UI updates immediately even if the host's saveThumbnail is
+        // async or stores out-of-band.
+        return dataUrl
       } catch {
         return null
       }
     },
 
-    getThumbnail(projectPath) {
-      return loadThumbnail(projectPath)
+    async getThumbnail(projectPath) {
+      if (provider.getThumbnail) {
+        return (await provider.getThumbnail(projectPath)) ?? null
+      }
+      return null
     },
 
+    // `getProjectPages` reads the project's own `app.json` from disk and is
+    // independent of the project registry — it stays on the repo helper.
     getProjectPages: (projectPath) => repo.getProjectPages(projectPath),
-    getCompileConfig: (projectPath) => repo.getCompileConfig(projectPath),
-    saveCompileConfig: (projectPath, config) =>
-      repo.saveCompileConfig(projectPath, config),
+    getCompileConfig: async (projectPath) =>
+      (provider.getCompileConfig
+        ? await provider.getCompileConfig(projectPath)
+        : DEFAULT_COMPILE_CONFIG) as CompileConfig,
+    saveCompileConfig: async (projectPath, config) => {
+      if (provider.saveCompileConfig) {
+        await provider.saveCompileConfig(projectPath, config)
+      }
+      // No persistence when the host opts out; the renderer's edits then
+      // do not survive a reload, matching the documented contract.
+    },
+    // Per-project settings (uploadWithSourceMap etc.) live in the project's
+    // own `project.config.json`, not the registry — keep direct repo calls.
     getProjectSettings: (projectPath) => repo.getProjectSettings(projectPath),
     updateProjectSettings: (projectPath, patch) =>
       repo.updateProjectSettings(projectPath, patch),

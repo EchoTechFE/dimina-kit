@@ -14,6 +14,14 @@ import {
   createWorkspaceService,
   type WorkspaceService,
 } from './workspace/workspace-service.js'
+import { createLocalProjectsProvider } from './projects/local-provider.js'
+import { resolveTemplates, sanitizeTemplates } from './projects/templates.js'
+import { BUILTIN_TEMPLATES } from './projects/builtin-templates.js'
+import type {
+  CreateProjectInput,
+  ProjectsProvider,
+  ProjectTemplate,
+} from './projects/types.js'
 
 /**
  * Shared mutable state for the workbench application.
@@ -60,6 +68,33 @@ export interface WorkbenchContext {
   workspace: WorkspaceService
 
   /**
+   * Pluggable backend for the project list. Defaults to a LocalProjectsProvider
+   * that persists to `<userData>/dimina-projects.json`. Hosts can inject a
+   * custom implementation (e.g. read from a remote workspace).
+   */
+  projectsProvider: ProjectsProvider
+
+  /**
+   * Merged template catalog used by the create-project flow. Combines the
+   * built-in templates with `WorkbenchAppConfig.projectTemplates` according
+   * to `WorkbenchAppConfig.builtinTemplates`. Keeps any `generate`
+   * functions intact — for IPC delivery, `sanitizeTemplates` is applied at
+   * the IPC boundary.
+   */
+  projectTemplates: ProjectTemplate[]
+
+  /**
+   * Optional host hook for the "新建项目" dialog. When present, the
+   * `projects:openCreateDialog` IPC returns whatever this hook resolves to;
+   * when absent, the IPC returns null and the renderer shows the built-in
+   * dialog.
+   */
+  customCreateProjectDialog?: (ctx: {
+    parentWindow: BrowserWindow
+    templates: ProjectTemplate[]
+  }) => Promise<CreateProjectInput | null>
+
+  /**
    * Trust predicate consulted by `IpcRegistry` for every incoming IPC.
    * Resolves the currently-trusted senders (main renderer + overlays)
    * lazily so it stays correct as windows/views come and go.
@@ -83,6 +118,14 @@ export interface CreateContextOptions {
   appName?: string
   toolbarActions?: WorkbenchContext['toolbarActions']
   brandingProvider?: WorkbenchContext['brandingProvider']
+  /** Host-supplied project list backend. Defaults to LocalProjectsProvider. */
+  projectsProvider?: ProjectsProvider
+  /** Templates injected by the host; same-id overrides a built-in. */
+  projectTemplates?: ProjectTemplate[]
+  /** Built-in template policy (default 'all'). */
+  builtinTemplates?: 'all' | 'none' | readonly string[]
+  /** Host-supplied "新建项目" dialog hook. */
+  customCreateProjectDialog?: WorkbenchContext['customCreateProjectDialog']
 }
 
 export function hasBuiltinPanel(ctx: Pick<WorkbenchContext, 'panels'>, panelId: string): boolean {
@@ -116,7 +159,18 @@ export function createWorkbenchContext(opts: CreateContextOptions): WorkbenchCon
   ctx.windows = createWindowService(ctx.mainWindow)
   ctx.views = createViewManager(ctx)
   ctx.notify = createRendererNotifier(ctx)
+  ctx.projectsProvider = opts.projectsProvider ?? createLocalProjectsProvider()
+  ctx.projectTemplates = resolveTemplates(
+    BUILTIN_TEMPLATES,
+    opts.projectTemplates ?? [],
+    opts.builtinTemplates ?? 'all',
+  )
+  ctx.customCreateProjectDialog = opts.customCreateProjectDialog
   ctx.workspace = createWorkspaceService(ctx)
   ctx.senderPolicy = createWorkbenchSenderPolicy(ctx)
   return ctx
 }
+
+// Re-export at this stable module path so callers don't have to know about
+// the projects/ subtree layout.
+export { sanitizeTemplates }

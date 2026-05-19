@@ -284,6 +284,126 @@ src/
 
 ---
 
+## Embedding & Extending the Project Panel
+
+宿主（如 qdmp）通过 `createWorkbenchApp({...})` 嵌入 devtools 时，可对项目面板做三个正交扩展：
+
+| 扩展点 | 用途 |
+| --- | --- |
+| `projectsProvider` | 接管项目列表存储 —— 替换默认 `<userData>/dimina-projects.json`，对接 qdmp 后台 / IDE workspace / 远端工程库 |
+| `projectTemplates` + `builtinTemplates` | 注入/覆盖/裁剪"新建项目"模板列表（同 id 覆盖内置；`builtinTemplates` 控制内置策略） |
+| `customCreateProjectDialog` | 用宿主自家页面替换内置"新建项目"对话框（main 进程 hook，可 `new BrowserWindow` 加载任意 URL，通过 IPC/postMessage 回传结果） |
+
+### 何时需要哪个扩展点
+
+| 场景 | 需要的扩展点 |
+| --- | --- |
+| 项目列表来自 qdmp 后台 / 团队工程库 | `projectsProvider` |
+| 仅替换可选模板（e.g. 只提供 taro / qdmp 自家脚手架） | `projectTemplates` + `builtinTemplates` |
+| 创建项目流程要走宿主自己的 wizard / 登录态 | `customCreateProjectDialog` |
+
+### 最小示例
+
+```typescript
+import { createWorkbenchApp } from '@dimina-kit/devtools/app'
+import type { ProjectsProvider, ProjectTemplate } from '@dimina-kit/devtools/projects-provider'
+import { BrowserWindow } from 'electron'
+
+const provider: ProjectsProvider = {
+  async listProjects() {
+    return await qdmp.api.listProjects()
+  },
+  async validateProjectDir(dirPath) {
+    return (await qdmp.api.isMiniApp(dirPath)) ? null : '不是合法的小程序工程'
+  },
+  async addProject(dirPath) {
+    return await qdmp.api.addProject(dirPath)
+  },
+  async removeProject(dirPath) {
+    await qdmp.api.removeProject(dirPath)
+  },
+  async updateLastOpened(dirPath) {
+    await qdmp.api.touchLastOpened(dirPath)
+  },
+  async getCompileConfig(dirPath) {
+    return await qdmp.api.getCompileConfig(dirPath)
+  },
+  async saveCompileConfig(dirPath, cfg) {
+    await qdmp.api.saveCompileConfig(dirPath, cfg)
+  },
+  // 缩略图走云端存储——dataUrl 形如 'data:image/png;base64,...'
+  async saveThumbnail(dirPath, imageDataUrl) {
+    await qdmp.api.uploadThumbnail(dirPath, imageDataUrl)
+  },
+  async getThumbnail(dirPath) {
+    return await qdmp.api.fetchThumbnail(dirPath)
+  },
+}
+
+const qdmpBlank: ProjectTemplate = {
+  id: 'blank', // 同 id 覆盖内置 blank
+  name: 'qdmp 空白工程',
+  description: '由 qdmp 维护的官方空白模板',
+  source: { type: 'directory', path: '/abs/path/to/template' },
+}
+
+createWorkbenchApp({
+  projectsProvider: provider,
+  projectTemplates: [qdmpBlank],
+  builtinTemplates: ['taro-todo'], // 只保留 taro-todo，干掉默认 blank
+  customCreateProjectDialog: async ({ parentWindow }) => {
+    const win = new BrowserWindow({ parent: parentWindow, modal: true, width: 720, height: 520 })
+    await win.loadURL('https://qdmp.example.com/devtools/new-project')
+    return await new Promise((resolve) => {
+      win.webContents.ipc.once('qdmp:create-project:done', (_e, payload) => {
+        win.close()
+        // payload 三选一（CustomCreateProjectDialogResult）：
+        //   null                  → 用户取消
+        //   CreateProjectInput    → 让 devtools 在本地物化模板并注册到 provider
+        //   { ready: Project }    → 宿主后端已经创建好，devtools 直接刷新列表
+        resolve(payload ?? null)
+      })
+      win.on('closed', () => resolve(null))
+    })
+  },
+}).start()
+```
+
+### `customCreateProjectDialog` 返回值
+
+`hook` 返回 `CustomCreateProjectDialogResult`，三种情形分别对应不同后续动作：
+
+| 返回 | 行为 |
+| --- | --- |
+| `null` | 用户取消，无副作用 |
+| `CreateProjectInput`（`{ name, path, templateId?, extra? }`） | devtools 在本地拷贝/生成模板 → 改写 `project.config.json` → `provider.addProject(path)`；适合"只想换 UI 但物化由 devtools 兜底" |
+| `{ ready: Project }` | devtools 跳过物化，只刷新列表并打开该项目；适合宿主后端已经远端创建好项目，本地完全无需落盘 |
+
+物化失败（路径已存在/模板缺失/`provider.addProject` reject）会经 native dialog 弹出错误，再 reject 给渲染层；宿主端无需自己 toast。
+
+### 内置模板
+
+devtools 自带两个 `source`-style 模板，位于 `packages/devtools/templates/`：
+
+- `blank` — 最小空白小程序骨架（pages/index + app.js/json/wxss + project.config.json，约 8 个文件）
+- `taro-todo` — 复制自 `dimina/fe/example/taro-todo`，作为 Taro 编译产物的端到端演示工程
+
+`builtinTemplates: 'none'` 排除全部内置；`builtinTemplates: ['taro-todo']` 仅保留指定 id；`projectTemplates` 同 id 注入会覆盖（例如上文 `qdmpBlank` 覆盖了内置 `blank`）。
+
+### Provider 部分实现 / fallback 行为
+
+`ProjectsProvider` 的多数方法是可选的；当宿主只实现 `listProjects` / `addProject` / `removeProject` 时：
+
+- `validateProjectDir` 缺省 → 返回 `null`（不校验）
+- `updateLastOpened` 缺省 → 静默 no-op，"最近"排序退化为 `listProjects` 返回顺序
+- `getCompileConfig` 缺省 → 返回 `DEFAULT_COMPILE_CONFIG`（`{ startPage: '', scene: 1001, queryParams: [] }`）
+- `saveCompileConfig` 缺省 → 静默 no-op，编译配置面板的编辑不会持久化
+- `saveThumbnail` / `getThumbnail` 缺省 → save 静默 no-op，get 返回 `null`；项目卡缩略图不显示。实现这两个方法可让远端项目用云端缩略图（详见示例）
+
+> 完整契约、参数语义和默认值见 `src/main/services/projects/types.ts` 的 JSDoc，那是 source of truth。
+
+---
+
 ## CompilationAdapter
 
 实现此接口接入自定义构建流程：

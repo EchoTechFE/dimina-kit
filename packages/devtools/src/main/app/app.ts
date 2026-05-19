@@ -120,6 +120,20 @@ function createContext(config: WorkbenchAppConfig, mainWindow: BrowserWindow, re
     apiNamespaces: config.apiNamespaces,
     brandingProvider: config.brandingProvider,
     toolbarActions: config.toolbarActions,
+    // The host-supplied ProjectsProvider / template types in `shared/types`
+    // are structurally compatible with the main-process equivalents —
+    // these casts are safe; we re-narrow at the workspace-service /
+    // create-project-service boundary.
+    projectsProvider: config.projectsProvider as
+      | import('../services/projects/types.js').ProjectsProvider
+      | undefined,
+    projectTemplates: config.projectTemplates as
+      | import('../services/projects/types.js').ProjectTemplate[]
+      | undefined,
+    builtinTemplates: config.builtinTemplates,
+    customCreateProjectDialog: config.customCreateProjectDialog as
+      | import('../services/workbench-context.js').WorkbenchContext['customCreateProjectDialog']
+      | undefined,
   })
 }
 
@@ -135,7 +149,7 @@ function installMenu(config: WorkbenchAppConfig, mainWindow: BrowserWindow, cont
   if (config.menuBuilder) {
     config.menuBuilder(mainWindow, context)
   } else {
-    installAppMenu(context)
+    void installAppMenu(context)
   }
   context.refreshMenu = () => installMenu(config, mainWindow, context)
 }
