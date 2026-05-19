@@ -5,7 +5,9 @@ import { config } from "@dimina-kit/eslint-config/react-internal";
 export default [
   ...config,
   {
-    ignores: ["container/**", "docs/**"],
+    // templates/ are scaffolds copied verbatim into user projects (with wx/App/Page
+    // globals + Taro-compiled minified bundles); they aren't part of our codebase.
+    ignores: ["container/**", "docs/**", "templates/**"],
   },
   {
     files: [

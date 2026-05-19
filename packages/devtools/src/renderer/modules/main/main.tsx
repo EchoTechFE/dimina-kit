@@ -89,7 +89,7 @@ export default function Main() {
     //   null              → user cancelled or no host hook → use built-in
     //   { ready: Project} → host already created the project, just refresh
     //   CreateProjectInput→ host collected inputs, we materialise the template
-    let result: Awaited<ReturnType<typeof openCreateProjectDialog>> = null
+    let result: Awaited<ReturnType<typeof openCreateProjectDialog>>
     try {
       result = await openCreateProjectDialog()
     } catch {
