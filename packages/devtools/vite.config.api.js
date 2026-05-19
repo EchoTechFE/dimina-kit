@@ -1,5 +1,8 @@
 /**
- * Standalone vite config for building src/runtime.js as an ES module library.
+ * Standalone vite config for building ../container-runtime.js as an ES module
+ * library. The entry file lives in our repo (not in dimina/) so the submodule
+ * stays at plain upstream — vite resolves the entry's `@/...` imports through
+ * the alias defined below, which points into the dimina container src tree.
  *
  * Produces dist/assets/container-api.js.
  *
@@ -7,8 +10,11 @@
  * upstream vite.config.mjs. This second build appends the browser API bundle into
  * the same dist/ directory (emptyOutDir: false).
  */
-import { resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
 
 // This config is invoked with cwd = container source root
 const containerRoot = process.cwd()
@@ -76,7 +82,7 @@ export default defineConfig({
 			format: { comments: false },
 		},
 		lib: {
-			entry: resolve(containerRoot, 'src/runtime.js'),
+			entry: resolve(__dirname, 'container-runtime.js'),
 			formats: ['es'],
 			fileName: () => 'assets/container-api.js',
 		},

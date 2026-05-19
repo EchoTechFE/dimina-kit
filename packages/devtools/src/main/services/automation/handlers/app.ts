@@ -5,54 +5,57 @@ export const appHandlers: Record<string, Handler> = {}
 
 // -- App domain --
 
-appHandlers['App.getCurrentPage'] = async (ctx) => {
-  const hash = await evalInSim<string>(ctx, 'location.hash')
-  const clean = hash.replace(/^#/, '')
-  const qIdx = clean.indexOf('?')
-  const pathPart = qIdx >= 0 ? clean.substring(0, qIdx) : clean
-  const queryPart = qIdx >= 0 ? clean.substring(qIdx + 1) : ''
-
-  // New format: #appid|page1|page2 — last segment is current page
-  let pagePath: string
-  if (pathPart.includes('|')) {
-    const parts = pathPart.split('|')
-    pagePath = parts[parts.length - 1] ?? ''
-  } else {
-    // Legacy format: #appid/pagePath
-    const slashIdx = pathPart.indexOf('/')
-    pagePath = slashIdx >= 0 ? pathPart.substring(slashIdx + 1) : pathPart
-  }
-
+// HashRouter (dimina/fe/packages/container/src/utils/hashRouter.js) encodes the
+// page stack as `#{appId}|{page1}?{q1}|{page2}?{q2}|…` — each segment owns its
+// own query. Splitting on `?` first would collapse the stack at any earlier
+// segment that carries a query, so we split on `|` and parse per-segment.
+function parseSegment(seg: string): { path: string; query: Record<string, string> } {
+  const qIdx = seg.indexOf('?')
+  const path = qIdx >= 0 ? seg.substring(0, qIdx) : seg
   const query: Record<string, string> = {}
-  if (queryPart) {
-    for (const pair of queryPart.split('&')) {
+  if (qIdx >= 0) {
+    for (const pair of seg.substring(qIdx + 1).split('&')) {
       const [k, v] = pair.split('=')
       if (k) query[k] = decodeURIComponent(v || '')
     }
   }
+  return { path, query }
+}
+
+appHandlers['App.getCurrentPage'] = async (ctx) => {
+  const hash = await evalInSim<string>(ctx, 'location.hash')
+  const clean = hash.replace(/^#/, '')
+
+  // New format: #appid|page1|page2 — last segment is current page.
+  // Legacy format: #appid/pagePath — strip the appid prefix.
+  const lastSeg = clean.includes('|')
+    ? clean.split('|').pop() ?? ''
+    : clean.replace(/^[^/]*\//, '')
+  const { path, query } = parseSegment(lastSeg)
 
   const iframeCount = await evalInSim<number>(ctx, `document.querySelectorAll('iframe').length`)
-  return { pageId: iframeCount, path: pagePath, query }
+  return { pageId: iframeCount, path, query }
 }
 
 appHandlers['App.getPageStack'] = async (ctx) => {
   const hash = await evalInSim<string>(ctx, 'location.hash')
-
-  const clean = hash.replace(/^#/, '').replace(/\?.*$/, '')
+  const clean = hash.replace(/^#/, '')
 
   const pageStack: Array<{ pageId: number; path: string; query: Record<string, string> }> = []
   if (clean.includes('|')) {
     // New format: #appid|page1|page2 — segments after appid are pages
     const parts = clean.split('|')
     for (let i = 1; i < parts.length; i++) {
-      pageStack.push({ pageId: i, path: parts[i] ?? '', query: {} })
+      const { path, query } = parseSegment(parts[i] ?? '')
+      pageStack.push({ pageId: i, path, query })
     }
   } else {
     // Legacy format: #appid/pagePath — single page
-    const slashIdx = clean.indexOf('/')
-    const currentPath = slashIdx >= 0 ? clean.substring(slashIdx + 1) : clean
+    const seg = parseSegment(clean)
+    const slashIdx = seg.path.indexOf('/')
+    const currentPath = slashIdx >= 0 ? seg.path.substring(slashIdx + 1) : seg.path
     if (currentPath) {
-      pageStack.push({ pageId: 1, path: currentPath, query: {} })
+      pageStack.push({ pageId: 1, path: currentPath, query: seg.query })
     }
   }
   return { pageStack }
