@@ -1,62 +1,38 @@
 import type { Handler } from '../shared.js'
 import { evalInSim, getSimulator, inIframe } from '../exec.js'
+import { parseLocationRoute } from '../../../../shared/simulator-route.js'
 
 export const appHandlers: Record<string, Handler> = {}
 
 // -- App domain --
 
-// HashRouter (dimina/fe/packages/container/src/utils/hashRouter.js) encodes the
-// page stack as `#{appId}|{page1}?{q1}|{page2}?{q2}|…` — each segment owns its
-// own query. Splitting on `?` first would collapse the stack at any earlier
-// segment that carries a query, so we split on `|` and parse per-segment.
-function parseSegment(seg: string): { path: string; query: Record<string, string> } {
-  const qIdx = seg.indexOf('?')
-  const path = qIdx >= 0 ? seg.substring(0, qIdx) : seg
-  const query: Record<string, string> = {}
-  if (qIdx >= 0) {
-    for (const pair of seg.substring(qIdx + 1).split('&')) {
-      const [k, v] = pair.split('=')
-      if (k) query[k] = decodeURIComponent(v || '')
-    }
-  }
-  return { path, query }
+async function readRoute(ctx: Parameters<Handler>[0]) {
+  const { search, hash } = await evalInSim<{ search: string; hash: string }>(
+    ctx,
+    `({ search: location.search, hash: location.hash })`,
+  )
+  return parseLocationRoute(search, hash)
 }
 
 appHandlers['App.getCurrentPage'] = async (ctx) => {
-  const hash = await evalInSim<string>(ctx, 'location.hash')
-  const clean = hash.replace(/^#/, '')
-
-  // New format: #appid|page1|page2 — last segment is current page.
-  // Legacy format: #appid/pagePath — strip the appid prefix.
-  const lastSeg = clean.includes('|')
-    ? clean.split('|').pop() ?? ''
-    : clean.replace(/^[^/]*\//, '')
-  const { path, query } = parseSegment(lastSeg)
-
+  const route = await readRoute(ctx)
   const iframeCount = await evalInSim<number>(ctx, `document.querySelectorAll('iframe').length`)
-  return { pageId: iframeCount, path, query }
+  return {
+    pageId: iframeCount,
+    path: route?.current.pagePath ?? '',
+    query: route?.current.query ?? {},
+  }
 }
 
 appHandlers['App.getPageStack'] = async (ctx) => {
-  const hash = await evalInSim<string>(ctx, 'location.hash')
-  const clean = hash.replace(/^#/, '')
-
+  const route = await readRoute(ctx)
   const pageStack: Array<{ pageId: number; path: string; query: Record<string, string> }> = []
-  if (clean.includes('|')) {
-    // New format: #appid|page1|page2 — segments after appid are pages
-    const parts = clean.split('|')
-    for (let i = 1; i < parts.length; i++) {
-      const { path, query } = parseSegment(parts[i] ?? '')
-      pageStack.push({ pageId: i, path, query })
-    }
-  } else {
-    // Legacy format: #appid/pagePath — single page
-    const seg = parseSegment(clean)
-    const slashIdx = seg.path.indexOf('/')
-    const currentPath = slashIdx >= 0 ? seg.path.substring(slashIdx + 1) : seg.path
-    if (currentPath) {
-      pageStack.push({ pageId: 1, path: currentPath, query: seg.query })
-    }
+  if (!route) return { pageStack }
+
+  // Mirrors upstream HashRouter.parseSearch: `[entry]` or `[entry, current]`.
+  pageStack.push({ pageId: 1, path: route.entry.pagePath, query: route.entry.query })
+  if (route.current.pagePath !== route.entry.pagePath) {
+    pageStack.push({ pageId: 2, path: route.current.pagePath, query: route.current.query })
   }
   return { pageStack }
 }
@@ -79,14 +55,27 @@ appHandlers['App.callWxMethod'] = async (ctx, params) => {
       `)).catch(() => false)
 
       if (!clicked) {
-        // Fallback: change hash
-        const hash = await evalInSim<string>(ctx, 'location.hash')
-        const appId = hash.replace(/^#/, '').split('/')[0]
-        if (method === 'reLaunch' || method === 'redirectTo') {
-          await evalInSim(ctx, `location.href = location.pathname + '#${appId}${cleanUrl}'`)
-        } else {
-          await evalInSim(ctx, `location.hash = '#${appId}${cleanUrl}'`)
-        }
+        // Fallback: drive navigation via wx.* on the rendered page iframe.
+        // We used to mutate location.hash directly, but upstream's new query
+        // router doesn't react to hashchange and ignores legacy hash writes
+        // once it has rewritten the URL via syncStack. The active page's
+        // iframe still exposes wx.* with the live dimina runtime bindings.
+        const apiName = JSON.stringify(method)
+        const urlJson = JSON.stringify(cleanUrl)
+        await evalInSim(
+          ctx,
+          `(() => {
+            const iframes = Array.from(document.querySelectorAll('iframe'))
+            for (const f of iframes) {
+              try {
+                if (f.contentWindow && f.contentWindow.wx && typeof f.contentWindow.wx[${apiName}] === 'function') {
+                  f.contentWindow.wx[${apiName}]({ url: ${urlJson} })
+                  return
+                }
+              } catch (_) {}
+            }
+          })()`,
+        )
       }
       // Wait for navigation
       await new Promise((r) => setTimeout(r, 2000))

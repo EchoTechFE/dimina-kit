@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { Application, MiniApp } from 'container-api'
 import { directRequest } from './direct-request'
 import { simulatorApis } from './simulator-api'
+import { parseLocationRoute } from '../shared/simulator-route'
 
 declare global {
   interface Window {
@@ -82,26 +83,16 @@ function SimulatorApp() {
     application.parent = { root: el, updateDeviceBarColor() {} }
     el.appendChild(application.el)
 
-    // Hash format produced by buildSimulatorUrl: #{appId}|{pagePath}?{query}
-    const rawHash = window.location.hash.slice(1)
-    const pipeIdx = rawHash.indexOf('|')
-    if (pipeIdx === -1) return
-
-    const appId = rawHash.slice(0, pipeIdx)
-    const rest = rawHash.slice(pipeIdx + 1)
-    const [pagePath, queryStr] = rest.split('?')
-    const query: Record<string, string> = {}
-    if (queryStr) {
-      for (const part of queryStr.split('&')) {
-        const eqIdx = part.indexOf('=')
-        if (eqIdx === -1) continue
-        query[decodeURIComponent(part.slice(0, eqIdx))] = decodeURIComponent(part.slice(eqIdx + 1))
-      }
-    }
+    // URL format produced by buildSimulatorUrl + maintained by upstream
+    // HashRouter.syncStack: ?appId={id}&entry={path?perPageQuery}&page={...}.
+    // parseLocationRoute also handles legacy hash formats for safety.
+    const route = parseLocationRoute(window.location.search, window.location.hash)
+    if (!route) return
+    const { appId } = route
+    const { pagePath, query } = route.entry
     const scene = Number(query['scene']) || 1001
-    // `scene` is a launch param, not a page param. Keeping it in `query`
-    // would round-trip through HashRouter.syncStack into the entry-page
-    // segment of location.hash.
+    // `scene` is a launch param, not a page param. Keeping it would
+    // round-trip through HashRouter.syncStack into the entry-page segment.
     delete query['scene']
 
     // Upstream AppManager.openApp pulls (name, logo) from a static getMiniAppInfo

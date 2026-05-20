@@ -8,8 +8,8 @@ import { attachSimulator, captureThumbnail } from '@/shared/api'
 import type { AppInfo } from '@/shared/api'
 import {
   buildSimulatorUrl,
-  extractCurrentPage,
-} from '@/shared/lib/simulator-url'
+  getCurrentPagePath,
+} from '../../../../../../shared/simulator-route'
 import type { CompileConfig } from '@/shared/types'
 import {
   ATTACH_RETRY_INTERVAL_MS,
@@ -54,11 +54,11 @@ export function useSimulator(props: UseSimulatorProps): SimulatorHookResult {
   }, [appInfo, compileConfig, port])
 
   const [currentPage, setCurrentPage] = useState(() =>
-    extractCurrentPage(simulatorUrl),
+    getCurrentPagePath(simulatorUrl),
   )
 
   useEffect(() => {
-    setCurrentPage(extractCurrentPage(simulatorUrl))
+    setCurrentPage(getCurrentPagePath(simulatorUrl))
   }, [simulatorUrl])
 
   useEffect(() => {
@@ -80,7 +80,7 @@ export function useSimulator(props: UseSimulatorProps): SimulatorHookResult {
       if (!currentUrl) {
         try { currentUrl = webview.getURL?.() } catch { /* webview not ready */ }
       }
-      setCurrentPage(extractCurrentPage(currentUrl ?? simulatorUrl))
+      setCurrentPage(getCurrentPagePath(currentUrl ?? simulatorUrl))
     }
 
     const tryAttach = () => {

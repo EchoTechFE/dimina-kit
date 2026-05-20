@@ -189,10 +189,14 @@ async function main() {
     if (r !== 'object') throw new Error('typeof wx: ' + r)
   })
 
-  await assert('读取 location.hash', async () => {
-    const r = await miniProgram.evaluate(() => location.hash)
-    if (!r.includes('console-test')) throw new Error('hash: ' + r)
-    console.log(`     → ${r}`)
+  await assert('读取 location route', async () => {
+    // Upstream dimina (>= 68310fe) syncs the page route into the query
+    // string (?appId=…&entry=…&page=…); older builds put it in the hash.
+    // Accept either so this assertion is robust to upstream bumps.
+    const r = await miniProgram.evaluate(() => ({ search: location.search, hash: location.hash }))
+    const combined = `${r.search} ${r.hash}`
+    if (!combined.includes('console-test')) throw new Error('route: ' + combined)
+    console.log(`     → ${combined.trim()}`)
   })
 
   // ═══════════════════════════════════════════════════

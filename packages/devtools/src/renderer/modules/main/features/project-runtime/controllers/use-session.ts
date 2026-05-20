@@ -16,8 +16,8 @@ import {
 import type { AppInfo } from '@/shared/api'
 import {
   buildSimulatorUrl,
-  collapseHashToTopPage,
-} from '@/shared/lib/simulator-url'
+  collapseRouteToTopPage,
+} from '../../../../../../shared/simulator-route'
 import type { CompileConfig } from '@/shared/types'
 import { DEFAULT_SCENE } from '../../../../../../shared/constants'
 import { asWebview } from './webview-helpers'
@@ -123,7 +123,7 @@ export function useSession(props: UseSessionProps): SessionHookResult {
         // pageFrame request a merged bundle that doesn't exist and render
         // blank. Trimming preserves the current page the user is looking at.
         const currentUrl = webview.getURL?.() ?? ''
-        const collapsed = collapseHashToTopPage(currentUrl)
+        const collapsed = collapseRouteToTopPage(currentUrl)
         if (collapsed !== currentUrl) {
           webview.loadURL?.(collapsed)
           // loadURL on a hash-only change is in-page navigation; force a
