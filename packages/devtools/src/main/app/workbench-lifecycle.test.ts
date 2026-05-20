@@ -235,7 +235,10 @@ vi.mock('electron', () => {
     createFromPath: vi.fn(() => ({ isEmpty: () => true })),
   }
 
+  // `...makeEmitter()` so `syncWindowThemeBackground` can attach a
+  // `nativeTheme.on('updated', …)` listener during window creation.
   const nativeTheme = {
+    ...stubs.makeEmitter(),
     themeSource: 'system',
   }
 

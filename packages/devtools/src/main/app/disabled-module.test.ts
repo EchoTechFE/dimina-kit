@@ -211,7 +211,9 @@ vi.mock('electron', () => {
     createFromPath: vi.fn(() => ({ isEmpty: () => true })),
   }
 
-  const nativeTheme = { themeSource: 'system' }
+  // `...makeEmitter()` so `syncWindowThemeBackground` can attach a
+  // `nativeTheme.on('updated', …)` listener during window creation.
+  const nativeTheme = { ...stubs.makeEmitter(), themeSource: 'system' }
 
   const globalShortcut = {
     register: vi.fn(() => false),
