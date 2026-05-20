@@ -5,6 +5,7 @@ import fs from 'fs'
 import path from 'path'
 import type { BuiltinModuleId, WorkbenchAppConfig } from '../../shared/types.js'
 import { rendererDir as defaultRendererDir, defaultPreloadPath } from '../utils/paths.js'
+import { installThemeBackgroundSync } from '../utils/theme.js'
 import { registerAppLifecycle } from './lifecycle.js'
 import { createMainWindow, wireMainWindowEvents } from '../windows/main-window/index.js'
 import { createWorkbenchContext, type WorkbenchContext } from '../services/workbench-context.js'
@@ -239,6 +240,10 @@ export function createWorkbenchApp(config: WorkbenchAppConfig = {}) {
       const mainWindow = createConfiguredMainWindow(config, rendererDir)
       const context = createContext(config, mainWindow, rendererDir)
       context.registry.add(registerAppIpc(context))
+      // One process-wide listener that re-syncs every window's native
+      // backgroundColor on theme change — windows otherwise keep the stale
+      // creation-time color (see installThemeBackgroundSync).
+      context.registry.add(installThemeBackgroundSync())
       registerBuiltinModules(config, context)
       installMenu(config, mainWindow, context)
 
