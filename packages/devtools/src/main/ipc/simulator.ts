@@ -41,7 +41,4 @@ export function registerSimulatorIpc(ctx: Pick<WorkbenchContext, 'views' | 'pane
     .handle(WorkbenchChannel.GetApiNamespaces, () => {
       return ctx.apiNamespaces
     })
-    .on(WorkbenchChannel.Reset, () => {
-      ctx.notify.workbenchReset()
-    })
 }

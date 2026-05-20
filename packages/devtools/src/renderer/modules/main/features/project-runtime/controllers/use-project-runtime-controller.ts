@@ -110,8 +110,7 @@ export interface ProjectRuntimeController {
  * Side-effect ordering preserved from the pre-controller hooks:
  *  1. openProject → getProjectPages / getCompileConfig → compileStatus ready
  *  2. compileStatus ready → webview attach + sendDeviceInfo + ipc-message
- *  3. workbench:reset → clear wxml / appdata / storage
- *  4. popover:closed → clear showCompilePanel; popover:relaunch → relaunch()
+ *  3. popover:closed → clear showCompilePanel; popover:relaunch → relaunch()
  */
 export function useProjectRuntimeController(
   props: ProjectRuntimeControllerProps,

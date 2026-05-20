@@ -1,17 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { SimulatorChannel } from '../../shared/ipc-channels.js'
 
-vi.mock('electron', () => ({
-  ipcRenderer: {
-    sendToHost: vi.fn(),
-    on: vi.fn(),
-  },
-}))
+// The migration replaces `installWxmlInstrumentation` / `setupWxmlObserver` /
+// `sendWxmlTree` with a single `createWxmlSource(): MiniappSnapshotSource`.
+// The tree-walking logic (`walkInstance` & friends) is UNCHANGED by the
+// migration — it is now reached through `createWxmlSource().start()` /
+// `.snapshot()` instead of `sendWxmlTree()`. The source no longer touches IPC.
+import { createWxmlSource } from './wxml'
 
-import { ipcRenderer } from 'electron'
-import { sendWxmlTree, setupWxmlObserver } from './wxml'
-
-let disposeObserver: (() => void) | null = null
+let disposeSource: (() => void) | null = null
 
 /** Helper: build a minimal mock Vue component instance tree. */
 function makeInstance(
@@ -59,34 +55,50 @@ function cleanupIframes() {
   document.querySelectorAll('.dimina-native-webview__window').forEach((el) => el.remove())
 }
 
-describe('sendWxmlTree', () => {
+// ── createWxmlSource — tree extraction / walkInstance / node mapping ─────
+//
+// UNCHANGED by the migration: the tree-walking logic is not touched. These
+// tests exercise `walkInstance` & friends and assert on the produced node
+// tree exactly as before — only the call surface moved from `sendWxmlTree()`
+// + `ipcRenderer.sendToHost` to `createWxmlSource().start()` + `.snapshot()`.
+// With a page already mounted, `start()` computes the tree synchronously, so
+// `snapshot()` returns it immediately. No fake timers are needed here.
+describe('createWxmlSource — tree extraction', () => {
+  let src: ReturnType<typeof createWxmlSource> | null = null
+
+  /** Start a source over the currently-mounted iframe and return its snapshot. */
+  function extract() {
+    src = createWxmlSource()
+    src.start(vi.fn())
+    return src.snapshot()
+  }
+
   beforeEach(() => {
     vi.clearAllMocks()
+    src = null
   })
 
   afterEach(() => {
+    src?.dispose()
     cleanupIframes()
   })
 
-  it('does nothing when no iframe exists', () => {
-    sendWxmlTree()
-    expect(ipcRenderer.sendToHost).not.toHaveBeenCalled()
+  it('snapshot() is null when no iframe exists', () => {
+    expect(extract()).toBeNull()
   })
 
-  it('does nothing when iframe has no __vue_app__', () => {
+  it('snapshot() is null when iframe has no __vue_app__', () => {
     createMockIframe() // no instance
-    sendWxmlTree()
-    expect(ipcRenderer.sendToHost).not.toHaveBeenCalled()
+    expect(extract()).toBeNull()
   })
 
-  it('sends a simple single-node tree', () => {
+  it('extracts a simple single-node tree', () => {
     const instance = makeInstance('view', { class: 'container' })
     createMockIframe(instance)
 
-    sendWxmlTree()
+    const tree = extract()
 
-    expect(ipcRenderer.sendToHost).toHaveBeenCalledWith(
-      SimulatorChannel.Wxml,
+    expect(tree).toEqual(
       expect.objectContaining({
         tagName: 'view',
         attrs: { class: 'container' },
@@ -100,9 +112,7 @@ describe('sendWxmlTree', () => {
     const root = makeInstance('view', {}, [child])
     createMockIframe(root)
 
-    sendWxmlTree()
-
-    const tree = (ipcRenderer.sendToHost as ReturnType<typeof vi.fn>).mock.calls[0]![1]
+    const tree = extract()!
     expect(tree.tagName).toBe('view')
     expect(tree.children).toHaveLength(1)
     expect(tree.children[0].tagName).toBe('text')
@@ -116,9 +126,7 @@ describe('sendWxmlTree', () => {
     }
     createMockIframe(instance)
 
-    sendWxmlTree()
-
-    const tree = (ipcRenderer.sendToHost as ReturnType<typeof vi.fn>).mock.calls[0]![1]
+    const tree = extract()!
     expect(tree.tagName).toBe('button')
   })
 
@@ -130,9 +138,7 @@ describe('sendWxmlTree', () => {
     }
     createMockIframe(instance)
 
-    sendWxmlTree()
-
-    const tree = (ipcRenderer.sendToHost as ReturnType<typeof vi.fn>).mock.calls[0]![1]
+    const tree = extract()!
     expect(tree.tagName).toBe('page')
   })
 
@@ -144,9 +150,7 @@ describe('sendWxmlTree', () => {
     }
     createMockIframe(instance)
 
-    sendWxmlTree()
-
-    const tree = (ipcRenderer.sendToHost as ReturnType<typeof vi.fn>).mock.calls[0]![1]
+    const tree = extract()!
     expect(tree.tagName).toBe('button')
   })
 
@@ -159,9 +163,7 @@ describe('sendWxmlTree', () => {
     })
     createMockIframe(instance)
 
-    sendWxmlTree()
-
-    const tree = (ipcRenderer.sendToHost as ReturnType<typeof vi.fn>).mock.calls[0]![1]
+    const tree = extract()!
     expect(tree.attrs).toEqual({ visible: 'true', title: 'hi' })
   })
 
@@ -173,9 +175,7 @@ describe('sendWxmlTree', () => {
     })
     createMockIframe(instance)
 
-    sendWxmlTree()
-
-    const tree = (ipcRenderer.sendToHost as ReturnType<typeof vi.fn>).mock.calls[0]![1]
+    const tree = extract()!
     expect(tree.attrs).toEqual({ label: 'show' })
   })
 
@@ -183,9 +183,7 @@ describe('sendWxmlTree', () => {
     const instance = makeInstance('view', { disabled: false, enabled: true })
     createMockIframe(instance)
 
-    sendWxmlTree()
-
-    const tree = (ipcRenderer.sendToHost as ReturnType<typeof vi.fn>).mock.calls[0]![1]
+    const tree = extract()!
     expect(tree.attrs).toEqual({ enabled: 'true' })
   })
 
@@ -200,9 +198,7 @@ describe('sendWxmlTree', () => {
     }
     createMockIframe(instance)
 
-    sendWxmlTree()
-
-    const tree = (ipcRenderer.sendToHost as ReturnType<typeof vi.fn>).mock.calls[0]![1]
+    const tree = extract()!
     // The text is extracted as a child text node
     expect(tree.children).toHaveLength(1)
     expect(tree.children[0].tagName).toBe('#text')
@@ -230,9 +226,7 @@ describe('sendWxmlTree', () => {
     }
     createMockIframe(instance)
 
-    sendWxmlTree()
-
-    const tree = (ipcRenderer.sendToHost as ReturnType<typeof vi.fn>).mock.calls[0]![1]
+    const tree = extract()!
     expect(tree.tagName).toBe('view')
     // 只剩真实子节点 button，没有 v-if/v-else/v-for 残留
     expect(tree.children).toHaveLength(1)
@@ -263,9 +257,7 @@ describe('sendWxmlTree', () => {
     }
     createMockIframe(instance)
 
-    sendWxmlTree()
-
-    const tree = (ipcRenderer.sendToHost as ReturnType<typeof vi.fn>).mock.calls[0]![1]
+    const tree = extract()!
     expect(tree.children).toHaveLength(1)
     expect(tree.children[0].tagName).toBe('button')
   })
@@ -285,9 +277,7 @@ describe('sendWxmlTree', () => {
     }
     createMockIframe(instance)
 
-    sendWxmlTree()
-
-    const tree = (ipcRenderer.sendToHost as ReturnType<typeof vi.fn>).mock.calls[0]![1]
+    const tree = extract()!
     expect(tree.tagName).toBe('view')
   })
 
@@ -299,9 +289,7 @@ describe('sendWxmlTree', () => {
     }
     createMockIframe(instance)
 
-    sendWxmlTree()
-
-    const tree = (ipcRenderer.sendToHost as ReturnType<typeof vi.fn>).mock.calls[0]![1]
+    const tree = extract()!
     expect(tree.tagName).toBe('scroll-view')
   })
 
@@ -313,9 +301,7 @@ describe('sendWxmlTree', () => {
     }
     createMockIframe(instance)
 
-    sendWxmlTree()
-
-    const tree = (ipcRenderer.sendToHost as ReturnType<typeof vi.fn>).mock.calls[0]![1]
+    const tree = extract()!
     expect(tree.tagName).toBe('cover-view')
   })
 
@@ -334,14 +320,11 @@ describe('sendWxmlTree', () => {
     }
     createMockIframe(instance)
 
-    sendWxmlTree()
-
-    // Either no IPC was sent (tree dropped because nothing identifiable),
-    // or the sent tree contains no native web tags. Both are acceptable —
+    const tree = extract()
+    // Either no tree was produced (dropped because nothing identifiable),
+    // or the tree contains no native web tags. Both are acceptable —
     // the only forbidden outcome is surfacing 'div'/'span' as a tag.
-    const calls = (ipcRenderer.sendToHost as ReturnType<typeof vi.fn>).mock.calls
-    if (calls.length === 0) return // dropped — fine
-    const tree = calls[0]![1]
+    if (tree === null) return // dropped — fine
     const collect = (n: unknown, out: string[] = []): string[] => {
       if (!n || typeof n !== 'object') return out
       const node = n as { tagName?: string; children?: unknown[] }
@@ -364,9 +347,7 @@ describe('sendWxmlTree', () => {
     }
     createMockIframe(instance)
 
-    sendWxmlTree()
-
-    const tree = (ipcRenderer.sendToHost as ReturnType<typeof vi.fn>).mock.calls[0]![1]
+    const tree = extract()!
     expect(tree.tagName).toBe('view3d')
   })
 
@@ -385,9 +366,7 @@ describe('sendWxmlTree', () => {
     )
     createMockIframe(instance)
 
-    sendWxmlTree()
-
-    const tree = (ipcRenderer.sendToHost as ReturnType<typeof vi.fn>).mock.calls[0]![1]
+    const tree = extract()!
     // 对齐微信开发者工具：自定义组件用全路径作 tag 名
     expect(tree.tagName).toBe('components/counter/counter')
     // `name` 属性是 dimina 内部包装信息，应当从面板上的 attrs 里去掉
@@ -405,9 +384,7 @@ describe('sendWxmlTree', () => {
     const instance = makeInstance('wrapper', { name: '/components/foo/index' }, [innerText])
     createMockIframe(instance)
 
-    sendWxmlTree()
-
-    const tree = (ipcRenderer.sendToHost as ReturnType<typeof vi.fn>).mock.calls[0]![1]
+    const tree = extract()!
     expect(tree.tagName).toBe('components/foo')
     // 仍旧包一层 shadow-root
     expect(tree.children).toHaveLength(1)
@@ -420,9 +397,7 @@ describe('sendWxmlTree', () => {
     const instance = makeInstance('wrapper', { name: '/index' })
     createMockIframe(instance)
 
-    sendWxmlTree()
-
-    const tree = (ipcRenderer.sendToHost as ReturnType<typeof vi.fn>).mock.calls[0]![1]
+    const tree = extract()!
     expect(tree.tagName).toBe('wrapper')
   })
 
@@ -434,9 +409,7 @@ describe('sendWxmlTree', () => {
     })
     createMockIframe(instance)
 
-    sendWxmlTree()
-
-    const tree = (ipcRenderer.sendToHost as ReturnType<typeof vi.fn>).mock.calls[0]![1]
+    const tree = extract()!
     expect(tree.tagName).toBe('components/counter/counter')
     expect(tree.attrs).toEqual({ 'bind:change': 'onCounterChange', label: 'demo' })
     // 没有真实子节点时不插入 shadow-root，children 保持空数组
@@ -447,9 +420,7 @@ describe('sendWxmlTree', () => {
     const instance = makeInstance('wrapper', {})
     createMockIframe(instance)
 
-    sendWxmlTree()
-
-    const tree = (ipcRenderer.sendToHost as ReturnType<typeof vi.fn>).mock.calls[0]![1]
+    const tree = extract()!
     // 没法推导真实组件名，保持 wrapper（避免误展示成空字符串）
     expect(tree.tagName).toBe('wrapper')
   })
@@ -460,9 +431,7 @@ describe('sendWxmlTree', () => {
     const instance = makeInstance('wrapper', { name: 'user-name' })
     createMockIframe(instance)
 
-    sendWxmlTree()
-
-    const tree = (ipcRenderer.sendToHost as ReturnType<typeof vi.fn>).mock.calls[0]![1]
+    const tree = extract()!
     expect(tree.tagName).toBe('wrapper')
     expect(tree.attrs).toEqual({ name: 'user-name' })
   })
@@ -477,9 +446,7 @@ describe('sendWxmlTree', () => {
     )
     createMockIframe(instance)
 
-    sendWxmlTree()
-
-    const tree = (ipcRenderer.sendToHost as ReturnType<typeof vi.fn>).mock.calls[0]![1]
+    const tree = extract()!
     expect(tree.tagName).toBe('components/counter/counter')
     expect(tree.children).toHaveLength(1)
     expect(tree.children[0].tagName).toBe('#shadow-root')
@@ -509,9 +476,7 @@ describe('sendWxmlTree', () => {
     }
     createMockIframe(instance)
 
-    sendWxmlTree()
-
-    const tree = (ipcRenderer.sendToHost as ReturnType<typeof vi.fn>).mock.calls[0]![1]
+    const tree = extract()!
     expect(tree.tagName).toBe('pages/index/index')
     expect(tree.children).toHaveLength(1)
     expect(tree.children[0].tagName).toBe('#shadow-root')
@@ -530,9 +495,7 @@ describe('sendWxmlTree', () => {
     }
     createMockIframe(instance)
 
-    sendWxmlTree()
-
-    const tree = (ipcRenderer.sendToHost as ReturnType<typeof vi.fn>).mock.calls[0]![1]
+    const tree = extract()!
     expect(tree.tagName).toBe('pages/index/index')
   })
 
@@ -554,9 +517,7 @@ describe('sendWxmlTree', () => {
     }
     createMockIframe(instance)
 
-    sendWxmlTree()
-
-    const tree = (ipcRenderer.sendToHost as ReturnType<typeof vi.fn>).mock.calls[0]![1]
+    const tree = extract()!
     expect(tree.tagName).not.toBe('pages/index/index')
     // 走老路径返回 'page'（__scopeId && components）
     expect(tree.tagName).toBe('page')
@@ -575,9 +536,7 @@ describe('sendWxmlTree', () => {
     }
     createMockIframe(instance)
 
-    sendWxmlTree()
-
-    const tree = (ipcRenderer.sendToHost as ReturnType<typeof vi.fn>).mock.calls[0]![1]
+    const tree = extract()!
     expect(tree.tagName).toBe('page')
     expect(tree.children).toEqual([])
   })
@@ -592,52 +551,139 @@ describe('sendWxmlTree', () => {
     }
     createMockIframe(instance)
 
-    sendWxmlTree()
-
-    const tree = (ipcRenderer.sendToHost as ReturnType<typeof vi.fn>).mock.calls[0]![1]
+    const tree = extract()!
     // PascalCase 'View' should map to 'view'. Currently the code only
     // strips a leading 'Dd' prefix; bare PascalCase falls through.
     expect(tree.tagName).toBe('view')
   })
 })
 
-describe('setupWxmlObserver', () => {
+// ── createWxmlSource — MiniappSnapshotSource lifecycle ──────────────────
+//
+// Reframes the former `setupWxmlObserver` install-lifecycle suite. The
+// migration turns the WXML instrumentation into a `MiniappSnapshotSource`, so
+// instead of asserting on `ipcRenderer.sendToHost('simulator:wxml', …)` these
+// tests assert on the source's contract — `id`, `snapshot()`, the `emit`
+// callback handed to `start()`, and `dispose()`. The source no longer touches
+// IPC; the `miniappSnapshot` host owns publishing.
+describe('createWxmlSource', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.useFakeTimers()
-    disposeObserver = null
+    disposeSource = null
   })
 
   afterEach(() => {
-    disposeObserver?.()
+    disposeSource?.()
     cleanupIframes()
     vi.useRealTimers()
   })
 
-  it('sends tree immediately when iframe with app is already present', () => {
+  it('has id "wxml"', () => {
+    const src = createWxmlSource()
+    expect(src.id).toBe('wxml')
+  })
+
+  it('computes the tree synchronously and emits once when an iframe with app is already present', () => {
+    // Reframes "sends tree immediately when iframe with app is already
+    // present". Previously: setupWxmlObserver() emitted (Wxml, null) then the
+    // real tree. Now: start() with a mounted page present must compute the
+    // tree synchronously, store it, and call emit() — and snapshot() returns
+    // the expected `tagName:'page'` tree.
     const instance = makeInstance('page')
     createMockIframe(instance)
 
-    disposeObserver = setupWxmlObserver()
+    const src = createWxmlSource()
+    disposeSource = () => src.dispose()
+    const emit = vi.fn()
+    src.start(emit)
 
-    expect(ipcRenderer.sendToHost).toHaveBeenCalledWith(
-      SimulatorChannel.Wxml,
+    expect(emit).toHaveBeenCalled()
+    expect(src.snapshot()).toEqual(
       expect.objectContaining({ tagName: 'page' }),
     )
   })
 
-  it('retries via interval when iframe is not yet present', () => {
-    disposeObserver = setupWxmlObserver()
-    expect(ipcRenderer.sendToHost).not.toHaveBeenCalled()
+  it('snapshot() is null at start() time with no iframe, then resolves via the retry timer', () => {
+    // Reframes "retries via interval when iframe is not yet present".
+    // Previously: setupWxmlObserver() emitted exactly one (Wxml, null) and
+    // then a later (Wxml, page) once an iframe appeared during the retry
+    // interval. Now: snapshot() is null until a page mounts, and the
+    // retry-attach machinery drives emit()+snapshot() once one does.
+    const src = createWxmlSource()
+    disposeSource = () => src.dispose()
+    const emit = vi.fn()
+    src.start(emit)
 
-    // Add iframe with Vue app and advance past the 500ms interval
+    // No iframe yet → no tree.
+    expect(src.snapshot()).toBeNull()
+
+    // Add an iframe with a Vue app and advance past the 500ms retry interval.
     const instance = makeInstance('page')
     createMockIframe(instance)
     vi.advanceTimersByTime(500)
 
-    expect(ipcRenderer.sendToHost).toHaveBeenCalledWith(
-      SimulatorChannel.Wxml,
+    expect(emit).toHaveBeenCalled()
+    expect(src.snapshot()).toEqual(
       expect.objectContaining({ tagName: 'page' }),
     )
   })
+
+  it('re-emits and updates snapshot() after a DOM mutation (debounced)', async () => {
+    // New-surface coverage of the MutationObserver path: a mutation inside the
+    // observed page must, after the debounce window, recompute the tree, store
+    // it, and call emit() again with the new tree visible via snapshot().
+    const instance = makeInstance('page')
+    const iframe = createMockIframe(instance)
+
+    const src = createWxmlSource()
+    disposeSource = () => src.dispose()
+    const emit = vi.fn()
+    src.start(emit)
+
+    const callsAfterStart = emit.mock.calls.length
+    expect(src.snapshot()).toEqual(expect.objectContaining({ tagName: 'page' }))
+
+    // Swap in a new tree, mutate the observed page's DOM, then let the
+    // debounce window elapse. jsdom delivers MutationObserver records on the
+    // microtask queue, so the async timer-advance is required to flush that
+    // queue before the debounce setTimeout fires.
+    mountVueAppOnIframe(iframe, makeInstance('view', { class: 'next' }))
+    iframe.contentDocument!.body.appendChild(
+      iframe.contentDocument!.createElement('div'),
+    )
+    await vi.advanceTimersByTimeAsync(300)
+
+    expect(emit.mock.calls.length).toBeGreaterThan(callsAfterStart)
+    expect(src.snapshot()).toEqual(
+      expect.objectContaining({ tagName: 'view', attrs: { class: 'next' } }),
+    )
+  })
+
+  it('dispose() tears down observers so later mutations do not call emit', () => {
+    // After dispose(), the MutationObserver / timers are gone, so a further
+    // DOM mutation must NOT trigger emit() again.
+    const instance = makeInstance('page')
+    const iframe = createMockIframe(instance)
+
+    const src = createWxmlSource()
+    const emit = vi.fn()
+    src.start(emit)
+    src.dispose()
+    disposeSource = null
+
+    const callsBeforeMutation = emit.mock.calls.length
+
+    // A mutation after disposal must not re-trigger emit().
+    iframe.contentDocument!.body.appendChild(
+      iframe.contentDocument!.createElement('div'),
+    )
+    vi.advanceTimersByTime(300)
+
+    expect(emit.mock.calls.length).toBe(callsBeforeMutation)
+  })
+
+  // C16 (install emits a tree-clear `(simulator:wxml, null)`) was deleted:
+  // install-time emit is now the framework host's responsibility — covered by
+  // `src/preload/miniapp-snapshot/host.test.ts`.
 })

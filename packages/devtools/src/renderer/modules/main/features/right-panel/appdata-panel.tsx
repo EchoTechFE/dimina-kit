@@ -102,6 +102,7 @@ export function AppDataPanel({
             return (
               <div
                 key={b.id}
+                data-bridge-id={b.id}
                 className="absolute inset-0 flex flex-col gap-2 p-2 overflow-y-auto"
                 style={{ display: isActive ? 'flex' : 'none' }}
               >

@@ -5,7 +5,6 @@ import {
   WindowChannel,
   SettingsChannel,
   PopoverChannel,
-  WorkbenchChannel,
   ToolbarChannel,
   WorkbenchSettingsChannel,
 } from '../../../shared/ipc-channels.js'
@@ -66,8 +65,6 @@ export interface RendererNotifier {
   popoverClosed(): void
   /** Ask the main renderer to relaunch the simulator with a new config. */
   popoverRelaunch(config: CompileConfig): void
-  /** Ask the main renderer to re-initialise the devtools panels. */
-  workbenchReset(): void
   /** Tell the main renderer the toolbar actions list has changed. */
   toolbarActionsChanged(): void
 
@@ -132,9 +129,6 @@ export function createRendererNotifier(ctx: NotifierContext): RendererNotifier {
     },
     popoverRelaunch(config) {
       sendToMain(PopoverChannel.Relaunch, config)
-    },
-    workbenchReset() {
-      sendToMain(WorkbenchChannel.Reset)
     },
     toolbarActionsChanged() {
       sendToMain(ToolbarChannel.ActionsChanged)

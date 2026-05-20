@@ -38,14 +38,34 @@ interface AppDataDom {
   tabs: string[]
   entryHeaders: string[]
   entryJsons: string[]
+  /**
+   * Distinct `data-bridge-id` values of the keepalive containers the panel
+   * renders — one per bridge (inactive ones stay in the DOM, just
+   * `display:none`). This is the most direct count of "how many bridges does
+   * the panel think exist", independent of whether the tab bar is shown
+   * (the tab bar only renders when there is >1 bridge).
+   */
+  bridgeIds: string[]
 }
 
 async function readPanel(mainWindow: Page): Promise<AppDataDom> {
   return mainWindow.evaluate(() => {
+    // Bridge containers are read from the whole document (not scoped to the
+    // panel) so the count is robust even before the refresh button mounts.
+    // Dedupe so a duplicate-id bug surfaces as a *count* discrepancy elsewhere
+    // rather than being hidden by counting the same node twice.
+    const bridgeIds = Array.from(
+      new Set(
+        Array.from(document.querySelectorAll('[data-bridge-id]'))
+          .map((el) => el.getAttribute('data-bridge-id') ?? '')
+          .filter((id) => id !== ''),
+      ),
+    )
+
     const refreshBtn = Array.from(document.querySelectorAll('button'))
       .find((b) => b.textContent?.trim().includes('刷新'))
     const panel = refreshBtn?.closest('.flex.flex-col') as HTMLElement | null
-    if (!panel) return { tabs: [], entryHeaders: [], entryJsons: [] }
+    if (!panel) return { tabs: [], entryHeaders: [], entryJsons: [], bridgeIds }
 
     const tabs: string[] = []
     panel.querySelectorAll('button').forEach((btn) => {
@@ -68,7 +88,7 @@ async function readPanel(mainWindow: Page): Promise<AppDataDom> {
       const fullText = card.textContent ?? ''
       entryJsons.push(fullText.replace(headerText, '').trim())
     })
-    return { tabs, entryHeaders, entryJsons }
+    return { tabs, entryHeaders, entryJsons, bridgeIds }
   })
 }
 
@@ -264,5 +284,90 @@ test.describe('AppData panel — per-page tabs & lifecycle', () => {
     expect(dom.entryHeaders.some((h) => h.includes('console-test'))).toBe(false)
     // Home still visible.
     expect(dom.entryHeaders.some((h) => h.includes('pages/index/index'))).toBe(true)
+  })
+
+  test('recompile does not accumulate duplicate page entries in the panel', async ({ mainWindow }) => {
+    // Each recompile + simulator relaunch can take a while; give plenty of room
+    // for ~3 iterations.
+    test.setTimeout(120_000)
+
+    await selectAppDataTab(mainWindow)
+
+    // ── Step 1: establish our own baseline ────────────────────────────────
+    // resetSimulatorState runs before this test and a prior recompile would
+    // relaunch to the start page, but we never *assume* state from earlier
+    // tests — wait until the panel actually shows the home page exactly once.
+    const baseline = await pollUntil(
+      () => readPanel(mainWindow),
+      (d) =>
+        d.bridgeIds.length === 1
+        && d.entryHeaders.some((h) => h.includes('pages/index/index')),
+      15000,
+      300,
+    )
+    // Snapshot the current single bridge id; every recompile mints a NEW one.
+    let prevBridgeIds = baseline.bridgeIds
+    expect(prevBridgeIds.length).toBe(1)
+
+    // Recompile 3 times. The bug ("每次重新编译都多一个") accumulates one extra
+    // duplicate entry per recompile, so a single iteration already fails; we
+    // loop to also prove it does not compound across multiple recompiles.
+    for (let round = 1; round <= 3; round++) {
+      // ── Step 2: trigger a recompile ─────────────────────────────────────
+      await mainWindow.locator('button[title="重新编译"]').click()
+      // Wait for the toolbar status text to report completion. The status
+      // lives in a `.truncate` element bound to setCompileStatus messages
+      // ('刷新完成' / '编译完成' / '编译完成，已热更新').
+      await pollUntil(
+        () => mainWindow.evaluate(() => {
+          const els = document.querySelectorAll('[class*="truncate"]')
+          for (const el of els) {
+            if ((el.textContent || '').includes('完成')) return true
+          }
+          return false
+        }),
+        (done) => done === true,
+        15000,
+        300,
+      )
+
+      // ── Step 3: wait for the NEW page to reach the renderer panel ────────
+      // A recompile relaunches the simulator; the new page gets a brand-new
+      // bridgeId. Poll until the panel's bridge-id set contains an id that was
+      // NOT present before this recompile. This predicate terminates on BOTH
+      // buggy and fixed code (the new bridge always shows up regardless of
+      // whether the old one is leaked), so it is a real readiness wait — not a
+      // bug-shaped wait that would mask the defect.
+      const after = await pollUntil(
+        () => readPanel(mainWindow),
+        (d) => d.bridgeIds.some((id) => !prevBridgeIds.includes(id)),
+        15000,
+        300,
+      )
+
+      // ── Step 4: assert the page is shown exactly ONCE ───────────────────
+      // Correct behaviour: after the recompile the old bridge is gone and only
+      // the freshly-relaunched page remains. On the current buggy code the old
+      // bridge leaks, so this iteration sees 2 bridge ids / 2 headers / a
+      // 2-button tab bar → the test fails here, which is the intended TDD
+      // red state.
+      expect(
+        after.bridgeIds.length,
+        `after recompile #${round}: panel should show exactly 1 bridge`,
+      ).toBe(1)
+      expect(
+        after.entryHeaders.filter((h) => h.includes('pages/index/index')).length,
+        `after recompile #${round}: exactly one pages/index/index entry header`,
+      ).toBe(1)
+      // With exactly 1 bridge the per-bridge tab bar must not render at all.
+      expect(
+        after.tabs.length,
+        `after recompile #${round}: no tab bar should render for a single bridge`,
+      ).toBe(0)
+
+      // Carry the (single) current bridge id forward as the new baseline so
+      // the next round's "new id appeared" poll is meaningful.
+      prevBridgeIds = after.bridgeIds
+    }
   })
 })

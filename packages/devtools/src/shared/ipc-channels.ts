@@ -14,9 +14,6 @@ export const SimulatorChannel = {
   Resize: 'simulator:resize',
   SetVisible: 'simulator:setVisible',
   Console: 'simulator:console',
-  Wxml: 'simulator:wxml',
-  AppData: 'simulator:appdata',
-  AppDataAll: 'simulator:appdata-all',
 } as const
 
 // ── Custom simulator APIs (downstream-registered, main-process handlers) ──
@@ -99,7 +96,6 @@ export interface ElementInspection {
 export const WorkbenchChannel = {
   GetPanelConfig: 'workbench:getPanelConfig',
   GetApiNamespaces: 'workbench:getApiNamespaces',
-  Reset: 'workbench:reset',
 } as const
 
 // ── Workbench settings ───────────────────────────────────────────────────
@@ -195,12 +191,16 @@ export const AppChannel = {
   GetBranding: 'app:getBranding',
 } as const
 
-// ── Bridge (renderer ↔ preload, webview.send / sendToHost) ───────────────
+// ── miniappSnapshot (unified panel snapshot framework) ───────────────────
+//
+// Two generic channels shared by every snapshot source (AppData, WXML, …).
+// Adding a new panel needs no new channel.
+//   Push: preload → renderer (`sendToHost`), payload: SnapshotEnvelope
+//   Pull: renderer → preload (`webview.send`),  payload: { id }
 
-export const BridgeChannel = {
-  WxmlRefreshRequest: 'wxml:refresh:request',
-  AppDataGetAllRequest: 'appdata:getAll:request',
-  AppDataGetAllResponse: 'appdata:getAll:response',
+export const MiniappSnapshotChannel = {
+  Push: 'miniapp-snapshot:push',
+  Pull: 'miniapp-snapshot:pull',
 } as const
 
 // ── Automation (WebSocket server) ────────────────────────────────────────
