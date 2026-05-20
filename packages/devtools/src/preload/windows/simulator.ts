@@ -7,8 +7,9 @@
 import { installSimulatorBridge } from '../runtime/bridge.js'
 import { installCustomApisBridge } from '../runtime/custom-apis.js'
 import { installConsoleInstrumentation } from '../instrumentation/console.js'
-import { installAppDataInstrumentation } from '../instrumentation/app-data.js'
-import { installWxmlInstrumentation } from '../instrumentation/wxml.js'
+import { createAppDataSource } from '../instrumentation/app-data.js'
+import { createWxmlSource } from '../instrumentation/wxml.js'
+import { createMiniappSnapshotHost } from '../miniapp-snapshot/host.js'
 import { setupApiCompatHook } from '../shared/api-compat.js'
 
 // Note: storage panel data is sourced from the main process via the CDP
@@ -19,5 +20,8 @@ setupApiCompatHook()
 installSimulatorBridge()
 installCustomApisBridge()
 installConsoleInstrumentation()
-installAppDataInstrumentation()
-installWxmlInstrumentation()
+
+const snapshotHost = createMiniappSnapshotHost()
+snapshotHost.register(createAppDataSource())
+snapshotHost.register(createWxmlSource())
+snapshotHost.install()

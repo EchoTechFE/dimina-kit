@@ -1,16 +1,30 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { BridgeChannel, SimulatorChannel } from '../../shared/ipc-channels'
 
+// The migration replaces `installAppDataInstrumentation` / `sendAllAppData`
+// with a single `createAppDataSource(): MiniappSnapshotSource<AppDataSnapshot>`.
+// The Worker-instrumentation / message-decoding logic is UNCHANGED by the
+// migration — it is now reached through `createAppDataSource().start(emit)`
+// instead of `installAppDataInstrumentation()`, and the cumulative state is
+// observed via `src.snapshot()` instead of `ipcRenderer.sendToHost`. The
+// source no longer touches IPC: the `miniappSnapshot` host owns push, pull and
+// the install-time publish.
+//
+// `electron` is still mocked because `app-data.ts` imports `runtime/bridge.js`
+// (the `__simulatorData` automation surface), which imports `electron`'s
+// `contextBridge`. The mock only keeps that transitive import resolving — the
+// source itself no longer calls `sendToHost` / `ipcRenderer.on`.
 vi.mock('electron', () => ({
   ipcRenderer: {
     sendToHost: vi.fn(),
     on: vi.fn(),
     removeListener: vi.fn(),
   },
+  contextBridge: {
+    exposeInMainWorld: vi.fn(),
+  },
 }))
 
-import { ipcRenderer } from 'electron'
-import { installAppDataInstrumentation } from './app-data'
+import { createAppDataSource } from './app-data'
 
 /**
  * Minimal constructible stand-in for the Worker constructor.
@@ -37,7 +51,7 @@ class StubWorker extends EventTarget {
 }
 
 let originalWorker: typeof Worker | undefined
-let dispose: (() => void) | null = null
+let src: ReturnType<typeof createAppDataSource> | null = null
 
 /** Build a well-formed `ub` publish payload. */
 function makePublish(
@@ -72,9 +86,13 @@ function fireMessage(data: unknown): EventTarget {
   return w
 }
 
-describe('installAppDataInstrumentation', () => {
+describe('createAppDataSource', () => {
+  let emit: ReturnType<typeof vi.fn<() => void>>
+
   beforeEach(() => {
     vi.clearAllMocks()
+    emit = vi.fn()
+    src = null
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     originalWorker = (window as any).Worker
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -84,9 +102,9 @@ describe('installAppDataInstrumentation', () => {
   })
 
   afterEach(() => {
-    if (dispose) {
-      try { dispose() } catch { /* ignore */ }
-      dispose = null
+    if (src) {
+      try { src.dispose() } catch { /* ignore */ }
+      src = null
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ;(window as any).Worker = originalWorker
@@ -94,37 +112,49 @@ describe('installAppDataInstrumentation', () => {
     ;(globalThis as any).Worker = originalWorker
   })
 
-  // ── C1: install replaces Worker; messages produce one IPC call per update ──
-  describe('C1: emits one IPC message per update entry', () => {
-    it('replaces window.Worker after installation', () => {
+  /** Start a fresh source over the (stubbed) Worker and capture `emit`. */
+  function startSource() {
+    src = createAppDataSource()
+    src.start(emit)
+    return src
+  }
+
+  // ── C1: install replaces Worker; each update mutates the snapshot ────────
+  //
+  // Reframed: the per-update incremental `sendToHost(AppData, …)` is REMOVED
+  // by the migration. Each accepted update now mutates the cumulative
+  // `snapshot()` and triggers one `emit()` so the host can republish.
+  describe('C1: each update entry mutates the snapshot and emits', () => {
+    it('has id "appdata"', () => {
+      expect(createAppDataSource().id).toBe('appdata')
+    })
+
+    it('replaces window.Worker after start()', () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const before = (window as any).Worker
-      dispose = installAppDataInstrumentation()
+      startSource()
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const after = (window as any).Worker
       expect(after).not.toBe(before)
     })
 
-    it('emits SimulatorChannel.AppData with {bridgeId, moduleId, data} for a single update', () => {
-      dispose = installAppDataInstrumentation()
+    it('a single update lands at snapshot.entries[bridgeId][componentPath] and emits', () => {
+      startSource()
       // R6: seed an init so the subsequent ub is not dropped.
       fireMessage(makeInit('page_m1', 'b1', '/p1', {}))
-      vi.clearAllMocks()
+      emit.mockClear()
       fireMessage(makePublish('b1', [{ moduleId: 'page_m1', data: { foo: 1 } }]))
 
-      expect(ipcRenderer.sendToHost).toHaveBeenCalledTimes(1)
-      expect(ipcRenderer.sendToHost).toHaveBeenCalledWith(
-        SimulatorChannel.AppData,
-        { bridgeId: 'b1', moduleId: 'page_m1', componentPath: '/p1', data: { foo: 1 } },
-      )
+      expect(emit).toHaveBeenCalledTimes(1)
+      expect(src!.snapshot().entries.b1['/p1']).toEqual({ foo: 1 })
     })
 
-    it('emits once per update entry when multiple updates arrive in one message', () => {
-      dispose = installAppDataInstrumentation()
+    it('emits once per accepted update entry when multiple updates arrive in one message', () => {
+      startSource()
       // R6: seed inits for each moduleId so the multi-update ub is not dropped.
       fireMessage(makeInit('page_m1', 'b1', '/p1', {}))
       fireMessage(makeInit('page_m2', 'b1', '/p2', {}))
-      vi.clearAllMocks()
+      emit.mockClear()
       fireMessage(
         makePublish('b1', [
           { moduleId: 'page_m1', data: { a: 1 } },
@@ -132,175 +162,140 @@ describe('installAppDataInstrumentation', () => {
         ]),
       )
 
-      expect(ipcRenderer.sendToHost).toHaveBeenCalledTimes(2)
-      expect(ipcRenderer.sendToHost).toHaveBeenNthCalledWith(
-        1,
-        SimulatorChannel.AppData,
-        { bridgeId: 'b1', moduleId: 'page_m1', componentPath: '/p1', data: { a: 1 } },
-      )
-      expect(ipcRenderer.sendToHost).toHaveBeenNthCalledWith(
-        2,
-        SimulatorChannel.AppData,
-        { bridgeId: 'b1', moduleId: 'page_m2', componentPath: '/p2', data: { b: 2 } },
-      )
+      // Two accepted updates → two emits, each carrying its own merged state.
+      expect(emit).toHaveBeenCalledTimes(2)
+      expect(src!.snapshot().entries.b1['/p1']).toEqual({ a: 1 })
+      expect(src!.snapshot().entries.b1['/p2']).toEqual({ b: 2 })
     })
   })
 
   // ── C2: event.data may arrive as parsed object OR JSON string ───────────
   describe('C2: accepts event.data as object or JSON string', () => {
     it('handles event.data as a parsed object', () => {
-      dispose = installAppDataInstrumentation()
+      startSource()
       // R6: seed an init so the subsequent ub is not dropped.
       fireMessage(makeInit('page_m1', 'b1', '/p1', {}))
-      vi.clearAllMocks()
+      emit.mockClear()
       fireMessage(makePublish('b1', [{ moduleId: 'page_m1', data: { foo: 1 } }]))
 
-      expect(ipcRenderer.sendToHost).toHaveBeenCalledWith(
-        SimulatorChannel.AppData,
-        { bridgeId: 'b1', moduleId: 'page_m1', componentPath: '/p1', data: { foo: 1 } },
-      )
+      expect(emit).toHaveBeenCalledTimes(1)
+      expect(src!.snapshot().entries.b1['/p1']).toEqual({ foo: 1 })
     })
 
     it('handles event.data as a JSON string of the same shape', () => {
-      dispose = installAppDataInstrumentation()
+      startSource()
       // R6: seed an init (object form) before sending the JSON-string ub.
       fireMessage(makeInit('page_m1', 'b1', '/p1', {}))
-      vi.clearAllMocks()
+      emit.mockClear()
       const payload = makePublish('b1', [{ moduleId: 'page_m1', data: { foo: 1 } }])
       fireMessage(JSON.stringify(payload))
 
-      expect(ipcRenderer.sendToHost).toHaveBeenCalledTimes(1)
-      expect(ipcRenderer.sendToHost).toHaveBeenCalledWith(
-        SimulatorChannel.AppData,
-        { bridgeId: 'b1', moduleId: 'page_m1', componentPath: '/p1', data: { foo: 1 } },
-      )
+      expect(emit).toHaveBeenCalledTimes(1)
+      expect(src!.snapshot().entries.b1['/p1']).toEqual({ foo: 1 })
     })
   })
 
   // ── C3: patches accumulate per (bridgeId, moduleId) ─────────────────────
   describe('C3: accumulates patches per (bridgeId, moduleId)', () => {
     it('merges later patches into the previously-seen state', () => {
-      dispose = installAppDataInstrumentation()
+      startSource()
 
-      // R6: seed an init; clear mocks so the ub emissions start at index 0.
+      // R6: seed an init; clear emit so the ub emissions start at index 0.
       fireMessage(makeInit('page_m1', 'b1', '/p1', {}))
-      vi.clearAllMocks()
+      emit.mockClear()
 
       fireMessage(makePublish('b1', [{ moduleId: 'page_m1', data: { foo: 1 } }]))
-      fireMessage(makePublish('b1', [{ moduleId: 'page_m1', data: { bar: 2 } }]))
-      fireMessage(makePublish('b1', [{ moduleId: 'page_m1', data: { foo: 9 } }]))
+      expect(src!.snapshot().entries.b1['/p1']).toEqual({ foo: 1 })
 
-      // 3 emissions in order, each carrying the merged state (componentPath
-      // persists from the seeded init).
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const calls = (ipcRenderer.sendToHost as any).mock.calls
-      expect(calls).toHaveLength(3)
-      expect(calls[0]).toEqual([
-        SimulatorChannel.AppData,
-        { bridgeId: 'b1', moduleId: 'page_m1', componentPath: '/p1', data: { foo: 1 } },
-      ])
-      expect(calls[1]).toEqual([
-        SimulatorChannel.AppData,
-        { bridgeId: 'b1', moduleId: 'page_m1', componentPath: '/p1', data: { foo: 1, bar: 2 } },
-      ])
-      expect(calls[2]).toEqual([
-        SimulatorChannel.AppData,
-        { bridgeId: 'b1', moduleId: 'page_m1', componentPath: '/p1', data: { foo: 9, bar: 2 } },
-      ])
+      fireMessage(makePublish('b1', [{ moduleId: 'page_m1', data: { bar: 2 } }]))
+      expect(src!.snapshot().entries.b1['/p1']).toEqual({ foo: 1, bar: 2 })
+
+      fireMessage(makePublish('b1', [{ moduleId: 'page_m1', data: { foo: 9 } }]))
+      expect(src!.snapshot().entries.b1['/p1']).toEqual({ foo: 9, bar: 2 })
+
+      // 3 distinct snapshot states → 3 emits, componentPath persists.
+      expect(emit).toHaveBeenCalledTimes(3)
     })
   })
 
   // ── C4: independent accumulation per (bridgeId, moduleId) tuple ─────────
   describe('C4: state is per-(bridgeId, moduleId), no cross-bleed', () => {
     it('different moduleIds on the same bridge stay isolated', () => {
-      dispose = installAppDataInstrumentation()
+      startSource()
 
       // R6: seed inits for both modules on b1.
       fireMessage(makeInit('page_m1', 'b1', '/p1', {}))
       fireMessage(makeInit('page_m2', 'b1', '/p2', {}))
-      vi.clearAllMocks()
+      emit.mockClear()
 
       fireMessage(makePublish('b1', [{ moduleId: 'page_m1', data: { foo: 1 } }]))
       fireMessage(makePublish('b1', [{ moduleId: 'page_m2', data: { bar: 2 } }]))
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const calls = (ipcRenderer.sendToHost as any).mock.calls
-      expect(calls).toHaveLength(2)
-      expect(calls[0]).toEqual([
-        SimulatorChannel.AppData,
-        { bridgeId: 'b1', moduleId: 'page_m1', componentPath: '/p1', data: { foo: 1 } },
-      ])
+      expect(emit).toHaveBeenCalledTimes(2)
+      expect(src!.snapshot().entries.b1['/p1']).toEqual({ foo: 1 })
       // page_m2's data must NOT include page_m1's `foo: 1`.
-      expect(calls[1]).toEqual([
-        SimulatorChannel.AppData,
-        { bridgeId: 'b1', moduleId: 'page_m2', componentPath: '/p2', data: { bar: 2 } },
-      ])
+      expect(src!.snapshot().entries.b1['/p2']).toEqual({ bar: 2 })
     })
 
     it('same moduleId on different bridges stays isolated', () => {
-      dispose = installAppDataInstrumentation()
+      startSource()
 
       // R6: seed inits for both bridges (same moduleId is fine).
       fireMessage(makeInit('page_m1', 'b1', '/p1', {}))
       fireMessage(makeInit('page_m1', 'b2', '/p2', {}))
-      vi.clearAllMocks()
+      emit.mockClear()
 
       fireMessage(makePublish('b1', [{ moduleId: 'page_m1', data: { foo: 1 } }]))
       fireMessage(makePublish('b2', [{ moduleId: 'page_m1', data: { bar: 2 } }]))
       fireMessage(makePublish('b1', [{ moduleId: 'page_m1', data: { baz: 3 } }]))
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const calls = (ipcRenderer.sendToHost as any).mock.calls
-      expect(calls).toHaveLength(3)
-      expect(calls[0]).toEqual([
-        SimulatorChannel.AppData,
-        { bridgeId: 'b1', moduleId: 'page_m1', componentPath: '/p1', data: { foo: 1 } },
-      ])
+      expect(emit).toHaveBeenCalledTimes(3)
       // b2/page_m1 must NOT inherit b1/page_m1's `foo: 1`.
-      expect(calls[1]).toEqual([
-        SimulatorChannel.AppData,
-        { bridgeId: 'b2', moduleId: 'page_m1', componentPath: '/p2', data: { bar: 2 } },
-      ])
+      expect(src!.snapshot().entries.b2['/p2']).toEqual({ bar: 2 })
       // b1/page_m1 keeps its own accumulated state — it should NOT see `bar: 2`.
-      expect(calls[2]).toEqual([
-        SimulatorChannel.AppData,
-        { bridgeId: 'b1', moduleId: 'page_m1', componentPath: '/p1', data: { foo: 1, baz: 3 } },
-      ])
+      expect(src!.snapshot().entries.b1['/p1']).toEqual({ foo: 1, baz: 3 })
     })
   })
 
   // ── C5: malformed / non-'ub' messages must be ignored ───────────────────
   describe('C5: ignores non-ub or malformed messages', () => {
     it('ignores messages whose type is not "ub"', () => {
-      dispose = installAppDataInstrumentation()
+      startSource()
+      emit.mockClear()
       fireMessage({
         type: 'invoke',
         target: 'render',
         method: 'publish',
         body: { bridgeId: 'b1', updates: [{ moduleId: 'm1', data: { a: 1 } }], callbackIds: [] },
       })
-      expect(ipcRenderer.sendToHost).not.toHaveBeenCalled()
+      expect(emit).not.toHaveBeenCalled()
+      expect(src!.snapshot()).toEqual({ bridges: [], entries: {} })
     })
 
     it('ignores messages with no body', () => {
-      dispose = installAppDataInstrumentation()
+      startSource()
+      emit.mockClear()
       fireMessage({ type: 'ub', target: 'render', method: 'publish' })
-      expect(ipcRenderer.sendToHost).not.toHaveBeenCalled()
+      expect(emit).not.toHaveBeenCalled()
+      expect(src!.snapshot()).toEqual({ bridges: [], entries: {} })
     })
 
     it('ignores messages whose body.updates is not an array', () => {
-      dispose = installAppDataInstrumentation()
+      startSource()
+      emit.mockClear()
       fireMessage({
         type: 'ub',
         target: 'render',
         method: 'publish',
         body: { bridgeId: 'b1', updates: 'nope', callbackIds: [] },
       })
-      expect(ipcRenderer.sendToHost).not.toHaveBeenCalled()
+      expect(emit).not.toHaveBeenCalled()
+      expect(src!.snapshot()).toEqual({ bridges: [], entries: {} })
     })
 
     it('ignores update entries missing moduleId', () => {
-      dispose = installAppDataInstrumentation()
+      startSource()
+      emit.mockClear()
       fireMessage({
         type: 'ub',
         target: 'render',
@@ -312,32 +307,35 @@ describe('installAppDataInstrumentation', () => {
           callbackIds: [],
         },
       })
-      expect(ipcRenderer.sendToHost).not.toHaveBeenCalled()
+      expect(emit).not.toHaveBeenCalled()
+      expect(src!.snapshot()).toEqual({ bridges: [], entries: {} })
     })
 
     it('ignores non-JSON string event.data', () => {
-      dispose = installAppDataInstrumentation()
+      startSource()
+      emit.mockClear()
       fireMessage('this is not json')
-      expect(ipcRenderer.sendToHost).not.toHaveBeenCalled()
+      expect(emit).not.toHaveBeenCalled()
+      expect(src!.snapshot()).toEqual({ bridges: [], entries: {} })
     })
   })
 
-  // ── C6: dispose restores Worker identity and stops emissions ────────────
-  describe('C6: disposer restores Worker and stops emissions', () => {
+  // ── C6: dispose restores Worker identity and stops state changes ────────
+  describe('C6: dispose restores Worker and stops state changes', () => {
     it('restores window.Worker to the original constructor identity', () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const before = (window as any).Worker
-      dispose = installAppDataInstrumentation()
+      startSource()
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       expect((window as any).Worker).not.toBe(before)
-      dispose()
-      dispose = null
+      src!.dispose()
+      src = null
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       expect((window as any).Worker).toBe(before)
     })
 
-    it('stops further IPC emissions even from a worker created before dispose', () => {
-      dispose = installAppDataInstrumentation()
+    it('stops further emits even from a worker created before dispose', () => {
+      startSource()
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const Ctor = (window as any).Worker as new (
@@ -352,7 +350,7 @@ describe('installAppDataInstrumentation', () => {
           data: makeInit('page_m1', 'b1', '/p1', {}),
         }),
       )
-      vi.clearAllMocks()
+      emit.mockClear()
 
       // Sanity: while installed, this would emit.
       w.dispatchEvent(
@@ -360,12 +358,12 @@ describe('installAppDataInstrumentation', () => {
           data: makePublish('b1', [{ moduleId: 'page_m1', data: { foo: 1 } }]),
         }),
       )
-      expect(ipcRenderer.sendToHost).toHaveBeenCalledTimes(1)
+      expect(emit).toHaveBeenCalledTimes(1)
 
       // Now dispose.
-      dispose()
-      dispose = null
-      vi.clearAllMocks()
+      src!.dispose()
+      src = null
+      emit.mockClear()
 
       // Further messages on the same (pre-dispose) worker must NOT emit.
       w.dispatchEvent(
@@ -373,71 +371,40 @@ describe('installAppDataInstrumentation', () => {
           data: makePublish('b1', [{ moduleId: 'page_m1', data: { bar: 2 } }]),
         }),
       )
-      expect(ipcRenderer.sendToHost).not.toHaveBeenCalled()
+      expect(emit).not.toHaveBeenCalled()
     })
   })
 
-  // ── Helper: extract the listener registered for a given channel ─────────
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  function findRegisteredListener(channel: string): ((event: any) => void) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const calls = (ipcRenderer.on as any).mock.calls as Array<[string, (event: any) => void]>
-    const found = calls.find((c) => c[0] === channel)
-    if (!found) {
-      throw new Error(`No ipcRenderer.on listener registered for channel ${channel}`)
-    }
-    return found[1]
-  }
-
-  // ── C7: renderer-initiated full snapshot refresh ────────────────────────
-  describe('C7: AppDataGetAllRequest replies with full cumulative snapshot', () => {
-    it('registers a host-message listener on BridgeChannel.AppDataGetAllRequest', () => {
-      dispose = installAppDataInstrumentation()
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const calls = (ipcRenderer.on as any).mock.calls as Array<[string, unknown]>
-      expect(calls.some((c) => c[0] === BridgeChannel.AppDataGetAllRequest)).toBe(true)
-    })
-
-    it('sends the merged snapshot on SimulatorChannel.AppDataAll when the request listener fires', () => {
-      dispose = installAppDataInstrumentation()
+  // ── C7: snapshot() returns the full cumulative snapshot ──────────────────
+  //
+  // Reframed: the source no longer registers an `AppDataGetAllRequest`
+  // listener — the `miniappSnapshot` host owns pull. The renderer-initiated
+  // refresh is now `src.snapshot()`, which must return the correct full
+  // cumulative snapshot directly.
+  describe('C7: snapshot() returns the full cumulative snapshot', () => {
+    it('snapshot() returns the merged cumulative state', () => {
+      startSource()
 
       // R6: seed inits so that subsequent ubs are accepted.
       // Init for page_m1 sets b1's pagePath to '/p1'; init for page_m2
       // accumulates onto the same bridge under its own (componentPath) key.
       fireMessage(makeInit('page_m1', 'b1', '/p1', {}))
       fireMessage(makeInit('page_m2', 'b1', '/p2', {}))
-      // Clear sendToHost only — preserving ipcRenderer.on's call history so
-      // findRegisteredListener can still locate the AppDataGetAllRequest
-      // listener registered during install.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ;(ipcRenderer.sendToHost as any).mockClear()
 
-      // Drive two worker updates so the preload accumulates state.
+      // Drive two worker updates so the source accumulates state.
       fireMessage(makePublish('b1', [{ moduleId: 'page_m1', data: { a: 1 } }]))
       fireMessage(makePublish('b1', [{ moduleId: 'page_m2', data: { x: 9 } }]))
 
-      // Sanity: the two per-update emissions happened.
-      expect(ipcRenderer.sendToHost).toHaveBeenCalledTimes(2)
-
-      // Trigger the renderer-initiated refresh.
-      const listener = findRegisteredListener(BridgeChannel.AppDataGetAllRequest)
-      listener(undefined)
-
-      // One additional sendToHost on AppDataAll carrying the full snapshot.
       // bridgePagePath is overwritten by each page_* init, so b1's pagePath
       // is '/p2' (last seeded).
-      expect(ipcRenderer.sendToHost).toHaveBeenCalledTimes(3)
-      expect(ipcRenderer.sendToHost).toHaveBeenLastCalledWith(
-        SimulatorChannel.AppDataAll,
-        {
-          bridges: [{ id: 'b1', pagePath: '/p2' }],
-          entries: { b1: { '/p1': { a: 1 }, '/p2': { x: 9 } } },
-        },
-      )
+      expect(src!.snapshot()).toEqual({
+        bridges: [{ id: 'b1', pagePath: '/p2' }],
+        entries: { b1: { '/p1': { a: 1 }, '/p2': { x: 9 } } },
+      })
     })
 
     it('C7: bridges list omits any bridge that only saw component messages', () => {
-      dispose = installAppDataInstrumentation()
+      startSource()
 
       // A bridge that only ever sees component_* messages (init + ub) must not
       // surface in the bridges list nor accumulate entries.
@@ -448,90 +415,76 @@ describe('installAppDataInstrumentation', () => {
         ]),
       )
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ;(ipcRenderer.sendToHost as any).mockClear()
-
-      const listener = findRegisteredListener(BridgeChannel.AppDataGetAllRequest)
-      listener(undefined)
-
-      expect(ipcRenderer.sendToHost).toHaveBeenCalledTimes(1)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const snapshot = (ipcRenderer.sendToHost as any).mock.calls[0][1] as {
-        bridges: Array<{ id: string; pagePath: string | null }>
-        entries: Record<string, Record<string, unknown>>
-      }
+      const snapshot = src!.snapshot()
       expect(snapshot.bridges).toEqual([])
       expect(snapshot.entries).not.toHaveProperty('b9')
     })
 
     it('snapshot reflects accumulated merges for the same (bridgeId, moduleId)', () => {
-      dispose = installAppDataInstrumentation()
+      startSource()
 
       // Seed pagePath for b1 and b2 with init messages.
       fireMessage(makeInit('page_x', 'b1', '/p1', { foo: 1 }))
       fireMessage(makePublish('b1', [{ moduleId: 'page_x', data: { bar: 2 } }]))
       fireMessage(makeInit('page_y', 'b2', '/p2', { z: 7 }))
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ;(ipcRenderer.sendToHost as any).mockClear()
-
-      const listener = findRegisteredListener(BridgeChannel.AppDataGetAllRequest)
-      listener(undefined)
-
-      expect(ipcRenderer.sendToHost).toHaveBeenCalledTimes(1)
-      expect(ipcRenderer.sendToHost).toHaveBeenCalledWith(
-        SimulatorChannel.AppDataAll,
-        {
-          bridges: [
-            { id: 'b1', pagePath: '/p1' },
-            { id: 'b2', pagePath: '/p2' },
-          ],
-          entries: {
-            b1: { '/p1': { foo: 1, bar: 2 } },
-            b2: { '/p2': { z: 7 } },
-          },
+      expect(src!.snapshot()).toEqual({
+        bridges: [
+          { id: 'b1', pagePath: '/p1' },
+          { id: 'b2', pagePath: '/p2' },
+        ],
+        entries: {
+          b1: { '/p1': { foo: 1, bar: 2 } },
+          b2: { '/p2': { z: 7 } },
         },
-      )
+      })
     })
   })
 
-  // ── C8: disposer unregisters the AppDataGetAllRequest listener ──────────
-  describe('C8: disposer unregisters the AppDataGetAllRequest listener', () => {
-    it('calls ipcRenderer.removeListener with the same (channel, listener) pair', () => {
-      dispose = installAppDataInstrumentation()
-      const listener = findRegisteredListener(BridgeChannel.AppDataGetAllRequest)
-
-      dispose()
-      dispose = null
-
-      expect(ipcRenderer.removeListener).toHaveBeenCalledWith(
-        BridgeChannel.AppDataGetAllRequest,
-        listener,
-      )
+  // ── C8: dispose tears the source down ───────────────────────────────────
+  //
+  // Reframed: the source no longer registers/unregisters an
+  // `AppDataGetAllRequest` listener (the host owns pull). C8 now asserts that
+  // `dispose()` tears the source down — Worker restored, no emit after dispose.
+  describe('C8: dispose tears the source down', () => {
+    it('restores window.Worker on dispose', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const before = (window as any).Worker
+      startSource()
+      src!.dispose()
+      src = null
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((window as any).Worker).toBe(before)
     })
 
-    it('no further sendToHost occurs when the captured listener fires after dispose', () => {
-      dispose = installAppDataInstrumentation()
+    it('no further emit occurs when a worker message arrives after dispose', () => {
+      startSource()
 
-      // Seed some state so a snapshot reply would be non-empty if it leaked.
-      fireMessage(makePublish('b1', [{ moduleId: 'm1', data: { a: 1 } }]))
-
-      const listener = findRegisteredListener(BridgeChannel.AppDataGetAllRequest)
-
-      dispose()
-      dispose = null
+      // Seed some state so a leak would be observable.
+      fireMessage(makeInit('page_x', 'b1', '/p1', { a: 1 }))
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ;(ipcRenderer.sendToHost as any).mockClear()
+      const Ctor = (window as any).Worker as new (
+        url: string | URL,
+        opts?: WorkerOptions,
+      ) => EventTarget
+      const w = new Ctor('worker.js')
 
-      // Simulate a stray renderer request arriving after dispose.
-      listener(undefined)
+      src!.dispose()
+      src = null
+      emit.mockClear()
 
-      expect(ipcRenderer.sendToHost).not.toHaveBeenCalled()
+      // A stray worker message after dispose must NOT emit.
+      w.dispatchEvent(
+        new MessageEvent('message', {
+          data: makePublish('b1', [{ moduleId: 'page_x', data: { b: 2 } }]),
+        }),
+      )
+      expect(emit).not.toHaveBeenCalled()
     })
   })
 
-  // ── Helpers used by C9–C13 ──────────────────────────────────────────────
+  // ── Helpers used by C9–C15 ──────────────────────────────────────────────
   /**
    * Build an init/full-state message. `type` is dynamic — e.g.
    * `page_<uuid>` or `component_<uuid>`.
@@ -563,166 +516,151 @@ describe('installAppDataInstrumentation', () => {
     w.dispatchEvent(new MessageEvent('message', { data }))
   }
 
-  // ── C9: init message (page_* / component_*) emits one IPC with path ─────
-  describe('C9: init message → single IPC emit with componentPath', () => {
-    it('emits one AppData call with componentPath for a page_<uuid> init (object form)', () => {
-      dispose = installAppDataInstrumentation()
+  // ── C9: init message (page_* / component_*) → snapshot write + emit ─────
+  describe('C9: init message → snapshot entry with componentPath', () => {
+    it('records a page_<uuid> init under componentPath and emits (object form)', () => {
+      startSource()
+      emit.mockClear()
       fireMessage(makeInit('page_abc', 'b1', '/pages/index/index', { n: 0, list: ['a'] }))
 
-      expect(ipcRenderer.sendToHost).toHaveBeenCalledTimes(1)
-      expect(ipcRenderer.sendToHost).toHaveBeenCalledWith(
-        SimulatorChannel.AppData,
-        {
-          bridgeId: 'b1',
-          moduleId: 'page_abc',
-          componentPath: '/pages/index/index',
-          data: { n: 0, list: ['a'] },
-        },
-      )
+      expect(emit).toHaveBeenCalledTimes(1)
+      expect(src!.snapshot()).toEqual({
+        bridges: [{ id: 'b1', pagePath: '/pages/index/index' }],
+        entries: { b1: { '/pages/index/index': { n: 0, list: ['a'] } } },
+      })
     })
 
-    it('emits one AppData call with componentPath for a page_<uuid> init (JSON string form)', () => {
-      dispose = installAppDataInstrumentation()
+    it('records a page_<uuid> init under componentPath and emits (JSON string form)', () => {
+      startSource()
+      emit.mockClear()
       const payload = makeInit('page_abc', 'b1', '/pages/index/index', { n: 0, list: ['a'] })
       fireMessage(JSON.stringify(payload))
 
-      expect(ipcRenderer.sendToHost).toHaveBeenCalledTimes(1)
-      expect(ipcRenderer.sendToHost).toHaveBeenCalledWith(
-        SimulatorChannel.AppData,
-        {
-          bridgeId: 'b1',
-          moduleId: 'page_abc',
-          componentPath: '/pages/index/index',
-          data: { n: 0, list: ['a'] },
-        },
-      )
+      expect(emit).toHaveBeenCalledTimes(1)
+      expect(src!.snapshot()).toEqual({
+        bridges: [{ id: 'b1', pagePath: '/pages/index/index' }],
+        entries: { b1: { '/pages/index/index': { n: 0, list: ['a'] } } },
+      })
     })
 
-    it('ignores component_* init (no IPC emission, no cache write)', () => {
-      dispose = installAppDataInstrumentation()
+    it('ignores component_* init (no emit, no snapshot write)', () => {
+      startSource()
+      emit.mockClear()
       fireMessage(makeInit('component_xyz', 'b1', '/components/foo/index', { ok: true }))
 
-      expect(ipcRenderer.sendToHost).not.toHaveBeenCalled()
+      expect(emit).not.toHaveBeenCalled()
+      expect(src!.snapshot()).toEqual({ bridges: [], entries: {} })
     })
 
     it('does NOT emit for messages whose type lacks page_/component_ prefix', () => {
-      dispose = installAppDataInstrumentation()
+      startSource()
+      emit.mockClear()
       fireMessage({
         type: 'not_a_prefix_xyz',
         body: { bridgeId: 'b1', path: '/p', data: { a: 1 } },
       })
-      expect(ipcRenderer.sendToHost).not.toHaveBeenCalled()
+      expect(emit).not.toHaveBeenCalled()
+      expect(src!.snapshot()).toEqual({ bridges: [], entries: {} })
     })
 
     it('does NOT emit for a page_* type whose body lacks path', () => {
-      dispose = installAppDataInstrumentation()
+      startSource()
+      emit.mockClear()
       fireMessage({
         type: 'page_abc',
         body: { bridgeId: 'b1', data: { a: 1 } },
       })
-      expect(ipcRenderer.sendToHost).not.toHaveBeenCalled()
+      expect(emit).not.toHaveBeenCalled()
+      expect(src!.snapshot()).toEqual({ bridges: [], entries: {} })
     })
 
     it('does NOT emit for a page_* type whose body lacks data', () => {
-      dispose = installAppDataInstrumentation()
+      startSource()
+      emit.mockClear()
       fireMessage({
         type: 'page_abc',
         body: { bridgeId: 'b1', path: '/p' },
       })
-      expect(ipcRenderer.sendToHost).not.toHaveBeenCalled()
+      expect(emit).not.toHaveBeenCalled()
+      expect(src!.snapshot()).toEqual({ bridges: [], entries: {} })
     })
 
     it('C9: drops ub entries whose moduleId starts with component_', () => {
-      dispose = installAppDataInstrumentation()
+      startSource()
+      emit.mockClear()
 
-      // A ub message containing only component_* updates: must yield zero IPC
-      // emissions AND no entry in the snapshot.
+      // A ub message containing only component_* updates: must yield zero
+      // emits AND no entry in the snapshot.
       fireMessage(
         makePublish('b1', [
           { moduleId: 'component_a', data: { foo: 1 } },
           { moduleId: 'component_b', data: { bar: 2 } },
         ]),
       )
-      expect(ipcRenderer.sendToHost).not.toHaveBeenCalled()
-
-      const listener = findRegisteredListener(BridgeChannel.AppDataGetAllRequest)
-      listener(undefined)
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const calls = (ipcRenderer.sendToHost as any).mock.calls as Array<[string, unknown]>
-      const allCall = calls.find((c) => c[0] === SimulatorChannel.AppDataAll)
-      expect(allCall).toBeDefined()
-      const snapshot = allCall![1] as {
-        bridges: Array<{ id: string; pagePath: string | null }>
-        entries: Record<string, Record<string, unknown>>
-      }
-      expect(snapshot.entries).not.toHaveProperty('b1')
+      expect(emit).not.toHaveBeenCalled()
+      expect(src!.snapshot().entries).not.toHaveProperty('b1')
     })
   })
 
   // ── C10: init seeds cache; subsequent `ub` patches merge ONTO init ──────
   describe('C10: init seeds cache, subsequent ub merges onto init', () => {
-    it('second emission carries fully-merged state and componentPath from init', () => {
-      dispose = installAppDataInstrumentation()
+    it('snapshot carries fully-merged state and componentPath from init', () => {
+      startSource()
+      emit.mockClear()
 
       fireMessage(makeInit('page_x', 'b1', '/p', { a: 1, b: 2 }))
       fireMessage(makePublish('b1', [{ moduleId: 'page_x', data: { c: 3, b: 99 } }]))
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const calls = (ipcRenderer.sendToHost as any).mock.calls
-      expect(calls).toHaveLength(2)
-
-      // Second call: merged state and path preserved.
-      expect(calls[1]).toEqual([
-        SimulatorChannel.AppData,
-        {
-          bridgeId: 'b1',
-          moduleId: 'page_x',
-          componentPath: '/p',
-          data: { a: 1, b: 99, c: 3 },
-        },
-      ])
+      // Two distinct snapshot states → two emits.
+      expect(emit).toHaveBeenCalledTimes(2)
+      // Merged state and path preserved.
+      expect(src!.snapshot()).toEqual({
+        bridges: [{ id: 'b1', pagePath: '/p' }],
+        entries: { b1: { '/p': { a: 1, b: 99, c: 3 } } },
+      })
     })
   })
 
   // ── C11: componentPath persists across subsequent ub patches ────────────
   describe('C11: componentPath persists for known (bridgeId, moduleId)', () => {
-    it('every subsequent ub patch on the seeded (bridge, module) carries the init path', () => {
-      dispose = installAppDataInstrumentation()
+    it('every subsequent ub patch on the seeded (bridge, module) stays under the init path', () => {
+      startSource()
+      emit.mockClear()
 
       fireMessage(makeInit('page_x', 'b1', '/p', { a: 1 }))
       fireMessage(makePublish('b1', [{ moduleId: 'page_x', data: { b: 2 } }]))
       fireMessage(makePublish('b1', [{ moduleId: 'page_x', data: { c: 3 } }]))
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const calls = (ipcRenderer.sendToHost as any).mock.calls
-      expect(calls).toHaveLength(3)
-      // Each call after init must carry componentPath '/p'.
-      expect(calls[1][1].componentPath).toBe('/p')
-      expect(calls[2][1].componentPath).toBe('/p')
+      // Three distinct snapshot states → three emits.
+      expect(emit).toHaveBeenCalledTimes(3)
+      // Every patch stays keyed under componentPath '/p' — never the bare
+      // moduleId — so componentPath persisted across both ub patches.
+      const snapshot = src!.snapshot()
+      expect(Object.keys(snapshot.entries.b1)).toEqual(['/p'])
+      expect(snapshot.entries.b1['/p']).toEqual({ a: 1, b: 2, c: 3 })
     })
 
-    it('post-init ub emissions carry the seeded componentPath', () => {
-      // R6: ub-without-init is dropped, so this test now seeds an init for b2
-      // and asserts that the subsequent ub picks up the seeded componentPath.
-      dispose = installAppDataInstrumentation()
+    it('post-init ub on a freshly-started source picks up the seeded componentPath', () => {
+      // R6: ub-without-init is dropped, so this seeds an init for b2 and
+      // asserts the subsequent ub lands under the seeded componentPath.
+      startSource()
 
       fireMessage(makeInit('page_y', 'b2', '/p_y', {}))
-      vi.clearAllMocks()
+      emit.mockClear()
       fireMessage(makePublish('b2', [{ moduleId: 'page_y', data: { q: 1 } }]))
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const calls = (ipcRenderer.sendToHost as any).mock.calls
-      expect(calls).toHaveLength(1)
-      const payload = calls[0][1] as { componentPath?: unknown }
-      expect(payload.componentPath).toBe('/p_y')
+      expect(emit).toHaveBeenCalledTimes(1)
+      // The ub is keyed under the init's componentPath '/p_y', not page_y.
+      expect(Object.keys(src!.snapshot().entries.b2)).toEqual(['/p_y'])
+      expect(src!.snapshot().entries.b2['/p_y']).toEqual({ q: 1 })
     })
   })
 
-  // ── C12: pageUnload via worker.postMessage clears cache for that bridge ─
-  describe('C12: pageUnload clears cache for the targeted bridge', () => {
+  // ── C12: pageUnload via worker.postMessage evicts the bridge ────────────
+  describe('C12: pageUnload evicts the targeted bridge from the snapshot', () => {
     it('object-form pageUnload evicts b1/* but keeps b2/* and forwards to original postMessage', () => {
-      dispose = installAppDataInstrumentation()
+      startSource()
+      emit.mockClear()
 
       // Seed two bridges via init messages.
       const w1 = createInstrumentedWorker()
@@ -734,34 +672,20 @@ describe('installAppDataInstrumentation', () => {
       const originalPostMessage = (w1 as any).__rawPostMessage
       dispatchMessage(w1, makeInit('page_x', 'b1', '/p1', { a: 1 }))
       dispatchMessage(w1, makeInit('page_y', 'b2', '/p2', { b: 2 }))
-
-      // Sanity: two AppData emissions happened.
-      expect(ipcRenderer.sendToHost).toHaveBeenCalledTimes(2)
+      emit.mockClear()
 
       // Drive main → worker pageUnload for bridge b1.
       w1.postMessage({ type: 'pageUnload', body: { bridgeId: 'b1' } })
+
+      // Eviction is a state change → emit fired.
+      expect(emit).toHaveBeenCalled()
 
       // Transparent forwarding: original postMessage was invoked.
       // The wrapper may have replaced the property, but `originalPostMessage`
       // (a vi.fn) must have been called at least once.
       expect(originalPostMessage).toHaveBeenCalled()
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ;(ipcRenderer.sendToHost as any).mockClear()
-
-      // Trigger snapshot.
-      const listener = findRegisteredListener(BridgeChannel.AppDataGetAllRequest)
-      listener(undefined)
-
-      expect(ipcRenderer.sendToHost).toHaveBeenCalledTimes(1)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const snapshotCall = (ipcRenderer.sendToHost as any).mock.calls[0]
-      expect(snapshotCall[0]).toBe(SimulatorChannel.AppDataAll)
-      const snapshot = snapshotCall[1] as {
-        bridges: Array<{ id: string; pagePath: string | null }>
-        entries: Record<string, Record<string, unknown>>
-      }
-
+      const snapshot = src!.snapshot()
       // b1 must be gone from both bridges list and entries.
       expect(snapshot.bridges.some((b) => b.id === 'b1')).toBe(false)
       expect(snapshot.entries).not.toHaveProperty('b1')
@@ -771,7 +695,7 @@ describe('installAppDataInstrumentation', () => {
     })
 
     it('JSON-string-form pageUnload also evicts the targeted bridge', () => {
-      dispose = installAppDataInstrumentation()
+      startSource()
 
       const w = createInstrumentedWorker()
       dispatchMessage(w, makeInit('page_x', 'b1', '/p1', { a: 1 }))
@@ -779,24 +703,15 @@ describe('installAppDataInstrumentation', () => {
 
       w.postMessage(JSON.stringify({ type: 'pageUnload', body: { bridgeId: 'b1' } }))
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ;(ipcRenderer.sendToHost as any).mockClear()
-      const listener = findRegisteredListener(BridgeChannel.AppDataGetAllRequest)
-      listener(undefined)
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const snapshot = (ipcRenderer.sendToHost as any).mock.calls[0][1] as {
-        bridges: Array<{ id: string; pagePath: string | null }>
-        entries: Record<string, Record<string, unknown>>
-      }
+      const snapshot = src!.snapshot()
       expect(snapshot.bridges.some((b) => b.id === 'b1')).toBe(false)
       expect(snapshot.entries).not.toHaveProperty('b1')
       expect(snapshot.bridges).toContainEqual({ id: 'b2', pagePath: '/p2' })
       expect(snapshot.entries.b2['/p2']).toEqual({ b: 2 })
     })
 
-    it('non-pageUnload outgoing messages do NOT clear cache', () => {
-      dispose = installAppDataInstrumentation()
+    it('non-pageUnload outgoing messages do NOT evict the bridge', () => {
+      startSource()
 
       const w = createInstrumentedWorker()
       dispatchMessage(w, makeInit('page_x', 'b1', '/p1', { a: 1 }))
@@ -804,101 +719,73 @@ describe('installAppDataInstrumentation', () => {
       // Some unrelated outgoing message.
       w.postMessage({ type: 'appShow' })
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ;(ipcRenderer.sendToHost as any).mockClear()
-      const listener = findRegisteredListener(BridgeChannel.AppDataGetAllRequest)
-      listener(undefined)
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const snapshot = (ipcRenderer.sendToHost as any).mock.calls[0][1] as {
-        bridges: Array<{ id: string; pagePath: string | null }>
-        entries: Record<string, Record<string, unknown>>
-      }
+      const snapshot = src!.snapshot()
       // b1/page_x must still be present (under '/p1').
       expect(snapshot.bridges).toContainEqual({ id: 'b1', pagePath: '/p1' })
       expect(snapshot.entries.b1['/p1']).toEqual({ a: 1 })
     })
   })
 
-  // ── C13: AppDataAll snapshot key prefers componentPath, falls back to bare moduleId ──
+  // ── C13: snapshot key prefers componentPath, falls back to bare moduleId ─
   describe('C13: snapshot key prefers componentPath, falls back to bare moduleId within bridge', () => {
     it('uses path for init-seeded entries and bare moduleId fallback for ub-only page entries', () => {
-      dispose = installAppDataInstrumentation()
+      startSource()
 
       // Init seeds path '/p1' for (b1, page_x).
       fireMessage(makeInit('page_x', 'b1', '/p1', { a: 1 }))
       // Patch-only for (b1, page_y) — no path known, falls back to bare moduleId.
       fireMessage(makePublish('b1', [{ moduleId: 'page_y', data: { q: 9 } }]))
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ;(ipcRenderer.sendToHost as any).mockClear()
-      const listener = findRegisteredListener(BridgeChannel.AppDataGetAllRequest)
-      listener(undefined)
-
-      expect(ipcRenderer.sendToHost).toHaveBeenCalledTimes(1)
-      expect(ipcRenderer.sendToHost).toHaveBeenCalledWith(
-        SimulatorChannel.AppDataAll,
-        {
-          bridges: [{ id: 'b1', pagePath: '/p1' }],
-          entries: { b1: { '/p1': { a: 1 }, page_y: { q: 9 } } },
-        },
-      )
+      expect(src!.snapshot()).toEqual({
+        bridges: [{ id: 'b1', pagePath: '/p1' }],
+        entries: { b1: { '/p1': { a: 1 }, page_y: { q: 9 } } },
+      })
     })
   })
 
-  // ── C14: pageUnload auto-pushes AppDataAll snapshot to host ─────────────
-  describe('C14: pageUnload auto-pushes AppDataAll', () => {
-    it('object-form pageUnload triggers automatic AppDataAll send without an explicit request', () => {
-      dispose = installAppDataInstrumentation()
+  // ── C14: pageUnload mutates the snapshot and emits ──────────────────────
+  //
+  // Reframed: the migration removes the auto-push `sendToHost(AppDataAll, …)`
+  // on pageUnload. Eviction now mutates `snapshot()` and triggers `emit()` so
+  // the host republishes the refreshed snapshot.
+  describe('C14: pageUnload mutates the snapshot and emits', () => {
+    it('object-form pageUnload emits and the snapshot no longer contains b1', () => {
+      startSource()
 
       const w = createInstrumentedWorker()
       dispatchMessage(w, makeInit('page_x', 'b1', '/p1', { a: 1 }))
       dispatchMessage(w, makeInit('page_y', 'b2', '/p2', { b: 2 }))
 
-      // Clear the per-update emissions so we only see post-unload activity.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ;(ipcRenderer.sendToHost as any).mockClear()
+      // Clear the per-init emissions so we only see post-unload activity.
+      emit.mockClear()
 
-      // Drive pageUnload for b1 — no AppDataGetAllRequest is fired.
+      // Drive pageUnload for b1.
       w.postMessage({ type: 'pageUnload', body: { bridgeId: 'b1' } })
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const calls = (ipcRenderer.sendToHost as any).mock.calls as Array<[string, unknown]>
-      const allCalls = calls.filter((c) => c[0] === SimulatorChannel.AppDataAll)
-      expect(allCalls.length).toBeGreaterThanOrEqual(1)
+      // The eviction is a state change → emit fired.
+      expect(emit).toHaveBeenCalled()
 
-      // The most recent AppDataAll snapshot must reflect the eviction of b1.
-      const snapshot = allCalls[allCalls.length - 1][1] as {
-        bridges: Array<{ id: string; pagePath: string | null }>
-        entries: Record<string, Record<string, unknown>>
-      }
+      const snapshot = src!.snapshot()
       expect(snapshot.bridges.some((b) => b.id === 'b1')).toBe(false)
       expect(snapshot.entries).not.toHaveProperty('b1')
       expect(snapshot.bridges).toContainEqual({ id: 'b2', pagePath: '/p2' })
       expect(snapshot.entries.b2['/p2']).toEqual({ b: 2 })
     })
 
-    it('JSON-string-form pageUnload also auto-pushes AppDataAll', () => {
-      dispose = installAppDataInstrumentation()
+    it('JSON-string-form pageUnload also emits and evicts the bridge', () => {
+      startSource()
 
       const w = createInstrumentedWorker()
       dispatchMessage(w, makeInit('page_x', 'b1', '/p1', { a: 1 }))
       dispatchMessage(w, makeInit('page_y', 'b2', '/p2', { b: 2 }))
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ;(ipcRenderer.sendToHost as any).mockClear()
+      emit.mockClear()
 
       w.postMessage(JSON.stringify({ type: 'pageUnload', body: { bridgeId: 'b1' } }))
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const calls = (ipcRenderer.sendToHost as any).mock.calls as Array<[string, unknown]>
-      const allCalls = calls.filter((c) => c[0] === SimulatorChannel.AppDataAll)
-      expect(allCalls.length).toBeGreaterThanOrEqual(1)
+      expect(emit).toHaveBeenCalled()
 
-      const snapshot = allCalls[allCalls.length - 1][1] as {
-        bridges: Array<{ id: string; pagePath: string | null }>
-        entries: Record<string, Record<string, unknown>>
-      }
+      const snapshot = src!.snapshot()
       expect(snapshot.bridges.some((b) => b.id === 'b1')).toBe(false)
       expect(snapshot.entries).not.toHaveProperty('b1')
       expect(snapshot.bridges).toContainEqual({ id: 'b2', pagePath: '/p2' })
@@ -919,87 +806,60 @@ describe('installAppDataInstrumentation', () => {
   // previously been seen via a `page_*` init message.
   describe('C15: ub for unseen bridge is dropped', () => {
     it('drops a single-update ub for a bridgeId that never saw a page_* init', () => {
-      dispose = installAppDataInstrumentation()
+      startSource()
+      emit.mockClear()
 
       fireMessage(makePublish('b_lonely', [{ moduleId: 'page_m1', data: { foo: 1 } }]))
 
-      expect(ipcRenderer.sendToHost).not.toHaveBeenCalled()
+      expect(emit).not.toHaveBeenCalled()
+      expect(src!.snapshot()).toEqual({ bridges: [], entries: {} })
     })
 
     it('drops a ub even when other bridges are known', () => {
-      dispose = installAppDataInstrumentation()
+      startSource()
 
       // Bridge b1 is known via a page_* init.
       fireMessage(makeInit('page_x', 'b1', '/p1', { a: 1 }))
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ;(ipcRenderer.sendToHost as any).mockClear()
+      emit.mockClear()
 
       // Bridge b2 has NOT been inited — its ub must be silently dropped.
       fireMessage(makePublish('b2', [{ moduleId: 'page_y', data: { q: 1 } }]))
 
-      // No per-update emission was produced for the dropped b2 ub.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const appDataCalls = (ipcRenderer.sendToHost as any).mock.calls.filter(
-        (c: [string, unknown]) => c[0] === SimulatorChannel.AppData,
-      )
-      expect(appDataCalls).toHaveLength(0)
+      // No state change → no emit for the dropped b2 ub.
+      expect(emit).not.toHaveBeenCalled()
 
       // Snapshot must NOT include b2 in either bridges or entries.
-      const listener = findRegisteredListener(BridgeChannel.AppDataGetAllRequest)
-      listener(undefined)
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const allCalls = (ipcRenderer.sendToHost as any).mock.calls.filter(
-        (c: [string, unknown]) => c[0] === SimulatorChannel.AppDataAll,
-      )
-      expect(allCalls.length).toBeGreaterThanOrEqual(1)
-      const snapshot = allCalls[allCalls.length - 1][1] as {
-        bridges: Array<{ id: string; pagePath: string | null }>
-        entries: Record<string, Record<string, unknown>>
-      }
+      const snapshot = src!.snapshot()
       expect(snapshot.bridges.some((b) => b.id === 'b2')).toBe(false)
       expect(snapshot.entries.b2).toBeUndefined()
     })
 
     it('simulates pageUnload race: ub arriving after clearBridge is dropped', () => {
-      dispose = installAppDataInstrumentation()
+      startSource()
 
       // Seed b1 via a page_* init.
       const w = createInstrumentedWorker()
       dispatchMessage(w, makeInit('page_x', 'b1', '/p1', { a: 1 }))
 
       // Container posts pageUnload to the worker — the wrapper synchronously
-      // calls clearBridge('b1') so the bridge is evicted from the cache.
+      // evicts b1 from the cache.
       w.postMessage({ type: 'pageUnload', body: { bridgeId: 'b1' } })
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ;(ipcRenderer.sendToHost as any).mockClear()
+      emit.mockClear()
 
       // A late `ub` arrives AFTER eviction. Under R6 it must be dropped:
-      // no new emission, no snapshot entry, and b1 must not be resurrected
+      // no new emit, no snapshot entry, and b1 must not be resurrected
       // in the bridges list.
       dispatchMessage(w, makePublish('b1', [{ moduleId: 'page_x', data: { a: 2 } }]))
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const appDataCalls = (ipcRenderer.sendToHost as any).mock.calls.filter(
-        (c: [string, unknown]) => c[0] === SimulatorChannel.AppData,
-      )
-      expect(appDataCalls).toHaveLength(0)
-
-      const listener = findRegisteredListener(BridgeChannel.AppDataGetAllRequest)
-      listener(undefined)
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const allCalls = (ipcRenderer.sendToHost as any).mock.calls.filter(
-        (c: [string, unknown]) => c[0] === SimulatorChannel.AppDataAll,
-      )
-      expect(allCalls.length).toBeGreaterThanOrEqual(1)
-      const snapshot = allCalls[allCalls.length - 1][1] as {
-        bridges: Array<{ id: string; pagePath: string | null }>
-        entries: Record<string, Record<string, unknown>>
-      }
+      expect(emit).not.toHaveBeenCalled()
+      const snapshot = src!.snapshot()
       expect(snapshot.bridges).toEqual([])
       expect(snapshot.entries).not.toHaveProperty('b1')
     })
   })
+
+  // C16 (install emits an empty AppDataAll snapshot) was deleted: the
+  // install-time publish is now the framework host's responsibility —
+  // covered by `src/preload/miniapp-snapshot/host.test.ts`.
 })

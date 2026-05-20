@@ -1,3 +1,3 @@
 export { installConsoleInstrumentation } from './console.js'
-export { installAppDataInstrumentation, sendAllAppData } from './app-data.js'
-export { installWxmlInstrumentation, sendWxmlTree, setupWxmlObserver } from './wxml.js'
+export { createAppDataSource, type AppDataSnapshot } from './app-data.js'
+export { createWxmlSource } from './wxml.js'

@@ -95,11 +95,6 @@ export function hidePopover(): Promise<void> {
 
 // ── Event subscriptions ─────────────────────────────────────────────────────
 
-/** Listen for built-in panel reset broadcasts (session restart etc.). */
-export function onWorkbenchReset(handler: () => void): () => void {
-  return on<[]>(WorkbenchChannel.Reset, () => handler())
-}
-
 /** Listen for toolbar action list changes. */
 export function onToolbarActionsChanged(handler: () => void): () => void {
   return on<[]>(ToolbarChannel.ActionsChanged, () => handler())

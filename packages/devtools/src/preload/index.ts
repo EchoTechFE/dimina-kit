@@ -10,8 +10,16 @@
  * bundled by esbuild, never re-exported through this barrel.
  */
 export { installConsoleInstrumentation } from './instrumentation/console.js'
-export { installAppDataInstrumentation, sendAllAppData } from './instrumentation/app-data.js'
-export { installWxmlInstrumentation, sendWxmlTree, setupWxmlObserver } from './instrumentation/wxml.js'
+export { createAppDataSource } from './instrumentation/app-data.js'
+export type { AppDataSnapshot } from './instrumentation/app-data.js'
+export { createWxmlSource } from './instrumentation/wxml.js'
+export { createMiniappSnapshotHost } from './miniapp-snapshot/host.js'
+export type {
+  MiniappSnapshotHost,
+  MiniappSnapshotSource,
+  SnapshotEnvelope,
+  SnapshotSourceId,
+} from './miniapp-snapshot/types.js'
 export { installSimulatorBridge } from './runtime/bridge.js'
 export { installCustomApisBridge } from './runtime/custom-apis.js'
 export type { DiminaCustomApisBridge } from './runtime/custom-apis.js'

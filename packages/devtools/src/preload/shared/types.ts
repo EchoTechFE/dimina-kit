@@ -7,6 +7,7 @@
 
 import type { Snapshot, StorageSnapshot, WxmlNode } from '../runtime/bridge.js'
 import type { ElementInspection } from '../../shared/ipc-channels.js'
+import type { MiniappSnapshotApi } from '../miniapp-snapshot/types.js'
 
 /** The simulator data bridge exposed via contextBridge. */
 export interface SimulatorDataBridge {
@@ -34,5 +35,6 @@ declare global {
     __simulatorData?: SimulatorDataBridge
     __deviceInfo?: unknown
     __simulatorHook?: SimulatorHook
+    __miniappSnapshot?: MiniappSnapshotApi
   }
 }

@@ -206,9 +206,12 @@ src/
       types.ts
     instrumentation/                     # 注入到小程序 runtime 的探针
       console.ts                         # 控制台拦截
-      app-data.ts                        # Worker setData 拦截
-      wxml.ts                            # Vue 组件树提取 + WXML 高亮 overlay
+      app-data.ts                        # Worker setData 拦截 → createAppDataSource
+      wxml.ts                            # Vue 组件树提取 → createWxmlSource
       disposable.ts                      # instrumentation 共用的清理工具
+    miniapp-snapshot/                    # 面板数据统一快照框架（docs/miniapp-snapshot.md）
+      types.ts                           # MiniappSnapshotSource / SnapshotEnvelope
+      host.ts                            # createMiniappSnapshotHost → push/pull/__miniappSnapshot
     runtime/
       bridge.ts                          # installSimulatorBridge → window.__simulatorData
       custom-apis.ts                     # installCustomApisBridge → window.__diminaCustomApis
@@ -444,11 +447,13 @@ const myAdapter: CompilationAdapter = {
 
 ### 按需：instrumentation
 
-| Instrumentation | 捕获内容 | 数据通道 |
+Console 是独立 instrumentation；AppData 与 WXML 已迁移到 **miniappSnapshot** 框架——各自实现一个 `MiniappSnapshotSource`，由 `MiniappSnapshotHost` 统一负责推送 / 拉取 / reload 重同步（详见 `docs/miniapp-snapshot.md`）。
+
+| 探针 | 捕获内容 | 数据通道 |
 | --- | --- | --- |
-| `installConsoleInstrumentation` | `console.*`、`window.onerror`、未捕获 rejection | IPC sendToHost |
-| `installAppDataInstrumentation` | Worker `type='u'` 消息、setData 调用 | IPC sendToHost + 写入 bridge state |
-| `installWxmlInstrumentation` | Vue 组件树提取、MutationObserver 自动更新 | IPC sendToHost + 写入 bridge state |
+| `installConsoleInstrumentation()` | `console.*`、`window.onerror`、未捕获 rejection | `sendToHost` |
+| `createAppDataSource()` | Worker `ub` 消息、setData / page init | miniappSnapshot 框架（`miniapp-snapshot:push`） |
+| `createWxmlSource()` | Vue 组件树提取、MutationObserver 自动更新 | miniappSnapshot 框架（`miniapp-snapshot:push`） |
 
 > Storage 面板的数据由主进程通过 CDP `DOMStorage` 域抓取（`src/main/services/simulator-storage`），**不需要 preload 侧 instrumentation**。
 
@@ -464,8 +469,9 @@ import {
   installSimulatorBridge,
   installCustomApisBridge,
   installConsoleInstrumentation,
-  installAppDataInstrumentation,
-  installWxmlInstrumentation,
+  createMiniappSnapshotHost,
+  createAppDataSource,
+  createWxmlSource,
   setupApiCompatHook,
 } from '@dimina-kit/devtools/preload'
 
@@ -474,12 +480,16 @@ setupApiCompatHook()
 installSimulatorBridge()
 installCustomApisBridge()   // 若用到 registerSimulatorApi，必装
 
-// 2. instrumentation（按需）
+// 2. Console instrumentation（按需）
 installConsoleInstrumentation()
-installAppDataInstrumentation()
-installWxmlInstrumentation()
 
-// 3. 自定义 hook
+// 3. miniappSnapshot 框架：注册面板数据源后 install()
+const snapshotHost = createMiniappSnapshotHost()
+snapshotHost.register(createAppDataSource())
+snapshotHost.register(createWxmlSource())
+snapshotHost.install()
+
+// 4. 自定义 hook
 window.addEventListener('error', (e) => {
   console.error('[my-preload]', e.message)
 })
@@ -559,9 +569,8 @@ dispose()
 @dimina-kit/devtools/preload                installSimulatorBridge,
                                        installCustomApisBridge,
                                        installConsoleInstrumentation,
-                                       installAppDataInstrumentation, sendAllAppData,
-                                       installWxmlInstrumentation, sendWxmlTree,
-                                       setupWxmlObserver,
+                                       createMiniappSnapshotHost,
+                                       createAppDataSource, createWxmlSource,
                                        setupApiCompatHook
                                        （storage 面板数据由主进程 CDP 抓取，无 preload 侧 hook）
 ```
@@ -653,13 +662,14 @@ flowchart TB
 
 ### 数据流
 
-按面板拆分，分**三条独立路径**：
+按面板 / 场景拆分：
 
 | 面板 / 场景 | 模式 | 路径 |
 | --- | --- | --- |
-| Console / AppData / WXML 树 | 推送 | preload instrumentation 通过 `runtime/host.ts:sendToHost` 经 webview `ipcRenderer.sendToHost` 推到宿主 → renderer 监听 `ipc-message` 分发 |
+| Console | 推送 | `installConsoleInstrumentation` 经 `runtime/host.ts:sendToHost` → webview `ipcRenderer.sendToHost` 推到宿主 → renderer 监听 `ipc-message` |
+| AppData / WXML 树 | 推送 + 拉取 | **miniappSnapshot 框架**：preload `MiniappSnapshotHost` 经 `miniapp-snapshot:push` 推全量快照，renderer `useMiniappSnapshot` 整份投影；面板「刷新」走 `miniapp-snapshot:pull`（详见 `docs/miniapp-snapshot.md`） |
 | Storage | 拉取 + 推送 | renderer `ipcInvoke(SimulatorStorageChannel.GetSnapshot)` → 主进程 CDP `DOMStorage` 域；变更事件由主进程通过 `SimulatorStorageChannel.Event` 推回 renderer |
-| 元素选区 / `Page.getData` / MCP overview | 拉取 | 主进程 `webContents.executeJavaScript(...)` 或 `Runtime.evaluate(...)` 读 `window.__simulatorData.*`（由 `installSimulatorBridge` 暴露） |
+| 元素选区 / `Page.getData` / MCP overview | 拉取 | 主进程 `webContents.executeJavaScript(...)` 或 `Runtime.evaluate(...)` 读 `window.__simulatorData.*`（由 `installSimulatorBridge` 暴露）；面板快照亦可经 `window.__miniappSnapshot.get(id)` 同步读取（由 `MiniappSnapshotHost` 暴露） |
 
 > `src/main/ipc/panels.ts` 暴露 `panel:eval` handler 供外部 host 自定义面板复用，内置 renderer 不消费它。
 
@@ -688,7 +698,6 @@ flowchart TB
 | `simulator:detach`                | R→M   | 销毁所有 View                                  |
 | `simulator:resize`                | R→M   | 更新 View 位置（分割线拖动）                   |
 | `simulator:setVisible`            | R→M   | 显示/隐藏 simulator 面板                       |
-| `workbench:reset`                 | R→M   | 通知主窗口重置面板状态                         |
 | `panel:list`                      | R→M   | 获取启用的内置面板列表                         |
 | `panel:eval`                      | R→M   | 在 simulator webContents 执行 JS 并返回结果    |
 | `panel:select`                    | R→M   | 切换到指定内置面板                             |
