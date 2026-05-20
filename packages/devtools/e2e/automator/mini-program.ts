@@ -4,7 +4,7 @@
  * Architecture:
  *   - The simulator is a webview containing an iframe (pageFrame.html)
  *   - The mini program page renders inside the iframe via Vue
- *   - Page route is encoded in the simulator's location.hash
+ *   - Page route lives in the simulator URL (see shared/simulator-route)
  *   - Navigation works by clicking DOM elements or IPC
  *   - wx object is on the simulator top window (storage/system APIs only)
  *   - No getCurrentPages/getApp - those are in the service layer
@@ -13,6 +13,10 @@
 import type { ElectronApplication, Page as PwPage } from '@playwright/test'
 import { Page } from './page'
 import { evalInSimulator, ipcInvoke, closeProject, pollUntil } from '../helpers'
+import {
+  buildRouteSearch,
+  parseLocationRoute,
+} from '../../src/shared/simulator-route'
 
 export class MiniProgram {
   readonly electronApp: ElectronApplication
@@ -32,21 +36,16 @@ export class MiniProgram {
   // ── Navigation ──────────────────────────────────────────────────────
 
   /**
-   * Get the current page route from the simulator's URL hash.
-   * New format: #appid|page1|page2 — last segment is current page
-   * Legacy format: #appid/pages/xxx/xxx?query
+   * Get the current page route from the simulator's URL.
+   * Delegates to the shared simulator-route module so this stays in sync
+   * with whatever URL contract upstream dimina exposes.
    */
   async currentPagePath(): Promise<string> {
-    const hash = await evalInSimulator<string>(this.electronApp, `location.hash`)
-    const clean = hash.replace(/^#/, '').replace(/\?.*$/, '')
-    // New format: #appid|page1|page2 — last segment is current page
-    if (clean.includes('|')) {
-      const parts = clean.split('|')
-      return parts[parts.length - 1] ?? ''
-    }
-    // Legacy format: #appid/pagePath
-    const slashIndex = clean.indexOf('/')
-    return slashIndex >= 0 ? clean.substring(slashIndex + 1) : clean
+    const { search, hash } = await evalInSimulator<{ search: string; hash: string }>(
+      this.electronApp,
+      `({ search: location.search, hash: location.hash })`,
+    )
+    return parseLocationRoute(search, hash)?.current.pagePath ?? ''
   }
 
   /** Get the current active page. */
@@ -121,6 +120,9 @@ export class MiniProgram {
       //   - target not on stack → reLaunch (works regardless of stack state)
       // A bare location.hash = ... is NOT enough — the dimina runtime does
       // not bind hashchange for navigation.
+      // Last-resort fallback: drive navigation via wx APIs on whichever page
+      // iframe exposes wx. Upstream's new query router doesn't react to
+      // hash writes, so reLaunch/navigateTo is the only reliable route.
       await evalInSimulator(
         this.electronApp,
         `(() => {
@@ -132,13 +134,9 @@ export class MiniProgram {
             } catch (_) {}
           }
           if (!win) return
-          const hash = location.hash.replace(/^#/, '')
-          const segs = hash.includes('|') ? hash.split('|').slice(1).map(s => s.split('?')[0]) : []
-          const targetIdx = segs.indexOf(${targetSegJson})
+          void ${targetSegJson};
           try {
-            if (targetIdx >= 0 && targetIdx < segs.length - 1 && typeof win.wx.navigateBack === 'function') {
-              win.wx.navigateBack({ delta: segs.length - 1 - targetIdx })
-            } else if (typeof win.wx.reLaunch === 'function') {
+            if (typeof win.wx.reLaunch === 'function') {
               win.wx.reLaunch({ url: ${cleanUrlJson} })
             } else if (typeof win.wx.navigateTo === 'function') {
               win.wx.navigateTo({ url: ${cleanUrlJson} })
@@ -188,15 +186,21 @@ export class MiniProgram {
   /** Close all pages and navigate to the specified page (reloads simulator). */
   async reLaunch(url: string): Promise<Page> {
     const cleanUrl = url.startsWith('/') ? url : `/${url}`
-    const hash = await evalInSimulator<string>(this.electronApp, `location.hash`)
-    const clean = hash.replace(/^#/, '')
-    const appId = clean.includes('|') ? clean.split('|')[0] : clean.split('/')[0]
     const pageSeg = cleanUrl.replace(/^\//, '')
 
-    // Reload the simulator with the target page
+    // Read appId from the current URL (query format with hash fallback).
+    const { search, hash } = await evalInSimulator<{ search: string; hash: string }>(
+      this.electronApp,
+      `({ search: location.search, hash: location.hash })`,
+    )
+    const appId = parseLocationRoute(search, hash)?.appId ?? ''
+
+    // Rebuild the simulator URL via the shared builder so the container
+    // parses it through HashRouter.parseSearch.
+    const newSearch = buildRouteSearch(appId, { pagePath: pageSeg, query: {} })
     await evalInSimulator(
       this.electronApp,
-      `location.href = location.pathname + '#${appId}|${pageSeg}'`,
+      `location.href = location.pathname + ${JSON.stringify(`?${newSearch}`)}`,
     )
 
     // Wait for iframe to appear

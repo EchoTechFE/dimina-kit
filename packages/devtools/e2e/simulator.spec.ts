@@ -155,7 +155,10 @@ test.describe('Simulator', () => {
   test('simulator page has expected URL structure', async ({ electronApp }) => {
     const url = await evalInSimulator<string>(electronApp, `location.href`)
     expect(url).toMatch(/^http:\/\/localhost:\d+\//)
-    expect(url).toContain('#')
+    // Upstream HashRouter now syncs the route into the query string
+    // (?appId=…&entry=…&page=…); the legacy hash form is accepted on first
+    // load but rewritten to query format once the container mounts.
+    expect(url).toContain('appId=')
   })
 
   test('simulator page title is present', async ({ electronApp }) => {

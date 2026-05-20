@@ -75,8 +75,14 @@ test.describe('Extension Panels Data Bridge', () => {
     await evalInSimulator(
       electronApp,
       `(() => {
-        const hash = location.hash.replace(/^#/, '')
-        const appId = hash.includes('|') ? hash.split('|')[0] : hash.split('/')[0]
+        // Upstream's query router writes appId into location.search; we still
+        // accept the legacy hash format as a fallback for older containers.
+        const fromQuery = new URLSearchParams(location.search).get('appId')
+        let appId = fromQuery || ''
+        if (!appId) {
+          const h = location.hash.replace(/^#/, '')
+          appId = h.includes('|') ? h.split('|')[0] : h.split('/')[0]
+        }
         localStorage.setItem(appId + '_e2e_storage_key', 'e2e_storage_value')
       })()`,
     )

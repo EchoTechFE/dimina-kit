@@ -166,10 +166,12 @@ describe('useSession: hotReload collapses stacked hash before reload', () => {
   it('stacked URL → loadURL with collapsed hash, then reload', async () => {
     vi.useFakeTimers()
     try {
+      // Use the new upstream query format. collapseRouteToTopPage rewrites
+      // entry to equal the current page so reload boots only the top page.
       const stackedUrl =
-        'http://localhost:1000/simulator.html#wx|pages/a/a|pages/b/b?scene=1001'
+        'http://localhost:1000/simulator.html?appId=wx&entry=pages/a/a&page=pages/b/b%3Fscene%3D1001'
       const collapsedUrl =
-        'http://localhost:1000/simulator.html#wx|pages/b/b?scene=1001'
+        'http://localhost:1000/simulator.html?appId=wx&entry=pages/b/b%3Fscene%3D1001&page=pages/b/b%3Fscene%3D1001'
 
       const webview = makeFakeWebview(stackedUrl)
       const hook = renderUseSession(webview)
@@ -213,7 +215,7 @@ describe('useSession: hotReload collapses stacked hash before reload', () => {
 
   it('single-page URL → reload only, no loadURL', async () => {
     const singleUrl =
-      'http://localhost:1000/simulator.html#wx|pages/a/a?scene=1001'
+      'http://localhost:1000/simulator.html?appId=wx&entry=pages/a/a%3Fscene%3D1001&page=pages/a/a%3Fscene%3D1001'
 
     const webview = makeFakeWebview(singleUrl)
     const hook = renderUseSession(webview)

@@ -6,8 +6,9 @@ export default [
   ...config,
   {
     // templates/ are scaffolds copied verbatim into user projects (with wx/App/Page
-    // globals + Taro-compiled minified bundles); they aren't part of our codebase.
-    ignores: ["container/**", "docs/**", "templates/**"],
+    // globals + Taro-compiled minified bundles); playwright-report and test-results
+    // are e2e artifacts. None of these are source we maintain — skip linting them.
+    ignores: ["container/**", "docs/**", "templates/**", "playwright-report/**", "test-results/**"],
   },
   {
     files: [
