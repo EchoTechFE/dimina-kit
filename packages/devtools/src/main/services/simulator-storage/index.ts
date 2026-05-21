@@ -230,6 +230,39 @@ export function setupSimulatorStorage(
     return { securityOrigin: cachedOrigin, isLocalStorage: true }
   }
 
+  async function withStorageWrite(
+    fn: (ctx: { wc: WebContents; storageId: { securityOrigin: string; isLocalStorage: true } }) => Promise<StorageWriteResult>,
+  ): Promise<StorageWriteResult> {
+    await ensureAttached()
+    if (!attachedWc || attachedWc.isDestroyed()) {
+      return { ok: false, error: 'simulator not attached' }
+    }
+    const storageId = await getStorageId()
+    if (!storageId) return { ok: false, error: 'failed to resolve simulator origin' }
+    try {
+      return await fn({ wc: attachedWc, storageId })
+    }
+    catch (e) {
+      return { ok: false, error: (e as Error).message }
+    }
+  }
+
+  async function withStorageRead<T>(
+    fallback: T,
+    fn: (ctx: { wc: WebContents; storageId: { securityOrigin: string; isLocalStorage: true } }) => Promise<T>,
+  ): Promise<T> {
+    await ensureAttached()
+    if (!attachedWc || attachedWc.isDestroyed()) return fallback
+    try {
+      const storageId = await getStorageId()
+      if (!storageId) return fallback
+      return await fn({ wc: attachedWc, storageId })
+    }
+    catch {
+      return fallback
+    }
+  }
+
   /**
    * Push a storage event synthesised from the write path itself, in addition
    * to whatever CDP forwards via `DOMStorage.domStorageItem*`. The CDP
@@ -253,42 +286,19 @@ export function setupSimulatorStorage(
   }
 
   async function setItem(key: string, value: string): Promise<StorageWriteResult> {
-    await ensureAttached()
-    if (!attachedWc || attachedWc.isDestroyed()) {
-      return { ok: false, error: 'simulator not attached' }
-    }
-    const storageId = await getStorageId()
-    if (!storageId) return { ok: false, error: 'failed to resolve simulator origin' }
-    try {
-      await attachedWc.debugger.sendCommand('DOMStorage.setDOMStorageItem', {
-        storageId,
-        key,
-        value,
-      })
+    return withStorageWrite(async ({ wc, storageId }) => {
+      await wc.debugger.sendCommand('DOMStorage.setDOMStorageItem', { storageId, key, value })
       pushSyntheticEvent({ type: 'added', key, newValue: value })
       return { ok: true }
-    } catch (e) {
-      return { ok: false, error: (e as Error).message }
-    }
+    })
   }
 
   async function removeItem(key: string): Promise<StorageWriteResult> {
-    await ensureAttached()
-    if (!attachedWc || attachedWc.isDestroyed()) {
-      return { ok: false, error: 'simulator not attached' }
-    }
-    const storageId = await getStorageId()
-    if (!storageId) return { ok: false, error: 'failed to resolve simulator origin' }
-    try {
-      await attachedWc.debugger.sendCommand('DOMStorage.removeDOMStorageItem', {
-        storageId,
-        key,
-      })
+    return withStorageWrite(async ({ wc, storageId }) => {
+      await wc.debugger.sendCommand('DOMStorage.removeDOMStorageItem', { storageId, key })
       pushSyntheticEvent({ type: 'removed', key })
       return { ok: true }
-    } catch (e) {
-      return { ok: false, error: (e as Error).message }
-    }
+    })
   }
 
   // Scoped clear: when an appId is active, removes only its prefixed keys so
@@ -296,59 +306,36 @@ export function setupSimulatorStorage(
   // Falls back to origin-wide `DOMStorage.clear` only when no active appId is
   // set (matches the snapshot filter's documented null-fallback).
   async function clearScoped(): Promise<StorageWriteResult> {
-    await ensureAttached()
-    if (!attachedWc || attachedWc.isDestroyed()) {
-      return { ok: false, error: 'simulator not attached' }
-    }
-    const storageId = await getStorageId()
-    if (!storageId) return { ok: false, error: 'failed to resolve simulator origin' }
-    const prefix = activePrefix()
-    try {
+    return withStorageWrite(async ({ wc, storageId }) => {
+      const prefix = activePrefix()
       if (!prefix) {
-        await attachedWc.debugger.sendCommand('DOMStorage.clear', { storageId })
+        await wc.debugger.sendCommand('DOMStorage.clear', { storageId })
         return { ok: true }
       }
-      const result = (await attachedWc.debugger.sendCommand('DOMStorage.getDOMStorageItems', {
+      const result = (await wc.debugger.sendCommand('DOMStorage.getDOMStorageItems', {
         storageId,
       })) as { entries: Array<[string, string]> }
       for (const [key] of result.entries) {
         if (!key.startsWith(prefix)) continue
-        await attachedWc.debugger.sendCommand('DOMStorage.removeDOMStorageItem', {
-          storageId,
-          key,
-        })
+        await wc.debugger.sendCommand('DOMStorage.removeDOMStorageItem', { storageId, key })
       }
       return { ok: true }
-    } catch (e) {
-      return { ok: false, error: (e as Error).message }
-    }
+    })
   }
 
   // Origin-wide clear regardless of the active appId — wipes every project's
   // state in the shared simulator partition. The renderer guards this with a
   // confirm dialog; we don't second-guess here.
   async function clearAll(): Promise<StorageWriteResult> {
-    await ensureAttached()
-    if (!attachedWc || attachedWc.isDestroyed()) {
-      return { ok: false, error: 'simulator not attached' }
-    }
-    const storageId = await getStorageId()
-    if (!storageId) return { ok: false, error: 'failed to resolve simulator origin' }
-    try {
-      await attachedWc.debugger.sendCommand('DOMStorage.clear', { storageId })
+    return withStorageWrite(async ({ wc, storageId }) => {
+      await wc.debugger.sendCommand('DOMStorage.clear', { storageId })
       return { ok: true }
-    } catch (e) {
-      return { ok: false, error: (e as Error).message }
-    }
+    })
   }
 
   async function getSnapshot(): Promise<StorageItem[]> {
-    await ensureAttached()
-    if (!attachedWc || attachedWc.isDestroyed()) return []
-    try {
-      const storageId = await getStorageId()
-      if (!storageId) return []
-      const result = (await attachedWc.debugger.sendCommand('DOMStorage.getDOMStorageItems', {
+    return withStorageRead<StorageItem[]>([], async ({ wc, storageId }) => {
+      const result = (await wc.debugger.sendCommand('DOMStorage.getDOMStorageItems', {
         storageId,
       })) as { entries: Array<[string, string]> }
       const prefix = activePrefix()
@@ -358,9 +345,7 @@ export function setupSimulatorStorage(
       // Keys are returned with their `${appId}_` prefix intact; stripping is
       // a follow-up so the panel UI can stay compatible with the raw keys.
       return filtered.map(([key, value]) => ({ key, value }))
-    } catch {
-      return []
-    }
+    })
   }
 
   // Attach to any simulator webview that already exists (project may have
