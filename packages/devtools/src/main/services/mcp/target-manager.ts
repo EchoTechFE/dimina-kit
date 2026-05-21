@@ -11,6 +11,7 @@
  */
 
 import CDP from 'chrome-remote-interface'
+import { DEFAULT_CDP_PORT } from '../../../shared/constants.js'
 
 const SIMULATOR_URL_PATTERN = 'localhost:7788'
 const MAX_BUFFER = 500
@@ -43,7 +44,7 @@ interface TargetState {
   networkRequests: NetworkRequestEntry[]
 }
 
-let cdpPort = 9222
+let cdpPort = DEFAULT_CDP_PORT
 
 const targets: Record<TargetKind, TargetState> = {
   simulator: { client: null, connected: false, timer: null, consoleLogs: [], networkRequests: [] },

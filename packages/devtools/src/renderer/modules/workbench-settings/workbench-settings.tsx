@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import { DEFAULT_CDP_PORT } from '../../../shared/constants'
 import {
   getCdpStatus,
   getWorkbenchSettings,
@@ -44,7 +45,7 @@ function ToggleSwitch({
 
 export default function WorkbenchSettings() {
   const [settings, setSettings] = useState<WorkbenchSettingsValue>({
-    cdp: { enabled: false, port: 9222 },
+    cdp: { enabled: false, port: DEFAULT_CDP_PORT },
     mcp: { enabled: false, port: 7789 },
     compile: { watch: true },
     theme: 'system',
@@ -52,7 +53,7 @@ export default function WorkbenchSettings() {
   const [cdpStatus, setCdpStatus] = useState<CdpStatus | null>(null)
   const [activeTab, setActiveTab] = useState<TabId>('general')
   const [saved, setSaved] = useState(false)
-  const [portInput, setPortInput] = useState('9222')
+  const [portInput, setPortInput] = useState(String(DEFAULT_CDP_PORT))
   const [mcpPortInput, setMcpPortInput] = useState('7789')
 
   useEffect(() => {
@@ -224,7 +225,7 @@ export default function WorkbenchSettings() {
                 className="w-24 h-7 px-2 rounded text-[12px] outline-none bg-surface border border-border text-text"
                 style={{ opacity: settings.cdp.enabled ? 1 : 0.4 }}
               />
-              <span className="text-[11px] text-text-dim">默认 9222</span>
+              <span className="text-[11px] text-text-dim">默认 {DEFAULT_CDP_PORT}</span>
             </div>
 
             <div className="rounded p-3 space-y-2 border border-border bg-surface">

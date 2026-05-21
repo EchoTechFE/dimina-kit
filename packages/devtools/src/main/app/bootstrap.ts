@@ -1,4 +1,5 @@
 import { app } from 'electron'
+import { DEFAULT_CDP_PORT } from '../../shared/constants.js'
 import { loadWorkbenchSettings } from '../services/settings/index.js'
 
 /**
@@ -36,6 +37,6 @@ export function setupCdpPort(): void {
   if (settings.cdp.enabled || settings.mcp.enabled) {
     app.commandLine.appendSwitch('remote-debugging-port', String(settings.cdp.port))
   } else if (!app.isPackaged) {
-    app.commandLine.appendSwitch('remote-debugging-port', String(settings.cdp.port || 9222))
+    app.commandLine.appendSwitch('remote-debugging-port', String(settings.cdp.port || DEFAULT_CDP_PORT))
   }
 }
