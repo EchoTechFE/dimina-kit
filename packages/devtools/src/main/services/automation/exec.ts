@@ -1,15 +1,11 @@
-import { webContents } from 'electron'
 import type { WorkbenchContext } from '../workbench-context.js'
 import type { ElementRef } from './shared.js'
 
 // ── Helpers ───────────────────────────────────────────────────────────
 
 export function getSimulator(ctx: WorkbenchContext) {
-  const simWcId = ctx.views.getSimulatorWebContentsId()
-  if (!ctx.workspace.hasActiveSession() || simWcId == null) return null
-  const sim = webContents.fromId(simWcId)
-  if (!sim || sim.isDestroyed()) return null
-  return sim
+  if (!ctx.workspace.hasActiveSession()) return null
+  return ctx.views.getSimulatorWebContents()
 }
 
 export async function evalInSim<T = unknown>(ctx: WorkbenchContext, expression: string): Promise<T> {

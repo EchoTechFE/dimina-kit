@@ -70,6 +70,8 @@ export interface ViewManager {
   // ── State queries ─────────────────────────────────────────────────────
   /** Return the webContents ID of the currently attached simulator. */
   getSimulatorWebContentsId(): number | null
+  /** Return the live webContents of the currently attached simulator, or null. */
+  getSimulatorWebContents(): WebContents | null
   /** Return the last known simulator width. */
   getLastSimWidth(): number
   /** Whether the simulator overlay is currently added to the contentView. */
@@ -341,6 +343,11 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     repositionAll,
     disposeAll,
     getSimulatorWebContentsId: () => simulatorWebContentsId,
+    getSimulatorWebContents: () => {
+      if (simulatorWebContentsId == null) return null
+      const wc = webContents.fromId(simulatorWebContentsId)
+      return wc && !wc.isDestroyed() ? wc : null
+    },
     getLastSimWidth: () => lastSimWidth,
     isSimulatorAdded: () => simulatorViewAdded,
     hasSimulatorView: () => simulatorView !== null,
