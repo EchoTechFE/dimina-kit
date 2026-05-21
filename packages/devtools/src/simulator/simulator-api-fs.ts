@@ -7,6 +7,7 @@
  */
 
 import type { MiniAppContext } from './types'
+import { bindCallbacks, notSupportedApi } from './simulator-api-helpers'
 
 // ─── Filesystem (container-side handlers for service-apis/file) ──────────────
 // service-apis/file/index.js calls invokeAPI('fsAccess', opts), etc.
@@ -34,9 +35,7 @@ export function fsAccess(
 	this: MiniAppContext,
 	{ path, success, fail, complete }: { path: string; success?: unknown; fail?: unknown; complete?: unknown },
 ) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onFail = this.createCallbackFunction(fail)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
 	if (!_fs) {
 		onFail?.({ errMsg: 'fsAccess:fail not available in browser context' })
 		onComplete?.()
@@ -62,9 +61,7 @@ export function fsStat(
 		complete?: unknown
 	},
 ) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onFail = this.createCallbackFunction(fail)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
 	if (!_fs) {
 		onFail?.({ errMsg: 'fsStat:fail not available in browser context' })
 		onComplete?.()
@@ -141,9 +138,7 @@ export function fsReadFile(
 		complete?: unknown
 	},
 ) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onFail = this.createCallbackFunction(fail)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
 	if (!_fs) {
 		onFail?.({ errMsg: 'fsReadFile:fail not available in browser context' })
 		onComplete?.()
@@ -170,9 +165,7 @@ export function fsWriteFile(
 		complete?: unknown
 	},
 ) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onFail = this.createCallbackFunction(fail)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
 	if (!_fs) {
 		onFail?.({ errMsg: 'fsWriteFile:fail not available in browser context' })
 		onComplete?.()
@@ -207,9 +200,7 @@ export function fsAppendFile(
 		complete?: unknown
 	},
 ) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onFail = this.createCallbackFunction(fail)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
 	if (!_fs) {
 		onFail?.({ errMsg: 'fsAppendFile:fail not available in browser context' })
 		onComplete?.()
@@ -235,9 +226,7 @@ export function fsCopyFile(
 		complete?: unknown
 	},
 ) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onFail = this.createCallbackFunction(fail)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
 	if (!_fs) {
 		onFail?.({ errMsg: 'fsCopyFile:fail not available in browser context' })
 		onComplete?.()
@@ -263,9 +252,7 @@ export function fsRename(
 		complete?: unknown
 	},
 ) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onFail = this.createCallbackFunction(fail)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
 	if (!_fs) {
 		onFail?.({ errMsg: 'fsRename:fail not available in browser context' })
 		onComplete?.()
@@ -285,9 +272,7 @@ export function fsUnlink(
 	this: MiniAppContext,
 	{ filePath, success, fail, complete }: { filePath: string; success?: unknown; fail?: unknown; complete?: unknown },
 ) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onFail = this.createCallbackFunction(fail)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
 	if (!_fs) {
 		onFail?.({ errMsg: 'fsUnlink:fail not available in browser context' })
 		onComplete?.()
@@ -313,9 +298,7 @@ export function fsMkdir(
 		complete?: unknown
 	},
 ) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onFail = this.createCallbackFunction(fail)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
 	if (!_fs) {
 		onFail?.({ errMsg: 'fsMkdir:fail not available in browser context' })
 		onComplete?.()
@@ -341,9 +324,7 @@ export function fsRmdir(
 		complete?: unknown
 	},
 ) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onFail = this.createCallbackFunction(fail)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
 	if (!_fs) {
 		onFail?.({ errMsg: 'fsRmdir:fail not available in browser context' })
 		onComplete?.()
@@ -365,9 +346,7 @@ export function fsReaddir(
 	this: MiniAppContext,
 	{ dirPath, success, fail, complete }: { dirPath: string; success?: unknown; fail?: unknown; complete?: unknown },
 ) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onFail = this.createCallbackFunction(fail)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
 	if (!_fs) {
 		onFail?.({ errMsg: 'fsReaddir:fail not available in browser context' })
 		onComplete?.()
@@ -393,9 +372,7 @@ export function fsGetFileInfo(
 		complete?: unknown
 	},
 ) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onFail = this.createCallbackFunction(fail)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
 	if (!_fs) {
 		onFail?.({ errMsg: 'fsGetFileInfo:fail not available in browser context' })
 		onComplete?.()
@@ -445,9 +422,7 @@ export function fsSaveFile(
 		complete?: unknown
 	},
 ) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onFail = this.createCallbackFunction(fail)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
 	if (!_fs) {
 		onFail?.({ errMsg: 'fsSaveFile:fail not available in browser context' })
 		onComplete?.()
@@ -481,9 +456,7 @@ export function fsGetSavedFileList(
 	this: MiniAppContext,
 	{ success, fail, complete }: { success?: unknown; fail?: unknown; complete?: unknown } = {},
 ) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onFail = this.createCallbackFunction(fail)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
 	if (!_fs) {
 		onFail?.({ errMsg: 'fsGetSavedFileList:fail not available in browser context' })
 		onComplete?.()
@@ -523,9 +496,7 @@ export function fsRemoveSavedFile(
 	this: MiniAppContext,
 	{ filePath, success, fail, complete }: { filePath: string; success?: unknown; fail?: unknown; complete?: unknown },
 ) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onFail = this.createCallbackFunction(fail)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
 	if (!_fs) {
 		onFail?.({ errMsg: 'fsRemoveSavedFile:fail not available in browser context' })
 		onComplete?.()
@@ -551,9 +522,7 @@ export function fsTruncate(
 		complete?: unknown
 	},
 ) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onFail = this.createCallbackFunction(fail)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
 	if (!_fs) {
 		onFail?.({ errMsg: 'fsTruncate:fail not available in browser context' })
 		onComplete?.()
@@ -569,19 +538,4 @@ export function fsTruncate(
 	})
 }
 
-export function fsUnzip(
-	this: MiniAppContext,
-	{ zipFilePath: _zipFilePath, targetPath: _targetPath, success: _success, fail, complete }: {
-		zipFilePath: string
-		targetPath: string
-		success?: unknown
-		fail?: unknown
-		complete?: unknown
-	},
-) {
-	const onFail = this.createCallbackFunction(fail)
-	const onComplete = this.createCallbackFunction(complete)
-	// Unzip requires a native module; stub with a clear error in simulator.
-	onFail?.({ errMsg: 'fsUnzip:fail not supported in simulator' })
-	onComplete?.()
-}
+export const fsUnzip = notSupportedApi('fsUnzip')

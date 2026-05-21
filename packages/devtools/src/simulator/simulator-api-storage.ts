@@ -6,6 +6,7 @@
  */
 
 import type { MiniAppContext } from './types'
+import { bindCallbacks } from './simulator-api-helpers'
 
 // ─── Storage (sync) ──────────────────────────────────────────────────────────
 
@@ -58,9 +59,7 @@ export function setStorage(
 	this: MiniAppContext,
 	{ key, data, success, fail, complete }: { key: string; data: unknown; success?: unknown; fail?: unknown; complete?: unknown },
 ) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onFail = this.createCallbackFunction(fail)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
 	try {
 		const storageKey = `${this.appId}_${key}`
 		const dataString = typeof data === 'object' ? JSON.stringify(data) : String(data)
@@ -76,9 +75,7 @@ export function getStorage(
 	this: MiniAppContext,
 	{ key, success, fail, complete }: { key: string; success?: unknown; fail?: unknown; complete?: unknown },
 ) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onFail = this.createCallbackFunction(fail)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
 	const storageKey = `${this.appId}_${key}`
 	const raw = localStorage.getItem(storageKey)
 	if (raw === null) {
@@ -95,9 +92,7 @@ export function removeStorage(
 	this: MiniAppContext,
 	{ key, success, fail, complete }: { key: string; success?: unknown; fail?: unknown; complete?: unknown },
 ) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onFail = this.createCallbackFunction(fail)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
 	try {
 		const storageKey = `${this.appId}_${key}`
 		localStorage.removeItem(storageKey)
@@ -109,8 +104,7 @@ export function removeStorage(
 }
 
 export function clearStorage(this: MiniAppContext, { success, complete }: { success?: unknown; complete?: unknown } = {}) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onComplete } = bindCallbacks(this, { success, complete })
 	const prefix = `${this.appId}_`
 	const keysToRemove: string[] = []
 	for (let i = 0; i < localStorage.length; i++) {
@@ -123,8 +117,7 @@ export function clearStorage(this: MiniAppContext, { success, complete }: { succ
 }
 
 export function getStorageInfo(this: MiniAppContext, { success, complete }: { success?: unknown; complete?: unknown } = {}) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onComplete } = bindCallbacks(this, { success, complete })
 	const prefix = `${this.appId}_`
 	const keys: string[] = []
 	let currentSize = 0
