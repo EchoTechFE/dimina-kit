@@ -152,7 +152,6 @@ describe('workspace-service ↔ ProjectsProvider injection', () => {
       panels: [],
       apiNamespaces: [],
       appName: 'x',
-      workbenchSettingsWindow: null,
       views: {
         disposeAll: vi.fn(),
         getSimulatorWebContentsId: () => null,

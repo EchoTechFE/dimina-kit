@@ -15,6 +15,7 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import type { Project } from '../projects/project-repository.js'
+import { DEFAULT_COMPILE_CONFIG } from '../projects/index.js'
 
 // Electron stub — workspace-service indirectly pulls in modules that import
 // from 'electron'. The stub only needs to not throw on `app.getPath`.
@@ -75,15 +76,6 @@ function makePartialProvider() {
   }
 }
 
-// TODO: once `DEFAULT_COMPILE_CONFIG` is exported from `./projects/index.js`,
-// replace this literal with the imported constant so the test pins the
-// canonical source instead of mirroring its shape.
-const EXPECTED_DEFAULT_COMPILE_CONFIG = {
-  startPage: '',
-  scene: 1001,
-  queryParams: [] as { key: string; value: string }[],
-}
-
 describe('workspace-service ↔ partial ProjectsProvider (optional-method fallback)', () => {
   /**
    * Bug caught: workspace-service falls back to the local repo helper
@@ -124,13 +116,8 @@ describe('workspace-service ↔ partial ProjectsProvider (optional-method fallba
       projectsProvider: injected,
     })
 
-    const projectsModule = await import('../projects/index.js')
-    const expectedDefault =
-      (projectsModule as { DEFAULT_COMPILE_CONFIG?: typeof EXPECTED_DEFAULT_COMPILE_CONFIG })
-        .DEFAULT_COMPILE_CONFIG ?? EXPECTED_DEFAULT_COMPILE_CONFIG
-
     const cfg = await ctx.workspace.getCompileConfig('/p/x')
-    expect(cfg).toEqual(expectedDefault)
+    expect(cfg).toEqual(DEFAULT_COMPILE_CONFIG)
     expect(fs.existsSync).not.toHaveBeenCalled()
     expect(fs.readFileSync).not.toHaveBeenCalled()
   })
@@ -156,13 +143,8 @@ describe('workspace-service ↔ partial ProjectsProvider (optional-method fallba
     expect(fs.writeFileSync).not.toHaveBeenCalled()
     expect(fs.mkdirSync).not.toHaveBeenCalled()
 
-    const projectsModule = await import('../projects/index.js')
-    const expectedDefault =
-      (projectsModule as { DEFAULT_COMPILE_CONFIG?: typeof EXPECTED_DEFAULT_COMPILE_CONFIG })
-        .DEFAULT_COMPILE_CONFIG ?? EXPECTED_DEFAULT_COMPILE_CONFIG
-
     // Persistence didn't happen, so the next read still surfaces the default.
-    expect(await ctx.workspace.getCompileConfig('/p/x')).toEqual(expectedDefault)
+    expect(await ctx.workspace.getCompileConfig('/p/x')).toEqual(DEFAULT_COMPILE_CONFIG)
     expect(fs.writeFileSync).not.toHaveBeenCalled()
   })
 

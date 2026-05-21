@@ -181,7 +181,7 @@ test.describe('WXML Panel Component Mapping', () => {
   test.setTimeout(90_000)
   test.describe.configure({ mode: 'serial' })
 
-  useSharedProject(test, DEMO_APP_DIR, { openOptions: { waitMs: 8000, waitForWebview: true } })
+  useSharedProject(test, DEMO_APP_DIR, { openOptions: { waitMs: 8000 } })
 
   test('home page wxml tree contains <view> tags, not raw <div>', async ({ electronApp }) => {
     const tree = await fetchWxmlTree(electronApp)

@@ -7,6 +7,7 @@
  */
 
 import type { MiniAppContext } from './types'
+import { bindDomEvents, type EventBridgeDisposer } from './event-bridge'
 
 // ─── Media: Image ────────────────────────────────────────────────────────────
 
@@ -272,53 +273,83 @@ export function chooseVideo(
 	input.click()
 }
 
-// ─── Media: Audio (container-side handlers) ─────────────────────────────────
-// createInnerAudioContext is injected into the service Worker via simulator.html.
-// It returns a local proxy that sends __audio_* calls through invokeAPI to here.
+// ─── Media: Audio (container-side handlers for service-apis/audio) ──────────
+// service-apis/audio/index.js (injected into the service Worker by the dimina
+// container bundle) calls invokeAPI('audioCreate', { audioId }), etc. DOM media
+// events on the container's HTMLAudioElement are bridged back to the service
+// layer via the `audioListen` handler.
 
-const _audioInstances = new Map<string, HTMLAudioElement>()
-
-export function __audio_create(this: MiniAppContext, { id }: { id: string }) {
-	_audioInstances.set(id, new Audio())
+/** Payload delivered to the service-side dispatcher on every audio event. */
+interface AudioEventPayload {
+	event: string
+	currentTime: number
+	duration: number
+	buffered: number
+	paused: boolean
 }
 
-export function __audio_setProp(this: MiniAppContext, { id, key, value }: { id: string; key: string; value: unknown }) {
-	const audio = _audioInstances.get(id)
-	if (!audio) return
-	switch (key) {
-		case 'src': audio.src = value as string; break
-		case 'startTime': audio.currentTime = value as number; break
-		case 'autoplay': audio.autoplay = value as boolean; break
-		case 'loop': audio.loop = value as boolean; break
-		case 'volume': audio.volume = Math.max(0, Math.min(1, value as number)); break
-		case 'playbackRate': audio.playbackRate = value as number; break
-	}
+/** DOM media event name → mini-program audio event name. */
+const AUDIO_EVENT_MAP: Record<string, string> = {
+	play: 'play',
+	pause: 'pause',
+	ended: 'ended',
+	error: 'error',
+	timeupdate: 'timeUpdate',
+	waiting: 'waiting',
+	seeking: 'seeking',
+	seeked: 'seeked',
+	canplay: 'canplay',
 }
-
-export function __audio_call(this: MiniAppContext, { id, method, args }: { id: string; method: string; args?: unknown[] }) {
-	const audio = _audioInstances.get(id)
-	if (!audio) return
-	switch (method) {
-		case 'play': audio.play().catch(() => {}); break
-		case 'pause': audio.pause(); break
-		case 'stop': audio.pause(); audio.currentTime = 0; break
-		case 'seek': if (args?.[0] != null) audio.currentTime = args[0] as number; break
-		case 'destroy':
-			audio.pause()
-			audio.removeAttribute('src')
-			audio.load()
-			_audioInstances.delete(id)
-			break
-	}
-}
-
-// ─── Media: Audio (new-style handlers for service-apis/audio) ───────────────
-// service-apis/audio/index.js calls invokeAPI('audioCreate', { audioId }), etc.
 
 const _newAudioInstances = new Map<number, HTMLAudioElement>()
+/** Disposers that unbind the DOM event bridge for a given audio instance. */
+const _audioEventDisposers = new Map<number, EventBridgeDisposer>()
+/** The service-side dispatcher callback for a given audio instance. */
+const _audioFire = new Map<number, (payload: AudioEventPayload) => void>()
+
+/** Snapshot the current playback state of an audio element. */
+function audioSnapshot(audio: HTMLAudioElement, event: string): AudioEventPayload {
+	return {
+		event,
+		currentTime: audio.currentTime || 0,
+		duration: Number.isFinite(audio.duration) ? audio.duration : 0,
+		buffered: audio.buffered.length ? audio.buffered.end(audio.buffered.length - 1) : 0,
+		paused: audio.paused,
+	}
+}
 
 export function audioCreate(this: MiniAppContext, { audioId }: { audioId: number }) {
 	_newAudioInstances.set(audioId, new Audio())
+}
+
+/**
+ * Persistent event-bridge registration. The service-side InnerAudioContext
+ * calls this once at construction with a `keep: true` callback; the container
+ * resolves a `fire` callback and binds the DOM media events of the matching
+ * audio element to it.
+ *
+ * The dimina service `invokeAPI` runs every callback through
+ * `callback.store(success, keep, evtId)` and delivers the resulting callback
+ * id under the `success` field of `params` — `evtId` itself is consumed by
+ * `callback.store` and never reaches the container payload. So the handler
+ * resolves `fire` from `success`, exactly like every other media API.
+ */
+export function audioListen(this: MiniAppContext, { audioId, success }: { audioId: number; success: unknown }) {
+	const audio = _newAudioInstances.get(audioId)
+	const fire = this.createCallbackFunction(success) as ((payload: AudioEventPayload) => void) | undefined
+	if (!audio || !fire) return
+
+	_audioFire.set(audioId, fire)
+
+	// Rebind cleanly if audioListen is somehow called twice for one instance.
+	_audioEventDisposers.get(audioId)?.()
+	const dispose = bindDomEvents<AudioEventPayload>(
+		audio,
+		AUDIO_EVENT_MAP,
+		fire,
+		event => audioSnapshot(audio, event),
+	)
+	_audioEventDisposers.set(audioId, dispose)
 }
 
 export function audioSetProp(
@@ -369,6 +400,8 @@ export function audioStop(this: MiniAppContext, { audioId }: { audioId: number }
 	if (!audio) return
 	audio.pause()
 	audio.currentTime = 0
+	// `stop` has no DOM equivalent — synthesise it through the bridge.
+	_audioFire.get(audioId)?.(audioSnapshot(audio, 'stop'))
 }
 
 export function audioSeek(this: MiniAppContext, { audioId, position }: { audioId: number; position: number }) {
@@ -378,6 +411,10 @@ export function audioSeek(this: MiniAppContext, { audioId, position }: { audioId
 }
 
 export function audioDestroy(this: MiniAppContext, { audioId }: { audioId: number }) {
+	_audioEventDisposers.get(audioId)?.()
+	_audioEventDisposers.delete(audioId)
+	_audioFire.delete(audioId)
+
 	const audio = _newAudioInstances.get(audioId)
 	if (!audio) return
 	audio.pause()

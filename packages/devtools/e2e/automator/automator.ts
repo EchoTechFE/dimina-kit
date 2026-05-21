@@ -95,7 +95,6 @@ export class Automator {
     // Open the project
     await openProjectInUI(mainWindow, projectPath, {
       waitMs: compileWaitMs,
-      waitForWebview,
     })
 
     if (waitForWebview) {

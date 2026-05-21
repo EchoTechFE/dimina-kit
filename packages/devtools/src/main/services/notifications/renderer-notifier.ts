@@ -88,7 +88,7 @@ export interface RendererNotifier {
  * between the notifier module and workbench-context.
  */
 export interface NotifierContext {
-  mainWindow: BrowserWindow
+  windows: { readonly mainWindow: BrowserWindow }
   views: { getSettingsWebContents(): WebContents | null }
 }
 
@@ -105,8 +105,8 @@ function liveWebContents(wc: WebContents | undefined | null): WebContents | null
  */
 export function createRendererNotifier(ctx: NotifierContext): RendererNotifier {
   function sendToMain(channel: string, ...args: unknown[]): void {
-    if (ctx.mainWindow.isDestroyed()) return
-    const wc = liveWebContents(ctx.mainWindow.webContents)
+    if (ctx.windows.mainWindow.isDestroyed()) return
+    const wc = liveWebContents(ctx.windows.mainWindow.webContents)
     if (!wc) return
     wc.send(channel, ...args)
   }

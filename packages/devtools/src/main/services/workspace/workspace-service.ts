@@ -122,24 +122,12 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
     }
   }
 
-  // Delegate to the host-injected (or default) ProjectsProvider on the
-  // context. When the host omits an optional method, we apply a safe
-  // documented default — never silently fall back to `repo.*`, because a
-  // remote provider's project paths are not on the local filesystem.
-  //
-  // The `??` here is a back-compat path for hand-rolled WorkbenchContext
-  // values (used in a couple of legacy tests). createWorkbenchContext
-  // always installs LocalProjectsProvider, so production never enters this
-  // branch.
-  const provider: ProjectsProvider = ctx.projectsProvider ?? {
-    listProjects: () => repo.listProjects(),
-    addProject: (p) => repo.addProject(p),
-    removeProject: (p) => repo.removeProject(p),
-    validateProjectDir: (p) => repo.validateProjectDir(p),
-    updateLastOpened: (p) => repo.updateLastOpened(p),
-    getCompileConfig: (p) => repo.getCompileConfig(p),
-    saveCompileConfig: (p, c) => repo.saveCompileConfig(p, c),
-  }
+  // Delegate to the host-injected (or default LocalProjectsProvider)
+  // ProjectsProvider on the context. When the host omits an optional method,
+  // we apply a safe documented default — never silently fall back to
+  // `repo.*`, because a remote provider's project paths are not on the local
+  // filesystem.
+  const provider: ProjectsProvider = ctx.projectsProvider
 
   return {
     listProjects: async () => provider.listProjects(),

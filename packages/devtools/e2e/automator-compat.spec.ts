@@ -115,7 +115,7 @@ test.describe('miniprogram-automator protocol compatibility', () => {
   // The following tests open a project first
   test.describe('with project open', () => {
     test.beforeAll(async () => {
-      await openProjectInUI(mainWindow, DEMO_APP_DIR, { waitMs: 8000, waitForWebview: true })
+      await openProjectInUI(mainWindow, DEMO_APP_DIR, { waitMs: 8000 })
       await waitForSimulatorWebview(electronApp)
       await pollUntil(
         () => electronApp.evaluate(({ webContents }) => {
@@ -246,7 +246,7 @@ test.describe('npm miniprogram-automator package', () => {
       100,
     ) as number
 
-    await openProjectInUI(smokeMainWindow, DEMO_APP_DIR, { waitMs: 8000, waitForWebview: true })
+    await openProjectInUI(smokeMainWindow, DEMO_APP_DIR, { waitMs: 8000 })
     await waitForSimulatorWebview(smokeElectronApp)
     await new Promise((r) => setTimeout(r, 2000))
 

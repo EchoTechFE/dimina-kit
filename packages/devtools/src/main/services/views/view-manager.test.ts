@@ -91,7 +91,9 @@ function makeContext() {
     contentView,
     notify,
     ctx: {
-      mainWindow: mainWindow as unknown as import('electron').BrowserWindow,
+      windows: {
+        mainWindow: mainWindow as unknown as import('electron').BrowserWindow,
+      } as import('../window-service.js').WindowService,
       rendererDir: '/stub/renderer',
       panels: ['console', 'wxml', 'storage', 'appdata'],
       notify: notify as unknown as import('../notifications/renderer-notifier.js').RendererNotifier,

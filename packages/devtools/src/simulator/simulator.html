@@ -11,12 +11,10 @@
 <body>
 	<div id="root"></div>
 	<script>
-		// Intercept Worker creation to inject createInnerAudioContext into the
-		// service layer.  The service runs in a Web Worker so it cannot return
-		// objects synchronously through invokeAPI.  By shimming the function
-		// directly in the Worker global scope it executes in the same thread as
-		// the mini-app code and returns a proxy object that forwards operations
-		// to the container (main thread) via invokeAPI messages.
+		// Intercept Worker creation to inject sync-invoke infrastructure into
+		// the service layer.  The service runs in a Web Worker, so synchronous
+		// wx APIs (getStorageSync, etc.) are bridged to the container (main
+		// thread) via a SharedArrayBuffer that the Worker blocks on.
 		;(function () {
 			const _Worker = Worker
 
@@ -71,41 +69,6 @@
 				_p(self.wx); _p(self.qd); _p(self.dd);
 			})();`
 
-			const SHIM = `;(function(){
-				var _seq = 0;
-				function _createInnerAudioContext() {
-					var id = '__audio_' + (++_seq) + '_' + Date.now();
-					var ns = self.wx || self.qd || self.dd;
-					if (ns) ns.__audio_create({ id: id });
-					var state = { src:'', startTime:0, autoplay:false, loop:false, volume:1, playbackRate:1, _id:id };
-					return new Proxy(state, {
-						get: function(t, k) {
-							if (k === 'play') return function(){ if(ns) ns.__audio_call({ id:id, method:'play' }); };
-							if (k === 'pause') return function(){ if(ns) ns.__audio_call({ id:id, method:'pause' }); };
-							if (k === 'stop') return function(){ if(ns) ns.__audio_call({ id:id, method:'stop' }); };
-							if (k === 'seek') return function(p){ if(ns) ns.__audio_call({ id:id, method:'seek', args:[p] }); };
-							if (k === 'destroy') return function(){ if(ns) ns.__audio_call({ id:id, method:'destroy' }); };
-							if (k === 'onCanplay' || k === 'onPlay' || k === 'onPause' || k === 'onStop' ||
-								k === 'onEnded' || k === 'onTimeUpdate' || k === 'onError' || k === 'onSeeking' ||
-								k === 'onSeeked' || k === 'onWaiting' ||
-								k === 'offCanplay' || k === 'offPlay' || k === 'offPause' || k === 'offStop' ||
-								k === 'offEnded' || k === 'offTimeUpdate' || k === 'offError' || k === 'offSeeking' ||
-								k === 'offSeeked' || k === 'offWaiting') return function(){};
-							return t[k];
-						},
-						set: function(t, k, v) {
-							t[k] = v;
-							if (ns && (k==='src'||k==='startTime'||k==='autoplay'||k==='loop'||k==='volume'||k==='playbackRate'))
-								ns.__audio_setProp({ id:id, key:k, value:v });
-							return true;
-						}
-					});
-				}
-				// importScripts is synchronous — wx/qd/dd are already set by service.js
-				if (self.wx) self.wx.createInnerAudioContext = _createInnerAudioContext;
-				if (self.qd) self.qd.createInnerAudioContext = _createInnerAudioContext;
-				if (self.dd) self.dd.createInnerAudioContext = _createInnerAudioContext;
-			})();`
 			// Read custom API namespaces from query parameter once at load time
 			// so we can inject them into every Worker before service.js runs.
 			const _nsParam = new URLSearchParams(window.location.search).get('apiNamespaces')
@@ -134,7 +97,7 @@
 						? 'self.__diminaApiNamespaces=' + JSON.stringify(_apiNs) + ';'
 						: ''
 					const shimBlob = new Blob(
-						[patchImportScripts + injectNs + SYNC_INFRA + '_is("' + absUrl + '");' + SHIM + SYNC_PATCH],
+						[patchImportScripts + injectNs + SYNC_INFRA + '_is("' + absUrl + '");' + SYNC_PATCH],
 						{ type: 'application/javascript' }
 					)
 					super(URL.createObjectURL(shimBlob), { ...opts, type: 'classic' })

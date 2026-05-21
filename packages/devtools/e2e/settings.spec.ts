@@ -11,7 +11,7 @@ import { SettingsChannel, ProjectChannel, ProjectsChannel } from '../src/shared/
 
 test.describe('Settings', () => {
   test.beforeEach(async ({ mainWindow }) => {
-    await openProjectInUI(mainWindow, DEMO_APP_DIR, { waitForWebview: true })
+    await openProjectInUI(mainWindow, DEMO_APP_DIR)
   })
 
   test.afterEach(async ({ mainWindow }) => {

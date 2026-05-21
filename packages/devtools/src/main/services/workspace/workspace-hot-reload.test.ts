@@ -89,6 +89,20 @@ type ExpectedPayload = {
 type WorkbenchContext = import('../workbench-context.js').WorkbenchContext
 let createWorkspaceService: typeof import('./workspace-service.js').createWorkspaceService
 
+/**
+ * Minimal ProjectsProvider for tests that only exercise `openProject`. The
+ * three mandatory methods satisfy the type; `openProject` itself only ever
+ * touches the optional `validateProjectDir` / `updateLastOpened`, which are
+ * intentionally absent so the guarded fall-throughs are taken.
+ */
+function stubProjectsProvider(): import('../projects/types.js').ProjectsProvider {
+  return {
+    listProjects: vi.fn(() => []),
+    addProject: vi.fn((p: string) => ({ name: 'fake', path: p, lastOpened: null })),
+    removeProject: vi.fn(),
+  }
+}
+
 beforeEach(async () => {
   vi.resetModules()
   ;({ createWorkspaceService } = await import('./workspace-service.js'))
@@ -120,6 +134,7 @@ describe('workspace-service: file-watcher rebuild emits hotReload signal', () =>
       adapter,
       notify: { projectStatus },
       views: { disposeAll: vi.fn() },
+      projectsProvider: stubProjectsProvider(),
     } as unknown as WorkbenchContext
 
     const workspace = createWorkspaceService(ctx)
@@ -170,6 +185,7 @@ describe('workspace-service: file-watcher rebuild emits hotReload signal', () =>
       adapter,
       notify: { projectStatus },
       views: { disposeAll: vi.fn() },
+      projectsProvider: stubProjectsProvider(),
     } as unknown as WorkbenchContext
 
     const workspace = createWorkspaceService(ctx)

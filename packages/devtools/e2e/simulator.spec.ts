@@ -14,7 +14,7 @@ test.describe('Simulator', () => {
   test.setTimeout(90_000)
   test.describe.configure({ mode: 'serial', retries: 1 })
 
-  useSharedProject(test, DEMO_APP_DIR, { openOptions: { waitMs: 8000, waitForWebview: true } })
+  useSharedProject(test, DEMO_APP_DIR, { openOptions: { waitMs: 8000 } })
 
   // ── UI Controls ────────────────────────────────────────────────────
 
@@ -155,9 +155,8 @@ test.describe('Simulator', () => {
   test('simulator page has expected URL structure', async ({ electronApp }) => {
     const url = await evalInSimulator<string>(electronApp, `location.href`)
     expect(url).toMatch(/^http:\/\/localhost:\d+\//)
-    // Upstream HashRouter now syncs the route into the query string
-    // (?appId=…&entry=…&page=…); the legacy hash form is accepted on first
-    // load but rewritten to query format once the container mounts.
+    // Upstream HashRouter syncs the route into the query string
+    // (?appId=…&entry=…&page=…).
     expect(url).toContain('appId=')
   })
 

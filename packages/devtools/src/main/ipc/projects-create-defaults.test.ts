@@ -118,7 +118,9 @@ function makeCtx() {
       hasProject: vi.fn(() => false),
       validateProjectDir: vi.fn(() => null),
     },
-    mainWindow: { id: 99 } as unknown as import('electron').BrowserWindow,
+    windows: {
+      mainWindow: { id: 99 } as unknown as import('electron').BrowserWindow,
+    },
     senderPolicy: () => true,
     projectsProvider: {
       listProjects: vi.fn(() => []),

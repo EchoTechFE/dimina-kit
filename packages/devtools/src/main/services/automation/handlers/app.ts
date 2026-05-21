@@ -7,11 +7,11 @@ export const appHandlers: Record<string, Handler> = {}
 // -- App domain --
 
 async function readRoute(ctx: Parameters<Handler>[0]) {
-  const { search, hash } = await evalInSim<{ search: string; hash: string }>(
+  const { search } = await evalInSim<{ search: string }>(
     ctx,
-    `({ search: location.search, hash: location.hash })`,
+    `({ search: location.search })`,
   )
-  return parseLocationRoute(search, hash)
+  return parseLocationRoute(search)
 }
 
 appHandlers['App.getCurrentPage'] = async (ctx) => {
@@ -41,7 +41,7 @@ appHandlers['App.callWxMethod'] = async (ctx, params) => {
   const method = params.method as string
   const args = (params.args as unknown[]) || []
 
-  // For navigation methods, handle specially via hash change + click
+  // For navigation methods, handle specially via DOM click / wx.* on the iframe
   if (['navigateTo', 'redirectTo', 'reLaunch', 'switchTab'].includes(method)) {
     const opts = args[0] as { url?: string } | undefined
     const url = opts?.url
@@ -56,10 +56,8 @@ appHandlers['App.callWxMethod'] = async (ctx, params) => {
 
       if (!clicked) {
         // Fallback: drive navigation via wx.* on the rendered page iframe.
-        // We used to mutate location.hash directly, but upstream's new query
-        // router doesn't react to hashchange and ignores legacy hash writes
-        // once it has rewritten the URL via syncStack. The active page's
-        // iframe still exposes wx.* with the live dimina runtime bindings.
+        // Upstream's query router doesn't react to URL mutation; the active
+        // page's iframe exposes wx.* with the live dimina runtime bindings.
         const apiName = JSON.stringify(method)
         const urlJson = JSON.stringify(cleanUrl)
         await evalInSim(

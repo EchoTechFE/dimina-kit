@@ -44,7 +44,7 @@ test.describe('Storage panel — UI editing', () => {
   // `project.config.json` instead of the literal string `'unknown'`).
   test.describe.configure({ mode: 'serial' })
 
-  useSharedProject(test, DEMO_APP_DIR, { openOptions: { waitForWebview: true } })
+  useSharedProject(test, DEMO_APP_DIR)
 
   test('add a new entry via the footer form writes through to the simulator', async ({ mainWindow, electronApp }) => {
     await selectStorageTab(mainWindow)

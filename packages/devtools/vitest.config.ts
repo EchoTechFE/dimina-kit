@@ -15,8 +15,18 @@ export default defineConfig({
     setupFiles: ['./src/renderer/test-setup.ts'],
   },
   resolve: {
-    alias: {
-      '@': rendererRoot,
-    },
+    alias: [
+      { find: '@', replacement: rendererRoot },
+      // `service-apis/audio/index.js` imports `../../../common`, a module
+      // that only exists inside the dimina submodule at runtime. Map it to a
+      // test-only stub so the audio event-bridge unit test can load it.
+      {
+        find: /^\.\.\/\.\.\/\.\.\/common$/,
+        replacement: resolve(
+          __dirname,
+          'src/simulator/service-apis/audio/__test-stubs__/common.ts',
+        ),
+      },
+    ],
   },
 })

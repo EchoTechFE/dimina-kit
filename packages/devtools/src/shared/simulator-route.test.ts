@@ -175,7 +175,7 @@ describe('buildSimulatorUrl (CompileConfig adapter)', () => {
 
 describe('parseLocationRoute (query format)', () => {
   it('parses the canonical entry===page URL', () => {
-    const r = parseLocationRoute('?appId=wx123&entry=pages/a/a&page=pages/a/a', '')
+    const r = parseLocationRoute('?appId=wx123&entry=pages/a/a&page=pages/a/a')
     expect(r).toEqual({
       appId: 'wx123',
       entry: { pagePath: 'pages/a/a', query: {} },
@@ -184,7 +184,7 @@ describe('parseLocationRoute (query format)', () => {
   })
 
   it('parses distinct entry and current (navigated state)', () => {
-    const r = parseLocationRoute('?appId=wx123&entry=pages/a/a&page=pages/b/b', '')
+    const r = parseLocationRoute('?appId=wx123&entry=pages/a/a&page=pages/b/b')
     expect(r!.entry.pagePath).toBe('pages/a/a')
     expect(r!.current.pagePath).toBe('pages/b/b')
   })
@@ -192,60 +192,25 @@ describe('parseLocationRoute (query format)', () => {
   it('decodes URL-encoded `?` inside entry/page values', () => {
     const r = parseLocationRoute(
       '?appId=wx123&entry=pages/a/a%3Fscene%3D1001&page=pages/a/a%3Fscene%3D1001',
-      '',
     )
     expect(r!.entry.query).toEqual({ scene: '1001' })
   })
 
   it('falls back to entry when page param is missing', () => {
-    const r = parseLocationRoute('?appId=wx123&entry=pages/a/a', '')
+    const r = parseLocationRoute('?appId=wx123&entry=pages/a/a')
     expect(r!.current.pagePath).toBe('pages/a/a')
   })
 
   it('returns null when appId is missing', () => {
-    expect(parseLocationRoute('?entry=pages/a/a', '')).toBeNull()
+    expect(parseLocationRoute('?entry=pages/a/a')).toBeNull()
   })
 
   it('returns null when entry is missing', () => {
-    expect(parseLocationRoute('?appId=wx123', '')).toBeNull()
-  })
-})
-
-describe('parseLocationRoute (legacy hash format)', () => {
-  it('parses `#appid|page1|page2`', () => {
-    const r = parseLocationRoute('', '#wx123|pages/a/a|pages/b/b')
-    expect(r!.appId).toBe('wx123')
-    expect(r!.entry.pagePath).toBe('pages/a/a')
-    expect(r!.current.pagePath).toBe('pages/b/b')
+    expect(parseLocationRoute('?appId=wx123')).toBeNull()
   })
 
-  it('parses per-segment ?query (an earlier bug was first-? truncation)', () => {
-    const r = parseLocationRoute('', '#wx123|pages/a/a?scene=1001|pages/b/b?k=v')
-    expect(r!.entry.query).toEqual({ scene: '1001' })
-    expect(r!.current.query).toEqual({ k: 'v' })
-  })
-
-  it('parses even-older `#appid/pagePath?q=v` (single page)', () => {
-    const r = parseLocationRoute('', '#wx123/pages/a/a?k=v')
-    expect(r!.appId).toBe('wx123')
-    expect(r!.entry.pagePath).toBe('pages/a/a')
-    expect(r!.entry.query).toEqual({ k: 'v' })
-    expect(r!.current).toEqual(r!.entry)
-  })
-
-  it('prefers query format over legacy hash when both present', () => {
-    const r = parseLocationRoute('?appId=wxQ&entry=pages/q/q', '#wxH|pages/h/h')
-    expect(r!.appId).toBe('wxQ')
-    expect(r!.entry.pagePath).toBe('pages/q/q')
-  })
-
-  it('returns null on an empty location', () => {
-    expect(parseLocationRoute('', '')).toBeNull()
-  })
-
-  it('returns null for malformed hashes', () => {
-    expect(parseLocationRoute('', '#noslashes')).toBeNull()
-    expect(parseLocationRoute('', '#|onlysep')).toBeNull()
+  it('returns null on an empty search string', () => {
+    expect(parseLocationRoute('')).toBeNull()
   })
 })
 

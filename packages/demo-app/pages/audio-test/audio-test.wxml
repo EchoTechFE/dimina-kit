@@ -1,0 +1,44 @@
+<view class="container">
+  <view class="page-title">Audio 事件桥测试</view>
+  <view class="page-desc">验证 wx.createInnerAudioContext() 的容器→service 事件桥</view>
+
+  <view class="section">
+    <view class="section-title">音频状态</view>
+    <view class="info-row">
+      <text class="info-label">canplay 已触发</text>
+      <text class="info-value">{{canplayFired}}</text>
+    </view>
+    <view class="info-row">
+      <text class="info-label">play 已触发</text>
+      <text class="info-value">{{playFired}}</text>
+    </view>
+    <view class="info-row">
+      <text class="info-label">ended 已触发</text>
+      <text class="info-value">{{endedFired}}</text>
+    </view>
+    <view class="info-row">
+      <text class="info-label">error 已触发</text>
+      <text class="info-value">{{errorFired}}</text>
+    </view>
+    <view class="info-row">
+      <text class="info-label">timeUpdate 次数</text>
+      <text class="info-value">{{timeUpdateCount}}</text>
+    </view>
+    <view class="info-row">
+      <text class="info-label">最近事件</text>
+      <text class="info-value">{{lastEvent}}</text>
+    </view>
+    <view class="info-row">
+      <text class="info-label">时长(秒)</text>
+      <text class="info-value">{{duration}}</text>
+    </view>
+    <view class="info-row" wx:if="{{errMsg}}">
+      <text class="info-label">错误信息</text>
+      <text class="info-value">{{errMsg}}</text>
+    </view>
+  </view>
+
+  <view class="section">
+    <button class="play-btn" bindtap="playAudio" data-action="play">播放</button>
+  </view>
+</view>

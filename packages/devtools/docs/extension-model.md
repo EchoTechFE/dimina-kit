@@ -1,6 +1,6 @@
 # devtools 扩展模型设计
 
-> 状态：设计稿（Proposal）。落地路径见 §8「兼容性与迁移」。
+> 状态：设计稿（Proposal）。落地路径见 §8「迁移：clean break」。
 > 配套：这是继 [`miniapp-snapshot.md`](./miniapp-snapshot.md) 之后的第二份结构性设计文档。
 > `miniappSnapshot` 统一的是面板**数据**的同步；本文统一的是下游 host 对 devtools 的**扩展**。
 
@@ -131,7 +131,7 @@ flowchart TB
 
 - **N1 不强行并成一种 API**：「host 提供一个实现」（branding）和「host 添加多个」（simulator API）基数不同，强行用同一种签名会损害易用性 —— 见 §5「两类扩展」。
 - **N2 不做 manifest / VS Code 式 contribution 系统**：host 数量有限，一套声明式插件清单是过度工程。
-- **N3 不破坏现有下游 host**：迁移用 `@deprecated` 薄 shim 过渡，不做断崖式 breaking change。
+- **N3 不保留兼容层**：调研（见 §8.1）确认下游是可协调的已知少数，迁移走 clean break —— 旧扩展点随重构一并删除，不留 `@deprecated` shim、不留双轨。
 
 ## 5. 模型：两类扩展 + 五条不变量
 
@@ -238,9 +238,9 @@ flowchart TB
 | `customCreateProjectDialog` 返回类型 | `workbench-context` 类型砍掉了 `{ready}` 分支 | 收敛到 `CustomCreateProjectDialogResult`（见 backlog E2） | 否（修类型） |
 | `updateChecker` → `UpdateManager` | 装配时漏传 `senderPolicy` | 补传 `senderPolicy` | 否（修 bug） |
 | `panels` | 两个 handler 行为不一致 | 单一语义；若要支持自定义面板，走 `registerPanel` | 否 |
-| `registerSimulatorApi` | 进程级单例 | `instance.registerSimulatorApi`（per-context）。旧的全局导出保留为 `@deprecated` 薄 shim | 否（shim 过渡） |
-| toolbar：`toolbarActions` + `toolbar:action:*` | provider（列表）+ 裸 IPC（行为）分裂 | `instance.registerToolbarAction({id,label,handler})` 合一，handler 经 `IpcRegistry` | 是（裸 IPC 路径弃用，给一版过渡） |
-| `onSetup` 内裸 `ipcMain.handle` | 绕过 senderPolicy、无主 | `instance.ipc`（已 gated 的 `IpcRegistry`） | 是（弃用，给一版过渡） |
+| `registerSimulatorApi` | 进程级单例 | `instance.registerSimulatorApi`（per-context）；同一改动里删除旧的进程级全局导出 | 是（clean break，与下游同步迁移） |
+| toolbar：`toolbarActions` + `toolbar:action:*` | provider（列表）+ 裸 IPC（行为）分裂 | `instance.registerToolbarAction({id,label,handler})` 合一，handler 经 `IpcRegistry`；删除 `toolbarActions` 字段与裸 `toolbar:action:*` 路径 | 是（clean break） |
+| `onSetup` 内裸 `ipcMain.handle` | 绕过 senderPolicy、无主 | 只能经 `instance.ipc`（已 gated 的 `IpcRegistry`）；裸 `ipcMain.handle` 不再是合法用法 | 是（clean break） |
 | `register*Ipc` / `WorkbenchModule` | 模块组装命令式 | 保留（深度定制路线）；额外模块经 `instance.registerIpcModule` 接入 | 否 |
 | `extraModules`（幽灵） | JSDoc 承诺、无实现 | 实现为 `instance.registerIpcModule`，删掉误导的 JSDoc | 否 |
 | `IpcRegistry` | 未导出 | 对外导出（host 写自定义 IPC 的安全基类） | 否（新增导出） |
@@ -311,25 +311,32 @@ sequenceDiagram
 
 现状下，裸 IPC 与进程全局的 `registerSimulatorApi` 都不在 `registry` 里，这一步清不到它们 —— 这正是当前的泄漏来源。
 
-## 8. 兼容性与迁移
+## 8. 迁移：clean break
 
-下游 host 已在用 `registerSimulatorApi`、`toolbar:action:*` 等扩展点，迁移必须不破坏它们。下面分七步推进，每步独立可合、可单独 ship、配 e2e：
+### 8.1 前提——下游是谁
 
-1. **导出 `IpcRegistry`** + 修 `UpdateManager` 漏传 `senderPolicy`。纯新增 / 修 bug，零兼容风险。
+迁移该保兼容还是 clean break，取决于一个事实问题：用 devtools 的下游 host 是「不特定公众」还是「可协调的已知少数」。专门调研的结论是后者，证据：
 
-2. **`WorkbenchHostInstance` 加 `registerXxx` + `ipc`**。`onSetup` 的入参本就是它，加方法即可。新增、不破坏。
+- `@dimina-kit/devtools` / `@dimina-kit/devkit` 虽公开发布在 npm，但 **npm dependents 为 0**，下载量与发布日完全同步（CI / 镜像噪声，非真实人类安装），公网搜不到任何第三方使用。
+- 源码、测试、本设计文档都把下游建模为一个**具体的、已知的**深度集成方（代号 `qdmp`）——团队自己的判断就是「下游 host 是个位数」。
+- 两个包仍处 `0.x`，semver 本就允许 minor 破坏。
 
-3. **`registerSimulatorApi` 从进程全局改为 context-owned**。旧的全局 `registerSimulatorApi` 导出保留为 `@deprecated` 薄 shim。难点在于：host 可能在 `createWorkbenchApp` 之前、模块加载期就调它，那时 `WorkbenchContext` 尚不存在。因此 shim 写入一个**进程级 pending 队列**；`WorkbenchContext` 创建时把队列 flush 进 `ctx` 并由 `ctx` 接管，过渡期结束后连队列一起删除。新代码改用 `instance.registerSimulatorApi`。（此 pending 队列是 G1「不进程全局」在过渡期的一个有时限例外，详见 §9。）
+结论：下游是**可协调的已知少数**（很可能就 `qdmp` 一个）。因此迁移采用 **clean break** —— 每一步都删掉旧路径，不留 `@deprecated` shim、不留双轨；唯一前提是与 `qdmp` 团队同步。
 
-4. **toolbar / 裸 IPC 迁移**。`registerToolbarAction({ id, label, handler })` 上线。`toolbarActions` config 字段可加 TS `@deprecated`；但 `toolbar:action:*` 那一半是 host 自己代码里的 `ipcMain.handle`，devtools **无法**对它加 `@deprecated`——只能靠 README 改写示例 + 启动期 `warn`（renderer `invoke` 了某 action，却没经 `registerToolbarAction` 注册过它）来引导迁移。旧路径继续可用（renderer 的 `invoke('toolbar:action:x')` 不变），非 breaking。
+> 执行前需团队确认一件仓库查不出的事：`qdmp` 是否为唯一下游、当前 pin 的版本。确认后即可放手 clean break。
 
-5. **`extraModules` 幽灵收编**。实现为 `registerIpcModule`，并删掉 `WorkbenchModule` 里那段误导的 JSDoc。
+### 8.2 步骤
 
-6. **类型收敛**。合并 `WorkbenchConfig` / `WorkbenchAppConfig` / `CreateContextOptions` 的重叠部分；统一 `panels` 行为。
+每步独立可合、可单独 ship、配 e2e；**每步都在同一改动里删除对应的旧路径**：
 
-7. **加 G4 信号**。启动期校验「声明了 toolbar action 却没 handler」等错配，发出 `warn`。
-
-每步都可独立 ship，并配各自的 e2e。
+1. **导出 `IpcRegistry`** + 修 `UpdateManager` 漏传 `senderPolicy`。纯新增 / 修 bug。
+2. **`WorkbenchHostInstance`（运行时为其超集 `WorkbenchAppInstance`）加 `registerXxx` + `ipc`**。
+3. **`registerSimulatorApi` → `instance.registerSimulatorApi`**。新 API 是 per-context、`onSetup` 期注册；**同一改动里删除**旧的进程级全局 `registerSimulatorApi` 导出与 `simulatorApiRegistry` 单例。`qdmp` 把调用从模块加载期挪进 `onSetup`——一次性的协调改动，不需要 pending 队列、不需要 shim。
+4. **toolbar 合一**。`registerToolbarAction({ id, label, handler })` 上线；**同一改动里删除** `toolbarActions` config 字段与裸 `toolbar:action:*` 路径。`qdmp` 改用新 API。
+5. **裸 IPC 收口**。`onSetup` 里的自定义 IPC 一律改走 `instance.ipc`；README 删除裸 `ipcMain.handle` 示例。
+6. **`extraModules` 幽灵收编**。实现为 `registerIpcModule`，并删掉 `WorkbenchModule` 里那段误导的 JSDoc。
+7. **类型收敛**。合并 `WorkbenchConfig` / `WorkbenchAppConfig` / `CreateContextOptions` 的重叠部分；统一 `panels` 行为。
+8. **加 G4 信号**。启动期校验「声明了 toolbar action 却没 handler」等错配，发出 `warn`。
 
 ## 9. 取舍与边界
 
@@ -339,7 +346,7 @@ sequenceDiagram
 
 - **为什么不做 manifest / 插件系统**：VS Code 式 contribution manifest 是为成百上千第三方插件设计的。devtools 的下游 host 是个位数、且是深度集成方，一套声明式清单 + 激活机制纯属负担。
 
-- **`@deprecated` shim 的成本**：`registerSimulatorApi`、`toolbar:action:*` 各需保留一个过渡版本。其中 `registerSimulatorApi` 的 shim 必须借助一个**进程级 pending 队列**（host 可能在 context 创建前就调它）——这意味着**过渡期内 G1「不进程全局」存在一个有时限的例外**。由于下游 host 是个位数的深度集成方，因此不设死板的「一版后移除」时限，而是逐一确认所有已知下游迁移完，再连同 shim 与队列一起删除。
+- **为什么 clean break 而非兼容层**：下游是可协调的已知少数（§8.1）。保留 `@deprecated` shim 只会在一份「消灭扩展面卫生债」的重构里又新造卫生债——而且本仓库已有前车之鉴：`WorkbenchContext` 的两个 `@deprecated` 窗口字段，标了之后迁移停滞至今。`@deprecated` 没有强制删除机制，就只是一个带标签的死代码。clean break 的代价是一次与 `qdmp` 的协调迁移——一次性的、有限的代价。
 
 - **不在本文范围**：`register*Ipc` 模块组装路线（供深度定制用）保留不动；它本就符合五条不变量，只是补一个 `registerIpcModule` 让「加模块」也能在 setup 期完成。
 

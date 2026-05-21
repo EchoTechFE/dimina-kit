@@ -6,9 +6,6 @@
  * `pagePath?key=val&…`. HashRouter.syncStack rewrites the URL after every
  * navigation; before mount, parent code consumes whatever URL it received.
  *
- * Older containers wrote the route into the URL hash; we still parse that as
- * a fallback so e2e tests / hot-reload paths survive a bisect across versions.
- *
  * Every URL-building or URL-parsing site in devtools should go through this
  * module — if upstream changes the contract again it's a single-file diff.
  */
@@ -141,41 +138,18 @@ export function buildSimulatorUrl(
 // ── Parse ────────────────────────────────────────────────────────────────────
 
 /**
- * Parse `location.search` + `location.hash` into a `SimulatorRoute`.
- * Prefers the new query format; falls back to the legacy hash format.
- * Returns `null` when no recognisable route is present.
+ * Parse `location.search` (the query route `?appId=&entry=&page=`) into a
+ * `SimulatorRoute`. Returns `null` when no recognisable route is present.
  */
-export function parseLocationRoute(search: string, hash: string): SimulatorRoute | null {
+export function parseLocationRoute(search: string): SimulatorRoute | null {
   const params = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search)
   const appId = params.get('appId')
   const entryRaw = params.get('entry')
-  if (appId && entryRaw) {
-    const entry = decodePageSpec(entryRaw)
-    const pageRaw = params.get('page')
-    const current = pageRaw && pageRaw !== entryRaw ? decodePageSpec(pageRaw) : entry
-    return { appId, entry, current }
-  }
-
-  // Legacy hash format: `#appid|page1|page2|…` (per-segment ?query)
-  const clean = hash.replace(/^#/, '')
-  if (!clean) return null
-  if (clean.includes('|')) {
-    const parts = clean.split('|')
-    const legacyAppId = parts[0] ?? ''
-    if (!legacyAppId || parts.length < 2) return null
-    const entry = decodePageSpec(parts[1] ?? '')
-    const current = decodePageSpec(parts[parts.length - 1] ?? '')
-    return { appId: legacyAppId, entry, current }
-  }
-  // Even older: `#appid/pagePath?query` — strip the appid prefix.
-  const seg = decodePageSpec(clean)
-  const slashIdx = seg.pagePath.indexOf('/')
-  if (slashIdx < 0) return null
-  const legacyAppId = seg.pagePath.slice(0, slashIdx)
-  const pagePath = seg.pagePath.slice(slashIdx + 1)
-  if (!legacyAppId || !pagePath) return null
-  const spec: PageSpec = { pagePath, query: seg.query }
-  return { appId: legacyAppId, entry: spec, current: spec }
+  if (!appId || !entryRaw) return null
+  const entry = decodePageSpec(entryRaw)
+  const pageRaw = params.get('page')
+  const current = pageRaw && pageRaw !== entryRaw ? decodePageSpec(pageRaw) : entry
+  return { appId, entry, current }
 }
 
 /** Parse a full URL string into a `SimulatorRoute`, or `null`. */
@@ -183,7 +157,7 @@ export function parseRoute(url: string): SimulatorRoute | null {
   if (!url) return null
   try {
     const u = new URL(url)
-    return parseLocationRoute(u.search, u.hash)
+    return parseLocationRoute(u.search)
   } catch {
     return null
   }
@@ -210,24 +184,19 @@ export function collapseRouteToTopPage(url: string): string {
   } catch {
     return url
   }
-  const route = parseLocationRoute(u.search, u.hash)
+  const route = parseLocationRoute(u.search)
   if (!route) return url
   if (route.entry.pagePath === route.current.pagePath
       && encodePageSpec(route.entry) === encodePageSpec(route.current)) {
     return url
   }
-  // Preserve non-route extras (apiNamespaces etc.) from the *query* portion.
-  // Detect whether the input already carried the new query route — if so we
-  // keep `u.hash` (could hold a non-route fragment). If we parsed via the
-  // legacy hash fallback, the hash IS the route we just migrated away from
-  // and must be dropped so the output URL has a single, canonical route.
+  // Preserve non-route extras (apiNamespaces etc.) from the query portion;
+  // a non-route fragment in `u.hash`, if any, is carried through verbatim.
   const searchParams = new URLSearchParams(u.search.startsWith('?') ? u.search.slice(1) : u.search)
-  const camefromQuery = searchParams.has('appId') && searchParams.has('entry')
   const extras: Record<string, string> = {}
   for (const [k, v] of searchParams) {
     if (!ROUTE_KEYS.includes(k as (typeof ROUTE_KEYS)[number])) extras[k] = v
   }
   const search = buildRouteSearch(route.appId, route.current, extras)
-  const trailingHash = camefromQuery ? u.hash : ''
-  return `${u.origin}${u.pathname}?${search}${trailingHash}`
+  return `${u.origin}${u.pathname}?${search}${u.hash}`
 }

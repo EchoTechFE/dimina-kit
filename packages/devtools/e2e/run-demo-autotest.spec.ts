@@ -64,7 +64,7 @@ test.describe('Demo App auto-test.js', () => {
         100,
       ) as number
 
-      await openProjectInUI(mainWindow, DEMO_APP_DIR, { waitMs: 8000, waitForWebview: true })
+      await openProjectInUI(mainWindow, DEMO_APP_DIR, { waitMs: 8000 })
       await waitForSimulatorWebview(electronApp)
       await new Promise((r) => setTimeout(r, 3000))
 
