@@ -82,18 +82,12 @@ export function getWindowInfo(this: MiniAppContext, { success, complete }: { suc
 	const onSuccess = this.createCallbackFunction(success)
 	const onComplete = this.createCallbackFunction(complete)
 
-	const wb = this.parent?.el?.querySelector('.dimina-native-webview__root')?.getBoundingClientRect()
-		?? { width: 375, height: 812 }
+	const { wb, di, pixelRatio, screenWidth, screenHeight, windowWidth, windowHeight } = readWindowMetrics(this)
 	const bar = this.parent?.getStatusBarRect?.() ?? { height: 0 }
-	const di = (window as Window & { __deviceInfo?: Record<string, number | string> }).__deviceInfo || {}
 	const statusBarHeight = (di['statusBarHeight'] as number | undefined) ?? bar.height
 
 	const info = {
-		pixelRatio: (di['pixelRatio'] as number | undefined) || window.devicePixelRatio || 2,
-		screenWidth: (di['screenWidth'] as number | undefined) || wb.width,
-		screenHeight: (di['screenHeight'] as number | undefined) || wb.height,
-		windowWidth: wb.width,
-		windowHeight: wb.height,
+		pixelRatio, screenWidth, screenHeight, windowWidth, windowHeight,
 		statusBarHeight,
 		safeArea: {
 			width: wb.width,
@@ -126,21 +120,30 @@ export function getSystemSetting(this: MiniAppContext, { success, complete }: { 
 
 // ─── System Info ─────────────────────────────────────────────────────────────
 
-function buildSystemInfo(miniApp: MiniAppContext) {
+function readWindowMetrics(miniApp: MiniAppContext) {
 	const wb = miniApp.parent?.el?.querySelector('.dimina-native-webview__root')?.getBoundingClientRect()
 		?? { width: 375, height: 812 }
 	const di = (window as Window & { __deviceInfo?: Record<string, number | string> }).__deviceInfo || {}
+	return {
+		wb,
+		di,
+		pixelRatio: (di['pixelRatio'] as number | undefined) || window.devicePixelRatio || 2,
+		screenWidth: (di['screenWidth'] as number | undefined) || wb.width,
+		screenHeight: (di['screenHeight'] as number | undefined) || wb.height,
+		windowWidth: wb.width,
+		windowHeight: wb.height,
+	}
+}
+
+function buildSystemInfo(miniApp: MiniAppContext) {
+	const { wb, di, pixelRatio, screenWidth, screenHeight, windowWidth, windowHeight } = readWindowMetrics(miniApp)
 	const statusBarHeight = (di['statusBarHeight'] as number | undefined) ?? 0
 	const safeAreaBottom = (di['safeAreaBottom'] as number | undefined) ?? 0
 
 	return {
 		brand: di['brand'] || 'devtools',
 		model: di['model'] || 'devtools',
-		pixelRatio: (di['pixelRatio'] as number | undefined) || window.devicePixelRatio || 2,
-		screenWidth: (di['screenWidth'] as number | undefined) || wb.width,
-		screenHeight: (di['screenHeight'] as number | undefined) || wb.height,
-		windowWidth: wb.width,
-		windowHeight: wb.height,
+		pixelRatio, screenWidth, screenHeight, windowWidth, windowHeight,
 		statusBarHeight,
 		language: 'zh_CN',
 		version: '8.0.5',
