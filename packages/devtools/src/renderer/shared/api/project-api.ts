@@ -1,4 +1,5 @@
 import type { CompileConfig, Project } from '@/shared/types'
+import type { CustomCreateProjectDialogResult } from '../../../shared/types'
 import type { ProjectCreateDefaults } from '../../../shared/ipc-channels'
 import { ProjectsChannel, DialogChannel, ProjectChannel } from '../../../shared/ipc-channels'
 import { invoke, invokeStrict, on } from './ipc-transport'
@@ -119,13 +120,13 @@ export function listTemplates(): Promise<ProjectTemplateInfo[]> {
 }
 
 /**
- * Ask main to open the host-supplied "新建项目" dialog hook. Resolves to
- * the input the host hook collected, or null when no hook is configured
- * (renderer should then show the built-in dialog) or when the user
- * cancelled the host dialog.
+ * Ask main to open the host-supplied "新建项目" dialog hook. Resolves to:
+ *  - `null` — no hook configured or user cancelled; renderer should show the built-in dialog.
+ *  - `{ ready }` — host has already created the project; devtools just refreshes the list.
+ *  - `CreateProjectInput` — host collected inputs; devtools materialises the template locally.
  */
-export function openCreateProjectDialog(): Promise<CreateProjectInput | null> {
-  return invoke<CreateProjectInput | null>(ProjectsChannel.OpenCreateDialog)
+export function openCreateProjectDialog(): Promise<CustomCreateProjectDialogResult> {
+  return invoke<CustomCreateProjectDialogResult>(ProjectsChannel.OpenCreateDialog)
 }
 
 /** Scaffold and register a new project. Returns the created Project. */

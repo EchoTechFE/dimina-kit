@@ -99,7 +99,7 @@ export default function Main() {
     if (result && 'ready' in result) {
       // Host backend already created the project; just refresh and open.
       await loadProjects()
-      handleOpen(result.ready as Project)
+      handleOpen(result.ready)
       return
     }
 
