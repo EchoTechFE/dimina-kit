@@ -48,9 +48,6 @@ export function AppDataPanel({
   onSelectBridge: (id: string) => void
 }) {
   const { bridges, activeBridgeId, entries } = state
-  const active = activeBridgeId && bridges.some((b) => b.id === activeBridgeId)
-    ? activeBridgeId
-    : bridges.at(-1)?.id ?? null
   const anyEntries = bridges.some((b) => Object.keys(entries[b.id] ?? {}).length > 0)
   return (
     <div className="flex flex-col overflow-hidden flex-1">
@@ -67,7 +64,7 @@ export function AppDataPanel({
       {bridges.length > 1 && (
         <div className="flex gap-1 px-2 py-1 border-b border-border-subtle shrink-0 overflow-x-auto bg-bg-panel">
           {bridges.map((b) => {
-            const isActive = b.id === active
+            const isActive = b.id === activeBridgeId
             return (
               <button
                 key={b.id}
@@ -96,7 +93,7 @@ export function AppDataPanel({
         // their expand/collapse state across tab switches.
         <div className="flex-1 overflow-hidden relative">
           {bridges.map((b) => {
-            const isActive = b.id === active
+            const isActive = b.id === activeBridgeId
             const bridgeEntries = entries[b.id] ?? {}
             const keys = Object.keys(bridgeEntries)
             return (

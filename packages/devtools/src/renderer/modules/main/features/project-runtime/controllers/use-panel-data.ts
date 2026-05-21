@@ -1,10 +1,10 @@
 import {
   useCallback,
   useEffect,
-  useRef,
   useState,
 } from 'react'
 import type { RefObject } from 'react'
+import { useActiveBridgeId } from './use-active-bridge-id'
 import { invoke as ipcInvoke, on as ipcOn } from '@/shared/api/ipc-transport'
 import {
   SimulatorElementChannel,
@@ -86,31 +86,7 @@ export function usePanelData(props: UsePanelDataProps): PanelDataHookResult {
     enabled: compileStatus.status === 'ready',
   })
 
-  const [activeBridgeId, setActiveBridgeId] = useState<string | null>(null)
-  // Bridge ids seen in the previously-applied snapshot — drives the
-  // "auto-follow the page that just inited" decision below.
-  const prevBridgeIdsRef = useRef<Set<string>>(new Set())
-
-  // Derive `activeBridgeId` from each new AppData snapshot. If a bridge id
-  // appears that was absent from the previous snapshot, a new page inited →
-  // follow it (the newest such id, last in `bridges` order). Otherwise, if the
-  // current selection was evicted, fall back to the last remaining bridge.
-  useEffect(() => {
-    const { bridges } = appDataSnapshot.data
-    const ids = bridges.map((b) => b.id)
-    const idSet = new Set(ids)
-    const prevIds = prevBridgeIdsRef.current
-    prevBridgeIdsRef.current = idSet
-
-    const appeared = ids.filter((id) => !prevIds.has(id))
-    if (appeared.length > 0) {
-      setActiveBridgeId(appeared[appeared.length - 1]!)
-      return
-    }
-    setActiveBridgeId((prev) => (
-      prev && idSet.has(prev) ? prev : (ids.at(-1) ?? null)
-    ))
-  }, [appDataSnapshot.data])
+  const { activeBridgeId, setActiveBridge } = useActiveBridgeId(appDataSnapshot.data.bridges)
 
   const appData: AppDataState = {
     bridges: appDataSnapshot.data.bridges,
@@ -118,13 +94,7 @@ export function usePanelData(props: UsePanelDataProps): PanelDataHookResult {
     entries: appDataSnapshot.data.entries,
   }
 
-  const setActiveAppDataBridge = useCallback((id: string) => {
-    setActiveBridgeId((prev) => (
-      prev !== id && appDataSnapshot.data.bridges.some((b) => b.id === id)
-        ? id
-        : prev
-    ))
-  }, [appDataSnapshot.data.bridges])
+  const setActiveAppDataBridge = setActiveBridge
 
   useEffect(() => {
     if (compileStatus.status !== 'ready') return
