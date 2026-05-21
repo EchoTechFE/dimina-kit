@@ -1,5 +1,5 @@
-import { contextBridge } from 'electron'
 import type { ElementInspection } from '../../shared/ipc-channels.js'
+import { exposeOnMainWorld } from '../shared/expose.js'
 
 export interface WxmlNode {
   tagName: string
@@ -217,25 +217,9 @@ export function installSimulatorBridge(): () => void {
   if (!exposedApi) {
     exposedApi = buildApi()
   }
-
-  try {
-    contextBridge.exposeInMainWorld('__simulatorData', {
-      ...exposedApi,
-      getAppdata: () => clone(state.appdata.data),
-      getAppdataSnapshot: () => clone(state.appdata),
-      getStorageSnapshot: () => clone(state.storage),
-      getWxml: () => clone(state.wxml.data),
-      getWxmlSnapshot: () => clone(state.wxml),
-    })
-  } catch {
-    ;(window as unknown as Record<string, unknown>).__simulatorData = exposedApi
-  }
-
+  const dispose = exposeOnMainWorld('__simulatorData', exposedApi)
   return () => {
     resetBridgeState()
-    const windowRef = window as unknown as Record<string, unknown>
-    if (windowRef.__simulatorData === exposedApi) {
-      delete windowRef.__simulatorData
-    }
+    dispose()
   }
 }
