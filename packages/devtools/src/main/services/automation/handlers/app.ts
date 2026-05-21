@@ -49,7 +49,9 @@ appHandlers['App.callWxMethod'] = async (ctx, params) => {
       const cleanUrl = url.startsWith('/') ? url : `/${url}`
       // Try clicking a matching DOM element first
       const clicked = await evalInSim<boolean>(ctx, inIframe(`
-        const el = _doc.querySelector('[data-path="${cleanUrl}"]')
+        const path = ${JSON.stringify(cleanUrl)}
+        const el = Array.from(_doc.querySelectorAll('[data-path]'))
+          .find(e => e.getAttribute('data-path') === path)
         if (el) { el.click(); return true }
         return false
       `)).catch(() => false)

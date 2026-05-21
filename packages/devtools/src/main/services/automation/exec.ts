@@ -20,8 +20,17 @@ export async function evalInSim<T = unknown>(ctx: WorkbenchContext, expression: 
 
 /** Build JS that locates an element by selector+index inside the active page iframe. */
 export function buildElAccess(ref: ElementRef, varName = 'el'): string {
-  const escaped = ref.selector.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
-  return `const ${varName} = _doc.querySelectorAll('${escaped}')[${ref.index}]`
+  return `const ${varName} = _doc.querySelectorAll(${JSON.stringify(ref.selector)})[${ref.index}]`
+}
+
+/** Run `body` inside the active page iframe with `varName` bound to the element at `ref`. */
+export function evalInElement<T = unknown>(
+  ctx: WorkbenchContext,
+  ref: ElementRef,
+  body: string,
+  varName = 'el',
+): Promise<T> {
+  return evalInSim<T>(ctx, inIframe(`${buildElAccess(ref, varName)}\n${body}`))
 }
 
 /** Wrap code to run inside the active page iframe (last iframe in the stack). */
