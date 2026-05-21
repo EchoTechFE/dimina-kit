@@ -671,48 +671,7 @@ flowchart TB
 
 ## IPC 通信总览
 
-| 频道                              | 方向  | 说明                                           |
-| --------------------------------- | ----- | ---------------------------------------------- |
-| `projects:list`                   | R→M   | 获取项目列表                                   |
-| `projects:add`                    | R→M   | 添加项目                                       |
-| `projects:remove`                 | R→M   | 删除项目                                       |
-| `dialog:openDirectory`            | R→M   | 打开目录选择对话框                             |
-| `project:open`                    | R→M   | 编译并启动项目                                 |
-| `project:close`                   | R→M   | 停止编译，清理 View                            |
-| `project:status`                  | M→R   | 编译状态推送                                   |
-| `project:getPages`                | R→M   | 读取 app.json pages                            |
-| `project:getCompileConfig`        | R→M   | 读取编译配置                                   |
-| `project:saveCompileConfig`       | R→M   | 保存编译配置                                   |
-| `app:getPreloadPath`              | R→M   | 获取 preload 脚本路径                          |
-| `app:getBranding`                 | R→M   | 读取品牌信息（`brandingProvider`）             |
-| `toolbar:getActions`              | R→M   | 读取自定义工具栏按钮                           |
-| `workbench:getPanelConfig`        | R→M   | 获取 panels 配置                               |
-| `workbench:getApiNamespaces`      | R→M   | 获取自定义 API namespaces                      |
-| `simulator:attach`                | R→M   | 绑定 simulator webContents，创建 simulatorView |
-| `simulator:detach`                | R→M   | 销毁所有 View                                  |
-| `simulator:resize`                | R→M   | 更新 View 位置（分割线拖动）                   |
-| `simulator:setVisible`            | R→M   | 显示/隐藏 simulator 面板                       |
-| `panel:list`                      | R→M   | 获取启用的内置面板列表                         |
-| `panel:eval`                      | R→M   | 在 simulator webContents 执行 JS 并返回结果    |
-| `panel:select`                    | R→M   | 切换到指定内置面板                             |
-| `panel:selectSimulator`           | R→M   | 切换到 simulator tab                           |
-| `popover:show`                    | R→M   | 创建弹窗                                       |
-| `popover:hide`                    | R→M   | 销毁弹窗                                       |
-| `popover:init`                    | M→P   | 初始化弹窗数据                                 |
-| `popover:relaunch`                | P→M→R | 重新编译                                       |
-| `popover:closed`                  | M→R   | 弹窗关闭通知                                   |
-| `settings:setVisible`             | R→M   | 显示/隐藏设置视图                              |
-| `settings:init`                   | M→P   | 初始化设置面板                                 |
-| `settings:configChanged`          | P→M→R | 编译配置变更通知                               |
-| `settings:projectSettingsChanged` | P→M   | 项目级设置（如 sourcemap）落盘                 |
-| `settings:closed`                 | M→R   | 设置面板关闭通知                               |
-| `workbenchSettings:get`           | R→M   | 读取用户级 workbench 设置                      |
-| `workbenchSettings:save`          | R→M   | 保存 workbench 设置并应用主题                  |
-| `workbenchSettings:setTheme`      | R→M   | 仅切换主题                                     |
-| `workbenchSettings:getCdpStatus`  | R→M   | 读取当前 CDP 端口状态                          |
-| `workbenchSettings:setVisible`    | R→M   | 打开/关闭独立设置窗口                          |
-
-R=渲染进程，M=主进程，P=子 WebContentsView
+IPC 频道名常量集中定义在 `src/shared/ipc-channels.ts`，按域分组（`SimulatorChannel` / `ProjectChannel` / `PanelChannel` / `WorkbenchSettingsChannel` 等）。该文件是频道清单的唯一真相源；此处不再维护手抄表，以免与代码漂移。
 
 ---
 
