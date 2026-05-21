@@ -44,7 +44,9 @@ await session.close()
 | `port`         | `number`                 | `0`     | 预览服务器端口，`0` 表示自动分配                                                             |
 | `sourcemap`    | `boolean`                | `false` | 是否生成 sourcemap                                                                           |
 | `simulatorDir` | `string`                 | --      | 模拟器外壳静态资源目录；不传则不启用 `/simulator` 路由                                       |
+| `containerDir` | `string`                 | --      | H5 容器静态资源目录；不传则使用内置 `dimina-fe-container`                                    |
 | `outputDir`    | `string`                 | --      | 编译产物输出目录，默认 `<os.tmpdir()>/dimina-kit/<projectPath 哈希前 12 位>`（每个项目独立） |
+| `watch`        | `boolean`                | `true`  | 为 `false` 时跳过 chokidar 文件监听 / 自动重编译循环                                        |
 | `onRebuild`    | `() => void`             | --      | 文件变更触发重新编译后的回调                                                                 |
 | `onBuildError` | `(err: unknown) => void` | --      | 编译出错时的回调                                                                             |
 

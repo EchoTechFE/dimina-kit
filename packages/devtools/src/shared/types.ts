@@ -1,3 +1,5 @@
+import type { OpenProjectOptions } from '@dimina-kit/devkit'
+
 export interface AppInfo {
   appName?: string
   [key: string]: unknown
@@ -10,16 +12,7 @@ export interface ProjectSession {
 }
 
 export interface CompilationAdapter {
-  openProject(opts: {
-    projectPath: string
-    port?: number
-    sourcemap?: boolean
-    simulatorDir?: string
-    /** When false, skip the file-watcher / auto-recompile loop. Default true. */
-    watch?: boolean
-    onRebuild?: () => void
-    onBuildError?: (err: unknown) => void
-  }): Promise<ProjectSession>
+  openProject(opts: Omit<OpenProjectOptions, 'containerDir' | 'outputDir'>): Promise<ProjectSession>
 }
 
 export type BuiltinPanelId = 'wxml' | 'console' | 'appdata' | 'storage'
