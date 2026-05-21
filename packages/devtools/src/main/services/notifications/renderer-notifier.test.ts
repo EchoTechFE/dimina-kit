@@ -5,7 +5,7 @@
  *
  * Covers three target classes:
  *   - main window methods (windowNavigateBack, popoverRelaunch, projectStatus,
- *     toolbarActionsChanged) → routed via `ctx.mainWindow.webContents.send`
+ *     toolbarActionsChanged) → routed via `ctx.windows.mainWindow.webContents.send`
  *   - settings overlay (settingsInit) → routed via
  *     `ctx.views.getSettingsWebContents().send`
  *   - popoverInit takes a separate view argument; flipping its
@@ -47,7 +47,7 @@ describe('RendererNotifier — destroyed targets no-op', () => {
     const mainWindow = makeBrowserWindow()
     const settingsWc = makeWebContents()
     const ctx = {
-      mainWindow: mainWindow as unknown as Electron.BrowserWindow,
+      windows: { mainWindow: mainWindow as unknown as Electron.BrowserWindow },
       views: { getSettingsWebContents: () => settingsWc as unknown as Electron.WebContents },
     }
     const notifier = createRendererNotifier(ctx)
@@ -65,7 +65,7 @@ describe('RendererNotifier — destroyed targets no-op', () => {
   it('windowNavigateBack: no-ops once only the webContents is destroyed (window still alive)', () => {
     const mainWindow = makeBrowserWindow()
     const ctx = {
-      mainWindow: mainWindow as unknown as Electron.BrowserWindow,
+      windows: { mainWindow: mainWindow as unknown as Electron.BrowserWindow },
       views: { getSettingsWebContents: () => null },
     }
     const notifier = createRendererNotifier(ctx)
@@ -81,7 +81,7 @@ describe('RendererNotifier — destroyed targets no-op', () => {
   it('popoverRelaunch: sends with payload while alive, no-ops after destruction', () => {
     const mainWindow = makeBrowserWindow()
     const ctx = {
-      mainWindow: mainWindow as unknown as Electron.BrowserWindow,
+      windows: { mainWindow: mainWindow as unknown as Electron.BrowserWindow },
       views: { getSettingsWebContents: () => null },
     }
     const notifier = createRendererNotifier(ctx)
@@ -98,7 +98,7 @@ describe('RendererNotifier — destroyed targets no-op', () => {
   it('projectStatus + toolbarActionsChanged: both route through mainWindow and respect destroy', () => {
     const mainWindow = makeBrowserWindow()
     const ctx = {
-      mainWindow: mainWindow as unknown as Electron.BrowserWindow,
+      windows: { mainWindow: mainWindow as unknown as Electron.BrowserWindow },
       views: { getSettingsWebContents: () => null },
     }
     const notifier = createRendererNotifier(ctx)
@@ -122,7 +122,7 @@ describe('RendererNotifier — destroyed targets no-op', () => {
     const mainWindow = makeBrowserWindow()
     const settingsWc = makeWebContents()
     const ctx = {
-      mainWindow: mainWindow as unknown as Electron.BrowserWindow,
+      windows: { mainWindow: mainWindow as unknown as Electron.BrowserWindow },
       views: {
         getSettingsWebContents: () =>
           (settingsWc.destroyed ? null : settingsWc) as unknown as Electron.WebContents | null,
@@ -147,7 +147,7 @@ describe('RendererNotifier — destroyed targets no-op', () => {
   it('settingsInit: also no-ops when getSettingsWebContents returns null (overlay hidden)', () => {
     const mainWindow = makeBrowserWindow()
     const ctx = {
-      mainWindow: mainWindow as unknown as Electron.BrowserWindow,
+      windows: { mainWindow: mainWindow as unknown as Electron.BrowserWindow },
       views: { getSettingsWebContents: () => null },
     }
     const notifier = createRendererNotifier(ctx)
@@ -163,7 +163,7 @@ describe('RendererNotifier — destroyed targets no-op', () => {
   it('popoverInit: routes via the passed-in popover view; destroyed sub view → no-op', () => {
     const mainWindow = makeBrowserWindow()
     const ctx = {
-      mainWindow: mainWindow as unknown as Electron.BrowserWindow,
+      windows: { mainWindow: mainWindow as unknown as Electron.BrowserWindow },
       views: { getSettingsWebContents: () => null },
     }
     const notifier = createRendererNotifier(ctx)

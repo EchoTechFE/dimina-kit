@@ -37,10 +37,8 @@ import {
 	getImageInfo,
 	chooseMedia,
 	chooseVideo,
-	__audio_create,
-	__audio_setProp,
-	__audio_call,
 	audioCreate,
+	audioListen,
 	audioSetProp,
 	audioPlay,
 	audioPause,
@@ -285,12 +283,9 @@ export const simulatorApis: Record<string, (this: MiniAppContext, opts: any) => 
 	// Media: Video
 	chooseMedia,
 	chooseVideo,
-	// Media: Audio (container-side, legacy __audio_* style)
-	__audio_create,
-	__audio_setProp,
-	__audio_call,
-	// Media: Audio (new-style, service-apis/audio)
+	// Media: Audio (service-apis/audio)
 	audioCreate,
+	audioListen,
 	audioSetProp,
 	audioPlay,
 	audioPause,

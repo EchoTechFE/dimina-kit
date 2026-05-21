@@ -21,7 +21,7 @@ import {
 type ProjectsIpcCtx = Pick<
   WorkbenchContext,
   | 'workspace'
-  | 'mainWindow'
+  | 'windows'
   | 'senderPolicy'
   | 'projectsProvider'
   | 'projectTemplates'
@@ -34,7 +34,7 @@ export function registerProjectsIpc(ctx: ProjectsIpcCtx): Disposable {
       return ctx.workspace.listProjects()
     })
     .handle(DialogChannel.OpenDirectory, async () => {
-      const result = await dialog.showOpenDialog(ctx.mainWindow, {
+      const result = await dialog.showOpenDialog(ctx.windows.mainWindow, {
         properties: ['openDirectory'],
         title: '选择小程序项目目录',
       })
@@ -44,7 +44,7 @@ export function registerProjectsIpc(ctx: ProjectsIpcCtx): Disposable {
       const [dirPath] = validate(ProjectsChannel.Add, ProjectsAddSchema, args)
       const dirError = await ctx.workspace.validateProjectDir(dirPath)
       if (dirError) {
-        await dialog.showMessageBox(ctx.mainWindow, {
+        await dialog.showMessageBox(ctx.windows.mainWindow, {
           type: 'error',
           title: '无法导入项目',
           message: '该目录不是有效的小程序项目',
@@ -56,7 +56,7 @@ export function registerProjectsIpc(ctx: ProjectsIpcCtx): Disposable {
       const duplicate = await ctx.workspace.hasProject(dirPath)
       const project = await ctx.workspace.addProject(dirPath)
       if (duplicate) {
-        await dialog.showMessageBox(ctx.mainWindow, {
+        await dialog.showMessageBox(ctx.windows.mainWindow, {
           type: 'info',
           title: '项目已存在',
           message: '该项目已在列表中',
@@ -81,7 +81,7 @@ export function registerProjectsIpc(ctx: ProjectsIpcCtx): Disposable {
       if (!ctx.customCreateProjectDialog) return null
       const sanitized = sanitizeTemplates(ctx.projectTemplates ?? [])
       return await ctx.customCreateProjectDialog({
-        parentWindow: ctx.mainWindow,
+        parentWindow: ctx.windows.mainWindow,
         templates: sanitized,
       })
     })
@@ -106,7 +106,7 @@ export function registerProjectsIpc(ctx: ProjectsIpcCtx): Disposable {
         // non-empty target dir, missing template, remote backend reject,
         // …) as a native dialog so users see *why* the create silently
         // fizzled. The renderer's catch then just bails out.
-        await dialog.showMessageBox(ctx.mainWindow, {
+        await dialog.showMessageBox(ctx.windows.mainWindow, {
           type: 'error',
           title: '创建项目失败',
           message: '无法创建项目',

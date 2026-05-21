@@ -28,17 +28,11 @@ import type {
  * Passed to each IPC module so they can read/write shared state without closures.
  */
 export interface WorkbenchContext {
-  /** @deprecated use ctx.windows.mainWindow */
-  mainWindow: BrowserWindow
   adapter: CompilationAdapter
   /** Absolute path to the preload script loaded into the simulator webview */
   preloadPath: string
   /** Absolute path to the renderer dist directory */
   rendererDir: string
-
-  // ── View state (managed exclusively by ViewManager) ──
-  /** @deprecated use ctx.windows.settingsWindow / setSettingsWindow / closeSettingsWindow */
-  workbenchSettingsWindow: BrowserWindow | null
 
   /** Built-in panel IDs to display (default: all) */
   panels: string[]
@@ -139,7 +133,6 @@ export function getDefaultTab(
 
 export function createWorkbenchContext(opts: CreateContextOptions): WorkbenchContext {
   const ctx = {
-    mainWindow: opts.mainWindow,
     adapter: opts.adapter ?? defaultAdapter,
     preloadPath: opts.preloadPath,
     rendererDir: opts.rendererDir,
@@ -148,12 +141,10 @@ export function createWorkbenchContext(opts: CreateContextOptions): WorkbenchCon
     appName: opts.appName ?? 'Dimina DevTools',
     toolbarActions: opts.toolbarActions,
     brandingProvider: opts.brandingProvider,
-
-    workbenchSettingsWindow: null,
   } as WorkbenchContext
 
   ctx.registry = new DisposableRegistry()
-  ctx.windows = createWindowService(ctx.mainWindow)
+  ctx.windows = createWindowService(opts.mainWindow)
   ctx.views = createViewManager(ctx)
   ctx.notify = createRendererNotifier(ctx)
   ctx.projectsProvider = opts.projectsProvider ?? createLocalProjectsProvider()

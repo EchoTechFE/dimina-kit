@@ -622,17 +622,11 @@ interface WorkbenchContext {
 }
 ```
 
-会话和视图状态封装在对应 service 的私有闭包中，通过方法访问：
+会话和视图状态封装在对应 service 的私有闭包中，通过方法访问，例如：
 
-| 旧写法                       | 新写法                                                            |
-| ---------------------------- | ----------------------------------------------------------------- |
-| `ctx.currentProjectPath`     | `ctx.workspace.getProjectPath()`                                  |
-| `ctx.currentSession`         | `ctx.workspace.getSession()` / `ctx.workspace.hasActiveSession()` |
-| `ctx.simulatorWebContentsId` | `ctx.views.getSimulatorWebContentsId()`                           |
-| `ctx.devToolsViewAdded`      | `ctx.views.isSimulatorAdded()`                                    |
-| `ctx.lastSimWidth`           | `ctx.views.getLastSimWidth()`                                     |
-| `ctx.mainWindow`             | `ctx.windows.mainWindow`                                          |
-| `ctx.workbenchSettingsWindow`| `ctx.windows.settingsWindow`                                      |
+- `ctx.workspace.getProjectPath()` / `ctx.workspace.getSession()` / `ctx.workspace.hasActiveSession()`
+- `ctx.views.getSimulatorWebContentsId()` / `ctx.views.isSimulatorAdded()` / `ctx.views.getLastSimWidth()`
+- `ctx.windows.mainWindow` / `ctx.windows.settingsWindow`
 
 ---
 

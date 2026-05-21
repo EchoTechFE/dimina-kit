@@ -6,6 +6,7 @@
     "pages/network-test/network-test",
     "pages/component-test/component-test",
     "pages/swiper-test/swiper-test",
+    "pages/audio-test/audio-test",
     "pages/tabbar-me/tabbar-me"
   ],
   "window": {

@@ -1,0 +1,6 @@
+.play-btn {
+  background: #1890ff;
+  color: #fff;
+  font-size: 30rpx;
+  border-radius: 12rpx;
+}

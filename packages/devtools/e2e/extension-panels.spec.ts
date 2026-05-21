@@ -9,7 +9,7 @@ test.describe('Extension Panels Data Bridge', () => {
   test.setTimeout(90_000)
   test.describe.configure({ mode: 'serial' })
 
-  useSharedProject(test, DEMO_APP_DIR, { openOptions: { waitMs: 8000, waitForWebview: true } })
+  useSharedProject(test, DEMO_APP_DIR, { openOptions: { waitMs: 8000 } })
 
   test('simulator exposes compat wx APIs in webview', async ({ electronApp }) => {
     const result = await evalInSimulator<{
@@ -75,14 +75,8 @@ test.describe('Extension Panels Data Bridge', () => {
     await evalInSimulator(
       electronApp,
       `(() => {
-        // Upstream's query router writes appId into location.search; we still
-        // accept the legacy hash format as a fallback for older containers.
-        const fromQuery = new URLSearchParams(location.search).get('appId')
-        let appId = fromQuery || ''
-        if (!appId) {
-          const h = location.hash.replace(/^#/, '')
-          appId = h.includes('|') ? h.split('|')[0] : h.split('/')[0]
-        }
+        // Upstream's query router writes appId into location.search.
+        const appId = new URLSearchParams(location.search).get('appId') || ''
         localStorage.setItem(appId + '_e2e_storage_key', 'e2e_storage_value')
       })()`,
     )

@@ -95,7 +95,7 @@ async function readPanel(mainWindow: Page): Promise<AppDataDom> {
 test.describe('AppData panel — per-page tabs & lifecycle', () => {
   test.describe.configure({ mode: 'serial' })
 
-  useSharedProject(test, DEMO_APP_DIR, { openOptions: { waitForWebview: true } })
+  useSharedProject(test, DEMO_APP_DIR)
 
   test('initial page data shows without any setData call', async ({ mainWindow, electronApp }) => {
     await selectAppDataTab(mainWindow)

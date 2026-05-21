@@ -8,7 +8,7 @@ import { PanelChannel } from '../src/shared/ipc-channels'
 test.describe('Right panel switching', () => {
   test.describe.configure({ mode: 'serial' })
 
-  useSharedProject(test, DEMO_APP_DIR, { openOptions: { waitForWebview: true } })
+  useSharedProject(test, DEMO_APP_DIR)
 
   test('selecting each panel renders the correct panel in the main window', async ({
     mainWindow,

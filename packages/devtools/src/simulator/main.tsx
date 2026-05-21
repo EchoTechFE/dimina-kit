@@ -85,8 +85,7 @@ function SimulatorApp() {
 
     // URL format produced by buildSimulatorUrl + maintained by upstream
     // HashRouter.syncStack: ?appId={id}&entry={path?perPageQuery}&page={...}.
-    // parseLocationRoute also handles legacy hash formats for safety.
-    const route = parseLocationRoute(window.location.search, window.location.hash)
+    const route = parseLocationRoute(window.location.search)
     if (!route) return
     const { appId } = route
     const { pagePath, query } = route.entry

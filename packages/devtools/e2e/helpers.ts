@@ -99,13 +99,12 @@ export async function closeProject(mainWindow: Page): Promise<void> {
  * Waits for the simulator webview to attach AND first-page DOM to be ready
  * (compile complete signal) instead of a fixed timer.
  *
- * @param waitMs - hard cap on total wait time (default 15000). Param kept for backwards compat.
- * @param waitForWebview - kept for backwards compat. The new implementation always waits for webview.
+ * @param waitMs - hard cap on total wait time (default 15000).
  */
 export async function openProjectInUI(
   mainWindow: Page,
   projectDir: string,
-  { waitMs = 15000, waitForWebview = true }: { waitMs?: number; waitForWebview?: boolean } = {}
+  { waitMs = 15000 }: { waitMs?: number } = {}
 ): Promise<void> {
   await addProject(mainWindow, projectDir)
   await mainWindow.evaluate(() => {
@@ -116,8 +115,6 @@ export async function openProjectInUI(
   await projectPathLabel.waitFor()
   await projectPathLabel.locator('..').click()
   await mainWindow.waitForSelector('text=普通编译')
-
-  void waitForWebview // accepted for backwards compat; behaviour below always waits
 
   const deadline = Date.now() + waitMs
 
@@ -304,31 +301,14 @@ export async function findButtonByTitle(
 
 /**
  * Best-effort reset of in-simulator state between tests when reusing one
- * open project. Clears wx storage and resets to the home page when possible.
+ * open project. Clears wx storage and unwinds the page stack to home.
  */
 export async function resetSimulatorState(
   electronApp: ElectronApplication,
-  homePagePath = 'pages/index/index',
 ): Promise<void> {
   await evalInSimulator(electronApp, `try { wx.clearStorageSync() } catch (e) {}`).catch(() => {})
 
-  // Try to get back to the home page via hash navigation first. dimina only
-  // reads `location.hash` once at boot, so this is effectively a no-op for it,
-  // but kept for any consumer that does observe hashchange.
-  await evalInSimulator(
-    electronApp,
-    `(() => {
-      try {
-        const hash = location.hash.replace(/^#/, '')
-        const appId = hash.includes('|') ? hash.split('|')[0] : hash.split('/')[0]
-        if (!appId) return
-        const target = '#' + appId + '|${homePagePath}'
-        if (location.hash !== target) location.hash = target
-      } catch (e) {}
-    })()`,
-  ).catch(() => {})
-
-  // The reliable path: dimina's own page stack is unwound by clicking each
+  // dimina's own page stack is unwound by clicking each
   // webview's back button (which calls miniApp.navigateBack internally). Loop
   // until only one webview remains (= home), or we hit a small safety bound.
   // We swallow errors so a flaky reset never blocks the next test.

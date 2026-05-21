@@ -35,6 +35,13 @@ Page({
         title: 'Swiper 轮播测试',
         subtitle: '验证 swiper / swiper-item 在 WXML 面板中的层级',
         tags: ['swiper', 'swiper-item', 'WXML']
+      },
+      {
+        path: '/pages/audio-test/audio-test',
+        icon: '\u{1F50A}',
+        title: 'Audio 音频测试',
+        subtitle: '验证 createInnerAudioContext 的容器→service 事件桥',
+        tags: ['audio', 'createInnerAudioContext', '事件桥']
       }
     ],
     deviceInfo: {}

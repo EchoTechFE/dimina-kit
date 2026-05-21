@@ -96,7 +96,7 @@ test.describe('Relaunch & compile resilience', () => {
   test.setTimeout(120_000)
 
   test.beforeEach(async ({ mainWindow }) => {
-    await openProjectInUI(mainWindow, DEMO_APP_DIR, { waitMs: 10000, waitForWebview: true })
+    await openProjectInUI(mainWindow, DEMO_APP_DIR, { waitMs: 10000 })
   })
 
   test.afterEach(async ({ mainWindow }) => {

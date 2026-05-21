@@ -23,9 +23,6 @@ export interface ProjectSettings {
   uploadWithSourceMap: boolean
 }
 
-// Re-export CompileConfig for backward compatibility
-export type { CompileConfig } from '../../../shared/types.js'
-
 function getProjectsFile(): string {
   return path.join(app.getPath('userData'), 'dimina-projects.json')
 }

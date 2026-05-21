@@ -8,7 +8,7 @@ import {
 test.describe('Simulator Panel', () => {
   test.describe.configure({ mode: 'serial' })
 
-  useSharedProject(test, DEMO_APP_DIR, { openOptions: { waitForWebview: true } })
+  useSharedProject(test, DEMO_APP_DIR)
 
   test('toolbar has compile and simulator toggle buttons', async ({ mainWindow }) => {
     expect(await findButtonByText(mainWindow, '普通编译')).toBe(true)

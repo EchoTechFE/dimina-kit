@@ -11,7 +11,7 @@ import { getDefaultTab, type WorkbenchContext } from '../workbench-context.js'
  * full WorkbenchContext here; typing it this way documents the actual dependency.
  */
 export interface ViewManagerContext {
-  mainWindow: WorkbenchContext['mainWindow']
+  windows: WorkbenchContext['windows']
   rendererDir: string
   panels: string[]
   notify: WorkbenchContext['notify']
@@ -121,9 +121,9 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
 
   function destroyViewInternal(view: WebContentsView | null): void {
     if (!view) return
-    if (!ctx.mainWindow.isDestroyed()) {
+    if (!ctx.windows.mainWindow.isDestroyed()) {
       try {
-        ctx.mainWindow.contentView.removeChildView(view)
+        ctx.windows.mainWindow.contentView.removeChildView(view)
       } catch { /* already removed */ }
     }
     try {
@@ -134,20 +134,20 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   }
 
   function applySimulatorBounds(simWidth: number): void {
-    if (!simulatorView || ctx.mainWindow.isDestroyed()) return
-    const [w = 0, h = 0] = ctx.mainWindow.getContentSize()
+    if (!simulatorView || ctx.windows.mainWindow.isDestroyed()) return
+    const [w = 0, h = 0] = ctx.windows.mainWindow.getContentSize()
     simulatorView.setBounds(layout.computeSimulatorBounds(w, h, simWidth))
   }
 
   function applySettingsBounds(): void {
-    if (!settingsView || ctx.mainWindow.isDestroyed()) return
-    const [w = 0, h = 0] = ctx.mainWindow.getContentSize()
+    if (!settingsView || ctx.windows.mainWindow.isDestroyed()) return
+    const [w = 0, h = 0] = ctx.windows.mainWindow.getContentSize()
     settingsView.setBounds(layout.computeSettingsBounds(w, h))
   }
 
   function applyPopoverBounds(): void {
-    if (!popoverView || ctx.mainWindow.isDestroyed()) return
-    const [w = 0, h = 0] = ctx.mainWindow.getContentSize()
+    if (!popoverView || ctx.windows.mainWindow.isDestroyed()) return
+    const [w = 0, h = 0] = ctx.windows.mainWindow.getContentSize()
     popoverView.setBounds(layout.computePopoverBounds(w, h))
   }
 
@@ -205,7 +205,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     })
 
     if (getDefaultTab(ctx) === 'simulator') {
-      ctx.mainWindow.contentView.addChildView(simulatorView)
+      ctx.windows.mainWindow.contentView.addChildView(simulatorView)
       simulatorViewAdded = true
       applySimulatorBounds(simWidth)
     }
@@ -227,7 +227,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     lastSimWidth = simWidth
     if (!simulatorView) return
     if (!simulatorViewAdded) {
-      ctx.mainWindow.contentView.addChildView(simulatorView)
+      ctx.windows.mainWindow.contentView.addChildView(simulatorView)
       simulatorViewAdded = true
     }
     applySimulatorBounds(simWidth)
@@ -236,7 +236,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   function hideSimulator(): void {
     if (simulatorView && simulatorViewAdded) {
       try {
-        ctx.mainWindow.contentView.removeChildView(simulatorView)
+        ctx.windows.mainWindow.contentView.removeChildView(simulatorView)
       } catch (e) {
         console.error('[workbench] hideSimulator error', e)
       }
@@ -262,7 +262,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       )
     }
     if (!settingsViewAdded) {
-      ctx.mainWindow.contentView.addChildView(settingsView)
+      ctx.windows.mainWindow.contentView.addChildView(settingsView)
       settingsViewAdded = true
     }
     applySettingsBounds()
@@ -271,7 +271,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   function hideSettings(): void {
     if (settingsView && settingsViewAdded) {
       try {
-        ctx.mainWindow.contentView.removeChildView(settingsView)
+        ctx.windows.mainWindow.contentView.removeChildView(settingsView)
       } catch { /* ignore */ }
       settingsViewAdded = false
     }
@@ -291,7 +291,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     applyNavigationHardening(popover.webContents, ctx.rendererDir)
     popoverView = popover
     popover.setBackgroundColor('#00000000')
-    ctx.mainWindow.contentView.addChildView(popover)
+    ctx.windows.mainWindow.contentView.addChildView(popover)
     applyPopoverBounds()
     popover.webContents.once('did-finish-load', () => {
       ctx.notify.popoverInit(popover, data)

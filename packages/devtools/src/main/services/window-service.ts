@@ -3,9 +3,9 @@ import type { BrowserWindow } from 'electron'
 /**
  * Owns every top-level BrowserWindow the workbench is responsible for.
  *
- * Callers should prefer this service over reading bare `mainWindow` /
- * `workbenchSettingsWindow` fields off `WorkbenchContext` — the latter
- * remain as @deprecated synchronized mirrors during the migration window.
+ * This service is the single source of truth for the main and settings
+ * windows; callers reach them via `ctx.windows.mainWindow` /
+ * `ctx.windows.settingsWindow`.
  */
 export interface WindowService {
   /** The primary devtools window. Created during app bootstrap. */

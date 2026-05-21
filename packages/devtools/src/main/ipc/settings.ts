@@ -24,7 +24,7 @@ import type { WorkbenchModule } from '../services/module.js'
 import { validate } from '../utils/ipc-schema.js'
 import { IpcRegistry } from '../utils/ipc-registry.js'
 
-export function registerSettingsIpc(ctx: Pick<WorkbenchContext, 'workbenchSettingsWindow' | 'views' | 'notify' | 'workspace' | 'mainWindow' | 'rendererDir' | 'senderPolicy' | 'windows'>): Disposable {
+export function registerSettingsIpc(ctx: Pick<WorkbenchContext, 'views' | 'notify' | 'workspace' | 'rendererDir' | 'senderPolicy' | 'windows'>): Disposable {
   return new IpcRegistry(ctx.senderPolicy)
     .handle(WorkbenchSettingsChannel.Get, () => {
       return loadWorkbenchSettings()

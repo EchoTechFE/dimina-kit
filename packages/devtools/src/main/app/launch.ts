@@ -17,19 +17,18 @@ export function buildDefaultMenu(ctx: WorkbenchContext): void {
   installAppMenu(ctx)
 }
 
-export async function openSettingsWindow(ctx: Pick<WorkbenchContext, 'workbenchSettingsWindow' | 'mainWindow' | 'rendererDir' | 'notify' | 'windows'>): Promise<void> {
-  if (!ctx.workbenchSettingsWindow || ctx.workbenchSettingsWindow.isDestroyed()) {
-    const win = await createSettingsWindow(ctx.mainWindow, ctx.rendererDir)
-    ctx.workbenchSettingsWindow = win
+export async function openSettingsWindow(ctx: Pick<WorkbenchContext, 'rendererDir' | 'notify' | 'windows'>): Promise<void> {
+  let win = ctx.windows.settingsWindow
+  if (!win || win.isDestroyed()) {
+    win = await createSettingsWindow(ctx.windows.mainWindow, ctx.rendererDir)
     ctx.windows.setSettingsWindow(win)
     wireSettingsWindowEvents(win, () => {
-      ctx.workbenchSettingsWindow = null
       ctx.windows.setSettingsWindow(null)
     })
   }
-  ctx.workbenchSettingsWindow.show()
-  ctx.workbenchSettingsWindow.focus()
-  ctx.notify.workbenchSettingsInit(ctx.workbenchSettingsWindow, {
+  win.show()
+  win.focus()
+  ctx.notify.workbenchSettingsInit(win, {
     settings: loadWorkbenchSettings(),
   })
 }

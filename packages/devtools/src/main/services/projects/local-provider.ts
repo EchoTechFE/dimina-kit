@@ -3,9 +3,9 @@
  * `<userData>/dimina-projects.json` and exposes the validation / compile-
  * config helpers historically provided by `project-repository.ts`.
  *
- * The repository module is kept for thumbnail/paths/page helpers and for
- * back-compat re-exports; the canonical list & validation surface for the
- * workspace service is this provider.
+ * The repository module is kept for thumbnail/paths/page helpers; the
+ * canonical list & validation surface for the workspace service is this
+ * provider.
  */
 import * as repo from './project-repository.js'
 import { loadThumbnail, saveThumbnailFromDataUrl } from './thumbnail.js'

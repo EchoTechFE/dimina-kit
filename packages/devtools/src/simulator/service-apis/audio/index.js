@@ -19,11 +19,44 @@ class InnerAudioContext {
 		this._loop = false
 		this._volume = 1
 		this._playbackRate = 1
+
+		// Playback-state snapshot, kept in sync by `_dispatch` from container
+		// audio events.  Read-only getters expose these instead of hard 0s.
+		this._currentTime = 0
+		this._duration = 0
+		this._buffered = 0
 		this._paused = true
 
 		this._listeners = {}
 
 		invokeAPI('audioCreate', { audioId: this._audioId })
+
+		// Register a persistent event subscription with the container (see
+		// `extOnBridge` in the dimina service bridge).  The container invokes
+		// `success` — our `_dispatch` — on every audio event for this instance.
+		invokeAPI('audioListen', {
+			audioId: this._audioId,
+			evtId: `audio_${this._audioId}`,
+			keep: true,
+			success: payload => this._dispatch(payload),
+		})
+	}
+
+	// ─── Event bridge ────────────────────────────────────────────────────
+	// Called by the container on every audio event with
+	// `{ event, currentTime, duration, buffered, paused }`.  Updates the
+	// local snapshot, then fires every listener registered for `event`.
+
+	_dispatch(payload) {
+		if (!payload || typeof payload !== 'object') return
+		this._currentTime = payload.currentTime || 0
+		this._duration = payload.duration || 0
+		this._buffered = payload.buffered || 0
+		this._paused = !!payload.paused
+
+		const listeners = this._listeners[payload.event]
+		if (!listeners) return
+		for (const cb of listeners.slice()) cb(payload)
 	}
 
 	// ─── Properties ──────────────────────────────────────────────────────
@@ -73,12 +106,12 @@ class InnerAudioContext {
 		invokeAPI('audioSetProp', { audioId: this._audioId, prop: 'playbackRate', value: this._playbackRate })
 	}
 
-	// Read-only properties – actual values live in the container; return
-	// local approximations (the container cannot send data back easily).
-	get duration() { return 0 }
-	get currentTime() { return 0 }
+	// Read-only properties – kept in sync from container audio events by
+	// `_dispatch`.
+	get duration() { return this._duration }
+	get currentTime() { return this._currentTime }
 	get paused() { return this._paused }
-	get buffered() { return 0 }
+	get buffered() { return this._buffered }
 
 	// ─── Playback control ────────────────────────────────────────────────
 
@@ -107,9 +140,8 @@ class InnerAudioContext {
 	}
 
 	// ─── Event system ────────────────────────────────────────────────────
-	// Events from Audio back to the service layer require a container→service
-	// bridge which is not yet available.  Keep the listener API as no-ops so
-	// mini-program code that registers callbacks does not throw.
+	// Listeners registered here are fired by `_dispatch` when the container
+	// reports a matching audio event over the persistent subscription bridge.
 
 	_on(event, cb) {
 		if (typeof cb !== 'function') return

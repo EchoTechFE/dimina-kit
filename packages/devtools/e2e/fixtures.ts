@@ -191,11 +191,9 @@ export async function findWindowByUrl(
  * ```
  *
  * Options:
- * - `homePagePath` — page to reset to between tests. Default `'pages/index/index'`.
  * - `openOptions`  — forwarded to `openProjectInUI`. Default `{}`.
  */
 export interface UseSharedProjectOptions {
-  homePagePath?: string
   openOptions?: Parameters<typeof openProjectInUI>[2]
 }
 
@@ -204,7 +202,7 @@ export function useSharedProject(
   projectDir: string,
   options: UseSharedProjectOptions = {},
 ): void {
-  const { homePagePath = 'pages/index/index', openOptions } = options
+  const { openOptions } = options
 
   // beforeAll/afterAll only receive worker-scoped fixtures, so we rely on
   // _workerElectron and grab the firstWindow ourselves.
@@ -214,7 +212,7 @@ export function useSharedProject(
   })
 
   testObj.afterEach(async ({ electronApp }) => {
-    await resetSimulatorState(electronApp, homePagePath)
+    await resetSimulatorState(electronApp)
   })
 
   testObj.afterAll(async ({ _workerElectron }) => {
