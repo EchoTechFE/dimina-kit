@@ -98,6 +98,7 @@ export const WorkbenchSettingsChannel = {
   Save: 'workbenchSettings:save',
   SetTheme: 'workbenchSettings:setTheme',
   GetCdpStatus: 'workbenchSettings:getCdpStatus',
+  GetMcpStatus: 'workbenchSettings:getMcpStatus',
   SetVisible: 'workbenchSettings:setVisible',
   Init: 'workbenchSettings:init',
 } as const
