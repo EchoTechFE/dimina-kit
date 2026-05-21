@@ -20,7 +20,7 @@ import {
 } from '../../../../../../shared/simulator-route'
 import type { CompileConfig } from '@/shared/types'
 import { DEFAULT_SCENE } from '../../../../../../shared/constants'
-import { asWebview } from './webview-helpers'
+import { asWebview, forceFullNavigate } from './webview-helpers'
 import type { CompileStatus } from './use-project-runtime-controller'
 
 export interface UseSessionProps {
@@ -122,16 +122,8 @@ export function useSession(props: UseSessionProps): SessionHookResult {
         // The compiler emits one bundle per page; a stacked hash would make
         // pageFrame request a merged bundle that doesn't exist and render
         // blank. Trimming preserves the current page the user is looking at.
-        const currentUrl = webview.getURL?.() ?? ''
-        const collapsed = collapseRouteToTopPage(currentUrl)
-        if (collapsed !== currentUrl) {
-          webview.loadURL?.(collapsed)
-          // loadURL on a hash-only change is in-page navigation; force a
-          // full reload so pageFrame re-initialises against the new hash.
-          setTimeout(() => webview.reload?.(), 100)
-        } else {
-          webview.reload?.()
-        }
+        const collapsed = collapseRouteToTopPage(webview.getURL?.() ?? '')
+        forceFullNavigate(webview, collapsed)
       }
     })
   }, [simulatorRef])
@@ -165,7 +157,6 @@ export function useSession(props: UseSessionProps): SessionHookResult {
         setCompileStatus({ status: 'ready', message: '正在刷新...' })
 
         const targetUrl = buildSimulatorUrl(appInfo.appId, nextConfig, port)
-        const currentUrl = webview.getURL?.()
         let settled = false
         let timer: ReturnType<typeof setTimeout> | null = null
 
@@ -205,18 +196,7 @@ export function useSession(props: UseSessionProps): SessionHookResult {
           finish('error', '刷新超时')
         }, 30000)
 
-        // Hash-only changes (page switch) don't trigger a full page reload,
-        // so the container won't re-read the hash. Always force a full reload:
-        // set the URL first, then reload to make the container re-initialize.
-        if (currentUrl === targetUrl) {
-          webview.reload?.()
-        } else {
-          webview.loadURL?.(targetUrl)
-          // loadURL for hash-only changes is in-page navigation — the
-          // container doesn't re-render. Force a full reload after the
-          // URL is updated so the container reads the new hash on load.
-          setTimeout(() => webview.reload?.(), 100)
-        }
+        forceFullNavigate(webview, targetUrl)
       } catch (error) {
         isRefreshing.current = false
         setCompileStatus({
