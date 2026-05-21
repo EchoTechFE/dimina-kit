@@ -62,7 +62,6 @@ interface SimulatorSlice {
 }
 
 interface PanelDataSlice {
-  connected: boolean
   wxmlTree: WxmlNode | null
   appData: AppDataState
   storageItems: StorageItem[]
@@ -206,7 +205,6 @@ export function useProjectRuntimeController(
       currentPage: simulatorHook.currentPage,
     },
     panelData: {
-      connected: panelDataHook.connected,
       wxmlTree: panelDataHook.wxmlTree,
       appData: panelDataHook.appData,
       storageItems: panelDataHook.storageItems,

@@ -1,4 +1,4 @@
-import { SimulatorChannel, SimulatorCustomApiChannel, WorkbenchChannel } from '../../shared/ipc-channels.js'
+import { SimulatorChannel, SimulatorCustomApiChannel } from '../../shared/ipc-channels.js'
 import {
   SimulatorAttachSchema,
   SimulatorCustomApiInvokeSchema,
@@ -11,7 +11,7 @@ import type { Disposable } from '../utils/disposable.js'
 import { validate } from '../utils/ipc-schema.js'
 import { IpcRegistry } from '../utils/ipc-registry.js'
 
-export function registerSimulatorIpc(ctx: Pick<WorkbenchContext, 'views' | 'panels' | 'apiNamespaces' | 'notify' | 'senderPolicy'>): Disposable {
+export function registerSimulatorIpc(ctx: Pick<WorkbenchContext, 'views' | 'notify' | 'senderPolicy'>): Disposable {
   return new IpcRegistry(ctx.senderPolicy)
     .handle(SimulatorChannel.Attach, (_, ...args: unknown[]) => {
       const [simWcId, simWidth] = validate(SimulatorChannel.Attach, SimulatorAttachSchema, args)
@@ -34,11 +34,5 @@ export function registerSimulatorIpc(ctx: Pick<WorkbenchContext, 'views' | 'pane
     .handle(SimulatorCustomApiChannel.Invoke, (_, ...args: unknown[]) => {
       const [name, params] = validate(SimulatorCustomApiChannel.Invoke, SimulatorCustomApiInvokeSchema, args)
       return simulatorApiRegistry.invoke(name, params)
-    })
-    .handle(WorkbenchChannel.GetPanelConfig, () => {
-      return ctx.panels
-    })
-    .handle(WorkbenchChannel.GetApiNamespaces, () => {
-      return ctx.apiNamespaces
     })
 }

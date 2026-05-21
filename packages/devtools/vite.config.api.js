@@ -26,13 +26,6 @@ const containerRoot = process.cwd()
  * opaque origin so `importScripts('/…')` fails; using the real URL avoids
  * that problem.
  */
-/**
- * Vite plugin that resolves `@dimina/service?url` to the external asset URL
- * produced by the main container build, instead of letting Vite inline the
- * entire service bundle as a base64 data-URL.  Data-URL Workers have an
- * opaque origin so `importScripts('/…')` fails; using the real URL avoids
- * that problem.
- */
 function externalServiceUrl() {
 	const SERVICE_ID = '\0external-service-url'
 	return {

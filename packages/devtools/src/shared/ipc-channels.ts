@@ -91,13 +91,6 @@ export interface ElementInspection {
   }
 }
 
-// ── Workbench ────────────────────────────────────────────────────────────
-
-export const WorkbenchChannel = {
-  GetPanelConfig: 'workbench:getPanelConfig',
-  GetApiNamespaces: 'workbench:getApiNamespaces',
-} as const
-
 // ── Workbench settings ───────────────────────────────────────────────────
 
 export const WorkbenchSettingsChannel = {
