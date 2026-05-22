@@ -1,7 +1,6 @@
 import type { CompileConfig } from '@/shared/types'
 import {
   SimulatorChannel,
-  WorkbenchChannel,
   PanelChannel,
   ToolbarChannel,
   PopoverChannel,
@@ -51,16 +50,6 @@ export function resizeSimulator(simWidth: number): Promise<void> {
 /** Show or hide the Chromium DevTools view. */
 export function setSimulatorVisible(visible: boolean, simWidth: number): Promise<void> {
   return invoke<void>(SimulatorChannel.SetVisible, visible, simWidth)
-}
-
-/** Read the active built-in panel config (wxml / appdata / storage). */
-export function getPanelConfig(): Promise<string[]> {
-  return invokeStrict<string[]>(WorkbenchChannel.GetPanelConfig)
-}
-
-/** Read the custom API namespace names configured for the simulator. */
-export function getApiNamespaces(): Promise<string[]> {
-  return invokeStrict<string[]>(WorkbenchChannel.GetApiNamespaces)
 }
 
 /** Enumerate the built-in panels (WXML / AppData / Storage) currently enabled. */

@@ -1,5 +1,6 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
+import { ipcRenderer, type IpcRendererEvent } from 'electron'
 import { SimulatorCustomApiBridgeChannel } from '../../shared/ipc-channels.js'
+import { exposeOnMainWorld } from '../shared/expose.js'
 
 export interface DiminaCustomApisBridge {
   list(): Promise<string[]>
@@ -56,11 +57,7 @@ function buildBridge(): DiminaCustomApisBridge {
   }
 }
 
-export function installCustomApisBridge(): void {
+export function installCustomApisBridge(): () => void {
   const bridge = buildBridge()
-  try {
-    contextBridge.exposeInMainWorld('__diminaCustomApis', bridge)
-  } catch {
-    (window as unknown as Record<string, unknown>).__diminaCustomApis = bridge
-  }
+  return exposeOnMainWorld('__diminaCustomApis', bridge)
 }

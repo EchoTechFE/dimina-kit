@@ -10,6 +10,8 @@ import {
   type ThemeSource,
 } from '../services/settings/index.js'
 import { WorkbenchSettingsChannel, SettingsChannel } from '../../shared/ipc-channels.js'
+import { DEFAULT_CDP_PORT } from '../../shared/constants.js'
+import { getMcpStatus } from '../services/mcp/status.js'
 import {
   SettingsConfigChangedSchema,
   SettingsProjectSettingsChangedSchema,
@@ -50,13 +52,24 @@ export function registerSettingsIpc(ctx: Pick<WorkbenchContext, 'views' | 'notif
     .handle(WorkbenchSettingsChannel.GetCdpStatus, () => {
       const settings = loadWorkbenchSettings()
       const switchValue = app.commandLine.getSwitchValue('remote-debugging-port')
-      const implicitDevDefault = !app.isPackaged && !settings.cdp.enabled && switchValue === '9222'
+      const implicitDevDefault = !app.isPackaged && !settings.cdp.enabled && switchValue === String(DEFAULT_CDP_PORT)
       return {
         configured: settings.cdp.enabled,
         port: settings.cdp.port,
         active: !!switchValue,
         activePort: switchValue ? parseInt(switchValue, 10) : null,
         implicitDevDefault,
+      }
+    })
+    .handle(WorkbenchSettingsChannel.GetMcpStatus, () => {
+      const settings = loadWorkbenchSettings()
+      const runtime = getMcpStatus()
+      return {
+        configured: settings.mcp.enabled,
+        configuredPort: settings.mcp.port,
+        running: runtime.running,
+        activePort: runtime.port,
+        error: runtime.error,
       }
     })
     .handle(WorkbenchSettingsChannel.SetVisible, async (_, ...args: unknown[]) => {

@@ -91,13 +91,6 @@ export interface ElementInspection {
   }
 }
 
-// ── Workbench ────────────────────────────────────────────────────────────
-
-export const WorkbenchChannel = {
-  GetPanelConfig: 'workbench:getPanelConfig',
-  GetApiNamespaces: 'workbench:getApiNamespaces',
-} as const
-
 // ── Workbench settings ───────────────────────────────────────────────────
 
 export const WorkbenchSettingsChannel = {
@@ -105,6 +98,7 @@ export const WorkbenchSettingsChannel = {
   Save: 'workbenchSettings:save',
   SetTheme: 'workbenchSettings:setTheme',
   GetCdpStatus: 'workbenchSettings:getCdpStatus',
+  GetMcpStatus: 'workbenchSettings:getMcpStatus',
   SetVisible: 'workbenchSettings:setVisible',
   Init: 'workbenchSettings:init',
 } as const

@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react'
+import { DEFAULT_CDP_PORT } from '../../../shared/constants'
 import {
   getCdpStatus,
+  getMcpStatus,
   getWorkbenchSettings,
   onWorkbenchSettingsInit,
   saveWorkbenchSettings,
@@ -8,6 +10,7 @@ import {
 } from '@/shared/api'
 import type {
   CdpStatus,
+  McpStatus,
   WorkbenchSettingsValue,
   ThemeSource,
 } from '@/shared/api'
@@ -44,15 +47,16 @@ function ToggleSwitch({
 
 export default function WorkbenchSettings() {
   const [settings, setSettings] = useState<WorkbenchSettingsValue>({
-    cdp: { enabled: false, port: 9222 },
+    cdp: { enabled: false, port: DEFAULT_CDP_PORT },
     mcp: { enabled: false, port: 7789 },
     compile: { watch: true },
     theme: 'system',
   })
   const [cdpStatus, setCdpStatus] = useState<CdpStatus | null>(null)
+  const [mcpStatus, setMcpStatus] = useState<McpStatus | null>(null)
   const [activeTab, setActiveTab] = useState<TabId>('general')
   const [saved, setSaved] = useState(false)
-  const [portInput, setPortInput] = useState('9222')
+  const [portInput, setPortInput] = useState(String(DEFAULT_CDP_PORT))
   const [mcpPortInput, setMcpPortInput] = useState('7789')
 
   useEffect(() => {
@@ -67,6 +71,7 @@ export default function WorkbenchSettings() {
       setMcpPortInput(String(s.mcp.port))
     })
     getCdpStatus().then(setCdpStatus)
+    getMcpStatus().then(setMcpStatus)
     return off
   }, [])
 
@@ -116,6 +121,7 @@ export default function WorkbenchSettings() {
     setSettings(next)
     await saveWorkbenchSettings(next)
     setCdpStatus(await getCdpStatus())
+    setMcpStatus(await getMcpStatus())
     flashSaved()
   }
 
@@ -224,7 +230,7 @@ export default function WorkbenchSettings() {
                 className="w-24 h-7 px-2 rounded text-[12px] outline-none bg-surface border border-border text-text"
                 style={{ opacity: settings.cdp.enabled ? 1 : 0.4 }}
               />
-              <span className="text-[11px] text-text-dim">默认 9222</span>
+              <span className="text-[11px] text-text-dim">默认 {DEFAULT_CDP_PORT}</span>
             </div>
 
             <div className="rounded p-3 space-y-2 border border-border bg-surface">
@@ -298,6 +304,44 @@ export default function WorkbenchSettings() {
                 style={{ opacity: settings.mcp.enabled ? 1 : 0.4 }}
               />
               <span className="text-[11px] text-text-dim">默认 7789</span>
+            </div>
+
+            <div className="rounded p-3 space-y-2 border border-border bg-surface">
+              <div className="text-[11px] font-medium text-text-secondary">当前状态</div>
+              {!settings.mcp.enabled ? (
+                <div className="flex items-center gap-2">
+                  <span
+                    className="inline-block w-2 h-2 rounded-full"
+                    style={{ background: 'var(--color-text-dim)' }}
+                  />
+                  <span className="text-[12px] text-text-secondary">MCP 未启用</span>
+                </div>
+              ) : mcpStatus?.running ? (
+                <div className="flex items-center gap-2">
+                  <span
+                    className="inline-block w-2 h-2 rounded-full"
+                    style={{ background: 'var(--color-status-success)' }}
+                  />
+                  <span className="text-[12px] text-text-secondary">
+                    MCP 已运行 - 端口 {mcpStatus.activePort}
+                  </span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <span
+                    className="inline-block w-2 h-2 rounded-full"
+                    style={{ background: 'var(--color-status-error, #e54d4d)' }}
+                  />
+                  <span className="text-[12px] text-text-secondary">
+                    MCP 未运行
+                    {mcpStatus?.error === 'port-in-use'
+                      ? `（端口 ${mcpStatus.configuredPort} 已被占用）`
+                      : mcpStatus?.error
+                        ? `（${mcpStatus.error}）`
+                        : ''}
+                  </span>
+                </div>
+              )}
             </div>
 
             <div className="rounded p-3 border border-border bg-surface">

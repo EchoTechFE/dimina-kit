@@ -1,6 +1,7 @@
 import { app, nativeTheme } from 'electron'
 import fs from 'fs'
 import path from 'path'
+import { DEFAULT_CDP_PORT } from '../../../shared/constants.js'
 
 export type ThemeSource = 'system' | 'dark' | 'light'
 
@@ -30,7 +31,7 @@ export interface WorkbenchSettings {
 const DEFAULTS: WorkbenchSettings = {
   cdp: {
     enabled: false,
-    port: 9222,
+    port: DEFAULT_CDP_PORT,
   },
   mcp: {
     enabled: false,

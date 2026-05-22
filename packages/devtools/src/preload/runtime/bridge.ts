@@ -1,5 +1,6 @@
-import { contextBridge } from 'electron'
 import type { ElementInspection } from '../../shared/ipc-channels.js'
+import { exposeOnMainWorld } from '../shared/expose.js'
+import { getActivePageIframe } from '../shared/page-iframe.js'
 
 export interface WxmlNode {
   tagName: string
@@ -78,11 +79,6 @@ function clone<T>(value: T): T {
   }
 }
 
-function getPageIframe(): HTMLIFrameElement | null {
-  const iframes = document.querySelectorAll<HTMLIFrameElement>('.dimina-native-webview__window')
-  return iframes.length > 0 ? iframes[iframes.length - 1]! : null
-}
-
 function ensureOverlay(doc: Document): HTMLDivElement {
   if (highlightOverlay && highlightOverlay.ownerDocument === doc) return highlightOverlay
   highlightOverlay = doc.createElement('div')
@@ -97,7 +93,7 @@ function ensureOverlay(doc: Document): HTMLDivElement {
 
 function highlightElement(sid: string): ElementInspection | null {
   if (!sid) return null
-  const iframe = getPageIframe()
+  const iframe = getActivePageIframe()
   if (!iframe?.contentDocument) return null
   const doc = iframe.contentDocument
   const el = findElementBySid(doc, sid)
@@ -217,25 +213,9 @@ export function installSimulatorBridge(): () => void {
   if (!exposedApi) {
     exposedApi = buildApi()
   }
-
-  try {
-    contextBridge.exposeInMainWorld('__simulatorData', {
-      ...exposedApi,
-      getAppdata: () => clone(state.appdata.data),
-      getAppdataSnapshot: () => clone(state.appdata),
-      getStorageSnapshot: () => clone(state.storage),
-      getWxml: () => clone(state.wxml.data),
-      getWxmlSnapshot: () => clone(state.wxml),
-    })
-  } catch {
-    ;(window as unknown as Record<string, unknown>).__simulatorData = exposedApi
-  }
-
+  const dispose = exposeOnMainWorld('__simulatorData', exposedApi)
   return () => {
     resetBridgeState()
-    const windowRef = window as unknown as Record<string, unknown>
-    if (windowRef.__simulatorData === exposedApi) {
-      delete windowRef.__simulatorData
-    }
+    dispose()
   }
 }

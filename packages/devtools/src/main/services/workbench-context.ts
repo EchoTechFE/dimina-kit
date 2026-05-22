@@ -18,10 +18,10 @@ import { createLocalProjectsProvider } from './projects/local-provider.js'
 import { resolveTemplates, sanitizeTemplates } from './projects/templates.js'
 import { BUILTIN_TEMPLATES } from './projects/builtin-templates.js'
 import type {
-  CreateProjectInput,
   ProjectsProvider,
   ProjectTemplate,
 } from './projects/types.js'
+import type { CustomCreateProjectDialogResult } from '../../shared/types.js'
 
 /**
  * Shared mutable state for the workbench application.
@@ -86,7 +86,7 @@ export interface WorkbenchContext {
   customCreateProjectDialog?: (ctx: {
     parentWindow: BrowserWindow
     templates: ProjectTemplate[]
-  }) => Promise<CreateProjectInput | null>
+  }) => Promise<CustomCreateProjectDialogResult>
 
   /**
    * Trust predicate consulted by `IpcRegistry` for every incoming IPC.

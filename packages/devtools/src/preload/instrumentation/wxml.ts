@@ -13,11 +13,7 @@ import {
 } from '../shared/constants.js'
 import type { MiniappSnapshotSource } from '../miniapp-snapshot/types.js'
 import { walkInstance, type ComponentInstance } from './wxml-extract.js'
-
-function findActivePageIframe(): HTMLIFrameElement | null {
-  const iframes = document.querySelectorAll<HTMLIFrameElement>('.dimina-native-webview__window')
-  return iframes.length > 0 ? iframes[iframes.length - 1]! : null
-}
+import { getActivePageIframe } from '../shared/page-iframe.js'
 
 function getVueAppFromIframe(iframe: HTMLIFrameElement): ComponentInstance | null {
   try {
@@ -37,7 +33,7 @@ function getVueAppFromIframe(iframe: HTMLIFrameElement): ComponentInstance | nul
 
 /** Compute the normalized WXML tree for the currently-active page, or `null`. */
 function computeWxmlTree(): WxmlNode | null {
-  const iframe = findActivePageIframe()
+  const iframe = getActivePageIframe()
   if (!iframe) return null
   const instance = getVueAppFromIframe(iframe)
   if (!instance) return null
@@ -134,7 +130,7 @@ export function createWxmlSource(): MiniappSnapshotSource<WxmlNode | null> {
   }
 
   function tryAttach(): boolean {
-    const iframe = findActivePageIframe()
+    const iframe = getActivePageIframe()
     if (!iframe) return false
     const instance = getVueAppFromIframe(iframe)
     if (!instance) return false
@@ -160,7 +156,7 @@ export function createWxmlSource(): MiniappSnapshotSource<WxmlNode | null> {
   function observeTopLevel(): void {
     if (topObserver) return
     topObserver = new MutationObserver(() => {
-      const iframe = findActivePageIframe()
+      const iframe = getActivePageIframe()
       if (!iframe) {
         refresh()
         return

@@ -8,6 +8,7 @@
 
 import type { MiniAppContext } from './types'
 import { bindDomEvents, type EventBridgeDisposer } from './event-bridge'
+import { bindCallbacks } from './simulator-api-helpers'
 
 // ─── Media: Image ────────────────────────────────────────────────────────────
 
@@ -22,9 +23,7 @@ export function chooseImage(
 		complete?: unknown
 	},
 ) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onFail = this.createCallbackFunction(fail)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
 
 	const input = document.createElement('input')
 	input.type = 'file'
@@ -55,8 +54,7 @@ export function previewImage(
 	this: MiniAppContext,
 	{ urls, current, success, complete }: { urls?: string[]; current?: string; success?: unknown; complete?: unknown },
 ) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onComplete } = bindCallbacks(this, { success, complete })
 
 	if (!urls || urls.length === 0) {
 		onComplete?.()
@@ -88,9 +86,7 @@ export function compressImage(
 		complete?: unknown
 	},
 ) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onFail = this.createCallbackFunction(fail)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
 
 	const img = new Image()
 	img.crossOrigin = 'anonymous'
@@ -130,9 +126,7 @@ export function saveImageToPhotosAlbum(
 	this: MiniAppContext,
 	{ filePath, success, fail, complete }: { filePath: string; success?: unknown; fail?: unknown; complete?: unknown },
 ) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onFail = this.createCallbackFunction(fail)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
 
 	try {
 		const a = document.createElement('a')
@@ -150,9 +144,7 @@ export function getImageInfo(
 	this: MiniAppContext,
 	{ src, success, fail, complete }: { src: string; success?: unknown; fail?: unknown; complete?: unknown },
 ) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onFail = this.createCallbackFunction(fail)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
 
 	const img = new Image()
 	img.crossOrigin = 'anonymous'
@@ -190,9 +182,7 @@ export function chooseMedia(
 		complete?: unknown
 	},
 ) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onFail = this.createCallbackFunction(fail)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
 
 	const accept = mediaType.includes('video') && mediaType.includes('image')
 		? 'image/*,video/*'
@@ -238,9 +228,7 @@ export function chooseVideo(
 		complete?: unknown
 	},
 ) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onFail = this.createCallbackFunction(fail)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
 
 	const input = document.createElement('input')
 	input.type = 'file'

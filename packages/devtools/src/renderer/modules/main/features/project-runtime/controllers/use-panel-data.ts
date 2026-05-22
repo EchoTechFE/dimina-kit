@@ -1,10 +1,10 @@
 import {
   useCallback,
   useEffect,
-  useRef,
   useState,
 } from 'react'
 import type { RefObject } from 'react'
+import { useActiveBridgeId } from './use-active-bridge-id'
 import { invoke as ipcInvoke, on as ipcOn } from '@/shared/api/ipc-transport'
 import {
   SimulatorElementChannel,
@@ -15,9 +15,7 @@ import {
   type StorageWriteResult,
 } from '../../../../../../shared/ipc-channels'
 import type { AppDataSnapshot } from '../../../../../../preload/instrumentation/app-data'
-import { ATTACH_RETRY_INTERVAL_MS, MAX_ATTACH_RETRIES } from '../../../../../../preload/shared/constants'
 import type { WxmlNode } from '../../right-panel/types.js'
-import { asWebview } from './webview-helpers'
 import { useMiniappSnapshot } from './use-miniapp-snapshot'
 import type { CompileStatus, StorageItem } from './use-project-runtime-controller'
 
@@ -43,7 +41,6 @@ const EMPTY_APP_DATA_SNAPSHOT: AppDataSnapshot = {
 }
 
 export interface PanelDataHookResult {
-  connected: boolean
   wxmlTree: WxmlNode | null
   appData: AppDataState
   storageItems: StorageItem[]
@@ -63,7 +60,6 @@ export interface PanelDataHookResult {
 export function usePanelData(props: UsePanelDataProps): PanelDataHookResult {
   const { compileStatus, simulatorRef } = props
 
-  const [connected, setConnected] = useState(true)
   const [storageItems, setStorageItems] = useState<StorageItem[]>([])
 
   // WXML is projected from the unified miniappSnapshot framework: preload owns
@@ -86,31 +82,7 @@ export function usePanelData(props: UsePanelDataProps): PanelDataHookResult {
     enabled: compileStatus.status === 'ready',
   })
 
-  const [activeBridgeId, setActiveBridgeId] = useState<string | null>(null)
-  // Bridge ids seen in the previously-applied snapshot — drives the
-  // "auto-follow the page that just inited" decision below.
-  const prevBridgeIdsRef = useRef<Set<string>>(new Set())
-
-  // Derive `activeBridgeId` from each new AppData snapshot. If a bridge id
-  // appears that was absent from the previous snapshot, a new page inited →
-  // follow it (the newest such id, last in `bridges` order). Otherwise, if the
-  // current selection was evicted, fall back to the last remaining bridge.
-  useEffect(() => {
-    const { bridges } = appDataSnapshot.data
-    const ids = bridges.map((b) => b.id)
-    const idSet = new Set(ids)
-    const prevIds = prevBridgeIdsRef.current
-    prevBridgeIdsRef.current = idSet
-
-    const appeared = ids.filter((id) => !prevIds.has(id))
-    if (appeared.length > 0) {
-      setActiveBridgeId(appeared[appeared.length - 1]!)
-      return
-    }
-    setActiveBridgeId((prev) => (
-      prev && idSet.has(prev) ? prev : (ids.at(-1) ?? null)
-    ))
-  }, [appDataSnapshot.data])
+  const { activeBridgeId, setActiveBridge } = useActiveBridgeId(appDataSnapshot.data.bridges)
 
   const appData: AppDataState = {
     bridges: appDataSnapshot.data.bridges,
@@ -118,69 +90,7 @@ export function usePanelData(props: UsePanelDataProps): PanelDataHookResult {
     entries: appDataSnapshot.data.entries,
   }
 
-  const setActiveAppDataBridge = useCallback((id: string) => {
-    setActiveBridgeId((prev) => (
-      prev !== id && appDataSnapshot.data.bridges.some((b) => b.id === id)
-        ? id
-        : prev
-    ))
-  }, [appDataSnapshot.data.bridges])
-
-  useEffect(() => {
-    if (compileStatus.status !== 'ready') return
-
-    const onCrashed = () => setConnected(false)
-    const onLoading = () => setConnected(true)
-
-    // The <webview> element mounts conditionally on `preloadPath && simulatorUrl`,
-    // both resolved asynchronously by useSession. compileStatus can flip to
-    // 'ready' BEFORE preloadPath resolves, in which case `simulatorRef.current`
-    // is still null when this effect first runs and the listeners are never
-    // installed (the effect doesn't re-run because the ref identity is stable).
-    // Use a bounded retry loop (same constants as preload's tryAttach) to bind
-    // once the webview is mounted. Panel data flows through useMiniappSnapshot;
-    // this effect only drives `connected` from crash / load lifecycle events.
-    let attached: HTMLElement | null = null
-    let pollTimer: number | null = null
-    let attempts = 0
-
-    const tryAttach = () => {
-      if (attached) return
-      const webview = asWebview(simulatorRef)
-      if (!webview) {
-        attempts += 1
-        if (attempts >= MAX_ATTACH_RETRIES && pollTimer !== null) {
-          window.clearInterval(pollTimer)
-          pollTimer = null
-        }
-        return
-      }
-      attached = webview
-      if (pollTimer !== null) {
-        window.clearInterval(pollTimer)
-        pollTimer = null
-      }
-      setConnected(true)
-      webview.addEventListener('crashed', onCrashed)
-      webview.addEventListener('did-start-loading', onLoading)
-    }
-
-    tryAttach()
-    if (!attached) {
-      pollTimer = window.setInterval(tryAttach, ATTACH_RETRY_INTERVAL_MS)
-    }
-
-    return () => {
-      if (pollTimer !== null) {
-        window.clearInterval(pollTimer)
-        pollTimer = null
-      }
-      if (attached) {
-        attached.removeEventListener('crashed', onCrashed)
-        attached.removeEventListener('did-start-loading', onLoading)
-      }
-    }
-  }, [compileStatus.status, simulatorRef])
+  const setActiveAppDataBridge = setActiveBridge
 
   const refreshAppData = appDataSnapshot.refresh
   const refreshStorage = useCallback(async () => {
@@ -242,7 +152,6 @@ export function usePanelData(props: UsePanelDataProps): PanelDataHookResult {
   }, [])
 
   return {
-    connected,
     wxmlTree: wxml.data,
     appData,
     storageItems,

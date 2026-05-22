@@ -13,3 +13,4 @@
  */
 
 export { startMcpServer } from './server.js'
+export { getMcpStatus, type McpRuntimeStatus } from './status.js'

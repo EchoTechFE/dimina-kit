@@ -136,7 +136,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: packages/devkit/fe/dimina-fe-container
-          key: dimina-container-${{ runner.os }}-${{ steps.dimina.outputs.sha }}-${{ hashFiles('packages/devtools/build-container.js', 'packages/devtools/vite.config.api.js', 'packages/devtools/src/simulator/service-apis/**') }}
+          key: dimina-container-${{ runner.os }}-${{ steps.dimina.outputs.sha }}-${{ hashFiles('packages/devtools/build-container.js', 'packages/devtools/vite.config.api.js', 'packages/devtools/container-runtime.js', 'packages/devtools/src/simulator/service-apis/**') }}
 
       - name: Install workspace deps
         run: pnpm install --frozen-lockfile --prefer-offline
@@ -287,7 +287,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: packages/devkit/fe/dimina-fe-container
-          key: dimina-container-${{ runner.os }}-${{ steps.dimina.outputs.sha }}-${{ hashFiles('packages/devtools/build-container.js', 'packages/devtools/vite.config.api.js', 'packages/devtools/src/simulator/service-apis/**') }}
+          key: dimina-container-${{ runner.os }}-${{ steps.dimina.outputs.sha }}-${{ hashFiles('packages/devtools/build-container.js', 'packages/devtools/vite.config.api.js', 'packages/devtools/container-runtime.js', 'packages/devtools/src/simulator/service-apis/**') }}
 
       - name: Install workspace deps
         run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts

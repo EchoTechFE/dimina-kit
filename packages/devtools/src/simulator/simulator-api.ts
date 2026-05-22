@@ -7,6 +7,7 @@
  */
 
 import type { MiniAppContext } from './types'
+import { bindCallbacks, notSupportedApi } from './simulator-api-helpers'
 import {
 	setStorageSync,
 	getStorageSync,
@@ -69,8 +70,7 @@ import {
 // ─── Base ────────────────────────────────────────────────────────────────────
 
 export function canIUse(this: MiniAppContext, { success, complete }: { success?: unknown; complete?: unknown }) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onComplete } = bindCallbacks(this, { success, complete })
 	// In devtools all standard APIs are considered available.
 	onSuccess?.(true)
 	onComplete?.()
@@ -79,21 +79,14 @@ export function canIUse(this: MiniAppContext, { success, complete }: { success?:
 }
 
 export function getWindowInfo(this: MiniAppContext, { success, complete }: { success?: unknown; complete?: unknown } = {}) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onComplete } = bindCallbacks(this, { success, complete })
 
-	const wb = this.parent?.el?.querySelector('.dimina-native-webview__root')?.getBoundingClientRect()
-		?? { width: 375, height: 812 }
+	const { wb, di, pixelRatio, screenWidth, screenHeight, windowWidth, windowHeight } = readWindowMetrics(this)
 	const bar = this.parent?.getStatusBarRect?.() ?? { height: 0 }
-	const di = (window as Window & { __deviceInfo?: Record<string, number | string> }).__deviceInfo || {}
 	const statusBarHeight = (di['statusBarHeight'] as number | undefined) ?? bar.height
 
 	const info = {
-		pixelRatio: (di['pixelRatio'] as number | undefined) || window.devicePixelRatio || 2,
-		screenWidth: (di['screenWidth'] as number | undefined) || wb.width,
-		screenHeight: (di['screenHeight'] as number | undefined) || wb.height,
-		windowWidth: wb.width,
-		windowHeight: wb.height,
+		pixelRatio, screenWidth, screenHeight, windowWidth, windowHeight,
 		statusBarHeight,
 		safeArea: {
 			width: wb.width,
@@ -110,8 +103,7 @@ export function getWindowInfo(this: MiniAppContext, { success, complete }: { suc
 }
 
 export function getSystemSetting(this: MiniAppContext, { success, complete }: { success?: unknown; complete?: unknown } = {}) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onComplete } = bindCallbacks(this, { success, complete })
 
 	const info = {
 		bluetoothEnabled: false,
@@ -126,21 +118,30 @@ export function getSystemSetting(this: MiniAppContext, { success, complete }: { 
 
 // ─── System Info ─────────────────────────────────────────────────────────────
 
-function buildSystemInfo(miniApp: MiniAppContext) {
+function readWindowMetrics(miniApp: MiniAppContext) {
 	const wb = miniApp.parent?.el?.querySelector('.dimina-native-webview__root')?.getBoundingClientRect()
 		?? { width: 375, height: 812 }
 	const di = (window as Window & { __deviceInfo?: Record<string, number | string> }).__deviceInfo || {}
+	return {
+		wb,
+		di,
+		pixelRatio: (di['pixelRatio'] as number | undefined) || window.devicePixelRatio || 2,
+		screenWidth: (di['screenWidth'] as number | undefined) || wb.width,
+		screenHeight: (di['screenHeight'] as number | undefined) || wb.height,
+		windowWidth: wb.width,
+		windowHeight: wb.height,
+	}
+}
+
+function buildSystemInfo(miniApp: MiniAppContext) {
+	const { wb, di, pixelRatio, screenWidth, screenHeight, windowWidth, windowHeight } = readWindowMetrics(miniApp)
 	const statusBarHeight = (di['statusBarHeight'] as number | undefined) ?? 0
 	const safeAreaBottom = (di['safeAreaBottom'] as number | undefined) ?? 0
 
 	return {
 		brand: di['brand'] || 'devtools',
 		model: di['model'] || 'devtools',
-		pixelRatio: (di['pixelRatio'] as number | undefined) || window.devicePixelRatio || 2,
-		screenWidth: (di['screenWidth'] as number | undefined) || wb.width,
-		screenHeight: (di['screenHeight'] as number | undefined) || wb.height,
-		windowWidth: wb.width,
-		windowHeight: wb.height,
+		pixelRatio, screenWidth, screenHeight, windowWidth, windowHeight,
 		statusBarHeight,
 		language: 'zh_CN',
 		version: '8.0.5',
@@ -162,8 +163,7 @@ function buildSystemInfo(miniApp: MiniAppContext) {
 
 export function getSystemInfoAsync(this: MiniAppContext, opts: { success?: unknown; complete?: unknown }) {
 	const { success, complete } = opts
-	const onSuccess = this.createCallbackFunction(success)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onComplete } = bindCallbacks(this, { success, complete })
 	onSuccess?.(buildSystemInfo(this))
 	onComplete?.()
 }
@@ -189,9 +189,7 @@ export function downloadFile(
 		complete?: unknown
 	},
 ) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onFail = this.createCallbackFunction(fail)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
 
 	fetch(url, { headers: header })
 		.then(async (response) => {
@@ -213,17 +211,7 @@ export function downloadFile(
 		})
 }
 
-export function uploadFile(
-	this: MiniAppContext,
-	{ fail, complete }: { url?: string; filePath?: string; name?: string; header?: unknown; formData?: unknown; success?: unknown; fail?: unknown; complete?: unknown },
-) {
-	const onFail = this.createCallbackFunction(fail)
-	const onComplete = this.createCallbackFunction(complete)
-
-	// In devtools we cannot truly access the filesystem; return a stub error.
-	onFail?.({ errMsg: 'uploadFile:fail not supported in simulator' })
-	onComplete?.()
-}
+export const uploadFile = notSupportedApi('uploadFile')
 
 // ─── Open API: Account Info ─────────────────────────────────────────────────
 

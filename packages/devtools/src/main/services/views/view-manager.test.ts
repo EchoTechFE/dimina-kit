@@ -11,7 +11,7 @@
  *   - popover overlay: a fresh view is created on every showPopover and
  *     destroyed on every hidePopover (no cache)
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // Track every WebContentsView instance ever constructed so we can assert
 // construction counts and per-view add/remove pairing.
@@ -32,6 +32,9 @@ type StubView = {
 }
 
 const constructed: StubView[] = []
+
+// Exported so getSimulatorWebContents tests can override return values.
+const mockFromId = vi.fn((_id: number) => null as unknown)
 
 vi.mock('electron', () => {
   let nextId = 1
@@ -56,7 +59,7 @@ vi.mock('electron', () => {
   }
   return {
     WebContentsView,
-    webContents: { fromId: vi.fn(() => null) },
+    webContents: { fromId: (id: number) => mockFromId(id) },
   }
 })
 
@@ -205,5 +208,106 @@ describe('ViewManager: repeated show/hide cycles do not leak', () => {
     mgr.hidePopover()
     expect(removeChildView).toHaveBeenCalledTimes(3)
     expect(constructed[2]!.webContents.destroyed).toBe(true)
+  })
+})
+
+// ── Helper: build a minimal "live" simulator WebContents stub ──────────────
+// attachSimulator() calls sim.setDevToolsWebContents(), sim.openDevTools(),
+// and sim.webContents (for the devtoolsWc.once('dom-ready', …) listener).
+// We need enough surface area that attachSimulator doesn't throw and actually
+// sets simulatorWebContentsId before getSimulatorWebContents is called.
+function makeSimStub() {
+  const wcStub = {
+    destroyed: false,
+    isDestroyed() { return this.destroyed },
+    once: vi.fn(),
+    on: vi.fn(),
+  }
+  return {
+    webContents: wcStub,
+    setDevToolsWebContents: vi.fn(),
+    openDevTools: vi.fn(),
+  }
+}
+
+describe('getSimulatorWebContents', () => {
+  afterEach(() => {
+    mockFromId.mockReset()
+  })
+
+  it('returns null when no simulator has been attached (simulatorWebContentsId is null)', () => {
+    const { ctx } = makeContext()
+    const mgr = createViewManager(ctx)
+
+    // Cast to any: getSimulatorWebContents does not exist yet — this is the red test.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = (mgr as any).getSimulatorWebContents()
+
+    expect(result).toBeNull()
+  })
+
+  it('returns null when webContents.fromId returns falsy for the stored id', () => {
+    const { ctx } = makeContext()
+    const mgr = createViewManager(ctx)
+
+    const SIM_ID = 42
+    const simStub = makeSimStub()
+
+    // First call (from attachSimulator): return the sim stub so attach succeeds.
+    // Subsequent calls (from getSimulatorWebContents): return undefined.
+    mockFromId
+      .mockReturnValueOnce(simStub)
+      .mockReturnValue(undefined)
+
+    mgr.attachSimulator(SIM_ID, 375)
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = (mgr as any).getSimulatorWebContents()
+
+    expect(result).toBeNull()
+  })
+
+  it('returns null when the webContents returned by fromId has isDestroyed() === true', () => {
+    const { ctx } = makeContext()
+    const mgr = createViewManager(ctx)
+
+    const SIM_ID = 43
+    const simStub = makeSimStub()
+    const destroyedWc = {
+      isDestroyed: () => true,
+    }
+
+    mockFromId
+      .mockReturnValueOnce(simStub) // for attachSimulator
+      .mockReturnValue(destroyedWc) // for getSimulatorWebContents
+
+    mgr.attachSimulator(SIM_ID, 375)
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = (mgr as any).getSimulatorWebContents()
+
+    expect(result).toBeNull()
+  })
+
+  it('returns the live webContents object when the simulator is attached and alive', () => {
+    const { ctx } = makeContext()
+    const mgr = createViewManager(ctx)
+
+    const SIM_ID = 44
+    const simStub = makeSimStub()
+    const liveWc = {
+      isDestroyed: () => false,
+    }
+
+    mockFromId
+      .mockReturnValueOnce(simStub) // for attachSimulator
+      .mockReturnValue(liveWc)      // for getSimulatorWebContents
+
+    mgr.attachSimulator(SIM_ID, 375)
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = (mgr as any).getSimulatorWebContents()
+
+    expect(result).toBe(liveWc)
   })
 })

@@ -13,6 +13,7 @@ import { createServer } from 'http'
 import { createRequire } from 'node:module'
 import { toDisposable, type Disposable } from '../../utils/disposable.js'
 import { connectTarget, setCdpPort } from './target-manager.js'
+import { recordMcpFailed, recordMcpStarted, recordMcpStopped } from './status.js'
 import { registerCommonTargetTools } from './tool-registry.js'
 import { registerContextTools } from './tools/context-tools.js'
 import { registerSimulatorTools } from './tools/simulator-tools.js'
@@ -75,17 +76,21 @@ export function startMcpServer(resolvedCdpPort: number, mcpPort: number): Dispos
   httpServer.on('error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'EADDRINUSE') {
       console.warn(`[MCP] Port ${mcpPort} already in use — MCP server not started`)
+      recordMcpFailed('port-in-use')
     } else {
       console.error('[MCP] Server error:', err)
+      recordMcpFailed(err.message)
     }
   })
 
   httpServer.listen(mcpPort, '127.0.0.1', () => {
     console.log(`[MCP] SSE server listening on http://127.0.0.1:${mcpPort}/sse`)
+    recordMcpStarted(mcpPort)
   })
 
   return toDisposable(() => {
     transports.clear()
     httpServer.close()
+    recordMcpStopped()
   })
 }

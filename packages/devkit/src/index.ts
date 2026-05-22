@@ -59,7 +59,7 @@ export interface ProjectSession {
 	close: () => Promise<void>
 }
 
-export async function openProject(opts: {
+export interface OpenProjectOptions {
 	projectPath: string
 	port?: number
 	sourcemap?: boolean
@@ -70,7 +70,9 @@ export async function openProject(opts: {
 	watch?: boolean
 	onRebuild?: () => void
 	onBuildError?: (err: unknown) => void
-}): Promise<ProjectSession> {
+}
+
+export async function openProject(opts: OpenProjectOptions): Promise<ProjectSession> {
 	const {
 		projectPath: rawProjectPath,
 		port = 0,

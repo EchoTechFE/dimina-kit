@@ -33,6 +33,14 @@ export interface CdpStatus {
   implicitDevDefault?: boolean
 }
 
+export interface McpStatus {
+  configured: boolean
+  configuredPort: number
+  running: boolean
+  activePort: number | null
+  error: string | null
+}
+
 export interface ProjectSettingsPatch {
   uploadWithSourceMap?: boolean
 }
@@ -90,6 +98,11 @@ export function setWorkbenchTheme(theme: ThemeSource): Promise<void> {
 /** Read the current Chrome DevTools Protocol listener status. */
 export function getCdpStatus(): Promise<CdpStatus> {
   return invokeStrict<CdpStatus>(WorkbenchSettingsChannel.GetCdpStatus)
+}
+
+/** Read the current MCP server runtime status. */
+export function getMcpStatus(): Promise<McpStatus> {
+  return invokeStrict<McpStatus>(WorkbenchSettingsChannel.GetMcpStatus)
 }
 
 /** Subscribe to init broadcasts for the workbench-settings window. */

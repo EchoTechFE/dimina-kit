@@ -1,5 +1,19 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
+// wxml.ts → runtime/bridge.ts → shared/expose.ts imports `contextBridge` from
+// 'electron'. Without this mock the suite loads the real electron module, which
+// throws when the electron binary is absent (e.g. CI's `pnpm install
+// --ignore-scripts`). The tests never call electron, so stubs suffice.
+vi.mock('electron', () => ({
+  contextBridge: {
+    exposeInMainWorld: vi.fn(),
+  },
+  ipcRenderer: {
+    on: vi.fn(),
+    sendToHost: vi.fn(),
+  },
+}))
+
 // The migration replaces `installWxmlInstrumentation` / `setupWxmlObserver` /
 // `sendWxmlTree` with a single `createWxmlSource(): MiniappSnapshotSource`.
 // The tree-walking logic (`walkInstance` & friends) is UNCHANGED by the

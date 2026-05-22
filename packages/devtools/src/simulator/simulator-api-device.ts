@@ -7,12 +7,12 @@
  */
 
 import type { MiniAppContext } from './types'
+import { bindCallbacks, notSupportedApi } from './simulator-api-helpers'
 
 // ─── Device: Keyboard ────────────────────────────────────────────────────────
 
 export function hideKeyboard(this: MiniAppContext, { success, complete }: { success?: unknown; complete?: unknown } = {}) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onComplete } = bindCallbacks(this, { success, complete })
 	// In web, blur the active element to dismiss virtual keyboard
 	if (document.activeElement && typeof (document.activeElement as HTMLElement).blur === 'function') {
 		;(document.activeElement as HTMLElement).blur()
@@ -22,8 +22,7 @@ export function hideKeyboard(this: MiniAppContext, { success, complete }: { succ
 }
 
 export function adjustPosition(this: MiniAppContext, { success, complete }: { success?: unknown; complete?: unknown } = {}) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onComplete } = bindCallbacks(this, { success, complete })
 	onSuccess?.({ errMsg: 'adjustPosition:ok' })
 	onComplete?.()
 }
@@ -34,9 +33,7 @@ export function makePhoneCall(
 	this: MiniAppContext,
 	{ phoneNumber, success, fail, complete }: { phoneNumber: string; success?: unknown; fail?: unknown; complete?: unknown },
 ) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onFail = this.createCallbackFunction(fail)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
 
 	try {
 		window.open(`tel:${phoneNumber}`)
@@ -49,25 +46,14 @@ export function makePhoneCall(
 
 // ─── Device: Contact (stub) ──────────────────────────────────────────────────
 
-export function chooseContact(this: MiniAppContext, { fail, complete }: { success?: unknown; fail?: unknown; complete?: unknown }) {
-	const onFail = this.createCallbackFunction(fail)
-	const onComplete = this.createCallbackFunction(complete)
-	onFail?.({ errMsg: 'chooseContact:fail not supported in simulator' })
-	onComplete?.()
-}
+export const chooseContact = notSupportedApi('chooseContact')
 
-export function addPhoneContact(this: MiniAppContext, { fail, complete }: { success?: unknown; fail?: unknown; complete?: unknown }) {
-	const onFail = this.createCallbackFunction(fail)
-	const onComplete = this.createCallbackFunction(complete)
-	onFail?.({ errMsg: 'addPhoneContact:fail not supported in simulator' })
-	onComplete?.()
-}
+export const addPhoneContact = notSupportedApi('addPhoneContact')
 
 // ─── Device: Vibrate (stub) ──────────────────────────────────────────────────
 
 export function vibrateShort(this: MiniAppContext, { success, complete }: { type?: string; success?: unknown; complete?: unknown } = {}) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onComplete } = bindCallbacks(this, { success, complete })
 	// Navigator.vibrate is available in some browsers
 	if (navigator.vibrate) navigator.vibrate(15)
 	onSuccess?.({ errMsg: 'vibrateShort:ok' })
@@ -75,8 +61,7 @@ export function vibrateShort(this: MiniAppContext, { success, complete }: { type
 }
 
 export function vibrateLong(this: MiniAppContext, { success, complete }: { success?: unknown; complete?: unknown } = {}) {
-	const onSuccess = this.createCallbackFunction(success)
-	const onComplete = this.createCallbackFunction(complete)
+	const { onSuccess, onComplete } = bindCallbacks(this, { success, complete })
 	if (navigator.vibrate) navigator.vibrate(400)
 	onSuccess?.({ errMsg: 'vibrateLong:ok' })
 	onComplete?.()
@@ -84,12 +69,4 @@ export function vibrateLong(this: MiniAppContext, { success, complete }: { succe
 
 // ─── Device: Scan (stub) ─────────────────────────────────────────────────────
 
-export function scanCode(
-	this: MiniAppContext,
-	{ fail, complete }: { onlyFromCamera?: boolean; scanType?: unknown; success?: unknown; fail?: unknown; complete?: unknown } = {},
-) {
-	const onFail = this.createCallbackFunction(fail)
-	const onComplete = this.createCallbackFunction(complete)
-	onFail?.({ errMsg: 'scanCode:fail not supported in simulator' })
-	onComplete?.()
-}
+export const scanCode = notSupportedApi('scanCode')

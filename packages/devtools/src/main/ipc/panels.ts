@@ -1,4 +1,3 @@
-import { webContents } from 'electron'
 import { PanelChannel } from '../../shared/ipc-channels.js'
 import {
   PanelEvalSchema,
@@ -23,13 +22,13 @@ export function registerPanelsIpc(ctx: Pick<WorkbenchContext, 'panels' | 'views'
     })
     .handle(PanelChannel.Eval, async (_event, ...args: unknown[]) => {
       const [expression] = validate(PanelChannel.Eval, PanelEvalSchema, args)
-      const simWcId = ctx.views.getSimulatorWebContentsId()
-      if (!ctx.workspace.hasActiveSession() || simWcId == null) return undefined
-      const sim = webContents.fromId(simWcId)
-      if (!sim || sim.isDestroyed()) return undefined
+      if (!ctx.workspace.hasActiveSession()) return undefined
+      const sim = ctx.views.getSimulatorWebContents()
+      if (!sim) return undefined
       try {
         return await sim.executeJavaScript(expression)
-      } catch {
+      }
+      catch {
         return undefined
       }
     })

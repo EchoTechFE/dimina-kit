@@ -67,19 +67,11 @@ export interface ViewManager {
   /** Destroy all overlay webContents and null out the cached views. */
   disposeAll(): void
 
-  // ── Debug ──────────────────────────────────────────────────────────────
-  /** Log current child-view count of the main contentView. */
-  logChildViews(label: string): void
-
-  // ── Positioning helpers (used by IPC resize handler) ──────────────────
-  /** Reposition only the simulator overlay (for simulator width changes). */
-  positionSimulator(simWidth: number): void
-  /** Reposition only the settings overlay. */
-  positionSettings(): void
-
   // ── State queries ─────────────────────────────────────────────────────
   /** Return the webContents ID of the currently attached simulator. */
   getSimulatorWebContentsId(): number | null
+  /** Return the live webContents of the currently attached simulator, or null. */
+  getSimulatorWebContents(): WebContents | null
   /** Return the last known simulator width. */
   getLastSimWidth(): number
   /** Whether the simulator overlay is currently added to the contentView. */
@@ -322,19 +314,6 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     detachSimulator()
   }
 
-  function logChildViews(_label: string): void {
-    // Debug helper — intentionally a no-op in production. Kept on the
-    // ViewManager interface so call sites and tests stay stable.
-  }
-
-  function positionSimulator(simWidth: number): void {
-    applySimulatorBounds(simWidth)
-  }
-
-  function positionSettings(): void {
-    applySettingsBounds()
-  }
-
   function resize(simWidth: number): void {
     lastSimWidth = simWidth
     if (simulatorViewAdded) applySimulatorBounds(simWidth)
@@ -363,10 +342,12 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     hidePopover,
     repositionAll,
     disposeAll,
-    logChildViews,
-    positionSimulator,
-    positionSettings,
     getSimulatorWebContentsId: () => simulatorWebContentsId,
+    getSimulatorWebContents: () => {
+      if (simulatorWebContentsId == null) return null
+      const wc = webContents.fromId(simulatorWebContentsId)
+      return wc && !wc.isDestroyed() ? wc : null
+    },
     getLastSimWidth: () => lastSimWidth,
     isSimulatorAdded: () => simulatorViewAdded,
     hasSimulatorView: () => simulatorView !== null,
