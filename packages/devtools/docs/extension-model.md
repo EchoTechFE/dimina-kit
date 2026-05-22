@@ -79,15 +79,22 @@ interface WorkbenchHostInstance {
 
   // ── Contribution：全部 per-context、自动进 ctx.registry ──
   registerSimulatorApi(name: string, handler: SimulatorApiHandler): Disposable
-  readonly toolbar: { set(actions: ToolbarAction[]): void }   // 原子整表替换
+  readonly toolbar: { set(actions: ToolbarActionInput[]): void }  // 原子整表替换
   readonly ipc: IpcRegistry                                    // gated 自定义 IPC
   registerTrustedWindow(win: BrowserWindow): Disposable        // host 弹窗加入受信 sender 集
 }
 
-interface ToolbarAction {
+// host 传入 toolbar.set 的形状（带 handler）
+interface ToolbarActionInput {
   id: string                              // 全表唯一，重复则 set() 抛错
   label: string
   handler: () => void | Promise<void>
+}
+
+// 跨 IPC 投影给 renderer 的形状 —— handler 不可序列化，不进此类型
+interface ToolbarAction {
+  id: string
+  label: string
 }
 ```
 
@@ -121,7 +128,7 @@ clean break，一次推完；6 步是可 review 的 PR 切分。每个 breaking 
 3. **simulator-api per-context**：删进程全局 `registerSimulatorApi` 与 `simulatorApiRegistry` 单例。
 4. **toolbar 合一**：`instance.toolbar.set()` 上线；删 `toolbarActions` config 字段与裸 `toolbar:action:*` 路径。
 5. **裸 IPC 收口**：自定义 IPC 改走 `instance.ipc`；README 删裸 `ipcMain.handle` 示例。
-6. **收尾**：撤模块组装公共导出；删 `extraModules` JSDoc；类型收敛（`WorkbenchConfig` / `WorkbenchAppConfig` / `CreateContextOptions`）；`menuBuilder` 签名收窄；preload 加 `installCustomApisBridge` 漏装 warn。
+6. **收尾**：撤模块组装公共导出；删 `extraModules` JSDoc；收敛 `CreateContextOptions` 与 `WorkbenchConfig` 形状等价的重叠字段（保守去重，不改类型形状）；`menuBuilder` 签名收窄；preload 加 `installCustomApisBridge` 漏装 warn。
 
 ## 6. 取舍
 

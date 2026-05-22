@@ -101,12 +101,15 @@ export interface WorkbenchContext {
   senderPolicy: SenderPolicy
 
   /**
-   * Mutable set of `webContents.id`s for host-owned BrowserWindows that have
-   * been registered as trusted senders via `instance.registerTrustedWindow`.
+   * Reference-counted map of `webContents.id` → live registration count for
+   * host-owned BrowserWindows registered as trusted senders via
+   * `instance.registerTrustedWindow`. A window stays trusted while its count
+   * is > 0; registering the same window N times requires N disposals (or a
+   * single `closed` event, which zeroes the count outright) to un-trust it.
    * Consulted by `createWorkbenchSenderPolicy` in addition to the static
    * main-window / overlay checks.
    */
-  trustedWindowSenderIds: Set<number>
+  trustedWindowSenderIds: Map<number, number>
 
   /**
    * Per-context registry of host-registered simulator custom APIs. Populated
@@ -180,7 +183,7 @@ export function createWorkbenchContext(opts: CreateContextOptions): WorkbenchCon
   } as WorkbenchContext
 
   ctx.registry = new DisposableRegistry()
-  ctx.trustedWindowSenderIds = new Set<number>()
+  ctx.trustedWindowSenderIds = new Map<number, number>()
   ctx.simulatorApis = createSimulatorApiRegistry()
   ctx.toolbar = createToolbarStore()
   ctx.windows = createWindowService(opts.mainWindow)

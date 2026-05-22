@@ -8,7 +8,8 @@
     "NODE_ENV",
     "CI",
     "GITHUB_TOKEN",
-    "DIMINA_FORCE_BUILD"
+    "DIMINA_FORCE_BUILD",
+    "DIMINA_E2E_TOOLBAR_SENTINEL"
   ],
   "tasks": {
     "build": {

@@ -64,23 +64,47 @@ export interface WorkbenchAppInstance {
  * Adds `win.webContents` to the context's trusted-sender set and returns a
  * Disposable that removes it again.
  *
- * The removal is idempotent: the window's `closed` event, the returned
- * Disposable, and `ctx.registry` may each trigger eviction; the first one
- * wins and the rest are no-ops. The `closed` listener also removes itself
- * once it has fired so a long-lived context doesn't accumulate dead
- * listeners on closed windows.
+ * Trust is reference-counted: registering the SAME window N times keeps it
+ * trusted until every one of the N returned Disposables has been disposed.
+ * `trustedWindowSenderIds` is a `Map<webContents.id, refCount>`; each register
+ * bumps the count, each dispose decrements it, and the window is un-trusted
+ * only when the count reaches zero.
+ *
+ * The window's `closed` event short-circuits the ref-count: it deletes the
+ * map entry outright (the window is dead, so it must be un-trusted
+ * immediately regardless of how many Disposables are still outstanding).
+ * After `closed`, disposing any leftover Disposable is a safe no-op — the
+ * map entry is already gone, so the decrement finds `undefined` and bails
+ * without driving the count negative or resurrecting trust.
+ *
+ * Each returned Disposable is itself idempotent (`removed` flag), and its
+ * `closed` listener removes itself once fired so a long-lived context
+ * doesn't accumulate dead listeners on closed windows.
  */
 function registerTrustedWindow(context: WorkbenchContext, win: BrowserWindow): Disposable {
   const senderId = win.webContents.id
-  context.trustedWindowSenderIds.add(senderId)
+  const counts = context.trustedWindowSenderIds
+  counts.set(senderId, (counts.get(senderId) ?? 0) + 1)
 
   let removed = false
-  const onClosed = () => remove()
+  const onClosed = () => {
+    // The window is gone: zero the ref-count for this sender id outright,
+    // regardless of any other outstanding registrations for the same window.
+    counts.delete(senderId)
+    win.removeListener('closed', onClosed)
+  }
+
   function remove() {
     if (removed) return
     removed = true
-    context.trustedWindowSenderIds.delete(senderId)
     win.removeListener('closed', onClosed)
+    const count = counts.get(senderId)
+    // `undefined` → the entry was already cleared (e.g. by `closed` or by a
+    // prior sibling's decrement that hit zero). Nothing to do — never go
+    // negative, never resurrect trust.
+    if (count === undefined) return
+    if (count <= 1) counts.delete(senderId)
+    else counts.set(senderId, count - 1)
   }
 
   win.once('closed', onClosed)

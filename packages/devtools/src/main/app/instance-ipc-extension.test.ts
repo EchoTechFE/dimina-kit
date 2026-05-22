@@ -432,4 +432,100 @@ describe('Requirement B: instance.registerTrustedWindow', () => {
       'context dispose must release the registerTrustedWindow disposable (it must live in ctx.registry)',
     ).toBe(false)
   })
+
+  // ── Reference-counting semantics for repeated registration ────────────────
+  //
+  // `trustedWindowSenderIds` is a `Set<number>` keyed on `webContents.id`, so
+  // registering the SAME window twice writes a single set entry. A naive
+  // implementation that just `set.delete(id)` on dispose lets the FIRST
+  // dispose evict the window even though a second, still-live registration
+  // exists. The trusted state must be reference-counted: it survives until
+  // EVERY registration's Disposable has been disposed.
+
+  it('registering the same window twice keeps it trusted until BOTH disposables are disposed', async () => {
+    const instance = await setupInstance()
+    const hostWin = new BrowserWindowMock()
+    const reg = instance as unknown as {
+      registerTrustedWindow: (w: import('electron').BrowserWindow) => import('../utils/disposable.js').Disposable
+    }
+
+    const first = reg.registerTrustedWindow(hostWin)
+    const second = reg.registerTrustedWindow(hostWin)
+
+    // Two registrations → trusted.
+    expect(
+      instance.context.senderPolicy(hostWin.webContents),
+      'a window registered twice must be trusted',
+    ).toBe(true)
+
+    // Dispose ONE of the two registrations. The other is still live, so the
+    // window MUST remain trusted. (A non-ref-counted impl fails here: the
+    // first dispose deletes the shared Set entry and the window goes dark
+    // while `second` is still holding a reference.)
+    await first.dispose()
+    expect(
+      instance.context.senderPolicy(hostWin.webContents),
+      'disposing one of two registrations must NOT un-trust the window — the other registration is still live',
+    ).toBe(true)
+
+    // Dispose the LAST registration → ref-count hits zero → un-trusted.
+    await second.dispose()
+    expect(
+      instance.context.senderPolicy(hostWin.webContents),
+      'disposing the final registration must un-trust the window',
+    ).toBe(false)
+  })
+
+  it("a window registered twice is un-trusted immediately on 'closed', regardless of outstanding disposables", async () => {
+    const instance = await setupInstance()
+    const hostWin = new BrowserWindowMock()
+    const reg = instance as unknown as {
+      registerTrustedWindow: (w: import('electron').BrowserWindow) => import('../utils/disposable.js').Disposable
+    }
+
+    reg.registerTrustedWindow(hostWin)
+    reg.registerTrustedWindow(hostWin)
+    expect(instance.context.senderPolicy(hostWin.webContents)).toBe(true)
+
+    // The window is gone — `closed` must zero the ref-count outright. It must
+    // NOT take two `closed` events (one per registration) to evict it; the
+    // window is dead, so a single `closed` un-trusts it even though neither
+    // Disposable was disposed.
+    ;(hostWin as unknown as { emit: (e: string) => void }).emit('closed')
+
+    expect(
+      instance.context.senderPolicy(hostWin.webContents),
+      "'closed' must un-trust a twice-registered window in one shot — the window is dead, ref-count goes straight to zero",
+    ).toBe(false)
+  })
+
+  it("after one dispose + 'closed' on a twice-registered window, disposing the remaining disposable is a safe no-op", async () => {
+    const instance = await setupInstance()
+    const hostWin = new BrowserWindowMock()
+    const reg = instance as unknown as {
+      registerTrustedWindow: (w: import('electron').BrowserWindow) => import('../utils/disposable.js').Disposable
+    }
+
+    const first = reg.registerTrustedWindow(hostWin)
+    const second = reg.registerTrustedWindow(hostWin)
+    expect(instance.context.senderPolicy(hostWin.webContents)).toBe(true)
+
+    // Dispose one registration, then close the window. The window is dead and
+    // there is still one outstanding registration (`second`) that was never
+    // disposed.
+    await first.dispose()
+    ;(hostWin as unknown as { emit: (e: string) => void }).emit('closed')
+    expect(
+      instance.context.senderPolicy(hostWin.webContents),
+      "'closed' must un-trust the window even with an outstanding registration",
+    ).toBe(false)
+
+    // Disposing the leftover registration after the window already closed must
+    // not throw and must not resurrect / mis-decrement anything.
+    await expect(Promise.resolve(second.dispose())).resolves.not.toThrow()
+    expect(
+      instance.context.senderPolicy(hostWin.webContents),
+      'window stays un-trusted after disposing the leftover registration post-close',
+    ).toBe(false)
+  })
 })
