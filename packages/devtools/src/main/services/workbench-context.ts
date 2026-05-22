@@ -19,6 +19,7 @@ import {
   createSimulatorApiRegistry,
   type SimulatorApiRegistry,
 } from './simulator/custom-apis.js'
+import { createToolbarStore, type ToolbarStore } from './toolbar/toolbar-store.js'
 import { resolveTemplates, sanitizeTemplates } from './projects/templates.js'
 import { BUILTIN_TEMPLATES } from './projects/builtin-templates.js'
 import type {
@@ -49,9 +50,6 @@ export interface WorkbenchContext {
 
   /** Header bar height in px, used for view layout and exposed to the renderer */
   headerHeight: number
-
-  /** Host-injected provider for toolbar actions (overrides default empty list) */
-  toolbarActions?: () => Promise<Array<{ id: string; label: string }>> | Array<{ id: string; label: string }>
 
   /** Host-injected provider for branding info (overrides default appName) */
   brandingProvider?: () => Promise<{ appName: string }> | { appName: string }
@@ -117,6 +115,13 @@ export interface WorkbenchContext {
    */
   simulatorApis: SimulatorApiRegistry
 
+  /**
+   * Per-context store of host-registered toolbar actions. Populated via
+   * `instance.toolbar.set`; read by the toolbar IPC handlers. One store per
+   * context — no process-global crosstalk.
+   */
+  toolbar: ToolbarStore
+
   /** Aggregates dispose handlers for every IPC handler, listener, watcher, and CDP session registered by the workbench. */
   registry: DisposableRegistry
 }
@@ -131,7 +136,6 @@ export interface CreateContextOptions {
   appName?: string
   /** Header bar height in px (default 40). */
   headerHeight?: number
-  toolbarActions?: WorkbenchContext['toolbarActions']
   brandingProvider?: WorkbenchContext['brandingProvider']
   /** Host-supplied project list backend. Defaults to LocalProjectsProvider. */
   projectsProvider?: ProjectsProvider
@@ -164,13 +168,13 @@ export function createWorkbenchContext(opts: CreateContextOptions): WorkbenchCon
     apiNamespaces: opts.apiNamespaces ?? [],
     appName: opts.appName ?? 'Dimina DevTools',
     headerHeight: opts.headerHeight ?? 40,
-    toolbarActions: opts.toolbarActions,
     brandingProvider: opts.brandingProvider,
   } as WorkbenchContext
 
   ctx.registry = new DisposableRegistry()
   ctx.trustedWindowSenderIds = new Set<number>()
   ctx.simulatorApis = createSimulatorApiRegistry()
+  ctx.toolbar = createToolbarStore()
   ctx.windows = createWindowService(opts.mainWindow)
   ctx.views = createViewManager(ctx)
   ctx.notify = createRendererNotifier(ctx)

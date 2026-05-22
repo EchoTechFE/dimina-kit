@@ -3,7 +3,7 @@ import { setupCdpPort } from './bootstrap.js'
 import { app, BrowserWindow, nativeImage } from 'electron'
 import fs from 'fs'
 import path from 'path'
-import type { BuiltinModuleId, WorkbenchAppConfig } from '../../shared/types.js'
+import type { BuiltinModuleId, ToolbarActionInput, WorkbenchAppConfig } from '../../shared/types.js'
 import type { SimulatorApiHandler } from '../services/simulator/custom-apis.js'
 import { rendererDir as defaultRendererDir, defaultPreloadPath } from '../utils/paths.js'
 import { installThemeBackgroundSync } from '../utils/theme.js'
@@ -53,6 +53,8 @@ export interface WorkbenchAppInstance {
   registerTrustedWindow: (win: BrowserWindow) => Disposable
   /** Registers a simulator custom API into this context's registry. */
   registerSimulatorApi: (name: string, handler: SimulatorApiHandler) => Disposable
+  /** Per-context toolbar surface — `set()` atomically replaces the table. */
+  readonly toolbar: { set(actions: ToolbarActionInput[]): void }
   automationServer?: AutomationServer
   updateManager?: UpdateManager
   dispose: () => Promise<void>
@@ -156,7 +158,6 @@ function createContext(config: WorkbenchAppConfig, mainWindow: BrowserWindow, re
     apiNamespaces: config.apiNamespaces,
     headerHeight: config.headerHeight,
     brandingProvider: config.brandingProvider,
-    toolbarActions: config.toolbarActions,
     // The host-supplied ProjectsProvider / template types in `shared/types`
     // are structurally compatible with the main-process equivalents —
     // these casts are safe; we re-narrow at the workspace-service /
@@ -304,6 +305,15 @@ export function createWorkbenchApp(config: WorkbenchAppConfig = {}) {
           const disposable = toDisposable(disposer)
           context.registry.add(disposable)
           return disposable
+        },
+        toolbar: {
+          set: (actions: ToolbarActionInput[]) => {
+            // `context.toolbar.set` validates id-uniqueness and throws on a
+            // duplicate BEFORE mutating, so a rejected batch never reaches
+            // the notify below — no phantom ActionsChanged.
+            context.toolbar.set(actions)
+            context.notify.toolbarActionsChanged()
+          },
         },
         dispose: () => disposeContext(context),
       }

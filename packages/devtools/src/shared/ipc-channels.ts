@@ -168,8 +168,8 @@ export const PopoverChannel = {
 export const ToolbarChannel = {
   GetActions: 'toolbar:getActions',
   ActionsChanged: 'toolbar:actionsChanged',
-  /** Prefix for dynamic action channels: `toolbar:action:${actionId}` */
-  ActionPrefix: 'toolbar:action:',
+  /** Invoke a toolbar action by id: `invoke(Invoke, actionId)`. */
+  Invoke: 'toolbar:invoke',
 } as const
 
 // ── Window ───────────────────────────────────────────────────────────────

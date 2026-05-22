@@ -87,6 +87,9 @@ export const SimulatorCustomApiInvokeSchema = z.tuple([
   z.unknown(),
 ])
 
+/** toolbar:invoke — a non-empty bounded toolbar action id. */
+export const ToolbarInvokeSchema = z.tuple([z.string().min(1).max(256)])
+
 /** project:getPages — absolute project path. */
 export const ProjectGetPagesSchema = z.tuple([AbsolutePath])
 

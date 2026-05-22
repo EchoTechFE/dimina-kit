@@ -19,9 +19,24 @@ export interface CompilationAdapter {
 export type BuiltinPanelId = 'wxml' | 'console' | 'appdata' | 'storage'
 export type BuiltinModuleId = 'projects' | 'session' | 'simulator' | 'popover' | 'settings'
 
+/**
+ * Cross-IPC / renderer shape of a toolbar action. Carries no `handler` — the
+ * handler is non-serialisable and never crosses the IPC boundary.
+ */
 export interface ToolbarAction {
   id: string
   label: string
+}
+
+/**
+ * Host-facing toolbar action passed to `instance.toolbar.set()`. Includes the
+ * `handler` (kept main-process side); only `{id,label}` is projected to the
+ * renderer.
+ */
+export interface ToolbarActionInput {
+  id: string
+  label: string
+  handler: () => void | Promise<void>
 }
 
 export interface WorkbenchConfig {
@@ -37,8 +52,6 @@ export interface WorkbenchConfig {
   apiNamespaces?: string[]
   /** Provider for branding info (overrides default appName) */
   brandingProvider?: () => Promise<{ appName: string }> | { appName: string }
-  /** Provider for toolbar actions shown above the compile toolbar */
-  toolbarActions?: () => Promise<ToolbarAction[]> | ToolbarAction[]
   /** Header bar height in px, used for view layout. Default 40. */
   headerHeight?: number
 }
@@ -117,6 +130,13 @@ export interface WorkbenchHostInstance {
     name: string,
     handler: SimulatorApiHandler,
   ): import('../main/utils/disposable.js').Disposable
+
+  /**
+   * Per-context toolbar surface. `set()` atomically replaces the whole table
+   * of toolbar actions stored on THIS context (duplicate `id` → throws),
+   * then notifies the renderer to re-fetch.
+   */
+  readonly toolbar: { set(actions: ToolbarActionInput[]): void }
 }
 
 /**
