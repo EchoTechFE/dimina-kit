@@ -43,6 +43,9 @@ export interface WorkbenchContext {
   /** Branding name shown in title bar and getBranding IPC */
   appName: string
 
+  /** Header bar height in px, used for view layout and exposed to the renderer */
+  headerHeight: number
+
   /** Host-injected provider for toolbar actions (overrides default empty list) */
   toolbarActions?: () => Promise<Array<{ id: string; label: string }>> | Array<{ id: string; label: string }>
 
@@ -107,6 +110,8 @@ export interface CreateContextOptions {
   panels?: string[]
   apiNamespaces?: string[]
   appName?: string
+  /** Header bar height in px (default 40). */
+  headerHeight?: number
   toolbarActions?: WorkbenchContext['toolbarActions']
   brandingProvider?: WorkbenchContext['brandingProvider']
   /** Host-supplied project list backend. Defaults to LocalProjectsProvider. */
@@ -139,6 +144,7 @@ export function createWorkbenchContext(opts: CreateContextOptions): WorkbenchCon
     panels: opts.panels ?? ['wxml', 'console', 'appdata', 'storage'],
     apiNamespaces: opts.apiNamespaces ?? [],
     appName: opts.appName ?? 'Dimina DevTools',
+    headerHeight: opts.headerHeight ?? 40,
     toolbarActions: opts.toolbarActions,
     brandingProvider: opts.brandingProvider,
   } as WorkbenchContext

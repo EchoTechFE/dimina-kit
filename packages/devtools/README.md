@@ -554,8 +554,8 @@ dispose()
                                        openSettingsWindow, suppressEpipe, setupCdpPort,
                                        createWorkbenchContext, createMainWindow,
                                        createViewManager, register*Ipc,
-                                       registerSimulatorApi,
-                                       setHeaderHeight, UpdateManager,
+                                       registerSimulatorApi, IpcRegistry,
+                                       UpdateManager,
                                        createGitHubReleaseChecker, ...
                                        （api.ts 聚合了所有公共 API；优先从根入口导入）
 @dimina-kit/devtools/launch                 launch(config?), buildDefaultMenu, openSettingsWindow

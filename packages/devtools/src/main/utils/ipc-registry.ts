@@ -72,8 +72,12 @@ export class IpcRegistry implements Disposable {
 
   handle(channel: string, fn: HandleFn): this {
     const policy = this.policy
+    // The gate is `async` so a rejected sender surfaces as a *rejected
+    // promise* (the invoke-result contract) rather than a synchronous throw —
+    // synchronous throws can escape callers that wrap the result in
+    // `Promise.resolve(...)` instead of `await`-ing it directly.
     const guarded: HandleFn = policy
-      ? (event: IpcMainInvokeEvent, ...args: unknown[]) => {
+      ? async (event: IpcMainInvokeEvent, ...args: unknown[]) => {
           const sender = event.sender
           if (!policy(sender)) {
             console.warn(

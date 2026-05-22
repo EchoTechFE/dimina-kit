@@ -119,6 +119,7 @@ function createContext(config: WorkbenchAppConfig, mainWindow: BrowserWindow, re
     panels: config.panels,
     appName: config.appName,
     apiNamespaces: config.apiNamespaces,
+    headerHeight: config.headerHeight,
     brandingProvider: config.brandingProvider,
     toolbarActions: config.toolbarActions,
     // The host-supplied ProjectsProvider / template types in `shared/types`
@@ -261,6 +262,7 @@ export function createWorkbenchApp(config: WorkbenchAppConfig = {}) {
         instance.updateManager = new UpdateManager({
           checker: config.updateChecker,
           mainWindow,
+          senderPolicy: context.senderPolicy,
           checkInterval: config.updateOptions?.checkInterval,
           initialDelay: config.updateOptions?.initialDelay,
           getCurrentVersion: config.updateOptions?.getCurrentVersion,

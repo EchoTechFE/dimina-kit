@@ -39,8 +39,9 @@ export {
   getRendererHtml,
 } from './utils/paths.js'
 
-// ── Layout ───────────────────────────────────────────────────────────────
-export { setHeaderHeight } from './services/layout/index.js'
+// ── IPC gateway (for host-registered custom IPC) ─────────────────────────
+export { IpcRegistry } from './utils/ipc-registry.js'
+export type { SenderPolicy } from './utils/ipc-registry.js'
 
 // ── Update checker ───────────────────────────────────────────────────────
 export { UpdateManager, createGitHubReleaseChecker } from './services/update/index.js'

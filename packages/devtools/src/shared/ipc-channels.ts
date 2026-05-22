@@ -183,6 +183,7 @@ export const WindowChannel = {
 export const AppChannel = {
   GetPreloadPath: 'app:getPreloadPath',
   GetBranding: 'app:getBranding',
+  GetHeaderHeight: 'app:getHeaderHeight',
 } as const
 
 // ── miniappSnapshot (unified panel snapshot framework) ───────────────────

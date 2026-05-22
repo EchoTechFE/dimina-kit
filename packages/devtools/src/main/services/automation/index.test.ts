@@ -169,9 +169,11 @@ describe('startAutomationServer lifecycle', () => {
     const server = await startAutomationServer(ctx, 0)
 
     const guarded = guardedFns.get(AutomationChannel.GetPort)!
-    expect(() =>
+    // The IpcRegistry sender gate now surfaces as a rejected promise (the
+    // invoke-result contract) rather than a synchronous throw.
+    await expect(
       guarded({ sender: { id: 99, isDestroyed: () => false, getURL: () => 'devtools://evil' } } as unknown as { sender: unknown }),
-    ).toThrow(/sender rejected/i)
+    ).rejects.toThrow(/sender rejected/i)
 
     server.close()
   })

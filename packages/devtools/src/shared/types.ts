@@ -38,6 +38,8 @@ export interface WorkbenchConfig {
   brandingProvider?: () => Promise<{ appName: string }> | { appName: string }
   /** Provider for toolbar actions shown above the compile toolbar */
   toolbarActions?: () => Promise<ToolbarAction[]> | ToolbarAction[]
+  /** Header bar height in px, used for view layout. Default 40. */
+  headerHeight?: number
 }
 
 export interface CompileConfig {

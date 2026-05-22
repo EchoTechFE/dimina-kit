@@ -1,14 +1,5 @@
 /** Layout constants (px) */
-export let HEADER_H = 40
 export const SPLITTER_W = 4
-
-/**
- * Override the header height used for layout calculations.
- * Call this before any views are positioned (e.g. in onSetup).
- */
-export function setHeaderHeight(h: number): void {
-  HEADER_H = h
-}
 
 /**
  * X coordinate where the right panel starts (simulator width + splitter).
@@ -27,14 +18,15 @@ export interface Bounds {
 export function computeRightPanelBounds(
   contentWidth: number,
   contentHeight: number,
-  simWidth: number
+  simWidth: number,
+  headerHeight: number
 ): Bounds {
   const x = getRightX(simWidth)
   return {
     x,
-    y: HEADER_H,
+    y: headerHeight,
     width: Math.max(1, contentWidth - x),
-    height: Math.max(1, contentHeight - HEADER_H),
+    height: Math.max(1, contentHeight - headerHeight),
   }
 }
 
@@ -44,33 +36,36 @@ export function computeRightPanelBounds(
 export function computeSimulatorBounds(
   contentWidth: number,
   contentHeight: number,
-  simWidth: number
+  simWidth: number,
+  headerHeight: number
 ): Bounds {
-  return computeRightPanelBounds(contentWidth, contentHeight, simWidth)
+  return computeRightPanelBounds(contentWidth, contentHeight, simWidth, headerHeight)
 }
 
 export const SETTINGS_W = 320
 
 export function computeSettingsBounds(
   contentWidth: number,
-  contentHeight: number
+  contentHeight: number,
+  headerHeight: number
 ): Bounds {
   return {
     x: Math.max(0, contentWidth - SETTINGS_W),
-    y: HEADER_H,
+    y: headerHeight,
     width: SETTINGS_W,
-    height: Math.max(1, contentHeight - HEADER_H),
+    height: Math.max(1, contentHeight - headerHeight),
   }
 }
 
 export function computePopoverBounds(
   contentWidth: number,
-  contentHeight: number
+  contentHeight: number,
+  headerHeight: number
 ): Bounds {
   return {
     x: 0,
-    y: HEADER_H,
+    y: headerHeight,
     width: contentWidth,
-    height: contentHeight - HEADER_H,
+    height: contentHeight - headerHeight,
   }
 }

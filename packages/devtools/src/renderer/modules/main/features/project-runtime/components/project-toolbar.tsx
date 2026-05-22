@@ -5,6 +5,7 @@ import { StatusDot } from '@/shared/components/status-dot'
 import { cn } from '@/shared/lib/utils'
 import { HEADER_H } from '@/shared/constants'
 import {
+  getHeaderHeight,
   getToolbarActions,
   invokeToolbarAction,
   listPanels,
@@ -36,6 +37,9 @@ export function ProjectToolbar({
 }: ProjectToolbarProps) {
   const [actions, setActions] = useState<ToolbarAction[]>([])
   const [panels, setPanels] = useState<PanelTab[]>([])
+  // Host-configured header height; HEADER_H (40) is the fallback until the
+  // IPC value resolves. Fetched once, mirrors the getBranding() pattern.
+  const [headerHeight, setHeaderHeight] = useState(HEADER_H)
 
   const fetchActions = () => {
     void getToolbarActions()
@@ -47,6 +51,14 @@ export function ProjectToolbar({
         console.debug('[toolbar] getActions not available', err)
       })
   }
+
+  useEffect(() => {
+    getHeaderHeight()
+      .then((h) => {
+        if (typeof h === 'number') setHeaderHeight(h)
+      })
+      .catch(() => {})
+  }, [])
 
   useEffect(() => {
     fetchActions()
@@ -81,7 +93,7 @@ export function ProjectToolbar({
 
       <div
         className="flex items-center gap-1.5 px-2.5 bg-surface-2 border-b border-border shrink-0"
-        style={{ height: HEADER_H }}
+        style={{ height: headerHeight }}
       >
         <div ref={compileDropdownRef as React.Ref<HTMLDivElement>}>
           <Button
