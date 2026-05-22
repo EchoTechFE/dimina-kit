@@ -20,11 +20,14 @@ import type { SenderPolicy } from './ipc-registry.js'
  * Keeping the guest off this list contains the blast radius if the
  * simulator content is ever compromised.
  *
+ * Host-owned BrowserWindows registered via `instance.registerTrustedWindow`
+ * are additionally accepted via `ctx.trustedWindowSenderIds`.
+ *
  * Any other sender — including a stale/destroyed sender or an unknown
  * iframe — is rejected.
  */
 export function createWorkbenchSenderPolicy(
-  ctx: Pick<WorkbenchContext, 'windows' | 'views'>,
+  ctx: Pick<WorkbenchContext, 'windows' | 'views' | 'trustedWindowSenderIds'>,
 ): SenderPolicy {
   return (sender: WebContents) => {
     if (sender.isDestroyed()) return false
@@ -34,6 +37,9 @@ export function createWorkbenchSenderPolicy(
 
     // Standalone settings BrowserWindow renderer
     if (ctx.windows.isSettingsWindowSender(sender.id)) return true
+
+    // Host-registered trusted windows (registerTrustedWindow)
+    if (ctx.trustedWindowSenderIds.has(sender.id)) return true
 
     // Settings overlay view (mounted inside the main window)
     const settingsViewId = ctx.views.getSettingsWebContentsId()

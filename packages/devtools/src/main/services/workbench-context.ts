@@ -98,6 +98,14 @@ export interface WorkbenchContext {
    */
   senderPolicy: SenderPolicy
 
+  /**
+   * Mutable set of `webContents.id`s for host-owned BrowserWindows that have
+   * been registered as trusted senders via `instance.registerTrustedWindow`.
+   * Consulted by `createWorkbenchSenderPolicy` in addition to the static
+   * main-window / overlay checks.
+   */
+  trustedWindowSenderIds: Set<number>
+
   /** Aggregates dispose handlers for every IPC handler, listener, watcher, and CDP session registered by the workbench. */
   registry: DisposableRegistry
 }
@@ -150,6 +158,7 @@ export function createWorkbenchContext(opts: CreateContextOptions): WorkbenchCon
   } as WorkbenchContext
 
   ctx.registry = new DisposableRegistry()
+  ctx.trustedWindowSenderIds = new Set<number>()
   ctx.windows = createWindowService(opts.mainWindow)
   ctx.views = createViewManager(ctx)
   ctx.notify = createRendererNotifier(ctx)

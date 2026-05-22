@@ -25,6 +25,7 @@ import { startMcpServer } from '../services/mcp/index.js'
 import { setupSimulatorStorage } from '../services/simulator-storage/index.js'
 import { UpdateManager } from '../services/update/index.js'
 import { toDisposable, type Disposable } from '../utils/disposable.js'
+import { IpcRegistry } from '../utils/ipc-registry.js'
 
 const DEFAULT_MODULES: Record<BuiltinModuleId, boolean> = {
   projects: true,
@@ -45,9 +46,40 @@ const BUILTIN_MODULES: Record<BuiltinModuleId, WorkbenchModule> = {
 export interface WorkbenchAppInstance {
   mainWindow: BrowserWindow
   context: WorkbenchContext
+  /** Gated custom-IPC registration surface bound to `context.senderPolicy`. */
+  readonly ipc: IpcRegistry
+  /** Adds a host-owned BrowserWindow to the trusted-sender set. */
+  registerTrustedWindow: (win: BrowserWindow) => Disposable
   automationServer?: AutomationServer
   updateManager?: UpdateManager
   dispose: () => Promise<void>
+}
+
+/**
+ * Adds `win.webContents` to the context's trusted-sender set and returns a
+ * Disposable that removes it again.
+ *
+ * The removal is idempotent: the window's `closed` event, the returned
+ * Disposable, and `ctx.registry` may each trigger eviction; the first one
+ * wins and the rest are no-ops. The `closed` listener also removes itself
+ * once it has fired so a long-lived context doesn't accumulate dead
+ * listeners on closed windows.
+ */
+function registerTrustedWindow(context: WorkbenchContext, win: BrowserWindow): Disposable {
+  const senderId = win.webContents.id
+  context.trustedWindowSenderIds.add(senderId)
+
+  let removed = false
+  const onClosed = () => remove()
+  function remove() {
+    if (removed) return
+    removed = true
+    context.trustedWindowSenderIds.delete(senderId)
+    win.removeListener('closed', onClosed)
+  }
+
+  win.once('closed', onClosed)
+  return toDisposable(remove)
 }
 
 /** Parse --auto, --auto-port, --project from process.argv. */
@@ -248,9 +280,22 @@ export function createWorkbenchApp(config: WorkbenchAppConfig = {}) {
       registerBuiltinModules(config, context)
       installMenu(config, mainWindow, context)
 
+      // Gated custom-IPC surface for the host. Bound to ctx.senderPolicy so
+      // host channels go through the same gateway as built-in IPC, and
+      // registered into ctx.registry so its handlers are torn down with the
+      // context.
+      const hostIpc = new IpcRegistry(context.senderPolicy)
+      context.registry.add(hostIpc)
+
       const instance: WorkbenchAppInstance = {
         mainWindow,
         context,
+        ipc: hostIpc,
+        registerTrustedWindow: (win: BrowserWindow) => {
+          const disposable = registerTrustedWindow(context, win)
+          context.registry.add(disposable)
+          return disposable
+        },
         dispose: () => disposeContext(context),
       }
 

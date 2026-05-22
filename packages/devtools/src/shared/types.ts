@@ -88,6 +88,23 @@ export interface UpdateChecker {
 export interface WorkbenchHostInstance {
   mainWindow: import('electron').BrowserWindow
   context: import('../main/services/workbench-context.js').WorkbenchContext
+
+  /**
+   * Gated custom-IPC registration surface. Channels registered through this
+   * `IpcRegistry` are bound to `context.senderPolicy` and torn down with the
+   * context. This is the only supported path for host custom IPC.
+   */
+  readonly ipc: import('../main/utils/ipc-registry.js').IpcRegistry
+
+  /**
+   * Adds a host-owned BrowserWindow's renderer to the trusted-sender set so
+   * its `instance.ipc` calls pass the gateway. The window is auto-evicted
+   * when it closes; the returned Disposable evicts it explicitly and is also
+   * registered into `context.registry` for context-scoped cleanup.
+   */
+  registerTrustedWindow(
+    win: import('electron').BrowserWindow,
+  ): import('../main/utils/disposable.js').Disposable
 }
 
 /**
