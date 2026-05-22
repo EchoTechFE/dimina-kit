@@ -4,6 +4,7 @@ import { Application, MiniApp } from 'container-api'
 import { directRequest } from './direct-request'
 import { simulatorApis } from './simulator-api'
 import { registerCustomApis } from './custom-api-boot'
+import { resolveCustomApisBridge } from './resolve-custom-apis-bridge'
 import { parseLocationRoute } from '../shared/simulator-route'
 
 declare global {
@@ -132,7 +133,10 @@ function SimulatorApp() {
       // Taro's one-shot `Object.keys(wx)` at init, which silently drops APIs
       // that register late. A rejected/hung bridge degrades to "no custom
       // APIs" rather than blocking the boot (see custom-api-boot.ts).
-      await registerCustomApis(miniApp, window.__diminaCustomApis)
+      // `resolveCustomApisBridge` resolves `window.__diminaCustomApis` and, if
+      // it is missing inside Electron, warns that a custom preload forgot
+      // `installCustomApisBridge()` — otherwise the failure is silent.
+      await registerCustomApis(miniApp, resolveCustomApisBridge())
       if (cancelled) return
 
       void application.presentView(miniApp, false)

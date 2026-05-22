@@ -24,6 +24,14 @@ export class DisposableRegistry implements Disposable {
   private entries: Entry[] = []
   private _disposed = false
 
+  /**
+   * Number of live entries. A wrapper's `dispose` splices its entry out and
+   * `disposeAll` clears the array, so `entries.length` is the live count.
+   */
+  get size(): number {
+    return this.entries.length
+  }
+
   add(d: Disposable | DisposeFn): Disposable {
     if (this._disposed) {
       throw new Error('cannot add to disposed registry')

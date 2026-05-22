@@ -1,4 +1,18 @@
 import type { OpenProjectOptions } from '@dimina-kit/devkit'
+import type { SimulatorApiHandler } from '../main/services/simulator/custom-apis.js'
+import type { WorkbenchContext } from '../main/services/workbench-context.js'
+
+/**
+ * The narrowed view of `WorkbenchContext` handed to a host `menuBuilder`.
+ * Strips the internal pipeline fields (`registry`, `senderPolicy`,
+ * `trustedWindowSenderIds`, `simulatorApis`, `toolbar`) so a menu builder can
+ * read menu-relevant state (workspace, views, windows, notify, appName, …)
+ * without reaching into devtools-internal plumbing.
+ */
+export type MenuContext = Omit<
+  WorkbenchContext,
+  'registry' | 'senderPolicy' | 'trustedWindowSenderIds' | 'simulatorApis' | 'toolbar'
+>
 
 export interface AppInfo {
   appName?: string
@@ -18,9 +32,24 @@ export interface CompilationAdapter {
 export type BuiltinPanelId = 'wxml' | 'console' | 'appdata' | 'storage'
 export type BuiltinModuleId = 'projects' | 'session' | 'simulator' | 'popover' | 'settings'
 
+/**
+ * Cross-IPC / renderer shape of a toolbar action. Carries no `handler` — the
+ * handler is non-serialisable and never crosses the IPC boundary.
+ */
 export interface ToolbarAction {
   id: string
   label: string
+}
+
+/**
+ * Host-facing toolbar action passed to `instance.toolbar.set()`. Includes the
+ * `handler` (kept main-process side); only `{id,label}` is projected to the
+ * renderer.
+ */
+export interface ToolbarActionInput {
+  id: string
+  label: string
+  handler: () => void | Promise<void>
 }
 
 export interface WorkbenchConfig {
@@ -36,8 +65,8 @@ export interface WorkbenchConfig {
   apiNamespaces?: string[]
   /** Provider for branding info (overrides default appName) */
   brandingProvider?: () => Promise<{ appName: string }> | { appName: string }
-  /** Provider for toolbar actions shown above the compile toolbar */
-  toolbarActions?: () => Promise<ToolbarAction[]> | ToolbarAction[]
+  /** Header bar height in px, used for view layout. Default 40. */
+  headerHeight?: number
 }
 
 export interface CompileConfig {
@@ -86,6 +115,41 @@ export interface UpdateChecker {
 export interface WorkbenchHostInstance {
   mainWindow: import('electron').BrowserWindow
   context: import('../main/services/workbench-context.js').WorkbenchContext
+
+  /**
+   * Gated custom-IPC registration surface. Channels registered through this
+   * `IpcRegistry` are bound to `context.senderPolicy` and torn down with the
+   * context. This is the only supported path for host custom IPC.
+   */
+  readonly ipc: import('../main/utils/ipc-registry.js').IpcRegistry
+
+  /**
+   * Adds a host-owned BrowserWindow's renderer to the trusted-sender set so
+   * its `instance.ipc` calls pass the gateway. The window is auto-evicted
+   * when it closes; the returned Disposable evicts it explicitly and is also
+   * registered into `context.registry` for context-scoped cleanup.
+   */
+  registerTrustedWindow(
+    win: import('electron').BrowserWindow,
+  ): import('../main/utils/disposable.js').Disposable
+
+  /**
+   * Registers a simulator custom API into THIS context's registry, callable
+   * from mini-program code as `wx.<name>(params)`. The registration joins
+   * `context.registry`, so it is released when the context is disposed.
+   * The returned Disposable removes only the registration it created.
+   */
+  registerSimulatorApi(
+    name: string,
+    handler: SimulatorApiHandler,
+  ): import('../main/utils/disposable.js').Disposable
+
+  /**
+   * Per-context toolbar surface. `set()` atomically replaces the whole table
+   * of toolbar actions stored on THIS context (duplicate `id` → throws),
+   * then notifies the renderer to re-fetch.
+   */
+  readonly toolbar: { set(actions: ToolbarActionInput[]): void }
 }
 
 /**
@@ -133,7 +197,7 @@ export interface WorkbenchAppConfig extends WorkbenchConfig {
   /** Absolute path to a window/taskbar icon (png or ico). macOS uses the app bundle icon. */
   icon?: string
   /** Custom menu builder. Should call Menu.setApplicationMenu(). If omitted, the default dimina-devtools menu is installed. */
-  menuBuilder?: (mainWindow: import('electron').BrowserWindow, context: WorkbenchHostInstance['context']) => void
+  menuBuilder?: (mainWindow: import('electron').BrowserWindow, menuContext: MenuContext) => void
   /** Called after window and context are created but before start() resolves. Use to register custom IPC handlers. */
   onSetup?: (instance: WorkbenchHostInstance) => void | Promise<void>
   /** Called before window close when a session is active. Session disposal happens automatically after this hook. */

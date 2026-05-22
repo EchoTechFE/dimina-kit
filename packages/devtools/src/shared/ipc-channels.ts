@@ -17,7 +17,7 @@ export const SimulatorChannel = {
 } as const
 
 // ── Custom simulator APIs (downstream-registered, main-process handlers) ──
-// list: simulator queries the names registered via @dimina-kit/devtools/simulator-apis.
+// list: simulator queries the names registered via instance.registerSimulatorApi().
 // invoke: simulator forwards an API call to the registry; result/reject propagates.
 //
 // These are ipcMain.handle channels invoked by the **main-window renderer**
@@ -168,8 +168,8 @@ export const PopoverChannel = {
 export const ToolbarChannel = {
   GetActions: 'toolbar:getActions',
   ActionsChanged: 'toolbar:actionsChanged',
-  /** Prefix for dynamic action channels: `toolbar:action:${actionId}` */
-  ActionPrefix: 'toolbar:action:',
+  /** Invoke a toolbar action by id: `invoke(Invoke, actionId)`. */
+  Invoke: 'toolbar:invoke',
 } as const
 
 // ── Window ───────────────────────────────────────────────────────────────
@@ -183,6 +183,7 @@ export const WindowChannel = {
 export const AppChannel = {
   GetPreloadPath: 'app:getPreloadPath',
   GetBranding: 'app:getBranding',
+  GetHeaderHeight: 'app:getHeaderHeight',
 } as const
 
 // ── miniappSnapshot (unified panel snapshot framework) ───────────────────

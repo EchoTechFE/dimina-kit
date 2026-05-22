@@ -16,18 +16,7 @@ export type { WorkspaceService } from './services/workspace/workspace-service.js
 export type { Project, ProjectPages, ProjectSettings } from './services/projects/project-repository.js'
 
 // ── Simulator extension surface ──────────────────────────────────────────
-export { registerSimulatorApi } from './simulator-apis.js'
-export type { SimulatorApiHandler } from './simulator-apis.js'
-
-// ── IPC module registration ──────────────────────────────────────────────
-export { registerAppIpc } from './ipc/app.js'
-export { registerSimulatorIpc } from './ipc/simulator.js'
-export { registerPanelsIpc } from './ipc/panels.js'
-export { registerPopoverIpc } from './ipc/popover.js'
-export { registerSettingsIpc } from './ipc/settings.js'
-export { registerProjectsIpc } from './ipc/projects.js'
-export { registerSessionIpc } from './ipc/session.js'
-export { registerToolbarIpc } from './ipc/toolbar.js'
+export type { SimulatorApiHandler } from './services/simulator/custom-apis.js'
 
 // ── Paths ────────────────────────────────────────────────────────────────
 export {
@@ -39,8 +28,9 @@ export {
   getRendererHtml,
 } from './utils/paths.js'
 
-// ── Layout ───────────────────────────────────────────────────────────────
-export { setHeaderHeight } from './services/layout/index.js'
+// ── IPC gateway (for host-registered custom IPC) ─────────────────────────
+export { IpcRegistry } from './utils/ipc-registry.js'
+export type { SenderPolicy } from './utils/ipc-registry.js'
 
 // ── Update checker ───────────────────────────────────────────────────────
 export { UpdateManager, createGitHubReleaseChecker } from './services/update/index.js'

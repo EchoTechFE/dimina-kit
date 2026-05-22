@@ -1,5 +1,5 @@
 import type { BrowserWindow } from 'electron'
-import type { CompilationAdapter } from '../../shared/types.js'
+import type { CompilationAdapter, WorkbenchConfig } from '../../shared/types.js'
 import { DisposableRegistry } from '../utils/disposable.js'
 import type { SenderPolicy } from '../utils/ipc-registry.js'
 import { createWorkbenchSenderPolicy } from '../utils/sender-policy.js'
@@ -15,6 +15,11 @@ import {
   type WorkspaceService,
 } from './workspace/workspace-service.js'
 import { createLocalProjectsProvider } from './projects/local-provider.js'
+import {
+  createSimulatorApiRegistry,
+  type SimulatorApiRegistry,
+} from './simulator/custom-apis.js'
+import { createToolbarStore, type ToolbarStore } from './toolbar/toolbar-store.js'
 import { resolveTemplates, sanitizeTemplates } from './projects/templates.js'
 import { BUILTIN_TEMPLATES } from './projects/builtin-templates.js'
 import type {
@@ -43,8 +48,8 @@ export interface WorkbenchContext {
   /** Branding name shown in title bar and getBranding IPC */
   appName: string
 
-  /** Host-injected provider for toolbar actions (overrides default empty list) */
-  toolbarActions?: () => Promise<Array<{ id: string; label: string }>> | Array<{ id: string; label: string }>
+  /** Header bar height in px, used for view layout and exposed to the renderer */
+  headerHeight: number
 
   /** Host-injected provider for branding info (overrides default appName) */
   brandingProvider?: () => Promise<{ appName: string }> | { appName: string }
@@ -95,19 +100,53 @@ export interface WorkbenchContext {
    */
   senderPolicy: SenderPolicy
 
+  /**
+   * Reference-counted map of `webContents.id` → live registration count for
+   * host-owned BrowserWindows registered as trusted senders via
+   * `instance.registerTrustedWindow`. A window stays trusted while its count
+   * is > 0; registering the same window N times requires N disposals (or a
+   * single `closed` event, which zeroes the count outright) to un-trust it.
+   * Consulted by `createWorkbenchSenderPolicy` in addition to the static
+   * main-window / overlay checks.
+   */
+  trustedWindowSenderIds: Map<number, number>
+
+  /**
+   * Per-context registry of host-registered simulator custom APIs. Populated
+   * via `instance.registerSimulatorApi`; read by the simulator IPC handlers.
+   * One registry per context — no process-global crosstalk.
+   */
+  simulatorApis: SimulatorApiRegistry
+
+  /**
+   * Per-context store of host-registered toolbar actions. Populated via
+   * `instance.toolbar.set`; read by the toolbar IPC handlers. One store per
+   * context — no process-global crosstalk.
+   */
+  toolbar: ToolbarStore
+
   /** Aggregates dispose handlers for every IPC handler, listener, watcher, and CDP session registered by the workbench. */
   registry: DisposableRegistry
 }
 
-export interface CreateContextOptions {
+/**
+ * Inputs for `createWorkbenchContext`. The scalar config fields it shares with
+ * `WorkbenchConfig` (`adapter` / `apiNamespaces` / `appName` / `headerHeight`)
+ * are derived from there via `Pick` so the two stay in lockstep — no
+ * field-by-field re-declaration. The remaining fields are kept explicit
+ * because their shapes intentionally differ from the config:
+ *  - `preloadPath` / `rendererDir` are REQUIRED here (the caller resolves the
+ *    defaults before constructing the context) but optional in the config;
+ *  - `panels` is the structural `string[]` (the context stores raw ids);
+ *  - `projectsProvider` / `projectTemplates` / `customCreateProjectDialog` use
+ *    the main-process types, not the structural mirrors in `shared/types`.
+ */
+export interface CreateContextOptions
+  extends Pick<WorkbenchConfig, 'adapter' | 'apiNamespaces' | 'appName' | 'headerHeight'> {
   mainWindow: BrowserWindow
-  adapter?: CompilationAdapter
   preloadPath: string
   rendererDir: string
   panels?: string[]
-  apiNamespaces?: string[]
-  appName?: string
-  toolbarActions?: WorkbenchContext['toolbarActions']
   brandingProvider?: WorkbenchContext['brandingProvider']
   /** Host-supplied project list backend. Defaults to LocalProjectsProvider. */
   projectsProvider?: ProjectsProvider
@@ -139,11 +178,14 @@ export function createWorkbenchContext(opts: CreateContextOptions): WorkbenchCon
     panels: opts.panels ?? ['wxml', 'console', 'appdata', 'storage'],
     apiNamespaces: opts.apiNamespaces ?? [],
     appName: opts.appName ?? 'Dimina DevTools',
-    toolbarActions: opts.toolbarActions,
+    headerHeight: opts.headerHeight ?? 40,
     brandingProvider: opts.brandingProvider,
   } as WorkbenchContext
 
   ctx.registry = new DisposableRegistry()
+  ctx.trustedWindowSenderIds = new Map<number, number>()
+  ctx.simulatorApis = createSimulatorApiRegistry()
+  ctx.toolbar = createToolbarStore()
   ctx.windows = createWindowService(opts.mainWindow)
   ctx.views = createViewManager(ctx)
   ctx.notify = createRendererNotifier(ctx)

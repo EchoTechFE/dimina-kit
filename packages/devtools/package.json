@@ -41,18 +41,10 @@
         "./context": "./dist/main/services/workbench-context.js",
         "./projects-provider": "./dist/main/services/projects/index.js",
         "./create-window": "./dist/main/windows/main-window/index.js",
-        "./ipc-simulator": "./dist/main/ipc/simulator.js",
-        "./ipc-panels": "./dist/main/ipc/panels.js",
-        "./ipc-toolbar": "./dist/main/ipc/toolbar.js",
-        "./ipc-popover": "./dist/main/ipc/popover.js",
-        "./ipc-settings": "./dist/main/ipc/settings.js",
-        "./ipc-projects": "./dist/main/ipc/projects.js",
-        "./ipc-session": "./dist/main/ipc/session.js",
         "./paths": "./dist/main/utils/paths.js",
         "./workbench-settings": "./dist/main/services/settings/index.js",
         "./preload": "./dist/preload/index.js",
-        "./bootstrap": "./dist/main/app/bootstrap.js",
-        "./simulator-apis": "./dist/main/simulator-apis.js"
+        "./bootstrap": "./dist/main/app/bootstrap.js"
     },
     "typesVersions": {
         "*": {
@@ -71,27 +63,6 @@
             "create-window": [
                 "dist/main/windows/main-window/index.d.ts"
             ],
-            "ipc-simulator": [
-                "dist/main/ipc/simulator.d.ts"
-            ],
-            "ipc-panels": [
-                "dist/main/ipc/panels.d.ts"
-            ],
-            "ipc-toolbar": [
-                "dist/main/ipc/toolbar.d.ts"
-            ],
-            "ipc-popover": [
-                "dist/main/ipc/popover.d.ts"
-            ],
-            "ipc-settings": [
-                "dist/main/ipc/settings.d.ts"
-            ],
-            "ipc-projects": [
-                "dist/main/ipc/projects.d.ts"
-            ],
-            "ipc-session": [
-                "dist/main/ipc/session.d.ts"
-            ],
             "paths": [
                 "dist/main/utils/paths.d.ts"
             ],
@@ -103,9 +74,6 @@
             ],
             "preload": [
                 "dist/preload/index.d.ts"
-            ],
-            "simulator-apis": [
-                "dist/main/simulator-apis.d.ts"
             ],
             "projects-provider": [
                 "dist/main/services/projects/index.d.ts"

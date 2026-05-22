@@ -15,6 +15,12 @@ export interface ViewManagerContext {
   rendererDir: string
   panels: string[]
   notify: WorkbenchContext['notify']
+  /**
+   * Header bar height in px, used to position overlay views below the header.
+   * Optional here so partial test contexts compile; `createWorkbenchContext`
+   * always supplies it (default 40).
+   */
+  headerHeight?: number
 }
 
 /**
@@ -100,6 +106,10 @@ export interface ViewManager {
  * on the context object.
  */
 export function createViewManager(ctx: ViewManagerContext): ViewManager {
+  // Resolve once: full WorkbenchContext always provides headerHeight; partial
+  // test contexts may omit it, in which case fall back to the default 40.
+  const headerHeight = ctx.headerHeight ?? 40
+
   // ── Private mutable state ───────────────────────────────────────────────
   let simulatorView: WebContentsView | null = null
   let simulatorViewAdded = false
@@ -128,19 +138,19 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   function applySimulatorBounds(simWidth: number): void {
     if (!simulatorView || ctx.windows.mainWindow.isDestroyed()) return
     const [w = 0, h = 0] = ctx.windows.mainWindow.getContentSize()
-    simulatorView.setBounds(layout.computeSimulatorBounds(w, h, simWidth))
+    simulatorView.setBounds(layout.computeSimulatorBounds(w, h, simWidth, headerHeight))
   }
 
   function applySettingsBounds(): void {
     if (!settingsView || ctx.windows.mainWindow.isDestroyed()) return
     const [w = 0, h = 0] = ctx.windows.mainWindow.getContentSize()
-    settingsView.setBounds(layout.computeSettingsBounds(w, h))
+    settingsView.setBounds(layout.computeSettingsBounds(w, h, headerHeight))
   }
 
   function applyPopoverBounds(): void {
     if (!popoverView || ctx.windows.mainWindow.isDestroyed()) return
     const [w = 0, h = 0] = ctx.windows.mainWindow.getContentSize()
-    popoverView.setBounds(layout.computePopoverBounds(w, h))
+    popoverView.setBounds(layout.computePopoverBounds(w, h, headerHeight))
   }
 
   // ── ViewManager methods ─────────────────────────────────────────────────

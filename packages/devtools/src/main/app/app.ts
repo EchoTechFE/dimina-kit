@@ -3,7 +3,8 @@ import { setupCdpPort } from './bootstrap.js'
 import { app, BrowserWindow, nativeImage } from 'electron'
 import fs from 'fs'
 import path from 'path'
-import type { BuiltinModuleId, WorkbenchAppConfig } from '../../shared/types.js'
+import type { BuiltinModuleId, MenuContext, ToolbarActionInput, WorkbenchAppConfig } from '../../shared/types.js'
+import type { SimulatorApiHandler } from '../services/simulator/custom-apis.js'
 import { rendererDir as defaultRendererDir, defaultPreloadPath } from '../utils/paths.js'
 import { installThemeBackgroundSync } from '../utils/theme.js'
 import { registerAppLifecycle } from './lifecycle.js'
@@ -25,6 +26,7 @@ import { startMcpServer } from '../services/mcp/index.js'
 import { setupSimulatorStorage } from '../services/simulator-storage/index.js'
 import { UpdateManager } from '../services/update/index.js'
 import { toDisposable, type Disposable } from '../utils/disposable.js'
+import { IpcRegistry } from '../utils/ipc-registry.js'
 
 const DEFAULT_MODULES: Record<BuiltinModuleId, boolean> = {
   projects: true,
@@ -45,9 +47,68 @@ const BUILTIN_MODULES: Record<BuiltinModuleId, WorkbenchModule> = {
 export interface WorkbenchAppInstance {
   mainWindow: BrowserWindow
   context: WorkbenchContext
+  /** Gated custom-IPC registration surface bound to `context.senderPolicy`. */
+  readonly ipc: IpcRegistry
+  /** Adds a host-owned BrowserWindow to the trusted-sender set. */
+  registerTrustedWindow: (win: BrowserWindow) => Disposable
+  /** Registers a simulator custom API into this context's registry. */
+  registerSimulatorApi: (name: string, handler: SimulatorApiHandler) => Disposable
+  /** Per-context toolbar surface — `set()` atomically replaces the table. */
+  readonly toolbar: { set(actions: ToolbarActionInput[]): void }
   automationServer?: AutomationServer
   updateManager?: UpdateManager
   dispose: () => Promise<void>
+}
+
+/**
+ * Adds `win.webContents` to the context's trusted-sender set and returns a
+ * Disposable that removes it again.
+ *
+ * Trust is reference-counted: registering the SAME window N times keeps it
+ * trusted until every one of the N returned Disposables has been disposed.
+ * `trustedWindowSenderIds` is a `Map<webContents.id, refCount>`; each register
+ * bumps the count, each dispose decrements it, and the window is un-trusted
+ * only when the count reaches zero.
+ *
+ * The window's `closed` event short-circuits the ref-count: it deletes the
+ * map entry outright (the window is dead, so it must be un-trusted
+ * immediately regardless of how many Disposables are still outstanding).
+ * After `closed`, disposing any leftover Disposable is a safe no-op — the
+ * map entry is already gone, so the decrement finds `undefined` and bails
+ * without driving the count negative or resurrecting trust.
+ *
+ * Each returned Disposable is itself idempotent (`removed` flag), and its
+ * `closed` listener removes itself once fired so a long-lived context
+ * doesn't accumulate dead listeners on closed windows.
+ */
+function registerTrustedWindow(context: WorkbenchContext, win: BrowserWindow): Disposable {
+  const senderId = win.webContents.id
+  const counts = context.trustedWindowSenderIds
+  counts.set(senderId, (counts.get(senderId) ?? 0) + 1)
+
+  let removed = false
+  const onClosed = () => {
+    // The window is gone: zero the ref-count for this sender id outright,
+    // regardless of any other outstanding registrations for the same window.
+    counts.delete(senderId)
+    win.removeListener('closed', onClosed)
+  }
+
+  function remove() {
+    if (removed) return
+    removed = true
+    win.removeListener('closed', onClosed)
+    const count = counts.get(senderId)
+    // `undefined` → the entry was already cleared (e.g. by `closed` or by a
+    // prior sibling's decrement that hit zero). Nothing to do — never go
+    // negative, never resurrect trust.
+    if (count === undefined) return
+    if (count <= 1) counts.delete(senderId)
+    else counts.set(senderId, count - 1)
+  }
+
+  win.once('closed', onClosed)
+  return toDisposable(remove)
 }
 
 /** Parse --auto, --auto-port, --project from process.argv. */
@@ -119,8 +180,8 @@ function createContext(config: WorkbenchAppConfig, mainWindow: BrowserWindow, re
     panels: config.panels,
     appName: config.appName,
     apiNamespaces: config.apiNamespaces,
+    headerHeight: config.headerHeight,
     brandingProvider: config.brandingProvider,
-    toolbarActions: config.toolbarActions,
     // The host-supplied ProjectsProvider / template types in `shared/types`
     // are structurally compatible with the main-process equivalents —
     // these casts are safe; we re-narrow at the workspace-service /
@@ -145,10 +206,28 @@ function registerBuiltinModules(config: WorkbenchAppConfig, context: WorkbenchCo
   })
 }
 
+/**
+ * Strip the internal-plumbing fields a host menu builder must not reach
+ * (registry / senderPolicy / trustedWindowSenderIds / simulatorApis / toolbar)
+ * so `menuBuilder` receives the narrowed `MenuContext` its contract promises —
+ * at runtime, not just at the type level.
+ */
+function toMenuContext(context: WorkbenchContext): MenuContext {
+  // Shallow-copy, then drop the internal-plumbing fields. A rest-destructure
+  // would be terser but trips no-unused-vars on the dropped siblings.
+  const menuContext: Partial<WorkbenchContext> = { ...context }
+  delete menuContext.registry
+  delete menuContext.senderPolicy
+  delete menuContext.trustedWindowSenderIds
+  delete menuContext.simulatorApis
+  delete menuContext.toolbar
+  return menuContext as MenuContext
+}
+
 function installMenu(config: WorkbenchAppConfig, mainWindow: BrowserWindow, context: WorkbenchContext): void {
   // Menu: use host-provided builder or fall back to default
   if (config.menuBuilder) {
-    config.menuBuilder(mainWindow, context)
+    config.menuBuilder(mainWindow, toMenuContext(context))
   } else {
     installAppMenu(context)
   }
@@ -247,9 +326,33 @@ export function createWorkbenchApp(config: WorkbenchAppConfig = {}) {
       registerBuiltinModules(config, context)
       installMenu(config, mainWindow, context)
 
+      // Gated custom-IPC surface for the host. Bound to ctx.senderPolicy so
+      // host channels go through the same gateway as built-in IPC, and
+      // registered into ctx.registry so its handlers are torn down with the
+      // context.
+      const hostIpc = new IpcRegistry(context.senderPolicy)
+      context.registry.add(hostIpc)
+
       const instance: WorkbenchAppInstance = {
         mainWindow,
         context,
+        ipc: hostIpc,
+        // Return the registry wrapper, not the raw disposable: disposing the
+        // wrapper splices the registry entry out AND drives the underlying
+        // teardown, so a single dispose leaves no dead entry behind.
+        registerTrustedWindow: (win: BrowserWindow) =>
+          context.registry.add(registerTrustedWindow(context, win)),
+        registerSimulatorApi: (name: string, handler: SimulatorApiHandler) =>
+          context.registry.add(toDisposable(context.simulatorApis.register(name, handler))),
+        toolbar: {
+          set: (actions: ToolbarActionInput[]) => {
+            // `context.toolbar.set` validates id-uniqueness and throws on a
+            // duplicate BEFORE mutating, so a rejected batch never reaches
+            // the notify below — no phantom ActionsChanged.
+            context.toolbar.set(actions)
+            context.notify.toolbarActionsChanged()
+          },
+        },
         dispose: () => disposeContext(context),
       }
 
@@ -261,6 +364,7 @@ export function createWorkbenchApp(config: WorkbenchAppConfig = {}) {
         instance.updateManager = new UpdateManager({
           checker: config.updateChecker,
           mainWindow,
+          senderPolicy: context.senderPolicy,
           checkInterval: config.updateOptions?.checkInterval,
           initialDelay: config.updateOptions?.initialDelay,
           getCurrentVersion: config.updateOptions?.getCurrentVersion,

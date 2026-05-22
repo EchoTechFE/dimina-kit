@@ -69,7 +69,7 @@ export function getToolbarActions(): Promise<ToolbarAction[]> {
 
 /** Trigger a named toolbar action. */
 export function invokeToolbarAction(actionId: string): Promise<void> {
-  return invoke<void>(`${ToolbarChannel.ActionPrefix}${actionId}`)
+  return invoke<void>(ToolbarChannel.Invoke, actionId)
 }
 
 /** Show the compile-popover overlay anchored below `top`/`left`. */

@@ -29,5 +29,3 @@ export function createSimulatorApiRegistry(): SimulatorApiRegistry {
     },
   }
 }
-
-export const simulatorApiRegistry: SimulatorApiRegistry = createSimulatorApiRegistry()

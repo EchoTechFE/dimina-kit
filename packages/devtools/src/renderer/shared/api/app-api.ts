@@ -17,3 +17,12 @@ export function getBranding(): Promise<AppBranding | undefined> {
 export function getPreloadPath(): Promise<string> {
   return invokeStrict<string>(AppChannel.GetPreloadPath)
 }
+
+/**
+ * Resolve the host-configured header bar height (px). The renderer uses this
+ * to lay out the toolbar / popover so a non-default `headerHeight` config
+ * doesn't desync from the main-process view layout.
+ */
+export function getHeaderHeight(): Promise<number> {
+  return invokeStrict<number>(AppChannel.GetHeaderHeight)
+}
