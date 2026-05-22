@@ -523,7 +523,7 @@ launch({ preloadPath: '/absolute/path/to/my-preload.js' })
 import { registerSimulatorApi } from '@dimina-kit/devtools/simulator-apis'
 
 // 提供 wx.login 的实现（dimina 容器默认未实现，注册后才能用）
-const dispose = registerSimulatorApi('login', async ({ success }) => {
+const dispose = registerSimulatorApi('login', async () => {
   // 主进程上下文：可调用内部 HTTP、读取凭证文件、访问原生模块
   const code = await callInternalAuth()
   return { code }
@@ -537,6 +537,7 @@ dispose()
 
 - **注册时机**：模拟器在启动小程序之前会 `await` 主进程的自定义 API 全量列表并完成注册，因此运行时框架在初始化时一次性枚举 API 表（典型如 Taro 的 `Object.keys(wx)`）也能枚举到 `registerSimulatorApi` 注册的 name。bridge 异常或超时（3s）则降级为"无自定义 API"，不会阻塞小程序启动。
 - **命中顺序**：小程序运行时按 `apiRegistry[name] → MiniApp 实例方法 → 扩展模块兜底` 查找，所以 `registerSimulatorApi` 注册的 name **优先于内置实现**——既能给"未实现"的 wx.* 补功能（如 `wx.login`），也能覆盖默认的 wx.* 行为（如 `wx.request`，dimina-kit 本身就在用这条路把 `request` 接到主进程 fetch）。
+- **回调风格自动桥接**：小程序用微信风格 `wx.<name>({ success, fail, complete })` 调用时，模拟器会把 handler 的 resolve 派发给 `success`、reject 派发给 `fail`，并在两种情况下都触发 `complete`。handler 本身只需 promise 风格 resolve/reject —— `success/fail/complete` 是渲染端回调 id，转发到主进程前已被剔除，handler 不会收到它们。
 - 同名重复注册：后注册的覆盖前者，静默替换。
 - `dispose()` 只会移除自己创建的那次注册——如果之后被别人覆盖了，旧的 disposer 是 no-op。
 - 调用未注册且容器内也没有的 name：小程序侧拿到 reject，错误信息里带 name。
