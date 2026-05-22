@@ -17,7 +17,7 @@ export const SimulatorChannel = {
 } as const
 
 // ── Custom simulator APIs (downstream-registered, main-process handlers) ──
-// list: simulator queries the names registered via @dimina-kit/devtools/simulator-apis.
+// list: simulator queries the names registered via instance.registerSimulatorApi().
 // invoke: simulator forwards an API call to the registry; result/reject propagates.
 //
 // These are ipcMain.handle channels invoked by the **main-window renderer**

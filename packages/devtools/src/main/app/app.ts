@@ -4,6 +4,7 @@ import { app, BrowserWindow, nativeImage } from 'electron'
 import fs from 'fs'
 import path from 'path'
 import type { BuiltinModuleId, WorkbenchAppConfig } from '../../shared/types.js'
+import type { SimulatorApiHandler } from '../services/simulator/custom-apis.js'
 import { rendererDir as defaultRendererDir, defaultPreloadPath } from '../utils/paths.js'
 import { installThemeBackgroundSync } from '../utils/theme.js'
 import { registerAppLifecycle } from './lifecycle.js'
@@ -50,6 +51,8 @@ export interface WorkbenchAppInstance {
   readonly ipc: IpcRegistry
   /** Adds a host-owned BrowserWindow to the trusted-sender set. */
   registerTrustedWindow: (win: BrowserWindow) => Disposable
+  /** Registers a simulator custom API into this context's registry. */
+  registerSimulatorApi: (name: string, handler: SimulatorApiHandler) => Disposable
   automationServer?: AutomationServer
   updateManager?: UpdateManager
   dispose: () => Promise<void>
@@ -293,6 +296,12 @@ export function createWorkbenchApp(config: WorkbenchAppConfig = {}) {
         ipc: hostIpc,
         registerTrustedWindow: (win: BrowserWindow) => {
           const disposable = registerTrustedWindow(context, win)
+          context.registry.add(disposable)
+          return disposable
+        },
+        registerSimulatorApi: (name: string, handler: SimulatorApiHandler) => {
+          const disposer = context.simulatorApis.register(name, handler)
+          const disposable = toDisposable(disposer)
           context.registry.add(disposable)
           return disposable
         },

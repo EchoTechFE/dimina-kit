@@ -5,13 +5,12 @@ import {
   SimulatorResizeSchema,
   SimulatorSetVisibleSchema,
 } from '../../shared/ipc-schemas.js'
-import { simulatorApiRegistry } from '../services/simulator/custom-apis.js'
 import type { WorkbenchContext } from '../services/workbench-context.js'
 import type { Disposable } from '../utils/disposable.js'
 import { validate } from '../utils/ipc-schema.js'
 import { IpcRegistry } from '../utils/ipc-registry.js'
 
-export function registerSimulatorIpc(ctx: Pick<WorkbenchContext, 'views' | 'notify' | 'senderPolicy'>): Disposable {
+export function registerSimulatorIpc(ctx: Pick<WorkbenchContext, 'views' | 'notify' | 'senderPolicy' | 'simulatorApis'>): Disposable {
   return new IpcRegistry(ctx.senderPolicy)
     .handle(SimulatorChannel.Attach, (_, ...args: unknown[]) => {
       const [simWcId, simWidth] = validate(SimulatorChannel.Attach, SimulatorAttachSchema, args)
@@ -29,10 +28,10 @@ export function registerSimulatorIpc(ctx: Pick<WorkbenchContext, 'views' | 'noti
       ctx.views.setVisible(visible, simWidth)
     })
     .handle(SimulatorCustomApiChannel.List, () => {
-      return simulatorApiRegistry.list()
+      return ctx.simulatorApis.list()
     })
     .handle(SimulatorCustomApiChannel.Invoke, (_, ...args: unknown[]) => {
       const [name, params] = validate(SimulatorCustomApiChannel.Invoke, SimulatorCustomApiInvokeSchema, args)
-      return simulatorApiRegistry.invoke(name, params)
+      return ctx.simulatorApis.invoke(name, params)
     })
 }

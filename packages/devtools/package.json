@@ -51,8 +51,7 @@
         "./paths": "./dist/main/utils/paths.js",
         "./workbench-settings": "./dist/main/services/settings/index.js",
         "./preload": "./dist/preload/index.js",
-        "./bootstrap": "./dist/main/app/bootstrap.js",
-        "./simulator-apis": "./dist/main/simulator-apis.js"
+        "./bootstrap": "./dist/main/app/bootstrap.js"
     },
     "typesVersions": {
         "*": {
@@ -103,9 +102,6 @@
             ],
             "preload": [
                 "dist/preload/index.d.ts"
-            ],
-            "simulator-apis": [
-                "dist/main/simulator-apis.d.ts"
             ],
             "projects-provider": [
                 "dist/main/services/projects/index.d.ts"

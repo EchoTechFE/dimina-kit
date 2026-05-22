@@ -15,6 +15,10 @@ import {
   type WorkspaceService,
 } from './workspace/workspace-service.js'
 import { createLocalProjectsProvider } from './projects/local-provider.js'
+import {
+  createSimulatorApiRegistry,
+  type SimulatorApiRegistry,
+} from './simulator/custom-apis.js'
 import { resolveTemplates, sanitizeTemplates } from './projects/templates.js'
 import { BUILTIN_TEMPLATES } from './projects/builtin-templates.js'
 import type {
@@ -106,6 +110,13 @@ export interface WorkbenchContext {
    */
   trustedWindowSenderIds: Set<number>
 
+  /**
+   * Per-context registry of host-registered simulator custom APIs. Populated
+   * via `instance.registerSimulatorApi`; read by the simulator IPC handlers.
+   * One registry per context — no process-global crosstalk.
+   */
+  simulatorApis: SimulatorApiRegistry
+
   /** Aggregates dispose handlers for every IPC handler, listener, watcher, and CDP session registered by the workbench. */
   registry: DisposableRegistry
 }
@@ -159,6 +170,7 @@ export function createWorkbenchContext(opts: CreateContextOptions): WorkbenchCon
 
   ctx.registry = new DisposableRegistry()
   ctx.trustedWindowSenderIds = new Set<number>()
+  ctx.simulatorApis = createSimulatorApiRegistry()
   ctx.windows = createWindowService(opts.mainWindow)
   ctx.views = createViewManager(ctx)
   ctx.notify = createRendererNotifier(ctx)

@@ -1,4 +1,5 @@
 import type { OpenProjectOptions } from '@dimina-kit/devkit'
+import type { SimulatorApiHandler } from '../main/services/simulator/custom-apis.js'
 
 export interface AppInfo {
   appName?: string
@@ -104,6 +105,17 @@ export interface WorkbenchHostInstance {
    */
   registerTrustedWindow(
     win: import('electron').BrowserWindow,
+  ): import('../main/utils/disposable.js').Disposable
+
+  /**
+   * Registers a simulator custom API into THIS context's registry, callable
+   * from mini-program code as `wx.<name>(params)`. The registration joins
+   * `context.registry`, so it is released when the context is disposed.
+   * The returned Disposable removes only the registration it created.
+   */
+  registerSimulatorApi(
+    name: string,
+    handler: SimulatorApiHandler,
   ): import('../main/utils/disposable.js').Disposable
 }
 

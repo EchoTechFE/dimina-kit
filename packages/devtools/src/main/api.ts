@@ -16,8 +16,7 @@ export type { WorkspaceService } from './services/workspace/workspace-service.js
 export type { Project, ProjectPages, ProjectSettings } from './services/projects/project-repository.js'
 
 // ── Simulator extension surface ──────────────────────────────────────────
-export { registerSimulatorApi } from './simulator-apis.js'
-export type { SimulatorApiHandler } from './simulator-apis.js'
+export type { SimulatorApiHandler } from './services/simulator/custom-apis.js'
 
 // ── IPC module registration ──────────────────────────────────────────────
 export { registerAppIpc } from './ipc/app.js'

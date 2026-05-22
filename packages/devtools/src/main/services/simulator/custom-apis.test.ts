@@ -25,7 +25,6 @@ interface SimulatorApiRegistry {
 }
 interface CustomApisModule {
   createSimulatorApiRegistry(): SimulatorApiRegistry
-  simulatorApiRegistry: SimulatorApiRegistry
 }
 
 const MODULE_PATH = './custom-apis'
@@ -35,14 +34,10 @@ async function loadModule(): Promise<CustomApisModule> {
 }
 
 let createSimulatorApiRegistry: CustomApisModule['createSimulatorApiRegistry']
-let simulatorApiRegistry: CustomApisModule['simulatorApiRegistry']
 
 beforeEach(async () => {
   const mod = await loadModule()
   createSimulatorApiRegistry = mod.createSimulatorApiRegistry
-  simulatorApiRegistry = mod.simulatorApiRegistry
-  // Make sure the shared singleton is empty before each test that uses it.
-  simulatorApiRegistry.clear()
 })
 
 describe('createSimulatorApiRegistry — register + list', () => {
@@ -204,37 +199,5 @@ describe('createSimulatorApiRegistry — clear', () => {
 
     expect(reg.list()).toEqual(['new'])
     await expect(reg.invoke('new', null)).resolves.toBe('new')
-  })
-})
-
-describe('simulatorApiRegistry — exported singleton', () => {
-  it('is a SimulatorApiRegistry with the full method surface (catches: accidentally exporting an object literal or a class missing methods)', () => {
-    const r: SimulatorApiRegistry = simulatorApiRegistry
-    expect(typeof r.register).toBe('function')
-    expect(typeof r.list).toBe('function')
-    expect(typeof r.invoke).toBe('function')
-    expect(typeof r.clear).toBe('function')
-  })
-
-  it('is shared across imports (same reference on a fresh dynamic import) — catches: singleton created per-import (e.g. exporting `createSimulatorApiRegistry()` from a side-effecting getter)', async () => {
-    const mod = await loadModule()
-    expect(mod.simulatorApiRegistry).toBe(simulatorApiRegistry)
-
-    // Sanity: state mutations are observable through both references.
-    try {
-      const dispose = simulatorApiRegistry.register('__shared_sanity__', () => 'ok')
-      expect(mod.simulatorApiRegistry.list()).toContain('__shared_sanity__')
-      dispose()
-      expect(mod.simulatorApiRegistry.list()).not.toContain('__shared_sanity__')
-    } finally {
-      if (simulatorApiRegistry.list().includes('__shared_sanity__')) {
-        simulatorApiRegistry.clear()
-      }
-    }
-  })
-
-  it('is distinct from a fresh factory instance (catches: factory secretly returning the singleton)', () => {
-    const fresh = createSimulatorApiRegistry()
-    expect(fresh).not.toBe(simulatorApiRegistry)
   })
 })
