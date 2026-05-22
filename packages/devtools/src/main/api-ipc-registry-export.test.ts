@@ -84,9 +84,12 @@ describe('Requirement A: api.ts re-exports IpcRegistry', () => {
     )
     const src = await fs.readFile(apiPath, 'utf8')
 
+    // A bare `/\bSenderPolicy\b/` would also match a stray mention in a
+    // comment. Require the actual `export type { … SenderPolicy … } from
+    // './utils/ipc-registry.js'` re-export statement.
     expect(
-      /\bSenderPolicy\b/.test(src),
-      'expected src/main/api.ts to re-export the `SenderPolicy` type',
+      /export\s+type\s*\{[^}]*\bSenderPolicy\b[^}]*\}\s+from\s+['"]\.\/utils\/ipc-registry\.js['"]/.test(src),
+      'expected src/main/api.ts to re-export the `SenderPolicy` type from ./utils/ipc-registry.js',
     ).toBe(true)
   })
 })

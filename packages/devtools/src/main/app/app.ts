@@ -3,7 +3,7 @@ import { setupCdpPort } from './bootstrap.js'
 import { app, BrowserWindow, nativeImage } from 'electron'
 import fs from 'fs'
 import path from 'path'
-import type { BuiltinModuleId, ToolbarActionInput, WorkbenchAppConfig } from '../../shared/types.js'
+import type { BuiltinModuleId, MenuContext, ToolbarActionInput, WorkbenchAppConfig } from '../../shared/types.js'
 import type { SimulatorApiHandler } from '../services/simulator/custom-apis.js'
 import { rendererDir as defaultRendererDir, defaultPreloadPath } from '../utils/paths.js'
 import { installThemeBackgroundSync } from '../utils/theme.js'
@@ -182,10 +182,28 @@ function registerBuiltinModules(config: WorkbenchAppConfig, context: WorkbenchCo
   })
 }
 
+/**
+ * Strip the internal-plumbing fields a host menu builder must not reach
+ * (registry / senderPolicy / trustedWindowSenderIds / simulatorApis / toolbar)
+ * so `menuBuilder` receives the narrowed `MenuContext` its contract promises —
+ * at runtime, not just at the type level.
+ */
+function toMenuContext(context: WorkbenchContext): MenuContext {
+  // Shallow-copy, then drop the internal-plumbing fields. A rest-destructure
+  // would be terser but trips no-unused-vars on the dropped siblings.
+  const menuContext: Partial<WorkbenchContext> = { ...context }
+  delete menuContext.registry
+  delete menuContext.senderPolicy
+  delete menuContext.trustedWindowSenderIds
+  delete menuContext.simulatorApis
+  delete menuContext.toolbar
+  return menuContext as MenuContext
+}
+
 function installMenu(config: WorkbenchAppConfig, mainWindow: BrowserWindow, context: WorkbenchContext): void {
   // Menu: use host-provided builder or fall back to default
   if (config.menuBuilder) {
-    config.menuBuilder(mainWindow, context)
+    config.menuBuilder(mainWindow, toMenuContext(context))
   } else {
     installAppMenu(context)
   }

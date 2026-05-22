@@ -335,6 +335,28 @@ describe('Requirement C: ToolbarChannel.Invoke routes to the per-context handler
     await (disposable as { dispose: () => Promise<void> }).dispose()
   })
 
+  it('a replaced action’s stale handler is no longer reachable via Invoke', async () => {
+    const ctx = makeContext()
+    const oldHandler = vi.fn()
+    setToolbar(ctx, [{ id: 'old', label: 'Old', handler: oldHandler }])
+
+    // Whole-table replace: 'old' is dropped, 'new' takes its place.
+    setToolbar(ctx, [{ id: 'new', label: 'New', handler: vi.fn() }])
+
+    const disposable = registerToolbarIpc(ctx as never)
+    const invoke = stubs.ipcHandlers.get(ToolbarChannel.Invoke)!
+
+    // Invoking the dropped id must reject — a stale handler kept in some
+    // never-cleared map would silently fire instead.
+    await expect(Promise.resolve(invoke(fakeEvent, 'old'))).rejects.toThrow()
+    expect(
+      oldHandler,
+      'the handler of a replaced action must never be invoked again',
+    ).not.toHaveBeenCalled()
+
+    await (disposable as { dispose: () => Promise<void> }).dispose()
+  })
+
   it('Invoke routes to the per-context handler, not a sibling context (isolation)', async () => {
     const a = makeContext()
     const b = makeContext()

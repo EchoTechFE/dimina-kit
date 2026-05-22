@@ -291,6 +291,12 @@ describe('Requirement A: instance.toolbar.set', () => {
   it('throws when the same id appears twice in a single set() call', async () => {
     const instance = await setupInstance()
 
+    // Start from a NON-empty toolbar: seed an existing action first. A buggy
+    // "clear-then-rebuild-then-throw" implementation would wipe this before
+    // hitting the duplicate — starting from `[]` could not catch that.
+    instance.toolbar.set([{ id: 'kept', label: 'Kept', handler: vi.fn() }])
+    expect(await getActionsViaIpc(instance)).toEqual([{ id: 'kept', label: 'Kept' }])
+
     // Duplicate id is a host bug — set() must reject the whole batch atomically.
     expect(() =>
       instance.toolbar.set([
@@ -299,9 +305,13 @@ describe('Requirement A: instance.toolbar.set', () => {
       ]),
     ).toThrow()
 
-    // Atomic: the rejected batch must NOT have been partially applied.
+    // Atomic: the rejected batch must NOT have been partially applied, and —
+    // crucially — must NOT have clobbered the pre-existing 'kept' action.
     const actions = await getActionsViaIpc(instance)
-    expect(actions, 'a rejected set() must leave the toolbar unchanged').toEqual([])
+    expect(
+      actions,
+      'a rejected set() must leave the prior toolbar fully intact',
+    ).toEqual([{ id: 'kept', label: 'Kept' }])
 
     await instance.dispose()
   })
