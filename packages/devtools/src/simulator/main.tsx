@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { Application, MiniApp } from 'container-api'
 import { directRequest } from './direct-request'
 import { simulatorApis } from './simulator-api'
+import { resolveCustomApisBridge } from './resolve-custom-apis-bridge'
 import { parseLocationRoute } from '../shared/simulator-route'
 
 declare global {
@@ -119,10 +120,11 @@ function SimulatorApp() {
     }
 
     // Register proxy handlers for downstream-registered main-process APIs.
-    // The bridge is exposed by the simulator preload (installCustomApisBridge);
-    // when running outside Electron (e.g. dev-server smoke tests) it is absent
-    // and we silently skip. Each proxy forwards (name, params) over IPC.
-    const customApisBridge = window.__diminaCustomApis
+    // The bridge is exposed by the simulator preload (installCustomApisBridge).
+    // `resolveCustomApisBridge` returns undefined when it is absent, and warns
+    // if that happens inside Electron (a custom preload that forgot to call
+    // `installCustomApisBridge()`). Each proxy forwards (name, params) over IPC.
+    const customApisBridge = resolveCustomApisBridge()
     if (customApisBridge) {
       customApisBridge.list().then((names) => {
         for (const name of names) {

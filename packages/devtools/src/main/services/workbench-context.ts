@@ -1,5 +1,5 @@
 import type { BrowserWindow } from 'electron'
-import type { CompilationAdapter } from '../../shared/types.js'
+import type { CompilationAdapter, WorkbenchConfig } from '../../shared/types.js'
 import { DisposableRegistry } from '../utils/disposable.js'
 import type { SenderPolicy } from '../utils/ipc-registry.js'
 import { createWorkbenchSenderPolicy } from '../utils/sender-policy.js'
@@ -126,16 +126,24 @@ export interface WorkbenchContext {
   registry: DisposableRegistry
 }
 
-export interface CreateContextOptions {
+/**
+ * Inputs for `createWorkbenchContext`. The scalar config fields it shares with
+ * `WorkbenchConfig` (`adapter` / `apiNamespaces` / `appName` / `headerHeight`)
+ * are derived from there via `Pick` so the two stay in lockstep — no
+ * field-by-field re-declaration. The remaining fields are kept explicit
+ * because their shapes intentionally differ from the config:
+ *  - `preloadPath` / `rendererDir` are REQUIRED here (the caller resolves the
+ *    defaults before constructing the context) but optional in the config;
+ *  - `panels` is the structural `string[]` (the context stores raw ids);
+ *  - `projectsProvider` / `projectTemplates` / `customCreateProjectDialog` use
+ *    the main-process types, not the structural mirrors in `shared/types`.
+ */
+export interface CreateContextOptions
+  extends Pick<WorkbenchConfig, 'adapter' | 'apiNamespaces' | 'appName' | 'headerHeight'> {
   mainWindow: BrowserWindow
-  adapter?: CompilationAdapter
   preloadPath: string
   rendererDir: string
   panels?: string[]
-  apiNamespaces?: string[]
-  appName?: string
-  /** Header bar height in px (default 40). */
-  headerHeight?: number
   brandingProvider?: WorkbenchContext['brandingProvider']
   /** Host-supplied project list backend. Defaults to LocalProjectsProvider. */
   projectsProvider?: ProjectsProvider

@@ -1,5 +1,18 @@
 import type { OpenProjectOptions } from '@dimina-kit/devkit'
 import type { SimulatorApiHandler } from '../main/services/simulator/custom-apis.js'
+import type { WorkbenchContext } from '../main/services/workbench-context.js'
+
+/**
+ * The narrowed view of `WorkbenchContext` handed to a host `menuBuilder`.
+ * Strips the internal pipeline fields (`registry`, `senderPolicy`,
+ * `trustedWindowSenderIds`, `simulatorApis`, `toolbar`) so a menu builder can
+ * read menu-relevant state (workspace, views, windows, notify, appName, …)
+ * without reaching into devtools-internal plumbing.
+ */
+export type MenuContext = Omit<
+  WorkbenchContext,
+  'registry' | 'senderPolicy' | 'trustedWindowSenderIds' | 'simulatorApis' | 'toolbar'
+>
 
 export interface AppInfo {
   appName?: string
@@ -184,7 +197,7 @@ export interface WorkbenchAppConfig extends WorkbenchConfig {
   /** Absolute path to a window/taskbar icon (png or ico). macOS uses the app bundle icon. */
   icon?: string
   /** Custom menu builder. Should call Menu.setApplicationMenu(). If omitted, the default dimina-devtools menu is installed. */
-  menuBuilder?: (mainWindow: import('electron').BrowserWindow, context: WorkbenchHostInstance['context']) => void
+  menuBuilder?: (mainWindow: import('electron').BrowserWindow, menuContext: MenuContext) => void
   /** Called after window and context are created but before start() resolves. Use to register custom IPC handlers. */
   onSetup?: (instance: WorkbenchHostInstance) => void | Promise<void>
   /** Called before window close when a session is active. Session disposal happens automatically after this hook. */

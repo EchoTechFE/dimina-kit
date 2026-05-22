@@ -18,16 +18,6 @@ export type { Project, ProjectPages, ProjectSettings } from './services/projects
 // ── Simulator extension surface ──────────────────────────────────────────
 export type { SimulatorApiHandler } from './services/simulator/custom-apis.js'
 
-// ── IPC module registration ──────────────────────────────────────────────
-export { registerAppIpc } from './ipc/app.js'
-export { registerSimulatorIpc } from './ipc/simulator.js'
-export { registerPanelsIpc } from './ipc/panels.js'
-export { registerPopoverIpc } from './ipc/popover.js'
-export { registerSettingsIpc } from './ipc/settings.js'
-export { registerProjectsIpc } from './ipc/projects.js'
-export { registerSessionIpc } from './ipc/session.js'
-export { registerToolbarIpc } from './ipc/toolbar.js'
-
 // ── Paths ────────────────────────────────────────────────────────────────
 export {
   rendererDir,
