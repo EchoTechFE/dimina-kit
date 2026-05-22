@@ -6,5 +6,13 @@
 //
 // `@/...` resolves via the alias defined in vite.config.api.js, which mirrors
 // upstream container's own vite.config.mjs (`@: containerRoot/src`).
+
+// Global stylesheet — `body` font-family/size reset plus `* { margin/padding }`.
+// Upstream's index.html pulls this in via index.js; the library build did not,
+// so the simulator document fell back to the UA serif font for the navigation
+// bar title (a bare <h2> with no font-family of its own). Importing it here
+// folds the reset into container.css, which the simulator loads.
+import '@/styles/app.scss'
+
 export { Application } from '@/pages/application/application'
 export { MiniApp } from '@/pages/miniApp/miniApp'
