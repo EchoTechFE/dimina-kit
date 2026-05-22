@@ -327,4 +327,51 @@ describe('Requirement B: instance.registerSimulatorApi', () => {
     await a.dispose()
     await b.dispose()
   })
+
+  // ── Registry-entry leak: the returned Disposable must be the registry wrapper ─
+  //
+  // `instance.registerSimulatorApi` does `ctx.registry.add(disposable)` but
+  // `DisposableRegistry.add()` RETURNS a wrapper — only disposing that wrapper
+  // splices the entry out of `registry.entries`. If the method returns the raw
+  // `disposable` instead of the wrapper, the host can dispose it (removing the
+  // API) yet the dead registry entry lingers, accumulating until the whole
+  // context is torn down. The fix must return the wrapper so a single dispose
+  // does BOTH: remove the API AND drop the registry entry.
+
+  it('disposing the returned Disposable drops its ctx.registry entry (no leak)', async () => {
+    const instance = await setupInstance()
+    const reg = ctxRegistry(instance)
+    const registry = instance.context.registry as unknown as { size: number }
+
+    // `size` is the only stable window into live registry entries — the fix
+    // adds it as a readonly getter on DisposableRegistry.
+    const baseline = registry.size
+
+    const disposable = instance.registerSimulatorApi('leak.api', () => 'z')
+
+    // Registration added exactly one live entry to ctx.registry.
+    expect(
+      registry.size,
+      'registerSimulatorApi must add exactly one entry to ctx.registry',
+    ).toBe(baseline + 1)
+
+    await disposable.dispose()
+
+    // RED before the fix: the returned disposable is the RAW toDisposable(disposer),
+    // not the registry wrapper, so disposing it never splices the entry out —
+    // size stays at baseline+1 (a leaked dead entry).
+    expect(
+      registry.size,
+      'disposing the returned Disposable must remove its ctx.registry entry — return the wrapper from registry.add(), not the raw disposable',
+    ).toBe(baseline)
+
+    // The dispose must ALSO release the underlying resource: the API is gone.
+    // So the single dispose does both jobs.
+    expect(
+      reg.list(),
+      'disposing the returned Disposable must also remove the simulator API',
+    ).not.toContain('leak.api')
+
+    await instance.dispose()
+  })
 })

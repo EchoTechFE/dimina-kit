@@ -100,7 +100,7 @@ interface ToolbarAction {
 
 设计要点：
 
-- **`toolbar.set(actions[])` 整表替换**：工具栏天然是「按 host 当前状态算出的一张表」（如 qdmp 按登录态显示「登录」或「注销」、`label` 含真实用户名）。host 状态变化时构造新表、整体 `set()` —— 框架原子替换 label + handler、dispose 被移除项的 handler、校验 id 唯一、通知 renderer。这比「一次性 `registerToolbarAction` + 额外的 change 事件」更贴合实际：后者把「重算一张表」拆成了两件事。
+- **`toolbar.set(actions[])` 整表替换**：工具栏天然是「按 host 当前状态算出的一张表」（如 qdmp 按登录态显示「登录」或「注销」、`label` 含真实用户名）。host 状态变化时构造新表、整体 `set()` —— 框架原子替换整张表（id / label / handler）、校验 id 唯一、通知 renderer；被移除项的 handler 只是普通函数，随旧表一起丢弃。这比「一次性 `registerToolbarAction` + 额外的 change 事件」更贴合实际：后者把「重算一张表」拆成了两件事。
 - **`instance.ipc`**：host 注册自定义 IPC 的唯一受支持入口，已绑定 `ctx.senderPolicy`，注册物自动进 `ctx.registry`。
 - **`registerTrustedWindow`**：默认 `senderPolicy` 只信主窗口 + settings 窗口 + 两个 overlay。host 自己的弹窗（加载 host 自有 HTML、可信）需经此显式加入受信集，否则其发起的 `instance.ipc` 调用会被拒。返回 `Disposable`，窗口关闭即移除。
 

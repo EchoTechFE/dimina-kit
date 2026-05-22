@@ -337,17 +337,13 @@ export function createWorkbenchApp(config: WorkbenchAppConfig = {}) {
         mainWindow,
         context,
         ipc: hostIpc,
-        registerTrustedWindow: (win: BrowserWindow) => {
-          const disposable = registerTrustedWindow(context, win)
-          context.registry.add(disposable)
-          return disposable
-        },
-        registerSimulatorApi: (name: string, handler: SimulatorApiHandler) => {
-          const disposer = context.simulatorApis.register(name, handler)
-          const disposable = toDisposable(disposer)
-          context.registry.add(disposable)
-          return disposable
-        },
+        // Return the registry wrapper, not the raw disposable: disposing the
+        // wrapper splices the registry entry out AND drives the underlying
+        // teardown, so a single dispose leaves no dead entry behind.
+        registerTrustedWindow: (win: BrowserWindow) =>
+          context.registry.add(registerTrustedWindow(context, win)),
+        registerSimulatorApi: (name: string, handler: SimulatorApiHandler) =>
+          context.registry.add(toDisposable(context.simulatorApis.register(name, handler))),
         toolbar: {
           set: (actions: ToolbarActionInput[]) => {
             // `context.toolbar.set` validates id-uniqueness and throws on a

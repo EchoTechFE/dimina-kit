@@ -119,13 +119,26 @@ test.describe('Extension host (createWorkbenchApp onSetup)', () => {
     expect(height).toBe(72)
   })
 
-  test('registerSimulatorApi: wx.e2eEcho proxies to the host handler', async () => {
-    // The simulator preload exposes `window.__diminaCustomApis` — the same
-    // bridge the dimina runtime uses to back `wx.<customApi>()`. Invoking it
-    // directly exercises the full host-extension path without depending on the
-    // demo mini-app calling the API itself:
-    //   webview → bridge → renderer proxy → SimulatorCustomApiChannel.Invoke
-    //   → ctx.simulatorApis → host's `e2eEcho` handler.
+  test('registerSimulatorApi: custom-apis bridge proxies e2eEcho to the host handler', async () => {
+    // SCOPE: this test covers the custom-apis BRIDGE layer only —
+    //   simulator webview → window.__diminaCustomApis.invoke → renderer proxy
+    //   → SimulatorCustomApiChannel.Invoke → ctx.simulatorApis → host's
+    //   `e2eEcho` handler.
+    // It does NOT cover the simulator's `wx.*` registration layer — the loop in
+    // `src/simulator/main.tsx` that consumes `__diminaCustomApis` and calls
+    // `miniApp.registerApi(name, …)` so the API is reachable as `wx.<name>()`
+    // from mini-app logic. That layer is NOT exercised here: `wx` lives only
+    // inside the dimina service Worker (the logic thread), which is not a
+    // webContents and so is unreachable from Playwright's `executeJavaScript` /
+    // `evalInSimulator`, and `main.tsx` keeps its `MiniApp` instance
+    // module-scoped (not exposed on `window`). Testing the `wx.e2eEcho(...)`
+    // call path end-to-end would require either the demo mini-app's logic to
+    // call it or an implementation hook exposing the registry — neither exists.
+    //
+    // `window.__diminaCustomApis` is the bridge the dimina runtime would itself
+    // consult to back `wx.<customApi>()`; invoking it directly is the closest
+    // e2e-reachable proxy for the host-extension path and does not depend on
+    // the demo mini-app calling the API itself.
     // The bridge `invoke` promise only settles once the renderer proxy posts
     // a response back; if the proxy hasn't attached yet it never resolves, so
     // each attempt races the invoke against an in-page timeout — that turns a

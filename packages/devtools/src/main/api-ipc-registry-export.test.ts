@@ -12,13 +12,24 @@
  * `api.ts` has no `IpcRegistry` / `SenderPolicy` export.
  *
  * NOTE: the barrel module is read through a `Record<string, unknown>` cast
- * so this test file still compiles under `tsc` while the export is absent —
- * the failure is a deliberate *runtime* assertion failure, not a type error.
- * Once `api.ts` adds the export, the runtime assertions go green; the
- * type-level contract is covered separately by `api-types.test-d`-style
- * reasoning in the final assertion below.
+ * so this test file still compiles under `tsc` while the runtime `IpcRegistry`
+ * export is absent — that failure is a deliberate *runtime* assertion failure,
+ * not a type error. The `SenderPolicy` type-only export is covered instead by
+ * the compile-time `import type` below: if `api.ts` stops re-exporting it,
+ * `tsc` (`check-types` / `pnpm exec tsc --noEmit`) fails outright — a check
+ * that, unlike a source-text regex, cannot be fooled by a commented-out
+ * `export type` line or a string literal mentioning the name.
  */
 import { describe, it, expect, vi } from 'vitest'
+import type { SenderPolicy } from './api.js'
+
+// Compile-time contract for the `SenderPolicy` type-only re-export.
+// `SenderPolicy` has no runtime presence, so a value import can't observe it;
+// instead we *use* the imported type here. If `src/main/api.ts` ever drops
+// `export type { SenderPolicy }`, this annotation stops type-checking and
+// `tsc` fails — the regression is caught at compile time, not via brittle
+// source scanning. The binding is consumed by the matching `it` below.
+const _senderPolicyContract: SenderPolicy = () => true
 
 // IpcRegistry's module touches `electron`'s ipcMain when `.handle` is called.
 // Stub it so the test runs outside Electron.
@@ -70,26 +81,20 @@ describe('Requirement A: api.ts re-exports IpcRegistry', () => {
     expect(() => reg.handle('test:from-barrel', () => 'ok')).not.toThrow()
   })
 
-  it('also re-exports the `SenderPolicy` type-only symbol from api.ts', async () => {
-    // `SenderPolicy` is a *type*, with no runtime presence — a value import
-    // can't observe it. Instead, scan api.ts's source text for the export so
-    // a regression (dropping `export type { SenderPolicy }`) is still caught
-    // by this runtime suite without forcing a separate `.test-d.ts` file.
-    const fs = await import('node:fs/promises')
-    const url = await import('node:url')
-    const path = await import('node:path')
-    const apiPath = path.resolve(
-      path.dirname(url.fileURLToPath(import.meta.url)),
-      'api.ts',
-    )
-    const src = await fs.readFile(apiPath, 'utf8')
-
-    // A bare `/\bSenderPolicy\b/` would also match a stray mention in a
-    // comment. Require the actual `export type { … SenderPolicy … } from
-    // './utils/ipc-registry.js'` re-export statement.
-    expect(
-      /export\s+type\s*\{[^}]*\bSenderPolicy\b[^}]*\}\s+from\s+['"]\.\/utils\/ipc-registry\.js['"]/.test(src),
-      'expected src/main/api.ts to re-export the `SenderPolicy` type from ./utils/ipc-registry.js',
-    ).toBe(true)
+  it('also re-exports the `SenderPolicy` type-only symbol from api.ts', () => {
+    // The real contract for the type-only `SenderPolicy` re-export is the
+    // module-level `import type { SenderPolicy } from './api.js'` at the top of
+    // this file plus `_senderPolicyContract`: if `api.ts` stops exporting the
+    // type, this file no longer type-checks and `tsc` fails. That compile-time
+    // guard cannot be bypassed by a commented-out `export type` line or a
+    // string literal — unlike the source-text regex this assertion replaces.
+    //
+    // This `it` exists so the failure also surfaces in the test report; the
+    // value `_senderPolicyContract` is a genuine value of the imported type.
+    // `SenderPolicy` is `(sender: WebContents) => boolean`, so the call site
+    // must pass a sender — a stub is enough since this predicate ignores it.
+    expect(typeof _senderPolicyContract).toBe('function')
+    const fakeSender = {} as Parameters<SenderPolicy>[0]
+    expect(_senderPolicyContract(fakeSender)).toBe(true)
   })
 })

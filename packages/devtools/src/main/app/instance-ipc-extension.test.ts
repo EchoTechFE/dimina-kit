@@ -435,12 +435,13 @@ describe('Requirement B: instance.registerTrustedWindow', () => {
 
   // ── Reference-counting semantics for repeated registration ────────────────
   //
-  // `trustedWindowSenderIds` is a `Set<number>` keyed on `webContents.id`, so
-  // registering the SAME window twice writes a single set entry. A naive
-  // implementation that just `set.delete(id)` on dispose lets the FIRST
+  // `trustedWindowSenderIds` is a `Map<number, number>` keyed on
+  // `webContents.id` whose value is a reference count, so registering the SAME
+  // window twice bumps the count to 2 under a single key. A naive
+  // implementation that just `map.delete(id)` on dispose lets the FIRST
   // dispose evict the window even though a second, still-live registration
-  // exists. The trusted state must be reference-counted: it survives until
-  // EVERY registration's Disposable has been disposed.
+  // exists. The trusted state must be reference-counted: the entry survives
+  // until EVERY registration's Disposable has been disposed (count → 0).
 
   it('registering the same window twice keeps it trusted until BOTH disposables are disposed', async () => {
     const instance = await setupInstance()
@@ -527,5 +528,55 @@ describe('Requirement B: instance.registerTrustedWindow', () => {
       instance.context.senderPolicy(hostWin.webContents),
       'window stays un-trusted after disposing the leftover registration post-close',
     ).toBe(false)
+  })
+
+  // ── Registry-entry leak: the returned Disposable must be the registry wrapper ─
+  //
+  // `instance.registerTrustedWindow` does `ctx.registry.add(disposable)` but
+  // `DisposableRegistry.add()` RETURNS a wrapper — only disposing that wrapper
+  // splices the entry out of `registry.entries`. If the method returns the raw
+  // `disposable` instead of the wrapper, the host can dispose it (un-trusting
+  // the window) yet the dead registry entry lingers, accumulating until the
+  // whole context is torn down. The fix must return the wrapper so a single
+  // dispose does BOTH: un-trust the window AND drop the registry entry.
+
+  it('disposing the returned Disposable drops its ctx.registry entry (no leak)', async () => {
+    const instance = await setupInstance()
+    const reg = instance as unknown as {
+      registerTrustedWindow: (w: import('electron').BrowserWindow) => import('../utils/disposable.js').Disposable
+    }
+    const registry = instance.context.registry as unknown as { size: number }
+
+    // `size` is the only stable window into live registry entries — the fix
+    // adds it as a readonly getter on DisposableRegistry.
+    const baseline = registry.size
+
+    const hostWin = new BrowserWindowMock()
+    const disposable = reg.registerTrustedWindow(hostWin)
+
+    // Registration added exactly one live entry to ctx.registry.
+    expect(
+      registry.size,
+      'registerTrustedWindow must add exactly one entry to ctx.registry',
+    ).toBe(baseline + 1)
+
+    await disposable.dispose()
+
+    // RED before the fix: the returned disposable is the RAW disposable, not the
+    // registry wrapper, so disposing it never splices the entry out — size stays
+    // at baseline+1 (a leaked dead entry).
+    expect(
+      registry.size,
+      'disposing the returned Disposable must remove its ctx.registry entry — return the wrapper from registry.add(), not the raw disposable',
+    ).toBe(baseline)
+
+    // The dispose must ALSO release the underlying resource: the window is
+    // un-trusted. So the single dispose does both jobs.
+    expect(
+      instance.context.senderPolicy(hostWin.webContents),
+      'disposing the returned Disposable must also un-trust the window',
+    ).toBe(false)
+
+    await instance.dispose()
   })
 })

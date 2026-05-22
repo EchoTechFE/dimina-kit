@@ -548,7 +548,7 @@ interface WorkbenchContext {
   // ── 扩展容器（host 通过 instance 上的方法写入，不直接操作）──
   simulatorApis: SimulatorApiRegistry  // instance.registerSimulatorApi 写入
   toolbar: ToolbarStore                // instance.toolbar.set 写入
-  trustedWindowSenderIds: Set<number>  // instance.registerTrustedWindow 写入
+  trustedWindowSenderIds: Map<number, number>  // instance.registerTrustedWindow 写入（webContents.id → 引用计数）
 
   // ── Internal lifecycle / security (host 不直接消费) ──
   registry: DisposableRegistry // 框架在创建时统一聚合 dispose
