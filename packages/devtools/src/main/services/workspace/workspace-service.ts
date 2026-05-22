@@ -1,4 +1,3 @@
-import { webContents } from 'electron'
 import type { CompileConfig, ProjectSession } from '../../../shared/types.js'
 import type { WorkbenchContext } from '../workbench-context.js'
 import * as repo from '../projects/project-repository.js'
@@ -211,10 +210,8 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
     hasActiveSession: () => currentSession !== null,
 
     async captureThumbnail(projectPath) {
-      const simWcId = ctx.views.getSimulatorWebContentsId()
-      if (!simWcId) return null
-      const wc = webContents.fromId(simWcId)
-      if (!wc || wc.isDestroyed()) return null
+      const wc = ctx.views.getSimulatorWebContents()
+      if (!wc) return null
       try {
         const image = await wc.capturePage()
         const dataUrl = `data:image/png;base64,${image.toPNG().toString('base64')}`

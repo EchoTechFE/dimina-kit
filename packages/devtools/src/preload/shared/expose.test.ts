@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { exposeOnMainWorld } from './expose'
 
-// 模拟 electron 的 contextBridge
-const mockExposeInMainWorld = vi.fn()
+// Stub electron's contextBridge; each test drives exposeInMainWorld's
+// behaviour (resolve vs throw) through mockExposeInMainWorld.
+const { mockExposeInMainWorld } = vi.hoisted(() => ({ mockExposeInMainWorld: vi.fn() }))
 
 vi.mock('electron', () => ({
   contextBridge: {
@@ -9,18 +11,9 @@ vi.mock('electron', () => ({
   },
 }))
 
-// expose.ts 尚不存在；用动态 import + 字符串拼接绕过 tsc 静态检查，
-// 让 vitest 在运行时抛出 MODULE_NOT_FOUND（red 阶段预期失败）。
 describe('exposeOnMainWorld', () => {
-  let exposeOnMainWorld: (key: string, value: unknown) => () => void
-
-  beforeEach(async () => {
-    vi.resetModules()
+  beforeEach(() => {
     mockExposeInMainWorld.mockReset()
-    // 拼接路径使 tsc 无法静态解析；vitest 运行时会找不到模块而报错
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const mod = await import(/* @vite-ignore */ './expose' + '') as any
-    exposeOnMainWorld = mod.exposeOnMainWorld
   })
 
   afterEach(() => {

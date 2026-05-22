@@ -88,10 +88,11 @@ function makePartialProvider() {
   }
 }
 
-/** Force the simulator webContents id so capturePage path is reachable. */
+/** Force the simulator webContents so the capturePage path is reachable. */
 function withSimulatorId(ctx: ReturnType<typeof createWorkbenchContext>) {
-  ;(ctx.views as unknown as { getSimulatorWebContentsId: () => number | null })
-    .getSimulatorWebContentsId = () => 1
+  const fakeWc = { id: 1, isDestroyed: () => false, capturePage: capturePageMock }
+  ;(ctx.views as unknown as { getSimulatorWebContents: () => unknown })
+    .getSimulatorWebContents = () => fakeWc
   return ctx
 }
 
