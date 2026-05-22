@@ -1,18 +1,17 @@
 # Dimina DevTools
 
-基于 Electron 的小程序模块化开发者工具。提供模拟器、Chrome DevTools 面板、WXML/AppData/Storage 面板、编译配置等功能。
+基于 Electron 的小程序开发者工具。提供模拟器、Chrome DevTools 面板、WXML/AppData/Storage 面板、编译配置等功能。
 
-所有功能拆分为独立可导入的模块，第三方可按需组装，最大程度支持自定义。
+下游 host 通过 `createWorkbenchApp()` 集成并定制 devtools。扩展模型设计见 [`docs/extension-model.md`](docs/extension-model.md)。
 
 ---
 
-## 三种接入方式
+## 两种接入方式
 
-| 级别         | 入口                   | 控制力             | 适合场景             |
-| ------------ | ---------------------- | ------------------ | -------------------- |
-| **零配置**   | `launch()`             | 无                 | 直接运行             |
-| **配置驱动** | `createWorkbenchApp()` | 开关模块、选择面板 | 简单定制             |
-| **模块组装** | 单独 import 各模块     | 完全控制           | 深度定制、自定义 IPC |
+| 级别         | 入口                   | 控制力                | 适合场景       |
+| ------------ | ---------------------- | --------------------- | -------------- |
+| **零配置**   | `launch()`             | 无                    | 直接运行       |
+| **配置驱动** | `createWorkbenchApp()` | 配置 Provider + 扩展点 | 品牌化、深度定制 |
 
 ### 零配置
 
@@ -23,124 +22,57 @@ launch()
 
 ### 配置驱动
 
-```typescript
-import { createWorkbenchApp } from '@dimina-kit/devtools/app'
-
-createWorkbenchApp({
-  appName: 'My DevTools',
-  adapter: myAdapter,
-  panels: ['console', 'storage'], // 只显示这两个内置面板
-  modules: { settings: false }, // 禁用设置面板模块
-  window: { width: 1400, height: 900 },
-}).start()
-```
-
-### 宿主扩展（推荐用于品牌化 / 自定义功能）
-
-基于 `createWorkbenchApp()` 的配置驱动模式，通过 hooks 注入宿主逻辑，无需手动组装模块：
+扩展点分两类：**配置 Provider**（构造期、一对一，替换某个内置能力）走 `createWorkbenchApp` 配置字段；**Contribution**（`onSetup` 期、一对多，添加多个同类条目）走 `onSetup(instance)` 上的 typed 方法。所有 Contribution 都 per-context，随 context 自动销毁。
 
 ```typescript
 import { suppressEpipe } from '@dimina-kit/devtools/bootstrap'
 import { createWorkbenchApp } from '@dimina-kit/devtools/app'
 import { rendererDir } from '@dimina-kit/devtools/paths'
-import { ipcMain, Menu } from 'electron'
+import { Menu } from 'electron'
 
 suppressEpipe()
 
 createWorkbenchApp({
+  // ── 配置 Provider（构造期，一对一）──
   appName: '我的开发工具',
   adapter: myAdapter,
   preloadPath: '/path/to/my-preload.js',
   rendererDir,
   apiNamespaces: ['my'],
+  headerHeight: 72,
   brandingProvider: () => ({ appName: '我的开发工具' }),
-  toolbarActions: () => [
-    { id: 'deploy', label: '发布' },
-    { id: 'preview', label: '预览' },
-  ],
   icon: '/path/to/icon.png',
-  menuBuilder: (mainWindow, ctx) => {
-    // 自定义菜单，ctx 是 WorkbenchContext
+  menuBuilder: (mainWindow, menuCtx) => {
+    // menuCtx 是 MenuContext（只读 menu 相关状态）
     Menu.setApplicationMenu(/* ... */)
   },
-  onSetup: ({ mainWindow, context }) => {
-    // 注册自定义 IPC handler
-    ipcMain.handle('toolbar:action:deploy', async () => {
-      // 通过 service 访问状态：context.workspace.getProjectPath()、context.workspace.hasActiveSession()
-    })
+
+  // ── Contribution（onSetup 期，一对多）──
+  onSetup: (instance) => {
+    // simulator 自定义 API：per-context
+    instance.registerSimulatorApi('login', (params) => myLogin(params))
+
+    // 工具栏：整表替换，随 host 状态（如登录态）重算时再 set 一次
+    const refreshToolbar = () => instance.toolbar.set([
+      { id: 'deploy', label: '发布', handler: () => deploy() },
+      { id: 'preview', label: '预览', handler: () => preview() },
+    ])
+    refreshToolbar()
+
+    // 自定义 IPC：经 gated 的 IpcRegistry，不再裸 ipcMain.handle
+    instance.ipc.handle('my:action', () => collectStats())
+
+    // host 自己的弹窗须注册为受信 sender 后才能调 instance.ipc
+    // const win = createDialogWindow(/* ... */)
+    // instance.registerTrustedWindow(win)
   },
   onBeforeClose: ({ context }) => {
-    // 窗口关闭前的自定义清理逻辑
-    // session 关闭和 view 销毁由框架自动处理
+    // 窗口关闭前的自定义清理；session 关闭和 view 销毁由框架自动处理
   },
 }).start()
 ```
 
-### 模块组装（仅在需要完全控制时使用）
-
-```typescript
-import { app, globalShortcut } from 'electron'
-import path from 'path'
-import { createMainWindow } from '@dimina-kit/devtools/create-window'
-import { createWorkbenchContext } from '@dimina-kit/devtools/context'
-import { registerAppIpc } from '@dimina-kit/devtools'
-import { registerSimulatorIpc } from '@dimina-kit/devtools/ipc-simulator'
-import { registerPanelsIpc } from '@dimina-kit/devtools/ipc-panels'
-import { registerToolbarIpc } from '@dimina-kit/devtools/ipc-toolbar'
-import { registerPopoverIpc } from '@dimina-kit/devtools/ipc-popover'
-import { registerProjectsIpc } from '@dimina-kit/devtools/ipc-projects'
-import { registerSessionIpc } from '@dimina-kit/devtools/ipc-session'
-// registerSettingsIpc 不需要，不导入
-import { rendererDir, defaultPreloadPath } from '@dimina-kit/devtools/paths'
-
-app.whenReady().then(() => {
-  const mainWindow = createMainWindow({
-    title: 'My DevTools',
-    indexHtml: path.join(rendererDir, 'entries/main/index.html'),
-  })
-
-  const ctx = createWorkbenchContext({
-    mainWindow,
-    adapter: myAdapter,
-    preloadPath: defaultPreloadPath,
-    rendererDir,
-  })
-
-  // registerAppIpc 必装：renderer 启动时调用 app:getPreloadPath / app:getBranding，
-  // 缺它会卡在加载阶段。
-  registerAppIpc(ctx)
-  registerProjectsIpc(ctx)
-  registerSessionIpc(ctx)
-  registerSimulatorIpc(ctx)
-  registerPanelsIpc(ctx)
-  registerToolbarIpc(ctx)
-  registerPopoverIpc(ctx)
-
-  // Storage / 元素选区面板的后端 handler 由 setupSimulatorStorage 单独装。
-  // 该函数当前**未列入稳定公共 API**（在 `@dimina-kit/devtools` 之外）。
-  // 若需要这两个面板，建议改用上方的 `createWorkbenchApp({ onSetup })` 路线，
-  // 框架会自动注册；模块组装路线下你只能用不依赖它们的精简面板集。
-
-  // 添加自定义 IPC — 通过 ctx.workspace 访问会话状态
-  ipcMain.handle('my:action', () => {
-    console.log('current project:', ctx.workspace.getProjectPath())
-  })
-
-  mainWindow.on('resize', () => ctx.views.repositionAll())
-  mainWindow.on('close', async (e) => {
-    if (ctx.workspace.hasActiveSession()) {
-      e.preventDefault()
-      await ctx.workspace.closeProject()
-      ctx.notify.windowNavigateBack()
-    }
-  })
-})
-
-app.on('window-all-closed', () => {
-  globalShortcut.unregisterAll()
-  app.quit()
-})
-```
+> Contribution 注册物全部自动进 `context.registry`，host 无需手写 cleanup。devtools 内部仍用 `WorkbenchModule` 组织内置 IPC 模块，但这是实现细节，不再作为对外接入方式导出。
 
 ---
 
@@ -251,15 +183,15 @@ src/
 
 `launch()` 和 `createWorkbenchApp()` 共用：
 
-| 字段               | 类型                    | 默认值              | 说明                               |
-| ------------------ | ----------------------- | ------------------- | ---------------------------------- |
-| `appName`          | `string`                | `'Dimina DevTools'` | 窗口标题                           |
-| `adapter`          | `CompilationAdapter`    | 内置                | 项目编译适配器                     |
-| `panels`           | `BuiltinPanelId[]`      | 全部四个            | 显示哪些内置面板                   |
-| `preloadPath`      | `string`                | 内置                | 自定义 preload 脚本路径            |
-| `apiNamespaces`    | `string[]`              | `[]`                | 自定义 API 命名空间（如 `['qd']`） |
-| `brandingProvider` | `() => { appName }`     | —                   | 品牌信息 provider                  |
-| `toolbarActions`   | `() => ToolbarAction[]` | —                   | 工具栏动作按钮 provider            |
+| 字段               | 类型                 | 默认值              | 说明                               |
+| ------------------ | -------------------- | ------------------- | ---------------------------------- |
+| `appName`          | `string`             | `'Dimina DevTools'` | 窗口标题                           |
+| `adapter`          | `CompilationAdapter` | 内置                | 项目编译适配器                     |
+| `panels`           | `BuiltinPanelId[]`   | 全部四个            | 显示哪些内置面板                   |
+| `preloadPath`      | `string`             | 内置                | 自定义 preload 脚本路径            |
+| `apiNamespaces`    | `string[]`           | `[]`                | 自定义 API 命名空间（如 `['qd']`） |
+| `brandingProvider` | `() => { appName }`  | —                   | 品牌信息 provider                  |
+| `headerHeight`     | `number`             | `40`                | 头部栏高度（px），同步下发 main + renderer |
 
 ### WorkbenchAppConfig（扩展 WorkbenchConfig）
 
@@ -267,15 +199,26 @@ src/
 
 | 字段            | 类型                                        | 默认值      | 说明                                              |
 | --------------- | ------------------------------------------- | ----------- | ------------------------------------------------- |
-| `modules`       | `Partial<Record<BuiltinModuleId, boolean>>` | 全部 `true` | 开关 IPC 模块组                                   |
+| `modules`       | `Partial<Record<BuiltinModuleId, boolean>>` | 全部 `true` | 开关内置 IPC 模块组                               |
 | `rendererDir`   | `string`                                    | 内置        | 自定义 renderer HTML 目录                         |
 | `icon`          | `string`                                    | —           | 窗口/任务栏图标路径（macOS 使用 app bundle 图标） |
-| `menuBuilder`   | `(mainWindow, context) => void`             | 内置菜单    | 自定义菜单构建器                                  |
-| `onSetup`       | `(instance) => void`                        | —           | 窗口和 context 创建后的回调，用于注册自定义 IPC   |
+| `menuBuilder`   | `(mainWindow, menuContext: MenuContext) => void` | 内置菜单 | 自定义菜单构建器；`menuContext` 为收窄后的 `MenuContext`，不含 `registry`/`senderPolicy` 等内部管线 |
+| `onSetup`       | `(instance) => void`                        | —           | 窗口和 context 创建后的回调，用于注册 Contribution（见下文）|
 | `onBeforeClose` | `(instance) => void`                        | —           | 窗口关闭前的回调，session 关闭由框架自动处理      |
 | `window`        | `WorkbenchWindowConfig`                     | —           | 窗口尺寸覆盖                                      |
 | `updateChecker` | `UpdateChecker`                             | —           | 自定义更新检查器；提供后启用"检查更新"功能        |
 | `updateOptions` | `{ checkInterval?, initialDelay?, getCurrentVersion? }` | —  | 仅当 `updateChecker` 提供时生效，默认 1h / 5s     |
+
+### onSetup Contribution
+
+`onSetup(instance)` 收到的 `instance` 上有一组 typed 注册方法，全部 per-context、自动进 `context.registry`：
+
+| 方法 | 说明 |
+| --- | --- |
+| `instance.registerSimulatorApi(name, handler)` | 注册 simulator 自定义 API，小程序里 `wx.<name>()` 调用（详见下方"Simulator 自定义 API"）。返回 `Disposable` |
+| `instance.toolbar.set(actions)` | 原子整表替换工具栏；`actions` 为 `ToolbarActionInput[]`（`{ id, label, handler }`），`id` 重复抛错。host 状态变化（如登录态）时构造新表再 `set` 一次 |
+| `instance.ipc` | `IpcRegistry` 实例，`instance.ipc.handle(channel, fn)` 注册自定义 IPC；已绑定 `senderPolicy` 网关 |
+| `instance.registerTrustedWindow(win)` | 把 host 自有弹窗 `BrowserWindow` 加入受信 sender 集，否则其发起的 `instance.ipc` 调用会被网关拒绝。窗口关闭即移除 |
 
 ### 内置面板 ID
 
@@ -505,13 +448,13 @@ launch({ preloadPath: '/absolute/path/to/my-preload.js' })
 
 ## Simulator 自定义 API
 
-下游可以通过 `registerSimulatorApi` 把业务 API 注入到模拟器内运行的小程序。Handler 在 Electron **主进程**执行，能用任何 Node 能力（fs、net、原生模块、持久状态）；模拟器侧拿到 `wx.<name>(params)` 调用后通过 IPC 转发到主进程，await 返回结果，handler 抛错则原型回传给小程序。
+下游通过 `onSetup` 里的 `instance.registerSimulatorApi(name, handler)` 把业务 API 注入到模拟器内运行的小程序。注册 per-context，随 context 销毁。Handler 在 Electron **主进程**执行，能用任何 Node 能力（fs、net、原生模块、持久状态）；模拟器侧拿到 `wx.<name>(params)` 调用后通过 IPC 转发到主进程，await 返回结果，handler 抛错则原型回传给小程序。
 
-> ⚠️ 使用本功能要求模拟器 preload 调用 `installCustomApisBridge()`（详见上方 "Preload Instrumentation"）。内置 preload 已包含此调用；若你用了自定义 preload 又忘记调用，注册的 API 在小程序运行时**没有任何反应**，且不会报错。
+> ⚠️ 使用本功能要求模拟器 preload 调用 `installCustomApisBridge()`（详见上方 "Preload Instrumentation"）。内置 preload 已包含此调用；若用了自定义 preload 又漏装，注册的 API 在小程序运行时**没有任何反应**，simulator 端会有 `console.warn`。
 
 ### 命名约定
 
-`name` 是 dimina service 层 `invokeAPI(name, opts)` 用的**裸名**，不带 `wx.` 前缀。注册之后小程序里通过 `wx.<name>(...)`（以及你在 `apiNamespaces` 配的其它命名空间）调用都会命中：
+`name` 是 dimina service 层 `invokeAPI(name, opts)` 用的**裸名**，不带 `wx.` 前缀。注册之后小程序里通过 `wx.<name>(...)`（以及在 `apiNamespaces` 配的其它命名空间）调用都会命中：
 
 | 小程序里写 | `registerSimulatorApi` 的 name |
 | --- | --- |
@@ -520,17 +463,19 @@ launch({ preloadPath: '/absolute/path/to/my-preload.js' })
 | `wx.getStorage(...)` 覆盖内置 | `'getStorage'`（小心：这会**屏蔽** dimina 容器的实现） |
 
 ```typescript
-import { registerSimulatorApi } from '@dimina-kit/devtools/simulator-apis'
+createWorkbenchApp({
+  onSetup: (instance) => {
+    // 提供 wx.login 的实现（dimina 容器默认未实现，注册后才能用）
+    const dispose = instance.registerSimulatorApi('login', async ({ success }) => {
+      // 主进程上下文：可调用内部 HTTP、读取凭证文件、访问原生模块
+      const code = await callInternalAuth()
+      return { code }
+    })
 
-// 提供 wx.login 的实现（dimina 容器默认未实现，注册后才能用）
-const dispose = registerSimulatorApi('login', async ({ success }) => {
-  // 主进程上下文：可调用内部 HTTP、读取凭证文件、访问原生模块
-  const code = await callInternalAuth()
-  return { code }
+    // 注册物已进 context.registry，随 context 销毁；
+    // 提前取消用返回的 dispose()
+  },
 })
-
-// 不再需要时取消注册（不传也行，进程退出会一起清理）
-dispose()
 ```
 
 ### 行为约定
@@ -545,27 +490,25 @@ dispose()
 
 ## 模块导出一览
 
-### Stable public exports
-
-`@dimina-kit/devtools` 的稳定入口，签名遵循 semver；新版本不会做破坏性改动（除非 major bump）。
+`@dimina-kit/devtools` 的公共入口。`api.ts`（根入口）聚合了所有公共 API，优先从根入口导入。
 
 ```
 @dimina-kit/devtools                        launch, createWorkbenchApp, buildDefaultMenu,
                                        openSettingsWindow, suppressEpipe, setupCdpPort,
                                        createWorkbenchContext, createMainWindow,
-                                       createViewManager, register*Ipc,
-                                       registerSimulatorApi, IpcRegistry,
-                                       UpdateManager,
-                                       createGitHubReleaseChecker, ...
-                                       （api.ts 聚合了所有公共 API；优先从根入口导入）
+                                       createViewManager, IpcRegistry,
+                                       UpdateManager, createGitHubReleaseChecker, ...
 @dimina-kit/devtools/launch                 launch(config?), buildDefaultMenu, openSettingsWindow
 @dimina-kit/devtools/app                    createWorkbenchApp(config?)
 @dimina-kit/devtools/types                  TypeScript 类型定义
 @dimina-kit/devtools/bootstrap              suppressEpipe(), setupCdpPort()
+@dimina-kit/devtools/context                createWorkbenchContext(opts),
+                                       hasBuiltinPanel(ctx, panelId), getDefaultTab(ctx)
+@dimina-kit/devtools/create-window          createMainWindow(opts)
 @dimina-kit/devtools/paths                  rendererDir, defaultPreloadPath, simulatorDir,
                                        getRendererDir, getPreloadDir, getRendererHtml
-@dimina-kit/devtools/simulator-apis         registerSimulatorApi(name, handler) →
-                                       注入由主进程托管的小程序 API（详见上方"Simulator 自定义 API"）
+@dimina-kit/devtools/projects-provider      ProjectsProvider / ProjectTemplate 等类型
+@dimina-kit/devtools/workbench-settings     loadWorkbenchSettings(), saveWorkbenchSettings(), applyTheme()
 @dimina-kit/devtools/preload                installSimulatorBridge,
                                        installCustomApisBridge,
                                        installConsoleInstrumentation,
@@ -575,29 +518,15 @@ dispose()
                                        （storage 面板数据由主进程 CDP 抓取，无 preload 侧 hook）
 ```
 
-### Experimental exports (v0.x — signatures may change in minor versions)
-
-下列子路径主要用于"模块组装"等深度定制场景。在 0.x 阶段，函数签名和模块边界可能在 minor 版本之间调整；如果你不需要逐模块组装，请优先使用上方的 stable 入口或根 barrel。
-
-```
-@dimina-kit/devtools/context                createWorkbenchContext(opts),
-                                       hasBuiltinPanel(ctx, panelId), getDefaultTab(ctx)
-@dimina-kit/devtools/create-window          createMainWindow(opts)
-@dimina-kit/devtools/ipc-simulator          registerSimulatorIpc(ctx)
-@dimina-kit/devtools/ipc-panels             registerPanelsIpc(ctx)
-@dimina-kit/devtools/ipc-toolbar            registerToolbarIpc(ctx)
-@dimina-kit/devtools/ipc-popover            registerPopoverIpc(ctx)
-@dimina-kit/devtools/ipc-settings           registerSettingsIpc(ctx)
-@dimina-kit/devtools/ipc-projects           registerProjectsIpc(ctx)
-@dimina-kit/devtools/ipc-session            registerSessionIpc(ctx), sessionModule
-@dimina-kit/devtools/workbench-settings     loadWorkbenchSettings(), saveWorkbenchSettings(), applyTheme()
-```
+> `IpcRegistry` 是 host 写自定义 IPC 的网关基类——`onSetup` 里通过 `instance.ipc` 拿到一个已绑定 `senderPolicy` 的实例，无需自行构造。
+> 自定义 simulator API 通过 `instance.registerSimulatorApi` 注册，没有独立的导出入口。
+> 内置 IPC 模块（`register*Ipc` / `WorkbenchModule`）是 devtools 内部实现，不再对外导出。
 
 ---
 
 ## WorkbenchContext
 
-`WorkbenchContext` 是所有 IPC 模块共享的状态入口。配置字段直接暴露，运行时状态通过三个 service 访问：
+`WorkbenchContext` 是所有扩展点的唯一容器。配置字段直接暴露，运行时状态通过 service 访问。host hook 拿到的 `instance.context` 即此类型；`menuBuilder` 拿到的是收窄后的 `MenuContext`（剔除 `registry` / `senderPolicy` / `trustedWindowSenderIds` / `simulatorApis` / `toolbar` 等内部管线）。
 
 ```typescript
 interface WorkbenchContext {
@@ -607,7 +536,7 @@ interface WorkbenchContext {
   panels: string[]
   apiNamespaces: string[]
   appName: string
-  toolbarActions?: () => Promise<ToolbarAction[]> | ToolbarAction[]
+  headerHeight: number
   brandingProvider?: () => Promise<{ appName: string }> | { appName: string }
 
   // ── Services（运行时状态封装在内部，通过方法访问）──
@@ -615,6 +544,11 @@ interface WorkbenchContext {
   views: ViewManager // ctx.views.repositionAll(), ctx.views.getSimulatorWebContentsId(), ...
   notify: RendererNotifier // ctx.notify.projectStatus(), ctx.notify.windowNavigateBack(), ...
   workspace: WorkspaceService // ctx.workspace.getProjectPath(), ctx.workspace.hasActiveSession(), ...
+
+  // ── 扩展容器（host 通过 instance 上的方法写入，不直接操作）──
+  simulatorApis: SimulatorApiRegistry  // instance.registerSimulatorApi 写入
+  toolbar: ToolbarStore                // instance.toolbar.set 写入
+  trustedWindowSenderIds: Set<number>  // instance.registerTrustedWindow 写入
 
   // ── Internal lifecycle / security (host 不直接消费) ──
   registry: DisposableRegistry // 框架在创建时统一聚合 dispose
