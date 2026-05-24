@@ -236,19 +236,18 @@ function readVideoMetadata(src: string): Promise<{ width: number; height: number
 			const width = video.videoWidth || 0
 			const height = video.videoHeight || 0
 			const duration = Number.isFinite(video.duration) ? video.duration : 0
-			let thumbTempFilePath = ''
-
-			try {
-				const canvas = document.createElement('canvas')
-				canvas.width = width || 1
-				canvas.height = height || 1
-				const ctx = canvas.getContext('2d')
-				ctx?.drawImage(video, 0, 0, canvas.width, canvas.height)
-				const dataUrl = canvas.toDataURL('image/jpeg', 0.8)
-				thumbTempFilePath = dataUrl
-			} catch {
-				thumbTempFilePath = ''
-			}
+			const thumbTempFilePath = (() => {
+				try {
+					const canvas = document.createElement('canvas')
+					canvas.width = width || 1
+					canvas.height = height || 1
+					const ctx = canvas.getContext('2d')
+					ctx?.drawImage(video, 0, 0, canvas.width, canvas.height)
+					return canvas.toDataURL('image/jpeg', 0.8)
+				} catch {
+					return ''
+				}
+			})()
 
 			finish({ width, height, duration, thumbTempFilePath })
 		}
