@@ -85,6 +85,28 @@ describe('service uploadFile UploadTask bridge', () => {
 		expect(mocks.remove).toHaveBeenCalledWith(payload.headersReceived)
 	})
 
+	it('clears listener stores when complete fires', () => {
+		const task = uploadFile({
+			url: 'https://example.com/upload',
+			filePath: 'blob:test',
+			name: 'file',
+		})
+		const payload = mocks.invokeAPI.mock.calls[0][1]
+		const progressDispatcher = mocks.callbackEntries.get(payload.progress)!
+		const headerDispatcher = mocks.callbackEntries.get(payload.headersReceived)!
+		const onProgress = vi.fn()
+		const onHeaders = vi.fn()
+		task.onProgressUpdate(onProgress)
+		task.onHeadersReceived(onHeaders)
+
+		payload.complete({ errMsg: 'uploadFile:ok' })
+		progressDispatcher({ progress: 99 })
+		headerDispatcher({ header: { ignored: '1' } })
+
+		expect(onProgress).not.toHaveBeenCalled()
+		expect(onHeaders).not.toHaveBeenCalled()
+	})
+
 	it('abort sends uploadFileAbort with the generated upload id until complete fires', () => {
 		const task = uploadFile({
 			url: 'https://example.com/upload',

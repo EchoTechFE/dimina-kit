@@ -170,6 +170,10 @@ export function getImageInfo(
 // ─── Media: Video ────────────────────────────────────────────────────────────
 
 type MediaFileType = 'image' | 'video'
+type ChooseMediaCamera = 'back' | 'front'
+
+const VIDEO_METADATA_TIMEOUT_MS = 5000
+const VIDEO_THUMBNAIL_TIMEOUT_MS = 500
 
 interface ChooseMediaTempFile {
 	tempFilePath: string
@@ -220,15 +224,29 @@ function readVideoMetadata(src: string): Promise<{ width: number; height: number
 	return new Promise((resolve) => {
 		const video = document.createElement('video')
 		let settled = false
+		let seekTimer: ReturnType<typeof setTimeout> | undefined
 		const finish = (metadata: { width: number; height: number; duration: number; thumbTempFilePath: string }) => {
 			if (settled) return
 			settled = true
 			clearTimeout(timer)
+			if (seekTimer) clearTimeout(seekTimer)
 			video.removeAttribute('src')
 			video.load()
 			resolve(metadata)
 		}
-		const timer = setTimeout(() => finish({ width: 0, height: 0, duration: 0, thumbTempFilePath: '' }), 1500)
+		const drawThumbnail = (width: number, height: number): string => {
+			try {
+				const canvas = document.createElement('canvas')
+				canvas.width = width || 1
+				canvas.height = height || 1
+				const ctx = canvas.getContext('2d')
+				ctx?.drawImage(video, 0, 0, canvas.width, canvas.height)
+				return canvas.toDataURL('image/jpeg', 0.8)
+			} catch {
+				return ''
+			}
+		}
+		const timer = setTimeout(() => finish({ width: 0, height: 0, duration: 0, thumbTempFilePath: '' }), VIDEO_METADATA_TIMEOUT_MS)
 
 		video.preload = 'metadata'
 		video.muted = true
@@ -236,20 +254,18 @@ function readVideoMetadata(src: string): Promise<{ width: number; height: number
 			const width = video.videoWidth || 0
 			const height = video.videoHeight || 0
 			const duration = Number.isFinite(video.duration) ? video.duration : 0
-			const thumbTempFilePath = (() => {
-				try {
-					const canvas = document.createElement('canvas')
-					canvas.width = width || 1
-					canvas.height = height || 1
-					const ctx = canvas.getContext('2d')
-					ctx?.drawImage(video, 0, 0, canvas.width, canvas.height)
-					return canvas.toDataURL('image/jpeg', 0.8)
-				} catch {
-					return ''
-				}
-			})()
-
-			finish({ width, height, duration, thumbTempFilePath })
+			const metadata = { width, height, duration, thumbTempFilePath: '' }
+			if (!width || !height || duration <= 0) {
+				finish(metadata)
+				return
+			}
+			video.onseeked = () => finish({ ...metadata, thumbTempFilePath: drawThumbnail(width, height) })
+			seekTimer = setTimeout(() => finish(metadata), VIDEO_THUMBNAIL_TIMEOUT_MS)
+			try {
+				video.currentTime = Math.min(0.1, Math.max(0, duration - 0.01))
+			} catch {
+				finish(metadata)
+			}
 		}
 		video.onerror = () => finish({ width: 0, height: 0, duration: 0, thumbTempFilePath: '' })
 		video.src = src
@@ -268,7 +284,7 @@ async function buildChooseMediaTempFile(file: File): Promise<ChooseMediaTempFile
 			duration: metadata.duration,
 			height: metadata.height,
 			width: metadata.width,
-			thumbTempFilePath: metadata.thumbTempFilePath || tempFilePath,
+			thumbTempFilePath: metadata.thumbTempFilePath,
 			fileType,
 		}
 	}
@@ -293,7 +309,7 @@ export function chooseMedia(
 		sourceType?: unknown
 		maxDuration?: unknown
 		sizeType?: unknown
-		camera?: unknown
+		camera?: ChooseMediaCamera
 		success?: unknown
 		fail?: unknown
 		complete?: unknown

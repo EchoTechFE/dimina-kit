@@ -47,9 +47,12 @@ export function uploadFile(opts = {}) {
 	let finished = false
 
 	const cleanup = (result) => {
+		if (finished) return
 		finished = true
 		callback.remove(progressId)
 		callback.remove(headersId)
+		progressListeners.remove()
+		headerListeners.remove()
 		if (typeof originalComplete === 'function') {
 			originalComplete(result)
 		}
