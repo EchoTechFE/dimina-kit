@@ -27,6 +27,13 @@ export default defineConfig({
           'src/simulator/service-apis/audio/__test-stubs__/common.ts',
         ),
       },
+      {
+        find: '@dimina/common',
+        replacement: resolve(
+          __dirname,
+          'src/simulator/service-apis/__test-stubs__/dimina-common.ts',
+        ),
+      },
     ],
   },
 })

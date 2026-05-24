@@ -34,6 +34,7 @@ const SIMULATOR_DIR = join(__dirname, 'src/simulator')
 const INJECTED_FILES = [
   { src: join(SIMULATOR_DIR, 'service-apis/file/index.js'), dest: join(SERVICE_SRC, 'src/api/core/file/index.js') },
   { src: join(SIMULATOR_DIR, 'service-apis/audio/index.js'), dest: join(SERVICE_SRC, 'src/api/core/media/audio/index.js') },
+  { src: join(SIMULATOR_DIR, 'service-apis/network/upload/index.js'), dest: join(SERVICE_SRC, 'src/api/core/network/upload/index.js') },
 ]
 
 function injectFiles() {

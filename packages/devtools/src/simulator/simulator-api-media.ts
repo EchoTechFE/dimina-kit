@@ -9,6 +9,7 @@
 import type { MiniAppContext } from './types'
 import { bindDomEvents, type EventBridgeDisposer } from './event-bridge'
 import { bindCallbacks } from './simulator-api-helpers'
+import { createTempFilePath } from './temp-files'
 
 // ─── Media: Image ────────────────────────────────────────────────────────────
 
@@ -40,7 +41,7 @@ export function chooseImage(
 			input.remove()
 			return
 		}
-		const tempFilePaths = files.map(f => URL.createObjectURL(f))
+		const tempFilePaths = files.map(f => createTempFilePath(f))
 		const tempFiles = files.map((f, i) => ({ path: tempFilePaths[i], size: f.size }))
 		onSuccess?.({ tempFilePaths, tempFiles, errMsg: 'chooseImage:ok' })
 		onComplete?.()
@@ -100,7 +101,7 @@ export function compressImage(
 			canvas.toBlob(
 				(blob) => {
 					if (blob) {
-						const tempFilePath = URL.createObjectURL(blob)
+						const tempFilePath = createTempFilePath(blob)
 						onSuccess?.({ tempFilePath, errMsg: 'compressImage:ok' })
 					} else {
 						onFail?.({ errMsg: 'compressImage:fail compression error' })
@@ -168,11 +169,128 @@ export function getImageInfo(
 
 // ─── Media: Video ────────────────────────────────────────────────────────────
 
+type MediaFileType = 'image' | 'video'
+
+interface ChooseMediaTempFile {
+	tempFilePath: string
+	size: number
+	duration: number
+	height: number
+	width: number
+	thumbTempFilePath: string
+	fileType: MediaFileType
+}
+
+function normalizeStringArray(value: unknown, fallback: string[]): string[] {
+	return Array.isArray(value)
+		? value.filter((item): item is string => typeof item === 'string')
+		: fallback
+}
+
+function normalizeChooseMediaCount(value: unknown): number {
+	const n = Number(value)
+	if (!Number.isFinite(n)) return 9
+	return Math.max(1, Math.min(20, Math.floor(n)))
+}
+
+function getChooseMediaAccept(mediaType: string[]): string {
+	const wantsMix = mediaType.includes('mix')
+	const wantsImage = wantsMix || mediaType.includes('image')
+	const wantsVideo = wantsMix || mediaType.includes('video')
+	if (wantsImage && wantsVideo) return 'image/*,video/*'
+	return wantsVideo ? 'video/*' : 'image/*'
+}
+
+function getChooseMediaResultType(files: ChooseMediaTempFile[]): 'image' | 'video' | 'mix' {
+	const types = new Set(files.map(file => file.fileType))
+	if (types.size > 1) return 'mix'
+	return files[0]?.fileType ?? 'image'
+}
+
+function readImageMetadata(src: string): Promise<{ width: number; height: number }> {
+	return new Promise((resolve) => {
+		const img = new Image()
+		img.onload = () => resolve({ width: img.naturalWidth || 0, height: img.naturalHeight || 0 })
+		img.onerror = () => resolve({ width: 0, height: 0 })
+		img.src = src
+	})
+}
+
+function readVideoMetadata(src: string): Promise<{ width: number; height: number; duration: number; thumbTempFilePath: string }> {
+	return new Promise((resolve) => {
+		const video = document.createElement('video')
+		let settled = false
+		const finish = (metadata: { width: number; height: number; duration: number; thumbTempFilePath: string }) => {
+			if (settled) return
+			settled = true
+			clearTimeout(timer)
+			video.removeAttribute('src')
+			video.load()
+			resolve(metadata)
+		}
+		const timer = setTimeout(() => finish({ width: 0, height: 0, duration: 0, thumbTempFilePath: '' }), 1500)
+
+		video.preload = 'metadata'
+		video.muted = true
+		video.onloadedmetadata = () => {
+			const width = video.videoWidth || 0
+			const height = video.videoHeight || 0
+			const duration = Number.isFinite(video.duration) ? video.duration : 0
+			let thumbTempFilePath = ''
+
+			try {
+				const canvas = document.createElement('canvas')
+				canvas.width = width || 1
+				canvas.height = height || 1
+				const ctx = canvas.getContext('2d')
+				ctx?.drawImage(video, 0, 0, canvas.width, canvas.height)
+				const dataUrl = canvas.toDataURL('image/jpeg', 0.8)
+				thumbTempFilePath = dataUrl
+			} catch {
+				thumbTempFilePath = ''
+			}
+
+			finish({ width, height, duration, thumbTempFilePath })
+		}
+		video.onerror = () => finish({ width: 0, height: 0, duration: 0, thumbTempFilePath: '' })
+		video.src = src
+	})
+}
+
+async function buildChooseMediaTempFile(file: File): Promise<ChooseMediaTempFile> {
+	const tempFilePath = createTempFilePath(file)
+	const fileType: MediaFileType = file.type.startsWith('video') ? 'video' : 'image'
+
+	if (fileType === 'video') {
+		const metadata = await readVideoMetadata(tempFilePath)
+		return {
+			tempFilePath,
+			size: file.size,
+			duration: metadata.duration,
+			height: metadata.height,
+			width: metadata.width,
+			thumbTempFilePath: metadata.thumbTempFilePath || tempFilePath,
+			fileType,
+		}
+	}
+
+	const metadata = await readImageMetadata(tempFilePath)
+	return {
+		tempFilePath,
+		size: file.size,
+		duration: 0,
+		height: metadata.height,
+		width: metadata.width,
+		thumbTempFilePath: '',
+		fileType,
+	}
+}
+
 export function chooseMedia(
 	this: MiniAppContext,
-	{ count = 9, mediaType = ['image', 'video'], success, fail, complete }: {
+	{ count = 9, mediaType = ['image', 'video'], sourceType = ['album', 'camera'], camera = 'back', success, fail, complete }: {
 		count?: number
-		mediaType?: string[]
+		mediaType?: unknown
 		sourceType?: unknown
 		maxDuration?: unknown
 		sizeType?: unknown
@@ -183,34 +301,41 @@ export function chooseMedia(
 	},
 ) {
 	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
-
-	const accept = mediaType.includes('video') && mediaType.includes('image')
-		? 'image/*,video/*'
-		: mediaType.includes('video') ? 'video/*' : 'image/*'
+	const normalizedCount = normalizeChooseMediaCount(count)
+	const normalizedMediaType = normalizeStringArray(mediaType, ['image', 'video'])
+	const normalizedSourceType = normalizeStringArray(sourceType, ['album', 'camera'])
 
 	const input = document.createElement('input')
 	input.type = 'file'
-	input.accept = accept
-	input.multiple = count > 1
+	input.accept = getChooseMediaAccept(normalizedMediaType)
+	input.multiple = normalizedCount > 1
+	if (normalizedSourceType.length === 1 && normalizedSourceType[0] === 'camera') {
+		input.setAttribute('capture', camera === 'front' ? 'user' : 'environment')
+	}
 	input.style.display = 'none'
 	document.body.appendChild(input)
 
-	input.addEventListener('change', () => {
-		const files = Array.from(input.files || [])
+	input.addEventListener('change', async () => {
+		const files = Array.from(input.files || []).slice(0, normalizedCount)
 		if (files.length === 0) {
 			onFail?.({ errMsg: 'chooseMedia:fail cancel' })
 			onComplete?.()
 			input.remove()
 			return
 		}
-		const tempFiles = files.map(f => ({
-			tempFilePath: URL.createObjectURL(f),
-			size: f.size,
-			fileType: f.type.startsWith('video') ? 'video' : 'image',
-		}))
-		onSuccess?.({ tempFiles, type: tempFiles[0]?.fileType || 'image', errMsg: 'chooseMedia:ok' })
-		onComplete?.()
-		input.remove()
+		try {
+			const tempFiles = await Promise.all(files.map(buildChooseMediaTempFile))
+			onSuccess?.({
+				tempFiles,
+				type: getChooseMediaResultType(tempFiles),
+				errMsg: 'chooseMedia:ok',
+			})
+		} catch (error) {
+			onFail?.({ errMsg: `chooseMedia:fail ${(error as Error).message}` })
+		} finally {
+			onComplete?.()
+			input.remove()
+		}
 	})
 
 	input.click()
@@ -245,7 +370,7 @@ export function chooseVideo(
 			return
 		}
 		const file = files[0]!
-		const tempFilePath = URL.createObjectURL(file)
+		const tempFilePath = createTempFilePath(file)
 		onSuccess?.({
 			tempFilePath,
 			duration: 0,
