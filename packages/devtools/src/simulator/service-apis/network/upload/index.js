@@ -58,13 +58,20 @@ export function uploadFile(opts = {}) {
 		}
 	}
 
-	invokeAPI('uploadFile', {
-		...opts,
-		uploadId,
-		progress: progressId,
-		headersReceived: headersId,
-		complete: cleanup,
-	})
+	try {
+		invokeAPI('uploadFile', {
+			...opts,
+			uploadId,
+			progress: progressId,
+			headersReceived: headersId,
+			complete: cleanup,
+		})
+	} catch (error) {
+		// Release keep=true callback ids and detach listener stores so the
+		// failure doesn't leak entries in the container callback registry.
+		cleanup({ errMsg: `uploadFile:fail ${error && error.message ? error.message : error}` })
+		throw error
+	}
 
 	return {
 		abort() {

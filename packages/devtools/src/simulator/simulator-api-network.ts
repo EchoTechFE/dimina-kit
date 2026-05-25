@@ -84,6 +84,11 @@ function appendFormData(form: FormData, formData: Record<string, unknown>): void
 		if (value == null) continue
 		if (value instanceof Blob) {
 			form.append(key, value)
+		} else if (typeof value === 'object') {
+			// JSON.stringify for plain objects/arrays; Map/Set/RegExp/TypedArray
+			// fall through here too and become '{}' or similar — caller should
+			// pre-stringify if they need a specific form.
+			form.append(key, JSON.stringify(value))
 		} else {
 			form.append(key, String(value))
 		}
@@ -98,7 +103,7 @@ export function uploadFile(
 		name,
 		header = {},
 		formData = {},
-		timeout = 0,
+		timeout,
 		uploadId = createUploadId(),
 		progress,
 		headersReceived,
@@ -163,7 +168,11 @@ export function uploadFile(
 			}
 
 			xhr.open('POST', url, true)
-			if (Number(timeout) > 0) xhr.timeout = Number(timeout)
+			if (timeout === undefined) {
+				xhr.timeout = 60_000
+			} else if (Number(timeout) > 0) {
+				xhr.timeout = Number(timeout)
+			}
 			for (const [key, value] of Object.entries(header)) {
 				if (/^(referer|content-type)$/i.test(key)) continue
 				xhr.setRequestHeader(key, String(value))

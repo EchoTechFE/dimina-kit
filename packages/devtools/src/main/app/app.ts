@@ -1,6 +1,6 @@
-import { setupCdpPort } from './bootstrap.js'
+import { setupCdpPort, registerDifileScheme } from './bootstrap.js'
 
-import { app, BrowserWindow, nativeImage } from 'electron'
+import { app, BrowserWindow, nativeImage, session } from 'electron'
 import fs from 'fs'
 import path from 'path'
 import type { BuiltinModuleId, MenuContext, ToolbarActionInput, WorkbenchAppConfig } from '../../shared/types.js'
@@ -24,6 +24,7 @@ import type { WorkbenchModule } from '../services/module.js'
 import { startAutomationServer, type AutomationServer } from '../services/automation/index.js'
 import { startMcpServer } from '../services/mcp/index.js'
 import { setupSimulatorStorage } from '../services/simulator-storage/index.js'
+import { setupSimulatorTempFiles } from '../services/simulator-temp-files/index.js'
 import { UpdateManager } from '../services/update/index.js'
 import { toDisposable, type Disposable } from '../utils/disposable.js'
 import { IpcRegistry } from '../utils/ipc-registry.js'
@@ -308,6 +309,9 @@ export function createWorkbenchApp(config: WorkbenchAppConfig = {}) {
   let appEventsRegistered = false
 
   setupCdpPort()
+  // Privileged scheme registration must run before `app.whenReady` —
+  // registering it later throws.
+  registerDifileScheme()
 
   async function setup(): Promise<WorkbenchAppInstance> {
     if (setupPromise) return setupPromise
@@ -324,6 +328,15 @@ export function createWorkbenchApp(config: WorkbenchAppConfig = {}) {
       // creation-time color (see installThemeBackgroundSync).
       context.registry.add(installThemeBackgroundSync())
       registerBuiltinModules(config, context)
+
+      // Wire the simulator-side difile:// protocol handler + temp-file IPC
+      // before host onSetup so any host-driven simulator boot sees the
+      // protocol live. The module installs its own narrow sender-policy
+      // (simulator-session-only) — see file header — because the default
+      // workbench policy intentionally rejects the simulator <webview>.
+      const simSession = session.fromPartition('persist:simulator')
+      context.registry.add(setupSimulatorTempFiles(simSession))
+
       installMenu(config, mainWindow, context)
 
       // Gated custom-IPC surface for the host. Bound to ctx.senderPolicy so

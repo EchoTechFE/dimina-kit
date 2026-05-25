@@ -1,0 +1,256 @@
+/**
+ * Main-process disk reader/writer backing `difile://_store/*` and
+ * `difile://<usr-rel>` URLs.
+ *
+ * Spec: `packages/devtools/docs/file-system.md` §6 P1-1 / P1-3.
+ *
+ *   - `readDiskFile(realPath, opts?)`: read a (possibly ranged) slice of a
+ *     file inside the USER_DATA_PATH sandbox. Returns `bytes` plus the
+ *     content metadata callers need to assemble an HTTP response without a
+ *     second `fs.stat` round-trip (`mime`, `etag`, `totalSize`).
+ *   - `writeDiskFile(realPath, bytes)`: write bytes into the sandbox,
+ *     creating parent directories on demand. Accepts both `Buffer` and
+ *     `ArrayBuffer`.
+ *   - `readDiskDir(realPath)`: list immediate children, no '.' / '..'.
+ *   - `statDiskFile(realPath)`: minimal stat surface (size/mtime/mode/flags).
+ *
+ * The caller is responsible for canonicalizing `realPath` through
+ * `resolveVPath` *before* invoking these helpers — disk.ts assumes the
+ * argument is already known to be inside the sandbox base.
+ *
+ * MIME resolution prefers magic-byte sniffing (first ~12 bytes) over file
+ * extension, falling back to `application/octet-stream` for both unknown
+ * extensions and unknown magic.
+ *
+ * ETag shape is `W/"<mtime-ms>-<size>"` — weak validator, both axes folded
+ * into one token so byte-equal rewrites at the same timestamp still match.
+ */
+
+import fs from 'node:fs/promises'
+import path from 'node:path'
+
+export interface DiskReadResult {
+	bytes: Buffer
+	mime: string
+	/** Weak ETag of the form `W/"<mtime>-<size>"`. */
+	etag: string
+	/** Full file size in bytes, regardless of whether a Range slice was returned. */
+	totalSize: number
+}
+
+export interface DiskReadOptions {
+	/** Inclusive byte range `[start, end]`. Omit to read the whole file. */
+	range?: { start: number; end: number }
+}
+
+export interface DiskStat {
+	size: number
+	/** Unix milliseconds. */
+	mtime: number
+	mode: number
+	isFile: boolean
+	isDirectory: boolean
+}
+
+// -- MIME detection ---------------------------------------------------------
+
+/**
+ * Extension-based MIME fallback. Kept deliberately small — anything more
+ * exotic should land in the magic-byte sniffer above. Lowercase keys only.
+ */
+const EXT_MIME: Record<string, string> = {
+	'.txt': 'text/plain',
+	'.log': 'text/plain',
+	'.md': 'text/markdown',
+	'.html': 'text/html',
+	'.htm': 'text/html',
+	'.css': 'text/css',
+	'.csv': 'text/csv',
+	'.json': 'application/json',
+	'.xml': 'application/xml',
+	'.js': 'application/javascript',
+	'.mjs': 'application/javascript',
+	'.svg': 'image/svg+xml',
+	'.png': 'image/png',
+	'.jpg': 'image/jpeg',
+	'.jpeg': 'image/jpeg',
+	'.gif': 'image/gif',
+	'.webp': 'image/webp',
+	'.bmp': 'image/bmp',
+	'.ico': 'image/x-icon',
+	'.mp4': 'video/mp4',
+	'.m4v': 'video/mp4',
+	'.webm': 'video/webm',
+	'.mov': 'video/quicktime',
+	'.mp3': 'audio/mpeg',
+	'.wav': 'audio/wav',
+	'.ogg': 'audio/ogg',
+	'.pdf': 'application/pdf',
+	'.zip': 'application/zip',
+}
+
+function sniffMime(head: Buffer): string | null {
+	if (head.length >= 8
+		&& head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47
+		&& head[4] === 0x0d && head[5] === 0x0a && head[6] === 0x1a && head[7] === 0x0a) {
+		return 'image/png'
+	}
+	if (head.length >= 3 && head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) {
+		return 'image/jpeg'
+	}
+	if (head.length >= 6
+		&& head[0] === 0x47 && head[1] === 0x49 && head[2] === 0x46
+		&& head[3] === 0x38 && (head[4] === 0x37 || head[4] === 0x39) && head[5] === 0x61) {
+		return 'image/gif'
+	}
+	if (head.length >= 12
+		&& head[0] === 0x52 && head[1] === 0x49 && head[2] === 0x46 && head[3] === 0x46
+		&& head[8] === 0x57 && head[9] === 0x45 && head[10] === 0x42 && head[11] === 0x50) {
+		return 'image/webp'
+	}
+	if (head.length >= 12
+		&& head[4] === 0x66 && head[5] === 0x74 && head[6] === 0x79 && head[7] === 0x70) {
+		// MP4 ftyp box: brand bytes vary, treat all as video/mp4 for now.
+		return 'video/mp4'
+	}
+	if (head.length >= 4
+		&& head[0] === 0x25 && head[1] === 0x50 && head[2] === 0x44 && head[3] === 0x46) {
+		return 'application/pdf'
+	}
+	if (head.length >= 2 && head[0] === 0x42 && head[1] === 0x4d) {
+		return 'image/bmp'
+	}
+	if (head.length >= 4
+		&& head[0] === 0x50 && head[1] === 0x4b && head[2] === 0x03 && head[3] === 0x04) {
+		return 'application/zip'
+	}
+	if (head.length >= 3 && head[0] === 0x49 && head[1] === 0x44 && head[2] === 0x33) {
+		// ID3-tagged MP3.
+		return 'audio/mpeg'
+	}
+	if (head.length >= 4 && head[0] === 0x4f && head[1] === 0x67 && head[2] === 0x67 && head[3] === 0x53) {
+		return 'audio/ogg'
+	}
+	return null
+}
+
+function extMime(realPath: string): string | null {
+	const ext = path.extname(realPath).toLowerCase()
+	if (!ext) return null
+	return EXT_MIME[ext] ?? null
+}
+
+function detectMime(realPath: string, head: Buffer): string {
+	const sniffed = sniffMime(head)
+	if (sniffed) return sniffed
+	const byExt = extMime(realPath)
+	if (byExt) return byExt
+	return 'application/octet-stream'
+}
+
+// -- ETag -------------------------------------------------------------------
+
+function etagOf(mtimeMs: number, size: number): string {
+	return `W/"${Math.floor(mtimeMs)}-${size}"`
+}
+
+// -- read -------------------------------------------------------------------
+
+export async function readDiskFile(
+	realPath: string,
+	opts?: DiskReadOptions,
+): Promise<DiskReadResult> {
+	const handle = await fs.open(realPath, 'r')
+	try {
+		const st = await handle.stat()
+		const totalSize = st.size
+		const mtimeMs = st.mtimeMs
+
+		const range = opts?.range
+		let sliceStart = 0
+		let sliceLen = totalSize
+		if (range) {
+			const { start, end } = range
+			if (!Number.isFinite(start) || !Number.isFinite(end)) {
+				throw new RangeError(`invalid range: ${start}-${end}`)
+			}
+			if (start < 0) throw new RangeError(`range start out of bounds: ${start}`)
+			if (start > end) throw new RangeError(`range start > end: ${start} > ${end}`)
+			if (start >= totalSize) {
+				throw new RangeError(`range start beyond file size: ${start} >= ${totalSize}`)
+			}
+			const clampedEnd = Math.min(end, totalSize - 1)
+			sliceStart = start
+			sliceLen = clampedEnd - start + 1
+		}
+
+		// Read at most the first 12 bytes for magic sniffing, regardless of
+		// whether the caller asked for a range. We need the head bytes from
+		// position 0 to label Content-Type correctly even on a tail Range
+		// request. For full reads the head is part of the body so we re-use
+		// it without a second read.
+		const head = Buffer.alloc(Math.min(12, totalSize))
+		if (head.length > 0) {
+			await handle.read(head, 0, head.length, 0)
+		}
+
+		let bytes: Buffer
+		if (!range) {
+			bytes = Buffer.alloc(totalSize)
+			if (totalSize > 0) {
+				if (totalSize <= head.length) {
+					head.copy(bytes, 0, 0, totalSize)
+				} else {
+					head.copy(bytes, 0, 0, head.length)
+					await handle.read(bytes, head.length, totalSize - head.length, head.length)
+				}
+			}
+		} else {
+			bytes = Buffer.alloc(sliceLen)
+			if (sliceLen > 0) {
+				await handle.read(bytes, 0, sliceLen, sliceStart)
+			}
+		}
+
+		return {
+			bytes,
+			mime: detectMime(realPath, head),
+			etag: etagOf(mtimeMs, totalSize),
+			totalSize,
+		}
+	}
+	finally {
+		await handle.close()
+	}
+}
+
+// -- write ------------------------------------------------------------------
+
+export async function writeDiskFile(
+	realPath: string,
+	bytes: Buffer | ArrayBuffer,
+): Promise<void> {
+	const buf = Buffer.isBuffer(bytes) ? bytes : Buffer.from(new Uint8Array(bytes))
+	await fs.mkdir(path.dirname(realPath), { recursive: true })
+	await fs.writeFile(realPath, buf)
+}
+
+// -- dir --------------------------------------------------------------------
+
+export async function readDiskDir(realPath: string): Promise<string[]> {
+	const entries = await fs.readdir(realPath)
+	return entries
+}
+
+// -- stat -------------------------------------------------------------------
+
+export async function statDiskFile(realPath: string): Promise<DiskStat> {
+	const st = await fs.stat(realPath)
+	return {
+		size: st.size,
+		mtime: Math.floor(st.mtimeMs),
+		mode: st.mode,
+		isFile: st.isFile(),
+		isDirectory: st.isDirectory(),
+	}
+}

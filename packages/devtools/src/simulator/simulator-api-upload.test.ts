@@ -255,3 +255,145 @@ describe('container uploadFile', () => {
 		expect(MockXMLHttpRequest.instances).toHaveLength(2)
 	})
 })
+
+describe('uploadFile timeout default', () => {
+	it('defaults xhr.timeout to 60000 when no timeout option is provided', async () => {
+		const ctx = makeContext()
+
+		uploadFile.call(ctx, {
+			uploadId: 'u-timeout-default',
+			url: 'https://example.com/upload',
+			filePath: 'blob:test-upload',
+			name: 'file',
+		})
+		await Promise.resolve()
+
+		const xhr = MockXMLHttpRequest.instances[0]!
+		expect(xhr.timeout).toBe(60000)
+	})
+
+	it('uses caller-provided positive timeout as-is', async () => {
+		const ctx = makeContext()
+
+		uploadFile.call(ctx, {
+			uploadId: 'u-timeout-explicit',
+			url: 'https://example.com/upload',
+			filePath: 'blob:test-upload',
+			name: 'file',
+			timeout: 30000,
+		})
+		await Promise.resolve()
+
+		const xhr = MockXMLHttpRequest.instances[0]!
+		expect(xhr.timeout).toBe(30000)
+	})
+
+	it('keeps xhr.timeout at 0 when caller explicitly passes timeout: 0', async () => {
+		const ctx = makeContext()
+
+		uploadFile.call(ctx, {
+			uploadId: 'u-timeout-zero',
+			url: 'https://example.com/upload',
+			filePath: 'blob:test-upload',
+			name: 'file',
+			timeout: 0,
+		})
+		await Promise.resolve()
+
+		const xhr = MockXMLHttpRequest.instances[0]!
+		expect(xhr.timeout).toBe(0)
+	})
+})
+
+describe('uploadFile formData encoding', () => {
+	it('serializes plain object formData values via JSON.stringify', async () => {
+		const ctx = makeContext()
+
+		uploadFile.call(ctx, {
+			uploadId: 'u-form-object',
+			url: 'https://example.com/upload',
+			filePath: 'blob:test-upload',
+			name: 'file',
+			formData: { meta: { foo: 1 } },
+		})
+		await Promise.resolve()
+
+		const xhr = MockXMLHttpRequest.instances[0]!
+		const body = xhr.body as FormData
+		expect(body.get('meta')).toBe('{"foo":1}')
+	})
+
+	it('serializes array formData values via JSON.stringify', async () => {
+		const ctx = makeContext()
+
+		uploadFile.call(ctx, {
+			uploadId: 'u-form-array',
+			url: 'https://example.com/upload',
+			filePath: 'blob:test-upload',
+			name: 'file',
+			formData: { list: [1, 2, 3] },
+		})
+		await Promise.resolve()
+
+		const xhr = MockXMLHttpRequest.instances[0]!
+		const body = xhr.body as FormData
+		expect(body.get('list')).toBe('[1,2,3]')
+	})
+
+	it('appends Blob formData values as Blob (not stringified)', async () => {
+		const ctx = makeContext()
+		const blob = new Blob(['payload'], { type: 'application/octet-stream' })
+
+		uploadFile.call(ctx, {
+			uploadId: 'u-form-blob',
+			url: 'https://example.com/upload',
+			filePath: 'blob:test-upload',
+			name: 'file',
+			formData: { blob },
+		})
+		await Promise.resolve()
+
+		const xhr = MockXMLHttpRequest.instances[0]!
+		const body = xhr.body as FormData
+		const appended = body.get('blob')
+		expect(appended).toBeInstanceOf(Blob)
+		expect(appended).not.toBe('[object Object]')
+	})
+
+	it('coerces primitive number/string formData values via String()', async () => {
+		const ctx = makeContext()
+
+		uploadFile.call(ctx, {
+			uploadId: 'u-form-primitive',
+			url: 'https://example.com/upload',
+			filePath: 'blob:test-upload',
+			name: 'file',
+			formData: { n: 42, s: 'str' },
+		})
+		await Promise.resolve()
+
+		const xhr = MockXMLHttpRequest.instances[0]!
+		const body = xhr.body as FormData
+		expect(body.get('n')).toBe('42')
+		expect(body.get('s')).toBe('str')
+	})
+
+	it('skips null and undefined formData values', async () => {
+		const ctx = makeContext()
+
+		uploadFile.call(ctx, {
+			uploadId: 'u-form-nullish',
+			url: 'https://example.com/upload',
+			filePath: 'blob:test-upload',
+			name: 'file',
+			formData: { a: null, b: undefined, keep: 'yes' } as Record<string, unknown>,
+		})
+		await Promise.resolve()
+
+		const xhr = MockXMLHttpRequest.instances[0]!
+		const body = xhr.body as FormData
+		expect(body.has('a')).toBe(false)
+		expect(body.has('b')).toBe(false)
+		expect(body.get('keep')).toBe('yes')
+	})
+})

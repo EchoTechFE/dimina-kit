@@ -1,11 +1,25 @@
-import { invokeAPI } from '@/api/common'
-
 /**
  * https://developers.weixin.qq.com/miniprogram/dev/api/file/wx.getFileSystemManager.html
+ *
+ * Parity with the dimina runtime: every `FileSystemManager` method short-
+ * circuits to `fail` / `throw` because no dimina client (iOS / Android /
+ * Harmony) has wired the FSM backends yet. The simulator deliberately mirrors
+ * that gap so a mini-program that "works in devtools" does not break on a
+ * real device.
+ *
+ * The lower-level `difile://` plumbing — vpath resolver, _tmp Blob store, main
+ * protocol handler, disk reader, fs-channels IPC — still exists in the
+ * codebase. Re-enabling FSM is a single edit: switch each method below back
+ * to the previous `invokeAPI('fs<Api>', opts)` form. Until the upstream
+ * runtime catches up we keep the surface inert.
+ *
+ * `USER_DATA_PATH` is exported unchanged because `wx.env.USER_DATA_PATH` is
+ * an env value, not an FSM API; concatenating it to build a path is fine
+ * even when the actual reads/writes would fail.
  */
 
 const USER_DATA_PATH = 'difile://'
-const UNSUPPORTED_ERRMSG = 'not supported in simulator'
+const UNSUPPORTED_ERRMSG = 'not supported by the dimina runtime'
 
 class Stats {
 	constructor(info) {
@@ -36,248 +50,78 @@ function failUnsupported(apiName, opts = {}) {
 	complete?.()
 }
 
-function wrapStats(info) {
-	return info ? new Stats(info) : info
-}
-
-function wrapRecursiveStats(statsMap) {
-	if (!statsMap || typeof statsMap !== 'object') return statsMap
-	const wrapped = {}
-	for (const [key, value] of Object.entries(statsMap)) {
-		wrapped[key] = new Stats(value)
-	}
-	return wrapped
-}
-
 class FileSystemManager {
-	// ─── access ──────────────────────────────────────────────────────────
+	access(opts) { failUnsupported('access', opts) }
+	accessSync() { throwUnsupported('accessSync') }
 
-	access(opts) {
-		invokeAPI('fsAccess', opts)
-	}
+	stat(opts) { failUnsupported('stat', opts) }
+	statSync() { throwUnsupported('statSync') }
 
-	accessSync() {
-		throwUnsupported('accessSync')
-	}
+	readFile(opts) { failUnsupported('readFile', opts) }
+	readFileSync() { throwUnsupported('readFileSync') }
 
-	// ─── stat ────────────────────────────────────────────────────────────
+	writeFile(opts) { failUnsupported('writeFile', opts) }
+	writeFileSync() { throwUnsupported('writeFileSync') }
 
-	stat(opts = {}) {
-		const { success, recursive, ...rest } = opts
-		invokeAPI('fsStat', {
-			...rest,
-			recursive,
-			success: (result) => {
-				if (!success) return
-				const stats = recursive
-					? wrapRecursiveStats(result?.stats)
-					: wrapStats(result?.stats)
-				success({
-					...result,
-					stats,
-				})
-			},
-		})
-	}
+	appendFile(opts) { failUnsupported('appendFile', opts) }
+	appendFileSync() { throwUnsupported('appendFileSync') }
 
-	statSync() {
-		throwUnsupported('statSync')
-	}
+	copyFile(opts) { failUnsupported('copyFile', opts) }
+	copyFileSync() { throwUnsupported('copyFileSync') }
 
-	// ─── readFile ────────────────────────────────────────────────────────
+	rename(opts) { failUnsupported('rename', opts) }
+	renameSync() { throwUnsupported('renameSync') }
 
-	readFile(opts) {
-		invokeAPI('fsReadFile', opts)
-	}
+	unlink(opts) { failUnsupported('unlink', opts) }
+	unlinkSync() { throwUnsupported('unlinkSync') }
 
-	readFileSync() {
-		throwUnsupported('readFileSync')
-	}
+	mkdir(opts) { failUnsupported('mkdir', opts) }
+	mkdirSync() { throwUnsupported('mkdirSync') }
 
-	// ─── writeFile ───────────────────────────────────────────────────────
+	rmdir(opts) { failUnsupported('rmdir', opts) }
+	rmdirSync() { throwUnsupported('rmdirSync') }
 
-	writeFile(opts) {
-		invokeAPI('fsWriteFile', opts)
-	}
+	readdir(opts) { failUnsupported('readdir', opts) }
+	readdirSync() { throwUnsupported('readdirSync') }
 
-	writeFileSync() {
-		throwUnsupported('writeFileSync')
-	}
+	getFileInfo(opts) { failUnsupported('getFileInfo', opts) }
 
-	// ─── appendFile ──────────────────────────────────────────────────────
+	saveFile(opts) { failUnsupported('saveFile', opts) }
+	saveFileSync() { throwUnsupported('saveFileSync') }
 
-	appendFile(opts) {
-		invokeAPI('fsAppendFile', opts)
-	}
+	getSavedFileList(opts) { failUnsupported('getSavedFileList', opts) }
+	removeSavedFile(opts) { failUnsupported('removeSavedFile', opts) }
 
-	appendFileSync() {
-		throwUnsupported('appendFileSync')
-	}
+	truncate(opts) { failUnsupported('truncate', opts) }
+	truncateSync() { throwUnsupported('truncateSync') }
 
-	// ─── copyFile ────────────────────────────────────────────────────────
+	unzip(opts) { failUnsupported('unzip', opts) }
 
-	copyFile(opts) {
-		invokeAPI('fsCopyFile', opts)
-	}
+	// File descriptor operations.
+	open(opts) { failUnsupported('open', opts) }
+	openSync() { throwUnsupported('openSync') }
+	close(opts) { failUnsupported('close', opts) }
+	closeSync() { throwUnsupported('closeSync') }
+	read(opts) { failUnsupported('read', opts) }
+	readSync() { throwUnsupported('readSync') }
+	write(opts) { failUnsupported('write', opts) }
+	writeSync() { throwUnsupported('writeSync') }
+	fstat(opts) { failUnsupported('fstat', opts) }
+	fstatSync() { throwUnsupported('fstatSync') }
+	ftruncate(opts) { failUnsupported('ftruncate', opts) }
+	ftruncateSync() { throwUnsupported('ftruncateSync') }
 
-	copyFileSync() {
-		throwUnsupported('copyFileSync')
-	}
-
-	// ─── rename ──────────────────────────────────────────────────────────
-
-	rename(opts) {
-		invokeAPI('fsRename', opts)
-	}
-
-	renameSync() {
-		throwUnsupported('renameSync')
-	}
-
-	// ─── unlink ──────────────────────────────────────────────────────────
-
-	unlink(opts) {
-		invokeAPI('fsUnlink', opts)
-	}
-
-	unlinkSync() {
-		throwUnsupported('unlinkSync')
-	}
-
-	// ─── mkdir ───────────────────────────────────────────────────────────
-
-	mkdir(opts) {
-		invokeAPI('fsMkdir', opts)
-	}
-
-	mkdirSync() {
-		throwUnsupported('mkdirSync')
-	}
-
-	// ─── rmdir ───────────────────────────────────────────────────────────
-
-	rmdir(opts) {
-		invokeAPI('fsRmdir', opts)
-	}
-
-	rmdirSync() {
-		throwUnsupported('rmdirSync')
-	}
-
-	// ─── readdir ─────────────────────────────────────────────────────────
-
-	readdir(opts) {
-		invokeAPI('fsReaddir', opts)
-	}
-
-	readdirSync() {
-		throwUnsupported('readdirSync')
-	}
-
-	// ─── getFileInfo ─────────────────────────────────────────────────────
-
-	getFileInfo(opts) {
-		invokeAPI('fsGetFileInfo', opts)
-	}
-
-	// ─── saveFile / getSavedFileList / removeSavedFile ───────────────────
-
-	saveFile(opts) {
-		invokeAPI('fsSaveFile', opts)
-	}
-
-	saveFileSync() {
-		throwUnsupported('saveFileSync')
-	}
-
-	getSavedFileList(opts) {
-		invokeAPI('fsGetSavedFileList', opts)
-	}
-
-	removeSavedFile(opts) {
-		invokeAPI('fsRemoveSavedFile', opts)
-	}
-
-	// ─── truncate ────────────────────────────────────────────────────────
-
-	truncate(opts) {
-		invokeAPI('fsTruncate', opts)
-	}
-
-	truncateSync() {
-		throwUnsupported('truncateSync')
-	}
-
-	// ─── unzip ───────────────────────────────────────────────────────────
-
-	unzip(opts) {
-		invokeAPI('fsUnzip', opts)
-	}
-
-	// ─── File descriptor operations ──────────────────────────────────────
-
-	open(opts) {
-		failUnsupported('open', opts)
-	}
-
-	openSync() {
-		throwUnsupported('openSync')
-	}
-
-	close(opts) {
-		failUnsupported('close', opts)
-	}
-
-	closeSync() {
-		throwUnsupported('closeSync')
-	}
-
-	read(opts) {
-		failUnsupported('read', opts)
-	}
-
-	readSync() {
-		throwUnsupported('readSync')
-	}
-
-	write(opts) {
-		failUnsupported('write', opts)
-	}
-
-	writeSync() {
-		throwUnsupported('writeSync')
-	}
-
-	fstat(opts) {
-		failUnsupported('fstat', opts)
-	}
-
-	fstatSync() {
-		throwUnsupported('fstatSync')
-	}
-
-	ftruncate(opts) {
-		failUnsupported('ftruncate', opts)
-	}
-
-	ftruncateSync() {
-		throwUnsupported('ftruncateSync')
-	}
-
-	// ─── Compression ─────────────────────────────────────────────────────
-
-	readCompressedFile(opts) {
-		failUnsupported('readCompressedFile', opts)
-	}
-
-	readCompressedFileSync() {
-		throwUnsupported('readCompressedFileSync')
-	}
-
-	readZipEntry(opts) {
-		failUnsupported('readZipEntry', opts)
-	}
+	// Compression.
+	readCompressedFile(opts) { failUnsupported('readCompressedFile', opts) }
+	readCompressedFileSync() { throwUnsupported('readCompressedFileSync') }
+	readZipEntry(opts) { failUnsupported('readZipEntry', opts) }
 }
+
+// Stats is kept exported via this module's structuredClone-shaped output so
+// consumers that detect `instanceof Stats` (e.g. the previous wrapStats path)
+// still see a class identity; left in the module purely as a forward-compat
+// affordance.
+void Stats
 
 let instance
 

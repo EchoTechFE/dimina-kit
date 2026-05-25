@@ -15,26 +15,32 @@ import { createTempFilePath } from './temp-files'
 
 export function chooseImage(
 	this: MiniAppContext,
-	{ count = 9, success, fail, complete }: {
+	{ count = 9, sourceType, camera, success, fail, complete }: {
 		count?: number
 		sizeType?: unknown
 		sourceType?: unknown
+		camera?: unknown
 		success?: unknown
 		fail?: unknown
 		complete?: unknown
 	},
 ) {
 	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
+	const normalizedCount = normalizeChooseMediaCount(count)
+	const normalizedSourceType = normalizeStringArray(sourceType, ['album', 'camera'])
 
 	const input = document.createElement('input')
 	input.type = 'file'
 	input.accept = 'image/*'
-	input.multiple = count > 1
+	input.multiple = normalizedCount > 1
+	if (normalizedSourceType.length === 1 && normalizedSourceType[0] === 'camera') {
+		input.setAttribute('capture', camera === 'front' ? 'user' : 'environment')
+	}
 	input.style.display = 'none'
 	document.body.appendChild(input)
 
 	input.addEventListener('change', () => {
-		const files = Array.from(input.files || [])
+		const files = Array.from(input.files || []).slice(0, normalizedCount)
 		if (files.length === 0) {
 			onFail?.({ errMsg: 'chooseImage:fail cancel' })
 			onComplete?.()
@@ -183,6 +189,7 @@ interface ChooseMediaTempFile {
 	width: number
 	thumbTempFilePath: string
 	fileType: MediaFileType
+	originalFileObj: File
 }
 
 function normalizeStringArray(value: unknown, fallback: string[]): string[] {
@@ -230,21 +237,69 @@ function readVideoMetadata(src: string): Promise<{ width: number; height: number
 			settled = true
 			clearTimeout(timer)
 			if (seekTimer) clearTimeout(seekTimer)
+			// Detach handlers so any late-firing DOM events (e.g. onseeked from a
+			// previously queued currentTime change) cannot reach into the now-
+			// resolved promise and allocate fresh blob: URLs.
+			video.onloadedmetadata = null
+			video.onseeked = null
+			video.onerror = null
 			video.removeAttribute('src')
 			video.load()
 			resolve(metadata)
 		}
-		const drawThumbnail = (width: number, height: number): string => {
-			try {
-				const canvas = document.createElement('canvas')
-				canvas.width = width || 1
-				canvas.height = height || 1
-				const ctx = canvas.getContext('2d')
-				ctx?.drawImage(video, 0, 0, canvas.width, canvas.height)
-				return canvas.toDataURL('image/jpeg', 0.8)
-			} catch {
-				return ''
-			}
+		const drawThumbnail = (width: number, height: number): Promise<string> => {
+			return new Promise((resolveThumb) => {
+				let resolved = false
+				const done = (value: string) => {
+					if (resolved) return
+					resolved = true
+					resolveThumb(value)
+				}
+				let canvas: HTMLCanvasElement
+				try {
+					canvas = document.createElement('canvas')
+					canvas.width = width || 1
+					canvas.height = height || 1
+					const ctx = canvas.getContext('2d')
+					ctx?.drawImage(video, 0, 0, canvas.width, canvas.height)
+				} catch {
+					done('')
+					return
+				}
+				const toDataUrlFallback = () => {
+					try {
+						done(canvas.toDataURL('image/jpeg', 0.8))
+					} catch {
+						done('')
+					}
+				}
+				const fallbackTimer = setTimeout(toDataUrlFallback, VIDEO_THUMBNAIL_TIMEOUT_MS)
+				try {
+					canvas.toBlob(
+						(blob) => {
+							clearTimeout(fallbackTimer)
+							// If the outer readVideoMetadata promise already settled
+							// (e.g. the seekTimer fired before toBlob's async callback
+							// arrived), we MUST NOT call createTempFilePath here — that
+							// would allocate a fresh blob: URL and register it in the
+							// temp-files Map with no one ever revoking it. Just drop
+							// the blob on the floor; the resolved thumbTempFilePath
+							// has already been chosen by the timeout path.
+							if (settled || resolved) return
+							if (blob) {
+								done(createTempFilePath(blob))
+							} else {
+								toDataUrlFallback()
+							}
+						},
+						'image/jpeg',
+						0.8,
+					)
+				} catch {
+					clearTimeout(fallbackTimer)
+					toDataUrlFallback()
+				}
+			})
 		}
 		const timer = setTimeout(() => finish({ width: 0, height: 0, duration: 0, thumbTempFilePath: '' }), VIDEO_METADATA_TIMEOUT_MS)
 
@@ -259,7 +314,14 @@ function readVideoMetadata(src: string): Promise<{ width: number; height: number
 				finish(metadata)
 				return
 			}
-			video.onseeked = () => finish({ ...metadata, thumbTempFilePath: drawThumbnail(width, height) })
+			video.onseeked = async () => {
+				if (seekTimer) {
+					clearTimeout(seekTimer)
+					seekTimer = undefined
+				}
+				const thumbTempFilePath = await drawThumbnail(width, height)
+				finish({ ...metadata, thumbTempFilePath })
+			}
 			seekTimer = setTimeout(() => finish(metadata), VIDEO_THUMBNAIL_TIMEOUT_MS)
 			try {
 				video.currentTime = Math.min(0.1, Math.max(0, duration - 0.01))
@@ -286,6 +348,7 @@ async function buildChooseMediaTempFile(file: File): Promise<ChooseMediaTempFile
 			width: metadata.width,
 			thumbTempFilePath: metadata.thumbTempFilePath,
 			fileType,
+			originalFileObj: file,
 		}
 	}
 
@@ -298,6 +361,7 @@ async function buildChooseMediaTempFile(file: File): Promise<ChooseMediaTempFile
 		width: metadata.width,
 		thumbTempFilePath: '',
 		fileType,
+		originalFileObj: file,
 	}
 }
 
@@ -343,6 +407,7 @@ export function chooseMedia(
 			onSuccess?.({
 				tempFiles,
 				type: getChooseMediaResultType(tempFiles),
+				failedCount: 0,
 				errMsg: 'chooseMedia:ok',
 			})
 		} catch (error) {
@@ -358,7 +423,7 @@ export function chooseMedia(
 
 export function chooseVideo(
 	this: MiniAppContext,
-	{ success, fail, complete }: {
+	{ sourceType, camera, success, fail, complete }: {
 		sourceType?: unknown
 		compressed?: unknown
 		maxDuration?: unknown
@@ -369,14 +434,18 @@ export function chooseVideo(
 	},
 ) {
 	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
+	const normalizedSourceType = normalizeStringArray(sourceType, ['album', 'camera'])
 
 	const input = document.createElement('input')
 	input.type = 'file'
 	input.accept = 'video/*'
+	if (normalizedSourceType.length === 1 && normalizedSourceType[0] === 'camera') {
+		input.setAttribute('capture', camera === 'front' ? 'user' : 'environment')
+	}
 	input.style.display = 'none'
 	document.body.appendChild(input)
 
-	input.addEventListener('change', () => {
+	input.addEventListener('change', async () => {
 		const files = Array.from(input.files || [])
 		if (files.length === 0) {
 			onFail?.({ errMsg: 'chooseVideo:fail cancel' })
@@ -386,12 +455,13 @@ export function chooseVideo(
 		}
 		const file = files[0]!
 		const tempFilePath = createTempFilePath(file)
+		const metadata = await readVideoMetadata(tempFilePath)
 		onSuccess?.({
 			tempFilePath,
-			duration: 0,
+			duration: metadata.duration,
 			size: file.size,
-			width: 0,
-			height: 0,
+			width: metadata.width,
+			height: metadata.height,
 			errMsg: 'chooseVideo:ok',
 		})
 		onComplete?.()
