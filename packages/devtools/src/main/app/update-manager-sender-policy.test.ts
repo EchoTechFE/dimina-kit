@@ -149,6 +149,7 @@ vi.mock('electron', () => {
     fromPartition: vi.fn(() => ({
       webRequest: { onBeforeSendHeaders: vi.fn(), onHeadersReceived: vi.fn() },
       registerPreloadScript: vi.fn(),
+      protocol: { handle: vi.fn(), unhandle: vi.fn() },
     })),
   }
 
@@ -172,7 +173,9 @@ vi.mock('electron', () => {
 
   return {
     app, ipcMain, BrowserWindow, WebContentsView, BrowserView: WebContentsView, View,
-    webContents: webContentsStatic, session: sessionStub, dialog, Menu, shell,
+    webContents: webContentsStatic, session: sessionStub,
+    protocol: { registerSchemesAsPrivileged: vi.fn(), handle: vi.fn(), unhandle: vi.fn() },
+    dialog, Menu, shell,
     nativeImage, nativeTheme, globalShortcut, Tray, default: {},
   }
 })

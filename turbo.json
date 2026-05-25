@@ -9,7 +9,8 @@
     "CI",
     "GITHUB_TOKEN",
     "DIMINA_FORCE_BUILD",
-    "DIMINA_E2E_TOOLBAR_SENTINEL"
+    "DIMINA_E2E_TOOLBAR_SENTINEL",
+    "DIMINA_HOME"
   ],
   "tasks": {
     "build": {

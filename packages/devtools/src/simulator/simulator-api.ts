@@ -7,7 +7,7 @@
  */
 
 import type { MiniAppContext } from './types'
-import { bindCallbacks, notSupportedApi } from './simulator-api-helpers'
+import { bindCallbacks } from './simulator-api-helpers'
 import {
 	setStorageSync,
 	getStorageSync,
@@ -66,6 +66,16 @@ import {
 	fsTruncate,
 	fsUnzip,
 } from './simulator-api-fs'
+import {
+	downloadFile,
+	uploadFile,
+	uploadFileAbort,
+} from './simulator-api-network'
+export {
+	downloadFile,
+	uploadFile,
+	uploadFileAbort,
+} from './simulator-api-network'
 
 // ─── Base ────────────────────────────────────────────────────────────────────
 
@@ -176,43 +186,6 @@ export function getSystemInfoSync(this: MiniAppContext) {
 	return buildSystemInfo(this)
 }
 
-// ─── Network ─────────────────────────────────────────────────────────────────
-
-export function downloadFile(
-	this: MiniAppContext,
-	{ url, header = {}, filePath, success, fail, complete }: {
-		url: string
-		header?: Record<string, string>
-		filePath?: string
-		success?: unknown
-		fail?: unknown
-		complete?: unknown
-	},
-) {
-	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
-
-	fetch(url, { headers: header })
-		.then(async (response) => {
-			if (!response.ok) throw new Error(response.statusText)
-			const blob = await response.blob()
-			const tempFilePath = URL.createObjectURL(blob)
-			onSuccess?.({
-				tempFilePath,
-				filePath: filePath || tempFilePath,
-				statusCode: response.status,
-				errMsg: 'downloadFile:ok',
-			})
-		})
-		.catch((error: Error) => {
-			onFail?.({ errMsg: `downloadFile:fail ${error.message}` })
-		})
-		.finally(() => {
-			onComplete?.()
-		})
-}
-
-export const uploadFile = notSupportedApi('uploadFile')
-
 // ─── Open API: Account Info ─────────────────────────────────────────────────
 
 export function getAccountInfoSync(this: MiniAppContext) {
@@ -239,6 +212,7 @@ export const simulatorApis: Record<string, (this: MiniAppContext, opts: any) => 
 	// Network
 	downloadFile,
 	uploadFile,
+	uploadFileAbort,
 	// Storage (sync)
 	setStorageSync,
 	getStorageSync,

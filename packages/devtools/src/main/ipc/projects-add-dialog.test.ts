@@ -231,6 +231,7 @@ vi.mock('electron', () => {
         onHeadersReceived: vi.fn(),
       },
       registerPreloadScript: vi.fn(),
+      protocol: { handle: vi.fn(), unhandle: vi.fn() },
     })),
   }
 
@@ -281,6 +282,7 @@ vi.mock('electron', () => {
     View,
     webContents: webContentsStatic,
     session: sessionStub,
+    protocol: { registerSchemesAsPrivileged: vi.fn(), handle: vi.fn(), unhandle: vi.fn() },
     dialog,
     Menu,
     shell,

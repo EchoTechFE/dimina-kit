@@ -6,6 +6,7 @@
 // because webview sandbox cannot resolve require() for separate modules.
 import { installSimulatorBridge } from '../runtime/bridge.js'
 import { installCustomApisBridge } from '../runtime/custom-apis.js'
+import { installTempFileBridge } from '../runtime/temp-files.js'
 import { installConsoleInstrumentation } from '../instrumentation/console.js'
 import { createAppDataSource } from '../instrumentation/app-data.js'
 import { createWxmlSource } from '../instrumentation/wxml.js'
@@ -19,6 +20,7 @@ import { setupApiCompatHook } from '../shared/api-compat.js'
 setupApiCompatHook()
 installSimulatorBridge()
 installCustomApisBridge()
+installTempFileBridge()
 installConsoleInstrumentation()
 
 const snapshotHost = createMiniappSnapshotHost()

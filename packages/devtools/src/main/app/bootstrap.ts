@@ -1,6 +1,34 @@
-import { app } from 'electron'
+import { app, protocol } from 'electron'
 import { DEFAULT_CDP_PORT } from '../../shared/constants.js'
 import { loadWorkbenchSettings } from '../services/settings/index.js'
+
+let difileSchemeRegistered = false
+
+/**
+ * Register `difile://` as a privileged scheme so `simSession.protocol.handle`
+ * can serve `difile://devtools/{uuid}` URLs from the simulator webview without
+ * tripping CSP / fetch-API restrictions. Must be called before `app.whenReady`.
+ *
+ * Idempotent — subsequent calls are no-ops because Electron throws if the same
+ * scheme is registered twice.
+ */
+export function registerDifileScheme(): void {
+  if (difileSchemeRegistered) return
+  difileSchemeRegistered = true
+  protocol.registerSchemesAsPrivileged([
+    {
+      scheme: 'difile',
+      privileges: {
+        standard: true,
+        secure: true,
+        supportFetchAPI: true,
+        stream: true,
+        bypassCSP: true,
+        corsEnabled: true,
+      },
+    },
+  ])
+}
 
 /**
  * Suppress EPIPE errors on stdout/stderr.
