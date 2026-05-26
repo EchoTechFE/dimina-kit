@@ -20,10 +20,12 @@
  *     `_Tmp/`, etc. fall through to the user-data namespace.
  */
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const _os: typeof import('os') = (typeof require !== 'undefined') ? require('os') : null as unknown as typeof import('os')
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const _path: typeof import('path') = (typeof require !== 'undefined') ? require('path') : null as unknown as typeof import('path')
+// Main-process (Node ESM) resolves these natively. Simulator (vite browser
+// bundle) externalizes node builtins as no-op stubs — that's safe here only
+// because the simulator never enters the `store`/`usr` branches below
+// (renderer-side FSM forwards disk-backed reads/writes to main via IPC).
+import os from 'node:os'
+import path from 'node:path'
 
 export type VPathKind = 'tmp' | 'store' | 'usr'
 
@@ -50,10 +52,9 @@ const DIFILE_PREFIX = 'difile://'
 export function sandboxBase(): string {
 	const env = (typeof process !== 'undefined' && process.env && process.env.DIMINA_HOME) || ''
 	if (env) {
-		return _path.join(env, 'files')
+		return path.join(env, 'files')
 	}
-	const home = _os ? _os.homedir() : '/tmp'
-	return _path.join(home, '.dimina', 'files')
+	return path.join(os.homedir(), '.dimina', 'files')
 }
 
 export function resolveVPath(url: unknown): ResolvedVPath | null {
@@ -112,9 +113,9 @@ export function resolveVPath(url: unknown): ResolvedVPath | null {
 	// after normalization. Defense in depth against any traversal that the
 	// segment check above missed (e.g. backslash trickery on POSIX).
 	const base = sandboxBase()
-	const joined = _path.join(base, decoded)
-	const normalized = _path.normalize(joined)
-	if (normalized !== base && !normalized.startsWith(base + _path.sep)) return null
+	const joined = path.join(base, decoded)
+	const normalized = path.normalize(joined)
+	if (normalized !== base && !normalized.startsWith(base + path.sep)) return null
 
 	return { kind, writable, realPath: normalized }
 }

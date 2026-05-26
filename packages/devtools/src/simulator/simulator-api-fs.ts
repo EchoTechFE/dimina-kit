@@ -20,7 +20,7 @@
 
 import type { MiniAppContext } from './types'
 import { bindCallbacks, notSupportedApi } from './simulator-api-helpers'
-import { resolveVPath, type ResolvedVPath } from './vpath.js'
+import { resolveVPath, type ResolvedVPath } from '../shared/vpath.js'
 import { resolveTempFilePath } from './temp-files'
 
 /**

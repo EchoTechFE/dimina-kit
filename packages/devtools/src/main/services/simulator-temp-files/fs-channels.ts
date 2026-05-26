@@ -24,7 +24,7 @@
 
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { sandboxBase } from '../../../simulator/vpath.js'
+import { sandboxBase } from '../../../shared/vpath.js'
 import {
 	readDiskDir,
 	readDiskFile,

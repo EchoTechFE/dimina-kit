@@ -27,6 +27,16 @@ export class UpdateManager {
   private getCurrentVersion: () => string
   private latestUpdate: UpdateInfo | null = null
   private downloadedPath: string | null = null
+  /**
+   * Whether this instance has already emitted `Available` once. The periodic
+   * check fires forever (interval default 1h), and downstream UI (qdmp shell
+   * renders a native toast / Notification) is not idempotent — every event
+   * stacks. We dedupe at the source: at most one Available per instance
+   * lifetime, regardless of how the upstream `info.version` shifts. The user
+   * already knows "an update exists"; tracking minor version bumps mid-
+   * session is not worth duplicating the toast.
+   */
+  private hasNotified = false
   private timer: ReturnType<typeof setInterval> | null = null
   private initialTimer: ReturnType<typeof setTimeout> | null = null
   private ipc: IpcRegistry
@@ -111,8 +121,9 @@ export class UpdateManager {
 
   private async checkAndNotify(): Promise<void> {
     const result = await this.check()
-    if (result.hasUpdate && result.info) {
-      this.mainWindow.webContents.send(UpdateChannel.Available, result.info)
-    }
+    if (!result.hasUpdate || !result.info) return
+    if (this.hasNotified) return
+    this.hasNotified = true
+    this.mainWindow.webContents.send(UpdateChannel.Available, result.info)
   }
 }
