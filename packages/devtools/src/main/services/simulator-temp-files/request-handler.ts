@@ -19,7 +19,7 @@
  *     leak errno strings.
  */
 
-import { resolveVPath } from '../../../simulator/vpath.js'
+import { resolveVPath } from '../../../shared/vpath.js'
 import { readDiskFile } from './disk.js'
 import type { TempFileStore } from './resolver.js'
 

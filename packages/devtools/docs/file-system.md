@@ -182,7 +182,7 @@ simulator 在文件这块**主动选择对齐上游 dimina，而不是 wx 真机
 
 | 模块 | 文件 |
 |---|---|
-| vpath 校验器 | `src/simulator/vpath.ts` |
+| vpath 校验器（main + renderer 共用） | `src/shared/vpath.ts` |
 | renderer temp store | `src/simulator/temp-files.ts` |
 | renderer FSM 入口 | `src/simulator/simulator-api-fs.ts` |
 | FSM 声明（被禁的那层） | `src/simulator/service-apis/file/index.js` |

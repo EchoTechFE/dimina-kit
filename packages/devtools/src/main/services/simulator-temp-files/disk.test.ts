@@ -9,7 +9,7 @@
  *   statDiskFile(realPath) → { size, mtime, mode, isFile, isDirectory }
  *
  * These tests treat `realPath` as already-canonicalized; vpath canonicalize
- * is covered by `src/simulator/vpath.test.ts`. To stay hermetic each test
+ * is covered by `src/shared/vpath.test.ts`. To stay hermetic each test
  * spins up an isolated sandbox under `os.tmpdir()` and points
  * `DIMINA_HOME` at it — the same hook `resolveVPath` honours — so callers
  * who DO go through `resolveVPath` would land at the same `realPath` we
