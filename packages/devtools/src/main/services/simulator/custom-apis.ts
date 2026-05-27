@@ -3,6 +3,7 @@ export type SimulatorApiHandler = (params: unknown) => unknown | Promise<unknown
 export interface SimulatorApiRegistry {
   register(name: string, handler: SimulatorApiHandler): () => void
   list(): string[]
+  has(name: string): boolean
   invoke(name: string, params: unknown): Promise<unknown>
   clear(): void
 }
@@ -18,6 +19,9 @@ export function createSimulatorApiRegistry(): SimulatorApiRegistry {
     },
     list() {
       return Array.from(handlers.keys())
+    },
+    has(name) {
+      return handlers.has(name)
     },
     async invoke(name, params) {
       const handler = handlers.get(name)

@@ -1,0 +1,23 @@
+{
+  "name": "@dimina-kit/native-runtime-spike",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && vite build src/simulator-window --outDir ../../dist/simulator-window --emptyOutDir false",
+    "start": "pnpm run build && electron dist/main.js"
+  },
+  "dependencies": {
+    "electron": "^37.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "typescript": "^6.0.0",
+    "vite": "^8.0.0"
+  }
+}

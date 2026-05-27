@@ -15,6 +15,13 @@
  * defense for a devtool that loads user-trusted mini-programs.
  */
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
+import { BRIDGE_CHANNELS as C, SIMULATOR_EVENTS as E } from '../../shared/bridge-channels.js'
+import type {
+  ApiCallPayload,
+  ApiResponsePayload,
+} from '../../shared/bridge-channels.js'
+import { runApiAsync } from '../runtime/main-api-runner.js'
+import { simulatorApis } from '../../simulator/simulator-api.js'
 
 const api = {
   ipc: {
@@ -49,6 +56,29 @@ const api = {
 // reaches the renderer's `window`. The simulator <webview> uses a separate
 // preload (`simulator.ts`).
 contextBridge.exposeInMainWorld('devtools', api)
+
+// Native-host fallback: bridge-router forwards any invokeAPI name not
+// registered in `ctx.simulatorApis` to the simulator's webContents via
+// E.API_CALL. When the *main* window doubles as the simulator (the default
+// path for e2e callers that drive `dmb:spawn` without an explicit
+// simulatorWcId), the listener must live here in the main-window preload
+// because the renderer side has no DeviceShell mounted to install one.
+ipcRenderer.on(E.API_CALL, (_event, payload: ApiCallPayload) => {
+  void runApiAsync(
+    simulatorApis as Record<string, (this: unknown, params?: unknown) => unknown | Promise<unknown>>,
+    payload.name,
+    payload.params,
+  ).then((verdict) => {
+    const ack: ApiResponsePayload = {
+      appSessionId: payload.appSessionId,
+      requestId: payload.requestId,
+      ok: verdict.ok,
+      result: verdict.result,
+      errMsg: verdict.errMsg,
+    }
+    ipcRenderer.send(C.API_RESPONSE, ack)
+  })
+})
 
 // Test-only hatch: e2e helpers emit synthetic IPC events on the renderer's
 // ipcRenderer instance to trigger handlers registered via `devtools.ipc.on`

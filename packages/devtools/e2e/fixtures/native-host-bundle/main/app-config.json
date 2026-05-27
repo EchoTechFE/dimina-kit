@@ -1,0 +1,41 @@
+{
+  "app": {
+    "entryPagePath": "pages/index/index",
+    "pages": ["pages/index/index", "pages/detail/detail", "pages/cart/cart", "pages/me/me"],
+    "window": {
+      "navigationBarTitleText": "Fixture",
+      "navigationBarBackgroundColor": "#ffffff",
+      "navigationBarTextStyle": "black",
+      "navigationStyle": "default"
+    },
+    "tabBar": {
+      "color": "#999999",
+      "selectedColor": "#1890ff",
+      "backgroundColor": "#ffffff",
+      "borderStyle": "black",
+      "list": [
+        { "pagePath": "pages/index/index", "text": "Home" },
+        { "pagePath": "pages/cart/cart", "text": "Cart" },
+        { "pagePath": "pages/me/me", "text": "Me" }
+      ]
+    }
+  },
+  "modules": {
+    "pages/index/index": {
+      "window": { "navigationBarTitleText": "Home" },
+      "root": "main"
+    },
+    "pages/cart/cart": {
+      "window": { "navigationBarTitleText": "Cart" },
+      "root": "main"
+    },
+    "pages/me/me": {
+      "window": { "navigationBarTitleText": "Me" },
+      "root": "main"
+    },
+    "pages/detail/detail": {
+      "window": { "navigationBarTitleText": "Detail" },
+      "root": "main"
+    }
+  }
+}

@@ -1,0 +1,17 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Dimina Service Host</title>
+    <!-- Plain script (not module). service.js is an IIFE; its bundled env.js installs
+         globalThis.modDefine/modRequire/wx/dd/App/Page when it runs. Loading the bundle
+         here (instead of via a module ESM import) makes sure logic.js (injected later
+         via webContents.executeJavaScript) calls the SAME modDefine — the one bound to
+         the service IIFE's internal JSModules — that service loader.modRequire reads
+         from. Using a pre-imported @dimina/common modDefine would create two
+         disconnected AMD registries. -->
+    <script src="../../../../../../dimina/fe/packages/service/dist/service.js"></script>
+    <script type="module" src="../../dist/service-host/sync-api-patch.js"></script>
+  </head>
+  <body></body>
+</html>

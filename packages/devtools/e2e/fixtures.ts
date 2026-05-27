@@ -40,16 +40,23 @@ interface WorkerElectronHandle {
   userDataDir: string
 }
 
+// playwright.config.ts sets DIMINA_DEVTOOLS_DATA_DIR at runner level but
+// workers spawn from a fresh node process and lose top-level env mutations,
+// so re-seed it here too. setupDataPaths() in bootstrap.ts and
+// userDataDirFor() below both read process.env.DIMINA_DEVTOOLS_DATA_DIR;
+// a single source of truth keeps Chromium caches off the system partition
+// regardless of which entry point loaded first.
+if (!process.env.DIMINA_DEVTOOLS_DATA_DIR && fs.existsSync('/Volumes/jdisk')) {
+  process.env.DIMINA_DEVTOOLS_DATA_DIR = '/Volumes/jdisk/electron-data/dimina-devtools-e2e'
+}
+
 function userDataDirFor(workerIndex: number): string {
-  const dir = path.resolve(
-    __dirname,
-    '..',
-    'node_modules',
-    '.cache',
-    'devtools-e2e',
-    'userdata',
-    `worker-${workerIndex}`,
-  )
+  // Honour DIMINA_DEVTOOLS_DATA_DIR (default: external jdisk) so per-worker
+  // Electron userData (Chromium cache, IndexedDB, dictionaries — ~100MB each)
+  // doesn't bloat the constrained system partition.
+  const base = process.env.DIMINA_DEVTOOLS_DATA_DIR
+    ?? path.resolve(__dirname, '..', 'node_modules', '.cache', 'devtools-e2e')
+  const dir = path.join(base, 'userdata', `worker-${workerIndex}`)
   fs.mkdirSync(dir, { recursive: true })
   return dir
 }

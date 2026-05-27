@@ -55,6 +55,26 @@ export async function ipcInvoke<T = unknown>(
   ) as Promise<T>
 }
 
+/**
+ * Fire-and-forget IPC send (mirrors `ipcRenderer.send`). Used for channels
+ * registered with `ipcMain.on` (e.g. `dmb:dispose`, `dmb:page:close`) where
+ * the main side does not return a value.
+ */
+export async function ipcSend(
+  mainWindow: Page,
+  channel: string,
+  ...args: unknown[]
+): Promise<void> {
+  await mainWindow.evaluate(
+    ({ channel, args }) => {
+      const ipc = (window as unknown as { devtools?: { ipc?: { send?: (c: string, ...a: unknown[]) => void } } }).devtools?.ipc
+      if (!ipc?.send) throw new Error('[e2e] window.devtools.ipc.send unavailable')
+      ipc.send(channel, ...args)
+    },
+    { channel, args }
+  )
+}
+
 // ── Project lifecycle ──────────────────────────────────────────────────
 
 /**

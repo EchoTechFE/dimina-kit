@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <title>Dimina Render Host</title>
+    <script>
+      // Polyfill `process` for Vue dev-build (referenced inside @dimina/render bundle).
+      // Without this, render.js throws "process is not defined".
+      if (typeof globalThis.process === 'undefined') {
+        globalThis.process = { env: { NODE_ENV: 'production' } };
+      }
+    </script>
+    <script type="module">
+      import { modDefine, modRequire } from '../../../../../../dimina/fe/packages/common/dist/common.js'
+      window.modDefine = modDefine
+      window.modRequire = modRequire
+      await import('../../../../../../dimina/fe/packages/render/dist/render.js')
+    </script>
+  </head>
+  <body></body>
+</html>

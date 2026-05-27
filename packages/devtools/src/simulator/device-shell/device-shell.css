@@ -1,0 +1,111 @@
+.device-shell-root {
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #e7ebef;
+  color: #101418;
+  box-sizing: border-box;
+  padding: 24px;
+}
+
+.device-shell {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid rgba(16, 20, 24, 0.18);
+  border-radius: 38px;
+  background: #f8fafc;
+  box-shadow: 0 18px 50px rgba(16, 20, 24, 0.22);
+}
+
+.device-shell__status-bar {
+  flex: 0 0 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 28px;
+  font: 600 13px/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  letter-spacing: 0;
+  background: #f8fafc;
+  color: #111827;
+}
+
+.device-shell__status-icons {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.device-shell__status-icons span {
+  display: block;
+  background: #111827;
+}
+
+.device-shell__status-icons span:nth-child(1) {
+  width: 16px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.device-shell__status-icons span:nth-child(2) {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+
+.device-shell__status-icons span:nth-child(3) {
+  width: 20px;
+  height: 10px;
+  border-radius: 3px;
+}
+
+.device-shell__viewport {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  background: #ffffff;
+}
+
+.device-shell__webview {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #ffffff;
+}
+
+.device-shell__home-indicator {
+  flex: 0 0 28px;
+  position: relative;
+  background: #f8fafc;
+}
+
+.device-shell__home-indicator::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  width: 118px;
+  height: 4px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: #111827;
+}
+
+@media (max-width: 460px) {
+  .device-shell-root {
+    padding: 0;
+    background: #f8fafc;
+  }
+
+  .device-shell {
+    width: 100% !important;
+    height: 100vh !important;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+}
