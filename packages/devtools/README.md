@@ -2,7 +2,7 @@
 
 基于 Electron 的小程序开发者工具。提供模拟器、Chrome DevTools 面板、WXML/AppData/Storage 面板、编译配置等功能。
 
-下游 host 通过 `createWorkbenchApp()` 集成并定制 devtools。扩展模型设计见 [`docs/extension-model.md`](docs/extension-model.md)。
+下游 host 通过 [`@dimina-kit/workbench`](../workbench) 的 `workbench(config)` fluent API 集成并定制 devtools。扩展模型设计见 [`docs/workbench-model.md`](docs/workbench-model.md)。
 
 ---
 

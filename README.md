@@ -11,6 +11,7 @@
 
 - [`@dimina-kit/devkit`](./packages/devkit) — Dimina 小程序编译与 H5 容器预览工具包，支持文件监听热更新，可独立使用或作为 devtools 的编译后端
 - [`@dimina-kit/devtools`](./packages/devtools) — 基于 Electron 的模块化小程序开发者工具，提供模拟器、Chrome DevTools 面板以及 WXML / AppData / Storage / Console 等内置面板
+- [`@dimina-kit/workbench`](./packages/workbench) — devtools host 集成框架：`workbench(config)` 单入口接管 Electron 装配、IPC、生命周期，供下游 host 与 dimina-devtools 自身共用
 
 ---
 
