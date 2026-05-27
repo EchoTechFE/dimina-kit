@@ -18,7 +18,8 @@ export function exposeOnMainWorld(key: string, value: unknown): () => void {
   try {
     contextBridge.exposeInMainWorld(key, value)
   }
-  catch {
+  catch (err) {
+    console.warn('[devtools/expose] contextBridge.exposeInMainWorld failed, falling back to direct window assignment:', err)
     ;(window as unknown as Record<string, unknown>)[key] = value
     fellBack = true
   }
