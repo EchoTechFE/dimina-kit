@@ -3,6 +3,8 @@
 > devtools 面板数据的统一**快照**框架。
 > 状态：**已落地（2026-05-20）** —— 框架、WXML 与 AppData 迁移、`workbench:reset` 死代码清理均已完成；
 > 自动化访问器 `__miniappSnapshot` 已实现。时间旅行、快照 diff、MCP 工具等见 §8，为后续可选扩展。
+>
+> 配套：[`workbench-model.md`](./workbench-model.md) 描述 host 的扩展模型（`workbench(config)` 单入口）；本文描述面板数据的统一快照框架。
 
 ## 摘要（TL;DR）
 

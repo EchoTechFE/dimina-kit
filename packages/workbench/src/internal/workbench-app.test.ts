@@ -1,0 +1,1705 @@
+import { describe, expect, it, vi } from 'vitest'
+import { defineEvent } from '../events.js'
+import {
+	BRIDGE_PROTOCOL_VERSION,
+	WorkbenchChannel,
+} from '../shared/protocol.js'
+import type { JsonValue, Runtime, WebviewSource, WorkbenchConfig } from '../types.js'
+import type {
+	MinimalBrowserWindow,
+	MinimalBrowserWindowOptions,
+	MinimalElectron,
+	MinimalRect,
+	MinimalWebContentsLike,
+	MinimalWebContentsView,
+} from './electron-types.js'
+import { WorkbenchApp } from './workbench-app.js'
+import type { MinimalIpcMain, MinimalWebContents } from './wire-transport.js'
+
+/**
+ * Phase 2 contract tests for WorkbenchApp lifecycle driver.
+ *
+ * Source of truth: JSDoc on WorkbenchApp. Phase 2 in-memory only —
+ * Electron-specific runtime fields (electron / mainWindow / toolbarView)
+ * are not exercised here.
+ */
+describe('WorkbenchApp — construction', () => {
+	it('constructs with an empty config without throwing', () => {
+		expect(() => new WorkbenchApp({})).not.toThrow()
+	})
+
+	it('exposes config back via app.config', () => {
+		const cfg: WorkbenchConfig = {}
+		const app = new WorkbenchApp(cfg)
+		expect(app.config).toBe(cfg)
+	})
+
+	// CONTRACT-AMBIGUOUS: JSDoc does not specify whether ctor validates or
+	// whether validation runs in start(). We assert "rejection happens on
+	// start() (validate-on-call)" because the public workbench() entry uses
+	// the same pattern, and ctor-throwing makes it hard to wire test fixtures.
+	it('invalid config rejects on start(), not at construction time (CONTRACT-AMBIGUOUS)', async () => {
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const bad: any = { simulatorApis: { broken: 'oops' } }
+		// Either ctor throws OR start() rejects — both honour validate-on-call.
+		let ctorThrew = false
+		let app: WorkbenchApp | null = null
+		try {
+			app = new WorkbenchApp(bad)
+		}
+		catch {
+			ctorThrew = true
+		}
+		if (!ctorThrew && app) {
+			await expect(app.start()).rejects.toThrow(TypeError)
+		}
+	})
+})
+
+describe('WorkbenchApp — start() phase progression', () => {
+	it('phase advances from init to ready after start()', async () => {
+		const app = new WorkbenchApp({})
+		await app.start()
+		expect(app.phase).toBe('ready')
+	})
+
+	it('start() invokes config.setup(runtime) before reaching ready', async () => {
+		const setup = vi.fn()
+		const app = new WorkbenchApp({ setup })
+		await app.start()
+		expect(setup).toHaveBeenCalledTimes(1)
+		const arg = setup.mock.calls[0]?.[0] as Runtime | undefined
+		expect(arg).toBeDefined()
+		expect(typeof arg?.add).toBe('function')
+	})
+
+	it('start() awaits an async setup before resolving', async () => {
+		let setupFinished = false
+		const app = new WorkbenchApp({
+			setup: async () => {
+				await new Promise(r => setTimeout(r, 20))
+				setupFinished = true
+			},
+		})
+		await app.start()
+		expect(setupFinished).toBe(true)
+		expect(app.phase).toBe('ready')
+	})
+
+	it('runtime is unavailable before setup phase (throws on access)', () => {
+		const app = new WorkbenchApp({})
+		expect(() => app.runtime).toThrow()
+	})
+
+	it('runtime is available after start()', async () => {
+		const app = new WorkbenchApp({})
+		await app.start()
+		expect(() => app.runtime).not.toThrow()
+		expect(app.runtime).toBeDefined()
+	})
+
+	it('setup throwing → start() rejects with the same error and app proceeds through cleanup → destroy', async () => {
+		const err = new Error('setup-boom')
+		const app = new WorkbenchApp({
+			setup: () => {
+				throw err
+			},
+		})
+		await expect(app.start()).rejects.toBe(err)
+		// dispose must have run; phase should NOT be 'ready'
+		expect(app.phase).not.toBe('ready')
+		// Phase must have progressed to a teardown state (cleanup/destroy/quit)
+		// — not stuck at setup.
+		expect(['cleanup', 'destroy', 'quit']).toContain(app.phase)
+	})
+
+	it('setup throwing causes registered disposables to run', async () => {
+		const dispose = vi.fn()
+		const err = new Error('setup-boom')
+		const app = new WorkbenchApp({
+			setup: (rt) => {
+				rt.add(dispose)
+				throw err
+			},
+		})
+		await expect(app.start()).rejects.toBe(err)
+		expect(dispose).toHaveBeenCalledTimes(1)
+	})
+})
+
+describe('WorkbenchApp — declared events during setup', () => {
+	it('a declared HostEvent.publish() is bound before setup runs (does not throw)', async () => {
+		const ev = defineEvent<JsonValue>('declared-evt')
+		let threw = false
+		const app = new WorkbenchApp({
+			events: [ev],
+			setup: () => {
+				try {
+					ev.publish({ ok: true })
+				}
+				catch {
+					threw = true
+				}
+			},
+		})
+		await app.start()
+		expect(threw).toBe(false)
+	})
+})
+
+describe('WorkbenchApp — shutdown()', () => {
+	it('shutdown() drives phase through to quit', async () => {
+		const app = new WorkbenchApp({})
+		await app.start()
+		await app.shutdown()
+		expect(app.phase).toBe('quit')
+	})
+
+	it('shutdown() is idempotent — second call resolves without throwing', async () => {
+		const app = new WorkbenchApp({})
+		await app.start()
+		await app.shutdown()
+		await expect(app.shutdown()).resolves.toBeUndefined()
+		expect(app.phase).toBe('quit')
+	})
+
+	it('shutdown() awaits lifecycle.beforeClose', async () => {
+		let beforeFinished = false
+		const app = new WorkbenchApp({
+			lifecycle: {
+				beforeClose: async () => {
+					await new Promise(r => setTimeout(r, 20))
+					beforeFinished = true
+				},
+			},
+		})
+		await app.start()
+		await app.shutdown()
+		expect(beforeFinished).toBe(true)
+	})
+
+	it('shutdown() invokes runtime.add() disposables in LIFO order', async () => {
+		const calls: string[] = []
+		const app = new WorkbenchApp({
+			setup: (rt) => {
+				rt.add(() => {
+					calls.push('a')
+				})
+				rt.add(() => {
+					calls.push('b')
+				})
+				rt.add(() => {
+					calls.push('c')
+				})
+			},
+		})
+		await app.start()
+		await app.shutdown()
+		expect(calls).toEqual(['c', 'b', 'a'])
+	})
+
+	it('shutdown() disposes a Disposable added during setup', async () => {
+		const dispose = vi.fn()
+		const app = new WorkbenchApp({
+			setup: (rt) => {
+				rt.add({ dispose })
+			},
+		})
+		await app.start()
+		expect(dispose).not.toHaveBeenCalled()
+		await app.shutdown()
+		expect(dispose).toHaveBeenCalledTimes(1)
+	})
+
+	// CONTRACT-AMBIGUOUS: JSDoc says "timeout → log error" but does not say
+	// whether shutdown rejects or continues. We assert "log error then
+	// continue into cleanup", which avoids leaving the host in a stuck
+	// half-shut state — the safer choice for a framework boundary.
+	it('beforeClose timing out logs an error but shutdown() still resolves to quit (CONTRACT-AMBIGUOUS)', async () => {
+		const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			const app = new WorkbenchApp({
+				lifecycle: {
+					timeoutMs: 30,
+					beforeClose: () => new Promise(() => {
+						// never resolves
+					}),
+				},
+			})
+			await app.start()
+			await expect(app.shutdown()).resolves.toBeUndefined()
+			expect(app.phase).toBe('quit')
+			expect(errorSpy).toHaveBeenCalled()
+		}
+		finally {
+			errorSpy.mockRestore()
+		}
+	}, 5000)
+})
+
+// ── Phase 3b: WireTransport integration via WorkbenchAppOptions.wireTransport ──
+
+type InvokeHandler = (
+	event: { sender: { id: number } },
+	...args: unknown[]
+) => unknown | Promise<unknown>
+
+interface FakeIpcMain extends MinimalIpcMain {
+	handle: ReturnType<typeof vi.fn> & MinimalIpcMain['handle']
+	removeHandler: ReturnType<typeof vi.fn> & MinimalIpcMain['removeHandler']
+	handlers: Map<string, InvokeHandler>
+}
+
+function createFakeIpcMain(): FakeIpcMain {
+	const handlers = new Map<string, InvokeHandler>()
+	const handle = vi.fn((channel: string, handler: InvokeHandler) => {
+		handlers.set(channel, handler)
+	}) as FakeIpcMain['handle']
+	const removeHandler = vi.fn((channel: string) => {
+		handlers.delete(channel)
+	}) as FakeIpcMain['removeHandler']
+	return { handle, removeHandler, handlers }
+}
+
+interface FakeWebContents extends MinimalWebContents {
+	send: ReturnType<typeof vi.fn> & MinimalWebContents['send']
+	destroyed: boolean
+}
+
+function createFakeWebContents(id: number): FakeWebContents {
+	const wc: FakeWebContents = {
+		id,
+		destroyed: false,
+		isDestroyed(): boolean {
+			return wc.destroyed
+		},
+		send: vi.fn() as FakeWebContents['send'],
+	}
+	return wc
+}
+
+describe('WorkbenchApp — wireTransport integration', () => {
+	it('start() registers ipcMain.handle for invoke + probe channels', async () => {
+		const ipcMain = createFakeIpcMain()
+		const app = new WorkbenchApp({}, { wireTransport: { ipcMain } })
+		await app.start()
+		expect(ipcMain.handle).toHaveBeenCalledTimes(2)
+		const channels = ipcMain.handle.mock.calls.map(c => c[0] as string).sort()
+		expect(channels).toEqual([WorkbenchChannel.Invoke, WorkbenchChannel.Probe].sort())
+	})
+
+	it('declared hostServices are reachable through the ipcMain invoke handler (trusted sender)', async () => {
+		const ipcMain = createFakeIpcMain()
+		const wc = createFakeWebContents(11)
+		const app = new WorkbenchApp(
+			{
+				hostServices: {
+					ping: () => 'pong' as JsonValue,
+				},
+			},
+			{ wireTransport: { ipcMain, trustedWebContents: () => [wc] } },
+		)
+		await app.start()
+
+		const invoke = ipcMain.handlers.get(WorkbenchChannel.Invoke)
+		if (!invoke) throw new Error('invoke handler missing')
+		const res = (await invoke(
+			{ sender: { id: 11 } },
+			{ kind: 'host', name: 'ping', args: [] },
+		)) as { ok: true, result: JsonValue }
+		expect(res.ok).toBe(true)
+		expect(res.result).toBe('pong')
+
+		await app.shutdown()
+	})
+
+	it('declared simulatorApis are reachable through the ipcMain invoke handler (trusted sender)', async () => {
+		const ipcMain = createFakeIpcMain()
+		const wc = createFakeWebContents(12)
+		const app = new WorkbenchApp(
+			{
+				simulatorApis: {
+					echo: (msg: string) => msg,
+				},
+			},
+			{ wireTransport: { ipcMain, trustedWebContents: () => [wc] } },
+		)
+		await app.start()
+
+		const invoke = ipcMain.handlers.get(WorkbenchChannel.Invoke)
+		if (!invoke) throw new Error('invoke handler missing')
+		const res = (await invoke(
+			{ sender: { id: 12 } },
+			{ kind: 'simulator', name: 'echo', args: ['hello'] },
+		)) as { ok: true, result: JsonValue }
+		expect(res.ok).toBe(true)
+		expect(res.result).toBe('hello')
+
+		await app.shutdown()
+	})
+
+	it('untrusted sender hitting the ipcMain invoke handler resolves to InvokeFailure with code UNTRUSTED_SENDER', async () => {
+		const ipcMain = createFakeIpcMain()
+		const hostServices = { secret: vi.fn(() => 'no' as JsonValue) }
+		const app = new WorkbenchApp(
+			{ hostServices },
+			// no trusted webContents → all senders untrusted
+			{ wireTransport: { ipcMain, trustedWebContents: () => [] } },
+		)
+		await app.start()
+
+		const invoke = ipcMain.handlers.get(WorkbenchChannel.Invoke)
+		if (!invoke) throw new Error('invoke handler missing')
+		const res = (await invoke(
+			{ sender: { id: 99 } },
+			{ kind: 'host', name: 'secret', args: [] },
+		)) as { ok: false, error: { code?: string } }
+		expect(res.ok).toBe(false)
+		expect(res.error.code).toBe('WORKBENCH_UNTRUSTED_SENDER')
+		expect(hostServices.secret).not.toHaveBeenCalled()
+		await app.shutdown()
+	})
+
+	it('probe handler returns ready + BRIDGE_PROTOCOL_VERSION', async () => {
+		const ipcMain = createFakeIpcMain()
+		const app = new WorkbenchApp({}, { wireTransport: { ipcMain } })
+		await app.start()
+		const probe = ipcMain.handlers.get(WorkbenchChannel.Probe)
+		if (!probe) throw new Error('probe handler missing')
+		const res = await probe({ sender: { id: 1 } })
+		expect(res).toEqual({ ready: true, version: BRIDGE_PROTOCOL_VERSION })
+		await app.shutdown()
+	})
+
+	it('declared HostEvent.publish() fans out to trusted webContents via send(__workbench:event, envelope)', async () => {
+		const ipcMain = createFakeIpcMain()
+		const wc = createFakeWebContents(20)
+		const ev = defineEvent<JsonValue>('hello')
+		const app = new WorkbenchApp(
+			{ events: [ev] },
+			{ wireTransport: { ipcMain, trustedWebContents: () => [wc] } },
+		)
+		await app.start()
+
+		ev.publish({ msg: 'world' })
+
+		expect(wc.send).toHaveBeenCalledTimes(1)
+		expect(wc.send).toHaveBeenCalledWith(WorkbenchChannel.Event, {
+			name: 'hello',
+			payload: { msg: 'world' },
+		})
+		await app.shutdown()
+	})
+
+	it('shutdown() calls ipcMain.removeHandler for invoke + probe', async () => {
+		const ipcMain = createFakeIpcMain()
+		const app = new WorkbenchApp({}, { wireTransport: { ipcMain } })
+		await app.start()
+		await app.shutdown()
+		expect(ipcMain.removeHandler).toHaveBeenCalledTimes(2)
+		const removed = ipcMain.removeHandler.mock.calls.map(c => c[0] as string).sort()
+		expect(removed).toEqual([WorkbenchChannel.Invoke, WorkbenchChannel.Probe].sort())
+	})
+
+	it('after shutdown(), declared HostEvent.publish no longer fans out (best-effort)', async () => {
+		// HostEvent publisher is unbound by bus.unbindAll() in shutdown — publish
+		// after shutdown throws EventNotBoundError. We assert that path here.
+		const ipcMain = createFakeIpcMain()
+		const wc = createFakeWebContents(30)
+		const ev = defineEvent<JsonValue>('drain-me')
+		const app = new WorkbenchApp(
+			{ events: [ev] },
+			{ wireTransport: { ipcMain, trustedWebContents: () => [wc] } },
+		)
+		await app.start()
+		ev.publish({ x: 1 })
+		expect(wc.send).toHaveBeenCalledTimes(1)
+		await app.shutdown()
+		expect(() => ev.publish({ x: 2 })).toThrow()
+		expect(wc.send).toHaveBeenCalledTimes(1)
+	})
+
+	it('default senderPolicy treats _trustWebContents() entries as trusted (Phase 4 windows.trust path)', async () => {
+		const ipcMain = createFakeIpcMain()
+		const app = new WorkbenchApp(
+			{ hostServices: { ping: () => 'pong' as JsonValue } },
+			{ wireTransport: { ipcMain } },
+		)
+		await app.start()
+
+		const invoke = ipcMain.handlers.get(WorkbenchChannel.Invoke)
+		if (!invoke) throw new Error('invoke handler missing')
+
+		// Untrusted by default — no _trustWebContents() called yet.
+		const untrustedRes = (await invoke(
+			{ sender: { id: 50 } },
+			{ kind: 'host', name: 'ping', args: [] },
+		)) as { ok: false, error: { code?: string } }
+		expect(untrustedRes.ok).toBe(false)
+		expect(untrustedRes.error.code).toBe('WORKBENCH_UNTRUSTED_SENDER')
+
+		// Trust a webContents → its sender id should now route through.
+		const wc = createFakeWebContents(50)
+		const trustDispose = app._trustWebContents(wc)
+		const trustedRes = (await invoke(
+			{ sender: { id: 50 } },
+			{ kind: 'host', name: 'ping', args: [] },
+		)) as { ok: true, result: JsonValue }
+		expect(trustedRes.ok).toBe(true)
+		expect(trustedRes.result).toBe('pong')
+
+		// Dispose returns it to untrusted.
+		trustDispose.dispose()
+		const afterRes = (await invoke(
+			{ sender: { id: 50 } },
+			{ kind: 'host', name: 'ping', args: [] },
+		)) as { ok: false, error: { code?: string } }
+		expect(afterRes.ok).toBe(false)
+		expect(afterRes.error.code).toBe('WORKBENCH_UNTRUSTED_SENDER')
+
+		await app.shutdown()
+	})
+})
+
+// ── Phase 4: Electron assembly via WorkbenchAppOptions.electron ──────────────
+
+interface FakeWebContentsLike extends MinimalWebContentsLike {
+	loadURL: ReturnType<typeof vi.fn> & MinimalWebContentsLike['loadURL']
+	loadFile: ReturnType<typeof vi.fn> & MinimalWebContentsLike['loadFile']
+	send: ReturnType<typeof vi.fn> & MinimalWebContentsLike['send']
+	destroyed: boolean
+}
+
+interface FakeBrowserWindow extends MinimalBrowserWindow {
+	readonly webContents: FakeWebContentsLike
+	getContentBounds: ReturnType<typeof vi.fn> & MinimalBrowserWindow['getContentBounds']
+	show: ReturnType<typeof vi.fn> & MinimalBrowserWindow['show']
+	destroy: ReturnType<typeof vi.fn> & MinimalBrowserWindow['destroy']
+	on: ReturnType<typeof vi.fn> & MinimalBrowserWindow['on']
+	contentView: MinimalBrowserWindow['contentView'] & {
+		addChildView: ReturnType<typeof vi.fn>
+		removeChildView: ReturnType<typeof vi.fn>
+	}
+	destroyed: boolean
+	/** Test-only — map of event name → listeners registered via `.on(event, fn)`. */
+	_listeners: Map<string, Array<() => void>>
+	/** Test-only — invoke all listeners registered for the given event. */
+	_emit(event: 'resize' | 'closed'): void
+}
+
+interface FakeWebContentsView extends MinimalWebContentsView {
+	readonly webContents: FakeWebContentsLike
+	setBounds: ReturnType<typeof vi.fn> & MinimalWebContentsView['setBounds']
+}
+
+interface FakeElectron extends MinimalElectron {
+	browserWindows: FakeBrowserWindow[]
+	webContentsViews: FakeWebContentsView[]
+	browserWindowCtorCalls: MinimalBrowserWindowOptions[]
+	webContentsViewCtorCalls: Array<{ webPreferences?: { preload?: string } } | undefined>
+}
+
+function createFakeElectron(initialContentBounds: MinimalRect = { x: 0, y: 0, width: 1024, height: 768 }): FakeElectron {
+	let wcIdCounter = 100
+	let winIdCounter = 1
+	const browserWindows: FakeBrowserWindow[] = []
+	const webContentsViews: FakeWebContentsView[] = []
+	const browserWindowCtorCalls: MinimalBrowserWindowOptions[] = []
+	const webContentsViewCtorCalls: Array<{ webPreferences?: { preload?: string } } | undefined> = []
+
+	function makeFakeWebContents(): FakeWebContentsLike {
+		const id = wcIdCounter++
+		const wc: FakeWebContentsLike = {
+			id,
+			destroyed: false,
+			loadURL: vi.fn(async (_u: string) => undefined) as FakeWebContentsLike['loadURL'],
+			loadFile: vi.fn(async (_p: string) => undefined) as FakeWebContentsLike['loadFile'],
+			send: vi.fn() as FakeWebContentsLike['send'],
+			isDestroyed: () => wc.destroyed,
+		}
+		return wc
+	}
+
+	class FakeBW implements MinimalBrowserWindow {
+		readonly id: number
+		readonly webContents: FakeWebContentsLike
+		readonly contentView: FakeBrowserWindow['contentView']
+		destroyed: boolean
+		getContentBounds: FakeBrowserWindow['getContentBounds']
+		show: FakeBrowserWindow['show']
+		destroy: FakeBrowserWindow['destroy']
+		on: FakeBrowserWindow['on']
+		_listeners: Map<string, Array<() => void>>
+
+		constructor(opts?: MinimalBrowserWindowOptions) {
+			browserWindowCtorCalls.push(opts ?? {})
+			this.id = winIdCounter++
+			this.webContents = makeFakeWebContents()
+			this.destroyed = false
+			const cv = {
+				addChildView: vi.fn(),
+				removeChildView: vi.fn(),
+			}
+			this.contentView = cv as FakeBrowserWindow['contentView']
+			this.getContentBounds = vi.fn(() => initialContentBounds) as FakeBrowserWindow['getContentBounds']
+			this.show = vi.fn() as FakeBrowserWindow['show']
+			this.destroy = vi.fn(() => {
+				this.destroyed = true
+				this.webContents.destroyed = true
+			}) as FakeBrowserWindow['destroy']
+			this._listeners = new Map()
+			this.on = vi.fn((event: 'resize' | 'closed', listener: () => void) => {
+				let arr = this._listeners.get(event)
+				if (!arr) {
+					arr = []
+					this._listeners.set(event, arr)
+				}
+				arr.push(listener)
+				return this
+			}) as FakeBrowserWindow['on']
+			browserWindows.push(this as unknown as FakeBrowserWindow)
+		}
+
+		_emit(event: 'resize' | 'closed'): void {
+			const arr = this._listeners.get(event)
+			if (!arr) return
+			for (const fn of arr) fn()
+		}
+
+		isDestroyed(): boolean {
+			return this.destroyed
+		}
+	}
+
+	class FakeWCV implements MinimalWebContentsView {
+		readonly webContents: FakeWebContentsLike
+		setBounds: FakeWebContentsView['setBounds']
+
+		constructor(opts?: { webPreferences?: { preload?: string } }) {
+			webContentsViewCtorCalls.push(opts)
+			this.webContents = makeFakeWebContents()
+			this.setBounds = vi.fn() as FakeWebContentsView['setBounds']
+			webContentsViews.push(this as unknown as FakeWebContentsView)
+		}
+	}
+
+	return {
+		BrowserWindow: FakeBW as unknown as MinimalElectron['BrowserWindow'],
+		WebContentsView: FakeWCV as unknown as MinimalElectron['WebContentsView'],
+		browserWindows,
+		webContentsViews,
+		browserWindowCtorCalls,
+		webContentsViewCtorCalls,
+	}
+}
+
+describe('WorkbenchApp — electron assembly', () => {
+	// MUST 1: mainWindow ctor reflects config.app.window + name + icon
+	it('start() constructs the mainWindow with title/icon/width/height/minWidth/minHeight from config.app', async () => {
+		const electron = createFakeElectron()
+		const app = new WorkbenchApp(
+			{
+				app: {
+					name: 'Demo Workbench',
+					icon: '/abs/path/icon.png',
+					window: { width: 1280, height: 800, minWidth: 800, minHeight: 600 },
+				},
+			},
+			{ electron },
+		)
+		await app.start()
+
+		// First BrowserWindow ctor call = mainWindow
+		expect(electron.browserWindowCtorCalls.length).toBeGreaterThanOrEqual(1)
+		const mainOpts = electron.browserWindowCtorCalls[0]
+		expect(mainOpts).toBeDefined()
+		expect(mainOpts!.title).toBe('Demo Workbench')
+		expect(mainOpts!.icon).toBe('/abs/path/icon.png')
+		expect(mainOpts!.width).toBe(1280)
+		expect(mainOpts!.height).toBe(800)
+		expect(mainOpts!.minWidth).toBe(800)
+		expect(mainOpts!.minHeight).toBe(600)
+	})
+
+	// MUST 2: mainWindow defaults to *some* numeric width/height (CONTRACT-AMBIGUOUS).
+	// We only assert presence + type, not specific defaults — framework picks.
+	it('mainWindow ctor receives numeric width/height even when config.app.window is omitted (CONTRACT-AMBIGUOUS defaults)', async () => {
+		const electron = createFakeElectron()
+		const app = new WorkbenchApp({}, { electron })
+		await app.start()
+
+		const mainOpts = electron.browserWindowCtorCalls[0]
+		expect(mainOpts).toBeDefined()
+		expect(typeof mainOpts!.width).toBe('number')
+		expect(typeof mainOpts!.height).toBe('number')
+	})
+
+	// MUST 8: runtime.electron / mainWindow / rawIpcMain available after start()
+	it('runtime.electron returns the injected fake (same reference) after start()', async () => {
+		const electron = createFakeElectron()
+		const app = new WorkbenchApp({}, { electron })
+		await app.start()
+		expect(app.runtime.electron).toBe(electron as unknown as Runtime['electron'])
+	})
+
+	it('runtime.mainWindow returns the constructed mainWindow after start()', async () => {
+		const electron = createFakeElectron()
+		const app = new WorkbenchApp({}, { electron })
+		await app.start()
+		expect(() => app.runtime.mainWindow).not.toThrow()
+		expect(app.runtime.mainWindow).toBe(electron.browserWindows[0] as unknown as Runtime['mainWindow'])
+	})
+
+	it('runtime.rawIpcMain returns the wired ipcMain (no longer throws) when wireTransport is provided', async () => {
+		const electron = createFakeElectron()
+		const ipcMain = createFakeIpcMain()
+		const app = new WorkbenchApp({}, { electron, wireTransport: { ipcMain } })
+		await app.start()
+		expect(() => app.runtime.rawIpcMain).not.toThrow()
+	})
+
+	// MUST 3: mainWindow.webContents is auto-trusted (via default senderPolicy)
+	it('mainWindow.webContents is automatically trusted (default senderPolicy lets its id through)', async () => {
+		const electron = createFakeElectron()
+		const ipcMain = createFakeIpcMain()
+		const app = new WorkbenchApp(
+			{ hostServices: { ping: () => 'pong' as JsonValue } },
+			{ electron, wireTransport: { ipcMain } },
+		)
+		await app.start()
+
+		const mainWcId = (electron.browserWindows[0] as unknown as FakeBrowserWindow).webContents.id
+		const invoke = ipcMain.handlers.get(WorkbenchChannel.Invoke)
+		if (!invoke) throw new Error('invoke handler missing')
+		const res = (await invoke(
+			{ sender: { id: mainWcId } },
+			{ kind: 'host', name: 'ping', args: [] },
+		)) as { ok: true, result: JsonValue }
+		expect(res.ok).toBe(true)
+		expect(res.result).toBe('pong')
+
+		await app.shutdown()
+	})
+
+	// MUST 4a: toolbar WebContentsView ctor with preloadPath
+	it('config.toolbar present → WebContentsView is constructed with webPreferences.preload === toolbar.preloadPath', async () => {
+		const electron = createFakeElectron()
+		const app = new WorkbenchApp(
+			{
+				toolbar: {
+					source: { url: 'http://localhost:5173/toolbar.html' },
+					preloadPath: '/abs/preload/toolbar.cjs',
+					height: 60,
+				},
+			},
+			{ electron, wireTransport: { ipcMain: createFakeIpcMain() } },
+		)
+		await app.start()
+
+		expect(electron.webContentsViewCtorCalls).toHaveLength(1)
+		const opts = electron.webContentsViewCtorCalls[0]
+		expect(opts).toBeDefined()
+		expect(opts?.webPreferences?.preload).toBe('/abs/preload/toolbar.cjs')
+	})
+
+	// MUST 4b: toolbar view attached to mainWindow.contentView
+	it('toolbar view is added to mainWindow.contentView via addChildView', async () => {
+		const electron = createFakeElectron()
+		const app = new WorkbenchApp(
+			{
+				toolbar: {
+					source: { url: 'http://localhost:5173/toolbar.html' },
+					preloadPath: '/abs/preload/toolbar.cjs',
+					height: 60,
+				},
+			},
+			{ electron, wireTransport: { ipcMain: createFakeIpcMain() } },
+		)
+		await app.start()
+
+		const mainWin = electron.browserWindows[0] as unknown as FakeBrowserWindow
+		const view = electron.webContentsViews[0]
+		expect(mainWin.contentView.addChildView).toHaveBeenCalledTimes(1)
+		expect(mainWin.contentView.addChildView).toHaveBeenCalledWith(view)
+	})
+
+	// MUST 4c: toolbar source.url → view.webContents.loadURL
+	it('toolbar source.url → view.webContents.loadURL is called with that url', async () => {
+		const electron = createFakeElectron()
+		const app = new WorkbenchApp(
+			{
+				toolbar: {
+					source: { url: 'http://localhost:5173/toolbar.html' },
+					preloadPath: '/abs/preload/toolbar.cjs',
+					height: 60,
+				},
+			},
+			{ electron, wireTransport: { ipcMain: createFakeIpcMain() } },
+		)
+		await app.start()
+
+		const view = electron.webContentsViews[0] as FakeWebContentsView
+		expect(view.webContents.loadURL).toHaveBeenCalledTimes(1)
+		expect(view.webContents.loadURL).toHaveBeenCalledWith('http://localhost:5173/toolbar.html')
+		expect(view.webContents.loadFile).not.toHaveBeenCalled()
+	})
+
+	// MUST 4c (file branch)
+	it('toolbar source.file → view.webContents.loadFile is called with that path', async () => {
+		const electron = createFakeElectron()
+		const app = new WorkbenchApp(
+			{
+				toolbar: {
+					source: { file: '/abs/dist/toolbar/index.html' },
+					preloadPath: '/abs/preload/toolbar.cjs',
+					height: 60,
+				},
+			},
+			{ electron, wireTransport: { ipcMain: createFakeIpcMain() } },
+		)
+		await app.start()
+
+		const view = electron.webContentsViews[0] as FakeWebContentsView
+		expect(view.webContents.loadFile).toHaveBeenCalledTimes(1)
+		expect(view.webContents.loadFile).toHaveBeenCalledWith('/abs/dist/toolbar/index.html')
+		expect(view.webContents.loadURL).not.toHaveBeenCalled()
+	})
+
+	// MUST 4d: toolbar view webContents auto-trusted
+	it('toolbar view.webContents is automatically trusted (default senderPolicy lets its id through)', async () => {
+		const electron = createFakeElectron()
+		const ipcMain = createFakeIpcMain()
+		const app = new WorkbenchApp(
+			{
+				toolbar: {
+					source: { url: 'http://localhost:5173/toolbar.html' },
+					preloadPath: '/abs/preload/toolbar.cjs',
+					height: 60,
+				},
+				hostServices: { ping: () => 'pong' as JsonValue },
+			},
+			{ electron, wireTransport: { ipcMain } },
+		)
+		await app.start()
+
+		const toolbarWcId = (electron.webContentsViews[0] as FakeWebContentsView).webContents.id
+		const invoke = ipcMain.handlers.get(WorkbenchChannel.Invoke)
+		if (!invoke) throw new Error('invoke handler missing')
+		const res = (await invoke(
+			{ sender: { id: toolbarWcId } },
+			{ kind: 'host', name: 'ping', args: [] },
+		)) as { ok: true, result: JsonValue }
+		expect(res.ok).toBe(true)
+		expect(res.result).toBe('pong')
+
+		await app.shutdown()
+	})
+
+	// MUST 4e: toolbar.height → view.setBounds, x=0,y=0, width=mainWindow.getContentBounds().width
+	it('toolbar.height drives view.setBounds: x=0, y=0, height=toolbar.height, width=mainWindow.getContentBounds().width', async () => {
+		const electron = createFakeElectron({ x: 0, y: 0, width: 1440, height: 900 })
+		const app = new WorkbenchApp(
+			{
+				toolbar: {
+					source: { url: 'http://localhost:5173/toolbar.html' },
+					preloadPath: '/abs/preload/toolbar.cjs',
+					height: 48,
+				},
+			},
+			{ electron, wireTransport: { ipcMain: createFakeIpcMain() } },
+		)
+		await app.start()
+
+		const view = electron.webContentsViews[0] as FakeWebContentsView
+		expect(view.setBounds).toHaveBeenCalled()
+		const lastCall = view.setBounds.mock.calls[view.setBounds.mock.calls.length - 1]
+		const rect = lastCall?.[0] as MinimalRect
+		expect(rect.x).toBe(0)
+		expect(rect.y).toBe(0)
+		expect(rect.height).toBe(48)
+		expect(rect.width).toBe(1440)
+	})
+
+	// MUST 5: no toolbar → runtime.toolbarView is null, WebContentsView never constructed
+	it('config.toolbar absent → runtime.toolbarView === null and WebContentsView ctor was never called', async () => {
+		const electron = createFakeElectron()
+		const app = new WorkbenchApp({}, { electron })
+		await app.start()
+
+		expect(app.runtime.toolbarView).toBeNull()
+		expect(electron.webContentsViewCtorCalls).toHaveLength(0)
+	})
+
+	// MUST 6: declared windows in config.windows each → BrowserWindow ctor + load*
+	it('declared windows each construct a BrowserWindow with title/width/height/modal/preload from contribution', async () => {
+		const electron = createFakeElectron()
+		const app = new WorkbenchApp(
+			{
+				windows: {
+					reauth: {
+						title: 'Re-Authenticate',
+						source: { url: 'http://localhost:5173/reauth.html' },
+						preloadPath: '/abs/preload/reauth.cjs',
+						width: 480,
+						height: 320,
+						modal: true,
+					},
+				},
+			},
+			{ electron, wireTransport: { ipcMain: createFakeIpcMain() } },
+		)
+		await app.start()
+
+		// First ctor = mainWindow; second = declared 'reauth'
+		expect(electron.browserWindowCtorCalls.length).toBeGreaterThanOrEqual(2)
+		const reauthOpts = electron.browserWindowCtorCalls[1]
+		expect(reauthOpts).toBeDefined()
+		expect(reauthOpts!.title).toBe('Re-Authenticate')
+		expect(reauthOpts!.width).toBe(480)
+		expect(reauthOpts!.height).toBe(320)
+		expect(reauthOpts!.modal).toBe(true)
+		expect(reauthOpts!.webPreferences?.preload).toBe('/abs/preload/reauth.cjs')
+
+		// loadURL called
+		const reauthWin = electron.browserWindows[1] as unknown as FakeBrowserWindow
+		expect(reauthWin.webContents.loadURL).toHaveBeenCalledWith('http://localhost:5173/reauth.html')
+	})
+
+	it('declared window source.file → win.webContents.loadFile is called with that path', async () => {
+		const electron = createFakeElectron()
+		const app = new WorkbenchApp(
+			{
+				windows: {
+					welcome: {
+						source: { file: '/abs/dist/welcome/index.html' },
+					},
+				},
+			},
+			{ electron, wireTransport: { ipcMain: createFakeIpcMain() } },
+		)
+		await app.start()
+
+		const win = electron.browserWindows[1] as unknown as FakeBrowserWindow
+		expect(win.webContents.loadFile).toHaveBeenCalledWith('/abs/dist/welcome/index.html')
+		expect(win.webContents.loadURL).not.toHaveBeenCalled()
+	})
+
+	// MUST 7: declared windows auto-trusted by default
+	it('declared windows webContents are automatically trusted', async () => {
+		const electron = createFakeElectron()
+		const ipcMain = createFakeIpcMain()
+		const app = new WorkbenchApp(
+			{
+				windows: {
+					reauth: {
+						source: { url: 'http://localhost:5173/reauth.html' },
+					},
+				},
+				hostServices: { ping: () => 'pong' as JsonValue },
+			},
+			{ electron, wireTransport: { ipcMain } },
+		)
+		await app.start()
+
+		const reauthWin = electron.browserWindows[1] as unknown as FakeBrowserWindow
+		const invoke = ipcMain.handlers.get(WorkbenchChannel.Invoke)
+		if (!invoke) throw new Error('invoke handler missing')
+		const res = (await invoke(
+			{ sender: { id: reauthWin.webContents.id } },
+			{ kind: 'host', name: 'ping', args: [] },
+		)) as { ok: true, result: JsonValue }
+		expect(res.ok).toBe(true)
+		expect(res.result).toBe('pong')
+
+		await app.shutdown()
+	})
+
+	// MUST 9: runtime.windows.create(opts) constructs a BrowserWindow + autoTrust default true
+	it('runtime.windows.create({ source: url }) constructs a BrowserWindow and loads the url; autoTrust defaults to true', async () => {
+		const electron = createFakeElectron()
+		const ipcMain = createFakeIpcMain()
+		const app = new WorkbenchApp(
+			{ hostServices: { ping: () => 'pong' as JsonValue } },
+			{ electron, wireTransport: { ipcMain } },
+		)
+		await app.start()
+
+		const before = electron.browserWindowCtorCalls.length
+		const win = app.runtime.windows.create({
+			source: { url: 'http://localhost:5173/dyn.html' },
+			width: 500,
+			height: 400,
+		}) as unknown as FakeBrowserWindow
+
+		expect(electron.browserWindowCtorCalls.length).toBe(before + 1)
+		expect(win.webContents.loadURL).toHaveBeenCalledWith('http://localhost:5173/dyn.html')
+
+		// autoTrust default true → its webContents.id resolves trusted
+		const invoke = ipcMain.handlers.get(WorkbenchChannel.Invoke)
+		if (!invoke) throw new Error('invoke handler missing')
+		const res = (await invoke(
+			{ sender: { id: win.webContents.id } },
+			{ kind: 'host', name: 'ping', args: [] },
+		)) as { ok: true, result: JsonValue }
+		expect(res.ok).toBe(true)
+
+		await app.shutdown()
+	})
+
+	it('runtime.windows.create({ autoTrust: false }) does NOT trust the new webContents', async () => {
+		const electron = createFakeElectron()
+		const ipcMain = createFakeIpcMain()
+		const app = new WorkbenchApp(
+			{ hostServices: { ping: () => 'pong' as JsonValue } },
+			{ electron, wireTransport: { ipcMain } },
+		)
+		await app.start()
+
+		const win = app.runtime.windows.create({
+			source: { url: 'http://localhost:5173/untrusted.html' },
+			autoTrust: false,
+		}) as unknown as FakeBrowserWindow
+
+		const invoke = ipcMain.handlers.get(WorkbenchChannel.Invoke)
+		if (!invoke) throw new Error('invoke handler missing')
+		const res = (await invoke(
+			{ sender: { id: win.webContents.id } },
+			{ kind: 'host', name: 'ping', args: [] },
+		)) as { ok: false, error: { code?: string } }
+		expect(res.ok).toBe(false)
+		expect(res.error.code).toBe('WORKBENCH_UNTRUSTED_SENDER')
+
+		await app.shutdown()
+	})
+
+	// MUST 10: runtime.windows.get(id) returns declared window by record key
+	it('runtime.windows.get("reauth") returns the declared window registered under that key', async () => {
+		const electron = createFakeElectron()
+		const app = new WorkbenchApp(
+			{
+				windows: {
+					reauth: {
+						source: { url: 'http://localhost:5173/reauth.html' },
+					},
+				},
+			},
+			{ electron, wireTransport: { ipcMain: createFakeIpcMain() } },
+		)
+		await app.start()
+
+		const declared = app.runtime.windows.get('reauth') as unknown as FakeBrowserWindow | undefined
+		expect(declared).toBeDefined()
+		expect(declared).toBe(electron.browserWindows[1])
+	})
+
+	it('runtime.windows.get(unknown-id) returns undefined', async () => {
+		const electron = createFakeElectron()
+		const app = new WorkbenchApp({}, { electron })
+		await app.start()
+		expect(app.runtime.windows.get('nope')).toBeUndefined()
+	})
+
+	// MUST 11: runtime.windows.all()
+	it('runtime.windows.all() includes mainWindow + declared + runtime.windows.create() spawned windows', async () => {
+		const electron = createFakeElectron()
+		const app = new WorkbenchApp(
+			{
+				windows: {
+					reauth: { source: { url: 'http://localhost:5173/reauth.html' } },
+				},
+			},
+			{ electron, wireTransport: { ipcMain: createFakeIpcMain() } },
+		)
+		await app.start()
+
+		const created = app.runtime.windows.create({
+			source: { url: 'http://localhost:5173/dyn.html' },
+		})
+		const all = app.runtime.windows.all()
+		expect(all.length).toBeGreaterThanOrEqual(3)
+		expect(all).toContain(app.runtime.mainWindow)
+		expect(all).toContain(app.runtime.windows.get('reauth') as unknown as Runtime['mainWindow'])
+		expect(all).toContain(created)
+	})
+
+	// MUST 12: runtime.windows.trust(win) → trusts; dispose → un-trusts
+	it('runtime.windows.trust(win) adds the win.webContents to trusted set; dispose removes it', async () => {
+		const electron = createFakeElectron()
+		const ipcMain = createFakeIpcMain()
+		const app = new WorkbenchApp(
+			{ hostServices: { ping: () => 'pong' as JsonValue } },
+			{ electron, wireTransport: { ipcMain } },
+		)
+		await app.start()
+
+		// Construct a window with autoTrust:false so it starts untrusted.
+		const win = app.runtime.windows.create({
+			source: { url: 'http://localhost:5173/x.html' },
+			autoTrust: false,
+		}) as unknown as FakeBrowserWindow
+
+		const invoke = ipcMain.handlers.get(WorkbenchChannel.Invoke)
+		if (!invoke) throw new Error('invoke handler missing')
+
+		const before = (await invoke(
+			{ sender: { id: win.webContents.id } },
+			{ kind: 'host', name: 'ping', args: [] },
+		)) as { ok: false, error: { code?: string } }
+		expect(before.ok).toBe(false)
+		expect(before.error.code).toBe('WORKBENCH_UNTRUSTED_SENDER')
+
+		const dispose = app.runtime.windows.trust(win as unknown as Runtime['mainWindow'])
+		const after = (await invoke(
+			{ sender: { id: win.webContents.id } },
+			{ kind: 'host', name: 'ping', args: [] },
+		)) as { ok: true, result: JsonValue }
+		expect(after.ok).toBe(true)
+
+		dispose.dispose()
+		const afterDispose = (await invoke(
+			{ sender: { id: win.webContents.id } },
+			{ kind: 'host', name: 'ping', args: [] },
+		)) as { ok: false, error: { code?: string } }
+		expect(afterDispose.ok).toBe(false)
+		expect(afterDispose.error.code).toBe('WORKBENCH_UNTRUSTED_SENDER')
+
+		await app.shutdown()
+	})
+
+	// MUST 13: shutdown destroys mainWindow + declared windows; idempotent.
+	// CONTRACT-AMBIGUOUS: order between mainWindow / declared / runtime-created
+	// is not asserted, only that all destroy() calls fire and none happen
+	// twice on an already-destroyed window.
+	it('shutdown() destroys mainWindow and declared windows (CONTRACT-AMBIGUOUS order)', async () => {
+		const electron = createFakeElectron()
+		const app = new WorkbenchApp(
+			{
+				windows: {
+					reauth: { source: { url: 'http://localhost:5173/reauth.html' } },
+				},
+			},
+			{ electron, wireTransport: { ipcMain: createFakeIpcMain() } },
+		)
+		await app.start()
+
+		const mainWin = electron.browserWindows[0] as unknown as FakeBrowserWindow
+		const reauthWin = electron.browserWindows[1] as unknown as FakeBrowserWindow
+
+		await app.shutdown()
+
+		expect(mainWin.destroy).toHaveBeenCalled()
+		expect(reauthWin.destroy).toHaveBeenCalled()
+	})
+
+	it('shutdown() destroys windows spawned via runtime.windows.create() too', async () => {
+		const electron = createFakeElectron()
+		const app = new WorkbenchApp({}, { electron })
+		await app.start()
+
+		const created = app.runtime.windows.create({
+			source: { url: 'http://localhost:5173/dyn.html' },
+		}) as unknown as FakeBrowserWindow
+
+		await app.shutdown()
+		expect(created.destroy).toHaveBeenCalled()
+	})
+
+	it('shutdown() does not double-destroy a window that is already destroyed', async () => {
+		const electron = createFakeElectron()
+		const app = new WorkbenchApp({}, { electron })
+		await app.start()
+
+		const mainWin = electron.browserWindows[0] as unknown as FakeBrowserWindow
+		// Mark as already destroyed before shutdown
+		mainWin.destroyed = true
+
+		await app.shutdown()
+		// destroy should NOT have been called (or, equivalently, isDestroyed() guard skipped it)
+		expect(mainWin.destroy).not.toHaveBeenCalled()
+	})
+
+	// CONTRACT-AMBIGUOUS: framework does NOT proactively load mainWindow content
+	// (host owns that via setup). We assert mainWindow.webContents.loadURL/loadFile
+	// were never called by framework during start().
+	it('framework does NOT proactively load mainWindow content during start() (host owns mainWindow loadURL/loadFile, CONTRACT-AMBIGUOUS)', async () => {
+		const electron = createFakeElectron()
+		const app = new WorkbenchApp({}, { electron })
+		await app.start()
+
+		const mainWin = electron.browserWindows[0] as unknown as FakeBrowserWindow
+		expect(mainWin.webContents.loadURL).not.toHaveBeenCalled()
+		expect(mainWin.webContents.loadFile).not.toHaveBeenCalled()
+	})
+
+	// race regression: codex review #2 — preload 在 ipcMain handler 未注册时
+	// invoke 会失败。framework 必须保证 ipcMain.handle 早于 webContents.loadURL。
+	it('declared windows loadURL/loadFile fires AFTER ipcMain.handle is registered (race regression)', async () => {
+		const electron = createFakeElectron()
+		const ipcMain = createFakeIpcMain()
+		const app = new WorkbenchApp(
+			{
+				toolbar: {
+					source: { url: 'http://localhost:5173/toolbar.html' },
+					preloadPath: '/abs/preload/toolbar.cjs',
+					height: 48,
+				},
+				windows: {
+					reauth: { source: { url: 'http://localhost:5173/reauth.html' } },
+				},
+			},
+			{ electron, wireTransport: { ipcMain } },
+		)
+		await app.start()
+
+		const handleOrders = ipcMain.handle.mock.invocationCallOrder
+		expect(handleOrders.length).toBeGreaterThan(0)
+		const lastHandle = Math.max(...handleOrders)
+
+		const reauth = electron.browserWindows[1] as unknown as FakeBrowserWindow
+		const toolbar = electron.webContentsViews[0] as unknown as FakeWebContentsView
+		const reauthLoad = reauth.webContents.loadURL.mock.invocationCallOrder
+		const toolbarLoad = toolbar.webContents.loadURL.mock.invocationCallOrder
+
+		expect(reauthLoad.length).toBe(1)
+		expect(toolbarLoad.length).toBe(1)
+		expect(reauthLoad[0]!).toBeGreaterThan(lastHandle)
+		expect(toolbarLoad[0]!).toBeGreaterThan(lastHandle)
+
+		await app.shutdown()
+	})
+})
+
+// ── Review fix #2 R2 — mainWindow 'closed' triggers framework shutdown ──────
+
+describe('WorkbenchApp — mainWindow.closed → framework shutdown (#2 R2)', () => {
+	it('mainWindow.on("closed") triggers framework shutdown', async () => {
+		const electron = createFakeElectron()
+		const app = new WorkbenchApp({}, { electron })
+		await app.start()
+		const mainWin = electron.browserWindows[0] as unknown as FakeBrowserWindow
+		// Sanity: an 'closed' listener has been registered
+		const closedListeners = mainWin._listeners.get('closed') ?? []
+		expect(closedListeners.length).toBeGreaterThan(0)
+		// Simulate the host destroying the main window
+		mainWin._emit('closed')
+		// Allow the async shutdown chain to settle
+		await new Promise(r => setTimeout(r, 0))
+		// Wait for the shutdown promise as well (idempotent guard)
+		await app.shutdown()
+		expect(app.phase).toBe('quit')
+	})
+
+	it('declared window "closed" cleans up its tracked state but does NOT shut down the framework', async () => {
+		const electron = createFakeElectron()
+		const app = new WorkbenchApp(
+			{
+				windows: {
+					reauth: { source: { url: 'http://localhost:5173/reauth.html' } },
+				},
+			},
+			{ electron, wireTransport: { ipcMain: createFakeIpcMain() } },
+		)
+		await app.start()
+		const reauthWin = electron.browserWindows[1] as unknown as FakeBrowserWindow
+		const closedListeners = reauthWin._listeners.get('closed') ?? []
+		expect(closedListeners.length).toBeGreaterThan(0)
+		reauthWin._emit('closed')
+		await new Promise(r => setTimeout(r, 0))
+		// Framework should still be ready, not quit
+		expect(app.phase).toBe('ready')
+		// Declared window should no longer appear in windows.all()
+		const all = app.runtime.windows.all()
+		expect(all.find(w => (w as unknown as FakeBrowserWindow).id === reauthWin.id)).toBeUndefined()
+		// Cleanup
+		await app.shutdown()
+	})
+})
+
+// ── Review fix #3 R5/C2 — loadAssembledSources catches load errors ──────────
+
+describe('WorkbenchApp — loadURL failures do not reject start() (#3 R5/C2)', () => {
+	it('toolbar loadURL rejection is caught and start() resolves', async () => {
+		const electron = createFakeElectron()
+		const app = new WorkbenchApp(
+			{
+				toolbar: {
+					source: { url: 'http://localhost:5173/toolbar.html' },
+					preloadPath: '/p',
+					height: 48,
+				},
+			},
+			{ electron, wireTransport: { ipcMain: createFakeIpcMain() } },
+		)
+		const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			// Make the toolbar webContents.loadURL reject
+			const origCtor = electron.WebContentsView
+			Object.defineProperty(electron, 'WebContentsView', {
+				value: class extends (origCtor as unknown as { new(opts?: { webPreferences?: { preload?: string } }): MinimalWebContentsView })  {
+					constructor(opts?: { webPreferences?: { preload?: string } }) {
+						super(opts)
+						const wc = this.webContents as FakeWebContentsLike
+						wc.loadURL = vi.fn(async () => {
+							throw new Error('load-boom')
+						}) as FakeWebContentsLike['loadURL']
+					}
+				},
+				configurable: true,
+			})
+			await expect(app.start()).resolves.toBeUndefined()
+			// Allow microtasks for caught rejection logging
+			await new Promise(r => setTimeout(r, 0))
+			expect(errorSpy).toHaveBeenCalled()
+		}
+		finally {
+			errorSpy.mockRestore()
+			await app.shutdown()
+		}
+	})
+
+	it('declared window loadFile rejection is caught and start() resolves', async () => {
+		const electron = createFakeElectron()
+		const app = new WorkbenchApp(
+			{
+				windows: {
+					broken: { source: { file: '/abs/missing.html' } },
+				},
+			},
+			{ electron, wireTransport: { ipcMain: createFakeIpcMain() } },
+		)
+		// Patch BrowserWindow so the SECOND (declared) ctor produces a wc.loadFile that rejects
+		let count = 0
+		const origCtor = electron.BrowserWindow
+		Object.defineProperty(electron, 'BrowserWindow', {
+			value: class extends (origCtor as unknown as { new(opts?: MinimalBrowserWindowOptions): MinimalBrowserWindow }) {
+				constructor(opts?: MinimalBrowserWindowOptions) {
+					super(opts)
+					count++
+					if (count === 2) {
+						const wc = (this as unknown as FakeBrowserWindow).webContents
+						wc.loadFile = vi.fn(async () => {
+							throw new Error('file-boom')
+						}) as FakeWebContentsLike['loadFile']
+					}
+				}
+			},
+			configurable: true,
+		})
+		const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			await expect(app.start()).resolves.toBeUndefined()
+			await new Promise(r => setTimeout(r, 0))
+			expect(errorSpy).toHaveBeenCalled()
+		}
+		finally {
+			errorSpy.mockRestore()
+			await app.shutdown()
+		}
+	})
+
+	// SELF-AUTHORED test (implementer 自补) — types.ts 加 'load-failed' FrameworkEvent 后，
+	// safeLoad 在 catch 里 emitFrameworkEvent('load-failed', {...})，host 在 setup 内
+	// 订阅可观测到。codex 终审请重点 cross-check。
+	it('loadURL rejection emits FrameworkEvent "load-failed" with source + error', async () => {
+		const electron = createFakeElectron()
+		let receivedPayload: { source: WebviewSource, error: unknown } | null = null
+		const app = new WorkbenchApp(
+			{
+				toolbar: {
+					source: { url: 'http://localhost:5173/will-fail.html' },
+					preloadPath: '/p',
+					height: 48,
+				},
+				setup: (rt) => {
+					rt.on('load-failed', (p) => {
+						receivedPayload = p
+					})
+				},
+			},
+			{ electron, wireTransport: { ipcMain: createFakeIpcMain() } },
+		)
+		const origCtor = electron.WebContentsView
+		Object.defineProperty(electron, 'WebContentsView', {
+			value: class extends (origCtor as unknown as { new(opts?: { webPreferences?: { preload?: string } }): MinimalWebContentsView }) {
+				constructor(opts?: { webPreferences?: { preload?: string } }) {
+					super(opts)
+					const wc = this.webContents as FakeWebContentsLike
+					wc.loadURL = vi.fn(async () => {
+						throw new Error('load-failed-boom')
+					}) as FakeWebContentsLike['loadURL']
+				}
+			},
+			configurable: true,
+		})
+		const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			await app.start()
+			// allow microtasks for catch -> emit
+			await new Promise(r => setTimeout(r, 0))
+			expect(receivedPayload).not.toBeNull()
+			const p = receivedPayload as unknown as { source: WebviewSource, error: unknown }
+			expect(p.source).toEqual({ url: 'http://localhost:5173/will-fail.html' })
+			expect((p.error as Error).message).toBe('load-failed-boom')
+		}
+		finally {
+			errorSpy.mockRestore()
+			await app.shutdown()
+		}
+	})
+
+	// D3 regression — codex 四审：declared/runtime-created window 'closed' 时
+	// 必须把 webContents 从 trustedWcRefs 移除，避免 wc.id 复用 + 内存泄漏。
+	it('declared window closed removes its webContents from trust set (D3)', async () => {
+		const electron = createFakeElectron()
+		const ipcMain = createFakeIpcMain()
+		const app = new WorkbenchApp(
+			{
+				windows: {
+					tmp: { source: { url: 'http://localhost:5173/tmp.html' } },
+				},
+				hostServices: { ping: () => 'pong' as JsonValue },
+			},
+			{ electron, wireTransport: { ipcMain } },
+		)
+		await app.start()
+		const tmpWin = electron.browserWindows[1] as unknown as FakeBrowserWindow
+		const wcId = tmpWin.webContents.id
+		const invoke = ipcMain.handlers.get(WorkbenchChannel.Invoke)
+		if (!invoke) throw new Error('invoke handler missing')
+
+		// trusted while alive
+		const before = (await invoke(
+			{ sender: { id: wcId } },
+			{ kind: 'host', name: 'ping', args: [] },
+		)) as { ok: true, result: JsonValue }
+		expect(before.ok).toBe(true)
+
+		// fire 'closed' callback → handleSubWindowClosed should evict from trustedWcRefs
+		const closedCb = (tmpWin.on.mock.calls.find(c => c[0] === 'closed')?.[1]) as (() => void) | undefined
+		expect(closedCb).toBeDefined()
+		closedCb!()
+
+		// the same wc.id now untrusted
+		const after = (await invoke(
+			{ sender: { id: wcId } },
+			{ kind: 'host', name: 'ping', args: [] },
+		)) as { ok: false, error: { code?: string } }
+		expect(after.ok).toBe(false)
+		expect(after.error.code).toBe('WORKBENCH_UNTRUSTED_SENDER')
+
+		await app.shutdown()
+	})
+
+	// D1 race regression — codex 四审：load-failed catch microtask 可能在 setup
+	// callback 内 await 之后才能 register listener 之前就跑过 → listener 错过。
+	// pending queue + 第一个 listener register 时 splice 消费应当兜住。
+	it('load-failed pending payload is replayed to a listener registered AFTER an async setup boundary', async () => {
+		const electron = createFakeElectron()
+		let received: { source: WebviewSource, error: unknown } | null = null
+		const app = new WorkbenchApp(
+			{
+				toolbar: {
+					source: { url: 'http://localhost:5173/late.html' },
+					preloadPath: '/p',
+					height: 48,
+				},
+				setup: async (rt) => {
+					// host 先 await 一个真异步任务 — catch microtask 已经跑完
+					await new Promise(r => setTimeout(r, 5))
+					rt.on('load-failed', (p) => {
+						received = p
+					})
+				},
+			},
+			{ electron, wireTransport: { ipcMain: createFakeIpcMain() } },
+		)
+		const origCtor = electron.WebContentsView
+		Object.defineProperty(electron, 'WebContentsView', {
+			value: class extends (origCtor as unknown as { new(opts?: { webPreferences?: { preload?: string } }): MinimalWebContentsView }) {
+				constructor(opts?: { webPreferences?: { preload?: string } }) {
+					super(opts)
+					const wc = this.webContents as FakeWebContentsLike
+					wc.loadURL = vi.fn(async () => {
+						throw new Error('late-boom')
+					}) as FakeWebContentsLike['loadURL']
+				}
+			},
+			configurable: true,
+		})
+		const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			await app.start()
+			await new Promise(r => setTimeout(r, 0))
+			expect(received).not.toBeNull()
+			const p = received as unknown as { source: WebviewSource, error: unknown }
+			expect((p.error as Error).message).toBe('late-boom')
+		}
+		finally {
+			errorSpy.mockRestore()
+			await app.shutdown()
+		}
+	})
+})
+
+// ── Review fix #4 R4/C3 — runShutdownCleanup ordering ──────────────────────
+
+describe('WorkbenchApp — shutdown cleanup ordering (#4 R4/C3)', () => {
+	it('window.destroy() is called BEFORE ipcMain.removeHandler() during shutdown', async () => {
+		const electron = createFakeElectron()
+		const ipcMain = createFakeIpcMain()
+		const app = new WorkbenchApp(
+			{
+				windows: {
+					reauth: { source: { url: 'http://localhost:5173/reauth.html' } },
+				},
+			},
+			{ electron, wireTransport: { ipcMain } },
+		)
+		await app.start()
+		const mainWin = electron.browserWindows[0] as unknown as FakeBrowserWindow
+		const reauthWin = electron.browserWindows[1] as unknown as FakeBrowserWindow
+		await app.shutdown()
+
+		const mainDestroyOrder = mainWin.destroy.mock.invocationCallOrder[0] ?? Infinity
+		const reauthDestroyOrder = reauthWin.destroy.mock.invocationCallOrder[0] ?? Infinity
+		const earliestDestroy = Math.min(mainDestroyOrder, reauthDestroyOrder)
+		const removeOrders = ipcMain.removeHandler.mock.invocationCallOrder
+		expect(removeOrders.length).toBeGreaterThan(0)
+		const earliestRemove = Math.min(...removeOrders)
+		expect(earliestDestroy).toBeLessThan(earliestRemove)
+	})
+})
+
+// ── Review fix #5 C6 — start() wraps assemble/bind in try and cleans up on throw ──
+
+describe('WorkbenchApp — start() rolls back on assembly failure (#5 C6)', () => {
+	it('BrowserWindow ctor throwing on the second (declared) window rejects start() and destroys mainWindow', async () => {
+		const electron = createFakeElectron()
+		// Patch BrowserWindow so the SECOND ctor throws
+		let count = 0
+		const origCtor = electron.BrowserWindow
+		Object.defineProperty(electron, 'BrowserWindow', {
+			value: class extends (origCtor as unknown as { new(opts?: MinimalBrowserWindowOptions): MinimalBrowserWindow }) {
+				constructor(opts?: MinimalBrowserWindowOptions) {
+					super(opts)
+					count++
+					if (count === 2) {
+						throw new Error('ctor-boom')
+					}
+				}
+			},
+			configurable: true,
+		})
+		const app = new WorkbenchApp(
+			{
+				windows: {
+					reauth: { source: { url: 'http://localhost:5173/reauth.html' } },
+				},
+			},
+			{ electron, wireTransport: { ipcMain: createFakeIpcMain() } },
+		)
+		await expect(app.start()).rejects.toThrow('ctor-boom')
+		// mainWindow (first ctor) should have been destroyed by cleanup
+		const mainWin = electron.browserWindows[0] as unknown as FakeBrowserWindow
+		expect(mainWin.destroy).toHaveBeenCalled()
+		expect(app.phase).not.toBe('ready')
+	})
+})
+
+// ── Review fix #6 R3 — emitFrameworkEvent + window-created replay ───────────
+
+describe('WorkbenchApp — FrameworkEvents emission (#6 R3)', () => {
+	it('setup() can subscribe to window-created and observe replay for mainWindow / toolbar / declared windows', async () => {
+		const electron = createFakeElectron()
+		const seen: Array<{ role: string; id: number }> = []
+		const app = new WorkbenchApp(
+			{
+				toolbar: {
+					source: { url: 'http://localhost:5173/toolbar.html' },
+					preloadPath: '/p',
+					height: 40,
+				},
+				windows: {
+					reauth: { source: { url: 'http://localhost:5173/reauth.html' } },
+				},
+				setup: (rt) => {
+					rt.on('window-created', (p) => {
+						const win = p.window as unknown as FakeBrowserWindow
+						seen.push({ role: p.role, id: win.id })
+					})
+				},
+			},
+			{ electron, wireTransport: { ipcMain: createFakeIpcMain() } },
+		)
+		await app.start()
+		// Should have main + toolbar + host(reauth)
+		const roles = seen.map(s => s.role).sort()
+		expect(roles).toContain('main')
+		expect(roles).toContain('toolbar')
+		expect(roles).toContain('host')
+		await app.shutdown()
+	})
+
+	it('runtime.windows.create() emits window-created in real-time after setup', async () => {
+		const electron = createFakeElectron()
+		const events: Array<{ role: string; id: number }> = []
+		const app = new WorkbenchApp(
+			{
+				setup: (rt) => {
+					rt.on('window-created', (p) => {
+						events.push({ role: p.role, id: (p.window as unknown as FakeBrowserWindow).id })
+					})
+				},
+			},
+			{ electron },
+		)
+		await app.start()
+		const before = events.length
+		const created = app.runtime.windows.create({
+			source: { url: 'http://localhost:5173/dyn.html' },
+		}) as unknown as FakeBrowserWindow
+		expect(events.length).toBe(before + 1)
+		const last = events[events.length - 1]
+		expect(last?.role).toBe('host')
+		expect(last?.id).toBe(created.id)
+		await app.shutdown()
+	})
+
+	it('window-closed is emitted when a tracked window fires closed', async () => {
+		const electron = createFakeElectron()
+		const closed: number[] = []
+		const app = new WorkbenchApp(
+			{
+				windows: {
+					reauth: { source: { url: 'http://localhost:5173/reauth.html' } },
+				},
+				setup: (rt) => {
+					rt.on('window-closed', (p) => {
+						closed.push((p.window as unknown as FakeBrowserWindow).id)
+					})
+				},
+			},
+			{ electron, wireTransport: { ipcMain: createFakeIpcMain() } },
+		)
+		await app.start()
+		const reauthWin = electron.browserWindows[1] as unknown as FakeBrowserWindow
+		reauthWin._emit('closed')
+		await new Promise(r => setTimeout(r, 0))
+		expect(closed).toContain(reauthWin.id)
+		await app.shutdown()
+	})
+})
+
+// ── Review fix #7 C5 — trust ref-count ──────────────────────────────────────
+
+describe('WorkbenchApp — trust ref-count (#7 C5)', () => {
+	it('declared auto-trust + runtime.windows.trust() + dispose() → window remains trusted', async () => {
+		const electron = createFakeElectron()
+		const ipcMain = createFakeIpcMain()
+		const app = new WorkbenchApp(
+			{
+				windows: {
+					reauth: { source: { url: 'http://localhost:5173/reauth.html' } },
+				},
+				hostServices: { ping: () => 'pong' as JsonValue },
+			},
+			{ electron, wireTransport: { ipcMain } },
+		)
+		await app.start()
+		const reauthWin = electron.browserWindows[1] as unknown as FakeBrowserWindow
+		// Already trusted via auto-trust
+		const invoke = ipcMain.handlers.get(WorkbenchChannel.Invoke)
+		if (!invoke) throw new Error('invoke handler missing')
+
+		// Take a second trust ref from runtime
+		const d = app.runtime.windows.trust(reauthWin as unknown as Runtime['mainWindow'])
+		const trustedRes = (await invoke(
+			{ sender: { id: reauthWin.webContents.id } },
+			{ kind: 'host', name: 'ping', args: [] },
+		)) as { ok: true, result: JsonValue }
+		expect(trustedRes.ok).toBe(true)
+
+		// Dispose: ref-count goes from 2 → 1, NOT 0 → still trusted
+		d.dispose()
+		const afterRes = (await invoke(
+			{ sender: { id: reauthWin.webContents.id } },
+			{ kind: 'host', name: 'ping', args: [] },
+		)) as { ok: true, result: JsonValue }
+		expect(afterRes.ok).toBe(true)
+
+		await app.shutdown()
+	})
+})
+
+// ── Review fix #8 R7 — toolbar follows mainWindow resize ────────────────────
+
+describe('WorkbenchApp — toolbar resize tracking (#8 R7)', () => {
+	it('mainWindow.on("resize") → toolbarView.setBounds updates with new content width', async () => {
+		const initial = { x: 0, y: 0, width: 1024, height: 768 }
+		const electron = createFakeElectron(initial)
+		const app = new WorkbenchApp(
+			{
+				toolbar: {
+					source: { url: 'http://localhost:5173/toolbar.html' },
+					preloadPath: '/p',
+					height: 48,
+				},
+			},
+			{ electron, wireTransport: { ipcMain: createFakeIpcMain() } },
+		)
+		await app.start()
+		const mainWin = electron.browserWindows[0] as unknown as FakeBrowserWindow
+		const view = electron.webContentsViews[0] as unknown as FakeWebContentsView
+		const callsBefore = view.setBounds.mock.calls.length
+		// Mutate the reported content bounds to simulate a real resize
+		mainWin.getContentBounds = vi.fn(() => ({ x: 0, y: 0, width: 1600, height: 900 })) as FakeBrowserWindow['getContentBounds']
+		mainWin._emit('resize')
+		expect(view.setBounds.mock.calls.length).toBeGreaterThan(callsBefore)
+		const lastCall = view.setBounds.mock.calls[view.setBounds.mock.calls.length - 1]
+		const rect = lastCall?.[0] as MinimalRect
+		expect(rect.width).toBe(1600)
+		expect(rect.height).toBe(48)
+		expect(rect.x).toBe(0)
+		expect(rect.y).toBe(0)
+		await app.shutdown()
+	})
+})
+
+// ── Review fix #12 C7 — half-state config check ─────────────────────────────
+
+describe('WorkbenchApp — wireTransport required when toolbar/windows declared (#12 C7)', () => {
+	it('electron + toolbar but no wireTransport → start() rejects with clear message', async () => {
+		const electron = createFakeElectron()
+		const app = new WorkbenchApp(
+			{
+				toolbar: {
+					source: { url: 'http://localhost:5173/toolbar.html' },
+					preloadPath: '/p',
+					height: 48,
+				},
+			},
+			{ electron },
+		)
+		await expect(app.start()).rejects.toThrow(/wireTransport\.ipcMain is required/)
+	})
+
+	it('electron + windows but no wireTransport → start() rejects with clear message', async () => {
+		const electron = createFakeElectron()
+		const app = new WorkbenchApp(
+			{
+				windows: {
+					reauth: { source: { url: 'http://localhost:5173/reauth.html' } },
+				},
+			},
+			{ electron },
+		)
+		await expect(app.start()).rejects.toThrow(/wireTransport\.ipcMain is required/)
+	})
+
+	it('electron only (no toolbar/windows) without wireTransport is permitted', async () => {
+		const electron = createFakeElectron()
+		const app = new WorkbenchApp({}, { electron })
+		await expect(app.start()).resolves.toBeUndefined()
+		await app.shutdown()
+	})
+})

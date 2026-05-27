@@ -1,0 +1,70 @@
+{
+    "name": "@dimina-kit/workbench",
+    "version": "0.0.0",
+    "description": "Dimina devtools workbench framework — single `workbench(config)` entry for hosts (qdmp, dimina default).",
+    "keywords": [
+        "dimina",
+        "devtools",
+        "workbench",
+        "electron"
+    ],
+    "type": "module",
+    "engines": {
+        "node": ">=20"
+    },
+    "license": "MIT",
+    "author": "EchoTechFE",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/EchoTechFE/dimina-kit.git",
+        "directory": "packages/workbench"
+    },
+    "bugs": {
+        "url": "https://github.com/EchoTechFE/dimina-kit/issues"
+    },
+    "homepage": "https://github.com/EchoTechFE/dimina-kit/tree/main/packages/workbench#readme",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "default": "./dist/index.js"
+        },
+        "./preload": {
+            "types": "./dist/preload/index.d.ts",
+            "default": "./dist/preload/index.js"
+        },
+        "./client": {
+            "types": "./dist/client/index.d.ts",
+            "default": "./dist/client/index.js"
+        }
+    },
+    "files": [
+        "dist",
+        "README.md",
+        "LICENSE"
+    ],
+    "scripts": {
+        "build": "tsc",
+        "check-types": "tsc --noEmit",
+        "lint": "eslint . --max-warnings 0",
+        "test": "vitest run",
+        "test:dev": "vitest",
+        "prepack": "pnpm run build"
+    },
+    "devDependencies": {
+        "@dimina-kit/eslint-config": "workspace:*",
+        "@dimina-kit/typescript-config": "workspace:*",
+        "@types/node": "^22.15.3",
+        "electron": "^41.2.1",
+        "eslint": "^10.2.1",
+        "typescript": "5.9.2",
+        "vitest": "^4.1.4"
+    },
+    "peerDependencies": {
+        "electron": ">=36"
+    },
+    "publishConfig": {
+        "access": "public"
+    }
+}
