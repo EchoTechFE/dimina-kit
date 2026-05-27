@@ -174,13 +174,19 @@ describe('createWorkbenchClient.ready()', () => {
 
 // ── createWorkbenchClient: invoke() ──────────────────────────────────────
 
-// Each handler signature must be assignable to the index signature
-// `(...args: JsonValue[]) => unknown`, so parameter types must be JsonValue-
-// compatible. `number` is a JsonPrimitive, so we destructure the args array.
-interface DemoHostServices extends Record<string, (...args: JsonValue[]) => unknown> {
-	ping: (...args: JsonValue[]) => Promise<string>
-	add: (...args: JsonValue[]) => Promise<number>
-	boom: (...args: JsonValue[]) => Promise<never>
+// Demo host services use real-world typed signatures (named params, narrow
+// return types). With the relaxed `(...args: any[]) => unknown` constraint
+// `Parameters<HS[K]>` infers the exact tuple — so `client.invoke('add', 2, 3)`
+// is type-checked at the call site, and `(p: { code: string }) => ...` style
+// handlers also assign cleanly (previously blocked by the JsonValue index
+// signature). Cross-process payload safety is owned by the wire envelope
+// (`InvokeRequest.args: readonly JsonValue[]`) and any handler-side validator,
+// not by this constraint.
+interface DemoHostServices {
+	ping: () => Promise<string>
+	add: (a: number, b: number) => Promise<number>
+	login: (p: { code: string }) => Promise<{ userId: string }>
+	boom: () => Promise<never>
 }
 
 type NoEvents = readonly []
