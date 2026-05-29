@@ -1,33 +1,39 @@
 import { Separator } from "react-resizable-panels"
 
 import { cn } from "@/shared/lib/utils"
+import {
+  splitterHitArea,
+  splitterVisibleBar,
+} from "@/shared/components/layout/splitter-styles"
 
 interface ResizeHandleProps {
   className?: string
   direction?: "horizontal" | "vertical"
 }
 
+/**
+ * Resize handle for `react-resizable-panels` groups (editor / debug, etc.).
+ *
+ * Shares its hit-area + visible-bar styling with the manual sim-column
+ * `Splitter` (see `splitter-styles`) so every divider in the workbench
+ * reads as the same 1px line with a wide invisible drag zone and the same
+ * border → ring hover/active color.
+ */
 export function ResizeHandle({
   className,
   direction = "horizontal",
 }: ResizeHandleProps) {
-  const isHorizontal = direction === "horizontal"
+  const orientation = direction === "horizontal" ? "vertical" : "horizontal"
 
   return (
-    <Separator
-      className={cn(
-        "group relative flex items-center justify-center bg-border",
-        isHorizontal ? "w-px" : "h-px",
-        "data-[resize-handle-active]:bg-ring",
-        className
-      )}
-    >
+    <Separator className={cn(splitterHitArea(orientation), className)}>
       <div
         className={cn(
-          "absolute z-10 rounded-full bg-border transition-colors group-hover:bg-ring group-data-[resize-handle-active]:bg-ring",
-          isHorizontal
-            ? "h-8 w-1 cursor-col-resize"
-            : "h-1 w-8 cursor-row-resize"
+          splitterVisibleBar,
+          // `react-resizable-panels` toggles this attribute while dragging;
+          // map it to the same ring color as hover so active feels unified.
+          "group-data-[resize-handle-active]:bg-ring",
+          orientation === "vertical" ? "h-full w-px" : "h-px w-full"
         )}
       />
     </Separator>

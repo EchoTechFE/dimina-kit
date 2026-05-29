@@ -10,6 +10,24 @@
   -->
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; media-src 'self' blob: http: https:; connect-src 'self' http: https: ws: wss:;" />
   <title>Dimina DevTools</title>
+  <style>
+    /*
+     * The React tree always occupies the full window. The only remaining
+     * main-process overlay is the simulator's Chromium DevTools
+     * WebContentsView, positioned to match a measured placeholder rect
+     * inside the React tree (see useViewAnchor in project-runtime.tsx). The
+     * code editor is now an in-renderer <MonacoEditor/>, not an overlay, so
+     * the previous `body.editor-active { left: 50vw; width: 50vw }` hack is
+     * gone.
+     */
+    html, body, #root { margin: 0; padding: 0; }
+    html, body { width: 100vw; height: 100vh; overflow: hidden; }
+    #root {
+      position: fixed;
+      inset: 0;
+      overflow: hidden;
+    }
+  </style>
 </head>
 <body>
   <div id="root"></div>

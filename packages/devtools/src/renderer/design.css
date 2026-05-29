@@ -29,6 +29,7 @@
   --color-border:        hsl(  0  0%  23%);
   --color-border-subtle: hsl(  0  0%  18%);
   --color-border-strong: hsl(  0  0%  27%);  /* elevated surfaces (popover, modal) */
+  --color-ring:          var(--color-accent);  /* splitter hover / focus highlight */
 
   /* Text */
   --color-text:           hsl(  0  0%  88%);  /* primary */

@@ -124,3 +124,76 @@ describe('IpcRegistry.on error handling', () => {
     warnSpy.mockRestore()
   })
 })
+
+/**
+ * `handleSync` backs `ipcRenderer.sendSync`: the renderer blocks until we set
+ * `event.returnValue`, so every path MUST set it — the happy value, a thrown
+ * error's `{ ok:false, code }` sentinel, or the policy-reject sentinel — or the
+ * blocked renderer would hang.
+ */
+function emitSync(channel: string, ...args: unknown[]): unknown {
+  const fakeEvent: { sender: unknown; returnValue?: unknown } = {
+    sender: { id: 1, isDestroyed: () => false, getURL: () => '' },
+  }
+  const set = electronStubs.listeners.get(channel)
+  if (!set) throw new Error(`no listeners registered for '${channel}'`)
+  for (const fn of set) fn(fakeEvent, ...args)
+  return fakeEvent.returnValue
+}
+
+describe('IpcRegistry.handleSync (sendSync return value)', () => {
+  it("sets event.returnValue to the handler's return value", () => {
+    const reg = new IpcRegistry()
+    reg.handleSync('test:sync-ok', (_evt, ...args: unknown[]) => ({ ok: true, echo: args[0] }))
+    expect(emitSync('test:sync-ok', 'hi')).toEqual({ ok: true, echo: 'hi' })
+  })
+
+  it('converts a thrown errno error into an { ok:false, code } sentinel without propagating', () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const reg = new IpcRegistry()
+    reg.handleSync('test:sync-throw', () => {
+      const err = new Error('nope') as Error & { code?: string }
+      err.code = 'EACCES'
+      throw err
+    })
+
+    let out: unknown
+    expect(() => {
+      out = emitSync('test:sync-throw')
+    }).not.toThrow()
+    expect(out).toEqual({ ok: false, code: 'EACCES', message: 'nope' })
+    errSpy.mockRestore()
+  })
+
+  it('rejects a disallowed sender with an EREJECTED sentinel and never calls the handler', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const handler = vi.fn(() => ({ ok: true }))
+    const reg = new IpcRegistry(() => false) // policy rejects every sender
+    reg.handleSync('test:sync-rejected', handler)
+
+    const out = emitSync('test:sync-rejected') as { ok: boolean; code?: string }
+    expect(out.ok).toBe(false)
+    expect(out.code).toBe('EREJECTED')
+    expect(handler).not.toHaveBeenCalled()
+    warnSpy.mockRestore()
+  })
+
+  it('still sets a sentinel (no renderer hang) when the sender policy itself throws', () => {
+    // sendSync blocks until returnValue is set; a throwing policy must NOT leak
+    // out leaving it unset. The policy check runs inside handleSync's try.
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const handler = vi.fn(() => ({ ok: true }))
+    const reg = new IpcRegistry(() => {
+      throw new Error('policy exploded')
+    })
+    reg.handleSync('test:sync-policy-throw', handler)
+
+    let out: unknown
+    expect(() => {
+      out = emitSync('test:sync-policy-throw')
+    }).not.toThrow()
+    expect((out as { ok: boolean }).ok).toBe(false)
+    expect(handler).not.toHaveBeenCalled()
+    errSpy.mockRestore()
+  })
+})

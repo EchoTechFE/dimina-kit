@@ -27,13 +27,14 @@ export interface ViewManagerContext {
  * Unified lifecycle manager for Electron WebContentsView overlays.
  *
  * Owns creation / attachment / detachment / positioning / destruction of
- * every overlay view hung off the main window's contentView (simulator,
- * settings, popover). All `new WebContentsView`, `addChildView`,
+ * every overlay view hung off the main window's contentView (simulator
+ * DevTools, settings, popover). All `new WebContentsView`, `addChildView`,
  * `removeChildView`, `webContents.destroy()` and overlay `setBounds` calls
  * should live here — IPC handlers just call into the manager.
  *
- * The main window's own renderer (added in `windows/main-window/create.ts`)
- * is the main content root and is not an overlay, so it is not managed here.
+ * The code editor is NOT an overlay: it renders as an in-renderer
+ * `<MonacoEditor/>` React component inside the main window. The main
+ * window's own renderer is the content root and is not managed here.
  */
 export interface ViewManager {
   // ── DevTools ───────────────────────────────────────────────────────────
@@ -96,6 +97,15 @@ export interface ViewManager {
   resize(simWidth: number): void
   /** Show or hide the simulator overlay based on visibility flag. */
   setVisible(visible: boolean, simWidth: number): void
+
+  // ── Renderer-driven overlay bounds ────────────────────────────────────
+  /**
+   * Apply a renderer-measured rectangle to the simulator's Chromium
+   * DevTools overlay view. `{ width: 0, height: 0 }` is treated as "hide" —
+   * the view is removed from the contentView but its WebContents is kept
+   * alive so re-showing it doesn't re-pay the DevTools bootstrap.
+   */
+  setSimulatorDevtoolsBounds(bounds: { x: number; y: number; width: number; height: number }): void
 }
 
 /**
@@ -119,6 +129,12 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   let lastSimWidth = 375
   let simulatorWebContentsId: number | null = null
 
+  // Renderer-driven overlay bounds for the simulator DevTools view. When
+  // non-null this takes precedence over the legacy layout computed from the
+  // window content size. A zero-area rectangle means "hide" — the overlay is
+  // removed from the contentView but its WebContents stays alive.
+  let simulatorBoundsOverride: layout.Bounds | null = null
+
   // ── Internal helpers ────────────────────────────────────────────────────
 
   function destroyViewInternal(view: WebContentsView | null): void {
@@ -137,8 +153,42 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
 
   function applySimulatorBounds(simWidth: number): void {
     if (!simulatorView || ctx.windows.mainWindow.isDestroyed()) return
+    if (simulatorBoundsOverride) {
+      simulatorView.setBounds(simulatorBoundsOverride)
+      return
+    }
     const [w = 0, h = 0] = ctx.windows.mainWindow.getContentSize()
-    simulatorView.setBounds(layout.computeSimulatorBounds(w, h, simWidth, headerHeight))
+    simulatorView.setBounds(
+      layout.computeSimulatorBounds(w, h, simWidth, headerHeight),
+    )
+  }
+
+  // Renderer publishes width/height = 0 to mean "hide overlay" — the
+  // surrounding React panel is unmounted/collapsed. We keep the cached
+  // value (so future republishes win over legacy layout) but remove the
+  // child view from the contentView until a non-empty rect arrives.
+  function isHidden(b: layout.Bounds): boolean {
+    return b.width <= 0 || b.height <= 0
+  }
+
+  function setSimulatorDevtoolsBounds(bounds: layout.Bounds): void {
+    simulatorBoundsOverride = bounds
+    if (!simulatorView || simulatorView.webContents.isDestroyed()) return
+    if (ctx.windows.mainWindow.isDestroyed()) return
+    if (isHidden(bounds)) {
+      if (simulatorViewAdded) {
+        try {
+          ctx.windows.mainWindow.contentView.removeChildView(simulatorView)
+        } catch { /* already removed */ }
+        simulatorViewAdded = false
+      }
+      return
+    }
+    if (!simulatorViewAdded) {
+      ctx.windows.mainWindow.contentView.addChildView(simulatorView)
+      simulatorViewAdded = true
+    }
+    simulatorView.setBounds(bounds)
   }
 
   function applySettingsBounds(): void {
@@ -180,9 +230,13 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     sim.openDevTools()
 
     // Default DevTools to Console panel (Chrome DevTools defaults to Elements).
-    // The DevTools UI renders inside simulatorView.webContents; we click the
-    // Console tab once its header is laid out, and persist the choice via
-    // localStorage so subsequent reloads honor it.
+    // The DevTools UI lives inside closed shadow roots, so a light-DOM
+    // querySelector('[role="tab"]') cannot reach the tab bar to click it.
+    // Instead drive the front-end's own view manager: the bundled DevTools
+    // exposes `UI.ViewManager.instance().showView(id)` on `globalThis.UI`
+    // once the front-end has finished bootstrapping. We poll for it and
+    // request the `console` view, and also persist the choice via the
+    // `panel-selectedTab` localStorage key so subsequent reloads honor it.
     const devtoolsWc = simulatorView.webContents
     devtoolsWc.once('dom-ready', () => {
       devtoolsWc.executeJavaScript(`
@@ -191,25 +245,35 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
           let tries = 0
           const timer = setInterval(() => {
             tries++
-            const tabs = document.querySelectorAll('[role="tab"], .tabbed-pane-header-tab')
-            for (const tab of tabs) {
-              const label = (tab.getAttribute('aria-label') || tab.textContent || '').trim().toLowerCase()
-              if (label === 'console' || label.startsWith('console')) {
-                tab.click()
+            try {
+              const UI = globalThis.UI
+              const vm = UI && UI.ViewManager && typeof UI.ViewManager.instance === 'function'
+                ? UI.ViewManager.instance()
+                : null
+              if (vm && typeof vm.showView === 'function') {
+                vm.showView('console')
                 clearInterval(timer)
                 return
               }
-            }
-            if (tries > 40) clearInterval(timer)
-          }, 100)
+            } catch {}
+            if (tries > 80) clearInterval(timer)
+          }, 50)
         })()
       `).catch(() => {})
     })
 
     if (getDefaultTab(ctx) === 'simulator') {
-      ctx.windows.mainWindow.contentView.addChildView(simulatorView)
-      simulatorViewAdded = true
-      applySimulatorBounds(simWidth)
+      if (simulatorBoundsOverride) {
+        if (!isHidden(simulatorBoundsOverride)) {
+          ctx.windows.mainWindow.contentView.addChildView(simulatorView)
+          simulatorViewAdded = true
+          simulatorView.setBounds(simulatorBoundsOverride)
+        }
+      } else {
+        ctx.windows.mainWindow.contentView.addChildView(simulatorView)
+        simulatorViewAdded = true
+        applySimulatorBounds(simWidth)
+      }
     }
   }
 
@@ -223,6 +287,9 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     simulatorView = null
     simulatorViewAdded = false
     simulatorWebContentsId = null
+    // Drop the renderer-published rect so a stale "hidden" override doesn't
+    // suppress the next view before its renderer republishes.
+    simulatorBoundsOverride = null
   }
 
   function showSimulator(simWidth: number): void {
@@ -378,5 +445,6 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     },
     resize,
     setVisible,
+    setSimulatorDevtoolsBounds,
   }
 }
