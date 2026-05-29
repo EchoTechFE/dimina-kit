@@ -177,6 +177,54 @@ describe('createProjectWatcher', () => {
 		expect(onChange).not.toHaveBeenCalled()
 	})
 
+	it('fires onChange for source edits when the project sits under a dotted ancestor directory', async () => {
+		// Why this matters: regression for the bug where `ignored` was a regex
+		// (/(^|[/\\])\../) matched against the full absolute path. When the
+		// project lives under a dotted ancestor — e.g. a Claude worktree at
+		// /…/.claude/worktrees/app — that regex matched the ancestor ".claude"
+		// and chokidar ignored the entire project. Editing source then never
+		// triggered a rebuild. The ancestor dot must NOT disable the watch;
+		// only dotfiles/dirs *inside* the project should be ignored.
+		const dottedAncestor = path.join(tempDir, '.claude', 'worktrees')
+		const projectRoot = path.join(dottedAncestor, 'app')
+		fs.mkdirSync(projectRoot, { recursive: true })
+		const target = path.join(projectRoot, 'app.json')
+		fs.writeFileSync(target, '{}')
+
+		const onChange = vi.fn()
+		handle = createProjectWatcher(projectRoot, onChange)
+		await settle()
+
+		fs.writeFileSync(target, '{"a":1}')
+
+		await vi.waitFor(
+			() => expect(onChange).toHaveBeenCalled(),
+			{ timeout: 2000 },
+		)
+	})
+
+	it('still ignores dotfiles inside a project that sits under a dotted ancestor directory', async () => {
+		// Companion to the regression above: confirm the fix didn't over-correct
+		// by disabling dot-ignoring entirely. A .git change *inside* the project
+		// must stay quiet even though the project path itself contains a dotted
+		// ancestor segment.
+		const dottedAncestor = path.join(tempDir, '.claude', 'worktrees')
+		const projectRoot = path.join(dottedAncestor, 'app')
+		const gitDir = path.join(projectRoot, '.git')
+		fs.mkdirSync(gitDir, { recursive: true })
+		const head = path.join(gitDir, 'HEAD')
+		fs.writeFileSync(head, 'ref: refs/heads/main\n')
+
+		const onChange = vi.fn()
+		handle = createProjectWatcher(projectRoot, onChange)
+		await settle()
+
+		fs.writeFileSync(head, 'ref: refs/heads/other\n')
+
+		await settle(500)
+		expect(onChange).not.toHaveBeenCalled()
+	})
+
 	it('stops firing onChange after close() is called', async () => {
 		// Why this matters: when a project session ends (user closes the
 		// devtools window, switches projects), lingering watchers would keep
