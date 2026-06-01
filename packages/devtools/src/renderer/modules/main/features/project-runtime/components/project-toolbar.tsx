@@ -35,6 +35,107 @@ function ToolbarDivider() {
   return <div className="w-px h-4 bg-border mx-1" aria-hidden="true" />
 }
 
+function getActionPlacement(action: ToolbarAction): NonNullable<ToolbarAction['placement']> {
+  return action.placement ?? 'primary'
+}
+
+function getAvatarFallback(action: ToolbarAction): string {
+  if (action.displayInitial?.trim()) {
+    return Array.from(action.displayInitial.trim())[0] ?? '?'
+  }
+
+  const { label } = action
+  const trimmed = label.trim()
+  if (!trimmed) return '?'
+  return Array.from(trimmed)[0] ?? '?'
+}
+
+function ToolbarActionButton({
+  action,
+  disabled,
+  onInvoke,
+}: {
+  action: ToolbarAction
+  disabled: boolean
+  onInvoke: (id: string) => void
+}) {
+  const [avatarFailed, setAvatarFailed] = useState(false)
+  const isAvatarAction = action.kind === 'avatar' || Boolean(action.avatarUrl)
+
+  useEffect(() => {
+    setAvatarFailed(false)
+  }, [action.avatarUrl])
+
+  if (isAvatarAction) {
+    return (
+      <button
+        type="button"
+        aria-label={action.label}
+        title={action.label}
+        onClick={() => onInvoke(action.id)}
+        disabled={disabled}
+        className={cn(
+          'inline-flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded border border-border bg-surface-thumb text-[13px] font-medium text-text transition-colors',
+          'hover:border-border-subtle hover:bg-surface-3 disabled:cursor-not-allowed disabled:opacity-35',
+        )}
+      >
+        {action.avatarUrl && !avatarFailed ? (
+          <img
+            src={action.avatarUrl}
+            alt=""
+            className="h-full w-full object-cover"
+            onError={() => setAvatarFailed(true)}
+          />
+        ) : (
+          <span>{getAvatarFallback(action)}</span>
+        )}
+      </button>
+    )
+  }
+
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      onClick={() => onInvoke(action.id)}
+      disabled={disabled}
+      title={action.label}
+    >
+      {action.icon && (
+        <span className="text-[13px] leading-none" aria-hidden="true">
+          {action.icon}
+        </span>
+      )}
+      <span>{action.label}</span>
+    </Button>
+  )
+}
+
+function ToolbarActionGroup({
+  actions,
+  disabled,
+  onInvoke,
+}: {
+  actions: ToolbarAction[]
+  disabled: boolean
+  onInvoke: (id: string) => void
+}) {
+  if (actions.length === 0) return null
+
+  return (
+    <div className="flex min-w-0 shrink-0 items-center gap-1" role="group">
+      {actions.map((action) => (
+        <ToolbarActionButton
+          key={action.id}
+          action={action}
+          disabled={disabled}
+          onInvoke={onInvoke}
+        />
+      ))}
+    </div>
+  )
+}
+
 export function ProjectToolbar({
   compileDropdownRef,
   showCompilePanel,
@@ -72,28 +173,26 @@ export function ProjectToolbar({
     return onToolbarActionsChanged(() => fetchActions())
   }, [])
 
+  const disabled = compileStatus.status === 'compiling'
+  const leadingActions = actions.filter((action) => getActionPlacement(action) === 'leading')
+  const primaryActions = actions.filter((action) => getActionPlacement(action) === 'primary')
+  const trailingActions = actions.filter((action) => getActionPlacement(action) === 'trailing')
+  const invokeAction = (id: string) => {
+    void invokeToolbarAction(id)
+  }
+
   return (
     <div className="flex flex-col shrink-0">
-      {actions.length > 0 && (
-        <div className="flex items-center gap-1.5 px-2.5 py-1 bg-surface-2 border-b border-border">
-          {actions.map((action) => (
-            <Button
-              key={action.id}
-              variant="outline"
-              size="sm"
-              onClick={() => invokeToolbarAction(action.id)}
-              disabled={compileStatus.status === 'compiling'}
-            >
-              {action.label}
-            </Button>
-          ))}
-        </div>
-      )}
-
       <div
-        className="flex items-center gap-1.5 px-2.5 bg-surface-2 border-b border-border shrink-0"
+        className="flex items-center gap-1.5 px-2.5 bg-surface-2 border-b border-border shrink-0 min-w-0"
         style={{ height: headerHeight }}
       >
+        <ToolbarActionGroup actions={leadingActions} disabled={disabled} onInvoke={invokeAction} />
+        {leadingActions.length > 0 && <ToolbarDivider />}
+
+        <LayoutVisibilityToggles layout={layout} />
+        <ToolbarDivider />
+
         {/* Cluster 1: Compile-mode dropdown.
             The dropdown surface itself is a main-process popover
             (showPopover from @/shared/api). Clicking the button toggles
@@ -122,7 +221,7 @@ export function ProjectToolbar({
           onClick={() => {
             void onRelaunch()
           }}
-          disabled={compileStatus.status === 'compiling'}
+          disabled={disabled}
           title="重新编译"
         >
           ↺
@@ -134,6 +233,8 @@ export function ProjectToolbar({
             {compileStatus.message}
           </span>
         </div>
+
+        <ToolbarActionGroup actions={primaryActions} disabled={disabled} onInvoke={invokeAction} />
 
         <div className="flex-1 min-w-2" />
 
@@ -149,11 +250,11 @@ export function ProjectToolbar({
               devtools-position preset (inEditor / belowSimulator /
               rightOfSimulator). The at-least-one-visible guard lives
               in the store. */}
-        <LayoutVisibilityToggles layout={layout} />
-        <ToolbarDivider />
         <LayoutAlignmentToggle layout={layout} />
         <ToolbarDivider />
         <LayoutDevtoolsPositionToggles layout={layout} />
+        {trailingActions.length > 0 && <ToolbarDivider />}
+        <ToolbarActionGroup actions={trailingActions} disabled={disabled} onInvoke={invokeAction} />
       </div>
     </div>
   )

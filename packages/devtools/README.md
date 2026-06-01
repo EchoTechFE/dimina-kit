@@ -55,10 +55,14 @@ launch({
     instance.registerSimulatorApi('login', (params) => myLogin(params))
 
     // 工具栏：整表替换，随 host 状态（如登录态）重算时再 set 一次
-    const refreshToolbar = () => instance.toolbar.set([
-      { id: 'deploy', label: '发布', handler: () => deploy() },
-      { id: 'preview', label: '预览', handler: () => preview() },
-    ])
+    const refreshToolbar = () => {
+      const currentUser = getCurrentUser()
+      instance.toolbar.set([
+        { id: 'account', label: '当前用户', kind: 'avatar', placement: 'leading', displayInitial: currentUser?.name, avatarUrl: currentUser?.avatar, handler: () => showAccount() },
+        { id: 'preview', label: '预览', placement: 'primary', handler: () => preview() },
+        { id: 'deploy', label: '发布', placement: 'trailing', handler: () => deploy() },
+      ])
+    }
     refreshToolbar()
 
     // 自定义 IPC：经 gated 的 IpcRegistry，不再裸 ipcMain.handle
@@ -67,6 +71,12 @@ launch({
     // host 自己的弹窗须注册为受信 sender 后才能调 instance.ipc
     // const win = createDialogWindow(/* ... */)
     // instance.registerTrustedWindow(win)
+  },
+  onBeforeOpenProject: async ({ projectPath, instance }) => {
+    const ok = await canOpenProject(projectPath)
+    return ok
+      ? { allow: true }
+      : { allow: false, reason: '当前账号没有项目权限' }
   },
   onBeforeClose: ({ context }) => {
     // 窗口关闭前的自定义清理；session 关闭和 view 销毁由框架自动处理
@@ -203,8 +213,9 @@ src/
 | `rendererDir`   | `string`                                    | 内置        | 自定义 renderer HTML 目录                         |
 | `icon`          | `string`                                    | —           | 窗口/任务栏图标路径（macOS 使用 app bundle 图标） |
 | `menuBuilder`   | `(mainWindow, menuContext: MenuContext) => void` | 内置菜单 | 自定义菜单构建器；`menuContext` 为收窄后的 `MenuContext`，不含 `registry`/`senderPolicy` 等内部管线 |
-| `onSetup`       | `(instance) => void`                        | —           | 窗口和 context 创建后的回调，用于注册 Contribution（见下文）|
-| `onBeforeClose` | `(instance) => void`                        | —           | 窗口关闭前的回调，session 关闭由框架自动处理      |
+| `onSetup`       | `(instance) => void \| Promise<void>`       | —           | 窗口和 context 创建后的回调，用于注册 Contribution（见下文）|
+| `onBeforeOpenProject` | `({ projectPath, instance }) => BeforeOpenProjectResult \| Promise<BeforeOpenProjectResult>` | — | 项目目录校验通过后、关闭当前 session 和编译新项目之前的宿主准入钩子 |
+| `onBeforeClose` | `(instance) => void \| Promise<void>`       | —           | 窗口关闭前的回调，session 关闭由框架自动处理      |
 | `window`        | `WorkbenchWindowConfig`                     | —           | 窗口尺寸覆盖                                      |
 | `updateChecker` | `UpdateChecker`                             | —           | 自定义更新检查器；提供后启用"检查更新"功能        |
 | `updateOptions` | `{ checkInterval?, initialDelay?, getCurrentVersion? }` | —  | 仅当 `updateChecker` 提供时生效，默认 1h / 5s     |
@@ -219,6 +230,8 @@ src/
 | `instance.toolbar.set(actions)` | 原子整表替换工具栏；`actions` 为 `ToolbarActionInput[]`（`{ id, label, handler }`），`id` 重复抛错。host 状态变化（如登录态）时构造新表再 `set` 一次 |
 | `instance.ipc` | `IpcRegistry` 实例，`instance.ipc.handle(channel, fn)` 注册自定义 IPC；已绑定 `senderPolicy` 网关 |
 | `instance.registerTrustedWindow(win)` | 把 host 自有弹窗 `BrowserWindow` 加入受信 sender 集，否则其发起的 `instance.ipc` 调用会被网关拒绝。窗口关闭即移除 |
+
+`onSetup` 可以返回 Promise；`createWorkbenchApp().start()` 会等待 `onSetup` 解析完成后才继续后续启动流程，因此宿主在 `onSetup` 内注册的 simulator API 会早于 simulator `<webview>` 首次枚举自定义 API。
 
 ### 内置面板 ID
 

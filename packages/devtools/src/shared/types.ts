@@ -36,9 +36,30 @@ export type BuiltinModuleId = 'projects' | 'session' | 'simulator' | 'popover' |
  * Cross-IPC / renderer shape of a toolbar action. Carries no `handler` — the
  * handler is non-serialisable and never crosses the IPC boundary.
  */
+export type ToolbarActionPlacement = 'leading' | 'primary' | 'trailing'
+export type ToolbarActionKind = 'button' | 'avatar'
+
+export type BeforeOpenProjectResult =
+  | { allow: true; statusMessage?: string }
+  | { allow: false; reason: string; userMessage?: string }
+
 export interface ToolbarAction {
   id: string
   label: string
+  /** Visual treatment. `avatar` keeps an account entry circular even without an image URL. */
+  kind?: ToolbarActionKind
+  /**
+   * Optional visual placement in the project-window header.
+   * Omitted actions default to `primary` so existing hosts remain visible
+   * near the compile controls.
+   */
+  placement?: ToolbarActionPlacement
+  /** Short text glyph rendered before the label for compact host actions. */
+  icon?: string
+  /** Explicit fallback text for avatar actions when no image URL is available. */
+  displayInitial?: string
+  /** Avatar image URL for account-style actions. Falls back to label initials. */
+  avatarUrl?: string
 }
 
 /**
@@ -49,6 +70,11 @@ export interface ToolbarAction {
 export interface ToolbarActionInput {
   id: string
   label: string
+  kind?: ToolbarActionKind
+  placement?: ToolbarActionPlacement
+  icon?: string
+  displayInitial?: string
+  avatarUrl?: string
   handler: () => void | Promise<void>
 }
 
@@ -152,6 +178,11 @@ export interface WorkbenchHostInstance {
   readonly toolbar: { set(actions: ToolbarActionInput[]): void }
 }
 
+export type BeforeOpenProjectHook = (ctx: {
+  projectPath: string
+  instance: WorkbenchHostInstance
+}) => BeforeOpenProjectResult | Promise<BeforeOpenProjectResult>
+
 /**
  * Pluggable backend for the project-list panel. Hosts may supply this to
  * take over project storage from the default `<userData>/dimina-projects.json`.
@@ -169,6 +200,8 @@ export interface ProjectsProvider {
   updateLastOpened?(dirPath: string): void | Promise<void>
   getCompileConfig?(dirPath: string): unknown
   saveCompileConfig?(dirPath: string, cfg: unknown): void | Promise<void>
+  saveThumbnail?(dirPath: string, imageDataUrl: string): void | Promise<void>
+  getThumbnail?(dirPath: string): string | null | Promise<string | null>
 }
 
 export interface ProjectTemplate {
@@ -200,6 +233,8 @@ export interface WorkbenchAppConfig extends WorkbenchConfig {
   menuBuilder?: (mainWindow: import('electron').BrowserWindow, menuContext: MenuContext) => void
   /** Called after window and context are created but before start() resolves. Use to register custom IPC handlers. */
   onSetup?: (instance: WorkbenchHostInstance) => void | Promise<void>
+  /** Called after project-directory validation but before an active session is closed and a new project compile starts. */
+  onBeforeOpenProject?: BeforeOpenProjectHook
   /** Called before window close when a session is active. Session disposal happens automatically after this hook. */
   onBeforeClose?: (instance: WorkbenchHostInstance) => void | Promise<void>
   /** Custom update checker. If provided, enables the check-for-updates feature. */

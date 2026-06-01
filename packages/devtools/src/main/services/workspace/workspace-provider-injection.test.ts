@@ -171,6 +171,116 @@ describe('workspace-service ↔ ProjectsProvider injection', () => {
     expect(injected.validateProjectDir).toHaveBeenCalledWith('/x')
   })
 
+  it('beforeOpenProject can reject a project before the adapter starts', async () => {
+    const injected = {
+      listProjects: vi.fn(() => []),
+      addProject: vi.fn(),
+      removeProject: vi.fn(),
+      validateProjectDir: vi.fn(() => null),
+    }
+    const adapter = {
+      openProject: vi.fn(async () => ({
+        port: 3000,
+        appInfo: {},
+        close: vi.fn(),
+      })),
+    }
+    const notify = { projectStatus: vi.fn(), windowNavigateBack: vi.fn() }
+    const beforeOpenProject = vi.fn(async () => ({
+      allow: false as const,
+      reason: 'permission denied',
+      userMessage: '没有项目权限',
+    }))
+    const fakeCtx = {
+      adapter,
+      views: { disposeAll: vi.fn(), getSimulatorWebContents: () => null },
+      notify,
+      projectsProvider: injected,
+      beforeOpenProject,
+    } as unknown as Parameters<typeof createWorkspaceService>[0]
+
+    const ws = createWorkspaceService(fakeCtx)
+    const result = await ws.openProject('/x')
+
+    expect(result).toEqual({ success: false, error: '没有项目权限' })
+    expect(injected.validateProjectDir).toHaveBeenCalledWith('/x')
+    expect(beforeOpenProject).toHaveBeenCalledWith('/x')
+    expect(adapter.openProject).not.toHaveBeenCalled()
+    expect(notify.projectStatus).toHaveBeenCalledWith({ status: 'error', message: '没有项目权限' })
+  })
+
+  it('beforeOpenProject rejection keeps the current session open', async () => {
+    const injected = {
+      listProjects: vi.fn(() => []),
+      addProject: vi.fn(),
+      removeProject: vi.fn(),
+      validateProjectDir: vi.fn(() => null),
+    }
+    const close = vi.fn()
+    const adapter = {
+      openProject: vi.fn(async () => ({
+        port: 3000,
+        appInfo: {},
+        close,
+      })),
+    }
+    const beforeOpenProject = vi.fn()
+      .mockResolvedValueOnce({ allow: true as const })
+      .mockResolvedValueOnce({ allow: false as const, reason: 'blocked' })
+    const fakeCtx = {
+      adapter,
+      views: { disposeAll: vi.fn(), getSimulatorWebContents: () => null },
+      notify: { projectStatus: vi.fn(), windowNavigateBack: vi.fn() },
+      projectsProvider: injected,
+      beforeOpenProject,
+    } as unknown as Parameters<typeof createWorkspaceService>[0]
+
+    const ws = createWorkspaceService(fakeCtx)
+    await expect(ws.openProject('/first')).resolves.toMatchObject({ success: true })
+
+    await expect(ws.openProject('/second')).resolves.toEqual({
+      success: false,
+      error: 'blocked',
+    })
+    expect(close).not.toHaveBeenCalled()
+    expect(ws.getProjectPath()).toBe('/first')
+  })
+
+  it('beforeOpenProject can provide the ready status message after a successful open', async () => {
+    const injected = {
+      listProjects: vi.fn(() => []),
+      addProject: vi.fn(),
+      removeProject: vi.fn(),
+      validateProjectDir: vi.fn(() => null),
+      updateLastOpened: vi.fn(),
+    }
+    const adapter = {
+      openProject: vi.fn(async () => ({
+        port: 3000,
+        appInfo: { appId: 'demo' },
+        close: vi.fn(),
+      })),
+    }
+    const notify = { projectStatus: vi.fn(), windowNavigateBack: vi.fn() }
+    const fakeCtx = {
+      adapter,
+      views: { disposeAll: vi.fn(), getSimulatorWebContents: () => null },
+      notify,
+      projectsProvider: injected,
+      beforeOpenProject: vi.fn(async () => ({
+        allow: true as const,
+        statusMessage: '已验证应用权限',
+      })),
+    } as unknown as Parameters<typeof createWorkspaceService>[0]
+
+    const ws = createWorkspaceService(fakeCtx)
+    const result = await ws.openProject('/x')
+
+    expect(result.success).toBe(true)
+    expect(adapter.openProject).toHaveBeenCalled()
+    expect(notify.projectStatus).toHaveBeenCalledWith({ status: 'ready', message: '已验证应用权限' })
+  })
+
   it('async ProjectsProvider methods are awaited end-to-end (qdmp remote workspace contract)', async () => {
     // Bug this catches: workspace-service strips Promise return types so a
     // host that returns `Promise<Project[]>` (remote API call) ends up with

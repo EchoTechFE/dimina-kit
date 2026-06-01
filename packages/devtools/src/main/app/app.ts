@@ -417,6 +417,11 @@ export async function createDevtoolsRuntime(config: WorkbenchAppConfig = {}): Pr
     dispose: () => disposeContext(context),
   }
 
+  if (config.onBeforeOpenProject) {
+    context.beforeOpenProject = (projectPath) =>
+      config.onBeforeOpenProject!({ projectPath, instance })
+  }
+
   if (config.onSetup) {
     await config.onSetup(instance)
   }

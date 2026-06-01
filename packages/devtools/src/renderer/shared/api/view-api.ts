@@ -25,6 +25,11 @@ export interface PopoverInitPayload {
 export interface ToolbarAction {
   id: string
   label: string
+  kind?: 'button' | 'avatar'
+  placement?: 'leading' | 'primary' | 'trailing'
+  icon?: string
+  displayInitial?: string
+  avatarUrl?: string
 }
 
 export interface PopoverShowPayload {
