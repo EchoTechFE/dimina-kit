@@ -191,6 +191,11 @@ vi.mock('electron', () => {
       registerPreloadScript: vi.fn(),
       protocol: { handle: vi.fn(), unhandle: vi.fn() },
     })),
+    // defaultSession stub — consumed by `registerEditorProtocolHandler`
+    // (dmieditor:// scheme handler) during workbench setup.
+    defaultSession: {
+      protocol: { handle: vi.fn(), unhandle: vi.fn() },
+    },
   }
 
   const dialog = {

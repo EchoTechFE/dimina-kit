@@ -19,6 +19,7 @@ module.exports = {
         border: 'var(--color-border)',
         'border-subtle': 'var(--color-border-subtle)',
         'border-strong': 'var(--color-border-strong)',
+        ring: 'var(--color-ring)',
         text: 'var(--color-text)',
         'text-secondary': 'var(--color-text-secondary)',
         'text-muted': 'var(--color-text-muted)',

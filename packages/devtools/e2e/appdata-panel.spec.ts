@@ -30,8 +30,12 @@ async function selectAppDataTab(mainWindow: Page) {
   await tab.waitFor({ state: 'visible', timeout: 15000 })
   // Playwright's getByRole handles Radix Tabs activation correctly.
   await tab.click()
-  // Panel header has a "↻ 刷新" button — wait for it.
-  await mainWindow.getByRole('button', { name: /刷新/ }).waitFor({ state: 'visible', timeout: 5000 })
+  // The bottom panel keeps inactive tab panels mounted, so scope to the
+  // AppData body instead of the first refresh button in document order.
+  await mainWindow
+    .locator('[data-tab-panel="appdata"]')
+    .getByRole('button', { name: /刷新/ })
+    .waitFor({ state: 'visible', timeout: 5000 })
 }
 
 interface AppDataDom {
@@ -62,9 +66,7 @@ async function readPanel(mainWindow: Page): Promise<AppDataDom> {
       ),
     )
 
-    const refreshBtn = Array.from(document.querySelectorAll('button'))
-      .find((b) => b.textContent?.trim().includes('刷新'))
-    const panel = refreshBtn?.closest('.flex.flex-col') as HTMLElement | null
+    const panel = document.querySelector('[data-tab-panel="appdata"]') as HTMLElement | null
     if (!panel) return { tabs: [], entryHeaders: [], entryJsons: [], bridgeIds }
 
     const tabs: string[] = []

@@ -193,36 +193,34 @@
     display: flex; align-items: center;
   }
   .dom-toolbar .spacer { flex: 1; }
-  .dom-toolbar .tabs {
-    width: 200px; height: 22px;
-    border: 1px solid hsl(0 0% 60%);
-    border-radius: 2px;
-    background: hsl(0 0% 14% / 0.7);
-    display: flex;
-  }
-  .dom-toolbar .tabs span {
-    flex: 1; border-right: 1px solid hsl(0 0% 40%);
-    font-family: ui-monospace, "SF Mono", Menlo, monospace;
-    font-size: 9px; color: hsl(0 0% 75%);
-    display: flex; align-items: center; justify-content: center;
-  }
-  .dom-toolbar .tabs span:last-child { border-right: 0; }
-  .dom-toolbar .tabs span.active { color: var(--color-accent); background: hsl(249 100% 67% / 0.14); }
 
-  /* Splitter line between Simulator and Right Pane */
+  /* Default 'inEditor' layout: fixed-width simulator COLUMN on the left, with
+     a vertical splitter on its trailing (right) edge; to its right a column
+     split vertically into the Monaco editor (top) over the bottom debug panel.
+     Sim column width is fixed-px (~44% of stack here); editor/debug split 70/30. */
+
+  /* Vertical splitter between the simulator column and the editor/debug column */
   .dom-splitter {
     position: absolute;
     top: 50px; bottom: 8px;
-    left: 50%;
+    left: 44%;
     width: 1.5px;
     background: hsl(0 0% 60%);
     transform: translateX(-50%);
+  }
+  /* Horizontal splitter between the editor (top) and the bottom debug panel */
+  .dom-hsplitter {
+    position: absolute;
+    left: 44%; right: 0;
+    top: 70%;
+    height: 1.5px;
+    background: hsl(0 0% 60%);
   }
 
   .dom-sim-region {
     position: absolute;
     left: 0; top: 42px; bottom: 0;
-    width: 50%;
+    width: 44%;
   }
   .dom-sim-region .topbar {
     position: absolute; left: 8px; right: 8px; top: 8px; height: 22px;
@@ -237,7 +235,7 @@
     display: flex; align-items: center; justify-content: center;
   }
   .dom-sim-region .webview-slot {
-    position: absolute; inset: 38px 50px 32px 50px;
+    position: absolute; inset: 38px 32px 24px 32px;
     border: 1.5px dashed hsl(0 0% 55%); border-radius: 12px;
   }
   .dom-sim-region .bottom {
@@ -249,51 +247,86 @@
     padding-top: 3px; text-indent: 4px;
   }
 
-  .dom-right-region {
+  /* Editor (Monaco) cell — plain React DOM, top of the right column */
+  .dom-editor-region {
     position: absolute;
-    right: 0; top: 42px; bottom: 0;
-    width: 50%;
+    left: 44%; right: 0; top: 42px;
+    height: calc(70% - 42px);
   }
-  .dom-right-region .tabs-bar {
-    position: absolute; left: 12px; right: 12px; top: 8px;
-    height: 22px;
-    display: flex; gap: 16px;
+  .dom-editor-region .gutter {
+    position: absolute; left: 0; top: 0; bottom: 0; width: 24px;
+    border-right: 1px solid hsl(0 0% 28%);
+    background: hsl(0 0% 14%);
+  }
+  .dom-editor-region .code {
+    position: absolute; left: 34px; right: 14px; top: 10px; bottom: 10px;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .dom-editor-region .code i {
+    display: block; height: 5px;
+    background: hsl(0 0% 50%); border-radius: 1px;
+  }
+  .dom-editor-region .code i:nth-child(1) { width: 40%; }
+  .dom-editor-region .code i:nth-child(2) { width: 70%; margin-left: 14px; }
+  .dom-editor-region .code i:nth-child(3) { width: 55%; margin-left: 14px; }
+  .dom-editor-region .code i:nth-child(4) { width: 30%; }
+  .dom-editor-region .code i:nth-child(5) { width: 60%; margin-left: 14px; }
+  /* Caption: the editor is the one cell with NO companion native layer —
+     it's pure in-renderer DOM (was a dmieditor:// WebContentsView overlay). */
+  .dom-editor-region .region-note {
+    position: absolute; right: 10px; bottom: 6px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 8px; color: hsl(0 0% 52%);
+    letter-spacing: 0.02em;
+  }
+
+  /* Bottom debug panel — WXML / AppData / Storage / Console tabs (Console is the
+     native DevTools overlay placeholder, anchored via ViewAnchor). */
+  .dom-debug-region {
+    position: absolute;
+    left: 44%; right: 0; bottom: 0;
+    top: 70%;
+  }
+  .dom-debug-region .tabs-bar {
+    position: absolute; left: 12px; right: 12px; top: 4px;
+    height: 18px;
+    display: flex; gap: 12px;
     border-bottom: 1px solid hsl(0 0% 55%);
     align-items: center;
   }
-  .dom-right-region .tabs-bar span {
+  .dom-debug-region .tabs-bar span {
     font-family: ui-monospace, "SF Mono", Menlo, monospace;
-    font-size: 9px; color: hsl(0 0% 82%);
-    padding-bottom: 4px; position: relative;
+    font-size: 8.5px; color: hsl(0 0% 82%);
+    padding-bottom: 3px; position: relative;
   }
-  .dom-right-region .tabs-bar span.active { color: var(--color-accent); }
-  .dom-right-region .tabs-bar span.active::after {
+  .dom-debug-region .tabs-bar span.active { color: var(--color-accent); }
+  .dom-debug-region .tabs-bar span.active::after {
     content: ""; position: absolute;
     left: 0; right: 0; bottom: -1px;
     height: 2px; background: var(--color-accent);
     border-radius: 1px;
   }
-  .dom-right-region .rows {
-    position: absolute; left: 14px; right: 14px; top: 38px; bottom: 14px;
-    display: flex; flex-direction: column; gap: 6px;
+  .dom-debug-region .rows {
+    position: absolute; left: 14px; right: 14px; top: 26px; bottom: 8px;
+    display: flex; flex-direction: column; gap: 5px;
   }
-  .dom-right-region .rows i {
+  .dom-debug-region .rows i {
     display: block; height: 5px;
     background: hsl(0 0% 56%); border-radius: 1px;
   }
-  .dom-right-region .rows i:nth-child(2) { width: 60%; }
-  .dom-right-region .rows i:nth-child(4) { width: 75%; }
-  .dom-right-region .rows i:nth-child(5) { width: 50%; }
+  .dom-debug-region .rows i:nth-child(2) { width: 60%; }
+  .dom-debug-region .rows i:nth-child(3) { width: 75%; }
 
   /* L3 <webview> simulator guest WebContents (embedded in SimulatorPanel)
      Covers the simulator panel's webview region on z2's surface.
-     Region in stack coords (sim-region inset 38 50 32 50 inside left half):
-       (14+50, 36+42+38) → 266 × 358 = (64, 116) */
+     Sim column is the left ~44% of the mainweb content area (left=14, width≈322).
+     webview-slot inset 38 32 24 32 → stack coords (14+32, 78+38) ≈ (46, 116),
+     258 wide, phone-tall. */
   .layer-webview {
     --bg: var(--color-webview);
     --bd: var(--color-webview-border);
-    top: 116px; left: 64px;
-    width: 266px; height: 358px;
+    top: 116px; left: 46px;
+    width: 258px; height: 366px;
     transform: translateZ(160px);
     background: var(--bg);
     border: 1.5px solid var(--bd);
@@ -302,13 +335,16 @@
   }
   .layer-webview .label { color: var(--color-text); }
 
-  /* L4 WebContentsView · DevTools
-     computeSimulatorBounds == computeRightPanelBounds in real code.
-     Right Pane footprint on z2: left=14+366=380, top=36+42=78, right=14, bottom=14 */
+  /* L4 WebContentsView · simulator Chromium DevTools (the "Console" tab)
+     Bounds come from the ViewAnchor-published rect of the bottom debug panel's
+     Console placeholder (publishSimulatorDevtoolsBounds → setSimulatorDevtoolsBounds),
+     NOT from the legacy computeSimulatorBounds/computeRightPanelBounds fallback.
+     So it sits over the Console area of the BOTTOM debug region (right column,
+     below the editor): left≈336, top≈387 (below the tab bar), right=14, bottom=14. */
   .layer-devtools {
     --bg: var(--color-devtools);
     --bd: var(--color-devtools-border);
-    top: 78px; left: 380px;
+    top: 387px; left: 336px;
     right: 14px; bottom: 14px;
     transform: translateZ(210px);
     background: var(--bg);
@@ -522,11 +558,9 @@
           <div class="dom-toolbar">
             <div class="btn">编译</div>
             <div class="spacer"></div>
-            <div class="tabs">
-              <span>WXML</span><span class="active">APPDATA</span><span>STORE</span><span>SIM</span>
-            </div>
           </div>
           <div class="dom-splitter"></div>
+          <div class="dom-hsplitter"></div>
           <div class="dom-sim-region">
             <div class="topbar">
               <div class="sel">iPhone 14</div>
@@ -534,11 +568,16 @@
             </div>
             <div class="webview-slot"></div>
           </div>
-          <div class="dom-right-region">
+          <div class="dom-editor-region">
+            <div class="gutter"></div>
+            <div class="code"><i></i><i></i><i></i><i></i><i></i></div>
+            <span class="region-note">Monaco · in-renderer DOM (无独立 view)</span>
+          </div>
+          <div class="dom-debug-region">
             <div class="tabs-bar">
-              <span>WXML</span><span class="active">APPDATA</span><span>STORAGE</span>
+              <span>WXML</span><span>AppData</span><span>Storage</span><span class="active">Console</span>
             </div>
-            <div class="rows"><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="rows"><i></i><i></i><i></i></div>
           </div>
           <span class="label lg">WebContentsView</span>
         </div>
@@ -602,7 +641,8 @@
           { layer: 'mainweb', children: [
             { dom: 'ProjectToolbar' },
             { dom: 'SimulatorPanel', children: [{ layer: 'webview' }] },
-            { dom: 'Right Pane' },
+            { dom: 'MonacoEditor' },
+            { dom: 'BottomDebugPanel · WXML / AppData / Storage / Console' },
           ]},
           { layer: 'devtools' },
           { layer: 'settings' },

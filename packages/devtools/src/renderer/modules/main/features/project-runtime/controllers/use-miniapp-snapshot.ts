@@ -94,6 +94,7 @@ export function useMiniappSnapshot<T>(
         pollTimer = null
       }
       webview.addEventListener('ipc-message', onIpcMessage)
+      webview.send?.(MiniappSnapshotChannel.Pull, { id })
     }
 
     tryAttach()

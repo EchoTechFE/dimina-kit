@@ -2,7 +2,6 @@ import { test, expect, useSharedProject } from './fixtures'
 import {
   DEMO_APP_DIR,
   findButtonByText,
-  findButtonByTitle,
 } from './helpers'
 
 test.describe('Simulator Panel', () => {
@@ -12,7 +11,8 @@ test.describe('Simulator Panel', () => {
 
   test('toolbar has compile and simulator toggle buttons', async ({ mainWindow }) => {
     expect(await findButtonByText(mainWindow, '普通编译')).toBe(true)
-    expect(await findButtonByTitle(mainWindow, '面板')).toBe(true)
+    await expect(mainWindow.getByRole('group', { name: '面板可见性' })).toBeVisible()
+    await expect(mainWindow.getByTestId('layout-toolbar-toggle-simulator')).toBeVisible()
   })
 
   test('toolbar has built-in right panel tabs', async ({ mainWindow }) => {
@@ -31,46 +31,15 @@ test.describe('Simulator Panel', () => {
     expect(tabLabels).toEqual(expect.arrayContaining(['WXML', 'AppData', 'Storage']))
   })
 
-  test('can toggle simulator panel visibility', async ({ mainWindow, electronApp }) => {
-    const getChildCount = () =>
-      electronApp.evaluate(({ BrowserWindow }) => {
-        const win = BrowserWindow.getAllWindows()[0]
-        return win ? (win.contentView.children || []).length : 0
-      })
+  test('can toggle simulator panel visibility', async ({ mainWindow }) => {
+    const toggle = mainWindow.getByTestId('layout-toolbar-toggle-simulator')
+    await expect(mainWindow.locator('webview')).toHaveCount(1)
 
-    const before = await getChildCount()
-    const toggleFound = await mainWindow.evaluate(() => {
-      const buttons = document.querySelectorAll('button')
-      for (const btn of buttons) {
-        const title = btn.getAttribute('title') || ''
-        if (title.includes('面板')) {
-          btn.click()
-          return true
-        }
-      }
-      return false
-    })
-    expect(toggleFound).toBe(true)
+    await toggle.click()
+    await expect(mainWindow.locator('webview')).toHaveCount(0)
 
-    await mainWindow.waitForTimeout(500)
-    const hiddenCount = await getChildCount()
-    expect(hiddenCount).toBeLessThan(before)
-
-    // Click again to toggle back
-    await mainWindow.evaluate(() => {
-      const buttons = document.querySelectorAll('button')
-      for (const btn of buttons) {
-        const title = btn.getAttribute('title') || ''
-        if (title.includes('面板')) {
-          btn.click()
-          return true
-        }
-      }
-      return false
-    })
-    await mainWindow.waitForTimeout(500)
-    const shownCount = await getChildCount()
-    expect(shownCount).toBeGreaterThan(hiddenCount)
+    await toggle.click()
+    await expect(mainWindow.locator('webview')).toHaveCount(1)
   })
 
   test('right panel tabs are rendered in the main window', async ({ mainWindow }) => {

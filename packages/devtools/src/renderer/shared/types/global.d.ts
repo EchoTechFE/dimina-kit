@@ -13,6 +13,8 @@ declare global {
     devtools: {
       ipc: {
         invoke<T = unknown>(channel: string, ...args: unknown[]): Promise<T>
+        /** Synchronous round-trip (blocks the renderer); see preload `sendSync`. */
+        sendSync<T = unknown>(channel: string, ...args: unknown[]): T
         send(channel: string, ...args: unknown[]): void
         on(
           channel: string,

@@ -191,8 +191,27 @@ export function createProjectWatcher(
 	projectPath: string,
 	onChange: () => void | Promise<void>,
 ): { close: () => Promise<void> } {
+	// Ignore dotfiles/dot-directories that live *inside* the project (.git,
+	// .DS_Store, editor scratch, etc.) without nuking the whole watch when the
+	// project itself sits under a dotted ancestor path. A regex like
+	// /(^|[/\\])\../ runs against the full absolute path, so a project under
+	// e.g. /…/.claude/worktrees/app would match on the ancestor ".claude" and
+	// chokidar would silently ignore everything — editing source files never
+	// triggers a rebuild. The function form scopes the dot check to the path
+	// segments *below* projectPath. chokidar v5 passes posix-normalized
+	// (forward-slash) absolute paths to the matcher, so we normalize both sides
+	// before computing the relative path.
+	const toPosix = (p: string) => p.replace(/\\/g, '/')
+	const projectPathPosix = toPosix(path.resolve(projectPath))
 	const watcher = chokidar.watch(projectPath, {
-		ignored: /(^|[/\\])\../,
+		ignored: (candidate: string) => {
+			const rel = path.posix.relative(projectPathPosix, toPosix(candidate))
+			// The root itself (rel === '') or anything outside the project
+			// (rel starts with '..') must never be ignored.
+			if (!rel || rel.startsWith('..'))
+				return false
+			return rel.split('/').some(seg => seg.startsWith('.'))
+		},
 		persistent: true,
 		ignoreInitial: true,
 	})

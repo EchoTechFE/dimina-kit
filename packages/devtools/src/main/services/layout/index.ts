@@ -2,7 +2,7 @@
 export const SPLITTER_W = 4
 
 /**
- * X coordinate where the right panel starts (simulator width + splitter).
+ * X coordinate where the legacy right-side overlay starts.
  */
 export function getRightX(simWidth: number): number {
   return simWidth + SPLITTER_W
@@ -19,7 +19,7 @@ export function computeRightPanelBounds(
   contentWidth: number,
   contentHeight: number,
   simWidth: number,
-  headerHeight: number
+  headerHeight: number,
 ): Bounds {
   const x = getRightX(simWidth)
   return {
@@ -37,7 +37,7 @@ export function computeSimulatorBounds(
   contentWidth: number,
   contentHeight: number,
   simWidth: number,
-  headerHeight: number
+  headerHeight: number,
 ): Bounds {
   return computeRightPanelBounds(contentWidth, contentHeight, simWidth, headerHeight)
 }
@@ -47,12 +47,12 @@ export const SETTINGS_W = 320
 export function computeSettingsBounds(
   contentWidth: number,
   contentHeight: number,
-  headerHeight: number
+  headerHeight: number,
 ): Bounds {
   return {
     x: Math.max(0, contentWidth - SETTINGS_W),
     y: headerHeight,
-    width: SETTINGS_W,
+    width: Math.min(SETTINGS_W, Math.max(1, contentWidth)),
     height: Math.max(1, contentHeight - headerHeight),
   }
 }
@@ -60,12 +60,12 @@ export function computeSettingsBounds(
 export function computePopoverBounds(
   contentWidth: number,
   contentHeight: number,
-  headerHeight: number
+  headerHeight: number,
 ): Bounds {
   return {
     x: 0,
     y: headerHeight,
-    width: contentWidth,
+    width: Math.max(1, contentWidth),
     height: contentHeight - headerHeight,
   }
 }

@@ -1,4 +1,5 @@
 import { setupCdpPort, registerDifileScheme } from './bootstrap.js'
+import { registerProjectFsIpc } from '../ipc/project-fs.js'
 
 import { app, BrowserWindow, nativeImage, session } from 'electron'
 import fs from 'fs'
@@ -308,6 +309,15 @@ export function createWorkbenchApp(config: WorkbenchAppConfig = {}) {
   let setupPromise: Promise<WorkbenchAppInstance> | null = null
   let appEventsRegistered = false
 
+  // Lock the visible app name BEFORE app.whenReady so the dock label,
+  // ⌘-Tab card and macOS app-menu first item all read "Dimina DevTools"
+  // in both dev (unpackaged Electron) and packaged builds. `app.setName`
+  // overrides the unpackaged process name ("Electron") and is harmless
+  // when the packaged Info.plist already says the same thing.
+  // Host integrators that brand the app differently can still override
+  // `config.appName`; we keep our default consistent with `electron-builder.yml#productName`.
+  try { app.setName(config.appName ?? 'Dimina DevTools') } catch { /* electron stub in tests */ }
+
   setupCdpPort()
   // Privileged scheme registration must run before `app.whenReady` —
   // registering it later throws.
@@ -322,7 +332,10 @@ export function createWorkbenchApp(config: WorkbenchAppConfig = {}) {
       const rendererDir = config.rendererDir ?? defaultRendererDir
       const mainWindow = createConfiguredMainWindow(config, rendererDir)
       const context = createContext(config, mainWindow, rendererDir)
+
       context.registry.add(registerAppIpc(context))
+      // Sandboxed project file-system IPC for the in-renderer Monaco editor.
+      context.registry.add(registerProjectFsIpc(context))
       // One process-wide listener that re-syncs every window's native
       // backgroundColor on theme change — windows otherwise keep the stale
       // creation-time color (see installThemeBackgroundSync).

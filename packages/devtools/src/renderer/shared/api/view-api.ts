@@ -1,10 +1,12 @@
 import type { CompileConfig } from '@/shared/types'
+import type { ViewBounds } from '../../../shared/ipc-channels'
 import {
   SimulatorChannel,
   PanelChannel,
   ToolbarChannel,
   PopoverChannel,
   WindowChannel,
+  ViewChannel,
 } from '../../../shared/ipc-channels'
 import { invoke, invokeStrict, on } from './ipc-transport'
 
@@ -114,4 +116,13 @@ export function onPopoverRelaunch(
 /** Listen for the back-to-project-list navigation event from the app menu. */
 export function onWindowNavigateBack(handler: () => void): () => void {
   return on<[]>(WindowChannel.NavigateBack, () => handler())
+}
+
+/**
+ * Publish the simulator Chromium-DevTools placeholder's measured rectangle.
+ * `width: 0, height: 0` means the overlay is hidden (e.g. the Console tab is
+ * not selected) — the main process removes it from the contentView.
+ */
+export function publishSimulatorDevtoolsBounds(bounds: ViewBounds): Promise<void> {
+  return invoke<void>(ViewChannel.SimulatorDevtoolsBounds, bounds)
 }

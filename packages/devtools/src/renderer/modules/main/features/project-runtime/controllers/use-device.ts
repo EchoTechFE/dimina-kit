@@ -27,7 +27,20 @@ export interface DeviceHookResult {
   setSimPanelWidth: (width: number) => void
   handleDeviceChange: (e: React.ChangeEvent<HTMLSelectElement>) => void
   handleZoomChange: (e: React.ChangeEvent<HTMLSelectElement>) => void
-  handleSplitterDrag: (e: React.MouseEvent) => void
+  /**
+   * Manual splitter drag handler for the sim column. `side` describes
+   * which side of the sim column the splitter is rendered on:
+   *   - `trailing` (default): splitter is to the RIGHT of the sim
+   *     column (alignment=left). Dragging right widens the column —
+   *     `delta = ev.clientX - startX` is the natural width delta.
+   *   - `leading`: splitter is to the LEFT of the sim column
+   *     (alignment=right). Dragging left widens the column — the delta
+   *     sign must be inverted.
+   *
+   * Defaults to `trailing` for backward compatibility with call sites
+   * that haven't switched to the FrameTree renderer yet.
+   */
+  handleSplitterDrag: (e: React.MouseEvent, side?: 'leading' | 'trailing') => void
   sendDeviceInfo: (device: DeviceType) => void
   simPanelWidthRef: RefObject<number>
   deviceRef: RefObject<DeviceType>
@@ -113,13 +126,19 @@ export function useDevice(props: UseDeviceProps): DeviceHookResult {
   )
 
   const handleSplitterDrag = useCallback(
-    (e: React.MouseEvent) => {
+    (e: React.MouseEvent, side: 'leading' | 'trailing' = 'trailing') => {
       e.preventDefault()
       const startX = e.clientX
       const startW = simPanelWidthRef.current
       const onMove = (ev: MouseEvent) => {
+        const delta = ev.clientX - startX
+        // `trailing` splitter (default): drag right widens the column.
+        // `leading` splitter (sim column on the right, alignment=right):
+        // drag left widens it — invert the delta so user intent matches
+        // the resulting width change.
+        const signed = side === 'trailing' ? delta : -delta
         const newW = clampPanelWidth(
-          startW + ev.clientX - startX,
+          startW + signed,
           window.innerWidth,
         )
         setSimPanelWidth(newW)

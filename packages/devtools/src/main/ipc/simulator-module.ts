@@ -3,6 +3,7 @@ import { DisposableRegistry } from '../utils/disposable.js'
 import { registerSimulatorIpc } from './simulator.js'
 import { registerPanelsIpc } from './panels.js'
 import { registerToolbarIpc } from './toolbar.js'
+import { registerViewsIpc } from './views.js'
 
 /**
  * The 'simulator' built-in module fans out into three IPC registrars
@@ -15,6 +16,7 @@ export const simulatorModule: WorkbenchModule = {
     reg.add(registerSimulatorIpc(ctx))
     reg.add(registerPanelsIpc(ctx))
     reg.add(registerToolbarIpc(ctx))
+    reg.add(registerViewsIpc(ctx))
     return reg
   },
 }

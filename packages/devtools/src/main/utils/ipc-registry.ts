@@ -93,6 +93,51 @@ export class IpcRegistry implements Disposable {
     return this
   }
 
+  /**
+   * Register a SYNCHRONOUS `ipcRenderer.sendSync` handler. Unlike {@link on}
+   * (fire-and-forget), the renderer is blocked until we set `event.returnValue`,
+   * so `fn` MUST be synchronous and return the value to hand back. The sender
+   * policy gates it like {@link handle}; a rejected sender or a thrown error
+   * yields a structured `{ ok: false, code, message }` returnValue instead of
+   * the silent drop `on` uses, so the blocked renderer always gets an answer.
+   */
+  handleSync(channel: string, fn: (event: IpcMainEvent, ...args: unknown[]) => unknown): this {
+    const policy = this.policy
+    const listener = (event: IpcMainEvent, ...args: unknown[]) => {
+      // Everything — including the policy check — runs inside the try so EVERY
+      // path sets `event.returnValue`. sendSync blocks the renderer until it is
+      // set, so an unset value (e.g. a throwing policy fn) would hang the
+      // renderer forever; the catch guarantees a sentinel instead.
+      try {
+        if (policy && !policy(event.sender)) {
+          console.warn(
+            `[ipc] sender rejected for channel '${channel}' (${summarizeSender(event.sender)})`,
+          )
+          event.returnValue = {
+            ok: false,
+            code: 'EREJECTED',
+            message: `IPC sender rejected for channel ${channel}`,
+          }
+          return
+        }
+        event.returnValue = fn(event, ...args)
+      } catch (err) {
+        reportListenerError(channel, err)
+        const code = (err as NodeJS.ErrnoException)?.code
+        event.returnValue = {
+          ok: false,
+          code: typeof code === 'string' ? code : 'EUNKNOWN',
+          message: err instanceof Error ? err.message : String(err),
+        }
+      }
+    }
+    ipcMain.on(channel, listener)
+    this.registry.add(() => {
+      ipcMain.removeListener(channel, listener)
+    })
+    return this
+  }
+
   on(channel: string, fn: ListenerFn): this {
     const policy = this.policy
     const raw = fn as (e: IpcMainEvent, ...a: unknown[]) => unknown
