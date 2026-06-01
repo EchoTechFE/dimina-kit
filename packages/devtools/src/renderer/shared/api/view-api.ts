@@ -1,5 +1,5 @@
 import type { CompileConfig } from '@/shared/types'
-import type { ViewBounds } from '../../../shared/ipc-channels'
+import type { NativeDeviceInfo, ViewBounds } from '../../../shared/ipc-channels'
 import {
   SimulatorChannel,
   PanelChannel,
@@ -81,6 +81,16 @@ export function setSimulatorVisible(visible: boolean, simWidth: number): Promise
   return invoke<void>(SimulatorChannel.SetVisible, visible, simWidth)
 }
 
+/**
+ * NATIVE-HOST ONLY. Push the selected device's logical metrics so main can
+ * live-update the running service-host window's host-env snapshot — the
+ * authoritative `wx.getSystemInfoSync()` source — without a relaunch. The
+ * default `<webview>` path delivers device info to the guest via `device:change`.
+ */
+export function setNativeDeviceInfo(device: NativeDeviceInfo): Promise<void> {
+  return invoke<void>(SimulatorChannel.SetDeviceInfo, device)
+}
+
 /** Enumerate the built-in panels (WXML / AppData / Storage) currently enabled. */
 export function listPanels(): Promise<PanelTab[]> {
   return invokeStrict<PanelTab[]>(PanelChannel.List)
@@ -143,6 +153,17 @@ export function onPopoverRelaunch(
 /** Listen for the back-to-project-list navigation event from the app menu. */
 export function onWindowNavigateBack(handler: () => void): () => void {
   return on<[]>(WindowChannel.NavigateBack, () => handler())
+}
+
+/**
+ * NATIVE-HOST ONLY. Subscribe to the visible page route pushed by main on every
+ * in-app navigation (the page stack lives in the DeviceShell WebContentsView,
+ * so the renderer can't observe it from `<webview>` nav events). The default
+ * path derives the current page from the simulator `<webview>` itself and never
+ * receives this.
+ */
+export function onSimulatorCurrentPage(handler: (pagePath: string) => void): () => void {
+  return on<[string]>(SimulatorChannel.CurrentPage, (pagePath) => handler(pagePath))
 }
 
 /**

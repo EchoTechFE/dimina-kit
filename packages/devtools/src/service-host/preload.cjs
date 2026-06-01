@@ -4,6 +4,10 @@ const CHANNELS = {
   SERVICE_INVOKE: 'dmb:service:invoke',
   SERVICE_PUBLISH: 'dmb:service:publish',
   TO_SERVICE: 'dmb:to-service',
+  // main → this window: live-update the host-env snapshot on a device change so
+  // wx.getSystemInfoSync() reflects the newly-selected device without a
+  // relaunch. Mirrors ServiceHostChannel.HostEnvUpdate in shared/ipc-channels.ts.
+  HOST_ENV_UPDATE: 'service-host:host-env:update',
 }
 
 const params = new URLSearchParams(globalThis.location && globalThis.location.search || '')
@@ -43,6 +47,18 @@ Object.defineProperty(globalThis, '__diminaSpawnContext', {
   },
   enumerable: false,
   configurable: false,
+})
+
+// Live host-env updates (native-host device dropdown). The binding above is
+// non-configurable, but the inner object's properties are writable — merge the
+// pushed metrics into `hostEnvSnapshot` in place. `sync-impls/system-info.ts`
+// reads `this.hostEnvSnapshot` fresh on every `getSystemInfoSync()`, so the
+// next call (and the mini-app code that invokes it) sees the new device.
+ipcRenderer.on(CHANNELS.HOST_ENV_UPDATE, (_event, snapshot) => {
+  if (!snapshot || typeof snapshot !== 'object') return
+  const ctx = globalThis.__diminaSpawnContext
+  if (!ctx) return
+  ctx.hostEnvSnapshot = { ...(ctx.hostEnvSnapshot || {}), ...snapshot }
 })
 
 function reportError(stage, error) {

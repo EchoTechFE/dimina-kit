@@ -27,6 +27,7 @@ import { startMcpServer, setNativeHost, setActiveBridgeId } from '../services/mc
 import { setupSimulatorStorage } from '../services/simulator-storage/index.js'
 import { setupSimulatorWxml } from '../services/simulator-wxml/index.js'
 import { setupSimulatorAppData } from '../services/simulator-appdata/index.js'
+import { setupSimulatorCurrentPage } from '../services/simulator-current-page/index.js'
 import { createRenderInspector } from '../services/render-inspect/index.js'
 import { setupSimulatorTempFiles } from '../services/simulator-temp-files/index.js'
 import { UpdateManager } from '../services/update/index.js'
@@ -471,6 +472,12 @@ export function createWorkbenchApp(config: WorkbenchAppConfig = {}) {
         context.appData = appDataService
         context.registry.add(appDataService)
         context.registry.add(() => { context.appData = undefined })
+        // Push the visible page route to the toolbar on every navigation (the
+        // page stack lives in the DeviceShell WCV, invisible to renderer
+        // <webview> nav events).
+        context.registry.add(setupSimulatorCurrentPage(mainWindow.webContents, {
+          bridge: context.bridge,
+        }))
       }
       context.registry.add(wireAppWindowEvents(config, instance))
       context.registry.add(enableDevRendererAutoReload(rendererDir))

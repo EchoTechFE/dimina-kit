@@ -4,7 +4,7 @@ import {
   useState,
 } from 'react'
 import type { RefObject } from 'react'
-import { attachNativeSimulator, attachSimulator, captureThumbnail } from '@/shared/api'
+import { attachNativeSimulator, attachSimulator, captureThumbnail, onSimulatorCurrentPage } from '@/shared/api'
 import type { AppInfo } from '@/shared/api'
 import {
   buildSimulatorUrl,
@@ -68,6 +68,18 @@ export function useSimulator(props: UseSimulatorProps): SimulatorHookResult {
   useEffect(() => {
     setCurrentPage(getCurrentPagePath(simulatorUrl))
   }, [simulatorUrl])
+
+  // Native-host: the page stack lives in the DeviceShell WebContentsView, so
+  // in-app navigation never reaches a renderer `<webview>`'s did-navigate
+  // events (the default path's source below). Subscribe to main's active-page
+  // push instead so the toolbar route stays in sync. Empty path = unknown →
+  // keep the URL-seeded value.
+  useEffect(() => {
+    if (!nativeHost) return
+    return onSimulatorCurrentPage((pagePath) => {
+      if (pagePath) setCurrentPage(pagePath)
+    })
+  }, [nativeHost])
 
   // ── Native-host: mount the simulator as a main-process WebContentsView ──────
   // The default `<webview>`-attach effect below short-circuits (asWebview → null)

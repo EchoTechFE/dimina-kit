@@ -7,7 +7,7 @@ import {
 } from 'react'
 import type { RefObject } from 'react'
 import { DEVICES } from '@/shared/constants'
-import { resizeSimulator } from '@/shared/api'
+import { resizeSimulator, setNativeDeviceInfo } from '@/shared/api'
 import {
   clampPanelWidth,
   computeSimPanelWidth,
@@ -18,6 +18,12 @@ import type { DeviceType } from './use-project-runtime-controller'
 export interface UseDeviceProps {
   initialDevice: DeviceType
   simulatorRef: RefObject<HTMLElement | null>
+  /**
+   * NATIVE-HOST ONLY. When true there is no renderer `<webview>` to receive
+   * `device:change`; device metrics are pushed to main via `setNativeDeviceInfo`
+   * instead, which live-updates the service-host window's host-env snapshot.
+   */
+  nativeHost: boolean
 }
 
 export interface DeviceHookResult {
@@ -48,7 +54,7 @@ export interface DeviceHookResult {
 }
 
 export function useDevice(props: UseDeviceProps): DeviceHookResult {
-  const { initialDevice, simulatorRef } = props
+  const { initialDevice, simulatorRef, nativeHost } = props
 
   const [device, setDevice] = useState<DeviceType>(initialDevice)
   const [zoom, setZoom] = useState(100)
@@ -88,6 +94,27 @@ export function useDevice(props: UseDeviceProps): DeviceHookResult {
   }, [])
 
   const sendDeviceInfo = useCallback((d: DeviceType) => {
+    // Native-host: no renderer <webview> exists, so `device:change` has no
+    // recipient. The mini-app's authoritative `wx.getSystemInfoSync()` runs in
+    // the hidden service-host window off its host-env snapshot; push the device
+    // metrics to main, which live-updates that snapshot (no relaunch). Zoom is
+    // NOT part of this — it is a display scale applied to the simulator WCV +
+    // nested render guests via setNativeSimulatorBounds, so logical device
+    // metrics stay zoom-invariant.
+    if (nativeHost) {
+      void setNativeDeviceInfo({
+        brand: 'Apple',
+        model: d.name,
+        system: d.system,
+        platform: 'ios',
+        pixelRatio: d.pixelRatio,
+        screenWidth: d.width,
+        screenHeight: d.height,
+        statusBarHeight: d.statusBarHeight,
+        safeAreaBottom: d.safeAreaBottom,
+      })
+      return
+    }
     const webview = asWebview(simulatorRef)
     try {
       webview?.send?.('device:change', {
@@ -104,7 +131,7 @@ export function useDevice(props: UseDeviceProps): DeviceHookResult {
     } catch {
       // WebView not yet attached to DOM — device info will be sent on dom-ready
     }
-  }, [simulatorRef])
+  }, [simulatorRef, nativeHost])
 
   const handleDeviceChange = useCallback(
     (e: React.ChangeEvent<HTMLSelectElement>) => {

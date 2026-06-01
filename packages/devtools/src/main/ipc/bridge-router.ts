@@ -19,6 +19,8 @@ import type {
   PageLifecyclePayload,
   PageOpenRequest,
   PageOpenResult,
+  PageStackEntry,
+  PageStackPayload,
   PageWindowConfig,
   RenderInvokePayload,
   RenderPublishPayload,
@@ -96,6 +98,10 @@ interface AppSession {
    * (= appSessionId). Main has no z-order concept of its own; this mirrors the
    * DeviceShell ShellState so panels/automation can target the current page. */
   activeBridgeId: string | null
+  /** Full ordered page stack (bottom→top) last reported by DeviceShell
+   * (PAGE_STACK). Undefined until the first signal; automation's
+   * `App.getPageStack` falls back to the single active page then. */
+  pageStack?: PageStackEntry[]
   /** Pool entry id when the service window came from the pre-warm pool; null
    * for a fresh / fallback window (destroyed, not pooled, on dispose). */
   poolEntryId: string | null
@@ -167,6 +173,9 @@ export interface RenderEvent {
   kind: 'domReady' | 'activePage'
   appId: string
   bridgeId: string
+  /** activePage only: the now-visible page's route (bare pagePath), if known.
+   * Lets the current-page panel push the route without a separate lookup. */
+  pagePath?: string
 }
 
 export interface BridgeRouterHandle {
@@ -180,6 +189,10 @@ export interface BridgeRouterHandle {
   getActiveRenderWc(appId?: string): WebContents | null
   /** The visible top-of-stack page bridgeId for the active (or named) app. */
   getActiveBridgeId(appId?: string): string | null
+  /** The full ordered page stack (bottom→top) reported by DeviceShell, or null
+   * before the first PAGE_STACK signal. Optional: only the native-host bridge
+   * provides it (the default path derives the stack from the simulator URL). */
+  getPageStack?(appId?: string): PageStackEntry[] | null
   /** Subscribe to render-side activity (domReady / active-page change). */
   onRenderEvent(listener: (event: RenderEvent) => void): () => void
 }
@@ -294,6 +307,10 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
       // Fall back to the root page (= appSessionId) before the first signal.
       return ap.activeBridgeId ?? ap.appSessionId
     },
+    getPageStack: (appId) => {
+      const ap = resolveCurrentApp(state, ctx, appId)
+      return ap?.pageStack ?? null
+    },
     getActiveRenderWc: (appId) => {
       const ap = resolveCurrentApp(state, ctx, appId)
       if (!ap) return null
@@ -317,11 +334,25 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
     if (!senderApp || senderApp.appSessionId !== ap.appSessionId) return
     if (ap.pages.has(payload.bridgeId)) {
       ap.activeBridgeId = payload.bridgeId
-      emitRenderEvent({ kind: 'activePage', appId: ap.appId, bridgeId: payload.bridgeId })
+      const pagePath = state.pageSessions.get(payload.bridgeId)?.pagePath
+      emitRenderEvent({ kind: 'activePage', appId: ap.appId, bridgeId: payload.bridgeId, pagePath })
     }
   }
   ipcMain.on(C.ACTIVE_PAGE, onActivePage)
   ctx.registry.add(() => { ipcMain.removeListener(C.ACTIVE_PAGE, onActivePage) })
+
+  // DeviceShell → main: the full ordered page stack (bottom→top). Stored so
+  // automation's App.getPageStack can report a multi-page stack (main has no
+  // stack of its own). Sender-validated against the owning app.
+  const onPageStack = (event: IpcMainEvent, payload: PageStackPayload): void => {
+    const ap = state.appSessions.get(payload.appSessionId)
+    if (!ap) return
+    const senderApp = appByWc(state, event.sender)
+    if (!senderApp || senderApp.appSessionId !== ap.appSessionId) return
+    ap.pageStack = payload.stack
+  }
+  ipcMain.on(C.PAGE_STACK, onPageStack)
+  ctx.registry.add(() => { ipcMain.removeListener(C.PAGE_STACK, onPageStack) })
 
   ipcMain.handle(C.SPAWN, async (event, opts: SpawnRequest): Promise<SpawnResult> => {
     return handleSpawn(state, ctx, event, opts)

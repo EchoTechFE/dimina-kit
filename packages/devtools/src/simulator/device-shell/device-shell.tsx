@@ -229,6 +229,13 @@ export function DeviceShell({
     miniApp.notifyActivePage(top.bridgeId)
   }, [miniApp, top.bridgeId])
 
+  // Report the full ordered stack (bottom→top) on every stack change so
+  // automation's App.getPageStack can return a multi-page stack — main only
+  // tracks the active bridgeId on its own.
+  useEffect(() => {
+    miniApp.notifyPageStack(shell.stack.map((e) => ({ pagePath: e.pagePath, query: e.query })))
+  }, [miniApp, shell.stack])
+
   const topIsCustomNav = top.navBar.style === 'custom'
   const viewportPadding = topIsCustomNav ? 0 : statusBarHeight + NAV_BAR_HEIGHT
 

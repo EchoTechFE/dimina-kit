@@ -105,6 +105,26 @@ export const SimulatorSetNativeBoundsSchema = z.tuple([
 ])
 
 /**
+ * simulator:set-device-info (native-host only) — the selected device's logical
+ * metrics, mapped by main into the service-host window's HostEnvSnapshot. Sizes
+ * are bounded positive ints (logical device px); strings are bounded to keep the
+ * payload small. Matches `NativeDeviceInfo` in ipc-channels.ts.
+ */
+export const SimulatorSetDeviceInfoSchema = z.tuple([
+  z.object({
+    brand: z.string().max(64),
+    model: z.string().max(64),
+    system: z.string().max(64),
+    platform: z.string().max(32),
+    pixelRatio: z.number().finite().positive(),
+    screenWidth: z.number().int().min(100).max(4000),
+    screenHeight: z.number().int().min(100).max(4000),
+    statusBarHeight: z.number().finite().min(0).max(400),
+    safeAreaBottom: z.number().finite().min(0).max(400),
+  }),
+])
+
+/**
  * view:*:bounds — renderer-measured CSS pixel rectangle in window content
  * coordinates. Width/height = 0 is the canonical "overlay hidden" signal.
  * No upper bound is enforced (window can be very large); we only refuse

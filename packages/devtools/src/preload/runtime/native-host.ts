@@ -10,6 +10,7 @@ import type {
   PageLifecyclePayload,
   PageOpenRequest,
   PageOpenResult,
+  PageStackPayload,
   SpawnRequest,
   SpawnResult,
 } from '../../shared/bridge-channels.js'
@@ -32,6 +33,8 @@ export interface DiminaNativeHostBridge {
   notifyApiResponse(payload: ApiResponsePayload): void
   /** Tell main which page is the visible top-of-stack (for panel/automation targeting). */
   notifyActivePage(payload: ActivePagePayload): void
+  /** Tell main the full ordered page stack (for automation's App.getPageStack). */
+  notifyPageStack(payload: PageStackPayload): void
   createRenderHostUrl(opts: RenderHostUrlOptions): string
   renderPreloadUrl: string
   /**
@@ -87,6 +90,9 @@ function buildBridge(cfg: NativeHostConfig): DiminaNativeHostBridge {
     },
     notifyActivePage(payload) {
       ipcRenderer.send(C.ACTIVE_PAGE, payload)
+    },
+    notifyPageStack(payload) {
+      ipcRenderer.send(C.PAGE_STACK, payload)
     },
     createRenderHostUrl(opts) {
       // `URL` + `URLSearchParams` are web globals — no node:url needed.

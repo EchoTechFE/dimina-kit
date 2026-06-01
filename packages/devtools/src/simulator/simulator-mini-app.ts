@@ -6,6 +6,8 @@ import type {
   NavCallbackPayload,
   PageLifecycleEvent,
   PageOpenResult,
+  PageStackEntry,
+  PageStackPayload,
   PageWindowConfig,
   SpawnRequest,
   SpawnResult,
@@ -29,6 +31,7 @@ interface NativeHostBridge {
   notifyNavCallback(payload: NavCallbackPayload): void
   notifyApiResponse(payload: ApiResponsePayload): void
   notifyActivePage(payload: ActivePagePayload): void
+  notifyPageStack(payload: PageStackPayload): void
   createRenderHostUrl(opts: { bridgeId: string; appId: string; pagePath: string }): string
   renderPreloadUrl: string
   onSimulatorEvent<T = unknown>(channel: string, listener: (payload: T) => void): () => void
@@ -173,6 +176,17 @@ export class SimulatorMiniApp {
     const appSessionId = this.appSessionId
     if (!appSessionId) return
     getNativeHost().notifyActivePage({ appSessionId, bridgeId })
+  }
+
+  /**
+   * Report the full ordered page stack (bottom→top) so automation's
+   * `App.getPageStack` can return a multi-page stack. DeviceShell calls this on
+   * every stack change (push / pop / switchTab).
+   */
+  notifyPageStack(stack: PageStackEntry[]): void {
+    const appSessionId = this.appSessionId
+    if (!appSessionId) return
+    getNativeHost().notifyPageStack({ appSessionId, stack })
   }
 
   getTabBarConfig(): TabBarConfig | null {

@@ -55,9 +55,22 @@ appHandlers['App.getCurrentPage'] = async (ctx) => {
 appHandlers['App.getPageStack'] = async (ctx) => {
   const pageStack: Array<{ pageId: number; path: string; query: Record<string, string> }> = []
   if (ctx.bridge?.isNativeHost()) {
-    // LIMITATION: the bridge handle only exposes the *active* page bridgeId, not
-    // the full ordered stack, so under native-host we report a single-entry stack
-    // for the visible page. Full multi-page-stack reporting is a follow-up.
+    // DeviceShell reports its full ordered stack (bottom→top) via PAGE_STACK;
+    // the bridge stores it. Report that. Before the first signal (or in a mock
+    // without the accessor) fall back to the single visible page.
+    const stack = ctx.bridge.getPageStack?.()
+    if (stack && stack.length > 0) {
+      stack.forEach((entry, i) => {
+        pageStack.push({
+          pageId: i + 1,
+          path: entry.pagePath,
+          query: Object.fromEntries(
+            Object.entries(entry.query ?? {}).map(([k, v]) => [k, String(v)]),
+          ),
+        })
+      })
+      return { pageStack }
+    }
     const page = await readNativeActivePage(ctx)
     if (page) pageStack.push({ pageId: 1, path: page.pagePath, query: page.query })
     return { pageStack }

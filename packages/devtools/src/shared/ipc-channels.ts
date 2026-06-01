@@ -18,10 +18,53 @@ export const SimulatorChannel = {
   // px from content top-left) + zoom so main can overlay the simulator WCV on
   // it. The default <webview> path never sends this.
   SetNativeBounds: 'simulator:set-native-bounds',
+  // NATIVE-HOST ONLY: renderer pushes the selected device's LOGICAL metrics
+  // (screen size, pixelRatio, statusBarHeight, …) when the device dropdown
+  // changes. Main maps it to a HostEnvSnapshot and live-updates the running
+  // service-host window — the authoritative `wx.getSystemInfoSync()` source —
+  // so the mini-app sees the selected device without a relaunch. The default
+  // <webview> path delivers device info to the guest via `device:change`.
+  SetDeviceInfo: 'simulator:set-device-info',
   Detach: 'simulator:detach',
   Resize: 'simulator:resize',
   SetVisible: 'simulator:setVisible',
   Console: 'simulator:console',
+  // NATIVE-HOST ONLY: main → renderer push of the visible top-of-stack page
+  // route whenever the mini-app navigates (navigateTo / switchTab / back).
+  // The default `<webview>` path derives the current page from the guest's
+  // navigation events instead and never receives this. Payload: the page path
+  // string (same bare format as `getCurrentPagePath`), or '' when unknown.
+  CurrentPage: 'simulator:current-page',
+} as const
+
+/**
+ * Logical device metrics pushed by the renderer device dropdown under
+ * native-host (`SimulatorChannel.SetDeviceInfo`). Mirrors a row of the renderer
+ * `DEVICES` table; main maps it onto a `HostEnvSnapshot` for the service-host
+ * window so `wx.getSystemInfoSync()` reflects the selected device.
+ */
+export interface NativeDeviceInfo {
+  brand: string
+  model: string
+  system: string
+  platform: string
+  pixelRatio: number
+  screenWidth: number
+  screenHeight: number
+  statusBarHeight: number
+  safeAreaBottom: number
+}
+
+// ── Service host (main → hidden service-host window) ─────────────────────
+
+export const ServiceHostChannel = {
+  /**
+   * NATIVE-HOST ONLY. Live-update the service-host window's host-env snapshot
+   * (device metrics) so subsequent `wx.getSystemInfoSync()` reflects a device
+   * change without a relaunch. The service-host preload mutates
+   * `__diminaSpawnContext.hostEnvSnapshot` in place (see `service-host/preload.cjs`).
+   */
+  HostEnvUpdate: 'service-host:host-env:update',
 } as const
 
 // ── Custom simulator APIs (downstream-registered, main-process handlers) ──

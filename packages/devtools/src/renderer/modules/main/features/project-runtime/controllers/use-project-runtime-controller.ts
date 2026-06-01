@@ -133,7 +133,7 @@ export function useProjectRuntimeController(
 
   // ── Compose sub-hooks ────────────────────────────────────────────────────
 
-  const deviceHook = useDevice({ initialDevice, simulatorRef })
+  const deviceHook = useDevice({ initialDevice, simulatorRef, nativeHost })
 
   const sessionHook = useSession({
     projectPath,

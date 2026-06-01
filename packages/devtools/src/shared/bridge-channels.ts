@@ -27,6 +27,13 @@ export const BRIDGE_CHANNELS = {
    * page's render webContents" resolve it through this signal. Fire-and-forget.
    */
   ACTIVE_PAGE: 'dmb:active-page',
+  /**
+   * simulator (DeviceShell) → main: the FULL ordered page stack (bottom→top)
+   * whenever it changes. Main has no stack of its own (it only learns the
+   * active bridgeId via ACTIVE_PAGE), so automation's `App.getPageStack` needs
+   * this to report multi-page stacks. Fire-and-forget.
+   */
+  PAGE_STACK: 'dmb:page-stack',
 } as const
 
 export const SIMULATOR_EVENTS = {
@@ -255,6 +262,20 @@ export interface ServicePublishPayload {
 export interface ActivePagePayload {
   appSessionId: string
   bridgeId: string
+}
+
+/**
+ * `dmb:page-stack` — simulator (DeviceShell) → main. The full ordered page
+ * stack (bottom→top) so `App.getPageStack` can report multi-page stacks.
+ */
+export interface PageStackEntry {
+  pagePath: string
+  query: Record<string, unknown>
+}
+
+export interface PageStackPayload {
+  appSessionId: string
+  stack: PageStackEntry[]
 }
 
 export interface RenderInvokePayload {
