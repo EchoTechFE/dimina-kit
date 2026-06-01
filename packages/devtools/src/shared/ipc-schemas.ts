@@ -70,8 +70,39 @@ export const SimulatorAttachSchema = z.tuple([
   SimWidth,
 ])
 
+/**
+ * simulator:attach-native (native-host only) — the simulator URL to load into
+ * the top-level WebContentsView + simulator width. The URL is the dev-server
+ * `http://localhost:<port>/simulator.html?…` the renderer would otherwise put
+ * on the `<webview src>`; we validate it's an http(s) URL to keep the WCV off
+ * arbitrary origins (will-navigate hardening re-checks at navigation time).
+ */
+export const SimulatorAttachNativeSchema = z.tuple([
+  z.string().url().refine((u) => u.startsWith('http://') || u.startsWith('https://'), {
+    message: 'simulator URL must be http(s)',
+  }),
+  SimWidth,
+])
+
 /** simulator:resize — simulator width. */
 export const SimulatorResizeSchema = z.tuple([SimWidth])
+
+/**
+ * simulator:set-native-bounds (native-host only) — the renderer-measured
+ * device-bezel inner-screen rect (CSS px, from `getBoundingClientRect()`, may
+ * be fractional/zero) plus the device zoom percent. Positioned 1:1 as the
+ * simulator WCV overlay bounds. Coordinates are plain finite numbers (x/y may
+ * be negative when scrolled off-screen); zoom is the ZOOM_OPTIONS percent.
+ */
+export const SimulatorSetNativeBoundsSchema = z.tuple([
+  z.object({
+    x: z.number().finite(),
+    y: z.number().finite(),
+    width: z.number().finite(),
+    height: z.number().finite(),
+    zoom: z.number().finite().positive(),
+  }),
+])
 
 /** simulator:setVisible — visible flag + simulator width. */
 export const SimulatorSetVisibleSchema = z.tuple([z.boolean(), SimWidth])

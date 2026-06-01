@@ -37,6 +37,17 @@ export function attachSimulator(simWebContentsId: number, simWidth: number): Pro
   return invoke<void>(SimulatorChannel.Attach, simWebContentsId, simWidth)
 }
 
+/**
+ * NATIVE-HOST ONLY. Ask main to create the simulator as a top-level
+ * WebContentsView loading `simulatorUrl` (so DeviceShell's nested render-host
+ * `<webview>`s can attach — impossible inside a renderer `<webview>` guest).
+ * The default path keeps rendering the renderer `<webview>` and calls
+ * `attachSimulator` with its webContents id instead.
+ */
+export function attachNativeSimulator(simulatorUrl: string, simWidth: number): Promise<void> {
+  return invoke<void>(SimulatorChannel.AttachNative, simulatorUrl, simWidth)
+}
+
 /** Detach the Chromium DevTools view. */
 export function detachSimulator(): Promise<void> {
   return invoke<void>(SimulatorChannel.Detach)
@@ -45,6 +56,22 @@ export function detachSimulator(): Promise<void> {
 /** Notify the main process of a new simulator panel width. */
 export function resizeSimulator(simWidth: number): Promise<void> {
   return invoke<void>(SimulatorChannel.Resize, simWidth)
+}
+
+/**
+ * NATIVE-HOST ONLY. Report the device-bezel inner-screen rect (CSS px from the
+ * main window content top-left, i.e. `getBoundingClientRect()` left/top) plus
+ * the device zoom percent so the main process can overlay the simulator
+ * WebContentsView precisely on the bezel and scale the nested render-host page.
+ */
+export function setNativeSimulatorBounds(p: {
+  x: number
+  y: number
+  width: number
+  height: number
+  zoom: number
+}): Promise<void> {
+  return invoke<void>(SimulatorChannel.SetNativeBounds, p)
 }
 
 /** Show or hide the Chromium DevTools view. */

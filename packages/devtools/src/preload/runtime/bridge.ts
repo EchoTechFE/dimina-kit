@@ -1,14 +1,13 @@
 import type { ElementInspection } from '../../shared/ipc-channels.js'
 import { exposeOnMainWorld } from '../shared/expose.js'
 import { getActivePageIframe } from '../shared/page-iframe.js'
+import { findElementBySid, registerSyntheticSid, type WxmlNode } from '../shared/sid-registry.js'
 
-export interface WxmlNode {
-  tagName: string
-  attrs: Record<string, string>
-  children: WxmlNode[]
-  text?: string
-  sid?: string
-}
+// Re-export so existing importers (wxml.ts, shared/types.ts, renderer panels)
+// keep their `from '../runtime/bridge.js'` path while the registry lives in the
+// dependency-free shared module.
+export type { WxmlNode } from '../shared/sid-registry.js'
+export { registerSyntheticSid } from '../shared/sid-registry.js'
 
 export interface Snapshot<T> {
   gen: number
@@ -38,38 +37,6 @@ const state: SimulatorBridgeState = {
 
 let highlightOverlay: HTMLDivElement | null = null
 let exposedApi: Record<string, unknown> | null = null
-
-// 合成 sid 注册表：用 WeakMap 把元素 ↔ sid 双向绑定，避免在源 DOM 上写
-// `data-*` 属性（提取本应只读，且属性形式会污染用户的快照/选择器）。
-// elBySyntheticSid 为反向查找用 WeakRef，元素被 GC 后下次 lookup 自动清理。
-const SYNTHETIC_SID_PREFIX = 'devtools-'
-const syntheticSidByEl = new WeakMap<HTMLElement, string>()
-const elBySyntheticSid = new Map<string, WeakRef<HTMLElement>>()
-let nextSyntheticSid = 1
-
-export function registerSyntheticSid(el: HTMLElement): string {
-  const existing = syntheticSidByEl.get(el)
-  if (existing) return existing
-  const synthetic = `${SYNTHETIC_SID_PREFIX}${nextSyntheticSid++}`
-  syntheticSidByEl.set(el, synthetic)
-  elBySyntheticSid.set(synthetic, new WeakRef(el))
-  return synthetic
-}
-
-function findElementBySid(doc: Document, sid: string): HTMLElement | null {
-  if (sid.startsWith(SYNTHETIC_SID_PREFIX)) {
-    const ref = elBySyntheticSid.get(sid)
-    if (!ref) return null
-    const el = ref.deref()
-    if (!el || !el.isConnected) {
-      elBySyntheticSid.delete(sid)
-      return null
-    }
-    if (el.ownerDocument !== doc) return null
-    return el
-  }
-  return doc.querySelector(`[data-sid="${CSS.escape(sid)}"]`) as HTMLElement | null
-}
 
 function clone<T>(value: T): T {
   try {

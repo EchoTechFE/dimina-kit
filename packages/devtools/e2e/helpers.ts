@@ -163,8 +163,15 @@ export async function openProjectInUI(
 // ── Simulator helpers ──────────────────────────────────────────────────
 
 /**
- * Execute JavaScript inside the simulator webview via the main process.
- * Retries up to 3 times if the webview is not yet available.
+ * Execute JavaScript inside the simulator's webContents via the main process.
+ * Retries up to 3 times if it is not yet available.
+ *
+ * The simulator's document loads `simulator.html` regardless of arch, so we
+ * match on that URL — works for BOTH the default renderer `<webview>` AND the
+ * native-host top-level WebContentsView (whose `getType()` is `'window'`, not
+ * `'webview'`). The nested render-host page frames load `pageFrame.html`, so
+ * they're never mistaken for the simulator. Falls back to the legacy
+ * `getType()==='webview'` match if no `simulator.html` content is found.
  */
 export async function evalInSimulator<T = unknown>(
   electronApp: ElectronApplication,
@@ -175,7 +182,8 @@ export async function evalInSimulator<T = unknown>(
     try {
       return await electronApp.evaluate(async ({ webContents }, expr) => {
         const all = webContents.getAllWebContents()
-        const sim = all.find((wc) => wc.getType() === 'webview')
+        const sim = all.find((wc) => wc.getURL().includes('simulator.html'))
+          ?? all.find((wc) => wc.getType() === 'webview')
         if (!sim) throw new Error('No webview found')
         return sim.executeJavaScript(expr)
       }, expression) as Promise<T>
@@ -215,7 +223,11 @@ export async function waitForSimulatorWebview(
   await pollUntil(
     () => electronApp.evaluate(({ webContents }) => {
       const all = webContents.getAllWebContents()
-      return all.some((wc) => wc.getType() === 'webview')
+      // Match the simulator document by URL (covers the default `<webview>` and
+      // the native-host WebContentsView alike); fall back to the legacy
+      // `'webview'` type check for safety.
+      return all.some((wc) => wc.getURL().includes('simulator.html'))
+        || all.some((wc) => wc.getType() === 'webview')
     }),
     (present) => present === true,
     timeout,
@@ -243,7 +255,8 @@ export async function waitSimulatorReady(
       try {
         const out = await electronApp.evaluate(async ({ webContents }) => {
           const all = webContents.getAllWebContents()
-          const sim = all.find((wc) => wc.getType() === 'webview')
+          const sim = all.find((wc) => wc.getURL().includes('simulator.html'))
+            ?? all.find((wc) => wc.getType() === 'webview')
           if (!sim) return null
           return sim.executeJavaScript('1')
         })

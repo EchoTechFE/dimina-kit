@@ -1,10 +1,9 @@
 /**
- * Step 6 of the devtools extension model — "收尾", Requirement A:
+ * Workbench model refactor — "收尾", Requirement A:
  * the module-assembly route is no longer part of the package's PUBLIC
  * export surface.
  *
- * `docs/extension-model.md` §4 / step 6 ("撤模块组装公共导出") + §6 ("不在本文
- * 范围：模块组装路线 … 保留，仅撤对外导出"):
+ * `docs/workbench-model.md` ("撤模块组装公共导出"；模块组装路线本身保留，仅撤对外导出):
  *
  *  A1. `src/main/api.ts` (the package root barrel) no longer re-exports the
  *      eight `register*Ipc` functions: registerAppIpc / registerSimulatorIpc
@@ -22,9 +21,9 @@
  *      too far" and removes the internal module-assembly plumbing that
  *      `app.ts` / `registerBuiltinModules` still depends on.
  *
- * A1/A2/A3 are RED today (the barrel exports + the subpaths + the
- * typesVersions entries all still exist). A4 is GREEN today and must STAY
- * green after the refactor.
+ * A1/A2/A3 pin that the barrel exports, the ./ipc-* subpaths, and the
+ * typesVersions entries are all gone. A4 pins that the internal
+ * module-assembly plumbing survives for devtools-internal use.
  *
  * Strategy: a runtime value import for `api.ts` (the eight functions have
  * runtime presence), plus JSON / source-text scans for package.json and the
@@ -107,7 +106,7 @@ describe('Requirement A1: api.ts no longer re-exports the register*Ipc functions
     // Catches: the barrel still surfacing a module-assembly registration fn.
     expect(
       api[name],
-      `api.ts must NOT re-export \`${name}\` — module-assembly is internal-only after step 6`,
+      `api.ts must NOT re-export \`${name}\` — module-assembly is internal-only`,
     ).toBeUndefined()
   })
 

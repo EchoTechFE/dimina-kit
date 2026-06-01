@@ -1,8 +1,8 @@
 /**
- * Step 3 of the devtools extension model — "simulator-api per-context",
+ * Workbench model refactor — "simulator-api per-context",
  * Requirement B: `instance.registerSimulatorApi`.
  *
- * `docs/extension-model.md` §3.3 / §4 / step 3: the `WorkbenchHostInstance`
+ * `docs/workbench-model.md`: the `WorkbenchHostInstance`
  * (and its runtime superset `WorkbenchAppInstance`) must grow a
  * `registerSimulatorApi(name, handler): Disposable` method that:
  *
@@ -13,9 +13,8 @@
  *    `ctx.registry`), and
  *  - is present on the instance BEFORE `onSetup(instance)` is invoked.
  *
- * Every assertion is RED until step 3 implements `instance.registerSimulatorApi`
- * — the failures must point at the missing method / missing per-context wiring,
- * not at a broken harness.
+ * Each assertion pins one of those guarantees: a failure points at a missing
+ * method / missing per-context wiring, not at a broken harness.
  *
  * Seam: identical to `instance-ipc-extension.test.ts` — there is no standalone
  * factory for `WorkbenchAppInstance`; the object is built inline inside
@@ -360,9 +359,10 @@ describe('Requirement B: instance.registerSimulatorApi', () => {
 
     await disposable.dispose()
 
-    // RED before the fix: the returned disposable is the RAW toDisposable(disposer),
-    // not the registry wrapper, so disposing it never splices the entry out —
-    // size stays at baseline+1 (a leaked dead entry).
+    // The returned disposable is the registry wrapper, not the RAW
+    // toDisposable(disposer): disposing it splices the entry out, so size
+    // returns to baseline rather than lingering at baseline+1 as a leaked
+    // dead entry.
     expect(
       registry.size,
       'disposing the returned Disposable must remove its ctx.registry entry — return the wrapper from registry.add(), not the raw disposable',

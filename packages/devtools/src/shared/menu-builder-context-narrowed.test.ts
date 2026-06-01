@@ -1,8 +1,8 @@
 /**
- * Step 6 of the devtools extension model — "收尾", Requirement B:
+ * Workbench model refactor — "收尾", Requirement B:
  * the `menuBuilder` config hook's `context` parameter is NARROWED.
  *
- * `docs/extension-model.md` §4 / step 6 ("`menuBuilder` 签名收窄") + the
+ * `docs/workbench-model.md` ("`menuBuilder` 签名收窄") + the
  * mapping table row: "menuBuilder … 保留；签名收窄为 menu-only context
  * (不交出 `registry` 等内部状态)".
  *
@@ -19,7 +19,7 @@
  *      fields (`registry`, `senderPolicy`, `trustedWindowSenderIds`,
  *      `simulatorApis`, `toolbar`).
  *
- * ── How this test is "red", and how `tsc` enforces it ──────────────────────
+ * ── How `tsc` enforces this contract ───────────────────────────────────────
  *
  * This is a COMPILE-TIME test. It carries no runtime assertions — the
  * `describe`/`it` body is empty; the contract lives entirely in the
@@ -33,22 +33,14 @@
  *
  * `// @ts-expect-error` flips the polarity: it PASSES when the next line has
  * a type error and FAILS ("Unused '@ts-expect-error' directive") when the
- * line compiles cleanly.
+ * line compiles cleanly. Each `// @ts-expect-error` here pins that the
+ * guarded internal-pipeline field is unreachable on `MenuContext`; if the
+ * field became reachable the directive would be unused and `tsc` would fail.
  *
- * RED TODAY: `menuBuilder`'s `context` is currently the full
- * `WorkbenchHostInstance['context']` (= `WorkbenchContext`), on which
- * `.registry` / `.senderPolicy` / etc. ARE valid properties. So the
- * `// @ts-expect-error` lines guarding those accesses have NOTHING to
- * suppress → `tsc` reports each as an unused directive → `check-types`
- * fails. The `MenuContext`-import block below also fails to resolve today
- * because the type does not yet exist. After step 6 narrows the signature
- * and adds `MenuContext`, every directive finds its error and the type
- * imports resolve → `tsc` is clean → this test is green.
- *
- * Implementer notes:
+ * Maintenance notes:
  *  - Do NOT "fix" this file by deleting `@ts-expect-error` directives.
  *    Each one encodes a required compile error; removing one removes a
- *    guarantee. The file goes green only when the production types change.
+ *    guarantee.
  *  - `MenuContext` must be `export`ed from `src/shared/types.ts` (this test
  *    imports it by name) and must be a strict `Omit` of `WorkbenchContext`
  *    over exactly the five internal fields — no more, no fewer.
@@ -56,8 +48,8 @@
 import { describe, it } from 'vitest'
 import type { BrowserWindow } from 'electron'
 import type { WorkbenchAppConfig } from './types.js'
-// `MenuContext` must be a NEW named export from this same module. The import
-// itself is part of the contract: it fails to resolve today (B1 not done).
+// `MenuContext` is a named export from this same module. The import itself is
+// part of the contract: it must resolve to a real type (B1).
 import type { MenuContext } from './types.js'
 import type { WorkbenchContext } from '../main/services/workbench-context.js'
 
@@ -75,13 +67,12 @@ type MenuBuilderWinParam = Parameters<MenuBuilderHook>[0]
 
 // ── B1/B2 — `MenuContext` shape and the hook's parameter types ─────────────
 
-// The hook's context parameter must be exactly `MenuContext` (not the full
-// `WorkbenchContext`). RED today: it is `WorkbenchContext`, so this is `false`.
+// Pins that the hook's context parameter is exactly `MenuContext` (not the
+// full `WorkbenchContext`).
 type _CtxParamIsMenuContext = Expect<Equal<MenuBuilderCtxParam, MenuContext>>
 
-// `MenuContext` must equal `WorkbenchContext` minus the five internal-pipeline
-// fields — exactly. RED today: `MenuContext` does not exist, so this line
-// also fails to compile (cannot find name `MenuContext`).
+// Pins that `MenuContext` equals `WorkbenchContext` minus the five
+// internal-pipeline fields — exactly.
 type _MenuContextIsNarrowedOmit = Expect<
   Equal<
     MenuContext,
@@ -114,9 +105,8 @@ describe('Requirement B: menuBuilder context is narrowed to MenuContext', () => 
       void menuContext.projectsProvider
 
       // ❌ Forbidden: the five internal-pipeline fields must be unreachable.
-      //    Each `@ts-expect-error` requires the next line to be a type error.
-      //    RED TODAY: `context` is the full `WorkbenchContext`, so these
-      //    accesses compile fine → the directives are "unused" → tsc fails.
+      //    Each `@ts-expect-error` requires the next line to be a type error,
+      //    pinning that the field is absent from `MenuContext`.
 
       // @ts-expect-error — `registry` is internal pipeline, not on MenuContext
       void menuContext.registry

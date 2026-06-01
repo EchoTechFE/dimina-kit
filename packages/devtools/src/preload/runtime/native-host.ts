@@ -1,10 +1,10 @@
 import { ipcRenderer } from 'electron'
-import path from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { BRIDGE_CHANNELS as C } from '../../shared/bridge-channels.js'
 import type {
+  ActivePagePayload,
   ApiResponsePayload,
   DisposePayload,
+  NativeHostConfig,
   NavCallbackPayload,
   PageClosePayload,
   PageLifecyclePayload,
@@ -30,27 +30,38 @@ export interface DiminaNativeHostBridge {
   notifyLifecycle(payload: PageLifecyclePayload): void
   notifyNavCallback(payload: NavCallbackPayload): void
   notifyApiResponse(payload: ApiResponsePayload): void
+  /** Tell main which page is the visible top-of-stack (for panel/automation targeting). */
+  notifyActivePage(payload: ActivePagePayload): void
   createRenderHostUrl(opts: RenderHostUrlOptions): string
   renderPreloadUrl: string
+  /**
+   * Subscribe to a main→simulator event channel (SIMULATOR_EVENTS). Returns an
+   * unsubscribe fn. The simulator renderer (DeviceShell) runs in the webview
+   * main world with `nodeIntegration:false`, so it cannot `import 'electron'`;
+   * this bridge owns the `ipcRenderer` plumbing on its behalf.
+   */
+  onSimulatorEvent<T = unknown>(channel: string, listener: (payload: T) => void): () => void
 }
 
-function devtoolsRoot(): string {
-  return path.resolve(__dirname, '../../..')
+/**
+ * Ask the main process (synchronously, at install time) whether native-host is
+ * on and, if so, for the render-host file:// URLs. The simulator webview's
+ * preload can't read the launch `process.env`, and — crucially — can't use
+ * `node:path`/`node:url` to compute paths (the guest preload has no Node
+ * builtins), so the main process (which has both) supplies everything here.
+ */
+function queryNativeHostConfig(): NativeHostConfig | null {
+  try {
+    const res = ipcRenderer.sendSync(C.NATIVE_HOST_ENABLED) as NativeHostConfig | undefined
+    return res && res.enabled ? res : null
+  } catch {
+    return null
+  }
 }
 
-function renderHostHtmlPath(): string {
-  return path.join(devtoolsRoot(), 'dist/render-host/pageFrame.html')
-}
-
-function renderHostPreloadPath(): string {
-  return path.join(devtoolsRoot(), 'dist/render-host/preload.cjs')
-}
-
-function buildBridge(): DiminaNativeHostBridge {
-  const renderPreloadUrl = pathToFileURL(renderHostPreloadPath()).toString()
-
+function buildBridge(cfg: NativeHostConfig): DiminaNativeHostBridge {
   return {
-    enabled: process.env.DIMINA_NATIVE_HOST === '1',
+    enabled: true,
     spawn(opts) {
       return ipcRenderer.invoke(C.SPAWN, opts) as Promise<SpawnResult>
     },
@@ -74,17 +85,35 @@ function buildBridge(): DiminaNativeHostBridge {
     notifyApiResponse(payload) {
       ipcRenderer.send(C.API_RESPONSE, payload)
     },
+    notifyActivePage(payload) {
+      ipcRenderer.send(C.ACTIVE_PAGE, payload)
+    },
     createRenderHostUrl(opts) {
-      const url = new URL(pathToFileURL(renderHostHtmlPath()).toString())
+      // `URL` + `URLSearchParams` are web globals — no node:url needed.
+      const url = new URL(cfg.renderHostHtmlUrl)
       url.searchParams.set('bridgeId', opts.bridgeId)
       url.searchParams.set('appId', opts.appId)
       url.searchParams.set('pagePath', opts.pagePath)
       return url.toString()
     },
-    renderPreloadUrl,
+    renderPreloadUrl: cfg.renderPreloadUrl,
+    onSimulatorEvent(channel, listener) {
+      const wrapped = (_event: unknown, payload: unknown): void => {
+        ;(listener as (p: unknown) => void)(payload)
+      }
+      ipcRenderer.on(channel, wrapped)
+      return () => ipcRenderer.removeListener(channel, wrapped)
+    },
   }
 }
 
+/**
+ * Install the native-host bridge on the simulator main world when native-host
+ * mode is on. Self-gating: a no-op disposer is returned when it's off, so the
+ * caller can install unconditionally.
+ */
 export function installNativeHostBridge(): () => void {
-  return exposeOnMainWorld('__diminaNativeHost', buildBridge())
+  const cfg = queryNativeHostConfig()
+  if (!cfg) return () => {}
+  return exposeOnMainWorld('__diminaNativeHost', buildBridge(cfg))
 }

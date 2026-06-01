@@ -14,6 +14,19 @@ export const BRIDGE_CHANNELS = {
   SIMULATOR_API: 'dmb:simulator-api',
   /** simulator → main: ack of an API_CALL request (carries success/fail args). */
   API_RESPONSE: 'dmb:api:response',
+  /**
+   * simulator webview preload → main (sendSync): "is native-host mode on?".
+   * The guest preload can't read the launch `process.env`, so it asks main
+   * (which can) at install time. Reply is `e.returnValue = boolean`.
+   */
+  NATIVE_HOST_ENABLED: 'dmb:native-host-enabled',
+  /**
+   * simulator (DeviceShell) → main: the visible top-of-stack page bridgeId.
+   * Main has no z-order concept — the active page lives only in DeviceShell's
+   * ShellState — so devtools panels / automation that must target "the current
+   * page's render webContents" resolve it through this signal. Fire-and-forget.
+   */
+  ACTIVE_PAGE: 'dmb:active-page',
 } as const
 
 export const SIMULATOR_EVENTS = {
@@ -26,6 +39,17 @@ export const SIMULATOR_EVENTS = {
 } as const
 
 export const CHANNELS = BRIDGE_CHANNELS
+
+/**
+ * Reply to a `NATIVE_HOST_ENABLED` sendSync. Main supplies the render-host
+ * file:// URLs (computed with node:path/url, which the simulator webview's
+ * preload lacks) so the preload can build the native-host bridge.
+ */
+export interface NativeHostConfig {
+  enabled: boolean
+  renderHostHtmlUrl: string
+  renderPreloadUrl: string
+}
 
 export type BridgeChannel = typeof BRIDGE_CHANNELS[keyof typeof BRIDGE_CHANNELS]
 
@@ -140,6 +164,16 @@ export interface SpawnRequest {
   hostEnvSnapshot?: Partial<HostEnvSnapshot>
   pkgRoot?: string
   root?: string
+  /**
+   * Base URL of the dev server that serves the compiled mini-app, i.e. the
+   * SAME origin the simulator page was loaded from (`http://localhost:<port>/`).
+   * The dev server statically serves `<appId>/<root>/…` (app-config.json,
+   * logic.js, page bundles, styles) — exactly what the default dimina-fe
+   * `<webview>` fetches. The native-host render + service hosts source every
+   * resource from here, so we don't need a second resource server or a local
+   * compiled-output path. Trailing slash expected.
+   */
+  resourceBaseUrl?: string
 }
 
 export interface SpawnResult {
@@ -211,6 +245,16 @@ export interface ServicePublishPayload {
   bridgeId: string
   targetBridgeId?: string
   msg: MessageEnvelope
+}
+
+/**
+ * `dmb:active-page` — simulator (DeviceShell) → main. Records which page is the
+ * visible top-of-stack so main-side services (WXML/element-inspect, automation)
+ * can resolve "the active page's render webContents" by bridgeId.
+ */
+export interface ActivePagePayload {
+  appSessionId: string
+  bridgeId: string
 }
 
 export interface RenderInvokePayload {

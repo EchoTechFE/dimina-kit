@@ -1,0 +1,5 @@
+<view class="page-marker page-home">HOME PAGE</view>
+<button class="btn nav-a-btn" bindtap="goA" data-path="/pages/a/a">Go A</button>
+<button class="btn nav-b-btn" bindtap="goB" data-path="/pages/b/b">Go B</button>
+<button class="btn nav-c-btn" bindtap="goC" data-path="/pages/c/c">Go C</button>
+<button class="btn nav-explore-btn" bindtap="goExplore" data-path="/pages/explore/explore">Switch Explore</button>

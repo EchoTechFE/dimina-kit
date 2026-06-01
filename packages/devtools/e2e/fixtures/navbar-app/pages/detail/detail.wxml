@@ -1,0 +1,2 @@
+<view class="page-marker page-detail">DETAIL PAGE</view>
+<button class="btn detail-back-btn" bindtap="goBack">Go Back</button>

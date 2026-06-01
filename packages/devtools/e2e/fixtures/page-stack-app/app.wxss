@@ -1,0 +1,25 @@
+page {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 28rpx;
+  color: #fff;
+  background-color: #1890ff;
+}
+
+.page-marker {
+  font-size: 40rpx;
+  font-weight: 700;
+  padding: 40rpx;
+  color: #ffffff;
+}
+
+.btn {
+  display: block;
+  width: 80%;
+  margin: 20rpx auto;
+  height: 80rpx;
+  line-height: 80rpx;
+  text-align: center;
+  background: #ffffff;
+  color: #1890ff;
+  border-radius: 12rpx;
+}

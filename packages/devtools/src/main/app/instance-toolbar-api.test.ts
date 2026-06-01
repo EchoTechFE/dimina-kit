@@ -1,7 +1,7 @@
 /**
- * Step 4 of the devtools extension model — "toolbar 合一".
+ * Workbench model refactor — "toolbar 合一".
  *
- * `docs/extension-model.md` §3.3 / §4 / step 4: the split toolbar surface
+ * `docs/workbench-model.md`: the split toolbar surface
  * (`WorkbenchConfig.toolbarActions` for the *list* + bare `toolbar:action:*`
  * dynamic channels for the *behavior*) is merged into a single
  * `instance.toolbar.set(actions)`.
@@ -19,9 +19,8 @@
  *    `onSetup(instance)` runs (hosts call `instance.toolbar.set()` inside
  *    onSetup).
  *
- * Every assertion is RED until step 4 lands: `instance.toolbar` does not
- * exist yet. Failures must point at the missing surface / missing wiring,
- * not at a broken harness.
+ * Every assertion pins `instance.toolbar` and its wiring: failures must point
+ * at the missing surface / missing wiring, not at a broken harness.
  *
  * Seam: identical to `instance-ipc-extension.test.ts` /
  * `instance-simulator-api.test.ts` — there is no standalone factory for

@@ -4,7 +4,7 @@ import {
   useState,
 } from 'react'
 import type { RefObject } from 'react'
-import { attachSimulator, captureThumbnail } from '@/shared/api'
+import { attachNativeSimulator, attachSimulator, captureThumbnail } from '@/shared/api'
 import type { AppInfo } from '@/shared/api'
 import {
   buildSimulatorUrl,
@@ -28,6 +28,13 @@ export interface UseSimulatorProps {
   compileConfig: CompileConfig
   port: number
   projectPath: string
+  /**
+   * NATIVE-HOST ONLY. When true the simulator is mounted as a main-process
+   * WebContentsView (so DeviceShell's nested render-host `<webview>`s can
+   * attach) instead of the renderer `<webview>`. The default path leaves this
+   * false and the `<webview>`-attach effect below runs unchanged.
+   */
+  nativeHost: boolean
 }
 
 export interface SimulatorHookResult {
@@ -46,6 +53,7 @@ export function useSimulator(props: UseSimulatorProps): SimulatorHookResult {
     compileConfig,
     port,
     projectPath,
+    nativeHost,
   } = props
 
   const simulatorUrl = useMemo(() => {
@@ -61,7 +69,23 @@ export function useSimulator(props: UseSimulatorProps): SimulatorHookResult {
     setCurrentPage(getCurrentPagePath(simulatorUrl))
   }, [simulatorUrl])
 
+  // ── Native-host: mount the simulator as a main-process WebContentsView ──────
+  // The default `<webview>`-attach effect below short-circuits (asWebview → null)
+  // when SimulatorPanel doesn't render the `<webview>`, so this is the only
+  // attach path under native-host. We ask main to create + load the WCV with the
+  // SAME simulatorUrl the `<webview src>` would use; main's preload then drives
+  // SPAWN → DeviceShell. `currentPage` mirrors the URL (no `<webview>` nav events
+  // reach the renderer; page-stack nav happens inside the WCV).
   useEffect(() => {
+    if (!nativeHost) return
+    if (compileStatus.status !== 'ready') return
+    if (!simulatorUrl) return
+    void attachNativeSimulator(simulatorUrl, simPanelWidthRef.current!)
+    sendDeviceInfo(deviceRef.current!)
+  }, [nativeHost, compileStatus.status, simulatorUrl, simPanelWidthRef, deviceRef, sendDeviceInfo])
+
+  useEffect(() => {
+    if (nativeHost) return
     if (compileStatus.status !== 'ready') return
 
     const webview = asWebview(simulatorRef)
@@ -158,7 +182,7 @@ export function useSimulator(props: UseSimulatorProps): SimulatorHookResult {
       webview.removeEventListener?.('did-finish-load', onDomReady as EventListener)
       webview.removeEventListener?.('did-finish-load', onFinishLoad as EventListener)
     }
-  }, [compileStatus.status, sendDeviceInfo, simulatorUrl, simulatorRef, simPanelWidthRef, deviceRef, projectPath])
+  }, [nativeHost, compileStatus.status, sendDeviceInfo, simulatorUrl, simulatorRef, simPanelWidthRef, deviceRef, projectPath])
 
   return {
     simulatorUrl,

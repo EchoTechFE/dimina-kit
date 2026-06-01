@@ -1,8 +1,10 @@
 import { SimulatorChannel, SimulatorCustomApiChannel } from '../../shared/ipc-channels.js'
 import {
+  SimulatorAttachNativeSchema,
   SimulatorAttachSchema,
   SimulatorCustomApiInvokeSchema,
   SimulatorResizeSchema,
+  SimulatorSetNativeBoundsSchema,
   SimulatorSetVisibleSchema,
 } from '../../shared/ipc-schemas.js'
 import type { WorkbenchContext } from '../services/workbench-context.js'
@@ -16,12 +18,20 @@ export function registerSimulatorIpc(ctx: Pick<WorkbenchContext, 'views' | 'noti
       const [simWcId, simWidth] = validate(SimulatorChannel.Attach, SimulatorAttachSchema, args)
       ctx.views.attachSimulator(simWcId, simWidth)
     })
+    .handle(SimulatorChannel.AttachNative, (_, ...args: unknown[]) => {
+      const [simulatorUrl, simWidth] = validate(SimulatorChannel.AttachNative, SimulatorAttachNativeSchema, args)
+      ctx.views.attachNativeSimulator(simulatorUrl, simWidth)
+    })
     .handle(SimulatorChannel.Detach, () => {
       ctx.views.detachSimulator()
     })
     .handle(SimulatorChannel.Resize, (_, ...args: unknown[]) => {
       const [simWidth] = validate(SimulatorChannel.Resize, SimulatorResizeSchema, args)
       ctx.views.resize(simWidth)
+    })
+    .handle(SimulatorChannel.SetNativeBounds, (_, ...args: unknown[]) => {
+      const [p] = validate(SimulatorChannel.SetNativeBounds, SimulatorSetNativeBoundsSchema, args)
+      ctx.views.setNativeSimulatorViewBounds(p)
     })
     .handle(SimulatorChannel.SetVisible, (_, ...args: unknown[]) => {
       const [visible, simWidth] = validate(SimulatorChannel.SetVisible, SimulatorSetVisibleSchema, args)

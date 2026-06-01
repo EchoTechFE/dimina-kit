@@ -10,6 +10,14 @@
 
 export const SimulatorChannel = {
   Attach: 'simulator:attach',
+  // NATIVE-HOST ONLY: ask main to create the simulator as a top-level
+  // WebContentsView (so nested render-host <webview>s can attach). The default
+  // path uses `Attach` with the renderer <webview>'s webContents id instead.
+  AttachNative: 'simulator:attach-native',
+  // NATIVE-HOST ONLY: renderer reports the device-bezel inner-screen rect (CSS
+  // px from content top-left) + zoom so main can overlay the simulator WCV on
+  // it. The default <webview> path never sends this.
+  SetNativeBounds: 'simulator:set-native-bounds',
   Detach: 'simulator:detach',
   Resize: 'simulator:resize',
   SetVisible: 'simulator:setVisible',
@@ -69,6 +77,31 @@ export type StorageWriteResult =
 export const SimulatorElementChannel = {
   Inspect: 'simulator:element:inspect',
   Clear: 'simulator:element:clear',
+} as const
+
+// ── Workbench runtime info (renderer reads once to pick panel data sources) ──
+// Under native-host the page DOM / service logic live in separate webContents,
+// so WXML + AppData are sourced from the main process instead of the simulator
+// guest's miniappSnapshot transport. The renderer queries this flag once and
+// branches usePanelData accordingly.
+export const WorkbenchRuntimeChannel = {
+  GetNativeHost: 'workbench:runtime:native-host',
+} as const
+
+// ── WXML tree (native-host: main pulls the tree from the active render-host
+// <webview> guest via render-inspect, and pushes/answers here — mirroring the
+// Storage panel's main→renderer contract so the renderer panel is unchanged) ──
+export const SimulatorWxmlChannel = {
+  GetSnapshot: 'simulator:wxml:snapshot',
+  Event: 'simulator:wxml:event',
+} as const
+
+// ── AppData (native-host: main taps the service→render setData stream in
+// bridge-router and pushes the cumulative snapshot here — the service logic runs
+// in the hidden service-host window, not a Worker in the simulator guest) ──
+export const SimulatorAppDataChannel = {
+  GetSnapshot: 'simulator:appdata:snapshot',
+  Event: 'simulator:appdata:event',
 } as const
 
 export interface ElementInspection {

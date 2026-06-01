@@ -1,0 +1,5 @@
+{
+  "appid": "devtools_navbar_fixture",
+  "projectname": "devtools-navbar-fixture",
+  "description": "Fixture mini-app for e2e NavigationBar tests"
+}

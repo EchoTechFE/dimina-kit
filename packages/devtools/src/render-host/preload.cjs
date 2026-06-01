@@ -91,3 +91,64 @@ globalThis.addEventListener('DOMContentLoaded', () => {
     },
   })
 })
+
+// ── Console capture (native-host) ───────────────────────────────────────────
+// This preload runs with contextIsolation effectively off (it defines globals on
+// globalThis the page reads), so patching `console` here captures the render
+// guest's own console output. Each entry is forwarded to main as a `consoleLog`
+// container message (source:'render') — bridge-router routes it to ctx.guestConsole
+// → automation rebroadcasts it as App.logAdded. Mirrors the shape used by
+// src/preload/instrumentation/console.ts + runtime/host.ts safeSerialize.
+
+function safeSerializeArg(val) {
+  if (val === null || val === undefined) return val
+  if (typeof val === 'function') return `[Function: ${val.name || 'anonymous'}]`
+  if (typeof val !== 'object') return val
+  if (val instanceof Error) return { __isError: true, message: val.message, stack: val.stack }
+  try {
+    return structuredClone(val)
+  } catch (_) { /* DOM nodes / proxies can't be structuredCloned */ }
+  try {
+    return JSON.parse(JSON.stringify(val))
+  } catch (_) { /* circular / non-serializable */ }
+  return String(val)
+}
+
+function emitConsoleLog(level, args) {
+  try {
+    globalThis.DiminaRenderBridge.invoke({
+      type: 'consoleLog',
+      target: 'container',
+      body: {
+        bridgeId,
+        source: 'render',
+        level,
+        args: args.map(safeSerializeArg),
+        ts: Date.now(),
+      },
+    })
+  } catch (_) { /* never let console capture break the guest */ }
+}
+
+;['log', 'warn', 'error', 'info', 'debug'].forEach((level) => {
+  const original = typeof console[level] === 'function' ? console[level].bind(console) : null
+  if (!original) return
+  console[level] = (...args) => {
+    original(...args)
+    emitConsoleLog(level, args)
+  }
+})
+
+globalThis.addEventListener('error', (event) => {
+  emitConsoleLog('error', [{
+    message: event.message,
+    source: event.filename,
+    lineno: event.lineno,
+    colno: event.colno,
+    stack: event.error && event.error.stack,
+  }])
+})
+
+globalThis.addEventListener('unhandledrejection', (event) => {
+  emitConsoleLog('error', [{ message: 'Unhandled Promise Rejection', reason: String(event.reason) }])
+})

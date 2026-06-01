@@ -87,6 +87,7 @@ export function ProjectRuntime({
           currentPage={simulator.currentPage}
           copied={copied}
           onCopyPagePath={copyPagePath}
+          nativeHost={simulator.nativeHost}
         />
 
         <div

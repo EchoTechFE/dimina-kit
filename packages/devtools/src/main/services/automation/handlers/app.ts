@@ -1,8 +1,11 @@
 import type { Handler } from '../shared.js'
-import { evalInSim, getSimulator, inIframe } from '../exec.js'
-import { parseLocationRoute } from '../../../../shared/simulator-route.js'
+import { evalInSim, getActivePageWc, getSimulator } from '../exec.js'
+import { decodePageSpec, parseLocationRoute } from '../../../../shared/simulator-route.js'
 
 export const appHandlers: Record<string, Handler> = {}
+
+/** Nav methods that take a `{ url }` arg (navigateBack is handled separately). */
+const NAV_METHODS = new Set(['navigateTo', 'redirectTo', 'reLaunch', 'switchTab'])
 
 // -- App domain --
 
@@ -14,7 +17,32 @@ async function readRoute(ctx: Parameters<Handler>[0]) {
   return parseLocationRoute(search)
 }
 
+/**
+ * Native-host: derive the visible page's `{ pagePath, query }` from the active
+ * render guest. The page-stack depth isn't surfaced by the bridge handle, so the
+ * native page stack is reported as the single active page (see App.getPageStack).
+ * Reads the guest's own `location.search` — the render-host preload encodes
+ * `pagePath` (+ per-page query) there.
+ */
+async function readNativeActivePage(ctx: Parameters<Handler>[0]) {
+  const renderWc = getActivePageWc(ctx)
+  if (!renderWc) return null
+  const search = await renderWc
+    .executeJavaScript('location.search')
+    .catch(() => '') as string
+  const params = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search)
+  const pagePath = params.get('pagePath') || ''
+  if (!pagePath) return null
+  // The guest URL carries the full page spec on `pagePath` (may include `?k=v`).
+  const spec = decodePageSpec(pagePath)
+  return { pagePath: spec.pagePath, query: spec.query }
+}
+
 appHandlers['App.getCurrentPage'] = async (ctx) => {
+  if (ctx.bridge?.isNativeHost()) {
+    const page = await readNativeActivePage(ctx)
+    return { pageId: 1, path: page?.pagePath ?? '', query: page?.query ?? {} }
+  }
   const route = await readRoute(ctx)
   const iframeCount = await evalInSim<number>(ctx, `document.querySelectorAll('iframe').length`)
   return {
@@ -25,8 +53,17 @@ appHandlers['App.getCurrentPage'] = async (ctx) => {
 }
 
 appHandlers['App.getPageStack'] = async (ctx) => {
-  const route = await readRoute(ctx)
   const pageStack: Array<{ pageId: number; path: string; query: Record<string, string> }> = []
+  if (ctx.bridge?.isNativeHost()) {
+    // LIMITATION: the bridge handle only exposes the *active* page bridgeId, not
+    // the full ordered stack, so under native-host we report a single-entry stack
+    // for the visible page. Full multi-page-stack reporting is a follow-up.
+    const page = await readNativeActivePage(ctx)
+    if (page) pageStack.push({ pageId: 1, path: page.pagePath, query: page.query })
+    return { pageStack }
+  }
+
+  const route = await readRoute(ctx)
   if (!route) return { pageStack }
 
   // Mirrors upstream HashRouter.parseSearch: `[entry]` or `[entry, current]`.
@@ -41,25 +78,56 @@ appHandlers['App.callWxMethod'] = async (ctx, params) => {
   const method = params.method as string
   const args = (params.args as unknown[]) || []
 
+  // NATIVE-HOST: nav isn't a DOM click — DeviceShell drives the page stack and
+  // the authoritative wx.* runs in the hidden service window. Run the real call
+  // there so navigation goes through the same path the running mini-app uses.
+  if (ctx.bridge?.isNativeHost() && (NAV_METHODS.has(method) || method === 'navigateBack')) {
+    const serviceWc = ctx.bridge.getServiceWc()
+    if (!serviceWc) throw new Error('Service host not connected')
+    const arg = method === 'navigateBack'
+      ? (args[0] ?? { delta: 1 })
+      : (args[0] ?? {})
+    await serviceWc.executeJavaScript(`wx.${method}(${JSON.stringify(arg)})`)
+    // Give the service-driven navigation time to mount the new page (mirrors the
+    // default-arch waits below).
+    await new Promise((r) => setTimeout(r, method === 'navigateBack' ? 1500 : 2000))
+    return { result: undefined }
+  }
+
   // For navigation methods, handle specially via DOM click / wx.* on the iframe
   if (['navigateTo', 'redirectTo', 'reLaunch', 'switchTab'].includes(method)) {
     const opts = args[0] as { url?: string } | undefined
     const url = opts?.url
     if (url) {
       const cleanUrl = url.startsWith('/') ? url : `/${url}`
-      // Try clicking a matching DOM element first
-      const clicked = await evalInSim<boolean>(ctx, inIframe(`
+      // Try clicking a matching DOM element first. We can't use `inIframe`
+      // here — tabBar mini-apps keep prior tabs' iframes around (display:none)
+      // and `iframes[length-1]` ends up being the hidden, freshly-cached tab
+      // rather than the visible one. Pick the visible iframe explicitly.
+      const clicked = await evalInSim<boolean>(ctx, `(() => {
+        const iframes = Array.from(document.querySelectorAll('iframe'))
+        const visible = iframes.filter((f) => {
+          const cs = window.getComputedStyle(f)
+          if (cs.display === 'none' || cs.visibility === 'hidden') return false
+          const rect = f.getBoundingClientRect()
+          return rect.width > 0 && rect.height > 0
+        })
+        const target = visible[visible.length - 1] || iframes[iframes.length - 1]
+        if (!target || !target.contentDocument) return false
         const path = ${JSON.stringify(cleanUrl)}
-        const el = Array.from(_doc.querySelectorAll('[data-path]'))
-          .find(e => e.getAttribute('data-path') === path)
+        const el = Array.from(target.contentDocument.querySelectorAll('[data-path]'))
+          .find((e) => e.getAttribute('data-path') === path)
         if (el) { el.click(); return true }
         return false
-      `)).catch(() => false)
+      })()`).catch(() => false)
 
       if (!clicked) {
-        // Fallback: drive navigation via wx.* on the rendered page iframe.
-        // Upstream's query router doesn't react to URL mutation; the active
-        // page's iframe exposes wx.* with the live dimina runtime bindings.
+        // Fallback cascade for navigation methods:
+        //   1. iframe wx[method] — page-iframe surface (older arch, where
+        //      jdimina installed `window.wx` on each page frame).
+        //   2. top-window wx[method] — set up by simulator/main.tsx, binds
+        //      MiniApp.switchTab / navigateTo / etc. Required for switchTab
+        //      since page-iframe wx (jdimina) doesn't expose it.
         const apiName = JSON.stringify(method)
         const urlJson = JSON.stringify(cleanUrl)
         await evalInSim(
@@ -73,6 +141,9 @@ appHandlers['App.callWxMethod'] = async (ctx, params) => {
                   return
                 }
               } catch (_) {}
+            }
+            if (typeof wx !== 'undefined' && wx && typeof wx[${apiName}] === 'function') {
+              wx[${apiName}]({ url: ${urlJson} })
             }
           })()`,
         )

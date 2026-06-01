@@ -1,4 +1,4 @@
-import { type WxmlNode, registerSyntheticSid } from '../runtime/bridge.js'
+import { type WxmlNode, registerSyntheticSid } from '../shared/sid-registry.js'
 
 export interface ComponentInstance extends Record<string, unknown> {
   type?: Record<string, unknown>

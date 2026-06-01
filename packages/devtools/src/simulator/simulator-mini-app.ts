@@ -1,4 +1,5 @@
 import type {
+  ActivePagePayload,
   ApiResponsePayload,
   AppManifest,
   HostEnvSnapshot,
@@ -27,8 +28,10 @@ interface NativeHostBridge {
   notifyLifecycle(payload: { appSessionId: string; bridgeId: string; event: PageLifecycleEvent }): void
   notifyNavCallback(payload: NavCallbackPayload): void
   notifyApiResponse(payload: ApiResponsePayload): void
+  notifyActivePage(payload: ActivePagePayload): void
   createRenderHostUrl(opts: { bridgeId: string; appId: string; pagePath: string }): string
   renderPreloadUrl: string
+  onSimulatorEvent<T = unknown>(channel: string, listener: (payload: T) => void): () => void
 }
 
 declare global {
@@ -95,6 +98,13 @@ export class SimulatorMiniApp {
       query: this.query,
       apiNamespaces: this.apiNamespaces,
       hostEnvSnapshot: this.getHostEnvSnapshot(),
+      // The simulator page is served by the dev server at
+      // `http://localhost:<port>/simulator.html`; that same origin statically
+      // serves the compiled `<appId>/<root>/…` resources (app-config, logic.js,
+      // page bundles). Hand it to main so the render/service hosts fetch from
+      // the same place the default dimina-fe path does — no separate resource
+      // server, no local compiled-output path needed.
+      resourceBaseUrl: `${window.location.origin}/`,
     })
     this.appSessionId = result.appSessionId
     this.bridgeId = result.bridgeId
@@ -154,6 +164,17 @@ export class SimulatorMiniApp {
     getNativeHost().notifyApiResponse({ appSessionId, ...payload })
   }
 
+  /**
+   * Tell main which page is now the visible top-of-stack. DeviceShell calls
+   * this whenever the stack top changes so main-side panels/automation can
+   * target the active page's render webContents.
+   */
+  notifyActivePage(bridgeId: string): void {
+    const appSessionId = this.appSessionId
+    if (!appSessionId) return
+    getNativeHost().notifyActivePage({ appSessionId, bridgeId })
+  }
+
   getTabBarConfig(): TabBarConfig | null {
     return this.manifest?.tabBar ?? null
   }
@@ -197,6 +218,16 @@ export class SimulatorMiniApp {
 
   getRenderPreloadUrl(): string {
     return getNativeHost().renderPreloadUrl
+  }
+
+  /**
+   * Subscribe to a main→simulator event channel (SIMULATOR_EVENTS) via the
+   * native-host preload bridge. DeviceShell uses this instead of importing
+   * `ipcRenderer` from electron (the simulator main world has no electron).
+   * Returns an unsubscribe fn.
+   */
+  onSimulatorEvent<T = unknown>(channel: string, listener: (payload: T) => void): () => void {
+    return getNativeHost().onSimulatorEvent<T>(channel, listener)
   }
 
   private requireAppSessionId(): string {

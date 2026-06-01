@@ -1,9 +1,9 @@
 /**
- * Step 2 of the devtools extension model — "custom IPC extension surface".
+ * Workbench model refactor — "custom IPC extension surface".
  *
  * The `onSetup(instance)` hook hands the host a `WorkbenchAppInstance`. This
  * suite pins down two NEW capabilities that surface object must grow
- * (`docs/extension-model.md` §3.3):
+ * (`docs/workbench-model.md`):
  *
  *  Requirement A — `instance.ipc`:
  *    A gated `IpcRegistry` bound to `context.senderPolicy`. Channels
@@ -17,10 +17,10 @@
  *    Disposable removes it again; closing the window auto-removes it; and the
  *    Disposable is registered into `ctx.registry` for context-scoped cleanup.
  *
- * Both capabilities DO NOT EXIST yet — every assertion below is expected to
- * be RED until step 2 is implemented. The failures must point at the missing
- * feature (`instance.ipc` / `instance.registerTrustedWindow` undefined, or
- * the policy not honoring a registered window), not at a broken harness.
+ * Each assertion below pins one of these two capabilities. A failure must
+ * point at the feature itself (`instance.ipc` / `instance.registerTrustedWindow`
+ * undefined, or the policy not honoring a registered window), not at a broken
+ * harness.
  *
  * Seam: there is no standalone factory for `WorkbenchAppInstance` — the
  * object is built inline inside `createWorkbenchApp().setup()`. The closest
@@ -565,9 +565,10 @@ describe('Requirement B: instance.registerTrustedWindow', () => {
 
     await disposable.dispose()
 
-    // RED before the fix: the returned disposable is the RAW disposable, not the
-    // registry wrapper, so disposing it never splices the entry out — size stays
-    // at baseline+1 (a leaked dead entry).
+    // The returned disposable must be the registry wrapper, not the RAW
+    // disposable: disposing it splices the entry out so size returns to
+    // baseline. (A raw disposable would never splice the entry, leaving a
+    // leaked dead entry at baseline+1.)
     expect(
       registry.size,
       'disposing the returned Disposable must remove its ctx.registry entry — return the wrapper from registry.add(), not the raw disposable',

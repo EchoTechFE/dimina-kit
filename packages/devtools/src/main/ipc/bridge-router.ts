@@ -1,15 +1,18 @@
 import { app, BrowserWindow, ipcMain, protocol, session as electronSession, webContents } from 'electron'
 import type { IpcMainEvent, IpcMainInvokeEvent, WebContents } from 'electron'
-import fs from 'node:fs/promises'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { BRIDGE_CHANNELS as C, SIMULATOR_EVENTS as E } from '../../shared/bridge-channels.js'
+import { devtoolsPackageRoot } from '../utils/paths.js'
 import type {
+  ActivePagePayload,
   ApiCallPayload,
   ApiResponsePayload,
   AppManifest,
   DisposePayload,
   HostEnvSnapshot,
   MessageEnvelope,
+  NativeHostConfig,
   NavActionPayload,
   NavCallbackPayload,
   PageClosePayload,
@@ -27,10 +30,35 @@ import type {
   TabBarConfig,
 } from '../../shared/bridge-channels.js'
 import type { WorkbenchContext } from '../services/workbench-context.js'
-import { startDiminaResourceServer, toSourceUrl, type DiminaResourceServer } from '../services/dimina-resource-server.js'
-import { createServiceHostWindow } from '../windows/service-host-window/create.js'
+import { startDiminaResourceServer, type DiminaResourceServer } from '../services/dimina-resource-server.js'
+import {
+  buildServiceHostSpawnUrl,
+  createServiceHostWindow,
+  navigateServiceHost,
+  serviceHostSpec,
+} from '../windows/service-host-window/create.js'
+import { ServiceHostPool } from '../services/service-host-pool/pool.js'
+import { STORAGE_API_NAMES } from '../services/simulator-storage/index.js'
 
 const STACK_ID = 'stack_0'
+
+/** Hard ceiling on the pre-warm pool, mirroring ServiceHostPool/doc §3.3. */
+const PREWARM_MAX_POOL_SIZE = 4
+
+/**
+ * Resolve the pre-warm pool size from env (doc §6). Returns 0 (OFF) unless
+ * `DIMINA_PREWARM_POOL_SIZE` is a positive integer and `DIMINA_PREWARM_DISABLE`
+ * is not set. Default OFF — pooling is opt-in so the spawn path is unchanged
+ * unless explicitly enabled.
+ */
+function resolvePrewarmPoolSize(): number {
+  if (process.env.DIMINA_PREWARM_DISABLE === '1') return 0
+  const raw = process.env.DIMINA_PREWARM_POOL_SIZE
+  if (!raw) return 0
+  const n = Number.parseInt(raw, 10)
+  if (!Number.isFinite(n) || n <= 0) return 0
+  return Math.min(n, PREWARM_MAX_POOL_SIZE)
+}
 
 interface RawAppConfig {
   app?: { window?: PageWindowConfig; tabBar?: TabBarConfig; entryPagePath?: string; pages?: string[] }
@@ -47,11 +75,38 @@ interface AppSession {
   serviceWc: WebContents
   simulatorWc: WebContents
   serviceLoaded: boolean
-  resourceServer: DiminaResourceServer
+  /**
+   * Base URL every resource fetch (render bundles, service logic.js,
+   * app-config.json, the dmb-resource protocol proxy) is resolved against.
+   * Under the simulator path this is the dev server origin
+   * (`http://localhost:<port>/`), which statically serves the compiled
+   * `<appId>/<root>/…` tree. When a caller doesn't supply one (legacy / unit
+   * tests), we fall back to a local `DiminaResourceServer` rooted at the
+   * spawn's `pkgRoot/root` and use its baseUrl here.
+   */
+  resourceBaseUrl: string
+  /** Local fallback server; null when `resourceBaseUrl` is an external (dev) server. */
+  resourceServer: DiminaResourceServer | null
   hostEnv: HostEnvSnapshot
   appConfig: RawAppConfig
   manifest: AppManifest
   pages: Map<string, PageSession>
+  /** Visible top-of-stack page bridgeId reported by DeviceShell (ACTIVE_PAGE).
+   * Null until the first signal — callers fall back to the root bridgeId
+   * (= appSessionId). Main has no z-order concept of its own; this mirrors the
+   * DeviceShell ShellState so panels/automation can target the current page. */
+  activeBridgeId: string | null
+  /** Pool entry id when the service window came from the pre-warm pool; null
+   * for a fresh / fallback window (destroyed, not pooled, on dispose). */
+  poolEntryId: string | null
+  /** The `'closed'` listener bound to the service window, kept so dispose can
+   * detach it before releasing the window back to the pool. */
+  onServiceClosed: (() => void) | null
+  /** The pool-path `'did-finish-load'` boot listener, kept so dispose can detach
+   * it before releasing the (recycled) window — otherwise a stale listener could
+   * boot this disposed session into the next spawn's window. Null on the fresh
+   * path (which uses a self-removing `once`). */
+  onServiceBoot: (() => void) | null
 }
 
 interface PageSession {
@@ -86,10 +141,73 @@ interface RouterState {
   wcIdToBridgeId: Map<number, string>
   /** requestId → pending API_CALL forwarded to a simulator window. */
   pendingApiCalls: Map<string, PendingApiCall>
+  /** Pre-warm pool for service-host windows; null when pooling is disabled. */
+  pool: ServiceHostPool | null
+  /** Fan-out for render-side activity (domReady / active-page); set in install. */
+  emitRenderEvent: (event: RenderEvent) => void
 }
 
 /** Default timeout for a simulator-forwarded API call. */
 const API_CALL_TIMEOUT_MS = 5_000
+
+/**
+ * Accessor over the bridge-router's private `RouterState`, stashed on
+ * `ctx.bridge` so other main-process services (simulator-storage, automation,
+ * appdata) can resolve live WebContents handles without owning router state.
+ * All getters resolve fresh each call (the pre-warm pool can swap windows on
+ * respawn, so cached handles go stale).
+ */
+/**
+ * Render-side activity worth re-reading panel data on: a page's DOM mounted
+ * (`domReady`) or the visible page changed (`activePage`). Panels that pull
+ * from the active render guest (WXML/element-inspect) subscribe via
+ * `BridgeRouterHandle.onRenderEvent` so they can refresh without polling.
+ */
+export interface RenderEvent {
+  kind: 'domReady' | 'activePage'
+  appId: string
+  bridgeId: string
+}
+
+export interface BridgeRouterHandle {
+  /** Whether native-host mode is on (main is the source of truth). */
+  isNativeHost(): boolean
+  /** The render-host `<webview>` WebContents for a page bridgeId, or null. */
+  resolveRenderWc(bridgeId: string): WebContents | null
+  /** The hidden service-host window WebContents for the active (or named) app. */
+  getServiceWc(appId?: string): WebContents | null
+  /** The visible page's render WebContents for the active (or named) app. */
+  getActiveRenderWc(appId?: string): WebContents | null
+  /** The visible top-of-stack page bridgeId for the active (or named) app. */
+  getActiveBridgeId(appId?: string): string | null
+  /** Subscribe to render-side activity (domReady / active-page change). */
+  onRenderEvent(listener: (event: RenderEvent) => void): () => void
+}
+
+/**
+ * Resolve the "current" app session: prefer an explicit appId, else the
+ * workspace's active project, else the only / most-recently-created session.
+ * Native-host can host multiple AppSessions, so this picks one deterministically
+ * rather than assuming a single session.
+ */
+function resolveCurrentApp(
+  state: RouterState,
+  ctx: WorkbenchContext,
+  appId?: string,
+): AppSession | undefined {
+  if (appId) {
+    for (const ap of state.appSessions.values()) if (ap.appId === appId) return ap
+  }
+  const appInfo = ctx.workspace?.getSession?.()?.appInfo as { appId?: string } | undefined
+  const activeAppId = appInfo?.appId
+  if (activeAppId) {
+    for (const ap of state.appSessions.values()) if (ap.appId === activeAppId) return ap
+  }
+  // Maps preserve insertion order; the last entry is the most recent spawn.
+  let last: AppSession | undefined
+  for (const ap of state.appSessions.values()) last = ap
+  return last
+}
 
 export function installBridgeRouter(ctx: WorkbenchContext): void {
   const state: RouterState = {
@@ -98,9 +216,112 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
     wcIdToAppSessionId: new Map(),
     wcIdToBridgeId: new Map(),
     pendingApiCalls: new Map(),
+    pool: null,
+    emitRenderEvent: () => {},
+  }
+
+  // Opt-in (default OFF) pre-warm pool for service-host windows. When enabled,
+  // handleSpawn acquires a warm window instead of constructing one per spawn.
+  const prewarmPoolSize = resolvePrewarmPoolSize()
+  if (prewarmPoolSize > 0) {
+    const pool = new ServiceHostPool()
+    state.pool = pool
+    // Defer warm-up off the cold-start critical path (doc §3.3: app.ready +
+    // idle). Warming eagerly here races main-window startup — it creates an
+    // extra hidden BrowserWindow before the workbench renderer has settled,
+    // which made the e2e's first-window/preload-readiness flaky. The timer is
+    // cancelled on teardown so it can't warm a disposed pool.
+    const warmTimer = setTimeout(() => {
+      void pool
+        .init({ defaultPoolSize: prewarmPoolSize, defaultSpec: serviceHostSpec(), maxPoolSize: PREWARM_MAX_POOL_SIZE })
+        .catch((error) => {
+          console.warn('[bridge-router] webview pool warm-up failed:', error)
+        })
+    }, 500)
+    ctx.registry.add(() => clearTimeout(warmTimer))
+    ctx.registry.add(() => state.pool?.dispose())
   }
 
   installResourceProtocolHandlers(ctx, state)
+
+  // Native-host enablement query. The simulator webview's preload can't read the
+  // launch `process.env` (and additionalArguments don't reach webview guests),
+  // nor can it compute file paths (no node:path/url in the guest preload), so it
+  // asks main synchronously at install time for the flag + the render-host URLs.
+  const onNativeHostQuery = (event: IpcMainEvent): void => {
+    const enabled = process.env.DIMINA_NATIVE_HOST === '1'
+    const reply: NativeHostConfig = enabled
+      ? {
+          enabled,
+          renderHostHtmlUrl: pathToFileURL(path.join(devtoolsPackageRoot, 'dist/render-host/pageFrame.html')).toString(),
+          renderPreloadUrl: pathToFileURL(path.join(devtoolsPackageRoot, 'dist/render-host/preload.cjs')).toString(),
+        }
+      : { enabled: false, renderHostHtmlUrl: '', renderPreloadUrl: '' }
+    event.returnValue = reply
+  }
+  ipcMain.on(C.NATIVE_HOST_ENABLED, onNativeHostQuery)
+  ctx.registry.add(() => { ipcMain.removeListener(C.NATIVE_HOST_ENABLED, onNativeHostQuery) })
+
+  // Subscribers to render-side activity (domReady / active-page). Panels that
+  // pull from the active render guest (WXML) re-read on these.
+  const renderEventListeners = new Set<(event: RenderEvent) => void>()
+  const emitRenderEvent = (event: RenderEvent): void => {
+    for (const listener of renderEventListeners) {
+      try { listener(event) } catch (error) {
+        console.warn('[bridge-router] render-event listener threw:', error)
+      }
+    }
+  }
+  state.emitRenderEvent = emitRenderEvent
+
+  // Expose a thin accessor over RouterState so other main services (storage,
+  // automation, appdata) can resolve live render/service WebContents without
+  // owning router state. Getters resolve fresh — the pre-warm pool can swap
+  // windows on respawn, so cached handles go stale.
+  const bridgeHandle: BridgeRouterHandle = {
+    isNativeHost: () => process.env.DIMINA_NATIVE_HOST === '1',
+    resolveRenderWc: (bridgeId) => {
+      const page = state.pageSessions.get(bridgeId)
+      return page?.renderWc && !page.renderWc.isDestroyed() ? page.renderWc : null
+    },
+    getServiceWc: (appId) => {
+      const ap = resolveCurrentApp(state, ctx, appId)
+      return ap && !ap.serviceWc.isDestroyed() ? ap.serviceWc : null
+    },
+    getActiveBridgeId: (appId) => {
+      const ap = resolveCurrentApp(state, ctx, appId)
+      if (!ap) return null
+      // Fall back to the root page (= appSessionId) before the first signal.
+      return ap.activeBridgeId ?? ap.appSessionId
+    },
+    getActiveRenderWc: (appId) => {
+      const ap = resolveCurrentApp(state, ctx, appId)
+      if (!ap) return null
+      const page = state.pageSessions.get(ap.activeBridgeId ?? ap.appSessionId)
+      return page?.renderWc && !page.renderWc.isDestroyed() ? page.renderWc : null
+    },
+    onRenderEvent: (listener) => {
+      renderEventListeners.add(listener)
+      return () => renderEventListeners.delete(listener)
+    },
+  }
+  ctx.bridge = bridgeHandle
+
+  // DeviceShell → main: record the visible top-of-stack page bridgeId so the
+  // accessor above can resolve "the active page". Sender-validated against the
+  // app that owns it; ignored for unknown apps/pages.
+  const onActivePage = (event: IpcMainEvent, payload: ActivePagePayload): void => {
+    const ap = state.appSessions.get(payload.appSessionId)
+    if (!ap) return
+    const senderApp = appByWc(state, event.sender)
+    if (!senderApp || senderApp.appSessionId !== ap.appSessionId) return
+    if (ap.pages.has(payload.bridgeId)) {
+      ap.activeBridgeId = payload.bridgeId
+      emitRenderEvent({ kind: 'activePage', appId: ap.appId, bridgeId: payload.bridgeId })
+    }
+  }
+  ipcMain.on(C.ACTIVE_PAGE, onActivePage)
+  ctx.registry.add(() => { ipcMain.removeListener(C.ACTIVE_PAGE, onActivePage) })
 
   ipcMain.handle(C.SPAWN, async (event, opts: SpawnRequest): Promise<SpawnResult> => {
     return handleSpawn(state, ctx, event, opts)
@@ -120,6 +341,15 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
 
   const onPageLifecycle = (event: IpcMainEvent, payload: PageLifecyclePayload): void => {
     handlePageLifecycle(state, event.sender, payload)
+    // Native-host AppData: evict the bridge on page teardown so the panel drops
+    // its tab (mirrors the default path's postMessage(pageUnload) eviction).
+    if (payload.event === 'pageUnload' && ctx.appData) {
+      const ap = state.appSessions.get(payload.appSessionId)
+      const senderApp = appByWc(state, event.sender)
+      if (ap && senderApp && senderApp.appSessionId === ap.appSessionId) {
+        ctx.appData.evictBridge(ap.appId, payload.bridgeId)
+      }
+    }
   }
   ipcMain.on(C.PAGE_LIFECYCLE, onPageLifecycle)
   ctx.registry.add(() => { ipcMain.removeListener(C.PAGE_LIFECYCLE, onPageLifecycle) })
@@ -138,6 +368,11 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
     if (senderApp && senderApp.appSessionId !== target.appSessionId) {
       console.warn(`[bridge-router] DISPOSE rejected: sender belongs to ${senderApp.appSessionId}, target ${target.appSessionId}`)
       return
+    }
+    // Native-host AppData: clear the app's accumulated bridges so a re-opened
+    // project doesn't show ghost tabs from the prior session.
+    if (ctx.appData) {
+      for (const page of target.pages.values()) ctx.appData.evictBridge(target.appId, page.bridgeId)
     }
     void disposeAppSession(state, target.appSessionId)
   }
@@ -158,6 +393,10 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
     const ap = appByWc(state, event.sender)
     if (!ap) return
     forwardToRender(ap, payload.msg, payload.targetBridgeId)
+    // Native-host AppData panel: tap the service→render setData stream centrally
+    // (the simulator guest has no Worker to sniff under native-host). Cheap —
+    // the tap ignores non-ub/non-page_* messages.
+    ctx.appData?.onServiceToRender(ap.appId, payload.msg)
   }
   ipcMain.on(C.SERVICE_PUBLISH, onServicePublish)
   ctx.registry.add(() => { ipcMain.removeListener(C.SERVICE_PUBLISH, onServicePublish) })
@@ -224,23 +463,52 @@ async function handleSpawn(
   const pagePath = normalizePagePath(opts.pagePath || 'pages/index/index')
   const pkgRoot = path.resolve(opts.pkgRoot || process.cwd())
   const root = opts.root || 'main'
-  const resourceRoot = path.resolve(pkgRoot, root)
-  const resourceServer = await startDiminaResourceServer(resourceRoot)
+
+  // Resource base resolution. Preferred: the simulator-supplied dev-server
+  // origin, which statically serves the compiled `<appId>/<root>/…` tree (same
+  // source the default dimina-fe `<webview>` reads). Fallback (no dev server —
+  // legacy/unit tests): a local server rooted at `pkgRoot/root`. Either way
+  // `resourceBaseUrl` is the single base all fetches resolve against.
+  let resourceServer: DiminaResourceServer | null = null
+  let resourceBaseUrl: string
+  if (opts.resourceBaseUrl) {
+    resourceBaseUrl = opts.resourceBaseUrl.endsWith('/') ? opts.resourceBaseUrl : `${opts.resourceBaseUrl}/`
+  } else {
+    resourceServer = await startDiminaResourceServer(path.resolve(pkgRoot, root))
+    resourceBaseUrl = resourceServer.baseUrl
+  }
   const hostEnv = makeHostEnv(opts.hostEnvSnapshot)
 
-  const appConfig = await loadAppConfig(resourceRoot)
+  // app-config.json lives at `<base><appId>/<root>/app-config.json` on the dev
+  // server, or at the local server root for the fallback path.
+  const appConfig = await loadAppConfig(
+    resourceServer ? resourceServer.baseUrl : `${resourceBaseUrl}${appId}/${root}/`,
+  )
   const manifest = buildAppManifest(appConfig, pagePath)
   const rootWindowConfig = resolvePageWindowConfig(appConfig, pagePath)
   const isTab = isTabPage(appConfig, pagePath)
 
-  const serviceWindow = createServiceHostWindow({
-    bridgeId,
-    appId,
-    pagePath,
-    pkgRoot,
-    resourceBaseUrl: resourceServer.baseUrl,
-    hostEnvSnapshot: hostEnv,
-  })
+  // Acquire a pre-warmed service-host window when pooling is enabled; otherwise
+  // construct one fresh (default). A pooled/fallback window is warmed on
+  // about:blank and must be navigated to the spawn URL below; the fresh path
+  // navigates inside createServiceHostWindow.
+  const usedPool = state.pool !== null
+  let poolEntryId: string | null = null
+  let serviceWindow: BrowserWindow
+  if (state.pool) {
+    const acquired = await state.pool.acquire(serviceHostSpec())
+    serviceWindow = acquired.win
+    poolEntryId = acquired.entryId
+  } else {
+    serviceWindow = createServiceHostWindow({
+      bridgeId,
+      appId,
+      pagePath,
+      pkgRoot,
+      resourceBaseUrl,
+      hostEnvSnapshot: hostEnv,
+    })
+  }
 
   const appSession: AppSession = {
     appSessionId,
@@ -252,11 +520,16 @@ async function handleSpawn(
     serviceWc: serviceWindow.webContents,
     simulatorWc,
     serviceLoaded: false,
+    resourceBaseUrl,
     resourceServer,
     hostEnv,
     appConfig,
     manifest,
     pages: new Map(),
+    activeBridgeId: null,
+    poolEntryId,
+    onServiceClosed: null,
+    onServiceBoot: null,
   }
 
   const rootPage: PageSession = {
@@ -279,20 +552,57 @@ async function handleSpawn(
   bindWc(state.wcIdToAppSessionId, simulatorWc, appSessionId)
   ctx.registry.add(() => disposeAppSession(state, appSessionId))
 
-  serviceWindow.once('closed', () => {
+  const onServiceClosed = (): void => {
     void disposeAppSession(state, appSessionId, { serviceAlreadyClosed: true })
-  })
+  }
+  appSession.onServiceClosed = onServiceClosed
+  serviceWindow.once('closed', onServiceClosed)
 
-  serviceWindow.webContents.once('did-finish-load', () => {
-    void bootServiceHost(state, appSession)
-  })
+  if (usedPool) {
+    // A pooled/fallback window passes through about:blank (warm load or the
+    // fallback's initial load). Boot only once the REAL service.html navigation
+    // finishes — filtering by URL so an about:blank did-finish-load can't fire a
+    // premature boot. The listener removes itself after the first match.
+    const bootOnServiceLoad = (): void => {
+      if (serviceWindow.isDestroyed()) return
+      // This session was disposed before its service.html settled: self-evict so
+      // a recycled window doesn't carry a stale listener into the next spawn.
+      if (state.appSessions.get(appSessionId) !== appSession) {
+        serviceWindow.webContents.removeListener('did-finish-load', bootOnServiceLoad)
+        return
+      }
+      // Ignore the warm/about:blank load; only the real service.html boots.
+      if (!serviceWindow.webContents.getURL().includes('service.html')) return
+      serviceWindow.webContents.removeListener('did-finish-load', bootOnServiceLoad)
+      void bootServiceHost(state, appSession)
+    }
+    appSession.onServiceBoot = bootOnServiceLoad
+    serviceWindow.webContents.on('did-finish-load', bootOnServiceLoad)
+    void navigateServiceHost(
+      serviceWindow,
+      buildServiceHostSpawnUrl({
+        bridgeId,
+        appId,
+        pagePath,
+        pkgRoot,
+        resourceBaseUrl,
+        hostEnvSnapshot: hostEnv,
+      }),
+    )
+  } else {
+    // Fresh window: its only navigation is service.html (issued inside
+    // createServiceHostWindow), so the first did-finish-load is the spawn load.
+    serviceWindow.webContents.once('did-finish-load', () => {
+      void bootServiceHost(state, appSession)
+    })
+  }
 
   return {
     appSessionId,
     bridgeId,
     pagePath,
     serviceWcId: serviceWindow.webContents.id,
-    resourceBaseUrl: resourceServer.baseUrl,
+    resourceBaseUrl,
     manifest,
     rootWindowConfig,
   }
@@ -382,6 +692,11 @@ function handleNavCallback(state: RouterState, sender: WebContents, payload: Nav
 // ── Service-host boot & per-page resource handshake ──────────────────────────
 
 async function bootServiceHost(state: RouterState, ap: AppSession): Promise<void> {
+  // Liveness guard: never boot a session that was already disposed. With pooling,
+  // the service window is recycled, so a stale did-finish-load listener from an
+  // early-disposed prior owner could otherwise fire here and inject the wrong
+  // app's logic.js into the next spawn (the recycled webContents is shared).
+  if (state.appSessions.get(ap.appSessionId) !== ap) return
   await injectLogicBundle(ap)
   // serviceLoaded is flipped only when service responds with
   // `serviceResourceLoaded`; see handleContainerMsg. Setting it here would
@@ -390,10 +705,17 @@ async function bootServiceHost(state: RouterState, ap: AppSession): Promise<void
 }
 
 async function injectLogicBundle(ap: AppSession): Promise<void> {
-  const logicPath = path.join(ap.pkgRoot, ap.root, 'logic.js')
+  // Fetch the compiled service logic over HTTP from the same base the render
+  // host reads (`<base><appId>/<root>/logic.js`). The fallback local server
+  // serves its root, so `<base>logic.js` resolves there too — both are http.
+  const logicUrl = ap.resourceServer
+    ? new URL('logic.js', ap.resourceBaseUrl).toString()
+    : new URL(`${ap.appId}/${ap.root}/logic.js`, ap.resourceBaseUrl).toString()
   try {
-    const logicContent = await fs.readFile(logicPath, 'utf8')
-    await ap.serviceWc.executeJavaScript(`${logicContent}\n//# sourceURL=${toSourceUrl(logicPath)}`, true)
+    const res = await fetch(logicUrl)
+    if (!res.ok) throw new Error(`logic.js fetch ${res.status} at ${logicUrl}`)
+    const logicContent = await res.text()
+    await ap.serviceWc.executeJavaScript(`${logicContent}\n//# sourceURL=${logicUrl}`, true)
   } catch (error) {
     console.warn('[bridge-router] unable to inject service logic.js:', error)
   }
@@ -489,12 +811,21 @@ function handleContainerMsg(
       if (!ap.simulatorWc.isDestroyed()) {
         ap.simulatorWc.send(E.DOM_READY, { bridgeId: page.bridgeId })
       }
+      state.emitRenderEvent({ kind: 'domReady', appId: ap.appId, bridgeId: page.bridgeId })
       break
     case 'invokeAPI':
       void handleSimulatorApi(state, ap, page, msg.body, ctx)
       break
     case 'serviceHostError':
       console.warn('[bridge-router] service host error:', msg.body)
+      break
+    case 'consoleLog':
+      // Native-host console capture: the render-host / service-host guest preloads
+      // monkeypatch console.* and post each entry here (one case handles both —
+      // distinguish via msg.body.source). Forward to the console sink (set by the
+      // automation server under native-host) so it can rebroadcast as App.logAdded.
+      // Guarded + non-throwing: console capture must never break message routing.
+      ctx.guestConsole?.emit(msg.body)
       break
     default:
       break
@@ -586,6 +917,24 @@ async function handleSimulatorApi(
       const fail = { errMsg: `${name}:fail simulator window destroyed` }
       sendCallback(ap, params.fail, fail)
       sendCallback(ap, params.complete, fail)
+    }
+    return
+  }
+
+  // Native-host storage unification: route async wx.setStorage/getStorage/etc.
+  // to the service-host window's file:// store (the same store the *Sync APIs +
+  // the Storage panel use), instead of forwarding to the simulator guest's
+  // http:// origin. Without this, async writes and sync writes diverge across
+  // two origins even for the running mini-app.
+  if (ctx.storageApi && STORAGE_API_NAMES.has(name)) {
+    try {
+      const result = await ctx.storageApi.invoke(ap.appId, name, params)
+      sendCallback(ap, params.success, result)
+      sendCallback(ap, params.complete, result)
+    } catch (error) {
+      const failResult = { errMsg: `${name}:fail ${error instanceof Error ? error.message : String(error)}` }
+      sendCallback(ap, params.fail, failResult)
+      sendCallback(ap, params.complete, failResult)
     }
     return
   }
@@ -731,8 +1080,8 @@ function makeLoadResource(ap: AppSession, page: PageSession, target: 'service' |
       bridgeId: page.bridgeId,
       pagePath: page.pagePath,
       root: ap.root,
-      baseUrl: ap.resourceServer.baseUrl,
-      resourceBaseUrl: ap.resourceServer.baseUrl,
+      baseUrl: ap.resourceBaseUrl,
+      resourceBaseUrl: ap.resourceBaseUrl,
       hostEnv: ap.hostEnv,
     },
   }
@@ -850,37 +1199,61 @@ async function disposeAppSession(
   }
   ap.pages.clear()
 
-  if (!opts.serviceAlreadyClosed && !ap.serviceWindow.isDestroyed()) {
+  if (ap.poolEntryId !== null && state.pool && !opts.serviceAlreadyClosed) {
+    // Return the window to the pool instead of closing it. Detach the per-spawn
+    // listeners first so the pool resetting/recycling (or a later pool-side
+    // destroy) can't re-trigger disposeAppSession or boot this disposed session
+    // into the next spawn's recycled window.
+    if (ap.onServiceClosed && !ap.serviceWindow.isDestroyed()) {
+      ap.serviceWindow.removeListener('closed', ap.onServiceClosed)
+    }
+    if (ap.onServiceBoot && !ap.serviceWindow.isDestroyed()) {
+      ap.serviceWindow.webContents.removeListener('did-finish-load', ap.onServiceBoot)
+    }
+    await state.pool.release(ap.poolEntryId, ap.serviceWindow).catch((error) => {
+      console.warn('[bridge-router] pool release failed:', error)
+    })
+  } else if (ap.poolEntryId !== null && state.pool && opts.serviceAlreadyClosed) {
+    // The pooled service window already closed/crashed externally (its 'closed'
+    // fired → onServiceClosed → here). `release` is skipped on this path, and the
+    // pool only auto-reclaims on render-process-gone — so without this the in-use
+    // entry leaks in the pool forever, permanently shrinking capacity. Reclaim
+    // the slot explicitly (the window is already gone; releaseDestroyed won't
+    // touch it). (Audit A1)
+    state.pool.releaseDestroyed(ap.poolEntryId)
+  } else if (!opts.serviceAlreadyClosed && !ap.serviceWindow.isDestroyed()) {
     ap.serviceWindow.close()
   }
   state.wcIdToAppSessionId.delete(ap.serviceWc.id)
   state.wcIdToAppSessionId.delete(ap.simulatorWc.id)
 
-  await ap.resourceServer.close().catch((error) => {
-    console.warn('[bridge-router] resource server close failed:', error)
-  })
+  // Only the local fallback server needs closing; the dev-server base is owned
+  // by the workspace session, not this app session.
+  if (ap.resourceServer) {
+    await ap.resourceServer.close().catch((error) => {
+      console.warn('[bridge-router] resource server close failed:', error)
+    })
+  }
 }
 
 // ── App-config / manifest parsing ───────────────────────────────────────────
 
-async function loadAppConfig(resourceRoot: string): Promise<RawAppConfig> {
-  const cfgPath = path.join(resourceRoot, 'app-config.json')
+async function loadAppConfig(resourceBase: string): Promise<RawAppConfig> {
+  // `resourceBase` is the dir/URL that directly contains `app-config.json`:
+  // the dev server's `<base><appId>/<root>/` (http) or the local fallback
+  // server root (also http). Both are HTTP, so a single fetch path covers them.
+  const cfgUrl = new URL('app-config.json', resourceBase.endsWith('/') ? resourceBase : `${resourceBase}/`).toString()
   try {
-    const raw = await fs.readFile(cfgPath, 'utf8')
-    return JSON.parse(raw) as RawAppConfig
-  } catch (error) {
-    if (isNotFound(error)) {
-      console.warn(`[bridge-router] no app-config.json at ${cfgPath}`)
+    const res = await fetch(cfgUrl)
+    if (!res.ok) {
+      console.warn(`[bridge-router] no app-config.json at ${cfgUrl} (${res.status})`)
       return {}
     }
-    console.warn('[bridge-router] failed to parse app-config.json:', error)
+    return await res.json() as RawAppConfig
+  } catch (error) {
+    console.warn('[bridge-router] failed to fetch/parse app-config.json:', error)
     return {}
   }
-}
-
-function isNotFound(error: unknown): boolean {
-  return typeof error === 'object' && error !== null && 'code' in error
-    && (error as { code?: string }).code === 'ENOENT'
 }
 
 function buildAppManifest(appConfig: RawAppConfig, fallbackEntry: string): AppManifest {
@@ -934,7 +1307,7 @@ function installResourceProtocolHandlers(ctx: WorkbenchContext, state: RouterSta
     const url = new URL(request.url)
     const ap = resolveAppByBridgeId(state, url.hostname)
     if (!ap) return new Response('Bridge session not found', { status: 404 })
-    const target = new URL(url.pathname.replace(/^\/+/, '') + url.search, ap.resourceServer.baseUrl)
+    const target = new URL(url.pathname.replace(/^\/+/, '') + url.search, ap.resourceBaseUrl)
     return fetch(target)
   }
 

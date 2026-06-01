@@ -7,8 +7,10 @@ import type { RefObject } from 'react'
 import { useActiveBridgeId } from './use-active-bridge-id'
 import { invoke as ipcInvoke, on as ipcOn } from '@/shared/api/ipc-transport'
 import {
+  SimulatorAppDataChannel,
   SimulatorElementChannel,
   SimulatorStorageChannel,
+  SimulatorWxmlChannel,
   type ElementInspection,
   type StorageEvent,
   type StorageItem as StorageItemDto,
@@ -17,6 +19,8 @@ import {
 import type { AppDataSnapshot } from '../../../../../../preload/instrumentation/app-data'
 import type { WxmlNode } from '../../right-panel/types.js'
 import { useMiniappSnapshot } from './use-miniapp-snapshot'
+import { useNativeHost } from './use-native-host'
+import { useNativeChannelSnapshot } from './use-native-channel-snapshot'
 import type { CompileStatus, StorageItem } from './use-project-runtime-controller'
 
 export interface UsePanelDataProps {
@@ -62,37 +66,62 @@ export function usePanelData(props: UsePanelDataProps): PanelDataHookResult {
 
   const [storageItems, setStorageItems] = useState<StorageItem[]>([])
 
+  // Under native-host the page DOM lives in render-host <webview> guests, not a
+  // same-document iframe the simulator preload can read — so WXML is sourced
+  // from the main process (simulator-wxml service) over a dedicated channel
+  // instead of the miniappSnapshot transport. The flag picks which source feeds
+  // the panel; the default dimina-fe path is unchanged.
+  const nativeHost = useNativeHost()
+  const ready = compileStatus.status === 'ready'
+
   // WXML is projected from the unified miniappSnapshot framework: preload owns
   // the tree, the renderer is a pure projection. reload re-sync is structural.
   const wxml = useMiniappSnapshot<WxmlNode | null>({
     id: 'wxml',
     initial: null,
     simulatorRef,
-    enabled: compileStatus.status === 'ready',
+    enabled: ready && !nativeHost,
+  })
+
+  // Native-host WXML: seed via GetSnapshot + live updates via Event.
+  const nativeWxml = useNativeChannelSnapshot<WxmlNode | null>({
+    getChannel: SimulatorWxmlChannel.GetSnapshot,
+    eventChannel: SimulatorWxmlChannel.Event,
+    initial: null,
+    enabled: ready && nativeHost,
   })
 
   // AppData is likewise a pure projection of the unified snapshot. The
   // `bridges` / `entries` come straight from preload; `activeBridgeId` (which
   // page tab is selected) is renderer-only UI state derived from each new
-  // snapshot below.
+  // snapshot below. Under native-host the service logic runs in the hidden
+  // service-host window (no Worker in the simulator guest), so AppData is fed
+  // from the main process (simulator-appdata service) over a dedicated channel.
   const appDataSnapshot = useMiniappSnapshot<AppDataSnapshot>({
     id: 'appdata',
     initial: EMPTY_APP_DATA_SNAPSHOT,
     simulatorRef,
-    enabled: compileStatus.status === 'ready',
+    enabled: ready && !nativeHost,
   })
+  const nativeAppData = useNativeChannelSnapshot<AppDataSnapshot>({
+    getChannel: SimulatorAppDataChannel.GetSnapshot,
+    eventChannel: SimulatorAppDataChannel.Event,
+    initial: EMPTY_APP_DATA_SNAPSHOT,
+    enabled: ready && nativeHost,
+  })
+  const appDataData = nativeHost ? nativeAppData.data : appDataSnapshot.data
 
-  const { activeBridgeId, setActiveBridge } = useActiveBridgeId(appDataSnapshot.data.bridges)
+  const { activeBridgeId, setActiveBridge } = useActiveBridgeId(appDataData.bridges)
 
   const appData: AppDataState = {
-    bridges: appDataSnapshot.data.bridges,
+    bridges: appDataData.bridges,
     activeBridgeId,
-    entries: appDataSnapshot.data.entries,
+    entries: appDataData.entries,
   }
 
   const setActiveAppDataBridge = setActiveBridge
 
-  const refreshAppData = appDataSnapshot.refresh
+  const refreshAppData = nativeHost ? nativeAppData.refresh : appDataSnapshot.refresh
   const refreshStorage = useCallback(async () => {
     const items = await ipcInvoke<StorageItemDto[] | undefined>(SimulatorStorageChannel.GetSnapshot)
     if (items) setStorageItems(items)
@@ -152,10 +181,10 @@ export function usePanelData(props: UsePanelDataProps): PanelDataHookResult {
   }, [])
 
   return {
-    wxmlTree: wxml.data,
+    wxmlTree: nativeHost ? nativeWxml.data : wxml.data,
     appData,
     storageItems,
-    refreshWxml: wxml.refresh,
+    refreshWxml: nativeHost ? nativeWxml.refresh : wxml.refresh,
     refreshAppData,
     setActiveAppDataBridge,
     refreshStorage,

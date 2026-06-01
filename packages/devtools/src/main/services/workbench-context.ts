@@ -1,5 +1,8 @@
 import type { BrowserWindow } from 'electron'
 import type { CompilationAdapter, WorkbenchConfig } from '../../shared/types.js'
+import type { BridgeRouterHandle } from '../ipc/bridge-router.js'
+import type { AppDataTap } from './simulator-appdata/index.js'
+import type { StorageApi } from './simulator-storage/index.js'
 import { DisposableRegistry } from '../utils/disposable.js'
 import type { SenderPolicy } from '../utils/ipc-registry.js'
 import { createWorkbenchSenderPolicy } from '../utils/sender-policy.js'
@@ -127,6 +130,40 @@ export interface WorkbenchContext {
 
   /** Aggregates dispose handlers for every IPC handler, listener, watcher, and CDP session registered by the workbench. */
   registry: DisposableRegistry
+
+  /**
+   * Accessor over the bridge-router's private state, set by `installBridgeRouter`.
+   * Lets other main services (simulator-storage, automation, appdata) resolve
+   * live render/service WebContents and the native-host flag without owning
+   * router state. Undefined until the bridge router is installed.
+   */
+  bridge?: BridgeRouterHandle
+
+  /**
+   * Native-host AppData tap, set by `setupSimulatorAppData` (app.ts) when
+   * native-host is on. bridge-router feeds it the service→render setData stream
+   * + page evictions so the AppData panel can be sourced from main. Undefined on
+   * the default dimina-fe path (which sniffs setData via a Worker hook).
+   */
+  appData?: AppDataTap
+
+  /**
+   * Native-host async-storage runtime hook, set by `setupSimulatorStorage` when
+   * native-host is on. bridge-router routes async `wx.setStorage`/etc. here so
+   * they hit the same service-host `file://` store as the sync APIs (one origin).
+   * Undefined on the default dimina-fe path (storage handled in the guest).
+   */
+  storageApi?: StorageApi
+
+  /**
+   * Native-host console sink, set by `startAutomationServer` when native-host is
+   * on. The render-host / service-host guest preloads monkeypatch `console.*`
+   * and post each entry to main as a `consoleLog` container message; bridge-router
+   * forwards those here so automation can rebroadcast them as `App.logAdded`
+   * events. Undefined on the default dimina-fe path (where the simulator guest's
+   * console flows through the `ipc-message-host` channel instead).
+   */
+  guestConsole?: { emit(entry: unknown): void }
 }
 
 /**

@@ -22,8 +22,11 @@ import {
 } from '../ipc/index.js'
 import type { WorkbenchModule } from '../services/module.js'
 import { startAutomationServer, type AutomationServer } from '../services/automation/index.js'
-import { startMcpServer } from '../services/mcp/index.js'
+import { startMcpServer, setNativeHost, setActiveBridgeId } from '../services/mcp/index.js'
 import { setupSimulatorStorage } from '../services/simulator-storage/index.js'
+import { setupSimulatorWxml } from '../services/simulator-wxml/index.js'
+import { setupSimulatorAppData } from '../services/simulator-appdata/index.js'
+import { createRenderInspector } from '../services/render-inspect/index.js'
 import { setupSimulatorTempFiles } from '../services/simulator-temp-files/index.js'
 import { UpdateManager } from '../services/update/index.js'
 import { toDisposable, type Disposable } from '../utils/disposable.js'
@@ -388,7 +391,32 @@ export function createWorkbenchApp(config: WorkbenchAppConfig = {}) {
       await setupAutomation(instance)
       const mcp = setupMcp()
       if (mcp) context.registry.add(mcp)
-      context.registry.add(setupSimulatorStorage(mainWindow.webContents, {
+      // Native-host: the real mini-app page runs in a nested render-host
+      // <webview> guest, not the localhost:7788 shell. Point the MCP
+      // `simulator` CDP target at the active render guest and keep it following
+      // the visible page across navigation/tab switches. Only wired under
+      // native-host so the default path stays byte-identical.
+      if (context.bridge?.isNativeHost()) {
+        setNativeHost(true)
+        const off = context.bridge.onRenderEvent((ev) => setActiveBridgeId(ev.bridgeId))
+        context.registry.add(off)
+        context.registry.add(() => setNativeHost(false))
+      }
+      // Resolve the active project's appId. Shared by the storage panel filter
+      // and the native-host WXML/element-inspect services (which scope the
+      // active render guest by appId).
+      const getActiveAppId = (): string | null => {
+        const session = context.workspace.getSession()
+        const appInfo = session?.appInfo as { appId?: string } | undefined
+        return appInfo?.appId ?? null
+      }
+
+      // Native-host inspector: injects the render-guest IIFE and drives WXML /
+      // element-highlight against the active render-host <webview>. Reused by
+      // the storage panel (element inspect) and the WXML panel service.
+      const renderInspector = createRenderInspector()
+
+      const storage = setupSimulatorStorage(mainWindow.webContents, {
         senderPolicy: context.senderPolicy,
         // Per-project filter for the simulator-storage panel: the simulator
         // uses a fixed `persist:simulator` partition + a fixed simulator.html
@@ -396,12 +424,41 @@ export function createWorkbenchApp(config: WorkbenchAppConfig = {}) {
         // ever opened. The dimina runtime isolates writes with `${appId}_`
         // prefixes; this callback lets the storage panel filter the CDP
         // snapshot/event stream to the active appId.
-        getActiveAppId: () => {
-          const session = context.workspace.getSession()
-          const appInfo = session?.appInfo as { appId?: string } | undefined
-          return appInfo?.appId ?? null
-        },
-      }))
+        getActiveAppId,
+        // Native-host: route element inspection to the active render guest, and
+        // read/write storage from the service-host window's file:// store.
+        bridge: context.bridge,
+        renderInspector,
+      })
+      context.registry.add(storage)
+      // Native-host: expose the async-storage runtime hook so bridge-router
+      // routes async wx.setStorage/etc. to the unified service-host store.
+      if (storage.storageApi) {
+        context.storageApi = storage.storageApi
+        context.registry.add(() => { context.storageApi = undefined })
+      }
+
+      // Native-host WXML + AppData panels: main sources the data (WXML pulled
+      // from the active render guest; AppData tapped from the service→render
+      // setData stream in bridge-router) and pushes it to the renderer. Inert on
+      // the default dimina-fe path (which sources both from the simulator
+      // miniappSnapshot transport), so only wire them when native-host is on.
+      if (context.bridge?.isNativeHost()) {
+        context.registry.add(setupSimulatorWxml(mainWindow.webContents, {
+          senderPolicy: context.senderPolicy,
+          bridge: context.bridge,
+          inspector: renderInspector,
+          getActiveAppId,
+        }))
+        const appDataService = setupSimulatorAppData(mainWindow.webContents, {
+          senderPolicy: context.senderPolicy,
+          getActiveAppId,
+        })
+        // bridge-router feeds this via ctx.appData (service→render tap + evict).
+        context.appData = appDataService
+        context.registry.add(appDataService)
+        context.registry.add(() => { context.appData = undefined })
+      }
       context.registry.add(wireAppWindowEvents(config, instance))
       context.registry.add(enableDevRendererAutoReload(rendererDir))
 

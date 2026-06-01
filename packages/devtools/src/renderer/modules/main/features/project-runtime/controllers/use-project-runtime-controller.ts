@@ -10,6 +10,7 @@ import { DEFAULT_RIGHT_PANE_STATE } from '../types'
 import type { RightPaneState, RightPaneTabId } from '../types'
 
 import { useDevice } from './use-device'
+import { useNativeHost } from './use-native-host'
 import { useSession } from './use-session'
 import { useSimulator } from './use-simulator'
 import { usePanelData, type AppDataState } from './use-panel-data'
@@ -59,6 +60,8 @@ interface SimulatorSlice {
   simulatorRef: RefObject<HTMLElement | null>
   simulatorUrl: string
   currentPage: string
+  /** Native-host: the simulator is a main-process WebContentsView, not a `<webview>`. */
+  nativeHost: boolean
 }
 
 interface PanelDataSlice {
@@ -123,6 +126,11 @@ export function useProjectRuntimeController(
   const simulatorRef = useRef<HTMLElement | null>(null)
   const compileDropdownRef = useRef<HTMLDivElement | null>(null)
 
+  // Fixed for the process lifetime. Under native-host the simulator is mounted
+  // as a main-process WebContentsView (not a renderer `<webview>`); `false`
+  // until the one-shot query resolves, so the default path is the safe default.
+  const nativeHost = useNativeHost()
+
   // ── Compose sub-hooks ────────────────────────────────────────────────────
 
   const deviceHook = useDevice({ initialDevice, simulatorRef })
@@ -151,6 +159,7 @@ export function useProjectRuntimeController(
     compileConfig: sessionHook.compileConfig,
     port: sessionHook.port,
     projectPath,
+    nativeHost,
   })
 
   const panelDataHook = usePanelData({
@@ -203,6 +212,7 @@ export function useProjectRuntimeController(
       simulatorRef,
       simulatorUrl: simulatorHook.simulatorUrl,
       currentPage: simulatorHook.currentPage,
+      nativeHost,
     },
     panelData: {
       wxmlTree: panelDataHook.wxmlTree,

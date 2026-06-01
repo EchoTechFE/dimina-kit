@@ -9,7 +9,11 @@ import {
   pollUntil,
 } from './helpers'
 
-process.env.DIMINA_NATIVE_HOST = '1'
+// This spec drives the native-host SERVICE path directly over `dmb:spawn` IPC
+// (the bridge-router handlers are registered regardless of DIMINA_NATIVE_HOST),
+// so it needs no env flag. Do NOT set `process.env.DIMINA_NATIVE_HOST` here — a
+// module-top mutation poisons the shared --workers=1 runner and flips every
+// other spec into native-host mode.
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURE_BUNDLE = path.resolve(__dirname, 'fixtures', 'native-host-bundle')

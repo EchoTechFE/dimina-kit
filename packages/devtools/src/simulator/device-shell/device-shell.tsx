@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ipcRenderer } from 'electron'
 import { SIMULATOR_EVENTS as E } from '../../shared/bridge-channels'
 import type {
   ApiCallPayload,
@@ -104,7 +103,6 @@ export function DeviceShell({
   // ── NavigationBar dynamic updates ──────────────────────────────────────────
   useEffect(() => {
     const listener = (
-      _event: unknown,
       payload: { bridgeId: string; name: string; params: Record<string, unknown> },
     ) => {
       setState(prev => ({
@@ -114,13 +112,12 @@ export function DeviceShell({
         ),
       }))
     }
-    ipcRenderer.on(E.NAV_BAR, listener)
-    return () => { ipcRenderer.removeListener(E.NAV_BAR, listener) }
-  }, [])
+    return miniApp.onSimulatorEvent(E.NAV_BAR, listener)
+  }, [miniApp])
 
   // ── TabBar dynamic API ────────────────────────────────────────────────────
   useEffect(() => {
-    const listener = (_event: unknown, payload: TabActionPayload) => {
+    const listener = (payload: TabActionPayload) => {
       const next = applyTabAction(stateRef.current.tabBar, {
         kind: 'apply',
         name: payload.name,
@@ -133,8 +130,7 @@ export function DeviceShell({
         callbacks: payload.callbacks,
       })
     }
-    ipcRenderer.on(E.TAB_ACTION, listener)
-    return () => { ipcRenderer.removeListener(E.TAB_ACTION, listener) }
+    return miniApp.onSimulatorEvent(E.TAB_ACTION, listener)
   }, [miniApp])
 
   // ── Routing controller (navigateTo / Back / redirectTo / reLaunch / switchTab) ─
@@ -169,12 +165,11 @@ export function DeviceShell({
   )
 
   useEffect(() => {
-    const listener = (_event: unknown, payload: NavActionPayload) => {
+    const listener = (payload: NavActionPayload) => {
       void performNavAction(payload)
     }
-    ipcRenderer.on(E.NAV_ACTION, listener)
-    return () => { ipcRenderer.removeListener(E.NAV_ACTION, listener) }
-  }, [performNavAction])
+    return miniApp.onSimulatorEvent(E.NAV_ACTION, listener)
+  }, [performNavAction, miniApp])
 
   // ── invokeAPI fallback (main → simulator) ──────────────────────────────────
   // Main forwards any invokeAPI name that is not registered in its
@@ -184,7 +179,7 @@ export function DeviceShell({
   // echo the verdict back so main can fire the original service-side
   // callbacks against their service-host ids.
   useEffect(() => {
-    const listener = (_event: unknown, payload: ApiCallPayload) => {
+    const listener = (payload: ApiCallPayload) => {
       void runApiAsync(miniApp, payload.name, payload.params).then((verdict) => {
         miniApp.notifyApiResponse({
           requestId: payload.requestId,
@@ -194,8 +189,7 @@ export function DeviceShell({
         })
       })
     }
-    ipcRenderer.on(E.API_CALL, listener)
-    return () => { ipcRenderer.removeListener(E.API_CALL, listener) }
+    return miniApp.onSimulatorEvent(E.API_CALL, listener)
   }, [miniApp])
 
   // ── Click handlers (back arrow + tab item) ────────────────────────────────
@@ -226,6 +220,14 @@ export function DeviceShell({
   // ── Rendering ─────────────────────────────────────────────────────────────
   const top = shell.stack[shell.stack.length - 1]
   const mounted = enumerateMounted(shell)
+
+  // Tell main which page is the visible top-of-stack so main-side panels
+  // (WXML/element-inspect) and automation can target the active render
+  // webContents — main has no z-order concept of its own. Fires on every
+  // top change (navigate / back / switchTab).
+  useEffect(() => {
+    miniApp.notifyActivePage(top.bridgeId)
+  }, [miniApp, top.bridgeId])
 
   const topIsCustomNav = top.navBar.style === 'custom'
   const viewportPadding = topIsCustomNav ? 0 : statusBarHeight + NAV_BAR_HEIGHT

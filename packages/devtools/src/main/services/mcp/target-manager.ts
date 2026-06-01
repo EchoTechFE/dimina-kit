@@ -14,6 +14,9 @@ import CDP from 'chrome-remote-interface'
 import { DEFAULT_CDP_PORT } from '../../../shared/constants.js'
 
 const SIMULATOR_URL_PATTERN = 'localhost:7788'
+// Native-host: the real mini-app page runs in a nested render-host <webview>
+// guest whose CDP target URL carries the render frame + the page's bridgeId.
+const RENDER_GUEST_PATTERN = 'pageFrame.html'
 const MAX_BUFFER = 500
 const RECONNECT_INTERVAL_MS = 3000
 
@@ -46,6 +49,14 @@ interface TargetState {
 
 let cdpPort = DEFAULT_CDP_PORT
 
+// Native-host mode: the simulator target is the active render-host <webview>
+// guest (pageFrame.html?...bridgeId=<id>) rather than the localhost:7788 shell.
+let nativeHostMode = false
+// The visible page's bridgeId, pushed from the bridge-router render events.
+// `selectSimulatorTarget` prefers the guest matching this id so MCP follows
+// the active page across navigation/tab switches.
+let activeBridgeId: string | null = null
+
 const targets: Record<TargetKind, TargetState> = {
   simulator: { client: null, connected: false, timer: null, consoleLogs: [], networkRequests: [] },
   workbench:  { client: null, connected: false, timer: null, consoleLogs: [], networkRequests: [] },
@@ -53,6 +64,59 @@ const targets: Record<TargetKind, TargetState> = {
 
 export function setCdpPort(port: number): void {
   cdpPort = port
+}
+
+export function setNativeHost(enabled: boolean): void {
+  nativeHostMode = enabled
+}
+
+/**
+ * Update the active-page bridgeId so the `simulator` target follows the
+ * currently visible render guest. No-op when unchanged. When native-host is
+ * on and the simulator target is already connected, fire-and-forget a
+ * reconnect so MCP re-points at the new active page.
+ */
+export function setActiveBridgeId(id: string | null): void {
+  if (id === activeBridgeId) return
+  activeBridgeId = id
+  if (nativeHostMode && targets.simulator.connected) {
+    void connectTarget('simulator')
+  }
+}
+
+/**
+ * Resolve which CDP target the `simulator` MCP tools should drive.
+ *
+ * Default (non-native) path: the localhost:7788 simulator shell — identical
+ * to the original behavior; `activeBridgeId` is ignored.
+ *
+ * Native-host path: the active render-host <webview> guest
+ * (pageFrame.html?...bridgeId=<id>), preferring the guest matching
+ * `activeBridgeId`, then any pageFrame guest, then degrading to the shell.
+ */
+export function selectSimulatorTarget<T extends { url?: string; type?: string }>(
+  targets: T[],
+  opts: { nativeHost: boolean; activeBridgeId: string | null },
+): T | undefined {
+  if (!opts.nativeHost) {
+    return targets.find((t) => t.url?.includes(SIMULATOR_URL_PATTERN))
+  }
+
+  // 1) Active-bridge guest takes priority over list order.
+  if (opts.activeBridgeId !== null) {
+    const bridgeMatch = `bridgeId=${opts.activeBridgeId}`
+    const active = targets.find(
+      (t) => t.url?.includes(RENDER_GUEST_PATTERN) && t.url.includes(bridgeMatch),
+    )
+    if (active) return active
+  }
+
+  // 2) Any render guest (no active match / no active bridge).
+  const anyGuest = targets.find((t) => t.url?.includes(RENDER_GUEST_PATTERN))
+  if (anyGuest) return anyGuest
+
+  // 3) Degrade to the localhost:7788 shell when no render guest exists yet.
+  return targets.find((t) => t.url?.includes(SIMULATOR_URL_PATTERN))
 }
 
 export function getTargetState(kind: TargetKind): TargetState {
@@ -71,7 +135,7 @@ export { listCdpTargets as listTargets }
 
 function findTarget(allTargets: Awaited<ReturnType<typeof CDP.List>>, kind: TargetKind) {
   if (kind === 'simulator') {
-    return allTargets.find((t) => t.url?.includes(SIMULATOR_URL_PATTERN))
+    return selectSimulatorTarget(allTargets, { nativeHost: nativeHostMode, activeBridgeId })
   }
   // workbench main window: page target whose URL contains index.html (renderer)
   return allTargets.find(
