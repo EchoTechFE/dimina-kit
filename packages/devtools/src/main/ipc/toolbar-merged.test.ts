@@ -131,7 +131,16 @@ vi.mock('fs', async () => {
 })
 
 type WorkbenchContext = import('../services/workbench-context.js').WorkbenchContext
-type ToolbarActionInput = { id: string; label: string; handler: () => void | Promise<void> }
+type ToolbarActionInput = {
+  id: string
+  label: string
+  kind?: 'button' | 'avatar'
+  placement?: 'leading' | 'primary' | 'trailing'
+  icon?: string
+  displayInitial?: string
+  avatarUrl?: string
+  handler: () => void | Promise<void>
+}
 
 let createWorkbenchContext: typeof import('../services/workbench-context.js').createWorkbenchContext
 let registerToolbarIpc: typeof import('./toolbar.js').registerToolbarIpc
@@ -251,6 +260,39 @@ describe('Requirement C: GetActions returns {id,label} (no handler leak)', () =>
     expect(await getActions(fakeEvent)).toEqual([
       { id: 'login', label: '登录' },
       { id: 'sync', label: '同步' },
+    ])
+
+    await (disposable as { dispose: () => Promise<void> }).dispose()
+  })
+
+  it('GetActions surfaces optional serializable display metadata', async () => {
+    const ctx = makeContext()
+    setToolbar(ctx, [
+      {
+        id: 'account',
+        label: '当前用户：Ada',
+        kind: 'avatar',
+        placement: 'leading',
+        icon: 'A',
+        displayInitial: 'Ada',
+        avatarUrl: 'https://example.com/avatar.png',
+        handler: vi.fn(),
+      },
+    ])
+
+    const disposable = registerToolbarIpc(ctx as never)
+    const getActions = stubs.ipcHandlers.get(ToolbarChannel.GetActions)!
+
+    expect(await getActions(fakeEvent)).toEqual([
+      {
+        id: 'account',
+        label: '当前用户：Ada',
+        kind: 'avatar',
+        placement: 'leading',
+        icon: 'A',
+        displayInitial: 'Ada',
+        avatarUrl: 'https://example.com/avatar.png',
+      },
     ])
 
     await (disposable as { dispose: () => Promise<void> }).dispose()

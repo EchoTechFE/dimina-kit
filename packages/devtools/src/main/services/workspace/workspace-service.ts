@@ -156,13 +156,6 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
         : null,
 
     async openProject(projectPath) {
-      clearSimulatorServicewechatReferer()
-      await disposeSession()
-      currentProjectPath = ''
-      // A fresh open starts a clean sandbox window — drop any previously
-      // recorded last-closed root so it can't accept writes after this point.
-      lastClosedProjectPath = ''
-
       // Reject obviously broken projects up front so we never spin up a
       // compile/server that the simulator will then fetch asset-by-asset.
       // Without this guard, deleted recent-list entries and typo'd CLI paths
@@ -177,6 +170,20 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
         sendStatus('error', dirError)
         return { success: false, error: dirError }
       }
+
+      const gate = ctx.beforeOpenProject ? await ctx.beforeOpenProject(projectPath) : undefined
+      if (gate && !gate.allow) {
+        const message = gate.userMessage ?? gate.reason
+        sendStatus('error', message)
+        return { success: false, error: message }
+      }
+
+      clearSimulatorServicewechatReferer()
+      await disposeSession()
+      currentProjectPath = ''
+      // A fresh open starts a clean sandbox window — drop any previously
+      // recorded last-closed root so it can't accept writes after this point.
+      lastClosedProjectPath = ''
 
       sendStatus('compiling', '正在编译...')
 
@@ -203,7 +210,7 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
       bestEffort('updateLastOpened', () => {
         if (provider.updateLastOpened) provider.updateLastOpened(projectPath)
       })
-      bestEffort('sendStatus', () => sendStatus('ready', '编译完成'))
+      bestEffort('sendStatus', () => sendStatus('ready', gate?.statusMessage ?? '编译完成'))
       bestEffort('applyReferer', () => applyRefererFromSession(session))
 
       return {

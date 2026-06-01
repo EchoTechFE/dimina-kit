@@ -26,7 +26,10 @@ import type {
   ProjectsProvider,
   ProjectTemplate,
 } from './projects/types.js'
-import type { CustomCreateProjectDialogResult } from '../../shared/types.js'
+import type {
+  BeforeOpenProjectResult,
+  CustomCreateProjectDialogResult,
+} from '../../shared/types.js'
 
 /**
  * Shared mutable state for the workbench application.
@@ -92,6 +95,14 @@ export interface WorkbenchContext {
     parentWindow: BrowserWindow
     templates: ProjectTemplate[]
   }) => Promise<CustomCreateProjectDialogResult>
+
+  /**
+   * Optional host gate for opening projects. Runs after basic directory
+   * validation and before the current project session is closed.
+   */
+  beforeOpenProject?: (
+    projectPath: string,
+  ) => BeforeOpenProjectResult | Promise<BeforeOpenProjectResult>
 
   /**
    * Trust predicate consulted by `IpcRegistry` for every incoming IPC.

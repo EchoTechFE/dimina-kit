@@ -43,11 +43,16 @@ export type {
 
 // ── Types (re-export for convenience) ────────────────────────────────────
 export type {
+  BeforeOpenProjectHook,
+  BeforeOpenProjectResult,
   WorkbenchConfig,
   WorkbenchAppConfig,
   CompilationAdapter,
   ProjectSession,
   ToolbarAction,
+  ToolbarActionInput,
+  ToolbarActionKind,
+  ToolbarActionPlacement,
   BuiltinPanelId,
   BuiltinModuleId,
   UpdateChecker,
