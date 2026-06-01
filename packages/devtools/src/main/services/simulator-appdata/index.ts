@@ -30,6 +30,8 @@ export interface AppDataTap {
   evictBridge(appId: string, bridgeId: string): void
   /** The ACTIVE app's current reactive page state for a bridge (`{}` when none). */
   getPageData(bridgeId: string): Record<string, unknown>
+  /** Snapshot all accumulated appdata for an app. Optional for compatibility with tests/mocks. */
+  snapshot?: (appId: string) => unknown
 }
 
 export interface SimulatorAppDataService extends AppDataTap, Disposable {}
@@ -106,6 +108,7 @@ export function setupSimulatorAppData(
     onServiceToRender,
     evictBridge,
     getPageData,
+    snapshot: (appId) => accumulatorFor(appId).snapshot(),
     dispose: () => registry.dispose(),
   }
 }

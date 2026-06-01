@@ -91,20 +91,40 @@ appHandlers['App.callWxMethod'] = async (ctx, params) => {
   const method = params.method as string
   const args = (params.args as unknown[]) || []
 
-  // NATIVE-HOST: nav isn't a DOM click — DeviceShell drives the page stack and
-  // the authoritative wx.* runs in the hidden service window. Run the real call
-  // there so navigation goes through the same path the running mini-app uses.
-  if (ctx.bridge?.isNativeHost() && (NAV_METHODS.has(method) || method === 'navigateBack')) {
+  // NATIVE-HOST: the authoritative `wx.*` runs in the hidden service-host
+  // window (the simulator / render-guest context has no `wx`). Run EVERY method
+  // there — nav so the page stack goes through the real runtime path, and
+  // non-nav (setNavigationBarTitle / getSystemInfoSync / tabBar APIs / …) so
+  // they don't fall through to the default-arch eval-in-simulator path below,
+  // which throws "wx is not defined" under native-host.
+  if (ctx.bridge?.isNativeHost()) {
     const serviceWc = ctx.bridge.getServiceWc()
     if (!serviceWc) throw new Error('Service host not connected')
-    const arg = method === 'navigateBack'
-      ? (args[0] ?? { delta: 1 })
-      : (args[0] ?? {})
-    await serviceWc.executeJavaScript(`wx.${method}(${JSON.stringify(arg)})`)
-    // Give the service-driven navigation time to mount the new page (mirrors the
-    // default-arch waits below).
-    await new Promise((r) => setTimeout(r, method === 'navigateBack' ? 1500 : 2000))
-    return { result: undefined }
+    if (NAV_METHODS.has(method) || method === 'navigateBack') {
+      const arg = method === 'navigateBack'
+        ? (args[0] ?? { delta: 1 })
+        : (args[0] ?? {})
+      await serviceWc.executeJavaScript(`wx.${method}(${JSON.stringify(arg)})`)
+      // Give the service-driven navigation time to mount the new page.
+      await new Promise((r) => setTimeout(r, method === 'navigateBack' ? 1500 : 2000))
+      return { result: undefined }
+    }
+    // Non-nav: invoke on the service-host wx and return its (sync) value. Async
+    // methods that report via a success callback return undefined here, same as
+    // the default-arch generic path below.
+    const argsStr = args.map((a) => JSON.stringify(a)).join(', ')
+    const result = await serviceWc.executeJavaScript(`
+      new Promise((resolve, reject) => {
+        try {
+          if (typeof wx === 'undefined' || typeof wx[${JSON.stringify(method)}] !== 'function') {
+            reject(new Error('wx.' + ${JSON.stringify(method)} + ' is not a function in service host'))
+            return
+          }
+          resolve(wx.${method}(${argsStr}))
+        } catch (e) { reject(e && e.message ? e.message : String(e)) }
+      })
+    `)
+    return { result }
   }
 
   // For navigation methods, handle specially via DOM click / wx.* on the iframe

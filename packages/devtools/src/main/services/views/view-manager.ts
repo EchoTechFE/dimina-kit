@@ -6,6 +6,7 @@ import {
   applyNavigationHardening,
   handleWindowOpenExternal,
 } from '../../windows/navigation-hardening.js'
+import type { RenderEvent } from '../../ipc/bridge-router.js'
 import * as layout from '../layout/index.js'
 import { getDefaultTab, type WorkbenchContext } from '../workbench-context.js'
 
@@ -25,6 +26,7 @@ export interface ViewManagerContext {
   preloadPath?: string
   panels: string[]
   notify: WorkbenchContext['notify']
+  bridge?: WorkbenchContext['bridge']
   /**
    * Header bar height in px, used to position overlay views below the header.
    * Optional here so partial test contexts compile; `createWorkbenchContext`
@@ -170,6 +172,11 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   let popoverView: WebContentsView | null = null
   let lastSimWidth = 375
   let simulatorWebContentsId: number | null = null
+  let nativeDevtoolsSourceWc: WebContents | null = null
+  let nativeDevtoolsSourceBridgeId: string | null = null
+  let unsubscribeNativeRenderEvents: (() => void) | null = null
+  let nativeDevtoolsRetryTimer: ReturnType<typeof setTimeout> | null = null
+  let nativeDevtoolsRetryToken = 0
 
   // Renderer-driven overlay bounds for the simulator DevTools view. When
   // non-null this takes precedence over the legacy layout computed from the
@@ -253,6 +260,120 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     popoverView.setBounds(layout.computePopoverBounds(w, h, headerHeight))
   }
 
+  function clearNativeDevtoolsRetry(): void {
+    nativeDevtoolsRetryToken++
+    if (nativeDevtoolsRetryTimer) {
+      clearTimeout(nativeDevtoolsRetryTimer)
+      nativeDevtoolsRetryTimer = null
+    }
+  }
+
+  function closeNativeDevtoolsSource(): void {
+    const source = nativeDevtoolsSourceWc
+    nativeDevtoolsSourceWc = null
+    nativeDevtoolsSourceBridgeId = null
+    if (!source || source.isDestroyed()) return
+    try {
+      if (source.isDevToolsOpened()) {
+        source.closeDevTools()
+      }
+    } catch { /* source may be mid-destroy */ }
+  }
+
+  function stopFollowingNativeRenderGuest(): void {
+    clearNativeDevtoolsRetry()
+    if (unsubscribeNativeRenderEvents) {
+      try {
+        unsubscribeNativeRenderEvents()
+      } catch { /* ignore */ }
+      unsubscribeNativeRenderEvents = null
+    }
+    closeNativeDevtoolsSource()
+  }
+
+  function pointNativeDevtoolsAtRenderGuest(
+    bridgeId: string | null,
+    next: WebContents,
+  ): boolean {
+    if (!simulatorView || simulatorView.webContents.isDestroyed()) return true
+    if (nativeDevtoolsSourceWc?.id === next.id && !nativeDevtoolsSourceWc.isDestroyed()) {
+      nativeDevtoolsSourceBridgeId = bridgeId
+      return true
+    }
+    closeNativeDevtoolsSource()
+    nativeDevtoolsSourceWc = next
+    nativeDevtoolsSourceBridgeId = bridgeId
+
+    try {
+      next.setDevToolsWebContents(simulatorView.webContents)
+      next.openDevTools({ mode: 'detach' })
+      return true
+    } catch {
+      if (nativeDevtoolsSourceWc?.id === next.id) {
+        nativeDevtoolsSourceWc = null
+        nativeDevtoolsSourceBridgeId = null
+      }
+      return false
+    }
+  }
+
+  function resolveNativeDevtoolsTarget(appId?: string, bridgeId?: string): {
+    activeBridgeId: string | null
+    wc: WebContents | null
+  } {
+    const bridge = ctx.bridge
+    if (!bridge?.isNativeHost()) return { activeBridgeId: null, wc: null }
+    const activeBridgeId = bridge.getActiveBridgeId(appId)
+    const targetBridgeId = bridgeId ?? activeBridgeId
+    if (bridgeId && bridgeId !== activeBridgeId) {
+      return { activeBridgeId, wc: null }
+    }
+    const exact = targetBridgeId ? bridge.resolveRenderWc(targetBridgeId) : null
+    if (exact && !exact.isDestroyed()) return { activeBridgeId: targetBridgeId, wc: exact }
+    const active = bridge.getActiveRenderWc(appId)
+    return {
+      activeBridgeId,
+      wc: active && !active.isDestroyed() ? active : null,
+    }
+  }
+
+  function pointNativeDevtoolsAtActiveRenderGuest(appId?: string, bridgeId?: string): boolean {
+    if (!ctx.bridge?.isNativeHost()) return true
+    if (!simulatorView || simulatorView.webContents.isDestroyed()) return true
+
+    const { activeBridgeId, wc } = resolveNativeDevtoolsTarget(appId, bridgeId)
+    if (activeBridgeId && nativeDevtoolsSourceBridgeId && nativeDevtoolsSourceBridgeId !== activeBridgeId) {
+      closeNativeDevtoolsSource()
+    }
+    if (!wc || wc.isDestroyed()) return false
+    return pointNativeDevtoolsAtRenderGuest(activeBridgeId, wc)
+  }
+
+  function scheduleNativeDevtoolsFollow(appId?: string, bridgeId?: string, attempt = 0): void {
+    if (attempt >= 20) return
+    if (!ctx.bridge?.isNativeHost()) return
+    const token = nativeDevtoolsRetryToken
+    if (nativeDevtoolsRetryTimer) clearTimeout(nativeDevtoolsRetryTimer)
+    nativeDevtoolsRetryTimer = setTimeout(() => {
+      nativeDevtoolsRetryTimer = null
+      if (token !== nativeDevtoolsRetryToken) return
+      if (pointNativeDevtoolsAtActiveRenderGuest(appId, bridgeId)) return
+      scheduleNativeDevtoolsFollow(appId, bridgeId, attempt + 1)
+    }, 50)
+  }
+
+  function followNativeDevtoolsRenderGuest(appId?: string, bridgeId?: string): void {
+    clearNativeDevtoolsRetry()
+    if (pointNativeDevtoolsAtActiveRenderGuest(appId, bridgeId)) return
+    scheduleNativeDevtoolsFollow(appId, bridgeId)
+  }
+
+  function onNativeRenderEvent(event: RenderEvent): void {
+    if (event.kind !== 'activePage' && event.kind !== 'domReady') return
+    if (event.kind === 'domReady' && ctx.bridge?.getActiveBridgeId(event.appId) !== event.bridgeId) return
+    followNativeDevtoolsRenderGuest(event.appId, event.bridgeId)
+  }
+
   // ── ViewManager methods ─────────────────────────────────────────────────
 
   function attachSimulator(simWcId: number, simWidth: number): void {
@@ -324,6 +445,75 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
         simulatorViewAdded = true
         applySimulatorBounds(simWidth)
       }
+    }
+  }
+
+  function attachNativeSimulatorDevtoolsHost(simWidth: number): void {
+    stopFollowingNativeRenderGuest()
+
+    // Destroy old simulatorView to prevent WebContentsView leak
+    if (simulatorView) {
+      hideSimulator()
+      try {
+        if (!simulatorView.webContents.isDestroyed()) {
+          simulatorView.webContents.close()
+        }
+      } catch { /* ignore */ }
+      simulatorView = null
+    }
+
+    simulatorView = new WebContentsView()
+
+    // Default DevTools to Console panel (Chrome DevTools defaults to Elements).
+    // The DevTools UI lives inside closed shadow roots, so a light-DOM
+    // querySelector('[role="tab"]') cannot reach the tab bar to click it.
+    // Instead drive the front-end's own view manager: the bundled DevTools
+    // exposes `UI.ViewManager.instance().showView(id)` on `globalThis.UI`
+    // once the front-end has finished bootstrapping. We poll for it and
+    // request the `console` view, and also persist the choice via the
+    // `panel-selectedTab` localStorage key so subsequent reloads honor it.
+    const devtoolsWc = simulatorView.webContents
+    devtoolsWc.once('dom-ready', () => {
+      devtoolsWc.executeJavaScript(`
+        (function() {
+          try { localStorage.setItem('panel-selectedTab', '"console"') } catch {}
+          let tries = 0
+          const timer = setInterval(() => {
+            tries++
+            try {
+              const UI = globalThis.UI
+              const vm = UI && UI.ViewManager && typeof UI.ViewManager.instance === 'function'
+                ? UI.ViewManager.instance()
+                : null
+              if (vm && typeof vm.showView === 'function') {
+                vm.showView('console')
+                clearInterval(timer)
+                return
+              }
+            } catch {}
+            if (tries > 80) clearInterval(timer)
+          }, 50)
+        })()
+      `).catch(() => {})
+    })
+
+    if (getDefaultTab(ctx) === 'simulator') {
+      if (simulatorBoundsOverride) {
+        if (!isHidden(simulatorBoundsOverride)) {
+          ctx.windows.mainWindow.contentView.addChildView(simulatorView)
+          simulatorViewAdded = true
+          simulatorView.setBounds(simulatorBoundsOverride)
+        }
+      } else {
+        ctx.windows.mainWindow.contentView.addChildView(simulatorView)
+        simulatorViewAdded = true
+        applySimulatorBounds(simWidth)
+      }
+    }
+
+    if (ctx.bridge?.isNativeHost()) {
+      unsubscribeNativeRenderEvents = ctx.bridge.onRenderEvent(onNativeRenderEvent)
+      followNativeDevtoolsRenderGuest()
     }
   }
 
@@ -408,6 +598,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
           e.preventDefault()
         }
       })
+      followNativeDevtoolsRenderGuest()
     })
 
     // The simulator loads http://localhost:<port>/simulator.html. Harden popups
@@ -447,13 +638,14 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       applyNativeSimulatorBounds(simWidth)
     }
 
-    // Wire the DevTools/console panel on top of the simulator wc (same path the
-    // default `<webview>` uses). `attachSimulator` re-records simulatorWebContentsId
-    // to the same id and builds the DevTools host view in the right panel region.
-    attachSimulator(simWc.id, simWidth)
+    // Native-host page code runs in the nested render-host guest, not this
+    // DeviceShell host. Keep the right-panel DevTools host view stable, but
+    // inspect whichever render-host guest the bridge reports as visible.
+    attachNativeSimulatorDevtoolsHost(simWidth)
   }
 
   function detachSimulator(): void {
+    stopFollowingNativeRenderGuest()
     // Native-host simulator content view (no-op in the default path).
     if (nativeSimulatorView) {
       if (nativeSimulatorViewAdded && !ctx.windows.mainWindow.isDestroyed()) {

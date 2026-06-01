@@ -37,6 +37,16 @@ export interface NetworkRequestEntry {
   timing: { requestTime: number; receiveHeadersEnd: number } | null
 }
 
+export interface NativeOverview {
+  currentRoute: string | null
+  pageStackDepth: number
+  storageKeys: string[]
+  storageCount: number
+  appDataKeys: string[]
+}
+
+export type NativeOverviewProvider = () => Promise<NativeOverview>
+
 interface TargetState {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   client: any
@@ -56,6 +66,7 @@ let nativeHostMode = false
 // `selectSimulatorTarget` prefers the guest matching this id so MCP follows
 // the active page across navigation/tab switches.
 let activeBridgeId: string | null = null
+let nativeOverviewProvider: NativeOverviewProvider | null = null
 
 const targets: Record<TargetKind, TargetState> = {
   simulator: { client: null, connected: false, timer: null, consoleLogs: [], networkRequests: [] },
@@ -82,6 +93,14 @@ export function setActiveBridgeId(id: string | null): void {
   if (nativeHostMode && targets.simulator.connected) {
     void connectTarget('simulator')
   }
+}
+
+export function setNativeOverviewProvider(provider: NativeOverviewProvider | null): void {
+  nativeOverviewProvider = provider
+}
+
+export function getNativeOverviewProvider(): NativeOverviewProvider | null {
+  return nativeOverviewProvider
 }
 
 /**

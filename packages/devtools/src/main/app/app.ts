@@ -23,7 +23,12 @@ import {
 } from '../ipc/index.js'
 import type { WorkbenchModule } from '../services/module.js'
 import { startAutomationServer, type AutomationServer } from '../services/automation/index.js'
-import { startMcpServer, setNativeHost, setActiveBridgeId } from '../services/mcp/index.js'
+import {
+  startMcpServer,
+  setNativeHost,
+  setActiveBridgeId,
+  setNativeOverviewProvider,
+} from '../services/mcp/index.js'
 import { setupSimulatorStorage } from '../services/simulator-storage/index.js'
 import { setupSimulatorWxml } from '../services/simulator-wxml/index.js'
 import { setupSimulatorAppData } from '../services/simulator-appdata/index.js'
@@ -405,17 +410,7 @@ export function createWorkbenchApp(config: WorkbenchAppConfig = {}) {
       await setupAutomation(instance)
       const mcp = setupMcp()
       if (mcp) context.registry.add(mcp)
-      // Native-host: the real mini-app page runs in a nested render-host
-      // <webview> guest, not the localhost:7788 shell. Point the MCP
-      // `simulator` CDP target at the active render guest and keep it following
-      // the visible page across navigation/tab switches. Only wired under
-      // native-host so the default path stays byte-identical.
-      if (context.bridge?.isNativeHost()) {
-        setNativeHost(true)
-        const off = context.bridge.onRenderEvent((ev) => setActiveBridgeId(ev.bridgeId))
-        context.registry.add(off)
-        context.registry.add(() => setNativeHost(false))
-      }
+
       // Resolve the active project's appId. Shared by the storage panel filter
       // and the native-host WXML/element-inspect services (which scope the
       // active render guest by appId).
@@ -423,6 +418,60 @@ export function createWorkbenchApp(config: WorkbenchAppConfig = {}) {
         const session = context.workspace.getSession()
         const appInfo = session?.appInfo as { appId?: string } | undefined
         return appInfo?.appId ?? null
+      }
+
+      // Native-host: the real mini-app page runs in a nested render-host
+      // <webview> guest, not the localhost:7788 shell. Point the MCP
+      // `simulator` CDP target at the active render guest and keep it following
+      // the visible page across navigation/tab switches. Only wired under
+      // native-host so the default path stays byte-identical.
+      if (context.bridge?.isNativeHost()) {
+        setNativeHost(true)
+        setNativeOverviewProvider(async () => {
+          const appId = getActiveAppId()
+          const stack = context.bridge?.getPageStack?.(appId ?? undefined) ?? []
+          const top = stack[stack.length - 1]
+          const overview = {
+            currentRoute: top?.pagePath ?? null,
+            pageStackDepth: stack.length,
+            storageKeys: [] as string[],
+            storageCount: 0,
+            appDataKeys: [] as string[],
+          }
+
+          if (appId) {
+            try {
+              const info = await context.storageApi?.invoke(appId, 'getStorageInfo', {})
+              if (info && typeof info === 'object') {
+                const keys = (info as { keys?: unknown }).keys
+                if (Array.isArray(keys)) {
+                  overview.storageKeys = keys.filter((key): key is string => typeof key === 'string')
+                  overview.storageCount = keys.length
+                }
+              }
+            } catch {
+              // Leave native storage empty when it is temporarily unavailable.
+            }
+
+            try {
+              const snapshot = context.appData?.snapshot?.(appId)
+              if (snapshot && typeof snapshot === 'object') {
+                const entries = (snapshot as { entries?: unknown }).entries
+                if (entries && typeof entries === 'object') {
+                  overview.appDataKeys = Object.keys(entries)
+                }
+              }
+            } catch {
+              // Leave native appdata empty when it has not been initialized yet.
+            }
+          }
+
+          return overview
+        })
+        const off = context.bridge.onRenderEvent((ev) => setActiveBridgeId(ev.bridgeId))
+        context.registry.add(off)
+        context.registry.add(() => setNativeHost(false))
+        context.registry.add(() => setNativeOverviewProvider(null))
       }
 
       // Native-host inspector: injects the render-guest IIFE and drives WXML /
