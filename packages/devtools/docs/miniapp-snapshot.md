@@ -1,8 +1,6 @@
 # miniappSnapshot 架构设计
 
 > devtools 面板数据的统一**快照**框架。
-> 状态：**已落地（2026-05-20）** —— 框架、WXML 与 AppData 迁移、`workbench:reset` 死代码清理均已完成；
-> 自动化访问器 `__miniappSnapshot` 已实现。时间旅行、快照 diff、MCP 工具等见 §8，为后续可选扩展。
 >
 > 配套：[`workbench-model.md`](./workbench-model.md) 描述 host 的扩展模型（`workbench(config)` 单入口）；本文描述面板数据的统一快照框架。
 
@@ -14,22 +12,11 @@
 
 数据源每次只向 renderer 推送**全量、不可变的快照**，renderer 端永远只做「整份替换」，不做任何增量拼接。由此，reload / crash / relaunch 后的重同步成为框架的**结构保证**，新增面板只需实现一个数据源接口即可白送 push / pull / 自动化读取 / 重同步。
 
-下文按「问题 → 现状为何失败 → 思路 → 设计 → 用法 → 还能解决什么 → 如何迁移」展开。
-
 ---
 
-## 1. 背景：一类反复复发的 bug
+## 1. 背景：单一真相源不变式
 
-devtools 的右侧面板要把 simulator `<webview>` 里运行的小程序状态，实时映射给开发者。目前每个面板各写一套同步机制，结果反复踩同一类 bug：
-
-| 面板 | 现象 |
-|---|---|
-| **AppData** | 每次重新编译，多出一个重复的 page tab |
-| **WXML** | 重新编译后仍显示上一页的旧树，`sid` 失效 |
-
-这些看似无关的 bug，根因是同一个：**状态失步**。
-
-下图展示失步是怎么发生的——注意 reload 清空了真相源，但没有任何人去通知 renderer 的镜像：
+devtools 的右侧面板要把 simulator `<webview>` 里运行的小程序状态，实时映射给开发者。这里的真相源（preload 内存 cache）每次 webview reload 都会被新的 JS 上下文清空，而 renderer 的 React state 不随之重建——若 renderer 靠**增量事件**自己拼状态，两者必然漂移。
 
 ```mermaid
 flowchart LR
@@ -43,9 +30,7 @@ flowchart LR
   CACHE -. "reload 后清空，<br/>但镜像没人通知" .-x MIRROR
 ```
 
-**真相源**（preload 内存 cache）每次 webview reload 都会被新的 JS 上下文清空；而 renderer 的 React **镜像**不随之重建，且它是靠**增量事件**一点点拼出来的——两者必然漂移。
-
-更糟的是：每加一个面板，就要重新实现一遍 push / pull / reload 重同步逻辑，漏掉任何一处，bug 就复发。`miniappSnapshot` 的目标，就是用一套通用机制根治这一整类问题。
+`miniappSnapshot` 用一条不变式消除这类漂移：**preload 持有全部状态并整份推送，renderer 只做投影、零增量拼接。** push / pull / reload 重同步由框架统一提供，新增面板复用同一套机制，不再各写一遍。
 
 ## 2. 设计目标与非目标
 
@@ -73,7 +58,7 @@ flowchart LR
 
 | 概念 | 角色 |
 |---|---|
-| `Snapshot<T>` | 某面板在某一刻的**全量、不可变**状态 |
+| 快照（snapshot） | 某面板在某一刻的**全量、不可变**状态；不是单独的导出类型，而是各 source 自定义的 `T`，经 `SnapshotEnvelope<T>.data` 传输 |
 | `SnapshotEnvelope<T>` | **信封**：快照 + 元数据（`id` / `seq` / `ts`）的传输单元 |
 | `MiniappSnapshotSource<T>` | **数据源**：preload 侧观测运行时、产出快照 |
 | `MiniappSnapshotHost` | **中枢**：preload 侧管理所有数据源的生命周期与收发 |
@@ -119,7 +104,7 @@ flowchart TB
     OBS2["MutationObserver"] --> SRC2["WxmlSource"]
     SRC1 --> HOST["MiniappSnapshotHost"]
     SRC2 --> HOST
-    HOST --> AUTO["window.__simulatorData<br/>.getMiniappSnapshot(id)"]
+    HOST --> AUTO["window.__miniappSnapshot<br/>.get(id) / .ids()"]
   end
 
   subgraph TRANSPORT["传输层（2 个通用通道）"]
@@ -129,7 +114,7 @@ flowchart TB
 
   subgraph RD["main-window renderer（不随 reload 重建）"]
     direction TB
-    IPC["&lt;webview&gt; ipc-message"] --> HOOK["useMiniappSnapshot(id)"]
+    IPC["&lt;webview&gt; ipc-message"] --> HOOK["useMiniappSnapshot({ id, initial,<br/>simulatorRef, enabled })"]
     HOOK --> P1["AppDataPanel"]
     HOOK --> P2["WxmlPanel"]
   end
@@ -144,6 +129,8 @@ flowchart TB
 - **数据源**：preload 内每个 source 把观测器（Worker 插桩、MutationObserver）封在内部，对外只暴露 `snapshot()`。
 - **中枢**：`Host` 负责全部横切逻辑——启动数据源、接收 `pull`、发出 `push`、暴露自动化访问器、释放资源。
 - **renderer**：只有一个通用 hook，按 `id` 把信封投影成 state。
+
+> **native-host 例外**：上图描述的是默认 simulator-preload 路径。开启 native-host 时，页面 DOM 与 service 逻辑跑在独立 webContents 里，simulator preload 会跳过 `WxmlSource` 注册（仅注册 `AppDataSource`）；renderer 改从主进程通道 `SimulatorWxmlChannel` / `SimulatorAppDataChannel` 取 WXML 与 AppData，不走本框架的 push/pull 传输。
 
 ## 5. 调用链路（时序图）
 
@@ -174,7 +161,7 @@ sequenceDiagram
     RD->>RD: setData(空) —— 初始即正确
   end
   Host->>Host: 注册 onHostMessage(pull)
-  Host->>Host: 暴露 __simulatorData.getMiniappSnapshot
+  Host->>Host: 暴露 window.__miniappSnapshot（get / ids）
   Note over WV,RD: 小程序随后启动 → 见 5.2
 ```
 
@@ -227,9 +214,9 @@ sequenceDiagram
 
 push 与 pull 走同一条 `publish` 路径，因此不存在「两套快照逻辑」。
 
-### 5.4 重新编译 / reload 重同步（核心）
+### 5.4 重新编译 / reload 重同步
 
-这是框架要根治的核心场景。下图展示 webview reload 后状态如何自动重同步——注意 renderer 的 `<webview>` 元素本身没变，监听一直在，所以**必然收到新的空快照**：
+webview reload 后，preload 上下文与旧 cache 一并销毁，新上下文重新执行 `install()`。renderer 的 `<webview>` 元素本身没变、`ipc-message` 监听一直在，所以**必然收到新的空快照**，旧面板状态被整份替换清掉：
 
 ```mermaid
 sequenceDiagram
@@ -279,16 +266,20 @@ stateDiagram-v2
 
 协议要点：
 
-- 全部 source 共用这两条通道，新增面板**不需要新频道**。
-- 替代并删除以下旧通道：`simulator:appdata`、`simulator:appdata-all`、`simulator:wxml`、`appdata:getAll:request`、`wxml:refresh:request`。
-- `seq` **全局单调**：renderer 据此丢弃过期信封；多面板可按 `seq` 对齐到同一时刻。
+- 一条共享 push + 一条共享 pull 服务所有面板；没有 per-panel 通道，新增面板**不需要新频道**。
+- `seq` **全局单调**：每个信封只承载一个 source（`publish(source)` 一次发一份），`seq` 仅提供全局排序 / 丢弃过期信封的语义，不保证多面板「同一时刻」的原子切面。
 
 ## 7. renderer 投影模型
 
-renderer 侧只有一个通用 hook，它把信封流投影成 React state：
+renderer 侧只有一个通用 hook，它把信封流投影成 React state。参数以单个对象传入：
 
 ```ts
-function useMiniappSnapshot<T>(id: SnapshotSourceId, initial: T): {
+function useMiniappSnapshot<T>(params: {
+  id: SnapshotSourceId
+  initial: T
+  simulatorRef: RefObject<HTMLElement | null>
+  enabled: boolean
+}): {
   data: T
   seq: number
   refresh: () => void
@@ -297,60 +288,35 @@ function useMiniappSnapshot<T>(id: SnapshotSourceId, initial: T): {
 
 行为约定：
 
-- 对 `<webview>` 只挂一次 `ipc-message` 监听，**不依赖 `compileStatus.status`**（顺带消除了「监听器在状态翻转时被拆掉」的竞态）。
-- `data` 永远是「最后一份快照」，没有任何增量 reducer。
-- 面板里的 **UI 态**（如 AppData 当前选中的 tab `activeBridgeId`）留在 renderer，作为对 `data` 的**单点派生**：`userSelected ?? data.currentBridgeId`。
-
-以 `AppData` 为例，改造前后对比：
-
-| | 改造前 | 改造后 |
-|---|---|---|
-| 通道 | `appdata` 增量 + `appdata-all` 全量 | `miniapp-snapshot:push` 全量 |
-| renderer reducer | 2 个（增量 append / 全量 replace） | 0 个（纯 `setData`） |
-| `activeBridgeId` | 3 处各算一遍、可能不一致 | 1 处派生 |
-| reload 重同步 | install 末尾手写一行 | 框架 `install()` 固有 |
+- 对 `<webview>` 只挂一次 `ipc-message` 监听；`enabled` 为 false 时不挂监听（首次以 `useState(initial)` 初始化），但不会把已收到的 `data` 重置回 `initial`。
+- `data` 永远是「最后一份快照」，没有任何增量 reducer；据全局 `seq` 丢弃过期 / 乱序信封。
+- 面板里的 **UI 态**（如 AppData 当前选中的 tab `activeBridgeId`）留在 renderer，作为对 `data` 的**单点派生**：由 `data.bridges` 推出 id 列表后，`activeBridgeId = selectedBridgeId && bridgeIds.includes(selectedBridgeId) ? selectedBridgeId : bridgeIds.at(-1) ?? null`（用户手选优先，否则跟随最新 page）。
 
 ## 8. 这套框架还能解决什么
 
 把「面板数据」统一成**不可变全量快照流**之后，下面这些能力，数据层要么免费、要么近免费：
 
-| 能力 | 说明 | 成本 |
-|---|---|---|
-| **消灭整类失步 bug** | reload 漂移、`activeBridgeId` 不一致、`entries` 泄漏/乱序复活——结构上不再可能 | 免费 |
-| **时间旅行调试** | 每次 push 都是不可变快照，留一个环形缓冲即可前后回放 AppData/WXML 历史状态 | 数据层免费，需时间线 UI |
-| **录制 / 导出复现** | 快照流可序列化落盘，作为可复现的 bug 报告，脱离原小程序回放 | 数据层免费，需导入导出 |
-| **快照 diff** | 相邻两份快照对比，直接高亮「这次 setData 改了哪些 key」「WXML 增删了哪些节点」 | 数据层免费，需 diff + 高亮 UI |
-| **统一自动化 / MCP** | `getMiniappSnapshot(id)` 一个 API 覆盖所有面板；包一层即成 MCP tool，供 AI 调试读取小程序状态 | 近免费 |
-| **跨面板时间一致性** | 全局 `seq` 让「AppData@seq=5 与 WXML@seq=6」可对齐，不再各显示不同时刻 | 免费 |
-| **面板可单测** | renderer 面板变成 `snapshot → UI` 的纯函数，喂 fixture 即可测，无需真机 | 免费 |
-| **下游 host 扩展点** | `host.register()` 即扩展点，下游可注册自定义快照源/面板，契合本项目「面向下游可扩展」方向 | 免费 |
-| **性能信号** | Host 看得见每个 push 的频率与体积，可白送一个「setData 频率/体积」观测 | 近免费，需小面板 |
-| **统一恢复路径** | recompile / crash / relaunch / 切项目 全部走同一条 `install()→publish` 恢复链 | 免费 |
-| **远程 / headless 检查** | 快照可序列化，传输层可换成 WebSocket，面板 UI 与 Electron `<webview>` 解耦 | 需额外传输实现 |
+| 能力 | 说明 |
+|---|---|
+| **消灭整类失步 bug** | reload 漂移、`activeBridgeId` 不一致、`entries` 泄漏/乱序复活——结构上不再可能 |
+| **统一自动化 / MCP** | `window.__miniappSnapshot.get(id)` 一个同步 API 覆盖所有面板，供主进程 / e2e / MCP 经 `executeJavaScript` 读取 |
+| **全局排序 / 丢弃过期** | 全局 `seq` 给每份信封一个单调序号，renderer 据此丢弃迟到 / 乱序信封；它提供的是排序语义，不是多面板同一时刻的原子切面 |
+| **面板可单测** | renderer 面板变成 `snapshot → UI` 的纯函数，喂 fixture 即可测，无需真机 |
+| **统一恢复路径** | recompile / crash / relaunch / 切项目 全部走同一条 `install()→publish` 恢复链 |
+| **下游 host 扩展点** | `host.register()` 即扩展点，下游可注册自定义快照源/面板 |
 
-**核心价值**：它不是「修一个 bug」，而是把这一整**类**问题在结构上变成不可能，并顺势把面板数据变成可回放、可 diff、可被 AI 读取的统一资产。
+**核心价值**：它不是「修一个 bug」，而是把这一整**类**问题在结构上变成不可能，并把面板数据统一成可被自动化读取的资产。
 
 ## 9. 取舍与风险
 
 任何设计都有代价，这里把权衡讲清楚：
 
-- **全量传输开销**：AppData / WXML 快照体量都不大，且现状本就每次事件都重建快照。devtools 非热路径，可接受。未来若需要，框架内部可透明改为 diff 传输，consumer 无感。
-- **不适用流式数据**：Console 日志是 append-only 流，应另立 `MiniappLogStream` 兄弟抽象，不塞进本框架。
-- **Storage 不纳入**：数据源在主进程 CDP，且 localStorage 跨 reload 持久——不属本类 bug；若想统一 renderer 侧体验，可让主进程 storage 服务也发 `miniapp-snapshot:push`，但属可选。
-- **seq 归属**：全局 `seq` 给的是「排序」；若要严格「多面板一致切面」，需 Host 对所有 source 同步取样，属后续增强。
+- **全量传输开销**：AppData / WXML 快照体量都不大，且每次事件本就重建快照。devtools 非热路径，全量传输可接受。
+- **不适用流式数据**：Console 日志是 append-only 流，属于另一种数据形态，不塞进本框架。
+- **Storage 不纳入**：其数据源在主进程 CDP，且 localStorage 跨 reload 持久——不属本类 bug。
+- **seq 语义**：全局 `seq` 给的是「排序」，不是「多面板一致切面」——多面板按 `seq` 对齐到的是最近一次发布的相对先后，而非同一时刻的原子取样。
 
-## 10. 迁移路径
-
-四步推进，每步独立可合、可测、可单独 ship：
-
-1. **新增框架**：建立 `preload/miniapp-snapshot/`（`types.ts` / `host.ts`）+ 两条通用通道 + renderer `useMiniappSnapshot`。纯新增，不动现有代码。
-2. **WXML 试点**：把 `wxml.ts` 改造为 `MiniappSnapshotSource`（它本就只有全量数据、最简单、低风险）。删除 `simulator:wxml` / `wxml:refresh:request`。
-3. **AppData 迁移**：把 `app-data.ts` 改造为 `MiniappSnapshotSource`，**删除增量通道与 renderer 增量 reducer** → 同时消灭 `activeBridgeId` 不一致与 `entries` 复活两个 bug。
-4. **清理**：删除死代码 `workbench:reset`（无 emitter 的半接线机制）。
-
-每一步都带自己的单测 / e2e，可独立 ship。
-
-## 11. 附录：新增一个面板
+## 10. 附录：新增一个面板
 
 完整示例——新增一个 Network 面板，只需「实现一个数据源 + 注册一行 + 用一个 hook」：
 
@@ -370,7 +336,12 @@ function createNetworkSource(): MiniappSnapshotSource<NetworkSnapshot> {
 host.register(createNetworkSource())
 
 // renderer —— 一个 hook
-const { data, refresh } = useMiniappSnapshot('network', { requests: [] })
+const { data, refresh } = useMiniappSnapshot({
+  id: 'network',
+  initial: { requests: [] },
+  simulatorRef,
+  enabled: ready,
+})
 ```
 
 push / pull / 自动化读取 / reload 重同步，全部自动获得。
