@@ -26,6 +26,10 @@ import { simulatorApis } from '../../simulator/simulator-api.js'
 const api = {
   ipc: {
     invoke: (channel: string, ...args: unknown[]) => ipcRenderer.invoke(channel, ...args),
+    // Synchronous round-trip. Blocks the renderer until the main process sets
+    // `event.returnValue` — used only for the editor's beforeunload flush, where
+    // the write MUST land before the page is torn down (an async invoke can't).
+    sendSync: (channel: string, ...args: unknown[]) => ipcRenderer.sendSync(channel, ...args),
     send: (channel: string, ...args: unknown[]) => {
       ipcRenderer.send(channel, ...args)
     },

@@ -58,6 +58,14 @@ export interface WorkspaceService {
   // ── session state (read-only) ──────────────────────────────────────────
   getSession(): { close: () => Promise<void>; port: number; appInfo: unknown } | null
   getProjectPath(): string
+  /**
+   * The project path most recently torn down by `closeProject`, or '' if none
+   * since the last `openProject`. Lets the project-fs sandbox accept an
+   * in-flight write (debounced/teardown flush) that targets the just-closed
+   * project even though `getProjectPath()` has already been cleared. Reset to
+   * '' on the next `openProject` so it never accumulates stale roots.
+   */
+  getLastClosedProjectPath(): string
   hasActiveSession(): boolean
 
   // ── thumbnails ──────────────────────────────────────────────────────────
@@ -82,6 +90,10 @@ export interface WorkspaceService {
 export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService {
   let currentSession: ProjectSession | null = null
   let currentProjectPath = ''
+  // The last project path cleared by `closeProject`; consumed by project-fs to
+  // accept an in-flight write that targets the just-closed project. Reset at
+  // the start of every `openProject` so it never accumulates a stale root.
+  let lastClosedProjectPath = ''
 
   function sendStatus(status: string, message: string, hotReload?: boolean): void {
     ctx.notify.projectStatus(hotReload ? { status, message, hotReload: true } : { status, message })
@@ -147,6 +159,9 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
       clearSimulatorServicewechatReferer()
       await disposeSession()
       currentProjectPath = ''
+      // A fresh open starts a clean sandbox window — drop any previously
+      // recorded last-closed root so it can't accept writes after this point.
+      lastClosedProjectPath = ''
 
       // Reject obviously broken projects up front so we never spin up a
       // compile/server that the simulator will then fetch asset-by-asset.
@@ -201,12 +216,16 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
     async closeProject() {
       clearSimulatorServicewechatReferer()
       await disposeSession()
+      // Record the root being torn down BEFORE clearing it, so a teardown/
+      // debounced write already in flight can still be accepted against it.
+      if (currentProjectPath !== '') lastClosedProjectPath = currentProjectPath
       currentProjectPath = ''
       ctx.views.disposeAll()
     },
 
     getSession: () => currentSession,
     getProjectPath: () => currentProjectPath,
+    getLastClosedProjectPath: () => lastClosedProjectPath,
     hasActiveSession: () => currentSession !== null,
 
     async captureThumbnail(projectPath) {

@@ -149,6 +149,29 @@ export const ProjectChannel = {
   GetThumbnail: 'project:getThumbnail',
 } as const
 
+// ── Project file system (sandboxed to active project root) ────────────────
+//
+// Read/write access to the active project's files, used by the in-renderer
+// Monaco editor. Every path is verified against the active project root in
+// the main process (see `services/project-fs`). Replaces the OpenSumi
+// editor's `editor:fs:*` bridge — same sandbox, callable from the main
+// renderer instead of a separate WebContentsView.
+
+export const ProjectFsChannel = {
+  GetRoot: 'project:fs:getRoot',
+  ReadFile: 'project:fs:readFile',
+  WriteFile: 'project:fs:writeFile',
+  /**
+   * Synchronous (blocking) write, used ONLY by the editor's `beforeunload`
+   * flush: a hard window/app close tears the renderer down before an async
+   * `WriteFile` IPC can round-trip, so the last in-debounce-window edit would
+   * be lost. `sendSync` blocks page teardown until the bytes hit disk. Runs the
+   * SAME sandbox as `WriteFile` (see project-fs `writeFileSync`).
+   */
+  WriteFileSync: 'project:fs:writeFileSync',
+  ListFiles: 'project:fs:listFiles',
+} as const
+
 // ── Project list / workspace ─────────────────────────────────────────────
 
 export const ProjectsChannel = {
@@ -185,6 +208,30 @@ export const PanelChannel = {
   Select: 'panel:select',
   SelectSimulator: 'panel:selectSimulator',
 } as const
+
+// ── Embedded views (renderer → main) ─────────────────────────────────────
+//
+// The main window's React layout owns the *positions* of the editor +
+// simulator-DevTools WebContentsView overlays — each visible placeholder
+// `<div>` measures its client rect via ResizeObserver and pushes the
+// rectangle to the main process. The view manager caches the latest
+// payload per kind and applies it to the overlay; no payload means the
+// overlay is hidden.
+//
+// Payload (after schema validation): `{ x, y, width, height }` in CSS
+// pixels relative to the window's content area (origin = top-left,
+// not including the OS chrome).
+export const ViewChannel = {
+  /** Update the simulator DevTools view's bounds (or hide if w/h = 0). */
+  SimulatorDevtoolsBounds: 'view:simulator:devtools-bounds',
+} as const
+
+export interface ViewBounds {
+  x: number
+  y: number
+  width: number
+  height: number
+}
 
 // ── Popover ──────────────────────────────────────────────────────────────
 

@@ -11,7 +11,6 @@ interface Device {
 }
 
 interface SimulatorPanelProps {
-  simPanelWidth: number
   device: Device
   zoom: number
   onDeviceChange: (e: React.ChangeEvent<HTMLSelectElement>) => void
@@ -39,7 +38,6 @@ interface SimulatorPanelProps {
 }
 
 export function SimulatorPanel({
-  simPanelWidth,
   device,
   zoom,
   onDeviceChange,
@@ -111,13 +109,7 @@ export function SimulatorPanel({
   }, [nativeHost, reportBounds])
 
   return (
-    <div
-      className="bg-sim-bg flex flex-col overflow-hidden shrink-0"
-      style={{
-        width: simPanelWidth,
-        minWidth: simPanelWidth,
-      }}
-    >
+    <div className="bg-sim-bg flex flex-col overflow-hidden h-full w-full">
       <div className="flex items-center gap-2 px-5 py-2 shrink-0 border-b border-border-subtle">
         <Select value={device.name} onChange={onDeviceChange}>
           {DEVICES.map((d) => (

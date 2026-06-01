@@ -159,6 +159,7 @@ vi.mock('electron', () => {
       registerPreloadScript: vi.fn(),
       protocol: { handle: vi.fn(), unhandle: vi.fn() },
     })),
+    defaultSession: { protocol: { handle: vi.fn(), unhandle: vi.fn() } },
   }
 
   const dialog = {

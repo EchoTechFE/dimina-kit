@@ -48,6 +48,17 @@ export function send(channel: string, ...args: unknown[]): void {
 }
 
 /**
+ * Synchronous round-trip. Blocks the renderer until the main process replies —
+ * use ONLY where the result must be observed before the current task yields
+ * (e.g. flushing an edit to disk inside `beforeunload`, where an async invoke
+ * would not land before the page is torn down). Returns the main-side handler's
+ * `event.returnValue` verbatim.
+ */
+export function sendSync<T = unknown>(channel: string, ...args: unknown[]): T {
+  return getIpc().sendSync<T>(channel, ...args)
+}
+
+/**
  * Subscribe to a main → renderer event. Returns an unsubscribe function that
  * calls `removeListener` with the original handler.
  */

@@ -216,6 +216,21 @@ export async function evalInWebContentsByUrl<T = unknown>(
   }, { urlSubstring, expression }) as Promise<T>
 }
 
+/**
+ * Wait until the in-renderer Monaco editor is mounted in the main window.
+ *
+ * The editor is now a plain React component (`[data-area="editor"]`
+ * containing Monaco's `.monaco-editor` element) — no separate
+ * WebContentsView / `dmieditor://` protocol to poll. We just wait for the
+ * Monaco DOM to appear in the main window.
+ */
+export async function waitForEditorReady(
+  mainWindow: Page,
+  timeout = 25000,
+): Promise<void> {
+  await mainWindow.waitForSelector('[data-area="editor"] .monaco-editor', { timeout })
+}
+
 export async function waitForSimulatorWebview(
   electronApp: ElectronApplication,
   timeout = 20000
@@ -312,22 +327,6 @@ export async function findButtonByText(
     }
     return false
   }, text)
-}
-
-/**
- * Find a button by its title attribute.
- */
-export async function findButtonByTitle(
-  mainWindow: Page,
-  title: string
-): Promise<boolean> {
-  return mainWindow.evaluate((t) => {
-    const buttons = document.querySelectorAll('button')
-    for (const btn of buttons) {
-      if ((btn.getAttribute('title') || '').includes(t)) return true
-    }
-    return false
-  }, title)
 }
 
 // ── Reset helpers (for shared-project pattern) ─────────────────────────

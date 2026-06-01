@@ -104,6 +104,22 @@ export const SimulatorSetNativeBoundsSchema = z.tuple([
   }),
 ])
 
+/**
+ * view:*:bounds — renderer-measured CSS pixel rectangle in window content
+ * coordinates. Width/height = 0 is the canonical "overlay hidden" signal.
+ * No upper bound is enforced (window can be very large); we only refuse
+ * negative/NaN values that would break setBounds.
+ */
+const NonNegInt = z.number().int().min(0).max(100_000)
+export const ViewBoundsSchema = z.tuple([
+  z.object({
+    x: NonNegInt,
+    y: NonNegInt,
+    width: NonNegInt,
+    height: NonNegInt,
+  }),
+])
+
 /** simulator:setVisible — visible flag + simulator width. */
 export const SimulatorSetVisibleSchema = z.tuple([z.boolean(), SimWidth])
 
