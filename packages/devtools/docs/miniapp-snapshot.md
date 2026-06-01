@@ -1,4 +1,4 @@
-# miniappSnapshot 架构设计
+# miniappSnapshot 框架
 
 > devtools 面板数据的统一**快照**框架。
 >
@@ -11,8 +11,6 @@
 > **preload 是唯一数据源（单一真相源），renderer 只是快照的纯投影。**
 
 数据源每次只向 renderer 推送**全量、不可变的快照**，renderer 端永远只做「整份替换」，不做任何增量拼接。由此，reload / crash / relaunch 后的重同步成为框架的**结构保证**，新增面板只需实现一个数据源接口即可白送 push / pull / 自动化读取 / 重同步。
-
----
 
 ## 1. 背景：单一真相源不变式
 
@@ -345,3 +343,16 @@ const { data, refresh } = useMiniappSnapshot({
 ```
 
 push / pull / 自动化读取 / reload 重同步，全部自动获得。
+
+## 11. 文件清单
+
+| 文件 | 角色 |
+|---|---|
+| `src/preload/miniapp-snapshot/types.ts` | `MiniappSnapshotSource<T>` / `SnapshotEnvelope<T>` / `MiniappSnapshotHost` 接口定义 |
+| `src/preload/miniapp-snapshot/host.ts` | 中枢 `MiniappSnapshotHost`：`register` / `install` + push/pull + `window.__miniappSnapshot` 访问器 |
+| `src/preload/instrumentation/app-data.ts` | `AppDataSource`（Worker 插桩 → AppData 快照） |
+| `src/preload/instrumentation/wxml.ts` | `WxmlSource`（MutationObserver → WXML 快照） |
+| `src/renderer/modules/main/features/project-runtime/controllers/use-miniapp-snapshot.ts` | renderer 通用 hook `useMiniappSnapshot`：信封 → React state 投影 |
+| `src/shared/ipc-channels.ts` | `MiniappSnapshotChannel`（`miniapp-snapshot:push` / `miniapp-snapshot:pull`） |
+
+> 面板数据的 host 扩展模型（`workbench(config)` 单入口）见 [`workbench-model.md`](./workbench-model.md)。

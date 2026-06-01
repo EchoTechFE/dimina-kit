@@ -1,10 +1,12 @@
-# workbench 模型
+# workbench 模型（host 集成框架）
 
-`@dimina-kit/workbench` 是 dimina devtools 的 host 集成框架：下游 host（qdmp 等）写一份 `WorkbenchConfig` 交给 `workbench(config)`，framework 接管 Electron 装配、IPC、生命周期。
+> `@dimina-kit/workbench` 是 dimina devtools 的 host 集成框架：下游 host（qdmp 等）写一份 `WorkbenchConfig` 交给 `workbench(config)`，framework 接管 Electron 装配、IPC、生命周期。
+>
+> 配套文档：[`miniapp-snapshot.md`](./miniapp-snapshot.md) 描述面板数据同步（preload 为唯一真相源）；本文描述 host 的扩展模型（`workbench(config)` 为唯一入口）。
+
+## 摘要（TL;DR）
 
 本文描述的是 framework 的目标集成模型——下游 host 经 `workbench(config)` 接入。`@dimina-kit/devtools` 自身目前不走这条入口：它通过自己的 `launch()` → `createWorkbenchApp(config)` 启动（见 [`README.md`](../README.md)），入口 config 是 `packages/devtools/src/shared/types.ts` 里的 `WorkbenchAppConfig`（带 `modules` / `BuiltinModuleId`；host 扩展点走另立的 `WorkbenchHostInstance.toolbar.set()` 等 hook 方法），与本文 `@dimina-kit/workbench` 的 config 形态不同。
-
-配套文档：[`miniapp-snapshot.md`](./miniapp-snapshot.md) 描述面板数据同步（preload 为唯一真相源）；本文描述 host 的扩展模型（`workbench(config)` 为唯一入口）。
 
 ## 1. 最小例子
 
@@ -641,3 +643,5 @@ workbench({
 ```
 
 在这个目标形态下，dimina 内置 React panels 的 preload / audience / route 仍是 framework baseline 私有路径——不在 `WorkbenchConfig` 表达，也不暴露给 host 入口。公共 config（`app/menu/projects/templates/update/lifecycle`）与 IPC / dispose 走同一管道，baseline panels 装配不收敛进公共 config。
+
+> 面板数据同步（preload 为唯一真相源）见 [`miniapp-snapshot.md`](./miniapp-snapshot.md)；dimina default 自身的启动入口（`createWorkbenchApp(config)`）见 [`README.md`](../README.md)。

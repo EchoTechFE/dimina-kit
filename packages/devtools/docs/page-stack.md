@@ -1,11 +1,8 @@
-# Page Stack 设计文档
+# 页面栈（Page Stack）
 
-> 适用模块：dimina-fe `MiniApp`（默认模拟器）与 `src/simulator/device-shell/page-stack-controller.ts`（native-host 模式）。
+> 页面栈是跨容器、跨架构的同一份导航语义：dimina-fe `MiniApp`（默认模拟器）与 `src/simulator/device-shell/page-stack-controller.ts`（native-host 模式）各自承载一套实现，规范、生命周期、URL 同步、降级行为统一收敛在本页。
 >
-> 本文目标：把"页面栈"这一跨容器、跨架构的概念，用一份文档把规范、两套实现、生命周期、URL 同步、降级行为都讲透。
-> 与 tab-bar 相关的视觉 / 配置细节单独由 [`./tab-bar.md`](./tab-bar.md) 承载，本文聚焦 `navigateTo` / `navigateBack` / `redirectTo` / `reLaunch` 这 4 个 API 与多 tab 子栈的交互。
-
----
+> tab-bar 的视觉 / 配置细节由 [`./tab-bar.md`](./tab-bar.md) 承载；本文聚焦 `navigateTo` / `navigateBack` / `redirectTo` / `reLaunch` 这 4 个 API 与多 tab 子栈的交互。
 
 ## 0. 一图速览
 
@@ -27,8 +24,6 @@
    │   页，复用 tab 页 iframe    │   还原 / 懒建目标 tab 子栈        │
    └──────────────────────────┴───────────────────────────────┘
 ```
-
----
 
 ## 1. WeChat 规范回顾
 
@@ -77,8 +72,6 @@ WeChat 定义的 5 个回调：
 | 跟随平台                       | WeChat（无每-tab 子栈）   | iOS / Harmony（每-tab 子栈）         |
 | switchTab 后是否保留旧 tab 上的 navigateTo 页 | 否（被弹掉）            | 是（保留在 `tabStacks[prevTab]`）    |
 | 实现入口                      | `dimina/fe/.../miniApp.js` | `page-stack-controller.ts`           |
-
----
 
 ## 2. 两种实现并存
 
@@ -156,8 +149,6 @@ type SideEffect =
 | 路由回调路径                  | `success` / `fail` / `complete` 透传到 jscore | host 派发 `SideEffect`，由 IPC adapter 回 ack       |
 | 单测覆盖                       | 间接通过 e2e                                  | 43 case 单测（纯函数）                             |
 
----
-
 ## 3. bridgeList 与 bridge 缓存（默认架构）
 
 ### 3.1 数据结构
@@ -212,8 +203,6 @@ switchTab /pages/home/home（命中池）
 
 `miniApp.js:578` 用 `new Set([...bridgeList, ...tabBarBridges.values()])` 去重。原因：当前 tab 页同时存在于 `bridgeList[0]` 和 `tabBarBridges[currentTabPath]`，是同一个 Bridge 引用；不去重会被 `destroy()` 两次。
 
----
-
 ## 4. 生命周期触发详表
 
 ### 4.1 一页表
@@ -238,8 +227,6 @@ switchTab /pages/home/home（命中池）
 - **`reLaunch` 是否对栈底 entry 也触发 `onUnload`**：是。`miniApp.js:578-583` 把 `bridgeList[0]` 也 `destroy`，等价 `onUnload`。
 - **`switchTab` 对 tab 页只触发 `onShow`/`onHide`，不触发 `onLoad`/`onUnload`**：tab iframe 在池里持久存在，只是 `display:none ↔ ''` 切换（`miniApp.js:829-830`、`miniApp.js:870`）；新 tab 首次进入会触发完整 `onLoad`，之后切来切去只 `pageShow` / `pageHide`。
 - **同名 bridgeId 在 reLaunch 中的防御**：`reduceReLaunch` 显式从 unload 集合里删去 `newEntry.bridgeId`（`page-stack-controller.ts:190`），防止"新页面和旧页面 ID 撞车导致新页被错卸"。
-
----
 
 ## 5. URL 同步机制
 
@@ -303,8 +290,6 @@ home → navigateTo detail → switchTab cart → switchTab home
 ```
 
 直接症状：`miniProgram.currentPage().path` 返回过期值（DOM 已切回 home，但 `location.search` 的 `page` 仍指向旧 tab，`App.getCurrentPage` 据此还原出 stale path）。该 test 只断 DOM、不再断 `cp.path`（见 `tabbar.spec.ts` 末尾内联说明）。
-
----
 
 ## 6. native-host 的 per-tab 子栈
 
@@ -372,8 +357,6 @@ switchTab(targetTab):
 | **dimina-fe**：detail 在第一次 switchTab 时被 destroy；切回 home 仅看到 home。|
 | **native-host**：detail 进入 `tabStacks['pages/home/home']` 快照；切回 home 还原 `[home, detail]`，detail 重新可见。|
 
----
-
 ## 7. 错误与降级
 
 ### 7.1 拒绝矩阵
@@ -399,16 +382,12 @@ switchTab(targetTab):
 
 `miniApp.js:497-500`、`miniApp.js:710-714` 的 `webviewAnimaEnd` 防抖在某些路径上**没回 `onFail`/`onComplete`**，调用方 success/fail/complete 都不会触发，存在用户脚本"挂起"风险。
 
----
-
 ## 8. 测试入口
 
 - 单测：`packages/devtools/src/simulator/device-shell/page-stack-controller.test.ts`，43 个 case 覆盖五个 reducer 的纯函数行为（含 lifecycle effects 顺序、tabStacks 同步、reLaunch 全清等）。
 - e2e：
   - `packages/devtools/e2e/page-stack.spec.ts`：现存 5 API + 生命周期 + 深度限制 + URL 同步检查（共 17 个 test）。
   - `packages/devtools/e2e/tabbar.spec.ts`：WeChat semantics 路径下 `switchTab` 的栈行为，含 §5.3 描述的 URL 滞后 workaround。
-
----
 
 ## 9. 延伸阅读
 

@@ -1,9 +1,9 @@
 # 服务宿主预热池（Service Host Pre-warm Pool）
 
-> 阅读对象：dimina-kit devtools 维护者、qdmp / 下游 host 集成方。
+> 服务宿主预热池是 native-host 架构下复用 service-host `BrowserWindow` 的 opt-in warm pool。
 > 配套：[`simulator-refactor.md`](./simulator-refactor.md)、[`workbench-model.md`](./workbench-model.md)、[`miniapp-snapshot.md`](./miniapp-snapshot.md)。
 
-## TL;DR
+## 摘要（TL;DR）
 
 打开一个 dimina mini-program 项目时，"点击 → 首屏可见" 这段延迟里有一大块是**进程 fork + preload 注入 + page-frame 解析**的固定开销 — 跟你的小程序本身的代码量几乎无关。三家 Native 端（iOS / Android / Harmony）都把这块固定开销砍掉了，做法是**预先 new 出 webview 实例放进池子里**。
 
@@ -15,20 +15,6 @@ dimina-kit Electron 容器里对等的实现是 `ServiceHostPool`（`src/main/se
 2. native-host 架构（`createServiceHostWindow`）下，pool 替代 `bridge-router.handleSpawn` 里同步 `new BrowserWindow`，收益直接、可度量。
 3. 复用 `WebContents` 跨 mini-app 时，**导航回 `about:blank` 销毁旧 JS realm** 是状态隔离的核心手段；service-host 跑在共享 `persist:simulator` session 上，reset **不**清该 session 的 storage（`clearStorageOnReset: false`），见 [§3.4](#34-reset-契约release--ready) / [§4.2](#42-重置完备性)。
 4. **预热页面 vs preload 契约**：service-host preload（`src/service-host/preload.cjs`）在 URL query 缺 `bridgeId` 时直接 `return`（暖机 idle），所以 pool 用 `about:blank` 预热的窗口能存活到真正 spawn 导航（`service.html?bridgeId=…`）再重跑 preload 完成初始化。真实 spawn 永远带 bridgeId，故 spawn 路径行为不变。
-
----
-
-## 目录
-
-1. [问题陈述](#1-问题陈述)
-2. [Native 端的参考实现](#2-native-端的参考实现)
-3. [Electron container 的预启动设计](#3-electron-container-的预启动设计)
-4. [风险与权衡](#4-风险与权衡)
-5. [已知限制](#5-已知限制)
-6. [配置与开关](#6-配置与开关)
-7. [延伸阅读](#7-延伸阅读)
-
----
 
 ## 1. 问题陈述
 
@@ -102,8 +88,6 @@ renderer SPAWN IPC
 - 不优化 §1.1 D — 那是 app 自己的代码量，不在容器责任内（预热在物理上也省不掉 dimina-fe 业务初始化）。
 - 不做"跨进程 service worker 缓存"或 page-frame 资源 prefetch。
 - 不在生产用户机器跑 N=10 的池 — 这里是开发者工具，不是浏览器（池大小 clamp 到 ≤ 4，见 §4.1 / §6）。
-
----
 
 ## 2. Native 端的参考实现
 
@@ -185,8 +169,6 @@ renderer SPAWN IPC
 | 多页预测命中 | 无 | 无 | `fullCachePool` 按 pagePath + query 命中 | 无（多页通过 PAGE_OPEN 复用 simulator wc，见 §1.2.3） |
 | 进程/session 共享 | `sharedProcessPool: WKProcessPool` | 隐式（同一 Application） | 隐式 | `session.fromPartition('persist:simulator')` 共享单例 |
 | 失败兜底 | acquire 时若池空，同步创建新 wc | acquire 时若池空，同步创建 | acquire 时若池空，先 push 一个再 pop（同步） | acquire 池空 → 同步 fallback `new BrowserWindow`，绝不阻塞 acquire（`entryId === null`） |
-
----
 
 ## 3. Electron container 的预启动设计
 
@@ -361,8 +343,6 @@ release(entryId, win):  // pool.ts:195
 
 > **关键不变量**：refill 只在**崩溃恢复**（`render-process-gone → onGone`）发生，**不在优雅关闭**。pooled 窗的 `'closed'` 只在 app/项目 teardown 时出现（窗口隐藏，没别的东西会关它）— 此时若 refill 会在 Electron 退出途中 `new BrowserWindow`，造窗比关窗还快，挂死 shutdown。所以 `refill` 是 `reclaim` 的逐调用方 opt-in（pool.ts:460 注释）。
 
----
-
 ## 4. 风险与权衡
 
 ### 4.1 内存占用
@@ -400,15 +380,11 @@ release(entryId, win):  // pool.ts:195
 
 pool 在 `acquire(spec)` 时按 `preloadPath` 校验 entry 是否匹配（`matches`, pool.ts:303）— 不匹配就 tear down pooled entries 重建。当前只有单一 spec（service-host）进池。
 
----
-
 ## 5. 已知限制
 
 **render 侧仍是 `<webview>`，无法预热**：render 侧（mini-app 页面）在默认架构和当前 native-host `device-shell` 里都用 `<webview>` tag（`src/simulator/device-shell/device-shell.tsx:255` `<webview … partition="persist:simulator">`）。Electron **没有把预热 `WebContents` reparent 到 `<webview>` 元素的 API**，所以 render 侧 pool 受此硬限制阻塞。本 worktree 的 native-host 重构把 **service 侧**做成了 BrowserWindow（已 pool），render 侧仍是 `<webview>`，该限制未解除。render 侧 pool 只有在 render 也改成 BrowserWindow / WebContentsView 之后才可能 — 当前 native-host 设计不做此改动。
 
 **预热省不掉 dimina-fe 业务初始化**：预热只能省 §1.1 的 A + B（fork + preload + parse）一次。dimina-fe 的业务 bridge 初始化（§1.1 D）跟 V8 isolate 绑定，每个新 spawn 都得跑一遍 — 这是物理上限，pool 不能省。
-
----
 
 ## 6. 配置与开关
 
@@ -419,9 +395,15 @@ pool **默认 OFF**，仅当 `DIMINA_PREWARM_POOL_SIZE` 为正整数且 `DIMINA_
 | `DIMINA_PREWARM_DISABLE` | unset | 设为 `1` 强制关闭 pool（即便设了 POOL_SIZE）；`handleSpawn` 全走 `createServiceHostWindow`，与未开池时一致 |
 | `DIMINA_PREWARM_POOL_SIZE` | 未设置（=0=OFF） | 正整数开启 pool 并设池大小，clamp 到 ≤ 4（`PREWARM_MAX_POOL_SIZE`, bridge-router.ts:46）；暖机延迟 500ms（避开冷启动） |
 
----
+## 7. 文件清单
 
-## 7. 延伸阅读
+| 文件 | 角色 |
+|---|---|
+| `src/main/services/service-host-pool/pool.ts` | `ServiceHostPool` 单例 + `EntryState` 状态机 + acquire/release/reset/reclaim |
+| `src/main/ipc/bridge-router.ts` | opt-in 构造 pool（`installBridgeRouter`）+ `handleSpawn` acquire + `disposeAppSession` release/releaseDestroyed + `DIMINA_PREWARM_*` 解析 |
+| `src/main/windows/service-host-window/create.ts` | `createServiceHostWindow` fallback 路径 + `serviceHostSpec()`（`clearStorageOnReset:false`，共享 `persist:simulator`） |
+
+## 8. 延伸阅读
 
 - [`simulator-refactor.md`](./simulator-refactor.md) — simulator 从 `<webview>` tag 改成 BrowserWindow 的方案；render 侧 pool 生效的前提。
 - [`workbench-model.md`](./workbench-model.md) — `WorkbenchContext` 的扩展点（pool 经 bridge-router 接入）。
