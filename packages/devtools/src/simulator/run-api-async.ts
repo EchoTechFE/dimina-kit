@@ -32,35 +32,70 @@ export interface ApiRunVerdict {
   ok: boolean
   result?: unknown
   errMsg?: string
+  /**
+   * Set only for persistent-subscription (`keep: true`) APIs such as
+   * `audioListen`. When true, this is one of potentially many success fires
+   * of the same subscription, and main must NOT tear the call down on receipt
+   * (see `handleApiResponse` in bridge-router).
+   */
+  keep?: boolean
 }
 
+/** Emits one response per success/fail fire back toward main. */
+export type ApiEmit = (verdict: ApiRunVerdict) => void
+
 /**
- * Run `name` against `miniApp.apiRegistry[name]` and resolve as soon as the
- * handler reports a verdict via success or fail (or throws / rejects / returns
- * sync for handlers without callbacks).
+ * Run `name` against `miniApp.apiRegistry[name]` and emit a verdict via `emit`
+ * as soon as the handler reports one (success/fail, throw/reject, or sync
+ * return for callback-less handlers).
  *
  * The handler is invoked with `this` set to a derived context whose
  * `createCallbackFunction` recognises three sentinel symbols; the `params`
  * passed in have `success`/`fail`/`complete` (if present) rewritten to those
  * sentinels so the handler's call-through to `bindCallbacks` produces
  * callbacks routed back here.
+ *
+ * One-shot (default) APIs emit exactly one verdict, then go inert. Persistent
+ * (`keep: true`) APIs re-emit a `{ keep: true }` verdict on EVERY subsequent
+ * success fire — that is the audio/`audioListen` event-bridge path, where the
+ * container's DOM media events must reach the service-side dispatcher on every
+ * `play`/`timeUpdate`/`ended`, not just the first `canplay`.
+ *
+ * The returned promise resolves once the call has produced its first verdict
+ * (for one-shot) or established its subscription (for keep); callers use it
+ * only for sequencing/cleanup, never to send a response — every response goes
+ * through `emit`.
  */
 export function runApiAsync(
   miniApp: MiniAppLike,
   name: string,
   params: unknown,
-): Promise<ApiRunVerdict> {
+  emit: ApiEmit,
+): Promise<void> {
   const handler = miniApp.apiRegistry[name]
   if (!handler) {
-    return Promise.resolve({ ok: false, errMsg: `${name}:fail no handler` })
+    emit({ ok: false, errMsg: `${name}:fail no handler` })
+    return Promise.resolve()
   }
 
-  return new Promise<ApiRunVerdict>((resolve) => {
-    let resolved = false
+  const keep =
+    params && typeof params === 'object' && !Array.isArray(params)
+      ? (params as Record<string, unknown>).keep === true
+      : false
+
+  return new Promise<void>((resolve) => {
+    let settled = false
+    // For keep subscriptions we keep dispatching after the first fire; the
+    // promise still resolves once (subscription established) so callers can
+    // sequence, but `emit` is what carries every response to main.
     const finish = (verdict: ApiRunVerdict): void => {
-      if (resolved) return
-      resolved = true
-      resolve(verdict)
+      if (settled) {
+        if (keep && verdict.ok) emit({ ...verdict, keep: true })
+        return
+      }
+      settled = true
+      emit(keep && verdict.ok ? { ...verdict, keep: true } : verdict)
+      resolve()
     }
 
     const SUCCESS = Symbol('sim-cb-success')

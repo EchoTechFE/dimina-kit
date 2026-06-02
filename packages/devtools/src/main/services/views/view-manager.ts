@@ -788,6 +788,25 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     if (!nativeSimulatorView || ctx.windows.mainWindow.isDestroyed()) return
     const p = layout.computeNativeSimulatorViewParams(params, params.zoom)
     currentZoomFactor = p.zoomFactor
+    // A zero-area rect means "hide" — the renderer reports this when the
+    // simulator panel/cell is toggled off or unmounts (toolbar toggle only
+    // mutates renderer layout state, so without this the WCV would stay
+    // painted over its old region). Mirror `setSimulatorDevtoolsBounds`:
+    // remove the child view from the contentView but keep its WebContents
+    // alive, so re-showing doesn't re-pay the simulator bootstrap.
+    if (isHidden(p.bounds)) {
+      if (nativeSimulatorViewAdded) {
+        try {
+          ctx.windows.mainWindow.contentView.removeChildView(nativeSimulatorView)
+        } catch { /* already removed */ }
+        nativeSimulatorViewAdded = false
+      }
+      return
+    }
+    if (!nativeSimulatorViewAdded) {
+      ctx.windows.mainWindow.contentView.addChildView(nativeSimulatorView)
+      nativeSimulatorViewAdded = true
+    }
     nativeSimulatorView.setBounds(p.bounds)
     // setBorderRadius lands on WebContentsView in Electron 41; guard so a
     // missing method (older runtime / tests) doesn't crash positioning.

@@ -3,7 +3,8 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { DEMO_APP_DIR, openProjectInUI, closeProject, pollUntil, evalInSimulator } from './helpers'
+import { DEMO_APP_DIR, openProjectInUI, closeProject, pollUntil, evalInSimulator, ipcInvoke } from './helpers'
+import { SimulatorCustomApiChannel } from '../src/shared/ipc-channels'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -119,50 +120,58 @@ test.describe('Extension host (createWorkbenchApp onSetup)', () => {
     expect(height).toBe(72)
   })
 
-  test('registerSimulatorApi: custom-apis bridge proxies e2eEcho to the host handler', async () => {
-    // SCOPE: this test covers the custom-apis BRIDGE layer only —
-    //   simulator webview → window.__diminaCustomApis.invoke → renderer proxy
-    //   → SimulatorCustomApiChannel.Invoke → ctx.simulatorApis → host's
-    //   `e2eEcho` handler.
-    // It does NOT cover the simulator's `wx.*` registration layer — the loop in
-    // `src/simulator/main.tsx` that consumes `__diminaCustomApis` and calls
-    // `miniApp.registerApi(name, …)` so the API is reachable as `wx.<name>()`
-    // from mini-app logic. That layer is NOT exercised here: `wx` lives only
-    // inside the dimina service Worker (the logic thread), which is not a
-    // webContents and so is unreachable from Playwright's `executeJavaScript` /
-    // `evalInSimulator`, and `main.tsx` keeps its `MiniApp` instance
-    // module-scoped (not exposed on `window`). Testing the `wx.e2eEcho(...)`
-    // call path end-to-end would require either the demo mini-app's logic to
-    // call it or an implementation hook exposing the registry — neither exists.
+  test('registerSimulatorApi: custom-apis channel proxies e2eEcho to the host handler', async () => {
+    // SCOPE: this test covers the custom-apis BRIDGE destination —
+    //   <trusted invoker> → SimulatorCustomApiChannel.Invoke → ctx.simulatorApis
+    //   → host's `e2eEcho` handler (registered in onSetup via
+    //   `instance.registerSimulatorApi`).
     //
-    // `window.__diminaCustomApis` is the bridge the dimina runtime would itself
-    // consult to back `wx.<customApi>()`; invoking it directly is the closest
-    // e2e-reachable proxy for the host-extension path and does not depend on
-    // the demo mini-app calling the API itself.
-    // The bridge `invoke` promise only settles once the renderer proxy posts
-    // a response back; if the proxy hasn't attached yet it never resolves, so
-    // each attempt races the invoke against an in-page timeout — that turns a
-    // stuck attempt into a retryable `__pending` instead of hanging the whole
-    // `executeJavaScript` call (and the test).
-    const result = await pollUntil(
-      () => evalInSimulator<unknown>(
+    // NATIVE-HOST MIGRATION: under the native-host runtime (now the default —
+    // `DIMINA_NATIVE_HOST !== '0'`), the simulator is a top-level
+    // WebContentsView, NOT a renderer `<webview>` guest. The OLD assertion drove
+    // the bridge from the simulator document via `window.__diminaCustomApis.invoke`,
+    // whose `invoke` does `ipcRenderer.sendToHost` → the main-window renderer's
+    // `useCustomApiProxy` (`ipc-message` on the `<webview>` tag) → this channel.
+    // `sendToHost` only delivers to a `<webview>`'s embedder; a top-level
+    // WebContentsView has no embedder and the renderer has no `<webview>` for the
+    // proxy to attach to, so that simulator-side leg is structurally unreachable
+    // under native-host. The renderer-proxy/`sendToHost` legs are an arch detail
+    // of the `<webview>` path; the LOAD-BEARING destination the test asserts —
+    // `SimulatorCustomApiChannel.Invoke` routing to `ctx.simulatorApis.invoke`,
+    // which is the per-context registry `registerSimulatorApi('e2eEcho', …)`
+    // populated — is arch-independent. We drive it directly from the trusted
+    // main-window renderer (on the workbench sender white-list), which is exactly
+    // where the renderer proxy would have forwarded to.
+    //
+    // This still does NOT cover the mini-app `wx.e2eEcho(...)` registration layer
+    // (that surface lives only inside the hidden service-host Worker and is not a
+    // webContents Playwright can drive); it asserts the host-extension API reaches
+    // its registered handler with the right params and result.
+
+    // Native-host readiness gate: DeviceShell mounts only after the native-host
+    // pipeline spawns. Once `.device-shell-root` is up, the project session
+    // (and thus `ctx.simulatorApis`) is fully wired. `.device-shell-root` is the
+    // native-host discriminator the dimina-fe path never emits.
+    await pollUntil(
+      () => evalInSimulator<boolean>(
         electronApp,
-        `(() => {
-          const bridge = window.__diminaCustomApis
-          if (!bridge || typeof bridge.invoke !== 'function') return Promise.resolve({ __noBridge: true })
-          const invoke = bridge.invoke('e2eEcho', { ping: 'e2e' })
-            .then((r) => ({ ok: true, value: r }))
-            .catch((err) => ({ ok: false, error: String(err) }))
-          const timeout = new Promise((resolve) => setTimeout(() => resolve({ __pending: true }), 3000))
-          return Promise.race([invoke, timeout])
-        })()`,
-      ),
-      (r) => {
-        const v = r as { ok?: boolean }
-        // Retry while the bridge proxy is still wiring up (webview attach is
-        // bounded but async after compileStatus flips to 'ready').
-        return v?.ok === true
-      },
+        `(() => !!document.querySelector('.device-shell-root'))()`,
+      ).catch(() => false),
+      (ok) => ok === true,
+      25_000,
+      300,
+    )
+
+    const result = await pollUntil(
+      () => ipcInvoke<unknown>(
+        mainWindow,
+        SimulatorCustomApiChannel.Invoke,
+        'e2eEcho',
+        { ping: 'e2e' },
+      )
+        .then((value) => ({ ok: true as const, value }))
+        .catch((err: unknown) => ({ ok: false as const, error: String(err) })),
+      (r) => (r as { ok?: boolean }).ok === true,
       30_000,
       500,
     )

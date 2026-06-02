@@ -107,6 +107,10 @@ function renderUseSession(fakeWebview: FakeWebview) {
     return useSession({
       projectPath: '/tmp/fakeProj',
       simulatorRef: simulatorRef as RefObject<HTMLElement | null>,
+      // These tests exercise the DEFAULT `<webview>` hot-reload path; the new
+      // `nativeHost` prop must be false so the `<webview>`-based behaviour under
+      // test runs unchanged.
+      nativeHost: false,
     })
   })
 }

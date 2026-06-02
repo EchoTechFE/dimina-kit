@@ -138,6 +138,7 @@ export function useProjectRuntimeController(
   const sessionHook = useSession({
     projectPath,
     simulatorRef,
+    nativeHost,
   })
 
   // Sync simulator panel width when device changes — separate from the

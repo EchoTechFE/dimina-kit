@@ -2,8 +2,10 @@ import { test, expect, useSharedProject } from './fixtures'
 import {
   DEMO_APP_DIR,
   evalInSimulator,
+  ipcInvoke,
   pollUntil,
 } from './helpers'
+import { SimulatorStorageChannel } from '../src/shared/ipc-channels'
 
 test.describe('Extension Panels Data Bridge', () => {
   test.setTimeout(90_000)
@@ -63,24 +65,37 @@ test.describe('Extension Panels Data Bridge', () => {
     expect(text).not.toContain('等待小程序加载')
   })
 
-  test('Storage panel renders in main window after tab switch', async ({ mainWindow, electronApp }) => {
+  test('Storage panel renders in main window after tab switch', async ({ mainWindow }) => {
     await mainWindow.getByRole('tab', { name: 'Storage' }).click()
     // Scope to StoragePanel：AppDataPanel keepalive 挂载着另一个「↻ 刷新」按钮。
     await mainWindow.getByTestId('storage-panel').locator('button:has-text("↻ 刷新")').waitFor({ timeout: 8000 })
 
-    // Storage panel filters the CDP DOMStorage stream by the active
-    // project's appId prefix (the simulator partition is shared across
-    // every project ever opened). Write a key with the same `${appId}_`
-    // prefix the dimina runtime uses so the filter passes it through.
-    await evalInSimulator(
-      electronApp,
-      `(() => {
-        // Upstream's query router writes appId into location.search.
-        const appId = new URLSearchParams(location.search).get('appId') || ''
-        localStorage.setItem(appId + '_e2e_storage_key', 'e2e_storage_value')
-      })()`,
-    )
+    // Under native-host the Storage panel is sourced from the main-process
+    // service-host `file://` store (serviceStorage), NOT the simulator
+    // webview's DOMStorage. `GetSnapshot` reads that store filtered by the
+    // active appId prefix, and `Set` routes to `serviceStorage.writeOne` —
+    // the same store — so writing a `${prefix}…` key via the SAME IPC the
+    // panel's own write path uses is what lands in the panel. A direct
+    // `localStorage.setItem` in the simulator would never reach it.
+    //
+    // We must drive `Set` through `mainWindow`'s IPC bridge (the renderer's
+    // sender) — the storage channels are sender-gated to the workbench
+    // policy, so an arbitrary main-process call would be rejected.
+    const prefix = await ipcInvoke<string>(mainWindow, SimulatorStorageChannel.GetActivePrefix)
+    expect(prefix, 'active storage prefix should resolve under native-host').toBeTruthy()
+    const key = `${prefix}e2e_storage_key`
 
+    const set = await ipcInvoke<{ ok: boolean }>(
+      mainWindow,
+      SimulatorStorageChannel.Set,
+      { key, value: 'e2e_storage_value' },
+    )
+    expect(set?.ok, 'Set should succeed against the service-host store').toBe(true)
+
+    // The synthetic `added` event pushed after the write keeps the panel
+    // reactive; the refresh button (and GetSnapshot) provide a fallback.
+    // Assert the key renders in the panel DOM — this catches a regression of
+    // the panel never receiving service-host storage data after a tab switch.
     const text = await pollUntil(
       () => mainWindow.evaluate(() => document.body.innerText),
       (value) => value.includes('e2e_storage_key'),

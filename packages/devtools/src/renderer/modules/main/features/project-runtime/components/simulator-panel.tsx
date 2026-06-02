@@ -101,12 +101,21 @@ export function SimulatorPanel({
       ro.disconnect()
       scroller?.removeEventListener('scroll', reportBounds)
       window.removeEventListener('resize', reportBounds)
+      // Cancel any in-flight measure so it can't race past the hide report
+      // below and re-show the WCV with stale bounds.
       if (rafRef.current !== null) {
         window.cancelAnimationFrame(rafRef.current)
         rafRef.current = null
       }
+      // The panel/cell is being hidden or unmounted (e.g. the toolbar toggled
+      // the simulator panel off). The toolbar toggle only mutates renderer
+      // layout state, so without an explicit zero-bounds report here the
+      // main-process simulator WebContentsView would stay painted over its old
+      // region (visual/layering leak). Report a zero-area rect — main treats
+      // `{width:0,height:0}` as "hide" and removes the WCV from the contentView.
+      void setNativeSimulatorBounds({ x: 0, y: 0, width: 0, height: 0, zoom })
     }
-  }, [nativeHost, reportBounds])
+  }, [nativeHost, reportBounds, zoom])
 
   return (
     <div className="bg-sim-bg flex flex-col overflow-hidden h-full w-full">

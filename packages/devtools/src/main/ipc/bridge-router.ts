@@ -135,7 +135,12 @@ interface PendingApiCall {
   appSessionId: string
   callbacks: { success?: unknown; fail?: unknown; complete?: unknown }
   name: string
-  timer: NodeJS.Timeout
+  /**
+   * No-handler timeout. Cleared (and set to undefined) once a persistent
+   * (`keep: true`) subscription produces its first fire, since such a call
+   * stays pending until page/app teardown rather than timing out.
+   */
+  timer: NodeJS.Timeout | undefined
 }
 
 interface RouterState {
@@ -1007,16 +1012,24 @@ function forwardApiCallToSimulator(
   }
 
   const requestId = newRequestId()
-  const timer = setTimeout(() => {
-    const pending = state.pendingApiCalls.get(requestId)
-    if (!pending) return
-    state.pendingApiCalls.delete(requestId)
-    const target = state.appSessions.get(pending.appSessionId)
-    if (!target) return
-    const fail = { errMsg: `${pending.name}:fail no handler (timeout)` }
-    sendCallback(target, pending.callbacks.fail, fail)
-    sendCallback(target, pending.callbacks.complete, fail)
-  }, API_CALL_TIMEOUT_MS)
+  // Persistent subscriptions (`keep: true`, e.g. audioListen) bind their event
+  // bridge synchronously but only emit their FIRST response when the first
+  // event fires (which can be well past the 5s no-handler window). Arming the
+  // one-shot timeout would tear the subscription down before it ever delivers,
+  // so keep calls run without a timeout and are reaped on page/app teardown.
+  const keep = params.keep === true
+  const timer = keep
+    ? undefined
+    : setTimeout(() => {
+        const pending = state.pendingApiCalls.get(requestId)
+        if (!pending) return
+        state.pendingApiCalls.delete(requestId)
+        const target = state.appSessions.get(pending.appSessionId)
+        if (!target) return
+        const fail = { errMsg: `${pending.name}:fail no handler (timeout)` }
+        sendCallback(target, pending.callbacks.fail, fail)
+        sendCallback(target, pending.callbacks.complete, fail)
+      }, API_CALL_TIMEOUT_MS)
 
   state.pendingApiCalls.set(requestId, {
     appSessionId: ap.appSessionId,
@@ -1055,17 +1068,39 @@ function handleApiResponse(
 ): void {
   const pending = state.pendingApiCalls.get(payload.requestId)
   if (!pending) return
-  state.pendingApiCalls.delete(payload.requestId)
-  clearTimeout(pending.timer)
 
   const ap = state.appSessions.get(pending.appSessionId)
-  if (!ap) return
-  // Only the simulator window bound to that app may respond.
+  if (!ap) {
+    // Owning app is gone — drop the stale entry regardless of keep.
+    state.pendingApiCalls.delete(payload.requestId)
+    clearTimeout(pending.timer)
+    return
+  }
+  // Only the simulator window bound to that app may respond. Validate BEFORE
+  // mutating pending state so a spoofed/foreign response can't tear down a
+  // live subscription.
   const senderApp = appByWc(state, sender)
   if (!senderApp || senderApp.appSessionId !== ap.appSessionId) {
     console.warn('[bridge-router] API_RESPONSE rejected: sender not bound to app session')
     return
   }
+
+  // Persistent-subscription fire (keep: true, e.g. audioListen). Re-fire the
+  // service-side success callback on EVERY response without tearing the call
+  // down: do not delete pending, do not fire `complete`. The 5s no-handler
+  // timeout is no longer relevant once the subscription has produced a fire,
+  // so clear it but keep the entry alive until page/app teardown (which
+  // drains pendingApiCalls in the dispose path).
+  if (payload.keep && payload.ok) {
+    clearTimeout(pending.timer)
+    pending.timer = undefined
+    sendCallback(ap, pending.callbacks.success, payload.result)
+    return
+  }
+
+  // One-shot path (default): fire the verdict's callbacks once and clean up.
+  state.pendingApiCalls.delete(payload.requestId)
+  clearTimeout(pending.timer)
 
   if (payload.ok) {
     sendCallback(ap, pending.callbacks.success, payload.result)
@@ -1221,6 +1256,16 @@ async function disposeAppSession(
   const ap = state.appSessions.get(appSessionId)
   if (!ap) return
   state.appSessions.delete(appSessionId)
+
+  // Drain any pending API calls owned by this app session. One-shot calls
+  // normally self-clean on response/timeout, but persistent (`keep: true`)
+  // subscriptions (e.g. audioListen) live with their timer cleared until
+  // teardown — without this they would leak in pendingApiCalls forever.
+  for (const [requestId, pending] of state.pendingApiCalls) {
+    if (pending.appSessionId !== appSessionId) continue
+    clearTimeout(pending.timer)
+    state.pendingApiCalls.delete(requestId)
+  }
 
   for (const page of ap.pages.values()) {
     if (page.renderWc && !page.renderWc.isDestroyed()) {

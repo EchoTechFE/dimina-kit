@@ -343,6 +343,15 @@ export interface ApiResponsePayload {
   /** Argument the simulator-side success/fail callback was invoked with. */
   result?: unknown
   errMsg?: string
+  /**
+   * Persistent-subscription marker (`keep: true` APIs, e.g.
+   * `audioListen`). When set, this response is one of potentially many
+   * fires of the same subscription: main re-fires the service-side success
+   * callback but keeps the pendingApiCall alive (does not delete it or fire
+   * `complete`) so subsequent fires of the same `requestId` are delivered.
+   * Cleanup happens on page/app teardown instead.
+   */
+  keep?: boolean
 }
 
 /**

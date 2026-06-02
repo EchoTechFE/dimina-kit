@@ -180,12 +180,16 @@ export function DeviceShell({
   // callbacks against their service-host ids.
   useEffect(() => {
     const listener = (payload: ApiCallPayload) => {
-      void runApiAsync(miniApp, payload.name, payload.params).then((verdict) => {
+      // `emit` fires once for one-shot APIs and on every subsequent success
+      // for persistent (`keep: true`) subscriptions like audioListen, so each
+      // container audio event reaches the service-side dispatcher.
+      void runApiAsync(miniApp, payload.name, payload.params, (verdict) => {
         miniApp.notifyApiResponse({
           requestId: payload.requestId,
           ok: verdict.ok,
           result: verdict.result,
           errMsg: verdict.errMsg,
+          keep: verdict.keep,
         })
       })
     }
