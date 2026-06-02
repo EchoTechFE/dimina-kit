@@ -133,7 +133,7 @@ export function useProjectRuntimeController(
 
   // ── Compose sub-hooks ────────────────────────────────────────────────────
 
-  const deviceHook = useDevice({ initialDevice, simulatorRef, nativeHost })
+  const deviceHook = useDevice({ initialDevice })
 
   const sessionHook = useSession({
     projectPath,
@@ -153,19 +153,15 @@ export function useProjectRuntimeController(
   const simulatorHook = useSimulator({
     compileStatus: sessionHook.compileStatus,
     sendDeviceInfo: deviceHook.sendDeviceInfo,
-    simulatorRef,
     simPanelWidthRef: deviceHook.simPanelWidthRef,
     deviceRef: deviceHook.deviceRef,
     appInfo: sessionHook.appInfo,
     compileConfig: sessionHook.compileConfig,
     port: sessionHook.port,
-    projectPath,
-    nativeHost,
   })
 
   const panelDataHook = usePanelData({
     compileStatus: sessionHook.compileStatus,
-    simulatorRef,
   })
 
   // Forward simulator-webview custom-apis bridge requests to main and post

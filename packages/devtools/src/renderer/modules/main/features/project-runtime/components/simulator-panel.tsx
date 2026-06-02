@@ -16,25 +16,9 @@ interface SimulatorPanelProps {
   onDeviceChange: (e: React.ChangeEvent<HTMLSelectElement>) => void
   onZoomChange: (e: React.ChangeEvent<HTMLSelectElement>) => void
   compileStatus: { status: string; message: string }
-  preloadPath: string
-  simulatorUrl: string
-  simulatorRef: React.RefObject<HTMLElement | null>
   currentPage: string
   copied: boolean
   onCopyPagePath: () => void
-  /**
-   * NATIVE-HOST ONLY. When true the simulator is a main-process
-   * WebContentsView positioned over this panel region, so we must NOT render
-   * the renderer `<webview>` (Electron forbids nesting `<webview>`s, which is
-   * the whole reason for the WCV). The bezel chrome stays so the layout column
-   * keeps its width; the WCV paints on top.
-   *
-   * The WCV is positioned to overlap the bezel's inner black screen exactly: a
-   * native-host-only effect below measures `innerRef`'s
-   * `getBoundingClientRect()` and reports it (rAF-debounced) to main via
-   * `setNativeSimulatorBounds`, which feeds `computeNativeSimulatorViewParams`.
-   */
-  nativeHost: boolean
 }
 
 export function SimulatorPanel({
@@ -43,25 +27,23 @@ export function SimulatorPanel({
   onDeviceChange,
   onZoomChange,
   compileStatus,
-  preloadPath,
-  simulatorUrl,
-  simulatorRef,
   currentPage,
   copied,
   onCopyPagePath,
-  nativeHost,
 }: SimulatorPanelProps) {
   const scale = zoom / 100
 
-  // NATIVE-HOST ONLY refs. `innerRef` is the bezel's black inner-screen div —
-  // a NEW ref distinct from `simulatorRef` (which the default path needs for
-  // the `<webview>`). `scrollRef` is the `overflow-auto` container we listen to
-  // for scroll so the WCV tracks the bezel when the panel scrolls.
+  // The simulator is a main-process WebContentsView positioned over this panel
+  // region (native-host is the sole runtime), so this panel only renders the
+  // bezel chrome and reports where the WCV should paint. `innerRef` is the
+  // bezel's black inner-screen div the WCV is overlaid on; `scrollRef` is the
+  // `overflow-auto` container we listen to for scroll so the WCV tracks the
+  // bezel when the panel scrolls.
   const innerRef = useRef<HTMLDivElement | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
 
-  // Measure the inner-screen rect and report it to main (rAF-debounced). Only
-  // ever called under native-host; the WCV is overlaid exactly on this rect.
+  // Measure the inner-screen rect and report it to main (rAF-debounced); the
+  // WCV is overlaid exactly on this rect via `computeNativeSimulatorViewParams`.
   const rafRef = useRef<number | null>(null)
   const reportBounds = useCallback(() => {
     if (rafRef.current !== null) return
@@ -81,8 +63,6 @@ export function SimulatorPanel({
   }, [zoom])
 
   useEffect(() => {
-    // Default path must be byte-identical: bail before touching anything.
-    if (!nativeHost) return
     const inner = innerRef.current
     const scroller = scrollRef.current
     if (!inner) return
@@ -115,7 +95,7 @@ export function SimulatorPanel({
       // `{width:0,height:0}` as "hide" and removes the WCV from the contentView.
       void setNativeSimulatorBounds({ x: 0, y: 0, width: 0, height: 0, zoom })
     }
-  }, [nativeHost, reportBounds, zoom])
+  }, [reportBounds, zoom])
 
   return (
     <div className="bg-sim-bg flex flex-col overflow-hidden h-full w-full">
@@ -164,29 +144,10 @@ export function SimulatorPanel({
                 transformOrigin: 'top left',
               }}
             >
-              {/* Default path: render the simulator as a renderer `<webview>`.
-                  Under native-host the simulator is a main-process
-                  WebContentsView (mounted via attachNativeSimulator) painted
-                  over this region — rendering a `<webview>` here would force a
-                  second simulator AND can't host DeviceShell's nested render
-                  webviews, so we skip it entirely. */}
-              {!nativeHost && preloadPath && simulatorUrl && (
-                <webview
-                  ref={simulatorRef as React.RefObject<HTMLElement>}
-                  src={simulatorUrl}
-                  // eslint-disable-next-line react/no-unknown-property
-                  partition="persist:simulator"
-                  // eslint-disable-next-line react/no-unknown-property
-                  allowpopups=""
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    width: device.width,
-                    height: device.height,
-                  }}
-                />
-              )}
-
+              {/* The simulator itself is a main-process WebContentsView
+                  (mounted via attachNativeSimulator) painted over this bezel
+                  region — it hosts DeviceShell's nested render webviews, so the
+                  renderer never renders a `<webview>` here. */}
               {compileStatus.status === 'compiling' && (
                 <div className="absolute inset-0 flex items-center justify-center bg-black/50 rounded-[36px] z-10">
                   <div className="text-text-dim text-[13px]">正在编译中...</div>

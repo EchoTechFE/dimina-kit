@@ -128,7 +128,9 @@ flowchart TB
 - **中枢**：`Host` 负责全部横切逻辑——启动数据源、接收 `pull`、发出 `push`、暴露自动化访问器、释放资源。
 - **renderer**：只有一个通用 hook，按 `id` 把信封投影成 state。
 
-> **native-host 例外**：上图描述的是默认 simulator-preload 路径。开启 native-host 时，页面 DOM 与 service 逻辑跑在独立 webContents 里，simulator preload 会跳过 `WxmlSource` 注册（仅注册 `AppDataSource`）；renderer 改从主进程通道 `SimulatorWxmlChannel` / `SimulatorAppDataChannel` 取 WXML 与 AppData，不走本框架的 push/pull 传输。
+> **面板 WXML / AppData 都由 main 取**：native-host 是唯一运行时，页面 DOM 跑在 render-host `<webview>` guests、service 逻辑跑在 service-host 窗口——都不是 simulator preload 能直达的同文档 iframe，所以本框架的 iframe 数据源在这里只会推 null。因此 renderer 的**面板**数据改从主进程的专用通道取：WXML 走 `SimulatorWxmlChannel`、AppData 走 `SimulatorAppDataChannel`（main 侧 simulator-wxml / simulator-appdata 服务 → `GetSnapshot` seed + `Event` push），都不走本框架的 push/pull 传输；renderer 侧由 `useNativeChannelSnapshot`（见 [§11 文件清单](#11-文件清单)）消费这两条通道。
+>
+> 据此 simulator preload 只注册 **`AppDataSource` 一个 source**，且不是为了面板数据，而是因为它的 `start()` 会装上 `window.__simulatorHook.appData` 钩子并把扁平缓存镜像到 `window.__simulatorData.getAppdata()`——这两个仍被 simulator 顶层帧里的自动化 `getData`（`automation/handlers/page.ts`）、MCP 上下文概览（`mcp/tools/context-tools.ts`）和 e2e automator helper 读取。`WxmlSource` 是纯顶层帧 DOM observer，在 native-host 下只会推 null，故跳过（`createWxmlSource` / `createMiniappSnapshotHost` 仍从 `@dimina-kit/devtools/preload` 导出，供外部/组合 preload 使用）。
 
 ## 5. 调用链路（时序图）
 
@@ -351,8 +353,9 @@ push / pull / 自动化读取 / reload 重同步，全部自动获得。
 | `src/preload/miniapp-snapshot/types.ts` | `MiniappSnapshotSource<T>` / `SnapshotEnvelope<T>` / `MiniappSnapshotHost` 接口定义 |
 | `src/preload/miniapp-snapshot/host.ts` | 中枢 `MiniappSnapshotHost`：`register` / `install` + push/pull + `window.__miniappSnapshot` 访问器 |
 | `src/preload/instrumentation/app-data.ts` | `AppDataSource`（Worker 插桩 → AppData 快照） |
-| `src/preload/instrumentation/wxml.ts` | `WxmlSource`（MutationObserver → WXML 快照） |
-| `src/renderer/modules/main/features/project-runtime/controllers/use-miniapp-snapshot.ts` | renderer 通用 hook `useMiniappSnapshot`：信封 → React state 投影 |
-| `src/shared/ipc-channels.ts` | `MiniappSnapshotChannel`（`miniapp-snapshot:push` / `miniapp-snapshot:pull`） |
+| `src/preload/instrumentation/wxml.ts` | `WxmlSource`（MutationObserver → WXML 快照）；导出供 composed preload 复用，native-host 默认 preload 不注册它 |
+| `src/renderer/modules/main/features/project-runtime/controllers/use-native-channel-snapshot.ts` | native-host 下 renderer 实际用的 hook `useNativeChannelSnapshot`：按主进程通道 seed（`GetSnapshot`）+ push（`Event`）投影成 React state，替代已删除的 `use-miniapp-snapshot.ts` |
+| `src/renderer/modules/main/features/project-runtime/controllers/use-panel-data.ts` | 装配 WXML / AppData / Storage 三个面板的数据：WXML / AppData 经 `useNativeChannelSnapshot` 走 `SimulatorWxmlChannel` / `SimulatorAppDataChannel` |
+| `src/shared/ipc-channels.ts` | `MiniappSnapshotChannel`（`miniapp-snapshot:push` / `miniapp-snapshot:pull`，供 composed preload 数据源使用）+ `SimulatorWxmlChannel` / `SimulatorAppDataChannel`（native-host 默认数据通道） |
 
 > 面板数据的 host 扩展模型（`workbench(config)` 单入口）见 [`workbench-model.md`](./workbench-model.md)。

@@ -9,7 +9,6 @@ import { installCustomApisBridge } from '../runtime/custom-apis.js'
 import { installTempFileBridge } from '../runtime/temp-files.js'
 import { installConsoleInstrumentation } from '../instrumentation/console.js'
 import { createAppDataSource } from '../instrumentation/app-data.js'
-import { createWxmlSource } from '../instrumentation/wxml.js'
 import { createMiniappSnapshotHost } from '../miniapp-snapshot/host.js'
 import { setupApiCompatHook } from '../shared/api-compat.js'
 import { installNativeHostBridge } from '../runtime/native-host.js'
@@ -40,24 +39,24 @@ if (!__isChildHostFrame) {
   installTempFileBridge()
   installConsoleInstrumentation()
 
-  // Native-host render path (opt-in via DIMINA_NATIVE_HOST). Self-gating: it asks
-  // main (sendSync) whether native-host is on and, if so, exposes
+  // Native-host render path: self-gating bridge that exposes
   // `window.__diminaNativeHost` so simulator/main.tsx boots the DeviceShell +
-  // SimulatorMiniApp pipeline. A no-op when off, so the default path is untouched.
+  // SimulatorMiniApp pipeline.
   installNativeHostBridge()
 
-  // `installNativeHostBridge()` above exposes `window.__diminaNativeHost` only
-  // when native-host is on. Under native-host the page DOM lives in child
-  // render-host <webview> guests — not a same-document iframe reachable from this
-  // preload — so the iframe-based WXML source would only ever publish null. Main
-  // sources WXML instead (simulator-wxml service → SimulatorWxmlChannel); skip
-  // the simulator-side source to avoid dead MutationObservers + null pushes.
-  const nativeHostEnabled = window.__diminaNativeHost?.enabled === true
-
+  // AppData instrumentation source. Its `start()` installs the
+  // `window.__simulatorHook.appData` hook and mirrors the flat cache into the
+  // `window.__simulatorData.getAppdata()` automation surface — both still read
+  // in the simulator (top) frame by automation `getData` (handlers/page.ts),
+  // the MCP context overview (mcp/tools/context-tools.ts) and the e2e automator
+  // helper. The panel-facing WXML/AppData *snapshots* come from main instead
+  // (simulator-wxml / simulator-appdata services → SimulatorWxmlChannel /
+  // SimulatorAppDataChannel), so we deliberately do NOT register
+  // `createWxmlSource` here — under native-host the page DOM lives in child
+  // render-host <webview> guests, so a top-frame DOM observer would only ever
+  // publish null. (`createWxmlSource` / `createMiniappSnapshotHost` stay
+  // exported from `@dimina-kit/devtools/preload` for external/composed preloads.)
   const snapshotHost = createMiniappSnapshotHost()
   snapshotHost.register(createAppDataSource())
-  if (!nativeHostEnabled) {
-    snapshotHost.register(createWxmlSource())
-  }
   snapshotHost.install()
 }

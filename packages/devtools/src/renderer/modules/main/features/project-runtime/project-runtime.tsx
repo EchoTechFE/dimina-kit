@@ -115,8 +115,8 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
 
   // ── Cell nodes — the actual content for each business panel ─────────
   //
-  // - `simulator`: SimulatorPanel renders the device-shell + <webview>.
-  //   No main-process overlay → no bounds binding.
+  // - `simulator`: SimulatorPanel renders the device-shell bezel; the
+  //   simulator itself is a main-process WebContentsView painted over it.
   //
   // - `editor`: In-renderer Monaco component. It is a normal React child,
   //   not an overlay placeholder, and has no bounds binding.
@@ -132,13 +132,9 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
         onDeviceChange={device.handleDeviceChange}
         onZoomChange={device.handleZoomChange}
         compileStatus={session.compileStatus}
-        preloadPath={session.preloadPath}
-        simulatorUrl={simulator.simulatorUrl}
-        simulatorRef={simulator.simulatorRef}
         currentPage={simulator.currentPage}
         copied={copied}
         onCopyPagePath={copyPagePath}
-        nativeHost={simulator.nativeHost}
       />
     ),
     // In-renderer Monaco editor — replaces the OpenSumi WebContentsView
