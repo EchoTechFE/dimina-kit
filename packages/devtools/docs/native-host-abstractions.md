@@ -174,12 +174,24 @@ audio 元素本身健康（诊断到 `fire -> canplay rs=4`）。断点在 **kee
 
 native-host 的 keep 机器（`run-api-async` keep 重发、`handleApiResponse` 的 `payload.keep` re-fire `bridge-router.ts:1107`）**形同虚设**——因为没有任何东西在这条路径上把 keep 置回 true。
 
-### 设计（待 codex 讨论 + 定稿）
+### 设计（codex 定稿）
 
-submodule 故意把 keep 留在 service-local（`callback.store`），容器无法从 params 恢复。修法 = **容器/router 侧按 API 名内在地知道哪些是持久订阅**（subscription-by-name），落在 `packages/devtools`、不动 submodule：
+submodule 故意把 keep 留在 service-local（`callback.store`/`callback.js:8-36`，keep 重入全程 service 内），容器无法从 params 恢复。修法 = **容器/router 侧按 API 名内在识别持久订阅**（subscription-by-name），落 `packages/devtools`、不动 submodule。codex grep 确认**现存订阅类 API 全集 = 仅 `audioListen`**（9 个 audio DOM 事件；upload 走 progressId 另一类、不受影响）。
 
-- 在 `src/simulator/run-api-async.ts` 维护一组订阅类 API 名（`audioListen`，及其它 `on*` 监听类），对它们：**不走同步一次性 settle**（不发首个空响应）、每次 `fire` 都带 `{keep:true}`、由 `handleApiResponse` 保持 pending 存活、不发 complete。router 既有 keep-alive 逻辑（`bridge-router.ts:1107-1126`）已具备，只是这条路径没触达。
-- 待 codex 复核的点：(1) 订阅类 API 名清单怎么维护最不易漏（硬编码 set vs 注册表标注）；(2) 与现有 keep 机器（之前修过一次的 keep 重发）会不会重复 fire / complete；(3) `dispose`/取消订阅（`offCanplay`/页面卸载）路径怎么收尾、pending 何时删；(4) 是否影响非 native 默认路径（已下线，但 preload 仍导出）。
+**改点（codex 推荐，file:line）**：
+1. 新建 `src/shared/simulator-api-metadata.ts`：`export const PERSISTENT_SIMULATOR_APIS = new Set(['audioListen'])` + `isPersistentSimulatorApi(name)`。单一事实源，新增订阅 API 加一行。
+2. `src/main/ipc/bridge-router.ts:1033`：`keep = params.keep === true || isPersistentSimulatorApi(name)`（不再为订阅类装 5s one-shot timer）。
+3. `bridge-router.ts:1058-1070`（forwardedParams 构造后）：订阅类注入 `forwardedParams.keep = true`（让容器侧也认得）。
+4. `src/simulator/run-api-async.ts:81-84`：`keep = params.keep || isPersistentSimulatorApi(name)`。
+5. `run-api-async.ts:151-155`：`if (!hadSuccess && !hadFail && !keep)` 才走同步空 settle——订阅类**跳过**同步空 settle（否则会先发一次空 keep success）。
+
+**收尾 / 防泄漏（codex 标的真泄漏，⏳ 暂记 follow-up）**：页面卸载但 app 未销毁期间，`audioListen` pending 残留到 app dispose。有界（每 app session、app dispose 时 `pendingApiCalls` 全清）、非关键，且修法需新增 audioDestroy→drain 消息路径（未被测试钉住、加路径自身有风险），故本批**不做**，记为 follow-up：
+6. `bridge-router.ts:1047-1052` pending 增 `subscriptionKey?: string`（`audioListen:${audioId}`）。
+7. `audioDestroy`（`service-apis/audio/index.js:137-140` → `simulator-api-media.ts:611-621`）发 drain 信号，router 按 key 删匹配 pending + `callback.remove(audio_${id})`。
+
+**落地状态**：核心 1-5 ✅ 已落地+验证（新建 `simulator-api-metadata.ts`；bridge-router `:1033` keep by-name + `:1107` 响应 by-name；run-api-async keep by-name + keep 订阅同步 `resolve()` 不 emit）。验证：typecheck0 / vitest 1208（+3 keep 单测：metadata 契约 + run-api-async 不空 settle/每事件重发 + bridge-router 无 5s timeout/by-name keep-alive）/ `native-host-audio.spec.ts` RED→GREEN（canplay/duration 端到端）。
+
+**不变式（codex 确认）**：keep-alive 分支（`bridge-router.ts:1101-1111`）已 only-fire-success、不 delete pending、不 fire complete → **无 double-complete**；本次是"补触达"非改语义。非 native fallback runner（`main-api-runner.ts`）不在 native audio 路径（native 走 `device-shell.tsx:181-196` 的 run-api-async），不在本次范围。
 
 ### 验证
 

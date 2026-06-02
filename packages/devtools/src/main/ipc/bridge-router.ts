@@ -3,6 +3,7 @@ import type { IpcMainEvent, IpcMainInvokeEvent, WebContents } from 'electron'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { BRIDGE_CHANNELS as C, SIMULATOR_EVENTS as E } from '../../shared/bridge-channels.js'
+import { isPersistentSimulatorApi } from '../../shared/simulator-api-metadata.js'
 import { devtoolsPackageRoot } from '../utils/paths.js'
 import type {
   ActivePagePayload,
@@ -1030,7 +1031,10 @@ function forwardApiCallToSimulator(
   // event fires (which can be well past the 5s no-handler window). Arming the
   // one-shot timeout would tear the subscription down before it ever delivers,
   // so keep calls run without a timeout and are reaped on page/app teardown.
-  const keep = params.keep === true
+  // Recognise persistent subscriptions BY NAME (`audioListen`) too: the service
+  // host strips the original `keep: true` before forwarding, so `params.keep` is
+  // gone by the time we route the call. See shared/simulator-api-metadata.ts.
+  const keep = params.keep === true || isPersistentSimulatorApi(name)
   const timer = keep
     ? undefined
     : setTimeout(() => {
@@ -1104,7 +1108,10 @@ function handleApiResponse(
   // timeout is no longer relevant once the subscription has produced a fire,
   // so clear it but keep the entry alive until page/app teardown (which
   // drains pendingApiCalls in the dispose path).
-  if (payload.keep && payload.ok) {
+  // `payload.keep` OR a by-name persistent API: be robust even if the verdict
+  // on the wire didn't echo `keep` (the service host strips it), so the router
+  // never tears a known subscription (`audioListen`) down as a one-shot.
+  if ((payload.keep || isPersistentSimulatorApi(pending.name)) && payload.ok) {
     clearTimeout(pending.timer)
     pending.timer = undefined
     sendCallback(ap, pending.callbacks.success, payload.result)

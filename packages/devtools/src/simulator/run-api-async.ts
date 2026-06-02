@@ -15,6 +15,7 @@
  * verdict back to main, which fires the *real* service-side callbacks.
  */
 import type { MiniAppContext } from './types'
+import { isPersistentSimulatorApi } from '../shared/simulator-api-metadata.js'
 
 // Loose handler signature: SimulatorMiniApp's apiRegistry binds `this` to the
 // MiniApp instance (a superset of MiniAppContext); the wx.* handlers in
@@ -78,10 +79,16 @@ export function runApiAsync(
     return Promise.resolve()
   }
 
+  // Persistent subscriptions keep re-firing on every underlying event. We
+  // recognise them BY NAME (`audioListen`) because the service host strips the
+  // original `keep: true` before the call reaches us — see
+  // shared/simulator-api-metadata.ts. The legacy `params.keep` path still works
+  // for any caller that does pass it through.
   const keep =
-    params && typeof params === 'object' && !Array.isArray(params)
+    isPersistentSimulatorApi(name) ||
+    (params && typeof params === 'object' && !Array.isArray(params)
       ? (params as Record<string, unknown>).keep === true
-      : false
+      : false)
 
   return new Promise<void>((resolve) => {
     let settled = false
@@ -151,7 +158,16 @@ export function runApiAsync(
       // Sync handler that ignored our injected callbacks (e.g. getSystemInfoSync)
       // — use its return value as the success result.
       if (!hadSuccess && !hadFail) {
-        finish({ ok: true, result: ret })
+        if (keep) {
+          // Persistent subscription (`audioListen`): the handler bound its DOM
+          // listeners and returned synchronously. Its real verdicts arrive later
+          // on each media event, so resolve the promise for sequencing WITHOUT
+          // emitting — emitting here would be an empty one-shot settle that marks
+          // the call settled and drops every subsequent event fire.
+          resolve()
+        } else {
+          finish({ ok: true, result: ret })
+        }
       }
       // Otherwise: wait for the captured success/fail callback above to fire.
     } catch (err: unknown) {
