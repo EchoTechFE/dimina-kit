@@ -1,5 +1,5 @@
-import type { WebContents } from 'electron'
-import { shell, WebContentsView, webContents } from 'electron'
+import type { IpcMainEvent, WebContents } from 'electron'
+import { ipcMain, shell, WebContentsView, webContents } from 'electron'
 import path from 'path'
 import { cjsSiblingPreloadPath, mainPreloadPath } from '../../utils/paths.js'
 import {
@@ -7,7 +7,12 @@ import {
   handleWindowOpenExternal,
 } from '../../windows/navigation-hardening.js'
 import type { RenderEvent } from '../../ipc/bridge-router.js'
+import { SimulatorCustomApiBridgeChannel } from '../../../shared/ipc-channels.js'
 import * as layout from '../layout/index.js'
+import {
+  handleCustomApiBridgeRequest,
+  type CustomApiBridgeRequest,
+} from '../simulator/custom-apis.js'
 import { getDefaultTab, type WorkbenchContext } from '../workbench-context.js'
 
 /**
@@ -27,6 +32,15 @@ export interface ViewManagerContext {
   panels: string[]
   notify: WorkbenchContext['notify']
   bridge?: WorkbenchContext['bridge']
+  /**
+   * Per-context registry of host-registered simulator custom APIs. The
+   * native-host simulator is a top-level WebContentsView with no embedder
+   * renderer, so `attachNativeSimulator` dispatches the simulator-side
+   * `__diminaCustomApis` bridge straight to this registry (the default
+   * `<webview>` path proxies through the trusted main renderer instead).
+   * Optional so partial test contexts compile.
+   */
+  simulatorApis?: WorkbenchContext['simulatorApis']
   /**
    * Header bar height in px, used to position overlay views below the header.
    * Optional here so partial test contexts compile; `createWorkbenchContext`
@@ -162,6 +176,12 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   // while `simulatorView` above hosts its DevTools in the right panel region.
   let nativeSimulatorView: WebContentsView | null = null
   let nativeSimulatorViewAdded = false
+  // NATIVE-HOST ONLY. The `ipcMain.on` listener that services the
+  // `__diminaCustomApis` bridge for the current native simulator webContents
+  // (see `attachNativeCustomApiBridge`). Tracked so we can remove it before
+  // tearing down / re-attaching the view (otherwise listeners leak across
+  // relaunch cycles).
+  let nativeCustomApiBridgeHandler: ((event: IpcMainEvent, req: unknown) => void) | null = null
   // NATIVE-HOST ONLY. The current device zoom as a factor (zoomPercent/100),
   // last reported by the renderer via setNativeSimulatorViewBounds. Stored so
   // nested render-host `<webview>` guests attached AFTER a zoom change still
@@ -523,6 +543,62 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     }
   }
 
+  /**
+   * Remove the custom-apis bridge `ipcMain.on` listener, if any. Idempotent.
+   */
+  function detachNativeCustomApiBridge(): void {
+    if (nativeCustomApiBridgeHandler) {
+      ipcMain.removeListener(SimulatorCustomApiBridgeChannel.Request, nativeCustomApiBridgeHandler)
+      nativeCustomApiBridgeHandler = null
+    }
+  }
+
+  /**
+   * NATIVE-HOST ONLY. The native simulator is a top-level WebContentsView with
+   * NO embedder renderer, so the simulator-side `__diminaCustomApis` bridge
+   * (`src/preload/runtime/custom-apis.ts`) cannot reach the host via
+   * `ipcRenderer.sendToHost` — that only delivers to a `<webview>`'s embedder,
+   * which is how the default path's `useCustomApiProxy` answered it. A
+   * top-level WebContentsView has no embedder, and `sendToHost` does NOT loop
+   * back as `ipc-message-host` on itself, so that channel never fires here.
+   *
+   * Under native-host the bridge instead talks to `ipcMain` directly (the same
+   * way `installNativeHostBridge` issues SPAWN/PAGE_OPEN): the preload sends
+   * `SimulatorCustomApiBridgeChannel.Request` via `ipcRenderer.send`, this
+   * `ipcMain.on` listener answers it. We do NOT route through `IpcRegistry` /
+   * the sender-policy white-list (the simulator is deliberately kept off it);
+   * instead we accept the message ONLY when `event.sender` is THIS precise
+   * simWc — the same trust model bridge-router uses for the simulator's own
+   * SPAWN messages. The result is dispatched through the shared
+   * `ctx.simulatorApis` registry and the id-correlated `Response` is posted
+   * back via `simWc.send`, which the preload's `ipcRenderer.on(Response)`
+   * listener settles.
+   */
+  function attachNativeCustomApiBridge(simWc: WebContents): void {
+    // Re-attach defensively: a stale listener from a prior simWc must never
+    // linger. (attachNativeSimulator already tears the old view down first.)
+    detachNativeCustomApiBridge()
+
+    const apis = ctx.simulatorApis
+    if (!apis) return
+
+    const simWcId = simWc.id
+    const handler = (event: IpcMainEvent, req: unknown): void => {
+      // Trust gate: only the exact native simulator webContents may drive this.
+      if (event.sender.id !== simWcId) return
+      const r = req as CustomApiBridgeRequest | undefined
+      if (!r || typeof r.id !== 'number') return
+      void handleCustomApiBridgeRequest(apis, r).then((response) => {
+        if (simWc.isDestroyed()) return
+        simWc.send(SimulatorCustomApiBridgeChannel.Response, response)
+      }).catch(() => { /* simWc torn down mid-dispatch; drop */ })
+    }
+
+    nativeCustomApiBridgeHandler = handler
+    ipcMain.on(SimulatorCustomApiBridgeChannel.Request, handler)
+    simWc.once('destroyed', detachNativeCustomApiBridge)
+  }
+
   function attachNativeSimulator(simulatorUrl: string, simWidth: number): void {
     if (!ctx.preloadPath) {
       console.error('[workbench] attachNativeSimulator — preloadPath unset; cannot mount native simulator')
@@ -532,6 +608,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
 
     // Tear down any previous native simulator view (relaunch / re-open).
     if (nativeSimulatorView) {
+      detachNativeCustomApiBridge()
       if (nativeSimulatorViewAdded) {
         try {
           ctx.windows.mainWindow.contentView.removeChildView(nativeSimulatorView)
@@ -564,6 +641,11 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     })
     nativeSimulatorView = view
     const simWc = view.webContents
+
+    // Service the simulator-side `__diminaCustomApis` bridge: this top-level
+    // WebContentsView has no embedder renderer to proxy through, so dispatch its
+    // `sendToHost` requests straight to `ctx.simulatorApis` from main.
+    attachNativeCustomApiBridge(simWc)
 
     // DeviceShell mounts per-page render-host `<webview>`s INSIDE this view.
     // Mirror windows/main-window/create.ts: pin them onto persist:simulator and
@@ -652,6 +734,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
 
   function detachSimulator(): void {
     stopFollowingNativeRenderGuest()
+    detachNativeCustomApiBridge()
     // Native-host simulator content view (no-op in the default path).
     if (nativeSimulatorView) {
       if (nativeSimulatorViewAdded && !ctx.windows.mainWindow.isDestroyed()) {

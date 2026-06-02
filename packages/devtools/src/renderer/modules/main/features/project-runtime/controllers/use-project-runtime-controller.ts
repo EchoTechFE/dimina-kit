@@ -14,7 +14,6 @@ import { useNativeHost } from './use-native-host'
 import { useSession } from './use-session'
 import { useSimulator } from './use-simulator'
 import { usePanelData, type AppDataState } from './use-panel-data'
-import { useCustomApiProxy } from './use-custom-api-proxy'
 import { useRightPane } from './use-right-pane'
 import { usePopover } from './use-popover'
 
@@ -162,13 +161,6 @@ export function useProjectRuntimeController(
 
   const panelDataHook = usePanelData({
     compileStatus: sessionHook.compileStatus,
-  })
-
-  // Forward simulator-webview custom-apis bridge requests to main and post
-  // results back. No state output — fire-and-forget proxy.
-  useCustomApiProxy({
-    compileStatus: sessionHook.compileStatus,
-    simulatorRef,
   })
 
   const rightPaneHook = useRightPane({

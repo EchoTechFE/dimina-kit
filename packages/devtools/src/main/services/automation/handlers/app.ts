@@ -1,6 +1,7 @@
 import type { Handler } from '../shared.js'
 import { evalInSim, getActivePageWc, getSimulator } from '../exec.js'
 import { decodePageSpec, parseLocationRoute } from '../../../../shared/simulator-route.js'
+import { waitForActivePage } from '../wait-active-page.js'
 
 export const appHandlers: Record<string, Handler> = {}
 
@@ -104,9 +105,23 @@ appHandlers['App.callWxMethod'] = async (ctx, params) => {
       const arg = method === 'navigateBack'
         ? (args[0] ?? { delta: 1 })
         : (args[0] ?? {})
+      // Capture the active page BEFORE navigating so we can wait for it to
+      // actually change, instead of blindly sleeping a fixed duration.
+      const since = ctx.bridge.getActiveBridgeId()
       await serviceWc.executeJavaScript(`wx.${method}(${JSON.stringify(arg)})`)
-      // Give the service-driven navigation time to mount the new page.
-      await new Promise((r) => setTimeout(r, method === 'navigateBack' ? 1500 : 2000))
+      // Wait for the bridge's `activePage` signal (the new page mounted), with a
+      // timeout floor = the old blind-wait duration. Resolves as soon as the new
+      // page is active — far faster than the fixed sleep for the common case —
+      // and still bounded for edges (e.g. switchTab back to an already-mounted
+      // tab keeps the same bridgeId, so it falls through to the floor, same as
+      // the old behaviour). See wait-active-page.ts.
+      const timeoutMs = method === 'navigateBack' ? 1500 : 2000
+      await waitForActivePage(ctx.bridge, {
+        since,
+        timeoutMs,
+        onTimeout: () =>
+          console.warn(`[automation] ${method}: activePage signal not seen within ${timeoutMs}ms — proceeding on timeout floor`),
+      })
       return { result: undefined }
     }
     // Non-nav: invoke on the service-host wx and return its (sync) value. Async

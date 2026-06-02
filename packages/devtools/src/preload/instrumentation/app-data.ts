@@ -19,7 +19,15 @@ import {
 export type { AppDataSnapshot } from '../../shared/appdata-accumulator.js'
 
 /**
- * The AppData snapshot data source (default dimina-fe path).
+ * The AppData snapshot data source.
+ *
+ * Under native-host (the sole runtime) this is registered in the simulator top
+ * frame purely for its `start()` side effects — it installs
+ * `window.__simulatorHook.appData` and mirrors the flat cache into the
+ * `window.__simulatorData.getAppdata()` automation surface still read by
+ * automation `getData` (handlers/page.ts), the MCP context overview
+ * (mcp/tools/context-tools.ts) and the e2e automator. Its iframe/Worker-based
+ * snapshot publishing is inert there (no mini-app Worker runs in the top frame).
  *
  * Instruments `window.Worker` (incoming `message` decoding + outgoing
  * `postMessage` interception) and installs `window.__simulatorHook.appData`,

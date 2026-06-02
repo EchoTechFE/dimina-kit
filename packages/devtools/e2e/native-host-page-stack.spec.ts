@@ -9,10 +9,11 @@
  *     matches the most-recently-navigated route.
  *   - `wx.navigateBack` shrinks the stack back (length 3 → 2).
  *
- * Today under DIMINA_NATIVE_HOST=1 `App.getPageStack` only ever synthesises a
- * single-entry stack for the visible render-host page, so after two navigateTo
- * pushes it returns length 1 instead of 3 — this spec is RED until the
- * native-host page-stack tracking is fixed.
+ * This contract is satisfied (GREEN): DeviceShell tracks the per-tab full stack
+ * (src/simulator/device-shell/page-stack-controller.ts) and reports it over the
+ * PAGE_STACK channel; the bridge stores it (bridge-router.ts `ap.pageStack`) and
+ * `App.getPageStack` (automation/handlers/app.ts) returns the full ordered stack
+ * rather than synthesising a single visible entry.
  *
  * Drives the SAME miniprogram-automator WebSocket surface the other
  * native-host specs use (`App.callWxMethod` for nav, `App.getCurrentPage` /

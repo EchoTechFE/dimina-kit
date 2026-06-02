@@ -14,9 +14,14 @@ import type { SenderPolicy } from './ipc-registry.js'
  *
  * The simulator webview is intentionally NOT on this list. Anything it
  * needs from main (currently just the custom-apis bridge — see
- * `installCustomApisBridge` in `src/preload/runtime/custom-apis.ts` and the
- * matching `useCustomApiProxy` host hook) proxies through the trusted
- * main-window renderer via `ipcRenderer.sendToHost` + `<webview>.send`.
+ * `installCustomApisBridge` in `src/preload/runtime/custom-apis.ts`) reaches
+ * the host without being white-listed here:
+ *  - default `<webview>` path: proxied through the trusted main-window renderer
+ *    via `ipcRenderer.sendToHost` + `<webview>.send`;
+ *  - native-host path (top-level WebContentsView, no embedder): dispatched by a
+ *    `ctx.simulatorApis`-backed `ipcMain.on` listener bound to that exact simWc
+ *    in view-manager `attachNativeCustomApiBridge` — it gates on the precise
+ *    sender id rather than this white-list.
  * Keeping the guest off this list contains the blast radius if the
  * simulator content is ever compromised.
  *

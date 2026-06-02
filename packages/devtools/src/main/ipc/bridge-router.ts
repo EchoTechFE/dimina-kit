@@ -759,6 +759,20 @@ async function injectLogicBundle(ap: AppSession): Promise<void> {
 function maybeSendResourceLoaded(ap: AppSession, page: PageSession): void {
   if (page.resourceLoadedSent || !ap.serviceLoaded || !page.renderLoaded) return
   page.resourceLoadedSent = true
+  // Non-root pages (navigateTo / redirectTo / reLaunch / non-cached switchTab)
+  // were never sent a SERVICE-side loadResource — only the root gets one at
+  // bootServiceHost. Without it the service never `modRequire`s the page module,
+  // so `getModuleByPath` misses and `createInstance` no-ops: the page mounts on
+  // the render side but its service instance — and thus its AppData / WXML /
+  // `Page.getData` — never exist. Mirror the render side, which sends
+  // loadResource per page on `renderHostReady`. `loadResource` only registers
+  // the module definition (no firstRender), and same-channel FIFO ordering
+  // guarantees the module is registered before the `resourceLoaded` below runs
+  // `createInstance`. Safety invariants 1-4 reviewed in
+  // docs/native-host-abstractions.md.
+  if (!page.isRoot) {
+    forwardToService(ap, makeLoadResource(ap, page, 'service'))
+  }
   forwardToService(ap, {
     type: 'resourceLoaded',
     target: 'service',

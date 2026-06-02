@@ -46,13 +46,12 @@ export function computeSimulatorBounds(
  * NATIVE-HOST ONLY. Bounds for the simulator CONTENT view (the DeviceShell
  * host WebContentsView) — the region LEFT of the splitter, below the header.
  *
- * PART-2 TODO (layout fidelity): this fills the whole simulator-panel column.
- * It does NOT yet reproduce the renderer `<webview>` chrome — the device bezel
- * / rounded corners (44px radius shell), the device-select + zoom toolbar
- * (~40px tall, top), the current-page footer (~30px tall, bottom), centering
- * inside an `overflow:auto` area, or `setZoomFactor` scaling. The view is
- * positioned roughly so nested render webviews attach + render; exact pixel
- * fidelity (bezel, zoom, scroll, splitter-drag) is deferred to Part 2.
+ * COARSE fallback only: fills the whole simulator-panel column. Used for the
+ * initial placement before the renderer measures the device bezel's inner
+ * screen. Exact pixel fidelity — bezel / rounded corners, zoom toolbar + footer
+ * insets, centering, `setZoomFactor` scaling, and scroll/splitter-drag tracking
+ * — is produced by `computeNativeSimulatorViewParams` once the renderer pushes
+ * the measured inner-screen rect via `SimulatorChannel.SetNativeBounds`.
  */
 export function computeNativeSimulatorBounds(
   contentWidth: number,

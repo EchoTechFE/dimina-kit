@@ -80,11 +80,15 @@ export const SimulatorCustomApiChannel = {
   Invoke: 'simulator:custom-apis:invoke',
 } as const
 
-// ── Custom APIs bridge proxy (simulator <webview> ↔ main-window renderer) ──
-// Request:  webview → host via `ipcRenderer.sendToHost`,
-//           payload = { id, op: 'list' } | { id, op: 'invoke', name, params }
-// Response: host → webview via `<webview>.send`,
-//           payload = { id, result } | { id, error }
+// ── Custom APIs bridge (simulator → host) ──
+// payload = { id, op: 'list' } | { id, op: 'invoke', name, params } for Request,
+// { id, result } | { id, error } for Response. Two transports (chosen in
+// `src/preload/runtime/custom-apis.ts`):
+//  • default `<webview>`: Request via `ipcRenderer.sendToHost` → main-window
+//    renderer proxy → Response via `<webview>.send`;
+//  • native-host (top-level WebContentsView, no embedder): Request via
+//    `ipcRenderer.send` → `ipcMain.on` dispatcher bound to that simWc
+//    (view-manager `attachNativeCustomApiBridge`) → Response via `simWc.send`.
 //
 // Request/response are correlated by `id` so multiple concurrent invokes can
 // be in flight at once.
