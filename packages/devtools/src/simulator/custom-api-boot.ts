@@ -5,8 +5,8 @@
  * `__diminaCustomApis` bridge — an IPC round-trip through the host renderer.
  * `registerCustomApis` resolves only once every name has been handed to
  * `target.registerApi`, so the simulator entry can `await` it *before*
- * `application.presentView(...)`. That ordering guarantees the APIs are on
- * `MiniApp.apiRegistry` before the mini-app runtime boots and enumerates the
+ * `miniApp.spawn()`. That ordering guarantees the APIs are on the mini-app's
+ * `apiRegistry` before the mini-app runtime boots and enumerates the
  * API surface — notably Taro's one-shot `Object.keys(wx)` at init, which
  * otherwise misses APIs that register late (e.g. `wx.login`).
  *

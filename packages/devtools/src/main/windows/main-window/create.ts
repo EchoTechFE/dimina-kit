@@ -48,11 +48,12 @@ function configureSimulatorSession(simulatorPreloadPath: string): void {
 
   simulatorSession.webRequest.onHeadersReceived((details, callback) => {
     const headers = details.responseHeaders ?? {}
+    // CORS for the native render/service hosts to fetch compiled app resources
+    // cross-origin. (The COOP/COEP cross-origin-isolation headers were only for
+    // the removed default-path SharedArrayBuffer sync Worker — dropped.)
     headers['access-control-allow-origin'] = ['*']
     headers['access-control-allow-headers'] = ['*']
     headers['access-control-allow-methods'] = ['*']
-    headers['Cross-Origin-Opener-Policy'] = ['same-origin']
-    headers['Cross-Origin-Embedder-Policy'] = ['credentialless']
     callback({ responseHeaders: headers })
   })
 }
