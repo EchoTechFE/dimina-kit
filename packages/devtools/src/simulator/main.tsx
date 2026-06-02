@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { Application, MiniApp } from 'container-api'
+import type { MiniApp } from 'container-api'
 import { directRequest } from './direct-request'
 import { simulatorApis } from './simulator-api'
 import { registerCustomApis } from './custom-api-boot'
@@ -32,17 +32,11 @@ declare global {
   }
 }
 
-// ── Inject container stylesheet ───────────────────────────────────────────────
-// Added programmatically so Vite does not try to bundle the external asset.
-const _styleLink = document.createElement('link')
-_styleLink.rel = 'stylesheet'
-_styleLink.href = '/assets/container.css'
-document.head.appendChild(_styleLink)
-
 // The active mini-app instance, for the sync-invoke handler. Either the
 // dimina-fe `MiniApp` (default path) or `SimulatorMiniApp` (native-host path);
 // both expose `apiRegistry`, which is all `__handleSyncInvoke` needs.
 let currentMiniApp: MiniApp | SimulatorMiniApp | null = null
+let containerStylesheetInjected = false
 
 // ── Sync invoke handler (main-thread side) ────────────────────────────────────
 // Called by the Worker wrapper's message listener when a __sync_invoke__
@@ -152,6 +146,15 @@ function SimulatorApp() {
     if (!el) return
 
     const boot = async (): Promise<void> => {
+      if (!containerStylesheetInjected) {
+        const _styleLink = document.createElement('link')
+        _styleLink.rel = 'stylesheet'
+        _styleLink.href = '/assets/container.css'
+        document.head.appendChild(_styleLink)
+        containerStylesheetInjected = true
+      }
+
+      const { Application, MiniApp } = await import('container-api')
       const application = new Application()
 
       // Status bar shim — upstream MiniApp.getSystemInfoAsync DOM-queries
