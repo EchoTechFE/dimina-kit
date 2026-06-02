@@ -338,29 +338,61 @@ export async function findButtonByText(
 export async function resetSimulatorState(
   electronApp: ElectronApplication,
 ): Promise<void> {
-  await evalInSimulator(electronApp, `try { wx.clearStorageSync() } catch (e) {}`).catch(() => {})
-
-  // dimina's own page stack is unwound by clicking each
-  // webview's back button (which calls miniApp.navigateBack internally). Loop
-  // until only one webview remains (= home), or we hit a small safety bound.
-  // We swallow errors so a flaky reset never blocks the next test.
-  for (let attempt = 0; attempt < 8; attempt++) {
-    const stillNonHome = await evalInSimulator<boolean>(
+  try {
+    const isNativeHost = await evalInSimulator<boolean>(
       electronApp,
-      `(() => {
-        try {
-          const webviews = document.querySelectorAll('.dimina-native-view')
-          if (webviews.length <= 1) return false
-          const top = webviews[webviews.length - 1]
-          const backBtn = top.querySelector('.dimina-native-webview__navigation-left-btn')
-          if (backBtn) (backBtn).click()
-          return true
-        } catch (e) { return false }
-      })()`,
+      `(() => !!document.querySelector('.device-shell-root'))()`,
     ).catch(() => false)
-    if (!stillNonHome) break
-    // Small wait for dimina's exit animation; navigateBack guards on
-    // webviewAnimaEnd so back-to-back clicks otherwise no-op.
-    await new Promise((r) => setTimeout(r, 350))
+
+    if (isNativeHost) {
+      await evalInSimulator(electronApp, `try { wx.clearStorageSync() } catch (e) {}`).catch(() => {})
+
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const clickedBack = await evalInSimulator<boolean>(
+          electronApp,
+          `(() => {
+            try {
+              const webviews = document.querySelectorAll('.device-shell__webview')
+              if (webviews.length <= 1) return false
+              const backBtn = document.querySelector('.nav-bar__back')
+              if (!backBtn || typeof backBtn.click !== 'function') return false
+              backBtn.click()
+              return true
+            } catch (e) { return false }
+          })()`,
+        ).catch(() => false)
+        if (!clickedBack) break
+        await new Promise((r) => setTimeout(r, 350))
+      }
+      return
+    }
+
+    await evalInSimulator(electronApp, `try { wx.clearStorageSync() } catch (e) {}`).catch(() => {})
+
+    // dimina's own page stack is unwound by clicking each
+    // webview's back button (which calls miniApp.navigateBack internally). Loop
+    // until only one webview remains (= home), or we hit a small safety bound.
+    // We swallow errors so a flaky reset never blocks the next test.
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const stillNonHome = await evalInSimulator<boolean>(
+        electronApp,
+        `(() => {
+          try {
+            const webviews = document.querySelectorAll('.dimina-native-view')
+            if (webviews.length <= 1) return false
+            const top = webviews[webviews.length - 1]
+            const backBtn = top.querySelector('.dimina-native-webview__navigation-left-btn')
+            if (backBtn) (backBtn).click()
+            return true
+          } catch (e) { return false }
+        })()`,
+      ).catch(() => false)
+      if (!stillNonHome) break
+      // Small wait for dimina's exit animation; navigateBack guards on
+      // webviewAnimaEnd so back-to-back clicks otherwise no-op.
+      await new Promise((r) => setTimeout(r, 350))
+    }
+  } catch {
+    // Best-effort reset must never block the next test.
   }
 }

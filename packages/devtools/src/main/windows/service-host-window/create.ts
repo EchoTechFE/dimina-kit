@@ -77,7 +77,7 @@ export function navigateServiceHost(win: BrowserWindow, url: string): Promise<vo
     () => undefined,
     () => undefined,
   )
-  if (!app.isPackaged) {
+  if (!app.isPackaged && process.env.NODE_ENV !== 'test') {
     // Recycled pooled windows get navigated repeatedly. A `once` hook that never
     // fires (the spawn was disposed before its service.html settled) stays on the
     // reused webContents and the next spawn's hook fires alongside it → DevTools

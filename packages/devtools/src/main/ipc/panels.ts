@@ -46,5 +46,5 @@ export function registerPanelsIpc(ctx: Pick<WorkbenchContext, 'panels' | 'views'
     // Renderer reads this once to pick panel data sources: under native-host
     // WXML + AppData come from the main process (the page/service logic live in
     // separate webContents), not the simulator guest's miniappSnapshot transport.
-    .handle(WorkbenchRuntimeChannel.GetNativeHost, () => process.env.DIMINA_NATIVE_HOST === '1')
+    .handle(WorkbenchRuntimeChannel.GetNativeHost, () => process.env.DIMINA_NATIVE_HOST !== '0')
 }

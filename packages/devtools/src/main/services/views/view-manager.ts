@@ -306,7 +306,11 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
 
     try {
       next.setDevToolsWebContents(simulatorView.webContents)
-      next.openDevTools({ mode: 'detach' })
+      // DevTools renders into the right-panel host view (simulatorView); with a
+      // custom host the `mode` is overridden, and `activate:false` prevents it
+      // stealing focus — this re-points on every navigation, so a focusing
+      // window would yank focus repeatedly (disrupting the user / e2e).
+      next.openDevTools({ mode: 'detach', activate: false })
       return true
     } catch {
       if (nativeDevtoolsSourceWc?.id === next.id) {
@@ -398,7 +402,9 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
 
     simulatorView = new WebContentsView()
     sim.setDevToolsWebContents(simulatorView.webContents)
-    sim.openDevTools()
+    // Embedded in the right-panel host view; never bring it to the foreground
+    // (would steal focus from the user / disrupt e2e).
+    sim.openDevTools({ mode: 'detach', activate: false })
 
     // Default DevTools to Console panel (Chrome DevTools defaults to Elements).
     // The DevTools UI lives inside closed shadow roots, so a light-DOM

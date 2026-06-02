@@ -262,7 +262,7 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
   // nor can it compute file paths (no node:path/url in the guest preload), so it
   // asks main synchronously at install time for the flag + the render-host URLs.
   const onNativeHostQuery = (event: IpcMainEvent): void => {
-    const enabled = process.env.DIMINA_NATIVE_HOST === '1'
+    const enabled = process.env.DIMINA_NATIVE_HOST !== '0'
     const reply: NativeHostConfig = enabled
       ? {
           enabled,
@@ -292,7 +292,7 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
   // owning router state. Getters resolve fresh — the pre-warm pool can swap
   // windows on respawn, so cached handles go stale.
   const bridgeHandle: BridgeRouterHandle = {
-    isNativeHost: () => process.env.DIMINA_NATIVE_HOST === '1',
+    isNativeHost: () => process.env.DIMINA_NATIVE_HOST !== '0',
     resolveRenderWc: (bridgeId) => {
       const page = state.pageSessions.get(bridgeId)
       return page?.renderWc && !page.renderWc.isDestroyed() ? page.renderWc : null
