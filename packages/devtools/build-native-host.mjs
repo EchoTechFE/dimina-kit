@@ -16,11 +16,18 @@
  */
 
 import { spawnSync } from 'node:child_process'
-import { cpSync, mkdirSync } from 'node:fs'
+import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
+const ROOT = join(__dirname, '../..')
+const DIMINA_FE_PACKAGES = join(ROOT, 'dimina/fe/packages')
+const NATIVE_HOST_ASSETS = [
+  { src: join(DIMINA_FE_PACKAGES, 'service/dist'), dest: join(__dirname, 'dist/native-host/service') },
+  { src: join(DIMINA_FE_PACKAGES, 'render/dist'), dest: join(__dirname, 'dist/native-host/render') },
+  { src: join(DIMINA_FE_PACKAGES, 'common/dist'), dest: join(__dirname, 'dist/native-host/common') },
+]
 
 // 1. Compile the service-host TypeScript.
 const tsc = spawnSync('npx', ['tsc', '-p', 'tsconfig.service-host.json'], {
@@ -49,7 +56,14 @@ const inspect = spawnSync(
 )
 if (inspect.status !== 0) process.exit(inspect.status ?? 1)
 
-// 2. Copy the static (non-TS) assets verbatim.
+// 2. Copy upstream native-host dependencies into package-local dist assets.
+for (const { src, dest } of NATIVE_HOST_ASSETS) {
+  mkdirSync(dirname(dest), { recursive: true })
+  cpSync(src, dest, { recursive: true })
+}
+
+// 3. Copy the static (non-TS) assets, rewriting HTML upstream refs to the
+// package-local native-host assets above.
 const ASSETS = [
   'src/service-host/preload.cjs',
   'src/service-host/service.html',
@@ -59,7 +73,19 @@ const ASSETS = [
 for (const rel of ASSETS) {
   const dest = join(__dirname, rel.replace(/^src\//, 'dist/'))
   mkdirSync(dirname(dest), { recursive: true })
-  cpSync(join(__dirname, rel), dest)
+  const src = join(__dirname, rel)
+  if (rel === 'src/service-host/service.html') {
+    const html = readFileSync(src, 'utf8')
+      .replaceAll('../../../../dimina/fe/packages/service/dist/', '../native-host/service/')
+    writeFileSync(dest, html)
+  } else if (rel === 'src/render-host/pageFrame.html') {
+    const html = readFileSync(src, 'utf8')
+      .replaceAll('../../../../dimina/fe/packages/common/dist/', '../native-host/common/')
+      .replaceAll('../../../../dimina/fe/packages/render/dist/', '../native-host/render/')
+    writeFileSync(dest, html)
+  } else {
+    cpSync(src, dest)
+  }
 }
 
 console.log('native-host runtime built → dist/service-host, dist/render-host')
