@@ -26,6 +26,8 @@ export function ResizeHandle({
   const orientation = direction === "horizontal" ? "vertical" : "horizontal"
 
   return (
+    // The UA focus outline (yellow bar on mousedown) is suppressed globally for
+    // every `role="separator"` in `design.css` — no per-component reset here.
     <Separator className={cn(splitterHitArea(orientation), className)}>
       <div
         className={cn(

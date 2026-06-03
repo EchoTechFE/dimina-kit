@@ -3,10 +3,11 @@ import { render, act } from '@testing-library/react'
 import { StrictMode, useCallback, useEffect, useRef } from 'react'
 import { useViewAnchor, type UseViewAnchorOptions } from './react'
 
-// ── ResizeObserver / RAF stubs ───────────────────────────────────────
-// Same mock setup the core test (and use-cell-bounds.test.ts) uses. The
-// React adapter is a thin wrapper over `createViewAnchor`, so behaviour is
-// observed through the injected `publish` spy + the FakeResizeObserver.
+// ── ResizeObserver stub ──────────────────────────────────────────────
+// The React adapter is a thin wrapper over `createViewAnchor`, so behaviour
+// is observed through the injected `publish` spy + the FakeResizeObserver.
+// The core publishes SYNCHRONOUSLY (no RAF defer), so a fired observer tick
+// publishes immediately — there is nothing to flush.
 
 class FakeResizeObserver {
   static instances: FakeResizeObserver[] = []
@@ -29,48 +30,15 @@ class FakeResizeObserver {
   }
 }
 
-interface RafEntry {
-  id: number
-  cb: () => void
-}
-let rafQueue: RafEntry[] = []
-let rafIdCounter = 0
-function fakeRaf(cb: () => void): number {
-  rafIdCounter++
-  rafQueue.push({ id: rafIdCounter, cb })
-  return rafIdCounter
-}
-const cancelSpy = vi.fn()
-
 beforeEach(() => {
   FakeResizeObserver.instances = []
-  rafQueue = []
-  rafIdCounter = 0
-  cancelSpy.mockClear()
   vi.stubGlobal('ResizeObserver', FakeResizeObserver)
-  vi.stubGlobal(
-    'requestAnimationFrame',
-    fakeRaf as unknown as typeof window.requestAnimationFrame,
-  )
-  vi.stubGlobal(
-    'cancelAnimationFrame',
-    ((id: number) => {
-      cancelSpy(id)
-      rafQueue = rafQueue.filter((e) => e.id !== id)
-    }) as unknown as typeof window.cancelAnimationFrame,
-  )
 })
 
 afterEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
-
-function flushRafs(): void {
-  const q = rafQueue
-  rafQueue = []
-  q.forEach((e) => e.cb())
-}
 
 /** Assert an observer exists, then return it — so a skeleton no-op (no
  *  observer installed) fails as a clear behavioural assertion rather than
@@ -239,7 +207,6 @@ describe('useViewAnchor — ref null disposes', () => {
     // After the node is gone the anchor is inert: no further publishes.
     ro.fire()
     window.dispatchEvent(new Event('resize'))
-    flushRafs()
     expect(publish).not.toHaveBeenCalled()
   })
 })
@@ -296,7 +263,7 @@ describe('useViewAnchor — opts/deps change re-publishes', () => {
     expect(publish).toHaveBeenLastCalledWith({ x: 1, y: 1, width: 200, height: 200 })
   })
 
-  it('publish identity change routes subsequent emits to the new callback', () => {
+  it('publish identity change routes the re-apply emit to the new callback', () => {
     const first = vi.fn()
     const second = vi.fn()
     const { rerender } = render(
@@ -307,6 +274,9 @@ describe('useViewAnchor — opts/deps change re-publishes', () => {
     )
     first.mockClear()
 
+    // A publish-identity change re-applies through the core's `update`, which
+    // resets `lastPublished` and re-emits even on unchanged geometry — so the
+    // new callback (carrying e.g. a new zoom closure) is guaranteed to fire.
     act(() => {
       rerender(
         <Anchored
@@ -315,11 +285,9 @@ describe('useViewAnchor — opts/deps change re-publishes', () => {
         />,
       )
     })
-    second.mockClear()
 
-    lastObserver().fire()
-    flushRafs()
     expect(second).toHaveBeenCalledTimes(1)
+    expect(second).toHaveBeenCalledWith({ x: 0, y: 0, width: 100, height: 100 })
     expect(first).not.toHaveBeenCalled()
   })
 })
@@ -342,8 +310,6 @@ describe('useViewAnchor — unmount disposes', () => {
       />,
     )
     const ro = firstObserver()
-    // Queue an in-flight RAF, then unmount before it fires.
-    ro.fire()
     publish.mockClear()
 
     act(() => {
@@ -355,17 +321,15 @@ describe('useViewAnchor — unmount disposes', () => {
     // NOTE: this assertion previously encoded the P1 bug — it asserted
     // `expect(publish).not.toHaveBeenCalled()` after unmount, leaving the
     // native view stranded. Correct behaviour: unmount publishes exactly one
-    // ZERO to collapse the native view (the pre-queued stale RAF is cancelled
-    // by the synchronous collapse, so it never adds a second publish).
+    // ZERO to collapse the native view.
     expect(publish).toHaveBeenCalledTimes(1)
     expect(publish).toHaveBeenCalledWith({ x: 0, y: 0, width: 0, height: 0 })
     publish.mockClear()
 
-    // After unmount the anchor is inert: no further publishes.
-    flushRafs()
+    // After unmount the anchor is inert: a later observer/resize tick (read
+    // synchronously against `disposed`) publishes nothing — no queued frame.
     ro.fire()
     window.dispatchEvent(new Event('resize'))
-    flushRafs()
     expect(publish).not.toHaveBeenCalled()
   })
 })
@@ -405,10 +369,13 @@ describe('useViewAnchor — independent instances', () => {
     publishA.mockClear()
     publishB.mockClear()
 
-    // Fire only A's observer → only A republishes.
+    // Move A's element to a NEW rect (so its tick isn't deduped), then fire
+    // only A's observer → only A republishes; B is untouched (no cross-wiring).
+    const aEl = FakeResizeObserver.instances[0]!.observed[0] as HTMLElement
+    stubRect(aEl, { x: 1, y: 1, w: 30, h: 30 })
     FakeResizeObserver.instances[0]!.fire()
-    flushRafs()
     expect(publishA).toHaveBeenCalledTimes(1)
+    expect(publishA).toHaveBeenCalledWith({ x: 1, y: 1, width: 30, height: 30 })
     expect(publishB).not.toHaveBeenCalled()
   })
 })
@@ -486,6 +453,40 @@ describe('useViewAnchor — remount with present transition', () => {
   })
 })
 
+// ── Contract 13: measure() threads through the adapter ──────────────
+// Bug it catches: the hook accepts `measure` in its options type but never
+// forwards it to createViewAnchor — so a React caller that owns a derived
+// rect (e.g. a zoomed viewport) silently falls back to the element's raw
+// getBoundingClientRect(), and the native view lands at the wrong bounds.
+// The element's stubbed rect ({1,2,3,4}) is deliberately distinct from the
+// measure() rect; the published rect must be measure()’s, round/clamped.
+
+describe('useViewAnchor — measure() forwarded to core', () => {
+  it('publishes the rounded/clamped measure() rect, not the element rect', () => {
+    const publish = vi.fn()
+    act(() => {
+      render(
+        <Anchored
+          options={{
+            present: true,
+            publish,
+            measure: () => ({ x: -3.4, y: 10.6, width: 100.5, height: 200.4 }),
+          }}
+          rect={{ x: 1, y: 2, w: 3, h: 4 }} // distinct from measure() → proves source
+        />,
+      )
+    })
+
+    expect(publish).toHaveBeenCalledTimes(1)
+    expect(publish).toHaveBeenCalledWith({
+      x: -3, // Math.round(-3.4) — x/y not clamped (scrolled-off origin allowed)
+      y: 11, // Math.round(10.6)
+      width: 101, // Math.max(0, Math.round(100.5))
+      height: 200, // Math.max(0, Math.round(200.4))
+    })
+  })
+})
+
 // ── StrictMode resilience (regression lock) ─────────────────────────
 // Not a new contract — these lock the *intended* behaviour against React's
 // StrictMode, which in dev double-fires every effect's setup/cleanup
@@ -544,13 +545,17 @@ describe('useViewAnchor — StrictMode resilience', () => {
     publish.mockClear()
 
     // The live anchor is wired to the *last* observer created during mount.
+    // Move its element to a new rect so the tick isn't deduped, then fire it:
+    // a surviving, working anchor re-publishes the current rect synchronously.
     act(() => {
-      lastObserver().fire()
-      flushRafs()
+      const liveObserver = lastObserver()
+      const liveEl = liveObserver.observed[0] as HTMLElement
+      stubRect(liveEl, { x: 9, y: 9, w: 71, h: 81 })
+      liveObserver.fire()
     })
 
     expect(publish).toHaveBeenCalledTimes(1)
-    expect(publish).toHaveBeenCalledWith({ x: 5, y: 6, width: 70, height: 80 })
+    expect(publish).toHaveBeenCalledWith({ x: 9, y: 9, width: 71, height: 81 })
   })
 
   it('detach under StrictMode publishes ZERO exactly once (contract 9 not amplified)', () => {
