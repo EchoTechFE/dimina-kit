@@ -6,15 +6,18 @@ export default [
   ...config,
   {
     // templates/ are scaffolds copied verbatim into user projects (with wx/App/Page
-    // globals + Taro-compiled minified bundles); playwright-report and test-results
-    // are e2e artifacts. None of these are source we maintain — skip linting them.
-    ignores: ["container/**", "docs/**", "templates/**", "playwright-report/**", "test-results/**"],
+    // globals + Taro-compiled minified bundles); e2e/fixtures/ are mini-app source
+    // fixtures (same wx/Page globals) + compiled bundles; _spike/ is throwaway
+    // prototype scratch; playwright-report and test-results are e2e artifacts. None
+    // of these are source we maintain — skip linting them.
+    ignores: ["container/**", "docs/**", "templates/**", "e2e/fixtures/**", "_spike/**", "playwright-report/**", "test-results/**"],
   },
   {
     files: [
       "*.config.{js,cjs,mjs,ts}",
       "vite.config.*.{js,cjs,mjs,ts}",
       "build-container.js",
+      "build-native-host.mjs",
       "e2e/**/*.{js,cjs,mjs,ts}",
       "src/main/**/*.ts",
       "src/preload/**/*.ts",
@@ -31,6 +34,17 @@ export default [
     files: ["e2e/**/*.{ts,js}"],
     rules: {
       "react-hooks/rules-of-hooks": "off",
+    },
+  },
+  {
+    // Electron `<webview>` carries attributes React's DOM checker doesn't know
+    // (preload/partition/allowpopups/…). They are valid on the webview tag.
+    files: ["src/**/*.tsx"],
+    rules: {
+      "react/no-unknown-property": [
+        "error",
+        { ignore: ["preload", "partition", "allowpopups", "nodeintegration", "webpreferences", "disablewebsecurity", "useragent"] },
+      ],
     },
   },
   {

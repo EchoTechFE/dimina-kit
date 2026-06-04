@@ -1,3 +1,7 @@
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-this-alias --
+   Mock-heavy contract test: WebContents / debugger / pool internals are stubbed with
+   ad-hoc `any` shapes and a `this` alias inside a fake class — test scaffolding, not
+   production typing. */
 /**
  * Contract spec for the ServiceHostPool main-process singleton described in
  * docs/prewarm-webview.md (design v0.1) and implemented in `./pool.ts`. These

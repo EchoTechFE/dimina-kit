@@ -18,12 +18,6 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURE_BUNDLE = path.resolve(__dirname, 'fixtures', 'native-host-bundle')
 
-interface SystemInfoResult {
-  brand?: string
-  platform?: string
-  version?: string
-}
-
 interface SpawnResult {
   appSessionId: string
   bridgeId: string

@@ -71,7 +71,6 @@ const BLIND_PROBE = {
 function injectConnectedBlindSimulator() {
   const state = getTargetState('simulator')
   state.connected = true
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   state.client = {
     Runtime: {
       evaluate: async () => ({ result: { value: JSON.stringify(BLIND_PROBE) } }),

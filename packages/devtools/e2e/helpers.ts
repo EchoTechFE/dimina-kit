@@ -249,7 +249,7 @@ export async function installConsoleCollector(electronApp: ElectronApplication):
         // (event, level, message, line, sourceId). Handle both shapes.
         let level: string
         let message: string
-        let source = ''
+        let source: string
         const a1 = args[1]
         if (a1 && typeof a1 === 'object' && 'level' in (a1 as object)) {
           const d = a1 as { level: unknown; message?: unknown; sourceId?: unknown }
