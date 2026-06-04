@@ -107,6 +107,7 @@
     },
     "dependencies": {
         "@dimina-kit/devkit": "workspace:*",
+        "@dimina-kit/view-anchor": "workspace:*",
         "@modelcontextprotocol/sdk": "^1.29.0",
         "chrome-remote-interface": "^0.34.0",
         "monaco-editor": "^0.55.1",

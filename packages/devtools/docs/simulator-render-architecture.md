@@ -172,7 +172,7 @@ position-aware via the resizing ancestor — no per-event whack-a-mole.
 The native-host refactor turned the simulator from a renderer `<webview>` into a
 main-process `WebContentsView` — a native overlay, exactly like the Chromium
 DevTools view, which the renderer already binds to its DOM via the shared,
-tested `useViewAnchor` (`src/renderer/lib/view-anchor/`). The refactor MISSED
+tested `useViewAnchor` (`packages/view-anchor/`). The refactor MISSED
 migrating the simulator onto that abstraction; instead the simulator grew the
 bespoke `reportBounds` effect above, which re-derived — badly, with the very
 observer gap this section patched — what `useViewAnchor` already does correctly

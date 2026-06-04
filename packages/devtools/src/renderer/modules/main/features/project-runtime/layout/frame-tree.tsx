@@ -26,7 +26,7 @@ import type {
  *
  * `FrameTree` owns no bounds wiring: it renders each `cellNode` verbatim.
  * The debug cell's DevTools overlay ref is supplied by `project-runtime`
- * via `useViewAnchor` (see `@/lib/view-anchor`); the simulator
+ * via `useViewAnchor` (see `@dimina-kit/view-anchor`); the simulator
  * WebContentsView self-anchors INSIDE `SimulatorPanel` (its own
  * `useViewAnchor`), and the Monaco editor is plain DOM — so FrameTree
  * threads no ref for either.

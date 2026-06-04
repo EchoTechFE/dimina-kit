@@ -1,0 +1,70 @@
+{
+  "name": "@dimina-kit/view-anchor",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Engine-agnostic primitive that keeps a main-process native view (Electron WebContentsView) aligned to a DOM element's geometry.",
+  "keywords": [
+    "dimina",
+    "devtools",
+    "electron",
+    "webcontentsview",
+    "react"
+  ],
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "author": "EchoTechFE",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EchoTechFE/dimina-kit.git",
+    "directory": "packages/view-anchor"
+  },
+  "bugs": {
+    "url": "https://github.com/EchoTechFE/dimina-kit/issues"
+  },
+  "homepage": "https://github.com/EchoTechFE/dimina-kit/tree/main/packages/view-anchor#readme",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && pnpm run build:docs",
+    "build:docs": "node scripts/build-docs.mjs",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run",
+    "test:dev": "vitest",
+    "prepack": "pnpm run build"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@dimina-kit/eslint-config": "workspace:*",
+    "@dimina-kit/typescript-config": "workspace:*",
+    "@testing-library/react": "^16.3.2",
+    "@types/react": "^18.3.12",
+    "@vitejs/plugin-react": "^6.0.1",
+    "esbuild": "^0.28.0",
+    "eslint": "^10.2.1",
+    "jsdom": "^29.0.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "5.9.2",
+    "vitest": "^4.1.4"
+  }
+}

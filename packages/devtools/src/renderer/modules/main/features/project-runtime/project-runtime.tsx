@@ -13,7 +13,7 @@ import { BottomDebugPanel } from '../bottom-debug-panel/bottom-debug-panel'
 import { MonacoEditor } from '../monaco-editor'
 import { compileProjectWindowLayout } from './layout/compile'
 import { FrameTree } from './layout/frame-tree'
-import { useViewAnchor } from '@/lib/view-anchor'
+import { useViewAnchor } from '@dimina-kit/view-anchor'
 import type { CellId } from './layout/types'
 
 interface ProjectRuntimeProps {
@@ -27,7 +27,7 @@ interface ProjectRuntimeProps {
  * a pure function from the persisted `LayoutState` (visibility flags +
  * `devtoolsPosition` + `simulatorAlignment`) to a Frame tree + cells
  * registry. `FrameTree` is the recursive renderer; `useViewAnchor`
- * (see `@/lib/view-anchor`) syncs the DevTools overlay's bounds with the
+ * (see `@dimina-kit/view-anchor`) syncs the DevTools overlay's bounds with the
  * main process. Together they
  * replaced the previous ad-hoc `LayoutTree` branching (see the
  * `layout/` directory for the design rationale).
@@ -54,18 +54,17 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
   )
 
   // Bounds-sync bindings. Both main-process overlays anchored to renderer DOM
-  // go through the SAME `useViewAnchor` (see `@/lib/view-anchor`):
+  // go through the SAME `useViewAnchor` (see `@dimina-kit/view-anchor`):
   //   - The Chromium DevTools view (debug cell) is anchored HERE, to its
   //     placeholder DOM, because its `present` is "the debug cell is in the
   //     compiled layout" — a decision this component owns. deps = topology
   //     signature + project switch + the active debug tab (Console's
   //     display:flex|none changes the placeholder's visible rect without
   //     changing frame topology — the ResizeObserver can't see it).
-  //   - The simulator WebContentsView is anchored INSIDE `SimulatorPanel`,
-  //     where its bezel refs live, with a `measure` redirect (observe the
-  //     scroll container, publish the inner-screen rect). It's always present
-  //     while mounted; FrameTree unmounts the panel to hide it, and the hook's
-  //     teardown collapses the WCV.
+  //   - The simulator WebContentsView is anchored INSIDE `SimulatorPanel`, to
+  //     its placeholder's own rect (default path — no measure redirect). It's
+  //     always present while mounted; FrameTree unmounts the panel to hide it,
+  //     and the hook's teardown collapses the WCV.
   // The in-renderer Monaco editor is a plain React child (no native overlay),
   // so it has no anchor.
   const devtoolsAnchorRef = useViewAnchor({
