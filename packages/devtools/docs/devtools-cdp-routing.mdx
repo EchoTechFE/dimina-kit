@@ -100,7 +100,7 @@ direction: right
     <tr><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)', color: 'hsl(160 70% 70%)' }}><b>Console</b></td><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)' }}>service-host（逻辑层）</td><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)' }}>Electron 原生 attach</td><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)' }}>✅ 零开销</td></tr>
     <tr><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)', color: 'hsl(28 80% 70%)' }}><b>Network</b></td><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)' }}>simulator WCV</td><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)' }}>CDP 抓取 + dispatchMessage 注入</td><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)' }}>✅ 一期（列表/headers/timing）</td></tr>
     <tr><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)', color: 'hsl(210 80% 72%)' }}><b>Elements</b></td><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)' }}>active render guest</td><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)' }}>sendMessageToBackend hook + 路由</td><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)' }}>🟢 已落地（默认开启，只读浏览）</td></tr>
-    <tr><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)', opacity: .6 }}>Sources/Memory/…</td><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)' }}>—</td><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)' }}>tab 定制隐藏</td><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)' }}>✅ 已隐藏</td></tr>
+    <tr><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)', opacity: .6 }}>Sources/Memory/…</td><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)' }}>—</td><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)' }}>转 transient（不删除）</td><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)' }}>✅ 默认隐藏，Cmd+Shift+P 可调出</td></tr>
   </tbody>
 </table>
 
@@ -190,7 +190,7 @@ interface CdpBackendProvider {
 2. **去重**：chunk / dispatch / 轮询这套样板，现在 network-forward 和 elements-forward **各写了一份**，收敛后只需一份。
 3. **单 lifecycle owner**：pool-swap 重指向、frontend re-ready 时，由一个 owner 统一 rebind，而不是两个服务各自监听。
 
-> open-in-editor（`setOpenResourceHandler`）和 tab 定制（UI 层）**不碰 embedder 的 CDP 边界**，所以即便将来有了 router 也不并进去（KISS）。
+> open-in-editor（`setOpenResourceHandler`）和 tab 定制（DevTools view registry + `setPreference`）**不碰 embedder 的 CDP 协议边界**（不 hook `sendMessageToBackend`、不 `dispatchMessage`），所以即便将来有了 router 也不并进去（KISS）。
 
 ---
 
@@ -249,7 +249,8 @@ follow-ups: requestChildNodes / CSS.getMatchedStyles ×4 …`}</pre>
 | Network 注入 | `services/network-forward/` | `DevToolsAPI.dispatchMessage`（事件） |
 | Elements 路由 | `services/elements-forward/` | hook `sendMessageToBackend` + 推回前端 |
 | 点源码 → Monaco | `view-manager` `injectOpenResourceHandler` | `setOpenResourceHandler` |
-| tab 定制 + 默认 Console | `services/views/devtools-tabs.ts` | UI 层 `UI.ViewManager` |
+| tab 定制（只留 Element/Console/Network） | `services/views/devtools-tabs.ts` | DevTools view registry：`import('./ui/legacy/legacy.js')` → 把非保留 panel `maybeRemoveViewExtension` + 重注册为 **transient**（默认不在栏里、Cmd+Shift+P 仍可调出，无 `>>`/`×` 残留） |
+| 默认 Console + 关 locale infobar | `view-manager`（localStorage `panel-selectedTab`）/ `devtools-tabs.ts` | localStorage + 官方 `InspectorFrontendHost.setPreference('disable-locale-info-bar','true')` |
 
 > **Elements 路由两个要点**：
 > 1. **复用、不抢占**：直接用 safe-area 已 attach 的那个 debugger session 收发（只在 safe-area 降级、没人 attach 时才自己 `attach('1.3')`），且只 detach 自己 attach 的，绝不动别人的。
