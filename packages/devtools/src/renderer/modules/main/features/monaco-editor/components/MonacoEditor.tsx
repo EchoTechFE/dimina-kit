@@ -14,6 +14,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { FileTree } from './FileTree'
+import { onEditorOpenFile } from '@/shared/api'
 import { useMonacoEditor } from '../hooks/useMonacoEditor'
 import { languageForPath } from '../language/register'
 import {
@@ -44,6 +45,23 @@ function joinPosix(root: string, rel: string): string {
 interface MonacoEditorProps {
   /** Active project path (drives file-list reload). */
   projectPath: string
+  /**
+   * Whether the main process has finished registering the active project
+   * (i.e. `openProject` resolved and `getProjectPath()` is non-empty).
+   *
+   * Gates the `project:fs:listFiles` load: opening a project clears the main
+   * side's active path FIRST and only sets it once the compile completes, so
+   * polling `listFiles` before then makes the fs sandbox throw `ENOACTIVE`
+   * on every attempt — 12 transient rejections per open, each logged to the
+   * renderer console and the main stdout. Waiting for `ready` (the same
+   * `compileStatus === 'ready'` signal the simulator uses) skips that window
+   * entirely without masking any genuine error: a real fs failure after the
+   * project is registered still surfaces unchanged.
+   *
+   * Optional + defaults to `true` so callers/tests that don't thread a status
+   * (the editor mounted in isolation) keep loading immediately.
+   */
+  ready?: boolean
 }
 
 /**
@@ -71,7 +89,7 @@ const SAVE_STATUS_CLASS: Record<SaveStatus, string> = {
   error: 'text-red-600 dark:text-red-400',
 }
 
-export function MonacoEditor({ projectPath }: MonacoEditorProps) {
+export function MonacoEditor({ projectPath, ready = true }: MonacoEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [files, setFiles] = useState<string[]>([])
   const [root, setRoot] = useState('')
@@ -165,7 +183,7 @@ export function MonacoEditor({ projectPath }: MonacoEditorProps) {
   const editor = useMonacoEditor(containerRef, handleChange)
 
   const openFile = useCallback(
-    async (rel: string) => {
+    async (rel: string, reveal?: { line?: number; column?: number }) => {
       const r = rootRef.current
       if (!r) return
       const seq = ++openSeqRef.current
@@ -203,6 +221,11 @@ export function MonacoEditor({ projectPath }: MonacoEditorProps) {
         // Fresh file: clear any leftover indicator from the previous file
         // before the user starts editing this one.
         setSaveStatus('idle')
+        // Jump to the requested position (e.g. a clicked console frame). Done
+        // after openModel so the model is attached and line bounds are known.
+        if (reveal && typeof reveal.line === 'number' && reveal.line > 0) {
+          editor.revealPosition(reveal.line, reveal.column)
+        }
       } catch (err) {
         console.warn('[monaco] open failed:', err)
       }
@@ -230,7 +253,15 @@ export function MonacoEditor({ projectPath }: MonacoEditorProps) {
       const r = projectPath
       rootRef.current = r
       setRoot(r)
-      if (!r) {
+      // Don't poll `listFiles` until the main process has actually registered
+      // the active project. Opening a project clears the main side's path
+      // first and sets it only after the compile finishes, so a load started
+      // on the bare `projectPath` prop hammers the fs sandbox with ENOACTIVE
+      // (12 transient rejections, all logged) for the whole compile window.
+      // `ready` is that registration signal; gate on it instead of brute-
+      // forcing through the error. Files stay `[]` (the correct empty initial
+      // tree) until the project is open.
+      if (!r || !ready) {
         setFiles([])
         return
       }
@@ -247,7 +278,7 @@ export function MonacoEditor({ projectPath }: MonacoEditorProps) {
       cancelled = true
       void flushPendingSave()
     }
-  }, [projectPath, editor, flushPendingSave])
+  }, [projectPath, ready, editor, flushPendingSave])
 
   // Auto-open a sensible entry file once the list is available.
   useEffect(() => {
@@ -255,6 +286,20 @@ export function MonacoEditor({ projectPath }: MonacoEditorProps) {
     const entry = PREFERRED_ENTRY_FILES.find((f) => files.includes(f)) ?? files[0]
     if (entry) void openFile(entry)
   }, [root, files, openFile])
+
+  // Open a file at a position on request from the main process — the "click a
+  // console file link → open in editor" pipeline. Main maps the clicked
+  // DevTools resource URL to a project-relative path (the same key `openFile`
+  // uses) and broadcasts it here; `openFile` reads + attaches the model and
+  // `revealPosition` jumps to the logged frame. A path outside the active
+  // project (no such file) just fails the read and no-ops, same as a manual
+  // click on a missing file.
+  useEffect(() => {
+    return onEditorOpenFile((payload) => {
+      if (!payload || typeof payload.path !== 'string' || payload.path === '') return
+      void openFile(payload.path, { line: payload.line, column: payload.column })
+    })
+  }, [openFile])
 
   // Flush a pending edit when the window is about to unload (devtools window
   // closing / reload / app quit). The projectPath-effect cleanup flushes on a

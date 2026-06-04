@@ -1,5 +1,10 @@
 import type { BrowserWindow } from 'electron'
 import type { CompilationAdapter, WorkbenchConfig } from '../../shared/types.js'
+import type { BridgeRouterHandle } from '../ipc/bridge-router.js'
+import type { ConsoleForwarder } from './console-forward/index.js'
+import type { NetworkForwarder } from './network-forward/index.js'
+import type { AppDataTap } from './simulator-appdata/index.js'
+import type { StorageApi } from './simulator-storage/index.js'
 import { DisposableRegistry } from '../utils/disposable.js'
 import type { SenderPolicy } from '../utils/ipc-registry.js'
 import { createWorkbenchSenderPolicy } from '../utils/sender-policy.js'
@@ -127,6 +132,60 @@ export interface WorkbenchContext {
 
   /** Aggregates dispose handlers for every IPC handler, listener, watcher, and CDP session registered by the workbench. */
   registry: DisposableRegistry
+
+  /**
+   * Accessor over the bridge-router's private state, set by `installBridgeRouter`.
+   * Lets other main services (simulator-storage, automation, appdata) resolve
+   * live render/service WebContents and the native-host flag without owning
+   * router state. Undefined until the bridge router is installed.
+   */
+  bridge?: BridgeRouterHandle
+
+  /**
+   * Native-host AppData tap, set by `setupSimulatorAppData` (app.ts) when
+   * native-host is on. bridge-router feeds it the service→render setData stream
+   * + page evictions so the AppData panel can be sourced from main. Undefined on
+   * the default dimina-fe path (which sniffs setData via a Worker hook).
+   */
+  appData?: AppDataTap
+
+  /**
+   * Native-host async-storage runtime hook, set by `setupSimulatorStorage` when
+   * native-host is on. bridge-router routes async `wx.setStorage`/etc. here so
+   * they hit the same service-host `file://` store as the sync APIs (one origin).
+   * Undefined on the default dimina-fe path (storage handled in the guest).
+   */
+  storageApi?: StorageApi
+
+  /**
+   * Native-host console sink. The render-host / service-host guest preloads
+   * monkeypatch `console.*` and post each entry to main as a `consoleLog`
+   * container message; bridge-router routes those here. Owned by the
+   * `ConsoleForwarder` (set in `installBridgeRouter`), whose `emit` fans every
+   * entry out to subscribers (automation WS) AND mirrors render-layer entries
+   * into the service host's own console for the embedded DevTools.
+   */
+  guestConsole?: { emit(entry: unknown): void }
+
+  /**
+   * Always-on console fan-out, set by `installBridgeRouter`. Other services
+   * (automation) call `subscribe` to receive every guest console entry instead
+   * of each clobbering `ctx.guestConsole`. Undefined until the bridge router is
+   * installed.
+   */
+  consoleForwarder?: ConsoleForwarder
+
+  /**
+   * Native-host network forwarder, set in app bootstrap. Attaches the CDP
+   * debugger to the simulator WCV (where `wx.request`/`downloadFile`/`uploadFile`
+   * run) and injects its raw Network.* CDP events into the DevTools FRONT-END wc
+   * (`window.DevToolsAPI.dispatchMessage`) so the native Network tab renders them;
+   * falls back to a `[网络]` service-host console line when the front-end is
+   * unavailable. The ViewManager calls `attachSimulator` + `setDevtoolsHost` from
+   * `attachNativeSimulator` once the simulator WCV + DevTools host exist.
+   * Undefined until bootstrap wires it.
+   */
+  networkForward?: NetworkForwarder
 }
 
 /**

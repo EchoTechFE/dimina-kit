@@ -1,0 +1,123 @@
+/*
+ * CONFIRMED MODEL (docs/simulator-render-stack.html): the simulator WCV is the
+ * flex:1 region of the main renderer (it draws NO phone). Inside the WCV,
+ * DeviceShell draws the WHOLE phone at FIXED device-logical size on a gray
+ * "desk" that fills the WCV and SCROLLS NATIVELY when the phone overflows the
+ * region. The WCV is rectangular (no native border radius); its own web-viewport
+ * is the clip (a straight edge). The device's rounded corners + notch live in
+ * this CSS and are ALWAYS round. zoom is applied by the WCV's zoomFactor, not by
+ * any CSS transform here.
+ */
+.device-shell-root {
+  /* The desk = fills the WCV viewport and scrolls when the phone overflows.
+     Background MIRRORS the renderer's --color-sim-bg (hsl(0 0% 7%)) — the SAME
+     color as the panel's flex:1 placeholder sitting behind this WCV. Keeping them
+     equal (a) syncs the simulator surround with the app theme, and (b) makes the
+     native-WCV resize-follow gap invisible: when the WCV trails the region edge
+     during a height drag, the briefly-exposed placeholder is the same color, so
+     there is no light/dark flash and the follow reads as smooth. */
+  width: 100%;
+  height: 100vh;
+  overflow: auto;
+  display: flex;
+  background: hsl(0 0% 7%);
+  color: #101418;
+  box-sizing: border-box;
+  padding: 24px;
+}
+
+.device-shell {
+  /* The phone — FIXED device-logical size (width/height set inline from the
+     device in device-shell.tsx). margin:auto centers it when it fits AND keeps
+     it scrolled from the top/left when it overflows the desk (align-items:center
+     would clip the overflowing top instead). flex:none keeps the fixed size so
+     it never grows/shrinks with the WCV/region. The rounded corners are ALWAYS
+     round here (the WCV does NOT round its corners). */
+  margin: auto;
+  flex: none;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid rgba(16, 20, 24, 0.18);
+  border-radius: 38px;
+  background: #f8fafc;
+  box-shadow: 0 18px 50px rgba(16, 20, 24, 0.22);
+}
+
+.device-shell__status-bar {
+  flex: 0 0 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 28px;
+  font: 600 13px/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  letter-spacing: 0;
+  background: #f8fafc;
+  color: #111827;
+}
+
+.device-shell__status-icons {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.device-shell__status-icons span {
+  display: block;
+  background: #111827;
+}
+
+.device-shell__status-icons span:nth-child(1) {
+  width: 16px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.device-shell__status-icons span:nth-child(2) {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+
+.device-shell__status-icons span:nth-child(3) {
+  width: 20px;
+  height: 10px;
+  border-radius: 3px;
+}
+
+.device-shell__viewport {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  background: #ffffff;
+}
+
+.device-shell__webview {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #ffffff;
+}
+
+.device-shell__home-indicator {
+  flex: 0 0 28px;
+  position: relative;
+  background: #f8fafc;
+}
+
+.device-shell__home-indicator::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  width: 118px;
+  height: 4px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: #111827;
+}

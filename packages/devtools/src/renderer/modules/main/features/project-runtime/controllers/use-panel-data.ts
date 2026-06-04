@@ -3,12 +3,13 @@ import {
   useEffect,
   useState,
 } from 'react'
-import type { RefObject } from 'react'
 import { useActiveBridgeId } from './use-active-bridge-id'
 import { invoke as ipcInvoke, on as ipcOn } from '@/shared/api/ipc-transport'
 import {
+  SimulatorAppDataChannel,
   SimulatorElementChannel,
   SimulatorStorageChannel,
+  SimulatorWxmlChannel,
   type ElementInspection,
   type StorageEvent,
   type StorageItem as StorageItemDto,
@@ -16,12 +17,11 @@ import {
 } from '../../../../../../shared/ipc-channels'
 import type { AppDataSnapshot } from '../../../../../../preload/instrumentation/app-data'
 import type { WxmlNode } from '../../right-panel/types.js'
-import { useMiniappSnapshot } from './use-miniapp-snapshot'
+import { useNativeChannelSnapshot } from './use-native-channel-snapshot'
 import type { CompileStatus, StorageItem } from './use-project-runtime-controller'
 
 export interface UsePanelDataProps {
   compileStatus: CompileStatus
-  simulatorRef: RefObject<HTMLElement | null>
 }
 
 export interface AppDataBridgeSummary {
@@ -58,41 +58,43 @@ export interface PanelDataHookResult {
 }
 
 export function usePanelData(props: UsePanelDataProps): PanelDataHookResult {
-  const { compileStatus, simulatorRef } = props
+  const { compileStatus } = props
 
   const [storageItems, setStorageItems] = useState<StorageItem[]>([])
 
-  // WXML is projected from the unified miniappSnapshot framework: preload owns
-  // the tree, the renderer is a pure projection. reload re-sync is structural.
-  const wxml = useMiniappSnapshot<WxmlNode | null>({
-    id: 'wxml',
+  const ready = compileStatus.status === 'ready'
+
+  // The page DOM lives in render-host <webview> guests and the service logic in
+  // the hidden service-host window — neither reachable from the simulator
+  // preload — so WXML + AppData are sourced from the main process
+  // (simulator-wxml / simulator-appdata services) over dedicated channels:
+  // seed via GetSnapshot + live updates via Event.
+  const nativeWxml = useNativeChannelSnapshot<WxmlNode | null>({
+    getChannel: SimulatorWxmlChannel.GetSnapshot,
+    eventChannel: SimulatorWxmlChannel.Event,
     initial: null,
-    simulatorRef,
-    enabled: compileStatus.status === 'ready',
+    enabled: ready,
   })
 
-  // AppData is likewise a pure projection of the unified snapshot. The
-  // `bridges` / `entries` come straight from preload; `activeBridgeId` (which
-  // page tab is selected) is renderer-only UI state derived from each new
-  // snapshot below.
-  const appDataSnapshot = useMiniappSnapshot<AppDataSnapshot>({
-    id: 'appdata',
+  const nativeAppData = useNativeChannelSnapshot<AppDataSnapshot>({
+    getChannel: SimulatorAppDataChannel.GetSnapshot,
+    eventChannel: SimulatorAppDataChannel.Event,
     initial: EMPTY_APP_DATA_SNAPSHOT,
-    simulatorRef,
-    enabled: compileStatus.status === 'ready',
+    enabled: ready,
   })
+  const appDataData = nativeAppData.data
 
-  const { activeBridgeId, setActiveBridge } = useActiveBridgeId(appDataSnapshot.data.bridges)
+  const { activeBridgeId, setActiveBridge } = useActiveBridgeId(appDataData.bridges)
 
   const appData: AppDataState = {
-    bridges: appDataSnapshot.data.bridges,
+    bridges: appDataData.bridges,
     activeBridgeId,
-    entries: appDataSnapshot.data.entries,
+    entries: appDataData.entries,
   }
 
   const setActiveAppDataBridge = setActiveBridge
 
-  const refreshAppData = appDataSnapshot.refresh
+  const refreshAppData = nativeAppData.refresh
   const refreshStorage = useCallback(async () => {
     const items = await ipcInvoke<StorageItemDto[] | undefined>(SimulatorStorageChannel.GetSnapshot)
     if (items) setStorageItems(items)
@@ -152,10 +154,10 @@ export function usePanelData(props: UsePanelDataProps): PanelDataHookResult {
   }, [])
 
   return {
-    wxmlTree: wxml.data,
+    wxmlTree: nativeWxml.data,
     appData,
     storageItems,
-    refreshWxml: wxml.refresh,
+    refreshWxml: nativeWxml.refresh,
     refreshAppData,
     setActiveAppDataBridge,
     refreshStorage,

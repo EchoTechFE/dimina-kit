@@ -26,8 +26,10 @@ import type {
  *
  * `FrameTree` owns no bounds wiring: it renders each `cellNode` verbatim.
  * The debug cell's DevTools overlay ref is supplied by `project-runtime`
- * via `useViewAnchor` (see `@/lib/view-anchor`); simulator (`<webview>`)
- * and editor (Monaco) are plain DOM, so they have no ref.
+ * via `useViewAnchor` (see `@/lib/view-anchor`); the simulator
+ * WebContentsView self-anchors INSIDE `SimulatorPanel` (its own
+ * `useViewAnchor`), and the Monaco editor is plain DOM — so FrameTree
+ * threads no ref for either.
  */
 export interface FrameTreeProps {
   layout: ProjectWindowLayout
@@ -92,7 +94,9 @@ function allResizable(frame: FrameRow | FrameColumn): boolean {
 function renderLeaf(cellId: CellId, ctx: RenderContext): ReactNode {
   // Every cell renders the caller-provided node verbatim:
   //   - editor    : an in-renderer <MonacoEditor/> (no overlay, no bounds).
-  //   - simulator : the device shell + <webview>.
+  //   - simulator : the device-shell bezel; the simulator WebContentsView is
+  //                 painted over it by main and self-anchored inside
+  //                 SimulatorPanel via `useViewAnchor`.
   //   - debug     : <BottomDebugPanel>, whose inner
   //                 `[data-area="simulator-devtools"]` placeholder carries
   //                 the DevTools overlay's bounds ref — supplied by
@@ -273,6 +277,11 @@ function Splitter(props: {
   // Same hit-area + visible-bar styling as `ResizeHandle` so both kinds of
   // divider read as one consistent 1px line (see `splitter-styles`). The
   // visible line is vertical here (sim column splits horizontally).
+  //
+  // The UA focus outline (a bright yellow bar painted when `onMouseDown`
+  // focuses this `role="separator"`) is suppressed globally for all separators
+  // in `design.css` — no per-component reset here. Hover/active highlight comes
+  // from the shared `splitterVisibleBar` (`group-hover:bg-ring`).
   return (
     <div
       role="separator"

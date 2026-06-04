@@ -1,0 +1,55 @@
+.menu-capsule {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.6);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  box-sizing: border-box;
+  border: 0.5px solid rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+  pointer-events: none; /* visual stand-in only */
+}
+
+.menu-capsule--white {
+  background: rgba(255, 255, 255, 0.15);
+  border-color: rgba(255, 255, 255, 0.4);
+  color: #ffffff;
+}
+
+.menu-capsule--black {
+  background: rgba(255, 255, 255, 0.85);
+  border-color: rgba(0, 0, 0, 0.08);
+  color: #000000;
+}
+
+.menu-capsule__more,
+.menu-capsule__close {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.menu-capsule__more {
+  gap: 3px;
+}
+
+.menu-capsule__more span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.menu-capsule__divider {
+  width: 0.5px;
+  height: 16px;
+  background: currentColor;
+  opacity: 0.4;
+}
+
+.menu-capsule__close svg {
+  color: currentColor;
+}

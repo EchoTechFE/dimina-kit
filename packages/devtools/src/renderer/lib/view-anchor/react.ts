@@ -59,6 +59,7 @@ export function useViewAnchor(opts: UseViewAnchorOptions): ViewAnchorRef {
   const appliedRef = useRef<ReadonlyArray<unknown>>([
     opts.present,
     opts.publish,
+    opts.measure,
     ...(opts.deps ?? []),
   ])
 
@@ -70,7 +71,12 @@ export function useViewAnchor(opts: UseViewAnchorOptions): ViewAnchorRef {
   const collapseAndDispose = useRef((): void => {
     const handle = handleRef.current
     if (!handle) return
-    handle.update({ present: false, publish: optsRef.current.publish })
+    handle.update({
+      present: false,
+      publish: optsRef.current.publish,
+      measure: optsRef.current.measure,
+      clipToTarget: optsRef.current.clipToTarget,
+    })
     handle.dispose()
     handleRef.current = null
   })
@@ -96,14 +102,17 @@ export function useViewAnchor(opts: UseViewAnchorOptions): ViewAnchorRef {
       handleRef.current = createViewAnchor(el, {
         present: optsRef.current.present,
         publish: optsRef.current.publish,
+        measure: optsRef.current.measure,
+        clipToTarget: optsRef.current.clipToTarget,
       })
-      // The anchor was just created at the current (present, publish, deps), so
-      // seed the re-apply baseline to match. Otherwise the post-commit re-apply
-      // effect would see this fresh state as a change and publish a second time
-      // — on a remount with a changed `present` that is a double-emit.
+      // The anchor was just created at the current (present, publish, measure,
+      // deps), so seed the re-apply baseline to match. Otherwise the post-commit
+      // re-apply effect would see this fresh state as a change and publish a
+      // second time — on a remount with a changed `present` that is a double-emit.
       appliedRef.current = [
         optsRef.current.present,
         optsRef.current.publish,
+        optsRef.current.measure,
         ...(optsRef.current.deps ?? []),
       ]
     }
@@ -123,6 +132,7 @@ export function useViewAnchor(opts: UseViewAnchorOptions): ViewAnchorRef {
     const next: ReadonlyArray<unknown> = [
       opts.present,
       opts.publish,
+      opts.measure,
       ...(opts.deps ?? []),
     ]
     const prev = appliedRef.current
@@ -130,9 +140,21 @@ export function useViewAnchor(opts: UseViewAnchorOptions): ViewAnchorRef {
       next.length !== prev.length || next.some((v, i) => !Object.is(v, prev[i]))
     if (!changed) return
     appliedRef.current = next
-    handleRef.current?.update({ present: opts.present, publish: opts.publish })
+    handleRef.current?.update({
+      present: opts.present,
+      publish: opts.publish,
+      measure: opts.measure,
+      // Thread clipToTarget through the re-apply too: the core's `update`
+      // assigns `next.clipToTarget` unconditionally, so omitting it here would
+      // silently turn clipping OFF on every opts/deps change. Not in the deps
+      // tuple below: it's a static per-call config (SimulatorPanel passes a
+      // constant `true`), so a change to it would arrive paired with a measure/
+      // present change that already re-applies — but we still re-send the
+      // current value so the core never reverts to unclipped.
+      clipToTarget: opts.clipToTarget,
+    })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [opts.present, opts.publish, ...(opts.deps ?? [])])
+  }, [opts.present, opts.publish, opts.measure, ...(opts.deps ?? [])])
 
   // Collapse the native view + dispose on teardown.
   //
@@ -158,6 +180,8 @@ export function useViewAnchor(opts: UseViewAnchorOptions): ViewAnchorRef {
       handleRef.current = createViewAnchor(elRef.current, {
         present: optsRef.current.present,
         publish: optsRef.current.publish,
+        measure: optsRef.current.measure,
+        clipToTarget: optsRef.current.clipToTarget,
       })
     }
     return () => {

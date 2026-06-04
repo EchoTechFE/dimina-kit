@@ -14,3 +14,11 @@
 
 export { startMcpServer } from './server.js'
 export { getMcpStatus, type McpRuntimeStatus } from './status.js'
+// Native-host: let app.ts point the `simulator` CDP target at the active
+// render-host guest as the visible page changes.
+export {
+  setNativeHost,
+  setActiveBridgeId,
+  setNativeOverviewProvider,
+  getNativeOverviewProvider,
+} from './target-manager.js'

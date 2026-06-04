@@ -1,4 +1,4 @@
-import { PanelChannel } from '../../shared/ipc-channels.js'
+import { PanelChannel, WorkbenchRuntimeChannel } from '../../shared/ipc-channels.js'
 import {
   PanelEvalSchema,
   PanelSelectSchema,
@@ -43,4 +43,8 @@ export function registerPanelsIpc(ctx: Pick<WorkbenchContext, 'panels' | 'views'
         ctx.views.showSimulator(ctx.views.getLastSimWidth())
       }
     })
+    // Renderer reads this once to pick panel data sources: native-host is the
+    // sole runtime, so WXML + AppData always come from the main process (the
+    // page/service logic live in separate webContents).
+    .handle(WorkbenchRuntimeChannel.GetNativeHost, () => true)
 }

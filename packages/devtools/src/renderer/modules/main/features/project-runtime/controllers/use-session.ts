@@ -26,6 +26,14 @@ import type { CompileStatus } from './use-project-runtime-controller'
 export interface UseSessionProps {
   projectPath: string
   simulatorRef: RefObject<HTMLElement | null>
+  /**
+   * NATIVE-HOST ONLY. Under native-host the simulator is a main-process
+   * WebContentsView, so there is no renderer `<webview>` to `loadURL`. A
+   * relaunch instead re-publishes the compile config; `use-simulator.ts`'s
+   * native-attach effect then re-runs `attachNativeSimulator` with the new
+   * start-page URL, which tears down + respawns the DeviceShell at that page.
+   */
+  nativeHost: boolean
 }
 
 export interface SessionHookResult {
@@ -39,7 +47,7 @@ export interface SessionHookResult {
 }
 
 export function useSession(props: UseSessionProps): SessionHookResult {
-  const { projectPath, simulatorRef } = props
+  const { projectPath, simulatorRef, nativeHost } = props
 
   const [compileStatus, setCompileStatus] = useState<CompileStatus>({
     status: 'compiling',
@@ -142,6 +150,27 @@ export function useSession(props: UseSessionProps): SessionHookResult {
       try {
         if (!appInfo?.appId || isRefreshing.current) return
 
+        // ── Native-host relaunch ──────────────────────────────────────────────
+        // Under native-host the simulator is a main-process WebContentsView, so
+        // there is no renderer `<webview>` to `loadURL`. Re-publishing the
+        // compile config changes `simulatorUrl`, and `use-simulator.ts`'s native
+        // attach effect re-runs `attachNativeSimulator(newUrl)`, which tears down
+        // the old DeviceShell and respawns it at the new start page. Without this
+        // the no-webview guard below would make popover page-switch a no-op.
+        if (nativeHost) {
+          isRefreshing.current = true
+          setCompileStatus({ status: 'ready', message: '正在刷新...' })
+          try {
+            await saveCompileConfig(projectPath, nextConfig)
+            // Triggers the native re-attach effect (simulatorUrl depends on this).
+            setCompileConfig(nextConfig)
+            setCompileStatus({ status: 'ready', message: '刷新完成' })
+          } finally {
+            isRefreshing.current = false
+          }
+          return
+        }
+
         const webview = asWebview(simulatorRef)
         if (!webview) return
 
@@ -205,7 +234,7 @@ export function useSession(props: UseSessionProps): SessionHookResult {
         })
       }
     },
-    [appInfo, compileConfig, port, projectPath, simulatorRef],
+    [appInfo, compileConfig, port, projectPath, simulatorRef, nativeHost],
   )
 
   return {

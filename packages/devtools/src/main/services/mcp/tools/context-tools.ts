@@ -12,7 +12,12 @@
  */
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { getClient, getTargetState, type TargetKind } from '../target-manager.js'
+import {
+  getClient,
+  getNativeOverviewProvider,
+  getTargetState,
+  type TargetKind,
+} from '../target-manager.js'
 
 // Truncation thresholds: keep the overview compact — orientation, not data dump.
 const MAX_KEYS = 50
@@ -198,6 +203,20 @@ export function registerContextTools(server: McpServer): void {
         return {
           content: [{ type: 'text' as const, text: 'Error: probe returned non-JSON payload' }],
           isError: true,
+        }
+      }
+
+      const nativeOverviewProvider = getNativeOverviewProvider()
+      if (nativeOverviewProvider) {
+        try {
+          const nativeOverview = await nativeOverviewProvider()
+          probe.pageStackDepth = nativeOverview.pageStackDepth
+          probe.currentRoute = nativeOverview.currentRoute
+          probe.storageKeys = nativeOverview.storageKeys
+          probe.storageCount = nativeOverview.storageCount
+          probe.appDataKeys = nativeOverview.appDataKeys
+        } catch {
+          // Best effort: keep the CDP probe values if the native provider fails.
         }
       }
 

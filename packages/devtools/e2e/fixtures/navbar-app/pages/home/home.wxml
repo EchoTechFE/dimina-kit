@@ -1,0 +1,8 @@
+<view class="page-marker page-home">HOME PAGE</view>
+<button class="btn home-set-title-btn" bindtap="setTitle">Set Title Renamed</button>
+<button class="btn home-set-color-btn" bindtap="setColor">Set Color BW</button>
+<button class="btn home-show-loading-btn" bindtap="showLoading">Show Loading</button>
+<button class="btn home-hide-loading-btn" bindtap="hideLoading">Hide Loading</button>
+<button class="btn home-nav-detail-btn" bindtap="goDetail" data-path="/pages/detail/detail">Go Detail</button>
+<button class="btn home-nav-black-btn" bindtap="goBlack" data-path="/pages/black-title/black-title">Go Black</button>
+<button class="btn home-nav-custom-btn" bindtap="goCustom" data-path="/pages/custom-style/custom-style">Go Custom</button>

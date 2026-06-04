@@ -1,0 +1,30 @@
+.index-page {
+  min-height: 100vh;
+  padding: 28px 20px;
+  background: #f7f9fc;
+  color: #17202a;
+}
+
+.hero {
+  display: block;
+  margin-bottom: 18px;
+  padding: 18px;
+  background: #ffffff;
+  border: 1px solid #d0d7de;
+}
+
+.msg {
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.count {
+  margin-top: 8px;
+  font-size: 18px;
+  color: #425466;
+}
+
+.tap-button {
+  width: 100%;
+}

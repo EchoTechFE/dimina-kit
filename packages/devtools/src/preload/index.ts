@@ -23,4 +23,11 @@ export type {
 export { installSimulatorBridge } from './runtime/bridge.js'
 export { installCustomApisBridge } from './runtime/custom-apis.js'
 export type { DiminaCustomApisBridge } from './runtime/custom-apis.js'
+// NATIVE-HOST: lets a custom simulator preload opt into the native-host bridge
+// (DeviceShell render path) the same way the built-in `windows/simulator.ts`
+// does. Self-gating — a no-op disposer when native-host is off. Required so
+// external/composed preloads aren't stranded once native-host becomes the sole
+// runtime. (Stage-0 prerequisite for decommissioning the default path.)
+export { installNativeHostBridge } from './runtime/native-host.js'
+export type { DiminaNativeHostBridge } from './runtime/native-host.js'
 export { setupApiCompatHook } from './shared/api-compat.js'

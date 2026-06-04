@@ -10,10 +10,76 @@
 
 export const SimulatorChannel = {
   Attach: 'simulator:attach',
+  // NATIVE-HOST ONLY: ask main to create the simulator as a top-level
+  // WebContentsView (so nested render-host <webview>s can attach). The default
+  // path uses `Attach` with the renderer <webview>'s webContents id instead.
+  AttachNative: 'simulator:attach-native',
+  // NATIVE-HOST ONLY: renderer reports the device-bezel inner-screen rect (CSS
+  // px from content top-left) + zoom so main can overlay the simulator WCV on
+  // it. The default <webview> path never sends this.
+  SetNativeBounds: 'simulator:set-native-bounds',
+  // NATIVE-HOST ONLY: renderer pushes the selected device's LOGICAL metrics
+  // (screen size, pixelRatio, statusBarHeight, …) when the device dropdown
+  // changes. Main maps it to a HostEnvSnapshot and live-updates the running
+  // service-host window — the authoritative `wx.getSystemInfoSync()` source —
+  // so the mini-app sees the selected device without a relaunch. The default
+  // <webview> path delivers device info to the guest via `device:change`.
+  SetDeviceInfo: 'simulator:set-device-info',
   Detach: 'simulator:detach',
   Resize: 'simulator:resize',
   SetVisible: 'simulator:setVisible',
   Console: 'simulator:console',
+  // NATIVE-HOST ONLY: main → renderer push of the visible top-of-stack page
+  // route whenever the mini-app navigates (navigateTo / switchTab / back).
+  // The default `<webview>` path derives the current page from the guest's
+  // navigation events instead and never receives this. Payload: the page path
+  // string (same bare format as `getCurrentPagePath`), or '' when unknown.
+  CurrentPage: 'simulator:current-page',
+} as const
+
+/** iPhone bezel cutout family driving the device-shell notch visual. */
+export type NotchType = 'none' | 'notch' | 'dynamic-island'
+
+/** Per-device safe-area insets in CSS px (portrait). */
+export interface SafeAreaInsets {
+  top: number
+  right: number
+  bottom: number
+  left: number
+}
+
+/**
+ * Logical device metrics pushed by the renderer device dropdown under
+ * native-host (`SimulatorChannel.SetDeviceInfo`). Mirrors a row of the renderer
+ * `DEVICES` table; main maps it onto a `HostEnvSnapshot` for the service-host
+ * window so `wx.getSystemInfoSync()` reflects the selected device, relays it to
+ * the simulator WCV (DeviceShell: bezel size + status bar + notch), and drives
+ * the CSS `env(safe-area-inset-*)` override on render-host guests.
+ */
+export interface NativeDeviceInfo {
+  brand: string
+  model: string
+  system: string
+  platform: string
+  pixelRatio: number
+  screenWidth: number
+  screenHeight: number
+  statusBarHeight: number
+  safeAreaBottom: number
+  notchType: NotchType
+  safeAreaInsets: SafeAreaInsets
+}
+
+// ── Service host (main → hidden service-host window) ─────────────────────
+
+export const ServiceHostChannel = {
+  /**
+   * NATIVE-HOST ONLY. Live-update the service-host window's host-env snapshot
+   * (device metrics) so subsequent `wx.getSystemInfoSync()` reflects a device
+   * change without a relaunch. The service-host preload mutates
+   * `__diminaSpawnContext.hostEnvSnapshot` in place (see `service-host/preload.cjs`).
+   */
+  HostEnvUpdate: 'service-host:host-env:update',
 } as const
 
 // ── Custom simulator APIs (downstream-registered, main-process handlers) ──
@@ -29,11 +95,15 @@ export const SimulatorCustomApiChannel = {
   Invoke: 'simulator:custom-apis:invoke',
 } as const
 
-// ── Custom APIs bridge proxy (simulator <webview> ↔ main-window renderer) ──
-// Request:  webview → host via `ipcRenderer.sendToHost`,
-//           payload = { id, op: 'list' } | { id, op: 'invoke', name, params }
-// Response: host → webview via `<webview>.send`,
-//           payload = { id, result } | { id, error }
+// ── Custom APIs bridge (simulator → host) ──
+// payload = { id, op: 'list' } | { id, op: 'invoke', name, params } for Request,
+// { id, result } | { id, error } for Response. Two transports (chosen in
+// `src/preload/runtime/custom-apis.ts`):
+//  • default `<webview>`: Request via `ipcRenderer.sendToHost` → main-window
+//    renderer proxy → Response via `<webview>.send`;
+//  • native-host (top-level WebContentsView, no embedder): Request via
+//    `ipcRenderer.send` → `ipcMain.on` dispatcher bound to that simWc
+//    (view-manager `attachNativeCustomApiBridge`) → Response via `simWc.send`.
 //
 // Request/response are correlated by `id` so multiple concurrent invokes can
 // be in flight at once.
@@ -69,6 +139,31 @@ export type StorageWriteResult =
 export const SimulatorElementChannel = {
   Inspect: 'simulator:element:inspect',
   Clear: 'simulator:element:clear',
+} as const
+
+// ── Workbench runtime info (renderer reads once to pick panel data sources) ──
+// Under native-host the page DOM / service logic live in separate webContents,
+// so WXML + AppData are sourced from the main process instead of the simulator
+// guest's miniappSnapshot transport. The renderer queries this flag once and
+// branches usePanelData accordingly.
+export const WorkbenchRuntimeChannel = {
+  GetNativeHost: 'workbench:runtime:native-host',
+} as const
+
+// ── WXML tree (native-host: main pulls the tree from the active render-host
+// <webview> guest via render-inspect, and pushes/answers here — mirroring the
+// Storage panel's main→renderer contract so the renderer panel is unchanged) ──
+export const SimulatorWxmlChannel = {
+  GetSnapshot: 'simulator:wxml:snapshot',
+  Event: 'simulator:wxml:event',
+} as const
+
+// ── AppData (native-host: main taps the service→render setData stream in
+// bridge-router and pushes the cumulative snapshot here — the service logic runs
+// in the hidden service-host window, not a Worker in the simulator guest) ──
+export const SimulatorAppDataChannel = {
+  GetSnapshot: 'simulator:appdata:snapshot',
+  Event: 'simulator:appdata:event',
 } as const
 
 export interface ElementInspection {
@@ -138,6 +233,30 @@ export const ProjectFsChannel = {
   WriteFileSync: 'project:fs:writeFileSync',
   ListFiles: 'project:fs:listFiles',
 } as const
+
+// ── Editor (main → renderer) ──────────────────────────────────────────────
+//
+// Drives the in-renderer Monaco editor from the main process. Used by the
+// "click a console file link → open the file at line:col" pipeline: the
+// embedded DevTools front-end routes a source-link click through an open-
+// resource handler → Electron `devtools-open-url` on the service host → main
+// maps the resource URL to a project-relative path → this event opens it in
+// Monaco. Payload: `EditorOpenFilePayload`.
+
+export const EditorChannel = {
+  /** main → renderer: open `path` (project-relative POSIX) at `line`/`column`. */
+  OpenFile: 'editor:openFile',
+} as const
+
+/** Payload for `editor:openFile`. `line`/`column` are 1-based for Monaco. */
+export interface EditorOpenFilePayload {
+  /** Project-relative POSIX path (the same key Monaco opens files by). */
+  path: string
+  /** 1-based line to reveal; omitted/<=0 means open without moving the cursor. */
+  line?: number
+  /** 1-based column to reveal; defaults to 1 when a line is given. */
+  column?: number
+}
 
 // ── Project list / workspace ─────────────────────────────────────────────
 

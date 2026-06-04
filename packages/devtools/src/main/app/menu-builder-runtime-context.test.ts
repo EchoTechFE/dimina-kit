@@ -1,5 +1,5 @@
 /**
- * Step 6 of the devtools extension model — "收尾", Requirement B, RUNTIME half.
+ * Workbench model refactor — "收尾", Requirement B, RUNTIME half.
  *
  * `src/shared/menu-builder-context-narrowed.test.ts` proves the `menuBuilder`
  * hook's `context` parameter is narrowed to `MenuContext` at COMPILE time
@@ -20,9 +20,9 @@
  *  - the runtime object MUST still carry the menu-relevant fields
  *    (`workspace` / `views`) a host menu builder legitimately reads.
  *
- * RED TODAY: `installMenu` in `app.ts` does `config.menuBuilder(mainWindow,
- * context)` — it passes the full `WorkbenchContext`, so `'registry' in
- * captured` is `true`. The fix is to hand `menuBuilder` a narrowed value.
+ * `installMenu` in `app.ts` hands `menuBuilder` a narrowed value rather than
+ * the full `WorkbenchContext`, so the internal-pipeline fields are stripped
+ * before the host hook sees the object.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
@@ -229,10 +229,9 @@ describe('Requirement B (runtime): menuBuilder receives the narrowed MenuContext
   it('the runtime object does NOT carry the five internal-pipeline fields', async () => {
     const captured = await captureMenuContext()
 
-    // RED TODAY: `installMenu` passes the full `WorkbenchContext`, so every
-    // one of these is still present on the runtime object. The narrowing is
-    // purely type-level until `installMenu` hands `menuBuilder` a value with
-    // the internal plumbing stripped.
+    // `installMenu` hands `menuBuilder` a value with the internal plumbing
+    // stripped, so none of these fields are present on the runtime object —
+    // the narrowing is enforced at runtime, not only at the type level.
     expect('registry' in captured, 'menuBuilder must not receive ctx.registry').toBe(false)
     expect('senderPolicy' in captured, 'menuBuilder must not receive ctx.senderPolicy').toBe(false)
     expect(

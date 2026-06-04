@@ -170,6 +170,22 @@ html, body {
   overflow: hidden;
 }
 
+/* ── Splitters / resize handles ───────────────────────────────────────────
+ * Every workbench divider — the manual sim-column `Splitter` AND every
+ * `react-resizable-panels` `<Separator>` — renders `role="separator"` and is
+ * focusable (the library gives its handle a `tabIndex`). On mousedown the
+ * browser focuses it and paints its DEFAULT focus outline (a bright yellow/gold
+ * bar) on top of our 1px divider. The divider's own affordance is the
+ * `--color-ring` hover/active highlight (see `splitter-styles.ts`), never a UA
+ * outline. Suppress that outline HERE, once, on the role — so it can't reappear
+ * each time a new divider or a layout refactor forgets a per-component
+ * `focus:outline-none` (it had regressed repeatedly that way). This is the
+ * single source of truth; do not re-add scattered outline resets on splitters. */
+[role="separator"]:focus,
+[role="separator"]:focus-visible {
+  outline: none;
+}
+
 /* ── Scrollbar ──────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar        { width: var(--scrollbar-size); height: var(--scrollbar-size); }
 ::-webkit-scrollbar-track  { background: transparent; }

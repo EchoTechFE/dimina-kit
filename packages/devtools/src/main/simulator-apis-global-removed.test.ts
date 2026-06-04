@@ -1,8 +1,8 @@
 /**
- * Step 3 of the devtools extension model — "simulator-api per-context",
+ * Workbench model refactor — "simulator-api per-context",
  * Requirement D: the process-global registration surface is DELETED.
  *
- * `docs/extension-model.md` §4 / step 3 ("删进程全局 `registerSimulatorApi`
+ * `docs/workbench-model.md` ("删进程全局 `registerSimulatorApi`
  * 与 `simulatorApiRegistry` 单例") mandates a clean break:
  *
  *  D1. `src/main/services/simulator/custom-apis.ts` no longer exports a
@@ -17,8 +17,8 @@
  *  D5. The factory + interface + handler type SURVIVE in custom-apis.ts:
  *      `SimulatorApiHandler`, `SimulatorApiRegistry`, `createSimulatorApiRegistry`.
  *
- * All assertions are RED today: the global, the wrapper file, the barrel
- * export and the subpath all still exist. After step 3 they go green.
+ * These assertions pin the clean break: the global, the wrapper file, the
+ * barrel export and the subpath are all gone.
  *
  * Strategy: this suite mixes a runtime value import (for `api.ts` — its
  * exports have runtime presence) with source-text scans (for the deleted
@@ -67,7 +67,7 @@ describe('Requirement D2: the simulator-apis.ts wrapper file is deleted', () => 
     // Catches: the file (and its free `registerSimulatorApi`) was kept around.
     expect(
       await exists(repoFile('simulator-apis.ts')),
-      'src/main/simulator-apis.ts must be deleted (step 3 — clean break)',
+      'src/main/simulator-apis.ts must be deleted (clean break)',
     ).toBe(false)
   })
 })
@@ -136,7 +136,7 @@ describe('Requirement D3: api.ts drops registerSimulatorApi, keeps SimulatorApiH
     // Catches: the barrel still surfacing the deleted free function.
     expect(
       api.registerSimulatorApi,
-      'api.ts must NOT export `registerSimulatorApi` anymore (step 3 — clean break)',
+      'api.ts must NOT export `registerSimulatorApi` anymore (clean break)',
     ).toBeUndefined()
   })
 

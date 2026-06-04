@@ -1,0 +1,79 @@
+.dmb-tab-bar {
+  display: flex;
+  align-items: stretch;
+  justify-content: space-around;
+  width: 100%;
+  height: 50px;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  border-top: 1px solid #e0e0e0;
+  box-sizing: content-box;
+  flex-shrink: 0;
+  z-index: 9;
+}
+
+.dmb-tab-bar__item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  position: relative;
+  background: transparent;
+  border: 0;
+  padding: 4px 0 2px;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  outline: none;
+}
+
+.dmb-tab-bar__item:focus-visible {
+  outline: 2px solid #1890ff;
+  outline-offset: -2px;
+}
+
+.dmb-tab-bar__icon-slot {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 2px;
+}
+
+.dmb-tab-bar__icon {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.dmb-tab-bar__text {
+  font-size: 11px;
+  line-height: 1;
+  user-select: none;
+}
+
+.dmb-tab-bar__badge {
+  position: absolute;
+  top: 0;
+  right: calc(50% - 22px);
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  background: #f43f5e;
+  color: #ffffff;
+  border-radius: 8px;
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+}
+
+.dmb-tab-bar__red-dot {
+  position: absolute;
+  top: 4px;
+  right: calc(50% - 16px);
+  width: 8px;
+  height: 8px;
+  background: #f43f5e;
+  border-radius: 50%;
+}

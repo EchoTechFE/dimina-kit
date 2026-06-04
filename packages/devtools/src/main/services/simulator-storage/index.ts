@@ -26,6 +26,35 @@ import {
 } from '../../../shared/ipc-channels.js'
 import { DisposableRegistry, type Disposable } from '../../utils/disposable.js'
 import { IpcRegistry, type SenderPolicy } from '../../utils/ipc-registry.js'
+import type { BridgeRouterHandle } from '../../ipc/bridge-router.js'
+import type { RenderInspector } from '../render-inspect/index.js'
+import { decodeStorageValue, encodeStorageValue, serviceStorage } from './service-storage-ops.js'
+
+/**
+ * Runtime async-storage handler (native-host). bridge-router routes async
+ * `wx.setStorage`/`getStorage`/… here so they hit the SAME service-host `file://`
+ * store as the sync APIs — eliminating the default-arch split where async writes
+ * landed on the simulator `http://` origin and sync writes on `file://`. Returns
+ * the value for the wx success callback (or throws → wx fail callback).
+ */
+export interface StorageApi {
+  invoke(appId: string, name: string, params: Record<string, unknown>): Promise<unknown>
+}
+
+/** Async wx storage API names routed through the unified service-window store. */
+export const STORAGE_API_NAMES = new Set([
+  'setStorage',
+  'getStorage',
+  'removeStorage',
+  'clearStorage',
+  'getStorageInfo',
+])
+
+/** The storage panel's return — a Disposable plus the native-host runtime hook. */
+export interface SimulatorStorageHandle extends Disposable {
+  /** Present only under native-host; wired to ctx.storageApi for bridge-router. */
+  storageApi: StorageApi | null
+}
 
 function isSimulatorWebview(wc: WebContents): boolean {
   if (wc.isDestroyed()) return false
@@ -60,14 +89,31 @@ export interface SimulatorStorageOptions {
    * CDP snapshot/event stream to the active appId.
    */
   getActiveAppId: () => string | null
+  /**
+   * Bridge-router accessor (native-host only). When present and native-host is
+   * on, element inspection targets the active render-host <webview> guest via
+   * `renderInspector` instead of the simulator iframe's `__simulatorData`.
+   */
+  bridge?: BridgeRouterHandle
+  /** Injects/drives the render-guest inspector; required for native-host inspect. */
+  renderInspector?: RenderInspector
 }
 
 export function setupSimulatorStorage(
   host: WebContents,
   options: SimulatorStorageOptions,
-): Disposable {
+): SimulatorStorageHandle {
   const registry = new DisposableRegistry()
   const getActiveAppId = options.getActiveAppId
+
+  // Native-host: the mini-app's storage lives on the service-host window's
+  // file:// origin (sync-impls + the unified async path both write there), not
+  // the simulator <webview>'s http:// origin the CDP path attaches to. Resolve
+  // the service window fresh each call (the pre-warm pool can swap it on respawn).
+  function nativeServiceWc(): WebContents | null {
+    if (!options.bridge?.isNativeHost()) return null
+    return options.bridge.getServiceWc(getActiveAppId() ?? undefined)
+  }
   let attachedWc: WebContents | null = null
   let attachDisposables: DisposableRegistry | null = null
   /**
@@ -286,6 +332,16 @@ export function setupSimulatorStorage(
   }
 
   async function setItem(key: string, value: string): Promise<StorageWriteResult> {
+    const nativeWc = nativeServiceWc()
+    if (nativeWc) {
+      try {
+        await serviceStorage(nativeWc).writeOne(key, value)
+        pushSyntheticEvent({ type: 'added', key, newValue: value })
+        return { ok: true }
+      } catch (e) {
+        return { ok: false, error: (e as Error).message }
+      }
+    }
     return withStorageWrite(async ({ wc, storageId }) => {
       await wc.debugger.sendCommand('DOMStorage.setDOMStorageItem', { storageId, key, value })
       pushSyntheticEvent({ type: 'added', key, newValue: value })
@@ -294,6 +350,16 @@ export function setupSimulatorStorage(
   }
 
   async function removeItem(key: string): Promise<StorageWriteResult> {
+    const nativeWc = nativeServiceWc()
+    if (nativeWc) {
+      try {
+        await serviceStorage(nativeWc).removeOne(key)
+        pushSyntheticEvent({ type: 'removed', key })
+        return { ok: true }
+      } catch (e) {
+        return { ok: false, error: (e as Error).message }
+      }
+    }
     return withStorageWrite(async ({ wc, storageId }) => {
       await wc.debugger.sendCommand('DOMStorage.removeDOMStorageItem', { storageId, key })
       pushSyntheticEvent({ type: 'removed', key })
@@ -306,6 +372,19 @@ export function setupSimulatorStorage(
   // Falls back to origin-wide `DOMStorage.clear` only when no active appId is
   // set (matches the snapshot filter's documented null-fallback).
   async function clearScoped(): Promise<StorageWriteResult> {
+    const nativeWc = nativeServiceWc()
+    if (nativeWc) {
+      try {
+        const prefix = activePrefix()
+        const ss = serviceStorage(nativeWc)
+        if (prefix) await ss.clearPrefix(prefix)
+        else await ss.clearAll()
+        if (!host.isDestroyed()) host.send(SimulatorStorageChannel.Event, { type: 'cleared' })
+        return { ok: true }
+      } catch (e) {
+        return { ok: false, error: (e as Error).message }
+      }
+    }
     return withStorageWrite(async ({ wc, storageId }) => {
       const prefix = activePrefix()
       if (!prefix) {
@@ -327,6 +406,16 @@ export function setupSimulatorStorage(
   // state in the shared simulator partition. The renderer guards this with a
   // confirm dialog; we don't second-guess here.
   async function clearAll(): Promise<StorageWriteResult> {
+    const nativeWc = nativeServiceWc()
+    if (nativeWc) {
+      try {
+        await serviceStorage(nativeWc).clearAll()
+        if (!host.isDestroyed()) host.send(SimulatorStorageChannel.Event, { type: 'cleared' })
+        return { ok: true }
+      } catch (e) {
+        return { ok: false, error: (e as Error).message }
+      }
+    }
     return withStorageWrite(async ({ wc, storageId }) => {
       await wc.debugger.sendCommand('DOMStorage.clear', { storageId })
       return { ok: true }
@@ -334,6 +423,14 @@ export function setupSimulatorStorage(
   }
 
   async function getSnapshot(): Promise<StorageItem[]> {
+    const nativeWc = nativeServiceWc()
+    if (nativeWc) {
+      const prefix = activePrefix()
+      if (!prefix) return []
+      const entries = await serviceStorage(nativeWc).readAll(prefix)
+      // Keys returned with the `${appId}_` prefix intact (same as the CDP path).
+      return entries.map(([key, value]) => ({ key, value }))
+    }
     return withStorageRead<StorageItem[]>([], async ({ wc, storageId }) => {
       const result = (await wc.debugger.sendCommand('DOMStorage.getDOMStorageItems', {
         storageId,
@@ -389,6 +486,48 @@ export function setupSimulatorStorage(
     }
   })
 
+  // Element inspection. Default path delegates to the simulator iframe's
+  // `__simulatorData`. Native-host path targets the active render-host
+  // <webview> guest via the render inspector (the page DOM lives there, not in
+  // the simulator iframe). Looked up fresh each call so a DevTools-induced CDP
+  // detach (default path) or a render-guest swap (native path) is tolerated.
+  async function inspectElement(sid: string): Promise<ElementInspection | null> {
+    if (!sid) return null
+    if (options.bridge?.isNativeHost() && options.renderInspector) {
+      const wc = options.bridge.getActiveRenderWc(getActiveAppId() ?? undefined)
+      if (!wc) return null
+      return options.renderInspector.highlight(wc, sid)
+    }
+    const sim = findSimulatorWebContents()
+    if (!sim) return null
+    try {
+      const result = (await sim.executeJavaScript(
+        `window.__simulatorData && window.__simulatorData.highlightElement ? window.__simulatorData.highlightElement(${JSON.stringify(sid)}) : null`,
+      )) as ElementInspection | null
+      return result ?? null
+    } catch (e) {
+      console.warn('[simulator-element] inspect failed:', (e as Error).message)
+      return null
+    }
+  }
+
+  async function clearElementInspection(): Promise<void> {
+    if (options.bridge?.isNativeHost() && options.renderInspector) {
+      const wc = options.bridge.getActiveRenderWc(getActiveAppId() ?? undefined)
+      if (wc) await options.renderInspector.unhighlight(wc)
+      return
+    }
+    const sim = findSimulatorWebContents()
+    if (!sim) return
+    try {
+      await sim.executeJavaScript(
+        'window.__simulatorData && window.__simulatorData.unhighlightElement && window.__simulatorData.unhighlightElement()',
+      )
+    } catch {
+      // best-effort
+    }
+  }
+
   // IPC handlers — gated by the workbench SenderPolicy when provided so this
   // module routes through the same C-stage sender white-list as every other
   // workbench-built-in (main-window renderer + overlay views only). Without
@@ -412,7 +551,63 @@ export function setupSimulatorStorage(
   // Detach active CDP session last
   registry.add(() => detachFromSim())
 
-  return registry
+  // ── Runtime async-storage unification (native-host) ───────────────────────
+  // bridge-router routes async wx.setStorage/etc. here so they hit the SAME
+  // service-host file:// store as the sync APIs (no more split origin). After a
+  // write we push a synthetic panel event so the Storage panel stays live on
+  // in-app writes (executeJavaScript writes don't emit CDP DOMStorage events).
+  async function runtimeInvoke(
+    appId: string,
+    name: string,
+    params: Record<string, unknown>,
+  ): Promise<unknown> {
+    const wc = options.bridge?.getServiceWc(appId)
+    if (!wc) throw new Error('service-host window unavailable')
+    const ss = serviceStorage(wc)
+    const prefix = `${appId}_`
+    const key = typeof params.key === 'string' ? params.key : ''
+    const fullKey = prefix + key
+    switch (name) {
+      case 'setStorage': {
+        const value = encodeStorageValue(params.data)
+        await ss.writeOne(fullKey, value)
+        pushSyntheticEvent({ type: 'added', key: fullKey, newValue: value })
+        return { errMsg: 'setStorage:ok' }
+      }
+      case 'getStorage': {
+        const raw = await ss.readOne(fullKey)
+        if (raw === null) throw new Error('getStorage:fail data not found')
+        return { data: decodeStorageValue(raw), errMsg: 'getStorage:ok' }
+      }
+      case 'removeStorage': {
+        await ss.removeOne(fullKey)
+        pushSyntheticEvent({ type: 'removed', key: fullKey })
+        return { errMsg: 'removeStorage:ok' }
+      }
+      case 'clearStorage': {
+        await ss.clearPrefix(prefix)
+        if (appId === getActiveAppId() && !host.isDestroyed()) {
+          host.send(SimulatorStorageChannel.Event, { type: 'cleared' })
+        }
+        return { errMsg: 'clearStorage:ok' }
+      }
+      case 'getStorageInfo': {
+        const entries = await ss.readAll(prefix)
+        const keys = entries.map(([k]) => k.slice(prefix.length))
+        let currentSize = 0
+        for (const [, v] of entries) currentSize += v ? v.length * 2 : 0
+        return { keys, currentSize, limitSize: 10 * 1024 * 1024, errMsg: 'getStorageInfo:ok' }
+      }
+      default:
+        throw new Error(`unsupported storage api ${name}`)
+    }
+  }
+
+  const storageApi: StorageApi | null = options.bridge?.isNativeHost()
+    ? { invoke: runtimeInvoke }
+    : null
+
+  return { dispose: () => registry.dispose(), storageApi }
 }
 
 // Element inspection delegates to the simulator preload's __simulatorData
@@ -424,31 +619,4 @@ function findSimulatorWebContents(): WebContents | null {
     if (isSimulatorWebview(wc)) return wc
   }
   return null
-}
-
-async function inspectElement(sid: string): Promise<ElementInspection | null> {
-  if (!sid) return null
-  const sim = findSimulatorWebContents()
-  if (!sim) return null
-  try {
-    const result = (await sim.executeJavaScript(
-      `window.__simulatorData && window.__simulatorData.highlightElement ? window.__simulatorData.highlightElement(${JSON.stringify(sid)}) : null`,
-    )) as ElementInspection | null
-    return result ?? null
-  } catch (e) {
-    console.warn('[simulator-element] inspect failed:', (e as Error).message)
-    return null
-  }
-}
-
-async function clearElementInspection(): Promise<void> {
-  const sim = findSimulatorWebContents()
-  if (!sim) return
-  try {
-    await sim.executeJavaScript(
-      'window.__simulatorData && window.__simulatorData.unhighlightElement && window.__simulatorData.unhighlightElement()',
-    )
-  } catch {
-    // best-effort
-  }
 }

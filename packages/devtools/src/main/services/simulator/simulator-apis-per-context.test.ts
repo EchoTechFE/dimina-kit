@@ -1,7 +1,7 @@
 /**
- * Step 3 of the devtools extension model — "simulator-api per-context".
+ * Workbench model refactor — "simulator-api per-context".
  *
- * `docs/extension-model.md` §4 / step 3: the simulator custom-API registry
+ * `docs/workbench-model.md`: the simulator custom-API registry
  * must move OFF the process-global singleton and onto a per-`WorkbenchContext`
  * registry. This suite pins down three of the four contract clauses:
  *
@@ -21,10 +21,10 @@
  *  `src/main/app/instance-simulator-api.test.ts` and
  *  `src/main/simulator-apis-global-removed.test.ts`.)
  *
- * Everything below is RED until step 3 lands: `ctx.simulatorApis` does not
- * exist yet, and `registerSimulatorIpc` still reads the process-global
- * `simulatorApiRegistry`. The failures must point at the missing per-context
- * field / wiring, not at a broken harness.
+ * `ctx.simulatorApis` is a per-context field, and `registerSimulatorIpc`
+ * reads it rather than the process-global `simulatorApiRegistry`. A failure
+ * here points at a missing per-context field / wiring, not at a broken
+ * harness.
  *
  * No Electron app is driven here — `createWorkbenchContext` is exercised
  * directly with a minimal electron mock, and `registerSimulatorIpc` is fed a
@@ -155,8 +155,7 @@ describe('Requirement A: ctx.simulatorApis is a per-context SimulatorApiRegistry
     const regA = (a as unknown as { simulatorApis: SimulatorApiRegistry }).simulatorApis
     const regB = (b as unknown as { simulatorApis: SimulatorApiRegistry }).simulatorApis
 
-    // Catches "createWorkbenchContext returns the process-global singleton" —
-    // the exact regression step 3 exists to kill.
+    // Catches "createWorkbenchContext returns the process-global singleton".
     expect(regA).not.toBe(regB)
   })
 

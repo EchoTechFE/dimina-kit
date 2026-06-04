@@ -1,0 +1,5 @@
+{
+  "appid": "devtools_tabbar_fixture",
+  "projectname": "devtools-tabbar-fixture",
+  "description": "Fixture mini-app for e2e TabBar tests"
+}

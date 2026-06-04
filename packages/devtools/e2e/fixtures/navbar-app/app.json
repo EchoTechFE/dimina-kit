@@ -1,0 +1,14 @@
+{
+  "pages": [
+    "pages/home/home",
+    "pages/detail/detail",
+    "pages/custom-style/custom-style",
+    "pages/black-title/black-title"
+  ],
+  "window": {
+    "navigationBarTitleText": "App Default Title",
+    "navigationBarBackgroundColor": "#1890ff",
+    "navigationBarTextStyle": "white",
+    "navigationStyle": "default"
+  }
+}

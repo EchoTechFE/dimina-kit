@@ -1,5 +1,7 @@
-import React from 'react'
+import React, { useCallback } from 'react'
 import { Select } from '@/shared/components/ui/select'
+import { setNativeSimulatorBounds } from '@/shared/api'
+import { useViewAnchor, type Bounds } from '@/lib/view-anchor'
 import { cn } from '@/shared/lib/utils'
 import { DEVICES, ZOOM_OPTIONS } from '@/shared/constants'
 
@@ -15,9 +17,6 @@ interface SimulatorPanelProps {
   onDeviceChange: (e: React.ChangeEvent<HTMLSelectElement>) => void
   onZoomChange: (e: React.ChangeEvent<HTMLSelectElement>) => void
   compileStatus: { status: string; message: string }
-  preloadPath: string
-  simulatorUrl: string
-  simulatorRef: React.RefObject<HTMLElement | null>
   currentPage: string
   copied: boolean
   onCopyPagePath: () => void
@@ -29,14 +28,49 @@ export function SimulatorPanel({
   onDeviceChange,
   onZoomChange,
   compileStatus,
-  preloadPath,
-  simulatorUrl,
-  simulatorRef,
   currentPage,
   copied,
   onCopyPagePath,
 }: SimulatorPanelProps) {
-  const scale = zoom / 100
+  // The simulator is a main-process WebContentsView (native-host is the sole
+  // runtime) painted directly over the flex:1 placeholder below. This z2
+  // renderer panel draws NO phone/bezel: just the toolbar, an EMPTY placeholder
+  // slot, and the page-path bar. The WCV is bound to the placeholder's rect via
+  // `useViewAnchor` (the same overlay-binding the DevTools view uses); flex:1
+  // sizes ONLY the placeholder region. The WCV is RECTANGULAR — its own
+  // web-viewport is the (straight-edged) clip. Inside it, DeviceShell draws the
+  // WHOLE phone (rounded corners, notch, nav, viewport, tab/home) at FIXED
+  // device-logical size and scrolls it natively when it's larger than the
+  // region. zoom is applied as the WCV's zoomFactor (zoom/100), never as a CSS
+  // transform here.
+  //
+  // `present` is constant `true`: FrameTree UNMOUNTS this panel when the
+  // simulator cell is hidden, and the hook's unmount teardown publishes one ZERO
+  // to collapse the WCV.
+  //
+  // `publish` carries `zoom` (the `Bounds` rect has no zoom field) so main can
+  // `setZoomFactor` the WCV; its identity changes with `zoom`, re-publishing on
+  // zoom change. The default `measure` (the placeholder's own
+  // getBoundingClientRect) gives the region rect directly — no `measure`
+  // override and no `clipToTarget`.
+  const publish = useCallback(
+    (b: Bounds) => {
+      void setNativeSimulatorBounds({
+        x: b.x,
+        y: b.y,
+        width: b.width,
+        height: b.height,
+        zoom,
+      })
+    },
+    [zoom],
+  )
+
+  const anchorRef = useViewAnchor({
+    present: true,
+    publish,
+    deps: [zoom],
+  })
 
   return (
     <div className="bg-sim-bg flex flex-col overflow-hidden h-full w-full">
@@ -61,64 +95,30 @@ export function SimulatorPanel({
         </Select>
       </div>
 
-      <div className="flex-1 overflow-auto flex items-center justify-center p-5">
-        <div className="flex flex-col items-center">
-          <div
-            className="shrink-0 overflow-visible relative"
-            style={{
-              borderRadius: 44,
-              boxShadow:
-                '0 0 0 8px var(--color-phone-shell), 0 0 0 10px var(--color-phone-border), 0 24px 60px var(--color-overlay-heavy)',
-              background: 'var(--color-phone-shell)',
-              width: Math.round(device.width * scale),
-              height: Math.round(device.height * scale),
-            }}
-          >
-            <div
-              className="bg-black relative overflow-hidden shrink-0"
-              style={{
-                borderRadius: 36,
-                width: device.width,
-                height: device.height,
-                transform: `scale(${scale})`,
-                transformOrigin: 'top left',
-              }}
-            >
-              {preloadPath && simulatorUrl && (
-                <webview
-                  ref={simulatorRef as React.RefObject<HTMLElement>}
-                  src={simulatorUrl}
-                  // eslint-disable-next-line react/no-unknown-property
-                  partition="persist:simulator"
-                  // eslint-disable-next-line react/no-unknown-property
-                  allowpopups=""
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    width: device.width,
-                    height: device.height,
-                  }}
-                />
-              )}
-
-              {compileStatus.status === 'compiling' && (
-                <div className="absolute inset-0 flex items-center justify-center bg-black/50 rounded-[36px] z-10">
-                  <div className="text-text-dim text-[13px]">正在编译中...</div>
-                </div>
-              )}
-              {compileStatus.status === 'error' && (
-                <div className="absolute inset-0 flex items-center justify-center bg-black/70 rounded-[36px] z-10">
-                  <div className="text-center p-4">
-                    <div className="text-status-error text-[14px] font-medium mb-2">编译失败</div>
-                    <div className="text-status-error text-[11px] max-w-[280px] break-words">
-                      {compileStatus.message}
-                    </div>
-                  </div>
-                </div>
-              )}
+      <div
+        ref={anchorRef}
+        className="flex-1 min-h-0 bg-sim-bg relative"
+        data-area="native-simulator"
+      >
+        {/* The simulator itself is a main-process WebContentsView (mounted via
+            attachNativeSimulator) painted over this placeholder region — it
+            hosts DeviceShell, which draws the whole phone and scrolls it
+            natively, so the renderer never renders a `<webview>` here. */}
+        {compileStatus.status === 'compiling' && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-10">
+            <div className="text-text-dim text-[13px]">正在编译中...</div>
+          </div>
+        )}
+        {compileStatus.status === 'error' && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/70 z-10">
+            <div className="text-center p-4">
+              <div className="text-status-error text-[14px] font-medium mb-2">编译失败</div>
+              <div className="text-status-error text-[11px] max-w-[280px] break-words">
+                {compileStatus.message}
+              </div>
             </div>
           </div>
-        </div>
+        )}
       </div>
 
       <div className="flex items-center px-2.5 bg-sim-bottom border-t border-border-subtle shrink-0 h-[30px] min-w-0">

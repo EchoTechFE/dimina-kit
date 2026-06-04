@@ -29,6 +29,24 @@ export const rendererDir = path.join(devtoolsPackageRoot, 'dist/renderer')
 export const defaultPreloadPath = path.join(devtoolsPackageRoot, 'dist/preload/windows/simulator.js')
 
 /**
+ * Resolve the CommonJS sibling (`*.cjs`) of a simulator preload bundle.
+ *
+ * The default `<webview>` simulator path consumes the preload as a session
+ * frame preload, where Electron always loads it as CommonJS. The native-host
+ * simulator runs in a top-level WebContentsView whose `webPreferences.preload`
+ * obeys the `.js` + `"type":"module"` ESM rule — so the `.js` bundle would fail
+ * with `require is not defined`. We ship a byte-identical `.cjs` copy
+ * (build:preload emits both) and hand the WCV the `.cjs` sibling. If a host
+ * supplies a custom `.js` preload, we swap the extension; an already-`.cjs`
+ * path (or any non-`.js`) is returned unchanged.
+ */
+export function cjsSiblingPreloadPath(preloadPath: string): string {
+  return preloadPath.endsWith('.js')
+    ? preloadPath.slice(0, -'.js'.length) + '.cjs'
+    : preloadPath
+}
+
+/**
  * Preload bundle for the main window, settings window, and the settings /
  * popover overlay WebContentsViews. Exposes `window.devtools.ipc` via
  * contextBridge so the renderer never needs `window.require('electron')`.

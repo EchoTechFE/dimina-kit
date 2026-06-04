@@ -70,8 +70,66 @@ export const SimulatorAttachSchema = z.tuple([
   SimWidth,
 ])
 
+/**
+ * simulator:attach-native (native-host only) — the simulator URL to load into
+ * the top-level WebContentsView + simulator width. The URL is the dev-server
+ * `http://localhost:<port>/simulator.html?…` the renderer would otherwise put
+ * on the `<webview src>`; we validate it's an http(s) URL to keep the WCV off
+ * arbitrary origins (will-navigate hardening re-checks at navigation time).
+ */
+export const SimulatorAttachNativeSchema = z.tuple([
+  z.string().url().refine((u) => u.startsWith('http://') || u.startsWith('https://'), {
+    message: 'simulator URL must be http(s)',
+  }),
+  SimWidth,
+])
+
 /** simulator:resize — simulator width. */
 export const SimulatorResizeSchema = z.tuple([SimWidth])
+
+/**
+ * simulator:set-native-bounds (native-host only) — the renderer-measured
+ * device-bezel inner-screen rect (CSS px, from `getBoundingClientRect()`, may
+ * be fractional/zero) plus the device zoom percent. Positioned 1:1 as the
+ * simulator WCV overlay bounds. Coordinates are plain finite numbers (x/y may
+ * be negative when scrolled off-screen); zoom is the ZOOM_OPTIONS percent.
+ */
+export const SimulatorSetNativeBoundsSchema = z.tuple([
+  z.object({
+    x: z.number().finite(),
+    y: z.number().finite(),
+    width: z.number().finite(),
+    height: z.number().finite(),
+    zoom: z.number().finite().positive(),
+  }),
+])
+
+/**
+ * simulator:set-device-info (native-host only) — the selected device's logical
+ * metrics, mapped by main into the service-host window's HostEnvSnapshot. Sizes
+ * are bounded positive ints (logical device px); strings are bounded to keep the
+ * payload small. Matches `NativeDeviceInfo` in ipc-channels.ts.
+ */
+export const SimulatorSetDeviceInfoSchema = z.tuple([
+  z.object({
+    brand: z.string().max(64),
+    model: z.string().max(64),
+    system: z.string().max(64),
+    platform: z.string().max(32),
+    pixelRatio: z.number().finite().positive(),
+    screenWidth: z.number().int().min(100).max(4000),
+    screenHeight: z.number().int().min(100).max(4000),
+    statusBarHeight: z.number().finite().min(0).max(400),
+    safeAreaBottom: z.number().finite().min(0).max(400),
+    notchType: z.enum(['none', 'notch', 'dynamic-island']),
+    safeAreaInsets: z.object({
+      top: z.number().finite().min(0).max(400),
+      right: z.number().finite().min(0).max(400),
+      bottom: z.number().finite().min(0).max(400),
+      left: z.number().finite().min(0).max(400),
+    }),
+  }),
+])
 
 /**
  * view:*:bounds — renderer-measured CSS pixel rectangle in window content

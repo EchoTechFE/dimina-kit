@@ -1,7 +1,7 @@
 /**
- * Step 4 of the devtools extension model — "toolbar 合一".
+ * Workbench model refactor — "toolbar 合一".
  *
- * `docs/extension-model.md` §3.3 / §4 / step 4. This suite pins down
+ * `docs/workbench-model.md`. This suite pins down
  * Requirements B, C and D of the toolbar merge:
  *
  *  Requirement B — per-context toolbar state:
@@ -25,10 +25,9 @@
  *    - `view-api.ts`'s `invokeToolbarAction` no longer references
  *      `ActionPrefix` (source scan).
  *
- * Everything is RED until step 4 lands: there is no per-context toolbar
- * store, no `Invoke` channel, and `registerToolbarIpc` still reads the
- * deleted `ctx.toolbarActions`. Failures must point at the missing
- * feature, not at a broken harness.
+ * Together these pin the per-context toolbar store, the `Invoke` channel, and
+ * the removal of the legacy `ctx.toolbarActions` path. Failures must point at
+ * the missing feature, not at a broken harness.
  *
  * Seam: `registerToolbarIpc` is fed a real `WorkbenchContext` built by
  * `createWorkbenchContext` (so the test never names the internal toolbar
@@ -135,9 +134,9 @@ type ToolbarActionInput = { id: string; label: string; handler: () => void | Pro
 
 let createWorkbenchContext: typeof import('../services/workbench-context.js').createWorkbenchContext
 let registerToolbarIpc: typeof import('./toolbar.js').registerToolbarIpc
-// Accessed as a string-keyed record so a test can assert on `Invoke`
-// (added in step 4) / `ActionPrefix` (removed in step 4) without TS errors
-// against the pre-step-4 enum shape.
+// Accessed as a string-keyed record so a test can assert on the presence of
+// `Invoke` and the absence of `ActionPrefix` without TS errors against the
+// enum's concrete shape.
 let ToolbarChannel: Record<string, string>
 
 beforeEach(async () => {
@@ -171,14 +170,14 @@ function makeContext(): WorkbenchContext {
 const fakeEvent = { sender: { id: 1, isDestroyed: () => false, getURL: () => '' } }
 
 /**
- * Push a batch of host actions into a context's toolbar store. Step 4's only
+ * Push a batch of host actions into a context's toolbar store. The only
  * supported way to populate per-context toolbar state is `instance.toolbar`;
  * since this suite drives `registerToolbarIpc` against a bare context, it
  * relies on the context exposing the SAME store the host surface writes to.
  *
- * The exact field name is an implementation detail; this helper tries the
- * documented shapes (`ctx.toolbar.set(...)`). If step 4 names it
- * differently, this helper is the single place to adjust.
+ * The exact field name is an implementation detail; this helper reaches the
+ * store via `ctx.toolbar.set(...)` and is the single place to adjust if that
+ * shape changes.
  */
 function setToolbar(ctx: WorkbenchContext, actions: ToolbarActionInput[]): void {
   const store = (ctx as unknown as { toolbar?: { set?: (a: ToolbarActionInput[]) => void } }).toolbar
@@ -196,9 +195,9 @@ describe('Requirement B: per-context toolbar state', () => {
   it('a fresh context exposes a per-context toolbar store, starting empty', async () => {
     const ctx = makeContext()
 
-    // Requirement B: the context itself carries the toolbar store. Catches a
-    // step-4 that wired `instance.toolbar` to some ad-hoc closure instead of
-    // a field on WorkbenchContext (which registerToolbarIpc must read).
+    // Requirement B: the context itself carries the toolbar store. Catches an
+    // `instance.toolbar` wired to some ad-hoc closure instead of a field on
+    // WorkbenchContext (which registerToolbarIpc must read).
     const store = (ctx as unknown as { toolbar?: { set?: unknown } }).toolbar
     expect(store, 'createWorkbenchContext must set a per-context toolbar store').toBeDefined()
     expect(typeof store!.set).toBe('function')
@@ -383,7 +382,7 @@ describe('Requirement D: old toolbar paths are deleted', () => {
     // The bare `toolbar:action:*` dynamic-channel scheme is replaced by Invoke.
     expect(
       channels.ActionPrefix,
-      'ToolbarChannel.ActionPrefix must be removed in step 4',
+      'ToolbarChannel.ActionPrefix must be removed',
     ).toBeUndefined()
   })
 
@@ -399,15 +398,15 @@ describe('Requirement D: old toolbar paths are deleted', () => {
     // The provider-style config field is deleted; per-context state replaces it.
     expect(
       Object.prototype.hasOwnProperty.call(ctx, 'toolbarActions'),
-      'WorkbenchContext.toolbarActions must be removed in step 4',
+      'WorkbenchContext.toolbarActions must be removed',
     ).toBe(false)
   })
 
   it('createWorkbenchContext ignores / no longer accepts a `toolbarActions` option', () => {
     // Passing the deleted option through must not resurrect a `toolbarActions`
     // field on the context. The option object is cast to the factory's param
-    // type so the test still compiles AFTER step 4 removes `toolbarActions`
-    // from `CreateContextOptions`.
+    // type so the test compiles even though `CreateContextOptions` no longer
+    // carries `toolbarActions`.
     const mainWindow = stubs.makeBrowserWindow(nextWcId++) as unknown as import('electron').BrowserWindow
     const opts = {
       mainWindow,

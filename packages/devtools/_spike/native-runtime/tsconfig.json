@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": "src",
+    "outDir": "dist",
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "types": ["node", "electron"]
+  },
+  "include": [
+    "src/main.ts",
+    "src/bridge-router.ts",
+    "src/shared/**/*.ts",
+    "src/service-host/preload.ts",
+    "src/service-host/sync-api-patch.ts",
+    "src/service-host/sync-impls/**/*.ts",
+    "src/render-host/preload.ts"
+  ]
+}

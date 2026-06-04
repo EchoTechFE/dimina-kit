@@ -21,6 +21,12 @@ export interface MonacoController {
   getValue(): string
   /** Re-apply the dimina theme for the given mode. */
   setTheme(isDark: boolean): void
+  /**
+   * Move the cursor to `line`/`column` (both 1-based) and scroll it into view,
+   * focusing the editor. No-op when no editor/model is attached. Used by the
+   * "open a console file link in the editor" flow to jump to the logged frame.
+   */
+  revealPosition(line: number, column?: number): void
   ready(): boolean
 }
 
@@ -137,6 +143,21 @@ export function useMonacoEditor(
     },
     setTheme(isDark: boolean) {
       applyMonacoTheme(isDark)
+    },
+    revealPosition(line, column = 1) {
+      const editor = editorRef.current
+      if (!editor) return
+      // Clamp to the model's bounds so a stale/over-long line from a console
+      // frame can't land off the document (Monaco would otherwise ignore it).
+      const model = editor.getModel()
+      const lineCount = model?.getLineCount() ?? 1
+      const targetLine = Math.min(Math.max(1, Math.trunc(line) || 1), lineCount)
+      const maxCol = model ? model.getLineMaxColumn(targetLine) : 1
+      const targetCol = Math.min(Math.max(1, Math.trunc(column) || 1), maxCol)
+      const position = { lineNumber: targetLine, column: targetCol }
+      editor.setPosition(position)
+      editor.revealPositionInCenter(position)
+      editor.focus()
     },
     ready() {
       return editorRef.current !== null

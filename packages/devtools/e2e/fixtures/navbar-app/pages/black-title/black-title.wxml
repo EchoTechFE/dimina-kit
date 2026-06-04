@@ -1,0 +1,2 @@
+<view class="page-marker page-black-title">BLACK TITLE PAGE</view>
+<button class="btn black-back-btn" bindtap="goBack">Go Back</button>

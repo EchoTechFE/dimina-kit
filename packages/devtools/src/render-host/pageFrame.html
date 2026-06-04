@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <title>Dimina Render Host</title>
+    <!--
+      Base render stylesheet (reset + `:root { font-size: clamp(.4px,.13333vw,2px) }`
+      rpx→rem scale + .dd-* component defaults). dimina's compiled WXSS emits `rem`
+      units relative to this root font-size; without it the UA default (16px) inflates
+      every page ~30x. Upstream the container package's pageFrame loads this; the
+      native-host render-host must load it too. build-native-host.mjs vendors it to
+      ../native-host/container/ and rewrites this href (mirrors common.js/render.js).
+    -->
+    <link rel="stylesheet" href="../../../../dimina/fe/packages/container/dist/assets/pageFrame.css" />
+    <script>
+      if (typeof globalThis.process === 'undefined') {
+        globalThis.process = { env: { NODE_ENV: 'production' } };
+      }
+    </script>
+    <script type="module">
+      import { modDefine, modRequire } from '../../../../dimina/fe/packages/common/dist/common.js'
+      window.modDefine = modDefine
+      window.modRequire = modRequire
+      await import('../../../../dimina/fe/packages/render/dist/render.js')
+    </script>
+  </head>
+  <body></body>
+</html>

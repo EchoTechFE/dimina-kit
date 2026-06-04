@@ -1,0 +1,5 @@
+{
+  "appid": "devtools_page_stack_fixture",
+  "projectname": "devtools-page-stack-fixture",
+  "description": "Fixture mini-app for e2e page-stack routing tests"
+}

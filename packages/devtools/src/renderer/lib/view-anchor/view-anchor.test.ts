@@ -4,14 +4,13 @@ import type { Bounds, ViewAnchorOptions } from './types'
 
 // ── ResizeObserver / RAF stubs ───────────────────────────────────────
 //
-// Mirrors the mock setup in
-// `modules/main/features/project-runtime/layout/use-cell-bounds.test.ts`:
 //   - `FakeResizeObserver` records observed elements + disconnect, and
 //     exposes `fire()` to synchronously invoke its callback.
-//   - `fakeRaf` queues callbacks so the test can decide *when* (and
-//     whether) they run via `flushRafs()`. `cancelAnimationFrame` is a
-//     real spy that also removes the queued entry so a cancelled RAF can
-//     never fire — this is what lets us assert the stale-RAF guard.
+//   - The anchor publishes SYNCHRONOUSLY (no RAF defer) — see the module
+//     header. We install `requestAnimationFrame`/`cancelAnimationFrame`
+//     spies NOT to drive a fake queue but as a regression guard: the anchor
+//     must NEVER call either (asserted in the "never schedules a RAF" test
+//     and implicitly available everywhere via `rafSpy`/`cancelSpy`).
 
 class FakeResizeObserver {
   static instances: FakeResizeObserver[] = []
@@ -34,52 +33,39 @@ class FakeResizeObserver {
   }
 }
 
-interface RafEntry {
-  id: number
-  cb: () => void
-}
-let rafQueue: RafEntry[] = []
-let rafIdCounter = 0
-function fakeRaf(cb: () => void): number {
-  rafIdCounter++
-  rafQueue.push({ id: rafIdCounter, cb })
-  return rafIdCounter
-}
+// RAF regression guards: if the anchor ever re-introduces a RAF defer these
+// spies will record a call, and the dedicated "never schedules a RAF" test
+// fails. They do NOT queue anything — publishes are synchronous.
+const rafSpy = vi.fn(() => 0)
 const cancelSpy = vi.fn()
 const resizeAddSpy = vi.fn()
 const resizeRemoveSpy = vi.fn()
 // Handlers added to the real window via the addEventListener spy, tracked so
 // afterEach can remove leaked 'resize' listeners — tests create anchors
 // directly and don't dispose them, so their listeners would otherwise
-// accumulate across tests and inflate RAF counts.
+// accumulate across tests and fire in later tests.
 let leakedResize: unknown[] = []
 
 beforeEach(() => {
   FakeResizeObserver.instances = []
-  rafQueue = []
-  rafIdCounter = 0
+  rafSpy.mockClear()
   cancelSpy.mockClear()
   resizeAddSpy.mockClear()
   resizeRemoveSpy.mockClear()
   vi.stubGlobal('ResizeObserver', FakeResizeObserver)
   vi.stubGlobal(
     'requestAnimationFrame',
-    fakeRaf as unknown as typeof window.requestAnimationFrame,
+    rafSpy as unknown as typeof window.requestAnimationFrame,
   )
   vi.stubGlobal(
     'cancelAnimationFrame',
-    ((id: number) => {
-      cancelSpy(id)
-      // A cancelled RAF must never fire — actually evict it so
-      // `flushRafs()` cannot run a callback the anchor cancelled.
-      rafQueue = rafQueue.filter((e) => e.id !== id)
-    }) as unknown as typeof window.cancelAnimationFrame,
+    cancelSpy as unknown as typeof window.cancelAnimationFrame,
   )
 
   // Spy on window resize listener add/remove so we can assert the anchor
   // installs exactly one resize listener when present, and removes it on
   // dispose / present=false. We forward to the real implementation so
-  // dispatching a real 'resize' event still works if a test needs it.
+  // dispatching a real 'resize' event still works.
   const realAdd = window.addEventListener.bind(window)
   const realRemove = window.removeEventListener.bind(window)
   vi.spyOn(window, 'addEventListener').mockImplementation(
@@ -113,12 +99,6 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-function flushRafs(): void {
-  const q = rafQueue
-  rafQueue = []
-  q.forEach((e) => e.cb())
-}
-
 /** Assert an observer was installed, then return it. Used so a missing
  *  observer (skeleton no-op) surfaces as a clear "expected 1, got 0"
  *  behavioural assertion instead of a TypeError on a later `.fire()`. */
@@ -135,10 +115,9 @@ function lastObserver(): FakeResizeObserver {
 
 // ── Element fixture ──────────────────────────────────────────────────
 //
-// jsdom's `getBoundingClientRect` always returns zeros, so we stub it —
-// exactly as `use-cell-bounds.test.ts/buildElement` does. `setRect` lets a
-// test move the element after the anchor was created (to prove a RAF reads
-// the *current* rect, not a captured one).
+// jsdom's `getBoundingClientRect` always returns zeros, so we stub it.
+// `setRect` lets a test move the element after the anchor was created (to
+// prove a tick reads the *current* rect, not a captured one).
 
 function buildElement(rect: {
   x: number
@@ -191,17 +170,20 @@ describe('createViewAnchor — present=true initial sync', () => {
     })
   })
 
-  it('rounds and clamps each field with Math.max(0, Math.round(...))', () => {
+  it('rounds x/y (negatives allowed) and clamps width/height to ≥0', () => {
     const publish = vi.fn()
-    // Fractional + negative left/top: rounding then clamp-to-zero.
+    // Fractional + negative left/top: x/y are ROUNDED (not clamped) — an
+    // element scrolled off the top/left edge has a legitimately negative
+    // origin and the native view must track it there. width/height are
+    // clamped to ≥0 (0 = the canonical hidden signal).
     const { el } = buildElement({ x: -3.4, y: 12.6, w: 100.49, h: 0.5 })
     createViewAnchor(el, opts({ present: true, publish }))
 
     expect(publish).toHaveBeenCalledWith({
-      x: 0, // Math.max(0, Math.round(-3.4)) = 0
+      x: -3, // Math.round(-3.4) — NOT clamped to 0
       y: 13, // Math.round(12.6)
-      width: 100, // Math.round(100.49)
-      height: 1, // Math.round(0.5)
+      width: 100, // Math.max(0, Math.round(100.49))
+      height: 1, // Math.max(0, Math.round(0.5))
     })
   })
 })
@@ -226,9 +208,11 @@ describe('createViewAnchor — present=false', () => {
   })
 })
 
-// ── Contract 3: present=true installs observers; updates are RAF-throttled
-// Bug it catches: a synchronous re-publish on every ResizeObserver tick
-// floods IPC; the contract is to coalesce through one RAF.
+// ── Contract 3: present=true installs observers; ticks publish SYNC ──
+// Bug it catches: a tick that defers to a RAF stacks a second compositor
+// frame on top of the unavoidable cross-process frame — the overlay
+// visibly trails the region edge during a drag. The new contract is to
+// publish in the triggering tick itself, no RAF.
 
 describe('createViewAnchor — present=true observation', () => {
   it('observes the target and adds a window resize listener', () => {
@@ -241,27 +225,22 @@ describe('createViewAnchor — present=true observation', () => {
     expect(resizeAddSpy).toHaveBeenCalledTimes(1)
   })
 
-  it('a ResizeObserver tick re-publishes via RAF, not synchronously', () => {
+  it('a ResizeObserver tick re-publishes SYNCHRONOUSLY (no RAF) with the current rect', () => {
     const publish = vi.fn()
     const { el, setRect } = buildElement({ x: 0, y: 0, w: 100, h: 100 })
     createViewAnchor(el, opts({ present: true, publish }))
     publish.mockClear()
 
-    // Move the element, then fire the observer.
+    // Move the element, then fire the observer — the publish lands in the
+    // same synchronous tick, reading the *current* rect.
     setRect({ x: 5, y: 6, w: 120, h: 130 })
     firstObserver().fire()
 
-    // Throttled: nothing published yet, but a RAF is queued.
-    expect(publish).not.toHaveBeenCalled()
-    expect(rafQueue).toHaveLength(1)
-
-    // Flushing the RAF publishes the *current* rect.
-    flushRafs()
     expect(publish).toHaveBeenCalledTimes(1)
     expect(publish).toHaveBeenCalledWith({ x: 5, y: 6, width: 120, height: 130 })
   })
 
-  it('a window resize event also schedules a RAF re-publish', () => {
+  it('a window resize tick re-publishes synchronously', () => {
     const publish = vi.fn()
     const { el, setRect } = buildElement({ x: 0, y: 0, w: 100, h: 100 })
     createViewAnchor(el, opts({ present: true, publish }))
@@ -270,34 +249,93 @@ describe('createViewAnchor — present=true observation', () => {
     setRect({ x: 1, y: 2, w: 50, h: 60 })
     window.dispatchEvent(new Event('resize'))
 
-    expect(publish).not.toHaveBeenCalled()
-    expect(rafQueue).toHaveLength(1)
-    flushRafs()
+    expect(publish).toHaveBeenCalledTimes(1)
     expect(publish).toHaveBeenCalledWith({ x: 1, y: 2, width: 50, height: 60 })
+  })
+
+  it('never schedules a requestAnimationFrame (RAF defer must not creep back)', () => {
+    const publish = vi.fn()
+    const { el, setRect } = buildElement({ x: 0, y: 0, w: 100, h: 100 })
+    const handle = createViewAnchor(el, opts({ present: true, publish }))
+
+    // Exercise every code path that used to schedule a RAF.
+    setRect({ x: 5, y: 6, w: 120, h: 130 })
+    firstObserver().fire()
+    window.dispatchEvent(new Event('resize'))
+    el.dispatchEvent(new Event('scroll'))
+    handle.update({ present: false, publish })
+
+    expect(rafSpy).not.toHaveBeenCalled()
+    expect(cancelSpy).not.toHaveBeenCalled()
   })
 })
 
-// ── Contract 4: RAF coalescing ───────────────────────────────────────
-// Bug it catches: without coalescing, N resize/RO events in one frame
-// produce N publishes (and N native-view setBounds calls) → jitter.
+// ── Contract 4: dedup-coalescing ─────────────────────────────────────
+// Bug it catches: without dedup, a burst of RO+scroll+resize ticks in one
+// frame — or a continuous drag that keeps re-firing the same final rect —
+// produces N publishes (and N native-view setBounds calls) → IPC flood /
+// jitter. The contract: a tick whose measured rect is byte-identical to the
+// last published one is dropped; a distinct rect always publishes.
 
-describe('createViewAnchor — RAF coalescing', () => {
-  it('multiple triggers in one frame collapse into a single RAF publish', () => {
+describe('createViewAnchor — dedup coalescing', () => {
+  it('N ticks measuring the SAME rect → exactly ONE publish', () => {
     const publish = vi.fn()
     const { el } = buildElement({ x: 0, y: 0, w: 100, h: 100 })
     createViewAnchor(el, opts({ present: true, publish }))
     publish.mockClear()
 
+    // A same-frame burst of RO + scroll + resize, all measuring the same
+    // (unchanged) rect: only the first emits, the rest dedup away.
     const ro = firstObserver()
     ro.fire()
     ro.fire()
     window.dispatchEvent(new Event('resize'))
+    el.dispatchEvent(new Event('scroll'))
     ro.fire()
 
-    // Only one RAF queued for the whole burst.
-    expect(rafQueue).toHaveLength(1)
-    flushRafs()
+    expect(publish).not.toHaveBeenCalled() // rect unchanged since create
+  })
+
+  it('a tick whose rect differs from the create-time rect publishes once', () => {
+    const publish = vi.fn()
+    const { el, setRect } = buildElement({ x: 0, y: 0, w: 100, h: 100 })
+    createViewAnchor(el, opts({ present: true, publish }))
+    publish.mockClear()
+
+    setRect({ x: 7, y: 8, w: 110, h: 120 })
+    firstObserver().fire()
+    firstObserver().fire() // same rect again → deduped
+
     expect(publish).toHaveBeenCalledTimes(1)
+    expect(publish).toHaveBeenCalledWith({ x: 7, y: 8, width: 110, height: 120 })
+  })
+
+  it('ticks measuring DIFFERENT rects each publish; identical rects dedup', () => {
+    const publish = vi.fn()
+    const { el, setRect } = buildElement({ x: 0, y: 0, w: 100, h: 100 })
+    createViewAnchor(el, opts({ present: true, publish }))
+    publish.mockClear()
+    const ro = firstObserver()
+
+    // Move → publish.
+    setRect({ x: 5, y: 5, w: 100, h: 100 })
+    ro.fire()
+    // Same rect twice more → deduped.
+    ro.fire()
+    ro.fire()
+    // Move again → publish.
+    setRect({ x: 5, y: 5, w: 200, h: 100 })
+    ro.fire()
+    // Move back to the first moved rect → distinct from last published → publish.
+    setRect({ x: 5, y: 5, w: 100, h: 100 })
+    ro.fire()
+
+    expect(publish).toHaveBeenCalledTimes(3)
+    expect(publish.mock.calls.map((c) => c[0])).toEqual([
+      { x: 5, y: 5, width: 100, height: 100 },
+      { x: 5, y: 5, width: 200, height: 100 },
+      { x: 5, y: 5, width: 100, height: 100 },
+    ])
   })
 })
 
@@ -342,118 +380,322 @@ describe('createViewAnchor — update()', () => {
   it('swapping publish while present routes new emits to the new callback', () => {
     const first = vi.fn()
     const second = vi.fn()
-    const { el } = buildElement({ x: 0, y: 0, w: 100, h: 100 })
+    const { el, setRect } = buildElement({ x: 0, y: 0, w: 100, h: 100 })
     const handle = createViewAnchor(el, opts({ present: true, publish: first }))
     first.mockClear()
 
     handle.update({ present: true, publish: second })
-    // Immediate re-publish goes to the new callback.
+    // Immediate re-publish goes to the new callback (apply() resets
+    // lastPublished, so an unchanged rect still emits — see next test).
     expect(second).toHaveBeenCalledWith({ x: 0, y: 0, width: 100, height: 100 })
 
     second.mockClear()
+    setRect({ x: 5, y: 5, w: 100, h: 100 })
     lastObserver().fire()
-    flushRafs()
     expect(second).toHaveBeenCalledTimes(1)
     expect(first).not.toHaveBeenCalled()
+  })
+
+  it('update() with an unchanged rect still forces one publish (lastPublished reset)', () => {
+    // Why this matters: zoom rides in the `publish` closure, not in `Bounds`.
+    // A zoom change re-calls update() with the SAME geometry but a NEW publish
+    // closure — the anchor must re-emit so the new closure runs, even though
+    // the dedup would otherwise drop a byte-identical rect. `apply()` resets
+    // `lastPublished = null` to guarantee that one fresh publish.
+    const first = vi.fn()
+    const { el } = buildElement({ x: 12, y: 34, w: 56, h: 78 })
+    const handle = createViewAnchor(el, opts({ present: true, publish: first }))
+    expect(first).toHaveBeenCalledTimes(1)
+
+    // Same present/measure, unchanged geometry, but a brand-new publish spy.
+    const second = vi.fn()
+    handle.update({ present: true, publish: second })
+
+    expect(second).toHaveBeenCalledTimes(1)
+    expect(second).toHaveBeenCalledWith({ x: 12, y: 34, width: 56, height: 78 })
   })
 })
 
 // ── Contract 6: dispose() tears everything down ─────────────────────
 // Bug it catches: a dispose that forgets to disconnect the RO / remove the
-// resize listener / cancel the in-flight RAF leaks observers and can
-// publish after teardown (the IPC target may already be gone → throw).
+// resize listener leaks observers and can publish after teardown (the IPC
+// target may already be gone → throw).
 
 describe('createViewAnchor — dispose()', () => {
-  it('disconnects the observer, removes the resize listener, cancels pending RAF', () => {
+  it('disconnects the observer and removes the resize listener', () => {
     const publish = vi.fn()
     const { el } = buildElement({ x: 0, y: 0, w: 100, h: 100 })
     const handle = createViewAnchor(el, opts({ present: true, publish }))
-
-    // Queue a RAF so dispose has something to cancel.
-    firstObserver().fire()
-    expect(rafQueue).toHaveLength(1)
 
     handle.dispose()
 
     expect(firstObserver().disconnected).toBe(true)
     expect(resizeRemoveSpy).toHaveBeenCalledTimes(1)
-    expect(cancelSpy).toHaveBeenCalledTimes(1)
+    // Teardown is synchronous and uses no RAF — nothing to cancel.
+    expect(cancelSpy).not.toHaveBeenCalled()
   })
 
-  it('never publishes again after dispose (later RO/resize events are ignored)', () => {
+  it('never publishes again after dispose (later RO/scroll/resize events are ignored)', () => {
     const publish = vi.fn()
-    const { el } = buildElement({ x: 0, y: 0, w: 100, h: 100 })
+    const { el, setRect } = buildElement({ x: 0, y: 0, w: 100, h: 100 })
     const handle = createViewAnchor(el, opts({ present: true, publish }))
     const ro = firstObserver()
     handle.dispose()
     publish.mockClear()
 
-    // Any event arriving after dispose must be inert.
+    // Move the element so a non-deduped rect WOULD publish if `disposed`
+    // weren't read synchronously in every emit. Any event after dispose
+    // must be inert — there is no queued frame to outrun the flag.
+    setRect({ x: 999, y: 999, w: 999, h: 999 })
     ro.fire()
     window.dispatchEvent(new Event('resize'))
-    flushRafs()
+    el.dispatchEvent(new Event('scroll'))
     expect(publish).not.toHaveBeenCalled()
   })
 })
 
-// ── Contract 7: stale-RAF guard ──────────────────────────────────────
-// Bug it catches: a RAF queued before update()/dispose() that still runs
-// would write an OLD rect over the live one → DevTools native view lands
-// at the wrong place / flickers.
+// ── Contract 7: teardown safety (no stale tick can overwrite live) ───
+// There is no queued frame anymore, so the old "stale-RAF guard" is now a
+// pure synchronous-read guard: every emit reads `disposed`/`present` live,
+// so a tick after dispose()/update(present=false) can never write a stale
+// rect over the live one.
 
-describe('createViewAnchor — stale-RAF guard', () => {
-  it('a RAF queued before dispose() does not publish even if flushed', () => {
+describe('createViewAnchor — teardown safety', () => {
+  it('a tick after dispose() does not publish (disposed read synchronously)', () => {
     const publish = vi.fn()
-    const { el } = buildElement({ x: 0, y: 0, w: 100, h: 100 })
+    const { el, setRect } = buildElement({ x: 0, y: 0, w: 100, h: 100 })
     const handle = createViewAnchor(el, opts({ present: true, publish }))
-
-    firstObserver().fire()
-    expect(rafQueue).toHaveLength(1)
+    const ro = firstObserver()
     publish.mockClear()
 
     handle.dispose()
-    flushRafs() // the queue is empty after cancel, OR the cb bails on guard
+    setRect({ x: 999, y: 999, w: 999, h: 999 })
+    ro.fire()
 
     expect(publish).not.toHaveBeenCalled()
   })
 
-  it('a RAF queued before update(present=false) does not republish a stale rect', () => {
+  it('after update(present=false), a later tick does not publish a non-zero rect', () => {
     const publish = vi.fn()
     const { el, setRect } = buildElement({ x: 0, y: 0, w: 100, h: 100 })
     const handle = createViewAnchor(el, opts({ present: true, publish }))
+    const ro = firstObserver()
 
-    // Queue a stale RAF (captures the intent to read the old rect).
-    setRect({ x: 999, y: 999, w: 999, h: 999 })
-    firstObserver().fire()
-    expect(rafQueue).toHaveLength(1)
-
-    // Flip to present=false BEFORE the RAF runs → synchronous zero.
+    // Flip to present=false → synchronous zero, observers stopped.
     handle.update({ present: false, publish })
     expect(publish).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 0, height: 0 })
     publish.mockClear()
 
-    // The stale RAF must NOT fire and overwrite the zero with {999,...}.
-    flushRafs()
+    // A late tick (e.g. a detached-but-not-yet-GC'd observer reference) must
+    // not republish a non-zero rect over the zero — `present` is read live.
+    setRect({ x: 999, y: 999, w: 999, h: 999 })
+    ro.fire()
+    window.dispatchEvent(new Event('resize'))
+    expect(publish).not.toHaveBeenCalled()
+  })
+})
+
+// ── Contract 8: measure() override — publish source redirection ──────
+// Bug it catches: the anchor publishing `target.getBoundingClientRect()`
+// instead of `measure()` means a caller that owns a transformed/derived
+// rect (e.g. a zoomed simulator viewport) can never override WHAT bounds
+// are published. These tests prove the published rect comes from `measure`,
+// that the same round/clamp applies, that observation is still on the
+// target, that ticks re-read `measure` live, and that `null` skips.
+
+describe('createViewAnchor — measure() override', () => {
+  it('publishes measure()’s rect (not the target rect), with the same rounding', () => {
+    const publish = vi.fn()
+    const { el } = buildElement({ x: 1, y: 2, w: 3, h: 4 }) // deliberately different
+    createViewAnchor(
+      el,
+      opts({
+        present: true,
+        publish,
+        measure: () => ({ x: -3.4, y: 10.6, width: 100.5, height: 200.4 }),
+      }),
+    )
+
+    expect(publish).toHaveBeenCalledTimes(1)
+    expect(publish).toHaveBeenCalledWith({
+      x: -3, // Math.round(-3.4) — NOT clamped to 0
+      y: 11, // Math.round(10.6)
+      width: 101, // Math.max(0, Math.round(100.5))
+      height: 200, // Math.max(0, Math.round(200.4))
+    })
+  })
+
+  it('still observes the target element (measure redirects publish, not observation)', () => {
+    const publish = vi.fn()
+    const { el } = buildElement({ x: 1, y: 2, w: 3, h: 4 })
+    createViewAnchor(
+      el,
+      opts({
+        present: true,
+        publish,
+        measure: () => ({ x: 0, y: 0, width: 10, height: 10 }),
+      }),
+    )
+
+    expect(firstObserver().observed).toContain(el)
+  })
+
+  it('a ResizeObserver tick re-reads measure() and publishes its CURRENT value synchronously', () => {
+    const publish = vi.fn()
+    const { el } = buildElement({ x: 0, y: 0, w: 100, h: 100 })
+    let measured: Bounds = { x: 0, y: 0, width: 10, height: 10 }
+    createViewAnchor(
+      el,
+      opts({ present: true, publish, measure: () => measured }),
+    )
+    publish.mockClear()
+
+    // Change what measure() returns AFTER create, then tick — the publish
+    // lands synchronously with measure()'s live value.
+    measured = { x: 5, y: 6, width: 120, height: 130 }
+    firstObserver().fire()
+
+    expect(publish).toHaveBeenCalledTimes(1)
+    expect(publish).toHaveBeenCalledWith({ x: 5, y: 6, width: 120, height: 130 })
+  })
+
+  it('measure() === null at create skips the initial publish (no zero, no stale)', () => {
+    const publish = vi.fn()
+    const { el } = buildElement({ x: 1, y: 2, w: 3, h: 4 })
+    createViewAnchor(el, opts({ present: true, publish, measure: () => null }))
+
     expect(publish).not.toHaveBeenCalled()
   })
 
-  it('a RAF queued before update(present=true, same el) is superseded by the immediate re-measure', () => {
+  it('a later tick where measure() returns a real rect DOES publish it', () => {
+    const publish = vi.fn()
+    const { el } = buildElement({ x: 0, y: 0, w: 100, h: 100 })
+    let measured: Bounds | null = null
+    createViewAnchor(
+      el,
+      opts({ present: true, publish, measure: () => measured }),
+    )
+    expect(publish).not.toHaveBeenCalled()
+
+    // Element becomes measurable; a tick should now publish synchronously.
+    measured = { x: 7, y: 8, width: 90, height: 110 }
+    firstObserver().fire()
+
+    expect(publish).toHaveBeenCalledTimes(1)
+    expect(publish).toHaveBeenCalledWith({ x: 7, y: 8, width: 90, height: 110 })
+  })
+
+  it('present=false publishes ZERO regardless of measure() (detach does not route through measure)', () => {
+    const publish = vi.fn()
+    const measure = vi.fn(() => ({ x: 50, y: 50, width: 60, height: 70 }))
+    const { el } = buildElement({ x: 1, y: 2, w: 3, h: 4 })
+    createViewAnchor(el, opts({ present: false, publish, measure }))
+
+    expect(publish).toHaveBeenCalledTimes(1)
+    expect(publish).toHaveBeenCalledWith({ x: 0, y: 0, width: 0, height: 0 })
+  })
+
+  it('update({present:false}) from a measure anchor publishes ZERO, not measure()', () => {
+    const publish = vi.fn()
+    const { el } = buildElement({ x: 1, y: 2, w: 3, h: 4 })
+    const handle = createViewAnchor(
+      el,
+      opts({
+        present: true,
+        publish,
+        measure: () => ({ x: 50, y: 50, width: 60, height: 70 }),
+      }),
+    )
+    publish.mockClear()
+
+    handle.update({
+      present: false,
+      publish,
+      measure: () => ({ x: 50, y: 50, width: 60, height: 70 }),
+    })
+
+    expect(publish).toHaveBeenCalledTimes(1)
+    expect(publish).toHaveBeenCalledWith({ x: 0, y: 0, width: 0, height: 0 })
+  })
+})
+
+// ── Contract 9: scroll-on-target listener ────────────────────────────
+// Bug it catches: the anchor only following ResizeObserver + window-resize
+// means a scroll of the target's own scroll container (which moves the
+// element without resizing it or the window) is never reflected — the
+// native view drifts out of alignment as the user scrolls. The fix is a
+// passive 'scroll' listener on the target that re-publishes synchronously.
+// We spy on the TARGET element directly because the shared harness only
+// spies window.addEventListener.
+
+describe('createViewAnchor — scroll-on-target listener', () => {
+  it('present=true adds a passive scroll listener on the target', () => {
+    const publish = vi.fn()
+    const { el } = buildElement({ x: 0, y: 0, w: 100, h: 100 })
+    const addSpy = vi.spyOn(el, 'addEventListener')
+    createViewAnchor(el, opts({ present: true, publish }))
+
+    const scrollCalls = addSpy.mock.calls.filter((c) => c[0] === 'scroll')
+    expect(scrollCalls).toHaveLength(1)
+    // The listener must be passive (scroll-perf contract).
+    const optsArg = scrollCalls[0]![2] as
+      | boolean
+      | AddEventListenerOptions
+      | undefined
+    const passive =
+      typeof optsArg === 'object' && optsArg !== null
+        ? optsArg.passive === true
+        : false
+    expect(passive).toBe(true)
+  })
+
+  it('present=false does NOT add a scroll listener on the target and publishes ZERO', () => {
+    const publish = vi.fn()
+    const { el } = buildElement({ x: 0, y: 0, w: 100, h: 100 })
+    const addSpy = vi.spyOn(el, 'addEventListener')
+    createViewAnchor(el, opts({ present: false, publish }))
+
+    const scrollCalls = addSpy.mock.calls.filter((c) => c[0] === 'scroll')
+    expect(scrollCalls).toHaveLength(0)
+    expect(publish).toHaveBeenCalledTimes(1)
+    expect(publish).toHaveBeenCalledWith({ x: 0, y: 0, width: 0, height: 0 })
+  })
+
+  it('a scroll tick on the target re-publishes synchronously (no RAF)', () => {
     const publish = vi.fn()
     const { el, setRect } = buildElement({ x: 0, y: 0, w: 100, h: 100 })
+    createViewAnchor(el, opts({ present: true, publish }))
+    publish.mockClear()
+
+    setRect({ x: 9, y: 10, w: 140, h: 150 })
+    el.dispatchEvent(new Event('scroll'))
+
+    expect(publish).toHaveBeenCalledTimes(1)
+    expect(publish).toHaveBeenCalledWith({ x: 9, y: 10, width: 140, height: 150 })
+  })
+
+  it('dispose() removes the target scroll listener', () => {
+    const publish = vi.fn()
+    const { el } = buildElement({ x: 0, y: 0, w: 100, h: 100 })
+    const removeSpy = vi.spyOn(el, 'removeEventListener')
     const handle = createViewAnchor(el, opts({ present: true, publish }))
 
-    firstObserver().fire() // stale RAF queued
-    expect(rafQueue.length).toBeGreaterThanOrEqual(1)
+    handle.dispose()
 
-    // update() re-measures synchronously at the current rect.
-    setRect({ x: 5, y: 5, w: 200, h: 200 })
-    handle.update({ present: true, publish })
-    expect(publish).toHaveBeenLastCalledWith({ x: 5, y: 5, width: 200, height: 200 })
+    const scrollRemovals = removeSpy.mock.calls.filter((c) => c[0] === 'scroll')
+    expect(scrollRemovals).toHaveLength(1)
+  })
 
-    const callsAfterUpdate = publish.mock.calls.length
-    // The pre-update RAF must not fire a second, stale publish.
-    flushRafs()
-    expect(publish.mock.calls.length).toBe(callsAfterUpdate)
+  it('update({present:false}) removes the target scroll listener', () => {
+    const publish = vi.fn()
+    const { el } = buildElement({ x: 0, y: 0, w: 100, h: 100 })
+    const removeSpy = vi.spyOn(el, 'removeEventListener')
+    const handle = createViewAnchor(el, opts({ present: true, publish }))
+
+    handle.update({ present: false, publish })
+
+    const scrollRemovals = removeSpy.mock.calls.filter((c) => c[0] === 'scroll')
+    expect(scrollRemovals).toHaveLength(1)
   })
 })
 

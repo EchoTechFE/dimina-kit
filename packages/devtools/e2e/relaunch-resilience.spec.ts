@@ -2,6 +2,23 @@
  * Relaunch & compile resilience tests.
  * Tests extreme edge cases: page switching, rapid changes, build errors,
  * file deletion, recovery, and race conditions.
+ *
+ * NATIVE-HOST migration: the simulator now runs the native-host path by default
+ * (the env gate is default-ON). The mini-app page DOM is NO LONGER a
+ * same-document iframe; instead:
+ *   - The simulator is a top-level "DeviceShell" WebContentsView loading
+ *     `simulator.html` (matched by `evalInSimulator`). It mounts
+ *     `.device-shell-root` and one `.device-shell__webview` per in-app page.
+ *   - Each PAGE is a nested cross-process render-host `<webview>` guest loading
+ *     `pageFrame.html?…&pagePath=pages%2F…`.
+ *
+ * So the old "view is alive" readiness probes (`win.contentView.children >= 2`
+ * counted renderer `<webview>`s; `getType()==='webview'` found the single
+ * dimina-fe iframe host) no longer describe a live native simulator. We replace
+ * them with the DISCRIMINATING native signals used by the native-host-*.spec.ts
+ * references: DeviceShell mounted (`.device-shell-root`) with at least one
+ * render-host page webview (`.device-shell__webview`), and — for crash/url
+ * checks — reading the render-host guests (`pageFrame.html`) directly in main.
  */
 import fs from 'fs'
 import path from 'path'
@@ -11,6 +28,7 @@ import {
   openProjectInUI,
   closeProject,
   pollUntil,
+  evalInSimulator,
 } from './helpers'
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -21,19 +39,90 @@ async function getStatus(mainWindow: import('@playwright/test').Page) {
   )
 }
 
-async function getChildViews(electronApp: import('@playwright/test').ElectronApplication) {
-  return electronApp.evaluate(({ BrowserWindow }) => {
-    const win = BrowserWindow.getAllWindows()[0]
-    return (win?.contentView.children || []).length
+/**
+ * Native readiness probe: is the DeviceShell mounted AND carrying at least one
+ * render-host page webview?
+ *
+ * `.device-shell-root` mounts only after `SimulatorMiniApp.spawn()` resolves,
+ * and `.device-shell__webview` is exclusive to the native render path (the old
+ * dimina-fe container never emitted it). Counting the page webviews replaces the
+ * old `contentView.children >= 2` heuristic with a signal that actually proves a
+ * live, rendering native simulator. Read in the simulator WCV (which always
+ * loads `simulator.html`, so it survives a relaunch reload). Returns 0 on any
+ * failure so callers can poll.
+ */
+async function getDeviceShellWebviewCount(
+  electronApp: import('@playwright/test').ElectronApplication,
+): Promise<number> {
+  return evalInSimulator<number>(
+    electronApp,
+    `(() => {
+      if (!document.querySelector('.device-shell-root')) return 0
+      return document.querySelectorAll('.device-shell__webview').length
+    })()`,
+  ).catch(() => 0)
+}
+
+/**
+ * Poll until the native simulator is ready again after a (re)launch: the
+ * DeviceShell is mounted and at least one render-host page webview exists.
+ */
+async function waitForDeviceShellReady(
+  electronApp: import('@playwright/test').ElectronApplication,
+  timeout = 25000,
+): Promise<number> {
+  return pollUntil(
+    () => getDeviceShellWebviewCount(electronApp),
+    (n) => n >= 1,
+    timeout,
+    300,
+  )
+}
+
+/** Decode a render-host guest's page path out of its `…?pagePath=pages%2F…` URL. */
+function guestPagePath(url: string): string {
+  const m = url.match(/[?&]pagePath=([^&]+)/)
+  if (!m) return ''
+  try { return decodeURIComponent(m[1]) } catch { return m[1] }
+}
+
+/**
+ * Inspect the native render-host page guests (`pageFrame.html`) directly in the
+ * main process. Returns each guest's decoded `pagePath` + crash state, plus
+ * whether the simulator shell WCV (`simulator.html`) itself is crashed.
+ *
+ * Replaces the old `getWebviewInfo` which matched the single `getType()==='webview'`
+ * dimina-fe iframe host — under native-host there can be several render-host
+ * webviews and the simulator shell is a WebContentsView (type `'window'`), so we
+ * key off the URLs instead.
+ */
+async function getNativePageInfo(electronApp: import('@playwright/test').ElectronApplication) {
+  return electronApp.evaluate(({ webContents }) => {
+    const all = webContents.getAllWebContents().filter((wc) => !wc.isDestroyed())
+    const shell = all.find((wc) => wc.getURL().includes('simulator.html'))
+    const guests = all.filter((wc) => wc.getURL().includes('pageFrame.html'))
+    return {
+      shellFound: !!shell,
+      shellCrashed: shell ? shell.isCrashed() : false,
+      guests: guests.map((wc) => ({ url: wc.getURL(), crashed: wc.isCrashed() })),
+    }
   })
 }
 
-async function getWebviewInfo(electronApp: import('@playwright/test').ElectronApplication) {
-  return electronApp.evaluate(({ webContents }) => {
-    const sim = webContents.getAllWebContents().find((wc) => wc.getType() === 'webview')
-    if (!sim) return null
-    return { url: sim.getURL(), crashed: sim.isCrashed() }
-  })
+/**
+ * The set of render-host page paths currently rendered + whether ANY guest (or
+ * the shell) is crashed. `pagePaths` are decoded route strings like
+ * `pages/storage-test/storage-test`.
+ */
+async function getNativePageState(
+  electronApp: import('@playwright/test').ElectronApplication,
+): Promise<{ shellFound: boolean; anyCrashed: boolean; pagePaths: string[] }> {
+  const info = await getNativePageInfo(electronApp)
+  return {
+    shellFound: info.shellFound,
+    anyCrashed: info.shellCrashed || info.guests.some((g) => g.crashed),
+    pagePaths: info.guests.map((g) => guestPagePath(g.url)),
+  }
 }
 
 async function waitForStatus(
@@ -108,8 +197,13 @@ test.describe('Relaunch & compile resilience', () => {
     const status = await waitForStatus(mainWindow, ['刷新完成', '编译完成'])
     expect(status).toContain('完成')
 
-    const views = await getChildViews(electronApp)
-    expect(views).toBeGreaterThanOrEqual(2)
+    // After the reload the DeviceShell must remount with a live render-host page
+    // webview (the native equivalent of "the simulator views are still alive").
+    const webviews = await waitForDeviceShellReady(electronApp)
+    expect(
+      webviews,
+      'DeviceShell should remount with ≥1 render-host page webview after ↺ reload',
+    ).toBeGreaterThanOrEqual(1)
   })
 
   test('popover page switch navigates correctly', async ({ mainWindow, electronApp }) => {
@@ -117,12 +211,22 @@ test.describe('Relaunch & compile resilience', () => {
     const status = await waitForStatus(mainWindow, ['刷新完成', '编译完成'])
     expect(status).toContain('完成')
 
-    const wv = await getWebviewInfo(electronApp)
-    expect(wv).not.toBeNull()
-    expect(wv!.url).toContain('storage-test')
-    expect(wv!.crashed).toBe(false)
+    // A respawn at storage-test must produce a render-host page guest whose
+    // entry route is that page. Poll: the render guest joins shortly after the
+    // status flips to 完成.
+    const state = await pollUntil(
+      () => getNativePageState(electronApp),
+      (s) => s.shellFound && s.pagePaths.some((p) => p.includes('storage-test')),
+      25000,
+      400,
+    )
+    expect(
+      state.pagePaths.some((p) => p.includes('storage-test')),
+      `a render-host page guest should be on storage-test; guests=${JSON.stringify(state.pagePaths)}`,
+    ).toBe(true)
+    expect(state.anyCrashed, 'no render-host guest or shell should be crashed').toBe(false)
 
-    expect(await getChildViews(electronApp)).toBeGreaterThanOrEqual(2)
+    expect(await getDeviceShellWebviewCount(electronApp)).toBeGreaterThanOrEqual(1)
   })
 
   test('multiple sequential page switches all succeed', async ({ mainWindow, electronApp }) => {
@@ -130,9 +234,21 @@ test.describe('Relaunch & compile resilience', () => {
       await relaunchViaPopover(mainWindow, electronApp, page)
       const status = await waitForStatus(mainWindow, ['刷新完成', '编译完成'])
       expect(status).toContain('完成')
-      const wv = await getWebviewInfo(electronApp)
-      expect(wv).not.toBeNull()
-      expect(wv!.url).toContain(page.replace('-test', ''))
+
+      // Each respawn must land a render-host page guest on the chosen entry page.
+      // The guest URL carries the full route (e.g. pages/console-test/console-test),
+      // so matching the page name is unambiguous across switches.
+      const state = await pollUntil(
+        () => getNativePageState(electronApp),
+        (s) => s.shellFound && s.pagePaths.some((p) => p.includes(page)),
+        25000,
+        400,
+      )
+      expect(
+        state.pagePaths.some((p) => p.includes(page)),
+        `after switching to ${page}, a render-host guest should be on it; guests=${JSON.stringify(state.pagePaths)}`,
+      ).toBe(true)
+      expect(state.anyCrashed, `no guest should crash after switching to ${page}`).toBe(false)
     }
   })
 
@@ -143,7 +259,16 @@ test.describe('Relaunch & compile resilience', () => {
 
     const status = await waitForStatus(mainWindow, ['完成', '失败', '超时'])
     expect(status).toContain('完成')
-    expect(await getChildViews(electronApp)).toBeGreaterThanOrEqual(2)
+
+    // A double-fire must still leave the DeviceShell mounted with a live page
+    // webview (no half-torn-down state).
+    const webviews = await waitForDeviceShellReady(electronApp)
+    expect(
+      webviews,
+      'DeviceShell should remain mounted with ≥1 render-host page webview after a double ↺',
+    ).toBeGreaterThanOrEqual(1)
+    const state = await getNativePageState(electronApp)
+    expect(state.anyCrashed, 'no guest or shell should be crashed after a double ↺').toBe(false)
   })
 
   test('rapid file changes do not crash webview', async ({ mainWindow, electronApp }) => {
@@ -163,10 +288,16 @@ test.describe('Relaunch & compile resilience', () => {
     // Wait for rebuild to settle
     await mainWindow.waitForTimeout(15000)
 
-    const wv = await getWebviewInfo(electronApp)
-    expect(wv).not.toBeNull()
-    expect(wv!.crashed).toBe(false)
-    expect(await getChildViews(electronApp)).toBeGreaterThanOrEqual(2)
+    // The render-host guests must survive the rapid-fire rebuild churn: the
+    // DeviceShell still has a live page webview and nothing crashed.
+    const webviews = await waitForDeviceShellReady(electronApp)
+    expect(
+      webviews,
+      'DeviceShell should keep ≥1 render-host page webview through rapid file changes',
+    ).toBeGreaterThanOrEqual(1)
+    const state = await getNativePageState(electronApp)
+    expect(state.shellFound, 'simulator shell should still be present').toBe(true)
+    expect(state.anyCrashed, 'no render-host guest or shell should crash on rapid file changes').toBe(false)
 
     // Restore
     for (const [f, content] of Object.entries(originals)) fs.writeFileSync(f, content)
@@ -190,9 +321,14 @@ test.describe('Relaunch & compile resilience', () => {
     fs.writeFileSync(jsFile, original)
     await mainWindow.waitForTimeout(15000)
 
-    // Should be able to relaunch after recovery
+    // Should be able to relaunch after recovery: the DeviceShell remounts with a
+    // live render-host page webview once the good build compiles.
     await clickRelaunchButton(mainWindow)
     await waitForStatus(mainWindow, ['完成', '失败', '超时'])
-    expect(await getChildViews(electronApp)).toBeGreaterThanOrEqual(2)
+    const webviews = await waitForDeviceShellReady(electronApp)
+    expect(
+      webviews,
+      'DeviceShell should remount with ≥1 render-host page webview after recovering from a build error',
+    ).toBeGreaterThanOrEqual(1)
   })
 })

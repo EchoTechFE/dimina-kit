@@ -91,7 +91,7 @@ export interface MenuBuildContext {
 
 export interface LifecycleContribution {
 	/**
-	 * 在主窗口关闭 / app 退出之前调用，await 完成；超时则阻止关闭并 log error。
+	 * 在主窗口关闭 / app 退出之前调用，await 完成；超时则 log error 后继续 shutdown 流程（不阻止关闭）。
 	 * host 如需更细粒度（区分 close 与 quit），用 `setup(runtime)` 内
 	 * `runtime.electron.app.on('before-quit', ...)` escape。
 	 */

@@ -1,5 +1,5 @@
 import type { CompileConfig } from '@/shared/types'
-import type { ViewBounds } from '../../../shared/ipc-channels'
+import type { NativeDeviceInfo, ViewBounds } from '../../../shared/ipc-channels'
 import {
   SimulatorChannel,
   PanelChannel,
@@ -39,6 +39,17 @@ export function attachSimulator(simWebContentsId: number, simWidth: number): Pro
   return invoke<void>(SimulatorChannel.Attach, simWebContentsId, simWidth)
 }
 
+/**
+ * NATIVE-HOST ONLY. Ask main to create the simulator as a top-level
+ * WebContentsView loading `simulatorUrl` (so DeviceShell's nested render-host
+ * `<webview>`s can attach — impossible inside a renderer `<webview>` guest).
+ * The default path keeps rendering the renderer `<webview>` and calls
+ * `attachSimulator` with its webContents id instead.
+ */
+export function attachNativeSimulator(simulatorUrl: string, simWidth: number): Promise<void> {
+  return invoke<void>(SimulatorChannel.AttachNative, simulatorUrl, simWidth)
+}
+
 /** Detach the Chromium DevTools view. */
 export function detachSimulator(): Promise<void> {
   return invoke<void>(SimulatorChannel.Detach)
@@ -49,9 +60,35 @@ export function resizeSimulator(simWidth: number): Promise<void> {
   return invoke<void>(SimulatorChannel.Resize, simWidth)
 }
 
+/**
+ * NATIVE-HOST ONLY. Report the device-bezel inner-screen rect (CSS px from the
+ * main window content top-left, i.e. `getBoundingClientRect()` left/top) plus
+ * the device zoom percent so the main process can overlay the simulator
+ * WebContentsView precisely on the bezel and scale the nested render-host page.
+ */
+export function setNativeSimulatorBounds(p: {
+  x: number
+  y: number
+  width: number
+  height: number
+  zoom: number
+}): Promise<void> {
+  return invoke<void>(SimulatorChannel.SetNativeBounds, p)
+}
+
 /** Show or hide the Chromium DevTools view. */
 export function setSimulatorVisible(visible: boolean, simWidth: number): Promise<void> {
   return invoke<void>(SimulatorChannel.SetVisible, visible, simWidth)
+}
+
+/**
+ * NATIVE-HOST ONLY. Push the selected device's logical metrics so main can
+ * live-update the running service-host window's host-env snapshot — the
+ * authoritative `wx.getSystemInfoSync()` source — without a relaunch. The
+ * default `<webview>` path delivers device info to the guest via `device:change`.
+ */
+export function setNativeDeviceInfo(device: NativeDeviceInfo): Promise<void> {
+  return invoke<void>(SimulatorChannel.SetDeviceInfo, device)
 }
 
 /** Enumerate the built-in panels (WXML / AppData / Storage) currently enabled. */
@@ -116,6 +153,17 @@ export function onPopoverRelaunch(
 /** Listen for the back-to-project-list navigation event from the app menu. */
 export function onWindowNavigateBack(handler: () => void): () => void {
   return on<[]>(WindowChannel.NavigateBack, () => handler())
+}
+
+/**
+ * NATIVE-HOST ONLY. Subscribe to the visible page route pushed by main on every
+ * in-app navigation (the page stack lives in the DeviceShell WebContentsView,
+ * so the renderer can't observe it from `<webview>` nav events). The default
+ * path derives the current page from the simulator `<webview>` itself and never
+ * receives this.
+ */
+export function onSimulatorCurrentPage(handler: (pagePath: string) => void): () => void {
+  return on<[string]>(SimulatorChannel.CurrentPage, (pagePath) => handler(pagePath))
 }
 
 /**

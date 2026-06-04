@@ -7,6 +7,8 @@ import {
   PopoverChannel,
   ToolbarChannel,
   WorkbenchSettingsChannel,
+  EditorChannel,
+  type EditorOpenFilePayload,
 } from '../../../shared/ipc-channels.js'
 import type { WorkbenchSettings } from '../settings/index.js'
 import type { ProjectSettings } from '../projects/project-repository.js'
@@ -67,6 +69,11 @@ export interface RendererNotifier {
   popoverRelaunch(config: CompileConfig): void
   /** Tell the main renderer the toolbar actions list has changed. */
   toolbarActionsChanged(): void
+  /**
+   * Ask the main renderer's Monaco editor to open a project file at a position.
+   * Drives the "click a console file link → open in editor" pipeline.
+   */
+  editorOpenFile(payload: EditorOpenFilePayload): void
 
   // ── Embedded overlays ────────────────────────────────────────────────────
   /** Initialise the currently shown compile popover overlay. */
@@ -132,6 +139,9 @@ export function createRendererNotifier(ctx: NotifierContext): RendererNotifier {
     },
     toolbarActionsChanged() {
       sendToMain(ToolbarChannel.ActionsChanged)
+    },
+    editorOpenFile(payload) {
+      sendToMain(EditorChannel.OpenFile, payload)
     },
 
     popoverInit(popoverView, payload) {

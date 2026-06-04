@@ -12,6 +12,7 @@ import { createViewAnchor } from './view-anchor'
 const handle = createViewAnchor(target, {
   present: true,                 // attach the native view
   publish: (bounds) => { ... },  // receives the live rect; owns IPC → setBounds
+  measure: () => rect | null,    // optional: publish THIS rect instead of target's
 })
 
 handle.update({ present, publish }) // re-apply new options (re-publishes immediately)
@@ -20,10 +21,28 @@ handle.dispose()                    // stop observing; never publishes again
 
 `createViewAnchor(target, opts)` returns a `{ update, dispose }` handle.
 
-- `present: true` → publish `target.getBoundingClientRect()` immediately (each field `Math.max(0, Math.round(...))`), then re-publish on every `ResizeObserver` tick and window `resize`, coalesced into one frame via `requestAnimationFrame`.
+- `present: true` → publish `target.getBoundingClientRect()` immediately (x/y rounded; width/height `Math.max(0, Math.round(...))` — x/y may be negative when the element is scrolled off the top/left edge), then re-publish **synchronously** on every `ResizeObserver` tick, `target` `scroll`, and window `resize`. Identical consecutive rects are deduped (see [Publish timing](#publish-timing--synchronous-dedup-coalesced)).
 - `present: false` → publish `ZERO` (`{0,0,0,0}`) once and stop observing. The host treats zero area as "detach the child view but keep its `WebContents` alive" — collapse without destroy.
-- `update(opts)` cancels any in-flight RAF, then re-applies synchronously (so a frame queued under the old state can't land late and overwrite the fresh rect).
-- `dispose()` stops observing and cancels pending RAF. After dispose the anchor never publishes again — including no final ZERO (that's the caller's job; see below).
+- `update(opts)` re-applies synchronously, resetting the dedup baseline so it always re-publishes once even when the geometry is unchanged (zoom and other non-`Bounds` state ride in the `publish` closure).
+- `dispose()` stops observing. After dispose the anchor never publishes again — every emit reads `disposed` synchronously, so there is no queued frame to fire late, and no final ZERO (that's the caller's job; see below).
+
+### Publish timing — synchronous, dedup-coalesced
+
+The follower is a **cross-process** `WebContentsView`: its `setBounds` is composited by the main/browser process, which already lands ~1 frame behind the renderer's own DOM paint (the two processes composite on different frames). During a height / splitter drag this shows as the native overlay trailing the region edge — **worst when the region GROWS**, because the not-yet-followed edge briefly exposes the background behind the placeholder.
+
+The anchor therefore publishes **in the observer tick itself, not via `requestAnimationFrame`**. An earlier version deferred each measure+publish to a RAF (to coalesce a burst into one frame); that stacked a *second*, self-inflicted frame on top of the unavoidable cross-process one, doubling the visible trail. Removing the RAF leaves only the one cross-process frame — masked in practice by painting the placeholder/desk behind the overlay the SAME colour, so the residual gap is invisible.
+
+The anti-flood job the RAF used to do is now served by **`lastPublished` dedup**: a tick whose measured rect is byte-identical (`x,y,width,height`) to the last published rect is dropped. A steady drag re-fires the same final rect → one publish; a same-frame burst of RO + `scroll` + `resize` all measuring the same rect → one publish. `update()`/`apply()` resets the baseline so a state change (e.g. a zoom that only changes the closure, not the rect) still forces one publish. Net: at most one publish per *distinct* rect, with zero added latency.
+
+> Both main-process overlays — the simulator `WebContentsView` and the Chromium DevTools view — bind through this same path, so the latency fix applies to both. See `docs/simulator-render-stack.html` for the simulator's stacking model and the colour-match that hides the residual frame.
+
+### Anchoring a descendant — the `measure` redirect
+
+By default the published rect IS the observed element's rect. When the element the native view must MATCH is not the element whose geometry SIGNALS the moves, pass `measure`: the anchor still observes `target` (ResizeObserver + `scroll`), but publishes `measure()` instead.
+
+This is how the simulator overlays the device bezel's fixed-size inner screen: that screen is centered and scrolled by its column, so a `ResizeObserver` on the screen itself never fires (it doesn't resize; zoom is a CSS transform; the column moves it without resizing it). The anchor instead targets the **scroll container** — which resizes on splitter drag / window resize and fires `scroll` when a tall bezel overflows — and `measure` reports the inner screen's rect. Attaching the anchor to a PARENT of the measured element also guarantees the child is committed before the first measure.
+
+`measure` may return `null` ("not measurable yet" — e.g. the measured descendant hasn't attached): the anchor skips that publish (no ZERO, no stale) and re-measures on the next trigger. `present: false` always publishes ZERO and never routes through `measure`.
 
 ### present / ZERO / detach semantics
 
@@ -37,6 +56,7 @@ import { useViewAnchor } from './react'
 const ref = useViewAnchor({
   present,            // boolean — attach or detach the native view
   publish,            // (bounds) => void — owns the IPC
+  measure,            // optional: () => Bounds | null — publish a descendant's rect
   deps: [signature],  // optional: non-DOM state that moves the rect (see below)
 })
 
@@ -81,4 +101,4 @@ function DebugPanel({ visible }: { visible: boolean }) {
 | `types.ts` | `Bounds`, `ViewAnchorOptions`, `ViewAnchorHandle`. |
 | `index.ts` | Public surface. |
 
-Lift this directory out into its own package and it compiles unchanged: the only runtime deps are `react` (adapter only) and browser APIs (`ResizeObserver` / `requestAnimationFrame` / `getBoundingClientRect`).
+Lift this directory out into its own package and it compiles unchanged: the only runtime deps are `react` (adapter only) and browser APIs (`ResizeObserver` / `getBoundingClientRect`).

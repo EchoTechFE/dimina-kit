@@ -42,8 +42,22 @@ export function StoragePanel({
 
   useEffect(() => {
     let cancelled = false
-    void getPrefix().then((p) => { if (!cancelled) setPrefix(p) })
-    return () => { cancelled = true }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    // The panel mounts as soon as the project view does — under native-host
+    // that can be BEFORE the workspace session has resolved the active appId,
+    // so `getPrefix()` (GetActivePrefix → `${activeAppId}_`) initially returns
+    // '' and the prefix label stays hidden forever. The prefix is empty only
+    // transiently during session warmup, so poll until it resolves non-empty
+    // (then stop). Once set it is stable for the session's lifetime.
+    const load = () => {
+      void getPrefix().then((p) => {
+        if (cancelled) return
+        if (p) { setPrefix(p); return }
+        timer = setTimeout(load, 300)
+      })
+    }
+    load()
+    return () => { cancelled = true; if (timer) clearTimeout(timer) }
   }, [getPrefix])
 
   async function withBusy<T extends StorageWriteResult>(op: () => Promise<T>): Promise<T | null> {

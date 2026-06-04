@@ -42,6 +42,35 @@ export function computeSimulatorBounds(
   return computeRightPanelBounds(contentWidth, contentHeight, simWidth, headerHeight)
 }
 
+/**
+ * NATIVE-HOST ONLY. Translate the renderer-measured simulator panel REGION rect
+ * (CSS px from the main window content top-left — the flex:1 placeholder slot)
+ * into the params needed to overlay the simulator `WebContentsView` on it.
+ *
+ * The renderer reports `getBoundingClientRect()` of the panel region. Because
+ * the simulator is a top-level overlay WebContentsView (not a nested guest),
+ * that CSS-px rect maps directly to `setBounds` DIP — no conversion. We just
+ * round to integers (setBounds rejects fractionals) and clamp width/height
+ * non-negative. The WCV fills the region as a plain rectangle (no native border
+ * radius); DeviceShell draws the rounded phone and scrolls it inside. `zoomFactor`
+ * feeds `webContents.setZoomFactor`.
+ */
+export function computeNativeSimulatorViewParams(
+  rect: { x: number; y: number; width: number; height: number },
+  zoomPercent: number,
+): { bounds: Bounds; zoomFactor: number } {
+  const zoomFactor = zoomPercent / 100
+  return {
+    bounds: {
+      x: Math.round(rect.x),
+      y: Math.round(rect.y),
+      width: Math.max(0, Math.round(rect.width)),
+      height: Math.max(0, Math.round(rect.height)),
+    },
+    zoomFactor,
+  }
+}
+
 export const SETTINGS_W = 320
 
 export function computeSettingsBounds(

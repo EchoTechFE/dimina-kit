@@ -1,0 +1,104 @@
+.nav-bar {
+  /*
+   * Default nav is IN-FLOW: the flex column reserves its real rendered height
+   * (status bar + 44pt nav row) so the page viewport/webview sits below it
+   * with no magic-number padding. box-sizing:border-box makes the inline
+   * height (statusBarHeight + navBarHeight) the TOTAL — without it the
+   * paddingTop:statusBarHeight is added on top (content-box), inflating the
+   * bar (e.g. 88 → 132) and pushing content too far down.
+   */
+  position: relative;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', sans-serif;
+}
+
+.nav-bar--custom {
+  /*
+   * Custom nav overlays the page (which renders full-bleed underneath). Take
+   * it out of flow and stack it above the page webview (z-index:100).
+   */
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 200;
+  background-color: transparent !important;
+  pointer-events: none;
+}
+
+.nav-bar--custom .menu-capsule {
+  pointer-events: auto;
+}
+
+.nav-bar__row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+}
+
+.nav-bar__leading {
+  position: absolute;
+  left: 8px;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  z-index: 1;
+}
+
+.nav-bar__back,
+.nav-bar__home {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: inherit;
+  padding: 0;
+}
+
+.nav-bar__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 17px;
+  font-weight: 500;
+  min-width: 0;
+  flex: 1;
+}
+
+.nav-bar__title--center {
+  justify-content: center;
+}
+
+.nav-bar__title--left {
+  justify-content: flex-start;
+  padding-left: 48px; /* leave room for back arrow */
+}
+
+.nav-bar__title-text {
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-bar__spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: nav-bar-spin 0.8s linear infinite;
+}
+
+@keyframes nav-bar-spin {
+  to { transform: rotate(360deg); }
+}

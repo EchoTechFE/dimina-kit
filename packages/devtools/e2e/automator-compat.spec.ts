@@ -19,6 +19,7 @@ import {
   closeProject,
   ipcInvoke,
   pollUntil,
+  evalInSimulator,
 } from './helpers'
 import { AutomationChannel } from '../src/shared/ipc-channels'
 
@@ -117,19 +118,32 @@ test.describe('miniprogram-automator protocol compatibility', () => {
     test.beforeAll(async () => {
       await openProjectInUI(mainWindow, DEMO_APP_DIR, { waitMs: 8000 })
       await waitForSimulatorWebview(electronApp)
+
+      // NATIVE-HOST readiness gate. The page DOM is no longer in a same-document
+      // iframe of the simulator guest — each page is a cross-process render-host
+      // `.device-shell__webview` inside the DeviceShell. So instead of probing
+      // `iframe.contentDocument.querySelector('.page-title')` (which can never
+      // succeed under native-host), wait for DeviceShell to mount and spawn at
+      // least one render guest (the discriminators native-host-render.spec.ts
+      // asserts), then confirm the automation pipeline reports the live entry
+      // page. Once App.getCurrentPage answers, the active render guest is
+      // reachable and Page.getElement('.page-title') will resolve against it.
       await pollUntil(
-        () => electronApp.evaluate(({ webContents }) => {
-          const sim = webContents.getAllWebContents().find(wc => wc.getType() === 'webview')
-          if (!sim) return Promise.resolve(false)
-          return sim.executeJavaScript(`(() => {
-            const fs = document.querySelectorAll('iframe')
-            const f = fs[fs.length - 1]
-            return !!(f && f.contentDocument && f.contentDocument.querySelector('.page-title'))
-          })()`)
-        }),
+        () => evalInSimulator<boolean>(
+          electronApp,
+          `(() => !!document.querySelector('.device-shell-root')
+              && document.querySelectorAll('.device-shell__webview').length >= 1)()`,
+        ).catch(() => false),
         (ok) => ok === true,
-        15000,
+        25000,
         300,
+      ).catch(() => {})
+      await pollUntil(
+        () => wsCall('App.getCurrentPage').catch(() => null),
+        (r) => !!r && typeof (r as { path?: string }).path === 'string'
+          && (r as { path: string }).path.includes('index/index'),
+        25000,
+        400,
       ).catch(() => {})
     })
 
@@ -144,12 +158,20 @@ test.describe('miniprogram-automator protocol compatibility', () => {
       expect(stack[stack.length - 1]!.path).toContain('index/index')
     })
 
-    test('Element.getDOMProperties reads innerText', async () => {
+    test('Element.getDOMProperties reads the page-title text', async () => {
+      // Element.getDOMProperties routes through evalInActivePage → the active
+      // render-host guest's main world (the guest IS the page document under
+      // native-host). We read `textContent` rather than `innerText`: the render
+      // guest is hosted by an offscreen WebContentsView, so `innerText` (which
+      // requires a laid-out/painted box) can resolve to '' there, whereas
+      // `textContent` is layout-independent and reliably carries the WXML text.
+      // This still proves getDOMProperties reaches the real page element and
+      // returns its content under native-host.
       const el = await wsCall('Page.getElement', { selector: '.page-title', pageId: 1 })
       const props = await wsCall('Element.getDOMProperties', {
         elementId: el.elementId,
         pageId: 1,
-        names: ['innerText'],
+        names: ['textContent'],
       })
       const properties = props.properties as string[]
       expect(properties[0]).toContain('DevTools')

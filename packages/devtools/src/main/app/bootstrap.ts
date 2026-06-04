@@ -46,6 +46,26 @@ export function suppressEpipe(): void {
 }
 
 /**
+ * Silence Electron's built-in "Insecure Content-Security-Policy" dev warning.
+ *
+ * In dev (unpackaged) the renderer is served from the Vite dev server, which
+ * does not ship a strict CSP header, so Electron prints its `Electron Security
+ * Warning (Insecure Content-Security-Policy)` notice in every frame's console.
+ * It is pure dev noise — Electron already suppresses it automatically once the
+ * app is packaged (`app.isPackaged`).
+ *
+ * This sets ONLY the log-suppression env var, and ONLY when unpackaged. It does
+ * not touch contextIsolation / sandbox / webSecurity or any other CSP-relevant
+ * window setting — the actual security posture is unchanged; we only stop the
+ * console from re-printing the warning. Must run before any window is created
+ * (Electron reads the env var when it emits the warning).
+ */
+export function suppressInsecureCspWarnings(): void {
+  if (app.isPackaged) return
+  process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = 'true'
+}
+
+/**
  * Configure Chrome DevTools Protocol remote-debugging-port.
  * Must be called before `app.whenReady()`.
  *

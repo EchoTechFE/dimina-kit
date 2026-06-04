@@ -18,6 +18,7 @@ import {
   ProjectChannel,
   ToolbarChannel,
   SettingsChannel,
+  EditorChannel,
 } from '../../../shared/ipc-channels.js'
 import { createRendererNotifier } from './renderer-notifier.js'
 
@@ -176,5 +177,27 @@ describe('RendererNotifier — destroyed targets no-op', () => {
     popoverWc.destroyed = true
     notifier.popoverInit(popoverView, { hello: 2 })
     expect(popoverWc.send).toHaveBeenCalledTimes(1)
+  })
+
+  it('editorOpenFile: sends the open-in-editor payload to the main window while alive', () => {
+    const mainWindow = makeBrowserWindow()
+    const ctx = {
+      windows: { mainWindow: mainWindow as unknown as Electron.BrowserWindow },
+      views: { getSettingsWebContents: () => null },
+    }
+    const notifier = createRendererNotifier(ctx)
+
+    notifier.editorOpenFile({ path: 'pages/home/home.js', line: 12, column: 3 })
+    expect(mainWindow.webContents.send).toHaveBeenCalledTimes(1)
+    expect(mainWindow.webContents.send).toHaveBeenCalledWith(
+      EditorChannel.OpenFile,
+      { path: 'pages/home/home.js', line: 12, column: 3 },
+    )
+
+    // Destroyed main window short-circuits — the console→editor pipeline can
+    // fire after a project/window close.
+    mainWindow.destroyed = true
+    expect(() => notifier.editorOpenFile({ path: 'app.js' })).not.toThrow()
+    expect(mainWindow.webContents.send).toHaveBeenCalledTimes(1)
   })
 })

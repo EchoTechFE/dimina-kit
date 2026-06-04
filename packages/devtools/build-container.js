@@ -5,11 +5,8 @@
  * packages/devkit/fe/dimina-fe-container/ — devkit's openProject serves
  * that dir as the runtime container, and ships it to npm consumers.
  *
- * Two builds run sequentially:
- *   1. Main build — upstream vite.config.mjs (index.html + pageFrame.html entries)
- *   2. Browser API build — our vite.config.api.js using container-runtime.js
- *      (this package, not in dimina/) as the library entry, so the submodule
- *      can point at plain didi/dimina with zero local modifications.
+ * The upstream vite.config.mjs build (index.html + pageFrame.html + the
+ * service/render/common bundles native-host loads) runs unchanged.
  */
 
 import { spawnSync } from 'node:child_process'
@@ -26,7 +23,6 @@ const CONTAINER_SRC = join(DIMINA_FE, 'packages/container')
 const SERVICE_SRC = join(DIMINA_FE, 'packages/service')
 const CONTAINER_DIST = join(CONTAINER_SRC, 'dist')
 const TARGET_DIST = join(ROOT, 'packages/devkit/fe/dimina-fe-container')
-const API_VITE_CONFIG = join(__dirname, 'vite.config.api.js')
 const SIMULATOR_DIR = join(__dirname, 'src/simulator')
 
 // Devtools-specific API files to inject into dimina source before building.
@@ -86,7 +82,7 @@ function getDiminaGitHash() {
 //   - dimina submodule HEAD commit
 //   - dimina working-tree dirtiness (git status + diff, so uncommitted
 //     upstream edits invalidate the cache even at the same SHA)
-//   - build-container.js + vite.config.api.js
+//   - build-container.js
 //   - every file under src/simulator/service-apis/ (injected into dimina)
 // Kept in sync with the CI actions/cache key in .github/workflows/release.yml.
 function walkAndHash(root, hash) {
@@ -135,7 +131,7 @@ function getInputFingerprint() {
       }
     }
   }
-  for (const file of ['build-container.js', 'vite.config.api.js', 'container-runtime.js']) {
+  for (const file of ['build-container.js']) {
     hash.update(`${file}:\n`)
     hash.update(readFileSync(join(__dirname, file)))
     hash.update('\0')
@@ -177,7 +173,7 @@ const buildEnv = { ...process.env, GITHUB_ACTIONS: '' }
 try {
   injectFiles()
 
-  // 1. Main container build (upstream config, unchanged)
+  // Main container build (upstream config, unchanged)
   const mainBuild = spawnSync('pnpm', ['build'], {
     cwd: DIMINA_FE,
     stdio: 'inherit',
@@ -187,17 +183,6 @@ try {
 
   if (mainBuild.status !== 0) {
     process.exit(mainBuild.status ?? 1)
-  }
-
-  // 2. Browser API build (our config, appends into same dist/)
-  const apiBuild = spawnSync(
-    'npx', ['vite', 'build', '--config', API_VITE_CONFIG],
-    { cwd: CONTAINER_SRC, stdio: 'inherit', shell: true, env: buildEnv },
-  )
-
-  if (apiBuild.status !== 0) {
-    console.error('Browser API build failed')
-    process.exit(apiBuild.status ?? 1)
   }
 } finally {
   cleanupInjectedFiles()
