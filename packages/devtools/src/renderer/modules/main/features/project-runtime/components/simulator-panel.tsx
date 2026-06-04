@@ -1,7 +1,7 @@
 import React, { useCallback } from 'react'
 import { Select } from '@/shared/components/ui/select'
 import { setNativeSimulatorBounds } from '@/shared/api'
-import { useViewAnchor, type Bounds } from '@/lib/view-anchor'
+import { useViewAnchor, type Bounds } from '@dimina-kit/view-anchor'
 import { cn } from '@/shared/lib/utils'
 import { DEVICES, ZOOM_OPTIONS } from '@/shared/constants'
 

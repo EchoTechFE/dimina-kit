@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { render, act } from '@testing-library/react'
 import { StrictMode, useCallback, useEffect, useRef } from 'react'
-import { useViewAnchor, type UseViewAnchorOptions } from './react'
+import { useViewAnchor, type UseViewAnchorOptions } from './react.js'
 
 // ── ResizeObserver stub ──────────────────────────────────────────────
 // The React adapter is a thin wrapper over `createViewAnchor`, so behaviour
@@ -449,40 +449,6 @@ describe('useViewAnchor — remount with present transition', () => {
       y: 29,
       width: 321,
       height: 654,
-    })
-  })
-})
-
-// ── Contract 13: measure() threads through the adapter ──────────────
-// Bug it catches: the hook accepts `measure` in its options type but never
-// forwards it to createViewAnchor — so a React caller that owns a derived
-// rect (e.g. a zoomed viewport) silently falls back to the element's raw
-// getBoundingClientRect(), and the native view lands at the wrong bounds.
-// The element's stubbed rect ({1,2,3,4}) is deliberately distinct from the
-// measure() rect; the published rect must be measure()’s, round/clamped.
-
-describe('useViewAnchor — measure() forwarded to core', () => {
-  it('publishes the rounded/clamped measure() rect, not the element rect', () => {
-    const publish = vi.fn()
-    act(() => {
-      render(
-        <Anchored
-          options={{
-            present: true,
-            publish,
-            measure: () => ({ x: -3.4, y: 10.6, width: 100.5, height: 200.4 }),
-          }}
-          rect={{ x: 1, y: 2, w: 3, h: 4 }} // distinct from measure() → proves source
-        />,
-      )
-    })
-
-    expect(publish).toHaveBeenCalledTimes(1)
-    expect(publish).toHaveBeenCalledWith({
-      x: -3, // Math.round(-3.4) — x/y not clamped (scrolled-off origin allowed)
-      y: 11, // Math.round(10.6)
-      width: 101, // Math.max(0, Math.round(100.5))
-      height: 200, // Math.max(0, Math.round(200.4))
     })
   })
 })

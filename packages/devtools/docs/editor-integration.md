@@ -111,7 +111,7 @@ Monaco 把语言服务（css/json/ts/html 校验+补全）放在 web worker。`s
 
 ## 6. 与 ProjectWindowLayout 的关系
 
-editor 是三宫格的 `editor` cell。**与旧 OpenSumi 不同**：editor 是普通 React flex 子节点，由 React 自行挂载/卸载，**不是 overlay、不发 bounds、不经 view-manager**。`frame-tree.tsx` 的 `renderLeaf` 直接返回 `cellNodes.editor = <MonacoEditor/>`，不挂任何 ref。整套 layout 里唯一仍是主进程 overlay 的 cell 是 debug 区的 Console DevTools（`view:simulator:devtools-bounds` + `setSimulatorDevtoolsBounds`），它由 `project-runtime.tsx` 里一个 `useViewAnchor`（`@/lib/view-anchor`）锚点同步 bounds——与 editor 无关。布局拓扑/显隐/拖拽逻辑见 `project-window-layout.md`。
+editor 是三宫格的 `editor` cell。**与旧 OpenSumi 不同**：editor 是普通 React flex 子节点，由 React 自行挂载/卸载，**不是 overlay、不发 bounds、不经 view-manager**。`frame-tree.tsx` 的 `renderLeaf` 直接返回 `cellNodes.editor = <MonacoEditor/>`，不挂任何 ref。整套 layout 里唯一仍是主进程 overlay 的 cell 是 debug 区的 Console DevTools（`view:simulator:devtools-bounds` + `setSimulatorDevtoolsBounds`），它由 `project-runtime.tsx` 里一个 `useViewAnchor`（`@dimina-kit/view-anchor`）锚点同步 bounds——与 editor 无关。布局拓扑/显隐/拖拽逻辑见 `project-window-layout.md`。
 
 ## 7. 构建
 

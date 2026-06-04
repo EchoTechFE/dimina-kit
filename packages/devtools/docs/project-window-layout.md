@@ -1,9 +1,9 @@
 # ProjectWindowLayout — 项目窗口布局抽象层
 
 > 入口目录：`packages/devtools/src/renderer/modules/main/features/project-runtime/layout/`。
-> `compileProjectWindowLayout` → `FrameTree` 两段纯函数管线接管三宫格区域（simulator / editor / debug）的拓扑构造与渲染；唯一仍是主进程 overlay 的 cell 是 debug 区的 Chromium DevTools，它的 bounds 由 `useViewAnchor`（`@/lib/view-anchor`）单锚点同步。
+> `compileProjectWindowLayout` → `FrameTree` 两段纯函数管线接管三宫格区域（simulator / editor / debug）的拓扑构造与渲染；唯一仍是主进程 overlay 的 cell 是 debug 区的 Chromium DevTools，它的 bounds 由 `useViewAnchor`（`@dimina-kit/view-anchor`）单锚点同步。
 
-> **editor 是 renderer 内组件，不是 overlay。** editor cell 渲染为普通 React flex 子节点 `<MonacoEditor/>`（根 div 带 `data-area="editor"`），由 React 自行挂载/卸载，**不发 bounds、不经 view-manager**。simulator 是 `<webview>`，也不是 overlay。**整套 layout 里唯一的主进程 overlay 是 debug 区的 Console DevTools**（`view:simulator:devtools-bounds` + `setSimulatorDevtoolsBounds`），由 `project-runtime.tsx` 里**一个** `useViewAnchor` 锚点驱动。编辑器细节见 [`editor-integration.md`](./editor-integration.md)；bounds 同步原语见 `src/renderer/lib/view-anchor/README.md`。
+> **editor 是 renderer 内组件，不是 overlay。** editor cell 渲染为普通 React flex 子节点 `<MonacoEditor/>`（根 div 带 `data-area="editor"`），由 React 自行挂载/卸载，**不发 bounds、不经 view-manager**。simulator 是 `<webview>`，也不是 overlay。**整套 layout 里唯一的主进程 overlay 是 debug 区的 Console DevTools**（`view:simulator:devtools-bounds` + `setSimulatorDevtoolsBounds`），由 `project-runtime.tsx` 里**一个** `useViewAnchor` 锚点驱动。编辑器细节见 [`editor-integration.md`](./editor-integration.md)；bounds 同步原语见 `packages/view-anchor/README.md`。
 
 ## 摘要（TL;DR）
 
@@ -20,7 +20,7 @@
 
 1. **compile**（`compile.ts`）：`LayoutState`（5 个字段）→ `ProjectWindowLayout`（frame 树 + cells 注册表 + 签名）。所有 `devtoolsPosition / simulatorAlignment / visibility` 的拓扑决策都在这里，是纯函数。
 2. **render**（`frame-tree.tsx`）：递归渲染 frame，按子节点的 `outerSize.kind` 派发到 `react-resizable-panels Group` / 纯 flex / 纯 flex + 手写 splitter 三条路径之一。`FrameTree` 自己不做任何 bounds wiring——它原样渲染 caller 给的 `cellNodes[cellId]`。
-3. **bounds sync**（`@/lib/view-anchor` 的 `useViewAnchor`）：`project-runtime.tsx` 用**一个**锚点把 debug overlay 的 bounds 绑到 debug 占位 div。`present` 直读 `cells.debug.present`——`present=false` 立即发零 bounds 收起 view，与 DOM lifecycle 解耦。
+3. **bounds sync**（`@dimina-kit/view-anchor` 的 `useViewAnchor`）：`project-runtime.tsx` 用**一个**锚点把 debug overlay 的 bounds 绑到 debug 占位 div。`present` 直读 `cells.debug.present`——`present=false` 立即发零 bounds 收起 view，与 DOM lifecycle 解耦。
 
 **最重要的规则**：sizing 是 **parent-edge 性质**，写在 `FrameChild.outerSize`，不在 `Frame` 自身。Container 溶解时上层 slot 的 outerSize 保留，溶解的容器内层 outerSize 丢弃。这条性质让 collapse 逻辑可以纯 local。
 
@@ -96,7 +96,7 @@ mainWindow.contentView
 | Bug 类 | 不变量 | 执行点 |
 |---|---|---|
 | sim 列右侧 dead zone | collapse 后没有"fixed-px 但只剩自己"的中间状态 | `compile.ts` `collapseRoot` + `demoteOrphanFixedPx`（`compile.test.ts` 覆盖） |
-| overlay cell 消失后 view 不收起（当前命中者：debug） | `cells.debug.present=false` ⇒ 锚点发零 bounds；占位 div detach/unmount ⇒ 锚点发零后 dispose | `useViewAnchor` 的 `present` + ref→null 路径（`@/lib/view-anchor`） |
+| overlay cell 消失后 view 不收起（当前命中者：debug） | `cells.debug.present=false` ⇒ 锚点发零 bounds；占位 div detach/unmount ⇒ 锚点发零后 dispose | `useViewAnchor` 的 `present` + ref→null 路径（`@dimina-kit/view-anchor`） |
 | iPhone shell 被 panels 百分比缩放 | fixed-px 走 plain flex + 手写 splitter，与 panels 解耦 | `frame-tree.tsx` `renderPlainFlexRow`（`frame-tree.test.tsx` 覆盖） |
 | `layoutKey` 字符串 deps 漏维度 | `signature` 是 effect 的唯一 topology dep | `compile.ts` `signatureOf` |
 | Panel id 跨 mode 复用 | Group key 由 children slotId 拼成，mode 切 → key 变 → remount | `frame-tree.tsx` `renderResizableGroup`（`frame-tree.test.tsx` 覆盖） |
@@ -278,7 +278,7 @@ alignment 反转的实现不在渲染时 `reverse()` children，而是在 `compi
 
 ## 5. bounds 同步（useViewAnchor）
 
-bounds 同步由原语 `@/lib/view-anchor` 提供（核心 `createViewAnchor` 零 React / 零 Electron，React 适配在 `react.ts`，可独立开源——见该目录的 `README.md`）。`project-runtime.tsx` 只用 React 适配器 `useViewAnchor`，且**只为唯一的 overlay（debug 的 Console DevTools）注册一个锚点**：
+bounds 同步由原语 `@dimina-kit/view-anchor` 提供（核心 `createViewAnchor` 零 React / 零 Electron，React 适配在 `react.ts`，可独立开源——见该目录的 `README.md`）。`project-runtime.tsx` 只用 React 适配器 `useViewAnchor`，且**只为唯一的 overlay（debug 的 Console DevTools）注册一个锚点**：
 
 ```ts
 // project-runtime.tsx
@@ -465,7 +465,7 @@ deps 数组长度需跨 render 稳定（React effect-deps 规则）。
 | `src/renderer/modules/main/features/project-runtime/project-runtime.tsx` | 管线串联点（compile → FrameTree）+ 唯一的 `useViewAnchor` 锚点（debug overlay） |
 | `src/renderer/modules/main/features/project-runtime/controllers/use-layout-store.ts` | `LayoutState` 持久化 + sanitize + at-least-one guard |
 | `src/renderer/modules/main/features/project-runtime/components/layout-controls.tsx` | toolbar 上的可见性 / 对齐 / devtools 位置 toggle 按钮 |
-| `src/renderer/lib/view-anchor/` | 引擎无关 bounds 同步原语（`createViewAnchor` core + `useViewAnchor` React 适配；见其 `README.md`） |
+| `packages/view-anchor/` | 引擎无关 bounds 同步原语（`createViewAnchor` core + `useViewAnchor` React 适配；见其 `README.md`） |
 | `src/renderer/modules/main/features/bottom-debug-panel/bottom-debug-panel.tsx` | debug cell；forward 锚点 ref 给内部 `[data-area="simulator-devtools"]` 占位 |
 | `src/renderer/modules/main/features/monaco-editor/` | editor cell 的 renderer 内 Monaco 实现（非 overlay；细节见 `editor-integration.md`） |
 | `src/main/services/views/view-manager.ts` | `setSimulatorDevtoolsBounds`（零面积 ⇒ removeChildView 保活）；无 editor overlay 方法 |
