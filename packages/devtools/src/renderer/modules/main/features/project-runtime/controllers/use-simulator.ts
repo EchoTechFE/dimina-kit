@@ -69,8 +69,11 @@ export function useSimulator(props: UseSimulatorProps): SimulatorHookResult {
   useEffect(() => {
     if (compileStatus.status !== 'ready') return
     if (!simulatorUrl) return
-    void attachNativeSimulator(simulatorUrl, simPanelWidthRef.current!)
+    // Push the device BEFORE attaching: main caches it so the simulator WCV's
+    // preload picks it up synchronously (NATIVE_HOST_ENABLED reply), letting the
+    // DeviceShell mount at the right bezel size / notch without a flash.
     sendDeviceInfo(deviceRef.current!)
+    void attachNativeSimulator(simulatorUrl, simPanelWidthRef.current!)
   }, [compileStatus.status, simulatorUrl, simPanelWidthRef, deviceRef, sendDeviceInfo])
 
   return {

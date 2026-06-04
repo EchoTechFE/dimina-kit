@@ -11,6 +11,8 @@ import {
   NavigationBar,
   type NavBarPlatform,
 } from './navigation-bar'
+import { StatusBar } from './status-bar'
+import type { NativeDeviceInfo } from '../../shared/ipc-channels'
 import { TabBar } from './tab-bar'
 import {
   applyTabAction,
@@ -61,11 +63,21 @@ interface DeviceShellState {
 export function DeviceShell({
   miniApp,
   bridgeId,
-  width = 390,
-  height = 844,
   platform = 'ios',
 }: DeviceShellProps) {
-  const statusBarHeight = platform === 'ios' ? STATUS_BAR_HEIGHT_IOS : STATUS_BAR_HEIGHT_ANDROID
+  // The selected device drives the bezel size + status bar height + notch.
+  // Initial value rides the native-host bridge config (race-free); live toolbar
+  // changes arrive over DEVICE_CHANGE.
+  const [device, setDevice] = useState<NativeDeviceInfo | null>(() => miniApp.getInitialDevice())
+  useEffect(() => miniApp.onSimulatorEvent<NativeDeviceInfo>(E.DEVICE_CHANGE, setDevice), [miniApp])
+
+  // DeviceShell draws the WHOLE phone at fixed device-logical size on a gray
+  // desk that fills the WCV and scrolls when the phone overflows the region.
+  // Only the chrome metrics below are derived from the device.
+  const statusBarHeight = device?.safeAreaInsets.top
+    ?? (platform === 'ios' ? STATUS_BAR_HEIGHT_IOS : STATUS_BAR_HEIGHT_ANDROID)
+  const bottomInset = device?.safeAreaInsets.bottom ?? 0
+  const notchType = device?.notchType ?? 'none'
   const preload = useMemo(() => miniApp.getRenderPreloadUrl(), [miniApp])
   const tabBarConfig = useMemo(() => miniApp.getTabBarConfig(), [miniApp])
 
@@ -240,16 +252,32 @@ export function DeviceShell({
     miniApp.notifyPageStack(shell.stack.map((e) => ({ pagePath: e.pagePath, query: e.query })))
   }, [miniApp, shell.stack])
 
-  const topIsCustomNav = top.navBar.style === 'custom'
-  const viewportPadding = topIsCustomNav ? 0 : statusBarHeight + NAV_BAR_HEIGHT
-
   return (
     <main className="device-shell-root">
       <section
         className="device-shell"
-        style={{ width, height }}
         aria-label="Dimina simulator"
+        // Fixed device-logical size so the phone never squishes with the
+        // window/flex: the desk (.device-shell-root) scrolls when it overflows.
+        // Omitted when device is null → CSS sizing fallback fills the desk.
+        style={device ? { width: device.screenWidth, height: device.screenHeight } : undefined}
       >
+        {/*
+          Status bar overlay (time / icons / notch) pinned to the device top,
+          above both the nav-bar and the page webview. The nav-bar still reserves
+          `statusBarHeight` below it (paddingTop), so default nav blends its bg
+          up into the status area while custom nav shows the page through it.
+        */}
+        <StatusBar
+          height={statusBarHeight}
+          notchType={notchType}
+          textStyle={top.navBar.textStyle}
+        />
+        {/*
+          Default nav-bar is in-flow (reserves its own height); custom nav-bar
+          is an absolute overlay and the webview renders full-bleed beneath it.
+          So the viewport needs no nav-height padding — see navigation-bar.css.
+        */}
         <NavigationBar
           state={top.navBar}
           stackDepth={shell.stack.length}
@@ -258,10 +286,7 @@ export function DeviceShell({
           navBarHeight={NAV_BAR_HEIGHT}
           onBack={handleBack}
         />
-        <div
-          className="device-shell__viewport"
-          style={{ paddingTop: viewportPadding }}
-        >
+        <div className="device-shell__viewport">
           {mounted.map(({ entry, visible }) => (
             <webview
               key={entry.bridgeId}
@@ -286,7 +311,15 @@ export function DeviceShell({
             onSwitch={handleTabClick}
           />
         )}
-        <div className="device-shell__home-indicator" aria-hidden="true" />
+        {/* Home-indicator strip sized to the device bottom inset (gesture-bar
+            devices only; the home-button SE class has bottom inset 0). */}
+        {bottomInset > 0 && (
+          <div
+            className="device-shell__home-indicator"
+            style={{ flexBasis: bottomInset }}
+            aria-hidden="true"
+          />
+        )}
       </section>
     </main>
   )

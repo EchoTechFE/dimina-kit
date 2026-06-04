@@ -1,3 +1,5 @@
+import type { NativeDeviceInfo } from './ipc-channels.js'
+
 export const BRIDGE_CHANNELS = {
   SPAWN: 'dmb:spawn',
   DISPOSE: 'dmb:dispose',
@@ -43,6 +45,13 @@ export const SIMULATOR_EVENTS = {
   TAB_ACTION: 'simulator:tab-action',
   /** main → simulator: invoke a wx.* API on the simulator-resident MiniApp. */
   API_CALL: 'simulator:api-call',
+  /**
+   * main → simulator: the renderer toolbar picked a different device. Carries a
+   * NativeDeviceInfo; DeviceShell resizes the bezel + re-renders status bar /
+   * notch. The race-free INITIAL device rides NativeHostConfig.device (read
+   * synchronously at preload bridge-install); this event covers live changes.
+   */
+  DEVICE_CHANGE: 'simulator:device-change',
 } as const
 
 export const CHANNELS = BRIDGE_CHANNELS
@@ -56,6 +65,14 @@ export interface NativeHostConfig {
   enabled: boolean
   renderHostHtmlUrl: string
   renderPreloadUrl: string
+  /**
+   * The currently-selected device, if the renderer already pushed it before the
+   * simulator WCV's preload installed (it does — SetDeviceInfo precedes
+   * AttachNative). DeviceShell reads this as its initial device so it never
+   * mounts with the wrong bezel size while waiting for the first DEVICE_CHANGE.
+   * Absent only on the pre-spawn default path.
+   */
+  device?: NativeDeviceInfo
 }
 
 export type BridgeChannel = typeof BRIDGE_CHANNELS[keyof typeof BRIDGE_CHANNELS]

@@ -13,6 +13,7 @@ import type {
   SpawnResult,
   TabBarConfig,
 } from '../shared/bridge-channels'
+import type { NativeDeviceInfo } from '../shared/ipc-channels'
 
 type ApiHandler = (this: SimulatorMiniApp, params?: unknown) => unknown | Promise<unknown>
 
@@ -34,6 +35,7 @@ interface NativeHostBridge {
   notifyPageStack(payload: PageStackPayload): void
   createRenderHostUrl(opts: { bridgeId: string; appId: string; pagePath: string }): string
   renderPreloadUrl: string
+  device?: NativeDeviceInfo
   onSimulatorEvent<T = unknown>(channel: string, listener: (payload: T) => void): () => void
 }
 
@@ -193,16 +195,28 @@ export class SimulatorMiniApp {
     return this.manifest?.tabBar ?? null
   }
 
+  /**
+   * The device selected when this simulator booted (delivered by main on the
+   * native-host bridge config — the renderer pushes SetDeviceInfo before
+   * AttachNative). DeviceShell uses it as the initial bezel size + notch; live
+   * changes arrive over SIMULATOR_EVENTS.DEVICE_CHANGE. Null on the pre-spawn
+   * default path.
+   */
+  getInitialDevice(): NativeDeviceInfo | null {
+    return getNativeHost().device ?? null
+  }
+
   getHostEnvSnapshot(): HostEnvSnapshot {
-    // Use simulated device dimensions (390x844 = iPhone 14) instead of the
-    // actual browser window — the simulator emulates a phone, not Electron's
-    // host window. WeChat capsule geometry + status bar height also key off
-    // these values via sync-impls/{menu-button,system-info}.ts.
-    const width = 390
-    const height = 844
-    const pixelRatio = 2
+    // Use the selected device's simulated dimensions (default iPhone 14 =
+    // 390x844) instead of the actual browser window — the simulator emulates a
+    // phone, not Electron's host window. WeChat capsule geometry + status bar
+    // height also key off these via sync-impls/{menu-button,system-info}.ts.
+    const device = this.getInitialDevice()
+    const width = device?.screenWidth ?? 390
+    const height = device?.screenHeight ?? 844
+    const pixelRatio = device?.pixelRatio ?? 2
     const language = navigator.language || 'zh-CN'
-    const statusBarHeight = this.platform === 'ios' ? 44 : 24
+    const statusBarHeight = device?.statusBarHeight ?? (this.platform === 'ios' ? 44 : 24)
 
     return {
       brand: this.platform === 'ios' ? 'iPhone' : 'Android',

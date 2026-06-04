@@ -1,6 +1,8 @@
 import type { BrowserWindow } from 'electron'
 import type { CompilationAdapter, WorkbenchConfig } from '../../shared/types.js'
 import type { BridgeRouterHandle } from '../ipc/bridge-router.js'
+import type { ConsoleForwarder } from './console-forward/index.js'
+import type { NetworkForwarder } from './network-forward/index.js'
 import type { AppDataTap } from './simulator-appdata/index.js'
 import type { StorageApi } from './simulator-storage/index.js'
 import { DisposableRegistry } from '../utils/disposable.js'
@@ -156,14 +158,34 @@ export interface WorkbenchContext {
   storageApi?: StorageApi
 
   /**
-   * Native-host console sink, set by `startAutomationServer` when native-host is
-   * on. The render-host / service-host guest preloads monkeypatch `console.*`
-   * and post each entry to main as a `consoleLog` container message; bridge-router
-   * forwards those here so automation can rebroadcast them as `App.logAdded`
-   * events. Undefined on the default dimina-fe path (where the simulator guest's
-   * console flows through the `ipc-message-host` channel instead).
+   * Native-host console sink. The render-host / service-host guest preloads
+   * monkeypatch `console.*` and post each entry to main as a `consoleLog`
+   * container message; bridge-router routes those here. Owned by the
+   * `ConsoleForwarder` (set in `installBridgeRouter`), whose `emit` fans every
+   * entry out to subscribers (automation WS) AND mirrors render-layer entries
+   * into the service host's own console for the embedded DevTools.
    */
   guestConsole?: { emit(entry: unknown): void }
+
+  /**
+   * Always-on console fan-out, set by `installBridgeRouter`. Other services
+   * (automation) call `subscribe` to receive every guest console entry instead
+   * of each clobbering `ctx.guestConsole`. Undefined until the bridge router is
+   * installed.
+   */
+  consoleForwarder?: ConsoleForwarder
+
+  /**
+   * Native-host network forwarder, set in app bootstrap. Attaches the CDP
+   * debugger to the simulator WCV (where `wx.request`/`downloadFile`/`uploadFile`
+   * run) and injects its raw Network.* CDP events into the DevTools FRONT-END wc
+   * (`window.DevToolsAPI.dispatchMessage`) so the native Network tab renders them;
+   * falls back to a `[网络]` service-host console line when the front-end is
+   * unavailable. The ViewManager calls `attachSimulator` + `setDevtoolsHost` from
+   * `attachNativeSimulator` once the simulator WCV + DevTools host exist.
+   * Undefined until bootstrap wires it.
+   */
+  networkForward?: NetworkForwarder
 }
 
 /**

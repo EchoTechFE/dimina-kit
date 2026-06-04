@@ -121,6 +121,13 @@ export const SimulatorSetDeviceInfoSchema = z.tuple([
     screenHeight: z.number().int().min(100).max(4000),
     statusBarHeight: z.number().finite().min(0).max(400),
     safeAreaBottom: z.number().finite().min(0).max(400),
+    notchType: z.enum(['none', 'notch', 'dynamic-island']),
+    safeAreaInsets: z.object({
+      top: z.number().finite().min(0).max(400),
+      right: z.number().finite().min(0).max(400),
+      bottom: z.number().finite().min(0).max(400),
+      left: z.number().finite().min(0).max(400),
+    }),
   }),
 ])
 

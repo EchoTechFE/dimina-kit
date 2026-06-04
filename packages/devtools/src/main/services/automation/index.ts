@@ -81,21 +81,20 @@ export async function startAutomationServer(
   // Native-host console forwarding: under native-host the page/service console
   // doesn't flow through the simulator guest's `ipc-message-host` channel (there
   // is no Worker/MiniApp in the guest). Instead the render-host / service-host
-  // preloads post each console entry to main, bridge-router routes it to this
-  // sink, and we rebroadcast it as an `App.logAdded` event — same shape the
-  // default-arch path emits below in `setupConsoleForwarding`. Set only in
-  // native-host mode so the default path is byte-identical; cleared on close().
-  if (ctx.bridge?.isNativeHost()) {
-    ctx.guestConsole = {
-      emit: (entry: unknown) => {
-        const e = (entry ?? {}) as { level?: string; args?: unknown[] }
-        broadcast({
-          method: 'App.logAdded',
-          params: { type: e.level || 'log', args: e.args || [] },
-        })
-      },
-    }
-  }
+  // preloads post each console entry to main, bridge-router routes it to the
+  // always-on ConsoleForwarder, and we SUBSCRIBE to rebroadcast every entry
+  // (both layers) as an `App.logAdded` event — same shape the default-arch path
+  // emits below in `setupConsoleForwarding`. We no longer set `ctx.guestConsole`
+  // ourselves (the forwarder owns it); subscribing means render + service both
+  // reach automation while the forwarder also mirrors render into the service
+  // host's console for the embedded DevTools. Unsubscribed on close().
+  const consoleSub = ctx.consoleForwarder?.subscribe((entry) => {
+    const e = (entry ?? {}) as { level?: string; args?: unknown[] }
+    broadcast({
+      method: 'App.logAdded',
+      params: { type: e.level || 'log', args: e.args || [] },
+    })
+  })
 
   // Forward simulator console logs as App.logAdded events.
   // Track the polling interval + stop timer + currently-attached sim and
@@ -222,9 +221,11 @@ export async function startAutomationServer(
         pollStopTimer = null
       }
       detachConsoleForwarding()
-      // Drop the native-host console sink so a late guest console entry can't
-      // broadcast against a torn-down server. No-op on the default path (never set).
-      if (ctx.guestConsole) ctx.guestConsole = undefined
+      // Unsubscribe from the always-on ConsoleForwarder so a late guest console
+      // entry can't broadcast against a torn-down server. The forwarder keeps
+      // owning `ctx.guestConsole` (render→service mirroring continues without an
+      // automation client). No-op if the forwarder was absent.
+      consoleSub?.dispose()
       for (const ws of clients) {
         try { ws.close() } catch { /* noop */ }
       }

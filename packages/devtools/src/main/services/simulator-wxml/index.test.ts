@@ -74,12 +74,15 @@ function makeBridge() {
     isNativeHost: vi.fn(() => true),
     resolveRenderWc: vi.fn(() => null),
     getServiceWc: vi.fn(() => null),
+    getServiceWcForBridge: vi.fn(() => null),
     getActiveBridgeId: vi.fn(() => null),
     getActiveRenderWc: vi.fn((_appId?: string) => FAKE_WC as Electron.WebContents | null),
     onRenderEvent: vi.fn((cb: (event: RenderEvent) => void) => {
       listener = cb
       return unsubscribe
     }),
+    getDevice: vi.fn(() => null),
+    setDevice: vi.fn(),
   } satisfies BridgeRouterHandle
   return {
     bridge,

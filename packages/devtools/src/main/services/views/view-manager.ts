@@ -8,6 +8,15 @@ import {
 } from '../../windows/navigation-hardening.js'
 import type { RenderEvent } from '../../ipc/bridge-router.js'
 import { SimulatorCustomApiBridgeChannel } from '../../../shared/ipc-channels.js'
+import type { NativeDeviceInfo } from '../../../shared/ipc-channels.js'
+import {
+  OPEN_IN_EDITOR_SCHEME,
+  decodeOpenInEditorUrl,
+  resourceUrlToProjectRelativePath,
+} from '../../../shared/open-in-editor.js'
+import { createSafeAreaController } from '../safe-area/index.js'
+import { buildCustomizeTabsScript } from './devtools-tabs.js'
+import { installElementsForward } from '../elements-forward/index.js'
 import * as layout from '../layout/index.js'
 import {
   handleCustomApiBridgeRequest,
@@ -32,6 +41,14 @@ export interface ViewManagerContext {
   panels: string[]
   notify: WorkbenchContext['notify']
   bridge?: WorkbenchContext['bridge']
+  /**
+   * Native-host network forwarder. `attachNativeSimulator` hands it the freshly
+   * created simulator WebContentsView (`attachSimulator`) so it can attach the
+   * CDP debugger, and the DevTools front-end host wc (`setDevtoolsHost`) so it can
+   * inject that WCV's Network.* events into the native Network tab (service-host
+   * console line is the fallback). Optional so partial test contexts compile.
+   */
+  networkForward?: WorkbenchContext['networkForward']
   /**
    * Per-context registry of host-registered simulator custom APIs. The
    * native-host simulator is a top-level WebContentsView with no embedder
@@ -134,12 +151,20 @@ export interface ViewManager {
   // ── Compound operations (used by IPC handlers) ────────────────────────
   /**
    * NATIVE-HOST ONLY. Position the simulator content WebContentsView over the
-   * renderer-measured device-bezel inner-screen rect (CSS px from the main
-   * window content top-left, which maps 1:1 to overlay setBounds DIP) and apply
-   * the device zoom. No-op in the default `<webview>` path
-   * (`nativeSimulatorView` is null). See `computeNativeSimulatorViewParams`.
+   * renderer-measured simulator panel REGION rect (the flex:1 placeholder slot,
+   * CSS px from the main window content top-left, which maps 1:1 to overlay
+   * setBounds DIP) and apply the device zoom. The WCV fills the region as a
+   * plain rectangle; DeviceShell draws + scrolls the phone inside. No-op in the
+   * default `<webview>` path (`nativeSimulatorView` is null). See
+   * `computeNativeSimulatorViewParams`.
    */
   setNativeSimulatorViewBounds(params: { x: number; y: number; width: number; height: number; zoom: number }): void
+  /**
+   * NATIVE-HOST ONLY. Re-push the selected device's CSS `env(safe-area-inset-*)`
+   * override to every attached render-host guest (on device change). New guests
+   * pick it up automatically when they attach (`did-attach-webview`).
+   */
+  reapplySafeArea(device: NativeDeviceInfo | null): void
   /** Update lastSimWidth; reposition simulator + settings if they are added. */
   resize(simWidth: number): void
   /** Show or hide the simulator overlay based on visibility flag. */
@@ -167,6 +192,11 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   // test contexts may omit it, in which case fall back to the default 40.
   const headerHeight = ctx.headerHeight ?? 40
 
+  // CSS env(safe-area-inset-*) simulation for render-host guests (per device).
+  // Driven from did-attach-webview below; re-pushed on device change via
+  // reapplySafeArea. Torn down in disposeAll.
+  const safeArea = createSafeAreaController()
+
   // ── Private mutable state ───────────────────────────────────────────────
   let simulatorView: WebContentsView | null = null
   let simulatorViewAdded = false
@@ -176,6 +206,12 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   // while `simulatorView` above hosts its DevTools in the right panel region.
   let nativeSimulatorView: WebContentsView | null = null
   let nativeSimulatorViewAdded = false
+  // Model A: the renderer's measured inner-screen rect is the SOLE authority for
+  // the native simulator WCV bounds (see docs/simulator-render-architecture.md).
+  // Cache the last rect so a report that lands before attachNativeSimulator (the
+  // project-open ordering) is not lost — attach replays it instead of using a
+  // coarse panel-size fallback (which raced and caused the clip/surround flips).
+  let lastRendererRect: { x: number; y: number; width: number; height: number; zoom: number } | null = null
   // NATIVE-HOST ONLY. The `ipcMain.on` listener that services the
   // `__diminaCustomApis` bridge for the current native simulator webContents
   // (see `attachNativeCustomApiBridge`). Tracked so we can remove it before
@@ -192,9 +228,21 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   let popoverView: WebContentsView | null = null
   let lastSimWidth = 375
   let simulatorWebContentsId: number | null = null
+  // NATIVE-HOST ONLY. The webContents the right-panel Chrome DevTools front-end
+  // currently inspects. We point it at the SERVICE HOST (logic layer) — the
+  // hidden BrowserWindow where the mini-app's page code runs (`console.log`,
+  // `wx.request`, Sources/Network(fetch) all live there). The UI/view layer
+  // (Elements/Styles/WXML tree) is served separately by the native WXML panel +
+  // render-guest highlight chain (`simulator-storage`/`simulator-wxml`), so a
+  // single DevTools front-end is enough. The service window can be swapped on
+  // respawn (pre-warm pool recycles it), so this is re-resolved fresh via
+  // `ctx.bridge.getServiceWc()` and re-pointed on every render-side event.
   let nativeDevtoolsSourceWc: WebContents | null = null
-  let nativeDevtoolsSourceBridgeId: string | null = null
   let unsubscribeNativeRenderEvents: (() => void) | null = null
+  // Disposer for the Elements-forward feature (routes the front-end's Elements
+  // CDP traffic at the active render guest). Installed in
+  // `attachNativeSimulatorDevtoolsHost`, stopped on detach / host destroyed.
+  let stopElementsForward: (() => void) | null = null
   let nativeDevtoolsRetryTimer: ReturnType<typeof setTimeout> | null = null
   let nativeDevtoolsRetryToken = 0
 
@@ -260,14 +308,6 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     simulatorView.setBounds(bounds)
   }
 
-  function applyNativeSimulatorBounds(simWidth: number): void {
-    if (!nativeSimulatorView || ctx.windows.mainWindow.isDestroyed()) return
-    const [w = 0, h = 0] = ctx.windows.mainWindow.getContentSize()
-    nativeSimulatorView.setBounds(
-      layout.computeNativeSimulatorBounds(w, h, simWidth, headerHeight),
-    )
-  }
-
   function applySettingsBounds(): void {
     if (!settingsView || ctx.windows.mainWindow.isDestroyed()) return
     const [w = 0, h = 0] = ctx.windows.mainWindow.getContentSize()
@@ -291,7 +331,6 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   function closeNativeDevtoolsSource(): void {
     const source = nativeDevtoolsSourceWc
     nativeDevtoolsSourceWc = null
-    nativeDevtoolsSourceBridgeId = null
     if (!source || source.isDestroyed()) return
     try {
       if (source.isDevToolsOpened()) {
@@ -300,7 +339,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     } catch { /* source may be mid-destroy */ }
   }
 
-  function stopFollowingNativeRenderGuest(): void {
+  function stopFollowingNativeServiceHost(): void {
     clearNativeDevtoolsRetry()
     if (unsubscribeNativeRenderEvents) {
       try {
@@ -311,69 +350,157 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     closeNativeDevtoolsSource()
   }
 
-  function pointNativeDevtoolsAtRenderGuest(
-    bridgeId: string | null,
-    next: WebContents,
-  ): boolean {
+  // ── Open-in-editor: click a console file link → built-in Monaco ──────────
+  // The right-panel console is the embedded Chromium DevTools front-end. Once a
+  // sourcemap maps a console frame back to source (restored by the service-host
+  // importScripts sourcemap rewrite), we redirect a source-link click to OUR
+  // Monaco editor instead of the DevTools Sources panel: install an "open
+  // resource handler" in the front-end realm that encodes (url, line, col) into
+  // a sentinel URL and asks the front-end to open it; Electron surfaces that as
+  // `devtools-open-url` on the inspected (service-host) wc, which we decode,
+  // map to a project-relative path, and broadcast to the renderer's Monaco.
+  const openInEditorWiredWcIds = new Set<number>()
+
+  function injectOpenResourceHandler(devtoolsWc: WebContents): void {
+    // `setOpenResourceHandler` is the official Chromium DevTools hook IDEs use
+    // to route source-link clicks to an external editor. We poll for the host
+    // (it appears once the front-end finishes bootstrapping, like `UI` above)
+    // and register a handler that re-emits an encoded sentinel via
+    // `openInNewTab` → Electron `devtools-open-url`. Best-effort: wrapped in
+    // try/catch and a bounded poll so a missing API never throws.
+    const scheme = JSON.stringify(OPEN_IN_EDITOR_SCHEME)
+    devtoolsWc.executeJavaScript(`
+      (function() {
+        try {
+          let tries = 0
+          const timer = setInterval(() => {
+            tries++
+            try {
+              const Host = globalThis.Host
+              const host = Host && Host.InspectorFrontendHost
+              if (host && typeof host.setOpenResourceHandler === 'function'
+                       && typeof host.openInNewTab === 'function') {
+                host.setOpenResourceHandler((url, lineNumber, columnNumber) => {
+                  try {
+                    const p = new URLSearchParams()
+                    p.set('u', String(url))
+                    if (typeof lineNumber === 'number') p.set('l', String(lineNumber))
+                    if (typeof columnNumber === 'number') p.set('c', String(columnNumber))
+                    host.openInNewTab(${scheme} + ':?' + p.toString())
+                  } catch (_) {}
+                })
+                clearInterval(timer)
+                return
+              }
+            } catch (_) {}
+            if (tries > 80) clearInterval(timer)
+          }, 50)
+        } catch (_) {}
+      })()
+    `).catch(() => {})
+  }
+
+  // ── DevTools tab customization: keep only Elements/Console/Network ──────────
+  // Inject into the same DevTools front-end host wc that the console/network
+  // injectors target. Reorders Elements/Console/Network to the front and closes
+  // every other panel tab by driving the front-end's UI.ViewManager /
+  // InspectorView.tabbedLocation (see ./devtools-tabs.ts). Best-effort: the
+  // injected script bounded-polls for the lazily-registered panels, wraps
+  // everything in try/catch, and silently no-ops if the API never appears —
+  // DevTools default tab behaviour is preserved on any failure. Re-injected on
+  // every (re)point so a re-`openDevTools` (service-host pool swap) re-applies.
+  function customizeDevtoolsTabs(devtoolsWc: WebContents): void {
+    try {
+      if (devtoolsWc.isDestroyed()) return
+      const inject = (): void => {
+        if (devtoolsWc.isDestroyed()) return
+        try {
+          void devtoolsWc.executeJavaScript(buildCustomizeTabsScript()).catch(() => {})
+        } catch { /* wc torn down mid-call */ }
+      }
+      if (devtoolsWc.isLoading()) {
+        devtoolsWc.once('dom-ready', inject)
+      } else {
+        inject()
+      }
+    } catch { /* wc surface incomplete / torn down; degrade silently */ }
+  }
+
+  function wireOpenInEditor(serviceWc: WebContents, devtoolsWc: WebContents): void {
+    // Inject the front-end handler on every (re)attach — the DevTools front-end
+    // wc is recreated per simulatorView, so a fresh host needs the handler set.
+    if (!devtoolsWc.isDestroyed()) {
+      if (devtoolsWc.isLoading()) {
+        devtoolsWc.once('dom-ready', () => injectOpenResourceHandler(devtoolsWc))
+      } else {
+        injectOpenResourceHandler(devtoolsWc)
+      }
+    }
+    // Attach the `devtools-open-url` decoder to the inspected service wc once
+    // (the listener is keyed off the encoded sentinel scheme, so it only acts on
+    // OUR redirected links; any other devtools "open in new tab" falls through).
+    if (openInEditorWiredWcIds.has(serviceWc.id)) return
+    openInEditorWiredWcIds.add(serviceWc.id)
+    serviceWc.on('devtools-open-url', (_event, url) => {
+      const req = decodeOpenInEditorUrl(url)
+      if (!req) return // not our sentinel — leave it to Electron's default path
+      const rel = resourceUrlToProjectRelativePath(req.url)
+      if (!rel) return
+      // DevTools reports 0-based line/column; Monaco is 1-based.
+      const line = typeof req.line === 'number' ? req.line + 1 : undefined
+      const column = typeof req.column === 'number' ? req.column + 1 : undefined
+      ctx.notify.editorOpenFile({ path: rel, line, column })
+    })
+    serviceWc.once('destroyed', () => openInEditorWiredWcIds.delete(serviceWc.id))
+  }
+
+  // Point the right-panel Chrome DevTools front-end at `next` — the SERVICE HOST
+  // webContents (logic layer). Idempotent: if we already inspect this wc, no-op.
+  function pointNativeDevtoolsAtServiceWc(next: WebContents): boolean {
     if (!simulatorView || simulatorView.webContents.isDestroyed()) return true
     if (nativeDevtoolsSourceWc?.id === next.id && !nativeDevtoolsSourceWc.isDestroyed()) {
-      nativeDevtoolsSourceBridgeId = bridgeId
       return true
     }
     closeNativeDevtoolsSource()
     nativeDevtoolsSourceWc = next
-    nativeDevtoolsSourceBridgeId = bridgeId
 
     try {
       next.setDevToolsWebContents(simulatorView.webContents)
       // DevTools renders into the right-panel host view (simulatorView); with a
       // custom host the `mode` is overridden, and `activate:false` prevents it
-      // stealing focus — this re-points on every navigation, so a focusing
-      // window would yank focus repeatedly (disrupting the user / e2e).
+      // stealing focus — this re-points whenever the service window is swapped,
+      // so a focusing window would yank focus repeatedly (disrupting the user /
+      // e2e).
       next.openDevTools({ mode: 'detach', activate: false })
+      // Redirect console source-link clicks to the built-in Monaco editor.
+      wireOpenInEditor(next, simulatorView.webContents)
+      // Keep only Elements/Console/Network tabs (front-most, in that order).
+      // Re-applied on every re-point so a service-host pool swap (fresh
+      // openDevTools) re-asserts the custom tab bar.
+      customizeDevtoolsTabs(simulatorView.webContents)
       return true
     } catch {
       if (nativeDevtoolsSourceWc?.id === next.id) {
         nativeDevtoolsSourceWc = null
-        nativeDevtoolsSourceBridgeId = null
       }
       return false
     }
   }
 
-  function resolveNativeDevtoolsTarget(appId?: string, bridgeId?: string): {
-    activeBridgeId: string | null
-    wc: WebContents | null
-  } {
-    const bridge = ctx.bridge
-    if (!bridge?.isNativeHost()) return { activeBridgeId: null, wc: null }
-    const activeBridgeId = bridge.getActiveBridgeId(appId)
-    const targetBridgeId = bridgeId ?? activeBridgeId
-    if (bridgeId && bridgeId !== activeBridgeId) {
-      return { activeBridgeId, wc: null }
-    }
-    const exact = targetBridgeId ? bridge.resolveRenderWc(targetBridgeId) : null
-    if (exact && !exact.isDestroyed()) return { activeBridgeId: targetBridgeId, wc: exact }
-    const active = bridge.getActiveRenderWc(appId)
-    return {
-      activeBridgeId,
-      wc: active && !active.isDestroyed() ? active : null,
-    }
-  }
-
-  function pointNativeDevtoolsAtActiveRenderGuest(appId?: string, bridgeId?: string): boolean {
+  // Resolve the SERVICE HOST webContents for the active (or named) app. This is
+  // the hidden service BrowserWindow's wc — a top-level wc that CAN host a
+  // Chrome DevTools front-end (unlike a `<webview>` guest's). Re-resolved fresh
+  // so a pre-warm-pool swap on respawn is tolerated.
+  function pointNativeDevtoolsAtActiveServiceHost(appId?: string): boolean {
     if (!ctx.bridge?.isNativeHost()) return true
     if (!simulatorView || simulatorView.webContents.isDestroyed()) return true
 
-    const { activeBridgeId, wc } = resolveNativeDevtoolsTarget(appId, bridgeId)
-    if (activeBridgeId && nativeDevtoolsSourceBridgeId && nativeDevtoolsSourceBridgeId !== activeBridgeId) {
-      closeNativeDevtoolsSource()
-    }
+    const wc = ctx.bridge.getServiceWc(appId)
     if (!wc || wc.isDestroyed()) return false
-    return pointNativeDevtoolsAtRenderGuest(activeBridgeId, wc)
+    return pointNativeDevtoolsAtServiceWc(wc)
   }
 
-  function scheduleNativeDevtoolsFollow(appId?: string, bridgeId?: string, attempt = 0): void {
+  function scheduleNativeDevtoolsFollow(appId?: string, attempt = 0): void {
     if (attempt >= 20) return
     if (!ctx.bridge?.isNativeHost()) return
     const token = nativeDevtoolsRetryToken
@@ -381,21 +508,24 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     nativeDevtoolsRetryTimer = setTimeout(() => {
       nativeDevtoolsRetryTimer = null
       if (token !== nativeDevtoolsRetryToken) return
-      if (pointNativeDevtoolsAtActiveRenderGuest(appId, bridgeId)) return
-      scheduleNativeDevtoolsFollow(appId, bridgeId, attempt + 1)
+      if (pointNativeDevtoolsAtActiveServiceHost(appId)) return
+      scheduleNativeDevtoolsFollow(appId, attempt + 1)
     }, 50)
   }
 
-  function followNativeDevtoolsRenderGuest(appId?: string, bridgeId?: string): void {
+  function followNativeDevtoolsServiceHost(appId?: string): void {
     clearNativeDevtoolsRetry()
-    if (pointNativeDevtoolsAtActiveRenderGuest(appId, bridgeId)) return
-    scheduleNativeDevtoolsFollow(appId, bridgeId)
+    if (pointNativeDevtoolsAtActiveServiceHost(appId)) return
+    scheduleNativeDevtoolsFollow(appId)
   }
 
+  // Render-side activity (a page DOM mounting / the visible page changing)
+  // always follows a spawn or respawn, by which point the service window exists
+  // (and may have been swapped by the pool). Re-resolve + re-point the DevTools
+  // at the now-current service host on every such event.
   function onNativeRenderEvent(event: RenderEvent): void {
     if (event.kind !== 'activePage' && event.kind !== 'domReady') return
-    if (event.kind === 'domReady' && ctx.bridge?.getActiveBridgeId(event.appId) !== event.bridgeId) return
-    followNativeDevtoolsRenderGuest(event.appId, event.bridgeId)
+    followNativeDevtoolsServiceHost(event.appId)
   }
 
   // ── ViewManager methods ─────────────────────────────────────────────────
@@ -435,6 +565,8 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     // request the `console` view, and also persist the choice via the
     // `panel-selectedTab` localStorage key so subsequent reloads honor it.
     const devtoolsWc = simulatorView.webContents
+    // Keep only Elements/Console/Network tabs (front-most, in that order).
+    customizeDevtoolsTabs(devtoolsWc)
     devtoolsWc.once('dom-ready', () => {
       devtoolsWc.executeJavaScript(`
         (function() {
@@ -475,7 +607,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   }
 
   function attachNativeSimulatorDevtoolsHost(simWidth: number): void {
-    stopFollowingNativeRenderGuest()
+    stopFollowingNativeServiceHost()
 
     // Destroy old simulatorView to prevent WebContentsView leak
     if (simulatorView) {
@@ -499,6 +631,29 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     // request the `console` view, and also persist the choice via the
     // `panel-selectedTab` localStorage key so subsequent reloads honor it.
     const devtoolsWc = simulatorView.webContents
+    // Hand the network forwarder THIS front-end host wc — it injects the
+    // simulator WCV's Network.* CDP events into `window.DevToolsAPI.dispatchMessage`
+    // here so the native Network tab renders them (falls back to the service-host
+    // console line when null / the API never appears). Cleared on detach.
+    ctx.networkForward?.setDevtoolsHost(devtoolsWc)
+    // Elements forwarding (production, always on for the native simulator): route
+    // the front-end's Elements-panel CDP traffic (DOM/CSS/Overlay/DOMSnapshot/
+    // DOMDebugger) onto the ACTIVE RENDER GUEST so the panel reflects the page's
+    // live DOM tree instead of the service host it natively inspects. Reuses the
+    // safe-area-attached debugger session (never detaches one it doesn't own);
+    // Emulation.* and every other domain stay on the service-host path. Degrades
+    // to the native service-host DOM if the front-end hook is unavailable. The
+    // disposer is stopped on detach / host destroyed.
+    if (ctx.bridge) {
+      try {
+        stopElementsForward?.()
+      } catch { /* prior disposer already gone */ }
+      stopElementsForward = installElementsForward({ devtoolsWc, bridge: ctx.bridge })
+      devtoolsWc.once('destroyed', () => {
+        try { stopElementsForward?.() } catch { /* already stopped */ }
+        stopElementsForward = null
+      })
+    }
     devtoolsWc.once('dom-ready', () => {
       devtoolsWc.executeJavaScript(`
         (function() {
@@ -539,7 +694,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
 
     if (ctx.bridge?.isNativeHost()) {
       unsubscribeNativeRenderEvents = ctx.bridge.onRenderEvent(onNativeRenderEvent)
-      followNativeDevtoolsRenderGuest()
+      followNativeDevtoolsServiceHost()
     }
   }
 
@@ -640,6 +795,11 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       },
     })
     nativeSimulatorView = view
+    // Paint the WCV surface the simulator-panel background (≈ --color-sim-bg
+    // hsl(0 0% 7%)) so a height-resize that grows the region never flashes white
+    // in the newly-exposed strip before DeviceShell's desk repaints — the WCV,
+    // the desk, and the renderer placeholder behind it are all the same color.
+    view.setBackgroundColor('#121212')
     const simWc = view.webContents
 
     // Service the simulator-side `__diminaCustomApis` bridge: this top-level
@@ -668,6 +828,9 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       try {
         guestWc.setZoomFactor(currentZoomFactor)
       } catch { /* guest not ready; setNativeSimulatorViewBounds re-applies */ }
+      // Simulate this device's CSS env(safe-area-inset-*) on the fresh guest
+      // before it paints, so notch-aware page layout resolves correctly.
+      safeArea.applyToGuest(guestWc, ctx.bridge?.getDevice() ?? null)
       guestWc.setWindowOpenHandler(({ url }) => handleWindowOpenExternal(url))
       guestWc.on('will-navigate', (e, url) => {
         try {
@@ -686,7 +849,10 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
           e.preventDefault()
         }
       })
-      followNativeDevtoolsRenderGuest()
+      // A render-host guest only attaches after a spawn, so the service window
+      // exists by now — (re)point the right-panel DevTools at it. Belt-and-braces
+      // with the `onRenderEvent` path in case its emit lost the attach race.
+      followNativeDevtoolsServiceHost()
     })
 
     // The simulator loads http://localhost:<port>/simulator.html. Harden popups
@@ -720,21 +886,44 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     // ap.simulatorWc = event.sender = this wc, and SIMULATOR_EVENTS flow back.
     simulatorWebContentsId = simWc.id
 
-    if (getDefaultTab(ctx) === 'simulator') {
-      ctx.windows.mainWindow.contentView.addChildView(view)
-      nativeSimulatorViewAdded = true
-      applyNativeSimulatorBounds(simWidth)
+    // Forward this WCV's network requests (wx.request/download/upload run here,
+    // not in the service host) into the service-host console so they show in the
+    // embedded DevTools the right panel hosts. Attaches the CDP debugger; no-op
+    // if the forwarder is unwired (partial test ctx) or the debugger is claimed.
+    ctx.networkForward?.attachSimulator(simWc)
+
+    // Model A: bounds come ONLY from the renderer's measured inner-screen rect.
+    // If a report already landed before this attach (project-open ordering),
+    // replay it now — setNativeSimulatorViewBounds adds + sizes the view. Else
+    // the view stays unadded until the next reportBounds. No coarse fallback.
+    if (lastRendererRect) {
+      setNativeSimulatorViewBounds(lastRendererRect)
     }
 
-    // Native-host page code runs in the nested render-host guest, not this
-    // DeviceShell host. Keep the right-panel DevTools host view stable, but
-    // inspect whichever render-host guest the bridge reports as visible.
+    // Native-host page code (console.log / wx.request / Sources) runs in the
+    // hidden SERVICE HOST window, not this DeviceShell host nor the render-host
+    // guests. Keep the right-panel DevTools host view stable and point it at the
+    // service host so its Console/Network(fetch)/Sources reflect the logic layer.
+    // (The UI/view layer's Elements equivalent is the native WXML panel +
+    // render-guest highlight chain, which targets the active render guest.)
     attachNativeSimulatorDevtoolsHost(simWidth)
   }
 
   function detachSimulator(): void {
-    stopFollowingNativeRenderGuest()
+    stopFollowingNativeServiceHost()
     detachNativeCustomApiBridge()
+    // Stop Elements forwarding (detaches only the debugger sessions IT attached;
+    // safe-area's sessions are untouched). Idempotent — the host 'destroyed'
+    // handler may have already run.
+    try { stopElementsForward?.() } catch { /* already stopped */ }
+    stopElementsForward = null
+    // Stop forwarding the simulator WCV's network (its debugger is detached as
+    // the view is closed below, but drop our session deterministically first).
+    // Also drop the DevTools front-end host — its wc is destroyed below; a stale
+    // ref would make the forwarder dispatch into a dead wc instead of falling
+    // back to the console.
+    ctx.networkForward?.detachSimulator()
+    ctx.networkForward?.setDevtoolsHost(null)
     // Native-host simulator content view (no-op in the default path).
     if (nativeSimulatorView) {
       if (nativeSimulatorViewAdded && !ctx.windows.mainWindow.isDestroyed()) {
@@ -762,6 +951,10 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     // Drop the renderer-published rect so a stale "hidden" override doesn't
     // suppress the next view before its renderer republishes.
     simulatorBoundsOverride = null
+    // Also drop the cached native-simulator rect: attachNativeSimulator replays
+    // lastRendererRect on attach, so a leftover rect/offset from a torn-down
+    // session must not be replayed onto a fresh re-attach (stale slice/offset).
+    lastRendererRect = null
   }
 
   function showSimulator(simWidth: number): void {
@@ -851,8 +1044,8 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   }
 
   function repositionAll(): void {
-    if (nativeSimulatorView && nativeSimulatorViewAdded)
-      applyNativeSimulatorBounds(lastSimWidth)
+    // Native simulator: bounds owned by the renderer's reportBounds (Model A);
+    // its window-resize listener re-measures, so no coarse re-apply here.
     if (simulatorView && simulatorViewAdded)
       applySimulatorBounds(lastSimWidth)
     if (settingsView && settingsViewAdded)
@@ -863,12 +1056,17 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
 
   function disposeAll(): void {
     detachSimulator()
+    safeArea.dispose()
   }
 
   function setNativeSimulatorViewBounds(
     params: { x: number; y: number; width: number; height: number; zoom: number },
   ): void {
-    if (!nativeSimulatorView || ctx.windows.mainWindow.isDestroyed()) return
+    // Cache unconditionally so attachNativeSimulator can replay a report that
+    // landed before the view existed (project-open ordering). This rect is the
+    // ONLY authority for the native WCV bounds.
+    lastRendererRect = params
+    if (ctx.windows.mainWindow.isDestroyed() || !nativeSimulatorView) return
     const p = layout.computeNativeSimulatorViewParams(params, params.zoom)
     currentZoomFactor = p.zoomFactor
     // A zero-area rect means "hide" — the renderer reports this when the
@@ -891,12 +1089,6 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       nativeSimulatorViewAdded = true
     }
     nativeSimulatorView.setBounds(p.bounds)
-    // setBorderRadius lands on WebContentsView in Electron 41; guard so a
-    // missing method (older runtime / tests) doesn't crash positioning.
-    const viewWithRadius = nativeSimulatorView as WebContentsView & {
-      setBorderRadius?: (radius: number) => void
-    }
-    viewWithRadius.setBorderRadius?.(p.borderRadius)
     const simWc = nativeSimulatorView.webContents
     if (!simWc.isDestroyed()) {
       simWc.setZoomFactor(p.zoomFactor)
@@ -917,7 +1109,9 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
 
   function resize(simWidth: number): void {
     lastSimWidth = simWidth
-    if (nativeSimulatorViewAdded) applyNativeSimulatorBounds(simWidth)
+    // Native simulator bounds are owned solely by the renderer's reportBounds
+    // (Model A) — its ResizeObserver/window-resize listeners re-measure on this
+    // same resize. No coarse panel-size re-apply here (it raced the precise rect).
     if (simulatorViewAdded) applySimulatorBounds(simWidth)
     if (settingsViewAdded) applySettingsBounds()
   }
@@ -937,6 +1131,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     attachSimulator,
     attachNativeSimulator,
     detachSimulator,
+    reapplySafeArea: (device) => safeArea.reapplyAll(device),
     showSimulator,
     hideSimulator,
     showSettings,

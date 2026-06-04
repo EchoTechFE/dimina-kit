@@ -148,6 +148,25 @@ const block = (key) => {
 // origin and eval it in the global scope, so its `modDefine(...)` registers
 // into the same AMD registry the service loader's `modRequire` reads. Bundles
 // are small + same-origin; sync XHR keeps the loader's synchronous contract.
+//
+// ── Sourcemap fidelity (console file links) ─────────────────────────────────
+// The compiled `logic.js` ships a RELATIVE `//# sourceMappingURL=logic.js.map`
+// (see compiler/core/logic-compiler.js). A real Worker `importScripts(url)`
+// loads the script with the dev-server URL as its base, so DevTools resolves
+// that relative map against `…/{appId}/{root}/logic.js` and fetches the right
+// `.map` — console frames + Sources links then point at the developer's
+// ORIGINAL files. Under `(0, eval)(...)` the script has NO base URL of its own:
+// DevTools resolves a relative `sourceMappingURL` against the service-host
+// DOCUMENT (`file://…/service-host/service.html`), fetches a nonexistent
+// `file://…/service-host/logic.js.map` (404), and falls back to the compiled
+// bundle — so every console file:line points at `logic.js` (compiled), not
+// source. Rewrite the relative map URL to an ABSOLUTE one resolved against the
+// script's fetch `url`, and put `sourceURL` last, restoring sourcemapped links.
+// The pure transform lives in a sibling `.cjs` (unit-tested in
+// sourcemap-rewrite.test.ts) — required relative to this preload so it resolves
+// from dist/service-host at runtime (build copies both files verbatim).
+const { rewriteSourceMappingUrl } = require('./sourcemap-rewrite.cjs')
+
 if (typeof globalThis.importScripts !== 'function') {
   globalThis.importScripts = function importScriptsShim(...urls) {
     for (const url of urls) {
@@ -157,9 +176,14 @@ if (typeof globalThis.importScripts !== 'function') {
       if (xhr.status && (xhr.status < 200 || xhr.status >= 300)) {
         throw new Error(`[service] importScripts failed ${xhr.status} for ${url}`)
       }
+      // Resolve the bundle's relative sourceMappingURL to an absolute dev-server
+      // URL (eval'd code has no base URL → relative maps 404 against file://).
+      const body = rewriteSourceMappingUrl(xhr.responseText, String(url))
       // Indirect eval → runs in global scope (so modDefine/modRequire bind to
       // the service IIFE globals), matching real Worker importScripts semantics.
-      ;(0, eval)(`${xhr.responseText}\n//# sourceURL=${url}`)
+      // `sourceURL` goes LAST so the script gets a stable name in the Sources
+      // tree while the (now absolute) sourceMappingURL above stays fetchable.
+      ;(0, eval)(`${body}\n//# sourceURL=${url}`)
     }
   }
 }

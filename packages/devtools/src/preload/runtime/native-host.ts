@@ -1,5 +1,7 @@
 import { ipcRenderer } from 'electron'
 import { BRIDGE_CHANNELS as C } from '../../shared/bridge-channels.js'
+import type { NativeDeviceInfo } from '../../shared/ipc-channels.js'
+// (extension required: preload tsconfig is moduleResolution node16)
 import type {
   ActivePagePayload,
   ApiResponsePayload,
@@ -37,6 +39,12 @@ export interface DiminaNativeHostBridge {
   notifyPageStack(payload: PageStackPayload): void
   createRenderHostUrl(opts: RenderHostUrlOptions): string
   renderPreloadUrl: string
+  /**
+   * The selected device at bridge-install time, if the renderer already pushed
+   * it (it does — SetDeviceInfo precedes AttachNative). DeviceShell reads this
+   * as its initial device; live changes arrive via the DEVICE_CHANGE event.
+   */
+  device?: NativeDeviceInfo
   /**
    * Subscribe to a main→simulator event channel (SIMULATOR_EVENTS). Returns an
    * unsubscribe fn. The simulator renderer (DeviceShell) runs in the webview
@@ -103,6 +111,7 @@ function buildBridge(cfg: NativeHostConfig): DiminaNativeHostBridge {
       return url.toString()
     },
     renderPreloadUrl: cfg.renderPreloadUrl,
+    device: cfg.device,
     onSimulatorEvent(channel, listener) {
       const wrapped = (_event: unknown, payload: unknown): void => {
         ;(listener as (p: unknown) => void)(payload)

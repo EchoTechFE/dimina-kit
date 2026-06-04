@@ -37,11 +37,24 @@ export const SimulatorChannel = {
   CurrentPage: 'simulator:current-page',
 } as const
 
+/** iPhone bezel cutout family driving the device-shell notch visual. */
+export type NotchType = 'none' | 'notch' | 'dynamic-island'
+
+/** Per-device safe-area insets in CSS px (portrait). */
+export interface SafeAreaInsets {
+  top: number
+  right: number
+  bottom: number
+  left: number
+}
+
 /**
  * Logical device metrics pushed by the renderer device dropdown under
  * native-host (`SimulatorChannel.SetDeviceInfo`). Mirrors a row of the renderer
  * `DEVICES` table; main maps it onto a `HostEnvSnapshot` for the service-host
- * window so `wx.getSystemInfoSync()` reflects the selected device.
+ * window so `wx.getSystemInfoSync()` reflects the selected device, relays it to
+ * the simulator WCV (DeviceShell: bezel size + status bar + notch), and drives
+ * the CSS `env(safe-area-inset-*)` override on render-host guests.
  */
 export interface NativeDeviceInfo {
   brand: string
@@ -53,6 +66,8 @@ export interface NativeDeviceInfo {
   screenHeight: number
   statusBarHeight: number
   safeAreaBottom: number
+  notchType: NotchType
+  safeAreaInsets: SafeAreaInsets
 }
 
 // ── Service host (main → hidden service-host window) ─────────────────────
@@ -218,6 +233,30 @@ export const ProjectFsChannel = {
   WriteFileSync: 'project:fs:writeFileSync',
   ListFiles: 'project:fs:listFiles',
 } as const
+
+// ── Editor (main → renderer) ──────────────────────────────────────────────
+//
+// Drives the in-renderer Monaco editor from the main process. Used by the
+// "click a console file link → open the file at line:col" pipeline: the
+// embedded DevTools front-end routes a source-link click through an open-
+// resource handler → Electron `devtools-open-url` on the service host → main
+// maps the resource URL to a project-relative path → this event opens it in
+// Monaco. Payload: `EditorOpenFilePayload`.
+
+export const EditorChannel = {
+  /** main → renderer: open `path` (project-relative POSIX) at `line`/`column`. */
+  OpenFile: 'editor:openFile',
+} as const
+
+/** Payload for `editor:openFile`. `line`/`column` are 1-based for Monaco. */
+export interface EditorOpenFilePayload {
+  /** Project-relative POSIX path (the same key Monaco opens files by). */
+  path: string
+  /** 1-based line to reveal; omitted/<=0 means open without moving the cursor. */
+  line?: number
+  /** 1-based column to reveal; defaults to 1 when a line is given. */
+  column?: number
+}
 
 // ── Project list / workspace ─────────────────────────────────────────────
 

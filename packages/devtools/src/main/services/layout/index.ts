@@ -43,56 +43,22 @@ export function computeSimulatorBounds(
 }
 
 /**
- * NATIVE-HOST ONLY. Bounds for the simulator CONTENT view (the DeviceShell
- * host WebContentsView) — the region LEFT of the splitter, below the header.
+ * NATIVE-HOST ONLY. Translate the renderer-measured simulator panel REGION rect
+ * (CSS px from the main window content top-left — the flex:1 placeholder slot)
+ * into the params needed to overlay the simulator `WebContentsView` on it.
  *
- * COARSE fallback only: fills the whole simulator-panel column. Used for the
- * initial placement before the renderer measures the device bezel's inner
- * screen. Exact pixel fidelity — bezel / rounded corners, zoom toolbar + footer
- * insets, centering, `setZoomFactor` scaling, and scroll/splitter-drag tracking
- * — is produced by `computeNativeSimulatorViewParams` once the renderer pushes
- * the measured inner-screen rect via `SimulatorChannel.SetNativeBounds`.
- */
-export function computeNativeSimulatorBounds(
-  contentWidth: number,
-  contentHeight: number,
-  simWidth: number,
-  headerHeight: number
-): Bounds {
-  return {
-    x: 0,
-    y: headerHeight,
-    width: Math.max(1, Math.min(simWidth, contentWidth)),
-    height: Math.max(1, contentHeight - headerHeight),
-  }
-}
-
-/**
- * Inner-screen corner radius (px) of the device bezel at 100% zoom — mirrors
- * the renderer `borderRadius: 36` on the black inner screen div in
- * `simulator-panel.tsx`. Scaled by the zoom factor in
- * `computeNativeSimulatorViewParams` so the WebContentsView corners stay flush
- * with the scaled bezel.
- */
-export const INNER_SCREEN_RADIUS = 36
-
-/**
- * NATIVE-HOST ONLY. Translate a renderer-measured inner-screen rect (CSS px
- * from the main window content top-left) into the params needed to overlay the
- * simulator `WebContentsView` on it.
- *
- * The renderer reports `getBoundingClientRect()` of the bezel's inner black
- * screen div. Because the simulator is a top-level overlay WebContentsView (not
- * a nested guest), that CSS-px rect maps directly to `setBounds` DIP — no
- * conversion. We just round to integers (setBounds rejects fractionals) and
- * clamp width/height non-negative. `zoomFactor` feeds
- * `webContents.setZoomFactor`; `borderRadius` scales with zoom so the rounded
- * corners line up with the scaled bezel.
+ * The renderer reports `getBoundingClientRect()` of the panel region. Because
+ * the simulator is a top-level overlay WebContentsView (not a nested guest),
+ * that CSS-px rect maps directly to `setBounds` DIP — no conversion. We just
+ * round to integers (setBounds rejects fractionals) and clamp width/height
+ * non-negative. The WCV fills the region as a plain rectangle (no native border
+ * radius); DeviceShell draws the rounded phone and scrolls it inside. `zoomFactor`
+ * feeds `webContents.setZoomFactor`.
  */
 export function computeNativeSimulatorViewParams(
   rect: { x: number; y: number; width: number; height: number },
   zoomPercent: number,
-): { bounds: Bounds; borderRadius: number; zoomFactor: number } {
+): { bounds: Bounds; zoomFactor: number } {
   const zoomFactor = zoomPercent / 100
   return {
     bounds: {
@@ -101,7 +67,6 @@ export function computeNativeSimulatorViewParams(
       width: Math.max(0, Math.round(rect.width)),
       height: Math.max(0, Math.round(rect.height)),
     },
-    borderRadius: Math.max(0, Math.round(INNER_SCREEN_RADIUS * zoomFactor)),
     zoomFactor,
   }
 }

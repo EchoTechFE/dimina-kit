@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dimina DevTools — Simulator Render Stack</title>
+<style>
+  :root {
+    --color-bg:               hsl(  0  0%   7%);
+    --color-bg-panel:         hsl(  0  0%  12%);
+    --color-window:           hsl(  0  0%  26%);
+    --color-window-border:    hsl(  0  0%  62%);
+    --color-view-border:      hsl(  0  0%  78%);
+    --color-webcontents:      hsl(  0  0%  32%);
+    --color-webcontents-border: hsl(  0  0%  72%);
+    --color-simwcv:           hsl(160 30% 16%);
+    --color-simwcv-border:    hsl(160 60% 60%);
+    --color-desk:             hsl(  0  0%  10%);
+    --color-screen:           hsl(210 16% 96%);
+    --color-screen-border:    hsl(  0  0%  88%);
+    --color-nav:              hsl(212 64% 56%);
+    --color-guest:            hsl(  0  0%   4%);
+    --color-guest-border:     hsl(  0  0%  92%);
+    --color-toolbar:          hsl(249 100%  67% / 0.30);
+    --color-toolbar-border:   hsl(249 100%  72%);
+    --color-text:             hsl(  0  0%  95%);
+    --color-text-secondary:   hsl(  0  0%  70%);
+    --color-text-muted:       hsl(  0  0%  52%);
+    --color-accent:           hsl(249 100%  67%);
+    --color-good:             hsl(140 60% 55%);
+    --color-warn:             hsl( 30 90% 60%);
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; background: var(--color-bg); color: var(--color-text);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+    font-size: 14px; line-height: 1.55; -webkit-font-smoothing: antialiased; overflow-x: hidden;
+  }
+  .page-grid { min-height: 100vh; display: grid; grid-template-columns: minmax(0, 1fr) 360px; padding: 44px 52px; gap: 40px; }
+  @media (max-width: 1040px) { .page-grid { grid-template-columns: 1fr; padding: 28px 20px; gap: 24px; } }
+
+  /* ── Stage / 3D stack ── */
+  .stage { position: relative; height: 1180px; perspective: 2800px; perspective-origin: 50% 38%;
+    display: flex; align-items: center; justify-content: center; }
+  .stack {
+    --winH: 520px;                 /* ← drives the "window height" demo */
+    position: relative; width: 760px; height: 520px; transform-style: preserve-3d;
+    transform: rotateX(56deg) rotateZ(-30deg) scale(1.4); transition: transform 1.4s cubic-bezier(0.7, 0, 0.2, 1);
+  }
+  .stack.flat { transform: rotateX(0deg) rotateZ(0deg) scale(1.4); }
+  .stack.flat .layer { transform: translateZ(0); }
+  .stack.flat .layer > .back-face { opacity: 0; }
+  .layer {
+    position: absolute; border-radius: 4px; transform-style: preserve-3d; will-change: transform, opacity;
+    box-shadow: 0 18px 44px hsl(0 0% 0% / 0.6);
+    transition: opacity 220ms ease, box-shadow 220ms ease, transform 1.4s cubic-bezier(0.7,0,0.2,1),
+                height 600ms cubic-bezier(0.7,0,0.2,1);
+  }
+  .layer.is-hidden { opacity: 0 !important; pointer-events: none; }
+  .layer.is-hidden .back-face { display: none; }
+  .layer > .back-face { position: absolute; inset: 0; background: var(--bg, transparent);
+    border: 1.5px solid var(--bd, hsl(0 0% 30%)); border-radius: inherit; transform: translateZ(-10px);
+    filter: brightness(0.5); transition: opacity 1.4s cubic-bezier(0.7,0,0.2,1); pointer-events: none; }
+  .layer-contentview > .back-face { display: none; }
+  .layer .label { position: absolute; left: 14px; bottom: 8px; font-family: ui-monospace,"SF Mono",Menlo,monospace;
+    font-size: 12px; font-weight: 500; color: var(--color-text); letter-spacing: 0.02em; user-select: none;
+    pointer-events: none; text-shadow: 0 2px 10px hsl(0 0% 0% / .95), 0 0 2px hsl(0 0% 0% / .9); }
+  .layer .label.lg { font-size: 14px; left: 20px; bottom: 12px; font-weight: 600; }
+  .layer .sub { position: absolute; right: 12px; bottom: 9px; font-family: ui-monospace,"SF Mono",Menlo,monospace;
+    font-size: 9.5px; color: var(--color-text-secondary); pointer-events: none; text-shadow: 0 2px 8px hsl(0 0% 0% / .95); }
+
+  /* z0 BrowserWindow — height = the window */
+  .layer-window { --bg: var(--color-window); --bd: var(--color-window-border);
+    top: 0; left: 0; right: 0; height: var(--winH); transform: translateZ(0);
+    background: var(--bg); border: 1.5px solid var(--bd); }
+  .layer-window .titlebar { position: absolute; left: 0; right: 0; top: 0; height: 22px;
+    background: hsl(0 0% 10%); border-bottom: 1px solid hsl(0 0% 30%); border-radius: 4px 4px 0 0; }
+  .layer-window .traffic { position: absolute; left: 12px; top: 8px; width: 42px; height: 7px;
+    background: radial-gradient(circle,hsl(0 70% 60%) 0 3.2px,transparent 3.6px) 0 0/14px 7px no-repeat,
+      radial-gradient(circle,hsl(45 80% 55%) 0 3.2px,transparent 3.6px) 14px 0/14px 7px no-repeat,
+      radial-gradient(circle,hsl(135 50% 55%) 0 3.2px,transparent 3.6px) 28px 0/14px 7px no-repeat; }
+
+  /* z1 contentView */
+  .layer-contentview { top: 28px; left: 8px; right: 8px; height: calc(var(--winH) - 36px); transform: translateZ(55px);
+    background: transparent; border: 1.5px dashed var(--color-view-border); box-shadow: none; }
+  .layer-contentview .label { color: var(--color-text-secondary); }
+
+  /* z2 WebContentsView · main renderer — SimulatorPanel DOM: toolbar(fixed) / flex:1 placeholder / pathbar(fixed) */
+  .layer-mainweb { --bg: var(--color-webcontents); --bd: var(--color-webcontents-border);
+    top: 36px; left: 14px; right: 14px; height: calc(var(--winH) - 50px); transform: translateZ(110px);
+    background: var(--bg); border: 1.5px solid var(--bd); }
+  .layer-mainweb .dom-toolbar { position: absolute; left: 0; right: 0; top: 0; height: 30px;  /* FIXED */
+    background: var(--color-toolbar); border-bottom: 1.5px solid var(--color-toolbar-border);
+    display: flex; align-items: center; padding: 0 12px; gap: 8px; }
+  .layer-mainweb .sel { height: 16px; padding: 0 6px; border: 1px solid var(--color-toolbar-border); border-radius: 2px;
+    background: hsl(0 0% 14% / .7); font: 9px ui-monospace, Menlo, monospace; color: var(--color-text); display: flex; align-items: center; }
+  .placeholder { position: absolute; left: 8px; right: 8px; top: 38px; bottom: 26px;  /* flex:1 → shrinks with z2 */
+    border: 1.5px dashed var(--color-simwcv-border); border-radius: 4px; display: flex; align-items: center;
+    justify-content: center; text-align: center; font: 10px ui-monospace, Menlo, monospace; color: var(--color-simwcv-border);
+    background: hsl(160 30% 16% / .12); }
+  .layer-mainweb .pathbar { position: absolute; left: 8px; right: 8px; bottom: 6px; height: 16px;  /* FIXED at z2 bottom */
+    border-top: 1px solid hsl(0 0% 40%); color: var(--color-good); font: 9px ui-monospace, Menlo, monospace; padding-top: 2px; text-indent: 4px; }
+
+  /* z3 Simulator WCV = flex:1 region (rectangular, overflow:hidden = STRAIGHT clip). Height tracks the region. */
+  .layer-simwcv { --bg: var(--color-simwcv); --bd: var(--color-simwcv-border);
+    top: 74px; left: 22px; right: 22px; height: calc(var(--winH) - 114px); transform: translateZ(170px);
+    background: var(--bg); border: 1.5px solid var(--bd); overflow: hidden; }
+  .layer-simwcv .desk { position: absolute; inset: 0; background: var(--color-desk); }
+  /* the PHONE — FIXED device size; never changes with --winH → clips at z3's straight bottom when region shrinks */
+  .layer-simwcv .phone { position: absolute; left: 50%; top: 8px; transform: translateX(-50%);
+    width: 150px; height: 326px; background: var(--color-screen); border: 1px solid var(--color-screen-border);
+    border-radius: 22px; overflow: hidden; display: flex; flex-direction: column; align-items: center; }
+  .layer-simwcv .phone .notch { width: 52px; height: 12px; background: hsl(0 0% 6%); border-radius: 0 0 8px 8px; flex: none; }
+  .layer-simwcv .phone .nav { margin-top: -12px; width: 100%; height: 30px; background: var(--color-nav);
+    display: flex; align-items: flex-end; justify-content: center; padding-bottom: 3px; font: 8px -apple-system, sans-serif; color: #fff; flex: none; }
+  .layer-simwcv .phone .page { flex: 1; width: 100%; background: var(--color-screen); border-top: 1px solid hsl(0 0% 88%);
+    display: flex; align-items: center; justify-content: center; color: hsl(0 0% 50%); font: 8px ui-monospace, Menlo, monospace; }
+  .layer-simwcv .phone .home { width: 40px; height: 4px; background: hsl(0 0% 22%); border-radius: 99px; margin: 5px 0 7px; flex: none; }
+  .scroll-hint { position: absolute; right: 5px; top: 50%; transform: translateY(-50%); font: 8.5px ui-monospace, Menlo, monospace;
+    color: var(--color-warn); writing-mode: vertical-rl; letter-spacing: 1px; }
+  .layer-simwcv .label { color: hsl(160 50% 82%); }
+
+  /* z4 render-host <webview> guest — FIXED device size; constant across --winH (the point: unaffected).
+     Centered via margin-left (NOT translateX) so it stays aligned in flat view, where
+     `.stack.flat .layer { transform: translateZ(0) }` would otherwise wipe a translateX. */
+  .layer-guest { --bg: var(--color-guest); --bd: var(--color-guest-border);
+    left: 50%; margin-left: -60px; width: 120px; top: 134px; height: 218px; transform: translateZ(225px);
+    background: var(--bg); border: 1.5px solid var(--bd); border-radius: 3px; display: flex; align-items: center; justify-content: center; }
+  .layer-guest .label { position: static; color: var(--color-text); font-size: 9px; text-align: center; padding: 2px 4px; line-height: 1.4; }
+
+  /* ── Hover ── */
+  .stack:hover .layer:not(.is-hidden) { opacity: 0.30; }
+  .stack .layer:not(.is-hidden):hover { opacity: 1; box-shadow: 0 0 0 2px var(--color-accent), 0 18px 36px hsl(0 0% 0% / 0.7); }
+  .stack .layer:not(.is-hidden):hover .label { color: var(--color-accent); }
+
+  /* ── Legend ── */
+  .legend { align-self: start; position: sticky; top: 44px; display: flex; flex-direction: column; gap: 16px; }
+  .panel { border: 1px solid hsl(0 0% 24%); border-radius: 8px; background: var(--color-bg-panel); overflow: hidden; }
+  .panel-head { padding: 11px 14px; border-bottom: 1px solid hsl(0 0% 22%); font-size: 11px; font-weight: 600;
+    letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-text-secondary);
+    display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .all-btn { border: 1px solid hsl(0 0% 30%); background: transparent; color: var(--color-text-secondary);
+    font: 10px inherit; letter-spacing: 0.06em; padding: 4px 9px; border-radius: 3px; cursor: pointer; font-family: inherit; }
+  .all-btn:hover { color: var(--color-accent); border-color: var(--color-accent); }
+  .all-btn.on { color: var(--color-accent); border-color: var(--color-accent); background: hsl(249 100% 67% / .1); }
+
+  .winctl { padding: 14px; }
+  .winctl .btns { display: flex; gap: 8px; margin-bottom: 12px; }
+  .winctl input[type=range] { width: 100%; accent-color: var(--color-accent); }
+  .winctl .row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-size: 12px; }
+  .winctl .val { color: var(--color-accent); font-family: ui-monospace, Menlo, monospace; }
+  .winctl .state { font-size: 12.5px; padding: 8px 10px; border-radius: 6px; border: 1px solid hsl(0 0% 26%); background: hsl(0 0% 9%); margin-top: 4px; }
+  .ok { color: var(--color-good); } .wn { color: var(--color-warn); }
+
+  .tree { padding: 12px 14px 16px; font-family: ui-monospace,"SF Mono",Menlo,monospace; font-size: 11.5px; }
+  .tree .branch { position: relative; margin-left: 10px; padding-left: 14px; border-left: 1px dashed hsl(0 0% 30%); }
+  .tree .node { position: relative; display: flex; align-items: center; gap: 8px; padding: 4px; user-select: none; }
+  .tree .branch > .node::before { content: ""; position: absolute; left: -14px; top: 50%; width: 10px; height: 1px; border-top: 1px dashed hsl(0 0% 30%); }
+  .tree .node.native { cursor: pointer; border-radius: 3px; }
+  .tree .node.native:hover { background: hsl(0 0% 16%); }
+  .tree .node.native.is-active { background: hsl(249 100% 67% / 0.08); }
+  .tree .node.native.is-active .name { color: var(--color-accent); }
+  .tree.has-hover .node.native:not(.is-active) { opacity: 0.4; }
+  .tree .node.native .eye { width: 26px; height: 26px; flex-shrink: 0; border-radius: 4px; border: 1px solid hsl(0 0% 32%);
+    background: hsl(0 0% 14%); display: inline-flex; align-items: center; justify-content: center; color: var(--color-text); cursor: pointer; }
+  .tree .node.native .eye:hover { border-color: var(--color-accent); color: var(--color-accent); }
+  .tree .node.native.is-hidden .eye { background: transparent; color: var(--color-text-muted); }
+  .tree .node.native.is-hidden .name { color: var(--color-text-muted); text-decoration: line-through; }
+  .tree .swatch { width: 9px; height: 9px; border-radius: 2px; border: 1px solid hsl(0 0% 50%); flex-shrink: 0; }
+  .tree .node[data-layer="window"]      .swatch { background: var(--color-window); border-color: var(--color-window-border); }
+  .tree .node[data-layer="contentview"] .swatch { background: transparent; border: 1.5px dashed var(--color-view-border); }
+  .tree .node[data-layer="mainweb"]     .swatch { background: var(--color-webcontents); border-color: var(--color-webcontents-border); }
+  .tree .node[data-layer="simwcv"]      .swatch { background: var(--color-simwcv); border-color: var(--color-simwcv-border); }
+  .tree .node[data-layer="guest"]       .swatch { background: var(--color-guest); border-color: var(--color-guest-border); }
+  .tree .node .name { flex: 1; color: var(--color-text); font-size: 12px; }
+  .tree .node .z { font-size: 10px; color: var(--color-text-muted); }
+  .tree .node .kind { font-size: 9.5px; color: var(--color-text-muted); padding: 1px 5px; border: 1px solid hsl(0 0% 26%); border-radius: 3px; white-space: nowrap; flex-shrink: 0; }
+  .tree .node.dom { padding: 3px 4px; }
+  .tree .node.dom .name { color: var(--color-text-secondary); font-size: 11px; }
+
+  .notes { padding: 12px 16px 14px; font-size: 12.5px; }
+  .notes ul { margin: 0; padding-left: 16px; }
+  .notes li { margin: 6px 0; color: var(--color-text); }
+  .notes code { background: hsl(0 0% 18%); padding: 1px 5px; border-radius: 4px; font-size: 11.5px; }
+</style>
+</head>
+<body>
+  <div class="page-grid">
+    <section class="stage" aria-label="simulator render stack">
+      <div class="stack">
+        <div class="layer layer-window" data-layer="window">
+          <div class="back-face"></div><div class="titlebar"></div><div class="traffic"></div>
+          <span class="label lg">BrowserWindow</span>
+        </div>
+        <div class="layer layer-contentview" data-layer="contentview">
+          <span class="label lg">View · contentView</span>
+        </div>
+        <div class="layer layer-mainweb" data-layer="mainweb">
+          <div class="back-face"></div>
+          <div class="dom-toolbar"><div class="sel">iPhone X</div><div class="sel">100%</div></div>
+          <div class="placeholder">flex:1 占位 div（空）<br/>= 模拟器 WCV 的位置</div>
+          <div class="pathbar">pages/index/index　← 始终可见</div>
+          <span class="label lg">WebContentsView · 主渲染</span>
+          <span class="sub">SimulatorPanel DOM</span>
+        </div>
+        <div class="layer layer-simwcv" data-layer="simwcv">
+          <div class="back-face"></div><div class="desk"></div>
+          <div class="phone">
+            <div class="notch"></div><div class="nav">DevTools Demo</div>
+            <div class="page">页面（固定）</div><div class="home"></div>
+          </div>
+          <div class="scroll-hint">▲ 放不下→区域内滚动·直边裁剪 ▼</div>
+          <span class="label lg">Simulator WebContentsView</span>
+          <span class="sub">= flex:1 区域 · 矩形 · 直边裁剪</span>
+        </div>
+        <div class="layer layer-guest" data-layer="guest">
+          <div class="back-face"></div>
+          <span class="label">&lt;webview&gt; · 固定·不受影响</span>
+        </div>
+      </div>
+    </section>
+
+    <aside class="legend">
+      <div class="panel">
+        <div class="panel-head">
+          <span>窗口大小（核对）</span>
+          <button class="all-btn" id="viewBtn">3D 视角</button>
+        </div>
+        <div class="winctl">
+          <div class="btns">
+            <button class="all-btn" id="bigBtn">放大窗口</button>
+            <button class="all-btn" id="smallBtn">缩小窗口</button>
+          </div>
+          <div class="row"><span>窗口高度</span><span class="val" id="winHVal">520</span></div>
+          <input type="range" id="winH" min="250" max="520" value="520">
+          <div class="state" id="fitState"></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><span>Layers (z 后→前)</span><button class="all-btn" id="allBtn">全部显示</button></div>
+        <div class="tree" id="tree"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><span>不变量</span></div>
+        <div class="notes"><ul>
+          <li><code>flex:1</code> 只决定 <b>z3</b> 这层多大 → <span class="ok">z3 里的手机 + z4 webview 固定尺寸，完全不受影响</span>（拖滑块看 z4 不动）。</li>
+          <li>区域边裁剪 = z3 <b>WCV 自己的网页视口</b> = <span class="ok">直边</span>；<span class="wn">WCV 不加 native 圆角</span>。</li>
+          <li>设备圆角/刘海在 z3 的 DeviceShell（CSS）→ <span class="ok">永远是圆的</span>。</li>
+          <li>z3 永不超出 flex:1 区域 → <span class="ok">工具栏 / 底 bar 永不被盖</span>。</li>
+        </ul></div>
+      </div>
+    </aside>
+  </div>
+
+  <script>
+  (() => {
+    const LAYERS = {
+      window:      { name: 'BrowserWindow',            z: 0 },
+      contentview: { name: 'View · contentView',       z: 1, kind: 'container' },
+      mainweb:     { name: 'WebContentsView · 主渲染',  z: 2, kind: 'renderer' },
+      simwcv:      { name: 'Simulator WebContentsView', z: 3, kind: '= flex:1 区域' },
+      guest:       { name: '<webview> render-host',     z: 4, kind: 'guest · 固定' },
+    };
+    const TREE = [
+      { layer: 'window', children: [
+        { layer: 'contentview', children: [
+          { layer: 'mainweb', children: [
+            { dom: 'ProjectToolbar（device / zoom）' },
+            { dom: 'flex:1 占位 div（= WCV 的位置）' },
+            { dom: 'BottomBar（页面路径）' },
+          ]},
+          { layer: 'simwcv', children: [
+            { dom: 'DeviceShell：整机·固定尺寸·圆角/刘海(CSS)·超出滚动' },
+            { layer: 'guest' },
+          ]},
+        ]},
+      ]},
+    ];
+    const EYE_OPEN = '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 8 C 3.5 4.5, 5.5 3.5, 8 3.5 C 10.5 3.5, 12.5 4.5, 14.5 8 C 12.5 11.5, 10.5 12.5, 8 12.5 C 5.5 12.5, 3.5 11.5, 1.5 8 Z"/><circle cx="8" cy="8" r="2"/></svg>';
+    const EYE_OFF  = '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8 C 4 5, 6 4, 8 4 C 10 4, 12 5, 14 8"/><line x1="3" y1="3" x2="13" y2="13"/></svg>';
+    const esc = s => s.replace(/[<>&]/g, c => ({ '<':'&lt;','>':'&gt;','&':'&amp;' }[c]));
+    function renderNode(node) {
+      let children = '';
+      if (node.children?.length) children = '<div class="branch">' + node.children.map(renderNode).join('') + '</div>';
+      let html;
+      if (node.dom) html = `<div class="node dom"><span class="name">${esc(node.dom)}</span><span class="kind">DOM</span></div>`;
+      else { const m = LAYERS[node.layer];
+        html = `<div class="node native" data-layer="${node.layer}"><button class="eye">${EYE_OPEN}</button>`
+          + `<span class="swatch"></span><span class="name">${esc(m.name)}</span>`
+          + (m.kind ? `<span class="kind">${esc(m.kind)}</span>` : '') + `<span class="z">z${m.z}</span></div>`;
+      }
+      return html + children;
+    }
+    const tree = document.getElementById('tree');
+    tree.innerHTML = TREE.map(renderNode).join('');
+
+    const stack = document.querySelector('.stack');
+    const layers = [...stack.querySelectorAll('.layer')];
+    const items = [...tree.querySelectorAll('.node.native')];
+    const findLayer = id => layers.find(l => l.dataset.layer === id);
+    const findItem  = id => items.find(i => i.dataset.layer === id);
+    function setHidden(id, h) { const l = findLayer(id), it = findItem(id); if (!l || !it) return;
+      l.classList.toggle('is-hidden', h); it.classList.toggle('is-hidden', h); it.querySelector('.eye').innerHTML = h ? EYE_OFF : EYE_OPEN; }
+    function setActive(id) { items.forEach(i => i.classList.toggle('is-active', i.dataset.layer === id)); tree.classList.toggle('has-hover', Boolean(id)); }
+    function highlight(id) { setActive(id); layers.forEach(l => { if (l.classList.contains('is-hidden')) return;
+      l.style.opacity = l.dataset.layer === id ? '1' : '0.30';
+      l.style.boxShadow = l.dataset.layer === id ? '0 0 0 2px var(--color-accent), 0 18px 36px hsl(0 0% 0% / 0.7)' : ''; }); }
+    function clear() { setActive(null); layers.forEach(l => { l.style.opacity=''; l.style.boxShadow=''; }); }
+    layers.forEach(l => { l.addEventListener('mouseenter', () => !l.classList.contains('is-hidden') && setActive(l.dataset.layer));
+      l.addEventListener('mouseleave', () => setActive(null)); });
+    items.forEach(it => { it.addEventListener('mouseenter', () => !it.classList.contains('is-hidden') && highlight(it.dataset.layer));
+      it.addEventListener('mouseleave', clear);
+      it.querySelector('.eye').addEventListener('click', e => { e.stopPropagation();
+        const id = it.dataset.layer; setHidden(id, !findLayer(id).classList.contains('is-hidden')); }); });
+    document.getElementById('allBtn').addEventListener('click', () => Object.keys(LAYERS).forEach(id => setHidden(id, false)));
+
+    const viewBtn = document.getElementById('viewBtn');
+    function setView(flat) { stack.classList.toggle('flat', flat); viewBtn.textContent = flat ? '3D 视角' : '正面视角'; }
+    setView(true); setTimeout(() => setView(false), 700);
+    viewBtn.addEventListener('click', () => setView(!stack.classList.contains('flat')));
+
+    // ── window-size demo: drives --winH on the stack; z2/z3 shrink, phone(z3)+z4 stay fixed ──
+    const winH = document.getElementById('winH'), winHVal = document.getElementById('winHVal'), fitState = document.getElementById('fitState');
+    const PHONE_FIT = 326 + 8 + 114; // phone height + top + (74 top inset + 40 bottom inset) ⇒ z3 fits when winH ≥ this
+    function applyWin() {
+      const h = +winH.value;
+      stack.style.setProperty('--winH', h + 'px');
+      winHVal.textContent = h;
+      fitState.innerHTML = h >= PHONE_FIT
+        ? '<span class="ok">设备放得下</span>：z3 区域 ≥ 手机，居中无滚动，四角圆'
+        : '<span class="wn">放不下</span>：z3 区域变小 → 手机<b>固定尺寸</b>、直边裁剪、可滚；<b>z4 不动</b>；底 bar 仍在';
+    }
+    winH.addEventListener('input', applyWin);
+    document.getElementById('bigBtn').addEventListener('click', () => { winH.value = 520; applyWin(); });
+    document.getElementById('smallBtn').addEventListener('click', () => { winH.value = 280; applyWin(); });
+    applyWin();
+  })();
+  </script>
+</body>
+</html>

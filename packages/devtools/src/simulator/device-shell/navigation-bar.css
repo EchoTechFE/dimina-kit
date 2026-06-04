@@ -1,15 +1,29 @@
 .nav-bar {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
+  /*
+   * Default nav is IN-FLOW: the flex column reserves its real rendered height
+   * (status bar + 44pt nav row) so the page viewport/webview sits below it
+   * with no magic-number padding. box-sizing:border-box makes the inline
+   * height (statusBarHeight + navBarHeight) the TOTAL — without it the
+   * paddingTop:statusBarHeight is added on top (content-box), inflating the
+   * bar (e.g. 88 → 132) and pushing content too far down.
+   */
+  position: relative;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  z-index: 10;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', sans-serif;
 }
 
 .nav-bar--custom {
+  /*
+   * Custom nav overlays the page (which renders full-bleed underneath). Take
+   * it out of flow and stack it above the page webview (z-index:100).
+   */
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 200;
   background-color: transparent !important;
   pointer-events: none;
 }

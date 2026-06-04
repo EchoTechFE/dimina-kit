@@ -3,6 +3,7 @@ import type { IpcMainEvent, IpcMainInvokeEvent, WebContents } from 'electron'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { BRIDGE_CHANNELS as C, SIMULATOR_EVENTS as E } from '../../shared/bridge-channels.js'
+import type { NativeDeviceInfo } from '../../shared/ipc-channels.js'
 import { isPersistentSimulatorApi } from '../../shared/simulator-api-metadata.js'
 import { devtoolsPackageRoot } from '../utils/paths.js'
 import type {
@@ -41,6 +42,7 @@ import {
   serviceHostSpec,
 } from '../windows/service-host-window/create.js'
 import { ServiceHostPool } from '../services/service-host-pool/pool.js'
+import { createConsoleForwarder } from '../services/console-forward/index.js'
 import { STORAGE_API_NAMES } from '../services/simulator-storage/index.js'
 
 const STACK_ID = 'stack_0'
@@ -191,6 +193,10 @@ export interface BridgeRouterHandle {
   resolveRenderWc(bridgeId: string): WebContents | null
   /** The hidden service-host window WebContents for the active (or named) app. */
   getServiceWc(appId?: string): WebContents | null
+  /** The service-host window WebContents for the app that owns a page bridgeId,
+   * or null. Lets render-side consumers (console forwarder) target the matching
+   * app's service host even with multiple sessions open. */
+  getServiceWcForBridge(bridgeId: string): WebContents | null
   /** The visible page's render WebContents for the active (or named) app. */
   getActiveRenderWc(appId?: string): WebContents | null
   /** The visible top-of-stack page bridgeId for the active (or named) app. */
@@ -201,6 +207,10 @@ export interface BridgeRouterHandle {
   getPageStack?(appId?: string): PageStackEntry[] | null
   /** Subscribe to render-side activity (domReady / active-page change). */
   onRenderEvent(listener: (event: RenderEvent) => void): () => void
+  /** The currently-selected device (renderer toolbar), or null pre-selection. */
+  getDevice(): NativeDeviceInfo | null
+  /** Cache the selected device + push DEVICE_CHANGE to the live simulator WC(s). */
+  setDevice(device: NativeDeviceInfo): void
 }
 
 /**
@@ -263,17 +273,26 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
 
   installResourceProtocolHandlers(ctx, state)
 
+  // The currently-selected device (renderer toolbar). Cached here so it can ride
+  // the NATIVE_HOST_ENABLED reply (race-free DeviceShell init) and so the
+  // safe-area service can read it when a render-host guest attaches.
+  let currentDevice: NativeDeviceInfo | null = null
+
   // Native-host enablement query. The simulator webview's preload can't read the
   // launch `process.env` (and additionalArguments don't reach webview guests),
   // nor can it compute file paths (no node:path/url in the guest preload), so it
   // asks main synchronously at install time for the flag + the render-host URLs.
   const onNativeHostQuery = (event: IpcMainEvent): void => {
     // native-host is the sole runtime: always reply enabled with the render-host
-    // file:// URLs the simulator preload needs.
+    // file:// URLs the simulator preload needs. `device` rides along so the
+    // DeviceShell mounts with the right bezel size synchronously (the renderer
+    // pushes SetDeviceInfo before AttachNative, so the cache is populated by the
+    // time the simulator preload runs this sendSync).
     const reply: NativeHostConfig = {
       enabled: true,
       renderHostHtmlUrl: pathToFileURL(path.join(devtoolsPackageRoot, 'dist/render-host/pageFrame.html')).toString(),
       renderPreloadUrl: pathToFileURL(path.join(devtoolsPackageRoot, 'dist/render-host/preload.cjs')).toString(),
+      device: currentDevice ?? undefined,
     }
     event.returnValue = reply
   }
@@ -306,6 +325,12 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
       const ap = resolveCurrentApp(state, ctx, appId)
       return ap && !ap.serviceWc.isDestroyed() ? ap.serviceWc : null
     },
+    getServiceWcForBridge: (bridgeId) => {
+      const page = state.pageSessions.get(bridgeId)
+      if (!page) return null
+      const ap = state.appSessions.get(page.appSessionId)
+      return ap && !ap.serviceWc.isDestroyed() ? ap.serviceWc : null
+    },
     getActiveBridgeId: (appId) => {
       const ap = resolveCurrentApp(state, ctx, appId)
       if (!ap) return null
@@ -326,8 +351,39 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
       renderEventListeners.add(listener)
       return () => renderEventListeners.delete(listener)
     },
+    getDevice: () => currentDevice,
+    setDevice: (device) => {
+      currentDevice = device
+      // Push to the live simulator WC(s) so a mounted DeviceShell re-renders the
+      // bezel/status-bar/notch. Pre-spawn there is no session yet — the initial
+      // device rides NATIVE_HOST_ENABLED instead. Dedupe across app sessions
+      // that share one simulator WCV.
+      const seen = new Set<number>()
+      for (const ap of state.appSessions.values()) {
+        const wc = ap.simulatorWc
+        if (wc && !wc.isDestroyed() && !seen.has(wc.id)) {
+          seen.add(wc.id)
+          wc.send(E.DEVICE_CHANGE, device)
+        }
+      }
+    },
   }
   ctx.bridge = bridgeHandle
+
+  // Always-on guest console fan-out. Owns `ctx.guestConsole` (the sink the
+  // consoleLog case below routes to) so that render-layer console output is
+  // mirrored into the service host's own console — surfacing it in the embedded
+  // Chrome DevTools (attached to the service host) prefixed `[视图]` — regardless
+  // of whether an automation client is connected. Automation now SUBSCRIBES to
+  // this forwarder instead of clobbering `ctx.guestConsole`.
+  const consoleForwarder = createConsoleForwarder(bridgeHandle)
+  ctx.consoleForwarder = consoleForwarder
+  ctx.guestConsole = consoleForwarder
+  ctx.registry.add(() => {
+    void consoleForwarder.dispose()
+    ctx.consoleForwarder = undefined
+    ctx.guestConsole = undefined
+  })
 
   // DeviceShell → main: record the visible top-of-stack page bridgeId so the
   // accessor above can resolve "the active page". Sender-validated against the
@@ -1168,7 +1224,17 @@ function makeLoadResource(ap: AppSession, page: PageSession, target: 'service' |
       root: ap.root,
       baseUrl: ap.resourceBaseUrl,
       resourceBaseUrl: ap.resourceBaseUrl,
-      hostEnv: ap.hostEnv,
+      // dimina's service runtime reads hostEnv as `{ systemInfo, menuRect }`
+      // (core/host-env.js init → getSystemInfo/getMenuRect; invokeAPI resolves
+      // getSystemInfoSync/getWindowInfo/getDeviceInfo from hostEnv.systemInfo).
+      // We previously sent the FLAT HostEnvSnapshot, so `systemInfo` was null →
+      // `wx.getSystemInfoSync()` returned null and pages reading
+      // `.screenWidth` threw. Nest it under `systemInfo`. (render does NOT read
+      // hostEnv, so this is service-only; the devtools sync-api-patch reads the
+      // separate __diminaSpawnContext.hostEnvSnapshot and is unaffected.)
+      // menuRect stays null as before — getMenuButtonBoundingClientRect is
+      // served by the sync-api-patch / DeviceShell capsule, not this path.
+      hostEnv: { systemInfo: ap.hostEnv, menuRect: null },
     },
   }
 }

@@ -1,0 +1,88 @@
+.device-statusbar {
+  /*
+   * Pinned to the device top, above the page webview (z 100) and the nav-bar
+   * (z 200). pointer-events:none so it never steals taps from the page/capsule.
+   */
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 28px;
+  box-sizing: border-box;
+  pointer-events: none;
+  font: 600 14px/1 -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
+  letter-spacing: 0.2px;
+}
+
+.device-statusbar__time {
+  font-variant-numeric: tabular-nums;
+}
+
+.device-statusbar__notch {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #000000;
+}
+
+.device-statusbar__icons {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Simple glyph stand-ins drawn from the current foreground color. */
+.device-statusbar__signal,
+.device-statusbar__wifi,
+.device-statusbar__battery {
+  display: block;
+  background: currentColor;
+}
+
+.device-statusbar__signal {
+  width: 17px;
+  height: 11px;
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 17 11'><rect x='0' y='8' width='3' height='3' rx='1'/><rect x='4.5' y='6' width='3' height='5' rx='1'/><rect x='9' y='3' width='3' height='8' rx='1'/><rect x='13.5' y='0' width='3' height='11' rx='1'/></svg>") no-repeat center / contain;
+  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 17 11'><rect x='0' y='8' width='3' height='3' rx='1'/><rect x='4.5' y='6' width='3' height='5' rx='1'/><rect x='9' y='3' width='3' height='8' rx='1'/><rect x='13.5' y='0' width='3' height='11' rx='1'/></svg>") no-repeat center / contain;
+}
+
+.device-statusbar__wifi {
+  width: 16px;
+  height: 11px;
+  border-radius: 1px;
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 11'><path d='M8 2.2c2.3 0 4.4.9 6 2.4l-1.4 1.5C11.4 4.9 9.8 4.2 8 4.2S4.6 4.9 3.4 6.1L2 4.6C3.6 3.1 5.7 2.2 8 2.2zm0 3.5c1.3 0 2.5.5 3.4 1.4L10 8.6c-.5-.5-1.2-.8-2-.8s-1.5.3-2 .8L4.6 7.1C5.5 6.2 6.7 5.7 8 5.7zm0 3.3l1.4 1.4c-.4.4-.9.6-1.4.6s-1-.2-1.4-.6L8 9z'/></svg>") no-repeat center / contain;
+  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 11'><path d='M8 2.2c2.3 0 4.4.9 6 2.4l-1.4 1.5C11.4 4.9 9.8 4.2 8 4.2S4.6 4.9 3.4 6.1L2 4.6C3.6 3.1 5.7 2.2 8 2.2zm0 3.5c1.3 0 2.5.5 3.4 1.4L10 8.6c-.5-.5-1.2-.8-2-.8s-1.5.3-2 .8L4.6 7.1C5.5 6.2 6.7 5.7 8 5.7zm0 3.3l1.4 1.4c-.4.4-.9.6-1.4.6s-1-.2-1.4-.6L8 9z'/></svg>") no-repeat center / contain;
+}
+
+.device-statusbar__battery {
+  width: 25px;
+  height: 12px;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  background: transparent;
+  position: relative;
+}
+
+.device-statusbar__battery::before {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  right: 8px;
+  border-radius: 1px;
+  background: currentColor;
+}
+
+.device-statusbar__battery::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  right: -3px;
+  width: 2px;
+  border-radius: 0 1px 1px 0;
+  background: currentColor;
+}

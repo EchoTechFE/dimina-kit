@@ -1,4 +1,4 @@
-import { setupCdpPort, registerDifileScheme } from './bootstrap.js'
+import { setupCdpPort, registerDifileScheme, suppressInsecureCspWarnings } from './bootstrap.js'
 import { registerProjectFsIpc } from '../ipc/project-fs.js'
 
 import { app, BrowserWindow, nativeImage, session } from 'electron'
@@ -30,6 +30,7 @@ import {
   setNativeOverviewProvider,
 } from '../services/mcp/index.js'
 import { setupSimulatorStorage } from '../services/simulator-storage/index.js'
+import { createNetworkForwarder } from '../services/network-forward/index.js'
 import { setupSimulatorWxml } from '../services/simulator-wxml/index.js'
 import { setupSimulatorAppData } from '../services/simulator-appdata/index.js'
 import { setupSimulatorCurrentPage } from '../services/simulator-current-page/index.js'
@@ -328,6 +329,10 @@ export function createWorkbenchApp(config: WorkbenchAppConfig = {}) {
   try { app.setName(config.appName ?? 'Dimina DevTools') } catch { /* electron stub in tests */ }
 
   setupCdpPort()
+  // Dev-only: silence Electron's built-in Insecure-CSP console warning. No-op
+  // when packaged; touches only the log-suppression env var, no security
+  // settings. Set before any window is created.
+  suppressInsecureCspWarnings()
   // Privileged scheme registration must run before `app.whenReady` —
   // registering it later throws.
   registerDifileScheme()
@@ -507,6 +512,20 @@ export function createWorkbenchApp(config: WorkbenchAppConfig = {}) {
       // the default dimina-fe path (which sources both from the simulator
       // miniappSnapshot transport), so only wire them when native-host is on.
       if (context.bridge?.isNativeHost()) {
+        // Native-host: surface the simulator WCV's network (wx.request/download/
+        // upload run there, not in the service host) in the embedded DevTools by
+        // injecting its raw Network.* CDP events into the DevTools front-end so the
+        // native Network tab renders them (service-host console line is the
+        // fallback). The ViewManager calls attachSimulator + setDevtoolsHost from
+        // attachNativeSimulator once the simulator WCV + DevTools host exist;
+        // getServiceWc here is the fallback sink target.
+        const networkForward = createNetworkForwarder({
+          getServiceWc: (appId) => context.bridge?.getServiceWc(appId) ?? null,
+        })
+        context.networkForward = networkForward
+        context.registry.add(networkForward)
+        context.registry.add(() => { context.networkForward = undefined })
+
         context.registry.add(setupSimulatorWxml(mainWindow.webContents, {
           senderPolicy: context.senderPolicy,
           bridge: context.bridge,

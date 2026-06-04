@@ -16,27 +16,32 @@ export interface WindowOptions {
   minHeight?: number
   indexHtml: string
   /**
-   * Absolute path to the simulator preload bundle. Registered at the session
-   * level so every frame inside the simulator <webview> gets the preload that
-   * exposes the `wx` runtime to the mini-program.
+   * Absolute path to the simulator preload bundle. Retained on the public
+   * `createMainWindow` contract for source compatibility, but no longer consumed
+   * here: under native-host (the sole runtime) every frame on the
+   * `persist:simulator` session carries its OWN dedicated preload —
+   *   - the simulator content WebContentsView gets the `.cjs` sibling via
+   *     `webPreferences.preload` (see view-manager `attachNativeSimulator`),
+   *   - the per-page render-host `<webview>` guests get `render-host/preload.cjs`
+   *     (set as the `<webview preload>` attribute from `renderPreloadUrl`),
+   *   - the service-host BrowserWindows get `service-host/preload.cjs`.
+   * A session-level `frame` preload was the OLD default `<webview>` path's entry
+   * point; that path is gone, and re-registering this bundle as a session frame
+   * preload would (a) double-install the simulator instrumentation on the WCV
+   * (session + webPreferences) and (b) fail to load as ESM (the `.js` bundle
+   * under package `"type":"module"` throws `require is not defined`). So we do
+   * NOT register it here.
    */
   simulatorPreloadPath: string
 }
 
 let simulatorSessionConfigured = false
 
-function configureSimulatorSession(simulatorPreloadPath: string): void {
+function configureSimulatorSession(): void {
   if (simulatorSessionConfigured) return
   simulatorSessionConfigured = true
 
   const simulatorSession = session.fromPartition('persist:simulator')
-
-  // Inject the simulator preload on every frame in this session. This is the
-  // mini-program runtime entry point (exposes `wx`, page registers, etc.).
-  simulatorSession.registerPreloadScript({
-    type: 'frame',
-    filePath: simulatorPreloadPath,
-  })
 
   simulatorSession.webRequest.onBeforeSendHeaders((details, callback) => {
     const forcedReferer = getSimulatorServicewechatReferer()
@@ -59,7 +64,7 @@ function configureSimulatorSession(simulatorPreloadPath: string): void {
 }
 
 export function createMainWindow(opts: WindowOptions): BrowserWindow {
-  configureSimulatorSession(opts.simulatorPreloadPath)
+  configureSimulatorSession()
 
   const mainWindow = new BrowserWindow({
     width: opts.width ?? 1280,
@@ -86,7 +91,10 @@ export function createMainWindow(opts: WindowOptions): BrowserWindow {
       mainWindow.showInactive()
     } else {
       mainWindow.show()
-      if (!app.isPackaged) {
+      // Don't auto-open a detached DevTools for the devtools UI shell itself —
+      // it's noise for normal use (the mini-app's Console lives in the embedded
+      // right-panel DevTools, not here). Opt in via env for debugging the shell.
+      if (!app.isPackaged && process.env.DIMINA_DEVTOOLS_MAIN_INSPECTOR === '1') {
         mainWindow.webContents.openDevTools({ mode: 'detach' })
       }
     }
@@ -100,7 +108,8 @@ export function createMainWindow(opts: WindowOptions): BrowserWindow {
 
   mainWindow.webContents.on('will-attach-webview', (event, webPreferences, params) => {
     // Pin the simulator <webview> onto `persist:simulator` so it shares storage
-    // with the rest of the session and picks up the session-registered preload.
+    // (and the session CORS/referer rules) with the rest of the session. The
+    // preload itself rides on the `<webview preload>` attribute, not the session.
     // Empirically (Electron 41) `webPreferences.partition` is the field the
     // guest session actually consults; `params.partition` alone is a no-op,
     // so we write both belt-and-braces.

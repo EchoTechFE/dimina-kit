@@ -216,6 +216,71 @@ export async function evalInWebContentsByUrl<T = unknown>(
   }, { urlSubstring, expression }) as Promise<T>
 }
 
+export interface ConsoleErrorEntry {
+  level: 'error' | 'warning'
+  message: string
+  url: string
+  source: string
+}
+
+/**
+ * Collect `error`/`warning` console messages from EVERY webContents (existing
+ * and future) into a main-process global. Install this right after
+ * `_electron.launch`, BEFORE opening a project, so it captures preload-load
+ * failures and early frame errors (the simulator WCV, render-host guests and
+ * service-host window are created on project open).
+ *
+ * Why a real test for this: console-level failures (a preload that fails to
+ * load, a bridge that throws) don't break DOM-existence / data-flow assertions,
+ * so the rest of the suite stays green while the simulator quietly logs errors.
+ * `assertNoConsoleErrors` turns that invisible breakage into a hard failure.
+ */
+export async function installConsoleCollector(electronApp: ElectronApplication): Promise<void> {
+  await electronApp.evaluate(({ app, webContents }) => {
+    const g = globalThis as unknown as { __e2eConsoleErrors?: unknown[] }
+    if (g.__e2eConsoleErrors) return
+    const errors: Array<{ level: string; message: string; url: string; source: string }> = []
+    g.__e2eConsoleErrors = errors
+    const levelName = (lvl: unknown): string =>
+      typeof lvl === 'string' ? lvl : (['verbose', 'info', 'warning', 'error'][Number(lvl)] ?? String(lvl))
+    const attach = (wc: Electron.WebContents): void => {
+      wc.on('console-message', (...args: unknown[]) => {
+        // Electron 41 may pass either (event, details) or the legacy
+        // (event, level, message, line, sourceId). Handle both shapes.
+        let level: string
+        let message: string
+        let source = ''
+        const a1 = args[1]
+        if (a1 && typeof a1 === 'object' && 'level' in (a1 as object)) {
+          const d = a1 as { level: unknown; message?: unknown; sourceId?: unknown }
+          level = levelName(d.level)
+          message = String(d.message ?? '')
+          source = String(d.sourceId ?? '')
+        } else {
+          level = levelName(args[1])
+          message = String(args[2] ?? '')
+          source = String(args[4] ?? '')
+        }
+        if (level === 'error' || level === 'warning') {
+          let url = ''
+          try { url = wc.getURL() } catch { /* destroyed */ }
+          errors.push({ level, message: message.slice(0, 400), url: url.slice(0, 140), source: String(source).slice(0, 140) })
+        }
+      })
+    }
+    webContents.getAllWebContents().forEach(attach)
+    app.on('web-contents-created', (_e, wc) => attach(wc))
+  })
+}
+
+/** Read the collected console error/warning entries. */
+export async function readConsoleErrors(electronApp: ElectronApplication): Promise<ConsoleErrorEntry[]> {
+  return electronApp.evaluate(() => {
+    const g = globalThis as unknown as { __e2eConsoleErrors?: ConsoleErrorEntry[] }
+    return (g.__e2eConsoleErrors ?? []).slice()
+  }) as Promise<ConsoleErrorEntry[]>
+}
+
 /**
  * Wait until the in-renderer Monaco editor is mounted in the main window.
  *

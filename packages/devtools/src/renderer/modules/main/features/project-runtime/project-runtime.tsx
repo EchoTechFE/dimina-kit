@@ -53,22 +53,21 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
     [layoutState],
   )
 
-  // Bounds-sync bindings. Each binding describes a main-process overlay
-  // whose rect the renderer must publish whenever:
-  //   - layout topology changes (`signature`),
-  //   - the active project changes (`projectPath`),
-  //   - the cell's presence flips (`cells[id].present`),
-  //   - or any `extraDeps` change (e.g. `rightPane.selected` for debug,
-  //     because the Console tab's display:none toggle changes the
-  //     simulator-devtools placeholder's visible area).
-  // The only remaining main-process overlay is the Chromium DevTools view
-  // (debug cell). Anchor it to its placeholder DOM via `useViewAnchor`:
-  //   - present: the debug cell is in the compiled layout;
-  //   - deps: topology signature + project switch + the active debug tab
-  //     (Console's display:flex|none changes the placeholder's visible rect
-  //     without changing frame topology — the ResizeObserver can't see it).
-  // editor is in-renderer Monaco and simulator is a <webview>; neither is a
-  // native overlay, so neither needs an anchor.
+  // Bounds-sync bindings. Both main-process overlays anchored to renderer DOM
+  // go through the SAME `useViewAnchor` (see `@/lib/view-anchor`):
+  //   - The Chromium DevTools view (debug cell) is anchored HERE, to its
+  //     placeholder DOM, because its `present` is "the debug cell is in the
+  //     compiled layout" — a decision this component owns. deps = topology
+  //     signature + project switch + the active debug tab (Console's
+  //     display:flex|none changes the placeholder's visible rect without
+  //     changing frame topology — the ResizeObserver can't see it).
+  //   - The simulator WebContentsView is anchored INSIDE `SimulatorPanel`,
+  //     where its bezel refs live, with a `measure` redirect (observe the
+  //     scroll container, publish the inner-screen rect). It's always present
+  //     while mounted; FrameTree unmounts the panel to hide it, and the hook's
+  //     teardown collapses the WCV.
+  // The in-renderer Monaco editor is a plain React child (no native overlay),
+  // so it has no anchor.
   const devtoolsAnchorRef = useViewAnchor({
     present: compiled.cells.debug.present,
     publish: publishSimulatorDevtoolsBounds,
@@ -140,7 +139,18 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
     // In-renderer Monaco editor — replaces the OpenSumi WebContentsView
     // overlay. Plain React component occupying the editor cell; reads/writes
     // the active project's files via the sandboxed `project:fs:*` IPC.
-    editor: <MonacoEditor projectPath={project.path} />,
+    // `ready` gates the editor's `project:fs:listFiles` load on the main
+    // process having registered the active project. `openProject` clears the
+    // main-side path first and sets it only once the compile finishes (the
+    // same point it reports `ready`), so loading the file tree before then
+    // throws `ENOACTIVE` on every poll. Threading the compile status skips
+    // that window instead of retrying through the error.
+    editor: (
+      <MonacoEditor
+        projectPath={project.path}
+        ready={session.compileStatus.status === 'ready'}
+      />
+    ),
     debug: (
       <BottomDebugPanel
         ref={devtoolsAnchorRef}
