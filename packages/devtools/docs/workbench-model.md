@@ -14,17 +14,23 @@
 
 ```ts
 // main.ts
-import { workbench, defineEvent } from '@dimina-kit/workbench'
+import { defineEvent } from '@dimina-kit/workbench'
+import { workbench } from '@dimina-kit/devtools' // 入口实现在 devtools，见 TL;DR
 
 const authChanged = defineEvent<{ user: { id: string } | null }>('authChanged')
 
-await workbench({
+// ⚠️ ESM main 里**不要顶层 `await workbench(...)`**：Electron 在 main 模块求值
+// 完成前不会触发 `app.whenReady()`，而 `workbench()` 内部要 await whenReady —
+// 顶层 await 会死锁（ready 等模块求值、模块求值等 workbench、workbench 等 ready）。
+// 像默认 `index.ts` 调 `launch()` 那样 fire-and-forget；event loop 会撑住进程，
+// `setup(runtime)` 照常运行。需要错误兜底就挂 `.catch()`。
+workbench({
   app: { name: 'My DevTools' },
   hostServices: {
     getUser: async () => ({ user: null }),
   },
   events: [authChanged],
-})
+}).catch((err) => { console.error('workbench() failed:', err) })
 ```
 
 host 写好 `workbench(config)` 调用即可启动；`@dimina-kit/workbench/preload` 与 `@dimina-kit/workbench/client` 分别给 webview preload / renderer 用（见 §3）。
