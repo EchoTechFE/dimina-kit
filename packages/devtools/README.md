@@ -404,45 +404,56 @@ Console 是独立 instrumentation；AppData 与 WXML 已迁移到 **miniappSnaps
 
 ### 自定义 Preload
 
-参考 `src/preload/windows/simulator.ts`：
+> **大多数 host 不需要自定义 preload。** 不传 `preloadPath` 时框架加载内置默认
+> preload（`src/preload/windows/simulator.ts`），它已组合好全部内置 instrumentation
+> 并自带子帧守卫。业务 API 走主进程 `registerSimulatorApi`、命名空间走 `apiNamespaces`，
+> 都**不必**碰 preload —— 优先用默认，别手抄。
+
+只有当你确实需要在 preload 这一层注入东西（主进程声明表达不了的）才写自己的 preload。
+此时**完整镜像** `src/preload/windows/simulator.ts`，否则会漏装内置积木（如临时文件桥）
+或在 native-host 子帧里重复注入而出错：
 
 ```typescript
-// my-preload.ts
+// my-preload.ts —— 镜像 src/preload/windows/simulator.ts
 import {
+  setupApiCompatHook,
   installSimulatorBridge,
   installCustomApisBridge,
+  installTempFileBridge,
   installConsoleInstrumentation,
-  createMiniappSnapshotHost,
+  installNativeHostBridge,
   createAppDataSource,
-  createWxmlSource,
-  setupApiCompatHook,
 } from '@dimina-kit/devtools/preload'
 
-// 1. 兼容 hook + 桥接（必装，且应在 instrumentation 之前）
-setupApiCompatHook()
-installSimulatorBridge()
-installCustomApisBridge()   // 若用到 registerSimulatorApi，必装
+// 子帧守卫：该 preload 注册在 persist:simulator session 上，native-host 下也会跑进
+// 每页 render-host / service-host 子帧——那里有各自专用 preload，重复注入会出错。
+const href = (() => { try { return window.location?.href ?? '' } catch { return '' } })()
+if (!(href.includes('pageFrame.html') || href.includes('/service.html'))) {
+  // 顺序有意义：compat hook → 桥接 → instrumentation
+  setupApiCompatHook()
+  installSimulatorBridge()
+  installCustomApisBridge()   // 用到 registerSimulatorApi 必装
+  installTempFileBridge()
+  installConsoleInstrumentation()
+  installNativeHostBridge()   // native-host 渲染路径必装
+  // AppData 探针：直接 start()（不裹 MiniappSnapshotHost），仅为装上
+  // __simulatorHook / __simulatorData 供 automation / MCP / e2e 读取。
+  createAppDataSource().start(() => {})
 
-// 2. Console instrumentation（按需）
-installConsoleInstrumentation()
-
-// 3. miniappSnapshot 框架：注册面板数据源后 install()
-const snapshotHost = createMiniappSnapshotHost()
-snapshotHost.register(createAppDataSource())
-snapshotHost.register(createWxmlSource())
-snapshotHost.install()
-
-// 4. 自定义 hook
-window.addEventListener('error', (e) => {
-  console.error('[my-preload]', e.message)
-})
+  // 你自己的注入
+  window.addEventListener('error', (e) => console.error('[my-preload]', e.message))
+}
 ```
 
-编译后传入路径：
+编译成单文件 CJS（webview sandbox 不能 `require` 分模块），同时产出 `.cjs` 兄弟文件
+（native-host 渲染路径需要），再传入 `.js` 路径（框架会自动取 `.cjs` 兄弟）：
 
 ```typescript
 launch({ preloadPath: '/absolute/path/to/my-preload.js' })
 ```
+
+> `createMiniappSnapshotHost` / `createWxmlSource` 仅在你自建快照通道时才用得到；
+> native-host 下面板 WXML/AppData 由主进程经 CDP 抓取，默认 preload **不**注册它们。
 
 ---
 
@@ -513,7 +524,9 @@ createWorkbenchApp({
 @dimina-kit/devtools/workbench-settings     loadWorkbenchSettings(), saveWorkbenchSettings(), applyTheme()
 @dimina-kit/devtools/preload                installSimulatorBridge,
                                        installCustomApisBridge,
+                                       installTempFileBridge,
                                        installConsoleInstrumentation,
+                                       installNativeHostBridge,
                                        createMiniappSnapshotHost,
                                        createAppDataSource, createWxmlSource,
                                        setupApiCompatHook

@@ -23,6 +23,10 @@ export type {
 export { installSimulatorBridge } from './runtime/bridge.js'
 export { installCustomApisBridge } from './runtime/custom-apis.js'
 export type { DiminaCustomApisBridge } from './runtime/custom-apis.js'
+// Temp-file bridge — part of the built-in default composition; exported so a
+// custom preload can reproduce the full chain without dropping it (a missing
+// tempFiles bridge is a silent functional gap, not a compile error).
+export { installTempFileBridge } from './runtime/temp-files.js'
 // NATIVE-HOST: lets a custom simulator preload opt into the native-host bridge
 // (DeviceShell render path) the same way the built-in `windows/simulator.ts`
 // does. Self-gating — a no-op disposer when native-host is off. Required so
