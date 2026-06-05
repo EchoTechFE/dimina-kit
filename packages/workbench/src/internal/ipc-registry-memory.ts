@@ -1,6 +1,5 @@
 import type { BrowserWindow } from 'electron'
 import type {
-	Audience,
 	Disposable,
 	JsonValue,
 	MaybePromise,
@@ -29,7 +28,6 @@ export class InMemoryTypedIpcRegistry implements TypedIpcRegistry {
 		channel: string,
 		handler: (...args: A) => MaybePromise<R>,
 		_options?: {
-			audience?: readonly Audience[] | 'allTrusted'
 			validator?: (args: unknown[]) => A
 		},
 	): Disposable {

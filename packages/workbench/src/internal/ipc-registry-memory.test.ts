@@ -68,19 +68,15 @@ describe('InMemoryTypedIpcRegistry — handle / invoke', () => {
 		await expect(reg.invoke('ghost-channel')).rejects.toThrow(/no handler/i)
 	})
 
-	// CONTRACT-AMBIGUOUS: JSDoc requires accepting `options` (audience /
-	// validator) but does not say what they do in Phase 2. We only assert
-	// the option object does not block registration.
-	it('handle() accepts audience/validator options without blocking registration (CONTRACT-AMBIGUOUS)', () => {
+	// The `audience` option was removed (it was a no-op fake guarantee — see
+	// foundation.md §11). `validator` remains as an accepted option; in this
+	// phase it does not block registration.
+	it('handle() accepts the validator option without blocking registration', () => {
 		const reg = new InMemoryTypedIpcRegistry()
 		expect(() =>
 			reg.handle<JsonValue[], JsonValue>('with-opts', () => null, {
-				audience: ['toolbar'],
 				validator: args => args as JsonValue[],
 			}),
-		).not.toThrow()
-		expect(() =>
-			reg.handle('with-opts-all', () => null, { audience: 'allTrusted' }),
 		).not.toThrow()
 	})
 })

@@ -187,14 +187,11 @@ export interface WorkbenchConfig {
 
 // ── Runtime ──────────────────────────────────────────────────────────────
 
-export type Audience = 'simulator' | 'toolbar' | `window:${string}`
-
 export interface TypedIpcRegistry {
 	handle<A extends JsonValue[], R extends JsonValue>(
 		channel: string,
 		handler: (...args: A) => MaybePromise<R>,
 		options?: {
-			audience?: readonly Audience[] | 'allTrusted'
 			validator?: (args: unknown[]) => A
 		},
 	): Disposable

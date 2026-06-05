@@ -36,7 +36,7 @@
  */
 import { describe, it, expect } from 'vitest'
 
-import { createDebugTap, type DebugTap, type DebugTapEntry } from './debug-tap.js'
+import { createDebugTap, type DebugTapEntry } from './debug-tap.js'
 
 /** Build a well-formed entry with a caller-supplied monotonic `ts`. */
 function entry(ts: number, over: Partial<DebugTapEntry> = {}): DebugTapEntry {

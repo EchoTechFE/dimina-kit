@@ -41,6 +41,10 @@
         "./client": {
             "types": "./dist/client/index.d.ts",
             "default": "./dist/client/index.js"
+        },
+        "./host": {
+            "types": "./dist/host/index.d.ts",
+            "default": "./dist/host/index.js"
         }
     },
     "files": [
