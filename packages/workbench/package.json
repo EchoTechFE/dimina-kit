@@ -30,6 +30,10 @@
             "types": "./dist/index.d.ts",
             "default": "./dist/index.js"
         },
+        "./main": {
+            "types": "./dist/main/index.d.ts",
+            "default": "./dist/main/index.js"
+        },
         "./preload": {
             "types": "./dist/preload/index.d.ts",
             "default": "./dist/preload/index.js"

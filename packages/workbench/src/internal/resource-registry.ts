@@ -12,6 +12,10 @@ import type { Disposable, MaybePromise, ResourceRegistry } from '../types.js'
  *   再次调是 no-op resolve。
  * - 在 disposeAll 已跑后，`add()` 仍然要立即 dispose 新资源（不泄漏）。
  *
+ * @deprecated 地基层的承重 disposable 原语已收敛到 `src/main/disposable.ts`
+ *   的 `DisposableRegistry`（foundation.md §11 决策①：连接层选用 disposed-后-add-抛错
+ *   语义 + reset=换实例）。本实现的 disposed-后-add-立即-dispose 语义与之互斥，
+ *   仅 `workbench-app.ts` 旧路径仍在用，不再用于新代码。后续期删除。
  * @internal
  */
 interface Entry {
