@@ -147,6 +147,18 @@ export const ViewBoundsSchema = z.tuple([
   }),
 ])
 
+/**
+ * host-toolbar reverse size-advertiser payload — the toolbar WCV renderer
+ * advertises its intrinsic content height on the block axis. Mirrors
+ * `@dimina-kit/view-anchor`'s `AdvertisedSize`.
+ */
+export const HostToolbarAdvertiseHeightSchema = z.tuple([
+  z.object({
+    axis: z.literal('block'),
+    extent: NonNegInt,
+  }),
+])
+
 /** simulator:setVisible — visible flag + simulator width. */
 export const SimulatorSetVisibleSchema = z.tuple([z.boolean(), SimWidth])
 

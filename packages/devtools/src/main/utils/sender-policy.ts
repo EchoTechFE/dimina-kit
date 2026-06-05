@@ -54,6 +54,12 @@ export function createWorkbenchSenderPolicy(
     const popoverViewId = ctx.views.getPopoverWebContentsId()
     if (popoverViewId != null && sender.id === popoverViewId) return true
 
+    // The host-toolbar overlay is DELIBERATELY NOT trusted here. The host loads
+    // arbitrary content into it, so granting it the global white-list would open
+    // all ~72 IpcRegistry channels to that content. Its one channel (the reverse
+    // size-advertiser) is instead a raw `ipcMain.on` gated on its exact wc id in
+    // `registerViewsIpc` — same blast-radius containment as the simulator guest.
+
     // simulator <webview> proxies through main-window renderer (see file header).
 
     return false

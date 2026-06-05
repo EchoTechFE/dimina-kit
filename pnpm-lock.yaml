@@ -66,6 +66,9 @@ importers:
       '@dimina-kit/view-anchor':
         specifier: workspace:*
         version: link:../view-anchor
+      '@dimina-kit/workbench':
+        specifier: workspace:*
+        version: link:../workbench
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.3.6)

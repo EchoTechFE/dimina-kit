@@ -1,80 +1,13 @@
-export interface Disposable {
-  dispose(): void | Promise<void>
-}
-
-export type DisposeFn = () => void | Promise<void>
-
-export function toDisposable(fn: DisposeFn): Disposable {
-  let done = false
-  return {
-    dispose() {
-      if (done) return
-      done = true
-      return fn()
-    },
-  }
-}
-
-interface Entry {
-  fn: DisposeFn
-  released: boolean
-}
-
-export class DisposableRegistry implements Disposable {
-  private entries: Entry[] = []
-  private _disposed = false
-
-  /**
-   * Number of live entries. A wrapper's `dispose` splices its entry out and
-   * `disposeAll` clears the array, so `entries.length` is the live count.
-   */
-  get size(): number {
-    return this.entries.length
-  }
-
-  add(d: Disposable | DisposeFn): Disposable {
-    if (this._disposed) {
-      throw new Error('cannot add to disposed registry')
-    }
-
-    const fn: DisposeFn = typeof d === 'function' ? d : () => d.dispose()
-    const entry: Entry = { fn, released: false }
-    this.entries.push(entry)
-    return {
-      dispose: () => {
-        if (entry.released) return
-        entry.released = true
-        const i = this.entries.indexOf(entry)
-        if (i >= 0) this.entries.splice(i, 1)
-        return fn()
-      },
-    }
-  }
-
-  async disposeAll(): Promise<void> {
-    if (this._disposed) return
-    this._disposed = true
-
-    const items = this.entries.slice().reverse()
-    this.entries = []
-
-    const errors: unknown[] = []
-    for (const entry of items) {
-      if (entry.released) continue
-      entry.released = true
-      try {
-        await entry.fn()
-      } catch (e) {
-        errors.push(e)
-      }
-    }
-
-    if (errors.length > 0) {
-      throw new AggregateError(errors, 'DisposableRegistry encountered errors during disposeAll')
-    }
-  }
-
-  dispose(): Promise<void> {
-    return this.disposeAll()
-  }
-}
+/**
+ * `DisposableRegistry` now lives in `@dimina-kit/workbench/main` — the
+ * foundation layer that devtools sits on top of (foundation.md §3, §11
+ * decision 1). This module re-exports it so the ~27 existing devtools call
+ * sites keep importing from `../utils/disposable.js` unchanged while the
+ * primitive itself is owned by the package.
+ */
+export {
+  DisposableRegistry,
+  toDisposable,
+  type Disposable,
+  type DisposeFn,
+} from '@dimina-kit/workbench/main'

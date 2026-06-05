@@ -174,3 +174,23 @@ export function onSimulatorCurrentPage(handler: (pagePath: string) => void): () 
 export function publishSimulatorDevtoolsBounds(bounds: ViewBounds): Promise<void> {
   return invoke<void>(ViewChannel.SimulatorDevtoolsBounds, bounds)
 }
+
+/**
+ * Publish the host-controllable toolbar placeholder's measured rectangle so the
+ * main process can overlay the toolbar WebContentsView precisely. `width: 0,
+ * height: 0` means the placeholder is absent (the reserved height is 0) — the
+ * main process removes the toolbar view from the contentView.
+ */
+export function publishHostToolbarBounds(bounds: ViewBounds): Promise<void> {
+  return invoke<void>(ViewChannel.HostToolbarBounds, bounds)
+}
+
+/**
+ * Subscribe to the reserved host-toolbar height pushed by the main process after
+ * the toolbar WCV's own renderer advertises its intrinsic content height. The
+ * main-window renderer sets its placeholder div's CSS height to this, which
+ * re-measures the forward anchor and closes the dynamic-height loop.
+ */
+export function onHostToolbarHeightChanged(handler: (height: number) => void): () => void {
+  return on<[number]>(ViewChannel.HostToolbarHeightChanged, (height) => handler(height))
+}

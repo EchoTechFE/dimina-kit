@@ -3,6 +3,8 @@ import { COPY_FEEDBACK_TIMEOUT_MS } from '@/shared/constants'
 import {
   getBranding,
   publishSimulatorDevtoolsBounds,
+  publishHostToolbarBounds,
+  onHostToolbarHeightChanged,
 } from '@/shared/api'
 import type { Project } from '@/shared/types'
 import { useProjectRuntimeController } from './controllers/use-project-runtime-controller'
@@ -71,6 +73,22 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
     present: compiled.cells.debug.present,
     publish: publishSimulatorDevtoolsBounds,
     deps: [compiled.signature, project.path, rightPane.rightPane.selected],
+  })
+
+  // Host-controllable toolbar WCV (sits above ProjectToolbar). Dynamic-height
+  // loop: the toolbar WCV's own renderer advertises its intrinsic content
+  // height (reverse size-advertiser) → main pushes it here as
+  // `HostToolbarHeightChanged` → we resize the placeholder div below → the
+  // forward anchor re-measures → main re-overlays the WCV. `present` is
+  // height > 0 (a height of 0 means the host registered no toolbar, so we emit
+  // ZERO and the WCV is collapsed). `deps` carries the height so the anchor
+  // re-publishes when the placeholder's rect changes.
+  const [hostToolbarHeight, setHostToolbarHeight] = useState(0)
+  useEffect(() => onHostToolbarHeightChanged(setHostToolbarHeight), [])
+  const hostToolbarAnchorRef = useViewAnchor({
+    present: hostToolbarHeight > 0,
+    publish: publishHostToolbarBounds,
+    deps: [hostToolbarHeight],
   })
 
   useEffect(() => {
@@ -175,6 +193,19 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
 
   return (
     <div className="flex flex-col h-screen">
+      {/*
+        Placeholder reserving space for the host-controllable toolbar WCV. Its
+        bounds are published to main via the forward anchor; its height is
+        driven by the WCV's advertised intrinsic height (see hostToolbarHeight
+        above). The flex-col root pushes everything below down automatically —
+        no offset math anywhere.
+      */}
+      <div
+        ref={hostToolbarAnchorRef}
+        style={{ height: hostToolbarHeight }}
+        className="shrink-0 w-full"
+        data-area="host-toolbar"
+      />
       <ProjectToolbar
         compileDropdownRef={popover.compileDropdownRef}
         showCompilePanel={popover.showCompilePanel}

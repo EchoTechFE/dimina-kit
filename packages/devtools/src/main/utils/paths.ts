@@ -53,6 +53,12 @@ export function cjsSiblingPreloadPath(preloadPath: string): string {
  */
 export const mainPreloadPath = path.join(devtoolsPackageRoot, 'dist/preload/windows/main.cjs')
 
+/** Preload for the host-controllable toolbar WCV — runs the reverse size-advertiser. */
+export const hostToolbarPreloadPath = path.join(
+  devtoolsPackageRoot,
+  'dist/preload/windows/host-toolbar.cjs',
+)
+
 export const simulatorDir = path.join(devtoolsPackageRoot, 'dist/simulator')
 
 export function getRendererDir(): string {

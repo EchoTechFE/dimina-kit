@@ -94,7 +94,7 @@
         "dist": "electron-builder",
         "prepack": "pnpm run build",
         "build:main": "tsc -p tsconfig.main.json && esbuild src/main/index.ts --bundle --platform=node --format=esm --target=node24 --external:electron --packages=external --outfile=dist/main/index.bundle.js",
-        "build:preload": "tsc -p tsconfig.preload.json && esbuild src/preload/windows/simulator.ts --bundle --platform=node --format=cjs --sourcemap --external:electron --outfile=dist/preload/windows/simulator.js && esbuild src/preload/windows/simulator.ts --bundle --platform=node --format=cjs --sourcemap --external:electron --outfile=dist/preload/windows/simulator.cjs && esbuild src/preload/windows/main.ts --bundle --platform=node --format=cjs --sourcemap --external:electron --outfile=dist/preload/windows/main.cjs",
+        "build:preload": "tsc -p tsconfig.preload.json && esbuild src/preload/windows/simulator.ts --bundle --platform=node --format=cjs --sourcemap --external:electron --outfile=dist/preload/windows/simulator.js && esbuild src/preload/windows/simulator.ts --bundle --platform=node --format=cjs --sourcemap --external:electron --outfile=dist/preload/windows/simulator.cjs && esbuild src/preload/windows/main.ts --bundle --platform=node --format=cjs --sourcemap --external:electron --outfile=dist/preload/windows/main.cjs && esbuild src/preload/windows/host-toolbar.ts --bundle --platform=node --format=cjs --sourcemap --external:electron --outfile=dist/preload/windows/host-toolbar.cjs",
         "build:renderer": "vite build",
         "dev": "pnpm build && concurrently \"vite build --watch\" \"vite build --watch --config vite.config.simulator.ts\" \"tsc -p tsconfig.main.json --watch\" \"tsc -p tsconfig.preload.json --watch\" \"esbuild src/preload/windows/simulator.ts --bundle --platform=node --format=cjs --sourcemap --external:electron --outfile=dist/preload/windows/simulator.js --watch\" \"esbuild src/preload/windows/simulator.ts --bundle --platform=node --format=cjs --sourcemap --external:electron --outfile=dist/preload/windows/simulator.cjs --watch\" \"esbuild src/preload/windows/main.ts --bundle --platform=node --format=cjs --sourcemap --external:electron --outfile=dist/preload/windows/main.cjs --watch\" \"electron dist/main/index.js\"",
         "build:core": "pnpm --filter @dimina-kit/devkit build",
@@ -108,6 +108,7 @@
     "dependencies": {
         "@dimina-kit/devkit": "workspace:*",
         "@dimina-kit/view-anchor": "workspace:*",
+        "@dimina-kit/workbench": "workspace:*",
         "@modelcontextprotocol/sdk": "^1.29.0",
         "chrome-remote-interface": "^0.34.0",
         "monaco-editor": "^0.55.1",

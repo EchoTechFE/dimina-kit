@@ -17,6 +17,7 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import type { WebContents } from 'electron'
+import { createConnectionRegistry } from '@dimina-kit/workbench/main'
 import {
   createNetworkForwarder,
   rewriteRequestId,
@@ -605,6 +606,75 @@ describe('createNetworkForwarder — batch size cap (MAJOR 5)', () => {
     // All 60 openers still got dispatched (split, not dropped).
     const dispatched = dt.exec.mock.calls.flatMap((c) => decodeDispatched(String(c[0])))
     expect(dispatched.filter((d) => d.method === 'Network.requestWillBeSent').length).toBe(60)
+  })
+})
+
+describe('createNetworkForwarder — connection-registry teardown', () => {
+  /**
+   * A simulator wc fake with the surface a real ConnectionRegistry needs: a
+   * stable `id`, a real `once('destroyed')` emitter (the registry arms the
+   * terminal hook there), plus the debugger surface the forwarder uses.
+   */
+  function makeRegistrySimWc(id: number) {
+    let attached = false
+    const dbgListeners = new Map<string, Set<(...a: unknown[]) => void>>()
+    const destroyedListeners = new Set<() => void>()
+    const dbg = {
+      isAttached: () => attached,
+      attach: vi.fn(() => { attached = true }),
+      detach: vi.fn(() => { attached = false }),
+      sendCommand: vi.fn(() => Promise.resolve({})),
+      on: (ev: string, fn: (...a: unknown[]) => void) => {
+        if (!dbgListeners.has(ev)) dbgListeners.set(ev, new Set())
+        dbgListeners.get(ev)!.add(fn)
+      },
+      removeListener: (ev: string, fn: (...a: unknown[]) => void) => { dbgListeners.get(ev)?.delete(fn) },
+    }
+    const wc = {
+      id,
+      isDestroyed: () => false,
+      debugger: dbg,
+      once: (ev: string, fn: () => void) => { if (ev === 'destroyed') destroyedListeners.add(fn) },
+      removeListener: () => {},
+    } as unknown as WebContents
+    const emitMessage = (method: string, params: unknown) => {
+      for (const fn of dbgListeners.get('message') ?? []) (fn as DbgListener)({}, method, params)
+    }
+    const emitDestroyed = () => { for (const fn of [...destroyedListeners]) fn() }
+    return { wc, dbg, emitMessage, emitDestroyed }
+  }
+
+  it('owns the simulator destroyed-teardown via the registry; destroy resets state + de-registers the connection', async () => {
+    const sim = makeRegistrySimWc(42)
+    const svc = makeServiceWc()
+    const connections = createConnectionRegistry()
+    const fwd = createNetworkForwarder({ getServiceWc: () => svc.wc, connections })
+
+    fwd.attachSimulator(sim.wc)
+    // Attaching acquires the connection and owns the teardown on it.
+    expect(connections.get(42)).toBeDefined()
+    expect(sim.dbg.attach).toHaveBeenCalledWith('1.3')
+
+    // The destroyed event drives the registry, which fires the owned teardown:
+    // it nulls simWc-if-matched and disposeAll's the attach disposables (removing
+    // the debugger 'message'/'detach' listeners), and the connection closes +
+    // de-registers.
+    sim.emitDestroyed()
+    await flushMicrotasks()
+
+    // Connection de-registered (its terminal hook fired and closed it).
+    expect(connections.get(42)).toBeUndefined()
+
+    // State reset: the debugger listeners were removed, so events from the old
+    // (now-dead) sim no longer reach any sink.
+    svc.exec.mockClear()
+    sim.emitMessage('Network.requestWillBeSent', { requestId: '1', request: { url: 'https://x', method: 'GET' } })
+    sim.emitMessage('Network.loadingFinished', { requestId: '1' })
+    await flushMicrotasks()
+    expect(svc.exec).not.toHaveBeenCalled()
+
+    // Idempotent: a redundant destroy + detach must not throw.
+    expect(() => { sim.emitDestroyed(); fwd.detachSimulator() }).not.toThrow()
   })
 })
 

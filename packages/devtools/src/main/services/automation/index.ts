@@ -106,7 +106,11 @@ export async function startAutomationServer(
   let pollStopTimer: ReturnType<typeof setTimeout> | null = null
   let attachedSim: WebContents | null = null
   let ipcMessageHostHandler: ((event: unknown, channel: string, data: unknown) => void) | null = null
-  let simDestroyedHandler: (() => void) | null = null
+  // Handle for the destroyed-teardown owned by the sim's connection (replaces a
+  // bespoke `sim.once('destroyed')` + manual removeListener). Disposing it on
+  // graceful close()/detach releases the disposer from the connection segment so
+  // it can't accumulate across automation create/dispose cycles on the same sim.
+  let simDestroyedDisposer: { dispose: () => void | Promise<void> } | null = null
 
   function detachConsoleForwarding(): void {
     if (attachedSim) {
@@ -118,17 +122,13 @@ export async function startAutomationServer(
           }
         } catch { /* noop */ }
       }
-      if (simDestroyedHandler) {
-        try {
-          if (!attachedSim.isDestroyed()) {
-            attachedSim.removeListener('destroyed', simDestroyedHandler)
-          }
-        } catch { /* noop */ }
-      }
     }
+    // Release the connection-owned destroyed disposer (idempotent; safe even if
+    // the sim is already destroyed — the disposer body only nulls local refs).
+    try { simDestroyedDisposer?.dispose() } catch { /* noop */ }
     attachedSim = null
     ipcMessageHostHandler = null
-    simDestroyedHandler = null
+    simDestroyedDisposer = null
   }
 
   function setupConsoleForwarding(): void {
@@ -157,16 +157,19 @@ export async function startAutomationServer(
         // sender would throw) and allow re-attach to a new simulator.
         attachedSim = null
         ipcMessageHostHandler = null
-        simDestroyedHandler = null
+        simDestroyedDisposer = null
         consoleForwardingSetup = false
       }
 
       attachedSim = sim
       ipcMessageHostHandler = onIpcMessageHost
-      simDestroyedHandler = onSimDestroyed
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ;(sim as any).on('ipc-message-host', onIpcMessageHost)
-      sim.once('destroyed', onSimDestroyed)
+      // Route the destroyed-teardown through the per-webContents connection
+      // registry: the connection arms a single `wc.once('destroyed')` and runs
+      // owned disposers on hard-destroy (or soft reset for pool reuse), so we no
+      // longer manage a bespoke 'destroyed' listener here.
+      simDestroyedDisposer = ctx.connections.acquire(sim).own(onSimDestroyed)
     }, 1000)
 
     // Stop polling after 30s

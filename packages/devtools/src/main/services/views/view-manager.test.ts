@@ -72,6 +72,7 @@ vi.mock('../../utils/paths.js', () => ({
 
 // Import AFTER mocks so view-manager picks up the stubs.
 import { createViewManager } from './view-manager.js'
+import { createConnectionRegistry } from '@dimina-kit/workbench/main'
 
 function makeContext() {
   const addChildView = vi.fn()
@@ -100,6 +101,10 @@ function makeContext() {
       rendererDir: '/stub/renderer',
       panels: ['console', 'wxml', 'storage', 'appdata'],
       notify: notify as unknown as import('../notifications/renderer-notifier.js').RendererNotifier,
+      // ViewManagerContext now requires the connection registry (P1 DoD #3).
+      // These overlay-lifecycle tests don't touch the native simulator, so an
+      // empty real registry satisfies the type without affecting behaviour.
+      connections: createConnectionRegistry(),
     },
   }
 }

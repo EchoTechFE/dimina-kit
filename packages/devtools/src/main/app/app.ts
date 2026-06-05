@@ -347,6 +347,11 @@ export function createWorkbenchApp(config: WorkbenchAppConfig = {}) {
       const mainWindow = createConfiguredMainWindow(config, rendererDir)
       const context = createContext(config, mainWindow, rendererDir)
 
+      // Anchor the main window's renderer as the first Connection. Resources
+      // scoped to the main webContents (acquired by later wiring) tear down with
+      // it; see packages/workbench/docs/foundation.md §4.
+      context.connections.acquire(mainWindow.webContents)
+
       context.registry.add(registerAppIpc(context))
       // Sandboxed project file-system IPC for the in-renderer Monaco editor.
       context.registry.add(registerProjectFsIpc(context))
@@ -482,10 +487,11 @@ export function createWorkbenchApp(config: WorkbenchAppConfig = {}) {
       // Native-host inspector: injects the render-guest IIFE and drives WXML /
       // element-highlight against the active render-host <webview>. Reused by
       // the storage panel (element inspect) and the WXML panel service.
-      const renderInspector = createRenderInspector()
+      const renderInspector = createRenderInspector({ connections: context.connections })
 
       const storage = setupSimulatorStorage(mainWindow.webContents, {
         senderPolicy: context.senderPolicy,
+        connections: context.connections,
         // Per-project filter for the simulator-storage panel: the simulator
         // uses a fixed `persist:simulator` partition + a fixed simulator.html
         // origin, so localStorage is shared across every project that has
@@ -521,6 +527,7 @@ export function createWorkbenchApp(config: WorkbenchAppConfig = {}) {
         // getServiceWc here is the fallback sink target.
         const networkForward = createNetworkForwarder({
           getServiceWc: (appId) => context.bridge?.getServiceWc(appId) ?? null,
+          connections: context.connections,
         })
         context.networkForward = networkForward
         context.registry.add(networkForward)

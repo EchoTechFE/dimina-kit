@@ -17,6 +17,7 @@
  */
 
 import { app, webContents as wcStatic, type WebContents } from 'electron'
+import type { ConnectionRegistry } from '@dimina-kit/workbench/main'
 import {
   SimulatorElementChannel,
   SimulatorStorageChannel,
@@ -97,6 +98,14 @@ export interface SimulatorStorageOptions {
   bridge?: BridgeRouterHandle
   /** Injects/drives the render-guest inspector; required for native-host inspect. */
   renderInspector?: RenderInspector
+  /**
+   * Connection-layer registry (`@dimina-kit/workbench/main`). When provided,
+   * per-webContents teardowns are routed through `acquire(wc).own(cleanup)` so
+   * they fire deterministically on wc destroy / connection reset instead of the
+   * bespoke `wc.once('destroyed', cleanup)` hook. Optional so callers that have
+   * not adopted the connection layer compile and behave unchanged.
+   */
+  connections?: ConnectionRegistry
 }
 
 export function setupSimulatorStorage(
@@ -183,8 +192,21 @@ export function setupSimulatorStorage(
           if (ad) void ad.disposeAll().catch(() => {})
         }
       }
-      wc.once('destroyed', onDestroyed)
-      attach.add(() => safeOff(wc as unknown as Parameters<typeof safeOff>[0], 'destroyed', onDestroyed as (...args: unknown[]) => void))
+      if (options.connections) {
+        // Route through the connection layer: own() disposes onDestroyed
+        // deterministically on wc destroy / connection reset, and the returned
+        // Disposable lets us release it early when this attach segment tears
+        // down (detach / re-attach).
+        const owned = options.connections.acquire(wc).own(onDestroyed)
+        attach.add(() => owned.dispose())
+      } else {
+        try {
+          wc.once('destroyed', onDestroyed)
+        } catch {
+          // fake-wc safety (unit tests pass a wc without a real emitter)
+        }
+        attach.add(() => safeOff(wc as unknown as Parameters<typeof safeOff>[0], 'destroyed', onDestroyed as (...args: unknown[]) => void))
+      }
 
       attachedWc = wc
     } catch (e) {
@@ -469,10 +491,22 @@ export function setupSimulatorStorage(
     wc.on('did-finish-load', onFinishLoad)
     sub.add(() => safeOff(wc as unknown as Parameters<typeof safeOff>[0], 'did-finish-load', onFinishLoad as (...args: unknown[]) => void))
 
-    wc.once('destroyed', () => {
+    const onWcDestroyed = () => {
       void sub.disposeAll().catch(() => {})
       wcSubs.delete(wc)
-    })
+    }
+    if (options.connections) {
+      // Per-wc cleanup (this wc's did-finish-load sub + wcSubs entry). Route
+      // through the connection layer so it fires deterministically on wc
+      // destroy / reset rather than the bespoke 'destroyed' hook.
+      options.connections.acquire(wc).own(onWcDestroyed)
+    } else {
+      try {
+        wc.once('destroyed', onWcDestroyed)
+      } catch {
+        // fake-wc safety (unit tests pass a wc without a real emitter)
+      }
+    }
   }
   app.on('web-contents-created', onWcCreated)
   registry.add(() => {

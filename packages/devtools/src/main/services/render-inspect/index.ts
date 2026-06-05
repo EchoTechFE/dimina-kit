@@ -14,6 +14,7 @@
  * reads, and the sid registry all share one realm. See render-inspect.ts.
  */
 import type { WebContents } from 'electron'
+import type { ConnectionRegistry } from '@dimina-kit/workbench/main'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { devtoolsPackageRoot } from '../../utils/paths.js'
@@ -32,6 +33,14 @@ export interface RenderInspector {
 export interface RenderInspectorOptions {
   /** Override the injected IIFE source (default: read the built bundle). Test seam. */
   loadSource?: () => string
+  /**
+   * Connection registry (foundation.md §4 / P2). When provided, the per-wc
+   * `injected` bookkeeping is torn down via the wc's connection (deterministic
+   * with the rest of that webContents's resources) instead of a bespoke
+   * `once('destroyed')`. Optional so focused unit tests can omit it (they fall
+   * back to the direct `once('destroyed')`).
+   */
+  connections?: ConnectionRegistry
 }
 
 const DEFAULT_SOURCE_PATH = 'dist/render-host/render-inspect.js'
@@ -66,7 +75,14 @@ export function createRenderInspector(options: RenderInspectorOptions = {}): Ren
       return false
     }
     injected.add(wc.id)
-    wc.once('destroyed', () => injected.delete(wc.id))
+    // Consolidate the per-wc bookkeeping teardown onto the connection layer
+    // (foundation.md §4 / P2) when a registry is available; fall back to the
+    // bespoke `once('destroyed')` only when omitted (focused unit tests).
+    if (options.connections) {
+      options.connections.acquire(wc).own(() => injected.delete(wc.id))
+    } else {
+      wc.once('destroyed', () => injected.delete(wc.id))
+    }
     return true
   }
 

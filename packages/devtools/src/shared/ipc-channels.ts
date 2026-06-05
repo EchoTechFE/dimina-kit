@@ -310,6 +310,23 @@ export const PanelChannel = {
 export const ViewChannel = {
   /** Update the simulator DevTools view's bounds (or hide if w/h = 0). */
   SimulatorDevtoolsBounds: 'view:simulator:devtools-bounds',
+  /**
+   * Host-controllable toolbar WebContentsView (sits ABOVE the devtools built-in
+   * header). Forward anchor: the main renderer reports the toolbar placeholder's
+   * bounds (or w/h=0 to hide). invoke.
+   */
+  HostToolbarBounds: 'view:host-toolbar:bounds',
+  /**
+   * Reverse size-advertiser: the host-toolbar WCV's OWN renderer advertises its
+   * intrinsic content height so main reserves exactly that much. Payload
+   * `{ axis: 'block', extent }`. fire-and-forget (send), NOT invoke.
+   */
+  HostToolbarAdvertiseHeight: 'view:host-toolbar:advertise-height',
+  /**
+   * main → main-window renderer: push the reserved host-toolbar height so the
+   * renderer placeholder div resizes (closing the dynamic-height loop).
+   */
+  HostToolbarHeightChanged: 'view:host-toolbar:height-changed',
 } as const
 
 export interface ViewBounds {

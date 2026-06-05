@@ -1,4 +1,6 @@
+import { EventEmitter } from 'node:events'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { createConnectionRegistry } from '@dimina-kit/workbench/main'
 import {
   buildElementsHookScript,
   installElementsForward,
@@ -131,6 +133,32 @@ function fakeWc(overrides: Partial<Record<string, unknown>> = {}) {
     once: vi.fn((event: string, cb: () => void) => { handlers[event] = cb }),
     removeListener: vi.fn(),
     __handlers: handlers,
+    ...overrides,
+  }
+  wcRegistry.set(wc.id, wc)
+  return wc
+}
+
+// A render guest backed by a REAL EventEmitter so the connection registry's
+// `wc.once('destroyed', …)` actually fires when we `emit('destroyed')`. Mirrors
+// `fakeWc` otherwise (debugger, isDestroyed, etc.) and registers in wcRegistry so
+// detachSelfAttached can resolve it by id.
+function emitterWc(overrides: Partial<Record<string, unknown>> = {}) {
+  const emitter = new EventEmitter()
+  const dbg = (overrides.debugger as ReturnType<typeof fakeDebugger>) ?? fakeDebugger()
+  let destroyed = false
+  const wc = {
+    id: (overrides.id as number) ?? nextWcId++,
+    debugger: dbg,
+    isDestroyed: vi.fn(() => destroyed),
+    isLoading: vi.fn(() => false),
+    executeJavaScript: vi.fn(() => Promise.resolve('installed')),
+    getURL: vi.fn(() => 'pageFrame.html?pagePath=pages/home/home'),
+    once: (event: string, cb: () => void) => { emitter.once(event, cb); return wc },
+    on: (event: string, cb: () => void) => { emitter.on(event, cb); return wc },
+    removeListener: (event: string, cb: () => void) => { emitter.removeListener(event, cb); return wc },
+    emit: (event: string) => emitter.emit(event),
+    __destroy() { destroyed = true; emitter.emit('destroyed') },
     ...overrides,
   }
   wcRegistry.set(wc.id, wc)
@@ -718,6 +746,63 @@ describe('installElementsForward — disposer', () => {
       expect((devtoolsWc.executeJavaScript as ReturnType<typeof vi.fn>).mock.calls.length).toBe(before)
       // render-event subscription removed → emitting does nothing.
       bridge.__emit({ kind: 'activePage', appId: 'a', bridgeId: 'b' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+// ── connection-registry-routed teardown ─────────────────────────────────────────
+
+describe('installElementsForward — connection-routed teardown', () => {
+  // When a `connections` registry is supplied, the per-guest `onDestroyed`
+  // teardown is routed through `connections.acquire(wc).on('closed', cleanup)`
+  // (the wc-lifetime hook) — NOT through `own()`, and NOT via a bespoke
+  // `wc.once('destroyed')`. This MUST stay `on('closed')` and must NOT be changed
+  // to `own()`: `own()`'s release handle FIRES the cleanup on dispose, which would
+  // mutate `wiredGuests` mid-drain; render guests are NEVER pool-reset, so
+  // `'closed'` (fires only on real wc destroy, and whose dispose() removes the
+  // listener WITHOUT firing) is the correct lifetime hook here.
+  // The observable contract is identical to the existing fallback path: a
+  // self-attached guest that is destroyed is dropped from the self-attach set, so
+  // a later stop() does NOT try to detach its (already-gone) session. If the
+  // teardown were never wired through the connection, the guest would stay in
+  // selfAttached and stop() would call detach() on it.
+  it('routes guest onDestroyed through the connection registry (drops self-attach on destroy)', async () => {
+    vi.useFakeTimers()
+    try {
+      const guestDbg = fakeDebugger({ attached: false }) // forces a self-attach
+      const guest = emitterWc({ debugger: guestDbg })
+      const devtoolsWc = devtoolsWcDrainingOnce([
+        { id: 1, method: 'DOM.getDocument', params: {}, sessionId: null },
+      ])
+      const bridge = fakeBridge(() => guest)
+      const connections = createConnectionRegistry()
+
+      const stop = installElementsForward({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        devtoolsWc: devtoolsWc as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        bridge: bridge as any,
+        connections,
+      })
+
+      await vi.advanceTimersByTimeAsync(400)
+      // We self-attached the guest's debugger (it started detached).
+      expect(guestDbg.attach).toHaveBeenCalledWith('1.3')
+      // The teardown was registered against the guest's connection, not as a raw
+      // 'destroyed' listener consumed by the feature directly.
+      expect(connections.get(guest.id)).toBeDefined()
+
+      // Destroy the guest → the connection registry disposes the owned cleanup
+      // (onDestroyed), which removes it from selfAttached.
+      guest.__destroy()
+      await vi.advanceTimersByTimeAsync(5)
+
+      stop()
+      // Connection-routed onDestroyed already dropped this wc from selfAttached,
+      // so stop() must NOT detach the (now destroyed) session.
+      expect(guestDbg.detach).not.toHaveBeenCalled()
     } finally {
       vi.useRealTimers()
     }
