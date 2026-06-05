@@ -8,6 +8,8 @@
 
 本文描述的是 framework 的目标集成模型——下游 host 经 `workbench(config)` 接入。`@dimina-kit/devtools` 自身目前不走这条入口：它通过自己的 `launch()` → `createWorkbenchApp(config)` 启动（见 [`README.md`](../README.md)），入口 config 是 `packages/devtools/src/shared/types.ts` 里的 `WorkbenchAppConfig`（带 `modules` / `BuiltinModuleId`；host 扩展点走另立的 `WorkbenchHostInstance.toolbar.set()` 等 hook 方法），与本文 `@dimina-kit/workbench` 的 config 形态不同。
 
+> **入口包归属（已落地）**：`workbench(config)` 编排入口实际实现在 **`@dimina-kit/devtools`**（`workbench-entry.ts`），host `import { workbench } from '@dimina-kit/devtools'`。因为它必须驱动 devtools 真运行时（`createWorkbenchApp`/`ViewManager`），而 devtools 已依赖 `@dimina-kit/workbench`，把入口放 workbench 包会形成循环依赖。`defineEvent` / config 类型 / `/preload` / `/client` 仍来自 `@dimina-kit/workbench`（零运行时依赖、天然无环）；跨进程 transport（`WireTransport`/`EventBus`/`InMemoryTypedIpcRegistry`）经 `@dimina-kit/workbench/host` 导出供入口装配。下面代码示例里的 `from '@dimina-kit/workbench'`（针对 `workbench`）应理解为 `from '@dimina-kit/devtools'`。
+
 ## 1. 最小例子
 
 ```ts
@@ -215,14 +217,12 @@ export interface Runtime {
   add(d: Disposable | (() => MaybePromise<void>)): Disposable
 }
 
-export type Audience = 'simulator' | 'toolbar' | `window:${string}`
-
 export interface TypedIpcRegistry {
   handle<A extends JsonValue[], R extends JsonValue>(
     channel: string,
     handler: (...args: A) => MaybePromise<R>,
     options?: {
-      audience?: readonly Audience[] | 'allTrusted'
+      // `audience` was removed — it was a no-op fake guarantee (foundation §11.3).
       validator?: (args: unknown[]) => A
     },
   ): Disposable

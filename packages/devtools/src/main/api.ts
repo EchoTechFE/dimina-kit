@@ -3,6 +3,13 @@ export { launch, buildDefaultMenu, openSettingsWindow } from './app/launch.js'
 export { createWorkbenchApp } from './app/app.js'
 export type { WorkbenchAppInstance } from './app/app.js'
 
+// ── Host-shell entry: workbench(config) ───────────────────────────────────
+// Per the foundation's dependency direction the declarative host-shell entry
+// lives here (not in @dimina-kit/workbench) so it can drive the devtools
+// runtime without a cycle. Hosts import `workbench` from @dimina-kit/devtools;
+// `defineEvent` / types / preload / client still come from @dimina-kit/workbench.
+export { workbench } from './app/workbench-entry.js'
+
 // ── Bootstrap utilities ──────────────────────────────────────────────────
 export { suppressEpipe, setupCdpPort } from './app/bootstrap.js'
 

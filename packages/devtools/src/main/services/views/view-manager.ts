@@ -232,6 +232,14 @@ export interface HostToolbarControl {
   readonly webContents: WebContents | null
   /** Remove the toolbar view from the contentView and reset it (kept alive). */
   hide(): void
+  /**
+   * Override the preload used when the toolbar view is first created. The
+   * host-shell (`workbench(config)`) passes the host-controlled
+   * `toolbar.preloadPath` here; the host owns the bridge (it calls
+   * `exposeWorkbenchBridge()` itself). Must be set before the first
+   * `loadURL`/`loadFile`; `null` restores the built-in size-advertiser preload.
+   */
+  setPreloadPath(path: string | null): void
 }
 
 /**
@@ -312,6 +320,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   // (forward anchor, like the simulator DevTools overlay); its height is
   // dynamic via a reverse size-advertiser the toolbar's own renderer drives.
   let hostToolbarView: WebContentsView | null = null
+  let hostToolbarPreloadOverride: string | null = null
   let hostToolbarViewAdded = false
 
   // ── Internal helpers ────────────────────────────────────────────────────
@@ -384,10 +393,13 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
         nodeIntegration: false,
         contextIsolation: true,
         sandbox: false,
-        // The reverse size-advertiser preload: it measures the host content's
-        // intrinsic height and posts it on the advertise channel so main can
-        // reserve exactly that strip height (dynamic height via ViewAnchor).
-        preload: hostToolbarPreloadPath,
+        // Default: the reverse size-advertiser preload that measures the host
+        // content's intrinsic height and posts it on the advertise channel so
+        // main reserves exactly that strip height (dynamic height via
+        // ViewAnchor). When the host-shell supplies its own toolbar preload
+        // (workbench config.toolbar.preloadPath), use that instead — the host
+        // owns the bridge and may install the advertiser itself.
+        preload: hostToolbarPreloadOverride ?? hostToolbarPreloadPath,
       },
     })
     hostToolbarView = view
@@ -465,6 +477,9 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     },
     hide(): void {
       hideHostToolbar()
+    },
+    setPreloadPath(path: string | null): void {
+      hostToolbarPreloadOverride = path
     },
   }
 

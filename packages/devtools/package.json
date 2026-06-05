@@ -36,6 +36,7 @@
     "exports": {
         ".": "./dist/main/api.js",
         "./app": "./dist/main/app/app.js",
+        "./workbench-entry": "./dist/main/app/workbench-entry.js",
         "./launch": "./dist/main/app/launch.js",
         "./types": "./dist/shared/types.js",
         "./context": "./dist/main/services/workbench-context.js",
@@ -50,6 +51,9 @@
         "*": {
             "app": [
                 "dist/main/app/app.d.ts"
+            ],
+            "workbench-entry": [
+                "dist/main/app/workbench-entry.d.ts"
             ],
             "launch": [
                 "dist/main/app/launch.d.ts"
