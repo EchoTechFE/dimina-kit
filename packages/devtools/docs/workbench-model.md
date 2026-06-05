@@ -1,29 +1,52 @@
-# workbench 模型（host 集成框架）
+# workbench 模型（host 集成参考）
 
-> `@dimina-kit/workbench` 是 dimina devtools 的 host 集成框架：下游 host（qdmp 等）写一份 `WorkbenchConfig` 交给 `workbench(config)`，framework 接管 Electron 装配、IPC、生命周期。
+> 下游 host（如 qdmp）写一份 `WorkbenchConfig` 交给 `workbench(config)`，framework
+> 接管 Electron 装配、IPC、生命周期。本文是 host 集成参考：怎么用 + API + 必知约束。
 >
-> 配套文档：[`miniapp-snapshot.md`](./miniapp-snapshot.md) 描述面板数据同步（preload 为唯一真相源）；本文描述 host 的扩展模型（`workbench(config)` 为唯一入口）。
+> 面板数据同步（preload 为唯一真相源）见 [`miniapp-snapshot.md`](./miniapp-snapshot.md)。
 
-## 摘要（TL;DR）
+## 两条必知坑（先读）
 
-本文描述的是 framework 的目标集成模型——下游 host 经 `workbench(config)` 接入。`@dimina-kit/devtools` 自身目前不走这条入口：它通过自己的 `launch()` → `createWorkbenchApp(config)` 启动（见 [`README.md`](../README.md)），入口 config 是 `packages/devtools/src/shared/types.ts` 里的 `WorkbenchAppConfig`（带 `modules` / `BuiltinModuleId`；host 扩展点走另立的 `WorkbenchHostInstance.toolbar.set()` 等 hook 方法），与本文 `@dimina-kit/workbench` 的 config 形态不同。
+**1. 入口包归属：`workbench` 从 `@dimina-kit/devtools` 导入，其余从 `@dimina-kit/workbench`。**
 
-> **入口包归属（已落地）**：`workbench(config)` 编排入口实际实现在 **`@dimina-kit/devtools`**（`workbench-entry.ts`），host `import { workbench } from '@dimina-kit/devtools'`。因为它必须驱动 devtools 真运行时（`createWorkbenchApp`/`ViewManager`），而 devtools 已依赖 `@dimina-kit/workbench`，把入口放 workbench 包会形成循环依赖。`defineEvent` / config 类型 / `/preload` / `/client` 仍来自 `@dimina-kit/workbench`（零运行时依赖、天然无环）；跨进程 transport（`WireTransport`/`EventBus`/`InMemoryTypedIpcRegistry`）经 `@dimina-kit/workbench/host` 导出供入口装配。下面代码示例里的 `from '@dimina-kit/workbench'`（针对 `workbench`）应理解为 `from '@dimina-kit/devtools'`。
+```ts
+import { workbench } from '@dimina-kit/devtools'        // 入口函数
+import { defineEvent } from '@dimina-kit/workbench'     // 事件 token + config 类型
+```
+
+`workbench()` 的实现住在 `@dimina-kit/devtools`，因为它要驱动 devtools 真运行时，而
+devtools 已依赖 `@dimina-kit/workbench`——入口若放 workbench 包会形成循环依赖。所以：
+
+| 你要的 | 从哪导入 |
+|---|---|
+| `workbench(config)` 入口函数 | `@dimina-kit/devtools` |
+| `defineEvent` / `WorkbenchConfig` 等类型 | `@dimina-kit/workbench` |
+| preload bridge `exposeWorkbenchBridge()` | `@dimina-kit/workbench/preload` |
+| renderer client `createWorkbenchClient()` | `@dimina-kit/workbench/client` |
+
+（`@dimina-kit/workbench/host` 导出 transport 原语，仅供入口装配，host 不直接用。）
+
+**2. 不要在 ESM main 里顶层 `await workbench(...)`。**
+
+Electron 在 main 模块求值完成前不会触发 `app.whenReady()`，而 `workbench()` 内部
+要 await whenReady——顶层 await 会死锁（ready 等模块求值、模块求值等 workbench、
+workbench 等 ready）。**fire-and-forget + `.catch()`**，event loop 会撑住进程：
+
+```ts
+workbench({ /* ... */ }).catch((err) => {
+  console.error('workbench() failed:', err)
+})
+```
 
 ## 1. 最小例子
 
 ```ts
 // main.ts
+import { workbench } from '@dimina-kit/devtools'
 import { defineEvent } from '@dimina-kit/workbench'
-import { workbench } from '@dimina-kit/devtools' // 入口实现在 devtools，见 TL;DR
 
 const authChanged = defineEvent<{ user: { id: string } | null }>('authChanged')
 
-// ⚠️ ESM main 里**不要顶层 `await workbench(...)`**：Electron 在 main 模块求值
-// 完成前不会触发 `app.whenReady()`，而 `workbench()` 内部要 await whenReady —
-// 顶层 await 会死锁（ready 等模块求值、模块求值等 workbench、workbench 等 ready）。
-// 像默认 `index.ts` 调 `launch()` 那样 fire-and-forget；event loop 会撑住进程，
-// `setup(runtime)` 照常运行。需要错误兜底就挂 `.catch()`。
 workbench({
   app: { name: 'My DevTools' },
   hostServices: {
@@ -33,95 +56,100 @@ workbench({
 }).catch((err) => { console.error('workbench() failed:', err) })
 ```
 
-host 写好 `workbench(config)` 调用即可启动；`@dimina-kit/workbench/preload` 与 `@dimina-kit/workbench/client` 分别给 webview preload / renderer 用（见 §3）。
+host 写好这一个调用即可启动。webview 侧 preload / renderer 的用法见 §4。
 
-## 2. 扩展能力一览
+## 2. config 字段
 
-host 通过 `WorkbenchConfig` 注入这些能力：
+host 通过 `WorkbenchConfig` 注入扩展能力。绝大多数能力在字段里**声明**，framework
+一次性装配；动态创建窗口、监听 Electron app event 等运行时操作通过 `setup(runtime)`
+**命令式** escape 完成。
 
-| 字段 | 用途 |
-|---|---|
-| `app.adapter` | 编译适配器，替换内置 devkit |
-| `app.name` / `icon` / `headerHeight` / `window` | 品牌、主窗口尺寸 |
-| `simulatorApis` | 暴露给模拟器小程序的 API（自动投影 `wx.<name>`） |
-| `hostServices` | 暴露给 trusted webview（toolbar 等）的 RPC |
-| `events` | main → webview 单向推送 |
-| `toolbar` | host 完全拥有的 WebContentsView（UI / preload 都在 host 这边） |
-| `windows` | 声明式独立窗口（settings / dialog 等） |
-| `menu` | 应用菜单构造器 |
-| `lifecycle` | `beforeClose` 钩子 + 超时 |
-| `projects` / `templates` | 项目列表 / 模板 |
-| `update` | 更新检查器 |
-| `setup(runtime)` | 运行时 escape：声明表达不了的操作 |
+| 字段 | 用途 | 受众 / 方向 |
+|---|---|---|
+| `app` | 品牌（`name`/`icon`/`headerHeight`）、主窗口尺寸（`window`）、编译适配器（`adapter`） | — |
+| `simulatorApis` | 暴露给模拟器小程序的 API，自动投影为 `wx.<name>` | main → 小程序（自动投影） |
+| `hostServices` | 暴露给 trusted webview（toolbar 等）的 RPC | trusted webview → main（请求/响应） |
+| `events` | main → webview 单向推送；必须 `defineEvent` 且列进此数组 | main → webview（单向） |
+| `toolbar` | host 完全拥有的 WebContentsView（UI + preload 都在 host 这边） | — |
+| `windows` | 声明式独立窗口的类型位（**当前未接线**——独立窗口用 `runtime.windows.create()` 命令式建） | — |
+| `menu` | 应用菜单构造器 `build(ctx)` 的类型位（**当前未接线**） | — |
+| `lifecycle` | `beforeClose`（仅"有活跃 session 的主窗口 close"触发，非通用 quit 钩子）+ `timeoutMs` 超时 | — |
+| `projects` | 项目列表 provider | — |
+| `templates` | 自定义模板 + builtin 开关 | — |
+| `update` | 更新检查器 | — |
+| `setup(runtime)` | 运行时 escape：声明表达不了的命令式操作 | — |
 
-切分维度是 **declarative vs imperative**：绝大多数能力在 `WorkbenchConfig` 字段里声明，framework 在 Bind 阶段一次性装配；动态创建窗口、监听 Electron app event 等运行时操作通过 `setup(runtime)` callback 完成。
+### simulatorApis / hostServices / events 三者的区别
+
+这三个字段刻意分开，受众和方向都不同，不要合并理解：
+
+- **`simulatorApis`**：注册进 devtools 的 simulator API registry，自动投影成小程序里的
+  `wx.<name>(params)`（单参约定）。
+- **`hostServices`**：trusted webview（toolbar 等）通过 client `invoke(name, ...)` 调的
+  RPC，走 framework typed transport（senderPolicy + envelope 形状校验；JSON-safe 是跨进程
+  类型约束，不是运行时深度校验）。
+- **`events`**：main 主动 `publish()` 推给 webview 的单向事件。每个事件必须用
+  `defineEvent(name)` 创建并列进 `config.events`，framework 才会绑 transport。
+  对一个**没列进当前 `config.events`** 的 token（或 transport 尚未就绪时）调 `publish()`，
+  会因其 publisher 为 null 抛 `EventNotBoundError`；列进去并经 Setup 之后才安全。
+
+### toolbar
+
+`toolbar` 是 host **完全拥有**的 WebContentsView：
+
+```ts
+toolbar: {
+  source: { url: 'http://localhost:5173/toolbar.html' }, // 或 { file: '...' }
+  preloadPath: '/abs/path/to/toolbar/preload.js',         // 必填
+  height: 48,                                             // 必填，固定高度；宽度跟随主窗口
+}
+```
+
+- `preloadPath` **必填**：framework 不自动注入 bridge，host 在自己的 preload 里调
+  `exposeWorkbenchBridge()`（见 §4）。
+- `height` **必填**：固定高度，framework 显式推给占位区；不推则占位为 0、toolbar 不可见。
+- toolbar 属于 wire transport 的信任集，因此它**能**调 `hostServices` / 收 `events`；
+  但它**不能**碰 devtools 全局 IpcRegistry（~72 条内部 channel）——这是安全边界，
+  防止 toolbar 内容触达 devtools 内部 IPC。
 
 ## 3. 公共 API
 
-`@dimina-kit/workbench` 暴露三个 import 路径：
-
-| 路径 | 用途 |
-|---|---|
-| `@dimina-kit/workbench` | main 进程：`workbench(config)` 入口、`defineEvent`、类型定义 |
-| `@dimina-kit/workbench/preload` | webview preload：`exposeWorkbenchBridge()` |
-| `@dimina-kit/workbench/client` | webview renderer：`createWorkbenchClient<HS, EV>()` |
-
-### 3.1 顶层 config 与入口
+### defineEvent
 
 ```ts
 // @dimina-kit/workbench
+export function defineEvent<P extends JsonValue>(name: string): HostEvent<P>
 
-export type MaybePromise<T> = T | Promise<T>
-export type JsonPrimitive = string | number | boolean | null
-export type JsonValue = JsonPrimitive | { readonly [k: string]: JsonValue } | readonly JsonValue[]
-
-export interface Disposable { dispose(): void | Promise<void> }
-
-/** HostEvent 是 pure factory：`defineEvent(name)` 创建后必须在 `config.events` 显式列出，framework 才会绑定 transport */
 export interface HostEvent<P extends JsonValue> {
   readonly name: string
   publish(payload: P): void
   on(listener: (payload: P) => void): Disposable
 }
-export function defineEvent<P extends JsonValue>(name: string): HostEvent<P>
+```
 
-/**
- * Handler 形参故意宽松（`any[]`）—— host 写 `(p: { code: string }) => ...`
- * 必须能赋给这个 map；narrower 类型由 webview-side
- * `createWorkbenchClient<HS, EV>()` 通过 `Parameters<HS[K]>` 推断。返回值
- * runtime 强制 JSON-safe。
- */
+`defineEvent` 是零 side-effect 的 pure factory。创建后必须列进 `config.events`，
+framework 才会在 Bind 阶段绑 transport。`payload` 必须 JSON-safe（function / Date /
+Map / 循环引用等跨进程会失败）。把 event token 放独立模块，main 与 renderer 共享。
+
+### WorkbenchConfig 顶层
+
+```ts
+// @dimina-kit/workbench
 export type SimulatorApiHandler = (...args: any[]) => unknown
 export type HostServiceHandler = (...args: any[]) => unknown
 
 export interface WorkbenchConfig {
   readonly app?: AppConfig
-
-  /** 暴露给小程序，自动投影为 `wx.<name>` */
   readonly simulatorApis?: Record<string, SimulatorApiHandler>
-
-  /** 暴露给 trusted webview（toolbar 等）的 RPC */
   readonly hostServices?: Record<string, HostServiceHandler>
-
-  /**
-   * main → webview 推送。必须显式列出，避免 module load order 隐式注册。
-   * payload 必须 JSON-safe；非 JSON 值（function / Date / Map / 循环引用 等）
-   * 会在跨进程时反序列化失败。
-   */
   readonly events?: readonly HostEvent<JsonValue>[]
-
-  /** Toolbar：host 完全拥有的 WebContentsView */
   readonly toolbar?: ToolbarContribution
-  /** 独立窗口 */
   readonly windows?: Record<string, WindowContribution>
-
   readonly menu?: MenuContribution
   readonly lifecycle?: LifecycleContribution
   readonly projects?: ProjectsProvider
   readonly templates?: { custom?: readonly ProjectTemplate[]; builtins?: 'all' | 'none' | readonly string[] }
   readonly update?: UpdateContribution
-
-  /** Imperative escape：声明表达不了的运行时操作 */
   readonly setup?: (runtime: Runtime) => MaybePromise<void>
 }
 
@@ -135,75 +163,37 @@ export interface AppConfig {
 
 export type WebviewSource = { readonly url: string } | { readonly file: string }
 
-/** Toolbar：host 完全拥有 WebContentsView，自渲染 UI + 自控 preload */
 export interface ToolbarContribution {
   readonly source: WebviewSource
-  readonly preloadPath: string   // 必填，host 完全控制
-  readonly height: number        // 必填，固定高度；width 自动跟随主窗口
-}
-
-export interface WindowContribution {
-  readonly title?: string
-  readonly source: WebviewSource
-  readonly preloadPath?: string
-  readonly width?: number
-  readonly height?: number
-  readonly modal?: boolean
+  readonly preloadPath: string   // 必填
+  readonly height: number        // 必填，固定高度
 }
 
 export interface LifecycleContribution {
-  /**
-   * 主窗口关闭 / app 退出前调用，await 完成；超时则 log error 后继续 shutdown 流程（不阻止关闭）。
-   * 如需区分 close vs quit 等细粒度时机，用 `setup(runtime)` 内
-   * `runtime.electron.app.on('before-quit', ...)`。
-   */
-  readonly beforeClose?: () => MaybePromise<void>
-  /** beforeClose 超时（ms），默认 10_000 */
-  readonly timeoutMs?: number
+  readonly beforeClose?: () => MaybePromise<void>  // 仅"有活跃 session 的主窗口 close"时 await；超时 log 后继续。非通用 quit 钩子
+  readonly timeoutMs?: number                      // 默认 10_000
 }
 
-/**
- * Framework 入口。第二参数 `options` 在生产路径下不传（framework lazy
- * `await import('electron')` 取真模块）；测试或非 Electron 环境可注入
- * `{ electron, ipcMain }` 等 fake。
- */
-export function workbench(config: WorkbenchConfig, options?: WorkbenchOptions): Promise<void>
-
-export interface WorkbenchOptions {
-  readonly electron?: MinimalElectron
-  readonly ipcMain?: MinimalIpcMain
-  readonly trustedWebContents?: () => readonly MinimalWebContents[]
-  readonly senderPolicy?: SenderPolicy
-}
+export function workbench(config: WorkbenchConfig): Promise<void>  // 从 @dimina-kit/devtools 导入
 ```
 
-字段设计要点：
+Handler 形参故意宽松（`any[]`），让 host 写 `(p: { code: string }) => ...` 这种
+narrower 签名能直接赋值；webview 侧 `createWorkbenchClient<HS, EV>()` 通过
+`Parameters<HS[K]>` 还原精确签名。返回值 runtime 强制 JSON-safe。
 
-- **`simulatorApis` / `hostServices` / `events` 三个字段分开**：受众、调用方向、是否自动投影都不同（simulator 自动投 `wx.<name>`；hostServices 是 trusted webview RPC；events 是 main → webview push）。不合并成单一 `channels` 抽象，避免引入 Audience / projection / mode union 等表面统一。
-- **`toolbar.preloadPath` / `height` 必填**：host 完全控制 toolbar webview 的 preload（framework 不自动注入 bridge，host 在自己的 preload 里 import `exposeWorkbenchBridge()`）；高度固定，宽度自动跟随主窗口。
-- **`events` 必须显式列出**：`defineEvent(name)` 是零 side effect 的 pure factory，只有出现在 `config.events` 里 framework 才会绑 transport。emit 未声明的 event 抛 `UndeclaredHostEventError`。
-- **`setup(runtime)` 是 await 的 callback**：framework 在 Bind 完成后调用、await 它返回才进入 Ready；`runtime` 是 long-lived，setup 返回后仍可在 channel handler 里使用。
-
-### 3.2 Runtime
+### Runtime（setup 拿到的门面）
 
 ```ts
-import type { BrowserWindow, WebContentsView, ipcMain } from 'electron'
-
 export interface Runtime {
-  /** Electron module proxy：host 用什么自取，framework 不维护白名单 */
-  readonly electron: typeof import('electron')
+  readonly electron: typeof import('electron')   // 完整 module proxy，host 自取任意模块
   readonly mainWindow: BrowserWindow
   readonly toolbarView: WebContentsView | null
 
-  /** 类型化 IPC（推荐 escape 路径，自动 senderPolicy + audience） */
-  readonly ipc: TypedIpcRegistry
+  readonly ipc: TypedIpcRegistry                 // 同进程 in-memory typed registry（host RPC 内部承载，非跨进程网关）
+  readonly rawIpcMain: typeof ipcMain            // 跨进程裸 IPC：自定义 channel 走这里（绕过框架保证，host 自负）
 
-  /** Raw IPC：绕过 framework 保证，host 自负 audience / dispose / 错误处理 */
-  readonly rawIpcMain: typeof ipcMain
-
-  /** main 进程内部 helper：直接调已声明的 simulator / host API */
   readonly call: {
-    simulator(name: string, ...args: JsonValue[]): Promise<JsonValue>
+    simulator(name: string, ...args: JsonValue[]): Promise<JsonValue>  // 内部直调已声明 API
     host(name: string, ...args: JsonValue[]): Promise<JsonValue>
   }
 
@@ -215,218 +205,169 @@ export interface Runtime {
   }
 
   readonly context: WorkbenchContext
-
-  /** Framework 内部事件 bus（main-process only，不跨进程） */
-  on<E extends keyof FrameworkEvents>(event: E, listener: (payload: FrameworkEvents[E]) => void): Disposable
-
-  /** Disposable 注册：随 runtime shutdown LIFO 清理 */
-  add(d: Disposable | (() => MaybePromise<void>)): Disposable
-}
-
-export interface TypedIpcRegistry {
-  handle<A extends JsonValue[], R extends JsonValue>(
-    channel: string,
-    handler: (...args: A) => MaybePromise<R>,
-    options?: {
-      // `audience` was removed — it was a no-op fake guarantee (foundation §11.3).
-      validator?: (args: unknown[]) => A
-    },
-  ): Disposable
-  on<P extends JsonValue>(channel: string, listener: (payload: P) => void): Disposable
-  send(target: 'mainWindow' | BrowserWindow, channel: string, payload: JsonValue): void
-}
-
-export interface WorkbenchContext {
-  readonly workspace: WorkspaceState
-  readonly settings: SettingsSnapshot
-  readonly theme: 'light' | 'dark'
-  readonly workspaceOps: {
-    openProject(path: string): Promise<void>
-    closeProject(): Promise<void>
-    on(event: 'session-changed', cb: (s: WorkbenchSession | null) => void): Disposable
-  }
-  /** @internal 使用 `_` 前缀字段属于 unsupported escape，破坏 framework 保证 */
-  readonly _registry: ResourceRegistry
-  /** @internal unsupported escape */
-  readonly _senderPolicy: SenderPolicy
-}
-
-export interface FrameworkEvents {
-  'window-created': { window: BrowserWindow; role: 'main' | 'toolbar' | 'host' }
-  'window-closed': { window: BrowserWindow }
-  'session-changed': { session: WorkbenchSession | null }
-  'theme-changed': { theme: 'light' | 'dark' }
-  /** webContents.loadURL/loadFile 失败时 emit；framework 不 reject start()，host 可订阅做兜底 */
-  'load-failed': { source: WebviewSource; error: unknown }
-}
-
-export interface WindowCreateOptions {
-  source: WebviewSource
-  preloadPath?: string
-  width?: number
-  height?: number
-  modal?: boolean
-  parent?: BrowserWindow
-  autoTrust?: boolean   // 默认 true
+  on<E extends keyof FrameworkEvents>(event: E, listener: (p: FrameworkEvents[E]) => void): Disposable
+  add(d: Disposable | (() => MaybePromise<void>)): Disposable  // 注册随 shutdown LIFO 清理
 }
 ```
 
-Runtime 设计要点：
+可用且实装的：`electron`、`mainWindow`、`ipc`、`rawIpcMain`、`call.simulator`、
+`call.host`、`windows.create / all / trust`、`add`，以及 `context.workspace` /
+`context.workspaceOps.openProject / closeProject`。
 
-- **`runtime.electron` 是完整 Electron module proxy**：host 想用 `app / dialog / shell / clipboard / nativeTheme / Menu / globalShortcut / screen / ...` 任何模块自取。
-- **`runtime.rawIpcMain` 显式暴露**：host 在技术上永远能 `import { ipcMain } from 'electron'`，framework 无法物理阻止。显式暴露 + doc 警示：用这个字段即绕过 senderPolicy、不进 registry，host 自负 audience / dispose / 错误处理。
-- **`runtime.context._registry` / `_senderPolicy`**：`@internal` 字段不藏。host 是 trusted partner（同团队），完整暴露让 framework 行为对 host 完全可观察可调试；使用 `_` 字段属于 unsupported escape，破坏 framework 保证。
-- **`runtime.on` vs `events` 字段**：FrameworkEvents 是 main 进程内部 bus（不跨进程）；HostEvents 是 main → webview push（跨进程）。两者严格区分。
-- **`runtime.windows.create()` 返回真 `Electron.BrowserWindow`**：production 下拥有完整方法（`minimize` / `setBounds` / `focus` 等）。framework 内部用结构类型 `MinimalBrowserWindow` 做 DI，host 在 production 代码按 `BrowserWindow` 全 API 调用是安全的。
+**当前 minimal-entry 占位（尚未接线，调用不报错但行为是惰性的）**：
 
-### 3.3 Preload bridge helper
+| 字段 | 现状 |
+|---|---|
+| `toolbarView` | 恒为 `null`（host 经 `config.toolbar` + 自己的 preload 驱动 toolbar；raw view 不外露） |
+| `windows.get(id)` | 恒返 `undefined`（声明式 `config.windows` 尚未装配；`windows.create` 是真的） |
+| `on(...)`（FrameworkEvents） | 监听器能注册，但 framework 暂无 emitter——**不会 fire** |
+| `context.theme` / `context.settings` | 占位 `'dark'`（devtools 暂无顶层 live theme 源） |
+| `context.workspaceOps.on('session-changed')` | 返回惰性 Disposable（WorkspaceService 暂不 emit session 变化） |
+| `WorkbenchSession.startedAt` | 投影为 `0`（devtools session 暂无开始时间戳） |
+
+`runtime.electron` 是完整 Electron module proxy（`app`/`dialog`/`shell`/`Menu`/…
+自取）。`runtime.rawIpcMain` 是显式 escape：用它即绕过 framework 保证、不进 registry，
+host 自负 dispose / 错误处理。`runtime.context` 上的 `_registry` / `_senderPolicy`
+是 `@internal` escape，使用即破坏 framework 保证。
+
+**启动 / 失败行为（当前 entry）**：
+
+- `setup(runtime)` 抛错时，framework 会 `dispose()` 已装配的 context（连带拆掉
+  WireTransport handler 与已绑的 contributions）再把错误抛出，不残留。
+- `toolbar` 加载是 best-effort：`source` load 失败只 log、不中断 `workbench()`；固定
+  `height` 仍会推给占位区。
+- `simulatorApis` 经 wire 的 simulator 路由按**单参**（`args[0]`）调，多参不支持
+  （devtools simulator API 是 `wx.<name>(params)` 单参约定）。
+
+### exposeWorkbenchBridge（preload）
 
 ```ts
 // @dimina-kit/workbench/preload
-
-export interface ExposeBridgeOptions {
-  /** 暴露到 window 的全局名，默认 '__workbenchBridge' */
-  readonly globalName?: string
-}
-
-export function exposeWorkbenchBridge(options?: ExposeBridgeOptions): void
+export function exposeWorkbenchBridge(options?: { globalName?: string }): void
 ```
 
-host 在自己的 preload 里 import 并调用：
+host 在自己的 toolbar/window preload 里调用，把 framework 的 typed RPC + event
+bridge 暴露到 webview window（默认全局名 `__workbenchBridge`）。不调它，webview 端
+`createWorkbenchClient().ready()` 会抛 `WorkbenchClientNotReadyError`。
 
-```ts
-// toolbar/preload.ts —— host 完全控制
-import { contextBridge, ipcRenderer } from 'electron'
-import { exposeWorkbenchBridge } from '@dimina-kit/workbench/preload'
-
-exposeWorkbenchBridge()   // framework typed RPC + events bridge
-
-// host 自己想暴露的额外 bridge —— 完全自由
-contextBridge.exposeInMainWorld('qdmp', {
-  trackEvent: (name: string, props: unknown) => ipcRenderer.invoke('qdmp:analytics', name, props),
-})
-```
-
-host 极端情况下可以不调 `exposeWorkbenchBridge()` 自定义全套 IPC 协议，但这样 webview 里 `createWorkbenchClient()` 的 `ready()` 会 reject `WorkbenchClientNotReadyError`。
-
-### 3.4 Webview-side client
+### createWorkbenchClient（renderer）
 
 ```ts
 // @dimina-kit/workbench/client
-
 export class WorkbenchClientNotReadyError extends Error {}
-export class WorkbenchRemoteError extends Error {
-  readonly remoteName: string
-  readonly code?: string
-}
-
-export interface CreateWorkbenchClientOptions {
-  /** 默认 `__workbenchBridge`；必须与 host preload 的 `exposeWorkbenchBridge({ globalName })` 对齐 */
-  readonly globalName?: string
-}
+export class WorkbenchRemoteError extends Error { readonly remoteName: string; readonly code?: string }
 
 export interface WorkbenchClient<
   HS extends Record<keyof HS, (...args: any[]) => unknown>,
   EV extends readonly HostEvent<JsonValue>[],
 > {
   ready(): Promise<void>
-  invoke<K extends keyof HS & string>(
-    name: K,
-    ...args: Parameters<HS[K]>
-  ): Promise<Awaited<ReturnType<HS[K]>>>
-  on<E extends EV[number]>(
-    event: E,
-    listener: (payload: E extends HostEvent<infer P> ? P : never) => void,
-  ): Disposable
+  invoke<K extends keyof HS & string>(name: K, ...args: Parameters<HS[K]>): Promise<Awaited<ReturnType<HS[K]>>>
+  on<E extends EV[number]>(event: E, listener: (payload: E extends HostEvent<infer P> ? P : never) => void): Disposable
 }
 
 export function createWorkbenchClient<
   HS extends Record<keyof HS, (...args: any[]) => unknown>,
   EV extends readonly HostEvent<JsonValue>[],
->(options?: CreateWorkbenchClientOptions): WorkbenchClient<HS, EV>
+>(options?: { globalName?: string }): WorkbenchClient<HS, EV>
 ```
-
-`HS` 上界用 `Record<keyof HS, (...args: any[]) => unknown>` 而非 `JsonValue[]`：与 host 侧 `HostServiceHandler` 对称，host 在 `hostServices` 写 `(p: { code: string }) => ...` 这种 narrower 签名直接成立，`Parameters<HS[K]>` 在 client 端精确推出原签名。跨进程负载安全性由 wire envelope（`InvokeRequest.args: readonly JsonValue[]`）与 handler 端可选 `validator` 承担，不放在公开类型约束里——Electron IPC 走 structured clone 而非 JSON，把 `JsonValue` 当编译期硬约束既挡掉合理写法、又给不出真实运行时保证。
 
 host 在 config 文件里 export `HostServices` / `Events` 类型，给 webview project import：
 
 ```ts
 // workbench.config.ts（host 写的）
-export const hostServices = { ... } as const
-export const events = [authChanged, ...] as const
+export const hostServices = { /* ... */ } as const
+export const events = [authChanged] as const
 export type HostServices = typeof hostServices
 export type Events = typeof events
 ```
 
 ```ts
 // toolbar/src/main.ts（webview 端）
+import { createWorkbenchClient } from '@dimina-kit/workbench/client'
 import type { HostServices, Events } from '../../workbench.config'
 const client = createWorkbenchClient<HostServices, Events>()
 ```
 
-不引入 `WorkbenchContract` generic、不引入 module augmentation——host 直接 export 自己已经写好的类型即可。
+`globalName` 必须与 host preload 的 `exposeWorkbenchBridge({ globalName })` 对齐。
 
-## 4. 关键不变量
+## 4. 最小可跑的三段（main / preload / client）
+
+```ts
+// events.ts —— 无 side-effect 的 HostEvent token，main / renderer 共享
+import { defineEvent } from '@dimina-kit/workbench'
+export const authChanged = defineEvent<{ user: { id: string } | null }>('authChanged')
+```
+
+```ts
+// main.ts —— host entry（顶层执行 workbench()，有 side-effect）
+import { workbench } from '@dimina-kit/devtools'
+import { authChanged } from './events'
+
+export const hostServices = {
+  getUser: async () => ({ user: null as { id: string } | null }),
+} as const
+export type HostServices = typeof hostServices
+export type Events = readonly [typeof authChanged]
+
+workbench({
+  app: { name: 'My DevTools' },
+  hostServices,
+  events: [authChanged],
+  toolbar: {
+    source: { url: 'http://localhost:5173/toolbar.html' },
+    preloadPath: new URL('./toolbar-preload.js', import.meta.url).pathname,
+    height: 48,
+  },
+}).catch((err) => { console.error('workbench() failed:', err) })
+```
+
+```ts
+// toolbar-preload.ts —— host 完全控制
+import { exposeWorkbenchBridge } from '@dimina-kit/workbench/preload'
+exposeWorkbenchBridge()   // framework typed RPC + events bridge
+```
+
+```ts
+// toolbar/src/main.ts —— webview renderer
+import { createWorkbenchClient } from '@dimina-kit/workbench/client'
+import type { HostServices, Events } from '../../main'   // type-only：被擦除，不拖 main side-effect
+import { authChanged } from '../../events'               // token 来自无 side-effect 模块
+
+const client = createWorkbenchClient<HostServices, Events>()
+await client.ready()
+
+const { user } = await client.invoke('getUser')
+renderLogin(user)
+
+const off = client.on(authChanged, ({ user }) => renderLogin(user))
+window.addEventListener('beforeunload', () => off.dispose())
+```
+
+## 5. mainWindow 加载归属
+
+当前 devtools entry **会**装配并加载内置 main renderer（`createWorkbenchApp` 在 host
+`setup` 之前就 `loadFile` 了 devtools 自带的 renderer）。所以 host **不应**在
+`setup(runtime)` 里覆盖 `runtime.mainWindow` 的内容——除非有明确替换整个 shell 的新实现。
+`runtime.mainWindow` 给 host 做窗口控制（show / bounds / 监听 app event 等），不是让
+host 重新 `loadURL` 入口页。`toolbar` 由 framework 按 `source` 加载。
+
+## 6. 关键不变量
 
 | 编号 | 含义 |
 |---|---|
 | **I1 容器归属** | 注册物挂 framework runtime registry，不进进程全局、不进模块级可变量 |
-| **I2 IPC 经网关** | host 跨进程 IPC 在受支持路径（`simulatorApis` / `hostServices` / `events` / `runtime.ipc`）上走 framework typed transport（senderPolicy + JSON 校验 + audience）。`runtime.rawIpcMain` 是显式 escape，框架不提供保证 |
-| **I3 生命周期** | 注册返 Disposable，进 registry，随 runtime shutdown LIFO 级联清理 |
+| **I2 IPC 经网关** | host 跨进程 IPC 的受支持路径（`simulatorApis` / `hostServices` / `events`）走 framework typed transport（senderPolicy + envelope 形状校验）。`runtime.ipc` 是同进程 in-memory registry（host RPC 内部承载），`runtime.rawIpcMain` 是跨进程裸 escape——两者框架都不提供跨进程 senderPolicy 保证 |
+| **I3 Disposable 级联** | 注册返 Disposable，进 registry，随 runtime shutdown LIFO 级联清理 |
 
-I2 的范围说明：framework 无法物理阻止 host `import { ipcMain }` 裸调；I2 是「受支持路径上的服务承诺」，不号称「裸 IPC 物理不可能」。`runtime.rawIpcMain` 把这条边界显式暴露给 host。
-
-## 5. Lifecycle
-
-启动：
-
-| Phase | Framework 行为 |
-|---|---|
-| **Init** | `app.whenReady()` + framework internal 起 + senderPolicy + IPC transport |
-| **Bind** | declared 全字段绑 transport；mainWindow + toolbar WebContentsView + declared windows 建好；wireTransport 启动后才触发 webview `loadURL` / `loadFile`（best-effort，不 await） |
-| **Setup** | 调 `config.setup(runtime)` 并 await；runtime 完全可用，topic publish 不抛错（但 toolbar webview 可能尚未 subscribe，初始状态用 hostServices 拉一次 snapshot） |
-| **Ready** | runtime/transport 装配完成，declared sources 已开始加载；webview 实际 load 完成属于 host 侧异步事件，加载失败通过 `runtime.on('load-failed', ...)` 兜底 |
-
-关闭：
-
-| Phase | Framework 行为 |
-|---|---|
-| **Drain** | 进入排空 phase；drain 是纯 phase 标记，不阻塞新进来的 invoke，也不等待 in-flight handler |
-| **Cleanup** | `lifecycle.beforeClose` await + timeout（超时只 log，不阻止 shutdown 继续）；之后 destroy 跟踪窗口、`registry.disposeAll()` LIFO 释放 `runtime.add()` 注册的 disposable |
-| **Destroy** | toolbar WebContentsView + windows + transport 关 |
-| **Quit** | lifecycle phase 进入 `quit`（framework 不主动调 `electron.app.quit()`；host 自行决定何时退出进程） |
-
-关键时序保证：
-
-- `HostEvent.publish()` 在 Init / Bind 阶段调用抛 `EventNotBoundError`；Setup / Ready 之后调用是安全的（fire-and-forget，无 replay——setup 内 publish 给 toolbar 的事件可能丢失，初始状态走 hostServices snapshot）
-- `setup(runtime)` 内异步操作 framework 严格 await
-- `beforeClose` 超时 → log error 后继续 shutdown 流程
-
-### Shutdown 的 host 责任
-
-framework 在 shutdown 路径上**故意留出三个 host-owned 缝隙**，每条都对应一个 host 自管点：
-
-1. **关闭不可抢断**：framework hook 的是 `mainWindow` 的 `'closed'` 事件（窗口已销毁后触发），不是 `'close'`（可 preventDefault 的拦截点）。如果 host 需要"保存未提交内容才允许关闭"这种语义，自行在 `setup(runtime)` 里 `runtime.mainWindow.on('close', e => { e.preventDefault(); ...; win.destroy() })`，由 host 控制最终关闭时机。
-2. **drain 不拒新 invoke**：drain phase 是纯状态标记，不阻塞新进来的 RPC 调用。`beforeClose` await 期间，toolbar / declared windows 仍可发 invoke。host 若依赖"shutdown 期间没有新写入"，在 host 自己的 webview 端实现"close→ stop issuing requests"逻辑。
-3. **进程退出**：framework 在 `Quit` phase 不主动调 `electron.app.quit()`。所有 trackedWindow 已 destroy 后，Electron 默认 `window-all-closed` 行为会 quit（macOS 除外）；host 若有多窗口或独立退出 UX，自行用 `app.on('window-all-closed')` / `app.quit()` 控制。
-
-## 6. mainWindow 加载归属
-
-framework 不主动 `loadURL` / `loadFile` mainWindow。host 在 `setup(runtime)` 内调 `runtime.mainWindow.loadURL(...)` 加载自己的入口页（dimina default 加载 dimina 内置 React app；qdmp 加载 qdmp 自己的 main webview）。
-
-toolbar / declared windows 由 framework 根据 `source` 字段自动加载——mainWindow 的视图层归属 host，framework 只保证容器装配与生命周期。
-
-## 7. 设计取舍
-
-- **不引入 plugin 系统**：使用者只有 qdmp 与 dimina 自身两个，feature 内聚用 plain TS module 边界（`auth.ts` / `projects.ts` 等）就够。
-- **`simulatorApis` / `hostServices` / `events` 三字段不合并**：audience、调用方向、是否自动投影都不同，统一成 `channels` 抽象需要引入 `Audience` 类型 / `projectAs` 字段 / `ChannelMode` 三 mode union 等额外概念，换来的是表面统一。
-- **toolbar 由 host 完全拥有 WebContentsView**：按钮 UI / 状态显示是 host 业务，framework 提供容器 + IPC bridge 已够。WebContentsView 是 Electron 现代 API（替代 BrowserView），嵌入主窗口子区域、独立 webContents、preload 隔离开箱即用。
-- **`runtime.rawIpcMain` 显式暴露**：host 永远能 `import { ipcMain }`，framework 无法物理拦截。显式暴露 + doc 警示告知 host **用这个字段即等于自负全部责任**。framework 不主动监控 raw IPC 用法（无 telemetry hook）。
-- **`runtime.context` 完整暴露包括 `_` 字段**：host 是 trusted partner，"防御"的对象是手滑、不是恶意。完整暴露 + JSDoc 警示让 framework 行为对 host 可观察可调试。
-- **不引入 CLI**：host 写 1 行 `main.ts` 就是 entry，framework 接管 Electron lifecycle 与 host 写 entry 文件不冲突。
-- **dimina builtin React panels 不进 public API**：dimina 内置的 projects / session / simulator / popover / settings 面板属于 framework baseline 私有路径（不在 `WorkbenchConfig` 表达）；host 不能加自己的 builtin panel，也不能关掉 dimina default 的 builtin panels。dogfooding 收敛的是 public config + lifecycle，不包括 baseline panels 装配。
+I2 是「受支持路径上的服务承诺」：framework 无法物理阻止 host 裸 `import { ipcMain }`，
+`runtime.rawIpcMain` 把这条边界显式暴露出来。
 
 ## 附录 A：host 完整集成示例（qdmp）
+
+> 下面是**示意性的 host 侧集成代码**，住在下游 host 工程（如 qdmp）里，**不在本仓库**。
+> `./qdmp-api` / `./qdmp-adapter` / `./projects` / `./menu` / `toolbar/preload.ts` 等都是
+> host 自己写的模块，这里只演示它们怎么拼到 `workbench(config)` 上。
 
 ### feature module
 
@@ -443,7 +384,6 @@ import { qdmpLogin, qdmpLogout } from './qdmp-api'   // main-only deps
 import { authChanged } from './events'
 
 let currentUser: { id: string; name: string } | null = null
-export const getCurrentUser = () => currentUser
 
 export async function login(p: { code: string }) {
   const r = await qdmpLogin(p)
@@ -463,18 +403,19 @@ export async function getAuthState() {
 }
 ```
 
-> 把 HostEvent token 独立到 `events.ts` —— renderer/toolbar 只 import token，不会把 main-only 的 `qdmp-api` 拖进 toolbar bundle。
+> 把 HostEvent token 独立到 `events.ts`——renderer/toolbar 只 import token，不会把
+> main-only 的 `qdmp-api` 拖进 toolbar bundle。
 
 ### workbench.config.ts
 
 ```ts
 import { fileURLToPath } from 'node:url'
-import { workbench } from '@dimina-kit/workbench'
+import { workbench } from '@dimina-kit/devtools'     // 入口在 devtools
 import { qdmpAdapter } from './qdmp-adapter'
 import { qdmpProjects } from './projects'
 import * as auth from './auth'
 import * as projects from './projects'
-import { authChanged, activeProjectChanged } from './events'
+import { authChanged } from './events'
 import { buildQdmpMenu } from './menu'
 
 export const simulatorApis = {
@@ -488,12 +429,13 @@ export const hostServices = {
   uploadCurrentProject: projects.upload,
 } as const
 
-export const events = [authChanged, activeProjectChanged] as const
+export const events = [authChanged] as const
 
 export type SimulatorApis = typeof simulatorApis
 export type HostServices = typeof hostServices
 export type Events = typeof events
 
+// fire-and-forget + .catch()，不要顶层 await（见开头第 2 条坑）
 workbench({
   app: {
     name: 'QDMP DevTools',
@@ -511,42 +453,26 @@ workbench({
     height: 48,
   },
 
-  windows: {
-    reauth: {
-      title: '重新登录',
-      source: { file: './dist/reauth/index.html' },
-      width: 400,
-      height: 300,
-      modal: true,
-    },
-  },
-
   projects: qdmpProjects,
   menu: { build: buildQdmpMenu },
   lifecycle: { beforeClose: async () => qdmpProjects.persistSession(), timeoutMs: 10_000 },
 
   async setup(runtime) {
-    // host 主动加载 mainWindow 入口页（framework 不主动 loadURL，见 §6）
-    await runtime.mainWindow.loadURL('http://localhost:5173/main.html')
+    // 内置 main renderer 已由 framework 加载（见 §5）；这里只做命令式接线。
 
     // 监听 app 激活、重显主窗口
     runtime.electron.app.on('activate', () => {
       if (!runtime.mainWindow.isVisible()) runtime.mainWindow.show()
     })
 
-    // 订阅 framework workspace 变化、触发 re-auth 弹窗
-    runtime.on('session-changed', ({ session }) => {
-      if ((session as { requiresReauth?: boolean } | null)?.requiresReauth) {
-        runtime.windows.get('reauth')?.show()
-      }
-    })
-
-    // 调原生 dialog 的 channel handler（imperative，但仍经 senderPolicy）
-    // 注意：返回值必须 JSON-safe，所以 `r.filePath` 的 undefined 兜成 null
-    runtime.ipc.handle('qdmp:export', async () => {
+    // 把"需要 runtime（dialog/mainWindow）的能力"暴露给 toolbar：走 host 自己的裸
+    // 通道（rawIpcMain + toolbar preload 里的 contextBridge），不是 hostServices——
+    // hostServices handler 在 config 阶段定义、拿不到 runtime。toolbar 端用
+    // `ipcRenderer.invoke('qdmp:export')` 调（见 toolbar/preload.ts）。
+    runtime.rawIpcMain.handle('qdmp:export', async () => {
       const r = await runtime.electron.dialog.showSaveDialog(runtime.mainWindow, { defaultPath: 'export.zip' })
-      return { canceled: r.canceled, filePath: r.filePath ?? null }
-    }, { audience: ['toolbar'] })
+      return { canceled: r.canceled, filePath: r.filePath ?? null }   // JSON-safe
+    })
 
     // host debug 窗口
     if (process.env.QDMP_DEBUG) {
@@ -557,6 +483,8 @@ workbench({
       })
     }
   },
+}).catch((err) => {
+  console.error('[qdmp] workbench() failed:', err)
 })
 ```
 
@@ -574,8 +502,10 @@ import { exposeWorkbenchBridge } from '@dimina-kit/workbench/preload'
 
 exposeWorkbenchBridge()
 
+// host 自己的额外 bridge —— 完全自由。这里和 setup 里注册的
+// `rawIpcMain.handle('qdmp:export', ...)` 配对：toolbar 调 `window.qdmp.exportProject()`。
 contextBridge.exposeInMainWorld('qdmp', {
-  trackEvent: (name: string, props: unknown) => ipcRenderer.invoke('qdmp:analytics', name, props),
+  exportProject: () => ipcRenderer.invoke('qdmp:export'),
 })
 ```
 
@@ -584,7 +514,7 @@ contextBridge.exposeInMainWorld('qdmp', {
 ```ts
 import { createWorkbenchClient } from '@dimina-kit/workbench/client'
 import type { HostServices, Events } from '../../workbench.config'
-import { authChanged } from '../../events'   // 只 import token，不拖 main-side deps
+import { authChanged } from '../../events'   // 只 import token
 
 const client = createWorkbenchClient<HostServices, Events>()
 await client.ready()
@@ -593,7 +523,7 @@ await client.ready()
 const { user } = await client.invoke('getAuthState')
 renderLoginButton(user)
 
-// 订阅变化：HostEvent 作为 token
+// 订阅变化
 const off = client.on(authChanged, ({ user }) => renderLoginButton(user))
 window.addEventListener('beforeunload', () => off.dispose())
 
@@ -602,52 +532,4 @@ document.querySelector('#upload')?.addEventListener('click', async () => {
   const r = await client.invoke('uploadCurrentProject', { projectId: getActiveId() })
   showNotification(`Uploaded to ${r.url}`)
 })
-
-// host 自己暴露的额外 API
-declare global {
-  interface Window {
-    qdmp: { trackEvent(n: string, p: unknown): Promise<void> }
-  }
-}
-window.qdmp.trackEvent('toolbar-loaded', {})
 ```
-
-## 附录 B：dimina default 经 workbench(config) 接入的目标形态（示意，非现有源文件）
-
-> 以下是「假如 dimina default 也走 `workbench(config)`」的示意写法，用来对照 qdmp host 的接入形态——**不是现有源文件**。dimina-devtools 自身目前不经 `@dimina-kit/workbench` 启动，而是用自己的 `createWorkbenchApp(config)`（见 §1 与 [`README.md`](../README.md)）。
-
-```ts
-import { workbench } from '@dimina-kit/workbench'
-import { defaultAdapter } from './services/default-adapter'
-import { builtinProjects } from './services/projects'
-import { buildDefaultMenu } from './menu'
-import { defaultUpdate } from './services/update'
-
-workbench({
-  app: {
-    name: 'Dimina DevTools',
-    adapter: defaultAdapter,
-    headerHeight: 40,
-  },
-
-  // dimina builtin host services（例：让 dimina 内置 React panels 通过这条路径调）
-  hostServices: {
-    'app.getVersion': async () => ({ version: '0.0.0' }),
-  },
-
-  projects: builtinProjects,
-  menu: { build: buildDefaultMenu },
-  lifecycle: { beforeClose: async () => builtinProjects.persistSession(), timeoutMs: 10_000 },
-  templates: { builtins: 'all' },
-  update: defaultUpdate,
-
-  async setup(runtime) {
-    // dimina default 也需要主动加载 mainWindow 入口页
-    await runtime.mainWindow.loadURL('file://path/to/dimina-builtin/index.html')
-  },
-})
-```
-
-在这个目标形态下，dimina 内置 React panels 的 preload / audience / route 仍是 framework baseline 私有路径——不在 `WorkbenchConfig` 表达，也不暴露给 host 入口。公共 config（`app/menu/projects/templates/update/lifecycle`）与 IPC / dispose 走同一管道，baseline panels 装配不收敛进公共 config。
-
-> 面板数据同步（preload 为唯一真相源）见 [`miniapp-snapshot.md`](./miniapp-snapshot.md)；dimina default 自身的启动入口（`createWorkbenchApp(config)`）见 [`README.md`](../README.md)。
