@@ -1,5 +1,5 @@
 /**
- * Requirement C — `createWorkbenchApp` must pass `context.senderPolicy` into
+ * Requirement C — `createDevtoolsRuntime` must pass `context.senderPolicy` into
  * the `UpdateManager` it constructs (app.ts ~line 261).
  *
  * `UpdateManagerOptions` already has an optional `senderPolicy`, and
@@ -193,12 +193,12 @@ vi.mock('@dimina-kit/devkit', () => ({
 import { UpdateChannel } from '../../shared/ipc-channels.js'
 import type { UpdateChecker } from '../../shared/types.js'
 
-let createWorkbenchApp: typeof import('./app.js').createWorkbenchApp
+let createDevtoolsRuntime: typeof import('./app.js').createDevtoolsRuntime
 
 beforeEach(async () => {
   vi.resetModules()
   stubs.reset()
-  ;({ createWorkbenchApp } = await import('./app.js'))
+  ;({ createDevtoolsRuntime } = await import('./app.js'))
 })
 
 function makeChecker(): UpdateChecker {
@@ -217,7 +217,7 @@ const UPDATE_CHANNELS = [UpdateChannel.Check, UpdateChannel.Download, UpdateChan
 
 describe('Requirement C: app wires senderPolicy into UpdateManager', () => {
   it('registers all three updates:* handlers when an updateChecker is provided', async () => {
-    const instance = await createWorkbenchApp({ updateChecker: makeChecker() }).setup()
+    const instance = await createDevtoolsRuntime({ updateChecker: makeChecker() })
     for (const ch of UPDATE_CHANNELS) {
       expect(
         stubs.ipcHandlers.has(ch),
@@ -229,7 +229,7 @@ describe('Requirement C: app wires senderPolicy into UpdateManager', () => {
 
   it('updates:check rejects an untrusted sender (handler must be sender-gated)', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const instance = await createWorkbenchApp({ updateChecker: makeChecker() }).setup()
+    const instance = await createDevtoolsRuntime({ updateChecker: makeChecker() })
 
     const handler = stubs.ipcHandlers.get(UpdateChannel.Check)
     expect(handler, 'updates:check handler must be registered').toBeDefined()
@@ -247,7 +247,7 @@ describe('Requirement C: app wires senderPolicy into UpdateManager', () => {
 
   it('updates:download and updates:install also reject an untrusted sender', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const instance = await createWorkbenchApp({ updateChecker: makeChecker() }).setup()
+    const instance = await createDevtoolsRuntime({ updateChecker: makeChecker() })
 
     for (const ch of [UpdateChannel.Download, UpdateChannel.Install]) {
       const handler = stubs.ipcHandlers.get(ch)

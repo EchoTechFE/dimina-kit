@@ -3,7 +3,7 @@
  * first Connection.
  *
  * `createWorkbenchContext` builds an EMPTY ConnectionRegistry (side-effect-free
- * constructor). The actual anchoring happens in `createWorkbenchApp().setup()`
+ * constructor). The actual anchoring happens in `createDevtoolsRuntime()`
  * (app.ts ~349-353), which calls `context.connections.acquire(mainWindow.webContents)`
  * right after `createContext`. This suite pins that wiring:
  *
@@ -203,22 +203,22 @@ vi.mock('@dimina-kit/devkit', () => ({
   openProject: vi.fn(() => Promise.resolve({ port: 0, appInfo: {}, close: () => Promise.resolve() })),
 }))
 
-let createWorkbenchApp: typeof import('./app.js').createWorkbenchApp
+let createDevtoolsRuntime: typeof import('./app.js').createDevtoolsRuntime
 
 beforeEach(async () => {
   vi.resetModules()
   stubs.reset()
-  ;({ createWorkbenchApp } = await import('./app.js'))
+  ;({ createDevtoolsRuntime } = await import('./app.js'))
 })
 
 /** Drives setup() and returns the WorkbenchAppInstance captured from onSetup. */
 async function setupInstance(): Promise<import('./app.js').WorkbenchAppInstance> {
   let captured: import('./app.js').WorkbenchAppInstance | undefined
-  const instance = await createWorkbenchApp({
+  const instance = await createDevtoolsRuntime({
     onSetup(inst) {
       captured = inst as import('./app.js').WorkbenchAppInstance
     },
-  }).setup()
+  })
   expect(captured, 'onSetup must receive the WorkbenchAppInstance').toBeDefined()
   expect(captured).toBe(instance)
   return instance

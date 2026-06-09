@@ -9,7 +9,7 @@ import { DisposableRegistry } from '../utils/disposable.js'
 import {
   createConnectionRegistry,
   type ConnectionRegistry,
-} from '@dimina-kit/workbench/main'
+} from '@dimina-kit/electron-deck/main'
 import type { SenderPolicy } from '../utils/ipc-registry.js'
 import { createWorkbenchSenderPolicy } from '../utils/sender-policy.js'
 import { defaultAdapter } from './default-adapter.js'
@@ -143,7 +143,7 @@ export interface WorkbenchContext {
    * owns the resources tied to its lifetime and tears them down deterministically
    * on `webContents.once('destroyed')` (hard) or `reset(id)` (soft pool reuse).
    * The substrate for connection-scoped resource ownership — see
-   * packages/workbench/docs/foundation.md §4. Domain services consume it by
+   * packages/electron-deck/docs/foundation.md §4. Domain services consume it by
    * `own()`-ing their per-endpoint resources and observing `reset`/`closed`.
    */
   connections: ConnectionRegistry

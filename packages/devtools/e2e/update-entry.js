@@ -3,7 +3,7 @@
 // `release-YYYYMMDD-N` scheme always resolves to an available update.
 import electron from 'electron'
 import https from 'node:https'
-import { createWorkbenchApp, createGitHubReleaseChecker } from '../dist/main/api.js'
+import { workbench, createGitHubReleaseChecker } from '../dist/main/api.js'
 
 if (process.env.NODE_ENV === 'test') {
   const hide = (win) => {
@@ -46,7 +46,7 @@ async function validateGitHubToken(token) {
 
 const token = await validateGitHubToken(process.env.GITHUB_TOKEN || undefined)
 
-createWorkbenchApp({
+workbench({
   updateChecker: createGitHubReleaseChecker({
     owner: 'EchoTechFE',
     repo: 'dimina-kit',
@@ -57,4 +57,4 @@ createWorkbenchApp({
     initialDelay: 300,
     getCurrentVersion: () => '0',
   },
-}).start()
+}).catch((err) => { console.error('[update-entry] failed:', err) })

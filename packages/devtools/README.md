@@ -2,7 +2,7 @@
 
 基于 Electron 的小程序开发者工具。提供模拟器、Chrome DevTools 面板、WXML/AppData/Storage 面板、编译配置等功能。
 
-下游 host 通过 `createWorkbenchApp(config)` 集成并定制 devtools（见下方「两种接入方式」）。另有独立的 host 集成框架 [`@dimina-kit/workbench`](../workbench)，其目标模型（host 写 `workbench(config)`，framework 接管 Electron 装配 / IPC / 生命周期）的扩展设计见 [`docs/workbench-model.md`](docs/workbench-model.md)。
+下游 host 通过 `workbench(config)`（或零配置 `launch()`）集成并定制 devtools（见下方「两种接入方式」）。两者都经领域中立的 [`@dimina-kit/electron-deck`](../electron-deck) 框架编排——框架接管 Electron 进程生命周期（whenReady / will-quit）、wire/trust 原语，devtools 作为 `RuntimeBackend` 注入完整运行时（见 [`docs/framework-extraction-v2.md`](docs/framework-extraction-v2.md)）。
 
 ---
 
@@ -11,7 +11,7 @@
 | 级别         | 入口                   | 控制力                | 适合场景       |
 | ------------ | ---------------------- | --------------------- | -------------- |
 | **零配置**   | `launch()`             | 无                    | 直接运行       |
-| **配置驱动** | `createWorkbenchApp()` | 配置 Provider + 扩展点 | 品牌化、深度定制 |
+| **配置驱动** | `workbench()` | 配置 Provider + 扩展点 | 品牌化、深度定制 |
 
 ### 零配置
 
@@ -22,17 +22,17 @@ launch()
 
 ### 配置驱动
 
-扩展点分两类：**配置 Provider**（构造期、一对一，替换某个内置能力）走 `createWorkbenchApp` 配置字段；**Contribution**（`onSetup` 期、一对多，添加多个同类条目）走 `onSetup(instance)` 上的 typed 方法。所有 Contribution 都 per-context，随 context 自动销毁。
+扩展点分两类：**配置 Provider**（构造期、一对一，替换某个内置能力）走 `workbench` 配置字段；**Contribution**（`onSetup` 期、一对多，添加多个同类条目）走 `onSetup(instance)` 上的 typed 方法。所有 Contribution 都 per-context，随 context 自动销毁。
 
 ```typescript
 import { suppressEpipe } from '@dimina-kit/devtools/bootstrap'
-import { createWorkbenchApp } from '@dimina-kit/devtools/app'
+import { workbench } from '@dimina-kit/devtools'
 import { rendererDir } from '@dimina-kit/devtools/paths'
 import { Menu } from 'electron'
 
 suppressEpipe()
 
-createWorkbenchApp({
+workbench({
   // ── 配置 Provider（构造期，一对一）──
   appName: '我的开发工具',
   adapter: myAdapter,
@@ -69,7 +69,7 @@ createWorkbenchApp({
   onBeforeClose: ({ context }) => {
     // 窗口关闭前的自定义清理；session 关闭和 view 销毁由框架自动处理
   },
-}).start()
+})
 ```
 
 > Contribution 注册物全部自动进 `context.registry`，host 无需手写 cleanup。devtools 内部仍用 `WorkbenchModule` 组织内置 IPC 模块，但这是实现细节，不再作为对外接入方式导出。
@@ -88,7 +88,7 @@ src/
     api.ts                               # 公共 API 聚合入口（package main）
     app/
       launch.ts                          # 零配置入口
-      app.ts                             # createWorkbenchApp 工厂
+      app.ts                             # createDevtoolsRuntime 装配体 + runDevtoolsBootstrap
       bootstrap.ts                       # suppressEpipe / setupCdpPort
       lifecycle.ts                       # Electron app 生命周期注册
     ipc/                                 # 只做 handler 注册，不写业务
@@ -181,7 +181,7 @@ src/
 
 ### WorkbenchConfig
 
-`launch()` 和 `createWorkbenchApp()` 共用：
+`launch()` 和 `workbench()` 共用：
 
 | 字段               | 类型                 | 默认值              | 说明                               |
 | ------------------ | -------------------- | ------------------- | ---------------------------------- |
@@ -195,7 +195,7 @@ src/
 
 ### WorkbenchAppConfig（扩展 WorkbenchConfig）
 
-`createWorkbenchApp()` 额外支持：
+`workbench()` 额外支持：
 
 | 字段            | 类型                                        | 默认值      | 说明                                              |
 | --------------- | ------------------------------------------- | ----------- | ------------------------------------------------- |
@@ -232,7 +232,7 @@ src/
 
 ## Embedding & Extending the Project Panel
 
-宿主（如 qdmp）通过 `createWorkbenchApp({...})` 嵌入 devtools 时，可对项目面板做三个正交扩展：
+宿主（如 qdmp）通过 `workbench({...})` 嵌入 devtools 时，可对项目面板做三个正交扩展：
 
 | 扩展点 | 用途 |
 | --- | --- |
@@ -251,7 +251,7 @@ src/
 ### 最小示例
 
 ```typescript
-import { createWorkbenchApp } from '@dimina-kit/devtools/app'
+import { workbench } from '@dimina-kit/devtools'
 import type { ProjectsProvider, ProjectTemplate } from '@dimina-kit/devtools/projects-provider'
 import { BrowserWindow } from 'electron'
 
@@ -293,7 +293,7 @@ const qdmpBlank: ProjectTemplate = {
   source: { type: 'directory', path: '/abs/path/to/template' },
 }
 
-createWorkbenchApp({
+workbench({
   projectsProvider: provider,
   projectTemplates: [qdmpBlank],
   builtinTemplates: ['taro-todo'], // 只保留 taro-todo，干掉默认 blank
@@ -312,7 +312,7 @@ createWorkbenchApp({
       win.on('closed', () => resolve(null))
     })
   },
-}).start()
+})
 ```
 
 ### `customCreateProjectDialog` 返回值
@@ -463,7 +463,7 @@ launch({ preloadPath: '/absolute/path/to/my-preload.js' })
 | `wx.getStorage(...)` 覆盖内置 | `'getStorage'`（小心：这会**屏蔽** dimina 容器的实现） |
 
 ```typescript
-createWorkbenchApp({
+workbench({
   onSetup: (instance) => {
     // 提供 wx.login 的实现（dimina 容器默认未实现，注册后才能用）
     const dispose = instance.registerSimulatorApi('login', async ({ success }) => {
@@ -495,13 +495,12 @@ createWorkbenchApp({
 `@dimina-kit/devtools` 的公共入口。`api.ts`（根入口）聚合了所有公共 API，优先从根入口导入。
 
 ```
-@dimina-kit/devtools                        launch, createWorkbenchApp, buildDefaultMenu,
+@dimina-kit/devtools                        launch, workbench, buildDefaultMenu,
                                        openSettingsWindow, suppressEpipe, setupCdpPort,
                                        createWorkbenchContext, createMainWindow,
                                        createViewManager, IpcRegistry,
                                        UpdateManager, createGitHubReleaseChecker, ...
 @dimina-kit/devtools/launch                 launch(config?), buildDefaultMenu, openSettingsWindow
-@dimina-kit/devtools/app                    createWorkbenchApp(config?)
 @dimina-kit/devtools/types                  TypeScript 类型定义
 @dimina-kit/devtools/bootstrap              suppressEpipe(), setupCdpPort()
 @dimina-kit/devtools/context                createWorkbenchContext(opts),

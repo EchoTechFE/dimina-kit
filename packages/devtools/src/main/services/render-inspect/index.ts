@@ -14,7 +14,7 @@
  * reads, and the sid registry all share one realm. See render-inspect.ts.
  */
 import type { WebContents } from 'electron'
-import type { ConnectionRegistry } from '@dimina-kit/workbench/main'
+import type { ConnectionRegistry } from '@dimina-kit/electron-deck/main'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { devtoolsPackageRoot } from '../../utils/paths.js'

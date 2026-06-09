@@ -17,7 +17,7 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import type { WebContents } from 'electron'
-import { createConnectionRegistry } from '@dimina-kit/workbench/main'
+import { createConnectionRegistry } from '@dimina-kit/electron-deck/main'
 import {
   createNetworkForwarder,
   rewriteRequestId,

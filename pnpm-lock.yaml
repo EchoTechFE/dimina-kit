@@ -63,12 +63,12 @@ importers:
       '@dimina-kit/devkit':
         specifier: workspace:*
         version: link:../devkit
+      '@dimina-kit/electron-deck':
+        specifier: workspace:*
+        version: link:../electron-deck
       '@dimina-kit/view-anchor':
         specifier: workspace:*
         version: link:../view-anchor
-      '@dimina-kit/workbench':
-        specifier: workspace:*
-        version: link:../workbench
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.3.6)
@@ -212,6 +212,30 @@ importers:
         specifier: ^4.1.4
         version: 4.1.4(@types/node@22.19.17)(jsdom@29.0.2)(vite@8.0.8(@types/node@22.19.17)(esbuild@0.28.0)(jiti@1.21.7)(less@4.6.4)(sass@1.99.0))
 
+  packages/electron-deck:
+    devDependencies:
+      '@dimina-kit/eslint-config':
+        specifier: workspace:*
+        version: link:../eslint-config
+      '@dimina-kit/typescript-config':
+        specifier: workspace:*
+        version: link:../typescript-config
+      '@types/node':
+        specifier: ^22.15.3
+        version: 22.19.17
+      electron:
+        specifier: ^41.2.1
+        version: 41.2.1
+      eslint:
+        specifier: ^10.2.1
+        version: 10.2.1(jiti@2.6.1)
+      typescript:
+        specifier: 5.9.2
+        version: 5.9.2
+      vitest:
+        specifier: ^4.1.4
+        version: 4.1.4(@types/node@22.19.17)(jsdom@29.0.2)(vite@8.0.8(@types/node@22.19.17)(esbuild@0.28.0)(jiti@2.6.1)(less@4.6.4)(sass@1.99.0))
+
   packages/eslint-config:
     devDependencies:
       '@eslint/js':
@@ -285,30 +309,6 @@ importers:
       vitest:
         specifier: ^4.1.4
         version: 4.1.4(@types/node@24.12.2)(jsdom@29.0.2)(vite@8.0.8(@types/node@24.12.2)(esbuild@0.28.0)(jiti@2.6.1)(less@4.6.4)(sass@1.99.0))
-
-  packages/workbench:
-    devDependencies:
-      '@dimina-kit/eslint-config':
-        specifier: workspace:*
-        version: link:../eslint-config
-      '@dimina-kit/typescript-config':
-        specifier: workspace:*
-        version: link:../typescript-config
-      '@types/node':
-        specifier: ^22.15.3
-        version: 22.19.17
-      electron:
-        specifier: ^41.2.1
-        version: 41.2.1
-      eslint:
-        specifier: ^10.2.1
-        version: 10.2.1(jiti@2.6.1)
-      typescript:
-        specifier: 5.9.2
-        version: 5.9.2
-      vitest:
-        specifier: ^4.1.4
-        version: 4.1.4(@types/node@22.19.17)(jsdom@29.0.2)(vite@8.0.8(@types/node@22.19.17)(esbuild@0.28.0)(jiti@2.6.1)(less@4.6.4)(sass@1.99.0))
 
 packages:
 

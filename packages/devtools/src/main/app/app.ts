@@ -8,7 +8,6 @@ import type { BuiltinModuleId, MenuContext, ToolbarActionInput, WorkbenchAppConf
 import type { SimulatorApiHandler } from '../services/simulator/custom-apis.js'
 import { rendererDir as defaultRendererDir, defaultPreloadPath } from '../utils/paths.js'
 import { installThemeBackgroundSync } from '../utils/theme.js'
-import { registerAppLifecycle } from './lifecycle.js'
 import { createMainWindow, wireMainWindowEvents } from '../windows/main-window/index.js'
 import { createWorkbenchContext, type WorkbenchContext } from '../services/workbench-context.js'
 import { loadWorkbenchSettings, applyTheme } from '../services/settings/index.js'
@@ -268,6 +267,10 @@ function setupMcp(): Disposable | null {
 
 function wireAppWindowEvents(config: WorkbenchAppConfig, instance: WorkbenchAppInstance): Disposable {
   const { mainWindow, context } = instance
+  // In-flight guard: `closeProject()` is async, and the window stays open
+  // (preventDefault'd) while it runs — a second close click during that window
+  // would re-enter and tear the same session down twice. Swallow re-entrancy.
+  let closing = false
   return wireMainWindowEvents(mainWindow, {
     context,
     onResize: () => context.views.repositionAll(),
@@ -281,11 +284,18 @@ function wireAppWindowEvents(config: WorkbenchAppConfig, instance: WorkbenchAppI
       // unable to invoke anything, so subsequent clicks on Import/etc. would
       // raise `No handler registered for ...`.
       e.preventDefault()
-      if (config.onBeforeClose) {
-        await config.onBeforeClose(instance)
+      if (closing) return
+      closing = true
+      try {
+        if (config.onBeforeClose) {
+          await config.onBeforeClose(instance)
+        }
+        await context.workspace.closeProject()
+        context.notify.windowNavigateBack()
       }
-      await context.workspace.closeProject()
-      context.notify.windowNavigateBack()
+      finally {
+        closing = false
+      }
     },
   })
 }
@@ -315,264 +325,251 @@ function enableDevRendererAutoReload(rendererDir: string): Disposable {
   })
 }
 
-export function createWorkbenchApp(config: WorkbenchAppConfig = {}) {
-  let setupPromise: Promise<WorkbenchAppInstance> | null = null
-  let appEventsRegistered = false
-
-  // Lock the visible app name BEFORE app.whenReady so the dock label,
-  // ⌘-Tab card and macOS app-menu first item all read "Dimina DevTools"
-  // in both dev (unpackaged Electron) and packaged builds. `app.setName`
-  // overrides the unpackaged process name ("Electron") and is harmless
-  // when the packaged Info.plist already says the same thing.
-  // Host integrators that brand the app differently can still override
-  // `config.appName`; we keep our default consistent with `electron-builder.yml#productName`.
+/**
+ * Pre-ready bootstrap side effects (app name, CDP port, CSP suppression,
+ * privileged scheme). MUST run before `app.whenReady()`. Extracted so the `RuntimeBackend.beforeReady` hook (which launch()/workbench()
+ * route through) runs it before the framework awaits app.whenReady().
+ */
+export function runDevtoolsBootstrap(config: WorkbenchAppConfig = {}): void {
+  // Lock the visible app name BEFORE app.whenReady so the dock label, ⌘-Tab
+  // card and macOS app-menu first item read the brand in dev + packaged.
   try { app.setName(config.appName ?? 'Dimina DevTools') } catch { /* electron stub in tests */ }
-
   setupCdpPort()
-  // Dev-only: silence Electron's built-in Insecure-CSP console warning. No-op
-  // when packaged; touches only the log-suppression env var, no security
-  // settings. Set before any window is created.
+  // Dev-only: silence Electron Insecure-CSP warning; no-op when packaged.
   suppressInsecureCspWarnings()
-  // Privileged scheme registration must run before `app.whenReady` —
-  // registering it later throws.
+  // Privileged scheme registration must run before app.whenReady (else throws).
   registerDifileScheme()
+}
 
-  async function setup(): Promise<WorkbenchAppInstance> {
-    if (setupPromise) return setupPromise
+/**
+ * Domain runtime assembly — the post-whenReady body. Builds the main window +
+ * context, registers IPC modules, stands up simulator/storage/CDP/native-host
+ * services, and returns the fat {@link WorkbenchAppInstance}. Extracted so the
+ * v2 `RuntimeBackend.assemble` reuses the exact same body (parity by shared
+ * implementation, not behavioural re-creation).
+ */
+export async function createDevtoolsRuntime(config: WorkbenchAppConfig = {}): Promise<WorkbenchAppInstance> {
+  // Self-gate on Electron readiness: this builds a BrowserWindow immediately, so
+  // it must run after `app.whenReady()`. The framework backend path already
+  // awaited it (idempotent no-op here); this guards any direct caller against
+  // constructing Electron resources before ready.
+  await app.whenReady()
 
-    setupPromise = app.whenReady().then(async () => {
-      applyTheme(loadWorkbenchSettings().theme)
+  applyTheme(loadWorkbenchSettings().theme)
 
-      const rendererDir = config.rendererDir ?? defaultRendererDir
-      const mainWindow = createConfiguredMainWindow(config, rendererDir)
-      const context = createContext(config, mainWindow, rendererDir)
+  const rendererDir = config.rendererDir ?? defaultRendererDir
+  const mainWindow = createConfiguredMainWindow(config, rendererDir)
+  const context = createContext(config, mainWindow, rendererDir)
 
-      // Anchor the main window's renderer as the first Connection. Resources
-      // scoped to the main webContents (acquired by later wiring) tear down with
-      // it; see packages/workbench/docs/foundation.md §4.
-      context.connections.acquire(mainWindow.webContents)
+  // Anchor the main window's renderer as the first Connection. Resources
+  // scoped to the main webContents (acquired by later wiring) tear down with
+  // it; see packages/electron-deck/docs/foundation.md §4.
+  context.connections.acquire(mainWindow.webContents)
 
-      context.registry.add(registerAppIpc(context))
-      // Sandboxed project file-system IPC for the in-renderer Monaco editor.
-      context.registry.add(registerProjectFsIpc(context))
-      // One process-wide listener that re-syncs every window's native
-      // backgroundColor on theme change — windows otherwise keep the stale
-      // creation-time color (see installThemeBackgroundSync).
-      context.registry.add(installThemeBackgroundSync())
-      registerBuiltinModules(config, context)
+  context.registry.add(registerAppIpc(context))
+  // Sandboxed project file-system IPC for the in-renderer Monaco editor.
+  context.registry.add(registerProjectFsIpc(context))
+  // One process-wide listener that re-syncs every window's native
+  // backgroundColor on theme change — windows otherwise keep the stale
+  // creation-time color (see installThemeBackgroundSync).
+  context.registry.add(installThemeBackgroundSync())
+  registerBuiltinModules(config, context)
 
-      // Wire the simulator-side difile:// protocol handler + temp-file IPC
-      // before host onSetup so any host-driven simulator boot sees the
-      // protocol live. The module installs its own narrow sender-policy
-      // (simulator-session-only) — see file header — because the default
-      // workbench policy intentionally rejects the simulator <webview>.
-      const simSession = session.fromPartition('persist:simulator')
-      context.registry.add(setupSimulatorTempFiles(simSession))
+  // Wire the simulator-side difile:// protocol handler + temp-file IPC
+  // before host onSetup so any host-driven simulator boot sees the
+  // protocol live. The module installs its own narrow sender-policy
+  // (simulator-session-only) — see file header — because the default
+  // workbench policy intentionally rejects the simulator <webview>.
+  const simSession = session.fromPartition('persist:simulator')
+  context.registry.add(setupSimulatorTempFiles(simSession))
 
-      installMenu(config, mainWindow, context)
+  installMenu(config, mainWindow, context)
 
-      // Gated custom-IPC surface for the host. Bound to ctx.senderPolicy so
-      // host channels go through the same gateway as built-in IPC, and
-      // registered into ctx.registry so its handlers are torn down with the
-      // context.
-      const hostIpc = new IpcRegistry(context.senderPolicy)
-      context.registry.add(hostIpc)
+  // Gated custom-IPC surface for the host. Bound to ctx.senderPolicy so
+  // host channels go through the same gateway as built-in IPC, and
+  // registered into ctx.registry so its handlers are torn down with the
+  // context.
+  const hostIpc = new IpcRegistry(context.senderPolicy)
+  context.registry.add(hostIpc)
 
-      const instance: WorkbenchAppInstance = {
-        mainWindow,
-        context,
-        ipc: hostIpc,
-        // Return the registry wrapper, not the raw disposable: disposing the
-        // wrapper splices the registry entry out AND drives the underlying
-        // teardown, so a single dispose leaves no dead entry behind.
-        registerTrustedWindow: (win: BrowserWindow) =>
-          context.registry.add(registerTrustedWindow(context, win)),
-        registerSimulatorApi: (name: string, handler: SimulatorApiHandler) =>
-          context.registry.add(toDisposable(context.simulatorApis.register(name, handler))),
-        toolbar: {
-          set: (actions: ToolbarActionInput[]) => {
-            // `context.toolbar.set` validates id-uniqueness and throws on a
-            // duplicate BEFORE mutating, so a rejected batch never reaches
-            // the notify below — no phantom ActionsChanged.
-            context.toolbar.set(actions)
-            context.notify.toolbarActionsChanged()
-          },
-        },
-        dispose: () => disposeContext(context),
-      }
+  const instance: WorkbenchAppInstance = {
+    mainWindow,
+    context,
+    ipc: hostIpc,
+    // Return the registry wrapper, not the raw disposable: disposing the
+    // wrapper splices the registry entry out AND drives the underlying
+    // teardown, so a single dispose leaves no dead entry behind.
+    registerTrustedWindow: (win: BrowserWindow) =>
+      context.registry.add(registerTrustedWindow(context, win)),
+    registerSimulatorApi: (name: string, handler: SimulatorApiHandler) =>
+      context.registry.add(toDisposable(context.simulatorApis.register(name, handler))),
+    toolbar: {
+      set: (actions: ToolbarActionInput[]) => {
+        // `context.toolbar.set` validates id-uniqueness and throws on a
+        // duplicate BEFORE mutating, so a rejected batch never reaches
+        // the notify below — no phantom ActionsChanged.
+        context.toolbar.set(actions)
+        context.notify.toolbarActionsChanged()
+      },
+    },
+    dispose: () => disposeContext(context),
+  }
 
-      if (config.onSetup) {
-        await config.onSetup(instance)
-      }
+  if (config.onSetup) {
+    await config.onSetup(instance)
+  }
 
-      if (config.updateChecker) {
-        instance.updateManager = new UpdateManager({
-          checker: config.updateChecker,
-          mainWindow,
-          senderPolicy: context.senderPolicy,
-          checkInterval: config.updateOptions?.checkInterval,
-          initialDelay: config.updateOptions?.initialDelay,
-          getCurrentVersion: config.updateOptions?.getCurrentVersion,
-        })
-        context.registry.add(() => instance.updateManager!.dispose())
-      }
-
-      await setupAutomation(instance)
-      const mcp = setupMcp()
-      if (mcp) context.registry.add(mcp)
-
-      // Resolve the active project's appId. Shared by the storage panel filter
-      // and the native-host WXML/element-inspect services (which scope the
-      // active render guest by appId).
-      const getActiveAppId = (): string | null => {
-        const session = context.workspace.getSession()
-        const appInfo = session?.appInfo as { appId?: string } | undefined
-        return appInfo?.appId ?? null
-      }
-
-      // Native-host: the real mini-app page runs in a nested render-host
-      // <webview> guest, not the localhost:7788 shell. Point the MCP
-      // `simulator` CDP target at the active render guest and keep it following
-      // the visible page across navigation/tab switches. Only wired under
-      // native-host so the default path stays byte-identical.
-      if (context.bridge?.isNativeHost()) {
-        setNativeHost(true)
-        setNativeOverviewProvider(async () => {
-          const appId = getActiveAppId()
-          const stack = context.bridge?.getPageStack?.(appId ?? undefined) ?? []
-          const top = stack[stack.length - 1]
-          const overview = {
-            currentRoute: top?.pagePath ?? null,
-            pageStackDepth: stack.length,
-            storageKeys: [] as string[],
-            storageCount: 0,
-            appDataKeys: [] as string[],
-          }
-
-          if (appId) {
-            try {
-              const info = await context.storageApi?.invoke(appId, 'getStorageInfo', {})
-              if (info && typeof info === 'object') {
-                const keys = (info as { keys?: unknown }).keys
-                if (Array.isArray(keys)) {
-                  overview.storageKeys = keys.filter((key): key is string => typeof key === 'string')
-                  overview.storageCount = keys.length
-                }
-              }
-            } catch {
-              // Leave native storage empty when it is temporarily unavailable.
-            }
-
-            try {
-              const snapshot = context.appData?.snapshot?.(appId)
-              if (snapshot && typeof snapshot === 'object') {
-                const entries = (snapshot as { entries?: unknown }).entries
-                if (entries && typeof entries === 'object') {
-                  overview.appDataKeys = Object.keys(entries)
-                }
-              }
-            } catch {
-              // Leave native appdata empty when it has not been initialized yet.
-            }
-          }
-
-          return overview
-        })
-        const off = context.bridge.onRenderEvent((ev) => setActiveBridgeId(ev.bridgeId))
-        context.registry.add(off)
-        context.registry.add(() => setNativeHost(false))
-        context.registry.add(() => setNativeOverviewProvider(null))
-      }
-
-      // Native-host inspector: injects the render-guest IIFE and drives WXML /
-      // element-highlight against the active render-host <webview>. Reused by
-      // the storage panel (element inspect) and the WXML panel service.
-      const renderInspector = createRenderInspector({ connections: context.connections })
-
-      const storage = setupSimulatorStorage(mainWindow.webContents, {
-        senderPolicy: context.senderPolicy,
-        connections: context.connections,
-        // Per-project filter for the simulator-storage panel: the simulator
-        // uses a fixed `persist:simulator` partition + a fixed simulator.html
-        // origin, so localStorage is shared across every project that has
-        // ever opened. The dimina runtime isolates writes with `${appId}_`
-        // prefixes; this callback lets the storage panel filter the CDP
-        // snapshot/event stream to the active appId.
-        getActiveAppId,
-        // Native-host: route element inspection to the active render guest, and
-        // read/write storage from the service-host window's file:// store.
-        bridge: context.bridge,
-        renderInspector,
-      })
-      context.registry.add(storage)
-      // Native-host: expose the async-storage runtime hook so bridge-router
-      // routes async wx.setStorage/etc. to the unified service-host store.
-      if (storage.storageApi) {
-        context.storageApi = storage.storageApi
-        context.registry.add(() => { context.storageApi = undefined })
-      }
-
-      // Native-host WXML + AppData panels: main sources the data (WXML pulled
-      // from the active render guest; AppData tapped from the service→render
-      // setData stream in bridge-router) and pushes it to the renderer. Inert on
-      // the default dimina-fe path (which sources both from the simulator
-      // miniappSnapshot transport), so only wire them when native-host is on.
-      if (context.bridge?.isNativeHost()) {
-        // Native-host: surface the simulator WCV's network (wx.request/download/
-        // upload run there, not in the service host) in the embedded DevTools by
-        // injecting its raw Network.* CDP events into the DevTools front-end so the
-        // native Network tab renders them (service-host console line is the
-        // fallback). The ViewManager calls attachSimulator + setDevtoolsHost from
-        // attachNativeSimulator once the simulator WCV + DevTools host exist;
-        // getServiceWc here is the fallback sink target.
-        const networkForward = createNetworkForwarder({
-          getServiceWc: (appId) => context.bridge?.getServiceWc(appId) ?? null,
-          connections: context.connections,
-        })
-        context.networkForward = networkForward
-        context.registry.add(networkForward)
-        context.registry.add(() => { context.networkForward = undefined })
-
-        context.registry.add(setupSimulatorWxml(mainWindow.webContents, {
-          senderPolicy: context.senderPolicy,
-          bridge: context.bridge,
-          inspector: renderInspector,
-          getActiveAppId,
-        }))
-        const appDataService = setupSimulatorAppData(mainWindow.webContents, {
-          senderPolicy: context.senderPolicy,
-          getActiveAppId,
-        })
-        // bridge-router feeds this via ctx.appData (service→render tap + evict).
-        context.appData = appDataService
-        context.registry.add(appDataService)
-        context.registry.add(() => { context.appData = undefined })
-        // Push the visible page route to the toolbar on every navigation (the
-        // page stack lives in the DeviceShell WCV, invisible to renderer
-        // <webview> nav events).
-        context.registry.add(setupSimulatorCurrentPage(mainWindow.webContents, {
-          bridge: context.bridge,
-        }))
-      }
-      context.registry.add(wireAppWindowEvents(config, instance))
-      context.registry.add(enableDevRendererAutoReload(rendererDir))
-
-      return instance
+  if (config.updateChecker) {
+    instance.updateManager = new UpdateManager({
+      checker: config.updateChecker,
+      mainWindow,
+      senderPolicy: context.senderPolicy,
+      checkInterval: config.updateOptions?.checkInterval,
+      initialDelay: config.updateOptions?.initialDelay,
+      getCurrentVersion: config.updateOptions?.getCurrentVersion,
     })
-
-    return setupPromise
+    context.registry.add(() => instance.updateManager!.dispose())
   }
 
-  function start(): Promise<void> {
-    if (!appEventsRegistered) {
-      appEventsRegistered = true
-      registerAppLifecycle()
-    }
-    return setup().then(() => undefined)
+  await setupAutomation(instance)
+  const mcp = setupMcp()
+  if (mcp) context.registry.add(mcp)
+
+  // Resolve the active project's appId. Shared by the storage panel filter
+  // and the native-host WXML/element-inspect services (which scope the
+  // active render guest by appId).
+  const getActiveAppId = (): string | null => {
+    const session = context.workspace.getSession()
+    const appInfo = session?.appInfo as { appId?: string } | undefined
+    return appInfo?.appId ?? null
   }
 
-  return {
-    setup,
-    start,
+  // Native-host: the real mini-app page runs in a nested render-host
+  // <webview> guest, not the localhost:7788 shell. Point the MCP
+  // `simulator` CDP target at the active render guest and keep it following
+  // the visible page across navigation/tab switches. Only wired under
+  // native-host so the default path stays byte-identical.
+  if (context.bridge?.isNativeHost()) {
+    setNativeHost(true)
+    setNativeOverviewProvider(async () => {
+      const appId = getActiveAppId()
+      const stack = context.bridge?.getPageStack?.(appId ?? undefined) ?? []
+      const top = stack[stack.length - 1]
+      const overview = {
+        currentRoute: top?.pagePath ?? null,
+        pageStackDepth: stack.length,
+        storageKeys: [] as string[],
+        storageCount: 0,
+        appDataKeys: [] as string[],
+      }
+
+      if (appId) {
+        try {
+          const info = await context.storageApi?.invoke(appId, 'getStorageInfo', {})
+          if (info && typeof info === 'object') {
+            const keys = (info as { keys?: unknown }).keys
+            if (Array.isArray(keys)) {
+              overview.storageKeys = keys.filter((key): key is string => typeof key === 'string')
+              overview.storageCount = keys.length
+            }
+          }
+        } catch {
+          // Leave native storage empty when it is temporarily unavailable.
+        }
+
+        try {
+          const snapshot = context.appData?.snapshot?.(appId)
+          if (snapshot && typeof snapshot === 'object') {
+            const entries = (snapshot as { entries?: unknown }).entries
+            if (entries && typeof entries === 'object') {
+              overview.appDataKeys = Object.keys(entries)
+            }
+          }
+        } catch {
+          // Leave native appdata empty when it has not been initialized yet.
+        }
+      }
+
+      return overview
+    })
+    const off = context.bridge.onRenderEvent((ev) => setActiveBridgeId(ev.bridgeId))
+    context.registry.add(off)
+    context.registry.add(() => setNativeHost(false))
+    context.registry.add(() => setNativeOverviewProvider(null))
   }
+
+  // Native-host inspector: injects the render-guest IIFE and drives WXML /
+  // element-highlight against the active render-host <webview>. Reused by
+  // the storage panel (element inspect) and the WXML panel service.
+  const renderInspector = createRenderInspector({ connections: context.connections })
+
+  const storage = setupSimulatorStorage(mainWindow.webContents, {
+    senderPolicy: context.senderPolicy,
+    connections: context.connections,
+    // Per-project filter for the simulator-storage panel: the simulator
+    // uses a fixed `persist:simulator` partition + a fixed simulator.html
+    // origin, so localStorage is shared across every project that has
+    // ever opened. The dimina runtime isolates writes with `${appId}_`
+    // prefixes; this callback lets the storage panel filter the CDP
+    // snapshot/event stream to the active appId.
+    getActiveAppId,
+    // Native-host: route element inspection to the active render guest, and
+    // read/write storage from the service-host window's file:// store.
+    bridge: context.bridge,
+    renderInspector,
+  })
+  context.registry.add(storage)
+  // Native-host: expose the async-storage runtime hook so bridge-router
+  // routes async wx.setStorage/etc. to the unified service-host store.
+  if (storage.storageApi) {
+    context.storageApi = storage.storageApi
+    context.registry.add(() => { context.storageApi = undefined })
+  }
+
+  // Native-host WXML + AppData panels: main sources the data (WXML pulled
+  // from the active render guest; AppData tapped from the service→render
+  // setData stream in bridge-router) and pushes it to the renderer. Inert on
+  // the default dimina-fe path (which sources both from the simulator
+  // miniappSnapshot transport), so only wire them when native-host is on.
+  if (context.bridge?.isNativeHost()) {
+    // Native-host: surface the simulator WCV's network (wx.request/download/
+    // upload run there, not in the service host) in the embedded DevTools by
+    // injecting its raw Network.* CDP events into the DevTools front-end so the
+    // native Network tab renders them (service-host console line is the
+    // fallback). The ViewManager calls attachSimulator + setDevtoolsHost from
+    // attachNativeSimulator once the simulator WCV + DevTools host exist;
+    // getServiceWc here is the fallback sink target.
+    const networkForward = createNetworkForwarder({
+      getServiceWc: (appId) => context.bridge?.getServiceWc(appId) ?? null,
+      connections: context.connections,
+    })
+    context.networkForward = networkForward
+    context.registry.add(networkForward)
+    context.registry.add(() => { context.networkForward = undefined })
+
+    context.registry.add(setupSimulatorWxml(mainWindow.webContents, {
+      senderPolicy: context.senderPolicy,
+      bridge: context.bridge,
+      inspector: renderInspector,
+      getActiveAppId,
+    }))
+    const appDataService = setupSimulatorAppData(mainWindow.webContents, {
+      senderPolicy: context.senderPolicy,
+      getActiveAppId,
+    })
+    // bridge-router feeds this via ctx.appData (service→render tap + evict).
+    context.appData = appDataService
+    context.registry.add(appDataService)
+    context.registry.add(() => { context.appData = undefined })
+    // Push the visible page route to the toolbar on every navigation (the
+    // page stack lives in the DeviceShell WCV, invisible to renderer
+    // <webview> nav events).
+    context.registry.add(setupSimulatorCurrentPage(mainWindow.webContents, {
+      bridge: context.bridge,
+    }))
+  }
+  context.registry.add(wireAppWindowEvents(config, instance))
+  context.registry.add(enableDevRendererAutoReload(rendererDir))
+
+  return instance
 }

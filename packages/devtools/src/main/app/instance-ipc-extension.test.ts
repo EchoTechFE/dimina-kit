@@ -23,7 +23,7 @@
  * harness.
  *
  * Seam: there is no standalone factory for `WorkbenchAppInstance` — the
- * object is built inline inside `createWorkbenchApp().setup()`. The closest
+ * object is built inline inside `createDevtoolsRuntime()`. The closest
  * stable seam is the `onSetup` hook itself, which receives that very
  * instance. We drive the full app under the same exhaustive electron mock
  * used by `update-manager-sender-policy.test.ts` and capture the instance
@@ -215,30 +215,30 @@ vi.mock('@dimina-kit/devkit', () => ({
 
 // Imported lazily inside beforeEach so the electron mock is installed before
 // app.ts (and its transitive module graph) captures `ipcMain` / `app`.
-let createWorkbenchApp: typeof import('./app.js').createWorkbenchApp
+let createDevtoolsRuntime: typeof import('./app.js').createDevtoolsRuntime
 let IpcRegistry: typeof import('../utils/ipc-registry.js').IpcRegistry
 let BrowserWindowMock: typeof import('electron').BrowserWindow
 
 beforeEach(async () => {
   vi.resetModules()
   stubs.reset()
-  ;({ createWorkbenchApp } = await import('./app.js'))
+  ;({ createDevtoolsRuntime } = await import('./app.js'))
   ;({ IpcRegistry } = await import('../utils/ipc-registry.js'))
   ;({ BrowserWindow: BrowserWindowMock } = await import('electron'))
 })
 
 /**
- * Drives `createWorkbenchApp` and returns the `WorkbenchAppInstance` captured
+ * Drives `createDevtoolsRuntime` and returns the `WorkbenchAppInstance` captured
  * from the `onSetup` hook — the runtime object whose extension surface this
  * suite verifies.
  */
 async function setupInstance(): Promise<import('./app.js').WorkbenchAppInstance> {
   let captured: import('./app.js').WorkbenchAppInstance | undefined
-  const instance = await createWorkbenchApp({
+  const instance = await createDevtoolsRuntime({
     onSetup(inst) {
       captured = inst as import('./app.js').WorkbenchAppInstance
     },
-  }).setup()
+  })
   // `onSetup` runs synchronously inside setup(); if it didn't capture, the
   // hook contract itself regressed.
   expect(captured, 'onSetup must receive the WorkbenchAppInstance').toBeDefined()

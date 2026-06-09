@@ -25,6 +25,21 @@ export interface Bounds {
   height: number
 }
 
+/**
+ * Explicit visibility + geometry for a native view, replacing the legacy
+ * magic-`{0,0,0,0}` "hidden" convention (`present:false → ZERO bounds`).
+ *
+ * Visibility is a DISCRIMINANT, never inferred from geometry. The whole
+ * reason this type exists: a genuinely zero-SIZED but on-screen view
+ * (`{ visible:true, bounds:{...,width:0,height:0} }`) is now distinct from a
+ * detached/hidden one (`{ visible:false }`, which carries no `bounds` at
+ * all). Under the old ZERO convention both collapsed to the same value and
+ * were indistinguishable.
+ */
+export type Placement =
+  | { visible: true; bounds: Bounds }
+  | { visible: false }
+
 export interface ViewAnchorOptions {
   /**
    * Whether the native view should be attached. When `false`, the anchor

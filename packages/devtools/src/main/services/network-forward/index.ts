@@ -64,7 +64,7 @@
  *     (exposed below; it uses the console fallback path).
  */
 import type { WebContents } from 'electron'
-import type { ConnectionRegistry } from '@dimina-kit/workbench/main'
+import type { ConnectionRegistry } from '@dimina-kit/electron-deck/main'
 import { DisposableRegistry, toDisposable, type Disposable } from '../../utils/disposable.js'
 
 /** Which layer a captured request came from (tags the fallback log line). */
@@ -96,7 +96,7 @@ export interface NetworkForwarderBridge {
    */
   getDevtoolsWc?(): WebContents | null
   /**
-   * Optional connection-layer registry (`@dimina-kit/workbench/main`). When
+   * Optional connection-layer registry (`@dimina-kit/electron-deck/main`). When
    * present, per-webContents teardowns route through `acquire(wc).own(d)` so the
    * Connection disposes them deterministically on wc destroy / reset (replacing
    * the bespoke `wc.once('destroyed', cleanup)`). Omitted → the legacy

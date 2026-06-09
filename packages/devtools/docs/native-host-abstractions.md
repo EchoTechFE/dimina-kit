@@ -70,7 +70,7 @@ function maybeSendResourceLoaded(ap, page):
 
 ### 问题
 
-custom simulator API（host 经 `createWorkbenchApp` 的 `onSetup`/`registerSimulatorApi` 注册的 `wx.<customApi>`）在 native 下整链断。回归测试：`e2e/native-host-custom-api.spec.ts`（RED：`__diminaCustomApis.list()` reject `"got no response from the host renderer"`）。
+custom simulator API（host 经 `workbench` 的 `onSetup`/`registerSimulatorApi` 注册的 `wx.<customApi>`）在 native 下整链断。回归测试：`e2e/native-host-custom-api.spec.ts`（RED：`__diminaCustomApis.list()` reject `"got no response from the host renderer"`）。
 
 ### 根因
 

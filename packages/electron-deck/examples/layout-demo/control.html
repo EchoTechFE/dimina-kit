@@ -1,0 +1,134 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>electron-deck layout demo — control layer</title>
+    <style>
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; font-family: -apple-system, system-ui, sans-serif; }
+      body {
+        /* the "底" / control layer that native views are composited ON TOP OF */
+        background: #1e1e2e;
+        color: #cdd6f4;
+        display: grid;
+        grid-template-rows: 36px 1fr;
+        height: 100vh;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 10px;
+        background: #181825;
+        border-bottom: 1px solid #313244;
+        font-size: 12px;
+      }
+      header .title { font-weight: 600; opacity: 0.85; }
+      header button {
+        font-size: 11px;
+        padding: 3px 8px;
+        background: #45475a;
+        color: #cdd6f4;
+        border: 1px solid #585b70;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      header button:hover { background: #585b70; }
+      .stage {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        padding: 10px;
+        min-height: 0;
+      }
+      /* placeholder DIVs in the DOM control layer; native views are anchored ON TOP of these rects */
+      .slot {
+        border: 2px dashed #585b70;
+        border-radius: 6px;
+        display: flex;
+        align-items: flex-start;
+        justify-content: flex-start;
+        padding: 6px 8px;
+        font-size: 11px;
+        color: #6c7086;
+        position: relative;
+      }
+      .slot .label { pointer-events: none; }
+      #simulator { /* red native view (Z.CONTENT) lands here */ }
+      #devtools  { /* blue native view (Z.PANEL) lands here */ }
+    </style>
+  </head>
+  <body>
+    <header>
+      <span class="title" id="winlabel">CONTROL LAYER (main window)</span>
+      <button id="btn-overlay">overlay (green over devtools)</button>
+      <button id="btn-reorder">reorder (devtools over overlay)</button>
+      <button id="btn-popout">popout devtools → win2</button>
+      <button id="btn-close">close session</button>
+    </header>
+    <div class="stage">
+      <div class="slot" id="simulator"><span class="label">#simulator slot (Z.CONTENT)</span></div>
+      <div class="slot" id="devtools"><span class="label">#devtools slot (Z.PANEL)</span></div>
+    </div>
+
+    <script>
+      // ── Simplified view-anchor: report each slot's viewport rect to main ──
+      // (The real `createViewAnchor` runs the same getBoundingClientRect →
+      //  publish loop; here we inline a ResizeObserver-driven publish so the
+      //  demo needs no preload bundling.)
+      const { ipcRenderer } = require('electron')
+
+      function reportBounds() {
+        const out = {}
+        for (const id of ['simulator', 'devtools']) {
+          const el = document.getElementById(id)
+          if (!el) continue
+          const r = el.getBoundingClientRect()
+          out[id] = { x: Math.round(r.left), y: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) }
+        }
+        ipcRenderer.send('demo:slot-bounds', out)
+      }
+
+      const ro = new ResizeObserver(reportBounds)
+      ro.observe(document.getElementById('simulator'))
+      ro.observe(document.getElementById('devtools'))
+      window.addEventListener('resize', reportBounds)
+      // first publish after layout settles
+      requestAnimationFrame(() => requestAnimationFrame(reportBounds))
+
+      // ── Layout commands → main, routed through ControlBus on the main side ──
+      const cmd = (name) => ipcRenderer.send('demo:command', name)
+      document.getElementById('btn-overlay').onclick = () => cmd('overlay')
+      document.getElementById('btn-reorder').onclick = () => cmd('reorder')
+      document.getElementById('btn-popout').onclick = () => cmd('popout')
+      document.getElementById('btn-close').onclick = () => cmd('close')
+
+      // main can stamp a window label (win2 = popout target)
+      ipcRenderer.on('demo:set-label', (_e, label, bg) => {
+        document.getElementById('winlabel').textContent = label
+        if (bg) document.body.style.background = bg
+      })
+
+      // ── Composite snapshot: main sends the host PNG + each native block's PNG
+      //    with its bounds, in compositor z-order; we blit onto a canvas and hand
+      //    the dataURL back. This reconstructs what the OS window-server would
+      //    composite (capturePage() alone omits child WebContentsViews).
+      ipcRenderer.on('demo:composite', async (_e, reqId, hostPng, blocks) => {
+        const load = (src) => new Promise((res) => { const i = new Image(); i.onload = () => res(i); i.src = src })
+        const hostImg = await load(hostPng)
+        const c = document.createElement('canvas')
+        c.width = hostImg.naturalWidth
+        c.height = hostImg.naturalHeight
+        const sx = hostImg.naturalWidth / window.innerWidth
+        const sy = hostImg.naturalHeight / window.innerHeight
+        const ctx = c.getContext('2d')
+        ctx.drawImage(hostImg, 0, 0)
+        for (const b of blocks) { // already z-sorted low→high by main
+          const img = await load(b.png)
+          ctx.drawImage(img, b.x * sx, b.y * sy, b.width * sx, b.height * sy)
+        }
+        ipcRenderer.send('demo:composite-result', reqId, c.toDataURL('image/png'))
+      })
+    </script>
+  </body>
+</html>

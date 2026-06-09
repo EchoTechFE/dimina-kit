@@ -17,7 +17,7 @@
  */
 
 import { app, webContents as wcStatic, type WebContents } from 'electron'
-import type { ConnectionRegistry } from '@dimina-kit/workbench/main'
+import type { ConnectionRegistry } from '@dimina-kit/electron-deck/main'
 import {
   SimulatorElementChannel,
   SimulatorStorageChannel,
@@ -99,7 +99,7 @@ export interface SimulatorStorageOptions {
   /** Injects/drives the render-guest inspector; required for native-host inspect. */
   renderInspector?: RenderInspector
   /**
-   * Connection-layer registry (`@dimina-kit/workbench/main`). When provided,
+   * Connection-layer registry (`@dimina-kit/electron-deck/main`). When provided,
    * per-webContents teardowns are routed through `acquire(wc).own(cleanup)` so
    * they fire deterministically on wc destroy / connection reset instead of the
    * bespoke `wc.once('destroyed', cleanup)` hook. Optional so callers that have

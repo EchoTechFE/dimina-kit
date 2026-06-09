@@ -34,8 +34,8 @@ import type {
   TabBarConfig,
 } from '../../shared/bridge-channels.js'
 import type { WorkbenchContext } from '../services/workbench-context.js'
-import type { ConnectionRegistry, DebugTap } from '@dimina-kit/workbench/main'
-import { createDebugTap } from '@dimina-kit/workbench/main'
+import type { ConnectionRegistry, DebugTap } from '@dimina-kit/electron-deck/main'
+import { createDebugTap } from '@dimina-kit/electron-deck/main'
 import { startDiminaResourceServer, type DiminaResourceServer } from '../services/dimina-resource-server.js'
 import {
   buildServiceHostSpawnUrl,

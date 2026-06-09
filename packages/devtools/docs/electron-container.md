@@ -354,7 +354,7 @@ native-host simulator 走另一套，且不在 renderer 里——它是顶层 `W
 ```mermaid
 sequenceDiagram
   participant Entry as entry (electron-entry.js)
-  participant App as createWorkbenchApp
+  participant App as workbench/launch
   participant Boot as bootstrap.ts
   participant Win as createMainWindow
   participant Ctx as workbench-context

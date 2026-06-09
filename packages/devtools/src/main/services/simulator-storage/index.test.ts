@@ -52,7 +52,7 @@ vi.mock('electron', () => ({
 
 // Import AFTER the mock so the module picks up the stubs.
 import { EventEmitter } from 'node:events'
-import { createConnectionRegistry } from '@dimina-kit/workbench/main'
+import { createConnectionRegistry } from '@dimina-kit/electron-deck/main'
 import { SimulatorStorageChannel } from '../../../shared/ipc-channels.js'
 import { setupSimulatorStorage } from './index.js'
 

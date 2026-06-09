@@ -5,7 +5,7 @@
  * ── The contract being pinned (implemented + verified) ──────────────────────
  * The bridge-router tracks every service-host webContents through the
  * connection registry (`ctx.connections`, a real `ConnectionRegistry` from
- * `@dimina-kit/workbench/main`) and, on POOLED service-host REUSE, RESET that
+ * `@dimina-kit/electron-deck/main`) and, on POOLED service-host REUSE, RESET that
  * connection so an old app session's per-wc bookkeeping cannot bleed into the
  * next session that reuses the same webContents:
  *
@@ -40,7 +40,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { createConnectionRegistry } from '@dimina-kit/workbench/main'
+import { createConnectionRegistry } from '@dimina-kit/electron-deck/main'
 
 // ── Hoisted electron + pool stub state ──────────────────────────────────────
 const stubs = vi.hoisted(() => {

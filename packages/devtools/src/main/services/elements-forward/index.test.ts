@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createConnectionRegistry } from '@dimina-kit/workbench/main'
+import { createConnectionRegistry } from '@dimina-kit/electron-deck/main'
 import {
   buildElementsHookScript,
   installElementsForward,

@@ -50,7 +50,7 @@
  */
 import { webContents as electronWebContents } from 'electron'
 import type { WebContents } from 'electron'
-import type { ConnectionRegistry } from '@dimina-kit/workbench/main'
+import type { ConnectionRegistry } from '@dimina-kit/electron-deck/main'
 import type { BridgeRouterHandle, RenderEvent } from '../../ipc/bridge-router.js'
 
 // ── routing table (pure, testable) ───────────────────────────────────────────

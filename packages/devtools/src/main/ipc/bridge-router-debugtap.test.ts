@@ -155,7 +155,7 @@ vi.mock('../windows/service-host-window/create.js', () => ({
 import { BRIDGE_CHANNELS as C } from '../../shared/bridge-channels.js'
 import type { MessageEnvelope, ServiceInvokePayload, SpawnRequest, SpawnResult } from '../../shared/bridge-channels.js'
 import type { WorkbenchContext } from '../services/workbench-context.js'
-import { createConnectionRegistry } from '@dimina-kit/workbench/main'
+import { createConnectionRegistry } from '@dimina-kit/electron-deck/main'
 
 type AnyFn = (...args: unknown[]) => unknown
 type MockWc = ReturnType<typeof stubs.makeWebContents>

@@ -34,7 +34,7 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
-import { createConnectionRegistry } from '@dimina-kit/workbench/main'
+import { createConnectionRegistry } from '@dimina-kit/electron-deck/main'
 import { SimulatorCustomApiBridgeChannel } from '../../../shared/ipc-channels.js'
 
 // ── shared mock state (hoisted so the electron factory can read it) ─────────

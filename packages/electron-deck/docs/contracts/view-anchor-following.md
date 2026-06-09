@@ -1,0 +1,487 @@
+# view-anchor 跟随契约硬化（split / nested / tab 的几何地基）
+
+> 状态：契约草案（只读代码 + 设计，不改实现）。本页定的是 `@dimina-kit/view-anchor`
+> 正向锚（`createViewAnchor` / `createPlacementAnchor` / `useViewAnchor`）要让原生
+> `WebContentsView` **跟随任意 DOM slot** 必须补齐的观测面与时序契约。落点在
+> `packages/view-anchor/src/{view-anchor,react,types}.ts` 的现有结构上，**本文不动 src**。
+>
+> 为什么这份文档住 `electron-deck/`：跟随的「为什么必须做实」由 host-shell 的
+> split/nested/tab 需求驱动（electron-deck 是 host），但「**怎么做实**」是 view-anchor
+> 这条原语的契约。两包之间的 seam = 注入的 `publish`，所以契约在 host 侧立、原语侧实现。
+
+---
+
+## 0. 现状一句话
+
+今天的正向锚只观测 **两类信号**（`view-anchor.ts:93-98`、`228-241`）：
+
+```ts
+observer = new ResizeObserver(emit)   // ① target 自身 border-box 变化
+observer.observe(target)
+window.addEventListener('resize', emit) // ② 整窗 resize
+```
+
+它把「target 的屏幕矩形会变」**等同于**「target 自己的尺寸会变」。这个等式在**单一固定
+面板**里成立（今天 simulator / debug 占位就是这样用的：占位是 flex:1 的直接子，矩形只
+随容器尺寸变）。一旦 slot 嵌进 split / nested / tab，等式破裂——矩形会因为**祖先**的
+动作而变，target 自己尺寸却纹丝不动，ResizeObserver 测不到，原生 view 当场跟丢。
+
+现有的唯一逃生口是 `useViewAnchor` 的 `deps`（`react.ts:12-21`）：调用方把「会移动矩形但
+DOM 看不见的状态」塞进数组强制 re-publish。但这要求**调用方预先枚举每一种会移动矩形的状态**
+——对一个能放进任意 split/tab 的 slot，这是不可能预先枚举的（外层 splitter 是谁、有几层、
+在不在可滚动容器里，slot 自己都不知道）。所以「跟随任意 slot」**不能**靠把负担推给调用方的
+`deps`，必须由锚**自己**把观测面补全。
+
+---
+
+## 1. codex 拆穿的六个盲区（逐条对应修法）
+
+| # | 盲区 | 今天为何测不到 | 本契约的修法（§见） |
+|---|---|---|---|
+| 1 | **祖先移动**（嵌套 split 外层 splitter 拖动） | 内层 slot 尺寸没变 → RO 不触发；window 没 resize → resize 不触发 | RAF 几何哨兵（§2.D） |
+| 2 | **scroll**（slot 在可滚动容器里滚动） | 滚动改的是位置不是尺寸，RO 盲；scroll 不冒泡到 window 的 resize | 祖先 scroll 捕获监听 + RAF 哨兵（§2.C/D） |
+| 3 | **CSS transform**（祖先 transform / translate 动画） | 屏幕位置变、`getBoundingClientRect` 的 left/top 跟着变，但**没有任何 DOM 事件**通告 | RAF 几何哨兵（§2.D）——这是 RAF 不可替代的核心理由 |
+| 4 | **`display:none`**（tab 用 display 隐藏） | slot 从渲染树消失，`getBoundingClientRect` 返回全 0 → 被当成「移到 (0,0) 且 0×0」，原生 view 残留/闪到角落 | IntersectionObserver 判可见性 + 几何守卫（§3） |
+| 5 | **slot 未 mount / 首帧 layout 未稳** | 同步 measure 拿到 0 矩形或脏矩形 → 原生 view 闪在 (0,0) | 首帧守卫（§4） |
+| 6 | **销毁不发终止 hidden** | 核心 `dispose()` 只停观察、刻意不再发布（`view-anchor.ts:266-269`）；slot 卸载后宿主收不到 hidden → 原生 view 冻在最后矩形 | 终止性 hidden（§5） |
+
+修法的总策略：**保留正向「同步发布」的不可动摇内核**（§7 论证为何不能整包搬去 RAF），
+只在它之外**叠加**一组观测器，每个观测器的回调仍走现有的同步 `emit()`。
+
+---
+
+## 2. 观测面扩展：最小够用且不抖的组合
+
+### 设计判据
+
+「跟随任意 slot」= 凡是会改变 `target.getBoundingClientRect()` 屏幕矩形的信号，锚都要能
+重新 measure+publish。把信号按「能否被某个 DOM 事件/Observer 精确通告」分两类：
+
+- **可被事件精确通告的**（A/B/C）：自身尺寸、整窗 resize、祖先 scroll。→ **事件驱动**，零空转。
+- **无任何事件通告的**（D）：祖先 transform、祖先因兄弟变化而**重排导致的位移**、
+  以及一切「我尺寸没变但我被推走了」。→ 只能**轮询** `getBoundingClientRect` 比对。
+
+最小组合 = **A+B+C 事件驱动兜住绝大多数 + D 的 RAF 哨兵只在「有理由怀疑在动」时启动**。
+关键设计：**RAF 不常驻**，由交互窗口 gating（§2.D + §6），静止时零成本。
+
+### A. ResizeObserver（已有，保留）
+
+`observer.observe(target)` —— target 自身 border-box 变化。**唯一改动**：见 §2.E，
+对 `display:none`（RO 不触发、IO 触发）协同。
+
+### B. window `resize`（已有，保留）
+
+整窗尺寸变。保留。
+
+### C. 祖先 scroll 监听（新增，事件驱动）
+
+slot 落在可滚动容器里滚动时，`scroll` 事件**不冒泡**到 window。修法：在 **捕获阶段**于
+`window` 上挂一个 `scroll` 监听，`{ capture: true, passive: true }`：
+
+```ts
+// 捕获阶段能收到任意后代滚动容器的 scroll —— 不必枚举具体哪个祖先在滚
+window.addEventListener('scroll', onAncestorScroll, { capture: true, passive: true })
+```
+
+- **为什么捕获阶段挂 window**：`scroll` 不冒泡，但**会**在捕获阶段从 window 往下传到目标
+  滚动容器。在 window 捕获即可收到页面内**任意**滚动容器的滚动，无需遍历 target 的祖先链
+  去逐个 `addEventListener`（祖先链是动态的，slot 不该知道自己嵌在谁里）。
+- **passive**：纯读，不 `preventDefault`，让浏览器滚动不被阻塞。
+- **回调**：scroll 是连续高频信号，**不**直接同步 `emit()`（一帧内可能几十次），而是
+  **打开 §2.D 的 RAF 哨兵窗口**（滚动期间每帧测一次，停了就关）。这样 scroll 与 D 共用
+  同一个「交互期每帧测、静止零测」的机制，避免两套节流。
+
+### D. RAF 几何哨兵（新增，**非常驻**，是 transform/祖先移动唯一兜底）
+
+transform 和「祖先重排把我推走」**没有任何事件**。dockview 的 `OverlayRenderContainer`
+正是用常驻 RAF 每帧 `getBoundingClientRect` 重测来兜这一类（参考，但**我们不照搬常驻**，见
+§7 成本论证）。本契约的哨兵：
+
+```
+RAF 哨兵 = 一个「窗口化」的 requestAnimationFrame 轮询：
+  - 每帧 measure(target) → 与 lastPublished 比 → 不同才 emit（复用现有同步 emit+dedup）
+  - 何时启动（开窗）：见 §6 的「交互窗口」gating
+  - 何时停止（关窗）：连续 N 帧（建议 N=2~3，真机调）测出矩形与上帧逐字段相等 → 判定静止 → cancelAnimationFrame
+```
+
+哨兵**只在「有理由相信几何在动」时存活**：
+- 触发开窗的信号：祖先 scroll（§2.C）、`pointerdown` 命中页面内任意 `[role="separator"]`/
+  splitter（拖动开始）、以及调用方经新 option 显式声明的「动画期」（§2.F）。
+- 自动关窗：检测到连续静止帧。所以一次 splitter 拖动 = 开窗→拖动中每帧跟随→松手后 2~3 帧
+  内判静止→关窗，**拖完即零成本**。
+
+> 为什么不直接每帧测就好、还要 dedup 关窗：见 §7。一句话——常驻 RAF 对「同时存在 N 个
+> 锚、其中大多数静止」的多面板场景是纯浪费；窗口化把成本压到只在真正交互的那个锚上。
+
+### E. IntersectionObserver（新增，**仅供可见性几何**，不抢调用方意图）
+
+见 §3：IO 负责回答「target 是否**几何上**在视口里有非零可见面积 / 是否被 `display:none`」，
+**不**负责「调用方想不想显示它」。职责切分见 §3 表。
+
+### F. 显式动画提示（新增 option，可选）
+
+某些位移由 CSS transition/animation 驱动（tab 切换的滑入、面板展开动画），既非 scroll 也非
+splitter 拖动。给 `createViewAnchor` / `useViewAnchor` 加一个可选信号让调用方**临时开窗**：
+
+```ts
+handle.pulse(durationMs?: number)   // 命令式核心：开 RAF 哨兵窗口，durationMs 后或判静止后自动关
+// React：useViewAnchor 把某个 deps 变化解读为一次 pulse（动画开始时 bump 该 dep）
+```
+
+这与 `deps` 的区别：`deps` 是「立刻重发一次」（一帧），`pulse` 是「接下来一段时间每帧跟随」
+（动画全程）。调用方只需知道「现在开始有动画」这一个事实，不需要枚举动画把矩形挪到哪。
+
+### 观测组合总表
+
+| 信号 | 观测器 | 驱动 | 常驻？ |
+|---|---|---|---|
+| target 自身尺寸 | ResizeObserver | 事件 | 是（但静止零回调） |
+| 整窗 resize | window `resize` | 事件 | 是（静止零回调） |
+| 祖先 scroll | window capture `scroll` | 事件 → 开 RAF 窗 | 是（静止零回调） |
+| 祖先 transform / 重排位移 | **RAF 几何哨兵** | 轮询 | **否**（窗口化） |
+| display:none / 出视口 | IntersectionObserver | 事件 | 是（静止零回调） |
+| 动画期位移 | `pulse()` → RAF 窗 | 调用方提示 | 否（窗口化） |
+
+---
+
+## 3. 可见性来源：几何 vs 调用方意图（精确划线）
+
+`createPlacementAnchor` 今天的 `{ visible:false }` **纯粹是调用方意图**（`visible` 标志，
+`view-anchor.ts:148-159`）——锚自己绝不从几何推断隐藏（`measurePlacement` 永远返回
+`visible:true`，注释明确写「hiddenness is a caller decision」）。这个设计是对的，**不要让
+IO 去翻它**。划线如下：
+
+| 维度 | 谁说了算 | 机制 | 失败模式（若搞错） |
+|---|---|---|---|
+| **意图**：这块 view **应不应该**在屏上（tab 切走、面板手动收起） | **调用方** | `setVisible(false)` / `present:false` / `pulse` 之外的显隐 API | 若让 IO 接管 → 用户滚动让 slot 暂时滚出视口，view 被「自作主张」detach，滚回来又 attach，闪烁 + 跨进程抖动 |
+| **几何**：target 此刻**在不在 DOM、有没有非零屏幕矩形、是不是 `display:none`** | **锚（IO + measure）** | IntersectionObserver + `getBoundingClientRect` 全 0 检测 | 若让调用方负责 → tab 用 `display:none` 隐藏时调用方忘了 `setVisible(false)`，view 残留在原位（codex 盲区 #4） |
+
+**结论（职责边界）**：
+
+1. **显隐意图永远是调用方说了算**。tab 切换 = 调用方对被切走的 slot 显式 `setVisible(false)`
+   （或 electron-deck 的 tab 容器统一替成员 slot 发）。锚**不**用 IO 把「滚出视口」翻译成
+   `visible:false`——那会把「暂时不可见」误判成「意图隐藏」。
+
+2. **IO 只补一件事：几何兜底，防 `display:none` 残留**。当 target 进入 `display:none`
+   （IO 报 `isIntersecting:false` 且 `intersectionRect` 全 0，且 `boundingClientRect` 也全 0），
+   锚必须发一条 **`{ visible:false }`（detach，不带 bounds）**——**不是** 0 尺寸的
+   `visible:true`。⚠️ 已按 codex 第3轮统一（见下「visible:false = OR」语义）。理由：
+   - `display:none` / slot 无任何几何盒 = **没有可锚的几何**，这是一个**客观事实**，不是
+     「调用方改了显隐意图」。Placement 的判别式（`types.ts:39-41`）把
+     `{ visible:true, bounds:0×0 }`（元素在、但渲染成 0×0 的**合法罕见**情形）与
+     `{ visible:false }`（无几何盒 / 隐藏，**不带 bounds**）钉成**必须可区分**的两态——
+     这正是消「魔法 0」的核心。`display:none` 没有几何盒，归后者，**不能**伪装成 0×0 的
+     visible（那会把「客观无盒」与「合法 0×0 元素」重新混成一谈，复活魔法 0）。
+   - 宿主侧把 `{ visible:false }` 读作「detach but keep alive」（`types.ts:28-41`）：原生
+     view 被摘下但 WebContents 存活，`display` 恢复（IO 再报有交集 / measure 拿到非零盒）
+     时瞬时贴回。
+   - **这不算「IO 篡改调用方意图」**：`visible:false` 的语义是「**不显示这个 view**」，
+     而「不显示」由**两路 OR** 得出——调用方意图 hide（`setVisible(false)` / `present:false`）
+     **或** 锚测出无几何盒（`display:none` / 未 mount）。IO 报告的是后一路（客观事实），
+     与前一路（调用方意图）做 **OR**，不覆盖、不翻转调用方的意图位；只要任一路为「不显示」，
+     最终就 `visible:false`。所以这与 §3.1「锚不替调用方决定意图」不冲突——「无几何可锚」
+     不是一个意图，是一个事实，事实与意图 OR 进同一个 `visible:false` 终态。
+
+   > **与 `{visible:true, bounds:0×0}` 的边界**：后者**只**保留给「元素仍在渲染树、有几何盒，
+   > 但被排版成 0×0」这一**合法罕见**情形（例如内容真的塌成 0 高）。`display:none` / 未 mount /
+   > 无几何盒 一律走 `{visible:false}`。判别口诀：**有盒但 0 面积 → visible:true+0×0；无盒 →
+   > visible:false**。
+   >
+   > 对 legacy 的 `createViewAnchor`（`Bounds` 而非 `Placement`，无判别式）：`display:none` 时
+   > measure 本就返回全 0，等价于发 ZERO（detach），行为已对（恰好正确）；但今天它**不知道
+   > 何时该重测**——靠 §2 的 IO/RAF 触发补这一步。Placement 版的好处正是显式区分了「合法 0×0
+   > visible」和「无几何盒 → visible:false」，这正是 split/tab 场景需要、且 legacy ZERO 约定
+   > 表达不出来的精度。
+
+3. **一句话边界**：**「想不想显示」是意图（调用方）；「现在贴得上贴不上、贴在哪」是几何
+   （锚）。** 锚永远不替调用方决定意图；调用方永远不该手算几何。
+
+---
+
+## 4. 首帧守卫（防原生 view 闪 (0,0)）
+
+codex 盲区 #5：slot 还没进 DOM、或刚进但 layout 未稳时，同步 measure 报出脏/0 矩形，原生
+view 闪在 (0,0)（`view-anchor.ts:243-254` 的 `apply()` 在 `visible/present` 时**无条件**
+`publish(measure())`）。契约：
+
+**「首个有效矩形之前，绝不 publish 一个会让原生 view 出现在错误位置的矩形。」**
+
+具体规则（落在 `apply()` 的初次发布与 IO 首帧）：
+
+1. **判「无效矩形」**：`width===0 || height===0`（含未 mount 的全 0、`display:none` 的全 0、
+   layout 未稳的塌缩）。
+2. **首帧若无效 → 不发非零、改发 detach 信号**：
+   - Placement 版：发 **`{ visible:false }`**（detach，不带 bounds；§3.2 同款，未 mount /
+     全 0 = 无几何盒），**绝不**发非零 bounds、也**不**发 0 尺寸的 `visible:true`。
+     ⚠️ 已按 codex 第3轮统一（无几何盒 → `visible:false`，0×0 visible 只留给有盒的合法塌缩）。
+   - legacy `Bounds` 版：发 `{0,0,0,0}`（ZERO），等价 detach。
+3. **挂 IO + RAF 哨兵等第一个非零矩形**：IO 的 `isIntersecting` 转 true（或哨兵某帧测到
+   非零 width/height）即触发一次正常 `emit()` → 发首个真实矩形 → 原生 view **直接出现在正确
+   位置**，从无闪 (0,0)。
+4. **不发非零 (0,0)**：(0,0) 作为**位置**是合法的（slot 真在左上角），所以不能用「位置==0」
+   判无效；判据只用 **尺寸==0**（与 `clampRect` 的 width/height 钳零、x/y 不钳零的既有不变量
+   一致，`view-anchor.ts:10-28`）。
+
+> 取舍：方案二「首帧直接不 publish 任何东西，静默到第一个有效矩形」也能防闪，但会让宿主侧的
+> view 处于「创建了但从没收到过 placement」的未定义初态。发一帧 `{ visible:false }`
+> （detach-but-keep）让宿主从一开始就处于明确的 detached 态，恢复时只是一次 attach，时序更
+> 干净 → **选发 visible:false detach**。
+
+---
+
+## 5. 终止性 hidden（dispose / 卸载必须发 detach，防残留）
+
+codex 盲区 #6：核心 `dispose()` 刻意只停观察、**永不再发布**（`view-anchor.ts:266-269`、
+mechanism.mdx「dispose 后保持静默」）。这对「调用方会先发 ZERO 再 dispose」的旧用法成立——
+但跟随任意 slot 时，slot 可能在调用方来不及发 detach 之前就被 React 卸载。契约：
+
+**「锚的生命终点（dispose）或 slot 卸载，必须有且仅有一条终止性 detach 信号抵达宿主，
+让原生 view 被摘除——不依赖调用方记得先发。」**
+
+落点分两层（保留核心纯净、把补发放适配层，**沿用今天的分工**）：
+
+- **核心 `createViewAnchor.dispose()`**：维持现状——**不**自动补发（保持「dispose 后静默」
+  不变量；core 不知道宿主的 detach 协议是 ZERO 还是 `{visible:false}`，由 sink 语义决定，
+  不该在 core 写死）。**这是刻意保留，不改。**
+- **React 适配层 `useViewAnchor`**：已实现 `collapseAndDispose`（`react.ts:70-76`）——
+  `ref → null` / 卸载时先 `update({ present:false })`（发 ZERO/detach）再 `dispose()`。
+  **本契约把这条从「DevTools 占位的 P1 修复」提升为「任意 slot 的硬契约」**：
+  - `ref(null)`（元素 detach）→ 必发一条 detach 再 dispose（`react.ts:89-93` 已有）。
+  - 组件卸载（`elRef.current===null` 的 cleanup）→ 必发一条 detach（`react.ts:163-165` 已有）。
+  - **新增覆盖**：`createPlacementAnchor` 没有 React 适配层时（命令式直接用），调用方必须在
+    `dispose()` 前发 `{ visible:false }`——这一点应在 `createPlacementAnchor` 的 JSDoc 用
+    **FOOTGUN** 标注（与 size-advertiser 的 `<body>` 守卫同风格），因为命令式核心刻意不补发。
+
+**为什么不让核心自动补发**：核心服务两种 sink（ZERO 约定 / Placement 约定），终止信号的
+**形状**取决于 sink 语义，core 写死任一种都会对另一种错。补发的归属 = **知道 sink 语义的那一层**
+（React 适配层知道是 ZERO；命令式调用方知道自己用的是哪种）。所以契约是「**终止 detach 必达**」，
+实现位置随 sink 语义层走，core 维持静默不变量。
+
+---
+
+## 6. 性能 / 抖动：多锚 + RAF 的成本与收敛
+
+### 成本模型
+
+设页面同时有 N 个锚（N 个 split 叶子各一块原生 view）。各信号成本：
+
+| 信号 | 静止态成本 | 交互态成本 |
+|---|---|---|
+| ResizeObserver ×N | 0 回调 | 仅尺寸真变的那个锚触发 |
+| window resize | 0 | 整窗拖动期间所有 N 个一起重测（本就该全测，合理） |
+| capture scroll | 0 | 仅滚动期间，开对应锚的 RAF 窗 |
+| **RAF 哨兵** | **0（窗口关闭）** | **仅「正在动」的锚开窗**——通常是被拖的那 1 个，不是 N 个 |
+| IntersectionObserver ×N | 0 回调 | 仅可见性翻转时触发 |
+
+**核心论点**：把 RAF **窗口化**（§2.D）而非常驻，使静止态成本严格为 0，交互态成本正比于
+「正在动的锚数」而非 N。dockview 常驻 RAF 是「单一 overlay 容器」语境下可接受的简化；我们是
+「N 个独立锚」语境，常驻会让 N 个锚每帧各测一次 `getBoundingClientRect`（N 次强制布局读），
+**即使只有一个在动**——这才是必须窗口化的原因。
+
+### dedup / coalesce（已有，保留并复用）
+
+- **同值去重**（`lastPublished` + `sameRect` / `samePlacement`，`view-anchor.ts:88`/`223`）：
+  一次连续拖拽里每个不同矩形至多发一次 IPC；RAF 哨兵每帧测到相同矩形直接丢，**不发 IPC**。
+  这也是哨兵「连续静止帧 → 关窗」（§2.D）的判据来源——dedup 命中即静止信号。
+- **同帧多信号合并**：scroll + RAF 哨兵共用同一个「每帧测一次」的 RAF 体，一帧内 scroll 触发
+  多次也只测一次。ResizeObserver/resize 的同步 `emit` 与 RAF 体之间靠 `lastPublished` 去重
+  防重复发（同帧若 RO 已发过该矩形，哨兵那帧 dedup 丢弃）。
+- **不加时间节流**：与 size-advertiser 同立场（bidirectional-design.md §5）——RAF 跟随刷新率
+  已是终极限流，额外 throttle 会吞掉合法的离散位移。
+
+### 抖动来源与封堵
+
+- 唯一会抖的是「IO 把滚出视口误判成意图隐藏」——§3 已封死（IO 不动意图）。
+- 哨兵关窗用「连续 N 帧静止」而非「1 帧静止」，避免拖动中的瞬时停顿（手指悬停）误判关窗后
+  又被下一帧位移重新开窗的开关抖动。N=2~3 待真机定。
+
+---
+
+## 7. 为什么不能整包搬去 RAF（与现有「禁 RAF」测试的调和）
+
+现有强约束：`view-anchor.test.ts:256` 断言正向锚 **「never schedules a requestAnimationFrame」**，
+header（`view-anchor.ts:42-57`）论证过：正向 sink 是跨进程 `setBounds`，本就晚约 1 合成帧，
+RAF 再叠一帧 → 拖拽可见拖尾（GROWING 时露背景最明显）。**这个结论不推翻。**
+
+调和方式——**区分两类触发的发布时机**：
+
+1. **事件驱动触发**（RO / resize / scroll-induced 的「我知道刚发生了一次离散变化」）：
+   **维持同步发布**，不进 RAF。盲区 #1/#2 中「事件能精确通告」的部分走这条，无新增帧。
+2. **轮询触发**（RAF 几何哨兵，盲区 #1 祖先移动 / #3 transform 的「无事件、只能每帧问一次」）：
+   **本质上就是每帧轮询**，RAF 是它**唯一**的实现方式——这不是「把同步发布推迟一帧」，而是
+   「在没有事件的情况下，每帧主动 measure 一次」。哨兵在 RAF 体内**测到变化就同步发**（当帧
+   measure+publish，不再往后推一帧），所以它**不引入**「发布晚一帧」的拖尾——它引入的只是
+   「**发现**变化最晚晚一帧」（轮询固有，无事件就只能下一帧才知道）。
+
+因此现有测试的精确含义应被**收窄**为：「**事件驱动**路径不得 RAF-defer 其发布」——而不是
+「整个包不许出现 requestAnimationFrame」。哨兵的 RAF 属于**轮询机制**，不是**发布延迟**。
+落地时这条测试需重述为「RO/resize 触发的 publish 必须在触发同步栈内发生」，并新增「哨兵在 RAF
+体内同步 publish、不二次 defer」的测试。**这是本契约对现有不变量唯一的语义澄清，需在实现 PR
+里显式标注（修改测试 = 移动球门，要让评审看见）。**
+
+> 一句话：**事件能告诉你的，同步发；事件告诉不了你的（transform/祖先移动），每帧轮询、当帧发。**
+> 两者都没有「为了合并而推迟发布」的那一帧——拖尾的根因被保留封死。
+
+---
+
+## 8. 嵌套 split 场景演示（证明观测组合够用）
+
+场景（codex 指定）：**左 | 右 分；右侧再 上 / 下 分；原生 view 在右下叶子；拖外层（左|右）
+splitter。**
+
+```
+┌───────────────┬─────────────────────────┐
+│               │  右上 (叶子，无原生 view)  │
+│   左 (叶子)    ├─────────────────────────┤
+│               │  右下 (叶子)              │
+│               │   └─ [占位 div] ← 锚      │  ← 原生 WCV 贴这里
+└───────────────┴─────────────────────────┘
+        ▲ 拖这条外层 splitter（左|右）向右
+```
+
+拖外层 splitter 向右：
+
+1. 左叶子变窄、右半边整体变宽并**左移**。右下占位 div 的 **width 变了**（右半边变宽）→
+   **ResizeObserver 触发**（§2.A）→ 同步 emit → 新矩形（宽变、x 也左移了）→ publish。
+   ✅ 宽度变化这一维**事件能告诉你**，同步发，无拖尾。
+
+但考虑**纯左移不变宽**的退化变体（外层 splitter 在右半边内部、或右半边是固定宽时整体被推走）：
+占位 div 的 **width/height 都没变、只有 x 变**（祖先把它整体推走）。此时：
+
+2. ResizeObserver **不触发**（尺寸没变）——这正是盲区 #1。
+3. 拖动从 splitter 的 `pointerdown` 开始 → §2.D/§6 的「命中 `[role="separator"]` 开窗」启动
+   **RAF 哨兵** → 拖动中每帧 measure 占位 div → x 每帧在变 → 与 lastPublished 不同 → 当帧
+   同步 publish 新 x。✅ 原生 view 跟随左移，逐帧贴住。
+4. 松手 → 占位 div 稳定 → 哨兵连续 N 帧测到相同矩形 → 关窗 → 回到零成本静止态。
+
+再叠 **scroll 变体**：若右下叶子是可滚动容器、原生 view 占位随内容滚动：
+
+5. 滚动 → `scroll` 不冒泡到 window，但 **window 捕获阶段**收到（§2.C）→ 开 RAF 窗 → 滚动期间
+   每帧测占位新 y → publish。✅ 滚动跟随。停滚 → 判静止 → 关窗。
+
+再叠 **transform 变体**（外层 split 用 CSS transform 做展开动画而非改 flex 尺寸）：
+
+6. transform 改屏幕位置、`getBoundingClientRect` 的 left/top 变、但**无任何事件**。调用方在动画
+   开始时 `pulse()`（§2.F）→ 开 RAF 窗 → 动画全程每帧跟随 → 动画结束判静止关窗。✅。
+
+**结论**：A（宽高变）+ C（滚动）+ D（splitter/transform 引发的纯位移）+ F（动画）覆盖了嵌套
+split 下原生 view 会经历的全部位移来源。每一类都有对应触发，且静止后全部回到零成本。
+
+---
+
+## 9. 跨进程时序：拖动滞后（标记，真机定）
+
+publish → IPC → 主进程 `setBounds` 有不可消除的延迟。锚已做到「发现变化的当帧就同步 publish」
+（§7），但 IPC + 主进程合成仍使原生 view 比渲染进程 DOM **晚约 1 合成帧**到位（header
+`view-anchor.ts:42-50` 已记载，且这是**已接受**的现状——靠占位/desk 背景同色遮掩边缘露出）。
+
+本契约**新引入**的潜在滞后只有一处：**RAF 哨兵的「轮询发现延迟」**——transform/祖先移动这类
+无事件信号，最坏情况「变化发生」到「哨兵下一帧测到」差 1 帧，再叠固有的 1 跨进程帧 = 拖动这类
+信号时原生 view 最坏滞后 DOM **2 帧**（事件驱动信号仍是 1 帧）。
+
+取舍（先标记，**真机才定**）：
+
+- **默认接受 2 帧**：拖动是用户主动、低速、背景同色遮掩，2 帧（~33ms@60Hz）大概率不可见。
+  先不做预测/插值——插值要在主进程对 bounds 做外推，复杂且可能过冲（松手瞬间外推冲过头更难看）。
+- **待真机验证点（最不确定，必须真机证）**：
+  1. **RAF 哨兵常驻 vs 窗口化的成本差**在真机多锚下到底多大——若窗口化的开关逻辑本身开销
+     接近常驻，则简化为常驻；§7 的窗口化论证是**纸面推导，未实测**。
+  2. **拖动 2 帧滞后是否可见**——若可见，再评估是否需要在事件驱动维度（宽高变）保持同步、
+     只对哨兵维度（位移）做主进程外推；外推 vs 接受滞后的拍板**只能真机看**。
+  3. **哨兵关窗的 N 帧静止阈值**（N=2~3）——太小则手指悬停误关、太大则松手后多空转几帧，
+     具体值真机调。
+  4. **capture scroll 监听在深嵌套滚动容器下是否真能收到全部滚动**——理论上捕获阶段必达，
+     但被动 listener + 浏览器滚动合成线程的实际触发时机需实测确认不丢帧。
+
+---
+
+## 10. API 变化总览（落到现有结构，供实现 PR 对照）
+
+> 全部是**叠加**，不破坏现有签名；旧调用方零改动即得「自身尺寸 + 整窗 resize」的原有行为。
+
+### `createViewAnchor` / `createPlacementAnchor`（命令式核心）
+
+新增可选 option（默认全关 = 退化成今天的行为）：
+
+```ts
+interface FollowOptions {
+  /** 追加祖先 scroll 跟随（window 捕获阶段监听）。默认 false。 */
+  followScroll?: boolean
+  /** 启用 RAF 几何哨兵（兜 transform / 祖先移动）。默认 false。
+   *  开窗由 scroll / splitter pointerdown / pulse() 触发，静止自动关窗。 */
+  followGeometry?: boolean
+  /** display:none 兜底：挂 IntersectionObserver，进入 display:none（无几何盒）时
+   *  发 `{ visible:false }`（detach-but-keep，不带 bounds），恢复时重测。默认 false。 */
+  guardDisplayNone?: boolean
+}
+```
+
+handle 新增：
+
+```ts
+interface ViewAnchorHandle {
+  // ...现有 update / dispose 不变...
+  /** 开一次 RAF 哨兵窗口（动画期跟随）；durationMs 后或判静止后自动关。
+   *  followGeometry 为 false 时为 no-op。 */
+  pulse(durationMs?: number): void
+}
+```
+
+**不变量保持**：`update` / `dispose` 语义不变；core 仍不在 dispose 后补发（§5）；事件驱动
+路径仍同步发布（§7）。
+
+### `useViewAnchor`（React 适配层）
+
+```ts
+interface UseViewAnchorOptions extends ViewAnchorOptions, FollowOptions {
+  deps?: ReadonlyArray<unknown>   // 现有，保留
+  /** 某个值变化 = 一次 pulse（动画开始时 bump 它）。区别于 deps 的「重发一次」。 */
+  pulseOn?: ReadonlyArray<unknown>
+}
+```
+
+- 终止性 detach（§5）已由 `collapseAndDispose` 覆盖，**升格为硬契约**，不新增 API。
+- electron-deck 的 **tab 容器**负责对被切走的成员 slot 显式发意图 `visible:false`（§3.1）——
+  这是 host 胶水，不进 view-anchor。
+
+### `electron-deck` 侧（host 胶水，不进 view-anchor）
+
+- split 的每个叶子占位 div 用 `useViewAnchor({ followScroll, followGeometry, guardDisplayNone })`。
+- splitter 组件在 `pointerdown` 时通知其管辖叶子的锚 `pulse()`（或锚自身的 capture
+  `pointerdown` 命中 `[role="separator"]` 自动开窗——二选一，倾向后者更自治，真机定）。
+- tab 容器切换时对非活动成员发意图 `setVisible(false)`，对活动成员 `setVisible(true)`。
+
+---
+
+## 11. 契约小结（锚保证 / 不保证）
+
+**保证跟随的信号**：
+1. target 自身尺寸变化（RO，同步发）。
+2. 整窗 resize（同步发）。
+3. 祖先滚动（`followScroll`，window 捕获 scroll，开窗逐帧跟）。
+4. 祖先 transform / 祖先重排导致的纯位移（`followGeometry` RAF 哨兵，开窗逐帧跟）。
+5. 动画期位移（`pulse` / `pulseOn` 开窗）。
+6. `display:none` 隐藏（`guardDisplayNone` IO）→ 发 `{ visible:false }`（detach-but-keep，
+   无几何盒），恢复重测、瞬时贴回。⚠️ 已按 codex 第3轮统一（不再发 0 尺寸 visible）。
+7. 首帧未 mount / layout 未稳 → 不发非零脏矩形，发 `{ visible:false }` detach，等首个有效矩形（§4）。
+8. dispose / 卸载 → 终止性 detach 必达（§5，由知道 sink 语义的那层补发）。
+
+**不保证 / 明确不做**：
+- **不替调用方决定显隐意图**：滚出视口 ≠ 意图隐藏，锚绝不据此 detach（§3）。
+- **不消除跨进程固有 1 帧滞后**（已接受，背景同色遮掩）；轮询信号再叠 1 帧轮询发现延迟（§9，真机定是否需外推）。
+- **不常驻 RAF**：静止态严格零轮询成本（§2.D / §6）。
+- **不在包里做时间节流**（dedup + RAF 跟随刷新率已是终极限流）。
+- **不在核心 dispose 后自动补发**（终止 detach 的形状随 sink 语义，归适配层/调用方，§5）。
+- **不提供 `decide` / 收敛策略 / tab 容器**（host 胶水，留 electron-deck，与 bidirectional-design §8 包定位守恒一致）。
+
+---
+
+## 12. 最不确定、必须真机证的点（实现前先标）
+
+1. **RAF 哨兵成本（窗口化 vs 常驻）**：多锚静止场景下窗口化是否真的把成本压到 ~0、开关逻辑
+   本身是否反而比常驻还贵（§6 / §9.1）——**纸面推导，未实测**。
+2. **拖动 2 帧滞后是否可见**：可见则需评估对位移维度做主进程外推 vs 接受滞后（§9.2）。
+3. **哨兵关窗 N 帧阈值**（N=2~3）：手指悬停误关 vs 松手空转的平衡（§9.3）。
+4. **capture scroll 在深嵌套滚动容器是否不丢帧**（§9.4）。
+5. **splitter 开窗机制**：锚自身 capture `pointerdown` 命中 `[role="separator"]` 自动开窗
+   vs splitter 显式 `pulse()`——哪个更不漏触发，真机定（§10）。

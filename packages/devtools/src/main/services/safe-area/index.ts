@@ -1,5 +1,5 @@
 import type { WebContents } from 'electron'
-import type { ConnectionRegistry } from '@dimina-kit/workbench/main'
+import type { ConnectionRegistry } from '@dimina-kit/electron-deck/main'
 import type { NativeDeviceInfo } from '../../../shared/ipc-channels.js'
 
 /**

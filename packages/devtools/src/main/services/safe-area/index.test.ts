@@ -13,7 +13,7 @@
 import { describe, it, expect } from 'vitest'
 import type { WebContents } from 'electron'
 
-import { createConnectionRegistry } from '@dimina-kit/workbench/main'
+import { createConnectionRegistry } from '@dimina-kit/electron-deck/main'
 import { createSafeAreaController } from './index.js'
 
 type AnyFn = (...args: unknown[]) => unknown

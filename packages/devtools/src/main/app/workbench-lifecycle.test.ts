@@ -3,7 +3,7 @@
  * does not leak ipcMain handlers/listeners across re-creation.
  *
  * If `WorkbenchAppInstance.dispose()` correctly tears down every
- * `register*Ipc(ctx)`-installed handler, a second `createWorkbenchApp().setup()`
+ * `register*Ipc(ctx)`-installed handler, a second `createDevtoolsRuntime()`
  * must not throw "Attempted to register a second handler …".
  *
  * The test runs entirely against stubbed electron primitives — no real Electron
@@ -304,19 +304,18 @@ vi.mock('@dimina-kit/devkit', () => ({
 // Import lazily so the electron mock above is in place before the module
 // graph (which captures `app`, `ipcMain` references at import time) is
 // loaded.
-let createWorkbenchApp: typeof import('./app.js').createWorkbenchApp
+let createDevtoolsRuntime: typeof import('./app.js').createDevtoolsRuntime
 type WorkbenchAppInstance = import('./app.js').WorkbenchAppInstance
 
 beforeEach(async () => {
   vi.resetModules()
   stubs.reset()
-  ;({ createWorkbenchApp } = await import('./app.js'))
+  ;({ createDevtoolsRuntime } = await import('./app.js'))
 })
 
 describe('Workbench lifecycle: setup → dispose × 2', () => {
   it('first setup() returns an instance with mainWindow + context + dispose', async () => {
-    const app = createWorkbenchApp({})
-    const instance = await app.setup()
+    const instance = await createDevtoolsRuntime({})
     expect(instance).toBeDefined()
     expect(instance.mainWindow).toBeDefined()
     expect(instance.context).toBeDefined()
@@ -326,7 +325,7 @@ describe('Workbench lifecycle: setup → dispose × 2', () => {
   })
 
   it('dispose() calls removeHandler for every channel registered via ipcMain.handle, and removeListener for every ipcMain.on listener', async () => {
-    const instance = await createWorkbenchApp({}).setup()
+    const instance = await createDevtoolsRuntime({})
 
     const firstHandles = new Set(stubs.handleCalls)
     const firstOns = new Set(stubs.onCalls)
@@ -355,7 +354,7 @@ describe('Workbench lifecycle: setup → dispose × 2', () => {
   })
 
   it('second setup() after dispose does NOT throw "Attempted to register a second handler"', async () => {
-    const first = await createWorkbenchApp({}).setup()
+    const first = await createDevtoolsRuntime({})
     await first.dispose()
 
     // Re-create. If any handler from the first setup was leaked, the stubbed
@@ -363,7 +362,7 @@ describe('Workbench lifecycle: setup → dispose × 2', () => {
     let second: WorkbenchAppInstance | undefined
     let err: unknown
     try {
-      second = await createWorkbenchApp({}).setup()
+      second = await createDevtoolsRuntime({})
     } catch (e) {
       err = e
     }
@@ -373,7 +372,7 @@ describe('Workbench lifecycle: setup → dispose × 2', () => {
   })
 
   it('second dispose symmetrically releases every handler/listener registered by the second setup', async () => {
-    const first = await createWorkbenchApp({}).setup()
+    const first = await createDevtoolsRuntime({})
     await first.dispose()
 
     // Snapshot counts after first dispose so we only inspect deltas from setup #2.
@@ -382,7 +381,7 @@ describe('Workbench lifecycle: setup → dispose × 2', () => {
     const removeHandlerBeforeSecond = stubs.removeHandlerCalls.length
     const removeListenerBeforeSecond = stubs.removeListenerCalls.length
 
-    const second = await createWorkbenchApp({}).setup()
+    const second = await createDevtoolsRuntime({})
 
     const secondHandles = new Set(stubs.handleCalls.slice(handleBeforeSecond))
     const secondOns = new Set(stubs.onCalls.slice(onBeforeSecond))
@@ -413,7 +412,7 @@ describe('Workbench lifecycle: setup → dispose × 2', () => {
   })
 
   it('dispose is idempotent — calling it twice does not throw', async () => {
-    const instance = await createWorkbenchApp({}).setup()
+    const instance = await createDevtoolsRuntime({})
     await expect(instance.dispose()).resolves.not.toThrow()
     await expect(instance.dispose()).resolves.not.toThrow()
   })

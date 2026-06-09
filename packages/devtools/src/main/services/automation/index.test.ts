@@ -84,7 +84,7 @@ vi.mock('ws', () => ({
 
 // Import AFTER the mocks so the module picks up the stubs.
 import { AutomationChannel } from '../../../shared/ipc-channels.js'
-import { createConnectionRegistry } from '@dimina-kit/workbench/main'
+import { createConnectionRegistry } from '@dimina-kit/electron-deck/main'
 import { startAutomationServer } from './index.js'
 import { getSimulator } from './exec.js'
 

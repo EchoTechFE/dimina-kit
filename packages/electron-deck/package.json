@@ -1,0 +1,82 @@
+{
+  "name": "@dimina-kit/electron-deck",
+  "version": "0.0.0",
+  "description": "Dimina devtools electron-deck framework — single `electronDeck(config)` entry for hosts (qdmp, dimina default).",
+  "keywords": [
+    "dimina",
+    "devtools",
+    "electron-deck",
+    "electron"
+  ],
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "author": "EchoTechFE",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EchoTechFE/dimina-kit.git",
+    "directory": "packages/electron-deck"
+  },
+  "bugs": {
+    "url": "https://github.com/EchoTechFE/dimina-kit/issues"
+  },
+  "homepage": "https://github.com/EchoTechFE/dimina-kit/tree/main/packages/electron-deck#readme",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./main": {
+      "types": "./dist/main/index.d.ts",
+      "default": "./dist/main/index.js"
+    },
+    "./preload": {
+      "types": "./dist/preload/index.d.ts",
+      "default": "./dist/preload/index.js"
+    },
+    "./client": {
+      "types": "./dist/client/index.d.ts",
+      "default": "./dist/client/index.js"
+    },
+    "./host": {
+      "types": "./dist/host/index.d.ts",
+      "default": "./dist/host/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "check:trust-seal": "node scripts/check-trust-seal.mjs",
+    "test": "node scripts/check-trust-seal.mjs && vitest run",
+    "test:dev": "vitest",
+    "prepack": "pnpm run build"
+  },
+  "dependencies": {
+    "@dimina-kit/view-anchor": "workspace:*"
+  },
+  "devDependencies": {
+    "@dimina-kit/eslint-config": "workspace:*",
+    "@dimina-kit/typescript-config": "workspace:*",
+    "@types/node": "^22.15.3",
+    "electron": "^41.2.1",
+    "eslint": "^10.2.1",
+    "typescript": "5.9.2",
+    "vitest": "^4.1.4"
+  },
+  "peerDependencies": {
+    "electron": ">=36"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
