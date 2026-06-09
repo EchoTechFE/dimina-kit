@@ -1,7 +1,6 @@
 import type { BrowserWindow, WebContents, WebContentsView, ipcMain } from 'electron'
 import type { MinimalApp, MinimalElectron } from './internal/electron-types.js'
 import type { MinimalIpcMain, MinimalWebContents } from './internal/wire-transport.js'
-import type { Scope } from './main/scope.js'
 
 export type MaybePromise<T> = T | Promise<T>
 
@@ -13,6 +12,13 @@ export type JsonValue =
 
 export interface Disposable {
 	dispose(): void | Promise<void>
+}
+
+/** Opaque session handle minted ONLY by `runtime.scopes.create()`. Wraps a
+ *  child of the app root, so disposing it (or app shutdown) tears down every
+ *  view bound to it. Does NOT expose the internal Scope (no adopt/reset escape). */
+export interface DeckSession {
+	dispose(): Promise<void>
 }
 
 /**
@@ -230,15 +236,15 @@ export type ViewPlacement = { readonly visible: true; readonly bounds: ViewBound
 /** Options for {@link Runtime.view}. */
 export interface ViewCreateOptions {
 	readonly source: WebviewSource
-	/** The view's home lifetime — closing it detaches + unregisters the view
-	 *  (display teardown); native WebContents destruction is deferred to keepAlive
-	 *  (B3). Omitting it (OR passing the app root scope explicitly) registers NO
-	 *  per-view self-disposer: the root scope lives the whole app, so binding to it
-	 *  would only accumulate a disposer for the process lifetime — both cases behave
-	 *  identically (no home-scope teardown; the view's display still tears down with
-	 *  its placeIn window). Pass a shorter-lived scope (e.g. a project session) to
-	 *  have that scope's close detach + unregister the view. */
-	readonly scope?: Scope
+	/** The view's home lifetime — a {@link DeckSession} from
+	 *  `runtime.scopes.create()`. Disposing the session detaches + unregisters the
+	 *  view (display teardown) and closes its native WebContents; because the
+	 *  session is a child of the app root, app shutdown also cascades into it.
+	 *  Omitting it binds the view to the app root (no per-session teardown; the
+	 *  view's display still tears down with its placeIn window, and shutdown closes
+	 *  it). A raw/foreign Scope is REJECTED — only a session minted by
+	 *  `runtime.scopes.create()` is accepted (provenance check). */
+	readonly scope?: DeckSession
 	/**
 	 * Opt-in keep-alive eviction policy (B3.2). When set, the framework disposes
 	 * the least-recently-VISIBLE HIDDEN view in this view's group once the group's
@@ -264,6 +270,11 @@ export interface DeckViewHandle {
 	 *  sets bounds directly; `visible:false` detaches but keeps the view alive.
 	 *  A frame after `dispose` is dropped. Chainable. */
 	applyPlacement(placement: ViewPlacement): DeckViewHandle
+	/** Migrate the placed view to another window (the ONLY re-placement path —
+	 *  placeIn twice throws). Moves the per-window substrate registration + re-issues
+	 *  the slot-token anchor for the dest; atomic (rolls back to the source on dest
+	 *  failure). `rehome:true` re-parents the view's lifetime to the dest window. */
+	moveTo(win: BrowserWindow, opts: { zone?: number; anchor?: string; rehome?: boolean }): Promise<void>
 	/** Tear down this placement (detach the native view, disable the sink). */
 	dispose(): Promise<void>
 }
@@ -286,11 +297,47 @@ export interface Runtime {
 		get(id: string): BrowserWindow | undefined
 		all(): BrowserWindow[]
 		trust(win: BrowserWindow): Disposable
+		/**
+		 * Register an EXTERNALLY-created window (one the host built itself, e.g.
+		 * under a `ownsWindows:true` backend) into the framework: its windowScope,
+		 * per-window native-view substrate, and TRUST lifecycle — so
+		 * `runtime.view().placeIn(win)` works for it. Trust + slot-tokens + grants
+		 * for the window's webContents are revoked SYNCHRONOUSLY and FIRST on the
+		 * window's `'closed'` (the framework arms its revoke via `prependListener`,
+		 * so it runs before any external `'closed'` listener the host registered
+		 * earlier — a host listener must never observe a still-trusted wc whose id
+		 * Electron may immediately reuse).
+		 *
+		 * Idempotent by webContents identity: adopting the same window twice returns
+		 * the existing registration (no second substrate, no double trust lease).
+		 * Throws if the window (or its webContents) is already destroyed — a dead
+		 * wc.id could be reused, so admitting one would be a privilege-escalation
+		 * hazard.
+		 *
+		 * `ownership`:
+		 *  - `'transfer'` → the framework owns the window's lifetime and destroys it
+		 *    at app shutdown (as it does for its own windows).
+		 *  - `'observe'` (default) → the HOST owns the window's lifetime; the
+		 *    framework NEVER calls `destroy()` on it, but still tears down the
+		 *    substrate + trust when the registration is disposed or the app shuts down.
+		 *
+		 * The returned {@link Disposable} un-adopts the window early (tears down its
+		 * substrate + trust); it is idempotent.
+		 */
+		adopt(win: BrowserWindow, opts?: { ownership?: 'transfer' | 'observe' }): Disposable
 	}
 
 	/** Create a host-managed native view and return a chainable handle. Throws
 	 *  if the build has no Electron (mirrors `windows.create`). */
 	view(opts: ViewCreateOptions): DeckViewHandle
+
+	/** Session factory. `create()` mints an opaque {@link DeckSession} (internally
+	 *  a child of the app root) — the ONLY legitimate source of a `scope` for
+	 *  `runtime.view`. Disposing the session tears down every view bound to it;
+	 *  app shutdown also cascades into it. */
+	readonly scopes: {
+		create(): DeckSession
+	}
 
 	readonly grants: {
 		/** Authorize `controlWc` to invoke the given privileged commands. The grant
@@ -298,11 +345,11 @@ export interface Runtime {
 		 *  (navigation) or closes (destroy) — wc.id-reuse safe. Throws if `controlWc`
 		 *  is not trusted.
 		 *
-		 *  `targetScope` is stored as the authorization boundary for FUTURE
-		 *  per-target view-command checks; the current grant gate authorizes by
-		 *  (senderId, command-name) only — no command resolves a target view yet, so
-		 *  targetScope is not consulted at dispatch. Reserved. */
-		issue(controlWc: WebContents, opts: { targetScope: Scope; commands: readonly string[] }): Disposable
+		 *  `targetScope` is OPTIONAL and reserved: when supplied it is stored as the
+		 *  authorization boundary for FUTURE per-target view-command checks; the
+		 *  current grant gate authorizes by (senderId, command-name) only — no command
+		 *  resolves a target view yet, so targetScope is not consulted at dispatch. */
+		issue(controlWc: WebContents, opts: { commands: readonly string[]; targetScope?: DeckSession }): Disposable
 	}
 
 	readonly layout: {

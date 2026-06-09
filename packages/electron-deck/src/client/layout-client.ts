@@ -56,39 +56,68 @@ export function createDeckLayoutClient(deps: LayoutClientDeps): {
 		((id: string): HTMLElement | null => document.querySelector(id))
 	const createAnchor = deps.createAnchor ?? createPlacementAnchor
 
-	const anchors: Array<{ dispose(): void }> = []
-	let disposed = false
+  // One live anchor per `viewId`. Main intentionally re-delivers a grant on
+  // per-wc replay, so we dedup: a same-token replay is a no-op (keep the live
+  // anchor); a new token for an existing `viewId` replaces it (dispose old,
+  // create new). The map holds only CURRENTLY-LIVE anchors — a replaced anchor
+  // is disposed at replacement time and removed, so `dispose()` never
+  // double-disposes it.
+  const byViewId = new Map<string, { token: string; anchor: { dispose(): void } }>()
+  let disposed = false
 
-	// Register the grant listener BEFORE requesting replay (handshake §A5-2.1):
-	// a grant the main side replays synchronously inside `subscribe()` must find
-	// the listener already attached.
-	const unsub = deps.bridge.onSlotGrant((grant) => {
-		if (disposed) return
-		const el = resolveSlot(grant.slotId)
-		if (!el) return // slot not mounted → graceful no-op, no throw
-		const anchor = createAnchor(el, {
-			visible: true,
-			followScroll: true,
-			followGeometry: true,
-			guardDisplayNone: true,
-			// Capture THIS grant's slotToken in the closure so each anchor publishes
-			// to its own token (no cross-talk between slots).
-			publish: (placement) => {
-				deps.bridge.sendPlace({ slotToken: grant.slotToken, placement })
-			},
-		})
-		anchors.push(anchor)
-	})
+  // Register the grant listener BEFORE requesting replay (handshake §A5-2.1):
+  // a grant the main side replays synchronously inside `subscribe()` must find
+  // the listener already attached.
+  const unsub = deps.bridge.onSlotGrant((grant) => {
+    if (disposed) return
+    const existing = byViewId.get(grant.viewId)
+    // Same viewId+token re-delivered (per-wc replay) → pure no-op: keep the
+    // live anchor, do not create a second, do not dispose the first.
+    if (existing && existing.token === grant.slotToken) return
+    // A new token for this viewId → REVOKE the stale anchor FIRST (codex P4
+    // round-3): dispose + drop it BEFORE resolving the new slot, so a stale
+    // anchor can never keep publishing a revoked token even when the new slot
+    // isn't mounted yet. Deleting before `createAnchor` also means a throw in
+    // `createAnchor` can't leave an already-disposed anchor in the map (which a
+    // later `dispose()` would double-dispose).
+    if (existing) {
+      // try/finally (codex P4 round-4): the `delete` MUST run even if the old
+      // anchor's dispose throws — otherwise the disposed-but-still-mapped anchor
+      // keeps publishing the revoked token AND a later client.dispose() would
+      // dispose it a second time.
+      try {
+        existing.anchor.dispose()
+      }
+      finally {
+        byViewId.delete(grant.viewId)
+      }
+    }
+    const el = resolveSlot(grant.slotId)
+    if (!el) return // new slot not mounted → graceful no-op; old anchor already revoked
+    const anchor = createAnchor(el, {
+      visible: true,
+      followScroll: true,
+      followGeometry: true,
+      guardDisplayNone: true,
+      // Capture THIS grant's slotToken in the closure so each anchor publishes
+      // to its own token (no cross-talk between slots).
+      publish: (placement) => {
+        deps.bridge.sendPlace({ slotToken: grant.slotToken, placement })
+      },
+    })
+    byViewId.set(grant.viewId, { token: grant.slotToken, anchor })
+  })
 
-	// Request replay AFTER the listener is attached.
-	deps.bridge.subscribe()
+  // Request replay AFTER the listener is attached.
+  deps.bridge.subscribe()
 
-	return {
-		dispose(): void {
-			if (disposed) return
-			disposed = true
-			unsub()
-			for (const a of anchors) a.dispose()
-		},
-	}
+  return {
+    dispose(): void {
+      if (disposed) return
+      disposed = true
+      unsub()
+      for (const { anchor } of byViewId.values()) anchor.dispose()
+      byViewId.clear()
+    },
+  }
 }

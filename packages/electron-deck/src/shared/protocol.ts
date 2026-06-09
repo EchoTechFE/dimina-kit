@@ -18,6 +18,13 @@ import type { JsonValue } from '../types.js'
 /** Bridge global 默认挂的全局名（contextBridge.exposeInMainWorld） */
 export const DEFAULT_BRIDGE_GLOBAL = '__electronDeckBridge'
 
+/**
+ * Slot-token LAYOUT bridge 默认挂的全局名。`exposeDeckLayoutBridge()` 默认暴露到
+ * 此名，renderer 的 `createDeckLayoutClient({ bridge: window.__electronDeckLayoutBridge })`
+ * 读取同名。单一来源避免 preload helper 与 client 之间字符串漂移。
+ */
+export const DEFAULT_LAYOUT_BRIDGE_GLOBAL = '__electronDeckLayoutBridge'
+
 /** Bridge protocol semver；client 在 ready() 时校验 major 一致 */
 export const BRIDGE_PROTOCOL_VERSION = '1.0.0'
 

@@ -59,6 +59,11 @@ export interface MinimalWebContentsLike {
 export interface MinimalContentView {
 	addChildView(view: MinimalWebContentsView): void
 	removeChildView(view: MinimalWebContentsView): void
+	/** The window's live child views (real Electron `View.children`). Used by the
+	 *  moveTo rollback to guard against removing a child the dest never added
+	 *  (codex P0 round-3 BUG 2). Optional so existing fakes stay valid; an absent
+	 *  array is treated as "membership unknown" by the guard's `?? []`. */
+	readonly children?: readonly MinimalWebContentsView[]
 }
 
 export interface MinimalBrowserWindow {
@@ -74,6 +79,22 @@ export interface MinimalBrowserWindow {
 		event: 'resize' | 'closed' | 'close',
 		listener: (e?: { preventDefault(): void }) => void,
 	): MinimalBrowserWindow
+	/**
+	 * Register a listener at the FRONT of the listener list (Electron's
+	 * EventEmitter `prependListener` — prepended listeners run BEFORE any earlier
+	 * `on`-added listener for the same event). The framework uses this to arm an
+	 * adopted window's trust/grant revocation so it runs FIRST on `'closed'`,
+	 * before any external `'closed'` listener the host registered earlier.
+	 *
+	 * Optional so legacy fakes that never adopt a window keep compiling without it;
+	 * the real Electron `BrowserWindow` (an EventEmitter) always provides it, and
+	 * `runtime.windows.adopt` requires it at runtime. Typed as a bare `Function`
+	 * (like `close`) so a test fake can assign a plain `vi.fn()` Mock — whose
+	 * `Mock<Procedure | Constructable>` carries a construct signature that a strict
+	 * call signature rejects. Callers invoke it as `win.prependListener('closed', fn)`.
+	 */
+	// eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
+	prependListener?: Function
 }
 
 export interface MinimalWebContentsView {

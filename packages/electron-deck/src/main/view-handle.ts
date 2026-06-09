@@ -127,6 +127,15 @@ export function createViewHandle(deps: ViewHandleDeps): ViewHandle {
   // (STEP0), so a late applyPlacement after dispose/cascade is a no-op.
   let active = false
 
+  // codex P0 round-3 (BUG 4): true WHILE a moveTo migration is in flight (the
+  // migrationLock is held). `applyPlacement` drops place frames while migrating —
+  // during the awaited dest commit + (rehome) adopt window, `current` already
+  // points at dest but the SOURCE slot token may still be registered, so a stale
+  // `place` from the source renderer could otherwise drive the view mid-migration
+  // (setBounds against a half-migrated host). A place frame during a move is stale
+  // by definition; drop it. Closes the window independent of token-revoke timing.
+  let migrating = false
+
   // Per-view async mutex (THE migrationLock — a handle is one view). Serializes
   // moveTo calls FIFO: each runs only after the prior fully settles (success OR
   // failure), so the view is never being migrated from two places at once.
@@ -144,6 +153,16 @@ export function createViewHandle(deps: ViewHandleDeps): ViewHandle {
     if (!current) return
     current.compositor.mount(ref, { zone: currentZone })
     current.compositor.commit()
+  }
+
+  // The actual teardown (viewScope.close A4 fence). Factored out so doMove's
+  // CLOSED path can dispose WHILE it holds the migrationLock (calling the
+  // lock-acquiring public `dispose()` from inside the lock would deadlock), and
+  // the public `dispose()` can serialize itself behind the lock (BUG 5).
+  async function doDispose(): Promise<void> {
+    // Idempotent: a dispose before placeIn (or a second dispose) is a no-op.
+    if (!viewScope) return
+    await viewScope.close()
   }
 
   async function doMove(
@@ -175,7 +194,7 @@ export function createViewHandle(deps: ViewHandleDeps): ViewHandle {
         // CLOSED: src is unrecoverable (the restore re-commit ALSO threw) → the
         // view is homeless. Close the view (viewScope.close ⇒ dispose) and
         // rethrow the original src error.
-        await handle.dispose()
+        await doDispose()
         throw e
       }
       throw e
@@ -195,21 +214,62 @@ export function createViewHandle(deps: ViewHandleDeps): ViewHandle {
       } catch {
         // CLOSED: the rollback re-mount ALSO failed → the view is homeless.
         // Close the view (viewScope.close ⇒ dispose) and rethrow the dest error.
-        await handle.dispose()
+        await doDispose()
         throw destErr
       }
       // Rolled back to AT_SRC: `current` stays src; rethrow the dest error.
       throw destErr
     }
 
-    // ── AT_DEST: success. The compositor token moves to dest. ──────────────────
+    // ── AT_DEST: native commit landed. The compositor token moves to dest. ─────
     current = { compositor: dest.compositor, windowScope: dest.windowScope }
     currentZone = destZone
     // rehome: re-parent the viewScope under dest's windowScope so dest-close
     // tears it down (lifetime follows display). Without rehome it stays under
     // src.windowScope (display moved, lifetime did not).
+    //
+    // codex P0 round-3 (BUG 3): adopt comes AFTER the native dest commit, so an
+    // adopt failure must FULLY roll back the native dest commit + restore
+    // `current`/`currentZone` to source — otherwise the view is detached from src
+    // while compositor/`current` point at dest (native + lifetime diverge, and the
+    // host catch would wrongly remove a dest child). moveTo's post-condition is
+    // all-or-nothing: either dest + rehome both land, or we roll back to the
+    // pre-move source state (same end-state as a dest-commit failure). Mirrors the
+    // STEP-2 ROLLBACK arm exactly so the two failure paths converge.
     if (opts.rehome) {
-      await src.windowScope.adopt(vs, dest.windowScope)
+      try {
+        await src.windowScope.adopt(vs, dest.windowScope)
+      } catch (adoptErr) {
+        // Undo the SUCCESSFUL dest commit: unmount AND commit on dest so the
+        // native dest attach is actually reversed (unlike the STEP-2 arm, here the
+        // dest commit landed before adopt failed, so the leaked dest child must be
+        // removed with a real dest commit — an unmount intent alone leaves it).
+        dest.compositor.unmount(ref.id)
+        try {
+          dest.compositor.commit()
+        } catch {
+          // best-effort: a failed dest detach commit (CommitError) leaves the host
+          // byte-for-byte; the planner already dropped the intent. Fall through to
+          // the src re-mount regardless — the src restore is what matters for I2.
+        }
+        // Re-mount on src (back to AT_SRC).
+        src.compositor.mount(ref, { zone: srcZone })
+        // Restore the token BEFORE the re-commit so a CLOSED dispose tears down
+        // against the right window, and a successful re-commit leaves `current`
+        // pointing at src.
+        current = src
+        currentZone = srcZone
+        try {
+          src.compositor.commit()
+        } catch {
+          // CLOSED: the rollback re-mount ALSO failed → the view is homeless.
+          await doDispose()
+          throw adoptErr
+        }
+        // Rolled back to AT_SRC: rethrow the adopt error. The view is re-mounted
+        // in src, `current` = src, and the (un-rehomed) viewScope is intact.
+        throw adoptErr
+      }
     }
     // gap#2: moveTo does NOT touch capability grants — the dest window's control
     // layer issues its own. Out of scope by construction.
@@ -217,6 +277,13 @@ export function createViewHandle(deps: ViewHandleDeps): ViewHandle {
 
   const handle: ViewHandle = {
     placeIn(target, opts) {
+      // One placeIn per handle: a SECOND placeIn must NOT silently overwrite
+      // `current`/`viewScope` (the N3 corruption — the old viewScope would stay
+      // alive under the old window and tear down the moved view on close). moveTo
+      // is the ONLY migration path.
+      if (viewScope) {
+        throw new Error('ViewHandle.placeIn: view already placed — use moveTo() to migrate')
+      }
       current = { compositor: target.compositor, windowScope: target.windowScope }
       currentZone = opts.zone
 
@@ -269,6 +336,10 @@ export function createViewHandle(deps: ViewHandleDeps): ViewHandle {
     applyPlacement(p) {
       // Disposed / never-placed: drop the frame (idempotent late IPC).
       if (!active || !current) return
+      // codex P0 round-3 (BUG 4): drop place frames while a moveTo is in flight.
+      // Mid-migration `current` may point at dest while the source token is still
+      // live — a stale source `place` must NOT drive setBounds during the move.
+      if (migrating) return
       if (p.visible) {
         // Ensure attached (idempotent if still mounted; a fresh instance if it
         // was previously detached via visible:false), then drive bounds DIRECTLY
@@ -286,15 +357,33 @@ export function createViewHandle(deps: ViewHandleDeps): ViewHandle {
       // Terminal (Promise<void>, not chainable). Serialized by the per-view
       // migrationLock so two concurrent moves run FIFO (the view is never being
       // migrated from two hosts at once).
-      return withLock(() => doMove(dest, opts))
+      //
+      // codex P0 round-3 (BUG 4): raise the `migrating` flag for the FULL duration
+      // the lock holds this move (set/cleared inside the locked region so the flag
+      // tracks exactly "a move is mid-flight"), so applyPlacement drops stale place
+      // frames throughout the migration window — including the awaited adopt.
+      return withLock(async () => {
+        migrating = true
+        try {
+          return await doMove(dest, opts)
+        } finally {
+          migrating = false
+        }
+      })
     },
 
-    async dispose() {
-      // Idempotent: a dispose before placeIn (or a second dispose) is a no-op.
-      if (!viewScope) return
-      // close() is a completion fence: it resolves only after the A4 owns have
-      // run LIFO (sink-disable then native detach).
-      await viewScope.close()
+    dispose() {
+      // codex P0 round-3 (BUG 5): serialize dispose with the migrationLock so it
+      // runs AFTER any in-flight moveTo fully settles (success OR rollback), not
+      // concurrently. `dispose` used to close the viewScope independently, racing a
+      // move that is mid-migrating `current`/`viewScope` (e.g. the awaited adopt) —
+      // a concurrent teardown could corrupt the move or double-tear-down. Routing
+      // through `withLock` parks the dispose behind the move's lock segment; the
+      // viewScope.close A4 fence (sink-disable then native detach) then runs once,
+      // cleanly, on the settled post-move state. doMove's own CLOSED-path disposal
+      // calls the un-locked `doDispose()` directly (it already holds the lock), so
+      // there is no self-deadlock. doDispose is idempotent (no viewScope → no-op).
+      return withLock(() => doDispose())
     },
   }
 

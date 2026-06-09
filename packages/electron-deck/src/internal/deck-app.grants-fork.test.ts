@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { DeckChannel } from '../shared/protocol.js'
 import type { JsonValue, Runtime } from '../types.js'
-import type { Scope } from '../main/scope.js'
 import type {
 	MinimalBrowserWindow,
 	MinimalBrowserWindowOptions,
@@ -212,11 +211,9 @@ function privileged(runtime: Runtime): PrivilegedRuntime {
 	return runtime as unknown as PrivilegedRuntime
 }
 
-// A grant must be bound to a TARGET scope. The framework's root scope is reached
-// via the deck-app escape hatch; a child of it is a fine target boundary.
-function targetScope(app: DeckApp): Scope {
-	return (app as unknown as { __rootScope(): Scope }).__rootScope().child()
-}
+// P2: `grants.issue` no longer requires a `targetScope`; the old `targetScope`
+// helper (a raw `rootScope.child()`) is removed — a raw Scope is no longer a
+// valid value for the now-optional, DeckSession-typed `targetScope` field.
 
 type InvokeOk = { ok: true, result: JsonValue }
 type InvokeFail = { ok: false, error: { code?: string, message?: string, remoteName?: string } }
@@ -291,7 +288,6 @@ describe('DeckApp — grants-fork: privileged layout.* route is grant-gated thro
 		const wc = mainWc(electron)
 		// mainWc is auto-trusted, so grants.issue accepts it (it has a wcScope).
 		app.runtime.grants.issue(controlWc(wc), {
-			targetScope: targetScope(app),
 			commands: ['layout.resize'],
 		})
 
@@ -343,7 +339,6 @@ describe('DeckApp — grants-fork: privileged layout.* route is grant-gated thro
 		const wc = mainWc(electron)
 		// Grant the command name even though no ControlBus handler is registered.
 		app.runtime.grants.issue(controlWc(wc), {
-			targetScope: targetScope(app),
 			commands: ['layout.ghost'],
 		})
 
@@ -404,7 +399,6 @@ describe('DeckApp — grants-fork: privileged layout.* route is grant-gated thro
 
 		const wc = mainWc(electron)
 		const grant = app.runtime.grants.issue(controlWc(wc), {
-			targetScope: targetScope(app),
 			commands: ['layout.resize'],
 		})
 

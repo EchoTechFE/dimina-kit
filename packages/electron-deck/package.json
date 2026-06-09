@@ -1,6 +1,7 @@
 {
   "name": "@dimina-kit/electron-deck",
   "version": "0.0.0",
+  "private": true,
   "description": "Dimina devtools electron-deck framework — single `electronDeck(config)` entry for hosts (qdmp, dimina default).",
   "keywords": [
     "dimina",
@@ -42,6 +43,10 @@
       "types": "./dist/client/index.d.ts",
       "default": "./dist/client/index.js"
     },
+    "./client/browser": {
+      "types": "./dist/client/index.d.ts",
+      "default": "./dist/client/index.js"
+    },
     "./host": {
       "types": "./dist/host/index.d.ts",
       "default": "./dist/host/index.js"
@@ -53,7 +58,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "vite build --config vite.config.ts && tsc -p tsconfig.build.json",
     "check-types": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
     "check:trust-seal": "node scripts/check-trust-seal.mjs",
@@ -71,12 +76,10 @@
     "electron": "^41.2.1",
     "eslint": "^10.2.1",
     "typescript": "5.9.2",
+    "vite": "^8.0.16",
     "vitest": "^4.1.4"
   },
   "peerDependencies": {
     "electron": ">=36"
-  },
-  "publishConfig": {
-    "access": "public"
   }
 }

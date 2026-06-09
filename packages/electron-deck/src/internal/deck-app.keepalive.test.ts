@@ -33,7 +33,6 @@
  * assertion, not a compile error that would stop the suite running).
  */
 import { describe, expect, it, vi } from 'vitest'
-import { createScope } from '../main/scope.js'
 import type { JsonValue, Runtime } from '../types.js'
 import type {
 	MinimalBrowserWindow,
@@ -240,10 +239,16 @@ interface KeepAliveSpec {
 interface HostViewHandle {
 	placeIn(win: unknown, opts: { zone?: number }): HostViewHandle
 	applyPlacement(p: Placement): HostViewHandle
+	// codex P0 round-3 (BUG 6): the cross-window move surface (typed loosely here,
+	// same escape-hatch pattern as deck-app.move.test.ts) so the keepAlive group
+	// staleness pin can move a hidden view.
+	moveTo(win: unknown, opts: { zone?: number, anchor?: string, rehome?: boolean }): Promise<void>
 	dispose(): Promise<void>
 }
 interface RuntimeWithView {
 	view(spec: { source: ViewSource, scope?: unknown, keepAlive?: KeepAliveSpec }): HostViewHandle
+	// P2: the sealed session factory — the ONLY legitimate source of a `scope`.
+	scopes: { create(): { dispose(): Promise<void> } }
 }
 function withView(runtime: Runtime): RuntimeWithView {
 	return runtime as unknown as RuntimeWithView
@@ -347,15 +352,19 @@ describe('keepAlive — Part 1 lifetime/leak fix: the native WebContents is dest
 		const app = new DeckApp({}, { electron, wireTransport: { ipcMain: createFakeIpcMain() } })
 		await app.start()
 
-		const sessionScope = createScope()
+		// P2: raw scope → sealed DeckSession. A raw `createScope()` is rejected by
+		// the provenance check; `runtime.scopes.create()` is the only valid source.
+		const session = withView(app.runtime).scopes.create()
 		const handle = withView(app.runtime).view({
 			source: { url: 'data:text/html,x' },
-			scope: sessionScope,
+			scope: session,
 		})
 		const wcv = lastWcv(electron)
 		handle.placeIn(app.runtime.mainWindow, { zone: 0 })
 
-		await sessionScope.close()
+		// P2: dispose the SESSION (→ its internal scope.close()) → home-scope backstop
+		// closes the view's native WebContents.
+		await session.dispose()
 		await new Promise(r => setTimeout(r, 0))
 
 		expect(wcv.webContents.close).toHaveBeenCalled()
@@ -393,6 +402,44 @@ describe('keepAlive — Part 1 lifetime/leak fix: the native WebContents is dest
 
 		expect(wcv.webContents.close).toHaveBeenCalledTimes(1)
 		expect(wcv.webContents.isDestroyed()).toBe(true)
+
+		await app.shutdown()
+	})
+
+	// codex P2 review pin: never-placed default-scope view closed at shutdown
+	it('a never-placed default-scope (rootScope) view → app.shutdown() closes its webContents exactly once', async () => {
+		const electron = createFakeElectron()
+		const app = new DeckApp({}, { electron, wireTransport: { ipcMain: createFakeIpcMain() } })
+		await app.start()
+
+		// No scope (rootScope default), NEVER placed — its only teardown path is the
+		// rootScope guard registered at create time (no viewScope, no session scope).
+		withView(app.runtime).view({ source: { url: 'data:text/html,x' } })
+		const wcv = lastWcv(electron)
+
+		await app.shutdown()
+
+		expect(wcv.webContents.close).toHaveBeenCalledTimes(1)
+		expect(wcv.webContents.isDestroyed()).toBe(true)
+	})
+
+	// real-electron demo pin: on a double-teardown, Electron may have already NULLED
+	// `wcv.webContents`, so `closeNativeWc` reading `.isDestroyed()` on it would throw
+	// (the layout demo surfaced exactly this). The `wc &&` guard must tolerate an
+	// undefined webContents — dispose resolves, no throw, no close attempted.
+	it('null-wc guard: dispose() on a view whose wcv.webContents was already nulled does NOT throw', async () => {
+		const electron = createFakeElectron()
+		const app = new DeckApp({}, { electron, wireTransport: { ipcMain: createFakeIpcMain() } })
+		await app.start()
+
+		const handle = withView(app.runtime).view({ source: { url: 'data:text/html,x' } })
+		const wcv = lastWcv(electron)
+		// Model Electron nulling the WebContents after a prior teardown path.
+		;(wcv as unknown as { webContents: undefined }).webContents = undefined
+
+		// hostHandle.dispose() calls closeNativeWc() directly — without the guard the
+		// undefined `.isDestroyed()` read would reject this promise.
+		await expect(handle.dispose()).resolves.toBeUndefined()
 
 		await app.shutdown()
 	})
@@ -602,6 +649,67 @@ describe('keepAlive — Part 2 opt-in LRU helper (B3.2)', () => {
 		expect(wcvA.webContents.close).not.toHaveBeenCalled()
 		expect(wcvB.webContents.close).not.toHaveBeenCalled()
 		expect(wcvC.webContents.close).not.toHaveBeenCalled()
+
+		await app.shutdown()
+	})
+
+	// ── codex P0 round-3 pin (BUG 6) — a moved hidden keepAlive view leaves the
+	// group's hidden/evictable set (a successful move re-mounts it VISIBLE in dest).
+	//
+	// Bug: moveTo did not remove the view from its keepAlive group's `hidden` list,
+	// so a view hidden-then-moved stayed evictable — a later over-budget hide could
+	// dispose a now-VISIBLE moved view (and skew the LRU). Fix: on a successful
+	// move, drop the view from its `lru:${max}` group's hidden list.
+	//
+	// Observable (eviction-based, like KA-2): max=1. Hide A (group hidden=[A]).
+	// Move A to winB (now visible there → must leave `hidden`). Then place + hide B
+	// and C in the SAME group. If A had stayed in hidden, hiding B → [A,B] exceeds
+	// max=1 → evicts A (a moved, VISIBLE view — corruption). With the fix, A is
+	// gone: hiding B is within budget (no evict), and only hiding C (live [B,C]
+	// exceeds max=1) evicts B. A is NEVER disposed (still live in winB). ──────────
+	it('codex P0 round-3 pin (BUG 6): a hidden keepAlive view that is moved is no longer in the group\'s hidden/evictable set', async () => {
+		const electron = createFakeElectron()
+		const app = new DeckApp({}, { electron, wireTransport: { ipcMain: createFakeIpcMain() } })
+		await app.start()
+
+		const keepAlive: KeepAliveSpec = { policy: 'lru', max: 1 }
+		const winB = app.runtime.windows.create({
+			source: { url: 'http://localhost:5173/winB.html' },
+		}) as unknown as FakeBrowserWindow
+
+		// A: placed + HIDDEN in the `lru:1` group (group hidden=[A], within budget).
+		const a = withView(app.runtime).view({ source: { url: 'data:text/html,a' }, keepAlive })
+		const wcvA = lastWcv(electron)
+		a.placeIn(app.runtime.mainWindow, { zone: 0 })
+		a.applyPlacement(HIDDEN)
+		await new Promise(r => setTimeout(r, 0))
+		expect(wcvA.webContents.close).not.toHaveBeenCalled() // within budget
+
+		// Move A to winB — it re-mounts VISIBLE there, so it must leave the group's
+		// hidden list (no longer evictable).
+		await a.moveTo(winB as unknown as Runtime['mainWindow'], { zone: 0 })
+		await new Promise(r => setTimeout(r, 0))
+		expect(wcvA.webContents.close).not.toHaveBeenCalled() // the move did not dispose A
+
+		// Now exercise the SAME group with B then C. If A leaked into hidden, hiding
+		// B ([A,B] > max=1) would evict A here — the corruption this pin guards.
+		const b = withView(app.runtime).view({ source: { url: 'data:text/html,b' }, keepAlive })
+		const wcvB = lastWcv(electron)
+		const c = withView(app.runtime).view({ source: { url: 'data:text/html,c' }, keepAlive })
+		const wcvC = lastWcv(electron)
+		b.placeIn(app.runtime.mainWindow, { zone: 0 })
+		c.placeIn(app.runtime.mainWindow, { zone: 0 })
+
+		b.applyPlacement(HIDDEN) // live hidden: [B] (1 ≤ max) → no evict if A is gone
+		await new Promise(r => setTimeout(r, 0))
+		expect(wcvB.webContents.close).not.toHaveBeenCalled()
+		expect(wcvA.webContents.close).not.toHaveBeenCalled() // A NOT evicted (it left hidden)
+
+		c.applyPlacement(HIDDEN) // live hidden exceeds max=1 → evict least-recent = B
+		await new Promise(r => setTimeout(r, 0))
+		expect(wcvB.webContents.close).toHaveBeenCalledTimes(1) // B is the victim, not A
+		expect(wcvC.webContents.close).not.toHaveBeenCalled()
+		expect(wcvA.webContents.close).not.toHaveBeenCalled() // A still live in winB
 
 		await app.shutdown()
 	})

@@ -11,6 +11,7 @@
     "react"
   ],
   "type": "module",
+  "sideEffects": false,
   "engines": {
     "node": ">=20"
   },

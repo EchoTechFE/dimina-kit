@@ -1,169 +1,81 @@
-// electron-deck layout demo — offscreen, screenshot-driven.
+// electron-deck layout demo — REAL user-side API, end-to-end, offscreen.
 //
-// Drives the REAL primitives from packages/electron-deck/dist:
-//   createScope / createCompositor  (dist/main)
-//   createControlBus + WireTransport + EventBus + createTrustSet  (dist/host)
-// behind a paper-thin `runtime` / `ViewHandle` facade (the only stub code here).
+// This drives the ACTUAL framework entry `startElectronDeck(config, { backend })`
+// (synchronous `{ ready, dispose }` handle — no deadlock glue) and the REAL
+// `runtime.view({ source, scope }).placeIn(win, { anchor })` slot-token path. The
+// renderer (control.html) runs the REAL `createDeckLayoutClient({ bridge })` with
+// the turnkey `window.__electronDeckLayoutBridge` from `exposeDeckLayoutBridge()`.
+//
+// What it proves:
+//   • A project list → click → devtools-like split layout (left #simulator,
+//     right #devtools) with a draggable splitter.
+//   • Native color blocks FOLLOW their DOM slots via the real slot-token
+//     mechanism (host issues SlotGrant on `placeIn({anchor})`; renderer's
+//     view-anchor measures + sends Place; host moves the WebContentsView).
+//   • A programmatic splitter drag moves the native blocks — renderer-driven
+//     geometry, ZERO host resize code.
 //
 // Run offscreen:  electron examples/layout-demo/main.mjs
-// Windows are created hidden + showInactive() at x:-3000 so they paint without
-// ever appearing on the visible desktop or stealing focus. Each step writes a
-// composite PNG (host page + native blocks blitted in real compositor z-order)
-// to shots/*.png — capturePage() alone omits child WebContentsViews.
+// Windows are created hidden + showInactive() at x:-3000 so they paint (native
+// child views composite) WITHOUT ever appearing or stealing focus. Each step
+// writes a composite PNG (host page + native blocks blitted in z-order) to
+// shots/*.png — capturePage() alone omits child WebContentsViews.
 
-import { app, BrowserWindow, WebContentsView } from 'electron'
+import { app, ipcMain } from 'electron'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
 import { writeFile } from 'node:fs/promises'
+import { appendFileSync, mkdirSync } from 'node:fs'
 
-// Import the REAL primitives from the built dist (tsc → ESM). The example lives
-// inside the package, so a relative dist path is the robust self-reference (the
-// package is not symlinked into node_modules for self-import).
-import { createScope, createCompositor } from '../../dist/main/index.js'
-import {
-  createControlBus,
-  createTrustSet,
-  WireTransport,
-  EventBus,
-} from '../../dist/host/index.js'
+// The REAL framework entry, imported from the built dist (the example lives
+// inside the package and the package is not symlinked for self-import).
+// `startElectronDeck` returns `{ ready, dispose }` SYNCHRONOUSLY — safe to use
+// from an ESM main entry with no deadlock-workaround glue.
+import { startElectronDeck } from '../../dist/index.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const SHOTS = join(HERE, 'shots')
 const BLOCK = pathToFileURL(join(HERE, 'block.html')).href
 const CONTROL = pathToFileURL(join(HERE, 'control.html')).href
+const PRELOAD = join(HERE, 'demo-preload.mjs')
 
-// Zones: lower renders BELOW higher (compositor total order = (zone,orderKey,id)).
-const Z = { CONTENT: 0, PANEL: 10, OVERLAY: 100 }
-
+const Z = { SIMULATOR: 0, DEVTOOLS: 10 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-const log = (...a) => console.log('[demo]', ...a)
-
-// ──────────────────────────────────────────────────────────────────────────
-// Thin facade (the ONLY stub): wraps a window's real Compositor + the real
-// Scope tree so the demo can speak runtime.windows.create / view().placeIn()/
-// .moveTo() while every lifecycle + z decision is delegated to a real primitive.
-// ──────────────────────────────────────────────────────────────────────────
-
-function makeWindowDeck(win, scope, label, bg) {
-  // ContentViewHost projection over the real Electron contentView — exactly the
-  // surface createCompositor() drives. The compositor speaks NativeViewRef ({id});
-  // we resolve id → the live WebContentsView via deck.byId.
-  const host = {
-    addChildView: (ref) => {
-      const vh = deck.byId.get(ref.id)
-      if (vh) win.contentView.addChildView(vh.native)
-    },
-    removeChildView: (ref) => {
-      const vh = deck.byId.get(ref.id)
-      if (vh) win.contentView.removeChildView(vh.native)
-    },
-    get isDestroyed() { return win.isDestroyed() },
-    children: () =>
-      win.contentView.children
-        .map((c) => deck.byWc.get(c.webContents?.id))
-        .filter(Boolean)
-        .map((vh) => ({ id: vh.id })),
-  }
-  const compositor = createCompositor(host)
-
-  const deck = {
-    win,
-    scope,          // window-scope (child of root); session = scope.child()
-    compositor,
-    label,
-    bg,
-    slotBounds: {}, // id → {x,y,w,h} reported by control.html's anchor
-    views: new Set(),
-    byWc: new Map(),  // wc.id → ViewHandle (for children() ordering readback)
-    byId: new Map(),  // view id  → ViewHandle (for the host add/remove adapter)
-  }
-  return deck
+// Unbuffered trace: Electron's main-process stdout is block-buffered when piped
+// to a file and only flushes on exit; a hung run would show an empty log. Write
+// each line synchronously so the trace survives a hang.
+const TRACE = join(HERE, 'shots', 'trace.log')
+const log = (...a) => {
+  const line = '[demo] ' + a.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' ')
+  console.log(line)
+  try { appendFileSync(TRACE, line + '\n') } catch {}
 }
 
-// ViewHandle facade: a NativeViewRef ({id}) for the compositor + the live
-// WebContentsView + the scope segment that owns its teardown.
-function makeViewHandle(id, color, label) {
-  const native = new WebContentsView({
-    webPreferences: { contextIsolation: false, nodeIntegration: false },
-  })
-  native.setBackgroundColor('#00000000')
-  native.webContents.loadURL(`${BLOCK}#${encodeURIComponent(`${color}|${label}`)}`)
-  return {
-    id,
-    native,
-    color,
-    label,
-    zone: Z.CONTENT,
-    slot: null,     // which control.html slot id it anchors to
-    deck: null,     // current owning window-deck
-    /** placeIn: real compositor.mount(zone) + commit, anchored to a slot. */
-    placeIn(deck, { zone, slot }) {
-      this.deck = deck
-      this.zone = zone
-      this.slot = slot
-      deck.views.add(this)
-      deck.byWc.set(this.native.webContents.id, this)
-      deck.byId.set(this.id, this)
-      deck.compositor.mount({ id: this.id }, { zone })
-      deck.compositor.commit()
-      applyBounds(deck, this)
-    },
-    /** moveTo (popout = live-migrate): cross-window compositor re-mount +
-     *  scope.adopt re-homes the lifetime WITHOUT reset/close (no reload). */
-    async moveTo(destDeck, { zone, slot }, sessionScopeOf) {
-      const srcDeck = this.deck
-      // 1) lifetime: re-parent this view's scope from src session → dest session.
-      //    adopt(child, newParent) is called ON the current parent (src session),
-      //    and requires `child` be a direct child of it — which vh.scope is.
-      const srcSession = sessionScopeOf(srcDeck)
-      const destSession = sessionScopeOf(destDeck)
-      await srcSession.adopt(this.scope, destSession)
-      // 2) compositor: drop from source window, mount into dest window.
-      srcDeck.compositor.unmount(this.id)
-      srcDeck.compositor.commit()  // detaches the view from win1's contentView
-      srcDeck.views.delete(this)
-      srcDeck.byWc.delete(this.native.webContents.id)
-      srcDeck.byId.delete(this.id)
-      this.deck = destDeck
-      this.zone = zone
-      this.slot = slot
-      destDeck.views.add(this)
-      destDeck.byWc.set(this.native.webContents.id, this)
-      destDeck.byId.set(this.id, this)
-      destDeck.compositor.mount({ id: this.id }, { zone })
-      destDeck.compositor.commit()
-      applyBounds(destDeck, this)
-    },
-  }
-}
-
-// Anchor a native view to its slot's reported rect (the view-anchor publish sink).
-function applyBounds(deck, vh) {
-  const b = deck.slotBounds[vh.slot]
-  if (!b) return
-  vh.native.setBounds({ x: b.x, y: b.y, width: b.width, height: b.height })
-}
-
+// ── composite-screenshot machinery (host page + native blocks in z-order) ────
 let compositeReq = 0
 const compositeWaiters = new Map()
+ipcMain.on('demo:composite-result', (_e, reqId, dataUrl) => {
+  const res = compositeWaiters.get(reqId)
+  if (res) { compositeWaiters.delete(reqId); res(dataUrl) }
+})
 
-// Composite snapshot. capturePage() on a window only captures its own web layer;
-// child WebContentsViews are composited by the OS window-server, not into the
-// offscreen capture. So we capture the host page + each native block separately,
-// then have the renderer blit them in the REAL compositor z-order at the views'
-// real bounds — reproducing exactly what the window-server would show.
-async function shot(deck, name) {
-  const win = deck.win
+// Track the native views we placed so the compositor snapshot can blit them in
+// z-order at their CURRENT bounds. The framework's DeckViewHandle does NOT
+// expose the underlying WebContentsView, so we hold our own ref to each native
+// view (see DEMO GLUE in assemble()).
+const placedBlocks = [] // { wcv, label, zone }
+
+async function shot(win, name) {
   const hostImg = await win.webContents.capturePage()
-  // compositor z-order = win.contentView.children (index 0 = bottom, last = top)
-  const ordered = win.contentView.children
-    .map((c) => deck.byWc.get(c.webContents?.id))
-    .filter(Boolean)
+  // z-order = ascending zone (matches the compositor's (zone, …) total order).
+  const ordered = [...placedBlocks].sort((a, b) => a.zone - b.zone)
   const blocks = []
-  for (const vh of ordered) {
-    const b = vh.native.getBounds()
-    const png = (await vh.native.webContents.capturePage()).toDataURL()
-    blocks.push({ png, x: b.x, y: b.y, width: b.width, height: b.height, label: vh.label })
+  for (const blk of ordered) {
+    if (blk.wcv.webContents.isDestroyed()) continue
+    const b = blk.wcv.getBounds()
+    if (b.width === 0 || b.height === 0) continue // hidden placement
+    const png = (await blk.wcv.webContents.capturePage()).toDataURL()
+    blocks.push({ png, x: b.x, y: b.y, width: b.width, height: b.height, label: blk.label })
   }
   const reqId = ++compositeReq
   const done = new Promise((res) => compositeWaiters.set(reqId, res))
@@ -171,196 +83,220 @@ async function shot(deck, name) {
   const dataUrl = await done
   const buf = Buffer.from(dataUrl.split(',')[1], 'base64')
   await writeFile(join(SHOTS, name), buf)
-  log('shot →', name, `(${blocks.length} native blocks composited:`, blocks.map((b) => b.label).join(' < ') + ')')
+  log('shot →', name, `(${blocks.length} native blocks:`, blocks.map((b) => `${b.label}@${b.x},${b.width}w`).join(' < ') + ')')
 }
 
-async function newControlWindow(label, bg) {
-  const win = new BrowserWindow({
-    width: 760,
-    height: 460,
-    show: false,        // created hidden so it never flashes on the desktop
-    x: -3000,           // parked FAR offscreen (never visible to the user)
-    y: -3000,
-    backgroundColor: bg,
-    webPreferences: { contextIsolation: false, nodeIntegration: true },
-  })
-  await win.webContents.loadURL(CONTROL)
-  win.webContents.send('demo:set-label', label, bg)
-  // showInactive() at the offscreen coord: forces the compositor to actually
-  // PAINT (so child WebContentsViews composite into capturePage) WITHOUT taking
-  // focus and WITHOUT appearing on the visible desktop. show:false alone leaves
-  // child views uncomposited in the captured frame.
-  win.setPosition(-3000, -3000)
-  win.showInactive()
-  return win
-}
+mkdirSync(SHOTS, { recursive: true })
+log('boot: about to call startElectronDeck()')
 
-// ──────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// HOST: the REAL `startElectronDeck(config, { backend })`. The framework owns process
+// lifecycle / window construction / trust / wire; the backend supplies domain
+// assembly. We do NOT set ownsWindows — the framework builds + auto-trusts the
+// main window, and we just load our control renderer into it.
+// ─────────────────────────────────────────────────────────────────────────────
 
-app.whenReady().then(async () => {
-  // Real root scope. window-scope = root.child(); session = window-scope.child().
-  const root = createScope()
+let resolveDone
+const allDone = new Promise((r) => { resolveDone = r })
 
-  // ── Real ControlBus stack (command/event/trust over real wire pieces) ──
-  // We don't need a live webview RPC for the visual demo, but we build the REAL
-  // facade + transport so the control link is genuine, and route the renderer's
-  // ipc 'demo:command' into controlBus.command() handlers.
-  const bus = new EventBus()
-  const trustSet = createTrustSet()
-  const controlBus = createControlBus({
-    bus,
-    trustSet,
-    transport: /* placeholder; wire built below referencing controlBus */ null,
-  })
-  const layoutEvent = controlBus.event('demo:layout') // declared (default-deny otherwise)
+// `startElectronDeck()` returns `{ ready, dispose }` SYNCHRONOUSLY — no internal
+// whenReady gate sits on top-level await, so the old deadlock-workaround glue is
+// GONE. Assembly still runs strictly after app.whenReady() (gating intact inside
+// start()); we just `void`-fire it and let the offscreen driver resolve `allDone`.
+const { ready } = startElectronDeck(
+  {
+    app: {
+      // show:false → framework builds the window hidden; we showInactive()
+      // offscreen after load so native child views composite into capturePage.
+      window: { width: 900, height: 520, show: false, backgroundColor: '#1e1e2e' },
+    },
+  },
+  {
+    backend: {
+      // The ESM preload (demo-preload.mjs) imports exposeDeckLayoutBridge() from
+      // the framework's preload dist, so it requires `sandbox:false` (Electron's
+      // ESM-preload requirement). This webPreferences hook is the seam for the
+      // framework-built main window's preload.
+      mainWindowWebPreferences() {
+        return {
+          preload: PRELOAD,
+          contextIsolation: true,
+          nodeIntegration: false,
+          sandbox: false,
+        }
+      },
 
-  const { ipcMain } = await import('electron')
-  const wire = new WireTransport({
-    ipcMain,
-    bus,
-    senderPolicy: { isTrusted: (id) => trustSet.isTrusted(id) },
-    trustedWebContents: () => trustSet.snapshot(),
-    invokeHost: (name, args) => controlBus.dispatch(name, args),
-    invokeSimulator: (name, args) => controlBus.dispatch(name, args),
-    declaredEvents: () => controlBus.declaredEvents(),
-  })
-  wire.start()
+      async assemble(runtime) {
+        log('assemble: entered')
+        const mainWin = runtime.mainWindow
+        log('assemble: mainWindow =', String(!!mainWin))
 
-  // ── Main window + its window-scope + session-scope ──
-  const win1 = await newControlWindow('CONTROL LAYER (main window)', '#1e1e2e')
-  const win1Scope = root.child()
-  win1Scope.own(() => { if (!win1.isDestroyed()) win1.destroy() })
-  trustSet.admit(win1.webContents, win1Scope)
+        // RESIDUAL GLUE (#2 — not addressed by P0–P5): the framework still loads
+        // NO content into the main window it built, and there is no
+        // `config.app.source` declarative main-renderer entry (unlike the toolbar
+        // / declared windows, which DO take a `source`). So the host still drives
+        // loadURL by hand here. Tracked as future ergonomics; not part of P0–P5.
+        // Surface renderer errors into our trace (diagnostics).
+        mainWin.webContents.on('preload-error', (_e, path, err) => {
+          log('[preload-error]', path, String(err))
+        })
+        log('assemble: loadURL start')
+        await mainWin.webContents.loadURL(CONTROL)
+        log('assemble: loadURL done')
 
-  const deck1 = makeWindowDeck(win1, win1Scope, 'main', '#1e1e2e')
-  // expose root on the window-scope so ViewHandle.moveTo can call root.adopt.
-  deck1.scope.__rootScope = root
+        // showInactive() offscreen → forces a real paint so child
+        // WebContentsViews composite, WITHOUT focus/visibility (verification).
+        mainWin.setPosition(-3000, -3000)
+        mainWin.showInactive()
 
-  // session = window-scope.child(): red+blue blocks' scope. session.reset()
-  // tears them down (LIFO) while the window survives → "close → main".
-  let session1 = win1Scope.child()
-  const sessionOf = new WeakMap()
-  sessionOf.set(deck1, session1)
+        // ── open-project: spawn two native color blocks following the slots ──
+        let projectViews = []
+        ipcMain.on('demo:open-project', (e, projectId) => {
+          // ignore re-opens of the same project session for simplicity
+          if (projectViews.length) return
+          log('open-project:', projectId)
 
-  ipcMain.on('demo:composite-result', (_e, reqId, dataUrl) => {
-    const res = compositeWaiters.get(reqId)
-    if (res) { compositeWaiters.delete(reqId); res(dataUrl) }
-  })
+          // REAL API: a per-project SESSION via runtime.scopes.create(). Binding
+          // each view to this DeckSession gives the project a single teardown
+          // handle — session.dispose() detaches + closes every view bound to it
+          // (and app shutdown cascades in too). No raw/internal Scope handling.
+          const session = runtime.scopes.create()
 
-  // Track the live slot rects reported by control.html's anchor.
-  ipcMain.on('demo:slot-bounds', (e, bounds) => {
-    const deck = e.sender === win1.webContents ? deck1 : deck2
-    if (!deck) return
-    Object.assign(deck.slotBounds, bounds)
-    for (const vh of deck.views) applyBounds(deck, vh)
-  })
+          // RESIDUAL GLUE (#6 — not addressed by P0–P5): `DeckViewHandle` still
+          // exposes no `webContents` / `bounds()` / `capture()`. Our OFFSCREEN
+          // composite snapshot needs each native view's live bounds + a
+          // capturePage(), so we recover the WCV by diffing
+          // mainWin.contentView.children around each placeIn. A host that doesn't
+          // screenshot/inspect native views never needs this.
+          const captureNewWcv = (handle, source, label, zone) => {
+            const before = new Set(mainWin.contentView.children)
+            // REAL API: runtime.view({ source, scope }).placeIn(win, { zone, anchor }).
+            // The `anchor` mints a slot token + PUSHES a SlotGrant to the control
+            // wc; the renderer's createDeckLayoutClient picks it up and measures
+            // that DOM slot, threading Placements back here. The framework moves
+            // the WebContentsView to follow — we write NO resize code; geometry
+            // is 100% renderer-driven.
+            handle.placeIn(mainWin, { zone, anchor: source })
+            const added = mainWin.contentView.children.find((c) => !before.has(c))
+            if (added) placedBlocks.push({ wcv: added, label, zone })
+            return handle
+          }
+          const sim = captureNewWcv(
+            runtime.view({ source: { url: `${BLOCK}#${enc('#c0392b', 'SIMULATOR')}` }, scope: session }),
+            '#simulator', 'SIMULATOR', Z.SIMULATOR,
+          )
+          const dev = captureNewWcv(
+            runtime.view({ source: { url: `${BLOCK}#${enc('#2980b9', 'DEVTOOLS')}` }, scope: session }),
+            '#devtools', 'DEVTOOLS', Z.DEVTOOLS,
+          )
+          projectViews = [sim, dev]
+          log('placed native views; contentView.children =', String(mainWin.contentView.children.length), '; placedBlocks =', String(placedBlocks.length))
 
-  // ── ViewHandle factory bound to a session scope (its lifetime owner) ──
-  function spawnView(deck, sessionScope, { id, color, label, zone, slot }) {
-    const vh = makeViewHandle(id, color, label)
-    vh.scope = sessionScope.child()
-    vh.scope.own(() => { if (!vh.native.webContents.isDestroyed()) vh.native.webContents.close() })
-    vh.placeIn(deck, { zone, slot })
-    return vh
-  }
+          // ── privileged layout command + grant (now FULLY user-side) ──
+          // A host that wants the renderer to invoke a PRIVILEGED `layout.*` op
+          // registers it via runtime.layout.command(...) and authorizes the
+          // control wc via runtime.grants.issue(...). `targetScope` is now an
+          // ergonomic, user-side DeckSession (the one we just minted) — no
+          // internal Scope handle required. The renderer doesn't drive it in the
+          // happy path (the splitter is pure DOM→Place), but it now stands up
+          // end-to-end with ZERO glue.
+          try {
+            runtime.layout.command('layout.collapse-sim', () => {
+              // host-side collapse: hide the simulator view
+              projectViews[0].applyPlacement({ visible: false })
+              return 'ok'
+            })
+            runtime.grants.issue(e.sender, {
+              commands: ['layout.collapse-sim'],
+              targetScope: session,
+            })
+            log('registered layout.collapse-sim + issued grant (targetScope = user-side DeckSession)')
+          } catch (err) {
+            log('layout.command/grant failed:', String(err))
+          }
+        })
 
-  // For win2 declared lazily on popout.
-  let win2 = null
-  let deck2 = null
-  let session2 = null
+        // ── verification driver (offscreen) ──
+        void runVerification(mainWin).then(resolveDone).catch((err) => {
+          console.error('[demo] verification failed:', err)
+          resolveDone()
+        })
+      },
+    },
+  },
+)
 
-  // ── Real ControlBus command handlers (renderer ipc → command → layout) ──
-  // The renderer sends 'demo:command'; we dispatch through controlBus so the
-  // command table is the real authority, then publish a declared event back.
-  controlBus.command('demo:overlay', () => { void doOverlay(); return 'ok' })
-  controlBus.command('demo:reorder', () => { void doReorder(); return 'ok' })
-  controlBus.command('demo:popout', () => { void doPopout(); return 'ok' })
-  controlBus.command('demo:close', () => { void doClose(); return 'ok' })
-  ipcMain.on('demo:command', async (_e, name) => {
-    await controlBus.dispatch(`demo:${name}`, [])
-    layoutEvent.publish({ applied: name })
-  })
-
-  let red, blue, green
-
-  // ── STEP 1: window + two native views into zones ──
-  red = spawnView(deck1, session1, { id: 'red', color: '#c0392b', label: 'SIMULATOR', zone: Z.CONTENT, slot: 'simulator' })
-  blue = spawnView(deck1, session1, { id: 'blue', color: '#2980b9', label: 'DEVTOOLS', zone: Z.PANEL, slot: 'devtools' })
-  await sleep(700)
-  await shot(deck1, '1-two-views.png')
-  log('STEP1: red(CONTENT)+blue(PANEL) mounted. children order:', deck1.compositorOrder?.() ?? childOrder(deck1))
-
-  // ── STEP 2: overlay floats ABOVE native, parked over devtools corner ──
-  async function doOverlay() {
-    green = spawnView(deck1, session1, { id: 'green', color: '#27ae60', label: 'OVERLAY', zone: Z.OVERLAY, slot: 'devtools' })
-    // shrink it to a corner of the devtools slot so we can see it COVER blue
-    const b = deck1.slotBounds.devtools
-    if (b) green.native.setBounds({ x: b.x + b.width / 2, y: b.y + b.height / 2, width: b.width / 2, height: b.height / 2 })
-    await sleep(400)
-  }
-  await doOverlay()
-  await shot(deck1, '2-overlay-over-devtools.png')
-  log('STEP2: green(OVERLAY) covers blue. order:', childOrder(deck1))
-
-  // ── STEP 3: reorder blue above green via compositor.reorder + commit ──
-  async function doReorder() {
-    // move blue into the OVERLAY zone, before nothing → top of overlay (above green)
-    deck1.compositor.reorder('blue', { zone: Z.OVERLAY, before: null })
-    deck1.compositor.commit()
-    // re-anchor blue back over the devtools slot (full) so the swap is visible
-    applyBounds(deck1, blue)
-    await sleep(300)
-  }
-  await doReorder()
-  await shot(deck1, '3-reorder-blue-top.png')
-  log('STEP3: blue reordered above green. order:', childOrder(deck1))
-
-  // ── STEP 4: popout = live-migrate blue → win2 (scope.adopt + cross mount) ──
-  async function doPopout() {
-    win2 = await newControlWindow('POPOUT WINDOW (win2)', '#3d2c00')
-    win2Scope_setup()
-    const tickBefore = await blue.native.webContents.executeJavaScript('window.__tick')
-    await blue.moveTo(deck2, { zone: Z.PANEL, slot: 'devtools' }, (d) => sessionOf.get(d))
-    // sessionOf resolves BOTH src (deck1→session1) and dest (deck2→session2).
-    await sleep(500)
-    const tickAfter = await blue.native.webContents.executeJavaScript('window.__tick')
-    log(`STEP4: blue migrated to win2. counter ${tickBefore} → ${tickAfter} (NOT reset = no reload)`)
-  }
-  function win2Scope_setup() {
-    const win2Scope = root.child()
-    win2Scope.own(() => { if (!win2.isDestroyed()) win2.destroy() })
-    win2Scope.__rootScope = root
-    trustSet.admit(win2.webContents, win2Scope)
-    deck2 = makeWindowDeck(win2, win2Scope, 'win2', '#3d2c00')
-    deck2.scope.__rootScope = root
-    session2 = win2Scope.child()
-    sessionOf.set(deck2, session2)
-  }
-  await doPopout()
-  await shot(deck1, '4a-main-after-popout.png')
-  await shot(deck2, '4b-win2-after-popout.png')
-  log('STEP4: main children:', childOrder(deck1), '| win2 children:', childOrder(deck2))
-
-  // ── STEP 5: close → main. session1.reset() tears red (+green) down LIFO ──
-  async function doClose() {
-    log('STEP5: session1.reset() — LIFO release of session resources, window survives…')
-    await session1.reset()
-    log('STEP5: session reset complete; win1 alive =', !win1.isDestroyed(), '; win1Scope.alive =', deck1.scope.alive)
-  }
-  await doClose()
-  await sleep(300)
-  await shot(deck1, '5-after-session-reset.png')
-
-  log('ALL STEPS DONE')
-  setTimeout(() => app.quit(), 200)
+// startElectronDeck never deadlocks on top-level await, but a startup FAILURE
+// still surfaces on `ready`. Observe it so a broken boot quits instead of hanging.
+ready.catch((err) => {
+  console.error('[demo] startElectronDeck failed:', err)
+  log('startElectronDeck failed: ' + String(err))
+  app.quit()
 })
 
-function childOrder(deck) {
-  return deck.win.contentView.children
-    .map((c) => deck.byWc.get(c.webContents?.id))
-    .map((vh) => (vh ? `${vh.label}@z${vh.zone}` : '?'))
-    .join(' < ')
+function enc(color, label) {
+  return encodeURIComponent(`${color}|${label}`)
 }
+
+// ── offscreen verification: 3 screenshots proving the native blocks follow ───
+async function runVerification(mainWin) {
+  await sleep(500)
+  // (a) project list
+  await shot(mainWin, '1-project-list.png')
+
+  // (b) open a project → detail layout; both blocks visible, following slots.
+  // Click the first project card from the host side via executeJavaScript.
+  await mainWin.webContents.executeJavaScript(`document.querySelector('.card').click()`)
+  // Set a deterministic initial split (sim = 360px) so the "before" geometry is
+  // stable, then wait for: openProject ipc → host placeIn → SlotGrant push →
+  // renderer anchor measure → Place → host moves WCV.
+  await sleep(400)
+  await mainWin.webContents.executeJavaScript(`window.__demoSetSplit(360)`)
+  await sleep(700)
+  await shot(mainWin, '2-detail-following.png')
+  const before = await captureSimBounds()
+  log('STEP2: native sim/dev bounds at split=360 :', JSON.stringify(before))
+
+  // (c) programmatic splitter drag → DOM split changes → view-anchor
+  // re-measures → Place → native blocks MOVE. Prove they followed by commanding
+  // a NARROWER simulator (220px) and checking the native sim shrank toward it
+  // and the native devtools shifted left to fill.
+  await mainWin.webContents.executeJavaScript(`window.__demoSetSplit(220)`)
+  await sleep(700)
+  await shot(mainWin, '3-after-drag.png')
+  const after = await captureSimBounds()
+  log('STEP3: native sim/dev bounds at split=220 :', JSON.stringify(after))
+
+  // PROOF: the native simulator block's width must TRACK the commanded split
+  // (360 → 220, a ~140px shrink, allowing for the slot's 8px CSS margins) and
+  // the native devtools block's x must move LEFT by a similar amount. Geometry
+  // is renderer-driven (the host wrote no bounds): if these hold, slot-token
+  // following covers live renderer resize.
+  const simDelta = before.sim && after.sim ? before.sim.width - after.sim.width : 0
+  const devDelta = before.sim && after.sim ? before.dev.x - after.dev.x : 0
+  const simTracked = simDelta > 100 && simDelta < 180   // ~140 expected
+  const devFollowed = devDelta > 100 && devDelta < 180  // devtools.x shifts left ~140
+  log('PROOF: simWidthΔ =', String(simDelta), '(expect ~140) | devXΔ(left) =', String(devDelta), '(expect ~140)')
+  if (simTracked && devFollowed) log('✅ split-drag MOVED the native color blocks (renderer-driven geometry, zero host resize code).')
+  else log('❌ native blocks did NOT track the split — slot-token did not cover renderer-driven resize.')
+
+  log('ALL STEPS DONE')
+}
+
+function captureSimBounds() {
+  const out = {}
+  for (const blk of placedBlocks) {
+    if (blk.wcv.webContents.isDestroyed()) continue
+    const b = blk.wcv.getBounds()
+    out[blk.label === 'SIMULATOR' ? 'sim' : 'dev'] = { x: b.x, width: b.width }
+  }
+  return Promise.resolve(out)
+}
+
+void allDone.then(async () => {
+  await sleep(200)
+  app.quit()
+})
 
 app.on('window-all-closed', () => app.quit())
 process.on('uncaughtException', (e) => { console.error('[demo] UNCAUGHT', e); app.quit() })

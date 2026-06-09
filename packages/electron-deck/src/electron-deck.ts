@@ -4,7 +4,7 @@ import type { MinimalElectron } from './internal/electron-types.js'
 import type { MinimalIpcMain } from './internal/wire-transport.js'
 import { DeckApp } from './internal/deck-app.js'
 import type { DeckAppOptions } from './internal/deck-app.js'
-import type { DeckConfig, DeckOptions } from './types.js'
+import type { DeckConfig, DeckOptions, Runtime } from './types.js'
 
 /**
  * `electronDeck(config, options?)` 是 framework 唯一入口（见 README §3）。
@@ -28,6 +28,69 @@ export async function electronDeck(config: DeckConfig, options?: DeckOptions): P
 	const resolved = await resolveAppOptions(options)
 	const app = new DeckApp(config, resolved)
 	await app.start()
+}
+
+/**
+ * Synchronous launch handle for `electronDeck`.
+ *
+ * `electronDeck(config)` is `async` and internally `await app.start()` →
+ * `await app.whenReady()`. A host ESM main entry doing `await electronDeck(config)`
+ * SUSPENDS module evaluation on the whenReady gate — but Electron's `ready` only
+ * fires once module evaluation finishes, so the gate never resolves: HARD DEADLOCK.
+ *
+ * `startElectronDeck` returns a plain handle SYNCHRONOUSLY (NOT a thenable), so a
+ * host's top-level `await handle.ready` never sits on the whenReady gate. Assembly
+ * still runs STRICTLY AFTER `app.whenReady()` resolves (gating intact inside
+ * `app.start()`); `handle.ready` resolves with the {@link Runtime}; `handle.dispose()`
+ * tears the app down even if called before the in-flight start finished.
+ *
+ * Invalid config throws a `TypeError` synchronously (matching `electronDeck`'s
+ * validate-first contract) — the error surfaces, never silently deadlocks.
+ */
+export function startElectronDeck(
+	config: DeckConfig,
+	options?: DeckOptions,
+): { ready: Promise<Runtime>, dispose(): Promise<void> } {
+	// Validate config SYNCHRONOUSLY (before returning the handle) — invalid configs
+	// surface a TypeError at the call, never a silent deadlock.
+	validateConfig(config)
+
+	let app: DeckApp | null = null
+	const startPromise: Promise<DeckApp> = (async () => {
+		const resolved = await resolveAppOptions(options)
+		app = new DeckApp(config, resolved)
+		// `app.start()` internally `await app.whenReady()` THEN assembles — gating
+		// stays intact: no window is constructed before whenReady resolves.
+		await app.start()
+		return app
+	})()
+
+	const ready = startPromise.then(a => a.runtime)
+	// Mark `ready` as handled so a fire-and-forget caller (who never reads `ready`,
+	// e.g. `startElectronDeck(...)` then `dispose()`) does NOT trigger an
+	// unhandledRejection if startup fails — which under strict Electron handling can
+	// terminate the process (codex P1 review). The caller's own `await handle.ready`
+	// still observes the rejection; this extra no-op handler only suppresses the
+	// "unhandled" classification, it does not swallow the error for the caller.
+	void ready.catch(() => {})
+
+	return {
+		ready,
+		async dispose(): Promise<void> {
+			// dispose-before-ready safety: AWAIT the in-flight start (swallow its error
+			// so a failed start still lets dispose clean up), THEN shut down — no race
+			// with the rootScope teardown that start() set up. `shutdown()` is
+			// idempotent (a second call is a no-op).
+			const started = await startPromise.catch(() => null)
+			if (started) {
+				await started.shutdown()
+			}
+			else if (app) {
+				// start threw post-construction → still tear down the partially-built app.
+				await app.shutdown()
+			}
+		},
+	}
 }
 
 /**

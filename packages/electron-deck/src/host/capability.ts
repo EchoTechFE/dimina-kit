@@ -24,12 +24,12 @@ export interface Grant {
 	/** grant lifetime — revoked on this scope's reset/closed. */
 	readonly senderScope: Scope
 	/**
-	 * Stored as the authorization boundary for FUTURE per-target view-command
-	 * checks; the current grant gate authorizes by (senderId, command-name) only —
-	 * no command resolves a target view yet, so targetScope is not consulted at
-	 * dispatch. Reserved.
+	 * OPTIONAL — stored as the authorization boundary for FUTURE per-target
+	 * view-command checks; the current grant gate authorizes by (senderId,
+	 * command-name) only — no command resolves a target view yet, so targetScope is
+	 * not consulted at dispatch. Reserved.
 	 */
-	readonly targetScope: Scope
+	readonly targetScope?: Scope
 	readonly commands: ReadonlySet<string>
 }
 

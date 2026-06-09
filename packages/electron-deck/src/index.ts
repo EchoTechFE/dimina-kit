@@ -1,5 +1,5 @@
 export * from './errors.js'
 export * from './types.js'
 export { defineEvent } from './events.js'
-export { electronDeck } from './electron-deck.js'
+export { electronDeck, startElectronDeck } from './electron-deck.js'
 export type { DeckOptions } from './types.js'

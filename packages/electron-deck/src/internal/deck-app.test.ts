@@ -279,13 +279,18 @@ function createFakeWebContents(id: number): FakeWebContents {
 }
 
 describe('DeckApp — wireTransport integration', () => {
-	it('start() registers ipcMain.handle for invoke + probe channels', async () => {
+	it('start() registers ipcMain.handle for invoke + probe + place + layout-subscribe channels', async () => {
 		const ipcMain = createFakeIpcMain()
 		const app = new DeckApp({}, { wireTransport: { ipcMain } })
 		await app.start()
-		expect(ipcMain.handle).toHaveBeenCalledTimes(2)
+		// P5 eager-arm: channels now armed at start — the slot-token Place /
+		// LayoutSubscribe handlers are registered eagerly (no longer lazily on the
+		// first anchored placeIn), so a slot-less app also registers all 4.
+		expect(ipcMain.handle).toHaveBeenCalledTimes(4)
 		const channels = ipcMain.handle.mock.calls.map(c => c[0] as string).sort()
-		expect(channels).toEqual([DeckChannel.Invoke, DeckChannel.Probe].sort())
+		expect(channels).toEqual(
+			[DeckChannel.Invoke, DeckChannel.Probe, DeckChannel.Place, DeckChannel.LayoutSubscribe].sort(),
+		)
 	})
 
 	it('declared hostServices are reachable through the ipcMain invoke handler (trusted sender)', async () => {
@@ -391,14 +396,18 @@ describe('DeckApp — wireTransport integration', () => {
 		await app.shutdown()
 	})
 
-	it('shutdown() calls ipcMain.removeHandler for invoke + probe', async () => {
+	it('shutdown() calls ipcMain.removeHandler for invoke + probe + place + layout-subscribe', async () => {
 		const ipcMain = createFakeIpcMain()
 		const app = new DeckApp({}, { wireTransport: { ipcMain } })
 		await app.start()
 		await app.shutdown()
-		expect(ipcMain.removeHandler).toHaveBeenCalledTimes(2)
+		// P5 eager-arm: channels now armed at start, so shutdown removes all 4
+		// (the eagerly-registered Place / LayoutSubscribe handlers too).
+		expect(ipcMain.removeHandler).toHaveBeenCalledTimes(4)
 		const removed = ipcMain.removeHandler.mock.calls.map(c => c[0] as string).sort()
-		expect(removed).toEqual([DeckChannel.Invoke, DeckChannel.Probe].sort())
+		expect(removed).toEqual(
+			[DeckChannel.Invoke, DeckChannel.Probe, DeckChannel.Place, DeckChannel.LayoutSubscribe].sort(),
+		)
 	})
 
 	it('after shutdown(), declared HostEvent.publish no longer fans out (best-effort)', async () => {
@@ -2401,7 +2410,9 @@ describe('unified-lifetime P1a: windowScope owns window destruction', () => {
 		expect(mainWin.destroy).toHaveBeenCalled()
 		expect(declaredWin.destroy).toHaveBeenCalled()
 		expect(app.phase).toBe('quit')
-		expect(ipcMain.removeHandler).toHaveBeenCalledTimes(2)
+		// P5 eager-arm: channels now armed at start (Invoke + Probe + Place +
+		// LayoutSubscribe), so quit removes all 4.
+		expect(ipcMain.removeHandler).toHaveBeenCalledTimes(4)
 	})
 
 	// 6 — trust UNCHANGED (P1a out-of-scope guard): a declared sub-window is

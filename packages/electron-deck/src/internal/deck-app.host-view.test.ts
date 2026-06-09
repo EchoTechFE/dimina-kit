@@ -45,7 +45,6 @@
  * against the spies directly rather than via a child-tracking host.)
  */
 import { describe, expect, it, vi } from 'vitest'
-import { createScope } from '../main/scope.js'
 import type { JsonValue, Runtime } from '../types.js'
 import type {
 	MinimalBrowserWindow,
@@ -243,6 +242,8 @@ interface HostViewHandle {
 }
 interface RuntimeWithView {
 	view(spec: { source: ViewSource, scope?: unknown }): HostViewHandle
+	// P2: the sealed session factory — the ONLY legitimate source of a `scope`.
+	scopes: { create(): { dispose(): Promise<void> } }
 }
 function withView(runtime: Runtime): RuntimeWithView {
 	return runtime as unknown as RuntimeWithView
@@ -450,19 +451,22 @@ describe('DeckApp host-view slice 1 — opts.scope close disposes the view (Bug 
 		await app.start()
 
 		const mainWin = electron.browserWindows[0] as unknown as FakeBrowserWindow
-		const sessionScope = createScope()
+		// P2: raw scope → sealed DeckSession. A raw `createScope()` is no longer a
+		// valid `scope` (it would be REJECTED by the provenance check); the only
+		// legitimate source is `runtime.scopes.create()`.
+		const session = withView(app.runtime).scopes.create()
 		const handle = withView(app.runtime).view({
 			source: { url: 'data:text/html,x' },
-			scope: sessionScope,
+			scope: session,
 		})
 		const wcv = lastWcv(electron)
 		handle.placeIn(app.runtime.mainWindow, { zone: 0 })
 		expect(mainWin.contentView.addChildView).toHaveBeenCalledWith(wcv)
 
 		const removesBefore = mainWin.contentView.removeChildView.mock.calls.length
-		// Close the session/home scope — the view must detach (display teardown)
-		// without anyone calling handle.dispose().
-		await sessionScope.close()
+		// P2: dispose the SESSION (→ its internal scope.close()) — the view must
+		// detach (display teardown) without anyone calling handle.dispose().
+		await session.dispose()
 		await new Promise(r => setTimeout(r, 0))
 
 		expect(mainWin.contentView.removeChildView.mock.calls.length).toBeGreaterThan(removesBefore)

@@ -166,6 +166,110 @@ describe('placeIn — mounts + commits into the target window', () => {
   })
 })
 
+// ═════════════════════════════════════════════════════════════════════════════
+// P0 — re-placement corruption (N3) [NEW PIN, FAILING-FIRST].
+//
+// BACKGROUND: a SECOND `placeIn()` currently OVERWRITES the inner `current` /
+// `viewScope` while leaving the OLD viewScope ALIVE. When that old window later
+// closes, its A4 teardown reads the now-mutated `current` and detaches/destroys
+// the view that has since MOVED to the new window (cross-window corruption).
+//
+// THE FIX (pinned here): `placeIn()` on an ALREADY-PLACED handle THROWS (one
+// placeIn per handle; re-placement is NOT silent). The ONLY migration path is
+// `moveTo()`. These two tests are RED today: placeIn-twice silently overwrites
+// (no throw), and the overwrite is exactly the corruption A2 catches.
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A1. a SECOND placeIn on an already-placed handle THROWS — it does NOT silently
+//     overwrite current/viewScope.
+// Pin: the second placeIn throws (/already placed.*use moveTo/i), AND the FIRST
+// placement is intact (the view is still in the FIRST host, never corrupted /
+// re-pointed at the second host by a half-applied overwrite).
+// ─────────────────────────────────────────────────────────────────────────────
+describe('placeIn — a second placeIn throws (one placeIn per handle, N3 fix)', () => {
+  it('throws on re-placement and leaves the first placement intact', () => {
+    const hostA = makeHost()
+    const compositorA = createCompositor(hostA)
+    const windowScopeA = createScope()
+    const hostB = makeHost()
+    const compositorB = createCompositor(hostB)
+    const windowScopeB = createScope()
+    const nativeView = makeNativeView('v1')
+    const handle = createViewHandle({ nativeView, scope: windowScopeA.child() })
+
+    handle.placeIn({ compositor: compositorA, windowScope: windowScopeA }, { zone: 0 })
+    expect(hostA.ids()).toContain('v1')
+
+    // A SECOND placeIn must THROW — re-placement is disallowed; moveTo is the path.
+    expect(() =>
+      handle.placeIn({ compositor: compositorB, windowScope: windowScopeB }, { zone: 0 }),
+    ).toThrow(/already placed.*use moveTo/i)
+
+    // The first placement was NOT corrupted: the view is still ONLY in host A
+    // (the second placeIn did not overwrite `current` / re-mount into host B).
+    expect(hostA.ids()).toContain('v1')
+    expect(hostB.ids()).not.toContain('v1')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A2. (N3 REGRESSION GUARD — THE CRITICAL ONE) the moved view survives an
+//     old-window close.
+// Pin: placeIn(winA) then moveTo(winB,{rehome:true}); closing winA's windowScope
+// must NOT detach/destroy the view that now lives in winB. We assert via the
+// compositor/native fakes: after the move + winA-scope close, host B STILL has the
+// view, host A does not, and the native view was NEVER destroyed. (Pre-fix, a
+// re-placeIn-style overwrite would have left a stale viewScope under winA whose
+// close would detach the migrated view from B — the corruption.)
+// ─────────────────────────────────────────────────────────────────────────────
+describe('moveTo — the moved view survives the old window closing (N3 regression guard)', () => {
+  it('closing the SRC windowScope after a rehome:true move does not detach/destroy the view in DEST', async () => {
+    const hostA = makeHost()
+    const compositorA = createCompositor(hostA)
+    const windowScopeA = createScope()
+
+    const hostB = makeHost()
+    const compositorB = createCompositor(hostB)
+    const windowScopeB = createScope()
+
+    // NativeView with a destroy spy so we can prove the migrated view's WebContents
+    // is NEVER destroyed by the old window's close.
+    const base = makeNativeView('v1')
+    let destroyCalls = 0
+    const nativeView: NativeView & { bounds: Bounds[] } = {
+      ref: base.ref,
+      bounds: base.bounds,
+      setBounds: (b) => base.setBounds(b),
+      destroy: () => {
+        destroyCalls++
+      },
+    }
+
+    const handle = createViewHandle({ nativeView, scope: windowScopeA.child() })
+    handle.placeIn({ compositor: compositorA, windowScope: windowScopeA }, { zone: 0 })
+    expect(hostA.ids()).toContain('v1')
+
+    // Migrate to winB AND re-home lifetime to winB (rehome:true).
+    await handle.moveTo({ compositor: compositorB, windowScope: windowScopeB }, { zone: 0, rehome: true })
+    expect(hostB.ids()).toContain('v1')
+    expect(hostA.ids()).not.toContain('v1')
+
+    // Close the OLD window's scope. The migrated view must be untouched: NOT
+    // detached from B, and its native view NOT destroyed (no stale viewScope under
+    // winA tearing down the now-winB view — the N3 corruption).
+    await windowScopeA.close()
+
+    expect(hostB.ids()).toContain('v1') // still in DEST
+    expect(hostA.ids()).not.toContain('v1') // never came back to SRC
+    expect(destroyCalls).toBe(0) // native view NOT destroyed by the old-window close
+
+    // And it is still LIVE + placeable in B (sink not disabled by the SRC close).
+    handle.applyPlacement({ visible: true, bounds: { x: 1, y: 1, width: 1, height: 1 } })
+    expect(hostB.ids()).toContain('v1')
+  })
+})
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 2. placeIn creates a viewScope UNDER the target windowScope.
 // Pin: the handle's lifetime is a CHILD of the target window's `windowScope`, so
@@ -802,5 +906,164 @@ describe('createViewHandle — moveTo (cross-window, build-plan §2(d))', () => 
     const ret = handle.moveTo(dest, { zone: 0 })
     expect(typeof (ret as Promise<void>).then).toBe('function')
     await expect(ret).resolves.toBeUndefined()
+  })
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // codex P0 round-3 pin (BUG 3) — a rehome/adopt FAILURE rolls back FULLY to
+  // source (no partial divergence between native + lifetime).
+  //
+  // Bug: the native dest commit + `current=dest` happened BEFORE Scope.adopt. If
+  // adopt threw, the inner did NOT undo the native commit → the view was detached
+  // from src while compositor/`current` pointed at dest (native ↔ lifetime
+  // diverge). Fix: on adopt failure, unmount dest + re-mount src + restore
+  // `current=src`. Post-condition: moveTo either fully succeeds or fully rolls
+  // back. We force adopt to throw by CLOSING the dest windowScope before the move
+  // (adopt rejects: "newParent scope is not alive"); the native dest compositor is
+  // independent of its windowScope, so the native dest commit still lands first.
+  // ───────────────────────────────────────────────────────────────────────────
+  it('codex P0 round-3 pin (BUG 3): a rehome/adopt failure leaves the view in SOURCE (re-mounted, current=src), rejects, no dest residue', async () => {
+    const { handle, srcHost, nativeView } = placeInSrc('v1')
+    const { destHost, destWindowScope, dest } = makeDest()
+    expect(srcHost.ids()).toContain('v1')
+
+    // Kill the dest windowScope so the rehome `adopt(viewScope, destWindowScope)`
+    // rejects (dead newParent) AFTER the native dest commit has already landed.
+    await destWindowScope.close()
+
+    await expect(handle.moveTo(dest, { zone: 0, rehome: true })).rejects.toBeTruthy()
+
+    // FULL rollback: the view is back in SRC (re-mounted), dest has NO residue.
+    expect(srcHost.ids()).toContain('v1')
+    expect(destHost.ids()).not.toContain('v1')
+
+    // `current` was restored to src (NOT left pointing at dest): a subsequent
+    // applyPlacement drives the SRC host, and a visible:false detaches from SRC.
+    const boundsBefore = nativeView.bounds.length
+    handle.applyPlacement({ visible: true, bounds: { x: 1, y: 1, width: 1, height: 1 } })
+    expect(nativeView.bounds.length).toBe(boundsBefore + 1) // sink live (NOT disposed)
+    expect(srcHost.ids()).toContain('v1')
+    handle.applyPlacement({ visible: false })
+    expect(srcHost.ids()).not.toContain('v1') // detached from SRC, not dest
+    expect(destHost.ids()).not.toContain('v1')
+  })
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // codex P0 round-3 pin (BUG 4) — applyPlacement is a NO-OP while a moveTo is in
+  // flight (a stale source place frame cannot drive the view mid-migration).
+  //
+  // Bug: during the awaited migration (esp. the adopt window) `current` points at
+  // dest while the SOURCE slot token is still registered → a stale source `place`
+  // could route through to inner.applyPlacement and setBounds mid-migration. Fix:
+  // drop place frames while the migrationLock is held (`migrating` guard). We park
+  // the move INSIDE the adopt by giving the dest windowScope an in-flight reset
+  // fence (adopt waits behind it), call applyPlacement during the park, and assert
+  // NO setBounds fired; then release and let the move complete.
+  // ───────────────────────────────────────────────────────────────────────────
+  it('codex P0 round-3 pin (BUG 4): an applyPlacement arriving while a moveTo is in flight is dropped (no setBounds mid-migration)', async () => {
+    const { handle, nativeView } = placeInSrc('v1')
+    const { destHost, destWindowScope, dest } = makeDest()
+
+    // Arm an in-flight reset fence on the dest windowScope: a slow async disposer
+    // the move's `adopt` must park behind (scope.adopt waits for an in-flight
+    // fence). This freezes the move INSIDE doMove, after `current=dest`.
+    let releaseFence!: () => void
+    const fenceBlocked = new Promise<void>((r) => {
+      releaseFence = r
+    })
+    destWindowScope.own(async () => {
+      await fenceBlocked
+    })
+    const resetFence = destWindowScope.reset() // in-flight teardown
+
+    const boundsBefore = nativeView.bounds.length
+    const movePromise = handle.moveTo(dest, { zone: 0, rehome: true })
+    // Let the move advance to the adopt park (a microtask turn or two).
+    await Promise.resolve()
+    await Promise.resolve()
+
+    // A stale `place` arrives mid-migration → MUST be dropped (no setBounds).
+    handle.applyPlacement({ visible: true, bounds: { x: 5, y: 5, width: 5, height: 5 } })
+    expect(nativeView.bounds.length).toBe(boundsBefore) // dropped, no setBounds
+
+    // Release the fence → adopt proceeds → the move completes successfully.
+    releaseFence()
+    await resetFence
+    await movePromise
+    expect(destHost.ids()).toContain('v1')
+
+    // After the move settles, applyPlacement works again (drives the DEST host).
+    handle.applyPlacement({ visible: true, bounds: { x: 6, y: 7, width: 8, height: 9 } })
+    expect(nativeView.bounds).toContainEqual({ x: 6, y: 7, width: 8, height: 9 })
+  })
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // codex P0 round-3 pin (BUG 5) — a concurrent dispose() is serialized with an
+  // in-flight moveTo (runs AFTER the move settles, not concurrently).
+  //
+  // Bug: dispose closed the viewScope independently and could race an in-flight
+  // move (the migrationLock only guarded moveTo) → corruption / double-teardown.
+  // Fix: dispose acquires the same migrationLock, so it runs after the move. We
+  // park the move inside the adopt (in-flight reset fence), fire dispose() during
+  // the park, assert it has NOT resolved (it is queued behind the move), then
+  // release: the move completes, THEN dispose runs cleanly, destroying the view.
+  // ───────────────────────────────────────────────────────────────────────────
+  it('codex P0 round-3 pin (BUG 5): dispose() during an in-flight moveTo waits for the move to settle, then disposes cleanly (view destroyed, no double-teardown)', async () => {
+    const { destHost: dHost, destWindowScope, dest } = makeDest()
+
+    // A fresh placed handle WITH a destroy spy so we can observe the (single)
+    // teardown destroy the native view.
+    let destroyCalls = 0
+    const base = makeNativeView('w1')
+    const srcHost2 = makeHost()
+    const srcCompositor2 = createCompositor(srcHost2)
+    const srcWindowScope2 = createScope()
+    const nativeView2: NativeView & { bounds: Bounds[] } = {
+      ref: base.ref,
+      bounds: base.bounds,
+      setBounds: (b) => base.setBounds(b),
+      destroy: () => {
+        destroyCalls++
+      },
+    }
+    const handle2 = createViewHandle({ nativeView: nativeView2, scope: srcWindowScope2.child() })
+    handle2.placeIn({ compositor: srcCompositor2, windowScope: srcWindowScope2 }, { zone: 0 })
+
+    // Park the move inside adopt via an in-flight reset fence on the dest scope.
+    let releaseFence!: () => void
+    const fenceBlocked = new Promise<void>((r) => {
+      releaseFence = r
+    })
+    destWindowScope.own(async () => {
+      await fenceBlocked
+    })
+    const resetFence = destWindowScope.reset()
+
+    const movePromise = handle2.moveTo(dest, { zone: 0, rehome: true })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    // dispose() fired mid-move MUST queue behind the migrationLock — it has NOT
+    // resolved while the move is still parked.
+    let disposeSettled = false
+    const disposePromise = handle2.dispose().then(() => {
+      disposeSettled = true
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(disposeSettled).toBe(false) // serialized: waiting for the move
+    expect(destroyCalls).toBe(0) // not torn down yet
+
+    // Release the move → it completes → THEN dispose runs (after the lock frees).
+    releaseFence()
+    await resetFence
+    await movePromise
+    await disposePromise
+
+    // Clean single teardown: the view is destroyed exactly once, detached from the
+    // dest host (its final home), no double-teardown.
+    expect(disposeSettled).toBe(true)
+    expect(destroyCalls).toBe(1)
+    expect(dHost.ids()).not.toContain('v1')
+    expect(dHost.ids()).not.toContain('w1')
   })
 })
