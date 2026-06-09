@@ -1,19 +1,15 @@
 /**
- * TDD-style failing test for the upcoming "auto-reload simulator on watch
- * rebuild" fix.
+ * Tests for the "auto-reload simulator on watch rebuild" hot-reload contract.
  *
- * Contract under test (NOT yet implemented):
- *  - `ExpectedPayload` will gain an optional `hotReload?: boolean` flag.
- *  - The `onRebuild` callback wired in `workspace-service.ts` will dispatch
+ * Contract under test:
+ *  - `ExpectedPayload` carries an optional `hotReload?: boolean` flag.
+ *  - The `onRebuild` callback wired in `workspace-service.ts` dispatches
  *    `projectStatus({ status: 'ready', message: '编译完成，已热更新', hotReload: true })`
  *    so the renderer can call `webview.reload()` once the watcher-triggered
  *    rebuild is complete.
- *  - The initial-open path (`正在编译...` → `编译完成`) must still emit WITHOUT
+ *  - The initial-open path (`正在编译...` → `编译完成`) emits WITHOUT
  *    `hotReload`, so the simulator is not double-reloaded right after the
  *    first compile finishes.
- *
- * This test is expected to FAIL today (production currently emits
- * `{ status: 'ready', message: '编译完成，已热更新' }` with no `hotReload`).
  *
  * Pattern lifted from `src/main/app/close-with-active-session.test.ts`:
  *  - hoist stub state so `vi.mock('electron', …)` can see it

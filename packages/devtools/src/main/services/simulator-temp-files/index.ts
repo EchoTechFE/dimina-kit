@@ -30,7 +30,7 @@
 
 import type { Session } from 'electron'
 import { IpcRegistry, type SenderPolicy } from '../../utils/ipc-registry.js'
-import { toDisposable, type Disposable } from '../../utils/disposable.js'
+import { toDisposable, type Disposable } from '@dimina-kit/electron-deck/main'
 import { type TempFileStore } from './resolver.js'
 import { registerTempFile, revokeTempFile, revokeAllTempFiles } from './store.js'
 import { handleDifileRequest } from './request-handler.js'

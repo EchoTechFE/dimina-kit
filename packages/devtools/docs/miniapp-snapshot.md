@@ -14,11 +14,13 @@
 
 ## 1. 背景：单一真相源不变式
 
-devtools 的右侧面板要把 simulator `<webview>` 里运行的小程序状态，实时映射给开发者。这里的真相源（preload 内存 cache）每次 webview reload 都会被新的 JS 上下文清空，而 renderer 的 React state 不随之重建——若 renderer 靠**增量事件**自己拼状态，两者必然漂移。
+devtools 的右侧面板要把小程序运行时状态实时映射给开发者。这里的真相源（preload 内存 cache）每次 frame reload 都会被新的 JS 上下文清空，而 renderer 的 React state 不随之重建——若 renderer 靠**增量事件**自己拼状态，两者必然漂移。这套快照框架就是为消除这类漂移而设计的（push/pull/重同步）。
+
+> **native-host 下的实际数据路径**：native-host 是唯一运行时，simulator 顶层帧（`simulator.html`，跑在主进程 WebContentsView 里）**不再**承载页面 DOM / service 状态——页面 DOM 在子 render-host `<webview>` guests、service 逻辑在隐藏 service-host 窗口。因此 **renderer 的面板数据不走本框架的 `miniapp-snapshot:push/pull` 传输**，而是从主进程的专用通道取（WXML→`SimulatorWxmlChannel`、AppData→`SimulatorAppDataChannel`，详见 §4 与 §11）。本框架的快照机制（含 push/pull 传输、`window.__miniappSnapshot` 访问器）作为**可复用的 preload 组合件**仍从 `@dimina-kit/devtools/preload` 导出，供 external/composed preload（在它们自己的同文档 iframe 里有真数据源时）使用。下文的**投影契约**（全量替换、丢弃过期、单点派生）两者共享；§4 / §5.3 / §7 / §10 以内置 native-host 通道路径（`useNativeChannelSnapshot`）为主语，preload 侧的 Host + push/pull 组合件路径见 §6 / §11。
 
 ```mermaid
 flowchart LR
-  subgraph SIM["simulator &lt;webview&gt; · 每次 reload 重建"]
+  subgraph SIM["preload 上下文（有 embedder 的 guest）· 每次 reload 重建"]
     CACHE["preload 内存 cache<br/>（真相源 · reload 即清空）"]
   end
   subgraph RENDERER["main-window renderer · 不随 reload 重建"]
@@ -60,7 +62,7 @@ flowchart LR
 | `SnapshotEnvelope<T>` | **信封**：快照 + 元数据（`id` / `seq` / `ts`）的传输单元 |
 | `MiniappSnapshotSource<T>` | **数据源**：preload 侧观测运行时、产出快照 |
 | `MiniappSnapshotHost` | **中枢**：preload 侧管理所有数据源的生命周期与收发 |
-| `useMiniappSnapshot<T>` | renderer 侧通用 hook：把信封**投影**成 React state |
+| renderer 投影 hook | 把信封/快照**投影**成 React state。native-host 下内置面板用 `useNativeChannelSnapshot`（消费主进程 `SimulatorWxmlChannel` / `SimulatorAppDataChannel` 的 `GetSnapshot` seed + `Event` push，见 §4 / §11） |
 
 ### 接口定义
 
@@ -92,41 +94,38 @@ interface MiniappSnapshotHost {
 
 ## 4. 架构总览
 
-整体由三层组成：preload 侧的**数据源 + 中枢**、两条通用**传输通道**、renderer 侧的**通用 hook**。下图展示这三层如何串联——注意所有数据源都汇入同一个 Host，所有面板都复用同一个 hook：
+native-host 下内置面板的实际数据路径分两层：主进程 **simulator 服务**产出快照、经两条**专用通道**（`GetSnapshot` seed + `Event` push）下发，renderer 侧由 `useNativeChannelSnapshot` 投影成 state。下图展示 WXML / AppData 两个面板如何复用同一个 hook：
 
 ```mermaid
 flowchart TB
-  subgraph WV["simulator &lt;webview&gt;（preload 上下文，每次 reload 重建）"]
+  subgraph MAIN["主进程（native-host 唯一运行时）"]
     direction TB
-    OBS1["Worker 插桩"] --> SRC1["AppDataSource"]
-    OBS2["MutationObserver"] --> SRC2["WxmlSource"]
-    SRC1 --> HOST["MiniappSnapshotHost"]
-    SRC2 --> HOST
-    HOST --> AUTO["window.__miniappSnapshot<br/>.get(id) / .ids()"]
-  end
-
-  subgraph TRANSPORT["传输层（2 个通用通道）"]
-    PUSH["miniapp-snapshot:push<br/>SnapshotEnvelope"]
-    PULL["miniapp-snapshot:pull<br/>{ id }"]
+    OBS1["render-host &lt;webview&gt; DOM"] --> SVC1["simulator-wxml 服务"]
+    OBS2["service-host 状态"] --> SVC2["simulator-appdata 服务"]
+    SVC1 --> CH1["SimulatorWxmlChannel<br/>GetSnapshot · Event"]
+    SVC2 --> CH2["SimulatorAppDataChannel<br/>GetSnapshot · Event"]
   end
 
   subgraph RD["main-window renderer（不随 reload 重建）"]
     direction TB
-    IPC["&lt;webview&gt; ipc-message"] --> HOOK["useMiniappSnapshot({ id, initial,<br/>simulatorRef, enabled })"]
+    HOOK["useNativeChannelSnapshot({ getChannel,<br/>eventChannel, initial, enabled })"]
     HOOK --> P1["AppDataPanel"]
     HOOK --> P2["WxmlPanel"]
   end
 
-  HOST -- sendToHost --> PUSH --> IPC
-  HOOK -- "webview.send" --> PULL --> HOST
-  AUTO -. "executeJavaScript" .-> AUTOMATION["自动化 / MCP / e2e"]
+  CH1 -- "GetSnapshot (invoke seed) / Event (push)" --> HOOK
+  CH2 -- "GetSnapshot (invoke seed) / Event (push)" --> HOOK
 ```
 
-每层的职责分工：
+> 主进程 simulator 服务侧的快照产出仍沿用本框架的语义（全量、不可变、单调 `seq` 丢弃过期）；其 preload 侧的 `MiniappSnapshotHost` + `miniapp-snapshot:push/pull` 传输通道作为**可复用组合件**保留，供 external/composed preload（在自己的同文档 iframe 里有真数据源时）使用，见 §6 / §11。
 
-- **数据源**：preload 内每个 source 把观测器（Worker 插桩、MutationObserver）封在内部，对外只暴露 `snapshot()`。
-- **中枢**：`Host` 负责全部横切逻辑——启动数据源、接收 `pull`、发出 `push`、暴露自动化访问器、释放资源。
-- **renderer**：只有一个通用 hook，按 `id` 把信封投影成 state。
+每层的职责分工（native-host 内置路径）：
+
+- **主进程 simulator 服务**：观测 render-host `<webview>` DOM / service-host 状态，产出全量快照。
+- **专用通道**：`SimulatorWxmlChannel` / `SimulatorAppDataChannel`，各暴露 `GetSnapshot`（invoke seed / refresh）+ `Event`（main→renderer push）。
+- **renderer**：一个通用 hook `useNativeChannelSnapshot`，按通道把快照投影成 state；WXML / AppData 复用同一份实现。
+
+> composed preload 路径的等价职责分工（preload 内 source 封观测器只暴露 `snapshot()`、`Host` 负责启动/`pull`/`push`/自动化访问器、renderer hook 按 `id` 投影信封）见 §6 与 §10。
 
 > **面板 WXML / AppData 都由 main 取**：native-host 是唯一运行时，页面 DOM 跑在 render-host `<webview>` guests、service 逻辑跑在 service-host 窗口——都不是 simulator preload 能直达的同文档 iframe，所以本框架的 iframe 数据源在这里只会推 null。因此 renderer 的**面板**数据改从主进程的专用通道取：WXML 走 `SimulatorWxmlChannel`、AppData 走 `SimulatorAppDataChannel`（main 侧 simulator-wxml / simulator-appdata 服务 → `GetSnapshot` seed + `Event` push），都不走本框架的 push/pull 传输；renderer 侧由 `useNativeChannelSnapshot`（见 [§11 文件清单](#11-文件清单)）消费这两条通道。
 >
@@ -146,7 +145,7 @@ sequenceDiagram
   participant WV as simulator preload
   participant Host as MiniappSnapshotHost
   participant Src as XxxSource
-  participant RD as renderer useMiniappSnapshot
+  participant RD as renderer useNativeChannelSnapshot
 
   WV->>Host: createMiniappSnapshotHost()
   WV->>Host: register(appDataSource)
@@ -200,21 +199,23 @@ sequenceDiagram
 sequenceDiagram
   autonumber
   participant UI as 面板「刷新」按钮
-  participant RD as useMiniappSnapshot
-  participant Host as MiniappSnapshotHost
-  participant Src as XxxSource
+  participant RD as useNativeChannelSnapshot
+  participant CH as SimulatorWxml/AppDataChannel
+  participant SVC as 主进程 simulator 服务
 
   UI->>RD: refresh()
-  RD->>Host: webview.send(pull, { id })
-  Host->>Src: snapshot()
-  Src-->>Host: 当前全量快照
-  Host->>RD: push(envelope)
-  RD->>RD: setData(envelope.data)
+  RD->>CH: invoke(GetSnapshot)
+  CH->>SVC: snapshot()
+  SVC-->>CH: 当前全量快照
+  CH-->>RD: 返回全量快照
+  RD->>RD: setData(snapshot)
 ```
 
-push 与 pull 走同一条 `publish` 路径，因此不存在「两套快照逻辑」。
+`refresh()` 走 `GetSnapshot` invoke 主动拉一份全量快照，与 `Event` push 下发的是同一份数据形态，因此不存在「两套快照逻辑」。（composed preload 侧的 `miniapp-snapshot:pull` 走对称的 `publish` 路径，见 §6。）
 
 ### 5.4 重新编译 / reload 重同步
+
+> 本图描述 composed preload 路径（有 embedder 的 `<webview>` guest + framework Host）的 reload 重同步；native-host 内置面板的等价重同步由主进程 simulator 服务在 reload 后重新 push `Event`（renderer 侧 `useNativeChannelSnapshot` 的订阅一直在）保证。
 
 webview reload 后，preload 上下文与旧 cache 一并销毁，新上下文重新执行 `install()`。renderer 的 `<webview>` 元素本身没变、`ipc-message` 监听一直在，所以**必然收到新的空快照**，旧面板状态被整份替换清掉：
 
@@ -261,8 +262,10 @@ stateDiagram-v2
 
 | 通道 | 方向 | 载荷 |
 |---|---|---|
-| `miniapp-snapshot:push` | preload → renderer（`sendToHost`） | `SnapshotEnvelope<T>` |
+| `miniapp-snapshot:push` | preload → 其 embedder renderer（`sendToHost`） | `SnapshotEnvelope<T>` |
 | `miniapp-snapshot:pull` | renderer → preload（`webview.send`） | `{ id: SnapshotSourceId }` |
+
+> 这两条通道的传输依赖 preload 有 embedder（即 source 跑在一个 `<webview>` guest 的同文档 preload 里）。**native-host 默认 preload 不用它们**：simulator 顶层帧是无 embedder 的 WebContentsView，`sendToHost` 无处可达；且默认 preload 只 `createAppDataSource().start()`（取其 `__simulatorHook`/`__simulatorData` 副作用，见 §4），不 `install()` 也不注册 `WxmlSource`，故没有任何 envelope 会 push。这两条通道随框架代码保留，供 external/composed preload（有 embedder + 同文档数据源时）复用。
 
 协议要点：
 
@@ -271,25 +274,26 @@ stateDiagram-v2
 
 ## 7. renderer 投影模型
 
-renderer 侧只有一个通用 hook，它把信封流投影成 React state。参数以单个对象传入：
+> 本节描述投影**契约**（全量替换、丢弃过期快照、UI 态单点派生）。native-host 下内置面板由 `useNativeChannelSnapshot`（`use-native-channel-snapshot.ts`）实现这套契约：经主进程通道 `GetSnapshot` seed + `Event` push 取快照，不走 `<webview>` ipc-message。下面的签名取自该实现。
+
+renderer 侧投影 hook 把主进程通道的快照投影成 React state，参数以单个对象传入：
 
 ```ts
-function useMiniappSnapshot<T>(params: {
-  id: SnapshotSourceId
+function useNativeChannelSnapshot<T>(opts: {
+  getChannel: string   // invoke 通道：返回当前全量快照（seed / refresh）
+  eventChannel: string // push 通道：main→renderer 推送新快照
   initial: T
-  simulatorRef: RefObject<HTMLElement | null>
-  enabled: boolean
+  enabled: boolean     // 仅在 true 时 seed/订阅（native-host + compile ready）
 }): {
   data: T
-  seq: number
   refresh: () => void
 }
 ```
 
 行为约定：
 
-- 对 `<webview>` 只挂一次 `ipc-message` 监听；`enabled` 为 false 时不挂监听（首次以 `useState(initial)` 初始化），但不会把已收到的 `data` 重置回 `initial`。
-- `data` 永远是「最后一份快照」，没有任何增量 reducer；据全局 `seq` 丢弃过期 / 乱序信封。
+- `enabled` 翻 true 时 seed 一次（`invoke(getChannel)`），并订阅 `eventChannel` 的 push；`enabled` 为 false 时不 seed、不订阅（首次以 `useState(initial)` 初始化），但不会把已收到的 `data` 重置回 `initial`。
+- `data` 永远是「最后一份快照」，没有任何增量 reducer——`Event` push 与 `refresh()` 的 `GetSnapshot` 都整份替换。
 - 面板里的 **UI 态**（如 AppData 当前选中的 tab `activeBridgeId`）留在 renderer，作为对 `data` 的**单点派生**：由 `data.bridges` 推出 id 列表后，`activeBridgeId = selectedBridgeId && bridgeIds.includes(selectedBridgeId) ? selectedBridgeId : bridgeIds.at(-1) ?? null`（用户手选优先，否则跟随最新 page）。
 
 ## 8. 这套框架还能解决什么
@@ -332,19 +336,31 @@ function createNetworkSource(): MiniappSnapshotSource<NetworkSnapshot> {
   }
 }
 
-// preload 入口 —— 注册一行
+// preload 入口（composed preload）—— 注册一行
 host.register(createNetworkSource())
+```
 
-// renderer —— 一个 hook
-const { data, refresh } = useMiniappSnapshot({
-  id: 'network',
-  initial: { requests: [] },
-  simulatorRef,
+composed preload 侧 push / pull / 自动化读取 / reload 重同步，全部自动获得。
+
+native-host 内置面板侧则用 `useNativeChannelSnapshot` 把主进程通道投影成 state（取自 `use-panel-data.ts`）：
+
+```ts
+// renderer —— WXML 面板
+const nativeWxml = useNativeChannelSnapshot<WxmlNode | null>({
+  getChannel: SimulatorWxmlChannel.GetSnapshot,
+  eventChannel: SimulatorWxmlChannel.Event,
+  initial: null,
+  enabled: ready,
+})
+
+// renderer —— AppData 面板
+const nativeAppData = useNativeChannelSnapshot<AppDataSnapshot>({
+  getChannel: SimulatorAppDataChannel.GetSnapshot,
+  eventChannel: SimulatorAppDataChannel.Event,
+  initial: EMPTY_APP_DATA_SNAPSHOT,
   enabled: ready,
 })
 ```
-
-push / pull / 自动化读取 / reload 重同步，全部自动获得。
 
 ## 11. 文件清单
 

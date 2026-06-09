@@ -6,7 +6,7 @@ import {
   PopoverShowSchema,
   PopoverRelaunchSchema,
 } from '../../shared/ipc-schemas.js'
-import type { Disposable } from '../utils/disposable.js'
+import type { Disposable } from '@dimina-kit/electron-deck/main'
 import { validate } from '../utils/ipc-schema.js'
 import { IpcRegistry } from '../utils/ipc-registry.js'
 

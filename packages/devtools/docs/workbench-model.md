@@ -1,9 +1,10 @@
 # workbench 模型（host 集成参考）
 
-> ⚠️ **本文是早期目标模型（thin-facade `setup(runtime)`）的设计草案，部分已被取代。**
-> 实际落地的抽取设计（framework `WorkbenchApp` 经注入式 `RuntimeBackend` 编排 devtools、
-> 杀掉 `createWorkbenchApp`、`launch()`/`workbench()` 统一走框架）见
-> [`framework-extraction-v2.md`](./framework-extraction-v2.md)。下文的概念框架仍有参考价值。
+> 落地的抽取设计：framework `electronDeck()` 经注入式 `RuntimeBackend` 编排 devtools，
+> `launch()` 与 `workbench()`（同一函数的两个名字）都走框架，旧的 `createWorkbenchApp`
+> 已不存在。框架内部机制见
+> [`framework-extraction-v2.md`](../../electron-deck/docs/framework-extraction-v2.md)。
+> 下文的概念框架（config 字段 / Runtime 门面 / 不变量）是 host 集成参考。
 >
 > 下游 host（如 qdmp）写一份 `WorkbenchConfig` 交给 `workbench(config)`，framework
 > 接管 Electron 装配、IPC、生命周期。本文是 host 集成参考：怎么用 + API + 必知约束。

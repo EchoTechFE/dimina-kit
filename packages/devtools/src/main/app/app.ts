@@ -36,7 +36,7 @@ import { setupSimulatorCurrentPage } from '../services/simulator-current-page/in
 import { createRenderInspector } from '../services/render-inspect/index.js'
 import { setupSimulatorTempFiles } from '../services/simulator-temp-files/index.js'
 import { UpdateManager } from '../services/update/index.js'
-import { toDisposable, type Disposable } from '../utils/disposable.js'
+import { toDisposable, type Disposable } from '@dimina-kit/electron-deck/main'
 import { IpcRegistry } from '../utils/ipc-registry.js'
 
 const DEFAULT_MODULES: Record<BuiltinModuleId, boolean> = {
@@ -166,11 +166,6 @@ function createConfiguredMainWindow(config: WorkbenchAppConfig, rendererDir: str
     height: config.window?.height,
     minWidth: config.window?.minWidth,
     minHeight: config.window?.minHeight,
-    // P1: pass the same preload path the workbench context stores on
-    // ctx.preloadPath so hosts that ship a custom simulator preload are the
-    // ones registered on the persist:simulator session — otherwise the
-    // backstop wouldn't be the host's script.
-    simulatorPreloadPath: config.preloadPath ?? defaultPreloadPath,
   })
 
   // Set window/taskbar icon if provided (Linux/Windows; macOS uses app bundle icon)

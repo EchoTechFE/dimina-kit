@@ -1,7 +1,7 @@
 import type { BrowserWindow, WebContentsView } from 'electron'
 import { globalShortcut } from 'electron'
 import type { WorkbenchContext } from '../../services/workbench-context.js'
-import { DisposableRegistry, type Disposable, toDisposable } from '../../utils/disposable.js'
+import { DisposableRegistry, type Disposable, toDisposable } from '@dimina-kit/electron-deck/main'
 
 export interface MainWindowEventState {
   context?: WorkbenchContext

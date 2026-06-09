@@ -64,8 +64,7 @@
  *     (exposed below; it uses the console fallback path).
  */
 import type { WebContents } from 'electron'
-import type { ConnectionRegistry } from '@dimina-kit/electron-deck/main'
-import { DisposableRegistry, toDisposable, type Disposable } from '../../utils/disposable.js'
+import { DisposableRegistry, toDisposable, type ConnectionRegistry, type Disposable } from '@dimina-kit/electron-deck/main'
 
 /** Which layer a captured request came from (tags the fallback log line). */
 export type NetworkSource = 'service' | 'render'

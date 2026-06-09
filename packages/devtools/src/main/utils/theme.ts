@@ -1,5 +1,5 @@
 import { BrowserWindow, nativeTheme } from 'electron'
-import { toDisposable, type Disposable } from './disposable.js'
+import { toDisposable, type Disposable } from '@dimina-kit/electron-deck/main'
 
 /**
  * Background color that matches the current system color scheme.

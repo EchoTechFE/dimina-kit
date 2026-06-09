@@ -131,7 +131,7 @@ export interface WorkbenchHostInstance {
    */
   registerTrustedWindow(
     win: import('electron').BrowserWindow,
-  ): import('../main/utils/disposable.js').Disposable
+  ): import('@dimina-kit/electron-deck/main').Disposable
 
   /**
    * Registers a simulator custom API into THIS context's registry, callable
@@ -142,7 +142,7 @@ export interface WorkbenchHostInstance {
   registerSimulatorApi(
     name: string,
     handler: SimulatorApiHandler,
-  ): import('../main/utils/disposable.js').Disposable
+  ): import('@dimina-kit/electron-deck/main').Disposable
 
   /**
    * Per-context toolbar surface. `set()` atomically replaces the whole table

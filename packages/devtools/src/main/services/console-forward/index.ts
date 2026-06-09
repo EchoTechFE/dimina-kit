@@ -33,7 +33,7 @@
  * attached DevTools, so forwarding would also duplicate it.
  */
 import type { WebContents } from 'electron'
-import { DisposableRegistry, toDisposable, type Disposable } from '../../utils/disposable.js'
+import { DisposableRegistry, toDisposable, type Disposable } from '@dimina-kit/electron-deck/main'
 import type { BridgeRouterHandle } from '../../ipc/bridge-router.js'
 
 /**

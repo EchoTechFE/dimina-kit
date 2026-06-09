@@ -17,7 +17,7 @@
  */
 
 import { app, webContents as wcStatic, type WebContents } from 'electron'
-import type { ConnectionRegistry } from '@dimina-kit/electron-deck/main'
+import { DisposableRegistry, type ConnectionRegistry, type Disposable } from '@dimina-kit/electron-deck/main'
 import {
   SimulatorElementChannel,
   SimulatorStorageChannel,
@@ -25,7 +25,6 @@ import {
   type StorageItem,
   type StorageWriteResult,
 } from '../../../shared/ipc-channels.js'
-import { DisposableRegistry, type Disposable } from '../../utils/disposable.js'
 import { IpcRegistry, type SenderPolicy } from '../../utils/ipc-registry.js'
 import type { BridgeRouterHandle } from '../../ipc/bridge-router.js'
 import type { RenderInspector } from '../render-inspect/index.js'

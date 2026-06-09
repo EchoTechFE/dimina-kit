@@ -9,30 +9,24 @@
 // ── Simulator (preload → host / renderer ↔ main) ────────────────────────
 
 export const SimulatorChannel = {
-  Attach: 'simulator:attach',
-  // NATIVE-HOST ONLY: ask main to create the simulator as a top-level
-  // WebContentsView (so nested render-host <webview>s can attach). The default
-  // path uses `Attach` with the renderer <webview>'s webContents id instead.
+  // Ask main to create the simulator as a top-level WebContentsView (so nested
+  // render-host <webview>s can attach). Native-host is the sole runtime.
   AttachNative: 'simulator:attach-native',
-  // NATIVE-HOST ONLY: renderer reports the device-bezel inner-screen rect (CSS
-  // px from content top-left) + zoom so main can overlay the simulator WCV on
-  // it. The default <webview> path never sends this.
+  // Renderer reports the device-bezel inner-screen rect (CSS px from content
+  // top-left) + zoom so main can overlay the simulator WCV on it.
   SetNativeBounds: 'simulator:set-native-bounds',
-  // NATIVE-HOST ONLY: renderer pushes the selected device's LOGICAL metrics
-  // (screen size, pixelRatio, statusBarHeight, …) when the device dropdown
-  // changes. Main maps it to a HostEnvSnapshot and live-updates the running
-  // service-host window — the authoritative `wx.getSystemInfoSync()` source —
-  // so the mini-app sees the selected device without a relaunch. The default
-  // <webview> path delivers device info to the guest via `device:change`.
+  // Renderer pushes the selected device's LOGICAL metrics (screen size,
+  // pixelRatio, statusBarHeight, …) when the device dropdown changes. Main
+  // maps it to a HostEnvSnapshot and live-updates the running service-host
+  // window — the authoritative `wx.getSystemInfoSync()` source — so the
+  // mini-app sees the selected device without a relaunch.
   SetDeviceInfo: 'simulator:set-device-info',
   Detach: 'simulator:detach',
   Resize: 'simulator:resize',
   SetVisible: 'simulator:setVisible',
   Console: 'simulator:console',
-  // NATIVE-HOST ONLY: main → renderer push of the visible top-of-stack page
-  // route whenever the mini-app navigates (navigateTo / switchTab / back).
-  // The default `<webview>` path derives the current page from the guest's
-  // navigation events instead and never receives this. Payload: the page path
+  // Main → renderer push of the visible top-of-stack page route whenever the
+  // mini-app navigates (navigateTo / switchTab / back). Payload: the page path
   // string (same bare format as `getCurrentPagePath`), or '' when unknown.
   CurrentPage: 'simulator:current-page',
 } as const
@@ -87,9 +81,9 @@ export const ServiceHostChannel = {
 // invoke: simulator forwards an API call to the registry; result/reject propagates.
 //
 // These are ipcMain.handle channels invoked by the **main-window renderer**
-// only (trusted host). The simulator <webview> never reaches them directly —
-// it proxies through the host via the bridge channels below, so the
-// sender-policy can keep the webview off the IPC white-list.
+// only (trusted host). The simulator guest never reaches them directly — it
+// reaches the host via the bridge channels below, so the sender-policy can keep
+// the simulator off the IPC white-list.
 export const SimulatorCustomApiChannel = {
   List: 'simulator:custom-apis:list',
   Invoke: 'simulator:custom-apis:invoke',
@@ -97,13 +91,13 @@ export const SimulatorCustomApiChannel = {
 
 // ── Custom APIs bridge (simulator → host) ──
 // payload = { id, op: 'list' } | { id, op: 'invoke', name, params } for Request,
-// { id, result } | { id, error } for Response. Two transports (chosen in
-// `src/preload/runtime/custom-apis.ts`):
-//  • default `<webview>`: Request via `ipcRenderer.sendToHost` → main-window
-//    renderer proxy → Response via `<webview>.send`;
-//  • native-host (top-level WebContentsView, no embedder): Request via
-//    `ipcRenderer.send` → `ipcMain.on` dispatcher bound to that simWc
-//    (view-manager `attachNativeCustomApiBridge`) → Response via `simWc.send`.
+// { id, result } | { id, error } for Response. Transport (in
+// `src/preload/runtime/custom-apis.ts`): native-host — the simulator is a
+// top-level WebContentsView (no embedder), so Request goes via
+// `ipcRenderer.send` → `ipcMain.on` dispatcher bound to that simWc (view-manager
+// `attachNativeCustomApiBridge`) → Response via `simWc.send`. (The old
+// renderer-proxied `<webview>` transport, `ipcRenderer.sendToHost` →
+// `<webview>.send`, no longer exists — native-host is the sole runtime.)
 //
 // Request/response are correlated by `id` so multiple concurrent invokes can
 // be in flight at once.
@@ -113,7 +107,7 @@ export const SimulatorCustomApiBridgeChannel = {
 } as const
 
 // ── Storage (CDP-backed; main process attaches the debugger to the
-// simulator <webview> and forwards DOMStorage events to the renderer) ──
+// simulator guest and forwards DOMStorage events to the renderer) ──
 export const SimulatorStorageChannel = {
   GetSnapshot: 'simulator:storage:snapshot',
   GetActivePrefix: 'simulator:storage:activePrefix',

@@ -455,9 +455,8 @@ describe('pickWriteRoot — accept current ∪ last-closed root (in-flight write
 })
 
 // ════════════════════════════════════════════════════════════════════════════
-// NEW CONTRACT (TDD red phase) — these tests describe behaviour the current
-// implementation does NOT yet have. They are EXPECTED to fail until the impl
-// adds (A) a synchronous sandboxed writer `__testing.writeFileSync` and
+// LIVE CONTRACT — these tests exercise behaviour the implementation provides:
+// (A) a synchronous sandboxed writer `__testing.writeFileSync` and
 // (B) post-open mid-path TOCTOU re-verification on every read/write path.
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -465,8 +464,8 @@ describe('pickWriteRoot — accept current ∪ last-closed root (in-flight write
  * Adapter so the same assertions can drive BOTH writers. The async writer is
  * awaited; the sync writer is invoked directly and wrapped so callers can
  * `await` a uniform Promise (a throw becomes a rejection). The sync writer is
- * read off `__testing` lazily because it does not exist yet (red phase) — the
- * cast keeps TypeScript happy while the export is still missing.
+ * read off `__testing` and typed via a cast so the same assertions apply
+ * uniformly to both writers.
  */
 const writeFileSync = (
   __testing as unknown as {

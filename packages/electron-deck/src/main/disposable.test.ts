@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { DisposableRegistry, toDisposable } from './disposable'
+import { DisposableRegistry, toDisposable } from './disposable.js'
 
 describe('toDisposable', () => {
   it('invokes fn exactly once when dispose() is called', () => {

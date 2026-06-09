@@ -1,6 +1,12 @@
 # iOS Notch / Dynamic Island + CSS `env(safe-area-inset-*)` (native-host simulator)
 
-Status: REVIEWED (codex, 2026-06-02). CDP mechanism empirically VERIFIED. Owner: simulator/device-shell.
+Status: SHIPPED (codex-reviewed 2026-06-02). CDP mechanism empirically VERIFIED. Owner: simulator/device-shell.
+
+> This is the design doc; the design landed. See "Current state — SHIPPED" for
+> the live reference points. The sections below describe the model/decisions and
+> read as a plan, but they match the shipped code (device profile in `DEVICES`,
+> `device:change` transport, status-bar/notch visual, the `services/safe-area`
+> CDP wiring, and JS `safeArea` parity).
 
 ## CDP mechanism — VERIFIED (live, Electron 41 / Chromium 146)
 
@@ -40,39 +46,45 @@ notch or Dynamic Island, so that:
 3. `wx.getSystemInfoSync().safeArea` / `getWindowInfo()` report the same insets
    (JS and CSS agree).
 
-## Current state (what's broken / missing)
+## Current state — SHIPPED
 
-- **Device selection never reaches the native-host `DeviceShell`.**
-  `simulator/main.tsx` renders `<DeviceShell miniApp bridgeId platform />` and
-  nothing else — `width`/`height` fall back to the component defaults
-  (`390 × 844`). Picking "iPhone SE" / "iPhone 16 Pro" in the toolbar does not
-  resize or re-profile the simulator.
-- **`device:change` is a dead IPC.** `use-device.ts` posts a `device:change`
-  message, but nothing in the native-host runtime listens for it or writes
-  `window.__deviceInfo`, so `simulator-api.ts` always falls back to its
-  defaults (status bar 44, no per-device safe area). (Pre-existing; deferred
-  while the simulator was being rewritten — this rework is that rewrite.)
-- **No status bar / notch visual.** `device-shell` renders nav-bar → viewport →
-  tabBar → home-indicator. The status-bar region only exists as `paddingTop`
-  inside the nav-bar; there is no time/signal/battery row and no notch shape.
-- **`env(safe-area-inset-*)` is `0` inside render-host webviews.** Desktop
-  Chromium has no physical notch, so dimina's compiled WXSS that uses
-  `env(safe-area-inset-bottom)` (tabBar padding, action sheets, weui-tabbar)
-  gets `0`.
+The design below SHIPPED. The reference points are live in code, not aspirational:
+
+- **Device selection reaches the native-host `DeviceShell`.** The toolbar device
+  picker drives `SimulatorChannel.SetDeviceInfo` (`src/main/ipc/simulator.ts`),
+  which caches the selection on the bridge (`ctx.bridge.setDevice`) and pushes a
+  `DEVICE_CHANGE` to the live simulator WCV. `DeviceShell` holds the selected
+  `device` and re-renders the bezel size + status bar + notch on change.
+- **`device:change` is live.** The device payload carries `notchType` +
+  `safeAreaInsets`; switching device resizes/re-profiles the simulator and
+  updates `window.__deviceInfo` (`simulator-api.ts` reads per-device values
+  instead of the old fallbacks).
+- **Status bar + notch visual ship.** `device-shell` renders a `StatusBar`
+  (`status-bar.tsx`) pinned to the device top — time (`9:41`) + signal/wifi/
+  battery — and the notch / Dynamic Island shape driven by `notchType`; nav-bar
+  is the title row beneath it. The home-indicator strip is sized to
+  `safeAreaInsets.bottom`.
+- **`env(safe-area-inset-*)` is overridden inside render-host webviews.**
+  `src/main/services/safe-area/index.ts` attaches `wc.debugger` per render-host
+  `<webview>` guest on `did-attach-webview` (`view-manager.ts`) and sends
+  `Emulation.setSafeAreaInsetsOverride`, so a page's `env(safe-area-inset-*)`
+  resolves to the device insets instead of `0`. Re-applied on every device
+  change (`reapplySafeArea`); degrades gracefully (warn, leave 0) if the guest
+  is already claimed by an external CDP client.
 
 ## Single source of truth: device profile
 
-Extend `DEVICES` in `src/renderer/shared/constants.ts`. Today each entry is
-`{ name, width, height, pixelRatio, statusBarHeight, system, safeAreaBottom }`.
-Add:
+`DEVICES` in `src/renderer/shared/constants.ts` is the single source of truth, and
+each entry now carries the notch/safe-area fields (SHIPPED):
 
 ```ts
 notchType: 'none' | 'notch' | 'dynamic-island'
 safeAreaInsets: { top: number; right: number; bottom: number; left: number }
 ```
 
-`statusBarHeight` stays = `safeAreaInsets.top` (keep both for back-compat with
-`getSystemInfoSync`; `safeAreaInsets.top` is the canonical value). Seed data:
+`statusBarHeight` stays = `safeAreaInsets.top` (both kept for back-compat with
+`getSystemInfoSync`; `safeAreaInsets.top` is the canonical value). Seeded data
+(live in `constants.ts:10-15`):
 
 | device        | notchType        | top | bottom |
 |---------------|------------------|-----|--------|
@@ -99,20 +111,21 @@ toolbar device picker (renderer)
   → simulator WCV / DeviceShell (resize + render notch/status bar + window.__deviceInfo)
 ```
 
-Design choices to settle with codex:
+Design decisions (SHIPPED):
 
-- **Transport renderer→simulator.** The simulator is a top-level
-  `WebContentsView` (not a `<webview>` of the main window), so
-  `webview.send('device:change')` from the old path does not apply. Options:
-  (A) main `ipcMain` relay → `simulatorWc.send('device:change', info)` +
-  a listener in `simulator/main.tsx` that lifts it into React state and
-  `window.__deviceInfo`; (B) carry the initial device in the simulator URL
-  query and only relay *changes* over IPC. Lean (A) for one code path; the
-  initial device is just the first `device:change`.
-- **DeviceShell device prop.** Replace the defaulted `width`/`height` with a
-  single `device` object (dims + platform + notchType + safeAreaInsets), held in
-  `SimulatorApp` state and updated on `device:change`. DeviceShell re-renders;
-  the WCV bounds already track the bezel rect via the existing layout pipeline.
+- **Transport renderer→simulator = option (A).** The simulator is a top-level
+  `WebContentsView` (not a `<webview>` of the main window), so the old
+  `webview.send('device:change')` does not apply. Shipped path: the toolbar
+  picker drives `SimulatorChannel.SetDeviceInfo` → main caches on the bridge
+  (`ctx.bridge.setDevice`) and relays a `DEVICE_CHANGE` to the live
+  `simulatorWc.send(...)`; a listener in `simulator/main.tsx` lifts it into React
+  state + `window.__deviceInfo`. One code path — the initial device is just the
+  first `device:change` (option B was not taken).
+- **DeviceShell device prop = single `device` object.** The defaulted
+  `width`/`height` were replaced by one `device` object (dims + platform +
+  notchType + safeAreaInsets), held in `SimulatorApp` state and updated on
+  `device:change`. DeviceShell re-renders; the WCV bounds track the bezel rect via
+  the existing layout pipeline.
 
 ## Visual: status bar + notch / Dynamic Island
 
@@ -202,21 +215,28 @@ bottom matches the device (0 for SE, 34 for notch/DI devices).
 
 - DOM probe (CDP) the simulator WCV: status-bar height == `safeAreaInsets.top`,
   notch element present + centered for notch/dynamic-island, absent for `none`.
-- DOM probe a render-host page that uses `env(safe-area-inset-bottom)` (e.g. a
-  bottom-pinned bar): computed `padding-bottom` reflects the device bottom inset
-  after the CDP override (0 before).
+- DOM probe a render-host page that uses `env(safe-area-inset-top)` on a
+  custom-nav page: computed `padding-top` reflects the device top inset after the
+  CDP override (0 before). NOTE: `env(safe-area-inset-bottom)` stays **0** even
+  after the override — the controller intentionally sends `bottom: 0` because the
+  DeviceShell already reserves the home-indicator strip (`safe-area/index.ts`
+  `guestInsets`), so the page's own `env(bottom)` must not double-count. Probe
+  bottom only to assert it is 0.
 - `getSystemInfoSync().safeArea` over the bridge equals the device profile.
 - e2e: switching device updates bezel dims + status bar height (assert via the
   simulator WCV DOM). Screenshot the WCV (chrome composits reliably in CDP;
   page content does not — verify content via DOM).
 
-## Open questions for codex
+## Decisions (resolved — codex-reviewed, SHIPPED)
 
-1. Transport (A vs B) for renderer→simulator device info; any race between the
-   first `device:change` and `DeviceShell` mount.
-2. Where the CDP `setSafeAreaInsetsOverride` wiring should live (a new
-   `services/safe-area` module vs folding into the existing render-host attach
-   path in `bridge-router`/`view-manager`), and how it composes with the
-   render-host webview lifecycle (per-page attach/detach).
-3. Whether to keep `statusBarHeight` as a separate field or derive everywhere
-   from `safeAreaInsets.top` (back-compat with existing tests).
+1. **Transport = option (A)** — `SimulatorChannel.SetDeviceInfo` → bridge cache →
+   `DEVICE_CHANGE` to `simulatorWc`; the first `device:change` seeds the initial
+   device, so there is no separate initial-mount path to race against.
+2. **CDP `setSafeAreaInsetsOverride` lives in a dedicated `services/safe-area`
+   module** (`src/main/services/safe-area/index.ts`), driven off the simulator
+   WCV's `did-attach-webview` so each per-page render-host guest gets insets
+   before paint, and re-applied on device change — NOT folded into
+   bridge-router/simulator-storage.
+3. **`statusBarHeight` is kept as a separate field**, held = `safeAreaInsets.top`
+   for back-compat with `getSystemInfoSync`; `safeAreaInsets.top` is the canonical
+   value.

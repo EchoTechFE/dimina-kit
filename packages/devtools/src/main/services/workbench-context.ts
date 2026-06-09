@@ -5,9 +5,9 @@ import type { ConsoleForwarder } from './console-forward/index.js'
 import type { NetworkForwarder } from './network-forward/index.js'
 import type { AppDataTap } from './simulator-appdata/index.js'
 import type { StorageApi } from './simulator-storage/index.js'
-import { DisposableRegistry } from '../utils/disposable.js'
 import {
   createConnectionRegistry,
+  DisposableRegistry,
   type ConnectionRegistry,
 } from '@dimina-kit/electron-deck/main'
 import type { SenderPolicy } from '../utils/ipc-registry.js'

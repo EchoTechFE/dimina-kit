@@ -1,6 +1,6 @@
 import type { IpcMainEvent, IpcMainInvokeEvent, WebContents } from 'electron'
 import { ipcMain } from 'electron'
-import { DisposableRegistry, type Disposable } from './disposable.js'
+import { DisposableRegistry, type Disposable } from '@dimina-kit/electron-deck/main'
 import { IpcValidationError } from './ipc-schema.js'
 import { createLogger } from './logger.js'
 

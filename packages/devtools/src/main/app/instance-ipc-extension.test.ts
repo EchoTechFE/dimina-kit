@@ -358,7 +358,7 @@ describe('Requirement B: instance.registerTrustedWindow', () => {
     const instance = await setupInstance()
     const hostWin = new BrowserWindowMock()
     const reg = instance as unknown as {
-      registerTrustedWindow: (w: import('electron').BrowserWindow) => import('../utils/disposable.js').Disposable
+      registerTrustedWindow: (w: import('electron').BrowserWindow) => import('@dimina-kit/electron-deck/main').Disposable
     }
 
     expect(instance.context.senderPolicy(hostWin.webContents)).toBe(false)
@@ -378,7 +378,7 @@ describe('Requirement B: instance.registerTrustedWindow', () => {
     const instance = await setupInstance()
     const hostWin = new BrowserWindowMock()
     const reg = instance as unknown as {
-      registerTrustedWindow: (w: import('electron').BrowserWindow) => import('../utils/disposable.js').Disposable
+      registerTrustedWindow: (w: import('electron').BrowserWindow) => import('@dimina-kit/electron-deck/main').Disposable
     }
 
     const disposable = reg.registerTrustedWindow(hostWin)
@@ -402,7 +402,7 @@ describe('Requirement B: instance.registerTrustedWindow', () => {
     const instance = await setupInstance()
     const hostWin = new BrowserWindowMock()
     const reg = instance as unknown as {
-      registerTrustedWindow: (w: import('electron').BrowserWindow) => import('../utils/disposable.js').Disposable
+      registerTrustedWindow: (w: import('electron').BrowserWindow) => import('@dimina-kit/electron-deck/main').Disposable
     }
 
     reg.registerTrustedWindow(hostWin)
@@ -424,7 +424,7 @@ describe('Requirement B: instance.registerTrustedWindow', () => {
     const instance = await setupInstance()
     const hostWin = new BrowserWindowMock()
     const reg = instance as unknown as {
-      registerTrustedWindow: (w: import('electron').BrowserWindow) => import('../utils/disposable.js').Disposable
+      registerTrustedWindow: (w: import('electron').BrowserWindow) => import('@dimina-kit/electron-deck/main').Disposable
     }
 
     reg.registerTrustedWindow(hostWin)
@@ -455,7 +455,7 @@ describe('Requirement B: instance.registerTrustedWindow', () => {
     const instance = await setupInstance()
     const hostWin = new BrowserWindowMock()
     const reg = instance as unknown as {
-      registerTrustedWindow: (w: import('electron').BrowserWindow) => import('../utils/disposable.js').Disposable
+      registerTrustedWindow: (w: import('electron').BrowserWindow) => import('@dimina-kit/electron-deck/main').Disposable
     }
 
     const first = reg.registerTrustedWindow(hostWin)
@@ -489,7 +489,7 @@ describe('Requirement B: instance.registerTrustedWindow', () => {
     const instance = await setupInstance()
     const hostWin = new BrowserWindowMock()
     const reg = instance as unknown as {
-      registerTrustedWindow: (w: import('electron').BrowserWindow) => import('../utils/disposable.js').Disposable
+      registerTrustedWindow: (w: import('electron').BrowserWindow) => import('@dimina-kit/electron-deck/main').Disposable
     }
 
     reg.registerTrustedWindow(hostWin)
@@ -512,7 +512,7 @@ describe('Requirement B: instance.registerTrustedWindow', () => {
     const instance = await setupInstance()
     const hostWin = new BrowserWindowMock()
     const reg = instance as unknown as {
-      registerTrustedWindow: (w: import('electron').BrowserWindow) => import('../utils/disposable.js').Disposable
+      registerTrustedWindow: (w: import('electron').BrowserWindow) => import('@dimina-kit/electron-deck/main').Disposable
     }
 
     const first = reg.registerTrustedWindow(hostWin)
@@ -551,7 +551,7 @@ describe('Requirement B: instance.registerTrustedWindow', () => {
   it('disposing the returned Disposable drops its ctx.registry entry (no leak)', async () => {
     const instance = await setupInstance()
     const reg = instance as unknown as {
-      registerTrustedWindow: (w: import('electron').BrowserWindow) => import('../utils/disposable.js').Disposable
+      registerTrustedWindow: (w: import('electron').BrowserWindow) => import('@dimina-kit/electron-deck/main').Disposable
     }
     const registry = instance.context.registry as unknown as { size: number }
 

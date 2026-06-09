@@ -2,7 +2,6 @@ import { ServiceHostChannel, SimulatorChannel, SimulatorCustomApiChannel } from 
 import type { NativeDeviceInfo } from '../../shared/ipc-channels.js'
 import {
   SimulatorAttachNativeSchema,
-  SimulatorAttachSchema,
   SimulatorCustomApiInvokeSchema,
   SimulatorResizeSchema,
   SimulatorSetDeviceInfoSchema,
@@ -11,7 +10,7 @@ import {
 } from '../../shared/ipc-schemas.js'
 import type { HostEnvSnapshot } from '../../shared/bridge-channels.js'
 import type { WorkbenchContext } from '../services/workbench-context.js'
-import type { Disposable } from '../utils/disposable.js'
+import type { Disposable } from '@dimina-kit/electron-deck/main'
 import { validate } from '../utils/ipc-schema.js'
 import { IpcRegistry } from '../utils/ipc-registry.js'
 
@@ -39,10 +38,6 @@ function deviceInfoToHostEnv(d: NativeDeviceInfo): Partial<HostEnvSnapshot> {
 
 export function registerSimulatorIpc(ctx: Pick<WorkbenchContext, 'views' | 'notify' | 'senderPolicy' | 'simulatorApis' | 'bridge'>): Disposable {
   return new IpcRegistry(ctx.senderPolicy)
-    .handle(SimulatorChannel.Attach, (_, ...args: unknown[]) => {
-      const [simWcId, simWidth] = validate(SimulatorChannel.Attach, SimulatorAttachSchema, args)
-      ctx.views.attachSimulator(simWcId, simWidth)
-    })
     .handle(SimulatorChannel.AttachNative, (_, ...args: unknown[]) => {
       const [simulatorUrl, simWidth] = validate(SimulatorChannel.AttachNative, SimulatorAttachNativeSchema, args)
       ctx.views.attachNativeSimulator(simulatorUrl, simWidth)

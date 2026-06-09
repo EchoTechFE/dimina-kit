@@ -64,12 +64,6 @@ export const PopoverShowSchema = z.tuple([z.looseObject({})])
  */
 const SimWidth = z.number().int().min(100).max(2000)
 
-/** simulator:attach — webContents id (positive int) + simulator width. */
-export const SimulatorAttachSchema = z.tuple([
-  z.number().int().positive(),
-  SimWidth,
-])
-
 /**
  * simulator:attach-native (native-host only) — the simulator URL to load into
  * the top-level WebContentsView + simulator width. The URL is the dev-server

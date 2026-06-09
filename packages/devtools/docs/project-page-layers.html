@@ -317,8 +317,12 @@
   .dom-debug-region .rows i:nth-child(2) { width: 60%; }
   .dom-debug-region .rows i:nth-child(3) { width: 75%; }
 
-  /* L3 <webview> simulator guest WebContents (embedded in SimulatorPanel)
-     Covers the simulator panel's webview region on z2's surface.
+  /* L3 WebContentsView · simulator (native-host overlay; NOT a renderer <webview>)
+     The simulator is a TOP-LEVEL WebContentsView overlaid on the sim cell's
+     flex:1 region of z2 (its bounds are the placeholder rect published via
+     useViewAnchor → setNativeSimulatorViewBounds). It loads simulator.html →
+     DeviceShell, which draws the whole phone and hosts the per-page render-host
+     <webview> GUESTS nested INSIDE it (those guests are still live <webview>s).
      Sim column is the left ~44% of the mainweb content area (left=14, width≈322).
      webview-slot inset 38 32 24 32 → stack coords (14+32, 78+38) ≈ (46, 116),
      258 wide, phone-tall. */
@@ -330,7 +334,9 @@
     transform: translateZ(160px);
     background: var(--bg);
     border: 1.5px solid var(--bd);
-    border-radius: 12px;
+    /* The WCV is a RECTANGULAR flex region (straight edges, no phone rounding) —
+       inherits the base .layer 4px chrome radius, NOT a phone bezel. DeviceShell
+       draws the rounded phone (border-radius: 38px) INSIDE this WCV. */
     display: flex; align-items: center; justify-content: center;
   }
   .layer-webview .label { color: var(--color-text); }
@@ -584,7 +590,7 @@
 
         <div class="layer layer-webview" data-layer="webview">
           <div class="back-face"></div>
-          <span class="label">&lt;webview&gt;</span>
+          <span class="label">WebContentsView · simulator</span>
         </div>
 
         <div class="layer layer-devtools" data-layer="devtools">
@@ -626,7 +632,7 @@
       window:      { name: 'BrowserWindow',    z: 0 },
       contentview: { name: 'View',             z: 1, kind: 'container' },
       mainweb:     { name: 'WebContentsView',  z: 2, kind: 'main' },
-      webview:     { name: '<webview>',        z: 3, kind: 'guest' },
+      webview:     { name: 'WebContentsView',  z: 3, kind: 'simulator' },
       devtools:    { name: 'WebContentsView',  z: 4, kind: 'DevTools' },
       settings:    { name: 'WebContentsView',  z: 5, kind: 'settings', hidden: true },
       popover:     { name: 'WebContentsView',  z: 6, kind: 'popover',  hidden: true },
@@ -640,9 +646,12 @@
         { layer: 'contentview', children: [
           { layer: 'mainweb', children: [
             { dom: 'ProjectToolbar' },
-            { dom: 'SimulatorPanel', children: [{ layer: 'webview' }] },
+            { dom: 'SimulatorPanel · flex:1 placeholder (anchors the simulator overlay)' },
             { dom: 'MonacoEditor' },
             { dom: 'BottomDebugPanel · WXML / AppData / Storage / Console' },
+          ]},
+          { layer: 'webview', children: [
+            { dom: 'DeviceShell · render-host <webview> guests (the pages)' },
           ]},
           { layer: 'devtools' },
           { layer: 'settings' },

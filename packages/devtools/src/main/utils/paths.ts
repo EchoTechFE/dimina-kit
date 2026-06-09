@@ -31,11 +31,11 @@ export const defaultPreloadPath = path.join(devtoolsPackageRoot, 'dist/preload/w
 /**
  * Resolve the CommonJS sibling (`*.cjs`) of a simulator preload bundle.
  *
- * The default `<webview>` simulator path consumes the preload as a session
- * frame preload, where Electron always loads it as CommonJS. The native-host
- * simulator runs in a top-level WebContentsView whose `webPreferences.preload`
- * obeys the `.js` + `"type":"module"` ESM rule — so the `.js` bundle would fail
- * with `require is not defined`. We ship a byte-identical `.cjs` copy
+ * A `<webview>`/session-frame preload is always loaded as CommonJS by Electron.
+ * The native-host simulator (the sole runtime) instead runs in a top-level
+ * WebContentsView whose `webPreferences.preload` obeys the `.js` +
+ * `"type":"module"` ESM rule — so the `.js` bundle would fail with
+ * `require is not defined`. We ship a byte-identical `.cjs` copy
  * (build:preload emits both) and hand the WCV the `.cjs` sibling. If a host
  * supplies a custom `.js` preload, we swap the extension; an already-`.cjs`
  * path (or any non-`.js`) is returned unchanged.

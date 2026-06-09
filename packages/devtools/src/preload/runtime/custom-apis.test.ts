@@ -6,7 +6,7 @@ import { SimulatorCustomApiBridgeChannel } from '../../shared/ipc-channels.js'
 // is re-imported per test. electron must be mocked before any import (vi.mock
 // is hoisted).
 
-const sendToHost = vi.fn()
+const send = vi.fn()
 let responseHandler: ((event: unknown, payload: unknown) => void) | undefined
 
 vi.mock('electron', () => ({
@@ -21,7 +21,9 @@ vi.mock('electron', () => ({
     on: (channel: string, handler: (event: unknown, payload: unknown) => void) => {
       if (channel === SimulatorCustomApiBridgeChannel.Response) responseHandler = handler
     },
-    sendToHost: (...args: unknown[]) => sendToHost(...args),
+    // native-host is the sole runtime: the bridge sends Requests straight to
+    // ipcMain via `ipcRenderer.send` (no `<webview>` embedder to `sendToHost`).
+    send: (...args: unknown[]) => send(...args),
   },
 }))
 
@@ -29,7 +31,7 @@ interface ListRequest { id: number; op: string }
 
 /** Pull the requests sent so far on the bridge `Request` channel. */
 function sentRequests(): ListRequest[] {
-  return sendToHost.mock.calls
+  return send.mock.calls
     .filter(([channel]) => channel === SimulatorCustomApiBridgeChannel.Request)
     .map(([, req]) => req as ListRequest)
 }
@@ -47,17 +49,17 @@ async function loadBridge() {
 describe('custom-apis bridge — list() re-send', () => {
   beforeEach(() => {
     vi.useFakeTimers()
-    sendToHost.mockClear()
+    send.mockClear()
     responseHandler = undefined
   })
   afterEach(() => {
     vi.useRealTimers()
   })
 
-  it('re-sends list() when the first request lands before the host proxy attaches', async () => {
-    // The bug: the simulator fires list() before the embedding renderer has
-    // attached its `ipc-message` proxy listener, so the first `sendToHost`
-    // is dropped. Only a re-send reaches a late-attaching proxy.
+  it('re-sends list() when the first request lands before the host listener attaches', async () => {
+    // The bug: the simulator fires list() before the main-side `ipcMain.on`
+    // listener is live, so the first `ipcRenderer.send` is dropped. Only a
+    // re-send reaches a late-attaching listener.
     const bridge = await loadBridge()
     const result = bridge.list()
 
@@ -111,8 +113,8 @@ describe('custom-apis bridge — list() re-send', () => {
     const bridge = await loadBridge()
     void bridge.invoke('wx.login', { code: 1 })
 
-    const before = sendToHost.mock.calls.length
+    const before = send.mock.calls.length
     await vi.advanceTimersByTimeAsync(2000)
-    expect(sendToHost.mock.calls.length).toBe(before)
+    expect(send.mock.calls.length).toBe(before)
   })
 })

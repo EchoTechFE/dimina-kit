@@ -208,7 +208,7 @@ beforeEach(async () => {
 
 type SimulatorApiHandler = (params: unknown) => unknown | Promise<unknown>
 type SimulatorApiRegistry = import('../services/simulator/custom-apis.js').SimulatorApiRegistry
-type Disposable = import('../utils/disposable.js').Disposable
+type Disposable = import('@dimina-kit/electron-deck/main').Disposable
 type AppInstance = import('./app.js').WorkbenchAppInstance
 
 /** The extra method this suite asserts onto the instance. */

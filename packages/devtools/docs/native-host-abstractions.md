@@ -1,6 +1,6 @@
 # Native-host 修复的抽象层设计
 
-> 状态：**设计稿（待 codex 充分讨论 + 落地）**。本文为 native-host 成为唯一 runtime 后一次审计中确诊的 3 个真 bug + 1 个时序债的**架构级修复设计**。原则：从整体架构与抽象复用出发，不打散点补丁。所有 file:line 均已实读核验（commit 基线 `40077f88`）。
+> 状态：**已落地（codex 评审通过）**。native-host 已是唯一 runtime；本文记录该阶段一次审计中确诊的 3 个真 bug + 1 个时序债的**架构级修复**——抽象 ①②③④ 的核心改点均已实现并验证（详见各节「落地状态」与文末「Codex 评审结论」）。原则：从整体架构与抽象复用出发，不打散点补丁。所有 file:line 均已实读核验（commit 基线 `40077f88`）。
 
 ## 背景
 
@@ -74,16 +74,21 @@ custom simulator API（host 经 `workbench` 的 `onSetup`/`registerSimulatorApi`
 
 ### 根因
 
-simulator 文档内 `window.__diminaCustomApis`（`installCustomApisBridge` `src/preload/runtime/custom-apis.ts:133-135`）的 `list()/invoke()` 全走 `ipcRenderer.sendToHost(SimulatorCustomApiBridgeChannel.Request)`（`:68,114`），**依赖一个 host renderer 的 `useCustomApiProxy` 代理回 Response**（注释 `custom-apis.ts:26-32` 自陈）。该 proxy 监听**renderer `<webview>` 标签**的 `ipc-message`。但 native 下 simulator 是**顶层主进程 WebContentsView、无 embedder renderer**，主进程也**没有**任何 `SimulatorCustomApiBridgeChannel.Request` 的 listener（grep `src/main` 仅 console 在 `automation/index.ts:169` 裸挂 `ipc-message-host`）→ `list()` 撞 ceiling（`custom-apis.ts:121`）reject → `custom-api-boot.ts` 降级"无 custom API"。`resolveCustomApisBridge`（`src/simulator/resolve-custom-apis-bridge.ts:38`）无 native 分支。
+**（历史根因，现已修复——见下「设计」与落地状态）** 旧实现里 simulator 文档内 `window.__diminaCustomApis`（`installCustomApisBridge` `src/preload/runtime/custom-apis.ts`）的 `list()/invoke()` 走 `ipcRenderer.sendToHost(SimulatorCustomApiBridgeChannel.Request)`，**依赖一个 host renderer 的 `useCustomApiProxy` 代理回 Response**。该 proxy 监听 renderer `<webview>` 标签的 `ipc-message`。但 native 下 simulator 是**顶层主进程 WebContentsView、无 embedder renderer**，`sendToHost` 不会在它自己身上回弹成 `ipc-message-host`，主进程也没有 `Request` 的 listener → `list()` 撞 ceiling reject → 降级"无 custom API"。
+
+**现状（已落地）**：`custom-apis.ts` 改为直接 `ipcRenderer.send(SimulatorCustomApiBridgeChannel.Request)`，main 侧由 `attachNativeCustomApiBridge`（`view-manager.ts:922`）在 mount simulator 时装一个绑定该 simWc 的 `ipcMain.on` 派发器：按 `event.sender.id === simWcId` 精确网关，调 `ctx.simulatorApis` 注册表，再 `simWc.send(SimulatorCustomApiBridgeChannel.Response, …)` 回桥。`sendToHost`/renderer-proxy（`useCustomApiProxy`）那条路已删。
 
 ### 设计：统一的 WCV host-message 派发器，custom-api 作为一条 route
 
-观察：simulator WCV 的 `ipc-message-host` 信道上有**多条** host→main 流（console 抓取、custom-api Request、未来更多），现状是各自裸挂。架构修法 = 一个**单一 owner** 持有该 WCV 的 `ipc-message-host`，按 channel 分发：
+> ⚠️ 落地纠正：本节原方案是"给 simWc 装 `ipc-message-host` 单一 owner 按 channel 分发"——**不成立**：顶层 WebContentsView 无 embedder，preload 的 `sendToHost` 不触发它身上的 `ipc-message-host`（console 也因此另走 `guestConsole`/ConsoleForwarder）。详见文末「Codex 评审 → B-2 落地纠正」。下面记录的是**实际落地**的方案。
 
-- `console` → 转发给 automation（沿用现 `automation/index.ts` 行为）。
-- `SimulatorCustomApiBridgeChannel.Request` → 调同一注册表（`SimulatorCustomApiChannel.List/Invoke` 背后的 `ctx.simulatorApis`，`src/main/ipc/simulator.ts:77-81`）→ `simWc.send(SimulatorCustomApiBridgeChannel.Response, …)` 回桥。
+落地方案 = preload 改 `ipcRenderer.send`、main 用 `ipcMain.on` 精确网关：
 
-落点：`view-manager.attachNativeSimulator`（`view-manager.ts:526+` 拿到 `simWc` 处）注册该派发器——它是 native simulator mount 时**必然**装上的、与 simulator 同生命周期，优于"automation WS 连上才装"。然后**删除孤儿** renderer proxy：`use-custom-api-proxy.ts`（native 下 `simulatorRef` 永不绑定、必空转 50 次）+ `use-project-runtime-controller.ts` 的接线 + 更新 `sender-policy` 注释。
+- preload：`custom-apis.ts` 用 `ipcRenderer.send(SimulatorCustomApiBridgeChannel.Request)`，Response 落在 `ipcRenderer.on(Response)`、按 id 关联。
+- main：`view-manager.attachNativeCustomApiBridge`（`view-manager.ts:922`，由 `attachNativeSimulator` 在拿到 `simWc` 后调用）装一个 `ipcMain.on(Request)` 派发器——按 `event.sender.id === simWcId` 精确网关，调同一注册表（`SimulatorCustomApiChannel.List/Invoke` 背后的 `ctx.simulatorApis`，`src/main/ipc/simulator.ts:79-85`）→ `simWc.send(Response, …)` 回桥。它与 simulator 同生命周期，`detachSimulator` / 重 attach 时由 `detachNativeCustomApiBridge` 摘除（经 connection 层 `own()` 兜底）。
+- console 不并入此派发器：native 下 render/service-host preload 把 `console.*` 打成 `consoleLog` **container 消息**（`DiminaRenderBridge.invoke({type:'consoleLog',target:'container'})`，`render-host/preload.cjs` / `service-host/preload.cjs`）直达 main → bridge-router → `ctx.guestConsole`，由 `services/console-forward/index.ts` 的 ConsoleForwarder 独占该 sink 并扇出（render→service 转发 + automation 订阅）。**不走 `ipc-message-host`**——顶层 WCV 无 embedder，`sendToHost` 不在其身上回弹（见文末纠正）。custom-api 与 console 因此是两条独立路径，避免双路广播。
+
+孤儿 renderer proxy（`use-custom-api-proxy.ts` + `use-project-runtime-controller.ts` 接线）已删，`sender-policy` 注释已更新。
 
 **顺序铁律**：先加 main-side 派发器（custom API 接通）→ 再删 renderer proxy。反序会让中间态 custom API 彻底断。
 
