@@ -23,6 +23,8 @@ import {
   type CustomApiBridgeRequest,
 } from '../simulator/custom-apis.js'
 import { getDefaultTab, type WorkbenchContext } from '../workbench-context.js'
+import { configureMiniappSession, miniappPartition } from './miniapp-partition.js'
+import { parseRoute } from '../../../shared/simulator-route.js'
 
 /**
  * Context surface used by the ViewManager. We only need a small slice of the
@@ -985,12 +987,23 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       nativeSimulatorView = null
     }
 
+    // Derive THIS project's session partition from the simulator URL's appId so
+    // its cookies/localStorage/cache are isolated from every other project (P0
+    // debt). Same project → same partition (storage survives a relaunch);
+    // unknown appId → the shared fallback. Configure the partition's session
+    // (protocol handlers + CORS/referer policy) before any project content loads
+    // on it — idempotent per partition.
+    const route = parseRoute(simulatorUrl)
+    const partition = miniappPartition(route?.appId)
+    configureMiniappSession(partition)
+
     // The simulator preload is a CJS bundle; webPreferences.preload obeys the
     // `.js` + "type":"module" ESM rule (require would be undefined), so hand the
     // top-level WebContentsView the `.cjs` sibling. contextIsolation:false +
     // sandbox:false + webviewTag:true mirror what the default `<webview>` guest
-    // runs with, and `partition:'persist:simulator'` shares storage + the
-    // session-registered preload/CORS rules with the rest of the simulator.
+    // runs with, and the per-project `persist:miniapp-<key>` partition shares
+    // storage + the session-registered preload/CORS rules with the rest of THIS
+    // project's simulator (render guests + service host), never other projects'.
     const view = new WebContentsView({
       webPreferences: {
         nodeIntegration: false,
@@ -998,7 +1011,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
         sandbox: false,
         webviewTag: true,
         preload: cjsSiblingPreloadPath(ctx.preloadPath),
-        partition: 'persist:simulator',
+        partition,
       },
     })
     nativeSimulatorView = view
@@ -1015,13 +1028,14 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     attachNativeCustomApiBridge(simWc)
 
     // DeviceShell mounts per-page render-host `<webview>`s INSIDE this view.
-    // Mirror windows/main-window/create.ts: pin them onto persist:simulator and
-    // run them with contextIsolation/sandbox off so the render runtime + its
-    // preload share the page realm. (A top-level WebContentsView can host these
-    // guests; a `<webview>` guest cannot — that's the whole point of Option A.)
+    // Pin them onto the SAME per-project partition as their host WCV (so render
+    // and the rest of this project share one localStorage/cookie jar) and run
+    // them with contextIsolation/sandbox off so the render runtime + its preload
+    // share the page realm. (A top-level WebContentsView can host these guests; a
+    // `<webview>` guest cannot — that's the whole point of Option A.)
     simWc.on('will-attach-webview', (_event, webPreferences, params) => {
-      ;(webPreferences as Electron.WebPreferences).partition = 'persist:simulator'
-      params.partition = 'persist:simulator'
+      ;(webPreferences as Electron.WebPreferences).partition = partition
+      params.partition = partition
       webPreferences.contextIsolation = false
       ;(webPreferences as Electron.WebPreferences).sandbox = false
     })

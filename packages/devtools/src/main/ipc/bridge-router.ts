@@ -44,6 +44,10 @@ import {
   serviceHostSpec,
 } from '../windows/service-host-window/create.js'
 import { ServiceHostPool } from '../services/service-host-pool/pool.js'
+import {
+  registerMiniappSessionConfigurator,
+  SHARED_MINIAPP_PARTITION,
+} from '../services/views/miniapp-partition.js'
 import { createConsoleForwarder } from '../services/console-forward/index.js'
 import { STORAGE_API_NAMES } from '../services/simulator-storage/index.js'
 
@@ -1580,14 +1584,30 @@ function installResourceProtocolHandlers(ctx: WorkbenchContext, state: RouterSta
     return fetch(target)
   }
 
-  const simulatorSession = electronSession.fromPartition('persist:simulator')
+  const simulatorSession = electronSession.fromPartition(SHARED_MINIAPP_PARTITION)
   try { protocol.unhandle('dmb-resource') } catch {}
   try { simulatorSession.protocol.unhandle('dmb-resource') } catch {}
   protocol.handle('dmb-resource', handler)
   simulatorSession.protocol.handle('dmb-resource', handler)
+
+  // Per-project partition sessions need the SAME resource handler so each
+  // project's render/service can load `dmb-resource://…`. Install on every
+  // miniapp partition (current + future); track installed sessions for teardown.
+  const perProjectSessions = new Set<Electron.Session>()
+  const unregisterConfigurator = registerMiniappSessionConfigurator((sess) => {
+    if (perProjectSessions.has(sess)) return
+    perProjectSessions.add(sess)
+    try { sess.protocol.unhandle('dmb-resource') } catch {}
+    sess.protocol.handle('dmb-resource', handler)
+  })
+
   ctx.registry.add(() => {
+    unregisterConfigurator()
     try { protocol.unhandle('dmb-resource') } catch {}
     try { simulatorSession.protocol.unhandle('dmb-resource') } catch {}
+    for (const sess of perProjectSessions) {
+      try { sess.protocol.unhandle('dmb-resource') } catch {}
+    }
   })
 }
 

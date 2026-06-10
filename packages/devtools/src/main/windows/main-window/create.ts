@@ -1,9 +1,13 @@
-import { app, BrowserWindow, View, WebContentsView, session } from 'electron'
+import { app, BrowserWindow, View, WebContentsView, session, type Session } from 'electron'
 import path from 'path'
 import { getSimulatorServicewechatReferer } from '../../services/simulator/referer.js'
 import { mainPreloadPath } from '../../utils/paths.js'
 import { themeBg } from '../../utils/theme.js'
 import { applyNavigationHardening } from '../navigation-hardening.js'
+import {
+  registerMiniappSessionConfigurator,
+  SHARED_MINIAPP_PARTITION,
+} from '../../services/views/miniapp-partition.js'
 
 export interface WindowOptions {
   title?: string
@@ -16,12 +20,10 @@ export interface WindowOptions {
 
 let simulatorSessionConfigured = false
 
-function configureSimulatorSession(): void {
-  if (simulatorSessionConfigured) return
-  simulatorSessionConfigured = true
-
-  const simulatorSession = session.fromPartition('persist:simulator')
-
+/** Apply the simulator runtime's referer + CORS webRequest policy to one
+ * session. Each session installs its own listeners (a webRequest listener is
+ * per-session), so this runs once per partition. */
+function applySimulatorWebRequestPolicy(simulatorSession: Session): void {
   simulatorSession.webRequest.onBeforeSendHeaders((details, callback) => {
     const forcedReferer = getSimulatorServicewechatReferer()
     if (forcedReferer) {
@@ -39,6 +41,22 @@ function configureSimulatorSession(): void {
     headers['access-control-allow-headers'] = ['*']
     headers['access-control-allow-methods'] = ['*']
     callback({ responseHeaders: headers })
+  })
+}
+
+function configureSimulatorSession(): void {
+  if (simulatorSessionConfigured) return
+  simulatorSessionConfigured = true
+
+  // Shared fallback session (pre-warm pool + unknown-appId path).
+  applySimulatorWebRequestPolicy(session.fromPartition(SHARED_MINIAPP_PARTITION))
+  // Every per-project miniapp partition session (current + future) gets the
+  // same referer/CORS policy so isolated projects load resources identically.
+  const configured = new Set<Session>()
+  registerMiniappSessionConfigurator((sess) => {
+    if (configured.has(sess)) return
+    configured.add(sess)
+    applySimulatorWebRequestPolicy(sess)
   })
 }
 
