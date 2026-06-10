@@ -35,6 +35,8 @@ import { setupSimulatorAppData } from '../services/simulator-appdata/index.js'
 import { setupSimulatorCurrentPage } from '../services/simulator-current-page/index.js'
 import { createRenderInspector } from '../services/render-inspect/index.js'
 import { setupSimulatorTempFiles } from '../services/simulator-temp-files/index.js'
+import { SHARED_MINIAPP_PARTITION } from '../services/views/miniapp-partition.js'
+import { setupSimulatorSessionPolicy } from '../services/views/simulator-session-policy.js'
 import { UpdateManager } from '../services/update/index.js'
 import { toDisposable, type Disposable } from '@dimina-kit/electron-deck/main'
 import { IpcRegistry } from '../utils/ipc-registry.js'
@@ -364,6 +366,11 @@ export async function createDevtoolsRuntime(config: WorkbenchAppConfig = {}): Pr
   context.registry.add(registerAppIpc(context))
   // Sandboxed project file-system IPC for the in-renderer Monaco editor.
   context.registry.add(registerProjectFsIpc(context))
+  // Referer/CORS webRequest policy for the simulator runtime's sessions (shared
+  // fallback + every per-project partition). Registered into the context
+  // registry so its configurator + per-session listeners are torn down with the
+  // context — re-creating the app never leaks a duplicate configurator.
+  context.registry.add(setupSimulatorSessionPolicy())
   // One process-wide listener that re-syncs every window's native
   // backgroundColor on theme change — windows otherwise keep the stale
   // creation-time color (see installThemeBackgroundSync).
@@ -375,7 +382,7 @@ export async function createDevtoolsRuntime(config: WorkbenchAppConfig = {}): Pr
   // protocol live. The module installs its own narrow sender-policy
   // (simulator-session-only) — see file header — because the default
   // workbench policy intentionally rejects the simulator <webview>.
-  const simSession = session.fromPartition('persist:simulator')
+  const simSession = session.fromPartition(SHARED_MINIAPP_PARTITION)
   context.registry.add(setupSimulatorTempFiles(simSession))
 
   installMenu(config, mainWindow, context)

@@ -1,13 +1,8 @@
-import { app, BrowserWindow, View, WebContentsView, session, type Session } from 'electron'
+import { app, BrowserWindow, View, WebContentsView } from 'electron'
 import path from 'path'
-import { getSimulatorServicewechatReferer } from '../../services/simulator/referer.js'
 import { mainPreloadPath } from '../../utils/paths.js'
 import { themeBg } from '../../utils/theme.js'
 import { applyNavigationHardening } from '../navigation-hardening.js'
-import {
-  registerMiniappSessionConfigurator,
-  SHARED_MINIAPP_PARTITION,
-} from '../../services/views/miniapp-partition.js'
 
 export interface WindowOptions {
   title?: string
@@ -18,51 +13,7 @@ export interface WindowOptions {
   indexHtml: string
 }
 
-let simulatorSessionConfigured = false
-
-/** Apply the simulator runtime's referer + CORS webRequest policy to one
- * session. Each session installs its own listeners (a webRequest listener is
- * per-session), so this runs once per partition. */
-function applySimulatorWebRequestPolicy(simulatorSession: Session): void {
-  simulatorSession.webRequest.onBeforeSendHeaders((details, callback) => {
-    const forcedReferer = getSimulatorServicewechatReferer()
-    if (forcedReferer) {
-      details.requestHeaders['Referer'] = forcedReferer
-    }
-    callback({ requestHeaders: details.requestHeaders })
-  })
-
-  simulatorSession.webRequest.onHeadersReceived((details, callback) => {
-    const headers = details.responseHeaders ?? {}
-    // CORS for the native render/service hosts to fetch compiled app resources
-    // cross-origin. (The COOP/COEP cross-origin-isolation headers were only for
-    // the removed default-path SharedArrayBuffer sync Worker — dropped.)
-    headers['access-control-allow-origin'] = ['*']
-    headers['access-control-allow-headers'] = ['*']
-    headers['access-control-allow-methods'] = ['*']
-    callback({ responseHeaders: headers })
-  })
-}
-
-function configureSimulatorSession(): void {
-  if (simulatorSessionConfigured) return
-  simulatorSessionConfigured = true
-
-  // Shared fallback session (pre-warm pool + unknown-appId path).
-  applySimulatorWebRequestPolicy(session.fromPartition(SHARED_MINIAPP_PARTITION))
-  // Every per-project miniapp partition session (current + future) gets the
-  // same referer/CORS policy so isolated projects load resources identically.
-  const configured = new Set<Session>()
-  registerMiniappSessionConfigurator((sess) => {
-    if (configured.has(sess)) return
-    configured.add(sess)
-    applySimulatorWebRequestPolicy(sess)
-  })
-}
-
 export function createMainWindow(opts: WindowOptions): BrowserWindow {
-  configureSimulatorSession()
-
   const mainWindow = new BrowserWindow({
     width: opts.width ?? 1280,
     height: opts.height ?? 980,
