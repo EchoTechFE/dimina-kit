@@ -135,8 +135,17 @@ jobs:
         id: container-cache
         uses: actions/cache@v5
         with:
-          path: packages/devkit/fe/dimina-fe-container
-          key: dimina-container-${{ runner.os }}-${{ steps.dimina.outputs.sha }}-${{ hashFiles('packages/devtools/build-container.js', 'packages/devtools/vite.config.api.js', 'packages/devtools/container-runtime.js', 'packages/devtools/src/simulator/service-apis/**') }}
+          # Must cover EVERY dimina/fe artifact consumed downstream: build-container.js
+          # skips the whole dimina/fe build on a fingerprint hit (isFreshBuild), and
+          # packages/devtools/build-native-host.mjs copies service/render/common dist +
+          # container pageFrame.css out of the submodule during `pnpm run build`.
+          path: |
+            packages/devkit/fe/dimina-fe-container
+            dimina/fe/packages/service/dist
+            dimina/fe/packages/render/dist
+            dimina/fe/packages/common/dist
+            dimina/fe/packages/container/dist
+          key: dimina-container-v2-${{ runner.os }}-${{ steps.dimina.outputs.sha }}-${{ hashFiles('packages/devtools/build-container.js', 'packages/devtools/vite.config.api.js', 'packages/devtools/container-runtime.js', 'packages/devtools/src/simulator/service-apis/**') }}
 
       - name: Install workspace deps
         run: pnpm install --frozen-lockfile --prefer-offline
@@ -286,8 +295,17 @@ jobs:
         id: container-cache
         uses: actions/cache@v5
         with:
-          path: packages/devkit/fe/dimina-fe-container
-          key: dimina-container-${{ runner.os }}-${{ steps.dimina.outputs.sha }}-${{ hashFiles('packages/devtools/build-container.js', 'packages/devtools/vite.config.api.js', 'packages/devtools/container-runtime.js', 'packages/devtools/src/simulator/service-apis/**') }}
+          # Must cover EVERY dimina/fe artifact consumed downstream: build-container.js
+          # skips the whole dimina/fe build on a fingerprint hit (isFreshBuild), and
+          # packages/devtools/build-native-host.mjs copies service/render/common dist +
+          # container pageFrame.css out of the submodule during `pnpm run build`.
+          path: |
+            packages/devkit/fe/dimina-fe-container
+            dimina/fe/packages/service/dist
+            dimina/fe/packages/render/dist
+            dimina/fe/packages/common/dist
+            dimina/fe/packages/container/dist
+          key: dimina-container-v2-${{ runner.os }}-${{ steps.dimina.outputs.sha }}-${{ hashFiles('packages/devtools/build-container.js', 'packages/devtools/vite.config.api.js', 'packages/devtools/container-runtime.js', 'packages/devtools/src/simulator/service-apis/**') }}
 
       - name: Install workspace deps
         run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
