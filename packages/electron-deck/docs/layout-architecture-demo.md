@@ -26,7 +26,7 @@ import { electronDeck } from '@dimina-kit/electron-deck'
 // Compositor 的 z 分层：低在下、高在上
 const Z = { CONTENT: 0, PANEL: 10, OVERLAY: 100 }
 
-electronDeck({}, {
+electronDeck({
   backend: {
     async assemble(runtime) {
       // ── 1. 主窗口 = control-layer renderer + 寿命 Scope + Compositor

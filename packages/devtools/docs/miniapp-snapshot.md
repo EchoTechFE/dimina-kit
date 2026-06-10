@@ -2,7 +2,7 @@
 
 > devtools 面板数据的统一**快照**框架。
 >
-> 配套：[`workbench-model.md`](./workbench-model.md) 描述 host 的扩展模型（`workbench(config)` 单入口）；本文描述面板数据的统一快照框架。
+> 配套：[`workbench-model.md`](./workbench-model.md) 描述 host 的扩展模型（`launch(config)` 单入口）；本文描述面板数据的统一快照框架。
 
 ## 摘要（TL;DR）
 
@@ -374,4 +374,4 @@ const nativeAppData = useNativeChannelSnapshot<AppDataSnapshot>({
 | `src/renderer/modules/main/features/project-runtime/controllers/use-panel-data.ts` | 装配 WXML / AppData / Storage 三个面板的数据：WXML / AppData 经 `useNativeChannelSnapshot` 走 `SimulatorWxmlChannel` / `SimulatorAppDataChannel` |
 | `src/shared/ipc-channels.ts` | `MiniappSnapshotChannel`（`miniapp-snapshot:push` / `miniapp-snapshot:pull`，供 composed preload 数据源使用）+ `SimulatorWxmlChannel` / `SimulatorAppDataChannel`（native-host 默认数据通道） |
 
-> 面板数据的 host 扩展模型（`workbench(config)` 单入口）见 [`workbench-model.md`](./workbench-model.md)。
+> 面板数据的 host 扩展模型（`launch(config)` 单入口）见 [`workbench-model.md`](./workbench-model.md)。

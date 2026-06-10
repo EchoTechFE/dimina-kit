@@ -138,7 +138,7 @@ zone 的某相对位置）与**应用**（`commit()` 算出把 host 当前子序
   在 `compositor.ts:203` + `keyBefore` `compositor.ts:152`；LIS commit 在 `compositor.ts:236`）。
   host 观察到的 Electron z 语义（spike 实证）记在 `compositor.ts:10-17` 的头注释。
 
-### 2.4 ControlBus —— IPC + trust 薄 facade（✅ primitive 已建；capability/grant 闸**未建**，见 §2.4 硬约束 + §5.2 契约 D）
+### 2.4 ControlBus —— IPC + trust 薄 facade（✅ 已建；capability/grant 闸**已建** 于 `capability.ts`，含导航撤权 C3）
 **职责**：三个动词的薄门面，**自己不加任何新 gating**：
 - `command(name, handler)`：webview → main 的 RPC。门面持唯一命令表，`dispatch(name, args)` 被真
   `WireTransport` 的 `invokeHost`/`invokeSimulator` seam 调到（在 wire 的 sender + main-frame
@@ -171,7 +171,7 @@ host service 也注册进**同一张表**（一个命名空间，永不两张会
   gate 在 `wire-transport.ts:210-245`）。trust 原语 `src/internal/trust-set.ts`（refcount
   `add`/`isTrusted`/`snapshot` 在 `trust-set.ts:46`）。
 
-### 2.5 ViewHandle —— 薄 per-view 编排（📐 设计完成，待建）
+### 2.5 ViewHandle —— 薄 per-view 编排（✅ 已建）
 **职责**：把上面四个原语缝成「一块 view」的最小编排单元。它**持有**：原生 view 句柄、一个
 scope-lease（绑哪个寿命）、一个 compositor token（在哪个窗口的 z 栈里）。
 
@@ -181,8 +181,10 @@ scope-lease（绑哪个寿命）、一个 compositor token（在哪个窗口的 
 - **不持全局树**——它只知道自己这一块，跨窗口/全局编排在 runtime。
 - **不直碰 contentView**——所有 `addChildView`/`removeChildView` 经 Compositor。
 
-API 形态（见第 4 节）：`runtime.view(...)` → `ViewHandle`，带 `placeIn(window, {zone, anchor})`
-/ `moveTo(window, ...)` / `dispose()`。
+API 形态（见第 4 节）：`runtime.view(...)` → `DeckViewHandle`，带 `placeIn(window, {zone, anchor})`
+/ `applyPlacement({visible, bounds})` / `moveTo(window, {rehome})` / `dispose()`，并暴露只读访问器
+`webContents` / `bounds()` / `capturePage()`（host 取原生 view 无需 diff `contentView.children`）。
+`placeIn`/`moveTo` 的 window 参数接受 `DeckWindow` 或裸 `BrowserWindow`。
 
 ---
 
@@ -199,65 +201,68 @@ API 形态（见第 4 节）：`runtime.view(...)` → `ViewHandle`，带 `place
 
 ---
 
-## 4. host-facing API + 最简 devtools 调用示例
+## 4. host-facing API + 最简 devtools 调用示例（Window facade，✅ 已建）
 
-> 完整版见 `docs/layout-architecture-demo.md`。这里给精炼骨架，呼应第 2/3 节的原语与决定。
+> 完整可跑版见 `examples/layout-demo/`（真机离屏自证）。这里给精炼骨架，呼应第 2/3 节的原语与决定。
+> `runtime.windows.create()` / `runtime.windows.main` 返回 **`DeckWindow`** 句柄
+> `{ window, controlWc, newSession(), onClose() }`——把寿命树/compositor/trust 接线吸收进框架，
+> host 不碰裸 primitive。`newSession()` 铸 **window-rooted** `DeckSession`（窗口寿命 > session 寿命，
+> 决定 A/4），`runtime.view({ scope })` 只接受它（provenance 校验，裸 Scope 被拒）。
 
 ```ts
 import { electronDeck } from '@dimina-kit/electron-deck'
 
 const Z = { CONTENT: 0, PANEL: 10, OVERLAY: 100 }   // Compositor z 分层
 
-electronDeck({}, {
+electronDeck({
+  app: { source: { url: 'app://project-shell' } },   // 框架建 + 自动加载主窗口
   backend: {
     async assemble(runtime) {
-      // 窗口 = 寿命 Scope + z 栈 Compositor + control-layer renderer(DOM 分栏)
-      const main = runtime.windows.create({ control: { url: 'app://project-shell' } })
+      const main = runtime.windows.main               // DeckWindow（框架建的主窗口）
 
       let session = null
       function openProject(path) {
-        session = main.scope.child()                       // 关项目只 reset 它，窗口活着 (决定 A/4)
+        session = main.newSession()                    // window-rooted session：关项目只 reset 它，窗口活着
 
         runtime.view({ source: simulatorSource(path), scope: session })
-               .placeIn(main, { zone: Z.CONTENT, anchor: '#simulator' })   // view-anchor 缝几何
+               .placeIn(main, { zone: Z.CONTENT, anchor: '#simulator' })   // view-anchor 缝几何（接受 DeckWindow）
         runtime.view({ source: { devtoolsFor: '#simulator' }, scope: session })
                .placeIn(main, { zone: Z.PANEL, anchor: '#devtools' })
       }
 
-      main.onClose(async () => {                            // 需求 A：close 退回 main
+      main.onClose(async () => {                       // 需求 A：close 退回 main（per-window 可取消决策）
         if (session) {
-          await session.reset()                            // 完成栅栏：资源真拆完才继续
-          main.bus.event('navigate').publish('project-list')
+          await session.reset()                        // 完成栅栏：资源真拆完才继续
           session = null
-          return 'keep'                                    // 留住窗口
+          return 'keep'                                // 留住窗口（host 自己发 navigate 事件回 project-list）
         }
         return 'close'
       })
 
-      function showOverlay(src, rect) {                     // 需求 C：浮在原生之上 = 顶层 zone
-        return runtime.view({ source: src, scope: main.scope })
+      function showOverlay(src, rect) {                // 需求 C：浮在原生之上 = 顶层 zone
+        return runtime.view({ source: src, scope: main.newSession() })
                       .placeIn(main, { zone: Z.OVERLAY, anchorRect: rect })
       }
 
-      function popout(view, win) {                          // 决定 5：live-migrate
-        view.moveTo(win, { zone: Z.PANEL, anchor: '#devtools', rehomeTo: win.scope })
-      }                                                     // rehomeTo 才迁寿命 (决定 4)
-
-      runtime.grants.issue(main.controlWc, {                // 需求 B：授权 control 层自助布局
-        scope: main.scope,
-        commands: ['layout.resize', 'layout.reorder', 'layout.popout', 'layout.overlay'],
+      runtime.grants.issue(main.controlWc, {           // 需求 B：授权 control 层自助布局
+        targetScope: session ?? undefined,             // 可选：把授权边界绑到某个 session
+        commands: ['layout.resize', 'layout.reorder', 'layout.overlay'],
       })
     },
   },
 })
 ```
 
+> **安全（C3）**：控制 wc 做主帧跨文档导航时，框架**同步撤销**它的 grant + slot token
+> （`did-start-navigation` → `capability.revokeBySenderId`），新文档不会继承旧页面的 `layout.*` 特权；
+> trust 保留（仍是控制面）。`autoTrust:false` 后经 `windows.trust()` 晚信任的窗口同样受保护。
+
 控制层 renderer 只画 DOM 分栏 + 原生 view 的占位「洞」，经 IPC client 发布局意图：
 
 ```tsx
-const deck = await createDeckLayoutClient()   // 自动拿主进程下发的 grant
+const deck = createDeckLayoutClient({ bridge: window.__electronDeckLayoutBridge })
 // <div id="simulator"/> / <div id="devtools"/> 是占位洞，原生 view 由主进程盖上来
-// deck.resize('#simulator', rect) / deck.popout('view:devtools') / deck.overlay(...)
+// view-anchor 在 client 内 ResizeObserver 重测 → 原生块跟随，host 写 0 行 resize 代码
 ```
 
 ---
@@ -279,18 +284,22 @@ const deck = await createDeckLayoutClient()   // 自动拿主进程下发的 gra
 | **Layout/Placement**（view-anchor，显式 `Placement{visible}`） | ✅ 已建（有测试） | 跟随硬化（契约 B：scroll/transform/display:none/首帧/终止 detach）、ViewHandle 持 anchor 的更新·dispose 归属、slotToken 原子下发 | `packages/view-anchor/src/` |
 | **Compositor**（per-window z，fractional indexing + LIS commit） | ✅ 已建（有测试） | 事务化 `commit` + per-window teardown 顺序（契约 C） | `src/main/compositor.ts` |
 | **ControlBus**（IPC + trust 薄 facade，真接 WireTransport） | ✅ 已建（有测试） | capability/grant 闸（契约 D；ControlBus 自身只有 trust 闸，**授权层未建**）、senderId 横切 | `src/host/control-bus.ts` + `src/internal/wire-transport.ts` + `src/internal/trust-set.ts` |
-| **ViewHandle**（薄 per-view 编排） | 📐 设计完成，**未建** | 整壳待建 | — |
-| **capability / grants**（授权层 = grant 闸 + senderId 横切 + per-wc Scope） | 📐 **未建** | 契约 D 全部 | — |
-| **layout client**（`createDeckLayoutClient` + `deck.resize/popout/overlay`） | 📐 **未建** | 整壳待建 | — |
+| **ViewHandle / `runtime.view`**（薄 per-view 编排 + `placeIn/applyPlacement/moveTo` + `bounds()/capturePage()/webContents`） | ✅ 已建（有测试） | compositor escape hatch（reorder/commit/batch 暴露给 host）未做（无消费者） | `src/main/view-handle.ts` + `src/internal/deck-app.ts` |
+| **capability / grants**（授权层 = grant 闸 + senderId 横切 + per-wc Scope + 导航撤权 C3） | ✅ 已建（有测试） | — | `src/host/capability.ts` + `src/internal/deck-app.ts` |
+| **layout client**（`createDeckLayoutClient({bridge})` + slot-token place/subscribe） | ✅ 已建（有测试） | `deck.resize/popout/overlay` 高层糖未做 | `src/client/layout-client.ts` + `src/preload/` |
+| **Window facade**（`runtime.windows.create()/.main` → `DeckWindow{window,controlWc,newSession(),onClose()}`） | ✅ 已建（有测试 + demo 真机自证） | create/adopt 注册未抽成单一 `registerWindow`（两路一致 + parity 测试 pin，漂移会被测出） | `src/internal/deck-app.ts` |
 
-> 一句话收窄：**底层 4 primitive 已闭合（建好+有测试）；上层 host-facing 壳（ViewHandle /
-> runtime.view / grants / layout client）+ 横切契约（B 跟随硬化 / C commit 事务 / D capability /
-> 统一寿命）尚未闭合**。当前能用的是「裸 primitive」，不是「拼好的布局/授权系统」。
+> 一句话收窄：**底层 4 primitive + 上层 host-facing 壳（ViewHandle / runtime.view / grants /
+> layout client / Window facade）均已建好+有测试，demo 真机端到端自证**。剩余开口仅是「便利糖」
+> 级（compositor escape hatch、`deck.*` 高层方法、create/adopt 单函数化），无生产阻塞。
 
-### 5.2 待闭合契约（open）
+### 5.2 横切契约（多数已闭合）
 
-以下是已识别、设计上已收敛但仍需在实现 ViewHandle / 编排层时正式闭合的横切契约，链到 B/C/D
-三份契约文档（待补；当前为占位，实现该壳时落地）：
+> 更新：下列 B/C/D 三份横切契约在 ViewHandle / capability / Window facade 落地过程中**多已闭合**——
+> 契约 B（view-anchor 跟随硬化：scroll/transform/display:none/首帧守卫/终止 detach）已建于
+> `view-anchor.ts`（opt-in `followScroll`/`followGeometry`/`guardDisplayNone`）；契约 C（Compositor
+> 事务化 `commit` + teardown 顺序）已建于 `compositor.ts`（`CommitError` + LIFO + rootScope 级联）；
+> 契约 D（capability + senderId + 导航撤权）已建于 `capability.ts` + `deck-app.ts`。以下保留为设计记录：
 
 - **契约 B —— view-anchor 跟随硬化**：在 splitter 高频拖动、zoom 变化、target 滚出可视区
   （x/y 允许负）等边界下，原生 view 跟随的确定性与去抖（dedup）保证。当前正向核心已落到

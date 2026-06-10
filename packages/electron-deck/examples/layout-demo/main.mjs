@@ -1,10 +1,24 @@
 // electron-deck layout demo — REAL user-side API, end-to-end, offscreen.
 //
-// This drives the ACTUAL framework entry `startElectronDeck(config, { backend })`
+// This drives the ACTUAL framework entry `startElectronDeck({ ...config, backend })`
 // (synchronous `{ ready, dispose }` handle — no deadlock glue) and the REAL
 // `runtime.view({ source, scope }).placeIn(win, { anchor })` slot-token path. The
 // renderer (control.html) runs the REAL `createDeckLayoutClient({ bridge })` with
 // the turnkey `window.__electronDeckLayoutBridge` from `exposeDeckLayoutBridge()`.
+//
+// Window facade: the demo is NOT ownsWindows, so the framework builds the main
+// window and exposes it as a `DeckWindow` via `runtime.windows.main`. The demo
+// uses that facade end-to-end instead of hand-wiring primitives:
+//   • `main.window`      — the raw BrowserWindow (offscreen showInactive, paint
+//                          wait, capturePage host).
+//   • `main.newSession()`— mints a window-rooted DeckSession for the project
+//                          (replaces runtime.scopes.create()).
+//   • `main.controlWc`   — the main control-layer wc; grants are issued to it
+//                          (replaces e.sender).
+//   • `main.onClose(...)`— per-window close arbitration: closing with an active
+//                          project RESETS the session and KEEPS the window;
+//                          closing with no project closes it (window-lifetime >
+//                          session-lifetime).
 //
 // What it proves:
 //   • A project list → click → devtools-like split layout (left #simulator,
@@ -59,22 +73,35 @@ ipcMain.on('demo:composite-result', (_e, reqId, dataUrl) => {
   if (res) { compositeWaiters.delete(reqId); res(dataUrl) }
 })
 
-// Track the native views we placed so the compositor snapshot can blit them in
-// z-order at their CURRENT bounds. The framework's DeckViewHandle does NOT
-// expose the underlying WebContentsView, so we hold our own ref to each native
-// view (see DEMO GLUE in assemble()).
-const placedBlocks = [] // { wcv, label, zone }
+// Track the DeckViewHandles we placed so the compositor snapshot can blit each
+// native view in z-order at its CURRENT bounds. The handle exposes
+// `bounds()` / `capturePage()` / `webContents` directly — no contentView diffing.
+const placedBlocks = [] // { handle, label, zone }
+
+// Offscreen capturePage() of native WebContentsViews is finicky — the Viz
+// compositor can transiently fail to produce a frame ("UnknownVizError") right
+// after a layout change. Retry a few times with a short settle so the demo's
+// screenshot proof is robust (this is a harness concern, not a framework one).
+async function captureRetry(capturer, label, tries = 5) {
+  let lastErr
+  for (let i = 0; i < tries; i++) {
+    try { return await capturer() }
+    catch (e) { lastErr = e; await sleep(300) }
+  }
+  log(`capture failed after ${tries} tries (${label}): ${String(lastErr)}`)
+  throw lastErr
+}
 
 async function shot(win, name) {
-  const hostImg = await win.webContents.capturePage()
+  const hostImg = await captureRetry(() => win.webContents.capturePage(), 'host')
   // z-order = ascending zone (matches the compositor's (zone, …) total order).
   const ordered = [...placedBlocks].sort((a, b) => a.zone - b.zone)
   const blocks = []
   for (const blk of ordered) {
-    if (blk.wcv.webContents.isDestroyed()) continue
-    const b = blk.wcv.getBounds()
-    if (b.width === 0 || b.height === 0) continue // hidden placement
-    const png = (await blk.wcv.webContents.capturePage()).toDataURL()
+    if (blk.handle.webContents.isDestroyed()) continue
+    const b = blk.handle.bounds()
+    if (!b || b.width === 0 || b.height === 0) continue // hidden / not placed
+    const png = (await captureRetry(() => blk.handle.capturePage(), blk.label)).toDataURL()
     blocks.push({ png, x: b.x, y: b.y, width: b.width, height: b.height, label: blk.label })
   }
   const reqId = ++compositeReq
@@ -90,13 +117,15 @@ mkdirSync(SHOTS, { recursive: true })
 log('boot: about to call startElectronDeck()')
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HOST: the REAL `startElectronDeck(config, { backend })`. The framework owns process
+// HOST: the REAL `startElectronDeck({ ...config, backend })`. The framework owns process
 // lifecycle / window construction / trust / wire; the backend supplies domain
 // assembly. We do NOT set ownsWindows — the framework builds + auto-trusts the
-// main window, and we just load our control renderer into it.
+// main window and hands it back as a `DeckWindow` (runtime.windows.main); we
+// drive everything (session, grant, close arbitration) through that facade.
 // ─────────────────────────────────────────────────────────────────────────────
 
 let resolveDone
+let quitting = false   // set when the demo is intentionally tearing down (app.quit)
 const allDone = new Promise((r) => { resolveDone = r })
 
 // `startElectronDeck()` returns `{ ready, dispose }` SYNCHRONOUSLY — no internal
@@ -109,9 +138,11 @@ const { ready } = startElectronDeck(
       // show:false → framework builds the window hidden; we showInactive()
       // offscreen after load so native child views composite into capturePage.
       window: { width: 900, height: 520, show: false, backgroundColor: '#1e1e2e' },
+      // REAL API: declarative main-renderer entry. When the framework owns the
+      // main window it auto-loads this source after build (mirrors the toolbar /
+      // declared-window `source`). No hand-rolled loadURL in assemble() anymore.
+      source: { url: CONTROL },
     },
-  },
-  {
     backend: {
       // The ESM preload (demo-preload.mjs) imports exposeDeckLayoutBridge() from
       // the framework's preload dist, so it requires `sandbox:false` (Electron's
@@ -128,21 +159,45 @@ const { ready } = startElectronDeck(
 
       async assemble(runtime) {
         log('assemble: entered')
-        const mainWin = runtime.mainWindow
-        log('assemble: mainWindow =', String(!!mainWin))
+        // Window facade: the framework built the main window (we are NOT
+        // ownsWindows) and exposes it as a DeckWindow here. `main.window` is the
+        // raw BrowserWindow (offscreen paint / capturePage); `main.newSession()`
+        // mints window-rooted sessions; `main.controlWc` is the control-layer wc;
+        // `main.onClose(...)` registers per-window close arbitration.
+        const main = runtime.windows.main
+        if (!main) {
+          log('assemble: runtime.windows.main is null (unexpected for non-ownsWindows) — aborting')
+          resolveDone()
+          return
+        }
+        const mainWin = main.window
+        log('assemble: windows.main =', String(!!main))
 
-        // RESIDUAL GLUE (#2 — not addressed by P0–P5): the framework still loads
-        // NO content into the main window it built, and there is no
-        // `config.app.source` declarative main-renderer entry (unlike the toolbar
-        // / declared windows, which DO take a `source`). So the host still drives
-        // loadURL by hand here. Tracked as future ergonomics; not part of P0–P5.
+        // The framework auto-loads `config.app.source` ({ url: CONTROL }) into the
+        // main window it built — assemble() no longer drives loadURL by hand.
         // Surface renderer errors into our trace (diagnostics).
         mainWin.webContents.on('preload-error', (_e, path, err) => {
           log('[preload-error]', path, String(err))
         })
-        log('assemble: loadURL start')
-        await mainWin.webContents.loadURL(CONTROL)
-        log('assemble: loadURL done')
+
+        // The framework kicks off the source load just before assemble() runs, so
+        // it may still be in flight here. Our offscreen showInactive() must follow
+        // a real paint (so child WebContentsViews composite into capturePage), so
+        // wait for did-finish-load rather than driving the load ourselves.
+        if (!mainWin.webContents.isLoading()) {
+          log('assemble: source already loaded')
+        } else {
+          log('assemble: awaiting source load')
+          // Race finish vs fail so a failed navigation doesn't hang assemble forever.
+          await new Promise((res) => {
+            const done = (tag) => (...a) => { mainWin.webContents.off('did-finish-load', finish); mainWin.webContents.off('did-fail-load', fail); res(); if (tag === 'fail') log('[did-fail-load]', ...a.slice(1).map(String)) }
+            const finish = done('finish')
+            const fail = done('fail')
+            mainWin.webContents.once('did-finish-load', finish)
+            mainWin.webContents.once('did-fail-load', fail)
+          })
+          log('assemble: source load settled')
+        }
 
         // showInactive() offscreen → forces a real paint so child
         // WebContentsViews composite, WITHOUT focus/visibility (verification).
@@ -150,75 +205,96 @@ const { ready } = startElectronDeck(
         mainWin.showInactive()
 
         // ── open-project: spawn two native color blocks following the slots ──
+        // `session` is hoisted so the per-window onClose decider (below) can see
+        // whether a project is currently live: closing WITH a project resets the
+        // session and keeps the window; closing with none lets the window close.
         let projectViews = []
+        let session = null
         ipcMain.on('demo:open-project', (e, projectId) => {
           // ignore re-opens of the same project session for simplicity
           if (projectViews.length) return
           log('open-project:', projectId)
 
-          // REAL API: a per-project SESSION via runtime.scopes.create(). Binding
-          // each view to this DeckSession gives the project a single teardown
-          // handle — session.dispose() detaches + closes every view bound to it
-          // (and app shutdown cascades in too). No raw/internal Scope handling.
-          const session = runtime.scopes.create()
+          // Window facade: a per-project SESSION via main.newSession() — a
+          // WINDOW-ROOTED DeckSession (vs an app-root runtime.scopes.create()).
+          // Binding each view to it gives the project a single teardown handle:
+          // session.reset() detaches its views but keeps window+session alive
+          // (used by onClose below); session.dispose() is the terminal close; and
+          // because it is rooted in the window scope, closing the window cascades
+          // it too. No raw/internal Scope handling.
+          session = main.newSession()
 
-          // RESIDUAL GLUE (#6 — not addressed by P0–P5): `DeckViewHandle` still
-          // exposes no `webContents` / `bounds()` / `capture()`. Our OFFSCREEN
-          // composite snapshot needs each native view's live bounds + a
-          // capturePage(), so we recover the WCV by diffing
-          // mainWin.contentView.children around each placeIn. A host that doesn't
-          // screenshot/inspect native views never needs this.
-          const captureNewWcv = (handle, source, label, zone) => {
-            const before = new Set(mainWin.contentView.children)
-            // REAL API: runtime.view({ source, scope }).placeIn(win, { zone, anchor }).
-            // The `anchor` mints a slot token + PUSHES a SlotGrant to the control
-            // wc; the renderer's createDeckLayoutClient picks it up and measures
-            // that DOM slot, threading Placements back here. The framework moves
-            // the WebContentsView to follow — we write NO resize code; geometry
-            // is 100% renderer-driven.
-            handle.placeIn(mainWin, { zone, anchor: source })
-            const added = mainWin.contentView.children.find((c) => !before.has(c))
-            if (added) placedBlocks.push({ wcv: added, label, zone })
+          // REAL API: runtime.view({ source, scope }).placeIn(win, { zone, anchor }).
+          // The `anchor` mints a slot token + PUSHES a SlotGrant to the control wc;
+          // the renderer's createDeckLayoutClient picks it up and measures that DOM
+          // slot, threading Placements back here. The framework moves the
+          // WebContentsView to follow — we write NO resize code; geometry is 100%
+          // renderer-driven. The returned DeckViewHandle exposes bounds() /
+          // capturePage() / webContents, so the offscreen composite snapshot reads
+          // them directly — no contentView.children diffing.
+          const place = (color, label, zone, anchor) => {
+            const handle = runtime
+              .view({ source: { url: `${BLOCK}#${enc(color, label)}` }, scope: session })
+              .placeIn(mainWin, { zone, anchor })
+            placedBlocks.push({ handle, label, zone })
             return handle
           }
-          const sim = captureNewWcv(
-            runtime.view({ source: { url: `${BLOCK}#${enc('#c0392b', 'SIMULATOR')}` }, scope: session }),
-            '#simulator', 'SIMULATOR', Z.SIMULATOR,
-          )
-          const dev = captureNewWcv(
-            runtime.view({ source: { url: `${BLOCK}#${enc('#2980b9', 'DEVTOOLS')}` }, scope: session }),
-            '#devtools', 'DEVTOOLS', Z.DEVTOOLS,
-          )
+          const sim = place('#c0392b', 'SIMULATOR', Z.SIMULATOR, '#simulator')
+          const dev = place('#2980b9', 'DEVTOOLS', Z.DEVTOOLS, '#devtools')
           projectViews = [sim, dev]
           log('placed native views; contentView.children =', String(mainWin.contentView.children.length), '; placedBlocks =', String(placedBlocks.length))
 
           // ── privileged layout command + grant (now FULLY user-side) ──
           // A host that wants the renderer to invoke a PRIVILEGED `layout.*` op
           // registers it via runtime.layout.command(...) and authorizes the
-          // control wc via runtime.grants.issue(...). `targetScope` is now an
-          // ergonomic, user-side DeckSession (the one we just minted) — no
-          // internal Scope handle required. The renderer doesn't drive it in the
-          // happy path (the splitter is pure DOM→Place), but it now stands up
-          // end-to-end with ZERO glue.
+          // control wc via runtime.grants.issue(...). The grant target is
+          // `main.controlWc` — the Window facade hands the control-layer wc back
+          // directly (it is the same wc as the open-project sender `e.sender`, but
+          // controlWc is the cleaner, facade-native expression). `targetScope` is
+          // the window-rooted DeckSession we just minted — no internal Scope
+          // handle required. The renderer doesn't drive it in the happy path (the
+          // splitter is pure DOM→Place), but it stands up end-to-end with ZERO glue.
           try {
             runtime.layout.command('layout.collapse-sim', () => {
               // host-side collapse: hide the simulator view
               projectViews[0].applyPlacement({ visible: false })
               return 'ok'
             })
-            runtime.grants.issue(e.sender, {
+            runtime.grants.issue(main.controlWc, {
               commands: ['layout.collapse-sim'],
               targetScope: session,
             })
-            log('registered layout.collapse-sim + issued grant (targetScope = user-side DeckSession)')
+            log('registered layout.collapse-sim + issued grant (target = main.controlWc, scope = window-rooted DeckSession)')
           } catch (err) {
             log('layout.command/grant failed:', String(err))
           }
         })
 
+        // ── close → reset demonstration (window-lifetime > session-lifetime) ──
+        // The Window facade lets a host arbitrate its own window's close. Here:
+        // if a project is live, closing RESETS the session (releases its views,
+        // keeps the window) and returns 'keep'; if no project is live, returns
+        // 'close' so the window actually closes. This is the canonical pattern —
+        // the window outlives any single project session.
+        main.onClose(async () => {
+          // When the demo is intentionally tearing down (post-verification
+          // app.quit), DON'T veto — let the window close so the process exits.
+          if (quitting) return 'close'
+          if (session) {
+            log('onClose: active project → reset session, KEEP window')
+            await session.reset()
+            session = null
+            projectViews = []
+            return 'keep'
+          }
+          log('onClose: no active project → CLOSE window')
+          return 'close'
+        })
+
         // ── verification driver (offscreen) ──
         void runVerification(mainWin).then(resolveDone).catch((err) => {
           console.error('[demo] verification failed:', err)
+          log('verification failed: ' + (err && err.stack ? err.stack : String(err)))
           resolveDone()
         })
       },
@@ -286,8 +362,9 @@ async function runVerification(mainWin) {
 function captureSimBounds() {
   const out = {}
   for (const blk of placedBlocks) {
-    if (blk.wcv.webContents.isDestroyed()) continue
-    const b = blk.wcv.getBounds()
+    if (blk.handle.webContents.isDestroyed()) continue
+    const b = blk.handle.bounds()
+    if (!b) continue
     out[blk.label === 'SIMULATOR' ? 'sim' : 'dev'] = { x: b.x, width: b.width }
   }
   return Promise.resolve(out)
@@ -295,6 +372,7 @@ function captureSimBounds() {
 
 void allDone.then(async () => {
   await sleep(200)
+  quitting = true   // tell onClose to STOP vetoing — we are tearing down for real
   app.quit()
 })
 

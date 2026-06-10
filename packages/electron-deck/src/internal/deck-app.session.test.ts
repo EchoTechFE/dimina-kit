@@ -297,12 +297,14 @@ describe('DeckApp P2 — runtime.scopes.create() mints an opaque DeckSession', (
 		expect(typeof session.dispose).toBe('function')
 
 		// Opacity: the session must NOT leak the rootless-escape primitives that a
-		// raw Scope exposes. `adopt` re-parents across roots; `child`/`reset` would
-		// let a host fork a sub-lifetime the framework can't track. None may exist.
+		// raw Scope exposes. `adopt` re-parents across roots; `child` would let a
+		// host fork a sub-lifetime the framework can't track. Neither may exist.
 		const s = session as unknown as Record<string, unknown>
 		expect(s.adopt).toBeUndefined()
 		expect(s.child).toBeUndefined()
-		expect(s.reset).toBeUndefined()
+		// C2 contract: `reset()` is now a first-class DeckSession method (per-session
+		// segment reset that keeps the session + window alive) — it MUST be present.
+		expect(typeof s.reset).toBe('function')
 
 		await app.shutdown()
 	})

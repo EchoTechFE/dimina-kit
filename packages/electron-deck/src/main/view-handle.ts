@@ -52,11 +52,18 @@ export type Placement = { visible: true; bounds: Bounds } | { visible: false }
  *  `setBounds` sink the handle calls directly (gap#1). `destroy` (optional)
  *  destroys the backing native view (its WebContents) — owned by the viewScope so
  *  it runs on teardown AFTER the detach (keepAlive B3.1 lifetime/leak fix).
- *  Optional so fakes that don't model a native WebContents stay valid. */
+ *  Optional so fakes that don't model a native WebContents stay valid.
+ *
+ *  `webContents` / `capturePage` (optional) expose the backing native view's
+ *  WebContents and a screenshot pass-through, so a handle accessor can recover
+ *  them without re-deriving the WebContentsView from the window's content view.
+ *  Optional so geometry-only fakes stay valid. */
 export interface NativeView {
   readonly ref: NativeViewRef
   setBounds(b: Bounds): void
   destroy?(): void
+  readonly webContents?: unknown
+  capturePage?(): Promise<unknown>
 }
 
 /** A window's z-planner + lifetime, handed to {@link ViewHandle.placeIn}. The
@@ -95,6 +102,15 @@ export interface ViewHandle {
   /** Tear down this placement: run the viewScope's A4 owns (sink-disable then
    *  native detach, via the LIFO completion fence). Idempotent. */
   dispose(): Promise<void>
+  /** The backing native view's WebContents (pass-through from {@link NativeView}).
+   *  Available immediately — the handle owns its view before any placeIn. */
+  readonly webContents: unknown
+  /** The view's LIVE screen-space rect when it is currently placed AND visible;
+   *  `null` before the first placement, after `applyPlacement({visible:false})`,
+   *  and after `dispose()`. Tracks the last applied `visible:true` bounds. */
+  bounds(): Bounds | null
+  /** Screenshot pass-through to the native view's `capturePage()`. */
+  capturePage(): Promise<unknown>
 }
 
 export interface ViewHandleDeps {
@@ -126,6 +142,12 @@ export function createViewHandle(deps: ViewHandleDeps): ViewHandle {
   // The placement sink's gate. Goes false the instant the A4 teardown runs
   // (STEP0), so a late applyPlacement after dispose/cascade is a no-op.
   let active = false
+
+  // The LIVE on-screen rect: the last `visible:true` bounds applied while the
+  // view is active. Set on applyPlacement({visible:true}); cleared on
+  // applyPlacement({visible:false}); read by bounds() (which also returns null
+  // once the view is no longer active — never placed or disposed).
+  let visibleBounds: Bounds | null = null
 
   // codex P0 round-3 (BUG 4): true WHILE a moveTo migration is in flight (the
   // migrationLock is held). `applyPlacement` drops place frames while migrating —
@@ -346,10 +368,15 @@ export function createViewHandle(deps: ViewHandleDeps): ViewHandle {
         // on the native view (gap#1 — not via the compositor).
         ensureMounted()
         nativeView.setBounds(p.bounds)
+        // Track the live on-screen rect for bounds(). Copy so a later caller
+        // mutation can't alter the recorded rect.
+        visibleBounds = { x: p.bounds.x, y: p.bounds.y, width: p.bounds.width, height: p.bounds.height }
       } else {
         // Detach-but-keep: remove from the host, do NOT destroy the native view.
         current.compositor.unmount(ref.id)
         current.compositor.commit()
+        // Not on screen → no live rect.
+        visibleBounds = null
       }
     },
 
@@ -384,6 +411,27 @@ export function createViewHandle(deps: ViewHandleDeps): ViewHandle {
       // calls the un-locked `doDispose()` directly (it already holds the lock), so
       // there is no self-deadlock. doDispose is idempotent (no viewScope → no-op).
       return withLock(() => doDispose())
+    },
+
+    // ── Additive accessors (handle-level view recovery) ───────────────────────
+    // The backing native view's WebContents, exposed immediately (the handle
+    // owns its view before any placeIn).
+    get webContents() {
+      return nativeView.webContents
+    },
+    // The live screen-space rect: the last `visible:true` bounds applied while
+    // the view is active. null before any placement, after `visible:false`, and
+    // after dispose (active goes false on the viewScope's A4 teardown).
+    bounds(): Bounds | null {
+      if (!active || !visibleBounds) return null
+      return { ...visibleBounds }
+    },
+    // Screenshot pass-through to the native view's webContents.capturePage().
+    capturePage(): Promise<unknown> {
+      if (!nativeView.capturePage) {
+        return Promise.reject(new Error('ViewHandle.capturePage: native view has no capturePage'))
+      }
+      return nativeView.capturePage()
     },
   }
 

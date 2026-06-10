@@ -1,46 +1,46 @@
 # workbench 模型（host 集成参考）
 
 > 落地的抽取设计：framework `electronDeck()` 经注入式 `RuntimeBackend` 编排 devtools，
-> `launch()` 与 `workbench()`（同一函数的两个名字）都走框架，旧的 `createWorkbenchApp`
-> 已不存在。框架内部机制见
+> `launch()` 是唯一入口，经框架启动；旧的 `createWorkbenchApp`
+> 已被它取代、不复存在。框架内部机制见
 > [`framework-extraction-v2.md`](../../electron-deck/docs/framework-extraction-v2.md)。
 > 下文的概念框架（config 字段 / Runtime 门面 / 不变量）是 host 集成参考。
 >
-> 下游 host（如 qdmp）写一份 `WorkbenchConfig` 交给 `workbench(config)`，framework
+> 下游 host（如 qdmp）写一份 `WorkbenchConfig` 交给 `launch(config)`，framework
 > 接管 Electron 装配、IPC、生命周期。本文是 host 集成参考：怎么用 + API + 必知约束。
 >
 > 面板数据同步（preload 为唯一真相源）见 [`miniapp-snapshot.md`](./miniapp-snapshot.md)。
 
 ## 两条必知坑（先读）
 
-**1. 入口包归属：`workbench` 从 `@dimina-kit/devtools` 导入，其余从 `@dimina-kit/electron-deck`。**
+**1. 入口包归属：`launch` 从 `@dimina-kit/devtools` 导入，其余从 `@dimina-kit/electron-deck`。**
 
 ```ts
-import { workbench } from '@dimina-kit/devtools'        // 入口函数
+import { launch } from '@dimina-kit/devtools'        // 入口函数
 import { defineEvent } from '@dimina-kit/electron-deck'     // 事件 token + config 类型
 ```
 
-`workbench()` 的实现住在 `@dimina-kit/devtools`，因为它要驱动 devtools 真运行时，而
+`launch()` 的实现住在 `@dimina-kit/devtools`，因为它要驱动 devtools 真运行时，而
 devtools 已依赖 `@dimina-kit/electron-deck`——入口若放 workbench 包会形成循环依赖。所以：
 
 | 你要的 | 从哪导入 |
 |---|---|
-| `workbench(config)` 入口函数 | `@dimina-kit/devtools` |
+| `launch(config)` 入口函数 | `@dimina-kit/devtools` |
 | `defineEvent` / `WorkbenchConfig` 等类型 | `@dimina-kit/electron-deck` |
 | preload bridge `exposeWorkbenchBridge()` | `@dimina-kit/electron-deck/preload` |
 | renderer client `createWorkbenchClient()` | `@dimina-kit/electron-deck/client` |
 
 （`@dimina-kit/electron-deck/host` 导出 transport 原语，仅供入口装配，host 不直接用。）
 
-**2. 不要在 ESM main 里顶层 `await workbench(...)`。**
+**2. 不要在 ESM main 里顶层 `await launch(...)`。**
 
-Electron 在 main 模块求值完成前不会触发 `app.whenReady()`，而 `workbench()` 内部
-要 await whenReady——顶层 await 会死锁（ready 等模块求值、模块求值等 workbench、
-workbench 等 ready）。**fire-and-forget + `.catch()`**，event loop 会撑住进程：
+Electron 在 main 模块求值完成前不会触发 `app.whenReady()`，而 `launch()` 内部
+要 await whenReady——顶层 await 会死锁（ready 等模块求值、模块求值等 launch、
+launch 等 ready）。**fire-and-forget + `.catch()`**，event loop 会撑住进程：
 
 ```ts
-workbench({ /* ... */ }).catch((err) => {
-  console.error('workbench() failed:', err)
+launch({ /* ... */ }).catch((err) => {
+  console.error('launch() failed:', err)
 })
 ```
 
@@ -48,18 +48,18 @@ workbench({ /* ... */ }).catch((err) => {
 
 ```ts
 // main.ts
-import { workbench } from '@dimina-kit/devtools'
+import { launch } from '@dimina-kit/devtools'
 import { defineEvent } from '@dimina-kit/electron-deck'
 
 const authChanged = defineEvent<{ user: { id: string } | null }>('authChanged')
 
-workbench({
+launch({
   app: { name: 'My DevTools' },
   hostServices: {
     getUser: async () => ({ user: null }),
   },
   events: [authChanged],
-}).catch((err) => { console.error('workbench() failed:', err) })
+}).catch((err) => { console.error('launch() failed:', err) })
 ```
 
 host 写好这一个调用即可启动。webview 侧 preload / renderer 的用法见 §4。
@@ -180,7 +180,7 @@ export interface LifecycleContribution {
   readonly timeoutMs?: number                      // 默认 10_000
 }
 
-export function workbench(config: WorkbenchConfig): Promise<void>  // 从 @dimina-kit/devtools 导入
+export function launch(config: WorkbenchConfig): Promise<void>  // 从 @dimina-kit/devtools 导入
 ```
 
 Handler 形参故意宽松（`any[]`），让 host 写 `(p: { code: string }) => ...` 这种
@@ -240,7 +240,7 @@ host 自负 dispose / 错误处理。`runtime.context` 上的 `_registry` / `_se
 
 - `setup(runtime)` 抛错时，framework 会 `dispose()` 已装配的 context（连带拆掉
   WireTransport handler 与已绑的 contributions）再把错误抛出，不残留。
-- `toolbar` 加载是 best-effort：`source` load 失败只 log、不中断 `workbench()`；固定
+- `toolbar` 加载是 best-effort：`source` load 失败只 log、不中断 `launch()`；固定
   `height` 仍会推给占位区。
 - `simulatorApis` 经 wire 的 simulator 路由按**单参**（`args[0]`）调，多参不支持
   （devtools simulator API 是 `wx.<name>(params)` 单参约定）。
@@ -306,8 +306,8 @@ export const authChanged = defineEvent<{ user: { id: string } | null }>('authCha
 ```
 
 ```ts
-// main.ts —— host entry（顶层执行 workbench()，有 side-effect）
-import { workbench } from '@dimina-kit/devtools'
+// main.ts —— host entry（顶层执行 launch()，有 side-effect）
+import { launch } from '@dimina-kit/devtools'
 import { authChanged } from './events'
 
 export const hostServices = {
@@ -316,7 +316,7 @@ export const hostServices = {
 export type HostServices = typeof hostServices
 export type Events = readonly [typeof authChanged]
 
-workbench({
+launch({
   app: { name: 'My DevTools' },
   hostServices,
   events: [authChanged],
@@ -325,7 +325,7 @@ workbench({
     preloadPath: new URL('./toolbar-preload.js', import.meta.url).pathname,
     height: 48,
   },
-}).catch((err) => { console.error('workbench() failed:', err) })
+}).catch((err) => { console.error('launch() failed:', err) })
 ```
 
 ```ts
@@ -373,7 +373,7 @@ I2 是「受支持路径上的服务承诺」：framework 无法物理阻止 hos
 
 > 下面是**示意性的 host 侧集成代码**，住在下游 host 工程（如 qdmp）里，**不在本仓库**。
 > `./qdmp-api` / `./qdmp-adapter` / `./projects` / `./menu` / `toolbar/preload.ts` 等都是
-> host 自己写的模块，这里只演示它们怎么拼到 `workbench(config)` 上。
+> host 自己写的模块，这里只演示它们怎么拼到 `launch(config)` 上。
 
 ### feature module
 
@@ -416,7 +416,7 @@ export async function getAuthState() {
 
 ```ts
 import { fileURLToPath } from 'node:url'
-import { workbench } from '@dimina-kit/devtools'     // 入口在 devtools
+import { launch } from '@dimina-kit/devtools'     // 入口在 devtools
 import { qdmpAdapter } from './qdmp-adapter'
 import { qdmpProjects } from './projects'
 import * as auth from './auth'
@@ -442,7 +442,7 @@ export type HostServices = typeof hostServices
 export type Events = typeof events
 
 // fire-and-forget + .catch()，不要顶层 await（见开头第 2 条坑）
-workbench({
+launch({
   app: {
     name: 'QDMP DevTools',
     adapter: qdmpAdapter,
@@ -490,7 +490,7 @@ workbench({
     }
   },
 }).catch((err) => {
-  console.error('[qdmp] workbench() failed:', err)
+  console.error('[qdmp] launch() failed:', err)
 })
 ```
 

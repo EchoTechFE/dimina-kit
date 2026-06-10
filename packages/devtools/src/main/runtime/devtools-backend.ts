@@ -1,7 +1,7 @@
-import { app } from 'electron'
 import type { RuntimeBackend } from '@dimina-kit/electron-deck'
 import type { WorkbenchAppConfig } from '../../shared/types.js'
 import { runDevtoolsBootstrap, createDevtoolsRuntime } from '../app/app.js'
+import type { WorkbenchAppInstance } from '../app/app.js'
 import { registerAppLifecycle } from '../app/lifecycle.js'
 
 /**
@@ -18,9 +18,18 @@ import { registerAppLifecycle } from '../app/lifecycle.js'
  * the runtime facade are deferred (see framework-extraction-v2.md §7).
  */
 export function createDevtoolsBackend(config: WorkbenchAppConfig = {}): RuntimeBackend {
+  // Hoisted so `onShutdown` can reach the assembled context (assigned by `assemble`).
+  let instance: WorkbenchAppInstance | null = null
   return {
-    // The devtools window needs a per-session simulator preload partition set at
-    // construction time, so the backend builds it (framework skips its own).
+    // The backend builds the devtools main window itself (framework skips its own).
+    // Its only construction-time needs are the host preload + `sandbox:false`
+    // (main-window/create.ts) and wrapping contentView in a `View` container.
+    // NOTE: `ownsWindows` is NOT structurally required — the framework's
+    // `mainWindowWebPreferences()` + `onMainWindowCreated()` hooks can supply both,
+    // and the project close→back lifecycle maps onto the Window facade's
+    // `onClose`/`newSession` (probe-validated). Retained for now; migrating to
+    // `runtime.windows.main` is the documented next step. (The `persist:simulator`
+    // partition is a fixed session used by child WCVs, not main-window state.)
     ownsWindows: true,
     // Pre-ready: app name / CDP port / CSP / privileged scheme — must run before
     // the framework awaits app.whenReady().
@@ -31,13 +40,13 @@ export function createDevtoolsBackend(config: WorkbenchAppConfig = {}): RuntimeB
     // full devtools assembly.
     assemble: async () => {
       registerAppLifecycle()
-      const instance = await createDevtoolsRuntime(config)
-      // Dispose the devtools context on quit: this is the backend's window, so
-      // the framework's closed→shutdown is not wired to it — without this, the
-      // compile session (a child process, torn down by closeProject) and the IPC
-      // registry would leak on exit. Best-effort (before-quit doesn't await), but
-      // it initiates the teardown the framework can't reach.
-      app.once('before-quit', () => { void instance.dispose() })
+      instance = await createDevtoolsRuntime(config)
     },
+    // Dispose the devtools context during the framework's deterministic shutdown
+    // (app.on('will-quit') → shutdown() → runShutdownCleanup(), awaited once).
+    // Without this, the compile session (a child process, torn down by
+    // closeProject) and the IPC registry would leak on exit. The framework awaits
+    // this hook, so teardown is no longer a best-effort before-quit reach-around.
+    onShutdown: () => instance?.dispose(),
   }
 }

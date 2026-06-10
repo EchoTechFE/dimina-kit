@@ -1,11 +1,10 @@
 // ── Primary API ──────────────────────────────────────────────────────────
-// `launch` / `workbench` both boot through the @dimina-kit/electron-deck framework
+// `launch` boots through the @dimina-kit/electron-deck framework
 // (process-lifecycle gate + wire/trust) with the devtools RuntimeBackend
 // supplying the full runtime. The instance builder (`createDevtoolsRuntime`) is
-// internal — hosts integrate via `workbench(config)` / `launch(config)`; the
-// `WorkbenchAppInstance` type (what `onSetup(instance)` receives) is re-exported
-// for typing host callbacks.
-export { launch, workbench, buildDefaultMenu, openSettingsWindow } from './app/launch.js'
+// internal — hosts integrate via `launch(config)`; the `WorkbenchAppInstance`
+// type (what `onSetup(instance)` receives) is re-exported for typing host callbacks.
+export { launch, buildDefaultMenu, openSettingsWindow } from './app/launch.js'
 export type { WorkbenchAppInstance } from './app/app.js'
 
 // ── Bootstrap utilities ──────────────────────────────────────────────────

@@ -3,7 +3,7 @@
 **All 7 frictions resolved by P0–P5; the demo is now boilerplate-free.**
 
 This demo (`examples/layout-demo/`) drives the **real** user-side API end-to-end:
-`startElectronDeck(config, { backend })` → `backend.assemble(runtime)` →
+`startElectronDeck({ ...config, backend })` → `backend.assemble(runtime)` →
 `runtime.view({ source, scope }).placeIn(win, { anchor })` → real
 `createDeckLayoutClient({ bridge: window.__electronDeckLayoutBridge })` in the
 renderer → slot-token following. It runs offscreen and proves a renderer splitter
@@ -48,28 +48,25 @@ Assembly still runs strictly after `app.whenReady()` (gating intact inside
 `start()`); a startup failure surfaces on `ready`.
 
 ```js
-const { ready } = startElectronDeck(config, { backend })
+const { ready } = startElectronDeck({ ...config, backend })
 // observe boot failures only — no deadlock workaround:
 ready.catch((err) => { … app.quit() })
 ```
 
 ---
 
-## #2 — main window has no `preload` / `source` config seam → PARTIAL (preload via webPreferences; `source` still residual)
+## #2 — main window has no `source` config seam → RESOLVED (`config.app.source`)
 
-`runtime.scopes` / `startElectronDeck` did not target this gap. The framework
-still loads NO content into the main window and offers no `config.app.source`, so
-the host still drives `loadURL` by hand and still attaches the main-window preload
-through the `mainWindowWebPreferences()` backend hook (the one documented seam):
+`AppConfig` now has `source?: WebviewSource`. When the framework owns the main
+window (NOT an `ownsWindows:true` backend), it auto-loads that source after build,
+via the same `safeLoad` path the toolbar / declared windows use — so the host no
+longer drives `loadURL` by hand. Preload still attaches via `mainWindowWebPreferences()`.
 
 ```js
-// RESIDUAL GLUE (#2 — not addressed by P0–P5): no `config.app.source`; host still
-// drives loadURL itself.
-await mainWin.webContents.loadURL(CONTROL)
+// RESOLVED: declarative main-renderer entry — the framework loads it.
+app: { window: { /* … */ }, source: { url: CONTROL } }
+// assemble() no longer calls loadURL; it just waits for the load to settle.
 ```
-
-This is the one gap P0–P5 did NOT close. Flagged honestly; tracked as future
-ergonomics (`config.app.window.preload` + `config.app.source`).
 
 ---
 
@@ -169,23 +166,23 @@ function openProject(p) {
 
 ---
 
-## #6 — `DeckViewHandle` doesn't expose the native view → RESIDUAL (offscreen-only)
+## #6 — `DeckViewHandle` doesn't expose the native view → RESOLVED (`webContents` / `bounds()` / `capturePage()`)
 
-P0–P5 did not add a `webContents` / `bounds()` / `capture()` accessor to
-`DeckViewHandle`. The demo's OFFSCREEN composite screenshot needs each native
-view's live bounds + a `capturePage()`, so it still recovers the WCV by diffing
-`mainWin.contentView.children` around each `placeIn`:
+`DeckViewHandle` now exposes `readonly webContents`, `bounds()` and
+`capturePage()`. The demo's OFFSCREEN composite screenshot reads them straight off
+the handle — no more diffing `mainWin.contentView.children` to recover the WCV:
 
 ```js
-// RESIDUAL GLUE (#6 — not addressed by P0–P5): no DeckViewHandle.webContents.
-const before = new Set(mainWin.contentView.children)
-handle.placeIn(mainWin, { zone, anchor: source })
-const added = mainWin.contentView.children.find((c) => !before.has(c))
+// RESOLVED: read the native view straight off the handle.
+const handle = runtime.view({ source, scope }).placeIn(mainWin, { zone, anchor })
+const b = handle.bounds()                 // live screen-space rect (null when hidden/detached)
+const png = await handle.capturePage()    // screenshot pass-through
+handle.webContents                        // send messages / inspect
 ```
 
-This is **only** needed by the demo's screenshot harness — a normal host that
-doesn't screenshot/inspect native views never touches it. Kept honest: this glue
-remains, but it is verification machinery, not application boilerplate.
+`bounds()`/`capturePage()` are only needed by the demo's screenshot harness — a
+normal host that doesn't screenshot native views never touches them — but they are
+now first-class accessors, not `contentView.children` archaeology.
 
 ---
 
@@ -233,17 +230,16 @@ runtime.grants.issue(controlWc, { commands: ['layout.collapse-sim'], targetScope
 | # | Gap | Status | Resolved by |
 |---|-----|--------|-------------|
 | 1 | `electronDeck()` top-level-await deadlock | ✅ Resolved | `startElectronDeck()` → sync `{ ready, dispose }` |
-| 2 | no main-window `preload`/`source` config seam | ⚠️ Partial | preload via `mainWindowWebPreferences()`; `source` still residual |
+| 2 | no main-window `source` config seam | ✅ Resolved | `config.app.source` → framework auto-loads |
 | 3 | no turnkey layout bridge / preload helper | ✅ Resolved | `exposeDeckLayoutBridge()` |
 | 4 | renderer client not browser-loadable | ✅ Resolved | `./client/browser` bundle |
 | 5 | lazy-armed channels → boot rejection | ✅ Resolved | P5 eager-arm |
-| 6 | no native-view accessor on `DeckViewHandle` | ⚠️ Residual | offscreen-only; not app boilerplate |
+| 6 | no native-view accessor on `DeckViewHandle` | ✅ Resolved | `webContents` / `bounds()` / `capturePage()` |
 | 7 | `grants.issue` needs un-obtainable `Scope` | ✅ Resolved | `runtime.scopes.create()` → `DeckSession` |
 
 **Boilerplate-free:** every piece of application glue the original report filed is
-deleted. What remains is (a) the demo's own screenshot/composite harness (#6, only
-because the demo captures native views offscreen), (b) a one-time `loadURL` for the
-main window (#2, the single un-shipped ergonomic), and (c) a framework-side
-shutdown null-guard bug (#7 residual) the demo cannot touch. The core proof — a
-renderer splitter drag moving the native color blocks with zero host resize code —
-is GREEN (sim 360→220, devtools x 390→250, both Δ140).
+deleted, and the two follow-up ergonomics (#2 `config.app.source`, #6 `DeckViewHandle`
+accessors) have since landed — so the demo no longer hand-drives `loadURL` nor diffs
+`contentView.children`. The core proof — a renderer splitter drag moving the native
+color blocks with zero host resize code — is GREEN (sim 360→220, devtools x 390→250,
+both Δ140).

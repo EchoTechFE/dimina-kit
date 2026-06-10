@@ -11,11 +11,11 @@ const dataBase = (process.env.DIMINA_DEVTOOLS_DATA_DIR
 
 /**
  * Proves the v2 framework-orchestrated path boots the FULL devtools runtime:
- * `@dimina-kit/electron-deck`'s `workbench()` runs the lifecycle gate + the devtools
+ * `@dimina-kit/electron-deck`'s `electronDeck()` runs the lifecycle gate + the devtools
  * `RuntimeBackend.beforeReady`/`assemble` build the real app (window + project
  * list), identical to the legacy `createWorkbenchApp` path.
  */
-test.describe('workbench() + RuntimeBackend (v2 framework orchestration)', () => {
+test.describe('launch() + RuntimeBackend (v2 framework orchestration)', () => {
   let app: ElectronApplication
 
   test.beforeAll(async () => {

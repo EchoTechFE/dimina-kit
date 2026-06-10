@@ -1,11 +1,11 @@
 // E2E entry exercising the downstream-host extension path:
-// `workbench({ headerHeight, onSetup })` injecting a custom toolbar
+// `launch({ headerHeight, onSetup })` injecting a custom toolbar
 // action and a simulator custom API. The companion spec
 // (`extension-host.spec.ts`) drives this entry and asserts the injected
 // extensions actually run.
 import electron from 'electron'
 import fs from 'node:fs'
-import { workbench } from '../dist/main/api.js'
+import { launch } from '../dist/main/api.js'
 
 // Mirror update-entry.js: keep windows off-screen under NODE_ENV=test so the
 // e2e run doesn't steal focus.
@@ -24,7 +24,7 @@ if (process.env.NODE_ENV === 'test') {
   })
 }
 
-workbench({
+launch({
   // Non-default header height — the spec measures the rendered toolbar header
   // element to prove this config reaches the renderer (default is 40).
   headerHeight: 72,

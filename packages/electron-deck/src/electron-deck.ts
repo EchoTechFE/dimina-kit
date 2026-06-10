@@ -15,6 +15,9 @@ import type { DeckConfig, DeckOptions, Runtime } from './types.js'
  *   Phase 4 接 Electron app lifecycle 后，由 Electron event loop 撑住进程，
  *   `electronDeck()` 同样 resolve（host 的 main 文件不需 await 阻塞）。
  *
+ * backend host（如 devtools）走 `electronDeck({ backend })`——backend 是
+ * {@link DeckConfig} 的字段，不再需要空 `{}` + options。
+ *
  * `options` 是测试 / 非 Electron 环境用的注入点（见 {@link DeckOptions}）。
  * 生产路径不传 options：framework `await import('electron')` 取真 `ipcMain` /
  * `BrowserWindow` / `WebContentsView`。
@@ -26,6 +29,9 @@ export async function electronDeck(config: DeckConfig, options?: DeckOptions): P
 	// configs that would otherwise be acceptable.
 	validateConfig(config)
 	const resolved = await resolveAppOptions(options)
+	if (config.backend) {
+		(resolved as Mutable<DeckAppOptions>).backend = config.backend
+	}
 	const app = new DeckApp(config, resolved)
 	await app.start()
 }
@@ -58,6 +64,9 @@ export function startElectronDeck(
 	let app: DeckApp | null = null
 	const startPromise: Promise<DeckApp> = (async () => {
 		const resolved = await resolveAppOptions(options)
+		if (config.backend) {
+			(resolved as Mutable<DeckAppOptions>).backend = config.backend
+		}
 		app = new DeckApp(config, resolved)
 		// `app.start()` internally `await app.whenReady()` THEN assembles — gating
 		// stays intact: no window is constructed before whenReady resolves.
@@ -159,9 +168,6 @@ function buildAppOptions(
 		(out.wireTransport as Mutable<NonNullable<DeckAppOptions['wireTransport']>>)
 			.senderPolicy = opts.senderPolicy
 	}
-	if (opts?.backend) {
-		(out as Mutable<DeckAppOptions>).backend = opts.backend
-	}
 	return out
 }
 
@@ -179,6 +185,13 @@ type Mutable<T> = { -readonly [K in keyof T]: T[K] }
 export function validateConfig(config: DeckConfig): void {
 	if (config === null || typeof config !== 'object') {
 		throw new TypeError('electronDeck(config): config must be an object')
+	}
+
+	if (config.backend !== undefined) {
+		const backend = config.backend as { assemble?: unknown }
+		if (backend === null || typeof backend !== 'object' || typeof backend.assemble !== 'function') {
+			throw new TypeError('config.backend must be a RuntimeBackend (an object with an assemble() function)')
+		}
 	}
 
 	if (config.simulatorApis !== undefined) {

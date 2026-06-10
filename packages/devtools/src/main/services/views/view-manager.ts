@@ -234,7 +234,7 @@ export interface HostToolbarControl {
   hide(): void
   /**
    * Override the preload used when the toolbar view is first created. The
-   * host-shell (`workbench(config)`) passes the host-controlled
+   * host-shell (`launch(config)`) passes the host-controlled
    * `toolbar.preloadPath` here; the host owns the bridge (it calls
    * `exposeWorkbenchBridge()` itself). Must be set before the first
    * `loadURL`/`loadFile`; `null` restores the built-in size-advertiser preload.

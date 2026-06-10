@@ -322,8 +322,8 @@ function enableDevRendererAutoReload(rendererDir: string): Disposable {
 
 /**
  * Pre-ready bootstrap side effects (app name, CDP port, CSP suppression,
- * privileged scheme). MUST run before `app.whenReady()`. Extracted so the `RuntimeBackend.beforeReady` hook (which launch()/workbench()
- * route through) runs it before the framework awaits app.whenReady().
+ * privileged scheme). MUST run before `app.whenReady()`. Extracted so the `RuntimeBackend.beforeReady` hook (which launch()
+ * routes through) runs it before the framework awaits app.whenReady().
  */
 export function runDevtoolsBootstrap(config: WorkbenchAppConfig = {}): void {
   // Lock the visible app name BEFORE app.whenReady so the dock label, ⌘-Tab

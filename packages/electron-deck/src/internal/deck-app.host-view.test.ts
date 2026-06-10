@@ -406,7 +406,7 @@ describe('DeckApp host-view slice 1 — window close cascades view teardown (A4)
 		// the placed view's viewScope.
 		const win = app.runtime.windows.create({
 			source: { url: 'http://localhost:5173/popout.html' },
-		}) as unknown as FakeBrowserWindow
+		}).window as unknown as FakeBrowserWindow
 
 		const handle = withView(app.runtime).view({ source: { url: 'data:text/html,x' } })
 		const wcv = lastWcv(electron)

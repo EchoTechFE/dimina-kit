@@ -950,7 +950,7 @@ describe('DeckApp — electron assembly', () => {
 			source: { url: 'http://localhost:5173/dyn.html' },
 			width: 500,
 			height: 400,
-		}) as unknown as FakeBrowserWindow
+		}).window as unknown as FakeBrowserWindow
 
 		expect(electron.browserWindowCtorCalls.length).toBe(before + 1)
 		expect(win.webContents.loadURL).toHaveBeenCalledWith('http://localhost:5173/dyn.html')
@@ -979,7 +979,7 @@ describe('DeckApp — electron assembly', () => {
 		const win = app.runtime.windows.create({
 			source: { url: 'http://localhost:5173/untrusted.html' },
 			autoTrust: false,
-		}) as unknown as FakeBrowserWindow
+		}).window as unknown as FakeBrowserWindow
 
 		const invoke = ipcMain.handlers.get(DeckChannel.Invoke)
 		if (!invoke) throw new Error('invoke handler missing')
@@ -1035,7 +1035,7 @@ describe('DeckApp — electron assembly', () => {
 
 		const created = app.runtime.windows.create({
 			source: { url: 'http://localhost:5173/dyn.html' },
-		})
+		}).window
 		const all = app.runtime.windows.all()
 		expect(all.length).toBeGreaterThanOrEqual(3)
 		expect(all).toContain(app.runtime.mainWindow)
@@ -1057,7 +1057,7 @@ describe('DeckApp — electron assembly', () => {
 		const win = app.runtime.windows.create({
 			source: { url: 'http://localhost:5173/x.html' },
 			autoTrust: false,
-		}) as unknown as FakeBrowserWindow
+		}).window as unknown as FakeBrowserWindow
 
 		const invoke = ipcMain.handlers.get(DeckChannel.Invoke)
 		if (!invoke) throw new Error('invoke handler missing')
@@ -1119,7 +1119,7 @@ describe('DeckApp — electron assembly', () => {
 
 		const created = app.runtime.windows.create({
 			source: { url: 'http://localhost:5173/dyn.html' },
-		}) as unknown as FakeBrowserWindow
+		}).window as unknown as FakeBrowserWindow
 
 		await app.shutdown()
 		expect(created.destroy).toHaveBeenCalled()
@@ -1760,7 +1760,7 @@ describe('DeckApp — FrameworkEvents emission (#6 R3)', () => {
 		const before = events.length
 		const created = app.runtime.windows.create({
 			source: { url: 'http://localhost:5173/dyn.html' },
-		}) as unknown as FakeBrowserWindow
+		}).window as unknown as FakeBrowserWindow
 		expect(events.length).toBe(before + 1)
 		const last = events[events.length - 1]
 		expect(last?.role).toBe('host')
@@ -2021,7 +2021,7 @@ describe('unified-lifetime P0: shadow map (observation-only, zero-regression)', 
 		const beforeSize = lifetime(app).__lifetimeShadow().size
 		const created = app.runtime.windows.create({
 			source: { url: 'http://localhost:5173/dyn.html' },
-		}) as unknown as FakeBrowserWindow
+		}).window as unknown as FakeBrowserWindow
 		expect(lifetime(app).__lifetimeShadow().size).toBe(beforeSize + 1)
 		expect(lifetime(app).__lifetimeShadow().has(wcKeyOf(created))).toBe(true)
 
@@ -2134,7 +2134,7 @@ describe('unified-lifetime P0: shadow map (observation-only, zero-regression)', 
 
 		const second = app.runtime.windows.create({
 			source: { url: 'http://localhost:5173/b.html' },
-		}) as unknown as FakeBrowserWindow
+		}).window as unknown as FakeBrowserWindow
 		assertConsistent() // after second runtime create
 
 		second._emit('closed')
@@ -2165,10 +2165,10 @@ describe('unified-lifetime P0: shadow map (observation-only, zero-regression)', 
 		const reauthWin = electron.browserWindows[1] as unknown as FakeBrowserWindow
 		const w3 = app.runtime.windows.create({
 			source: { url: 'http://localhost:5173/w3.html' },
-		}) as unknown as FakeBrowserWindow
+		}).window as unknown as FakeBrowserWindow
 		const w4 = app.runtime.windows.create({
 			source: { url: 'http://localhost:5173/w4.html' },
-		}) as unknown as FakeBrowserWindow
+		}).window as unknown as FakeBrowserWindow
 
 		const creationOrder = [mainWin.id, reauthWin.id, w3.id, w4.id]
 
@@ -2314,7 +2314,7 @@ describe('unified-lifetime P1a: windowScope owns window destruction', () => {
 		const declaredWin = electron.browserWindows[1] as unknown as FakeBrowserWindow
 		const created = app.runtime.windows.create({
 			source: { url: 'http://localhost:5173/dyn.html' },
-		}) as unknown as FakeBrowserWindow
+		}).window as unknown as FakeBrowserWindow
 		const trackedWins = [mainWin, declaredWin, created]
 
 		// Capture every windowScope BEFORE shutdown (shadow is cleared by teardown).
@@ -2691,7 +2691,7 @@ describe('unified-lifetime P1b: wcScope owns trust leases', () => {
 		const win = app.runtime.windows.create({
 			source: { url: 'http://localhost:5173/nt.html' },
 			autoTrust: false,
-		}) as unknown as FakeBrowserWindow
+		}).window as unknown as FakeBrowserWindow
 		const wcId = win.webContents.id
 		const invoke = ipcMain.handlers.get(DeckChannel.Invoke)
 		if (!invoke) throw new Error('invoke handler missing')

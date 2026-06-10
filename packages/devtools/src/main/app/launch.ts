@@ -7,25 +7,16 @@ import { createSettingsWindow, wireSettingsWindowEvents } from '../windows/setti
 import { loadWorkbenchSettings } from '../services/settings/index.js'
 
 /**
- * Convenience launcher for the default full-featured app.
- *
- * v2: boots through the `@dimina-kit/electron-deck` framework orchestrator (process
- * lifecycle gate + wire/trust) with the devtools {@link createDevtoolsBackend}
- * supplying the full runtime — the framework is now the single entry. The
- * instance builder (`createDevtoolsRuntime`) is internal; hosts integrate via
- * `workbench(config)` / `launch(config)`.
+ * Host-shell entry for the devtools app. Boots through the
+ * `@dimina-kit/electron-deck` framework orchestrator (process lifecycle gate +
+ * wire/trust) with the devtools {@link createDevtoolsBackend} supplying the full
+ * runtime — the framework is the single entry. The instance builder
+ * (`createDevtoolsRuntime`) is internal; hosts integrate via `launch(config)`,
+ * passing `WorkbenchAppConfig` (incl. `onSetup`, `apiNamespaces`, `menuBuilder`, …).
  */
 export function launch(config: WorkbenchAppConfig = {}): Promise<void> {
-  return frameworkElectronDeck({}, { backend: createDevtoolsBackend(config) })
+  return frameworkElectronDeck({ backend: createDevtoolsBackend(config) })
 }
-
-/**
- * Declarative host-shell entry. Identical to {@link launch} — both boot through
- * the `@dimina-kit/electron-deck` framework with the devtools backend; hosts use
- * this name when integrating (config = `WorkbenchAppConfig`, incl. `onSetup`,
- * `apiNamespaces`, `menuBuilder`, …).
- */
-export const workbench = launch
 
 export function buildDefaultMenu(ctx: WorkbenchContext): void {
   installAppMenu(ctx)

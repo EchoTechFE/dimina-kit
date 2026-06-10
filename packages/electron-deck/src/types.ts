@@ -1,4 +1,4 @@
-import type { BrowserWindow, WebContents, WebContentsView, ipcMain } from 'electron'
+import type { BrowserWindow, NativeImage, WebContents, WebContentsView, ipcMain } from 'electron'
 import type { MinimalApp, MinimalElectron } from './internal/electron-types.js'
 import type { MinimalIpcMain, MinimalWebContents } from './internal/wire-transport.js'
 
@@ -14,11 +14,45 @@ export interface Disposable {
 	dispose(): void | Promise<void>
 }
 
-/** Opaque session handle minted ONLY by `runtime.scopes.create()`. Wraps a
- *  child of the app root, so disposing it (or app shutdown) tears down every
- *  view bound to it. Does NOT expose the internal Scope (no adopt/reset escape). */
+/** Opaque session handle minted by `runtime.scopes.create()` (app-root) or
+ *  `DeckWindow.newSession()` (window-rooted). Wraps a child Scope, so disposing
+ *  it (or app shutdown / window close) tears down every view bound to it. Does
+ *  NOT expose the internal Scope (no adopt/child escape). */
 export interface DeckSession {
+	/** Release THIS session's views (and any other owned resources of its current
+	 *  segment), keeping the session AND its window alive — a fresh segment opens. */
+	reset(): Promise<void>
+	/** Terminal: dispose every view bound to the session and close it. */
 	dispose(): Promise<void>
+}
+
+/** A per-window close decision. `'keep'` vetoes the close; `'close'` proceeds. */
+export type WindowCloseDecision = 'keep' | 'close'
+/** A cancelable per-window close decider registered via {@link DeckWindow.onClose}. */
+export type WindowCloseDecider = () => MaybePromise<WindowCloseDecision>
+
+/**
+ * Opaque handle over a framework-registered window (`runtime.windows.create()`
+ * / `runtime.windows.main`). Exposes the BrowserWindow + its control wc, a
+ * window-rooted session factory, and a per-window cancelable close decider.
+ *
+ * **Never exposes** the raw windowScope / substrate / trust lease.
+ */
+export interface DeckWindow {
+	/** The BrowserWindow this handle wraps. */
+	readonly window: BrowserWindow
+	/** The window's primary control WebContents (=== `window.webContents`),
+	 *  captured once at registration. */
+	readonly controlWc: WebContents
+	/** Mint a window-rooted {@link DeckSession} (a child of this window's lifetime).
+	 *  `runtime.view({ scope })` accepts it under the same provenance check as an
+	 *  app-root session; closing the window cascades every session minted here. */
+	newSession(): DeckSession
+	/** Register a per-window cancelable close decider. On a close attempt the
+	 *  framework `preventDefault()`s, runs the registered deciders in registration
+	 *  order; any `'keep'` vetoes, else the window is destroyed. On the MAIN window
+	 *  a live decider supersedes {@link RuntimeBackend.onMainWindowClose}. */
+	onClose(decider: WindowCloseDecider): Disposable
 }
 
 /**
@@ -48,6 +82,14 @@ export type HostServiceHandler = (...args: any[]) => unknown
 export interface AppConfig {
 	readonly name?: string
 	readonly icon?: string
+	/**
+	 * Optional content source for the framework-built main window. When set AND
+	 * the framework owns the main window (NOT an `ownsWindows:true` backend), the
+	 * framework auto-loads it after the window is built, via the same safeLoad path
+	 * the toolbar / declared windows use. Omitted → the host owns the load. Ignored
+	 * under an `ownsWindows:true` backend (the backend builds + loads its own window).
+	 */
+	readonly source?: WebviewSource
 	/**
 	 * Opt-in process-lifecycle: bind `window-all-closed`. Omitted → the framework
 	 * does NOT touch `window-all-closed` (Electron's default, or the consumer's own
@@ -127,6 +169,9 @@ export interface LifecycleContribution {
  *
  * `trustedWebContents` / `senderPolicy` 是可选 override —— 缺省 framework 用
  * 内部维护的 trusted set + 默认 isTrusted 策略。
+ *
+ * 注意：`backend` 不在这里——它是「这个 deck 跑什么领域装配」的配置，属于
+ * {@link DeckConfig}，不是测试注入旋钮。
  */
 export interface DeckOptions {
 	/** 注入自定义 Electron（测试 fake 或 production override）。缺省时 framework lazy import 真 electron。 */
@@ -137,15 +182,16 @@ export interface DeckOptions {
 	readonly trustedWebContents?: () => readonly MinimalWebContents[]
 	/** 自定义 senderPolicy；默认按 trusted 集判断。 */
 	readonly senderPolicy?: SenderPolicy
-	/**
-	 * v2 — 领域 backend。提供后 framework 跑 `beforeReady`(pre-ready) + `assemble`
-	 * (setup)，并把 main-window 装配让给 backend（framework 不建自己的窗口）。
-	 */
-	readonly backend?: RuntimeBackend
 }
 
 export interface DeckConfig {
 	readonly app?: AppConfig
+	/**
+	 * 领域 backend。提供后 framework 跑 `beforeReady`(pre-ready) + `assemble`
+	 * (setup)，并把 main-window 装配让给 backend（framework 不建自己的窗口）。
+	 * backend host 的主入口字段：`electronDeck({ backend })`——无需空 `{}` + options。
+	 */
+	readonly backend?: RuntimeBackend
 	/** 暴露给小程序，自动投影为 `wx.<name>` */
 	readonly simulatorApis?: Record<string, SimulatorApiHandler>
 	/** 暴露给 trusted webview（toolbar 等）的 RPC */
@@ -277,6 +323,17 @@ export interface DeckViewHandle {
 	moveTo(win: BrowserWindow, opts: { zone?: number; anchor?: string; rehome?: boolean }): Promise<void>
 	/** Tear down this placement (detach the native view, disable the sink). */
 	dispose(): Promise<void>
+	/** The native view's `WebContents`. Available immediately — the handle owns
+	 *  its view before any `placeIn`, so a caller can recover the WebContents (and
+	 *  its bounds/screenshot below) without diffing `mainWindow.contentView.children`. */
+	readonly webContents: WebContents
+	/** The view's LIVE screen-space rect when it is currently placed AND visible;
+	 *  `null` before any placement, after `applyPlacement({visible:false})`, and
+	 *  after `dispose()`. */
+	bounds(): ViewBounds | null
+	/** Capture the native view as a `NativeImage` (pass-through to the view's
+	 *  `webContents.capturePage()`). */
+	capturePage(): Promise<NativeImage>
 }
 
 export interface Runtime {
@@ -293,9 +350,12 @@ export interface Runtime {
 	}
 
 	readonly windows: {
-		create(opts: WindowCreateOptions): BrowserWindow
+		create(opts: WindowCreateOptions): DeckWindow
 		get(id: string): BrowserWindow | undefined
 		all(): BrowserWindow[]
+		/** The framework-built main window's {@link DeckWindow}, or `null` when the
+		 *  framework does not own a main window (e.g. an `ownsWindows:true` backend). */
+		readonly main: DeckWindow | null
 		trust(win: BrowserWindow): Disposable
 		/**
 		 * Register an EXTERNALLY-created window (one the host built itself, e.g.
@@ -458,4 +518,12 @@ export interface RuntimeBackend {
 	 * window. Process-level: fires regardless of `ownsWindows`.
 	 */
 	onSecondInstance?(): void
+	/**
+	 * Deterministic shutdown hook. AWAITED exactly ONCE during `app.shutdown()`'s
+	 * cleanup, consistently with `config.lifecycle.beforeClose` — so a backend no
+	 * longer hand-rolls `app.once('before-quit', ...)`. Best-effort: a throw/reject
+	 * is logged and does NOT abort the rest of shutdown. Fires regardless of
+	 * `ownsWindows`.
+	 */
+	onShutdown?(): void | Promise<void>
 }

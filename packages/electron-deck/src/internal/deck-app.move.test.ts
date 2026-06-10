@@ -300,7 +300,7 @@ async function bootTwoWindows(): Promise<{
 	const winA = electron.browserWindows[0] as unknown as FakeBrowserWindow
 	const winB = app.runtime.windows.create({
 		source: { url: 'http://localhost:5173/winB.html' },
-	}) as unknown as FakeBrowserWindow
+	}).window as unknown as FakeBrowserWindow
 	return { app, electron, ipcMain, winA, winB }
 }
 

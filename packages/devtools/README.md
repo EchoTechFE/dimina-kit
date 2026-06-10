@@ -2,16 +2,18 @@
 
 基于 Electron 的小程序开发者工具。提供模拟器、Chrome DevTools 面板、WXML/AppData/Storage 面板、编译配置等功能。
 
-下游 host 通过 `workbench(config)`（或零配置 `launch()`）集成并定制 devtools（见下方「两种接入方式」）。两者都经领域中立的 [`@dimina-kit/electron-deck`](../electron-deck) 框架编排——框架接管 Electron 进程生命周期（whenReady / will-quit）、wire/trust 原语，devtools 作为 `RuntimeBackend` 注入完整运行时（见 [`framework-extraction-v2.md`](../electron-deck/docs/framework-extraction-v2.md)）。
+下游 host 通过 `launch(config)` 集成并定制 devtools（零配置直接 `launch()`，配置驱动 `launch({...})`；见下方「两种用法」）。两种用法都经领域中立的 [`@dimina-kit/electron-deck`](../electron-deck) 框架编排——框架接管 Electron 进程生命周期（whenReady / will-quit）、wire/trust 原语，devtools 作为 `RuntimeBackend` 注入完整运行时（见 [`framework-extraction-v2.md`](../electron-deck/docs/framework-extraction-v2.md)）。
 
 ---
 
-## 两种接入方式
+## 两种用法
 
-| 级别         | 入口                   | 控制力                | 适合场景       |
+单一入口 `launch(config?)`——不传配置即零配置直接运行，传 `WorkbenchAppConfig` 即配置驱动定制。
+
+| 用法         | 调用                   | 控制力                | 适合场景       |
 | ------------ | ---------------------- | --------------------- | -------------- |
 | **零配置**   | `launch()`             | 无                    | 直接运行       |
-| **配置驱动** | `workbench()` | 配置 Provider + 扩展点 | 品牌化、深度定制 |
+| **配置驱动** | `launch({...})`        | 配置 Provider + 扩展点 | 品牌化、深度定制 |
 
 ### 零配置
 
@@ -22,17 +24,17 @@ launch()
 
 ### 配置驱动
 
-扩展点分两类：**配置 Provider**（构造期、一对一，替换某个内置能力）走 `workbench` 配置字段；**Contribution**（`onSetup` 期、一对多，添加多个同类条目）走 `onSetup(instance)` 上的 typed 方法。所有 Contribution 都 per-context，随 context 自动销毁。
+扩展点分两类：**配置 Provider**（构造期、一对一，替换某个内置能力）走 `launch` 配置字段；**Contribution**（`onSetup` 期、一对多，添加多个同类条目）走 `onSetup(instance)` 上的 typed 方法。所有 Contribution 都 per-context，随 context 自动销毁。
 
 ```typescript
 import { suppressEpipe } from '@dimina-kit/devtools/bootstrap'
-import { workbench } from '@dimina-kit/devtools'
+import { launch } from '@dimina-kit/devtools'
 import { rendererDir } from '@dimina-kit/devtools/paths'
 import { Menu } from 'electron'
 
 suppressEpipe()
 
-workbench({
+launch({
   // ── 配置 Provider（构造期，一对一）──
   appName: '我的开发工具',
   adapter: myAdapter,
@@ -179,7 +181,7 @@ src/
 
 ### WorkbenchConfig
 
-`launch()` 和 `workbench()` 共用：
+`launch()` 接受的基础字段（`WorkbenchConfig`）：
 
 | 字段               | 类型                 | 默认值              | 说明                               |
 | ------------------ | -------------------- | ------------------- | ---------------------------------- |
@@ -193,7 +195,7 @@ src/
 
 ### WorkbenchAppConfig（扩展 WorkbenchConfig）
 
-`workbench()` 额外支持：
+`launch()` 完整接受的 `WorkbenchAppConfig` 额外支持：
 
 | 字段            | 类型                                        | 默认值      | 说明                                              |
 | --------------- | ------------------------------------------- | ----------- | ------------------------------------------------- |
@@ -230,7 +232,7 @@ src/
 
 ## Embedding & Extending the Project Panel
 
-宿主（如 qdmp）通过 `workbench({...})` 嵌入 devtools 时，可对项目面板做三个正交扩展：
+宿主（如 qdmp）通过 `launch({...})` 嵌入 devtools 时，可对项目面板做三个正交扩展：
 
 | 扩展点 | 用途 |
 | --- | --- |
@@ -249,7 +251,7 @@ src/
 ### 最小示例
 
 ```typescript
-import { workbench } from '@dimina-kit/devtools'
+import { launch } from '@dimina-kit/devtools'
 import type { ProjectsProvider, ProjectTemplate } from '@dimina-kit/devtools/projects-provider'
 import { BrowserWindow } from 'electron'
 
@@ -291,7 +293,7 @@ const qdmpBlank: ProjectTemplate = {
   source: { type: 'directory', path: '/abs/path/to/template' },
 }
 
-workbench({
+launch({
   projectsProvider: provider,
   projectTemplates: [qdmpBlank],
   builtinTemplates: ['taro-todo'], // 只保留 taro-todo，干掉默认 blank
@@ -463,7 +465,7 @@ launch({ preloadPath: '/absolute/path/to/my-preload.js' })
 | `wx.getStorage(...)` 覆盖内置 | `'getStorage'`（小心：这会**屏蔽** dimina 容器的实现） |
 
 ```typescript
-workbench({
+launch({
   onSetup: (instance) => {
     // 提供 wx.login 的实现（dimina 容器默认未实现，注册后才能用）
     const dispose = instance.registerSimulatorApi('login', async ({ success }) => {
@@ -495,7 +497,7 @@ workbench({
 `@dimina-kit/devtools` 的公共入口。`api.ts`（根入口）聚合了所有公共 API，优先从根入口导入。
 
 ```
-@dimina-kit/devtools                        launch, workbench, buildDefaultMenu,
+@dimina-kit/devtools                        launch, buildDefaultMenu,
                                        openSettingsWindow, suppressEpipe, setupCdpPort,
                                        createWorkbenchContext, createMainWindow,
                                        createViewManager, IpcRegistry,

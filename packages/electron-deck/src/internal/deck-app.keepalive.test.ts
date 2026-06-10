@@ -300,7 +300,7 @@ describe('keepAlive — Part 1 lifetime/leak fix: the native WebContents is dest
 		// (not a full app shutdown), which must destroy the view it hosts.
 		const win = app.runtime.windows.create({
 			source: { url: 'http://localhost:5173/popout.html' },
-		}) as unknown as FakeBrowserWindow
+		}).window as unknown as FakeBrowserWindow
 
 		const handle = withView(app.runtime).view({ source: { url: 'data:text/html,x' } })
 		const wcv = lastWcv(electron)
@@ -325,7 +325,7 @@ describe('keepAlive — Part 1 lifetime/leak fix: the native WebContents is dest
 
 		const win = app.runtime.windows.create({
 			source: { url: 'http://localhost:5173/popout.html' },
-		}) as unknown as FakeBrowserWindow
+		}).window as unknown as FakeBrowserWindow
 
 		const handle = withView(app.runtime).view({ source: { url: 'data:text/html,x' } })
 		const wcv = lastWcv(electron)
@@ -581,7 +581,7 @@ describe('keepAlive — Part 2 opt-in LRU helper (B3.2)', () => {
 		// child of THAT window's scope (closing the window cascades into it).
 		const win = app.runtime.windows.create({
 			source: { url: 'http://localhost:5173/popout.html' },
-		}) as unknown as FakeBrowserWindow
+		}).window as unknown as FakeBrowserWindow
 		const a = withView(app.runtime).view({ source: { url: 'data:text/html,a' }, keepAlive })
 		const wcvA = lastWcv(electron)
 		a.placeIn(win as unknown as Runtime['mainWindow'], { zone: 0 })
@@ -675,7 +675,7 @@ describe('keepAlive — Part 2 opt-in LRU helper (B3.2)', () => {
 		const keepAlive: KeepAliveSpec = { policy: 'lru', max: 1 }
 		const winB = app.runtime.windows.create({
 			source: { url: 'http://localhost:5173/winB.html' },
-		}) as unknown as FakeBrowserWindow
+		}).window as unknown as FakeBrowserWindow
 
 		// A: placed + HIDDEN in the `lru:1` group (group hidden=[A], within budget).
 		const a = withView(app.runtime).view({ source: { url: 'data:text/html,a' }, keepAlive })
