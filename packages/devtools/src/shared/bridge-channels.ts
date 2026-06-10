@@ -137,6 +137,34 @@ export interface HostEnvSnapshot {
 }
 
 /**
+ * Map the renderer's logical device metrics onto the subset of a
+ * HostEnvSnapshot the service-host window's `getSystemInfoSync` consumes.
+ * `windowHeight` excludes the status bar (the page area); `windowWidth` has no
+ * horizontal chrome. Zoom is intentionally absent — it is a display scale, not
+ * a logical-size change.
+ *
+ * Single source of truth for the device→host-env mapping, shared by the live
+ * `SetDeviceInfo` IPC path (main/ipc/simulator.ts) and the per-spawn host-env
+ * seeding (main/ipc/bridge-router.ts). Keeping them identical guarantees a
+ * service-host RESPAWN after a device change reports the same dims the live
+ * update pushed — otherwise a respawn would silently revert to the boot device.
+ */
+export function deviceInfoToHostEnv(d: NativeDeviceInfo): Partial<HostEnvSnapshot> {
+  return {
+    brand: d.brand,
+    model: d.model,
+    system: d.system,
+    platform: d.platform,
+    pixelRatio: d.pixelRatio,
+    screenWidth: d.screenWidth,
+    screenHeight: d.screenHeight,
+    windowWidth: d.screenWidth,
+    windowHeight: Math.max(0, d.screenHeight - d.statusBarHeight),
+    statusBarHeight: d.statusBarHeight,
+  }
+}
+
+/**
  * Subset of WeChat page `window` config plus tabBar list, parsed from
  * `app-config.json` (`{app:{window,tabBar,pages,entryPagePath}, modules:{[pagePath]:{window}}}`).
  * Mirrors mergePageConfig in dimina-fe: page-level keys override app-level.

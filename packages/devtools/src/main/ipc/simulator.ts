@@ -1,5 +1,4 @@
 import { ServiceHostChannel, SimulatorChannel, SimulatorCustomApiChannel } from '../../shared/ipc-channels.js'
-import type { NativeDeviceInfo } from '../../shared/ipc-channels.js'
 import {
   SimulatorAttachNativeSchema,
   SimulatorCustomApiInvokeSchema,
@@ -8,33 +7,11 @@ import {
   SimulatorSetNativeBoundsSchema,
   SimulatorSetVisibleSchema,
 } from '../../shared/ipc-schemas.js'
-import type { HostEnvSnapshot } from '../../shared/bridge-channels.js'
+import { deviceInfoToHostEnv } from '../../shared/bridge-channels.js'
 import type { WorkbenchContext } from '../services/workbench-context.js'
 import type { Disposable } from '@dimina-kit/electron-deck/main'
 import { validate } from '../utils/ipc-schema.js'
 import { IpcRegistry } from '../utils/ipc-registry.js'
-
-/**
- * Map the renderer's logical device metrics onto the subset of a
- * HostEnvSnapshot the service-host window's `getSystemInfoSync` consumes.
- * `windowHeight` excludes the status bar (the page area); `windowWidth` has no
- * horizontal chrome. Zoom is intentionally absent — it is a display scale, not
- * a logical-size change.
- */
-function deviceInfoToHostEnv(d: NativeDeviceInfo): Partial<HostEnvSnapshot> {
-  return {
-    brand: d.brand,
-    model: d.model,
-    system: d.system,
-    platform: d.platform,
-    pixelRatio: d.pixelRatio,
-    screenWidth: d.screenWidth,
-    screenHeight: d.screenHeight,
-    windowWidth: d.screenWidth,
-    windowHeight: Math.max(0, d.screenHeight - d.statusBarHeight),
-    statusBarHeight: d.statusBarHeight,
-  }
-}
 
 export function registerSimulatorIpc(ctx: Pick<WorkbenchContext, 'views' | 'notify' | 'senderPolicy' | 'simulatorApis' | 'bridge'>): Disposable {
   return new IpcRegistry(ctx.senderPolicy)

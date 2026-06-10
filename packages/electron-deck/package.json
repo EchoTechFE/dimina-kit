@@ -61,7 +61,8 @@
     "check-types": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
     "check:trust-seal": "node scripts/check-trust-seal.mjs",
-    "test": "node scripts/check-trust-seal.mjs && vitest run",
+    "check:docs-api-sync": "node scripts/check-docs-api-sync.mjs",
+    "test": "node scripts/check-trust-seal.mjs && node scripts/check-docs-api-sync.mjs && vitest run",
     "test:dev": "vitest",
     "prepack": "pnpm run build"
   },

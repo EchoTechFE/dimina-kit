@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, protocol, session as electronSession, webC
 import type { IpcMainEvent, IpcMainInvokeEvent, WebContents } from 'electron'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { BRIDGE_CHANNELS as C, SIMULATOR_EVENTS as E } from '../../shared/bridge-channels.js'
+import { BRIDGE_CHANNELS as C, SIMULATOR_EVENTS as E, deviceInfoToHostEnv } from '../../shared/bridge-channels.js'
 import type { NativeDeviceInfo } from '../../shared/ipc-channels.js'
 import { isPersistentSimulatorApi } from '../../shared/simulator-api-metadata.js'
 import { devtoolsPackageRoot } from '../utils/paths.js'
@@ -637,7 +637,18 @@ async function handleSpawn(
     resourceServer = await startDiminaResourceServer(path.resolve(pkgRoot, root))
     resourceBaseUrl = resourceServer.baseUrl
   }
-  const hostEnv = makeHostEnv(opts.hostEnvSnapshot)
+  // The selected device (renderer toolbar) is the authoritative source for the
+  // logical dims a spawn must report. The simulator-supplied `hostEnvSnapshot`
+  // is derived from the device baked into the simulator at BOOT time, so on a
+  // RESPAWN after a live device change it still carries the boot device. Layer
+  // the live `currentDevice` on top so every spawn/respawn reports the selected
+  // device — matching what the live `SetDeviceInfo` HostEnvUpdate pushes to an
+  // already-running service host. Pre-selection (null) → simulator snapshot wins.
+  const selectedDevice = ctx.bridge?.getDevice?.() ?? null
+  const hostEnv = makeHostEnv({
+    ...opts.hostEnvSnapshot,
+    ...(selectedDevice ? deviceInfoToHostEnv(selectedDevice) : {}),
+  })
 
   // app-config.json lives at `<base><appId>/<root>/app-config.json` on the dev
   // server, or at the local server root for the fallback path.
