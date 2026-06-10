@@ -378,6 +378,7 @@ var __viewAnchorCore = (() => {
     let rafId = null;
     let steadyFrames = 0;
     const STEADY_CLOSE_FRAMES = 2;
+    let pointerHeld = false;
     let sentinelDeadline = null;
     const computePlacement = () => {
       const p = measurePlacement(target);
@@ -406,7 +407,7 @@ var __viewAnchorCore = (() => {
       const p = computePlacement();
       if (lastPublished && samePlacement(lastPublished, p)) {
         steadyFrames++;
-        if (steadyFrames >= STEADY_CLOSE_FRAMES) {
+        if (steadyFrames >= STEADY_CLOSE_FRAMES && !pointerHeld) {
           sentinelDeadline = null;
           return;
         }
@@ -433,6 +434,7 @@ var __viewAnchorCore = (() => {
       }
       steadyFrames = 0;
       sentinelDeadline = null;
+      pointerHeld = false;
     };
     const onScroll = () => {
       if (followGeometry) openSentinel();
@@ -440,7 +442,15 @@ var __viewAnchorCore = (() => {
     };
     const onPointerDown = (e) => {
       const t = e.target;
-      if (t && t.closest && t.closest('[role="separator"]')) openSentinel();
+      if (t && t.closest && t.closest('[role="separator"]')) {
+        pointerHeld = true;
+        openSentinel();
+      }
+    };
+    const onPointerUp = () => {
+      if (!pointerHeld) return;
+      pointerHeld = false;
+      openSentinel();
     };
     const startObserving = () => {
       if (observer) return;
@@ -459,6 +469,7 @@ var __viewAnchorCore = (() => {
       }
       if (followGeometry) {
         window.addEventListener("pointerdown", onPointerDown, { capture: true });
+        window.addEventListener("pointerup", onPointerUp, { capture: true });
       }
     };
     const stopObserving = () => {
@@ -475,6 +486,9 @@ var __viewAnchorCore = (() => {
         capture: true
       });
       window.removeEventListener("pointerdown", onPointerDown, {
+        capture: true
+      });
+      window.removeEventListener("pointerup", onPointerUp, {
         capture: true
       });
       closeSentinel();

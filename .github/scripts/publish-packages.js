@@ -4,7 +4,11 @@ import { randomUUID } from 'node:crypto'
 import { appendFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
+// Order matters: dependency-first so consumers resolve already-published versions.
+// view-anchor → electron-deck → devkit → devtools.
 const PACKAGES = [
+  { name: '@dimina-kit/view-anchor', dir: 'packages/view-anchor' },
+  { name: '@dimina-kit/electron-deck', dir: 'packages/electron-deck' },
   { name: '@dimina-kit/devkit', dir: 'packages/devkit' },
   { name: '@dimina-kit/devtools', dir: 'packages/devtools' },
 ]

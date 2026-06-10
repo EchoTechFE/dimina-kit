@@ -388,6 +388,16 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     if (hostToolbarView && !hostToolbarView.webContents.isDestroyed()) {
       return hostToolbarView
     }
+    // Rebuilding after the host destroyed the underlying webContents: detach the
+    // dead view from the contentView and reset the added-flag so the new view
+    // gets re-mounted (otherwise the `hostToolbarViewAdded` guard would skip the
+    // addChildView and the toolbar would silently disappear).
+    if (hostToolbarView && hostToolbarViewAdded) {
+      try {
+        ctx.windows.mainWindow.contentView.removeChildView(hostToolbarView)
+      } catch { /* already removed */ }
+      hostToolbarViewAdded = false
+    }
     const view = new WebContentsView({
       webPreferences: {
         nodeIntegration: false,

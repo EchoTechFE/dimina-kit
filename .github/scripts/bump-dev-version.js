@@ -2,7 +2,12 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-const PACKAGES = ['packages/devkit', 'packages/devtools']
+const PACKAGES = [
+  'packages/view-anchor',
+  'packages/electron-deck',
+  'packages/devkit',
+  'packages/devtools',
+]
 const suffix = process.env.DEV_VERSION_SUFFIX
 
 if (!suffix) {

@@ -138,6 +138,11 @@ export function createViewHandle(deps: ViewHandleDeps): ViewHandle {
   let currentZone: number | undefined
   // The per-placement teardown scope (a child of the current target windowScope).
   let viewScope: Scope | null = null
+  // The windowScope the viewScope is ACTUALLY parented under (its lifetime owner).
+  // Distinct from `current.windowScope` (the display window): a display-only move
+  // updates `current` but NOT `owning`, so a later `rehome:true` adopt uses the
+  // viewScope's real parent as the donor (scope.adopt requires donor === parent).
+  let owningWindowScope: Scope | null = null
 
   // The placement sink's gate. Goes false the instant the A4 teardown runs
   // (STEP0), so a late applyPlacement after dispose/cascade is a no-op.
@@ -259,8 +264,13 @@ export function createViewHandle(deps: ViewHandleDeps): ViewHandle {
     // pre-move source state (same end-state as a dest-commit failure). Mirrors the
     // STEP-2 ROLLBACK arm exactly so the two failure paths converge.
     if (opts.rehome) {
+      // The adopt donor MUST be the viewScope's ACTUAL parent (owningWindowScope),
+      // not the current display window (src). After a display-only move, src is the
+      // display window but the viewScope still lives under owningWindowScope, so
+      // adopt(donor=src) would reject "child is not a direct child …".
+      const donor = owningWindowScope ?? src.windowScope
       try {
-        await src.windowScope.adopt(vs, dest.windowScope)
+        await donor.adopt(vs, dest.windowScope)
       } catch (adoptErr) {
         // Undo the SUCCESSFUL dest commit: unmount AND commit on dest so the
         // native dest attach is actually reversed (unlike the STEP-2 arm, here the
@@ -292,6 +302,8 @@ export function createViewHandle(deps: ViewHandleDeps): ViewHandle {
         // in src, `current` = src, and the (un-rehomed) viewScope is intact.
         throw adoptErr
       }
+      // Adopt landed: the viewScope's lifetime now lives under dest's windowScope.
+      owningWindowScope = dest.windowScope
     }
     // gap#2: moveTo does NOT touch capability grants — the dest window's control
     // layer issues its own. Out of scope by construction.
@@ -317,6 +329,8 @@ export function createViewHandle(deps: ViewHandleDeps): ViewHandle {
       // windowScope's close() cascades into it.
       const vs = target.windowScope.child()
       viewScope = vs
+      // The viewScope is born parented under the target window's scope.
+      owningWindowScope = target.windowScope
 
       // A4 order: own the combined DETACH+DESTROY FIRST → LIFO runs it LAST, after
       // the sink-disable (STEP0). The sink-disable is owned LAST → LIFO runs it

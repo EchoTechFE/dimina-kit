@@ -305,8 +305,13 @@ export class DeckApp {
 	 *  (which bypasses that promise) reach here; and `rootScope.close()` inside the
 	 *  body can synchronously fire a framework window's `'closed'` → `shutdown()`
 	 *  re-entry. Without this latch that re-entry would invoke `backend.onShutdown`
-	 *  a second time. Never resets. */
-	private cleanupRan = false
+	 *  a second time.
+	 *
+	 *  This is a JOIN, not a boolean early-return: a re-entrant caller AWAITS the
+	 *  SAME in-flight cleanup promise instead of returning immediately. A plain
+	 *  `if (ran) return` let a concurrent shutdown skip past an in-flight cleanup
+	 *  and force `app.quit()` mid-teardown (truncation). Never resets. */
+	private cleanupPromise: Promise<void> | null = null
 
 	constructor(config: DeckConfig, options: DeckAppOptions = {}) {
 		this.config = config
@@ -1663,14 +1668,19 @@ export class DeckApp {
 		}
 	}
 
-	private async runShutdownCleanup(): Promise<void> {
-		// Idempotency: run the cleanup body at most once. `cleanupOnError` reaches
-		// here outside the single-flight `shutdownPromise`, and `rootScope.close()`
-		// below can re-enter via a framework window's `'closed'` → `shutdown()` — so
-		// without this latch `backend.onShutdown` (and beforeClose) could run twice.
-		if (this.cleanupRan) return
-		this.cleanupRan = true
+	private runShutdownCleanup(): Promise<void> {
+		// Idempotency = JOIN: run the cleanup body at most once, and make a re-entrant
+		// caller AWAIT the in-flight run rather than skip past it. `cleanupOnError`
+		// reaches here outside the single-flight `shutdownPromise`, and a concurrent
+		// `shutdown()` can arrive while the first cleanup is still parked (e.g. on a
+		// slow disposer). A plain boolean early-return let that second path race ahead
+		// to `app.quit()` mid-teardown (truncation). Caching the promise merges them.
+		if (this.cleanupPromise) return this.cleanupPromise
+		this.cleanupPromise = this.doShutdownCleanup()
+		return this.cleanupPromise
+	}
 
+	private async doShutdownCleanup(): Promise<void> {
 		// unified-lifetime P1b: no pre-beforeClose trust fence is needed here. Trust
 		// for a destroyed window is revoked SYNCHRONOUSLY in its 'closed' handler
 		// (revokeWindowTrust), so any already-destroyed window is already untrusted
@@ -2171,12 +2181,19 @@ export class DeckApp {
 								// leaked mid-apply add must still be detached; removeChildView of a
 								// non-child is a no-op in real Electron). A SOURCE-commit failure that
 								// truly never touched dest → removeChildView is a harmless no-op.
-								const destChildren = destWin.contentView.children
-								// `== null` covers BOTH undefined and null (a null `children` would
-								// throw on `.includes` before the unregister below — codex P0 round-5).
-								const maybeAttached = destChildren == null || destChildren.includes(wcv)
-								if (!destWin.isDestroyed() && maybeAttached) {
-									destWin.contentView.removeChildView(wcv)
+								// Check isDestroyed() FIRST: reading `.contentView` on a destroyed
+								// BrowserWindow throws "Object has been destroyed" in real Electron, so a
+								// dead dest window must skip the contentView read entirely (its native child
+								// is already gone — nothing to detach). Without this guard the getter throws,
+								// gets caught below, and pollutes the log with a secondary destroyed error.
+								if (!destWin.isDestroyed()) {
+									const destChildren = destWin.contentView.children
+									// `== null` covers BOTH undefined and null (a null `children` would
+									// throw on `.includes` — codex P0 round-5).
+									const maybeAttached = destChildren == null || destChildren.includes(wcv)
+									if (maybeAttached) {
+										destWin.contentView.removeChildView(wcv)
+									}
 								}
 							}
 							catch (cleanupErr) {
@@ -2193,8 +2210,15 @@ export class DeckApp {
 							throw e
 						}
 						// inner.moveTo succeeded → move the substrate registration: drop
-						// from src now that the view lives in dest.
-						srcSub?.unregisterView(viewId)
+						// from src now that the view lives in dest. For a SAME-WINDOW move
+						// (src === dest, only re-anchor/zone) the dest registration above IS
+						// the src entry — unregistering it would erase the very entry we just
+						// (re)registered, so a later dispose can't resolve viewId → wcv and
+						// the native detach is silently skipped. Skip the unregister when the
+						// substrate is unchanged.
+						if (srcSub && srcSub !== destSub) {
+							srcSub.unregisterView(viewId)
+						}
 						placedSubstrate = destSub
 						// codex P0 round-3 (BUG 6): a successful move ALWAYS re-mounts the
 						// view VISIBLE in dest, so it is no longer hidden/evictable in its

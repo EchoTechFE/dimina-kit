@@ -201,13 +201,20 @@ export function createScope(): Scope {
     segment = newSegment()
     inFlightKind = 'reset'
     const p = (async () => {
-      await disposeSegment(old)
-      // A concurrent close() may have upgraded this teardown to a terminal
-      // close while we were awaiting; if so it owns clearing inFlight/emitting.
-      if (inFlightKind === 'reset') {
-        inFlight = null
-        inFlightKind = null
-        emit('reset')
+      // The disposer may throw (a disposeAll AggregateError); the error must
+      // still reach the first caller, but the in-flight state MUST be cleared
+      // and 'reset' fired regardless — otherwise the scope wedges permanently
+      // (stale rejection forever, new segment leaked). finally guarantees both.
+      try {
+        await disposeSegment(old)
+      } finally {
+        // A concurrent close() may have upgraded this teardown to a terminal
+        // close while we were awaiting; if so it owns clearing inFlight/emitting.
+        if (inFlightKind === 'reset') {
+          inFlight = null
+          inFlightKind = null
+          emit('reset')
+        }
       }
     })()
     inFlight = p
@@ -224,10 +231,16 @@ export function createScope(): Scope {
     segment = newSegment()
     inFlightKind = 'close'
     const p = (async () => {
-      await disposeSegment(old)
-      inFlight = null
-      inFlightKind = null
-      emit('closed')
+      // As in runReset: the disposer may throw (KA-5 lets a CommitError reach
+      // the caller), but 'closed' must still fire and the in-flight state must
+      // clear so a later close() is idempotent rather than a stale rejection.
+      try {
+        await disposeSegment(old)
+      } finally {
+        inFlight = null
+        inFlightKind = null
+        emit('closed')
+      }
     })()
     inFlight = p
     return p
@@ -341,14 +354,24 @@ export function createScope(): Scope {
         alive = false
         const afterReset = inFlight
         inFlightKind = 'close'
-        const upgraded = afterReset.then(async () => {
+        const upgraded = (async () => {
+          // The in-flight reset may reject (a throwing disposer in the old
+          // segment). Swallow that here — the upgrade still owns tearing down
+          // the leftover (fresh) segment and firing 'closed'. The reset's own
+          // rejection already reached its first caller.
+          await afterReset.catch(() => {})
           const leftover = segment
           segment = newSegment()
-          await disposeSegment(leftover)
-          inFlight = null
-          inFlightKind = null
-          emit('closed')
-        })
+          // Clear state + emit even if the leftover teardown throws, so a later
+          // close() is idempotent rather than a permanent stale rejection.
+          try {
+            await disposeSegment(leftover)
+          } finally {
+            inFlight = null
+            inFlightKind = null
+            emit('closed')
+          }
+        })()
         inFlight = upgraded
         return upgraded
       }

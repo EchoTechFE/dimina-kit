@@ -1,20 +1,21 @@
 /**
  * `@dimina-kit/electron-deck/host` — the cross-process host-shell transport.
  *
- * These are the pieces a host-shell host (dimina-devtools' own `electronDeck()`
- * entry, which lives in `@dimina-kit/devtools` per the foundation's dependency
- * direction) constructs to carry `hostServices` (trusted-webview RPC) and
- * `events` (main→webview push) over a real Electron `ipcMain`:
+ * These are the transport pieces the `electronDeck()` entry (exported from this
+ * package's root, `@dimina-kit/electron-deck`) and domain backends construct to
+ * carry `hostServices` (trusted-webview RPC) and `events` (main→webview push)
+ * over a real Electron `ipcMain`:
  *
  *  - `WireTransport`            — the wire protocol (probe / invoke / event fanout)
  *  - `EventBus`                 — declared-event publisher fan-out
  *  - `InMemoryTypedIpcRegistry` — main-process handler/invoke registry the
  *                                 transport routes host/simulator kinds through
  *
- * The `electronDeck(config)` orchestration cannot live in this package without a
- * cycle (it must drive the devtools runtime, and devtools already depends on
- * `@dimina-kit/electron-deck`); exposing the transport here lets the devtools-side
- * entry assemble it. See packages/devtools/docs/workbench-model.md.
+ * The `electronDeck(config)` orchestration lives in this package's root entry
+ * (`@dimina-kit/electron-deck`, see `src/index.ts`); it stays domain-neutral and
+ * receives the domain assembly via an injected `RuntimeBackend`. Exposing the
+ * transport here lets a backend implementer assemble it. See
+ * packages/devtools/docs/workbench-model.md.
  */
 export {
   WireTransport,

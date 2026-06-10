@@ -271,6 +271,14 @@ export function createPlacementAnchor(
   let rafId: number | null = null
   let steadyFrames = 0
   const STEADY_CLOSE_FRAMES = 2
+  // True while a [role="separator"] splitter drag is in progress: set on the
+  // capture-phase pointerdown that opened the window, cleared on pointerup
+  // (§2.D). A held pointer means the drag may still resume after a static
+  // pause, so a steady run while held must NOT close the sentinel — it only
+  // closes once the pointer is released (松手后 2~3 帧内判静止→关窗). Without
+  // this gate a press that pauses a couple of frames before the drag actually
+  // moves would close mid-press and drop the entire subsequent drag.
+  let pointerHeld = false
   // Absolute time (performance.now()) past which a `pulse(durationMs)` window
   // force-closes even if the geometry is still changing — the upper bound that
   // prevents a perpetually-animating target from keeping the sentinel resident.
@@ -320,9 +328,13 @@ export function createPlacementAnchor(
     const p = computePlacement()
     if (lastPublished && samePlacement(lastPublished, p)) {
       steadyFrames++
-      if (steadyFrames >= STEADY_CLOSE_FRAMES) {
+      // Steady-close only fires once the pointer is RELEASED (§2.D): while a
+      // splitter drag is held, a static pause is a hesitation, not the end of
+      // the drag, so we keep polling (re-arm below) and let `steadyFrames`
+      // accrue — it converges to a close within N frames after pointerup.
+      if (steadyFrames >= STEADY_CLOSE_FRAMES && !pointerHeld) {
         sentinelDeadline = null
-        return // steady → close
+        return // steady (and released) → close
       }
     } else {
       lastPublished = p
@@ -351,6 +363,7 @@ export function createPlacementAnchor(
     }
     steadyFrames = 0
     sentinelDeadline = null
+    pointerHeld = false
   }
 
   // §2.C — an ancestor scroll moved the target's screen rect. With the sentinel
@@ -366,7 +379,19 @@ export function createPlacementAnchor(
   // tick) → open the sentinel.
   const onPointerDown = (e: Event): void => {
     const t = e.target as Element | null
-    if (t && t.closest && t.closest('[role="separator"]')) openSentinel()
+    if (t && t.closest && t.closest('[role="separator"]')) {
+      pointerHeld = true
+      openSentinel()
+    }
+  }
+
+  // §2.D — pointer released: the drag is over, so a steady run may now close the
+  // sentinel. Re-open it (a no-op if already polling) so the steady-close
+  // threshold is reached even if the geometry was already static at release.
+  const onPointerUp = (): void => {
+    if (!pointerHeld) return
+    pointerHeld = false
+    openSentinel()
   }
 
   const startObserving = (): void => {
@@ -389,6 +414,7 @@ export function createPlacementAnchor(
     }
     if (followGeometry) {
       window.addEventListener('pointerdown', onPointerDown, { capture: true })
+      window.addEventListener('pointerup', onPointerUp, { capture: true })
     }
   }
 
@@ -406,6 +432,9 @@ export function createPlacementAnchor(
       capture: true,
     } as EventListenerOptions)
     window.removeEventListener('pointerdown', onPointerDown, {
+      capture: true,
+    } as EventListenerOptions)
+    window.removeEventListener('pointerup', onPointerUp, {
       capture: true,
     } as EventListenerOptions)
     closeSentinel()

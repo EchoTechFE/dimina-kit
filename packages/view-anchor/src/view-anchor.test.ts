@@ -863,6 +863,14 @@ describe('createPlacementAnchor — scroll + windowed RAF geometry sentinel (opt
     target.dispatchEvent(new Event('pointerdown', { bubbles: true }))
   }
 
+  /** Pointer release — ends a splitter drag so the sentinel may steady-close
+   *  (§2.D: 关窗只发生在松手之后). Dispatched bubbling from the target and on
+   *  window directly so a capture/bubble window listener sees it. */
+  function dispatchPointerup(target: HTMLElement): void {
+    target.dispatchEvent(new Event('pointerup', { bubbles: true }))
+    window.dispatchEvent(new Event('pointerup'))
+  }
+
   // Cast helpers: the new options/method aren't on the public types yet.
   type FollowOpts = Parameters<typeof createPlacementAnchor>[1] & {
     followScroll?: boolean
@@ -1055,19 +1063,23 @@ describe('createPlacementAnchor — scroll + windowed RAF geometry sentinel (opt
     })
   })
 
-  // B-close: after N=2 consecutive UNCHANGED frames the sentinel cancels the
-  //   rAF (steady = stop) — no further frame scheduled.
-  it('B-close) N=2 consecutive unchanged frames → sentinel stops (cancelAnimationFrame / no further frame scheduled)', () => {
+  // B-close: after the pointer is RELEASED, N=2 consecutive UNCHANGED frames
+  //   cancel the rAF (steady = stop) — no further frame scheduled. (§2.D: a
+  //   steady run while the pointer is still HELD is a mid-drag pause and must
+  //   NOT close — see follow-geometry-press-drag.fix.test.ts; close is gated on
+  //   pointerup, so this test now releases before going steady.)
+  it('B-close) pointerup then N=2 consecutive unchanged frames → sentinel stops (cancelAnimationFrame / no further frame scheduled)', () => {
     const publish = vi.fn<(p: Placement) => void>()
     const { el, setRect } = buildElement({ x: 0, y: 0, w: 100, h: 100 })
     mk(el, { visible: true, followGeometry: true, publish })
     const splitter = buildSplitter()
 
     dispatchPointerdown(splitter) // open
-    // One changing frame to prove it's live, then go steady.
+    // One changing frame to prove it's live, then release and go steady.
     setRect({ x: 30, y: 0, w: 100, h: 100 })
     raf.flushFrame()
     expect(raf.pending).toBeGreaterThanOrEqual(1) // still polling
+    dispatchPointerup(splitter) // drag over → steady-close now permitted
 
     // Steady frame 1 (rect identical to last published) — not yet closed
     // (N=2 needs TWO consecutive identical frames).

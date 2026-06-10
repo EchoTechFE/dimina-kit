@@ -248,7 +248,6 @@ export interface DeckContext {
 export interface FrameworkEvents {
 	'window-created': { window: BrowserWindow; role: 'main' | 'toolbar' | 'host' }
 	'window-closed': { window: BrowserWindow }
-	'theme-changed': { theme: 'light' | 'dark' }
 	/** webContents.loadURL/loadFile 失败时 emit。framework 不 reject start()，host 可订阅做兜底/重试 */
 	'load-failed': { source: WebviewSource; error: unknown }
 }
