@@ -1,4 +1,51 @@
 /**
+ * ── ROUND 3 (codex third re-review — ratchet final round, 2026-06) ──────────
+ * Two remaining syntax holes plus one GRANULARITY change to the exemption
+ * mechanism itself. Pinned in describe blocks ⑤ and ⑥ below:
+ *
+ *  RED today (verified by running this file before any fix):
+ *   1. dynamic import EXPRESSION (runtime, not type position):
+ *      `const m = await import('…/workbench-context.js')`
+ *      → `ImportExpression` node. AST shape verified on this parser version:
+ *      fields are `source` (Literal — match `source.value`) and `options`
+ *      (import attributes, null here). It is NOT a CallExpression with an
+ *      Import callee on this typescript-estree version, and NOT a
+ *      TSImportType (that one is type-position only, covered in round 2).
+ *   2. module augmentation:
+ *      `declare module '…/workbench-context.js' { interface WorkbenchContext {…} }`
+ *      → `TSModuleDeclaration` with `kind: 'module'`, `declare: true`. For a
+ *      STRING-named module the `id` field is a Literal (match `id.value`);
+ *      for `declare module SomeNs {}` the id is an Identifier with no
+ *      `value` field, so an `[id.value=…]` selector cannot misfire on
+ *      namespace declarations — and the regex keys on the module source, so
+ *      `declare module 'electron'` augmentation stays allowed (GREEN anti-pin).
+ *   3. EXEMPTION GRANULARITY: the per-file `no-restricted-syntax: "off"`
+ *      block in eslint.config.js is revoked. Grandfathered files keep their
+ *      existing violations exempt via an INLINE
+ *      `// eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only`
+ *      on each violating line — so a NEW violation added to an
+ *      already-grandfathered file (invisible today: the whole file is off)
+ *      must be reported. Pinned for a grandfathered file
+ *      (view-manager.ts) and for the public barrel (api.ts).
+ *      NOTE: this round UPDATES the round-2 GREEN pin "grandfathered file
+ *      stays exempt" — its old body linted an UNCOMMENTED violation and
+ *      expected silence, which contradicts the new contract; it now pins the
+ *      inline-comment flavor (green both before and after the fix). Flagged
+ *      explicitly here per TDD policy: this is a deliberate contract change,
+ *      not goalpost-moving by the implementer.
+ *
+ *  Deliberately NOT pinned (decision record, so the absence is not mistaken
+ *  for an oversight later): JSDoc `@type {import('…').WorkbenchContext}`
+ *  comments and triple-slash `/// <reference …>` directives are NOT
+ *  ratcheted, per codex's round-3 scope assessment. Rationale: both live in
+ *  comment trivia — no AST node for no-restricted-syntax to match without a
+ *  custom rule; JSDoc type annotations have no compile effect in the .ts
+ *  sources the ratchet globs cover (tsc honors them only in checked .js),
+ *  and triple-slash references pull in declaration FILES rather than
+ *  importing the WorkbenchContext symbol. Cost/benefit of a bespoke
+ *  comment-scanning rule was judged out of scope for the ratchet.
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
  * ── ROUND 2 (codex re-review, 2026-06) ──────────────────────────────────────
  * The namespace bypass below was closed, but codex found the ratchet still
  * has bypass forms that never produce an ImportDeclaration at all. This file
@@ -94,6 +141,18 @@ async function lintProbe(code: string): Promise<ESLint.LintResult> {
 function ratchetMessages(result: ESLint.LintResult) {
   return result.messages.filter((m) => m.ruleId === 'no-restricted-syntax')
 }
+
+function ratchetMessagesOnLine(result: ESLint.LintResult, line: number) {
+  return ratchetMessages(result).filter((m) => m.line === line)
+}
+
+/**
+ * ROUND 3 — the exact inline exemption marker the ratchet migrates to.
+ * The `-- …` justification suffix is contractual (greppable audit trail);
+ * eslint only consumes the directive part before `--`.
+ */
+const GRANDFATHER_COMMENT =
+  '// eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only'
 
 describe('③ WorkbenchContext import ratchet', () => {
   it('named type import is flagged (GREEN pin — existing coverage must not regress)', async () => {
@@ -258,13 +317,19 @@ describe('④ WorkbenchContext ratchet — round 2 bypasses', () => {
     ).not.toHaveLength(0)
   })
 
-  it('grandfathered file stays exempt (GREEN pin — fix must not break the exception list)', async () => {
-    // src/main/services/views/view-manager.ts is on the enumerated
-    // grandfathered list in eslint.config.js; the ratchet (including any new
-    // selectors added to close the round-2 bypasses) must stay OFF for it.
+  it('grandfathered file stays exempt (GREEN pin — UPDATED in ROUND 3 to the inline-comment flavor)', async () => {
+    // ROUND 3 CONTRACT CHANGE (flagged per TDD policy — see the ROUND 3 file
+    // header): the original round-2 body linted an UNCOMMENTED violation at a
+    // grandfathered path and expected silence, pinning the per-file
+    // `no-restricted-syntax: "off"` block. Round 3 revokes whole-file
+    // exemption (describe ⑥ pins the new granularity), so the old expectation
+    // now contradicts the contract. Updated pin: the grandfathered line
+    // carries the inline grandfather comment and must stay exempt — GREEN
+    // both today (whole file off) and after the fix (inline disable).
     const result = await lintAt(
       path.join(packageRoot, 'src/main/services/views/view-manager.ts'),
       [
+        GRANDFATHER_COMMENT,
         "import type { WorkbenchContext } from '../workbench-context.js'",
         '',
         'export type Probe = WorkbenchContext',
@@ -274,7 +339,7 @@ describe('④ WorkbenchContext ratchet — round 2 bypasses', () => {
 
     expect(
       ratchetMessages(result),
-      'grandfathered files must not be flagged by the ratchet',
+      'inline-grandfathered lines must not be flagged by the ratchet',
     ).toHaveLength(0)
   })
 
@@ -288,6 +353,183 @@ describe('④ WorkbenchContext ratchet — round 2 bypasses', () => {
     expect(
       ratchetMessages(result),
       're-exporting unrelated modules must stay allowed',
+    ).toHaveLength(0)
+  })
+})
+
+// ═══ ROUND 3 — final ratchet round (see file header for the AST evidence) ═══
+describe('⑤ WorkbenchContext ratchet — round 3: dynamic import & augmentation', () => {
+  it('dynamic import() expression is flagged [RED today]', async () => {
+    // BUG CAUGHT (today): a RUNTIME `import('…/workbench-context.js')` is an
+    // ImportExpression node — not an ImportDeclaration, not a TSImportType
+    // (the round-2 selector only covers the type-position flavor) — so a
+    // module can lazily load the whole grab-bag at runtime without tripping
+    // the ratchet at all.
+    const result = await lintProbe(
+      [
+        'export async function loadFullContext() {',
+        "  const m = await import('../services/workbench-context.js')",
+        '  return m',
+        '}',
+        '',
+      ].join('\n'),
+    )
+
+    expect(
+      ratchetMessages(result),
+      'the dynamic-import (ImportExpression) bypass must be reported by no-restricted-syntax',
+    ).not.toHaveLength(0)
+  })
+
+  it('module augmentation of workbench-context is flagged [RED today]', async () => {
+    // BUG CAUGHT (today): `declare module '…/workbench-context.js' {…}` is a
+    // TSModuleDeclaration — no import/export node of any kind — yet it is the
+    // WORST growth direction: instead of merely depending on the grab-bag, a
+    // module silently widens the grab-bag's own interface for everyone.
+    const result = await lintProbe(
+      [
+        "declare module '../services/workbench-context.js' {",
+        '  interface WorkbenchContext {',
+        '    __probeExtraCapability: number',
+        '  }',
+        '}',
+        'export {}',
+        '',
+      ].join('\n'),
+    )
+
+    expect(
+      ratchetMessages(result),
+      'the module-augmentation bypass must be reported by no-restricted-syntax',
+    ).not.toHaveLength(0)
+  })
+
+  it('dynamic import / augmentation of OTHER modules stays allowed (GREEN anti-pin)', async () => {
+    // Closing the two holes above must key on the module source — neither a
+    // wholesale ImportExpression ban nor a wholesale TSModuleDeclaration ban.
+    // `declare module 'electron'` augmentation is the canonical legitimate
+    // case in this codebase, and lazy-loading unrelated modules is normal.
+    const result = await lintProbe(
+      [
+        "declare module 'electron' {",
+        '  interface App {',
+        '    __probeFlag?: string',
+        '  }',
+        '}',
+        '',
+        'export async function loadPaths() {',
+        "  return import('./paths.js')",
+        '}',
+        '',
+      ].join('\n'),
+    )
+
+    expect(
+      ratchetMessages(result),
+      'dynamic import / module augmentation of unrelated modules must stay allowed',
+    ).toHaveLength(0)
+  })
+})
+
+describe('⑥ WorkbenchContext ratchet — round 3: exemption granularity goes inline', () => {
+  // The per-file `no-restricted-syntax: "off"` block in eslint.config.js is
+  // revoked; each grandfathered VIOLATION LINE instead carries
+  // GRANDFATHER_COMMENT. Behavioral contract pinned here: exempt lines stay
+  // exempt, but a grandfathered FILE is no longer a free-growth zone.
+
+  const VIEW_MANAGER = 'src/main/services/views/view-manager.ts'
+  const API_BARREL = 'src/main/api.ts'
+
+  it('grandfathered file: inline-commented violation line stays exempt (GREEN pin)', async () => {
+    // Mirrors the real violation (view-manager.ts:25) with the inline marker
+    // the migration adds. Must be silent today (whole file off) AND after the
+    // fix (inline disable) — continuity pin across the granularity change.
+    const result = await lintAt(
+      path.join(packageRoot, VIEW_MANAGER),
+      [
+        GRANDFATHER_COMMENT,
+        "import { type WorkbenchContext } from '../workbench-context.js'",
+        '',
+        'export type Probe = WorkbenchContext',
+        '',
+      ].join('\n'),
+    )
+
+    expect(
+      ratchetMessages(result),
+      'the inline-grandfathered import line must not be reported',
+    ).toHaveLength(0)
+  })
+
+  it('grandfathered file: a NEW uncommented violation must be reported [RED today]', async () => {
+    // BUG CAUGHT (today): under the whole-file exemption, an
+    // already-grandfathered file can grow ARBITRARY new WorkbenchContext
+    // dependencies invisibly — the exact growth the ratchet exists to forbid.
+    // Line 2 carries the grandfather marker (line 1) and stays exempt; the
+    // namespace import on line 3 is new and unmarked, and MUST be reported.
+    const result = await lintAt(
+      path.join(packageRoot, VIEW_MANAGER),
+      [
+        GRANDFATHER_COMMENT, // line 1
+        "import { type WorkbenchContext } from '../workbench-context.js'", // line 2
+        "import * as WbFull from '../workbench-context.js'", // line 3 — NEW, unmarked
+        '',
+        'export type Probe = WorkbenchContext | WbFull.WorkbenchContext',
+        '',
+      ].join('\n'),
+    )
+
+    expect(
+      ratchetMessagesOnLine(result, 3),
+      'a new unmarked violation inside a grandfathered file must be reported',
+    ).not.toHaveLength(0)
+    expect(
+      ratchetMessagesOnLine(result, 2),
+      'the inline-grandfathered line must stay exempt even when the file has new violations',
+    ).toHaveLength(0)
+  })
+
+  it('api.ts: inline-commented public re-export stays exempt (GREEN pin)', async () => {
+    // api.ts is the package's public barrel — its WorkbenchContext re-export
+    // (api.ts:25) is intended public surface, but the file moves from the
+    // config whitelist to the same inline mechanism as everything else.
+    const result = await lintAt(
+      path.join(packageRoot, API_BARREL),
+      [
+        GRANDFATHER_COMMENT,
+        "export type { WorkbenchContext, CreateContextOptions } from './services/workbench-context.js'",
+        '',
+      ].join('\n'),
+    )
+
+    expect(
+      ratchetMessages(result),
+      'the inline-exempted public re-export in api.ts must not be reported',
+    ).toHaveLength(0)
+  })
+
+  it('api.ts: a NEW uncommented violation must be reported [RED today]', async () => {
+    // BUG CAUGHT (today): the barrel is whitelisted wholesale, so a future
+    // edit could `export *` the entire workbench-context module through the
+    // PUBLIC API without any signal. Line 2 is the marked existing re-export;
+    // the export-star on line 3 is new and unmarked, and MUST be reported.
+    const result = await lintAt(
+      path.join(packageRoot, API_BARREL),
+      [
+        GRANDFATHER_COMMENT, // line 1
+        "export type { WorkbenchContext, CreateContextOptions } from './services/workbench-context.js'", // line 2
+        "export * from './services/workbench-context.js'", // line 3 — NEW, unmarked
+        '',
+      ].join('\n'),
+    )
+
+    expect(
+      ratchetMessagesOnLine(result, 3),
+      'a new unmarked violation in api.ts must be reported',
+    ).not.toHaveLength(0)
+    expect(
+      ratchetMessagesOnLine(result, 2),
+      'the inline-exempted re-export line must stay exempt even when api.ts has new violations',
     ).toHaveLength(0)
   })
 })

@@ -25,6 +25,7 @@
  * sentinel: if an internal service drifts away from the contract, compilation
  * breaks HERE, in this package's CI — not in a downstream host's upgrade.
  */
+// eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
 import type { WorkbenchContext } from '../services/workbench-context.js'
 
 /** Compile-status payload broadcast to hosts via `notify.projectStatus`. */

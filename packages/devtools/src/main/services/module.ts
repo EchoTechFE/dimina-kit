@@ -1,4 +1,5 @@
 import type { Disposable } from '@dimina-kit/electron-deck/main'
+// eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
 import type { WorkbenchContext } from './workbench-context.js'
 
 /**

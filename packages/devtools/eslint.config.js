@@ -97,11 +97,18 @@ export default [
   // ── WorkbenchContext import RATCHET ───────────────────────────────────────
   // Production modules must not grow new dependencies on the full
   // `WorkbenchContext` grab-bag: depend on `MiniappRuntime` / `MenuContext` /
-  // a module-local narrow deps interface instead. The exception list below is
-  // a one-time, MECHANICALLY ENUMERATED snapshot of the violations existing
-  // when the ratchet landed (0.4.0) — per-file, never directory globs. Files
-  // may only ever LEAVE the grandfathered list; any new file importing
-  // WorkbenchContext fails CI.
+  // a module-local narrow deps interface instead.
+  //
+  // EXEMPTION MECHANISM (round 3): exemptions are PER-LINE inline directives,
+  // not per-file config entries. Each violation existing when the ratchet
+  // landed carries
+  //   // eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
+  // directly above it. The inline marker set is shrink-only: migrate a line
+  // to a narrow contract / module-local deps interface, then delete its
+  // marker — never add new markers. Because there is no whole-file
+  // exemption, a NEW violation added to ANY file (including files that
+  // already carry grandfathered lines, and the assembly/barrel files
+  // app.ts / miniapp-runtime.ts / api.ts) is reported by CI.
   {
     files: [
       "src/main/**/*.ts",
@@ -116,7 +123,7 @@ export default [
         {
           selector: "ImportSpecifier[imported.name='WorkbenchContext']",
           message:
-            "Ratchet: do not import WorkbenchContext outside assembly layers. Depend on MiniappRuntime / MenuContext / a module-local narrow deps interface instead (see the enumerated exception list in eslint.config.js).",
+            "Ratchet: do not import WorkbenchContext outside assembly layers. Depend on MiniappRuntime / MenuContext / a module-local narrow deps interface instead (exemptions are inline grandfathered(workbench-context) directives; shrink-only).",
         },
         {
           // Namespace bypass: `import * as Wb from '…/workbench-context.js'`
@@ -127,7 +134,7 @@ export default [
           selector:
             "ImportDeclaration[source.value=/workbench-context(\\.js)?$/] ImportNamespaceSpecifier",
           message:
-            "Ratchet: do not namespace-import workbench-context outside assembly layers. Depend on MiniappRuntime / MenuContext / a module-local narrow deps interface instead (see the enumerated exception list in eslint.config.js).",
+            "Ratchet: do not namespace-import workbench-context outside assembly layers. Depend on MiniappRuntime / MenuContext / a module-local narrow deps interface instead (exemptions are inline grandfathered(workbench-context) directives; shrink-only).",
         },
         {
           // Type-query bypass: `type T = import('…/workbench-context.js').X`
@@ -138,7 +145,7 @@ export default [
           // reasoning as the namespace-import selector above.
           selector: "TSImportType[source.value=/workbench-context(\\.js)?$/]",
           message:
-            "Ratchet: do not type-query import('…/workbench-context.js') outside assembly layers. Depend on MiniappRuntime / MenuContext / a module-local narrow deps interface instead (see the enumerated exception list in eslint.config.js).",
+            "Ratchet: do not type-query import('…/workbench-context.js') outside assembly layers. Depend on MiniappRuntime / MenuContext / a module-local narrow deps interface instead (exemptions are inline grandfathered(workbench-context) directives; shrink-only).",
         },
         {
           // Re-export bypass: `export { WorkbenchContext } from '…'` (plus
@@ -150,7 +157,7 @@ export default [
           selector:
             "ExportNamedDeclaration[source.value=/workbench-context(\\.js)?$/] ExportSpecifier[local.name='WorkbenchContext']",
           message:
-            "Ratchet: do not re-export WorkbenchContext outside assembly layers — that creates a new distribution point for the grab-bag. Depend on MiniappRuntime / MenuContext / a module-local narrow deps interface instead (see the enumerated exception list in eslint.config.js).",
+            "Ratchet: do not re-export WorkbenchContext outside assembly layers — that creates a new distribution point for the grab-bag. Depend on MiniappRuntime / MenuContext / a module-local narrow deps interface instead (exemptions are inline grandfathered(workbench-context) directives; shrink-only).",
         },
         {
           // Export-star bypass: `export * from '…/workbench-context.js'`
@@ -160,49 +167,34 @@ export default [
           selector:
             "ExportAllDeclaration[source.value=/workbench-context(\\.js)?$/]",
           message:
-            "Ratchet: do not `export *` from workbench-context outside assembly layers — it re-exports the whole grab-bag. Depend on MiniappRuntime / MenuContext / a module-local narrow deps interface instead (see the enumerated exception list in eslint.config.js).",
+            "Ratchet: do not `export *` from workbench-context outside assembly layers — it re-exports the whole grab-bag. Depend on MiniappRuntime / MenuContext / a module-local narrow deps interface instead (exemptions are inline grandfathered(workbench-context) directives; shrink-only).",
+        },
+        {
+          // Dynamic-import bypass: a RUNTIME `import('…/workbench-context.js')`
+          // is an ImportExpression node (fields: `source` Literal +
+          // `options`) — not an ImportDeclaration and not a TSImportType
+          // (type-position only) — so it needs its own selector. Keyed on
+          // the module source; lazy-loading unrelated modules stays allowed.
+          selector:
+            "ImportExpression[source.value=/workbench-context(\\.js)?$/]",
+          message:
+            "Ratchet: do not dynamically import('…/workbench-context.js') outside assembly layers. Depend on MiniappRuntime / MenuContext / a module-local narrow deps interface instead (exemptions are inline grandfathered(workbench-context) directives; shrink-only).",
+        },
+        {
+          // Module-augmentation bypass: `declare module '…/workbench-context.js'
+          // {…}` is a TSModuleDeclaration — no import/export node of any
+          // kind — yet it WIDENS the grab-bag's interface for everyone. For
+          // a string-named module the `id` is a Literal (has `.value`); for
+          // `declare module SomeNs {}` the id is an Identifier with no
+          // `value` field, so this selector cannot misfire on namespace
+          // declarations. Keyed on the module source — `declare module
+          // 'electron'` augmentation stays allowed.
+          selector:
+            "TSModuleDeclaration[id.value=/workbench-context(\\.js)?$/]",
+          message:
+            "Ratchet: do not augment ('declare module') workbench-context outside assembly layers — that silently widens the grab-bag for everyone. Depend on MiniappRuntime / MenuContext / a module-local narrow deps interface instead (exemptions are inline grandfathered(workbench-context) directives; shrink-only).",
         },
       ],
-    },
-  },
-  {
-    files: [
-      // ── Legitimate assembly / contract layer (permanent whitelist) ──
-      // workbench-context.ts itself defines the type; these are the real
-      // composition points that wire the full context together or view it
-      // down to the public contract.
-      "src/main/app/app.ts",
-      "src/main/runtime/miniapp-runtime.ts",
-      // api.ts is the package's public API barrel: re-exporting the
-      // WorkbenchContext type there is the intended public surface, not a
-      // violation to migrate away from.
-      "src/main/api.ts",
-      // ── Grandfathered violations (ratchet snapshot, 0.4.0) ──
-      // grep-generated; shrink-only. Migrate each to a narrow contract or
-      // module-local deps interface, then delete its line.
-      "src/main/ipc/app.ts",
-      "src/main/ipc/bridge-router.ts",
-      "src/main/ipc/popover.ts",
-      "src/main/ipc/project-fs.ts",
-      "src/main/ipc/projects.ts",
-      "src/main/ipc/session.ts",
-      "src/main/ipc/settings.ts",
-      "src/main/ipc/simulator.ts",
-      "src/main/ipc/views.ts",
-      "src/main/services/automation/exec.ts",
-      "src/main/services/automation/index.ts",
-      "src/main/services/automation/shared.ts",
-      "src/main/services/module.ts",
-      "src/main/services/views/view-manager.ts",
-      "src/main/services/workspace/workspace-service.ts",
-      "src/main/utils/sender-policy.ts",
-      "src/main/windows/main-window/events.ts",
-      // round-2 ratchet (TSImportType selector) snapshot: type-query import
-      // at src/shared/types.ts:132.
-      "src/shared/types.ts",
-    ],
-    rules: {
-      "no-restricted-syntax": "off",
     },
   },
 ];

@@ -129,6 +129,7 @@ export interface UpdateChecker {
  */
 export interface WorkbenchHostInstance {
   mainWindow: import('electron').BrowserWindow
+  // eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
   context: import('../main/services/workbench-context.js').WorkbenchContext
 
   /**

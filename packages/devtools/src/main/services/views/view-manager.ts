@@ -22,6 +22,7 @@ import {
   handleCustomApiBridgeRequest,
   type CustomApiBridgeRequest,
 } from '../simulator/custom-apis.js'
+// eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
 import { type WorkbenchContext } from '../workbench-context.js'
 import { configureMiniappSession, miniappPartition } from './miniapp-partition.js'
 import {

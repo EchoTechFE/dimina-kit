@@ -9,6 +9,7 @@ import type { SimulatorApiHandler } from '../services/simulator/custom-apis.js'
 import { rendererDir as defaultRendererDir, defaultPreloadPath } from '../utils/paths.js'
 import { installThemeBackgroundSync } from '../utils/theme.js'
 import { createMainWindow, wireMainWindowEvents } from '../windows/main-window/index.js'
+// eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
 import { createWorkbenchContext, type WorkbenchContext } from '../services/workbench-context.js'
 import { loadWorkbenchSettings, applyTheme } from '../services/settings/index.js'
 import { installAppMenu } from '../menu/index.js'
@@ -198,6 +199,7 @@ function createContext(config: WorkbenchAppConfig, mainWindow: BrowserWindow, re
       | undefined,
     builtinTemplates: config.builtinTemplates,
     customCreateProjectDialog: config.customCreateProjectDialog as
+      // eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
       | import('../services/workbench-context.js').WorkbenchContext['customCreateProjectDialog']
       | undefined,
   })

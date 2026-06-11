@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import type { AppInfo, CompileConfig, ProjectSession } from '../../../shared/types.js'
+// eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
 import type { WorkbenchContext } from '../workbench-context.js'
 import * as repo from '../projects/project-repository.js'
 import type {

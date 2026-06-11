@@ -1,3 +1,4 @@
+// eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
 import type { WorkbenchContext } from '../services/workbench-context.js'
 import type { WorkbenchModule } from '../services/module.js'
 import type { CompileConfig } from '../../shared/types.js'
