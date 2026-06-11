@@ -5,7 +5,6 @@ import {
   WindowChannel,
   SettingsChannel,
   PopoverChannel,
-  ToolbarChannel,
   WorkbenchSettingsChannel,
   EditorChannel,
   ViewChannel,
@@ -60,16 +59,10 @@ export interface RendererNotifier {
   projectStatus(payload: ProjectStatusPayload): void
   /** Ask the main renderer to navigate back to its landing screen. */
   windowNavigateBack(): void
-  /** Tell the main renderer the embedded settings overlay has been closed. */
-  settingsClosed(): void
-  /** Broadcast an updated compile config to the main renderer. */
-  settingsChanged(config: CompileConfig): void
   /** Tell the main renderer the compile popover has been closed. */
   popoverClosed(): void
   /** Ask the main renderer to relaunch the simulator with a new config. */
   popoverRelaunch(config: CompileConfig): void
-  /** Tell the main renderer the toolbar actions list has changed. */
-  toolbarActionsChanged(): void
   /**
    * Push the reserved host-toolbar height to the main renderer so its toolbar
    * placeholder div resizes (closes the host-toolbar dynamic-height loop).
@@ -131,20 +124,11 @@ export function createRendererNotifier(ctx: NotifierContext): RendererNotifier {
     windowNavigateBack() {
       sendToMain(WindowChannel.NavigateBack)
     },
-    settingsClosed() {
-      sendToMain(SettingsChannel.Closed)
-    },
-    settingsChanged(config) {
-      sendToMain(SettingsChannel.Changed, config)
-    },
     popoverClosed() {
       sendToMain(PopoverChannel.Closed)
     },
     popoverRelaunch(config) {
       sendToMain(PopoverChannel.Relaunch, config)
-    },
-    toolbarActionsChanged() {
-      sendToMain(ToolbarChannel.ActionsChanged)
     },
     hostToolbarHeightChanged(height) {
       sendToMain(ViewChannel.HostToolbarHeightChanged, height)

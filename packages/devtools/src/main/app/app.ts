@@ -4,7 +4,7 @@ import { registerProjectFsIpc } from '../ipc/project-fs.js'
 import { app, BrowserWindow, nativeImage, session } from 'electron'
 import fs from 'fs'
 import path from 'path'
-import type { BuiltinModuleId, MenuContext, ToolbarActionInput, WorkbenchAppConfig } from '../../shared/types.js'
+import type { BuiltinModuleId, MenuContext, WorkbenchAppConfig } from '../../shared/types.js'
 import type { SimulatorApiHandler } from '../services/simulator/custom-apis.js'
 import { rendererDir as defaultRendererDir, defaultPreloadPath } from '../utils/paths.js'
 import { installThemeBackgroundSync } from '../utils/theme.js'
@@ -66,8 +66,6 @@ export interface WorkbenchAppInstance {
   registerTrustedWindow: (win: BrowserWindow) => Disposable
   /** Registers a simulator custom API into this context's registry. */
   registerSimulatorApi: (name: string, handler: SimulatorApiHandler) => Disposable
-  /** Per-context toolbar surface — `set()` atomically replaces the table. */
-  readonly toolbar: { set(actions: ToolbarActionInput[]): void }
   automationServer?: AutomationServer
   updateManager?: UpdateManager
   dispose: () => Promise<void>
@@ -185,10 +183,8 @@ function createContext(config: WorkbenchAppConfig, mainWindow: BrowserWindow, re
     adapter: config.adapter,
     preloadPath: config.preloadPath ?? defaultPreloadPath,
     rendererDir,
-    panels: config.panels,
     appName: config.appName,
     apiNamespaces: config.apiNamespaces,
-    headerHeight: config.headerHeight,
     brandingProvider: config.brandingProvider,
     // The host-supplied ProjectsProvider / template types in `shared/types`
     // are structurally compatible with the main-process equivalents —
@@ -216,7 +212,7 @@ function registerBuiltinModules(config: WorkbenchAppConfig, context: WorkbenchCo
 
 /**
  * Strip the internal-plumbing fields a host menu builder must not reach
- * (registry / senderPolicy / trustedWindowSenderIds / simulatorApis / toolbar)
+ * (registry / senderPolicy / trustedWindowSenderIds / simulatorApis)
  * so `menuBuilder` receives the narrowed `MenuContext` its contract promises —
  * at runtime, not just at the type level.
  */
@@ -228,7 +224,6 @@ function toMenuContext(context: WorkbenchContext): MenuContext {
   delete menuContext.senderPolicy
   delete menuContext.trustedWindowSenderIds
   delete menuContext.simulatorApis
-  delete menuContext.toolbar
   return menuContext as MenuContext
 }
 
@@ -405,15 +400,6 @@ export async function createDevtoolsRuntime(config: WorkbenchAppConfig = {}): Pr
       context.registry.add(registerTrustedWindow(context, win)),
     registerSimulatorApi: (name: string, handler: SimulatorApiHandler) =>
       context.registry.add(toDisposable(context.simulatorApis.register(name, handler))),
-    toolbar: {
-      set: (actions: ToolbarActionInput[]) => {
-        // `context.toolbar.set` validates id-uniqueness and throws on a
-        // duplicate BEFORE mutating, so a rejected batch never reaches
-        // the notify below — no phantom ActionsChanged.
-        context.toolbar.set(actions)
-        context.notify.toolbarActionsChanged()
-      },
-    },
     dispose: () => disposeContext(context),
   }
 
@@ -538,9 +524,9 @@ export async function createDevtoolsRuntime(config: WorkbenchAppConfig = {}): Pr
     // upload run there, not in the service host) in the embedded DevTools by
     // injecting its raw Network.* CDP events into the DevTools front-end so the
     // native Network tab renders them (service-host console line is the
-    // fallback). The ViewManager calls attachSimulator + setDevtoolsHost from
-    // attachNativeSimulator once the simulator WCV + DevTools host exist;
-    // getServiceWc here is the fallback sink target.
+    // fallback). The ViewManager calls the forwarder's attachSimulator +
+    // setDevtoolsHost from attachNativeSimulator once the simulator WCV +
+    // DevTools host exist; getServiceWc here is the fallback sink target.
     const networkForward = createNetworkForwarder({
       getServiceWc: (appId) => context.bridge?.getServiceWc(appId) ?? null,
       connections: context.connections,

@@ -10,7 +10,6 @@ import {
   POPOVER_OFFSET_PX,
 } from '@/shared/constants'
 import {
-  getHeaderHeight,
   hidePopover,
   onPopoverClosed,
   onPopoverRelaunch,
@@ -34,17 +33,6 @@ export function usePopover(props: UsePopoverProps): PopoverHookResult {
   const { relaunch, compileConfig, pages, compileDropdownRef } = props
 
   const [showCompilePanel, setShowCompilePanel] = useState(false)
-
-  // Host-configured header height; HEADER_H (40) is the fallback until the
-  // IPC value resolves. Fetched once, mirrors the getBranding() pattern.
-  const [headerHeight, setHeaderHeight] = useState(HEADER_H)
-  useEffect(() => {
-    getHeaderHeight()
-      .then((h) => {
-        if (typeof h === 'number') setHeaderHeight(h)
-      })
-      .catch(() => {})
-  }, [])
 
   const relaunchRef = useRef(relaunch)
   useEffect(() => {
@@ -82,14 +70,14 @@ export function usePopover(props: UsePopoverProps): PopoverHookResult {
       if (!el) return prev
       const rect = el.getBoundingClientRect()
       void showPopover({
-        top: Math.round(rect.bottom - headerHeight + POPOVER_OFFSET_PX),
+        top: Math.round(rect.bottom - HEADER_H + POPOVER_OFFSET_PX),
         left: Math.round(rect.left),
         config: compileConfigRef.current,
         pages: pagesRef.current,
       })
       return true
     })
-  }, [compileDropdownRef, headerHeight])
+  }, [compileDropdownRef])
 
   return {
     showCompilePanel,

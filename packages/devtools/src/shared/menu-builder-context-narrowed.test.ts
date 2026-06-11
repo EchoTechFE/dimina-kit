@@ -97,7 +97,6 @@ describe('Requirement B: menuBuilder context is narrowed to MenuContext', () => 
       //    following lines may error — if one does, the narrowing removed a
       //    field the menu builder legitimately needs.
       void menuContext.appName
-      void menuContext.panels
       void menuContext.workspace
       void menuContext.views
       void menuContext.windows

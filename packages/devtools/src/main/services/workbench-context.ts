@@ -28,7 +28,6 @@ import {
   createSimulatorApiRegistry,
   type SimulatorApiRegistry,
 } from './simulator/custom-apis.js'
-import { createToolbarStore, type ToolbarStore } from './toolbar/toolbar-store.js'
 import { resolveTemplates, sanitizeTemplates } from './projects/templates.js'
 import { BUILTIN_TEMPLATES } from './projects/builtin-templates.js'
 import type {
@@ -48,17 +47,11 @@ export interface WorkbenchContext {
   /** Absolute path to the renderer dist directory */
   rendererDir: string
 
-  /** Built-in panel IDs to display (default: all) */
-  panels: string[]
-
   /** Custom API namespace names (e.g. ['qd']) passed to the simulator */
   apiNamespaces: string[]
 
   /** Branding name shown in title bar and getBranding IPC */
   appName: string
-
-  /** Header bar height in px, used for view layout and exposed to the renderer */
-  headerHeight: number
 
   /** Host-injected provider for branding info (overrides default appName) */
   brandingProvider?: () => Promise<{ appName: string }> | { appName: string }
@@ -127,13 +120,6 @@ export interface WorkbenchContext {
    */
   simulatorApis: SimulatorApiRegistry
 
-  /**
-   * Per-context store of host-registered toolbar actions. Populated via
-   * `instance.toolbar.set`; read by the toolbar IPC handlers. One store per
-   * context — no process-global crosstalk.
-   */
-  toolbar: ToolbarStore
-
   /** Aggregates dispose handlers for every IPC handler, listener, watcher, and CDP session registered by the workbench. */
   registry: DisposableRegistry
 
@@ -196,31 +182,29 @@ export interface WorkbenchContext {
    * run) and injects its raw Network.* CDP events into the DevTools FRONT-END wc
    * (`window.DevToolsAPI.dispatchMessage`) so the native Network tab renders them;
    * falls back to a `[网络]` service-host console line when the front-end is
-   * unavailable. The ViewManager calls `attachSimulator` + `setDevtoolsHost` from
-   * `attachNativeSimulator` once the simulator WCV + DevTools host exist.
-   * Undefined until bootstrap wires it.
+   * unavailable. The ViewManager calls the forwarder's own `attachSimulator` +
+   * `setDevtoolsHost` from `attachNativeSimulator` once the simulator WCV +
+   * DevTools host exist. Undefined until bootstrap wires it.
    */
   networkForward?: NetworkForwarder
 }
 
 /**
  * Inputs for `createWorkbenchContext`. The scalar config fields it shares with
- * `WorkbenchConfig` (`adapter` / `apiNamespaces` / `appName` / `headerHeight`)
+ * `WorkbenchConfig` (`adapter` / `apiNamespaces` / `appName`)
  * are derived from there via `Pick` so the two stay in lockstep — no
  * field-by-field re-declaration. The remaining fields are kept explicit
  * because their shapes intentionally differ from the config:
  *  - `preloadPath` / `rendererDir` are REQUIRED here (the caller resolves the
  *    defaults before constructing the context) but optional in the config;
- *  - `panels` is the structural `string[]` (the context stores raw ids);
  *  - `projectsProvider` / `projectTemplates` / `customCreateProjectDialog` use
  *    the main-process types, not the structural mirrors in `shared/types`.
  */
 export interface CreateContextOptions
-  extends Pick<WorkbenchConfig, 'adapter' | 'apiNamespaces' | 'appName' | 'headerHeight'> {
+  extends Pick<WorkbenchConfig, 'adapter' | 'apiNamespaces' | 'appName'> {
   mainWindow: BrowserWindow
   preloadPath: string
   rendererDir: string
-  panels?: string[]
   brandingProvider?: WorkbenchContext['brandingProvider']
   /** Host-supplied project list backend. Defaults to LocalProjectsProvider. */
   projectsProvider?: ProjectsProvider
@@ -232,27 +216,13 @@ export interface CreateContextOptions
   customCreateProjectDialog?: WorkbenchContext['customCreateProjectDialog']
 }
 
-export function hasBuiltinPanel(ctx: Pick<WorkbenchContext, 'panels'>, panelId: string): boolean {
-  return ctx.panels.includes(panelId)
-}
-
-export function getDefaultTab(
-  ctx: Pick<WorkbenchContext, 'panels'>,
-): string {
-  if (hasBuiltinPanel(ctx, 'console')) return 'simulator'
-  if (ctx.panels.length > 0) return ctx.panels[0]!
-  return 'simulator'
-}
-
 export function createWorkbenchContext(opts: CreateContextOptions): WorkbenchContext {
   const ctx = {
     adapter: opts.adapter ?? defaultAdapter,
     preloadPath: opts.preloadPath,
     rendererDir: opts.rendererDir,
-    panels: opts.panels ?? ['wxml', 'console', 'appdata', 'storage'],
     apiNamespaces: opts.apiNamespaces ?? [],
     appName: opts.appName ?? 'Dimina DevTools',
-    headerHeight: opts.headerHeight ?? 40,
     brandingProvider: opts.brandingProvider,
   } as WorkbenchContext
 
@@ -264,7 +234,6 @@ export function createWorkbenchContext(opts: CreateContextOptions): WorkbenchCon
   ctx.connections = createConnectionRegistry()
   ctx.trustedWindowSenderIds = new Map<number, number>()
   ctx.simulatorApis = createSimulatorApiRegistry()
-  ctx.toolbar = createToolbarStore()
   ctx.windows = createWindowService(opts.mainWindow)
   ctx.views = createViewManager(ctx)
   ctx.notify = createRendererNotifier(ctx)

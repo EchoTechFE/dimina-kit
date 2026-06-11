@@ -29,12 +29,20 @@ jobs:
           CHANNEL: ${{ inputs.channel }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           if [[ "$CHANNEL" == "dev" ]]; then
             ts="$(date -u +%Y%m%d%H%M%S)"
             dev_version_suffix="dev.${ts}"
-            npm_tag="dev"
+            # Only main may move the shared `dev` dist-tag; other refs publish
+            # to an isolated `dev-<branch>` tag so a branch dispatch can never
+            # repoint what downstreams install via @dev.
+            if [[ "$REF_NAME" == "main" ]]; then
+              npm_tag="dev"
+            else
+              npm_tag="dev-$(printf '%s' "$REF_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9._-]/-/g')"
+            fi
             release_name=""
             last_release_tag=""
           else

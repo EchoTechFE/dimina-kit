@@ -11,12 +11,13 @@
  *   - and a process-global is fragile under multi-window / re-entrant setup.
  *
  * Target contract (per the step-1 spec):
- *   computeRightPanelBounds(contentWidth, contentHeight, simWidth, headerHeight)
- *   computeSimulatorBounds (contentWidth, contentHeight, simWidth, headerHeight)
- *   computeSettingsBounds  (contentWidth, contentHeight,           headerHeight)
- *   computePopoverBounds   (contentWidth, contentHeight,           headerHeight)
+ *   computeSettingsBounds  (contentWidth, contentHeight, headerHeight)
+ *   computePopoverBounds   (contentWidth, contentHeight, headerHeight)
  * Each must return `y === headerHeight` and a `height` reduced by it.
  * `export let HEADER_H` and `export function setHeaderHeight` must be GONE.
+ * (computeRightPanelBounds / computeSimulatorBounds were deleted outright with
+ * the static-layout fallback — the DevTools overlay is anchor-published only —
+ * so their headerHeight cases are gone with them.)
  *
  * These tests are RED today: the functions ignore any 4th/3rd arg and read
  * the `HEADER_H` module-global (default 40), and `setHeaderHeight` still
@@ -34,23 +35,6 @@ async function loadLayout(): Promise<Record<string, unknown>> {
 const HH = 72 // a non-default header height; default is 40, so 72 ≠ 40 proves wiring.
 
 describe('Requirement B: layout functions take an explicit headerHeight', () => {
-  it('computeRightPanelBounds positions y at the passed headerHeight', async () => {
-    const layout = await loadLayout()
-    const fn = layout.computeRightPanelBounds as BoundsFn
-    // contentWidth=1000, contentHeight=800, simWidth=375, headerHeight=72
-    const b = fn(1000, 800, 375, HH)
-    expect(b.y, 'right panel y must equal the passed headerHeight').toBe(HH)
-    expect(b.height, 'right panel height must subtract the passed headerHeight').toBe(800 - HH)
-  })
-
-  it('computeSimulatorBounds positions y at the passed headerHeight', async () => {
-    const layout = await loadLayout()
-    const fn = layout.computeSimulatorBounds as BoundsFn
-    const b = fn(1000, 800, 375, HH)
-    expect(b.y).toBe(HH)
-    expect(b.height).toBe(800 - HH)
-  })
-
   it('computeSettingsBounds positions y at the passed headerHeight', async () => {
     const layout = await loadLayout()
     const fn = layout.computeSettingsBounds as BoundsFn
@@ -67,18 +51,6 @@ describe('Requirement B: layout functions take an explicit headerHeight', () => 
     const b = fn(1000, 800, HH)
     expect(b.y).toBe(HH)
     expect(b.height).toBe(800 - HH)
-  })
-
-  it('different headerHeight values produce different y (no hidden global)', async () => {
-    const layout = await loadLayout()
-    const right = layout.computeRightPanelBounds as BoundsFn
-    // Two calls with different header heights in the same module instance.
-    // A process-global would make the *first* call's value leak; an explicit
-    // param keeps each call independent.
-    const a = right(1000, 800, 375, 40)
-    const b = right(1000, 800, 375, 96)
-    expect(a.y).toBe(40)
-    expect(b.y).toBe(96)
   })
 
   it('the `setHeaderHeight` process-global escape hatch is removed', async () => {

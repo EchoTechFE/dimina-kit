@@ -170,7 +170,6 @@ function makeViewCtx(): ViewManagerContext {
   return {
     windows: { mainWindow: mainWindow as unknown as Electron.BrowserWindow } as ViewManagerContext['windows'],
     rendererDir: '/stub/renderer',
-    panels: ['console'],
     notify: { popoverInit: vi.fn(), popoverClosed: vi.fn() } as unknown as ViewManagerContext['notify'],
     connections: createConnectionRegistry(),
     // attachNativeSimulator needs a preload path to proceed past its guard.

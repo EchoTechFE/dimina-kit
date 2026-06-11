@@ -12,7 +12,22 @@
 export { installConsoleInstrumentation } from './instrumentation/console.js'
 export { createAppDataSource } from './instrumentation/app-data.js'
 export type { AppDataSnapshot } from './instrumentation/app-data.js'
+/**
+ * @deprecated Will be removed in the next minor. Under the native-host (sole)
+ * runtime the simulator top frame is a top-level WebContentsView — the page DOM
+ * lives in child render-host `<webview>` guests, so this top-frame DOM observer
+ * only ever publishes `null`. Panel WXML flows over the main-process
+ * `SimulatorWxmlChannel` (`src/main/services/simulator-wxml`) instead.
+ */
 export { createWxmlSource } from './instrumentation/wxml.js'
+/**
+ * @deprecated Will be removed in the next minor. The host's
+ * `miniapp-snapshot:push/pull` IPC has no receiving end under the native-host
+ * (sole) runtime: the simulator is a top-level WebContentsView without an
+ * embedder (its `sendToHost` fires into the void) and the renderer-side puller
+ * was removed. Panel data flows over the main-process `SimulatorWxmlChannel` /
+ * `SimulatorAppDataChannel` / `SimulatorStorageChannel` instead.
+ */
 export { createMiniappSnapshotHost } from './miniapp-snapshot/host.js'
 export type {
   MiniappSnapshotHost,

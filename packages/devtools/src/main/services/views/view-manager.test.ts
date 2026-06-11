@@ -21,9 +21,12 @@ type StubWebContents = {
   isDestroyed: () => boolean
   close: ReturnType<typeof vi.fn>
   loadFile: ReturnType<typeof vi.fn>
+  loadURL: ReturnType<typeof vi.fn>
   on: ReturnType<typeof vi.fn>
   once: ReturnType<typeof vi.fn>
   setWindowOpenHandler: ReturnType<typeof vi.fn>
+  setZoomFactor: ReturnType<typeof vi.fn>
+  send: ReturnType<typeof vi.fn>
 }
 type StubView = {
   webContents: StubWebContents
@@ -42,7 +45,7 @@ vi.mock('electron', () => {
     webContents: StubWebContents
     setBounds = vi.fn()
     setBackgroundColor = vi.fn()
-    constructor() {
+    constructor(_opts?: unknown) {
       const id = nextId++
       this.webContents = {
         destroyed: false,
@@ -50,21 +53,39 @@ vi.mock('electron', () => {
         isDestroyed() { return this.destroyed },
         close: vi.fn(function (this: StubWebContents) { this.destroyed = true }),
         loadFile: vi.fn(() => Promise.resolve()),
+        loadURL: vi.fn(() => Promise.resolve()),
         on: vi.fn(),
         once: vi.fn(),
         setWindowOpenHandler: vi.fn(),
+        setZoomFactor: vi.fn(),
+        send: vi.fn(),
       }
       constructed.push(this as unknown as StubView)
     }
   }
+  const ipcMain = {
+    on: vi.fn(),
+    removeListener: vi.fn(),
+    handle: vi.fn(),
+    removeHandler: vi.fn(),
+  }
   return {
     WebContentsView,
-    webContents: { fromId: (id: number) => mockFromId(id) },
+    ipcMain,
+    shell: { openExternal: vi.fn() },
+    webContents: {
+      fromId: (id: number) => mockFromId(id),
+      getAllWebContents: vi.fn(() => []),
+    },
+    default: { ipcMain },
   }
 })
 
 vi.mock('../../utils/paths.js', () => ({
   mainPreloadPath: '/stub/preload.js',
+  hostToolbarPreloadPath: '/stub/host-toolbar-preload.js',
+  // attachNativeSimulator hands the WCV the `.cjs` sibling of the preload.
+  cjsSiblingPreloadPath: (p: string) => p.replace(/\.js$/, '.cjs'),
   // Phase 3: workbench-context transitively imports builtin-templates.ts
   // which reads this at module load to build the BUILTIN_TEMPLATES catalog.
   devtoolsPackageRoot: '/stub/devtools-pkg-root',
@@ -105,6 +126,9 @@ function makeContext() {
       // These overlay-lifecycle tests don't touch the native simulator, so an
       // empty real registry satisfies the type without affecting behaviour.
       connections: createConnectionRegistry(),
+      // Lets attachNativeSimulator proceed past its preload guard in the
+      // getSimulatorWebContents tests below; inert for the overlay tests.
+      preloadPath: '/stub/sim-preload.js',
     },
   }
 }
@@ -216,24 +240,13 @@ describe('ViewManager: repeated show/hide cycles do not leak', () => {
   })
 })
 
-// ── Helper: build a minimal "live" simulator WebContents stub ──────────────
-// attachSimulator() calls sim.setDevToolsWebContents(), sim.openDevTools(),
-// and sim.webContents (for the devtoolsWc.once('dom-ready', …) listener).
-// We need enough surface area that attachSimulator doesn't throw and actually
-// sets simulatorWebContentsId before getSimulatorWebContents is called.
-function makeSimStub() {
-  const wcStub = {
-    destroyed: false,
-    isDestroyed() { return this.destroyed },
-    once: vi.fn(),
-    on: vi.fn(),
-  }
-  return {
-    webContents: wcStub,
-    setDevToolsWebContents: vi.fn(),
-    openDevTools: vi.fn(),
-  }
-}
+// ── getSimulatorWebContents (native-host attach path) ───────────────────────
+// `attachNativeSimulator` creates the simulator content WebContentsView itself
+// and records its webContents id as THE simulator id; `getSimulatorWebContents`
+// resolves that id through `webContents.fromId` on every call so it never hands
+// out a stale/destroyed reference.
+
+const SIM_URL = 'http://localhost:7788/simulator.html?appId=vmtest'
 
 describe('getSimulatorWebContents', () => {
   afterEach(() => {
@@ -244,75 +257,44 @@ describe('getSimulatorWebContents', () => {
     const { ctx } = makeContext()
     const mgr = createViewManager(ctx)
 
-    // Cast to any: getSimulatorWebContents does not exist yet — this is the red test.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const result = (mgr as any).getSimulatorWebContents()
-
-    expect(result).toBeNull()
+    expect(mgr.getSimulatorWebContents()).toBeNull()
+    expect(mockFromId).not.toHaveBeenCalled()
   })
 
   it('returns null when webContents.fromId returns falsy for the stored id', () => {
     const { ctx } = makeContext()
     const mgr = createViewManager(ctx)
 
-    const SIM_ID = 42
-    const simStub = makeSimStub()
+    mgr.attachNativeSimulator(SIM_URL, 375)
+    // The simulator wc is gone from Electron's registry (e.g. destroyed).
+    mockFromId.mockReturnValue(undefined)
 
-    // First call (from attachSimulator): return the sim stub so attach succeeds.
-    // Subsequent calls (from getSimulatorWebContents): return undefined.
-    mockFromId
-      .mockReturnValueOnce(simStub)
-      .mockReturnValue(undefined)
-
-    mgr.attachSimulator(SIM_ID, 375)
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const result = (mgr as any).getSimulatorWebContents()
-
-    expect(result).toBeNull()
+    expect(mgr.getSimulatorWebContents()).toBeNull()
   })
 
   it('returns null when the webContents returned by fromId has isDestroyed() === true', () => {
     const { ctx } = makeContext()
     const mgr = createViewManager(ctx)
 
-    const SIM_ID = 43
-    const simStub = makeSimStub()
-    const destroyedWc = {
-      isDestroyed: () => true,
-    }
+    mgr.attachNativeSimulator(SIM_URL, 375)
+    mockFromId.mockReturnValue({ isDestroyed: () => true })
 
-    mockFromId
-      .mockReturnValueOnce(simStub) // for attachSimulator
-      .mockReturnValue(destroyedWc) // for getSimulatorWebContents
-
-    mgr.attachSimulator(SIM_ID, 375)
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const result = (mgr as any).getSimulatorWebContents()
-
-    expect(result).toBeNull()
+    expect(mgr.getSimulatorWebContents()).toBeNull()
   })
 
   it('returns the live webContents object when the simulator is attached and alive', () => {
     const { ctx } = makeContext()
     const mgr = createViewManager(ctx)
 
-    const SIM_ID = 44
-    const simStub = makeSimStub()
-    const liveWc = {
-      isDestroyed: () => false,
-    }
+    mgr.attachNativeSimulator(SIM_URL, 375)
 
-    mockFromId
-      .mockReturnValueOnce(simStub) // for attachSimulator
-      .mockReturnValue(liveWc)      // for getSimulatorWebContents
+    // [0] = the native simulator content view (created first), [1] = the
+    // DevTools overlay host view. The manager must resolve the SIM's id.
+    const simWc = constructed[constructed.length - 2]!.webContents
+    const liveWc = { isDestroyed: () => false }
+    mockFromId.mockReturnValue(liveWc)
 
-    mgr.attachSimulator(SIM_ID, 375)
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const result = (mgr as any).getSimulatorWebContents()
-
-    expect(result).toBe(liveWc)
+    expect(mgr.getSimulatorWebContents()).toBe(liveWc)
+    expect(mockFromId).toHaveBeenCalledWith(simWc.id)
   })
 })

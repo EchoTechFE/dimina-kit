@@ -1,0 +1,20 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>e2e host toolbar (custom host preload)</title>
+    <style>
+      html, body { margin: 0; background: #1e1e1e; color: #ddd; font: 13px sans-serif; }
+    </style>
+  </head>
+  <body>
+    <!-- Distinct 88px content height so the spec can prove a FRESH advertise
+         happened after the custom-preload rebuild (64 → 88), not a stale
+         placeholder left over from the previous load. -->
+    <div data-host-toolbar-root>
+      <div style="height: 88px; display: flex; align-items: center; padding: 0 8px;">
+        e2e host toolbar — custom host preload set via setPreloadPath
+      </div>
+    </div>
+  </body>
+</html>

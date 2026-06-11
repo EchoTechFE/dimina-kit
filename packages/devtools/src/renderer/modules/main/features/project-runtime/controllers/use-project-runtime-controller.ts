@@ -39,7 +39,6 @@ interface SessionSlice {
   port: number
   pages: string[]
   compileConfig: CompileConfig
-  preloadPath: string
   relaunch: (nextConfig?: CompileConfig) => Promise<void>
 }
 
@@ -155,7 +154,6 @@ export function useProjectRuntimeController(
 
   const rightPaneHook = useRightPane({
     initialRightPane,
-    simPanelWidthRef: deviceHook.simPanelWidthRef,
   })
 
   const popoverHook = usePopover({
@@ -174,7 +172,6 @@ export function useProjectRuntimeController(
       port: sessionHook.port,
       pages: sessionHook.pages,
       compileConfig: sessionHook.compileConfig,
-      preloadPath: sessionHook.preloadPath,
       relaunch: sessionHook.relaunch,
     },
     device: {

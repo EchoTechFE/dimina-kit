@@ -329,13 +329,16 @@ export function registerWxmlLanguageProviders(): void {
 
     // 测试钩子：暴露 provider 实例，spec 可直接调 provideCompletionItems /
     // provideHover，避免依赖 monaco 私有 registry 或 suggest widget 时序。
-    // 命名空间 `__dimina*`，生产代码不读它。
-    try {
-      (window as unknown as { __diminaWxmlProviders?: unknown }).__diminaWxmlProviders = {
-        completion: completionProvider,
-        hover: hoverProvider,
-      };
-    } catch { /* non-browser env */ }
+    // 命名空间 `__dimina*`，生产代码不读它。仅非生产构建暴露：生产 renderer
+    // 不携带 `__dimina*` 测试钩子（e2e 断言主窗口主世界零 `__dimina*` 泄漏）。
+    if (process.env.NODE_ENV !== 'production') {
+      try {
+        (window as unknown as { __diminaWxmlProviders?: unknown }).__diminaWxmlProviders = {
+          completion: completionProvider,
+          hover: hoverProvider,
+        };
+      } catch { /* non-browser env */ }
+    }
 
     console.log('[dimina-grammar] wxml LSP providers registered (completion + hover)');
   } catch (err) {

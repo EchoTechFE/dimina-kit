@@ -12,8 +12,11 @@
  *    in context A leaking into context B).
  *
  *  Requirement C — simulator IPC reads per-context:
- *    `registerSimulatorIpc(ctx)` wires the `SimulatorCustomApiChannel.List` /
- *    `.Invoke` handlers to *that ctx's* `simulatorApis` — not to a global.
+ *    `registerSimulatorIpc(ctx)` wires the `SimulatorCustomApiChannel.Invoke`
+ *    handler to *that ctx's* `simulatorApis` — not to a global. (The `.List`
+ *    channel was decommissioned — the simulator guest reaches the registry via
+ *    the bridge channels, never a main-window handle — so the registry's own
+ *    `list()` is asserted directly where the old tests drove the List IPC.)
  *    Two registrars over two contexts must surface two different API sets.
  *
  * (Requirement B — `instance.registerSimulatorApi` — and Requirement D —
@@ -180,10 +183,10 @@ describe('Requirement A: ctx.simulatorApis is a per-context SimulatorApiRegistry
 function makeIpcCtx(simulatorApis: SimulatorApiRegistry): Record<string, unknown> {
   return {
     views: {
-      attachSimulator: vi.fn(),
+      attachNativeSimulator: vi.fn(),
       detachSimulator: vi.fn(),
-      resize: vi.fn(),
-      setVisible: vi.fn(),
+      setNativeSimulatorViewBounds: vi.fn(),
+      reapplySafeArea: vi.fn(),
     },
     notify: {},
     // No policy → IpcRegistry wraps handlers ungated, so we can invoke them
@@ -195,20 +198,19 @@ function makeIpcCtx(simulatorApis: SimulatorApiRegistry): Record<string, unknown
 
 const fakeEvent = { sender: { id: 1, isDestroyed: () => false, getURL: () => '' } }
 
-describe('Requirement C: registerSimulatorIpc List/Invoke read the passed ctx.simulatorApis', () => {
-  it('List returns the names registered on the ctx handed to registerSimulatorIpc', async () => {
+describe('Requirement C: registerSimulatorIpc Invoke reads the passed ctx.simulatorApis', () => {
+  it('the registry handed to the ctx lists its registered names (List IPC is decommissioned)', async () => {
     const reg = await import('./custom-apis.js').then((m) => m.createSimulatorApiRegistry())
     reg.register('ctx.alpha', () => 1)
     reg.register('ctx.beta', () => 2)
 
     const disposable = registerSimulatorIpc(makeIpcCtx(reg) as never)
 
-    const listHandler = stub.handlers.get(SimulatorCustomApiChannel.List)
-    expect(listHandler, 'registerSimulatorIpc must register the List handler').toBeDefined()
-
-    const names = await listHandler!(fakeEvent)
-    // Catches: List still reading the process-global registry instead of ctx.
-    expect(names).toEqual(['ctx.alpha', 'ctx.beta'])
+    // The List channel must NOT come back (it has no consumer; the guest
+    // reaches the registry via the bridge channels) — the registry surface
+    // itself is the only name-enumeration path.
+    expect(stub.handlers.has('simulator:custom-apis:list')).toBe(false)
+    expect(reg.list()).toEqual(['ctx.alpha', 'ctx.beta'])
 
     await (disposable as { dispose: () => Promise<void> }).dispose()
   })
@@ -239,37 +241,40 @@ describe('Requirement C: registerSimulatorIpc List/Invoke read the passed ctx.si
     regA.register('only.in.A', () => 'A')
     regB.register('only.in.B', () => 'B')
 
-    // First registrar (ctx A) — capture its List handler before the second
+    // First registrar (ctx A) — capture its Invoke handler before the second
     // registrar overwrites the channel.
     const dispA = registerSimulatorIpc(makeIpcCtx(regA) as never)
-    const listA = stub.handlers.get(SimulatorCustomApiChannel.List)!
-    expect(await listA(fakeEvent)).toEqual(['only.in.A'])
+    const invokeA = stub.handlers.get(SimulatorCustomApiChannel.Invoke)!
+    expect(await invokeA(fakeEvent, 'only.in.A', null)).toBe('A')
+    // ctx A must NOT see ctx B's API — a process-global registry would.
+    await expect(Promise.resolve(invokeA(fakeEvent, 'only.in.B', null))).rejects.toThrowError(/only\.in\.B/)
 
     // Second registrar (ctx B) re-registers the channel against regB.
     const dispB = registerSimulatorIpc(makeIpcCtx(regB) as never)
-    const listB = stub.handlers.get(SimulatorCustomApiChannel.List)!
+    const invokeB = stub.handlers.get(SimulatorCustomApiChannel.Invoke)!
 
     // If the IPC handler still closed over a process-global registry, both
-    // ctxs would report the union. Per-context means strict isolation.
-    expect(await listB(fakeEvent)).toEqual(['only.in.B'])
+    // ctxs would dispatch the union. Per-context means strict isolation.
+    expect(await invokeB(fakeEvent, 'only.in.B', null)).toBe('B')
+    await expect(Promise.resolve(invokeB(fakeEvent, 'only.in.A', null))).rejects.toThrowError(/only\.in\.A/)
 
     await (dispA as { dispose: () => Promise<void> }).dispose()
     await (dispB as { dispose: () => Promise<void> }).dispose()
   })
 
-  it('a name registered on ctx AFTER registerSimulatorIpc is still visible via List', async () => {
+  it('a name registered on ctx AFTER registerSimulatorIpc is still reachable via Invoke', async () => {
     const { createSimulatorApiRegistry } = await import('./custom-apis.js')
     const reg = createSimulatorApiRegistry()
 
     const disposable = registerSimulatorIpc(makeIpcCtx(reg) as never)
-    const listHandler = stub.handlers.get(SimulatorCustomApiChannel.List)!
+    const invokeHandler = stub.handlers.get(SimulatorCustomApiChannel.Invoke)!
 
-    expect(await listHandler(fakeEvent)).toEqual([])
+    await expect(Promise.resolve(invokeHandler(fakeEvent, 'late.api', null))).rejects.toThrowError(/late\.api/)
 
     // Late registration — the IPC handler must read the live ctx registry,
     // not a snapshot taken at registerSimulatorIpc time.
     reg.register('late.api', () => 'late')
-    expect(await listHandler(fakeEvent)).toEqual(['late.api'])
+    expect(await invokeHandler(fakeEvent, 'late.api', null)).toBe('late')
 
     await (disposable as { dispose: () => Promise<void> }).dispose()
   })

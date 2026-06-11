@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>e2e host toolbar (default)</title>
+    <style>
+      html, body { margin: 0; background: #1e1e1e; color: #ddd; font: 13px sans-serif; }
+    </style>
+  </head>
+  <body>
+    <!--
+      [data-host-toolbar-root] must be shrink-to-fit on the block axis: its
+      height comes from the 64px content row, NOT from the host-applied view
+      height (see host-toolbar-advertiser.ts footgun note).
+    -->
+    <div data-host-toolbar-root>
+      <div style="height: 64px; display: flex; align-items: center; padding: 0 8px;">
+        e2e host toolbar — default (framework) preload path
+      </div>
+    </div>
+  </body>
+</html>

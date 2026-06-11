@@ -10,8 +10,14 @@ export type { WorkbenchAppInstance } from './app/app.js'
 // ── Bootstrap utilities ──────────────────────────────────────────────────
 export { suppressEpipe, setupCdpPort } from './app/bootstrap.js'
 
+// ── Miniapp runtime contract (host-facing, stable) ───────────────────────
+// The hand-written kernel surface a downstream host consumes; prefer this
+// over depending on the full `WorkbenchContext`.
+export { asMiniappRuntime } from './runtime/miniapp-runtime.js'
+export type { MiniappRuntime } from './runtime/miniapp-runtime.js'
+
 // ── Context & views (for module-assembly consumers) ──────────────────────
-export { createWorkbenchContext, hasBuiltinPanel, getDefaultTab } from './services/workbench-context.js'
+export { createWorkbenchContext } from './services/workbench-context.js'
 export type { WorkbenchContext, CreateContextOptions } from './services/workbench-context.js'
 export { createMainWindow } from './windows/main-window/index.js'
 export { createViewManager } from './services/views/view-manager.js'
@@ -51,7 +57,6 @@ export type {
   WorkbenchAppConfig,
   CompilationAdapter,
   ProjectSession,
-  ToolbarAction,
   BuiltinPanelId,
   BuiltinModuleId,
   UpdateChecker,

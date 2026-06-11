@@ -1,7 +1,7 @@
 import type { IpcMainEvent, WebContents } from 'electron'
 import { ipcMain, shell, WebContentsView, webContents } from 'electron'
 import path from 'path'
-import { cjsSiblingPreloadPath, hostToolbarPreloadPath, mainPreloadPath } from '../../utils/paths.js'
+import { cjsSiblingPreloadPath, mainPreloadPath } from '../../utils/paths.js'
 import {
   applyNavigationHardening,
   handleWindowOpenExternal,
@@ -22,9 +22,18 @@ import {
   handleCustomApiBridgeRequest,
   type CustomApiBridgeRequest,
 } from '../simulator/custom-apis.js'
-import { getDefaultTab, type WorkbenchContext } from '../workbench-context.js'
+import { type WorkbenchContext } from '../workbench-context.js'
 import { configureMiniappSession, miniappPartition } from './miniapp-partition.js'
+import {
+  acquireHostToolbarSessionRuntime,
+  releaseHostToolbarSessionRuntime,
+} from './host-toolbar-session-runtime.js'
+import {
+  createHostToolbarPortChannel,
+  type HostToolbarMessageSubscription,
+} from './host-toolbar-port-channel.js'
 import { parseRoute } from '../../../shared/simulator-route.js'
+import { HEADER_H, HOST_TOOLBAR_RUNTIME_MARKER } from '../../../shared/constants.js'
 
 /**
  * Context surface used by the ViewManager. We only need a small slice of the
@@ -48,12 +57,11 @@ export interface ViewManagerContext {
    * frame preload instead. Optional so partial test contexts compile.
    */
   preloadPath?: string
-  panels: string[]
   notify: WorkbenchContext['notify']
   bridge?: WorkbenchContext['bridge']
   /**
    * Native-host network forwarder. `attachNativeSimulator` hands it the freshly
-   * created simulator WebContentsView (`attachSimulator`) so it can attach the
+   * created simulator WebContentsView (`networkForward.attachSimulator`) so it can attach the
    * CDP debugger, and the DevTools front-end host wc (`setDevtoolsHost`) so it can
    * inject that WCV's Network.* events into the native Network tab (service-host
    * console line is the fallback). Optional so partial test contexts compile.
@@ -68,12 +76,6 @@ export interface ViewManagerContext {
    * Optional so partial test contexts compile.
    */
   simulatorApis?: WorkbenchContext['simulatorApis']
-  /**
-   * Header bar height in px, used to position overlay views below the header.
-   * Optional here so partial test contexts compile; `createWorkbenchContext`
-   * always supplies it (default 40).
-   */
-  headerHeight?: number
 }
 
 /**
@@ -92,22 +94,21 @@ export interface ViewManagerContext {
 export interface ViewManager {
   // ── DevTools ───────────────────────────────────────────────────────────
   /**
-   * Create a DevTools view for the given simulator webContents and add it to
-   * the main window contentView (only when the `devtools` tab is the default
-   * tab; otherwise the view is created but not added yet).
-   */
-  attachSimulator(simWcId: number, simWidth: number): void
-  /**
    * NATIVE-HOST ONLY. Create the simulator itself as a top-level
    * WebContentsView (not a renderer `<webview>` guest) loading `simulatorUrl`,
-   * position it in the simulator panel region, and treat its webContents as
-   * THE simulator webContents (so `getSimulatorWebContents` resolves it and the
-   * spawn/SIMULATOR_EVENTS pipeline flows through it). This is required because
-   * Electron force-disables the `<webview>` tag inside a webview guest, so the
-   * default `<webview>`-in-`<webview>` topology can never host DeviceShell's
+   * and treat its webContents as THE simulator webContents (so
+   * `getSimulatorWebContents` resolves it and the spawn/SIMULATOR_EVENTS
+   * pipeline flows through it). This is required because Electron
+   * force-disables the `<webview>` tag inside a webview guest, so a
+   * `<webview>`-in-`<webview>` topology can never host DeviceShell's
    * per-page render-host `<webview>`s. A top-level WebContentsView's webContents
    * is NOT a guest and CAN host them. Then wires the DevTools/console view on
-   * top of it via `attachSimulator`. No-op (logs) when `preloadPath` is unset.
+   * top of it via `attachNativeSimulatorDevtoolsHost`. Neither view is added
+   * to the contentView here — both mount only when the renderer's view anchors
+   * publish a non-zero rect (`setNativeSimulatorViewBounds` /
+   * `setSimulatorDevtoolsBounds`). No-op (logs) when `preloadPath` is unset.
+   * `simWidth` rides the wire for schema compatibility but is unused: all
+   * geometry is anchor-published.
    */
   attachNativeSimulator(simulatorUrl: string, simWidth: number): void
   /**
@@ -117,10 +118,6 @@ export interface ViewManager {
    * `windows/views.ts` module, which every detach call relied on.
    */
   detachSimulator(): void
-  /** Reveal the existing DevTools view (idempotent). */
-  showSimulator(simWidth: number): void
-  /** Remove (but do not destroy) the simulator view from the contentView. */
-  hideSimulator(): void
 
   // ── Settings (overlay panel on the right) ──────────────────────────────
   /** Lazy-create and show the settings overlay view. */
@@ -145,12 +142,6 @@ export interface ViewManager {
   getSimulatorWebContentsId(): number | null
   /** Return the live webContents of the currently attached simulator, or null. */
   getSimulatorWebContents(): WebContents | null
-  /** Return the last known simulator width. */
-  getLastSimWidth(): number
-  /** Whether the simulator overlay is currently added to the contentView. */
-  isSimulatorAdded(): boolean
-  /** Whether a DevTools view exists (created but maybe not added). */
-  hasSimulatorView(): boolean
   /** Return the settings overlay's WebContents (for renderer-notifier). */
   getSettingsWebContents(): WebContents | null
   /** Return the webContents ID of the settings overlay if alive, else null. */
@@ -182,10 +173,12 @@ export interface ViewManager {
    * pick it up automatically when they attach (`did-attach-webview`).
    */
   reapplySafeArea(device: NativeDeviceInfo | null): void
-  /** Update lastSimWidth; reposition simulator + settings if they are added. */
+  /**
+   * Window-resize entry point. Re-applies the settings overlay's bounds only.
+   * Simulator + DevTools overlay geometry is anchor-published (the renderer's
+   * ResizeObserver re-measures on the same resize), so no static re-apply here.
+   */
   resize(simWidth: number): void
-  /** Show or hide the simulator overlay based on visibility flag. */
-  setVisible(visible: boolean, simWidth: number): void
 
   // ── Renderer-driven overlay bounds ────────────────────────────────────
   /**
@@ -210,7 +203,9 @@ export interface ViewManager {
    * Reverse size-advertiser sink: the toolbar WCV's own renderer advertises
    * its intrinsic content height (block-axis extent); we store it and push it
    * to the main-window renderer so the placeholder div resizes (closing the
-   * dynamic-height loop).
+   * dynamic-height loop). Ignored while a `{ fixed }` height mode is pinned
+   * via `hostToolbar.setHeightMode` (the session-resident advertiser always
+   * runs, so its reports must not fight a host-pinned height).
    */
   setHostToolbarHeight(extent: number): void
   /**
@@ -220,6 +215,13 @@ export interface ViewManager {
    */
   readonly hostToolbar: HostToolbarControl
 }
+
+/**
+ * Height mode for the host-toolbar placeholder strip. `'auto'` (default): the
+ * session-resident advertiser's reports drive the height. `{ fixed }`: the
+ * host pins the height; advertiser reports are ignored until `'auto'` again.
+ */
+export type HostToolbarHeightMode = 'auto' | { fixed: number }
 
 /**
  * The control object the downstream host uses to own the toolbar
@@ -235,13 +237,50 @@ export interface HostToolbarControl {
   /** Remove the toolbar view from the contentView and reset it (kept alive). */
   hide(): void
   /**
-   * Override the preload used when the toolbar view is first created. The
-   * host-shell (`launch(config)`) passes the host-controlled
-   * `toolbar.preloadPath` here; the host owns the bridge (it calls
-   * `exposeWorkbenchBridge()` itself). Must be set before the first
-   * `loadURL`/`loadFile`; `null` restores the built-in size-advertiser preload.
+   * The HOST's own `webPreferences.preload` for the toolbar view (purely
+   * additive). The framework's height-advertiser runtime does NOT ride
+   * `webPreferences.preload` — it is session-resident (registered on
+   * `session.defaultSession`, self-guarded by the `--dimina-host-toolbar`
+   * marker + `isMainFrame`), so a host preload set here coexists with it and
+   * never replaces it. Must be set before the view is (re)created (first
+   * `loadURL`/`loadFile`, or the next one after the host closed the
+   * webContents); `null` (default) means "no host preload" — it does not and
+   * cannot restore any built-in preload.
    */
   setPreloadPath(path: string | null): void
+  /**
+   * Register a host-side handler for messages the toolbar PAGE sends via
+   * `window.diminaHostToolbar.send(channel, payload)`. Control-level: may be
+   * called before the view exists and survives page reloads / wc rebuilds
+   * (each per-load MessagePort handshake re-attaches the registry to the new
+   * port). Throws on an empty / non-string channel. `dispose()` detaches
+   * (idempotent).
+   */
+  onMessage(
+    channel: string,
+    handler: (payload: unknown) => void,
+  ): HostToolbarMessageSubscription
+  /**
+   * Post `{ channel, payload }` to the toolbar page (received via
+   * `window.diminaHostToolbar.onMessage(channel, handler)`). Gated and
+   * non-queueing: returns false — delivering nothing, creating no view —
+   * while there is no live toolbar webContents, the current load's
+   * MessagePort handshake hasn't completed, or a document-replacing
+   * navigation is in flight (`loadURL`/`loadFile` was issued, or the page
+   * itself started a main-frame cross-document navigation, and the new
+   * document hasn't handshaked yet); true once the envelope went out.
+   * No manual `getHostToolbarWebContentsId` gating needed: the false/true
+   * result IS the readiness signal.
+   */
+  send(channel: string, payload: unknown): boolean
+  /**
+   * Pin or unpin the toolbar strip height. `{ fixed }` notifies the renderer
+   * placeholder with that height immediately (so a preload-less/static toolbar
+   * is visible without any advertiser report) and ignores subsequent advertiser
+   * reports. `'auto'` (default) re-enables advertiser-driven height starting
+   * from the NEXT report — it does not synthesize/replay a stale height.
+   */
+  setHeightMode(mode: HostToolbarHeightMode): void
 }
 
 /**
@@ -252,10 +291,6 @@ export interface HostToolbarControl {
  * on the context object.
  */
 export function createViewManager(ctx: ViewManagerContext): ViewManager {
-  // Resolve once: full WorkbenchContext always provides headerHeight; partial
-  // test contexts may omit it, in which case fall back to the default 40.
-  const headerHeight = ctx.headerHeight ?? 40
-
   // CSS env(safe-area-inset-*) simulation for render-host guests (per device).
   // Driven from did-attach-webview below; re-pushed on device change via
   // reapplySafeArea. Torn down in disposeAll.
@@ -290,7 +325,6 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   let settingsView: WebContentsView | null = null
   let settingsViewAdded = false
   let popoverView: WebContentsView | null = null
-  let lastSimWidth = 375
   let simulatorWebContentsId: number | null = null
   // NATIVE-HOST ONLY. The webContents the right-panel Chrome DevTools front-end
   // currently inspects. We point it at the SERVICE HOST (logic layer) — the
@@ -310,10 +344,10 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   let nativeDevtoolsRetryTimer: ReturnType<typeof setTimeout> | null = null
   let nativeDevtoolsRetryToken = 0
 
-  // Renderer-driven overlay bounds for the simulator DevTools view. When
-  // non-null this takes precedence over the legacy layout computed from the
-  // window content size. A zero-area rectangle means "hide" — the overlay is
-  // removed from the contentView but its WebContents stays alive.
+  // Renderer-driven overlay bounds for the simulator DevTools view — the SOLE
+  // mount/geometry authority (no static-layout fallback). A zero-area
+  // rectangle means "hide" — the overlay is removed from the contentView but
+  // its WebContents stays alive.
   let simulatorBoundsOverride: layout.Bounds | null = null
 
   // ── Host-controllable toolbar WebContentsView ───────────────────────────
@@ -324,6 +358,21 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   let hostToolbarView: WebContentsView | null = null
   let hostToolbarPreloadOverride: string | null = null
   let hostToolbarViewAdded = false
+  // Whether THIS manager holds a reference on the shared defaultSession
+  // registration of the toolbar-runtime preload (see
+  // host-toolbar-session-runtime.ts). Acquired on first toolbar need,
+  // released exactly once in disposeAll — a manager that never used the
+  // toolbar must not decrement a ref it never took.
+  let hostToolbarRuntimeAcquired = false
+  // Placeholder height authority: 'auto' = advertiser reports forward to the
+  // renderer; { fixed } = host-pinned, advertiser reports are dropped.
+  let hostToolbarHeightMode: HostToolbarHeightMode = 'auto'
+  // Gated narrow channel to the toolbar PAGE (per-load MessagePort handshake;
+  // see host-toolbar-port-channel.ts). Control-level registry — created with
+  // the manager so onMessage() works before any toolbar view exists.
+  const hostToolbarPort = createHostToolbarPortChannel({
+    isCurrent: (wc) => liveHostToolbarWebContents() === wc,
+  })
 
   // ── Internal helpers ────────────────────────────────────────────────────
 
@@ -339,18 +388,6 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
         view.webContents.close()
       }
     } catch { /* ignore */ }
-  }
-
-  function applySimulatorBounds(simWidth: number): void {
-    if (!simulatorView || ctx.windows.mainWindow.isDestroyed()) return
-    if (simulatorBoundsOverride) {
-      simulatorView.setBounds(simulatorBoundsOverride)
-      return
-    }
-    const [w = 0, h = 0] = ctx.windows.mainWindow.getContentSize()
-    simulatorView.setBounds(
-      layout.computeSimulatorBounds(w, h, simWidth, headerHeight),
-    )
   }
 
   // Renderer publishes width/height = 0 to mean "hide overlay" — the
@@ -383,11 +420,23 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
 
   // ── Host-controllable toolbar WebContentsView ───────────────────────────
 
+  // The toolbar's webContents lifecycle belongs to the HOST, which may close
+  // it out from under us (the documented rebuild path). In real Electron a
+  // WebContentsView whose webContents was destroyed can report `webContents`
+  // as undefined — not merely a destroyed handle — so every access must
+  // tolerate BOTH (observed in the R1 e2e: `.isDestroyed()` on undefined threw
+  // inside the control surface after the host closed the wc).
+  function liveHostToolbarWebContents(): WebContents | null {
+    const wc = hostToolbarView?.webContents as WebContents | undefined
+    if (!wc || wc.isDestroyed()) return null
+    return wc
+  }
+
   // Lazily create the host-toolbar view. Mirrors `showSettings` for the
   // webPreferences shape and the native simulator for nav hardening +
   // background color (the host may load arbitrary URLs / content). Idempotent.
   function ensureHostToolbarView(): WebContentsView {
-    if (hostToolbarView && !hostToolbarView.webContents.isDestroyed()) {
+    if (hostToolbarView && liveHostToolbarWebContents()) {
       return hostToolbarView
     }
     // Rebuilding after the host destroyed the underlying webContents: detach the
@@ -400,21 +449,36 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       } catch { /* already removed */ }
       hostToolbarViewAdded = false
     }
-    const view = new WebContentsView({
-      webPreferences: {
-        nodeIntegration: false,
-        contextIsolation: true,
-        sandbox: false,
-        // Default: the reverse size-advertiser preload that measures the host
-        // content's intrinsic height and posts it on the advertise channel so
-        // main reserves exactly that strip height (dynamic height via
-        // ViewAnchor). When the host-shell supplies its own toolbar preload
-        // (workbench config.toolbar.preloadPath), use that instead — the host
-        // owns the bridge and may install the advertiser itself.
-        preload: hostToolbarPreloadOverride ?? hostToolbarPreloadPath,
-      },
-    })
+    // The framework's height-advertiser runtime is SESSION-resident: register
+    // it on session.defaultSession (ref-counted across coexisting managers)
+    // BEFORE the view exists, so the very first load already runs it. The
+    // toolbar WCV stays on the defaultSession (no partition/session override)
+    // — moving it onto its own partition would silently detach it from this
+    // registration and height advertising would die with no error.
+    if (!hostToolbarRuntimeAcquired) {
+      acquireHostToolbarSessionRuntime()
+      hostToolbarRuntimeAcquired = true
+    }
+    // `webPreferences.preload` is the HOST's alone (setPreloadPath); the
+    // built-in advertiser no longer rides it (it would execute twice — the
+    // session copy + the webPreferences copy). The additionalArguments marker
+    // is what the session runtime's guard keys on to activate here and stay a
+    // zero-footprint no-op in every other defaultSession renderer.
+    const webPreferences: Electron.WebPreferences = {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: false,
+      additionalArguments: [HOST_TOOLBAR_RUNTIME_MARKER],
+    }
+    if (hostToolbarPreloadOverride !== null) {
+      webPreferences.preload = hostToolbarPreloadOverride
+    }
+    const view = new WebContentsView({ webPreferences })
     hostToolbarView = view
+    // Hook the per-load MessagePort handshake (did-finish-load) + dead-port
+    // cleanup (destroyed) on the fresh wc. AFTER the assignment above so the
+    // channel's isCurrent guard sees this wc as the live one.
+    hostToolbarPort.attach(view.webContents)
     // Paint the surface a neutral color so growing the reserved strip never
     // flashes white before the host content paints (mirrors the native
     // simulator's setBackgroundColor anti-flash).
@@ -433,7 +497,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     // WebContents (and the host's loaded content) alive. Do NOT create the
     // view just to immediately hide it.
     if (isHidden(bounds)) {
-      if (hostToolbarView && hostToolbarViewAdded && !hostToolbarView.webContents.isDestroyed()) {
+      if (hostToolbarView && hostToolbarViewAdded && liveHostToolbarWebContents()) {
         try {
           ctx.windows.mainWindow.contentView.removeChildView(hostToolbarView)
         } catch { /* already removed */ }
@@ -452,6 +516,11 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   }
 
   function setHostToolbarHeight(extent: number): void {
+    // While the host pins a fixed height, drop advertiser reports entirely —
+    // the session-resident advertiser is always installed, so forwarding its
+    // reports would make the strip oscillate between the pinned and measured
+    // heights on every content resize.
+    if (hostToolbarHeightMode !== 'auto') return
     // Push the reserved height back to the main-window renderer so its
     // placeholder div resizes (closing the dynamic-height loop). The height is
     // not retained in main — the renderer placeholder is the single source of
@@ -476,35 +545,62 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   const hostToolbar: HostToolbarControl = {
     async loadURL(url: string): Promise<void> {
       const view = ensureHostToolbarView()
+      // Invalidate SYNCHRONOUSLY at initiation, before the load is issued:
+      // the current document is about to be replaced, so a same-tick send()
+      // must report false instead of confirming delivery into it. The channel
+      // recovers on the new document's did-finish-load handshake. (Cannot
+      // rely on did-start-navigation here — that only covers page-initiated
+      // navigations once the load is actually under way.)
+      hostToolbarPort.invalidate()
       await view.webContents.loadURL(url)
     },
     async loadFile(filePath: string): Promise<void> {
       const view = ensureHostToolbarView()
+      // Same initiation-invalidates contract as loadURL above.
+      hostToolbarPort.invalidate()
       await view.webContents.loadFile(filePath)
     },
     get webContents(): WebContents | null {
-      if (!hostToolbarView) return null
-      if (hostToolbarView.webContents.isDestroyed()) return null
-      return hostToolbarView.webContents
+      return liveHostToolbarWebContents()
     },
     hide(): void {
       hideHostToolbar()
     },
     setPreloadPath(path: string | null): void {
+      // The HOST's own webPreferences.preload, applied when the view is next
+      // (re)created. `null` = no host preload. The framework advertiser is
+      // session-resident and unaffected either way (see ensureHostToolbarView).
       hostToolbarPreloadOverride = path
+    },
+    setHeightMode(mode: HostToolbarHeightMode): void {
+      hostToolbarHeightMode = mode
+      if (mode !== 'auto') {
+        // Pin immediately: a preload-less/static toolbar never advertises, so
+        // waiting for the next report would leave the strip at height 0.
+        ctx.notify.hostToolbarHeightChanged(mode.fixed)
+      }
+      // Switching back to 'auto' deliberately does NOT synthesize a notify —
+      // replaying a stale cached height would flash the old size; the NEXT
+      // advertiser report drives the placeholder again.
+    },
+    onMessage(channel, handler): HostToolbarMessageSubscription {
+      return hostToolbarPort.onMessage(channel, handler)
+    },
+    send(channel, payload): boolean {
+      return hostToolbarPort.send(channel, payload)
     },
   }
 
   function applySettingsBounds(): void {
     if (!settingsView || ctx.windows.mainWindow.isDestroyed()) return
     const [w = 0, h = 0] = ctx.windows.mainWindow.getContentSize()
-    settingsView.setBounds(layout.computeSettingsBounds(w, h, headerHeight))
+    settingsView.setBounds(layout.computeSettingsBounds(w, h, HEADER_H))
   }
 
   function applyPopoverBounds(): void {
     if (!popoverView || ctx.windows.mainWindow.isDestroyed()) return
     const [w = 0, h = 0] = ctx.windows.mainWindow.getContentSize()
-    popoverView.setBounds(layout.computePopoverBounds(w, h, headerHeight))
+    popoverView.setBounds(layout.computePopoverBounds(w, h, HEADER_H))
   }
 
   function clearNativeDevtoolsRetry(): void {
@@ -732,88 +828,12 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
 
   // ── ViewManager methods ─────────────────────────────────────────────────
 
-  function attachSimulator(simWcId: number, simWidth: number): void {
-    const sim = webContents.fromId(simWcId)
-    if (!sim) {
-      console.error('[workbench] attachSimulator — simWc not found for id', simWcId)
-      return
-    }
-    lastSimWidth = simWidth
-    simulatorWebContentsId = simWcId
-
-    // Destroy old simulatorView to prevent WebContentsView leak
-    if (simulatorView) {
-      hideSimulator()
-      try {
-        if (!simulatorView.webContents.isDestroyed()) {
-          simulatorView.webContents.close()
-        }
-      } catch { /* ignore */ }
-      simulatorView = null
-    }
-
-    simulatorView = new WebContentsView()
-    sim.setDevToolsWebContents(simulatorView.webContents)
-    // Embedded in the right-panel host view; never bring it to the foreground
-    // (would steal focus from the user / disrupt e2e).
-    sim.openDevTools({ mode: 'detach', activate: false })
-
-    // Default DevTools to Console panel (Chrome DevTools defaults to Elements).
-    // The DevTools UI lives inside closed shadow roots, so a light-DOM
-    // querySelector('[role="tab"]') cannot reach the tab bar to click it.
-    // Instead drive the front-end's own view manager: the bundled DevTools
-    // exposes `UI.ViewManager.instance().showView(id)` on `globalThis.UI`
-    // once the front-end has finished bootstrapping. We poll for it and
-    // request the `console` view, and also persist the choice via the
-    // `panel-selectedTab` localStorage key so subsequent reloads honor it.
-    const devtoolsWc = simulatorView.webContents
-    // Keep only Elements/Console/Network tabs (front-most, in that order).
-    customizeDevtoolsTabs(devtoolsWc)
-    devtoolsWc.once('dom-ready', () => {
-      devtoolsWc.executeJavaScript(`
-        (function() {
-          try { localStorage.setItem('panel-selectedTab', '"console"') } catch {}
-          let tries = 0
-          const timer = setInterval(() => {
-            tries++
-            try {
-              const UI = globalThis.UI
-              const vm = UI && UI.ViewManager && typeof UI.ViewManager.instance === 'function'
-                ? UI.ViewManager.instance()
-                : null
-              if (vm && typeof vm.showView === 'function') {
-                vm.showView('console')
-                clearInterval(timer)
-                return
-              }
-            } catch {}
-            if (tries > 80) clearInterval(timer)
-          }, 50)
-        })()
-      `).catch(() => {})
-    })
-
-    if (getDefaultTab(ctx) === 'simulator') {
-      if (simulatorBoundsOverride) {
-        if (!isHidden(simulatorBoundsOverride)) {
-          ctx.windows.mainWindow.contentView.addChildView(simulatorView)
-          simulatorViewAdded = true
-          simulatorView.setBounds(simulatorBoundsOverride)
-        }
-      } else {
-        ctx.windows.mainWindow.contentView.addChildView(simulatorView)
-        simulatorViewAdded = true
-        applySimulatorBounds(simWidth)
-      }
-    }
-  }
-
-  function attachNativeSimulatorDevtoolsHost(simWidth: number): void {
+  function attachNativeSimulatorDevtoolsHost(): void {
     stopFollowingNativeServiceHost()
 
     // Destroy old simulatorView to prevent WebContentsView leak
     if (simulatorView) {
-      hideSimulator()
+      removeSimulatorDevtoolsView()
       try {
         if (!simulatorView.webContents.isDestroyed()) {
           simulatorView.webContents.close()
@@ -880,18 +900,16 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       `).catch(() => {})
     })
 
-    if (getDefaultTab(ctx) === 'simulator') {
-      if (simulatorBoundsOverride) {
-        if (!isHidden(simulatorBoundsOverride)) {
-          ctx.windows.mainWindow.contentView.addChildView(simulatorView)
-          simulatorViewAdded = true
-          simulatorView.setBounds(simulatorBoundsOverride)
-        }
-      } else {
-        ctx.windows.mainWindow.contentView.addChildView(simulatorView)
-        simulatorViewAdded = true
-        applySimulatorBounds(simWidth)
-      }
+    // Anchor-only mount: the renderer's published rect is the SOLE authority.
+    // If a non-zero rect was already published (it can land before this attach
+    // on the project-open ordering), replay it; otherwise the view stays
+    // unadded and unsized until the first publish arrives. No static-layout
+    // fallback — an attach-time computed rect raced the precise anchor rect
+    // and flashed the overlay at the wrong rectangle.
+    if (simulatorBoundsOverride && !isHidden(simulatorBoundsOverride)) {
+      ctx.windows.mainWindow.contentView.addChildView(simulatorView)
+      simulatorViewAdded = true
+      simulatorView.setBounds(simulatorBoundsOverride)
     }
 
     if (ctx.bridge?.isNativeHost()) {
@@ -963,12 +981,11 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     ctx.connections.acquire(simWc).own(detachNativeCustomApiBridge)
   }
 
-  function attachNativeSimulator(simulatorUrl: string, simWidth: number): void {
+  function attachNativeSimulator(simulatorUrl: string, _simWidth: number): void {
     if (!ctx.preloadPath) {
       console.error('[workbench] attachNativeSimulator — preloadPath unset; cannot mount native simulator')
       return
     }
-    lastSimWidth = simWidth
 
     // Tear down any previous native simulator view (relaunch / re-open).
     if (nativeSimulatorView) {
@@ -1127,7 +1144,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     // service host so its Console/Network(fetch)/Sources reflect the logic layer.
     // (The UI/view layer's Elements equivalent is the native WXML panel +
     // render-guest highlight chain, which targets the active render guest.)
-    attachNativeSimulatorDevtoolsHost(simWidth)
+    attachNativeSimulatorDevtoolsHost()
   }
 
   function detachSimulator(): void {
@@ -1178,22 +1195,15 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     lastRendererRect = null
   }
 
-  function showSimulator(simWidth: number): void {
-    lastSimWidth = simWidth
-    if (!simulatorView) return
-    if (!simulatorViewAdded) {
-      ctx.windows.mainWindow.contentView.addChildView(simulatorView)
-      simulatorViewAdded = true
-    }
-    applySimulatorBounds(simWidth)
-  }
-
-  function hideSimulator(): void {
+  // Remove (but do not destroy) the DevTools overlay from the contentView.
+  // Internal teardown helper for re-attach; user-facing visibility is the
+  // anchor 0×0 single path (`setSimulatorDevtoolsBounds`).
+  function removeSimulatorDevtoolsView(): void {
     if (simulatorView && simulatorViewAdded) {
       try {
         ctx.windows.mainWindow.contentView.removeChildView(simulatorView)
       } catch (e) {
-        console.error('[workbench] hideSimulator error', e)
+        console.error('[workbench] removeSimulatorDevtoolsView error', e)
       }
       simulatorViewAdded = false
     }
@@ -1265,10 +1275,9 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   }
 
   function repositionAll(): void {
-    // Native simulator: bounds owned by the renderer's reportBounds (Model A);
-    // its window-resize listener re-measures, so no coarse re-apply here.
-    if (simulatorView && simulatorViewAdded)
-      applySimulatorBounds(lastSimWidth)
+    // Simulator + DevTools overlay: bounds owned by the renderer's anchor
+    // publishes; their ResizeObserver/window-resize listeners re-measure, so
+    // no static re-apply here.
     if (settingsView && settingsViewAdded)
       applySettingsBounds()
     if (popoverView)
@@ -1277,11 +1286,23 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
 
   function disposeAll(): void {
     detachSimulator()
+    // Narrow channel first: close the live MessagePort + sweep the onMessage
+    // registry, so a send() racing teardown reports false instead of posting
+    // into a wc that is about to be closed.
+    hostToolbarPort.dispose()
     // Host-controllable toolbar view: removed from the contentView + its
     // WebContents closed (the host's loaded content is torn down on app exit).
     destroyViewInternal(hostToolbarView)
     hostToolbarView = null
     hostToolbarViewAdded = false
+    // Release this manager's reference on the shared defaultSession
+    // toolbar-runtime registration (only if it ever acquired one — a manager
+    // that never used the toolbar must not drive the shared count to zero).
+    // The LAST release unregisters; other coexisting managers keep theirs.
+    if (hostToolbarRuntimeAcquired) {
+      releaseHostToolbarSessionRuntime()
+      hostToolbarRuntimeAcquired = false
+    }
     safeArea.dispose()
   }
 
@@ -1333,33 +1354,17 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     } catch { /* hostWebContents unavailable; guests get zoom on attach */ }
   }
 
-  function resize(simWidth: number): void {
-    lastSimWidth = simWidth
-    // Native simulator bounds are owned solely by the renderer's reportBounds
-    // (Model A) — its ResizeObserver/window-resize listeners re-measure on this
-    // same resize. No coarse panel-size re-apply here (it raced the precise rect).
-    if (simulatorViewAdded) applySimulatorBounds(simWidth)
+  function resize(_simWidth: number): void {
+    // Simulator + DevTools overlay bounds are owned solely by the renderer's
+    // anchor publishes — its ResizeObserver/window-resize listeners re-measure
+    // on this same resize. No static re-apply (it raced the precise rect).
     if (settingsViewAdded) applySettingsBounds()
   }
 
-  function setVisible(visible: boolean, simWidth: number): void {
-    lastSimWidth = simWidth
-    if (!simulatorView) return
-
-    if (visible && !simulatorViewAdded) {
-      showSimulator(simWidth)
-    } else if (!visible) {
-      hideSimulator()
-    }
-  }
-
   return {
-    attachSimulator,
     attachNativeSimulator,
     detachSimulator,
     reapplySafeArea: (device) => safeArea.reapplyAll(device),
-    showSimulator,
-    hideSimulator,
     showSettings,
     hideSettings,
     showPopover,
@@ -1372,9 +1377,6 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       const wc = webContents.fromId(simulatorWebContentsId)
       return wc && !wc.isDestroyed() ? wc : null
     },
-    getLastSimWidth: () => lastSimWidth,
-    isSimulatorAdded: () => simulatorViewAdded,
-    hasSimulatorView: () => simulatorView !== null,
     getSettingsWebContents: () => {
       if (!settingsView) return null
       if (settingsView.webContents.isDestroyed()) return null
@@ -1390,14 +1392,9 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       if (popoverView.webContents.isDestroyed()) return null
       return popoverView.webContents.id
     },
-    getHostToolbarWebContentsId: () => {
-      if (!hostToolbarView) return null
-      if (hostToolbarView.webContents.isDestroyed()) return null
-      return hostToolbarView.webContents.id
-    },
+    getHostToolbarWebContentsId: () => liveHostToolbarWebContents()?.id ?? null,
     setNativeSimulatorViewBounds,
     resize,
-    setVisible,
     setSimulatorDevtoolsBounds,
     setHostToolbarBounds,
     setHostToolbarHeight,

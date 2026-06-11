@@ -2,16 +2,10 @@ import {
   useCallback,
   useState,
 } from 'react'
-import type { RefObject } from 'react'
-import {
-  selectSimulatorPanel,
-  setSimulatorVisible,
-} from '@/shared/api'
 import type { RightPaneState, RightPaneTabId } from '../types'
 
 export interface UseRightPaneProps {
   initialRightPane: RightPaneState
-  simPanelWidthRef: RefObject<number>
 }
 
 export interface RightPaneHookResult {
@@ -20,45 +14,31 @@ export interface RightPaneHookResult {
   toggleRightPaneVisible: () => void
 }
 
+/**
+ * Pure React state for the right-pane tab selection. No IPC side-channel:
+ * the Chromium DevTools overlay's visibility converges on the view anchor —
+ * selecting a non-Console tab hides the DevTools placeholder (display:none),
+ * the anchor re-measures and publishes a 0×0 rect, and the main process
+ * removes the overlay child view (see `useViewAnchor` in project-runtime.tsx).
+ */
 export function useRightPane(props: UseRightPaneProps): RightPaneHookResult {
-  const { initialRightPane, simPanelWidthRef } = props
+  const { initialRightPane } = props
 
   const [rightPane, setRightPane] = useState<RightPaneState>(initialRightPane)
 
-  const syncRightPane = useCallback(
-    (next: RightPaneState, width: number) => {
-      if (next.selected === 'simulator') {
-        if (next.simulatorVisible) {
-          void selectSimulatorPanel()
-          return
-        }
-        void setSimulatorVisible(false, width)
-        return
-      }
-      void setSimulatorVisible(false, width)
+  const selectRightPane = useCallback(
+    (panelId: RightPaneTabId) => {
+      setRightPane({ selected: panelId, simulatorVisible: true })
     },
     [],
   )
 
-  const selectRightPane = useCallback(
-    (panelId: RightPaneTabId) => {
-      const next: RightPaneState = { selected: panelId, simulatorVisible: true }
-      setRightPane(next)
-      syncRightPane(next, simPanelWidthRef.current!)
-    },
-    [syncRightPane, simPanelWidthRef],
-  )
-
   const toggleRightPaneVisible = useCallback(() => {
-    setRightPane((prev) => {
-      const next: RightPaneState = {
-        ...prev,
-        simulatorVisible: !prev.simulatorVisible,
-      }
-      syncRightPane(next, simPanelWidthRef.current!)
-      return next
-    })
-  }, [syncRightPane, simPanelWidthRef])
+    setRightPane((prev) => ({
+      ...prev,
+      simulatorVisible: !prev.simulatorVisible,
+    }))
+  }, [])
 
   return {
     rightPane,

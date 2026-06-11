@@ -53,10 +53,19 @@ export function cjsSiblingPreloadPath(preloadPath: string): string {
  */
 export const mainPreloadPath = path.join(devtoolsPackageRoot, 'dist/preload/windows/main.cjs')
 
-/** Preload for the host-controllable toolbar WCV — runs the reverse size-advertiser. */
-export const hostToolbarPreloadPath = path.join(
+/**
+ * Session-registered toolbar-runtime preload bundle (the reverse
+ * size-advertiser, self-guarded by the `--dimina-host-toolbar` marker +
+ * `isMainFrame`). Registered on `session.defaultSession` via
+ * `registerPreloadScript({ type: 'frame', filePath })` — see
+ * `src/main/services/views/host-toolbar-session-runtime.ts`. Session preloads
+ * are always loaded as CommonJS, so this points at the `.cjs` bundle (same
+ * rule `cjsSiblingPreloadPath` exists for). Resolved from the package root so
+ * npm/pnpm node_modules and ASAR packaging alike get an absolute, correct path.
+ */
+export const hostToolbarRuntimePreloadPath = path.join(
   devtoolsPackageRoot,
-  'dist/preload/windows/host-toolbar.cjs',
+  'dist/preload/windows/host-toolbar-runtime.cjs',
 )
 
 export const simulatorDir = path.join(devtoolsPackageRoot, 'dist/simulator')

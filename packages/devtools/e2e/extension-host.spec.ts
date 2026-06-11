@@ -1,6 +1,4 @@
 import { test, expect, _electron, type ElectronApplication, type Page } from '@playwright/test'
-import fs from 'fs'
-import os from 'os'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { DEMO_APP_DIR, openProjectInUI, closeProject, pollUntil, evalInSimulator, ipcInvoke } from './helpers'
@@ -13,11 +11,16 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
  * integrates devtools via `createWorkbenchApp({ headerHeight, onSetup })` and
  * injects extensions inside `onSetup(instance)`.
  *
- * `e2e/extension-host-entry.js` is the host entry — it registers a custom
- * toolbar action (`E2E_TOOLBAR_ACTION`) and a simulator custom API
- * (`e2eEcho`), and sets `headerHeight: 72`. This spec drives that real
- * Electron app and asserts the injected extensions actually run end-to-end
- * (not just that the API surface exists — that's already unit-covered).
+ * `e2e/extension-host-entry.js` is the host entry — it registers a simulator
+ * custom API (`e2eEcho`) and still passes the deprecated `headerHeight: 72`
+ * (which must be runtime-ignored without crashing launch). This spec drives
+ * that real Electron app and asserts the injected extension actually runs
+ * end-to-end (not just that the API surface exists — that's already
+ * unit-covered).
+ *
+ * Host toolbar actions (`instance.toolbar.set` / E2E_TOOLBAR_ACTION) are
+ * decommissioned and no longer covered — the custom-API mechanism
+ * (`registerSimulatorApi`) is the surviving extension surface.
  *
  * Electron e2e; runs on local macOS without extra setup.
  */
@@ -27,23 +30,14 @@ test.describe('Extension host (createWorkbenchApp onSetup)', () => {
 
   let electronApp: ElectronApplication
   let mainWindow: Page
-  let sentinelPath: string
 
   test.beforeAll(async () => {
-    // The host's toolbar handler writes here; the spec polls for it to prove
-    // the click reached the host-registered handler.
-    sentinelPath = path.join(
-      fs.mkdtempSync(path.join(os.tmpdir(), 'dimina-e2e-ext-')),
-      'toolbar-sentinel.txt',
-    )
-
     const entryPath = path.resolve(__dirname, 'extension-host-entry.js')
     electronApp = await _electron.launch({
       args: [entryPath],
       env: {
         ...process.env,
         NODE_ENV: 'test',
-        DIMINA_E2E_TOOLBAR_SENTINEL: sentinelPath,
       },
     })
     mainWindow = await electronApp.firstWindow()
@@ -66,58 +60,33 @@ test.describe('Extension host (createWorkbenchApp onSetup)', () => {
       electronApp?.close().catch(() => {}),
       new Promise((resolve) => setTimeout(resolve, 15_000)),
     ])
-    try {
-      fs.rmSync(path.dirname(sentinelPath), { recursive: true, force: true })
-    } catch {}
   })
 
-  test('custom toolbar action: button renders and click reaches the host handler', async () => {
-    // The host registered one action via `instance.toolbar.set([...])`; it
-    // renders as a <Button> whose text is the action label.
-    const actionButton = mainWindow.getByRole('button', { name: 'E2E_TOOLBAR_ACTION' })
-    await expect(actionButton).toBeVisible({ timeout: 15_000 })
-
-    // Sentinel must not exist before the click — otherwise a pre-existing file
-    // would make the assertion below pass without the handler ever running.
-    expect(fs.existsSync(sentinelPath)).toBe(false)
-
-    await actionButton.click()
-
-    // Poll for the sentinel: its presence + content proves the click travelled
-    // renderer → ToolbarChannel.Invoke → context.toolbar handler → host fn.
-    const content = await pollUntil(
-      () => Promise.resolve(fs.existsSync(sentinelPath) ? fs.readFileSync(sentinelPath, 'utf8') : ''),
-      (value) => value.length > 0,
-      10_000,
-      200,
-    )
-    expect(content).toBe('e2e-action:invoked')
-  })
-
-  test('headerHeight config reaches the renderer (toolbar header is 72px)', async () => {
-    // project-toolbar.tsx renders the toolbar header div with
-    // `style={{ height: headerHeight }}`, defaulting to HEADER_H (40) until
-    // `app:getHeaderHeight` resolves. The host configured 72, so the rendered
-    // element must measure 72 — not the 40px default.
-    const height = await pollUntil(
-      () => mainWindow.evaluate(() => {
-        // The header is the toolbar row holding the "普通编译" compile button.
-        const buttons = Array.from(document.querySelectorAll('button'))
-        const compileBtn = buttons.find((b) => (b.textContent || '').includes('普通编译'))
-        if (!compileBtn) return null
-        // Walk up to the flex row that carries the inline height style.
-        let el: HTMLElement | null = compileBtn.parentElement
-        while (el) {
-          if (el.style && el.style.height) return parseInt(el.style.height, 10)
-          el = el.parentElement
-        }
-        return null
-      }),
-      (h) => h === 72,
-      10_000,
-      300,
-    )
-    expect(height).toBe(72)
+  test('deprecated headerHeight config is ignored (toolbar header stays 40px)', async () => {
+    // `headerHeight` is decommissioned: the host entry still passes 72 (which
+    // must not crash launch — proven by this suite booting at all), but
+    // project-toolbar.tsx renders its main row at the fixed HEADER_H constant
+    // (40px) and no longer fetches a height over IPC. A 72px reading means
+    // the legacy config→IPC→renderer plumbing has come back.
+    const measure = () => mainWindow.evaluate(() => {
+      // The header is the toolbar row holding the "普通编译" compile button.
+      const buttons = Array.from(document.querySelectorAll('button'))
+      const compileBtn = buttons.find((b) => (b.textContent || '').includes('普通编译'))
+      if (!compileBtn) return null
+      // Walk up to the flex row that carries the inline height style.
+      let el: HTMLElement | null = compileBtn.parentElement
+      while (el) {
+        if (el.style && el.style.height) return parseInt(el.style.height, 10)
+        el = el.parentElement
+      }
+      return null
+    })
+    const height = await pollUntil(measure, (h) => h !== null, 10_000, 300)
+    expect(height).toBe(40)
+    // Settle guard: the legacy behavior painted 40 first and flipped to 72
+    // once the IPC resolved — re-measure after a beat to catch that flip.
+    await new Promise((resolve) => setTimeout(resolve, 1_000))
+    expect(await measure()).toBe(40)
   })
 
   test('registerSimulatorApi: custom-apis channel proxies e2eEcho to the host handler', async () => {

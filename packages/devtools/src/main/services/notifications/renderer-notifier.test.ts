@@ -4,8 +4,8 @@
  * never throws.
  *
  * Covers three target classes:
- *   - main window methods (windowNavigateBack, popoverRelaunch, projectStatus,
- *     toolbarActionsChanged) → routed via `ctx.windows.mainWindow.webContents.send`
+ *   - main window methods (windowNavigateBack, popoverRelaunch, projectStatus)
+ *     → routed via `ctx.windows.mainWindow.webContents.send`
  *   - settings overlay (settingsInit) → routed via
  *     `ctx.views.getSettingsWebContents().send`
  *   - popoverInit takes a separate view argument; flipping its
@@ -16,7 +16,6 @@ import {
   WindowChannel,
   PopoverChannel,
   ProjectChannel,
-  ToolbarChannel,
   SettingsChannel,
   EditorChannel,
 } from '../../../shared/ipc-channels.js'
@@ -96,7 +95,7 @@ describe('RendererNotifier — destroyed targets no-op', () => {
     expect(mainWindow.webContents.send).toHaveBeenCalledTimes(1)
   })
 
-  it('projectStatus + toolbarActionsChanged: both route through mainWindow and respect destroy', () => {
+  it('projectStatus: routes through mainWindow and respects destroy', () => {
     const mainWindow = makeBrowserWindow()
     const ctx = {
       windows: { mainWindow: mainWindow as unknown as Electron.BrowserWindow },
@@ -105,18 +104,15 @@ describe('RendererNotifier — destroyed targets no-op', () => {
     const notifier = createRendererNotifier(ctx)
 
     notifier.projectStatus({ status: 'compiling', message: '' })
-    notifier.toolbarActionsChanged()
     expect(mainWindow.webContents.send).toHaveBeenNthCalledWith(
       1,
       ProjectChannel.Status,
       { status: 'compiling', message: '' },
     )
-    expect(mainWindow.webContents.send).toHaveBeenNthCalledWith(2, ToolbarChannel.ActionsChanged)
 
     mainWindow.destroyed = true
     notifier.projectStatus({ status: 'idle', message: '' })
-    notifier.toolbarActionsChanged()
-    expect(mainWindow.webContents.send).toHaveBeenCalledTimes(2)
+    expect(mainWindow.webContents.send).toHaveBeenCalledTimes(1)
   })
 
   it('settingsInit: targets the settings overlay webContents and no-ops once it is destroyed', () => {

@@ -2,10 +2,8 @@ import { ServiceHostChannel, SimulatorChannel, SimulatorCustomApiChannel } from 
 import {
   SimulatorAttachNativeSchema,
   SimulatorCustomApiInvokeSchema,
-  SimulatorResizeSchema,
   SimulatorSetDeviceInfoSchema,
   SimulatorSetNativeBoundsSchema,
-  SimulatorSetVisibleSchema,
 } from '../../shared/ipc-schemas.js'
 import { deviceInfoToHostEnv } from '../../shared/bridge-channels.js'
 import type { WorkbenchContext } from '../services/workbench-context.js'
@@ -21,10 +19,6 @@ export function registerSimulatorIpc(ctx: Pick<WorkbenchContext, 'views' | 'noti
     })
     .handle(SimulatorChannel.Detach, () => {
       ctx.views.detachSimulator()
-    })
-    .handle(SimulatorChannel.Resize, (_, ...args: unknown[]) => {
-      const [simWidth] = validate(SimulatorChannel.Resize, SimulatorResizeSchema, args)
-      ctx.views.resize(simWidth)
     })
     .handle(SimulatorChannel.SetNativeBounds, (_, ...args: unknown[]) => {
       const [p] = validate(SimulatorChannel.SetNativeBounds, SimulatorSetNativeBoundsSchema, args)
@@ -48,13 +42,6 @@ export function registerSimulatorIpc(ctx: Pick<WorkbenchContext, 'views' | 'noti
       if (serviceWc && !serviceWc.isDestroyed()) {
         serviceWc.send(ServiceHostChannel.HostEnvUpdate, deviceInfoToHostEnv(device))
       }
-    })
-    .handle(SimulatorChannel.SetVisible, (_, ...args: unknown[]) => {
-      const [visible, simWidth] = validate(SimulatorChannel.SetVisible, SimulatorSetVisibleSchema, args)
-      ctx.views.setVisible(visible, simWidth)
-    })
-    .handle(SimulatorCustomApiChannel.List, () => {
-      return ctx.simulatorApis.list()
     })
     .handle(SimulatorCustomApiChannel.Invoke, (_, ...args: unknown[]) => {
       const [name, params] = validate(SimulatorCustomApiChannel.Invoke, SimulatorCustomApiInvokeSchema, args)

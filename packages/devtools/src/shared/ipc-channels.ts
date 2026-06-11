@@ -22,8 +22,6 @@ export const SimulatorChannel = {
   // mini-app sees the selected device without a relaunch.
   SetDeviceInfo: 'simulator:set-device-info',
   Detach: 'simulator:detach',
-  Resize: 'simulator:resize',
-  SetVisible: 'simulator:setVisible',
   Console: 'simulator:console',
   // Main → renderer push of the visible top-of-stack page route whenever the
   // mini-app navigates (navigateTo / switchTab / back). Payload: the page path
@@ -77,15 +75,13 @@ export const ServiceHostChannel = {
 } as const
 
 // ── Custom simulator APIs (downstream-registered, main-process handlers) ──
-// list: simulator queries the names registered via instance.registerSimulatorApi().
-// invoke: simulator forwards an API call to the registry; result/reject propagates.
+// invoke: forwards an API call to the registry; result/reject propagates.
 //
-// These are ipcMain.handle channels invoked by the **main-window renderer**
-// only (trusted host). The simulator guest never reaches them directly — it
+// This is an ipcMain.handle channel invoked by the **main-window renderer**
+// only (trusted host). The simulator guest never reaches it directly — it
 // reaches the host via the bridge channels below, so the sender-policy can keep
 // the simulator off the IPC white-list.
 export const SimulatorCustomApiChannel = {
-  List: 'simulator:custom-apis:list',
   Invoke: 'simulator:custom-apis:invoke',
 } as const
 
@@ -135,15 +131,6 @@ export const SimulatorElementChannel = {
   Clear: 'simulator:element:clear',
 } as const
 
-// ── Workbench runtime info (renderer reads once to pick panel data sources) ──
-// Under native-host the page DOM / service logic live in separate webContents,
-// so WXML + AppData are sourced from the main process instead of the simulator
-// guest's miniappSnapshot transport. The renderer queries this flag once and
-// branches usePanelData accordingly.
-export const WorkbenchRuntimeChannel = {
-  GetNativeHost: 'workbench:runtime:native-host',
-} as const
-
 // ── WXML tree (native-host: main pulls the tree from the active render-host
 // <webview> guest via render-inspect, and pushes/answers here — mirroring the
 // Storage panel's main→renderer contract so the renderer panel is unchanged) ──
@@ -188,7 +175,6 @@ export const WorkbenchSettingsChannel = {
   SetTheme: 'workbenchSettings:setTheme',
   GetCdpStatus: 'workbenchSettings:getCdpStatus',
   GetMcpStatus: 'workbenchSettings:getMcpStatus',
-  SetVisible: 'workbenchSettings:setVisible',
   Init: 'workbenchSettings:init',
 } as const
 
@@ -280,15 +266,6 @@ export const DialogChannel = {
   OpenDirectory: 'dialog:openDirectory',
 } as const
 
-// ── Panels ───────────────────────────────────────────────────────────────
-
-export const PanelChannel = {
-  List: 'panel:list',
-  Eval: 'panel:eval',
-  Select: 'panel:select',
-  SelectSimulator: 'panel:selectSimulator',
-} as const
-
 // ── Embedded views (renderer → main) ─────────────────────────────────────
 //
 // The main window's React layout owns the *positions* of the editor +
@@ -317,6 +294,16 @@ export const ViewChannel = {
    */
   HostToolbarAdvertiseHeight: 'view:host-toolbar:advertise-height',
   /**
+   * main → host-toolbar WCV renderer: per-load MessagePort handshake for the
+   * gated narrow channel. On every toolbar `did-finish-load` main creates a
+   * `MessageChannelMain` and transfers port2 here
+   * (`wc.postMessage(HostToolbarPort, null, [port2])`); the session-resident
+   * toolbar runtime preload receives it via `event.ports[0]` and bridges it to
+   * the page as `window.diminaHostToolbar`. Envelope both directions:
+   * `{ channel: string, payload: unknown }`.
+   */
+  HostToolbarPort: 'view:host-toolbar:port',
+  /**
    * main → main-window renderer: push the reserved host-toolbar height so the
    * renderer placeholder div resizes (closing the dynamic-height loop).
    */
@@ -340,15 +327,6 @@ export const PopoverChannel = {
   Init: 'popover:init',
 } as const
 
-// ── Toolbar ──────────────────────────────────────────────────────────────
-
-export const ToolbarChannel = {
-  GetActions: 'toolbar:getActions',
-  ActionsChanged: 'toolbar:actionsChanged',
-  /** Invoke a toolbar action by id: `invoke(Invoke, actionId)`. */
-  Invoke: 'toolbar:invoke',
-} as const
-
 // ── Window ───────────────────────────────────────────────────────────────
 
 export const WindowChannel = {
@@ -358,9 +336,7 @@ export const WindowChannel = {
 // ── App ──────────────────────────────────────────────────────────────────
 
 export const AppChannel = {
-  GetPreloadPath: 'app:getPreloadPath',
   GetBranding: 'app:getBranding',
-  GetHeaderHeight: 'app:getHeaderHeight',
 } as const
 
 // ── miniappSnapshot (unified panel snapshot framework) ───────────────────
@@ -388,8 +364,6 @@ export const SettingsChannel = {
   ConfigChanged: 'settings:configChanged',
   ProjectSettingsChanged: 'settings:projectSettingsChanged',
   Init: 'settings:init',
-  Closed: 'settings:closed',
-  Changed: 'settings:changed',
 } as const
 
 // ── Updates (UpdateManager) ──────────────────────────────────────────────
