@@ -10,8 +10,10 @@
  * The lower-level `difile://` plumbing — vpath resolver, _tmp Blob store, main
  * protocol handler, disk reader, fs-channels IPC — still exists in the
  * codebase. Re-enabling FSM is a single edit: switch each method below back
- * to the previous `invokeAPI('fs<Api>', opts)` form. Until the upstream
- * runtime catches up we keep the surface inert.
+ * to the previous `invokeAPI('fs<Api>', opts)` form. Upstream dimina has
+ * since landed a real File API (invokeFileAPI in service, 057330d); wiring
+ * the simulator to it is a separate task — until then the surface stays
+ * inert here.
  *
  * `USER_DATA_PATH` is exported unchanged because `wx.env.USER_DATA_PATH` is
  * an env value, not an FSM API; concatenating it to build a path is fine
@@ -122,6 +124,12 @@ class FileSystemManager {
 // still see a class identity; left in the module purely as a forward-compat
 // affordance.
 void Stats
+
+// Upstream base/index.js derives its canIUse list from this export; mirror
+// the upstream shape (method names off the FSM prototype).
+export const fileSystemManagerAPINames = Object
+	.getOwnPropertyNames(FileSystemManager.prototype)
+	.filter(name => name !== 'constructor')
 
 let instance
 
