@@ -36,6 +36,13 @@ vi.mock('./app/launch.js', () => ({
   openSettingsWindow: () => Promise.resolve(),
 }))
 
+// The entry's structured failure exit imports `app` from electron (app.exit).
+// CI has no electron binary — importing the real package throws in
+// getElectronPath — so main-process tests must mock electron (repo convention).
+vi.mock('electron', () => ({
+  app: { exit: () => undefined },
+}))
+
 // Some structured-failure exits call process.exit / console.error. Keep the
 // process alive and capture the error output so a fixed entry doesn't tear the
 // test runner down or spew.
