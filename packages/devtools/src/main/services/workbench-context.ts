@@ -19,6 +19,7 @@ import {
 } from './notifications/renderer-notifier.js'
 import { createViewManager, type ViewManager } from './views/view-manager.js'
 import { createWindowService, type WindowService } from './window-service.js'
+import { openSettingsWindow } from '../windows/settings-window/index.js'
 import {
   createWorkspaceService,
   type WorkspaceService,
@@ -64,6 +65,14 @@ export interface WorkbenchContext {
 
   /** Unified main → renderer event dispatcher */
   notify: RendererNotifier
+
+  /**
+   * Open (or re-focus) the standalone workbench-settings window. First-class
+   * member so contract holders (`MiniappRuntime` / `MenuContext`) can open
+   * settings without reaching into `windows`/`notify` plumbing. Wired by
+   * `createWorkbenchContext` to the real `openSettingsWindow` path.
+   */
+  openSettings: () => Promise<void>
 
   /** Single source of truth for project + session + per-project settings */
   workspace: WorkspaceService
@@ -237,6 +246,10 @@ export function createWorkbenchContext(opts: CreateContextOptions): WorkbenchCon
   ctx.windows = createWindowService(opts.mainWindow)
   ctx.views = createViewManager(ctx)
   ctx.notify = createRendererNotifier(ctx)
+  // Lazy closure (not a bound snapshot): reads ctx.windows/notify/rendererDir
+  // at call time through the live context, which structurally satisfies the
+  // helper's narrow OpenSettingsWindowDeps.
+  ctx.openSettings = () => openSettingsWindow(ctx)
   ctx.projectsProvider = opts.projectsProvider ?? createLocalProjectsProvider()
   ctx.projectTemplates = resolveTemplates(
     BUILTIN_TEMPLATES,

@@ -1,4 +1,5 @@
-import type { CompileConfig, ProjectSession } from '../../../shared/types.js'
+import { z } from 'zod'
+import type { AppInfo, CompileConfig, ProjectSession } from '../../../shared/types.js'
 import type { WorkbenchContext } from '../workbench-context.js'
 import * as repo from '../projects/project-repository.js'
 import type {
@@ -24,9 +25,17 @@ import { loadWorkbenchSettings } from '../settings/index.js'
 export interface OpenProjectResult {
   success: boolean
   port?: number
-  appInfo?: unknown
+  appInfo?: AppInfo
   error?: string
 }
+
+/**
+ * Runtime guard for the adapter-return boundary: `session.appInfo` must be an
+ * object carrying a string `appId` (the renderer derives its IPC scoping from
+ * it; a session without one cannot be driven). Loose: extra fields pass
+ * through untouched — only the contract-critical `appId` is enforced.
+ */
+const SessionAppInfoSchema = z.looseObject({ appId: z.string() })
 
 /**
  * The single source of truth for project + session + project-settings.
@@ -56,7 +65,7 @@ export interface WorkspaceService {
   closeProject(): Promise<void>
 
   // ── session state (read-only) ──────────────────────────────────────────
-  getSession(): { close: () => Promise<void>; port: number; appInfo: unknown } | null
+  getSession(): ProjectSession | null
   getProjectPath(): string
   /**
    * The project path most recently torn down by `closeProject`, or '' if none
@@ -195,6 +204,29 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
         clearSimulatorServicewechatReferer()
         sendStatus('error', String(err))
         return { success: false, error: String(err) }
+      }
+
+      // Adapter-return boundary: enforce the AppInfo producer contract the
+      // moment the adapter resolves, BEFORE the session is recorded. A
+      // session without a string appId cannot be driven by the renderer, so
+      // it must never become the active session. The adapter already spun up
+      // live resources (compile watcher, dev-server port) — close them
+      // best-effort before reporting; the validation report is the law and a
+      // failing close() must not mask it (or escape as a throw).
+      if (!SessionAppInfoSchema.safeParse(session.appInfo).success) {
+        try {
+          await session.close()
+        } catch (closeErr) {
+          console.warn(
+            '[workspace] closing appId-less adapter session failed (non-fatal):',
+            closeErr,
+          )
+        }
+        const error =
+          'adapter returned session.appInfo without a string appId — ' +
+          'the CompilationAdapter must supply appInfo.appId'
+        sendStatus('error', error)
+        return { success: false, error }
       }
 
       currentSession = session

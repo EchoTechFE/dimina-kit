@@ -192,7 +192,7 @@ src/
 | `modules`       | `Partial<Record<BuiltinModuleId, boolean>>` | 全部 `true` | 开关内置 IPC 模块组                               |
 | `rendererDir`   | `string`                                    | 内置        | 自定义 renderer HTML 目录                         |
 | `icon`          | `string`                                    | —           | 窗口/任务栏图标路径（macOS 使用 app bundle 图标） |
-| `menuBuilder`   | `(mainWindow, menuContext: MenuContext) => void` | 内置菜单 | 自定义菜单构建器；`menuContext` 为收窄后的 `MenuContext`，不含 `registry`/`senderPolicy` 等内部管线 |
+| `menuBuilder`   | `(mainWindow, menuContext: MenuContext) => void` | 内置菜单 | 自定义菜单构建器；`menuContext` 为手写窄契约 `MenuContext`（`appName` + workspace 窄集 + `openSettings` + `notify.{projectStatus, windowNavigateBack}`），不含内部管线 |
 | `onSetup`       | `(instance) => void`                        | —           | 窗口和 context 创建后的回调，用于注册 Contribution（见下文）|
 | `onBeforeClose` | `(instance) => void`                        | —           | 窗口关闭前的回调，session 关闭由框架自动处理      |
 | `window`        | `WorkbenchWindowConfig`                     | —           | 窗口尺寸覆盖                                      |
@@ -483,7 +483,7 @@ launch({
 
 ## Host Toolbar（宿主自定义工具栏）
 
-下游通过 `instance.context.views.hostToolbar` 拥有 devtools 头部下方的工具栏条（一个 WebContentsView）：`loadURL` / `loadFile` 加载自己的内容，`setPreloadPath` 注入自己的 preload，`setHeightMode` 钉死或自动跟随内容高度（自动模式要求内容自带 shrink-to-fit 的 `[data-host-toolbar-root]` 包裹元素）。
+下游通过 `instance.context.views.hostToolbar` 拥有 devtools 头部下方的工具栏条（一个 WebContentsView）：`loadURL` / `loadFile` 加载自己的内容，`setPreloadPath` 注入自己的 preload，`setHeightMode` 钉死或自动跟随内容高度（自动模式要求内容自带 shrink-to-fit 的 `[data-host-toolbar-root]` 包裹元素；`{ fixed }` 校验入参——非有限数或负数同步抛 `TypeError` 且不污染既有模式）。
 
 ### 双向消息：onMessage / send
 
@@ -491,8 +491,9 @@ launch({
 
 - `hostToolbar.onMessage(channel, handler): { dispose() }` — 接收页面消息。控制面级注册：可在 view 创建前调用，且跨页面 reload 自动续接，无需重新注册。空串/非 string channel 抛错。
 - `hostToolbar.send(channel, payload): boolean` — 发消息给页面。门控不排队：没有活的工具栏 webContents、本次 load 的握手未完成、或正处于换文档导航窗口期（`loadURL`/`loadFile` 发起后、以及页面自发的主框架跨文档导航开始后，直到新文档握手完成）时返回 `false`（不投递、不建 view）；返回 `true` 即已发出。返回值本身就是就绪信号，下游不再需要拿 `getHostToolbarWebContentsId()` 手工判断工具栏是否就绪（该 API 保留）。
+- `hostToolbar.onReady(handler): { dispose() }` — 握手完成的推送信号（每个 load generation fire 一次；已就绪后注册在微任务上补发一次，补发前复查订阅与 generation）。在 handler 内 `send()` 必然返回 `true`，可用于推送初始状态，替代轮询 retry loop。
 
-页面侧由框架自动注入 `window.diminaHostToolbar`（仅 `{ send, onMessage }` 两个函数；握手前的 `send` 进队列、握手后按序送达。队列上限 128 条：超限丢弃最新一条、首次超限 console.warn 一次，不抛错）：
+页面侧由框架自动注入 `window.diminaHostToolbar`（仅 `{ send, onMessage }` 两个函数；类型可从根入口导入 `DiminaHostToolbarPageBridge`，并附带 optional 的 `Window` 增强。握手前的 `send` 进队列、握手后按序送达。队列上限 128 条：超限丢弃最新一条、首次超限 console.warn 一次，不抛错。`send`/`onMessage` 对空串/非 string channel 同步抛 `TypeError`，与主进程同语义）：
 
 ```js
 // 工具栏页面内
@@ -515,7 +516,8 @@ instance.context.views.hostToolbar.send('host:cmd', { theme: 'dark' }) // false 
 ```
 @dimina-kit/devtools                        launch, buildDefaultMenu,
                                        openSettingsWindow, suppressEpipe, setupCdpPort,
-                                       asMiniappRuntime, MiniappRuntime（type）,
+                                       asMiniappRuntime, MiniappRuntime / MiniappSessionAppInfo /
+                                       DiminaHostToolbarPageBridge（type）,
                                        createWorkbenchContext, createMainWindow,
                                        createViewManager, IpcRegistry,
                                        UpdateManager, createGitHubReleaseChecker, ...
@@ -556,11 +558,11 @@ runtime.views.hostToolbar.send('host:cmd', { theme: 'dark' })
 runtime.notify.projectStatus({ status: 'ready', message: '编译完成' })
 ```
 
-契约面：`rendererDir` / `views.hostToolbar`（6 成员，无 `webContents`）/ `workspace`（7 方法）/ `notify.projectStatus` / `registry.add` / `windows`（不透明句柄）。零 Electron 类型。
+契约面：`views.hostToolbar`（7 成员，含 `onReady`，无 `webContents`）/ `workspace`（7 方法，`getSession().appInfo` 为结构化 `MiniappSessionAppInfo`，`appId` 必有）/ `notify.projectStatus` / `registry.add`（接受 `{ dispose }` 对象或裸函数两种习语）/ `openSettings()`。零 Electron 类型。0.4.0 起不再含 `rendererDir`（用 `/paths` 导出）与 `windows`（用 `openSettings()`）。
 
 ## WorkbenchContext
 
-`WorkbenchContext` 是所有扩展点的唯一容器。配置字段直接暴露，运行时状态通过 service 访问。host hook 拿到的 `instance.context` 即此类型；`menuBuilder` 拿到的是收窄后的 `MenuContext`（剔除 `registry` / `senderPolicy` / `trustedWindowSenderIds` / `simulatorApis` 等内部管线）。
+`WorkbenchContext` 是所有扩展点的唯一容器。配置字段直接暴露，运行时状态通过 service 访问。host hook 拿到的 `instance.context` 即此类型；`menuBuilder` 拿到的是手写窄契约 `MenuContext`（`appName` + workspace 窄集 + `openSettings` + `notify.{projectStatus, windowNavigateBack}`，不再是 `WorkbenchContext` 的 Omit 投影）。
 
 ```typescript
 interface WorkbenchContext {

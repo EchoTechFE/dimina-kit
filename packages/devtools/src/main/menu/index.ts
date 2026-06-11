@@ -1,8 +1,10 @@
 import { Menu, type MenuItemConstructorOptions } from 'electron'
-import type { WorkbenchContext } from '../services/workbench-context.js'
-import { openSettingsWindow } from '../app/launch.js'
+import type { MenuContext } from '../../shared/types.js'
 
-export function installAppMenu(ctx: WorkbenchContext): void {
+// The built-in menu consumes the narrow MenuContext, the same surface a host
+// menuBuilder receives — proof that the hand-written contract covers the
+// real internal consumption (settings entry + navigate-back).
+export function installAppMenu(ctx: MenuContext): void {
   const template: MenuItemConstructorOptions[] = [
     {
       label: 'Dimina DevTools',
@@ -10,7 +12,7 @@ export function installAppMenu(ctx: WorkbenchContext): void {
         {
           label: '开发工具设置',
           click: () => {
-            void openSettingsWindow(ctx).catch(() => {})
+            void ctx.openSettings().catch(() => {})
           },
         },
         { type: 'separator' },

@@ -1,28 +1,53 @@
 import type { OpenProjectOptions } from '@dimina-kit/devkit'
 import type { SimulatorApiHandler } from '../main/services/simulator/custom-apis.js'
-import type { WorkbenchContext } from '../main/services/workbench-context.js'
+import type { MiniappSessionAppInfo } from '../main/runtime/miniapp-runtime.js'
 
 /**
- * The narrowed view of `WorkbenchContext` handed to a host `menuBuilder`.
- * Strips the internal pipeline fields (`registry`, `senderPolicy`,
- * `trustedWindowSenderIds`, `simulatorApis`) so a menu builder can
- * read menu-relevant state (workspace, views, windows, notify, appName, …)
- * without reaching into devtools-internal plumbing.
+ * The HAND-WRITTEN narrow contract handed to a host `menuBuilder` — the
+ * audited menu consumption surface only, same posture as `MiniappRuntime`.
+ * NOT an `Omit<WorkbenchContext, …>` projection: a projection drags every
+ * nested internal service type (adapter, windows → BrowserWindow, bridge,
+ * connections, …) onto the host-facing menu surface, making internal
+ * refactors unreviewed breaking changes for host menu builders.
+ *
+ * A full `WorkbenchContext` stays structurally assignable to this type, so
+ * hosts (and the default-menu path) that pass the whole ctx through keep
+ * compiling. Widening this surface is a deliberate semver decision.
  */
-export type MenuContext = Omit<
-  WorkbenchContext,
-  'registry' | 'senderPolicy' | 'trustedWindowSenderIds' | 'simulatorApis'
->
-
-export interface AppInfo {
-  appName?: string
-  [key: string]: unknown
+export interface MenuContext {
+  /** Branding name shown in title bar / menu labels. */
+  appName: string
+  /** Narrow workspace set a menu legitimately drives. */
+  workspace: {
+    hasActiveSession: () => boolean
+    getProjectPath: () => string
+    openProject: (projectPath: string) => Promise<{ success: boolean; error?: string }>
+    closeProject: () => Promise<void>
+    getSession: () => { appInfo: MiniappSessionAppInfo } | null
+  }
+  /** Open (or re-focus) the standalone workbench-settings window. */
+  openSettings: () => Promise<void>
+  notify: {
+    /** Broadcast compile-status transitions to the main renderer. */
+    projectStatus: (payload: { status: string; message: string; hotReload?: boolean }) => void
+    /** Ask the main renderer to navigate back to its landing screen (打开项目). */
+    windowNavigateBack: () => void
+  }
 }
+
+/**
+ * Structured `session.appInfo` DTO — the producer contract a
+ * `CompilationAdapter` must satisfy. Single definition: alias of the
+ * host-facing {@link MiniappSessionAppInfo} (`appId` required; the rest
+ * optional). `openProject` validates this shape at the adapter boundary and
+ * rejects sessions without a string `appId`.
+ */
+export type AppInfo = MiniappSessionAppInfo
 
 export interface ProjectSession {
   close: () => Promise<void>
   port: number
-  appInfo: AppInfo | unknown
+  appInfo: AppInfo
 }
 
 export interface CompilationAdapter {

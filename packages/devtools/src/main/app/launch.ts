@@ -1,10 +1,7 @@
 import { electronDeck as frameworkElectronDeck } from '@dimina-kit/electron-deck'
-import type { WorkbenchAppConfig } from '../../shared/types.js'
+import type { MenuContext, WorkbenchAppConfig } from '../../shared/types.js'
 import { createDevtoolsBackend } from '../runtime/devtools-backend.js'
 import { installAppMenu } from '../menu/index.js'
-import type { WorkbenchContext } from '../services/workbench-context.js'
-import { createSettingsWindow, wireSettingsWindowEvents } from '../windows/settings-window/index.js'
-import { loadWorkbenchSettings } from '../services/settings/index.js'
 
 /**
  * Host-shell entry for the devtools app. Boots through the
@@ -18,22 +15,13 @@ export function launch(config: WorkbenchAppConfig = {}): Promise<void> {
   return frameworkElectronDeck({ backend: createDevtoolsBackend(config) })
 }
 
-export function buildDefaultMenu(ctx: WorkbenchContext): void {
+export function buildDefaultMenu(ctx: MenuContext): void {
   installAppMenu(ctx)
 }
 
-export async function openSettingsWindow(ctx: Pick<WorkbenchContext, 'rendererDir' | 'notify' | 'windows'>): Promise<void> {
-  let win = ctx.windows.settingsWindow
-  if (!win || win.isDestroyed()) {
-    win = await createSettingsWindow(ctx.windows.mainWindow, ctx.rendererDir)
-    ctx.windows.setSettingsWindow(win)
-    wireSettingsWindowEvents(win, () => {
-      ctx.windows.setSettingsWindow(null)
-    })
-  }
-  win.show()
-  win.focus()
-  ctx.notify.workbenchSettingsInit(win, {
-    settings: loadWorkbenchSettings(),
-  })
-}
+// The implementation lives with the settings-window domain module and takes
+// its own narrow `OpenSettingsWindowDeps` (a full WorkbenchContext satisfies
+// it structurally). Re-exported here so the public barrel path is unchanged.
+// Contract holders should prefer `ctx.openSettings()` / `runtime.openSettings()`.
+export { openSettingsWindow } from '../windows/settings-window/index.js'
+export type { OpenSettingsWindowDeps } from '../windows/settings-window/index.js'

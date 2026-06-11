@@ -261,6 +261,18 @@ export interface HostToolbarControl {
     handler: (payload: unknown) => void,
   ): HostToolbarMessageSubscription
   /**
+   * Observe handshake readiness — the push counterpart to polling `send()`
+   * for `true`. Fires the handler once per load generation, exactly when
+   * that load's MessagePort handshake completes; registering while the
+   * channel is ALREADY ready fires once asynchronously on a microtask
+   * (missed-signal race guard, re-validated at fire time). A reload /
+   * re-handshake fires registered handlers again; a host-initiated
+   * `loadURL`/`loadFile` invalidates readiness at initiation, so handlers
+   * registered in that window wait for the NEW document's handshake.
+   * `dispose()` detaches (idempotent); `disposeAll` sweeps everything.
+   */
+  onReady(handler: () => void): HostToolbarMessageSubscription
+  /**
    * Post `{ channel, payload }` to the toolbar page (received via
    * `window.diminaHostToolbar.onMessage(channel, handler)`). Gated and
    * non-queueing: returns false — delivering nothing, creating no view —
@@ -573,6 +585,15 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       hostToolbarPreloadOverride = path
     },
     setHeightMode(mode: HostToolbarHeightMode): void {
+      // Validate BEFORE touching any state: a poisoned `{ fixed }` (NaN /
+      // ±Infinity / negative) must neither reach the renderer placeholder
+      // (`height: NaNpx` corrupts the strip with no error anywhere) nor
+      // clobber the standing mode — fail-closed, not fail-corrupt.
+      if (mode !== 'auto' && !(Number.isFinite(mode.fixed) && mode.fixed >= 0)) {
+        throw new TypeError(
+          `hostToolbar.setHeightMode: fixed height must be a finite, non-negative number (got ${mode.fixed})`,
+        )
+      }
       hostToolbarHeightMode = mode
       if (mode !== 'auto') {
         // Pin immediately: a preload-less/static toolbar never advertises, so
@@ -585,6 +606,9 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     },
     onMessage(channel, handler): HostToolbarMessageSubscription {
       return hostToolbarPort.onMessage(channel, handler)
+    },
+    onReady(handler): HostToolbarMessageSubscription {
+      return hostToolbarPort.onReady(handler)
     },
     send(channel, payload): boolean {
       return hostToolbarPort.send(channel, payload)

@@ -82,3 +82,16 @@ if (ghOutput) {
   const delim = `EOF_NOTES_${randomUUID()}`
   appendFileSync(ghOutput, `notes<<${delim}\n${notes}\n${delim}\n`)
 }
+
+// Publish manifest on the run summary page. The dev channel creates no GitHub
+// Release, so without this the exact name@version list is invisible — and
+// downstreams hitting npm-mirror lag (npmmirror can trail by an hour+) have
+// nothing to paste into the mirror's manual sync.
+const ghSummary = process.env.GITHUB_STEP_SUMMARY
+if (ghSummary && changes.length > 0) {
+  let summary = '## Published packages\n\n'
+  for (const c of changes) {
+    summary += `- \`${c.name}@${c.to}\` — [sync npmmirror](https://npmmirror.com/sync/${c.name})\n`
+  }
+  appendFileSync(ghSummary, `${summary}\n`)
+}

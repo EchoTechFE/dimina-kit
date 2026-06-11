@@ -211,20 +211,29 @@ function registerBuiltinModules(config: WorkbenchAppConfig, context: WorkbenchCo
 }
 
 /**
- * Strip the internal-plumbing fields a host menu builder must not reach
- * (registry / senderPolicy / trustedWindowSenderIds / simulatorApis)
- * so `menuBuilder` receives the narrowed `MenuContext` its contract promises —
- * at runtime, not just at the type level.
+ * Build the hand-written narrow `MenuContext` a host menu builder receives —
+ * explicit construction (not clone+delete), so the runtime object carries
+ * EXACTLY the contract members and nothing else. Every member is a lazy
+ * closure over the live context: a host monkey-patch of
+ * `context.workspace.openProject` (the documented permission-gate pattern)
+ * still intercepts calls made through this menu surface.
  */
 function toMenuContext(context: WorkbenchContext): MenuContext {
-  // Shallow-copy, then drop the internal-plumbing fields. A rest-destructure
-  // would be terser but trips no-unused-vars on the dropped siblings.
-  const menuContext: Partial<WorkbenchContext> = { ...context }
-  delete menuContext.registry
-  delete menuContext.senderPolicy
-  delete menuContext.trustedWindowSenderIds
-  delete menuContext.simulatorApis
-  return menuContext as MenuContext
+  return {
+    appName: context.appName,
+    workspace: {
+      hasActiveSession: () => context.workspace.hasActiveSession(),
+      getProjectPath: () => context.workspace.getProjectPath(),
+      openProject: (projectPath) => context.workspace.openProject(projectPath),
+      closeProject: () => context.workspace.closeProject(),
+      getSession: () => context.workspace.getSession(),
+    },
+    openSettings: () => context.openSettings(),
+    notify: {
+      projectStatus: (payload) => context.notify.projectStatus(payload),
+      windowNavigateBack: () => context.notify.windowNavigateBack(),
+    },
+  }
 }
 
 function installMenu(config: WorkbenchAppConfig, mainWindow: BrowserWindow, context: WorkbenchContext): void {

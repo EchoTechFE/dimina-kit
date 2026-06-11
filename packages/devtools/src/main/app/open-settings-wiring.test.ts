@@ -1,45 +1,34 @@
 /**
- * Workbench model refactor — "收尾", Requirement B, RUNTIME half.
+ * Feedback fix ② (RUNTIME half) — `ctx.openSettings()` must actually open the
+ * settings window through the real `openSettingsWindow` path.
  *
- * `src/shared/menu-builder-context-narrowed.test.ts` proves the `menuBuilder`
- * hook's `context` parameter is narrowed to `MenuContext` at COMPILE time
- * (via `@ts-expect-error` / `Expect<Equal<…>>`). But a compile-time type
- * narrowing says nothing about the OBJECT actually passed at runtime: a
- * `Parameters<…>` extraction reflects the declared signature, while
- * `installMenu` can still hand `config.menuBuilder` the full
- * `WorkbenchContext` value.
+ * The type half (src/main/runtime/miniapp-runtime-open-settings.test.ts)
+ * pins that `WorkbenchContext` / `MiniappRuntime` carry
+ * `openSettings: () => Promise<void>`. A declared member can still be wired
+ * to nothing; this suite drives a REAL `createDevtoolsRuntime` boot (same
+ * exhaustive electron stub as menu-builder-runtime-context.test.ts) and
+ * proves the value-level wiring:
  *
- * This suite closes that gap. It drives a real app through `createDevtoolsRuntime`
- * (same exhaustive electron mock + `onSetup`-style capture seam as
- * `instance-ipc-extension.test.ts`), passes a host `menuBuilder`, and
- * inspects the *value* it receives:
+ *  - `instance.context.openSettings` is a function [RED today: undefined];
+ *  - calling it lands in the `openSettingsWindow` path: a settings
+ *    BrowserWindow is created, registered on `ctx.windows.settingsWindow`,
+ *    loads `entries/workbench-settings/index.html`, and is shown/focused;
+ *  - calling it AGAIN while the window is alive reuses the same window
+ *    (openSettingsWindow's documented reuse branch), not a second one.
  *
- *  - the runtime object MUST NOT carry the five internal-pipeline fields
- *    (`registry` / `senderPolicy` / `trustedWindowSenderIds` /
- *    `simulatorApis` / `toolbar`) — those are what `MenuContext` omits;
- *  - the runtime object MUST still carry the menu-relevant fields
- *    (`workspace` / `notify` / `openSettings` / `appName`) a host menu
- *    builder legitimately reads.
- *
- * DESIGNED CONTRACT CHANGE (feedback fix ⑤ — menu-context-handwritten.test.ts
- * is the spec): `MenuContext` became a HAND-WRITTEN narrow contract and
- * `views` left the menu surface (`toMenuContext` constructs the narrow object
- * explicitly instead of clone+delete). The old `views` reachability pin below
- * was updated to the new audited member set in that designed pass.
- *
- * `installMenu` in `app.ts` hands `menuBuilder` a narrowed value rather than
- * the full `WorkbenchContext`, so the internal-pipeline fields are stripped
- * before the host hook sees the object.
+ * Electron mock: copied from menu-builder-runtime-context.test.ts (vitest
+ * mocks are per-file by convention in this package; main-process suites must
+ * vi.mock('electron') because CI has no Electron binary).
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
-// ── electron stub: minimal but exhaustive enough to boot createDevtoolsRuntime ──
 const stubs = vi.hoisted(() => {
   type AnyFn = (...args: unknown[]) => unknown
   type EventBag = Record<string, Set<AnyFn>>
 
   const ipcHandlers = new Map<string, AnyFn>()
-  const removeHandlerCalls: string[] = []
+  /** Every BrowserWindow the code under test constructed, in order. */
+  const browserWindows: unknown[] = []
 
   function makeEmitter() {
     const listeners: EventBag = {}
@@ -58,10 +47,10 @@ const stubs = vi.hoisted(() => {
 
   function reset() {
     ipcHandlers.clear()
-    removeHandlerCalls.length = 0
+    browserWindows.length = 0
   }
 
-  return { ipcHandlers, removeHandlerCalls, makeEmitter, reset }
+  return { ipcHandlers, browserWindows, makeEmitter, reset }
 })
 
 vi.mock('electron', () => {
@@ -70,13 +59,8 @@ vi.mock('electron', () => {
   const ipcEmitter = stubs.makeEmitter()
   const ipcMain = {
     ...ipcEmitter,
-    handle: vi.fn((channel: string, fn: AnyFn) => {
-      stubs.ipcHandlers.set(channel, fn)
-    }),
-    removeHandler: vi.fn((channel: string) => {
-      stubs.ipcHandlers.delete(channel)
-      stubs.removeHandlerCalls.push(channel)
-    }),
+    handle: vi.fn((channel: string, fn: AnyFn) => { stubs.ipcHandlers.set(channel, fn) }),
+    removeHandler: vi.fn((channel: string) => { stubs.ipcHandlers.delete(channel) }),
     on: vi.fn((event: string, fn: AnyFn) => { ipcEmitter.on(event, fn) }),
     removeListener: vi.fn((event: string, fn: AnyFn) => { ipcEmitter.removeListener(event, fn) }),
   }
@@ -143,6 +127,7 @@ vi.mock('electron', () => {
     destroyed = false
     webContents = new WebContents()
     contentView: View | WebContentsView = new WebContentsView()
+    constructor() { stubs.browserWindows.push(this) }
     on = this.em.on.bind(this.em)
     once = this.em.once.bind(this.em)
     off = this.em.off.bind(this.em)
@@ -168,7 +153,11 @@ vi.mock('electron', () => {
       registerPreloadScript: vi.fn(),
       protocol: { handle: vi.fn(), unhandle: vi.fn() },
     })),
-    defaultSession: { protocol: { handle: vi.fn(), unhandle: vi.fn() } },
+    defaultSession: {
+      protocol: { handle: vi.fn(), unhandle: vi.fn() },
+      registerPreloadScript: vi.fn(() => 'stub-preload-script-id'),
+      unregisterPreloadScript: vi.fn(),
+    },
   }
 
   const dialog = {
@@ -215,54 +204,68 @@ beforeEach(async () => {
   ;({ createDevtoolsRuntime } = await import('./app.js'))
 })
 
-/**
- * Drives `createDevtoolsRuntime` with a host `menuBuilder` and returns the
- * runtime `context` value that `installMenu` actually handed to it.
- */
-async function captureMenuContext(): Promise<Record<string, unknown>> {
-  let captured: Record<string, unknown> | undefined
-  const instance = await createDevtoolsRuntime({
-    menuBuilder: (_mainWindow, menuContext) => {
-      captured = menuContext as unknown as Record<string, unknown>
-    },
-  })
-
-  expect(captured, 'menuBuilder must be invoked with the runtime menu context').toBeDefined()
-  await instance.dispose()
-  return captured!
+/** Stub-window view used by the assertions below. */
+type StubWindow = {
+  loadFile: ReturnType<typeof vi.fn>
+  show: ReturnType<typeof vi.fn>
+  focus: ReturnType<typeof vi.fn>
+  isDestroyed: () => boolean
 }
 
-describe('Requirement B (runtime): menuBuilder receives the narrowed MenuContext value', () => {
-  it('the runtime object does NOT carry the five internal-pipeline fields', async () => {
-    const captured = await captureMenuContext()
+type OpenSettingsContext = {
+  openSettings?: () => Promise<void>
+  windows: { settingsWindow: StubWindow | null }
+}
 
-    // `installMenu` hands `menuBuilder` a value with the internal plumbing
-    // stripped, so none of these fields are present on the runtime object —
-    // the narrowing is enforced at runtime, not only at the type level.
-    expect('registry' in captured, 'menuBuilder must not receive ctx.registry').toBe(false)
-    expect('senderPolicy' in captured, 'menuBuilder must not receive ctx.senderPolicy').toBe(false)
-    expect(
-      'trustedWindowSenderIds' in captured,
-      'menuBuilder must not receive ctx.trustedWindowSenderIds',
-    ).toBe(false)
-    expect('simulatorApis' in captured, 'menuBuilder must not receive ctx.simulatorApis').toBe(false)
-    expect('toolbar' in captured, 'menuBuilder must not receive ctx.toolbar').toBe(false)
+describe('feedback ② (runtime): ctx.openSettings is wired to the openSettingsWindow path', () => {
+  it('openSettings exists on the booted context and opens + shows the settings window [RED today]', async () => {
+    const instance = await createDevtoolsRuntime({})
+    try {
+      const ctx = instance.context as unknown as OpenSettingsContext
+
+      // BUG CAUGHT: a contract member declared but never assembled — a
+      // MiniappRuntime host calls openSettings() and gets a TypeError.
+      expect(
+        typeof ctx.openSettings,
+        'WorkbenchContext.openSettings must be wired during app assembly',
+      ).toBe('function')
+
+      await ctx.openSettings!()
+
+      // The openSettingsWindow path: window created, registered on the
+      // WindowService, settings entry loaded, shown and focused.
+      const win = ctx.windows.settingsWindow
+      expect(win, 'openSettings must register the window on ctx.windows.settingsWindow').toBeTruthy()
+      expect(win!.loadFile).toHaveBeenCalledWith(
+        expect.stringContaining('entries/workbench-settings/index.html'),
+      )
+      expect(win!.show).toHaveBeenCalled()
+      expect(win!.focus).toHaveBeenCalled()
+    } finally {
+      await instance.dispose()
+    }
   })
 
-  it('the runtime object still carries the menu-relevant fields', async () => {
-    const captured = await captureMenuContext()
+  it('a second openSettings() call reuses the live settings window instead of creating another [RED today]', async () => {
+    const instance = await createDevtoolsRuntime({})
+    try {
+      const ctx = instance.context as unknown as OpenSettingsContext
+      expect(typeof ctx.openSettings).toBe('function')
 
-    // The narrowing must keep the fields a host menu builder legitimately
-    // reads — stripping these too would break the hook.
-    // DESIGNED CONTRACT CHANGE (fix ⑤): `views` left this list when
-    // MenuContext became hand-written; the audited menu surface is
-    // appName / workspace / openSettings / notify.
-    expect(captured.workspace, 'menuBuilder needs ctx.workspace').toBeDefined()
-    expect(captured.appName, 'menuBuilder needs ctx.appName').toBeDefined()
-    expect(captured.notify, 'menuBuilder needs ctx.notify').toBeDefined()
-    expect(
-      typeof captured.openSettings,
-      'menuBuilder needs ctx.openSettings',
-    ).toBe('function')
+      await ctx.openSettings!()
+      const first = ctx.windows.settingsWindow
+      expect(first).toBeTruthy()
+      const windowCountAfterFirst = stubs.browserWindows.length
+
+      await ctx.openSettings!()
+
+      // openSettingsWindow's reuse branch: same window object, no new
+      // BrowserWindow constructed, re-shown for focus.
+      expect(ctx.windows.settingsWindow).toBe(first)
+      expect(stubs.browserWindows.length).toBe(windowCountAfterFirst)
+      expect(first!.show.mock.calls.length).toBeGreaterThanOrEqual(2)
+    } finally {
+      await instance.dispose()
+    }
   })
 })

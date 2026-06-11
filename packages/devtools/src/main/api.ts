@@ -14,7 +14,11 @@ export { suppressEpipe, setupCdpPort } from './app/bootstrap.js'
 // The hand-written kernel surface a downstream host consumes; prefer this
 // over depending on the full `WorkbenchContext`.
 export { asMiniappRuntime } from './runtime/miniapp-runtime.js'
-export type { MiniappRuntime } from './runtime/miniapp-runtime.js'
+export type {
+  MiniappRuntime,
+  MiniappSessionAppInfo,
+  DiminaHostToolbarPageBridge,
+} from './runtime/miniapp-runtime.js'
 
 // ── Context & views (for module-assembly consumers) ──────────────────────
 export { createWorkbenchContext } from './services/workbench-context.js'
