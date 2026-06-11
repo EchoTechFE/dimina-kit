@@ -2,29 +2,17 @@ import type { CompileConfig } from '@/shared/types'
 import type { NativeDeviceInfo, ViewBounds } from '../../../shared/ipc-channels'
 import {
   SimulatorChannel,
-  PanelChannel,
-  ToolbarChannel,
   PopoverChannel,
   WindowChannel,
   ViewChannel,
 } from '../../../shared/ipc-channels'
-import { invoke, invokeStrict, on } from './ipc-transport'
-
-export interface PanelTab {
-  id: string
-  label: string
-}
+import { invoke, on } from './ipc-transport'
 
 export interface PopoverInitPayload {
   top: number
   left: number
   config: CompileConfig
   pages: string[]
-}
-
-export interface ToolbarAction {
-  id: string
-  label: string
 }
 
 export interface PopoverShowPayload {
@@ -49,11 +37,6 @@ export function detachSimulator(): Promise<void> {
   return invoke<void>(SimulatorChannel.Detach)
 }
 
-/** Notify the main process of a new simulator panel width. */
-export function resizeSimulator(simWidth: number): Promise<void> {
-  return invoke<void>(SimulatorChannel.Resize, simWidth)
-}
-
 /**
  * NATIVE-HOST ONLY. Report the device-bezel inner-screen rect (CSS px from the
  * main window content top-left, i.e. `getBoundingClientRect()` left/top) plus
@@ -70,11 +53,6 @@ export function setNativeSimulatorBounds(p: {
   return invoke<void>(SimulatorChannel.SetNativeBounds, p)
 }
 
-/** Show or hide the Chromium DevTools view. */
-export function setSimulatorVisible(visible: boolean, simWidth: number): Promise<void> {
-  return invoke<void>(SimulatorChannel.SetVisible, visible, simWidth)
-}
-
 /**
  * NATIVE-HOST ONLY. Push the selected device's logical metrics so main can
  * live-update the running service-host window's host-env snapshot — the
@@ -83,26 +61,6 @@ export function setSimulatorVisible(visible: boolean, simWidth: number): Promise
  */
 export function setNativeDeviceInfo(device: NativeDeviceInfo): Promise<void> {
   return invoke<void>(SimulatorChannel.SetDeviceInfo, device)
-}
-
-/** Enumerate the built-in panels (WXML / AppData / Storage) currently enabled. */
-export function listPanels(): Promise<PanelTab[]> {
-  return invokeStrict<PanelTab[]>(PanelChannel.List)
-}
-
-/** Request the main process to switch the right pane back to the DevTools view. */
-export function selectSimulatorPanel(): Promise<void> {
-  return invoke<void>(PanelChannel.SelectSimulator)
-}
-
-/** Read the host-app-configured toolbar actions rendered above the toolbar. */
-export function getToolbarActions(): Promise<ToolbarAction[]> {
-  return invokeStrict<ToolbarAction[]>(ToolbarChannel.GetActions)
-}
-
-/** Trigger a named toolbar action. */
-export function invokeToolbarAction(actionId: string): Promise<void> {
-  return invoke<void>(ToolbarChannel.Invoke, actionId)
 }
 
 /** Show the compile-popover overlay anchored below `top`/`left`. */
@@ -116,11 +74,6 @@ export function hidePopover(): Promise<void> {
 }
 
 // ── Event subscriptions ─────────────────────────────────────────────────────
-
-/** Listen for toolbar action list changes. */
-export function onToolbarActionsChanged(handler: () => void): () => void {
-  return on<[]>(ToolbarChannel.ActionsChanged, () => handler())
-}
 
 /** Listen for popover-closed broadcasts emitted by the main process. */
 export function onPopoverClosed(handler: () => void): () => void {

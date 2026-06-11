@@ -1,4 +1,5 @@
 import { test, expect } from './fixtures'
+import type { ElectronApplication, Page } from '@playwright/test'
 import {
   DEMO_APP_DIR,
   openProjectInUI,
@@ -7,7 +8,29 @@ import {
   evalInWebContentsByUrl,
   pollUntil,
 } from './helpers'
-import { SettingsChannel, ProjectChannel, ProjectsChannel } from '../src/shared/ipc-channels'
+import { ProjectChannel, ProjectsChannel } from '../src/shared/ipc-channels'
+
+/**
+ * UI-driven settings flow. The embedded settings overlay is opened the way a
+ * USER opens it — clicking the toolbar's 设置 button (Wave 2 ④ restores this
+ * entry point; until it lands these tests are RED) — instead of the previous
+ * raw `ipcInvoke('settings:setVisible', true)` backdoor, which kept passing
+ * even while the overlay was unreachable from the actual UI.
+ */
+async function openSettingsViaUI(mainWindow: Page, electronApp: ElectronApplication): Promise<void> {
+  const settingsButton = mainWindow.getByTitle('设置')
+  await expect(settingsButton).toBeVisible({ timeout: 15_000 })
+  await settingsButton.click()
+  // The click is fire-and-forget from Playwright's perspective: it drives
+  // invoke('settings:setVisible', true) and main creates the overlay WCV
+  // lazily. Wait until the overlay webContents is reachable so callers can
+  // immediately evaluate into it without racing its creation.
+  await pollUntil(
+    () => evalInWebContentsByUrl<number>(electronApp, 'entries/settings', '1'),
+    (value) => value === 1,
+    10_000,
+  )
+}
 
 test.describe('Settings', () => {
   test.beforeEach(async ({ mainWindow }) => {
@@ -19,8 +42,8 @@ test.describe('Settings', () => {
     await ipcInvoke(mainWindow, ProjectsChannel.Remove, DEMO_APP_DIR).catch(() => {})
   })
 
-  test('settings view can be shown', async ({ mainWindow, electronApp }) => {
-    await ipcInvoke(mainWindow, SettingsChannel.SetVisible, true)
+  test('settings view opens from the toolbar 设置 button', async ({ mainWindow, electronApp }) => {
+    await openSettingsViaUI(mainWindow, electronApp)
 
     const text = await pollUntil(
       () => evalInWebContentsByUrl<string>(electronApp, 'entries/settings', `document.body.innerText`),
@@ -32,7 +55,7 @@ test.describe('Settings', () => {
   })
 
   test('settings view receives current project path', async ({ mainWindow, electronApp }) => {
-    await ipcInvoke(mainWindow, SettingsChannel.SetVisible, true)
+    await openSettingsViaUI(mainWindow, electronApp)
     await evalInWebContentsByUrl(
       electronApp,
       'entries/settings',
@@ -62,7 +85,7 @@ test.describe('Settings', () => {
       queryParams: [{ key: 'from', value: 'e2e' }],
     }
 
-    await ipcInvoke(mainWindow, SettingsChannel.SetVisible, true)
+    await openSettingsViaUI(mainWindow, electronApp)
     await evalInWebContentsByUrl(
       electronApp,
       'entries/settings',

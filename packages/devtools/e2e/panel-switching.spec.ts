@@ -1,9 +1,5 @@
 import { test, expect, useSharedProject } from './fixtures'
-import {
-  DEMO_APP_DIR,
-  ipcInvoke,
-} from './helpers'
-import { PanelChannel } from '../src/shared/ipc-channels'
+import { DEMO_APP_DIR } from './helpers'
 
 test.describe('Right panel switching', () => {
   test.describe.configure({ mode: 'serial' })
@@ -13,12 +9,19 @@ test.describe('Right panel switching', () => {
   test('selecting each panel renders the correct panel in the main window', async ({
     mainWindow,
   }) => {
-    for (const id of ['wxml', 'appdata', 'storage']) {
-      await ipcInvoke(mainWindow, PanelChannel.Select, id)
+    // UI-driven: click the real tab buttons (the only switching path a user
+    // has). The raw PanelChannel.Select/SelectSimulator IPC channels this
+    // test used to drive are being decommissioned.
+    for (const name of ['WXML', 'AppData', 'Storage']) {
+      const tab = mainWindow.getByRole('tab', { name })
+      await tab.click()
+      await expect(tab).toHaveAttribute('aria-selected', 'true')
       await mainWindow.waitForTimeout(400)
     }
-    // Selecting devtools should show the devtools overlay (chrome devtools)
-    await ipcInvoke(mainWindow, PanelChannel.SelectSimulator)
+    // Selecting Console should show the devtools overlay (chrome devtools)
+    const consoleTab = mainWindow.getByRole('tab', { name: 'Console' })
+    await consoleTab.click()
+    await expect(consoleTab).toHaveAttribute('aria-selected', 'true')
     await mainWindow.waitForTimeout(400)
   })
 

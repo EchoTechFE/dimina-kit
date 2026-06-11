@@ -17,7 +17,9 @@ export const DEVICES = [
 
 export const ZOOM_OPTIONS = [25, 50, 75, 100] as const
 
-export const HEADER_H = 40
+// Fixed toolbar header height — re-exported from the cross-process shared
+// module so main (view layout) and renderer (toolbar/popover) can't drift.
+export { HEADER_H } from '../../shared/constants'
 export const SIM_PANEL_PADDING = 24
 
 /** Timeout for save/action feedback messages. */

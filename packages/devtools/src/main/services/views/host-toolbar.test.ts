@@ -65,12 +65,25 @@ vi.mock('electron', () => {
     // module imports them at top level — provide harmless stubs.
     ipcMain: { on: vi.fn(), removeListener: vi.fn() },
     shell: { openExternal: vi.fn() },
+    // R1 mock adaptation: ensureHostToolbarView now registers the session-
+    // resident toolbar-runtime preload on session.defaultSession (ref-counted,
+    // released in disposeAll). These tests don't assert the registration —
+    // host-toolbar-session-preload.test.ts pins that contract — but the stubs
+    // must exist for toolbar creation/teardown to run.
+    session: {
+      defaultSession: {
+        registerPreloadScript: vi.fn(() => 'stub-preload-script-id'),
+        unregisterPreloadScript: vi.fn(),
+      },
+    },
   }
 })
 
 vi.mock('../../utils/paths.js', () => ({
   mainPreloadPath: '/stub/preload.js',
-  hostToolbarPreloadPath: '/stub/host-toolbar-preload.js',
+  // R1 mock adaptation: the session-registered toolbar-runtime preload path
+  // (replaces the legacy webPreferences-delivered advertiser bundle).
+  hostToolbarRuntimePreloadPath: '/stub/host-toolbar-runtime-preload.cjs',
   cjsSiblingPreloadPath: (p: string) => p,
   devtoolsPackageRoot: '/stub/devtools-pkg-root',
 }))

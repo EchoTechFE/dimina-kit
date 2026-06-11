@@ -6,7 +6,6 @@ import {
 } from 'react'
 import {
   getCompileConfig,
-  getPreloadPath,
   getProjectPages,
   onProjectStatus,
   openProject,
@@ -27,7 +26,6 @@ export interface SessionHookResult {
   port: number
   pages: string[]
   compileConfig: CompileConfig
-  preloadPath: string
   relaunch: (nextConfig?: CompileConfig) => Promise<void>
 }
 
@@ -46,8 +44,6 @@ export function useSession(props: UseSessionProps): SessionHookResult {
     scene: DEFAULT_SCENE,
     queryParams: [],
   })
-  const [preloadPath, setPreloadPath] = useState('')
-
   useEffect(() => {
     let cancelled = false
 
@@ -98,10 +94,6 @@ export function useSession(props: UseSessionProps): SessionHookResult {
   }, [projectPath])
 
   useEffect(() => {
-    void getPreloadPath().then(setPreloadPath)
-  }, [])
-
-  useEffect(() => {
     return onProjectStatus((data) => {
       setCompileStatus(data)
     })
@@ -146,7 +138,6 @@ export function useSession(props: UseSessionProps): SessionHookResult {
     port,
     pages,
     compileConfig,
-    preloadPath,
     relaunch,
   }
 }

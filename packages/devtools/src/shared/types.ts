@@ -5,13 +5,13 @@ import type { WorkbenchContext } from '../main/services/workbench-context.js'
 /**
  * The narrowed view of `WorkbenchContext` handed to a host `menuBuilder`.
  * Strips the internal pipeline fields (`registry`, `senderPolicy`,
- * `trustedWindowSenderIds`, `simulatorApis`, `toolbar`) so a menu builder can
+ * `trustedWindowSenderIds`, `simulatorApis`) so a menu builder can
  * read menu-relevant state (workspace, views, windows, notify, appName, …)
  * without reaching into devtools-internal plumbing.
  */
 export type MenuContext = Omit<
   WorkbenchContext,
-  'registry' | 'senderPolicy' | 'trustedWindowSenderIds' | 'simulatorApis' | 'toolbar'
+  'registry' | 'senderPolicy' | 'trustedWindowSenderIds' | 'simulatorApis'
 >
 
 export interface AppInfo {
@@ -32,32 +32,17 @@ export interface CompilationAdapter {
 export type BuiltinPanelId = 'wxml' | 'console' | 'appdata' | 'storage'
 export type BuiltinModuleId = 'projects' | 'session' | 'simulator' | 'popover' | 'settings'
 
-/**
- * Cross-IPC / renderer shape of a toolbar action. Carries no `handler` — the
- * handler is non-serialisable and never crosses the IPC boundary.
- */
-export interface ToolbarAction {
-  id: string
-  label: string
-}
-
-/**
- * Host-facing toolbar action passed to `instance.toolbar.set()`. Includes the
- * `handler` (kept main-process side); only `{id,label}` is projected to the
- * renderer.
- */
-export interface ToolbarActionInput {
-  id: string
-  label: string
-  handler: () => void | Promise<void>
-}
-
 export interface WorkbenchConfig {
   /** Window title, default 'Dimina DevTools' */
   appName?: string
   /** Compilation adapter */
   adapter?: CompilationAdapter
-  /** Built-in panel IDs to display, default all four */
+  /**
+   * @deprecated Ignored at runtime. The workbench UI always renders all four
+   * built-in panels (WXML / Console / AppData / Storage); the config no longer
+   * filters them and never lands on the context. Kept only so existing hosts
+   * passing it keep compiling.
+   */
   panels?: BuiltinPanelId[]
   /** Absolute path to a custom preload script (overrides built-in simulator.js) */
   preloadPath?: string
@@ -65,7 +50,12 @@ export interface WorkbenchConfig {
   apiNamespaces?: string[]
   /** Provider for branding info (overrides default appName) */
   brandingProvider?: () => Promise<{ appName: string }> | { appName: string }
-  /** Header bar height in px, used for view layout. Default 40. */
+  /**
+   * @deprecated Ignored. The devtools toolbar header is fixed at 40px
+   * (`HEADER_H` in `shared/constants`). Hosts that need their own toolbar
+   * should use the host toolbar WCV instead. Kept only so existing hosts
+   * passing it keep compiling; it has no runtime effect.
+   */
   headerHeight?: number
 }
 
@@ -143,13 +133,6 @@ export interface WorkbenchHostInstance {
     name: string,
     handler: SimulatorApiHandler,
   ): import('@dimina-kit/electron-deck/main').Disposable
-
-  /**
-   * Per-context toolbar surface. `set()` atomically replaces the whole table
-   * of toolbar actions stored on THIS context (duplicate `id` → throws),
-   * then notifies the renderer to re-fetch.
-   */
-  readonly toolbar: { set(actions: ToolbarActionInput[]): void }
 }
 
 /**

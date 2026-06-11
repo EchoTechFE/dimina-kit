@@ -83,13 +83,24 @@ vi.mock('electron', () => {
     ipcMain: { on: vi.fn(), removeListener: vi.fn(), handle: vi.fn(), removeHandler: vi.fn() },
     webContents: { fromId: vi.fn(() => null), getAllWebContents: vi.fn(() => []) },
     shell: { openExternal: vi.fn(() => Promise.resolve()) },
+    // R1 mock adaptation: ensureHostToolbarView registers the session-resident
+    // toolbar-runtime preload on session.defaultSession (the rebuild path
+    // re-ensures the view, but the ref-counted registration happens once).
+    session: {
+      defaultSession: {
+        registerPreloadScript: vi.fn(() => 'stub-preload-script-id'),
+        unregisterPreloadScript: vi.fn(),
+      },
+    },
   }
 })
 
 vi.mock('../../utils/paths.js', () => ({
   mainPreloadPath: '/stub/preload.js',
   devtoolsPackageRoot: '/stub/devtools-pkg-root',
-  hostToolbarPreloadPath: '/stub/host-toolbar-preload.cjs',
+  // R1 mock adaptation: session-registered toolbar-runtime preload path
+  // (replaces the legacy hostToolbarPreloadPath advertiser bundle).
+  hostToolbarRuntimePreloadPath: '/stub/host-toolbar-runtime-preload.cjs',
   cjsSiblingPreloadPath: (p: string) => (p.endsWith('.js') ? p.slice(0, -'.js'.length) + '.cjs' : p),
 }))
 

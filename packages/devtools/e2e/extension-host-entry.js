@@ -1,10 +1,13 @@
 // E2E entry exercising the downstream-host extension path:
-// `launch({ headerHeight, onSetup })` injecting a custom toolbar
-// action and a simulator custom API. The companion spec
-// (`extension-host.spec.ts`) drives this entry and asserts the injected
-// extensions actually run.
+// `launch({ headerHeight, onSetup })` injecting a simulator custom API.
+// The companion spec (`extension-host.spec.ts`) drives this entry and
+// asserts the injected extension actually runs.
+//
+// NOTE: `instance.toolbar.set()` (host-injected toolbar buttons) is
+// decommissioned — this entry must NOT call it. With the surface deleted,
+// `instance.toolbar` is undefined and a leftover call would TypeError and
+// kill the whole launch (and with it every test in the suite).
 import electron from 'electron'
-import fs from 'node:fs'
 import { launch } from '../dist/main/api.js'
 
 // Mirror update-entry.js: keep windows off-screen under NODE_ENV=test so the
@@ -25,26 +28,11 @@ if (process.env.NODE_ENV === 'test') {
 }
 
 launch({
-  // Non-default header height — the spec measures the rendered toolbar header
-  // element to prove this config reaches the renderer (default is 40).
+  // Deprecated, runtime-ignored config — kept on purpose to prove a host
+  // still passing `headerHeight` doesn't crash launch. The spec asserts the
+  // toolbar header stays at the fixed 40px despite this 72.
   headerHeight: 72,
   onSetup(instance) {
-    // Custom toolbar action. The handler writes a sentinel file so the spec
-    // can prove the click reached this host-registered handler — the path is
-    // supplied by the spec via DIMINA_E2E_TOOLBAR_SENTINEL.
-    instance.toolbar.set([
-      {
-        id: 'e2e-action',
-        label: 'E2E_TOOLBAR_ACTION',
-        handler: () => {
-          const sentinel = process.env.DIMINA_E2E_TOOLBAR_SENTINEL
-          if (sentinel) {
-            fs.writeFileSync(sentinel, 'e2e-action:invoked', 'utf8')
-          }
-        },
-      },
-    ])
-
     // Simulator custom API — the simulated mini-program reaches it as
     // `wx.e2eEcho(...)`; the spec triggers it through the custom-apis bridge.
     instance.registerSimulatorApi('e2eEcho', (params) => ({ echoed: params }))

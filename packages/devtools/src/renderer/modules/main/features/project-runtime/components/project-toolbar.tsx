@@ -1,15 +1,9 @@
-import React, { useEffect, useState } from 'react'
+import React from 'react'
 import { Button } from '@/shared/components/ui/button'
 import { StatusDot } from '@/shared/components/status-dot'
 import { cn } from '@/shared/lib/utils'
 import { HEADER_H } from '@/shared/constants'
-import {
-  getHeaderHeight,
-  getToolbarActions,
-  invokeToolbarAction,
-  onToolbarActionsChanged,
-} from '@/shared/api'
-import type { ToolbarAction } from '@/shared/api'
+import { setSettingsVisible } from '@/shared/api'
 import type { LayoutStoreApi } from '../controllers/use-layout-store'
 import {
   LayoutAlignmentToggle,
@@ -43,56 +37,11 @@ export function ProjectToolbar({
   compileStatus,
   layout,
 }: ProjectToolbarProps) {
-  const [actions, setActions] = useState<ToolbarAction[]>([])
-  // Host-configured header height; HEADER_H (40) is the fallback until the
-  // IPC value resolves. Fetched once, mirrors the getBranding() pattern.
-  const [headerHeight, setHeaderHeight] = useState(HEADER_H)
-
-  const fetchActions = () => {
-    void getToolbarActions()
-      .then((result) => {
-        setActions(Array.isArray(result) ? result : [])
-      })
-      .catch((err: unknown) => {
-        // toolbar:getActions may not be registered — this is expected
-        console.debug('[toolbar] getActions not available', err)
-      })
-  }
-
-  useEffect(() => {
-    getHeaderHeight()
-      .then((h) => {
-        if (typeof h === 'number') setHeaderHeight(h)
-      })
-      .catch(() => {})
-  }, [])
-
-  useEffect(() => {
-    fetchActions()
-    return onToolbarActionsChanged(() => fetchActions())
-  }, [])
-
   return (
     <div className="flex flex-col shrink-0">
-      {actions.length > 0 && (
-        <div className="flex items-center gap-1.5 px-2.5 py-1 bg-surface-2 border-b border-border">
-          {actions.map((action) => (
-            <Button
-              key={action.id}
-              variant="outline"
-              size="sm"
-              onClick={() => invokeToolbarAction(action.id)}
-              disabled={compileStatus.status === 'compiling'}
-            >
-              {action.label}
-            </Button>
-          ))}
-        </div>
-      )}
-
       <div
         className="flex items-center gap-1.5 px-2.5 bg-surface-2 border-b border-border shrink-0"
-        style={{ height: headerHeight }}
+        style={{ height: HEADER_H }}
       >
         {/* Cluster 1: Compile-mode dropdown.
             The dropdown surface itself is a main-process popover
@@ -113,9 +62,8 @@ export function ProjectToolbar({
 
         <ToolbarDivider />
 
-        {/* Cluster 2: Primary compile actions (relaunch + host-extension
-            toolbar actions render as adjacent buttons in the action row
-            above). Keep just the icon-button cluster compact. */}
+        {/* Cluster 2: Primary compile actions. Keep just the icon-button
+            cluster compact. */}
         <Button
           variant="icon"
           size="icon"
@@ -154,6 +102,22 @@ export function ProjectToolbar({
         <LayoutAlignmentToggle layout={layout} />
         <ToolbarDivider />
         <LayoutDevtoolsPositionToggles layout={layout} />
+        <ToolbarDivider />
+
+        {/* Settings entry point. Stateless open-only: the embedded
+            project-settings overlay owns its own close path, so the button
+            always sends `true` (a toggle could not observe the overlay's
+            real state and would desync). */}
+        <Button
+          variant="icon"
+          size="icon"
+          onClick={() => {
+            void setSettingsVisible(true)
+          }}
+          title="设置"
+        >
+          ⚙
+        </Button>
       </div>
     </div>
   )

@@ -59,6 +59,15 @@ export interface WorkbenchSettingsInitPayload {
 
 // ── Embedded project settings overlay ───────────────────────────────────────
 
+/**
+ * Show (`true`) or hide (`false`) the embedded project-settings overlay.
+ * Drives the main-process `settings:setVisible` handler — `true` shows the
+ * overlay and triggers the `settings:init` payload push, `false` hides it.
+ */
+export function setSettingsVisible(visible: boolean): Promise<void> {
+  return invoke<void>(SettingsChannel.SetVisible, visible)
+}
+
 /** Broadcast a compile-config change from the embedded settings overlay. */
 export function emitSettingsConfigChanged(config: CompileConfig): void {
   send(SettingsChannel.ConfigChanged, config)

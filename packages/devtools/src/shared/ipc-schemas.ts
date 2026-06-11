@@ -24,9 +24,6 @@ const AbsolutePath = z
     'must be an absolute path',
   )
 
-/** panel:eval — single JS expression string. Cap at 50_000 chars to avoid DoS. */
-export const PanelEvalSchema = z.tuple([z.string().min(1).max(50_000)])
-
 /** projects:add — absolute directory path. */
 export const ProjectsAddSchema = z.tuple([AbsolutePath])
 
@@ -77,9 +74,6 @@ export const SimulatorAttachNativeSchema = z.tuple([
   }),
   SimWidth,
 ])
-
-/** simulator:resize — simulator width. */
-export const SimulatorResizeSchema = z.tuple([SimWidth])
 
 /**
  * simulator:set-native-bounds (native-host only) — the renderer-measured
@@ -153,9 +147,6 @@ export const HostToolbarAdvertiseHeightSchema = z.tuple([
   }),
 ])
 
-/** simulator:setVisible — visible flag + simulator width. */
-export const SimulatorSetVisibleSchema = z.tuple([z.boolean(), SimWidth])
-
 /**
  * simulator:custom-apis:invoke — API name + arbitrary JSON-serialisable params.
  *
@@ -166,9 +157,6 @@ export const SimulatorCustomApiInvokeSchema = z.tuple([
   z.string().min(1).max(256),
   z.unknown(),
 ])
-
-/** toolbar:invoke — a non-empty bounded toolbar action id. */
-export const ToolbarInvokeSchema = z.tuple([z.string().min(1).max(256)])
 
 /** project:getPages — absolute project path. */
 export const ProjectGetPagesSchema = z.tuple([AbsolutePath])
@@ -210,9 +198,6 @@ export const WorkbenchSettingsSetThemeSchema = z.tuple([
   z.enum(['system', 'light', 'dark']),
 ])
 
-/** workbenchSettings:setVisible — boolean. */
-export const WorkbenchSettingsSetVisibleSchema = z.tuple([z.boolean()])
-
 /** settings:setVisible — boolean. */
 export const SettingsSetVisibleSchema = z.tuple([z.boolean()])
 
@@ -234,9 +219,6 @@ export const SettingsProjectSettingsChangedSchema = z.tuple([
     uploadWithSourceMap: z.boolean().optional(),
   }),
 ])
-
-/** panel:select — single panel id string. */
-export const PanelSelectSchema = z.tuple([z.string().min(1).max(200)])
 
 /** project:captureThumbnail — absolute project path. */
 export const ProjectCaptureThumbnailSchema = z.tuple([AbsolutePath])

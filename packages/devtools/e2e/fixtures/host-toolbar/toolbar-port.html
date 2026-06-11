@@ -1,0 +1,42 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>e2e host toolbar (port channel)</title>
+    <style>
+      html, body { margin: 0; background: #1e1e1e; color: #ddd; font: 13px sans-serif; }
+    </style>
+  </head>
+  <body>
+    <!--
+      [data-host-toolbar-root] must be shrink-to-fit on the block axis (see
+      host-toolbar-advertiser.ts footgun note) — keep the R1 height loop happy
+      while this fixture exercises the R2 port channel.
+    -->
+    <div data-host-toolbar-root>
+      <div style="height: 64px; display: flex; align-items: center; padding: 0 8px;">
+        e2e host toolbar — port channel; host said: <span id="host-out"></span>
+      </div>
+    </div>
+    <script>
+      // This script runs BEFORE the main process can possibly complete the
+      // did-finish-load handshake, so the send() below exercises the preload
+      // PENDING QUEUE on every load (the spike footgun: without the queue the
+      // first message of each load is silently dropped).
+      ;(function () {
+        window.__hostMsgs = []
+        window.__loadTag = 'load-' + Math.random().toString(36).slice(2)
+        var api = window.diminaHostToolbar
+        if (!api) {
+          window.__bridgeMissing = true
+          return
+        }
+        api.onMessage('e2e:host', function (payload) {
+          window.__hostMsgs.push(payload)
+          document.getElementById('host-out').textContent = JSON.stringify(payload)
+        })
+        api.send('e2e:ping', { from: 'page', tag: window.__loadTag })
+      })()
+    </script>
+  </body>
+</html>

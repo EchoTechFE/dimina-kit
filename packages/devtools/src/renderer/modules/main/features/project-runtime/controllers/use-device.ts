@@ -7,7 +7,7 @@ import {
 } from 'react'
 import type { RefObject } from 'react'
 import { DEVICES } from '@/shared/constants'
-import { resizeSimulator, setNativeDeviceInfo } from '@/shared/api'
+import { setNativeDeviceInfo } from '@/shared/api'
 import {
   clampPanelWidth,
   computeSimPanelWidth,
@@ -42,7 +42,6 @@ export interface DeviceHookResult {
   sendDeviceInfo: (device: DeviceType) => void
   simPanelWidthRef: RefObject<number>
   deviceRef: RefObject<DeviceType>
-  scheduleResize: (width: number) => void
 }
 
 export function useDevice(props: UseDeviceProps): DeviceHookResult {
@@ -53,37 +52,16 @@ export function useDevice(props: UseDeviceProps): DeviceHookResult {
   const [simPanelWidth, setSimPanelWidth] = useState(() =>
     computeSimPanelWidth(initialDevice.width),
   )
-  const resizeFrameRef = useRef<number | null>(null)
-  const pendingResizeRef = useRef(simPanelWidth)
   const simPanelWidthRef = useRef(simPanelWidth)
   const deviceRef = useRef(device)
 
   useEffect(() => {
-    pendingResizeRef.current = simPanelWidth
     simPanelWidthRef.current = simPanelWidth
   }, [simPanelWidth])
 
   useEffect(() => {
     deviceRef.current = device
   }, [device])
-
-  useEffect(() => {
-    return () => {
-      if (resizeFrameRef.current !== null) {
-        window.cancelAnimationFrame(resizeFrameRef.current)
-      }
-    }
-  }, [])
-
-  const scheduleResize = useCallback((width: number) => {
-    pendingResizeRef.current = width
-    if (resizeFrameRef.current !== null) return
-
-    resizeFrameRef.current = window.requestAnimationFrame(() => {
-      resizeFrameRef.current = null
-      void resizeSimulator(pendingResizeRef.current)
-    })
-  }, [])
 
   const sendDeviceInfo = useCallback((d: DeviceType) => {
     // The simulator is a main-process WebContentsView, so there is no renderer
@@ -113,11 +91,12 @@ export function useDevice(props: UseDeviceProps): DeviceHookResult {
       const d = DEVICES.find((item) => item.name === e.target.value) ?? DEVICES[1]!
       setDevice(d)
       sendDeviceInfo(d)
-      const newWidth = computeSimPanelWidth(d.width)
-      setSimPanelWidth(newWidth)
-      scheduleResize(newWidth)
+      // React layout state is the single width authority: the panel re-renders
+      // at the new width, and the simulator/DevTools view anchors re-measure
+      // and publish the precise rects to main (no width IPC side-channel).
+      setSimPanelWidth(computeSimPanelWidth(d.width))
     },
-    [scheduleResize, sendDeviceInfo],
+    [sendDeviceInfo],
   )
 
   const handleZoomChange = useCallback(
@@ -139,12 +118,10 @@ export function useDevice(props: UseDeviceProps): DeviceHookResult {
         // drag left widens it — invert the delta so user intent matches
         // the resulting width change.
         const signed = side === 'trailing' ? delta : -delta
-        const newW = clampPanelWidth(
+        setSimPanelWidth(clampPanelWidth(
           startW + signed,
           window.innerWidth,
-        )
-        setSimPanelWidth(newW)
-        scheduleResize(newW)
+        ))
       }
       const onUp = () => {
         window.removeEventListener('mousemove', onMove)
@@ -153,7 +130,7 @@ export function useDevice(props: UseDeviceProps): DeviceHookResult {
       window.addEventListener('mousemove', onMove)
       window.addEventListener('mouseup', onUp)
     },
-    [scheduleResize],
+    [],
   )
 
   return {
@@ -167,6 +144,5 @@ export function useDevice(props: UseDeviceProps): DeviceHookResult {
     sendDeviceInfo,
     simPanelWidthRef,
     deviceRef,
-    scheduleResize,
   }
 }

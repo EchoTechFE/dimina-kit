@@ -6,17 +6,18 @@
  * `docs/workbench-model.md` ("撤模块组装公共导出"；模块组装路线本身保留，仅撤对外导出):
  *
  *  A1. `src/main/api.ts` (the package root barrel) no longer re-exports the
- *      eight `register*Ipc` functions: registerAppIpc / registerSimulatorIpc
- *      / registerPanelsIpc / registerPopoverIpc / registerSettingsIpc /
- *      registerProjectsIpc / registerSessionIpc / registerToolbarIpc.
+ *      `register*Ipc` functions: registerAppIpc / registerSimulatorIpc
+ *      / registerPopoverIpc / registerSettingsIpc / registerProjectsIpc /
+ *      registerSessionIpc. (registerPanelsIpc / registerToolbarIpc were
+ *      deleted outright with the panel:eval + host-toolbar decommission.)
  *  A2. `package.json` `exports` drops the seven `./ipc-*` subpaths
  *      (./ipc-simulator, ./ipc-panels, ./ipc-toolbar, ./ipc-popover,
  *      ./ipc-settings, ./ipc-projects, ./ipc-session).
  *  A3. `package.json` `typesVersions['*']` drops the same seven `ipc-*`
  *      mappings.
  *  A4. GUARDRAIL — the mechanism itself SURVIVES for devtools-internal use:
- *      the `src/main/ipc/*.ts` implementation files still exist, and
- *      `src/main/ipc/index.ts` still internally re-exports the eight
+ *      the surviving `src/main/ipc/*.ts` implementation files still exist,
+ *      and `src/main/ipc/index.ts` still internally re-exports the surviving
  *      `register*Ipc` functions. This catches an implementer who "deletes
  *      too far" and removes the internal module-assembly plumbing that
  *      `app.ts` / `registerBuiltinModules` still depends on.
@@ -75,16 +76,19 @@ async function loadPackageJson(): Promise<{
   }
 }
 
-/** The eight module-assembly registration functions that must leave the public surface. */
+/**
+ * The surviving module-assembly registration functions that must leave the
+ * public surface. (registerPanelsIpc / registerToolbarIpc no longer exist —
+ * panels.ts / toolbar.ts were deleted with the panel:eval + host-toolbar
+ * decommission — so they cannot appear in the internal-survival anchors below.)
+ */
 const REGISTER_FNS = [
   'registerAppIpc',
   'registerSimulatorIpc',
-  'registerPanelsIpc',
   'registerPopoverIpc',
   'registerSettingsIpc',
   'registerProjectsIpc',
   'registerSessionIpc',
-  'registerToolbarIpc',
 ] as const
 
 /** The seven `./ipc-*` subpaths that must leave package.json. */
@@ -170,15 +174,15 @@ describe('Requirement A4 (guardrail): module-assembly plumbing survives for inte
   it('the src/main/ipc/*.ts implementation files still exist', async () => {
     // Catches: an implementer deleting the implementation instead of just the
     // public export face. `app.ts` / `registerBuiltinModules` still need these.
+    // (panels.ts / toolbar.ts are intentionally absent — deleted with the
+    // panel:eval + host-toolbar decommission.)
     for (const file of [
       'app.ts',
       'simulator.ts',
-      'panels.ts',
       'popover.ts',
       'settings.ts',
       'projects.ts',
       'session.ts',
-      'toolbar.ts',
       'index.ts',
     ]) {
       expect(
@@ -188,7 +192,7 @@ describe('Requirement A4 (guardrail): module-assembly plumbing survives for inte
     }
   })
 
-  it('src/main/ipc/index.ts still internally re-exports the eight register*Ipc functions', async () => {
+  it('src/main/ipc/index.ts still internally re-exports the surviving register*Ipc functions', async () => {
     const src = await readFile(repoFile('ipc/index.ts'), 'utf8')
     for (const name of REGISTER_FNS) {
       expect(
