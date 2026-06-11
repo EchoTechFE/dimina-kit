@@ -1,4 +1,21 @@
 /**
+ * ── ROUND 4 (codex residual risk — inventory ceiling guard, 2026-06) ────────
+ * Residual risk after round 3: the inline
+ * `grandfathered(workbench-context): shrink-only` directive is SELF-SERVE — a
+ * developer can paste the same comment onto a brand-new violation and quietly
+ * WIDEN the exemption set; "shrink-only" had no mechanical enforcement.
+ * Describe block ⑦ closes it by inventorying the directive itself:
+ *   - `<= 22` is the HARD GATE: adding a 23rd inline grandfather directive
+ *     anywhere under src/ fails CI, no matter which file it lands in.
+ *   - `=== 22` + the per-file distribution snapshot is REVIEW VISIBILITY:
+ *     any add OR remove (even one that stays under the ceiling, e.g. delete
+ *     one + add one elsewhere) shows up as an explicit snapshot diff that has
+ *     to pass review. Division of labor is deliberate: the ceiling alone
+ *     would let churn hide inside the budget; the snapshot alone could be
+ *     "fixed" by bumping numbers without anyone noticing direction — together
+ *     they make growth red and movement visible.
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
  * ── ROUND 3 (codex third re-review — ratchet final round, 2026-06) ──────────
  * Two remaining syntax holes plus one GRANULARITY change to the exemption
  * mechanism itself. Pinned in describe blocks ⑤ and ⑥ below:
@@ -109,6 +126,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { ESLint } from 'eslint'
+import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 
@@ -531,5 +549,96 @@ describe('⑥ WorkbenchContext ratchet — round 3: exemption granularity goes i
       ratchetMessagesOnLine(result, 2),
       'the inline-exempted re-export line must stay exempt even when api.ts has new violations',
     ).toHaveLength(0)
+  })
+})
+
+// ═══ ROUND 4 — inventory ceiling guard (see file header for the rationale) ══
+describe('⑦ WorkbenchContext ratchet — round 4: grandfather inventory ceiling', () => {
+  /**
+   * The greppable audit token inside GRANDFATHER_COMMENT. Counted as an exact
+   * substring so re-formatting the directive part (`eslint-disable-line` vs
+   * `-next-line`, spacing) cannot dodge the inventory — what is ratcheted is
+   * the JUSTIFICATION marker every exemption must carry.
+   */
+  const MARKER = 'grandfathered(workbench-context): shrink-only'
+
+  /**
+   * 缩短清单后请把上限同步下调 — when grandfathered lines are removed, lower
+   * this ceiling (and the exact count + snapshot below) in the same change.
+   * Shrinking without touching the ceiling still passes the hard gate (only
+   * the exact-count/snapshot assertions below will ask for an update); ADDING
+   * a 23rd directive necessarily fails here.
+   */
+  const CEILING = 22
+
+  function listSourceFiles(dir: string): string[] {
+    const out: string[] = []
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        out.push(...listSourceFiles(full))
+      } else if (entry.isFile() && !/\.test\.tsx?$/.test(entry.name)) {
+        out.push(full)
+      }
+    }
+    return out
+  }
+
+  function countOccurrences(haystack: string, needle: string): number {
+    return haystack.split(needle).length - 1
+  }
+
+  it('inline grandfather directives cannot grow: hard ceiling + exact distribution snapshot', () => {
+    const srcRoot = path.join(packageRoot, 'src')
+    const perFile = new Map<string, number>()
+    for (const file of listSourceFiles(srcRoot)) {
+      const n = countOccurrences(fs.readFileSync(file, 'utf8'), MARKER)
+      if (n > 0) {
+        perFile.set(path.relative(packageRoot, file).split(path.sep).join('/'), n)
+      }
+    }
+    const total = [...perFile.values()].reduce((a, b) => a + b, 0)
+    const distribution = [...perFile.entries()]
+      .map(([file, n]) => `${file} ×${n}`)
+      .sort()
+
+    // ① HARD GATE — a 23rd inline exemption anywhere under src/ goes red.
+    expect(
+      total,
+      `the shrink-only grandfather inventory must never grow past ${CEILING}; ` +
+        'do NOT raise this ceiling — remove a WorkbenchContext dependency instead. ' +
+        `current distribution:\n${distribution.join('\n')}`,
+    ).toBeLessThanOrEqual(CEILING)
+
+    // ② REVIEW VISIBILITY — any add/remove (including budget-neutral churn)
+    // must show up as an explicit diff of the exact count + file snapshot.
+    expect(
+      total,
+      'grandfather inventory changed — update the exact count, the snapshot ' +
+        'below, AND (when shrinking) lower the ceiling in the same change',
+    ).toBe(22)
+    expect(distribution).toEqual([
+      'src/main/api.ts ×1',
+      'src/main/app/app.ts ×2',
+      'src/main/ipc/app.ts ×1',
+      'src/main/ipc/bridge-router.ts ×1',
+      'src/main/ipc/popover.ts ×1',
+      'src/main/ipc/project-fs.ts ×1',
+      'src/main/ipc/projects.ts ×1',
+      'src/main/ipc/session.ts ×1',
+      'src/main/ipc/settings.ts ×1',
+      'src/main/ipc/simulator.ts ×1',
+      'src/main/ipc/views.ts ×1',
+      'src/main/runtime/miniapp-runtime.ts ×1',
+      'src/main/services/automation/exec.ts ×1',
+      'src/main/services/automation/index.ts ×1',
+      'src/main/services/automation/shared.ts ×1',
+      'src/main/services/module.ts ×1',
+      'src/main/services/views/view-manager.ts ×1',
+      'src/main/services/workspace/workspace-service.ts ×1',
+      'src/main/utils/sender-policy.ts ×1',
+      'src/main/windows/main-window/events.ts ×1',
+      'src/shared/types.ts ×1',
+    ])
   })
 })
