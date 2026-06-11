@@ -7,10 +7,10 @@ export default [
   {
     // templates/ are scaffolds copied verbatim into user projects (with wx/App/Page
     // globals + Taro-compiled minified bundles); e2e/fixtures/ are mini-app source
-    // fixtures (same wx/Page globals) + compiled bundles; _spike/ is throwaway
-    // prototype scratch; playwright-report and test-results are e2e artifacts. None
-    // of these are source we maintain — skip linting them.
-    ignores: ["container/**", "docs/**", "templates/**", "e2e/fixtures/**", "_spike/**", "playwright-report/**", "test-results/**"],
+    // fixtures (same wx/Page globals) + compiled bundles; _spike/ and spike/ are
+    // throwaway prototype scratch; playwright-report and test-results are e2e
+    // artifacts. None of these are source we maintain — skip linting them.
+    ignores: ["container/**", "docs/**", "templates/**", "e2e/fixtures/**", "_spike/**", "spike/**", "playwright-report/**", "test-results/**"],
   },
   {
     files: [

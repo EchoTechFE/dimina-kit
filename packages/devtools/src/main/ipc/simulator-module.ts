@@ -1,5 +1,5 @@
 import type { WorkbenchModule } from '../services/module.js'
-import { DisposableRegistry } from '../utils/disposable.js'
+import { DisposableRegistry } from '@dimina-kit/electron-deck/main'
 import { registerSimulatorIpc } from './simulator.js'
 import { registerPanelsIpc } from './panels.js'
 import { registerToolbarIpc } from './toolbar.js'

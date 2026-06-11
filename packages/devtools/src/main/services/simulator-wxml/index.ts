@@ -17,7 +17,7 @@ import type { WebContents } from 'electron'
 import { SimulatorWxmlChannel } from '../../../shared/ipc-channels.js'
 import type { WxmlNode } from '../../../preload/shared/sid-registry.js'
 import type { BridgeRouterHandle } from '../../ipc/bridge-router.js'
-import { DisposableRegistry, type Disposable } from '../../utils/disposable.js'
+import { DisposableRegistry, type Disposable } from '@dimina-kit/electron-deck/main'
 import { IpcRegistry, type SenderPolicy } from '../../utils/ipc-registry.js'
 import type { RenderInspector } from '../render-inspect/index.js'
 

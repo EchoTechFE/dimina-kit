@@ -25,7 +25,7 @@
  * Seam: identical to `instance-ipc-extension.test.ts` /
  * `instance-simulator-api.test.ts` — there is no standalone factory for
  * `WorkbenchAppInstance`; the object is built inline inside
- * `createWorkbenchApp().setup()`. We drive the full app under an exhaustive
+ * `createDevtoolsRuntime()`. We drive the full app under an exhaustive
  * electron mock and capture the instance from the `onSetup` hook.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
@@ -211,13 +211,13 @@ vi.mock('@dimina-kit/devkit', () => ({
   openProject: vi.fn(() => Promise.resolve({ port: 0, appInfo: {}, close: () => Promise.resolve() })),
 }))
 
-let createWorkbenchApp: typeof import('./app.js').createWorkbenchApp
+let createDevtoolsRuntime: typeof import('./app.js').createDevtoolsRuntime
 let ToolbarChannel: typeof import('../../shared/ipc-channels.js').ToolbarChannel
 
 beforeEach(async () => {
   vi.resetModules()
   stubs.reset()
-  ;({ createWorkbenchApp } = await import('./app.js'))
+  ;({ createDevtoolsRuntime } = await import('./app.js'))
   ;({ ToolbarChannel } = await import('../../shared/ipc-channels.js'))
 })
 
@@ -228,7 +228,7 @@ type ToolbarActionInput = { id: string; label: string; handler: () => void | Pro
 type WithToolbar = { toolbar: { set(actions: ToolbarActionInput[]): void } }
 
 /**
- * Drives `createWorkbenchApp` and returns the `WorkbenchAppInstance` captured
+ * Drives `createDevtoolsRuntime` and returns the `WorkbenchAppInstance` captured
  * from `onSetup`. Also asserts the instance carries `toolbar` AT `onSetup`
  * time — hosts call `instance.toolbar.set()` inside the hook, so it must be
  * ready before the hook runs.
@@ -236,13 +236,13 @@ type WithToolbar = { toolbar: { set(actions: ToolbarActionInput[]): void } }
 async function setupInstance(): Promise<AppInstance & WithToolbar> {
   let sawToolbarInOnSetup = false
   let captured: AppInstance | undefined
-  const instance = await createWorkbenchApp({
+  const instance = await createDevtoolsRuntime({
     onSetup(inst) {
       captured = inst as AppInstance
       const t = (inst as unknown as Partial<WithToolbar>).toolbar
       sawToolbarInOnSetup = !!t && typeof t.set === 'function'
     },
-  }).setup()
+  })
 
   expect(captured, 'onSetup must receive the WorkbenchAppInstance').toBeDefined()
   expect(captured).toBe(instance)

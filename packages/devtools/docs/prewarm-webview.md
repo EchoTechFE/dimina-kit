@@ -56,7 +56,7 @@ renderer SPAWN IPC
 
 | 子系统 | 来源 | 备注 |
 |---|---|---|
-| `persist:simulator` session | `main-window/create.ts:32`、`bridge-router.ts:1314` 共享同一 partition | session 单例已存在，preload 只注册一次；pool 不会改这里 |
+| `persist:simulator` session | `main-window/create.ts:23`（`configureSimulatorSession`）、`bridge-router.ts` 协议注册 共享同一 partition | session 单例已存在（Referer/CORS 头只设一次；preload 改由各宿主 `webPreferences.preload` / `<webview preload>` 挂）；pool 不会改这里 |
 | `dimina-resource-server` | `bridge-router.ts:477`（`startDiminaResourceServer`） 每个 fallback appSession 起一个 fastify 端口 | 不在固定开销里，跟 app 强相关 |
 | 每页 render-host `<webview>` | DeviceShell 渲染（`device-shell.tsx`） | 同 simulator session 内同 frame tree；不在 pool 影响域（见 §5） |
 
@@ -228,7 +228,7 @@ reset（`reset`, pool.ts:411）顺序固定（先导航后清存储）：先 nav
 | 全局 JS 符号（`DiminaServiceBridge`、`DiminaRenderBridge`、`__diminaSpawnContext`、`wx`） | 由 navigate-to-`about:blank` 跨 document 导航销毁整个 realm | reset 不 `executeJavaScript` 删 global |
 | 等待时序 | navigate 先于 storage clear（见上） | `loadBlank` await did-finish-load |
 
-> **共享 session 下的实际行为**：service-host 跑在共享 `persist:simulator` partition（main-window 的 simulator `<webview>` 也用它）。`serviceHostSpec()`（create.ts:108）把 `clearStorageOnReset` 设为 **`false`**，所以 `reset()` 在导航回 `about:blank` 之后**直接 early-return**（pool.ts:416），**不**调用 `clearStorageData` / `clearCache` — 否则会炸掉所有当前活项目的 storage。跨 spawn 的隔离由"导航销毁 JS realm" + storage 在 persist 分区上按 appId 命名空间持久化共同保证，与今天 simulator `<webview>` 共享、从不清空的行为等价。
+> **共享 session 下的实际行为**：service-host 跑在共享 `persist:simulator` partition（simulator WCV 与每页 render-host `<webview>` guests 也共用它）。`serviceHostSpec()`（create.ts:108）把 `clearStorageOnReset` 设为 **`false`**，所以 `reset()` 在导航回 `about:blank` 之后**直接 early-return**（pool.ts:416），**不**调用 `clearStorageData` / `clearCache` — 否则会炸掉所有当前活项目的 storage。跨 spawn 的隔离由"导航销毁 JS realm" + storage 在 persist 分区上按 appId 命名空间持久化共同保证，与今天 simulator WCV / render-host guests 共享、从不清空的行为等价。
 
 ### 3.5 与现有架构的接入点
 
@@ -236,7 +236,7 @@ reset（`reset`, pool.ts:411）顺序固定（先导航后清存储）：先 nav
 
 mini-app 页面用 `<webview>` 标签承载，pool 给出 `WebContents` 后**无法把它 attach 到一个 `<webview>` 元素** — Electron 不提供把外部 `WebContents` reparent 进 `<webview>` 的 API；`<webview>` 元素必须自己 new 自己的 guest wc。所以 pool **不工作于 render 侧 `<webview>` tag**（这是物理限制，详见 §5）。
 
-simulator session 自身的预热（session 单例 + preload registration）已经默认完成（`configureSimulatorSession`，main-window/create.ts:28 在首次 `createMainWindow` 时 register），不在本 pool 的优化范围。
+simulator session 自身在首次 `createMainWindow` 时由 `configureSimulatorSession()`（main-window/create.ts:19，无参）取得单例并设 Referer/CORS 头；simulator WCV 的 preload 改由 `attachNativeSimulator` 经 `webPreferences.preload` 挂（不再 session 级 register）。这块不在本 pool 的优化范围。
 
 #### 3.5.2 service 侧（`createServiceHostWindow`）
 
@@ -350,23 +350,23 @@ release(entryId, win):  // pool.ts:195
 
 **JS 全局符号残留**：`DiminaServiceBridge`、`DiminaRenderBridge`、`__diminaSpawnContext` 是 preload 写入的全局符号。`reset()`（pool.ts:411）**不** `executeJavaScript` 删 globals — 它单靠 navigate 回 `about:blank` 的跨 document 导航销毁整个 JS realm。（iOS 的 `prepareForReuse` 额外显式 `delete` 全局桥，dimina-kit 不照搬，因为跨 document 导航本身就重建了 realm。）
 
-**共享 session storage**：service-host 跑在共享 `persist:simulator` session 上，`serviceHostSpec().clearStorageOnReset === false`（create.ts:116），所以 reset **不**清这个共享 session 的 storage — 跨项目 cookies / storage 沿用与今天 simulator `<webview>` 一致的共享语义，不存在"per-entry 专属 partition"的隔离（详 §3.4）。带独立 session 的调用方（`clearStorageOnReset` 默认 true）才会触发 §3.4 的 storage 清理。
+**共享 session storage**：service-host 跑在共享 `persist:simulator` session 上，`serviceHostSpec().clearStorageOnReset === false`（create.ts:116），所以 reset **不**清这个共享 session 的 storage — 跨项目 cookies / storage 沿用与今天 simulator WCV / render-host `<webview>` guests 一致的共享语义，不存在"per-entry 专属 partition"的隔离（详 §3.4）。带独立 session 的调用方（`clearStorageOnReset` 默认 true）才会触发 §3.4 的 storage 清理。
 
 ### 4.3 preload 注入路径
 
 | 调用方 | preload 注入方式 | 注入位置 |
 |---|---|---|
-| native simulator WebContentsView（唯一 simulator 宿主） | window-level (`webPreferences.preload`，cjs sibling) | `views/view-manager.ts:561`（`attachNativeSimulator`） |
-| `persist:simulator` session 内的 render-host 页面 `<webview>` guests | session-level (`registerPreloadScript({type:'frame'})`) | `main-window/create.ts:36` |
+| native simulator WebContentsView（唯一 simulator 宿主） | window-level (`webPreferences.preload`，cjs sibling) | `views/view-manager.ts:990`（`attachNativeSimulator`） |
+| `persist:simulator` session 内的 render-host 页面 `<webview>` guests | `<webview preload>` 属性（`getRenderPreloadUrl()`） | `device-shell.tsx:295` |
 | service-host BrowserWindow | window-level (`webPreferences.preload`) | `service-host-window/create.ts:42` |
-| settings / popover WebContentsView | window-level (`webPreferences.preload`) | `views/view-manager.ts:447`、`:480` |
-| main window | window-level (`webPreferences.preload`) | `main-window/create.ts:77` |
+| settings / popover WebContentsView | window-level (`webPreferences.preload`) | `views/view-manager.ts:1185`、`:1218` |
+| main window | window-level (`webPreferences.preload`) | `main-window/create.ts:62` |
 
 pool 在 `acquire(spec)` 时按 `preloadPath` 校验 entry 是否匹配（`matches`, pool.ts:303）— 不匹配就 tear down pooled entries 重建。当前只有单一 spec（service-host）进池。
 
 ## 5. 已知限制
 
-**render 侧 `<webview>` 无法预热**：mini-app 页面用 `<webview>` tag 承载（`src/simulator/device-shell/device-shell.tsx:255` `<webview … partition="persist:simulator">`）。Electron **没有把预热 `WebContents` reparent 到 `<webview>` 元素的 API**，所以 render 侧 pool 受此硬限制阻塞。当前 service 侧已做成 BrowserWindow（已 pool），render 侧仍是 `<webview>`，该限制未解除。render 侧 pool 只有在 render 也改成 BrowserWindow / WebContentsView 之后才可能。
+**render 侧 `<webview>` 无法预热**：mini-app 页面用 `<webview>` tag 承载（`src/simulator/device-shell/device-shell.tsx:291` `<webview … partition="persist:simulator">`）。Electron **没有把预热 `WebContents` reparent 到 `<webview>` 元素的 API**，所以 render 侧 pool 受此硬限制阻塞。当前 service 侧已做成 BrowserWindow（已 pool），render 侧仍是 `<webview>`，该限制未解除。render 侧 pool 只有在 render 也改成 BrowserWindow / WebContentsView 之后才可能。
 
 **预热省不掉 service 业务初始化**：预热只能省 §1.1 的 A + B（fork + preload + parse）一次。service 的业务初始化（§1.1 D）跟 V8 isolate 绑定，每个新 spawn 都得跑一遍 — 这是物理上限，pool 不能省。
 

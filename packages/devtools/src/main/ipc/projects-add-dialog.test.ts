@@ -369,12 +369,12 @@ vi.mock('@dimina-kit/devkit', () => ({
 
 // ── Lazy imports (after vi.mock('electron') is set up) ──────────────────
 import { ProjectsChannel } from '../../shared/ipc-channels.js'
-let createWorkbenchApp: typeof import('../app/app.js').createWorkbenchApp
+let createDevtoolsRuntime: typeof import('../app/app.js').createDevtoolsRuntime
 
 beforeEach(async () => {
   vi.resetModules()
   stubs.reset()
-  ;({ createWorkbenchApp } = await import('../app/app.js'))
+  ;({ createDevtoolsRuntime } = await import('../app/app.js'))
 })
 
 /**
@@ -399,7 +399,7 @@ describe('projects:add — duplicate detection dialog', () => {
     stubs.projectsWithAppJson.add(dir) // make validateProjectDir pass
     stubs.setProjectsJson(JSON.stringify([])) // empty list
 
-    const instance = await createWorkbenchApp({}).setup()
+    const instance = await createDevtoolsRuntime({})
     const { dialog } = await import('electron')
     const sender = instance.mainWindow.webContents as unknown as {
       id: number
@@ -424,7 +424,7 @@ describe('projects:add — duplicate detection dialog', () => {
     stubs.projectsWithAppJson.add(dir)
     stubs.setProjectsJson(JSON.stringify([]))
 
-    const instance = await createWorkbenchApp({}).setup()
+    const instance = await createDevtoolsRuntime({})
     const { dialog } = await import('electron')
     const sender = instance.mainWindow.webContents as unknown as {
       id: number
@@ -472,7 +472,7 @@ describe('projects:add — duplicate detection dialog', () => {
     // Deliberately do NOT add to projectsWithAppJson — validateProjectDir fails.
     stubs.setProjectsJson(JSON.stringify([]))
 
-    const instance = await createWorkbenchApp({}).setup()
+    const instance = await createDevtoolsRuntime({})
     const { dialog } = await import('electron')
     const sender = instance.mainWindow.webContents as unknown as {
       id: number

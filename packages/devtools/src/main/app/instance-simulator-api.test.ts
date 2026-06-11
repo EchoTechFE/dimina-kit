@@ -18,7 +18,7 @@
  *
  * Seam: identical to `instance-ipc-extension.test.ts` — there is no standalone
  * factory for `WorkbenchAppInstance`; the object is built inline inside
- * `createWorkbenchApp().setup()`. The `onSetup` hook receives that very
+ * `createDevtoolsRuntime()`. The `onSetup` hook receives that very
  * instance, so we drive the full app under an exhaustive electron mock and
  * capture the instance from `onSetup`.
  */
@@ -198,17 +198,17 @@ vi.mock('@dimina-kit/devkit', () => ({
   openProject: vi.fn(() => Promise.resolve({ port: 0, appInfo: {}, close: () => Promise.resolve() })),
 }))
 
-let createWorkbenchApp: typeof import('./app.js').createWorkbenchApp
+let createDevtoolsRuntime: typeof import('./app.js').createDevtoolsRuntime
 
 beforeEach(async () => {
   vi.resetModules()
   stubs.reset()
-  ;({ createWorkbenchApp } = await import('./app.js'))
+  ;({ createDevtoolsRuntime } = await import('./app.js'))
 })
 
 type SimulatorApiHandler = (params: unknown) => unknown | Promise<unknown>
 type SimulatorApiRegistry = import('../services/simulator/custom-apis.js').SimulatorApiRegistry
-type Disposable = import('../utils/disposable.js').Disposable
+type Disposable = import('@dimina-kit/electron-deck/main').Disposable
 type AppInstance = import('./app.js').WorkbenchAppInstance
 
 /** The extra method this suite asserts onto the instance. */
@@ -217,21 +217,21 @@ type WithRegisterSimulatorApi = {
 }
 
 /**
- * Drives `createWorkbenchApp` and returns the `WorkbenchAppInstance` captured
+ * Drives `createDevtoolsRuntime` and returns the `WorkbenchAppInstance` captured
  * from `onSetup`. Also asserts the instance carries `registerSimulatorApi`
  * AT `onSetup` time — the method must exist before the hook runs.
  */
 async function setupInstance(): Promise<AppInstance & WithRegisterSimulatorApi> {
   let sawMethodInOnSetup = false
   let captured: AppInstance | undefined
-  const instance = await createWorkbenchApp({
+  const instance = await createDevtoolsRuntime({
     onSetup(inst) {
       captured = inst as AppInstance
       sawMethodInOnSetup =
         typeof (inst as unknown as Partial<WithRegisterSimulatorApi>).registerSimulatorApi
         === 'function'
     },
-  }).setup()
+  })
 
   expect(captured, 'onSetup must receive the WorkbenchAppInstance').toBeDefined()
   expect(captured).toBe(instance)

@@ -1,0 +1,239 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>electron-deck layout demo — real-API control layer</title>
+    <!--
+      No import map needed anymore: the renderer loads the framework's BROWSER
+      bundle (`dist/client/layout-client.browser.js`, mapped to the package's
+      `./client/browser` export), which is a dependency-inlined ESM with no bare
+      specifiers — the hand-authored `@dimina-kit/view-anchor` mapping is GONE.
+    -->
+    <style>
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; font-family: -apple-system, system-ui, sans-serif; }
+      body {
+        background: #1e1e2e;
+        color: #cdd6f4;
+        display: grid;
+        grid-template-rows: 36px 1fr;
+        height: 100vh;
+        overflow: hidden;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 10px;
+        background: #181825;
+        border-bottom: 1px solid #313244;
+        font-size: 12px;
+      }
+      header .title { font-weight: 600; opacity: 0.85; }
+      header button {
+        font-size: 11px;
+        padding: 3px 8px;
+        background: #45475a;
+        color: #cdd6f4;
+        border: 1px solid #585b70;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      header button:hover { background: #585b70; }
+
+      /* ── Screen 1: project list ─────────────────────────────────────────── */
+      #project-list {
+        padding: 16px;
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 14px;
+        align-content: start;
+      }
+      .card {
+        height: 110px;
+        border-radius: 10px;
+        display: flex;
+        align-items: flex-end;
+        padding: 10px;
+        font-weight: 700;
+        font-size: 14px;
+        color: #fff;
+        text-shadow: 0 1px 3px rgba(0,0,0,.5);
+        cursor: pointer;
+        border: 2px solid transparent;
+        transition: transform .08s ease, border-color .08s ease;
+      }
+      .card:hover { transform: translateY(-2px); border-color: #fff6; }
+
+      /* ── Screen 2: devtools-like detail layout ──────────────────────────── */
+      #detail {
+        display: none;          /* shown when a project is opened */
+        position: relative;
+        min-height: 0;
+        height: 100%;
+      }
+      #detail.active { display: block; }
+      .split {
+        display: flex;
+        height: 100%;
+        width: 100%;
+      }
+      /* slot placeholders: native color blocks anchor ON TOP of these rects */
+      .slot {
+        border: 2px dashed #585b70;
+        border-radius: 6px;
+        margin: 8px;
+        display: flex;
+        align-items: flex-start;
+        padding: 6px 8px;
+        font-size: 11px;
+        color: #6c7086;
+        position: relative;
+        min-width: 40px;
+        overflow: hidden;
+      }
+      #simulator { flex: 0 0 auto; }   /* width driven by JS (splitter) */
+      #devtools  { flex: 1 1 auto; }   /* takes the rest */
+      .splitter {
+        flex: 0 0 6px;
+        cursor: col-resize;
+        background: #313244;
+        align-self: stretch;
+        margin: 8px 0;
+      }
+      .splitter:hover { background: #585b70; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <span class="title" id="winlabel">electron-deck — REAL API layout demo</span>
+      <button id="btn-back" style="display:none">← back to projects</button>
+    </header>
+
+    <!-- Screen 1 -->
+    <div id="project-list"></div>
+
+    <!-- Screen 2 -->
+    <div id="detail">
+      <div class="split">
+        <div class="slot" id="simulator"><span class="label">#simulator slot</span></div>
+        <div class="splitter" id="splitter"></div>
+        <div class="slot" id="devtools"><span class="label">#devtools slot</span></div>
+      </div>
+    </div>
+
+    <script type="module">
+      // ── REAL framework client, loaded from the Vite-built self-contained
+      //    client entry (no import map, no bare specifiers — view-anchor is
+      //    inlined by the Vite library build; the `./client/browser` export
+      //    now points here too). ───────────────────────────────────────────
+      import { createDeckLayoutClient } from '../../dist/client/index.js'
+
+      // Turnkey global bridge exposed by exposeDeckLayoutBridge() in the preload —
+      // no hand-wiring, no duplicated channel strings.
+      const bridge = window.__electronDeckLayoutBridge
+      const demo = window.__demoControl
+
+      // ── Screen 1: project cards ───────────────────────────────────────────
+      const PROJECTS = [
+        { id: 'aurora',  label: 'Aurora',  color: '#8e44ad' },
+        { id: 'nebula',  label: 'Nebula',  color: '#16a085' },
+        { id: 'comet',   label: 'Comet',   color: '#d35400' },
+        { id: 'pulsar',  label: 'Pulsar',  color: '#2c3e50' },
+        { id: 'quasar',  label: 'Quasar',  color: '#c0392b' },
+        { id: 'zenith',  label: 'Zenith',  color: '#2980b9' },
+      ]
+      const listEl = document.getElementById('project-list')
+      for (const p of PROJECTS) {
+        const card = document.createElement('div')
+        card.className = 'card'
+        card.style.background = p.color
+        card.textContent = p.label
+        card.onclick = () => openProject(p)
+        listEl.appendChild(card)
+      }
+
+      const detailEl = document.getElementById('detail')
+      const backBtn = document.getElementById('btn-back')
+      let layoutClient = null
+
+      function openProject(p) {
+        // Show the detail screen (mounts the slot DOM) FIRST, then tell the HOST
+        // to spawn the native blocks. The host PUSHES SlotGrant frames; our
+        // layoutClient (already running, channels eager-armed at framework start)
+        // picks them up and anchors the now-mounted slots. No re-subscribe glue.
+        listEl.style.display = 'none'
+        detailEl.classList.add('active')
+        backBtn.style.display = ''
+        document.getElementById('winlabel').textContent = `Project: ${p.label}`
+        demo.openProject(p.id)
+      }
+
+      backBtn.onclick = () => {
+        listEl.style.display = ''
+        detailEl.classList.remove('active')
+        backBtn.style.display = 'none'
+      }
+
+      // ── REAL slot-token client: bridge is REQUIRED, no default form ────────
+      // This is the actual user-side API under review. The renderer owns ZERO
+      // geometry/IPC logic beyond handing the client a bridge + a DOM with the
+      // #simulator / #devtools slots. The client measures each granted slot and
+      // threads placements back; the host moves the native blocks.
+      layoutClient = createDeckLayoutClient({ bridge })
+
+      // ── Draggable vertical splitter (pure DOM/CSS/JS) ─────────────────────
+      // Dragging resizes #simulator (#devtools = flex:1 fills the rest). The
+      // view-anchor inside createDeckLayoutClient re-measures via ResizeObserver
+      // and republishes — so the NATIVE blocks follow with ZERO host resize code.
+      const splitter = document.getElementById('splitter')
+      const simEl = document.getElementById('simulator')
+      const splitContainer = simEl.parentElement
+      let dragging = false
+      function setSimWidth(px) {
+        const min = 80
+        const max = splitContainer.clientWidth - 80
+        simEl.style.flexBasis = Math.max(min, Math.min(max, px)) + 'px'
+      }
+      // initial: half the container
+      requestAnimationFrame(() => setSimWidth(splitContainer.clientWidth / 2))
+      splitter.addEventListener('mousedown', () => { dragging = true })
+      window.addEventListener('mouseup', () => { dragging = false })
+      window.addEventListener('mousemove', (e) => {
+        if (!dragging) return
+        const left = splitContainer.getBoundingClientRect().left
+        setSimWidth(e.clientX - left)
+      })
+      // Programmatic hook for the offscreen verification (executeJavaScript):
+      // moves the splitter to an absolute simulator width so the test can prove
+      // the native blocks FOLLOWED the DOM split.
+      window.__demoSetSplit = (simPx) => setSimWidth(simPx)
+
+      // ── Composite-screenshot machinery (REUSED from the original demo) ─────
+      // Native WebContentsViews are composited by the OS window-server, not into
+      // an offscreen capturePage(). So main sends the host PNG + each native
+      // block's PNG (with bounds, in z-order) and we blit onto a canvas.
+      demo.onComposite(async (reqId, hostPng, blocks) => {
+        const load = (src) => new Promise((res) => { const i = new Image(); i.onload = () => res(i); i.src = src })
+        const hostImg = await load(hostPng)
+        const c = document.createElement('canvas')
+        c.width = hostImg.naturalWidth
+        c.height = hostImg.naturalHeight
+        const sx = hostImg.naturalWidth / window.innerWidth
+        const sy = hostImg.naturalHeight / window.innerHeight
+        const ctx = c.getContext('2d')
+        ctx.drawImage(hostImg, 0, 0)
+        for (const b of blocks) {
+          const img = await load(b.png)
+          ctx.drawImage(img, b.x * sx, b.y * sy, b.width * sx, b.height * sy)
+        }
+        demo.sendCompositeResult(reqId, c.toDataURL('image/png'))
+      })
+
+      demo.onSetLabel((label, bg) => {
+        document.getElementById('winlabel').textContent = label
+        if (bg) document.body.style.background = bg
+      })
+    </script>
+  </body>
+</html>

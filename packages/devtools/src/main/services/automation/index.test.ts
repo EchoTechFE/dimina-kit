@@ -84,6 +84,7 @@ vi.mock('ws', () => ({
 
 // Import AFTER the mocks so the module picks up the stubs.
 import { AutomationChannel } from '../../../shared/ipc-channels.js'
+import { createConnectionRegistry } from '@dimina-kit/electron-deck/main'
 import { startAutomationServer } from './index.js'
 import { getSimulator } from './exec.js'
 
@@ -97,6 +98,11 @@ const getSimulatorMock = vi.mocked(getSimulator)
 function makeCtx(senderPolicy: (s: unknown) => boolean = () => true) {
   return {
     senderPolicy,
+    // Real connection registry — the destroyed-teardown is routed through
+    // `ctx.connections.acquire(sim).own(...)` rather than a bespoke
+    // `sim.once('destroyed')`. The registry is a pure primitive (no Electron),
+    // so the sim stub's `once('destroyed')` / `isDestroyed()` drive it faithfully.
+    connections: createConnectionRegistry(),
     views: { getSimulatorWebContentsId: () => 1 },
     workspace: { hasActiveSession: () => true },
   } as unknown as Parameters<typeof startAutomationServer>[0]
@@ -105,6 +111,8 @@ function makeCtx(senderPolicy: (s: unknown) => boolean = () => true) {
 function makeSim() {
   const listeners = new Map<string, Array<(...a: unknown[]) => void>>()
   return {
+    // Stable wc.id so the ConnectionRegistry keys this sim deterministically.
+    id: 1,
     isDestroyed: vi.fn(() => false),
     on: vi.fn((event: string, fn: (...a: unknown[]) => void) => {
       if (!listeners.has(event)) listeners.set(event, [])
@@ -200,14 +208,45 @@ describe('startAutomationServer lifecycle', () => {
     await vi.advanceTimersByTimeAsync(1000)
 
     expect(sim.on).toHaveBeenCalledWith('ipc-message-host', expect.any(Function))
+    // The destroyed-teardown is owned by the connection registry, which arms a
+    // single `sim.once('destroyed')` internally (not a bespoke one here).
     expect(sim.once).toHaveBeenCalledWith('destroyed', expect.any(Function))
     expect(sim._listenerCount('ipc-message-host')).toBe(1)
 
     server.close()
 
+    // ipc-message-host is still detached directly. The destroyed teardown is NOT
+    // unwound via removeListener anymore — it's released by disposing the
+    // connection-owned handle (the registry keeps its own once('destroyed')).
     expect(sim.removeListener).toHaveBeenCalledWith('ipc-message-host', expect.any(Function))
-    expect(sim.removeListener).toHaveBeenCalledWith('destroyed', expect.any(Function))
+    expect(sim.removeListener).not.toHaveBeenCalledWith('destroyed', expect.any(Function))
     expect(sim._listenerCount('ipc-message-host')).toBe(0)
+  })
+
+  it('routes the simulator destroyed-teardown through the connection registry', async () => {
+    const ctx = makeCtx()
+    const sim = makeSim()
+    getSimulatorMock.mockReturnValue(sim as unknown as ReturnType<typeof getSimulator>)
+
+    const server = await startAutomationServer(ctx, 0)
+
+    const wss = wssStub.created[0]!
+    wss.emit('connection', { readyState: 1, OPEN: 1, send: vi.fn(), close: vi.fn(), on: vi.fn() })
+
+    // Pick up the sim — this acquires its connection and owns onSimDestroyed.
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(sim._listenerCount('ipc-message-host')).toBe(1)
+
+    // Firing the wc's real 'destroyed' event drives the registry connection,
+    // which runs the owned teardown: the ipc-message-host handler is dropped and
+    // the forwarding setup is reset so a fresh sim can re-attach.
+    sim._emit('destroyed')
+    sim.isDestroyed.mockReturnValue(true)
+
+    // close() must not touch the dead sim's listeners.
+    sim.removeListener.mockClear()
+    server.close()
+    expect(sim.removeListener).not.toHaveBeenCalled()
   })
 
   it('drops refs cleanly when the simulator emits destroyed before close()', async () => {

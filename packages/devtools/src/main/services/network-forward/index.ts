@@ -64,7 +64,7 @@
  *     (exposed below; it uses the console fallback path).
  */
 import type { WebContents } from 'electron'
-import { DisposableRegistry, toDisposable, type Disposable } from '../../utils/disposable.js'
+import { DisposableRegistry, toDisposable, type ConnectionRegistry, type Disposable } from '@dimina-kit/electron-deck/main'
 
 /** Which layer a captured request came from (tags the fallback log line). */
 export type NetworkSource = 'service' | 'render'
@@ -94,6 +94,14 @@ export interface NetworkForwarderBridge {
    * `setDevtoolsHost`. Null until the DevTools host view exists.
    */
   getDevtoolsWc?(): WebContents | null
+  /**
+   * Optional connection-layer registry (`@dimina-kit/electron-deck/main`). When
+   * present, per-webContents teardowns route through `acquire(wc).own(d)` so the
+   * Connection disposes them deterministically on wc destroy / reset (replacing
+   * the bespoke `wc.once('destroyed', cleanup)`). Omitted → the legacy
+   * `once('destroyed')` fallback is used, so existing callers compile unchanged.
+   */
+  connections?: ConnectionRegistry
 }
 
 export interface NetworkForwarder extends Disposable {
@@ -762,10 +770,20 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
         if (ad) void ad.disposeAll().catch(() => {})
       }
     }
-    wc.once('destroyed', onDestroyed)
-    attach.add(() => {
-      try { wc.removeListener('destroyed', onDestroyed) } catch { /* wc gone */ }
-    })
+    // Route the destroyed-teardown through the connection registry when one is
+    // available (deterministic disposal on wc destroy / connection reset);
+    // otherwise keep the bespoke `once('destroyed')` watcher. WHAT onDestroyed
+    // does is unchanged — only WHERE it's registered.
+    const reg = bridge.connections
+    if (reg) {
+      const owned = reg.acquire(wc).own(onDestroyed)
+      attach.add(() => owned.dispose())
+    } else {
+      wc.once('destroyed', onDestroyed)
+      attach.add(() => {
+        try { wc.removeListener('destroyed', onDestroyed) } catch { /* wc gone */ }
+      })
+    }
 
     void wc.debugger.sendCommand('Network.enable').catch((err) => {
       console.warn('[network-forward] Network.enable failed:', err instanceof Error ? err.message : err)
@@ -826,12 +844,26 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
     // probing and flush anything already queued.
     const host = devtoolsWc
     const onHostDestroyed = (): void => { applyDevtoolsHost(null) }
-    // `once` is always present on a real Electron WebContents; guard so minimal
+    // Route host-destroyed teardown through the connection registry when present
+    // (the Connection fires onHostDestroyed on wc destroy / reset, and the
+    // returned Disposable releases the ownership early on host swap/clear);
+    // otherwise keep the bespoke `once('destroyed')` watcher. The
+    // `typeof host.once === 'function'` guard stays on the fallback so minimal
     // test fakes / odd hosts don't throw.
-    if (typeof host.once === 'function') host.once('destroyed', onHostDestroyed)
-    devtoolsHostDisposable = toDisposable(() => {
-      try { host.removeListener?.('destroyed', onHostDestroyed) } catch { /* gone */ }
-    })
+    const reg = bridge.connections
+    // `acquire(host)` internally arms `host.once('destroyed')`, so it must be
+    // gated by the SAME `typeof host.once === 'function'` guard the fallback
+    // uses — otherwise a minimal/fake DevTools host (no emitter) throws on the
+    // connection path where the fallback would safely no-op.
+    if (reg && typeof host.once === 'function') {
+      const owned = reg.acquire(host).own(onHostDestroyed)
+      devtoolsHostDisposable = toDisposable(() => owned.dispose())
+    } else {
+      if (typeof host.once === 'function') host.once('destroyed', onHostDestroyed)
+      devtoolsHostDisposable = toDisposable(() => {
+        try { host.removeListener?.('destroyed', onHostDestroyed) } catch { /* gone */ }
+      })
+    }
 
     beginProbing()
     if (dispatchQueue.length > 0) scheduleFlush()

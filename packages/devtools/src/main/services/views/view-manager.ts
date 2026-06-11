@@ -1,7 +1,7 @@
 import type { IpcMainEvent, WebContents } from 'electron'
 import { ipcMain, shell, WebContentsView, webContents } from 'electron'
 import path from 'path'
-import { cjsSiblingPreloadPath, mainPreloadPath } from '../../utils/paths.js'
+import { cjsSiblingPreloadPath, hostToolbarPreloadPath, mainPreloadPath } from '../../utils/paths.js'
 import {
   applyNavigationHardening,
   handleWindowOpenExternal,
@@ -23,6 +23,8 @@ import {
   type CustomApiBridgeRequest,
 } from '../simulator/custom-apis.js'
 import { getDefaultTab, type WorkbenchContext } from '../workbench-context.js'
+import { configureMiniappSession, miniappPartition } from './miniapp-partition.js'
+import { parseRoute } from '../../../shared/simulator-route.js'
 
 /**
  * Context surface used by the ViewManager. We only need a small slice of the
@@ -31,6 +33,14 @@ import { getDefaultTab, type WorkbenchContext } from '../workbench-context.js'
 export interface ViewManagerContext {
   windows: WorkbenchContext['windows']
   rendererDir: string
+  /**
+   * Per-webContents connection registry (foundation.md §4). The native-host
+   * simulator WebContentsView is acquired here so the registry tracks that
+   * trusted webContents and tears its per-wc resources (the custom-api bridge
+   * `ipcMain.on`) down deterministically on destroy — see P1 DoD #3. Required:
+   * `createWorkbenchContext` always supplies it.
+   */
+  connections: WorkbenchContext['connections']
   /**
    * Absolute path to the simulator preload bundle. Only consumed by the
    * native-host simulator WebContentsView (`attachNativeSimulator`); the
@@ -147,6 +157,13 @@ export interface ViewManager {
   getSettingsWebContentsId(): number | null
   /** Return the webContents ID of the popover overlay if alive, else null. */
   getPopoverWebContentsId(): number | null
+  /**
+   * Return the webContents ID of the host-toolbar overlay if alive, else null.
+   * The host-toolbar WCV is the one overlay whose OWN renderer drives an IPC
+   * channel back to main (the reverse size-advertiser), so the sender policy
+   * must trust its id — see `createWorkbenchSenderPolicy`.
+   */
+  getHostToolbarWebContentsId(): number | null
 
   // ── Compound operations (used by IPC handlers) ────────────────────────
   /**
@@ -178,6 +195,53 @@ export interface ViewManager {
    * alive so re-showing it doesn't re-pay the DevTools bootstrap.
    */
   setSimulatorDevtoolsBounds(bounds: { x: number; y: number; width: number; height: number }): void
+
+  // ── Host-controllable toolbar WebContentsView ─────────────────────────
+  /**
+   * Apply a renderer-measured rectangle to the host-controllable toolbar
+   * WebContentsView (the strip above the devtools header). Forward anchor,
+   * mirroring `setSimulatorDevtoolsBounds`. `{ width: 0, height: 0 }` is
+   * treated as "hide" — the view is removed from the contentView but its
+   * WebContents (and the host's loaded content) stays alive. Lazily creates
+   * the view on the first non-empty rect.
+   */
+  setHostToolbarBounds(bounds: { x: number; y: number; width: number; height: number }): void
+  /**
+   * Reverse size-advertiser sink: the toolbar WCV's own renderer advertises
+   * its intrinsic content height (block-axis extent); we store it and push it
+   * to the main-window renderer so the placeholder div resizes (closing the
+   * dynamic-height loop).
+   */
+  setHostToolbarHeight(extent: number): void
+  /**
+   * Host-facing control surface for the toolbar WebContentsView. The downstream
+   * host loads its own content into it (`loadURL` / `loadFile`) and fully drives
+   * it. Lazily creates the underlying view on the first load call.
+   */
+  readonly hostToolbar: HostToolbarControl
+}
+
+/**
+ * The control object the downstream host uses to own the toolbar
+ * WebContentsView. Lazily backed by the view-manager's `hostToolbarView`.
+ */
+export interface HostToolbarControl {
+  /** Load a URL into the toolbar view (lazy-creates the view). */
+  loadURL(url: string): Promise<void>
+  /** Load a local file into the toolbar view (lazy-creates the view). */
+  loadFile(path: string): Promise<void>
+  /** The toolbar view's live WebContents, or null if not yet created/destroyed. */
+  readonly webContents: WebContents | null
+  /** Remove the toolbar view from the contentView and reset it (kept alive). */
+  hide(): void
+  /**
+   * Override the preload used when the toolbar view is first created. The
+   * host-shell (`launch(config)`) passes the host-controlled
+   * `toolbar.preloadPath` here; the host owns the bridge (it calls
+   * `exposeWorkbenchBridge()` itself). Must be set before the first
+   * `loadURL`/`loadFile`; `null` restores the built-in size-advertiser preload.
+   */
+  setPreloadPath(path: string | null): void
 }
 
 /**
@@ -195,7 +259,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   // CSS env(safe-area-inset-*) simulation for render-host guests (per device).
   // Driven from did-attach-webview below; re-pushed on device change via
   // reapplySafeArea. Torn down in disposeAll.
-  const safeArea = createSafeAreaController()
+  const safeArea = createSafeAreaController({ connections: ctx.connections })
 
   // ── Private mutable state ───────────────────────────────────────────────
   let simulatorView: WebContentsView | null = null
@@ -252,6 +316,15 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   // removed from the contentView but its WebContents stays alive.
   let simulatorBoundsOverride: layout.Bounds | null = null
 
+  // ── Host-controllable toolbar WebContentsView ───────────────────────────
+  // A strip above the devtools header that the downstream host loads its own
+  // content into and fully controls. Bounds come from a renderer DOM anchor
+  // (forward anchor, like the simulator DevTools overlay); its height is
+  // dynamic via a reverse size-advertiser the toolbar's own renderer drives.
+  let hostToolbarView: WebContentsView | null = null
+  let hostToolbarPreloadOverride: string | null = null
+  let hostToolbarViewAdded = false
+
   // ── Internal helpers ────────────────────────────────────────────────────
 
   function destroyViewInternal(view: WebContentsView | null): void {
@@ -306,6 +379,120 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       simulatorViewAdded = true
     }
     simulatorView.setBounds(bounds)
+  }
+
+  // ── Host-controllable toolbar WebContentsView ───────────────────────────
+
+  // Lazily create the host-toolbar view. Mirrors `showSettings` for the
+  // webPreferences shape and the native simulator for nav hardening +
+  // background color (the host may load arbitrary URLs / content). Idempotent.
+  function ensureHostToolbarView(): WebContentsView {
+    if (hostToolbarView && !hostToolbarView.webContents.isDestroyed()) {
+      return hostToolbarView
+    }
+    // Rebuilding after the host destroyed the underlying webContents: detach the
+    // dead view from the contentView and reset the added-flag so the new view
+    // gets re-mounted (otherwise the `hostToolbarViewAdded` guard would skip the
+    // addChildView and the toolbar would silently disappear).
+    if (hostToolbarView && hostToolbarViewAdded) {
+      try {
+        ctx.windows.mainWindow.contentView.removeChildView(hostToolbarView)
+      } catch { /* already removed */ }
+      hostToolbarViewAdded = false
+    }
+    const view = new WebContentsView({
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        sandbox: false,
+        // Default: the reverse size-advertiser preload that measures the host
+        // content's intrinsic height and posts it on the advertise channel so
+        // main reserves exactly that strip height (dynamic height via
+        // ViewAnchor). When the host-shell supplies its own toolbar preload
+        // (workbench config.toolbar.preloadPath), use that instead — the host
+        // owns the bridge and may install the advertiser itself.
+        preload: hostToolbarPreloadOverride ?? hostToolbarPreloadPath,
+      },
+    })
+    hostToolbarView = view
+    // Paint the surface a neutral color so growing the reserved strip never
+    // flashes white before the host content paints (mirrors the native
+    // simulator's setBackgroundColor anti-flash).
+    try { view.setBackgroundColor('#121212') } catch { /* stub may lack it */ }
+    // The host may load arbitrary URLs; route popups + cross-origin in-place
+    // navigation to the OS browser (mirror the native simulator hardening).
+    try {
+      view.webContents.setWindowOpenHandler(({ url }) => handleWindowOpenExternal(url))
+    } catch { /* stub may lack it */ }
+    return view
+  }
+
+  function setHostToolbarBounds(bounds: layout.Bounds): void {
+    if (ctx.windows.mainWindow.isDestroyed()) return
+    // Zero-area rect means "hide" — remove the child view but keep its
+    // WebContents (and the host's loaded content) alive. Do NOT create the
+    // view just to immediately hide it.
+    if (isHidden(bounds)) {
+      if (hostToolbarView && hostToolbarViewAdded && !hostToolbarView.webContents.isDestroyed()) {
+        try {
+          ctx.windows.mainWindow.contentView.removeChildView(hostToolbarView)
+        } catch { /* already removed */ }
+      }
+      hostToolbarViewAdded = false
+      return
+    }
+    const view = ensureHostToolbarView()
+    if (!hostToolbarViewAdded) {
+      // addChildView appends = topmost z-order, which is correct for a strip
+      // that sits above the devtools header.
+      ctx.windows.mainWindow.contentView.addChildView(view)
+      hostToolbarViewAdded = true
+    }
+    view.setBounds(bounds)
+  }
+
+  function setHostToolbarHeight(extent: number): void {
+    // Push the reserved height back to the main-window renderer so its
+    // placeholder div resizes (closing the dynamic-height loop). The height is
+    // not retained in main — the renderer placeholder is the single source of
+    // truth, and the forward anchor re-reports bounds from it.
+    ctx.notify.hostToolbarHeightChanged(extent)
+  }
+
+  function hideHostToolbar(): void {
+    if (hostToolbarView && hostToolbarViewAdded && !ctx.windows.mainWindow.isDestroyed()) {
+      try {
+        ctx.windows.mainWindow.contentView.removeChildView(hostToolbarView)
+      } catch { /* already removed */ }
+    }
+    hostToolbarViewAdded = false
+    // Collapse the renderer placeholder to 0 too. Otherwise its anchor keeps a
+    // non-zero reserved height and re-publishes bounds on the next window
+    // resize, silently re-adding the view we just hid (unstable hide). Zeroing
+    // the height flips the anchor to `present:false` so it stops re-publishing.
+    ctx.notify.hostToolbarHeightChanged(0)
+  }
+
+  const hostToolbar: HostToolbarControl = {
+    async loadURL(url: string): Promise<void> {
+      const view = ensureHostToolbarView()
+      await view.webContents.loadURL(url)
+    },
+    async loadFile(filePath: string): Promise<void> {
+      const view = ensureHostToolbarView()
+      await view.webContents.loadFile(filePath)
+    },
+    get webContents(): WebContents | null {
+      if (!hostToolbarView) return null
+      if (hostToolbarView.webContents.isDestroyed()) return null
+      return hostToolbarView.webContents
+    },
+    hide(): void {
+      hideHostToolbar()
+    },
+    setPreloadPath(path: string | null): void {
+      hostToolbarPreloadOverride = path
+    },
   }
 
   function applySettingsBounds(): void {
@@ -441,7 +628,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     // OUR redirected links; any other devtools "open in new tab" falls through).
     if (openInEditorWiredWcIds.has(serviceWc.id)) return
     openInEditorWiredWcIds.add(serviceWc.id)
-    serviceWc.on('devtools-open-url', (_event, url) => {
+    const onOpenUrl = (_event: Electron.Event, url: string): void => {
       const req = decodeOpenInEditorUrl(url)
       if (!req) return // not our sentinel — leave it to Electron's default path
       const rel = resourceUrlToProjectRelativePath(req.url)
@@ -450,8 +637,23 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       const line = typeof req.line === 'number' ? req.line + 1 : undefined
       const column = typeof req.column === 'number' ? req.column + 1 : undefined
       ctx.notify.editorOpenFile({ path: rel, line, column })
+    }
+    serviceWc.on('devtools-open-url', onOpenUrl)
+    // Consolidate teardown onto the connection layer (foundation.md §4 / P2),
+    // but as a wc-LIFETIME resource: the open-in-editor wiring inspects this
+    // service-host wc and must SURVIVE pool reuse (`reset`) — the dedup set
+    // entry + listener stay valid across sessions reusing the same wc, and the
+    // early-return dedup above correctly skips re-wiring after a reset. So we
+    // register on `'closed'` (fires only on real wc destroy), NOT `own()`
+    // (which also fires on `reset` and would leave the wc un-wired after reuse
+    // because re-pointing the same wc.id early-returns). acquire() is
+    // idempotent — bridge-router owning session-scoped resources on the same
+    // serviceWc connection coexists cleanly.
+    const conn = ctx.connections.acquire(serviceWc)
+    conn.on('closed', () => {
+      openInEditorWiredWcIds.delete(serviceWc.id)
+      try { serviceWc.removeListener('devtools-open-url', onOpenUrl) } catch { /* wc gone */ }
     })
-    serviceWc.once('destroyed', () => openInEditorWiredWcIds.delete(serviceWc.id))
   }
 
   // Point the right-panel Chrome DevTools front-end at `next` — the SERVICE HOST
@@ -648,7 +850,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       try {
         stopElementsForward?.()
       } catch { /* prior disposer already gone */ }
-      stopElementsForward = installElementsForward({ devtoolsWc, bridge: ctx.bridge })
+      stopElementsForward = installElementsForward({ devtoolsWc, bridge: ctx.bridge, connections: ctx.connections })
       devtoolsWc.once('destroyed', () => {
         try { stopElementsForward?.() } catch { /* already stopped */ }
         stopElementsForward = null
@@ -751,7 +953,14 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
 
     nativeCustomApiBridgeHandler = handler
     ipcMain.on(SimulatorCustomApiBridgeChannel.Request, handler)
-    simWc.once('destroyed', detachNativeCustomApiBridge)
+    // Consolidate this per-webContents teardown onto the connection layer
+    // (foundation.md §4 / P1 DoD #3): acquiring the simWc connection makes the
+    // registry track this trusted webContents, and `own()`-ing the detach ties
+    // the ipcMain listener's lifetime to the connection so it's torn down
+    // deterministically when the wc is destroyed (or the connection is reset),
+    // instead of a bespoke `once('destroyed')`. The detach stays idempotent, so
+    // the defensive re-attach path calling it directly remains safe.
+    ctx.connections.acquire(simWc).own(detachNativeCustomApiBridge)
   }
 
   function attachNativeSimulator(simulatorUrl: string, simWidth: number): void {
@@ -778,12 +987,23 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       nativeSimulatorView = null
     }
 
+    // Derive THIS project's session partition from the simulator URL's appId so
+    // its cookies/localStorage/cache are isolated from every other project (P0
+    // debt). Same project → same partition (storage survives a relaunch);
+    // unknown appId → the shared fallback. Configure the partition's session
+    // (protocol handlers + CORS/referer policy) before any project content loads
+    // on it — idempotent per partition.
+    const route = parseRoute(simulatorUrl)
+    const partition = miniappPartition(route?.appId)
+    configureMiniappSession(partition)
+
     // The simulator preload is a CJS bundle; webPreferences.preload obeys the
     // `.js` + "type":"module" ESM rule (require would be undefined), so hand the
     // top-level WebContentsView the `.cjs` sibling. contextIsolation:false +
     // sandbox:false + webviewTag:true mirror what the default `<webview>` guest
-    // runs with, and `partition:'persist:simulator'` shares storage + the
-    // session-registered preload/CORS rules with the rest of the simulator.
+    // runs with, and the per-project `persist:miniapp-<key>` partition shares
+    // storage + the session-registered preload/CORS rules with the rest of THIS
+    // project's simulator (render guests + service host), never other projects'.
     const view = new WebContentsView({
       webPreferences: {
         nodeIntegration: false,
@@ -791,7 +1011,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
         sandbox: false,
         webviewTag: true,
         preload: cjsSiblingPreloadPath(ctx.preloadPath),
-        partition: 'persist:simulator',
+        partition,
       },
     })
     nativeSimulatorView = view
@@ -808,13 +1028,14 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     attachNativeCustomApiBridge(simWc)
 
     // DeviceShell mounts per-page render-host `<webview>`s INSIDE this view.
-    // Mirror windows/main-window/create.ts: pin them onto persist:simulator and
-    // run them with contextIsolation/sandbox off so the render runtime + its
-    // preload share the page realm. (A top-level WebContentsView can host these
-    // guests; a `<webview>` guest cannot — that's the whole point of Option A.)
+    // Pin them onto the SAME per-project partition as their host WCV (so render
+    // and the rest of this project share one localStorage/cookie jar) and run
+    // them with contextIsolation/sandbox off so the render runtime + its preload
+    // share the page realm. (A top-level WebContentsView can host these guests; a
+    // `<webview>` guest cannot — that's the whole point of Option A.)
     simWc.on('will-attach-webview', (_event, webPreferences, params) => {
-      ;(webPreferences as Electron.WebPreferences).partition = 'persist:simulator'
-      params.partition = 'persist:simulator'
+      ;(webPreferences as Electron.WebPreferences).partition = partition
+      params.partition = partition
       webPreferences.contextIsolation = false
       ;(webPreferences as Electron.WebPreferences).sandbox = false
     })
@@ -1056,6 +1277,11 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
 
   function disposeAll(): void {
     detachSimulator()
+    // Host-controllable toolbar view: removed from the contentView + its
+    // WebContents closed (the host's loaded content is torn down on app exit).
+    destroyViewInternal(hostToolbarView)
+    hostToolbarView = null
+    hostToolbarViewAdded = false
     safeArea.dispose()
   }
 
@@ -1164,9 +1390,17 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       if (popoverView.webContents.isDestroyed()) return null
       return popoverView.webContents.id
     },
+    getHostToolbarWebContentsId: () => {
+      if (!hostToolbarView) return null
+      if (hostToolbarView.webContents.isDestroyed()) return null
+      return hostToolbarView.webContents.id
+    },
     setNativeSimulatorViewBounds,
     resize,
     setVisible,
     setSimulatorDevtoolsBounds,
+    setHostToolbarBounds,
+    setHostToolbarHeight,
+    hostToolbar,
   }
 }

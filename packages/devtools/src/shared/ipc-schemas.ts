@@ -64,12 +64,6 @@ export const PopoverShowSchema = z.tuple([z.looseObject({})])
  */
 const SimWidth = z.number().int().min(100).max(2000)
 
-/** simulator:attach — webContents id (positive int) + simulator width. */
-export const SimulatorAttachSchema = z.tuple([
-  z.number().int().positive(),
-  SimWidth,
-])
-
 /**
  * simulator:attach-native (native-host only) — the simulator URL to load into
  * the top-level WebContentsView + simulator width. The URL is the dev-server
@@ -144,6 +138,18 @@ export const ViewBoundsSchema = z.tuple([
     y: NonNegInt,
     width: NonNegInt,
     height: NonNegInt,
+  }),
+])
+
+/**
+ * host-toolbar reverse size-advertiser payload — the toolbar WCV renderer
+ * advertises its intrinsic content height on the block axis. Mirrors
+ * `@dimina-kit/view-anchor`'s `AdvertisedSize`.
+ */
+export const HostToolbarAdvertiseHeightSchema = z.tuple([
+  z.object({
+    axis: z.literal('block'),
+    extent: NonNegInt,
   }),
 ])
 

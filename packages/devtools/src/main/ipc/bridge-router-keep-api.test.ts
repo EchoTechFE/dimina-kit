@@ -162,6 +162,7 @@ vi.mock('../windows/service-host-window/create.js', () => ({
 import { BRIDGE_CHANNELS as C } from '../../shared/bridge-channels.js'
 import type { ApiResponsePayload, MessageEnvelope, ServiceInvokePayload, SpawnRequest, SpawnResult } from '../../shared/bridge-channels.js'
 import type { WorkbenchContext } from '../services/workbench-context.js'
+import { createConnectionRegistry } from '@dimina-kit/electron-deck/main'
 
 type AnyFn = (...args: unknown[]) => unknown
 type MockWc = ReturnType<typeof stubs.makeWebContents>
@@ -191,6 +192,10 @@ function makeCtx(): { ctx: WorkbenchContext; simulatorWc: MockWc } {
   const simulatorWc = stubs.makeWebContents()
   const ctx = {
     registry: { add: (_fn: AnyFn) => {} },
+    // bridge-router now acquires a Connection for the service-host wc at spawn
+    // (foundation.md §4.3); a real registry satisfies that without affecting
+    // these keep-API assertions.
+    connections: createConnectionRegistry(),
     simulatorApis: { has: (_name: string) => false, invoke: async () => ({}) },
     windows: { mainWindow: { webContents: simulatorWc } },
     workspace: { getSession: () => undefined },

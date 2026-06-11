@@ -1,6 +1,6 @@
 import type { IpcMainEvent, IpcMainInvokeEvent, WebContents } from 'electron'
 import { ipcMain } from 'electron'
-import { DisposableRegistry, type Disposable } from './disposable.js'
+import { DisposableRegistry, type Disposable } from '@dimina-kit/electron-deck/main'
 import { IpcValidationError } from './ipc-schema.js'
 import { createLogger } from './logger.js'
 
@@ -49,6 +49,41 @@ function summarizeSender(sender: WebContents): string {
 }
 
 /**
+ * Defense-in-depth frame check (sits alongside the sender white-list). A trusted
+ * webContents could embed a sub-frame of arbitrary origin; only its top (main)
+ * frame should reach gated IPC, so a sub-frame can't spoof the trusted sender.
+ *
+ * Verified on Electron 41 that `event.senderFrame` is reliably present on
+ * invoke / send / sendSync — including the editor's `beforeunload` sendSync
+ * write — and equals `sender.mainFrame` for top-frame traffic, so this never
+ * mis-rejects legitimate callers.
+ *
+ * Fail-closed on a null frame for REAL events: a sub-frame can send a message
+ * and immediately navigate/destroy itself, so by delivery time `senderFrame`
+ * resolves to null — allowing that would let the navigate-after-send trick
+ * bypass the boundary. A real Electron event always exposes the `senderFrame`
+ * property and `sender.mainFrame`, so we can tell a real event (frame-modeled,
+ * possibly null) from a frame-unaware unit-test stub (neither present) and only
+ * skip the check for the latter (the sender-id white-list still gates tests).
+ */
+type FrameRef = { routingId: number; processId: number } | null | undefined
+function isMainFrameSender(event: IpcMainEvent | IpcMainInvokeEvent): boolean {
+  // Read via loose casts: the Electron types declare these always-present, but
+  // unit-test stubs legitimately omit them — and real events can carry a null
+  // senderFrame after navigation/destruction.
+  const frame = (event as { senderFrame?: FrameRef }).senderFrame
+  const main = (event.sender as { mainFrame?: FrameRef }).mainFrame
+  // Frame-unaware stub (NEITHER field modeled) → not a real frame boundary; the
+  // sender-id white-list is the gate. Real events always have both, so they fall
+  // through to the strict check; a partial/malformed event (only one field) also
+  // falls through and fail-closes below rather than escaping here.
+  if (frame === undefined && main === undefined) return true
+  // Real event, unresolvable frame (navigate-after-send / destroyed) → reject.
+  if (frame == null || main == null) return false
+  return frame.routingId === main.routingId && frame.processId === main.processId
+}
+
+/**
  * Tiny fluent helper that wraps every `ipcMain.handle` / `ipcMain.on` with a
  * matching removeHandler/removeListener registered into an internal registry.
  *
@@ -79,7 +114,7 @@ export class IpcRegistry implements Disposable {
     const guarded: HandleFn = policy
       ? async (event: IpcMainInvokeEvent, ...args: unknown[]) => {
           const sender = event.sender
-          if (!policy(sender)) {
+          if (!policy(sender) || !isMainFrameSender(event)) {
             console.warn(
               `[ipc] sender rejected for channel '${channel}' (${summarizeSender(sender)})`,
             )
@@ -109,7 +144,7 @@ export class IpcRegistry implements Disposable {
       // set, so an unset value (e.g. a throwing policy fn) would hang the
       // renderer forever; the catch guarantees a sentinel instead.
       try {
-        if (policy && !policy(event.sender)) {
+        if (policy && (!policy(event.sender) || !isMainFrameSender(event))) {
           console.warn(
             `[ipc] sender rejected for channel '${channel}' (${summarizeSender(event.sender)})`,
           )
@@ -157,7 +192,7 @@ export class IpcRegistry implements Disposable {
     const guarded: ListenerFn = policy
       ? (event: IpcMainEvent, ...args: unknown[]) => {
           const sender = event.sender
-          if (!policy(sender)) {
+          if (!policy(sender) || !isMainFrameSender(event)) {
             console.warn(
               `[ipc] sender rejected for channel '${channel}' (${summarizeSender(sender)})`,
             )

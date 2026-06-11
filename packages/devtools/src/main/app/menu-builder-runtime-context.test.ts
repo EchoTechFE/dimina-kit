@@ -9,7 +9,7 @@
  * `installMenu` can still hand `config.menuBuilder` the full
  * `WorkbenchContext` value.
  *
- * This suite closes that gap. It drives a real app through `createWorkbenchApp`
+ * This suite closes that gap. It drives a real app through `createDevtoolsRuntime`
  * (same exhaustive electron mock + `onSetup`-style capture seam as
  * `instance-ipc-extension.test.ts`), passes a host `menuBuilder`, and
  * inspects the *value* it receives:
@@ -26,7 +26,7 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
-// ── electron stub: minimal but exhaustive enough to boot createWorkbenchApp ──
+// ── electron stub: minimal but exhaustive enough to boot createDevtoolsRuntime ──
 const stubs = vi.hoisted(() => {
   type AnyFn = (...args: unknown[]) => unknown
   type EventBag = Record<string, Set<AnyFn>>
@@ -200,25 +200,25 @@ vi.mock('@dimina-kit/devkit', () => ({
   openProject: vi.fn(() => Promise.resolve({ port: 0, appInfo: {}, close: () => Promise.resolve() })),
 }))
 
-let createWorkbenchApp: typeof import('./app.js').createWorkbenchApp
+let createDevtoolsRuntime: typeof import('./app.js').createDevtoolsRuntime
 
 beforeEach(async () => {
   vi.resetModules()
   stubs.reset()
-  ;({ createWorkbenchApp } = await import('./app.js'))
+  ;({ createDevtoolsRuntime } = await import('./app.js'))
 })
 
 /**
- * Drives `createWorkbenchApp` with a host `menuBuilder` and returns the
+ * Drives `createDevtoolsRuntime` with a host `menuBuilder` and returns the
  * runtime `context` value that `installMenu` actually handed to it.
  */
 async function captureMenuContext(): Promise<Record<string, unknown>> {
   let captured: Record<string, unknown> | undefined
-  const instance = await createWorkbenchApp({
+  const instance = await createDevtoolsRuntime({
     menuBuilder: (_mainWindow, menuContext) => {
       captured = menuContext as unknown as Record<string, unknown>
     },
-  }).setup()
+  })
 
   expect(captured, 'menuBuilder must be invoked with the runtime menu context').toBeDefined()
   await instance.dispose()

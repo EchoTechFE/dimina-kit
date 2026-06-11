@@ -1,0 +1,47 @@
+{
+  "_comment": "Words that the docs may name inside backticks that are NOT electron-deck exports. Each entry must be justified — a reviewer should be able to sanity-check why a documented symbol is allowed despite not appearing in the package export surface. Adding a name here is an explicit decision, not a silencer. See scripts/check-docs-api-sync.mjs.",
+
+  "_devtools_entry_symbols": "Host-integration symbols the docs legitimately reference that are exported by @dimina-kit/devtools (not this package): launch() lives there to avoid a circular dep, and WorkbenchConfig/WorkbenchAppConfig are the devtools-side host config types.",
+  "launch": true,
+  "WorkbenchConfig": true,
+  "WorkbenchAppConfig": true,
+
+  "_documented_as_removed": "Old API name the docs mention only to say it no longer exists ('已被它取代、不复存在'). Kept so the historical note is allowed; the *current* drift name (createWorkbenchClient) is intentionally NOT here so substituting it still fails.",
+  "createWorkbenchApp": true,
+
+  "_ts_builtins_and_globals": "TypeScript / JS built-ins and standard globals used in type positions inside code spans.",
+  "Awaited": true,
+  "Parameters": true,
+  "ReturnType": true,
+  "Record": true,
+  "Promise": true,
+  "Error": true,
+  "Date": true,
+  "Map": true,
+  "Set": true,
+  "URL": true,
+
+  "_electron_types": "Electron runtime types referenced by the host-integration docs.",
+  "BrowserWindow": true,
+  "WebContentsView": true,
+
+  "_electron_apis": "Electron runtime methods/APIs called in example code, not electron-deck exports.",
+  "exposeInMainWorld": true,
+  "isVisible": true,
+
+  "_host_example_types": "Host-authored example type aliases in the docs' sample config (e.g. `export type HostServices = typeof hostServices`) — illustrative, defined by the downstream host, not exported by this package.",
+  "HostServices": true,
+  "SimulatorApis": true,
+
+  "_brand_strings": "App brand-name strings used in `app.name` examples, not symbols.",
+  "DevTools": true,
+
+  "_devtools_internal_runtime": "Implementation detail named in prose, not part of the electron-deck public surface.",
+  "createDevtoolsRuntime": true,
+  "IpcRegistry": true,
+
+  "_doc_local_type_params": "Single/short type-parameter and example identifiers local to a code snippet (generics, example component names) — not package exports.",
+  "HS": true,
+  "EV": true,
+  "My": true
+}

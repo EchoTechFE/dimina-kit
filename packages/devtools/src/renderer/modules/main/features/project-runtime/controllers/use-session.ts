@@ -4,7 +4,6 @@ import {
   useRef,
   useState,
 } from 'react'
-import type { RefObject } from 'react'
 import {
   getCompileConfig,
   getPreloadPath,
@@ -14,26 +13,12 @@ import {
   saveCompileConfig,
 } from '@/shared/api'
 import type { AppInfo } from '@/shared/api'
-import {
-  buildSimulatorUrl,
-  collapseRouteToTopPage,
-} from '../../../../../../shared/simulator-route'
 import type { CompileConfig } from '@/shared/types'
 import { DEFAULT_SCENE } from '../../../../../../shared/constants'
-import { asWebview, forceFullNavigate } from './webview-helpers'
 import type { CompileStatus } from './use-project-runtime-controller'
 
 export interface UseSessionProps {
   projectPath: string
-  simulatorRef: RefObject<HTMLElement | null>
-  /**
-   * NATIVE-HOST ONLY. Under native-host the simulator is a main-process
-   * WebContentsView, so there is no renderer `<webview>` to `loadURL`. A
-   * relaunch instead re-publishes the compile config; `use-simulator.ts`'s
-   * native-attach effect then re-runs `attachNativeSimulator` with the new
-   * start-page URL, which tears down + respawns the DeviceShell at that page.
-   */
-  nativeHost: boolean
 }
 
 export interface SessionHookResult {
@@ -47,7 +32,7 @@ export interface SessionHookResult {
 }
 
 export function useSession(props: UseSessionProps): SessionHookResult {
-  const { projectPath, simulatorRef, nativeHost } = props
+  const { projectPath } = props
 
   const [compileStatus, setCompileStatus] = useState<CompileStatus>({
     status: 'compiling',
@@ -119,113 +104,31 @@ export function useSession(props: UseSessionProps): SessionHookResult {
   useEffect(() => {
     return onProjectStatus((data) => {
       setCompileStatus(data)
-      // Watch-triggered rebuild → reload the simulator so the user sees fresh
-      // pages without manually clicking "重新编译". The fe live-reload SSE only
-      // injects into the container SPA, not the simulator host page, so the
-      // reload has to come from here in the renderer.
-      if (data.hotReload) {
-        const webview = asWebview(simulatorRef)
-        if (!webview) return
-        // Collapse any accumulated page stack to the top page before reload.
-        // The compiler emits one bundle per page; a stacked hash would make
-        // pageFrame request a merged bundle that doesn't exist and render
-        // blank. Trimming preserves the current page the user is looking at.
-        const collapsed = collapseRouteToTopPage(webview.getURL?.() ?? '')
-        forceFullNavigate(webview, collapsed)
-      }
     })
-  }, [simulatorRef])
+  }, [])
 
   const isRefreshing = useRef(false)
-  const cleanupRelaunchRef = useRef<(() => void) | null>(null)
-
-  useEffect(() => {
-    return () => {
-      cleanupRelaunchRef.current?.()
-    }
-  }, [])
 
   const relaunch = useCallback(
     async (nextConfig: CompileConfig = compileConfig) => {
       try {
         if (!appInfo?.appId || isRefreshing.current) return
 
-        // ── Native-host relaunch ──────────────────────────────────────────────
         // Under native-host the simulator is a main-process WebContentsView, so
         // there is no renderer `<webview>` to `loadURL`. Re-publishing the
         // compile config changes `simulatorUrl`, and `use-simulator.ts`'s native
         // attach effect re-runs `attachNativeSimulator(newUrl)`, which tears down
-        // the old DeviceShell and respawns it at the new start page. Without this
-        // the no-webview guard below would make popover page-switch a no-op.
-        if (nativeHost) {
-          isRefreshing.current = true
-          setCompileStatus({ status: 'ready', message: '正在刷新...' })
-          try {
-            await saveCompileConfig(projectPath, nextConfig)
-            // Triggers the native re-attach effect (simulatorUrl depends on this).
-            setCompileConfig(nextConfig)
-            setCompileStatus({ status: 'ready', message: '刷新完成' })
-          } finally {
-            isRefreshing.current = false
-          }
-          return
-        }
-
-        const webview = asWebview(simulatorRef)
-        if (!webview) return
-
-        cleanupRelaunchRef.current?.()
-        cleanupRelaunchRef.current = null
-
+        // the old DeviceShell and respawns it at the new start page.
         isRefreshing.current = true
-
-        await saveCompileConfig(projectPath, nextConfig)
-        // DON'T update compileConfig before navigation — that would change
-        // simulatorUrl → React updates <webview src> → double navigation
-        // with loadURL → ERR_FAILED. Update config AFTER navigation succeeds.
         setCompileStatus({ status: 'ready', message: '正在刷新...' })
-
-        const targetUrl = buildSimulatorUrl(appInfo.appId, nextConfig, port)
-        let settled = false
-        let timer: ReturnType<typeof setTimeout> | null = null
-
-        const finish = (status: string, message: string) => {
-          if (settled) return
-          settled = true
-          isRefreshing.current = false
-          cleanupRelaunchRef.current = null
-          if (timer) clearTimeout(timer)
-          webview.removeEventListener?.('did-finish-load', onDone as EventListener)
-          webview.removeEventListener?.('did-stop-loading', onDone as EventListener)
-          webview.removeEventListener?.('did-fail-load', onFail as EventListener)
-          // Sync React state with the navigated URL AFTER navigation completes
+        try {
+          await saveCompileConfig(projectPath, nextConfig)
+          // Triggers the native re-attach effect (simulatorUrl depends on this).
           setCompileConfig(nextConfig)
-          setCompileStatus({ status, message })
+          setCompileStatus({ status: 'ready', message: '刷新完成' })
+        } finally {
+          isRefreshing.current = false
         }
-        const onDone = () => {
-          const current = webview.getURL?.() ?? ''
-          const targetHash = targetUrl.split('#')[1] ?? ''
-          const currentHash = current.split('#')[1] ?? ''
-          if (targetHash && currentHash !== targetHash) return
-          finish('ready', '刷新完成')
-        }
-        const onFail = (_event: Event) => {
-          const code = (_event as Event & { errorCode?: number }).errorCode
-          if (code === -3) return // ERR_ABORTED from intermediate navigation
-          finish('error', '刷新失败')
-        }
-
-        webview.addEventListener?.('did-finish-load', onDone as EventListener)
-        webview.addEventListener?.('did-stop-loading', onDone as EventListener)
-        webview.addEventListener?.('did-fail-load', onFail as EventListener)
-
-        cleanupRelaunchRef.current = () => finish('error', '已取消')
-
-        timer = setTimeout(() => {
-          finish('error', '刷新超时')
-        }, 30000)
-
-        forceFullNavigate(webview, targetUrl)
       } catch (error) {
         isRefreshing.current = false
         setCompileStatus({
@@ -234,7 +137,7 @@ export function useSession(props: UseSessionProps): SessionHookResult {
         })
       }
     },
-    [appInfo, compileConfig, port, projectPath, simulatorRef, nativeHost],
+    [appInfo, compileConfig, projectPath],
   )
 
   return {

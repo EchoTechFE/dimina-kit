@@ -1,9 +1,5 @@
 /**
- * TDD red-phase tests for `installThemeBackgroundSync`.
- *
- * The function is NOT yet implemented — these tests are expected to fail
- * with a TypeError ("installThemeBackgroundSync is not a function" or
- * "is not exported"), NOT with mock/import errors.
+ * Tests for `installThemeBackgroundSync`.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 

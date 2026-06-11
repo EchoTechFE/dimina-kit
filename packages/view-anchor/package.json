@@ -1,7 +1,6 @@
 {
   "name": "@dimina-kit/view-anchor",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
   "description": "Engine-agnostic primitive that keeps a main-process native view (Electron WebContentsView) aligned to a DOM element's geometry.",
   "keywords": [
     "dimina",
@@ -11,6 +10,7 @@
     "react"
   ],
   "type": "module",
+  "sideEffects": false,
   "engines": {
     "node": ">=20"
   },
@@ -31,6 +31,7 @@
     ".": "./src/index.ts"
   },
   "files": [
+    "dist",
     "src",
     "docs",
     "README.md",
@@ -66,5 +67,16 @@
     "react-dom": "^18.3.1",
     "typescript": "5.9.2",
     "vitest": "^4.1.4"
+  },
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
   }
 }

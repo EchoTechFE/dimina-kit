@@ -283,7 +283,9 @@ var __viewAnchorCore = (() => {
   // src/view-anchor.ts
   var view_anchor_exports = {};
   __export(view_anchor_exports, {
-    createViewAnchor: () => createViewAnchor
+    createPlacementAnchor: () => createPlacementAnchor,
+    createViewAnchor: () => createViewAnchor,
+    measurePlacement: () => measurePlacement
   });
   var ZERO = { x: 0, y: 0, width: 0, height: 0 };
   var clampRect = (r) => ({
@@ -346,6 +348,184 @@ var __viewAnchorCore = (() => {
         if (disposed) return;
         disposed = true;
         stopObserving();
+      }
+    };
+  }
+  function measurePlacement(target) {
+    const r = target.getBoundingClientRect();
+    return {
+      visible: true,
+      bounds: clampRect({ x: r.left, y: r.top, width: r.width, height: r.height })
+    };
+  }
+  var samePlacement = (a, b) => {
+    if (a.visible !== b.visible) return false;
+    if (a.visible && b.visible) {
+      return a.bounds.x === b.bounds.x && a.bounds.y === b.bounds.y && a.bounds.width === b.bounds.width && a.bounds.height === b.bounds.height;
+    }
+    return true;
+  };
+  function createPlacementAnchor(target, opts) {
+    let visible = opts.visible;
+    let publish = opts.publish;
+    const guardDisplayNone = opts.guardDisplayNone ?? false;
+    const followScroll = opts.followScroll ?? false;
+    const followGeometry = opts.followGeometry ?? false;
+    let observer = null;
+    let io = null;
+    let lastPublished = null;
+    let disposed = false;
+    let rafId = null;
+    let steadyFrames = 0;
+    const STEADY_CLOSE_FRAMES = 2;
+    let pointerHeld = false;
+    let sentinelDeadline = null;
+    const computePlacement = () => {
+      const p = measurePlacement(target);
+      if (guardDisplayNone && p.visible && (p.bounds.width === 0 || p.bounds.height === 0)) {
+        return { visible: false };
+      }
+      return p;
+    };
+    const emit = () => {
+      if (disposed || !visible) return;
+      const p = computePlacement();
+      if (lastPublished && samePlacement(lastPublished, p)) return;
+      lastPublished = p;
+      publish(p);
+    };
+    const sentinelFrame = () => {
+      rafId = null;
+      if (disposed || !visible) {
+        sentinelDeadline = null;
+        return;
+      }
+      if (sentinelDeadline !== null && performance.now() >= sentinelDeadline) {
+        sentinelDeadline = null;
+        return;
+      }
+      const p = computePlacement();
+      if (lastPublished && samePlacement(lastPublished, p)) {
+        steadyFrames++;
+        if (steadyFrames >= STEADY_CLOSE_FRAMES && !pointerHeld) {
+          sentinelDeadline = null;
+          return;
+        }
+      } else {
+        lastPublished = p;
+        publish(p);
+        steadyFrames = 0;
+      }
+      if (!disposed && visible) {
+        rafId = requestAnimationFrame(sentinelFrame);
+      } else {
+        sentinelDeadline = null;
+      }
+    };
+    const openSentinel = () => {
+      if (!followGeometry || disposed) return;
+      steadyFrames = 0;
+      if (rafId === null) rafId = requestAnimationFrame(sentinelFrame);
+    };
+    const closeSentinel = () => {
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+      steadyFrames = 0;
+      sentinelDeadline = null;
+      pointerHeld = false;
+    };
+    const onScroll = () => {
+      if (followGeometry) openSentinel();
+      else emit();
+    };
+    const onPointerDown = (e) => {
+      const t = e.target;
+      if (t && t.closest && t.closest('[role="separator"]')) {
+        pointerHeld = true;
+        openSentinel();
+      }
+    };
+    const onPointerUp = () => {
+      if (!pointerHeld) return;
+      pointerHeld = false;
+      openSentinel();
+    };
+    const startObserving = () => {
+      if (observer) return;
+      observer = new ResizeObserver(emit);
+      observer.observe(target);
+      window.addEventListener("resize", emit);
+      if (guardDisplayNone && typeof IntersectionObserver !== "undefined") {
+        io = new IntersectionObserver(emit);
+        io.observe(target);
+      }
+      if (followScroll) {
+        window.addEventListener("scroll", onScroll, {
+          capture: true,
+          passive: true
+        });
+      }
+      if (followGeometry) {
+        window.addEventListener("pointerdown", onPointerDown, { capture: true });
+        window.addEventListener("pointerup", onPointerUp, { capture: true });
+      }
+    };
+    const stopObserving = () => {
+      if (observer) {
+        observer.disconnect();
+        observer = null;
+      }
+      if (io) {
+        io.disconnect();
+        io = null;
+      }
+      window.removeEventListener("resize", emit);
+      window.removeEventListener("scroll", onScroll, {
+        capture: true
+      });
+      window.removeEventListener("pointerdown", onPointerDown, {
+        capture: true
+      });
+      window.removeEventListener("pointerup", onPointerUp, {
+        capture: true
+      });
+      closeSentinel();
+    };
+    const apply = () => {
+      lastPublished = null;
+      if (visible) {
+        startObserving();
+        lastPublished = computePlacement();
+        publish(lastPublished);
+      } else {
+        stopObserving();
+        const hidden = { visible: false };
+        lastPublished = hidden;
+        publish(hidden);
+      }
+    };
+    apply();
+    return {
+      update(next) {
+        if (disposed) return;
+        publish = next.publish;
+        visible = next.visible;
+        apply();
+      },
+      dispose() {
+        if (disposed) return;
+        disposed = true;
+        stopObserving();
+      },
+      pulse(durationMs) {
+        if (disposed || !followGeometry) return;
+        if (durationMs !== void 0 && durationMs > 0) {
+          const next = performance.now() + durationMs;
+          sentinelDeadline = sentinelDeadline === null ? next : Math.max(sentinelDeadline, next);
+        }
+        openSentinel();
       }
     };
   }

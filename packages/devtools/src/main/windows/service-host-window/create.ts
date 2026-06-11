@@ -3,9 +3,15 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { devtoolsPackageRoot } from '../../utils/paths.js'
 import type { ServiceHostSpec } from '../../services/service-host-pool/pool.js'
+import { configureMiniappSession, miniappPartition, SHARED_MINIAPP_PARTITION } from '../../services/views/miniapp-partition.js'
 
-/** Session partition the service host shares with the simulator `<webview>`. */
-export const SERVICE_HOST_PARTITION = 'persist:simulator'
+/**
+ * Default service-host partition when no project `appId` is supplied (the
+ * pre-warm pool's shared, isolation-UNAWARE session — see `serviceHostSpec`).
+ * Per-project service hosts get a `persist:miniapp-<key>` partition instead so
+ * their localStorage/cookies are shared with that project's render side only.
+ */
+export const SERVICE_HOST_PARTITION = SHARED_MINIAPP_PARTITION
 
 /** Absolute path to the service-host preload (loaded at runtime by path). */
 export const serviceHostPreloadPath = path.join(devtoolsPackageRoot, 'dist/service-host/preload.cjs')
@@ -29,13 +35,17 @@ export interface ServiceHostWindowOptions {
  * globals onto the page realm).
  */
 export function constructServiceHostWindow(opts: { appId?: string; partition?: string } = {}): BrowserWindow {
+  const partition = opts.partition ?? SERVICE_HOST_PARTITION
+  // Apply the simulator runtime's protocol handlers + webRequest policies to
+  // THIS project's session before the window loads. Idempotent per partition.
+  configureMiniappSession(partition)
   return new BrowserWindow({
     width: 980,
     height: 720,
     show: false,
     title: opts.appId ? `Dimina Service Host: ${opts.appId}` : 'Dimina Service Host',
     webPreferences: {
-      partition: opts.partition ?? SERVICE_HOST_PARTITION,
+      partition,
       nodeIntegration: false,
       contextIsolation: false,
       sandbox: false,
@@ -102,12 +112,25 @@ export function navigateServiceHost(win: BrowserWindow, url: string): Promise<vo
 /**
  * The spec a `ServiceHostPool` uses to pre-warm service-host windows. Keeps the
  * pooled window byte-equivalent to `constructServiceHostWindow`'s output, and
- * opts out of the reset storage-clear because the service host shares the
- * `persist:simulator` session with live projects (see ServiceHostSpec docs).
+ * opts out of the reset storage-clear because the service host shares its
+ * session with live projects (see ServiceHostSpec docs).
+ *
+ * KNOWN BLOCKER (intentional): the pre-warm pool is NOT per-project isolation
+ * aware. It warms windows on ONE `defaultSpec` partition before any project is
+ * known, so a pooled window cannot carry a project-derived partition — handing
+ * one project's warmed window to another project would cross-contaminate
+ * storage. Therefore the pool's `defaultSpec` (and pooled `acquire`) call this
+ * with NO appId → the shared `persist:simulator` partition; per-project
+ * isolation only applies on the default (non-pooled) `createServiceHostWindow`
+ * path, which passes the project's appId. Reconciling pooling with per-project
+ * partitions (e.g. per-partition sub-pools) is out of scope for this change.
  */
-export function serviceHostSpec(): ServiceHostSpec {
+export function serviceHostSpec(appId?: string): ServiceHostSpec {
   return {
-    partition: SERVICE_HOST_PARTITION,
+    // Per-project partition when an appId is known (so this project's service
+    // host shares storage ONLY with its own render side); the shared partition
+    // for the pre-warm pool's default spec (no appId — see KNOWN BLOCKER below).
+    partition: appId ? miniappPartition(appId) : SERVICE_HOST_PARTITION,
     preloadPath: serviceHostPreloadPath,
     size: { width: 980, height: 720 },
     contextIsolation: false,
@@ -122,7 +145,10 @@ export function serviceHostSpec(): ServiceHostSpec {
  * Behavior-identical to the pre-refactor implementation.
  */
 export function createServiceHostWindow(opts: ServiceHostWindowOptions): BrowserWindow {
-  const win = constructServiceHostWindow({ appId: opts.appId })
+  // Default (non-pooled) path: pin the service host to THIS project's partition
+  // so its logic-layer localStorage/cookies are shared with the project's render
+  // side only, never with other projects.
+  const win = constructServiceHostWindow({ appId: opts.appId, partition: miniappPartition(opts.appId) })
   void navigateServiceHost(win, buildServiceHostSpawnUrl(opts))
   return win
 }

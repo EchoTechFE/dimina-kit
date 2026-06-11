@@ -51,6 +51,8 @@ vi.mock('electron', () => ({
 }))
 
 // Import AFTER the mock so the module picks up the stubs.
+import { EventEmitter } from 'node:events'
+import { createConnectionRegistry } from '@dimina-kit/electron-deck/main'
 import { SimulatorStorageChannel } from '../../../shared/ipc-channels.js'
 import { setupSimulatorStorage } from './index.js'
 
@@ -142,5 +144,56 @@ describe('setupSimulatorStorage lifecycle', () => {
     const removeCalls = ipcMainStub.removeHandler.mock.calls.length
     await d.dispose()
     expect(ipcMainStub.removeHandler.mock.calls.length).toBe(removeCalls)
+  })
+})
+
+describe('setupSimulatorStorage connection-registry teardown', () => {
+  /**
+   * A fake webContents backed by a real EventEmitter so `acquire(wc)` can arm a
+   * real `'destroyed'` hook and `emit('destroyed')` drives the connection close.
+   * Each gets a unique id (the registry keys connections by `wc.id`).
+   */
+  let nextId = 1
+  function makeFakeWc(): Electron.WebContents {
+    const ee = new EventEmitter()
+    const wc = ee as unknown as Electron.WebContents & EventEmitter
+    Object.assign(wc, {
+      id: nextId++,
+      isDestroyed: () => false,
+      getType: () => 'webview',
+      getURL: () => 'http://localhost/simulator.html',
+    })
+    return wc
+  }
+
+  it('routes per-wc destroy through connections.own and resets state without leaking', async () => {
+    const connections = createConnectionRegistry()
+    const d = setupSimulatorStorage(makeHost(), {
+      getActiveAppId: () => null,
+      connections,
+    })
+
+    // Fire the module's app.on('web-contents-created') with a fresh wc.
+    const onCreated = [...(appListeners.get('web-contents-created') ?? [])][0] as (
+      ev: unknown,
+      wc: Electron.WebContents,
+    ) => void
+    expect(onCreated).toBeTypeOf('function')
+
+    const childWc = makeFakeWc()
+    onCreated({}, childWc)
+
+    // A connection is now alive and owns this wc's per-wc cleanup.
+    const conn = connections.get((childWc as unknown as { id: number }).id)
+    expect(conn?.alive).toBe(true)
+
+    // Destroying the wc closes the connection (own() disposer runs).
+    ;(childWc as unknown as EventEmitter).emit('destroyed')
+
+    // Connection is closed (deterministic teardown) and de-registered — not leaked.
+    expect(conn?.alive).toBe(false)
+    expect(connections.get((childWc as unknown as { id: number }).id)).toBeUndefined()
+
+    await d.dispose()
   })
 })

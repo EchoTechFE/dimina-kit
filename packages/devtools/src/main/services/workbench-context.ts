@@ -5,7 +5,11 @@ import type { ConsoleForwarder } from './console-forward/index.js'
 import type { NetworkForwarder } from './network-forward/index.js'
 import type { AppDataTap } from './simulator-appdata/index.js'
 import type { StorageApi } from './simulator-storage/index.js'
-import { DisposableRegistry } from '../utils/disposable.js'
+import {
+  createConnectionRegistry,
+  DisposableRegistry,
+  type ConnectionRegistry,
+} from '@dimina-kit/electron-deck/main'
 import type { SenderPolicy } from '../utils/ipc-registry.js'
 import { createWorkbenchSenderPolicy } from '../utils/sender-policy.js'
 import { defaultAdapter } from './default-adapter.js'
@@ -134,6 +138,17 @@ export interface WorkbenchContext {
   registry: DisposableRegistry
 
   /**
+   * Per-webContents connection registry. Each trusted webContents (main window,
+   * overlay views, native simulator/render guests) is one `Connection` that
+   * owns the resources tied to its lifetime and tears them down deterministically
+   * on `webContents.once('destroyed')` (hard) or `reset(id)` (soft pool reuse).
+   * The substrate for connection-scoped resource ownership — see
+   * packages/electron-deck/docs/foundation.md §4. Domain services consume it by
+   * `own()`-ing their per-endpoint resources and observing `reset`/`closed`.
+   */
+  connections: ConnectionRegistry
+
+  /**
    * Accessor over the bridge-router's private state, set by `installBridgeRouter`.
    * Lets other main services (simulator-storage, automation, appdata) resolve
    * live render/service WebContents and the native-host flag without owning
@@ -242,6 +257,11 @@ export function createWorkbenchContext(opts: CreateContextOptions): WorkbenchCon
   } as WorkbenchContext
 
   ctx.registry = new DisposableRegistry()
+  // Empty connection registry as a first-class context field. Connections are
+  // acquired by real wiring points (app bootstrap, view-manager endpoints),
+  // NOT here — the constructor stays side-effect-free so focused unit tests can
+  // build a context with a minimal mainWindow fake.
+  ctx.connections = createConnectionRegistry()
   ctx.trustedWindowSenderIds = new Map<number, number>()
   ctx.simulatorApis = createSimulatorApiRegistry()
   ctx.toolbar = createToolbarStore()

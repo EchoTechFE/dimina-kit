@@ -13,8 +13,21 @@
  * `getBoundingClientRect`). See the design notes and the interactive 3D
  * walkthrough in `docs/` (`mechanism.mdx` / `anchor-3d.html`).
  */
-export { createViewAnchor } from './view-anchor.js'
-export type { Bounds, ViewAnchorOptions, ViewAnchorHandle } from './types.js'
+export {
+  createViewAnchor,
+  measurePlacement,
+  createPlacementAnchor,
+} from './view-anchor.js'
+export type {
+  PlacementAnchorOptions,
+  PlacementAnchorHandle,
+} from './view-anchor.js'
+export type {
+  Bounds,
+  Placement,
+  ViewAnchorOptions,
+  ViewAnchorHandle,
+} from './types.js'
 export { useViewAnchor } from './react.js'
 export type { UseViewAnchorOptions, ViewAnchorRef } from './react.js'
 export { createSizeAdvertiser } from './size-advertiser.js'

@@ -197,3 +197,41 @@ describe('IpcRegistry.handleSync (sendSync return value)', () => {
     errSpy.mockRestore()
   })
 })
+
+// NOTE: self-authored by the implementer (small additive test for the
+// `isMainFrameSender` defense-in-depth gate added alongside the sender
+// white-list). Flagged per the TDD policy.
+describe('IpcRegistry frame validation (sub-frame rejection)', () => {
+  function emitWithFrame(channel: string, frameRouting: number, mainRouting: number, ...args: unknown[]) {
+    const fakeEvent = {
+      sender: {
+        id: 1,
+        isDestroyed: () => false,
+        getURL: () => '',
+        mainFrame: { routingId: mainRouting, processId: 1 },
+      },
+      senderFrame: { routingId: frameRouting, processId: 1 },
+    }
+    const set = electronStubs.listeners.get(channel)
+    if (!set) throw new Error(`no listeners registered for '${channel}'`)
+    for (const fn of set) fn(fakeEvent, ...args)
+  }
+
+  it('rejects an on() message whose senderFrame is a sub-frame of a trusted sender', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const reg = new IpcRegistry(() => true) // sender white-listed by policy…
+    const fn = vi.fn()
+    reg.on('frame:ch', fn)
+    emitWithFrame('frame:ch', 99, 1) // …but senderFrame(99) ≠ mainFrame(1)
+    expect(fn).not.toHaveBeenCalled()
+    warnSpy.mockRestore()
+  })
+
+  it('accepts an on() message from the main frame of a trusted sender', () => {
+    const reg = new IpcRegistry(() => true)
+    const fn = vi.fn()
+    reg.on('frame:ch', fn)
+    emitWithFrame('frame:ch', 1, 1) // senderFrame === mainFrame
+    expect(fn).toHaveBeenCalledTimes(1)
+  })
+})

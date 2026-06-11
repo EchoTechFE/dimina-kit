@@ -1,7 +1,12 @@
+import type { IpcMainEvent } from 'electron'
+import { ipcMain } from 'electron'
 import { ViewChannel } from '../../shared/ipc-channels.js'
-import { ViewBoundsSchema } from '../../shared/ipc-schemas.js'
+import {
+  ViewBoundsSchema,
+  HostToolbarAdvertiseHeightSchema,
+} from '../../shared/ipc-schemas.js'
 import type { WorkbenchContext } from '../services/workbench-context.js'
-import type { Disposable } from '../utils/disposable.js'
+import type { Disposable } from '@dimina-kit/electron-deck/main'
 import { validate } from '../utils/ipc-schema.js'
 import { IpcRegistry } from '../utils/ipc-registry.js'
 
@@ -23,7 +28,7 @@ import { IpcRegistry } from '../utils/ipc-registry.js'
 export function registerViewsIpc(
   ctx: Pick<WorkbenchContext, 'views' | 'senderPolicy'>,
 ): Disposable {
-  return new IpcRegistry(ctx.senderPolicy)
+  const registry = new IpcRegistry(ctx.senderPolicy)
     .handle(ViewChannel.SimulatorDevtoolsBounds, (_event, ...args: unknown[]) => {
       const [bounds] = validate(
         ViewChannel.SimulatorDevtoolsBounds,
@@ -32,4 +37,48 @@ export function registerViewsIpc(
       )
       ctx.views.setSimulatorDevtoolsBounds(bounds)
     })
+    // Host-controllable toolbar: forward anchor (the MAIN renderer measures the
+    // placeholder rect → toolbar WCV bounds). invoke, mirroring
+    // SimulatorDevtoolsBounds. Sender is the trusted main renderer.
+    .handle(ViewChannel.HostToolbarBounds, (_event, ...args: unknown[]) => {
+      const [bounds] = validate(
+        ViewChannel.HostToolbarBounds,
+        ViewBoundsSchema,
+        args,
+      )
+      ctx.views.setHostToolbarBounds(bounds)
+    })
+
+  // Reverse size-advertiser: the toolbar WCV's OWN renderer sends this, and the
+  // host loads ARBITRARY content into that WCV. We DELIBERATELY do NOT add the
+  // toolbar wc to the global sender policy — that would trust it for ALL ~72
+  // IpcRegistry channels (project-fs / session / settings / panels
+  // executeJavaScript / storage …), a large blast radius if the host content is
+  // ever compromised. Instead this is a RAW `ipcMain.on` gated on the EXACT
+  // current host-toolbar wc id — the same precise-sender-id trust model the
+  // simulator custom-api bridge uses (view-manager `attachNativeCustomApiBridge`).
+  // The host content can reach ONLY this one channel, carrying only a
+  // non-negative integer height.
+  const onAdvertiseHeight = (event: IpcMainEvent, ...args: unknown[]): void => {
+    if (event.sender.id !== ctx.views.getHostToolbarWebContentsId()) return
+    let extent: number
+    try {
+      ;[{ extent }] = validate(
+        ViewChannel.HostToolbarAdvertiseHeight,
+        HostToolbarAdvertiseHeightSchema,
+        args,
+      )
+    } catch {
+      return // malformed payload from the host's own content — drop it
+    }
+    ctx.views.setHostToolbarHeight(extent)
+  }
+  ipcMain.on(ViewChannel.HostToolbarAdvertiseHeight, onAdvertiseHeight)
+
+  return {
+    dispose() {
+      void registry.dispose()
+      ipcMain.removeListener(ViewChannel.HostToolbarAdvertiseHeight, onAdvertiseHeight)
+    },
+  }
 }

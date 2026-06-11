@@ -1,4 +1,4 @@
-import type { Disposable } from '../utils/disposable.js'
+import type { Disposable } from '@dimina-kit/electron-deck/main'
 import type { WorkbenchContext } from './workbench-context.js'
 
 /**

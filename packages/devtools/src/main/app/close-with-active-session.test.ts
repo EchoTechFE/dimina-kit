@@ -361,12 +361,12 @@ vi.mock('@dimina-kit/devkit', () => ({
 
 // ── Lazy imports ────────────────────────────────────────────────────────
 import { WindowChannel, ProjectsChannel } from '../../shared/ipc-channels.js'
-let createWorkbenchApp: typeof import('./app.js').createWorkbenchApp
+let createDevtoolsRuntime: typeof import('./app.js').createDevtoolsRuntime
 
 beforeEach(async () => {
   vi.resetModules()
   stubs.reset()
-  ;({ createWorkbenchApp } = await import('./app.js'))
+  ;({ createDevtoolsRuntime } = await import('./app.js'))
 })
 
 describe('mainWindow close while a project session is active', () => {
@@ -375,7 +375,7 @@ describe('mainWindow close while a project session is active', () => {
     stubs.projectsWithAppJson.add(projectDir)
     stubs.setProjectsJson(JSON.stringify([]))
 
-    const instance = await createWorkbenchApp({}).setup()
+    const instance = await createDevtoolsRuntime({})
 
     // Open a project directly through the workspace service. Bypasses the
     // IPC layer because what we want to set up is "a session exists".
@@ -428,7 +428,7 @@ describe('mainWindow close while a project session is active', () => {
     stubs.projectsWithAppJson.add(projectDir)
     stubs.setProjectsJson(JSON.stringify([]))
 
-    const instance = await createWorkbenchApp({}).setup()
+    const instance = await createDevtoolsRuntime({})
     await instance.context.workspace.openProject(projectDir)
     expect(instance.context.workspace.hasActiveSession()).toBe(true)
 

@@ -20,7 +20,7 @@ import {
   decodedToInput,
   type AppDataSnapshot,
 } from '../../../shared/appdata-accumulator.js'
-import { DisposableRegistry, type Disposable } from '../../utils/disposable.js'
+import { DisposableRegistry, type Disposable } from '@dimina-kit/electron-deck/main'
 import { IpcRegistry, type SenderPolicy } from '../../utils/ipc-registry.js'
 
 export interface AppDataTap {

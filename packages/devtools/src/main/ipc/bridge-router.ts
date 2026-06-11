@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, protocol, session as electronSession, webC
 import type { IpcMainEvent, IpcMainInvokeEvent, WebContents } from 'electron'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { BRIDGE_CHANNELS as C, SIMULATOR_EVENTS as E } from '../../shared/bridge-channels.js'
+import { BRIDGE_CHANNELS as C, SIMULATOR_EVENTS as E, deviceInfoToHostEnv } from '../../shared/bridge-channels.js'
 import type { NativeDeviceInfo } from '../../shared/ipc-channels.js'
 import { isPersistentSimulatorApi } from '../../shared/simulator-api-metadata.js'
 import { devtoolsPackageRoot } from '../utils/paths.js'
@@ -34,6 +34,8 @@ import type {
   TabBarConfig,
 } from '../../shared/bridge-channels.js'
 import type { WorkbenchContext } from '../services/workbench-context.js'
+import type { ConnectionRegistry, DebugTap } from '@dimina-kit/electron-deck/main'
+import { createDebugTap } from '@dimina-kit/electron-deck/main'
 import { startDiminaResourceServer, type DiminaResourceServer } from '../services/dimina-resource-server.js'
 import {
   buildServiceHostSpawnUrl,
@@ -42,6 +44,10 @@ import {
   serviceHostSpec,
 } from '../windows/service-host-window/create.js'
 import { ServiceHostPool } from '../services/service-host-pool/pool.js'
+import {
+  registerMiniappSessionConfigurator,
+  SHARED_MINIAPP_PARTITION,
+} from '../services/views/miniapp-partition.js'
 import { createConsoleForwarder } from '../services/console-forward/index.js'
 import { STORAGE_API_NAMES } from '../services/simulator-storage/index.js'
 
@@ -63,6 +69,25 @@ function resolvePrewarmPoolSize(): number {
   const n = Number.parseInt(raw, 10)
   if (!Number.isFinite(n) || n <= 0) return 0
   return Math.min(n, PREWARM_MAX_POOL_SIZE)
+}
+
+/** debugTap (§7) is opt-in via `DIMINA_DEBUG_TAP=1` — off everywhere else. */
+function resolveDebugTapEnabled(): boolean {
+  return process.env.DIMINA_DEBUG_TAP === '1'
+}
+
+/**
+ * Compact one-line summary of a bridge payload for debugTap — the inner
+ * `msg.type` + `bridgeId`, never the full (potentially large) payload blob.
+ */
+function summarizeBridgeMsg(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== 'object') return undefined
+  const p = payload as Record<string, unknown>
+  const bridgeId = typeof p.bridgeId === 'string' ? p.bridgeId : undefined
+  const msg = p.msg as Record<string, unknown> | undefined
+  const type = msg && typeof msg.type === 'string' ? msg.type : undefined
+  const parts = [type, bridgeId ? `bridge=${bridgeId}` : undefined].filter(Boolean)
+  return parts.length > 0 ? parts.join(' ') : undefined
 }
 
 interface RawAppConfig {
@@ -159,6 +184,23 @@ interface RouterState {
   pool: ServiceHostPool | null
   /** Fan-out for render-side activity (domReady / active-page); set in install. */
   emitRenderEvent: (event: RenderEvent) => void
+  /**
+   * Per-webContents connection registry (foundation.md §4). Render guests and
+   * service-host windows are acquired here so their per-wc bookkeeping tears
+   * down with the connection (destroy → close, pool reuse → reset) instead of
+   * bespoke `once('destroyed')` listeners scattered through the router.
+   */
+  connections: ConnectionRegistry
+  /**
+   * Flag-gated ring buffer (foundation.md §7) over the cross-wc bridge message
+   * stream. Off by default (near-free no-op); when `DIMINA_DEBUG_TAP=1` it
+   * records every SERVICE_INVOKE / RENDER_INVOKE / *_PUBLISH / API_RESPONSE at
+   * the dispatch chokepoint (connection id + appSession + channel + direction)
+   * so the cross-wc state machine is inspectable. This is debugTap's first real
+   * consumer — the observability hangs on the LIVE runtime, not the
+   * not-yet-integrated async envelope.
+   */
+  debugTap: DebugTap
 }
 
 /** Default timeout for a simulator-forwarded API call. */
@@ -211,6 +253,13 @@ export interface BridgeRouterHandle {
   getDevice(): NativeDeviceInfo | null
   /** Cache the selected device + push DEVICE_CHANGE to the live simulator WC(s). */
   setDevice(device: NativeDeviceInfo): void
+  /**
+   * The flag-gated debugTap (§7) over the bridge message stream. Exposed so a
+   * hidden devtools panel / automation can read `.entries()` when
+   * `DIMINA_DEBUG_TAP=1`; a no-op snapshot otherwise. Optional so the many
+   * partial `BridgeRouterHandle` test mocks don't each have to stub it.
+   */
+  debugTap?: DebugTap
 }
 
 /**
@@ -247,6 +296,8 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
     pendingApiCalls: new Map(),
     pool: null,
     emitRenderEvent: () => {},
+    connections: ctx.connections,
+    debugTap: createDebugTap({ enabled: resolveDebugTapEnabled() }),
   }
 
   // Opt-in (default OFF) pre-warm pool for service-host windows. When enabled,
@@ -367,6 +418,7 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
         }
       }
     },
+    debugTap: state.debugTap,
   }
   ctx.bridge = bridgeHandle
 
@@ -471,7 +523,23 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
   ipcMain.on(C.DISPOSE, onDispose)
   ctx.registry.add(() => { ipcMain.removeListener(C.DISPOSE, onDispose) })
 
+  // debugTap (§7) ingress recorder — near-free no-op unless DIMINA_DEBUG_TAP=1.
+  // Hung on the bridge dispatch chokepoint so the cross-wc message flow is
+  // inspectable (the first real consumer of the workbench debugTap primitive).
+  const tapIn = (channel: string, sender: WebContents, payload: unknown): void => {
+    if (!state.debugTap.enabled) return
+    state.debugTap.record({
+      ts: Date.now(),
+      channel,
+      direction: 'in',
+      connectionId: sender.id,
+      appSessionId: appByWc(state, sender)?.appSessionId,
+      summary: summarizeBridgeMsg(payload),
+    })
+  }
+
   const onServiceInvoke = (event: IpcMainEvent, payload: ServiceInvokePayload): void => {
+    tapIn(C.SERVICE_INVOKE, event.sender, payload)
     const ap = appByWc(state, event.sender)
     if (!ap) return
     const page = state.pageSessions.get(payload.bridgeId) ?? state.pageSessions.get(ap.appSessionId)
@@ -482,6 +550,7 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
   ctx.registry.add(() => { ipcMain.removeListener(C.SERVICE_INVOKE, onServiceInvoke) })
 
   const onServicePublish = (event: IpcMainEvent, payload: ServicePublishPayload): void => {
+    tapIn(C.SERVICE_PUBLISH, event.sender, payload)
     const ap = appByWc(state, event.sender)
     if (!ap) return
     forwardToRender(ap, payload.msg, payload.targetBridgeId)
@@ -494,6 +563,7 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
   ctx.registry.add(() => { ipcMain.removeListener(C.SERVICE_PUBLISH, onServicePublish) })
 
   const onRenderInvoke = (event: IpcMainEvent, payload: RenderInvokePayload): void => {
+    tapIn(C.RENDER_INVOKE, event.sender, payload)
     const page = ensureRenderBound(state, event.sender, payload.bridgeId)
     if (!page) return
     const ap = state.appSessions.get(page.appSessionId)
@@ -504,6 +574,7 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
   ctx.registry.add(() => { ipcMain.removeListener(C.RENDER_INVOKE, onRenderInvoke) })
 
   const onRenderPublish = (event: IpcMainEvent, payload: RenderPublishPayload): void => {
+    tapIn(C.RENDER_PUBLISH, event.sender, payload)
     const page = ensureRenderBound(state, event.sender, payload.bridgeId)
     if (!page) return
     const ap = state.appSessions.get(page.appSessionId)
@@ -519,6 +590,7 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
   ctx.registry.add(() => { ipcMain.removeHandler(C.SIMULATOR_API) })
 
   const onApiResponse = (event: IpcMainEvent, payload: ApiResponsePayload): void => {
+    tapIn(C.API_RESPONSE, event.sender, payload)
     handleApiResponse(state, event.sender, payload)
   }
   ipcMain.on(C.API_RESPONSE, onApiResponse)
@@ -569,7 +641,18 @@ async function handleSpawn(
     resourceServer = await startDiminaResourceServer(path.resolve(pkgRoot, root))
     resourceBaseUrl = resourceServer.baseUrl
   }
-  const hostEnv = makeHostEnv(opts.hostEnvSnapshot)
+  // The selected device (renderer toolbar) is the authoritative source for the
+  // logical dims a spawn must report. The simulator-supplied `hostEnvSnapshot`
+  // is derived from the device baked into the simulator at BOOT time, so on a
+  // RESPAWN after a live device change it still carries the boot device. Layer
+  // the live `currentDevice` on top so every spawn/respawn reports the selected
+  // device — matching what the live `SetDeviceInfo` HostEnvUpdate pushes to an
+  // already-running service host. Pre-selection (null) → simulator snapshot wins.
+  const selectedDevice = ctx.bridge?.getDevice?.() ?? null
+  const hostEnv = makeHostEnv({
+    ...opts.hostEnvSnapshot,
+    ...(selectedDevice ? deviceInfoToHostEnv(selectedDevice) : {}),
+  })
 
   // app-config.json lives at `<base><appId>/<root>/app-config.json` on the dev
   // server, or at the local server root for the fallback path.
@@ -642,6 +725,21 @@ async function handleSpawn(
   appSession.pages.set(bridgeId, rootPage)
   bindWc(state.wcIdToAppSessionId, serviceWindow.webContents, appSessionId)
   bindWc(state.wcIdToAppSessionId, simulatorWc, appSessionId)
+  // Track the service-host webContents as a Connection (foundation.md §4.3) and
+  // own this session's serviceWc→appSessionId binding on its CURRENT lifetime
+  // segment. On a pooled-window REUSE, `disposeAppSession` calls
+  // `connections.reset(serviceWc.id)` → this owned cleanup fires + a fresh
+  // segment opens, so the next session rebinding the same wc starts clean; on a
+  // real destroy the connection closes and fires it too. The cleanup is guarded
+  // by `appSessionId` so it only clears a binding that is still THIS session's.
+  // (The simulatorWc binding stays manual in `disposeAppSession`: the simulator
+  // wc outlives individual app sessions — cross-connection state, §4.4 — so it
+  // cannot hang off any single session's segment.)
+  state.connections.acquire(serviceWindow.webContents).own(() => {
+    if (state.wcIdToAppSessionId.get(appSession.serviceWc.id) === appSessionId) {
+      state.wcIdToAppSessionId.delete(appSession.serviceWc.id)
+    }
+  })
   ctx.registry.add(() => disposeAppSession(state, appSessionId))
 
   const onServiceClosed = (): void => {
@@ -1267,7 +1365,12 @@ function ensureRenderBound(state: RouterState, sender: WebContents, bridgeId: st
     }
     page.renderWc = sender
     state.wcIdToBridgeId.set(sender.id, bridgeId)
-    sender.once('destroyed', () => {
+    // Consolidate the render-guest bookkeeping teardown onto the connection
+    // layer (foundation.md §4 / P2): the render guest is its own webContents =
+    // its own connection (§4.4); own() ties this cleanup to its lifetime so it
+    // fires on destroy, replacing the bespoke `once('destroyed')`. acquire() is
+    // idempotent — re-binding the same sender re-uses its connection.
+    state.connections.acquire(sender).own(() => {
       const p = state.pageSessions.get(bridgeId)
       if (p && p.renderWc === sender) p.renderWc = null
       if (state.wcIdToBridgeId.get(sender.id) === bridgeId) state.wcIdToBridgeId.delete(sender.id)
@@ -1362,6 +1465,14 @@ async function disposeAppSession(
   ap.pages.clear()
 
   if (ap.poolEntryId !== null && state.pool && !opts.serviceAlreadyClosed) {
+    // Soft reuse (foundation.md §4.3): the pooled service-host webContents keeps
+    // its wc.id but is about to run a NEW app session. Reset its Connection
+    // BEFORE returning it to the pool — dispose this session's owned segment
+    // (the serviceWc binding cleanup) and swap a fresh one — so an old in-flight
+    // response can't bleed into the next session and the next spawn `acquire`s a
+    // clean segment. The connection object stays alive (it's reused), so this is
+    // reset (not close); a real destroy still closes it via its 'destroyed' hook.
+    state.connections.reset(ap.serviceWc.id)
     // Return the window to the pool instead of closing it. Detach the per-spawn
     // listeners first so the pool resetting/recycling (or a later pool-side
     // destroy) can't re-trigger disposeAppSession or boot this disposed session
@@ -1473,14 +1584,30 @@ function installResourceProtocolHandlers(ctx: WorkbenchContext, state: RouterSta
     return fetch(target)
   }
 
-  const simulatorSession = electronSession.fromPartition('persist:simulator')
+  const simulatorSession = electronSession.fromPartition(SHARED_MINIAPP_PARTITION)
   try { protocol.unhandle('dmb-resource') } catch {}
   try { simulatorSession.protocol.unhandle('dmb-resource') } catch {}
   protocol.handle('dmb-resource', handler)
   simulatorSession.protocol.handle('dmb-resource', handler)
+
+  // Per-project partition sessions need the SAME resource handler so each
+  // project's render/service can load `dmb-resource://…`. Install on every
+  // miniapp partition (current + future); track installed sessions for teardown.
+  const perProjectSessions = new Set<Electron.Session>()
+  const unregisterConfigurator = registerMiniappSessionConfigurator((sess) => {
+    if (perProjectSessions.has(sess)) return
+    perProjectSessions.add(sess)
+    try { sess.protocol.unhandle('dmb-resource') } catch {}
+    sess.protocol.handle('dmb-resource', handler)
+  })
+
   ctx.registry.add(() => {
+    unregisterConfigurator()
     try { protocol.unhandle('dmb-resource') } catch {}
     try { simulatorSession.protocol.unhandle('dmb-resource') } catch {}
+    for (const sess of perProjectSessions) {
+      try { sess.protocol.unhandle('dmb-resource') } catch {}
+    }
   })
 }
 

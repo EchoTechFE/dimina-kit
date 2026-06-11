@@ -1,4 +1,5 @@
 import type { WebContents } from 'electron'
+import type { ConnectionRegistry } from '@dimina-kit/electron-deck/main'
 import type { NativeDeviceInfo } from '../../../shared/ipc-channels.js'
 
 /**
@@ -49,7 +50,7 @@ export interface SafeAreaController {
   dispose(): void
 }
 
-export function createSafeAreaController(): SafeAreaController {
+export function createSafeAreaController(options: { connections?: ConnectionRegistry } = {}): SafeAreaController {
   // Guests we successfully attached `wc.debugger` to (so we don't re-attach,
   // which throws). Pruned on guest destroy.
   const attached = new Set<WebContents>()
@@ -78,7 +79,11 @@ export function createSafeAreaController(): SafeAreaController {
         return
       }
       attached.add(wc)
-      wc.once('destroyed', () => attached.delete(wc))
+      if (options.connections) {
+        options.connections.acquire(wc).own(() => attached.delete(wc))
+      } else {
+        wc.once('destroyed', () => attached.delete(wc))
+      }
       override(wc, device)
     },
     reapplyAll: (device) => {

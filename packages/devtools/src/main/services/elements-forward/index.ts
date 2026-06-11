@@ -50,6 +50,7 @@
  */
 import { webContents as electronWebContents } from 'electron'
 import type { WebContents } from 'electron'
+import type { ConnectionRegistry } from '@dimina-kit/electron-deck/main'
 import type { BridgeRouterHandle, RenderEvent } from '../../ipc/bridge-router.js'
 
 // ── routing table (pure, testable) ───────────────────────────────────────────
@@ -203,6 +204,15 @@ export interface ElementsForwardDeps {
    * devtools-follow paths) — what the wire-up passes.
    */
   appId?: string
+  /**
+   * Optional connection registry. When present, per-webContents teardowns
+   * (the devtools front-end wc's `stop`, and each render guest's `onDestroyed`)
+   * are routed through `connections.acquire(wc).own(cleanup)` so they fire
+   * deterministically on wc destroy / connection reset — replacing the bespoke
+   * `wc.once('destroyed', cleanup)` hook. Optional so existing callers compile
+   * unchanged; absent → the `once('destroyed')` fallback is used.
+   */
+  connections?: ConnectionRegistry
 }
 
 /** One drained front-end command awaiting routing at the render guest. */
@@ -413,9 +423,22 @@ export function installElementsForward(deps: ElementsForwardDeps): () => void {
       // If we own this wc's session there is nothing left to detach; drop it.
       selfAttached.delete(wc.id)
     }
-    try { wc.once('destroyed', onDestroyed) } catch { /* fake/minimal wc */ }
+    let closedSub: { dispose(): void } | undefined
+    try {
+      // Route the guest teardown through the connection registry's `'closed'`
+      // event when present. Render guests are NEVER pool-reset, so `'closed'`
+      // (fires only on real wc destroy) is the correct lifetime — and crucially
+      // `on('closed')` returns a handle whose `dispose()` REMOVES the listener
+      // WITHOUT firing it, matching the original `removeListener` semantics.
+      // (`own()` would fire `onDestroyed` on release AND mutate `wiredGuests`
+      // mid-drain in stop() — wrong here; see foundation.md §4.3.) Same
+      // try/catch guards a fake/minimal wc that lacks once/emitter wiring.
+      if (deps.connections) closedSub = deps.connections.acquire(wc).on('closed', onDestroyed)
+      else wc.once('destroyed', onDestroyed)
+    } catch { /* fake/minimal wc */ }
     wiredGuests.set(wc.id, () => {
       try { wc.debugger.removeListener('message', onMessage) } catch { /* gone */ }
+      try { closedSub?.dispose() } catch { /* gone */ }
       try { wc.removeListener('destroyed', onDestroyed) } catch { /* gone */ }
     })
   }
@@ -534,10 +557,19 @@ export function installElementsForward(deps: ElementsForwardDeps): () => void {
   } else {
     onReady()
   }
-  try { devtoolsWc.once('destroyed', stop) } catch { /* fake/minimal wc */ }
+  let devtoolsClosedSub: { dispose(): void } | undefined
+  try {
+    // Devtools front-end wc is never pool-reset → use `'closed'` (fires only on
+    // real destroy). `on('closed')` dispose() removes WITHOUT firing, so the
+    // returned teardown releases it then calls `stop()` directly — no stale
+    // `stop` disposers accumulate across re-install on a surviving devtoolsWc.
+    if (deps.connections) devtoolsClosedSub = deps.connections.acquire(devtoolsWc).on('closed', stop)
+    else devtoolsWc.once('destroyed', stop)
+  } catch { /* fake/minimal wc */ }
 
   return () => {
     try { unsubscribeRenderEvents() } catch { /* already gone */ }
+    try { devtoolsClosedSub?.dispose() } catch { /* already gone */ }
     stop()
   }
 }

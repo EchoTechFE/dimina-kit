@@ -30,10 +30,11 @@
 
 import type { Session } from 'electron'
 import { IpcRegistry, type SenderPolicy } from '../../utils/ipc-registry.js'
-import { toDisposable, type Disposable } from '../../utils/disposable.js'
+import { toDisposable, type Disposable } from '@dimina-kit/electron-deck/main'
 import { type TempFileStore } from './resolver.js'
 import { registerTempFile, revokeTempFile, revokeAllTempFiles } from './store.js'
 import { handleDifileRequest } from './request-handler.js'
+import { registerMiniappSessionConfigurator } from '../views/miniapp-partition.js'
 import {
 	handleFsMkdir,
 	handleFsRead,
@@ -75,8 +76,13 @@ export function setupSimulatorTempFiles(simSession: Session): Disposable {
 		for (const list of lists) for (const fn of list) fn()
 	}
 
+	// The protocol handler + IPC channels are shared across every per-project
+	// miniapp partition session (each project's render/service runs the same
+	// difile:// + temp-file FSM). The base session is always trusted; additional
+	// per-project partition sessions register themselves via `installOnSession`.
+	const trustedSessions = new Set<Session>([simSession])
 	const simulatorOnlyPolicy: SenderPolicy = sender =>
-		!sender.isDestroyed() && sender.session === simSession
+		!sender.isDestroyed() && trustedSessions.has(sender.session)
 
 	const registry = new IpcRegistry(simulatorOnlyPolicy)
 
@@ -103,14 +109,7 @@ export function setupSimulatorTempFiles(simSession: Session): Disposable {
 		revokeAllTempFiles(store)
 	})
 
-	// Idempotent: a stale handler from a prior setup (e.g. fast app
-	// re-init in tests) is replaced rather than throwing.
-	try {
-		simSession.protocol.unhandle('difile')
-	} catch {
-		// Not previously registered — fine.
-	}
-	simSession.protocol.handle('difile', async (req) => {
+	const difileHandler = async (req: { url: string; headers: { forEach: (cb: (v: string, k: string) => void) => void } }): Promise<Response> => {
 		const url = req.url
 		// Forward any HTTP headers Electron parsed (Range / If-None-Match)
 		// to the pure dispatcher so it can do its own conditional / range
@@ -154,7 +153,28 @@ export function setupSimulatorTempFiles(simSession: Session): Disposable {
 			res = await handleDifileRequest(ctx, { url, headers })
 		}
 		return res
-	})
+	}
+
+	// Install the difile:// protocol handler on a session. Idempotent per
+	// session: a stale handler from a prior setup (e.g. fast app re-init in
+	// tests) is replaced rather than throwing. Trusts that session's senders for
+	// the temp-file / fs IPC channels.
+	const installedSessions = new Set<Session>()
+	function installOnSession(sess: Session): void {
+		trustedSessions.add(sess)
+		if (installedSessions.has(sess)) return
+		installedSessions.add(sess)
+		try {
+			sess.protocol.unhandle('difile')
+		} catch {
+			// Not previously registered — fine.
+		}
+		sess.protocol.handle('difile', difileHandler)
+	}
+
+	installOnSession(simSession)
+	// Apply to every per-project miniapp partition session (current + future).
+	const unregisterConfigurator = registerMiniappSessionConfigurator((sess) => installOnSession(sess))
 
 	// Phase 1 (P1-7): renderer FSM → main fs operations bridge. The same
 	// simulator-only sender policy applies — registry instance is shared.
@@ -179,12 +199,15 @@ export function setupSimulatorTempFiles(simSession: Session): Disposable {
 
 	return toDisposable(async () => {
 		disposed = true
+		unregisterConfigurator()
 		drainAllWaiters()
 		store.clear()
-		try {
-			simSession.protocol.unhandle('difile')
-		} catch {
-			// May already have been unhandled by app shutdown.
+		for (const sess of installedSessions) {
+			try {
+				sess.protocol.unhandle('difile')
+			} catch {
+				// May already have been unhandled by app shutdown.
+			}
 		}
 		await registry.dispose()
 	})

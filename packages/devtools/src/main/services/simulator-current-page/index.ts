@@ -17,7 +17,7 @@
 import type { WebContents } from 'electron'
 import { SimulatorChannel } from '../../../shared/ipc-channels.js'
 import type { BridgeRouterHandle } from '../../ipc/bridge-router.js'
-import { DisposableRegistry, type Disposable } from '../../utils/disposable.js'
+import { DisposableRegistry, type Disposable } from '@dimina-kit/electron-deck/main'
 
 export interface SimulatorCurrentPageOptions {
   bridge: BridgeRouterHandle

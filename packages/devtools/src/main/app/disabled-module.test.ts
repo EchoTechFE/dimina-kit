@@ -279,12 +279,12 @@ import {
   WorkbenchSettingsChannel,
 } from '../../shared/ipc-channels.js'
 
-let createWorkbenchApp: typeof import('./app.js').createWorkbenchApp
+let createDevtoolsRuntime: typeof import('./app.js').createDevtoolsRuntime
 
 beforeEach(async () => {
   vi.resetModules()
   stubs.reset()
-  ;({ createWorkbenchApp } = await import('./app.js'))
+  ;({ createDevtoolsRuntime } = await import('./app.js'))
 })
 
 function channelsWithPrefix(ns: Record<string, string>): string[] {
@@ -293,7 +293,7 @@ function channelsWithPrefix(ns: Record<string, string>): string[] {
 
 describe('disabled module → no IPC registration', () => {
   it('modules.projects=false skips every ProjectsChannel.* handler', async () => {
-    const instance = await createWorkbenchApp({ modules: { projects: false } }).setup()
+    const instance = await createDevtoolsRuntime({ modules: { projects: false } })
     const handled = new Set(stubs.handleCalls)
 
     for (const ch of channelsWithPrefix(ProjectsChannel)) {
@@ -306,7 +306,7 @@ describe('disabled module → no IPC registration', () => {
   })
 
   it('modules.settings=false skips every WorkbenchSettingsChannel.* and SettingsChannel.* handler', async () => {
-    const instance = await createWorkbenchApp({ modules: { settings: false } }).setup()
+    const instance = await createDevtoolsRuntime({ modules: { settings: false } })
     const handled = new Set(stubs.handleCalls)
 
     for (const ch of channelsWithPrefix(WorkbenchSettingsChannel)) {
@@ -325,7 +325,7 @@ describe('disabled module → no IPC registration', () => {
   })
 
   it('default config (no modules override) registers ProjectsChannel.List as a sanity check', async () => {
-    const instance = await createWorkbenchApp({}).setup()
+    const instance = await createDevtoolsRuntime({})
     const handled = new Set(stubs.handleCalls)
     expect(handled.has(ProjectsChannel.List)).toBe(true)
     expect(handled.has(WorkbenchSettingsChannel.Get)).toBe(true)

@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      html, body { margin: 0; height: 100%; font-family: -apple-system, system-ui, sans-serif; }
+      body {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        color: #fff;
+        text-shadow: 0 1px 2px rgba(0,0,0,0.4);
+      }
+      .label { font-size: 20px; font-weight: 700; letter-spacing: 1px; }
+      .counter { font-size: 13px; font-variant-numeric: tabular-nums; opacity: 0.9; }
+    </style>
+  </head>
+  <body>
+    <div class="label" id="label">VIEW</div>
+    <div class="counter">tick <span id="tick">0</span></div>
+    <script>
+      // color + label come in via URL hash, e.g. #c0392b|SIMULATOR
+      const [color, label] = decodeURIComponent(location.hash.slice(1)).split('|')
+      document.body.style.background = color || '#444'
+      document.getElementById('label').textContent = label || 'VIEW'
+      // Live counter: survives a cross-window MIGRATE (no reload) but resets on
+      // a genuine reload — the popout proof that scope.adopt re-homes the live
+      // WebContents instead of recreating it.
+      let n = 0
+      window.__tick = 0
+      setInterval(() => { n++; window.__tick = n; document.getElementById('tick').textContent = String(n) }, 100)
+    </script>
+  </body>
+</html>

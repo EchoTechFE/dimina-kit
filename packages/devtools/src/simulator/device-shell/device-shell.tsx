@@ -293,7 +293,12 @@ export function DeviceShell({
               className="device-shell__webview"
               src={miniApp.createRenderHostUrl(entry.bridgeId, entry.pagePath)}
               preload={preload}
-              partition="persist:simulator"
+              // No static partition here: the renderer doesn't know the
+              // per-project partition. Main owns it — the host WCV's
+              // `will-attach-webview` handler (view-manager.ts) stamps every
+              // render-host guest onto this project's `persist:miniapp-<key>`
+              // partition. Hardcoding `persist:simulator` here would request the
+              // shared session pre-attach and defeat per-project isolation.
               allowpopups="true"
               style={{
                 display: visible ? 'flex' : 'none',
