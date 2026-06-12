@@ -49,6 +49,15 @@ export function registerViewsIpc(
       )
       ctx.views.setHostToolbarBounds(bounds)
     })
+    // Height replay pull: a freshly-mounted main-renderer placeholder asks for
+    // the last NOTIFIED toolbar height (main retains it — the toolbar's
+    // size-advertiser deduplicates and never re-pushes, so a push that fired
+    // while no project view was mounted is otherwise lost: cold start races
+    // it, close-project → reopen hits it always). Rides the SAME
+    // senderPolicy-gated registry as HostToolbarBounds: the toolbar WCV's
+    // arbitrary host content must not reach this — only the trusted main
+    // renderer pulls. Live delegation, not a registration-time snapshot.
+    .handle(ViewChannel.HostToolbarGetHeight, () => ctx.views.getHostToolbarHeight())
 
   // Reverse size-advertiser: the toolbar WCV's OWN renderer sends this, and the
   // host loads ARBITRARY content into that WCV. We DELIBERATELY do NOT add the

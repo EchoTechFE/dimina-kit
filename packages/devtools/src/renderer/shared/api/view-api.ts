@@ -140,3 +140,17 @@ export function publishHostToolbarBounds(bounds: ViewBounds): Promise<void> {
 export function onHostToolbarHeightChanged(handler: (height: number) => void): () => void {
   return on<[number]>(ViewChannel.HostToolbarHeightChanged, (height) => handler(height))
 }
+
+/**
+ * Pull the last host-toolbar height main notified (retained main-side). Replay
+ * companion to {@link onHostToolbarHeightChanged}: the push subscription mounts
+ * with the project view, and the toolbar's size-advertiser deduplicates (a
+ * height already reported is never re-sent), so a height pushed while no
+ * project view was mounted is never re-pushed — a freshly-mounted placeholder
+ * must pull it (cold start on the project list; always close-project →
+ * reopen). Resolves `undefined` when the lenient invoke swallowed a main-side
+ * failure; callers keep their current height in that case.
+ */
+export function getHostToolbarHeight(): Promise<number | undefined> {
+  return invoke<number | undefined>(ViewChannel.HostToolbarGetHeight)
+}

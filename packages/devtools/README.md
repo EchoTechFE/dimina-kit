@@ -483,7 +483,7 @@ launch({
 
 ## Host Toolbar（宿主自定义工具栏）
 
-下游通过 `instance.context.views.hostToolbar` 拥有 devtools 头部下方的工具栏条（一个 WebContentsView）：`loadURL` / `loadFile` 加载自己的内容，`setPreloadPath` 注入自己的 preload，`setHeightMode` 钉死或自动跟随内容高度（自动模式要求内容自带 shrink-to-fit 的 `[data-host-toolbar-root]` 包裹元素；`{ fixed }` 校验入参——非有限数或负数同步抛 `TypeError` 且不污染既有模式）。
+下游通过 `instance.context.views.hostToolbar` 拥有 devtools 头部下方的工具栏条（一个 WebContentsView）：`loadURL` / `loadFile` 加载自己的内容，`setPreloadPath` 注入自己的 preload，`setHeightMode` 钉死或自动跟随内容高度（自动模式要求内容自带 shrink-to-fit 的 `[data-host-toolbar-root]` 包裹元素；`{ fixed }` 校验入参——非有限数或负数同步抛 `TypeError` 且不污染既有模式）。主进程保留最后一次下发的高度（`views.getHostToolbarHeight()`），项目视图的占位条挂载时会主动拉取并回放——广播器对已上报的高度去重不再重发，没有这一步，冷启动在项目列表期间的上报、以及关闭项目再打开后的高度都会永久丢失（工具栏条塌缩为 0）。
 
 ### 双向消息：onMessage / send
 
