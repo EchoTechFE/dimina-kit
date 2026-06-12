@@ -56,8 +56,7 @@ export function setNativeSimulatorBounds(p: {
 /**
  * NATIVE-HOST ONLY. Push the selected device's logical metrics so main can
  * live-update the running service-host window's host-env snapshot — the
- * authoritative `wx.getSystemInfoSync()` source — without a relaunch. The
- * default `<webview>` path delivers device info to the guest via `device:change`.
+ * authoritative `wx.getSystemInfoSync()` source — without a relaunch.
  */
 export function setNativeDeviceInfo(device: NativeDeviceInfo): Promise<void> {
   return invoke<void>(SimulatorChannel.SetDeviceInfo, device)

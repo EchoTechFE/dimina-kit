@@ -1,3 +1,4 @@
+import { SIMULATOR_EVENTS } from '../shared/bridge-channels'
 import type {
   ActivePagePayload,
   ApiResponsePayload,
@@ -14,6 +15,7 @@ import type {
   TabBarConfig,
 } from '../shared/bridge-channels'
 import type { NativeDeviceInfo } from '../shared/ipc-channels'
+import type { DeviceMetrics } from './types'
 
 type ApiHandler = (this: SimulatorMiniApp, params?: unknown) => unknown | Promise<unknown>
 
@@ -74,6 +76,15 @@ export class SimulatorMiniApp {
   rootWindowConfig: PageWindowConfig | null = null
   readonly platform: 'ios' | 'android'
   private readonly apiNamespaces: string[]
+  /**
+   * Latest device delivered over SIMULATOR_EVENTS.DEVICE_CHANGE (live toolbar
+   * switches). Cleared on dispose(): main's sticky device selection reaches a
+   * fresh spawn through its boot config (getInitialDevice), which is always
+   * re-delivered with the latest selection — a live value held across dispose
+   * would shadow a newer boot config with a stale device.
+   */
+  private currentDevice: NativeDeviceInfo | null = null
+  private unsubscribeDeviceChange: (() => void) | null = null
 
   constructor(opts: SimulatorMiniAppOptions) {
     this.appId = opts.appId
@@ -96,6 +107,17 @@ export class SimulatorMiniApp {
 
   async spawn(): Promise<string> {
     const nativeHost = getNativeHost()
+    // Track live device switches: main pushes SIMULATOR_EVENTS.DEVICE_CHANGE on
+    // bridge.setDevice (toolbar device picker). The simulator-resident wx.* API
+    // handlers read the device through getDeviceMetrics(), so the forwarded
+    // async getSystemInfo/getWindowInfo path follows the selection instead of
+    // answering a constant fallback rect forever.
+    this.unsubscribeDeviceChange ??= nativeHost.onSimulatorEvent<NativeDeviceInfo>(
+      SIMULATOR_EVENTS.DEVICE_CHANGE,
+      (device) => {
+        this.currentDevice = device
+      },
+    )
     const result = await nativeHost.spawn({
       appId: this.appId,
       scene: this.scene,
@@ -121,6 +143,9 @@ export class SimulatorMiniApp {
   }
 
   dispose(): void {
+    this.unsubscribeDeviceChange?.()
+    this.unsubscribeDeviceChange = null
+    this.currentDevice = null
     if (!this.appSessionId) return
     getNativeHost().dispose(this.appSessionId)
     this.appSessionId = null
@@ -204,6 +229,34 @@ export class SimulatorMiniApp {
    */
   getInitialDevice(): NativeDeviceInfo | null {
     return getNativeHost().device ?? null
+  }
+
+  /**
+   * Metric fallbacks for the simulator-resident wx.* API handlers
+   * (readWindowMetrics in simulator-api.ts): the CURRENT device — a live
+   * DEVICE_CHANGE wins over the boot config device — or, when no device was
+   * ever selected, the host-env snapshot defaults (the same source the sync
+   * service-host wx.getSystemInfoSync reports).
+   */
+  getDeviceMetrics(): DeviceMetrics {
+    const device = this.currentDevice ?? this.getInitialDevice()
+    if (device) {
+      return {
+        pixelRatio: device.pixelRatio,
+        screenWidth: device.screenWidth,
+        screenHeight: device.screenHeight,
+        statusBarHeight: device.statusBarHeight,
+        safeAreaBottom: device.safeAreaBottom,
+      }
+    }
+    const snap = this.getHostEnvSnapshot()
+    return {
+      pixelRatio: snap.pixelRatio,
+      screenWidth: snap.screenWidth,
+      screenHeight: snap.screenHeight,
+      statusBarHeight: snap.statusBarHeight,
+      safeAreaBottom: 0,
+    }
   }
 
   getHostEnvSnapshot(): HostEnvSnapshot {

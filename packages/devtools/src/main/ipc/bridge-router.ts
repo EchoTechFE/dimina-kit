@@ -202,6 +202,15 @@ interface RouterState {
    * not-yet-integrated async envelope.
    */
   debugTap: DebugTap
+  /**
+   * Evict the app's accumulated AppData bridges (panel registry) for every
+   * page of the session. Lives on RouterState because `disposeAppSession` is
+   * the single teardown chokepoint shared by BOTH dispose paths — graceful
+   * `C.DISPOSE` and the simulator-WCV `'destroyed'` hook. Inlining eviction at
+   * one call site (as the graceful handler once did) leaves the other path
+   * with ghost AppData tabs after a respawn.
+   */
+  evictAppDataBridges: (ap: AppSession) => void
 }
 
 /** Default timeout for a simulator-forwarded API call. */
@@ -274,13 +283,20 @@ function resolveCurrentApp(
   ctx: WorkbenchContext,
   appId?: string,
 ): AppSession | undefined {
+  // Same-appId matches prefer the MOST RECENT spawn (Maps preserve insertion
+  // order): after a respawn/reopen the newest session is the live one — the
+  // first match could be a just-superseded session mid-teardown.
   if (appId) {
-    for (const ap of state.appSessions.values()) if (ap.appId === appId) return ap
+    let match: AppSession | undefined
+    for (const ap of state.appSessions.values()) if (ap.appId === appId) match = ap
+    if (match) return match
   }
   const appInfo = ctx.workspace?.getSession?.()?.appInfo as { appId?: string } | undefined
   const activeAppId = appInfo?.appId
   if (activeAppId) {
-    for (const ap of state.appSessions.values()) if (ap.appId === activeAppId) return ap
+    let match: AppSession | undefined
+    for (const ap of state.appSessions.values()) if (ap.appId === activeAppId) match = ap
+    if (match) return match
   }
   // Maps preserve insertion order; the last entry is the most recent spawn.
   let last: AppSession | undefined
@@ -299,6 +315,10 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
     emitRenderEvent: () => {},
     connections: ctx.connections,
     debugTap: createDebugTap({ enabled: resolveDebugTapEnabled() }),
+    evictAppDataBridges: (ap) => {
+      if (!ctx.appData) return
+      for (const page of ap.pages.values()) ctx.appData.evictBridge(ap.appId, page.bridgeId)
+    },
   }
 
   // Opt-in (default OFF) pre-warm pool for service-host windows. When enabled,
@@ -514,11 +534,8 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
       console.warn(`[bridge-router] DISPOSE rejected: sender belongs to ${senderApp.appSessionId}, target ${target.appSessionId}`)
       return
     }
-    // Native-host AppData: clear the app's accumulated bridges so a re-opened
-    // project doesn't show ghost tabs from the prior session.
-    if (ctx.appData) {
-      for (const page of target.pages.values()) ctx.appData.evictBridge(target.appId, page.bridgeId)
-    }
+    // AppData bridge eviction happens inside disposeAppSession (single
+    // chokepoint shared with the simulator-WCV 'destroyed' path).
     void disposeAppSession(state, target.appSessionId)
   }
   ipcMain.on(C.DISPOSE, onDispose)
@@ -748,6 +765,20 @@ async function handleSpawn(
   }
   appSession.onServiceClosed = onServiceClosed
   serviceWindow.once('closed', onServiceClosed)
+
+  // The simulator WCV owns the app's UI lifetime. When it is destroyed —
+  // project close (`views.disposeAll`/detach) or a DeviceShell respawn
+  // (`attachNativeSimulator`, e.g. watcher hot reload) — the guest never gets
+  // to send its graceful `C.DISPOSE`, so without this hook the app session and
+  // its hidden service-host window leak, and `resolveCurrentApp` keeps
+  // resolving the STALE session for the same appId: `getActiveRenderWc` then
+  // dereferences dead pages and every panel pull (WXML/elements) returns null
+  // for the whole next session. Disposing here is idempotent with the graceful
+  // path (`disposeAppSession` early-returns once the session is gone).
+  const onSimulatorDestroyed = (): void => {
+    void disposeAppSession(state, appSessionId)
+  }
+  simulatorWc.once('destroyed', onSimulatorDestroyed)
 
   if (usedPool) {
     // A pooled/fallback window passes through about:blank (warm load or the
@@ -1446,6 +1477,10 @@ async function disposeAppSession(
   const ap = state.appSessions.get(appSessionId)
   if (!ap) return
   state.appSessions.delete(appSessionId)
+
+  // Evict AppData bridges FIRST — eviction enumerates `ap.pages`, which the
+  // page teardown below progressively empties (and finally clears).
+  state.evictAppDataBridges(ap)
 
   // Drain any pending API calls owned by this app session. One-shot calls
   // normally self-clean on response/timeout, but persistent (`keep: true`)

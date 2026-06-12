@@ -26,6 +26,12 @@ export interface SessionHookResult {
   port: number
   pages: string[]
   compileConfig: CompileConfig
+  /**
+   * Strictly-increasing counter, bumped once per `projectStatus` payload that
+   * carries `hotReload: true` (a watcher rebuild finished). `use-simulator.ts`
+   * folds it into its native attach-effect deps to respawn the DeviceShell.
+   */
+  hotReloadToken: number
   relaunch: (nextConfig?: CompileConfig) => Promise<void>
 }
 
@@ -93,9 +99,18 @@ export function useSession(props: UseSessionProps): SessionHookResult {
     }
   }, [projectPath])
 
+  const [hotReloadToken, setHotReloadToken] = useState(0)
+
   useEffect(() => {
     return onProjectStatus((data) => {
       setCompileStatus(data)
+      // Resurrects the PR#12 hot-reload guard that PR#39 (workbench landing)
+      // deleted together with the dead `<webview>` reload branch: a watcher
+      // rebuild (hotReload:true) bumps the token so the simulator re-attaches.
+      // Plain status chatter (compiling/error/ready) must NOT move the token.
+      if (data.hotReload === true) {
+        setHotReloadToken((token) => token + 1)
+      }
     })
   }, [])
 
@@ -138,6 +153,7 @@ export function useSession(props: UseSessionProps): SessionHookResult {
     port,
     pages,
     compileConfig,
+    hotReloadToken,
     relaunch,
   }
 }

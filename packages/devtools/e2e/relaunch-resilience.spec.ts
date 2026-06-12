@@ -279,56 +279,70 @@ test.describe('Relaunch & compile resilience', () => {
       files.filter((f) => fs.existsSync(f)).map((f) => [f, fs.readFileSync(f, 'utf8')]),
     )
 
-    // Rapid-fire touch 3 files in 300ms
-    for (const f of Object.keys(originals)) {
-      fs.writeFileSync(f, originals[f] + `\n// e2e-${Date.now()}`)
-      await mainWindow.waitForTimeout(100)
+    // The demo-app sources are mutated below; restore them in `finally` so a
+    // failing assertion (or a poll timeout throwing mid-test) can never leave
+    // sentinel comments polluting the working tree.
+    try {
+      // Rapid-fire touch 3 files in 300ms
+      for (const f of Object.keys(originals)) {
+        fs.writeFileSync(f, originals[f] + `\n// e2e-${Date.now()}`)
+        await mainWindow.waitForTimeout(100)
+      }
+
+      // Wait for rebuild to settle
+      await mainWindow.waitForTimeout(15000)
+
+      // The render-host guests must survive the rapid-fire rebuild churn: the
+      // DeviceShell still has a live page webview and nothing crashed.
+      const webviews = await waitForDeviceShellReady(electronApp)
+      expect(
+        webviews,
+        'DeviceShell should keep ≥1 render-host page webview through rapid file changes',
+      ).toBeGreaterThanOrEqual(1)
+      const state = await getNativePageState(electronApp)
+      expect(state.shellFound, 'simulator shell should still be present').toBe(true)
+      expect(state.anyCrashed, 'no render-host guest or shell should crash on rapid file changes').toBe(false)
+    } finally {
+      // Restore
+      for (const [f, content] of Object.entries(originals)) fs.writeFileSync(f, content)
     }
-
-    // Wait for rebuild to settle
-    await mainWindow.waitForTimeout(15000)
-
-    // The render-host guests must survive the rapid-fire rebuild churn: the
-    // DeviceShell still has a live page webview and nothing crashed.
-    const webviews = await waitForDeviceShellReady(electronApp)
-    expect(
-      webviews,
-      'DeviceShell should keep ≥1 render-host page webview through rapid file changes',
-    ).toBeGreaterThanOrEqual(1)
-    const state = await getNativePageState(electronApp)
-    expect(state.shellFound, 'simulator shell should still be present').toBe(true)
-    expect(state.anyCrashed, 'no render-host guest or shell should crash on rapid file changes').toBe(false)
-
-    // Restore
-    for (const [f, content] of Object.entries(originals)) fs.writeFileSync(f, content)
   })
 
   test('UI stays usable after build error and recovers', async ({ mainWindow, electronApp }) => {
     const jsFile = path.join(DEMO_APP_DIR, 'pages', 'index', 'index.js')
     const original = fs.readFileSync(jsFile, 'utf8')
 
-    // Introduce syntax error
-    fs.writeFileSync(jsFile, 'const x = {{{BROKEN')
-    await mainWindow.waitForTimeout(15000)
+    // The broken source is restored mid-test as part of the recovery scenario,
+    // but if any assertion before that point throws (e.g. the toolbar check),
+    // the restore would be skipped and the demo app left broken on disk. The
+    // `finally` re-write is idempotent on the happy path and the safety net on
+    // every failure path.
+    try {
+      // Introduce syntax error
+      fs.writeFileSync(jsFile, 'const x = {{{BROKEN')
+      await mainWindow.waitForTimeout(15000)
 
-    // Toolbar must remain visible (not white/black screen)
-    const hasToolbar = await mainWindow.evaluate(() =>
-      document.body.innerText.includes('普通编译'),
-    )
-    expect(hasToolbar).toBe(true)
+      // Toolbar must remain visible (not white/black screen)
+      const hasToolbar = await mainWindow.evaluate(() =>
+        document.body.innerText.includes('普通编译'),
+      )
+      expect(hasToolbar).toBe(true)
 
-    // Restore and verify recovery
-    fs.writeFileSync(jsFile, original)
-    await mainWindow.waitForTimeout(15000)
+      // Restore and verify recovery
+      fs.writeFileSync(jsFile, original)
+      await mainWindow.waitForTimeout(15000)
 
-    // Should be able to relaunch after recovery: the DeviceShell remounts with a
-    // live render-host page webview once the good build compiles.
-    await clickRelaunchButton(mainWindow)
-    await waitForStatus(mainWindow, ['完成', '失败', '超时'])
-    const webviews = await waitForDeviceShellReady(electronApp)
-    expect(
-      webviews,
-      'DeviceShell should remount with ≥1 render-host page webview after recovering from a build error',
-    ).toBeGreaterThanOrEqual(1)
+      // Should be able to relaunch after recovery: the DeviceShell remounts with a
+      // live render-host page webview once the good build compiles.
+      await clickRelaunchButton(mainWindow)
+      await waitForStatus(mainWindow, ['完成', '失败', '超时'])
+      const webviews = await waitForDeviceShellReady(electronApp)
+      expect(
+        webviews,
+        'DeviceShell should remount with ≥1 render-host page webview after recovering from a build error',
+      ).toBeGreaterThanOrEqual(1)
+    } finally {
+      fs.writeFileSync(jsFile, original)
+    }
   })
 })

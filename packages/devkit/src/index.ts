@@ -6,6 +6,10 @@ import { fileURLToPath } from 'node:url'
 import { createServer, type Server } from 'node:http'
 import { createRequire } from 'node:module'
 import chokidar from 'chokidar'
+import { createRebuildScheduler } from './rebuild-scheduler.js'
+
+export { createRebuildScheduler } from './rebuild-scheduler.js'
+export type { RebuildScheduler } from './rebuild-scheduler.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const require = createRequire(import.meta.url)
@@ -145,10 +149,7 @@ export async function openProject(opts: OpenProjectOptions): Promise<ProjectSess
 		sessionApps,
 	})
 
-	let isBuilding = false
 	async function rebuild(): Promise<void> {
-		if (isBuilding) return
-		isBuilding = true
 		try {
 			process.chdir(projectPath)
 			const rebuilt = (await build(resolvedOutputDir, projectPath, true, buildOptions)) as AppInfo | null
@@ -165,11 +166,14 @@ export async function openProject(opts: OpenProjectOptions): Promise<ProjectSess
 		}
 		finally {
 			process.chdir(prevCwd)
-			isBuilding = false
 		}
 	}
 
-	const watcher = watch ? createProjectWatcher(projectPath, rebuild) : null
+	// Watcher events are routed through the scheduler so a save landing while
+	// a build is in flight is never dropped: it coalesces into exactly one
+	// trailing rebuild once the current run settles.
+	const rebuildScheduler = createRebuildScheduler(rebuild)
+	const watcher = watch ? createProjectWatcher(projectPath, () => rebuildScheduler.schedule()) : null
 
 	return {
 		appInfo: initialAppInfo ?? { appId: 'unknown', name: path.basename(projectPath), path: projectPath },
