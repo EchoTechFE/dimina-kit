@@ -156,6 +156,16 @@ export interface ViewManager {
    * must trust its id — see `createWorkbenchSenderPolicy`.
    */
   getHostToolbarWebContentsId(): number | null
+  /**
+   * Return the last host-toolbar height NOTIFIED to the main-window renderer
+   * (an advertiser report in `'auto'` mode, a `setHeightMode({ fixed })` pin,
+   * or 0 after `hostToolbar.hide()`); 0 before any notify. The renderer pulls
+   * this on project-view mount to REPLAY a height whose push it missed — the
+   * toolbar's size-advertiser deduplicates and never re-reports, so a notify
+   * fired while no project view is mounted (cold start on the project list;
+   * always on close-project → reopen) would otherwise be lost forever.
+   */
+  getHostToolbarHeight(): number
 
   // ── Compound operations (used by IPC handlers) ────────────────────────
   /**
@@ -202,10 +212,12 @@ export interface ViewManager {
   setHostToolbarBounds(bounds: { x: number; y: number; width: number; height: number }): void
   /**
    * Reverse size-advertiser sink: the toolbar WCV's own renderer advertises
-   * its intrinsic content height (block-axis extent); we store it and push it
-   * to the main-window renderer so the placeholder div resizes (closing the
-   * dynamic-height loop). Ignored while a `{ fixed }` height mode is pinned
-   * via `hostToolbar.setHeightMode` (the session-resident advertiser always
+   * its intrinsic content height (block-axis extent); we retain it as the
+   * last-notified height (`getHostToolbarHeight`) and push it to the
+   * main-window renderer so the placeholder div resizes (closing the
+   * dynamic-height loop). Ignored ENTIRELY while a `{ fixed }` height mode is
+   * pinned via `hostToolbar.setHeightMode` — dropped reports neither notify
+   * nor touch the retained value (the session-resident advertiser always
    * runs, so its reports must not fight a host-pinned height).
    */
   setHostToolbarHeight(extent: number): void
@@ -380,6 +392,13 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   // Placeholder height authority: 'auto' = advertiser reports forward to the
   // renderer; { fixed } = host-pinned, advertiser reports are dropped.
   let hostToolbarHeightMode: HostToolbarHeightMode = 'auto'
+  // Last toolbar height NOTIFIED to the main-window renderer — the replay
+  // source behind `getHostToolbarHeight()`. Updated ONLY inside
+  // `notifyHostToolbarHeight` so the retained value can never diverge from
+  // what the renderer was told (an advertiser report dropped by a `{ fixed }`
+  // pin must not pollute it, and a setHeightMode validation reject leaves it
+  // untouched).
+  let hostToolbarLastHeight = 0
   // Gated narrow channel to the toolbar PAGE (per-load MessagePort handshake;
   // see host-toolbar-port-channel.ts). Control-level registry — created with
   // the manager so onMessage() works before any toolbar view exists.
@@ -528,17 +547,30 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     view.setBounds(bounds)
   }
 
+  // Single funnel for the height notify: retain-then-push, so the retained
+  // value is exactly the last value the renderer was told. Every height
+  // notify site MUST go through here — the renderer pulls the retained value
+  // on project-view mount to replay a push it missed (the toolbar's
+  // size-advertiser deduplicates and never re-reports).
+  function notifyHostToolbarHeight(height: number): void {
+    hostToolbarLastHeight = height
+    ctx.notify.hostToolbarHeightChanged(height)
+  }
+
   function setHostToolbarHeight(extent: number): void {
     // While the host pins a fixed height, drop advertiser reports entirely —
     // the session-resident advertiser is always installed, so forwarding its
     // reports would make the strip oscillate between the pinned and measured
-    // heights on every content resize.
+    // heights on every content resize. Dropped reports must not touch the
+    // retained value either: retention records what was NOTIFIED, not what
+    // was reported.
     if (hostToolbarHeightMode !== 'auto') return
     // Push the reserved height back to the main-window renderer so its
-    // placeholder div resizes (closing the dynamic-height loop). The height is
-    // not retained in main — the renderer placeholder is the single source of
-    // truth, and the forward anchor re-reports bounds from it.
-    ctx.notify.hostToolbarHeightChanged(extent)
+    // placeholder div resizes (closing the dynamic-height loop). The notified
+    // height IS retained in main (`getHostToolbarHeight`) so a renderer that
+    // mounts later can pull/replay it; the renderer placeholder remains the
+    // geometry authority — the forward anchor re-reports bounds from it.
+    notifyHostToolbarHeight(extent)
   }
 
   function hideHostToolbar(): void {
@@ -552,7 +584,9 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     // non-zero reserved height and re-publishes bounds on the next window
     // resize, silently re-adding the view we just hid (unstable hide). Zeroing
     // the height flips the anchor to `present:false` so it stops re-publishing.
-    ctx.notify.hostToolbarHeightChanged(0)
+    // Through the funnel so the retained value follows to 0 — a renderer
+    // mounting after the hide must replay 0, not the stale pre-hide height.
+    notifyHostToolbarHeight(0)
   }
 
   const hostToolbar: HostToolbarControl = {
@@ -599,11 +633,13 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       if (mode !== 'auto') {
         // Pin immediately: a preload-less/static toolbar never advertises, so
         // waiting for the next report would leave the strip at height 0.
-        ctx.notify.hostToolbarHeightChanged(mode.fixed)
+        notifyHostToolbarHeight(mode.fixed)
       }
       // Switching back to 'auto' deliberately does NOT synthesize a notify —
       // replaying a stale cached height would flash the old size; the NEXT
-      // advertiser report drives the placeholder again.
+      // advertiser report drives the placeholder again. The RETAINED value
+      // survives the switch though: a freshly-mounting renderer still needs
+      // the pinned height until that next report lands.
     },
     onMessage(channel, handler): HostToolbarMessageSubscription {
       return hostToolbarPort.onMessage(channel, handler)
@@ -1418,6 +1454,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       return popoverView.webContents.id
     },
     getHostToolbarWebContentsId: () => liveHostToolbarWebContents()?.id ?? null,
+    getHostToolbarHeight: () => hostToolbarLastHeight,
     setNativeSimulatorViewBounds,
     resize,
     setSimulatorDevtoolsBounds,

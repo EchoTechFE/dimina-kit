@@ -5,6 +5,7 @@ import {
   publishSimulatorDevtoolsBounds,
   publishHostToolbarBounds,
   onHostToolbarHeightChanged,
+  getHostToolbarHeight,
 } from '@/shared/api'
 import type { Project } from '@/shared/types'
 import { useProjectRuntimeController } from './controllers/use-project-runtime-controller'
@@ -84,7 +85,29 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
   // ZERO and the WCV is collapsed). `deps` carries the height so the anchor
   // re-publishes when the placeholder's rect changes.
   const [hostToolbarHeight, setHostToolbarHeight] = useState(0)
-  useEffect(() => onHostToolbarHeightChanged(setHostToolbarHeight), [])
+  useEffect(() => {
+    // Mount-time REPLAY: the height chain is push-based and the toolbar's
+    // size-advertiser deduplicates (a height already reported is never
+    // re-sent), so any push that fired before this component mounted is lost —
+    // cold start on the project list races it; close-project → reopen hits it
+    // deterministically (this component is rebuilt at 0). Main retains the
+    // last notified height; subscribe FIRST (a push landing between pull and
+    // subscribe would be lost exactly like the original bug), then pull it.
+    let pushReceived = false
+    const unsubscribe = onHostToolbarHeightChanged((height) => {
+      pushReceived = true
+      setHostToolbarHeight(height)
+    })
+    void getHostToolbarHeight().then((height) => {
+      // TOCTOU guard: a fresher push won the race while the pull was in
+      // flight — applying the stale pull result would snap the strip back.
+      if (pushReceived) return
+      // The lenient invoke resolves undefined on main-side failure: keep the
+      // placeholder collapsed at 0 and let live pushes drive it.
+      if (typeof height === 'number') setHostToolbarHeight(height)
+    })
+    return unsubscribe
+  }, [])
   const hostToolbarAnchorRef = useViewAnchor({
     present: hostToolbarHeight > 0,
     publish: publishHostToolbarBounds,

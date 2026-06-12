@@ -312,6 +312,16 @@ export const ViewChannel = {
    * renderer placeholder div resizes (closing the dynamic-height loop).
    */
   HostToolbarHeightChanged: 'view:host-toolbar:height-changed',
+  /**
+   * main ← main-window renderer (invoke): pull the last NOTIFIED toolbar
+   * height retained in main. Mount-time replay companion to
+   * `HostToolbarHeightChanged`: the push listener mounts with the project
+   * view and the toolbar's size-advertiser deduplicates (never re-reports),
+   * so a height pushed while no project view was mounted would otherwise be
+   * lost forever (cold start on the project list races it; close-project →
+   * reopen hits it deterministically). No payload; resolves a number.
+   */
+  HostToolbarGetHeight: 'view:host-toolbar:get-height',
 } as const
 
 export interface ViewBounds {

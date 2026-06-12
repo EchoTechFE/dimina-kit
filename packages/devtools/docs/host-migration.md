@@ -36,6 +36,8 @@
 
 要求：toolbar 页面保留一个 shrink-to-fit 的 `[data-host-toolbar-root]` 根节点（自动高度）。固定高度场景改用 `hostToolbar.setHeightMode({ fixed: n })`，恢复自动用 `setHeightMode('auto')`。
 
+主进程会保留最后一次下发给渲染层的高度（新 getter `views.getHostToolbarHeight()`），项目视图的占位条挂载时主动拉取并回放——广播器去重不重发，宿主无需为「冷启动在项目列表期间上报 / 关闭项目再打开」自行补发高度。
+
 `setHeightMode({ fixed })` 现在做参数校验：非有限数（`NaN`/`±Infinity`）或负数会同步抛 `TypeError`，且**不污染既有模式**（之前的 `'auto'` 或合法 fixed 钉继续生效）——污染值不会到达渲染层 placeholder。
 
 `setPreloadPath(null)` 语义变化：现在表示「无宿主 preload」（旧语义「恢复内置广播器」已无意义——内置运行时永远在）。
