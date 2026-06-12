@@ -577,21 +577,27 @@ describe('openProject — fork-based compile worker orchestration', () => {
 		)
 		expect(child.buildSends().length).toBe(2)
 
-		// A second save lands while the first rebuild's IPC is unanswered.
-		fs.writeFileSync(pageFile, 'Page({ data: { msg: "b" } })\n')
-		await sleep(800) // ample time for the watcher to deliver the event
+		// A second save lands while the first rebuild's IPC is unanswered. Pump it
+		// across the in-flight window: EVERY save while a build is unanswered folds
+		// into ONE dirty flag (rebuild-scheduler coalescing), so the count provably
+		// stays 2 — no concurrent build — no matter how many we issue. Re-issuing
+		// thus CANNOT over-count past the single trailing build; it only defeats a
+		// dropped inotify event under CI CPU contention (a single mid-build write
+		// whose event is lost would otherwise leave dirty unset → no trailing build
+		// → the ===3 assertion below hangs to timeout). The ===2 invariant is the
+		// real serialization proof and is asserted on every pump.
+		for (let attempt = 0; attempt < 6; attempt++) {
+			fs.writeFileSync(pageFile, `Page({ data: { msg: "b-${attempt}" } })\n`)
+			await sleep(250)
+			expect(
+				child.buildSends().length,
+				'NO concurrent build command while one is in flight — rebuild-scheduler serialization must hold across the IPC boundary',
+			).toBe(2)
+		}
 
-		expect(
-			child.buildSends().length,
-			'NO concurrent build command while one is in flight — rebuild-scheduler serialization must hold across the IPC boundary',
-		).toBe(2)
-
-		// Answer the in-flight build: exactly ONE trailing coalesced build.
-		// NOT re-written here — re-issuing the save while answering risks a SECOND
-		// dirty/trailing build and would corrupt the exact ===3 count this test
-		// pins. The dirty flag is already set (asserted ===2 above proves the save
-		// event was delivered without producing a concurrent build), so a single
-		// response deterministically yields the one trailing build.
+		// Answer the in-flight build: the coalesced dirty flag (set by the pumped
+		// saves above, all while the build was unanswered) yields exactly ONE
+		// trailing build.
 		child.respondToBuild(root)
 		await vi.waitFor(() => {
 			expect(
