@@ -33,6 +33,7 @@ import type {
   TabActionPayload,
   TabBarConfig,
 } from '../../shared/bridge-channels.js'
+// eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
 import type { WorkbenchContext } from '../services/workbench-context.js'
 import type { ConnectionRegistry, DebugTap } from '@dimina-kit/electron-deck/main'
 import { createDebugTap } from '@dimina-kit/electron-deck/main'

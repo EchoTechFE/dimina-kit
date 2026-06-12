@@ -1,6 +1,16 @@
 /**
  * Preload side of the host-toolbar gated narrow channel.
  *
+ * ── PUBLIC SURFACE EVOLUTION RULE ───────────────────────────────────────────
+ * `window.diminaHostToolbar` is a published page-facing API, typed by the
+ * exported `DiminaHostToolbarPageBridge` (src/main/runtime/miniapp-runtime.ts)
+ * — arbitrary host toolbar pages compile against it. Members may only be
+ * ADDED, never changed: any semantic change to an existing member (signature,
+ * return shape, queueing/throw behavior) ships under a NEW name instead.
+ * Exception: security fixes / compliance corrections may change existing
+ * member semantics, and MUST be called out in the release's version notes.
+ * Keep the exported bridge type in lockstep with what is exposed here.
+ *
  * Receives the per-load MessagePort main transfers on `did-finish-load`
  * (`ViewChannel.HostToolbarPort`, `event.ports[0]`) and bridges it to the page
  * as `window.diminaHostToolbar` — EXACTLY `{ send, onMessage }`, functions
@@ -47,6 +57,21 @@ export const HOST_TOOLBAR_PENDING_LIMIT = 128
  * a passing toolbar-runtime guard (`activateHostToolbarRuntime`) — a failing
  * guard must leave zero footprint (no bridge key, no IPC listener).
  */
+/**
+ * Entry-waist channel validation, parity with the main side's
+ * `hostToolbar.onMessage` guard (same TypeError, message names `channel`).
+ * Runs BEFORE any state is touched (no queue slot, no registry entry), in
+ * both port states — a page author's typo throws at the call site instead of
+ * vanishing into main's silent inbound drop.
+ */
+function assertValidChannel(method: string, channel: unknown): asserts channel is string {
+  if (typeof channel !== 'string' || channel === '') {
+    throw new TypeError(
+      `diminaHostToolbar.${method}: channel must be a non-empty string`,
+    )
+  }
+}
+
 export function installHostToolbarPortBridge(): void {
   let activePort: MessagePort | null = null
   const pending: Array<{ channel: string; payload: unknown }> = []
@@ -99,6 +124,7 @@ export function installHostToolbarPortBridge(): void {
   // isolated world.
   contextBridge.exposeInMainWorld(BRIDGE_KEY, {
     send(channel: string, payload: unknown): void {
+      assertValidChannel('send', channel)
       const envelope = { channel, payload }
       if (activePort) {
         activePort.postMessage(envelope)
@@ -119,6 +145,7 @@ export function installHostToolbarPortBridge(): void {
       pending.push(envelope)
     },
     onMessage(channel: string, handler: (payload: unknown) => void): () => void {
+      assertValidChannel('onMessage', channel)
       const entry = { channel, handler }
       handlers.push(entry)
       return () => {

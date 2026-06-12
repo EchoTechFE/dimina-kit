@@ -17,8 +17,6 @@
  *    past the drift sentinel.
  *  - `workspace.openProject` stays writable (no `readonly`): qdmp gates
  *    project permissions by reassigning it (documented monkey-patch contract).
- *  - `windows` is an OPAQUE handle (`object`): hosts pass it through to
- *    framework helpers but never reach into it (no BrowserWindow leak).
  *
  * `asMiniappRuntime(ctx)` is an identity return — the contract is a typed
  * VIEW onto the live context, not a snapshot/projection. That is what makes
@@ -27,6 +25,7 @@
  * sentinel: if an internal service drifts away from the contract, compilation
  * breaks HERE, in this package's CI — not in a downstream host's upgrade.
  */
+// eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
 import type { WorkbenchContext } from '../services/workbench-context.js'
 
 /** Compile-status payload broadcast to hosts via `notify.projectStatus`. */
@@ -35,6 +34,56 @@ export interface MiniappProjectStatusPayload {
   message: string
   /** True when the status update is emitted by the file-watcher rebuild loop. */
   hotReload?: boolean
+}
+
+/**
+ * Structured shape of `getSession().appInfo` — the doc-promised
+ * (`host-migration.md` "appInfo 已结构化") DTO, named so hosts can type what
+ * they receive without deep imports or casts.
+ *
+ * `appId` is REQUIRED: the renderer derives its IPC scoping from it and the
+ * default devkit adapter always supplies one (fallback included). A custom
+ * adapter that returns a session without a string `appId` is rejected at the
+ * `openProject` boundary (see workspace-service.ts) — it never becomes the
+ * active session. The decorative rest stays optional: `name`/`path` come from
+ * the devkit adapter, `appName` from the devtools-side mirror; minimal custom
+ * adapters may omit all three.
+ */
+export interface MiniappSessionAppInfo {
+  appId: string
+  name?: string
+  path?: string
+  appName?: string
+}
+
+/**
+ * The page-side bridge the framework injects into the host-toolbar WCV as
+ * `window.diminaHostToolbar` (see src/preload/runtime/host-toolbar-port.ts).
+ * Declared here (the electron-free contract module) so TypeScript toolbar
+ * pages can type the bridge without hand-rolling — and without importing
+ * anything Electron-flavored.
+ *
+ * Shape mirrors the injected bridge EXACTLY:
+ *  - `send` returns void (pre-handshake sends are queued, bounded at 128);
+ *  - `onMessage` returns a BARE un-subscribe function — unlike the main-side
+ *    control's `{ dispose }` — because that is what the preload exposes.
+ * Both throw a `TypeError` synchronously when `channel` is not a non-empty
+ * string (parity with the main side's `onMessage` guard).
+ */
+export interface DiminaHostToolbarPageBridge {
+  send: (channel: string, payload: unknown) => void
+  onMessage: (channel: string, handler: (payload: unknown) => void) => () => void
+}
+
+declare global {
+  interface Window {
+    /**
+     * Present ONLY inside the host-toolbar WebContentsView's main frame
+     * (guarded injection — see host-toolbar-runtime.ts); optional everywhere
+     * else, so page code must runtime-guard before use.
+     */
+    diminaHostToolbar?: DiminaHostToolbarPageBridge
+  }
 }
 
 /**
@@ -71,8 +120,19 @@ export interface MiniappHostToolbar {
     handler: (payload: unknown) => void,
   ) => { dispose: () => void }
   /**
+   * Observe handshake readiness. Fires the handler once per load generation,
+   * exactly when the toolbar page's MessagePort handshake completes (i.e.
+   * when `send` flips to true). Registering while the channel is already
+   * ready fires once asynchronously on a microtask (missed-signal guard);
+   * a reload / re-handshake fires registered handlers again. `dispose()`
+   * detaches (idempotent).
+   */
+  onReady: (handler: () => void) => { dispose: () => void }
+  /**
    * Pin (`{ fixed }`) or unpin (`'auto'`) the toolbar strip height. `'auto'`
    * (default) lets the in-page height advertiser drive the placeholder.
+   * `{ fixed }` values must be finite and non-negative — anything else throws
+   * a `TypeError` synchronously and leaves the standing mode untouched.
    */
   setHeightMode: (mode: 'auto' | { fixed: number }) => void
 }
@@ -102,9 +162,10 @@ export interface MiniappWorkspace {
   /**
    * Minimal live-session DTO, or null when no session. Deliberately excludes
    * the session's own `close` — hosts end sessions via `closeProject`, never
-   * behind the workspace's back.
+   * behind the workspace's back. `appInfo` is structured (see
+   * {@link MiniappSessionAppInfo}) — no casting required.
    */
-  getSession: () => { appInfo: unknown } | null
+  getSession: () => { appInfo: MiniappSessionAppInfo } | null
 }
 
 /**
@@ -113,21 +174,28 @@ export interface MiniappWorkspace {
  * plumbing is a deliberate semver decision, not an accident of projection.
  */
 export interface MiniappRuntime {
-  /** Absolute path to the devtools renderer dist directory. */
-  rendererDir: string
   /** View layer — only the host-owned toolbar control is public. */
   views: { readonly hostToolbar: MiniappHostToolbar }
   /** Project + session workspace (see {@link MiniappWorkspace}). */
   workspace: MiniappWorkspace
   /** Main → renderer notifier — only the compile-status broadcast is public. */
   notify: { projectStatus: (payload: MiniappProjectStatusPayload) => void }
-  /** Lifecycle sink: hosts register their own teardown via `registry.add`. */
-  registry: { add: (dispose: () => void) => unknown }
   /**
-   * Opaque window-service handle. Pass it through to framework helpers
-   * (e.g. `openSettingsWindow`); it exposes nothing to reach into.
+   * Lifecycle sink: hosts register their own teardown via `registry.add`.
+   * Accepts BOTH disposal idioms — a `{ dispose }` object (what
+   * `hostToolbar.onMessage`/`onReady` return) or a bare `() => void` —
+   * matching the live registry, so `registry.add(sub)` works without the
+   * `registry.add(() => sub.dispose())` wrapper.
    */
-  windows: object
+  registry: { add: (d: { dispose: () => void } | (() => void)) => void }
+  /**
+   * Open (or re-focus) the standalone workbench-settings window. Replaces the
+   * retired `windows` opaque pass-through (whose only documented purpose —
+   * `openSettingsWindow(ctx)` — could never typecheck from the contract) and
+   * the `rendererDir` member that existed solely to feed it; hosts needing
+   * the renderer dist path use the `/paths` export instead.
+   */
+  openSettings: () => Promise<void>
 }
 
 /**

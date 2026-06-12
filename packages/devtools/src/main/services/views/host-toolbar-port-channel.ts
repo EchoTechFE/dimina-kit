@@ -54,6 +54,20 @@ export interface HostToolbarMessageSubscription {
   dispose(): void
 }
 
+/**
+ * Internal channel lifecycle, named. Exactly one is current at any time:
+ *  - `absent`            — no live port and no document-replacing navigation
+ *                          in flight (initial; wc destroyed; renderer port
+ *                          died without a re-handshake);
+ *  - `awaitingHandshake` — a navigation invalidated the port; the next
+ *                          `did-finish-load` handshake restores readiness;
+ *  - `ready`             — the current load's handshake completed; `send`
+ *                          delivers; `onReady` catch-up fires for late
+ *                          registrations;
+ *  - `disposed`          — terminal (manager teardown); everything inert.
+ */
+type ChannelState = 'absent' | 'awaitingHandshake' | 'ready' | 'disposed'
+
 export interface HostToolbarPortChannel {
   /**
    * Hook a freshly created toolbar webContents: registers the
@@ -76,6 +90,16 @@ export interface HostToolbarPortChannel {
     channel: string,
     handler: (payload: unknown) => void,
   ): HostToolbarMessageSubscription
+  /**
+   * Observe handshake readiness. Fires `handler` once per load GENERATION,
+   * at the moment that generation's handshake completes (`send` flips true).
+   * Registering while already `ready` schedules a one-shot catch-up fire on a
+   * microtask — never synchronously — and the catch-up RE-CHECKS at fire time
+   * that (a) the subscription is still registered and (b) the generation is
+   * unchanged / the port is still live, so a same-frame `dispose()` or
+   * host-initiated load suppresses it. Inert (never fires) after `dispose()`.
+   */
+  onReady(handler: () => void): HostToolbarMessageSubscription
   /**
    * Post `{ channel, payload }` to the toolbar page over the live port.
    * Returns false (delivering NOTHING, creating NOTHING) when there is no
@@ -102,10 +126,20 @@ export function createHostToolbarPortChannel(opts: {
   let activePort: MessagePortMain | null = null
   /** The wc that owns `activePort` (so a stale wc's `destroyed` can't drop a successor's port). */
   let activeWc: WebContents | null = null
-  let disposed = false
+  /** Named lifecycle state. INVARIANT: `state === 'ready'` ⟺ `activePort !== null`. */
+  let state: ChannelState = 'absent'
+  /**
+   * Monotonic per-handshake counter. Each completed handshake is one load
+   * GENERATION; `onReady` catch-up fires capture it at registration and
+   * re-check it at fire time so a fire scheduled for generation N can never
+   * deliver after a navigation/handshake moved the channel past N.
+   */
+  let generation = 0
   // Array (not Map<channel, Set>) so the same handler function may be
   // registered twice and each registration disposes independently.
   const handlers: Array<{ channel: string; handler: (payload: unknown) => void }> = []
+  // onReady registrations. Same array-of-entries discipline as `handlers`.
+  const readyHandlers: Array<{ handler: () => void }> = []
 
   function dispatch(data: unknown): void {
     // Inbound waist: the toolbar page is host-arbitrary content — anything
@@ -119,10 +153,15 @@ export function createHostToolbarPortChannel(opts: {
     }
   }
 
-  function dropActivePort(close: boolean): void {
+  /**
+   * Drop the live port and transition to `next` (`'absent'` for death paths,
+   * `'awaitingHandshake'` for navigation paths). Never demotes `disposed`.
+   */
+  function dropActivePort(close: boolean, next: 'absent' | 'awaitingHandshake'): void {
     const port = activePort
     activePort = null
     activeWc = null
+    if (state !== 'disposed') state = next
     if (close && port) {
       try {
         port.close()
@@ -132,11 +171,37 @@ export function createHostToolbarPortChannel(opts: {
     }
   }
 
+  /**
+   * Invoke one onReady handler with exception ISOLATION: subscribers are
+   * arbitrary control-level code — one throwing must neither starve sibling
+   * registrations nor escape the surrounding event/microtask callback (a
+   * throw out of a `did-finish-load` listener or a `queueMicrotask` body is
+   * process-level `uncaughtException` territory). Report-and-continue.
+   */
+  function invokeReadyHandler(handler: () => void): void {
+    try {
+      handler()
+    } catch (err) {
+      console.error('[host-toolbar] onReady handler threw:', err)
+    }
+  }
+
+  /** Fire every still-registered onReady handler exactly once (snapshot iteration). */
+  function fireReadyHandlers(): void {
+    for (const entry of [...readyHandlers]) {
+      // A handler may dispose a sibling registration mid-fire: re-check
+      // membership so a disposed entry never fires. Per-handler isolation
+      // (NOT around the loop): a throwing handler must not abort the fire
+      // for later-registered siblings.
+      if (readyHandlers.includes(entry)) invokeReadyHandler(entry.handler)
+    }
+  }
+
   function handshake(wc: WebContents): void {
-    if (disposed) return
+    if (state === 'disposed') return
     if (!opts.isCurrent(wc)) return
     // The previous load's document is gone; its port goes with it.
-    dropActivePort(true)
+    dropActivePort(true, 'awaitingHandshake')
     const { port1, port2 } = new MessageChannelMain()
     port1.on('message', (event) => {
       dispatch(event.data)
@@ -144,12 +209,17 @@ export function createHostToolbarPortChannel(opts: {
     // Renderer end died without a re-handshake (page crash / wc close): drop
     // the reference so send() reports false instead of posting into the void.
     port1.on('close', () => {
-      if (activePort === port1) dropActivePort(false)
+      if (activePort === port1) dropActivePort(false, 'absent')
     })
     wc.postMessage(ViewChannel.HostToolbarPort, null, [port2])
     port1.start()
     activePort = port1
     activeWc = wc
+    state = 'ready'
+    generation++
+    // Readiness signal AFTER the port is live: a handler calling send() from
+    // inside its onReady fire must observe `true`.
+    fireReadyHandlers()
   }
 
   return {
@@ -180,16 +250,16 @@ export function createHostToolbarPortChannel(opts: {
               ? details.isMainFrame
               : isMainFramePositional
           if (isSameDocument || !isMainFrame) return
-          dropActivePort(true)
+          dropActivePort(true, 'awaitingHandshake')
         },
       )
       wc.on('destroyed', () => {
-        if (activeWc === wc) dropActivePort(true)
+        if (activeWc === wc) dropActivePort(true, 'absent')
       })
     },
 
     invalidate(): void {
-      dropActivePort(true)
+      dropActivePort(true, 'awaitingHandshake')
     },
 
     onMessage(channel, handler): HostToolbarMessageSubscription {
@@ -208,6 +278,35 @@ export function createHostToolbarPortChannel(opts: {
       }
     },
 
+    onReady(handler): HostToolbarMessageSubscription {
+      // Torn-down control: inert registration — never fires, never throws.
+      if (state === 'disposed') {
+        return { dispose(): void {} }
+      }
+      const entry = { handler }
+      readyHandlers.push(entry)
+      if (state === 'ready') {
+        // Missed-signal catch-up: the handshake already happened, so the
+        // subscriber would otherwise wait forever. Asynchronous on a
+        // microtask (never re-enter host code synchronously inside
+        // onReady()), and RE-CHECKED at fire time — both the subscription's
+        // liveness and the load generation can change between scheduling and
+        // the microtask (same-frame dispose() / same-frame loadFile).
+        const scheduledGeneration = generation
+        queueMicrotask(() => {
+          if (state !== 'ready' || generation !== scheduledGeneration || !activePort) return
+          if (!readyHandlers.includes(entry)) return
+          invokeReadyHandler(entry.handler)
+        })
+      }
+      return {
+        dispose(): void {
+          const i = readyHandlers.indexOf(entry)
+          if (i >= 0) readyHandlers.splice(i, 1)
+        },
+      }
+    },
+
     send(channel, payload): boolean {
       if (!activePort) return false
       activePort.postMessage({ channel, payload })
@@ -215,9 +314,10 @@ export function createHostToolbarPortChannel(opts: {
     },
 
     dispose(): void {
-      disposed = true
-      dropActivePort(true)
+      dropActivePort(true, 'absent')
+      state = 'disposed'
       handlers.length = 0
+      readyHandlers.length = 0
     },
   }
 }

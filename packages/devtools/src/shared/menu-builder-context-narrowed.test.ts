@@ -71,16 +71,15 @@ type MenuBuilderWinParam = Parameters<MenuBuilderHook>[0]
 // full `WorkbenchContext`).
 type _CtxParamIsMenuContext = Expect<Equal<MenuBuilderCtxParam, MenuContext>>
 
-// Pins that `MenuContext` equals `WorkbenchContext` minus the five
-// internal-pipeline fields — exactly.
-type _MenuContextIsNarrowedOmit = Expect<
-  Equal<
-    MenuContext,
-    Omit<
-      WorkbenchContext,
-      'registry' | 'senderPolicy' | 'trustedWindowSenderIds' | 'simulatorApis' | 'toolbar'
-    >
-  >
+// DESIGNED CONTRACT CHANGE (feedback fix ⑤ — see
+// menu-context-handwritten.test.ts, which is the spec): `MenuContext` is now
+// a HAND-WRITTEN narrow contract, no longer `Omit<WorkbenchContext, …>`.
+// The old `Equal<MenuContext, Omit<…>>` pin was removed in that designed
+// pass; its semantic guarantees (internal pipeline unreachable, hook param
+// narrowed) are re-encoded in the handwritten-contract suite and below. A
+// full WorkbenchContext must STAY assignable (structural subtyping):
+type _ContextStillAssignable = Expect<
+  WorkbenchContext extends MenuContext ? true : false
 >
 
 // The first parameter stays a `BrowserWindow` — narrowing must not touch it.
@@ -96,12 +95,15 @@ describe('Requirement B: menuBuilder context is narrowed to MenuContext', () => 
       // ✅ Allowed: menu-relevant context fields stay reachable. None of the
       //    following lines may error — if one does, the narrowing removed a
       //    field the menu builder legitimately needs.
+      //    DESIGNED CONTRACT CHANGE (feedback fix ⑤): `views` / `windows` /
+      //    `projectsProvider` left the menu surface when `MenuContext` became
+      //    the hand-written audited contract (menu-context-handwritten.test.ts
+      //    is the spec) — they were dropped from this allowed list in that
+      //    designed pass; `openSettings` joined it.
       void menuContext.appName
       void menuContext.workspace
-      void menuContext.views
-      void menuContext.windows
       void menuContext.notify
-      void menuContext.projectsProvider
+      void menuContext.openSettings
 
       // ❌ Forbidden: the five internal-pipeline fields must be unreachable.
       //    Each `@ts-expect-error` requires the next line to be a type error,
@@ -126,6 +128,6 @@ describe('Requirement B: menuBuilder context is narrowed to MenuContext', () => 
 // readers both see they are intentional anchors, not dead code.
 export type __MenuContextContract = [
   _CtxParamIsMenuContext,
-  _MenuContextIsNarrowedOmit,
+  _ContextStillAssignable,
   _WinParamUnchanged,
 ]

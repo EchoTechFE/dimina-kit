@@ -1,4 +1,5 @@
 import type { WebContents } from 'electron'
+// eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
 import type { WorkbenchContext } from '../workbench-context.js'
 import type { ElementRef } from './shared.js'
 

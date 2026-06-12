@@ -45,19 +45,19 @@ function staticAssert<_T extends true>(): void {}
 // and every downstream host using it breaks on upgrade instead of in our CI.
 // ═════════════════════════════════════════════════════════════════════════
 
-// qdmp reads `rendererDir` to resolve its own renderer assets.
-staticAssert<HasKey<MiniappRuntime, 'rendererDir'>>()
+// DESIGNED CONTRACT CHANGE (feedback fix ② — see
+// miniapp-runtime-open-settings.test.ts, which is the spec): `rendererDir`
+// and `windows` are REMOVED from the contract. `windows` existed only for an
+// `openSettingsWindow(ctx)` pass-through its own type could never satisfy
+// (replaced by first-class `openSettings()`); `rendererDir`'s real need is
+// served by the `/paths` export. The two HasKey pins below were flipped from
+// positive to negative in that designed pass — re-adding either member is a
+// deliberate semver decision, not an accident.
+staticAssert<Not<HasKey<MiniappRuntime, 'rendererDir'>>>()
+staticAssert<Not<HasKey<MiniappRuntime, 'windows'>>>()
 
 // qdmp registers its own teardown via `registry.add(dispose)`.
 staticAssert<HasKey<MiniappRuntime, 'registry'>>()
-
-// qdmp passes `windows` through to `openSettingsWindow` (opaque handle).
-staticAssert<HasKey<MiniappRuntime, 'windows'>>()
-
-// `rendererDir` must be a plain string DTO, no path-service indirection.
-// (Vacuously true while the key is absent — `KeyType` yields `never` — and a
-// real pin the moment the key exists.)
-staticAssert<KeyType<MiniappRuntime, 'rendererDir'> extends string ? true : false>()
 
 // `registry.add` must accept a bare `() => void` dispose fn (qdmp's call shape).
 // (Vacuous-today pin, same mechanism as above.)
@@ -98,9 +98,9 @@ staticAssert<Not<HasKey<MiniappRuntime['views'], 'getHostToolbarWebContentsId'>>
 // qdmp migrated to the send/onMessage message channel).
 staticAssert<Not<HasKey<MiniappRuntime['views']['hostToolbar'], 'webContents'>>>()
 
-// `windows` is OPAQUE: it must not re-expose `mainWindow` (a BrowserWindow —
-// the whole point is zero Electron types on the contract).
-staticAssert<Not<HasKey<KeyType<MiniappRuntime, 'windows'>, 'mainWindow'>>>()
+// (`windows` itself is gone from the contract — designed change, see §1 —
+// so its old "opaque, no mainWindow re-exposure" pin is superseded by the
+// stronger Not<HasKey<MiniappRuntime, 'windows'>> pin above.)
 
 // `workspace` keeps only the 7 audited members; thumbnails are internal.
 staticAssert<Not<HasKey<MiniappRuntime['workspace'], 'captureThumbnail'>>>()

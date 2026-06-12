@@ -15,6 +15,7 @@ import type { AddressInfo } from 'net'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { AutomationChannel, SimulatorChannel } from '../../../shared/ipc-channels.js'
 import { IpcRegistry } from '../../utils/ipc-registry.js'
+// eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
 import type { WorkbenchContext } from '../workbench-context.js'
 import type { Handler, RpcEvent, RpcRequest, RpcResponse } from './shared.js'
 import { getSimulator } from './exec.js'

@@ -14,10 +14,18 @@ export { suppressEpipe, setupCdpPort } from './app/bootstrap.js'
 // The hand-written kernel surface a downstream host consumes; prefer this
 // over depending on the full `WorkbenchContext`.
 export { asMiniappRuntime } from './runtime/miniapp-runtime.js'
-export type { MiniappRuntime } from './runtime/miniapp-runtime.js'
+export type {
+  MiniappRuntime,
+  MiniappSessionAppInfo,
+  DiminaHostToolbarPageBridge,
+} from './runtime/miniapp-runtime.js'
 
 // ── Context & views (for module-assembly consumers) ──────────────────────
 export { createWorkbenchContext } from './services/workbench-context.js'
+// Public barrel: re-exporting the WorkbenchContext type here is the intended
+// public surface (not a violation to migrate away from); the grandfather
+// directive below uses the uniform marker so the audit grep stays one string.
+// eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
 export type { WorkbenchContext, CreateContextOptions } from './services/workbench-context.js'
 export { createMainWindow } from './windows/main-window/index.js'
 export { createViewManager } from './services/views/view-manager.js'
