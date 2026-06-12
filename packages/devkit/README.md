@@ -49,6 +49,7 @@ await session.close()
 | `watch`        | `boolean`                | `true`  | 为 `false` 时跳过 chokidar 文件监听 / 自动重编译循环                                        |
 | `onRebuild`    | `() => void`             | --      | 文件变更触发重新编译后的回调                                                                 |
 | `onBuildError` | `(err: unknown) => void` | --      | 编译出错时的回调                                                                             |
+| `onLog`        | `(entry) => void`        | --      | 逐行编译日志回调；`entry = { stream: 'stdout' \| 'stderr', text }`，已经过内置噪音过滤（`filterDmccLogLine`） |
 
 #### 返回值 ProjectSession
 
@@ -62,9 +63,10 @@ await session.close()
 
 ## 工作流程
 
-1. 调用 `@dimina/compiler` 编译小程序项目
-2. 启动基于 Express 的 H5 容器预览服务器（含 CORS、SPA fallback、可选 live-reload）
-3. 通过 chokidar 监听项目目录变更，自动触发增量编译和页面刷新；编译进行中的变更不会丢失，会在当前编译结束后合并为恰好一次尾随重编译（trailing rebuild）
+1. 在 fork 出的长驻编译子进程中调用 `@dimina/compiler` 编译小程序项目（cwd 隔离：`chdir` 只发生在子进程内，宿主进程 cwd 不被污染；编译器崩溃不会拖垮宿主，下次重编译自动重新 fork 恢复）
+2. 子进程的 stdout/stderr 按行管道回父进程，经 `filterDmccLogLine` 过滤噪音后通过 `onLog` 回调送出
+3. 启动基于 Express 的 H5 容器预览服务器（含 CORS、SPA fallback、可选 live-reload）
+4. 通过 chokidar 监听项目目录变更，自动触发增量编译和页面刷新；编译进行中的变更不会丢失，会在当前编译结束后合并为恰好一次尾随重编译（trailing rebuild）
 
 ---
 

@@ -24,6 +24,16 @@ export interface ProjectStatusPayload {
 }
 
 /**
+ * Payload for the `project:compileLog` push — one filtered dmcc log line.
+ * `at` is stamped in the main process when the line is captured.
+ */
+export interface CompileLogPayload {
+  at: number
+  stream: 'stdout' | 'stderr'
+  text: string
+}
+
+/**
  * Payload for the `settings:init` event sent into the embedded settings overlay
  * right after it is shown.
  */
@@ -57,6 +67,8 @@ export interface RendererNotifier {
   // ── Main window ──────────────────────────────────────────────────────────
   /** Broadcast project compile status transitions to the main renderer. */
   projectStatus(payload: ProjectStatusPayload): void
+  /** Push one per-line dmcc compile-log entry to the main renderer. */
+  compileLog(payload: CompileLogPayload): void
   /** Ask the main renderer to navigate back to its landing screen. */
   windowNavigateBack(): void
   /** Tell the main renderer the compile popover has been closed. */
@@ -120,6 +132,9 @@ export function createRendererNotifier(ctx: NotifierContext): RendererNotifier {
   return {
     projectStatus(payload) {
       sendToMain(ProjectChannel.Status, payload)
+    },
+    compileLog(payload) {
+      sendToMain(ProjectChannel.CompileLog, payload)
     },
     windowNavigateBack() {
       sendToMain(WindowChannel.NavigateBack)

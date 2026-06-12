@@ -1,4 +1,4 @@
-export type BuiltinRightPaneTabId = 'simulator' | 'wxml' | 'appdata' | 'storage'
+export type BuiltinRightPaneTabId = 'simulator' | 'wxml' | 'appdata' | 'storage' | 'compile'
 export type RightPaneTabId = BuiltinRightPaneTabId | (string & {})
 
 export interface RightPaneState {

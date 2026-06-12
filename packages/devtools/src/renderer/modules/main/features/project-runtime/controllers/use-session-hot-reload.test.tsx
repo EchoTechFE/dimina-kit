@@ -68,6 +68,10 @@ vi.mock('@/shared/api', () => {
         if (i >= 0) projectStatusListeners.splice(i, 1)
       }
     }),
+    // Harness stub (same nature as the pre-authorized compile-events harness
+    // fix): useSession now also subscribes onCompileLog, and a missing export
+    // on a vi.mock'ed module throws at access. Nothing here asserts on it.
+    onCompileLog: vi.fn(() => () => {}),
   }
 })
 

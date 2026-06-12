@@ -187,6 +187,10 @@ export const ProjectChannel = {
   GetCompileConfig: 'project:getCompileConfig',
   SaveCompileConfig: 'project:saveCompileConfig',
   Status: 'project:status',
+  // Main → renderer push of per-line dmcc compile logs (devkit `onLog`).
+  // Dedicated channel: `project:status` keeps its one-event-per-payload
+  // contract (compileEvents), this one carries the line stream (compileLogs).
+  CompileLog: 'project:compileLog',
   CaptureThumbnail: 'project:captureThumbnail',
   GetThumbnail: 'project:getThumbnail',
 } as const

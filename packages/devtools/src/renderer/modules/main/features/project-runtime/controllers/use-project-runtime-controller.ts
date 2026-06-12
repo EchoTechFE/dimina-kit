@@ -11,6 +11,7 @@ import type { RightPaneState, RightPaneTabId } from '../types'
 
 import { useDevice } from './use-device'
 import { useSession } from './use-session'
+import type { CompileEvent, CompileLogEntry } from './use-session'
 import { useSimulator } from './use-simulator'
 import { usePanelData, type AppDataState } from './use-panel-data'
 import { useRightPane } from './use-right-pane'
@@ -39,6 +40,12 @@ interface SessionSlice {
   port: number
   pages: string[]
   compileConfig: CompileConfig
+  /** 编译 tab event log (useSession passthrough — feeds BottomDebugPanel). */
+  compileEvents: CompileEvent[]
+  /** 编译 tab per-line dmcc log (useSession passthrough). */
+  compileLogs: CompileLogEntry[]
+  /** Clears both compileEvents and compileLogs. */
+  clearCompileEvents: () => void
   relaunch: (nextConfig?: CompileConfig) => Promise<void>
 }
 
@@ -175,6 +182,9 @@ export function useProjectRuntimeController(
       port: sessionHook.port,
       pages: sessionHook.pages,
       compileConfig: sessionHook.compileConfig,
+      compileEvents: sessionHook.compileEvents,
+      compileLogs: sessionHook.compileLogs,
+      clearCompileEvents: sessionHook.clearCompileEvents,
       relaunch: sessionHook.relaunch,
     },
     device: {
