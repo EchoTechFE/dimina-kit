@@ -1,5 +1,6 @@
 import type { Page, ElectronApplication } from '@playwright/test'
 import fs from 'fs'
+import os from 'os'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { ProjectsChannel, ProjectChannel, SimulatorChannel } from '../src/shared/ipc-channels'
@@ -12,12 +13,37 @@ const DEMO_CANDIDATES = [
   path.resolve(__dirname, '..', '..', 'demo-app'),
 ]
 
-function resolveDemoAppDir(): string {
+function resolveDemoAppSourceDir(): string {
   const found = DEMO_CANDIDATES.find((dir) => fs.existsSync(path.join(dir, 'project.config.json')))
   if (!found) {
     throw new Error(`No demo app found. Checked: ${DEMO_CANDIDATES.join(', ')}`)
   }
   return found
+}
+
+/**
+ * Per-worker demo-app copy. Workers used to share one mutable demo-app at the
+ * repo path, and several specs mutate its sources (relaunch-resilience,
+ * editor-hot-reload) — with hot reload actually working, a mutation made by
+ * one worker triggers a watcher rebuild + DeviceShell respawn inside EVERY
+ * concurrently-open session of the same project path, failing unrelated
+ * assertions mid-flight in the other worker. (The interference existed
+ * before, but was invisible while the renderer dropped the `hotReload` flag.)
+ *
+ * Keyed by TEST_PARALLEL_INDEX (stable across worker restarts, unlike
+ * TEST_WORKER_INDEX) so a respawned worker reuses the same project path. The
+ * copy is recreated fresh at worker startup so mutation residue from an
+ * interrupted previous run can never leak into this one — and the repo's
+ * demo-app stays pristine even when a spec's restore path is cut short.
+ */
+function resolveDemoAppDir(): string {
+  const source = resolveDemoAppSourceDir()
+  const parallelIndex = process.env.TEST_PARALLEL_INDEX
+  if (parallelIndex === undefined) return source
+  const copy = path.join(os.tmpdir(), 'dimina-kit-e2e', `demo-app-w${parallelIndex}`)
+  fs.rmSync(copy, { recursive: true, force: true })
+  fs.cpSync(source, copy, { recursive: true })
+  return copy
 }
 
 function readDemoProjectName(projectDir: string): string {

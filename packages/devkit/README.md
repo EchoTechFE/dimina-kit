@@ -64,7 +64,7 @@ await session.close()
 
 1. 调用 `@dimina/compiler` 编译小程序项目
 2. 启动基于 Express 的 H5 容器预览服务器（含 CORS、SPA fallback、可选 live-reload）
-3. 通过 chokidar 监听项目目录变更，自动触发增量编译和页面刷新
+3. 通过 chokidar 监听项目目录变更，自动触发增量编译和页面刷新；编译进行中的变更不会丢失，会在当前编译结束后合并为恰好一次尾随重编译（trailing rebuild）
 
 ---
 

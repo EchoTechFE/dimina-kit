@@ -1,6 +1,7 @@
 import {
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react'
 import type { RefObject } from 'react'
@@ -21,6 +22,12 @@ export interface UseSimulatorProps {
   appInfo: AppInfo | null
   compileConfig: CompileConfig
   port: number
+  /**
+   * Hot-reload signal from `useSession`: bumped once per watcher rebuild
+   * (`projectStatus` with `hotReload: true`). Each bump respawns the
+   * DeviceShell exactly once via `attachNativeSimulator`.
+   */
+  hotReloadToken: number
 }
 
 export interface SimulatorHookResult {
@@ -37,6 +44,7 @@ export function useSimulator(props: UseSimulatorProps): SimulatorHookResult {
     appInfo,
     compileConfig,
     port,
+    hotReloadToken,
   } = props
 
   const simulatorUrl = useMemo(() => {
@@ -62,19 +70,62 @@ export function useSimulator(props: UseSimulatorProps): SimulatorHookResult {
     })
   }, [])
 
+  // Latest-value mirror for the hot-reload path. The attach effect must NOT
+  // depend on `currentPage`/`compileConfig`/`appInfo`/`port` directly (in-app
+  // navigation or config identity churn would re-attach the simulator), so it
+  // reads them through this render-synced ref instead. The sync effect has no
+  // dep array (runs every render) and is declared BEFORE the attach effect so
+  // the context is always fresh when the attach effect reads it.
+  const hotReloadContextRef = useRef({ currentPage, compileConfig, appInfo, port })
+  useEffect(() => {
+    hotReloadContextRef.current = { currentPage, compileConfig, appInfo, port }
+  })
+
+  // Last token the attach effect has consumed. Seeded with the initial token
+  // so the mount attach is a plain attach, not a hot reload.
+  const attachedHotReloadTokenRef = useRef(hotReloadToken)
+
   // ── Mount the simulator as a main-process WebContentsView ───────────────────
   // We ask main to create + load the WCV with the simulatorUrl; main's preload
   // then drives SPAWN → DeviceShell. `currentPage` mirrors the URL (page-stack
   // nav happens inside the WCV and arrives via onSimulatorCurrentPage above).
+  //
+  // `hotReloadToken` resurrects the PR#12 hot-reload guard deleted in PR#39:
+  // a watcher rebuild bumps the token, the effect re-runs exactly once, and
+  // `attachNativeSimulator` tears down + respawns the DeviceShell (the
+  // native-host reload primitive, view-manager.ts attachNativeSimulator).
   useEffect(() => {
     if (compileStatus.status !== 'ready') return
     if (!simulatorUrl) return
+
+    const isHotReload = hotReloadToken !== attachedHotReloadTokenRef.current
+    attachedHotReloadTokenRef.current = hotReloadToken
+
+    let attachUrl = simulatorUrl
+    if (isHotReload) {
+      // Reload at the page the user is looking at (the onSimulatorCurrentPage
+      // mirror), not the configured startPage — the native equivalent of the
+      // old `collapseRouteToTopPage` semantics. The startPage's queryParams
+      // belong to the startPage only and must not leak onto another page.
+      const ctx = hotReloadContextRef.current
+      if (ctx.appInfo && ctx.port) {
+        const reloadPage = ctx.currentPage || ctx.compileConfig.startPage
+        attachUrl = buildSimulatorUrl(
+          ctx.appInfo.appId,
+          reloadPage === ctx.compileConfig.startPage
+            ? ctx.compileConfig
+            : { ...ctx.compileConfig, startPage: reloadPage, queryParams: [] },
+          ctx.port,
+        )
+      }
+    }
+
     // Push the device BEFORE attaching: main caches it so the simulator WCV's
     // preload picks it up synchronously (NATIVE_HOST_ENABLED reply), letting the
     // DeviceShell mount at the right bezel size / notch without a flash.
     sendDeviceInfo(deviceRef.current!)
-    void attachNativeSimulator(simulatorUrl, simPanelWidthRef.current!)
-  }, [compileStatus.status, simulatorUrl, simPanelWidthRef, deviceRef, sendDeviceInfo])
+    void attachNativeSimulator(attachUrl, simPanelWidthRef.current!)
+  }, [compileStatus.status, simulatorUrl, hotReloadToken, simPanelWidthRef, deviceRef, sendDeviceInfo])
 
   return {
     simulatorUrl,

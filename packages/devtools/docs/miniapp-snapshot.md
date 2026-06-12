@@ -16,7 +16,7 @@
 
 devtools 的右侧面板要把小程序运行时状态实时映射给开发者。这里的真相源（preload 内存 cache）每次 frame reload 都会被新的 JS 上下文清空，而 renderer 的 React state 不随之重建——若 renderer 靠**增量事件**自己拼状态，两者必然漂移。这套快照框架就是为消除这类漂移而设计的（push/pull/重同步）。
 
-> **native-host 下的实际数据路径**：native-host 是唯一运行时，simulator 顶层帧（`simulator.html`，跑在主进程 WebContentsView 里）**不再**承载页面 DOM / service 状态——页面 DOM 在子 render-host `<webview>` guests、service 逻辑在隐藏 service-host 窗口。因此 **renderer 的面板数据不走本框架的 `miniapp-snapshot:push/pull` 传输**，而是从主进程的专用通道取（WXML→`SimulatorWxmlChannel`、AppData→`SimulatorAppDataChannel`，详见 §4 与 §11）。本框架的 push/pull 传输（`createMiniappSnapshotHost` / `createWxmlSource`）**已废弃**：导出暂留 `@dimina-kit/devtools/preload` 但已标记 `@deprecated`（计划下个 minor 移除），在 devtools 内结构性无收端（原因见 §6）。下文的**投影契约**（全量替换、丢弃过期、单点派生）两条路径共享；§4 / §5.3 / §7 / §10 以内置 native-host 通道路径（`useNativeChannelSnapshot`）为主语，preload 侧已废弃的 Host + push/pull 路径见 §6 / §11。
+> **native-host 下的实际数据路径**：native-host 是唯一运行时，simulator 顶层帧（`simulator.html`，跑在主进程 WebContentsView 里）**不再**承载页面 DOM / service 状态——页面 DOM 在子 render-host `<webview>` guests、service 逻辑在隐藏 service-host 窗口。因此 **renderer 的面板数据不走本框架的 `miniapp-snapshot:push/pull` 传输**，而是从主进程的专用通道取（WXML→`SimulatorWxmlChannel`、AppData→`SimulatorAppDataChannel`，详见 §4 与 §11）。本框架的 push/pull 传输（`createMiniappSnapshotHost` / `createWxmlSource`）**已废弃**：导出暂留 `@dimina-kit/devtools/preload` 但已标记 `@deprecated`（计划 0.5.0 移除），在 devtools 内结构性无收端（原因见 §6）。下文的**投影契约**（全量替换、丢弃过期、单点派生）两条路径共享；§4 / §5.3 / §7 / §10 以内置 native-host 通道路径（`useNativeChannelSnapshot`）为主语，preload 侧已废弃的 Host + push/pull 路径见 §6 / §11。
 
 ```mermaid
 flowchart LR
@@ -117,7 +117,7 @@ flowchart TB
   CH2 -- "GetSnapshot (invoke seed) / Event (push)" --> HOOK
 ```
 
-> 主进程 simulator 服务侧的快照产出仍沿用本框架的语义（全量、不可变、单调 `seq` 丢弃过期）；其 preload 侧的 `MiniappSnapshotHost` + `miniapp-snapshot:push/pull` 传输通道**已废弃**（导出保留但标记 `@deprecated`，计划下个 minor 移除——devtools 内已无任何收端，原因见 §6）。
+> 主进程 simulator 服务侧的快照产出仍沿用本框架的语义（全量、不可变、单调 `seq` 丢弃过期）；其 preload 侧的 `MiniappSnapshotHost` + `miniapp-snapshot:push/pull` 传输通道**已废弃**（导出保留但标记 `@deprecated`，计划 0.5.0 移除——devtools 内已无任何收端，原因见 §6）。
 
 每层的职责分工（native-host 内置路径）：
 
@@ -129,7 +129,7 @@ flowchart TB
 
 > **面板 WXML / AppData 都由 main 取**：native-host 是唯一运行时，页面 DOM 跑在 render-host `<webview>` guests、service 逻辑跑在 service-host 窗口——都不是 simulator preload 能直达的同文档 iframe，所以本框架的 iframe 数据源在这里只会推 null。因此 renderer 的**面板**数据改从主进程的专用通道取：WXML 走 `SimulatorWxmlChannel`、AppData 走 `SimulatorAppDataChannel`（main 侧 simulator-wxml / simulator-appdata 服务 → `GetSnapshot` seed + `Event` push），都不走本框架的 push/pull 传输；renderer 侧由 `useNativeChannelSnapshot`（见 [§11 文件清单](#11-文件清单)）消费这两条通道。
 >
-> 据此 simulator preload 只注册 **`AppDataSource` 一个 source**，且不是为了面板数据，而是因为它的 `start()` 会装上 `window.__simulatorHook.appData` 钩子并把扁平缓存镜像到 `window.__simulatorData.getAppdata()`——这两个仍被 simulator 顶层帧里的自动化 `getData`（`automation/handlers/page.ts`）、MCP 上下文概览（`mcp/tools/context-tools.ts`）和 e2e automator helper 读取。`WxmlSource` 是纯顶层帧 DOM observer，在 native-host 下只会推 null，故跳过（`createWxmlSource` / `createMiniappSnapshotHost` 仍从 `@dimina-kit/devtools/preload` 导出，但已标记 `@deprecated`，计划下个 minor 移除）。
+> 据此 simulator preload 只注册 **`AppDataSource` 一个 source**，且不是为了面板数据，而是因为它的 `start()` 会装上 `window.__simulatorHook.appData` 钩子并把扁平缓存镜像到 `window.__simulatorData.getAppdata()`——这两个仍被 simulator 顶层帧里的自动化 `getData`（`automation/handlers/page.ts`）、MCP 上下文概览（`mcp/tools/context-tools.ts`）和 e2e automator helper 读取。`WxmlSource` 是纯顶层帧 DOM observer，在 native-host 下只会推 null，故跳过（`createWxmlSource` / `createMiniappSnapshotHost` 仍从 `@dimina-kit/devtools/preload` 导出，但已标记 `@deprecated`，计划 0.5.0 移除）。
 
 ## 5. 调用链路（时序图）
 
@@ -270,7 +270,7 @@ stateDiagram-v2
 > - **发送端**：传输依赖 preload 有 embedder（source 跑在 `<webview>` guest 的同文档 preload 里），而 simulator 顶层帧是无 embedder 的主进程 WebContentsView，`sendToHost` 无处可达——`src/preload/windows/simulator.ts` 的注释自承 publish "would only ever fire into the void"。默认 preload 也只 `createAppDataSource().start()`（取其 `__simulatorHook`/`__simulatorData` 副作用，见 §4），不 `install()` 也不注册 `WxmlSource`，故没有任何 envelope 会 push。
 > - **接收端**：renderer 侧的 puller（旧 `use-miniapp-snapshot.ts`）已删除，代码库中没有任何 `miniapp-snapshot:push` 的消费者。
 >
-> 面板数据请改走主进程专用通道：WXML→`SimulatorWxmlChannel`、AppData→`SimulatorAppDataChannel`、Storage→`SimulatorStorageChannel`（main 侧 `services/simulator-wxml` / `simulator-appdata` / `simulator-storage`）。`createMiniappSnapshotHost` / `createWxmlSource` 的公共导出暂时保留但已标记 `@deprecated`（`src/preload/index.ts`），计划下个 minor 移除。
+> 面板数据请改走主进程专用通道：WXML→`SimulatorWxmlChannel`、AppData→`SimulatorAppDataChannel`、Storage→`SimulatorStorageChannel`（main 侧 `services/simulator-wxml` / `simulator-appdata` / `simulator-storage`）。`createMiniappSnapshotHost` / `createWxmlSource` 的公共导出暂时保留但已标记 `@deprecated`（`src/preload/index.ts`），计划 0.5.0 移除。
 
 协议要点：
 
@@ -374,7 +374,7 @@ const nativeAppData = useNativeChannelSnapshot<AppDataSnapshot>({
 | 文件 | 角色 |
 |---|---|
 | `src/preload/miniapp-snapshot/types.ts` | `MiniappSnapshotSource<T>` / `SnapshotEnvelope<T>` / `MiniappSnapshotHost` 接口定义 |
-| `src/preload/miniapp-snapshot/host.ts` | 中枢 `MiniappSnapshotHost`：`register` / `install` + push/pull + `window.__miniappSnapshot` 访问器；push/pull 传输已废弃（`@deprecated`，计划下个 minor 移除，见 §6） |
+| `src/preload/miniapp-snapshot/host.ts` | 中枢 `MiniappSnapshotHost`：`register` / `install` + push/pull + `window.__miniappSnapshot` 访问器；push/pull 传输已废弃（`@deprecated`，计划 0.5.0 移除，见 §6） |
 | `src/preload/instrumentation/app-data.ts` | `AppDataSource`（Worker 插桩 → AppData 快照） |
 | `src/preload/instrumentation/wxml.ts` | `WxmlSource`（MutationObserver → WXML 快照）；导出已 `@deprecated`（native-host 下顶层帧 DOM observer 只会推 null，默认 preload 不注册它） |
 | `src/renderer/modules/main/features/project-runtime/controllers/use-native-channel-snapshot.ts` | native-host 下 renderer 实际用的 hook `useNativeChannelSnapshot`：按主进程通道 seed（`GetSnapshot`）+ push（`Event`）投影成 React state，替代已删除的 `use-miniapp-snapshot.ts` |
