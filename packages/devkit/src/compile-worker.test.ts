@@ -5,6 +5,22 @@ import path from 'node:path'
 import { PassThrough } from 'node:stream'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as devkit from './index.js'
+import { writeUntilPredicate, writeUntilSettled } from './watch-rebuild.testutil.js'
+
+/**
+ * FLAKE HARDENING (no assertions changed): the watcher-driven rebuild tests
+ * below depend on a REAL chokidar inotify watch (fork is mocked, chokidar is
+ * not). Under CI load (concurrent real dmcc compile in
+ * open-project-compile-log.test.ts pegging CPU) a single fs.writeFileSync's
+ * inotify event can be dropped, hanging `await rebuilt`/`vi.waitFor` forever
+ * (PR #44 30s timeout at the "fork exactly once across … 2 rebuilds" test).
+ * Count-agnostic / `>=` waiters are wrapped in writeUntilSettled /
+ * writeUntilPredicate, which RE-WRITE the source file (micro-varied content →
+ * fresh inotify event) until the rebuild lands; the rebuild scheduler
+ * coalesces the extra writes into one trailing build, so the pinned outcomes
+ * are unchanged. The exact-count serial-IPC test deliberately does NOT use
+ * them (see its inline note).
+ */
 
 /**
  * FORK-ARCHITECTURE WAVE (dmcc 编译子进程化) — TDD contract for the PARENT
@@ -227,7 +243,7 @@ describe('openProject — fork-based compile worker orchestration', () => {
 			piped,
 			'fork options must pipe the child stdout/stderr (silent:true or a stdio array containing "pipe") — otherwise onLog can never see dmcc output',
 		).toBe(true)
-	}, 30_000)
+	}, 45_000)
 
 	it('first build flows over IPC and openProject resolves with the worker-returned AppInfo (downstream shape preserved)', async () => {
 		const root = makeFixture()
@@ -259,7 +275,7 @@ describe('openProject — fork-based compile worker orchestration', () => {
 		expect(session.appInfo).toEqual({ ...WORKER_APP, path: root })
 		expect(typeof session.port).toBe('number')
 		expect(typeof session.close).toBe('function')
-	}, 30_000)
+	}, 45_000)
 
 	it('the parent process NEVER calls process.chdir — first build and rebuild alike', async () => {
 		const chdirSpy = vi.spyOn(process, 'chdir').mockImplementation(() => {})
@@ -278,11 +294,12 @@ describe('openProject — fork-based compile worker orchestration', () => {
 			openSessions.push(session)
 
 			const rebuilt = waiter.next()
-			fs.writeFileSync(
+			// Count-agnostic (chdir-zero): re-write until the rebuild actually lands.
+			await writeUntilSettled(
+				rebuilt,
 				path.join(root, 'pages', 'index', 'index.js'),
-				'Page({ data: { msg: "updated" } })\n',
+				attempt => `Page({ data: { msg: "updated-${attempt}" } })\n`,
 			)
-			await rebuilt
 
 			expect(
 				chdirSpy,
@@ -292,7 +309,7 @@ describe('openProject — fork-based compile worker orchestration', () => {
 		finally {
 			chdirSpy.mockRestore()
 		}
-	}, 30_000)
+	}, 45_000)
 
 	it('rebuilds reuse the same long-lived worker: fork exactly once across first build + 2 rebuilds', async () => {
 		const root = makeFixture()
@@ -308,11 +325,14 @@ describe('openProject — fork-based compile worker orchestration', () => {
 
 		for (const round of [1, 2]) {
 			const rebuilt = waiter.next()
-			fs.writeFileSync(
+			// Count-agnostic (fork-once / buildSends >= 3): re-write until each
+			// rebuild lands. Extra coalesced rebuilds cannot break a `>=` or a
+			// single-fork pin — fork is mocked and stays one child.
+			await writeUntilSettled(
+				rebuilt,
 				path.join(root, 'pages', 'index', 'index.js'),
-				`Page({ data: { msg: "round-${round}" } })\n`,
+				attempt => `Page({ data: { msg: "round-${round}-${attempt}" } })\n`,
 			)
-			await rebuilt
 		}
 
 		expect(
@@ -324,7 +344,7 @@ describe('openProject — fork-based compile worker orchestration', () => {
 			'first compile + 2 rebuilds must all be build commands on the SAME child',
 		).toBeGreaterThanOrEqual(3)
 		expect(children).toHaveLength(1)
-	}, 30_000)
+	}, 45_000)
 
 	it('child stdout/stderr lines are filtered through filterDmccLogLine and delivered to onLog with stream tags', async () => {
 		const root = makeFixture()
@@ -354,7 +374,7 @@ describe('openProject — fork-based compile worker orchestration', () => {
 			{ stream: 'stdout', text: '✔ 收集配置信息' },
 			{ stream: 'stderr', text: '[compat] Unsupported wx API: wx.createInnerAudioContext (/pages/audio-test/audio-test.js:33)' },
 		]))
-	}, 30_000)
+	}, 45_000)
 
 	it('half lines split across chunks are buffered until the newline arrives (no partial-line delivery)', async () => {
 		const root = makeFixture()
@@ -391,7 +411,7 @@ describe('openProject — fork-based compile worker orchestration', () => {
 			{ stream: 'stdout', text: '✔ 收集配置信息' },
 			{ stream: 'stderr', text: '[logic] esbuild 转换失败 /p/x.js: Transform failed with 1 error:' },
 		]))
-	}, 30_000)
+	}, 45_000)
 
 	it('without onLog the worker is STILL forked (uniform architecture) and stray output is simply not delivered', async () => {
 		const root = makeFixture()
@@ -415,7 +435,7 @@ describe('openProject — fork-based compile worker orchestration', () => {
 		await sleep(80)
 
 		expect(session.appInfo.appId).toBe(WORKER_APP.appId)
-	}, 30_000)
+	}, 45_000)
 
 	it('session.close() kills the long-lived worker', async () => {
 		const root = makeFixture()
@@ -433,7 +453,7 @@ describe('openProject — fork-based compile worker orchestration', () => {
 			child.kill,
 			'close() must kill the compile worker — a leaked child per closed project is the new architecture\'s one new failure mode',
 		).toHaveBeenCalled()
-	}, 30_000)
+	}, 45_000)
 
 	it('a worker crash mid-build settles the in-flight rebuild via onBuildError, and the next rebuild re-forks (crash recovery)', async () => {
 		const root = makeFixture()
@@ -451,13 +471,16 @@ describe('openProject — fork-based compile worker orchestration', () => {
 		first.autoRespond = false
 
 		// Trigger a rebuild whose build command will never be answered…
-		fs.writeFileSync(
+		// buildSends===2 is a STABLE equality here: the child never auto-responds,
+		// so the first build stays in flight and every extra (re-written) watcher
+		// event coalesces to dirty — buildSends cannot exceed 2. Re-write until
+		// the (single) in-flight build command is observed.
+		await writeUntilPredicate(
+			() => first.buildSends().length === 2,
 			path.join(root, 'pages', 'index', 'index.js'),
-			'Page({ data: { msg: "doomed" } })\n',
+			attempt => `Page({ data: { msg: "doomed-${attempt}" } })\n`,
 		)
-		await vi.waitFor(() => {
-			expect(first.buildSends().length).toBe(2)
-		}, { timeout: 5000 })
+		expect(first.buildSends().length).toBe(2)
 
 		// …then kill the worker out from under it.
 		first.crash(1)
@@ -476,10 +499,13 @@ describe('openProject — fork-based compile worker orchestration', () => {
 		).toMatch(/worker/i)
 
 		// Recovery: the NEXT rebuild re-forks a fresh worker and succeeds.
+		// Count-agnostic (fork-times-2 after a crash): the first worker is dead, so
+		// re-writing only schedules trailing rebuilds on the single fresh worker.
 		const rebuilt = waiter.next()
-		fs.writeFileSync(
+		await writeUntilSettled(
+			rebuilt,
 			path.join(root, 'pages', 'index', 'index.js'),
-			'Page({ data: { msg: "recovered" } })\n',
+			attempt => `Page({ data: { msg: "recovered-${attempt}" } })\n`,
 		)
 		await vi.waitFor(() => {
 			expect(
@@ -487,12 +513,11 @@ describe('openProject — fork-based compile worker orchestration', () => {
 				'after a crash the next rebuild must fork a FRESH worker',
 			).toBe(2)
 		}, { timeout: 5000 })
-		await rebuilt
 
 		expect(mocks.fork).toHaveBeenCalledTimes(2)
 		const second = children.at(-1) as FakeChild
 		expect(second.buildSends().length).toBeGreaterThanOrEqual(1)
-	}, 30_000)
+	}, 45_000)
 
 	it('a worker crash while IDLE is recovered too: the next rebuild forks a fresh worker and succeeds', async () => {
 		const root = makeFixture()
@@ -508,12 +533,14 @@ describe('openProject — fork-based compile worker orchestration', () => {
 
 		first.crash(1)
 
+		// Count-agnostic (fork-times-2): the crashed worker is gone, so re-writes
+		// only schedule trailing rebuilds on the one fresh worker — no extra fork.
 		const rebuilt = waiter.next()
-		fs.writeFileSync(
+		await writeUntilSettled(
+			rebuilt,
 			path.join(root, 'pages', 'index', 'index.js'),
-			'Page({ data: { msg: "after-idle-crash" } })\n',
+			attempt => `Page({ data: { msg: "after-idle-crash-${attempt}" } })\n`,
 		)
-		await rebuilt
 
 		expect(
 			mocks.fork,
@@ -522,7 +549,7 @@ describe('openProject — fork-based compile worker orchestration', () => {
 		const second = children.at(-1) as FakeChild
 		expect(second).not.toBe(first)
 		expect(second.buildSends().length).toBeGreaterThanOrEqual(1)
-	}, 30_000)
+	}, 45_000)
 
 	it('serial IPC: a save during an in-flight build never sends a concurrent build command — it coalesces into one trailing build', async () => {
 		const root = makeFixture()
@@ -538,10 +565,17 @@ describe('openProject — fork-based compile worker orchestration', () => {
 		child.autoRespond = false
 		const pageFile = path.join(root, 'pages', 'index', 'index.js')
 
-		fs.writeFileSync(pageFile, 'Page({ data: { msg: "a" } })\n')
-		await vi.waitFor(() => {
-			expect(child.buildSends().length).toBe(2)
-		}, { timeout: 5000 })
+		// EXACT-COUNT test — the writeUntilSettled re-write helper is NOT applied
+		// to the coalescing assertions (===2 in-flight, ===3 after the response).
+		// The first waiter is a STABLE EQUALITY (===2): while no build is answered
+		// every extra watcher event coalesces to dirty, so re-writing to defeat a
+		// dropped inotify event cannot push the count past 2.
+		await writeUntilPredicate(
+			() => child.buildSends().length === 2,
+			pageFile,
+			attempt => `Page({ data: { msg: "a-${attempt}" } })\n`,
+		)
+		expect(child.buildSends().length).toBe(2)
 
 		// A second save lands while the first rebuild's IPC is unanswered.
 		fs.writeFileSync(pageFile, 'Page({ data: { msg: "b" } })\n')
@@ -553,6 +587,11 @@ describe('openProject — fork-based compile worker orchestration', () => {
 		).toBe(2)
 
 		// Answer the in-flight build: exactly ONE trailing coalesced build.
+		// NOT re-written here — re-issuing the save while answering risks a SECOND
+		// dirty/trailing build and would corrupt the exact ===3 count this test
+		// pins. The dirty flag is already set (asserted ===2 above proves the save
+		// event was delivered without producing a concurrent build), so a single
+		// response deterministically yields the one trailing build.
 		child.respondToBuild(root)
 		await vi.waitFor(() => {
 			expect(
@@ -567,7 +606,7 @@ describe('openProject — fork-based compile worker orchestration', () => {
 		await sleep(50)
 
 		expect(mocks.fork).toHaveBeenCalledTimes(1)
-	}, 30_000)
+	}, 45_000)
 })
 
 /**
@@ -617,7 +656,7 @@ describe('createCompileWorker — close-time leak guards (direct use)', () => {
 			+ 'leaves a busy compiler running after the project closed',
 		).toHaveBeenCalled()
 		await settled
-	}, 30_000)
+	}, 45_000)
 
 	it('build() after close() rejects and NEVER re-forks — a closed session must not resurrect a worker process', async () => {
 		const worker = devkit.createCompileWorker({})
@@ -646,7 +685,7 @@ describe('createCompileWorker — close-time leak guards (direct use)', () => {
 			+ 'teardown-wedge anti-pattern, and a post-close fork is an untracked orphan)',
 		).toHaveBeenCalledTimes(1)
 		expect(children).toHaveLength(1)
-	}, 30_000)
+	}, 45_000)
 
 	it('close() is idempotent — the second close neither throws nor double-kills', async () => {
 		const worker = devkit.createCompileWorker({})
@@ -664,7 +703,7 @@ describe('createCompileWorker — close-time leak guards (direct use)', () => {
 			child.kill,
 			'double-close must not double-kill: the second kill could land on a recycled OS PID',
 		).toHaveBeenCalledTimes(1)
-	}, 30_000)
+	}, 45_000)
 })
 
 /**
@@ -730,7 +769,7 @@ describe('codex review regressions — worker error replies, fork errors, close 
 		})
 
 		await settled
-	}, 30_000)
+	}, 45_000)
 
 	it('M1: a rebuild whose worker reply carries an error settles through onBuildError — NOT through onRebuild as a fake hot-reload success', async () => {
 		const root = makeFixture()
@@ -747,13 +786,15 @@ describe('codex review regressions — worker error replies, fork errors, close 
 		const child = theChild()
 		child.autoRespond = false
 
-		fs.writeFileSync(
+		// buildSends===2 is a stable equality (child never auto-responds, so the
+		// first build stays in flight and re-written watcher events coalesce to
+		// dirty). Re-write until the single in-flight build command is observed.
+		await writeUntilPredicate(
+			() => child.buildSends().length === 2,
 			path.join(root, 'pages', 'index', 'index.js'),
-			'Page({ data: { msg: "will fail" } })\n',
+			attempt => `Page({ data: { msg: "will fail-${attempt}" } })\n`,
 		)
-		await vi.waitFor(() => {
-			expect(child.buildSends().length).toBe(2)
-		}, { timeout: 5000 })
+		expect(child.buildSends().length).toBe(2)
 
 		child.emit('message', {
 			type: 'result',
@@ -777,7 +818,7 @@ describe('codex review regressions — worker error replies, fork errors, close 
 			rebuilds,
 			'the failed rebuild must NOT fire onRebuild — onRebuild triggers the hot-reload toast',
 		).toHaveLength(0)
-	}, 30_000)
+	}, 45_000)
 
 	it("M2: a fork 'error' event with NO accompanying 'exit' settles the in-flight build (bounded) and the next build re-forks a fresh worker", async () => {
 		useSilentChildren()
@@ -812,7 +853,7 @@ describe('codex review regressions — worker error replies, fork errors, close 
 		}, { timeout: 5000 })
 		fresh.respondToBuild('/tmp/p')
 		await expect(second).resolves.toEqual(expect.objectContaining({ appId: WORKER_APP.appId }))
-	}, 30_000)
+	}, 45_000)
 
 	it("M2: 'error' followed by a LATE 'exit' is idempotent — the stale exit must not settle the NEXT build on the fresh worker", async () => {
 		useSilentChildren()
@@ -848,7 +889,7 @@ describe('codex review regressions — worker error replies, fork errors, close 
 			second,
 			"the dead child's late 'exit' must be a no-op for the new generation — error+exit double-fire settles ONE build, once",
 		).resolves.toEqual(expect.objectContaining({ appId: WORKER_APP.appId }))
-	}, 30_000)
+	}, 45_000)
 
 	it("M3: close() returns a promise that resolves only AFTER the child actually exited — kill-and-return is not a close", async () => {
 		const worker = devkit.createCompileWorker({})
@@ -880,7 +921,7 @@ describe('codex review regressions — worker error replies, fork errors, close 
 
 		child.emit('exit', null, 'SIGTERM')
 		await (closeResult as Promise<void>)
-	}, 30_000)
+	}, 45_000)
 
 	it('M3: close() itself rejects the in-flight build — even when the child never emits exit', async () => {
 		useSilentChildren()
@@ -900,7 +941,7 @@ describe('codex review regressions — worker error replies, fork errors, close 
 			'close() must settle the in-flight build ITSELF — delegating the rejection to a child exit that may never '
 			+ 'come leaves the rebuild scheduler hanging at teardown',
 		).toBe('rejected')
-	}, 30_000)
+	}, 45_000)
 
 	/**
 	 * CODEX RE-REVIEW — M3 NOT-RESOLVED follow-up. `settleDeath`'s
@@ -937,7 +978,7 @@ describe('codex review regressions — worker error replies, fork errors, close 
 			"settleDeath's removeAllListeners must not strip close()'s exit resolver — a child that dies via "
 			+ "'error' mid-close leaves closePromise hanging forever, wedging every awaiter of session.close()",
 		).toBe('resolved')
-	}, 30_000)
+	}, 45_000)
 
 	it("M3 follow-up: a child 'error' during an in-flight close() with NO 'exit' ever resolves the close too — 'error' is a death signal, not a wait-longer signal", async () => {
 		const worker = devkit.createCompileWorker({})
@@ -958,7 +999,7 @@ describe('codex review regressions — worker error replies, fork errors, close 
 			+ "'error' as death everywhere else (clears the child, rejects builds); close() waiting for an 'exit' "
 			+ 'that Node never guarantees hangs teardown forever',
 		).toBe('resolved')
-	}, 30_000)
+	}, 45_000)
 
 	it('m7: a final line WITHOUT a trailing newline is flushed to onLog exactly once when the stream ends', async () => {
 		const root = makeFixture()
@@ -993,5 +1034,5 @@ describe('codex review regressions — worker error replies, fork errors, close 
 			stream: 'stderr',
 			text: 'pages/index/index.js 编译出错: Transform failed',
 		})
-	}, 30_000)
+	}, 45_000)
 })

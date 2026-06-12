@@ -6,6 +6,15 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import * as devkit from './index.js'
+import { writeUntilPredicate } from './watch-rebuild.testutil.js'
+
+/*
+ * FLAKE HARDENING (no assertions changed): the "close during in-flight
+ * rebuild" test below relies on a REAL chokidar inotify watch to start a
+ * rebuild. Under CI load a single fs.writeFileSync's event can be dropped,
+ * so the `sawRebuildOutput` precondition (count-agnostic: logEntries.length
+ * > 0) re-writes the source file until the rebuild's first log line appears.
+ */
 
 /**
  * LEAK-PROOFING WAVE (项目关闭时保证编译子进程同步关闭) — REAL-PROCESS
@@ -267,18 +276,20 @@ describe('② session.close() — the worker PID is ACTUALLY dead afterwards (re
 		// Best-effort in-flight timing: even if the rebuild squeaks through
 		// before close lands, the pinned outcome (PID dead) must still hold.
 		logEntries.length = 0
-		fs.writeFileSync(
-			path.join(root, 'pages', 'index', 'index.js'),
-			'Page({ data: { msg: "mid-build close" } })\n',
-		)
-		const sawRebuildOutput = await (async () => {
-			const deadline = Date.now() + 20_000
-			while (Date.now() < deadline) {
-				if (logEntries.length > 0) return true
-				await sleep(50)
-			}
-			return false
-		})()
+		// Count-agnostic precondition (logEntries.length > 0): re-write the
+		// source until the rebuild's first log line appears, so a dropped
+		// inotify event under CI load can't fail the precondition. The rebuild
+		// scheduler coalesces the extra writes into one trailing build.
+		let sawRebuildOutput = false
+		await Promise.race([
+			writeUntilPredicate(
+				() => logEntries.length > 0,
+				path.join(root, 'pages', 'index', 'index.js'),
+				attempt => `Page({ data: { msg: "mid-build close-${attempt}" } })\n`,
+			).then(() => { sawRebuildOutput = true }),
+			sleep(20_000),
+		])
+		if (logEntries.length > 0) sawRebuildOutput = true
 		expect(sawRebuildOutput, 'precondition: the watcher rebuild must have started (worker emitted output)').toBe(true)
 
 		await session.close()

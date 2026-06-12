@@ -3,6 +3,15 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import * as devkit from './index.js'
+import { writeUntilSettled } from './watch-rebuild.testutil.js'
+
+/**
+ * FLAKE HARDENING (no assertions changed): the watcher-rebuild test below uses
+ * a REAL chokidar inotify watch + a REAL dmcc compile. Under CI load a single
+ * fs.writeFileSync's inotify event can be dropped, hanging `await rebuilt`. The
+ * count-agnostic waiter (`entries.length > 0`) re-writes the source file until
+ * the rebuild fires; the rebuild scheduler coalesces the extra writes.
+ */
 
 /**
  * ROUND 2 (dmcc 日志链路) — TDD contract for the `onLog` wiring in
@@ -185,11 +194,13 @@ describe('openProject onLog — watcher rebuild (integration, real dmcc)', () =>
 		// Only count lines captured by the REBUILD build() call.
 		entries.length = 0
 
-		fs.writeFileSync(
+		// Count-agnostic (entries.length > 0): re-write until the rebuild lands so
+		// a dropped inotify event under CI load can't hang `await rebuilt`.
+		await writeUntilSettled(
+			rebuilt,
 			path.join(root, 'pages', 'index', 'index.js'),
-			'Page({ data: { msg: "updated" } })\n',
+			attempt => `Page({ data: { msg: "updated-${attempt}" } })\n`,
 		)
-		await rebuilt
 
 		expect(
 			entries.length,
