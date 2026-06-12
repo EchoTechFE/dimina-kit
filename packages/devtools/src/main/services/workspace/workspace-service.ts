@@ -104,6 +104,16 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
   // accept an in-flight write that targets the just-closed project. Reset at
   // the start of every `openProject` so it never accumulates a stale root.
   let lastClosedProjectPath = ''
+  // Session generation for the onLog closure handed to the adapter: a closed
+  // (or switched-away-from) session's compile worker dies asynchronously, so
+  // buffered log lines can still arrive through the OLD closure after
+  // closeProject/openProject. Each openProject claims a new generation and
+  // closeProject invalidates the current one; a stale closure sees the
+  // mismatch and drops the line instead of polluting the next project's
+  // compile panel. (Deliberately NOT a `currentSession !== null` check: the
+  // first compile's log lines arrive while the adapter promise is still
+  // pending, before currentSession is assigned.)
+  let logGeneration = 0
 
   function sendStatus(status: string, message: string, hotReload?: boolean): void {
     ctx.notify.projectStatus(hotReload ? { status, message, hotReload: true } : { status, message })
@@ -167,6 +177,14 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
 
     async openProject(projectPath) {
       clearSimulatorServicewechatReferer()
+      // Invalidate the outgoing session's onLog BEFORE teardown starts (same
+      // order as closeProject below): the dying compile worker flushes
+      // buffered lines DURING disposeSession(), and with the old generation
+      // still current they would pass the staleness guard and pollute the
+      // incoming project's compile-log timeline. The new session claims its
+      // own fresh generation further down (after dispose), so its onLog
+      // forwards normally.
+      logGeneration++
       await disposeSession()
       currentProjectPath = ''
       // A fresh open starts a clean sandbox window — drop any previously
@@ -192,6 +210,10 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
 
       const { compile } = loadWorkbenchSettings()
 
+      // This open owns the log channel until the next open/close bumps the
+      // generation — the onLog closure below checks it per line.
+      const sessionGeneration = ++logGeneration
+
       let session: Awaited<ReturnType<typeof ctx.adapter.openProject>>
       try {
         session = await ctx.adapter.openProject({
@@ -200,6 +222,20 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
           watch: compile.watch,
           onRebuild: () => sendStatus('ready', '编译完成，已热更新', true),
           onBuildError: (err: unknown) => sendStatus('error', String(err)),
+          // Per-line dmcc log (already filtered in devkit). Stamp the
+          // wall-clock capture time here and push verbatim on the dedicated
+          // compile-log channel — never through projectStatus, whose
+          // one-event-per-payload contract feeds compileEvents. Stale lines
+          // (a closed/replaced session's worker flushing its buffers) are
+          // dropped via the generation check.
+          onLog: (entry: { stream: 'stdout' | 'stderr'; text: string }) => {
+            if (sessionGeneration !== logGeneration) return
+            ctx.notify.compileLog({
+              stream: entry.stream,
+              text: entry.text,
+              at: Date.now(),
+            })
+          },
         })
       } catch (err) {
         clearSimulatorServicewechatReferer()
@@ -247,6 +283,9 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
     },
 
     async closeProject() {
+      // Invalidate the active session's onLog BEFORE teardown starts — lines
+      // flushed by the dying compile worker must not reach the panel.
+      logGeneration++
       clearSimulatorServicewechatReferer()
       await disposeSession()
       // Record the root being torn down BEFORE clearing it, so a teardown/

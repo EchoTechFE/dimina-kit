@@ -187,6 +187,9 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
         onClearStorage={panelData.clearStorage}
         onClearAllStorage={panelData.clearAllStorage}
         getStoragePrefix={panelData.getStoragePrefix}
+        compileEvents={session.compileEvents}
+        compileLogs={session.compileLogs}
+        onClearCompileEvents={session.clearCompileEvents}
       />
     ),
   }

@@ -23,6 +23,20 @@ test.describe('Right panel switching', () => {
     await consoleTab.click()
     await expect(consoleTab).toHaveAttribute('aria-selected', 'true')
     await mainWindow.waitForTimeout(400)
+
+    // 编译 (compile-event log) is the fifth tab, pinned after Console. Its
+    // body is plain React content (no main-process overlay), so selecting it
+    // must flip the keepalive tabpanel visible.
+    //
+    // Deliberately NOT asserted here: "a ready event appears in the log after
+    // open project" — the initial compiling/ready projectStatus emissions race
+    // the renderer's subscription mount, so right after open the log may
+    // legitimately be empty. The hook unit tests own the event semantics.
+    const compileTab = mainWindow.getByRole('tab', { name: '编译' })
+    await compileTab.click()
+    await expect(compileTab).toHaveAttribute('aria-selected', 'true')
+    await expect(mainWindow.locator('[data-tab-panel="compile"]')).toBeVisible()
+    await mainWindow.waitForTimeout(400)
   })
 
   test('selecting WXML tab shows WXML panel content in main window', async ({ mainWindow }) => {

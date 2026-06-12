@@ -1,6 +1,6 @@
 # Dimina DevTools
 
-基于 Electron 的小程序开发者工具。提供模拟器、Chrome DevTools 面板、WXML/AppData/Storage 面板、编译配置等功能。
+基于 Electron 的小程序开发者工具。提供模拟器、Chrome DevTools 面板、WXML/AppData/Storage/编译 面板、编译配置等功能。
 
 下游 host 通过 `launch(config)` 集成并定制 devtools（零配置直接 `launch()`，配置驱动 `launch({...})`；见下方「两种用法」）。两种用法都经领域中立的 [`@dimina-kit/electron-deck`](../electron-deck) 框架编排——框架接管 Electron 进程生命周期（whenReady / will-quit）、wire/trust 原语，devtools 作为 `RuntimeBackend` 注入完整运行时（见 [`framework-extraction-v2.md`](../electron-deck/docs/framework-extraction-v2.md)）。
 
@@ -147,7 +147,7 @@ src/
         main.tsx                         # 主窗口 React 根
         features/                        # 主窗口内的业务区域
           project-runtime/               # 项目视图 + 工具栏 + 右侧面板切换
-          right-panel/                   # WXML / AppData / Storage 面板
+          right-panel/                   # WXML / AppData / Storage / 编译 面板
       popover/ settings/ workbench-settings/
     shared/
       components/                        # UI 组件（ui / layout / json-viewer / ...）
@@ -177,7 +177,7 @@ src/
 | ------------------ | -------------------- | ------------------- | ---------------------------------- |
 | `appName`          | `string`             | `'Dimina DevTools'` | 窗口标题                           |
 | `adapter`          | `CompilationAdapter` | 内置                | 项目编译适配器                     |
-| `panels`           | `BuiltinPanelId[]`   | —                   | **已废弃，运行时忽略**：界面恒显示全部四个内置面板；保留字段仅为兼容仍传它的 host |
+| `panels`           | `BuiltinPanelId[]`   | —                   | **已废弃，运行时忽略**：界面恒显示全部内置面板（WXML / AppData / Storage / Console / 编译）；保留字段仅为兼容仍传它的 host |
 | `preloadPath`      | `string`             | 内置                | 统一的 host 级 preload 入口；native-host simulator（WCV）自动跑其 `.cjs` sibling（`cjsSiblingPreloadPath`） |
 | `apiNamespaces`    | `string[]`           | `[]`                | 自定义 API 命名空间（如 `['qd']`） |
 | `brandingProvider` | `() => { appName }`  | —                   | 品牌信息 provider                  |

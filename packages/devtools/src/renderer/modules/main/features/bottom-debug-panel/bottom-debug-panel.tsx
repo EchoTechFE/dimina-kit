@@ -5,7 +5,12 @@ import type { ElementInspection, StorageWriteResult } from '../../../../../share
 import { WxmlPanel } from '../right-panel/wxml-panel.js'
 import { AppDataPanel } from '../right-panel/appdata-panel.js'
 import { StoragePanel } from '../right-panel/storage-panel.js'
+import { CompilePanel } from '../right-panel/compile-panel.js'
 import type { AppDataState } from '../project-runtime/controllers/use-panel-data.js'
+import type {
+  CompileEvent,
+  CompileLogEntry,
+} from '../project-runtime/controllers/use-session.js'
 import type { RightPaneState, RightPaneTabId } from '../project-runtime/types.js'
 
 interface StorageItem { key: string; value: unknown }
@@ -15,13 +20,15 @@ interface StorageItem { key: string; value: unknown }
  * simulator's Chromium DevTools WebContentsView (positioned by the main
  * process onto the placeholder rect we expose via `simulatorDevtoolsRef`).
  *
- * The order mirrors WeChat DevTools: WXML / AppData / Storage / Console.
+ * The order mirrors WeChat DevTools, plus the compile log appended last:
+ * WXML / AppData / Storage / Console / 编译.
  */
 const TABS: Array<{ id: RightPaneTabId; label: string }> = [
   { id: 'wxml', label: 'WXML' },
   { id: 'appdata', label: 'AppData' },
   { id: 'storage', label: 'Storage' },
   { id: 'simulator', label: 'Console' },
+  { id: 'compile', label: '编译' },
 ]
 
 export interface BottomDebugPanelProps {
@@ -45,11 +52,17 @@ export interface BottomDebugPanelProps {
   onClearStorage: () => Promise<StorageWriteResult>
   onClearAllStorage: () => Promise<StorageWriteResult>
   getStoragePrefix: () => Promise<string>
+
+  // 编译 tab: event log + per-line dmcc log, pure passthrough to
+  // CompilePanel. Optional so embedders without a compile feed keep working.
+  compileEvents?: CompileEvent[]
+  compileLogs?: CompileLogEntry[]
+  onClearCompileEvents?: () => void
 }
 
 /**
- * Horizontal bottom panel hosting the four debug tabs. WXML / AppData /
- * Storage render React content; Console reserves an empty div whose
+ * Horizontal bottom panel hosting the five debug tabs. WXML / AppData /
+ * Storage / 编译 render React content; Console reserves an empty div whose
  * client rect the parent measures and pushes to the main process — the
  * simulator's Chromium DevTools WebContentsView is positioned to overlay
  * that div.
@@ -79,6 +92,9 @@ export const BottomDebugPanel = forwardRef(function BottomDebugPanel(
     onClearStorage,
     onClearAllStorage,
     getStoragePrefix,
+    compileEvents = [],
+    compileLogs = [],
+    onClearCompileEvents,
   } = props
 
   const selected = rightPane.selected
@@ -88,6 +104,8 @@ export const BottomDebugPanel = forwardRef(function BottomDebugPanel(
     if (id === 'wxml') onRefreshWxml()
     else if (id === 'appdata') onRefreshAppData()
     else if (id === 'storage') void onRefreshStorage()
+    // 'compile' needs no refresh: its data is push-fed (projectStatus +
+    // compileLog subscriptions in useSession).
   }
 
   return (
@@ -168,6 +186,19 @@ export const BottomDebugPanel = forwardRef(function BottomDebugPanel(
             onClear={onClearStorage}
             onClearAll={onClearAllStorage}
             getPrefix={getStoragePrefix}
+          />
+        </div>
+
+        <div
+          role="tabpanel"
+          data-tab-panel="compile"
+          className="absolute inset-0 flex overflow-hidden"
+          style={{ display: selected === 'compile' ? 'flex' : 'none' }}
+        >
+          <CompilePanel
+            events={compileEvents}
+            logs={compileLogs}
+            onClear={onClearCompileEvents ?? (() => {})}
           />
         </div>
 

@@ -24,6 +24,25 @@ export interface ProjectStatus {
   hotReload?: boolean
 }
 
+/**
+ * One per-line dmcc compile-log entry pushed by the main process on
+ * `project:compileLog` (see `RendererNotifier.compileLog`). `at` is the
+ * main-process capture timestamp.
+ */
+export interface CompileLogEntry {
+  at: number
+  stream: 'stdout' | 'stderr'
+  text: string
+  /**
+   * Optional shared monotonic arrival counter spanning compile EVENTS and
+   * LOGS. `at` is a millisecond stamp, so a status event and the log lines
+   * of the same compile routinely collide on the same `at` — the panel uses
+   * `seq` as the same-`at` tie-break so the merged timeline keeps true
+   * arrival order (codex m8).
+   */
+  seq?: number
+}
+
 /** Enumerate all known projects from the workspace store. */
 export function listProjects(): Promise<Project[]> {
   return invokeStrict<Project[]>(ProjectsChannel.List)
@@ -80,6 +99,16 @@ export function onProjectStatus(
   handler: (status: ProjectStatus) => void,
 ): () => void {
   return on<[ProjectStatus]>(ProjectChannel.Status, (status) => handler(status))
+}
+
+/**
+ * Subscribe to per-line compile-log pushes from the main process (mirrors
+ * `onProjectStatus`). Returns the transport unsubscribe function.
+ */
+export function onCompileLog(
+  handler: (entry: CompileLogEntry) => void,
+): () => void {
+  return on<[CompileLogEntry]>(ProjectChannel.CompileLog, (entry) => handler(entry))
 }
 
 /** Capture a screenshot of the simulator and save it as a thumbnail. */

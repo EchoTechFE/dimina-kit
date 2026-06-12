@@ -349,12 +349,22 @@ vi.mock('fs', async () => {
 
 // Default-adapter returns a fake session immediately, so workspace.openProject
 // can establish an active session without spinning up a real compiler.
+//
+// MODIFYING THIS MOCK (leak-proofing wave): `close` was an anonymous
+// `() => Promise.resolve()` — unobservable. It is now a hoisted spy so the
+// app-teardown tests below can assert the session (and with it the devkit
+// compile worker) is actually closed. Existing tests are unaffected: the
+// session shape and resolution behavior are identical.
+const devkitStubs = vi.hoisted(() => ({
+  sessionClose: vi.fn(() => Promise.resolve()),
+}))
+
 vi.mock('@dimina-kit/devkit', () => ({
   openProject: vi.fn(() =>
     Promise.resolve({
       port: 12345,
       appInfo: { appId: 'fakeApp' },
-      close: () => Promise.resolve(),
+      close: devkitStubs.sessionClose,
     }),
   ),
 }))
@@ -366,6 +376,7 @@ let createDevtoolsRuntime: typeof import('./app.js').createDevtoolsRuntime
 beforeEach(async () => {
   vi.resetModules()
   stubs.reset()
+  devkitStubs.sessionClose.mockClear()
   ;({ createDevtoolsRuntime } = await import('./app.js'))
 })
 
@@ -486,5 +497,65 @@ describe('mainWindow close while a project session is active', () => {
     }
 
     await instance.dispose()
+  })
+})
+
+/**
+ * LEAK-PROOFING WAVE (项目关闭时保证编译子进程同步关闭) — app/registry
+ * teardown conduction.
+ *
+ * `instance.dispose()` (the path hosts and tests run at app shutdown,
+ * backing `disposeContext`) must tear down the ACTIVE SESSION, not just the
+ * IPC registry. The session's close() is the only hop that reaches devkit
+ * and kills the forked compile worker — an app teardown that skips it leaks
+ * one compiler process per shutdown-with-open-project.
+ *
+ * Workspace-level conduction (closeProject → session.close, open-switch,
+ * rejecting close) is pinned in
+ * `services/workspace/workspace-session-teardown.test.ts`; this describe
+ * pins the one hop above it: dispose → closeProject → session.close.
+ */
+describe('instance.dispose() while a project session is active (app teardown leak guard)', () => {
+  it('dispose() closes the active devkit session exactly once and clears it', async () => {
+    const projectDir = '/tmp/projDisposeActive'
+    stubs.projectsWithAppJson.add(projectDir)
+    stubs.setProjectsJson(JSON.stringify([]))
+
+    const instance = await createDevtoolsRuntime({})
+    const openResult = await instance.context.workspace.openProject(projectDir)
+    expect(openResult.success).toBe(true)
+    expect(instance.context.workspace.hasActiveSession()).toBe(true)
+    // The open itself must not have closed anything (a fresh service's
+    // pre-open disposeSession is a no-op) — baseline for the pin below.
+    expect(devkitStubs.sessionClose).not.toHaveBeenCalled()
+
+    await instance.dispose()
+
+    expect(
+      devkitStubs.sessionClose,
+      'instance.dispose() must close the active session — this is the hop that kills the forked '
+      + 'compile worker; disposing only the IPC registry leaks one compiler process per app shutdown',
+    ).toHaveBeenCalledTimes(1)
+    expect(instance.context.workspace.hasActiveSession()).toBe(false)
+  })
+
+  it('dispose() with no active session does not invent a session close (and stays idempotent after a real one)', async () => {
+    const projectDir = '/tmp/projDisposeIdempotent'
+    stubs.projectsWithAppJson.add(projectDir)
+    stubs.setProjectsJson(JSON.stringify([]))
+
+    const instance = await createDevtoolsRuntime({})
+    await instance.context.workspace.openProject(projectDir)
+
+    await instance.dispose()
+    expect(devkitStubs.sessionClose).toHaveBeenCalledTimes(1)
+
+    // A second dispose (host teardown re-entry) must not double-close the
+    // already-dead session.
+    await instance.dispose()
+    expect(
+      devkitStubs.sessionClose,
+      'double dispose must not double-close the session',
+    ).toHaveBeenCalledTimes(1)
   })
 })

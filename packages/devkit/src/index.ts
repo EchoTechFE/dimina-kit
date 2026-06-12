@@ -7,13 +7,17 @@ import { createServer, type Server } from 'node:http'
 import { createRequire } from 'node:module'
 import chokidar from 'chokidar'
 import { createRebuildScheduler } from './rebuild-scheduler.js'
+import { createCompileWorker } from './compile-worker.js'
+import type { CompileLogEntry } from './compile-worker.js'
 
 export { createRebuildScheduler } from './rebuild-scheduler.js'
 export type { RebuildScheduler } from './rebuild-scheduler.js'
+export { filterDmccLogLine } from './compile-log.js'
+export { createCompileWorker } from './compile-worker.js'
+export type { CompileLogEntry, CompileWorker } from './compile-worker.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const require = createRequire(import.meta.url)
-const build = require('@dimina/compiler') as typeof import('@dimina/compiler').default
 
 // esbuild's native binary is shipped inside node_modules, but when packaged
 // via electron-builder it lives in app.asar. asarUnpack puts the real binary
@@ -74,6 +78,12 @@ export interface OpenProjectOptions {
 	watch?: boolean
 	onRebuild?: () => void
 	onBuildError?: (err: unknown) => void
+	/**
+	 * Per-line dmcc compile log, already filtered through `filterDmccLogLine`
+	 * (noise stripped, signal kept). Lines come from the forked compile
+	 * worker's piped stdout/stderr, tagged with their source stream.
+	 */
+	onLog?: (entry: CompileLogEntry) => void
 }
 
 export async function openProject(opts: OpenProjectOptions): Promise<ProjectSession> {
@@ -87,6 +97,7 @@ export async function openProject(opts: OpenProjectOptions): Promise<ProjectSess
 		watch = true,
 		onRebuild,
 		onBuildError,
+		onLog,
 	} = opts
 	const projectPath = path.resolve(rawProjectPath)
 	const buildOptions = { sourcemap }
@@ -94,18 +105,28 @@ export async function openProject(opts: OpenProjectOptions): Promise<ProjectSess
 	const resolvedPort = port === 0 ? await getRandomPort() : port
 
 	const containerDir = overrideContainerDir ?? path.join(__dirname, '..', 'fe', 'dimina-fe-container')
-	const prevCwd = process.cwd()
 	const resolvedOutputDir = outputDir
 		?? path.join(os.tmpdir(), 'dimina-kit', createHash('sha1').update(projectPath).digest('hex').slice(0, 12))
 	fs.mkdirSync(resolvedOutputDir, { recursive: true })
 
+	// Compilation runs in a long-lived forked worker — the worker chdirs in
+	// its OWN process, so this (host) process never mutates its cwd, and dmcc
+	// terminal output arrives on the worker's piped streams (delivered to
+	// `onLog` line-by-line after `filterDmccLogLine`).
+	const compileWorker = createCompileWorker({ onLog })
+	const buildRequest = {
+		projectPath,
+		outputDir: resolvedOutputDir,
+		options: buildOptions,
+	}
+
 	let initialAppInfo: AppInfo | null
 	try {
-		process.chdir(projectPath)
-		initialAppInfo = (await build(resolvedOutputDir, projectPath, true, buildOptions)) as AppInfo | null
+		initialAppInfo = (await compileWorker.build(buildRequest)) as AppInfo | null
 	}
-	finally {
-		process.chdir(prevCwd)
+	catch (err) {
+		await compileWorker.close()
+		throw err
 	}
 	// When the compiler is racing (e.g. opening a project that was just
 	// closed elsewhere in the same Electron process) `build()` can return
@@ -137,22 +158,17 @@ export async function openProject(opts: OpenProjectOptions): Promise<ProjectSess
 	}
 	const sessionApps: AppInfo[] = initialAppInfo ? [initialAppInfo] : []
 
-	process.env.DIMINA_NO_OPEN_BROWSER = '1'
-	const fe = await import('../fe/index.js' as string)
-	const start = fe.start as FeStart
-	const { server, reload } = await start({
-		port: resolvedPort,
-		containerDir,
-		outputDir: resolvedOutputDir,
-		simulatorDir,
-		liveReload: true,
-		sessionApps,
-	})
+	// Everything after the worker exists is failure-cleaned: if the dev server
+	// or the watcher fails to come up, the already-forked compile worker (and a
+	// server that already started listening) must be torn down before the error
+	// propagates — otherwise every failed open leaks a whole compiler process.
+	let server: Server | null = null
+	let reload: (() => void) | undefined
+	let watcher: { close: () => Promise<void>; ready: Promise<void> } | null = null
 
 	async function rebuild(): Promise<void> {
 		try {
-			process.chdir(projectPath)
-			const rebuilt = (await build(resolvedOutputDir, projectPath, true, buildOptions)) as AppInfo | null
+			const rebuilt = (await compileWorker.build(buildRequest)) as AppInfo | null
 			if (rebuilt) {
 				const idx = sessionApps.findIndex(a => a.appId === rebuilt.appId)
 				if (idx === -1) sessionApps.push(rebuilt)
@@ -164,24 +180,72 @@ export async function openProject(opts: OpenProjectOptions): Promise<ProjectSess
 		catch (e) {
 			onBuildError?.(e)
 		}
-		finally {
-			process.chdir(prevCwd)
-		}
 	}
 
-	// Watcher events are routed through the scheduler so a save landing while
-	// a build is in flight is never dropped: it coalesces into exactly one
-	// trailing rebuild once the current run settles.
-	const rebuildScheduler = createRebuildScheduler(rebuild)
-	const watcher = watch ? createProjectWatcher(projectPath, () => rebuildScheduler.schedule()) : null
+	try {
+		process.env.DIMINA_NO_OPEN_BROWSER = '1'
+		const fe = await import('../fe/index.js' as string)
+		const start = fe.start as FeStart
+		const started = await start({
+			port: resolvedPort,
+			containerDir,
+			outputDir: resolvedOutputDir,
+			simulatorDir,
+			liveReload: true,
+			sessionApps,
+		})
+		server = started.server
+		reload = started.reload
 
+		// Watcher events are routed through the scheduler so a save landing while
+		// a build is in flight is never dropped: it coalesces into exactly one
+		// trailing rebuild once the current run settles.
+		const rebuildScheduler = createRebuildScheduler(rebuild)
+		watcher = watch ? createProjectWatcher(projectPath, () => rebuildScheduler.schedule()) : null
+		// Don't resolve until the watcher's initial scan is done: a save landing
+		// in the gap between `openProject` resolving and chokidar going live
+		// (fsevents stream not yet active on macOS) would otherwise be silently
+		// missed — no rebuild for the very first post-open edit. The promise
+		// also REJECTS on a pre-ready watcher 'error' (EMFILE, permission loss)
+		// so a broken watcher fails the open instead of hanging it forever.
+		await watcher?.ready
+	}
+	catch (err) {
+		try {
+			await watcher?.close()
+		}
+		catch {
+			// best-effort — the open is already failing with the primary error
+		}
+		try {
+			await compileWorker.close()
+		}
+		catch {
+			// best-effort — never mask the primary error
+		}
+		if (server) {
+			;(server as Server & { closeAllConnections?: () => void }).closeAllConnections?.()
+			const listening = server
+			await new Promise<void>(resolve => listening.close(() => resolve()))
+		}
+		throw err
+	}
+
+	// `server` is always assigned when the try block completes without throwing
+	// — this guard exists only to narrow the type for the close closure.
+	if (!server) throw new Error('openProject: dev server missing after successful start')
+	const liveServer = server
 	return {
 		appInfo: initialAppInfo ?? { appId: 'unknown', name: path.basename(projectPath), path: projectPath },
 		port: resolvedPort,
 		close: async () => {
 			await watcher?.close()
-			;(server as Server & { closeAllConnections?: () => void }).closeAllConnections?.()
-			await new Promise<void>(resolve => server.close(() => resolve()))
+			// Kill the long-lived compile worker and WAIT for the child to be
+			// actually dead — only kill, never re-fork on a graceful close (a
+			// refill here would wedge process teardown).
+			await compileWorker.close()
+			;(liveServer as Server & { closeAllConnections?: () => void }).closeAllConnections?.()
+			await new Promise<void>(resolve => liveServer.close(() => resolve()))
 		},
 	}
 }
@@ -189,12 +253,13 @@ export async function openProject(opts: OpenProjectOptions): Promise<ProjectSess
 /**
  * Watch a project directory and invoke `onChange` whenever a source file is
  * created, modified, or deleted. Returns a handle whose `close()` stops the
- * watcher.
+ * watcher and whose `ready` resolves once the initial scan is complete (only
+ * changes made after that point are guaranteed to surface).
  */
 export function createProjectWatcher(
 	projectPath: string,
 	onChange: () => void | Promise<void>,
-): { close: () => Promise<void> } {
+): { close: () => Promise<void>; ready: Promise<void> } {
 	// Ignore dotfiles/dot-directories that live *inside* the project (.git,
 	// .DS_Store, editor scratch, etc.) without nuking the whole watch when the
 	// project itself sits under a dotted ancestor path. A regex like
@@ -226,7 +291,19 @@ export function createProjectWatcher(
 	watcher.on('add', () => { void onChange() })
 	watcher.on('change', () => { void onChange() })
 	watcher.on('unlink', () => { void onChange() })
+	// A watcher 'error' before the initial scan completes (EMFILE, permission
+	// loss, …) must REJECT `ready`: resolving only on 'ready' would leave
+	// `await watcher.ready` — and the whole openProject — hung forever. The
+	// listener also doubles as the EventEmitter unhandled-'error' guard. A
+	// post-ready 'error' makes the reject a settled-promise no-op.
+	const ready = new Promise<void>((resolve, reject) => {
+		watcher.once('ready', () => resolve())
+		watcher.on('error', (err: unknown) => {
+			reject(err instanceof Error ? err : new Error(String(err)))
+		})
+	})
 	return {
 		close: () => watcher.close(),
+		ready,
 	}
 }

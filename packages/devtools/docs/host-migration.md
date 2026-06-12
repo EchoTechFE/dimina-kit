@@ -7,7 +7,7 @@
 | 版本 | 变更 |
 |---|---|
 | **0.4.0（breaking，已删/收紧）** | 删除 `instance.toolbar`（按钮注入机制整体下线）；删除 `MiniappRuntime` 契约上的 `windows` / `rendererDir`（由 `openSettings()` 与 `/paths` 导出取代）；`CompilationAdapter` 的 `session.appInfo` 类型收紧为结构化 `AppInfo`（`appId: string` 必填），`openProject` 在适配器返回边界做运行时校验 |
-| **0.4.0（废弃，保留编译兼容）→ 0.5.0（删除）** | `headerHeight` 配置（运行时忽略，恒 40px）；`panels` 配置（运行时忽略，恒四面板）；preload 导出 `createWxmlSource`、`createMiniappSnapshotHost`（miniappSnapshot push/pull 传输在 devtools 内已无收端，面板数据改走主进程专用通道） |
+| **0.4.0（废弃，保留编译兼容）→ 0.5.0（删除）** | `headerHeight` 配置（运行时忽略，恒 40px）；`panels` 配置（运行时忽略，恒显示全部内置面板）；preload 导出 `createWxmlSource`、`createMiniappSnapshotHost`（miniappSnapshot push/pull 传输在 devtools 内已无收端，面板数据改走主进程专用通道） |
 
 ## Breaking
 
@@ -23,7 +23,7 @@
 ## Deprecated（字段保留、编译不破坏，运行时忽略；0.5.0 删除）
 
 - `headerHeight` 配置：忽略，devtools 工具栏恒 40px。宿主侧的 `headerHeight: 72` 之类可删。
-- `panels` 配置：忽略，调试区恒为全部四个面板。
+- `panels` 配置：忽略，调试区恒为全部内置面板（WXML / AppData / Storage / Console / 编译）。
 
 ## 新能力（取代宿主侧的手搓 workaround）
 
