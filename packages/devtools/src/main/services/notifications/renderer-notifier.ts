@@ -8,6 +8,7 @@ import {
   WorkbenchSettingsChannel,
   EditorChannel,
   ViewChannel,
+  AppChannel,
   type EditorOpenFilePayload,
 } from '../../../shared/ipc-channels.js'
 import type { WorkbenchSettings } from '../settings/index.js'
@@ -80,6 +81,10 @@ export interface RendererNotifier {
    * placeholder div resizes (closes the host-toolbar dynamic-height loop).
    */
   hostToolbarHeightChanged(height: number): void
+  /** Ask the main renderer to re-fetch the host-provided header avatar DTO. */
+  headerAvatarChanged(): void
+  /** Ask the main renderer to re-fetch host-provided header actions. */
+  headerActionsChanged(): void
   /**
    * Ask the main renderer's Monaco editor to open a project file at a position.
    * Drives the "click a console file link → open in editor" pipeline.
@@ -147,6 +152,12 @@ export function createRendererNotifier(ctx: NotifierContext): RendererNotifier {
     },
     hostToolbarHeightChanged(height) {
       sendToMain(ViewChannel.HostToolbarHeightChanged, height)
+    },
+    headerAvatarChanged() {
+      sendToMain(AppChannel.HeaderAvatarChanged)
+    },
+    headerActionsChanged() {
+      sendToMain(AppChannel.HeaderActionsChanged)
     },
     editorOpenFile(payload) {
       sendToMain(EditorChannel.OpenFile, payload)

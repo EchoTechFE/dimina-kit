@@ -57,6 +57,45 @@ export interface CompilationAdapter {
 export type BuiltinPanelId = 'wxml' | 'console' | 'appdata' | 'storage'
 export type BuiltinModuleId = 'projects' | 'session' | 'simulator' | 'popover' | 'settings'
 
+/**
+ * Small, serialisable profile shape rendered by the built-in project header.
+ * Hosts own the source of truth; devtools only reads this DTO and paints the
+ * avatar slot in the fixed header toolbar.
+ */
+export interface HeaderAvatarInfo {
+  /** User-facing name used for tooltip/aria text and fallback initials. */
+  displayName?: string
+  /** Explicit fallback text when the image is absent or fails to load. */
+  displayInitial?: string
+  /** Image URL or data URL for the account avatar. */
+  avatarUrl?: string
+  /** Optional tooltip override. Defaults to displayName or "用户头像". */
+  tooltip?: string
+}
+
+export type HeaderAvatarProvider = () =>
+  | HeaderAvatarInfo
+  | null
+  | undefined
+  | Promise<HeaderAvatarInfo | null | undefined>
+
+export type HeaderActionPlacement = 'left' | 'center' | 'right'
+
+export interface HeaderActionInfo {
+  id: string
+  label: string
+  placement?: HeaderActionPlacement
+  icon?: string
+  tooltip?: string
+  disabled?: boolean
+}
+
+export type HeaderActionsProvider = () =>
+  | HeaderActionInfo[]
+  | null
+  | undefined
+  | Promise<HeaderActionInfo[] | null | undefined>
+
 export interface WorkbenchConfig {
   /** Window title, default 'Dimina DevTools' */
   appName?: string
@@ -75,6 +114,17 @@ export interface WorkbenchConfig {
   apiNamespaces?: string[]
   /** Provider for branding info (overrides default appName) */
   brandingProvider?: () => Promise<{ appName: string }> | { appName: string }
+  /**
+   * Optional host-owned profile provider for the built-in header avatar slot.
+   * Return null/undefined to hide the slot.
+   */
+  headerAvatarProvider?: HeaderAvatarProvider
+  /** Optional click handler for the built-in header avatar slot. */
+  headerAvatarActionHandler?: () => void | Promise<void>
+  /** Optional host-owned business actions rendered in the built-in header. */
+  headerActionsProvider?: HeaderActionsProvider
+  /** Handles clicks from actions returned by `headerActionsProvider`. */
+  headerActionHandler?: (id: string) => void | Promise<void>
   /**
    * @deprecated Ignored. The devtools toolbar header is fixed at 40px
    * (`HEADER_H` in `shared/constants`). Hosts that need their own toolbar
@@ -159,6 +209,14 @@ export interface WorkbenchHostInstance {
     name: string,
     handler: SimulatorApiHandler,
   ): import('@dimina-kit/electron-deck/main').Disposable
+
+  /**
+   * Ask the main renderer to re-read `headerAvatarProvider`. Hosts should call
+   * this after their current-user state changes.
+   */
+  refreshHeaderAvatar(): void
+  /** Ask the main renderer to re-read `headerActionsProvider`. */
+  refreshHeaderActions(): void
 }
 
 /**

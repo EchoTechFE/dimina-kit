@@ -42,6 +42,12 @@ launch({
   rendererDir,
   apiNamespaces: ['my'],
   brandingProvider: () => ({ appName: '我的开发工具' }),
+  headerAvatarProvider: () => {
+    const user = getCurrentUser()
+    return user
+      ? { displayName: user.name, displayInitial: user.name, avatarUrl: user.avatarUrl }
+      : null
+  },
   icon: '/path/to/icon.png',
   menuBuilder: (mainWindow, menuCtx) => {
     // menuCtx 是 MenuContext（只读 menu 相关状态）
@@ -181,6 +187,7 @@ src/
 | `preloadPath`      | `string`             | 内置                | 统一的 host 级 preload 入口；native-host simulator（WCV）自动跑其 `.cjs` sibling（`cjsSiblingPreloadPath`） |
 | `apiNamespaces`    | `string[]`           | `[]`                | 自定义 API 命名空间（如 `['qd']`） |
 | `brandingProvider` | `() => { appName }`  | —                   | 品牌信息 provider                  |
+| `headerAvatarProvider` | `() => HeaderAvatarInfo \| null \| Promise<HeaderAvatarInfo \| null>` | — | 内置 header 头像 slot 的宿主数据源；返回 `null` / `undefined` 时隐藏 |
 | `headerHeight`     | `number`             | —                   | **已废弃，运行时忽略**：头部栏恒为 40px（`HEADER_H`）；需要自定义工具栏请用 host toolbar WCV |
 
 ### WorkbenchAppConfig（扩展 WorkbenchConfig）
@@ -208,6 +215,39 @@ src/
 | `instance.registerSimulatorApi(name, handler)` | 注册 simulator 自定义 API，小程序里 `wx.<name>()` 调用（详见下方"Simulator 自定义 API"）。返回 `Disposable` |
 | `instance.ipc` | `IpcRegistry` 实例，`instance.ipc.handle(channel, fn)` 注册自定义 IPC；已绑定 `senderPolicy` 网关 |
 | `instance.registerTrustedWindow(win)` | 把 host 自有弹窗 `BrowserWindow` 加入受信 sender 集，否则其发起的 `instance.ipc` 调用会被网关拒绝。窗口关闭即移除 |
+| `instance.refreshHeaderAvatar()` | 通知 main renderer 重新调用 `headerAvatarProvider`，用于宿主登录态 / 头像变更后刷新内置 header 头像 |
+
+### Header Avatar
+
+`headerAvatarProvider` 是内置 project header 右侧头像 slot 的唯一数据源。devtools 会通过 `app:getHeaderAvatar` 拉取一个可序列化 DTO 并在 header toolbar 的设置按钮前渲染；宿主不需要、也不应该依赖 renderer 内部组件。
+
+```typescript
+launch({
+  headerAvatarProvider: () => {
+    const user = qdmpSession.currentUser()
+    return user
+      ? {
+          displayName: user.nickname,
+          displayInitial: user.nickname,
+          avatarUrl: user.avatarUrl,
+          tooltip: user.nickname,
+        }
+      : null
+  },
+  onSetup(instance) {
+    qdmpSession.onUserChanged(() => instance.refreshHeaderAvatar())
+  },
+})
+```
+
+`HeaderAvatarInfo` 字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `displayName` | 用户名；用于 tooltip / aria 文本和 fallback 首字 |
+| `displayInitial` | 可选 fallback 文本；头像图片缺失或加载失败时取首字显示 |
+| `avatarUrl` | 头像图片 URL 或 data URL |
+| `tooltip` | 可选 tooltip 覆盖；默认用 `displayName` |
 
 ### 内置面板 ID
 
