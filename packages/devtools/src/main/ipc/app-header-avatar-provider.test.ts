@@ -118,63 +118,81 @@ describe('registerAppIpc: app:getHeaderAvatar', () => {
   })
 })
 
+describe('registerAppIpc: avatar action', () => {
+  it('invokes the host avatar handler without exposing it to the renderer', async () => {
+    const { registerAppIpc } = await import('./app.js')
+    const { AppChannel } = await import('../../shared/ipc-channels.js')
+    const headerAvatarActionHandler = vi.fn()
+
+    const disposable = registerAppIpc(makeAppCtx({
+      headerAvatarActionHandler,
+    }) as never)
+
+    await stub.handlers.get(AppChannel.InvokeHeaderAvatar)!({})
+
+    expect(headerAvatarActionHandler).toHaveBeenCalledTimes(1)
+
+    await (disposable as { dispose: () => Promise<void> }).dispose()
+  })
+})
+
 describe('registerAppIpc: header actions', () => {
-  it('normalises host header actions and drops invalid or duplicate entries', async () => {
+  it('normalises host actions to public DTOs and drops invalid/duplicate entries', async () => {
     const { registerAppIpc } = await import('./app.js')
     const { AppChannel } = await import('../../shared/ipc-channels.js')
 
     const disposable = registerAppIpc(makeAppCtx({
       headerActionsProvider: async () => [
         {
-          id: ' upload ',
-          label: ' 上传 ',
-          placement: 'right',
-          tooltip: ' 上传版本 ',
-          icon: 'U',
-          disabled: true,
-          handler: 'must-not-cross-ipc',
+          id: ' open ',
+          label: ' 打开 ',
+          placement: 'left',
+          tooltip: ' Open project ',
+          internalToken: 'must-not-cross-ipc',
         },
-        { id: 'upload', label: 'duplicate' },
-        { id: 'preview', label: '预览', placement: 'center' },
-        { id: 'bad', label: 'Bad', placement: 'elsewhere' },
-        { id: '', label: 'missing id' },
-        { id: 'missing-label', label: '' },
+        { id: 'preview', label: '真机预览', placement: 'center', disabled: true },
+        { id: 'upload', label: '上传', placement: 'right' },
+        { id: 'upload', label: 'duplicate is ignored', placement: 'right' },
+        { id: '', label: 'invalid' },
+        { id: 'bad', label: '' },
       ],
     }) as never)
 
     const handler = stub.handlers.get(AppChannel.GetHeaderActions)!
     await expect(handler({})).resolves.toEqual([
       {
+        id: 'open',
+        label: '打开',
+        placement: 'left',
+        tooltip: 'Open project',
+      },
+      {
+        id: 'preview',
+        label: '真机预览',
+        placement: 'center',
+        disabled: true,
+      },
+      {
         id: 'upload',
         label: '上传',
         placement: 'right',
-        tooltip: '上传版本',
-        icon: 'U',
-        disabled: true,
       },
-      { id: 'preview', label: '预览', placement: 'center' },
-      { id: 'bad', label: 'Bad' },
     ])
 
     await (disposable as { dispose: () => Promise<void> }).dispose()
   })
 
-  it('invokes the host avatar and action handlers without exposing them to the renderer', async () => {
+  it('invokes the host action handler with the normalised action id', async () => {
     const { registerAppIpc } = await import('./app.js')
     const { AppChannel } = await import('../../shared/ipc-channels.js')
-    const headerAvatarActionHandler = vi.fn()
     const headerActionHandler = vi.fn()
 
     const disposable = registerAppIpc(makeAppCtx({
-      headerAvatarActionHandler,
       headerActionHandler,
     }) as never)
 
-    await stub.handlers.get(AppChannel.InvokeHeaderAvatar)!({})
-    await stub.handlers.get(AppChannel.InvokeHeaderAction)!({}, 'upload')
-    await stub.handlers.get(AppChannel.InvokeHeaderAction)!({}, '')
+    await stub.handlers.get(AppChannel.InvokeHeaderAction)!({}, ' upload ')
 
-    expect(headerAvatarActionHandler).toHaveBeenCalledTimes(1)
     expect(headerActionHandler).toHaveBeenCalledTimes(1)
     expect(headerActionHandler).toHaveBeenCalledWith('upload')
 

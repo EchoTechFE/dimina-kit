@@ -68,6 +68,7 @@ export type {
   HeaderAvatarInfo,
   HeaderAvatarProvider,
   HeaderActionInfo,
+  HeaderActionPlacement,
   HeaderActionsProvider,
   BuiltinPanelId,
   BuiltinModuleId,

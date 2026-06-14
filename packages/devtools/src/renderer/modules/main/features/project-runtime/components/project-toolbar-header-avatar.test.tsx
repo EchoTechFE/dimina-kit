@@ -11,12 +11,6 @@ type HeaderAvatar = {
   tooltip?: string
 }
 
-type HeaderAction = {
-  id: string
-  label: string
-  placement?: 'left' | 'center' | 'right'
-}
-
 const api = vi.hoisted(() => {
   const store = {
     listener: null as null | (() => void),
@@ -31,9 +25,9 @@ const api = vi.hoisted(() => {
         return store.unsubscribe
       }),
       invokeHeaderAvatar: vi.fn(() => Promise.resolve()),
-      getHeaderActions: vi.fn<() => Promise<HeaderAction[]>>(() => Promise.resolve([])),
-      invokeHeaderAction: vi.fn(() => Promise.resolve()),
+      getHeaderActions: vi.fn(() => Promise.resolve([])),
       onHeaderActionsChanged: vi.fn(() => () => {}),
+      invokeHeaderAction: vi.fn(() => Promise.resolve()),
       setSettingsVisible: vi.fn(() => Promise.resolve()),
       getToolbarActions: vi.fn(() => Promise.resolve([])),
       invokeToolbarAction: vi.fn(() => Promise.resolve()),
@@ -87,10 +81,6 @@ beforeEach(() => {
   api.mocks.getHeaderAvatar.mockResolvedValue(null)
   api.mocks.onHeaderAvatarChanged.mockClear()
   api.mocks.invokeHeaderAvatar.mockClear()
-  api.mocks.getHeaderActions.mockReset()
-  api.mocks.getHeaderActions.mockResolvedValue([])
-  api.mocks.invokeHeaderAction.mockClear()
-  api.mocks.onHeaderActionsChanged.mockClear()
 })
 
 describe('ProjectToolbar header avatar slot', () => {
@@ -135,19 +125,6 @@ describe('ProjectToolbar header avatar slot', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Qdmp User' }))
 
     expect(api.mocks.invokeHeaderAvatar).toHaveBeenCalledTimes(1)
-  })
-
-  it('renders host header actions and invokes the selected action id', async () => {
-    api.mocks.getHeaderActions.mockResolvedValueOnce([
-      { id: 'preview', label: '预览', placement: 'center' },
-      { id: 'upload', label: '上传', placement: 'right' },
-    ])
-
-    await renderToolbar()
-
-    fireEvent.click(screen.getByRole('button', { name: '上传' }))
-
-    expect(api.mocks.invokeHeaderAction).toHaveBeenCalledWith('upload')
   })
 
   it('re-fetches the avatar when the main process announces a profile change', async () => {

@@ -135,6 +135,25 @@ describe('RendererNotifier — destroyed targets no-op', () => {
     expect(mainWindow.webContents.send).toHaveBeenCalledTimes(1)
   })
 
+  it('headerActionsChanged: routes through mainWindow and respects destroy', () => {
+    const mainWindow = makeBrowserWindow()
+    const ctx = {
+      windows: { mainWindow: mainWindow as unknown as Electron.BrowserWindow },
+      views: { getSettingsWebContents: () => null },
+    }
+    const notifier = createRendererNotifier(ctx)
+
+    notifier.headerActionsChanged()
+    expect(mainWindow.webContents.send).toHaveBeenNthCalledWith(
+      1,
+      AppChannel.HeaderActionsChanged,
+    )
+
+    mainWindow.destroyed = true
+    notifier.headerActionsChanged()
+    expect(mainWindow.webContents.send).toHaveBeenCalledTimes(1)
+  })
+
   it('settingsInit: targets the settings overlay webContents and no-ops once it is destroyed', () => {
     const mainWindow = makeBrowserWindow()
     const settingsWc = makeWebContents()

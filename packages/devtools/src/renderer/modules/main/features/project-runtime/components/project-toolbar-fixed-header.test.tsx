@@ -41,8 +41,8 @@ const apiMocks = vi.hoisted(() => ({
   onHeaderAvatarChanged: vi.fn(() => () => {}),
   invokeHeaderAvatar: vi.fn(() => Promise.resolve()),
   getHeaderActions: vi.fn(() => Promise.resolve([])),
-  invokeHeaderAction: vi.fn(() => Promise.resolve()),
   onHeaderActionsChanged: vi.fn(() => () => {}),
+  invokeHeaderAction: vi.fn(() => Promise.resolve()),
 }))
 
 vi.mock('@/shared/api', () => apiMocks)

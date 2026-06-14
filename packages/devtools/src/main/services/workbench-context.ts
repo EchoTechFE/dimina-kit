@@ -68,10 +68,10 @@ export interface WorkbenchContext {
   /** Host-injected click handler for the built-in header avatar slot. */
   headerAvatarActionHandler?: () => void | Promise<void>
 
-  /** Host-injected business actions rendered in the built-in header. */
+  /** Host-injected compact action provider for the built-in project header. */
   headerActionsProvider?: HeaderActionsProvider
 
-  /** Host-injected handler for business header actions. */
+  /** Host-injected click handler for the built-in project header actions. */
   headerActionHandler?: (id: string) => void | Promise<void>
 
   /** Unified lifecycle manager for all overlay WebContentsViews */
@@ -232,9 +232,9 @@ export interface CreateContextOptions
   preloadPath: string
   rendererDir: string
   brandingProvider?: WorkbenchContext['brandingProvider']
-  headerAvatarProvider?: HeaderAvatarProvider
+  headerAvatarProvider?: WorkbenchContext['headerAvatarProvider']
   headerAvatarActionHandler?: WorkbenchContext['headerAvatarActionHandler']
-  headerActionsProvider?: HeaderActionsProvider
+  headerActionsProvider?: WorkbenchContext['headerActionsProvider']
   headerActionHandler?: WorkbenchContext['headerActionHandler']
   /** Host-supplied project list backend. Defaults to LocalProjectsProvider. */
   projectsProvider?: ProjectsProvider

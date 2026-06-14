@@ -4,8 +4,8 @@ import { StatusDot } from '@/shared/components/status-dot'
 import { cn } from '@/shared/lib/utils'
 import { HEADER_H } from '@/shared/constants'
 import {
-  getHeaderActions,
   getHeaderAvatar,
+  getHeaderActions,
   invokeHeaderAction,
   invokeHeaderAvatar,
   onHeaderActionsChanged,
@@ -83,52 +83,32 @@ function HeaderAvatar({ avatar }: { avatar: HeaderAvatarInfo }) {
   )
 }
 
-function getActionPlacement(action: HeaderActionInfo): NonNullable<HeaderActionInfo['placement']> {
-  return action.placement ?? 'right'
-}
-
-function HeaderActionButton({
-  action,
-  disabled,
-}: {
-  action: HeaderActionInfo
-  disabled: boolean
-}) {
+function HeaderActionButton({ action }: { action: HeaderActionInfo }) {
   const title = action.tooltip ?? action.label
+
   return (
     <Button
       variant="outline"
       size="sm"
+      disabled={action.disabled}
+      title={title}
       onClick={() => {
         void invokeHeaderAction(action.id)
       }}
-      disabled={disabled || action.disabled}
-      title={title}
-      className="h-8 px-2.5"
+      className="h-8 max-w-24 px-2 text-[12px]"
     >
-      {action.icon && (
-        <span className="text-[13px] leading-none" aria-hidden="true">
-          {action.icon}
-        </span>
-      )}
-      <span>{action.label}</span>
+      <span className="truncate">{action.label}</span>
     </Button>
   )
 }
 
-function HeaderActionGroup({
-  actions,
-  disabled,
-}: {
-  actions: HeaderActionInfo[]
-  disabled: boolean
-}) {
+function HeaderActionGroup({ actions }: { actions: HeaderActionInfo[] }) {
   if (actions.length === 0) return null
 
   return (
-    <div className="flex min-w-0 shrink-0 items-center gap-1" role="group">
+    <div className="flex min-w-0 shrink-0 items-center gap-1.5 overflow-hidden">
       {actions.map((action) => (
-        <HeaderActionButton key={action.id} action={action} disabled={disabled} />
+        <HeaderActionButton key={action.id} action={action} />
       ))}
     </div>
   )
@@ -173,7 +153,7 @@ export function ProjectToolbar({
     const refresh = () => {
       void getHeaderActions()
         .then((actions) => {
-          if (alive) setHeaderActions(Array.isArray(actions) ? actions : [])
+          if (alive) setHeaderActions(actions)
         })
         .catch(() => {
           if (alive) setHeaderActions([])
@@ -190,24 +170,29 @@ export function ProjectToolbar({
   }, [])
 
   const disabled = compileStatus.status === 'compiling'
-  const leftActions = headerActions.filter((action) => getActionPlacement(action) === 'left')
-  const centerActions = headerActions.filter((action) => getActionPlacement(action) === 'center')
-  const rightActions = headerActions.filter((action) => getActionPlacement(action) === 'right')
+  const leftActions = headerActions.filter((action) => action.placement === 'left')
+  const centerActions = headerActions.filter((action) => action.placement === 'center')
+  const rightActions = headerActions.filter(
+    (action) => !action.placement || action.placement === 'right',
+  )
 
   return (
     <div className="flex flex-col shrink-0">
       <div
-        className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 px-2.5 bg-surface-2 border-b border-border shrink-0"
+        className="flex items-center gap-3 px-2.5 bg-surface-2 border-b border-border shrink-0"
         style={{ height: HEADER_H }}
       >
-        <div className="flex min-w-0 items-center gap-1.5 justify-start">
+        <div className="flex min-w-0 shrink-0 items-center gap-1.5 justify-start">
           {headerAvatar && <HeaderAvatar avatar={headerAvatar} />}
           {headerAvatar && <ToolbarDivider />}
           <LayoutVisibilityToggles layout={layout} />
-          <HeaderActionGroup actions={leftActions} disabled={disabled} />
+          <HeaderActionGroup actions={leftActions} />
         </div>
 
-        <div className="flex min-w-0 items-center justify-center gap-1.5">
+        <div
+          data-testid="project-toolbar-center"
+          className="flex min-w-0 flex-1 items-center justify-center gap-1.5"
+        >
           {/* Cluster 1: Compile-mode dropdown.
             The dropdown surface itself is a main-process popover
             (showPopover from @/shared/api). Clicking the button toggles
@@ -247,12 +232,13 @@ export function ProjectToolbar({
               {compileStatus.message}
             </span>
           </div>
-          <HeaderActionGroup actions={centerActions} disabled={disabled} />
+
+          <HeaderActionGroup actions={centerActions} />
         </div>
 
-        <div className="flex min-w-0 items-center justify-end gap-1.5">
-          <HeaderActionGroup actions={rightActions} disabled={disabled} />
-          {rightActions.length > 0 && <ToolbarDivider />}
+        <div className="flex min-w-0 shrink-0 items-center justify-end gap-1.5">
+          <HeaderActionGroup actions={rightActions} />
+
           {/* Cluster 3: Layout controls, all inline toggles (no dropdown).
             Dropdowns were dropped because the editor WebContentsView
             renders above renderer-layer popovers in the OS stacking

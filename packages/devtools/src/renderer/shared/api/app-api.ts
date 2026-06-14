@@ -28,12 +28,12 @@ export function onHeaderAvatarChanged(handler: () => void): () => void {
   return on<[]>(AppChannel.HeaderAvatarChanged, () => handler())
 }
 
-/** Resolve host-provided actions rendered in the project header. */
+/** Resolve the optional compact host actions rendered in the project header. */
 export function getHeaderActions(): Promise<HeaderActionInfo[]> {
   return invoke<HeaderActionInfo[]>(AppChannel.GetHeaderActions)
 }
 
-/** Invoke a host-provided project header action. */
+/** Invoke the optional host handler for a project-header action. */
 export function invokeHeaderAction(id: string): Promise<void> {
   return invoke<void>(AppChannel.InvokeHeaderAction, id)
 }

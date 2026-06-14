@@ -83,7 +83,7 @@ export interface RendererNotifier {
   hostToolbarHeightChanged(height: number): void
   /** Ask the main renderer to re-fetch the host-provided header avatar DTO. */
   headerAvatarChanged(): void
-  /** Ask the main renderer to re-fetch host-provided header actions. */
+  /** Ask the main renderer to re-fetch the host-provided header actions. */
   headerActionsChanged(): void
   /**
    * Ask the main renderer's Monaco editor to open a project file at a position.

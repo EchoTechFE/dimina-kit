@@ -45,7 +45,7 @@ describe('app-api: header avatar facade', () => {
     expect(transport.invoke).toHaveBeenCalledWith('app:getHeaderActions')
   })
 
-  it("invokeHeaderAction invokes the 'app:invokeHeaderAction' wire channel with the id", async () => {
+  it("invokeHeaderAction invokes the 'app:invokeHeaderAction' wire channel with the action id", async () => {
     await appApi.invokeHeaderAction('upload')
 
     expect(transport.invoke).toHaveBeenCalledWith('app:invokeHeaderAction', 'upload')

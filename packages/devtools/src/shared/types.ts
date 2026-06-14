@@ -81,12 +81,22 @@ export type HeaderAvatarProvider = () =>
 
 export type HeaderActionPlacement = 'left' | 'center' | 'right'
 
+/**
+ * Small, serialisable command shape rendered inside the built-in project
+ * header. This is for compact host commands that must align with the
+ * existing header groups; richer host-owned toolbar UIs should use the host
+ * toolbar WCV.
+ */
 export interface HeaderActionInfo {
+  /** Stable command id passed back to `headerActionHandler`. */
   id: string
+  /** Short button label. Keep this compact; the header is height-constrained. */
   label: string
-  placement?: HeaderActionPlacement
-  icon?: string
+  /** Optional tooltip override. Defaults to label. */
   tooltip?: string
+  /** Header group to render into. Defaults to right. */
+  placement?: HeaderActionPlacement
+  /** Render as disabled while preserving layout. */
   disabled?: boolean
 }
 
@@ -121,7 +131,11 @@ export interface WorkbenchConfig {
   headerAvatarProvider?: HeaderAvatarProvider
   /** Optional click handler for the built-in header avatar slot. */
   headerAvatarActionHandler?: () => void | Promise<void>
-  /** Optional host-owned business actions rendered in the built-in header. */
+  /**
+   * Optional compact host commands rendered inside the built-in project
+   * header. Use this only for a handful of header-adjacent commands; use the
+   * host toolbar WCV for richer/custom toolbar UI.
+   */
   headerActionsProvider?: HeaderActionsProvider
   /** Handles clicks from actions returned by `headerActionsProvider`. */
   headerActionHandler?: (id: string) => void | Promise<void>
@@ -215,7 +229,10 @@ export interface WorkbenchHostInstance {
    * this after their current-user state changes.
    */
   refreshHeaderAvatar(): void
-  /** Ask the main renderer to re-read `headerActionsProvider`. */
+  /**
+   * Ask the main renderer to re-read `headerActionsProvider`. Hosts should
+   * call this after action labels/disabled states change.
+   */
   refreshHeaderActions(): void
 }
 

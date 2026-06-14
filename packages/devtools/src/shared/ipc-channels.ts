@@ -352,10 +352,10 @@ export const WindowChannel = {
 export const AppChannel = {
   GetBranding: 'app:getBranding',
   GetHeaderAvatar: 'app:getHeaderAvatar',
-  GetHeaderActions: 'app:getHeaderActions',
-  InvokeHeaderAction: 'app:invokeHeaderAction',
   InvokeHeaderAvatar: 'app:invokeHeaderAvatar',
   HeaderAvatarChanged: 'app:headerAvatarChanged',
+  GetHeaderActions: 'app:getHeaderActions',
+  InvokeHeaderAction: 'app:invokeHeaderAction',
   HeaderActionsChanged: 'app:headerActionsChanged',
 } as const
 
