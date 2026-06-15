@@ -1,7 +1,7 @@
 # 正确性契约：Compositor 事务化 commit（A1）+ per-window teardown 顺序（A4）
 
 > 范围：`@dimina-kit/electron-deck` 主进程视图编排层的两个正确性契约。
-> 性质：**设计文档（只读代码 + 写契约，不改实现）**。本文定义 commit
+> 性质：**✅ as-built（已实现于 main，见 architecture.md §5）；下文为设计契约原文（只读代码 + 写契约）**。本文定义 commit
 > 失败语义、`moveTo` 跨窗迁移事务状态机、`migrationLock` 无死锁论证、单窗口
 > teardown 的确切顺序及其用 `Scope.own()` LIFO 的编码方式。
 >

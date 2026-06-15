@@ -1,6 +1,6 @@
 # Capability 授权 + 生命周期契约（A5 / B3）
 
-> 状态：**设计契约（待建）**。本文只约定接口/数据形状/握手协议/裁决，不含实现。
+> 状态：**✅ as-built（已实现于 main，见 architecture.md §5）；下文为设计契约原文**。本文只约定接口/数据形状/握手协议/裁决，不含实现。
 > 上游语境：`docs/layout-architecture-demo.md` 已把 `runtime.grants.issue(...)`、
 > `runtime.view({...})`、`placeIn(anchor)` 列为「📐 待建」的壳。本文把其中三件
 > 安全/寿命攸关的事钉死：**A5-1 senderId 横切 + grant 闸**、**A5-2 anchor slotToken

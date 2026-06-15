@@ -14,10 +14,27 @@ export interface Disposable {
 	dispose(): void | Promise<void>
 }
 
+/**
+ * `@experimental` convention (used throughout this file)
+ * --------------------------------------------------------
+ * The high-level host-shell surface — `runtime.windows.*` (Window facade),
+ * `runtime.view` / `DeckViewHandle`, `runtime.scopes` / `DeckSession`,
+ * `runtime.grants`, `runtime.layout` — is fully built and wired, but has NO
+ * production consumer yet: the only callers are `examples/layout-demo` and
+ * `spike/popout`. The devtools/qdmp host integrates through the `RuntimeBackend`
+ * lifecycle path with `ownsWindows:true` and never touches this surface.
+ *
+ * Until a SECOND, real consumer adopts it, these signatures are NOT API-stable —
+ * treat them as `@experimental`. Do not assume any of it is validated against a
+ * non-demo workload. Rationale + the ROI matrix that decided devtools should NOT
+ * migrate onto it: packages/devtools/docs/deck-adoption-decision.md.
+ */
+
 /** Opaque session handle minted by `runtime.scopes.create()` (app-root) or
  *  `DeckWindow.newSession()` (window-rooted). Wraps a child Scope, so disposing
  *  it (or app shutdown / window close) tears down every view bound to it. Does
- *  NOT expose the internal Scope (no adopt/child escape). */
+ *  NOT expose the internal Scope (no adopt/child escape).
+ *  @experimental No production consumer yet — see the convention note above. */
 export interface DeckSession {
 	/** Release THIS session's views (and any other owned resources of its current
 	 *  segment), keeping the session AND its window alive — a fresh segment opens. */
@@ -26,9 +43,13 @@ export interface DeckSession {
 	dispose(): Promise<void>
 }
 
-/** A per-window close decision. `'keep'` vetoes the close; `'close'` proceeds. */
+/** A per-window close decision. `'keep'` vetoes the close; `'close'` proceeds.
+ *  @experimental Only reached via the {@link DeckWindow} facade — see the
+ *  convention note above. (`RuntimeBackend.onMainWindowClose` uses an inline
+ *  `'keep' | 'close'`, not this alias.) */
 export type WindowCloseDecision = 'keep' | 'close'
-/** A cancelable per-window close decider registered via {@link DeckWindow.onClose}. */
+/** A cancelable per-window close decider registered via {@link DeckWindow.onClose}.
+ *  @experimental No production consumer yet — see the convention note above. */
 export type WindowCloseDecider = () => MaybePromise<WindowCloseDecision>
 
 /**
@@ -37,6 +58,8 @@ export type WindowCloseDecider = () => MaybePromise<WindowCloseDecision>
  * window-rooted session factory, and a per-window cancelable close decider.
  *
  * **Never exposes** the raw windowScope / substrate / trust lease.
+ *
+ * @experimental No production consumer yet — see the convention note above.
  */
 export interface DeckWindow {
 	/** The BrowserWindow this handle wraps. */
@@ -252,6 +275,8 @@ export interface FrameworkEvents {
 	'load-failed': { source: WebviewSource; error: unknown }
 }
 
+/** @experimental Window facade option bag — no production consumer yet (see the
+ *  convention note above). */
 export interface WindowCreateOptions {
 	readonly source: WebviewSource
 	readonly preloadPath?: string
@@ -263,7 +288,9 @@ export interface WindowCreateOptions {
 	readonly autoTrust?: boolean
 }
 
-/** A screen-space rectangle (CSS px), mirroring the `view-handle` `Bounds`. */
+/** A screen-space rectangle (CSS px), mirroring the `view-handle` `Bounds`.
+ *  @experimental Part of the host-view surface — no production consumer yet (see
+ *  the convention note above). */
 export interface ViewBounds {
 	readonly x: number
 	readonly y: number
@@ -275,10 +302,14 @@ export interface ViewBounds {
  * Explicit visibility + geometry for a host-managed native view. Structurally
  * identical to the internal `view-handle` `Placement`; re-declared here so the
  * public `Runtime` surface adds no internal-module dependency.
+ *
+ * @experimental Part of the host-view surface — no production consumer yet (see
+ * the convention note above).
  */
 export type ViewPlacement = { readonly visible: true; readonly bounds: ViewBounds } | { readonly visible: false }
 
-/** Options for {@link Runtime.view}. */
+/** Options for {@link Runtime.view}.
+ *  @experimental No production consumer yet — see the convention note above. */
 export interface ViewCreateOptions {
 	readonly source: WebviewSource
 	/** The view's home lifetime — a {@link DeckSession} from
@@ -305,6 +336,8 @@ export interface ViewCreateOptions {
  * A host-API handle over ONE native view (`runtime.view(...)`). Chainable:
  * `placeIn` and `applyPlacement` both return the handle so calls compose.
  * `dispose` detaches the view and makes the placement sink inert.
+ *
+ * @experimental No production consumer yet — see the convention note above.
  */
 export interface DeckViewHandle {
 	/** Mount the native view into `window`'s content view at the given zone.
@@ -348,6 +381,8 @@ export interface Runtime {
 		host(name: string, ...args: JsonValue[]): Promise<JsonValue>
 	}
 
+	/** @experimental Window facade — no production consumer yet (see the
+	 *  convention note near the top of this file). */
 	readonly windows: {
 		create(opts: WindowCreateOptions): DeckWindow
 		get(id: string): BrowserWindow | undefined
@@ -387,30 +422,37 @@ export interface Runtime {
 	}
 
 	/** Create a host-managed native view and return a chainable handle. Throws
-	 *  if the build has no Electron (mirrors `windows.create`). */
+	 *  if the build has no Electron (mirrors `windows.create`).
+	 *  @experimental No production consumer yet — see the convention note above. */
 	view(opts: ViewCreateOptions): DeckViewHandle
 
 	/** Session factory. `create()` mints an opaque {@link DeckSession} (internally
 	 *  a child of the app root) — the ONLY legitimate source of a `scope` for
 	 *  `runtime.view`. Disposing the session tears down every view bound to it;
-	 *  app shutdown also cascades into it. */
+	 *  app shutdown also cascades into it.
+	 *  @experimental No production consumer yet — see the convention note above. */
 	readonly scopes: {
 		create(): DeckSession
 	}
 
+	/** @experimental Capability/grant surface — no production consumer yet (see
+	 *  the convention note near the top of this file). */
 	readonly grants: {
 		/** Authorize `controlWc` to invoke the given privileged commands. The grant
 		 *  is revoked automatically when the control wc's lifetime Scope resets
 		 *  (navigation) or closes (destroy) — wc.id-reuse safe. Throws if `controlWc`
 		 *  is not trusted.
 		 *
-		 *  `targetScope` is OPTIONAL and reserved: when supplied it is stored as the
-		 *  authorization boundary for FUTURE per-target view-command checks; the
-		 *  current grant gate authorizes by (senderId, command-name) only — no command
-		 *  resolves a target view yet, so targetScope is not consulted at dispatch. */
+		 *  `@experimental` `targetScope` is OPTIONAL and currently INERT: when supplied
+		 *  it is stored as the authorization boundary for FUTURE per-target view-command
+		 *  checks, but the current grant gate authorizes by (senderId, command-name)
+		 *  only — no command resolves a target view yet, so targetScope is NOT consulted
+		 *  at dispatch. Passing it today has no effect; do not rely on it for isolation. */
 		issue(controlWc: WebContents, opts: { commands: readonly string[]; targetScope?: DeckSession }): Disposable
 	}
 
+	/** @experimental Privileged-command surface — no production consumer yet (see
+	 *  the convention note near the top of this file). */
 	readonly layout: {
 		/** Register a PRIVILEGED command (must be a `layout.*` name) handled through
 		 *  the capability-gated ControlBus. A caller can only invoke it if a live

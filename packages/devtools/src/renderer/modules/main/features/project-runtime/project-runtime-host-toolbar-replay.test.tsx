@@ -114,39 +114,38 @@ vi.mock('./controllers/use-project-runtime-controller', () => ({
 
 vi.mock('./controllers/use-layout-store', () => ({
   useLayoutStore: () => ({
-    state: {
-      simulatorVisible: true,
-      editorVisible: true,
-      debugVisible: true,
-      simulatorAlignment: 'left',
-      devtoolsPosition: 'inEditor',
-    },
-    toggleSimulator: vi.fn(),
-    toggleEditor: vi.fn(),
-    toggleDebug: vi.fn(),
-    setSimulatorAlignment: vi.fn(),
-    setDevtoolsPosition: vi.fn(),
+    state: { dockTree: null },
+    setDockTree: vi.fn(),
   }),
 }))
 
-vi.mock('./layout/compile', () => ({
-  compileProjectWindowLayout: () => ({
-    signature: 'stub-signature',
-    cells: {
-      simulator: { present: true },
-      editor: { present: true },
-      debug: { present: false },
-    },
-  }),
-}))
-
-vi.mock('./layout/frame-tree', () => ({ FrameTree: () => null }))
+// The dock layout is the sole content; stub it out so this suite exercises only
+// the host-toolbar placeholder-height wiring (the dock engine is covered by its
+// own suites). Stubbing the component avoids pulling in DockView / the layout
+// engine here.
 vi.mock('./components/project-toolbar', () => ({ ProjectToolbar: () => null }))
 vi.mock('./components/simulator-panel', () => ({ SimulatorPanel: () => null }))
-vi.mock('../bottom-debug-panel/bottom-debug-panel', () => ({ BottomDebugPanel: () => null }))
+vi.mock('../bottom-debug-panel/bottom-debug-panel', () => ({ DebugTabContent: () => null }))
 vi.mock('../monaco-editor', () => ({ MonacoEditor: () => null }))
-// useViewAnchor returns a callback ref; bounds publication is not under test.
-vi.mock('@dimina-kit/view-anchor', () => ({ useViewAnchor: () => () => {} }))
+vi.mock('@dimina-kit/electron-deck/dock-react', () => ({ DockView: () => null }))
+vi.mock('@dimina-kit/electron-deck/layout', () => ({
+  serializeLayout: () => '',
+  setConstraint: (t: unknown) => t,
+}))
+vi.mock('./layout/dock-layout', () => ({
+  buildDockModel: () => ({
+    get: () => ({ root: { kind: 'tabs', id: 'g', panels: [], active: null } }),
+    apply: vi.fn(),
+    subscribe: () => () => {},
+  }),
+  buildDockRegistry: () => ({ get: () => undefined, list: () => [] }),
+}))
+// useViewAnchor returns a callback ref; createPlacementAnchor is unused here
+// (simulator-panel is stubbed). Bounds publication is not under test.
+vi.mock('@dimina-kit/view-anchor', () => ({
+  useViewAnchor: () => () => {},
+  createPlacementAnchor: () => ({ update: vi.fn(), dispose: vi.fn() }),
+}))
 
 import { ProjectRuntime } from './project-runtime'
 

@@ -27,7 +27,6 @@ import { describe, it, expect, vi } from 'vitest'
 import { render, act } from '@testing-library/react'
 import { HEADER_H } from '@/shared/constants'
 import { ProjectToolbar } from './project-toolbar'
-import type { LayoutStoreApi } from '../controllers/use-layout-store'
 
 const apiMocks = vi.hoisted(() => ({
   // Simulates a host that configured the (now deprecated) headerHeight: 72.
@@ -41,24 +40,6 @@ const apiMocks = vi.hoisted(() => ({
 
 vi.mock('@/shared/api', () => apiMocks)
 
-function makeLayoutStub(): LayoutStoreApi {
-  return {
-    state: {
-      simulatorVisible: true,
-      editorVisible: true,
-      debugVisible: true,
-      simulatorAlignment: 'left',
-      devtoolsPosition: 'inEditor',
-    },
-    visibleCount: 3,
-    toggleSimulator: vi.fn(),
-    toggleEditor: vi.fn(),
-    toggleDebug: vi.fn(),
-    setSimulatorAlignment: vi.fn(),
-    setDevtoolsPosition: vi.fn(),
-  }
-}
-
 async function renderToolbar() {
   const utils = render(
     <ProjectToolbar
@@ -67,7 +48,6 @@ async function renderToolbar() {
       onToggleCompilePanel={() => {}}
       onRelaunch={() => {}}
       compileStatus={{ status: 'ready', message: '' }}
-      layout={makeLayoutStub()}
     />,
   )
   // Flush mount effects + any pending IPC promise resolutions so a legacy

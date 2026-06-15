@@ -1,0 +1,109 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>electron-deck — DOCKABLE demo (React DockView + native slot)</title>
+    <style>
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; font-family: -apple-system, system-ui, sans-serif; }
+      body {
+        background: #1e1e2e;
+        color: #cdd6f4;
+        display: grid;
+        grid-template-rows: 36px 1fr;
+        height: 100vh;
+        overflow: hidden;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 10px;
+        background: #181825;
+        border-bottom: 1px solid #313244;
+        font-size: 12px;
+      }
+      header .title { font-weight: 600; opacity: 0.85; }
+
+      /* DockView mount host. Its WIDTH is driven by the verification driver
+         (window.__deck.setHostWidth) so react-resizable-panels re-distributes
+         the left (simulator) panel → the native slot rect changes → the native
+         WebContentsView follows. Renderer-driven geometry, zero host resize. */
+      #dock-host {
+        height: 100%;
+        width: 100%;
+        position: relative;
+        overflow: hidden;
+      }
+
+      /* DockView structural styling (it emits stable data-* attributes only;
+         all visual styling is the host's). */
+      [data-deck-split] { display: block; }
+      [data-deck-group] {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        min-width: 0;
+        min-height: 0;
+        border: 1px solid #313244;
+      }
+      [role="tablist"] {
+        display: flex;
+        gap: 2px;
+        padding: 4px;
+        background: #181825;
+        border-bottom: 1px solid #313244;
+        flex: 0 0 auto;
+      }
+      [data-deck-tab] {
+        font-size: 11px;
+        padding: 3px 10px;
+        background: #45475a;
+        color: #cdd6f4;
+        border: 1px solid #585b70;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      [data-deck-tab][data-active="true"] {
+        background: #585b70;
+        font-weight: 700;
+        border-color: #89b4fa;
+      }
+      [data-deck-panel-body] {
+        flex: 1 1 auto;
+        padding: 10px;
+        font-family: ui-monospace, SFMono-Regular, monospace;
+        font-size: 12px;
+        white-space: pre-wrap;
+        overflow: auto;
+        min-height: 0;
+      }
+      /* native slot: the native WebContentsView anchors ON TOP of this rect. */
+      [data-deck-native-slot] {
+        flex: 1 1 auto;
+        margin: 6px;
+        border: 2px dashed #585b70;
+        border-radius: 6px;
+        min-height: 0;
+        min-width: 0;
+      }
+      /* react-resizable-panels separator (drag handle between split children). */
+      [data-deck-resize-handle] {
+        flex: 0 0 6px;
+        background: #313244;
+        cursor: col-resize;
+      }
+      [data-deck-resize-handle]:hover { background: #585b70; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <span class="title">electron-deck — DockView dock-shell + native slot following</span>
+    </header>
+    <div id="dock-host"></div>
+
+    <!-- Bundled React app (esbuild output). Contains React, react-dom, the
+         consumed dist layout/dock-react/client, and our wiring. -->
+    <script src="./app.bundle.js"></script>
+  </body>
+</html>
