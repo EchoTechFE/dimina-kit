@@ -277,6 +277,14 @@ function removePanel(root: LayoutNode, panelId: string): LayoutNode {
 }
 
 export function closePanel(t: LayoutTree, panelId: string): LayoutTree {
+	// Last-panel no-op guard: closing the SOLE panel in the whole tree would
+	// empty the layout (normalizeRoot throws). Instead return the tree unchanged
+	// so hosts can wire a close button without special-casing the final panel.
+	// An UNKNOWN id is NOT "the last panel" — only short-circuit when the panel
+	// actually EXISTS and is the only one; otherwise fall through to removePanel,
+	// which throws "panel not found" for an unknown id (behavior preserved).
+	const ids = collectPanelIds(t.root)
+	if (ids.size === 1 && ids.has(panelId)) return t
 	return wrap(removePanel(t.root, panelId))
 }
 

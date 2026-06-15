@@ -245,6 +245,11 @@ describe('<DockView> drag-to-redock — real-pointer cases (e2e only)', () => {
 	// `data-deck-drop-zone` overlay deterministically. The geometry truth is
 	// pinned in the node suite (drag-redock.test.ts); these two require a real
 	// browser / pointer driver.
-	it.todo('dragging a tab over the LEFT band of a group shows data-deck-drop-zone="left" and drops to split-left — needs e2e/real-pointer (jsdom getBoundingClientRect is 0)')
-	it.todo('dragging a tab into the CENTER of a group shows data-deck-drop-zone="center" and drops to join — needs e2e/real-pointer (jsdom getBoundingClientRect is 0)')
+	// COVERED by the real-pointer e2e: packages/devtools/e2e/dock-real-drag.spec.ts
+	// ("POINT 1+2 LEFT band" / "POINT 1+2 CENTER"). That spec drives a real HTML5
+	// DnD event sequence in a live Electron renderer with real geometry, asserting
+	// both the `data-deck-drop-zone` indicator zone AND the resulting tree mutation.
+	// Kept as `todo` here because jsdom (getBoundingClientRect is 0) cannot.
+	it.todo('dragging a tab over the LEFT band of a group shows data-deck-drop-zone="left" and drops to split-left — covered by e2e dock-real-drag.spec.ts (jsdom getBoundingClientRect is 0)')
+	it.todo('dragging a tab into the CENTER of a group shows data-deck-drop-zone="center" and drops to join — covered by e2e dock-real-drag.spec.ts (jsdom getBoundingClientRect is 0)')
 })

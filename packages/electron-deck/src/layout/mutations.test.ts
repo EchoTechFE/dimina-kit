@@ -225,6 +225,76 @@ describe('closePanel — collapse', () => {
 	})
 })
 
+describe('closePanel — last-panel no-op guard', () => {
+	// BUG: closing the ONLY panel left in the whole tree currently THROWS
+	// "mutation would empty the entire layout"; the new contract makes it a
+	// NO-OP that returns the tree unchanged, so the host never has to special-case
+	// "this is the last panel" before wiring a close button.
+	it('closing the only panel in a single-group tree is a NO-OP (returns the tree, no throw)', () => {
+		const t = tree(tabs('only', ['solo'], 'solo'))
+		const out = closePanel(t, 'solo')
+		// not a throw, not an empty tree — the solo panel survives.
+		expect(out.root.kind).toBe('tabs')
+		expect((out.root as TabGroupNode).id).toBe('only')
+		expect((out.root as TabGroupNode).panels).toEqual(['solo'])
+		expect((out.root as TabGroupNode).active).toBe('solo')
+		expectStructurallySound(out)
+	})
+
+	// BUG: a last-panel close that previously threw would corrupt callers that
+	// expect a usable tree back; the no-op must yield a structurally identical
+	// (deep-equal) tree, not a partially-collapsed or empty one.
+	it('the last-panel no-op returns a tree deep-equal to the input', () => {
+		const t = tree(tabs('only', ['solo'], 'solo'))
+		const out = closePanel(t, 'solo')
+		expect(out).toEqual(t)
+	})
+
+	// BUG: collapse could whittle a multi-group tree down to its final panel and
+	// then THROW on that final close; the last close in a sequence must instead
+	// no-op once a single panel remains across the WHOLE tree.
+	it('closing down to the final panel across multiple groups no-ops on the last close', () => {
+		// row s0 with g1:[p1] and g2:[p2]. Close p1 -> collapse to g2:[p2].
+		const t = tree(
+			split('s0', 'row', [
+				tabs('g1', ['p1'], 'p1'),
+				tabs('g2', ['p2'], 'p2'),
+			]),
+		)
+		const out = closePanel(t, 'p1')
+		// other panel (p2) still existed when p1 closed -> normal collapse path.
+		expect(out.root.kind).toBe('tabs')
+		expect((out.root as TabGroupNode).panels).toEqual(['p2'])
+		expectStructurallySound(out)
+
+		// now p2 is the ONLY panel in the whole tree -> closing it must NO-OP.
+		const afterLast = closePanel(out, 'p2')
+		expect(afterLast.root.kind).toBe('tabs')
+		expect((afterLast.root as TabGroupNode).panels).toEqual(['p2'])
+		expectStructurallySound(afterLast)
+	})
+
+	// BUG: a permissive last-panel guard must NOT also swallow genuinely-invalid
+	// closes — closing an unknown panel id (even when only one panel exists) must
+	// still throw, so typos/stale ids aren't silently ignored.
+	it('closing an UNKNOWN panel id still throws even when only one panel exists', () => {
+		const t = tree(tabs('only', ['solo'], 'solo'))
+		expectRejects(() => closePanel(t, 'ghost'))
+	})
+
+	// BUG: the no-op path must not regress the normal multi-panel close — when
+	// OTHER panels still exist anywhere, closing one must remove it (collapse +
+	// active re-derivation) exactly as before, not no-op.
+	it('with other panels present, closing one still removes it (no spurious no-op)', () => {
+		// g1=[p1,p2] active p1; close p1 -> p1 gone, active clamps to p2.
+		const out = closePanel(base(), 'p1')
+		const g1 = findGroup(out, 'g1')!
+		expect(g1.panels).toEqual(['p2'])
+		expect(g1.active).toBe('p2')
+		expectStructurallySound(out)
+	})
+})
+
 // ───────────────────────── extractPanel ─────────────────────────
 
 describe('extractPanel', () => {

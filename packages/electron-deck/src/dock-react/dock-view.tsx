@@ -21,7 +21,7 @@ import {
 } from 'react'
 import { Group, Panel, Separator } from 'react-resizable-panels'
 import type { Layout } from 'react-resizable-panels'
-import { extractPanel, movePanel, setActive, setSizes, splitPanel } from '../layout/index.js'
+import { closePanel, extractPanel, movePanel, setActive, setSizes, splitPanel } from '../layout/index.js'
 import type {
 	LayoutModel,
 	LayoutNode,
@@ -108,6 +108,23 @@ export function DockView(props: DockViewProps): ReactNode {
 		[model],
 	)
 
+	// Close write-back: a tab's close affordance funnels here, applying
+	// `closePanel` to the canonical model (which removes + collapses + re-derives
+	// active, or NO-OPs on the final panel). Same single-`apply` discipline as
+	// `handleActivate`/`handleRedock`.
+	const handleClose = useCallback(
+		(panelId: string) => {
+			model.apply((t) => closePanel(t, panelId))
+		},
+		[model],
+	)
+
+	// Total panels across the WHOLE tree. The close affordance is suppressed only
+	// when the entire layout has a single panel left (closing it would no-op);
+	// a multi-panel single group still shows closes. GroupView sees only its own
+	// node, so we compute the global count here and thread `canClose` down.
+	const canClose = countPanels(tree.root) > 1
+
 	// Resize write-back: a drag commit (or the `__deckApplyLayout` seam) funnels
 	// new per-split weights here, which apply `setSizes` to the canonical model.
 	const handleApplyLayout = useCallback(
@@ -163,6 +180,8 @@ export function DockView(props: DockViewProps): ReactNode {
 				onActivate: handleActivate,
 				onApplyLayout: handleApplyLayout,
 				onRedock: handleRedock,
+				onClose: handleClose,
+				canClose,
 			})}
 		</Fragment>
 	)
@@ -187,6 +206,10 @@ interface RenderContext {
 	onActivate: (groupId: string, panelId: string) => void
 	onApplyLayout: (splitId: string, weights: number[]) => void
 	onRedock: (groupId: string, activePanelId: string, draggedPanelId: string, zone: DropZone) => void
+	onClose: (panelId: string) => void
+	/** False when the whole tree has a single panel — suppresses every close
+	 * button so the layout can't be emptied (closePanel would no-op anyway). */
+	canClose: boolean
 }
 
 /** The id of the tab group currently holding `panelId`, or `undefined` if the
@@ -201,6 +224,14 @@ function findPanelGroupId(node: LayoutNode, panelId: string): string | undefined
 		if (found !== undefined) return found
 	}
 	return undefined
+}
+
+/** Total panels anywhere in the tree. Drives the last-panel close suppression:
+ * a GroupView only knows its own node, so DockView computes this global count
+ * once and threads the resulting `canClose` boolean down. */
+function countPanels(node: LayoutNode): number {
+	if (node.kind === 'tabs') return node.panels.length
+	return node.children.reduce((sum, child) => sum + countPanels(child), 0)
 }
 
 function renderNode(node: LayoutNode, ctx: RenderContext): ReactNode {
@@ -439,6 +470,7 @@ function GroupView(props: GroupViewProps): ReactNode {
 			<div role="tablist" style={{ flexShrink: 0 }}>
 				{node.panels.map((panelId) => {
 					const active = panelId === node.active
+					const title = ctx.registry.get(panelId)?.title ?? panelId
 					return (
 						<button
 							key={panelId}
@@ -448,6 +480,19 @@ function GroupView(props: GroupViewProps): ReactNode {
 							data-deck-tab={panelId}
 							data-active={active ? 'true' : 'false'}
 							onDragStart={(e) => {
+								// A press that BEGINS on the close affordance must not drag the
+								// whole tab: the HTML5 drag source is the draggable ANCESTOR
+								// (this tab) regardless of which descendant the pointer landed
+								// on, so a descendant's stopPropagation cannot cancel it —
+								// detect the origin here and abort the drag. `closest` walks up
+								// from the event target; a hit means the gesture started on ×.
+								if (
+									e.target instanceof Element
+									&& e.target.closest('[data-deck-tab-close]') !== null
+								) {
+									e.preventDefault()
+									return
+								}
 								// Record the dragged panel id so the drop target can recover it.
 								e.dataTransfer.setData(DRAG_PANEL_MIME, panelId)
 								e.dataTransfer.setData('text/plain', panelId)
@@ -457,7 +502,39 @@ function GroupView(props: GroupViewProps): ReactNode {
 								if (!active) ctx.onActivate(node.id, panelId)
 							}}
 						>
-							{ctx.registry.get(panelId)?.title ?? panelId}
+							{title}
+							{/* Close affordance — a `role="button"` SPAN (NOT a nested <button>:
+							   an interactive button may not be a descendant of another button —
+							   invalid HTML + illegal a11y nesting). `tabIndex={0}` + the
+							   Enter/Space keydown keep it keyboard/AT-operable. Suppressed when
+							   the WHOLE tree has one panel left (`canClose` false). Activate is
+							   kept off the tab (click stopPropagation) and a tab drag that
+							   begins here is cancelled by the tab's onDragStart guard above. */}
+							{ctx.canClose
+								? (
+									<span
+										role="button"
+										tabIndex={0}
+										data-deck-tab-close={panelId}
+										aria-label={`Close ${title}`}
+										onPointerDown={(e) => e.stopPropagation()}
+										onClick={(e) => {
+											e.stopPropagation()
+											e.preventDefault()
+											ctx.onClose(panelId)
+										}}
+										onKeyDown={(e) => {
+											if (e.key === 'Enter' || e.key === ' ') {
+												e.stopPropagation()
+												e.preventDefault()
+												ctx.onClose(panelId)
+											}
+										}}
+									>
+										×
+									</span>
+									)
+								: null}
 						</button>
 					)
 				})}

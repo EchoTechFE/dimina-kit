@@ -26,6 +26,58 @@
 
 > 一句话：**dockview 管 DOM 怎么分；electron-deck 管原生 view 怎么跟着 DOM 走、跨窗口怎么搬、寿命归谁。**
 
+> **关于「窗口内 DOM 怎么分」**：上面说 electron-deck「不替你做窗口内的 DOM 分栏」是指
+> §1–§5 的 host-shell 原语（Scope / Compositor / ControlBus / ViewHandle / Window facade）。
+> 但本包现在另外提供一个**独立的、领域中立的窗口内布局面**——layout-as-data 引擎
+> （`/layout`）+ `<DockView>`（`/dock-react`），见下面 §0.5。它和 host-shell 原语是
+> **两个正交的 surface**：host-shell 不依赖布局引擎，布局引擎也不 import electron。devtools 是
+> 布局引擎的**首消费者**（IDE-dockable 布局），但仍以 `ownsWindows:true` 旁路集成、**不**采纳
+> §4 的高层 host-shell API（见 `../../devtools/docs/deck-adoption-decision.md`）。
+
+---
+
+## 0.5. layout-as-data 引擎 + DockView（窗口内 docking 布局，✅ 已建）
+
+这是与 §1–§5 host-shell 原语**正交**的第二个公开面：一套**领域中立**的「窗口内 docking 布局」
+能力，供任何 Electron 工具把面板拼成可拖拽 re-dock / tab / 分屏 / 序列化恢复的 IDE 式布局。
+
+### 0.5.1 layout-as-data 引擎（`@dimina-kit/electron-deck/layout`）
+
+**纯 TS**——`src/layout/` 下严禁 import `electron` / `react`（`boundary.test.ts` 钉死这条边界）。
+原生面板只引用一个 electron-free 的不透明句柄 `NativeHandleRef`，由 host 自己映射回真 view。
+
+- **数据模型**：布局是一棵不可变树 `LayoutTree`，节点是 `SplitNode`（`row`/`column` 容器，带
+  每子一份 `sizes` 权重 + 可选 `constraints` 做 per-child fixed-px 锁宽）或 `TabGroupNode`
+  （一组 panelId + 当前 `active`）。
+- **面板登记**：`PanelDescriptor` 分 `dom`（renderer 内 React 内容）/ `native`（带
+  `NativeHandleRef` 的主进程 view）两类；`createPanelRegistry()` 维护 panelId → descriptor。
+- **mutation（纯函数，树→树）**：`movePanel` / `splitPanel` / `closePanel` / `setActive` /
+  `setSizes` / `setConstraint` / `extractPanel` / `insertPanel`。
+- **序列化 / 校验**：`serializeLayout` / `parseLayout`（不透明字符串往返持久化）+ `validateTree`
+  （结构合法性 + panelId 是否都在已知集合内，给 fallback-safe 恢复用）。
+- **可观察模型**：`createLayoutModel(tree)` 是一个**单写者**的 `LayoutModel`（`get` /
+  `apply(mut)` / `subscribe(snap)`），把树变更广播给渲染层。
+
+### 0.5.2 `<DockView>`（`@dimina-kit/electron-deck/dock-react`）
+
+`<DockView model registry renderDomPanel bindNativeSlot>` 是把 `LayoutModel` 渲染成 docking UI
+的 React 渲染器：
+
+- DOM 面板经 `renderDomPanel(panelId)` 渲染 React 内容；原生面板经 `bindNativeSlot(panelId, el)`
+  把一个**空 DOM 槽**交给 host——host 用 `view-anchor` 把主进程 view 贴到该槽（与 §2.2 同一跨进程
+  桥）。
+- 交互：用户**拖拽 tab → drop 区**做 split / tab re-dock（HTML5 DnD），拖分隔条 resize，切 tab，
+  **关闭面板**（tab 上的 close 控件 → `closePanel`，守卫整树最后一个面板）；
+  纯几何的 drop-zone 计算与 descriptor 层（`computeDropZone` / `dropZoneToMutation` /
+  `isNoopRedock`）也从本 entry 导出，host 不必深 import。
+- fixed-px `constraints` 让某个 leaf（如 simulator 的设备宽）保真不被权重缩放。
+
+### 0.5.3 与 §1–§5 的关系
+
+布局引擎**不碰** Scope / Compositor / ControlBus / Window facade，也不要求 host 采纳它们；
+host-shell 原语同样不依赖布局引擎。devtools 同时用两者，但走的是**不同的 seam**：项目窗口内的
+分栏用 `/layout` + `/dock-react`，而窗口装配 / 原生 view 寿命仍走 `ownsWindows:true` 旁路。
+
 ---
 
 ## 1. 为什么（三个真实需求 + 一个物理约束）
@@ -320,6 +372,8 @@ const deck = createDeckLayoutClient({ bridge: window.__electronDeckLayoutBridge 
 
 | 路径 | 内容 |
 |---|---|
+| `src/layout/` | layout-as-data 引擎（纯 TS）：`types.ts` 树/节点/registry/model 类型、`mutations.ts` 树→树纯函数、`serialize.ts` 往返+`validateTree`、`model.ts` 单写者可观察模型、`registry.ts` panel registry；公开面在 `index.ts` |
+| `src/dock-react/` | `<DockView>` React 渲染器（`dock-view.tsx`）+ 纯几何 drag-to-redock（`drag-redock.ts`）；公开面在 `index.ts` |
 | `src/main/scope.ts` | Scope 嵌套寿命原语：`own/child/reset/close/on/adopt`，完成栅栏单飞状态机 |
 | `src/main/compositor.ts` | Compositor：`(zone,orderKey,viewId)` 全序、fractional indexing、LIS commit |
 | `src/host/control-bus.ts` | ControlBus 薄 facade：`command/event/trust/dispatch/declaredEvents` |

@@ -4,6 +4,17 @@
 > electron-deck 的高层 host API。本文是「止血」记录——这个判断已被反复重提多次，这里固化论据
 > 与重启条件，避免再次空耗。评审过程：两路调研 subagent 对账 main 真实代码 + codex 对抗评审。
 
+> **范围澄清（2026-06-15 对账）**：本决策只针对 deck 的**高层 host-shell API**——`runtime.view` /
+> `runtime.windows` / `runtime.grants` / Window facade / Compositor 那一面（即下文 ROI 矩阵的
+> F1–F6）。这条结论**仍成立**：IDE-dockable 改造没有采纳其中任何一项。
+>
+> 但 deck 后来另起的**layout-as-data 引擎（`@dimina-kit/electron-deck/layout`）+ `<DockView>`
+> （`/dock-react`）是一个不同的 surface**，与上述高层 host-shell API 正交（它不 import electron、
+> 不碰 Scope/Compositor/ControlBus）。这个 surface **已被 devtools 采纳**：项目窗口布局从写死的
+> 三栏 FrameTree 整体换成单一 `<DockView>`（IDE-dockable 拖拽 re-dock / tab / 分屏 / 序列化），
+> devtools 是该引擎的**首消费者**。这与本文「不采纳高层 host API」的结论**不矛盾**——两件事针对
+> deck 的两个不同对外面。详见 `project-window-layout.md` 与 `../../electron-deck/docs/architecture.md §0.5`。
+
 ## 背景
 
 electron-deck 是从 devtools 抽出的领域中立 Electron host-shell 框架。在抽取过程中，框架侧
