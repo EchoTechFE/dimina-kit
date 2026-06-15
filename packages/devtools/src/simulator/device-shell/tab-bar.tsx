@@ -9,9 +9,13 @@ export interface TabBarProps {
   resourceBaseUrl: string | null
   appId: string
   onSwitch: (pagePath: string) => void
+  /** Device bottom safe-area inset (px). The tabBar background extends through
+   *  it (padding-bottom) so the home-indicator strip is the tabBar's color, as
+   *  on WeChat. 0 on home-button devices. */
+  bottomInset?: number
 }
 
-export function TabBar({ state, currentPath, resourceBaseUrl, appId, onSwitch }: TabBarProps) {
+export function TabBar({ state, currentPath, resourceBaseUrl, appId, onSwitch, bottomInset = 0 }: TabBarProps) {
   if (!state.config || !state.visible) return null
 
   const { color, selectedColor, backgroundColor, borderStyle, list } = state.config
@@ -23,7 +27,7 @@ export function TabBar({ state, currentPath, resourceBaseUrl, appId, onSwitch }:
   return (
     <div
       className="dmb-tab-bar"
-      style={{ backgroundColor: bg, borderTopColor: borderColor }}
+      style={{ backgroundColor: bg, borderTopColor: borderColor, paddingBottom: bottomInset }}
       role="tablist"
       aria-label="TabBar"
     >

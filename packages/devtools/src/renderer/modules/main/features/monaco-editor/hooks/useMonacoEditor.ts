@@ -11,6 +11,7 @@ import * as monaco from 'monaco-editor'
 import { installMonacoEnvironment } from '../monaco-env'
 import { ensureDiminaLanguages } from '../language/register'
 import { applyMonacoTheme, isDarkMode } from '../theme'
+import { onThemeChanged } from '@/shared/api'
 
 export interface MonacoController {
   /** Open (or focus) a model for `key`, seeding it with `value` + `language`. */
@@ -79,6 +80,16 @@ export function useMonacoEditor(
       onChangeRef.current?.(editor.getValue())
     })
 
+    // Re-apply the dimina theme when the color scheme flips. `applyMonacoTheme`
+    // only runs once at mount; without this, switching the workbench theme would
+    // leave Monaco frozen on its mount-time theme while the rest of the UI flips.
+    // The signal comes from main (onThemeChanged) rather than a renderer
+    // matchMedia listener: Electron does NOT dispatch the renderer's
+    // `prefers-color-scheme` change event for programmatic
+    // `nativeTheme.themeSource` flips, so a matchMedia listener never fires for
+    // in-app theme switches. main pushes the resolved isDark instead.
+    const offThemeChanged = onThemeChanged((isDark) => applyMonacoTheme(isDark))
+
     // Capture the model collections at setup time. They are created once on
     // mount and never reassigned, so these locals reference the SAME objects
     // the controller mutates — the cleanup tears down exactly what was opened
@@ -88,6 +99,7 @@ export function useMonacoEditor(
 
     return () => {
       sub.dispose()
+      offThemeChanged()
       editor.dispose()
       editorRef.current = null
       for (const m of owned) {

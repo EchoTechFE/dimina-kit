@@ -291,7 +291,7 @@ export function DeviceShell({
             <webview
               key={entry.bridgeId}
               className="device-shell__webview"
-              src={miniApp.createRenderHostUrl(entry.bridgeId, entry.pagePath)}
+              src={miniApp.createRenderHostUrl(entry.bridgeId, entry.pagePath, entry.isTab)}
               preload={preload}
               // No static partition here: the renderer doesn't know the
               // per-project partition. Main owns it — the host WCV's
@@ -314,14 +314,20 @@ export function DeviceShell({
             resourceBaseUrl={miniApp.resourceBaseUrl}
             appId={miniApp.appId}
             onSwitch={handleTabClick}
+            // WeChat parity: the tabBar background extends through the bottom
+            // safe area so the home-indicator strip is the tabBar's color.
+            bottomInset={bottomInset}
           />
         )}
-        {/* Home-indicator strip sized to the device bottom inset (gesture-bar
-            devices only; the home-button SE class has bottom inset 0). */}
+        {/* Home-indicator pill — an absolute overlay at the device bottom
+            (gesture-bar devices only; the home-button SE class has bottom inset
+            0). It is NOT in flow: a tab page sees the tabBar's color behind it,
+            a non-tab page is full-bleed so its own content shows through. The
+            page reserves bottom space only via its own env(safe-area-inset-*). */}
         {bottomInset > 0 && (
           <div
             className="device-shell__home-indicator"
-            style={{ flexBasis: bottomInset }}
+            style={{ height: bottomInset }}
             aria-hidden="true"
           />
         )}

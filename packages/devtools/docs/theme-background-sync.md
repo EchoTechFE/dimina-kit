@@ -1,6 +1,6 @@
 # 主题切换与窗口背景同步
 
-> 关联代码：`src/main/utils/theme.ts`、`src/main/app/app.ts`、`src/main/services/settings/index.ts`
+> 关联代码：`src/main/utils/theme.ts`、`src/main/app/app.ts`、`src/main/services/settings/index.ts`、`src/main/services/views/view-manager.ts`、`src/renderer/modules/main/features/monaco-editor/hooks/useMonacoEditor.ts`
 
 ## 这个文档解决什么
 
@@ -37,15 +37,46 @@ WebContents 之间的接缝。主题切换后：
 Electron 官方 Dark Mode 教程也只演示 CSS 方案，未覆盖这一层 —— 这正是缺陷的来源。
 原生窗口底色只能用 `win.setBackgroundColor()` 手动更新。
 
+### 还有一类「CSS 管不到」：渲染层里用 JS 定主题的组件
+
+CSS 媒体查询会随 `themeSource` 自动重算，但**用 JS API 设主题的组件不会**——
+典型是 Monaco 编辑器（`monaco.editor.setTheme(...)`）。它在挂载时按当前色调应用一次，
+之后需要一个事件来重新应用。
+
+直觉做法是在渲染层监听 `window.matchMedia('(prefers-color-scheme: dark)')` 的 `change`
+事件——**但这条路对应用内切换无效**：Electron / Chromium 在**代码显式赋值
+`nativeTheme.themeSource`** 时，会更新 `matchMedia(...).matches` 的值并重算 CSS，
+**却不派发该 `MediaQueryList` 的 `change` 事件**（只有真·操作系统级主题变化才派发）。
+所以渲染层拿不到 JS 信号。
+
+解决办法：让 main 在它本来就有的 `nativeTheme 'updated'` 处**主动广播**给渲染层。
+`installThemeBackgroundSync()` 在同步窗口底色的同一轮里，向每个存活窗口
+`webContents.send(WorkbenchSettingsChannel.ThemeChanged, isDark)`；渲染层用
+`onThemeChanged(isDark => applyMonacoTheme(isDark))`（`shared/api/settings-api.ts`）订阅，
+Monaco 编辑器在 `useMonacoEditor` 里据此重应用主题。这条广播覆盖「应用内切换」与
+「macOS/Windows 的系统主题变化」；仅 Linux + 跟随系统 + OS 改主题这一路径失效，
+与下方窗口底色的已知限制同源。
+
 ## 设计
 
 一个集中式监听器 —— `installThemeBackgroundSync()`（位于 `theme.ts`）：
 
 - 注册**单个** `nativeTheme` 的 `updated` 事件监听器；
 - 每次主题变化，遍历 `BrowserWindow.getAllWindows()`，给每个未销毁的窗口
-  调用 `setBackgroundColor(themeBg())`；
+  调用 `setBackgroundColor(themeBg())`，**并** `webContents.send(ThemeChanged, isDark)`
+  广播给渲染层（见上节，供 Monaco 等 JS 消费者重应用主题）；
 - 返回一个 `Disposable`，在 `app.ts` 的 `setup()` 里注册一次、交给 `context.registry`
   随生命周期销毁。
+
+### `WebContentsView` 不在覆盖范围内 —— 模拟器 desk 单独同步
+
+集中式监听器只遍历 `BrowserWindow`。模拟器是一个**顶层 `WebContentsView`**（非窗口），
+它的 `backgroundColor`（手机背后那块 desk 底）同样会被创建时冻结。`view-manager.ts` 的
+`attachNativeSimulator` 因此就近用同一套机制补一份：创建时
+`setBackgroundColor(simDeskBg())`，并自己订阅 `nativeTheme 'updated'` 重刷，监听器由该
+WebContents 的 connection 持有、随视图销毁自动摘除。`simDeskBg()`（深 `#121212` /
+浅 `#e8e8e8`）必须与渲染层 `--color-sim-bg` 和模拟器页 `.device-shell-root` 保持一致——
+三层是同色，才能让高度 resize 跟随时不露出错色条。
 
 窗口创建时仍传 `backgroundColor: themeBg()` 作为初始值，避免创建瞬间闪白；
 此后的每次变化都由这个监听器接管。
@@ -64,12 +95,16 @@ Electron 官方 Dark Mode 教程也只演示 CSS 方案，未覆盖这一层 —
                        ▼
                  nativeTheme 触发 'updated'
                        │
-         ┌─────────────┴──────────────┐
-         ▼                            ▼
-  Chromium 刷新                 installThemeBackgroundSync
-  prefers-color-scheme          的监听器
-  → 渲染层 CSS 重绘              → getAllWindows() 逐窗口
-   （自动，无需 JS）              setBackgroundColor(themeBg())
+     ┌─────────────────┼────────────────────────────┐
+     ▼                 ▼                            ▼
+Chromium 刷新     installThemeBackgroundSync   view-manager 的
+prefers-color-     的监听器                     模拟器 desk 监听器
+scheme            ├─ getAllWindows() 逐窗口      → setBackgroundColor(
+→ 渲染层 CSS 重绘  │   setBackgroundColor(themeBg())   simDeskBg())
+ （自动，无需 JS）  └─ webContents.send(
+                       ThemeChanged, isDark)
+                       → 渲染层 onThemeChanged
+                       → Monaco 重应用主题
 ```
 
 ## 已知限制

@@ -146,7 +146,15 @@
     /* Scrollbar */
     --scrollbar-thumb: hsl(0 0% 70%);
 
-    /* Simulator — intentionally left dark (physical phone hardware) */
+    /* Simulator desk surround — the area AROUND the simulated phone (panel
+       toolbar, the WCV-placeholder desk, the bottom page-path bar). Follows the
+       theme so the simulator column isn't a dark island in the light workbench.
+       --color-sim-bg MUST stay equal to simDeskBg() (main/utils/theme.ts) and
+       .device-shell-root (device-shell.css) — see those sites. The phone screen
+       (--color-sim-screen) stays black: it's the physical device screen, behind
+       the mini-app's own white content. */
+    --color-sim-bg:     hsl(0 0% 91%);  /* #e8e8e8 desk — phone reads against it */
+    --color-sim-bottom: hsl(0 0% 88%);  /* page-path bar — a touch darker */
   }
 }
 

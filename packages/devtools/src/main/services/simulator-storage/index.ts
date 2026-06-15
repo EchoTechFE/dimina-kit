@@ -460,8 +460,10 @@ export function setupSimulatorStorage(
       const filtered = prefix
         ? result.entries.filter(([key]) => key.startsWith(prefix))
         : result.entries
-      // Keys are returned with their `${appId}_` prefix intact; stripping is
-      // a follow-up so the panel UI can stay compatible with the raw keys.
+      // Keys are returned with their `${appId}_` prefix intact: every write
+      // path (Set/Remove) keys off the raw storage key. The Storage panel
+      // display-strips the prefix for readability (storage-panel.tsx), so the
+      // wire keys stay raw while the UI shows clean, Chrome-like keys.
       return filtered.map(([key, value]) => ({ key, value }))
     })
   }

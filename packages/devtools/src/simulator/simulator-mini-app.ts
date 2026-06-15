@@ -35,7 +35,7 @@ interface NativeHostBridge {
   notifyApiResponse(payload: ApiResponsePayload): void
   notifyActivePage(payload: ActivePagePayload): void
   notifyPageStack(payload: PageStackPayload): void
-  createRenderHostUrl(opts: { bridgeId: string; appId: string; pagePath: string }): string
+  createRenderHostUrl(opts: { bridgeId: string; appId: string; pagePath: string; isTab?: boolean }): string
   renderPreloadUrl: string
   device?: NativeDeviceInfo
   onSimulatorEvent<T = unknown>(channel: string, listener: (payload: T) => void): () => void
@@ -246,7 +246,7 @@ export class SimulatorMiniApp {
         screenWidth: device.screenWidth,
         screenHeight: device.screenHeight,
         statusBarHeight: device.statusBarHeight,
-        safeAreaBottom: device.safeAreaBottom,
+        safeAreaInsets: device.safeAreaInsets,
       }
     }
     const snap = this.getHostEnvSnapshot()
@@ -255,7 +255,7 @@ export class SimulatorMiniApp {
       screenWidth: snap.screenWidth,
       screenHeight: snap.screenHeight,
       statusBarHeight: snap.statusBarHeight,
-      safeAreaBottom: 0,
+      safeAreaInsets: { top: 0, right: 0, bottom: 0, left: 0 },
     }
   }
 
@@ -289,11 +289,12 @@ export class SimulatorMiniApp {
     }
   }
 
-  createRenderHostUrl(bridgeId: string, pagePath?: string): string {
+  createRenderHostUrl(bridgeId: string, pagePath?: string, isTab?: boolean): string {
     return getNativeHost().createRenderHostUrl({
       bridgeId,
       appId: this.appId,
       pagePath: pagePath ?? this.pagePath,
+      isTab,
     })
   }
 

@@ -73,6 +73,9 @@ vi.mock('electron', () => {
     WebContentsView,
     ipcMain,
     shell: { openExternal: vi.fn() },
+    // attachNativeSimulator paints the WCV with simDeskBg() (reads
+    // shouldUseDarkColors) and subscribes to `updated` to keep it in sync.
+    nativeTheme: { shouldUseDarkColors: false, on: vi.fn(), removeListener: vi.fn() },
     webContents: {
       fromId: (id: number) => mockFromId(id),
       getAllWebContents: vi.fn(() => []),

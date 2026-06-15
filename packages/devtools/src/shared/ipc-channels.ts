@@ -57,7 +57,6 @@ export interface NativeDeviceInfo {
   screenWidth: number
   screenHeight: number
   statusBarHeight: number
-  safeAreaBottom: number
   notchType: NotchType
   safeAreaInsets: SafeAreaInsets
 }
@@ -176,6 +175,13 @@ export const WorkbenchSettingsChannel = {
   GetCdpStatus: 'workbenchSettings:getCdpStatus',
   GetMcpStatus: 'workbenchSettings:getMcpStatus',
   Init: 'workbenchSettings:init',
+  // Main → renderer push: the active color scheme flipped (OS change or in-app
+  // SetTheme). Payload is `isDark: boolean`. The app's CSS reacts to
+  // `prefers-color-scheme` automatically; this exists for the few JS consumers
+  // (Monaco's theme) that can't observe that media change — Electron does NOT
+  // dispatch the renderer's `matchMedia('(prefers-color-scheme)')` change event
+  // for programmatic `nativeTheme.themeSource` assignments.
+  ThemeChanged: 'workbenchSettings:themeChanged',
 } as const
 
 // ── Project session ──────────────────────────────────────────────────────

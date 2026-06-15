@@ -135,7 +135,7 @@ function readWindowMetrics(miniApp: MiniAppContext) {
 	const dev = miniApp.getDeviceMetrics?.()
 	const wb = miniApp.parent?.el?.querySelector('.dimina-native-webview__root')?.getBoundingClientRect()
 		?? { width: dev?.screenWidth ?? 375, height: dev?.screenHeight ?? 812 }
-	const di = (window as Window & { __deviceInfo?: Record<string, number | string> }).__deviceInfo || {}
+	const di = (window as Window & { __deviceInfo?: Record<string, unknown> }).__deviceInfo || {}
 	return {
 		wb,
 		di,
@@ -151,7 +151,10 @@ function readWindowMetrics(miniApp: MiniAppContext) {
 function buildSystemInfo(miniApp: MiniAppContext) {
 	const { wb, di, dev, pixelRatio, screenWidth, screenHeight, windowWidth, windowHeight } = readWindowMetrics(miniApp)
 	const statusBarHeight = (di['statusBarHeight'] as number | undefined) ?? dev?.statusBarHeight ?? 0
-	const safeAreaBottom = (di['safeAreaBottom'] as number | undefined) ?? dev?.safeAreaBottom ?? 0
+	// Bottom inset sourced from safeAreaInsets.bottom (the single source — the
+	// legacy flat `safeAreaBottom` field is decommissioned).
+	const bottomInset = (di['safeAreaInsets'] as { bottom?: number } | undefined)?.bottom
+		?? dev?.safeAreaInsets?.bottom ?? 0
 
 	return {
 		brand: di['brand'] || 'devtools',
@@ -167,9 +170,9 @@ function buildSystemInfo(miniApp: MiniAppContext) {
 		deviceOrientation: 'portrait',
 		safeArea: {
 			width: wb.width,
-			height: wb.height - statusBarHeight - safeAreaBottom,
+			height: wb.height - statusBarHeight - bottomInset,
 			top: statusBarHeight,
-			bottom: wb.height - safeAreaBottom,
+			bottom: wb.height - bottomInset,
 			left: 0,
 			right: wb.width,
 		},

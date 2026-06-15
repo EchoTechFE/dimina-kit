@@ -46,6 +46,11 @@ const stubs = vi.hoisted(() => {
   const onCalls: Array<{ channel: string; handler: AnyFn }> = []
   const removeListenerCalls: Array<{ channel: string; handler: AnyFn }> = []
 
+  // Records of nativeTheme.on / removeListener — attachNativeSimulator subscribes
+  // to 'updated' (desk-bg sync) and the wc connection must remove it on teardown.
+  const nativeThemeOnCalls: Array<{ event: string; handler: AnyFn }> = []
+  const nativeThemeRemoveCalls: Array<{ event: string; handler: AnyFn }> = []
+
   // Real emitter: `once` self-removes; `emit` snapshots before firing.
   function makeEmitter() {
     const listeners: EventBag = {}
@@ -65,9 +70,11 @@ const stubs = vi.hoisted(() => {
   function reset() {
     onCalls.length = 0
     removeListenerCalls.length = 0
+    nativeThemeOnCalls.length = 0
+    nativeThemeRemoveCalls.length = 0
   }
 
-  return { onCalls, removeListenerCalls, makeEmitter, reset }
+  return { onCalls, removeListenerCalls, nativeThemeOnCalls, nativeThemeRemoveCalls, makeEmitter, reset }
 })
 
 vi.mock('electron', () => {
@@ -121,6 +128,18 @@ vi.mock('electron', () => {
     ipcMain,
     WebContentsView,
     shell: { openExternal: vi.fn(() => Promise.resolve()) },
+    // attachNativeSimulator paints the WCV with simDeskBg() and subscribes to
+    // nativeTheme `updated`; the listener is owned by the wc connection so it
+    // detaches on teardown (the property this suite exercises). Real emitter +
+    // recording so the test can assert the subscribe/remove pair fires.
+    nativeTheme: (() => {
+      const em = stubs.makeEmitter()
+      return {
+        shouldUseDarkColors: false,
+        on: vi.fn((event: string, fn: AnyFn) => { stubs.nativeThemeOnCalls.push({ event, handler: fn }); em.on(event, fn); return undefined }),
+        removeListener: vi.fn((event: string, fn: AnyFn) => { stubs.nativeThemeRemoveCalls.push({ event, handler: fn }); em.removeListener(event, fn); return undefined }),
+      }
+    })(),
     webContents: {
       fromId: vi.fn(() => null),
       getAllWebContents: vi.fn(() => []),
@@ -199,9 +218,15 @@ describe('native simulator teardown is routed through ctx.connections', () => {
       'the connection must wrap the simulator webContents',
     ).toBe(simWcId)
     expect(connections.all().some((c) => c.id === simWcId)).toBe(true)
+
+    // attachNativeSimulator subscribes the desk-bg sync to nativeTheme 'updated'.
+    expect(
+      stubs.nativeThemeOnCalls.some((c) => c.event === 'updated'),
+      'attachNativeSimulator must subscribe the desk-bg sync to nativeTheme updated',
+    ).toBe(true)
   })
 
-  it("removes the ipcMain bridge listener AND closes the connection when simWc emits 'destroyed'", () => {
+  it("removes the ipcMain bridge listener AND closes the connection when simWc emits 'destroyed'", async () => {
     const { ctx, connections } = makeContext()
     const mgr = createViewManager(ctx)
 
@@ -236,5 +261,20 @@ describe('native simulator teardown is routed through ctx.connections', () => {
       "ctx.connections.get(simWc.id) must be undefined after 'destroyed'",
     ).toBeUndefined()
     expect(connections.all().some((c) => c.id === simWcId)).toBe(false)
+
+    // The nativeTheme desk-bg listener owned by that connection was removed —
+    // without this, every relaunch would leak a nativeTheme 'updated' listener.
+    // The connection's `disposeAll` is async (LIFO); the ipcMain bridge detach
+    // is owned later so it runs first (synchronously above), while this one is
+    // owned earlier and runs on a later microtask — flush before asserting.
+    await new Promise((resolve) => setTimeout(resolve))
+    const onUpdated = stubs.nativeThemeOnCalls.find((c) => c.event === 'updated')
+    expect(onUpdated, 'precondition: a nativeTheme updated listener was registered').toBeDefined()
+    expect(
+      stubs.nativeThemeRemoveCalls.some(
+        (c) => c.event === 'updated' && c.handler === onUpdated!.handler,
+      ),
+      "the nativeTheme desk-bg listener must be removed when simWc emits 'destroyed'",
+    ).toBe(true)
   })
 })

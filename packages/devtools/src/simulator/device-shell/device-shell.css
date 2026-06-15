@@ -10,12 +10,15 @@
  */
 .device-shell-root {
   /* The desk = fills the WCV viewport and scrolls when the phone overflows.
-     Background MIRRORS the renderer's --color-sim-bg (hsl(0 0% 7%)) — the SAME
-     color as the panel's flex:1 placeholder sitting behind this WCV. Keeping them
-     equal (a) syncs the simulator surround with the app theme, and (b) makes the
-     native-WCV resize-follow gap invisible: when the WCV trails the region edge
-     during a height drag, the briefly-exposed placeholder is the same color, so
-     there is no light/dark flash and the follow reads as smooth. */
+     Background MIRRORS the renderer's --color-sim-bg AND the WCV's simDeskBg()
+     (theme.ts) — the SAME color as the panel's flex:1 placeholder sitting behind
+     this WCV. Keeping all three equal (a) syncs the simulator surround with the
+     app theme, and (b) makes the native-WCV resize-follow gap invisible: when the
+     WCV trails the region edge during a height drag, the briefly-exposed
+     placeholder is the same color, so there is no flash and the follow reads as
+     smooth. This page follows `prefers-color-scheme` (which tracks the in-app
+     theme via nativeTheme.themeSource), so the light override below keeps it in
+     lockstep. Update all three sites together. */
   width: 100%;
   height: 100vh;
   overflow: auto;
@@ -24,6 +27,12 @@
   color: #101418;
   box-sizing: border-box;
   padding: 24px;
+}
+
+@media (prefers-color-scheme: light) {
+  .device-shell-root {
+    background: hsl(0 0% 91%); /* #e8e8e8 — matches simDeskBg() light + --color-sim-bg light */
+  }
 }
 
 .device-shell {
@@ -105,16 +114,23 @@
 }
 
 .device-shell__home-indicator {
-  flex: 0 0 28px;
-  position: relative;
-  background: #f8fafc;
+  /* Absolute overlay pinned to the device bottom — height is set inline from
+     the device bottom inset. It reserves NO layout space (so a non-tab page is
+     full-bleed) and is transparent, so it shows the tabBar's color (tab page)
+     or the page content (non-tab page) behind the pill. */
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  z-index: 200; /* above the page webview (z 100) and the in-flow tabBar */
 }
 
 .device-shell__home-indicator::before {
   content: "";
   position: absolute;
   left: 50%;
-  bottom: 10px;
+  bottom: 8px;
   width: 118px;
   height: 4px;
   transform: translateX(-50%);

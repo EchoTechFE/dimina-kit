@@ -72,6 +72,9 @@ function makeFakeWindow(opts: { destroyed?: boolean } = {}) {
   let destroyed = opts.destroyed ?? false
   return {
     setBackgroundColor: vi.fn(),
+    // installThemeBackgroundSync also pushes the resolved isDark to each live
+    // window's renderer (so JS consumers like Monaco can re-theme).
+    webContents: { send: vi.fn(), isDestroyed: () => destroyed },
     isDestroyed: () => destroyed,
     setDestroyed(val: boolean) { destroyed = val },
   }
@@ -206,5 +209,33 @@ describe('installThemeBackgroundSync', () => {
       stubs.nativeTheme.shouldUseDarkColors = true
       stubs.nativeTheme.emit('updated')
     }).not.toThrow()
+  })
+
+  it('test 9 – broadcasts the resolved isDark to each live window so JS consumers (Monaco) can re-theme', async () => {
+    const win = makeFakeWindow()
+    stubs.windows.push(win)
+
+    installThemeBackgroundSync()
+
+    stubs.nativeTheme.shouldUseDarkColors = true
+    stubs.nativeTheme.emit('updated')
+    expect(win.webContents.send).toHaveBeenLastCalledWith('workbenchSettings:themeChanged', true)
+
+    stubs.nativeTheme.shouldUseDarkColors = false
+    stubs.nativeTheme.emit('updated')
+    expect(win.webContents.send).toHaveBeenLastCalledWith('workbenchSettings:themeChanged', false)
+  })
+})
+
+describe('simDeskBg', () => {
+  it('returns the dark desk in dark mode and a neutral light grey in light mode', async () => {
+    const mod = await import('./theme.js')
+    const simDeskBg = (mod as Record<string, unknown>)['simDeskBg'] as () => string
+
+    stubs.nativeTheme.shouldUseDarkColors = true
+    expect(simDeskBg()).toBe('#121212')
+
+    stubs.nativeTheme.shouldUseDarkColors = false
+    expect(simDeskBg()).toBe('#e8e8e8')
   })
 })
