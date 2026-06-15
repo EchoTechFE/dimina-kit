@@ -105,6 +105,14 @@ export interface WorkbenchContext {
   }) => Promise<CustomCreateProjectDialogResult>
 
   /**
+   * Host permission gate consulted by `workspace.openProject` BEFORE any side
+   * effect. Throwing vetoes the open (see `WorkbenchAppConfig.onBeforeOpenProject`).
+   * Wired from the config by `createDevtoolsRuntime`; undefined for the
+   * single-tenant default.
+   */
+  onBeforeOpenProject?: (projectPath: string) => void | Promise<void>
+
+  /**
    * Trust predicate consulted by `IpcRegistry` for every incoming IPC.
    * Resolves the currently-trusted senders (main renderer + overlays)
    * lazily so it stays correct as windows/views come and go.
@@ -223,6 +231,8 @@ export interface CreateContextOptions
   builtinTemplates?: 'all' | 'none' | readonly string[]
   /** Host-supplied "新建项目" dialog hook. */
   customCreateProjectDialog?: WorkbenchContext['customCreateProjectDialog']
+  /** Host permission gate run before a project opens (throw to veto). */
+  onBeforeOpenProject?: WorkbenchContext['onBeforeOpenProject']
 }
 
 export function createWorkbenchContext(opts: CreateContextOptions): WorkbenchContext {
@@ -257,6 +267,7 @@ export function createWorkbenchContext(opts: CreateContextOptions): WorkbenchCon
     opts.builtinTemplates ?? 'all',
   )
   ctx.customCreateProjectDialog = opts.customCreateProjectDialog
+  ctx.onBeforeOpenProject = opts.onBeforeOpenProject
   ctx.workspace = createWorkspaceService(ctx)
   ctx.senderPolicy = createWorkbenchSenderPolicy(ctx)
   return ctx

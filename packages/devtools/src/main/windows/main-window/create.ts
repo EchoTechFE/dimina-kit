@@ -11,6 +11,12 @@ export interface WindowOptions {
   minWidth?: number
   minHeight?: number
   indexHtml: string
+  /**
+   * Auto-show the window on `ready-to-show` in non-test envs. Defaults to
+   * `true`. `false` lets a login-gating host keep the window hidden and call
+   * `show()` itself. The test env always uses `showInactive()` regardless.
+   */
+  autoShow?: boolean
 }
 
 export function createMainWindow(opts: WindowOptions): BrowserWindow {
@@ -36,7 +42,11 @@ export function createMainWindow(opts: WindowOptions): BrowserWindow {
     if (process.env.NODE_ENV === 'test') {
       mainWindow.showInactive()
     } else {
-      mainWindow.show()
+      // A login-gating host opts out via `autoShow: false` and shows the
+      // window itself once auth passes — don't flash an un-authed window.
+      if (opts.autoShow !== false) {
+        mainWindow.show()
+      }
       // Don't auto-open a detached DevTools for the devtools UI shell itself —
       // it's noise for normal use (the mini-app's Console lives in the embedded
       // right-panel DevTools, not here). Opt in via env for debugging the shell.

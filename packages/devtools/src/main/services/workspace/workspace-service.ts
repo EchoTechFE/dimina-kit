@@ -176,6 +176,18 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
         : null,
 
     async openProject(projectPath) {
+      // Host permission gate — runs BEFORE any side effect (referer reset,
+      // session teardown, compile/dev-server spin-up). A throwing hook vetoes
+      // the open: return early with the error and leave the currently-active
+      // session fully intact. The declarative replacement for monkey-patching
+      // this method. See WorkbenchAppConfig.onBeforeOpenProject.
+      if (ctx.onBeforeOpenProject) {
+        try {
+          await ctx.onBeforeOpenProject(projectPath)
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) }
+        }
+      }
       clearSimulatorServicewechatReferer()
       // Invalidate the outgoing session's onLog BEFORE teardown starts (same
       // order as closeProject below): the dying compile worker flushes
