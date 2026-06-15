@@ -67,10 +67,6 @@ export interface WorkbenchAppInstance {
   registerTrustedWindow: (win: BrowserWindow) => Disposable
   /** Registers a simulator custom API into this context's registry. */
   registerSimulatorApi: (name: string, handler: SimulatorApiHandler) => Disposable
-  /** Ask the main renderer to re-read the header avatar provider. */
-  refreshHeaderAvatar: () => void
-  /** Ask the main renderer to re-read the header actions provider. */
-  refreshHeaderActions: () => void
   automationServer?: AutomationServer
   updateManager?: UpdateManager
   dispose: () => Promise<void>
@@ -191,10 +187,6 @@ function createContext(config: WorkbenchAppConfig, mainWindow: BrowserWindow, re
     appName: config.appName,
     apiNamespaces: config.apiNamespaces,
     brandingProvider: config.brandingProvider,
-    headerAvatarProvider: config.headerAvatarProvider,
-    headerAvatarActionHandler: config.headerAvatarActionHandler,
-    headerActionsProvider: config.headerActionsProvider,
-    headerActionHandler: config.headerActionHandler,
     // The host-supplied ProjectsProvider / template types in `shared/types`
     // are structurally compatible with the main-process equivalents —
     // these casts are safe; we re-narrow at the workspace-service /
@@ -419,8 +411,6 @@ export async function createDevtoolsRuntime(config: WorkbenchAppConfig = {}): Pr
       context.registry.add(registerTrustedWindow(context, win)),
     registerSimulatorApi: (name: string, handler: SimulatorApiHandler) =>
       context.registry.add(toDisposable(context.simulatorApis.register(name, handler))),
-    refreshHeaderAvatar: () => context.notify.headerAvatarChanged(),
-    refreshHeaderActions: () => context.notify.headerActionsChanged(),
     dispose: () => disposeContext(context),
   }
 

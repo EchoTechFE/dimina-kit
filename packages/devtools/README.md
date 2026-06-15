@@ -42,12 +42,6 @@ launch({
   rendererDir,
   apiNamespaces: ['my'],
   brandingProvider: () => ({ appName: '我的开发工具' }),
-  headerAvatarProvider: () => {
-    const user = getCurrentUser()
-    return user
-      ? { displayName: user.name, displayInitial: user.name, avatarUrl: user.avatarUrl }
-      : null
-  },
   icon: '/path/to/icon.png',
   menuBuilder: (mainWindow, menuCtx) => {
     // menuCtx 是 MenuContext（只读 menu 相关状态）
@@ -187,10 +181,6 @@ src/
 | `preloadPath`      | `string`             | 内置                | 统一的 host 级 preload 入口；native-host simulator（WCV）自动跑其 `.cjs` sibling（`cjsSiblingPreloadPath`） |
 | `apiNamespaces`    | `string[]`           | `[]`                | 自定义 API 命名空间（如 `['qd']`） |
 | `brandingProvider` | `() => { appName }`  | —                   | 品牌信息 provider                  |
-| `headerAvatarProvider` | `() => HeaderAvatarInfo \| null \| Promise<HeaderAvatarInfo \| null>` | — | 内置 header 头像 slot 的宿主数据源；返回 `null` / `undefined` 时隐藏 |
-| `headerAvatarActionHandler` | `() => void \| Promise<void>` | — | 内置 header 头像 slot 的点击处理；未提供时点击无业务副作用 |
-| `headerActionsProvider` | `() => HeaderActionInfo[] \| null \| Promise<HeaderActionInfo[] \| null>` | — | 内置 header 三栏里的少量宿主命令按钮 |
-| `headerActionHandler` | `(id: string) => void \| Promise<void>` | — | 处理 `headerActionsProvider` 返回按钮的点击 |
 | `headerHeight`     | `number`             | —                   | **已废弃，运行时忽略**：头部栏恒为 40px（`HEADER_H`）；需要自定义工具栏请用 host toolbar WCV |
 
 ### WorkbenchAppConfig（扩展 WorkbenchConfig）
@@ -218,78 +208,6 @@ src/
 | `instance.registerSimulatorApi(name, handler)` | 注册 simulator 自定义 API，小程序里 `wx.<name>()` 调用（详见下方"Simulator 自定义 API"）。返回 `Disposable` |
 | `instance.ipc` | `IpcRegistry` 实例，`instance.ipc.handle(channel, fn)` 注册自定义 IPC；已绑定 `senderPolicy` 网关 |
 | `instance.registerTrustedWindow(win)` | 把 host 自有弹窗 `BrowserWindow` 加入受信 sender 集，否则其发起的 `instance.ipc` 调用会被网关拒绝。窗口关闭即移除 |
-| `instance.refreshHeaderAvatar()` | 通知 main renderer 重新调用 `headerAvatarProvider`，用于宿主登录态 / 头像变更后刷新内置 header 头像 |
-| `instance.refreshHeaderActions()` | 通知 main renderer 重新调用 `headerActionsProvider`，用于宿主 action 文案 / disabled 状态变化后刷新 |
-
-### Header Avatar
-
-`headerAvatarProvider` 是内置 project header 头像 slot 的唯一数据源。devtools 会通过 `app:getHeaderAvatar` 拉取一个可序列化 DTO 并在固定 header toolbar 内渲染；宿主不需要、也不应该依赖 renderer 内部组件。
-
-该 slot 只承载当前账号 / 身份入口，不是通用业务按钮扩展点。少量必须贴合内置 header 三栏布局的命令按钮使用下方的 `headerActionsProvider`；完整自定义工具栏、复杂状态展示、表单/筛选器、可变高度内容仍应使用 host toolbar WCV（`instance.context.views.hostToolbar.loadURL/loadFile` + `send/onMessage`），由宿主拥有内容、样式和高度。
-
-```typescript
-launch({
-  headerAvatarProvider: () => {
-    const user = qdmpSession.currentUser()
-    return user
-      ? {
-          displayName: user.nickname,
-          displayInitial: user.nickname,
-          avatarUrl: user.avatarUrl,
-          tooltip: user.nickname,
-        }
-      : null
-  },
-  onSetup(instance) {
-    qdmpSession.onUserChanged(() => instance.refreshHeaderAvatar())
-  },
-})
-```
-
-`HeaderAvatarInfo` 字段：
-
-| 字段 | 说明 |
-| --- | --- |
-| `displayName` | 用户名；用于 tooltip / aria 文本和 fallback 首字 |
-| `displayInitial` | 可选 fallback 文本；头像图片缺失或加载失败时取首字显示 |
-| `avatarUrl` | 头像图片 URL 或 data URL |
-| `tooltip` | 可选 tooltip 覆盖；默认用 `displayName` |
-
-### Header Actions
-
-`headerActionsProvider` 用于把少量宿主命令渲染到内置 project header 的三栏中。它不是 host toolbar WCV 的替代品：只适合 1-4 个短文本命令，且按钮高度固定、宽度受 header 约束。
-
-placement 对应内置 header 的三个区域：
-
-| placement | 渲染位置 |
-| --- | --- |
-| `left` | 左区最右侧，位于头像 / 面板显隐 controls 之后 |
-| `center` | 中区最右侧，位于编译模式 / 重新编译 / 编译状态之后 |
-| `right` | 右区最左侧，位于布局 controls / 设置按钮之前 |
-
-```typescript
-launch({
-  headerActionsProvider: () => [
-    { id: 'open', label: '打开', placement: 'left' },
-    { id: 'bindApp', label: '绑定应用', placement: 'left' },
-    { id: 'preview', label: '真机预览', placement: 'center' },
-    { id: 'upload', label: '上传', placement: 'right' },
-  ],
-  headerActionHandler: async (id) => {
-    await commands.run(id)
-  },
-})
-```
-
-`HeaderActionInfo` 字段：
-
-| 字段 | 说明 |
-| --- | --- |
-| `id` | 稳定 action id；点击时传给 `headerActionHandler` |
-| `label` | 短按钮文案 |
-| `tooltip` | 可选 tooltip 覆盖；默认用 `label` |
-| `placement` | `left` / `center` / `right`；默认 `right` |
-| `disabled` | 可选禁用态 |
 
 ### 内置面板 ID
 

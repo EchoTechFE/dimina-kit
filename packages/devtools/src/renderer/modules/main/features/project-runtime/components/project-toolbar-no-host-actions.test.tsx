@@ -42,12 +42,6 @@ const apiMocks = vi.hoisted(() => ({
   // Wave 2 ④ — the settings entry point the toolbar gains; present so the
   // component's (future) import resolves. Not asserted here.
   setSettingsVisible: vi.fn(() => Promise.resolve()),
-  getHeaderAvatar: vi.fn(() => Promise.resolve(null)),
-  onHeaderAvatarChanged: vi.fn(() => () => {}),
-  invokeHeaderAvatar: vi.fn(() => Promise.resolve()),
-  getHeaderActions: vi.fn(() => Promise.resolve([])),
-  onHeaderActionsChanged: vi.fn(() => () => {}),
-  invokeHeaderAction: vi.fn(() => Promise.resolve()),
 }))
 
 vi.mock('@/shared/api', () => apiMocks)

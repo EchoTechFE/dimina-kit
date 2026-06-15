@@ -1,10 +1,5 @@
 import type { BrowserWindow } from 'electron'
-import type {
-  CompilationAdapter,
-  HeaderActionsProvider,
-  HeaderAvatarProvider,
-  WorkbenchConfig,
-} from '../../shared/types.js'
+import type { CompilationAdapter, WorkbenchConfig } from '../../shared/types.js'
 import type { BridgeRouterHandle } from '../ipc/bridge-router.js'
 import type { ConsoleForwarder } from './console-forward/index.js'
 import type { NetworkForwarder } from './network-forward/index.js'
@@ -61,18 +56,6 @@ export interface WorkbenchContext {
 
   /** Host-injected provider for branding info (overrides default appName) */
   brandingProvider?: () => Promise<{ appName: string }> | { appName: string }
-
-  /** Host-injected profile provider for the built-in header avatar slot. */
-  headerAvatarProvider?: HeaderAvatarProvider
-
-  /** Host-injected click handler for the built-in header avatar slot. */
-  headerAvatarActionHandler?: () => void | Promise<void>
-
-  /** Host-injected compact action provider for the built-in project header. */
-  headerActionsProvider?: HeaderActionsProvider
-
-  /** Host-injected click handler for the built-in project header actions. */
-  headerActionHandler?: (id: string) => void | Promise<void>
 
   /** Unified lifecycle manager for all overlay WebContentsViews */
   views: ViewManager
@@ -232,10 +215,6 @@ export interface CreateContextOptions
   preloadPath: string
   rendererDir: string
   brandingProvider?: WorkbenchContext['brandingProvider']
-  headerAvatarProvider?: WorkbenchContext['headerAvatarProvider']
-  headerAvatarActionHandler?: WorkbenchContext['headerAvatarActionHandler']
-  headerActionsProvider?: WorkbenchContext['headerActionsProvider']
-  headerActionHandler?: WorkbenchContext['headerActionHandler']
   /** Host-supplied project list backend. Defaults to LocalProjectsProvider. */
   projectsProvider?: ProjectsProvider
   /** Templates injected by the host; same-id overrides a built-in. */
@@ -254,10 +233,6 @@ export function createWorkbenchContext(opts: CreateContextOptions): WorkbenchCon
     apiNamespaces: opts.apiNamespaces ?? [],
     appName: opts.appName ?? 'Dimina DevTools',
     brandingProvider: opts.brandingProvider,
-    headerAvatarProvider: opts.headerAvatarProvider,
-    headerAvatarActionHandler: opts.headerAvatarActionHandler,
-    headerActionsProvider: opts.headerActionsProvider,
-    headerActionHandler: opts.headerActionHandler,
   } as WorkbenchContext
 
   ctx.registry = new DisposableRegistry()
