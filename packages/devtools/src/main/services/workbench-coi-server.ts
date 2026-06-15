@@ -277,6 +277,13 @@ export interface WorkbenchCoiServerOptions {
    * manifest the workbench reads at boot. Omit for none.
    */
   extensionsDir?: string
+  /**
+   * Reads the host's custom file types (e.g. `.qdml`/`.qdss`/`.qds`), served at
+   * `/__filetypes` so the workbench maps them to `files.associations`. Read
+   * per-request so a project switch takes effect on the next editor boot. Omit
+   * for none (built-in `wx*` associations only).
+   */
+  getFileTypes?: () => unknown
 }
 
 /**
@@ -338,6 +345,13 @@ export async function startWorkbenchCoiServer(options: WorkbenchCoiServerOptions
       handleFsRequest(req, res, options.getProjectRoot(), url).catch((e) => {
         if (!res.headersSent) jsonRes(res, 500, { error: String(e) })
       })
+      return
+    }
+
+    // Host custom file types for the editor's `files.associations`. Read-only;
+    // empty object when the host configured none.
+    if (url.pathname === '/__filetypes') {
+      jsonRes(res, 200, options.getFileTypes?.() ?? {})
       return
     }
 

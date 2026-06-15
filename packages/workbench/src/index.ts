@@ -15,6 +15,9 @@ export type {
   WorkbenchProbe,
 } from './boot'
 
+export { buildFileAssociations } from './file-type-associations'
+export type { CustomFileTypes } from './file-type-associations'
+
 export { diskMirrorSource } from './workspace/disk-mirror'
 export type { DiskMirrorOptions } from './workspace/disk-mirror'
 export { inMemorySeedSource } from './workspace/in-memory-seed'

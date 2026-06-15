@@ -71,6 +71,12 @@ export interface OpenProjectOptions {
 	projectPath: string
 	port?: number
 	sourcemap?: boolean
+	/**
+	 * Custom file types appended on top of the built-in `wx*`/`dd*` families,
+	 * forwarded to `@dimina/compiler`'s `build()` so `.qdml`/`.qdss`/`.qds` etc.
+	 * compile like their `.wxml`/`.wxss`/`.wxs` equivalents.
+	 */
+	fileTypes?: { template?: string[]; style?: string[]; viewScript?: string[] }
 	simulatorDir?: string
 	containerDir?: string
 	outputDir?: string
@@ -91,6 +97,7 @@ export async function openProject(opts: OpenProjectOptions): Promise<ProjectSess
 		projectPath: rawProjectPath,
 		port = 0,
 		sourcemap = false,
+		fileTypes,
 		simulatorDir,
 		containerDir: overrideContainerDir,
 		outputDir,
@@ -100,7 +107,7 @@ export async function openProject(opts: OpenProjectOptions): Promise<ProjectSess
 		onLog,
 	} = opts
 	const projectPath = path.resolve(rawProjectPath)
-	const buildOptions = { sourcemap }
+	const buildOptions = { sourcemap, fileTypes }
 
 	const resolvedPort = port === 0 ? await getRandomPort() : port
 

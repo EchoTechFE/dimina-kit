@@ -47,6 +47,9 @@
     "build:check": "node scripts/check-workbench-build.mjs dist-app",
     "check-types": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
+    "test": "vitest run",
+    "test:dev": "vitest",
+    "test:coverage": "vitest run --coverage",
     "dev": "node scripts/patch-ts-ext.mjs && vite",
     "prepack": "pnpm build:lib"
   },
@@ -86,8 +89,10 @@
     "@dimina-kit/eslint-config": "workspace:*",
     "@dimina-kit/typescript-config": "workspace:*",
     "@types/node": "^22.10.0",
+    "@vitest/coverage-v8": "^4.1.4",
     "eslint": "^10.2.1",
     "typescript": "5.9.2",
-    "vite": "^8.0.8"
+    "vite": "^8.0.8",
+    "vitest": "^4.1.4"
   }
 }

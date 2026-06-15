@@ -57,9 +57,25 @@ export interface CompilationAdapter {
 export type BuiltinPanelId = 'wxml' | 'console' | 'appdata' | 'storage'
 export type BuiltinModuleId = 'projects' | 'session' | 'simulator' | 'popover' | 'settings'
 
+/**
+ * Custom mini-program file types. Same shape as the dmcc compiler's
+ * `build()` `options.fileTypes`: brand extensions appended on top of the
+ * built-in `wx*`/`dd*` families. In devtools this drives both the editor's
+ * extension → Monaco-language mapping (template→wxml, style→css,
+ * viewScript→javascript) and compilation — it is forwarded to the dmcc
+ * compiler via `openProject({ fileTypes })`.
+ */
+export interface CustomFileTypes {
+  template?: string[]
+  style?: string[]
+  viewScript?: string[]
+}
+
 export interface WorkbenchConfig {
   /** Window title, default 'Dimina DevTools' */
   appName?: string
+  /** Custom file types (e.g. `.qdml`/`.qdss`/`.qds`) recognized by the editor. */
+  fileTypes?: CustomFileTypes
   /** Compilation adapter */
   adapter?: CompilationAdapter
   /**

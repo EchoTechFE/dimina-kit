@@ -216,6 +216,48 @@ describe('no active project', () => {
   })
 })
 
+describe('/__filetypes endpoint', () => {
+  it('returns 200 application/json with the object returned by getFileTypes', async () => {
+    server = await startWorkbenchCoiServer({
+      rootDir,
+      getProjectRoot: () => activeProjectRoot,
+      getFileTypes: () => ({ template: ['qdml'], style: ['qdss'], viewScript: ['qds'] }),
+    })
+    const res = await fetch(`${server.baseUrl}__filetypes`)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toMatch(/application\/json/)
+    const body = await res.json()
+    expect(body).toEqual({ template: ['qdml'], style: ['qdss'], viewScript: ['qds'] })
+  })
+
+  it('returns 200 with body {} when getFileTypes is omitted', async () => {
+    server = await startWorkbenchCoiServer({
+      rootDir,
+      getProjectRoot: () => activeProjectRoot,
+    })
+    const res = await fetch(`${server.baseUrl}__filetypes`)
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body).toEqual({})
+  })
+
+  it('reads getFileTypes per-request so a changed value is reflected on the next request', async () => {
+    let current: unknown = { template: ['qdml'] }
+    server = await startWorkbenchCoiServer({
+      rootDir,
+      getProjectRoot: () => activeProjectRoot,
+      getFileTypes: () => current,
+    })
+
+    const first = await fetch(`${server.baseUrl}__filetypes`)
+    expect(await first.json()).toEqual({ template: ['qdml'] })
+
+    current = { style: ['qdss'] }
+    const second = await fetch(`${server.baseUrl}__filetypes`)
+    expect(await second.json()).toEqual({ style: ['qdss'] })
+  })
+})
+
 describe('symlink containment on /__contrib', () => {
   it('serves a valid extension file but refuses an out-of-root symlink', async () => {
     const extDir = path.join(tmpParent, 'extensions')

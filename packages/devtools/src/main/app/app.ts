@@ -189,6 +189,7 @@ function createContext(config: WorkbenchAppConfig, mainWindow: BrowserWindow, re
     rendererDir,
     appName: config.appName,
     apiNamespaces: config.apiNamespaces,
+    fileTypes: config.fileTypes,
     brandingProvider: config.brandingProvider,
     // The host-supplied ProjectsProvider / template types in `shared/types`
     // are structurally compatible with the main-process equivalents —
@@ -627,6 +628,7 @@ export async function createDevtoolsRuntime(config: WorkbenchAppConfig = {}): Pr
       rootDir: bundleDir,
       getProjectRoot: () => context.workspace.getProjectPath(),
       extensionsDir: config.editorViewConfig?.extensionsDir,
+      getFileTypes: () => context.fileTypes,
     })
     // Return the close promise so the registry awaits server shutdown on dispose
     // instead of fire-and-forgetting it (a dangling http server would keep the

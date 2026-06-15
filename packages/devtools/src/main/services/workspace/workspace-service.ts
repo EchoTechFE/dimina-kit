@@ -227,6 +227,7 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
       const session = await ctx.adapter.openProject({
         projectPath,
         sourcemap: true,
+        fileTypes: ctx.fileTypes,
         watch: compile.watch,
         onRebuild: () => sendStatus('ready', '编译完成，已热更新', true),
         onBuildError: (err: unknown) => sendStatus('error', String(err)),

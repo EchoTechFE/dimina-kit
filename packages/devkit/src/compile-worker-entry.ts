@@ -24,6 +24,8 @@ export interface WorkerAppInfo {
 
 export interface WorkerBuildOptions {
 	sourcemap?: boolean
+	/** Forwarded verbatim to `@dimina/compiler`'s `build()` `options.fileTypes`. */
+	fileTypes?: { template?: string[]; style?: string[]; viewScript?: string[] }
 }
 
 export type WorkerBuildFn = (
