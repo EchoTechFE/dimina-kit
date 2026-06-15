@@ -70,7 +70,7 @@
     "lint": "eslint . --max-warnings 0",
     "check:trust-seal": "node scripts/check-trust-seal.mjs",
     "check:docs-api-sync": "node scripts/check-docs-api-sync.mjs",
-    "test": "node scripts/check-trust-seal.mjs && node scripts/check-docs-api-sync.mjs && vitest run",
+    "test": "node scripts/check-trust-seal.mjs && node scripts/check-docs-api-sync.mjs && vitest run && vitest run --config vitest.dock-react.config.ts",
     "test:dev": "vitest",
     "test:dock-react": "vitest run --config vitest.dock-react.config.ts",
     "examples:dockable": "pnpm run build && node examples/dockable-demo/bundle.mjs && electron examples/dockable-demo/main.mjs",

@@ -46,8 +46,15 @@ export function SimulatorPanel({
   // an ADJACENT splitter SHIFTS its x-position WITHOUT resizing it — a
   // ResizeObserver never fires. `followGeometry: true` opens a windowed RAF
   // geometry sentinel that re-publishes the moved rect frame-by-frame. The WCV is
-  // a main-process child view; SimulatorPanel mounts/unmounts with its dock tab,
-  // and the unmount path publishes hidden to collapse the WCV.
+  // a main-process child view. Under DOM-panel keepalive (A3) SimulatorPanel is
+  // NOT unmounted when its dock tab deactivates — its slot merely goes
+  // `display:none` — so there is no unmount path to publish hidden on a tab
+  // switch. To collapse the WCV on deactivation it opts into view-anchor's
+  // `guardDisplayNone`: that installs an IntersectionObserver which re-fires on a
+  // `display:none` transition (invisible to ResizeObserver) and turns the
+  // resulting zero-area measure into a `{ visible:false }` publish, which the
+  // `publish` callback below maps to COLLAPSED 0×0 bounds (detaching the WCV).
+  // The true unmount path still publishes hidden + disposes as a safety net.
   //
   // Zoom rides in the publish payload (the `Placement` rect has no zoom field) so
   // main can `setZoomFactor` the WCV; it is kept in a ref so the imperative
@@ -83,6 +90,7 @@ export function SimulatorPanel({
           anchorHandleRef.current = createPlacementAnchor(el, {
             visible: true,
             followGeometry: true,
+            guardDisplayNone: true,
             publish,
           })
         } else {
@@ -96,6 +104,7 @@ export function SimulatorPanel({
         anchorHandleRef.current = createPlacementAnchor(el, {
           visible: true,
           followGeometry: true,
+          guardDisplayNone: true,
           publish,
         })
       }

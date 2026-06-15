@@ -33,6 +33,7 @@ import {
 	insertPanel,
 	movePanel,
 	setActive,
+	setConstraint,
 	setSizes,
 	splitPanel,
 	validateTree,
@@ -562,5 +563,99 @@ describe('operations compose without corrupting the tree (order sensitivity)', (
 		expect(allPanels(a).sort()).toEqual(allPanels(b).sort())
 		expect(structuralProblems(a)).toEqual([])
 		expect(structuralProblems(b)).toEqual([])
+	})
+})
+
+// ───────────────────── CONSTRAINT INVARIANT under mutation (M3) ─────────────────────
+//
+// THE BUG (M3): `validateTree` (serialize.ts) requires every split to keep >= 1
+// FLEXIBLE (non-fixed) child — an all-fixed split has no weight-sized child to
+// absorb leftover space (rrp v4.10), so `serializeLayout` writes a tree that
+// `parseLayout` REJECTS on next launch → the persisted layout is silently lost.
+// Two built-in mutations can manufacture exactly that all-fixed split:
+//
+//   (a) `setConstraint` can mark the LAST flexible child `fixedPx`, leaving a
+//       split whose children are ALL fixed (no guard preserves a flexible one).
+//   (b) child-removal `normalize` (mutations.ts ~line 44) RETAINS each survivor's
+//       constraint, so closing / extracting / moving-away the SOLE flexible child
+//       of a split with fixed siblings leaves a multi-child split where EVERY
+//       remaining child is fixed.
+//
+// CONTRACT: NO built-in mutation may return a tree that `validateTree` rejects.
+//
+// All cases below are RED on HEAD (validateTree returns the all-fixed problem)
+// and GREEN once the mutation layer preserves >= 1 flexible child.
+
+const knownOf = (t: LayoutTree): ReadonlySet<string> => new Set(allPanels(t))
+
+describe('M3 — no mutation may produce an all-fixed split that validateTree rejects', () => {
+	// A 3-child row split: children 0 & 1 fixed, child 2 (g3/p3) the SOLE flexible.
+	function twoFixedOneFlexible(): LayoutTree {
+		return tree({
+			kind: 'split',
+			id: 's0',
+			orientation: 'row',
+			children: [
+				tabs('g1', ['p1'], 'p1'),
+				tabs('g2', ['p2'], 'p2'),
+				tabs('g3', ['p3'], 'p3'),
+			],
+			sizes: [1, 1, 1],
+			constraints: [{ fixedPx: 100 }, { fixedPx: 200 }, null],
+		})
+	}
+
+	// (a) setConstraint fixing the LAST flexible child must NOT yield an all-fixed
+	// split. On HEAD it writes `[{100},{200},{300}]` → validateTree rejects.
+	it('setConstraint on the sole flexible child does not create an all-fixed split', () => {
+		const t = twoFixedOneFlexible()
+		const out = setConstraint(t, 's0', 2, { fixedPx: 300 })
+		expect(validateTree(out, knownOf(out)), validateTree(out, knownOf(out)).join('\n')).toEqual([])
+	})
+
+	// (b1) closePanel'ing the sole flexible child leaves [g1(fixed), g2(fixed)] —
+	// an all-fixed 2-child split on HEAD (normalize keeps both constraints).
+	it('closePanel of the sole flexible child yields a validateTree-clean tree', () => {
+		const t = twoFixedOneFlexible()
+		const out = closePanel(t, 'p3')
+		expect(validateTree(out, knownOf(out)), validateTree(out, knownOf(out)).join('\n')).toEqual([])
+	})
+
+	// (b2) extractPanel of the sole flexible child — same all-fixed survivor.
+	it('extractPanel of the sole flexible child yields a validateTree-clean tree', () => {
+		const t = twoFixedOneFlexible()
+		const { tree: out } = extractPanel(t, 'p3')
+		expect(validateTree(out, knownOf(out)), validateTree(out, knownOf(out)).join('\n')).toEqual([])
+	})
+
+	// (b3) movePanel of the sole flexible child OUT to another group leaves the
+	// remaining split all-fixed. Move p3 into a separate flexible sibling group so
+	// the source split collapses to [g1(fixed), g2(fixed)].
+	it('movePanel of the sole flexible child away yields a validateTree-clean tree', () => {
+		// Outer row split: [ inner(two-fixed-one-flex) | g-sink ]. Moving p3 into
+		// g-sink empties g3 → inner split collapses to the two fixed children.
+		const t = tree({
+			kind: 'split',
+			id: 'root',
+			orientation: 'row',
+			children: [
+				{
+					kind: 'split',
+					id: 's0',
+					orientation: 'row',
+					children: [
+						tabs('g1', ['p1'], 'p1'),
+						tabs('g2', ['p2'], 'p2'),
+						tabs('g3', ['p3'], 'p3'),
+					],
+					sizes: [1, 1, 1],
+					constraints: [{ fixedPx: 100 }, { fixedPx: 200 }, null],
+				},
+				tabs('g-sink', ['p9'], 'p9'),
+			],
+			sizes: [1, 1],
+		})
+		const out = movePanel(t, 'p3', { groupId: 'g-sink' })
+		expect(validateTree(out, knownOf(out)), validateTree(out, knownOf(out)).join('\n')).toEqual([])
 	})
 })

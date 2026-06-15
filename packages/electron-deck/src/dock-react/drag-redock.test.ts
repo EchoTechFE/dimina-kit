@@ -264,6 +264,31 @@ describe('computeDropZone — out-of-rect clamp', () => {
 	})
 })
 
+describe('computeDropZone — non-finite rect dimensions (N1)', () => {
+	// BUG (N1): the degenerate guard checks `Number.isFinite(x/y)` for the POINT
+	// but only `width > 0` / `height > 0` for the RECT — NOT finiteness. A
+	// non-finite width/height (e.g. Infinity) satisfies `> 0` and slips through,
+	// then `band = edgeFraction * min(Infinity, h)` produces a finite band and the
+	// point is misclassified as an EDGE zone. A rect with a non-finite dimension is
+	// degenerate (no meaningful geometry) → it must be the interior ('center').
+	//
+	// On HEAD: width Infinity + x=20 → band = 0.25*min(Infinity,100)=25, x=20<25 →
+	// 'left'. height Infinity → band derived from width → an edge zone. Both wrong.
+
+	it('a rect with non-finite WIDTH is degenerate → center', () => {
+		expect(computeDropZone({ width: Infinity, height: 100 }, { x: 20, y: 50 })).toBe('center')
+	})
+
+	it('a rect with non-finite HEIGHT is degenerate → center', () => {
+		expect(computeDropZone({ width: 100, height: Infinity }, { x: 50, y: 20 })).toBe('center')
+	})
+
+	it('a rect with NaN width or height is degenerate → center', () => {
+		expect(computeDropZone({ width: Number.NaN, height: 100 }, { x: 20, y: 50 })).toBe('center')
+		expect(computeDropZone({ width: 100, height: Number.NaN }, { x: 50, y: 20 })).toBe('center')
+	})
+})
+
 // ───────────────────────── Layer 1b: dropZoneToMutation ─────────────────────────
 
 describe('dropZoneToMutation — descriptor shape', () => {

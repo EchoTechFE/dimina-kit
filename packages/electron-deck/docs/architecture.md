@@ -63,9 +63,14 @@
 `<DockView model registry renderDomPanel bindNativeSlot>` 是把 `LayoutModel` 渲染成 docking UI
 的 React 渲染器：
 
-- DOM 面板经 `renderDomPanel(panelId)` 渲染 React 内容；原生面板经 `bindNativeSlot(panelId, el)`
-  把一个**空 DOM 槽**交给 host——host 用 `view-anchor` 把主进程 view 贴到该槽（与 §2.2 同一跨进程
-  桥）。
+- DOM 面板经 `renderDomPanel(panelId, { active })` 渲染 React 内容；原生面板经
+  `bindNativeSlot(panelId, el)` 把一个**空 DOM 槽**交给 host——host 用 `view-anchor` 把主进程
+  view 贴到该槽（与 §2.2 同一跨进程桥）。
+- **DOM 面板 keepalive**：同一 tab group 内的 DOM 面板**全部常驻挂载**，非 active 的用
+  `display:none` 隐藏（不卸载），切 tab 来回不 remount——滚动位置 / 展开态得以保留。`active`
+  标志让面板能在 false→true 边沿跑「激活时副作用」（如数据 refresh）而无需依赖挂载。
+  **原生面板例外**：仍 active-only 挂载（隐藏一个已 bind 的 WebContentsView 槽会塌缩其 rect），
+  失活即卸载并触发 `bindNativeSlot(panelId, null)` 清理。
 - 交互：用户**拖拽 tab → drop 区**做 split / tab re-dock（HTML5 DnD），拖分隔条 resize，切 tab，
   **关闭面板**（tab 上的 close 控件 → `closePanel`，守卫整树最后一个面板）；
   纯几何的 drop-zone 计算与 descriptor 层（`computeDropZone` / `dropZoneToMutation` /

@@ -47,7 +47,16 @@ function normalize(node: LayoutNode): LayoutNode | null {
 	if (kept.length === 0) return null
 	if (kept.length === 1) return kept[0]!
 	const rebuilt: SplitNode = { kind: 'split', id: node.id, orientation: node.orientation, children: kept, sizes: keptSizes }
-	return hadConstraints ? { ...rebuilt, constraints: keptConstraints } : rebuilt
+	if (!hadConstraints) return rebuilt
+	// M3 repair: dropping children can leave a multi-child split whose survivors
+	// are ALL fixed-px (the sole flexible child was the one removed). That tree is
+	// rejected by validateTree (rrp needs >= 1 weight-sized child). Deterministically
+	// clear the LAST survivor's constraint so >= 1 flexible child remains.
+	const allFixed = keptConstraints.length > 0 && !keptConstraints.some(c => c === null)
+	if (allFixed) {
+		keptConstraints[keptConstraints.length - 1] = null
+	}
+	return { ...rebuilt, constraints: keptConstraints }
 }
 
 /** Apply collapse to the root, guaranteeing the result is a LayoutNode. A root
@@ -243,6 +252,14 @@ export function setConstraint(
 		? [...target.constraints]
 		: target.children.map(() => null)
 	base[childIndex] = constraint
+	// M3 guard: never produce an all-fixed split. If applying this constraint
+	// would leave EVERY child with a fixed-px constraint (0 flexible children),
+	// `validateTree`/`parseLayout` would later reject the serialized tree (rrp
+	// requires >= 1 weight-sized child). You cannot pin the LAST flexible child —
+	// treat it as a NO-OP and return the input tree unchanged.
+	if (base.length > 0 && base.every(c => c !== null)) {
+		return t
+	}
 	const replacement: SplitNode = {
 		kind: 'split',
 		id: target.id,

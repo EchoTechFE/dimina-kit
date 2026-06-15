@@ -182,18 +182,30 @@ describe('<DockView> tab strip', () => {
 })
 
 describe('<DockView> active body rendering', () => {
-	// BUG: impl renders ALL panel bodies (or an inactive one), wasting work and
-	// double-mounting components that assume a single live instance.
-	it('renders ONLY the active DOM panel body in a group', () => {
+	// A3 KEEPALIVE: under DOM-panel keepalive every DOM panel in a group is mounted
+	// (inactive ones hidden via display:none), so the ACTIVE body is visible and the
+	// inactive body is PRESENT-BUT-HIDDEN — not absent. (Pre-keepalive this asserted
+	// the inactive body was absent from the DOM; that contract is inverted by A3 and
+	// the kept-but-hidden behavior is pinned by dock-view-keepalive.test.tsx.)
+	it('keeps the active DOM body visible and the inactive one mounted-but-hidden', () => {
 		const { container } = renderDock({ model: createLayoutModel(makeTree()), registry: makeRegistry() })
-		// g-right active=editor => editor body present, debug body absent.
-		expect(container.querySelector('[data-deck-panel-body="editor"]')).not.toBeNull()
-		expect(container.querySelector('[data-deck-panel-body="debug"]')).toBeNull()
+		// g-right active=editor => editor body visible, debug body kept but hidden.
+		const editorBody = container.querySelector<HTMLElement>('[data-deck-panel-body="editor"]')
+		const debugBody = container.querySelector<HTMLElement>('[data-deck-panel-body="debug"]')
+		expect(editorBody).not.toBeNull()
+		expect(debugBody).not.toBeNull()
+		expect(editorBody!.style.display).not.toBe('none')
+		expect(debugBody!.style.display).toBe('none')
 	})
 
 	// BUG: impl ignores renderDomPanel and renders its own placeholder, so the
 	// host's panel content never appears.
-	it('uses renderDomPanel(panelId) output as the active body content', () => {
+	// A3 KEEPALIVE: the renderer now receives `(panelId, { active })`. The active
+	// body's content still comes from `renderDomPanel`; under keepalive the inactive
+	// panel IS rendered too (kept-but-hidden), so the renderer is invoked for it with
+	// `active:false`. (Pre-keepalive this asserted the renderer was NOT called for the
+	// inactive panel; that contract is inverted by A3.)
+	it('uses renderDomPanel(panelId, { active }) output as each body content', () => {
 		const renderDomPanel = vi.fn((id: string) => (
 			<span data-test-marker={id}>custom-{id}</span>
 		))
@@ -205,9 +217,9 @@ describe('<DockView> active body rendering', () => {
 		const body = container.querySelector('[data-deck-panel-body="editor"]')!
 		expect(body.querySelector('[data-test-marker="editor"]')).not.toBeNull()
 		expect(body.textContent).toContain('custom-editor')
-		expect(renderDomPanel).toHaveBeenCalledWith('editor')
-		// inactive panel's body must NOT be rendered => renderer not called for it.
-		expect(renderDomPanel).not.toHaveBeenCalledWith('debug')
+		// active panel rendered with active:true; inactive (kept-alive) with active:false.
+		expect(renderDomPanel).toHaveBeenCalledWith('editor', { active: true })
+		expect(renderDomPanel).toHaveBeenCalledWith('debug', { active: false })
 	})
 
 	// BUG: impl renders a native panel via renderDomPanel (wrong) instead of an
@@ -249,9 +261,11 @@ describe('<DockView> tab click interaction', () => {
 		const model = createLayoutModel(makeTree())
 		const { container } = renderDock({ model, registry: makeRegistry() })
 
-		// before: editor active.
-		expect(container.querySelector('[data-deck-panel-body="editor"]')).not.toBeNull()
-		expect(container.querySelector('[data-deck-panel-body="debug"]')).toBeNull()
+		// before: editor active (visible), debug kept-but-hidden (A3 keepalive).
+		const editorBefore = container.querySelector<HTMLElement>('[data-deck-panel-body="editor"]')!
+		const debugBefore = container.querySelector<HTMLElement>('[data-deck-panel-body="debug"]')!
+		expect(editorBefore.style.display).not.toBe('none')
+		expect(debugBefore.style.display).toBe('none')
 
 		const debugTab = container.querySelector('[data-deck-tab="debug"]')!
 		act(() => {
@@ -262,9 +276,11 @@ describe('<DockView> tab click interaction', () => {
 		const grp = (model.get().root as any).children.find((c: any) => c.id === 'g-right')
 		expect(grp.active).toBe('debug')
 
-		// DOM re-rendered: debug body now present, editor body gone.
-		expect(container.querySelector('[data-deck-panel-body="debug"]')).not.toBeNull()
-		expect(container.querySelector('[data-deck-panel-body="editor"]')).toBeNull()
+		// DOM re-rendered: VISIBILITY swapped (both bodies stay mounted under keepalive).
+		const debugAfter = container.querySelector<HTMLElement>('[data-deck-panel-body="debug"]')!
+		const editorAfter = container.querySelector<HTMLElement>('[data-deck-panel-body="editor"]')!
+		expect(debugAfter.style.display).not.toBe('none')
+		expect(editorAfter.style.display).toBe('none')
 		expect(container.querySelector('[data-deck-tab="debug"]')!.getAttribute('data-active')).toBe('true')
 	})
 
@@ -291,14 +307,16 @@ describe('<DockView> external reactivity', () => {
 	it('re-renders when an EXTERNAL model.apply(setActive) changes the tree', () => {
 		const model = createLayoutModel(makeTree())
 		const { container } = renderDock({ model, registry: makeRegistry() })
-		expect(container.querySelector('[data-deck-panel-body="debug"]')).toBeNull()
+		// A3 keepalive: debug is kept-but-hidden before the external activation.
+		expect(container.querySelector<HTMLElement>('[data-deck-panel-body="debug"]')!.style.display).toBe('none')
 
 		act(() => {
 			model.apply((t) => setActive(t, 'g-right', 'debug'))
 		})
 
-		expect(container.querySelector('[data-deck-panel-body="debug"]')).not.toBeNull()
-		expect(container.querySelector('[data-deck-panel-body="editor"]')).toBeNull()
+		// External setActive flips visibility (both bodies stay mounted).
+		expect(container.querySelector<HTMLElement>('[data-deck-panel-body="debug"]')!.style.display).not.toBe('none')
+		expect(container.querySelector<HTMLElement>('[data-deck-panel-body="editor"]')!.style.display).toBe('none')
 	})
 
 	// BUG: impl throws or fails to re-render on a setSizes apply, breaking the

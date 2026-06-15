@@ -349,6 +349,32 @@ describe('T1 constraints — setConstraint mutation', () => {
 	})
 
 	it('updates an existing child constraint without disturbing siblings', () => {
+		// 4 children, two flexible (g2, g4). Pinning g2 still leaves g4 flexible, so
+		// the M3 all-fixed guard does NOT trigger and the write goes through.
+		const t = tree({
+			kind: 'split',
+			id: 's0',
+			orientation: 'row',
+			children: [
+				tabs('g1', ['p1'], 'p1'),
+				tabs('g2', ['p2'], 'p2'),
+				tabs('g3', ['p3'], 'p3'),
+				tabs('g4', ['p4'], 'p4'),
+			],
+			sizes: [1, 1, 1, 1],
+			constraints: [{ fixedPx: 100 }, null, { fixedPx: 300 }, null],
+		})
+		const out = setConstraint(t, 's0', 1, { fixedPx: 200 })
+		const s = out.root as SplitNode
+		expect(s.constraints).toEqual([{ fixedPx: 100 }, { fixedPx: 200 }, { fixedPx: 300 }, null])
+		expect(validateTree(out, knownOf(out))).toEqual([])
+	})
+
+	// M3: pinning the LAST flexible child of a split would make every child fixed —
+	// a tree validateTree rejects (rrp needs >= 1 weight-sized child). setConstraint
+	// must NO-OP in that case (you cannot pin the last flexible child) and return the
+	// input tree unchanged rather than emit an unrestorable layout.
+	it('no-ops when pinning the sole remaining flexible child (would be all-fixed)', () => {
 		const t = tree({
 			kind: 'split',
 			id: 's0',
@@ -358,8 +384,9 @@ describe('T1 constraints — setConstraint mutation', () => {
 			constraints: [{ fixedPx: 100 }, null, { fixedPx: 300 }],
 		})
 		const out = setConstraint(t, 's0', 1, { fixedPx: 200 })
-		const s = out.root as SplitNode
-		expect(s.constraints).toEqual([{ fixedPx: 100 }, { fixedPx: 200 }, { fixedPx: 300 }])
+		// unchanged input (no-op) — still valid, sole flexible child preserved.
+		expect(out).toBe(t)
+		expect(validateTree(out, knownOf(out))).toEqual([])
 	})
 
 	it('throws when the split id is not found', () => {

@@ -128,10 +128,12 @@ fallback 到 `buildDefaultDockTree(simPanelWidth)`。
   实时拖拽）。切项目时父组件用 `key={project.path}` remount `<DockableLayout>`，新项目的持久化树
   干净重新种子。
 - 渲染 `<DockView model registry renderDomPanel bindNativeSlot/>`。
-- `renderDomPanel(panelId)`：`simulator` → `<SimulatorPanel/>`（设备/缩放 chrome + 自有 WCV
-  anchor）；`editor` → `<MonacoEditor/>`；四个 React debug tab → `<DockDebugTab/>`（包一层
-  `DebugTabContent`，并在 tab 激活时触发该 tab 的数据 refresh）；`console` 不走这里（由 DockView
-  路由到 NativeSlot）。
+- `renderDomPanel(panelId, { active })`：`simulator` → `<SimulatorPanel/>`（设备/缩放 chrome +
+  自有 WCV anchor）；`editor` → `<MonacoEditor/>`；四个 React debug tab → `<DockDebugTab active=…/>`
+  （包一层 `DebugTabContent`，在 `active` 的 false→true 边沿触发该 tab 的数据 refresh）；`console`
+  不走这里（由 DockView 路由到 NativeSlot）。所有 DOM 面板由 DockView **keepalive**（切 tab 不
+  卸载、非 active 用 `display:none` 隐藏），故 refresh 改由 `active` 边沿驱动而非挂载——切走再
+  切回仍会重新 refresh，且滚动 / 展开态得以保留。
 - `bindNativeSlot(panelId, el)`：只对 `console` 生效——用 `view-anchor` 的
   `createPlacementAnchor` 把 Console DevTools WCV 贴到 DockView 给的空槽。
 - 订阅模型，每次 mutation `serializeLayout` 回写 `useLayoutStore` 持久化（`onPersistTree`）。
@@ -145,7 +147,10 @@ overlay 各注册一个锚点。
 **simulator overlay**（在 `<SimulatorPanel>` 自身）：panel 只画 toolbar + 一个空 flex:1 占位 div
 （`data-area="native-simulator"`）+ 路径 bar，**不画手机框、不渲染 `<webview>`**。占位 rect（带
 `zoom`）经 anchor 发到 `setNativeSimulatorViewBounds`。设备框 / 圆角 / 刘海 / 页面 `<webview>` 全在
-那个 WCV 内部的 DeviceShell 里画（见 `simulator-render-architecture.md`）。
+那个 WCV 内部的 DeviceShell 里画（见 `simulator-render-architecture.md`）。anchor 选项与 console
+同形：`guardDisplayNone: true`（A3 keepalive 下 simulator tab 失活时占位是 `display:none`、面板**不
+卸载**，必须据此 detach WCV，否则它会悬在新激活面板之上）+ `followGeometry: true`（fixedPx 锁宽，拖
+相邻 splitter 只平移不 resize，几何哨兵重发 rect）。
 
 **console overlay**（在 `<DockableLayout>` 的 `bindNativeSlot`）：Console DevTools 是另一个 WCV。
 DockView 把 console 渲染成一个空 DOM 槽（NativeSlot），`bindNativeSlot('console', el)` 用

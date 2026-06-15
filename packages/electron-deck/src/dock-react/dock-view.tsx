@@ -48,7 +48,15 @@ const DRAG_PANEL_MIME = 'application/x-deck-panel'
 export interface DockViewProps {
 	model: LayoutModel
 	registry: PanelRegistry
-	renderDomPanel: (panelId: string) => ReactNode
+	/**
+	 * Render a DOM panel's body. `opts.active` is `true` iff `panelId` is its tab
+	 * group's currently-active panel. Under DOM-panel keepalive every DOM panel in
+	 * a group is rendered (the inactive ones hidden), so this callback is invoked
+	 * for ALL of them and `opts.active` is RE-EVALUATED on every activation change
+	 * WITHOUT remounting the kept-alive subtree — letting a host run on-activation
+	 * side effects (e.g. data refresh) off the false→true `active` edge.
+	 */
+	renderDomPanel: (panelId: string, opts: { active: boolean }) => ReactNode
 	bindNativeSlot: (panelId: string, el: HTMLElement | null) => void
 }
 
@@ -125,6 +133,14 @@ export function DockView(props: DockViewProps): ReactNode {
 	// node, so we compute the global count here and thread `canClose` down.
 	const canClose = countPanels(tree.root) > 1
 
+	// Panel-id membership of the CURRENT tree (M2). A drop's payload must be a
+	// panel that actually lives in the tree, not merely one that is registered —
+	// see `handleDrop`. Derived from the snapshot the component already holds.
+	const isPanelInTree = useCallback(
+		(panelId: string) => findPanelGroupId(tree.root, panelId) !== undefined,
+		[tree],
+	)
+
 	// Resize write-back: a drag commit (or the `__deckApplyLayout` seam) funnels
 	// new per-split weights here, which apply `setSizes` to the canonical model.
 	const handleApplyLayout = useCallback(
@@ -182,6 +198,7 @@ export function DockView(props: DockViewProps): ReactNode {
 				onRedock: handleRedock,
 				onClose: handleClose,
 				canClose,
+				isPanelInTree,
 			})}
 		</Fragment>
 	)
@@ -201,7 +218,7 @@ type DeckGroupElement = HTMLDivElement & {
 
 interface RenderContext {
 	registry: PanelRegistry
-	renderDomPanel: (panelId: string) => ReactNode
+	renderDomPanel: (panelId: string, opts: { active: boolean }) => ReactNode
 	bindNativeSlot: (panelId: string, el: HTMLElement | null) => void
 	onActivate: (groupId: string, panelId: string) => void
 	onApplyLayout: (splitId: string, weights: number[]) => void
@@ -210,6 +227,11 @@ interface RenderContext {
 	/** False when the whole tree has a single panel — suppresses every close
 	 * button so the layout can't be emptied (closePanel would no-op anyway). */
 	canClose: boolean
+	/** True iff `panelId` is present in the CURRENT layout tree (M2). Registry
+	 * membership is NOT enough: a panel can be registered but absent from the tree
+	 * (closed out / never docked), and driving a re-dock on it makes the mutation
+	 * layer throw `panel not found`. A drop carrying such an id must be a no-op. */
+	isPanelInTree: (panelId: string) => boolean
 }
 
 /** The id of the tab group currently holding `panelId`, or `undefined` if the
@@ -287,6 +309,16 @@ function renderSplit(node: SplitNode, ctx: RenderContext): ReactNode {
 			)
 		}
 		else {
+			// KNOWN LIMITATION (M1): react-resizable-panels consumes `defaultSize`
+			// ONLY at mount. A programmatic post-mount size change — `model.apply(
+			// setSizes(...))` — updates the model + the `data-deck-sizes` mirror but
+			// does NOT move the LIVE splitter: rrp ignores a changed `defaultSize` on
+			// an already-mounted Group. The visible split still follows user drags
+			// (committed back via `onLayoutChanged`), and a serialized restore works
+			// because the model is re-seeded into a FRESH Group on remount — but an
+			// imperative resize from code is silently visually ignored until remount.
+			// FOLLOW-UP (not done here): hold the `Group` ref and call its imperative
+			// layout API, suppressing the resulting `onLayoutChanged` write-back loop.
 			items.push(
 				<Panel key={panelKey(child)} id={child.id} defaultSize={percentageByIndex.get(i)}>
 					{renderNode(child, ctx)}
@@ -436,11 +468,15 @@ function GroupView(props: GroupViewProps): ReactNode {
 		setDropZone(null)
 		const dragged
 			= e.dataTransfer.getData(DRAG_PANEL_MIME) || e.dataTransfer.getData('text/plain')
-		// Validate the payload is a REGISTERED panel (M4): a `text/plain` drop can
-		// carry arbitrary external text (a selection, a file path); feeding that to
-		// the mutation layer drives `extractPanel`/`movePanel` on a non-existent id
-		// and throws. An unknown id is not a re-dock — ignore it.
-		if (!dragged || ctx.registry.get(dragged) === undefined) return
+		// Validate the payload before committing a re-dock:
+		//  - M4: a `text/plain` drop can carry arbitrary external text (a selection,
+		//    a file path); it must at least be a REGISTERED panel.
+		//  - M2: registry membership is NOT tree membership. A registered-but-absent
+		//    panel (closed out of the tree / never docked) passes the registry guard
+		//    yet drives `movePanel`/`extractPanel` on an id missing from the tree,
+		//    which THROWS `panel not found`. It must be a NO-OP — also require the id
+		//    to be present in the CURRENT tree.
+		if (!dragged || ctx.registry.get(dragged) === undefined || !ctx.isPanelInTree(dragged)) return
 		ctx.onRedock(node.id, node.active, dragged, zone)
 	}
 
@@ -580,31 +616,69 @@ function DropIndicator(props: { zone: DropZone }): ReactNode {
 	return <div data-deck-drop-zone={props.zone} style={dropIndicatorStyle(props.zone)} />
 }
 
+/**
+ * Render a tab group's body region under DOM-panel KEEPALIVE.
+ *
+ * - DOM panels: ALL of the group's DOM panels are mounted SIMULTANEOUSLY, each
+ *   under a STABLE React key (`dom-${panelId}`) so switching the active tab never
+ *   remounts a body — React state + scroll persist across A→B→A. The active body
+ *   fills the region (flex:1); inactive ones stay in the DOM but `display:none`.
+ *   Each body's host renderer receives `{ active }` and is re-invoked with the
+ *   new flag on every activation change (no remount), so a host can fire
+ *   on-activation side effects off the false→true edge.
+ * - Native panels: EXEMPT from keepalive. The single ACTIVE native panel mounts a
+ *   `NativeSlot` (keyed on the active id, so deactivation unmounts it and fires
+ *   `bindNativeSlot(id, null)`); inactive native panels render nothing. Keeping a
+ *   bound native slot mounted-but-hidden would collapse its WebContentsView rect.
+ */
 function renderActiveBody(node: TabGroupNode, ctx: RenderContext): ReactNode {
 	const activeId = node.active
 	if (!activeId) return null
-	const descriptor = ctx.registry.get(activeId)
 
-	if (descriptor?.kind === 'native') {
-		return (
-			<NativeSlot
-				key={activeId}
-				panelId={activeId}
-				bindNativeSlot={ctx.bindNativeSlot}
-			/>
-		)
-	}
+	const activeDescriptor = ctx.registry.get(activeId)
 
-	// DOM panel (or unknown descriptor — render via the host's DOM renderer).
-	// Fill the remaining group space (FIX 2a): flex:1 + min-size:0 so the body
-	// occupies the area below the tab strip rather than collapsing to content.
+	// Native active panel → active-only NativeSlot (no keepalive).
+	const nativeSlot
+		= activeDescriptor?.kind === 'native'
+			? (
+				<NativeSlot
+					key={activeId}
+					panelId={activeId}
+					bindNativeSlot={ctx.bindNativeSlot}
+				/>
+				)
+			: null
+
+	// Every DOM (non-native) panel in the group is kept alive: mounted up-front,
+	// hidden unless active. A panel with no descriptor is treated as DOM (render
+	// via the host's renderer) — matching the pre-keepalive fallback.
+	const domBodies = node.panels
+		.filter((panelId) => ctx.registry.get(panelId)?.kind !== 'native')
+		.map((panelId) => {
+			const active = panelId === activeId
+			return (
+				<div
+					key={`dom-${panelId}`}
+					data-deck-panel-body={panelId}
+					style={{
+						// Active body fills the region; inactive bodies stay mounted but
+						// hidden (display:none preserves React state + scroll position).
+						display: active ? undefined : 'none',
+						flex: 1,
+						minWidth: 0,
+						minHeight: 0,
+					}}
+				>
+					{ctx.renderDomPanel(panelId, { active })}
+				</div>
+			)
+		})
+
 	return (
-		<div
-			data-deck-panel-body={activeId}
-			style={{ flex: 1, minWidth: 0, minHeight: 0 }}
-		>
-			{ctx.renderDomPanel(activeId)}
-		</div>
+		<Fragment>
+			{nativeSlot}
+			{domBodies}
+		</Fragment>
 	)
 }
 

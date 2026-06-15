@@ -38,8 +38,9 @@
  * module exists.
  */
 import { describe, it, expect, beforeEach } from 'vitest'
-import { render, act, cleanup } from '@testing-library/react'
+import { render, act, cleanup, fireEvent } from '@testing-library/react'
 import {
+	closePanel,
 	createLayoutModel,
 	createPanelRegistry,
 	type LayoutNode,
@@ -237,6 +238,119 @@ describe('<DockView> drag-to-redock — __deckHandleDrop seam', () => {
 		expect(grp.id).toBe('g-right')
 		expect(countPanel(model.get().root, 'editor')).toBe(1)
 	})
+})
+
+describe('<DockView> drag-to-redock — registered-but-absent payload (M2)', () => {
+  // BUG (M2): handleDrop accepts the drop when `registry.get(dragged) !==
+  // undefined` — REGISTRY membership — but never checks the panel is actually in
+  // the CURRENT layout tree. A `text/plain` (or x-deck-panel) drop whose id is a
+  // REGISTERED-but-CLOSED panel (registered, but removed from the tree) passes the
+  // guard and drives `onRedock` → `movePanel`/`extractPanel` on a panel absent
+  // from the tree, which THROWS out of the React drop event handler (uncaught).
+  //
+  // jsdom getBoundingClientRect returns 0×0, so computeDropZone yields 'center'
+  // (the degenerate guard), which routes to `movePanel(t, ghost, …)` →
+  // `movePanel: panel not found` on HEAD. The contract: a drop carrying a
+  // registered id NOT present in the tree is a NO-OP (no mutation, no throw).
+  //
+  // Registry has 'sim'/'editor'/'debug' (makeRegistry); the tree (makeTree) holds
+  // exactly those three. We additionally register a 'ghost' panel that is NOT in
+  // the tree, then drop it onto a group.
+
+  /** A registry like makeRegistry() PLUS a registered-but-not-in-tree 'ghost'. */
+  function makeRegistryWithGhost(): PanelRegistry {
+    const reg = makeRegistry()
+    reg.register({ kind: 'dom', id: 'ghost', title: 'Ghost' })
+    return reg
+  }
+
+  /** A minimal DataTransfer stub whose getData returns `id` for both the custom
+   * MIME and text/plain — exactly what a real drag payload would carry. */
+  function dragPayload(id: string) {
+    return {
+      getData: (type: string) =>
+        type === 'application/x-deck-panel' || type === 'text/plain' ? id : '',
+    }
+  }
+
+  // React (dev) does not let a listener throw synchronously OUT of
+  // `fireEvent.drop`; it re-raises the error through the DOM as a global `error`
+  // event (jsdom dispatches it on `window`). So an `expect().not.toThrow()`
+  // around `fireEvent.drop` would NOT see the mutation throw. Capture global
+  // errors instead and assert none was raised — deterministic on HEAD (the
+  // mutation throws `panel not found`) and after the fix (no-op, no error).
+  function withCapturedGlobalErrors(run: () => void): Error[] {
+    const captured: Error[] = []
+    const onError = (e: ErrorEvent): void => {
+      captured.push((e.error as Error) ?? new Error(e.message))
+      e.preventDefault()
+    }
+    window.addEventListener('error', onError)
+    try {
+      run()
+    }
+    catch (e) {
+      // Belt-and-braces: if a future React surfaces it synchronously, record it
+      // here too (don't let it crash the runner).
+      captured.push(e as Error)
+    }
+    finally {
+      window.removeEventListener('error', onError)
+    }
+    return captured
+  }
+
+  it('a drop carrying a registered id that is NOT in the tree is a no-op (no error, no mutation)', () => {
+    const model = createLayoutModel(makeTree())
+    const { container } = renderDock(model, makeRegistryWithGhost())
+
+    let revisions = 0
+    model.subscribe(() => { revisions += 1 })
+    const before = JSON.stringify(model.get())
+
+    const right = container.querySelector('[data-deck-group="g-right"]') as DeckGroupElement
+
+    // Firing the real DOM drop drives handleDrop → onRedock. On HEAD this raises
+    // `movePanel: panel not found` (the drop zone is 'center' since jsdom
+    // geometry is 0×0). The contract: it must be a NO-OP.
+    const errors = withCapturedGlobalErrors(() => {
+      fireEvent.drop(right, { dataTransfer: dragPayload('ghost') })
+    })
+
+    expect(errors.map((e) => e.message)).toEqual([])
+    // No mutation: the tree is byte-for-byte unchanged and no subscriber fired.
+    expect(JSON.stringify(model.get())).toBe(before)
+    expect(revisions).toBe(0)
+    // 'ghost' was never inserted into the tree.
+    expect(countPanel(model.get().root, 'ghost')).toBe(0)
+  })
+
+  it('a drop carrying a registered id CLOSED out of the tree is a no-op (registry membership != tree membership)', () => {
+    // Start with 'debug' in g-right, then close it from the tree (it stays
+    // REGISTERED). A drop of 'debug' must NOT resurrect it / error.
+    const model = createLayoutModel(makeTree())
+    const { container } = renderDock(model, makeRegistry())
+
+    // Close 'debug' out of the tree (still registered in the registry).
+    act(() => {
+      model.apply((t) => closePanel(t, 'debug'))
+    })
+    expect(countPanel(model.get().root, 'debug')).toBe(0)
+
+    let revisions = 0
+    model.subscribe(() => { revisions += 1 })
+    const before = JSON.stringify(model.get())
+
+    const left = container.querySelector('[data-deck-group="g-left"]') as DeckGroupElement
+    const errors = withCapturedGlobalErrors(() => {
+      fireEvent.drop(left, { dataTransfer: dragPayload('debug') })
+    })
+
+    expect(errors.map((e) => e.message)).toEqual([])
+    expect(JSON.stringify(model.get())).toBe(before)
+    expect(revisions).toBe(0)
+    expect(countPanel(model.get().root, 'debug')).toBe(0)
+  })
 })
 
 describe('<DockView> drag-to-redock — real-pointer cases (e2e only)', () => {

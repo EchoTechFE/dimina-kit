@@ -62,8 +62,15 @@ export function computeDropZone(
 
 	// ── DEGENERATE / NON-FINITE guard (N1) ─────────────────────────────────
 	// A zero/negative/non-finite rect has no meaningful edge bands; a non-finite
-	// point can't be classified. Treat either as the interior (tab-join).
-	if (!(width > 0) || !(height > 0) || !Number.isFinite(x) || !Number.isFinite(y)) {
+	// point can't be classified. Treat either as the interior (tab-join). Note a
+	// non-finite WIDTH/HEIGHT (e.g. Infinity) satisfies `> 0` and would otherwise
+	// slip through — `band = ef * min(Infinity, h)` yields a finite band and the
+	// point is misclassified as an EDGE zone — so reject finiteness EXPLICITLY.
+	if (
+		!(width > 0) || !(height > 0)
+		|| !Number.isFinite(width) || !Number.isFinite(height)
+		|| !Number.isFinite(x) || !Number.isFinite(y)
+	) {
 		return 'center'
 	}
 	// Clamp the band fraction to [0, 0.5] (N1): a fraction > 0.5 makes the left

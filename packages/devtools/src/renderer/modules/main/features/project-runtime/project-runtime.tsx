@@ -185,7 +185,7 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
   // function (not useCallback): `debugPanelProps` is rebuilt every render with
   // fresh handlers, so memoizing would only pin stale nodes; DockView re-reads it
   // on each render anyway.
-  const renderDomPanel = (panelId: string): ReactNode => {
+  const renderDomPanel = (panelId: string, opts: { active: boolean }): ReactNode => {
     if (panelId === 'simulator') {
       return (
         <SimulatorPanel
@@ -207,11 +207,12 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
       panelId === 'storage' ||
       panelId === 'compile'
     ) {
-      // DOCK path: `renderActiveBody` mounts ONLY the active tab's body, so a
-      // tab switch swaps which `DockDebugTab` is rendered. `DockDebugTab` fires
-      // the per-tab refresh on activation (M3), since the dock tab strip drives
-      // activation through the model and never calls a `handleSelectTab`.
-      return <DockDebugTab tabId={panelId} panelProps={debugPanelProps} />
+      // DOCK path (keepalive): `renderActiveBody` keeps ALL DOM debug tabs
+      // mounted, so the `DockDebugTab` is NOT remounted on a tab switch. It fires
+      // the per-tab refresh off the `active` false→true edge (M3) — the dock tab
+      // strip drives activation through the model and never calls a
+      // `handleSelectTab`.
+      return <DockDebugTab tabId={panelId} active={opts.active} panelProps={debugPanelProps} />
     }
     return null
   }
@@ -268,7 +269,7 @@ interface DockableLayoutProps {
    */
   simPanelWidth: number
   /** DOM-panel renderer for simulator/editor/debug (console is native → NativeSlot). */
-  renderDomPanel: (panelId: string) => ReactNode
+  renderDomPanel: (panelId: string, opts: { active: boolean }) => ReactNode
   /** Persist DockView's in-session layout mutations (opaque serialized tree). */
   onPersistTree: (serialized: string) => void
 }
@@ -338,34 +339,44 @@ function findSimulatorConstraintSite(
  * pin is kept live via `setConstraint` on a device change.
  */
 /**
- * Dock-mode wrapper for a DOM debug tab. `renderActiveBody` mounts ONLY the
- * active tab's body, so this component's `tabId` changes (or it mounts) exactly
- * when its tab becomes active — at which point it fires the per-tab data refresh,
- * mirroring `BottomDebugPanel.handleSelectTab` (M3). The dock tab strip drives
- * activation through the layout model and never calls `handleSelectTab`, so
- * without this the WXML/AppData/Storage panels would show stale data on switch.
+ * Dock-mode wrapper for a DOM debug tab. Under DOM-panel KEEPALIVE every debug
+ * tab body stays MOUNTED (inactive ones hidden), so this component is NOT
+ * remounted on a tab switch — its `active` prop flips instead. It fires the
+ * per-tab data refresh off the `active` false→true edge (mirroring
+ * `BottomDebugPanel.handleSelectTab`, M3): the dock tab strip drives activation
+ * through the layout model and never calls `handleSelectTab`, so without this the
+ * WXML/AppData/Storage panels would show stale data when re-activated.
  * `'compile'` is push-fed (projectStatus + compileLog), so it needs no refresh.
  * Refresh handlers are read through a ref so the activation effect depends only
- * on `tabId` (the props object is rebuilt every render and would otherwise
- * re-fire the refresh on every render).
+ * on `tabId`/`active` (the props object is rebuilt every render and would
+ * otherwise re-fire the refresh on every render).
  */
 function DockDebugTab(
-  { tabId, panelProps }: { tabId: DebugTabContentId; panelProps: BottomDebugPanelProps },
+  { tabId, active, panelProps }: { tabId: DebugTabContentId; active: boolean; panelProps: BottomDebugPanelProps },
 ): ReactNode {
   // Keep the latest refresh handlers in a ref (updated in an effect, not during
-  // render) so the activation effect can depend only on `tabId`. This effect has
-  // no deps → it runs on every commit and, by declaration order, BEFORE the
-  // activation effect below, so the ref is always current when a refresh fires.
+  // render) so the activation effect can depend only on `tabId`/`active`. This
+  // effect has no deps → it runs on every commit and, by declaration order,
+  // BEFORE the activation effect below, so the ref is always current when a
+  // refresh fires.
   const propsRef = useRef(panelProps)
   useEffect(() => {
     propsRef.current = panelProps
   })
+  // Refresh on the false→true activation edge (NOT every render): a kept-alive
+  // body is never remounted, so the refresh must be driven by becoming active.
+  // The initial commit (active=true) counts as the first edge (prev defaults to
+  // false). A mounted-but-inactive tab (active=false) never refreshes.
+  const prevActive = useRef(false)
   useEffect(() => {
+    const becameActive = active && !prevActive.current
+    prevActive.current = active
+    if (!becameActive) return
     const p = propsRef.current
     if (tabId === 'wxml') p.onRefreshWxml()
     else if (tabId === 'appdata') p.onRefreshAppData()
     else if (tabId === 'storage') void p.onRefreshStorage()
-  }, [tabId])
+  }, [tabId, active])
   return <DebugTabContent tabId={tabId} {...panelProps} />
 }
 
