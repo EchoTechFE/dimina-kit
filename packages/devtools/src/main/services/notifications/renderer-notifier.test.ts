@@ -18,7 +18,6 @@ import {
   ProjectChannel,
   SettingsChannel,
   EditorChannel,
-  AppChannel,
 } from '../../../shared/ipc-channels.js'
 import { createRendererNotifier } from './renderer-notifier.js'
 
@@ -113,44 +112,6 @@ describe('RendererNotifier — destroyed targets no-op', () => {
 
     mainWindow.destroyed = true
     notifier.projectStatus({ status: 'idle', message: '' })
-    expect(mainWindow.webContents.send).toHaveBeenCalledTimes(1)
-  })
-
-  it('headerAvatarChanged: routes through mainWindow and respects destroy', () => {
-    const mainWindow = makeBrowserWindow()
-    const ctx = {
-      windows: { mainWindow: mainWindow as unknown as Electron.BrowserWindow },
-      views: { getSettingsWebContents: () => null },
-    }
-    const notifier = createRendererNotifier(ctx)
-
-    notifier.headerAvatarChanged()
-    expect(mainWindow.webContents.send).toHaveBeenNthCalledWith(
-      1,
-      AppChannel.HeaderAvatarChanged,
-    )
-
-    mainWindow.destroyed = true
-    notifier.headerAvatarChanged()
-    expect(mainWindow.webContents.send).toHaveBeenCalledTimes(1)
-  })
-
-  it('headerActionsChanged: routes through mainWindow and respects destroy', () => {
-    const mainWindow = makeBrowserWindow()
-    const ctx = {
-      windows: { mainWindow: mainWindow as unknown as Electron.BrowserWindow },
-      views: { getSettingsWebContents: () => null },
-    }
-    const notifier = createRendererNotifier(ctx)
-
-    notifier.headerActionsChanged()
-    expect(mainWindow.webContents.send).toHaveBeenNthCalledWith(
-      1,
-      AppChannel.HeaderActionsChanged,
-    )
-
-    mainWindow.destroyed = true
-    notifier.headerActionsChanged()
     expect(mainWindow.webContents.send).toHaveBeenCalledTimes(1)
   })
 

@@ -351,12 +351,6 @@ export const WindowChannel = {
 
 export const AppChannel = {
   GetBranding: 'app:getBranding',
-  GetHeaderAvatar: 'app:getHeaderAvatar',
-  InvokeHeaderAvatar: 'app:invokeHeaderAvatar',
-  HeaderAvatarChanged: 'app:headerAvatarChanged',
-  GetHeaderActions: 'app:getHeaderActions',
-  InvokeHeaderAction: 'app:invokeHeaderAction',
-  HeaderActionsChanged: 'app:headerActionsChanged',
 } as const
 
 // ── miniappSnapshot (unified panel snapshot framework) ───────────────────
