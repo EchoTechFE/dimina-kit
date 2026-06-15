@@ -152,13 +152,13 @@ export function StoragePanel({
         <table className="w-full border-collapse text-[12px]">
           <thead>
             <tr>
-              <th className="text-left text-code-label font-normal px-2.5 py-1 border-b border-border-subtle text-[11px] sticky top-0 bg-bg z-10">
+              <th className="text-left text-code-label font-normal px-2.5 py-1 border-b border-border-subtle text-[11px] sticky top-0 bg-bg-panel z-10 w-px pr-5">
                 Key
               </th>
-              <th className="text-left text-code-label font-normal px-2.5 py-1 border-b border-border-subtle text-[11px] sticky top-0 bg-bg z-10">
+              <th className="text-left text-code-label font-normal px-2.5 py-1 border-b border-border-subtle text-[11px] sticky top-0 bg-bg-panel z-10">
                 Value
               </th>
-              <th className="w-px sticky top-0 bg-bg z-10 border-b border-border-subtle" />
+              <th className="w-px sticky top-0 bg-bg-panel z-10 border-b border-border-subtle" />
             </tr>
           </thead>
           <tbody>
@@ -170,10 +170,19 @@ export function StoragePanel({
               </tr>
             ) : items.map((item) => {
               const isEditing = editing?.key === item.key
+              // Display keys without the active appId namespace prefix
+              // (`${appId}_`), the way Chrome's Local Storage panel shows clean
+              // keys. The full key (used for every read/write below) stays in
+              // the `title` for discoverability.
+              const displayKey = prefix && item.key.startsWith(prefix)
+                ? item.key.slice(prefix.length)
+                : item.key
               return (
                 <tr key={item.key} className="hover:[&>td]:bg-surface">
-                  <td className="px-2.5 py-0.5 border-b border-border-subtle font-mono text-code-blue whitespace-nowrap w-px pr-5 align-top">
-                    {item.key}
+                  <td className="px-2.5 py-0.5 border-b border-border-subtle w-px pr-5 align-top">
+                    <div className="font-mono text-code-blue max-w-[240px] truncate" title={item.key}>
+                      {displayKey}
+                    </div>
                   </td>
                   <td
                     className="px-2.5 py-0.5 border-b border-border-subtle font-mono text-code-orange break-all align-top cursor-text"
@@ -214,11 +223,9 @@ export function StoragePanel({
         </table>
       </div>
       <div className="flex items-center gap-1.5 px-2.5 py-1.5 border-t border-border-subtle shrink-0 bg-bg-panel">
-        {prefix && (
-          <span className="font-mono text-[11px] text-text-dim shrink-0" title="active appId prefix">
-            {prefix}
-          </span>
-        )}
+        {/* New keys are auto-namespaced with the active appId prefix (see
+            handleAdd); the raw prefix is intentionally not shown — Chrome's
+            Local Storage panel likewise hides the storage-key namespace. */}
         <input
           type="text"
           placeholder="key"
