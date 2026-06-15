@@ -104,6 +104,17 @@ export function setWorkbenchTheme(theme: ThemeSource): Promise<void> {
   return invoke<void>(WorkbenchSettingsChannel.SetTheme, theme)
 }
 
+/**
+ * Subscribe to active-color-scheme flips (OS change or in-app SetTheme). The
+ * app's CSS reacts to `prefers-color-scheme` on its own; this is for JS
+ * consumers (Monaco's theme) that can't observe that media change because
+ * Electron doesn't dispatch the renderer's matchMedia change event for
+ * programmatic `nativeTheme.themeSource` assignments. Returns an unsubscribe.
+ */
+export function onThemeChanged(handler: (isDark: boolean) => void): () => void {
+  return on<[boolean]>(WorkbenchSettingsChannel.ThemeChanged, (isDark) => handler(isDark))
+}
+
 /** Read the current Chrome DevTools Protocol listener status. */
 export function getCdpStatus(): Promise<CdpStatus> {
   return invokeStrict<CdpStatus>(WorkbenchSettingsChannel.GetCdpStatus)

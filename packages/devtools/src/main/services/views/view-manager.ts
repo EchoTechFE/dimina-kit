@@ -1,7 +1,8 @@
 import type { IpcMainEvent, WebContents } from 'electron'
-import { ipcMain, shell, WebContentsView, webContents } from 'electron'
+import { ipcMain, nativeTheme, shell, WebContentsView, webContents } from 'electron'
 import path from 'path'
 import { cjsSiblingPreloadPath, mainPreloadPath } from '../../utils/paths.js'
+import { simDeskBg } from '../../utils/theme.js'
 import {
   applyNavigationHardening,
   handleWindowOpenExternal,
@@ -1093,12 +1094,26 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       },
     })
     nativeSimulatorView = view
-    // Paint the WCV surface the simulator-panel background (≈ --color-sim-bg
-    // hsl(0 0% 7%)) so a height-resize that grows the region never flashes white
-    // in the newly-exposed strip before DeviceShell's desk repaints — the WCV,
-    // the desk, and the renderer placeholder behind it are all the same color.
-    view.setBackgroundColor('#121212')
+    // Paint the WCV surface the themed desk color (simDeskBg(): dark #121212 /
+    // light #e8e8e8) so a height-resize that grows the region never flashes a
+    // mismatched strip before DeviceShell's desk repaints — the WCV, the desk,
+    // and the renderer placeholder behind it are all the same color.
+    view.setBackgroundColor(simDeskBg())
     const simWc = view.webContents
+
+    // Keep the WCV surface in sync with the active color scheme. The
+    // process-wide installThemeBackgroundSync() re-syncs BrowserWindows on a
+    // theme switch, but this top-level WebContentsView is not a window, so its
+    // creation-time backgroundColor would otherwise freeze. Mirror simDeskBg()
+    // here on every nativeTheme `updated`; the listener is owned by the wc's
+    // connection so it detaches when the simulator view is torn down.
+    const syncDeskBg = (): void => {
+      try {
+        if (!simWc.isDestroyed()) view.setBackgroundColor(simDeskBg())
+      } catch { /* view/wc gone */ }
+    }
+    nativeTheme.on('updated', syncDeskBg)
+    ctx.connections.acquire(simWc).own(() => nativeTheme.removeListener('updated', syncDeskBg))
 
     // Service the simulator-side `__diminaCustomApis` bridge: this top-level
     // WebContentsView has no embedder renderer to proxy through, so dispatch its

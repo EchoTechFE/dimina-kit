@@ -1,5 +1,6 @@
 import { BrowserWindow, nativeTheme } from 'electron'
 import { toDisposable, type Disposable } from '@dimina-kit/electron-deck/main'
+import { WorkbenchSettingsChannel } from '../../shared/ipc-channels.js'
 
 /**
  * Background color that matches the current system color scheme.
@@ -11,6 +12,24 @@ import { toDisposable, type Disposable } from '@dimina-kit/electron-deck/main'
  */
 export function themeBg(): string {
   return nativeTheme.shouldUseDarkColors ? '#1a1a1a' : '#fafafa'
+}
+
+/**
+ * Backdrop ("desk") color for the native simulator WebContentsView — the
+ * surface the simulated phone sits on. Unlike {@link themeBg} (the window bg),
+ * the desk is a neutral grey kept a touch off the window so the light-colored
+ * phone keeps contrast against it in BOTH schemes.
+ *
+ * Dark:  hsl(0 0% 7%)  ≈ #121212  (the long-standing desk color — unchanged)
+ * Light: hsl(0 0% 91%) ≈ #e8e8e8  (neutral grey; the white phone reads on it)
+ *
+ * MUST stay equal to the renderer's `--color-sim-bg` (design.css) and the
+ * simulator page's `.device-shell-root` background (device-shell.css): the WCV,
+ * the desk, and the placeholder behind it are the same color so a height-resize
+ * never flashes a mismatched strip. Update all three together.
+ */
+export function simDeskBg(): string {
+  return nativeTheme.shouldUseDarkColors ? '#121212' : '#e8e8e8'
 }
 
 /**
@@ -38,10 +57,23 @@ export function themeBg(): string {
 export function installThemeBackgroundSync(): Disposable {
   const apply = () => {
     const bg = themeBg()
+    const isDark = nativeTheme.shouldUseDarkColors
     for (const win of BrowserWindow.getAllWindows()) {
-      if (!win.isDestroyed()) {
+      if (win.isDestroyed()) continue
+      // Isolate each window: a window closing mid-loop (or a renderer torn down
+      // between the isDestroyed() check and the send) must not abort the sync
+      // for the remaining windows.
+      try {
         win.setBackgroundColor(bg)
-      }
+        // Notify renderer JS consumers that can't observe the CSS
+        // `prefers-color-scheme` change (Monaco's theme). Electron does not
+        // dispatch the renderer's matchMedia change event for programmatic
+        // `nativeTheme.themeSource` flips, so push it from here — the one place
+        // that already centralizes color-scheme reactions.
+        if (!win.webContents.isDestroyed()) {
+          win.webContents.send(WorkbenchSettingsChannel.ThemeChanged, isDark)
+        }
+      } catch { /* window/webContents gone mid-loop */ }
     }
   }
   nativeTheme.on('updated', apply)
