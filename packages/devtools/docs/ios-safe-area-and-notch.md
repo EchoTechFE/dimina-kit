@@ -62,15 +62,27 @@ The design below SHIPPED. The reference points are live in code, not aspirationa
 - **Status bar + notch visual ship.** `device-shell` renders a `StatusBar`
   (`status-bar.tsx`) pinned to the device top — time (`9:41`) + signal/wifi/
   battery — and the notch / Dynamic Island shape driven by `notchType`; nav-bar
-  is the title row beneath it. The home-indicator strip is sized to
-  `safeAreaInsets.bottom`.
+  is the title row beneath it.
+- **Bottom safe area is page-type-aware (WeChat parity).** The home-indicator
+  pill is an ABSOLUTE overlay pinned to the device bottom — it reserves no layout
+  space and is transparent. What fills the bottom safe area depends on the page:
+  - *tab page* → the shell tabBar's `background` extends through the bottom inset
+    (`padding-bottom` = `safeAreaInsets.bottom`, `tab-bar.tsx`), so the strip is
+    the tabBar's color and the pill sits on it.
+  - *non-tab page* → the page webview is full-bleed to the device bottom (no
+    reserved strip); the pill overlays the page content.
 - **`env(safe-area-inset-*)` is overridden inside render-host webviews.**
   `src/main/services/safe-area/index.ts` attaches `wc.debugger` per render-host
   `<webview>` guest on `did-attach-webview` (`view-manager.ts`) and sends
   `Emulation.setSafeAreaInsetsOverride`, so a page's `env(safe-area-inset-*)`
-  resolves to the device insets instead of `0`. Re-applied on every device
-  change (`reapplySafeArea`); degrades gracefully (warn, leave 0) if the guest
-  is already claimed by an external CDP client.
+  resolves to the device insets instead of `0`. The TOP inset is always surfaced
+  (notch). The BOTTOM inset is per page TYPE: a **tab page → 0** (the shell tabBar
+  covers the safe area), a **non-tab page → the real inset** so the page opts in
+  via its own `env(safe-area-inset-bottom)` — it is NOT auto-reserved. The page
+  type is read from the render-host URL's `isTab` flag (captured in
+  `will-attach-webview`). Re-applied on every device change (each guest keeps its
+  attached page type); degrades gracefully (warn, leave 0) if the guest is
+  already claimed by an external CDP client.
 
 ## Single source of truth: device profile
 
@@ -170,17 +182,23 @@ Verified mechanism (above). Wiring (per codex):
   guest `destroyed`.
 - **Re-apply triggers:** (1) guest attach (new page in the stack), (2) device
   change (reapply to all attached guests).
-- **Insets value — avoid double-counting (codex Q4).** The shell already
-  RESERVES the chrome edges (in-flow nav-bar at top, tabBar + home-indicator at
-  bottom), so the guest webview does not span those unsafe zones for a default
-  page — injecting the full device inset there would double-count against the
-  page's own `env()` padding. So inject only the inset for edges the webview
-  actually borders the unsafe zone:
+- **Insets value — inject only what the webview actually borders.** Inject the
+  inset for an edge only where the guest webview spans the unsafe zone, so the
+  page's own `env()` padding never double-counts a region the shell already
+  covers:
   - `top` = custom-nav page ? `device.safeAreaInsets.top` : `0`
-    (default nav covers the notch with the opaque bar).
-  - `bottom` = `0` — the shell's home-indicator strip (sized to
-    `device.safeAreaInsets.bottom`, see below) reserves the bottom; the webview
-    ends above it.
+    (default nav covers the notch with the opaque bar). (Surfaced as the top
+    inset for all guests today; a full-bleed page needs it.)
+  - `bottom` is per page TYPE (WeChat parity, see "Bottom safe area" above):
+    - tab page → `0`. The shell tabBar extends its background through the bottom
+      inset, and the page content sits above the tabBar — it never borders the
+      bottom unsafe zone.
+    - non-tab page → `device.safeAreaInsets.bottom`. The page is full-bleed to
+      the device bottom; the shell reserves nothing, so the page opts in via its
+      own `env(safe-area-inset-bottom)`. The page type is read from the
+      render-host URL's `isTab` flag, captured in `will-attach-webview`
+      (`guestWc.getURL()` is empty at `did-attach`) and stored per guest so a
+      device-change reapply reuses it.
   - `left`/`right` = `0` (portrait v1).
   This keeps JS `safeArea` (full device insets) and CSS `env()` (what the page
   webview actually borders) each correct for their consumer.

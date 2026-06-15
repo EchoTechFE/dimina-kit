@@ -114,16 +114,23 @@
 }
 
 .device-shell__home-indicator {
-  flex: 0 0 28px;
-  position: relative;
-  background: #f8fafc;
+  /* Absolute overlay pinned to the device bottom — height is set inline from
+     the device bottom inset. It reserves NO layout space (so a non-tab page is
+     full-bleed) and is transparent, so it shows the tabBar's color (tab page)
+     or the page content (non-tab page) behind the pill. */
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  z-index: 200; /* above the page webview (z 100) and the in-flow tabBar */
 }
 
 .device-shell__home-indicator::before {
   content: "";
   position: absolute;
   left: 50%;
-  bottom: 10px;
+  bottom: 8px;
   width: 118px;
   height: 4px;
   transform: translateX(-50%);

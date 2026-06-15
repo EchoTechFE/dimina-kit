@@ -19,8 +19,11 @@ import { createSafeAreaController } from './index.js'
 type AnyFn = (...args: unknown[]) => unknown
 
 /** Minimal emitter-backed WebContents fake (id/once/emit/isDestroyed + the
- *  debugger surface safe-area touches). */
-function makeWc(id: number): WebContents & { emit: (e: string) => void } {
+ *  debugger surface safe-area touches). `sink` captures every `sendCommand`. */
+function makeWc(
+  id: number,
+  sink?: Array<{ method: string; params: unknown }>,
+): WebContents & { emit: (e: string) => void } {
   const listeners: Record<string, Set<AnyFn>> = {}
   let destroyed = false
   const wc = {
@@ -41,11 +44,16 @@ function makeWc(id: number): WebContents & { emit: (e: string) => void } {
     debugger: {
       attach: () => {},
       detach: () => {},
-      sendCommand: () => Promise.resolve({}),
+      sendCommand: (method: string, params: unknown) => {
+        sink?.push({ method, params })
+        return Promise.resolve({})
+      },
     },
   }
   return wc as unknown as WebContents & { emit: (e: string) => void }
 }
+
+const DEVICE = { safeAreaInsets: { top: 47, right: 0, bottom: 34, left: 0 } } as never
 
 describe('createSafeAreaController teardown routing', () => {
   it('routes guest prune through the connection registry; destroy cleans both', () => {
@@ -53,7 +61,7 @@ describe('createSafeAreaController teardown routing', () => {
     const controller = createSafeAreaController({ connections })
     const wc = makeWc(7)
 
-    controller.applyToGuest(wc, null)
+    controller.applyToGuest(wc, null, false)
 
     // The connection was acquired for this guest.
     expect(connections.get(wc.id), 'guest connection must be live before destroy').toBeDefined()
@@ -73,5 +81,45 @@ describe('createSafeAreaController teardown routing', () => {
 
     // dispose() must not throw and must not touch the destroyed guest.
     expect(() => controller.dispose()).not.toThrow()
+  })
+})
+
+describe('createSafeAreaController per-page-type bottom inset', () => {
+  function lastInsets(sink: Array<{ method: string; params: unknown }>) {
+    const call = [...sink].reverse().find((c) => c.method === 'Emulation.setSafeAreaInsetsOverride')
+    return (call?.params as { insets: { top: number; bottom: number; bottomMax: number } }).insets
+  }
+
+  it('a non-tab page gets the real bottom inset (page opts in via env)', () => {
+    const sink: Array<{ method: string; params: unknown }> = []
+    const controller = createSafeAreaController()
+    controller.applyToGuest(makeWc(1, sink), DEVICE, false)
+    const insets = lastInsets(sink)
+    expect(insets.top).toBe(47)
+    expect(insets.bottom).toBe(34)
+    expect(insets.bottomMax).toBe(34)
+  })
+
+  it('a tab page gets bottom 0 (the shell tabBar fills the safe area)', () => {
+    const sink: Array<{ method: string; params: unknown }> = []
+    const controller = createSafeAreaController()
+    controller.applyToGuest(makeWc(2, sink), DEVICE, true)
+    const insets = lastInsets(sink)
+    expect(insets.top).toBe(47)
+    expect(insets.bottom).toBe(0)
+    expect(insets.bottomMax).toBe(0)
+  })
+
+  it('reapplyAll keeps each guest its attached page type', () => {
+    const sinkTab: Array<{ method: string; params: unknown }> = []
+    const sinkPage: Array<{ method: string; params: unknown }> = []
+    const controller = createSafeAreaController()
+    controller.applyToGuest(makeWc(3, sinkTab), DEVICE, true)
+    controller.applyToGuest(makeWc(4, sinkPage), DEVICE, false)
+    sinkTab.length = 0
+    sinkPage.length = 0
+    controller.reapplyAll(DEVICE)
+    expect(lastInsets(sinkTab).bottom).toBe(0)
+    expect(lastInsets(sinkPage).bottom).toBe(34)
   })
 })

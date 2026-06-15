@@ -23,8 +23,6 @@ import { StoragePanel } from './storage-panel'
 const FULL_KEY = 'devtools_demo_001_token'
 const PREFIX = 'devtools_demo_001_'
 
-const okWrite = vi.fn(async () => ({ ok: true as const }))
-
 function makeProps(overrides: Partial<Parameters<typeof StoragePanel>[0]> = {}) {
   return {
     items: [{ key: FULL_KEY, value: 'abc' }],

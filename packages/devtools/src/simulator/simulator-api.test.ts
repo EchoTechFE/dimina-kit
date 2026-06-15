@@ -44,7 +44,7 @@ function makeMockThis(): MiniAppContext {
 
 const DEVICE_INFO_A = {
   statusBarHeight: 44,
-  safeAreaBottom: 34,
+  safeAreaInsets: { top: 44, right: 0, bottom: 34, left: 0 },
   pixelRatio: 3,
   screenWidth: 390,
   screenHeight: 844,

@@ -22,6 +22,9 @@ export interface RenderHostUrlOptions {
   bridgeId: string
   appId: string
   pagePath: string
+  /** Whether this page is a tabBar page. Surfaced on the URL so main can pick
+   *  the bottom safe-area policy at `did-attach-webview` (services/safe-area). */
+  isTab?: boolean
 }
 
 export interface DiminaNativeHostBridge {
@@ -108,6 +111,7 @@ function buildBridge(cfg: NativeHostConfig): DiminaNativeHostBridge {
       url.searchParams.set('bridgeId', opts.bridgeId)
       url.searchParams.set('appId', opts.appId)
       url.searchParams.set('pagePath', opts.pagePath)
+      if (opts.isTab) url.searchParams.set('isTab', '1')
       return url.toString()
     },
     renderPreloadUrl: cfg.renderPreloadUrl,

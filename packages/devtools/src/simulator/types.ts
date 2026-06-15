@@ -13,7 +13,9 @@ export interface DeviceMetrics {
   screenWidth: number
   screenHeight: number
   statusBarHeight: number
-  safeAreaBottom: number
+  /** Per-edge safe-area insets (portrait). Single source of truth for the
+   *  bottom inset — there is no separate `safeAreaBottom` field. */
+  safeAreaInsets: { top: number; right: number; bottom: number; left: number }
 }
 
 /**

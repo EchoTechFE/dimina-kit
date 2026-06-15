@@ -80,7 +80,6 @@ export function useDevice(props: UseDeviceProps): DeviceHookResult {
       screenWidth: d.width,
       screenHeight: d.height,
       statusBarHeight: d.statusBarHeight,
-      safeAreaBottom: d.safeAreaBottom,
       notchType: d.notchType,
       safeAreaInsets: { ...d.safeAreaInsets },
     })

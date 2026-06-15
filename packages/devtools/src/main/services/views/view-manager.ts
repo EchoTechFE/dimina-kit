@@ -1126,11 +1126,19 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     // them with contextIsolation/sandbox off so the render runtime + its preload
     // share the page realm. (A top-level WebContentsView can host these guests; a
     // `<webview>` guest cannot — that's the whole point of Option A.)
+    // Page type (`isTab`) of each attaching guest, captured from its render-host
+    // URL in will-attach (where `params.src` carries the full URL) and consumed
+    // FIFO in the matching did-attach — `guestWc.getURL()` is still empty there.
+    // Per-attach scope: a fresh simWc + handlers are built on every (re)attach.
+    const pendingGuestIsTab: boolean[] = []
     simWc.on('will-attach-webview', (_event, webPreferences, params) => {
       ;(webPreferences as Electron.WebPreferences).partition = partition
       params.partition = partition
       webPreferences.contextIsolation = false
       ;(webPreferences as Electron.WebPreferences).sandbox = false
+      let isTab = false
+      try { isTab = new URL(params.src).searchParams.get('isTab') === '1' } catch { /* keep false */ }
+      pendingGuestIsTab.push(isTab)
     })
     simWc.on('did-attach-webview', (_event, guestWc) => {
       // Scale the nested render-host page with the device zoom. The host WCV is
@@ -1143,8 +1151,13 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
         guestWc.setZoomFactor(currentZoomFactor)
       } catch { /* guest not ready; setNativeSimulatorViewBounds re-applies */ }
       // Simulate this device's CSS env(safe-area-inset-*) on the fresh guest
-      // before it paints, so notch-aware page layout resolves correctly.
-      safeArea.applyToGuest(guestWc, ctx.bridge?.getDevice() ?? null)
+      // before it paints, so notch-aware page layout resolves correctly. The
+      // bottom inset is page-type-dependent (see services/safe-area): a tab
+      // page's content sits above the shell tabBar (bottom 0); a non-tab page
+      // is full-bleed (real bottom inset). The page type was captured from the
+      // render-host URL in will-attach (FIFO).
+      const isTabGuest = pendingGuestIsTab.shift() ?? false
+      safeArea.applyToGuest(guestWc, ctx.bridge?.getDevice() ?? null, isTabGuest)
       guestWc.setWindowOpenHandler(({ url }) => handleWindowOpenExternal(url))
       guestWc.on('will-navigate', (e, url) => {
         try {

@@ -57,7 +57,6 @@ export interface NativeDeviceInfo {
   screenWidth: number
   screenHeight: number
   statusBarHeight: number
-  safeAreaBottom: number
   notchType: NotchType
   safeAreaInsets: SafeAreaInsets
 }

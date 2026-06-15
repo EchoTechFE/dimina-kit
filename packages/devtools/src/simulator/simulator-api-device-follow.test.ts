@@ -54,7 +54,6 @@ const IPHONE_14: NativeDeviceInfo = {
   screenWidth: 390,
   screenHeight: 844,
   statusBarHeight: 47,
-  safeAreaBottom: 34,
   notchType: 'notch',
   safeAreaInsets: { top: 47, right: 0, bottom: 34, left: 0 },
 }
@@ -68,7 +67,6 @@ const PIXEL_7: NativeDeviceInfo = {
   screenWidth: 412,
   screenHeight: 915,
   statusBarHeight: 24,
-  safeAreaBottom: 0,
   notchType: 'none',
   safeAreaInsets: { top: 24, right: 0, bottom: 0, left: 0 },
 }
@@ -82,7 +80,6 @@ const IPHONE_15_PRO: NativeDeviceInfo = {
   screenWidth: 393,
   screenHeight: 852,
   statusBarHeight: 59,
-  safeAreaBottom: 34,
   notchType: 'dynamic-island',
   safeAreaInsets: { top: 59, right: 0, bottom: 34, left: 0 },
 }
@@ -290,8 +287,8 @@ describe('async getSystemInfo — follows DEVICE_CHANGE', () => {
     expect(info.statusBarHeight).toBe(d.statusBarHeight) // 59, today 0
     expect(info.safeArea.top).toBe(d.statusBarHeight)
     expect(info.safeArea.width).toBe(d.screenWidth)
-    expect(info.safeArea.bottom).toBe(d.screenHeight - d.safeAreaBottom) // 818
-    expect(info.safeArea.height).toBe(d.screenHeight - d.safeAreaBottom - d.statusBarHeight) // 759
+    expect(info.safeArea.bottom).toBe(d.screenHeight - d.safeAreaInsets.bottom) // 818
+    expect(info.safeArea.height).toBe(d.screenHeight - d.safeAreaInsets.bottom - d.statusBarHeight) // 759
   })
 })
 
@@ -355,7 +352,7 @@ describe('ROUND 2 — device metrics across dispose() → respawn', () => {
     expect(metrics.screenHeight).toBe(IPHONE_15_PRO.screenHeight) // 852
     expect(metrics.pixelRatio).toBe(IPHONE_15_PRO.pixelRatio)
     expect(metrics.statusBarHeight, 'status bar must follow the new boot device').toBe(IPHONE_15_PRO.statusBarHeight) // 59
-    expect(metrics.safeAreaBottom).toBe(IPHONE_15_PRO.safeAreaBottom)
+    expect(metrics.safeAreaInsets.bottom).toBe(IPHONE_15_PRO.safeAreaInsets.bottom)
 
     // And through the production forwarded-API seam (runApiAsync) too.
     const info = await callForwardedApi(miniApp, 'getSystemInfo')
