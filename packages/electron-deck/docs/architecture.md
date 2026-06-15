@@ -76,6 +76,11 @@
   纯几何的 drop-zone 计算与 descriptor 层（`computeDropZone` / `dropZoneToMutation` /
   `isNoopRedock`）也从本 entry 导出，host 不必深 import。
 - fixed-px `constraints` 让某个 leaf（如 simulator 的设备宽）保真不被权重缩放。
+- **已知限制（M1，follow-up）**：可视分屏比例靠 react-resizable-panels 的 `defaultSize`，它**只在挂载读取**。
+  拖分隔条会经 `onLayoutChanged` 写回 model（view→model），序列化恢复也因 model 在**全新 Group** 上重新
+  seed 而正确；但一次**程序化** `setSizes`（model→view）**不会移动已挂载的分隔条**，直到 remount。devtools
+  不触发此路径（运行时只 `setConstraint` 改 simulator 宽，从不程序化 `setSizes`）。正解见 `dock-view.tsx`
+  `renderSplit` 处的 FOLLOW-UP 注释（持 `Group` ref + 命令式 `setLayout` + 双向 epsilon 抑制写回环）。
 
 ### 0.5.3 与 §1–§5 的关系
 

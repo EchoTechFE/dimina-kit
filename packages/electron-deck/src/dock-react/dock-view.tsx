@@ -317,8 +317,19 @@ function renderSplit(node: SplitNode, ctx: RenderContext): ReactNode {
 			// (committed back via `onLayoutChanged`), and a serialized restore works
 			// because the model is re-seeded into a FRESH Group on remount — but an
 			// imperative resize from code is silently visually ignored until remount.
-			// FOLLOW-UP (not done here): hold the `Group` ref and call its imperative
-			// layout API, suppressing the resulting `onLayoutChanged` write-back loop.
+			// FOLLOW-UP (not done here — deferred after codex review: NO devtools
+			// path triggers this today; the only `setSizes` callers are tests, and
+			// restore is always a fresh-Group remount). A correct fix would: promote
+			// `renderSplit` to a keyed `SplitView` COMPONENT (needs a ref + effect),
+			// hold the rrp `Group` ref, and on an external `node.sizes` change call
+			// its imperative `setLayout` — which takes a panel-ID→percentage MAP (NOT
+			// an array) and must include the fixed-px panels' current % so the total
+			// is 100. Suppress the write-back loop with an IDEMPOTENT epsilon guard on
+			// BOTH sides (skip `setLayout` if `getLayout()` already matches; skip the
+			// `onLayoutChanged` write-back if equivalent to the current model) rather
+			// than a transient flag — `setLayout` itself emits `onLayoutChanged`, and
+			// concurrent updates vs an in-flight pointer drag must read the latest
+			// model revision, not a stale closure.
 			items.push(
 				<Panel key={panelKey(child)} id={child.id} defaultSize={percentageByIndex.get(i)}>
 					{renderNode(child, ctx)}
