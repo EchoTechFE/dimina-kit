@@ -20,13 +20,14 @@ import {
 	type ReactNode,
 } from 'react'
 import { Group, Panel, Separator } from 'react-resizable-panels'
-import type { Layout } from 'react-resizable-panels'
+import type { GroupImperativeHandle, Layout } from 'react-resizable-panels'
 import { closePanel, extractPanel, movePanel, setActive, setSizes, splitPanel } from '../layout/index.js'
 import type {
 	LayoutModel,
 	LayoutNode,
 	LayoutTree,
 	PanelRegistry,
+	SizeConstraint,
 	SplitNode,
 	TabGroupNode,
 } from '../layout/index.js'
@@ -204,9 +205,13 @@ export function DockView(props: DockViewProps): ReactNode {
 	)
 }
 
-/** A split wrapper element augmented with the resize write-back seam. */
+/** A split wrapper element augmented with the resize write-back seam plus the
+ * rrp Group imperative handle (M1 model→view sync). Hosts/tests reach the live
+ * split layout through `__deckGroupApi` the same way they reach the write-back
+ * through `__deckApplyLayout`. */
 type DeckSplitElement = HTMLDivElement & {
 	__deckApplyLayout?: (weights: number[]) => void
+	__deckGroupApi?: GroupImperativeHandle
 }
 
 /** A group wrapper element augmented with the drop-handling seam. Mirrors the
@@ -262,21 +267,193 @@ function renderNode(node: LayoutNode, ctx: RenderContext): ReactNode {
 		: renderGroup(node, ctx)
 }
 
+/** A split is a stateful component (it holds the rrp Group imperative ref + runs
+ * the M1 model→view sync effect), so render it via JSX with a STABLE key so
+ * React preserves that ref / its kept-alive subtree across model emissions
+ * rather than remounting on every snapshot. Mirrors `renderGroup`/`GroupView`. */
 function renderSplit(node: SplitNode, ctx: RenderContext): ReactNode {
+	return <SplitView key={node.id} node={node} ctx={ctx} />
+}
+
+interface SplitViewProps {
+	node: SplitNode
+	ctx: RenderContext
+}
+
+/** Epsilon (in percentage points) within which two split layouts are treated as
+ * equivalent. Guards BOTH sides of the model↔view loop: we skip pushing a
+ * `setLayout` when the live layout already matches the target, and skip the
+ * `onLayoutChanged` write-back when the incoming layout matches the model — so
+ * `setLayout`→`onLayoutChanged`→write-back→re-sync cannot loop. */
+const LAYOUT_EPSILON = 0.5
+
+/** TIGHT tolerance (percentage points) for the BASIS-NORMALIZED flexible-ratio
+ * compare in `handleLayoutChanged`. We normalize the incoming layout's flexible
+ * subset to ratios summing to 100 and compare them against the model's flexible
+ * ratios (`computeFlexiblePercentages`, also summing to 100). If they match
+ * within this tolerance the `onLayoutChanged` is either our own `setLayout` echo
+ * OR a ratio-preserving spontaneous re-measure (mount / fixed-px re-pin /
+ * container resize) — SKIP the write-back. If they differ it is a genuine user
+ * resize (pointer OR keyboard) — WRITE BACK.
+ *
+ * Set to ~0.1pp: large enough to absorb rrp's ~3-decimal float noise on an echo,
+ * yet FAR below a real drag's delta. R1's "sub-0.5%" drag moves a panel ~0.33pp
+ * of the container; normalized over the two-flexible-child subset that is ~0.66pp
+ * of ratio — comfortably above 0.1, so it is NOT mistaken for an echo and is
+ * written back.
+ *
+ * CAVEAT: this is a flexible-RATIO tolerance (the flexible subset normalized to
+ * sum 100), NOT a container-%. It is safe against rrp's 3-decimal echo noise.
+ * In a pathologically WIDE split (~≥10 flexible children) a single arrow-key
+ * nudge (±~5% of the container on one child) can, once normalized over many
+ * flexible siblings, fall BELOW 0.1pp of ratio and be skipped — exotic and
+ * self-healing (the next, larger resize writes back). If that ever matters,
+ * scale the tolerance down by the flexible child count. */
+const FLEX_RATIO_TOLERANCE = 0.1
+
+/** Are two panelId→percentage maps equivalent within `epsilon` percentage
+ * points? Both maps must cover EXACTLY the `ids` key set — a missing key OR an
+ * extra key (a key present in `a`/`b` but absent from `ids`) counts as NOT
+ * equivalent so the sync is not falsely suppressed. A non-finite value
+ * (NaN/±Infinity) is likewise NOT equivalent — `typeof NaN === 'number'` and
+ * `Math.abs(NaN - x) > eps` is `false`, so without the `Number.isFinite` guard a
+ * NaN would slip through as "equivalent" and wrongly suppress a legitimate
+ * sync/write-back (N1). EXPORTED (pure) for direct unit coverage. */
+export function layoutsEquivalent(
+	a: Record<string, number>,
+	b: Record<string, number>,
+	ids: readonly string[],
+	epsilon: number = LAYOUT_EPSILON,
+): boolean {
+	// Exact key-set match: any key in `a` or `b` that is not in `ids` (extra key)
+	// makes the maps non-equivalent. `ids` is the authoritative compared set.
+	const idSet = new Set(ids)
+	for (const k of Object.keys(a)) if (!idSet.has(k)) return false
+	for (const k of Object.keys(b)) if (!idSet.has(k)) return false
+	for (const id of ids) {
+		const av = a[id]
+		const bv = b[id]
+		if (!Number.isFinite(av) || !Number.isFinite(bv)) return false
+		if (Math.abs((av as number) - (bv as number)) > epsilon) return false
+	}
+	return true
+}
+
+/**
+ * Build the panel-ID→PERCENTAGE map for an imperative `setLayout`, given the
+ * model's full-length raw `sizes` (per child) and `constraints`:
+ *
+ *  - FIXED (px-pinned) children keep their CURRENT measured percentage (read
+ *    from the live `getLayout()`); they are NOT derived from weights, so a
+ *    flexible-weights change never disturbs their pixel lock.
+ *  - The REMAINING percentage (100 − Σ fixed%) is distributed across the
+ *    FLEXIBLE children in proportion to their weights.
+ *
+ * Returns `null` when the map can't be built faithfully (e.g. `live` is empty —
+ * jsdom's stub — or a fixed child's live % is missing), so the caller skips the
+ * `setLayout` rather than pushing a corrupt total. The result always sums to
+ * ~100 over all children.
+ */
+function buildSetLayoutMap(
+	childIds: readonly string[],
+	sizes: readonly number[],
+	constraints: readonly (SizeConstraint | null)[] | undefined,
+	live: Record<string, number>,
+): Record<string, number> | null {
+	const isFixedAt = (i: number): boolean => (constraints?.[i] ?? null) !== null
+
+	// Sum the fixed children's CURRENT live percentages (preserve their px lock).
+	let fixedTotal = 0
+	for (let i = 0; i < childIds.length; i++) {
+		if (!isFixedAt(i)) continue
+		const livePct = live[childIds[i]!]
+		// Without a measured live % for a fixed child we cannot preserve its px
+		// lock faithfully — bail so we don't corrupt the fixed child.
+		if (typeof livePct !== 'number') return null
+		fixedTotal += livePct
+	}
+
+	const remaining = Math.max(0, 100 - fixedTotal)
+
+	// Flexible weight pool.
+	let flexWeightTotal = 0
+	for (let i = 0; i < childIds.length; i++) {
+		if (isFixedAt(i)) continue
+		const w = sizes[i] ?? 0
+		flexWeightTotal += w > 0 ? w : 0
+	}
+	const flexibleCount = childIds.length - childIds.filter((_, i) => isFixedAt(i)).length
+
+	const out: Record<string, number> = {}
+	for (let i = 0; i < childIds.length; i++) {
+		const id = childIds[i]!
+		if (isFixedAt(i)) {
+			out[id] = live[id]!
+			continue
+		}
+		if (flexWeightTotal <= 0) {
+			// Degenerate flexible weights → split the remaining space evenly.
+			out[id] = flexibleCount > 0 ? remaining / flexibleCount : remaining
+			continue
+		}
+		const w = sizes[i] ?? 0
+		out[id] = (remaining * (w > 0 ? w : 0)) / flexWeightTotal
+	}
+	return out
+}
+
+/**
+ * Extract an rrp `onLayoutChanged` map's FLEXIBLE subset (skipping fixed-px
+ * children) in child order and NORMALIZE it by its own sum to ratios summing to
+ * ~100 — the basis `computeFlexiblePercentages` already produces for the model,
+ * so the two are directly comparable. Returns the original child `indices`
+ * alongside the `ratios`. Null when the map is malformed (a flexible id is
+ * missing / non-finite) or there is no flexible child — the caller then never
+ * writes back from it.
+ */
+function incomingFlexRatios(
+	childIds: readonly string[],
+	constraints: readonly (SizeConstraint | null)[] | undefined,
+	layout: Record<string, number>,
+): { indices: number[]; ratios: number[] } | null {
+	const indices: number[] = []
+	const raw: number[] = []
+	for (let i = 0; i < childIds.length; i++) {
+		if ((constraints?.[i] ?? null) !== null) continue
+		const v = layout[childIds[i]!]
+		if (typeof v !== 'number' || !Number.isFinite(v)) return null
+		indices.push(i)
+		raw.push(v > 0 ? v : 0)
+	}
+	if (indices.length === 0) return null
+	return { indices, ratios: toPercentages(raw) }
+}
+
+function SplitView(props: SplitViewProps): ReactNode {
+	const { node, ctx } = props
 	const orientation = node.orientation === 'row' ? 'horizontal' : 'vertical'
 
 	// A child is FIXED (px-pinned) iff it carries a non-null constraint. Fixed
 	// children are excluded from the flexible-percentage pool: their px panel does
 	// not participate in weight-based sizing, so polluting `toPercentages` with
-	// their weight would skew the flexible siblings' defaultSize. We therefore
-	// normalize percentages over the FLEXIBLE indices only and map them back by
-	// index; fixed children keep their px defaultSize/min/max.
-	const isFixed = (i: number): boolean => (node.constraints?.[i] ?? null) !== null
+	// their weight would skew the flexible siblings' defaultSize.
+	// `computeFlexiblePercentages` therefore normalizes percentages over the
+	// FLEXIBLE indices only and maps them back by index; fixed children keep their
+	// px defaultSize/min/max. (Both write-back seams derive fixed-ness from
+	// `nodeRef.current.constraints` directly — see `handleLayoutChanged` and
+	// `__deckApplyLayout` — so no render-closure `isFixed` helper is needed here.)
 	const percentageByIndex = computeFlexiblePercentages(node.sizes, node.constraints)
 
-	// Ordered Panel ids — also the keys rrp's `onLayoutChanged` map is keyed by,
-	// so we can convert that map back to ordered weights for the model write-back.
-	const childIds = node.children.map((child) => child.id)
+	// ── M1 model→view sync plumbing ────────────────────────────────────────
+	// The rrp Group's imperative handle (getLayout/setLayout) — the seam through
+	// which the model becomes the source of truth for the visible split ratio.
+	const groupRef = useRef<GroupImperativeHandle | null>(null)
+	// Keep the latest node reachable from the imperative ref + drag callbacks
+	// without re-binding the ref on every render. The sync effect reads the
+	// freshest `node` directly (it re-runs when `node.sizes` change), so it does
+	// not go stale; this ref is for the imperative seams that capture once.
+	const nodeRef = useRef(node)
+	nodeRef.current = node
 
 	const items: ReactNode[] = []
 	node.children.forEach((child, i) => {
@@ -309,27 +486,11 @@ function renderSplit(node: SplitNode, ctx: RenderContext): ReactNode {
 			)
 		}
 		else {
-			// KNOWN LIMITATION (M1): react-resizable-panels consumes `defaultSize`
-			// ONLY at mount. A programmatic post-mount size change — `model.apply(
-			// setSizes(...))` — updates the model + the `data-deck-sizes` mirror but
-			// does NOT move the LIVE splitter: rrp ignores a changed `defaultSize` on
-			// an already-mounted Group. The visible split still follows user drags
-			// (committed back via `onLayoutChanged`), and a serialized restore works
-			// because the model is re-seeded into a FRESH Group on remount — but an
-			// imperative resize from code is silently visually ignored until remount.
-			// FOLLOW-UP (not done here — deferred after codex review: NO devtools
-			// path triggers this today; the only `setSizes` callers are tests, and
-			// restore is always a fresh-Group remount). A correct fix would: promote
-			// `renderSplit` to a keyed `SplitView` COMPONENT (needs a ref + effect),
-			// hold the rrp `Group` ref, and on an external `node.sizes` change call
-			// its imperative `setLayout` — which takes a panel-ID→percentage MAP (NOT
-			// an array) and must include the fixed-px panels' current % so the total
-			// is 100. Suppress the write-back loop with an IDEMPOTENT epsilon guard on
-			// BOTH sides (skip `setLayout` if `getLayout()` already matches; skip the
-			// `onLayoutChanged` write-back if equivalent to the current model) rather
-			// than a transient flag — `setLayout` itself emits `onLayoutChanged`, and
-			// concurrent updates vs an in-flight pointer drag must read the latest
-			// model revision, not a stale closure.
+			// `defaultSize` seeds the FLEXIBLE child at mount; post-mount the model
+			// becomes the source of truth via the imperative `setLayout` driven from
+			// the sync effect below (M1). rrp ignores a changed `defaultSize` on an
+			// already-mounted Group, so the effect — not this prop — moves the live
+			// splitter on a programmatic `setSizes`.
 			items.push(
 				<Panel key={panelKey(child)} id={child.id} defaultSize={percentageByIndex.get(i)}>
 					{renderNode(child, ctx)}
@@ -338,31 +499,46 @@ function renderSplit(node: SplitNode, ctx: RenderContext): ReactNode {
 		}
 	})
 
-	// A real rrp drag commits new per-Panel percentages here; map them back to
-	// ordered weights (in child order) and funnel through the same write-back
-	// seam the `__deckApplyLayout` host hook uses.
+	// A real rrp resize (pointer OR keyboard) — or our own `setLayout` echo / a
+	// spontaneous re-measure — commits new per-Panel percentages here. The SINGLE
+	// discriminator is a BASIS-NORMALIZED flexible-ratio compare (no gate, no echo
+	// token): write back IFF the incoming layout's FLEXIBLE-child ratios differ from
+	// the model's. `incomingFlexRatios` normalizes rrp's CONTAINER-% over the
+	// flexible subset; `computeFlexiblePercentages` already does the same for the
+	// model — so both bases sum to 100 and are directly comparable.
 	const handleLayoutChanged = (layout: Layout): void => {
-		// Build a FULL-LENGTH weights array (setSizes requires length ===
-		// children.length). For FIXED children, preserve the model's existing weight
-		// (node.sizes[i]) — rrp reports a container-derived percentage for the pinned
-		// panel which, if written back, would irreversibly corrupt the stored weight
-		// and lose it when the constraint is later cleared. Only FLEXIBLE children
-		// take their rrp-reported value.
-		const weights: number[] = []
-		for (let i = 0; i < childIds.length; i++) {
-			if (isFixed(i)) {
-				weights.push(node.sizes[i] ?? 1)
-				continue
-			}
-			const w = layout[childIds[i]!]
-			if (typeof w !== 'number') return
-			weights.push(w)
-		}
-		ctx.onApplyLayout(node.id, weights)
+		const cur = nodeRef.current
+		const curChildIds = cur.children.map((c) => c.id)
+		const isFixedAt = (i: number): boolean => (cur.constraints?.[i] ?? null) !== null
+
+		const incoming = incomingFlexRatios(curChildIds, cur.constraints, layout)
+		if (!incoming) return // malformed / no flexible child → never write back
+		const modelPctByIndex = computeFlexiblePercentages(cur.sizes, cur.constraints)
+		const modelNorm = incoming.indices.map((i) => modelPctByIndex.get(i) ?? 0)
+
+		// Equal within a TIGHT tolerance → our own `setLayout` echo OR a
+		// ratio-preserving spontaneous re-measure (mount / fixed-px re-pin / container
+		// resize). SKIP: no model churn, no loop, no R2 corruption. Otherwise it is a
+		// genuine user resize → WRITE BACK.
+		const differs = incoming.ratios.some(
+			(r, k) => Math.abs(r - modelNorm[k]!) > FLEX_RATIO_TOLERANCE,
+		)
+		if (!differs) return
+
+		// FULL-LENGTH weights (setSizes requires length === children.length). FIXED
+		// children keep the model's existing weight — rrp reports a container-derived %
+		// for the pinned panel which, written back, would corrupt the stored weight and
+		// lose it when the constraint is later cleared. FLEXIBLE children take rrp's.
+		const weights = curChildIds.map((id, i) =>
+			isFixedAt(i) ? cur.sizes[i] ?? 1 : layout[id]!,
+		)
+		ctx.onApplyLayout(cur.id, weights)
 	}
 
-	// Ref callback exposing the resize write-back seam on the split element. A
-	// drag round-trip (e2e) and the unit seam both land on the same engine path.
+	// Ref callback exposing the resize write-back seam + the rrp Group imperative
+	// handle on the split element. A drag round-trip (e2e) and the unit seam both
+	// land on the same engine path; the `__deckGroupApi` handle lets hosts/tests
+	// read the LIVE split layout (M1 model→view sync seam).
 	const setSplitRef = (el: DeckSplitElement | null): void => {
 		if (el) {
 			el.__deckApplyLayout = (weights: number[]) => {
@@ -370,11 +546,67 @@ function renderSplit(node: SplitNode, ctx: RenderContext): ReactNode {
 				// overwritten by an incoming (container-derived) value — preserve
 				// node.sizes[i] for fixed indices so clearing the constraint later
 				// restores the original weight. Flexible indices take the supplied value.
-				const next = weights.map((w, i) => (isFixed(i) ? node.sizes[i] ?? 1 : w))
-				ctx.onApplyLayout(node.id, next)
+				// Derive fixed-ness from `nodeRef.current.constraints` (the SAME fresh
+				// node we read sizes from) so this seam has no fresh-sizes/stale-constraints
+				// asymmetry. Mirrors `isFixedAt` in handleLayoutChanged.
+				const cur = nodeRef.current
+				const isFixedAt = (i: number): boolean => (cur.constraints?.[i] ?? null) !== null
+				const next = weights.map((w, i) => (isFixedAt(i) ? cur.sizes[i] ?? 1 : w))
+				ctx.onApplyLayout(cur.id, next)
 			}
+			// Expose the rrp Group imperative handle (getLayout/setLayout) so a host —
+			// and the jsdom `[M1-seam-live]` test — can reach the live split layout.
+			// May be null until the Group mounts its handle; the getter reads the
+			// freshest ref each call.
+			Object.defineProperty(el, '__deckGroupApi', {
+				configurable: true,
+				get: () => groupRef.current ?? undefined,
+			})
 		}
 	}
+
+	// ── M1 model→view sync ─────────────────────────────────────────────────
+	// Push the model's FLEXIBLE weights into the live Group via `setLayout` so the
+	// model is the source of truth for the visible split post-mount (without it rrp
+	// freezes at the mount-time `defaultSize`). Reads the FRESHEST `node` from the
+	// ref so an external `setSizes` syncs against the latest model. Returns true if
+	// a `setLayout` was actually pushed.
+	const runSync = useCallback((): boolean => {
+		const api = groupRef.current
+		if (!api) return false
+		const cur = nodeRef.current
+		const curChildIds = cur.children.map((c) => c.id)
+
+		const live = api.getLayout()
+		// jsdom's stub returns `{}` (no measured geometry) — buildSetLayoutMap then
+		// returns null for any fixed child, and for the all-flexible case the
+		// equivalence check below sees missing live ids and proceeds; but `setLayout`
+		// is a no-op under jsdom anyway. In a real renderer `live` is populated.
+		const targetMap = buildSetLayoutMap(curChildIds, cur.sizes, cur.constraints, live)
+		if (!targetMap) return false
+
+		// SET-side redundant-push skip: don't re-push a layout the live Group already
+		// satisfies. This is the loop break on the SET side — pushing an identical
+		// layout would re-emit `onLayoutChanged`, but its flexible ratios match the
+		// model so the normalized compare in `handleLayoutChanged` skips the write-back
+		// anyway; this skip just avoids the redundant work.
+		if (layoutsEquivalent(live, targetMap, curChildIds)) return false
+
+		api.setLayout(targetMap)
+		return true
+	}, [])
+
+	// Re-run the sync whenever the model's raw weights change (every external
+	// `setSizes`). The model is stable DURING a user drag — the write-back lands on
+	// release — so this effect does not fire mid-drag and never fights the live
+	// pointer snapshot. An external `setSizes` (incl. one after an away-and-back
+	// drag) syncs immediately (R3): there is no drag flag to get stuck.
+	const sizesKey = node.sizes.join(',')
+	useEffect(() => {
+		runSync()
+		// Keyed only on `sizesKey`; `runSync` reads `node`/`childIds`/`constraints`
+		// fresh from the ref, so they cannot go stale relative to `sizesKey`.
+	}, [sizesKey, runSync])
 
 	// The split-level `data-*` attributes ride on an outer wrapper rather than
 	// the Group itself, so hosts/tests can target them regardless of how the
@@ -389,6 +621,7 @@ function renderSplit(node: SplitNode, ctx: RenderContext): ReactNode {
 			style={{ width: '100%', height: '100%' }}
 		>
 			<Group
+				groupRef={groupRef}
 				orientation={orientation}
 				onLayoutChanged={handleLayoutChanged}
 				style={{ width: '100%', height: '100%' }}

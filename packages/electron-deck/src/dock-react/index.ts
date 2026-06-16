@@ -5,7 +5,7 @@
  * `PanelRegistry` (panelId -> descriptor). See `dock-view.test.tsx` for the
  * `data-*` contract.
  */
-export { DockView, computeFlexiblePercentages } from './dock-view.js'
+export { DockView, computeFlexiblePercentages, layoutsEquivalent } from './dock-view.js'
 export type { DockViewProps } from './dock-view.js'
 
 // Pure drag-to-redock geometry + descriptor layer (no react/electron import),
