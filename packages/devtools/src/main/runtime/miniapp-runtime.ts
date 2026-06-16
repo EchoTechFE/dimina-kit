@@ -15,8 +15,10 @@
  *    syntax: under strictFunctionTypes method signatures compare bivariantly,
  *    which would let a wrongly-narrowed implementation or host override slip
  *    past the drift sentinel.
- *  - `workspace.openProject` stays writable (no `readonly`): qdmp gates
- *    project permissions by reassigning it (documented monkey-patch contract).
+ *  - `workspace.openProject` stays writable (no `readonly`) for backward
+ *    compat: hosts MAY still gate permissions by reassigning it. The preferred
+ *    path is now the declarative `WorkbenchAppConfig.onBeforeOpenProject` hook
+ *    (runs before any side effect, throw to veto) — see host-migration.md §7.
  *
  * `asMiniappRuntime(ctx)` is an identity return — the contract is a typed
  * VIEW onto the live context, not a snapshot/projection. That is what makes

@@ -101,6 +101,14 @@ export interface WorkbenchWindowConfig {
   height?: number
   minWidth?: number
   minHeight?: number
+  /**
+   * Auto-show the main window on `ready-to-show`. Defaults to `true`. Set
+   * `false` when the host gates the window behind its own startup flow (e.g. a
+   * login screen) and wants to call `mainWindow.show()` itself once ready —
+   * avoids an un-authed window flashing on screen. Does not affect the test
+   * environment, which always uses `showInactive()` (e2e depends on it).
+   */
+  autoShow?: boolean
 }
 
 // ── Update Checker ──────────────────────────────────────────────────────
@@ -211,6 +219,15 @@ export interface WorkbenchAppConfig extends WorkbenchConfig {
   onSetup?: (instance: WorkbenchHostInstance) => void | Promise<void>
   /** Called before window close when a session is active. Session disposal happens automatically after this hook. */
   onBeforeClose?: (instance: WorkbenchHostInstance) => void | Promise<void>
+  /**
+   * Called before a project is opened, BEFORE any side effect (session
+   * teardown, compile, dev-server). Use to gate the open on login/permission
+   * state. THROW to veto: `openProject` then resolves `{ success: false,
+   * error }`, leaves any currently-active session untouched, and never spins
+   * up the adapter. Resolve normally (or omit) to allow the open. The
+   * declarative alternative to monkey-patching `workspace.openProject`.
+   */
+  onBeforeOpenProject?: (projectPath: string) => void | Promise<void>
   /** Custom update checker. If provided, enables the check-for-updates feature. */
   updateChecker?: UpdateChecker
   /** Extra options applied when an updateChecker is provided. */

@@ -9,6 +9,7 @@ import type { SimulatorApiHandler } from '../services/simulator/custom-apis.js'
 import { rendererDir as defaultRendererDir, defaultPreloadPath } from '../utils/paths.js'
 import { installThemeBackgroundSync } from '../utils/theme.js'
 import { createMainWindow, wireMainWindowEvents } from '../windows/main-window/index.js'
+import { isAppQuitting } from './lifecycle.js'
 // eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
 import { createWorkbenchContext, type WorkbenchContext } from '../services/workbench-context.js'
 import { loadWorkbenchSettings, applyTheme } from '../services/settings/index.js'
@@ -167,6 +168,7 @@ function createConfiguredMainWindow(config: WorkbenchAppConfig, rendererDir: str
     height: config.window?.height,
     minWidth: config.window?.minWidth,
     minHeight: config.window?.minHeight,
+    autoShow: config.window?.autoShow,
   })
 
   // Set window/taskbar icon if provided (Linux/Windows; macOS uses app bundle icon)
@@ -202,6 +204,7 @@ function createContext(config: WorkbenchAppConfig, mainWindow: BrowserWindow, re
       // eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
       | import('../services/workbench-context.js').WorkbenchContext['customCreateProjectDialog']
       | undefined,
+    onBeforeOpenProject: config.onBeforeOpenProject,
   })
 }
 
@@ -278,6 +281,13 @@ function wireAppWindowEvents(config: WorkbenchAppConfig, instance: WorkbenchAppI
     context,
     onResize: () => context.views.repositionAll(),
     onClose: async (e) => {
+      // A real application quit (⌘Q / menu "Quit" / app.quit()) fires
+      // `before-quit` first, then this window's `close`. Let it through so the
+      // app actually exits — do NOT convert it into "close the project".
+      // Without this, `hasActiveSession()` would be true and the quit gets
+      // swallowed into closeProject(), so the app can never be quit while a
+      // project is open.
+      if (isAppQuitting()) return
       if (!context.workspace.hasActiveSession()) return
 
       // Close button while a project session is open: stay in the workbench

@@ -102,12 +102,71 @@ onSetup(instance) {
 ```
 
 - 契约覆盖：`workspace`（含 `openProject`/`getSession` 等）、`views.hostToolbar`（含 `onReady`）、`notify.projectStatus`、`registry.add`、`openSettings`；语义化版本承诺：加字段 = minor，移除/收窄 = major；
-- `workspace.openProject` 保持可写自有属性——宿主对它的包装（如权限门控）不受影响；
+- `workspace.openProject` 仍保持可写自有属性（旧的 monkey-patch 权限门控不会被破坏），但权限门控**推荐改用声明式 `onBeforeOpenProject`**（见下方「新能力 §7」）——不必再重写方法引用；
 - `getSession().appInfo` 已结构化且类型已兑现：`MiniappSessionAppInfo`（`appId: string` 必有——`openProject` 在适配器边界强制；`name?/path?/appName?` 可选），无需再 cast；
 - `registry.add` 接受两种 disposal 习语：`{ dispose() }` 对象（`onMessage`/`onReady` 的返回值可直接注册）或裸 `() => void`，与运行时一致——`registry.add(() => sub.dispose())` 包装可删；
 - `openSettings(): Promise<void>` 打开（或复用聚焦）独立设置窗口——取代旧的「把 `windows` 透传给 `openSettingsWindow`」（该透传从未能通过类型检查）。
 
 宿主 `menuBuilder` 收到的 `MenuContext` 同步改为手写窄契约：`appName` + workspace 窄集（`hasActiveSession`/`getProjectPath`/`openProject`/`closeProject`/`getSession`）+ `openSettings` + `notify.{projectStatus, windowNavigateBack}`。透传整个 ctx 的宿主不受影响（结构子类型仍可赋值）；此前经 `Omit` 投影可达的内部管线字段（`adapter`/`windows`/`bridge`/`connections`/`storageApi`/…）不再在菜单面上。
+
+### 6. ⌘Q 退出不再被活动会话吞掉 —— 框架内部修复，宿主无需改代码
+
+此前：主窗口 `close` 事件的处理器只要 `hasActiveSession()` 为真就无条件 `preventDefault()`，把关闭转成「关项目、留 workbench」。它**不区分**「用户点红绿灯关窗」与「用户按 ⌘Q / 菜单退出整个应用」——于是开着项目时 ⌘Q 退不掉应用，只关掉了项目。
+
+现在：框架在 `before-quit` 置一个进程级退出标志（`isAppQuitting()`），主窗口 onClose 先读它——**真正的应用退出（⌘Q / 菜单 Quit / `app.quit()`）一律放行**，窗口照常关闭、应用正常退出；只有「会话活跃时的普通关窗」才仍留在 workbench。`before-quit` 在每个窗口 `close` 之前触发，标志一定先就位。
+
+宿主侧影响：
+
+- 无需任何代码改动即获得正确的 ⌘Q 行为。
+- 如果你的 e2e 收尾里有「必须先 `project:close` 再 `electronApp.close()`，否则 worker 永挂」这类祖传 workaround（针对裸 close 被吞的旧行为），**可以重新评估能否简化为直接 close**——请在你自己的 e2e 上验证后再删，本仓库未代你验证你的收尾时序。
+
+### 7. `onBeforeOpenProject` 权限门控 hook —— 删掉对 `workspace.openProject` 的 monkey-patch
+
+此前：框架没有「打开项目前」的声明式 hook，宿主要做登录态 / 权限校验只能重写 `ctx.workspace.openProject` 方法引用（文档曾把这条 monkey-patch 写成契约）。重写方法引用是脆弱的——上游若新增不走该引用的打开入口，门控会静默失效。
+
+现在：`WorkbenchAppConfig` 新增声明式 hook：
+
+```ts
+launch({
+  onBeforeOpenProject: async (projectPath) => {
+    if (!(await hasPermission(projectPath))) {
+      throw new Error('请先登录') // 抛错即否决本次打开
+    }
+  },
+})
+```
+
+语义保证（已被单测钉死）：
+
+- hook 在 `openProject` 的**任何副作用之前**运行——抢在 referer 重置 / 旧会话 `disposeSession()` / 编译·dev-server 启动之前；
+- hook **抛错 = 否决**：`openProject` 返回 `{ success: false, error }`（`error` 为 hook 抛出的 message），**当前活动会话保持原样不被拆**，适配器**不会**被调用（无权限旁路）；
+- hook 正常 resolve 或省略 = 放行，行为不变；
+- 覆盖全部三个打开入口（IPC / 菜单 / 内部直调）——它们都汇聚到同一个 `openProject`。
+
+宿主侧可删除整段重写 `openProject` 闭包的 monkey-patch，改为传 `onBeforeOpenProject`。`openProject` 仍是可写属性，旧 monkey-patch 不会被破坏，可平滑迁移。
+
+### 8. `window.autoShow` 开关 —— 删掉 `removeAllListeners('ready-to-show')`
+
+此前：框架在主窗口 `ready-to-show` 上硬挂自动 `show()`，没有开关。要先过登录门再显示窗口的宿主，只能在 `onSetup` 里 `instance.mainWindow.removeAllListeners('ready-to-show')` 再自己重挂——霰弹枪式，会连带干掉框架将来挂在同一事件上的其它逻辑，宿主无从知情。
+
+现在：`WorkbenchAppConfig.window` 新增 `autoShow?: boolean`（默认 `true`）：
+
+```ts
+launch({
+  window: { autoShow: false }, // 框架不自动 show；宿主自己在登录通过后 show
+  onSetup(instance) {
+    afterLoginGate(() => instance.mainWindow.show())
+  },
+})
+```
+
+语义：
+
+- `autoShow: false` 时，非 test 环境的 `ready-to-show` **不再** `show()`——窗口创建即隐藏（`show: false`），由宿主决定何时显示，不会闪现未鉴权窗口；
+- 省略或 `true` 时行为不变（非 test → `show()`）；
+- **不影响 test 环境**：`NODE_ENV==='test'` 仍走 `showInactive()`（e2e 依赖），`autoShow` 不会压制它。
+
+宿主侧可删除 `removeAllListeners('ready-to-show')`，以及为「隐藏窗口里 rAF 轮询 stall」而改用的 `evaluate` 死循环轮询（窗口按宿主自己的节奏 show 后，常规 `waitForFunction` 即可）。
 
 ## CI / 发布
 
