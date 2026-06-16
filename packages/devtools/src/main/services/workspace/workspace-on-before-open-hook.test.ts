@@ -148,6 +148,25 @@ describe('workspace-service: onBeforeOpenProject permission hook', () => {
     ).not.toHaveBeenCalled()
   })
 
+  it('a THROWING hook surfaces the veto to the status bar (symmetry with validateProjectDir rejection)', async () => {
+    const onBeforeOpenProject = vi.fn(async () => {
+      throw new Error('permission denied: please log in first')
+    })
+    const { ctx } = makeHarness({ onBeforeOpenProject })
+    const workspace = createWorkspaceService(ctx)
+
+    const result = await workspace.openProject('/tmp/secret')
+
+    expect(result.success).toBe(false)
+    // A host veto must reach the user the same way validateProjectDir rejection
+    // does: an error status bar carrying the thrown Error's message. Otherwise
+    // the open silently fails with no UI feedback.
+    expect(
+      ctx.notify.projectStatus,
+      'a vetoed open must emit an error projectStatus so the status bar tells the user why',
+    ).toHaveBeenCalledWith({ status: 'error', message: 'permission denied: please log in first' })
+  })
+
   it('a THROWING hook does NOT dispose the currently-active session (denial has zero side effects)', async () => {
     // First, establish an active session with a permissive hook.
     let deny = false

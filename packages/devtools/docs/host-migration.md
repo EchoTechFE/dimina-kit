@@ -140,10 +140,11 @@ launch({
 
 - hook 在 `openProject` 的**任何副作用之前**运行——抢在 referer 重置 / 旧会话 `disposeSession()` / 编译·dev-server 启动之前；
 - hook **抛错 = 否决**：`openProject` 返回 `{ success: false, error }`（`error` 为 hook 抛出的 message），**当前活动会话保持原样不被拆**，适配器**不会**被调用（无权限旁路）；
+- **veto 时框架自动把 error 透到状态条**：与框架自身的 `validateProjectDir` 拒绝路径对称，框架在否决路径上会 `notify.projectStatus({ status: 'error', message })`（`message` 为 hook 抛出的 message）。所以宿主**无需**再为「显示被拒原因」反手摸 `asMiniappRuntime(getHostInstance().context).notify` —— 状态条由框架兜底，宿主只在需要时叠加更丰富的 UX（如 `dialog.showErrorBox`，它是无窗 Electron 全局 API，本就不依赖框架）；
 - hook 正常 resolve 或省略 = 放行，行为不变；
 - 覆盖全部三个打开入口（IPC / 菜单 / 内部直调）——它们都汇聚到同一个 `openProject`。
 
-宿主侧可删除整段重写 `openProject` 闭包的 monkey-patch，改为传 `onBeforeOpenProject`。`openProject` 仍是可写属性，旧 monkey-patch 不会被破坏，可平滑迁移。
+宿主侧可删除整段重写 `openProject` 闭包的 monkey-patch，改为传 `onBeforeOpenProject`，并删掉门控里为发错误状态条而抓 `getHostInstance().context` 的那段。`openProject` 仍是可写属性，旧 monkey-patch 不会被破坏，可平滑迁移。
 
 ### 8. `window.autoShow` 开关 —— 删掉 `removeAllListeners('ready-to-show')`
 
@@ -160,13 +161,36 @@ launch({
 })
 ```
 
-语义：
+语义（可见性由 `autoShow` 在 test / 非 test **两个**环境统一决定；环境只决定**怎么**显示，不决定**要不要**显示）：
 
-- `autoShow: false` 时，非 test 环境的 `ready-to-show` **不再** `show()`——窗口创建即隐藏（`show: false`），由宿主决定何时显示，不会闪现未鉴权窗口；
-- 省略或 `true` 时行为不变（非 test → `show()`）；
-- **不影响 test 环境**：`NODE_ENV==='test'` 仍走 `showInactive()`（e2e 依赖），`autoShow` 不会压制它。
+- `autoShow: false` 时，`ready-to-show` **既不 `show()` 也不 `showInactive()`**——窗口创建即隐藏（`show: false`），由宿主决定何时显示，**test 环境同样如此**，框架不会强制显示未鉴权窗口；
+- 省略或 `true` 时显示窗口，环境只挑显示方式：非 test → `show()`，test → `showInactive()`（e2e 避免抢焦点）；
+- 之前 test 环境无视 `autoShow` 一律 `showInactive()` 的行为已移除——它会与宿主自己的 reveal 处理器并存抢同一个 `ready-to-show` 事件，逼宿主写防御性 re-hide。现在宿主在 test 下也独占 reveal。
 
-宿主侧可删除 `removeAllListeners('ready-to-show')`，以及为「隐藏窗口里 rAF 轮询 stall」而改用的 `evaluate` 死循环轮询（窗口按宿主自己的节奏 show 后，常规 `waitForFunction` 即可）。
+宿主侧可删除 `removeAllListeners('ready-to-show')`、为「隐藏窗口里 rAF 轮询 stall」而改用的 `evaluate` 死循环轮询，以及**为对抗框架 test 强制 show 而写的防御性 `on('show', hide)` re-hide**（窗口按宿主自己的节奏 show 后，常规 `waitForFunction` 即可）。
+
+### 9. e2e 识别主窗口 —— 用 `window.devtools` 标识，别用 `firstWindow()` / URL / title
+
+此前：宿主写 Playwright e2e 时只能用 `electronApp.firstWindow()` 或 `url().endsWith('index.html')` 选主窗口。两者都脆：host-toolbar 是 `WebContentsView`，Playwright `_electron` 把每个 webContents 都暴露成 page，host-toolbar 也算一个 "window"；`firstWindow()` 依赖创建顺序（`autoShow:false` 改时序后会抢到 host-toolbar），URL 后缀依赖 renderer 入口路径，title 又会被 `appName` / `brandingProvider` 改写。
+
+现在：把框架**已注入**的 `window.devtools`（主窗口 preload 暴露的 IPC bridge，见 `preload/windows/main.ts`）定为稳定选择契约——它是**主窗口独有**的(host-toolbar 暴露的是 `window.diminaHostToolbar`)，且与展示名解耦、抗时序、抗 WCV 增多。e2e 选主窗口:
+
+```ts
+async function findMainWindow(electronApp: ElectronApplication, timeout = 30_000): Promise<Page> {
+  const deadline = Date.now() + timeout
+  for (;;) {
+    for (const p of electronApp.windows()) {
+      // 主窗口独有的 IPC bridge；host-toolbar 没有它。
+      const isMain = await p.evaluate(() => Boolean((window as any).devtools?.ipc)).catch(() => false)
+      if (isMain) return p
+    }
+    if (Date.now() > deadline) throw new Error('main workbench window not found within timeout')
+    await new Promise((r) => setTimeout(r, 100))
+  }
+}
+```
+
+框架不导出该 helper（避免把 Playwright 依赖拖进运行时包），但 `window.devtools` 的存在性是稳定契约，宿主据此自维护一份即可，无需再赌 `firstWindow()` 或匹配 URL/title。
 
 ## CI / 发布
 

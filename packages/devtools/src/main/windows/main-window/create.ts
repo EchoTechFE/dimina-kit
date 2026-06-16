@@ -39,20 +39,22 @@ export function createMainWindow(opts: WindowOptions): BrowserWindow {
   })
 
   mainWindow.once('ready-to-show', () => {
-    if (process.env.NODE_ENV === 'test') {
-      mainWindow.showInactive()
-    } else {
-      // A login-gating host opts out via `autoShow: false` and shows the
-      // window itself once auth passes — don't flash an un-authed window.
-      if (opts.autoShow !== false) {
-        mainWindow.show()
-      }
-      // Don't auto-open a detached DevTools for the devtools UI shell itself —
-      // it's noise for normal use (the mini-app's Console lives in the embedded
-      // right-panel DevTools, not here). Opt in via env for debugging the shell.
-      if (!app.isPackaged && process.env.DIMINA_DEVTOOLS_MAIN_INSPECTOR === '1') {
-        mainWindow.webContents.openDevTools({ mode: 'detach' })
-      }
+    const isTest = process.env.NODE_ENV === 'test'
+    // Visibility is governed by `autoShow` in BOTH envs. A login-gating host
+    // opts out via `autoShow: false` and reveals the window itself once auth
+    // passes — don't flash an un-authed window. The env only chooses HOW to
+    // show: test uses showInactive() so e2e windows don't steal focus, prod
+    // uses show(). The framework must never force-show when the host opted
+    // out, in test env either (that would fight the host's own reveal handler).
+    if (opts.autoShow !== false) {
+      if (isTest) mainWindow.showInactive()
+      else mainWindow.show()
+    }
+    // Don't auto-open a detached DevTools for the devtools UI shell itself —
+    // it's noise for normal use (the mini-app's Console lives in the embedded
+    // right-panel DevTools, not here). Opt in via env for debugging the shell.
+    if (!isTest && !app.isPackaged && process.env.DIMINA_DEVTOOLS_MAIN_INSPECTOR === '1') {
+      mainWindow.webContents.openDevTools({ mode: 'detach' })
     }
   })
 

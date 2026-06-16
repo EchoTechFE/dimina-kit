@@ -7,11 +7,17 @@
  *
  * Contract:
  *  - `WindowOptions.autoShow?: boolean` (default treated as `true`).
+ *  - Visibility is decided by autoShow in BOTH envs; env only decides HOW the
+ *    window is revealed (production → `show()`, test → `showInactive()` to
+ *    avoid stealing focus during e2e).
  *  - Non-test env (`NODE_ENV !== 'test'`): when `autoShow === false`, the
  *    `ready-to-show` handler must NOT call `mainWindow.show()`.
- *  - `autoShow` omitted or `true`: original behaviour (non-test → show()).
- *  - test env (`NODE_ENV === 'test'`): `showInactive()` is used regardless of
- *    autoShow (e2e depends on it) — autoShow must not suppress it.
+ *  - test env (`NODE_ENV === 'test'`): when `autoShow === false`, the handler
+ *    must call NEITHER `show()` NOR `showInactive()` — a login-gated host owns
+ *    the reveal even under test; the framework must not force an un-authed
+ *    window visible.
+ *  - `autoShow` omitted or `true`: window is revealed (non-test → `show()`,
+ *    test → `showInactive()`).
  *
  * Bug guarded against: framework ignores autoShow and shows the window on
  * ready-to-show, so the login-gate host gets a visible un-authed window flash.
@@ -120,19 +126,35 @@ describe('createMainWindow autoShow switch (non-test env)', () => {
   })
 })
 
-describe('createMainWindow autoShow does not affect test env', () => {
+describe('createMainWindow autoShow is honoured in test env (env only selects show vs showInactive)', () => {
   beforeEach(() => {
     process.env.NODE_ENV = 'test'
   })
 
-  it('test env uses showInactive() even when autoShow:false (e2e depends on it)', () => {
+  it('test env + autoShow:false → calls NEITHER show() NOR showInactive()', () => {
     const win = createMainWindow({ indexHtml: '/fake/index.html', autoShow: false })
     fireReadyToShow()
     expect(
       vi.mocked(win.showInactive),
-      'test-env showInactive is required by e2e and must be unaffected by autoShow',
+      'a login-gated host owns the reveal under test too — the framework must not force an un-authed window visible',
+    ).not.toHaveBeenCalled()
+    expect(vi.mocked(win.show)).not.toHaveBeenCalled()
+  })
+
+  it('test env + autoShow omitted → calls showInactive() once, never show()', () => {
+    const win = createMainWindow({ indexHtml: '/fake/index.html' })
+    fireReadyToShow()
+    expect(
+      vi.mocked(win.showInactive),
+      'test env reveals via showInactive (avoids stealing focus during e2e)',
     ).toHaveBeenCalledTimes(1)
-    // And the production show() path is never used in test env.
+    expect(vi.mocked(win.show)).not.toHaveBeenCalled()
+  })
+
+  it('test env + autoShow:true → calls showInactive() once, never show()', () => {
+    const win = createMainWindow({ indexHtml: '/fake/index.html', autoShow: true })
+    fireReadyToShow()
+    expect(vi.mocked(win.showInactive)).toHaveBeenCalledTimes(1)
     expect(vi.mocked(win.show)).not.toHaveBeenCalled()
   })
 })
