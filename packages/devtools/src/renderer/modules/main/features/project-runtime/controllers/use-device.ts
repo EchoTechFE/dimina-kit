@@ -35,8 +35,9 @@ export interface DeviceHookResult {
    *     (alignment=right). Dragging left widens the column — the delta
    *     sign must be inverted.
    *
-   * Defaults to `trailing` for backward compatibility with call sites
-   * that haven't switched to the FrameTree renderer yet.
+   * Defaults to `trailing`. (The dock layout resizes via
+   * react-resizable-panels, so this manual splitter handler is retained on the
+   * controller for embedders but is no longer wired into the project window.)
    */
   handleSplitterDrag: (e: React.MouseEvent, side?: 'leading' | 'trailing') => void
   sendDeviceInfo: (device: DeviceType) => void

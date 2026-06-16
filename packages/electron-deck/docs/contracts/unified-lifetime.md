@@ -1,7 +1,11 @@
 # 统一生命周期 / 信任地基契约（B-foundation）
 
-> 状态：**设计契约（待建）**。本文只读现有实现 + 钉死数据结构 / Scope 树形状 /
-> 收敛方案，**不改 `src`**。
+> 状态：**✅ 主体 as-built（Scope 树 / windowScope / wcScope / 同步 trust 撤销 / grant 已实现于 main，见 architecture.md §5）；下文为设计契约原文**。本文只读现有实现 + 钉死数据结构 / Scope 树形状 /
+> 收敛方案。
+>
+> ⚠️ **唯一仍未做的部分**：P3「Connection 适配器化」——`Connection`（connection.ts）至今仍持有
+> **独立的 `DisposableRegistry`**，尚未改写成 wcScope 的适配器。下文凡描述「Connection = wcScope 适配器 /
+> Connection 寿命由 wcScope 级联」的段落是**设计目标，非现状**，引用前请核对 connection.ts。
 >
 > 性质（codex 第 3 轮裁决）：这是建一切壳（ViewHandle / capability grant / B3 tab
 > 保活）的**第一块地基**，必须**先于** C（compositor-and-teardown）与 D

@@ -16,6 +16,11 @@ import { registerAppLifecycle } from '../app/lifecycle.js'
  * backend is present), so `assemble` ignores the framework `runtime` and builds
  * the real devtools main window itself. Trust/frame unification and surfacing
  * the runtime facade are deferred (see framework-extraction-v2.md §7).
+ *
+ * NOT migrating onto deck's high-level host API (Window facade / runtime.view /
+ * DeckSession / grants) is a DELIBERATE, reviewed decision — not a backlog item.
+ * The ROI matrix (every candidate NO-GO) + revisit conditions live in
+ * docs/deck-adoption-decision.md. Read it before re-proposing such a migration.
  */
 export function createDevtoolsBackend(config: WorkbenchAppConfig = {}): RuntimeBackend {
   // Hoisted so `onShutdown` can reach the assembled context (assigned by `assemble`).
@@ -27,9 +32,11 @@ export function createDevtoolsBackend(config: WorkbenchAppConfig = {}): RuntimeB
     // NOTE: `ownsWindows` is NOT structurally required — the framework's
     // `mainWindowWebPreferences()` + `onMainWindowCreated()` hooks can supply both,
     // and the project close→back lifecycle maps onto the Window facade's
-    // `onClose`/`newSession` (probe-validated). Retained for now; migrating to
-    // `runtime.windows.main` is the documented next step. (The `persist:simulator`
-    // partition is a fixed session used by child WCVs, not main-window state.)
+    // `onClose`/`newSession` (probe-validated). It is RETAINED BY DECISION, not
+    // inertia: migrating to `runtime.windows.main` buys no user value at high
+    // regression cost (see docs/deck-adoption-decision.md, F1). (The
+    // `persist:simulator` partition is a fixed session used by child WCVs, not
+    // main-window state.)
     ownsWindows: true,
     // Pre-ready: app name / CDP port / CSP / privileged scheme — must run before
     // the framework awaits app.whenReady().

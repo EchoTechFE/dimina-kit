@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { COPY_FEEDBACK_TIMEOUT_MS } from '@/shared/constants'
 import {
   getBranding,
@@ -12,12 +12,30 @@ import { useProjectRuntimeController } from './controllers/use-project-runtime-c
 import { useLayoutStore } from './controllers/use-layout-store'
 import { ProjectToolbar } from './components/project-toolbar'
 import { SimulatorPanel } from './components/simulator-panel'
-import { BottomDebugPanel } from '../bottom-debug-panel/bottom-debug-panel'
+import { DebugTabContent } from '../bottom-debug-panel/bottom-debug-panel'
+import type { BottomDebugPanelProps, DebugTabContentId } from '../bottom-debug-panel/bottom-debug-panel'
 import { MonacoEditor } from '../monaco-editor'
-import { compileProjectWindowLayout } from './layout/compile'
-import { FrameTree } from './layout/frame-tree'
-import { useViewAnchor } from '@dimina-kit/view-anchor'
-import type { CellId } from './layout/types'
+import { useViewAnchor, createPlacementAnchor } from '@dimina-kit/view-anchor'
+import type { Placement, PlacementAnchorHandle } from '@dimina-kit/view-anchor'
+import { DockView } from '@dimina-kit/electron-deck/dock-react'
+import { serializeLayout, setConstraint } from '@dimina-kit/electron-deck/layout'
+import type { LayoutNode } from '@dimina-kit/electron-deck/layout'
+import {
+  buildDockModel,
+  buildDockRegistry,
+} from './layout/dock-layout'
+
+// The seven dock panels after splitting the coarse `debug` into five fine ones.
+// `simulator` and `console` are native overlays; the rest are DOM panels.
+const DOCK_PANEL_IDS = new Set([
+  'simulator',
+  'editor',
+  'wxml',
+  'appdata',
+  'storage',
+  'console',
+  'compile',
+])
 
 interface ProjectRuntimeProps {
   project: Project
@@ -26,14 +44,13 @@ interface ProjectRuntimeProps {
 /**
  * The project window's main content area.
  *
- * Layout is fully described by `compileProjectWindowLayout(layoutState)` —
- * a pure function from the persisted `LayoutState` (visibility flags +
- * `devtoolsPosition` + `simulatorAlignment`) to a Frame tree + cells
- * registry. `FrameTree` is the recursive renderer; `useViewAnchor`
- * (see `@dimina-kit/view-anchor`) syncs the DevTools overlay's bounds with the
- * main process. Together they
- * replaced the previous ad-hoc `LayoutTree` branching (see the
- * `layout/` directory for the design rationale).
+ * Layout is the layout-engine `<DockView>`, owned entirely by the
+ * `<DockableLayout>` child below: simulator (native WCV) + editor (in-renderer
+ * Monaco) + the five debug panels (wxml/appdata/storage/console/compile, with
+ * console a native overlay). The dock tree is persisted opaquely via the layout
+ * store; `dock-layout.ts` seeds the default arrangement on a fresh install. All
+ * native-overlay bounds-sync (simulator + console) lives inside `DockableLayout`
+ * via `createPlacementAnchor`; the editor is a plain React child with no anchor.
  */
 export function ProjectRuntime({ project }: ProjectRuntimeProps) {
   const copyTimerRef = useRef<number | null>(null)
@@ -44,37 +61,6 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
 
   const layout = useLayoutStore()
   const { state: layoutState } = layout
-
-  // Compile layout state into a Frame tree. `compile` is cheap and pure;
-  // memoizing on the 5 layout-state fields is enough.
-  // `useLayoutStore` returns a fresh `state` object reference on every
-  // change, so depending on the object alone re-compiles whenever any field
-  // moves — no need to enumerate individual fields (and enumerating them
-  // alongside the object trips react-hooks/exhaustive-deps).
-  const compiled = useMemo(
-    () => compileProjectWindowLayout(layoutState),
-    [layoutState],
-  )
-
-  // Bounds-sync bindings. Both main-process overlays anchored to renderer DOM
-  // go through the SAME `useViewAnchor` (see `@dimina-kit/view-anchor`):
-  //   - The Chromium DevTools view (debug cell) is anchored HERE, to its
-  //     placeholder DOM, because its `present` is "the debug cell is in the
-  //     compiled layout" — a decision this component owns. deps = topology
-  //     signature + project switch + the active debug tab (Console's
-  //     display:flex|none changes the placeholder's visible rect without
-  //     changing frame topology — the ResizeObserver can't see it).
-  //   - The simulator WebContentsView is anchored INSIDE `SimulatorPanel`, to
-  //     its placeholder's own rect (default path — no measure redirect). It's
-  //     always present while mounted; FrameTree unmounts the panel to hide it,
-  //     and the hook's teardown collapses the WCV.
-  // The in-renderer Monaco editor is a plain React child (no native overlay),
-  // so it has no anchor.
-  const devtoolsAnchorRef = useViewAnchor({
-    present: compiled.cells.debug.present,
-    publish: publishSimulatorDevtoolsBounds,
-    deps: [compiled.signature, project.path, rightPane.rightPane.selected],
-  })
 
   // Host-controllable toolbar WCV (sits above ProjectToolbar). Dynamic-height
   // loop: the toolbar WCV's own renderer advertises its intrinsic content
@@ -152,69 +138,83 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
     }
   }
 
-  // ── Cell nodes — the actual content for each business panel ─────────
-  //
-  // - `simulator`: SimulatorPanel renders the device-shell bezel; the
-  //   simulator itself is a main-process WebContentsView painted over it.
-  //
-  // - `editor`: In-renderer Monaco component. It is a normal React child,
-  //   not an overlay placeholder, and has no bounds binding.
-  //
-  // - `debug`: BottomDebugPanel forwards its outer ref to the inner
-  //   `[data-area="simulator-devtools"]` placeholder, which is where
-  //   the IPC target lives. Hand the debug bounds ref through.
-  const cellNodes: Record<CellId, ReactNode> = {
-    simulator: (
-      <SimulatorPanel
-        device={device.device}
-        zoom={device.zoom}
-        onDeviceChange={device.handleDeviceChange}
-        onZoomChange={device.handleZoomChange}
-        compileStatus={session.compileStatus}
-        currentPage={simulator.currentPage}
-        copied={copied}
-        onCopyPagePath={copyPagePath}
-      />
-    ),
-    // In-renderer Monaco editor — replaces the OpenSumi WebContentsView
-    // overlay. Plain React component occupying the editor cell; reads/writes
-    // the active project's files via the sandboxed `project:fs:*` IPC.
-    // `ready` gates the editor's `project:fs:listFiles` load on the main
-    // process having registered the active project. `openProject` clears the
-    // main-side path first and sets it only once the compile finishes (the
-    // same point it reports `ready`), so loading the file tree before then
-    // throws `ENOACTIVE` on every poll. Threading the compile status skips
-    // that window instead of retrying through the error.
-    editor: (
-      <MonacoEditor
-        projectPath={project.path}
-        ready={session.compileStatus.status === 'ready'}
-      />
-    ),
-    debug: (
-      <BottomDebugPanel
-        ref={devtoolsAnchorRef}
-        rightPane={rightPane.rightPane}
-        onSelectTab={rightPane.selectRightPane}
-        wxmlTree={panelData.wxmlTree}
-        onRefreshWxml={panelData.refreshWxml}
-        onInspectWxml={panelData.inspectWxmlElement}
-        onClearWxmlInspection={panelData.clearWxmlElementInspection}
-        appData={panelData.appData}
-        onRefreshAppData={panelData.refreshAppData}
-        onSelectAppDataBridge={panelData.setActiveAppDataBridge}
-        storageItems={panelData.storageItems}
-        onRefreshStorage={panelData.refreshStorage}
-        onSetStorage={panelData.setStorageItem}
-        onRemoveStorage={panelData.removeStorageItem}
-        onClearStorage={panelData.clearStorage}
-        onClearAllStorage={panelData.clearAllStorage}
-        getStoragePrefix={panelData.getStoragePrefix}
-        compileEvents={session.compileEvents}
-        compileLogs={session.compileLogs}
-        onClearCompileEvents={session.clearCompileEvents}
-      />
-    ),
+  // Shared debug-panel data + handlers. The dockable `renderDomPanel` forwards
+  // them through DebugTabContent so each of the four DOM debug tabs drives the
+  // same handlers.
+  const debugPanelProps: BottomDebugPanelProps = {
+    rightPane: rightPane.rightPane,
+    onSelectTab: rightPane.selectRightPane,
+    wxmlTree: panelData.wxmlTree,
+    onRefreshWxml: panelData.refreshWxml,
+    onInspectWxml: panelData.inspectWxmlElement,
+    onClearWxmlInspection: panelData.clearWxmlElementInspection,
+    appData: panelData.appData,
+    onRefreshAppData: panelData.refreshAppData,
+    onSelectAppDataBridge: panelData.setActiveAppDataBridge,
+    storageItems: panelData.storageItems,
+    onRefreshStorage: panelData.refreshStorage,
+    onSetStorage: panelData.setStorageItem,
+    onRemoveStorage: panelData.removeStorageItem,
+    onClearStorage: panelData.clearStorage,
+    onClearAllStorage: panelData.clearAllStorage,
+    getStoragePrefix: panelData.getStoragePrefix,
+    compileEvents: session.compileEvents,
+    compileLogs: session.compileLogs,
+    onClearCompileEvents: session.clearCompileEvents,
+  }
+
+  // In-renderer Monaco editor — replaces the OpenSumi WebContentsView overlay.
+  // Plain React component occupying the editor panel; reads/writes the active
+  // project's files via the sandboxed `project:fs:*` IPC. `ready` gates the
+  // editor's `project:fs:listFiles` load on the main process having registered
+  // the active project (`openProject` sets the main-side path only once the
+  // compile finishes / reports `ready`; loading before then throws `ENOACTIVE`).
+  const editorNode = (
+    <MonacoEditor
+      projectPath={project.path}
+      ready={session.compileStatus.status === 'ready'}
+    />
+  )
+
+  // DOM-panel renderer for DockView. `simulator` renders the SimulatorPanel
+  // chrome (device/zoom pickers, compile overlays, page-path bar); SimulatorPanel
+  // owns the simulator WCV anchor on its device-region div (a bare native slot
+  // would render no chrome). `editor` is the Monaco component. The four React
+  // debug tabs (wxml/appdata/storage/compile) render through DockDebugTab. The
+  // native `console` is routed to a NativeSlot by DockView, never here. A plain
+  // function (not useCallback): `debugPanelProps` is rebuilt every render with
+  // fresh handlers, so memoizing would only pin stale nodes; DockView re-reads it
+  // on each render anyway.
+  const renderDomPanel = (panelId: string, opts: { active: boolean }): ReactNode => {
+    if (panelId === 'simulator') {
+      return (
+        <SimulatorPanel
+          device={device.device}
+          zoom={device.zoom}
+          onDeviceChange={device.handleDeviceChange}
+          onZoomChange={device.handleZoomChange}
+          compileStatus={session.compileStatus}
+          currentPage={simulator.currentPage}
+          copied={copied}
+          onCopyPagePath={copyPagePath}
+        />
+      )
+    }
+    if (panelId === 'editor') return editorNode
+    if (
+      panelId === 'wxml' ||
+      panelId === 'appdata' ||
+      panelId === 'storage' ||
+      panelId === 'compile'
+    ) {
+      // DOCK path (keepalive): `renderActiveBody` keeps ALL DOM debug tabs
+      // mounted, so the `DockDebugTab` is NOT remounted on a tab switch. It fires
+      // the per-tab refresh off the `active` false→true edge (M3) — the dock tab
+      // strip drives activation through the model and never calls a
+      // `handleSelectTab`.
+      return <DockDebugTab tabId={panelId} active={opts.active} panelProps={debugPanelProps} />
+    }
+    return null
   }
 
   return (
@@ -238,17 +238,262 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
         onToggleCompilePanel={popover.toggleCompilePanel}
         onRelaunch={() => session.relaunch()}
         compileStatus={session.compileStatus}
-        layout={layout}
       />
 
       <div className="flex-1 min-h-0 overflow-hidden">
-        <FrameTree
-          layout={compiled}
-          cellNodes={cellNodes}
+        {/*
+          The dock layout is the SOLE layout. DockableLayout owns all dock state
+          and builds its model synchronously on mount, so DockView renders on the
+          first commit. Keying on `project.path` remounts it on a project switch
+          so the new project's persisted tree seeds a fresh model.
+        */}
+        <DockableLayout
+          key={project.path}
+          seedDockTree={layoutState.dockTree ?? null}
           simPanelWidth={device.simPanelWidth}
-          onSimSplitterDrag={device.handleSplitterDrag}
+          renderDomPanel={renderDomPanel}
+          onPersistTree={layout.setDockTree}
         />
       </div>
     </div>
+  )
+}
+
+interface DockableLayoutProps {
+  /** Persisted opaque tree to SEED the model (mount-only; never re-seeds). */
+  seedDockTree: string | null
+  /**
+   * Current device pixel width. SEEDS the simulator's fixed-px leaf at mount AND
+   * re-pins it live on a device change (the picker changes width without a
+   * remount — without this the simulator leaf would keep the old device width).
+   */
+  simPanelWidth: number
+  /** DOM-panel renderer for simulator/editor/debug (console is native → NativeSlot). */
+  renderDomPanel: (panelId: string, opts: { active: boolean }) => ReactNode
+  /** Persist DockView's in-session layout mutations (opaque serialized tree). */
+  onPersistTree: (serialized: string) => void
+}
+
+/** Does `simulator` appear anywhere in this node's subtree? */
+function subtreeHasSimulator(node: LayoutNode): boolean {
+  if (node.kind === 'tabs') return node.panels.includes('simulator')
+  return node.children.some(subtreeHasSimulator)
+}
+
+/** The fixed-px value of the constraint at a located split/child site, or null. */
+function constraintFixedPxAt(
+  root: LayoutNode,
+  site: { splitId: string; childIndex: number },
+): number | null {
+  function find(node: LayoutNode): number | null {
+    if (node.kind === 'tabs') return null
+    if (node.id === site.splitId) {
+      const c = node.constraints?.[site.childIndex] ?? null
+      return c ? c.fixedPx : null
+    }
+    for (const child of node.children) {
+      const hit = find(child)
+      if (hit !== null) return hit
+    }
+    return null
+  }
+  return find(root)
+}
+
+/**
+ * Locate the fixed-px constraint that pins the simulator's width: the split id +
+ * child index of the FIRST constrained child whose subtree contains the
+ * `simulator` panel. Matching the constrained child by "contains simulator"
+ * (not "is the simulator tab group") keeps the re-pin correct after an
+ * edge-drop onto the simulator turns its leading group into a nested split while
+ * the constraint stays on that subtree (Codex MF3). Returns `null` only when the
+ * simulator is not inside any fixed-px region (e.g. re-docked into a flexible
+ * group) — the caller then skips the live re-pin rather than guessing. Walks the
+ * tree (does NOT assume `root.children[0]`).
+ */
+function findSimulatorConstraintSite(
+  node: LayoutNode,
+): { splitId: string; childIndex: number } | null {
+  if (node.kind === 'tabs') return null
+  for (let i = 0; i < node.children.length; i++) {
+    const child = node.children[i]!
+    if (
+      (node.constraints?.[i] ?? null) !== null &&
+      subtreeHasSimulator(child)
+    ) {
+      return { splitId: node.id, childIndex: i }
+    }
+    const hit = findSimulatorConstraintSite(child)
+    if (hit) return hit
+  }
+  return null
+}
+
+/**
+ * The dock layout — the SOLE project-window layout.
+ *
+ * The model is built SYNCHRONOUSLY in `useState`'s initializer so `<DockView>`
+ * renders on the very first commit. The only native overlay this component owns
+ * is the CONSOLE (the simulator WCV anchor moved into `SimulatorPanel`, which is
+ * now a DOM dock panel rendering its own chrome). The simulator's device-width
+ * pin is kept live via `setConstraint` on a device change.
+ */
+/**
+ * Dock-mode wrapper for a DOM debug tab. Under DOM-panel KEEPALIVE every debug
+ * tab body stays MOUNTED (inactive ones hidden), so this component is NOT
+ * remounted on a tab switch — its `active` prop flips instead. It fires the
+ * per-tab data refresh off the `active` false→true edge (mirroring
+ * `BottomDebugPanel.handleSelectTab`, M3): the dock tab strip drives activation
+ * through the layout model and never calls `handleSelectTab`, so without this the
+ * WXML/AppData/Storage panels would show stale data when re-activated.
+ * `'compile'` is push-fed (projectStatus + compileLog), so it needs no refresh.
+ * Refresh handlers are read through a ref so the activation effect depends only
+ * on `tabId`/`active` (the props object is rebuilt every render and would
+ * otherwise re-fire the refresh on every render).
+ */
+function DockDebugTab(
+  { tabId, active, panelProps }: { tabId: DebugTabContentId; active: boolean; panelProps: BottomDebugPanelProps },
+): ReactNode {
+  // Keep the latest refresh handlers in a ref (updated in an effect, not during
+  // render) so the activation effect can depend only on `tabId`/`active`. This
+  // effect has no deps → it runs on every commit and, by declaration order,
+  // BEFORE the activation effect below, so the ref is always current when a
+  // refresh fires.
+  const propsRef = useRef(panelProps)
+  useEffect(() => {
+    propsRef.current = panelProps
+  })
+  // Refresh on the false→true activation edge (NOT every render): a kept-alive
+  // body is never remounted, so the refresh must be driven by becoming active.
+  // The initial commit (active=true) counts as the first edge (prev defaults to
+  // false). A mounted-but-inactive tab (active=false) never refreshes.
+  const prevActive = useRef(false)
+  useEffect(() => {
+    const becameActive = active && !prevActive.current
+    prevActive.current = active
+    if (!becameActive) return
+    const p = propsRef.current
+    if (tabId === 'wxml') p.onRefreshWxml()
+    else if (tabId === 'appdata') p.onRefreshAppData()
+    else if (tabId === 'storage') void p.onRefreshStorage()
+  }, [tabId, active])
+  return <DebugTabContent tabId={tabId} {...panelProps} />
+}
+
+function DockableLayout(props: DockableLayoutProps): ReactNode {
+  const { simPanelWidth, renderDomPanel, onPersistTree } = props
+
+  // SYNCHRONOUS model build. Seeds are read ONCE in the initializer; a later
+  // persisted-tree change never rebuilds the model (that would discard the user's
+  // live drags). A project switch remounts this component (the parent keys it on
+  // `project.path`), so the model reseeds cleanly.
+  const [dockModel] = useState(() =>
+    buildDockModel(props.seedDockTree, simPanelWidth, DOCK_PANEL_IDS),
+  )
+  const dockRegistry = useMemo(() => buildDockRegistry(), [])
+
+  // Native CONSOLE overlay (the simulator's Chromium DevTools WebContentsView).
+  // Its bounds ride a SEPARATE channel (`publishSimulatorDevtoolsBounds`) from
+  // the simulator device WCV (which `SimulatorPanel` now owns). `guardDisplayNone`
+  // is on: when the console tab is inactive the slot is display:none, which must
+  // DETACH the overlay (publish hidden) rather than overlay a 0×0 rect over live
+  // content. The simulator anchor is NOT here — simulator is a DOM panel and
+  // `bindNativeSlot` only fires for native panels (console), so a simulator
+  // branch here would be dead code.
+  const consoleAnchorRef = useRef<PlacementAnchorHandle | null>(null)
+  const publishConsole = useCallback((p: Placement) => {
+    if (p.visible) {
+      void publishSimulatorDevtoolsBounds({
+        x: p.bounds.x,
+        y: p.bounds.y,
+        width: p.bounds.width,
+        height: p.bounds.height,
+      })
+    } else {
+      void publishSimulatorDevtoolsBounds({ x: 0, y: 0, width: 0, height: 0 })
+    }
+  }, [])
+
+  const bindNativeSlot = useCallback(
+    (panelId: string, el: HTMLElement | null) => {
+      if (panelId !== 'console') return
+      // The console overlay needs display:none detach (an inactive tab releases
+      // the WCV), `followScroll` (track ancestor scroll), AND `followGeometry`
+      // (N2): a drag-re-dock can MOVE the console slot without resizing it (e.g.
+      // a sibling re-dock shifts its x-position), and a ResizeObserver never
+      // fires on a pure translate — the geometry sentinel re-publishes the rect.
+      if (consoleAnchorRef.current) {
+        if (el) {
+          consoleAnchorRef.current.dispose()
+          consoleAnchorRef.current = createPlacementAnchor(el, {
+            visible: true,
+            guardDisplayNone: true,
+            followScroll: true,
+            followGeometry: true,
+            publish: publishConsole,
+          })
+        } else {
+          consoleAnchorRef.current.update({ visible: false, publish: publishConsole })
+          consoleAnchorRef.current.dispose()
+          consoleAnchorRef.current = null
+        }
+        return
+      }
+      if (el) {
+        consoleAnchorRef.current = createPlacementAnchor(el, {
+          visible: true,
+          guardDisplayNone: true,
+          followScroll: true,
+          followGeometry: true,
+          publish: publishConsole,
+        })
+      }
+    },
+    [publishConsole],
+  )
+
+  // Live device-width re-pin (red-line: the FrameTree path followed device width
+  // live; the model seeds width only at mount). On a device change the picker
+  // updates `simPanelWidth` without a remount, so re-pin the simulator's fixed-px
+  // constraint in the model. Skip when the constraint already equals
+  // `simPanelWidth` (no redundant emission → no needless re-render/persist, Codex
+  // N1) or when the simulator isn't fixed-px pinned (a re-dock moved it).
+  useEffect(() => {
+    const root = dockModel.get().root
+    const site = findSimulatorConstraintSite(root)
+    if (!site) return
+    if (constraintFixedPxAt(root, site) === simPanelWidth) return
+    dockModel.apply((t) => {
+      const cur = findSimulatorConstraintSite(t.root)
+      if (!cur) return t
+      if (constraintFixedPxAt(t.root, cur) === simPanelWidth) return t
+      return setConstraint(t, cur.splitId, cur.childIndex, { fixedPx: simPanelWidth })
+    })
+  }, [dockModel, simPanelWidth])
+
+  // Dispose the console anchor on unmount (the slot's `null` cleanup also
+  // disposes, but a hard unmount of the whole component must not leak it).
+  useEffect(() => {
+    return () => {
+      consoleAnchorRef.current?.dispose()
+      consoleAnchorRef.current = null
+    }
+  }, [])
+
+  // Persist DockView's in-session layout mutations back to the store.
+  useEffect(() => {
+    const unsub = dockModel.subscribe((snap) => {
+      onPersistTree(serializeLayout(snap.tree))
+    })
+    return unsub
+  }, [dockModel, onPersistTree])
+
+  return (
+    <DockView
+      model={dockModel}
+      registry={dockRegistry}
+      renderDomPanel={renderDomPanel}
+      bindNativeSlot={bindNativeSlot}
+    />
   )
 }

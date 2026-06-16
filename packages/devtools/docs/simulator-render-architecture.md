@@ -1,7 +1,7 @@
 # Native-host simulator rendering architecture (DeviceShell / WCV bounds / zoom)
 
 native-host is the SOLE simulator runtime. The simulator is a top-level
-`WebContentsView` (WCV) overlaid on the simulator cell's region of the
+`WebContentsView` (WCV) overlaid on the simulator dock panel's region of the
 main-window React renderer — a native overlay, exactly like the Chromium
 DevTools view. This doc describes the shipped model: who draws the phone, how the
 WCV is sized, and how zoom flows.
@@ -85,23 +85,31 @@ NEVER a CSS transform in the renderer panel.
 
 ## ViewAnchor binding
 
-The simulator uses the same shared, tested `useViewAnchor`
-(`packages/view-anchor/`) as the Chromium DevTools overlay — one abstraction for
-all DOM-anchored overlays. The simulator's anchor:
+The simulator uses the shared, tested `view-anchor` primitive
+(`packages/view-anchor/`) — the same package that backs the Chromium DevTools
+(`console`) overlay. `SimulatorPanel` is a DOM dock panel (it renders its own
+device/zoom chrome — a bare `NativeSlot` would render no chrome), and it OWNS the
+simulator-WCV anchor itself on its `data-area="native-simulator"` placeholder
+div. The simulator's anchor:
 
-- `present: true` — the panel is UNMOUNTED by `FrameTree` when the simulator cell
-  is hidden; the hook's unmount teardown publishes one ZERO to collapse the WCV.
-  So there is no separate "hidden" detach branch in the panel.
-- default `measure` — the placeholder's own `getBoundingClientRect()` gives the
-  region rect directly (no `measure` override, no `clipToTarget`).
-- `deps: [zoom]` — re-publish on zoom change (the rect can also move on splitter
-  drag / window resize, which the anchor's ResizeObserver + scroll listener catch
-  via the placeholder element).
+- **Imperative `createPlacementAnchor`, NOT the React `useViewAnchor`.** The
+  simulator dock leaf is pinned to `fixedPx`, so dragging an ADJACENT splitter
+  SHIFTS its x-position WITHOUT resizing it — a `ResizeObserver` never fires.
+  `followGeometry: true` opens a windowed-RAF geometry sentinel that re-publishes
+  the moved rect frame-by-frame. The ref-callback binds on mount, rebinds without
+  a hidden flash on element swap, and publishes-hidden-then-disposes on unmount.
+- **Unmount = collapse.** When the simulator panel is closed/inactive `<DockView>`
+  unmounts `SimulatorPanel`; the ref-callback `null` cleanup (and a hard-unmount
+  effect) publishes hidden, which main treats as detach-but-keep-alive. So there
+  is no separate "hidden" detach branch.
+- **zoom rides the publish payload** (the `Placement` rect has no zoom field),
+  kept in a ref so the imperative publisher always reads the live value; a zoom
+  change forces one re-publish so main re-applies `setZoomFactor`.
 
 (Earlier the simulator carried a bespoke `reportBounds` effect with a
-splitter/scroll re-measure gap; it has been replaced by `useViewAnchor`, which
-closes that gap at the abstraction layer. See `project-window-layout.md` §5 for
-the anchor semantics.)
+splitter/scroll re-measure gap; it has been replaced by the `view-anchor`
+placement anchor, which closes that gap at the abstraction layer. See
+`project-window-layout.md` §3 for the anchor semantics.)
 
 ## getSystemInfoSync in the service host
 

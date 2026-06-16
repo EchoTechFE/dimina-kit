@@ -14,6 +14,8 @@ Dimina devtools 的 host 集成地基。提供：连接层（per-webContents 的
 | `defineEvent` / `DeckConfig` 等类型 | `@dimina-kit/electron-deck` |
 | preload bridge `exposeDeckBridge()` | `@dimina-kit/electron-deck/preload` |
 | renderer client `createDeckClient<HS, EV>()` | `@dimina-kit/electron-deck/client` |
+| layout-as-data 引擎（`SplitNode`/`TabGroupNode` 树、`movePanel`/`splitPanel`/`closePanel`/`setActive`/`setSizes` 等 mutation、`serializeLayout`/`parseLayout`/`validateTree`、`createLayoutModel` 单写者可观察模型、panel registry） | `@dimina-kit/electron-deck/layout` |
+| `<DockView>` React 渲染器（把 layout 树渲染成可拖拽 re-dock / tab / 分屏的 docking UI） | `@dimina-kit/electron-deck/dock-react` |
 
 ## 最小例子
 

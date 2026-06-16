@@ -37,14 +37,22 @@ export default defineConfig({
 				'preload/index': resolve(src, 'preload/index.ts'),
 				'host/index': resolve(src, 'host/index.ts'),
 				'client/index': resolve(src, 'client/index.ts'),
+				'layout/index': resolve(src, 'layout/index.ts'),
+				'dock-react/index': resolve(src, 'dock-react/index.ts'),
 			},
 			formats: ['es'],
 		},
 		rollupOptions: {
-			// Externalize electron + node builtins; bundle everything else
-			// (including @dimina-kit/view-anchor).
+			// Externalize electron + node builtins + react ecosystem; bundle
+			// everything else (including @dimina-kit/view-anchor). React and
+			// react-resizable-panels are peer/regular deps the host provides —
+			// they must never be inlined into the lib.
 			external: (id: string) =>
 				id === 'electron'
+				|| id === 'react'
+				|| id === 'react-dom'
+				|| id === 'react/jsx-runtime'
+				|| id === 'react-resizable-panels'
 				|| id.startsWith('node:')
 				|| builtinModules.includes(id),
 			output: {

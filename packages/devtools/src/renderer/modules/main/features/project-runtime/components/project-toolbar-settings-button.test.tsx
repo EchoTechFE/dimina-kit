@@ -33,7 +33,6 @@ import React from 'react'
 import { describe, it, expect, vi } from 'vitest'
 import { render, fireEvent, act } from '@testing-library/react'
 import { ProjectToolbar } from './project-toolbar'
-import type { LayoutStoreApi } from '../controllers/use-layout-store'
 
 const apiMocks = vi.hoisted(() => ({
   // Legacy toolbar exports (Wave 2 ① deletes them) — kept as inert stubs so
@@ -47,24 +46,6 @@ const apiMocks = vi.hoisted(() => ({
 
 vi.mock('@/shared/api', () => apiMocks)
 
-function makeLayoutStub(): LayoutStoreApi {
-  return {
-    state: {
-      simulatorVisible: true,
-      editorVisible: true,
-      debugVisible: true,
-      simulatorAlignment: 'left',
-      devtoolsPosition: 'inEditor',
-    },
-    visibleCount: 3,
-    toggleSimulator: vi.fn(),
-    toggleEditor: vi.fn(),
-    toggleDebug: vi.fn(),
-    setSimulatorAlignment: vi.fn(),
-    setDevtoolsPosition: vi.fn(),
-  }
-}
-
 async function renderToolbar() {
   const utils = render(
     <ProjectToolbar
@@ -73,7 +54,6 @@ async function renderToolbar() {
       onToggleCompilePanel={() => {}}
       onRelaunch={() => {}}
       compileStatus={{ status: 'ready', message: '' }}
-      layout={makeLayoutStub()}
     />,
   )
   await act(async () => {

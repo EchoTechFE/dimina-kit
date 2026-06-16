@@ -4,12 +4,6 @@ import { StatusDot } from '@/shared/components/status-dot'
 import { cn } from '@/shared/lib/utils'
 import { HEADER_H } from '@/shared/constants'
 import { setSettingsVisible } from '@/shared/api'
-import type { LayoutStoreApi } from '../controllers/use-layout-store'
-import {
-  LayoutAlignmentToggle,
-  LayoutDevtoolsPositionToggles,
-  LayoutVisibilityToggles,
-} from './layout-controls'
 
 interface ProjectToolbarProps {
   compileDropdownRef: React.RefObject<HTMLDivElement | null>
@@ -17,7 +11,6 @@ interface ProjectToolbarProps {
   onToggleCompilePanel: () => void
   onRelaunch: () => void | Promise<void>
   compileStatus: { status: string; message: string }
-  layout: LayoutStoreApi
 }
 
 /**
@@ -35,7 +28,6 @@ export function ProjectToolbar({
   onToggleCompilePanel,
   onRelaunch,
   compileStatus,
-  layout,
 }: ProjectToolbarProps) {
   return (
     <div className="flex flex-col shrink-0">
@@ -85,24 +77,10 @@ export function ProjectToolbar({
 
         <div className="flex-1 min-w-2" />
 
-        {/* Cluster 3: Layout controls, all inline toggles (no dropdown).
-            Dropdowns were dropped because the editor WebContentsView
-            renders above renderer-layer popovers in the OS stacking
-            order, so a layout popover would be hidden behind it.
-            - LayoutVisibilityToggles: 3 toggles for sim / editor / debug
-              (shape change + surface-active chip carries the signal).
-            - LayoutAlignmentToggle: single button that swaps simulator
-              alignment between left and right.
-            - LayoutDevtoolsPositionToggles: 3-button group for the
-              devtools-position preset (inEditor / belowSimulator /
-              rightOfSimulator). The at-least-one-visible guard lives
-              in the store. */}
-        <LayoutVisibilityToggles layout={layout} />
-        <ToolbarDivider />
-        <LayoutAlignmentToggle layout={layout} />
-        <ToolbarDivider />
-        <LayoutDevtoolsPositionToggles layout={layout} />
-        <ToolbarDivider />
+        {/* Panel layout is owned entirely by the dock (<DockView>): drag a
+            panel's tab to re-dock it. The legacy visibility/alignment/
+            devtools-position preset toggles were removed with the FrameTree
+            layout they drove — free-form docking replaces them. */}
 
         {/* Settings entry point. Stateless open-only: the embedded
             project-settings overlay owns its own close path, so the button

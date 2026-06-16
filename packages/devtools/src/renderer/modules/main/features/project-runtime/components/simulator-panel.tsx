@@ -1,7 +1,7 @@
-import React, { useCallback } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 import { Select } from '@/shared/components/ui/select'
 import { setNativeSimulatorBounds } from '@/shared/api'
-import { useViewAnchor, type Bounds } from '@dimina-kit/view-anchor'
+import { createPlacementAnchor, type Placement, type PlacementAnchorHandle } from '@dimina-kit/view-anchor'
 import { cn } from '@/shared/lib/utils'
 import { DEVICES, ZOOM_OPTIONS } from '@/shared/constants'
 
@@ -33,44 +33,103 @@ export function SimulatorPanel({
   onCopyPagePath,
 }: SimulatorPanelProps) {
   // The simulator is a main-process WebContentsView (native-host is the sole
-  // runtime) painted directly over the flex:1 placeholder below. This z2
-  // renderer panel draws NO phone/bezel: just the toolbar, an EMPTY placeholder
-  // slot, and the page-path bar. The WCV is bound to the placeholder's rect via
-  // `useViewAnchor` (the same overlay-binding the DevTools view uses); flex:1
-  // sizes ONLY the placeholder region. The WCV is RECTANGULAR — its own
-  // web-viewport is the (straight-edged) clip. Inside it, DeviceShell draws the
-  // WHOLE phone (rounded corners, notch, nav, viewport, tab/home) at FIXED
-  // device-logical size and scrolls it natively when it's larger than the
-  // region. zoom is applied as the WCV's zoomFactor (zoom/100), never as a CSS
-  // transform here.
+  // runtime) painted directly over the flex:1 placeholder below. This renderer
+  // panel draws NO phone/bezel: just the toolbar, an EMPTY placeholder slot, and
+  // the page-path bar. Inside the WCV, DeviceShell draws the WHOLE phone (rounded
+  // corners, notch, nav, viewport, tab/home) at FIXED device-logical size and
+  // scrolls it natively when larger than the region. zoom is applied as the
+  // WCV's zoomFactor (zoom/100), never as a CSS transform here.
   //
-  // `present` is constant `true`: FrameTree UNMOUNTS this panel when the
-  // simulator cell is hidden, and the hook's unmount teardown publishes one ZERO
-  // to collapse the WCV.
+  // This component is the SOLE simulator-WCV anchor owner. It binds an imperative
+  // `createPlacementAnchor` to the device-region div (NOT the engine-agnostic
+  // `useViewAnchor`): the simulator dock leaf is pinned to `fixedPx`, so dragging
+  // an ADJACENT splitter SHIFTS its x-position WITHOUT resizing it — a
+  // ResizeObserver never fires. `followGeometry: true` opens a windowed RAF
+  // geometry sentinel that re-publishes the moved rect frame-by-frame. The WCV is
+  // a main-process child view. Under DOM-panel keepalive (A3) SimulatorPanel is
+  // NOT unmounted when its dock tab deactivates — its slot merely goes
+  // `display:none` — so there is no unmount path to publish hidden on a tab
+  // switch. To collapse the WCV on deactivation it opts into view-anchor's
+  // `guardDisplayNone`: that installs an IntersectionObserver which re-fires on a
+  // `display:none` transition (invisible to ResizeObserver) and turns the
+  // resulting zero-area measure into a `{ visible:false }` publish, which the
+  // `publish` callback below maps to COLLAPSED 0×0 bounds (detaching the WCV).
+  // The true unmount path still publishes hidden + disposes as a safety net.
   //
-  // `publish` carries `zoom` (the `Bounds` rect has no zoom field) so main can
-  // `setZoomFactor` the WCV; its identity changes with `zoom`, re-publishing on
-  // zoom change. The default `measure` (the placeholder's own
-  // getBoundingClientRect) gives the region rect directly — no `measure`
-  // override and no `clipToTarget`.
-  const publish = useCallback(
-    (b: Bounds) => {
+  // Zoom rides in the publish payload (the `Placement` rect has no zoom field) so
+  // main can `setZoomFactor` the WCV; it is kept in a ref so the imperative
+  // publisher always reads the LIVE value, and a zoom change forces one
+  // re-publish.
+  const zoomRef = useRef(zoom)
+  const anchorHandleRef = useRef<PlacementAnchorHandle | null>(null)
+
+  const publish = useCallback((p: Placement) => {
+    if (p.visible) {
       void setNativeSimulatorBounds({
-        x: b.x,
-        y: b.y,
-        width: b.width,
-        height: b.height,
-        zoom,
+        x: p.bounds.x,
+        y: p.bounds.y,
+        width: p.bounds.width,
+        height: p.bounds.height,
+        zoom: zoomRef.current,
       })
+    } else {
+      // Hidden → collapse the WCV (host treats 0×0 as detach-but-keep-alive).
+      void setNativeSimulatorBounds({ x: 0, y: 0, width: 0, height: 0, zoom: zoomRef.current })
+    }
+  }, [])
+
+  // Ref-callback binding the placement anchor to the device-region div. Mirrors
+  // the dock native-slot lifecycle: bind on mount, rebind without a hidden flash
+  // on element swap, publish-hidden-then-dispose on unmount.
+  const anchorRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      const existing = anchorHandleRef.current
+      if (existing) {
+        if (el) {
+          existing.dispose()
+          anchorHandleRef.current = createPlacementAnchor(el, {
+            visible: true,
+            followGeometry: true,
+            guardDisplayNone: true,
+            publish,
+          })
+        } else {
+          existing.update({ visible: false, publish })
+          existing.dispose()
+          anchorHandleRef.current = null
+        }
+        return
+      }
+      if (el) {
+        anchorHandleRef.current = createPlacementAnchor(el, {
+          visible: true,
+          followGeometry: true,
+          guardDisplayNone: true,
+          publish,
+        })
+      }
     },
-    [zoom],
+    [publish],
   )
 
-  const anchorRef = useViewAnchor({
-    present: true,
-    publish,
-    deps: [zoom],
+  // Keep the live zoom in the ref BEFORE paint (so a geometry event firing
+  // between commit and a passive effect never reads a stale zoom), then force one
+  // re-publish so main re-applies `setZoomFactor` on zoom change.
+  useLayoutEffect(() => {
+    zoomRef.current = zoom
   })
+  useLayoutEffect(() => {
+    anchorHandleRef.current?.update({ visible: true, publish })
+  }, [zoom, publish])
+
+  // Hard-unmount safety: the ref-callback `null` cleanup also disposes, but a
+  // teardown that skips the ref cleanup must not leak a live anchor.
+  useEffect(() => {
+    return () => {
+      anchorHandleRef.current?.dispose()
+      anchorHandleRef.current = null
+    }
+  }, [])
 
   return (
     <div className="bg-sim-bg flex flex-col overflow-hidden h-full w-full">

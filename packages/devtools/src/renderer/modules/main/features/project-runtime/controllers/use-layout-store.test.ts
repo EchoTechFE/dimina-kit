@@ -1,15 +1,19 @@
 /**
- * Unit tests for `useLayoutStore`.
+ * Unit tests for `useLayoutStore` (dock-only).
+ *
+ * After the layout consolidation the store holds a SINGLE opaque field —
+ * `dockTree` (serialized DockView layout) — and nothing else. The legacy
+ * visibility / alignment / devtools-position / dockableMode state (and its
+ * at-least-one-visible sanitize) was removed with the FrameTree layout it drove,
+ * so the tests that pinned that behavior were removed (the guarded behavior no
+ * longer exists — they were not relaxed to keep passing).
  *
  * Public contract under test (see ./use-layout-store.ts):
- * - Hydrates from `localStorage['dimina-devtools.layout.v1']`, falling back to
- *   DEFAULT_LAYOUT_STATE on any corruption / missing / wrong-typed value.
- * - Enforces the "at least one panel visible" invariant when toggling and when
- *   loading a persisted all-hidden state.
- * - Persists every state change back to localStorage, but never throws if the
- *   write fails (quota / disabled storage).
- * - Toggling visibility and changing alignment / devtools position update state
- *   and persist.
+ * - Hydrates `dockTree` from `localStorage['dimina-devtools.layout.v1']`,
+ *   falling back to DEFAULT_LAYOUT_STATE (`dockTree: null`) on missing / corrupt
+ *   / wrong-typed input.
+ * - `setDockTree` updates state and persists; setting the same value is a no-op
+ *   (identity preserved); a write failure is swallowed.
  *
  * These tests use jsdom's real `window.localStorage`, cleared between tests.
  */
@@ -49,85 +53,31 @@ describe('useLayoutStore — hydration / sanitization', () => {
     expect(result!.current.state).toEqual(DEFAULT_LAYOUT_STATE)
   })
 
-  // Regression: a persisted object missing some keys (e.g. written by an older
-  // build that didn't have `devtoolsPosition`) must fill the gaps from defaults
-  // field-by-field, not wipe the whole thing and not leave `undefined` fields.
-  it('fills missing fields from defaults while keeping present valid fields', () => {
-    window.localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({ simulatorVisible: false, editorVisible: true }),
-    )
+  // Regression: missing `dockTree` (e.g. a first run, or an older build that did
+  // not persist it) must fall back to the default `null`, not leave it undefined.
+  it('defaults dockTree to null when the persisted blob omits it', () => {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({}))
 
     const { result } = renderHook(() => useLayoutStore())
 
-    expect(result.current.state).toEqual({
-      simulatorVisible: false, // present + valid → kept
-      editorVisible: true, // present + valid → kept (also keeps invariant satisfied)
-      debugVisible: DEFAULT_LAYOUT_STATE.debugVisible, // missing → default
-      simulatorAlignment: DEFAULT_LAYOUT_STATE.simulatorAlignment, // missing → default
-      devtoolsPosition: DEFAULT_LAYOUT_STATE.devtoolsPosition, // missing → default
-    })
+    expect(result.current.state).toEqual({ dockTree: null })
   })
 
-  // Regression: a stored value with wrong-typed / out-of-range fields (booleans
-  // as strings, an unknown alignment / position enum) must be rejected per field
-  // and replaced with the default, never passed through verbatim into state.
-  it('rejects wrong-typed and out-of-enum fields, replacing each with its default', () => {
-    window.localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        simulatorVisible: 'yes', // wrong type → default (true)
-        editorVisible: 0, // wrong type → default (true)
-        debugVisible: false, // valid → kept (and keeps invariant satisfied)
-        simulatorAlignment: 'middle', // not in enum → default ('left')
-        devtoolsPosition: 'floating', // not in enum → default ('inEditor')
-      }),
-    )
+  // Regression: a wrong-typed `dockTree` (a number / object instead of the
+  // opaque serialized string) must be rejected and replaced with null, never
+  // passed through to `buildDockModel` (which would mis-parse it).
+  it('rejects a non-string dockTree, replacing it with null', () => {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ dockTree: 123 }))
 
     const { result } = renderHook(() => useLayoutStore())
 
-    expect(result.current.state).toEqual({
-      simulatorVisible: DEFAULT_LAYOUT_STATE.simulatorVisible,
-      editorVisible: DEFAULT_LAYOUT_STATE.editorVisible,
-      debugVisible: false,
-      simulatorAlignment: DEFAULT_LAYOUT_STATE.simulatorAlignment,
-      devtoolsPosition: DEFAULT_LAYOUT_STATE.devtoolsPosition,
-    })
+    expect(result.current.state).toEqual({ dockTree: null })
   })
 
-  // Regression: a persisted state where every panel is hidden (a stale write or
-  // hand-edit) would render an empty window. Loading it must be sanitized back
-  // to the full default layout, never produce a zero-visible-panel state.
-  it('sanitizes a persisted all-hidden layout back to defaults', () => {
-    window.localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        simulatorVisible: false,
-        editorVisible: false,
-        debugVisible: false,
-        simulatorAlignment: 'right',
-        devtoolsPosition: 'belowSimulator',
-      }),
-    )
-
-    const { result } = renderHook(() => useLayoutStore())
-
-    // Whole state reset to default (not just the visibility flags) because the
-    // implementation returns DEFAULT_LAYOUT_STATE wholesale in this case.
-    expect(result.current.state).toEqual(DEFAULT_LAYOUT_STATE)
-    expect(result.current.visibleCount).toBe(3)
-  })
-
-  // Regression: valid persisted state must round-trip exactly — guards against a
-  // hydration bug that would over-sanitize and discard legitimate user choices.
-  it('hydrates a fully-valid persisted state verbatim', () => {
-    const stored = {
-      simulatorVisible: true,
-      editorVisible: false,
-      debugVisible: true,
-      simulatorAlignment: 'right' as const,
-      devtoolsPosition: 'rightOfSimulator' as const,
-    }
+  // Regression: a valid persisted dockTree string must round-trip verbatim —
+  // guards against a hydration bug that would discard the user's saved layout.
+  it('hydrates a persisted dockTree string verbatim', () => {
+    const stored = { dockTree: '{"version":1,"root":{"kind":"tabs","id":"g","panels":["editor"],"active":"editor"}}' }
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(stored))
 
     const { result } = renderHook(() => useLayoutStore())
@@ -136,118 +86,44 @@ describe('useLayoutStore — hydration / sanitization', () => {
   })
 })
 
-describe('useLayoutStore — at-least-one-visible invariant', () => {
-  // Regression: when exactly one panel remains visible, toggling THAT panel off
-  // must be a no-op (state identity unchanged). Removing the guard would let the
-  // window go fully blank with no way to recover via the toolbar.
-  it('rejects toggling off the last remaining visible panel (state unchanged)', () => {
-    // Start with only the simulator visible.
-    window.localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        simulatorVisible: true,
-        editorVisible: false,
-        debugVisible: false,
-      }),
-    )
-
+describe('useLayoutStore — setDockTree and persistence', () => {
+  // Regression: persisting a dock tree must update state AND write to
+  // localStorage so the layout survives a reload. A missing persistence effect
+  // would silently drop the saved layout on next mount.
+  it('persists a new dockTree and writes it to localStorage', () => {
     const { result } = renderHook(() => useLayoutStore())
-    expect(result.current.visibleCount).toBe(1)
-    expect(result.current.state.simulatorVisible).toBe(true)
+    expect(result.current.state.dockTree).toBeNull()
 
+    const tree = '{"version":1,"root":{"kind":"tabs","id":"g","panels":["editor"],"active":"editor"}}'
+    act(() => {
+      result.current.setDockTree(tree)
+    })
+
+    expect(result.current.state.dockTree).toBe(tree)
+    expect(persisted()).toMatchObject({ dockTree: tree })
+  })
+
+  // Regression: setting the SAME serialized value must be a no-op (identity
+  // preserved) so the model's persist-subscription re-emitting an unchanged tree
+  // does not trigger a redundant re-render / write loop.
+  it('returns the same state object when the dockTree value is unchanged', () => {
+    const tree = '{"version":1,"root":{"kind":"tabs","id":"g","panels":["editor"],"active":"editor"}}'
+    const { result } = renderHook(() => useLayoutStore())
+
+    act(() => {
+      result.current.setDockTree(tree)
+    })
     const before = result.current.state
-    act(() => {
-      result.current.toggleSimulator()
-    })
-
-    // Toggle was rejected → still visible, and the count never dropped to 0.
-    expect(result.current.state.simulatorVisible).toBe(true)
-    expect(result.current.visibleCount).toBe(1)
-    // Implementation returns the previous object reference unchanged.
-    expect(result.current.state).toBe(before)
-  })
-
-  // Regression: the guard must only block the *last* panel — toggling off a
-  // non-last visible panel must still work and bring visibleCount down to 1.
-  it('allows toggling off a panel while another stays visible', () => {
-    // simulator + editor visible, debug hidden.
-    window.localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        simulatorVisible: true,
-        editorVisible: true,
-        debugVisible: false,
-      }),
-    )
-
-    const { result } = renderHook(() => useLayoutStore())
-    expect(result.current.visibleCount).toBe(2)
 
     act(() => {
-      result.current.toggleEditor()
-    })
-
-    expect(result.current.state.editorVisible).toBe(false)
-    expect(result.current.state.simulatorVisible).toBe(true)
-    expect(result.current.visibleCount).toBe(1)
-
-    // Now editor is hidden and simulator is the last one — toggling simulator is rejected.
-    act(() => {
-      result.current.toggleSimulator()
-    })
-    expect(result.current.state.simulatorVisible).toBe(true)
-    expect(result.current.visibleCount).toBe(1)
-  })
-})
-
-describe('useLayoutStore — toggles and persistence', () => {
-  // Regression: toggling a panel visible/hidden must both update state and be
-  // written back to localStorage, so the choice survives a reload. A missing
-  // persistence effect would silently drop the change on next mount.
-  it('toggles visibility and persists the new state', () => {
-    const { result } = renderHook(() => useLayoutStore())
-    // Default has all three visible.
-    expect(result.current.state.debugVisible).toBe(true)
-
-    act(() => {
-      result.current.toggleDebug()
-    })
-
-    expect(result.current.state.debugVisible).toBe(false)
-    expect(persisted()).toMatchObject({ debugVisible: false })
-  })
-
-  // Regression: changing alignment / devtools position must update state and
-  // persist; setting the same value must be a no-op (identity preserved) so we
-  // don't trigger redundant re-renders or writes.
-  it('updates and persists simulatorAlignment and devtoolsPosition', () => {
-    const { result } = renderHook(() => useLayoutStore())
-    expect(result.current.state.simulatorAlignment).toBe('left')
-    expect(result.current.state.devtoolsPosition).toBe('inEditor')
-
-    act(() => {
-      result.current.setSimulatorAlignment('right')
-    })
-    expect(result.current.state.simulatorAlignment).toBe('right')
-    expect(persisted()).toMatchObject({ simulatorAlignment: 'right' })
-
-    act(() => {
-      result.current.setDevtoolsPosition('belowSimulator')
-    })
-    expect(result.current.state.devtoolsPosition).toBe('belowSimulator')
-    expect(persisted()).toMatchObject({ devtoolsPosition: 'belowSimulator' })
-
-    // Setting the same value again returns the same state object (no-op).
-    const before = result.current.state
-    act(() => {
-      result.current.setSimulatorAlignment('right')
+      result.current.setDockTree(tree)
     })
     expect(result.current.state).toBe(before)
   })
 
-  // Regression: if localStorage.setItem throws (quota exceeded / storage
-  // disabled), the write must be swallowed — the in-memory state update still
-  // applies and the hook must not throw, keeping the UI responsive offline.
+  // Regression: if localStorage.setItem throws (quota / disabled storage), the
+  // write must be swallowed — the in-memory state update still applies and the
+  // hook must not throw, keeping the UI responsive offline.
   it('swallows localStorage write failures while still applying the state update', () => {
     const setItemSpy = vi
       .spyOn(Storage.prototype, 'setItem')
@@ -256,16 +132,15 @@ describe('useLayoutStore — toggles and persistence', () => {
       })
 
     const { result } = renderHook(() => useLayoutStore())
-    expect(result.current.state.editorVisible).toBe(true)
+    const tree = '{"version":1,"root":{"kind":"tabs","id":"g","panels":["editor"],"active":"editor"}}'
 
     expect(() => {
       act(() => {
-        result.current.toggleEditor()
+        result.current.setDockTree(tree)
       })
     }).not.toThrow()
 
-    // State update still took effect even though persistence failed.
-    expect(result.current.state.editorVisible).toBe(false)
+    expect(result.current.state.dockTree).toBe(tree)
     expect(setItemSpy).toHaveBeenCalled()
   })
 })

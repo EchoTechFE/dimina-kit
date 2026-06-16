@@ -49,6 +49,14 @@
     "./host": {
       "types": "./dist/host/index.d.ts",
       "default": "./dist/host/index.js"
+    },
+    "./layout": {
+      "types": "./dist/layout/index.d.ts",
+      "default": "./dist/layout/index.js"
+    },
+    "./dock-react": {
+      "types": "./dist/dock-react/index.d.ts",
+      "default": "./dist/dock-react/index.js"
     }
   },
   "files": [
@@ -62,25 +70,38 @@
     "lint": "eslint . --max-warnings 0",
     "check:trust-seal": "node scripts/check-trust-seal.mjs",
     "check:docs-api-sync": "node scripts/check-docs-api-sync.mjs",
-    "test": "node scripts/check-trust-seal.mjs && node scripts/check-docs-api-sync.mjs && vitest run",
+    "test": "node scripts/check-trust-seal.mjs && node scripts/check-docs-api-sync.mjs && vitest run && vitest run --config vitest.dock-react.config.ts",
     "test:dev": "vitest",
+    "test:dock-react": "vitest run --config vitest.dock-react.config.ts",
+    "examples:dockable": "pnpm run build && node examples/dockable-demo/bundle.mjs && electron examples/dockable-demo/main.mjs",
     "prepack": "pnpm run build"
   },
   "dependencies": {
-    "@dimina-kit/view-anchor": "workspace:*"
+    "@dimina-kit/view-anchor": "workspace:*",
+    "react-resizable-panels": "^4.10.0"
   },
   "devDependencies": {
     "@dimina-kit/eslint-config": "workspace:*",
     "@dimina-kit/typescript-config": "workspace:*",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
     "@types/node": "^22.15.3",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^6.0.1",
     "electron": "^41.2.1",
     "eslint": "^10.2.1",
+    "jsdom": "^29.0.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-resizable-panels": "^4.10.0",
     "typescript": "5.9.2",
     "vite": "^8.0.16",
     "vitest": "^4.1.4"
   },
   "peerDependencies": {
-    "electron": ">=36"
+    "electron": ">=36",
+    "react": ">=18"
   },
   "publishConfig": {
     "access": "public"

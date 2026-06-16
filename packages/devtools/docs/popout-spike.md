@@ -84,15 +84,20 @@ separate WebContents. They cannot be `moveTo`'d — there is nothing native to
 migrate. To pop one out you must **first** carve the panel into its own
 `runtime.view({ source })` (its own WebContents/route), then deck can migrate it.
 
-The DevTools **simulator DevTools (Chromium inspector)** and the **Monaco editor**
-overlays ARE already separate `WebContentsView`s — but they are managed by the
-**bespoke `view-manager.ts`** (`new WebContentsView` + `addChildView` /
-`removeChildView` directly), **not** through `runtime.view()` handles. So they
-cannot be `moveTo`'d either until they are re-homed onto deck view handles.
+Only the DevTools **simulator DevTools (Chromium inspector)** is a separate
+`WebContentsView` overlay. The **Monaco editor is NOT a WebContentsView** — it
+renders in-renderer as a React/DOM component (see `view-manager.ts:91`: "The code
+editor is NOT an overlay: it renders as an in-renderer [Monaco]"), so it cannot be
+`moveTo`'d at all (there is nothing native to migrate; it is in the same boat as
+the React panels in G1). The simulator-inspector overlay IS a native
+`WebContentsView`, but it is managed by the **bespoke `view-manager.ts`**
+(`new WebContentsView` + `addChildView` / `removeChildView` directly), **not**
+through `runtime.view()` handles. So even it cannot be `moveTo`'d until it is
+re-homed onto a deck view handle.
 
 **→ The real prerequisite is adopting `runtime.view()` as the ownership model for
-the overlays in `view-manager.ts`.** That is the one substantial piece of product
-work; the migration itself is free once a panel is a deck view.
+the native overlay(s) in `view-manager.ts`.** That is the one substantial piece of
+product work; the migration itself is free once a panel is a deck view.
 
 ### G2 — Renderer-side slot wiring for the popout window
 

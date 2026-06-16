@@ -1,6 +1,6 @@
 # view-anchor 跟随契约硬化（split / nested / tab 的几何地基）
 
-> 状态：契约草案（只读代码 + 设计，不改实现）。本页定的是 `@dimina-kit/view-anchor`
+> 状态：**✅ as-built（follow*/pulse 等已实现于 main，见 architecture.md §5）；下文为设计契约原文**。本页定的是 `@dimina-kit/view-anchor`
 > 正向锚（`createViewAnchor` / `createPlacementAnchor` / `useViewAnchor`）要让原生
 > `WebContentsView` **跟随任意 DOM slot** 必须补齐的观测面与时序契约。落点在
 > `packages/view-anchor/src/{view-anchor,react,types}.ts` 的现有结构上，**本文不动 src**。
