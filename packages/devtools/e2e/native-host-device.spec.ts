@@ -295,7 +295,7 @@ test.describe('native-host device sizing e2e', () => {
     expect(typeof baseline.screenHeight, 'baseline screenHeight should be readable').toBe('number')
 
     // Pick a zoom DIFFERENT from 100%.
-    const newZoom = ZOOM_OPTIONS.find((z) => z !== 100)! // e.g. 25
+    const newZoom = ZOOM_OPTIONS.find((z) => z !== 100)! // e.g. 85
     await selectZoom(mainWindow, newZoom)
     await new Promise((r) => setTimeout(r, 2000))
     const afterZoom = await readServiceSystemInfo(electronApp)
@@ -321,11 +321,9 @@ test.describe('native-host device sizing e2e', () => {
       // webContents.setZoomFactor(scale). Under a FRACTIONAL zoom `scale`,
       //   innerWidth (CSS px) = round(deviceWidth * scale) / scale
       // so its error vs deviceWidth is bounded by ~0.5/scale px and EXACT
-      // equality is generally unachievable. Concretely at the test's zoom
-      // (newZoom = first non-100 ZOOM_OPTION = 25 ⇒ scale = 0.25) and
-      // deviceWidth = 402: round(402*0.25)/0.25 = round(100.5)/0.25 = 101/0.25 =
-      // 404 — 402 would require a 100.5-px integer bound, which is impossible;
-      // only 400 and 404 are reachable. So we bound the render-guest viewport to
+      // equality is generally unachievable. At a fractional zoom, the nearest
+      // integer backing bounds can land slightly off the logical device width
+      // after dividing by scale. So we bound the render-guest viewport to
       // ⌈1/scale⌉+1 px of the device width (tight: a genuinely broken zoom where
       // setZoomFactor was NOT applied would give innerWidth = deviceWidth*scale
       // ≈ 100 or = deviceWidth/scale ≈ 1600, both far outside this band and so
@@ -342,6 +340,6 @@ test.describe('native-host device sizing e2e', () => {
     }
 
     // Restore zoom for any later tests.
-    await selectZoom(mainWindow, 100).catch(() => {})
+    await selectZoom(mainWindow, 85).catch(() => {})
   })
 })

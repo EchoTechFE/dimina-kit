@@ -49,7 +49,7 @@ export function useDevice(props: UseDeviceProps): DeviceHookResult {
   const { initialDevice } = props
 
   const [device, setDevice] = useState<DeviceType>(initialDevice)
-  const [zoom, setZoom] = useState(100)
+  const [zoom, setZoom] = useState(85)
   const [simPanelWidth, setSimPanelWidth] = useState(() =>
     computeSimPanelWidth(initialDevice.width),
   )
