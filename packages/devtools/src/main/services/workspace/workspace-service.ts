@@ -185,7 +185,15 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
         try {
           await ctx.onBeforeOpenProject(projectPath)
         } catch (err) {
-          return { success: false, error: err instanceof Error ? err.message : String(err) }
+          // Surface the veto to the status bar — symmetric with the
+          // validateProjectDir rejection below (which already emits an error
+          // status). The framework caught the error, so it owns the minimal
+          // user-visible feedback; a host gate must not have to thread
+          // `notify` through a singleton just to report why the open was
+          // denied. The host can still layer richer UX (e.g. a dialog).
+          const error = err instanceof Error ? err.message : String(err)
+          sendStatus('error', error)
+          return { success: false, error }
         }
       }
       clearSimulatorServicewechatReferer()

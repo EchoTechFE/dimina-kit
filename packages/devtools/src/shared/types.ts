@@ -104,9 +104,14 @@ export interface WorkbenchWindowConfig {
   /**
    * Auto-show the main window on `ready-to-show`. Defaults to `true`. Set
    * `false` when the host gates the window behind its own startup flow (e.g. a
-   * login screen) and wants to call `mainWindow.show()` itself once ready —
-   * avoids an un-authed window flashing on screen. Does not affect the test
-   * environment, which always uses `showInactive()` (e2e depends on it).
+   * login screen) and wants to reveal it itself once ready — avoids an
+   * un-authed window flashing on screen.
+   *
+   * Visibility is governed by this flag in BOTH the test and non-test
+   * environments; the environment only chooses HOW to show (non-test →
+   * `show()`, test → `showInactive()` so e2e windows don't steal focus). When
+   * `false`, the framework calls neither in either env — the host owns reveal,
+   * test included.
    */
   autoShow?: boolean
 }
@@ -226,6 +231,11 @@ export interface WorkbenchAppConfig extends WorkbenchConfig {
    * error }`, leaves any currently-active session untouched, and never spins
    * up the adapter. Resolve normally (or omit) to allow the open. The
    * declarative alternative to monkey-patching `workspace.openProject`.
+   *
+   * On veto the framework surfaces the thrown error to the status bar
+   * (`notify.projectStatus({ status: 'error', message })`), symmetric with its
+   * own validateProjectDir rejection — the host need not reach for `notify`
+   * just to report the denial; it may layer richer UX (e.g. a dialog) on top.
    */
   onBeforeOpenProject?: (projectPath: string) => void | Promise<void>
   /** Custom update checker. If provided, enables the check-for-updates feature. */
