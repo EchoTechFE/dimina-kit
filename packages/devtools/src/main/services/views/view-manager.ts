@@ -556,6 +556,8 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   function notifyHostToolbarHeight(height: number): void {
     hostToolbarLastHeight = height
     ctx.notify.hostToolbarHeightChanged(height)
+    if (settingsViewAdded) applySettingsBounds()
+    if (popoverView) applyPopoverBounds()
   }
 
   function setHostToolbarHeight(extent: number): void {
@@ -653,16 +655,20 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     },
   }
 
+  function overlayHeaderHeight(): number {
+    return HEADER_H + hostToolbarLastHeight
+  }
+
   function applySettingsBounds(): void {
     if (!settingsView || ctx.windows.mainWindow.isDestroyed()) return
     const [w = 0, h = 0] = ctx.windows.mainWindow.getContentSize()
-    settingsView.setBounds(layout.computeSettingsBounds(w, h, HEADER_H))
+    settingsView.setBounds(layout.computeSettingsBounds(w, h, overlayHeaderHeight()))
   }
 
   function applyPopoverBounds(): void {
     if (!popoverView || ctx.windows.mainWindow.isDestroyed()) return
     const [w = 0, h = 0] = ctx.windows.mainWindow.getContentSize()
-    popoverView.setBounds(layout.computePopoverBounds(w, h, HEADER_H))
+    popoverView.setBounds(layout.computePopoverBounds(w, h, overlayHeaderHeight()))
   }
 
   function clearNativeDevtoolsRetry(): void {

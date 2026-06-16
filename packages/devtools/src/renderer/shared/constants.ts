@@ -15,7 +15,7 @@ export const DEVICES = [
   { name: 'iPhone 17 Pro', width: 402, height: 874, pixelRatio: 3, statusBarHeight: 59, system: 'iOS 19.0', notchType: 'dynamic-island', safeAreaInsets: { top: 59, right: 0, bottom: 34, left: 0 } },
 ] as const
 
-export const ZOOM_OPTIONS = [25, 50, 75, 100] as const
+export const ZOOM_OPTIONS = [100, 85, 75, 50] as const
 
 // Fixed toolbar header height — re-exported from the cross-process shared
 // module so main (view layout) and renderer (toolbar/popover) can't drift.

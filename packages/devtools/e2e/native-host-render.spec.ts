@@ -344,13 +344,13 @@ test.describe('native-host render path e2e', () => {
 
   test('layout: the native simulator WebContentsView is live with the default zoom', async () => {
     // The simulator is a top-level WebContentsView (Option A). Confirm it exists
-    // and carries the default 100% zoom factor (setZoomFactor wired, not broken).
+    // and carries the default 85% zoom factor (setZoomFactor wired, not broken).
     // Pixel-position fidelity (bezel inset, scroll/splitter tracking) is visual QA.
     const zoom = await electronApp.evaluate(({ webContents }) => {
       const sim = webContents.getAllWebContents().find((wc) => wc.getURL().includes('simulator.html'))
       return sim ? sim.getZoomFactor() : null
     })
     expect(zoom, 'native simulator WebContentsView should be present').not.toBeNull()
-    expect(Math.abs((zoom as number) - 1), 'default zoom factor should be ~1.0').toBeLessThan(0.01)
+    expect(Math.abs((zoom as number) - 0.85), 'default zoom factor should be ~0.85').toBeLessThan(0.01)
   })
 })
