@@ -192,6 +192,8 @@ async function findMainWindow(electronApp: ElectronApplication, timeout = 30_000
 
 框架不导出该 helper（避免把 Playwright 依赖拖进运行时包），但 `window.devtools` 的存在性是稳定契约，宿主据此自维护一份即可，无需再赌 `firstWindow()` 或匹配 URL/title。
 
+> 注：这是缓解而非根治——`firstWindow()` 仍会抢到 host-toolbar WCV，因为 Playwright `_electron` 把每个 webContents 都暴露成顶层 page，而 Electron 没有 API 把 `WebContentsView` 标记为「非 page target」。该平台限制钉在 [#53](https://github.com/EchoTechFE/dimina-kit/issues/53)，等 Playwright/Electron 给出过滤能力即接上、下线本节绕行。
+
 ## CI / 发布
 
 npm `dev` dist-tag 仅接受 main 分支的 workflow dispatch；其它分支发布到隔离的 `dev-<branch>` dist-tag，不再可能误拨共享 `dev`。
