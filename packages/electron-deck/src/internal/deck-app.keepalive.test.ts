@@ -1,18 +1,18 @@
 /**
- * TDD failing-first contract tests for "keepAlive" (build-plan §2(f) /
- * docs/contracts/capability-and-lifecycle.md §B3). TWO parts:
+ * TDD failing-first contract tests for "keepAlive" (view-handle.md「keepAlive 保活」/
+ * docs/contracts/capability-and-lifecycle.md「tab 保活归属」). TWO parts:
  *
  * PART 1 — LIFETIME / LEAK FIX (the critical half). Today a `runtime.view`'s
  * native `WebContentsView` is only DETACHED on teardown (removeChildView); its
  * backing `webContents` is NEVER destroyed (the slice-1 host-view test even
  * pins `wcv.destroyed === false`). That leaks a renderer process for the life
- * of the app. The contract (§B3.1): the keep-alive view's WebContents is `own()`d
+ * of the app. The contract (「保活寿命归 Scope、淘汰策略归 host」): the keep-alive view's WebContents is `own()`d
  * by its Scope, so it is DESTROYED (`webContents.close()`, guarded by
  * `isDestroyed()`) when the view is explicitly disposed, when its window closes
  * (windowScope cascade), or when an explicit `opts.scope` (home/session) closes —
  * idempotent (never double-closed).
  *
- * PART 2 — opt-in LRU helper (§B3.2). `runtime.view({ keepAlive:{policy:'lru',
+ * PART 2 — opt-in LRU helper (「opt-in helper：runtime.view({ keepAlive })」). `runtime.view({ keepAlive:{policy:'lru',
  * max:N} })` tracks a per-policy-group LRU of HIDDEN views; making a view visible
  * marks it recently-used; when the count of HIDDEN keep-alive views in a group
  * exceeds `max`, the LEAST-recently-visible HIDDEN view is disposed (its
@@ -446,11 +446,11 @@ describe('keepAlive — Part 1 lifetime/leak fix: the native WebContents is dest
 })
 
 // ═════════════════════════════════════════════════════════════════════════════
-// PART 2 — opt-in LRU helper (§B3.2). keepAlive:{policy:'lru',max:N} evicts the
+// PART 2 — opt-in LRU helper (「opt-in helper：runtime.view({ keepAlive })」). keepAlive:{policy:'lru',max:N} evicts the
 // least-recently-visible HIDDEN view in a group once HIDDEN keep-alive views
 // exceed `max`. Visible views are never evicted. No keepAlive → evict nothing.
 // ═════════════════════════════════════════════════════════════════════════════
-describe('keepAlive — Part 2 opt-in LRU helper (B3.2)', () => {
+describe('keepAlive — Part 2 opt-in LRU helper', () => {
 	// ── a) exceed max hidden → least-recent-hidden disposed (wc destroyed). ─────
 	it('a) keepAlive {policy:lru,max:2}: hiding a 3rd view (exceeds max) disposes the FIRST-hidden (least-recent) view', async () => {
 		const electron = createFakeElectron()

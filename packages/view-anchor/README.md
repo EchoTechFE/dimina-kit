@@ -66,22 +66,26 @@ handle.update(publish) // 换 publish（IPC 通道），并立即把当前尺寸
 handle.dispose()       // 停止观察；此后不再上报
 ```
 
-它从 `ResizeObserver` 的 border-box 取主导轴尺寸（不调 `getBoundingClientRect`、不强制 reflow），`Math.round` + 钳零，复用与正向同一套 RAF 合并 + 去重。宿主收到尺寸后调整占位、再由正向把视图贴上去——两个单向原语经占位 div 串成一座双向桥。**注意 footgun**：`target` 必须在主导轴上 shrink-to-fit（其尺寸不能被宿主灌入的视图尺寸反向决定），否则跨进程环不收敛。详见 [`docs/bidirectional-design.md`](./docs/bidirectional-design.md)。
+它从 `ResizeObserver` 的 border-box 取主导轴尺寸（不调 `getBoundingClientRect`、不强制 reflow），`Math.round` + 钳零，经反向专用的 RAF 合并 + 去重发出（正向同步、反向 RAF，刻意不对称）。宿主收到尺寸后调整占位、再由正向把视图贴上去——两个单向原语经占位 div 串成一座双向桥。**注意 footgun**：`target` 必须在主导轴上 shrink-to-fit（其尺寸不能被宿主灌入的视图尺寸反向决定），否则跨进程环不收敛。详见 [`docs/bidirectional-design.md`](./docs/bidirectional-design.md)。
 
 ## 文档
 
-- [`docs/mechanism.mdx`](./docs/mechanism.mdx) —— 正向完整机制：RAF 与陈旧帧安全性、`present` / 零矩形 / 卸载契约、React 18 StrictMode 生命周期。内嵌可交互 3D 演示 [`docs/anchor-3d.html`](./docs/anchor-3d.html)。
-- [`docs/bidirectional-design.md`](./docs/bidirectional-design.md) —— 双向化设计：共享 `createMeasureLoop` 核心、单轴所有权与收敛性、信任边界、以及两个原语如何「锚」到一起。
+- [`docs/mechanism.mdx`](./docs/mechanism.mdx) —— 正向完整机制：同步发布与陈旧帧安全性、`present` / 零矩形 / 卸载契约、React 18 StrictMode 生命周期。内嵌可交互 3D 演示 [`docs/anchor-3d.html`](./docs/anchor-3d.html)。
+- [`docs/bidirectional-design.md`](./docs/bidirectional-design.md) —— 双向几何桥：正向同步 / 反向 RAF 的刻意不对称、单轴所有权与收敛性、信任边界、以及两个原语如何「锚」到一起。
 
 ## API
 
 | 导出 | 类型 | 作用 |
 |---|---|---|
-| `createViewAnchor(target, opts)` | 函数 | 正向命令式核心，返回 `{ update, dispose }`。不依赖 React、不依赖 Electron。 |
-| `useViewAnchor(opts)` | Hook | 正向 React 适配层，返回一个挂到占位元素上的 ref 回调。 |
+| `createViewAnchor(target, opts)` | 函数 | 正向命令式核心，返回 `{ update, dispose }`。`present:false` 用零矩形 `{0,0,0,0}` 表示收起。不依赖 React、不依赖 Electron。 |
+| `createPlacementAnchor(target, opts)` | 函数 | 正向核心的显式 `Placement` 变体：可见性是判别式 `{ visible:true, bounds }` / `{ visible:false }`，绝不从零尺寸推断——真正 0×0 但在屏的视图与隐藏视图就此可区分。另支持 opt-in 的 `guardDisplayNone` / `followScroll` / `followGeometry`（按需开窗的 RAF 几何哨兵）+ `pulse()`。 |
+| `measurePlacement(target)` | 函数 | 纯测量：读 `target` 矩形，包成 `{ visible:true, bounds }`。 |
+| `useViewAnchor(opts)` | Hook | 正向 React 适配层（基于 `createViewAnchor`），返回一个挂到占位元素上的 ref 回调。 |
 | `createSizeAdvertiser(target, opts)` | 函数 | 反向命令式核心，返回 `{ update, dispose }`。下游量内容尺寸回流给宿主。 |
 | `Bounds` | 类型 | `{ x, y, width, height }`，单位为 CSS 像素。 |
-| `ViewAnchorOptions` / `ViewAnchorHandle` | 类型 | 正向核心的选项与句柄形状。 |
+| `Placement` | 类型 | `{ visible:true; bounds:Bounds } \| { visible:false }`，显式可见性判别式。 |
+| `ViewAnchorOptions` / `ViewAnchorHandle` | 类型 | 正向零矩形核心的选项与句柄形状。 |
+| `PlacementAnchorOptions` / `PlacementAnchorHandle` | 类型 | 正向 `Placement` 核心的选项与句柄形状。 |
 | `UseViewAnchorOptions` / `ViewAnchorRef` | 类型 | 正向适配层的选项与 ref 回调形状。 |
 | `AdvertisedAxis` / `AdvertisedSize` | 类型 | 反向的轴（`'block'\|'inline'`）与帧载荷 `{ axis, extent }`。 |
 | `SizeAdvertiserOptions` / `SizeAdvertiserHandle` | 类型 | 反向核心的选项与句柄形状。 |

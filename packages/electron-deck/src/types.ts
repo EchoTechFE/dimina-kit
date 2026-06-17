@@ -322,7 +322,7 @@ export interface ViewCreateOptions {
 	 *  `runtime.scopes.create()` is accepted (provenance check). */
 	readonly scope?: DeckSession
 	/**
-	 * Opt-in keep-alive eviction policy (B3.2). When set, the framework disposes
+	 * Opt-in keep-alive eviction policy (opt-in LRU helper). When set, the framework disposes
 	 * the least-recently-VISIBLE HIDDEN view in this view's group once the group's
 	 * HIDDEN count exceeds `max` — destroying that view's native WebContents.
 	 * Currently-visible views are NEVER evicted. Views sharing the same `max` form

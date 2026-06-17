@@ -1,46 +1,43 @@
 # workbench 模型（host 集成参考）
 
-> 落地的抽取设计：framework `electronDeck()` 经注入式 `RuntimeBackend` 编排 devtools，
-> `launch()` 是唯一入口，经框架启动；旧的 `createWorkbenchApp`
-> 已被它取代、不复存在。框架内部机制见
-> [`framework-extraction-v2.md`](../../electron-deck/docs/framework-extraction-v2.md)。
-> 下文的概念框架（config 字段 / Runtime 门面 / 不变量）是 host 集成参考。
+> framework `electronDeck()` 经注入式 `RuntimeBackend` 编排 devtools 运行时；下游 host
+> 写一份 `DeckConfig` 交给框架，framework 接管 Electron 装配、IPC、生命周期。框架内部
+> 机制见 [`electron-deck 架构`](../../electron-deck/docs/architecture.md)。
 >
-> 下游 host（如 qdmp）写一份 `WorkbenchConfig` 交给 `launch(config)`，framework
-> 接管 Electron 装配、IPC、生命周期。本文是 host 集成参考：怎么用 + API + 必知约束。
->
+> 本文是 host 集成参考：config 字段 / Runtime 门面 / 不变量 —— 怎么用 + API + 必知约束。
 > 面板数据同步（preload 为唯一真相源）见 [`miniapp-snapshot.md`](./miniapp-snapshot.md)。
 
 ## 两条必知坑（先读）
 
-**1. 入口包归属：`launch` 从 `@dimina-kit/devtools` 导入，其余从 `@dimina-kit/electron-deck`。**
+**1. 入口包归属：框架入口 `electronDeck()` 与扩展原语都从 `@dimina-kit/electron-deck` 导入。**
 
 ```ts
-import { launch } from '@dimina-kit/devtools'        // 入口函数
+import { electronDeck } from '@dimina-kit/electron-deck'    // 框架入口
 import { defineEvent } from '@dimina-kit/electron-deck'     // 事件 token + config 类型
 ```
 
-`launch()` 的实现住在 `@dimina-kit/devtools`，因为它要驱动 devtools 真运行时，而
-devtools 已依赖 `@dimina-kit/electron-deck`——入口若放 workbench 包会形成循环依赖。所以：
-
 | 你要的 | 从哪导入 |
 |---|---|
-| `launch(config)` 入口函数 | `@dimina-kit/devtools` |
-| `defineEvent` / `WorkbenchConfig` 等类型 | `@dimina-kit/electron-deck` |
+| `electronDeck(config)` 框架入口 | `@dimina-kit/electron-deck` |
+| `defineEvent` / `DeckConfig` 等类型 | `@dimina-kit/electron-deck` |
 | preload bridge `exposeDeckBridge()` | `@dimina-kit/electron-deck/preload` |
 | renderer client `createDeckClient()` | `@dimina-kit/electron-deck/client` |
 
-（`@dimina-kit/electron-deck/host` 导出 transport 原语，仅供入口装配，host 不直接用。）
+（`@dimina-kit/electron-deck/host` 导出 transport 原语，仅供入口装配，host 不直接用。本文描述的
+`DeckConfig` 是 **直接驱动框架** 的 host 集成形态；devtools 自身另经 `@dimina-kit/devtools` 的
+`launch(WorkbenchAppConfig)` 注入 `RuntimeBackend`，那条入口的 config 是 devtools 专属的
+`WorkbenchAppConfig`（`onSetup` / `registerSimulatorApi` 模型，见 [`README`](../README.md)），与
+`DeckConfig` 不是同一套。）
 
-**2. 不要在 ESM main 里顶层 `await launch(...)`。**
+**2. 不要在 ESM main 里顶层 `await electronDeck(...)`。**
 
-Electron 在 main 模块求值完成前不会触发 `app.whenReady()`，而 `launch()` 内部
-要 await whenReady——顶层 await 会死锁（ready 等模块求值、模块求值等 launch、
-launch 等 ready）。**fire-and-forget + `.catch()`**，event loop 会撑住进程：
+Electron 在 main 模块求值完成前不会触发 `app.whenReady()`，而框架入口内部
+要 await whenReady——顶层 await 会死锁（ready 等模块求值、模块求值等入口、
+入口等 ready）。**fire-and-forget + `.catch()`**，event loop 会撑住进程：
 
 ```ts
-launch({ /* ... */ }).catch((err) => {
-  console.error('launch() failed:', err)
+electronDeck({ /* ... */ }).catch((err) => {
+  console.error('electronDeck() failed:', err)
 })
 ```
 
@@ -48,18 +45,17 @@ launch({ /* ... */ }).catch((err) => {
 
 ```ts
 // main.ts
-import { launch } from '@dimina-kit/devtools'
-import { defineEvent } from '@dimina-kit/electron-deck'
+import { electronDeck, defineEvent } from '@dimina-kit/electron-deck'
 
 const authChanged = defineEvent<{ user: { id: string } | null }>('authChanged')
 
-launch({
+electronDeck({
   app: { name: 'My DevTools' },
   hostServices: {
     getUser: async () => ({ user: null }),
   },
   events: [authChanged],
-}).catch((err) => { console.error('launch() failed:', err) })
+}).catch((err) => { console.error('electronDeck() failed:', err) })
 ```
 
 host 写好这一个调用即可启动。webview 侧 preload / renderer 的用法见 §4。
@@ -238,11 +234,11 @@ export interface Runtime {
 host 自负 dispose / 错误处理。`runtime.context` 上的 `_registry` / `_senderPolicy`
 是 `@internal` escape，使用即破坏 framework 保证。
 
-**启动 / 失败行为（当前 entry）**：
+**启动 / 失败行为**：
 
 - `setup(runtime)` 抛错时，framework 会 `dispose()` 已装配的 context（连带拆掉
   WireTransport handler 与已绑的 contributions）再把错误抛出，不残留。
-- `toolbar` 加载是 best-effort：`source` load 失败只 log、不中断 `launch()`；固定
+- `toolbar` 加载是 best-effort：`source` load 失败只 log、不中断 `electronDeck()`；固定
   `height` 仍会推给占位区。
 - `simulatorApis` 经 wire 的 simulator 路由按**单参**（`args[0]`）调，多参不支持
   （devtools simulator API 是 `wx.<name>(params)` 单参约定）。
@@ -308,8 +304,8 @@ export const authChanged = defineEvent<{ user: { id: string } | null }>('authCha
 ```
 
 ```ts
-// main.ts —— host entry（顶层执行 launch()，有 side-effect）
-import { launch } from '@dimina-kit/devtools'
+// main.ts —— host entry（顶层执行 electronDeck()，有 side-effect）
+import { electronDeck } from '@dimina-kit/electron-deck'
 import { authChanged } from './events'
 
 export const hostServices = {
@@ -318,7 +314,7 @@ export const hostServices = {
 export type HostServices = typeof hostServices
 export type Events = readonly [typeof authChanged]
 
-launch({
+electronDeck({
   app: { name: 'My DevTools' },
   hostServices,
   events: [authChanged],
@@ -327,7 +323,7 @@ launch({
     preloadPath: new URL('./toolbar-preload.js', import.meta.url).pathname,
     height: 48,
   },
-}).catch((err) => { console.error('launch() failed:', err) })
+}).catch((err) => { console.error('electronDeck() failed:', err) })
 ```
 
 ```ts
@@ -354,7 +350,7 @@ window.addEventListener('beforeunload', () => off.dispose())
 
 ## 5. mainWindow 加载归属
 
-当前 devtools entry **会**装配并加载内置 main renderer（`createDevtoolsRuntime` 在 host
+devtools backend **会**装配并加载内置 main renderer（`createDevtoolsRuntime` 在 host
 `setup` 之前就 `loadFile` 了 devtools 自带的 renderer）。所以 host **不应**在
 `setup(runtime)` 里覆盖 `runtime.mainWindow` 的内容——除非有明确替换整个 shell 的新实现。
 `runtime.mainWindow` 给 host 做窗口控制（show / bounds / 监听 app event 等），不是让
@@ -375,7 +371,7 @@ I2 是「受支持路径上的服务承诺」：framework 无法物理阻止 hos
 
 > 下面是**示意性的 host 侧集成代码**，住在下游 host 工程（如 qdmp）里，**不在本仓库**。
 > `./qdmp-api` / `./qdmp-adapter` / `./projects` / `./menu` / `toolbar/preload.ts` 等都是
-> host 自己写的模块，这里只演示它们怎么拼到 `launch(config)` 上。
+> host 自己写的模块，这里只演示它们怎么拼到 `electronDeck(config)` 上。
 
 ### feature module
 
@@ -418,7 +414,7 @@ export async function getAuthState() {
 
 ```ts
 import { fileURLToPath } from 'node:url'
-import { launch } from '@dimina-kit/devtools'     // 入口在 devtools
+import { electronDeck } from '@dimina-kit/electron-deck'
 import { qdmpAdapter } from './qdmp-adapter'
 import { qdmpProjects } from './projects'
 import * as auth from './auth'
@@ -444,7 +440,7 @@ export type HostServices = typeof hostServices
 export type Events = typeof events
 
 // fire-and-forget + .catch()，不要顶层 await（见开头第 2 条坑）
-launch({
+electronDeck({
   app: {
     name: 'QDMP DevTools',
     adapter: qdmpAdapter,
@@ -491,7 +487,7 @@ launch({
     }
   },
 }).catch((err) => {
-  console.error('[qdmp] launch() failed:', err)
+  console.error('[qdmp] electronDeck() failed:', err)
 })
 ```
 

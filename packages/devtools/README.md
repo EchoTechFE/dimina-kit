@@ -2,7 +2,7 @@
 
 基于 Electron 的小程序开发者工具。提供模拟器、Chrome DevTools 面板、WXML/AppData/Storage/编译 面板、编译配置等功能。
 
-下游 host 通过 `launch(config)` 集成并定制 devtools（零配置直接 `launch()`，配置驱动 `launch({...})`；见下方「两种用法」）。两种用法都经领域中立的 [`@dimina-kit/electron-deck`](../electron-deck) 框架编排——框架接管 Electron 进程生命周期（whenReady / will-quit）、wire/trust 原语，devtools 作为 `RuntimeBackend` 注入完整运行时（见 [`framework-extraction-v2.md`](../electron-deck/docs/framework-extraction-v2.md)）。
+下游 host 通过 `launch(config)` 集成并定制 devtools（零配置直接 `launch()`，配置驱动 `launch({...})`；见下方「两种用法」）。两种用法都经领域中立的 [`@dimina-kit/electron-deck`](../electron-deck) 框架编排——框架接管 Electron 进程生命周期（whenReady / will-quit）、wire/trust 原语，devtools 作为 `RuntimeBackend` 注入完整运行时（见 [`electron-deck 架构`](../electron-deck/docs/architecture.md)）。
 
 ---
 
@@ -195,7 +195,8 @@ src/
 | `menuBuilder`   | `(mainWindow, menuContext: MenuContext) => void` | 内置菜单 | 自定义菜单构建器；`menuContext` 为手写窄契约 `MenuContext`（`appName` + workspace 窄集 + `openSettings` + `notify.{projectStatus, windowNavigateBack}`），不含内部管线 |
 | `onSetup`       | `(instance) => void`                        | —           | 窗口和 context 创建后的回调，用于注册 Contribution（见下文）|
 | `onBeforeClose` | `(instance) => void`                        | —           | 窗口关闭前的回调，session 关闭由框架自动处理      |
-| `window`        | `WorkbenchWindowConfig`                     | —           | 窗口尺寸覆盖                                      |
+| `onBeforeOpenProject` | `(projectPath: string) => void \| Promise<void>` | — | 打开项目前、任何副作用（旧会话拆除 / 编译 / dev-server）之前运行的声明式权限门控。抛错即否决：`openProject` 返回 `{ success: false, error }`，当前活动会话保持不动、适配器不被调用，且框架自动把 error 透到状态条（`notify.projectStatus`）。覆盖 IPC / 菜单 / 内部直调三个打开入口 |
+| `window`        | `WorkbenchWindowConfig`（`width`/`height`/`autoShow?`） | — | 主窗口尺寸覆盖；`autoShow`（默认 `true`）控制 `ready-to-show` 是否自动显示窗口。`autoShow: false` 时窗口创建即隐藏（test / 非 test 一致），由 host 在登录通过后自行 `instance.mainWindow.show()` |
 | `updateChecker` | `UpdateChecker`                             | —           | 自定义更新检查器；提供后启用"检查更新"功能        |
 | `updateOptions` | `{ checkInterval?, initialDelay?, getCurrentVersion? }` | —  | 仅当 `updateChecker` 提供时生效，默认 1h / 5s     |
 
@@ -679,7 +680,7 @@ pnpm test               # 运行测试
 本工具仅用于本地开发调试。当前的安全配置：
 
 - **Workbench 窗口**（main / settings / popover overlay）均启用 `contextIsolation` 并禁用 `nodeIntegration`；renderer 通过 main preload 经 `contextBridge` 拿到 `window.devtools.ipc`，每个 IPC handler 经 sender whitelist 校验调用方
-- **Simulator 本体** 是主进程顶层 `WebContentsView`（`nativeSimulatorView`，`partition='persist:simulator'`、`nodeIntegration=false`），其 preload 由 `webPreferences.preload = cjsSiblingPreloadPath(ctx.preloadPath)` 在创建时（`attachNativeSimulator`）固定；session 层的 `configureSimulatorSession()` 只设 Referer/CORS 头，不注册 frame preload。**小程序的每页代码** 运行在该 WCV 内部 DeviceShell 托管的 render-host `<webview>` guest 里（同 `persist:simulator` partition、`nodeIntegration=false`），承载逐页沙箱；guest 的 contextIsolation/sandbox 由主进程 `will-attach-webview` 钉死，渲染进程无法替换
+- **Simulator 本体** 是主进程顶层 `WebContentsView`（`nativeSimulatorView`，per-project `persist:miniapp-<key>` partition、无 appId 时回落共享 `persist:simulator`、`nodeIntegration=false`），其 preload 由 `webPreferences.preload = cjsSiblingPreloadPath(ctx.preloadPath)` 在创建时（`attachNativeSimulator`）固定。**小程序的每页代码** 运行在该 WCV 内部 DeviceShell 托管的 render-host `<webview>` guest 里（`nodeIntegration=false`），承载逐页沙箱；guest 不带静态 `partition` 属性，由主进程 `will-attach-webview` 钉到同一 per-project partition，并钉死 contextIsolation/sandbox，渲染进程无法替换
 - **renderer 入口** 启用了保守 CSP；`will-navigate` / `setWindowOpenHandler` 屏蔽外部跳转
 
 仍然不要在 devtools 窗口中加载不受信任的远程内容；本工具不打算在非本地环境部署。

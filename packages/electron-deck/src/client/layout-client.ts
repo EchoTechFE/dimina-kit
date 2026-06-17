@@ -41,7 +41,7 @@ export interface LayoutClientDeps {
 }
 
 /**
- * Renderer half of the A5-2 slot-token handshake (§A5-2.1). Subscribes to main's
+ * Renderer half of the slot-token handshake (capability-and-lifecycle.md「原子下发握手协议」). Subscribes to main's
  * `slot-grant` pushes FIRST (so a grant replayed synchronously by `subscribe()`
  * cannot be missed), then on each grant anchors the granted DOM slot with this
  * session's hardening opts (followScroll / followGeometry / guardDisplayNone)
@@ -65,7 +65,7 @@ export function createDeckLayoutClient(deps: LayoutClientDeps): {
   const byViewId = new Map<string, { token: string; anchor: { dispose(): void } }>()
   let disposed = false
 
-  // Register the grant listener BEFORE requesting replay (handshake §A5-2.1):
+  // Register the grant listener BEFORE requesting replay (handshake):
   // a grant the main side replays synchronously inside `subscribe()` must find
   // the listener already attached.
   const unsub = deps.bridge.onSlotGrant((grant) => {

@@ -15,7 +15,7 @@ import { registerAppLifecycle } from '../app/lifecycle.js'
  * v2 scope: the backend owns window creation (the framework skips its own when a
  * backend is present), so `assemble` ignores the framework `runtime` and builds
  * the real devtools main window itself. Trust/frame unification and surfacing
- * the runtime facade are deferred (see framework-extraction-v2.md §7).
+ * the runtime facade are deferred.
  *
  * NOT migrating onto deck's high-level host API (Window facade / runtime.view /
  * DeckSession / grants) is a DELIBERATE, reviewed decision — not a backlog item.

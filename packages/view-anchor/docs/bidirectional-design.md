@@ -1,27 +1,21 @@
-# view-anchor 双向化重构设计（提案）
+# view-anchor 双向几何桥
 
-> 状态：契约草案，经四轮对抗评审收敛。本页只定契约，不含实现。
+view-anchor 是一座**双向几何桥**，引擎无关、传输注入：
 
-## 1. 目标
+- **正向** `createViewAnchor(target, { present, publish })` —— 宿主渲染进程量 DOM 占位矩形 → `publish(bounds)` → IPC → 主进程 `WebContentsView.setBounds`。
+- **反向** `createSizeAdvertiser(target, { axis, publish })` —— 下游 WebContentsView 自己的渲染进程量自身内容尺寸 → `publish(size)` → IPC → 宿主，宿主据此调整占位尺寸，再经正向把视图贴上去。
 
-把 view-anchor 从「单向锚定」重构成「**双向几何桥**」，且保持引擎无关、传输注入：
+适用场景：toolbar 这类「**交给下游控制**」的 WebContentsView，尺寸的事实来源在下游一侧（典型：宽由宿主主导、高由下游内容主导），占位映射是动态的。
 
-- **正向（已有）** `createViewAnchor(target, { present, publish })` —— 宿主渲染进程量 DOM 占位矩形 → `publish(bounds)` → IPC → 主进程 `WebContentsView.setBounds`。
-- **反向（新增）** `createSizeAdvertiser(target, { axis, publish })` —— 下游 WebContentsView 自己的渲染进程量自身内容尺寸 → `publish(size)` → IPC → 宿主，宿主据此调整占位尺寸，再经正向把视图贴上去。
+范围之外：不是同层渲染（合成器层面、另一套机制）；包里不提供 React 反向适配、不提供宿主决策 `decide`（见 §4/§7）。
 
-动机：workbench 的 toolbar 改成「**交给下游控制**」的 WebContentsView，尺寸的事实来源从宿主翻到了下游一侧（典型：宽宿主主导、高下游内容主导），占位映射变成动态的。
+## 2. 正反向不共享发射核心——两个方向最优时机不同
 
-非目标：不是同层渲染（合成器层面、另一套机制）；不在包里提供 React 反向适配、不在包里提供宿主决策 `decide`（见 §4/§7）。
+正反向的最优发射时机本就不同，所以它们**不共享发射核心**，采取**正向同步、反向 RAF** 的刻意不对称。
 
-## 2. 正反向**不共享发射核心**——两个方向最优时机不同
+**正向 `createViewAnchor` = 同步发布，不走 RAF。** 原生 overlay 的 `setBounds` 是跨进程、本就晚约 1 合成帧；RAF 再叠一帧 → 拖拽可见拖尾。所以正向在每个 `ResizeObserver` / window `resize` 触发里**同步**测量+发布，抗洪由 `lastPublished` 同值去重承担。撤销安全靠「每次发布开头同步读 `disposed`/`present`」——没有排队帧可跑赢状态变化。正向的 sink 是 IPC→主进程 `setBounds`，**不碰本渲染进程 DOM**，所以同步发布不会形成 RO 重入循环。
 
-> 设计初稿曾想抽一个共享 `createMeasureLoop` 给两个方向。落地时与 refactor-simulator
-> 的生产正向合并，发现这是**错的**：正反向的最优发射时机本就不同，强行共享会让核心
-> 长出 by-direction flag。最终采取**正向同步、反向 RAF** 的刻意不对称。
-
-**正向 `createViewAnchor` = 同步发布，不走 RAF。** 原生 overlay 的 `setBounds` 是跨进程、本就晚约 1 合成帧；RAF 再叠一帧 → 拖拽可见拖尾（refactor-simulator 生产验证过的修复）。所以正向在每个 `ResizeObserver` / window `resize` 触发里**同步**测量+发布，抗洪由 `lastPublished` 同值去重承担。撤销安全靠「每次发布开头同步读 `disposed`/`present`」——没有排队帧可跑赢状态变化。正向的 sink 是 IPC→主进程 `setBounds`，**不碰本渲染进程 DOM**，所以同步发布不会形成 RO 重入循环。
-
-**反向 `createSizeAdvertiser` = RAF 合并（内部 `createMeasureLoop`，反向专用）。** 反向是一条**跨进程反馈环**：advertise → 宿主 resize 这块视图 → 下游内容 remeasure → 再 advertise。RAF 的「每帧≤1 次发布」对这条环是合理的阻尼。`createMeasureLoop<T>` 只服务反向，通过注入 `produce`/`same`/`sink` 三元组把方向细节关在外层，核心零 flag：
+**反向 `createSizeAdvertiser` = RAF 合并（内部 `createMeasureLoop`，反向专用）。** 反向是一条**跨进程反馈环**：advertise → 宿主 resize 这块视图 → 下游内容 remeasure → 再 advertise。RAF 的「每帧≤1 次发布」对这条环是合理的阻尼。`createMeasureLoop<T>` 只服务反向（正向不用它），通过注入 `produce`/`same`/`sink` 三元组把方向细节关在外层，核心零 flag：
 
 ```ts
 function createMeasureLoop<T>(cfg: {
@@ -31,7 +25,7 @@ function createMeasureLoop<T>(cfg: {
 }): { schedule, emitNow, setActive, cancel, dispose }
 ```
 
-**为什么不对称是对的**：正向是单向跟随者，少一帧直接消除可见拖尾；反向是反馈环，多一帧阻尼更稳。把两者塞进一个核心要么逼出 `if(direction)` flag，要么把正向重新拖回 RAF（复活拖尾）。所以**正向内联同步、反向用 RAF 引擎**，各取所需。
+**为什么不对称是对的**：正向是单向跟随者，少一帧直接消除可见拖尾；反向是反馈环，多一帧阻尼更稳。把两者塞进一个核心要么逼出 `if(direction)` flag，要么把正向也拖进 RAF（带回拖尾）。所以**正向内联同步、反向用 RAF 引擎**，各取所需。
 
 ## 3. 反向原语契约
 
@@ -50,7 +44,7 @@ export interface SizeAdvertiserOptions {
 }
 
 export interface SizeAdvertiserHandle {
-  update(opts: SizeAdvertiserOptions): void  // 只能换 publish（换 IPC 通道）；axis 不可变
+  update(publish: (size: AdvertisedSize) => void): void  // 只能换 publish（换 IPC 通道）；axis 不可变
   dispose(): void                            // 停 observe、取消 RAF，此后永不再 publish
 }
 
@@ -84,7 +78,7 @@ export function createSizeAdvertiser(target: HTMLElement, opts: SizeAdvertiserOp
 | 白名单轴 | 宿主 | 用 payload 的 `axis` 常量比对，`axis !== expected` 则丢弃 |
 | 位置 / 另一轴 / z-order 锁定 | 宿主 | 下游无任何途径改变 → 杜绝全窗覆盖类点击劫持 |
 
-**target 选错（反馈环）的防护——克制为主，不过度防御。** 关键事实：违反单轴所有权时，RAF 合并把「死循环」**封顶为每帧一次**——它退化成可见的抖动 / 每帧一次冗余 IPC，而**不是冻死 UI**。既然不是灾难性故障，就不值得为它在每帧路径上堆检测器。最终只保留：
+**target 选错（反馈环）的防护——克制为主，不过度防御。** 关键事实：违反单轴所有权时，RAF 合并把「死循环」**封顶为每帧一次**——它退化成可见的抖动 / 每帧一次冗余 IPC，而**不是冻死 UI**。既然不是灾难性故障，就不在每帧路径上堆检测器。只保留：
 
 - **一条构造期廉价守卫**：`target` 是 `<body>`/`<html>` 时 `console.warn`——这是「stable-but-wrong」（占位永远撑成视图高、不缩到内容）最常见的成因，一次性、零每帧成本。
 - **其余靠文档**：JSDoc 与本节把「target 必须主导轴 shrink-to-fit、不被宿主灌入的尺寸反向决定」讲清。
@@ -137,15 +131,10 @@ export function createSizeAdvertiser(target: HTMLElement, opts: SizeAdvertiserOp
 
 ## 7. 与 Electron preferred-size 的关系（宿主侧可选数据源，非替代）
 
-宿主若在 Electron 且能接受零下游代码，可用 `enablePreferredSizeMode` + `preferred-size-changed` 作为反向「**源**」喂给同一个 `decide`，省掉下游注入。但它是 Electron 私有、且有两点待 spike 坐实：① 在 `WebContentsView` 上触发且上报值吸收 zoom；② `setBounds.height` 不回灌 layout（否则正反馈震荡）。
+宿主若在 Electron 且能接受零下游代码，可用 `enablePreferredSizeMode` + `preferred-size-changed` 作为反向「**源**」喂给同一个 `decide`，省掉下游注入。但它是 Electron 私有，且依赖两个前提：① 在 `WebContentsView` 上触发且上报值吸收 zoom；② `setBounds.height` 不回灌 layout（否则正反馈震荡）。
 
-view-anchor 的反向原语是**引擎无关/可移植**那条路（非 Electron / iframe 宿主、需选子 target 的场景）。两者并存：preferred-size 是 Electron 捷径，advertiser 是可移植机制，`decide` + §5 安全红线是二者共用的公共底座。这也是反向逻辑该留在 view-anchor、而非写死成 Electron 事件的理由。spike 结果只决定宿主选哪个**源**，不改变 view-anchor 要不要建反向原语。
+view-anchor 的反向原语是**引擎无关/可移植**那条路（非 Electron / iframe 宿主、需选子 target 的场景）。两者并存：preferred-size 是 Electron 捷径，advertiser 是可移植机制，`decide` + §5 安全红线是二者共用的公共底座。这也是反向逻辑留在 view-anchor、而非写死成 Electron 事件的理由——宿主选哪个**源**不改变反向原语本身。
 
-## 8. 包定位守恒（仍是一个原语，不是框架）
+## 8. 包定位守恒（一个原语，不是框架）
 
-双向化后 view-anchor 仍是「DOM 几何 ↔ 跨进程视图」的**单一职责双向桥**。守住四条即不滑向框架：① 导出面只多 `createSizeAdvertiser` + 其类型；② `createMeasureLoop` 不导出；③ 现在不做 React 反向适配（下游不保证是 React）；④ `decide` 留宿主、不进包。
-
-## 9. 已收敛 / 仍待拍板
-
-已由对抗评审定：payload 单标量 `{axis, extent}`（关闭「单标量 vs 可空双轴」）；命名 `createSizeAdvertiser`/`AdvertisedSize`/`publish`（关闭命名问题）；`present` 砍掉。
-仍待定：React 反向适配 `useSizeAdvertiser` 是否要做（默认否，等出现真实 React 下游）。
+view-anchor 是「DOM 几何 ↔ 跨进程视图」的**单一职责双向桥**。守住四条即不滑向框架：① 导出面只含 `createViewAnchor` / `createPlacementAnchor` / `createSizeAdvertiser` + 其类型；② `createMeasureLoop` 不导出；③ 不提供 React 反向适配（下游不保证是 React）；④ `decide` 留宿主、不进包。

@@ -1,5 +1,5 @@
 /**
- * `ViewHandle` — the per-view orchestrator (build-plan §2(a)/(b)/(d)). One handle
+ * `ViewHandle` — the per-view orchestrator (view-handle.md「placeIn 与挂载」/「dispose（viewScope LIFO 序）」/「moveTo 跨窗迁移」). One handle
  * owns ONE native view and threads it through a window's z-planner. It composes
  * three INJECTED primitives and nothing else (no deck-app, no Electron):
  *   - a {@link NativeView} (its `ref` + a `setBounds` sink) — the native surface;
@@ -12,16 +12,16 @@
  * (scope.ts cross-layer LIFO): the native view is detached and the placement
  * sink goes inert.
  *
- * gap#1. The handle drives `setBounds` DIRECTLY on its native view; the
+ * handle 直接驱动 bounds. The handle drives `setBounds` DIRECTLY on its native view; the
  * Compositor stays a pure z-order planner (mount/unmount/commit only) and never
  * sees geometry.
  *
- * A4 teardown order (build-plan §2(b)). The viewScope owns the native detach
+ * per-window teardown 顺序 (view-handle.md「dispose（viewScope LIFO 序）」). The viewScope owns the native detach
  * FIRST and the sink-disable LAST, so LIFO teardown runs the sink-disable
  * (STEP0) BEFORE the detach (STEP1): a late `place` frame can never drive a
  * native effect on a half-torn-down view.
  *
- * Cross-window move (build-plan §2(d) / A1.3.2). {@link ViewHandle.moveTo}
+ * Cross-window move (view-handle.md「moveTo 跨窗迁移」/ compositor-and-teardown.md「moveTo 事务状态机」). {@link ViewHandle.moveTo}
  * migrates the view to another `{ compositor, windowScope }` as TWO independent
  * Compositor commits, guarded by a per-view async mutex (THE migrationLock —
  * each handle is one view). The current placement is a MUTABLE token so the
@@ -49,9 +49,9 @@ export interface Bounds {
 export type Placement = { visible: true; bounds: Bounds } | { visible: false }
 
 /** The native surface a handle drives: its z-order identity (`ref`) plus the
- *  `setBounds` sink the handle calls directly (gap#1). `destroy` (optional)
+ *  `setBounds` sink the handle calls directly (handle 直接驱动 bounds). `destroy` (optional)
  *  destroys the backing native view (its WebContents) — owned by the viewScope so
- *  it runs on teardown AFTER the detach (keepAlive B3.1 lifetime/leak fix).
+ *  it runs on teardown AFTER the detach (keepAlive「保活寿命归 Scope、淘汰策略归 host」lifetime/leak fix).
  *  Optional so fakes that don't model a native WebContents stay valid.
  *
  *  `webContents` / `capturePage` (optional) expose the backing native view's
@@ -82,7 +82,7 @@ export interface ViewHandle {
    *  detaches (unmount + commit) but keeps the native view alive. */
   applyPlacement(p: Placement): void
   /**
-   * Cross-window move (build-plan §2(d) / A1.3.2). Migrate the view from its
+   * Cross-window move (view-handle.md「moveTo 跨窗迁移」/ compositor-and-teardown.md「moveTo 事务状态机」). Migrate the view from its
    * current placement (`src`) to `dest` as TWO independent Compositor commits,
    * serialized by a per-view async mutex (migrationLock):
    *
@@ -93,7 +93,7 @@ export interface ViewHandle {
    *
    * On success the compositor token moves to `dest` (later `applyPlacement`
    * drives the dest host). With `rehome:true`, the viewScope is re-parented under
-   * dest's `windowScope` (lifetime follows display). gap#2: moveTo moves DISPLAY
+   * dest's `windowScope` (lifetime follows display). moveTo 迁移显示而非寿命: moveTo moves DISPLAY
    * (and, with rehome, LIFETIME) — it does NOT carry capability grants; the dest
    * window's own control layer issues its own grant. Terminal (Promise<void>, not
    * chainable).
@@ -144,7 +144,7 @@ export function createViewHandle(deps: ViewHandleDeps): ViewHandle {
   // viewScope's real parent as the donor (scope.adopt requires donor === parent).
   let owningWindowScope: Scope | null = null
 
-  // The placement sink's gate. Goes false the instant the A4 teardown runs
+  // The placement sink's gate. Goes false the instant the per-window teardown runs
   // (STEP0), so a late applyPlacement after dispose/cascade is a no-op.
   let active = false
 
@@ -305,7 +305,7 @@ export function createViewHandle(deps: ViewHandleDeps): ViewHandle {
       // Adopt landed: the viewScope's lifetime now lives under dest's windowScope.
       owningWindowScope = dest.windowScope
     }
-    // gap#2: moveTo does NOT touch capability grants — the dest window's control
+    // moveTo 迁移显示而非寿命: moveTo does NOT touch capability grants — the dest window's control
     // layer issues its own. Out of scope by construction.
   }
 
@@ -379,7 +379,7 @@ export function createViewHandle(deps: ViewHandleDeps): ViewHandle {
       if (p.visible) {
         // Ensure attached (idempotent if still mounted; a fresh instance if it
         // was previously detached via visible:false), then drive bounds DIRECTLY
-        // on the native view (gap#1 — not via the compositor).
+        // on the native view (handle 直接驱动 bounds — not via the compositor).
         ensureMounted()
         nativeView.setBounds(p.bounds)
         // Track the live on-screen rect for bounds(). Copy so a later caller
@@ -435,7 +435,7 @@ export function createViewHandle(deps: ViewHandleDeps): ViewHandle {
     },
     // The live screen-space rect: the last `visible:true` bounds applied while
     // the view is active. null before any placement, after `visible:false`, and
-    // after dispose (active goes false on the viewScope's A4 teardown).
+    // after dispose (active goes false on the viewScope's per-window teardown).
     bounds(): Bounds | null {
       if (!active || !visibleBounds) return null
       return { ...visibleBounds }

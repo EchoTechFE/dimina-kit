@@ -44,7 +44,7 @@ const TIMING_FUNC_MAP: Record<NonNullable<NavigationBarState['colorAnimation']>[
 
 /**
  * Simulator navigation bar aligned with WeChat MiniProgram spec
- * (see packages/devtools/docs/simulator-refactor.md NavigationBar section):
+ * (see packages/devtools/docs/native-bridge-protocol.md NavigationBar section):
  *
  * - `style: custom` hides the bar entirely, capsule stays.
  * - Title default-center on iOS, default-left on Android (per official guidance).

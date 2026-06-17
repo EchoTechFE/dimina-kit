@@ -88,11 +88,11 @@ export interface ShellState {
 
 | Reducer                | 行号                                | 说明                                                |
 |------------------------|-------------------------------------|----------------------------------------------------|
-| `reduceNavigateTo`     | `page-stack-controller.ts:97-118`   | push 新页，同时镜像到 `tabStacks[currentTabPath]`     |
-| `reduceNavigateBack`   | `page-stack-controller.ts:120-154`  | clamp `delta` 到 `stack.length - 1`，发 `pageUnload + closePage` |
-| `reduceRedirectTo`     | `page-stack-controller.ts:156-175`  | 替换栈顶，旧顶发 `pageUnload + closePage`             |
-| `reduceReLaunch`       | `page-stack-controller.ts:177-208`  | 全员 `pageUnload + closePage`，重置 `tabStacks`        |
-| `reduceSwitchTab`      | `page-stack-controller.ts:220-264`  | snapshot 当前 stack → 还原 / 懒建目标 tab，**不发 closePage** |
+| `reduceNavigateTo`     | `page-stack-controller.ts`   | push 新页，同时镜像到 `tabStacks[currentTabPath]`     |
+| `reduceNavigateBack`   | `page-stack-controller.ts`  | clamp `delta` 到 `stack.length - 1`，发 `pageUnload + closePage` |
+| `reduceRedirectTo`     | `page-stack-controller.ts`  | 替换栈顶，旧顶发 `pageUnload + closePage`             |
+| `reduceReLaunch`       | `page-stack-controller.ts`  | 全员 `pageUnload + closePage`，重置 `tabStacks`        |
+| `reduceSwitchTab`      | `page-stack-controller.ts`  | snapshot 当前 stack → 还原 / 懒建目标 tab，**不发 closePage** |
 
 副作用通过 `SideEffect` 联合表达，host 层负责执行：
 
@@ -106,7 +106,7 @@ type SideEffect =
 
 | 维度                          | upstream dimina-fe（WeChat 参考）            | native-host（devtools 运行时）                     |
 |-------------------------------|----------------------------------------------|---------------------------------------------------|
-| 每页页面载体                  | 1 `<iframe>` / page                          | 1 `<webview partition="persist:simulator">` / page（`device-shell.tsx:254-267`） |
+| 每页页面载体                  | 1 `<iframe>` / page                          | 1 `<webview>` / page（per-project partition，主进程钉定） |
 | Tab 子栈语义                  | 无（switchTab 弹掉非 tab 页）                | 有（switchTab snapshot + restore）                |
 | URL 同步                      | `HashRouter.syncStack` 写 `location.search`  | 无 URL 同步（host 内部状态）                       |
 | 路由回调路径                  | `success` / `fail` / `complete` 透传到 jscore | host 派发 `SideEffect`，由 IPC adapter 回 ack       |
@@ -162,7 +162,7 @@ switchTab /pages/home/home（命中池）
     currentTabPath:    'pages/home/home'
 ```
 
-> ⚠️ 注意：在 WeChat semantics 下 `detail` 永远找不回来；native-host semantics 下因为 `tabStacks['pages/home/home']` 在 `switchTab` 离开 home 时被快照保存（`page-stack-controller.ts:90-93`），切回 home 会还原 `[home, detail]`。
+> ⚠️ 注意：在 WeChat semantics 下 `detail` 永远找不回来；native-host semantics 下因为 `tabStacks['pages/home/home']` 在 `switchTab` 离开 home 时被快照保存（`page-stack-controller.ts`），切回 home 会还原 `[home, detail]`。
 
 ### 3.3 reLaunch 为什么要合并 Set？
 
@@ -186,10 +186,10 @@ switchTab /pages/home/home（命中池）
 
 ### 4.2 容易踩坑的点
 
-- **`navigateBack(delta)` 越界**：`reduceNavigateBack` 显式 clamp：`Math.min(Math.max(1, delta), stack.length - 1)`（`page-stack-controller.ts:127-130`）。`delta` 超过深度直接弹到栈底，不抛错。
+- **`navigateBack(delta)` 越界**：`reduceNavigateBack` 显式 clamp：`Math.min(Math.max(1, delta), stack.length - 1)`（`page-stack-controller.ts`）。`delta` 超过深度直接弹到栈底，不抛错。
 - **`reLaunch` 对栈底 entry 也发 `pageUnload`**：是——`reduceReLaunch` 把当前可见栈 + 全部 tab 子栈全员 unload + closePage。
 - **`switchTab` 对子栈页只切显隐、不发 closePage**：离开的 tab 子栈整段快照进 `tabStacks`，页面 `<webview>` 不卸载；切回时整段还原。
-- **同名 bridgeId 在 reLaunch 中的防御**：`reduceReLaunch` 显式从 unload 集合里删去 `newEntry.bridgeId`（`page-stack-controller.ts:190`），防止"新页面和旧页面 ID 撞车导致新页被错卸"。
+- **同名 bridgeId 在 reLaunch 中的防御**：`reduceReLaunch` 显式从 unload 集合里删去 `newEntry.bridgeId`（`page-stack-controller.ts`），防止"新页面和旧页面 ID 撞车导致新页被错卸"。
 
 ## 5. URL 同步与自动化读取
 
@@ -226,17 +226,17 @@ appHandlers['App.getCurrentPage'] = async (ctx) => {
 }
 ```
 
-- `readNativeActivePage`（`app.ts:27-39`）拿 `getActivePageWc(ctx)`，读该 render guest 自己的 `location.search`，从 `pagePath` 参数里 `decodePageSpec` 解出 `{ pagePath, query }`，固定返回 `pageId: 1`。automator 是远程协议、需要 OOP-safe 的"事实"信道，所以读 guest URL 而不是直接读 reducer 的 `ShellState`。
+- `readNativeActivePage` 拿 `getActivePageWc(ctx)`，读该 render guest 自己的 `location.search`，从 `pagePath` 参数里 `decodePageSpec` 解出 `{ pagePath, query }`，固定返回 `pageId: 1`。automator 是远程协议、需要 OOP-safe 的"事实"信道，所以读 guest URL 而不是直接读 reducer 的 `ShellState`。
 
-`App.getPageStack`（`app.ts:55-88`）优先用 `ctx.bridge.getPageStack?.()`——DeviceShell 经 `PAGE_STACK` 上报的完整有序栈（bottom→top）；首个信号前（或不带该 accessor 的 mock 里）降级返回**单条目栈**，即当前可见页。
+`App.getPageStack` 优先用 `ctx.bridge.getPageStack?.()`——DeviceShell 经 `PAGE_STACK` 上报的完整有序栈（bottom→top）；首个信号前（或不带该 accessor 的 mock 里）降级返回**单条目栈**，即当前可见页。
 
-`App.callWxMethod`（`app.ts:90-128`）的导航不是 DOM 点击，而是把真正的 `wx.<method>` 跑在隐藏的 service 窗口里（`serviceWc.executeJavaScript('wx.<method>(...)')`，`app.ts:103-110`），让导航走与运行中小程序相同的路径，再由 DeviceShell 驱动页面栈。
+`App.callWxMethod` 的导航不是 DOM 点击，而是把真正的 `wx.<method>` 跑在隐藏的 service 窗口里（`serviceWc.executeJavaScript('wx.<method>(...)')`），让导航走与运行中小程序相同的路径，再由 DeviceShell 驱动页面栈。
 
 ## 6. native-host 的 per-tab 子栈
 
 ### 6.1 设计来源
 
-参考 iOS `DMPNavigator` + `DMPTabBarContainerView` 的"按需创建 + 持久缓存"模型——每个 tab 是一根独立的导航栈，`switchTab` 不抹平另一个 tab 内的 `navigateTo` 堆积。这与 WeChat 默认行为相反，但对 native 容器（iOS / Harmony）才是用户体感期待。native-host 的 Native Bridge 协议与窗口拓扑见 [`./simulator-refactor.md`](./simulator-refactor.md)。
+参考 iOS `DMPNavigator` + `DMPTabBarContainerView` 的"按需创建 + 持久缓存"模型——每个 tab 是一根独立的导航栈，`switchTab` 不抹平另一个 tab 内的 `navigateTo` 堆积。这与 WeChat 默认行为相反，但对 native 容器（iOS / Harmony）才是用户体感期待。native-host 的 Native Bridge 协议与窗口拓扑见 [`./native-bridge-protocol.md`](./native-bridge-protocol.md)。
 
 ### 6.2 数据结构与几何关系
 
@@ -250,9 +250,9 @@ ShellState = {
 
 不变量（由 reducer 共同维护）：
 
-1. 若 `currentTabPath ≠ null`，则 `tabStacks[currentTabPath]` **始终等于** `stack`——也就是 active tab 的子栈和可见栈是同一份引用快照（`page-stack-controller.ts:108-110`、`page-stack-controller.ts:140-142`）。
-2. 非 active tab 的子栈被 `switchTab` 离开时定格（`snapshotCurrentTabStack`，`page-stack-controller.ts:90-93`）。
-3. `reLaunch` 后 `tabStacks` 重建——只剩新 entry 一项（若它是 tab）（`page-stack-controller.ts:192-194`）。
+1. 若 `currentTabPath ≠ null`，则 `tabStacks[currentTabPath]` **始终等于** `stack`——也就是 active tab 的子栈和可见栈是同一份引用快照（`page-stack-controller.ts`、`page-stack-controller.ts`）。
+2. 非 active tab 的子栈被 `switchTab` 离开时定格（`snapshotCurrentTabStack`，`page-stack-controller.ts`）。
+3. `reLaunch` 后 `tabStacks` 重建——只剩新 entry 一项（若它是 tab）（`page-stack-controller.ts`）。
 
 ### 6.3 enumerateMounted
 
@@ -265,7 +265,7 @@ enumerateMounted(state) = uniqueByBridgeId(
 // 只有 state.stack 的栈顶 visible:true，其余 visible:false
 ```
 
-实现 `page-stack-controller.ts:281-295`。Renderer 据此决定每页 `<webview>` 的显隐。
+实现 `page-stack-controller.ts`。Renderer 据此决定每页 `<webview>` 的显隐。
 
 ### 6.4 switchTab 流程图
 
@@ -289,7 +289,7 @@ switchTab(targetTab):
     └─────────────────────────────────────────────────────────┘
 ```
 
-实现：`page-stack-controller.ts:220-264`。
+实现：`page-stack-controller.ts`。
 
 ### 6.5 与 WeChat 参考语义的差异（再强调）
 
@@ -316,7 +316,7 @@ switchTab(targetTab):
 
 - 所有拒绝走 `fail` 回调 + `complete` 回调，**不抛异常**到调用方。
 - `errMsg` 格式严格遵循 `${api}:fail <reason>`，与 WeChat 一致。
-- native-host 的 `reduceNavigateBack` 拒绝返回 `{ error: string }` 而非抛错（`page-stack-controller.ts:124-126`）；host adapter 翻译成 `errMsg`。
+- native-host 的 `reduceNavigateBack` 拒绝返回 `{ error: string }` 而非抛错（`page-stack-controller.ts`）；host adapter 翻译成 `errMsg`。
 
 ## 8. 测试入口
 
@@ -325,7 +325,7 @@ switchTab(targetTab):
 
 ## 9. 延伸阅读
 
-- `packages/devtools/docs/simulator-refactor.md` —— Native Bridge 协议 / native-host 窗口拓扑。
+- `packages/devtools/docs/native-bridge-protocol.md` —— Native Bridge 协议 / native-host 窗口拓扑。
 - `packages/devtools/docs/workbench-model.md` —— Workspace / Project 与 simulator 的上下层关系。
 - [`./tab-bar.md`](./tab-bar.md) —— tab 渲染、badge / reddot、动态 API。
 - [`./electron-container.md`](./electron-container.md) —— host process 与 renderer 的进程边界、`<webview>` 载体。

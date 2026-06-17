@@ -7,7 +7,7 @@
  * wired into the REAL DeckApp, with a per-window native-view substrate + A4
  * `detachAll` teardown.
  *
- * Source of truth: docs/contracts/view-handle-build-plan.md §2(a) + gap#1, and
+ * Source of truth: docs/contracts/view-handle.md「placeIn 与挂载」+「handle 直接驱动 bounds」, and
  * docs/layout-architecture-demo.md (the target `runtime.view(...).placeIn(...)`
  * call shape). The increment-1 unit (`src/main/view-handle.ts` +
  * `src/main/compositor.ts` detachAll) already exists; what does NOT exist yet is
@@ -21,7 +21,7 @@
  *   2. placeIn(win,{zone:0}) mounts the native view into THAT window's
  *      contentView (addChildView with the view's WCV).
  *   3. applyPlacement(visible:true,bounds) → the native WCV's setBounds with
- *      EXACTLY those bounds (gap#1: handle drives bounds, not the Compositor).
+ *      EXACTLY those bounds (handle drives bounds, not the Compositor).
  *   4. applyPlacement(visible:false) → detach (removeChildView), WCV NOT
  *      destroyed; a later visible:true re-adds (addChildView) + setBounds again.
  *   5. dispose() detaches (removeChildView); a later applyPlacement is a no-op
@@ -33,7 +33,7 @@
  *      error (mirrors runtime.windows.create's electronUnavailable path).
  *
  * (Brief item 7 — placeIn into a second window — is OUT OF SCOPE for slice 1
- *  and DEFERRED to moveTo (build-plan §2(d)); see the `it.skip` note below.)
+ *  and DEFERRED to moveTo (view-handle.md「moveTo 跨窗迁移」); see the `it.skip` note below.)
  *
  * Fakes: copied (minimal) from deck-app.test.ts — `createFakeElectron` /
  * `createFakeIpcMain`. `FakeBrowserWindow.contentView` already exposes
@@ -306,9 +306,9 @@ describe('DeckApp host-view slice 1 — placeIn mounts into the window contentVi
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 3. applyPlacement(visible:true,bounds) → the native WCV's setBounds with
-//    EXACTLY those bounds (gap#1: handle drives bounds, not the Compositor).
+//    EXACTLY those bounds (handle drives bounds, not the Compositor).
 // ─────────────────────────────────────────────────────────────────────────────
-describe('DeckApp host-view slice 1 — applyPlacement drives setBounds (gap#1)', () => {
+describe('DeckApp host-view slice 1 — applyPlacement drives setBounds (handle-drives-bounds)', () => {
 	it('applyPlacement(visible:true,bounds) calls the view WCV setBounds with exactly those bounds', async () => {
 		const electron = createFakeElectron()
 		const app = new DeckApp({}, { electron, wireTransport: { ipcMain: createFakeIpcMain() } })
@@ -427,12 +427,12 @@ describe('DeckApp host-view slice 1 — window close cascades view teardown (A4)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 7. placeIn into a second window — OUT OF SCOPE for slice 1, deferred to moveTo
-//    (build-plan §2(d)). Documented as skipped so the goalpost is explicit.
+//    (view-handle.md「moveTo 跨窗迁移」). Documented as skipped so the goalpost is explicit.
 // ─────────────────────────────────────────────────────────────────────────────
 describe('DeckApp host-view slice 1 — second placeIn (deferred to moveTo)', () => {
-	it.skip('placing the same handle into a second window is moveTo\'s job (§2(d)) — not slice 1', () => {
+	it.skip('placing the same handle into a second window is moveTo\'s job (moveTo cross-window) — not slice 1', () => {
 		// Intentionally unspecified for slice 1. A cross-window move is the moveTo
-		// state machine (build-plan §2(d): AT_SRC→DETACHED→AT_DEST|ROLLBACK with a
+		// state machine (view-handle.md「moveTo 跨窗迁移」: AT_SRC→DETACHED→AT_DEST|ROLLBACK with a
 		// per-view migration lock). Pinning a behavior here would prejudge that
 		// contract, so this is deferred.
 	})

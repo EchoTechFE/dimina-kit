@@ -3,8 +3,8 @@
 native-host is the SOLE simulator runtime. The simulator is a top-level
 `WebContentsView` (WCV) overlaid on the simulator dock panel's region of the
 main-window React renderer — a native overlay, exactly like the Chromium
-DevTools view. This doc describes the shipped model: who draws the phone, how the
-WCV is sized, and how zoom flows.
+DevTools view. This doc describes who draws the phone, how the WCV is sized, and
+how zoom flows.
 
 ## The model in one paragraph
 
@@ -20,7 +20,7 @@ page itself is a render-host `<webview>` guest nested inside the DeviceShell.
 
 ```
 renderer (z2)          SimulatorPanel: toolbar / flex:1 placeholder / path-bar
-   │  useViewAnchor publishes the placeholder rect (+ zoom)
+   │  createPlacementAnchor publishes the placeholder rect (+ zoom)
    ▼
 simulator WCV (z3)     simulator.html → DeviceShell
    │                     • gray desk (.device-shell-root) fills WCV, scrolls
@@ -35,8 +35,8 @@ render-host <webview>  the page (one guest per mounted page, z-ordered by visibi
 - **Renderer (`simulator-panel.tsx`)** — draws the toolbar (device / zoom
   selects), an empty `flex:1` placeholder div (`data-area="native-simulator"`),
   and the page-path bar. The panel comment is explicit: "this z2 renderer panel
-  draws NO phone/bezel." It owns the `useViewAnchor` that binds the WCV to the
-  placeholder rect.
+  draws NO phone/bezel." It owns the `createPlacementAnchor` that binds the WCV to
+  the placeholder rect.
 - **DeviceShell (`src/simulator/device-shell/`, runs INSIDE the WCV)** — draws
   the whole phone. `.device-shell-root` is the gray desk (`width:100%`,
   `height:100vh`, `overflow:auto`, `padding:24`, mirrors the renderer's
@@ -50,14 +50,13 @@ render-host <webview>  the page (one guest per mounted page, z-ordered by visibi
   entry, rendered inside `.device-shell__viewport` and z-ordered by `display` +
   `zIndex` on visibility. These are LIVE — they are the page WebContents.
 
-This is the **DeviceShell-draws-the-phone** model (NOT renderer-bezel). It
-matches `docs/simulator-render-stack.html` (z3 = the WCV = the flex:1 region; the
-phone is fixed-size CSS inside it) and the device-shell.css header comment
-("CONFIRMED MODEL").
+This is the **DeviceShell-draws-the-phone** model: the renderer panel draws no
+bezel. It matches `docs/simulator-render-stack.html` (z3 = the WCV = the flex:1
+region; the phone is fixed-size CSS inside it).
 
 ## WCV bounds — single authority
 
-The WCV bounds come from a **single authority**: the renderer's `useViewAnchor`
+The WCV bounds come from a **single authority**: the renderer's `createPlacementAnchor`
 in `simulator-panel.tsx` measures the placeholder region's
 `getBoundingClientRect()` and publishes it (plus `zoom`) over
 `simulator:set-native-bounds` → `setNativeSimulatorViewBounds`
@@ -106,10 +105,7 @@ div. The simulator's anchor:
   kept in a ref so the imperative publisher always reads the live value; a zoom
   change forces one re-publish so main re-applies `setZoomFactor`.
 
-(Earlier the simulator carried a bespoke `reportBounds` effect with a
-splitter/scroll re-measure gap; it has been replaced by the `view-anchor`
-placement anchor, which closes that gap at the abstraction layer. See
-`project-window-layout.md` §3 for the anchor semantics.)
+See `project-window-layout.md` §3 for the anchor semantics.
 
 ## getSystemInfoSync in the service host
 
@@ -144,7 +140,7 @@ safe-area doc for the CDP wiring.)
 
 | file | role |
 |---|---|
-| `src/renderer/.../project-runtime/components/simulator-panel.tsx` | z2 panel: toolbar / placeholder / path-bar; owns the simulator `useViewAnchor` |
+| `src/renderer/.../project-runtime/components/simulator-panel.tsx` | z2 panel: toolbar / placeholder / path-bar; owns the simulator `createPlacementAnchor` |
 | `src/simulator/device-shell/device-shell.tsx` + `device-shell.css` | DeviceShell: draws the whole phone inside the WCV; hosts render-host `<webview>` guests |
 | `src/main/services/views/view-manager.ts` | `setNativeSimulatorViewBounds` (sole bounds authority + zoomFactor + pre-attach cache); `attachNativeSimulator` |
 | `src/main/services/layout/index.ts` | `computeNativeSimulatorViewParams` |
