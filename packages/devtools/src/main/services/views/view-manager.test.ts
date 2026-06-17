@@ -251,6 +251,32 @@ describe('ViewManager: repeated show/hide cycles do not leak', () => {
 
 const SIM_URL = 'http://localhost:7788/simulator.html?appId=vmtest'
 
+function fireWcEvent(view: StubView, eventName: string): void {
+  for (const call of view.webContents.on.mock.calls) {
+    const [name, handler] = call as [string, (...args: unknown[]) => void]
+    if (name === eventName) handler()
+  }
+}
+
+describe('native simulator zoom', () => {
+  it('re-applies the cached renderer zoom after the simulator page finishes loading', () => {
+    const { ctx } = makeContext()
+    const mgr = createViewManager(ctx)
+    mgr.setNativeSimulatorViewBounds({ x: 10, y: 20, width: 300, height: 400, zoom: 85 })
+    mgr.attachNativeSimulator(SIM_URL, 375)
+
+    const simView = constructed[constructed.length - 2]!
+    const simWc = simView.webContents
+    expect(simWc.setZoomFactor).toHaveBeenCalledWith(0.85)
+
+    const callsBeforeLoad = simWc.setZoomFactor.mock.calls.length
+    fireWcEvent(simView, 'did-finish-load')
+
+    expect(simWc.setZoomFactor).toHaveBeenCalledTimes(callsBeforeLoad + 1)
+    expect(simWc.setZoomFactor).toHaveBeenLastCalledWith(0.85)
+  })
+})
+
 describe('getSimulatorWebContents', () => {
   afterEach(() => {
     mockFromId.mockReset()

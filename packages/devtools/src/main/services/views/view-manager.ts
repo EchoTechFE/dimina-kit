@@ -431,6 +431,28 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     return b.width <= 0 || b.height <= 0
   }
 
+  function applyNativeSimulatorZoom(simWc: WebContents, zoomFactor = currentZoomFactor): void {
+    try {
+      if (!simWc.isDestroyed()) {
+        simWc.setZoomFactor(zoomFactor)
+      }
+    } catch { /* wc may be navigating/destroyed */ }
+    // Propagate zoom to any already-attached nested render-host guests so the
+    // page rescales live on zoom change and after DeviceShell reloads. Newly
+    // attached guests also get it in did-attach-webview.
+    try {
+      for (const wc of webContents.getAllWebContents()) {
+        if (wc.isDestroyed()) continue
+        if (wc.hostWebContents === simWc) {
+          wc.setZoomFactor(zoomFactor)
+        }
+      }
+    } catch {
+      // hostWebContents can be unavailable in partial Electron mocks; guests
+      // still pick up the factor on did-attach-webview.
+    }
+  }
+
   function setSimulatorDevtoolsBounds(bounds: layout.Bounds): void {
     simulatorBoundsOverride = bounds
     if (!simulatorView || simulatorView.webContents.isDestroyed()) return
@@ -1107,6 +1129,13 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     view.setBackgroundColor(simDeskBg())
     const simWc = view.webContents
 
+    // Electron can reset page zoom during the main-frame navigation. Re-apply
+    // the latest renderer-selected factor after every DeviceShell load so the
+    // initial default (85%) and subsequent reloads do not fall back to 100%.
+    simWc.on('did-finish-load', () => {
+      applyNativeSimulatorZoom(simWc)
+    })
+
     // Keep the WCV surface in sync with the active color scheme. The
     // process-wide installThemeBackgroundSync() re-syncs BrowserWindows on a
     // theme switch, but this top-level WebContentsView is not a window, so its
@@ -1432,21 +1461,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     }
     nativeSimulatorView.setBounds(p.bounds)
     const simWc = nativeSimulatorView.webContents
-    if (!simWc.isDestroyed()) {
-      simWc.setZoomFactor(p.zoomFactor)
-    }
-    // Propagate zoom to any already-attached nested render-host guests so the
-    // page rescales live on zoom change (newly-attached guests get it in
-    // did-attach-webview). `webContents.getAllWebContents()` includes guests;
-    // filter to those hosted by this simulator wc.
-    try {
-      for (const wc of webContents.getAllWebContents()) {
-        if (wc.isDestroyed()) continue
-        if (wc.hostWebContents === simWc) {
-          wc.setZoomFactor(p.zoomFactor)
-        }
-      }
-    } catch { /* hostWebContents unavailable; guests get zoom on attach */ }
+    applyNativeSimulatorZoom(simWc, p.zoomFactor)
   }
 
   function resize(_simWidth: number): void {
