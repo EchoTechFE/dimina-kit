@@ -2,7 +2,7 @@
 
 基于 Electron 的小程序开发者工具。提供模拟器、Chrome DevTools 面板、WXML/AppData/Storage/编译 面板、编译配置等功能。
 
-下游 host 通过 `launch(config)` 集成并定制 devtools（零配置直接 `launch()`，配置驱动 `launch({...})`；见下方「两种用法」）。两种用法都经领域中立的 [`@dimina-kit/electron-deck`](../electron-deck) 框架编排——框架接管 Electron 进程生命周期（whenReady / will-quit）、wire/trust 原语，devtools 作为 `RuntimeBackend` 注入完整运行时（见 [`framework-extraction-v2.md`](../electron-deck/docs/framework-extraction-v2.md)）。
+下游 host 通过 `launch(config)` 集成并定制 devtools（零配置直接 `launch()`，配置驱动 `launch({...})`；见下方「两种用法」）。两种用法都经领域中立的 [`@dimina-kit/electron-deck`](../electron-deck) 框架编排——框架接管 Electron 进程生命周期（whenReady / will-quit）、wire/trust 原语，devtools 作为 `RuntimeBackend` 注入完整运行时（见 [`architecture.md`](../electron-deck/docs/architecture.md)）。
 
 ---
 

@@ -1,134 +1,128 @@
-# electron-deck 架构总览：布局 / 多窗口
+# electron-deck 架构总览
 
-> 本文是经过多轮对抗收敛后的**布局与多窗口架构**沉淀，面向第一次接触本包的工程师。
-> 它解释「为什么是这套原语」「每个原语的职责边界在哪」「host 怎么用」，并标清楚
-> **已建 / 待建** 与待闭合契约。配套阅读：
-> - `docs/foundation.md` —— 连接层 / Disposable / Scope 的地基推导。
-> - `docs/framework-extraction-v2.md` —— `@dimina-kit/electron-deck`（原 workbench）抽框架的 v2 设计。
-> - `docs/layout-architecture-demo.md` —— 「最简 devtools」host-facing 调用形态（与本文第 4 节互为正反面）。
-> - `packages/view-anchor/README.md` —— Layout/Placement 原语的独立包文档。
+`@dimina-kit/electron-deck` 是一个**领域中立的 Electron host-shell 框架**。本文面向第一次接触本包的工程师与要做 host 集成的人，讲清楚：框架做什么、由哪些原语组成、每个原语的职责边界、host 怎么用，以及必须守住的关键不变量。
 
----
-
-## 0. 一句话定位 + 与 dockview 的关系
-
-**electron-deck 是一个领域中立的 Electron「host shell」框架**：它不替你做窗口内的 DOM 分栏，
-而是把**跨窗口编排、原生 `WebContentsView` 的 z 叠放与几何跟随、以及嵌套寿命管理**抽成四个
-正交原语，让业务（devtools / simulator / 任意 Electron 多窗口工具）用极少的 host 代码拼出
-「窗口 + 原生 view + 浮层 + popout」。
-
-**与 dockview 不是替代关系，是分工关系。** dockview（或任意 CSS / React 分栏库）是
-**窗口内 DOM 布局**的权威：split / grid / tab 的真相源在 renderer 控制层。dockview 内部有个
-`OverlayRenderContainer`，做的正是 `getBoundingClientRect → RAF → reposition` 把一个 follower
-贴到面板上——但它的 follower 是 **DOM 节点**。electron-deck 的 `view-anchor` 是同一个机制的
-**跨进程版本**：follower 是主进程的原生 `WebContentsView`（见 `packages/view-anchor/src/types.ts:13`
-的注释——「dockview 故意不提供的那道跨进程桥」）。
-
-> 一句话：**dockview 管 DOM 怎么分；electron-deck 管原生 view 怎么跟着 DOM 走、跨窗口怎么搬、寿命归谁。**
-
-> **关于「窗口内 DOM 怎么分」**：上面说 electron-deck「不替你做窗口内的 DOM 分栏」是指
-> §1–§5 的 host-shell 原语（Scope / Compositor / ControlBus / ViewHandle / Window facade）。
-> 但本包现在另外提供一个**独立的、领域中立的窗口内布局面**——layout-as-data 引擎
-> （`/layout`）+ `<DockView>`（`/dock-react`），见下面 §0.5。它和 host-shell 原语是
-> **两个正交的 surface**：host-shell 不依赖布局引擎，布局引擎也不 import electron。devtools 是
-> 布局引擎的**首消费者**（IDE-dockable 布局），但仍以 `ownsWindows:true` 旁路集成、**不**采纳
-> §4 的高层 host-shell API（见 `../../devtools/docs/deck-adoption-decision.md`）。
+配套阅读：
+- `docs/foundation.md` —— 连接层 / Disposable / Scope 地基。
+- `docs/layout-architecture-demo.md` —— 「最简 devtools」host-facing 调用形态。
+- `docs/contracts/` —— capability / compositor-teardown / 统一寿命 / view-anchor 跟随 / ViewHandle 的契约与不变量。
+- `packages/view-anchor/README.md` —— Layout/Placement 原语的独立包文档。
 
 ---
 
-## 0.5. layout-as-data 引擎 + DockView（窗口内 docking 布局，✅ 已建）
+## 0. 定位
 
-这是与 §1–§5 host-shell 原语**正交**的第二个公开面：一套**领域中立**的「窗口内 docking 布局」
-能力，供任何 Electron 工具把面板拼成可拖拽 re-dock / tab / 分屏 / 序列化恢复的 IDE 式布局。
+electron-deck 不替你做窗口内的 DOM 分栏，而是把**跨窗口编排、原生 `WebContentsView` 的 z 叠放与几何跟随、嵌套寿命管理、跨进程 IPC 与信任边界**抽成一组正交原语，让业务（devtools / simulator / 任意 Electron 多窗口工具）用极少的 host 代码拼出「窗口 + 原生 view + 浮层 + popout」。
 
-### 0.5.1 layout-as-data 引擎（`@dimina-kit/electron-deck/layout`）
+host 写一份 `DeckConfig`，框架接管 Electron 装配；领域逻辑经注入式 `RuntimeBackend` 接入（见 §3）。
 
-**纯 TS**——`src/layout/` 下严禁 import `electron` / `react`（`boundary.test.ts` 钉死这条边界）。
-原生面板只引用一个 electron-free 的不透明句柄 `NativeHandleRef`，由 host 自己映射回真 view。
+### 与 dockview 的关系：分工而非替代
 
-- **数据模型**：布局是一棵不可变树 `LayoutTree`，节点是 `SplitNode`（`row`/`column` 容器，带
-  每子一份 `sizes` 权重 + 可选 `constraints` 做 per-child fixed-px 锁宽）或 `TabGroupNode`
-  （一组 panelId + 当前 `active`）。
-- **面板登记**：`PanelDescriptor` 分 `dom`（renderer 内 React 内容）/ `native`（带
-  `NativeHandleRef` 的主进程 view）两类；`createPanelRegistry()` 维护 panelId → descriptor。
-- **mutation（纯函数，树→树）**：`movePanel` / `splitPanel` / `closePanel` / `setActive` /
-  `setSizes` / `setConstraint` / `extractPanel` / `insertPanel`。
-- **序列化 / 校验**：`serializeLayout` / `parseLayout`（不透明字符串往返持久化）+ `validateTree`
-  （结构合法性 + panelId 是否都在已知集合内，给 fallback-safe 恢复用）。
-- **可观察模型**：`createLayoutModel(tree)` 是一个**单写者**的 `LayoutModel`（`get` /
-  `apply(mut)` / `subscribe(snap)`），把树变更广播给渲染层。
+dockview（或任意 CSS / React 分栏库）是**窗口内 DOM 布局**的权威：split / grid / tab 的真相源在 renderer 控制层。dockview 内部的 `OverlayRenderContainer` 做 `getBoundingClientRect → RAF → reposition`，把一个 follower 贴到面板上——但它的 follower 是 **DOM 节点**。electron-deck 的 `view-anchor` 是同一机制的**跨进程版本**：follower 是主进程的原生 `WebContentsView`。
 
-### 0.5.2 `<DockView>`（`@dimina-kit/electron-deck/dock-react`）
+一句话：**dockview 管 DOM 怎么分；electron-deck 管原生 view 怎么跟着 DOM 走、跨窗口怎么搬、寿命归谁。**
 
-`<DockView model registry renderDomPanel bindNativeSlot>` 是把 `LayoutModel` 渲染成 docking UI
-的 React 渲染器：
+### 两个正交的公开面
 
-- DOM 面板经 `renderDomPanel(panelId, { active })` 渲染 React 内容；原生面板经
-  `bindNativeSlot(panelId, el)` 把一个**空 DOM 槽**交给 host——host 用 `view-anchor` 把主进程
-  view 贴到该槽（与 §2.2 同一跨进程桥）。
-- **DOM 面板 keepalive**：同一 tab group 内的 DOM 面板**全部常驻挂载**，非 active 的用
-  `display:none` 隐藏（不卸载），切 tab 来回不 remount——滚动位置 / 展开态得以保留。`active`
-  标志让面板能在 false→true 边沿跑「激活时副作用」（如数据 refresh）而无需依赖挂载。
-  **原生面板例外**：仍 active-only 挂载（隐藏一个已 bind 的 WebContentsView 槽会塌缩其 rect），
-  失活即卸载并触发 `bindNativeSlot(panelId, null)` 清理。
-- 交互：用户**拖拽 tab → drop 区**做 split / tab re-dock（HTML5 DnD），拖分隔条 resize，切 tab，
-  **关闭面板**（tab 上的 close 控件 → `closePanel`，守卫整树最后一个面板）；
-  纯几何的 drop-zone 计算与 descriptor 层（`computeDropZone` / `dropZoneToMutation` /
-  `isNoopRedock`）也从本 entry 导出，host 不必深 import。
-- fixed-px `constraints` 让某个 leaf（如 simulator 的设备宽）保真不被权重缩放。
-- **model 是可视分屏的事实源（M1，双向同步）**：react-resizable-panels 的 `defaultSize` 只在挂载读取，所以
-  `SplitView` 持 rrp `Group` 的命令式 handle：一次**程序化** `setSizes`（model→view）经 `setLayout` 推动**已挂载
-  的分隔条**真正移动（不必 remount）；用户拖分隔条 / 键盘 resize（view→model）经 `onLayoutChanged` 写回 model。
-  写回的去重靠**基准归一化的 flexible 比例比较**(把 rrp 的容器-% 与 model 各自按 flexible 子集归一化后比，
-  >0.1pp 才写)——单一判据即可区分「真用户 resize（写回）」与「自身 `setLayout` 回声 / 比例守恒的自发重测（跳过）」，
-  无需指针门控或 echo-token。fixed-px 子项的权重在写回时保持不变（其尺寸由约束而非权重决定）。
+本包有两个互不依赖的 surface：
 
-### 0.5.3 与 §1–§5 的关系
+- **host-shell 原语**（§1–§5）：Scope / Compositor / ControlBus / view-anchor / ViewHandle / Window facade。
+- **layout-as-data 引擎**（§6）：`/layout` 纯 TS 布局树 + `/dock-react` 的 `<DockView>` 渲染器。
 
-布局引擎**不碰** Scope / Compositor / ControlBus / Window facade，也不要求 host 采纳它们；
-host-shell 原语同样不依赖布局引擎。devtools 同时用两者，但走的是**不同的 seam**：项目窗口内的
-分栏用 `/layout` + `/dock-react`，而窗口装配 / 原生 view 寿命仍走 `ownsWindows:true` 旁路。
+host-shell 不依赖布局引擎，布局引擎也不 import electron。一个 host 可以只用其中一面，也可以两面都用、走两条独立的 seam（devtools 即如此：窗口装配走 host-shell，项目窗口内的分栏走布局引擎）。
 
 ---
 
-## 1. 为什么（三个真实需求 + 一个物理约束）
+## 1. 框架的六条能力
 
-这套架构不是凭空设计的，是被三个具体需求 + Electron 的一条硬约束逼出来的。
+electron-deck 覆盖的是「没有单一现成框架能一站式提供」的组合能力：
 
-### 需求 A：点 close 退回 main，而不是关掉窗口
-devtools 里「关闭当前项目」应当**销毁项目相关的全部资源（simulator、CDP、DevTools view……）
-但留住窗口**，退回项目列表。这要求一种**嵌套寿命**：窗口寿命 ⊃ 会话寿命；关项目 = `reset`
-会话寿命，窗口活着。→ **Scope**。
+1. **配置驱动 host-shell 装配**：app 生命周期 + 多窗口 / `WebContentsView`。
+2. **声明式 + typed 双向 IPC**：含「必须先声明才能 publish」的事件总线。
+3. **信任边界 / sender policy**：沙箱 untrusted vs trusted host 分级 + frame 级校验。
+4. **确定性资源生命周期**：LIFO dispose + 连接 / 窗口寿命绑定。
+5. **原生 `WebContentsView` 编排**：z 叠放 + 几何跟随 + 跨窗 popout。
+6. **领域无关**：可被任意 Electron 应用复用。
 
-### 需求 B：业务（renderer）经 IPC 自助控制布局
-分栏比例、把面板拽出去、弹下拉……这些是业务交互，不该写死在主进程。renderer 控制层需要一条
-受信的 IPC 通道把布局意图（resize / reorder / popout）发回主进程，主进程据此驱动原生 view，
-且必须有**权限边界**（一个窗口的控制层不能动别的窗口）。→ **ControlBus**（+ 待建的 capability）。
-
-### 需求 C：浮层要浮在原生 view 之上
-「设置」面板、被 DevTools 盖住的下拉菜单……这些要浮在**原生 DevTools view 之上**。
-
-### 物理约束（决定了整套架构形态）
-**Electron 的原生 `WebContentsView` 永远合成在 DOM 之上，且原生 view 之间不能与 DOM 在 z 轴上
-穿插。** 这意味着：
-- 需求 C 的「浮在原生 DevTools 之上的下拉」**本身必须是一块原生 view**（放进更高的 z 层），
-  不可能是一个 DOM 元素——DOM 永远在原生 view 之下。
-- 同一窗口里多块原生 view 的前后关系，需要一个**主进程侧的原生 z 层规划器**来管。dockview 这类
-  纯 DOM 库给不了这个。→ **Compositor**。
-
-而「窗口被 splitter 拖动时原生 view 跟着 DOM 占位走」这件事，是 → **Layout/Placement（view-anchor）**。
+其中 typed IPC（②）与 LIFO dispose（④）已有成熟生态（electron-trpc / 原生 `DisposableStack`），框架按需复用其思想；真正的空白在 ①③⑤ 的组合，这也是框架原语的核心。
 
 ---
 
-## 2. 四个正交原语 + 薄 ViewHandle
+## 2. 物理约束：为什么需要主进程原生 z 层
 
-整套架构 = **4 个正交 primitive** + 一层**薄 ViewHandle** 编排壳。正交 = 互不依赖、可独立测试、
-各自只管一件事。
+**Electron 的原生 `WebContentsView` 永远合成在 DOM 之上，且原生 view 之间不能与 DOM 在 z 轴上穿插。** 这条硬约束决定了整套架构形态：
+
+- 「浮在原生 DevTools 之上的下拉 / 设置面板」**本身必须是一块原生 view**（放进更高的 z 层），不可能是 DOM 元素——DOM 永远在原生 view 之下。
+- 同一窗口里多块原生 view 的前后关系，需要一个**主进程侧的原生 z 层规划器**来管。纯 DOM 库（dockview）给不了这个。→ **Compositor**。
+- 「窗口被 splitter 拖动时原生 view 跟着 DOM 占位走」是 → **Layout/Placement（view-anchor）**。
+
+由此推出三类 host 需求各落到一个原语：
+
+| host 需求 | 落到 |
+|---|---|
+| 点 close 退回 main 而非关窗（销毁项目资源、留住窗口） | **Scope** 嵌套寿命：窗口寿命 ⊃ 会话寿命，关项目 = `reset` 会话 |
+| renderer 经 IPC 自助控制布局（resize / reorder / popout），且有权限边界 | **ControlBus** + **capability** |
+| 浮层浮在原生 view 之上 | **Compositor** 顶层 zone |
+
+---
+
+## 3. 注入式 `RuntimeBackend`
+
+框架是唯一 orchestrator，但通过注入的 `RuntimeBackend` 拿领域装配——框架不知道 projects / simulator / wx 这些领域概念存在。`RuntimeBackend` 是 `DeckConfig.backend` 字段，除 `assemble` 外所有 hook 都可选（缺省走框架默认）：
+
+```ts
+interface RuntimeBackend {
+  /** pre-ready：lazy-import electron 之后、app.whenReady 之前跑领域 pre-ready 副作用
+   *  （difile scheme / cdp port / CSP / setName）。拿框架已 resolve 的 MinimalApp。 */
+  beforeReady?(app: MinimalApp): MaybePromise<void>
+  /** true：backend 在 assemble 内自建主窗口，框架跳过 main/toolbar/declared 装配。 */
+  readonly ownsWindows?: boolean
+  /** 领域装配：真 context / mainWindow 内容加载 / projects / views / IPC 模块。 */
+  assemble(runtime: Runtime): MaybePromise<void>
+  /** 框架建主窗口前同步取 webPreferences（与 config 合并，backend 键优先）。
+   *  仅 ownsWindows falsy 路径触发。 */
+  mainWindowWebPreferences?(): Record<string, unknown> | undefined
+  /** 框架建完主窗口、load 内容前同步回调（attach view / listener）。
+   *  仅 ownsWindows falsy 路径触发。 */
+  onMainWindowCreated?(win: BrowserWindow, electron: typeof import('electron')): void
+  /** 框架 edge-trust 一个**自建**窗口时通知 backend 同步领域 trust；返回 Disposable 供 untrust。
+   *  主窗口受 ownsWindows 门控（ownsWindows:true 不触发）；declared / runtime.windows.create()
+   *  窗口与 ownsWindows 正交，总触发。 */
+  onWindowTrusted?(wc: MinimalWebContents): Disposable
+  /** 主窗 close（可否决）：'keep' → 框架 preventDefault 留窗；'close' → 放行析构→shutdown。 */
+  onMainWindowClose?(): MaybePromise<'keep' | 'close'>
+  /** 框架 resize 时回调，backend 用发出 resize 的主窗口重定位 overlay。
+   *  仅 ownsWindows falsy 路径触发。 */
+  repositionOverlays?(win: BrowserWindow): void
+}
+```
+
+### 框架边界
+
+- **框架做**：app 生命周期 + 主窗口 + 多窗口创建 + wire（typed IPC + 声明式事件）+ 信任边界 + 连接 / 资源 LIFO dispose + 布局编排原语。
+- **领域 backend 做**：toolbar / overlay 内容、off-wire CDP、session / workspace、projects / templates、difile / cdp / csp 等领域副作用。
+
+### 入口与 app 生命周期
+
+框架不许 value-import electron 主进程面，`app` 经 lazy `await import('electron')` 注入。类型面 `MinimalApp` 暴露 `whenReady()` / `quit()` / `setName()` / 生命周期 `on(...)` / 可选 `requestSingleInstanceLock()`；`electronDeck()` 在生产路径用真 `app` 实例，测试路径注入桩。
+
+执行序列（生产路径，无环）：lazy `import('electron')` → 拿真 app → single-instance 门控（仅 `config.app.singleInstance`：`whenReady` 之前调 `requestSingleInstanceLock()`，没拿到锁即 `quit()`）→ `backend.beforeReady(app)`（pre-ready 窗口确凿存在：import 后 / whenReady 前）→ `await app.whenReady()` → 绑定 app 生命周期 → 装配窗口（此刻 `new BrowserWindow` 合法）→ `backend.assemble(runtime)`。
+
+- `will-quit` → `shutdown()`（LIFO dispose，带 `quitInitiated` 闸防再入）。
+- `window-all-closed` → **opt-in**：仅 `config.app.quitOnAllWindowsClosed` 显式给值时框架才绑该 listener；省略则不绑，由 Electron 默认 / consumer 自理。
+
+> ⚠️ `electronDeck()` 是 `async` 且内部 `await app.whenReady()`。ESM main 顶层 `await electronDeck(...)` 会挂死（Electron `ready` 要等模块求值完才 fire）。顶层入口用 `startElectronDeck()`——同步返回 `{ ready, dispose }`，装配仍严格在 whenReady 之后跑，启动失败经 `ready` 暴露。
+
+---
+
+## 4. 四个正交原语 + 薄 ViewHandle
+
+整套 host-shell = **4 个正交 primitive** + 一层**薄 ViewHandle** 编排壳。正交 = 互不依赖、可独立测试、各自只管一件事。
 
 ```
                        ┌─────────────────────────────────────────┐
-   host backend  ──►   │            ViewHandle (薄编排壳)          │
-   runtime.view()      │  持: native view + scope-lease + compositor token │
+   runtime.view()  ──► │            ViewHandle (薄编排壳)          │
+                       │  持: native view + scope-lease + compositor token │
                        └───┬───────────┬──────────────┬──────────┘
                            │           │              │
                   ┌────────▼──┐  ┌─────▼──────┐  ┌────▼─────────┐   ┌──────────────┐
@@ -140,144 +134,89 @@ devtools 里「关闭当前项目」应当**销毁项目相关的全部资源（
                   └───────────┘  └────────────┘  └──────────────┘   └──────────────┘
 ```
 
-### 2.1 Scope —— 嵌套寿命（✅ 已建）
-**职责**：一段「寿命片段」。`own()` 绑资源、`child()` 开子寿命；`reset()`（软复用：拆掉当前片段、
-开新片段、自己活着）和 `close()`（终结：全拆、死掉）统一释放，LIFO，跨层（孙→子→父）。
+### 4.1 Scope —— 嵌套寿命
 
-**关键性质（与 `connection.ts` 的差别）**：`reset()/close()` 是**完成栅栏（completion fence）**——
-它的 Promise 只在底层 async `disposeAll` **真正跑完**之后才 resolve、才 fire 监听器；不是
-「触发即忘」。这让父的 `await child.close()` 是一次真等待（单飞 in-flight，重入合流）。
+一段「寿命片段」。`own()` 绑资源、`child()` 开子寿命；`reset()`（软复用：拆掉当前片段、开新片段、自己活着）和 `close()`（终结：全拆、死掉）统一释放，LIFO，跨层（孙→子→父）。
 
-**adopt**：把一个 child 从当前父的片段**重挂**到另一个父的片段上，**不 reset / 不 close**——
-child 的 `own()` 资源原封不动，只换「从此谁负责拆它」。若任一端有 teardown 在飞，adopt **等栅栏**
-（不抛），等完后对新鲜片段重新校验。这是 popout「迁寿命」的底层（见决定 5）。
+**完成栅栏（completion fence）**：`reset()/close()` 的 Promise 只在底层 async `disposeAll` 真正跑完之后才 resolve、才 fire 监听器；不是「触发即忘」。这让父的 `await child.close()` 是一次真等待（单飞 in-flight，重入合流）。
 
-- 文件：`src/main/scope.ts`（接口 `Scope` 在 `scope.ts:23`；adopt 在 `scope.ts:371`；完成栅栏的
-  单飞状态机在 `scope.ts:159-234`）。
+**adopt**：把一个 child 从当前父的片段重挂到另一个父的片段上，**不 reset / 不 close**——child 的 `own()` 资源原封不动，只换「从此谁负责拆它」。若任一端有 teardown 在飞，adopt 等栅栏（不抛），等完后对新鲜片段重新校验。这是 popout 迁寿命的底层。
 
-### 2.2 Layout/Placement —— DOM rect ↔ native bounds（✅ primitive 已建，独立包 `@dimina-kit/view-anchor`；跟随硬化契约 B 待闭合，见 §5.2）
-**职责**：让一块主进程原生 view 始终贴住某个 DOM 元素的屏幕矩形。测 `getBoundingClientRect()`，
-把矩形交给注入的 `publish`（host 接 IPC → `setBounds`），并在 `ResizeObserver` / window `resize`
-时**同步**重发（不走 RAF——原生 setBounds 本就慢一帧，再叠一帧会在拖 splitter 时拖尾，见
-`view-anchor/src/view-anchor.ts:30-58` 的长注释）。
+实现：`src/main/scope.ts`。
 
-**显式 `Placement{visible}`**：可见性是**判别式（discriminant）**，绝不从几何推断。一个
-真正 0×0 但在屏（有几何盒、被排版成 0 面积）的 view 是 `{ visible:true, bounds:{...width:0} }`，
-一个隐藏 / **无几何盒**（`display:none`、未 mount）的是 `{ visible:false }`（**不带 bounds**）。
-这替换了旧的 magic-`{0,0,0,0}` = 隐藏 的约定（旧约定下两者无法区分）。
+### 4.2 Layout/Placement —— DOM rect ↔ native bounds
 
-> ⚠️ 已按 codex 第3轮统一：`display:none` / 无几何盒 一律发 `{ visible:false }`（detach），
-> **不是** 0 尺寸的 `visible:true`；`{ visible:true, bounds:0×0 }` 只保留给「有盒但被排成
-> 0×0」的合法罕见情形。`visible:false` = 「不显示这个 view」，由**调用方意图 hide** **OR**
-> **锚测出无几何盒**两路得出（锚报客观事实，不篡改意图）。判别口诀：**有盒但 0 面积 →
-> visible:true+0×0；无盒 → visible:false**。详见 `contracts/view-anchor-following.md` §3。
+独立包 `@dimina-kit/view-anchor`。让一块主进程原生 view 始终贴住某个 DOM 元素的屏幕矩形：测 `getBoundingClientRect()`，把矩形交给注入的 `publish`（host 接 IPC → `setBounds`），并在 `ResizeObserver` / window `resize` 时**同步**重发（不走 RAF——原生 setBounds 本就慢一帧，再叠一帧会在拖 splitter 时拖尾）。
 
-**反向（size-advertiser）**：正向让原生 view 跟 DOM；反向让 DOM 占位跟内容尺寸（在下游 view
-自己的渲染进程里量 border-box 回流给宿主）。单轴所有权（block=高 / inline=宽），保证跨进程环是
-单向 DAG。
+**显式 `Placement{visible}`**：可见性是**判别式**，绝不从几何推断。
 
-- 文件：`packages/view-anchor/src/`（`Placement` 类型 `types.ts:39`；正向核心
-  `view-anchor.ts:59`；显式 Placement 核心 `view-anchor.ts:210`；反向 `size-advertiser.ts`）。
+- `{ visible:true, bounds }`：有几何盒。「有盒但被排成 0×0」是合法罕见情形 `{ visible:true, bounds:{...width:0} }`。
+- `{ visible:false }`（**不带 bounds**）：隐藏 / 无几何盒（`display:none`、未 mount）。
 
-### 2.3 Compositor —— per-window 原生 z 叠放（✅ 已建）
-**职责**：规划一个窗口内原生子 view 的 z 顺序。把**意图**（`mount` / `unmount` / `reorder` 到某
-zone 的某相对位置）与**应用**（`commit()` 算出把 host 当前子序变成目标序的**最小** add/remove
-序列）分开。
+判别口诀：**有盒但 0 面积 → visible:true+0×0；无盒 → visible:false**。`visible:false` = 「不显示这个 view」，由**调用方意图 hide** **或** **锚测出无几何盒**两路 OR 得出（锚报客观事实，不篡改意图）。详见 `contracts/view-anchor-following.md`。
 
-**全序 `(zone, orderKey, viewId)`**：低 zone 渲染在下、高 zone 在上（zone 之间堆叠）；zone 内按
-`orderKey` 排；`viewId` 纯兜底保证确定性。`orderKey` 用 **fractional indexing**：reorder-before(X)
-取 X 与其前驱的中点，O(1) 且不扰动其他 view 的 key；中点精度耗尽时**整 zone 重编号**（rebalance，
-对可见顺序无感）。
+**跟随硬化**（opt-in，`followScroll` / `followGeometry` / `guardDisplayNone` / `pulse()`）：在嵌套 split / scroll / 祖先 transform / `display:none` / 首帧 / 动画期下让原生 view 跟住 DOM slot。事件能精确通告的信号（自身尺寸 / 整窗 resize / 祖先 scroll）走同步发布；无事件的位移（transform / 祖先重排）走**窗口化** RAF 几何哨兵（静止零成本）。详见 `contracts/view-anchor-following.md`。
 
-**LIS commit**：把一批意图折叠成**最终目标态**（last-state，不是写日志回放），再 diff host 当前
-子序与目标。host 只能 `addChildView` 到顶（append/raise），所以保留「当前∩目标里已就位的最长前缀」
-（LIS），其余共享 view + 全部新 view 在一个同步 pass 里 remove+add 重排——**最小 host churn、
-零 renderer reload**。
+**反向（size-advertiser）**：正向让原生 view 跟 DOM；反向让 DOM 占位跟内容尺寸（在下游 view 自己的渲染进程里量 border-box 回流给宿主）。单轴所有权（block=高 / inline=宽），保证跨进程环是单向 DAG。
 
-> 为什么需要它而 dockview 没有：见决定 1。原生 view 的 z 是 Electron 物理约束下主进程独有的一层，
-> DOM 库管不到。
+实现：`packages/view-anchor/src/`。
 
-- 文件：`src/main/compositor.ts`（接口 `Compositor` 在 `compositor.ts:61`；reorder/fractional key
-  在 `compositor.ts:203` + `keyBefore` `compositor.ts:152`；LIS commit 在 `compositor.ts:236`）。
-  host 观察到的 Electron z 语义（spike 实证）记在 `compositor.ts:10-17` 的头注释。
+### 4.3 Compositor —— per-window 原生 z 叠放
 
-### 2.4 ControlBus —— IPC + trust 薄 facade（✅ 已建；capability/grant 闸**已建** 于 `capability.ts`，含导航撤权 C3）
-**职责**：三个动词的薄门面，**自己不加任何新 gating**：
-- `command(name, handler)`：webview → main 的 RPC。门面持唯一命令表，`dispatch(name, args)` 被真
-  `WireTransport` 的 `invokeHost`/`invokeSimulator` seam 调到（在 wire 的 sender + main-frame
-  gate 之后）。trust / main-frame 校验**全在 wire**，不是 facade。
-- `event(name)`：main → webview 推送，**默认拒绝**。`name` 加进 wire 读的 declared-event allowlist；
-  未声明的 name 被 wire 丢弃。
+规划一个窗口内原生子 view 的 z 顺序。把**意图**（`mount` / `unmount` / `reorder` 到某 zone 的某相对位置）与**应用**（`commit()` 算出把 host 当前子序变成目标序的**最小** add/remove 序列）分开。
+
+**全序 `(zone, orderKey, viewId)`**：低 zone 渲染在下、高 zone 在上；zone 内按 `orderKey` 排；`viewId` 兜底保证确定性。`orderKey` 用 **fractional indexing**：reorder-before(X) 取 X 与其前驱的中点，O(1) 且不扰动其他 key；中点精度耗尽时整 zone 重编号（rebalance，对可见顺序无感）。
+
+**LIS commit**：把一批意图折叠成**最终目标态**（last-state，不是写日志回放），再 diff host 当前子序与目标。host 只能 `addChildView` 到顶，所以保留「当前∩目标里已就位的最长前缀」（LIS），其余共享 view + 全部新 view 在一个同步 pass 里 remove+add 重排——最小 host churn、零 renderer reload。
+
+**事务化 commit**：no-op（无 add/无 remove）静默 return；有工作但 host 已毁 → preflight 在动 host 之前抛 `CommitError{kind:'host-destroyed', applied:false}`（native 未动）；apply 中途非预期抛 → snapshot 兜底回滚 → 抛 `apply-failed{recovered}`。**teardown 例外**：工作仅 removals 且 host 已毁时视为已 detach、静默 return（detach 路径在销毁竞态下保证不抛）。详见 `contracts/compositor-and-teardown.md`。
+
+实现：`src/main/compositor.ts`。
+
+### 4.4 ControlBus —— IPC + trust 薄 facade
+
+三个动词的薄门面，自己不加新 gating：
+
+- `command(name, handler)`：webview → main 的 RPC。门面持唯一命令表，`dispatch(name, args, ctx)` 被真 `WireTransport` 的 `invokeHost`/`invokeSimulator` seam 调到（在 wire 的 sender + main-frame gate 之后）。
+- `event(name)`：main → webview 推送，默认拒绝；`name` 加进 wire 读的 declared-event allowlist，未声明的被丢弃。
 - `trust(wc)`：委托给可注入的 refcount `TrustSet`。
 
-**关键**：命令表是**唯一命令权威**——生产侧用 `invokeHost = (n,a) => controlBus.dispatch(n,a)`
-建 `WireTransport`，所以真 IPC invoke 是经 wire 落到 handler，而不是测试专用私缝；config 声明的
-host service 也注册进**同一张表**（一个命名空间，永不两张会撞的注册表）。
+命令表是**唯一命令权威**：生产侧用 `invokeHost = (n,a,ctx) => controlBus.dispatch(n,a,ctx)` 建 `WireTransport`，config 声明的 host service 也注册进同一张表（一个命名空间，永不两张会撞的注册表）。
 
-> 🔒 **硬约束（建 capability 时强制的不变量）—— 布局/特权 command 必须唯一经 ControlBus**：
-> ⚠️ 已按 codex 第3轮统一。grant 闸（capability default-deny）的**唯一插点**是
-> `ControlBus.dispatch`（见 `contracts/capability-and-lifecycle.md` §A5-1.4）。因此：
-> - 任何**布局 / 特权 command**（`layout.resize` / `layout.reorder` / `layout.popout` /
->   `layout.overlay` 等会驱动原生 view / 寿命 / 跨窗的动作）**必须**经 ControlBus 注册并 dispatch，
->   grant 闸才能拦它。
-> - **禁止**把这类特权名注册进普通 `hostServices` / `InMemoryTypedIpcRegistry`。注意生产 deck-app
->   有**两条独立 invoke 路由**：默认路由 `invokeHost = (name,args) => ipc.invoke(HOST_PREFIX+name)`
->   走 `InMemoryTypedIpcRegistry`（`deck-app.ts:296-303` 注册 + `:554-557` 接线），这条**没有
->   grant 闸**，只做 trust 闸——它承载普通领域 API（`hostServices`），「trusted 即可调」。特权名
->   若误进这条路由 = **grant 授权闸被完全绕过**。
-> - 故不变量：**特权 command 只走 ControlBus 路由，普通领域 API 走 `InMemoryTypedIpcRegistry`
->   路由；两条路由的边界必须在接线处（`deck-app.ts:554`）写死，特权名永不落进普通 hostServices。**
->   这条在 capability 层尚未建（见 §5.2 契约 D），是建它时要强制守住的边界。
+**capability 闸**（`ControlBus.dispatch` 内，trust 之上）：注入 `CapabilityPolicy` 后，`dispatch` 在 command 表解析之后、handler 调用之前判 grant——`policy.allows(senderId, name)` 为假即抛 `DECK_FORBIDDEN`。闸层次不可换序：`wire trust → wire main-frame → ControlBus grant → handler`。不注入 policy ⇒ 闸不存在 ⇒ 维持「trusted 即可 dispatch」（向后兼容）。
 
-- 文件：`src/host/control-bus.ts`（接口 `ControlBus` 在 `control-bus.ts:50`；`dispatch` 真接 wire
-  在 `control-bus.ts:124`）。真 wire 桥接 `src/internal/wire-transport.ts`（trust + main-frame
-  gate 在 `wire-transport.ts:210-245`）。trust 原语 `src/internal/trust-set.ts`（refcount
-  `add`/`isTrusted`/`snapshot` 在 `trust-set.ts:46`）。
+> 🔒 **硬不变量——布局 / 特权 command 必须唯一经 ControlBus**：grant 闸**只存在于 `ControlBus.dispatch`**。生产 deck-app 有**两条 invoke 路由**：默认路由 `invokeHost = (name,args) => ipc.invoke(HOST_PREFIX+name)` 走 `InMemoryTypedIpcRegistry`，**只做 trust 闸、没有 grant 闸**，承载普通领域 API（`hostServices`，「trusted 即可调」）；`layout.*` 等驱动原生 view / 寿命 / 跨窗的特权 command **必须**经 ControlBus 注册并 dispatch。**禁止**把特权名注册进普通 `hostServices`——否则 grant 授权闸被完全绕过。两条路由的边界在接线处写死，特权名永不落进普通 hostServices。
 
-### 2.5 ViewHandle —— 薄 per-view 编排（✅ 已建）
-**职责**：把上面四个原语缝成「一块 view」的最小编排单元。它**持有**：原生 view 句柄、一个
-scope-lease（绑哪个寿命）、一个 compositor token（在哪个窗口的 z 栈里）。
+实现：`src/host/control-bus.ts` + `src/internal/wire-transport.ts`（trust + main-frame gate）+ `src/internal/trust-set.ts` + `src/host/capability.ts`。
+
+### 4.5 ViewHandle —— 薄 per-view 编排
+
+把上面四个原语缝成「一块 view」的最小编排单元。它持有：原生 view 句柄、一个 scope-lease（绑哪个寿命）、一个 compositor token（在哪个窗口的 z 栈里）。
 
 **硬边界（ViewHandle 不做什么）**：
-- **不算布局**——几何来自 Layout/Placement（view-anchor），ViewHandle 只转发。
+- **不算布局**——几何来自 view-anchor，ViewHandle 只转发 `Placement → setBounds/detach`。
 - **不定释放策略**——寿命归 Scope，ViewHandle 只持一个 lease。
-- **不持全局树**——它只知道自己这一块，跨窗口/全局编排在 runtime。
-- **不直碰 contentView**——所有 `addChildView`/`removeChildView` 经 Compositor。
+- **不持全局树**——它只知道自己这一块，slot-token 私表 / LRU 组归 runtime。
+- **不直碰 contentView 做 z 挂载**——`addChildView`/`removeChildView` 经 Compositor（per-view `setBounds` 由 ViewHandle 自调，Compositor 纯 z-order）。
 
-API 形态（见第 4 节）：`runtime.view(...)` → `DeckViewHandle`，带 `placeIn(window, {zone, anchor})`
-/ `applyPlacement({visible, bounds})` / `moveTo(window, {rehome})` / `dispose()`，并暴露只读访问器
-`webContents` / `bounds()` / `capturePage()`（host 取原生 view 无需 diff `contentView.children`）。
-`placeIn`/`moveTo` 的 window 参数接受 `DeckWindow` 或裸 `BrowserWindow`。
+API 形态（见 §5）：`runtime.view(...)` → `DeckViewHandle`，带 `placeIn(window, {zone, anchor})` / `applyPlacement({visible, bounds})` / `moveTo(window, {zone, anchor, rehome})` / `dispose()`，并暴露只读访问器 `webContents` / `bounds()` / `capturePage()`。
 
----
+**`moveTo` 跨窗迁移**：受 per-view `migrationLock` 串行化，物理终态恒在 `{AT_SRC, AT_DEST, CLOSED}` 之一（绝不悬空 / 双挂）；回滚动作与 dest 失败种类解耦（恒为「src 重挂」）。`rehome:true` 经 `Scope.adopt` 把 view 寿命重挂到 dest 窗口。详见 `contracts/compositor-and-teardown.md` 与 `contracts/view-handle-build-plan.md`。
 
-## 3. 六个关键架构决定
-
-| # | 决定 | 理由 |
-|---|---|---|
-| 1 | **混合合成需要一个主进程原生 z 层（Compositor）** | Electron 物理约束：原生 `WebContentsView` 永远盖在 DOM 之上、原生 view 之间不能与 DOM z 穿插。所以「同一区域多块原生 view 谁前谁后」「浮层浮在原生 DevTools 上」只能在主进程排——dockview 这类纯 DOM 库结构上做不到。Compositor 就是这层（基于 spike 实证的 Electron z 语义，`compositor.ts:10-17`）。 |
-| 2 | **权威分层** | **窗口内 DOM 布局**（split/grid/tab）真相源在 **renderer 控制层**（可以直接用真 dockview / CSS）；**跨窗口 + 原生 view 编排 + 生命周期** 真相源在**主进程**。两边各自是各自领域的唯一权威，不互相镜像状态。 |
-| 3 | **split 分工裁决：host 主进程零布局原语** | DOM 分栏整套交给 renderer。框架只做两件事：① 原生 view 经 view-anchor 跟随任意 slot 的几何；② Compositor 管同区多原生 view 的 z。所以「支持 split」对框架而言**就等于**「拖 splitter 时原生 view 跟随」——这正是 view-anchor 的本职，框架不需要任何 split/grid 原语。与 dockview **分工不替代**（view-anchor = dockview `OverlayRenderContainer` 的跨进程版，见 `view-anchor/src/types.ts:13`）。 |
-| 4 | **placement ≠ lifetime** | 「view 显示在哪个窗口」（placement）与「归哪个 scope 管寿命」（lifetime）**正交**。`moveTo` 默认只移**显示**（Compositor 跨窗 mount），寿命不动；要让 view 比原 session 活得久，必须显式 `rehomeTo` 才走 `Scope.adopt` 迁寿命。混淆这两者会导致「搬个面板顺手改了它的释放归属」之类的 bug。 |
-| 5 | **popout = live-migrate** | 跨窗口移动**同一块** `WebContentsView` **不重载、不丢 CDP**（真机 spike 实测：`.repro/electron-deck-spikes/gate2.js` 跨双窗口迁移含 setInterval tick + 嵌套 webview guest；`gate2b.js` 钉死 setInterval 连续性 + 关窗后 view 寿命）。底层 = `Scope.adopt`（迁寿命）+ Compositor 跨窗 mount（迁显示），全程**原子单父**（view 任一时刻只挂在一个父片段上）。 |
-| 6 | **host-facing 干净 API** | 对 host 暴露的是领域中立的少量动词：`runtime.windows.create → Window`、`runtime.view().placeIn / moveTo`、`window.onClose`、`runtime.grants.issue`、以及受限的 `window.compositor`（reorder/commit/batch）。目标是「最简 devtools ~30 行」（见 `docs/layout-architecture-demo.md`）。 |
+实现：`src/main/view-handle.ts`。
 
 ---
 
-## 4. host-facing API + 最简 devtools 调用示例（Window facade，✅ 已建）
+## 5. host-facing API + 最简调用示例
 
-> 完整可跑版见 `examples/layout-demo/`（真机离屏自证）。这里给精炼骨架，呼应第 2/3 节的原语与决定。
-> `runtime.windows.create()` / `runtime.windows.main` 返回 **`DeckWindow`** 句柄
-> `{ window, controlWc, newSession(), onClose() }`——把寿命树/compositor/trust 接线吸收进框架，
-> host 不碰裸 primitive。`newSession()` 铸 **window-rooted** `DeckSession`（窗口寿命 > session 寿命，
-> 决定 A/4），`runtime.view({ scope })` 只接受它（provenance 校验，裸 Scope 被拒）。
+> 完整可跑版见 `examples/layout-demo/`。`runtime.windows.create()` / `runtime.windows.main` 返回 **`DeckWindow`** 句柄 `{ window, controlWc, newSession(), onClose() }`——把寿命树 / compositor / trust 接线吸收进框架，host 不碰裸 primitive。`newSession()` 铸 window-rooted `DeckSession`（窗口寿命 ⊃ session 寿命）；`runtime.view({ scope })` 只接受它（provenance 校验，裸 Scope 被拒）。
 
 ```ts
-import { electronDeck } from '@dimina-kit/electron-deck'
+import { startElectronDeck } from '@dimina-kit/electron-deck'
 
 const Z = { CONTENT: 0, PANEL: 10, OVERLAY: 100 }   // Compositor z 分层
 
-electronDeck({
+startElectronDeck({
   app: { source: { url: 'app://project-shell' } },   // 框架建 + 自动加载主窗口
   backend: {
     async assemble(runtime) {
@@ -285,30 +224,29 @@ electronDeck({
 
       let session = null
       function openProject(path) {
-        session = main.newSession()                    // window-rooted session：关项目只 reset 它，窗口活着
+        session = main.newSession()                    // window-rooted session：关项目只拆它，窗口活着
 
         runtime.view({ source: simulatorSource(path), scope: session })
-               .placeIn(main, { zone: Z.CONTENT, anchor: '#simulator' })   // view-anchor 缝几何（接受 DeckWindow）
+               .placeIn(main.window, { zone: Z.CONTENT, anchor: '#simulator' })   // view-anchor 缝几何
         runtime.view({ source: { devtoolsFor: '#simulator' }, scope: session })
-               .placeIn(main, { zone: Z.PANEL, anchor: '#devtools' })
+               .placeIn(main.window, { zone: Z.PANEL, anchor: '#devtools' })
       }
 
-      main.onClose(async () => {                       // 需求 A：close 退回 main（per-window 可取消决策）
+      main.onClose(async () => {                       // close 退回 main（per-window 可取消决策）
         if (session) {
-          await session.reset()                        // 完成栅栏：资源真拆完才继续
+          await session.dispose()                      // 完成栅栏：资源真拆完才继续
           session = null
-          return 'keep'                                // 留住窗口（host 自己发 navigate 事件回 project-list）
+          return 'keep'                                // 留住窗口（host 自发 navigate 回 project-list）
         }
         return 'close'
       })
 
-      function showOverlay(src, rect) {                // 需求 C：浮在原生之上 = 顶层 zone
+      function showOverlay(src, anchor) {              // 浮在原生之上 = 顶层 zone
         return runtime.view({ source: src, scope: main.newSession() })
-                      .placeIn(main, { zone: Z.OVERLAY, anchorRect: rect })
+                      .placeIn(main.window, { zone: Z.OVERLAY, anchor })
       }
 
-      runtime.grants.issue(main.controlWc, {           // 需求 B：授权 control 层自助布局
-        targetScope: session ?? undefined,             // 可选：把授权边界绑到某个 session
+      runtime.grants.issue(main.controlWc, {           // 授权 control 层自助布局
         commands: ['layout.resize', 'layout.reorder', 'layout.overlay'],
       })
     },
@@ -316,85 +254,82 @@ electronDeck({
 })
 ```
 
-> **安全（C3）**：控制 wc 做主帧跨文档导航时，框架**同步撤销**它的 grant + slot token
-> （`did-start-navigation` → `capability.revokeBySenderId`），新文档不会继承旧页面的 `layout.*` 特权；
-> trust 保留（仍是控制面）。`autoTrust:false` 后经 `windows.trust()` 晚信任的窗口同样受保护。
-
-控制层 renderer 只画 DOM 分栏 + 原生 view 的占位「洞」，经 IPC client 发布局意图：
+控制层 renderer 只画 DOM 分栏 + 原生 view 的占位「洞」，经 layout client 发布局意图：
 
 ```tsx
+import { createDeckLayoutClient } from '@dimina-kit/electron-deck/client'
+
 const deck = createDeckLayoutClient({ bridge: window.__electronDeckLayoutBridge })
-// <div id="simulator"/> / <div id="devtools"/> 是占位洞，原生 view 由主进程盖上来
-// view-anchor 在 client 内 ResizeObserver 重测 → 原生块跟随，host 写 0 行 resize 代码
+// <div id="simulator"/> / <div id="devtools"/> 是占位洞，原生 view 由主进程盖上来；
+// view-anchor 在 client 内 ResizeObserver 重测 → 原生块跟随 DOM slot，host 写 0 行 resize 代码。
 ```
 
----
+### 关键架构决定
 
-## 5. 已建 vs 待建状态表 + 待闭合契约
+| # | 决定 | 理由 |
+|---|---|---|
+| 1 | **混合合成需要一个主进程原生 z 层（Compositor）** | Electron 物理约束：原生 view 永远盖在 DOM 之上、原生 view 之间不能与 DOM z 穿插。纯 DOM 库结构上做不到。 |
+| 2 | **权威分层** | 窗口内 DOM 布局（split/grid/tab）真相源在 renderer 控制层；跨窗口 + 原生 view 编排 + 生命周期真相源在主进程。两边各是各自领域的唯一权威，不互相镜像状态。 |
+| 3 | **host 主进程零布局原语** | DOM 分栏整套交给 renderer。框架只做：① 原生 view 经 view-anchor 跟随任意 slot 几何；② Compositor 管同区多原生 view 的 z。「支持 split」对框架 = 「拖 splitter 时原生 view 跟随」，不需要任何 split/grid 原语。 |
+| 4 | **placement ≠ lifetime** | 「view 显示在哪个窗口」（placement）与「归哪个 scope 管寿命」（lifetime）正交。`moveTo` 默认只移显示，寿命不动；要让 view 比原 session 活得久，必须显式 `rehome` 才走 `Scope.adopt`。 |
+| 5 | **popout = live-migrate** | 跨窗口移动**同一块** `WebContentsView` 不重载、不丢 CDP。底层 = `Scope.adopt`（迁寿命）+ Compositor 跨窗 mount（迁显示），全程原子单父。 |
+| 6 | **host-facing 干净 API** | 对 host 暴露领域中立的少量动词：`runtime.windows.create → DeckWindow`、`runtime.view().placeIn / moveTo`、`window.onClose`、`runtime.grants.issue`。 |
 
-> ⚠️ 已按 codex 第3轮统一——**「已建」收窄为「primitive 本身已建（有测试）」，不等于
-> 「整个布局系统 ready」**。四个底层 primitive（Scope / Compositor / ControlBus /
-> Layout·Placement）确已建且各有单测；但**围绕它们的 host-facing 壳**（ViewHandle /
-> `runtime.view` / `runtime.grants` / layout client）**和几条横切契约**（§5.2 的 B/C/D +
-> 统一寿命）**尚未闭合**。读这张表时按「primitive 已建、契约/壳待闭合」理解，别把单个
-> primitive 的 ✅ 读成「布局/授权能力可直接用」。
+### 安全：控制 wc 导航撤权
 
-### 5.1 状态（按「primitive 本身」 vs 「围绕它的壳/契约」分列）
+控制 wc 做主帧跨文档导航时，框架**同步撤销**它的 grant + slot token（`did-start-navigation` → 撤权），新文档不会继承旧页面的 `layout.*` 特权；trust 保留（仍是控制面）。晚信任（`windows.trust()` / `windows.adopt()`）的窗口同样在其 `'closed'` 上同步撤权（`prependListener`，跑在 host 的 `'closed'` 监听之前），防 wc.id 复用继承旧授权。
 
-| 原语 / 壳 | primitive 本身 | 围绕它的壳 / 契约（待闭合） | 文件 |
-|---|---|---|---|
-| **Scope**（嵌套寿命 + 完成栅栏 + adopt） | ✅ 已建（有测试） | per-wc Scope 地基（与 grant/ViewHandle 共用）、统一寿命契约 | `src/main/scope.ts` |
-| **Layout/Placement**（view-anchor，显式 `Placement{visible}`） | ✅ 已建（有测试） | 跟随硬化（契约 B：scroll/transform/display:none/首帧/终止 detach）、ViewHandle 持 anchor 的更新·dispose 归属、slotToken 原子下发 | `packages/view-anchor/src/` |
-| **Compositor**（per-window z，fractional indexing + LIS commit） | ✅ 已建（有测试） | 事务化 `commit` + per-window teardown 顺序（契约 C） | `src/main/compositor.ts` |
-| **ControlBus**（IPC + trust 薄 facade，真接 WireTransport） | ✅ 已建（有测试） | capability/grant 闸（契约 D；ControlBus 自身只有 trust 闸，**授权层未建**）、senderId 横切 | `src/host/control-bus.ts` + `src/internal/wire-transport.ts` + `src/internal/trust-set.ts` |
-| **ViewHandle / `runtime.view`**（薄 per-view 编排 + `placeIn/applyPlacement/moveTo` + `bounds()/capturePage()/webContents`） | ✅ 已建（有测试） | compositor escape hatch（reorder/commit/batch 暴露给 host）未做（无消费者） | `src/main/view-handle.ts` + `src/internal/deck-app.ts` |
-| **capability / grants**（授权层 = grant 闸 + senderId 横切 + per-wc Scope + 导航撤权 C3） | ✅ 已建（有测试） | — | `src/host/capability.ts` + `src/internal/deck-app.ts` |
-| **layout client**（`createDeckLayoutClient({bridge})` + slot-token place/subscribe） | ✅ 已建（有测试） | `deck.resize/popout/overlay` 高层糖未做 | `src/client/layout-client.ts` + `src/preload/` |
-| **Window facade**（`runtime.windows.create()/.main` → `DeckWindow{window,controlWc,newSession(),onClose()}`） | ✅ 已建（有测试 + demo 真机自证） | create/adopt 注册未抽成单一 `registerWindow`（两路一致 + parity 测试 pin，漂移会被测出） | `src/internal/deck-app.ts` |
-
-> 一句话收窄：**底层 4 primitive + 上层 host-facing 壳（ViewHandle / runtime.view / grants /
-> layout client / Window facade）均已建好+有测试，demo 真机端到端自证**。剩余开口仅是「便利糖」
-> 级（compositor escape hatch、`deck.*` 高层方法、create/adopt 单函数化），无生产阻塞。
-
-### 5.2 横切契约（多数已闭合）
-
-> 更新：下列 B/C/D 三份横切契约在 ViewHandle / capability / Window facade 落地过程中**多已闭合**——
-> 契约 B（view-anchor 跟随硬化：scroll/transform/display:none/首帧守卫/终止 detach）已建于
-> `view-anchor.ts`（opt-in `followScroll`/`followGeometry`/`guardDisplayNone`）；契约 C（Compositor
-> 事务化 `commit` + teardown 顺序）已建于 `compositor.ts`（`CommitError` + LIFO + rootScope 级联）；
-> 契约 D（capability + senderId + 导航撤权）已建于 `capability.ts` + `deck-app.ts`。以下保留为设计记录：
-
-- **契约 B —— view-anchor 跟随硬化**：在 splitter 高频拖动、zoom 变化、target 滚出可视区
-  （x/y 允许负）等边界下，原生 view 跟随的确定性与去抖（dedup）保证。当前正向核心已落到
-  `view-anchor.ts`，但「ViewHandle 持有 anchor 的更新/dispose 归属」尚未成文。**[open → 契约文档 B]**
-- **契约 C —— Compositor 事务化 commit + per-window teardown 顺序**：`commit()` 的原子性、
-  与窗口销毁时「先拆 view 再拆 contentView」的顺序保证（呼应 `deck-app.ts:733` 的「destroy
-  windows BEFORE registry.disposeAll()」）需要在 ViewHandle ↔ Compositor ↔ Scope 三者间正式
-  约定。**[open → 契约文档 C]**
-- **契约 D —— capability + senderId 横切**：grant 的 scope 边界（一个窗口的控制层只能动自己
-  子树）、senderId 与 capability 的绑定、撤销时机。当前 trust 是 refcount（`trust-set.ts`），
-  但 capability 层（`runtime.grants.issue`）尚未建。**[open → 契约文档 D]**
-- **tab 保活归属**：tab 切换时「非活动 tab 的原生 view 保活但收起」（`Placement{visible:false}`
-  保 WebContents 存活）归 ViewHandle 还是控制层，需要随 ViewHandle 一并定。**[open]**
+> host-view surface（`runtime.view` / `windows.create` / `grants` / `scopes` / `layout` / `DeckViewHandle`）当前标 `@experimental`——原语与接线均已就位、有测试与 demo 自证，但生产 devtools 仍以 `ownsWindows:true` 旁路集成、未采纳这套高层 API（见 `../devtools/docs/deck-adoption-decision.md`）。
 
 ---
 
-## 6. 关键文件索引
+## 6. layout-as-data 引擎 + DockView（窗口内 docking 布局）
+
+与 §1–§5 host-shell 原语**正交**的第二个公开面：一套领域中立的「窗口内 docking 布局」能力，供任何 Electron 工具把面板拼成可拖拽 re-dock / tab / 分屏 / 序列化恢复的 IDE 式布局。
+
+### 6.1 layout-as-data 引擎（`@dimina-kit/electron-deck/layout`）
+
+**纯 TS**——`src/layout/` 下严禁 import `electron` / `react`（`boundary.test.ts` 钉死这条边界）。原生面板只引用一个 electron-free 的不透明句柄 `NativeHandleRef`，由 host 自己映射回真 view。
+
+- **数据模型**：布局是一棵不可变树 `LayoutTree`，节点是 `SplitNode`（`row`/`column` 容器，带每子一份 `sizes` 权重 + 可选 `constraints` 做 per-child fixed-px 锁宽）或 `TabGroupNode`（一组 panelId + 当前 `active`）。
+- **面板登记**：`PanelDescriptor` 分 `dom`（renderer 内 React 内容）/ `native`（带 `NativeHandleRef` 的主进程 view）两类；`createPanelRegistry()` 维护 panelId → descriptor。
+- **mutation（纯函数，树→树）**：`movePanel` / `splitPanel` / `closePanel` / `setActive` / `setSizes` / `setConstraint` / `extractPanel` / `insertPanel`。
+- **序列化 / 校验**：`serializeLayout` / `parseLayout`（不透明字符串往返持久化）+ `validateTree`（结构合法性 + panelId 是否都在已知集合内，给 fallback-safe 恢复用）。
+- **可观察模型**：`createLayoutModel(tree)` 是一个**单写者** `LayoutModel`（`get` / `apply(mut)` / `subscribe(snap)`），把树变更广播给渲染层。
+
+### 6.2 `<DockView>`（`@dimina-kit/electron-deck/dock-react`）
+
+`<DockView model registry renderDomPanel bindNativeSlot>` 把 `LayoutModel` 渲染成 docking UI：
+
+- DOM 面板经 `renderDomPanel(panelId, { active })` 渲染 React 内容；原生面板经 `bindNativeSlot(panelId, el)` 把一个空 DOM 槽交给 host——host 用 view-anchor 把主进程 view 贴到该槽。
+- **DOM 面板 keepalive**：同一 tab group 内的 DOM 面板全部常驻挂载，非 active 的用 `display:none` 隐藏（不卸载），切 tab 来回不 remount——滚动位置 / 展开态保留。`active` 标志让面板能在 false→true 边沿跑「激活时副作用」。**原生面板例外**：仍 active-only 挂载（隐藏一个已 bind 的 WebContentsView 槽会塌缩其 rect），失活即卸载并触发 `bindNativeSlot(panelId, null)` 清理。
+- **交互**：拖拽 tab → drop 区做 split / tab re-dock（HTML5 DnD），拖分隔条 resize，切 tab，关闭面板（守卫整树最后一个面板）；纯几何的 drop-zone 计算（`computeDropZone` / `dropZoneToMutation` / `isNoopRedock`）从本 entry 导出。
+- **fixed-px `constraints`** 让某个 leaf（如 simulator 的设备宽）保真不被权重缩放。
+- **可视分屏双向同步**：react-resizable-panels 的 `defaultSize` 只在挂载读取，所以 `SplitView` 持 rrp `Group` 的命令式 handle：程序化 `setSizes`（model→view）经 `setLayout` 推动已挂载的分隔条真正移动（不必 remount）；用户拖分隔条 / 键盘 resize（view→model）经 `onLayoutChanged` 写回 model。写回去重靠**基准归一化的 flexible 比例比较**（>0.1pp 才写），单一判据即可区分「真用户 resize（写回）」与「自身 `setLayout` 回声 / 比例守恒的自发重测（跳过）」，无需指针门控或 echo-token。fixed-px 子项的权重在写回时保持不变。
+
+### 6.3 与 host-shell 原语的关系
+
+布局引擎不碰 Scope / Compositor / ControlBus / Window facade，也不要求 host 采纳它们；host-shell 原语同样不依赖布局引擎。devtools 同时用两者，但走不同的 seam：项目窗口内的分栏用 `/layout` + `/dock-react`，窗口装配 / 原生 view 寿命走 `ownsWindows:true` 旁路。
+
+---
+
+## 7. 关键文件索引
 
 | 路径 | 内容 |
 |---|---|
-| `src/layout/` | layout-as-data 引擎（纯 TS）：`types.ts` 树/节点/registry/model 类型、`mutations.ts` 树→树纯函数、`serialize.ts` 往返+`validateTree`、`model.ts` 单写者可观察模型、`registry.ts` panel registry；公开面在 `index.ts` |
-| `src/dock-react/` | `<DockView>` React 渲染器（`dock-view.tsx`）+ 纯几何 drag-to-redock（`drag-redock.ts`）；公开面在 `index.ts` |
-| `src/main/scope.ts` | Scope 嵌套寿命原语：`own/child/reset/close/on/adopt`，完成栅栏单飞状态机 |
-| `src/main/compositor.ts` | Compositor：`(zone,orderKey,viewId)` 全序、fractional indexing、LIS commit |
-| `src/host/control-bus.ts` | ControlBus 薄 facade：`command/event/trust/dispatch/declaredEvents` |
-| `src/internal/wire-transport.ts` | 真 Electron wire：`ipcMain.handle` 路由 + trust/main-frame gate + event fanout |
-| `src/internal/trust-set.ts` | TrustSet：refcount 信任成员（`add/isTrusted/snapshot/deleteEntry`） |
-| `src/internal/deck-app.ts` | `electronDeck()` 顶层 app：whenReady gating、窗口装配、close 决策机、shutdown 顺序 |
-| `packages/view-anchor/src/types.ts` | `Bounds` / `Placement` / 正反向 anchor 的类型契约 |
-| `packages/view-anchor/src/view-anchor.ts` | view-anchor 正向核心 + 显式 Placement 核心 |
-| `packages/view-anchor/src/size-advertiser.ts` | 反向尺寸回流（下游内容尺寸 → 宿主占位） |
-| `docs/layout-architecture-demo.md` | 最简 devtools host-facing 调用形态（第 4 节完整版） |
-| `docs/foundation.md` | 连接层 / Disposable / Scope 地基推导 |
-| `docs/framework-extraction-v2.md` | 抽框架 v2 设计（host-shell + 注入式 RuntimeBackend） |
-| `.repro/electron-deck-spikes/gate2.js` `gate2b.js` | popout live-migrate 的真机 spike 实证 |
+| `src/electron-deck.ts` | `electronDeck()` / `startElectronDeck()` 入口 + config 校验 |
+| `src/internal/deck-app.ts` | `DeckApp` orchestrator：whenReady gating、窗口装配、close 决策机、shutdown 顺序、runtime 工厂 |
+| `src/internal/electron-types.ts` | `MinimalElectron` + `MinimalApp`（type-only 注入面） |
+| `src/internal/wire-transport.ts` | 真 Electron wire：`ipcMain.handle` 路由 + trust / main-frame gate + event fanout + `InvokeCtx` |
+| `src/internal/trust-set.ts` | refcount 信任成员集 |
+| `src/host/control-bus.ts` | ControlBus 薄 facade：`command/event/trust/dispatch` |
+| `src/host/capability.ts` | capability 授权层：grant 注册表 + policy（grant 闸） |
+| `src/main/scope.ts` | Scope 嵌套寿命：`own/child/reset/close/adopt` + 完成栅栏 |
+| `src/main/compositor.ts` | Compositor：`(zone,orderKey,viewId)` 全序、fractional indexing、LIS commit、事务化 `CommitError` |
+| `src/main/view-handle.ts` | ViewHandle per-view 编排 + `placeIn/applyPlacement/moveTo/dispose` + moveTo 状态机 |
+| `src/main/connection.ts` | 连接层原语（见 `docs/foundation.md`） |
+| `src/layout/` | layout-as-data 引擎（纯 TS）；公开面在 `index.ts` |
+| `src/dock-react/` | `<DockView>` React 渲染器 + 纯几何 drag-to-redock；公开面在 `index.ts` |
+| `src/client/` | renderer client：`createDeckClient` / `createDeckLayoutClient` |
+| `src/preload/` | preload bridge：`exposeDeckBridge` / `exposeDeckLayoutBridge` |
+| `packages/view-anchor/src/` | view-anchor 正反向几何（`Placement` 类型 / 正向核心 / size-advertiser） |

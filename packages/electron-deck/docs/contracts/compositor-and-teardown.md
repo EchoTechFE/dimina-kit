@@ -1,7 +1,6 @@
 # 正确性契约：Compositor 事务化 commit（A1）+ per-window teardown 顺序（A4）
 
-> 范围：`@dimina-kit/electron-deck` 主进程视图编排层的两个正确性契约。
-> 性质：**✅ as-built（已实现于 main，见 architecture.md §5）；下文为设计契约原文（只读代码 + 写契约）**。本文定义 commit
+> `@dimina-kit/electron-deck` 主进程视图编排层的两个正确性契约。本文定义 commit
 > 失败语义、`moveTo` 跨窗迁移事务状态机、`migrationLock` 无死锁论证、单窗口
 > teardown 的确切顺序及其用 `Scope.own()` LIFO 的编码方式。
 >
@@ -11,18 +10,14 @@
 > - `src/main/disposable.ts` — `DisposableRegistry.disposeAll()` LIFO + AggregateError
 > - `src/internal/deck-app.ts:733-755` — 现有 **app 级** teardown：「窗口先于 registry」
 >
-> 现状基线（事实，非设计）：
-> - 当前 `commit()` 是**单同步 pass**：先 `removeChildView`（removals），再按
+> 基线事实：
+> - `commit()` 是**单同步 pass**：先 `removeChildView`（removals），再按
 >   target index 升序 `addChildView`（additions）。host 已毁且**有待应用工作**时
->   同步抛 `Error('commit: contentView is destroyed')`；**no-op commit 不抛、不碰
->   host**（`compositor.ts:287-292`，pin 见 `compositor.test.ts §8`）。
-> - 当前**没有** `moveTo` / `ViewHandle` / per-window `Scope`：本文是这些尚未实现
->   概念的正确性契约（grep 确认零实现）。
-> - app 级 teardown 已确立的顺序先例：**先 `win.destroy()` 全部窗口，再
+>   抛；**no-op commit 不抛、不碰 host**（`compositor.ts`）。
+> - app 级 teardown 顺序：**先 `win.destroy()` 全部窗口，再
 >   `registry.disposeAll()`**，理由是 WireTransport 在 registry 里，若窗口还活着
 >   时 registry 先拆，renderer 端 teardown handler 会对已移除的 `ipcMain` handler
->   发 `__electron-deck:*`（`deck-app.ts:733-738`）。A4 是这条先例在**单窗口粒度**
->   上的细化。
+>   发 `__electron-deck:*`（`deck-app.ts`）。A4 是这条先例在**单窗口粒度**上的细化。
 
 ---
 
@@ -52,7 +47,7 @@
 
 # A1：Compositor commit 事务化
 
-## A1.1 问题（codex）
+## A1.1 问题
 
 现 `commit()` 在**一个同步 pass** 里逐个 `removeChildView` / `addChildView`。
 Electron **没有 contentView 事务 API**——只能逐个调。若 pass 中途某个
@@ -289,8 +284,7 @@ per-view 锁」，期间不再去 acquire 第二把 per-view 锁。** 即：
 
 1. **任一时刻，任一执行流最多持有一把 per-view 锁**（持锁期间不取第二把）。
    ⇒ 不存在「持 L1 等 L2」的前提 ⇒ **等待图无边** ⇒ **不可能成环** ⇒ 无死锁。
-   （这是「一次最多一把锁」的标准无死锁结论，与 codex 第 2 轮「初判无锁环」一致，
-   此处给出根因：**每个临界区单锁**。）
+   （这是「一次最多一把锁」的标准无死锁结论，根因：**每个临界区单锁**。）
 2. 退一步，即便将来需要同时锁多 view（本契约**不允许**，但为稳健性给出全局序锁
    方案）：所有 per-view 锁按 **`viewId` 字典序**统一获取（`A < B` 永远先取 A 再
    取 B）。`moveTo(v, A→B)` 与 `moveTo(v, B→A)` 都只锁 `v` 这一把，本就不涉及多锁
@@ -322,7 +316,7 @@ per-view 锁」，期间不再去 acquire 第二把 per-view 锁。** 即：
 
 # A4：per-window teardown 顺序
 
-## A4.1 问题（codex）：单窗口关闭的三件事 + 与生产相反的风险
+## A4.1 问题：单窗口关闭的三件事
 
 关闭**单个**窗口要做三件事：
 
@@ -332,7 +326,7 @@ per-view 锁」，期间不再去 acquire 第二把 per-view 锁。** 即：
    anchor sink / wire（`scope.ts:324-356` + `disposable.ts:54-75` LIFO）。
 3. **`win.destroy()`**：销毁 Electron 窗口。
 
-三个约束（codex 提出，本文逐条核实）：
+三个约束（逐条核实）：
 
 - **(a) anchor use-after-free**：renderer 端 anchor（`view-anchor.ts`）持续
   `publish(bounds)` 到正被拆的 view 的 sink。若 sink（主进程侧，对某 native view

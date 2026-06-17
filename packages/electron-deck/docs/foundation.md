@@ -13,9 +13,9 @@
 
 ## 1. 它解决的问题
 
-主进程的资源（IPC handler 派生状态、event 订阅、CDP service 的 detach 决策、bridge-router 的 page 条目）天然挂在某个 webContents 上：那个 webContents 死了，这些资源就该一起消失。在没有连接原语之前，这件事散落在各子系统里各自为政——`view-manager` 里一堆 `once('destroyed')` / `removeChildView`、bridge-router 里一堆手写 teardown——很容易漏。
+主进程的资源（IPC handler 派生状态、event 订阅、CDP service 的 detach 决策、bridge-router 的 page 条目）天然挂在某个 webContents 上：那个 webContents 死了，这些资源就该一起消失。若散落在各子系统里各自为政——`view-manager` 里一堆 `once('destroyed')` / `removeChildView`、bridge-router 里一堆手写 teardown——很容易漏。
 
-连接层把"**webContents 死亡 → 级联拆除它名下资源**"从各处的自觉行为，变成框架级不变量：资源 `own()` 到连接上，连接负责在正确时机确定性拆除。
+连接层把"**webContents 死亡 → 级联拆除它名下资源**"做成框架级不变量：资源 `own()` 到连接上，连接负责在正确时机确定性拆除。
 
 ---
 
