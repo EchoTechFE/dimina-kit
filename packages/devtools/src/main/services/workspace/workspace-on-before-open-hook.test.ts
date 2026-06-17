@@ -2,7 +2,7 @@
  * onBeforeOpenProject PERMISSION HOOK (host-shell extensibility) —
  * workspace-service unit contract.
  *
- * Hosts (e.g. qdmp) need to veto a project open before any side effect runs:
+ * Downstream hosts need to veto a project open before any side effect runs:
  * permission check, license gate, "you must log in first", etc. The contract:
  *
  *  - `openProject(path)` first `await ctx.onBeforeOpenProject?.(path)` —

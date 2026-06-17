@@ -21,7 +21,7 @@ export interface Disposable {
  * `runtime.view` / `DeckViewHandle`, `runtime.scopes` / `DeckSession`,
  * `runtime.grants`, `runtime.layout` — is fully built and wired, but has NO
  * production consumer yet: the only callers are `examples/layout-demo` and
- * `spike/popout`. The devtools/qdmp host integrates through the `RuntimeBackend`
+ * `spike/popout`. The devtools (and other downstream) host integrates through the `RuntimeBackend`
  * lifecycle path with `ownsWindows:true` and never touches this surface.
  *
  * Until a SECOND, real consumer adopts it, these signatures are NOT API-stable —
@@ -322,7 +322,7 @@ export interface ViewCreateOptions {
 	 *  `runtime.scopes.create()` is accepted (provenance check). */
 	readonly scope?: DeckSession
 	/**
-	 * Opt-in keep-alive eviction policy (B3.2). When set, the framework disposes
+	 * Opt-in keep-alive eviction policy (opt-in LRU helper). When set, the framework disposes
 	 * the least-recently-VISIBLE HIDDEN view in this view's group once the group's
 	 * HIDDEN count exceeds `max` — destroying that view's native WebContents.
 	 * Currently-visible views are NEVER evicted. Views sharing the same `max` form

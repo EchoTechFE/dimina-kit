@@ -8,7 +8,7 @@ import {
 
 /**
  * Pure shape tests for the error classes. These pin the public contract that
- * consumers (devtools / qdmp / webview client) rely on for `instanceof` /
+ * consumers (devtools / downstream host / webview client) rely on for `instanceof` /
  * `err.name === '...'` / structured field access. No framework, no IPC.
  */
 

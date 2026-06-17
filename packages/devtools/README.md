@@ -2,7 +2,7 @@
 
 基于 Electron 的小程序开发者工具。提供模拟器、Chrome DevTools 面板、WXML/AppData/Storage/编译 面板、编译配置等功能。
 
-下游 host 通过 `launch(config)` 集成并定制 devtools（零配置直接 `launch()`，配置驱动 `launch({...})`；见下方「两种用法」）。两种用法都经领域中立的 [`@dimina-kit/electron-deck`](../electron-deck) 框架编排——框架接管 Electron 进程生命周期（whenReady / will-quit）、wire/trust 原语，devtools 作为 `RuntimeBackend` 注入完整运行时（见 [`framework-extraction-v2.md`](../electron-deck/docs/framework-extraction-v2.md)）。
+下游 host 通过 `launch(config)` 集成并定制 devtools（零配置直接 `launch()`，配置驱动 `launch({...})`；见下方「两种用法」）。两种用法都经领域中立的 [`@dimina-kit/electron-deck`](../electron-deck) 框架编排——框架接管 Electron 进程生命周期（whenReady / will-quit）、wire/trust 原语，devtools 作为 `RuntimeBackend` 注入完整运行时（见 [`electron-deck 架构`](../electron-deck/docs/architecture.md)）。
 
 ---
 
@@ -195,7 +195,8 @@ src/
 | `menuBuilder`   | `(mainWindow, menuContext: MenuContext) => void` | 内置菜单 | 自定义菜单构建器；`menuContext` 为手写窄契约 `MenuContext`（`appName` + workspace 窄集 + `openSettings` + `notify.{projectStatus, windowNavigateBack}`），不含内部管线 |
 | `onSetup`       | `(instance) => void`                        | —           | 窗口和 context 创建后的回调，用于注册 Contribution（见下文）|
 | `onBeforeClose` | `(instance) => void`                        | —           | 窗口关闭前的回调，session 关闭由框架自动处理      |
-| `window`        | `WorkbenchWindowConfig`                     | —           | 窗口尺寸覆盖                                      |
+| `onBeforeOpenProject` | `(projectPath: string) => void \| Promise<void>` | — | 打开项目前、任何副作用（旧会话拆除 / 编译 / dev-server）之前运行的声明式权限门控。抛错即否决：`openProject` 返回 `{ success: false, error }`，当前活动会话保持不动、适配器不被调用，且框架自动把 error 透到状态条（`notify.projectStatus`）。覆盖 IPC / 菜单 / 内部直调三个打开入口 |
+| `window`        | `WorkbenchWindowConfig`（`width`/`height`/`autoShow?`） | — | 主窗口尺寸覆盖；`autoShow`（默认 `true`）控制 `ready-to-show` 是否自动显示窗口。`autoShow: false` 时窗口创建即隐藏（test / 非 test 一致），由 host 在登录通过后自行 `instance.mainWindow.show()` |
 | `updateChecker` | `UpdateChecker`                             | —           | 自定义更新检查器；提供后启用"检查更新"功能        |
 | `updateOptions` | `{ checkInterval?, initialDelay?, getCurrentVersion? }` | —  | 仅当 `updateChecker` 提供时生效，默认 1h / 5s     |
 
@@ -221,11 +222,11 @@ src/
 
 ## Embedding & Extending the Project Panel
 
-宿主（如 qdmp）通过 `launch({...})` 嵌入 devtools 时，可对项目面板做三个正交扩展：
+下游宿主通过 `launch({...})` 嵌入 devtools 时，可对项目面板做三个正交扩展：
 
 | 扩展点 | 用途 |
 | --- | --- |
-| `projectsProvider` | 接管项目列表存储 —— 替换默认 `<userData>/dimina-projects.json`，对接 qdmp 后台 / IDE workspace / 远端工程库 |
+| `projectsProvider` | 接管项目列表存储 —— 替换默认 `<userData>/dimina-projects.json`，对接下游宿主后台 / IDE workspace / 远端工程库 |
 | `projectTemplates` + `builtinTemplates` | 注入/覆盖/裁剪"新建项目"模板列表（同 id 覆盖内置；`builtinTemplates` 控制内置策略） |
 | `customCreateProjectDialog` | 用宿主自家页面替换内置"新建项目"对话框（main 进程 hook，可 `new BrowserWindow` 加载任意 URL，通过 IPC/postMessage 回传结果） |
 
@@ -233,8 +234,8 @@ src/
 
 | 场景 | 需要的扩展点 |
 | --- | --- |
-| 项目列表来自 qdmp 后台 / 团队工程库 | `projectsProvider` |
-| 仅替换可选模板（e.g. 只提供 taro / qdmp 自家脚手架） | `projectTemplates` + `builtinTemplates` |
+| 项目列表来自下游宿主后台 / 团队工程库 | `projectsProvider` |
+| 仅替换可选模板（e.g. 只提供 taro / 宿主自家脚手架） | `projectTemplates` + `builtinTemplates` |
 | 创建项目流程要走宿主自己的 wizard / 登录态 | `customCreateProjectDialog` |
 
 ### 最小示例
@@ -246,51 +247,51 @@ import { BrowserWindow } from 'electron'
 
 const provider: ProjectsProvider = {
   async listProjects() {
-    return await qdmp.api.listProjects()
+    return await host.api.listProjects()
   },
   async validateProjectDir(dirPath) {
-    return (await qdmp.api.isMiniApp(dirPath)) ? null : '不是合法的小程序工程'
+    return (await host.api.isMiniApp(dirPath)) ? null : '不是合法的小程序工程'
   },
   async addProject(dirPath) {
-    return await qdmp.api.addProject(dirPath)
+    return await host.api.addProject(dirPath)
   },
   async removeProject(dirPath) {
-    await qdmp.api.removeProject(dirPath)
+    await host.api.removeProject(dirPath)
   },
   async updateLastOpened(dirPath) {
-    await qdmp.api.touchLastOpened(dirPath)
+    await host.api.touchLastOpened(dirPath)
   },
   async getCompileConfig(dirPath) {
-    return await qdmp.api.getCompileConfig(dirPath)
+    return await host.api.getCompileConfig(dirPath)
   },
   async saveCompileConfig(dirPath, cfg) {
-    await qdmp.api.saveCompileConfig(dirPath, cfg)
+    await host.api.saveCompileConfig(dirPath, cfg)
   },
   // 缩略图走云端存储——dataUrl 形如 'data:image/png;base64,...'
   async saveThumbnail(dirPath, imageDataUrl) {
-    await qdmp.api.uploadThumbnail(dirPath, imageDataUrl)
+    await host.api.uploadThumbnail(dirPath, imageDataUrl)
   },
   async getThumbnail(dirPath) {
-    return await qdmp.api.fetchThumbnail(dirPath)
+    return await host.api.fetchThumbnail(dirPath)
   },
 }
 
-const qdmpBlank: ProjectTemplate = {
+const hostBlank: ProjectTemplate = {
   id: 'blank', // 同 id 覆盖内置 blank
-  name: 'qdmp 空白工程',
-  description: '由 qdmp 维护的官方空白模板',
+  name: '宿主空白工程',
+  description: '由下游宿主维护的官方空白模板',
   source: { type: 'directory', path: '/abs/path/to/template' },
 }
 
 launch({
   projectsProvider: provider,
-  projectTemplates: [qdmpBlank],
+  projectTemplates: [hostBlank],
   builtinTemplates: ['taro-todo'], // 只保留 taro-todo，干掉默认 blank
   customCreateProjectDialog: async ({ parentWindow }) => {
     const win = new BrowserWindow({ parent: parentWindow, modal: true, width: 720, height: 520 })
-    await win.loadURL('https://qdmp.example.com/devtools/new-project')
+    await win.loadURL('https://host.example.com/devtools/new-project')
     return await new Promise((resolve) => {
-      win.webContents.ipc.once('qdmp:create-project:done', (_e, payload) => {
+      win.webContents.ipc.once('host:create-project:done', (_e, payload) => {
         win.close()
         // payload 三选一（CustomCreateProjectDialogResult）：
         //   null                  → 用户取消
@@ -323,7 +324,7 @@ devtools 自带两个 `source`-style 模板，位于 `packages/devtools/template
 - `blank` — 最小空白小程序骨架（pages/index + app.js/json/wxss + project.config.json，约 8 个文件）
 - `taro-todo` — 复制自 `dimina/fe/example/taro-todo`，作为 Taro 编译产物的端到端演示工程
 
-`builtinTemplates: 'none'` 排除全部内置；`builtinTemplates: ['taro-todo']` 仅保留指定 id；`projectTemplates` 同 id 注入会覆盖（例如上文 `qdmpBlank` 覆盖了内置 `blank`）。
+`builtinTemplates: 'none'` 排除全部内置；`builtinTemplates: ['taro-todo']` 仅保留指定 id；`projectTemplates` 同 id 注入会覆盖（例如上文 `hostBlank` 覆盖了内置 `blank`）。
 
 ### Provider 部分实现 / fallback 行为
 
@@ -547,7 +548,7 @@ instance.context.views.hostToolbar.send('host:cmd', { theme: 'dark' }) // false 
 
 ## MiniappRuntime（宿主集成推荐契约）
 
-下游宿主（如 qdmp）集成时，推荐依赖手写的稳定契约 `MiniappRuntime`，而不是整个 `WorkbenchContext`——后者携带全部内部 service 类型，内部重构会直接破坏下游编译。`asMiniappRuntime(ctx)` 恒等返回（typed view，非拷贝），宿主对 `runtime.workspace.openProject` 的 monkey-patch 会落在真实对象上：
+下游宿主集成时，推荐依赖手写的稳定契约 `MiniappRuntime`，而不是整个 `WorkbenchContext`——后者携带全部内部 service 类型，内部重构会直接破坏下游编译。`asMiniappRuntime(ctx)` 恒等返回（typed view，非拷贝），宿主对 `runtime.workspace.openProject` 的 monkey-patch 会落在真实对象上：
 
 ```typescript
 import { asMiniappRuntime, type MiniappRuntime } from '@dimina-kit/devtools'
@@ -679,7 +680,7 @@ pnpm test               # 运行测试
 本工具仅用于本地开发调试。当前的安全配置：
 
 - **Workbench 窗口**（main / settings / popover overlay）均启用 `contextIsolation` 并禁用 `nodeIntegration`；renderer 通过 main preload 经 `contextBridge` 拿到 `window.devtools.ipc`，每个 IPC handler 经 sender whitelist 校验调用方
-- **Simulator 本体** 是主进程顶层 `WebContentsView`（`nativeSimulatorView`，`partition='persist:simulator'`、`nodeIntegration=false`），其 preload 由 `webPreferences.preload = cjsSiblingPreloadPath(ctx.preloadPath)` 在创建时（`attachNativeSimulator`）固定；session 层的 `configureSimulatorSession()` 只设 Referer/CORS 头，不注册 frame preload。**小程序的每页代码** 运行在该 WCV 内部 DeviceShell 托管的 render-host `<webview>` guest 里（同 `persist:simulator` partition、`nodeIntegration=false`），承载逐页沙箱；guest 的 contextIsolation/sandbox 由主进程 `will-attach-webview` 钉死，渲染进程无法替换
+- **Simulator 本体** 是主进程顶层 `WebContentsView`（`nativeSimulatorView`，per-project `persist:miniapp-<key>` partition、无 appId 时回落共享 `persist:simulator`、`nodeIntegration=false`），其 preload 由 `webPreferences.preload = cjsSiblingPreloadPath(ctx.preloadPath)` 在创建时（`attachNativeSimulator`）固定。**小程序的每页代码** 运行在该 WCV 内部 DeviceShell 托管的 render-host `<webview>` guest 里（`nodeIntegration=false`），承载逐页沙箱；guest 不带静态 `partition` 属性，由主进程 `will-attach-webview` 钉到同一 per-project partition，并钉死 contextIsolation/sandbox，渲染进程无法替换
 - **renderer 入口** 启用了保守 CSP；`will-navigate` / `setWindowOpenHandler` 屏蔽外部跳转
 
 仍然不要在 devtools 窗口中加载不受信任的远程内容；本工具不打算在非本地环境部署。

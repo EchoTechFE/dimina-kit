@@ -114,7 +114,7 @@ export interface Compositor {
   /** Fold the intent state to EMPTY and commit, removing every native view
    * this window's compositor mounted from the host. The resulting commit is
    * REMOVALS-ONLY, so it reuses {@link commit}'s teardown-friendly
-   * "destroyed host + only removals → silent" path (A1.2.1): on an
+   * "destroyed host + only removals → silent" path (commit failure semantics): on an
    * already-destroyed host it makes zero host calls and throws nothing.
    *
    * Optional on the interface so a partial test double (or a caller that only

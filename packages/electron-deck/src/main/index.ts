@@ -3,8 +3,8 @@
  *
  * The connection layer (foundation.md §4): one `Connection` per trusted
  * webContents, owning a single `DisposableRegistry` lifetime segment that tears
- * down deterministically on hard-destroy or soft-reuse. devtools (and qdmp)
- * consume this as the substrate for connection-scoped resource ownership.
+ * down deterministically on hard-destroy or soft-reuse. devtools (and other
+ * downstream hosts) consume this as the substrate for connection-scoped resource ownership.
  */
 export {
   createConnectionRegistry,

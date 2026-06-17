@@ -53,7 +53,7 @@ const SessionAppInfoSchema = z.looseObject({ appId: z.string() })
 export interface WorkspaceService {
   // ── project list ────────────────────────────────────────────────────────
   // Methods that flow through the host-injected ProjectsProvider are async,
-  // so a remote provider (e.g. qdmp's cloud workspace) works the same as the
+  // so a remote provider (e.g. a downstream host's cloud workspace) works the same as the
   // local FS-backed default. Callers must await.
   listProjects(): Promise<Project[]>
   addProject(dirPath: string): Promise<Project>

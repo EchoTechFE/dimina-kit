@@ -1,6 +1,6 @@
 /**
  * Phase 2 contract: project thumbnails must flow through the injected
- * ProjectsProvider, not through `fs` in the workspace. Hosts like qdmp
+ * ProjectsProvider, not through `fs` in the workspace. Downstream hosts
  * keep projects in the cloud, so the local `<userData>/...thumbnails`
  * cache is the wrong source of truth for them.
  *
@@ -99,7 +99,7 @@ function withSimulatorId(ctx: ReturnType<typeof createWorkbenchContext>) {
 describe('workspace-service ↔ ProjectsProvider thumbnail hooks', () => {
   /**
    * Bug caught: when the host omits saveThumbnail, workspace falls back to
-   * writing PNGs into `<userData>/dimina-thumbnails`. For a qdmp remote
+   * writing PNGs into `<userData>/dimina-thumbnails`. For a downstream host's remote
    * project the dirPath isn't a real local path; the local cache becomes
    * the de-facto store and the host never sees the screenshot.
    */

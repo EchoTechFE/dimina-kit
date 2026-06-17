@@ -1,12 +1,12 @@
 /**
  * TDD failing-first contract tests for "slot-token main-process plumbing"
- * (build-plan §2(e) / capability-and-lifecycle.md §A5-2) — the deck-app side:
+ * (view-handle.md「slot-token 握手」/ capability-and-lifecycle.md「anchor slotToken 原子下发」) — the deck-app side:
  * the per-view slot-grant PUSH, the secure `__electron-deck:place` apply path
  * with anti-spoof, the per-wc layout-subscribe REPLAY, and token revocation on
  * view dispose.
  *
- * Source of truth: docs/contracts/capability-and-lifecycle.md §A5-2 +
- * docs/contracts/view-handle-build-plan.md §2(e) + gap#3.
+ * Source of truth: docs/contracts/capability-and-lifecycle.md「anchor slotToken 原子下发」+
+ * docs/contracts/view-handle.md「slot-token 握手」+「slot-token replay 分桶」.
  *
  * What does NOT exist yet:
  *   - `runtime.view(...).placeIn(win, { anchor })` minting a slotToken and

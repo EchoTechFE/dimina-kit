@@ -3,7 +3,7 @@
  * `headerHeight?: number` field must STAY on the public config type
  * (`WorkbenchConfig` / `WorkbenchAppConfig`) even though the runtime
  * ignores it, so downstream hosts that still pass it (e.g.
- * e2e/extension-host-entry.js, real hosts like qdmp) keep compiling.
+ * e2e/extension-host-entry.js, downstream hosts) keep compiling.
  *
  * Real bug this catches: an over-eager implementer deletes the field from
  * `src/shared/types.ts` while removing the runtime plumbing — every

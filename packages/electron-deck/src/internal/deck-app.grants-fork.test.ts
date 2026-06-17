@@ -14,8 +14,8 @@ import type { MinimalIpcMain } from './wire-transport.js'
 
 /**
  * grants-fork — FAILING-FIRST (TDD) contract tests for the "make it real"
- * wiring (view-handle-build-plan §4.1 / capability-and-lifecycle §A5-1.2 +
- * §A5-1.4).
+ * wiring (view-handle.md「关键文件」/ capability-and-lifecycle.md「两条 invoke 路由的硬边界」+
+ *「grant 强制闸（数据形状 + 插点）」).
  *
  * THE TWO-ROUTE BOUNDARY (intent): deck-app forks the wire's host `invokeHost`
  * seam at the wiring. A privileged command name (convention: starts with

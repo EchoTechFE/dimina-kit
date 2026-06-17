@@ -1,5 +1,5 @@
 /**
- * Phase 1.5 contract: when a host (e.g. qdmp) injects a `ProjectsProvider`
+ * Phase 1.5 contract: when a downstream host injects a `ProjectsProvider`
  * that implements only the required methods (list/add/remove) and omits the
  * optional ones (`validateProjectDir` / `getCompileConfig` /
  * `saveCompileConfig`), `WorkspaceService` MUST NOT silently fall back to
@@ -80,7 +80,7 @@ describe('workspace-service ↔ partial ProjectsProvider (optional-method fallba
   /**
    * Bug caught: workspace-service falls back to the local repo helper
    * `validateProjectDir`, which calls `fs.existsSync(dirPath)` against a
-   * remote-only path. For a qdmp provider the path is never on disk, so
+   * remote-only path. For a downstream host's provider the path is never on disk, so
    * the host's "添加项目" click reports "目录不存在" even though the
    * remote workspace accepts it.
    */

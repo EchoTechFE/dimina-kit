@@ -29,7 +29,7 @@ export class UpdateManager {
   private downloadedPath: string | null = null
   /**
    * Whether this instance has already emitted `Available` once. The periodic
-   * check fires forever (interval default 1h), and downstream UI (qdmp shell
+   * check fires forever (interval default 1h), and downstream UI (a downstream host shell
    * renders a native toast / Notification) is not idempotent — every event
    * stacks. We dedupe at the source: at most one Available per instance
    * lifetime, regardless of how the upstream `info.version` shifts. The user

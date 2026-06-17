@@ -3,7 +3,7 @@
  * surface (`.` entry → src/main/api.ts).
  *
  * Today `src/main/runtime/miniapp-runtime.ts` exists but is reachable only by
- * deep-importing an internal path; qdmp is forced onto
+ * deep-importing an internal path; a downstream host is forced onto
  * `import type { WorkbenchContext } from '@dimina-kit/devtools/context'` —
  * the whole internal grab-bag — and gets broken by every internal refactor.
  *
@@ -63,7 +63,7 @@ describe('R3: api.ts re-exports the MiniappRuntime contract', () => {
   })
 
   it('the barrel `asMiniappRuntime` is an identity return [RED today]', async () => {
-    // Real bug: a wrapper/projection return breaks qdmp's monkey-patch of
+    // Real bug: a wrapper/projection return breaks a downstream host's monkey-patch of
     // workspace.openProject (it would patch a dead copy).
     const api = await loadBarrel()
     const fn = api.asMiniappRuntime as ((ctx: unknown) => unknown) | undefined

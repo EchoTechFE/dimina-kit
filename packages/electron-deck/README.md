@@ -1,41 +1,43 @@
 # @dimina-kit/electron-deck
 
-Dimina devtools 的 host 集成地基。提供：连接层（per-webContents 的 `Connection` + 资源归属）、host-shell 的跨进程 transport、`DeckConfig` 配置类型与 `defineEvent`，以及 webview 侧的 preload / client。
+领域中立的 Electron host-shell 框架。它把跨窗口编排、原生 `WebContentsView` 的 z 叠放与几何跟随、嵌套寿命管理抽成一组正交原语，让任意 Electron 多窗口应用用极少的 host 代码拼出「窗口 + 原生 view + 浮层 + popout」。同时提供 host-shell 的跨进程 transport（声明式 + typed 双向 IPC）、信任边界、确定性资源生命周期，以及 webview 侧的 preload / client。
 
-下游 host（如 qdmp）写一份 `DeckConfig` 交给 `launch(config)`，framework 接管 Electron 装配、IPC、生命周期。
+## 入口
 
-## 入口包归属
-
-`launch()` 入口函数住在 `@dimina-kit/devtools`（它要驱动 devtools 真运行时，而 devtools 已依赖本包——入口放本包会形成循环依赖）。本包提供配置类型、`defineEvent` 和 webview 侧工具：
-
-| 你要的 | 从哪导入 |
-|---|---|
-| `launch(config)` 入口函数 | `@dimina-kit/devtools` |
-| `defineEvent` / `DeckConfig` 等类型 | `@dimina-kit/electron-deck` |
-| preload bridge `exposeDeckBridge()` | `@dimina-kit/electron-deck/preload` |
-| renderer client `createDeckClient<HS, EV>()` | `@dimina-kit/electron-deck/client` |
-| layout-as-data 引擎（`SplitNode`/`TabGroupNode` 树、`movePanel`/`splitPanel`/`closePanel`/`setActive`/`setSizes` 等 mutation、`serializeLayout`/`parseLayout`/`validateTree`、`createLayoutModel` 单写者可观察模型、panel registry） | `@dimina-kit/electron-deck/layout` |
-| `<DockView>` React 渲染器（把 layout 树渲染成可拖拽 re-dock / tab / 分屏的 docking UI） | `@dimina-kit/electron-deck/dock-react` |
-
-## 最小例子
+框架入口 `electronDeck(config, options?)` 与 `startElectronDeck(...)` 都从本包根导出。host 写一份 `DeckConfig`，framework 接管 Electron 装配、IPC、生命周期：
 
 ```ts
 // main.ts
-import { launch } from '@dimina-kit/devtools'
-import { defineEvent } from '@dimina-kit/electron-deck'
+import { startElectronDeck, defineEvent } from '@dimina-kit/electron-deck'
 
 const authChanged = defineEvent<{ user: { id: string } | null }>('authChanged')
 
-// 不要顶层 `await launch(...)`：electron 在 main 模块求值完成前不触发
-// app.whenReady()，而 launch() 内部要 await whenReady，顶层 await 会死锁。
-launch({
+startElectronDeck({
   app: { name: 'My DevTools' },
   hostServices: { getUser: async () => ({ user: null }) },
   events: [authChanged],
-}).catch((err) => { console.error('launch() failed:', err) })
+})
 ```
+
+`startElectronDeck()` 内部已对 `app.whenReady()` 做 gating，可在 main 模块顶层直接调用。`electronDeck()` 是其 await 版本——若直接用它，不要在 main 模块顶层 `await`（electron 在 main 模块求值完成前不触发 `whenReady`，顶层 await 会死锁），改用 `startElectronDeck()` 或 `electronDeck(...).catch(...)`。
+
+`@dimina-kit/devtools` 的 `launch(config)` 是预注入 devtools backend 的薄封装——集成 devtools 时用它，见 [`../devtools/docs/workbench-model.md`](../devtools/docs/workbench-model.md)。
+
+## 导出
+
+| 你要的 | 从哪导入 |
+|---|---|
+| `electronDeck` / `startElectronDeck` 入口、`defineEvent`、`DeckConfig` / `RuntimeBackend` 等类型 | `@dimina-kit/electron-deck` |
+| 主进程装配工具 | `@dimina-kit/electron-deck/main` |
+| host 侧 control-bus / capability / trust 原语 | `@dimina-kit/electron-deck/host` |
+| preload bridge `exposeDeckBridge()` | `@dimina-kit/electron-deck/preload` |
+| renderer client `createDeckClient<HS, EV>()` | `@dimina-kit/electron-deck/client`（浏览器构建：`/client/browser`） |
+| layout-as-data 引擎（`SplitNode`/`TabGroupNode` 树、`movePanel`/`splitPanel`/`closePanel`/`setActive`/`setSizes` mutation、`serializeLayout`/`parseLayout`/`validateTree`、`createLayoutModel` 单写者可观察模型、panel registry） | `@dimina-kit/electron-deck/layout` |
+| `<DockView>` React 渲染器（把 layout 树渲染成可拖拽 re-dock / tab / 分屏的 docking UI） | `@dimina-kit/electron-deck/dock-react` |
 
 ## 文档
 
-- 连接层（Connection / 资源归属 / debugTap）参考：[`docs/foundation.md`](./docs/foundation.md)
-- host 集成（config 字段 / Runtime / preload / client / 必知约束）参考：[`../devtools/docs/workbench-model.md`](../devtools/docs/workbench-model.md)
+- 架构总览（四个布局/多窗口原语、注入式 `RuntimeBackend`、信任边界、生命周期）：[`docs/architecture.md`](./docs/architecture.md)
+- 连接层（`Connection` / 资源归属 / debugTap）：[`docs/foundation.md`](./docs/foundation.md)
+- 横切契约：[`docs/contracts/`](./docs/contracts/)
+- host 集成（以 devtools 为例）：[`../devtools/docs/workbench-model.md`](../devtools/docs/workbench-model.md)

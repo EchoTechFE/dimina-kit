@@ -1,15 +1,18 @@
-# 布局架构 demo：新架构下「最简 devtools」的窗口 + 页面布局
+# 布局架构 demo：「最简 devtools」的窗口 + 页面布局
 
-> 状态：**目标 host-facing 调用形态**（只演示布局，省略编译/CDP/业务细节）。
-> 底层 4 primitive（Scope / Layout-Placement / Compositor / ControlBus）+ **ViewHandle
-> （per-view 编排）+ capability(grants) + slot-token + layout client 现均已建**：
-> `runtime.view().placeIn(win,{anchor}).applyPlacement().moveTo().dispose()` 真接 deck-app
-> + 链式，native view 经 renderer `createDeckLayoutClient` 的 anchor **真跟 DOM slot**（slot-token
-> A5-2，主进程 anti-spoof 校验）；`runtime.grants.issue` 绑 wcScope（P4，wc.id 复用安全），
-> `runtime.view({keepAlive})` 寿命不漏（B3），`runtime.layout.command` 的 `layout.*` 特权命令经
-> ControlBus.dispatch **grant 闸**（grants-fork，闸已上活生产路径）。**仍待建**：`deck.resize/
-> popout/overlay` 高层糖 + targetScope per-target 检查。详见 `contracts/view-handle-build-plan.md`。
-> 本文给出整体调用，让 host 代码长什么样一目了然。
+> 本文演示高层 host API 的调用形态（只演示布局，省略编译/CDP/业务细节），让 host
+> 代码长什么样一目了然。底层四原语（Scope / Layout-Placement / Compositor / ControlBus）
+> + ViewHandle（per-view 编排）+ capability(grants) + slot-token + layout client 缝出这套调用：
+> `runtime.view({source,scope}).placeIn(win,{zone,anchor})` 把原生 view 挂进窗口，native view
+> 经 renderer `createDeckLayoutClient({bridge})` 的 anchor 真跟 DOM slot（slot-token + 主进程
+> anti-spoof 校验）。`placeIn` / `applyPlacement` 链式（返回 handle）；`moveTo` / `dispose`
+> 是终态（返回 `Promise`）。完整运行示例见 `examples/layout-demo/`，原语契约见
+> [`architecture.md`](./architecture.md) §4。
+>
+> ⚠️ 这套高层 surface（`runtime.windows` / `runtime.view` / `runtime.scopes` / `runtime.grants`
+> / `runtime.layout`）`@experimental`：已实装并接线，但当前唯一调用者是 `examples/layout-demo`
+> 与 `spike/popout`，签名未 API 稳定。devtools 等下游宿主走 `RuntimeBackend` + `ownsWindows:true`，
+> 不碰这层（理由见 [`../../devtools/docs/deck-adoption-decision.md`](../../devtools/docs/deck-adoption-decision.md)）。
 
 ## 架构一句话
 
@@ -21,64 +24,81 @@
 ## 主进程：`main.ts`
 
 ```ts
-import { electronDeck } from '@dimina-kit/electron-deck'
+import { app, ipcMain } from 'electron'
+import { startElectronDeck } from '@dimina-kit/electron-deck'
 
 // Compositor 的 z 分层：低在下、高在上
-const Z = { CONTENT: 0, PANEL: 10, OVERLAY: 100 }
+const Z = { SIMULATOR: 0, DEVTOOLS: 10, OVERLAY: 100 }
 
-electronDeck({
+const { ready } = startElectronDeck({
+  app: {
+    window: { width: 900, height: 520 },
+    // 声明式主窗口入口：framework 建好主窗口后自动 load 这个 source
+    source: { url: 'app://control-shell' },
+  },
   backend: {
-    async assemble(runtime) {
-      // ── 1. 主窗口 = control-layer renderer + 寿命 Scope + Compositor
-      const main = runtime.windows.create({ control: { url: 'app://project-shell' } })
+    // framework 建的主窗口用 host 的 preload（exposeDeckLayoutBridge 需要 sandbox:false）
+    mainWindowWebPreferences() {
+      return { preload: PRELOAD, contextIsolation: true, nodeIntegration: false, sandbox: false }
+    },
 
-      // ── 2. 打开项目：session 寿命 ⊂ 窗口寿命
+    async assemble(runtime) {
+      // ── 1. 主窗口：framework 建好后经 Window facade 交回（非 ownsWindows）
+      const main = runtime.windows.main            // DeckWindow
+      const mainWin = main.window                  // 原生 BrowserWindow
+
       let session = null
-      function openProject(path) {
-        session = main.scope.child()                      // 关项目只 reset 它，窗口活着
+      // ── 2. 打开项目：window-rooted session 寿命 ⊂ 窗口寿命
+      ipcMain.on('open-project', () => {
+        session = main.newSession()                // 关项目只 reset 它，窗口活着
 
         // 模拟器：原生 view，锚到 DOM 的 #simulator 占位
-        runtime.view({ source: simulatorSource(path), scope: session })
-               .placeIn(main, { zone: Z.CONTENT, anchor: '#simulator' })
+        runtime.view({ source: simulatorSource(), scope: session })
+               .placeIn(mainWin, { zone: Z.SIMULATOR, anchor: '#simulator' })
 
         // 右侧 Chrome DevTools：另一块原生 view（z 更高）
-        runtime.view({ source: { devtoolsFor: '#simulator' }, scope: session })
-               .placeIn(main, { zone: Z.PANEL, anchor: '#devtools' })
-      }
+        runtime.view({ source: devtoolsSource(), scope: session })
+               .placeIn(mainWin, { zone: Z.DEVTOOLS, anchor: '#devtools' })
+      })
 
       // ── 3. 点 close → 退回 main 而非关窗（窗口寿命 > session 寿命）
       main.onClose(async () => {
         if (session) {
-          await session.reset()                           // 优雅释放项目页全部资源
-          main.bus.event('navigate').publish('project-list')
+          await session.reset()                    // 优雅释放项目页全部资源
           session = null
-          return 'keep'                                   // 留住窗口
+          return 'keep'                            // 留住窗口
         }
         return 'close'
       })
 
-      // ── 4. 浮在原生之上的 overlay（settings / 被 DevTools 盖住的下拉）
-      function showOverlay(src, anchorRect) {
-        return runtime.view({ source: src, scope: main.scope })
-                      .placeIn(main, { zone: Z.OVERLAY, anchorRect })   // 原生 z 栈最顶
-      }                                                   // 返回 ViewHandle，.dispose() 关掉
+      // ── 4. 浮在原生之上的 overlay（settings / 被 DevTools 盖住的下拉）：
+      // 一块原生 view 放进最高 zone，锚到一个 DOM 占位元素
+      function showOverlay(src, anchor) {
+        return runtime.view({ source: src, scope: session ?? main.newSession() })
+                      .placeIn(mainWin, { zone: Z.OVERLAY, anchor })   // 原生 z 栈最顶
+      }                                            // 返回 DeckViewHandle，.dispose() 关掉
 
-      // ── 5. 把面板拽出成独立窗口（live-migrate，实测不重载/不丢 CDP）
+      // ── 5. 把面板拽出成独立窗口（live-migrate，spike/popout 实测不重载/不丢 CDP）
       function popout(view) {
-        const win = runtime.windows.create({ control: { url: 'app://popout-shell' } })
-        // moveTo 只移「显示」（Compositor 跨窗 mount），寿命默认仍属原 session：
-        // placement ≠ lifetime。要让 view 比原 session 活得久，显式 rehome 才走 Scope.adopt：
-        view.moveTo(win, { zone: Z.PANEL, anchor: '#devtools', rehomeTo: win.scope })
+        const win = runtime.windows.create({ source: { url: 'app://popout-shell' } })
+        // moveTo 移「显示」（Compositor 跨窗 mount）；rehome:true 才把寿命迁到新窗口
+        // （placement ≠ lifetime；默认仅移显示，寿命仍属原 session）：
+        view.moveTo(win.window, { zone: Z.DEVTOOLS, anchor: '#devtools', rehome: true })
       }
 
-      // ── 6. 授权 control-layer 自助驱动布局（capability，不越权）
+      // ── 6. 授权 control-layer 自助驱动特权布局命令（capability，不越权）
+      runtime.layout.command('layout.collapse-sim', () => {
+        /* host-side：隐藏 simulator view 等 */ return 'ok'
+      })
       runtime.grants.issue(main.controlWc, {
-        scope: main.scope,                                // 只能动这个窗口子树
-        commands: ['layout.resize', 'layout.reorder', 'layout.popout', 'layout.overlay'],
+        commands: ['layout.collapse-sim'],         // 只授这些 layout.* 命令
+        targetScope: session,                      // window-rooted DeckSession
       })
     },
   },
 })
+
+ready.catch((err) => { console.error(err); app.quit() })
 ```
 
 ## 控制层 renderer：`control-shell.tsx`（那块「底」）
@@ -86,38 +106,41 @@ electronDeck({
 ```tsx
 import { createDeckLayoutClient } from '@dimina-kit/electron-deck/client'
 
-const deck = await createDeckLayoutClient()   // 自动拿主进程发的 grant
+// preload 里 `exposeDeckLayoutBridge()` 已把 turnkey bridge 挂到 window
+const deck = createDeckLayoutClient({ bridge: window.__electronDeckLayoutBridge })
+// deck.dispose() 在卸载时停掉 anchor
 
 function ProjectShell() {
   return (
-    <SplitView onResize={(rect) => deck.resize('#simulator', rect)}>
+    <div className="split">
       {/* DOM 面板：CSS 布局，归 React */}
-      <Toolbar onPopOutDevtools={() => deck.popout('view:devtools')} />
+      <Toolbar onOpenProject={(id) => window.__demoControl.openProject(id)} />
 
-      {/* 原生 view 的占位「洞」：React 只画 div + 报 bounds，原生 view 由主进程盖上来 */}
+      {/* 原生 view 的占位「洞」：React 只画 div + 报 bounds，原生 view 由主进程盖上来。
+          createDeckLayoutClient 内部的 view-anchor 用 ResizeObserver 量这些 slot，
+          拖动 splitter → slot 尺寸变 → 自动 publish Placement → 原生 view 跟随。
+          ZERO 显式 resize 代码。 */}
       <div id="simulator" className="flex-1" />
-      <div id="devtools" className="w-[360px]" />
-
-      {/* 会被原生 DevTools 盖住的下拉 → 交框架开顶层原生 overlay */}
-      <Dropdown onOpen={(btnRect) => deck.overlay({ url: 'app://menu' }, btnRect)} />
-    </SplitView>
+      <div id="splitter" />
+      <div id="devtools" style={{ width: 360 }} />
+    </div>
   )
 }
 ```
 
 ## 每个调用背后是哪个 primitive
 
-| demo 里的调用 | 底层 primitive | 状态 |
-|---|---|---|
-| `runtime.windows.create` / `main.scope` / `main.compositor` / `main.bus` / `main.onClose` | 窗口 + **Scope** + **Compositor** + **ControlBus** + close 决策机 | ✅ 已建 |
-| `scope.child()` / `session.reset()` | **Scope** 嵌套寿命 + 完成栅栏 | ✅ 已建 |
-| `runtime.view().placeIn(win,{anchor})` / `.applyPlacement()` / `.moveTo()` / `.dispose()` | **ViewHandle** 薄编排 + per-window Compositor 底座（链式）→ Compositor(✅)+Layout/Placement(✅)+Scope(✅) | ✅ 已建（slice 1 + moveTo + **slot-token A5-2**：anchored placeIn 推 slot-grant，native view 经 renderer anchor 真跟 DOM slot） |
-| `runtime.grants.issue` / `runtime.layout.command` / capability 校验 | **capability** 授权层（绑 wcScope，wc.id 复用安全）+ grant 闸**上活生产路径** | ✅ 已建（P4 + grants-fork）；`layout.*` 命令经 ControlBus.dispatch **grant 闸**（无 grant→DECK_FORBIDDEN），`layout.* ⟺ 受闸` 强制；targetScope per-target 检查保留待 target-bearing 命令 |
-| `createDeckLayoutClient`（renderer 侧）| 订阅 slot-grant→真硬化 `createPlacementAnchor`(followScroll/followGeometry/guardDisplayNone)→publish 发 `__deck:place`(带 slotToken，主进程 anti-spoof 校验) | ✅ 已建（`@dimina-kit/electron-deck/client`；`deck.resize/popout/overlay` 高层糖待建） |
+| demo 里的调用 | 底层 primitive |
+|---|---|
+| `runtime.windows.main` / `runtime.windows.create` / `main.window` / `main.controlWc` / `main.onClose` | 窗口 + **Scope** + **Compositor** + **ControlBus** + close 决策机 |
+| `main.newSession()` / `session.reset()` / `session.dispose()` | **Scope** 嵌套寿命（window-rooted DeckSession）+ 完成栅栏 |
+| `runtime.view({source,scope}).placeIn(win,{zone,anchor})` / `.applyPlacement()` / `.moveTo()` / `.dispose()` | **ViewHandle** 薄编排 + per-window Compositor 底座：Compositor + Layout/Placement + Scope。slot-token：anchored placeIn 推 slot-grant，native view 经 renderer anchor 真跟 DOM slot |
+| `runtime.layout.command` / `runtime.grants.issue` / capability 校验 | **capability** 授权层（绑 control-wc senderId，wc.id 复用安全）+ grant 闸；`layout.*` 命令经 ControlBus.dispatch **grant 闸**（无 grant → `DECK_FORBIDDEN`） |
+| `createDeckLayoutClient({bridge})`（renderer 侧）| 订阅 slot-grant → `createPlacementAnchor`(followScroll/followGeometry/guardDisplayNone) → publish 发 place（带 slotToken，主进程 anti-spoof 校验）；preload 的 `exposeDeckLayoutBridge()` 提供 turnkey `bridge` |
 
 ## 整体调用的精髓
 
 1. **窗口 = Scope（寿命）+ Compositor（z 栈）+ 控制层 renderer（DOM 布局）** 三件套。
-2. **页面布局零代码在主进程**：原生 view `view.placeIn(zone, anchor)` 一句话挂进去；DOM 分栏归 React，靠 anchor 占位缝合。
-3. **三个真实需求各一句话**：close 退回 main = `session.reset()`；下拉浮在 DevTools 上 = `placeIn(OVERLAY zone)`；popout = `view.moveTo(win)`。
-4. **业务自助布局 = grant + layout client**：React 直接 `deck.resize/popout`，主进程不写布局逻辑。
+2. **页面布局零代码在主进程**：原生 view `view.placeIn(win, {zone, anchor})` 一句话挂进去；DOM 分栏归 React，靠 anchor 占位缝合，拖动 splitter 原生 view 自动跟随。
+3. **三个真实需求各一句话**：close 退回 main = `session.reset()`；下拉浮在 DevTools 上 = `placeIn(OVERLAY zone)`；popout = `view.moveTo(win, {rehome:true})`。
+4. **业务自助布局 = grant + layout client**：renderer 挂 `createDeckLayoutClient`，原生 view 自动跟 DOM；特权命令经 `runtime.layout.command` + `runtime.grants.issue` 授权，主进程不写布局逻辑。

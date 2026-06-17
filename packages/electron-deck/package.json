@@ -1,7 +1,7 @@
 {
   "name": "@dimina-kit/electron-deck",
   "version": "0.1.0",
-  "description": "Dimina devtools electron-deck framework — single `electronDeck(config)` entry for hosts (qdmp, dimina default).",
+  "description": "Dimina devtools electron-deck framework — single `electronDeck(config)` entry for downstream hosts (dimina default).",
   "keywords": [
     "dimina",
     "devtools",

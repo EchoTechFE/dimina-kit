@@ -129,7 +129,7 @@ function createFakeElectron(
 			loadURL: vi.fn(async (_u: string) => undefined) as FakeWebContentsLike['loadURL'],
 			loadFile: vi.fn(async (_p: string) => undefined) as FakeWebContentsLike['loadFile'],
 			send: vi.fn() as FakeWebContentsLike['send'],
-			// The view's native-WC teardown calls `wc.close()` (B3.1). Mark destroyed
+			// The view's native-WC teardown calls `wc.close()` (keep-alive ownership). Mark destroyed
 			// so the session-dispose teardown is observable.
 			close: vi.fn(function (this: FakeWebContentsLike) {
 				wc.destroyed = true
@@ -339,7 +339,7 @@ describe('DeckApp P2 — view({scope: session}) is bound to the session lifetime
 
 		expect(mainWin.contentView.removeChildView.mock.calls.length).toBeGreaterThan(removesBefore)
 		expect(mainWin.contentView.removeChildView).toHaveBeenCalledWith(wcv)
-		// view-handle B3.1: the view's native WebContents is closed on teardown.
+		// view-handle keep-alive ownership: the view's native WebContents is closed on teardown.
 		expect(wcv.webContents.close).toHaveBeenCalled()
 
 		await app.shutdown()

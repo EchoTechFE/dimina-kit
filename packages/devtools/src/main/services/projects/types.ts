@@ -1,6 +1,6 @@
 /**
  * Public extensibility surface for the project list panel. Hosts that embed
- * dimina-devtools (e.g. qdmp) can inject implementations of these types via
+ * dimina-devtools (downstream hosts) can inject implementations of these types via
  * `WorkbenchAppConfig` to fully take over the project source-of-truth, the
  * template catalog, and the "新建项目" dialog.
  */

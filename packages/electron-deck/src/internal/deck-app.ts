@@ -260,7 +260,7 @@ export class DeckApp {
 	 */
 	private readonly sessions = new WeakMap<DeckSession, Scope>()
 	/**
-	 * keepAlive B3.2 — opt-in per-group LRU of HIDDEN keep-alive views. Group key is
+	 * keepAlive「opt-in helper：runtime.view({ keepAlive })」 — opt-in per-group LRU of HIDDEN keep-alive views. Group key is
 	 * `lru:${max}` (all `keepAlive:{policy:'lru',max:N}` views share one group per
 	 * `max`). Each group holds an ORDERED list of HIDDEN view ids (front = least
 	 * recently visible = first to evict) + a map from view id to its host handle so
@@ -277,7 +277,7 @@ export class DeckApp {
 	 *  or un-adopted then re-adopted) never accumulates duplicate nav listeners. */
 	private readonly navHookBound = new WeakSet<MinimalWebContents>()
 	/**
-	 * slot-token registry (build-plan §2(e) / capability-and-lifecycle §A5-2):
+	 * slot-token registry (view-handle.md「slot-token 握手」/ capability-and-lifecycle.md「anchor slotToken 原子下发」):
 	 * each anchored `placeIn` mints an unguessable token bound to (viewId, slotId,
 	 * authorizedWcId). The `__electron-deck:place` apply path looks the token up,
 	 * checks the sender is the authorized wc (anti-spoof), validates the placement,
@@ -1193,7 +1193,7 @@ export class DeckApp {
 			bus: this.bus,
 			senderPolicy,
 			trustedWebContents,
-			// The two-route boundary (§A5-1.2 硬约束): the wire's host `invokeHost`
+			// The two-route boundary (「两条 invoke 路由的硬边界」): the wire's host `invokeHost`
 			// seam FORKS by command name.
 			//  - PRIVILEGED `layout.*` names route through `controlBus.dispatch`,
 			//    which applies the grant gate (DECK_FORBIDDEN when no live grant
@@ -1232,7 +1232,7 @@ export class DeckApp {
 	}
 
 	/**
-	 * The two-route boundary's privileged-name predicate (§A5-1.2 硬约束). A
+	 * The two-route boundary's privileged-name predicate (「两条 invoke 路由的硬边界」). A
 	 * PRIVILEGED command name — by convention `layout.*` — routes through the
 	 * grant-gated {@link ControlBus} (`controlBus.dispatch`). Ordinary domain
 	 * APIs (any other name) stay on the un-gated declarative `hostServices`
@@ -1952,7 +1952,7 @@ export class DeckApp {
 						if (wc && !wc.isDestroyed()) wc.close?.()
 					})
 				}
-				// keepAlive B3.1: destroy the backing WebContents (guarded -> idempotent,
+				// keepAlive「保活寿命归 Scope、淘汰策略归 host」: destroy the backing WebContents (guarded -> idempotent,
 				// never double-closed). Leak fix: a `runtime.view` previously only
 				// DETACHED its native view, leaking its renderer for the app's life.
 				const closeNativeWc = (): void => {
@@ -1985,7 +1985,7 @@ export class DeckApp {
 						return wc.capturePage()
 					},
 				}
-				// keepAlive B3.2: opt-in LRU group, only when configured. Views sharing
+				// keepAlive「opt-in helper：runtime.view({ keepAlive })」: opt-in LRU group, only when configured. Views sharing
 				// the same `max` form one group keyed `lru:${max}`.
 				//
 				// KA-4: validate `max`. A negative `max` would make the eviction
@@ -2111,7 +2111,7 @@ export class DeckApp {
 						// avoid double-handling + disposer accumulation on the long-lived
 						// rootScope.
 						disarmRootClose()
-						// slot-token (build-plan §2(e)): an anchored placeIn binds a DOM
+						// slot-token (view-handle.md「slot-token 握手」): an anchored placeIn binds a DOM
 						// slot in the control wc to this native view. Mint an unguessable
 						// token, register it (authorized to that wc), and PUSH a slot-grant
 						// so the renderer learns (viewId, slotId, slotToken). The token is
@@ -2248,7 +2248,7 @@ export class DeckApp {
 					},
 					applyPlacement: (p) => {
 						inner.applyPlacement(p)
-						// keepAlive B3.2: maintain this group's LRU of HIDDEN views.
+						// keepAlive「opt-in helper：runtime.view({ keepAlive })」: maintain this group's LRU of HIDDEN views.
 						if (groupKey) {
 							const group = keepAliveGroup()
 							const dropFromHidden = (): void => {
@@ -2291,14 +2291,14 @@ export class DeckApp {
 						// below, so the rootScope guard is now redundant — disarm + drop it
 						// (no double-close, and no disposer left on the long-lived rootScope).
 						disarmRootClose()
-						// keepAlive B3.1: catch-all destroy for a NEVER-PLACED view (no
+						// keepAlive「保活寿命归 Scope、淘汰策略归 host」: catch-all destroy for a NEVER-PLACED view (no
 						// viewScope ran the destroy own). Guarded -> a no-op when the
 						// viewScope already closed the wc (never double-closed).
 						closeNativeWc()
 						placedSubstrate?.unregisterView(viewId)
 						// Revoke the slot token so a stale `place` after dispose drops.
 						if (slotToken) this.slotTokens.delete(slotToken)
-						// keepAlive B3.2 / KA-2: drop this view from its LRU group. Idempotent
+						// keepAlive「opt-in helper：runtime.view({ keepAlive })」 / KA-2: drop this view from its LRU group. Idempotent
 						// + redundant-but-safe for placed views (the viewScope's onDispose
 						// already ran it on inner.dispose above); REQUIRED for a never-placed
 						// keepAlive view whose viewScope never existed (no onDispose fired).
@@ -2313,7 +2313,7 @@ export class DeckApp {
 					bounds: (): ViewBounds | null => inner.bounds() as ViewBounds | null,
 					capturePage: (): Promise<NativeImage> => inner.capturePage() as Promise<NativeImage>,
 				}
-				// keepAlive B3.2: register this handle so its group can evict/dispose it.
+				// keepAlive「opt-in helper：runtime.view({ keepAlive })」: register this handle so its group can evict/dispose it.
 				if (groupKey) keepAliveGroup().handles.set(viewId, hostHandle)
 				// Bug 3b — bind the display lifetime to an EXPLICIT session scope only.
 				// When a DeckSession was passed, `displayScope` is its internal child of

@@ -94,7 +94,7 @@ staticAssert<Not<Equal<ProjectSession['appInfo'], unknown>>>()
 
 // ═════════════════════════════════════════════════════════════════════════
 // §4 Host consumption pin — the doc's "无需再 cast" promise, written as code.
-// Each marked line is the exact cast-free access a downstream host (qdmp)
+// Each marked line is the exact cast-free access a downstream host
 // performs; today every one is a compile error on `unknown`.
 // ═════════════════════════════════════════════════════════════════════════
 

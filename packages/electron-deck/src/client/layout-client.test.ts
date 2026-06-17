@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
  * TDD contract tests (FAILING-FIRST) for `createDeckLayoutClient` — the
- * RENDERER half of the A5-2 slot-token handshake (view-handle build-plan §2(e)
+ * RENDERER half of the「anchor slotToken 原子下发」slot-token handshake (view-handle.md「slot-token 握手」
  * "renderer client"). This client is what makes a main-process native view
  * actually FOLLOW a DOM slot:
  *
@@ -13,7 +13,7 @@
  *
  * Source-of-truth referenced (and only these):
  *   - the `createDeckLayoutClient(deps)` contract handed to this test author,
- *   - `docs/contracts/capability-and-lifecycle.md` §A5-2.1 (renderer handshake:
+ *   - `docs/contracts/capability-and-lifecycle.md`「原子下发握手协议」(renderer handshake:
  *     subscribe FIRST, anchor ON grant, publish WITH slotToken),
  *   - `packages/view-anchor/src/view-anchor.ts` `createPlacementAnchor` opts
  *     + `Placement` shape (mirrored locally below — view-anchor is not yet a
@@ -120,7 +120,7 @@ function placement(x: number): Placement {
   return { visible: true, bounds: { x, y: x, width: 10, height: 10 } }
 }
 
-describe('createDeckLayoutClient — renderer slot-token handshake (§2(e))', () => {
+describe('createDeckLayoutClient — renderer slot-token handshake', () => {
   // ── #1 subscribe-on-init (HANDSHAKE-ORDER PIN) ──────────────────────────
   it('subscribes to slot-grant BEFORE (or at) calling subscribe() so a replayed grant cannot be missed', () => {
     const b = makeBridge()

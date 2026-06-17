@@ -6,7 +6,7 @@
  * would drag every nested internal service type (ViewManager,
  * BridgeRouterHandle, SimulatorApiRegistry, Electron WebContents…) onto the
  * public semver face, so any internal refactor of those services becomes an
- * unreviewed breaking change for downstream hosts (qdmp). Instead this module
+ * unreviewed breaking change for downstream hosts. Instead this module
  * names ONLY the audited downstream consumption surface, with structural DTOs
  * and zero Electron types — non-Electron consumers can compile against it.
  *
@@ -171,7 +171,7 @@ export interface MiniappWorkspace {
 }
 
 /**
- * The stable miniapp-kernel surface a downstream host (qdmp) consumes.
+ * The stable miniapp-kernel surface a downstream host consumes.
  * Compiler-enforced and versionable: widening it back toward internal
  * plumbing is a deliberate semver decision, not an accident of projection.
  */

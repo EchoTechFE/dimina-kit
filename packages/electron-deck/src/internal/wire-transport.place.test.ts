@@ -1,8 +1,8 @@
 // TDD (failing-first): slot-token main-process plumbing — WireTransport's
 // `__electron-deck:place` + `__electron-deck:layout-subscribe` inbound channels.
 //
-// Contract under test (NOT yet implemented — build-plan §2(e) /
-// capability-and-lifecycle.md §A5-2):
+// Contract under test (NOT yet implemented — view-handle.md「slot-token 握手」/
+// capability-and-lifecycle.md「anchor slotToken 原子下发」):
 //
 //   WireTransportDeps gains two OPTIONAL deps:
 //     onPlace?(senderId: number, slotToken: string, placement: unknown): void

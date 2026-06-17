@@ -71,7 +71,7 @@ interface Compositor {
   // ── TDD red: `detachAll` is not implemented on the compositor yet (Part 1).
   // Folds the intent to EMPTY and commits, removing all of this window's native
   // views from the host. Reuses the teardown-friendly removals-only-on-destroyed
-  // path (A1.2.1), so on an already-destroyed host it is SILENT (no throw).
+  // path (commit failure semantics), so on an already-destroyed host it is SILENT (no throw).
   detachAll(): void
 }
 
@@ -534,7 +534,7 @@ describe('rebalance — precision-exhausting reorders keep visible order intact'
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 10. commit — transactional failure semantics (A1.2.1)  [TDD red: CommitError
+// 10. commit — transactional failure semantics (commit failure semantics)  [TDD red: CommitError
 //     is not exported yet, and the new destroyed/rollback behaviors are not
 //     implemented — the old code throws a generic Error.]
 //
@@ -557,7 +557,7 @@ describe('rebalance — precision-exhausting reorders keep visible order intact'
 //     its pre-apply snapshot order, and a typed apply-failed throw reports
 //     whether the rollback restored the snapshot (recovered:true/false).
 // ─────────────────────────────────────────────────────────────────────────────
-describe('commit — transactional failure semantics (A1.2.1, CommitError)', () => {
+describe('commit — transactional failure semantics (commit failure semantics, CommitError)', () => {
 	// The typed error is imported lazily alongside `createCompositor` so the
 	// missing export turns these specs (and only these) red, rather than breaking
 	// module load for the whole file. Mirrors the public shape locally.
@@ -810,7 +810,7 @@ describe('commit — transactional failure semantics (A1.2.1, CommitError)', () 
 //
 // Contract: `detachAll()` folds the intent state to EMPTY and commits, so every
 // native view this window's compositor mounted is removed from the host. Because
-// the resulting commit is REMOVALS-ONLY, it reuses A1.2.1's teardown-friendly
+// the resulting commit is REMOVALS-ONLY, it reuses commit failure semantics's teardown-friendly
 // "destroyed host + only removals → silent" path: on an already-destroyed host
 // it makes zero host calls and throws nothing.
 // ─────────────────────────────────────────────────────────────────────────────
