@@ -7,7 +7,7 @@
  *  - If workspace-service still calls the static `project-repository`
  *    functions directly, the injected provider's listProjects/addProject/
  *    removeProject/validateProjectDir would never be reached, and host
- *    extensions (qdmp) would be silently bypassed.
+ *    extensions (downstream hosts) would be silently bypassed.
  *  - If `createWorkbenchContext` no longer instantiates a default
  *    LocalProjectsProvider when host omits `projectsProvider`, every
  *    existing single-tenant install regresses (list comes up empty / add
@@ -171,7 +171,7 @@ describe('workspace-service ↔ ProjectsProvider injection', () => {
     expect(injected.validateProjectDir).toHaveBeenCalledWith('/x')
   })
 
-  it('async ProjectsProvider methods are awaited end-to-end (qdmp remote workspace contract)', async () => {
+  it('async ProjectsProvider methods are awaited end-to-end (downstream host remote workspace contract)', async () => {
     // Bug this catches: workspace-service strips Promise return types so a
     // host that returns `Promise<Project[]>` (remote API call) ends up with
     // the renderer receiving a Promise object instead of resolved data.

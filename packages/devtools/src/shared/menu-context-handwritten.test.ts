@@ -118,7 +118,7 @@ staticAssert<Equal<Parameters<MenuBuilderHook>[1], MenuContext>>()
 
 // THE structural-subtyping sentinel: a full WorkbenchContext must remain
 // assignable to MenuContext, so hosts that pass the whole ctx through
-// (qdmp's pattern) keep compiling across the narrowing.
+// (a downstream host's pattern) keep compiling across the narrowing.
 const _contextSatisfiesMenuContext: (ctx: WorkbenchContext) => MenuContext = (ctx) => ctx
 void _contextSatisfiesMenuContext
 

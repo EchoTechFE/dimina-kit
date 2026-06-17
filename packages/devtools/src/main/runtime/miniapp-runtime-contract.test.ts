@@ -5,11 +5,11 @@
  * Why hand-written: `Pick` drags every nested internal service type
  * (ViewManager, BridgeRouterHandle, SimulatorApiRegistry, Electron
  * WebContents…) into the public semver face — any internal refactor of those
- * services becomes an unreviewed breaking change for downstream hosts (qdmp).
- * The contract instead names ONLY the audited qdmp consumption surface with
+ * services becomes an unreviewed breaking change for downstream hosts.
+ * The contract instead names ONLY the audited downstream-host consumption surface with
  * function-valued properties and structural DTOs; `asMiniappRuntime(ctx)`
  * stays an identity return and doubles as the assignment-compat sentinel:
- * internal drift breaks compilation HERE, not in qdmp's upgrade.
+ * internal drift breaks compilation HERE, not in a downstream host's upgrade.
  *
  * ── RED / flip protocol ────────────────────────────────────────────────────
  * Type-level requirements cannot fail at vitest runtime without reddening
@@ -56,10 +56,10 @@ function staticAssert<_T extends true>(): void {}
 staticAssert<Not<HasKey<MiniappRuntime, 'rendererDir'>>>()
 staticAssert<Not<HasKey<MiniappRuntime, 'windows'>>>()
 
-// qdmp registers its own teardown via `registry.add(dispose)`.
+// A downstream host registers its own teardown via `registry.add(dispose)`.
 staticAssert<HasKey<MiniappRuntime, 'registry'>>()
 
-// `registry.add` must accept a bare `() => void` dispose fn (qdmp's call shape).
+// `registry.add` must accept a bare `() => void` dispose fn (a downstream host's call shape).
 // (Vacuous-today pin, same mechanism as above.)
 staticAssert<
   KeyType<KeyType<MiniappRuntime, 'registry'>, 'add'> extends (
@@ -70,7 +70,7 @@ staticAssert<
 >()
 
 // ═════════════════════════════════════════════════════════════════════════
-// §2 Members the contract MUST LOSE (present today via Pick; qdmp has ZERO
+// §2 Members the contract MUST LOSE (present today via Pick; a downstream host has ZERO
 // uses — audited). Real bug caught (post-flip): someone re-widens the
 // contract, silently re-promising internal plumbing to hosts (先窄后宽 —
 // adding back later is a deliberate minor bump, not an accident).
@@ -83,7 +83,7 @@ staticAssert<Not<HasKey<MiniappRuntime, 'appData'>>>()
 staticAssert<Not<HasKey<MiniappRuntime, 'connections'>>>()
 
 // ═════════════════════════════════════════════════════════════════════════
-// §3 Narrowed sub-surfaces. The contract keeps the qdmp-consumed members of
+// §3 Narrowed sub-surfaces. The contract keeps the downstream-host-consumed members of
 // each service and nothing else, so internal service refactors stay off the
 // public semver face.
 // ═════════════════════════════════════════════════════════════════════════
@@ -95,7 +95,7 @@ staticAssert<Not<HasKey<MiniappRuntime['views'], 'getSimulatorWebContents'>>>()
 staticAssert<Not<HasKey<MiniappRuntime['views'], 'getHostToolbarWebContentsId'>>>()
 
 // `views.hostToolbar` must NOT expose `webContents` (Electron type leak —
-// qdmp migrated to the send/onMessage message channel).
+// downstream hosts migrated to the send/onMessage message channel).
 staticAssert<Not<HasKey<MiniappRuntime['views']['hostToolbar'], 'webContents'>>>()
 
 // (`windows` itself is gone from the contract — designed change, see §1 —
@@ -111,7 +111,7 @@ staticAssert<Not<HasKey<MiniappRuntime['workspace'], 'captureThumbnail'>>>()
 type SessionDto = NonNullable<ReturnType<MiniappRuntime['workspace']['getSession']>>
 staticAssert<Not<HasKey<SessionDto, 'close'>>>()
 
-// `notify` keeps only `projectStatus` (qdmp's sole use).
+// `notify` keeps only `projectStatus` (a downstream host's sole use).
 staticAssert<Not<HasKey<MiniappRuntime['notify'], 'editorOpenFile'>>>()
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -142,28 +142,28 @@ staticAssert<ProjectStatusIsStrictlyVariant>()
 // THE assignment-compat sentinel: a real WorkbenchContext must always satisfy
 // the contract via plain assignment (this is what makes `asMiniappRuntime`'s
 // identity return compile). If an internal service drifts away from the
-// contract, THIS stops compiling — in our package, not in qdmp's upgrade.
+// contract, THIS stops compiling — in our package, not in a downstream host's upgrade.
 const _contextSatisfiesContract: (ctx: WorkbenchContext) => MiniappRuntime = (ctx) => ctx
 void _contextSatisfiesContract
 
 /**
- * The audited qdmp consumption surface, written as code. Never executed —
- * compile-only. Real bug caught: ANY signature change to a member qdmp
+ * The audited downstream-host consumption surface, written as code. Never executed —
+ * compile-only. Real bug caught: ANY signature change to a member a downstream host
  * actually calls (param/return DTO drift, a member going readonly, a member
  * disappearing) stops this function compiling.
  */
-function _qdmpConsumptionPin(rt: MiniappRuntime): void {
-  // workspace — the 7 audited members, exact call shapes qdmp uses
+function _downstreamConsumptionPin(rt: MiniappRuntime): void {
+  // workspace — the 7 audited members, exact call shapes a downstream host uses
   const active: boolean = rt.workspace.hasActiveSession()
   const projectPath: string = rt.workspace.getProjectPath()
   const opened: Promise<{ success: boolean; error?: string }> =
-    rt.workspace.openProject('/qdmp/project')
+    rt.workspace.openProject('/downstream/project')
   const closed: Promise<void> = rt.workspace.closeProject()
-  const has: Promise<boolean> = rt.workspace.hasProject('/qdmp/project')
-  rt.workspace.addProject('/qdmp/project') // return value discarded by qdmp
+  const has: Promise<boolean> = rt.workspace.hasProject('/downstream/project')
+  rt.workspace.addProject('/downstream/project') // return value discarded by the host
   const session: { appInfo: unknown } | null = rt.workspace.getSession()
 
-  // HARD CONSTRAINT — qdmp monkey-patches openProject for permission gating;
+  // HARD CONSTRAINT — a downstream host monkey-patches openProject for permission gating;
   // the member must stay assignable (NOT readonly) at the type level.
   rt.workspace.openProject = async (gatedPath: string) => ({
     success: false,
@@ -171,13 +171,13 @@ function _qdmpConsumptionPin(rt: MiniappRuntime): void {
   })
 
   // views.hostToolbar — the post-R2 host surface (no webContents anywhere)
-  rt.views.hostToolbar.setPreloadPath('/qdmp/toolbar-preload.cjs')
+  rt.views.hostToolbar.setPreloadPath('/downstream/toolbar-preload.cjs')
   rt.views.hostToolbar.setPreloadPath(null)
-  const loadedFile: Promise<void> = rt.views.hostToolbar.loadFile('/qdmp/toolbar.html')
-  const loadedUrl: Promise<void> = rt.views.hostToolbar.loadURL('https://qdmp.example/toolbar')
-  const sent: boolean = rt.views.hostToolbar.send('qdmp:state', { connected: true })
+  const loadedFile: Promise<void> = rt.views.hostToolbar.loadFile('/downstream/toolbar.html')
+  const loadedUrl: Promise<void> = rt.views.hostToolbar.loadURL('https://downstream.example/toolbar')
+  const sent: boolean = rt.views.hostToolbar.send('downstream:state', { connected: true })
   const sub: { dispose: () => void } = rt.views.hostToolbar.onMessage(
-    'qdmp:action',
+    'downstream:action',
     (payload: unknown) => {
       void payload
     },
@@ -186,7 +186,7 @@ function _qdmpConsumptionPin(rt: MiniappRuntime): void {
   rt.views.hostToolbar.setHeightMode('auto')
   rt.views.hostToolbar.setHeightMode({ fixed: 40 })
 
-  // notify — status broadcast with qdmp's structural payload
+  // notify — status broadcast with a downstream host's structural payload
   rt.notify.projectStatus({ status: 'ready', message: '编译完成' })
 
   void active
@@ -199,7 +199,7 @@ function _qdmpConsumptionPin(rt: MiniappRuntime): void {
   void loadedUrl
   void sent
 }
-void _qdmpConsumptionPin
+void _downstreamConsumptionPin
 
 // ═════════════════════════════════════════════════════════════════════════
 // §6 Runtime assertions.
@@ -216,7 +216,7 @@ describe('MiniappRuntime contract (R3) — hand-written, Electron-free module', 
   it('is hand-written: MiniappRuntime is NOT declared via a Pick<…> projection [RED today]', () => {
     // Real bug: `Pick<WorkbenchContext, …>` puts every nested internal service
     // type on the public semver face — internal refactors of ViewManager /
-    // bridge / storage types become breaking changes qdmp discovers on
+    // bridge / storage types become breaking changes a downstream host discovers on
     // upgrade. The hand-written interface decouples them.
     const source = readFileSync(contractSourcePath, 'utf8')
     expect(
@@ -238,7 +238,7 @@ describe('MiniappRuntime contract (R3) — hand-written, Electron-free module', 
 
   it('asMiniappRuntime is an identity return (typed view, not a projection object) [green pin]', () => {
     // Real bug: an implementer "helpfully" returns a new object of copied
-    // members — qdmp's monkey-patch of workspace.openProject then patches a
+    // members — a downstream host's monkey-patch of workspace.openProject then patches a
     // dead copy and the permission gate silently stops gating.
     const fake = { tag: 'fake-context' } as unknown as WorkbenchContext
     expect(asMiniappRuntime(fake)).toBe(fake)

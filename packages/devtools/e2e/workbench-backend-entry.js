@@ -28,7 +28,7 @@ if (process.env.NODE_ENV === 'test') {
 
 // Fire-and-forget (do NOT top-level-await in an ESM main — electronDeck() awaits
 // whenReady internally; the Electron event loop keeps the process alive).
-electronDeck({ backend: createDevtoolsBackend({ appName: 'QDMP Backend Host' }) })
+electronDeck({ backend: createDevtoolsBackend({ appName: 'Downstream Backend Host' }) })
   .catch((err) => {
     console.error('[workbench-backend-entry] electronDeck() failed:', err)
   })

@@ -8,7 +8,7 @@
  *    the user would lose `blank` after a refactor, breaking the default
  *    new-project flow.
  *  - `mode='none'` regression that leaks built-ins back into the catalog:
- *    a downstream host (qdmp) that wants to ship only its own templates
+ *    a downstream host that wants to ship only its own templates
  *    would suddenly start showing our blank/taro-todo too.
  *  - Whitelist regression that ignores the array and shows everything,
  *    leaking unsupported templates.

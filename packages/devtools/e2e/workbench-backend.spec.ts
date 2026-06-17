@@ -44,7 +44,7 @@ test.describe('launch() + RuntimeBackend (v2 framework orchestration)', () => {
 
   test('beforeReady bootstrap set the Electron app name', async () => {
     const appName = await app.evaluate(({ app: a }) => a.getName())
-    expect(appName).toBe('QDMP Backend Host')
+    expect(appName).toBe('Downstream Backend Host')
   })
 
   test('full devtools runtime assembled (renderer mounts content)', async () => {

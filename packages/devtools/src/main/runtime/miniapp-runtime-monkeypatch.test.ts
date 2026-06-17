@@ -2,7 +2,7 @@
  * R3 — runtime sentinel: `asMiniappRuntime` over a REAL `createWorkbenchContext`.
  *
  * The contract is a typed VIEW onto the live context, not a snapshot/projection
- * — that is what makes qdmp's permission gate work: qdmp monkey-patches
+ * — that is what makes a downstream host's permission gate work: the host monkey-patches
  * `ctx.workspace.openProject = wrapped` and every caller (IPC, menu, the
  * runtime view) must hit the wrapper.
  *
@@ -82,7 +82,7 @@ describe('R3 runtime sentinel: asMiniappRuntime over a real context', () => {
     ).toBeDefined()
     expect(
       desc?.writable,
-      'qdmp gates project permissions by reassigning ctx.workspace.openProject; the property must stay writable',
+      'a downstream host gates project permissions by reassigning ctx.workspace.openProject; the property must stay writable',
     ).toBe(true)
   })
 
@@ -94,7 +94,7 @@ describe('R3 runtime sentinel: asMiniappRuntime over a real context', () => {
     const original = ctx.workspace.openProject
     rt.workspace.openProject = async (projectPath: string) => {
       gated.push(projectPath)
-      return { success: false, error: 'denied by qdmp permission gate' }
+      return { success: false, error: 'denied by downstream host permission gate' }
     }
 
     // The patch must be visible through BOTH references (same live object) …
@@ -103,9 +103,9 @@ describe('R3 runtime sentinel: asMiniappRuntime over a real context', () => {
 
     // … and must actually intercept: the wrapper runs, the real adapter
     // pipeline (compile/session) is never entered.
-    const result = await ctx.workspace.openProject('/qdmp/project')
-    expect(gated).toEqual(['/qdmp/project'])
+    const result = await ctx.workspace.openProject('/downstream/project')
+    expect(gated).toEqual(['/downstream/project'])
     expect(result.success).toBe(false)
-    expect(result.error).toBe('denied by qdmp permission gate')
+    expect(result.error).toBe('denied by downstream host permission gate')
   })
 })

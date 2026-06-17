@@ -222,11 +222,11 @@ src/
 
 ## Embedding & Extending the Project Panel
 
-宿主（如 qdmp）通过 `launch({...})` 嵌入 devtools 时，可对项目面板做三个正交扩展：
+下游宿主通过 `launch({...})` 嵌入 devtools 时，可对项目面板做三个正交扩展：
 
 | 扩展点 | 用途 |
 | --- | --- |
-| `projectsProvider` | 接管项目列表存储 —— 替换默认 `<userData>/dimina-projects.json`，对接 qdmp 后台 / IDE workspace / 远端工程库 |
+| `projectsProvider` | 接管项目列表存储 —— 替换默认 `<userData>/dimina-projects.json`，对接下游宿主后台 / IDE workspace / 远端工程库 |
 | `projectTemplates` + `builtinTemplates` | 注入/覆盖/裁剪"新建项目"模板列表（同 id 覆盖内置；`builtinTemplates` 控制内置策略） |
 | `customCreateProjectDialog` | 用宿主自家页面替换内置"新建项目"对话框（main 进程 hook，可 `new BrowserWindow` 加载任意 URL，通过 IPC/postMessage 回传结果） |
 
@@ -234,8 +234,8 @@ src/
 
 | 场景 | 需要的扩展点 |
 | --- | --- |
-| 项目列表来自 qdmp 后台 / 团队工程库 | `projectsProvider` |
-| 仅替换可选模板（e.g. 只提供 taro / qdmp 自家脚手架） | `projectTemplates` + `builtinTemplates` |
+| 项目列表来自下游宿主后台 / 团队工程库 | `projectsProvider` |
+| 仅替换可选模板（e.g. 只提供 taro / 宿主自家脚手架） | `projectTemplates` + `builtinTemplates` |
 | 创建项目流程要走宿主自己的 wizard / 登录态 | `customCreateProjectDialog` |
 
 ### 最小示例
@@ -247,51 +247,51 @@ import { BrowserWindow } from 'electron'
 
 const provider: ProjectsProvider = {
   async listProjects() {
-    return await qdmp.api.listProjects()
+    return await host.api.listProjects()
   },
   async validateProjectDir(dirPath) {
-    return (await qdmp.api.isMiniApp(dirPath)) ? null : '不是合法的小程序工程'
+    return (await host.api.isMiniApp(dirPath)) ? null : '不是合法的小程序工程'
   },
   async addProject(dirPath) {
-    return await qdmp.api.addProject(dirPath)
+    return await host.api.addProject(dirPath)
   },
   async removeProject(dirPath) {
-    await qdmp.api.removeProject(dirPath)
+    await host.api.removeProject(dirPath)
   },
   async updateLastOpened(dirPath) {
-    await qdmp.api.touchLastOpened(dirPath)
+    await host.api.touchLastOpened(dirPath)
   },
   async getCompileConfig(dirPath) {
-    return await qdmp.api.getCompileConfig(dirPath)
+    return await host.api.getCompileConfig(dirPath)
   },
   async saveCompileConfig(dirPath, cfg) {
-    await qdmp.api.saveCompileConfig(dirPath, cfg)
+    await host.api.saveCompileConfig(dirPath, cfg)
   },
   // 缩略图走云端存储——dataUrl 形如 'data:image/png;base64,...'
   async saveThumbnail(dirPath, imageDataUrl) {
-    await qdmp.api.uploadThumbnail(dirPath, imageDataUrl)
+    await host.api.uploadThumbnail(dirPath, imageDataUrl)
   },
   async getThumbnail(dirPath) {
-    return await qdmp.api.fetchThumbnail(dirPath)
+    return await host.api.fetchThumbnail(dirPath)
   },
 }
 
-const qdmpBlank: ProjectTemplate = {
+const hostBlank: ProjectTemplate = {
   id: 'blank', // 同 id 覆盖内置 blank
-  name: 'qdmp 空白工程',
-  description: '由 qdmp 维护的官方空白模板',
+  name: '宿主空白工程',
+  description: '由下游宿主维护的官方空白模板',
   source: { type: 'directory', path: '/abs/path/to/template' },
 }
 
 launch({
   projectsProvider: provider,
-  projectTemplates: [qdmpBlank],
+  projectTemplates: [hostBlank],
   builtinTemplates: ['taro-todo'], // 只保留 taro-todo，干掉默认 blank
   customCreateProjectDialog: async ({ parentWindow }) => {
     const win = new BrowserWindow({ parent: parentWindow, modal: true, width: 720, height: 520 })
-    await win.loadURL('https://qdmp.example.com/devtools/new-project')
+    await win.loadURL('https://host.example.com/devtools/new-project')
     return await new Promise((resolve) => {
-      win.webContents.ipc.once('qdmp:create-project:done', (_e, payload) => {
+      win.webContents.ipc.once('host:create-project:done', (_e, payload) => {
         win.close()
         // payload 三选一（CustomCreateProjectDialogResult）：
         //   null                  → 用户取消
@@ -324,7 +324,7 @@ devtools 自带两个 `source`-style 模板，位于 `packages/devtools/template
 - `blank` — 最小空白小程序骨架（pages/index + app.js/json/wxss + project.config.json，约 8 个文件）
 - `taro-todo` — 复制自 `dimina/fe/example/taro-todo`，作为 Taro 编译产物的端到端演示工程
 
-`builtinTemplates: 'none'` 排除全部内置；`builtinTemplates: ['taro-todo']` 仅保留指定 id；`projectTemplates` 同 id 注入会覆盖（例如上文 `qdmpBlank` 覆盖了内置 `blank`）。
+`builtinTemplates: 'none'` 排除全部内置；`builtinTemplates: ['taro-todo']` 仅保留指定 id；`projectTemplates` 同 id 注入会覆盖（例如上文 `hostBlank` 覆盖了内置 `blank`）。
 
 ### Provider 部分实现 / fallback 行为
 
@@ -548,7 +548,7 @@ instance.context.views.hostToolbar.send('host:cmd', { theme: 'dark' }) // false 
 
 ## MiniappRuntime（宿主集成推荐契约）
 
-下游宿主（如 qdmp）集成时，推荐依赖手写的稳定契约 `MiniappRuntime`，而不是整个 `WorkbenchContext`——后者携带全部内部 service 类型，内部重构会直接破坏下游编译。`asMiniappRuntime(ctx)` 恒等返回（typed view，非拷贝），宿主对 `runtime.workspace.openProject` 的 monkey-patch 会落在真实对象上：
+下游宿主集成时，推荐依赖手写的稳定契约 `MiniappRuntime`，而不是整个 `WorkbenchContext`——后者携带全部内部 service 类型，内部重构会直接破坏下游编译。`asMiniappRuntime(ctx)` 恒等返回（typed view，非拷贝），宿主对 `runtime.workspace.openProject` 的 monkey-patch 会落在真实对象上：
 
 ```typescript
 import { asMiniappRuntime, type MiniappRuntime } from '@dimina-kit/devtools'

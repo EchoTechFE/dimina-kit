@@ -21,7 +21,7 @@ export interface Disposable {
  * `runtime.view` / `DeckViewHandle`, `runtime.scopes` / `DeckSession`,
  * `runtime.grants`, `runtime.layout` — is fully built and wired, but has NO
  * production consumer yet: the only callers are `examples/layout-demo` and
- * `spike/popout`. The devtools/qdmp host integrates through the `RuntimeBackend`
+ * `spike/popout`. The devtools (and other downstream) host integrates through the `RuntimeBackend`
  * lifecycle path with `ownsWindows:true` and never touches this surface.
  *
  * Until a SECOND, real consumer adopts it, these signatures are NOT API-stable —

@@ -85,7 +85,7 @@ export default function Main() {
   }
 
   async function handleCreate() {
-    // First try the host-supplied dialog (qdmp/etc.). It can return:
+    // First try the host-supplied dialog (downstream host/etc.). It can return:
     //   null              → user cancelled or no host hook → use built-in
     //   { ready: Project} → host already created the project, just refresh
     //   CreateProjectInput→ host collected inputs, we materialise the template

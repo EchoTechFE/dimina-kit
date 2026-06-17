@@ -1,7 +1,7 @@
 /**
  * Contract: UpdateManager must emit `UpdateChannel.Available` AT MOST ONCE
  * per instance lifetime, regardless of how the checked version evolves
- * (X→X, X→Y, X→null→Y, etc.). The downstream UI (qdmp shell toast) stacks
+ * (X→X, X→Y, X→null→Y, etc.). The downstream UI (a downstream host shell toast) stacks
  * on every event, so the source must be a single-shot event stream.
  *
  * These tests intentionally do NOT inspect the implementation; they only

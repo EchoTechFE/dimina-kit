@@ -1,10 +1,10 @@
 /**
  * Independent contract review of `ProjectsProvider` for downstream hosts
- * (qdmp et al.). Locks down the documented "may be sync or Promise /
+ * (downstream hosts). Locks down the documented "may be sync or Promise /
  * optional methods fall back to sensible defaults" contract so a remote/
  * async host implementation behaves the same as the local default.
  *
- * Each test inlines the minimal host-side glue qdmp would write on top
+ * Each test inlines the minimal host-side glue a downstream host would write on top
  * of a provider — if the contract is ambiguous, the inline glue is the
  * natural-but-wrong way to write it.
  */

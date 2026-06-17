@@ -367,10 +367,10 @@ host 重新 `loadURL` 入口页。`toolbar` 由 framework 按 `source` 加载。
 I2 是「受支持路径上的服务承诺」：framework 无法物理阻止 host 裸 `import { ipcMain }`，
 `runtime.rawIpcMain` 把这条边界显式暴露出来。
 
-## 附录 A：host 完整集成示例（qdmp）
+## 附录 A：host 完整集成示例
 
-> 下面是**示意性的 host 侧集成代码**，住在下游 host 工程（如 qdmp）里，**不在本仓库**。
-> `./qdmp-api` / `./qdmp-adapter` / `./projects` / `./menu` / `toolbar/preload.ts` 等都是
+> 下面是**示意性的 host 侧集成代码**，住在下游 host 工程里，**不在本仓库**。
+> `./host-api` / `./host-adapter` / `./projects` / `./menu` / `toolbar/preload.ts` 等都是
 > host 自己写的模块，这里只演示它们怎么拼到 `electronDeck(config)` 上。
 
 ### feature module
@@ -384,20 +384,20 @@ export const authChanged = defineEvent<{ user: { id: string; name: string } | nu
 
 ```ts
 // auth.ts —— main 进程
-import { qdmpLogin, qdmpLogout } from './qdmp-api'   // main-only deps
+import { hostLogin, hostLogout } from './host-api'   // main-only deps
 import { authChanged } from './events'
 
 let currentUser: { id: string; name: string } | null = null
 
 export async function login(p: { code: string }) {
-  const r = await qdmpLogin(p)
+  const r = await hostLogin(p)
   currentUser = { id: r.userId, name: r.userName }
   authChanged.publish({ user: currentUser })
   return r
 }
 
 export async function logout() {
-  await qdmpLogout()
+  await hostLogout()
   currentUser = null
   authChanged.publish({ user: null })
 }
@@ -408,19 +408,19 @@ export async function getAuthState() {
 ```
 
 > 把 HostEvent token 独立到 `events.ts`——renderer/toolbar 只 import token，不会把
-> main-only 的 `qdmp-api` 拖进 toolbar bundle。
+> main-only 的 `host-api` 拖进 toolbar bundle。
 
 ### workbench.config.ts
 
 ```ts
 import { fileURLToPath } from 'node:url'
 import { electronDeck } from '@dimina-kit/electron-deck'
-import { qdmpAdapter } from './qdmp-adapter'
-import { qdmpProjects } from './projects'
+import { hostAdapter } from './host-adapter'
+import { hostProjects } from './projects'
 import * as auth from './auth'
 import * as projects from './projects'
 import { authChanged } from './events'
-import { buildQdmpMenu } from './menu'
+import { buildHostMenu } from './menu'
 
 export const simulatorApis = {
   login: auth.login,
@@ -442,8 +442,8 @@ export type Events = typeof events
 // fire-and-forget + .catch()，不要顶层 await（见开头第 2 条坑）
 electronDeck({
   app: {
-    name: 'QDMP DevTools',
-    adapter: qdmpAdapter,
+    name: 'Host DevTools',
+    adapter: hostAdapter,
   },
 
   simulatorApis,
@@ -456,9 +456,9 @@ electronDeck({
     height: 48,
   },
 
-  projects: qdmpProjects,
-  menu: { build: buildQdmpMenu },
-  lifecycle: { beforeClose: async () => qdmpProjects.persistSession(), timeoutMs: 10_000 },
+  projects: hostProjects,
+  menu: { build: buildHostMenu },
+  lifecycle: { beforeClose: async () => hostProjects.persistSession(), timeoutMs: 10_000 },
 
   async setup(runtime) {
     // 内置 main renderer 已由 framework 加载（见 §5）；这里只做命令式接线。
@@ -471,14 +471,14 @@ electronDeck({
     // 把"需要 runtime（dialog/mainWindow）的能力"暴露给 toolbar：走 host 自己的裸
     // 通道（rawIpcMain + toolbar preload 里的 contextBridge），不是 hostServices——
     // hostServices handler 在 config 阶段定义、拿不到 runtime。toolbar 端用
-    // `ipcRenderer.invoke('qdmp:export')` 调（见 toolbar/preload.ts）。
-    runtime.rawIpcMain.handle('qdmp:export', async () => {
+    // `ipcRenderer.invoke('host:export')` 调（见 toolbar/preload.ts）。
+    runtime.rawIpcMain.handle('host:export', async () => {
       const r = await runtime.electron.dialog.showSaveDialog(runtime.mainWindow, { defaultPath: 'export.zip' })
       return { canceled: r.canceled, filePath: r.filePath ?? null }   // JSON-safe
     })
 
     // host debug 窗口
-    if (process.env.QDMP_DEBUG) {
+    if (process.env.HOST_DEBUG) {
       runtime.windows.create({
         width: 600,
         height: 400,
@@ -487,7 +487,7 @@ electronDeck({
     }
   },
 }).catch((err) => {
-  console.error('[qdmp] electronDeck() failed:', err)
+  console.error('[host] electronDeck() failed:', err)
 })
 ```
 
@@ -506,9 +506,9 @@ import { exposeDeckBridge } from '@dimina-kit/electron-deck/preload'
 exposeDeckBridge()
 
 // host 自己的额外 bridge —— 完全自由。这里和 setup 里注册的
-// `rawIpcMain.handle('qdmp:export', ...)` 配对：toolbar 调 `window.qdmp.exportProject()`。
-contextBridge.exposeInMainWorld('qdmp', {
-  exportProject: () => ipcRenderer.invoke('qdmp:export'),
+// `rawIpcMain.handle('host:export', ...)` 配对：toolbar 调 `window.host.exportProject()`。
+contextBridge.exposeInMainWorld('host', {
+  exportProject: () => ipcRenderer.invoke('host:export'),
 })
 ```
 

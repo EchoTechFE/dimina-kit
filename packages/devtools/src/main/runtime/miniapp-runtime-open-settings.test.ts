@@ -18,7 +18,7 @@
  *    proof lives in src/main/app/open-settings-wiring.test.ts).
  *  - `MiniappRuntime` gains `openSettings: () => Promise<void>` and DROPS
  *    `windows` and `rendererDir` (both existed only for that pass-through;
- *    qdmp's real rendererDir need is served by the `/paths` export).
+ *    a downstream host's real rendererDir need is served by the `/paths` export).
  *  - `asMiniappRuntime` stays an identity return and the assignment-compat
  *    sentinel keeps compiling.
  *
