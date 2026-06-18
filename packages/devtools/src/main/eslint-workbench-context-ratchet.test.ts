@@ -124,11 +124,15 @@
  * in eslint-plugin-only-warn, which downgrades every error to a warning —
  * assertions key on `ruleId`, never on severity.
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { ESLint } from 'eslint'
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
+
+// Loading the package's full ESLint flat config is an integration-test cold
+// start and can exceed Vitest's 5s default under CI worker contention.
+vi.setConfig({ testTimeout: 15_000 })
 
 const packageRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -137,15 +141,15 @@ const packageRoot = path.resolve(
 
 /** A production-file path that is neither whitelisted nor grandfathered. */
 const PROBE_FILE = path.join(packageRoot, 'src/main/utils/probe.ts')
+const eslint = new ESLint({
+  cwd: packageRoot,
+  overrideConfigFile: path.join(packageRoot, 'eslint.config.js'),
+})
 
 async function lintAt(
   filePath: string,
   code: string,
 ): Promise<ESLint.LintResult> {
-  const eslint = new ESLint({
-    cwd: packageRoot,
-    overrideConfigFile: path.join(packageRoot, 'eslint.config.js'),
-  })
   const results = await eslint.lintText(code, { filePath })
   const result = results[0]
   if (!result) throw new Error(`lintText returned no result for ${filePath}`)
