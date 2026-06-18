@@ -51,6 +51,19 @@ import {
 } from '../services/views/miniapp-partition.js'
 import { createConsoleForwarder } from '../services/console-forward/index.js'
 import { STORAGE_API_NAMES } from '../services/simulator-storage/index.js'
+import { createRequire } from 'node:module'
+
+// The compiled `logic.js` ships a RELATIVE `//# sourceMappingURL=logic.js.map`.
+// `injectLogicBundle` loads it via `executeJavaScript`, which gives the injected
+// script no base URL of its own — so DevTools resolves that relative map against
+// the service-host DOCUMENT and 404s, leaving console frames / Sources links
+// pointing at the compiled bundle instead of the developer's source. Reuse the
+// pure (tested) rewrite that turns the directive absolute. It lives as a CJS
+// helper because the service-host preload (copied, not bundled) also requires it;
+// `createRequire` resolves the same module from this ESM main bundle.
+const { rewriteSourceMappingUrl } = createRequire(import.meta.url)(
+  '../../service-host/sourcemap-rewrite.cjs',
+) as { rewriteSourceMappingUrl: (source: string, scriptUrl: string) => string }
 
 const STACK_ID = 'stack_0'
 
@@ -936,7 +949,10 @@ async function injectLogicBundle(ap: AppSession): Promise<void> {
   try {
     const res = await fetch(logicUrl)
     if (!res.ok) throw new Error(`logic.js fetch ${res.status} at ${logicUrl}`)
-    const logicContent = await res.text()
+    // Rewrite the relative `sourceMappingURL` to an absolute dev-server URL
+    // BEFORE injecting — `executeJavaScript` gives the script no base URL, so a
+    // relative map would 404 and break sourcemapped console frames / Sources.
+    const logicContent = rewriteSourceMappingUrl(await res.text(), logicUrl)
     await ap.serviceWc.executeJavaScript(`${logicContent}\n//# sourceURL=${logicUrl}`, true)
   } catch (error) {
     console.warn('[bridge-router] unable to inject service logic.js:', error)

@@ -5,18 +5,25 @@
  * ABSOLUTE URL resolved against the script's own fetch URL.
  *
  * Why this exists (native-host console file links):
- *   The service host loads each compiled `logic.js` via the `importScripts`
- *   shim in preload.cjs — a synchronous XHR + `(0, eval)(...)`. The compiled
- *   bundle ships a RELATIVE `//# sourceMappingURL=logic.js.map`
- *   (compiler/core/logic-compiler.js). A real Web Worker `importScripts(url)`
- *   gives the script the dev-server URL as its base, so DevTools resolves the
- *   relative map against `…/{appId}/{root}/logic.js` and fetches the right
- *   `.map`. Under `(0, eval)(...)` the script has NO base URL of its own, so
- *   DevTools resolves a relative `sourceMappingURL` against the service-host
- *   DOCUMENT (`file://…/service-host/service.html`) and 404s — console
- *   file:line links then point at the compiled bundle, not the developer's
- *   original source. Rewriting the directive to an absolute dev-server URL
- *   restores sourcemapped console frames + Sources links.
+ *   The compiled `logic.js` ships a RELATIVE `//# sourceMappingURL=logic.js.map`
+ *   (compiler/core/logic-compiler.js). Whoever injects it must give DevTools a
+ *   resolvable base for that relative map, or DevTools resolves it against the
+ *   service-host DOCUMENT (`file://…/service-host/service.html`) and 404s —
+ *   console file:line links then point at the compiled bundle, not the
+ *   developer's original source. Rewriting the directive to an absolute
+ *   dev-server URL restores sourcemapped console frames + Sources links.
+ *
+ *   LIVE consumer (native-host): `bridge-router.injectLogicBundle` fetches
+ *   `logic.js` and injects it via `executeJavaScript`, which gives the script NO
+ *   base URL — so it MUST rewrite first. That is the path this helper actually
+ *   serves today.
+ *
+ *   Legacy consumer (web-worker render only): the `importScripts` shim in
+ *   preload.cjs (synchronous XHR + `(0, eval)(...)`). Under native-host the
+ *   service host is a BrowserWindow, not a Web Worker (`isWebWorker` false), so
+ *   that shim never runs — kept for the worker render path. A real
+ *   `importScripts(url)` would base the relative map on the script URL itself,
+ *   but `(0, eval)(...)` does not, hence the same rewrite applies there too.
  *
  * Contract:
  *   - Operates on the LAST `//# sourceMappingURL=` (or legacy `//@`) directive

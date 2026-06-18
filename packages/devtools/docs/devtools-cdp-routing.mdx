@@ -175,7 +175,7 @@ function routeByDomain(method): 'render' | 'service' {
 
 1. **消双 hook 冲突**：Elements 已 hook `sendMessageToBackend`；Network 二期（`getResponseBody`）也要 hook 它。两处各自 monkey-patch 会互相覆盖——只有让 router 持**唯一**包装器才安全。
 2. **去重**：chunk / dispatch / 轮询这套样板，现在 network-forward 和 elements-forward **各写了一份**，收敛后只需一份。
-3. **单 lifecycle owner**：pool-swap 重指向、frontend re-ready 时，由一个 owner 统一 rebind，而不是两个服务各自监听。
+3. **单 lifecycle owner**：pool-swap 重指向、frontend re-ready 时统一 rebind。当前各服务自管：`installElementsForward` 持续监听 devtoolsWc 的 `dom-ready`，每次前端（重）加载都幂等重装 hook（前端重载 / pool-swap 重开 DevTools 会清空 `globalThis.__diminaElementsHookInstalled`，单次 `once` 会让 Elements 回落到 service-host DOM）；network-forward 经 `setDevtoolsHost` 重 arm。收敛的收益是把这套 re-ready 重绑交给一个 owner，而非两个服务各自监听。
 
 > open-in-editor（`setOpenResourceHandler`）和 tab 定制（DevTools view registry + `setPreference`）**不碰 embedder 的 CDP 协议边界**（不 hook `sendMessageToBackend`、不 `dispatchMessage`），所以即便将来有了 router 也不并进去（KISS）。
 

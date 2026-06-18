@@ -225,7 +225,11 @@ interface OutboundCommand {
 
 const DRAIN_INTERVAL_MS = 150
 /** Bounded retry for the front-end hook install (front-end boots asynchronously). */
-const INSTALL_POLL_TRIES = 80
+// Per-load install poll window. Must outlast the gap between a devtools
+// front-end `dom-ready` and `InspectorFrontendHost` becoming available on a
+// cold/slow open (pool cold-start). 200×50ms = 10s — generous, and each future
+// front-end load re-arms a fresh window anyway (see the `dom-ready` listener).
+const INSTALL_POLL_TRIES = 200
 const INSTALL_POLL_INTERVAL_MS = 50
 
 /**
@@ -518,6 +522,11 @@ export function installElementsForward(deps: ElementsForwardDeps): () => void {
 
   const onReady = (): void => {
     if (disposed) return
+    // Re-arm safe: a devtools front-end (re)load re-runs this, so clear any
+    // in-flight timers from a prior attempt before starting fresh ones — without
+    // this a reload would stack intervals (leak) and double-drain.
+    if (installTimer) { clearInterval(installTimer); installTimer = null }
+    if (drainTimer) { clearInterval(drainTimer); drainTimer = null }
     let tries = 0
     installTimer = setInterval(() => {
       tries++
@@ -552,11 +561,17 @@ export function installElementsForward(deps: ElementsForwardDeps): () => void {
     }, DRAIN_INTERVAL_MS)
   }
 
-  if (devtoolsWc.isLoading()) {
-    devtoolsWc.once('dom-ready', onReady)
-  } else {
-    onReady()
-  }
+  // Re-install on EVERY devtools front-end load, not once. The hook lives in the
+  // front-end's `globalThis` (`__diminaElementsHookInstalled`), so any front-end
+  // (re)load wipes it — most importantly a service-host pool SWAP, which re-opens
+  // DevTools (`pointNativeDevtoolsAtServiceWc`) and re-bootstraps the front-end.
+  // A single-shot `once('dom-ready')` left the hook uninstalled after such a
+  // reload, so Elements silently fell back to the native service-host DOM. A
+  // PERSISTENT listener re-runs the (idempotent — the sentinel returns 'already')
+  // install on each load; the immediate call covers an already-loaded wc and the
+  // first `openDevTools` whose `dom-ready` may have fired before this ran.
+  devtoolsWc.on('dom-ready', onReady)
+  onReady()
   let devtoolsClosedSub: { dispose(): void } | undefined
   try {
     // Devtools front-end wc is never pool-reset → use `'closed'` (fires only on
@@ -570,6 +585,7 @@ export function installElementsForward(deps: ElementsForwardDeps): () => void {
   return () => {
     try { unsubscribeRenderEvents() } catch { /* already gone */ }
     try { devtoolsClosedSub?.dispose() } catch { /* already gone */ }
+    try { devtoolsWc.removeListener('dom-ready', onReady) } catch { /* already gone */ }
     stop()
   }
 }
