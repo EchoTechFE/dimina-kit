@@ -169,6 +169,10 @@ test.describe('native-host DevTools Console attaches to the service host (logic 
   test.setTimeout(180_000)
 
   test.beforeAll(async () => {
+    // The heavy native-host setup (Electron launch + project open + simulator
+    // ready) lives in this hook; on a cold/slow machine it exceeds Playwright's
+    // default 60s HOOK timeout (separate from the 180s per-test timeout above).
+    test.setTimeout(180_000)
     const appPath = path.resolve(__dirname, 'electron-entry.js')
     const userDataDir = path.resolve(
       process.env.DIMINA_DEVTOOLS_DATA_DIR
@@ -419,5 +423,162 @@ test.describe('native-host DevTools Console attaches to the service host (logic 
       hit,
       `the render-layer console.log should reach the service host as a [视图]-prefixed line; captured=${JSON.stringify(captured)}`,
     ).toBeTruthy()
+  })
+
+  test('a service-layer console.log keeps native source attribution (logic.js), not the deleted preload wrapper', async () => {
+    // Regression for the source-attribution bug: the service host's console.* used
+    // to be monkeypatched by a preload wrapper, so the embedded Chrome DevTools
+    // mis-attributed EVERY service-layer log's source to the wrapper (preload.cjs)
+    // instead of the developer's code. The fix removes the wrapper and captures
+    // service-layer logs in the MAIN process via CDP `Runtime.consoleAPICalled`
+    // (services/service-console), which preserves native source attribution.
+    //
+    // service-console already `debugger.attach('1.3')`-es the service host wc and
+    // listens for `Runtime.consoleAPICalled`. We don't attach/detach our own
+    // session (that would kill service-console's session); we APPEND a second
+    // `message` listener on its already-attached debugger (appending is safe) and
+    // collect each event's top-frame URL. The `//# sourceURL=…` directive sets the
+    // realm script's URL, so a correctly-attributed log carries that URL on its
+    // top call frame — and never `preload.cjs`.
+    const token = `svc-source-probe-${Date.now()}`
+
+    // Precondition: service-console has taken over the service host's debugger.
+    // `isAttached()` true proves the in-process CDP capture is live (and that we
+    // must NOT detach below).
+    const attached = await pollUntil(
+      () => electronApp.evaluate(({ webContents }) => {
+        const all = webContents.getAllWebContents().filter((wc) => !wc.isDestroyed())
+        const svc = all.find((wc) => wc.getURL().includes('service.html'))
+        if (!svc) return null
+        try { return svc.debugger.isAttached() } catch { return false }
+      }),
+      (ok) => ok === true,
+      30000,
+      500,
+    )
+    expect(attached, 'service-console should have the debugger attached to the service host (service.html)').toBe(true)
+
+    // Append a listener on the EXISTING (service-console-owned) debugger session
+    // and stash collected top-frame URLs on the wc so a later evaluate() reads them
+    // back. We tag the listener so afterwards we can remove EXACTLY ours via
+    // removeListener — and we never detach.
+    const armed = await electronApp.evaluate(({ webContents }) => {
+      const all = webContents.getAllWebContents().filter((wc) => !wc.isDestroyed())
+      const svc = all.find((wc) => wc.getURL().includes('service.html'))
+      if (!svc) return false
+      const sink = svc as unknown as {
+        __svcSourceFrames?: string[]
+        __svcSourceListener?: (...args: unknown[]) => void
+      }
+      sink.__svcSourceFrames = []
+      const listener = (_event: unknown, method: string, params: unknown): void => {
+        if (method !== 'Runtime.consoleAPICalled') return
+        const p = params as { stackTrace?: { callFrames?: Array<{ url?: unknown }> } }
+        const top = p.stackTrace?.callFrames?.[0]
+        sink.__svcSourceFrames!.push(top ? String(top.url ?? '') : '')
+      }
+      sink.__svcSourceListener = listener
+      svc.debugger.on('message', listener)
+      return true
+    })
+    expect(armed, 'service-host window (service.html) should exist to append a consoleAPICalled listener').toBe(true)
+
+    try {
+      // Emit a console.log INTO the service realm carrying a `//# sourceURL`
+      // directive, so the engine attributes the call frame to that script URL.
+      // We drive it over the SAME already-attached debugger via `Runtime.evaluate`
+      // so the call genuinely originates in the service realm (not via the wc's
+      // own executeJavaScript pipeline).
+      await electronApp.evaluate(async ({ webContents }, tok) => {
+        const all = webContents.getAllWebContents().filter((wc) => !wc.isDestroyed())
+        const svc = all.find((wc) => wc.getURL().includes('service.html'))
+        if (!svc) throw new Error('no service host')
+        await svc.debugger.sendCommand('Runtime.evaluate', {
+          expression: `console.log('${tok}');\n//# sourceURL=http://dimina.local/app/main/logic.js`,
+        })
+      }, token)
+
+      // Poll the captured top-frame URLs: at least one consoleAPICalled must be
+      // attributed to `logic.js`, and NONE may be attributed to `preload.cjs`
+      // (the deleted wrapper would have re-attributed every entry there).
+      const frames = await pollUntil(
+        () => electronApp.evaluate(({ webContents }) => {
+          const all = webContents.getAllWebContents().filter((wc) => !wc.isDestroyed())
+          const svc = all.find((wc) => wc.getURL().includes('service.html'))
+          const sink = svc as unknown as { __svcSourceFrames?: string[] }
+          return sink?.__svcSourceFrames ? [...sink.__svcSourceFrames] : []
+        }),
+        (urls) => urls.some((u) => u.includes('logic.js')),
+        20000,
+        300,
+      )
+
+      expect(
+        frames.some((u) => u.includes('logic.js')),
+        `a service-layer console.log should be source-attributed to logic.js; captured top frames=${JSON.stringify(frames)}`,
+      ).toBe(true)
+      expect(
+        frames.some((u) => u.includes('preload.cjs')),
+        `no service-layer console.log should be source-attributed to the deleted preload wrapper (preload.cjs); captured top frames=${JSON.stringify(frames)}`,
+      ).toBe(false)
+    } finally {
+      // Remove ONLY our appended listener; never detach — detaching would tear
+      // down service-console's own capture session.
+      await electronApp.evaluate(({ webContents }) => {
+        const all = webContents.getAllWebContents().filter((wc) => !wc.isDestroyed())
+        const svc = all.find((wc) => wc.getURL().includes('service.html'))
+        const sink = svc as unknown as { __svcSourceListener?: (...args: unknown[]) => void }
+        if (svc && sink?.__svcSourceListener) {
+          try { svc.debugger.removeListener('message', sink.__svcSourceListener) } catch { /* gone */ }
+          sink.__svcSourceListener = undefined
+        }
+      }).catch(() => {})
+    }
+  })
+
+  test('a service-layer console.log still reaches the automation WS as App.logAdded', async () => {
+    // No-regression for the console fan-out: deleting the preload monkeypatch and
+    // switching to CDP capture must NOT drop service-layer logs from automation.
+    // service-console emits each `consoleAPICalled` as a `source:'service'` entry
+    // → console fan-out → automation rebroadcasts it as an `App.logAdded` event
+    // (same WS shape native-host-render.spec.ts asserts for render-layer logs).
+    const marker = `__e2e_svc_logadded_${Date.now()}__`
+    const ws = new WebSocket(`ws://127.0.0.1:${autoPort}`)
+    const logs: Array<{ args?: unknown[] }> = []
+    await new Promise<void>((resolve, reject) => {
+      ws.once('open', () => resolve())
+      ws.once('error', reject)
+    })
+    ws.on('message', (raw) => {
+      try {
+        const m = JSON.parse(String(raw)) as { method?: string; params?: { args?: unknown[] } }
+        if (m.method === 'App.logAdded' && m.params) logs.push(m.params)
+      } catch { /* ignore */ }
+    })
+    // Let the server register this client before emitting.
+    await new Promise((r) => setTimeout(r, 300))
+
+    try {
+      // Fire a console.log directly in the SERVICE realm. A unique marker keeps
+      // this distinct from the `logic.js` line test A injects (different token).
+      await evalInWebContentsByUrl(
+        electronApp,
+        'service.html',
+        `console.log(${JSON.stringify(marker)}); 1`,
+      )
+
+      const found = await pollUntil(
+        async () => logs.some((p) => JSON.stringify(p.args ?? []).includes(marker)),
+        (ok) => ok === true,
+        15000,
+        300,
+      )
+      expect(
+        found,
+        'a service-layer console.log should reach the automation WS via the CDP consoleAPICalled capture',
+      ).toBe(true)
+    } finally {
+      ws.close()
+    }
   })
 })

@@ -18,6 +18,7 @@ import {
 import { createSafeAreaController } from '../safe-area/index.js'
 import { buildCustomizeTabsScript } from './devtools-tabs.js'
 import { installElementsForward } from '../elements-forward/index.js'
+import { installServiceConsoleForward } from '../service-console/index.js'
 import * as layout from '../layout/index.js'
 import {
   handleCustomApiBridgeRequest,
@@ -69,6 +70,13 @@ export interface ViewManagerContext {
    * console line is the fallback). Optional so partial test contexts compile.
    */
   networkForward?: WorkbenchContext['networkForward']
+  /**
+   * Always-on console fan-out (set by `installBridgeRouter`). The service-console
+   * capture feeds service-layer `consoleAPICalled` entries here so they reach
+   * automation; mirrors how render entries arrive via the bridge. Optional so
+   * partial test contexts compile.
+   */
+  consoleForwarder?: WorkbenchContext['consoleForwarder']
   /**
    * Per-context registry of host-registered simulator custom APIs. The
    * native-host simulator is a top-level WebContentsView with no embedder
@@ -367,6 +375,10 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   // CDP traffic at the active render guest). Installed in
   // `attachNativeSimulatorDevtoolsHost`, stopped on detach / host destroyed.
   let stopElementsForward: (() => void) | null = null
+  // Disposer for the service-layer console capture (CDP `consoleAPICalled` on the
+  // service host wc → console fan-out). Installed when the DevTools is pointed at
+  // a service host, stopped when that source is closed / swapped.
+  let stopServiceConsole: (() => void) | null = null
   let nativeDevtoolsRetryTimer: ReturnType<typeof setTimeout> | null = null
   let nativeDevtoolsRetryToken = 0
 
@@ -685,6 +697,8 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   function closeNativeDevtoolsSource(): void {
     const source = nativeDevtoolsSourceWc
     nativeDevtoolsSourceWc = null
+    try { stopServiceConsole?.() } catch { /* already stopped */ }
+    stopServiceConsole = null
     if (!source || source.isDestroyed()) return
     try {
       if (source.isDevToolsOpened()) {
@@ -847,6 +861,16 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       // Re-applied on every re-point so a service-host pool swap (fresh
       // openDevTools) re-asserts the custom tab bar.
       customizeDevtoolsTabs(simulatorView.webContents)
+      // Capture service-layer console via CDP (NOT a preload monkeypatch, which
+      // would clobber native source attribution) and feed it to the console
+      // fan-out (automation `App.logAdded`). Bound to THIS service wc; replaced
+      // on the next re-point via closeNativeDevtoolsSource.
+      try { stopServiceConsole?.() } catch { /* already stopped */ }
+      stopServiceConsole = installServiceConsoleForward({
+        serviceWc: next,
+        connections: ctx.connections,
+        emit: (entry) => ctx.consoleForwarder?.emit(entry),
+      }).stop
       return true
     } catch {
       if (nativeDevtoolsSourceWc?.id === next.id) {

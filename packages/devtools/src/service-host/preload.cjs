@@ -192,14 +192,21 @@ ipcRenderer.on(CHANNELS.TO_SERVICE, (_event, payload) => {
   deliver(payload && payload.msg)
 })
 
-// ── Console capture (native-host) ───────────────────────────────────────────
+// ── Uncaught error capture (native-host) ────────────────────────────────────
 // Placed AFTER the no-bridgeId early-return (pool warming) and AFTER
 // DiminaServiceBridge is defined, so it only runs for a real spawn and can use
-// the bridge. This preload runs with contextIsolation effectively off, so
-// patching `console` here captures the service guest's own console (wx.* +
-// logic.js). Each entry is forwarded to main as a `consoleLog` container message
-// (source:'service') — bridge-router routes it to ctx.guestConsole → automation
-// rebroadcasts it as App.logAdded. Mirrors src/preload/instrumentation/console.ts.
+// the bridge.
+//
+// NOTE: `console.*` is deliberately NOT patched here. A wrapper adds a stack
+// frame, so the embedded Chrome DevTools (attached natively to this service
+// host) would attribute every log to the wrapper line instead of the
+// developer's source. Service-layer console output is captured in main via CDP
+// `Runtime.consoleAPICalled` (services/service-console) — no extra frame, native
+// attribution + sourcemaps preserved. Only WINDOW error / unhandledrejection
+// events are posted here: they carry no console call site to preserve and CDP's
+// `consoleAPICalled` does not report them. Each is forwarded to main as a
+// `consoleLog` container message (source:'service') → bridge-router →
+// ctx.guestConsole → automation `App.logAdded`.
 
 function safeSerializeArg(val) {
   if (val === null || val === undefined) return val
@@ -229,15 +236,6 @@ function emitConsoleLog(level, args) {
     })
   } catch (_) { /* never let console capture break the guest */ }
 }
-
-;['log', 'warn', 'error', 'info', 'debug'].forEach((level) => {
-  const original = typeof console[level] === 'function' ? console[level].bind(console) : null
-  if (!original) return
-  console[level] = (...args) => {
-    original(...args)
-    emitConsoleLog(level, args)
-  }
-})
 
 globalThis.addEventListener('error', (event) => {
   emitConsoleLog('error', [{
