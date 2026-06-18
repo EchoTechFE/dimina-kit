@@ -131,6 +131,10 @@ function fakeWc(overrides: Partial<Record<string, unknown>> = {}) {
     executeJavaScript: vi.fn(() => Promise.resolve('installed')),
     getURL: vi.fn(() => 'pageFrame.html?pagePath=pages/home/home'),
     once: vi.fn((event: string, cb: () => void) => { handlers[event] = cb }),
+    // Real WebContents exposes `on` (persistent) alongside `once`; elements-forward
+    // now uses `on('dom-ready', …)` to re-install the hook on every front-end load.
+    // Stash under the same `__handlers` map so a test can re-fire `dom-ready`.
+    on: vi.fn((event: string, cb: () => void) => { handlers[event] = cb }),
     removeListener: vi.fn(),
     __handlers: handlers,
     ...overrides,
@@ -746,6 +750,102 @@ describe('installElementsForward — disposer', () => {
       expect((devtoolsWc.executeJavaScript as ReturnType<typeof vi.fn>).mock.calls.length).toBe(before)
       // render-event subscription removed → emitting does nothing.
       bridge.__emit({ kind: 'activePage', appId: 'a', bridgeId: 'b' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+// ── per-load re-arm (dom-ready re-installs the front-end hook) ──────────────────
+
+// Count executeJavaScript calls that INSTALL the front-end hook. The install
+// script (buildElementsHookScript) embeds the `__diminaElementsHookInstalled`
+// sentinel; the splice-drain poll references `__diminaElementsOutbound` (no
+// sentinel) and dispatch calls reference `dispatchMessage`. So filtering on the
+// sentinel uniquely isolates install calls.
+function hookInstallCount(devtoolsWc: ReturnType<typeof fakeWc>): number {
+  return (devtoolsWc.executeJavaScript as ReturnType<typeof vi.fn>).mock.calls
+    .filter((c) => (c[0] as string).includes('__diminaElementsHookInstalled')).length
+}
+
+describe('installElementsForward — per-load re-arm', () => {
+  // The hook lives in the front-end's `globalThis`; a front-end reload (notably a
+  // service-host pool swap that re-opens DevTools) wipes it. The feature uses a
+  // PERSISTENT `on('dom-ready', …)` listener (not `once`) so it re-installs the
+  // hook on EVERY load. This pins that contract: a second `dom-ready` produces a
+  // fresh install call — proving it is not single-shot.
+  it('re-installs the front-end hook on every dom-ready (not once)', async () => {
+    vi.useFakeTimers()
+    try {
+      const guest = fakeWc()
+      const devtoolsWc = devtoolsWcDrainingOnce([])
+      const bridge = fakeBridge(() => guest)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const stop = installElementsForward({ devtoolsWc: devtoolsWc as any, bridge: bridge as any })
+
+      // First load's hook install runs (immediate onReady + install poll).
+      await vi.advanceTimersByTimeAsync(400)
+      const afterFirst = hookInstallCount(devtoolsWc)
+      expect(afterFirst).toBeGreaterThan(0)
+
+      // Front-end reloads → `dom-ready` fires again. A single-shot `once` listener
+      // would NOT re-run; the persistent one re-arms a fresh install poll.
+      devtoolsWc.__handlers['dom-ready']!()
+      await vi.advanceTimersByTimeAsync(400)
+
+      expect(hookInstallCount(devtoolsWc)).toBeGreaterThan(afterFirst)
+      stop()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // After dispose the `dom-ready` listener is removed (and the `disposed` guard
+  // short-circuits `onReady`), so a stray reload must NOT re-install the hook.
+  it('does not re-install after dispose (dom-ready listener removed)', async () => {
+    vi.useFakeTimers()
+    try {
+      const guest = fakeWc()
+      const devtoolsWc = devtoolsWcDrainingOnce([])
+      const bridge = fakeBridge(() => guest)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const stop = installElementsForward({ devtoolsWc: devtoolsWc as any, bridge: bridge as any })
+
+      await vi.advanceTimersByTimeAsync(400)
+      expect(hookInstallCount(devtoolsWc)).toBeGreaterThan(0)
+
+      stop()
+      const afterStop = hookInstallCount(devtoolsWc)
+
+      // Reload after dispose → no new install call.
+      devtoolsWc.__handlers['dom-ready']!()
+      await vi.advanceTimersByTimeAsync(400)
+      expect(hookInstallCount(devtoolsWc)).toBe(afterStop)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // Re-arm must clear the prior load's timers before starting fresh ones, and
+  // dispose must stop them all. After a re-arm + dispose, advancing time must NOT
+  // drive any further executeJavaScript (no leaked install/drain interval).
+  it('leaks no timers across re-arm + dispose', async () => {
+    vi.useFakeTimers()
+    try {
+      const guest = fakeWc()
+      const devtoolsWc = devtoolsWcDrainingOnce([])
+      const bridge = fakeBridge(() => guest)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const stop = installElementsForward({ devtoolsWc: devtoolsWc as any, bridge: bridge as any })
+
+      await vi.advanceTimersByTimeAsync(400)
+      devtoolsWc.__handlers['dom-ready']!() // re-arm a fresh load
+      await vi.advanceTimersByTimeAsync(400)
+
+      stop()
+      const frozen = (devtoolsWc.executeJavaScript as ReturnType<typeof vi.fn>).mock.calls.length
+      await vi.advanceTimersByTimeAsync(2000)
+      expect((devtoolsWc.executeJavaScript as ReturnType<typeof vi.fn>).mock.calls.length).toBe(frozen)
     } finally {
       vi.useRealTimers()
     }

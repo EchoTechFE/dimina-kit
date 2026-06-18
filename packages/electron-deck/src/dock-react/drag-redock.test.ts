@@ -86,6 +86,8 @@ import {
 // Honest point of failure: the pure module does not exist yet.
 import {
 	computeDropZone,
+	// FAILING: `computeReorderIndex` is not yet exported from the pure module.
+	computeReorderIndex,
 	dropZoneToMutation,
 	isNoopRedock,
 	type DropZone,
@@ -286,6 +288,97 @@ describe('computeDropZone — non-finite rect dimensions (N1)', () => {
 	it('a rect with NaN width or height is degenerate → center', () => {
 		expect(computeDropZone({ width: Number.NaN, height: 100 }, { x: 20, y: 50 })).toBe('center')
 		expect(computeDropZone({ width: 100, height: Number.NaN }, { x: 50, y: 20 })).toBe('center')
+	})
+})
+
+// ───────────────────────── Layer 1a': computeReorderIndex ─────────────────────────
+//
+// FAILING TDD spec for the NOT-YET-WRITTEN pure helper:
+//
+//   computeReorderIndex(
+//     tabRects: readonly { left: number; width: number }[],
+//     pointerX: number,
+//   ): number
+//
+// Maps a pointer x over a HORIZONTAL tab strip to an INSERTION index:
+//   - pointer left of the first tab            => 0
+//   - within the LEFT half of tab i            => i
+//   - within the RIGHT half of tab i           => i + 1
+//   - past the last tab                        => tabRects.length
+//   - empty strip                              => 0
+//   - non-finite pointerX (guard)              => 0
+//
+// Style mirrors computeDropZone's exhaustive boundary tests above.
+describe('computeReorderIndex — tab-strip insertion index', () => {
+	// A 3-tab strip, each 100px wide, contiguous: [0..100) [100..200) [200..300).
+	// midpoints: 50, 150, 250.
+	const tabs3 = [
+		{ left: 0, width: 100 },
+		{ left: 100, width: 100 },
+		{ left: 200, width: 100 },
+	] as const
+
+	// BUG: impl forgets the before-first case and clamps negatively or returns 1,
+	// so dropping a tab to the very front lands it in the wrong slot.
+	it('a pointer left of the first tab => 0', () => {
+		expect(computeReorderIndex(tabs3, -50)).toBe(0)
+		expect(computeReorderIndex(tabs3, 0)).toBe(0)
+	})
+
+	// BUG: impl uses the tab START instead of its MIDPOINT, so the left half of a
+	// tab wrongly inserts AFTER it.
+	it('within the LEFT half of tab i => i', () => {
+		expect(computeReorderIndex(tabs3, 10)).toBe(0) // left half of tab 0
+		expect(computeReorderIndex(tabs3, 120)).toBe(1) // left half of tab 1
+		expect(computeReorderIndex(tabs3, 220)).toBe(2) // left half of tab 2
+	})
+
+	// BUG: impl uses the tab END instead of its MIDPOINT, so the right half of a
+	// tab wrongly inserts BEFORE it.
+	it('within the RIGHT half of tab i => i + 1', () => {
+		expect(computeReorderIndex(tabs3, 90)).toBe(1) // right half of tab 0
+		expect(computeReorderIndex(tabs3, 190)).toBe(2) // right half of tab 1
+		expect(computeReorderIndex(tabs3, 290)).toBe(3) // right half of tab 2
+	})
+
+	// BUG: off-by-one exactly AT the midpoint. The contract: the LEFT half is the
+	// half that maps to i; AT the midpoint the point is no longer in the left half,
+	// so it maps to i + 1. Pin the boundary deterministically.
+	it('exactly at a tab midpoint maps to the right half (i + 1)', () => {
+		expect(computeReorderIndex(tabs3, 50)).toBe(1) // midpoint of tab 0
+		expect(computeReorderIndex(tabs3, 150)).toBe(2) // midpoint of tab 1
+		expect(computeReorderIndex(tabs3, 250)).toBe(3) // midpoint of tab 2
+	})
+
+	// BUG: impl clamps to length-1 instead of length, so a drop past the last tab
+	// can't append to the very end.
+	it('past the last tab => tabRects.length', () => {
+		expect(computeReorderIndex(tabs3, 500)).toBe(3)
+		expect(computeReorderIndex(tabs3, 300)).toBe(3) // right at the trailing edge
+	})
+
+	// BUG: empty strip throws / returns NaN instead of the only valid index, 0.
+	it('an empty strip => 0', () => {
+		expect(computeReorderIndex([], 123)).toBe(0)
+		expect(computeReorderIndex([], -5)).toBe(0)
+	})
+
+	// BUG: a non-finite pointer (a stray NaN/Infinity from a 0-geometry dragover)
+	// produces NaN index downstream; the guard must pin it to 0.
+	it('a non-finite pointerX => 0 (guard)', () => {
+		expect(computeReorderIndex(tabs3, Number.NaN)).toBe(0)
+		expect(computeReorderIndex(tabs3, Infinity)).toBe(0)
+		expect(computeReorderIndex(tabs3, -Infinity)).toBe(0)
+	})
+
+	// Single-tab strip: left half => 0, right half => 1. Pins the degenerate small
+	// strip the same way the 3-tab cases pin the general one.
+	it('single-tab strip: left half => 0, right half => 1', () => {
+		const one = [{ left: 0, width: 80 }] as const
+		expect(computeReorderIndex(one, -10)).toBe(0)
+		expect(computeReorderIndex(one, 10)).toBe(0) // left half
+		expect(computeReorderIndex(one, 70)).toBe(1) // right half
+		expect(computeReorderIndex(one, 200)).toBe(1) // past end
 	})
 })
 

@@ -44,6 +44,26 @@ describe('Requirement B: layout functions take an explicit headerHeight', () => 
     expect(b.height).toBe(800 - HH)
   })
 
+  // Outside-click-to-close: computeSettingsBounds now covers the WHOLE content
+  // area below the header (a transparent backdrop + the right-hand 320px
+  // panel, drawn in the renderer), exactly like computePopoverBounds — NOT the
+  // old right-edge 320px strip. The strip left clicks outside the panel
+  // landing on a different view, so the overlay couldn't be dismissed by
+  // clicking outside it.
+  //
+  // RED today: computeSettingsBounds still returns the right-edge strip
+  // (x: contentWidth - 320, width: 320), so these full-width assertions fail
+  // while the y/height assertions above stay green.
+  it('computeSettingsBounds spans the full content area below the header (no right-edge strip)', async () => {
+    const layout = await loadLayout()
+    const fn = layout.computeSettingsBounds as BoundsFn
+    const b = fn(1000, 800, HH)
+    expect(b.x).toBe(0)
+    expect(b.width).toBe(1000)
+    expect(b.y).toBe(HH)
+    expect(b.height).toBe(800 - HH)
+  })
+
   it('computePopoverBounds positions y at the passed headerHeight', async () => {
     const layout = await loadLayout()
     const fn = layout.computePopoverBounds as BoundsFn

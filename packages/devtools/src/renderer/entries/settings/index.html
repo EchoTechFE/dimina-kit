@@ -5,6 +5,12 @@
   <!-- See main/index.html for CSP rationale. -->
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; media-src 'self' blob: http: https:; connect-src 'self' http: https: ws: wss:;" />
   <title>Settings</title>
+  <style>
+    /* The view spans the full content area as a transparent backdrop (only the
+       panel is opaque) so a click outside the panel reaches the backdrop and
+       closes the overlay — mirrors the popover entry. */
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: transparent !important; }
+  </style>
 </head>
 <body>
   <div id="root"></div>

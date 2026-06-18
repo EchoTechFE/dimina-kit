@@ -11,8 +11,10 @@
  * react here does not violate the pure-TS layout boundary.
  */
 import {
+	createContext,
 	Fragment,
 	useCallback,
+	useContext,
 	useEffect,
 	useRef,
 	useState,
@@ -33,6 +35,7 @@ import type {
 } from '../layout/index.js'
 import {
 	computeDropZone,
+	computeReorderIndex,
 	dropZoneToMutation,
 	isNoopRedock,
 	type DropZone,
@@ -61,6 +64,35 @@ export interface DockViewProps {
 	bindNativeSlot: (panelId: string, el: HTMLElement | null) => void
 }
 
+/**
+ * The current layout EPOCH — the model's revision, bumped once per committed
+ * mutation. `DockView` provides it; descendant panels read it via
+ * `useDockLayoutEpoch`.
+ *
+ * Its reason to exist: a native-view overlay anchored inside a dock panel
+ * (a `WebContentsView` tracking its slot's geometry) re-publishes its bounds
+ * only on GEOMETRY events (ResizeObserver / window-resize / splitter-drag). A
+ * layout mutation that REORDERS a slot without resizing it — flipping a
+ * fixed-width simulator column left↔right, moving a region — produces NO such
+ * event (a same-size flex reorder fires nothing), so the overlay would freeze
+ * at its old position. The epoch is the layout layer's explicit "something
+ * moved" signal: a panel hosting a native overlay re-measures (e.g. pulses its
+ * view-anchor) when the epoch changes, catching the translate the browser never
+ * reports. Default 0 (outside a provider): the consuming effect runs once on
+ * mount, which is harmless.
+ */
+const LayoutEpochContext = createContext<number>(0)
+
+/**
+ * Read the current dock layout epoch (the model revision). Re-renders the caller
+ * whenever a layout mutation commits. Keyed into a panel's effect deps, it lets
+ * a native-overlay host re-measure on a reorder that fires no geometry event.
+ * Returns 0 when used outside a `<DockView>`.
+ */
+export function useDockLayoutEpoch(): number {
+	return useContext(LayoutEpochContext)
+}
+
 /** Normalize raw split weights to percentages summing ~100 for `defaultSize`. */
 function toPercentages(sizes: readonly number[]): number[] {
 	const total = sizes.reduce((a, b) => a + (b > 0 ? b : 0), 0)
@@ -73,15 +105,15 @@ function toPercentages(sizes: readonly number[]): number[] {
 }
 
 /**
- * Compute the `defaultSize` percentage for each FLEXIBLE (unconstrained) child,
- * keyed by its ORIGINAL child index. Fixed (px-pinned) children are excluded
- * from the pool entirely so their weight never pollutes the flexible siblings'
- * normalization (FIX E1). `constraints[i]` non-null ⇒ child i is fixed and is
- * absent from the returned map.
+ * Compute the `defaultSize` percentage for each FLEXIBLE child, keyed by its
+ * ORIGINAL child index. Px-sized children (a non-null `constraint` — `fixedPx`
+ * locked OR `minPx` floored) are EXCLUDED from the pool: their size is px, not a
+ * weight, so it must never pollute the flexible siblings' normalization (FIX E1).
+ * `constraints[i]` non-null ⇒ child i is px-sized and absent from the returned map.
  */
 export function computeFlexiblePercentages(
 	sizes: readonly number[],
-	constraints: readonly ({ fixedPx: number } | null)[] | undefined,
+	constraints: readonly (SizeConstraint | null)[] | undefined,
 ): Map<number, number> {
 	const flexibleIndices = sizes
 		.map((_, i) => i)
@@ -97,8 +129,12 @@ export function computeFlexiblePercentages(
 export function DockView(props: DockViewProps): ReactNode {
 	const { model, registry, renderDomPanel, bindNativeSlot } = props
 
-	// Snapshot the canonical tree; re-render on every external emission.
+	// Snapshot the canonical tree; re-render on every external emission. The
+	// `epoch` mirrors the model revision (0 before the first apply) and is
+	// provided to descendant panels via `LayoutEpochContext` so a native-overlay
+	// host can re-measure on a reorder that fires no geometry event.
 	const [tree, setTree] = useState<LayoutTree>(() => model.get())
+	const [epoch, setEpoch] = useState<number>(0)
 
 	useEffect(() => {
 		// Re-sync immediately in case the model changed between the initial
@@ -106,6 +142,7 @@ export function DockView(props: DockViewProps): ReactNode {
 		setTree(model.get())
 		const unsubscribe = model.subscribe((snap) => {
 			setTree(snap.tree)
+			setEpoch(snap.revision)
 		})
 		return unsubscribe
 	}, [model])
@@ -164,12 +201,42 @@ export function DockView(props: DockViewProps): ReactNode {
 	//     target. Doing both inside one `apply` keeps the tree from ever being
 	//     observed in the transient extracted state.
 	const handleRedock = useCallback(
-		(groupId: string, activePanelId: string, draggedPanelId: string, zone: DropZone) => {
+		(
+			groupId: string,
+			activePanelId: string,
+			draggedPanelId: string,
+			zone: DropZone,
+			reorderIndex?: number,
+		) => {
 			const target = { groupId, panelId: activePanelId }
 			// The dragged panel's CURRENT group — needed to skip a center-drop back
 			// into its own group (M2) and (via `dragged === target.panelId`) a
 			// self-split (M1).
 			const draggedGroupId = findPanelGroupId(model.get().root, draggedPanelId)
+
+			// ── PanelCapabilities gate (GOAL A target): a group whose ACTIVE panel is
+			// `draggable:false` is a locked drop ANCHOR — nothing may join or split
+			// against it, in any zone. Checked before the no-op/reorder logic so a
+			// locked simulator/editor can never absorb another panel. ──
+			if (registry.get(activePanelId)?.draggable === false) return
+
+			// ── PanelCapabilities gate (GOAL B): a `reorder-only` dragged panel may
+			// ONLY reorder WITHIN its own group. It never leaves the group (a center
+			// drop into another group) and never edge-splits (any edge zone, own or
+			// other group). The one motion it permits — a center drop into its OWN
+			// group — must OVERRIDE `isNoopRedock` (which would swallow it as churn).
+			if (registry.get(draggedPanelId)?.dropPolicy === 'reorder-only') {
+				if (draggedGroupId === undefined || draggedGroupId !== groupId) return
+				if (zone !== 'center') return
+				// Anchor the reorder on the pointer-derived index when the gesture
+				// supplies one (real drag), else on the active anchor's CURRENT index
+				// (the imperative seam carries no pointer).
+				const group = findGroupById(model.get().root, groupId)
+				const index = reorderIndex ?? (group ? group.panels.indexOf(activePanelId) : undefined)
+				model.apply((t) => movePanel(t, draggedPanelId, { groupId, index }))
+				return
+			}
+
 			if (isNoopRedock(draggedPanelId, draggedGroupId, target, zone)) return
 			const mutation = dropZoneToMutation(zone, draggedPanelId, target)
 			if (mutation.kind === 'move') {
@@ -185,11 +252,11 @@ export function DockView(props: DockViewProps): ReactNode {
 				return splitPanel(tree, mutation.atPanelId, mutation.dir, mutation.newPanelId, mutation.side)
 			})
 		},
-		[model],
+		[model, registry],
 	)
 
 	return (
-		<Fragment>
+		<LayoutEpochContext.Provider value={epoch}>
 			{renderNode(tree.root, {
 				registry,
 				renderDomPanel,
@@ -201,7 +268,7 @@ export function DockView(props: DockViewProps): ReactNode {
 				canClose,
 				isPanelInTree,
 			})}
-		</Fragment>
+		</LayoutEpochContext.Provider>
 	)
 }
 
@@ -227,7 +294,16 @@ interface RenderContext {
 	bindNativeSlot: (panelId: string, el: HTMLElement | null) => void
 	onActivate: (groupId: string, panelId: string) => void
 	onApplyLayout: (splitId: string, weights: number[]) => void
-	onRedock: (groupId: string, activePanelId: string, draggedPanelId: string, zone: DropZone) => void
+	onRedock: (
+		groupId: string,
+		activePanelId: string,
+		draggedPanelId: string,
+		zone: DropZone,
+		/** Pointer-derived insertion index for a within-group reorder
+		 * (`dropPolicy:'reorder-only'`). Omitted by the imperative seam, which
+		 * falls back to the active anchor's current index. */
+		reorderIndex?: number,
+	) => void
 	onClose: (panelId: string) => void
 	/** False when the whole tree has a single panel — suppresses every close
 	 * button so the layout can't be emptied (closePanel would no-op anyway). */
@@ -248,6 +324,19 @@ function findPanelGroupId(node: LayoutNode, panelId: string): string | undefined
 	}
 	for (const child of node.children) {
 		const found = findPanelGroupId(child, panelId)
+		if (found !== undefined) return found
+	}
+	return undefined
+}
+
+/** The tab-group node with `groupId`, or `undefined`. Used by `handleRedock` to
+ * read the live `panels` order of a reorder target (to anchor a same-group
+ * reorder on the active panel's current index when the gesture carries no
+ * pointer-derived index — e.g. the `__deckHandleDrop` test seam). */
+function findGroupById(node: LayoutNode, groupId: string): TabGroupNode | undefined {
+	if (node.kind === 'tabs') return node.id === groupId ? node : undefined
+	for (const child of node.children) {
+		const found = findGroupById(child, groupId)
 		if (found !== undefined) return found
 	}
 	return undefined
@@ -310,6 +399,46 @@ const LAYOUT_EPSILON = 0.5
  * self-healing (the next, larger resize writes back). If that ever matters,
  * scale the tolerance down by the flexible child count. */
 const FLEX_RATIO_TOLERANCE = 0.1
+
+/**
+ * The minimum weight a FLEXIBLE child may hold, given how many flexible children
+ * share the split (Bug #1). A flexible `<Panel>` has no rrp `minSize` by default
+ * (rrp floor is 0%), so a user can drag it to ~0 width; the resize write-back
+ * would then persist a ~0 weight and the panel comes back invisible/stuck.
+ *
+ * The floor is `min(1, floor(90 / flexCount))` — i.e. ~1 weight unit (a flexible
+ * split's weights are normalized to percentages downstream, so ~1 reads as ~1%
+ * of the flexible pool). With any realistic flexible count this is exactly 1; the
+ * `min(1, …)` only matters for a hypothetical 90+ flexible-child split. It is the
+ * SAME value used for the rrp `minSize` (A) and the write-back clamp (B) so the
+ * two defenses never disagree.
+ */
+function flexibleFloor(flexCount: number): number {
+	// `floor(90 / flexCount)` is ~1 for any realistic count, but goes to 0 once
+	// flexCount > 90 — which would silently DEFEAT the floor (a 0 minSize / 0 clamp
+	// is no floor at all). Clamp into [MIN_POSITIVE_FLOOR, 1] so the floor is always
+	// a positive percentage even in a pathologically wide split.
+	const MIN_POSITIVE_FLOOR = 0.5
+	return Math.min(1, Math.max(MIN_POSITIVE_FLOOR, Math.floor(90 / Math.max(1, flexCount))))
+}
+
+/**
+ * Clamp the FLEXIBLE entries of a full-length weights array up to `floor` (Bug #1
+ * defense B). Px-sized children (a non-null constraint) are left untouched — their
+ * `sizes[i]` is a preserved placeholder, not a live weight. Returns a new array;
+ * a weight already ≥ floor is kept verbatim so a healthy ratio is undisturbed.
+ */
+function clampFlexibleWeights(
+	weights: readonly number[],
+	constraints: readonly (SizeConstraint | null)[] | undefined,
+): number[] {
+	const flexCount = weights.filter((_, i) => (constraints?.[i] ?? null) === null).length
+	const floor = flexibleFloor(flexCount)
+	return weights.map((w, i) => {
+		if ((constraints?.[i] ?? null) !== null) return w // px child — leave as-is
+		return Number.isFinite(w) && w >= floor ? w : floor
+	})
+}
 
 /** Are two panelId→percentage maps equivalent within `epsilon` percentage
  * points? Both maps must cover EXACTLY the `ids` key set — a missing key OR an
@@ -444,6 +573,15 @@ function SplitView(props: SplitViewProps): ReactNode {
 	// `__deckApplyLayout` — so no render-closure `isFixed` helper is needed here.)
 	const percentageByIndex = computeFlexiblePercentages(node.sizes, node.constraints)
 
+	// Bug #1 defense A: the minimum % a flexible child may shrink to. rrp's default
+	// flexible `minSize` is 0% (a panel can be dragged to nothing); this floors it
+	// so the simulator/editor can never be pulled to 0 width. Unitless string =
+	// percentage (same convention as `defaultSize` above; a px `minSize` next to a
+	// %-`defaultSize` is misparsed by rrp). The floor is keyed on the COUNT of
+	// flexible children in THIS split (the same value the write-back clamp uses).
+	const flexCount = node.children.filter((_, i) => (node.constraints?.[i] ?? null) === null).length
+	const flexMinSize = String(flexibleFloor(flexCount))
+
 	// ── M1 model→view sync plumbing ────────────────────────────────────────
 	// The rrp Group's imperative handle (getLayout/setLayout) — the seam through
 	// which the model becomes the source of truth for the visible split ratio.
@@ -465,12 +603,16 @@ function SplitView(props: SplitViewProps): ReactNode {
 				/>,
 			)
 		}
-		// A non-null constraint pins the child to an exact pixel size: min===max
-		// locks it in rrp (numeric/`"Npx"` strings are pixels in rrp v4.10), and
-		// `groupResizeBehavior="preserve-pixel-size"` keeps it fixed while flexible
-		// siblings absorb group resizes. Unconstrained siblings stay weight-sized.
+		// PIXEL-sized children (`fixedPx`/`minPx`) are sized in px, NOT weights, so
+		// they are excluded from the flexible % pool (`computeFlexiblePercentages`)
+		// and never normalized against weight-sized siblings. rrp needs CONSISTENT
+		// units per panel — a px `minSize` on a %-`defaultSize` panel is misparsed
+		// (the panel grabs the whole region), so a px floor MUST pair with a px
+		// `defaultSize`.
 		const constraint = node.constraints?.[i] ?? null
-		if (constraint) {
+		if (constraint?.fixedPx != null) {
+			// `fixedPx` LOCKS the child: min===max + `preserve-pixel-size` keeps it
+			// fixed while flexible siblings absorb group resizes.
 			const px = `${constraint.fixedPx}px`
 			items.push(
 				<Panel
@@ -485,14 +627,43 @@ function SplitView(props: SplitViewProps): ReactNode {
 				</Panel>,
 			)
 		}
+		else if (constraint?.minPx != null) {
+			// `minPx` FLOORS the child at a pixel minimum but leaves it DRAGGABLE
+			// above it: px `defaultSize`+`minSize` (starts AT the floor, can't shrink
+			// past it), NO `maxSize` so the user can widen it. `preserve-pixel-size`
+			// puts the panel in rrp's pixel mode — WITHOUT it rrp misparses a px
+			// `defaultSize` next to %-sized siblings and the panel grabs ~80% of the
+			// region. It only governs WINDOW-resize behavior (keep pixel width, don't
+			// scale); the user can still drag the separator to resize it (≥ minSize).
+			const px = `${constraint.minPx}px`
+			items.push(
+				<Panel
+					key={panelKey(child)}
+					id={child.id}
+					defaultSize={px}
+					minSize={px}
+					groupResizeBehavior="preserve-pixel-size"
+				>
+					{renderNode(child, ctx)}
+				</Panel>,
+			)
+		}
 		else {
 			// `defaultSize` seeds the FLEXIBLE child at mount; post-mount the model
 			// becomes the source of truth via the imperative `setLayout` driven from
-			// the sync effect below (M1). rrp ignores a changed `defaultSize` on an
-			// already-mounted Group, so the effect — not this prop — moves the live
-			// splitter on a programmatic `setSizes`.
+			// the sync effect below (M1). The value is passed as a STRING percentage:
+			// rrp treats a NUMBER `defaultSize` as PIXELS, so `defaultSize={70}` would
+			// be 70px (not 70%) — which mis-proportions a flexible sibling next to a
+			// px-sized (`fixedPx`/`minPx`) panel and the sync then preserves the wrong
+			// size. A unitless string is parsed as a percentage.
+			const pct = percentageByIndex.get(i)
 			items.push(
-				<Panel key={panelKey(child)} id={child.id} defaultSize={percentageByIndex.get(i)}>
+				<Panel
+					key={panelKey(child)}
+					id={child.id}
+					defaultSize={pct != null ? String(pct) : undefined}
+					minSize={flexMinSize}
+				>
 					{renderNode(child, ctx)}
 				</Panel>,
 			)
@@ -532,7 +703,11 @@ function SplitView(props: SplitViewProps): ReactNode {
 		const weights = curChildIds.map((id, i) =>
 			isFixedAt(i) ? cur.sizes[i] ?? 1 : layout[id]!,
 		)
-		ctx.onApplyLayout(cur.id, weights)
+		// Bug #1 defense B: a flexible child dragged to ~0 width reports a ~0 ratio;
+		// floor it before persisting so a 0-width weight can never reach the model
+		// (the rrp `minSize` from A is the first defense, this is the write-back
+		// backstop). Px children are untouched (clampFlexibleWeights skips them).
+		ctx.onApplyLayout(cur.id, clampFlexibleWeights(weights, cur.constraints))
 	}
 
 	// Ref callback exposing the resize write-back seam + the rrp Group imperative
@@ -552,7 +727,9 @@ function SplitView(props: SplitViewProps): ReactNode {
 				const cur = nodeRef.current
 				const isFixedAt = (i: number): boolean => (cur.constraints?.[i] ?? null) !== null
 				const next = weights.map((w, i) => (isFixedAt(i) ? cur.sizes[i] ?? 1 : w))
-				ctx.onApplyLayout(cur.id, next)
+				// Bug #1 defense B (same clamp as handleLayoutChanged): floor flexible
+				// weights so a near-0 drag can never persist a 0-width panel.
+				ctx.onApplyLayout(cur.id, clampFlexibleWeights(next, cur.constraints))
 			}
 			// Expose the rrp Group imperative handle (getLayout/setLayout) so a host —
 			// and the jsdom `[M1-seam-live]` test — can reach the live split layout.
@@ -602,11 +779,20 @@ function SplitView(props: SplitViewProps): ReactNode {
 	// pointer snapshot. An external `setSizes` (incl. one after an away-and-back
 	// drag) syncs immediately (R3): there is no drag flag to get stuck.
 	const sizesKey = node.sizes.join(',')
+	// Child COUNT is part of the sync key (Bug #2 follow-up): the `key={children.
+	// length}` on the Group remounts it on a cardinality change, and a remount
+	// reseeds the rrp layout from each Panel's `defaultSize` — for a `minPx` column
+	// that is the floor (the device-min), NOT the user's last-dragged width. Re-
+	// running `runSync` after the remount re-pushes the model's stored weights into
+	// the fresh Group so a surviving split's proportions are restored rather than
+	// snapping back to the per-Panel defaults. A pure weight resize (same count)
+	// already re-syncs via `sizesKey`; this only adds the count edge.
+	const childCountKey = node.children.length
 	useEffect(() => {
 		runSync()
-		// Keyed only on `sizesKey`; `runSync` reads `node`/`childIds`/`constraints`
-		// fresh from the ref, so they cannot go stale relative to `sizesKey`.
-	}, [sizesKey, runSync])
+		// Keyed on `sizesKey` + `childCountKey`; `runSync` reads `node`/`childIds`/
+		// `constraints` fresh from the ref, so they cannot go stale relative to either.
+	}, [sizesKey, childCountKey, runSync])
 
 	// The split-level `data-*` attributes ride on an outer wrapper rather than
 	// the Group itself, so hosts/tests can target them regardless of how the
@@ -621,6 +807,23 @@ function SplitView(props: SplitViewProps): ReactNode {
 			style={{ width: '100%', height: '100%' }}
 		>
 			<Group
+				// Bug #2 (white-screen crash guard): KEY the Group on its child COUNT.
+				// rrp v4.10 caches the previous layout in a ref keyed by group id; on a
+				// render where the child count CHANGES (a panel closed/split — the split
+				// id stays 'root' so the Group instance is otherwise reused), rrp's
+				// commit-phase layout effect synchronously validates the STALE
+				// (old-length) cached layout against the NEW (different-length)
+				// constraints and throws `Invalid N panel layout`. That throw escapes
+				// SplitView during commit and unmounts the whole tree (white screen).
+				// Keying on `node.children.length` remounts the Group with a fresh
+				// internal layout sized to the new child count ONLY when the count
+				// changes — an ordinary weight resize never changes the key, so this
+				// adds NO remount on drags. The model→view sync (runSync) re-binds
+				// `groupRef` on remount and re-pushes the model's weights via the
+				// `sizesKey` effect; the simulator/console native overlay re-anchors via
+				// its slot ref callback (same path as a tab switch). See
+				// dock-view-robustness.test.tsx "3 → 2" for the regression.
+				key={node.children.length}
 				groupRef={groupRef}
 				orientation={orientation}
 				onLayoutChanged={handleLayoutChanged}
@@ -721,8 +924,56 @@ function GroupView(props: GroupViewProps): ReactNode {
 		//    which THROWS `panel not found`. It must be a NO-OP — also require the id
 		//    to be present in the CURRENT tree.
 		if (!dragged || ctx.registry.get(dragged) === undefined || !ctx.isPanelInTree(dragged)) return
-		ctx.onRedock(node.id, node.active, dragged, zone)
+		// Pointer-derived insertion index for a within-group REORDER
+		// (`dropPolicy:'reorder-only'`): measure this group's tab rects and map the
+		// pointer x onto an index. Ignored by `handleRedock` for every non-reorder
+		// path, so it is safe to compute unconditionally.
+		const tabRects = Array.from(
+			e.currentTarget.querySelectorAll<HTMLElement>('[data-deck-tab]'),
+		).map((el) => {
+			const r = el.getBoundingClientRect()
+			return { left: r.left, width: r.width }
+		})
+		const reorderIndex = computeReorderIndex(tabRects, e.clientX)
+		ctx.onRedock(node.id, node.active, dragged, zone, reorderIndex)
 	}
+
+	// The tab STRIP is a first-class REORDER drop target. It sits at the TOP of
+	// the group, so a tab dropped onto it would otherwise resolve to the group's
+	// `top` EDGE zone via `computeDropZone` — which a `reorder-only` panel rejects
+	// as a no-op, so reordering by dragging within the tab bar would never work.
+	// Intercept strip drops here and commit a `center` re-dock carrying the
+	// pointer-x insertion index (`handleRedock` reorders within the group).
+	// `stopPropagation` keeps the group's edge/center drop handlers from also
+	// firing for the same gesture.
+	const handleTabStripDragOver = (e: DragEvent<HTMLDivElement>): void => {
+		if (!e.dataTransfer.types.includes(DRAG_PANEL_MIME)) return
+		e.preventDefault()
+		e.stopPropagation()
+		setDropZone(null)
+	}
+	const handleTabStripDrop = (e: DragEvent<HTMLDivElement>): void => {
+		e.preventDefault()
+		e.stopPropagation()
+		setDropZone(null)
+		const dragged
+			= e.dataTransfer.getData(DRAG_PANEL_MIME) || e.dataTransfer.getData('text/plain')
+		if (!dragged || ctx.registry.get(dragged) === undefined || !ctx.isPanelInTree(dragged)) return
+		const tabRects = Array.from(
+			e.currentTarget.querySelectorAll<HTMLElement>('[data-deck-tab]'),
+		).map((el) => {
+			const r = el.getBoundingClientRect()
+			return { left: r.left, width: r.width }
+		})
+		const reorderIndex = computeReorderIndex(tabRects, e.clientX)
+		ctx.onRedock(node.id, node.active, dragged, 'center', reorderIndex)
+	}
+
+	// Panels that contribute a tab to the strip (`hideTab` panels carry their own
+	// chrome — e.g. the simulator's device picker — so the engine tab is omitted).
+	// When NONE remain the tab strip is not rendered at all and the body fills the
+	// whole group region.
+	const visibleTabs = node.panels.filter((panelId) => !ctx.registry.get(panelId)?.hideTab)
 
 	// FILL LAYOUT (FIX 2a): the group must be a flex COLUMN that fills its
 	// allotted panel region so a leaf native slot can stretch to the full area.
@@ -747,16 +998,27 @@ function GroupView(props: GroupViewProps): ReactNode {
 				minHeight: 0,
 			}}
 		>
-			<div role="tablist" style={{ flexShrink: 0 }}>
-				{node.panels.map((panelId) => {
+			{visibleTabs.length > 0 ? (
+				<div
+				role="tablist"
+				style={{ flexShrink: 0 }}
+				onDragOver={handleTabStripDragOver}
+				onDrop={handleTabStripDrop}
+			>
+				{visibleTabs.map((panelId) => {
 					const active = panelId === node.active
-					const title = ctx.registry.get(panelId)?.title ?? panelId
+					const descriptor = ctx.registry.get(panelId)
+					const title = descriptor?.title ?? panelId
+					// PanelCapabilities (GOAL A source): a `draggable:false` panel's tab
+					// cannot be picked up — omit the marker entirely (an absent attribute,
+					// not `draggable="false"`, matches the "no drag source" contract).
+					const isDraggable = descriptor?.draggable !== false
 					return (
 						<button
 							key={panelId}
 							type="button"
 							role="tab"
-							draggable="true"
+							draggable={isDraggable ? 'true' : undefined}
 							data-deck-tab={panelId}
 							data-active={active ? 'true' : 'false'}
 							onDragStart={(e) => {
@@ -819,6 +1081,7 @@ function GroupView(props: GroupViewProps): ReactNode {
 					)
 				})}
 			</div>
+			) : null}
 			{renderActiveBody(node, ctx)}
 			{dropZone ? <DropIndicator zone={dropZone} /> : null}
 		</div>
@@ -907,7 +1170,12 @@ function renderActiveBody(node: TabGroupNode, ctx: RenderContext): ReactNode {
 					style={{
 						// Active body fills the region; inactive bodies stay mounted but
 						// hidden (display:none preserves React state + scroll position).
-						display: active ? undefined : 'none',
+						// A flex COLUMN container (not a bare block) so a host panel root
+						// that fills via `flex:1`/`height:100%` actually stretches to the
+						// full body height — without this such a root collapses to content
+						// height and leaves dead space below it.
+						display: active ? 'flex' : 'none',
+						flexDirection: 'column',
 						flex: 1,
 						minWidth: 0,
 						minHeight: 0,

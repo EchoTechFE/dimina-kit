@@ -18,6 +18,7 @@ import {
 import { createSafeAreaController } from '../safe-area/index.js'
 import { buildCustomizeTabsScript } from './devtools-tabs.js'
 import { installElementsForward } from '../elements-forward/index.js'
+import { installServiceConsoleForward } from '../service-console/index.js'
 import * as layout from '../layout/index.js'
 import {
   handleCustomApiBridgeRequest,
@@ -69,6 +70,13 @@ export interface ViewManagerContext {
    * console line is the fallback). Optional so partial test contexts compile.
    */
   networkForward?: WorkbenchContext['networkForward']
+  /**
+   * Always-on console fan-out (set by `installBridgeRouter`). The service-console
+   * capture feeds service-layer `consoleAPICalled` entries here so they reach
+   * automation; mirrors how render entries arrive via the bridge. Optional so
+   * partial test contexts compile.
+   */
+  consoleForwarder?: WorkbenchContext['consoleForwarder']
   /**
    * Per-context registry of host-registered simulator custom APIs. The
    * native-host simulator is a top-level WebContentsView with no embedder
@@ -367,6 +375,10 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   // CDP traffic at the active render guest). Installed in
   // `attachNativeSimulatorDevtoolsHost`, stopped on detach / host destroyed.
   let stopElementsForward: (() => void) | null = null
+  // Disposer for the service-layer console capture (CDP `consoleAPICalled` on the
+  // service host wc → console fan-out). Installed when the DevTools is pointed at
+  // a service host, stopped when that source is closed / swapped.
+  let stopServiceConsole: (() => void) | null = null
   let nativeDevtoolsRetryTimer: ReturnType<typeof setTimeout> | null = null
   let nativeDevtoolsRetryToken = 0
 
@@ -447,6 +459,9 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     if (!simulatorViewAdded) {
       ctx.windows.mainWindow.contentView.addChildView(simulatorView)
       simulatorViewAdded = true
+      // Re-attaching this base overlay moved it to the top of the z-stack; keep
+      // any open settings/popover above it.
+      raiseTopOverlays()
     }
     simulatorView.setBounds(bounds)
   }
@@ -682,6 +697,8 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   function closeNativeDevtoolsSource(): void {
     const source = nativeDevtoolsSourceWc
     nativeDevtoolsSourceWc = null
+    try { stopServiceConsole?.() } catch { /* already stopped */ }
+    stopServiceConsole = null
     if (!source || source.isDestroyed()) return
     try {
       if (source.isDevToolsOpened()) {
@@ -844,6 +861,16 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       // Re-applied on every re-point so a service-host pool swap (fresh
       // openDevTools) re-asserts the custom tab bar.
       customizeDevtoolsTabs(simulatorView.webContents)
+      // Capture service-layer console via CDP (NOT a preload monkeypatch, which
+      // would clobber native source attribution) and feed it to the console
+      // fan-out (automation `App.logAdded`). Bound to THIS service wc; replaced
+      // on the next re-point via closeNativeDevtoolsSource.
+      try { stopServiceConsole?.() } catch { /* already stopped */ }
+      stopServiceConsole = installServiceConsoleForward({
+        serviceWc: next,
+        connections: ctx.connections,
+        emit: (entry) => ctx.consoleForwarder?.emit(entry),
+      }).stop
       return true
     } catch {
       if (nativeDevtoolsSourceWc?.id === next.id) {
@@ -1317,6 +1344,11 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       // Overlay loads mainPreloadPath, so the same navigation rules as the
       // main window apply — see navigation-hardening.ts.
       applyNavigationHardening(settingsView.webContents, ctx.rendererDir)
+      // Transparent backing: the settings view now spans the whole content area
+      // (computeSettingsBounds) and its renderer paints a transparent backdrop +
+      // an opaque right-side panel, so the underlying editor/simulator show
+      // through and a backdrop click closes the overlay (mirrors the popover).
+      settingsView.setBackgroundColor('#00000000')
       await settingsView.webContents.loadFile(
         path.join(ctx.rendererDir, 'entries/settings/index.html'),
       )
@@ -1335,6 +1367,23 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       } catch { /* ignore */ }
       settingsViewAdded = false
     }
+  }
+
+  // Keep the TOP-tier overlays (settings, popover) above the BASE-tier native
+  // overlays (the native simulator WCV + the console/DevTools WCV). Native
+  // overlays are z-ordered by `addChildView` insertion order — the last-added
+  // sits on top — so RE-attaching a base overlay while a top overlay is open
+  // (e.g. the simulator re-shows on a tab switch, or the console bounds
+  // republish re-adds it) would move the base ABOVE the open settings/popover
+  // and occlude it. Whenever a base overlay is (re)added, re-append the open top
+  // overlays so they stay on top. Settings is re-appended before popover so a
+  // simultaneously-open popover ends up topmost. A no-op when neither is open
+  // (pinned by the z-order guard test).
+  function raiseTopOverlays(): void {
+    if (ctx.windows.mainWindow.isDestroyed()) return
+    const cv = ctx.windows.mainWindow.contentView
+    if (settingsView && settingsViewAdded) cv.addChildView(settingsView)
+    if (popoverView) cv.addChildView(popoverView)
   }
 
   function showPopover(data: unknown): void {
@@ -1429,6 +1478,9 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     if (!nativeSimulatorViewAdded) {
       ctx.windows.mainWindow.contentView.addChildView(nativeSimulatorView)
       nativeSimulatorViewAdded = true
+      // Re-attaching this base overlay moved it to the top of the z-stack; keep
+      // any open settings/popover above it.
+      raiseTopOverlays()
     }
     nativeSimulatorView.setBounds(p.bounds)
     const simWc = nativeSimulatorView.webContents

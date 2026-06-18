@@ -16,6 +16,7 @@ export type {
 	DomPanelDescriptor,
 	NativeHandleRef,
 	NativePanelDescriptor,
+	PanelCapabilities,
 	PanelDescriptor,
 	Disposable,
 	PanelRegistry,
@@ -25,6 +26,7 @@ export type {
 
 export { createPanelRegistry } from './registry.js'
 export { serializeLayout, parseLayout, validateTree } from './serialize.js'
+export { sanitizeFlexibleWeights } from './sanitize.js'
 export {
 	setSizes,
 	setConstraint,

@@ -677,3 +677,42 @@ describe('<DockView> fixed-px constraint (FIX E)', () => {
 		expect(container.querySelector('[data-deck-split="root"]')!.getAttribute('data-deck-sizes')).toBe('5,1,3')
 	})
 })
+
+// ─────────────────── T2: minPx (flexible-minimum) constraint in the flex pool ───────────────────
+//
+// A SECOND constraint kind, `{ minPx: N }`, is a FLEXIBLE MINIMUM: the child
+// still participates in weight sizing (it gets a percentage), but has a pixel
+// floor enforced downstream (rrp px `minSize`, covered by e2e). Both `{minPx}`
+// and `{fixedPx}` are PX-SIZED, so BOTH are EXCLUDED from the flexible % pool —
+// only `null` (weight-sized) children get a map entry. (A px `minSize` on a
+// %-`defaultSize` panel is misparsed by rrp, so a px floor must pair with a px
+// default; hence minPx is sized in px, not via the weight pool.)
+
+describe('computeFlexiblePercentages — px-sized children (fixedPx/minPx) excluded (T2)', () => {
+	// minPx is px-sized → EXCLUDED from the pool, exactly like fixedPx: with
+	// constraints=[{minPx:375}, null] only the null sibling gets a percentage.
+	it('excludes a {minPx} child from the flexible pool (only the weight sibling has an entry)', () => {
+		const pct = computeFlexiblePercentages([1, 3], [{ minPx: 375 }, null])
+		expect(pct.has(0)).toBe(false)
+		expect(pct.has(1)).toBe(true)
+		expect(pct.get(1)).toBeCloseTo(100, 6)
+	})
+
+	// Same for {fixedPx}: excluded, only the null sibling gets a percentage.
+	it('excludes a {fixedPx} child too (only the flexible sibling has an entry)', () => {
+		const pct = computeFlexiblePercentages([1, 3], [{ fixedPx: 375 }, null])
+		expect(pct.has(0)).toBe(false)
+		expect(pct.has(1)).toBe(true)
+		expect(pct.get(1)).toBeCloseTo(100, 6)
+	})
+
+	// A mix: minPx + fixedPx + null. BOTH px-sized children are excluded; only the
+	// null child remains in the pool (gets the whole 100%).
+	it('mixes minPx + fixedPx + null: both px-sized excluded, only null in the pool', () => {
+		const pct = computeFlexiblePercentages([2, 5, 6], [{ minPx: 375 }, { fixedPx: 100 }, null])
+		expect(pct.has(0)).toBe(false)
+		expect(pct.has(1)).toBe(false)
+		expect(pct.has(2)).toBe(true)
+		expect(pct.get(2)).toBeCloseTo(100, 6)
+	})
+})

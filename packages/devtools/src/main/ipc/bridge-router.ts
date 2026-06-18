@@ -52,6 +52,43 @@ import {
 import { createConsoleForwarder } from '../services/console-forward/index.js'
 import { STORAGE_API_NAMES } from '../services/simulator-storage/index.js'
 
+// The compiled `logic.js` ships a RELATIVE `//# sourceMappingURL=logic.js.map`.
+// `injectLogicBundle` loads it via `executeJavaScript`, which gives the injected
+// script no base URL of its own — so DevTools resolves that relative map against
+// the service-host DOCUMENT and 404s, leaving console frames / Sources links
+// pointing at the compiled bundle instead of the developer's source. This rewrite
+// turns the directive absolute.
+//
+// Inlined (not imported from `service-host/sourcemap-rewrite.cjs`) ON PURPOSE:
+// the shipped main entry is the FLAT esbuild bundle (`dist/main/index.bundle.js`,
+// see electron-builder.yml `extraMetadata.main`). A runtime `createRequire(...)`
+// of the relative `.cjs` resolved against `import.meta.url`, which is the bundle
+// at `dist/main/` (one level shallower than the tsc tree `dist/main/ipc/`), so
+// the path 404'd and the PACKAGED app crashed on load. Bundling the logic inline
+// is bundler-proof. KEEP IN SYNC with `service-host/sourcemap-rewrite.cjs` (the
+// copied-not-bundled service-host preload still requires that one).
+function rewriteSourceMappingUrl(source: string, scriptUrl: string): string {
+  if (typeof source !== 'string' || !source) return source
+  const re = /(^|\n)[ \t]*\/\/[#@][ \t]*sourceMappingURL=([^\n]*)/g
+  let lastIndex = -1
+  let lastValue = ''
+  let m: RegExpExecArray | null
+  while ((m = re.exec(source)) !== null) {
+    lastIndex = m.index + m[1].length
+    lastValue = (m[2] || '').trim()
+  }
+  if (lastIndex < 0 || !lastValue) return source
+  // Already absolute (scheme://, protocol-relative //host, or data:)? Leave it.
+  if (/^(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(lastValue) || /^data:/i.test(lastValue)) return source
+  let absolute: string
+  try {
+    absolute = new URL(lastValue, scriptUrl).toString()
+  } catch {
+    return source
+  }
+  return `${source.slice(0, lastIndex)}\n//# sourceMappingURL=${absolute}`
+}
+
 const STACK_ID = 'stack_0'
 
 /** Hard ceiling on the pre-warm pool, mirroring ServiceHostPool/doc §3.3. */
@@ -936,7 +973,10 @@ async function injectLogicBundle(ap: AppSession): Promise<void> {
   try {
     const res = await fetch(logicUrl)
     if (!res.ok) throw new Error(`logic.js fetch ${res.status} at ${logicUrl}`)
-    const logicContent = await res.text()
+    // Rewrite the relative `sourceMappingURL` to an absolute dev-server URL
+    // BEFORE injecting — `executeJavaScript` gives the script no base URL, so a
+    // relative map would 404 and break sourcemapped console frames / Sources.
+    const logicContent = rewriteSourceMappingUrl(await res.text(), logicUrl)
     await ap.serviceWc.executeJavaScript(`${logicContent}\n//# sourceURL=${logicUrl}`, true)
   } catch (error) {
     console.warn('[bridge-router] unable to inject service logic.js:', error)

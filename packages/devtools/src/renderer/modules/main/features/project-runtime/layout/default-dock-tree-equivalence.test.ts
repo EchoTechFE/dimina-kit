@@ -143,14 +143,14 @@ describe('default dock tree — equivalent to the legacy FrameTree default arran
     // simulator sits ALONE on the leading edge (its own region), not co-mingled.
     expect(regions[0]).toEqual(new Set(['simulator']))
 
-    // -- SIMULATOR pinned to W via a fixedPx constraint on the row split. --
+    // -- SIMULATOR floored at W via a minPx constraint on the row split. --
     const root = tree.root as SplitNode
     expect(root.kind).toBe('split')
     expect(root.orientation).toBe('row')
     const simChildIdx = root.children.findIndex(
       (c) => leadingTabGroup(c).panels.includes('simulator'),
     )
-    expect(root.constraints?.[simChildIdx]).toEqual({ fixedPx: W })
+    expect(root.constraints?.[simChildIdx]).toEqual({ minPx: W })
     // the sibling region stays weight-sized (null constraint) so it can flex.
     expect(
       root.constraints?.some((c, i) => i !== simChildIdx && c === null),

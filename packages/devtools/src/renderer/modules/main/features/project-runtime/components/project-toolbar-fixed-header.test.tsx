@@ -27,6 +27,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { render, act } from '@testing-library/react'
 import { HEADER_H } from '@/shared/constants'
 import { ProjectToolbar } from './project-toolbar'
+import { buildDockModel, buildDockRegistry } from '../layout/dock-layout'
 
 const apiMocks = vi.hoisted(() => ({
   // Simulates a host that configured the (now deprecated) headerHeight: 72.
@@ -48,6 +49,15 @@ async function renderToolbar() {
       onToggleCompilePanel={() => {}}
       onRelaunch={() => {}}
       compileStatus={{ status: 'ready', message: '' }}
+      dockModel={buildDockModel(null, 375, new Set())}
+      dockRegistry={buildDockRegistry()}
+      layout={{
+        state: { dockTree: null, simulatorAlignment: 'left', devtoolsPosition: 'inEditor' },
+        setDockTree: () => {},
+        setSimulatorAlignment: () => {},
+        setDevtoolsPosition: () => {},
+      }}
+      simPanelWidth={375}
     />,
   )
   // Flush mount effects + any pending IPC promise resolutions so a legacy

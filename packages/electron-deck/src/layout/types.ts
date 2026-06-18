@@ -10,13 +10,23 @@
 export type Orientation = 'row' | 'column'
 
 /**
- * Per-child fixed-pixel size lock. `fixedPx` must be a finite number > 0
- * (validation lives in `serialize.ts`, not the type). A child carrying a
- * `SizeConstraint` is rendered at that exact pixel width/height instead of
- * being weight-sized.
+ * Per-child pixel size constraint. EXACTLY ONE of the two keys is set; the value
+ * is a finite number > 0 (validation lives in `serialize.ts`, not the type):
+ *
+ *  - `fixedPx` — LOCKED to exactly N px (min === max). A fixed child is excluded
+ *    from the flexible weight pool: it never resizes, weight changes don't touch
+ *    it.
+ *  - `minPx` — a FLEXIBLE FLOOR: the child is weight-sized like an unconstrained
+ *    child (participates in the flex pool, resizable), but never shrinks below N
+ *    px. Use for a panel that must keep a minimum size while still being
+ *    draggable (e.g. a simulator column floored at the device width).
+ *
+ * KEY SEMANTIC: "is this child fixed?" === "does the constraint carry `fixedPx`?"
+ * A `minPx` child is NOT fixed — it is flexible-with-a-floor.
  */
 export interface SizeConstraint {
-	readonly fixedPx: number
+	readonly fixedPx?: number
+	readonly minPx?: number
 }
 
 export interface SplitNode {
@@ -53,7 +63,40 @@ export interface LayoutTree {
 
 // ───────────────────────── panel registry ─────────────────────────
 
-export interface DomPanelDescriptor {
+/**
+ * Per-panel drag/drop capability policy. All fields are OPTIONAL and
+ * DEFAULT-PERMISSIVE, so existing registrations keep today's behavior (a fully
+ * draggable panel that may move/split freely). The two fields are orthogonal:
+ * `draggable` governs whether the panel is a drag SOURCE / drop ANCHOR at all;
+ * `dropPolicy` governs where a draggable panel may LAND.
+ */
+export interface PanelCapabilities {
+	/**
+	 * When `false`: the panel's tab cannot be picked up (its tab is not
+	 * `draggable`) AND it is not a valid drop ANCHOR — no other panel may
+	 * join/split against the group while this panel is that group's active tab.
+	 * `undefined` is treated as `true`.
+	 */
+	readonly draggable?: boolean
+	/**
+	 * Drop/move policy for THIS panel when it is the one being dragged:
+	 *  - `'free'` (default): may move to any group or edge-split anywhere.
+	 *  - `'reorder-only'`: may ONLY reorder within its CURRENT tab group — it
+	 *    never leaves the group and never edge-splits.
+	 * `undefined` is treated as `'free'`.
+	 */
+	readonly dropPolicy?: 'free' | 'reorder-only'
+	/**
+	 * When `true`, this panel contributes NO tab to the group's tab strip. A
+	 * group whose every panel hides its tab renders no tab strip at all (its body
+	 * fills the whole region). Use for structural/chrome-owning panels that carry
+	 * their own header (e.g. a simulator panel that draws its own device picker),
+	 * where the engine tab would be redundant. `undefined` is treated as `false`.
+	 */
+	readonly hideTab?: boolean
+}
+
+export interface DomPanelDescriptor extends PanelCapabilities {
 	readonly kind: 'dom'
 	readonly id: string
 	readonly title?: string
@@ -67,7 +110,7 @@ export interface NativeHandleRef {
 	readonly id: string
 }
 
-export interface NativePanelDescriptor {
+export interface NativePanelDescriptor extends PanelCapabilities {
 	readonly kind: 'native'
 	readonly id: string
 	readonly title?: string

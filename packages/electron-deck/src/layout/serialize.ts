@@ -101,7 +101,7 @@ function collectProblems(
 				problems.push(`split ${id ?? '?'}: invalid orientation ${String(orientation)}`)
 			}
 			// OPTIONAL constraints — validate the field's INTRINSIC format (array
-			// shape + per-entry rules + strict single `fixedPx` key + all-constrained
+			// shape + per-entry rules + exactly-one-of fixedPx/minPx + all-FIXED
 			// guard) INDEPENDENTLY of `children` validity. Only the LENGTH-vs-children
 			// comparison is gated on `children` being a valid array (done below).
 			if (sp.constraints !== undefined) {
@@ -110,6 +110,10 @@ function collectProblems(
 					problems.push(`split ${id ?? '?'}: constraints is not an array`)
 				}
 				else {
+					// Tracks whether EVERY child is PX-SIZED (a non-null constraint —
+					// `fixedPx` OR `minPx`). Both are sized in px and excluded from the
+					// weight pool, so an all-constrained split trips the rrp footgun
+					// (needs >= 1 weight-sized child); only a `null` child clears it.
 					let everyConstrained = constraints.length > 0
 					for (const c of constraints) {
 						if (c === null) {
@@ -121,20 +125,23 @@ function collectProblems(
 							problems.push(`split ${id ?? '?'}: constraint is not null nor an object: ${String(c)}`)
 							continue
 						}
-						// Strict-key: a constraint object must carry EXACTLY `fixedPx`.
+						// Exactly ONE of `fixedPx` / `minPx`, value finite > 0.
 						const keys = Object.keys(c as object)
-						if (keys.length !== 1 || keys[0] !== 'fixedPx') {
-							problems.push(`split ${id ?? '?'}: constraint must have exactly the key 'fixedPx', got [${keys.join(', ')}]`)
+						const hasFixed = keys.includes('fixedPx')
+						const hasMin = keys.includes('minPx')
+						if (keys.length !== 1 || !(hasFixed || hasMin)) {
+							problems.push(`split ${id ?? '?'}: constraint must have exactly one of 'fixedPx' or 'minPx', got [${keys.join(', ')}]`)
 						}
-						const fixedPx = (c as { fixedPx?: unknown }).fixedPx
-						if (typeof fixedPx !== 'number' || !Number.isFinite(fixedPx) || fixedPx <= 0) {
-							problems.push(`split ${id ?? '?'}: constraint fixedPx must be a finite number > 0, got ${String(fixedPx)}`)
+						const cKey = hasFixed ? 'fixedPx' : 'minPx'
+						const cVal = hasFixed ? (c as { fixedPx?: unknown }).fixedPx : (c as { minPx?: unknown }).minPx
+						if (typeof cVal !== 'number' || !Number.isFinite(cVal) || cVal <= 0) {
+							problems.push(`split ${id ?? '?'}: constraint ${cKey} must be a finite number > 0, got ${String(cVal)}`)
 						}
 					}
-					// Guard the rrp footgun: an all-fixed-px split has no flexible child
-					// to absorb leftover space (rrp v4.10 requires >= 1 weight-sized).
+					// Guard the rrp footgun: an all-px-sized split has no weight-sized
+					// child to absorb leftover space (rrp v4.10 requires >= 1).
 					if (everyConstrained) {
-						problems.push(`split ${id ?? '?'}: all children are fixed-px constraints; at least one must be weight-sized`)
+						problems.push(`split ${id ?? '?'}: all children are px-sized constraints; at least one must be weight-sized`)
 					}
 				}
 			}

@@ -44,7 +44,7 @@
 原生面板只引用一个 electron-free 的不透明句柄 `NativeHandleRef`，由 host 自己映射回真 view。
 
 - **数据模型**：布局是一棵不可变树 `LayoutTree`，节点是 `SplitNode`（`row`/`column` 容器，带
-  每子一份 `sizes` 权重 + 可选 `constraints` 做 per-child fixed-px 锁宽）或 `TabGroupNode`
+  每子一份 `sizes` 权重 + 可选 `constraints`：`{fixedPx}` 锁死 / `{minPx}` 柔性下限）或 `TabGroupNode`
   （一组 panelId + 当前 `active`）。
 - **面板登记**：`PanelDescriptor` 分 `dom`（renderer 内 React 内容）/ `native`（带
   `NativeHandleRef` 的主进程 view）两类；`createPanelRegistry()` 维护 panelId → descriptor。
@@ -72,7 +72,7 @@
   **关闭面板**（tab 上的 close 控件 → `closePanel`，守卫整树最后一个面板）；
   纯几何的 drop-zone 计算与 descriptor 层（`computeDropZone` / `dropZoneToMutation` /
   `isNoopRedock`）也从本 entry 导出，host 不必深 import。
-- fixed-px `constraints` 让某个 leaf（如 simulator 的设备宽）保真不被权重缩放。
+- `constraints` 让某个 leaf 受像素约束：`{fixedPx}` 锁死，`{minPx}` 柔性下限（如 simulator 列可拖宽但不小于设备宽）。
 - **model 是可视分屏的事实源（双向同步）**：react-resizable-panels（rrp）的 `defaultSize` 只在挂载时读取，
   所以 `SplitView` 持有 rrp `Group` 的命令式 handle，两个方向各走一条路：model→view 时，程序化 `setSizes`
   经 `setLayout` 推动**已挂载的分隔条**真正移动（不必 remount）；view→model 时，用户拖分隔条 / 键盘 resize

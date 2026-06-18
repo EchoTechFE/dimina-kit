@@ -176,12 +176,13 @@ export interface WorkbenchContext {
   storageApi?: StorageApi
 
   /**
-   * Native-host console sink. The render-host / service-host guest preloads
-   * monkeypatch `console.*` and post each entry to main as a `consoleLog`
-   * container message; bridge-router routes those here. Owned by the
-   * `ConsoleForwarder` (set in `installBridgeRouter`), whose `emit` fans every
-   * entry out to subscribers (automation WS) AND mirrors render-layer entries
-   * into the service host's own console for the embedded DevTools.
+   * Native-host console sink. Render-layer entries arrive from
+   * render-host/preload.cjs (`console.*` monkeypatch → `consoleLog` message);
+   * service-layer entries arrive from CDP `Runtime.consoleAPICalled`
+   * (services/service-console) so native source attribution is preserved.
+   * Owned by the `ConsoleForwarder` (set in `installBridgeRouter`), whose `emit`
+   * fans every entry out to subscribers (automation WS) AND mirrors render-layer
+   * entries into the service host's own console for the embedded DevTools.
    */
   guestConsole?: { emit(entry: unknown): void }
 

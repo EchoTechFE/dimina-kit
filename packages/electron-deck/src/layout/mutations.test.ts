@@ -419,6 +419,58 @@ describe('movePanel', () => {
 		expectStructurallySound(out)
 	})
 
+	// ── same-group reorder hardening ─────────────────────────────────────────
+	// Pins the exact `panels` order for a same-group reorder to each boundary
+	// index (front / middle / end) and that reorder to the CURRENT index is a
+	// stable no-op-equivalent. This underwrites the dock-react `reorder-only`
+	// drop policy, which must REORDER a pinned panel within its group instead of
+	// letting it split out or no-op.
+	//
+	// Starting group g3 = [p1, p2, p3] active p1.
+	function reorderTree(): LayoutTree {
+		return tree(
+			split('s0', 'row', [
+				tabs('g3', ['p1', 'p2', 'p3'], 'p1'),
+				tabs('g4', ['p4'], 'p4'),
+			]),
+		)
+	}
+
+	it('same-group reorder: move a panel to the FRONT (index 0)', () => {
+		// g3 = [p1,p2,p3]; move p3 to index 0 -> [p3,p1,p2]
+		const out = movePanel(reorderTree(), 'p3', { groupId: 'g3', index: 0 })
+		expect(findGroup(out, 'g3')!.panels).toEqual(['p3', 'p1', 'p2'])
+		expectStructurallySound(out)
+	})
+
+	it('same-group reorder: move a panel to a MIDDLE index', () => {
+		// g3 = [p1,p2,p3]; move p1 to index 1 -> [p2,p1,p3]
+		const out = movePanel(reorderTree(), 'p1', { groupId: 'g3', index: 1 })
+		expect(findGroup(out, 'g3')!.panels).toEqual(['p2', 'p1', 'p3'])
+		expectStructurallySound(out)
+	})
+
+	it('same-group reorder: move a panel to the END', () => {
+		// g3 = [p1,p2,p3]; move p1 to the end -> [p2,p3,p1]
+		const out = movePanel(reorderTree(), 'p1', { groupId: 'g3', index: 2 })
+		expect(findGroup(out, 'g3')!.panels).toEqual(['p2', 'p3', 'p1'])
+		expectStructurallySound(out)
+	})
+
+	it('same-group reorder: undefined index appends to the end of the same group', () => {
+		// g3 = [p1,p2,p3]; move p1 with no index -> appended -> [p2,p3,p1]
+		const out = movePanel(reorderTree(), 'p1', { groupId: 'g3' })
+		expect(findGroup(out, 'g3')!.panels).toEqual(['p2', 'p3', 'p1'])
+		expectStructurallySound(out)
+	})
+
+	it('same-group reorder to the CURRENT index is a stable no-op-equivalent (order unchanged)', () => {
+		// p2 already sits at index 1 in [p1,p2,p3]; moving it to index 1 keeps order.
+		const out = movePanel(reorderTree(), 'p2', { groupId: 'g3', index: 1 })
+		expect(findGroup(out, 'g3')!.panels).toEqual(['p1', 'p2', 'p3'])
+		expectStructurallySound(out)
+	})
+
 	it('throws for unknown panel or unknown dest group', () => {
 		expectRejects(() => movePanel(base(), 'ghost', { groupId: 'g1' }))
 		expectRejects(() => movePanel(base(), 'p1', { groupId: 'nope' }))

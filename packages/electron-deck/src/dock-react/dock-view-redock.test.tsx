@@ -353,6 +353,233 @@ describe('<DockView> drag-to-redock — registered-but-absent payload (M2)', () 
   })
 })
 
+// ───────────────────── PanelCapabilities: draggable + dropPolicy ─────────────────────
+//
+// FAILING TDD spec for the NOT-YET-WIRED capability gates. The registry can now
+// carry `draggable:false` and `dropPolicy:'reorder-only'` (PanelCapabilities);
+// the DockView must HONOR them:
+//
+//   GOAL A (draggable:false):
+//     - source: a tab for a `draggable:false` panel renders WITHOUT a truthy
+//       `draggable` attribute (a default panel still renders draggable="true").
+//     - target: a group whose ACTIVE panel is `draggable:false` rejects EVERY
+//       drop zone (it is a no-op — no revision bump, byte-identical tree).
+//
+//   GOAL B (dropPolicy:'reorder-only'):
+//     - a reorder-only panel may NEVER leave its group: a center drop into ANOTHER
+//       group is a no-op, and ANY edge zone (own group or another) is a no-op.
+//     - a reorder-only panel dropped center into its OWN group REORDERS within
+//       that group (it does NOT stay a no-op — the current `isNoopRedock` would
+//       wrongly swallow this; this test pins that the reorder DOES happen).
+//
+// Fixtures are SEPARATE from makeTree/makeRegistry so the existing free-panel
+// cases above keep passing unchanged.
+describe('<DockView> drag-to-redock — PanelCapabilities gates (draggable / dropPolicy)', () => {
+	// root split[row] -> [ g-cap(pinned, sib) active=sib | g-free(free) active=free ]
+	//   - 'pinned' : dropPolicy 'reorder-only'  (may reorder, never leave g-cap)
+	//   - 'locked' : we substitute it as g-cap's ACTIVE panel in the draggable:false
+	//     target test (see capsTreeLockedActive)
+	function capsTree(): LayoutTree {
+		return {
+			version: 1,
+			root: {
+				kind: 'split',
+				id: 'root',
+				orientation: 'row',
+				sizes: [1, 1],
+				children: [
+					// active = 'sib' (NOT 'pinned'), so a center drop of 'pinned' into its
+					// own group anchors on a DIFFERENT sibling => a real reorder, not the
+					// M1 self-no-op.
+					{ kind: 'tabs', id: 'g-cap', panels: ['sib', 'pinned'], active: 'sib' },
+					{ kind: 'tabs', id: 'g-free', panels: ['free'], active: 'free' },
+				],
+			},
+		}
+	}
+
+	// A tree whose g-cap ACTIVE panel is a `draggable:false` panel — the GOAL-A
+	// target case (the group must reject every drop onto its locked active panel).
+	function capsTreeLockedActive(): LayoutTree {
+		return {
+			version: 1,
+			root: {
+				kind: 'split',
+				id: 'root',
+				orientation: 'row',
+				sizes: [1, 1],
+				children: [
+					{ kind: 'tabs', id: 'g-lock', panels: ['locked'], active: 'locked' },
+					{ kind: 'tabs', id: 'g-free', panels: ['free', 'free2'], active: 'free' },
+				],
+			},
+		}
+	}
+
+	// Registry whose descriptors carry the new capability fields.
+	// 'locked'  => draggable:false
+	// 'pinned'  => dropPolicy:'reorder-only'
+	// 'sib'/'free'/'free2' => default (permissive).
+	function capsRegistry(): PanelRegistry {
+		const reg = createPanelRegistry()
+		// `draggable` / `dropPolicy` are PanelCapabilities fields the descriptors
+		// will carry once the type extends PanelCapabilities. They are excess props
+		// on the current descriptor type (the honest type failure the impl closes).
+		reg.register({ kind: 'dom', id: 'locked', title: 'Locked', draggable: false })
+		reg.register({ kind: 'dom', id: 'pinned', title: 'Pinned', dropPolicy: 'reorder-only' })
+		reg.register({ kind: 'dom', id: 'sib', title: 'Sibling' })
+		reg.register({ kind: 'dom', id: 'free', title: 'Free' })
+		reg.register({ kind: 'dom', id: 'free2', title: 'Free 2' })
+		return reg
+	}
+
+	const ALL_ZONES = ['center', 'left', 'right', 'top', 'bottom'] as const
+	const EDGE_ZONES = ['left', 'right', 'top', 'bottom'] as const
+
+	// ── GOAL A (source): the draggable affordance reflects the capability ──
+	// BUG: the tab affordance ignores `draggable:false`, so a locked panel can
+	// still be torn out by a drag gesture.
+	it('GOAL A source: a draggable:false panel renders WITHOUT a truthy draggable attribute', () => {
+		const model = createLayoutModel(capsTreeLockedActive())
+		const { container } = renderDock(model, capsRegistry())
+		const lockedTab = container.querySelector('[data-deck-tab="locked"]')!
+		const freeTab = container.querySelector('[data-deck-tab="free"]')!
+		// default panel stays draggable
+		expect(freeTab.getAttribute('draggable')).toBe('true')
+		// locked panel's draggable marker is absent / not "true"
+		expect(lockedTab.getAttribute('draggable')).not.toBe('true')
+	})
+
+	// ── GOAL A (target): a group whose ACTIVE panel is draggable:false rejects ──
+	//    EVERY drop zone (no-op, no churn). 'draggable:false' locks the panel as a
+	//    drop ANCHOR too — nothing may dock onto it.
+	// BUG: handleRedock anchors on the group's active panel without checking its
+	// capabilities, so a free panel can be docked onto a locked anchor.
+	for (const zone of ALL_ZONES) {
+		it(`GOAL A target: dropping a free panel onto a group with a draggable:false ACTIVE panel is a no-op (zone="${zone}")`, () => {
+			const model = createLayoutModel(capsTreeLockedActive())
+			const { container } = renderDock(model, capsRegistry())
+
+			let revisions = 0
+			model.subscribe(() => { revisions += 1 })
+			const before = JSON.stringify(model.get())
+
+			const gLock = container.querySelector('[data-deck-group="g-lock"]') as DeckGroupElement
+			expect(typeof gLock.__deckHandleDrop).toBe('function')
+			act(() => {
+				gLock.__deckHandleDrop!('free', zone)
+			})
+
+			expect(revisions).toBe(0)
+			expect(JSON.stringify(model.get())).toBe(before)
+		})
+	}
+
+	// ── GOAL B (leave-group blocked): center into ANOTHER group is a no-op ──
+	// BUG: a reorder-only panel can be torn into a different group by a center
+	// drop, violating its "may only reorder within its own group" policy.
+	it('GOAL B: dropping a reorder-only panel into a DIFFERENT group center is a no-op', () => {
+		const model = createLayoutModel(capsTree())
+		const { container } = renderDock(model, capsRegistry())
+
+		let revisions = 0
+		model.subscribe(() => { revisions += 1 })
+		const before = JSON.stringify(model.get())
+
+		const gFree = container.querySelector('[data-deck-group="g-free"]') as DeckGroupElement
+		act(() => {
+			gFree.__deckHandleDrop!('pinned', 'center')
+		})
+
+		expect(revisions).toBe(0)
+		expect(JSON.stringify(model.get())).toBe(before)
+		// 'pinned' never left g-cap.
+		expect(findGroupOf(model.get().root, 'pinned')!.id).toBe('g-cap')
+		expect(countPanel(model.get().root, 'pinned')).toBe(1)
+	})
+
+	// ── GOAL B (leave-group blocked): ANY edge zone is a no-op — own group OR ──
+	//    another group. A reorder-only panel must never SPLIT out of its group.
+	for (const zone of EDGE_ZONES) {
+		it(`GOAL B: edge-dropping a reorder-only panel into ANOTHER group is a no-op (zone="${zone}")`, () => {
+			const model = createLayoutModel(capsTree())
+			const { container } = renderDock(model, capsRegistry())
+
+			let revisions = 0
+			model.subscribe(() => { revisions += 1 })
+			const before = JSON.stringify(model.get())
+
+			const gFree = container.querySelector('[data-deck-group="g-free"]') as DeckGroupElement
+			act(() => {
+				gFree.__deckHandleDrop!('pinned', zone)
+			})
+
+			expect(revisions).toBe(0)
+			expect(JSON.stringify(model.get())).toBe(before)
+			expect(findGroupOf(model.get().root, 'pinned')!.id).toBe('g-cap')
+		})
+
+		it(`GOAL B: edge-dropping a reorder-only panel into its OWN group is a no-op (zone="${zone}")`, () => {
+			const model = createLayoutModel(capsTree())
+			const { container } = renderDock(model, capsRegistry())
+
+			let revisions = 0
+			model.subscribe(() => { revisions += 1 })
+			const before = JSON.stringify(model.get())
+
+			const gCap = container.querySelector('[data-deck-group="g-cap"]') as DeckGroupElement
+			act(() => {
+				gCap.__deckHandleDrop!('pinned', zone)
+			})
+
+			// An edge zone within its own group would SPLIT it out — forbidden, so
+			// no-op: 'pinned' stays a member of g-cap and the tree is unchanged.
+			expect(revisions).toBe(0)
+			expect(JSON.stringify(model.get())).toBe(before)
+			expect(findGroupOf(model.get().root, 'pinned')!.id).toBe('g-cap')
+			expect(countPanel(model.get().root, 'pinned')).toBe(1)
+		})
+	}
+
+	// ── GOAL B (reorder allowed): center into its OWN group REORDERS ──
+	// BUG: the current `isNoopRedock` swallows a center drop back into the dragged
+	// panel's own group (M2), so a reorder-only panel can NEVER reorder — the one
+	// thing its policy is supposed to permit. The reorder-only policy must OVERRIDE
+	// that no-op and reorder the panel within its group.
+	//
+	// g-cap = [sib, pinned] active=sib. Dropping 'pinned' center anchors on the
+	// active sibling 'sib' => 'pinned' reorders relative to 'sib'. The panel set is
+	// unchanged, 'pinned' stays in g-cap, and the `panels` ORDER changes.
+	it('GOAL B: dropping a reorder-only panel center into its OWN group REORDERS it (not a no-op)', () => {
+		const model = createLayoutModel(capsTree())
+		const { container } = renderDock(model, capsRegistry())
+
+		const beforeGroup = findGroupOf(model.get().root, 'pinned')!
+		expect(beforeGroup.id).toBe('g-cap')
+		expect([...beforeGroup.panels]).toEqual(['sib', 'pinned'])
+
+		let revisions = 0
+		model.subscribe(() => { revisions += 1 })
+
+		const gCap = container.querySelector('[data-deck-group="g-cap"]') as DeckGroupElement
+		act(() => {
+			gCap.__deckHandleDrop!('pinned', 'center')
+		})
+
+		const afterGroup = findGroupOf(model.get().root, 'pinned')!
+		// It REORDERED: a mutation happened (revision bumped) and the order changed.
+		expect(revisions).toBeGreaterThan(0)
+		// Panel set unchanged, still exactly once, still in g-cap.
+		expect(afterGroup.id).toBe('g-cap')
+		expect(countPanel(model.get().root, 'pinned')).toBe(1)
+		expect([...afterGroup.panels].sort()).toEqual(['pinned', 'sib'])
+		// The ORDER moved relative to the sibling: 'pinned' is no longer in its
+		// original [sib, pinned] slot — it was re-inserted relative to the active
+		// anchor 'sib', so the order is now ['pinned', 'sib'].
+		expect([...afterGroup.panels]).not.toEqual(['sib', 'pinned'])
+	})
+})
+
 describe('<DockView> drag-to-redock — real-pointer cases (e2e only)', () => {
 	// jsdom returns 0 from getBoundingClientRect/offsetWidth, so a real
 	// drag-hover cannot select a geometry-driven zone or render the

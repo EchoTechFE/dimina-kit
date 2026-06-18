@@ -175,7 +175,7 @@ function routeByDomain(method): 'render' | 'service' {
 
 1. **消双 hook 冲突**：Elements 已 hook `sendMessageToBackend`；Network 二期（`getResponseBody`）也要 hook 它。两处各自 monkey-patch 会互相覆盖——只有让 router 持**唯一**包装器才安全。
 2. **去重**：chunk / dispatch / 轮询这套样板，现在 network-forward 和 elements-forward **各写了一份**，收敛后只需一份。
-3. **单 lifecycle owner**：pool-swap 重指向、frontend re-ready 时，由一个 owner 统一 rebind，而不是两个服务各自监听。
+3. **单 lifecycle owner**：pool-swap 重指向、frontend re-ready 时统一 rebind。当前各服务自管：`installElementsForward` 持续监听 devtoolsWc 的 `dom-ready`，每次前端（重）加载都幂等重装 hook（前端重载 / pool-swap 重开 DevTools 会清空 `globalThis.__diminaElementsHookInstalled`，单次 `once` 会让 Elements 回落到 service-host DOM）；network-forward 经 `setDevtoolsHost` 重 arm。收敛的收益是把这套 re-ready 重绑交给一个 owner，而非两个服务各自监听。
 
 > open-in-editor（`setOpenResourceHandler`）和 tab 定制（DevTools view registry + `setPreference`）**不碰 embedder 的 CDP 协议边界**（不 hook `sendMessageToBackend`、不 `dispatchMessage`），所以即便将来有了 router 也不并进去（KISS）。
 
@@ -214,7 +214,8 @@ function routeByDomain(method): 'render' | 'service' {
 | 机制 | 文件 | 注入层 |
 |---|---|---|
 | Console（前端 attach） | Electron `setDevToolsWebContents`（`view-manager` `pointNativeDevtoolsAtServiceWc`） | 原生 attach 到 service-host |
-| Console 汇聚（guest console sink） | `services/console-forward/` | 拥有 `consoleLog` sink：把 render 层（`source:'render'`）的日志重新打进 service-host 窗口的 `console`，使前端在 service-host 一处即可看到两层日志 |
+| Console 汇聚（guest console sink） | `services/console-forward/` | 拥有 `consoleLog` sink：把 render 层（`source:'render'`）的日志重新打进 service-host 窗口的 `console`（带 `[视图]` 前缀），使前端在 service-host 一处即可看到两层日志，并 fan-out 给 automation `App.logAdded` |
+| Console 捕获（service 层 → automation） | `services/service-console/` | CDP `Runtime.consoleAPICalled` attach 到 service-host wc（**非** preload monkeypatch——包装 `console.*` 会多压一帧，使前端把每条日志归因到包装器而非源码）；喂同一个 fan-out。注入的 `[视图]` 行靠 sentinel sourceURL 跳过防重复 |
 | Network 注入 | `services/network-forward/` | `DevToolsAPI.dispatchMessage`（事件） |
 | Elements 路由 | `services/elements-forward/` | hook `sendMessageToBackend` + 推回前端 |
 | 点源码 → Monaco | `view-manager` `injectOpenResourceHandler` | `setOpenResourceHandler` |

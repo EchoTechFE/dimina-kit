@@ -3,10 +3,16 @@
  *
  * Under native-host the guest console doesn't flow through the simulator guest's
  * `ipc-message-host` channel — there is no Worker/MiniApp in the simulator
- * webview. Instead the render-host / service-host preloads monkeypatch
- * `console.*` and post each entry to main as a `consoleLog` container message;
- * bridge-router routes it to `ctx.guestConsole.emit`. This service OWNS that
- * sink (always-on, native-host is the sole runtime) and fans each entry out to:
+ * webview. Entries reach `ctx.guestConsole.emit` two ways:
+ *   - RENDER layer (`source:'render'`): render-host/preload.cjs monkeypatches
+ *     `console.*` and posts each entry to main as a `consoleLog` message.
+ *   - SERVICE layer (`source:'service'`): captured in main via CDP
+ *     `Runtime.consoleAPICalled` (services/service-console) — NOT a preload
+ *     monkeypatch, so the embedded DevTools keeps native source attribution.
+ *     (service-host/preload.cjs still posts uncaught error/unhandledrejection as
+ *     `source:'service'` `consoleLog` messages — CDP doesn't report those.)
+ * This service OWNS that sink (always-on, native-host is the sole runtime) and
+ * fans each entry out to:
  *
  *   1. A built-in render→service forward: render-layer entries (`source:'render'`)
  *      are re-emitted into the service-host window's own `console` with a
@@ -21,20 +27,21 @@
  *      register here so render + service both reach every consumer.
  *
  * ── Loop-safety invariant ───────────────────────────────────────────────────
- * The render→service forward injects `console.log('[视图]', …)` INTO the service
- * host. The service-host preload's own `console.*` patch then captures that call
- * and posts it back here as a NEW `consoleLog` entry — but with `source:'service'`
- * (it originated inside the service guest). Because we forward ONLY `source:
- * 'render'` entries and skip every `source:'service'` entry, that re-captured
- * `[视图]` line is NOT forwarded again. No loop. This relies on the source field
- * being accurate: render-host/preload.cjs stamps `source:'render'`,
- * service-host/preload.cjs stamps `source:'service'`. Do NOT forward service
- * entries — besides the loop, the service layer is already shown natively in the
- * attached DevTools, so forwarding would also duplicate it.
+ * The render→service forward injects `console[…]('[视图]', …)` INTO the service
+ * host. The service-console CDP capture attached to that host would re-capture
+ * that call as a fresh `source:'service'` entry and re-broadcast it (duplicate).
+ * Two guards prevent that:
+ *   1. The injected script is stamped with `//# sourceURL=RENDER_FORWARD_SOURCE_URL`
+ *      (see `buildForwardScript`); service-console skips any `consoleAPICalled`
+ *      whose top frame is that sentinel, so the `[视图]` line is never re-emitted.
+ *   2. This forwarder re-injects ONLY `source:'render'` entries — service entries
+ *      are already shown natively in the attached DevTools, so forwarding them
+ *      would duplicate. (Do NOT forward `source:'service'`.)
  */
 import type { WebContents } from 'electron'
 import { DisposableRegistry, toDisposable, type Disposable } from '@dimina-kit/electron-deck/main'
 import type { BridgeRouterHandle } from '../../ipc/bridge-router.js'
+import { RENDER_FORWARD_SOURCE_URL } from '../service-console/console-api.js'
 
 /**
  * One console entry posted by a guest preload. Shape mirrors
@@ -89,7 +96,13 @@ function buildForwardScript(level: string, args: unknown[]): string {
   const argsJson = JSON.stringify(args ?? [])
   // `console[method]` (not `console.log`) preserves the original level so the
   // DevTools severity filter still works on the forwarded line.
-  return `(()=>{try{const a=JSON.parse(${JSON.stringify(argsJson)});console[${JSON.stringify(method)}]('[视图]',...a)}catch(_){}})()`
+  //
+  // The trailing `//# sourceURL` stamps this injected line with a sentinel URL.
+  // The service-console CDP capture (services/service-console) attached to THIS
+  // service host would otherwise re-capture this `console[...]` call as a fresh
+  // service entry and re-broadcast it to automation (duplicate). It skips any
+  // `consoleAPICalled` whose top frame URL === RENDER_FORWARD_SOURCE_URL.
+  return `(()=>{try{const a=JSON.parse(${JSON.stringify(argsJson)});console[${JSON.stringify(method)}]('[视图]',...a)}catch(_){}})()\n//# sourceURL=${RENDER_FORWARD_SOURCE_URL}`
 }
 
 export function createConsoleForwarder(
