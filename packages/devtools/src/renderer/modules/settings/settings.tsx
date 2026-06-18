@@ -4,6 +4,7 @@ import {
   emitProjectSettingsChanged,
   emitSettingsConfigChanged,
   onSettingsInit,
+  setSettingsVisible,
 } from '@/shared/api'
 
 interface CompileConfig {
@@ -79,7 +80,19 @@ export default function Settings() {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-surface text-text">
+    // The view spans the whole content area; this transparent backdrop catches a
+    // click OUTSIDE the panel and closes the overlay. The opaque panel below
+    // stops propagation so interacting with its controls never self-closes.
+    <div
+      data-testid="settings-backdrop"
+      className="fixed inset-0"
+      onClick={() => void setSettingsVisible(false)}
+    >
+    <div
+      data-testid="settings-panel"
+      className="fixed top-0 right-0 h-full w-[320px] flex flex-col bg-surface text-text border-l border-border shadow-[0_8px_24px_var(--color-overlay-heavy)]"
+      onClick={(e) => e.stopPropagation()}
+    >
       <div className="flex items-center border-b border-border shrink-0">
         {TABS.map((tab) => (
           <button
@@ -140,6 +153,7 @@ export default function Settings() {
           </div>
         )}
       </div>
+    </div>
     </div>
   )
 }

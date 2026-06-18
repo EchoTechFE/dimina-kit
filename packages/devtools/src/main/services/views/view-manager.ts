@@ -1320,6 +1320,11 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       // Overlay loads mainPreloadPath, so the same navigation rules as the
       // main window apply — see navigation-hardening.ts.
       applyNavigationHardening(settingsView.webContents, ctx.rendererDir)
+      // Transparent backing: the settings view now spans the whole content area
+      // (computeSettingsBounds) and its renderer paints a transparent backdrop +
+      // an opaque right-side panel, so the underlying editor/simulator show
+      // through and a backdrop click closes the overlay (mirrors the popover).
+      settingsView.setBackgroundColor('#00000000')
       await settingsView.webContents.loadFile(
         path.join(ctx.rendererDir, 'entries/settings/index.html'),
       )
