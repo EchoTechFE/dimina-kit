@@ -13,10 +13,12 @@
  *   developer's original source. Rewriting the directive to an absolute
  *   dev-server URL restores sourcemapped console frames + Sources links.
  *
- *   LIVE consumer (native-host): `bridge-router.injectLogicBundle` fetches
- *   `logic.js` and injects it via `executeJavaScript`, which gives the script NO
- *   base URL — so it MUST rewrite first. That is the path this helper actually
- *   serves today.
+ *   Consumer: the `importScripts` shim in preload.cjs below (this file is COPIED,
+ *   not bundled, so a plain relative `require('./sourcemap-rewrite.cjs')` works).
+ *   The main process needs the same rewrite in `bridge-router.injectLogicBundle`
+ *   but keeps its OWN inlined copy there — the shipped main entry is the flat
+ *   esbuild bundle and a runtime `require` of this relative path resolved wrong
+ *   against the bundle location (crashed the packaged app). KEEP THE TWO IN SYNC.
  *
  *   Legacy consumer (web-worker render only): the `importScripts` shim in
  *   preload.cjs (synchronous XHR + `(0, eval)(...)`). Under native-host the
