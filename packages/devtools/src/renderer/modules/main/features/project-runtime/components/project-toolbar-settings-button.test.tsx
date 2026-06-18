@@ -33,6 +33,7 @@ import React from 'react'
 import { describe, it, expect, vi } from 'vitest'
 import { render, fireEvent, act } from '@testing-library/react'
 import { ProjectToolbar } from './project-toolbar'
+import { buildDockModel, buildDockRegistry } from '../layout/dock-layout'
 
 const apiMocks = vi.hoisted(() => ({
   // Legacy toolbar exports (Wave 2 ① deletes them) — kept as inert stubs so
@@ -54,6 +55,15 @@ async function renderToolbar() {
       onToggleCompilePanel={() => {}}
       onRelaunch={() => {}}
       compileStatus={{ status: 'ready', message: '' }}
+      dockModel={buildDockModel(null, 375, new Set())}
+      dockRegistry={buildDockRegistry()}
+      layout={{
+        state: { dockTree: null, simulatorAlignment: 'left', devtoolsPosition: 'inEditor' },
+        setDockTree: () => {},
+        setSimulatorAlignment: () => {},
+        setDevtoolsPosition: () => {},
+      }}
+      simPanelWidth={375}
     />,
   )
   await act(async () => {

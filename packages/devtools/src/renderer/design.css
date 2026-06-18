@@ -204,3 +204,124 @@ html, body {
   0%, 100% { opacity: 1; }
   50%       { opacity: 0.3; }
 }
+
+/* ── Dockable layout (electron-deck DockView) tab skin ───────────────────────
+ * electron-deck renders an intentionally UNSTYLED tab strip: a semantic
+ * `<div role="tablist">` of `<button role="tab" data-deck-tab>` plus a
+ * `<span data-deck-tab-close>` ×. The engine defers ALL visuals to the host;
+ * Tailwind preflight then strips the UA button look, so without this skin the
+ * tabs render as bare oversized text (the #51 dockable rewrite shipped the
+ * engine without the host skin). Mirror the legacy BottomDebugPanel strip.
+ * Everything is scoped under `[data-deck-group]` so it can never leak onto
+ * another `role="tab"` usage elsewhere in the app. */
+[data-deck-group] > [role="tablist"] {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
+  padding: 0 8px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: var(--color-surface-2);
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+[data-deck-group] > [role="tablist"] [data-deck-tab] {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 10px;
+  font-size: var(--font-size-sm);
+  line-height: 1;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius);
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  transition: color 0.12s, background 0.12s;
+}
+
+[data-deck-group] > [role="tablist"] [data-deck-tab]:hover {
+  color: var(--color-text);
+  background: var(--color-surface);
+}
+
+[data-deck-group] > [role="tablist"] [data-deck-tab][data-active="true"] {
+  color: var(--color-text);
+  background: var(--color-surface-selected);
+  box-shadow: 0 1px 2px hsl(0 0% 0% / 0.2);
+}
+
+/* ── Dockable resize handles (electron-deck DockView `Separator`) ─────────────
+ * Like the tab strip, electron-deck renders the react-resizable-panels resize
+ * handle UNSTYLED — a bare `[data-deck-resize-handle]` div with NO size, so it
+ * collapses to 0px and is impossible to grab (the #51 dockable rewrite shipped
+ * the engine without this host skin; only the programmatic setSizes seam ever
+ * exercised resize, so the dead grab-area went unnoticed). Give it the same
+ * affordance the legacy FrameTree splitter used (see `splitter-styles.ts`): a
+ * generous 10px transparent hit zone with a 1px visible line (a `::before`),
+ * elevated to the ring token on hover / active drag. `aria-orientation` is the
+ * orientation of the VISIBLE line: `vertical` → a column boundary you drag
+ * horizontally; `horizontal` → a row boundary you drag vertically. */
+[data-deck-resize-handle] {
+  position: relative;
+  flex-shrink: 0;
+  background: transparent;
+  z-index: 1;
+}
+[data-deck-resize-handle][aria-orientation="vertical"] {
+  width: 10px;
+  cursor: col-resize;
+}
+[data-deck-resize-handle][aria-orientation="horizontal"] {
+  height: 10px;
+  cursor: row-resize;
+}
+[data-deck-resize-handle]::before {
+  content: "";
+  position: absolute;
+  background: var(--color-border);
+  transition: background 0.12s;
+}
+[data-deck-resize-handle][aria-orientation="vertical"]::before {
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-0.5px);
+}
+[data-deck-resize-handle][aria-orientation="horizontal"]::before {
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  transform: translateY(-0.5px);
+}
+[data-deck-resize-handle]:hover::before,
+[data-deck-resize-handle][data-resize-handle-active]::before {
+  background: var(--color-ring);
+}
+
+/* Close affordance (×). A `role="button"` span nested in the tab button. */
+[data-deck-tab-close] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-left: 2px;
+  border-radius: 3px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+[data-deck-tab-close]:hover {
+  color: var(--color-text);
+  background: var(--color-surface-3);
+}

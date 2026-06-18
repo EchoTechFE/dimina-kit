@@ -30,6 +30,7 @@ import React from 'react'
 import { describe, it, expect, vi } from 'vitest'
 import { render, act } from '@testing-library/react'
 import { ProjectToolbar } from './project-toolbar'
+import { buildDockModel, buildDockRegistry } from '../layout/dock-layout'
 
 const apiMocks = vi.hoisted(() => ({
   // Simulates a stale main process that still answers GetActions with one
@@ -53,6 +54,15 @@ async function renderToolbar() {
       onToggleCompilePanel={() => {}}
       onRelaunch={() => {}}
       compileStatus={{ status: 'ready', message: '' }}
+      dockModel={buildDockModel(null, 375, new Set())}
+      dockRegistry={buildDockRegistry()}
+      layout={{
+        state: { dockTree: null, simulatorAlignment: 'left', devtoolsPosition: 'inEditor' },
+        setDockTree: () => {},
+        setSimulatorAlignment: () => {},
+        setDevtoolsPosition: () => {},
+      }}
+      simPanelWidth={375}
     />,
   )
   // Flush mount effects + pending IPC promise resolutions so a legacy

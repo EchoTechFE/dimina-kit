@@ -1,17 +1,17 @@
 /**
  * Unit tests for `useLayoutStore` (dock-only).
  *
- * After the layout consolidation the store holds a SINGLE opaque field —
- * `dockTree` (serialized DockView layout) — and nothing else. The legacy
- * visibility / alignment / devtools-position / dockableMode state (and its
- * at-least-one-visible sanitize) was removed with the FrameTree layout it drove,
- * so the tests that pinned that behavior were removed (the guarded behavior no
- * longer exists — they were not relaxed to keep passing).
+ * The store holds the opaque `dockTree` (serialized DockView layout) PLUS the
+ * two toolbar layout-PRESET axes restored on top of the dock model:
+ * `simulatorAlignment` ('left'|'right') and `devtoolsPosition`
+ * ('inEditor'|'belowSimulator'|'rightOfSimulator'). The legacy per-panel
+ * visibility booleans + dockableMode (and the at-least-one-visible sanitize) stay
+ * gone — visibility is now the dock tree's panel membership.
  *
  * Public contract under test (see ./use-layout-store.ts):
  * - Hydrates `dockTree` from `localStorage['dimina-devtools.layout.v1']`,
- *   falling back to DEFAULT_LAYOUT_STATE (`dockTree: null`) on missing / corrupt
- *   / wrong-typed input.
+ *   falling back to DEFAULT_LAYOUT_STATE (`dockTree: null`, alignment `left`,
+ *   position `inEditor`) on missing / corrupt / wrong-typed input.
  * - `setDockTree` updates state and persists; setting the same value is a no-op
  *   (identity preserved); a write failure is swallowed.
  *
@@ -60,7 +60,7 @@ describe('useLayoutStore — hydration / sanitization', () => {
 
     const { result } = renderHook(() => useLayoutStore())
 
-    expect(result.current.state).toEqual({ dockTree: null })
+    expect(result.current.state).toEqual({ dockTree: null, simulatorAlignment: 'left', devtoolsPosition: 'inEditor' })
   })
 
   // Regression: a wrong-typed `dockTree` (a number / object instead of the
@@ -71,7 +71,7 @@ describe('useLayoutStore — hydration / sanitization', () => {
 
     const { result } = renderHook(() => useLayoutStore())
 
-    expect(result.current.state).toEqual({ dockTree: null })
+    expect(result.current.state).toEqual({ dockTree: null, simulatorAlignment: 'left', devtoolsPosition: 'inEditor' })
   })
 
   // Regression: a valid persisted dockTree string must round-trip verbatim —
@@ -82,7 +82,7 @@ describe('useLayoutStore — hydration / sanitization', () => {
 
     const { result } = renderHook(() => useLayoutStore())
 
-    expect(result.current.state).toEqual(stored)
+    expect(result.current.state).toEqual({ ...stored, simulatorAlignment: 'left', devtoolsPosition: 'inEditor' })
   })
 })
 

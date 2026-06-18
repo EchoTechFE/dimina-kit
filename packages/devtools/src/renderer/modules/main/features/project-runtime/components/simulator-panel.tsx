@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 import { Select } from '@/shared/components/ui/select'
 import { setNativeSimulatorBounds } from '@/shared/api'
 import { createPlacementAnchor, type Placement, type PlacementAnchorHandle } from '@dimina-kit/view-anchor'
+import { useDockLayoutEpoch } from '@dimina-kit/electron-deck/dock-react'
 import { cn } from '@/shared/lib/utils'
 import { DEVICES, ZOOM_OPTIONS } from '@/shared/constants'
 
@@ -42,10 +43,12 @@ export function SimulatorPanel({
   //
   // This component is the SOLE simulator-WCV anchor owner. It binds an imperative
   // `createPlacementAnchor` to the device-region div (NOT the engine-agnostic
-  // `useViewAnchor`): the simulator dock leaf is pinned to `fixedPx`, so dragging
-  // an ADJACENT splitter SHIFTS its x-position WITHOUT resizing it — a
-  // ResizeObserver never fires. `followGeometry: true` opens a windowed RAF
-  // geometry sentinel that re-publishes the moved rect frame-by-frame. The WCV is
+  // `useViewAnchor`). The simulator dock leaf is `minPx`-floored (flexible above
+  // the device width), so dragging an adjacent splitter both SHIFTS and RESIZES
+  // it. `followGeometry: true` opens a windowed RAF geometry sentinel that
+  // re-publishes the live rect (position AND size) frame-by-frame, so the WCV
+  // tracks the column as the user widens it (the DeviceShell inside keeps the
+  // phone at device-logical size and centers it on its gray desk). The WCV is
   // a main-process child view. Under DOM-panel keepalive (A3) SimulatorPanel is
   // NOT unmounted when its dock tab deactivates — its slot merely goes
   // `display:none` — so there is no unmount path to publish hidden on a tab
@@ -121,6 +124,23 @@ export function SimulatorPanel({
   useLayoutEffect(() => {
     anchorHandleRef.current?.update({ visible: true, publish })
   }, [zoom, publish])
+
+  // Follow a pure-translate layout reorder. A dock preset change (simulator
+  // left↔right flip, devtools-position move) reorders this panel's slot
+  // horizontally without resizing it, so the anchor's ResizeObserver never fires
+  // and the native WCV would freeze at its old x. `useDockLayoutEpoch` bumps on
+  // every committed layout mutation; pulsing the anchor on that edge opens the
+  // `followGeometry` RAF sentinel for a few frames AFTER React commits the
+  // reorder, re-measuring the moved slot and re-publishing the rect (the
+  // sentinel auto-closes once the geometry goes steady). The bounded duration is
+  // an upper guard against a commit deferred past the next frame. The mount run
+  // (epoch 0) pulses once over the just-published initial rect — a harmless
+  // steady-close. Outside a `<DockView>` the epoch is a constant 0 and this
+  // never re-fires.
+  const layoutEpoch = useDockLayoutEpoch()
+  useEffect(() => {
+    anchorHandleRef.current?.pulse(300)
+  }, [layoutEpoch])
 
   // Hard-unmount safety: the ref-callback `null` cleanup also disposes, but a
   // teardown that skips the ref cleanup must not leak a live anchor.

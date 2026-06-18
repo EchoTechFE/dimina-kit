@@ -176,3 +176,28 @@ export function isNoopRedock(
 	}
 	return false
 }
+
+/**
+ * Map a pointer x-position over a horizontal tab strip to an insertion index for
+ * a within-strip REORDER (the `dropPolicy:'reorder-only'` gesture). The strip is
+ * the dragged tab's own group; `tabRects` are the tab buttons' rects in visual
+ * order (each `left` is the rect's left edge, `width` its width). The index is
+ * the count of tabs whose MIDPOINT the pointer has passed: the LEFT half of a tab
+ * inserts BEFORE it, the RIGHT half (and the exact midpoint) inserts AFTER it. A
+ * pointer left of the first tab → 0; past the last tab → `tabRects.length`. Pure
+ * (no DOM): the caller measures the rects and passes the pointer x. An empty
+ * strip or a non-finite pointer → 0.
+ */
+export function computeReorderIndex(
+	tabRects: readonly { left: number; width: number }[],
+	pointerX: number,
+): number {
+	if (!Number.isFinite(pointerX)) return 0
+	let index = 0
+	for (const rect of tabRects) {
+		const midpoint = rect.left + rect.width / 2
+		if (pointerX >= midpoint) index += 1
+		else break
+	}
+	return index
+}

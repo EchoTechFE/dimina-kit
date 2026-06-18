@@ -4,6 +4,13 @@ import { StatusDot } from '@/shared/components/status-dot'
 import { cn } from '@/shared/lib/utils'
 import { HEADER_H } from '@/shared/constants'
 import { setSettingsVisible } from '@/shared/api'
+import type { LayoutModel, PanelRegistry } from '@dimina-kit/electron-deck/layout'
+import {
+  LayoutVisibilityToggles,
+  LayoutAlignmentToggle,
+  LayoutDevtoolsPositionToggles,
+} from './layout-controls'
+import type { LayoutStoreApi } from '../controllers/use-layout-store'
 
 interface ProjectToolbarProps {
   compileDropdownRef: React.RefObject<HTMLDivElement | null>
@@ -11,6 +18,13 @@ interface ProjectToolbarProps {
   onToggleCompilePanel: () => void
   onRelaunch: () => void | Promise<void>
   compileStatus: { status: string; message: string }
+  /** Dock model + registry powering the panel visibility + layout toggles. */
+  dockModel: LayoutModel
+  dockRegistry: PanelRegistry
+  /** Layout store — drives the alignment / devtools-position preset toggles. */
+  layout: LayoutStoreApi
+  /** Current device width — seeds a reopened simulator's fixed-px column. */
+  simPanelWidth: number
 }
 
 /**
@@ -28,6 +42,10 @@ export function ProjectToolbar({
   onToggleCompilePanel,
   onRelaunch,
   compileStatus,
+  dockModel,
+  dockRegistry,
+  layout,
+  simPanelWidth,
 }: ProjectToolbarProps) {
   return (
     <div className="flex flex-col shrink-0">
@@ -77,10 +95,23 @@ export function ProjectToolbar({
 
         <div className="flex-1 min-w-2" />
 
-        {/* Panel layout is owned entirely by the dock (<DockView>): drag a
-            panel's tab to re-dock it. The legacy visibility/alignment/
-            devtools-position preset toggles were removed with the FrameTree
-            layout they drove — free-form docking replaces them. */}
+        {/* Panel visibility toggles (模拟器 / 编辑器 / 调试器). The dock
+            (<DockView>) owns arrangement (drag a tab to re-dock; × to hide);
+            these restore the one-click show/hide affordance — hiding closes the
+            panel out of the tree, showing re-inserts it at its default position. */}
+        <LayoutVisibilityToggles model={dockModel} registry={dockRegistry} simPanelWidth={simPanelWidth} />
+
+        <ToolbarDivider />
+
+        {/* Simulator left/right alignment. */}
+        <LayoutAlignmentToggle model={dockModel} layout={layout} simPanelWidth={simPanelWidth} />
+
+        <ToolbarDivider />
+
+        {/* Devtools/debug region position presets (in-editor / below / right). */}
+        <LayoutDevtoolsPositionToggles model={dockModel} layout={layout} simPanelWidth={simPanelWidth} />
+
+        <ToolbarDivider />
 
         {/* Settings entry point. Stateless open-only: the embedded
             project-settings overlay owns its own close path, so the button

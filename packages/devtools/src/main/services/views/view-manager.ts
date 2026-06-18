@@ -447,6 +447,9 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     if (!simulatorViewAdded) {
       ctx.windows.mainWindow.contentView.addChildView(simulatorView)
       simulatorViewAdded = true
+      // Re-attaching this base overlay moved it to the top of the z-stack; keep
+      // any open settings/popover above it.
+      raiseTopOverlays()
     }
     simulatorView.setBounds(bounds)
   }
@@ -1337,6 +1340,23 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     }
   }
 
+  // Keep the TOP-tier overlays (settings, popover) above the BASE-tier native
+  // overlays (the native simulator WCV + the console/DevTools WCV). Native
+  // overlays are z-ordered by `addChildView` insertion order — the last-added
+  // sits on top — so RE-attaching a base overlay while a top overlay is open
+  // (e.g. the simulator re-shows on a tab switch, or the console bounds
+  // republish re-adds it) would move the base ABOVE the open settings/popover
+  // and occlude it. Whenever a base overlay is (re)added, re-append the open top
+  // overlays so they stay on top. Settings is re-appended before popover so a
+  // simultaneously-open popover ends up topmost. A no-op when neither is open
+  // (pinned by the z-order guard test).
+  function raiseTopOverlays(): void {
+    if (ctx.windows.mainWindow.isDestroyed()) return
+    const cv = ctx.windows.mainWindow.contentView
+    if (settingsView && settingsViewAdded) cv.addChildView(settingsView)
+    if (popoverView) cv.addChildView(popoverView)
+  }
+
   function showPopover(data: unknown): void {
     hidePopover()
     const popover = new WebContentsView({
@@ -1429,6 +1449,9 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     if (!nativeSimulatorViewAdded) {
       ctx.windows.mainWindow.contentView.addChildView(nativeSimulatorView)
       nativeSimulatorViewAdded = true
+      // Re-attaching this base overlay moved it to the top of the z-stack; keep
+      // any open settings/popover above it.
+      raiseTopOverlays()
     }
     nativeSimulatorView.setBounds(p.bounds)
     const simWc = nativeSimulatorView.webContents

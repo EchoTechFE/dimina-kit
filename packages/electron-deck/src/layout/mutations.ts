@@ -252,11 +252,13 @@ export function setConstraint(
 		? [...target.constraints]
 		: target.children.map(() => null)
 	base[childIndex] = constraint
-	// M3 guard: never produce an all-fixed split. If applying this constraint
-	// would leave EVERY child with a fixed-px constraint (0 flexible children),
+	// M3 guard: never produce an all-FIXED-px split. If applying this constraint
+	// would leave EVERY child `fixedPx`-locked (0 weight-sized children),
 	// `validateTree`/`parseLayout` would later reject the serialized tree (rrp
-	// requires >= 1 weight-sized child). You cannot pin the LAST flexible child —
-	// treat it as a NO-OP and return the input tree unchanged.
+	// requires >= 1 weight-sized child). You cannot fixedPx-pin the LAST flexible
+	// child — treat it as a NO-OP. A `minPx` child is FLEXIBLE (weight-sized with a
+	// floor), so it does NOT count toward "all fixed" — pinning a `minPx` floor is
+	// always allowed.
 	if (base.length > 0 && base.every(c => c !== null)) {
 		return t
 	}

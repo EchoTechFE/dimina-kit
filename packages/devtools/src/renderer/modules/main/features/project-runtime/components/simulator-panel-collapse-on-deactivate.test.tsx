@@ -79,7 +79,9 @@ vi.mock('@dimina-kit/view-anchor', () => ({
     opts: { visible: boolean; followGeometry?: boolean; guardDisplayNone?: boolean; publish: (p: Placement) => void },
   ) => {
     anchorCalls.push({ el, opts })
-    return { update: vi.fn(), dispose: vi.fn() }
+    // Handle mirrors the real `PlacementAnchorHandle` (update/dispose/pulse) —
+    // SimulatorPanel `pulse()`s on the dock layout epoch (mount + reorder).
+    return { update: vi.fn(), dispose: vi.fn(), pulse: vi.fn() }
   },
 }))
 

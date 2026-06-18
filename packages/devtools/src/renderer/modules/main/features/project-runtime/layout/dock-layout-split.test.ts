@@ -206,19 +206,19 @@ describe('buildDefaultDockTree — 5 debug panels grouped on the right', () => {
     expect(debugGroup!.active).toBe('wxml')
   })
 
-  it('keeps simulator pinned to the passed width via a fixedPx constraint, sibling flexible', () => {
-    // Bug guarded: the simulator must stay device-width-locked after the split.
+  it('keeps simulator floored at the passed width via a minPx constraint, sibling flexible', () => {
+    // Bug guarded: the simulator must never shrink below the device width.
     const tree = buildDefaultDockTree(375)
     const enc = findEnclosingSplitConstraints(tree.root, 'simulator')
     expect(enc).not.toBeNull()
-    expect(enc?.own).toEqual({ fixedPx: 375 })
+    expect(enc?.own).toEqual({ minPx: 375 })
     expect(enc?.siblings.some((c) => c === null)).toBe(true)
   })
 
   it('is parametric: a different width lands in the constraint', () => {
     const tree = buildDefaultDockTree(414)
     expect(validateTree(tree, KNOWN_7)).toEqual([])
-    const fixedPxValues = collectConstraints(tree.root).map((c) => c.fixedPx)
+    const fixedPxValues = collectConstraints(tree.root).map((c) => c.minPx)
     expect(fixedPxValues).toContain(414)
     expect(fixedPxValues).not.toContain(375)
   })
@@ -246,7 +246,7 @@ describe('buildDockModel — fallback safety under the new known-panel set', () 
 
     expect(restored).toEqual(original)
     expect(collectPanelIds(restored.root)).toEqual(KNOWN_7)
-    const fixedPxValues = collectConstraints(restored.root).map((c) => c.fixedPx)
+    const fixedPxValues = collectConstraints(restored.root).map((c) => c.minPx)
     expect(fixedPxValues).toContain(W)
     expect(fixedPxValues).not.toContain(375)
   })

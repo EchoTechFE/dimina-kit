@@ -456,3 +456,274 @@ describe('T1 constraints — existing mutations preserve constraints', () => {
 		expect(validateTree(out, knownOf(out))).toEqual([])
 	})
 })
+
+// ───────────────────────── T2 — minPx (FLEXIBLE MINIMUM) constraint ─────────────────────────
+//
+// A SECOND constraint kind is added alongside `fixedPx`. The new shape:
+//
+//     interface SizeConstraint { fixedPx?: number; minPx?: number }
+//
+// Exactly ONE of `fixedPx`/`minPx` is set; the value is finite and > 0. KEY
+// SEMANTIC: a `fixedPx` child is FIXED (locked, excluded from the flex pool); a
+// `minPx` child is FLEXIBLE (it participates in weight sizing) but has a pixel
+// floor. So "is this child fixed?" === "does its constraint have `fixedPx`?" — a
+// `minPx` child is NOT fixed.
+//
+// These are RED until the type/validation/mutation support minPx; the existing
+// fixedPx tests above must keep passing (the lock semantics are preserved).
+
+describe('T2 minPx — serialize / parse round-trip', () => {
+	// 1. A split carrying a `{ minPx: N }` on one child (and null/weight on the
+	// other) round-trips through serialize -> parse with the constraint intact,
+	// and validateTree returns [].
+	it('a {minPx} child survives serialize -> parse unchanged and validates clean', () => {
+		const t = tree({
+			kind: 'split',
+			id: 's0',
+			orientation: 'row',
+			children: [tabs('g1', ['p1'], 'p1'), tabs('g2', ['p2'], 'p2')],
+			sizes: [1, 3],
+			constraints: [{ minPx: 375 }, null],
+		})
+		const back = parseLayout(serializeLayout(t))
+		expect(back).toEqual(t)
+		const s = back.root as SplitNode
+		expect(s.constraints).toEqual([{ minPx: 375 }, null])
+		expect(validateTree(back, knownOf(back))).toEqual([])
+	})
+
+	it('a mix of {fixedPx} and {minPx} across children round-trips and validates clean', () => {
+		const t = tree({
+			kind: 'split',
+			id: 's0',
+			orientation: 'row',
+			children: [tabs('g1', ['p1'], 'p1'), tabs('g2', ['p2'], 'p2'), tabs('g3', ['p3'], 'p3')],
+			sizes: [1, 1, 1],
+			constraints: [{ minPx: 375 }, { fixedPx: 100 }, null],
+		})
+		const back = parseLayout(serializeLayout(t))
+		expect(back).toEqual(t)
+		expect(validateTree(back, knownOf(back))).toEqual([])
+	})
+})
+
+describe('T2 minPx — validateTree accepts minPx, rejects malformed', () => {
+	// 2. `{ minPx: 375 }` is VALID.
+	it('OK: a single {minPx} constraint with a flexible/null sibling', () => {
+		const t = tree({
+			kind: 'split',
+			id: 's0',
+			orientation: 'row',
+			children: [tabs('g1', ['p1'], 'p1'), tabs('g2', ['p2'], 'p2')],
+			sizes: [1, 1],
+			constraints: [{ minPx: 375 }, null],
+		})
+		expect(validateTree(t, knownOf(t))).toEqual([])
+		expect(() => parseLayout(serializeLayout(t))).not.toThrow()
+	})
+
+	// BOTH keys set => INVALID (exactly one of fixedPx/minPx).
+	it('PROBLEM: a constraint with BOTH fixedPx and minPx', () => {
+		const t = bad({
+			kind: 'split',
+			id: 'sBoth',
+			orientation: 'row',
+			children: [tabs('g1', ['p1'], 'p1'), tabs('g2', ['p2'], 'p2')],
+			sizes: [1, 1],
+			constraints: [{ fixedPx: 10, minPx: 20 }, null],
+		})
+		const problems = validateTree(t, new Set(['p1', 'p2']))
+		expect(problems.length).toBeGreaterThan(0)
+		const joined = problems.join('\n')
+		expect(joined).toContain('sBoth')
+		expect(joined).toContain('constraint')
+		expectRejects(() => parseLayout(JSON.stringify(t)))
+	})
+
+	// minPx must be finite > 0.
+	it('PROBLEM: a constraint with minPx <= 0 (zero or negative)', () => {
+		const zero = bad({
+			kind: 'split',
+			id: 'sZero',
+			orientation: 'row',
+			children: [tabs('g1', ['p1'], 'p1'), tabs('g2', ['p2'], 'p2')],
+			sizes: [1, 1],
+			constraints: [{ minPx: 0 }, null],
+		})
+		expect(validateTree(zero, new Set(['p1', 'p2'])).join('\n')).toContain('constraint')
+		expectRejects(() => parseLayout(JSON.stringify(zero)))
+
+		const neg = bad({
+			kind: 'split',
+			id: 'sNeg',
+			orientation: 'row',
+			children: [tabs('g1', ['p1'], 'p1'), tabs('g2', ['p2'], 'p2')],
+			sizes: [1, 1],
+			constraints: [{ minPx: -5 }, null],
+		})
+		expect(validateTree(neg, new Set(['p1', 'p2'])).join('\n')).toContain('constraint')
+		expectRejects(() => parseLayout(JSON.stringify(neg)))
+	})
+
+	it('PROBLEM: a constraint with a non-number minPx', () => {
+		const t = bad({
+			kind: 'split',
+			id: 'sStr',
+			orientation: 'row',
+			children: [tabs('g1', ['p1'], 'p1'), tabs('g2', ['p2'], 'p2')],
+			sizes: [1, 1],
+			constraints: [{ minPx: 'x' }, null],
+		})
+		expect(validateTree(t, new Set(['p1', 'p2'])).join('\n')).toContain('constraint')
+		expectRejects(() => parseLayout(JSON.stringify(t)))
+	})
+
+	it('PROBLEM: a non-finite minPx (NaN / Infinity)', () => {
+		const nan = bad({
+			kind: 'split',
+			id: 'sNaN',
+			orientation: 'row',
+			children: [tabs('g1', ['p1'], 'p1'), tabs('g2', ['p2'], 'p2')],
+			sizes: [1, 1],
+			constraints: [{ minPx: NaN }, null],
+		})
+		expect(validateTree(nan, new Set(['p1', 'p2'])).join('\n')).toContain('constraint')
+		expectRejects(() => parseLayout(JSON.stringify(nan)))
+
+		const inf = bad({
+			kind: 'split',
+			id: 'sInf',
+			orientation: 'row',
+			children: [tabs('g1', ['p1'], 'p1'), tabs('g2', ['p2'], 'p2')],
+			sizes: [1, 1],
+			constraints: [{ minPx: Infinity }, null],
+		})
+		expect(validateTree(inf, new Set(['p1', 'p2'])).join('\n')).toContain('constraint')
+		expectRejects(() => parseLayout(JSON.stringify(inf)))
+	})
+
+	// `{}` (neither key) is INVALID — exactly one of fixedPx/minPx must be set.
+	it('PROBLEM: a constraint object with NEITHER fixedPx nor minPx ({})', () => {
+		const t = bad({
+			kind: 'split',
+			id: 'sEmpty',
+			orientation: 'row',
+			children: [tabs('g1', ['p1'], 'p1'), tabs('g2', ['p2'], 'p2')],
+			sizes: [1, 1],
+			constraints: [{}, null],
+		})
+		const problems = validateTree(t, new Set(['p1', 'p2']))
+		expect(problems.length).toBeGreaterThan(0)
+		expect(problems.join('\n')).toContain('constraint')
+		expectRejects(() => parseLayout(JSON.stringify(t)))
+	})
+
+	// The all-fixed rejection NARROWS to fixedPx: a split whose every child is
+	// FIXED (fixedPx) is still invalid (needs >= 1 weight-sized). But a minPx
+	// child is FLEXIBLE, so a split where the only non-null constraints are minPx
+	// is VALID.
+	it('OK: split [ {minPx:375}, null ] — the minPx child is flexible', () => {
+		const t = tree({
+			kind: 'split',
+			id: 's0',
+			orientation: 'row',
+			children: [tabs('g1', ['p1'], 'p1'), tabs('g2', ['p2'], 'p2')],
+			sizes: [1, 1],
+			constraints: [{ minPx: 375 }, null],
+		})
+		expect(validateTree(t, knownOf(t))).toEqual([])
+	})
+
+	it('OK: split [ {minPx:375}, null ] — the null child is the weight-sized one', () => {
+		const t = tree({
+			kind: 'split',
+			id: 's0',
+			orientation: 'row',
+			children: [tabs('g1', ['p1'], 'p1'), tabs('g2', ['p2'], 'p2')],
+			sizes: [1, 1],
+			constraints: [{ minPx: 375 }, null],
+		})
+		expect(validateTree(t, knownOf(t))).toEqual([])
+		expect(() => parseLayout(serializeLayout(t))).not.toThrow()
+	})
+
+	// Both `fixedPx` and `minPx` are PX-SIZED (excluded from the weight pool), so a
+	// split with NO weight-sized child trips the rrp footgun — regardless of which
+	// px-constraint kind. `minPx` is "px with a draggable floor", not weight-sized.
+	it('PROBLEM: split [ {minPx:375}, {fixedPx:100} ] — all px-sized, needs a weight child', () => {
+		const t = bad({
+			kind: 'split',
+			id: 'sAllPx',
+			orientation: 'row',
+			children: [tabs('g1', ['p1'], 'p1'), tabs('g2', ['p2'], 'p2')],
+			sizes: [1, 1],
+			constraints: [{ minPx: 375 }, { fixedPx: 100 }],
+		})
+		expect(validateTree(t, new Set(['p1', 'p2'])).join('\n')).toContain('sAllPx')
+		expectRejects(() => parseLayout(JSON.stringify(t)))
+	})
+
+	it('PROBLEM: split [ {minPx:375}, {minPx:200} ] — all px-sized, needs a weight child', () => {
+		const t = bad({
+			kind: 'split',
+			id: 'sAllPx',
+			orientation: 'row',
+			children: [tabs('g1', ['p1'], 'p1'), tabs('g2', ['p2'], 'p2')],
+			sizes: [1, 1],
+			constraints: [{ minPx: 375 }, { minPx: 200 }],
+		})
+		expect(validateTree(t, new Set(['p1', 'p2'])).join('\n')).toContain('sAllPx')
+		expectRejects(() => parseLayout(JSON.stringify(t)))
+	})
+
+	// The all-fixed guard must STILL reject an all-fixedPx split (preserved rule).
+	it('PROBLEM: a split where EVERY child is fixedPx is still rejected (rule narrows to fixedPx, not minPx)', () => {
+		const t = bad({
+			kind: 'split',
+			id: 'sAllFixed',
+			orientation: 'row',
+			children: [tabs('g1', ['p1'], 'p1'), tabs('g2', ['p2'], 'p2')],
+			sizes: [1, 1],
+			constraints: [{ fixedPx: 100 }, { fixedPx: 200 }],
+		})
+		const problems = validateTree(t, new Set(['p1', 'p2']))
+		expect(problems.length).toBeGreaterThan(0)
+		expect(problems.join('\n')).toContain('sAllFixed')
+		expectRejects(() => parseLayout(JSON.stringify(t)))
+	})
+})
+
+describe('T2 minPx — setConstraint sets a minPx constraint', () => {
+	// 4. setConstraint(tree, splitId, childIndex, { minPx: 400 }) produces a child
+	// carrying { minPx: 400 } and the tree round-trips through validate clean.
+	it('lazily creates the constraints array and writes a {minPx} slot', () => {
+		const t = legacyTree() // s0 has no constraints field
+		const before = frozenCopy(t)
+		const out = setConstraint(t, 's0', 0, { minPx: 400 })
+		// pure
+		expect(out).not.toBe(t)
+		expect(t).toEqual(before)
+		const s = out.root as SplitNode
+		expect(s.constraints).toEqual([{ minPx: 400 }, null])
+		expect(s.constraints!.length).toBe(s.children.length)
+		expect(structuralProblems(out)).toEqual([])
+		expect(validateTree(out, knownOf(out))).toEqual([])
+	})
+
+	// `minPx` is PX-SIZED (excluded from the weight pool), so pinning EVERY child
+	// with a constraint (minPx or fixedPx) would leave NO weight-sized child — the
+	// M3 guard treats that as a NO-OP (you can't px-constrain the last weight child).
+	it('setting minPx on the last weight-sized child is a NO-OP (would leave no weight child)', () => {
+		const t = tree({
+			kind: 'split',
+			id: 's0',
+			orientation: 'row',
+			children: [tabs('g1', ['p1'], 'p1'), tabs('g2', ['p2'], 'p2')],
+			sizes: [1, 1],
+			constraints: [{ minPx: 375 }, null],
+		})
+		// Pinning child 1 too → both px-sized → no-op, tree returned unchanged.
+		const out = setConstraint(t, 's0', 1, { minPx: 200 })
+		expect(out).toBe(t)
+	})
+})

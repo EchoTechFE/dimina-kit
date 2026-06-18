@@ -19,7 +19,7 @@ import { useViewAnchor, createPlacementAnchor } from '@dimina-kit/view-anchor'
 import type { Placement, PlacementAnchorHandle } from '@dimina-kit/view-anchor'
 import { DockView } from '@dimina-kit/electron-deck/dock-react'
 import { serializeLayout, setConstraint } from '@dimina-kit/electron-deck/layout'
-import type { LayoutNode } from '@dimina-kit/electron-deck/layout'
+import type { LayoutModel, LayoutNode, PanelRegistry } from '@dimina-kit/electron-deck/layout'
 import {
   buildDockModel,
   buildDockRegistry,
@@ -61,6 +61,16 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
 
   const layout = useLayoutStore()
   const { state: layoutState } = layout
+
+  // Dock model + registry are owned HERE (lifted out of DockableLayout) so the
+  // toolbar's Panels visibility menu and the DockView render from ONE shared
+  // model. ProjectRuntime is keyed on `project.path` at its mount site
+  // (main.tsx), so this `useState` initializer rebuilds the model per project —
+  // seeding from the persisted tree once, exactly as DockableLayout did before.
+  const [dockModel] = useState(() =>
+    buildDockModel(layoutState.dockTree ?? null, device.simPanelWidth, DOCK_PANEL_IDS),
+  )
+  const dockRegistry = useMemo(() => buildDockRegistry(), [])
 
   // Host-controllable toolbar WCV (sits above ProjectToolbar). Dynamic-height
   // loop: the toolbar WCV's own renderer advertises its intrinsic content
@@ -238,6 +248,10 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
         onToggleCompilePanel={popover.toggleCompilePanel}
         onRelaunch={() => session.relaunch()}
         compileStatus={session.compileStatus}
+        dockModel={dockModel}
+        dockRegistry={dockRegistry}
+        layout={layout}
+        simPanelWidth={device.simPanelWidth}
       />
 
       <div className="flex-1 min-h-0 overflow-hidden">
@@ -248,11 +262,12 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
           so the new project's persisted tree seeds a fresh model.
         */}
         <DockableLayout
-          key={project.path}
-          seedDockTree={layoutState.dockTree ?? null}
+          dockModel={dockModel}
+          dockRegistry={dockRegistry}
           simPanelWidth={device.simPanelWidth}
           renderDomPanel={renderDomPanel}
           onPersistTree={layout.setDockTree}
+          persistedTree={layoutState.dockTree ?? null}
         />
       </div>
     </div>
@@ -260,18 +275,30 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
 }
 
 interface DockableLayoutProps {
-  /** Persisted opaque tree to SEED the model (mount-only; never re-seeds). */
-  seedDockTree: string | null
+  /** The shared dock model, built + owned by ProjectRuntime. */
+  dockModel: LayoutModel
+  /** The shared panel registry, built + owned by ProjectRuntime. */
+  dockRegistry: PanelRegistry
   /**
-   * Current device pixel width. SEEDS the simulator's fixed-px leaf at mount AND
-   * re-pins it live on a device change (the picker changes width without a
-   * remount — without this the simulator leaf would keep the old device width).
+   * Current device pixel width. Re-pins the simulator's fixed-px leaf live on a
+   * device change (the picker changes width without a remount — without this the
+   * simulator leaf would keep the old device width).
    */
   simPanelWidth: number
   /** DOM-panel renderer for simulator/editor/debug (console is native → NativeSlot). */
   renderDomPanel: (panelId: string, opts: { active: boolean }) => ReactNode
   /** Persist DockView's in-session layout mutations (opaque serialized tree). */
   onPersistTree: (serialized: string) => void
+  /**
+   * The RAW persisted tree string the model was seeded from (or null on a fresh
+   * install). Used ONLY for the mount-time force-persist: `buildDockModel` heals
+   * a flexible child collapsed to a ~0 weight, but that healing lives in the
+   * model's INITIAL state and fires no `subscribe` emission — so without a
+   * compare-on-mount the stale 0-weight string would survive in localStorage and
+   * re-collapse the panel next launch. When the model's current serialization
+   * differs from this, we persist the healed value once.
+   */
+  persistedTree: string | null
 }
 
 /** Does `simulator` appear anywhere in this node's subtree? */
@@ -280,8 +307,8 @@ function subtreeHasSimulator(node: LayoutNode): boolean {
   return node.children.some(subtreeHasSimulator)
 }
 
-/** The fixed-px value of the constraint at a located split/child site, or null. */
-function constraintFixedPxAt(
+/** The min-px floor of the constraint at a located split/child site, or null. */
+function constraintMinPxAt(
   root: LayoutNode,
   site: { splitId: string; childIndex: number },
 ): number | null {
@@ -289,7 +316,7 @@ function constraintFixedPxAt(
     if (node.kind === 'tabs') return null
     if (node.id === site.splitId) {
       const c = node.constraints?.[site.childIndex] ?? null
-      return c ? c.fixedPx : null
+      return c?.minPx ?? null
     }
     for (const child of node.children) {
       const hit = find(child)
@@ -381,16 +408,7 @@ function DockDebugTab(
 }
 
 function DockableLayout(props: DockableLayoutProps): ReactNode {
-  const { simPanelWidth, renderDomPanel, onPersistTree } = props
-
-  // SYNCHRONOUS model build. Seeds are read ONCE in the initializer; a later
-  // persisted-tree change never rebuilds the model (that would discard the user's
-  // live drags). A project switch remounts this component (the parent keys it on
-  // `project.path`), so the model reseeds cleanly.
-  const [dockModel] = useState(() =>
-    buildDockModel(props.seedDockTree, simPanelWidth, DOCK_PANEL_IDS),
-  )
-  const dockRegistry = useMemo(() => buildDockRegistry(), [])
+  const { dockModel, dockRegistry, simPanelWidth, renderDomPanel, onPersistTree, persistedTree } = props
 
   // Native CONSOLE overlay (the simulator's Chromium DevTools WebContentsView).
   // Its bounds ride a SEPARATE channel (`publishSimulatorDevtoolsBounds`) from
@@ -452,22 +470,21 @@ function DockableLayout(props: DockableLayoutProps): ReactNode {
     [publishConsole],
   )
 
-  // Live device-width re-pin (red-line: the FrameTree path followed device width
-  // live; the model seeds width only at mount). On a device change the picker
-  // updates `simPanelWidth` without a remount, so re-pin the simulator's fixed-px
-  // constraint in the model. Skip when the constraint already equals
-  // `simPanelWidth` (no redundant emission → no needless re-render/persist, Codex
-  // N1) or when the simulator isn't fixed-px pinned (a re-dock moved it).
+  // Live device-width re-pin: the simulator column's `minPx` FLOOR must follow
+  // the device width. On a device change the picker updates `simPanelWidth`
+  // without a remount, so re-pin the simulator's `minPx` constraint in the model.
+  // Skip when the floor already equals `simPanelWidth` (no redundant emission, N1)
+  // or when the simulator isn't min-px floored (a re-dock moved it out).
   useEffect(() => {
     const root = dockModel.get().root
     const site = findSimulatorConstraintSite(root)
     if (!site) return
-    if (constraintFixedPxAt(root, site) === simPanelWidth) return
+    if (constraintMinPxAt(root, site) === simPanelWidth) return
     dockModel.apply((t) => {
       const cur = findSimulatorConstraintSite(t.root)
       if (!cur) return t
-      if (constraintFixedPxAt(t.root, cur) === simPanelWidth) return t
-      return setConstraint(t, cur.splitId, cur.childIndex, { fixedPx: simPanelWidth })
+      if (constraintMinPxAt(t.root, cur) === simPanelWidth) return t
+      return setConstraint(t, cur.splitId, cur.childIndex, { minPx: simPanelWidth })
     })
   }, [dockModel, simPanelWidth])
 
@@ -487,6 +504,20 @@ function DockableLayout(props: DockableLayoutProps): ReactNode {
     })
     return unsub
   }, [dockModel, onPersistTree])
+
+  // Force-persist a HEALED tree on mount. `buildDockModel` runs
+  // `sanitizeFlexibleWeights` on the restored tree (lifting a flexible child
+  // collapsed to a ~0 weight), but that healing is the model's INITIAL state and
+  // fires no `subscribe` emission — so the stale 0-weight string would otherwise
+  // survive in localStorage and re-collapse the panel on the next launch. If the
+  // model's current serialization differs from the raw persisted string, write
+  // the healed value back ONCE (mount-only: deps are empty so a later in-session
+  // mutation goes through the subscribe path above, not here).
+  useEffect(() => {
+    const current = serializeLayout(dockModel.get())
+    if (current !== persistedTree) onPersistTree(current)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   return (
     <DockView

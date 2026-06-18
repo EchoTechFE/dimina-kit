@@ -32,8 +32,8 @@ startElectronDeck({
 | host 侧 control-bus / capability / trust 原语 | `@dimina-kit/electron-deck/host` |
 | preload bridge `exposeDeckBridge()` | `@dimina-kit/electron-deck/preload` |
 | renderer client `createDeckClient<HS, EV>()` | `@dimina-kit/electron-deck/client`（浏览器构建：`/client/browser`） |
-| layout-as-data 引擎（`SplitNode`/`TabGroupNode` 树、`movePanel`/`splitPanel`/`closePanel`/`setActive`/`setSizes` mutation、`serializeLayout`/`parseLayout`/`validateTree`、`createLayoutModel` 单写者可观察模型、panel registry） | `@dimina-kit/electron-deck/layout` |
-| `<DockView>` React 渲染器（把 layout 树渲染成可拖拽 re-dock / tab / 分屏的 docking UI） | `@dimina-kit/electron-deck/dock-react` |
+| layout-as-data 引擎（`SplitNode`/`TabGroupNode` 树、`movePanel`/`splitPanel`/`closePanel`/`insertPanel`/`setActive`/`setSizes`/`setConstraint` mutation、`serializeLayout`/`parseLayout`/`validateTree`、`createLayoutModel` 单写者可观察模型、panel registry，descriptor 可带 `PanelCapabilities`：`draggable`/`dropPolicy`/`hideTab`；split 子可带 `SizeConstraint`：`fixedPx` 锁死 / `minPx` 柔性下限） | `@dimina-kit/electron-deck/layout` |
+| `<DockView>` React 渲染器（把 layout 树渲染成可拖拽 re-dock / tab / 分屏的 docking UI；按 descriptor 的 `PanelCapabilities` 约束拖拽——`draggable:false` 锁定为不可拖且不可作落点锚，`dropPolicy:'reorder-only'` 只允许组内重排）+ `computeReorderIndex` 纯几何 | `@dimina-kit/electron-deck/dock-react` |
 
 ## 文档
 
