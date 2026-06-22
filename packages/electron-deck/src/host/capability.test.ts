@@ -6,12 +6,11 @@ import {
 } from './capability.js'
 
 /**
- * P4 Phase B — capability grant gate (policy + grant lifetime).
+ * Capability grant gate (policy + grant lifetime).
  *
- * Source of truth: the Phase B CONTRACT. These tests are FAILING-FIRST: the
- * module `./capability.js` does not yet exist, so the whole file is RED at
- * import time until the implementer creates `createCapabilityRegistry` / the
- * `Grant` interface. They use the REAL `createScope()` for senderScope and
+ * Source of truth: the CONTRACT. These tests pin the `createCapabilityRegistry`
+ * / `Grant` contract exported from `./capability.js`. They use the REAL
+ * `createScope()` for senderScope and
  * targetScope so the lifetime-binding semantics (reset/close → revoke) are
  * exercised against the production Scope primitive, not a fake.
  *

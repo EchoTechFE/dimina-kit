@@ -16,8 +16,8 @@
  * Locked contract:
  *  - the wire name is the string literal 'view:host-toolbar:get-height'
  *    (asserted literally, not via the enum, so re-registering a different wire
- *    under the same constant is also caught — the implementer should add a
- *    `ViewChannel.HostToolbarGetHeight` entry carrying this exact string);
+ *    under the same constant is also caught; the `ViewChannel.HostToolbarGetHeight`
+ *    entry carries this exact string);
  *  - it is an ipcMain.HANDLE registration (invoke round-trip — the renderer
  *    needs the value back), not a fire-and-forget `on`;
  *  - the handler delegates to `ctx.views.getHostToolbarHeight()` (live, not
@@ -29,7 +29,7 @@
  * Electron stub: same handle-capturing pattern as
  * app-no-header-height-channel.test.ts.
  *
- * RED today: views.ts registers no such channel.
+ * Guards that views.ts registers this pull channel.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 

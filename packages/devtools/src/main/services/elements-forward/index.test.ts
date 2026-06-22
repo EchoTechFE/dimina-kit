@@ -321,15 +321,10 @@ describe('installElementsForward — routing & passthrough', () => {
 // ── generation isolation ──────────────────────────────────────────────────────
 
 describe('installElementsForward — generation isolation', () => {
-  // CORRECTED (by implementer, flagged): this test previously used a SINGLE-guest
-  // bridge and fired `activePage` (which under the old `generation` counter bumped
-  // staleness even though the active guest never changed), then asserted the
-  // in-flight command errored. That fossilised the same over-eager-staleness
-  // defect as B2/MINOR-3 — a no-op activePage to the SAME guest must NOT invalidate
-  // its own in-flight command. The legitimate contract (consistent with the
-  // independently-authored MINOR-3 test) is: a command errors only when the active
-  // guest ACTUALLY changes to a DIFFERENT guest while it was in flight. We switch
-  // to a separate `other` guest to express that.
+  // A no-op activePage to the SAME guest must NOT invalidate its own in-flight
+  // command. A command errors only when the active guest ACTUALLY changes to a
+  // DIFFERENT guest while it was in flight. We switch to a separate `other` guest
+  // to express that.
   it('drops a late response after the active guest switched to a DIFFERENT guest', async () => {
     vi.useFakeTimers()
     try {
@@ -370,16 +365,10 @@ describe('installElementsForward — generation isolation', () => {
     }
   })
 
-  // CORRECTED (B2): this test previously emitted from the *same* guest after an
-  // activePage bump and asserted the event was DROPPED. That fossilised the B2
-  // bug — with a single-guest bridge, an activePage event re-activates that very
-  // guest, so its events must be RESTORED, not dropped. Asserting "dropped" there
-  // locked in the stale-`wiredGen` defect. The legitimate scenario this test
-  // *means* to cover is: a guest that is NO LONGER active (we switched to a
-  // DIFFERENT guest) must not leak its events into the now-current tree. We make
-  // that explicit by switching to a separate `other` guest before the stale emit.
-  // (The "switch back to an old guest restores its events" contract now lives in
-  // its own dedicated B2 test below.)
+  // A guest that is NO LONGER active (we switched to a DIFFERENT guest) must not
+  // leak its events into the now-current tree. We make that explicit by switching
+  // to a separate `other` guest before the stale emit. (The "switch back to an old
+  // guest restores its events" contract lives in its own dedicated test below.)
   it('drops a render EVENT from a guest that is no longer the active one', async () => {
     vi.useFakeTimers()
     try {
@@ -415,14 +404,13 @@ describe('installElementsForward — generation isolation', () => {
     }
   })
 
-  // ── B2: re-activating an existing (reused) render guest restores its events ──
-  // MAJOR bug B2: render guests are NOT destroyed on switchTab/navigateBack — the
-  // target guest is an existing, alive, REUSED wc. When we switch A→B→A and land
-  // back on the already-wired guest A, A's DOM-domain events must be re-injected
-  // into the front-end again. The current impl snapshots `wiredGen` at first wire
-  // and `wireGuestEvents` early-returns on re-prime (guest already in
-  // `wiredGuests`), so A's listener keeps its stale generation and its events are
-  // dropped FOREVER after the round-trip. This RED test pins the correct contract.
+  // ── re-activating an existing (reused) render guest restores its events ──
+  // Render guests are NOT destroyed on switchTab/navigateBack — the target guest
+  // is an existing, alive, REUSED wc. When we switch A→B→A and land back on the
+  // already-wired guest A, A's DOM-domain events must be re-injected into the
+  // front-end again. A scheme that snapshots a generation at first wire and
+  // early-returns on re-prime would leave A's listener with a stale generation and
+  // drop its events forever after the round-trip.
   it('B2: restores event forwarding when switching back to a previously-wired guest', async () => {
     vi.useFakeTimers()
     try {
@@ -458,8 +446,8 @@ describe('installElementsForward — generation isolation', () => {
       await vi.advanceTimersByTimeAsync(5)
 
       // 5. CONTRACT: A's event must be re-injected into the front-end. It is the
-      // active tree again — dropping it (because A's first-wire generation is now
-      // stale) is the B2 defect.
+      // active tree again — dropping it because A's first-wire generation is now
+      // stale is the defect this guards against.
       expect(dispatchedMatching(devtoolsWc, 'A-restored').length).toBeGreaterThan(0)
 
       // Positive control (no over-correction): while A is active, B is NOT — a
@@ -475,11 +463,11 @@ describe('installElementsForward — generation isolation', () => {
     }
   })
 
-  // ── MINOR-3: destroying a non-active OLD guest must not error the ACTIVE
-  // guest's in-flight routed command. `onDestroyed` bumps the global generation;
-  // a too-coarse generation scheme would then settle the current guest's pending
-  // response as 'stale render generation'. This pins that the active guest's
-  // command still resolves with its real result. RED if the impl can't isolate.
+  // Destroying a non-active OLD guest must not error the ACTIVE guest's in-flight
+  // routed command. `onDestroyed` bumps the global generation; a too-coarse
+  // generation scheme would then settle the current guest's pending response as
+  // 'stale render generation'. The active guest's command must still resolve with
+  // its real result.
   it('MINOR-3: destroying an old non-active guest does not stale the active guest command', async () => {
     vi.useFakeTimers()
     try {

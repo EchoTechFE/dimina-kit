@@ -12,8 +12,7 @@ import { writeUntilPredicate, writeUntilSettled } from './watch-rebuild.testutil
  * below depend on a REAL chokidar inotify watch (fork is mocked, chokidar is
  * not). Under CI load (concurrent real dmcc compile in
  * open-project-compile-log.test.ts pegging CPU) a single fs.writeFileSync's
- * inotify event can be dropped, hanging `await rebuilt`/`vi.waitFor` forever
- * (PR #44 30s timeout at the "fork exactly once across … 2 rebuilds" test).
+ * inotify event can be dropped, hanging `await rebuilt`/`vi.waitFor` forever.
  * Count-agnostic / `>=` waiters are wrapped in writeUntilSettled /
  * writeUntilPredicate, which RE-WRITE the source file (micro-varied content →
  * fresh inotify event) until the rebuild lands; the rebuild scheduler
@@ -23,16 +22,12 @@ import { writeUntilPredicate, writeUntilSettled } from './watch-rebuild.testutil
  */
 
 /**
- * FORK-ARCHITECTURE WAVE (dmcc 编译子进程化) — TDD contract for the PARENT
- * side: `openProject` orchestrating a long-lived forked compile worker
- * (NOT yet implemented).
+ * Contract for the PARENT side: `openProject` orchestrating a long-lived
+ * forked compile worker.
  *
- * ⚠️ ARCHITECTURE-DECISION CHANGE (user-approved, 2026-06-12):
- * Compilation moves from the in-process `require('@dimina/compiler')` call
- * (src/index.ts:104-105 with its host-global `process.chdir`) into a forked
- * long-lived child process. The tee-style `withCapturedStdio` contract from
- * ROUND 2 was deleted (see compile-log.test.ts header); THIS file pins its
- * replacement. Explicit architecture correction, not goalpost-moving.
+ * Compilation runs in a forked long-lived child process (which chdirs in its
+ * own process) rather than the in-process `require('@dimina/compiler')` call
+ * with its host-global `process.chdir`.
  *
  * Parent-side contract pinned here (child_process.fork is mocked; the fake
  * child is an EventEmitter with PassThrough stdout/stderr + send/kill spies):
@@ -616,10 +611,10 @@ describe('openProject — fork-based compile worker orchestration', () => {
 })
 
 /**
- * LEAK-PROOFING WAVE (项目关闭时保证编译子进程同步关闭) — close-time guards on
- * the exported `createCompileWorker` directly (same mocked fork as above).
- * Real process death is pinned by `compile-worker-leak.test.ts`; these pin
- * the parent-side STATE MACHINE around close:
+ * Close-time guards on the exported `createCompileWorker` directly (same
+ * mocked fork as above). Real process death is pinned by
+ * `compile-worker-leak.test.ts`; these pin the parent-side STATE MACHINE
+ * around close:
  *   - close with a build in flight kills immediately and SETTLES the pending
  *     promise (a hung promise wedges the rebuild scheduler — and a scheduler
  *     wedged at close time is itself a teardown leak),
@@ -713,23 +708,22 @@ describe('createCompileWorker — close-time leak guards (direct use)', () => {
 })
 
 /**
- * CODEX-REVIEW REGRESSION WAVE (fix/editor-hot-reload-and-simulator-leftovers)
- * — failing regression tests for review findings M1 / M2 / M3 / m7. Same
- * mocked-fork harness as above; each test names the finding it pins.
+ * Regression guards for worker error replies, fork errors, close semantics,
+ * and the trailing line. Same mocked-fork harness as above.
  *
- *  M1  a `{ type:'result', error }` reply is currently resolved as a SUCCESS
- *      with appInfo:null — it must reject the in-flight build (message passed
- *      through) and surface via onBuildError on the rebuild path.
- *  M2  a child 'error' event (spawn/IPC failure) is swallowed; Node does NOT
- *      guarantee an accompanying 'exit', so the in-flight build hangs forever
- *      and the dead child is never replaced.
- *  M3  close() kills and returns immediately — it must return a promise that
- *      resolves only after the child actually exited, and must settle the
- *      in-flight build itself (not rely on the child cooperating with exit).
- *  m7  a final line without a trailing newline is buffered forever — it must
- *      be flushed to onLog exactly once when the stream ends.
+ *  - a `{ type:'result', error }` reply must NOT resolve as a SUCCESS with
+ *    appInfo:null — it must reject the in-flight build (message passed
+ *    through) and surface via onBuildError on the rebuild path.
+ *  - a child 'error' event (spawn/IPC failure) must not be swallowed; Node
+ *    does NOT guarantee an accompanying 'exit', so the in-flight build would
+ *    hang forever and the dead child would never be replaced.
+ *  - close() must return a promise that resolves only after the child actually
+ *    exited, and must settle the in-flight build itself (not rely on the child
+ *    cooperating with exit).
+ *  - a final line without a trailing newline must be flushed to onLog exactly
+ *    once when the stream ends (not buffered forever).
  */
-describe('codex review regressions — worker error replies, fork errors, close semantics, trailing line (M1/M2/M3/m7)', () => {
+describe('worker error replies, fork errors, close semantics, trailing line', () => {
 	const REQUEST = {
 		projectPath: '/tmp/p',
 		outputDir: '/tmp/out',
@@ -753,7 +747,7 @@ describe('codex review regressions — worker error replies, fork errors, close 
 		})
 	}
 
-	it('M1: build() rejects (error message passed through) when the worker reply carries an error — not a silent appInfo:null success', async () => {
+	it('build() rejects (error message passed through) when the worker reply carries an error — not a silent appInfo:null success', async () => {
 		useSilentChildren()
 		const worker = devkit.createCompileWorker({})
 		const pending = worker.build(REQUEST)
@@ -777,7 +771,7 @@ describe('codex review regressions — worker error replies, fork errors, close 
 		await settled
 	}, 45_000)
 
-	it('M1: a rebuild whose worker reply carries an error settles through onBuildError — NOT through onRebuild as a fake hot-reload success', async () => {
+	it('a rebuild whose worker reply carries an error settles through onBuildError — NOT through onRebuild as a fake hot-reload success', async () => {
 		const root = makeFixture()
 		const buildErrors: unknown[] = []
 		const rebuilds: unknown[] = []
@@ -826,7 +820,7 @@ describe('codex review regressions — worker error replies, fork errors, close 
 		).toHaveLength(0)
 	}, 45_000)
 
-	it("M2: a fork 'error' event with NO accompanying 'exit' settles the in-flight build (bounded) and the next build re-forks a fresh worker", async () => {
+	it("a fork 'error' event with NO accompanying 'exit' settles the in-flight build (bounded) and the next build re-forks a fresh worker", async () => {
 		useSilentChildren()
 		const worker = devkit.createCompileWorker({})
 		const pending = worker.build(REQUEST)
@@ -861,7 +855,7 @@ describe('codex review regressions — worker error replies, fork errors, close 
 		await expect(second).resolves.toEqual(expect.objectContaining({ appId: WORKER_APP.appId }))
 	}, 45_000)
 
-	it("M2: 'error' followed by a LATE 'exit' is idempotent — the stale exit must not settle the NEXT build on the fresh worker", async () => {
+	it("'error' followed by a LATE 'exit' is idempotent — the stale exit must not settle the NEXT build on the fresh worker", async () => {
 		useSilentChildren()
 		const worker = devkit.createCompileWorker({})
 		const pending = worker.build(REQUEST)
@@ -873,7 +867,7 @@ describe('codex review regressions — worker error replies, fork errors, close 
 		first.emit('error', new Error('spawn failure'))
 		expect(
 			await raceSettle(pending, 2000),
-			"the 'error' event alone must settle the in-flight build (see the companion M2 test)",
+			"the 'error' event alone must settle the in-flight build",
 		).toBe('rejected')
 
 		// Start the recovery build, THEN let the dead child's 'exit' fire late
@@ -897,7 +891,7 @@ describe('codex review regressions — worker error replies, fork errors, close 
 		).resolves.toEqual(expect.objectContaining({ appId: WORKER_APP.appId }))
 	}, 45_000)
 
-	it("M3: close() returns a promise that resolves only AFTER the child actually exited — kill-and-return is not a close", async () => {
+	it("close() returns a promise that resolves only AFTER the child actually exited — kill-and-return is not a close", async () => {
 		const worker = devkit.createCompileWorker({})
 		await worker.build(REQUEST)
 		const child = children[0] as FakeChild
@@ -929,7 +923,7 @@ describe('codex review regressions — worker error replies, fork errors, close 
 		await (closeResult as Promise<void>)
 	}, 45_000)
 
-	it('M3: close() itself rejects the in-flight build — even when the child never emits exit', async () => {
+	it('close() itself rejects the in-flight build — even when the child never emits exit', async () => {
 		useSilentChildren()
 		const worker = devkit.createCompileWorker({})
 		const pending = worker.build(REQUEST)
@@ -950,18 +944,17 @@ describe('codex review regressions — worker error replies, fork errors, close 
 	}, 45_000)
 
 	/**
-	 * CODEX RE-REVIEW — M3 NOT-RESOLVED follow-up. `settleDeath`'s
-	 * `removeAllListeners()` also strips the `once('exit', resolve)` that
-	 * close() registered on the SAME child: when a child dies through the
-	 * 'error' path while a close() is in flight (kill sent, exit not yet
-	 * emitted), the closePromise loses its only resolver and hangs forever.
-	 * Contract: a child 'error' during an in-flight close is a death signal
-	 * (Node does NOT guarantee an 'exit' after 'error' — see M2) — the close
+	 * `settleDeath`'s `removeAllListeners()` must not strip the
+	 * `once('exit', resolve)` that close() registered on the SAME child: when a
+	 * child dies through the 'error' path while a close() is in flight (kill
+	 * sent, exit not yet emitted), the closePromise must not lose its only
+	 * resolver and hang forever. A child 'error' during an in-flight close is a
+	 * death signal (Node does NOT guarantee an 'exit' after 'error') — the close
 	 * promise must still resolve, whether a late 'exit' follows or never comes.
-	 * The normal-exit-resolves case is already pinned above ("M3: close()
-	 * returns a promise that resolves only AFTER the child actually exited").
+	 * The normal-exit-resolves case is pinned above ("close() returns a promise
+	 * that resolves only AFTER the child actually exited").
 	 */
-	it("M3 follow-up: a child 'error' during an in-flight close() must not strip the close resolver — closePromise resolves even though only a LATE 'exit' follows", async () => {
+	it("a child 'error' during an in-flight close() must not strip the close resolver — closePromise resolves even though only a LATE 'exit' follows", async () => {
 		const worker = devkit.createCompileWorker({})
 		await worker.build(REQUEST)
 		const child = children[0] as FakeChild
@@ -986,7 +979,7 @@ describe('codex review regressions — worker error replies, fork errors, close 
 		).toBe('resolved')
 	}, 45_000)
 
-	it("M3 follow-up: a child 'error' during an in-flight close() with NO 'exit' ever resolves the close too — 'error' is a death signal, not a wait-longer signal", async () => {
+	it("a child 'error' during an in-flight close() with NO 'exit' ever resolves the close too — 'error' is a death signal, not a wait-longer signal", async () => {
 		const worker = devkit.createCompileWorker({})
 		await worker.build(REQUEST)
 		const child = children[0] as FakeChild
@@ -995,8 +988,8 @@ describe('codex review regressions — worker error replies, fork errors, close 
 		const closeResult = worker.close()
 		expect(child.kill).toHaveBeenCalled()
 
-		// Node does NOT guarantee an 'exit' after 'error' (the exact premise M2
-		// pinned for builds): the lone 'error' must settle the close as well.
+		// Node does NOT guarantee an 'exit' after 'error': the lone 'error' must
+		// settle the close as well.
 		child.emit('error', new Error('spawn EAGAIN'))
 
 		expect(
@@ -1007,7 +1000,7 @@ describe('codex review regressions — worker error replies, fork errors, close 
 		).toBe('resolved')
 	}, 45_000)
 
-	it('m7: a final line WITHOUT a trailing newline is flushed to onLog exactly once when the stream ends', async () => {
+	it('a final line WITHOUT a trailing newline is flushed to onLog exactly once when the stream ends', async () => {
 		const root = makeFixture()
 		const entries: LogEntry[] = []
 		const logOpts = { onLog: (entry: LogEntry) => entries.push(entry) }

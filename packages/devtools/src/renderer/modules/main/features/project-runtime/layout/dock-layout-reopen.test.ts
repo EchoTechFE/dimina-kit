@@ -1,17 +1,13 @@
 /**
- * Contract tests for the two NEW pure dock-layout helpers (TDD — NOT yet
- * implemented). The implementer will add `reopenPanel` and
- * `listPanelVisibility` to `dock-layout.ts` alongside the existing exports.
- *
- * These tests will fail at import (the symbols are `undefined`) until the
- * implementation lands — that is the expected RED state.
+ * Contract tests for the two pure dock-layout helpers `reopenPanel` and
+ * `listPanelVisibility` in `dock-layout.ts`.
  *
  * Topology-agnostic: like the sibling `dock-layout-split.test.ts` /
  * `default-dock-tree-equivalence.test.ts`, we set up scenarios from
  * `buildDefaultDockTree(W)` + `closePanel(...)` and assert the CONTRACT by
- * walking whatever tree the implementer produces — never pinning a specific
- * nesting. `findGroupById` / `collectPanelIds` are NOT exported by the engine,
- * so we walk the tree ourselves below.
+ * walking whatever tree is produced — never pinning a specific nesting.
+ * `findGroupById` / `collectPanelIds` are NOT exported by the engine, so we
+ * walk the tree ourselves below.
  *
  * The two helpers under test:
  *
@@ -37,7 +33,6 @@ import type { LayoutNode, LayoutTree } from '@dimina-kit/electron-deck/layout'
 import {
   buildDefaultDockTree,
   buildDockRegistry,
-  // NEW — not yet implemented (import will be `undefined` until it lands):
   listPanelVisibility,
   reopenPanel,
 } from './dock-layout'

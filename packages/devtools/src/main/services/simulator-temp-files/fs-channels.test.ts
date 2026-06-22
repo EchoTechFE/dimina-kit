@@ -1,6 +1,5 @@
 /**
- * Phase 1 contract tests for the main-process `simulator:fs:*` IPC channel
- * handlers.
+ * Contract tests for the main-process `simulator:fs:*` IPC channel handlers.
  *
  * Spec: `packages/devtools/docs/file-system.md` §4.4, §6 P1-7.
  *
@@ -18,7 +17,7 @@
  *                        → { ok: true }
  *
  * Electron's `ipcMain` is unreachable from vitest, so we test the *pure
- * handlers* the implementer is asked to expose from `./fs-channels`:
+ * handlers* exposed from `./fs-channels`:
  *
  *   handleFsRead(req): Promise<{ bytes, mime, etag, totalSize }>
  *   handleFsWrite(req): Promise<{ ok: true }>

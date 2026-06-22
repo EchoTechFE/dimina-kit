@@ -1,5 +1,5 @@
 /**
- * Feedback fix ① — `getSession().appInfo` must be STRUCTURED, matching what
+ * `getSession().appInfo` must be STRUCTURED, matching what
  * `docs/host-migration.md` already promises ("已结构化（appId/name/path），
  * 无需再 cast") but the types do not deliver:
  *
@@ -10,15 +10,11 @@
  *    a union that ALWAYS collapses to `unknown` — the `AppInfo` arm is dead
  *    type-level decoration.
  *
- * ⚠ INCREMENTAL-ROUND REVISION (intentional contract change, flagged — not
- * goalpost-moving): the first wave pinned ALL four fields optional. The
- * Claude×codex final review upgraded the design: `appId: string` is REQUIRED.
- * The renderer genuinely depends on `appId`; the devkit adapter always
- * returns one (fallback included); a session without it is unusable — so
- * "all-optional" was a vacuous constraint, not a real one. The §5 pins and
- * one §7 runtime pin below were revised accordingly; the RUNTIME enforcement
- * of the boundary (openProject rejecting an appId-less adapter session) lives
- * in workspace/workspace-open-project-appinfo-validation.test.ts.
+ * `appId: string` is REQUIRED (not optional): the renderer genuinely depends
+ * on `appId`; the devkit adapter always returns one (fallback included); a
+ * session without it is unusable. The RUNTIME enforcement of the boundary
+ * (openProject rejecting an appId-less adapter session) lives in
+ * workspace/workspace-open-project-appinfo-validation.test.ts.
  *
  * Locked contract (this file is the spec):
  *  - A new exported type `MiniappSessionAppInfo` lives in
@@ -32,19 +28,16 @@
  *      · a custom adapter may omit the decorative rest
  *    ⇒ `appId: string` required; `name?/path?/appName?: string` optional.
  *  - `getSession()`'s DTO types `appInfo` as `MiniappSessionAppInfo` (or
- *    `MiniappSessionAppInfo | null` — real nullability is the implementer's
- *    call; the pins below tolerate both), NOT `unknown`.
+ *    `MiniappSessionAppInfo | null`; the pins below tolerate both), NOT
+ *    `unknown`.
  *  - `ProjectSession['appInfo']`'s meaningless `AppInfo | unknown` union is
  *    fixed to a type that no longer collapses to `unknown`.
  *  - `asMiniappRuntime`'s identity-assignment sentinel must KEEP compiling,
  *    which forces `WorkspaceService.getSession` (the live implementation
  *    type) to be retyped in the same pass — no cast laundering.
  *
- * ── RED / flip protocol (same as miniapp-runtime-contract.test.ts) ─────────
- * the marked line compiles, the directive turns into TS2578 ("unused
- * '@ts-expect-error'"), and the implementer deletes the directive line —
- * converting the line into the permanent compile-time guard. The runtime
- * tests below are RED in vitest today.
+ * The `@ts-expect-error` markers below are compile-time guards: if a marked
+ * line ever compiles, the directive becomes an unused-directive error (TS2578).
  */
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -158,7 +151,7 @@ const _contextStillSatisfiesContract: (ctx: WorkbenchContext) => MiniappRuntime 
 void _contextStillSatisfiesContract
 
 // ═════════════════════════════════════════════════════════════════════════
-// §7 Runtime assertions (vitest-RED today).
+// §7 Runtime assertions.
 // ═════════════════════════════════════════════════════════════════════════
 
 const thisTestFile = import.meta.url.startsWith('file:')
@@ -168,7 +161,7 @@ const contractSourcePath = path.join(path.dirname(thisTestFile), 'miniapp-runtim
 const barrelSourcePath = path.join(path.dirname(thisTestFile), '..', 'api.ts')
 
 describe('feedback ① — MiniappSessionAppInfo: structured session appInfo (doc/type矛盾闭合)', () => {
-  it('miniapp-runtime.ts exports the MiniappSessionAppInfo type [RED today]', () => {
+  it('miniapp-runtime.ts exports the MiniappSessionAppInfo type', () => {
     // Real bug: host-migration.md promises "appInfo 已结构化（appId/name/path），
     // 无需再 cast" while the contract module ships `{ appInfo: unknown }` — the
     // named, exported type is what makes the promise true.
@@ -179,7 +172,7 @@ describe('feedback ① — MiniappSessionAppInfo: structured session appInfo (do
     ).toBe(true)
   })
 
-  it('MiniappSessionAppInfo declares appId REQUIRED — `appId: string`, not `appId?:` [RED today; incremental-round revision]', () => {
+  it('MiniappSessionAppInfo declares appId REQUIRED — `appId: string`, not `appId?:`', () => {
     // ⚠ Revised pin (see header): the first wave specified appId optional.
     // Real bug (post-flip): an optional appId re-opens the gap this item
     // closes — hosts are back to `if (!appInfo.appId)` defensive code for a
@@ -198,7 +191,7 @@ describe('feedback ① — MiniappSessionAppInfo: structured session appInfo (do
     ).toBe(false)
   })
 
-  it('the public barrel (src/main/api.ts, package export ".") re-exports MiniappSessionAppInfo [RED today]', () => {
+  it('the public barrel (src/main/api.ts, package export ".") re-exports MiniappSessionAppInfo', () => {
     // Real bug: the type exists but is reachable only by deep-importing an
     // internal path — downstream hosts cannot name the DTO they receive.
     const source = readFileSync(barrelSourcePath, 'utf8')
@@ -208,7 +201,7 @@ describe('feedback ① — MiniappSessionAppInfo: structured session appInfo (do
     ).toBe(true)
   })
 
-  it('getSession() DTO no longer types appInfo as bare unknown [RED today]', () => {
+  it('getSession() DTO no longer types appInfo as bare unknown', () => {
     // Runtime mirror of the §2 sentinel: the contract module's source still
     // spelling the DTO `{ appInfo: unknown }` is the bug this item fixes.
     const source = readFileSync(contractSourcePath, 'utf8')

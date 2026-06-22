@@ -27,8 +27,8 @@
  * Electron mock + harness: copied from host-toolbar-port-channel.test.ts
  * (vitest mocks are per-file; main-process suites must vi.mock('electron')).
  *
- * RED today: `onReady` does not exist on the control surface — the typeof
- * guard in every test fails first.
+ * Guards that `onReady` exists on the control surface — every test's typeof
+ * guard pins it.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -421,16 +421,14 @@ describe('③ dispose semantics', () => {
 })
 
 // ═══════════════════════════════════════════════════════════════════════════
-// INCREMENTAL ROUND (③ 增量) — the scheduled catch-up fire must RE-CHECK its
-// preconditions AT FIRE TIME, not only at registration time.
+// The scheduled catch-up fire must RE-CHECK its preconditions AT FIRE TIME,
+// not only at registration time.
 //
-// The first wave pinned the catch-up as async-on-a-microtask and pinned that
-// a dispose()/loadFile happening BEFORE registration suppresses it. The
-// Claude×codex final review found the remaining hole: the window BETWEEN
-// registration (catch-up scheduled) and the microtask (catch-up runs). Both
+// The catch-up is async-on-a-microtask, and a dispose()/loadFile happening
+// BEFORE registration suppresses it. The remaining hole is the window BETWEEN
+// registration (catch-up scheduled) and the microtask (catch-up runs): both
 // the subscription's liveness and the load generation can change inside that
-// window; a catch-up that snapshots only at registration fires stale. Not
-// covered above — these two interleavings did not exist in the first wave.
+// window, so a catch-up that snapshots only at registration fires stale.
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('③(增量) same-frame dispose(): catch-up re-checks subscription liveness at fire time', () => {

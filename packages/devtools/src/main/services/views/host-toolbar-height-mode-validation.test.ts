@@ -20,8 +20,8 @@
  * Electron mock + harness: trimmed copy of host-toolbar-port-channel.test.ts
  * (vitest mocks are per-file; main-process suites must vi.mock('electron')).
  *
- * RED today: no validation exists — the toThrow assertions fail and the
- * notify spy records the poisoned values.
+ * Guards that validation rejects poisoned values — the toThrow assertions hold
+ * and the notify spy never records them.
  */
 import { describe, it, expect, vi } from 'vitest'
 

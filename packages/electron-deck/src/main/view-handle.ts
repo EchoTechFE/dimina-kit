@@ -154,7 +154,7 @@ export function createViewHandle(deps: ViewHandleDeps): ViewHandle {
   // once the view is no longer active — never placed or disposed).
   let visibleBounds: Bounds | null = null
 
-  // codex P0 round-3 (BUG 4): true WHILE a moveTo migration is in flight (the
+  // True WHILE a moveTo migration is in flight (the
   // migrationLock is held). `applyPlacement` drops place frames while migrating —
   // during the awaited dest commit + (rehome) adopt window, `current` already
   // points at dest but the SOURCE slot token may still be registered, so a stale
@@ -185,7 +185,7 @@ export function createViewHandle(deps: ViewHandleDeps): ViewHandle {
   // The actual teardown (viewScope.close A4 fence). Factored out so doMove's
   // CLOSED path can dispose WHILE it holds the migrationLock (calling the
   // lock-acquiring public `dispose()` from inside the lock would deadlock), and
-  // the public `dispose()` can serialize itself behind the lock (BUG 5).
+  // the public `dispose()` can serialize itself behind the lock.
   async function doDispose(): Promise<void> {
     // Idempotent: a dispose before placeIn (or a second dispose) is a no-op.
     if (!viewScope) return
@@ -255,7 +255,7 @@ export function createViewHandle(deps: ViewHandleDeps): ViewHandle {
     // tears it down (lifetime follows display). Without rehome it stays under
     // src.windowScope (display moved, lifetime did not).
     //
-    // codex P0 round-3 (BUG 3): adopt comes AFTER the native dest commit, so an
+    // adopt comes AFTER the native dest commit, so an
     // adopt failure must FULLY roll back the native dest commit + restore
     // `current`/`currentZone` to source — otherwise the view is detached from src
     // while compositor/`current` point at dest (native + lifetime diverge, and the
@@ -372,7 +372,7 @@ export function createViewHandle(deps: ViewHandleDeps): ViewHandle {
     applyPlacement(p) {
       // Disposed / never-placed: drop the frame (idempotent late IPC).
       if (!active || !current) return
-      // codex P0 round-3 (BUG 4): drop place frames while a moveTo is in flight.
+      // Drop place frames while a moveTo is in flight.
       // Mid-migration `current` may point at dest while the source token is still
       // live — a stale source `place` must NOT drive setBounds during the move.
       if (migrating) return
@@ -399,7 +399,7 @@ export function createViewHandle(deps: ViewHandleDeps): ViewHandle {
       // migrationLock so two concurrent moves run FIFO (the view is never being
       // migrated from two hosts at once).
       //
-      // codex P0 round-3 (BUG 4): raise the `migrating` flag for the FULL duration
+      // Raise the `migrating` flag for the FULL duration
       // the lock holds this move (set/cleared inside the locked region so the flag
       // tracks exactly "a move is mid-flight"), so applyPlacement drops stale place
       // frames throughout the migration window — including the awaited adopt.
@@ -414,11 +414,11 @@ export function createViewHandle(deps: ViewHandleDeps): ViewHandle {
     },
 
     dispose() {
-      // codex P0 round-3 (BUG 5): serialize dispose with the migrationLock so it
+      // Serialize dispose with the migrationLock so it
       // runs AFTER any in-flight moveTo fully settles (success OR rollback), not
-      // concurrently. `dispose` used to close the viewScope independently, racing a
-      // move that is mid-migrating `current`/`viewScope` (e.g. the awaited adopt) —
-      // a concurrent teardown could corrupt the move or double-tear-down. Routing
+      // concurrently — closing the viewScope independently would race a
+      // move that is mid-migrating `current`/`viewScope` (e.g. the awaited adopt),
+      // and a concurrent teardown could corrupt the move or double-tear-down. Routing
       // through `withLock` parks the dispose behind the move's lock segment; the
       // viewScope.close A4 fence (sink-disable then native detach) then runs once,
       // cleanly, on the settled post-move state. doMove's own CLOSED-path disposal

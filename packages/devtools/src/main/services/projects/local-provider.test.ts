@@ -1,5 +1,5 @@
 /**
- * Contract tests for LocalProjectsProvider (Phase 1 of projects-extensibility).
+ * Contract tests for LocalProjectsProvider.
  *
  * LocalProjectsProvider is the default ProjectsProvider used when no host
  * injection is supplied. It MUST implement the same persistence/validation

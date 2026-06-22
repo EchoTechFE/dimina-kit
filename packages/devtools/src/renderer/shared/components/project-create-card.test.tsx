@@ -1,5 +1,5 @@
 /**
- * Phase 4: the "新建项目" card is rendered as the first item of the project
+ * The "新建项目" card is rendered as the first item of the project
  * list. It must:
  *  - render a dashed-border placeholder card with a Chinese label,
  *  - invoke its `onClick` prop exactly once when the user clicks anywhere

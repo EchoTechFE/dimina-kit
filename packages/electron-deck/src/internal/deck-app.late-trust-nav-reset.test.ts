@@ -13,17 +13,16 @@ import { DeckApp } from './deck-app.js'
 import type { MinimalIpcMain } from './wire-transport.js'
 
 /**
- * C3 (P0 security) — navigation-driven grant revocation on the LATE-TRUST path.
+ * Navigation-driven grant revocation on the LATE-TRUST path.
  *
- * REGRESSION (codex-found, fixed): a window built via
- * `runtime.windows.create({ autoTrust: false })` and trusted LATER via
- * `runtime.windows.trust(win)` was MISSING the C3 `did-start-navigation`
- * grant-reset hook — only auto-trusted windows got it bound in
+ * A window built via `runtime.windows.create({ autoTrust: false })` and trusted
+ * LATER via `runtime.windows.trust(win)` must bind the `did-start-navigation`
+ * grant-reset hook — otherwise only auto-trusted windows get it bound in
  * `constructWindow`. So the late-trusted window's control wc could perform a
  * MAIN-FRAME CROSS-DOCUMENT navigation and the navigated-to document would
  * INHERIT the prior page's `layout.*` grants (privilege escalation).
  *
- * The fix binds `bindNavigationGrantReset(wc)` in the `windows.trust()` tracked
+ * `bindNavigationGrantReset(wc)` is bound in the `windows.trust()` tracked
  * branch too (idempotently, guarded by `navHookBound`).
  *
  * CONTRACT pinned here (mirrors the auto-trust contract in

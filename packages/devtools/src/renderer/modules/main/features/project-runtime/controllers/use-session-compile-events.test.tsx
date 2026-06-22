@@ -1,5 +1,5 @@
 /**
- * 编译信息 tab — data source contract (TDD, NOT yet implemented).
+ * 编译信息 tab — data source contract.
  *
  * `useSession` already subscribes to every `projectStatus` payload (it feeds
  * `compileStatus` + the PR#43 `hotReloadToken`). This suite pins the NEW
@@ -70,8 +70,8 @@ vi.mock('@/shared/api', () => {
         if (i >= 0) projectStatusListeners.splice(i, 1)
       }
     }),
-    // Harness stub (pre-authorized ROUND 2 fix): useSession now also
-    // subscribes onCompileLog; this suite asserts nothing about it.
+    // Harness stub: useSession also subscribes onCompileLog; this suite
+    // asserts nothing about it.
     onCompileLog: vi.fn(() => () => {}),
   }
 })
@@ -263,16 +263,15 @@ describe('useSession: compileEvents log (编译 tab data source)', () => {
 })
 
 /**
- * CODEX RE-REVIEW — m8 NOT-RESOLVED follow-up (CONTRACT EVOLUTION,
- * pre-authorized). The CompilePanel breaks same-`at` ties by a monotonic
- * `seq` (compile-panel.tsx, already pinned), but useSession never stamps it
+ * The CompilePanel breaks same-`at` ties by a monotonic
+ * `seq` (compile-panel.tsx), so useSession must stamp it
  * on compileEvents. Pinned here: every event carries a strictly increasing
  * numeric `seq`. The CROSS-array half of the contract (events and logs share
  * ONE global counter) is pinned in use-session-compile-logs.test.tsx, whose
  * harness can emit both feeds — this suite's onCompileLog mock is a no-op
  * stub by design.
  */
-describe('useSession: compileEvents carry a monotonic seq (codex m8 contract evolution)', () => {
+describe('useSession: compileEvents carry a monotonic seq', () => {
   it('stamps every compileEvents entry with a strictly increasing numeric seq', async () => {
     const { result } = await renderReadySession()
 

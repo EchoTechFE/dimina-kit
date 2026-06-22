@@ -1,8 +1,8 @@
 /**
  * Host-toolbar height replay — renderer mount half (ProjectRuntime).
  *
- * THE BUG (downstream feedback, verified against source): ProjectRuntime owns
- * the toolbar placeholder height as `useState(0)` and only subscribes
+ * THE BUG: ProjectRuntime owns the toolbar placeholder height as `useState(0)`
+ * and only subscribes
  * `onHostToolbarHeightChanged` in a mount `useEffect`. The height chain is
  * push-only and the toolbar WCV's size-advertiser DEDUPLICATES (a height
  * already reported is never re-sent), so any push that fired before this
@@ -27,12 +27,7 @@
  * Harness: same `vi.mock('@/shared/api', …)` convention as the
  * use-session-* suites; all heavyweight children / controller hooks are
  * mocked away so the suite exercises exactly the placeholder-height wiring.
- * `getHostToolbarHeight` is provided BY THE MOCK even though view-api does
- * not export it yet — the module is fully replaced, so this file compiles
- * today and the assertions go red at runtime.
- *
- * RED today: ProjectRuntime never pulls — every test below fails on
- * "getHostToolbarHeight was never called" / the placeholder stuck at 0px.
+ * `getHostToolbarHeight` is provided BY THE MOCK; the module is fully replaced.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, act, waitFor } from '@testing-library/react'

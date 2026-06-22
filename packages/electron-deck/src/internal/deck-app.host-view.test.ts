@@ -1,5 +1,5 @@
 /**
- * TDD failing-first contract tests for "host API make-it-real slice 1":
+ * Contract tests for the "host API make-it-real" view factory:
  *   runtime.view({ source, scope? })
  *     .placeIn(win, { zone })
  *     .applyPlacement(p)
@@ -10,10 +10,9 @@
  * Source of truth: docs/contracts/view-handle.md「placeIn 与挂载」+「handle 直接驱动 bounds」, and
  * docs/layout-architecture-demo.md (the target `runtime.view(...).placeIn(...)`
  * call shape). The increment-1 unit (`src/main/view-handle.ts` +
- * `src/main/compositor.ts` detachAll) already exists; what does NOT exist yet is
- * the deck-app WIRING: `runtime.view` is absent. So every spec here is RED at
- * RUNTIME (`runtime.view is not a function`), reached through a single typed
- * escape hatch so the file still compiles (TypeError, not a compile error).
+ * `src/main/compositor.ts` detachAll) and the deck-app WIRING (`runtime.view`)
+ * are both live. Every spec exercises that runtime contract, reached through a
+ * single typed escape hatch so the file still compiles.
  *
  * The contract pinned (per the brief):
  *   1. runtime.view exists + creates a native WebContentsView (via injected
@@ -32,8 +31,8 @@
  *   8. runtime.view with no electron injected throws a clear "unavailable"
  *      error (mirrors runtime.windows.create's electronUnavailable path).
  *
- * (Brief item 7 — placeIn into a second window — is OUT OF SCOPE for slice 1
- *  and DEFERRED to moveTo (view-handle.md「moveTo 跨窗迁移」); see the `it.skip` note below.)
+ * (Item 7 — placeIn into a second window — is DEFERRED to moveTo
+ *  (view-handle.md「moveTo 跨窗迁移」); see the `it.skip` note below.)
  *
  * Fakes: copied (minimal) from deck-app.test.ts — `createFakeElectron` /
  * `createFakeIpcMain`. `FakeBrowserWindow.contentView` already exposes
@@ -226,9 +225,9 @@ function createFakeElectron(
 
 // ── Typed escape hatch for the not-yet-typed `runtime.view` factory ──────────
 //
-// `Runtime.view` is not in the public type yet, so we reach it through a loose
-// view. Absence then fails at RUNTIME (`runtime.view is not a function`) — the
-// RED we want — rather than a compile error that would stop the suite running.
+// `Runtime.view` is not in the public type, so we reach it through a loose
+// view. Any absence then fails at RUNTIME (`runtime.view is not a function`) —
+// the clean runtime failure we want — rather than a compile error.
 type Bounds = { x: number, y: number, width: number, height: number }
 type Placement = { visible: true, bounds: Bounds } | { visible: false }
 interface ViewSource {
@@ -242,7 +241,7 @@ interface HostViewHandle {
 }
 interface RuntimeWithView {
 	view(spec: { source: ViewSource, scope?: unknown }): HostViewHandle
-	// P2: the sealed session factory — the ONLY legitimate source of a `scope`.
+	// the sealed session factory — the ONLY legitimate source of a `scope`.
 	scopes: { create(): { dispose(): Promise<void> } }
 }
 function withView(runtime: Runtime): RuntimeWithView {
@@ -426,12 +425,12 @@ describe('DeckApp host-view slice 1 — window close cascades view teardown (A4)
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 7. placeIn into a second window — OUT OF SCOPE for slice 1, deferred to moveTo
+// placeIn into a second window — deferred to moveTo
 //    (view-handle.md「moveTo 跨窗迁移」). Documented as skipped so the goalpost is explicit.
 // ─────────────────────────────────────────────────────────────────────────────
 describe('DeckApp host-view slice 1 — second placeIn (deferred to moveTo)', () => {
 	it.skip('placing the same handle into a second window is moveTo\'s job (moveTo cross-window) — not slice 1', () => {
-		// Intentionally unspecified for slice 1. A cross-window move is the moveTo
+		// Intentionally unspecified here. A cross-window move is the moveTo
 		// state machine (view-handle.md「moveTo 跨窗迁移」: AT_SRC→DETACHED→AT_DEST|ROLLBACK with a
 		// per-view migration lock). Pinning a behavior here would prejudge that
 		// contract, so this is deferred.
@@ -439,7 +438,7 @@ describe('DeckApp host-view slice 1 — second placeIn (deferred to moveTo)', ()
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// NEW (flagged) — Bug 3b: an explicit `opts.scope` bounds the view's display
+// an explicit `opts.scope` bounds the view's display
 // lifetime. Closing that scope detaches the view (removeChildView) WITHOUT the
 // caller calling dispose(). Pins the `opts.scope.own(() => hostHandle.dispose())`
 // wiring (and only for an explicit scope, not the rootScope default).
@@ -451,7 +450,7 @@ describe('DeckApp host-view slice 1 — opts.scope close disposes the view (Bug 
 		await app.start()
 
 		const mainWin = electron.browserWindows[0] as unknown as FakeBrowserWindow
-		// P2: raw scope → sealed DeckSession. A raw `createScope()` is no longer a
+		// raw scope → sealed DeckSession. A raw `createScope()` is no longer a
 		// valid `scope` (it would be REJECTED by the provenance check); the only
 		// legitimate source is `runtime.scopes.create()`.
 		const session = withView(app.runtime).scopes.create()
@@ -464,14 +463,14 @@ describe('DeckApp host-view slice 1 — opts.scope close disposes the view (Bug 
 		expect(mainWin.contentView.addChildView).toHaveBeenCalledWith(wcv)
 
 		const removesBefore = mainWin.contentView.removeChildView.mock.calls.length
-		// P2: dispose the SESSION (→ its internal scope.close()) — the view must
+		// dispose the SESSION (→ its internal scope.close()) — the view must
 		// detach (display teardown) without anyone calling handle.dispose().
 		await session.dispose()
 		await new Promise(r => setTimeout(r, 0))
 
 		expect(mainWin.contentView.removeChildView.mock.calls.length).toBeGreaterThan(removesBefore)
 		expect(mainWin.contentView.removeChildView).toHaveBeenCalledWith(wcv)
-		// Native WCV is NOT destroyed in slice 1 (deferred to keepAlive/B3).
+		// Native WCV is NOT destroyed here (deferred to keepAlive).
 		expect(wcv.destroyed).toBe(false)
 
 		await app.shutdown()
@@ -497,7 +496,7 @@ describe('DeckApp host-view slice 1 — runtime.view requires electron', () => {
 	})
 })
 
-// A throwaway reference so an unused-import lint never masks the RED. (JsonValue
+// A throwaway reference so an unused-import lint never masks a runtime failure. (JsonValue
 // is imported for parity with deck-app.test.ts's fake helpers; reference it.)
 const _jsonValueParityRef: JsonValue = null
 void _jsonValueParityRef

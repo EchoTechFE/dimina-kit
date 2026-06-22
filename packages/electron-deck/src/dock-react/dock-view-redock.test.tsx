@@ -1,6 +1,6 @@
 /**
- * FAILING TDD spec — Layer 2 (DockView gesture binding) for the NOT-YET-WRITTEN
- * drag-to-redock feature. Runs under the jsdom `vitest.dock-react.config.ts`
+ * Contract spec — Layer 2 (DockView gesture binding) for the drag-to-redock
+ * feature. Runs under the jsdom `vitest.dock-react.config.ts`
  * suite (`*.test.tsx`). The pure geometry is exhaustively covered by the node
  * suite `drag-redock.test.ts`; jsdom cannot do real pointer geometry
  * (getBoundingClientRect returns 0s), so here we cover only what jsdom CAN see:
@@ -355,7 +355,7 @@ describe('<DockView> drag-to-redock — registered-but-absent payload (M2)', () 
 
 // ───────────────────── PanelCapabilities: draggable + dropPolicy ─────────────────────
 //
-// FAILING TDD spec for the NOT-YET-WIRED capability gates. The registry can now
+// Contract spec for the capability gates. The registry can
 // carry `draggable:false` and `dropPolicy:'reorder-only'` (PanelCapabilities);
 // the DockView must HONOR them:
 //

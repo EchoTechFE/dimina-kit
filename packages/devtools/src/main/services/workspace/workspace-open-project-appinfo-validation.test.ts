@@ -1,16 +1,12 @@
 /**
- * Feedback fix ① — INCREMENTAL ROUND: runtime enforcement of the REQUIRED
- * `appId` at the REAL boundary (where the adapter's session enters the
- * workbench), not at `getSession()` read time.
+ * Runtime enforcement of the REQUIRED `appId` at the REAL boundary (where the
+ * adapter's session enters the workbench), not at `getSession()` read time.
  *
- * ⚠ Relation to the first wave (miniapp-session-appinfo.test.ts): the first
- * wave pinned `MiniappSessionAppInfo` as ALL-optional. The Claude×codex final
- * review intentionally REVISED that contract — `appId: string` is REQUIRED
- * (the renderer genuinely depends on it; the devkit adapter always returns
- * one, fallback included; a custom adapter that returns none hands the
- * renderer a session it cannot drive). All-optional was a vacuous constraint.
- * This file is the runtime half of the revised contract; the type-level half
- * lives in the (also revised) first-wave file.
+ * `appId: string` is REQUIRED on `MiniappSessionAppInfo` (the renderer
+ * genuinely depends on it; the devkit adapter always returns one, fallback
+ * included; a custom adapter that returns none hands the renderer a session it
+ * cannot drive). This file is the runtime half of that contract; the
+ * type-level half lives in miniapp-session-appinfo.test.ts.
  *
  * Locked contract (this file is the spec) — `WorkspaceService.openProject`:
  *
@@ -19,11 +15,11 @@
  *    carrying a string `appId`. Validation failures are REPORTED, not thrown:
  *    `openProject` resolves `{ success: false, error }` with an `error`
  *    message that names `appId` so an adapter author can find the problem.
- *  - REJECTION MUST NOT LEAK THE SESSION (the codex-caught hole): the adapter
- *    already created a live session (compile watcher, dev-server port). The
- *    workbench must `close()` that session before reporting failure, and must
- *    retain NO active session: `getSession()` → null, `hasActiveSession()` →
- *    false, `getProjectPath()` → ''.
+ *  - REJECTION MUST NOT LEAK THE SESSION: the adapter already created a live
+ *    session (compile watcher, dev-server port). The workbench must `close()`
+ *    that session before reporting failure, and must retain NO active session:
+ *    `getSession()` → null, `hasActiveSession()` → false,
+ *    `getProjectPath()` → ''.
  *  - a failing `close()` during that cleanup must not mask the validation
  *    error (still `{ success: false, error: …appId… }`, still no throw).
  *  - a rejected open leaves the service reusable: the NEXT `openProject`
@@ -35,8 +31,8 @@
  * (mock electron + fs; drive through the PUBLIC `ctx.workspace` surface built
  * by createWorkbenchContext).
  *
- * RED today: openProject forwards `session.appInfo` blindly — every rejection
- * test sees `success: true` and a retained session.
+ * Guards that openProject validates `session.appInfo` instead of forwarding it
+ * blindly — an invalid appInfo must yield a rejection, not a retained session.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import type { CompilationAdapter, ProjectSession } from '../../../shared/types.js'
@@ -140,8 +136,8 @@ describe('①(增量) openProject rejects an adapter session whose appInfo lacks
   })
 
   it('rejection CLOSES the adapter-created session and retains nothing (no leak)', async () => {
-    // BUG CAUGHT (codex): an implementation that validates and returns early
-    // leaks the live session the adapter already spun up — its compile
+    // An implementation that validates and returns early leaks the live
+    // session the adapter already spun up — its compile
     // watcher and dev-server port stay alive with no owner and no way to
     // close them (the workspace never recorded the session).
     const session = makeSession({ name: 'no-app-id' })

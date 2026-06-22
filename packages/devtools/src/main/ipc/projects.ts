@@ -71,7 +71,7 @@ export function registerProjectsIpc(ctx: ProjectsIpcCtx): Disposable {
       const [dirPath] = validate(ProjectsChannel.Remove, ProjectsRemoveSchema, args)
       return ctx.workspace.removeProject(dirPath)
     })
-    // ── Phase 3: template catalog + create flow ──
+    // ── template catalog + create flow ──
     .handle(ProjectsChannel.ListTemplates, () => {
       // Sanitize at the IPC boundary: `generate` is a function and the
       // structured-clone algorithm Electron uses for invoke would otherwise

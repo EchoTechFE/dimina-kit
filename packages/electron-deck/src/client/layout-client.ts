@@ -74,14 +74,14 @@ export function createDeckLayoutClient(deps: LayoutClientDeps): {
     // Same viewId+token re-delivered (per-wc replay) → pure no-op: keep the
     // live anchor, do not create a second, do not dispose the first.
     if (existing && existing.token === grant.slotToken) return
-    // A new token for this viewId → REVOKE the stale anchor FIRST (codex P4
-    // round-3): dispose + drop it BEFORE resolving the new slot, so a stale
+    // A new token for this viewId → REVOKE the stale anchor FIRST:
+    // dispose + drop it BEFORE resolving the new slot, so a stale
     // anchor can never keep publishing a revoked token even when the new slot
     // isn't mounted yet. Deleting before `createAnchor` also means a throw in
     // `createAnchor` can't leave an already-disposed anchor in the map (which a
     // later `dispose()` would double-dispose).
     if (existing) {
-      // try/finally (codex P4 round-4): the `delete` MUST run even if the old
+      // try/finally: the `delete` MUST run even if the old
       // anchor's dispose throws — otherwise the disposed-but-still-mapped anchor
       // keeps publishing the revoked token AND a later client.dispose() would
       // dispose it a second time.

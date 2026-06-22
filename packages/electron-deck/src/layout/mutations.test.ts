@@ -635,8 +635,8 @@ describe('operations compose without corrupting the tree (order sensitivity)', (
 //
 // CONTRACT: NO built-in mutation may return a tree that `validateTree` rejects.
 //
-// All cases below are RED on HEAD (validateTree returns the all-fixed problem)
-// and GREEN once the mutation layer preserves >= 1 flexible child.
+// All cases below assert that the mutation layer preserves >= 1 flexible child
+// (so validateTree never reports the all-fixed problem).
 
 const knownOf = (t: LayoutTree): ReadonlySet<string> => new Set(allPanels(t))
 

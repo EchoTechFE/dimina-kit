@@ -1,5 +1,5 @@
 /**
- * TDD red-phase tests for automation/handlers/app.ts
+ * Tests for automation/handlers/app.ts
  *
  * 聚焦：App.callWxMethod navigateTo 分支里 cleanUrl 插入选择器的注入面。
  *

@@ -1,19 +1,16 @@
 /**
- * panels decommission — public-type half (mirrors
- * workbench-config-header-height-deprecated.test.ts). The deprecated
- * `panels?: BuiltinPanelId[]` field must STAY on the public config type
- * (`WorkbenchConfig` / `WorkbenchAppConfig`) even though the runtime ignores
- * it, so downstream hosts that still pass it (e.g. `launch({ panels:
- * ['wxml'] })`) keep compiling.
+ * The deprecated `panels?: BuiltinPanelId[]` field must STAY on the public
+ * config type (`WorkbenchConfig` / `WorkbenchAppConfig`) even though the
+ * runtime ignores it, so downstream hosts that still pass it (e.g.
+ * `launch({ panels: ['wxml'] })`) keep compiling.
  *
- * Real bug this catches: an over-eager implementer deletes the field from
- * `src/shared/types.ts` while removing the runtime plumbing — every
- * downstream `launch({ panels: [...], … })` becomes a TS compile error,
- * i.e. a breaking API change disguised as cleanup.
+ * Real bug this catches: deleting the field from `src/shared/types.ts` while
+ * removing the runtime plumbing turns every downstream
+ * `launch({ panels: [...], … })` into a TS compile error — a breaking API
+ * change disguised as cleanup.
  *
- * GREEN today by design — this is the regression-guard side of the contract
- * (the field exists now and must continue to exist). The real gate is
- * compile-time: if the field is removed, this file fails to typecheck.
+ * The gate is compile-time: if the field is removed, this file fails to
+ * typecheck.
  */
 import { describe, it, expect } from 'vitest'
 import type { WorkbenchAppConfig, WorkbenchConfig } from './types.js'

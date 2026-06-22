@@ -1,8 +1,8 @@
 /**
- * P5 (codex #5) — EAGER ARMING of the slot-token layout channels.
+ * EAGER ARMING of the slot-token layout channels.
  *
- * Source of truth: the P5 contract (Part A). Today the Place + LayoutSubscribe
- * ipc handlers are armed LAZILY — `ensureSlotChannelsArmed()` (deck-app.ts ~1095)
+ * Without eager arming the Place + LayoutSubscribe ipc handlers are armed
+ * LAZILY — `ensureSlotChannelsArmed()` (deck-app.ts ~1095)
  * calls `wireTransport.armSlotChannels(...)`, and its ONLY call site is the
  * anchored `placeIn` path (~1569). So a `createDeckLayoutClient` that boots
  * BEFORE any view is placed sends `__electron-deck:layout-subscribe` and main
@@ -13,18 +13,15 @@
  * anchored placeIn. THE GATE MUST STAY IDENTICAL — eager arming widens no
  * attack surface (trust + main-frame + token checks intact).
  *
- * RED today:
- *   - A1: with NO views placed, the layout-subscribe handler is ABSENT (lazy)
- *         → `handlers.has(...)` is false / `getLayoutSubscribeHandler` throws.
- *   - A3: the place handler is likewise ABSENT (lazy) → throws.
- *   - A2: the gate-unchanged pin is structurally green ONLY ONCE the handler
- *         exists; today it is RED for the same "no handler" reason (the helper
- *         that fetches the handler throws). Once armed eagerly, this pin proves
- *         the untrusted-sender DROP still holds.
+ * What each spec pins:
+ *   - A1: with NO views placed, the layout-subscribe handler must already be
+ *         present (armed eagerly) → `handlers.has(...)` is true.
+ *   - A3: the place handler is likewise present at framework START.
+ *   - A2: the gate-unchanged pin proves the untrusted-sender DROP still holds
+ *         once the handler is armed eagerly.
  *
  * Reached through the SAME typed escape hatch + fakes pattern as
- * `deck-app.slot-token.test.ts` so the file COMPILES — the RED is a
- * missing-handler runtime assertion, not a type error.
+ * `deck-app.slot-token.test.ts` so the file COMPILES.
  *
  * Channel string literals are used directly (matching the slot-token test) so
  * the pin reads exactly what the renderer wire sends.
@@ -262,8 +259,8 @@ describe('DeckApp eager-arm — layout-subscribe armed at start()', () => {
 	it('A1) immediately after start() with NO views, the layout-subscribe handler IS registered and a trusted main-frame subscribe RESOLVES (not "no handler")', async () => {
 		const { app, ipcMain, mainWcId } = await bootAppNoViews()
 
-		// PIN: the handler exists at start() — today it is armed lazily on the
-		// first anchored placeIn, so with no views this is RED.
+		// PIN: the handler exists at start() — armed eagerly when the wire
+		// transport binds, so it is present even with no views placed.
 		expect(ipcMain.handlers.has(LAYOUT_SUBSCRIBE_CHANNEL)).toBe(true)
 
 		// And invoking it from a trusted main-frame sender resolves (no "No handler
@@ -328,7 +325,7 @@ describe('DeckApp eager-arm — place armed at start()', () => {
 	it('A3) immediately after start() with NO views, the place handler IS registered; a trusted-sender place with an UNKNOWN token is token-gated DROP (not a "no handler" reject)', async () => {
 		const { app, ipcMain, mainWcId } = await bootAppNoViews()
 
-		// PIN: the place handler exists at start() — lazy today → RED.
+		// PIN: the place handler exists at start() — armed eagerly.
 		expect(ipcMain.handlers.has(PLACE_CHANNEL)).toBe(true)
 
 		const place = getPlaceHandler(ipcMain)
@@ -348,6 +345,6 @@ describe('DeckApp eager-arm — place armed at start()', () => {
 	})
 })
 
-// Parity ref so an unused-import lint never masks the RED.
+// Parity ref so an unused-import lint never masks a runtime failure.
 const _jsonParityRef: JsonValue = null
 void _jsonParityRef

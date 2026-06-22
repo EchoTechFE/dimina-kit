@@ -5,7 +5,7 @@
  * auto-height row, so the deprecated host config has no renderer effect.
  *
  * Real bug each test catches:
- *  - "height stays 40": the implementer leaves the
+ *  - "height stays 40": catches leftover
  *    `useState(HEADER_H)` + `getHeaderHeight().then(setHeaderHeight)`
  *    wiring in project-toolbar.tsx — the row first paints 40 and then
  *    flips to whatever the IPC reports (72 here), desyncing from the main
@@ -16,11 +16,7 @@
  *    keep a dead dependency on the removed `app:getHeaderHeight` channel.
  *
  * The `@/shared/api` mock is built with vi.hoisted and keeps a
- * `getHeaderHeight` stub even after the real export is deleted, so this
- * file needs no edits when the implementation lands.
- *
- * RED today: project-toolbar.tsx fetches getHeaderHeight() in a mount
- * effect and renders `style={{ height: headerHeight }}` with the fetched 72.
+ * `getHeaderHeight` stub even though the real export is gone.
  */
 import React from 'react'
 import { describe, it, expect, vi } from 'vitest'

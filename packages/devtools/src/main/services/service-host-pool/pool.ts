@@ -8,9 +8,8 @@ import { BrowserWindow } from 'electron'
  * (release / releaseDestroyed), opt-in behind `DIMINA_PREWARM_POOL_SIZE`
  * (default OFF). Only the SERVICE-HOST window is pooled; the simulator content
  * WebContentsView (`view-manager.attachNativeSimulator`) is created fresh per
- * attach. (The historical `<webview>`-tag default arch was never poolable —
- * Electron can't reparent a pre-warmed WebContents into a `<webview>`; doc §5
- * Phase 4 — and that route has since been deleted outright.)
+ * attach. (A `<webview>`-tag arch is not poolable — Electron can't reparent a
+ * pre-warmed WebContents into a `<webview>`.)
  *
  * Lifecycle of a pool entry:
  *   warming   — BrowserWindow constructed, page loading

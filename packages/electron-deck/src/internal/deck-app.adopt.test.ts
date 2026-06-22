@@ -1,30 +1,28 @@
 /**
- * TDD failing-first contract tests for "P3: runtime.windows.adopt with explicit
- * ownership" — the deck-app side of adopting an EXTERNALLY-created BrowserWindow
- * into the framework so `runtime.view().placeIn(adoptedWin)` works and trust /
- * grants are revoked synchronously (revoke-FIRST) on the window's 'closed'.
+ * Contract tests for `runtime.windows.adopt` with explicit ownership — the
+ * deck-app side of adopting an EXTERNALLY-created BrowserWindow into the
+ * framework so `runtime.view().placeIn(adoptedWin)` works and trust / grants are
+ * revoked synchronously (revoke-FIRST) on the window's 'closed'.
  *
- * Source of truth: codex N1 + R2.
  *   - With `ownsWindows:true` the framework builds NO main window and no per-window
  *     substrate, so `runtime.mainWindow` is unset and `runtime.view().placeIn(win)`
  *     REJECTS any untracked window ("window is not framework-tracked"). The host has
  *     no way to register an externally-created BrowserWindow.
- *   - The fix: `runtime.windows.adopt(win, { ownership })` registers an external
- *     window's windowScope + per-window substrate + TRUST lifecycle, so
+ *   - `runtime.windows.adopt(win, { ownership })` registers an external window's
+ *     windowScope + per-window substrate + TRUST lifecycle, so
  *     `runtime.view().placeIn(adoptedWin)` works; trust + slot-tokens + grants are
  *     revoked SYNCHRONOUSLY and FIRST on the window's 'closed'.
- *   - codex R2 (CRITICAL ordering): revocation MUST run FIRST on 'closed'. The
- *     framework registers its revoke listener via `prependListener` so it runs
- *     before any external 'closed' listener the host registered earlier. The
- *     current `MinimalBrowserWindow` only has `on(...)`, NO `prependListener`, so
- *     this file ADDS `prependListener` to the fake window infra (mirroring `on`).
+ *   - CRITICAL ordering: revocation MUST run FIRST on 'closed'. The framework
+ *     registers its revoke listener via `prependListener` so it runs before any
+ *     external 'closed' listener the host registered earlier. The minimal
+ *     `MinimalBrowserWindow` only has `on(...)`, so this file ADDS
+ *     `prependListener` to the fake window infra (mirroring `on`).
  *
- * What does NOT exist yet: `runtime.windows.adopt`. So every spec here is RED at
- * RUNTIME (`runtime.windows.adopt is not a function`) — reached through a single
- * typed escape hatch (`withAdopt`) so the file COMPILES (TypeError, not a compile
- * error). The fake window now exposes `prependListener` (the framework will call
- * it for the revoke listener); the fake records `on` vs `prependListener` into a
- * single ORDERED list so spec #3 can assert revoke-first ordering.
+ * The adopt surface is reached through a single typed escape hatch (`withAdopt`)
+ * so the file compiles against the runtime types. The fake window exposes
+ * `prependListener` (the framework calls it for the revoke listener); the fake
+ * records `on` vs `prependListener` into a single ORDERED list so spec #3 can
+ * assert revoke-first ordering.
  *
  * Fakes copied (minimal) from deck-app.host-view.test.ts / deck-app.slot-token.test.ts,
  * EXTENDED with `prependListener` (mirrors `on`, but unshifts to the FRONT) so an
@@ -77,8 +75,8 @@ interface FakeWebContentsLike extends MinimalWebContentsLike {
 	destroyed: boolean
 }
 
-// The fake window now ALSO supports prependListener (codex R2). To prove the
-// revoke-first ordering we record EVERY 'closed' listener — whether added via
+// The fake window ALSO supports prependListener. To prove the revoke-first
+// ordering we record EVERY 'closed' listener — whether added via
 // `on` or `prependListener` — into a single ordered array; `_emit('closed')`
 // invokes them front-to-back. `prependListener` unshifts (front); `on` pushes
 // (back) — exactly Electron's EventEmitter semantics.
@@ -178,7 +176,7 @@ function createFakeElectron(
 				arr.push(listener)
 				return this
 			}) as FakeBrowserWindow['on']
-			// codex R2 — `prependListener` mirrors `on` but unshifts to the FRONT, so
+			// `prependListener` mirrors `on` but unshifts to the FRONT, so
 			// a listener added via prependListener runs BEFORE any earlier `on`
 			// listener for the same event. The framework's adopt revoke listener uses
 			// this to guarantee revoke-first.
@@ -262,10 +260,10 @@ function makeOwnsWindowsBackend(): RuntimeBackend {
 	}
 }
 
-// ── Typed escape hatch for the not-yet-typed `runtime.windows.adopt` ─────────
+// ── Typed escape hatch for `runtime.windows.adopt` ───────────────────────────
 //
-// `runtime.windows.adopt` is not in the public type yet, so reach it through a
-// loose view. Absence then fails at RUNTIME (`adopt is not a function`) — the RED
+// Reach `runtime.windows.adopt` through a loose view so any regression that
+// drops it fails at RUNTIME (`adopt is not a function`) — the runtime failure
 // we want — rather than a compile error that would stop the suite running.
 interface ViewSource { url?: string, file?: string }
 interface HostViewHandle {
@@ -388,7 +386,7 @@ describe('runtime.windows.adopt — admits trust', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 3. CRITICAL (codex R2): 'closed' revokes trust FIRST (prependListener). An
+// 3. CRITICAL: 'closed' revokes trust FIRST (prependListener). An
 //    EXTERNAL 'closed' listener registered BEFORE adopt must, when the window
 //    fires 'closed', observe the wc ALREADY untrusted — proving the framework's
 //    revoke listener ran FIRST (registered via prependListener, not on()).
@@ -544,6 +542,6 @@ describe('runtime.windows.adopt — ownership transfer vs observe', () => {
 	})
 })
 
-// Parity ref so an unused-import lint never masks the RED.
+// Parity ref so an unused-import lint never masks a runtime failure.
 const _jsonParityRef: JsonValue = null
 void _jsonParityRef

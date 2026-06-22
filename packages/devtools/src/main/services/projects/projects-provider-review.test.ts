@@ -99,7 +99,9 @@ describe('ProjectsProvider — host integration contract', () => {
       addProject: (p) => ({ name: 'x', path: p }),
       removeProject: () => {},
       saveCompileConfig: async (_p, cfg) => {
-        await new Promise((r) => setTimeout(r, 10))
+        // Resolve on a microtask, not a real timer: the point is that callers
+        // await completion, not how long the write takes.
+        await Promise.resolve()
         written = cfg
       },
     }

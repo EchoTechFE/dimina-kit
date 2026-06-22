@@ -1,27 +1,19 @@
 /**
- * TDD failing-first contract tests for "P0: expose moveTo on the public host
- * handle + re-placement is moveTo's job (N3/N8)".
+ * Contract tests for moveTo on the public host handle + re-placement.
  *
- * BACKGROUND (codex-confirmed):
- *   - (N8) the INNER `createViewHandle` (src/main/view-handle.ts) already
- *     implements `moveTo(dest,{zone,rehome})` (rollback + Scope.adopt). But the
- *     PUBLIC `DeckViewHandle` returned by `runtime.view()` exposes ONLY
- *     placeIn/applyPlacement/dispose — `moveTo` is NOT surfaced.
- *   - (N3) a SECOND `placeIn()` on the public handle currently OVERWRITES the
- *     inner `current`/`viewScope` (cross-window corruption on old-window close).
+ * BACKGROUND:
+ *   - The INNER `createViewHandle` (src/main/view-handle.ts) implements
+ *     `moveTo(dest,{zone,rehome})` (rollback + Scope.adopt), and the PUBLIC
+ *     `DeckViewHandle` returned by `runtime.view()` surfaces it alongside
+ *     placeIn/applyPlacement/dispose.
  *
- * THE FIX pinned here:
- *   - `runtime.view().moveTo(dest, { zone, anchor, rehome? })` is exposed and
- *     moves the per-window SUBSTRATE registration (unregister from src, register
- *     in dest), moves the WCV (winB.contentView gains it / winA loses it),
- *     re-issues the slot-token anchor for the dest, and ROLLS BACK on dest
- *     failure (the view stays in src; the promise rejects).
+ * Contract pinned here:
+ *   - `runtime.view().moveTo(dest, { zone, anchor, rehome? })` moves the
+ *     per-window SUBSTRATE registration (unregister from src, register in dest),
+ *     moves the WCV (winB.contentView gains it / winA loses it), re-issues the
+ *     slot-token anchor for the dest, and ROLLS BACK on dest failure (the view
+ *     stays in src; the promise rejects).
  *   - `placeIn` TWICE on the public handle THROWS (re-placement disallowed).
- *
- * Every spec is RED at RUNTIME: `handle.moveTo` is `undefined`
- * (`handle.moveTo is not a function`) and placeIn-twice currently overwrites
- * rather than throwing. Reached through a typed escape hatch (`withView`) so the
- * file COMPILES — the RED is a missing-member / wrong-behavior assertion.
  *
  * Channel string literals are used directly (the `DeckChannel.*` members are
  * internal); fakes are copied (minimal) from deck-app.slot-token.test.ts.
@@ -150,10 +142,10 @@ function createFakeElectron(
 			this.webContents = makeFakeWebContents()
 			this.destroyed = false
 			// Model real Electron `contentView.children` so the moveTo rollback's
-			// membership guard (codex P0 round-3 BUG 2) has a truthful view of which
-			// WCVs the window actually hosts. The default add/remove keep the array in
-			// sync; a test may override addChildView (e.g. B3's mid-apply throw) while
-			// still pushing into `children` to model a leaked-then-detached child.
+			// membership guard has a truthful view of which WCVs the window actually
+			// hosts. The default add/remove keep the array in sync; a test may
+			// override addChildView (e.g. B3's mid-apply throw) while still pushing
+			// into `children` to model a leaked-then-detached child.
 			const children: MinimalWebContentsView[] = []
 			const cv = {
 				children,
@@ -231,14 +223,13 @@ function createFakeElectron(
 
 // ── Typed escape hatch for the not-yet-typed `moveTo` on the host handle ──────
 //
-// `DeckViewHandle` does NOT declare `moveTo` (N8). Reaching it through a loose
-// view makes its absence fail at RUNTIME (`handle.moveTo is not a function`) —
-// the RED we want — not a compile error that would stop the suite running.
+// Reaching `moveTo` through a loose view keeps the suite running regardless of
+// whether the public `DeckViewHandle` type declares it.
 interface ViewSource { url?: string, file?: string }
 interface HostViewHandle {
 	placeIn(win: unknown, opts: { zone?: number, anchor?: string }): HostViewHandle
 	applyPlacement(p: ViewPlacement): HostViewHandle
-	// N8: the surface under test — not in the public type yet.
+	// the surface under test
 	moveTo(win: unknown, opts: { zone?: number, anchor?: string, rehome?: boolean }): Promise<void>
 	dispose(): Promise<void>
 }
@@ -262,7 +253,7 @@ function lastWcv(electron: FakeElectron): FakeWebContentsView {
 }
 
 // Pull the most recent slot-grant the framework `send`-pushed to `wc` (or null
-// if none). Used to assert the dest re-anchor (B4) and to capture tokens.
+// if none). Used to assert the dest re-anchor and to capture tokens.
 function lastSlotGrant(wc: FakeWebContentsLike): SlotGrant | null {
 	const calls = (wc.send as ReturnType<typeof vi.fn>).mock.calls
 	for (let i = calls.length - 1; i >= 0; i -= 1) {
@@ -305,11 +296,11 @@ async function bootTwoWindows(): Promise<{
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// B1. moveTo moves the native view to winB's substrate (registered in winB,
-//     UNREGISTERED from winA) — the WCV moved (winB gained it, winA lost it).
+// moveTo moves the native view to winB's substrate (registered in winB,
+// UNREGISTERED from winA) — the WCV moved (winB gained it, winA lost it).
 // Pin: winB.contentView.addChildView(wcv) fired on the move; winA detached it
 // (removeChildView(wcv)); and the dest registration is real — a place driven via
-// winB's NEW token (B4 token) reaches the WCV's setBounds.
+// winB's NEW token reaches the WCV's setBounds.
 // ─────────────────────────────────────────────────────────────────────────────
 describe('DeckApp moveTo (public handle) — moves the view to winB substrate', () => {
 	it('B1) moveTo(winB) adds the WCV to winB, removes it from winA, and re-binds to winB', async () => {
@@ -344,8 +335,8 @@ describe('DeckApp moveTo (public handle) — moves the view to winB substrate', 
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// B2. placeIn TWICE on the public handle THROWS (re-placement disallowed; moveTo
-//     is the migration path — N3).
+// placeIn TWICE on the public handle THROWS (re-placement disallowed; moveTo
+// is the migration path).
 // Pin: the second placeIn throws; the view stays in winA (no corruption).
 // ─────────────────────────────────────────────────────────────────────────────
 describe('DeckApp moveTo (public handle) — second placeIn throws (N3)', () => {
@@ -370,7 +361,7 @@ describe('DeckApp moveTo (public handle) — second placeIn throws (N3)', () => 
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// B3. (CRITICAL) moveTo ROLLBACK — a dest commit failure leaves the view in winA.
+// (CRITICAL) moveTo ROLLBACK — a dest commit failure leaves the view in winA.
 // Pin: arm winB.contentView.addChildView to THROW on the dest attach (the
 // Compositor surfaces a CommitError; moveTo rolls back). The view STAYS in winA
 // (still its child, re-mounted), winB never gains it, and the promise REJECTS.
@@ -393,8 +384,8 @@ describe('DeckApp moveTo (public handle) — dest-failure rollback (atomicity)',
 			// Model a MID-APPLY native leak: the child IS added to the window before
 			// the call throws (real Electron's addChildView can partially apply). This
 			// is exactly the residue the moveTo rollback's membership-guarded
-			// removeChildView (codex P0 round-3 BUG 2) must clean up — so the dest
-			// stays net-zero (the assertion below).
+			// removeChildView must clean up — so the dest stays net-zero (the
+			// assertion below).
 			const children = winB.contentView.children
 			const i = children.indexOf(v)
 			if (i >= 0) children.splice(i, 1)
@@ -428,7 +419,7 @@ describe('DeckApp moveTo (public handle) — dest-failure rollback (atomicity)',
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// B4. slot-token re-anchor on move: after moveTo(winB,{anchor:'#b'}), a NEW
+// slot-token re-anchor on move: after moveTo(winB,{anchor:'#b'}), a NEW
 // slot-grant for the moved view is pushed to winB's control wc with slotId '#b';
 // AND a stale `place` using the OLD (winA) token is DROPPED (the old token was
 // revoked on move).
@@ -477,7 +468,7 @@ describe('DeckApp moveTo (public handle) — slot-token re-anchor + old-token re
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// B5. dispose after moveTo destroys the view in winB (unregistered from winB,
+// dispose after moveTo destroys the view in winB (unregistered from winB,
 // webContents.close called) — no leak, no double.
 // Pin: after moveTo(winB) then dispose(), winB detached the WCV (removeChildView)
 // and the WCV's webContents.close() was called (destroy), exactly once.
@@ -505,21 +496,20 @@ describe('DeckApp moveTo (public handle) — dispose after move destroys in winB
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// codex P0 round-3 pin (BUG 1) — placeIn's `placed` flag is set BEFORE the
-// best-effort slot-grant push, so a slot-grant `send` failure does NOT leave the
-// handle re-placeable.
+// placeIn's `placed` flag is set BEFORE the best-effort slot-grant push, so a
+// slot-grant `send` failure does NOT leave the handle re-placeable.
 //
-// Bug: `placed = true` used to run AFTER mintSlotToken (which `send`s the
-// slot-grant). If `send` threw, `placed` stayed false → a RETRY's public guard
-// passed → it overwrote `placedSubstrate` (corruption). Fix: set `placed` right
-// after the CORE placement (registerView + inner.placeIn), before the grant push.
-// The view IS placed (winA gained the WCV); the renderer can re-subscribe to get
-// the grant. We force the grant `send` to throw and assert: the first placeIn
-// threw (the grant push failed) BUT a subsequent placeIn STILL throws "already
-// placed" and does NOT overwrite (winB never gains the WCV).
+// `placed = true` must run right after the CORE placement (registerView +
+// inner.placeIn), before the grant push. If it ran AFTER mintSlotToken (which
+// `send`s the slot-grant) and `send` threw, `placed` would stay false → a
+// RETRY's public guard would pass → it would overwrite `placedSubstrate`
+// (corruption). The view IS placed (winA gained the WCV); the renderer can
+// re-subscribe to get the grant. We force the grant `send` to throw and assert:
+// the first placeIn threw (the grant push failed) BUT a subsequent placeIn STILL
+// throws "already placed" and does NOT overwrite (winB never gains the WCV).
 // ─────────────────────────────────────────────────────────────────────────────
-describe('DeckApp placeIn (public handle) — slot-grant send failure still marks placed (BUG 1)', () => {
-	it('codex P0 round-3 pin (BUG 1): a placeIn whose slot-grant send throws still marks the handle placed (a later placeIn throws, does NOT overwrite)', async () => {
+describe('DeckApp placeIn (public handle) — slot-grant send failure still marks placed', () => {
+	it('a placeIn whose slot-grant send throws still marks the handle placed (a later placeIn throws, does NOT overwrite)', async () => {
 		const { app, electron, winA, winB } = await bootTwoWindows()
 
 		const handle = withView(app.runtime).view({ source: { url: 'data:text/html,x' } })
@@ -565,12 +555,12 @@ describe('DeckApp placeIn (public handle) — slot-grant send failure still mark
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// codex P0 round-3 pin (BUG 2) — the moveTo rollback `removeChildView` is
+// the moveTo rollback `removeChildView` is
 // DEFENSIVE: it (a) does NOT remove a child the dest never added (a source-side
 // failure path), and (b) a cleanup-throw never masks the ORIGINAL moveTo error.
 // ─────────────────────────────────────────────────────────────────────────────
-describe('DeckApp moveTo (public handle) — defensive rollback cleanup (BUG 2)', () => {
-	it('codex P0 round-3 pin (BUG 2a): a SOURCE-side failure does not removeChildView from a dest that never added it', async () => {
+describe('DeckApp moveTo (public handle) — defensive rollback cleanup', () => {
+	it('a SOURCE-side failure does not removeChildView from a dest that never added it', async () => {
 		const { app, electron, winA, winB } = await bootTwoWindows()
 
 		const handle = withView(app.runtime).view({ source: { url: 'data:text/html,x' } })
@@ -599,7 +589,7 @@ describe('DeckApp moveTo (public handle) — defensive rollback cleanup (BUG 2)'
 		await app.shutdown()
 	})
 
-	it('codex P0 round-3 pin (BUG 2b): a cleanup-throw does NOT mask the original moveTo (dest) error', async () => {
+	it('a cleanup-throw does NOT mask the original moveTo (dest) error', async () => {
 		const { app, electron, winA, winB } = await bootTwoWindows()
 
 		const handle = withView(app.runtime).view({ source: { url: 'data:text/html,x' } })
@@ -634,6 +624,6 @@ describe('DeckApp moveTo (public handle) — defensive rollback cleanup (BUG 2)'
 	})
 })
 
-// Parity ref so an unused-import lint never masks the RED.
+// Parity ref so an unused-import lint never masks a runtime failure.
 const _jsonParityRef: JsonValue = null
 void _jsonParityRef

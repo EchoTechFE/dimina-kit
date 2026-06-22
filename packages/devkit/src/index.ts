@@ -131,7 +131,7 @@ export async function openProject(opts: OpenProjectOptions): Promise<ProjectSess
 	// When the compiler is racing (e.g. opening a project that was just
 	// closed elsewhere in the same Electron process) `build()` can return
 	// null even though the manifest on disk is perfectly readable. The
-	// pre-existing fallback to `{ appId: 'unknown' }` was load-bearing for
+	// fallback to `{ appId: 'unknown' }` is load-bearing for
 	// any consumer that calls `wx.setStorageSync` — the dimina runtime
 	// stores values under `${appId}_${key}` and the devtools storage panel
 	// also derives its IPC prefix from `appInfo.appId`. A stale `unknown`

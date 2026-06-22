@@ -22,9 +22,9 @@
  *      DevTools filter can separate the two layers.
  *
  *   2. Zero or more external subscribers (e.g. the automation WS server, which
- *      rebroadcasts every entry as an `App.logAdded` event). Subscribers used to
- *      each set `ctx.guestConsole` directly and clobber one another; now they
- *      register here so render + service both reach every consumer.
+ *      rebroadcasts every entry as an `App.logAdded` event). Subscribers register
+ *      here rather than each setting `ctx.guestConsole` directly (which would
+ *      clobber one another), so render + service both reach every consumer.
  *
  * ── Loop-safety invariant ───────────────────────────────────────────────────
  * The render→service forward injects `console[…]('[视图]', …)` INTO the service

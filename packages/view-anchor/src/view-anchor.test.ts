@@ -499,12 +499,12 @@ void _boundsShape
 
 // ── display:none / first-frame guard (opt-in) ───────────────────────
 //
-// TDD — FAILING-FIRST tests for an ADDITIVE, OPT-IN hardening of
-// `createPlacementAnchor`, gated behind a new `guardDisplayNone?: boolean`
-// option (default false = today's behaviour, unchanged).
+// An ADDITIVE, OPT-IN hardening of `createPlacementAnchor`, gated behind the
+// `guardDisplayNone?: boolean` option (default false = the unguarded
+// behaviour).
 //
-// Two new behaviours, ONLY when `guardDisplayNone: true`:
-//   §4 First-frame guard — `visible:true` but the measured rect has
+// Two behaviours, ONLY when `guardDisplayNone: true`:
+//   First-frame guard — `visible:true` but the measured rect has
 //      `width === 0 || height === 0` (no geometry box: unmounted /
 //      display:none / unstable first layout) → publish `{ visible:false }`
 //      (a detach, NO bounds) instead of `{ visible:true, bounds:{...,0,0} }`.
@@ -512,27 +512,22 @@ void _boundsShape
 //      the native view flashing at (0,0). NOTE: only ZERO WIDTH OR HEIGHT
 //      triggers this — a NON-zero box at position (0,0) is still a normal
 //      `{ visible:true }`.
-//   §3/§2.E display:none guard — the anchor attaches an
-//      `IntersectionObserver` on the target. When the target goes
-//      display:none (IO reports `isIntersecting:false` with a zero-area
-//      `boundingClientRect`) → publish `{ visible:false }`. When it comes
-//      back with a non-zero box (IO intersecting again / a subsequent
-//      measure yields non-zero width&height) → re-measure → publish
-//      `{ visible:true, bounds }`.
+//   display:none guard — the anchor attaches an `IntersectionObserver` on the
+//      target. When the target goes display:none (IO reports
+//      `isIntersecting:false` with a zero-area `boundingClientRect`) → publish
+//      `{ visible:false }`. When it comes back with a non-zero box (IO
+//      intersecting again / a subsequent measure yields non-zero
+//      width&height) → re-measure → publish `{ visible:true, bounds }`.
 //
-// Caller intent still wins (§3.1): a caller-`visible:false` anchor is
-// detached regardless — the guard NEVER flips a caller's `visible:false`
-// to true, and NEVER detaches purely because a NON-zero box scrolled
-// off-screen (a non-zero box at a negative/off-screen origin stays
-// `visible:true` with its real, possibly negative-origin, bounds).
+// Caller intent still wins: a caller-`visible:false` anchor is detached
+// regardless — the guard NEVER flips a caller's `visible:false` to true, and
+// NEVER detaches purely because a NON-zero box scrolled off-screen (a non-zero
+// box at a negative/off-screen origin stays `visible:true` with its real,
+// possibly negative-origin, bounds).
 //
-// This increment adds an IntersectionObserver, NOT a RAF — so the existing
-// "never schedules a requestAnimationFrame" guard must stay valid. We assert
-// it here too (`rafSpy`/`cancelSpy` from the shared harness).
-//
-// These tests must be RED today: `guardDisplayNone` is not implemented, so
-// no IntersectionObserver is wired and a 0×0 visible measure still publishes
-// `{ visible:true, bounds:0×0 }`.
+// This guard adds an IntersectionObserver, NOT a RAF — so the existing
+// "never schedules a requestAnimationFrame" guard stays valid. We assert it
+// here too (`rafSpy`/`cancelSpy` from the shared harness).
 
 // A controllable fake IntersectionObserver (jsdom has none). Mirrors the
 // FakeResizeObserver style: records observed elements + disconnect, captures
@@ -762,33 +757,26 @@ describe('createPlacementAnchor — display:none / first-frame guard (opt-in)', 
   })
 })
 
-// ── scroll + windowed RAF geometry sentinel (opt-in, increment 2) ────
+// ── scroll + windowed RAF geometry sentinel (opt-in) ────
 //
-// TDD — FAILING-FIRST tests for ADDITIVE, OPT-IN follow options on
-// `createPlacementAnchor`, derived from view-anchor-following.md
-// §2.C / §2.D / §2.F / §6 / §7. Both default OFF (= today's behaviour).
+// ADDITIVE, OPT-IN follow options on `createPlacementAnchor`. Both default
+// OFF (= the unfollowed behaviour).
 //
-//   followScroll?: boolean   — §2.C ancestor-scroll capture listener.
-//   followGeometry?: boolean — §2.D windowed RAF geometry sentinel.
-//   pulse(durationMs?)       — §2.F imperative "open the sentinel window".
+//   followScroll?: boolean   — ancestor-scroll capture listener.
+//   followGeometry?: boolean — windowed RAF geometry sentinel.
+//   pulse(durationMs?)       — imperative "open the sentinel window".
 //
 // ────────────────────────────────────────────────────────────────────
-// GOALPOST NOTE (§7): the package-wide "never RAF" invariant is
-// INTENTIONALLY NARROWED by `followGeometry` (opt-in) to "EVENT-driven
-// publishes (ResizeObserver / window resize / scroll) are never
-// RAF-deferred". The sentinel rAF is a POLLING mechanism that publishes
-// SYNCHRONOUSLY within its own frame — it is NOT a deferral of an
-// event-driven publish (see view-anchor-following.md §7). The existing
-// `createViewAnchor` "never schedules a requestAnimationFrame" test
-// (above) REMAINS VALID and is left UNCHANGED, because `followGeometry`
-// defaults off and the forward `createViewAnchor` core never opts in. The
-// tests below re-pin that the DEFAULT / event-driven paths still schedule
-// NO rAF, so the original guarantee holds wherever the sentinel is off.
+// The package-wide "never RAF" invariant is INTENTIONALLY NARROWED by
+// `followGeometry` (opt-in) to "EVENT-driven publishes (ResizeObserver /
+// window resize / scroll) are never RAF-deferred". The sentinel rAF is a
+// POLLING mechanism that publishes SYNCHRONOUSLY within its own frame — it is
+// NOT a deferral of an event-driven publish. The `createViewAnchor` "never
+// schedules a requestAnimationFrame" test (above) stays valid, because
+// `followGeometry` defaults off and the forward `createViewAnchor` core never
+// opts in. The tests below re-pin that the DEFAULT / event-driven paths still
+// schedule NO rAF, so the guarantee holds wherever the sentinel is off.
 // ────────────────────────────────────────────────────────────────────
-//
-// These tests must be RED today: `followScroll` / `followGeometry` /
-// `pulse` are unimplemented, so no capture scroll listener / pointerdown
-// listener / RAF sentinel exists.
 
 // A CONTROLLABLE fake requestAnimationFrame. The shared `rafSpy` only
 // returns 0 and stores nothing (it's a regression guard, not a driver), so
@@ -842,7 +830,7 @@ describe('createPlacementAnchor — scroll + windowed RAF geometry sentinel (opt
 
   /** Build a `[role="separator"]` splitter element (the drag handle). A
    *  capture-phase pointerdown whose target matches `[role="separator"]`
-   *  opens the sentinel window (§2.D). */
+   *  opens the sentinel window. */
   function buildSplitter(): HTMLElement {
     const sep = document.createElement('div')
     sep.setAttribute('role', 'separator')
@@ -851,7 +839,7 @@ describe('createPlacementAnchor — scroll + windowed RAF geometry sentinel (opt
   }
 
   /** Dispatch a capture-phase scroll on window (an ancestor scroll container
-   *  scrolling — §2.C: scroll doesn't bubble, but reaches window in capture). */
+   *  scrolling — scroll doesn't bubble, but reaches window in capture). */
   function dispatchCaptureScroll(): void {
     window.dispatchEvent(new Event('scroll'))
   }
@@ -864,8 +852,8 @@ describe('createPlacementAnchor — scroll + windowed RAF geometry sentinel (opt
   }
 
   /** Pointer release — ends a splitter drag so the sentinel may steady-close
-   *  (§2.D: 关窗只发生在松手之后). Dispatched bubbling from the target and on
-   *  window directly so a capture/bubble window listener sees it. */
+   *  (close only happens after release). Dispatched bubbling from the target
+   *  and on window directly so a capture/bubble window listener sees it. */
   function dispatchPointerup(target: HTMLElement): void {
     target.dispatchEvent(new Event('pointerup', { bubbles: true }))
     window.dispatchEvent(new Event('pointerup'))
@@ -888,12 +876,11 @@ describe('createPlacementAnchor — scroll + windowed RAF geometry sentinel (opt
   ): PulseHandle =>
     createPlacementAnchor(el, o as FollowOpts) as PulseHandle
 
-  // ── A. followScroll — capture-phase ancestor scroll (§2.C) ──────────
+  // ── A. followScroll — capture-phase ancestor scroll ──────────
 
   // A1: capture scroll re-publishes the freshly-measured rect (basic scroll
-  //     follow works WITHOUT the geometry sentinel — §2.C: "if followGeometry
-  //     is false, the scroll callback should still at least do a synchronous
-  //     emit()").
+  //     follow works WITHOUT the geometry sentinel — with followGeometry off,
+  //     the scroll callback still does a single synchronous emit()).
   it('A1) followScroll (followGeometry off): a capture-phase scroll re-publishes the new measured rect synchronously', () => {
     const publish = vi.fn<(p: Placement) => void>()
     const { el, setRect } = buildElement({ x: 0, y: 0, w: 100, h: 100 })
@@ -960,8 +947,8 @@ describe('createPlacementAnchor — scroll + windowed RAF geometry sentinel (opt
     removeSpy.mockRestore()
   })
 
-  // A3: §2.C — a followScroll capture-scroll OPENS the RAF sentinel window
-  //     when followGeometry is ALSO on (so it follows every frame of a scroll
+  // A3: a followScroll capture-scroll OPENS the RAF sentinel window when
+  //     followGeometry is ALSO on (so it follows every frame of a scroll
   //     burst, not just the one synchronous emit).
   it('A3) followScroll + followGeometry: a capture scroll opens the RAF sentinel (a frame becomes scheduled)', () => {
     const publish = vi.fn<(p: Placement) => void>()
@@ -982,9 +969,9 @@ describe('createPlacementAnchor — scroll + windowed RAF geometry sentinel (opt
     expect(raf.pending).toBeGreaterThanOrEqual(1)
   })
 
-  // ── B. followGeometry — windowed RAF geometry sentinel (§2.D/§6) ─────
+  // ── B. followGeometry — windowed RAF geometry sentinel ─────
 
-  // B-idle: §6 — IDLE (no scroll / pointerdown / pulse) schedules NO rAF.
+  // B-idle: IDLE (no scroll / pointerdown / pulse) schedules NO rAF.
   //   The sentinel is windowed: static cost is exactly zero.
   it('B-idle) followGeometry on but idle: NO rAF is ever scheduled (windowed = zero static cost)', () => {
     const publish = vi.fn<(p: Placement) => void>()
@@ -1064,10 +1051,10 @@ describe('createPlacementAnchor — scroll + windowed RAF geometry sentinel (opt
   })
 
   // B-close: after the pointer is RELEASED, N=2 consecutive UNCHANGED frames
-  //   cancel the rAF (steady = stop) — no further frame scheduled. (§2.D: a
-  //   steady run while the pointer is still HELD is a mid-drag pause and must
-  //   NOT close — see follow-geometry-press-drag.fix.test.ts; close is gated on
-  //   pointerup, so this test now releases before going steady.)
+  //   cancel the rAF (steady = stop) — no further frame scheduled. A steady run
+  //   while the pointer is still HELD is a mid-drag pause and must NOT close
+  //   (see follow-geometry-press-drag.fix.test.ts); close is gated on pointerup,
+  //   so this test releases before going steady.
   it('B-close) pointerup then N=2 consecutive unchanged frames → sentinel stops (cancelAnimationFrame / no further frame scheduled)', () => {
     const publish = vi.fn<(p: Placement) => void>()
     const { el, setRect } = buildElement({ x: 0, y: 0, w: 100, h: 100 })
@@ -1095,7 +1082,7 @@ describe('createPlacementAnchor — scroll + windowed RAF geometry sentinel (opt
     expect(raf.request.mock.calls.length).toBe(requestsBefore)
   })
 
-  // ── F. pulse() — explicit window open (§2.F) ────────────────────────
+  // ── F. pulse() — explicit window open ────────────────────────
 
   // F-open: pulse() opens the sentinel and it follows subsequent rect changes.
   it('F-open) pulse() opens the sentinel; it follows rect changes on subsequent frames', () => {
@@ -1137,13 +1124,13 @@ describe('createPlacementAnchor — scroll + windowed RAF geometry sentinel (opt
     expect(raf.request.mock.calls.length).toBe(requestsBefore)
   })
 
-  // ── §7 goalpost: event-driven publishes stay SYNCHRONOUS even with the
-  //    sentinel enabled; the sentinel rAF publishes in-frame, not deferred. ──
+  // ── Event-driven publishes stay SYNCHRONOUS even with the sentinel enabled;
+  //    the sentinel rAF publishes in-frame, not deferred. ──
 
   // B-sync: a ResizeObserver tick still publishes SYNCHRONOUSLY (in the event
   //   stack) WITHOUT scheduling a rAF, even with followGeometry enabled. This
-  //   is the §7 narrowing made concrete: event-driven ≠ RAF-deferred.
-  it('§7) with followGeometry ENABLED, a ResizeObserver tick publishes synchronously and schedules NO rAF', () => {
+  //   is the narrowing made concrete: event-driven ≠ RAF-deferred.
+  it('with followGeometry ENABLED, a ResizeObserver tick publishes synchronously and schedules NO rAF', () => {
     const publish = vi.fn<(p: Placement) => void>()
     const { el, setRect } = buildElement({ x: 0, y: 0, w: 100, h: 100 })
     mk(el, { visible: true, followGeometry: true, publish })
@@ -1158,7 +1145,7 @@ describe('createPlacementAnchor — scroll + windowed RAF geometry sentinel (opt
       visible: true,
       bounds: { x: 3, y: 4, width: 100, height: 100 },
     })
-    // …and the event-driven path did NOT route through a rAF (the §7 invariant
+    // …and the event-driven path did NOT route through a rAF (the invariant
     // survives, narrowed: event-driven publishes are never RAF-deferred).
     expect(raf.request).not.toHaveBeenCalled()
   })
@@ -1166,7 +1153,7 @@ describe('createPlacementAnchor — scroll + windowed RAF geometry sentinel (opt
   // Default-path "still no rAF": with followGeometry OFF / unset, NOTHING in
   //   the increment-2 surface schedules a rAF — the original package-wide
   //   "never RAF" guarantee holds for the default + event-driven paths.
-  it('§7-default) followGeometry OFF (default): RO + resize + scroll-less lifecycle schedules NO rAF', () => {
+  it('followGeometry OFF (default): RO + resize + scroll-less lifecycle schedules NO rAF', () => {
     const publish = vi.fn<(p: Placement) => void>()
     const { el, setRect } = buildElement({ x: 0, y: 0, w: 100, h: 100 })
     const handle = mk(el, { visible: true, publish }) // followGeometry unset

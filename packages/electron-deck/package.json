@@ -72,6 +72,7 @@
     "check:docs-api-sync": "node scripts/check-docs-api-sync.mjs",
     "test": "node scripts/check-trust-seal.mjs && node scripts/check-docs-api-sync.mjs && vitest run && vitest run --config vitest.dock-react.config.ts",
     "test:dev": "vitest",
+    "test:coverage": "vitest run --coverage && vitest run --config vitest.dock-react.config.ts --coverage --coverage.reportsDirectory=./coverage/dock-react",
     "test:dock-react": "vitest run --config vitest.dock-react.config.ts",
     "examples:dockable": "pnpm run build && node examples/dockable-demo/bundle.mjs && electron examples/dockable-demo/main.mjs",
     "prepack": "pnpm run build"
@@ -89,6 +90,7 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^6.0.1",
+    "@vitest/coverage-v8": "^4.1.4",
     "electron": "^41.2.1",
     "eslint": "^10.2.1",
     "jsdom": "^29.0.2",

@@ -10,15 +10,16 @@
  *  - the toolbar WCV's creation injects `HOST_TOOLBAR_RUNTIME_MARKER` into its
  *    process argv via `webPreferences.additionalArguments`;
  *  - the marker is PROCESS-level (subframes of the toolbar window carry it
- *    too — spike .repro/wave3-spike/RESULTS.md item 3), so the guard needs
- *    BOTH wings: `isMainFrame` AND `argv.includes(marker)`;
+ *    too), so the guard needs BOTH wings: `isMainFrame` AND
+ *    `argv.includes(marker)`;
  *  - a renderer that fails the guard returns immediately with ZERO footprint
- *    (no advertiser, no listeners, no globals — spike item 4).
+ *    (no advertiser, no listeners, no globals).
  *
- * Why session-resident at all: the advertiser used to ride the toolbar WCV's
- * `webPreferences.preload`, so a host calling `setPreloadPath(<its own
- * preload>)` REPLACED it and the strip height collapsed to 0. With the runtime
- * on the session layer, the host preload and the framework runtime coexist.
+ * Why session-resident at all: riding the toolbar WCV's
+ * `webPreferences.preload` lets a host calling `setPreloadPath(<its own
+ * preload>)` REPLACE the advertiser, collapsing the strip height to 0. With the
+ * runtime on the session layer, the host preload and the framework runtime
+ * coexist.
  */
 
 import { HOST_TOOLBAR_RUNTIME_MARKER } from '../../shared/constants.js'

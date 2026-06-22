@@ -2,15 +2,15 @@
  * Ref-counted registration of the host-toolbar framework runtime on
  * `session.defaultSession`.
  *
- * The toolbar's height advertiser no longer rides the toolbar WCV's
- * `webPreferences.preload` (a host's `setPreloadPath` used to replace it and
- * the strip height collapsed to 0). Instead the runtime bundle
+ * The toolbar's height advertiser does not ride the toolbar WCV's
+ * `webPreferences.preload`: a host's `setPreloadPath` would replace it and the
+ * strip height would collapse to 0. Instead the runtime bundle
  * (`hostToolbarRuntimePreloadPath`) is registered once per process as a
  * session frame preload; its own guard (`--dimina-host-toolbar` marker +
  * `isMainFrame`) keeps it a zero-footprint no-op in every other defaultSession
  * renderer.
  *
- * Ref-counting (codex condition 3): multiple ViewManagers can coexist in one
+ * Ref-counting: multiple ViewManagers can coexist in one
  * process and share the ONE defaultSession. Each manager acquires at most one
  * reference (on first toolbar need) and releases it in `disposeAll`. Only the
  * first acquire registers; only the last release unregisters (with the id

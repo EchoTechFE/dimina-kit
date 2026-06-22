@@ -115,14 +115,13 @@ describe('resolveTempFile', () => {
 })
 
 /**
- * Phase 0 contract: the main-process resolver only owns the `_tmp/` namespace.
- * `_store/` and plain user-data paths (`difile://<rel>`) must be handed off to
- * the on-disk reader (`disk.ts`, landing in Phase 1). Until that lands the
- * resolver must return 404 for those URLs even if a record happens to exist
- * in the Map under that key (the Map should never be populated for non-tmp
- * URLs in P0, but we assert the safe-by-default behaviour anyway).
+ * The main-process resolver only owns the `_tmp/` namespace. `_store/` and plain
+ * user-data paths (`difile://<rel>`) are handed off to the on-disk reader
+ * (`disk.ts`). The resolver returns 404 for those URLs even if a record happens
+ * to exist in the Map under that key (the Map should never be populated for
+ * non-tmp URLs, but we assert the safe-by-default behaviour anyway).
  */
-describe('resolveTempFile — Phase 0 namespace ownership', () => {
+describe('resolveTempFile — namespace ownership', () => {
 	it('returns 404 for difile://_store/* even when a record exists at that key', () => {
 		const store = makeStore([
 			['difile://_store/xyz', { bytes: Buffer.from('stored'), mime: 'image/png' }],

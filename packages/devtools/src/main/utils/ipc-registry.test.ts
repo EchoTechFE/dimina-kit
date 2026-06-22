@@ -198,9 +198,8 @@ describe('IpcRegistry.handleSync (sendSync return value)', () => {
   })
 })
 
-// NOTE: self-authored by the implementer (small additive test for the
-// `isMainFrameSender` defense-in-depth gate added alongside the sender
-// white-list). Flagged per the TDD policy.
+// Covers the `isMainFrameSender` defense-in-depth gate alongside the sender
+// white-list.
 describe('IpcRegistry frame validation (sub-frame rejection)', () => {
   function emitWithFrame(channel: string, frameRouting: number, mainRouting: number, ...args: unknown[]) {
     const fakeEvent = {

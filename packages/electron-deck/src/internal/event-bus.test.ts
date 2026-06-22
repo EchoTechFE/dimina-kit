@@ -121,8 +121,8 @@ describe('EventBus', () => {
 		expect(listenerB).not.toHaveBeenCalled()
 	})
 
-	// codex review #9: 重入守护。listener 内同步再 publish 同一 event 不能死循环。
-	it('reentrant publish on same channel within a listener is dropped + logged (codex #9)', () => {
+	// 重入守护。listener 内同步再 publish 同一 event 不能死循环。
+	it('reentrant publish on same channel within a listener is dropped + logged', () => {
 		const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 		try {
 			const bus = new EventBus()

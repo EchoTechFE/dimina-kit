@@ -1,5 +1,5 @@
 /**
- * Phase 2 contract: project thumbnails must flow through the injected
+ * Contract: project thumbnails must flow through the injected
  * ProjectsProvider, not through `fs` in the workspace. Downstream hosts
  * keep projects in the cloud, so the local `<userData>/...thumbnails`
  * cache is the wrong source of truth for them.

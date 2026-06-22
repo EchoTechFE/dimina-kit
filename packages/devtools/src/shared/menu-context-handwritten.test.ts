@@ -1,21 +1,19 @@
 /**
- * Feedback fix ⑤ — `MenuContext` must be a HAND-WRITTEN narrow contract, not
- * a wide `Omit<WorkbenchContext, …>` projection.
+ * `MenuContext` must be a HAND-WRITTEN narrow contract, not a wide
+ * `Omit<WorkbenchContext, …>` projection.
  *
- * Today's bug, verified against source (src/shared/types.ts):
- * `MenuContext = Omit<WorkbenchContext, 'registry' | 'senderPolicy' |
- * 'trustedWindowSenderIds' | 'simulatorApis'>` still drags EVERYTHING else —
- * `adapter`, `preloadPath`, `bridge?`, `connections`, `windows`
- * (WindowService → BrowserWindow), `storageApi?`, `appData?`… — onto the
- * host-facing menu surface. Every internal refactor of those services is an
- * unreviewed breaking change for a host menuBuilder, the exact failure mode
- * the hand-written `MiniappRuntime` already eliminated for the runtime
- * contract.
+ * Why a plain `Omit` is wrong: `Omit<WorkbenchContext, 'registry' |
+ * 'senderPolicy' | 'trustedWindowSenderIds' | 'simulatorApis'>` still drags
+ * EVERYTHING else — `adapter`, `preloadPath`, `bridge?`, `connections`,
+ * `windows` (WindowService → BrowserWindow), `storageApi?`, `appData?`… —
+ * onto the host-facing menu surface. Every internal refactor of those
+ * services then becomes an unreviewed breaking change for a host menuBuilder,
+ * the exact failure mode the hand-written `MiniappRuntime` eliminated for the
+ * runtime contract.
  *
- * Real consumption surface (audited for this spec):
+ * Real consumption surface:
  *  - the built-in menu (src/main/menu/index.ts): settings entry →
- *    `openSettingsWindow(ctx)` (replaced by `ctx.openSettings()` per
- *    feedback fix ②) and `ctx.notify.windowNavigateBack()` (打开项目);
+ *    `ctx.openSettings()` and `ctx.notify.windowNavigateBack()` (打开项目);
  *  - a host menuBuilder's legitimate reads: `appName`, the narrow workspace
  *    set (`hasActiveSession` / `getProjectPath` / `openProject` /
  *    `closeProject` / `getSession`), `notify.projectStatus`.
@@ -23,22 +21,12 @@
  * Locked contract (this file is the spec): hand-written `MenuContext` with
  *  - `appName: string`
  *  - the narrow workspace set above
- *  - `openSettings: () => Promise<void>` (lands with fix ②)
+ *  - `openSettings: () => Promise<void>`
  *  - `notify.projectStatus` + `notify.windowNavigateBack`
  * and WITHOUT the internal plumbing (`adapter` / `preloadPath` / `bridge` /
  * `connections` / `windows` / `storageApi`). A full `WorkbenchContext` must
  * STAY assignable to `MenuContext` (structural subtyping — hosts that pass
  * the whole ctx through keep compiling).
- *
- * NOTE FOR THE IMPLEMENTER: menu-builder-context-narrowed.test.ts pins the
- * OLD `Equal<MenuContext, Omit<…>>` shape (and `views`/`windows`/
- * `projectsProvider` reachability) — updating that file is part of this
- * designed contract change; its SEMANTIC guarantees (internal pipeline
- * unreachable, hook param narrowed) are re-encoded below and must survive.
- *
- * RED / flip protocol: the original `@ts-expect-error RED` markers flipped
- * when the fix landed and were deleted per protocol — the remaining lines
- * are the permanent compile-time guards.
  */
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -87,10 +75,10 @@ function _menuConsumptionPin(menuCtx: MenuContext): void {
 void _menuConsumptionPin
 
 // ═════════════════════════════════════════════════════════════════════════
-// §2 Members the narrow contract must LOSE (today all reachable through the
-// Omit projection). Real bug caught (post-flip): re-widening silently
-// re-promises internal plumbing — and Electron types (`windows` →
-// WindowService → BrowserWindow) — to host menu builders.
+// §2 Members the narrow contract must LOSE — these are reachable through an
+// Omit projection. Bug guarded: re-widening silently re-promises internal
+// plumbing — and Electron types (`windows` → WindowService → BrowserWindow) —
+// to host menu builders.
 // ═════════════════════════════════════════════════════════════════════════
 
 staticAssert<Not<HasKey<MenuContext, 'adapter'>>>()
@@ -101,9 +89,8 @@ staticAssert<Not<HasKey<MenuContext, 'windows'>>>()
 staticAssert<Not<HasKey<MenuContext, 'storageApi'>>>()
 
 // ═════════════════════════════════════════════════════════════════════════
-// §3 Guarantees CARRIED OVER from menu-builder-context-narrowed.test.ts —
-// these were true under the Omit and must stay true under the hand-written
-// shape (green today AND after; regression guards, no markers).
+// §3 Guarantees shared with menu-builder-context-narrowed.test.ts — the
+// internal pipeline must stay unreachable on the hand-written `MenuContext`.
 // ═════════════════════════════════════════════════════════════════════════
 
 // Internal pipeline stays unreachable.
@@ -123,7 +110,8 @@ const _contextSatisfiesMenuContext: (ctx: WorkbenchContext) => MenuContext = (ct
 void _contextSatisfiesMenuContext
 
 // ═════════════════════════════════════════════════════════════════════════
-// §4 Runtime assertion (vitest-RED today).
+// §4 Runtime assertion: types.ts declares MenuContext as a hand-written
+// interface, not an Omit projection.
 // ═════════════════════════════════════════════════════════════════════════
 
 const thisTestFile = import.meta.url.startsWith('file:')
@@ -132,7 +120,7 @@ const thisTestFile = import.meta.url.startsWith('file:')
 const typesSourcePath = path.join(path.dirname(thisTestFile), 'types.ts')
 
 describe('feedback ⑤ — MenuContext is hand-written, not an Omit<WorkbenchContext, …> projection', () => {
-  it('types.ts does not declare MenuContext via Omit<…> [RED today]', () => {
+  it('types.ts does not declare MenuContext via Omit<…>', () => {
     // Real bug: the Omit projection puts every nested internal service type
     // on the host-facing menu surface — internal refactors become breaking
     // changes a host menuBuilder discovers on upgrade (same failure mode the

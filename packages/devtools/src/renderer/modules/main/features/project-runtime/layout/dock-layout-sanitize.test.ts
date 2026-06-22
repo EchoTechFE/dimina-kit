@@ -2,15 +2,11 @@
  * Wiring test — `restoreTreeOrDefault` heals non-positive FLEXIBLE weights
  * (via `sanitizeFlexibleWeights`) before handing the tree to the model.
  *
- * TDD — NOT yet implemented. Today `restoreTreeOrDefault` returns a parsed tree
- * VERBATIM once it round-trips + validates; a persisted tree with a flexible
- * pane collapsed to weight 0 (a structurally-LEGAL state — `validateTree` only
- * rejects NON-FINITE sizes, not 0) survives un-healed, so the pane restores as a
- * 0-share sliver. After the change, `buildDockModel` heals that weight to > 0.
- *
- * RED reasons (each fails for the RIGHT reason, not infra):
- *  - the healing call is not wired into `restoreTreeOrDefault`, so the restored
- *    tree keeps the 0 weight → `weightOf(...)` assertions fail.
+ * Without healing, `restoreTreeOrDefault` would return a parsed tree VERBATIM
+ * once it round-trips + validates; a persisted tree with a flexible pane
+ * collapsed to weight 0 (a structurally-LEGAL state — `validateTree` only
+ * rejects NON-FINITE sizes, not 0) would survive un-healed and the pane would
+ * restore as a 0-share sliver. `buildDockModel` heals that weight to > 0.
  *
  * The bad tree is built from `buildDefaultDockTree(375)` with ONE flexible
  * child's weight zeroed, so it stays structurally legal + references ONLY the 7

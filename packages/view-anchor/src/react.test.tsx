@@ -160,10 +160,10 @@ describe('useViewAnchor — ref attach', () => {
 // the leaf div conditionally rendered), failing to dispose leaks the RO
 // and keeps publishing against a detached element.
 //
-// P1 fix: this contract ALSO requires emitting one ZERO on detach. The
-// anchor's follower is a main-process WebContentsView; the host only
-// collapses it on `{0,0,0,0}`. Without a ZERO the native view stays frozen
-// at its last bounds and occludes content. See `react.ts`.
+// This contract ALSO requires emitting one ZERO on detach. The anchor's
+// follower is a main-process WebContentsView; the host only collapses it on
+// `{0,0,0,0}`. Without a ZERO the native view stays frozen at its last bounds
+// and occludes content. See `react.ts`.
 
 describe('useViewAnchor — ref null disposes', () => {
   it('detaching the DOM node publishes ZERO once, disconnects the observer, and stops publishing', () => {
@@ -195,11 +195,9 @@ describe('useViewAnchor — ref null disposes', () => {
     })
     expect(ro.disconnected).toBe(true)
 
-    // NOTE: this assertion previously encoded the P1 bug — it asserted
-    // `expect(publish).not.toHaveBeenCalled()`, i.e. detach published nothing,
-    // which left the native WebContentsView stranded at its old bounds. The
-    // correct behaviour is: a vanished anchor MUST publish exactly one ZERO so
-    // the host collapses the native view.
+    // A vanished anchor MUST publish exactly one ZERO so the host collapses the
+    // native view — detach publishing nothing would strand the native
+    // WebContentsView at its old bounds.
     expect(publish).toHaveBeenCalledTimes(1)
     expect(publish).toHaveBeenCalledWith({ x: 0, y: 0, width: 0, height: 0 })
     publish.mockClear()
@@ -296,9 +294,9 @@ describe('useViewAnchor — opts/deps change re-publishes', () => {
 // Bug it catches: a hook that does not dispose on unmount leaks the RO and
 // can throw when a queued RAF fires against a torn-down IPC channel.
 //
-// P1 fix: unmount must ALSO collapse the native view with one ZERO (same
-// reasoning as Contract 9 — the follower is a main-process WebContentsView
-// the host only collapses on `{0,0,0,0}`).
+// Unmount must ALSO collapse the native view with one ZERO (same reasoning as
+// Contract 9 — the follower is a main-process WebContentsView the host only
+// collapses on `{0,0,0,0}`).
 
 describe('useViewAnchor — unmount disposes', () => {
   it('unmounting the component publishes ZERO once, disconnects the observer, and never publishes after', () => {
@@ -318,10 +316,8 @@ describe('useViewAnchor — unmount disposes', () => {
 
     expect(ro.disconnected).toBe(true)
 
-    // NOTE: this assertion previously encoded the P1 bug — it asserted
-    // `expect(publish).not.toHaveBeenCalled()` after unmount, leaving the
-    // native view stranded. Correct behaviour: unmount publishes exactly one
-    // ZERO to collapse the native view.
+    // Unmount publishes exactly one ZERO to collapse the native view —
+    // publishing nothing would leave the native view stranded.
     expect(publish).toHaveBeenCalledTimes(1)
     expect(publish).toHaveBeenCalledWith({ x: 0, y: 0, width: 0, height: 0 })
     publish.mockClear()
@@ -380,7 +376,7 @@ describe('useViewAnchor — independent instances', () => {
   })
 })
 
-// ── Remount with present transition (codex regression) ──────────────
+// ── Remount with present transition ──────────────
 // Production coupling: the debug cell is *unmounted* when hidden and *remounted*
 // when shown, so the element's mount/unmount and `options.present` flip together
 // (present=false ⟺ unmounted, present=true ⟺ mounted). On "show", React commits

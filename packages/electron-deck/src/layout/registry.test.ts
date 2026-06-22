@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import type {
 	DomPanelDescriptor,
 	NativePanelDescriptor,
-	// FAILING: not yet exported — this import is the honest contract failure point.
 	PanelCapabilities,
 } from './types.js'
 import { createPanelRegistry } from './index.js'
@@ -54,9 +53,9 @@ describe('createPanelRegistry', () => {
 })
 
 // ───────────────────────── PanelCapabilities ─────────────────────────
-// FAILING TDD spec for the NOT-YET-ADDED `PanelCapabilities` contract.
+// Contract spec for the `PanelCapabilities` contract.
 //
-// Contract (the implementer must build EXACTLY this):
+// Contract (the implementation must match EXACTLY this):
 //   export interface PanelCapabilities {
 //     readonly draggable?: boolean              // default (undefined) === true
 //     readonly dropPolicy?: 'free' | 'reorder-only' // default (undefined) === 'free'

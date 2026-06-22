@@ -1,127 +1,48 @@
 /**
- * ── ROUND 4 (codex residual risk — inventory ceiling guard, 2026-06) ────────
- * Residual risk after round 3: the inline
- * `grandfathered(workbench-context): shrink-only` directive is SELF-SERVE — a
- * developer can paste the same comment onto a brand-new violation and quietly
- * WIDEN the exemption set; "shrink-only" had no mechanical enforcement.
- * Describe block ⑦ closes it by inventorying the directive itself:
- *   - `<= 22` is the HARD GATE: adding a 23rd inline grandfather directive
- *     anywhere under src/ fails CI, no matter which file it lands in.
- *   - `=== 22` + the per-file distribution snapshot is REVIEW VISIBILITY:
- *     any add OR remove (even one that stays under the ceiling, e.g. delete
- *     one + add one elsewhere) shows up as an explicit snapshot diff that has
- *     to pass review. Division of labor is deliberate: the ceiling alone
- *     would let churn hide inside the budget; the snapshot alone could be
- *     "fixed" by bumping numbers without anyone noticing direction — together
- *     they make growth red and movement visible.
- * ─────────────────────────────────────────────────────────────────────────────
+ * Spec for the WorkbenchContext import RATCHET (eslint.config.js
+ * `no-restricted-syntax`). The ratchet exists to forbid GROWTH of dependencies
+ * on the WorkbenchContext grab-bag type from non-whitelisted modules. This file
+ * pins every AST shape the rule must catch plus the exemption mechanism.
  *
- * ── ROUND 3 (codex third re-review — ratchet final round, 2026-06) ──────────
- * Two remaining syntax holes plus one GRANULARITY change to the exemption
- * mechanism itself. Pinned in describe blocks ⑤ and ⑥ below:
+ * Forms that must be flagged (none produce a plain ImportSpecifier, the naive
+ * selector):
+ *   - named (type) import + qualified access — `import { WorkbenchContext }`
+ *     and `import * as Wb` + `Wb.WorkbenchContext` (value and type-only flavors);
+ *   - type-query import — `type T = import('…').WorkbenchContext` → TSImportType
+ *     (fields `source` Literal, `qualifier` Identifier);
+ *   - named / type re-export — `export { WorkbenchContext } from '…'` →
+ *     ExportSpecifier; the aliased form keys on `local.name`, not `exported.name`;
+ *   - export-star — `export * from '…/workbench-context.js'` →
+ *     ExportAllDeclaration, an equivalent whole-barrel leak;
+ *   - dynamic import expression — `await import('…/workbench-context.js')` →
+ *     ImportExpression (Literal `source`), distinct from TSImportType;
+ *   - module augmentation — `declare module '…/workbench-context.js' {…}` →
+ *     TSModuleDeclaration; for a string-named module `id` is a Literal so an
+ *     `[id.value=…]` selector cannot misfire on `declare module SomeNs {}`.
  *
- *  RED today (verified by running this file before any fix):
- *   1. dynamic import EXPRESSION (runtime, not type position):
- *      `const m = await import('…/workbench-context.js')`
- *      → `ImportExpression` node. AST shape verified on this parser version:
- *      fields are `source` (Literal — match `source.value`) and `options`
- *      (import attributes, null here). It is NOT a CallExpression with an
- *      Import callee on this typescript-estree version, and NOT a
- *      TSImportType (that one is type-position only, covered in round 2).
- *   2. module augmentation:
- *      `declare module '…/workbench-context.js' { interface WorkbenchContext {…} }`
- *      → `TSModuleDeclaration` with `kind: 'module'`, `declare: true`. For a
- *      STRING-named module the `id` field is a Literal (match `id.value`);
- *      for `declare module SomeNs {}` the id is an Identifier with no
- *      `value` field, so an `[id.value=…]` selector cannot misfire on
- *      namespace declarations — and the regex keys on the module source, so
- *      `declare module 'electron'` augmentation stays allowed (GREEN anti-pin).
- *   3. EXEMPTION GRANULARITY: the per-file `no-restricted-syntax: "off"`
- *      block in eslint.config.js is revoked. Grandfathered files keep their
- *      existing violations exempt via an INLINE
- *      `// eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only`
- *      on each violating line — so a NEW violation added to an
- *      already-grandfathered file (invisible today: the whole file is off)
- *      must be reported. Pinned for a grandfathered file
- *      (view-manager.ts) and for the public barrel (api.ts).
- *      NOTE: this round UPDATES the round-2 GREEN pin "grandfathered file
- *      stays exempt" — its old body linted an UNCOMMENTED violation and
- *      expected silence, which contradicts the new contract; it now pins the
- *      inline-comment flavor (green both before and after the fix). Flagged
- *      explicitly here per TDD policy: this is a deliberate contract change,
- *      not goalpost-moving by the implementer.
+ * GREEN anti-pins (must NOT be flagged): `require('…')` in a .ts file is already
+ * blocked by @typescript-eslint/no-require-imports; export-star / dynamic import
+ * / `declare module 'electron'` augmentation of UNRELATED modules stays allowed
+ * (selectors key on the module source, never the node kind wholesale).
  *
- *  Deliberately NOT pinned (decision record, so the absence is not mistaken
- *  for an oversight later): JSDoc `@type {import('…').WorkbenchContext}`
- *  comments and triple-slash `/// <reference …>` directives are NOT
- *  ratcheted, per codex's round-3 scope assessment. Rationale: both live in
- *  comment trivia — no AST node for no-restricted-syntax to match without a
- *  custom rule; JSDoc type annotations have no compile effect in the .ts
- *  sources the ratchet globs cover (tsc honors them only in checked .js),
- *  and triple-slash references pull in declaration FILES rather than
- *  importing the WorkbenchContext symbol. Cost/benefit of a bespoke
- *  comment-scanning rule was judged out of scope for the ratchet.
- * ─────────────────────────────────────────────────────────────────────────────
+ * Exemption granularity: there is no per-file `no-restricted-syntax: "off"`
+ * block. Each grandfathered violation LINE carries an inline
+ * `// eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only`,
+ * so a NEW violation in an already-grandfathered file is still reported. Block
+ * ⑦ inventories the directive itself: `<= CEILING` is the hard gate (a new
+ * exemption anywhere under src/ fails CI), and the exact count + per-file
+ * snapshot make any add/remove (even budget-neutral churn) a visible diff.
  *
- * ── ROUND 2 (codex re-review, 2026-06) ──────────────────────────────────────
- * The namespace bypass below was closed, but codex found the ratchet still
- * has bypass forms that never produce an ImportDeclaration at all. This file
- * gained a second describe block, `④ WorkbenchContext ratchet — round 2
- * bypasses`, pinning them:
+ * JSDoc `@type {import('…').WorkbenchContext}` and triple-slash references are
+ * deliberately NOT ratcheted: they live in comment trivia (no AST node for
+ * no-restricted-syntax), have no compile effect in .ts sources, and pull in
+ * declaration files rather than the symbol — a bespoke comment-scanning rule is
+ * out of scope.
  *
- *  RED today (verified: lintText returns ZERO `no-restricted-syntax`
- *  messages for each on the current config):
- *   1. type-query import:  type T = import('…/workbench-context.js').WorkbenchContext
- *      → `TSImportType` node (NOT an ImportDeclaration). NOTE for the fix:
- *      on this typescript-estree version the node's fields are
- *      `source` (Literal, the module string — older versions called it
- *      `argument`) and `qualifier` (Identifier `WorkbenchContext`).
- *   2. named re-export:    export { WorkbenchContext } from '…'
- *      → `ExportNamedDeclaration` > `ExportSpecifier`. For the aliased form
- *      (`export { WorkbenchContext as Ctx } from`), `local.name` is
- *      'WorkbenchContext' and `exported.name` is the alias — a selector must
- *      key on `local.name`.
- *   3. type re-export:     export type { WorkbenchContext } from '…'
- *      → same shape, `exportKind: 'type'` on the ExportNamedDeclaration.
- *   4. export-star:        export * from '…/workbench-context.js'
- *      → `ExportAllDeclaration` with `source.value` — re-exports the whole
- *      barrel, equivalent leak.
- *
- *  GREEN pins (must stay green through the fix):
- *   5. require('…/workbench-context.js') in a .ts file is ALREADY blocked by
- *      `@typescript-eslint/no-require-imports` (verified via lintText); pinned
- *      on that ruleId so the coverage can't silently vanish.
- *   - a grandfathered file (src/main/services/views/view-manager.ts, from the
- *     enumerated exception list in eslint.config.js) stays exempt;
- *   - export-star pointing at OTHER modules (`export * from './paths.js'`)
- *     must NOT be flagged (no over-broad ExportAllDeclaration selector).
- * ─────────────────────────────────────────────────────────────────────────────
- *
- * Codex review MAJOR ③ — the WorkbenchContext import RATCHET has a namespace
- * bypass.
- *
- * Today's gap, verified against eslint.config.js:117: the ratchet rule is a
- * single selector, `ImportSpecifier[imported.name='WorkbenchContext']` — it
- * only matches NAMED (specifier) imports. A module can reach the full
- * grab-bag type unflagged via a namespace import:
- *
- *   import * as Wb from '../services/workbench-context.js'
- *   type Deps = Wb.WorkbenchContext   // ratchet silently bypassed
- *
- * Locked contract (this file is the spec): for a NON-whitelisted production
- * file (virtual probe `src/main/utils/probe.ts`), `no-restricted-syntax`
- * must report BOTH
- *  - the named (type) import form — already caught, pinned GREEN so a fix
- *    cannot regress the existing coverage; and
- *  - the namespace import + qualified access form — RED today.
- *
- * Harness: ESLint's Node API (`new ESLint` + `lintText`), loading the
- * package's own flat config (`overrideConfigFile`) against a VIRTUAL file
- * path — no temp files, no CLI subprocess. There was no prior lintText test
- * in the repo, so this file establishes the harness. Verified feasible: the
- * shared config is not type-aware (plain tseslint.configs.recommended), so
- * lintText on a non-existent path parses fine. NOTE: the shared config pulls
- * in eslint-plugin-only-warn, which downgrades every error to a warning —
+ * Harness: ESLint's Node API (`new ESLint` + `lintText`) loading the package's
+ * own flat config against a VIRTUAL file path — no temp files, no CLI. The
+ * shared config is not type-aware, so lintText on a non-existent path parses
+ * fine. It pulls in eslint-plugin-only-warn (every error → warning), so
  * assertions key on `ruleId`, never on severity.
  */
 import { describe, it, expect, vi } from 'vitest'
@@ -169,9 +90,9 @@ function ratchetMessagesOnLine(result: ESLint.LintResult, line: number) {
 }
 
 /**
- * ROUND 3 — the exact inline exemption marker the ratchet migrates to.
- * The `-- …` justification suffix is contractual (greppable audit trail);
- * eslint only consumes the directive part before `--`.
+ * The exact inline exemption marker the ratchet uses. The `-- …` justification
+ * suffix is contractual (greppable audit trail); eslint only consumes the
+ * directive part before `--`.
  */
 const GRANDFATHER_COMMENT =
   '// eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only'
@@ -193,8 +114,8 @@ describe('③ WorkbenchContext import ratchet', () => {
     ).not.toHaveLength(0)
   })
 
-  it('namespace import + qualified access is flagged [RED today: silent bypass]', async () => {
-    // BUG CAUGHT (today): the selector only matches ImportSpecifier nodes, so
+  it('namespace import + qualified access is flagged', async () => {
+    // The selector only matches ImportSpecifier nodes, so
     // `import * as Wb` + `Wb.WorkbenchContext` grows a new full-context
     // dependency without tripping CI — the exact growth the ratchet exists to
     // forbid.
@@ -213,7 +134,7 @@ describe('③ WorkbenchContext import ratchet', () => {
     ).not.toHaveLength(0)
   })
 
-  it('type-only namespace import is flagged too [RED today: same bypass, type flavor]', async () => {
+  it('type-only namespace import is flagged too', async () => {
     // `import type * as` is the flavor a type-position consumer would write;
     // it must not be a second loophole once the value flavor is closed.
     const result = await lintProbe(
@@ -232,14 +153,13 @@ describe('③ WorkbenchContext import ratchet', () => {
   })
 })
 
-// ═══ ROUND 2 — new pins for this review cycle (see file header) ═════════════
 describe('④ WorkbenchContext ratchet — round 2 bypasses', () => {
-  it('type-query import (TSImportType) is flagged [RED today]', async () => {
-    // BUG CAUGHT (today): `import('…').WorkbenchContext` in type position is
-    // a TSImportType node — no ImportDeclaration, no ImportSpecifier — so the
-    // ratchet never fires. codex found a real instance already in the tree
-    // (src/shared/types.ts:132); that FILE will be grandfathered, but a
-    // NON-exempt file writing the same thing must be reported.
+  it('type-query import (TSImportType) is flagged', async () => {
+    // `import('…').WorkbenchContext` in type position is a TSImportType node —
+    // no ImportDeclaration, no ImportSpecifier — so a naive ratchet never fires.
+    // A real instance exists in the tree (src/shared/types.ts:132) and is
+    // grandfathered, but a NON-exempt file writing the same thing must be
+    // reported.
     const result = await lintProbe(
       [
         'export type Probe =',
@@ -254,8 +174,8 @@ describe('④ WorkbenchContext ratchet — round 2 bypasses', () => {
     ).not.toHaveLength(0)
   })
 
-  it('named re-export is flagged [RED today]', async () => {
-    // BUG CAUGHT (today): `export { WorkbenchContext } from '…'` produces an
+  it('named re-export is flagged', async () => {
+    // `export { WorkbenchContext } from '…'` produces an
     // ExportSpecifier, not an ImportSpecifier — a module can become a fresh
     // distribution point for the grab-bag without ever "importing" it.
     const plain = await lintProbe(
@@ -285,8 +205,8 @@ describe('④ WorkbenchContext ratchet — round 2 bypasses', () => {
     ).not.toHaveLength(0)
   })
 
-  it('type re-export is flagged [RED today]', async () => {
-    // BUG CAUGHT (today): same ExportSpecifier shape with
+  it('type re-export is flagged', async () => {
+    // Same ExportSpecifier shape with
     // exportKind: 'type' on the ExportNamedDeclaration — the flavor a
     // type-position consumer would actually write.
     const result = await lintProbe(
@@ -304,8 +224,8 @@ describe('④ WorkbenchContext ratchet — round 2 bypasses', () => {
     ).not.toHaveLength(0)
   })
 
-  it('export-star from workbench-context is flagged [RED today]', async () => {
-    // BUG CAUGHT (today): `export *` (ExportAllDeclaration) re-exports the
+  it('export-star from workbench-context is flagged', async () => {
+    // `export *` (ExportAllDeclaration) re-exports the
     // whole barrel — including WorkbenchContext — with no specifier node of
     // any kind. Equivalent leak, completely invisible to the ratchet.
     const result = await lintProbe(
@@ -339,15 +259,10 @@ describe('④ WorkbenchContext ratchet — round 2 bypasses', () => {
     ).not.toHaveLength(0)
   })
 
-  it('grandfathered file stays exempt (GREEN pin — UPDATED in ROUND 3 to the inline-comment flavor)', async () => {
-    // ROUND 3 CONTRACT CHANGE (flagged per TDD policy — see the ROUND 3 file
-    // header): the original round-2 body linted an UNCOMMENTED violation at a
-    // grandfathered path and expected silence, pinning the per-file
-    // `no-restricted-syntax: "off"` block. Round 3 revokes whole-file
-    // exemption (describe ⑥ pins the new granularity), so the old expectation
-    // now contradicts the contract. Updated pin: the grandfathered line
-    // carries the inline grandfather comment and must stay exempt — GREEN
-    // both today (whole file off) and after the fix (inline disable).
+  it('grandfathered file stays exempt (inline-comment flavor)', async () => {
+    // There is no per-file `no-restricted-syntax: "off"` block; the
+    // grandfathered line carries the inline grandfather comment and must stay
+    // exempt (block ⑥ pins the per-line granularity).
     const result = await lintAt(
       path.join(packageRoot, 'src/main/services/views/view-manager.ts'),
       [
@@ -379,14 +294,12 @@ describe('④ WorkbenchContext ratchet — round 2 bypasses', () => {
   })
 })
 
-// ═══ ROUND 3 — final ratchet round (see file header for the AST evidence) ═══
 describe('⑤ WorkbenchContext ratchet — round 3: dynamic import & augmentation', () => {
-  it('dynamic import() expression is flagged [RED today]', async () => {
-    // BUG CAUGHT (today): a RUNTIME `import('…/workbench-context.js')` is an
-    // ImportExpression node — not an ImportDeclaration, not a TSImportType
-    // (the round-2 selector only covers the type-position flavor) — so a
-    // module can lazily load the whole grab-bag at runtime without tripping
-    // the ratchet at all.
+  it('dynamic import() expression is flagged', async () => {
+    // A RUNTIME `import('…/workbench-context.js')` is an ImportExpression node —
+    // not an ImportDeclaration, not a TSImportType (which is type-position only)
+    // — so a module could otherwise lazily load the whole grab-bag at runtime
+    // without tripping the ratchet at all.
     const result = await lintProbe(
       [
         'export async function loadFullContext() {',
@@ -403,8 +316,8 @@ describe('⑤ WorkbenchContext ratchet — round 3: dynamic import & augmentatio
     ).not.toHaveLength(0)
   })
 
-  it('module augmentation of workbench-context is flagged [RED today]', async () => {
-    // BUG CAUGHT (today): `declare module '…/workbench-context.js' {…}` is a
+  it('module augmentation of workbench-context is flagged', async () => {
+    // `declare module '…/workbench-context.js' {…}` is a
     // TSModuleDeclaration — no import/export node of any kind — yet it is the
     // WORST growth direction: instead of merely depending on the grab-bag, a
     // module silently widens the grab-bag's own interface for everyone.
@@ -483,10 +396,10 @@ describe('⑥ WorkbenchContext ratchet — round 3: exemption granularity goes i
     ).toHaveLength(0)
   })
 
-  it('grandfathered file: a NEW uncommented violation must be reported [RED today]', async () => {
-    // BUG CAUGHT (today): under the whole-file exemption, an
-    // already-grandfathered file can grow ARBITRARY new WorkbenchContext
-    // dependencies invisibly — the exact growth the ratchet exists to forbid.
+  it('grandfathered file: a NEW uncommented violation must be reported', async () => {
+    // Without per-line granularity, an already-grandfathered file could grow
+    // ARBITRARY new WorkbenchContext dependencies invisibly — the exact growth
+    // the ratchet exists to forbid.
     // Line 2 carries the grandfather marker (line 1) and stays exempt; the
     // namespace import on line 3 is new and unmarked, and MUST be reported.
     const result = await lintAt(
@@ -530,8 +443,8 @@ describe('⑥ WorkbenchContext ratchet — round 3: exemption granularity goes i
     ).toHaveLength(0)
   })
 
-  it('api.ts: a NEW uncommented violation must be reported [RED today]', async () => {
-    // BUG CAUGHT (today): the barrel is whitelisted wholesale, so a future
+  it('api.ts: a NEW uncommented violation must be reported', async () => {
+    // The barrel must not become a wholesale whitelist, or a future
     // edit could `export *` the entire workbench-context module through the
     // PUBLIC API without any signal. Line 2 is the marked existing re-export;
     // the export-star on line 3 is new and unmarked, and MUST be reported.
@@ -556,7 +469,6 @@ describe('⑥ WorkbenchContext ratchet — round 3: exemption granularity goes i
   })
 })
 
-// ═══ ROUND 4 — inventory ceiling guard (see file header for the rationale) ══
 describe('⑦ WorkbenchContext ratchet — round 4: grandfather inventory ceiling', () => {
   /**
    * The greppable audit token inside GRANDFATHER_COMMENT. Counted as an exact

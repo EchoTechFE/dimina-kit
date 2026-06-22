@@ -1,29 +1,22 @@
 /**
- * Wave 2 ④ — renderer wrapper for opening the embedded settings overlay.
+ * Renderer wrapper for opening the embedded settings overlay.
  *
- * CONTRACT (new public API on settings-api.ts, RED until implemented):
+ * CONTRACT (public API on settings-api.ts):
  *
  *   export function setSettingsVisible(visible: boolean): Promise<void>
  *
- * It must drive the EXISTING 'settings:setVisible' wire channel
+ * It must drive the 'settings:setVisible' wire channel
  * (SettingsChannel.SetVisible — registered in src/main/ipc/settings.ts,
  * pinned as a survivor in dead-channels-decommission.test.ts) via the
  * ipc-transport invoke path, passing the boolean through.
  *
- * Real bug this catches: the renderer currently has NO wrapper for this
- * channel (settings-api.ts only covers ConfigChanged / ProjectSettingsChanged
- * / Init + the standalone workbenchSettings:* window). A settings button
- * wired to a wrapper that hits the WRONG wire name — e.g.
- * 'workbenchSettings:setVisible', which Wave 1 decommissioned — silently
- * opens nothing. The component test asserts the button calls the wrapper;
- * THIS test pins the wrapper to the wire, closing the chain
+ * Real bug this catches: a settings button wired to a wrapper that hits the
+ * WRONG wire name — e.g. the decommissioned 'workbenchSettings:setVisible' —
+ * silently opens nothing. The component test asserts the button calls the
+ * wrapper; THIS test pins the wrapper to the wire, closing the chain
  * button → wrapper → 'settings:setVisible'.
  *
- * The export is reached via the module namespace (not a direct named import)
- * so this file compiles BEFORE the export exists and fails as a RED
- * assertion instead of a build break.
- *
- * RED today: settings-api.ts exports no setSettingsVisible.
+ * The export is reached via the module namespace (not a direct named import).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 

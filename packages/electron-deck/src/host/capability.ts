@@ -1,5 +1,5 @@
 /**
- * Capability grant registry — P4 Phase B.
+ * Capability grant registry.
  *
  * Default-DENY authorization for privileged control commands. A command is
  * allowed for a sender ONLY while a LIVE grant naming that command (exact,

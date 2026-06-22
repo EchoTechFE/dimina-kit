@@ -1,5 +1,5 @@
 /**
- * Phase 3 contract: the projects-IPC module exposes three new channels:
+ * Contract: the projects-IPC module exposes three channels:
  *  - projects:listTemplates    → sanitized merged catalog (no `generate` fns)
  *  - projects:openCreateDialog → host hook OR null
  *  - projects:create           → delegates to create-project-service

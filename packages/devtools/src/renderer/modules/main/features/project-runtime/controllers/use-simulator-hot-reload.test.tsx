@@ -1,9 +1,8 @@
 /**
  * Companion to `use-session-hot-reload.test.tsx` — the simulator half of the
- * resurrected PR #12 hot-reload guard (deleted in PR #39 / a85fb6dc without a
- * native-host replacement).
+ * hot-reload guard.
  *
- * Contract under test (TDD — NOT yet implemented):
+ * Contract under test:
  *  - `useSimulator` accepts a numeric `hotReloadToken` prop (threaded from
  *    `useSession` via `use-project-runtime-controller`).
  *  - A token bump re-runs the native attach effect EXACTLY once:

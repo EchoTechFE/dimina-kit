@@ -355,18 +355,18 @@ describe('electronDeck(config)', () => {
 	// Phase 2 tests inject {electron, ipcMain} explicitly to skip the
 	// production lazy-import path which is not driveable in vitest.
 
-	it('Phase 2 contract: resolves for a valid empty config', async () => {
+	it('resolves for a valid empty config', async () => {
 		const options = makeInjectedOptions()
 		await expect(electronDeck({}, options)).resolves.toBeUndefined()
 	})
 
-	it('Phase 2 contract: invokes config.setup(runtime) once', async () => {
+	it('invokes config.setup(runtime) once', async () => {
 		const setup = vi.fn()
 		await electronDeck({ setup }, makeInjectedOptions())
 		expect(setup).toHaveBeenCalledTimes(1)
 	})
 
-	it('Phase 2 contract: setup throwing causes electronDeck() to reject with the same error', async () => {
+	it('setup throwing causes electronDeck() to reject with the same error', async () => {
 		const err = new Error('user-setup-boom')
 		await expect(
 			electronDeck(

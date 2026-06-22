@@ -14,20 +14,16 @@ import { writeUntilSettled } from './watch-rebuild.testutil.js'
  */
 
 /**
- * ROUND 2 (dmcc 日志链路) — TDD contract for the `onLog` wiring in
- * `openProject` (NOT yet implemented).
+ * Contract for the `onLog` wiring in `openProject`.
  *
- * Required contract (devkit side, see .repro/dmcc-log-spike/RESULTS.md §④):
- *  - `OpenProjectOptions` gains
+ *  - `OpenProjectOptions` carries
  *    `onLog?: (entry: { stream: 'stdout' | 'stderr'; text: string }) => void`.
- *  - BOTH `build()` call sites — the first compile inside `openProject` and
- *    the watcher-driven `rebuild()` — are wrapped with `withCapturedStdio`,
- *    so every dmcc line (already filtered through `filterDmccLogLine`)
- *    reaches `opts.onLog`.
- *  - When `onLog` is NOT passed, the wrapper must not be engaged at all:
- *    `process.stdout/stderr.write` and `isTTY` stay untouched during the
- *    build (zero-overhead contract, pinned by the last test — that one is a
- *    regression guard and is green today).
+ *  - BOTH compile paths — the first compile inside `openProject` and the
+ *    watcher-driven `rebuild()` — deliver every dmcc line (already filtered
+ *    through `filterDmccLogLine`) to `opts.onLog`.
+ *  - When `onLog` is NOT passed, no stdout/stderr capture is engaged:
+ *    `process.stdout/stderr.write` and `isTTY` stay untouched during the build
+ *    (zero-overhead contract, pinned by the last test).
  *
  * These are real integration tests: they run the actual `@dimina/compiler`
  * against a tiny generated fixture project in os.tmpdir() (~3s per compile,
@@ -111,7 +107,7 @@ describe('openProject onLog — first compile (integration, real dmcc)', () => {
 
 		expect(
 			entries.length,
-			'openProject must wire opts.onLog through withCapturedStdio around the first build() — no lines were captured',
+			'openProject must wire opts.onLog around the first build() — no lines were captured',
 		).toBeGreaterThan(0)
 
 		const texts = entries.map(entry => entry.text)
@@ -204,7 +200,7 @@ describe('openProject onLog — watcher rebuild (integration, real dmcc)', () =>
 
 		expect(
 			entries.length,
-			'the rebuild() build() call must ALSO be wrapped with withCapturedStdio — no rebuild lines reached onLog',
+			'the rebuild() build() call must ALSO deliver to onLog — no rebuild lines reached onLog',
 		).toBeGreaterThan(0)
 		const texts = entries.map(entry => entry.text)
 		expect(

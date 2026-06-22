@@ -166,7 +166,7 @@ export interface PlacementAnchorOptions {
    */
   guardDisplayNone?: boolean
   /**
-   * Opt-in capture-phase ancestor-scroll follow (§2.C). When true, the anchor
+   * Opt-in capture-phase ancestor-scroll follow. When true, the anchor
    * listens for `scroll` on `window` in the CAPTURE phase (scroll events don't
    * bubble, but reach `window` while capturing), so an ancestor scroll
    * container scrolling the target re-measures and re-publishes. With
@@ -176,7 +176,7 @@ export interface PlacementAnchorOptions {
    */
   followScroll?: boolean
   /**
-   * Opt-in windowed RAF geometry sentinel (§2.D/§6). Catches ancestor
+   * Opt-in windowed RAF geometry sentinel. Catches ancestor
    * transform / reflow moves that no DOM event reports. The sentinel is
    * NON-resident: it is OPENED on demand (a scroll burst, a `[role="separator"]`
    * splitter pointerdown, or an explicit `pulse()`), polls geometry once per
@@ -262,7 +262,7 @@ export function createPlacementAnchor(
   let lastPublished: Placement | null = null
   let disposed = false
 
-  // ── Windowed RAF geometry sentinel state (§2.D/§6) ──────────────────
+  // ── Windowed RAF geometry sentinel state ──────────────────
   // The sentinel is a windowed poll, opened on demand and auto-closing once
   // the geometry goes steady. It publishes IN-FRAME (no nested defer): each
   // frame measures, and either publishes a changed rect synchronously or
@@ -272,12 +272,12 @@ export function createPlacementAnchor(
   let steadyFrames = 0
   const STEADY_CLOSE_FRAMES = 2
   // True while a [role="separator"] splitter drag is in progress: set on the
-  // capture-phase pointerdown that opened the window, cleared on pointerup
-  // (§2.D). A held pointer means the drag may still resume after a static
-  // pause, so a steady run while held must NOT close the sentinel — it only
-  // closes once the pointer is released (松手后 2~3 帧内判静止→关窗). Without
-  // this gate a press that pauses a couple of frames before the drag actually
-  // moves would close mid-press and drop the entire subsequent drag.
+  // capture-phase pointerdown that opened the window, cleared on pointerup.
+  // A held pointer means the drag may still resume after a static pause, so a
+  // steady run while held must NOT close the sentinel — it only closes once the
+  // pointer is released. Without this gate a press that pauses a couple of
+  // frames before the drag actually moves would close mid-press and drop the
+  // entire subsequent drag.
   let pointerHeld = false
   // Absolute time (performance.now()) past which a `pulse(durationMs)` window
   // force-closes even if the geometry is still changing — the upper bound that
@@ -319,7 +319,7 @@ export function createPlacementAnchor(
       sentinelDeadline = null
       return
     }
-    // §2.F upper bound: a pulse window past its deadline closes regardless of
+    // Upper bound: a pulse window past its deadline closes regardless of
     // motion, so a target that changes every frame can't keep the sentinel alive.
     if (sentinelDeadline !== null && performance.now() >= sentinelDeadline) {
       sentinelDeadline = null
@@ -328,7 +328,7 @@ export function createPlacementAnchor(
     const p = computePlacement()
     if (lastPublished && samePlacement(lastPublished, p)) {
       steadyFrames++
-      // Steady-close only fires once the pointer is RELEASED (§2.D): while a
+      // Steady-close only fires once the pointer is RELEASED: while a
       // splitter drag is held, a static pause is a hesitation, not the end of
       // the drag, so we keep polling (re-arm below) and let `steadyFrames`
       // accrue — it converges to a close within N frames after pointerup.
@@ -342,7 +342,7 @@ export function createPlacementAnchor(
       steadyFrames = 0
     }
     // `publish` may have synchronously disposed (or hidden) the anchor; re-read
-    // live state so a re-entrant teardown leaves ZERO scheduled frames (B2).
+    // live state so a re-entrant teardown leaves ZERO scheduled frames.
     if (!disposed && visible) {
       rafId = requestAnimationFrame(sentinelFrame) // keep polling
     } else {
@@ -366,17 +366,17 @@ export function createPlacementAnchor(
     pointerHeld = false
   }
 
-  // §2.C — an ancestor scroll moved the target's screen rect. With the sentinel
-  // on, open the window so the whole scroll burst is followed frame-by-frame;
-  // without it, a single synchronous emit() follows the new rect (A1).
+  // An ancestor scroll moved the target's screen rect. With the sentinel on,
+  // open the window so the whole scroll burst is followed frame-by-frame;
+  // without it, a single synchronous emit() follows the new rect.
   const onScroll = (): void => {
     if (followGeometry) openSentinel()
     else emit()
   }
 
-  // §2.D — a capture-phase pointerdown on a [role="separator"] splitter handle
-  // marks the start of a drag that moves the target via ancestor reflow (no RO
-  // tick) → open the sentinel.
+  // A capture-phase pointerdown on a [role="separator"] splitter handle marks
+  // the start of a drag that moves the target via ancestor reflow (no RO tick)
+  // → open the sentinel.
   const onPointerDown = (e: Event): void => {
     const t = e.target as Element | null
     if (t && t.closest && t.closest('[role="separator"]')) {
@@ -385,7 +385,7 @@ export function createPlacementAnchor(
     }
   }
 
-  // §2.D — pointer released: the drag is over, so a steady run may now close the
+  // Pointer released: the drag is over, so a steady run may now close the
   // sentinel. Re-open it (a no-op if already polling) so the steady-close
   // threshold is reached even if the geometry was already static at release.
   const onPointerUp = (): void => {
@@ -469,7 +469,7 @@ export function createPlacementAnchor(
       stopObserving()
     },
     pulse(durationMs?: number): void {
-      // Imperative window open (§2.F): start the animation-follow window. It
+      // Imperative window open: start the animation-follow window. It
       // closes on steady (N=2 unchanged frames) OR, when `durationMs` is given,
       // at that deadline — whichever comes first. The deadline is the upper bound
       // that guarantees a still-animating target cannot keep the sentinel

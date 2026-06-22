@@ -176,8 +176,8 @@ export function setupSimulatorTempFiles(simSession: Session): Disposable {
 	// Apply to every per-project miniapp partition session (current + future).
 	const unregisterConfigurator = registerMiniappSessionConfigurator((sess) => installOnSession(sess))
 
-	// Phase 1 (P1-7): renderer FSM → main fs operations bridge. The same
-	// simulator-only sender policy applies — registry instance is shared.
+	// Renderer FSM → main fs operations bridge. The same simulator-only sender
+	// policy applies — registry instance is shared.
 	registry.handle('simulator:fs:read', (_event, payload) =>
 		handleFsRead(payload as Parameters<typeof handleFsRead>[0]),
 	)

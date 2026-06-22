@@ -11,8 +11,7 @@ import fs from 'node:fs'
  * watch. A single `fs.writeFileSync` produces a single inotify `change` event,
  * and under CI load (Linux inotify + a concurrent REAL dmcc compile in
  * open-project-compile-log.test.ts pegging the CPU) chokidar can DROP that lone
- * event — the rebuild never fires and the test waits forever (PR #44's 30s
- * timeout at compile-worker.test.ts:297).
+ * event — the rebuild never fires and the test waits forever until timeout.
  *
  * The fix is NOT a longer timeout (the event is lost, not slow): re-issue the
  * filesystem write — with micro-varied content so size+mtime change and a fresh
@@ -21,8 +20,8 @@ import fs from 'node:fs'
  * write into exactly ONE trailing build, so re-writing is safe for the
  * count-agnostic / `>=` assertions these helpers are applied to.
  *
- * ⚠️ This is flake hardening, NOT goalpost-moving: no assertion is touched.
- * Only apply these helpers where the assertion is count-agnostic or `>=`
+ * This is flake hardening only: no assertion is touched. Only apply these
+ * helpers where the assertion is count-agnostic or `>=`
  * (re-triggering an extra coalesced rebuild cannot change the outcome). Tests
  * that pin an EXACT rebuild/build-send count must not use them.
  */

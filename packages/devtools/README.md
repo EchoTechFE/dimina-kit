@@ -670,8 +670,12 @@ pnpm build:preload      # 仅构建 preload TypeScript
 pnpm build:renderer     # Vite 构建渲染层
 pnpm dev                # Watch 模式 + Electron
 pnpm check-types        # 类型检查
-pnpm test               # 运行测试
+pnpm test               # 运行单元测试（vitest）
+pnpm test:coverage      # 单元测试 + 覆盖率报告（终端表格 + coverage/index.html）
+pnpm test:e2e           # 运行 Playwright e2e 测试
 ```
+
+> 覆盖率：`pnpm test:coverage`（单包）或仓库根 `pnpm test:coverage`（全部包），报告输出到各包 `coverage/`，浏览器打开 `coverage/index.html` 看逐行高亮。
 
 ---
 

@@ -1,6 +1,6 @@
 /**
- * Wave 2 decommission — `instance.toolbar` is deleted (user decision,
- * breaking change). The host-injected toolbar-button mechanism
+ * `instance.toolbar` is deleted (breaking change). The host-injected
+ * toolbar-button mechanism
  * (`instance.toolbar.set(actions)` → 'toolbar:getActions' / 'toolbar:invoke'
  * IPC → ProjectToolbar host-actions row) goes away as a whole cluster.
  *
@@ -29,9 +29,10 @@
  * `createDevtoolsRuntime()` under an exhaustive electron mock and capture the
  * instance from `onSetup`.
  *
- * RED today: app.ts builds `toolbar: { set: … }` onto the instance (~:407),
- * createWorkbenchContext assigns `ctx.toolbar = createToolbarStore()`, and
- * registerToolbarIpc registers both wire channels.
+ * Guards the decommission: app.ts must NOT build `toolbar: { set: … }` onto
+ * the instance, createWorkbenchContext must NOT assign
+ * `ctx.toolbar = createToolbarStore()`, and registerToolbarIpc must NOT
+ * register either wire channel.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 

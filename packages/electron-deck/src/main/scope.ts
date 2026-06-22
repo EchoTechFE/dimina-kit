@@ -175,8 +175,8 @@ export function createScope(): Scope {
   let owningSegment: Segment | null = null
 
   // For each child this scope owns, the Disposable that unsubscribes the
-  // on('closed') removal hook we bound when attaching it. child() previously
-  // discarded this subscription (a leak); adopt() requires it so a re-parent can
+  // on('closed') removal hook we bound when attaching it. child() must retain
+  // this subscription; adopt() requires it so a re-parent can
   // unbind the stale hook. Keyed by child scope.
   const childRemovers = new Map<ScopeInternal, Disposable>()
 
@@ -396,7 +396,7 @@ export function createScope(): Scope {
       const newParent = asInternal(newParentPublic)
       const self = scope
 
-      // ── Atomicity = WAIT not throw (codex #5) ──────────────────────────────
+      // ── Atomicity = WAIT not throw ─────────────────────────────────────────
       // If either endpoint has a teardown in flight, park behind its fence
       // BEFORE reading any segment. We re-read segments AFTER waiting so we
       // attach to/detach from the fresh post-fence segment, never a stale one.
@@ -410,7 +410,7 @@ export function createScope(): Scope {
         await f.catch(() => {})
       }
 
-      // ── Pre-validation (codex #4); failures reject, leaving child untouched ─
+      // ── Pre-validation; failures reject, leaving child untouched ────────────
       if (!self.alive) {
         throw new Error('adopt: donor scope is not alive')
       }
@@ -433,7 +433,7 @@ export function createScope(): Scope {
         throw new Error('adopt: would create a cycle (newParent is child or a descendant of it)')
       }
 
-      // ── Atomic detach + re-attach (codex #2/#3/#6) ─────────────────────────
+      // ── Atomic detach + re-attach ──────────────────────────────────────────
       // Splice out of the old segment + unbind the stale old-parent removal hook
       // (detachChild), then push into the new segment + bind a fresh removal hook
       // (newParent.__attachChild). The child is never in both lists and never in

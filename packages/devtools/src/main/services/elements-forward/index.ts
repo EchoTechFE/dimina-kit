@@ -36,7 +36,7 @@
  * no longer active is dropped (its in-flight command id is settled with an error
  * so the front-end never leaks a pending request, and stale nodes never bleed into
  * the new tree); and switching away and BACK to a previously-wired guest RESUMES
- * its forwarding (a snapshot would strand it — that was bug B2).
+ * its forwarding (a snapshot would strand it).
  *
  * ── Degradation ──────────────────────────────────────────────────────────────
  * Hook unavailable / `DevToolsAPI` missing / no active guest → routing is simply
@@ -46,7 +46,7 @@
  *
  * This is a production feature (no env gate, default on for the native simulator).
  * It deliberately re-implements the small pure helpers it needs (routing table,
- * hook + dispatch scripts) rather than importing the throwaway spike file.
+ * hook + dispatch scripts) as self-contained code.
  */
 import { webContents as electronWebContents } from 'electron'
 import type { WebContents } from 'electron'
@@ -252,8 +252,8 @@ export function installElementsForward(deps: ElementsForwardDeps): () => void {
   // bridge per check — NOT a generation snapshot. An event/response is honoured
   // only while its originating guest is still the active one, so switching away
   // and BACK to a previously-wired guest RESUMES its forwarding (a snapshot would
-  // strand it forever — that was bug B2). It also means destroying some OTHER
-  // (non-active) guest never stales the active guest's in-flight commands.
+  // strand it forever). It also means destroying some OTHER (non-active) guest
+  // never stales the active guest's in-flight commands.
   const isActiveWcId = (id: number): boolean => {
     const a = activeRenderWc()
     return a != null && a.id === id
@@ -423,7 +423,7 @@ export function installElementsForward(deps: ElementsForwardDeps): () => void {
       if (cleanup) { wiredGuests.delete(wc.id); try { cleanup() } catch { /* gone */ } }
       // A destroyed guest is no longer the active one, so its in-flight commands
       // fail `isActiveWcId` and settle as errors on their own — no global bump
-      // (which would wrongly stale OTHER, still-active guests' commands: bug MINOR-3).
+      // (which would wrongly stale OTHER, still-active guests' commands).
       // If we own this wc's session there is nothing left to detach; drop it.
       selfAttached.delete(wc.id)
     }

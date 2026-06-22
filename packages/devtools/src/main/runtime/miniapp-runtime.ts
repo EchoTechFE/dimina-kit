@@ -89,9 +89,9 @@ declare global {
 }
 
 /**
- * Host-facing control surface for the toolbar WebContentsView — the exact
- * post-R2 message-channel surface (`send`/`onMessage`), with no `webContents`
- * escape hatch (that would put Electron types on the contract).
+ * Host-facing control surface for the toolbar WebContentsView — a
+ * message-channel surface (`send`/`onMessage`), with no `webContents` escape
+ * hatch (that would put Electron types on the contract).
  */
 export interface MiniappHostToolbar {
   /**

@@ -1,16 +1,15 @@
 /**
- * Failing (red) tests for Phase 0 of the fs subsystem:
+ * Contract tests for the fs subsystem:
  *
  *   1. Security: every fs API must reject absolute paths, non-difile:// URLs,
- *      and `..` / `%2e%2e` traversal — the previous `_fsResolvePath` would
- *      silently let `/etc/passwd` or `difile://abc/../../escape` through.
+ *      and `..` / `%2e%2e` traversal, so `/etc/passwd` or
+ *      `difile://abc/../../escape` cannot leak through the resolver.
  *   2. Reserved namespace: write-class APIs (writeFile / appendFile / unlink /
  *      rename(dest) / mkdir / rmdir / truncate) must refuse `difile://_tmp/*`
  *      and `difile://_store/*` with `permission denied`, matching wx 真机 read-
  *      only tmp/store semantics.
  *   3. saveFile must return a `difile://_store/{uuid}.{ext}` vpath, not the
- *      raw realPath; and in Phase 0 must explicitly fail when the source is a
- *      `_tmp` vpath because tmp→store materialization belongs to Phase 1.
+ *      raw realPath; a `_tmp` source materializes into `_store`.
  *
  * Sandbox strategy
  * ----------------
@@ -18,9 +17,6 @@
  * `os` module so homedir() points at a per-suite temp directory, ensuring the
  * tests cannot touch the developer's real `~/.dimina`. The mock is set up
  * before the SUT is imported (the SUT captures `_os` at module load time).
- *
- * All tests in this file are expected to FAIL on the current implementation —
- * that is the point of this Phase 0 red bar.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -330,12 +326,9 @@ describe('reserved namespace: write APIs reject _tmp and _store', () => {
 // ─── 3. saveFile returns a difile://_store/{uuid}.{ext} vpath ────────────────
 
 describe('fsSaveFile vpath contract', () => {
-	// MODIFIED FOR PHASE 1: this test was previously the Phase 0 "_tmp source is
-	// unsupported" red bar. Phase 1 (P1-6 in docs/file-system.md §6) takes over
-	// _tmp materialization, so the contract flipped: a _tmp source must now
-	// succeed and produce a _store/* vpath. The unsupported-on-_tmp assertion
-	// is no longer correct.
-	it('fsSaveFile from a difile://_tmp/* source now materializes into _store (Phase 1 takeover)', async () => {
+	// A _tmp source must materialize into _store and produce a _store/* vpath
+	// (see _tmp materialization, docs/file-system.md §6).
+	it('fsSaveFile from a difile://_tmp/* source materializes into _store', async () => {
 		const original = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x10, 0x11, 0x12])
 		const tmpUrl = 'difile://_tmp/saveFile-from-tmp.jpg'
 		registerTempFilePath(tmpUrl, new Blob([new Uint8Array(original)], { type: 'image/jpeg' }))
@@ -419,10 +412,9 @@ describe('fsSaveFile vpath contract', () => {
 	})
 })
 
-// ─── 4. FSM read-class dispatch (Phase 1) ────────────────────────────────────
+// ─── 4. FSM read-class dispatch ──────────────────────────────────────────────
 //
-// Phase 1 (P1-5 in docs/file-system.md §6) splits read-class FSM entries by
-// vpath kind:
+// Read-class FSM entries dispatch by vpath kind (docs/file-system.md §6):
 //
 //   - `_tmp/<id>`   → bytes pulled from the renderer Blob Map (temp-files.ts)
 //   - `_store/<id>` → bytes pulled from the main-process disk (~/.dimina/files/_store)
@@ -452,7 +444,7 @@ function asBuffer(data: unknown): Buffer {
 	throw new Error('fsReadFile returned unexpected data shape: ' + Object.prototype.toString.call(data))
 }
 
-describe('FSM read-class dispatch (Phase 1)', () => {
+describe('FSM read-class dispatch', () => {
 	describe('fsReadFile', () => {
 		it('reads bytes from a _tmp/* Blob registered in the renderer Map', async () => {
 			const original = Buffer.from([0xca, 0xfe, 0xba, 0xbe, 0x01, 0x02])
@@ -468,9 +460,9 @@ describe('FSM read-class dispatch (Phase 1)', () => {
 		})
 
 		it('fails with an ENOENT-shaped error when the _tmp/* entry is unknown', async () => {
-			// Phase 1 must surface a real not-found error for missing _tmp, NOT
-			// the Phase 0 blanket "not supported" message — that string is no
-			// longer the truth for this namespace.
+			// A missing _tmp entry must surface a real not-found error, not a
+			// blanket "not supported" message — that string is wrong for this
+			// namespace.
 			const r = await invoke('fsReadFile', { filePath: 'difile://_tmp/never-registered.bin' })
 			expect(r.success).toBeUndefined()
 			expect(r.fail).toBeDefined()
@@ -676,9 +668,9 @@ describe('FSM read-class dispatch (Phase 1)', () => {
 	})
 })
 
-// ─── 5. fsCopyFile materialization (Phase 1, P1-6) ───────────────────────────
+// ─── 5. fsCopyFile materialization ───────────────────────────────────────────
 
-describe('fsCopyFile (Phase 1 materialization)', () => {
+describe('fsCopyFile materialization', () => {
 	it('copies a _tmp/* Blob into a usr-area destination (materializes the bytes)', async () => {
 		const original = Buffer.from([0x10, 0x20, 0x30, 0x40, 0x50])
 		const srcUrl = 'difile://_tmp/copy-src.bin'

@@ -286,10 +286,9 @@ describe('rewriteRequestId', () => {
 })
 
 describe('RequestIdNamespace active/retired TTL/LRU', () => {
-  // NOTE: these two were rewritten for MAJOR 3 — a freshly-resolved entry is now
-  // ACTIVE and exempt from TTL/LRU; only RETIRED (terminal) entries age out. The
-  // old tests asserted eviction of still-active entries, which is exactly the
-  // orphan bug this change fixes, so they had to change.
+  // A freshly-resolved entry is ACTIVE and exempt from TTL/LRU; only RETIRED
+  // (terminal) entries age out. Evicting still-active entries would orphan their
+  // later response/completion events in the panel.
   it('does NOT expire an ACTIVE mapping; expires it only after retire + TTL', () => {
     let t = 0
     const ns = new RequestIdNamespace('E1', 1000, 1000, () => t)
@@ -435,7 +434,7 @@ describe('createNetworkForwarder — native DevTools dispatch', () => {
   })
 })
 
-// ── Codex MAJOR fixes: sink state machine, orphan-protection, chunk, batch ────
+// ── sink state machine, orphan-protection, chunk, batch ──────────────────────
 
 describe('createNetworkForwarder — sink state machine (no double-display)', () => {
   it('MAJOR 1: a completion never shows in BOTH console and Network', async () => {

@@ -35,7 +35,7 @@ export interface CompileEvent {
   hotReload?: boolean
   /**
    * Optional shared monotonic arrival counter spanning compile events AND
-   * compile logs — the panel's same-`at` tie-break (codex m8): `at` is a
+   * compile logs — the panel's same-`at` tie-break: `at` is a
    * millisecond stamp, so an event and the log lines of the same compile
    * routinely collide on it.
    */
@@ -145,7 +145,7 @@ export function useSession(props: UseSessionProps): SessionHookResult {
   const [hotReloadToken, setHotReloadToken] = useState(0)
   const [compileEvents, setCompileEvents] = useState<CompileEvent[]>([])
   const [compileLogs, setCompileLogs] = useState<CompileLogEntry[]>([])
-  // Shared monotonic arrival counter spanning BOTH stores (codex m8): `at`
+  // Shared monotonic arrival counter spanning BOTH stores: `at`
   // is a millisecond stamp, so a status event and the log lines of the same
   // compile routinely collide on it — `seq` is the panel's same-`at`
   // tie-break carrier. A ref (not state): bumping it must not re-render, and
@@ -178,9 +178,8 @@ export function useSession(props: UseSessionProps): SessionHookResult {
           ? next.slice(next.length - MAX_COMPILE_EVENTS)
           : next
       })
-      // Resurrects the PR#12 hot-reload guard that PR#39 (workbench landing)
-      // deleted together with the dead `<webview>` reload branch: a watcher
-      // rebuild (hotReload:true) bumps the token so the simulator re-attaches.
+      // Hot-reload guard: a watcher rebuild (hotReload:true) bumps the token
+      // so the simulator re-attaches.
       // Plain status chatter (compiling/error/ready) must NOT move the token.
       if (data.hotReload === true) {
         setHotReloadToken((token) => token + 1)
@@ -193,7 +192,7 @@ export function useSession(props: UseSessionProps): SessionHookResult {
       // `at` comes stamped from the main process — never re-stamped here.
       // `seq` IS stamped here: arrival order at the renderer is the only
       // order the merged panel timeline needs, and the counter is shared
-      // with compileEvents above (codex m8).
+      // with compileEvents above.
       const seq = ++compileSeqRef.current
       setCompileLogs((prev) => {
         const next = [...prev, { ...entry, seq }]

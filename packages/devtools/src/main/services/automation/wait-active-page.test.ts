@@ -1,5 +1,5 @@
 /**
- * TDD red-phase contract tests for automation/wait-active-page.ts
+ * Contract tests for automation/wait-active-page.ts
  *
  * `waitForActivePage(bridge, opts)` replaces the blind `setTimeout(1500/2000)`
  * navigation waits in handlers/app.ts with "wait for the bridge's activePage
@@ -14,9 +14,6 @@
  *     (no match given) it is already !== since → resolve immediately.
  *   - Idempotent: resolve exactly once; later events must not throw and the
  *     unsubscribe must already have run.
- *
- * The implementation file does not exist yet, so the `import` below fails at
- * module load — every test in this file errors. That is the intended RED.
  *
  * Covered cases:
  *   (a) matching activePage → resolve + unsubscribe called
@@ -222,7 +219,7 @@ describe('waitForActivePage', () => {
     expect(b.unsubscribe).toHaveBeenCalledTimes(1)
   })
 
-  // (g)(h) — onTimeout 回调（codex 评审建议的超时可见性扩展；由实现者补测）
+  // onTimeout 回调（超时可见性扩展）
   it('超时兜底时 onTimeout 触发一次', async () => {
     const b = makeBridge('old')
     const onTimeout = vi.fn()

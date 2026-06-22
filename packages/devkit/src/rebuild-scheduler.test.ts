@@ -2,15 +2,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as devkit from './index.js'
 
 /**
- * TDD contract for the rebuild scheduler — fixes the "save silently dropped
- * while a build is in flight" hole in `openProject`'s rebuild loop.
+ * Contract for the rebuild scheduler — closes the "save silently dropped
+ * while a build is in flight" hole in `openProject`'s rebuild loop, where a
+ * naive `if (isBuilding) return` would discard any watcher event that lands
+ * while `build()` is running (a save made during the ~1-2s compile window
+ * never produces a rebuild — the simulator stays stale until the user saves
+ * again).
  *
- * Today (devkit/src/index.ts `rebuild()`): `if (isBuilding) return` discards
- * any watcher event that lands while `build()` is running. A save made during
- * the (~1-2s) compile window never produces a rebuild — the user sees a stale
- * simulator until they save *again*.
- *
- * Required contract (NOT yet implemented):
+ * Required contract:
  *  - devkit exports `createRebuildScheduler(run: () => Promise<void>)`
  *    returning `{ schedule(): void }`, and `openProject` routes its watcher
  *    `rebuild` calls through it.
@@ -24,9 +23,8 @@ import * as devkit from './index.js'
  *  - A rejecting run must neither wedge the scheduler nor drop a pending
  *    dirty flag (a save during a failing build still gets its rebuild).
  *
- * These tests import the not-yet-existing export, so they are red until the
- * implementation lands. They use a manually-resolved deferred `run` so the
- * in-flight window is fully controlled — no timing flakiness.
+ * They use a manually-resolved deferred `run` so the in-flight window is fully
+ * controlled — no timing flakiness.
  */
 
 type Scheduler = { schedule: () => void }
@@ -192,10 +190,10 @@ describe('createRebuildScheduler — saves during an in-flight build must not be
 	})
 })
 
-// ─── ROUND 2 — `run` throwing SYNCHRONOUSLY (not rejecting) ──────────────────
+// ─── `run` throwing SYNCHRONOUSLY (not rejecting) ──────────────────
 //
-// Regression tests for the wedge found in review: `start()` sets
-// `running = true` and then calls `run()` bare. If `run` throws synchronously
+// Regression tests for a wedge: `start()` sets `running = true` and then calls
+// `run()` bare. If `run` throws synchronously
 // (e.g. a config/IO error raised before the build's first await — no promise
 // ever exists), the `.catch().then()` settle chain is never attached, so:
 //   - the exception escapes through `schedule()` to the watcher callsite,
@@ -207,7 +205,7 @@ describe('createRebuildScheduler — saves during an in-flight build must not be
 // drops a pending dirty flag", with failures being `run`'s responsibility to
 // report) must hold regardless of HOW the run fails: rejection and synchronous
 // throw are the same event to the scheduler.
-describe('ROUND 2 — createRebuildScheduler: run() throwing synchronously must not wedge the scheduler', () => {
+describe('createRebuildScheduler: run() throwing synchronously must not wedge the scheduler', () => {
 	/** A `run` that throws synchronously on the i-th call(s), resolves otherwise. */
 	function makeSyncThrowingRun(throwOnCalls: number[]) {
 		const run = vi.fn((): Promise<void> => {

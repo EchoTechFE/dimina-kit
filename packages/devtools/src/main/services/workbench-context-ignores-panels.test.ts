@@ -6,9 +6,9 @@
  * `hasBuiltinPanel`) must be deleted with it.
  *
  * Real bug each test catches:
- *  - "key absent" (an `in` check, NOT `toBe(undefined)`): if the implementer
- *    leaves `panels: opts.panels ?? [...]` in the constructor, a host passing
- *    `panels: ['wxml']` still materializes a filtered panel list on ctx — a
+ *  - "key absent" (an `in` check, NOT `toBe(undefined)`): leaving
+ *    `panels: opts.panels ?? [...]` in the constructor lets a host passing
+ *    `panels: ['wxml']` still materialize a filtered panel list on ctx — a
  *    present key (even the 4-entry default) invites main-process code to grow
  *    panel-filtering behavior back, while the renderer always shows all four
  *    tabs. Config and UI silently disagree.
@@ -17,11 +17,8 @@
  *    caller. Asserted via a namespace-object key check (not a direct import)
  *    so this file still COMPILES after the exports are deleted — a direct
  *    import would turn the expected deletion into a build break of the test
- *    itself. NOTE for implementer: `src/main/api.ts:14` re-exports both —
- *    drop them there in the same change or check-types fails.
- *
- * RED today: workbench-context.ts:249 assigns `panels: opts.panels ?? [...]`
- * and :232/:236 export hasBuiltinPanel/getDefaultTab.
+ *    itself. `src/main/api.ts` re-exports both; they must be dropped there in
+ *    the same change or check-types fails.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 

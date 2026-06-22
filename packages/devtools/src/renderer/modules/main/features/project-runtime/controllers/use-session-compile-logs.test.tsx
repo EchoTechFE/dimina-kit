@@ -1,8 +1,7 @@
 /**
- * ROUND 2 (dmcc 日志链路) — useSession compile-log state contract
- * (TDD, NOT yet implemented).
+ * useSession compile-log state contract (dmcc 日志链路).
  *
- * Pinned contract (additive to the wave-1 compileEvents suite — that suite's
+ * Pinned contract (additive to the compileEvents suite — that suite's
  * assertions are untouched):
  *
  *  - `useSession` exposes
@@ -12,20 +11,18 @@
  *    from the pushed payload (stamped in the main process), capped at 300
  *    FIFO.
  *  - STATE ISOLATION: `compileEvents` stays sourced ONLY from projectStatus
- *    (wave-1 contract) and `compileLogs` ONLY from compileLog pushes —
- *    neither feed crosses into the other array. Merging happens in the VIEW
- *    layer (CompilePanel), not here.
+ *    and `compileLogs` ONLY from compileLog pushes — neither feed crosses into
+ *    the other array. Merging happens in the VIEW layer (CompilePanel), not
+ *    here.
  *  - `clearCompileEvents()` clears BOTH arrays (the panel has one 清空
  *    button driving one callback).
  *  - Switching projects (projectPath change) clears `compileLogs` like it
  *    clears `compileEvents`.
  *
- * Implementation note for the GREEN phase: useSession will import
- * `onCompileLog` from '@/shared/api'. The wave-1 file
- * `use-session-compile-events.test.tsx` mocks '@/shared/api' WITHOUT
- * `onCompileLog` — its mock factory (NOT its assertions) must gain a stub
- * `onCompileLog: vi.fn(() => () => {})` when the subscription lands; call
- * that harness fix out explicitly per TDD policy.
+ * useSession imports `onCompileLog` from '@/shared/api'. The sibling file
+ * `use-session-compile-events.test.tsx` mocks '@/shared/api' and stubs
+ * `onCompileLog: vi.fn(() => () => {})` in its mock factory (not its
+ * assertions) so the subscription resolves.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
@@ -135,7 +132,7 @@ async function renderReadySession(initialPath = '/tmp/fake-project') {
   return rendered
 }
 
-describe('useSession: compileLogs (ROUND 2 — dmcc 日志链路)', () => {
+describe('useSession: compileLogs (dmcc 日志链路)', () => {
   it('exposes an empty compileLogs array before any compileLog traffic', async () => {
     const { result } = await renderReadySession()
     expect(readLogs(result.current)).toHaveLength(0)
@@ -157,11 +154,9 @@ describe('useSession: compileLogs (ROUND 2 — dmcc 日志链路)', () => {
 
     const logs = readLogs(result.current)
     expect(logs).toHaveLength(2)
-    // CONTRACT EVOLUTION (pre-authorized, codex m8 NOT-RESOLVED): this pin was
-    // an exact `toEqual({ at, stream, text })`, which blocked the m8 fix — the
-    // panel's same-`at` tie-break needs useSession to stamp a shared monotonic
-    // `seq` onto every entry, and the exact shape outlawed that extra field.
-    // Relaxed to toMatchObject; the seq contract itself is pinned by the
+    // Uses toMatchObject (not exact toEqual): the panel's same-`at` tie-break
+    // needs useSession to stamp a shared monotonic `seq` onto every entry, so
+    // entries carry that extra field. The seq contract itself is pinned by the
     // "shared monotonic seq" suite at the bottom of this file.
     expect(logs[0]).toMatchObject({ at: 1765500000001, stream: 'stdout', text: '✔ 收集配置信息' })
     expect(
@@ -268,14 +263,12 @@ describe('useSession: compileLogs (ROUND 2 — dmcc 日志链路)', () => {
 })
 
 /**
- * CODEX RE-REVIEW — m8 NOT-RESOLVED follow-up (CONTRACT EVOLUTION,
- * pre-authorized). The CompilePanel's same-`at` tie-break sorts by a shared
- * monotonic `seq` (compile-panel.tsx m8 group — already implemented and
- * pinned), but useSession never stamps one: today's entries reach the panel
- * seq-less, so every same-`at` tie still falls back to the events-above-logs
- * type priority m8 outlawed. The seq wiring was blocked by the exact-shape
- * pin this file used to hold at the "preserves the payload `at`" test (now
- * relaxed to toMatchObject — see the CONTRACT EVOLUTION note there).
+ * The CompilePanel's same-`at` tie-break sorts by a shared
+ * monotonic `seq` (compile-panel.tsx), so useSession must stamp one: without
+ * it, entries reach the panel seq-less and every same-`at` tie falls back to
+ * the events-above-logs type priority that is outlawed. The "preserves the
+ * payload `at`" test above uses toMatchObject (not exact toEqual) so the
+ * additive `seq` field is allowed.
  *
  * Pinned here:
  *  - every compileLogs entry carries a numeric, strictly increasing `seq`;
@@ -289,7 +282,7 @@ function readSeq(entry: unknown): unknown {
   return (entry as { seq?: unknown }).seq
 }
 
-describe('useSession: shared monotonic seq across compileEvents and compileLogs (codex m8 contract evolution)', () => {
+describe('useSession: shared monotonic seq across compileEvents and compileLogs', () => {
   it('stamps every compileLogs entry with a strictly increasing numeric seq', async () => {
     const { result } = await renderReadySession()
 
@@ -309,7 +302,7 @@ describe('useSession: shared monotonic seq across compileEvents and compileLogs 
     expect(
       typeof seq0,
       'every compileLogs entry must carry a numeric seq — without it the panel’s same-at tie-break '
-      + '(compile-panel.tsx, codex m8) has nothing to sort by and silently falls back to type priority',
+      + '(compile-panel.tsx) has nothing to sort by and silently falls back to type priority',
     ).toBe('number')
     expect(typeof seq1).toBe('number')
     expect(
@@ -354,7 +347,7 @@ describe('useSession: shared monotonic seq across compileEvents and compileLogs 
       expect(
         seqs[i] as number,
         'seq must come from ONE shared counter spanning both stores — per-array counters cannot order an '
-        + 'event against a log line that collided on the same `at`, which is the exact m8 failure mode',
+        + 'event against a log line that collided on the same `at`, which is the exact failure mode this guards',
       ).toBeGreaterThan(seqs[i - 1] as number)
     }
   })

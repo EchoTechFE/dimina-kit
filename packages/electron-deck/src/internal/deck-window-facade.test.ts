@@ -20,12 +20,11 @@
  *   `session.reset()` disposes that session's views but keeps the session AND the
  *   window alive. Closing the window disposes all sessions minted from it.
  *
- * STATUS: every spec here is RED at authoring time. Today `runtime.windows.create`
- * returns a bare BrowserWindow, so `.newSession` / `.controlWc` / `.window` /
- * `.onClose` are absent — the C1 specs fail at RUNTIME, and the C2 view-accepts
- * spec fails because there's no window-rooted session to feed into
- * `runtime.view({ scope })`. Reached through a typed escape hatch (`asDeckWindow`)
- * so the file COMPILES and fails on BEHAVIOR, not a compile error.
+ * Every spec here exercises the runtime contract of the window facade returned by
+ * `runtime.windows.create`: it carries `.newSession` / `.controlWc` / `.window` /
+ * `.onClose` (the C1 specs), and a window-rooted session can be fed into
+ * `runtime.view({ scope })` (the C2 view-accepts spec). Reached through a typed
+ * escape hatch (`asDeckWindow`) so the file COMPILES and asserts on BEHAVIOR.
  *
  * Fakes: copied (minimal) from deck-app.host-view.test.ts — `createFakeElectron`
  * / `createFakeIpcMain`. The existing fake shapes (contentView add/removeChildView
@@ -217,7 +216,7 @@ function createFakeElectron(
 // (no `.window` / `.controlWc` / `.newSession` / `.onClose`). The LOCKED C1
 // contract upgrades it to a `DeckWindow`. We reach the new surface through a
 // loose view so its ABSENCE fails at RUNTIME (`...create(...).newSession is not
-// a function`) — the RED we want — instead of a compile error that would stop
+// a function`) — the runtime failure we want — instead of a compile error that would stop
 // the suite from running.
 
 interface DeckWindow {
@@ -455,6 +454,6 @@ describe('DeckWindow facade (C2) — window close cascades window-rooted session
 	})
 })
 
-// Parity ref so an unused-import lint never masks the RED.
+// Parity ref so an unused-import lint never masks a runtime failure.
 const _jsonParityRef: JsonValue = null
 void _jsonParityRef

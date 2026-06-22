@@ -68,28 +68,28 @@ const DEFAULT_MAIN_WIDTH = 1024
 const DEFAULT_MAIN_HEIGHT = 768
 
 /**
- * Optional dependencies for {@link DeckApp} —— Phase 3b 用于注入真 (或
+ * Optional dependencies for {@link DeckApp} —— 用于注入真 (或
  * mock) Electron `ipcMain` + trusted webContents 集合，让 framework 接通跨进程
- * wire transport。不注入则保持 Phase 2 main-internal-only 行为。
+ * wire transport。不注入则保持 main-internal-only 行为。
  *
  * @internal
  */
 export interface DeckAppOptions {
 	readonly wireTransport?: {
 		readonly ipcMain: MinimalIpcMain
-		/** 默认返回 framework 内部维护的 trusted set（Phase 4 由 windows.trust 填）。 */
+		/** 默认返回 framework 内部维护的 trusted set（由 windows.trust 填）。 */
 		readonly trustedWebContents?: () => readonly MinimalWebContents[]
 		/** 自定义 senderPolicy（默认按 trusted set 判断）。 */
 		readonly senderPolicy?: SenderPolicy
 	}
 	/**
-	 * Phase 4 — 注入真 (或 fake) Electron `BrowserWindow` / `WebContentsView`
+	 * 注入真 (或 fake) Electron `BrowserWindow` / `WebContentsView`
 	 * 构造器；提供后 framework 会装配 mainWindow / toolbarView / declared
-	 * windows，否则保持 Phase 3b electron-unavailable 行为。
+	 * windows，否则保持 electron-unavailable 行为。
 	 */
 	readonly electron?: MinimalElectron
 	/**
-	 * v2 — 领域 backend。提供后 framework 在 whenReady 前跑 `beforeReady`，
+	 * 领域 backend。提供后 framework 在 whenReady 前跑 `beforeReady`，
 	 * 在 setup 阶段跑 `assemble(runtime)`。不提供则退化为纯框架（桩 context，
 	 * 仅测试/演示用）。
 	 */
@@ -97,8 +97,8 @@ export interface DeckAppOptions {
 }
 
 /**
- * Internal record for replaying window-created events into setup-time listeners
- * (#6 R3): bind 期间 ctor 已经完成时，setup 还没机会订阅；framework 缓存
+ * Internal record for replaying window-created events into setup-time listeners:
+ * bind 期间 ctor 已经完成时，setup 还没机会订阅；framework 缓存
  * baseline window-created 事件，setup 期间第一个 listener 注册时一次性消费
  * 整个队列（splice 0）。后续 listener 注册时队列已空，不重复 replay。
  *
@@ -113,7 +113,7 @@ interface PendingWindowCreated {
 
 /**
  * Internal record for buffering load-failed events that fired before any
- * 'load-failed' listener was registered (D1 race fix). bind 阶段
+ * 'load-failed' listener was registered. bind 阶段
  * loadAssembledSources() 触发的 loadURL/loadFile 是异步，rejection 的 microtask
  * 可能在 setup callback 的 await 点之间先跑，listener 还没注册。framework 在
  * fwListeners 上无 'load-failed' listener 时把 payload push 进队列；第一个
@@ -125,7 +125,7 @@ interface PendingLoadFailed {
 }
 
 /**
- * host-view slice 1 — per-window native-view substrate. Each tracked window
+ * Per-window native-view substrate. Each tracked window
  * gets ONE `Compositor` whose {@link ContentViewHost} adapts that window's
  * `contentView`. The minimal `contentView` has no `children()`, so the host
  * adapter TRACKS the Compositor-managed views' z-order itself (the toolbar,
@@ -137,7 +137,7 @@ interface ViewSubstrate {
 	compositor: Compositor
 	windowScope: Scope
 	registerView(id: string, wcv: MinimalWebContentsView): void
-	/** host-view slice 1 (Bug 3a) — drop a disposed/detached view from this
+	/** Drop a disposed/detached view from this
 	 *  substrate's registry + tracked z-order, so a long-lived window doesn't
 	 *  accumulate dead views. Safe to call twice (Map.delete + guarded splice). */
 	unregisterView(id: string): void
@@ -145,8 +145,8 @@ interface ViewSubstrate {
 
 /**
  * Framework-internal "app" object —— `electronDeck(config)` 顶层入口的 plain-class
- * 形态，便于 Phase 2 测试驱动 lifecycle 转换。Phase 3b 加 wireTransport 注入
- * 后可接真 ipcMain；Phase 4 加 electron 注入后可装配 mainWindow / toolbarView
+ * 形态，便于测试驱动 lifecycle 转换。加 wireTransport 注入
+ * 后可接真 ipcMain；加 electron 注入后可装配 mainWindow / toolbarView
  * / declared windows。两者都不注入时退化为同进程内存 fake。
  *
  * @internal
@@ -160,21 +160,21 @@ export class DeckApp {
 	private readonly ipc = new InMemoryTypedIpcRegistry()
 	private readonly fwListeners = new Map<keyof FrameworkEvents, Set<(payload: unknown) => void>>()
 	private readonly trustSet: TrustSet = createTrustSet()
-	/** P4 Phase B — privileged-command grant registry. The policy gates
+	/** Privileged-command grant registry. The policy gates
 	 *  ControlBus.dispatch; grants are minted via `runtime.grants.issue`. */
 	private readonly capability = createCapabilityRegistry()
-	/** P4 Phase B — the grant-gated command bus for PRIVILEGED `layout.*`
+	/** The grant-gated command bus for PRIVILEGED `layout.*`
 	 *  commands. Constructed in `bindWireTransport` with the capability policy
 	 *  injected, so `dispatch` default-DENIES any command lacking a live grant.
 	 *  Privileged commands are registered via `runtime.layout.command`; ordinary
 	 *  domain APIs stay on the un-gated `InMemoryTypedIpcRegistry`. */
 	private controlBus: ControlBus | null = null
-	/** v2 — per-webContents backend `onWindowTrusted` Disposable, so a window's
+	/** Per-webContents backend `onWindowTrusted` Disposable, so a window's
 	 *  trust mirror is undone when THAT window closes (not only at teardown). */
 	private readonly backendTrustDisposables = new Map<MinimalWebContents, Disposable>()
 	private readonly options: DeckAppOptions
 	private wireTransport: WireTransport | null = null
-	/** v2 — the live wire senderPolicy, reused by buildRuntime so
+	/** The live wire senderPolicy, reused by buildRuntime so
 	 *  `context._senderPolicy` reflects real trust instead of a `() => true` stub. */
 	private wireSenderPolicy: SenderPolicy | null = null
 	private mainWindow: MinimalBrowserWindow | null = null
@@ -182,12 +182,8 @@ export class DeckApp {
 	private readonly declaredWindows = new Map<string, MinimalBrowserWindow>()
 	private readonly trackedWindows = new Set<MinimalBrowserWindow>()
 	/**
-	 * unified-lifetime P0 (observation-only, zero-regression). The root lifetime
-	 * scope of the app + a shadow map mirroring `trackedWindows`, keyed by each
-	 * window's webContents, carrying a per-window child Scope. P0 is PURELY
-	 * OBSERVATIONAL: these windowScopes own NO resources (no destroy/trust/wire is
-	 * moved onto them), so `rootScope.close()` during shutdown is a no-op for app
-	 * behaviour — it exists only to lay the foundation P1 will take over. The
+	 * The root lifetime scope of the app + a shadow map mirroring `trackedWindows`,
+	 * keyed by each window's webContents, carrying a per-window child Scope. The
 	 * shadow's key set is kept in lock-step with `trackedWindows` at every
 	 * maintenance point.
 	 */
@@ -197,11 +193,11 @@ export class DeckApp {
 		{ window: MinimalBrowserWindow, windowScope: Scope }
 	>()
 	/**
-	 * unified-lifetime P1b: per-trusted-webContents trust record. `wcScope` is a
+	 * Per-trusted-webContents trust record. `wcScope` is a
 	 * child of the owning window's `windowScope`; it OWNS the wc's trust ref-count
 	 * lease(s). When the window closes, `windowScope.close()` cascades into this
 	 * `wcScope` (children-first LIFO), disposing every lease → ref-count hits 0 →
-	 * the wc leaves the trust set. This replaces the imperative `deleteEntry`.
+	 * the wc leaves the trust set.
 	 * A wc can be trusted more than once (framework auto-trust + host
 	 * `windows.trust`), so `leases` is a Set.
 	 */
@@ -212,13 +208,13 @@ export class DeckApp {
 	private readonly pendingWindowCreated: PendingWindowCreated[] = []
 	private readonly pendingLoadFailed: PendingLoadFailed[] = []
 	/**
-	 * host-view slice 1 — per-window native-view substrate, keyed by the window's
+	 * Per-window native-view substrate, keyed by the window's
 	 * webContents (same key discipline as `lifetimeShadow`). Created at both
 	 * window-construction sites; dropped in `handleSubWindowClosed`.
 	 */
 	private readonly windowSubstrates = new Map<MinimalWebContents, ViewSubstrate>()
 	/**
-	 * P3 — per-adopted-window registration handle, keyed by the adopted window's
+	 * Per-adopted-window registration handle, keyed by the adopted window's
 	 * webContents. `runtime.windows.adopt` is idempotent by wc identity: a second
 	 * adopt of the same window returns this stored Disposable (no double-admit, no
 	 * second substrate). The entry is removed when the registration is disposed
@@ -226,7 +222,7 @@ export class DeckApp {
 	 */
 	private readonly adoptedWindows = new Map<MinimalWebContents, Disposable>()
 	/**
-	 * C1/C4 — per-registered-window {@link DeckWindow} facade + its per-window
+	 * Per-registered-window {@link DeckWindow} facade + its per-window
 	 * close deciders, keyed by the window's control wc. Populated by
 	 * {@link registerWindow} for framework-created and adopted windows, plus the
 	 * framework-built main window. `deciders` is an ORDERED list run in
@@ -245,13 +241,13 @@ export class DeckApp {
 			committedClose: boolean
 		}
 	>()
-	/** C1 — the framework-built main window's control wc, so `runtime.windows.main`
+	/** The framework-built main window's control wc, so `runtime.windows.main`
 	 *  can resolve its {@link DeckWindow}. Null under an `ownsWindows:true` backend. */
 	private mainControlWc: MinimalWebContents | null = null
-	/** host-view slice 1 — monotonic id source for `runtime.view` native views. */
+	/** Monotonic id source for `runtime.view` native views. */
 	private viewSeq = 0
 	/**
-	 * P2 — provenance map for `runtime.scopes.create()` sessions: maps an opaque
+	 * Provenance map for `runtime.scopes.create()` sessions: maps an opaque
 	 * {@link DeckSession} to its internal `rootScope.child()` Scope. A WeakMap so a
 	 * dropped session is GC'd; the framework holds the scope's lifetime via
 	 * rootScope anyway (the session scope is a rootScope child). `runtime.view`
@@ -271,7 +267,7 @@ export class DeckApp {
 		string,
 		{ hidden: string[], handles: Map<string, DeckViewHandle> }
 	>()
-	/** C3: wcs that already have the `did-start-navigation` grant-reset hook bound,
+	/** Wcs that already have the `did-start-navigation` grant-reset hook bound,
 	 *  so {@link bindNavigationGrantReset} is idempotent — a wc admitted to trust
 	 *  more than once (e.g. constructed `autoTrust:false` then `windows.trust()`ed,
 	 *  or un-adopted then re-adopted) never accumulates duplicate nav listeners. */
@@ -294,9 +290,9 @@ export class DeckApp {
 	/** Set when shutdown is driven by the `will-quit` handler — the app is already
 	 *  quitting, so `doShutdown()` must NOT re-`app.quit()` (re-entrant quit). */
 	private quitInitiated = false
-	/** v2 close machine: non-null while a close decision is awaiting (in-flight latch). */
+	/** Close machine: non-null while a close decision is awaiting (in-flight latch). */
 	private closingDecisionPromise: Promise<'keep' | 'close'> | null = null
-	/** v2 close machine: set once a 'close' decision is committed (guards the
+	/** Close machine: set once a 'close' decision is committed (guards the
 	 *  window between decision-resolve and the 'closed' event). Never resets. */
 	private shuttingDown = false
 	/** Idempotency latch for {@link runShutdownCleanup}: the cleanup body
@@ -316,14 +312,13 @@ export class DeckApp {
 	constructor(config: DeckConfig, options: DeckAppOptions = {}) {
 		this.config = config
 		this.options = options
-		// unified-lifetime P1a: rootScope owns the app-level teardown resources
-		// (event bus + resource registry). Owned here so they dispose as rootScope
-		// RESOURCES — which, per Scope's children-first LIFO, run AFTER every
-		// windowScope child has torn down its window. This reproduces the legacy
-		// "destroy all windows BEFORE registry.disposeAll()" ordering structurally,
-		// without a manual loop. Own order encodes reverse disposal order: bus first
-		// (disposed last), then registry (disposed first) → registry.disposeAll runs
-		// before bus.unbindAll, matching the pre-P1a runShutdownCleanup sequence.
+		// rootScope owns the app-level teardown resources (event bus + resource
+		// registry). Owned here so they dispose as rootScope RESOURCES — which, per
+		// Scope's children-first LIFO, run AFTER every windowScope child has torn
+		// down its window. This reproduces the "destroy all windows BEFORE
+		// registry.disposeAll()" ordering structurally, without a manual loop. Own
+		// order encodes reverse disposal order: bus first (disposed last), then
+		// registry (disposed first) → registry.disposeAll runs before bus.unbindAll.
 		this.rootScope.own(() => {
 			this.bus.unbindAll()
 		})
@@ -357,7 +352,7 @@ export class DeckApp {
 		// 校验在 lifecycle 转换之前；invalid config → reject，phase 不动
 		validateConfig(this.config)
 
-		// #12 C7 — half-state guard: electron + (toolbar | windows) without
+		// half-state guard: electron + (toolbar | windows) without
 		// wireTransport would leave the host with webviews that can never
 		// reach back via __electron-deck:invoke. Reject early with a clear msg.
 		const hasWebviewContent = !!(this.config.toolbar || this.config.windows)
@@ -367,10 +362,10 @@ export class DeckApp {
 			)
 		}
 
-		// v2 — pre-ready + whenReady gate. Only runs when a real `app` surface is
-		// injected (production path / gate tests); legacy fakes without `app`
-		// skip it and keep Phase-4 behaviour. The framework must NOT construct any
-		// BrowserWindow before `whenReady` resolves in a real main process.
+		// pre-ready + whenReady gate. Only runs when a real `app` surface is
+		// injected (production path / gate tests); fakes without `app` skip it. The
+		// framework must NOT construct any BrowserWindow before `whenReady` resolves
+		// in a real main process.
 		const app = this.options.electron?.app
 		if (app) {
 			// Single-instance gate (opt-in): a second instance must quit BEFORE any
@@ -394,7 +389,7 @@ export class DeckApp {
 			this.bindAppLifecycle(app)
 		}
 
-		// #5 C6 — wrap assemble/bind in a single try; on any failure run
+		// Wrap assemble/bind in a single try; on any failure run
 		// cleanupOnError() so partially-constructed windows / handlers get
 		// disposed before the start() promise rejects.
 		try {
@@ -412,7 +407,7 @@ export class DeckApp {
 			this.lifecycle.enter('setup')
 			this._runtime = this.buildRuntime()
 
-			// v2 — domain assembly before the host's imperative setup escape.
+			// Domain assembly before the host's imperative setup escape.
 			if (this.options.backend) {
 				await this.options.backend.assemble(this._runtime)
 			}
@@ -468,7 +463,7 @@ export class DeckApp {
 	}
 
 	/**
-	 * @internal Phase 4 windows.trust() / framework 内部添加 trusted webContents.
+	 * @internal windows.trust() / framework 内部添加 trusted webContents.
 	 * Backend-owned / untracked-window fallback: there is no framework windowScope
 	 * for these (the backend manages their lifetime), so the trust lease is owned
 	 * by `rootScope` as an app-shutdown backstop. The backend still disposes the
@@ -479,14 +474,14 @@ export class DeckApp {
 	}
 
 	/**
-	 * unified-lifetime P1b: admit `wc` to the trust set under `windowScope`. Gets
+	 * Admit `wc` to the trust set under `windowScope`. Gets
 	 * or creates the wc's `wcScope` (a child of `windowScope`), takes a fresh
 	 * `trustSet.admit(wc, wcScope)` ref-count lease OWNED BY that wcScope, and returns a
 	 * one-shot host-facing Disposable that releases just THIS lease early. On
 	 * `wcScope.close()` (window-close cascade) every still-held lease is disposed
-	 * → ref-count zeroes → the wc leaves the set (equivalent to the old
-	 * `deleteEntry`, but driven by Scope teardown and covering partially-built
-	 * windows too). Idempotent registry cleanup is owned by the wcScope.
+	 * → ref-count zeroes → the wc leaves the set (driven by Scope teardown,
+	 * covering partially-built windows too). Idempotent registry cleanup is owned
+	 * by the wcScope.
 	 */
 	private admitTrust(wc: MinimalWebContents, windowScope: Scope): Disposable {
 		// Never trust an already-destroyed webContents. Trust is keyed/observed by
@@ -523,7 +518,7 @@ export class DeckApp {
 	}
 
 	/**
-	 * C3 (P0 security) — bind the main-frame cross-document navigation grant-reset
+	 * Bind the main-frame cross-document navigation grant-reset
 	 * hook on a control `wc`. On a MAIN-FRAME CROSS-DOCUMENT navigation
 	 * (`isMainFrame && !isInPlace`) this SYNCHRONOUSLY revokes the wc's capability
 	 * grants (`capability.revokeBySenderId`) and slot tokens, so the navigated-to
@@ -569,7 +564,7 @@ export class DeckApp {
 	}
 
 	/**
-	 * C1 — build the {@link DeckWindow} facade over a registered window and record
+	 * Build the {@link DeckWindow} facade over a registered window and record
 	 * it (so `runtime.windows.create()` / `runtime.windows.main` can return it and
 	 * the per-window close machine can find its deciders). `newSession()` mints a
 	 * window-rooted {@link DeckSession} (a `windowScope.child()` registered in the
@@ -630,7 +625,7 @@ export class DeckApp {
 	/**
 	 * Resolve a window argument that may be either a raw `BrowserWindow` (the
 	 * historical `runtime.view().placeIn(window)` shape) OR a {@link DeckWindow}
-	 * handle (the C1 `runtime.windows.create()` return). A DeckWindow exposes the
+	 * handle (the `runtime.windows.create()` return). A DeckWindow exposes the
 	 * underlying window via `.window` and has no `.webContents` of its own; a raw
 	 * window has `.webContents`. Unwrap so the substrate lookup keys off the real
 	 * control webContents either way — keeping the `placeIn(deckWindow)` and
@@ -645,7 +640,7 @@ export class DeckApp {
 	}
 
 	/**
-	 * C4 — run a registered window's per-window close deciders (registration order;
+	 * Run a registered window's per-window close deciders (registration order;
 	 * any `'keep'` vetoes), with an in-flight latch so a re-entrant close during a
 	 * pending decision decides ONCE. A throw / rejection fails CLOSED. Returns the
 	 * committed decision, or `null` when the decision is still in flight / there are
@@ -672,7 +667,7 @@ export class DeckApp {
 	}
 
 	/**
-	 * C4 — arm the per-window cancelable close-decision machine on a CREATED /
+	 * Arm the per-window cancelable close-decision machine on a CREATED /
 	 * adopted window. On a `close` attempt: `preventDefault`, dispatch the
 	 * per-window deciders behind an in-flight latch (re-entrant closes swallowed),
 	 * and on a `'close'` decision `win.destroy()` (→ `'closed'` → revoke +
@@ -712,30 +707,30 @@ export class DeckApp {
 	}
 
 	/**
-	 * @internal unified-lifetime P0 accessors (observation-only). The live shadow
-	 * map mirroring `trackedWindows`, the root Scope, and a consistency assertion.
+	 * @internal Lifetime accessors. The live shadow map mirroring `trackedWindows`,
+	 * the root Scope, and a consistency assertion.
 	 */
 	__lifetimeShadow(): Map<MinimalWebContents, { window: MinimalBrowserWindow, windowScope: Scope }> {
 		return this.lifetimeShadow
 	}
 
-	/** @internal unified-lifetime P0: the root lifetime Scope. */
+	/** @internal The root lifetime Scope. */
 	__rootScope(): Scope {
 		return this.rootScope
 	}
 
-	/** @internal unified-lifetime P1b: the per-trusted-wc trust records. */
+	/** @internal The per-trusted-wc trust records. */
 	__wcRecords(): Map<MinimalWebContents, { wcScope: Scope, leases: Set<Disposable>, windowScope: Scope }> {
 		return this.wcRecords
 	}
 
-	/** @internal P4 Phase B: the live capability policy (grant gate reads it). */
+	/** @internal The live capability policy (grant gate reads it). */
 	__capabilityPolicy(): CapabilityPolicy {
 		return this.capability.policy
 	}
 
 	/**
-	 * @internal unified-lifetime P0 invariant (A): the shadow's per-window set
+	 * @internal Lifetime invariant: the shadow's per-window set
 	 * (the `window` of each entry) must equal `trackedWindows` membership. Throws
 	 * if violated; no-op otherwise.
 	 */
@@ -771,7 +766,7 @@ export class DeckApp {
 		}
 		if (this.config.hostServices) {
 			for (const [name, handler] of Object.entries(this.config.hostServices)) {
-				// GF-1: ENFORCE the layout.* boundary at registration. `layout.*` names
+				// ENFORCE the layout.* boundary at registration. `layout.*` names
 				// are reserved for the grant-gated ControlBus (runtime.layout.command);
 				// they must NEVER be registered on the un-gated declarative hostServices
 				// route, or a privileged name would be reachable without a grant.
@@ -793,12 +788,11 @@ export class DeckApp {
 	}
 
 	/**
-	 * host-view slice 1 — build a per-window {@link ViewSubstrate}. The
+	 * Build a per-window {@link ViewSubstrate}. The
 	 * `ContentViewHost` adapts `win.contentView` and tracks the Compositor-managed
 	 * z-order in `order` (the minimal `contentView` has no `children()`). The
 	 * substrate's `detachAll` is owned on `windowScope` AFTER the window's
-	 * `win.destroy` own, so LIFO teardown runs detachAll (STEP1) BEFORE destroy
-	 * (STEP4) — the A4 ordering.
+	 * `win.destroy` own, so LIFO teardown runs detachAll BEFORE destroy.
 	 */
 	private createWindowSubstrate(win: MinimalBrowserWindow, windowScope: Scope): ViewSubstrate {
 		const wcvById = new Map<string, MinimalWebContentsView>()
@@ -807,7 +801,7 @@ export class DeckApp {
 			addChildView: (ref: NativeViewRef) => {
 				const wcv = wcvById.get(ref.id)
 				if (!wcv) return
-				// Bug 2: native call FIRST — if it throws, the tracked `order` stays
+				// Native call FIRST — if it throws, the tracked `order` stays
 				// consistent with Electron reality (the op didn't happen) so the
 				// Compositor's diff/rollback works against a truthful order. Only
 				// mutate `order` AFTER the native add returns successfully.
@@ -819,7 +813,7 @@ export class DeckApp {
 			removeChildView: (ref: NativeViewRef) => {
 				const wcv = wcvById.get(ref.id)
 				if (!wcv) return
-				// Bug 2: native remove FIRST, then splice `order` — a native throw
+				// Native remove FIRST, then splice `order` — a native throw
 				// leaves `order` consistent with reality.
 				win.contentView.removeChildView(wcv)
 				const i = order.indexOf(ref.id)
@@ -831,7 +825,7 @@ export class DeckApp {
 			children: () => order.map(id => ({ id })),
 		}
 		const compositor = createCompositor(host)
-		// A4 STEP1 — owned AFTER the win.destroy own ⇒ runs BEFORE destroy (LIFO).
+		// Owned AFTER the win.destroy own ⇒ runs BEFORE destroy (LIFO).
 		// `detachAll` is optional on the interface but always present on the real
 		// `createCompositor`; guard for the type only.
 		windowScope.own(() => {
@@ -855,7 +849,7 @@ export class DeckApp {
 		const electron = this.options.electron
 		if (!electron) return
 
-		// v2 — a window-owning backend builds the real (domain) main window in
+		// A window-owning backend builds the real (domain) main window in
 		// `assemble()` via its own factory. The framework must NOT create its own
 		// here, or the app would show a second, empty BrowserWindow. The framework
 		// still provides lifecycle / wire / trust. Backends that only react to
@@ -889,7 +883,7 @@ export class DeckApp {
 		const main = new electron.BrowserWindow(mainOpts)
 		this.mainWindow = main
 		this.trackedWindows.add(main)
-		// unified-lifetime P1a: the window's lifetime is a child Scope of rootScope,
+		// The window's lifetime is a child Scope of rootScope,
 		// and that windowScope now OWNS the window's destruction. rootScope.close()
 		// (shutdown) cascades into it, destroying the window as part of Scope
 		// teardown rather than a manual loop. The isDestroyed() guard means an
@@ -902,9 +896,9 @@ export class DeckApp {
 			window: main,
 			windowScope: mainWindowScope,
 		})
-		// host-view slice 1 — per-window native-view substrate. Created AFTER the
+		// Per-window native-view substrate. Created AFTER the
 		// `win.destroy` own above so its `detachAll` (owned inside) runs FIRST in
-		// the LIFO teardown (STEP1), before win.destroy (STEP4).
+		// the LIFO teardown, before win.destroy.
 		this.windowSubstrates.set(
 			main.webContents as unknown as MinimalWebContents,
 			this.createWindowSubstrate(main, mainWindowScope),
@@ -917,8 +911,8 @@ export class DeckApp {
 		// — backend or framework — can observe a stale trust/grant for a wc whose id
 		// Electron may immediately reuse. Idempotent with the async wcScope cascade
 		// and the later close-decision handler (revoke is one-shot / by-senderId).
-		// Capture the main wc.id WHILE the window is alive (Bug 2, codex slot-token
-		// review): reading `main.webContents` inside the 'closed' handler is a
+		// Capture the main wc.id WHILE the window is alive: reading
+		// `main.webContents` inside the 'closed' handler is a
 		// post-destroy access that can throw — leaving tokens un-revoked until
 		// shutdown, where a reused wc.id could then pass the authorizedWcId check.
 		const mainWcId = (main.webContents as unknown as MinimalWebContents).id
@@ -928,7 +922,7 @@ export class DeckApp {
 			// the captured id, never a post-destroy webContents read).
 			this.revokeSlotTokensForWc(mainWcId)
 		})
-		// v2 — backend post-ctor / pre-load hook (synchronous, exactly once):
+		// Backend post-ctor / pre-load hook (synchronous, exactly once):
 		// runs after the window exists but before any source load, so the backend
 		// can attach views / listeners before the renderer starts.
 		this.options.backend?.onMainWindowCreated?.(
@@ -938,15 +932,15 @@ export class DeckApp {
 		// auto-trust — the framework's ref-count lease is OWNED by the main window's
 		// wcScope (child of mainWindowScope), so the window-close cascade zeroes it.
 		this.admitTrust(main.webContents as unknown as MinimalWebContents, mainWindowScope)
-		// C3 — main-frame cross-document navigation grant-reset on the main control
-		// wc (after admitTrust so its wcScope exists). C1 — record the main window's
+		// Main-frame cross-document navigation grant-reset on the main control
+		// wc (after admitTrust so its wcScope exists). Record the main window's
 		// DeckWindow facade (newSession + per-window onClose) so `runtime.windows.main`
 		// resolves it and the close machine below can consult its per-window deciders.
 		const mainControlWc = main.webContents as unknown as MinimalWebContents
 		this.bindNavigationGrantReset(mainControlWc)
 		this.buildDeckWindow(main, mainControlWc, mainWindowScope)
 		this.mainControlWc = mainControlWc
-		// v2 — let the backend mirror main-window trust into its domain set.
+		// Let the backend mirror main-window trust into its domain set.
 		// This onWindowTrusted call belongs to the **main-window-assembly seam**
 		// and is therefore ownsWindows-gated: under `ownsWindows:true` we
 		// early-return above (the backend builds + trusts its own main window via
@@ -955,9 +949,9 @@ export class DeckApp {
 		// — a main window it built itself.
 		this._notifyBackendTrusted(main.webContents)
 		this.pendingWindowCreated.push({ window: main, role: 'main' })
-		// #8 R7 — toolbar follows mainWindow resize
+		// Toolbar follows mainWindow resize
 		main.on('resize', () => {
-			// v2 — backend repositions its overlays against the main window.
+			// Backend repositions its overlays against the main window.
 			this.options.backend?.repositionOverlays?.(
 				main as unknown as Parameters<NonNullable<RuntimeBackend['repositionOverlays']>>[0],
 			)
@@ -970,7 +964,7 @@ export class DeckApp {
 				height: this.config.toolbar.height,
 			})
 		})
-		// v2 close-decision machine. `close` is cancelable: we always
+		// Close-decision machine. `close` is cancelable: we always
 		// preventDefault first, then ask the backend whether to keep the window
 		// (e.g. tear down the active session and stay) or actually close. Only a
 		// 'close' decision destroys the window → fires 'closed' → shutdown.
@@ -987,7 +981,7 @@ export class DeckApp {
 			// slip past [B] before the latch is set.
 			let settle!: (d: 'keep' | 'close') => void
 			this.closingDecisionPromise = new Promise<'keep' | 'close'>((res) => { settle = res })
-			// C4 — a LIVE per-window onClose decider STRICTLY supersedes
+			// A LIVE per-window onClose decider STRICTLY supersedes
 			// backend.onMainWindowClose: when one is registered on the main window's
 			// DeckWindow, run the per-window deciders (registration order, any 'keep'
 			// vetoes, throw/reject fail-closed) and DO NOT call the backend hook. The
@@ -1027,22 +1021,21 @@ export class DeckApp {
 			})
 		})
 		// 'closed' revokes trust + triggers shutdown. The 'keep' path never
-		// destroys, so it never reaches here. P1b: close mainWindowScope and AWAIT
+		// destroys, so it never reaches here. Close mainWindowScope and AWAIT
 		// its cascade BEFORE starting shutdown. The cascade closes the main +
 		// toolbar wcScopes (its children, LIFO) → disposes their trust leases →
-		// ref-count zeroes → untrusted, the Scope-teardown replacement for the old
-		// imperative deleteEntry. Awaiting to COMPLETION before `shutdown()` matters
-		// (codex ISSUE-1): a fire-and-forget `void close()` would pause at the
+		// ref-count zeroes → untrusted. Awaiting to COMPLETION before `shutdown()`
+		// matters: a fire-and-forget `void close()` would pause at the
 		// async boundary between the two child wcScopes while shutdown's synchronous
-		// `beforeClose` prefix runs — leaving the main wc briefly trusted, unlike the
-		// old synchronous deleteEntry. The cascade is cheap (trust leases + the
+		// `beforeClose` prefix runs — leaving the main wc briefly trusted. The
+		// cascade is cheap (trust leases + the
 		// isDestroyed-guarded win.destroy no-op). `shutdown()` is reached via
 		// `.finally` so it still runs if the cascade throws; rootScope.close() during
 		// shutdown is idempotent over the already-closed mainWindowScope.
 		main.on('closed', () => {
 			// Synchronously revoke main + toolbar trust the instant the window is
-			// destroyed (matches the old synchronous deleteEntry; no async-cascade
-			// race can leave a destroyed wc trusted during a later beforeClose).
+			// destroyed, so no async-cascade race can leave a destroyed wc trusted
+			// during a later beforeClose.
 			this.revokeWindowTrust(mainWindowScope)
 			// Then the async windowScope teardown (idempotent re-dispose of the now
 			// already-revoked leases + win.destroy + wcRecords cleanup) and shutdown.
@@ -1080,7 +1073,7 @@ export class DeckApp {
 		}
 	}
 
-	/** Phase 4 race fix：在 wireTransport.start 之后再 loadURL/loadFile。 */
+	/** 在 wireTransport.start 之后再 loadURL/loadFile，避免 preload 先于 ipcMain handler 注册触发 invoke。 */
 	private loadAssembledSources(): void {
 		if (this.toolbarView && this.config.toolbar) {
 			this.safeLoad(this.toolbarView.webContents, this.config.toolbar.source)
@@ -1101,7 +1094,7 @@ export class DeckApp {
 	}
 
 	/**
-	 * #3 R5/C2 — load is best-effort: log + emit `load-failed` if it rejects,
+	 * Load is best-effort: log + emit `load-failed` if it rejects,
 	 * but never let start() reject because of a renderer load issue (we'd
 	 * leave the host blocked indefinitely while the framework is otherwise
 	 * happy).
@@ -1173,10 +1166,10 @@ export class DeckApp {
 					isTrusted: (id: number): boolean => this.trustSet.isTrusted(id),
 				}
 		const senderPolicy = wireOpts.senderPolicy ?? defaultSenderPolicy
-		// v2 — expose the live policy to buildRuntime (replaces `() => true` stub).
+		// Expose the live policy to buildRuntime (replaces `() => true` stub).
 		this.wireSenderPolicy = senderPolicy
 
-		// grants-fork — construct the grant-gated ControlBus BEFORE the
+		// Construct the grant-gated ControlBus BEFORE the
 		// WireTransport. `CreateControlBusDeps.transport` is vestigial (the facade
 		// never calls back into the wire; the wire calls `dispatch`, not the
 		// reverse), so there is NO circular dependency: the ControlBus is built
@@ -1217,7 +1210,7 @@ export class DeckApp {
 		})
 		transport.start()
 		this.wireTransport = transport
-		// P5 eager-arm: arm the slot-token Place / LayoutSubscribe channels at
+		// Arm the slot-token Place / LayoutSubscribe channels at
 		// framework START (right after the wire binds) instead of lazily on the
 		// first anchored placeIn. This lets a `createDeckLayoutClient` subscribe
 		// before any view is placed without hitting a "no handler" reject. The
@@ -1243,7 +1236,7 @@ export class DeckApp {
 	}
 
 	/**
-	 * KA-4: warn ONCE about an invalid `keepAlive.max` (negative / non-integer /
+	 * Warn ONCE about an invalid `keepAlive.max` (negative / non-integer /
 	 * NaN). Such a view is not keep-alive-managed (the group is skipped); warning
 	 * once avoids log spam when many views share the same bad config.
 	 */
@@ -1287,7 +1280,7 @@ export class DeckApp {
 		// re-read in the 'closed' handler is what silently skipped windowScope.close
 		// → trust revocation leak under real Electron.)
 		const wc = win.webContents as unknown as MinimalWebContents
-		// unified-lifetime P1a: windowScope (child of rootScope) owns this window's
+		// windowScope (child of rootScope) owns this window's
 		// destruction; rootScope.close() cascades the destroy. Declared and
 		// runtime.windows.create() windows both flow through here. The isDestroyed()
 		// guard avoids double-destroy when the window was already closed externally.
@@ -1299,11 +1292,11 @@ export class DeckApp {
 			window: win,
 			windowScope,
 		})
-		// host-view slice 1 — per-window native-view substrate, keyed by the
-		// captured `wc`. Created AFTER the `win.destroy` own above so its
-		// `detachAll` runs FIRST in the LIFO teardown (STEP1) before destroy (STEP4).
+		// Per-window native-view substrate, keyed by the captured `wc`. Created
+		// AFTER the `win.destroy` own above so its `detachAll` runs FIRST in the
+		// LIFO teardown before destroy.
 		this.windowSubstrates.set(wc, this.createWindowSubstrate(win, windowScope))
-		// #2 R2 — declared / runtime-created window 'closed' only cleans up its own
+		// Declared / runtime-created window 'closed' only cleans up its own
 		// tracked state; full framework shutdown is reserved for mainWindow. Pass the
 		// CAPTURED `wc` (not a post-destroy re-read). Registered BEFORE admitTrust so
 		// the revocation hook is armed before trust is admitted: combined with
@@ -1314,7 +1307,7 @@ export class DeckApp {
 		})
 		if (autoTrust) {
 			this.admitTrust(wc, windowScope)
-			// v2 — let the backend mirror trust for framework-built windows.
+			// Let the backend mirror trust for framework-built windows.
 			// This onWindowTrusted call is **orthogonal to ownsWindows**: it fires
 			// for any window the framework itself constructs and trusts — declared
 			// `config.windows` (assembleElectron) and imperative
@@ -1326,11 +1319,11 @@ export class DeckApp {
 			// Construction-time (window alive) → reading win.webContents is safe and
 			// keeps the Like type; the map key is the same object identity as `wc`.
 			this._notifyBackendTrusted(win.webContents)
-			// C3 — main-frame cross-document navigation grant-reset on this window's
+			// Main-frame cross-document navigation grant-reset on this window's
 			// control wc (after admitTrust so its wcScope exists).
 			this.bindNavigationGrantReset(wc)
 		}
-		// C1/C4 — record the DeckWindow facade (newSession + per-window onClose) and
+		// Record the DeckWindow facade (newSession + per-window onClose) and
 		// arm the per-window cancelable close machine. The machine only preventDefaults
 		// when a live per-window decider exists, so declared windows (no decider) keep
 		// Electron's default close.
@@ -1343,7 +1336,7 @@ export class DeckApp {
 	}
 
 	/**
-	 * P3 — register an EXTERNALLY-created window into the framework so
+	 * Register an EXTERNALLY-created window into the framework so
 	 * `runtime.view().placeIn(win)` works for it: a `rootScope.child()`
 	 * windowScope, a per-window {@link ViewSubstrate}, and the TRUST lifecycle —
 	 * mirroring {@link constructWindow}'s registration, but for a window the host
@@ -1357,7 +1350,7 @@ export class DeckApp {
 	 *     windowScope so app shutdown destroys the window; for `'observe'` the host
 	 *     keeps lifetime control (the framework never destroys it),
 	 *  4) arm trust+grant+slot-token revocation as the FIRST `'closed'` listener via
-	 *     `prependListener` (codex R2 — runs before any external `'closed'` listener),
+	 *     `prependListener` (runs before any external `'closed'` listener),
 	 *  5) `admitTrust` AFTER the revoke listener is registered (constructWindow order).
 	 *
 	 * Idempotent by webContents identity: a second adopt of the same window returns
@@ -1377,7 +1370,7 @@ export class DeckApp {
 		// registration (no second substrate, no second trust lease).
 		const existing = this.adoptedWindows.get(wc)
 		if (existing) return existing
-		// codex P3 review (MEDIUM): a window the framework ALREADY tracks (its own
+		// A window the framework ALREADY tracks (its own
 		// constructed main/toolbar/declared window) must NOT be re-adopted — that
 		// would replace its substrate and add a SECOND trust lease for the same wc.
 		if (this.windowSubstrates.has(wc)) {
@@ -1390,13 +1383,11 @@ export class DeckApp {
 		// (2) ownership: OWN the destroy FIRST (before the substrate's detachAll own
 		// below) when TRANSFERRING the window's lifetime to the framework. Under
 		// Scope LIFO the LAST-owned disposer runs FIRST, so registering destroy
-		// BEFORE the substrate makes detachAll (STEP1) run BEFORE win.destroy
-		// (STEP4) — matching constructWindow's already-correct A4 ordering. (C6 LIFO
-		// fix: the previous order registered the substrate first, so on transfer
-		// teardown the window was destroyed BEFORE the substrate detached, and
-		// detachAll then no-op'd against a destroyed host.) For 'observe' (default)
-		// the HOST owns the window — the framework tears down substrate+trust but
-		// NEVER destroys the window itself.
+		// BEFORE the substrate makes detachAll run BEFORE win.destroy — matching
+		// constructWindow's ordering. The reverse order would destroy the window
+		// before the substrate detached, and detachAll would then no-op against a
+		// destroyed host. For 'observe' (default) the HOST owns the window — the
+		// framework tears down substrate+trust but NEVER destroys the window itself.
 		if (opts?.ownership === 'transfer') {
 			windowScope.own(() => {
 				if (!win.isDestroyed()) win.destroy()
@@ -1404,10 +1395,10 @@ export class DeckApp {
 		}
 		// (3) per-window substrate (mirror constructWindow) so placeIn resolves it.
 		// Created AFTER the destroy-own above so its detachAll runs FIRST in LIFO
-		// teardown (STEP1) before win.destroy (STEP4).
+		// teardown before win.destroy.
 		this.windowSubstrates.set(wc, this.createWindowSubstrate(win, windowScope))
 		// (4) Arm trust+grant+slot-token revocation as the FIRST 'closed' listener via
-		// prependListener (codex R2): it MUST run before any external 'closed' listener
+		// prependListener: it MUST run before any external 'closed' listener
 		// the host registered earlier, so that listener never observes the adopted wc
 		// still trusted (its id may be reused by Electron). Capture wc.id WHILE the
 		// window is alive — a post-destroy webContents read inside 'closed' can throw.
@@ -1428,8 +1419,8 @@ export class DeckApp {
 		// combined with admitTrust's isDestroyed() guard, a window destroyed at any
 		// point can never leave a trusted-but-unrevoked wc.
 		this.admitTrust(wc, windowScope)
-		// C3 — main-frame cross-document navigation grant-reset on the adopted
-		// control wc (after admitTrust so its wcScope exists). C1/C4 — record its
+		// Main-frame cross-document navigation grant-reset on the adopted
+		// control wc (after admitTrust so its wcScope exists). Record its
 		// DeckWindow facade + arm the per-window close machine (only preventDefaults
 		// when a live per-window decider exists, so an adopted window with no decider
 		// keeps the host's own close handling).
@@ -1451,7 +1442,7 @@ export class DeckApp {
 			dispose: () => {
 				if (disposed) return
 				disposed = true
-				// codex P3 review (MEDIUM): synchronously revoke trust + grants + slot
+				// Synchronously revoke trust + grants + slot
 				// tokens BEFORE the async windowScope.close(), so an un-adopt leaves NO
 				// window where the wc is still observable-as-trusted after dispose()
 				// returns (mirrors the synchronous 'closed' revoke). Idempotent with the
@@ -1470,12 +1461,11 @@ export class DeckApp {
 	}
 
 	/**
-	 * unified-lifetime P1b: synchronously revoke BOTH trust leases AND capability
+	 * Synchronously revoke BOTH trust leases AND capability
 	 * grants for every wc admitted under `windowScope` (the window's control wc +
 	 * any siblings like the toolbar wc). Called from the window's 'closed' handler
-	 * so both authorizations are gone the instant the window is destroyed —
-	 * matching the old synchronous `deleteEntry` timing and closing every
-	 * async-cascade race (a destroyed wc can never be observed trusted OR granted
+	 * so both authorizations are gone the instant the window is destroyed,
+	 * closing every async-cascade race (a destroyed wc can never be observed trusted OR granted
 	 * by a later shutdown/beforeClose, nor by a NEW window that reuses the same
 	 * wc.id before the async scope cascade revokes it). The leases are ALSO owned
 	 * by their wcScope, so the async `windowScope.close()` still runs (it disposes
@@ -1501,8 +1491,8 @@ export class DeckApp {
 	}
 
 	/**
-	 * Arm the wire's slot-token inbound channels (idempotent). P5 eager-arm:
-	 * called once at framework start() (bindWireTransport, right after
+	 * Arm the wire's slot-token inbound channels (idempotent). Called once at
+	 * framework start() (bindWireTransport, right after
 	 * transport.start()) so a layout client can subscribe before the first
 	 * anchored placeIn; the anchored `placeIn` call site is now a redundant no-op
 	 * (kept for safety). No-op when there's no wire transport (main-internal-only
@@ -1549,18 +1539,18 @@ export class DeckApp {
 
 	private handleSubWindowClosed(win: MinimalBrowserWindow, wc: MinimalWebContents): void {
 		this.trackedWindows.delete(win)
-		// host-view slice 1 — drop this window's view substrate (keyed by the
-		// captured `wc`). The Compositor's `detachAll` already ran via the
-		// windowScope cascade (STEP1); this just clears the registry entry.
+		// Drop this window's view substrate (keyed by the captured `wc`). The
+		// Compositor's `detachAll` already ran via the windowScope cascade; this
+		// just clears the registry entry.
 		this.windowSubstrates.delete(wc)
 		// slot-token leak hygiene — drop every token authorized to this window's
 		// control wc (a closed wc can't send `place` anyway, but don't leak the map).
 		this.revokeSlotTokensForWc(wc.id)
-		// P0 shadow: close + drop this window's child Scope, in lock-step with
+		// Close + drop this window's child Scope, in lock-step with
 		// trackedWindows. Idempotent: a repeated 'closed' finds no entry and returns
 		// without touching the scope twice. Keyed by the CAPTURED `wc` — re-reading
 		// `win.webContents` here (post-destroy) could miss the entry and silently
-		// skip windowScope.close(), leaking the window's trust (P1b regression).
+		// skip windowScope.close(), leaking the window's trust.
 		const shadowEntry = this.lifetimeShadow.get(wc)
 		if (shadowEntry) {
 			this.lifetimeShadow.delete(wc)
@@ -1577,17 +1567,17 @@ export class DeckApp {
 				break
 			}
 		}
-		// P1b: trust revocation is now a pure Scope-teardown effect — the
+		// Trust revocation is a pure Scope-teardown effect — the
 		// `void shadowEntry.windowScope.close()` above cascades into this wc's
 		// wcScope, disposing every lease → ref-count zeroes → untrusted (wc.id-reuse
-		// + leak safety). No imperative deleteEntry.
+		// + leak safety).
 		// Undo the backend trust mirror for THIS window now (not at teardown).
 		this.backendTrustDisposables.get(wc)?.dispose()
 		this.emitFrameworkEvent('window-closed', { window: win as unknown as FrameworkEvents['window-closed']['window'] })
 	}
 
 	/**
-	 * v2 — notify the backend that the framework has edge-trusted one of its
+	 * Notify the backend that the framework has edge-trusted one of its
 	 * (framework-built) webContents, so the backend can mirror it into the domain
 	 * trust set. The returned Disposable is disposed when THAT window closes
 	 * ({@link handleSubWindowClosed}) — honouring the contract "framework disposes
@@ -1681,7 +1671,7 @@ export class DeckApp {
 	}
 
 	private async doShutdownCleanup(): Promise<void> {
-		// unified-lifetime P1b: no pre-beforeClose trust fence is needed here. Trust
+		// No pre-beforeClose trust fence is needed here. Trust
 		// for a destroyed window is revoked SYNCHRONOUSLY in its 'closed' handler
 		// (revokeWindowTrust), so any already-destroyed window is already untrusted
 		// before beforeClose runs — regardless of which shutdown trigger (a window's
@@ -1714,49 +1704,46 @@ export class DeckApp {
 			}
 		}
 
-		// unified-lifetime P1a: teardown via rootScope.close() replaces the legacy
-		// "destroy all trackedWindows in a loop, then registry.disposeAll(), then
-		// bus.unbindAll()". rootScope disposes children-first LIFO: every windowScope
-		// (each owning () => win.destroy()) tears down its window BEFORE rootScope's
-		// directly-owned resources run — and those resources are registry.disposeAll()
-		// then bus.unbindAll() (owned in the ctor, reverse-disposal order). So the
-		// critical "#4 R4/C3" ordering — windows destroyed BEFORE WireTransport /
-		// ipcMain handlers are removed — is preserved STRUCTURALLY, with no manual
-		// loop. Each windowScope's destroy disposer is isDestroyed()-guarded, so an
-		// already-closed window is skipped (no double-destroy).
+		// Teardown via rootScope.close(). rootScope disposes children-first LIFO:
+		// every windowScope (each owning () => win.destroy()) tears down its window
+		// BEFORE rootScope's directly-owned resources run — and those resources are
+		// registry.disposeAll() then bus.unbindAll() (owned in the ctor,
+		// reverse-disposal order). So the critical ordering — windows destroyed
+		// BEFORE WireTransport / ipcMain handlers are removed — is preserved
+		// STRUCTURALLY, with no manual loop. Each windowScope's destroy disposer is
+		// isDestroyed()-guarded, so an already-closed window is skipped (no
+		// double-destroy).
 		//
 		// NOTE (teardown order): rootScope tears children down LIFO = reverse
 		// creation order (last-created window destroyed first), the standard stack
-		// discipline — intentionally replacing the old loop's creation-order
-		// destroy. No consumer contract pins inter-window destroy order at app
-		// shutdown; the LIFO order is the one pinned by the P0/P1 suite.
+		// discipline. No consumer contract pins inter-window destroy order at app
+		// shutdown.
 		//
 		// NOTE (`mainWindow`/`toolbarView` nulled AFTER close, not before): real
 		// Electron fires `'closed'` synchronously inside `win.destroy()`, so a host
-		// `window-closed` listener runs DURING rootScope.close()'s cascade. The old
-		// loop nulled these refs only AFTER destroying every window, so such a
-		// listener still saw a live `runtime.mainWindow`. Clearing before close
-		// would expose a prematurely-null ref — so we null AFTER, matching legacy.
+		// `window-closed` listener runs DURING rootScope.close()'s cascade. Nulling
+		// these refs before close would expose a prematurely-null ref to such a
+		// listener, so we null AFTER close.
 		await this.rootScope.close()
 		this.mainWindow = null
 		this.toolbarView = null
 		this.trackedWindows.clear()
 		this.declaredWindows.clear()
 		this.lifetimeShadow.clear()
-		// host-view slice 1 (Bug 1): sub-window substrates self-delete per-close in
+		// Sub-window substrates self-delete per-close in
 		// handleSubWindowClosed, but the MAIN window's substrate entry is never
 		// removed there (main 'closed' → shutdown → here). Clear the map so no
 		// substrate (main or residual) survives the app's lifetime.
 		this.windowSubstrates.clear()
-		// P3 belt-and-suspenders: adopted-window registrations self-delete via their
-		// windowScope cleanup during the rootScope cascade; clear any residue.
+		// Adopted-window registrations self-delete via their windowScope cleanup
+		// during the rootScope cascade; clear any residue.
 		this.adoptedWindows.clear()
-		// P1b belt-and-suspenders: entries self-delete via the wcScope cleanup
-		// during the rootScope cascade; clear any untracked residue.
+		// wcRecords entries self-delete via the wcScope cleanup during the rootScope
+		// cascade; clear any untracked residue.
 		this.wcRecords.clear()
 		// slot-token registry — drop any residual tokens at app teardown.
 		this.slotTokens.clear()
-		// KA-2: drop any residual keep-alive groups at app teardown (each view's
+		// Drop any residual keep-alive groups at app teardown (each view's
 		// dispose self-deletes its empty group, but clear belt-and-suspenders so no
 		// group survives the app's lifetime).
 		this.keepAliveGroups.clear()
@@ -1778,8 +1765,7 @@ export class DeckApp {
 			settings: { theme: 'light' },
 			theme: 'light',
 			_registry: this.registry,
-			// v2 — forward the live wire senderPolicy (fail-closed when no wire);
-			// the old `() => true` stub was a domain-auth bypass.
+			// Forward the live wire senderPolicy (fail-closed when no wire).
 			_senderPolicy: this.wireSenderPolicy ?? { isTrusted: () => false },
 		}
 
@@ -1853,7 +1839,7 @@ export class DeckApp {
 					if (!electronModule) return electronUnavailable('windows.create')
 					const autoTrust = opts.autoTrust ?? true
 					const win = constructWindow(opts, autoTrust)
-					// C1 — constructWindow recorded the DeckWindow facade in
+					// constructWindow recorded the DeckWindow facade in
 					// windowRegistrations (keyed by control wc); return it.
 					const wc = win.webContents as unknown as MinimalWebContents
 					const reg = this.windowRegistrations.get(wc)
@@ -1879,16 +1865,16 @@ export class DeckApp {
 				trust: (win): Disposable => {
 					const w = win as unknown as MinimalBrowserWindow
 					const wc = w.webContents as unknown as MinimalWebContents
-					// P1b: a framework-tracked window has a windowScope → admit the
+					// A framework-tracked window has a windowScope → admit the
 					// trust lease under it so the window's close revokes it. A
 					// backend-owned window (ownsWindows:true builds its own main
 					// window with no framework windowScope) is NOT tracked; fall back
-					// to a raw ref the BACKEND owns/disposes (unchanged from before —
-					// the framework never managed those windows' lifetime).
+					// to a raw ref the BACKEND owns/disposes (the framework never
+					// manages those windows' lifetime).
 					const tracked = this.lifetimeShadow.get(wc)
 					if (tracked) {
 						const lease = this.admitTrust(wc, tracked.windowScope)
-						// C3 — a window constructed `autoTrust:false` then trusted late
+						// A window constructed `autoTrust:false` then trusted late
 						// here MUST also get the navigation grant-reset hook, else its
 						// control page could navigate away carrying its grants. Idempotent,
 						// so a window already auto-trusted (hook bound) is unaffected.
@@ -1904,7 +1890,7 @@ export class DeckApp {
 			},
 			view: (opts): DeckViewHandle => {
 				if (!electronModule) return electronUnavailable('view')
-				// P2 — `opts.scope` is now a DeckSession (or undefined). Resolve it to
+				// `opts.scope` is a DeckSession (or undefined). Resolve it to
 				// the internal Scope through the provenance map. A foreign / raw Scope
 				// (e.g. createScope(), or an adopted one) is absent → REJECTED, so a host
 				// can't smuggle in a scope the framework didn't mint. Undefined → bind to
@@ -1925,7 +1911,7 @@ export class DeckApp {
 				const viewId = `view:${++this.viewSeq}`
 				// A never-placed DEFAULT (root-scope) view has no viewScope (placeIn makes it) and
 				// no session scope to cascade its teardown, so its WebContents would leak past app
-				// shutdown (codex P2 review). Register a guarded WC-close on rootScope, and REMOVE
+				// shutdown. Register a guarded WC-close on rootScope, and REMOVE
 				// it once the view is placed (viewScope takes over the destroy) or disposed — so
 				// the long-lived rootScope never accumulates disposers for placed/disposed views.
 				//
@@ -1953,8 +1939,8 @@ export class DeckApp {
 					})
 				}
 				// keepAlive「保活寿命归 Scope、淘汰策略归 host」: destroy the backing WebContents (guarded -> idempotent,
-				// never double-closed). Leak fix: a `runtime.view` previously only
-				// DETACHED its native view, leaking its renderer for the app's life.
+				// never double-closed) so a view's
+				// renderer for the app's life on detach.
 				const closeNativeWc = (): void => {
 					// `wc &&` guard (real-electron demo finding): a double-teardown
 					// (e.g. a session-bound view closed by both its session scope AND the
@@ -1966,7 +1952,7 @@ export class DeckApp {
 				const nativeView = {
 					ref: { id: viewId } as NativeViewRef,
 					setBounds: (b: { x: number, y: number, width: number, height: number }) => wcv.setBounds(b),
-					// Owned by the viewScope (AFTER detach, via view-handle's A4 order), so
+					// Owned by the viewScope (AFTER detach, via view-handle's teardown order), so
 					// an explicit dispose / window-close cascade / explicit-scope close
 					// destroys the wc, not just detaches it.
 					destroy: closeNativeWc,
@@ -1988,7 +1974,7 @@ export class DeckApp {
 				// keepAlive「opt-in helper：runtime.view({ keepAlive })」: opt-in LRU group, only when configured. Views sharing
 				// the same `max` form one group keyed `lru:${max}`.
 				//
-				// KA-4: validate `max`. A negative `max` would make the eviction
+				// Validate `max`. A negative `max` would make the eviction
 				// `while (hidden.length > max)` loop evict every hidden view (and a
 				// fractional / NaN max is meaningless). A `max` that is not a finite
 				// integer >= 0 is NOT keep-alive-managed — the view is treated as if no
@@ -2010,7 +1996,7 @@ export class DeckApp {
 					}
 					return g
 				}
-				// KA-2: drop this view from its keepAlive group (hidden list + handles
+				// Drop this view from its keepAlive group (hidden list + handles
 				// map), deleting the group when it empties. IDEMPOTENT so it is safe to
 				// fire from EVERY teardown path: the viewScope's onDispose (window-close
 				// cascade OR explicit dispose OR LRU eviction → hostHandle.dispose →
@@ -2032,12 +2018,12 @@ export class DeckApp {
 				const inner = createViewHandle({
 					nativeView,
 					scope: displayScope,
-					// KA-2: fire group cleanup on viewScope teardown (covers window-close,
+					// Fire group cleanup on viewScope teardown (covers window-close,
 					// explicit dispose, AND LRU eviction). Idempotent with the hostHandle
 					// .dispose() call below.
 					onDispose: () => removeFromKeepAliveGroup(viewId),
 				})
-				// Bug 3a — remember WHICH substrate this view was placed into, so
+				// Remember WHICH substrate this view was placed into, so
 				// dispose() can unregister its WCV from that substrate's registry +
 				// z-order (preventing a long-lived window from accumulating disposed
 				// views). null until first placeIn → if never placed, nothing to
@@ -2046,15 +2032,15 @@ export class DeckApp {
 				// slot-token minted by an anchored placeIn (undefined for un-anchored
 				// placeIn). Captured so dispose() can revoke it from `slotTokens`.
 				let slotToken: string | undefined
-				// N3: one placeIn per host handle. A second placeIn THROWS (re-placement
+				// One placeIn per host handle. A second placeIn THROWS (re-placement
 				// is moveTo's job) — never overwrite the inner current/viewScope.
 				let placed = false
 				// Mint + register + push a slot-token anchor for an anchored placement on
 				// `controlWc`/`anchor`. Shared by placeIn (first placement) and moveTo
 				// (re-anchor for the dest window). Sets the captured `slotToken`.
 				const mintSlotToken = (controlWc: MinimalWebContents, anchor: string): void => {
-					// P5 eager-arm: the wire's Place / LayoutSubscribe channels are
-					// now armed eagerly at framework start() (see bindWireTransport).
+					// The wire's Place / LayoutSubscribe channels are
+					// armed eagerly at framework start() (see bindWireTransport).
 					// This call is kept for safety/idempotency — it is a no-op when the
 					// channels are already armed.
 					this.ensureSlotChannelsArmed()
@@ -2078,7 +2064,7 @@ export class DeckApp {
 				// the inner ViewHandle. placeIn/applyPlacement both return the handle.
 				const hostHandle: DeckViewHandle = {
 					placeIn: (win, placeOpts) => {
-						// N3: re-placement is disallowed at the host level too — guard
+						// Re-placement is disallowed at the host level too — guard
 						// BEFORE any substrate registration so a rejected re-placeIn leaves
 						// no partial state. moveTo() is the only migration path.
 						if (placed) {
@@ -2097,7 +2083,7 @@ export class DeckApp {
 							{ compositor: substrate.compositor, windowScope: substrate.windowScope },
 							{ zone: placeOpts.zone },
 						)
-						// codex P0 round-3 (BUG 1): mark placed the INSTANT the CORE placement
+						// Mark placed the INSTANT the CORE placement
 						// succeeds (registerView + inner.placeIn), BEFORE the best-effort slot
 						// -grant mint/push below. The view IS placed now; if the grant `send`
 						// throws, the handle must NOT stay re-placeable (a retry's public guard
@@ -2105,7 +2091,7 @@ export class DeckApp {
 						// failed slot-grant push is recoverable WITHOUT re-placing — the
 						// renderer can re-subscribe (layout-subscribe replay) to get the grant.
 						placed = true
-						// codex P2 review: the viewScope (created by inner.placeIn) now owns
+						// The viewScope (created by inner.placeIn) now owns
 						// nativeView.destroy → wc.close at shutdown (windowScope→viewScope
 						// cascade), so the rootScope guard is redundant. DISARM + drop it to
 						// avoid double-handling + disposer accumulation on the long-lived
@@ -2159,7 +2145,7 @@ export class DeckApp {
 							// Compositor rollback can't remove it). Balance it with an
 							// explicit dest detach so the dest window is net-zero.
 							//
-							// codex P0 round-3 (BUG 2): the cleanup must be DEFENSIVE and must
+							// The cleanup must be DEFENSIVE and must
 							// NEVER mask the original moveTo error.
 							//   - Only removeChildView if the dest WCV was ACTUALLY added (a
 							//     SOURCE-commit failure never touched dest; the Compositor
@@ -2169,7 +2155,7 @@ export class DeckApp {
 							//   - Wrap the WHOLE cleanup in try/catch that swallows+logs its own
 							//     error, then ALWAYS rethrow the ORIGINAL `e` — a cleanup throw
 							//     can never shadow the real cause of the move failure.
-							// codex P0 round-4: the two cleanup steps are INDEPENDENT — a throw in
+							// The two cleanup steps are INDEPENDENT — a throw in
 							// the native detach must NOT skip the registry unregister (else the dest
 							// substrate leaks a view it doesn't host, and a later dispose only frees
 							// `placedSubstrate`=src). Each step is its own try/catch; the original
@@ -2189,7 +2175,7 @@ export class DeckApp {
 								if (!destWin.isDestroyed()) {
 									const destChildren = destWin.contentView.children
 									// `== null` covers BOTH undefined and null (a null `children` would
-									// throw on `.includes` — codex P0 round-5).
+									// throw on `.includes`).
 									const maybeAttached = destChildren == null || destChildren.includes(wcv)
 									if (maybeAttached) {
 										destWin.contentView.removeChildView(wcv)
@@ -2220,7 +2206,7 @@ export class DeckApp {
 							srcSub.unregisterView(viewId)
 						}
 						placedSubstrate = destSub
-						// codex P0 round-3 (BUG 6): a successful move ALWAYS re-mounts the
+						// A successful move ALWAYS re-mounts the
 						// view VISIBLE in dest, so it is no longer hidden/evictable in its
 						// (window-independent `lru:${max}`) keepAlive group. If it was on the
 						// group's `hidden` list (moved while hidden), drop it — otherwise a
@@ -2260,7 +2246,7 @@ export class DeckApp {
 								dropFromHidden()
 							}
 							else {
-								// KA-1: append only on the VISIBLE→HIDDEN transition. A repeated
+								// Append only on the VISIBLE→HIDDEN transition. A repeated
 								// `visible:false` for an ALREADY-hidden view is a no-op for LRU
 								// ordering — re-appending would move it to most-recently-hidden,
 								// corrupting "least-recently-VISIBLE" order. Membership guard:
@@ -2271,7 +2257,7 @@ export class DeckApp {
 								// Over budget: evict the FRONT (least-recently-visible) hidden
 								// view -> dispose it (its WebContents is destroyed). `keepAlive.max`
 								// is a validated non-negative integer here (groupKey is null for an
-								// invalid max — KA-4 — so this block never runs for one).
+								// invalid max, so this block never runs for one).
 								while (keepAlive && group.hidden.length > keepAlive.max) {
 									const victimId = group.hidden.shift()!
 									const victim = group.handles.get(victimId)
@@ -2281,13 +2267,13 @@ export class DeckApp {
 						}
 						return hostHandle
 					},
-					// Bug 3a — detach (inner, idempotent) THEN unregister from the
+					// Detach (inner, idempotent) THEN unregister from the
 					// substrate so the disposed view leaves `wcvById` + `order`.
 					// `unregisterView` is itself idempotent (Map.delete + guarded
 					// splice), so a double-dispose is harmless.
 					dispose: async () => {
 						await inner.dispose()
-						// codex P2 review: dispose already closes the WC via closeNativeWc
+						// Dispose already closes the WC via closeNativeWc
 						// below, so the rootScope guard is now redundant — disarm + drop it
 						// (no double-close, and no disposer left on the long-lived rootScope).
 						disarmRootClose()
@@ -2298,7 +2284,7 @@ export class DeckApp {
 						placedSubstrate?.unregisterView(viewId)
 						// Revoke the slot token so a stale `place` after dispose drops.
 						if (slotToken) this.slotTokens.delete(slotToken)
-						// keepAlive「opt-in helper：runtime.view({ keepAlive })」 / KA-2: drop this view from its LRU group. Idempotent
+						// keepAlive「opt-in helper：runtime.view({ keepAlive })」: drop this view from its LRU group. Idempotent
 						// + redundant-but-safe for placed views (the viewScope's onDispose
 						// already ran it on inner.dispose above); REQUIRED for a never-placed
 						// keepAlive view whose viewScope never existed (no onDispose fired).
@@ -2315,15 +2301,15 @@ export class DeckApp {
 				}
 				// keepAlive「opt-in helper：runtime.view({ keepAlive })」: register this handle so its group can evict/dispose it.
 				if (groupKey) keepAliveGroup().handles.set(viewId, hostHandle)
-				// Bug 3b — bind the display lifetime to an EXPLICIT session scope only.
+				// Bind the display lifetime to an EXPLICIT session scope only.
 				// When a DeckSession was passed, `displayScope` is its internal child of
 				// rootScope; closing the session (→ scope.close()) OR app shutdown
 				// cascading detaches + unregisters the view AND closes its native
 				// WebContents. Exclude the rootScope default: rootScope lives the whole
 				// app, so a self-dispose there would be a pointless per-view disposer that
-				// accumulates on the root for the process lifetime (codex).
+				// accumulates on the root for the process lifetime.
 				if (displayScope !== this.rootScope) {
-					// KA-3: RETURN the dispose promise so Scope.own awaits it — the
+					// RETURN the dispose promise so Scope.own awaits it — the
 					// session's close() then fences the WebContents close (it does not
 					// resolve until dispose settles). CATCH rejection so a dispose failure
 					// is logged, not an unhandled promise rejection.
@@ -2334,7 +2320,7 @@ export class DeckApp {
 				return hostHandle
 			},
 			scopes: {
-				// P2 — mint an opaque DeckSession. Internally a child of the app root,
+				// Mint an opaque DeckSession. Internally a child of the app root,
 				// so disposing it (→ scope.close()) OR app shutdown (rootScope.close
 				// cascade) tears down every view bound to it. The returned handle
 				// exposes ONLY dispose() — the internal Scope's adopt/child/reset
@@ -2360,7 +2346,7 @@ export class DeckApp {
 						// die with the wc). Refuse rather than mint an unrevocable grant.
 						throw new Error('runtime.grants.issue: webContents is not trusted (no wcScope to bind the grant to)')
 					}
-					// P2 — `targetScope` is optional + reserved (not consulted at
+					// `targetScope` is optional + reserved (not consulted at
 					// dispatch). When supplied it is a DeckSession; resolve it to the
 					// internal Scope for storage, ignore an unresolvable/foreign one
 					// (the grant gate doesn't read it yet).
@@ -2374,7 +2360,7 @@ export class DeckApp {
 				},
 			},
 			layout: {
-				// grants-fork — register a PRIVILEGED (`layout.*`) command into the
+				// Register a PRIVILEGED (`layout.*`) command into the
 				// grant-gated ControlBus command table. A real webview→main invoke of
 				// this name (after the wire's trust + main-frame gate) reaches the
 				// handler ONLY when a live grant covers (senderId, name); otherwise
@@ -2383,7 +2369,7 @@ export class DeckApp {
 					name: string,
 					handler: (...args: JsonValue[]) => JsonValue | Promise<JsonValue>,
 				): Disposable => {
-					// GF-1: ENFORCE the layout.* boundary (not just convention). A
+					// ENFORCE the layout.* boundary (not just convention). A
 					// privileged command name MUST start with `layout.` so it always
 					// routes to the grant-gated ControlBus dispatch (isPrivilegedCommandName
 					// forks `layout.*` there). Reject any other name at registration.
@@ -2408,7 +2394,7 @@ export class DeckApp {
 				}
 				const cast = listener as unknown as (payload: unknown) => void
 				set.add(cast)
-				// #6 R3 + D1/D2 — bind 期间已发生的 baseline 事件
+				// bind 期间已发生的 baseline 事件
 				// （window-created / load-failed）在第一个 listener 注册时
 				// 一次性消费式 replay。后续 listener 注册时队列空，no-op。
 				// 不再检查 inSetupPhase：host 在 ready 之后注册的 first listener

@@ -80,7 +80,7 @@ export function CompilePanel({ events, logs = [], onClear }: CompilePanelProps) 
     // event and the logs of the same compile collide routinely) the shared
     // monotonic `seq` keeps ARRIVAL order: without it, the events-then-logs
     // concat above plus the stable sort would rank events above logs no
-    // matter which actually came first (codex m8). Entries without `seq`
+    // matter which actually came first. Entries without `seq`
     // fall back to the stable insertion order.
     return items.sort((a, b) => {
       if (b.at !== a.at) return b.at - a.at

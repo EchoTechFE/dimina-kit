@@ -38,7 +38,7 @@ export interface CompileLogEntry {
    * LOGS. `at` is a millisecond stamp, so a status event and the log lines
    * of the same compile routinely collide on the same `at` — the panel uses
    * `seq` as the same-`at` tie-break so the merged timeline keeps true
-   * arrival order (codex m8).
+   * arrival order.
    */
   seq?: number
 }
@@ -121,7 +121,7 @@ export function getThumbnail(projectPath: string): Promise<string | null> {
   return invoke<string | null>(ProjectChannel.GetThumbnail, projectPath)
 }
 
-// ── Phase 3: create-project IPC wrappers ────────────────────────────────
+// ── create-project IPC wrappers ─────────────────────────────────────────
 
 /**
  * Wire-level shape sent over IPC. Mirrors `ProjectTemplate` from the main

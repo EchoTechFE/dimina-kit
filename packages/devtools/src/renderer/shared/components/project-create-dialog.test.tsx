@@ -1,8 +1,7 @@
 /**
- * Phase 4 + suggestion-mode (5月 follow-up): the built-in "新建项目" dialog.
+ * The built-in "新建项目" dialog (suggestion mode).
  *
- * GOALPOST CHANGE — was "name and directory are fully independent". After
- * user feedback the new contract is:
+ * Contract for name ↔ path coupling:
  *   - On open the path is suggested from `<defaultBaseDir>/<slug(name)>`.
  *   - Typing in the name keeps re-suggesting the path until the user
  *     manually edits the path or picks a directory via 浏览 — those acts

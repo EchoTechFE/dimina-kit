@@ -1,10 +1,9 @@
 /**
- * GAP — `sanitizeFlexibleWeights` (flexible-weight healing).
+ * `sanitizeFlexibleWeights` (flexible-weight healing).
  *
- * TDD — NOT yet implemented. `sanitizeFlexibleWeights` does not exist yet;
- * importing it from `./index.js` is RED until the implementer adds + exports it.
+ * Contract spec for `sanitizeFlexibleWeights`, exported from `./index.js`.
  *
- * CONTRACT (pinned here; the implementer MUST match these):
+ * CONTRACT (pinned here; the implementation MUST match these):
  *
  *  1. PURE: returns a NEW tree; the input is NEVER mutated.
  *  2. Walks EVERY split node in the tree (recursively, to any nesting depth).

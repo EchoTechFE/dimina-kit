@@ -1,12 +1,9 @@
 /**
- * Resurrects the PR #12 `use-session-hot-reload` guard that PR #39
- * (a85fb6dc, "Worktree workbench landing") deleted together with the dead
- * `<webview>` reload branch — without replacing it with a native-host
- * equivalent. Regression: editor save → dmcc rebuild → `projectStatus`
- * arrives with `hotReload: true` → renderer drops the flag on the floor →
- * the simulator never refreshes.
+ * Hot-reload guard: editor save → dmcc rebuild → `projectStatus` arrives with
+ * `hotReload: true`. Without this guard the renderer drops the flag on the
+ * floor and the simulator never refreshes.
  *
- * Contract under test (TDD — NOT yet implemented):
+ * Contract under test:
  *  - `useSession`'s result gains a numeric `hotReloadToken`.
  *  - Every `projectStatus` payload with `hotReload === true` bumps the token
  *    (strictly increasing number). The token is the renderer-side signal that
@@ -68,9 +65,8 @@ vi.mock('@/shared/api', () => {
         if (i >= 0) projectStatusListeners.splice(i, 1)
       }
     }),
-    // Harness stub (same nature as the pre-authorized compile-events harness
-    // fix): useSession now also subscribes onCompileLog, and a missing export
-    // on a vi.mock'ed module throws at access. Nothing here asserts on it.
+    // Harness stub: useSession also subscribes onCompileLog, and a missing
+    // export on a vi.mock'ed module throws at access. Nothing here asserts on it.
     onCompileLog: vi.fn(() => () => {}),
   }
 })

@@ -245,7 +245,7 @@ describe('chooseMedia', () => {
 		expect(fetchSpy).not.toHaveBeenCalled()
 	})
 
-	// Codex fix #4 — each tempFile must carry the originating File instance under
+	// Each tempFile must carry the originating File instance under
 	// `originalFileObj` so downstream callers (e.g. uploadFile passing it back
 	// through to the network layer) can recover the underlying Blob without
 	// having to refetch the blob: URL.

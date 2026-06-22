@@ -25,9 +25,9 @@
  * Real bug each test catches:
  *   - B1-7/8: the attach-time fallback mount races the renderer's precise
  *     anchor rect — the overlay flashes at a wrong static rectangle (the old
- *     clip/surround flips) before the real rect lands. If the implementer
- *     deletes `computeSimulatorBounds` but keeps ANY attach-time
- *     addChildView/setBounds (e.g. an inlined replacement rect), these fail.
+ *     clip/surround flips) before the real rect lands. Deleting
+ *     `computeSimulatorBounds` but keeping ANY attach-time
+ *     addChildView/setBounds (e.g. an inlined replacement rect) fails these.
  *   - B1-9: deleting the attach fallback but leaving `resize()`/
  *     `repositionAll()` able to apply a static rect resurrects the same race
  *     on the first window resize.
@@ -39,10 +39,10 @@
  *     path alive that no caller maintains (its `webContents.fromId` lookup +
  *     static fallback diverge from the native path's invariants).
  *
- * RED today: view-manager.ts attachNativeSimulatorDevtoolsHost (getDefaultTab
- * === 'simulator' branch) mounts + applies `computeSimulatorBounds` when no
- * override has been published yet, `resize()` re-applies it, and
- * `attachSimulator` is still on the returned object.
+ * Guards that view-manager.ts attachNativeSimulatorDevtoolsHost (getDefaultTab
+ * === 'simulator' branch) does NOT mount or apply `computeSimulatorBounds`
+ * when no override has been published yet, that `resize()` does not re-apply
+ * it, and that `attachSimulator` is no longer on the returned object.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 

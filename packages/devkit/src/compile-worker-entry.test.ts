@@ -2,21 +2,14 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 
 /**
- * FORK-ARCHITECTURE WAVE (dmcc 编译子进程化) — TDD contract for the compile
- * worker ENTRY module (NOT yet implemented).
+ * Contract for the compile worker ENTRY module.
  *
- * ⚠️ ARCHITECTURE-DECISION CHANGE (user-approved, 2026-06-12):
- * Compilation moves out of the Electron main process into a forked,
- * long-lived child process. Root causes being killed:
- *   - `process.chdir(projectPath)` (src/index.ts:104) globally mutating the
- *     host process cwd,
- *   - the planned global stdout/stderr write-hook (`withCapturedStdio`)
- *     capturing unrelated host logs,
+ * Compilation runs in a forked, long-lived child process instead of the
+ * Electron main process. Root causes the fork avoids:
+ *   - `process.chdir(projectPath)` globally mutating the host process cwd,
+ *   - a global stdout/stderr write-hook capturing unrelated host logs,
  *   - compiler crashes taking down the host process,
  *   - listr2 isTTY hacks on the host's real streams.
- * This file REPLACES the deleted `withCapturedStdio` describe block of
- * `compile-log.test.ts` (8 tee-architecture tests removed from the ledger).
- * Explicit architecture correction, not goalpost-moving.
  *
  * Required contract — `src/compile-worker-entry.ts`:
  *  - This module is the `child_process.fork()` target. When forked it wires
@@ -41,9 +34,8 @@ import { describe, expect, it, vi } from 'vitest'
  *  - Compiler loading is LAZY (deferred to the first build command, so the
  *    fork itself stays fast) and CACHED (loaded once per worker lifetime).
  *  - `@dimina/compiler`'s build() swallows compile errors internally
- *    (console.error + resolve undefined, never rethrows — verified in
- *    .repro/dmcc-log-spike/RESULTS.md §①). The IPC protocol normalizes that
- *    to `{ type: 'result', appInfo: null }`.
+ *    (console.error + resolve undefined, never rethrows). The IPC protocol
+ *    normalizes that to `{ type: 'result', appInfo: null }`.
  *  - If build() DOES throw/reject (defensive — worker init failures etc.),
  *    the handler must still reply, with
  *    `{ type: 'result', appInfo: null, error: { message } }`, and the
@@ -226,8 +218,7 @@ describe('compile-worker-entry — createCompileWorkerHandler (fork-side IPC han
 })
 
 /**
- * LEAK-PROOFING WAVE (项目关闭时保证编译子进程同步关闭) — unit-testable seam
- * for the fork-side PROCESS LIFECYCLE wiring.
+ * Unit-testable seam for the fork-side PROCESS LIFECYCLE wiring.
  *
  * The orphan safety net ("worker kills itself when the fork IPC channel
  * dies") is BEHAVIORALLY pinned by the real-fork integration tests in
@@ -343,21 +334,20 @@ describe('compile-worker-entry — wireCompileWorkerProcess (orphan-safety-net s
 })
 
 /**
- * CODEX-REVIEW REGRESSION (m9) — the fork-mode self-wiring gate currently
- * uses `process.argv[1].includes('compile-worker-entry')`, a SUBSTRING match.
- * Any unrelated script whose path merely contains that fragment (run with an
- * IPC channel, e.g. itself a fork) would import this module and silently
- * self-wire: a disconnect→exit(0) handler and a message handler hijacking the
- * host's IPC traffic. The gate must engage ONLY when argv[1] is THIS module
- * (same path as import.meta.url) — pinned behaviorally below via a fresh
- * module evaluation under a manipulated argv[1].
+ * The fork-mode self-wiring gate must NOT use a SUBSTRING match on
+ * `process.argv[1]`: any unrelated script whose path merely contains
+ * `compile-worker-entry` (run with an IPC channel, e.g. itself a fork) would
+ * import this module and silently self-wire — a disconnect→exit(0) handler and
+ * a message handler hijacking the host's IPC traffic. The gate must engage
+ * ONLY when argv[1] is THIS module (same path as import.meta.url) — pinned
+ * behaviorally below via a fresh module evaluation under a manipulated argv[1].
  *
  * Observation seam: self-wiring is `process.on('message'|'disconnect', …)` on
  * the REAL process — the tests diff the process listener sets around the
  * import and remove any added listeners again in cleanup (so a failing run
  * can never leak a disconnect→exit(0) handler into the vitest worker).
  */
-describe('compile-worker-entry — fork-mode self-wiring gate (codex m9)', () => {
+describe('compile-worker-entry — fork-mode self-wiring gate', () => {
 	type ListenerSnapshot = {
 		message: Array<(...args: unknown[]) => void>
 		disconnect: Array<(...args: unknown[]) => void>
@@ -389,7 +379,7 @@ describe('compile-worker-entry — fork-mode self-wiring gate (codex m9)', () =>
 		await import('./compile-worker-entry.js' as string)
 	}
 
-	it('m9: an argv[1] LOOKALIKE path (substring match) must NOT self-wire the worker IPC handlers', async () => {
+	it('an argv[1] LOOKALIKE path (substring match) must NOT self-wire the worker IPC handlers', async () => {
 		const originalArgv1 = process.argv[1] ?? ''
 		const originalSend = process.send
 		const before = snapshotListeners()
@@ -421,7 +411,7 @@ describe('compile-worker-entry — fork-mode self-wiring gate (codex m9)', () =>
 		}
 	})
 
-	it('m9 positive control: when argv[1] IS this entry module, the fork-mode self-wiring engages', async () => {
+	it('positive control: when argv[1] IS this entry module, the fork-mode self-wiring engages', async () => {
 		const originalArgv1 = process.argv[1] ?? ''
 		const originalSend = process.send
 		const before = snapshotListeners()

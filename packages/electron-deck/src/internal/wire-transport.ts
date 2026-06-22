@@ -1,5 +1,5 @@
 /**
- * WireTransport — main 端的真 Electron wire 桥接（Phase 3b）。
+ * WireTransport — main 端的真 Electron wire 桥接。
  *
  * 责任：
  * - 在 `ipcMain.handle('__electron-deck:invoke')` / `'__electron-deck:probe'` 上路由
@@ -40,7 +40,7 @@ export const DECK_CODE = {
 	UntrustedFrame: 'DECK_UNTRUSTED_FRAME',
 	UnknownKind: 'DECK_UNKNOWN_KIND',
 	BadRequest: 'DECK_BAD_REQUEST',
-	/** P4 Phase B — the grant gate denied a privileged command for this sender. */
+	/** The grant gate denied a privileged command for this sender. */
 	Forbidden: 'DECK_FORBIDDEN',
 } as const
 
@@ -54,8 +54,8 @@ export interface FrameRef {
  * Per-invoke context threaded from {@link WireTransport.handleInvoke} into the
  * host/simulator invoke seams. Constructed ONLY after the wire's trust gate +
  * main-frame gate have both passed, so `senderId` is a real trusted webContents
- * id (never undefined). Phase B's grant gate (in `ControlBus.dispatch`) reads
- * this; Phase A just plumbs it through as a REQUIRED param so a missing call
+ * id (never undefined). The grant gate (in `ControlBus.dispatch`) reads
+ * this; it is a REQUIRED param so a missing call
  * site is a COMPILE error, not a silent security downgrade.
  */
 export interface InvokeCtx {
@@ -93,7 +93,7 @@ export interface WireTransportDeps {
 	/** 取当前 trusted webContents 快照；用于 event push 广播。lazy：每次 publish 重调。 */
 	readonly trustedWebContents: () => readonly MinimalWebContents[]
 	/** 路由 host kind 调用；handler 抛错由 WireTransport 接住 → InvokeFailure。
-	 *  `ctx` 必填：携带已过 trust + main-frame gate 的 senderId（Phase B 授权门读它）。 */
+	 *  `ctx` 必填：携带已过 trust + main-frame gate 的 senderId（授权门读它）。 */
 	readonly invokeHost: (name: string, args: readonly JsonValue[], ctx: InvokeCtx) => Promise<JsonValue>
 	/** 路由 simulator kind 调用；同上（`ctx` 必填）。 */
 	readonly invokeSimulator: (name: string, args: readonly JsonValue[], ctx: InvokeCtx) => Promise<JsonValue>
@@ -349,7 +349,7 @@ export class WireTransport {
 		}
 
 		// Both gates passed → senderId is a real trusted number. Build the ctx once
-		// and thread it into either seam (Phase B's grant gate reads ctx.senderId).
+		// and thread it into either seam (the grant gate reads ctx.senderId).
 		const ctx: InvokeCtx = { senderId, senderFrame: senderFrame ?? null }
 
 		try {

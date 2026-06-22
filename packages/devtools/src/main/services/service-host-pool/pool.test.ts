@@ -243,9 +243,9 @@ function specB(): any {
 }
 
 // Fire the captured did-finish-load handler on every window that has one but
-// hasn't been "loaded" yet, so warming can settle even if the implementer
-// gates ready on the event rather than the loadURL Promise. Safe to call
-// repeatedly. Returns the number of handlers fired.
+// hasn't been "loaded" yet, so warming can settle whether ready is gated on the
+// event or on the loadURL Promise. Safe to call repeatedly. Returns the number
+// of handlers fired.
 function fireDidFinishLoadAll(): number {
   let fired = 0
   for (const w of constructed) {

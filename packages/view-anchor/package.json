@@ -44,6 +44,7 @@
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run",
     "test:dev": "vitest",
+    "test:coverage": "vitest run --coverage",
     "prepack": "pnpm run build"
   },
   "peerDependencies": {
@@ -60,6 +61,7 @@
     "@testing-library/react": "^16.3.2",
     "@types/react": "^18.3.12",
     "@vitejs/plugin-react": "^6.0.1",
+    "@vitest/coverage-v8": "^4.1.4",
     "esbuild": "^0.28.0",
     "eslint": "^10.2.1",
     "jsdom": "^29.0.2",

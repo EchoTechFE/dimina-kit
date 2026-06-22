@@ -1,15 +1,13 @@
 /**
- * TDD failing-first contract tests for FOUR currently-unmet behaviours in the
- * electron-deck view move + close/shutdown lifecycle. Every spec here is RED
- * against the current implementation because of a REAL bug (not a harness
- * mistake); each will turn GREEN once the corresponding fix lands.
+ * Contract tests for FOUR behaviours in the electron-deck view move +
+ * close/shutdown lifecycle, each guarding against a real bug that was fixed.
  *
  *   F1. moveTo rehome AFTER a display-only move. A view does ONE non-rehome
  *       (display-only) cross-window move, THEN a `rehome:true` move. The second
- *       move must SUCCEED. The current implementation re-parents the viewScope
+ *       move must SUCCEED. The bug guarded against: re-parenting the viewScope
  *       via `src.windowScope.adopt(viewScope, dest.windowScope)`, where `src`
  *       is the CURRENT DISPLAY window — but after a display-only move the
- *       viewScope's lifetime still lives under the ORIGINAL home window. So the
+ *       viewScope's lifetime still lives under the ORIGINAL home window, so the
  *       donor passed to `adopt` is not the viewScope's real parent → adopt
  *       throws "child is not a direct child …" → moveTo rolls back + rejects.
  *
@@ -37,8 +35,8 @@
  *       instead of letting the ORIGINAL move error rethrow. The fix checks
  *       `isDestroyed()` FIRST and skips the contentView read for a dead window.
  *
- * These reach not-yet-typed members (`moveTo` on the public handle) through a
- * typed escape hatch (`withView`) so the file COMPILES and the RED is a
+ * These reach un-typed members (`moveTo` on the public handle) through a
+ * typed escape hatch (`withView`) so the file COMPILES and the failure is a
  * behaviour assertion, not a type error. Fakes are copied (minimal) from
  * deck-app.move.test.ts / start-electron-deck.test.ts.
  */
@@ -545,11 +543,11 @@ describe('moveTo — rollback tolerates a destroyed dest window', () => {
 })
 
 // keep the place handler + slot-grant helpers referenced so an unused-symbol
-// lint never masks a RED (these mirror the move-suite helper surface).
+// lint never masks a runtime failure (these mirror the move-suite helper surface).
 void getPlaceHandler
 void lastSlotGrant
 void mainFrameEvent
 
-// Parity ref so an unused-import lint never masks the RED.
+// Parity ref so an unused-import lint never masks a runtime failure.
 const _jsonParityRef: JsonValue = null
 void _jsonParityRef

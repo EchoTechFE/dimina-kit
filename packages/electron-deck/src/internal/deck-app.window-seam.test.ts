@@ -29,10 +29,9 @@ import type { MinimalWebContents } from './wire-transport.js'
  *      hook though — it still fires for windows the backend explicitly asks the
  *      framework to build via runtime.windows.create() (see the positive case).
  *
- * They are EXPECTED RED until Phase 3 lands the seam. Where a hook is not yet
- * declared on RuntimeBackend, we attach it via a loose structural cast so the
- * file COMPILES and the failure is an *assertion* failure (spy never called),
- * not a type error.
+ * They pin the Phase 3 seam contract. Hooks are attached via a loose structural
+ * cast so the file COMPILES and any regression surfaces as an *assertion*
+ * failure (spy never called), not a type error.
  */
 
 // ── Minimal fake electron (self-contained mirror of deck-app.test.ts) ─────────
@@ -417,7 +416,7 @@ describe('window-seam — backend.onWindowTrusted(wc) for framework auto-trust',
 		await app.start()
 
 		const mainWc = (electron.browserWindows[0] as unknown as FakeBrowserWindow).webContents
-		// codex #8 — no framework webview content (no toolbar/windows), so the main
+		// no framework webview content (no toolbar/windows), so the main
 		// window is the only framework-built+trusted wc: exactly one call.
 		expect(onWindowTrusted).toHaveBeenCalledTimes(1)
 		expect(trusted.some(wc => wc.id === mainWc.id)).toBe(true)

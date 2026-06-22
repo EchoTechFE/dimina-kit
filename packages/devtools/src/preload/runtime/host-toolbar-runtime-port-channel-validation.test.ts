@@ -1,8 +1,8 @@
 /**
- * Feedback fix ⑦ — INCREMENTAL ROUND (C): the PAGE-side bridge must validate
- * `channel` with the SAME semantics as the main side.
+ * The PAGE-side bridge must validate `channel` with the SAME semantics as the
+ * main side.
  *
- * Today's inconsistency, verified against source: the main side's
+ * The inconsistency this guards against: the main side's
  * `hostToolbar.onMessage` (host-toolbar-port-channel.ts) throws a `TypeError`
  * for an empty-string / non-string channel, while the page bridge
  * (host-toolbar-port.ts `installHostToolbarPortBridge`) checks NOTHING on
@@ -29,9 +29,6 @@
  * Harness: same boot pattern as host-toolbar-runtime-port.test.ts (vitest
  * mocks are per-file; module state is per-load, so resetModules + dynamic
  * import per test).
- *
- * RED today: no page-side validation exists — every toThrow assertion fails
- * (the bad channel is queued/registered instead).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -132,11 +129,11 @@ const INVALID_CHANNELS: ReadonlyArray<[label: string, channel: unknown]> = [
   ['object', { channel: 'x' }],
 ]
 
-describe('C: page-side send() validates channel (parity with main onMessage semantics)', () => {
+describe('page-side send() validates channel (parity with main onMessage semantics)', () => {
   it.each(INVALID_CHANNELS)(
     'send(%s) throws TypeError BEFORE the handshake (queue path)',
     async (_label, bad) => {
-      // BUG CAUGHT: today the garbage envelope is silently QUEUED and later
+      // Without this, the garbage envelope is silently QUEUED and later
       // flushed; main's inbound waist drops the non-string ones on the floor —
       // the page author's typo produces no signal anywhere.
       const { api } = await boot()
@@ -159,9 +156,9 @@ describe('C: page-side send() validates channel (parity with main onMessage sema
   )
 
   it('a rejected pre-handshake send leaves NO queue residue — valid neighbors still flush in order', async () => {
-    // BUG CAUGHT: validation bolted on AFTER the enqueue (or one that swallows
-    // instead of throwing) would either flush the poison envelope anyway or
-    // burn a bounded-queue slot on it.
+    // Validation bolted on AFTER the enqueue (or one that swallows instead of
+    // throwing) would either flush the poison envelope anyway or burn a
+    // bounded-queue slot on it.
     const { api, deliverPort } = await boot()
     const port = makeDomPort()
 
@@ -178,7 +175,7 @@ describe('C: page-side send() validates channel (parity with main onMessage sema
   })
 })
 
-describe('C: page-side onMessage() validates channel (parity with main onMessage semantics)', () => {
+describe('page-side onMessage() validates channel (parity with main onMessage semantics)', () => {
   it.each(INVALID_CHANNELS)('onMessage(%s) throws TypeError', async (_label, bad) => {
     const { api } = await boot()
 
@@ -187,10 +184,10 @@ describe('C: page-side onMessage() validates channel (parity with main onMessage
   })
 
   it("a rejected onMessage('') registers NOTHING — an inbound '' envelope finds nobody", async () => {
-    // BUG CAUGHT: the inbound dispatcher's guard is `typeof channel ===
-    // 'string'`, which LETS '' THROUGH — so a leaked '' registration is
-    // reachable, not dead code. Validation must keep the registry clean, not
-    // just throw after the push.
+    // The inbound dispatcher's guard is `typeof channel === 'string'`, which
+    // LETS '' THROUGH — so a leaked '' registration is reachable, not dead
+    // code. Validation must keep the registry clean, not just throw after the
+    // push.
     const { api, deliverPort } = await boot()
     const handler = vi.fn()
     expect(() => api.onMessage('', handler)).toThrow(TypeError)

@@ -1,23 +1,19 @@
 /**
- * Requirement A — `IpcRegistry` must be on the package's public export surface.
- *
- * The class already exists and is `export`ed from
- * `src/main/utils/ipc-registry.ts`, but the package root barrel
- * `src/main/api.ts` (the `.` entry in package.json `exports`) does NOT
- * re-export it. Downstream hosts that want to register their own gated IPC
- * handlers can't reach it without deep-importing an internal path.
+ * Requirement A — `IpcRegistry` must stay on the package's public export
+ * surface so downstream hosts can register their own gated IPC handlers
+ * without deep-importing an internal path.
  *
  * These tests import from `./api.js` (the relative path a file in
- * `src/main/` uses to hit the barrel). They are RED today because
- * `api.ts` has no `IpcRegistry` / `SenderPolicy` export.
+ * `src/main/` uses to hit the barrel) and assert `api.ts` re-exports both
+ * `IpcRegistry` (runtime value) and `SenderPolicy` (type-only).
  *
- * NOTE: the barrel module is read through a `Record<string, unknown>` cast
- * so this test file still compiles under `tsc` while the runtime `IpcRegistry`
- * export is absent — that failure is a deliberate *runtime* assertion failure,
- * not a type error. The `SenderPolicy` type-only export is covered instead by
- * the compile-time `import type` below: if `api.ts` stops re-exporting it,
- * `tsc` (`check-types` / `pnpm exec tsc --noEmit`) fails outright — a check
- * that, unlike a source-text regex, cannot be fooled by a commented-out
+ * The barrel module is read through a `Record<string, unknown>` cast so the
+ * test still compiles under `tsc` even if the runtime `IpcRegistry` export
+ * regresses — that case is a *runtime* assertion failure, not a type error.
+ * The `SenderPolicy` type-only export is guarded instead by the compile-time
+ * `import type` below: if `api.ts` stops re-exporting it, `tsc`
+ * (`check-types` / `pnpm exec tsc --noEmit`) fails outright — a check that,
+ * unlike a source-text regex, cannot be fooled by a commented-out
  * `export type` line or a string literal mentioning the name.
  */
 import { describe, it, expect, vi } from 'vitest'

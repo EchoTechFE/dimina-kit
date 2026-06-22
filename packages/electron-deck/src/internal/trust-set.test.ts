@@ -1,9 +1,8 @@
 /**
- * trust-set.test.ts — P2 SEALED trust writer.
+ * trust-set.test.ts — SEALED trust writer.
  *
- * REWRITTEN for the sealed contract (P2). The previous (would-be) coverage
- * exercised the PUBLIC `add(wc)` writer and the `InternalTrustSet.deleteEntry`
- * escape hatch. Those are GONE: a caller may no longer mint an un-owned trust
+ * The sealed contract removes the PUBLIC `add(wc)` writer and the
+ * `InternalTrustSet.deleteEntry` escape hatch: a caller may no longer mint an un-owned trust
  * lease (`add`) nor imperatively wipe an entry (`deleteEntry`). The single write
  * gate is now `admit(wc, owner)`, which binds the refcount-- to the `owner`
  * Scope so trust lifetime FOLLOWS the owner — and returns a one-shot host-facing

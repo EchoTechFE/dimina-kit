@@ -14,10 +14,9 @@
  *     shutdown from completing (phase still reaches 'quit'), but it WAS still
  *     attempted exactly once.
  *
- * At authoring time the framework does not wire `onShutdown`, so the awaited /
- * called-once assertions are RED. `onShutdown` is not in the public
- * `RuntimeBackend` type yet, so it is reached through a typed escape hatch
- * (`BackendWithOnShutdown`) so the file COMPILES and fails on BEHAVIOUR, not
+ * The awaited / called-once assertions pin that the framework wires
+ * `onShutdown`. The hook is reached through a typed escape hatch
+ * (`BackendWithOnShutdown`) so the file COMPILES and asserts on BEHAVIOUR, not
  * types.
  *
  * Fake-electron setup mirrors deck-app.test.ts / deck-app.adopt.test.ts exactly.
@@ -198,11 +197,11 @@ function createFakeElectron(
 	}
 }
 
-// ── Typed escape hatch for the not-yet-typed `onShutdown` hook ───────────────
+// ── Typed escape hatch for the `onShutdown` hook ─────────────────────────────
 //
-// `onShutdown` is not in the public `RuntimeBackend` type yet, so attach it via
-// a loose view. Its absence then fails at BEHAVIOUR (hook never awaited /
-// called) — the RED we want — rather than a compile error.
+// Attach `onShutdown` via a loose view so any regression that stops wiring it
+// fails at BEHAVIOUR (hook never awaited / called) — the runtime failure we
+// want — rather than a compile error.
 type BackendWithOnShutdown = RuntimeBackend & {
 	onShutdown?: () => void | Promise<void>
 }
@@ -352,6 +351,6 @@ describe('RuntimeBackend.onShutdown — best-effort: a rejecting hook does not b
 	})
 })
 
-// Parity ref so an unused-import lint never masks the RED.
+// Parity ref so an unused-import lint never masks a runtime failure.
 const _runtimeParityRef: Runtime | null = null
 void _runtimeParityRef

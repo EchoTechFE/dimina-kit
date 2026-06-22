@@ -19,18 +19,14 @@
  * WebContents destroyed). Visible views are NEVER evicted. Omitting `keepAlive`
  * → the framework evicts nothing.
  *
- * These are RED today because (1) no `webContents.close()` is ever called by the
- * view factory's dispose / scope cascade, and (2) `keepAlive` is not honored.
- *
  * Fakes: replicated minimally from deck-app.host-view.test.ts. The fake
  * `webContents` is EXTENDED with a `close: vi.fn()` spy that flips the
  * `destroyed` flag backing `isDestroyed()` — so "the native WebContents was
  * destroyed" is observable as `close()` being called (and idempotency as
  * "not called twice once destroyed").
  *
- * The not-yet-typed `keepAlive` option and the not-yet-typed `webContents.close`
- * are reached through typed escape hatches so the file COMPILES (RED at runtime /
- * assertion, not a compile error that would stop the suite running).
+ * The `keepAlive` option and `webContents.close` are reached through typed
+ * escape hatches so the file compiles against the runtime types.
  */
 import { describe, expect, it, vi } from 'vitest'
 import type { JsonValue, Runtime } from '../types.js'
@@ -222,10 +218,9 @@ function createFakeElectron(
 
 // ── Typed escape hatches ─────────────────────────────────────────────────────
 //
-// `keepAlive` is not in `ViewCreateOptions` yet, and `webContents.close` is not
-// in `MinimalWebContentsLike` yet. Reach both through loose views so the file
-// COMPILES — absence then fails as a RED assertion (close() never called), not a
-// compile error that would stop the suite running.
+// `keepAlive` (`ViewCreateOptions`) and `webContents.close`
+// (`MinimalWebContentsLike`) are reached through loose views so the suite runs
+// regardless of whether those types declare them.
 type Bounds = { x: number, y: number, width: number, height: number }
 type Placement = { visible: true, bounds: Bounds } | { visible: false }
 interface ViewSource {
@@ -239,15 +234,15 @@ interface KeepAliveSpec {
 interface HostViewHandle {
 	placeIn(win: unknown, opts: { zone?: number }): HostViewHandle
 	applyPlacement(p: Placement): HostViewHandle
-	// codex P0 round-3 (BUG 6): the cross-window move surface (typed loosely here,
-	// same escape-hatch pattern as deck-app.move.test.ts) so the keepAlive group
-	// staleness pin can move a hidden view.
+	// the cross-window move surface (typed loosely here, same escape-hatch pattern
+	// as deck-app.move.test.ts) so the keepAlive group staleness pin can move a
+	// hidden view.
 	moveTo(win: unknown, opts: { zone?: number, anchor?: string, rehome?: boolean }): Promise<void>
 	dispose(): Promise<void>
 }
 interface RuntimeWithView {
 	view(spec: { source: ViewSource, scope?: unknown, keepAlive?: KeepAliveSpec }): HostViewHandle
-	// P2: the sealed session factory — the ONLY legitimate source of a `scope`.
+	// the sealed session factory — the ONLY legitimate source of a `scope`.
 	scopes: { create(): { dispose(): Promise<void> } }
 }
 function withView(runtime: Runtime): RuntimeWithView {
@@ -352,8 +347,8 @@ describe('keepAlive — Part 1 lifetime/leak fix: the native WebContents is dest
 		const app = new DeckApp({}, { electron, wireTransport: { ipcMain: createFakeIpcMain() } })
 		await app.start()
 
-		// P2: raw scope → sealed DeckSession. A raw `createScope()` is rejected by
-		// the provenance check; `runtime.scopes.create()` is the only valid source.
+		// raw scope → sealed DeckSession. A raw `createScope()` is rejected by the
+		// provenance check; `runtime.scopes.create()` is the only valid source.
 		const session = withView(app.runtime).scopes.create()
 		const handle = withView(app.runtime).view({
 			source: { url: 'data:text/html,x' },
@@ -362,7 +357,7 @@ describe('keepAlive — Part 1 lifetime/leak fix: the native WebContents is dest
 		const wcv = lastWcv(electron)
 		handle.placeIn(app.runtime.mainWindow, { zone: 0 })
 
-		// P2: dispose the SESSION (→ its internal scope.close()) → home-scope backstop
+		// dispose the SESSION (→ its internal scope.close()) → home-scope backstop
 		// closes the view's native WebContents.
 		await session.dispose()
 		await new Promise(r => setTimeout(r, 0))
@@ -406,7 +401,7 @@ describe('keepAlive — Part 1 lifetime/leak fix: the native WebContents is dest
 		await app.shutdown()
 	})
 
-	// codex P2 review pin: never-placed default-scope view closed at shutdown
+	// never-placed default-scope view closed at shutdown
 	it('a never-placed default-scope (rootScope) view → app.shutdown() closes its webContents exactly once', async () => {
 		const electron = createFakeElectron()
 		const app = new DeckApp({}, { electron, wireTransport: { ipcMain: createFakeIpcMain() } })
@@ -554,12 +549,12 @@ describe('keepAlive — Part 2 opt-in LRU helper', () => {
 		await app.shutdown()
 	})
 
-	// ── KA-2) [NEW PIN] window-close cleans the keepAlive group (no dead residue).
+	// ── window-close cleans the keepAlive group (no dead residue).
 	//
-	// Bug: the group cleanup used to live ONLY in hostHandle.dispose(). A WINDOW
-	// close cascades the inner viewScope DIRECTLY (not via hostHandle.dispose), so
-	// the group was never cleaned on window-close → a dead handle/hidden entry
-	// stuck around and skewed later eviction. Fix: the cleanup hangs off the
+	// A WINDOW close cascades the inner viewScope DIRECTLY (not via
+	// hostHandle.dispose). If the group cleanup lived ONLY in hostHandle.dispose(),
+	// the group would never be cleaned on window-close → a dead handle/hidden entry
+	// would stick around and skew later eviction. The cleanup hangs off the
 	// viewScope (via createViewHandle's onDispose), so window-close cleans it too.
 	//
 	// Observable (the cleanest one): A is a keepAlive view placed + hidden in a
@@ -653,21 +648,21 @@ describe('keepAlive — Part 2 opt-in LRU helper', () => {
 		await app.shutdown()
 	})
 
-	// ── codex P0 round-3 pin (BUG 6) — a moved hidden keepAlive view leaves the
-	// group's hidden/evictable set (a successful move re-mounts it VISIBLE in dest).
+	// ── a moved hidden keepAlive view leaves the group's hidden/evictable set
+	// (a successful move re-mounts it VISIBLE in dest).
 	//
-	// Bug: moveTo did not remove the view from its keepAlive group's `hidden` list,
-	// so a view hidden-then-moved stayed evictable — a later over-budget hide could
-	// dispose a now-VISIBLE moved view (and skew the LRU). Fix: on a successful
-	// move, drop the view from its `lru:${max}` group's hidden list.
+	// On a successful move, the view is dropped from its `lru:${max}` group's
+	// hidden list. Without that, a view hidden-then-moved would stay evictable — a
+	// later over-budget hide could dispose a now-VISIBLE moved view (and skew the
+	// LRU).
 	//
-	// Observable (eviction-based, like KA-2): max=1. Hide A (group hidden=[A]).
+	// Observable (eviction-based): max=1. Hide A (group hidden=[A]).
 	// Move A to winB (now visible there → must leave `hidden`). Then place + hide B
 	// and C in the SAME group. If A had stayed in hidden, hiding B → [A,B] exceeds
 	// max=1 → evicts A (a moved, VISIBLE view — corruption). With the fix, A is
 	// gone: hiding B is within budget (no evict), and only hiding C (live [B,C]
 	// exceeds max=1) evicts B. A is NEVER disposed (still live in winB). ──────────
-	it('codex P0 round-3 pin (BUG 6): a hidden keepAlive view that is moved is no longer in the group\'s hidden/evictable set', async () => {
+	it('a hidden keepAlive view that is moved is no longer in the group\'s hidden/evictable set', async () => {
 		const electron = createFakeElectron()
 		const app = new DeckApp({}, { electron, wireTransport: { ipcMain: createFakeIpcMain() } })
 		await app.start()
@@ -715,6 +710,6 @@ describe('keepAlive — Part 2 opt-in LRU helper', () => {
 	})
 })
 
-// A throwaway reference so an unused-import lint never masks the RED.
+// A throwaway reference so an unused-import lint never masks a runtime failure.
 const _jsonValueParityRef: JsonValue = null
 void _jsonValueParityRef

@@ -13,8 +13,8 @@
  * The primary test drives the real behavior: build the app with an
  * `updateChecker`, then invoke a registered `updates:*` handler with an
  * untrusted sender and assert it is rejected (the IpcRegistry sender gate
- * throws `IPC sender rejected for channel updates:*`). It is RED today
- * because, with no policy passed, the handler runs ungated and resolves
+ * throws `IPC sender rejected for channel updates:*`). This guards that the
+ * policy is wired: without it the handler would run ungated and resolve
  * normally for any sender.
  *
  * `UpdateChannel.*` values are imported from the real channels module so a

@@ -1,12 +1,11 @@
 /**
  * Pure helpers for the native-host service-console forwarder.
  *
- * Under native-host the service-host's console used to be captured by a
- * `console.*` monkeypatch in `service-host/preload.cjs`. That wrapper added a
- * stack frame, so Chrome DevTools (attached natively to the service host)
- * attributed EVERY service-layer log to the wrapper line (`preload.cjs:237`)
- * instead of the developer's source. We now capture via CDP
- * `Runtime.consoleAPICalled` instead, which preserves native source attribution.
+ * The service-host's console is captured via CDP `Runtime.consoleAPICalled`,
+ * which preserves native source attribution. A `console.*` monkeypatch in
+ * `service-host/preload.cjs` would add a stack frame, so Chrome DevTools (attached
+ * natively to the service host) would attribute EVERY service-layer log to the
+ * wrapper line instead of the developer's source.
  *
  * These functions turn the CDP event shape into the `GuestConsoleEntry` shape
  * the existing console fan-out (automation `App.logAdded`) expects, WITHOUT any

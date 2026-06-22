@@ -339,9 +339,9 @@ describe('ViewManager: disposeAll tears down the host-toolbar view', () => {
 // ── Sender policy: the host-toolbar WCV is DELIBERATELY NOT globally trusted ──
 // The host loads ARBITRARY content into the toolbar WCV, so granting it the
 // global white-list would open all ~72 IpcRegistry channels to that content
-// (project-fs / panels.executeJavaScript / storage …) — a large blast radius
-// (codex review finding (b), HIGH). Its one channel (the reverse size-advertiser)
-// is instead a raw `ipcMain.on` gated on its exact wc id in `registerViewsIpc`.
+// (project-fs / panels.executeJavaScript / storage …) — a large blast radius.
+// Its one channel (the reverse size-advertiser) is instead a raw `ipcMain.on`
+// gated on its exact wc id in `registerViewsIpc`.
 // So the policy must REJECT the toolbar wc, and `getHostToolbarWebContentsId`
 // exists only to feed that raw per-id gate.
 import { createWorkbenchSenderPolicy } from '../../utils/sender-policy.js'

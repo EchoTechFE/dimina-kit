@@ -3,7 +3,7 @@
 // higher-level coordination (session + renderer notifications) lives in
 // ../workspace/workspace-service.ts.
 //
-// Phase 1 adds the extensibility surface: `types.ts` (ProjectsProvider,
+// The extensibility surface lives in `types.ts` (ProjectsProvider,
 // ProjectTemplate, CreateProjectInput) and `local-provider.ts` (the default
 // implementation injected when the host omits `projectsProvider`).
 export * from './project-repository.js'

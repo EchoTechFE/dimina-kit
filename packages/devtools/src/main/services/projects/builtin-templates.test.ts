@@ -1,5 +1,5 @@
 /**
- * Phase 2 contract: the two built-in template directories ship inside the
+ * Contract: the two built-in template directories ship inside the
  * package at `<devtools>/templates/{blank,taro-todo}/` and `BUILTIN_TEMPLATES`
  * exposes them with absolute `source.path` values that point at those dirs.
  *

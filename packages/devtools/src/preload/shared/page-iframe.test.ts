@@ -1,12 +1,9 @@
 /**
- * Red-first tests for the new shared helper `getActivePageIframe`.
+ * Tests for the shared helper `getActivePageIframe`.
  *
  * Contract: return the last element in `document` with class
  * `dimina-native-webview__window`, cast as HTMLIFrameElement; return null if
  * no such element exists.
- *
- * The function does NOT yet exist — these tests are intentionally red until
- * P7 creates `packages/devtools/src/preload/shared/page-iframe.ts`.
  */
 
 import { beforeEach, afterEach, describe, expect, it } from 'vitest'

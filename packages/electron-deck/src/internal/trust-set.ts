@@ -1,8 +1,8 @@
 /**
- * TrustSet — SEALED refcount membership of trusted webContents (P2).
+ * TrustSet — SEALED refcount membership of trusted webContents.
  *
- * Refcount membership extracted from `DeckApp`'s former private `trustedWcRefs`
- * (Map<wc, refcount>) so the same primitive can back both `DeckApp` and the
+ * Refcount membership (Map<wc, refcount>) factored into a standalone primitive
+ * so it can back both `DeckApp` and the
  * domain-neutral `ControlBus` facade.
  *
  * SEALED WRITE MODEL: there is exactly ONE writer — `admit(wc, owner)`. It forces

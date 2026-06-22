@@ -33,12 +33,12 @@ import { DeckApp } from './deck-app.js'
  * The framework must bind these AFTER `app.whenReady()`; the single-instance
  * lock check must run BEFORE `app.whenReady()`.
  *
- * Where a config field / backend hook is not yet declared in types, we attach
- * it through a loose structural cast so this file COMPILES and the failure is
- * an *assertion* failure (spy never called), not a type error.
+ * Config fields / backend hooks are attached through a loose structural cast so
+ * this file COMPILES and any regression surfaces as an *assertion* failure (spy
+ * never called), not a type error.
  *
- * EXPECTED RED until `bindAppLifecycle` + single-instance gating +
- * `onSecondInstance` land.
+ * Pins the `bindAppLifecycle` + single-instance gating + `onSecondInstance`
+ * contract.
  */
 
 // ── Fake MinimalApp ──────────────────────────────────────────────────────────
@@ -206,9 +206,9 @@ function createFakeElectron(
 	}
 }
 
-// ── Config / backend builders (loose casts for not-yet-declared fields) ───────
+// ── Config / backend builders (loose casts for the `app.*` lifecycle fields) ──
 
-/** Build a DeckConfig carrying the not-yet-declared `app.*` lifecycle fields. */
+/** Build a DeckConfig carrying the `app.*` lifecycle fields. */
 function lifecycleConfig(appExtra: Record<string, unknown>, rest: DeckConfig = {}): DeckConfig {
 	return {
 		...rest,

@@ -1,9 +1,9 @@
 /**
- * FAILING TDD spec (red phase) for finding B1 (BLOCKER): the simulator native
- * WebContentsView is not collapsed when its kept-alive DOM tab DEACTIVATES.
+ * Spec guarding that the simulator native WebContentsView IS collapsed when its
+ * kept-alive DOM tab DEACTIVATES.
  *
  * ── THE BUG ──────────────────────────────────────────────────────────────────
- * Under A3 DOM-panel keepalive, `DockView` keeps an inactive panel's body MOUNTED
+ * Under DOM-panel keepalive, `DockView` keeps an inactive panel's body MOUNTED
  * inside a `display:none` wrapper (it no longer unmounts it). `SimulatorPanel`
  * binds its native-view placement anchor with
  *     createPlacementAnchor(el, { visible: true, followGeometry: true, publish })
@@ -110,11 +110,11 @@ beforeEach(() => {
   api.setNativeSimulatorBounds.mockClear()
 })
 
-describe('SimulatorPanel: collapse native view when its kept-alive slot deactivates (B1)', () => {
-  // BUG (B1): the anchor is bound without `guardDisplayNone`, so a display:none
-  // transition (tab deactivated under A3 keepalive) is never observed and the
-  // native simulator WCV is never collapsed. The component MUST opt into the
-  // guard at its bind site.
+describe('SimulatorPanel: collapse native view when its kept-alive slot deactivates', () => {
+  // Without `guardDisplayNone` the anchor never observes a display:none
+  // transition (tab deactivated under DOM-panel keepalive), so the native
+  // simulator WCV is never collapsed. The component MUST opt into the guard at
+  // its bind site.
   it('binds the placement anchor with guardDisplayNone: true', () => {
     renderPanel()
 

@@ -1,7 +1,7 @@
 /**
- * FAILING TDD spec for the NOT-YET-WRITTEN `<DockView>` React component.
+ * Contract spec for the `<DockView>` React component.
  *
- * The implementer reads THIS file as the contract. `<DockView>` lives at
+ * This file documents the component contract. `<DockView>` lives at
  * `./dock-view` (re-exported from `./index`). It renders a docking layout from
  * a `LayoutModel` (observable) + `PanelRegistry` (panelId -> descriptor), and
  * must expose the following STABLE `data-*` attributes so hosts/tests can target
@@ -26,8 +26,6 @@
  *  - Native slot: bindNativeSlot(id, el) on mount-as-active;
  *    bindNativeSlot(id, null) when it stops being active or unmounts.
  *
- * These tests MUST fail right now with "cannot find module ./dock-view"
- * (the component does not exist). They must NOT fail from test-infra issues.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, fireEvent, act, cleanup } from '@testing-library/react'
@@ -43,8 +41,7 @@ import {
 	type PanelRegistry,
 } from '../layout/index.js'
 
-// Import the component-under-test. This import is the honest point of failure:
-// the module does not exist yet, so every test errors at collection time.
+// Import the component-under-test.
 import { DockView, computeFlexiblePercentages } from './index.js'
 
 // ───────────────────────── fixtures ─────────────────────────

@@ -105,8 +105,8 @@ vi.mock('../../utils/paths.js', () => ({
   hostToolbarPreloadPath: '/stub/host-toolbar-preload.js',
   // attachNativeSimulator hands the WCV the `.cjs` sibling of the preload.
   cjsSiblingPreloadPath: (p: string) => p.replace(/\.js$/, '.cjs'),
-  // Phase 3: workbench-context transitively imports builtin-templates.ts
-  // which reads this at module load to build the BUILTIN_TEMPLATES catalog.
+  // workbench-context transitively imports builtin-templates.ts which reads
+  // this at module load to build the BUILTIN_TEMPLATES catalog.
   devtoolsPackageRoot: '/stub/devtools-pkg-root',
 }))
 

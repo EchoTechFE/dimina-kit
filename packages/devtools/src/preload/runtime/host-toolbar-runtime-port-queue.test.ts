@@ -1,10 +1,9 @@
 /**
- * R2 follow-up (codex final review, Bug 2 / MINOR) — the preload pending
- * queue is UNBOUNDED. TDD-RED: `installHostToolbarPortBridge`
- * (host-toolbar-port.ts) appends EVERY pre-handshake `send()` to `pending`
- * unconditionally; a page that never finishes loading (or whose handshake
- * never arrives) grows the array without limit — memory creep driven by
- * arbitrary host toolbar content.
+ * The preload pending queue must be BOUNDED. Without a cap,
+ * `installHostToolbarPortBridge` (host-toolbar-port.ts) appends EVERY
+ * pre-handshake `send()` to `pending` unconditionally; a page that never
+ * finishes loading (or whose handshake never arrives) grows the array without
+ * limit — memory creep driven by arbitrary host toolbar content.
  *
  * CONTRACT PINNED BY THIS FILE:
  *  - The queue holds at most HOST_TOOLBAR_PENDING_LIMIT = 128 envelopes
@@ -133,10 +132,10 @@ function flushedPayloads(port: StubDomPort): unknown[] {
   )
 }
 
-describe('Bug 2 — pending queue cap at HOST_TOOLBAR_PENDING_LIMIT (128)', () => {
+describe('pending queue cap at HOST_TOOLBAR_PENDING_LIMIT (128)', () => {
   it('exactly 128 pre-handshake sends: ALL flush in FIFO order on handshake, no warning', async () => {
-    // Boundary guard (GREEN today): the cap must not eat messages BELOW the
-    // limit, and a full-but-not-overflowing queue is not warn-worthy.
+    // Boundary guard: the cap must not eat messages BELOW the limit, and a
+    // full-but-not-overflowing queue is not warn-worthy.
     const { api, deliverPort } = await boot()
     const port = makeDomPort()
 
@@ -152,10 +151,9 @@ describe('Bug 2 — pending queue cap at HOST_TOOLBAR_PENDING_LIMIT (128)', () =
   })
 
   it('overflow drops the NEWEST sends: only the first 128 ever reach the port', async () => {
-    // BUG CAUGHT: the unbounded queue — today all 131 envelopes are buffered
-    // and flushed; a page that never finishes loading grows this array
-    // forever. The cap keeps the first-comers (boot-sequence messages) and
-    // drops the overflow.
+    // An unbounded queue would buffer and flush all 131 envelopes; a page that
+    // never finishes loading grows this array forever. The cap keeps the
+    // first-comers (boot-sequence messages) and drops the overflow.
     const { api, deliverPort } = await boot()
     const port = makeDomPort()
 
@@ -182,10 +180,9 @@ describe('Bug 2 — pending queue cap at HOST_TOOLBAR_PENDING_LIMIT (128)', () =
   })
 
   it('warns EXACTLY ONCE on first overflow, at overflow time, and never again for later drops', async () => {
-    // BUG CAUGHT: today there is no warning at all — host developers would
-    // see messages vanish with zero signal. And a per-drop warning would let
-    // a runaway page send-loop spam the console; the contract is one warning
-    // per load.
+    // Without a warning, host developers would see messages vanish with zero
+    // signal. A per-drop warning would let a runaway page send-loop spam the
+    // console; the contract is one warning per load.
     const { api, deliverPort } = await boot()
 
     sendBatch(api, HOST_TOOLBAR_PENDING_LIMIT)
@@ -204,8 +201,8 @@ describe('Bug 2 — pending queue cap at HOST_TOOLBAR_PENDING_LIMIT (128)', () =
   })
 
   it('overflow does not poison the channel: after the handshake, new sends bypass the queue and go straight out', async () => {
-    // BUG CAUGHT (count assertion): an implementation that flushes the
-    // unbounded backlog would post 131 envelopes here, not 128 + 1.
+    // An implementation that flushes the unbounded backlog would post 131
+    // envelopes here, not 128 + 1.
     const { api, deliverPort } = await boot()
     const port = makeDomPort()
 

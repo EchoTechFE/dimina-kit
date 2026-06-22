@@ -1,12 +1,11 @@
 /**
- * Wave 3 R1 — host toolbar framework runtime becomes SESSION-RESIDENT.
+ * Host toolbar framework runtime is SESSION-RESIDENT, not delivered via the
+ * toolbar WCV's `webPreferences.preload`. If the height-advertiser preload
+ * rode on `webPreferences.preload`, a host calling
+ * `setPreloadPath(<its own preload>)` would REPLACE the advertiser and the
+ * strip height would collapse to 0 (a real downstream incident).
  *
- * TODAY the height-advertiser preload is delivered via the toolbar WCV's
- * `webPreferences.preload` (`hostToolbarPreloadOverride ?? hostToolbarPreloadPath`).
- * A host calling `setPreloadPath(<its own preload>)` therefore REPLACES the
- * advertiser — the strip height collapses to 0 (a real downstream incident).
- *
- * NEW CONTRACT (codex CONDITIONAL-GO + spike .repro/wave3-spike/RESULTS.md):
+ * Contract:
  *  - the toolbar WCV stays on the defaultSession (no partition),
  *  - its creation injects the `'--dimina-host-toolbar'` marker via
  *    `webPreferences.additionalArguments`,
@@ -14,7 +13,7 @@
  *    `session.defaultSession.registerPreloadScript({ type: 'frame', filePath })`
  *    (filePath resolved by the paths layer → ASAR-safe absolute path),
  *  - registrations are REF-COUNTED across coexisting ViewManagers: only the
- *    LAST disposeAll unregisters (codex condition 3),
+ *    LAST disposeAll unregisters,
  *  - `setPreloadPath` now means "the HOST's own webPreferences.preload"; null
  *    means "no host preload" — it never was and never restores the advertiser,
  *  - `webPreferences.preload` no longer carries the built-in advertiser at all.
@@ -280,8 +279,8 @@ describe('R1/A.2 — runtime preload registered on defaultSession (once, ref-cou
   })
 
   it('disposing ONE of two contexts does NOT unregister; the LAST disposeAll unregisters with the registration id', async () => {
-    // BUG CAUGHT (codex condition 3): a naive "disposeAll always unregisters"
-    // kills the OTHER still-alive context's toolbar advertiser — its next
+    // A naive "disposeAll always unregisters" kills the OTHER still-alive
+    // context's toolbar advertiser — its next
     // toolbar load silently has no height loop.
     const createViewManager = await loadCreateViewManager()
     const a = createViewManager(makeContext().ctx)

@@ -10,7 +10,7 @@ export default [
     // fixtures (same wx/Page globals) + compiled bundles; _spike/ and spike/ are
     // throwaway prototype scratch; playwright-report and test-results are e2e
     // artifacts. None of these are source we maintain — skip linting them.
-    ignores: ["container/**", "docs/**", "templates/**", "e2e/fixtures/**", "_spike/**", "spike/**", "playwright-report/**", "test-results/**"],
+    ignores: ["container/**", "docs/**", "templates/**", "e2e/fixtures/**", "_spike/**", "spike/**", "playwright-report/**", "test-results/**", "coverage/**"],
   },
   {
     files: [

@@ -5,7 +5,7 @@
  * Each exported function is bound with `this` = MiniApp instance
  * (via AppManager.registerApi → MiniApp.invokeApi).
  *
- * Phase 0 contract (see `docs/file-system.md`):
+ * Contract (see `docs/file-system.md`):
  *   - Every entry point routes its caller-supplied path through `resolveVPath`
  *     (single resolver), which rejects non-`difile://` schemes, absolute
  *     filesystem paths, and any `..` traversal.
@@ -14,8 +14,7 @@
  *     `difile://_store/*` with `permission denied` — those namespaces are
  *     runtime-owned and read-only, matching wx 真机 semantics.
  *   - `fsSaveFile` returns a `difile://_store/{uuid}.{ext}` vpath, never a
- *     real disk path. Materializing from `_tmp` is a Phase 1 feature; in
- *     Phase 0 we fail with an explicit message.
+ *     real disk path.
  */
 
 import type { MiniAppContext } from './types'
@@ -24,10 +23,9 @@ import { resolveVPath, type ResolvedVPath } from '../shared/vpath.js'
 import { resolveTempFilePath } from './temp-files'
 
 /**
- * Phase 1 dispatch helper: pull a `_tmp/*` Blob out of the renderer Map and
- * hand back its bytes. Throws an ENOENT-shaped Error if the URL is unknown,
- * so callers can surface a `fail` with a real not-found message instead of
- * the Phase 0 blanket "not supported" string.
+ * Dispatch helper: pull a `_tmp/*` Blob out of the renderer Map and hand back
+ * its bytes. Throws an ENOENT-shaped Error if the URL is unknown, so callers
+ * can surface a `fail` with a real not-found message.
  */
 async function _tmpBytes(url: string): Promise<Buffer> {
 	try {
@@ -359,7 +357,7 @@ export function fsCopyFile(
 		return
 	}
 	if (vSrc.kind === 'tmp') {
-		// Phase 1 (P1-6): materialize the renderer Blob into the user-data
+		// Materialize the renderer Blob into the user-data
 		// area. The dest writable check above already rejected _tmp / _store
 		// destinations — saveFile is the documented route for tmp→store.
 		_tmpBytes(srcPath).then(
@@ -648,9 +646,9 @@ export function fsGetFileInfo(
  * (`difile://_store/{uuid}.{ext}`) rather than a real disk path so callers
  * cannot leak the host filesystem layout.
  *
- * Phase 0 scope:
+ * Scope:
  *   - source must be a `difile://`-anchored vpath (validator rejects abs paths);
- *   - source from `_tmp/` fails explicitly — that path requires the Phase 1
+ *   - source from `_tmp/` materializes the renderer Blob into `_store/` via the
  *     renderer-Blob → main-fs copy bridge;
  *   - source from `_store/` or the user-data area is copied byte-for-byte to a
  *     freshly minted `_store/{uuid}.{ext}` entry under the sandbox base.
@@ -702,7 +700,7 @@ export function fsSaveFile(
 	}
 
 	if (src.kind === 'tmp') {
-		// Phase 1 (P1-6): materialize the renderer Blob into _store on disk.
+		// Materialize the renderer Blob into _store on disk.
 		_tmpBytes(tempFilePath).then(
 			writeBytesToStore,
 			(err: Error) => { onFail?.({ errMsg: `fsSaveFile:fail ${err.message}` }); onComplete?.() },

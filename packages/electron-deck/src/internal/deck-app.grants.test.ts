@@ -13,11 +13,10 @@ import type { MinimalIpcMain, MinimalWebContents } from './wire-transport.js'
 import { createScope, type Scope } from '../main/scope.js'
 
 /**
- * P4 Phase B — `runtime.grants.issue` integration over DeckApp.
+ * `runtime.grants.issue` integration over DeckApp.
  *
- * FAILING-FIRST: `runtime.grants` and the test accessor `app.__capabilityPolicy()`
- * do not exist yet (Phase B implementer adds them), so these are RED at RUNTIME
- * (`runtime.grants` is undefined / `__capabilityPolicy` is not a function).
+ * `runtime.grants` and the test accessor `app.__capabilityPolicy()` are reached
+ * at runtime; the accessor is a typed escape hatch off the app instance.
  *
  * The contract these pin:
  *   • `runtime.grants.issue(controlWc, { targetScope, commands })` binds the
@@ -194,7 +193,7 @@ function createFakeElectron(initialContentBounds: MinimalRect = { x: 0, y: 0, wi
 	}
 }
 
-// ── escape hatches for the (not-yet-existent) Phase B surface ───────────────
+// ── escape hatches for the Phase B surface ───────────────
 
 interface GrantIssueOpts {
 	targetScope: Scope

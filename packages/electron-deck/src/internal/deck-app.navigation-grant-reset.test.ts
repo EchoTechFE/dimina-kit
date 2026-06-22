@@ -13,7 +13,7 @@ import { DeckApp } from './deck-app.js'
 import type { MinimalIpcMain } from './wire-transport.js'
 
 /**
- * C3 (P0 security) — navigation-driven grant revocation.
+ * Navigation-driven grant revocation.
  *
  * CONTRACT (deck-window-facade-LOCKED.md §C3): a trusted control wc that has
  * been issued capability grants MUST lose those grants when it performs a
@@ -31,13 +31,12 @@ import type { MinimalIpcMain } from './wire-transport.js'
  *   • in-place (hash/pushState, isInPlace=true)                     → NO revoke.
  *   • sub-frame (isMainFrame=false)                                 → NO revoke.
  *
- * FAILING-FIRST: at authoring time deck-app.ts wires NO `did-start-navigation`
- * hook on the control wc (grep confirms only `closed`/`close`/`resize`/
- * `did-...`-free `.on(...)` registrations). So firing a main-frame cross-doc
- * navigation does NOT reset the wcScope → the grant survives → the gated
- * `layout.*` command is STILL allowed where the contract demands DECK_FORBIDDEN.
- * That positive test is RED until the hook lands. The negative tests
- * (in-place / sub-frame don't revoke) already pass (nothing revokes today).
+ * deck-app.ts wires a `did-start-navigation` hook on the control wc that resets
+ * the wcScope on a main-frame cross-document navigation. So firing such a
+ * navigation resets the wcScope → the grant is revoked → the gated `layout.*`
+ * command is DECK_FORBIDDEN, per the contract. The negative tests
+ * (in-place / sub-frame don't revoke) confirm the hook scopes the reset
+ * correctly.
  *
  * Fakes mirror deck-app.test.ts / grants-fork.test.ts, EXTENDED so the control
  * wc is an EventEmitter-ish object that can register + emit
@@ -280,7 +279,7 @@ function controlWc(wc: NavFakeWebContents): Parameters<Runtime['grants']['issue'
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 describe('DeckApp — C3: main-frame cross-document navigation revokes the control wc grants', () => {
-	// POSITIVE (RED until the did-start-navigation hook lands): issue a grant,
+	// POSITIVE: issue a grant,
 	// confirm the gated layout.* command is ALLOWED, then perform a MAIN-FRAME
 	// CROSS-DOCUMENT navigation on the control wc; the SAME command must now be
 	// FORBIDDEN — the grant was revoked (the navigated-to page can't inherit it).

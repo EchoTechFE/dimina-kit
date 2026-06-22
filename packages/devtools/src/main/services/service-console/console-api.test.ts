@@ -1,16 +1,14 @@
 /**
- * RED tests for the pure helpers backing CDP-based service console capture.
+ * Tests for the pure helpers backing CDP-based service console capture.
  *
- * The service layer is moving from monkeypatching `console.*` to listening on
- * CDP `Runtime.consoleAPICalled`. These helpers convert CDP RemoteObjects into
- * JSON-serializable values WITHOUT a CDP round-trip, decide when a deep fetch
- * IS required, and filter out the render→service `[视图]` forward re-injection
- * so automation doesn't see each render entry twice.
+ * The service layer captures console output by listening on CDP
+ * `Runtime.consoleAPICalled` (not by monkeypatching `console.*`). These helpers
+ * convert CDP RemoteObjects into JSON-serializable values WITHOUT a CDP
+ * round-trip, decide when a deep fetch IS required, and filter out the
+ * render→service `[视图]` forward re-injection so automation doesn't see each
+ * render entry twice.
  *
  * Pure functions only — no electron, no IO, so no `vi.mock('electron')`.
- *
- * NOTE: `./console-api.js` does not exist yet. These tests are expected to FAIL
- * at import time (RED). Implementation comes after.
  */
 import { describe, it, expect } from 'vitest'
 import {

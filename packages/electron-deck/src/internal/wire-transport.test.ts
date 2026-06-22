@@ -147,10 +147,10 @@ describe('WireTransport — start()', () => {
 		expect(() => h.transport.start()).toThrow(/already started|already/i)
 	})
 
-	// codex review #13 (C9): start() 中途抛错时必须回滚已注册的 handler / 已建的
-	// bus subscription，并把 state 回到 idle —— 否则遗留半状态会让 dispose() 走
-	// "idle no-op" 分支跳过 cleanup，造成 listener 泄露。
-	describe('start() partial-failure rollback (codex #13)', () => {
+	// start() 中途抛错时必须回滚已注册的 handler / 已建的 bus subscription，并把
+	// state 回到 idle —— 否则遗留半状态会让 dispose() 走 "idle no-op" 分支跳过
+	// cleanup，造成 listener 泄露。
+	describe('start() partial-failure rollback', () => {
 		it('second ipcMain.handle throws → already-registered handler is removed + state reverts to idle', () => {
 			const ipcMain = createFakeIpcMain()
 			let callCount = 0
@@ -396,9 +396,9 @@ describe('WireTransport — invoke handler: error serialization', () => {
 		expect(res.error.message).toBe('x')
 	})
 
-	// codex review #3: host 抛 DeckRemoteError 重抛代理调用结果时，原 remoteName
-	// 必须被保留 —— 不能被中间环节的 invoke name 覆盖。
-	it('host throwing DeckRemoteError preserves original remoteName + code (codex #3)', async () => {
+	// host 抛 DeckRemoteError 重抛代理调用结果时，原 remoteName 必须被保留 ——
+	// 不能被中间环节的 invoke name 覆盖。
+	it('host throwing DeckRemoteError preserves original remoteName + code', async () => {
 		const h = makeHarness({
 			trustedIds: [1],
 			invokeHost: async () => {
@@ -417,8 +417,8 @@ describe('WireTransport — invoke handler: error serialization', () => {
 		expect(res.error.message).toBe('upstream failed')
 	})
 
-	// codex review #9 (R8): DeckRemoteError 携带显式空字符串 remoteName 时
-	// 表达 "未知来源" 的意图，不能被 invokeName 友好覆盖（`||` → `??`）。
+	// DeckRemoteError 携带显式空字符串 remoteName 时表达 "未知来源" 的意图，
+	// 不能被 invokeName 友好覆盖（`||` → `??`）。
 	it('host throwing DeckRemoteError with empty remoteName preserves "" (codex #9 — ?? over ||)', async () => {
 		const h = makeHarness({
 			trustedIds: [1],
@@ -600,10 +600,10 @@ describe('WireTransport — event push', () => {
 		})
 	})
 
-	// codex review #4: declaredEvents allowlist —— wire transport 不能把任何
-	// bus.publish 都跨进程推；未声明 event name 必须 drop（防 framework 内部
-	// 误用 bus.publish 时 leak 到 webview）。
-	it('publish on undeclared event name is dropped (codex #4 — declaredEvents allowlist)', () => {
+	// declaredEvents allowlist —— wire transport 不能把任何 bus.publish 都跨进程
+	// 推；未声明 event name 必须 drop（防 framework 内部误用 bus.publish 时 leak
+	// 到 webview）。
+	it('publish on undeclared event name is dropped (declaredEvents allowlist)', () => {
 		const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 		try {
 			const wc = createFakeWebContents(1)

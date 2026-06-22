@@ -1,6 +1,6 @@
 /**
- * Feedback fix ② (RUNTIME half) — `ctx.openSettings()` must actually open the
- * settings window through the real `openSettingsWindow` path.
+ * `ctx.openSettings()` must actually open the settings window through the real
+ * `openSettingsWindow` path (the runtime half of the contract).
  *
  * The type half (src/main/runtime/miniapp-runtime-open-settings.test.ts)
  * pins that `WorkbenchContext` / `MiniappRuntime` carry
@@ -9,7 +9,7 @@
  * exhaustive electron stub as menu-builder-runtime-context.test.ts) and
  * proves the value-level wiring:
  *
- *  - `instance.context.openSettings` is a function [RED today: undefined];
+ *  - `instance.context.openSettings` is a function;
  *  - calling it lands in the `openSettingsWindow` path: a settings
  *    BrowserWindow is created, registered on `ctx.windows.settingsWindow`,
  *    loads `entries/workbench-settings/index.html`, and is shown/focused;
@@ -218,7 +218,7 @@ type OpenSettingsContext = {
 }
 
 describe('feedback ② (runtime): ctx.openSettings is wired to the openSettingsWindow path', () => {
-  it('openSettings exists on the booted context and opens + shows the settings window [RED today]', async () => {
+  it('openSettings exists on the booted context and opens + shows the settings window', async () => {
     const instance = await createDevtoolsRuntime({})
     try {
       const ctx = instance.context as unknown as OpenSettingsContext
@@ -246,7 +246,7 @@ describe('feedback ② (runtime): ctx.openSettings is wired to the openSettingsW
     }
   })
 
-  it('a second openSettings() call reuses the live settings window instead of creating another [RED today]', async () => {
+  it('a second openSettings() call reuses the live settings window instead of creating another', async () => {
     const instance = await createDevtoolsRuntime({})
     try {
       const ctx = instance.context as unknown as OpenSettingsContext

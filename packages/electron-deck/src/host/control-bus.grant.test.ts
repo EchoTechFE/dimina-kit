@@ -1,7 +1,7 @@
 /**
- * P4 Phase B — ControlBus grant gate (A5-1.4).
+ * ControlBus grant gate.
  *
- * Added by the Phase B implementer (flagged): pins that when a `policy` is
+ * Pins that when a `policy` is
  * injected into `createControlBus`, `dispatch` default-DENIES a command the
  * sender lacks a live grant for — throwing a `DeckRemoteError` carrying
  * `DECK_FORBIDDEN` (the wire serialises that into an InvokeFailure) — and that an

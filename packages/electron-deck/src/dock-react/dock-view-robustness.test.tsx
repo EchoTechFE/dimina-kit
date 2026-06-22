@@ -1,7 +1,7 @@
 /**
- * FAILING TDD spec — robustness contracts for `<DockView>` (src/dock-view.tsx).
+ * Robustness contract spec for `<DockView>` (src/dock-view.tsx).
  *
- * Two contracts, both currently UNIMPLEMENTED:
+ * Two contracts:
  *
  *  Contract 1 (Bug #2 — white-screen crash guard): when a layout transition
  *  changes a split's child COUNT while its id stays the same (`'root'` stays

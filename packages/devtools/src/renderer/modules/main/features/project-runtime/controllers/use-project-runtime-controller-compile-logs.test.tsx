@@ -1,7 +1,6 @@
 /**
- * ROUND 2 (dmcc 日志链路) — controller passthrough contract for
- * `compileLogs` (TDD, NOT yet implemented). Mirrors the wave-1
- * use-project-runtime-controller-compile-events suite: sub-hooks mocked at
+ * Controller passthrough contract for `compileLogs` (dmcc 日志链路). Mirrors
+ * the use-project-runtime-controller-compile-events suite: sub-hooks mocked at
  * their module seams, asserting ONLY the session-slice assembly.
  */
 import { describe, it, expect, vi } from 'vitest'

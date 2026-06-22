@@ -1,5 +1,5 @@
 /**
- * TDD failing-first contract tests for the NEW `DeckViewHandle` accessors
+ * Contract tests for the `DeckViewHandle` accessors
  * (an additive surface on the handle returned by `runtime.view(...)`):
  *
  *   interface DeckViewHandle {
@@ -13,15 +13,13 @@
  * directly from the handle, WITHOUT diffing `mainWindow.contentView.children`
  * to re-derive the underlying WebContentsView.
  *
- * At authoring time these three members do NOT exist on the handle the deck-app
- * builds (`hostHandle` in src/internal/deck-app.ts only has placeIn /
- * applyPlacement / moveTo / dispose). So every spec here is RED at RUNTIME:
- *   - `handle.webContents` is `undefined` (identity check fails),
- *   - `handle.bounds` / `handle.capturePage` are `undefined` → calling them is a
- *     `TypeError: ... is not a function`.
+ * Every spec here exercises the runtime contract of these three members on the
+ * handle the deck-app builds (`hostHandle` in src/internal/deck-app.ts):
+ *   - `handle.webContents` is the native view's WebContents (identity check),
+ *   - `handle.bounds()` returns the live screen-space rect (or null),
+ *   - `handle.capturePage()` passes through to `wc.capturePage()`.
  * Reached through a single typed escape hatch (`withAccessors`) so the file
- * COMPILES (these members aren't in the published type yet) and fails on
- * BEHAVIOR, not a compile error.
+ * COMPILES against the published type and asserts on BEHAVIOR.
  *
  * Fakes: copied (minimal) from deck-app.host-view.test.ts. The local
  * `FakeWebContentsView` is EXTENDED here so the gap is testable:
@@ -229,12 +227,12 @@ function createFakeElectron(
 	}
 }
 
-// ── Typed escape hatch for the not-yet-typed accessors ───────────────────────
+// ── Typed escape hatch for the handle accessors ──────────────────────────────
 //
-// `webContents` / `bounds()` / `capturePage()` are not on the published
-// `DeckViewHandle` type yet, so reach them through a loose view. Absence then
-// fails at RUNTIME (undefined member / "is not a function") — the RED we want —
-// not a compile error that would stop the suite running.
+// `webContents` / `bounds()` / `capturePage()` are reached through a loose view
+// so any regression that drops a member fails at RUNTIME (undefined member /
+// "is not a function") — the runtime failure we want — not a compile error that
+// would stop the suite running.
 type Bounds = { x: number, y: number, width: number, height: number }
 type Placement = { visible: true, bounds: Bounds } | { visible: false }
 interface ViewSource {
@@ -391,7 +389,7 @@ describe('DeckViewHandle accessors — capturePage()', () => {
 	})
 })
 
-// A throwaway reference so an unused-import lint never masks the RED (JsonValue
+// A throwaway reference so an unused-import lint never masks a runtime failure (JsonValue
 // is imported for parity with the copied fake helpers; reference it).
 const _jsonValueParityRef: JsonValue = null
 void _jsonValueParityRef

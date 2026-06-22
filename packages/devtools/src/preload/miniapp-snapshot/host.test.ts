@@ -8,7 +8,7 @@ vi.mock('electron', () => ({
     on: vi.fn(),
     removeListener: vi.fn(),
   },
-  // Additive: the host exposes its automation accessor via `contextBridge`.
+  // The host exposes its automation accessor via `contextBridge`.
   // `exposeInMainWorld` is a plain spy — it does NOT populate `window`, so the
   // accessor tests grab the API object straight off the spy's call args.
   contextBridge: {
@@ -17,8 +17,6 @@ vi.mock('electron', () => ({
 }))
 
 import { ipcRenderer, contextBridge } from 'electron'
-// RED state: `./host` does not exist yet — the implementer creates it.
-// This import deliberately fails until `createMiniappSnapshotHost` is written.
 import { createMiniappSnapshotHost } from './host'
 
 // ── Test doubles ────────────────────────────────────────────────────────

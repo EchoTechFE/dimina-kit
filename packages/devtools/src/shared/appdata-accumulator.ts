@@ -11,7 +11,7 @@
  * Default (dimina-fe) path: the simulator preload sniffs these as Worker
  * `message` events (app-data.ts). Native-host path: they flow service→render
  * through bridge-router (SERVICE_PUBLISH). Both feed this one accumulator so the
- * decode/merge/page-only/R6 policy can't drift between modes.
+ * decode/merge/page-only/init-gate policy can't drift between modes.
  */
 
 /**
@@ -148,11 +148,11 @@ export class AppDataAccumulator {
 
   /**
    * Apply one entry. Returns true if it was accepted (a mutation worth
-   * republishing), false if dropped (missing ids, or the R6 gate).
+   * republishing), false if dropped (missing ids, or the init-gate).
    */
   apply(input: AppDataInput): boolean {
     if (!input.bridgeId || !input.moduleId) return false
-    // R6: drop ub patches whose bridge has never been initialised. dimina
+    // Drop ub patches whose bridge has never been initialised. dimina
     // dispatches pageUnload → onUnload, whose setData produces a late `ub`
     // arriving AFTER clearBridge; without this gate it would resurrect the
     // unloaded bridge as a ghost tab.

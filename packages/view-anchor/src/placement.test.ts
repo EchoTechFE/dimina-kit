@@ -1,37 +1,35 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 
 // ─────────────────────────────────────────────────────────────────────
-// TDD — FAILING tests for the *not-yet-implemented* explicit `Placement`
-// API. The current package encodes "hidden" as the magic geometric value
-// `{x:0,y:0,width:0,height:0}` (the `present:false → ZERO bounds`
-// convention in types.ts/view-anchor.ts). That leaks a compositor/host
-// concept ("detach the view") into the geometry layer, and is ambiguous:
-// a view that is genuinely 0-wide is indistinguishable from a hidden one.
+// Tests for the explicit `Placement` API, the alternative to encoding
+// "hidden" as the magic geometric value `{x:0,y:0,width:0,height:0}` (the
+// `present:false → ZERO bounds` convention in types.ts/view-anchor.ts). That
+// ZERO convention leaks a compositor/host concept ("detach the view") into the
+// geometry layer, and is ambiguous: a view that is genuinely 0-wide is
+// indistinguishable from a hidden one.
 //
-// This file pins the REPLACEMENT contract:
+// The replacement contract:
 //
 //   type Placement =
 //     | { visible: true; bounds: Bounds }
 //     | { visible: false }
 //
 // measure produces a `Placement`; the sink consumes a `Placement`.
-// Visibility is EXPLICIT (a discriminant), never inferred from a 0.
+// Visibility is EXPLICIT (a discriminant), never inferred from a 0. The
+// explicit API NEVER reintroduces a ZERO-bounds path for "hidden".
 //
-// These tests must be RED today: the symbols they import/exercise
-// (`measurePlacement`, `createPlacementAnchor`, the `Placement` type) do
-// not exist yet. We import them dynamically so the failure surfaces as a
-// runtime/assertion failure (a missing export is `undefined`, and calling
-// it throws) rather than a whole-file compile error that vitest would skip.
-// The implementer makes them GREEN by adding the explicit API — WITHOUT
-// reintroducing any ZERO-bounds path for "hidden".
+// The symbols (`measurePlacement`, `createPlacementAnchor`, `Placement`) are
+// imported dynamically so a missing export surfaces as a runtime/assertion
+// failure (an `undefined` that throws when called) rather than a whole-file
+// compile error that vitest would skip.
 // ─────────────────────────────────────────────────────────────────────
 
 import type { Bounds } from './types.js'
 
-// The explicit API is imported through this indirection so that a not-yet-
-// existing export is observable as `undefined` at runtime (→ a failing
-// assertion / TypeError), not a static "module has no exported member"
-// compile error that would prevent the whole suite from running.
+// The explicit API is imported through this indirection so that a missing
+// export is observable as `undefined` at runtime (→ a failing assertion /
+// TypeError), not a static "module has no exported member" compile error that
+// would prevent the whole suite from running.
 import * as viewAnchorModule from './view-anchor.js'
 
 // The shape the explicit API must produce/consume. Mirrored locally (not
@@ -128,11 +126,10 @@ function buildElement(rect: {
   }
 }
 
-// ── Resolve the (not-yet-existing) explicit API at call time ─────────
+// ── Resolve the explicit API at call time ─────────
 //
-// Each returns `undefined` until the implementer adds the export. The
-// tests below call them, so an absent export throws ("not a function") —
-// a RED behavioural failure, which is what TDD wants here.
+// Each helper asserts the export is a function before calling it, so an absent
+// export surfaces as a clear assertion failure rather than a TypeError.
 
 interface MaybeModule {
   // measurePlacement(target): Placement — pure measure, no IPC.
@@ -154,7 +151,7 @@ function measurePlacement(target: HTMLElement): ExpectedPlacement {
   const fn = mod.measurePlacement
   expect(
     typeof fn,
-    'explicit API `measurePlacement` is not implemented yet (expected a function export from view-anchor)',
+    'explicit API `measurePlacement` must be a function export from view-anchor',
   ).toBe('function')
   return fn!(target)
 }
@@ -169,7 +166,7 @@ function createPlacementAnchor(
   const fn = mod.createPlacementAnchor
   expect(
     typeof fn,
-    'explicit API `createPlacementAnchor` is not implemented yet (expected a function export from view-anchor)',
+    'explicit API `createPlacementAnchor` must be a function export from view-anchor',
   ).toBe('function')
   return fn!(target, opts)
 }

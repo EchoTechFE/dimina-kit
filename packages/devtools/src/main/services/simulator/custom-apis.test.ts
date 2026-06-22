@@ -1,21 +1,16 @@
 /**
- * Failing-first contract tests for the simulator custom-API registry.
+ * Contract tests for the simulator custom-API registry.
  *
- * The module under test (`./custom-apis`) does not exist yet — these tests
- * pin down the public contract from `createSimulatorApiRegistry()` and the
- * shared singleton `simulatorApiRegistry`. No Electron / IPC mocking: the
- * registry is plain TS.
+ * These tests pin down the public contract from `createSimulatorApiRegistry()`
+ * and the shared singleton `simulatorApiRegistry`. No Electron / IPC mocking:
+ * the registry is plain TS.
  *
  * Each test describes the bug it would catch if the implementation regresses.
- *
- * Note: imports are deliberately dynamic (`await import(...)`) so the test
- * file typechecks before the implementation lands; the suite still fails at
- * runtime ("Cannot find module './custom-apis'") until the module is added.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-// Public-contract type aliases (kept loose so the suite typechecks before the
-// real module exists; the runtime import below will fail until it does).
+// Public-contract type aliases (kept loose, independent of the real module's
+// exact types).
 type SimulatorApiHandler = (params: unknown) => unknown | Promise<unknown>
 interface SimulatorApiRegistry {
   register(name: string, handler: SimulatorApiHandler): () => void
@@ -77,7 +72,7 @@ describe('createSimulatorApiRegistry — invoke', () => {
   it('awaits and resolves with the handler\'s async return value (catches: invoke returning the Promise instead of awaiting, or not handling async at all)', async () => {
     const reg = createSimulatorApiRegistry()
     reg.register('slow', async (p: unknown) => {
-      await new Promise((r) => setTimeout(r, 5))
+      await new Promise((r) => setTimeout(r, 0))
       return { ok: true, p }
     })
     await expect(reg.invoke('slow', 'hello')).resolves.toEqual({ ok: true, p: 'hello' })

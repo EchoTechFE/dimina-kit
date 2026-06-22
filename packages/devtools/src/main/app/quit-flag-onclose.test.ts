@@ -397,8 +397,8 @@ describe('mainWindow onClose honours the app-quit flag', () => {
       emit: (event: string, ...args: unknown[]) => void
     }).emit('close', fakeEvent)
 
-    // Give any (incorrect) async closeProject a chance to run.
-    await new Promise((r) => setTimeout(r, 50))
+    // Drain a macrotask so any (incorrect) async closeProject would run.
+    await new Promise((r) => setTimeout(r, 0))
 
     expect(
       prevented,

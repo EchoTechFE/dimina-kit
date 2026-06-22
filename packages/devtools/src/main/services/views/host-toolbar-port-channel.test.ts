@@ -1,10 +1,8 @@
 /**
- * Wave 3 R2 — HostToolbarControl gated narrow channel (MessagePort edition),
- * MAIN-PROCESS side. TDD-RED: `hostToolbar.onMessage` / `hostToolbar.send` do
- * not exist yet; every positive test here fails until R2 lands.
+ * HostToolbarControl gated narrow channel (MessagePort edition), MAIN-PROCESS
+ * side.
  *
- * Contract under test (codex three-round review; spike evidence
- * .repro/wave3-spike/RESULTS.md items 7/8/9):
+ * Contract under test:
  *
  *  - `hostToolbar.onMessage(channel, handler): Disposable` — CONTROL-level
  *    registration that survives toolbar page reloads / WC rebuilds (each new
@@ -25,7 +23,7 @@
  *    malformed envelopes are DROPPED (no throw — toolbar content is
  *    host-arbitrary, same blast-radius posture as the sender-policy tests).
  *
- * IMPLEMENTATION SEAMS PINNED BY THIS FILE (implementer must follow):
+ * IMPLEMENTATION SEAMS PINNED BY THIS FILE:
  *  - handshake channel literal: 'view:host-toolbar:port' (add as
  *    `ViewChannel.HostToolbarPort` in src/shared/ipc-channels.ts).
  *  - did-finish-load and destroyed hooks registered via `wc.on(...)` (the
@@ -432,8 +430,8 @@ describe('R2 inbound: port1 message envelopes → control-level onMessage regist
     const mgr = createViewManager(ctx)
     const toolbar = portApi(mgr)
 
-    // Guard first so this test is RED pre-implementation (a missing method
-    // would make the throw-assertions pass vacuously via TypeError).
+    // Guard first so the throw-assertions below cannot pass vacuously via a
+    // TypeError from a missing method.
     expect(typeof toolbar.onMessage).toBe('function')
 
     expect(() => toolbar.onMessage('', () => {})).toThrow()

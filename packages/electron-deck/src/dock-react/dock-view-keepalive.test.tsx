@@ -1,10 +1,9 @@
 /**
- * FAILING TDD spec (red phase) for the DOM-panel KEEPALIVE contract (gap A3).
+ * Contract spec for the DOM-panel KEEPALIVE contract (gap A3).
  *
  * Mirrors the harness/fixtures of `dock-view.test.tsx`. These tests describe the
- * DESIRED behavior of `<DockView>` after keepalive lands; they FAIL against the
- * current impl, where `renderActiveBody` renders ONLY the active panel's body and
- * UNMOUNTS every inactive DOM panel.
+ * keepalive behavior of `<DockView>`: `renderActiveBody` keeps every DOM panel
+ * MOUNTED across tab switches, hiding inactive ones rather than UNMOUNTING them.
  *
  * ── THE CONTRACT (what the implementer must honor) ──────────────────────────
  *

@@ -41,7 +41,7 @@
  * host-toolbar-height-mode-validation.test.ts (vitest mocks are per-file;
  * main-process suites must vi.mock('electron')).
  *
- * RED today: `getHostToolbarHeight` does not exist on the ViewManager.
+ * Guards that `getHostToolbarHeight` exists on the ViewManager.
  */
 import { describe, it, expect, vi } from 'vitest'
 
