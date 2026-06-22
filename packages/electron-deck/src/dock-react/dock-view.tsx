@@ -220,6 +220,13 @@ export function DockView(props: DockViewProps): ReactNode {
 			// self-split (M1).
 			const draggedGroupId = findPanelGroupId(model.get().root, draggedPanelId)
 
+			// ── PanelCapabilities gate (GOAL A source): a `draggable:false` panel is
+			// a locked STRUCTURAL panel — it can never be torn into another region.
+			// UI drag-start already refuses to lift it, but the imperative drop seam
+			// bypasses that, so reject a locked dragged source here too (defense in
+			// depth) — its position in the tree is fixed. ──
+			if (registry.get(draggedPanelId)?.draggable === false) return
+
 			// ── PanelCapabilities gate (GOAL A target): a group whose ACTIVE panel is
 			// `draggable:false` is a locked drop ANCHOR — nothing may join or split
 			// against it, in any zone. Checked before the no-op/reorder logic so a
