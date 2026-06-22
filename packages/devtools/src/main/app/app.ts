@@ -288,6 +288,22 @@ function wireAppWindowEvents(config: WorkbenchAppConfig, instance: WorkbenchAppI
       // swallowed into closeProject(), so the app can never be quit while a
       // project is open.
       if (isAppQuitting()) return
+
+      // A close arriving while a project teardown is already in flight (the
+      // user rapid-double-clicked the close button) MUST keep the window open.
+      // This guard runs BEFORE hasActiveSession() on purpose: `closeProject()`
+      // → `disposeSession()` synchronously nulls the active session before it
+      // finishes awaiting `session.close()`, so by the time the second close
+      // arrives `hasActiveSession()` is already false. With the old guard order
+      // that second close fell straight through the hasActiveSession() check
+      // WITHOUT `preventDefault()`, so Electron destroyed the last window →
+      // `window-all-closed` → `app.quit()`, quitting the whole app on a
+      // double-click. Swallow the re-entrant close and keep the window.
+      if (closing) {
+        e.preventDefault()
+        return
+      }
+
       if (!context.workspace.hasActiveSession()) return
 
       // Close button while a project session is open: stay in the workbench
@@ -297,7 +313,6 @@ function wireAppWindowEvents(config: WorkbenchAppConfig, instance: WorkbenchAppI
       // unable to invoke anything, so subsequent clicks on Import/etc. would
       // raise `No handler registered for ...`.
       e.preventDefault()
-      if (closing) return
       closing = true
       try {
         if (config.onBeforeClose) {
