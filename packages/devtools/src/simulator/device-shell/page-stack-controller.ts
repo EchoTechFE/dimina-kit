@@ -266,12 +266,21 @@ export function reduceSwitchTab(
 // ── Mount enumeration ───────────────────────────────────────────────────
 
 /**
- * Returns the union of pages that must remain mounted in the DOM:
- * (a) the current visible stack and (b) every tab's preserved substack.
+ * Returns the union of pages that must remain mounted in the DOM: every tab's
+ * preserved substack plus any visible-stack pages not already covered (the
+ * tab-less navigateTo case). Dedupes by bridgeId; only the current
+ * top-of-stack entry is `visible: true`.
  *
- * Dedupes by bridgeId. The entry pulled from the visible stack wins for
- * `visible` calculation. Only the topmost entry of `state.stack` renders
- * with `visible: true`.
+ * ORDER IS STABLE and must NOT depend on which tab is currently active. An
+ * Electron `<webview>` reloads its guest (fresh document, lost rendered DOM)
+ * whenever React reparents it — which happens if this list reorders between
+ * renders. Ordering by the active stack first would move the current tab to
+ * the front on every switchTab, reloading and thus BLANKING every
+ * already-rendered tab on return (the render data lives service-side and is
+ * not re-pushed on a render-host reload). So we iterate `tabStacks` in its
+ * stable insertion order and drive visibility purely off the `visible` flag +
+ * CSS — never DOM position (only one page shows at a time, so DOM order is
+ * cosmetically irrelevant).
  */
 export interface MountedEntry {
   entry: PageEntry
@@ -281,16 +290,19 @@ export interface MountedEntry {
 export function enumerateMounted(state: ShellState): MountedEntry[] {
   const byBridgeId = new Map<string, MountedEntry>()
   const topId = state.stack[state.stack.length - 1]?.bridgeId
-  for (const entry of state.stack) {
-    byBridgeId.set(entry.bridgeId, { entry, visible: entry.bridgeId === topId })
-  }
-  for (const entries of Object.values(state.tabStacks)) {
-    for (const entry of entries) {
-      if (!byBridgeId.has(entry.bridgeId)) {
-        byBridgeId.set(entry.bridgeId, { entry, visible: false })
-      }
+  const add = (entry: PageEntry): void => {
+    if (!byBridgeId.has(entry.bridgeId)) {
+      byBridgeId.set(entry.bridgeId, { entry, visible: entry.bridgeId === topId })
     }
   }
+  // Tab substacks first, in stable insertion order. The visible stack is
+  // mirrored into tabStacks[currentTabPath], so the active page is covered
+  // here at its fixed position; the trailing loop only adds tab-less
+  // navigateTo'd pages.
+  for (const entries of Object.values(state.tabStacks)) {
+    for (const entry of entries) add(entry)
+  }
+  for (const entry of state.stack) add(entry)
   return Array.from(byBridgeId.values())
 }
 

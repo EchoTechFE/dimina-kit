@@ -225,6 +225,30 @@ describe('enumerateMounted', () => {
     const visibleIds = mounted.filter((m) => m.visible).map((m) => m.entry.bridgeId)
     expect(visibleIds).toEqual([page2.bridgeId])
   })
+
+  it('keeps a STABLE mount order across switchTab (active tab must not reorder the list)', () => {
+    // A reordering mount list reparents the `<webview>` nodes in the DOM, which
+    // reloads their Electron guests and blanks already-rendered tabs on return.
+    // So the order must be identical no matter which tab is currently active.
+    const { state: s0, tabA, tabB } = buildStateWithTabANavigations([])
+    const page1 = makeEntry({ pagePath: 'pages/detail/index' })
+    const { next: s1 } = reduceNavigateTo(s0, page1) // tabA: [tabA, page1]
+    const { next: s2 } = reduceSwitchTab(s1, tabB.pagePath, tabB) // tabB active
+    const orderTabB = bridgeIds(enumerateMounted(s2).map((m) => m.entry))
+    const { next: s3 } = reduceSwitchTab(s2, tabA.pagePath, null) // back to tabA
+    const orderTabA = bridgeIds(enumerateMounted(s3).map((m) => m.entry))
+    const { next: s4 } = reduceSwitchTab(s3, tabB.pagePath, null) // back to tabB
+    const orderTabB2 = bridgeIds(enumerateMounted(s4).map((m) => m.entry))
+
+    expect(orderTabA).toEqual(orderTabB)
+    expect(orderTabB2).toEqual(orderTabB)
+    // All pages stay mounted regardless of order.
+    expect(orderTabB).toContain(tabA.bridgeId)
+    expect(orderTabB).toContain(page1.bridgeId)
+    expect(orderTabB).toContain(tabB.bridgeId)
+    // The visible flag still tracks the active top (tabB after the last switch).
+    expect(enumerateMounted(s4).filter((m) => m.visible).map((m) => m.entry.bridgeId)).toEqual([tabB.bridgeId])
+  })
 })
 
 // ── reLaunch ──────────────────────────────────────────────────────────────
