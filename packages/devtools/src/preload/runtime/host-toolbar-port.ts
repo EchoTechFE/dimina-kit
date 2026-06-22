@@ -19,7 +19,7 @@
  * envelope stays the single waist (same posture as the main side's
  * host-toolbar-port-channel.ts).
  *
- * Ordering reality this module absorbs (spike .repro/wave3-spike):
+ * Ordering reality this module absorbs:
  *  - The page script runs BEFORE the handshake can complete (the port is
  *    posted on did-finish-load). Page `send()`s issued before the port
  *    arrives go into a PENDING QUEUE and flush in order on handshake —

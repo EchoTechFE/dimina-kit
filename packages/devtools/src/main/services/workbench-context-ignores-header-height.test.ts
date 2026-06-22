@@ -5,18 +5,15 @@
  * returned context, even when the host configures one.
  *
  * Real bug each test catches:
- *  - If the implementer leaves `headerHeight: opts.headerHeight ?? 40` in
- *    the constructor, a host-configured 72 keeps flowing into
- *    `view-manager.ts` (`ctx.headerHeight ?? 40`) and the main process
- *    carves the WCV layout at y=72 while the renderer draws its fixed 40px
- *    toolbar — a 32px dead band between toolbar and views.
+ *  - Leaving `headerHeight: opts.headerHeight ?? 40` in the constructor lets a
+ *    host-configured 72 keep flowing into `view-manager.ts`
+ *    (`ctx.headerHeight ?? 40`) so the main process carves the WCV layout at
+ *    y=72 while the renderer draws its fixed 40px toolbar — a 32px dead band
+ *    between toolbar and views.
  *  - The "absent key" assertion (vs `toBe(undefined)`) also catches a
  *    half-removal that keeps the key with a default (`headerHeight: 40`):
  *    a present key invites downstream code to keep reading ctx instead of
  *    the layout call sites passing the constant explicitly.
- *
- * RED today: ctx.headerHeight is assigned in createWorkbenchContext
- * (workbench-context.ts), so the key exists with value 72 / 40.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 

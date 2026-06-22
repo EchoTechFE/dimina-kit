@@ -1,20 +1,14 @@
 /**
- * R3 — the MiniappRuntime contract must be on the package's PUBLIC export
- * surface (`.` entry → src/main/api.ts).
+ * The MiniappRuntime contract must be on the package's PUBLIC export surface
+ * (`.` entry → src/main/api.ts), so a downstream host is not forced onto
+ * `import type { WorkbenchContext } from '@dimina-kit/devtools/context'` (the
+ * whole internal grab-bag) and broken by every internal refactor.
  *
- * Today `src/main/runtime/miniapp-runtime.ts` exists but is reachable only by
- * deep-importing an internal path; a downstream host is forced onto
- * `import type { WorkbenchContext } from '@dimina-kit/devtools/context'` —
- * the whole internal grab-bag — and gets broken by every internal refactor.
- *
- * RED today (vitest): `api.ts` re-exports neither `asMiniappRuntime` nor the
- * `MiniappRuntime` type. Pattern mirrors api-ipc-registry-export.test.ts: the
- * barrel is read through a `Record<string, unknown>` cast so the missing
- * runtime export is a deliberate RUNTIME assertion failure, while the missing
- * TYPE export is expressed inversely via a `@ts-expect-error RED` marker that
- * turns into an unused-directive compile error (TS2578) the moment the
- * re-export lands — the implementer then deletes the directive, leaving the
- * type alias as the permanent compile-time guard.
+ * `api.ts` must re-export both `asMiniappRuntime` and the `MiniappRuntime` type.
+ * Pattern mirrors api-ipc-registry-export.test.ts: the barrel is read through a
+ * `Record<string, unknown>` cast so a missing runtime export is a RUNTIME
+ * assertion failure, while the type re-export is pinned by the `MiniappRuntime`
+ * type alias below as a permanent compile-time guard.
  */
 import { describe, expect, it, vi } from 'vitest'
 import type * as Barrel from './api.js'
@@ -41,7 +35,7 @@ async function loadBarrel(): Promise<Record<string, unknown>> {
 }
 
 describe('R3: api.ts re-exports the MiniappRuntime contract', () => {
-  it('exposes `asMiniappRuntime` from the package root barrel [RED today]', async () => {
+  it('exposes `asMiniappRuntime` from the package root barrel', async () => {
     // Real bug: the contract module exists but stays internal — downstream
     // hosts can't adopt it without deep-importing dist paths, so they keep
     // depending on `/context` and the contract never actually decouples them.
@@ -53,7 +47,7 @@ describe('R3: api.ts re-exports the MiniappRuntime contract', () => {
     expect(typeof api.asMiniappRuntime).toBe('function')
   })
 
-  it('the barrel `asMiniappRuntime` is the SAME function as the internal one [RED today]', async () => {
+  it('the barrel `asMiniappRuntime` is the SAME function as the internal one', async () => {
     // Real bug: api.ts grows a second, divergent helper (e.g. a projection
     // copy) instead of re-exporting the sentinel-bearing original — the
     // assignment-compat sentinel then no longer guards what hosts call.
@@ -62,7 +56,7 @@ describe('R3: api.ts re-exports the MiniappRuntime contract', () => {
     expect(api.asMiniappRuntime).toBe(internal.asMiniappRuntime)
   })
 
-  it('the barrel `asMiniappRuntime` is an identity return [RED today]', async () => {
+  it('the barrel `asMiniappRuntime` is an identity return', async () => {
     // Real bug: a wrapper/projection return breaks a downstream host's monkey-patch of
     // workspace.openProject (it would patch a dead copy).
     const api = await loadBarrel()
@@ -73,9 +67,9 @@ describe('R3: api.ts re-exports the MiniappRuntime contract', () => {
   })
 
   it('also re-exports the `MiniappRuntime` type-only symbol [inverse marker — see header]', () => {
-    // The real assertion is the `@ts-expect-error RED(R3)` marker on the
-    // `Barrel.MiniappRuntime` alias at the top of this file; this `it` exists
-    // so the contract surfaces in the test report and the pin stays consumed.
+    // The real assertion is the `Barrel.MiniappRuntime` type alias at the top
+    // of this file; this `it` exists so the contract surfaces in the test
+    // report and the pin stays consumed.
     expect(_barrelTypePin).toBeUndefined()
   })
 })

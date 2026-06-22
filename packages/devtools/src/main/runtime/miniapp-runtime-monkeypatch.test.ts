@@ -1,5 +1,5 @@
 /**
- * R3 — runtime sentinel: `asMiniappRuntime` over a REAL `createWorkbenchContext`.
+ * Runtime sentinel: `asMiniappRuntime` over a REAL `createWorkbenchContext`.
  *
  * The contract is a typed VIEW onto the live context, not a snapshot/projection
  * — that is what makes a downstream host's permission gate work: the host monkey-patches
@@ -15,9 +15,9 @@
  *    monkey-patch contract breaks at runtime even though the (non-readonly)
  *    type still compiles. → writability + interception assertions.
  *
- * GREEN today by design for the workspace half (the current literal-object
- * service is writable); RED-relevant the moment an implementer hardens the
- * service while landing R3. Electron/fs mock pattern mirrors
+ * The workspace half holds because the service is a writable literal object;
+ * these assertions fail if the service is ever hardened (frozen / get-trapped /
+ * non-writable `openProject`). Electron/fs mock pattern mirrors
  * workbench-context-ignores-panels.test.ts.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'

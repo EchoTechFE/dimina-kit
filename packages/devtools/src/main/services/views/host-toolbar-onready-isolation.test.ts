@@ -1,7 +1,5 @@
 /**
- * Codex review MAJOR ① — onReady handler EXCEPTION ISOLATION.
- *
- * Today's bug, verified against source (host-toolbar-port-channel.ts):
+ * onReady handler EXCEPTION ISOLATION. Without it (host-toolbar-port-channel.ts):
  *
  *  - normal fire path (`fireReadyHandlers`, :179): handlers run bare inside a
  *    plain for-loop — one handler throwing ABORTS the loop (later-registered
@@ -26,8 +24,8 @@
  * Electron mock + harness: copied from host-toolbar-onready.test.ts (vitest
  * mocks are per-file; main-process suites must vi.mock('electron')).
  *
- * RED today: the isolation tests fail on both paths (sibling skipped /
- * exception escapes).
+ * Guards isolation on both paths: a failing handler must not skip its sibling
+ * and must not let the exception escape.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 

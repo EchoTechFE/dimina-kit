@@ -1,9 +1,7 @@
 /**
- * Workbench model refactor — "收尾", Requirement A:
- * the module-assembly route is no longer part of the package's PUBLIC
- * export surface.
- *
- * `docs/workbench-model.md` ("撤模块组装公共导出"；模块组装路线本身保留，仅撤对外导出):
+ * The module-assembly route is not part of the package's PUBLIC export surface,
+ * but the mechanism survives for devtools-internal use (see
+ * `docs/workbench-model.md`).
  *
  *  A1. `src/main/api.ts` (the package root barrel) no longer re-exports the
  *      `register*Ipc` functions: registerAppIpc / registerSimulatorIpc
@@ -18,9 +16,9 @@
  *  A4. GUARDRAIL — the mechanism itself SURVIVES for devtools-internal use:
  *      the surviving `src/main/ipc/*.ts` implementation files still exist,
  *      and `src/main/ipc/index.ts` still internally re-exports the surviving
- *      `register*Ipc` functions. This catches an implementer who "deletes
- *      too far" and removes the internal module-assembly plumbing that
- *      `app.ts` / `registerBuiltinModules` still depends on.
+ *      `register*Ipc` functions. This catches a "deletes too far" change that
+ *      removes the internal module-assembly plumbing that `app.ts` /
+ *      `registerBuiltinModules` still depends on.
  *
  * A1/A2/A3 pin that the barrel exports, the ./ipc-* subpaths, and the
  * typesVersions entries are all gone. A4 pins that the internal
@@ -172,8 +170,8 @@ describe('Requirement A3: package.json `typesVersions` drops the ipc-* mappings'
 
 describe('Requirement A4 (guardrail): module-assembly plumbing survives for internal use', () => {
   it('the src/main/ipc/*.ts implementation files still exist', async () => {
-    // Catches: an implementer deleting the implementation instead of just the
-    // public export face. `app.ts` / `registerBuiltinModules` still need these.
+    // Catches deleting the implementation instead of just the public export
+    // face. `app.ts` / `registerBuiltinModules` still need these.
     // (panels.ts / toolbar.ts are intentionally absent — deleted with the
     // panel:eval + host-toolbar decommission.)
     for (const file of [

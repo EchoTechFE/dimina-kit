@@ -17,13 +17,13 @@ import { writeUntilPredicate } from './watch-rebuild.testutil.js'
  */
 
 /**
- * LEAK-PROOFING WAVE (项目关闭时保证编译子进程同步关闭) — REAL-PROCESS
- * integration contract. Nothing in this file mocks `child_process`: every
- * test forks the actual `compile-worker-entry` (and, for the `openProject`
- * tests, runs the actual `@dimina/compiler`) and asserts on REAL process
- * death via `process.kill(pid, 0)` (ESRCH ⇒ the PID is gone).
+ * REAL-PROCESS integration contract: a closed project must take its compile
+ * worker down with it. Nothing in this file mocks `child_process`: every test
+ * forks the actual `compile-worker-entry` (and, for the `openProject` tests,
+ * runs the actual `@dimina/compiler`) and asserts on REAL process death via
+ * `process.kill(pid, 0)` (ESRCH ⇒ the PID is gone).
  *
- * Why these tests exist on top of the existing mocked-fork suite
+ * Why these tests exist on top of the mocked-fork suite
  * (`compile-worker.test.ts` pins `child.kill` was CALLED): a kill() spy
  * proves intent, not death. The two leak classes this file closes:
  *
@@ -40,12 +40,11 @@ import { writeUntilPredicate } from './watch-rebuild.testutil.js'
  *    actually dead (not merely "kill was invoked"), including when a build
  *    is in flight at close time.
  *
- * PID discovery (decision recorded for the implementer): NO new public API
- * is pinned for exposing the worker PID. The worker is discovered externally
- * via a `ps -axo pid=,ppid=,command=` scan for children of THIS test process
- * whose command line contains `compile-worker-entry`. That keeps the
- * contract purely behavioral — if the implementation later wants to expose
- * `worker.pid`, nothing here constrains it either way.
+ * PID discovery: NO public API is pinned for exposing the worker PID. The
+ * worker is discovered externally via a `ps -axo pid=,ppid=,command=` scan for
+ * children of THIS test process whose command line contains
+ * `compile-worker-entry`. That keeps the contract purely behavioral — exposing
+ * `worker.pid` later is unconstrained either way.
  *
  * CI stability: all death checks are bounded polls (8s deadline, 100ms
  * interval), and every discovered/forked PID is SIGKILLed in cleanup so a
@@ -302,13 +301,12 @@ describe('② session.close() — the worker PID is ACTUALLY dead afterwards (re
 	}, 90_000)
 
 	/**
-	 * CODEX-REVIEW REGRESSION (M3): the tests above tolerate an 8s post-close
-	 * death poll. The actual contract is stronger — `await session.close()`
-	 * must RETURN only after the worker already exited (close() awaits the
-	 * child 'exit'), so the await itself is the death guarantee and no caller
-	 * ever needs a grace poll.
+	 * The tests above tolerate an 8s post-close death poll. The actual contract
+	 * is stronger — `await session.close()` must RETURN only after the worker
+	 * already exited (close() awaits the child 'exit'), so the await itself is
+	 * the death guarantee and no caller ever needs a grace poll.
 	 */
-	it("M3: await session.close() returns only AFTER the worker PID is already dead — the await IS the guarantee, no grace poll", async () => {
+	it("await session.close() returns only AFTER the worker PID is already dead — the await IS the guarantee, no grace poll", async () => {
 		const root = makeFixture()
 		const session = await devkit.openProject({
 			projectPath: root,

@@ -1,5 +1,5 @@
 /**
- * Phase 1 contract: workspace-service must delegate project-list operations
+ * Contract: workspace-service must delegate project-list operations
  * to the injected ProjectsProvider on the workbench context, falling back
  * to LocalProjectsProvider when no injection is supplied.
  *

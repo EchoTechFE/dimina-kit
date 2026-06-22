@@ -1,7 +1,6 @@
 /**
- * Wave 2 decommission — wire-level contract for the 'simulator' built-in
- * module: the host-injected toolbar cluster and the panel:eval channel are
- * deleted.
+ * Wire-level contract for the 'simulator' built-in module: the host-injected
+ * toolbar cluster and the panel:eval channel are deleted.
  *
  *   toolbar cluster — 'toolbar:getActions', 'toolbar:invoke'
  *     The `instance.toolbar.set()` host-button mechanism is removed outright
@@ -18,10 +17,10 @@
  * alive that can silently resurrect the deleted host-actions row.
  *
  * Seam: `simulatorModule.setup(ctx)` — the module that fans out into the
- * individual registrars — NOT the per-registrar functions. Deliberate: the
- * implementer may delete `toolbar.ts` / `panels.ts` outright (after panel:eval
- * goes, registerPanelsIpc registers nothing), and a test importing a deleted
- * file breaks for the wrong reason. The module survives either shape and is
+ * individual registrars — NOT the per-registrar functions. Deliberate:
+ * `toolbar.ts` / `panels.ts` may be deleted outright (with panel:eval gone,
+ * registerPanelsIpc registers nothing), and a test importing a deleted file
+ * would break for the wrong reason. The module survives either shape and is
  * exactly where a half-removed registrar would still be wired up.
  *
  * Wire names are STRING LITERALS (not the enums) so the test still compiles
@@ -29,8 +28,9 @@
  * under a new constant is caught too. Both `ipcMain.handle` AND `ipcMain.on`
  * are checked so a "moved the handle() to on()" half-removal can't slip by.
  *
- * RED today: simulator-module.ts wires registerToolbarIpc (toolbar.ts:10/15)
- * and registerPanelsIpc (panels.ts:10) which register all three channels.
+ * Guards the decommission: simulator-module.ts must NOT wire
+ * registerToolbarIpc (toolbar.ts:10/15) or registerPanelsIpc (panels.ts:10),
+ * neither of which may register any of the three channels.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 

@@ -1,5 +1,5 @@
 /**
- * P5 (codex #3) — turnkey `exposeDeckLayoutBridge()` preload helper.
+ * Turnkey `exposeDeckLayoutBridge()` preload helper.
  *
  * Today `exposeDeckBridge()` exposes only the host-service / event RPC bridge
  * (probe / invoke / onEvent). It does NOT wire the three slot-token LAYOUT
@@ -12,9 +12,9 @@
  * (`__electronDeckLayoutBridge`) — a `LayoutBridge`-shaped object so the
  * renderer does `createDeckLayoutClient({ bridge: window.__electronDeckLayoutBridge })`.
  *
- * RED today: `exposeDeckLayoutBridge` does not exist → reached through a typed
- * escape hatch on the imported preload module so the file COMPILES; the RED is
- * a "not a function" runtime failure, not a type error.
+ * `exposeDeckLayoutBridge` is reached through a typed escape hatch on the
+ * imported preload module, so the file COMPILES regardless of the exact export
+ * surface and the guard is a runtime check, not a type error.
  *
  * Reuses the fake `contextBridge` / `ipcRenderer` pattern from
  * `src/preload/index.test.ts` (vi.hoisted mock state so the vi.mock factory can
@@ -91,8 +91,8 @@ vi.mock('electron', () => ({
 }))
 
 // Pull in the SUT *after* vi.mock has registered. `exposeDeckLayoutBridge` is
-// not yet typed on the module — reach it through a loose shape so the file
-// COMPILES and the RED is a runtime "not a function".
+// reached through a loose shape so the file COMPILES regardless of the exact
+// module typing, with the guard enforced at runtime.
 const preloadModule = await import('./index.js')
 type ExposeLayoutBridge = (options?: { globalName?: string }) => void
 const exposeDeckLayoutBridge = (preloadModule as unknown as {
@@ -236,9 +236,9 @@ describe('exposeDeckLayoutBridge()', () => {
 		})
 	})
 
-	// ── B4: guard outside a preload ─────────────────────────────────────────────
-	describe('B4 — guard outside a preload', () => {
-		it('B4) throws a clear error when contextBridge / ipcRenderer are unavailable (mirrors exposeDeckBridge guard)', async () => {
+	// ── guard outside a preload ─────────────────────────────────────────────
+	describe('guard outside a preload', () => {
+		it('throws a clear error when contextBridge / ipcRenderer are unavailable (mirrors exposeDeckBridge guard)', async () => {
 			// Re-import the module under a fresh registry where `electron` has no
 			// contextBridge / ipcRenderer, so the guard fires.
 			vi.resetModules()

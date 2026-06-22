@@ -1,11 +1,7 @@
 /**
- * Wave 3 R2 — host-toolbar PRELOAD side of the gated narrow channel
- * (MessagePort edition). TDD-RED: `activateHostToolbarRuntime` currently only
- * installs the height advertiser; every positive test here fails until R2
- * extends it.
+ * Host-toolbar PRELOAD side of the gated narrow channel (MessagePort edition).
  *
- * Contract under test (codex three-round review; spike evidence
- * .repro/wave3-spike/RESULTS.md items 7/8/9 + the pending-queue footgun):
+ * Contract under test:
  *
  *  - On a PASSING guard, activation additionally:
  *      (a) exposes the page API via
@@ -15,7 +11,7 @@
  *          MessagePort itself must NEVER cross into the main world;
  *      (b) subscribes `ipcRenderer.on('view:host-toolbar:port', …)` to receive
  *          the transferred port (`event.ports[0]`).
- *  - PENDING QUEUE (spike: the page script runs BEFORE the handshake): page
+ *  - PENDING QUEUE (the page script runs BEFORE the handshake): page
  *    `send()`s issued before the port arrives must not throw and must flush
  *    IN ORDER once it does — otherwise the page's first message is dropped.
  *  - Envelope on the wire: `{ channel, payload }` both directions.
@@ -23,11 +19,10 @@
  *    handlers; malformed data is dropped without throwing; the unsubscribe
  *    function detaches.
  *  - Same-load duplicate handshake: the LATER port wins.
- *  - FAILING guard: zero footprint extends to R2 — no bridge key, no
- *    handshake listener (R1's zero-exposure posture, new surface).
+ *  - FAILING guard: zero footprint — no bridge key, no handshake listener.
  *
- * SEAMS PINNED (implementer must follow): bridge key `'diminaHostToolbar'`,
- * handshake channel `'view:host-toolbar:port'` (= the main-side literal in
+ * SEAMS PINNED: bridge key `'diminaHostToolbar'`, handshake channel
+ * `'view:host-toolbar:port'` (= the main-side literal in
  * host-toolbar-port-channel.test.ts; export as `ViewChannel.HostToolbarPort`).
  *
  * Module state is per-load in production (preload re-runs on reload), so each
@@ -135,11 +130,11 @@ async function boot(env: { argv: readonly string[]; isMainFrame: boolean } = { a
   return { electron, activated, expose, ipcOn, api, handshakeListener, deliverPort }
 }
 
-describe('R2 preload: bridge exposure (guard passes)', () => {
+describe('preload: bridge exposure (guard passes)', () => {
   it(`exposes '${BRIDGE_KEY}' with EXACTLY { send, onMessage } — functions only, no port object`, async () => {
-    // BUG CAUGHT: leaking the raw MessagePort (or any non-function) into the
-    // main world hands arbitrary toolbar content a raw pipe to main, bypassing
-    // the envelope/validation narrow waist this whole feature is.
+    // Leaking the raw MessagePort (or any non-function) into the main world
+    // hands arbitrary toolbar content a raw pipe to main, bypassing the
+    // envelope/validation narrow waist this whole feature is.
     const { activated, api } = await boot()
 
     expect(activated).toBe(true)
@@ -149,9 +144,9 @@ describe('R2 preload: bridge exposure (guard passes)', () => {
     expect(typeof api!.onMessage).toBe('function')
   })
 
-  it('subscribes the handshake channel and still installs the R1 height advertiser', async () => {
-    // Regression guard: extending activation must not displace the advertiser
-    // (the R1 incident would silently come back as height 0).
+  it('subscribes the handshake channel and still installs the height advertiser', async () => {
+    // Regression guard: extending activation must not displace the advertiser,
+    // which would silently bring back height 0.
     const { handshakeListener } = await boot()
     const advertiser = await import('./host-toolbar-advertiser.js')
 
@@ -160,10 +155,9 @@ describe('R2 preload: bridge exposure (guard passes)', () => {
   })
 })
 
-describe('R2 preload: zero footprint when the guard fails', () => {
+describe('preload: zero footprint when the guard fails', () => {
   it('no marker: neither the bridge key nor the handshake listener appears', async () => {
-    // The R1 zero-exposure posture extended to the new surface. BUG CAUGHT:
-    // exposing the bridge in EVERY defaultSession renderer (main window,
+    // Exposing the bridge in EVERY defaultSession renderer (main window,
     // settings, popover) hands all of them a toolbar-channel API.
     const { activated, expose, ipcOn } = await boot({ argv: NO_MARKER_ARGV, isMainFrame: true })
 
@@ -181,11 +175,10 @@ describe('R2 preload: zero footprint when the guard fails', () => {
   })
 })
 
-describe('R2 preload: outbound send + the pending queue', () => {
+describe('preload: outbound send + the pending queue', () => {
   it('sends issued BEFORE the port arrives do not throw and flush IN ORDER after the handshake', async () => {
-    // THE spike footgun (RESULTS.md R2 工程提示): the page script runs before
-    // the handshake completes; without a pending queue the first message of
-    // every load is silently dropped.
+    // The page script runs before the handshake completes; without a pending
+    // queue the first message of every load is silently dropped.
     const { api, deliverPort } = await boot()
     const port = makeDomPort()
 
@@ -217,9 +210,9 @@ describe('R2 preload: outbound send + the pending queue', () => {
   })
 
   it('same-load duplicate handshake: the LATER port wins for subsequent sends', async () => {
-    // BUG CAUGHT: holding the first port forever — main re-handshakes (e.g.
-    // a did-finish-load it considers fresh) and closes the old port1; a
-    // preload still sending on the old renderer end goes into the void.
+    // Holding the first port forever breaks re-handshakes: main closes the old
+    // port1 (e.g. a did-finish-load it considers fresh), and a preload still
+    // sending on the old renderer end goes into the void.
     const { api, deliverPort } = await boot()
     const portA = makeDomPort()
     const portB = makeDomPort()
@@ -233,7 +226,7 @@ describe('R2 preload: outbound send + the pending queue', () => {
   })
 })
 
-describe('R2 preload: inbound dispatch to page handlers', () => {
+describe('preload: inbound dispatch to page handlers', () => {
   it('a handler registered BEFORE the handshake receives a post-handshake host message (and delivery is wired live)', async () => {
     // Same-ordering reality as the pending queue: the page registers its
     // handlers at script-run time, before the port exists.

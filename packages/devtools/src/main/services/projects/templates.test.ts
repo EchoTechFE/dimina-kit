@@ -1,5 +1,5 @@
 /**
- * Phase 2 contract: `resolveTemplates(builtin, injected, mode)` merges the
+ * Contract: `resolveTemplates(builtin, injected, mode)` merges the
  * built-in template catalog with a host-injected catalog, honouring the
  * `builtinTemplates` policy on `WorkbenchAppConfig`.
  *

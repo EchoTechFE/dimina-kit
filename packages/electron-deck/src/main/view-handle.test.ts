@@ -1,8 +1,6 @@
 /**
- * Behavior tests for `ViewHandle` — the per-view orchestrator (keystone). The
- * implementation in `./view-handle.js` does NOT exist yet (TDD: these tests are
- * written first and are expected to be RED — module-not-found — until
- * `createViewHandle()` ships).
+ * Behavior tests for `ViewHandle` — the per-view orchestrator (keystone) —
+ * the `createViewHandle()` contract implemented in `./view-handle.js`.
  *
  * For THIS unit increment (view-handle.md「placeIn 与挂载」/「dispose（viewScope LIFO 序）」), a `ViewHandle` composes three
  * INJECTED primitives and nothing else (no deck-app, no Electron):
@@ -32,8 +30,8 @@
  *
  * `Placement` is mirrored locally (structurally identical to the
  * `@dimina-kit/view-anchor` export) — the same local-mirror pattern
- * `compositor.test.ts` uses for `NativeViewRef`/`ContentViewHost`, so the RED is
- * the missing `./view-handle.js` export, not an unrelated package resolution.
+ * `compositor.test.ts` uses for `NativeViewRef`/`ContentViewHost`, so a missing
+ * `./view-handle.js` export fails locally, not as an unrelated package resolution.
  */
 import { describe, it, expect, beforeAll } from 'vitest'
 import { createScope, type Scope } from './scope.js'
@@ -82,10 +80,7 @@ let createViewHandle: (deps: { nativeView: NativeView; scope: Scope }) => ViewHa
 
 beforeAll(async () => {
   // Cast via `unknown`: the real export shape need not match this local mirror
-  // exactly (the mirror is the contract under test). The `@ts-expect-error` that
-  // kept this RED before `view-handle.ts` existed was dropped on ship, exactly
-  // as that directive's own note instructed (an existing module makes the
-  // directive itself an error — a built-in reminder to drop it).
+  // exactly (the mirror is the contract under test).
   const mod = (await import('./view-handle.js')) as unknown as {
     createViewHandle: (deps: { nativeView: NativeView; scope: Scope }) => ViewHandle
   }
@@ -168,17 +163,17 @@ describe('placeIn — mounts + commits into the target window', () => {
 })
 
 // ═════════════════════════════════════════════════════════════════════════════
-// P0 — re-placement corruption (N3) [NEW PIN, FAILING-FIRST].
+// re-placement corruption.
 //
 // BACKGROUND: a SECOND `placeIn()` currently OVERWRITES the inner `current` /
 // `viewScope` while leaving the OLD viewScope ALIVE. When that old window later
 // closes, its per-window teardown reads the now-mutated `current` and detaches/destroys
 // the view that has since MOVED to the new window (cross-window corruption).
 //
-// THE FIX (pinned here): `placeIn()` on an ALREADY-PLACED handle THROWS (one
-// placeIn per handle; re-placement is NOT silent). The ONLY migration path is
-// `moveTo()`. These two tests are RED today: placeIn-twice silently overwrites
-// (no throw), and the overwrite is exactly the corruption A2 catches.
+// THE INVARIANT (pinned here): `placeIn()` on an ALREADY-PLACED handle THROWS
+// (one placeIn per handle; re-placement is NOT silent). The ONLY migration path
+// is `moveTo()`. These two tests guard against placeIn-twice silently
+// overwriting (no throw), which is exactly the corruption A2 catches.
 // ═════════════════════════════════════════════════════════════════════════════
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -910,8 +905,8 @@ describe('createViewHandle — moveTo (cross-window, moveTo cross-window migrati
   })
 
   // ───────────────────────────────────────────────────────────────────────────
-  // codex P0 round-3 pin (BUG 3) — a rehome/adopt FAILURE rolls back FULLY to
-  // source (no partial divergence between native + lifetime).
+  // a rehome/adopt FAILURE rolls back FULLY to source (no partial divergence
+  // between native + lifetime).
   //
   // Bug: the native dest commit + `current=dest` happened BEFORE Scope.adopt. If
   // adopt threw, the inner did NOT undo the native commit → the view was detached
@@ -922,7 +917,7 @@ describe('createViewHandle — moveTo (cross-window, moveTo cross-window migrati
   // (adopt rejects: "newParent scope is not alive"); the native dest compositor is
   // independent of its windowScope, so the native dest commit still lands first.
   // ───────────────────────────────────────────────────────────────────────────
-  it('codex P0 round-3 pin (BUG 3): a rehome/adopt failure leaves the view in SOURCE (re-mounted, current=src), rejects, no dest residue', async () => {
+  it('a rehome/adopt failure leaves the view in SOURCE (re-mounted, current=src), rejects, no dest residue', async () => {
     const { handle, srcHost, nativeView } = placeInSrc('v1')
     const { destHost, destWindowScope, dest } = makeDest()
     expect(srcHost.ids()).toContain('v1')
@@ -949,8 +944,8 @@ describe('createViewHandle — moveTo (cross-window, moveTo cross-window migrati
   })
 
   // ───────────────────────────────────────────────────────────────────────────
-  // codex P0 round-3 pin (BUG 4) — applyPlacement is a NO-OP while a moveTo is in
-  // flight (a stale source place frame cannot drive the view mid-migration).
+  // applyPlacement is a NO-OP while a moveTo is in flight (a stale source place
+  // frame cannot drive the view mid-migration).
   //
   // Bug: during the awaited migration (esp. the adopt window) `current` points at
   // dest while the SOURCE slot token is still registered → a stale source `place`
@@ -960,7 +955,7 @@ describe('createViewHandle — moveTo (cross-window, moveTo cross-window migrati
   // fence (adopt waits behind it), call applyPlacement during the park, and assert
   // NO setBounds fired; then release and let the move complete.
   // ───────────────────────────────────────────────────────────────────────────
-  it('codex P0 round-3 pin (BUG 4): an applyPlacement arriving while a moveTo is in flight is dropped (no setBounds mid-migration)', async () => {
+  it('an applyPlacement arriving while a moveTo is in flight is dropped (no setBounds mid-migration)', async () => {
     const { handle, nativeView } = placeInSrc('v1')
     const { destHost, destWindowScope, dest } = makeDest()
 
@@ -998,8 +993,8 @@ describe('createViewHandle — moveTo (cross-window, moveTo cross-window migrati
   })
 
   // ───────────────────────────────────────────────────────────────────────────
-  // codex P0 round-3 pin (BUG 5) — a concurrent dispose() is serialized with an
-  // in-flight moveTo (runs AFTER the move settles, not concurrently).
+  // a concurrent dispose() is serialized with an in-flight moveTo (runs AFTER
+  // the move settles, not concurrently).
   //
   // Bug: dispose closed the viewScope independently and could race an in-flight
   // move (the migrationLock only guarded moveTo) → corruption / double-teardown.
@@ -1008,7 +1003,7 @@ describe('createViewHandle — moveTo (cross-window, moveTo cross-window migrati
   // the park, assert it has NOT resolved (it is queued behind the move), then
   // release: the move completes, THEN dispose runs cleanly, destroying the view.
   // ───────────────────────────────────────────────────────────────────────────
-  it('codex P0 round-3 pin (BUG 5): dispose() during an in-flight moveTo waits for the move to settle, then disposes cleanly (view destroyed, no double-teardown)', async () => {
+  it('dispose() during an in-flight moveTo waits for the move to settle, then disposes cleanly (view destroyed, no double-teardown)', async () => {
     const { destHost: dHost, destWindowScope, dest } = makeDest()
 
     // A fresh placed handle WITH a destroy spy so we can observe the (single)

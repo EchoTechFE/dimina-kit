@@ -237,7 +237,7 @@ describe('DeckApp — shutdown()', () => {
 	}, 5000)
 })
 
-// ── Phase 3b: WireTransport integration via DeckAppOptions.wireTransport ──
+// ── WireTransport integration via DeckAppOptions.wireTransport ──
 
 type InvokeHandler = (
 	event: { sender: { id: number } },
@@ -283,9 +283,9 @@ describe('DeckApp — wireTransport integration', () => {
 		const ipcMain = createFakeIpcMain()
 		const app = new DeckApp({}, { wireTransport: { ipcMain } })
 		await app.start()
-		// P5 eager-arm: channels now armed at start — the slot-token Place /
-		// LayoutSubscribe handlers are registered eagerly (no longer lazily on the
-		// first anchored placeIn), so a slot-less app also registers all 4.
+		// Channels are armed at start — the slot-token Place / LayoutSubscribe
+		// handlers are registered eagerly (not lazily on the first anchored
+		// placeIn), so a slot-less app also registers all 4.
 		expect(ipcMain.handle).toHaveBeenCalledTimes(4)
 		const channels = ipcMain.handle.mock.calls.map(c => c[0] as string).sort()
 		expect(channels).toEqual(
@@ -401,7 +401,7 @@ describe('DeckApp — wireTransport integration', () => {
 		const app = new DeckApp({}, { wireTransport: { ipcMain } })
 		await app.start()
 		await app.shutdown()
-		// P5 eager-arm: channels now armed at start, so shutdown removes all 4
+		// Channels are armed at start, so shutdown removes all 4
 		// (the eagerly-registered Place / LayoutSubscribe handlers too).
 		expect(ipcMain.removeHandler).toHaveBeenCalledTimes(4)
 		const removed = ipcMain.removeHandler.mock.calls.map(c => c[0] as string).sort()
@@ -428,7 +428,7 @@ describe('DeckApp — wireTransport integration', () => {
 		expect(wc.send).toHaveBeenCalledTimes(1)
 	})
 
-	it('default senderPolicy treats _trustWebContents() entries as trusted (Phase 4 windows.trust path)', async () => {
+	it('default senderPolicy treats _trustWebContents() entries as trusted (windows.trust path)', async () => {
 		const ipcMain = createFakeIpcMain()
 		const app = new DeckApp(
 			{ hostServices: { ping: () => 'pong' as JsonValue } },
@@ -470,7 +470,7 @@ describe('DeckApp — wireTransport integration', () => {
 	})
 })
 
-// ── Phase 4: Electron assembly via DeckAppOptions.electron ──────────────
+// ── Electron assembly via DeckAppOptions.electron ──────────────
 
 interface FakeWebContentsLike extends MinimalWebContentsLike {
 	loadURL: ReturnType<typeof vi.fn> & MinimalWebContentsLike['loadURL']
@@ -1152,8 +1152,8 @@ describe('DeckApp — electron assembly', () => {
 		expect(mainWin.webContents.loadFile).not.toHaveBeenCalled()
 	})
 
-	// race regression: codex review #2 — preload 在 ipcMain handler 未注册时
-	// invoke 会失败。framework 必须保证 ipcMain.handle 早于 webContents.loadURL。
+	// preload 在 ipcMain handler 未注册时 invoke 会失败。framework 必须保证
+	// ipcMain.handle 早于 webContents.loadURL。
 	it('declared windows loadURL/loadFile fires AFTER ipcMain.handle is registered (race regression)', async () => {
 		const electron = createFakeElectron()
 		const ipcMain = createFakeIpcMain()
@@ -1190,7 +1190,7 @@ describe('DeckApp — electron assembly', () => {
 	})
 })
 
-// ── Review fix #2 R2 — mainWindow 'closed' triggers framework shutdown ──────
+// ── mainWindow 'closed' triggers framework shutdown ────────────────────────
 
 describe('DeckApp — mainWindow.closed → framework shutdown (#2 R2)', () => {
 	it('mainWindow.on("closed") triggers framework shutdown', async () => {
@@ -1236,15 +1236,12 @@ describe('DeckApp — mainWindow.closed → framework shutdown (#2 R2)', () => {
 	})
 })
 
-// ── v2 — mainWindow close-decision state machine ────────────────────────────
+// ── mainWindow close-decision state machine ─────────────────────────────────
 //
-// FAILURE-FIRST (TDD): these tests encode the v2 close-decision contract
-// (JSDoc on RuntimeBackend.onMainWindowClose + DeckApp). At authoring
-// time the implementation still wires only `closed` (legacy #2 R2), so the
-// `close`-handler tests below are expected to be RED until the close-decision
-// machine lands. The `closed → shutdown` regression test stays GREEN.
+// These tests encode the close-decision contract (JSDoc on
+// RuntimeBackend.onMainWindowClose + DeckApp).
 //
-// Contract under test (v2):
+// Contract under test:
 //   • framework registers a `close` handler (cancelable) on the main window.
 //   • close handler: ① always e.preventDefault(); ② if a decision is in
 //     flight → return (swallow, no re-dispatch); ③ else dispatch exactly one
@@ -1277,7 +1274,7 @@ describe('DeckApp — mainWindow close-decision machine (v2)', () => {
 		await app.start()
 		const mainWin = electron.browserWindows[0] as unknown as FakeBrowserWindow
 
-		// A 'close' handler must have been registered (v2).
+		// A 'close' handler must have been registered.
 		const closeListeners = mainWin._listeners.get('close') ?? []
 		expect(closeListeners.length).toBeGreaterThan(0)
 
@@ -1402,8 +1399,8 @@ describe('DeckApp — mainWindow close-decision machine (v2)', () => {
 		}
 	})
 
-	// 6 — REGRESSION (legacy #2 R2): a direct 'closed' (external destroy)
-	//     still triggers framework shutdown. Mirrors test at the #2 R2 block.
+	// 6 — REGRESSION: a direct 'closed' (external destroy) still triggers
+	//     framework shutdown.
 	it('regression: direct "closed" (external destroy) still triggers framework shutdown', async () => {
 		const electron = createFakeElectron()
 		const app = new DeckApp({}, { electron })
@@ -1418,7 +1415,7 @@ describe('DeckApp — mainWindow close-decision machine (v2)', () => {
 	})
 })
 
-// ── Review fix #3 R5/C2 — loadAssembledSources catches load errors ──────────
+// ── loadAssembledSources catches load errors ────────────────────────────────
 
 describe('DeckApp — loadURL failures do not reject start() (#3 R5/C2)', () => {
 	it('toolbar loadURL rejection is caught and start() resolves', async () => {
@@ -1500,9 +1497,8 @@ describe('DeckApp — loadURL failures do not reject start() (#3 R5/C2)', () => 
 		}
 	})
 
-	// SELF-AUTHORED test (implementer 自补) — types.ts 加 'load-failed' FrameworkEvent 后，
-	// safeLoad 在 catch 里 emitFrameworkEvent('load-failed', {...})，host 在 setup 内
-	// 订阅可观测到。codex 终审请重点 cross-check。
+	// types.ts 加 'load-failed' FrameworkEvent 后，safeLoad 在 catch 里
+	// emitFrameworkEvent('load-failed', {...})，host 在 setup 内订阅可观测到。
 	it('loadURL rejection emits FrameworkEvent "load-failed" with source + error', async () => {
 		const electron = createFakeElectron()
 		let receivedPayload: { source: WebviewSource, error: unknown } | null = null
@@ -1550,8 +1546,8 @@ describe('DeckApp — loadURL failures do not reject start() (#3 R5/C2)', () => 
 		}
 	})
 
-	// D3 regression — codex 四审：declared/runtime-created window 'closed' 时
-	// 必须把 webContents 从 trustedWcRefs 移除，避免 wc.id 复用 + 内存泄漏。
+	// declared/runtime-created window 'closed' 时必须把 webContents 从
+	// trustedWcRefs 移除，避免 wc.id 复用 + 内存泄漏。
 	it('declared window closed removes its webContents from trust set (D3)', async () => {
 		const electron = createFakeElectron()
 		const ipcMain = createFakeIpcMain()
@@ -1593,9 +1589,9 @@ describe('DeckApp — loadURL failures do not reject start() (#3 R5/C2)', () => 
 		await app.shutdown()
 	})
 
-	// D1 race regression — codex 四审：load-failed catch microtask 可能在 setup
-	// callback 内 await 之后才能 register listener 之前就跑过 → listener 错过。
-	// pending queue + 第一个 listener register 时 splice 消费应当兜住。
+	// load-failed catch microtask 可能在 setup callback 内 await 之后、register
+	// listener 之前就跑过 → listener 错过。pending queue + 第一个 listener
+	// register 时 splice 消费应当兜住。
 	it('load-failed pending payload is replayed to a listener registered AFTER an async setup boundary', async () => {
 		const electron = createFakeElectron()
 		let received: { source: WebviewSource, error: unknown } | null = null
@@ -1644,7 +1640,7 @@ describe('DeckApp — loadURL failures do not reject start() (#3 R5/C2)', () => 
 	})
 })
 
-// ── Review fix #4 R4/C3 — runShutdownCleanup ordering ──────────────────────
+// ── runShutdownCleanup ordering ────────────────────────────────────────────
 
 describe('DeckApp — shutdown cleanup ordering (#4 R4/C3)', () => {
 	it('window.destroy() is called BEFORE ipcMain.removeHandler() during shutdown', async () => {
@@ -1673,7 +1669,7 @@ describe('DeckApp — shutdown cleanup ordering (#4 R4/C3)', () => {
 	})
 })
 
-// ── Review fix #5 C6 — start() wraps assemble/bind in try and cleans up on throw ──
+// ── start() wraps assemble/bind in try and cleans up on throw ──────────────
 
 describe('DeckApp — start() rolls back on assembly failure (#5 C6)', () => {
 	it('BrowserWindow ctor throwing on the second (declared) window rejects start() and destroys mainWindow', async () => {
@@ -1709,7 +1705,7 @@ describe('DeckApp — start() rolls back on assembly failure (#5 C6)', () => {
 	})
 })
 
-// ── Review fix #6 R3 — emitFrameworkEvent + window-created replay ───────────
+// ── emitFrameworkEvent + window-created replay ─────────────────────────────
 
 describe('DeckApp — FrameworkEvents emission (#6 R3)', () => {
 	it('setup() can subscribe to window-created and observe replay for mainWindow / toolbar / declared windows', async () => {
@@ -1793,7 +1789,7 @@ describe('DeckApp — FrameworkEvents emission (#6 R3)', () => {
 	})
 })
 
-// ── Review fix #7 C5 — trust ref-count ──────────────────────────────────────
+// ── trust ref-count ────────────────────────────────────────────────────────
 
 describe('DeckApp — trust ref-count (#7 C5)', () => {
 	it('declared auto-trust + runtime.windows.trust() + dispose() → window remains trusted', async () => {
@@ -1834,7 +1830,7 @@ describe('DeckApp — trust ref-count (#7 C5)', () => {
 	})
 })
 
-// ── Review fix #8 R7 — toolbar follows mainWindow resize ────────────────────
+// ── toolbar follows mainWindow resize ──────────────────────────────────────
 
 describe('DeckApp — toolbar resize tracking (#8 R7)', () => {
 	it('mainWindow.on("resize") → toolbarView.setBounds updates with new content width', async () => {
@@ -1868,7 +1864,7 @@ describe('DeckApp — toolbar resize tracking (#8 R7)', () => {
 	})
 })
 
-// ── Review fix #12 C7 — half-state config check ─────────────────────────────
+// ── half-state config check ────────────────────────────────────────────────
 
 describe('DeckApp — wireTransport required when toolbar/windows declared (#12 C7)', () => {
 	it('electron + toolbar but no wireTransport → start() rejects with clear message', async () => {
@@ -1907,21 +1903,19 @@ describe('DeckApp — wireTransport required when toolbar/windows declared (#12 
 	})
 })
 
-// ── unified-lifetime P0: shadow map (observation-only, zero-regression) ──────
+// ── unified-lifetime: shadow map (observation-only) ─────────────────────────
 //
-// FAILURE-FIRST (TDD): this block pins the P0 切口 of the unified-lifetime
-// refactor (codex 定的真零回归 seam). The implementer will add, IN PARALLEL with
-// the existing trackedWindows.add/delete points (main-window assembly, declared
-// `config.windows`, runtime.windows.create, handleSubWindowClosed, doShutdown):
+// The shadow map mirrors the existing trackedWindows.add/delete points
+// (main-window assembly, declared `config.windows`, runtime.windows.create,
+// handleSubWindowClosed, doShutdown):
 //
 //   • `private rootScope = createScope()` (from ../main/scope.js)
 //   • `private lifetimeShadow: Map<MinimalWebContents, { window, windowScope }>`
 //     where `windowScope = rootScope.child()`
 //
-// P0 IS PURELY OBSERVATIONAL: the windowScopes own NO resources (no
-// destroy/trust/wire is moved onto them), and the shutdown path is UNCHANGED —
-// the shadow exists only to lay the foundation P1 will take over. The contract
-// the implementer must honour, pinned below:
+// The shadow is OBSERVATION-ONLY: the windowScopes own NO resources (no
+// destroy/trust/wire is moved onto them), and the shutdown path is unchanged.
+// Pinned contract:
 //
 //   (A) the shadow's KEY SET (per-window webContents) === the membership of
 //       `trackedWindows`, at every observable point;
@@ -1931,19 +1925,12 @@ describe('DeckApp — wireTransport required when toolbar/windows declared (#12 
 //   (C) at doShutdown the windowScopes release in LIFO order (children-first,
 //       reverse creation order) — matching the existing window-destroy order.
 //
-// Accessors the test agrees on (implementer may pick the internal shape; these
-// are the names this suite calls — all referenced via the typed escape hatch
-// below so a still-absent member fails at RUNTIME, not compile time):
+// Accessors this suite reaches via the typed escape hatch below:
 //
 //   • deck.__lifetimeShadow()  → the live Map<wc, { window, windowScope }>
 //   • deck.__rootScope()       → the root Scope (alive while the app lives)
 //   • deck.__assertLifetimeConsistent() → throws if (A) is violated; no-op else
-//
-// NOTE: these members do NOT exist yet, so each test here is RED until P0 lands.
-// We reach them through a loose-typed view (NOT @ts-expect-error on every call —
-// a single typed escape keeps the file compiling so the failures are RUNTIME
-// red, per the brief) so the suite RUNS and reports assertion/throw failures.
-describe('unified-lifetime P0: shadow map (observation-only, zero-regression)', () => {
+describe('unified-lifetime: shadow map (observation-only, zero-regression)', () => {
 	interface ShadowEntry {
 		window: MinimalBrowserWindow
 		windowScope: { readonly alive: boolean, on(ev: 'reset' | 'closed', cb: () => void): { dispose(): void } }
@@ -1953,9 +1940,7 @@ describe('unified-lifetime P0: shadow map (observation-only, zero-regression)', 
 		__rootScope(): { readonly alive: boolean }
 		__assertLifetimeConsistent(): void
 	}
-	// Single typed escape hatch: surfaces the (not-yet-existent) P0 accessors so
-	// the calls below compile; absence then fails at RUNTIME (TypeError), which is
-	// exactly the RED we want for a TDD-first contract.
+	// Single typed escape hatch surfacing the internal lifetime accessors.
 	function lifetime(app: DeckApp): LifetimeView {
 		return app as unknown as LifetimeView
 	}
@@ -2146,8 +2131,7 @@ describe('unified-lifetime P0: shadow map (observation-only, zero-regression)', 
 
 	// 6 — doShutdown releases windowScopes in LIFO (children-first, reverse
 	//     creation order). We record each windowScope's 'closed' firing order and
-	//     assert it is the exact reverse of creation order — pinning the order so
-	//     P1 can rely on it without re-deriving teardown sequencing.
+	//     assert it is the exact reverse of creation order.
 	it('doShutdown releases windowScopes in LIFO (reverse creation) order', async () => {
 		const electron = createFakeElectron()
 		const app = new DeckApp(
@@ -2193,9 +2177,9 @@ describe('unified-lifetime P0: shadow map (observation-only, zero-regression)', 
 		expect(lifetime(app).__rootScope().alive).toBe(false)
 	})
 
-	// 7 — zero-regression guard: P0 must not change shutdown behaviour. With the
-	//     shadow in place, the legacy window-destroy + phase=quit contract still
-	//     holds exactly as the pre-P0 suite expects.
+	// 7 — zero-regression guard: the shadow must not change shutdown behaviour.
+	//     With the shadow in place, the window-destroy + phase=quit contract still
+	//     holds.
 	it('zero-regression: shadow does not alter shutdown — windows still destroyed and phase reaches quit', async () => {
 		const electron = createFakeElectron()
 		const app = new DeckApp(
@@ -2220,23 +2204,17 @@ describe('unified-lifetime P0: shadow map (observation-only, zero-regression)', 
 
 // ── unified-lifetime P1a: windowScope owns window destruction ────────────────
 //
-// FAILURE-FIRST (TDD): pins the P1a 切口 — destruction AUTHORITY moves from the
-// manual `for (win of trackedWindows) win.destroy()` loop in runShutdownCleanup
-// ONTO the Scope tree built in P0. After P1a:
+// Destruction AUTHORITY lives on the Scope tree, not a manual
+// `for (win of trackedWindows) win.destroy()` loop in runShutdownCleanup:
 //
 //   • each tracked window's windowScope (a child of rootScope, present in
 //     __lifetimeShadow()) OWNS `() => { if (!win.isDestroyed()) win.destroy() }`;
-//   • shutdown tears down by calling `rootScope.close()` — NOT the manual loop;
+//   • shutdown tears down by calling `rootScope.close()` — NOT a manual loop;
 //   • children-first LIFO keeps window destroys ahead of resource disposal
-//     (ipcMain.removeHandler) — same ordering the legacy loop guaranteed;
-//   • TRUST handling is explicitly UNCHANGED in P1a.
-//
-// Each test below is RED today because windowScope does NOT yet own destroy and
-// shutdown does NOT yet route through rootScope.close(). Reached through a single
-// typed escape hatch (the P1a LifetimeView) so absence fails at RUNTIME, not
-// compile time — the RED we want for a TDD-first contract.
+//     (ipcMain.removeHandler);
+//   • TRUST handling is unchanged here.
 describe('unified-lifetime P1a: windowScope owns window destruction', () => {
-	// Scope shape P1a relies on: alive + close() (Promise) + on('closed') sub.
+	// Scope shape this suite relies on: alive + close() (Promise) + on('closed') sub.
 	interface P1aScope {
 		readonly alive: boolean
 		close(): Promise<void>
@@ -2250,9 +2228,7 @@ describe('unified-lifetime P1a: windowScope owns window destruction', () => {
 		__lifetimeShadow(): Map<MinimalWebContents, P1aShadowEntry>
 		__rootScope(): P1aScope
 	}
-	// Single typed escape hatch (mirrors the P0 `lifetime()` pattern). The
-	// not-yet-owned close()/alive semantics surface here so the calls compile;
-	// they fail at RUNTIME until P1a lands.
+	// Single typed escape hatch surfacing the windowScope close()/alive semantics.
 	function lifetime(app: DeckApp): P1aLifetimeView {
 		return app as unknown as P1aLifetimeView
 	}
@@ -2335,8 +2311,8 @@ describe('unified-lifetime P1a: windowScope owns window destruction', () => {
 	})
 
 	// 3 — ordering: window destroys land BEFORE registry teardown
-	//     (ipcMain.removeHandler). Same spirit as the #4 R4/C3 test, but framed
-	//     as the Scope-driven (children-first LIFO) guarantee.
+	//     (ipcMain.removeHandler), as the Scope-driven (children-first LIFO)
+	//     guarantee.
 	it('Scope-driven LIFO: earliest window.destroy precedes earliest ipcMain.removeHandler', async () => {
 		const electron = createFakeElectron()
 		const ipcMain = createFakeIpcMain()
@@ -2410,14 +2386,13 @@ describe('unified-lifetime P1a: windowScope owns window destruction', () => {
 		expect(mainWin.destroy).toHaveBeenCalled()
 		expect(declaredWin.destroy).toHaveBeenCalled()
 		expect(app.phase).toBe('quit')
-		// P5 eager-arm: channels now armed at start (Invoke + Probe + Place +
-		// LayoutSubscribe), so quit removes all 4.
+		// Channels are armed at start (Invoke + Probe + Place + LayoutSubscribe),
+		// so quit removes all 4.
 		expect(ipcMain.removeHandler).toHaveBeenCalledTimes(4)
 	})
 
-	// 6 — trust UNCHANGED (P1a out-of-scope guard): a declared sub-window is
-	//     trusted while alive and untrusted after its 'closed'. P1a must NOT touch
-	//     this. Reuses the D3 invoke pattern.
+	// 6 — trust UNCHANGED: a declared sub-window is trusted while alive and
+	//     untrusted after its 'closed'.
 	it('trust unchanged: declared window trusted while alive, untrusted after "closed"', async () => {
 		const electron = createFakeElectron()
 		const ipcMain = createFakeIpcMain()
@@ -2445,7 +2420,7 @@ describe('unified-lifetime P1a: windowScope owns window destruction', () => {
 		expect(before.ok).toBe(true)
 		expect(before.result).toBe('pong')
 
-		// fire 'closed' → trust must be revoked (unchanged from pre-P1a behaviour)
+		// fire 'closed' → trust must be revoked
 		declaredWin._emit('closed')
 		await new Promise(r => setTimeout(r, 0))
 
@@ -2462,27 +2437,23 @@ describe('unified-lifetime P1a: windowScope owns window destruction', () => {
 
 // ── unified-lifetime P1b: wcScope owns trust leases ──────────────────────────
 //
-// FAILURE-FIRST (TDD): pins the P1b 切口 — a trusted webContents's TRUST becomes
-// a Scope-owned lease instead of an imperative trustSet.deleteEntry(wc) call in
-// the window's 'closed' handler. After P1b:
+// A trusted webContents's TRUST is a Scope-owned lease rather than an imperative
+// trustSet.deleteEntry(wc) call in the window's 'closed' handler:
 //
 //   • each trusted wc gets a `wcScope` = its window's windowScope.child() (which
-//     is itself a child of rootScope, both established in P0);
+//     is itself a child of rootScope);
 //   • the trust ref-count Disposable is wcScope.own(...)-ed — so trust is revoked
 //     by Scope teardown: window close → windowScope.close() cascades into the
 //     wcScope → leases dispose → ref-count hits 0 → wc leaves the trust set;
 //   • the framework's OWN auto-trust lease is ALSO owned by the wcScope, so the
 //     cascade zeroes it (no leaked forever-ref);
-//   • the imperative deleteEntry is removed — trust revocation is now a pure
+//   • there is no imperative deleteEntry — trust revocation is a pure
 //     Scope-teardown effect.
 //
-// The NEW accessor `__wcRecords()` (Map<wc, { wcScope, leases }>) is RUNTIME-
-// absent until P1b lands → that's the RED. Trust is asserted ONLY via the real
-// ipcMain invoke round-trip (trusted → ok, untrusted → DECK_UNTRUSTED_SENDER) —
-// never against trustSet internals. Reached through a single typed escape hatch
-// (mirrors the P0/P1a `lifetime()` pattern) so absence fails at RUNTIME.
+// Trust is asserted ONLY via the real ipcMain invoke round-trip (trusted → ok,
+// untrusted → DECK_UNTRUSTED_SENDER) — never against trustSet internals.
 describe('unified-lifetime P1b: wcScope owns trust leases', () => {
-	// Scope shape P1b relies on: alive + close() (Promise).
+	// Scope shape this suite relies on: alive + close() (Promise).
 	interface P1bScope {
 		readonly alive: boolean
 		close(): Promise<void>
@@ -2502,12 +2473,9 @@ describe('unified-lifetime P1b: wcScope owns trust leases', () => {
 	interface P1bLifetimeView {
 		__lifetimeShadow(): Map<MinimalWebContents, P1bShadowEntry>
 		__rootScope(): P1bScope
-		// NEW in P1b — RUNTIME-absent until implemented (the RED).
 		__wcRecords(): Map<MinimalWebContents, P1bWcRecord>
 	}
-	// Single typed escape hatch: surfaces the (not-yet-existent) __wcRecords()
-	// accessor so the calls compile; absence then fails at RUNTIME (TypeError),
-	// exactly the RED we want for a TDD-first contract.
+	// Single typed escape hatch surfacing the __wcRecords() accessor.
 	function lifetime(app: DeckApp): P1bLifetimeView {
 		return app as unknown as P1bLifetimeView
 	}
@@ -2754,10 +2722,10 @@ describe('unified-lifetime P1b: wcScope owns trust leases', () => {
 		await new Promise(r => setTimeout(r, 0))
 	})
 
-	// 7 — zero-regression guard for the WHOLE POINT of P1b: (a) the #7 C5 contract
-	//     (dispose one of two refs keeps trusted) still holds; (b) an auto-trusted
-	//     window with NO host ref is revoked PURELY by close — proving the
-	//     framework-held auto-trust ref is owned by the wcScope, not leaked forever.
+	// 7 — guard for both halves: (a) the trust ref-count contract (dispose one of
+	//     two refs keeps trusted) still holds; (b) an auto-trusted window with NO
+	//     host ref is revoked PURELY by close — proving the framework-held
+	//     auto-trust ref is owned by the wcScope, not leaked forever.
 	it('zero-regression: dispose-one-of-two keeps trusted; auto-trust-only window revoked purely by close', async () => {
 		const electron = createFakeElectron()
 		const ipcMain = createFakeIpcMain()
@@ -2777,7 +2745,7 @@ describe('unified-lifetime P1b: wcScope owns trust leases', () => {
 		const invoke = ipcMain.handlers.get(DeckChannel.Invoke)
 		if (!invoke) throw new Error('invoke handler missing')
 
-		// (a) #7 C5: 2nd ref taken then disposed → still trusted (ref-count 2→1).
+		// (a) 2nd ref taken then disposed → still trusted (ref-count 2→1).
 		const d = app.runtime.windows.trust(reauthWin as unknown as Runtime['mainWindow'])
 		expect(await isTrusted(invoke, wcId)).toBe(true)
 		d.dispose()

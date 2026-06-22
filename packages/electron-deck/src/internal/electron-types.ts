@@ -1,5 +1,5 @@
 /**
- * Phase 4 — minimal structural typing for the Electron surface the electron-deck
+ * Minimal structural typing for the Electron surface the electron-deck
  * framework needs to assemble its real windows / views. Tests inject a plain
  * object satisfying these shapes via {@link DeckAppOptions.electron};
  * the framework does **not** import 'electron' directly.
@@ -60,8 +60,8 @@ export interface MinimalContentView {
 	addChildView(view: MinimalWebContentsView): void
 	removeChildView(view: MinimalWebContentsView): void
 	/** The window's live child views (real Electron `View.children`). Used by the
-	 *  moveTo rollback to guard against removing a child the dest never added
-	 *  (codex P0 round-3 BUG 2). Optional so existing fakes stay valid; an absent
+	 *  moveTo rollback to guard against removing a child the dest never added.
+	 *  Optional so existing fakes stay valid; an absent
 	 *  array is treated as "membership unknown" by the guard's `?? []`. */
 	readonly children?: readonly MinimalWebContentsView[]
 }

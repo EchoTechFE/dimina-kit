@@ -11,8 +11,8 @@ import type { DeckConfig, DeckOptions, Runtime } from './types.js'
  *
  * - Invalid config → reject `TypeError`，phase 不前进
  * - Valid config → 装配 runtime + 调 `config.setup(runtime)` await 完成 →
- *   resolve。Phase 2 不接 Electron，resolve 后 framework 仍持有运行时；
- *   Phase 4 接 Electron app lifecycle 后，由 Electron event loop 撑住进程，
+ *   resolve。不接 Electron 时，resolve 后 framework 仍持有运行时；
+ *   接 Electron app lifecycle 后，由 Electron event loop 撑住进程，
  *   `electronDeck()` 同样 resolve（host 的 main 文件不需 await 阻塞）。
  *
  * backend host（如 devtools）走 `electronDeck({ backend })`——backend 是
@@ -24,8 +24,8 @@ import type { DeckConfig, DeckOptions, Runtime } from './types.js'
  */
 export async function electronDeck(config: DeckConfig, options?: DeckOptions): Promise<void> {
 	// Validate config BEFORE attempting electron resolution — invalid configs
-	// must reject with TypeError regardless of environment (matches Phase 1
-	// contract). Electron load failure is reported separately, only for
+	// must reject with TypeError regardless of environment. Electron load
+	// failure is reported separately, only for
 	// configs that would otherwise be acceptable.
 	validateConfig(config)
 	const resolved = await resolveAppOptions(options)
@@ -78,7 +78,7 @@ export function startElectronDeck(
 	// Mark `ready` as handled so a fire-and-forget caller (who never reads `ready`,
 	// e.g. `startElectronDeck(...)` then `dispose()`) does NOT trigger an
 	// unhandledRejection if startup fails — which under strict Electron handling can
-	// terminate the process (codex P1 review). The caller's own `await handle.ready`
+	// terminate the process. The caller's own `await handle.ready`
 	// still observes the rejection; this extra no-op handler only suppresses the
 	// "unhandled" classification, it does not swallow the error for the caller.
 	void ready.catch(() => {})

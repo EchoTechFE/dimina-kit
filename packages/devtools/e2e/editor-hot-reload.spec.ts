@@ -96,22 +96,30 @@ async function settleAfterRestore(
   mainWindow: import('@playwright/test').Page,
 ): Promise<void> {
   // The restore write itself triggers one watcher rebuild (~1-2s compile).
-  // Give it a generous fixed window, then confirm the toolbar is in a settled
-  // ("…完成") state.
-  await mainWindow.waitForTimeout(8000)
-  await pollUntil(
-    () =>
-      mainWindow.evaluate(() => {
-        const els = document.querySelectorAll('[class*="truncate"]')
-        for (const el of els) {
-          if ((el.textContent || '').includes('完成')) return true
-        }
-        return false
-      }),
-    (done) => done === true,
-    10000,
-    500,
-  ).catch(() => {})
+  // Wait for that rebuild to actually start (toolbar leaves the settled "完成"
+  // state into "编译中…/刷新中…"), bounded so a no-op restore doesn't stall,
+  // then wait for it to settle back to "…完成". This replaces a blind 8s sleep
+  // with condition-based waits — the common case finishes in ~2-3s.
+  const compileStatus = () =>
+    mainWindow.evaluate(() => {
+      const els = document.querySelectorAll('[class*="truncate"]')
+      for (const el of els) {
+        const t = el.textContent || ''
+        if (t.includes('完成')) return 'done'
+        if (t.includes('编译') || t.includes('刷新') || t.includes('...') || t.includes('…')) return 'building'
+      }
+      return 'unknown'
+    })
+  // Observe the rebuild kick off (toolbar flips to "编译中…"), bounded — a
+  // restore that produces identical output may never flip.
+  const sawBuilding = await pollUntil(compileStatus, (s) => s === 'building', 4000, 200)
+    .then((s) => s === 'building')
+    .catch(() => false)
+  // Only wait for the settle if a rebuild actually started; otherwise a stale
+  // pre-restore "完成" would let us return before the rebuild even runs.
+  if (sawBuilding) {
+    await pollUntil(compileStatus, (s) => s === 'done', 10000, 300).catch(() => {})
+  }
 }
 
 // How long the simulator gets to show fresh content after a save. The spike

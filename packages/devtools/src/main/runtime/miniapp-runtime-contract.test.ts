@@ -1,6 +1,6 @@
 /**
- * R3 — `MiniappRuntime` as a HAND-WRITTEN public contract (replaces the
- * `Pick<WorkbenchContext, …>` projection in `./miniapp-runtime.ts`).
+ * `MiniappRuntime` is a HAND-WRITTEN public contract, not a
+ * `Pick<WorkbenchContext, …>` projection.
  *
  * Why hand-written: `Pick` drags every nested internal service type
  * (ViewManager, BridgeRouterHandle, SimulatorApiRegistry, Electron
@@ -11,19 +11,11 @@
  * stays an identity return and doubles as the assignment-compat sentinel:
  * internal drift breaks compilation HERE, not in a downstream host's upgrade.
  *
- * ── RED / flip protocol ────────────────────────────────────────────────────
- * Type-level requirements cannot fail at vitest runtime without reddening
- * `check-types`, so (same as the existing type-guard tests, e.g.
- * api-ipc-registry-export.test.ts) they are expressed INVERSELY: each
- * `@ts-expect-error RED` marker below asserts TODAY'S gap in the Pick-based
- * contract. The moment R3 lands, every marker turns into an "unused
- * '@ts-expect-error' directive" (TS2578) compile error — the implementer MUST
- * delete the directive lines (and nothing else), which converts each marked
- * line into the permanent compile-time guard. Deleting a directive is the
- * designed GREEN transition, not goalpost-moving.
- *
- * Runtime-RED today (vitest): the "hand-written, not Pick-derived" source
- * assertion below fails against the current `= Pick<` implementation.
+ * Type-level requirements cannot fail at vitest runtime, so (same as the other
+ * type-guard tests, e.g. api-ipc-registry-export.test.ts) each
+ * `@ts-expect-error` marker below is a permanent compile-time guard: if a
+ * marked line ever compiles, the directive becomes an unused-directive error
+ * (TS2578).
  */
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -90,8 +82,8 @@ staticAssert<Not<HasKey<MiniappRuntime, 'connections'>>>()
 
 // `views` exposes ONLY `hostToolbar` — not the whole ViewManager.
 staticAssert<Not<HasKey<MiniappRuntime['views'], 'getSimulatorWebContents'>>>()
-// `getHostToolbarWebContentsId` was the pre-R2 workaround for reaching the
-// toolbar's webContents; retired in favour of `send`/`onMessage`.
+// `getHostToolbarWebContentsId` was a workaround for reaching the toolbar's
+// webContents; retired in favour of `send`/`onMessage`.
 staticAssert<Not<HasKey<MiniappRuntime['views'], 'getHostToolbarWebContentsId'>>>()
 
 // `views.hostToolbar` must NOT expose `webContents` (Electron type leak —
@@ -136,7 +128,7 @@ type ProjectStatusIsStrictlyVariant =
 staticAssert<ProjectStatusIsStrictlyVariant>()
 
 // ═════════════════════════════════════════════════════════════════════════
-// §5 Permanent compile pins (green today AND after R3 — regression guards).
+// §5 Permanent compile pins (regression guards).
 // ═════════════════════════════════════════════════════════════════════════
 
 // THE assignment-compat sentinel: a real WorkbenchContext must always satisfy
@@ -170,7 +162,7 @@ function _downstreamConsumptionPin(rt: MiniappRuntime): void {
     error: `denied: ${gatedPath}`,
   })
 
-  // views.hostToolbar — the post-R2 host surface (no webContents anywhere)
+  // views.hostToolbar — the host surface (no webContents anywhere)
   rt.views.hostToolbar.setPreloadPath('/downstream/toolbar-preload.cjs')
   rt.views.hostToolbar.setPreloadPath(null)
   const loadedFile: Promise<void> = rt.views.hostToolbar.loadFile('/downstream/toolbar.html')
@@ -213,7 +205,7 @@ const thisTestFile = import.meta.url.startsWith('file:')
 const contractSourcePath = path.join(path.dirname(thisTestFile), 'miniapp-runtime.ts')
 
 describe('MiniappRuntime contract (R3) — hand-written, Electron-free module', () => {
-  it('is hand-written: MiniappRuntime is NOT declared via a Pick<…> projection [RED today]', () => {
+  it('is hand-written: MiniappRuntime is NOT declared via a Pick<…> projection', () => {
     // Real bug: `Pick<WorkbenchContext, …>` puts every nested internal service
     // type on the public semver face — internal refactors of ViewManager /
     // bridge / storage types become breaking changes a downstream host discovers on
@@ -237,9 +229,9 @@ describe('MiniappRuntime contract (R3) — hand-written, Electron-free module', 
   })
 
   it('asMiniappRuntime is an identity return (typed view, not a projection object) [green pin]', () => {
-    // Real bug: an implementer "helpfully" returns a new object of copied
-    // members — a downstream host's monkey-patch of workspace.openProject then patches a
-    // dead copy and the permission gate silently stops gating.
+    // Real bug: returning a new object of copied members means a downstream
+    // host's monkey-patch of workspace.openProject patches a dead copy and the
+    // permission gate silently stops gating.
     const fake = { tag: 'fake-context' } as unknown as WorkbenchContext
     expect(asMiniappRuntime(fake)).toBe(fake)
   })

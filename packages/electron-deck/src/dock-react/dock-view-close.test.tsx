@@ -1,5 +1,5 @@
 /**
- * FAILING TDD spec for the NOT-YET-WRITTEN "panel close" affordance in
+ * Contract spec for the "panel close" affordance in
  * `<DockView>`. Mirrors the harness/fixtures of `dock-view.test.tsx`.
  *
  * NEW `data-*` contract this file pins down:

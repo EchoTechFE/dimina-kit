@@ -1,5 +1,5 @@
 /**
- * Phase 4: the create card is always the first item in the project list,
+ * The create card is always the first item in the project list,
  * even when `projects` is empty. The create card click must invoke the
  * `onCreate` callback the parent passed to the list (NOT `onAdd`, which
  * stays bound to the "导入" button).

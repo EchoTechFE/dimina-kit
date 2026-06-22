@@ -1,11 +1,11 @@
 /**
- * Phase 1 contract tests for the pure `difile://` request dispatcher.
+ * Contract tests for the pure `difile://` request dispatcher.
  *
  * Spec: `packages/devtools/docs/file-system.md` §4.3, §6 P1-2 / P1-3.
  *
- * Electron's `simSession.protocol.handle` is unreachable from vitest, so
- * the implementer is asked to factor the dispatch body out into an exported
- * pure function `handleDifileRequest(ctx, req): Promise<Response>` that:
+ * Electron's `simSession.protocol.handle` is unreachable from vitest, so the
+ * dispatch body is factored out into an exported pure function
+ * `handleDifileRequest(ctx, req): Promise<Response>` that:
  *
  *   - reads `_tmp/*` from the shared in-memory `TempFileStore`
  *   - reads `_store/*` and `usr/<rel>` from `disk.ts`

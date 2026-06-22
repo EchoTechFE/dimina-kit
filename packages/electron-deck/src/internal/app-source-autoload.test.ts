@@ -25,10 +25,9 @@ import type {
  *   • When an `ownsWindows: true` backend is present, `config.app.source` is
  *     IGNORED (the backend builds & loads its own window).
  *
- * At authoring time the implementation's `loadAssembledSources()` loads only the
- * toolbar + declared windows — never the main window from `config.app.source` —
- * so the positive tests are expected to be RED for the right reason (the main
- * window's loadURL/loadFile was never called).
+ * The positive tests assert that `loadAssembledSources()` also loads the main
+ * window from `config.app.source` (the main window's loadURL/loadFile is called),
+ * alongside the toolbar + declared windows.
  */
 
 // ── Fakes (mirroring deck-app.test.ts's Electron fakes) ─────────────────────

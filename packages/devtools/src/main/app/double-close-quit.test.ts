@@ -456,8 +456,8 @@ describe('double-close race: second close arriving during project teardown', () 
     const second = makeCloseEvent()
     emitClose(instance, second.event)
 
-    // Give the close handler a chance to run.
-    await new Promise((r) => setTimeout(r, 50))
+    // Drain a macrotask so the async close handler runs.
+    await new Promise((r) => setTimeout(r, 0))
 
     // In real Electron, a `close` event that is NOT preventDefault'd destroys
     // the window → window-all-closed → app.quit(). The JS mock cannot simulate
@@ -530,7 +530,7 @@ describe('double-close: existing single-close / no-session contracts still hold'
     const evt = makeCloseEvent()
     emitClose(instance, evt.event)
 
-    await new Promise((r) => setTimeout(r, 50))
+    await new Promise((r) => setTimeout(r, 0))
 
     expect(
       evt.prevented,

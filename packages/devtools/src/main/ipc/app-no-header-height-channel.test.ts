@@ -12,14 +12,14 @@
  *    desync this decommission removes. The channel must be gone at the
  *    wire level, regardless of what the host configures.
  *  - The wire name is asserted as a string literal (not via the enum) so
- *    the test still compiles after the implementer deletes the
- *    `GetHeaderHeight` enum entry, and so re-registering the same wire
+ *    the test still compiles after the `GetHeaderHeight` enum entry is
+ *    deleted, and so re-registering the same wire
  *    name under a new constant is also caught.
  *  - The companion sanity test pins that GetBranding is still registered —
  *    proving "channel absent" comes from targeted removal, not from
  *    registerAppIpc failing to register anything.
  *
- * RED today: app.ts line 16 registers AppChannel.GetHeaderHeight.
+ * Guards that app.ts does NOT register AppChannel.GetHeaderHeight.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 

@@ -1,16 +1,14 @@
 /**
- * ROUND 2 (dmcc 日志链路) — CompilePanel `logs` prop contract
- * (TDD, NOT yet implemented). Additive to the wave-1 compile-panel suite —
- * its `{ events, onClear }` assertions are untouched.
+ * CompilePanel `logs` prop contract (dmcc 日志链路). Additive to the base
+ * compile-panel suite — its `{ events, onClear }` assertions are untouched.
  *
  * Pinned contract:
- *  - `CompilePanel` gains an OPTIONAL `logs?: CompileLogEntry[]` prop
+ *  - `CompilePanel` carries an OPTIONAL `logs?: CompileLogEntry[]` prop
  *    (`{ at: number; stream: 'stdout' | 'stderr'; text: string }`,
- *    oldest-first like `events`). Optional + default empty, so every wave-1
- *    render without `logs` keeps its exact behaviour (incl. the 暂无编译
- *    empty state).
+ *    oldest-first like `events`). Optional + default empty, so a render
+ *    without `logs` keeps its exact behaviour (incl. the 暂无编译 empty state).
  *  - Log lines render as part of ONE timeline merged with events by `at`
- *    (newest first, matching the wave-1 row order). Merging is a VIEW
+ *    (newest first, matching the event row order). Merging is a VIEW
  *    concern — state stays isolated in useSession.
  *  - Log rows are identifiable: `[data-compile-log]` carrying
  *    `data-stream="stdout" | "stderr"` (the styling hook that makes stderr
@@ -29,7 +27,7 @@ interface CompileEvent {
   status: string
   message: string
   hotReload?: boolean
-  /** Shared monotonic arrival counter across events AND logs (codex m8). */
+  /** Shared monotonic arrival counter across events AND logs. */
   seq?: number
 }
 
@@ -37,7 +35,7 @@ interface CompileLogEntry {
   at: number
   stream: 'stdout' | 'stderr'
   text: string
-  /** Shared monotonic arrival counter across events AND logs (codex m8). */
+  /** Shared monotonic arrival counter across events AND logs. */
   seq?: number
 }
 
@@ -47,8 +45,8 @@ interface CompilePanelProps {
   onClear: () => void
 }
 
-// Same red-phase loading dodge as the wave-1 suite: the glob matches zero
-// modules until compile-panel.tsx exists.
+// The glob matches zero modules if compile-panel.tsx is absent, keeping a
+// missing module an assertion failure rather than an import-time throw.
 const compilePanelModules = import.meta.glob('./compile-panel.tsx')
 
 async function loadCompilePanel(): Promise<ComponentType<CompilePanelProps>> {
@@ -209,7 +207,7 @@ describe('CompilePanel: logs prop (ROUND 2 — dmcc 日志链路)', () => {
 })
 
 /**
- * CODEX-REVIEW REGRESSION (m8) — `at` is a Date.now() millisecond stamp, so a
+ * `at` is a Date.now() millisecond stamp, so a
  * status event and the log lines of the same compile routinely COLLIDE on the
  * same `at`. The current merge pushes ALL events first, then ALL logs, then
  * stable-sorts by `at` — so within a same-`at` tie, events always rank above
@@ -218,7 +216,7 @@ describe('CompilePanel: logs prop (ROUND 2 — dmcc 日志链路)', () => {
  * stores; any equivalent arrival marker works — only the rendered order is
  * pinned). Across different `at` values the newest-first order is untouched.
  */
-describe('CompilePanel: same-at ties keep arrival order, not type priority (codex m8)', () => {
+describe('CompilePanel: same-at ties keep arrival order, not type priority', () => {
   const T = at(14, 30, 0)
 
   it('a log line that ARRIVED before a same-at event renders above it', async () => {

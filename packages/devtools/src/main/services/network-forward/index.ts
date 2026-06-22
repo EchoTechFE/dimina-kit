@@ -14,8 +14,8 @@
  * `direct-request.ts`/`simulator-api-network.ts`, which call `fetch()` /
  * `XMLHttpRequest`). Those requests therefore go through the simulator WCV's
  * network stack — a DIFFERENT webContents than the one the DevTools front-end
- * inspects — so they were invisible in the Network panel after the native-host
- * refactor. THAT is the regression this service closes.
+ * inspects — so they are otherwise invisible in the Network panel. This service
+ * surfaces them.
  *
  * ── How it surfaces them (primary sink: native Network tab) ─────────────────
  * We attach the CDP `webContents.debugger` to the simulator WCV, `Network.enable`,
@@ -32,9 +32,8 @@
  * into a namespaced virtual id (`dimina:sim:<epoch>:<rawId>`) before dispatch,
  * keeping a raw→virtual map so redirects / extra-info / completion events on the
  * same request stay correlated. We inject on the MAIN session (no `sessionId`),
- * i.e. the events appear as activity on the currently-inspected target. This is
- * the one-shot approach the Codex review settled on; child-target routing
- * (`Target.attachedToTarget` + hooking outbound CDP) is explicitly deferred.
+ * i.e. the events appear as activity on the currently-inspected target. Child-
+ * target routing (`Target.attachedToTarget` + hooking outbound CDP) is deferred.
  *
  * ── Fallback sink (console line) ────────────────────────────────────────────
  * If the DevTools host wc is unavailable, or `window.DevToolsAPI.dispatchMessage`
@@ -134,7 +133,7 @@ export interface NetworkForwarder extends Disposable {
  * Anything carrying a requestId must be namespaced consistently — even methods
  * we don't (yet) forward — so the raw→virtual map stays coherent if forwarding
  * is widened later. `requestServedFromCache` and `resourceChangedPriority` are
- * included for that reason (MINOR: rewrite-only today, not forwarded).
+ * included for that reason (rewrite-only today, not forwarded).
  */
 export const REWRITE_REQUEST_ID_METHODS: ReadonlySet<string> = new Set([
   'Network.requestWillBeSent',
@@ -427,11 +426,10 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
 
   // The DevTools front-end host wc (primary sink), set by the ViewManager.
   let devtoolsWc: WebContents | null = null
-  // Teardown for the wc 'destroyed' watcher on the current host (clears the host
-  // here, in this file — view-manager is owned by another change and untouched).
+  // Teardown for the wc 'destroyed' watcher on the current host (clears the host).
   let devtoolsHostDisposable: Disposable | null = null
 
-  // ── Native-sink state machine (MAJOR 1) ───────────────────────────────────
+  // ── Native-sink state machine ─────────────────────────────────────────────
   let sink: SinkState = 'idle'
   // Buffered completed-request records while 'probing' — flushed to console if we
   // degrade, dropped if we go ready (so a request shows in exactly one sink).
@@ -496,7 +494,7 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
   /** Trim the native queue to its cap, preferring to keep request-opening events.
    * Active requests' first events (requestWillBeSent / ...ExtraInfo) are retained
    * so later responseReceived/loadingFinished never become orphans in the panel;
-   * we drop the oldest NON-opening (low-value / completion) events first. (MAJOR 2) */
+   * we drop the oldest NON-opening (low-value / completion) events first. */
   function trimQueue(): void {
     if (dispatchQueue.length <= MAX_DISPATCH_QUEUE) return
     const isOpener = (json: string): boolean =>
@@ -523,15 +521,15 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
     if (sink === 'degraded') { dispatchQueue = []; return }
     const wc = resolveDevtoolsWc()
     if (!wc) {
-      // Host went away mid-flight. Keep the queue bounded (MAJOR 2: cap applies on
+      // Host went away mid-flight. Keep the queue bounded (the cap applies on
       // EVERY path, not just no-host) and wait — setDevtoolsHost re-arms probing.
       trimQueue()
       return
     }
     if (sink === 'idle') beginProbing()
 
-    // Pack greedily up to MAX_BATCH_CHARS so one executeJavaScript stays sized
-    // (MAJOR 5); oversized single messages go via the chunked transport.
+    // Pack greedily up to MAX_BATCH_CHARS so one executeJavaScript stays sized;
+    // oversized single messages go via the chunked transport.
     const batch: string[] = []
     let batchChars = 0
     let i = 0
@@ -583,7 +581,7 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
     }).catch(() => {
       // wc navigated / torn down mid-call, OR the script overflowed IPC. Re-queue
       // (bounded) and let the next flush re-resolve the host. Best-effort; the
-      // ready-timeout still governs giving up. (MAJOR 5: backoff via retry timer.)
+      // ready-timeout still governs giving up. Backoff is via the retry timer.
       if (sink === 'degraded') return
       dispatchQueue = batch.concat(dispatchQueue)
       trimQueue()
@@ -792,7 +790,7 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
 
   /**
    * Route a completed request to EXACTLY ONE sink, per the native-sink state
-   * machine (MAJOR 1 — no double-display):
+   * machine (no double-display):
    *  - 'ready'    : native path already rendered it → suppress console.
    *  - 'degraded' : native abandoned → console.
    *  - 'idle'     : no host configured → console (the native queue never flushes).

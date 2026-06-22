@@ -13,7 +13,7 @@ import { DeckApp } from './deck-app.js'
 import type { MinimalIpcMain } from './wire-transport.js'
 
 /**
- * grants-fork — FAILING-FIRST (TDD) contract tests for the "make it real"
+ * grants-fork — contract tests for the "make it real"
  * wiring (view-handle.md「关键文件」/ capability-and-lifecycle.md「两条 invoke 路由的硬边界」+
  *「grant 强制闸（数据形状 + 插点）」).
  *
@@ -26,16 +26,14 @@ import type { MinimalIpcMain } from './wire-transport.js'
  * `this.ipc.invoke(HOST_PREFIX + name, ...)` declarative `hostServices` route,
  * with NO grant gate (trusted-may-call, unchanged).
  *
- * At authoring time the wiring is DORMANT: deck-app never instantiates
- * `createControlBus`, the wire's `invokeHost` only hits the un-gated
- * InMemoryTypedIpcRegistry, and there is no `runtime.layout.command` surface.
- * So these tests are EXPECTED RED until the fork + the privileged-command
- * runtime surface land.
+ * These specs pin that wiring: deck-app instantiates `createControlBus`, the
+ * privileged-command route applies the grant gate, and the
+ * `runtime.layout.command` surface is live.
  *
  * Privileged commands are reached via a typed escape hatch
- * (`runtime.layout.command(name, handler): Disposable` — pin whatever the
- * implementer exposes) because the surface is not yet on the public `Runtime`
- * type. Invokes are driven through the ipcMain Invoke handler with a
+ * (`runtime.layout.command(name, handler): Disposable`) because the surface is
+ * not on the public `Runtime` type. Invokes are driven through the ipcMain
+ * Invoke handler with a
  * `{ kind:'host', name:'layout.*', args }` request, exactly like the real wire.
  */
 
@@ -211,7 +209,7 @@ function privileged(runtime: Runtime): PrivilegedRuntime {
 	return runtime as unknown as PrivilegedRuntime
 }
 
-// P2: `grants.issue` no longer requires a `targetScope`; the old `targetScope`
+// `grants.issue` no longer requires a `targetScope`; the old `targetScope`
 // helper (a raw `rootScope.child()`) is removed — a raw Scope is no longer a
 // valid value for the now-optional, DeckSession-typed `targetScope` field.
 

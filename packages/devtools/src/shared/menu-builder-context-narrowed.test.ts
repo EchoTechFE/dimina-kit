@@ -1,23 +1,19 @@
 /**
- * Workbench model refactor — "收尾", Requirement B:
- * the `menuBuilder` config hook's `context` parameter is NARROWED.
+ * The `menuBuilder` config hook's `context` parameter is NARROWED.
  *
  * `docs/workbench-model.md` ("`menuBuilder` 签名收窄") + the
  * mapping table row: "menuBuilder … 保留；签名收窄为 menu-only context
  * (不交出 `registry` 等内部状态)".
  *
- *  B1. A new exported type `MenuContext` exists in `src/shared/types.ts`,
- *      defined as `WorkbenchContext` with the internal-plumbing fields
- *      removed:
- *        Omit<WorkbenchContext,
- *          'registry' | 'senderPolicy' | 'trustedWindowSenderIds'
- *          | 'simulatorApis' | 'toolbar'>
- *  B2. `WorkbenchAppConfig['menuBuilder']` is
+ *  - A `MenuContext` type is exported from `src/shared/types.ts`, exposing the
+ *    menu-relevant context fields without the internal-plumbing fields
+ *    (`registry`, `senderPolicy`, `trustedWindowSenderIds`, `simulatorApis`,
+ *    `toolbar`).
+ *  - `WorkbenchAppConfig['menuBuilder']` is
  *        (mainWindow: BrowserWindow, menuContext: MenuContext) => void
- *      so a host menu builder can read `.workspace` / `.views` / `.windows`
- *      / `.notify` / `.appName` etc., but CANNOT reach the internal pipeline
- *      fields (`registry`, `senderPolicy`, `trustedWindowSenderIds`,
- *      `simulatorApis`, `toolbar`).
+ *    so a host menu builder can read `.workspace` / `.views` / `.windows`
+ *    / `.notify` / `.appName` etc., but CANNOT reach the internal pipeline
+ *    fields.
  *
  * ── How `tsc` enforces this contract ───────────────────────────────────────
  *
@@ -49,7 +45,7 @@ import { describe, it } from 'vitest'
 import type { BrowserWindow } from 'electron'
 import type { WorkbenchAppConfig } from './types.js'
 // `MenuContext` is a named export from this same module. The import itself is
-// part of the contract: it must resolve to a real type (B1).
+// part of the contract: it must resolve to a real type.
 import type { MenuContext } from './types.js'
 import type { WorkbenchContext } from '../main/services/workbench-context.js'
 
@@ -65,19 +61,17 @@ type MenuBuilderHook = NonNullable<WorkbenchAppConfig['menuBuilder']>
 type MenuBuilderCtxParam = Parameters<MenuBuilderHook>[1]
 type MenuBuilderWinParam = Parameters<MenuBuilderHook>[0]
 
-// ── B1/B2 — `MenuContext` shape and the hook's parameter types ─────────────
+// ── `MenuContext` shape and the hook's parameter types ─────────────────────
 
 // Pins that the hook's context parameter is exactly `MenuContext` (not the
 // full `WorkbenchContext`).
 type _CtxParamIsMenuContext = Expect<Equal<MenuBuilderCtxParam, MenuContext>>
 
-// DESIGNED CONTRACT CHANGE (feedback fix ⑤ — see
-// menu-context-handwritten.test.ts, which is the spec): `MenuContext` is now
-// a HAND-WRITTEN narrow contract, no longer `Omit<WorkbenchContext, …>`.
-// The old `Equal<MenuContext, Omit<…>>` pin was removed in that designed
-// pass; its semantic guarantees (internal pipeline unreachable, hook param
-// narrowed) are re-encoded in the handwritten-contract suite and below. A
-// full WorkbenchContext must STAY assignable (structural subtyping):
+// `MenuContext` is a HAND-WRITTEN narrow contract, not `Omit<WorkbenchContext,
+// …>` — see menu-context-handwritten.test.ts, which is the spec. Its semantic
+// guarantees (internal pipeline unreachable, hook param narrowed) are encoded
+// in the handwritten-contract suite and below. A full WorkbenchContext must
+// STAY assignable (structural subtyping):
 type _ContextStillAssignable = Expect<
   WorkbenchContext extends MenuContext ? true : false
 >
@@ -85,7 +79,7 @@ type _ContextStillAssignable = Expect<
 // The first parameter stays a `BrowserWindow` — narrowing must not touch it.
 type _WinParamUnchanged = Expect<Equal<MenuBuilderWinParam, BrowserWindow>>
 
-// ── B2 — value-level proof that the narrowing actually bites a host ────────
+// ── value-level proof that the narrowing actually bites a host ─────────────
 
 describe('Requirement B: menuBuilder context is narrowed to MenuContext', () => {
   it('forbids internal-pipeline fields and allows menu-relevant fields (compile-time only)', () => {
@@ -94,12 +88,10 @@ describe('Requirement B: menuBuilder context is narrowed to MenuContext', () => 
     const _menuBuilder: MenuBuilderHook = (_mainWindow, menuContext) => {
       // ✅ Allowed: menu-relevant context fields stay reachable. None of the
       //    following lines may error — if one does, the narrowing removed a
-      //    field the menu builder legitimately needs.
-      //    DESIGNED CONTRACT CHANGE (feedback fix ⑤): `views` / `windows` /
-      //    `projectsProvider` left the menu surface when `MenuContext` became
-      //    the hand-written audited contract (menu-context-handwritten.test.ts
-      //    is the spec) — they were dropped from this allowed list in that
-      //    designed pass; `openSettings` joined it.
+      //    field the menu builder legitimately needs. `views` / `windows` /
+      //    `projectsProvider` are not on the menu surface; `openSettings` is —
+      //    see the hand-written audited contract in
+      //    menu-context-handwritten.test.ts, which is the spec.
       void menuContext.appName
       void menuContext.workspace
       void menuContext.notify

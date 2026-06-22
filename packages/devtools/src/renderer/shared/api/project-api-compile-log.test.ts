@@ -1,6 +1,5 @@
 /**
- * ROUND 2 (dmcc 日志链路) — renderer API seam contract (TDD, NOT yet
- * implemented).
+ * Renderer API seam contract (dmcc 日志链路).
  *
  * Pinned contract: `project-api.ts` exports
  * `onCompileLog(handler: (entry) => void): () => void` — the main→renderer

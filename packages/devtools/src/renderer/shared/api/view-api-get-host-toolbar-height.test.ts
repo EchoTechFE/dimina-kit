@@ -1,11 +1,11 @@
 /**
  * Host-toolbar height replay — renderer api wrapper.
  *
- * CONTRACT (new public API on view-api.ts, RED until implemented):
+ * CONTRACT (public API on view-api.ts):
  *
  *   export function getHostToolbarHeight(): Promise<number | undefined>
  *
- * It must drive the NEW 'view:host-toolbar:get-height' wire channel (the
+ * It must drive the 'view:host-toolbar:get-height' wire channel (the
  * invoke handler pinned in src/main/ipc/views-host-toolbar-get-height.test.ts)
  * via the ipc-transport invoke path and hand the main-retained height back to
  * the caller.
@@ -19,19 +19,15 @@
  * at 0. The component test (project-runtime-host-toolbar-replay.test.tsx)
  * pins that mount calls the wrapper; THIS test pins the wrapper to the wire.
  *
- * The export is reached via the module namespace (not a direct named import)
- * so this file compiles BEFORE the export exists and fails as a RED assertion
- * instead of a build break (same convention as
- * settings-api-set-visible.test.ts).
- *
- * RED today: view-api.ts exports no getHostToolbarHeight.
+ * The export is reached via the module namespace (not a direct named import),
+ * same convention as settings-api-set-visible.test.ts.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const transport = vi.hoisted(() => ({
   // Record both invoke flavors — the contract is "an invoke-style round trip
   // on the right channel that resolves to the main-side value". Which helper
-  // carries it is the implementer's choice (note: the lenient `invoke`
+  // carries it is unspecified (note: the lenient `invoke`
   // swallows main-side errors into `undefined`, which the mounting component
   // must tolerate — pinned in the component suite).
   invoke: vi.fn((_channel: string, ..._args: unknown[]) => Promise.resolve<unknown>(undefined)),

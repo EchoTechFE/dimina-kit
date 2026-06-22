@@ -28,7 +28,7 @@ export type ViewAnchorRef = (el: HTMLElement | null) => void
  * detach (`null`) → publish ZERO then `dispose()`; on `opts`/`deps` change →
  * `update`; on unmount → publish ZERO then `dispose`.
  *
- * Why ZERO on disappearance (P1 fix): the anchor's follower is a *main-process*
+ * Why ZERO on disappearance: the anchor's follower is a *main-process*
  * `WebContentsView`, not a DOM node. When the anchored element vanishes, core
  * `dispose()` only stops observing — it deliberately never publishes again
  * (its Contract 6/7). But the host only collapses the native view when it

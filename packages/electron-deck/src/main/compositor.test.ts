@@ -1,7 +1,6 @@
 /**
- * Behavior tests for the `Compositor` primitive — the implementation in
- * `./compositor.js` does NOT exist yet (TDD: these tests are written first and
- * are expected to be RED until `createCompositor()` ships).
+ * Behavior tests for the `Compositor` primitive — the `createCompositor()`
+ * contract implemented in `./compositor.js`.
  *
  * `Compositor` is the engine-agnostic z-order planner for a window's native
  * child views (an Electron `contentView` and its `addChildView`/

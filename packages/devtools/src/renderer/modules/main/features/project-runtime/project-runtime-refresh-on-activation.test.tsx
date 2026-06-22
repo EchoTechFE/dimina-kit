@@ -1,36 +1,25 @@
 /**
- * FAILING TDD spec (red phase) for devtools "refresh on tab ACTIVATION" under
- * DOM-panel KEEPALIVE (gap A3, devtools half).
+ * Devtools "refresh on tab ACTIVATION" under DOM-panel KEEPALIVE.
  *
- * ── THE BUG ──────────────────────────────────────────────────────────────────
- * `DockDebugTab` (in project-runtime.tsx) fires the WXML/AppData/Storage refresh
- * from a MOUNT effect (`useEffect(() => {...}, [tabId])`). That only works while
- * `<DockView>` unmounts inactive tab bodies: tab away → unmount → tab back →
- * REMOUNT → effect re-fires.
+ * Under DOM-panel keepalive, `<DockView>` keeps inactive DOM bodies MOUNTED and
+ * hidden — they never remount on a tab round-trip. A MOUNT-effect refresh
+ * (`useEffect(() => {...}, [tabId])`) would therefore fire EXACTLY ONCE for the
+ * whole session, leaving the panel stale on every re-activation.
  *
- * Once DOM-panel keepalive lands (the electron-deck half: inactive DOM bodies
- * stay MOUNTED and hidden, never remounting on a tab round-trip), the mount
- * effect fires EXACTLY ONCE for the whole session — so tabbing away and back NO
- * LONGER refreshes the panel. The data goes stale on every re-activation.
- *
- * ── THE CONTRACT (what the implementer must honor) ───────────────────────────
- * `DockDebugTab` (or its replacement) must fire the per-tab refresh when its
- * panel BECOMES active — including the keepalive case where it was already
- * mounted and is merely RE-activated — NOT only on first mount. Concretely:
+ * ── THE CONTRACT ─────────────────────────────────────────────────────────────
+ * `DockDebugTab` fires the WXML/AppData/Storage per-tab refresh when its panel
+ * BECOMES active — including the keepalive case where it was already mounted and
+ * is merely RE-activated — NOT only on first mount. Concretely:
  *   - first activation (mount, active) → refresh fires once;
  *   - tab away and back → refresh fires AGAIN on re-activation, WITHOUT the body
  *     having remounted (keepalive: the same DebugTabContent instance persists);
  *   - staying mounted-but-inactive → no refresh.
  *
- * ── HOW THIS GOES RED ON HEAD ────────────────────────────────────────────────
  * We render the REAL `<DockView>` + the REAL ProjectRuntime dock wiring (only the
  * controller + @/shared/api + the leaf DebugTabContent are mocked). The
  * load-bearing assertion is: across a wxml→appdata→wxml tab round-trip, the wxml
- * `DebugTabContent` stays MOUNTED THE WHOLE TIME (keepalive) AND its refresh fired
- * again on re-activation. On HEAD, DockView unmounts the inactive wxml body, so
- * the wxml DebugTabContent UNMOUNTS when you switch to appdata — the keepalive
- * (mount-count stays 1) assertion FAILS. After the full A3 fix (keepalive +
- * activation refresh) it passes.
+ * `DebugTabContent` stays MOUNTED THE WHOLE TIME (keepalive) AND its refresh
+ * fired again on re-activation.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, act } from '@testing-library/react'
@@ -205,8 +194,8 @@ beforeEach(() => {
   dockModelHolder.model = null
 })
 
-describe('ProjectRuntime: refresh on tab ACTIVATION under keepalive (A3)', () => {
-  // BUG (A3): the load-bearing keepalive proof at the devtools layer. After a
+describe('ProjectRuntime: refresh on tab ACTIVATION under keepalive', () => {
+  // The load-bearing keepalive proof at the devtools layer. After a
   // wxml→appdata→wxml round-trip, the wxml DebugTabContent must have stayed
   // MOUNTED the whole time (keepalive: mount count 1, zero unmounts). On HEAD,
   // DockView unmounts the inactive wxml body when appdata activates → wxml
@@ -226,7 +215,7 @@ describe('ProjectRuntime: refresh on tab ACTIVATION under keepalive (A3)', () =>
     expect(tabMounts.get('wxml'), 'wxml body must not remount on switch-back').toBe(1)
   })
 
-  // BUG (A3): refresh must fire on RE-ACTIVATION, not only first mount. The wxml
+  // Refresh must fire on RE-ACTIVATION, not only first mount. The wxml
   // refresh fires once on initial activation; after tabbing away and back it must
   // fire AGAIN — driven by the activation edge, not a remount. On HEAD the
   // mount-based effect happens to re-fire because the body remounts, so the COUNT
@@ -246,7 +235,7 @@ describe('ProjectRuntime: refresh on tab ACTIVATION under keepalive (A3)', () =>
     expect(refresh.wxml.mock.calls.length).toBeGreaterThanOrEqual(2)
   })
 
-  // BUG (A3): a panel that is kept-alive but INACTIVE must NOT refresh. Switching
+  // A panel that is kept-alive but INACTIVE must NOT refresh. Switching
   // wxml→appdata fires appdata's refresh exactly once (on appdata activation) and
   // does NOT keep firing wxml's refresh while wxml sits mounted-but-hidden. On a
   // wrong keepalive impl that re-runs every panel's mount effect on every render,

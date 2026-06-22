@@ -1,6 +1,5 @@
 /**
- * ROUND 2 (dmcc 日志链路) — workspace-service `onLog` wiring contract
- * (TDD, NOT yet implemented).
+ * workspace-service `onLog` wiring contract (dmcc 日志链路).
  *
  * Contract under test:
  *  - `openProject` passes an `onLog` callback to `ctx.adapter.openProject`,
@@ -201,16 +200,16 @@ describe('workspace-service: adapter onLog → notify.compileLog', () => {
 })
 
 /**
- * CODEX-REVIEW REGRESSION (M5) — the onLog closure handed to the adapter
- * carries no session generation: after closeProject (or switching projects)
- * a LATE log line from the old session's compile worker still flows into
- * notify.compileLog, polluting the (new) project's compile panel with lines
- * from a project the user already closed. The behavioural pin: a stale
- * session's onLog must become a no-op once that session is no longer the
- * active one. (Implementation form free — generation counter, closure flag,
- * whatever — only the drop behaviour is pinned.)
+ * If the onLog closure handed to the adapter carries no session generation,
+ * then after closeProject (or switching projects) a LATE log line from the old
+ * session's compile worker still flows into notify.compileLog, polluting the
+ * (new) project's compile panel with lines from a project the user already
+ * closed. The behavioural pin: a stale session's onLog must become a no-op once
+ * that session is no longer the active one. (Implementation form free —
+ * generation counter, closure flag, whatever — only the drop behaviour is
+ * pinned.)
  */
-describe('workspace-service: stale onLog after close/switch is dropped (codex M5)', () => {
+describe('workspace-service: stale onLog after close/switch is dropped', () => {
   it('drops late log lines arriving through a CLOSED session’s onLog', async () => {
     const harness = makeHarness()
     const workspace = createWorkspaceService(harness.ctx)
@@ -265,9 +264,9 @@ describe('workspace-service: stale onLog after close/switch is dropped (codex M5
   })
 
   /**
-   * CODEX RE-REVIEW — M5 NOT-RESOLVED follow-up. On the project-SWITCH path
-   * `openProject(P2)` disposes P1's session BEFORE claiming the new log
-   * generation (`++logGeneration` happens after `await disposeSession()`), so
+   * On the project-SWITCH path `openProject(P2)` disposes P1's session BEFORE
+   * claiming the new log generation (`++logGeneration` happens after
+   * `await disposeSession()`), so
    * while P1's `session.close()` is still executing, P1's onLog closure still
    * sees `sessionGeneration === logGeneration` and forwards. A compile worker
    * being torn down is exactly when it flushes its buffered stdout/stderr —

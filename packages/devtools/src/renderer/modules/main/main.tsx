@@ -28,7 +28,7 @@ export default function Main() {
   const [thumbnails, setThumbnails] = useState<Record<string, string | null>>({})
   const [appName, setAppName] = useState(DEFAULT_APP_NAME)
 
-  // Phase 4: local "新建项目" dialog state. Used only when the host did
+  // Local "新建项目" dialog state. Used only when the host did
   // not supply a customCreateProjectDialog hook (openCreateProjectDialog
   // returns null in that case).
   const [createOpen, setCreateOpen] = useState(false)

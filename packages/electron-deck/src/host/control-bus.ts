@@ -65,8 +65,8 @@ export interface ControlBus {
 	 * `invokeSimulator` seam calls this with a domain-neutral `name` AFTER its
 	 * trust + main-frame gate. Resolves the command table; throws if `name` is
 	 * unregistered (the wire serialises that into an `InvokeFailure`). `ctx`
-	 * carries the gated senderId (Phase B's grant gate reads it; Phase A passes
-	 * it through unused).
+	 * carries the gated senderId (the grant gate reads it when a policy is
+	 * configured; otherwise it is plumbed through unused).
 	 */
 	dispatch(name: string, args: readonly JsonValue[], ctx: InvokeCtx): Promise<JsonValue>
 	/**
@@ -89,7 +89,7 @@ export interface CreateControlBusDeps {
 	readonly bus: EventBus
 	readonly trustSet: TrustSet
 	/**
-	 * P4 Phase B — privileged-command grant gate. When provided, `dispatch`
+	 * Privileged-command grant gate. When provided, `dispatch`
 	 * default-DENIES any command not authorized by a live grant for the gated
 	 * `ctx.senderId`. Omitted → no gate (backward-compatible "trusted may
 	 * dispatch" behaviour).
@@ -148,7 +148,7 @@ export function createControlBus(deps: CreateControlBusDeps): ControlBus {
 			if (!handler) {
 				throw new Error(`no command registered: ${name}`)
 			}
-			// P4 Phase B — grant gate (A5-1.4). After resolving the command but
+			// Grant gate. After resolving the command but
 			// BEFORE running it, default-DENY any command the sender lacks a live
 			// grant for. No policy injected → no gate (backward compatible).
 			if (policy && !policy.allows(ctx.senderId, name)) {

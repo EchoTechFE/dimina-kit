@@ -1,7 +1,7 @@
 /**
- * FAILING TDD spec for the NOT-YET-WRITTEN drag-to-redock geometry layer.
+ * Contract spec for the drag-to-redock geometry layer.
  *
- * The implementer reads THIS file as the contract for the pure module
+ * This file documents the contract for the pure module
  * `./drag-redock` (re-exported from `./index`). This module is PURE TS — it must
  * NOT import react/electron, so it can run under the node `vitest.config.ts`
  * suite (this file is `*.test.ts`). We import it DIRECTLY from `./drag-redock.js`
@@ -67,9 +67,6 @@
  *     The descriptor only NAMES the intent; these tests prove that the
  *     extract-then-split sequence lands the dragged panel adjacent to the target
  *     in the right orientation/side and that it appears EXACTLY ONCE.
- *
- * These tests MUST fail right now with "cannot find module ./drag-redock"
- * (the module does not exist yet). They must NOT fail from test-infra issues.
  */
 import { describe, it, expect } from 'vitest'
 import {
@@ -83,10 +80,9 @@ import {
 	type TabGroupNode,
 } from '../layout/index.js'
 
-// Honest point of failure: the pure module does not exist yet.
 import {
 	computeDropZone,
-	// FAILING: `computeReorderIndex` is not yet exported from the pure module.
+	// Guards that `computeReorderIndex` is exported from the pure module.
 	computeReorderIndex,
 	dropZoneToMutation,
 	isNoopRedock,
@@ -293,7 +289,7 @@ describe('computeDropZone — non-finite rect dimensions (N1)', () => {
 
 // ───────────────────────── Layer 1a': computeReorderIndex ─────────────────────────
 //
-// FAILING TDD spec for the NOT-YET-WRITTEN pure helper:
+// Contract spec for the pure helper:
 //
 //   computeReorderIndex(
 //     tabRects: readonly { left: number; width: number }[],

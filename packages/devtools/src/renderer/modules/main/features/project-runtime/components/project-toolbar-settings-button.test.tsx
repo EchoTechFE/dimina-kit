@@ -1,22 +1,19 @@
 /**
- * Wave 2 ④ — settings entry point restored in the toolbar.
+ * Settings entry point in the toolbar.
  *
- * CONTRACT (new feature, RED until implemented):
+ * CONTRACT:
  *  - ProjectToolbar renders a STATELESS settings button with `title="设置"`
  *    (title is how every icon button in this toolbar exposes its accessible
  *    name — cf. the 重新编译 button).
- *  - Clicking it calls the new renderer wrapper `setSettingsVisible(true)`
- *    from `@/shared/api` (settings-api.ts), which drives the EXISTING
+ *  - Clicking it calls the renderer wrapper `setSettingsVisible(true)`
+ *    from `@/shared/api` (settings-api.ts), which drives the
  *    'settings:setVisible' main handler → views.showSettings() +
  *    notify.settingsInit(). Open-only: the overlay owns its own close path,
- *    the button carries no open/closed state (KISS — so the unconsumed
- *    SettingsChannel.Closed/Changed notifications stay unconsumed and their
- *    senders can be removed by the implementer).
+ *    the button carries no open/closed state.
  *
  * Real bug each test catches:
- *  - "button exists": the settings overlay currently has NO UI entry point —
- *    only raw IPC (e2e drove it via ipcInvoke). Without the button, users
- *    cannot reach project settings at all.
+ *  - "button exists": without the button the settings overlay has NO UI entry
+ *    point (only raw IPC), so users cannot reach project settings at all.
  *  - "click → setSettingsVisible(true)": catches a button wired to nothing,
  *    wired to the WRONG surface (e.g. the standalone workbench-settings
  *    window instead of the embedded project-settings overlay), or calling
@@ -24,10 +21,7 @@
  *    a missing `true` HIDES the overlay instead of showing it.
  *
  * The `@/shared/api` mock keeps stubs for the legacy toolbar exports so this
- * file renders against today's component (RED on the missing button, not on
- * a missing mock) and needs no edits when ① lands.
- *
- * RED today: project-toolbar.tsx has no settings button.
+ * file renders against the component.
  */
 import React from 'react'
 import { describe, it, expect, vi } from 'vitest'
@@ -36,8 +30,7 @@ import { ProjectToolbar } from './project-toolbar'
 import { buildDockModel, buildDockRegistry } from '../layout/dock-layout'
 
 const apiMocks = vi.hoisted(() => ({
-  // Legacy toolbar exports (Wave 2 ① deletes them) — kept as inert stubs so
-  // the component renders both before and after that removal.
+  // Legacy toolbar exports — kept as inert stubs so the component renders.
   getToolbarActions: vi.fn(() => Promise.resolve([])),
   invokeToolbarAction: vi.fn(() => Promise.resolve()),
   onToolbarActionsChanged: vi.fn(() => () => {}),

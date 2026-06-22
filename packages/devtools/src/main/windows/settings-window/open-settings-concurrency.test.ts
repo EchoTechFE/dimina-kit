@@ -1,7 +1,7 @@
 /**
- * Codex review MAJOR ② — `openSettingsWindow` concurrency + stale-close races.
+ * `openSettingsWindow` concurrency + stale-close races.
  *
- * Today's bugs, verified against source (index.ts:43-46):
+ * Bugs guarded against (index.ts:43-46):
  *
  *  1. CONCURRENT OPENS: the create branch is `if (!win || win.isDestroyed())
  *     { win = await createSettingsWindow(...) }` with no in-flight guard. Two
@@ -29,8 +29,9 @@
  * cleanup orchestration in index.ts, and the seam gives the test control over
  * creation timing (required to overlap the calls deterministically).
  *
- * RED today: the concurrency test (two windows created) and the stale-close
- * test (live window dropped, third window created).
+ * Guards the open/reuse/cleanup orchestration: overlapping calls must create
+ * exactly one window, and a late-closing stale window must not drop the live
+ * registration.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import type { BrowserWindow } from 'electron'
@@ -148,7 +149,7 @@ describe('② normal close still clears the registration (GREEN pin)', () => {
 })
 
 describe('② concurrent opens are serialized through one in-flight creation', () => {
-  it('two overlapping openSettingsWindow calls create exactly ONE window [RED today]', async () => {
+  it('two overlapping openSettingsWindow calls create exactly ONE window', async () => {
     // BUG CAUGHT (today): no in-flight guard — both calls observe
     // settingsWindow === null before either registration lands, so two
     // BrowserWindows are constructed and the loser is orphaned (alive,
@@ -178,7 +179,7 @@ describe('② concurrent opens are serialized through one in-flight creation', (
 })
 
 describe("② a stale window's late 'closed' must not drop a live successor", () => {
-  it('old window closes late → current registration survives and is reused [RED today]', async () => {
+  it('old window closes late → current registration survives and is reused', async () => {
     // BUG CAUGHT (today): the 'closed' callback nulls the registration
     // unconditionally. Electron delivers 'closed' asynchronously, so a window
     // destroyed-then-replaced fires its callback AFTER the successor is

@@ -1,5 +1,5 @@
 /**
- * Codex fix #1 — race / resource leak in readVideoMetadata.
+ * Race / resource leak in readVideoMetadata.
  *
  * Today `readVideoMetadata` does:
  *   video.onseeked = async () => {
@@ -65,7 +65,7 @@ afterEach(() => {
 	revokeAllTempFilePaths?.()
 })
 
-describe('readVideoMetadata thumbnail race (Codex fix #1)', () => {
+describe('readVideoMetadata thumbnail race', () => {
 	it('does not leak a difile:// path into the temp-files Map when toBlob resolves after the seekTimer fired', async () => {
 		// We need fine-grained control over the seekTimer + toBlob ordering.
 		vi.useFakeTimers()

@@ -1,5 +1,5 @@
 /**
- * Settings overlay — outside-click-to-close contract (TDD, RED today).
+ * Settings overlay — outside-click-to-close contract.
  *
  * The settings overlay is a full-content-area WebContentsView. To get
  * click-outside-to-close (like the compile popover), the `Settings` component
@@ -23,11 +23,8 @@
  *    would dismiss the overlay every time the user clicks an input/tab inside
  *    it — the settings panel would be unusable.
  *
- * RED today: settings.tsx renders no backdrop, no testids, and no close path,
- * so `[data-testid="settings-backdrop"]` is absent (test A fails its assertion
- * that setSettingsVisible was called — it is never reachable) and the panel
- * has no close-on-click anyway. The `queryByTestId` form keeps the failure an
- * assertion failure, not an unhandled throw.
+ * The `queryByTestId` form keeps a missing element an assertion failure, not an
+ * unhandled throw.
  */
 import React from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'

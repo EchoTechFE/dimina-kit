@@ -1,5 +1,5 @@
 /**
- * 编译信息 tab — controller passthrough contract (TDD, NOT yet implemented).
+ * 编译信息 tab — controller passthrough contract.
  *
  * `useProjectRuntimeController` assembles the session slice consumed by
  * `project-runtime.tsx`. The compile log lives in `useSession`; the

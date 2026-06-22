@@ -22,6 +22,6 @@ export const HEADER_H = 40
  * defaultSession renderer; its guard activates the height advertiser only when
  * `process.argv` carries this marker AND `process.isMainFrame` is true (the
  * marker is process-level, so subframes of the toolbar window see it too —
- * both guard wings are required; see .repro/wave3-spike/RESULTS.md items 3/4).
+ * both guard wings are required).
  */
 export const HOST_TOOLBAR_RUNTIME_MARKER = '--dimina-host-toolbar'

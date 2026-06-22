@@ -1,5 +1,5 @@
 /**
- * Phase 2 contract: `createProject(input, ctx)` is the canonical
+ * Contract: `createProject(input, ctx)` is the canonical
  * server-side path for the "新建项目" flow. It must:
  *  - reject an empty/whitespace name, an existing-non-empty target path, an
  *    unknown templateId — with messages the renderer can display verbatim.

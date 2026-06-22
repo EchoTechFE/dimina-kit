@@ -1,26 +1,13 @@
 /**
- * Contract tests for the "split the coarse `debug` dock panel into 5 fine
- * panels" change (TDD — NOT yet implemented).
- *
- * Today `buildDockRegistry()` registers 3 COARSE panels (simulator=native,
- * editor=dom, debug=dom) and the default tree puts the whole BottomDebugPanel
- * in a single `g-debug` tab group. This change splits `debug` into FIVE
- * INDEPENDENT dock panels — wxml / appdata / storage / console / compile —
- * so each is its own dockable unit, while the DEFAULT (FrameTree) mode is
- * untouched.
+ * Contract tests for the fine-grained `debug` dock panels: the coarse `debug`
+ * panel is split into FIVE INDEPENDENT dock panels — wxml / appdata / storage /
+ * console / compile — so each is its own dockable unit, while the DEFAULT
+ * (FrameTree) mode is untouched.
  *
  * These mirror the topology-agnostic style of `dock-layout.test.ts`: we assert
  * the CONTRACT (which panel ids exist, their kinds, the default grouping +
- * active, fallback safety) by walking whatever tree the implementer produces,
- * NOT by pinning a specific nesting.
- *
- * RED reasons (each should fail for the RIGHT reason, not infra):
- *  - B1: registry still has coarse `debug`, none of the 5 fine ids → assertions
- *    on `registry.get('console')`/`registry.list()` length fail.
- *  - B2: default tree groups `debug`, not the 5 → `collectPanelIds` / tabgroup
- *    lookup fail.
- *  - B3: fallback set is `{simulator,editor,debug}` not the new 7 → restore /
- *    fallback assertions fail.
+ * active, fallback safety) by walking whatever tree is produced, NOT by pinning
+ * a specific nesting.
  *
  * PURE tests: buildDockRegistry / buildDefaultDockTree / buildDockModel are
  * pure data; no React render / jsdom DOM needed.

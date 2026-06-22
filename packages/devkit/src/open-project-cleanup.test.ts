@@ -7,17 +7,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as devkit from './index.js'
 
 /**
- * CODEX-REVIEW REGRESSION WAVE (fix/editor-hot-reload-and-simulator-leftovers)
- * — failing regression tests for review findings M4 / M6: resource cleanup
- * when `openProject` fails AFTER the compile worker was already forked.
+ * Resource cleanup when `openProject` fails AFTER the compile worker was
+ * already forked.
  *
- *  M4  the worker is created before the dev server starts; a server-start
- *      failure propagates out of openProject but never kills the worker — a
- *      leaked compiler process per failed open.
- *  M6  `createProjectWatcher().ready` only resolves on chokidar's 'ready';
- *      a watcher 'error' (EMFILE, permission loss, …) before ready leaves
- *      `await watcher?.ready` — and therefore openProject — hung forever,
- *      leaking the worker AND the already-listening dev server.
+ *  - the worker is created before the dev server starts; a server-start
+ *    failure that propagates out of openProject must still kill the worker
+ *    (otherwise a leaked compiler process per failed open).
+ *  - `createProjectWatcher().ready` only resolves on chokidar's 'ready'; a
+ *    watcher 'error' (EMFILE, permission loss, …) before ready must REJECT
+ *    `ready` — otherwise `await watcher?.ready` (and openProject) hangs
+ *    forever, leaking the worker AND the already-listening dev server.
  *
  * Harness: same fake-fork pattern as compile-worker.test.ts, plus this file
  * mocks the fe dev-server module and chokidar so the failure point of each
@@ -149,8 +148,8 @@ function sleep(ms: number): Promise<void> {
 	return new Promise<void>(resolve => setTimeout(resolve, ms))
 }
 
-describe('openProject failure cleanup — no leaked compile worker (codex M4/M6)', () => {
-	it('M4: a dev-server start failure AFTER the worker was forked rejects openProject AND kills the worker', async () => {
+describe('openProject failure cleanup — no leaked compile worker', () => {
+	it('a dev-server start failure AFTER the worker was forked rejects openProject AND kills the worker', async () => {
 		const root = makeFixture()
 		mocks.feStart.mockReset()
 		mocks.feStart.mockRejectedValue(new Error('listen EADDRINUSE: address already in use'))
@@ -174,7 +173,7 @@ describe('openProject failure cleanup — no leaked compile worker (codex M4/M6)
 		).toHaveBeenCalled()
 	}, 15_000)
 
-	it("M6: a watcher 'error' before 'ready' rejects openProject within a bounded time and kills the worker (no eternal hang)", async () => {
+	it("a watcher 'error' before 'ready' rejects openProject within a bounded time and kills the worker (no eternal hang)", async () => {
 		const root = makeFixture()
 		mocks.watch.mockReset()
 		mocks.watch.mockImplementation(() => {

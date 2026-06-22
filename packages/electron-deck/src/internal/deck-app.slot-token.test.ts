@@ -15,17 +15,14 @@
  *     validation) wired into WireTransport's `__electron-deck:place` channel.
  *   - the `onLayoutSubscribe` per-wc replay over `__electron-deck:layout-subscribe`.
  *
- * So every spec here is RED at RUNTIME: either the slot-grant `send` never
- * fires (so the token-capture helper throws / asserts fail) OR the place handler
- * is never registered (so `ipcMain.handlers.get('__electron-deck:place')` is
- * undefined). Reached through a single typed escape hatch (`withView`) so the
- * file COMPILES — the RED is a missing-member / never-called assertion, not a
- * type error.
+ * Every spec here exercises that runtime contract: the slot-grant `send` fires
+ * (so the token-capture helper resolves) and the place handler is registered
+ * (so `ipcMain.handlers.get('__electron-deck:place')` is defined). Reached
+ * through a single typed escape hatch (`withView`) so the file COMPILES.
  *
  * Channel string literals are used directly ('__electron-deck:place',
  * '__electron-deck:slot-grant', '__electron-deck:layout-subscribe') because the
- * corresponding `DeckChannel.*` members do not exist yet — importing them would
- * be a compile error rather than a clean runtime RED.
+ * corresponding `DeckChannel.*` members are not exported.
  *
  * Fakes copied (minimal) from deck-app.host-view.test.ts: `createFakeElectron`
  * (FakeBrowserWindow with addChildView/removeChildView spies + FakeWebContents
@@ -252,7 +249,7 @@ function lastWcv(electron: FakeElectron): FakeWebContentsView {
 	return wcv
 }
 
-// Pull the most recent slot-grant the framework `send`-pushed to `wc`. RED guard:
+// Pull the most recent slot-grant the framework `send`-pushed to `wc`. Guard:
 // if the framework never sends a slot-grant, this throws → the test fails loud.
 function lastSlotGrant(wc: FakeWebContentsLike): SlotGrant {
 	const calls = (wc.send as ReturnType<typeof vi.fn>).mock.calls
@@ -550,6 +547,6 @@ describe('DeckApp slot-token — placeIn without anchor (back-compat)', () => {
 	})
 })
 
-// Parity ref so an unused-import lint never masks the RED.
+// Parity ref so an unused-import lint never masks a runtime failure.
 const _jsonParityRef: JsonValue = null
 void _jsonParityRef

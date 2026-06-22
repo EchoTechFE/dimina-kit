@@ -13,6 +13,26 @@ export default defineConfig({
     include: ['src/**/*.test.{ts,tsx}'],
     globals: true,
     setupFiles: ['./src/renderer/test-setup.ts'],
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'text-summary', 'html', 'json-summary'],
+      reportsDirectory: './coverage',
+      exclude: [
+        '**/*.test.{ts,tsx}',
+        '**/__test-stubs__/**',
+        'e2e/**',
+        'dist/**',
+        'build-*.js',
+        // Only the contextBridge entry bundles are unmeasurable glue; the
+        // instrumentation/runtime/shared preload logic has unit tests.
+        'src/preload/windows/**',
+        '**/*.config.*',
+        '**/*.d.ts',
+        'spike/**',
+        '_spike/**',
+        'templates/**',
+      ],
+    },
   },
   resolve: {
     alias: [

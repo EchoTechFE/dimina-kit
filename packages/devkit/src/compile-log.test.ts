@@ -2,26 +2,19 @@ import { describe, expect, it } from 'vitest'
 import * as devkit from './index.js'
 
 /**
- * ROUND 2 (dmcc 日志链路) — TDD contract for the compile-log module
- * (NOT yet implemented).
+ * Contract for the compile-log module.
  *
- * ⚠️ ARCHITECTURE-DECISION CHANGE (user-approved, 2026-06-12):
- * The original ROUND 2 contract had a second export, `withCapturedStdio`
- * (tee-style in-process stdout/stderr write-hook + isTTY=false hack). The
- * user has since decided that compilation moves OUT of the Electron main
- * process into a forked long-lived child process (root causes: global
- * `process.chdir` mutation, global stdout hook capturing unrelated logs,
- * compiler crashes taking down the host, listr2 TTY hacks). In a fork
- * architecture the parent reads `child.stdout/stderr` — no write-hook, no
- * isTTY mutation — so the entire `withCapturedStdio` describe block was
- * DELETED from this file (it pinned an architecture that no longer exists,
- * 8 tests removed from the RED ledger). Its replacement contracts live in
- * `src/compile-worker-entry.test.ts` (worker side) and
- * `src/compile-worker.test.ts` (parent orchestration). This is an explicit
- * architecture correction, not goalpost-moving on a failing implementation.
+ * Compilation runs OUT of the Electron main process in a forked long-lived
+ * child process (root causes the fork architecture avoids: global
+ * `process.chdir` mutation, a global stdout hook capturing unrelated logs,
+ * compiler crashes taking down the host, listr2 TTY hacks). The parent reads
+ * `child.stdout/stderr` — no write-hook, no isTTY mutation — and runs each
+ * line through this pure filter. The worker-side and parent-orchestration
+ * contracts live in `src/compile-worker-entry.test.ts` and
+ * `src/compile-worker.test.ts`.
  *
- * Required contract (unchanged — pure function, architecture-independent):
- *  - A new module (e.g. `src/compile-log.ts`) exports, and `src/index.ts`
+ * Required contract (pure function, architecture-independent):
+ *  - `src/compile-log.ts` exports, and `src/index.ts`
  *    RE-EXPORTS (same pattern as `createRebuildScheduler`):
  *
  *    `filterDmccLogLine(line: string): string | null` — pure line filter.

@@ -1,7 +1,7 @@
 /**
- * Feedback fix ⑥ — the page-side bridge needs a PUBLIC type declaration.
+ * The page-side bridge needs a PUBLIC type declaration.
  *
- * Today's gap, verified against source: the framework injects
+ * The framework injects
  * `window.diminaHostToolbar` (src/preload/runtime/host-toolbar-port.ts,
  * BRIDGE_KEY) and host-migration.md tells toolbar pages to call
  * `window.diminaHostToolbar.send/onMessage` — but no exported type and no
@@ -23,9 +23,7 @@
  *    augmentation ships with it, OPTIONAL because the bridge only exists
  *    inside the toolbar WCV with a passing runtime guard.
  *
- * RED / flip protocol: the original `@ts-expect-error RED` markers flipped
- * when the fix landed and were deleted per protocol — the remaining lines
- * are the permanent compile-time guards.
+ * The remaining `@ts-expect-error` lines are permanent compile-time guards.
  */
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -79,7 +77,7 @@ staticAssert<WindowBridgeSlot extends ExpectedBridge | undefined ? true : false>
 staticAssert<undefined extends WindowBridgeSlot ? true : false>()
 
 // ═════════════════════════════════════════════════════════════════════════
-// §4 Runtime assertion (vitest-RED today).
+// §4 Runtime assertion.
 // ═════════════════════════════════════════════════════════════════════════
 
 const thisTestFile = import.meta.url.startsWith('file:')
@@ -88,7 +86,7 @@ const thisTestFile = import.meta.url.startsWith('file:')
 const barrelSourcePath = path.join(path.dirname(thisTestFile), '..', 'api.ts')
 
 describe('feedback ⑥ — DiminaHostToolbarPageBridge public declaration', () => {
-  it('the public barrel (src/main/api.ts) exports DiminaHostToolbarPageBridge [RED today]', () => {
+  it('the public barrel (src/main/api.ts) exports DiminaHostToolbarPageBridge', () => {
     // Real bug: host-migration.md instructs pages to call
     // window.diminaHostToolbar.send/onMessage, but the package ships no type
     // for it — every TS toolbar page hand-rolls (and drifts from) the shape.

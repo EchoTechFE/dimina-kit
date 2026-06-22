@@ -1,9 +1,8 @@
 // @vitest-environment jsdom
 /**
- * TDD contract tests (FAILING-FIRST) for P4 — DEDUP of renderer grants in
- * `createDeckLayoutClient`.
+ * Contract tests for DEDUP of renderer grants in `createDeckLayoutClient`.
  *
- * BACKGROUND (codex-confirmed bug N2): the client appends a NEW anchor on EVERY
+ * BACKGROUND: the client must not append a NEW anchor on EVERY
  * `slot-grant`, with NO dedup by `viewId`. But the main process INTENTIONALLY
  * re-delivers a slot-grant on `layout-subscribe` replay (per-wc replay). So when
  * a grant for an already-anchored `viewId` is re-delivered, the client today
@@ -26,9 +25,9 @@
  * fake createAnchor capturing (target, opts) + dispose spies) — REUSED verbatim
  * so these pins compose with the existing handshake/token-threading pins.
  *
- * Expected initial state: RED — today the client has no viewId tracking, so the
- * same-token replay (#1) creates a 2nd anchor and the new-token replacement (#2)
- * never disposes the old / never replaces.
+ * These pin the client's per-viewId tracking: the same-token replay (#1) must
+ * NOT create a 2nd anchor, and the new-token replacement (#2) must dispose the
+ * old anchor and replace it.
  */
 
 import { describe, expect, it, vi } from 'vitest'
@@ -116,7 +115,7 @@ function placement(x: number): Placement {
   return { visible: true, bounds: { x, y: x, width: 10, height: 10 } }
 }
 
-describe('createDeckLayoutClient — P4 dedup renderer grants by viewId', () => {
+describe('createDeckLayoutClient — dedup renderer grants by viewId', () => {
   // ── #1 (CORE) same-token replay = no-op ────────────────────────────────────
   it('a re-delivered grant with the SAME viewId+token does NOT create a second anchor and does NOT dispose the first', () => {
     const b = makeBridge()
@@ -312,7 +311,7 @@ describe('createDeckLayoutClient — P4 dedup renderer grants by viewId', () => 
     })
   })
 
-  // codex P4 round-3 pin: a NEW token for an existing viewId must REVOKE the old
+  // a NEW token for an existing viewId must REVOKE the old
   // anchor even when the NEW slot does not resolve — otherwise the stale anchor
   // keeps publishing an already-revoked token. The old anchor is disposed and NO
   // replacement is created; a later grant (slot now mounted) anchors with the

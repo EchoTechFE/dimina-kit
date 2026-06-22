@@ -10,13 +10,12 @@ import type {
 } from './internal/electron-types.js'
 import type { MinimalIpcMain } from './internal/wire-transport.js'
 import type { DeckConfig, DeckOptions, Runtime } from './types.js'
-// RED: `startElectronDeck` does not exist yet — this import is the first failure.
-// It is imported ALONGSIDE the existing `electronDeck` so the compat smoke (#6)
-// proves the Promise form is untouched.
+// `startElectronDeck` is imported ALONGSIDE the existing `electronDeck` so the
+// compat smoke (#6) proves the Promise form is untouched.
 import { electronDeck, startElectronDeck } from './electron-deck.js'
 
 /**
- * P1 — FAILURE-FIRST (TDD) contract for `startElectronDeck(config, opts?)`.
+ * Contract for `startElectronDeck(config, opts?)`.
  *
  * BACKGROUND: `electronDeck(config)` is `async` and internally
  * `await app.start()` → `await app.whenReady()`. A host ESM main entry that
@@ -36,12 +35,12 @@ import { electronDeck, startElectronDeck } from './electron-deck.js'
  *     dispose(): Promise<void>
  *   }
  *
- * Where the not-yet-typed handle members are reached, we use a typed escape
- * hatch (`StartHandle`) so this file COMPILES and each failure is the missing
- * `startElectronDeck` symbol (RED), not a type error.
+ * Where handle members are reached, we use a typed escape hatch (`StartHandle`)
+ * so this file COMPILES against the export surface and each guard is a runtime
+ * check, not a type error.
  */
 
-// ── Typed escape hatch for the not-yet-implemented handle ─────────────────────
+// ── Typed escape hatch for the handle surface ────────────────────────────────
 
 interface StartHandle {
 	ready: Promise<Runtime>
@@ -129,7 +128,7 @@ interface FakeElectron extends MinimalElectron {
 	browserWindows: FakeBrowserWindow[]
 	/** OBSERVABLE assembly side-effect — # of BrowserWindow ctor calls so far. */
 	readonly browserWindowCtorCount: number
-	/** # of windows still alive (not destroyed) — used to assert no leak (#4). */
+	/** # of windows still alive (not destroyed) — used to assert no leak. */
 	readonly liveWindowCount: number
 }
 
@@ -366,10 +365,9 @@ describe('startElectronDeck — invalid config', () => {
 		// error SURFACES (never silently deadlocks) — either synchronously at the
 		// call, or via `handle.ready` rejecting. Accept whichever is the contract.
 		//
-		// Guard the RED signal: assert the symbol EXISTS first, so this test fails
-		// because validation didn't surface (GREEN-side bug) — not coincidentally
-		// because `startElectronDeck` is undefined and "not a function" happens to
-		// be a TypeError too.
+		// Assert the symbol EXISTS first, so this test fails because validation
+		// didn't surface — not because `startElectronDeck` is undefined and
+		// "not a function" happens to be a TypeError too.
 		expect(typeof startElectronDeck).toBe('function')
 
 		let syncThrew: unknown

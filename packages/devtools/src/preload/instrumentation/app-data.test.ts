@@ -140,7 +140,7 @@ describe('createAppDataSource', () => {
 
     it('a single update lands at snapshot.entries[bridgeId][componentPath] and emits', () => {
       startSource()
-      // R6: seed an init so the subsequent ub is not dropped.
+      // seed an init so the subsequent ub is not dropped.
       fireMessage(makeInit('page_m1', 'b1', '/p1', {}))
       emit.mockClear()
       fireMessage(makePublish('b1', [{ moduleId: 'page_m1', data: { foo: 1 } }]))
@@ -151,7 +151,7 @@ describe('createAppDataSource', () => {
 
     it('emits once per accepted update entry when multiple updates arrive in one message', () => {
       startSource()
-      // R6: seed inits for each moduleId so the multi-update ub is not dropped.
+      // seed inits for each moduleId so the multi-update ub is not dropped.
       fireMessage(makeInit('page_m1', 'b1', '/p1', {}))
       fireMessage(makeInit('page_m2', 'b1', '/p2', {}))
       emit.mockClear()
@@ -173,7 +173,7 @@ describe('createAppDataSource', () => {
   describe('C2: accepts event.data as object or JSON string', () => {
     it('handles event.data as a parsed object', () => {
       startSource()
-      // R6: seed an init so the subsequent ub is not dropped.
+      // seed an init so the subsequent ub is not dropped.
       fireMessage(makeInit('page_m1', 'b1', '/p1', {}))
       emit.mockClear()
       fireMessage(makePublish('b1', [{ moduleId: 'page_m1', data: { foo: 1 } }]))
@@ -184,7 +184,7 @@ describe('createAppDataSource', () => {
 
     it('handles event.data as a JSON string of the same shape', () => {
       startSource()
-      // R6: seed an init (object form) before sending the JSON-string ub.
+      // seed an init (object form) before sending the JSON-string ub.
       fireMessage(makeInit('page_m1', 'b1', '/p1', {}))
       emit.mockClear()
       const payload = makePublish('b1', [{ moduleId: 'page_m1', data: { foo: 1 } }])
@@ -200,7 +200,7 @@ describe('createAppDataSource', () => {
     it('merges later patches into the previously-seen state', () => {
       startSource()
 
-      // R6: seed an init; clear emit so the ub emissions start at index 0.
+      // seed an init; clear emit so the ub emissions start at index 0.
       fireMessage(makeInit('page_m1', 'b1', '/p1', {}))
       emit.mockClear()
 
@@ -223,7 +223,7 @@ describe('createAppDataSource', () => {
     it('different moduleIds on the same bridge stay isolated', () => {
       startSource()
 
-      // R6: seed inits for both modules on b1.
+      // seed inits for both modules on b1.
       fireMessage(makeInit('page_m1', 'b1', '/p1', {}))
       fireMessage(makeInit('page_m2', 'b1', '/p2', {}))
       emit.mockClear()
@@ -240,7 +240,7 @@ describe('createAppDataSource', () => {
     it('same moduleId on different bridges stays isolated', () => {
       startSource()
 
-      // R6: seed inits for both bridges (same moduleId is fine).
+      // seed inits for both bridges (same moduleId is fine).
       fireMessage(makeInit('page_m1', 'b1', '/p1', {}))
       fireMessage(makeInit('page_m1', 'b2', '/p2', {}))
       emit.mockClear()
@@ -344,7 +344,7 @@ describe('createAppDataSource', () => {
       ) => EventTarget
       const w = new Ctor('worker.js')
 
-      // R6: seed an init for b1 first so the sanity ub is not silently dropped.
+      // seed an init for b1 first so the sanity ub is not silently dropped.
       w.dispatchEvent(
         new MessageEvent('message', {
           data: makeInit('page_m1', 'b1', '/p1', {}),
@@ -385,7 +385,7 @@ describe('createAppDataSource', () => {
     it('snapshot() returns the merged cumulative state', () => {
       startSource()
 
-      // R6: seed inits so that subsequent ubs are accepted.
+      // seed inits so that subsequent ubs are accepted.
       // Init for page_m1 sets b1's pagePath to '/p1'; init for page_m2
       // accumulates onto the same bridge under its own (componentPath) key.
       fireMessage(makeInit('page_m1', 'b1', '/p1', {}))
@@ -641,7 +641,7 @@ describe('createAppDataSource', () => {
     })
 
     it('post-init ub on a freshly-started source picks up the seeded componentPath', () => {
-      // R6: ub-without-init is dropped, so this seeds an init for b2 and
+      // ub-without-init is dropped, so this seeds an init for b2 and
       // asserts the subsequent ub lands under the seeded componentPath.
       startSource()
 
@@ -793,18 +793,18 @@ describe('createAppDataSource', () => {
     })
   })
 
-  // ── C15: R6 — ub patches must follow an init for the same bridgeId ──────
+  // ── ub patches must follow an init for the same bridgeId ───────────────
   //
   // Rationale: on navigateBack the dimina container posts
   //   {type:'pageUnload', body:{bridgeId}}
   // to the worker BEFORE the worker's onUnload finishes. onUnload can call
   // `setData` (e.g. `stopTimer` does), which produces a late `ub` that
   // arrives at main AFTER the preload has already evicted the bridge.
-  // Without R6, that late ub would register the bridge anew with no
-  // pagePath, surfacing a ghost `bridge_<uuid>` tab in the panel. R6
+  // Without this gate, that late ub would register the bridge anew with no
+  // pagePath, surfacing a ghost `bridge_<uuid>` tab in the panel. The gate
   // requires that a ub be silently dropped unless its bridgeId has
   // previously been seen via a `page_*` init message.
-  describe('C15: ub for unseen bridge is dropped', () => {
+  describe('ub for unseen bridge is dropped', () => {
     it('drops a single-update ub for a bridgeId that never saw a page_* init', () => {
       startSource()
       emit.mockClear()
@@ -847,7 +847,7 @@ describe('createAppDataSource', () => {
 
       emit.mockClear()
 
-      // A late `ub` arrives AFTER eviction. Under R6 it must be dropped:
+      // A late `ub` arrives AFTER eviction. It must be dropped:
       // no new emit, no snapshot entry, and b1 must not be resurrected
       // in the bridges list.
       dispatchMessage(w, makePublish('b1', [{ moduleId: 'page_x', data: { a: 2 } }]))

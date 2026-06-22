@@ -38,7 +38,7 @@ export {
 } from './control-bus.js'
 export { createTrustSet, type TrustSet, type TrustIndex } from '../internal/trust-set.js'
 /**
- * P4 Phase B — capability grant registry + policy (the privileged-command gate).
+ * Capability grant registry + policy (the privileged-command gate).
  */
 export {
   createCapabilityRegistry,

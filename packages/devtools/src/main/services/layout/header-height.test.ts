@@ -1,7 +1,7 @@
 /**
- * Requirement B (layout half) — the 4 bounds-computing functions must take an
- * explicit `headerHeight` parameter instead of reading a module-global
- * `HEADER_H` set via `setHeaderHeight()`.
+ * The 4 bounds-computing functions must take an explicit `headerHeight`
+ * parameter instead of reading a module-global `HEADER_H` set via
+ * `setHeaderHeight()`.
  *
  * The real bug this catches: a host that configures `headerHeight: 72` ends
  * up with views positioned at `y: 40` because:
@@ -10,7 +10,7 @@
  *     `src/renderer/shared/constants.ts` that `setHeaderHeight` can't reach,
  *   - and a process-global is fragile under multi-window / re-entrant setup.
  *
- * Target contract (per the step-1 spec):
+ * Contract:
  *   computeSettingsBounds  (contentWidth, contentHeight, headerHeight)
  *   computePopoverBounds   (contentWidth, contentHeight, headerHeight)
  * Each must return `y === headerHeight` and a `height` reduced by it.
@@ -19,10 +19,8 @@
  * the static-layout fallback — the DevTools overlay is anchor-published only —
  * so their headerHeight cases are gone with them.)
  *
- * These tests are RED today: the functions ignore any 4th/3rd arg and read
- * the `HEADER_H` module-global (default 40), and `setHeaderHeight` still
- * exists. The dynamic `Record` cast lets the file compile under `tsc` while
- * the signatures are still the old arity.
+ * The dynamic `Record` cast lets the file compile under `tsc` regardless of the
+ * functions' exact arity.
  */
 import { describe, it, expect } from 'vitest'
 
@@ -50,10 +48,6 @@ describe('Requirement B: layout functions take an explicit headerHeight', () => 
   // old right-edge 320px strip. The strip left clicks outside the panel
   // landing on a different view, so the overlay couldn't be dismissed by
   // clicking outside it.
-  //
-  // RED today: computeSettingsBounds still returns the right-edge strip
-  // (x: contentWidth - 320, width: 320), so these full-width assertions fail
-  // while the y/height assertions above stay green.
   it('computeSettingsBounds spans the full content area below the header (no right-edge strip)', async () => {
     const layout = await loadLayout()
     const fn = layout.computeSettingsBounds as BoundsFn
@@ -75,8 +69,8 @@ describe('Requirement B: layout functions take an explicit headerHeight', () => 
 
   it('the `setHeaderHeight` process-global escape hatch is removed', async () => {
     const layout = await loadLayout()
-    // The whole point of req B is to delete this. If it still exists, the
-    // implementer left the global path in place.
+    // Header height is an explicit param now; this process-global escape hatch
+    // must not exist.
     expect(
       layout.setHeaderHeight,
       'setHeaderHeight() must be deleted — header height is now an explicit param',

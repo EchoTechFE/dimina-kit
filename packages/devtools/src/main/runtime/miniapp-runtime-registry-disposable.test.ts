@@ -1,7 +1,6 @@
 /**
- * Feedback fix ④ — disposal-idiom consistency on the contract's `registry.add`.
+ * Disposal-idiom consistency on the contract's `registry.add`.
  *
- * Today's gap, verified against source:
  *  - The REAL registry behind `ctx.registry` is
  *    `DisposableRegistry` from `@dimina-kit/electron-deck/main`
  *    (packages/electron-deck/src/main/disposable.ts) — its `add` accepts

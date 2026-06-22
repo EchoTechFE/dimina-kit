@@ -1,6 +1,5 @@
 /**
- * TDD failing-first contract tests for "P2: sealed DeckSession +
- * runtime.scopes.create" (codex-confirmed #7).
+ * Contract tests for the sealed DeckSession + runtime.scopes.create.
  *
  * THE PROBLEM: `runtime.view({scope})` and `runtime.grants.issue({targetScope})`
  * both demand a `Scope`, but `Runtime` exposes NO scope factory — a host has
@@ -26,10 +25,8 @@
  *   - `runtime.grants.issue(controlWc, { commands })` no longer REQUIRES
  *     `targetScope` (it's optional / reserved-not-consulted).
  *
- * None of `runtime.scopes`, the DeckSession type, or the DeckSession-accepting
- * `view({scope})` exists yet, so every spec is RED — reached through a single
- * typed escape hatch so the file still compiles (the failure is a runtime
- * TypeError "runtime.scopes is undefined", not a compile error).
+ * The session surface is reached through a single typed escape hatch so the
+ * file compiles against the runtime types.
  *
  * Fakes mirror deck-app.host-view.test.ts / deck-app.grants-fork.test.ts. The
  * FakeWebContentsView gains a `close` spy + `destroyed` flag so the native-WC
@@ -219,13 +216,12 @@ function createFakeElectron(
 	}
 }
 
-// ── Typed escape hatch for the not-yet-typed sealed-session surface ──────────
+// ── Typed escape hatch for the sealed-session surface ───────────────────────
 //
 // `runtime.scopes`, the `DeckSession` type, and the DeckSession-accepting
-// `view({scope})` / targetScope-optional `grants.issue` are not on the public
-// `Runtime` type yet, so we reach them through a loose view. Absence then fails
-// at RUNTIME (`runtime.scopes is undefined`) — the RED we want — rather than a
-// compile error that would stop the suite running.
+// `view({scope})` / targetScope-optional `grants.issue` are reached through a
+// loose view so the suite runs regardless of whether the public `Runtime` type
+// declares them.
 
 type Bounds = { x: number, y: number, width: number, height: number }
 type Placement = { visible: true, bounds: Bounds } | { visible: false }
@@ -287,7 +283,7 @@ async function invokeHost(
 // 1. runtime.scopes.create() returns an OPAQUE DeckSession — has dispose(), does
 //    NOT expose the raw Scope surface (adopt/child/reset).
 // ─────────────────────────────────────────────────────────────────────────────
-describe('DeckApp P2 — runtime.scopes.create() mints an opaque DeckSession', () => {
+describe('DeckApp — runtime.scopes.create() mints an opaque DeckSession', () => {
 	it('returns a handle with dispose() and NO raw Scope surface (no adopt/child/reset)', async () => {
 		const electron = createFakeElectron()
 		const app = new DeckApp({}, { electron, wireTransport: { ipcMain: createFakeIpcMain() } })
@@ -302,8 +298,8 @@ describe('DeckApp P2 — runtime.scopes.create() mints an opaque DeckSession', (
 		const s = session as unknown as Record<string, unknown>
 		expect(s.adopt).toBeUndefined()
 		expect(s.child).toBeUndefined()
-		// C2 contract: `reset()` is now a first-class DeckSession method (per-session
-		// segment reset that keeps the session + window alive) — it MUST be present.
+		// `reset()` is a first-class DeckSession method (per-session segment reset
+		// that keeps the session + window alive) — it MUST be present.
 		expect(typeof s.reset).toBe('function')
 
 		await app.shutdown()
@@ -315,7 +311,7 @@ describe('DeckApp P2 — runtime.scopes.create() mints an opaque DeckSession', (
 //    session.dispose() tears the view down (native WC closed + unregistered).
 //    The session is a child of the app root, so app shutdown ALSO cascades.
 // ─────────────────────────────────────────────────────────────────────────────
-describe('DeckApp P2 — view({scope: session}) is bound to the session lifetime', () => {
+describe('DeckApp — view({scope: session}) is bound to the session lifetime', () => {
 	it('session.dispose() detaches + closes the session-bound view native WebContents', async () => {
 		const electron = createFakeElectron()
 		const app = new DeckApp({}, { electron, wireTransport: { ipcMain: createFakeIpcMain() } })
@@ -372,7 +368,7 @@ describe('DeckApp P2 — view({scope: session}) is bound to the session lifetime
 //    (not minted by runtime.scopes.create()) passed as `view({scope})` THROWS the
 //    provenance check — a host can't smuggle a rootless / adopted scope in.
 // ─────────────────────────────────────────────────────────────────────────────
-describe('DeckApp P2 — view rejects a foreign/raw Scope (provenance, SECURITY)', () => {
+describe('DeckApp — view rejects a foreign/raw Scope (provenance, SECURITY)', () => {
 	it('view({scope: createScope()}) (a raw rootless Scope) THROWS — not minted by runtime.scopes.create()', async () => {
 		const electron = createFakeElectron()
 		const app = new DeckApp({}, { electron, wireTransport: { ipcMain: createFakeIpcMain() } })
@@ -392,7 +388,7 @@ describe('DeckApp P2 — view rejects a foreign/raw Scope (provenance, SECURITY)
 // 4. default (no scope) still works — view({source}) with NO scope binds to the
 //    app root and is disposed at app shutdown. Unchanged default.
 // ─────────────────────────────────────────────────────────────────────────────
-describe('DeckApp P2 — view with NO scope still binds to the app root', () => {
+describe('DeckApp — view with NO scope still binds to the app root', () => {
 	it('view({source}) without a scope is created + placed, and shutdown closes it', async () => {
 		const electron = createFakeElectron()
 		const app = new DeckApp({}, { electron, wireTransport: { ipcMain: createFakeIpcMain() } })
@@ -416,7 +412,7 @@ describe('DeckApp P2 — view with NO scope still binds to the app root', () => 
 //    command (granted sender passes, ungranted → FORBIDDEN). targetScope, if
 //    accepted at all, is optional (omitting it does NOT throw).
 // ─────────────────────────────────────────────────────────────────────────────
-describe('DeckApp P2 — grants.issue drops the mandatory targetScope', () => {
+describe('DeckApp — grants.issue drops the mandatory targetScope', () => {
 	it('issue(controlWc, { commands }) WITHOUT targetScope succeeds and gates the command', async () => {
 		const electron = createFakeElectron()
 		const ipcMain = createFakeIpcMain()
@@ -460,7 +456,7 @@ describe('DeckApp P2 — grants.issue drops the mandatory targetScope', () => {
 // 6. session.dispose is idempotent + closing the session disposes ALL views
 //    created in it (create 2 views in a session → session.dispose closes both).
 // ─────────────────────────────────────────────────────────────────────────────
-describe('DeckApp P2 — session.dispose is idempotent + disposes all its views', () => {
+describe('DeckApp — session.dispose is idempotent + disposes all its views', () => {
 	it('two views created in one session are BOTH torn down by a single session.dispose; dispose is idempotent', async () => {
 		const electron = createFakeElectron()
 		const app = new DeckApp({}, { electron, wireTransport: { ipcMain: createFakeIpcMain() } })

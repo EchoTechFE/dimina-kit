@@ -5,23 +5,20 @@ import type { Placement } from './types.js'
 // ── press-pause-drag: the windowed RAF geometry sentinel must NOT close
 //    while the pointer is still held down ───────────────────────────────
 //
-// TDD — FAILING-FIRST. Locks the press-pause-drag behaviour of the
-// `followGeometry` sentinel (view-anchor-following.md §2.D / §6).
+// Locks the press-pause-drag behaviour of the `followGeometry` sentinel.
 //
-// The contract (§2.D, line "一次 splitter 拖动 = 开窗→拖动中每帧跟随→
-// 松手后 2~3 帧内判静止→关窗") is explicit that the windowed sentinel only
-// closes on *steady* frames AFTER release (松手 = pointerup). The current
-// implementation instead closes after N consecutive identical frames
-// UNCONDITIONALLY — so a press that pauses before the drag actually starts
-// (very common: user clicks the splitter, hesitates a frame or two, THEN
-// drags) closes the window mid-press, and the entire subsequent drag is
-// dropped (the native view freezes at its pre-drag position).
+// The windowed sentinel only closes on *steady* frames AFTER release
+// (pointerup), NOT after N consecutive identical frames unconditionally — a
+// press that pauses before the drag actually starts (very common: user clicks
+// the splitter, hesitates a frame or two, THEN drags) must not close the
+// window mid-press and drop the entire subsequent drag (freezing the native
+// view at its pre-drag position).
 //
 // This file pins:
 //   1. press-pause-drag: pointerdown → ≥2 static frames (current close
 //      threshold) → rect starts moving → the movement is STILL followed.
-//      RED today because the sentinel closes after the static pause and the
-//      drag frames find no scheduled rAF.
+//      The pointerHeld gate keeps the sentinel open through the static pause
+//      so the later drag frames still find a scheduled rAF.
 //   2. no-regression: pointerup → static frames → the sentinel still
 //      eventually closes (we must not "fix" #1 by keeping the window open
 //      forever / spinning a rAF while idle).
@@ -124,7 +121,7 @@ function buildElement(rect: { x: number; y: number; w: number; h: number }): {
 }
 
 /** A `[role="separator"]` splitter (the drag handle): a capture-phase
- *  pointerdown matching it opens the sentinel window (§2.D). */
+ *  pointerdown matching it opens the sentinel window. */
 function buildSplitter(): HTMLElement {
   const sep = document.createElement('div')
   sep.setAttribute('role', 'separator')

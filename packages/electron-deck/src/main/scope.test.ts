@@ -1,7 +1,6 @@
 /**
  * Behavior tests for the `Scope` primitive (nested lifetime) — the
- * implementation in `./scope.js` does NOT exist yet (TDD: these tests are
- * written first and are expected to be RED until `createScope()` ships).
+ * `createScope()` contract implemented in `./scope.js`.
  *
  * `Scope` generalizes the Connection/Disposable semantics already in this
  * package:
@@ -517,16 +516,16 @@ describe('on() — unsubscribe', () => {
   })
 })
 
-// ── 8. concurrent close/reset single-flight (codex-found fence bug) ───────────
+// ── concurrent close/reset single-flight (fence bug) ───────────
 //
-// REGRESSION for the codex-found bug: reset()/close() had no serialization and
-// close() early-returned on `alive===false`. So if a child was MID-ASYNC-CLOSE,
+// reset()/close() must serialize: without it close() early-returned on
+// `alive===false`. So if a child was MID-ASYNC-CLOSE,
 // the parent's disposeSegment did `await child.close()` and got an immediate
 // resolve (child already !alive), letting the parent's completion fence pass
 // BEFORE the child's disposer actually finished. The fix is single-flight:
 // concurrent close()/reset() join the in-flight Promise (true-wait) instead of
 // launching a second teardown or early-returning.
-describe('concurrent close/reset single-flight — codex-found fence bug', () => {
+describe('concurrent close/reset single-flight — fence bug', () => {
   it('two concurrent close() calls both resolve only after disposeAll truly finishes; disposer runs once', async () => {
     const scope = createScope()
     const d = deferredDisposer()
@@ -683,8 +682,7 @@ describe('concurrent close/reset single-flight — codex-found fence bug', () =>
 
 // ── 9. adopt() — re-parent a child between scopes without reset/close ─────────
 //
-// TDD red: `adopt` does NOT exist on the implementation yet. These specs pin the
-// codex-reviewed contract for `adopt(child, newParent)`:
+// These specs pin the contract for `adopt(child, newParent)`:
 //
 //   - Cascade ownership transfers: after adopt, the OLD parent no longer cascades
 //     reset()/close() into the child; the NEW parent does. (#1)
@@ -696,7 +694,7 @@ describe('concurrent close/reset single-flight — codex-found fence bug', () =>
 //     the NEW parent's child-removal, never the stale OLD one. (#3)
 //   - Pre-validation throws: dead this/newParent, non-direct-child, and cycle
 //     (newParent is a descendant of child). (#4)
-//   - Atomicity = WAIT not throw (codex): if this/newParent is mid reset()/close()
+//   - Atomicity = WAIT not throw: if this/newParent is mid reset()/close()
 //     (in-flight), adopt awaits the fence, THEN re-validates and proceeds; it does
 //     NOT throw and shove a retry onto the caller. If the awaited party becomes
 //     DEAD, adopt fails explicitly (throws) and the child is NEITHER orphaned NOR
@@ -870,7 +868,7 @@ describe('adopt() — re-parent a child without resetting/closing it', () => {
     await expect(pA.adopt(gc, gc)).rejects.toThrow()
   })
 
-  // ── #5 atomicity = WAIT not throw (codex) ──────────────────────────────────
+  // ── atomicity = WAIT not throw ──────────────────────────────────
   it('when newParent is mid-reset (in-flight), adopt WAITS for the fence then attaches to the NEW segment (no throw)', async () => {
     const root = createScope()
     const pA = root.child()

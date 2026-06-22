@@ -346,7 +346,7 @@ describe('pickWriteRoot — accept current ∪ last-closed root (in-flight write
   // realpath containment / `assertWritableAncestor` / `O_NOFOLLOW` defences
   // still apply against THAT root.
   //
-  // ── ASSUMED SEAM (implementer must align) ─────────────────────────────────
+  // ── SEAM ──────────────────────────────────────────────────────────────────
   //   __testing.pickWriteRoot(
   //     absPath: string,
   //     roots: { current: string; lastClosed: string },
@@ -487,9 +487,7 @@ const WRITERS: Writer[] = [
   {
     name: 'sync writeFileSync',
     // Wrap the synchronous call: a throw must surface as a rejection so the
-    // shared `expectRejectCode` helper works for both writers. When the export
-    // is still missing (red phase) this rejects with a TypeError, NOT the
-    // contract errno — which is the intended RED signal for the sync rows.
+    // shared `expectRejectCode` helper works for both writers.
     write: (root, abs, content) =>
       new Promise<void>((resolve, reject) => {
         try {

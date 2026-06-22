@@ -1,5 +1,5 @@
 /**
- * Phase 1.5 contract: when a downstream host injects a `ProjectsProvider`
+ * Contract: when a downstream host injects a `ProjectsProvider`
  * that implements only the required methods (list/add/remove) and omits the
  * optional ones (`validateProjectDir` / `getCompileConfig` /
  * `saveCompileConfig`), `WorkspaceService` MUST NOT silently fall back to

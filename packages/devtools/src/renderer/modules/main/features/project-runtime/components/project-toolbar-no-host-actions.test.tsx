@@ -1,30 +1,24 @@
 /**
- * Wave 2 decommission — renderer half of the host-toolbar-buttons removal.
- * `instance.toolbar.set()` is deleted in main, so ProjectToolbar must stop
- * (a) rendering the host-actions row and (b) talking to the toolbar IPC
- * cluster ('toolbar:getActions' / 'toolbar:actionsChanged').
+ * ProjectToolbar must NOT (a) render the host-actions row or (b) talk to the
+ * toolbar IPC cluster ('toolbar:getActions' / 'toolbar:actionsChanged'):
+ * `instance.toolbar.set()` no longer exists in main.
  *
  * Real bug each test catches:
- *  - "no host action button renders": the implementer removes the main-side
- *    surface but leaves the renderer row — the mock simulates a stale main
- *    process still answering GetActions with one action; if the row survives,
- *    a phantom button renders whose click drives the deleted
- *    'toolbar:invoke' channel (rejects on every click).
- *  - "never calls getToolbarActions": catches the half-fix that keeps the
- *    mount-effect fetch but hides the row — the channel no longer exists in
- *    main, so every ProjectToolbar mount fires a rejected invoke and keeps a
- *    dead dependency on the removed channel.
+ *  - "no host action button renders": the mock simulates a stale main process
+ *    still answering GetActions with one action; if the row survives, a phantom
+ *    button renders whose click drives the deleted 'toolbar:invoke' channel
+ *    (rejects on every click).
+ *  - "never calls getToolbarActions": catches keeping the mount-effect fetch
+ *    but hiding the row — the channel no longer exists in main, so every
+ *    ProjectToolbar mount would fire a rejected invoke and keep a dead
+ *    dependency on the removed channel.
  *  - "never subscribes onToolbarActionsChanged": a leftover subscription is a
  *    listener for an event main can never send again — dead wire surface that
  *    invites the cluster to grow back.
  *
  * The `@/shared/api` mock is built with vi.hoisted and keeps stubs for the
- * toolbar exports even after the real exports are deleted, so this file needs
- * no edits when the implementation lands (same pattern as
+ * toolbar exports even though the real exports are gone (same pattern as
  * project-toolbar-fixed-header.test.tsx).
- *
- * RED today: project-toolbar.tsx fetches getToolbarActions() in a mount
- * effect, subscribes onToolbarActionsChanged, and renders the actions row.
  */
 import React from 'react'
 import { describe, it, expect, vi } from 'vitest'
@@ -39,8 +33,8 @@ const apiMocks = vi.hoisted(() => ({
   getToolbarActions: vi.fn(() => Promise.resolve([{ id: 'host-a', label: 'HOST_ACTION_SENTINEL' }])),
   invokeToolbarAction: vi.fn(() => Promise.resolve()),
   onToolbarActionsChanged: vi.fn(() => () => {}),
-  // Wave 2 ④ — the settings entry point the toolbar gains; present so the
-  // component's (future) import resolves. Not asserted here.
+  // The settings entry point the toolbar uses; present so the component's
+  // import resolves. Not asserted here.
   setSettingsVisible: vi.fn(() => Promise.resolve()),
 }))
 

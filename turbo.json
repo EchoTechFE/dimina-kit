@@ -7,6 +7,7 @@
     "DIMINA_DEBUG_PORT",
     "NODE_ENV",
     "CI",
+    "PLAYWRIGHT_WORKERS",
     "GITHUB_TOKEN",
     "DIMINA_FORCE_BUILD",
     "DIMINA_E2E_TOOLBAR_SENTINEL",
@@ -36,6 +37,11 @@
       "dependsOn": ["^build"],
       "cache": true,
       "outputs": []
+    },
+    "test:coverage": {
+      "dependsOn": ["^build"],
+      "cache": true,
+      "outputs": ["coverage/**"]
     },
     "dev": {
       "cache": false,

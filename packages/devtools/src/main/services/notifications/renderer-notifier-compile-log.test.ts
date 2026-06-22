@@ -1,11 +1,10 @@
 /**
- * ROUND 2 (dmcc 日志链路) — RendererNotifier `compileLog` contract
- * (TDD, NOT yet implemented).
+ * RendererNotifier `compileLog` contract (dmcc 日志链路).
  *
  * Pinned contract:
- *  - `ProjectChannel` gains `CompileLog: 'project:compileLog'` — a NEW push
+ *  - `ProjectChannel` gains `CompileLog: 'project:compileLog'` — a separate push
  *    channel. The existing `project:status` channel is NOT reused: the
- *    wave-1 TDD suite pins `compileEvents` as "one entry per projectStatus
+ *    projectStatus suite pins `compileEvents` as "one entry per projectStatus
  *    payload", so pushing per-line logs there would pollute that contract
  *    (and every other projectStatus consumer: use-session / use-simulator).
  *  - `RendererNotifier` gains
@@ -16,9 +15,6 @@
  * Note on schemas: `shared/ipc-schemas.ts` only validates renderer→main
  * `ipcMain.handle` arguments; main→renderer pushes (Status, CompileLog) are
  * typed via payload interfaces instead — no schema entry is added.
- *
- * Structural lookups keep this file typechecking while the channel/method do
- * not exist yet — the runtime assertions are the red.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ProjectChannel } from '../../../shared/ipc-channels.js'

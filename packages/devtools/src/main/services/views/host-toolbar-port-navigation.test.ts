@@ -1,9 +1,8 @@
 /**
- * R2 follow-up (codex final review, Bug 1 / MAJOR) — navigation-window
- * violation of the send() three-state contract. TDD-RED: the channel
- * currently clears its active port ONLY on (a) the next did-finish-load
- * handshake, (b) wc 'destroyed', (c) remote port 'close'. Starting a NEW
- * navigation does not invalidate anything, so:
+ * Navigation-window violation of the send() three-state contract. If the
+ * channel cleared its active port ONLY on (a) the next did-finish-load
+ * handshake, (b) wc 'destroyed', (c) remote port 'close' — so that starting a
+ * NEW navigation invalidated nothing — then:
  *
  *   - host calls hostToolbar.loadURL/loadFile and a same-tick send() still
  *     returns TRUE — the envelope is posted into the OLD document that is

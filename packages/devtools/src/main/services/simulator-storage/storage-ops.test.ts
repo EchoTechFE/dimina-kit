@@ -1,8 +1,8 @@
 /**
  * Characterization tests for the 5 storage-operation methods of
- * setupSimulatorStorage (M5 refactor guard).
+ * setupSimulatorStorage.
  *
- * These tests nail down the failure-semantics divergence that M5 must preserve:
+ * These tests nail down the failure-semantics divergence:
  *   - READ ops  (getSnapshot)                → fail silently → []
  *   - WRITE ops (setItem/removeItem/clearScoped/clearAll) → fail explicitly →
  *       { ok: false, error: 'simulator not attached' }         (no wc)

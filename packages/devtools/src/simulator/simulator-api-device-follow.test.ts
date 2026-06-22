@@ -315,9 +315,9 @@ describe('async getWindowInfo — follows DEVICE_CHANGE', () => {
   })
 })
 
-// ─── ROUND 2 — currentDevice must not stick across dispose() → spawn() ───────
+// ─── currentDevice must not stick across dispose() → spawn() ────────────────
 //
-// Regression test for the review finding: dispose() tears down the
+// Regression test: dispose() tears down the
 // DEVICE_CHANGE subscription but leaves `currentDevice` populated. When the
 // SAME SimulatorMiniApp instance is later spawned into a NEW session whose
 // boot config carries a different device (the renderer pushes SetDeviceInfo
@@ -331,7 +331,7 @@ describe('async getWindowInfo — follows DEVICE_CHANGE', () => {
 // selection). No test pins that behavior, and it conflicts with the boot
 // config being re-delivered per session — this test locks the boot config as
 // the source of truth for a fresh spawn.
-describe('ROUND 2 — device metrics across dispose() → respawn', () => {
+describe('device metrics across dispose() → respawn', () => {
   it('after dispose + respawn with a new boot device (no DEVICE_CHANGE), metrics follow the NEW boot config, not the stale live device', async () => {
     const { emitDeviceChange, setBootDevice } = installNativeHostMock(IPHONE_14)
     const miniApp = await bootMiniApp()

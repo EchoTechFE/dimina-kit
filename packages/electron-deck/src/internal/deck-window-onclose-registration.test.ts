@@ -23,13 +23,13 @@
  *   transfer-adopt path (adoptWindow registers the substrate first, then the
  *   transfer destroy-own) — a regression test pins it.
  *
- * STATUS: every spec here is RED at authoring time.
- *   • C4: there is NO per-window `onClose` machine yet — `create()` returns a
- *     bare BrowserWindow (no `.onClose`), and the main window only wires the
- *     backend-level close-decision machine. The per-window deciders never run.
- *   • C6 ordering: the transfer-adopt path destroys the window BEFORE the
- *     substrate detaches (LIFO violated), so the substrate's `removeChildView`
- *     never runs on a live host (commit short-circuits on the destroyed host).
+ * COVERAGE:
+ *   • C4: every window carries a per-window `onClose` machine — `create()`
+ *     returns a `DeckWindow` whose `.onClose` deciders run on close, distinct
+ *     from the backend-level close-decision machine.
+ *   • C6 ordering: the transfer-adopt path detaches the substrate BEFORE the
+ *     window is destroyed (LIFO honored), so the substrate's `removeChildView`
+ *     runs on a live host.
  *
  * Reached through typed escape hatches (`asDeckWindow`, `mainDeckWindowOf`,
  * `withAdopt`) so the file COMPILES and fails on BEHAVIOR, not types.
@@ -296,8 +296,8 @@ function bwOf(created: unknown): FakeBrowserWindow {
  * Resolve the MAIN window's `DeckWindow` handle so a per-window `onClose` can be
  * registered on it. The LOCKED facade ("create/adopt/main 统一返回形态") exposes
  * the main window through this surface; the accessor name is not pinned, so probe
- * the plausible shapes. If none exposes a callable `onClose`, throw — the RED we
- * want (the per-window facade does not exist on the main window yet).
+ * the plausible shapes. If none exposes a callable `onClose`, throw — the
+ * runtime failure we want (the per-window facade is missing on the main window).
  */
 function mainDeckWindowOf(app: DeckApp): DeckWindow {
 	const rt = app.runtime as unknown as {
@@ -310,7 +310,7 @@ function mainDeckWindowOf(app: DeckApp): DeckWindow {
 		typeof rt.windows?.main === 'function' ? rt.windows.main() : rt.windows?.main,
 		rt.windows?.mainWindow,
 		// last resort: the bare main BrowserWindow, treated as a DeckWindow (it has
-		// no `onClose`, so this still fails RED — but COMPILES + RUNS the assertion).
+		// no `onClose`, so this fails at runtime — but COMPILES + RUNS the assertion).
 		rt.mainWindow,
 	]
 	for (const c of candidates) {
@@ -345,7 +345,7 @@ function lastWcv(electron: FakeElectron): FakeWebContentsView {
 // disposable (correct LIFO). On the BUGGY transfer-adopt ordering the window is
 // destroyed FIRST → detachAll commits against a destroyed host → removeChildView
 // is NEVER called for the bare view. So `removeChildView).toHaveBeenCalledWith`
-// is the clean RED.
+// is the clean runtime failure.
 interface MinimalSubstrate {
 	compositor: { mount(ref: { id: string }, opts?: { zone?: number }): void, commit(): void }
 	registerView(id: string, wcv: unknown): void
@@ -641,7 +641,7 @@ describe('unified registration (C6) — create + adopt share trust + substrate i
 //   • BUGGY transfer-adopt ordering (destroy-own registered AFTER detachAll-own) →
 //     destroy fires FIRST → detachAll commits against a destroyed host → its
 //     removeChildView is a SILENT no-op → removeChildView is NEVER called for the
-//     bare view. So `removeChildView).toHaveBeenCalledWith(wcv)` is the clean RED.
+//     bare view. So `removeChildView).toHaveBeenCalledWith(wcv)` is the clean runtime failure.
 // ─────────────────────────────────────────────────────────────────────────────
 describe('unified registration (C6) — substrate detaches BEFORE window destroy (LIFO)', () => {
 	it('CREATED window: substrate detachAll removes the view (live host) BEFORE window.destroy', async () => {
@@ -711,7 +711,7 @@ describe('unified registration (C6) — substrate detaches BEFORE window destroy
 	})
 })
 
-// Parity ref so an unused-import lint never masks the RED.
+// Parity ref so an unused-import lint never masks a runtime failure.
 const _jsonParityRef: JsonValue = null
 void _jsonParityRef
 const _mwc: MinimalWebContents | null = null

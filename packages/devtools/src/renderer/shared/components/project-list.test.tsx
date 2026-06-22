@@ -8,7 +8,7 @@ const mockProjects = [
 ]
 
 describe('ProjectList', () => {
-  it('renders the create card when no projects exist (Phase 4: empty-state text replaced by always-present create card)', () => {
+  it('renders the create card when no projects exist', () => {
     render(
       <ProjectList
         projects={[]}

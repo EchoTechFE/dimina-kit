@@ -4,8 +4,7 @@
  * (validates clean against the 7 known ids), contain ALL seven panels exactly
  * once, and pin the simulator (or the column holding it) to the device width.
  *
- * NOTE: authored by the implementer (a pure, deterministic shape builder) — the
- * assertions pin observable structural invariants, not the implementation.
+ * The assertions pin observable structural invariants, not the implementation.
  */
 import { describe, it, expect } from 'vitest'
 import { validateTree } from '@dimina-kit/electron-deck/layout'

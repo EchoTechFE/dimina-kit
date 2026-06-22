@@ -1,8 +1,8 @@
 /**
- * Phase 0 vpath resolver.
+ * vpath resolver.
  *
  * Spec: `docs/file-system.md` §3.3 — single resolver shared by every FSM
- * entry, the renderer-side temp store, and (Phase 1) the main-process
+ * entry, the renderer-side temp store, and the main-process
  * protocol.handle / disk reader.
  *
  *   resolveVPath(url): { kind, writable, realPath? } | null

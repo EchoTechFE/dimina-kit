@@ -15,14 +15,14 @@ test.describe('Right panel switching', () => {
     for (const name of ['WXML', 'AppData', 'Storage']) {
       const tab = mainWindow.getByRole('tab', { name })
       await tab.click()
-      await expect(tab).toHaveAttribute('aria-selected', 'true')
-      await mainWindow.waitForTimeout(400)
+      // The dock marks the selected tab with `data-active`; that flip IS the
+      // switch-complete signal, so the assertion's own wait replaces a sleep.
+      await expect(tab).toHaveAttribute('data-active', 'true')
     }
     // Selecting Console should show the devtools overlay (chrome devtools)
     const consoleTab = mainWindow.getByRole('tab', { name: 'Console' })
     await consoleTab.click()
-    await expect(consoleTab).toHaveAttribute('aria-selected', 'true')
-    await mainWindow.waitForTimeout(400)
+    await expect(consoleTab).toHaveAttribute('data-active', 'true')
 
     // 编译 (compile-event log) is the fifth tab, pinned after Console. Its
     // body is plain React content (no main-process overlay), so selecting it
@@ -34,23 +34,30 @@ test.describe('Right panel switching', () => {
     // legitimately be empty. The hook unit tests own the event semantics.
     const compileTab = mainWindow.getByRole('tab', { name: '编译' })
     await compileTab.click()
-    await expect(compileTab).toHaveAttribute('aria-selected', 'true')
-    await expect(mainWindow.locator('[data-tab-panel="compile"]')).toBeVisible()
-    await mainWindow.waitForTimeout(400)
+    await expect(compileTab).toHaveAttribute('data-active', 'true')
+    // The dock keeps every panel body mounted; the active one's
+    // `data-deck-panel-body` wrapper flips to display:flex (visible).
+    await expect(mainWindow.locator('[data-deck-panel-body="compile"]')).toBeVisible()
   })
 
   test('selecting WXML tab shows WXML panel content in main window', async ({ mainWindow }) => {
     await mainWindow.getByRole('tab', { name: 'WXML' }).click()
-    await mainWindow.waitForTimeout(500)
 
-    const hasRefreshButton = await mainWindow.evaluate(() => {
-      const buttons = document.querySelectorAll('button')
-      for (const btn of buttons) {
-        if (btn.textContent?.includes('刷新')) return true
-      }
-      return false
-    })
-    expect(hasRefreshButton).toBe(true)
+    // Poll for the WXML panel's "刷新" button instead of a fixed sleep — it
+    // appears once the panel body mounts.
+    await expect
+      .poll(
+        () =>
+          mainWindow.evaluate(() => {
+            const buttons = document.querySelectorAll('button')
+            for (const btn of buttons) {
+              if (btn.textContent?.includes('刷新')) return true
+            }
+            return false
+          }),
+        { timeout: 5000, intervals: [100, 200, 300] },
+      )
+      .toBe(true)
   })
 
   test('closing project does not leave orphan right-panel views', async ({ electronApp }) => {

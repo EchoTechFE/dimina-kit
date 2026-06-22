@@ -64,10 +64,9 @@ export function allPanels(t: LayoutTree): string[] {
 
 /**
  * Assert that `fn` throws a REAL domain error — i.e. it actually rejected the
- * input, not merely the `not-implemented` stub. While the engine is a stub this
- * is RED (the stub throws 'not-implemented'); once implemented it must throw a
- * different, meaningful error. This prevents `.toThrow()` from false-greening
- * against the unimplemented skeleton.
+ * input, not merely a `not-implemented` stub. The implementation must throw a
+ * meaningful error, not 'not-implemented'. This prevents `.toThrow()` from
+ * false-greening against a bare skeleton.
  */
 export function expectRejects(fn: () => unknown): void {
 	let thrown: unknown

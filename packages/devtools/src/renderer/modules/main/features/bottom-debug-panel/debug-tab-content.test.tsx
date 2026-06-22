@@ -1,35 +1,15 @@
 /**
  * Contract tests for `DebugTabContent` — the reusable per-tab content renderer.
  *
- * HISTORY / WHY THIS FILE SHRANK:
- *   A layout consolidation DELETED the `BottomDebugPanel` React container (its
- *   tab strip + the per-tab tabpanel bodies + Console placeholder). The module
- *   `bottom-debug-panel.tsx` now exports ONLY `DebugTabContent`, the per-tab
- *   content renderer, plus the `DebugTabContentId` / `BottomDebugPanelProps`
- *   types. Console is a NATIVE main-process overlay, not a DebugTabContent case.
+ * The module `bottom-debug-panel.tsx` exports `DebugTabContent` (the per-tab
+ * content renderer) plus the `DebugTabContentId` / `BottomDebugPanelProps`
+ * types. Console is a NATIVE main-process overlay, not a DebugTabContent case.
  *
- *   The two `describe('BottomDebugPanel default mode (regression-lock …)')`
- *   blocks (tab-strip order via [data-bottom-debug-tabs] / getAllByRole('tab'),
- *   and the [data-tab-panel] keepalive bodies + Console placeholder) guarded a
- *   component that NO LONGER EXISTS. They are REMOVED, not relaxed-to-stay-green:
- *   there is nothing left to lock, so the lock is deleted along with the
- *   `import { BottomDebugPanel }`. We intentionally do NOT migrate tab-strip
- *   order, onSelectTab, or [data-tab-panel] keepalive — those tested the deleted
- *   container.
- *
- *   `DebugTabContent` was previously a NOT-YET-EXISTING export read off the
- *   module namespace at runtime (a red-phase workaround) — it now exists, so it
- *   is imported directly. The red-phase "is exported as a usable React
- *   component" typeof check is dropped (it only existed to fail before the
- *   export landed).
- *
- * What lives here now:
+ * What lives here:
  *   - The reusable-renderer tests: `<DebugTabContent tabId=… />` renders the
  *     right per-tab panel (WxmlPanel / AppDataPanel / StoragePanel /
  *     CompilePanel) and forwards every handler.
- *   - Migrated compile-data-flow coverage from two DELETED sibling test files
- *     that exercised the SAME data flow THROUGH the (now-deleted) container; the
- *     behavior now lives in DebugTabContent tabId='compile'.
+ *   - Compile-data-flow coverage via DebugTabContent tabId='compile'.
  *
  * The four content panels are NOT mocked: these tests integrate through the
  * real WxmlPanel / AppDataPanel / StoragePanel / CompilePanel so we exercise

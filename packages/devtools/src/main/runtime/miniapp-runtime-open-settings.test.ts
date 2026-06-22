@@ -1,9 +1,7 @@
 /**
- * Feedback fix ② — the contract's `windows` pass-through promise is
- * UNFULFILLABLE, replaced by a first-class `openSettings()`.
- *
- * Today's bug, verified against source:
- *  - `MiniappRuntime.windows` is documented as "Pass it through to framework
+ * The contract exposes a first-class `openSettings()` instead of a `windows`
+ * pass-through (which was unfulfillable):
+ *  - `MiniappRuntime.windows` would be documented as "Pass it through to framework
  *    helpers (e.g. `openSettingsWindow`)" — but `openSettingsWindow`
  *    (src/main/app/launch.ts) requires
  *    `Pick<WorkbenchContext, 'rendererDir' | 'notify' | 'windows'>`:
@@ -22,14 +20,7 @@
  *  - `asMiniappRuntime` stays an identity return and the assignment-compat
  *    sentinel keeps compiling.
  *
- * NOTE FOR THE IMPLEMENTER: the §1 pins in miniapp-runtime-contract.test.ts
- * (`HasKey<MiniappRuntime, 'rendererDir'>` / `HasKey<MiniappRuntime,
- * 'windows'>`) encode the OLD contract and must be removed in the same pass —
- * that edit is part of this designed contract change, not goalpost-moving.
- *
- * RED / flip protocol: the original `@ts-expect-error RED` markers flipped
- * when the fix landed and were deleted per protocol — the remaining lines
- * are the permanent compile-time guards.
+ * The remaining `@ts-expect-error` lines are permanent compile-time guards.
  */
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -81,7 +72,7 @@ const _contextStillSatisfiesContract: (ctx: WorkbenchContext) => MiniappRuntime 
 void _contextStillSatisfiesContract
 
 // ═════════════════════════════════════════════════════════════════════════
-// §4 Runtime assertions (vitest-RED today).
+// §4 Runtime assertions.
 // ═════════════════════════════════════════════════════════════════════════
 
 const thisTestFile = import.meta.url.startsWith('file:')
@@ -90,7 +81,7 @@ const thisTestFile = import.meta.url.startsWith('file:')
 const contractSourcePath = path.join(path.dirname(thisTestFile), 'miniapp-runtime.ts')
 
 describe('feedback ② — MiniappRuntime.openSettings replaces the dead windows pass-through', () => {
-  it('the contract module declares openSettings [RED today]', () => {
+  it('the contract module declares openSettings', () => {
     // Real bug: the contract ships an opaque `windows: object` whose ONLY
     // documented purpose (`openSettingsWindow(ctx)`) cannot typecheck against
     // openSettingsWindow's Pick<…,'rendererDir'|'notify'|'windows'> — a
@@ -102,7 +93,7 @@ describe('feedback ② — MiniappRuntime.openSettings replaces the dead windows
     ).toBe(true)
   })
 
-  it('the contract module no longer carries the windows opaque handle [RED today]', () => {
+  it('the contract module no longer carries the windows opaque handle', () => {
     // `windows` existed solely for the unfulfillable pass-through; with
     // openSettings on the contract it must go (先窄后宽 — re-adding is a
     // deliberate semver decision).

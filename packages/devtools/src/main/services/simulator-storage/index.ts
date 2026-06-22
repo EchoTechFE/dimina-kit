@@ -2,11 +2,9 @@
  * SimulatorStorageWatcher
  *
  * Attaches the Chrome DevTools Protocol debugger to the simulator <webview>
- * and forwards `DOMStorage.*` events to the renderer host. Replaces the
- * preload-side localStorage.setItem hook that used to push storage changes
- * via SimulatorChannel.Storage / StorageAll.
+ * and forwards `DOMStorage.*` events to the renderer host.
  *
- * Trade-offs vs the preload approach:
+ * Trade-offs vs a preload-side localStorage.setItem hook:
  *   + Uses standard browser protocol; no preload injection
  *   + Captures every change including ones bypassing wx (api-compat fallback,
  *     direct localStorage.setItem from devtools, etc.)

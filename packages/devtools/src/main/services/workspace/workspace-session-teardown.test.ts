@@ -178,10 +178,10 @@ describe('workspace-service: closeProject delivers session.close (compile-worker
   })
 
   it('openProject(B) while A is active: A.close() SETTLES before the adapter is asked to open B (no two live compile workers)', async () => {
-    // Make close take a real tick so an unawaited disposeSession would
+    // Make close take a real macrotask so an unawaited disposeSession would
     // observably let open:B jump the queue.
     const { ctx, events, sessions } = makeHarness({
-      closeBehavior: () => new Promise((resolve) => setTimeout(resolve, 20)),
+      closeBehavior: () => new Promise((resolve) => setTimeout(resolve, 0)),
     })
     const workspace = createWorkspaceService(ctx)
 

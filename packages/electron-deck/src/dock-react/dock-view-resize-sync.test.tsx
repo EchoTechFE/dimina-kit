@@ -1,7 +1,7 @@
 /**
- * FAILING TDD spec (red phase) for FINDING M1 — "model→view resize sync".
+ * Contract spec for FINDING M1 — "model→view resize sync".
  *
- * THE DEFECT (dock-view.tsx `renderSplit`): flexible children render as
+ * THE DEFECT this guards against (dock-view.tsx `renderSplit`): flexible children render as
  * `<Panel defaultSize={pct}>`. react-resizable-panels (rrp v4.10) consumes
  * `defaultSize` ONLY at mount. So after a `<DockView>` is mounted, applying a
  * programmatic `model.apply(setSizes(splitId, newWeights))`:
@@ -39,14 +39,13 @@
  *   (F) a programmatic setSizes on an INNER split moves only that split's model
  *       node, not its sibling.                                        [M1-nested]
  *
- * NOTE ON RED/GREEN: most guards here encode invariants that already hold on
- * HEAD (B/C/D/E/F) — they are REGRESSION guards that must stay green after the
- * fix (the fix must not break write-back, must not loop, must not corrupt
- * fixed-px). The one test that is RED on HEAD by construction is [M1-seam-live]
- * (A): it asserts the rrp Group ref is exposed for a model→view sync, which the
- * current impl does NOT wire (no `groupRef`, no imperative `setLayout` on a
- * model change). That assertion is the jsdom-observable proxy for "the fix added
- * the imperative sync seam"; the TRUE visible-pixels proof is the e2e.
+ * Most guards here encode invariants that already hold (B/C/D/E/F) — they are
+ * REGRESSION guards (write-back must not break, must not loop, must not corrupt
+ * fixed-px). The [M1-seam-live] test (A) exercises the live model→view sync
+ * seam: it asserts the rrp Group ref is exposed for a model→view sync (the
+ * `groupRef` + imperative `setLayout` on a model change). That assertion is the
+ * jsdom-observable proxy for the imperative sync seam; the TRUE visible-pixels
+ * proof is the e2e.
  */
 import { describe, it, expect, beforeEach } from 'vitest'
 import { render, act, cleanup } from '@testing-library/react'
@@ -156,22 +155,21 @@ beforeEach(() => {
 	cleanup()
 })
 
-// ─────────────── [M1-seam-live] RED on HEAD: model→view sync seam ───────────────
+// ─────────────── [M1-seam-live]: model→view sync seam ───────────────
 
 describe('M1 model→view sync — the live split must follow a programmatic setSizes', () => {
-	// CORE M1 (RED on HEAD). The fix promotes the split to a component that holds
-	// the rrp Group's imperative ref and, on an external `node.sizes` change, calls
-	// its `setLayout(map)` to MOVE the live splitter. jsdom can't observe the moved
-	// PIXELS (getLayout()==={}), but it CAN observe whether the sync seam — the rrp
-	// Group imperative handle — is wired at all. The current impl renders the Group
-	// WITHOUT a `groupRef`/imperative handle and re-applies nothing on an external
-	// setSizes, so there is no handle to drive: this exposes the missing seam.
+	// CORE M1. The split is a component that holds the rrp Group's imperative ref
+	// and, on an external `node.sizes` change, calls its `setLayout(map)` to MOVE
+	// the live splitter. jsdom can't observe the moved PIXELS (getLayout()==={}),
+	// but it CAN observe whether the sync seam — the rrp Group imperative handle —
+	// is wired. The split exposes the rrp Group's imperative API on the split
+	// element as `__deckGroupApi` so the model→view sync — and this test — has
+	// something to read.
 	//
 	// We surface the handle the same fix-agnostic way the split exposes
-	// `__deckApplyLayout`: the fix must hang the rrp Group's imperative API on the
-	// split element as `__deckGroupApi` (or equivalent) so the model→view sync — and
-	// this test — has something to read. Absent today → undefined → RED.
-	it('[M1-seam-live] exposes the rrp Group imperative handle for model→view sync (RED on HEAD)', () => {
+	// `__deckApplyLayout`: the rrp Group's imperative API hangs on the split
+	// element as `__deckGroupApi` so the model→view sync has something to read.
+	it('[M1-seam-live] exposes the rrp Group imperative handle for model→view sync', () => {
 		const model = createLayoutModel(makeFlexTree())
 		const { container } = renderDock(model, makeRegistry(['a', 'b']))
 

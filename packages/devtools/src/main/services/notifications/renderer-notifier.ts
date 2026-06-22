@@ -53,10 +53,9 @@ export interface WorkbenchSettingsInitPayload {
 
 /**
  * Unified entry point for every main → renderer event sent by the devtools
- * main process. Every site that previously called
- * `someWebContents.send(channel, payload)` now goes through a typed method
- * here so that channel names, payload shapes and `isDestroyed()` guards live
- * in exactly one place.
+ * main process. Instead of calling `someWebContents.send(channel, payload)`
+ * directly, every site goes through a typed method here so that channel names,
+ * payload shapes and `isDestroyed()` guards live in exactly one place.
  *
  * Methods resolve their target `WebContents` lazily from references provided
  * at call time (or read from the owning context) and silently no-op when the

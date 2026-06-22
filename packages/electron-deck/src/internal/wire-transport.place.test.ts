@@ -24,10 +24,10 @@
 //
 // These tests deliberately reference the channel string LITERALS
 // ('__electron-deck:place' / '__electron-deck:layout-subscribe') instead of
-// `DeckChannel.Place` / `DeckChannel.LayoutSubscribe`, because those members do
-// not exist yet — importing them would be a COMPILE error rather than a clean
-// runtime RED. `onPlace`/`onLayoutSubscribe` are reached through a typed escape
-// hatch on the deps for the same reason.
+// `DeckChannel.Place` / `DeckChannel.LayoutSubscribe`, so they pin the on-the-wire
+// channel strings directly — a rename of the enum member can't silently drift the
+// wire contract past these specs. `onPlace`/`onLayoutSubscribe` are reached through
+// a typed escape hatch on the deps.
 
 import { describe, expect, it, vi } from 'vitest'
 import type { JsonValue, SenderPolicy } from '../types.js'

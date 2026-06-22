@@ -7,9 +7,6 @@
  *
  *   simulatorModule      — 'workbench:runtime:native-host', 'panel:list',
  *     (panel cluster)      'panel:select', 'panel:selectSimulator'
- *                          [Wave 2: seam moved from registerPanelsIpc to the
- *                          module — panels.ts may be deleted once panel:eval
- *                          goes; see the block comment below]
  *   registerSimulatorIpc — 'simulator:custom-apis:list', 'simulator:resize',
  *                          'simulator:setVisible'
  *   registerAppIpc       — 'app:getPreloadPath'
@@ -21,7 +18,7 @@
  * path main no longer maintains (e.g. `panel:select` calling into the
  * deleted static show/hide route). Wire names are asserted as STRING
  * LITERALS (not via the enum) so:
- *   1. the test still compiles after the implementer deletes the enum entry;
+ *   1. the test still compiles after the enum entry is deleted;
  *   2. re-registering the same wire name under a new constant is also caught;
  *   3. deleting the enum entry but keeping a literal-string registration is
  *      caught too.
@@ -38,8 +35,8 @@
  *     overlay cluster is a separate decision; only the WORKBENCH-settings
  *     'workbenchSettings:setVisible' goes away.
  *
- * RED today: panels.ts:19/35/41/49, simulator.ts:25/52/56, app.ts:9,
- * settings.ts:75 all still register the dead channels.
+ * Guards that none of panels.ts, simulator.ts, app.ts, or settings.ts
+ * register the dead channels.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
@@ -121,17 +118,13 @@ beforeEach(() => {
 
 // ── panel cluster (via simulatorModule) ──────────────────────────────────────
 //
-// [Wave 2 edit] This block originally imported `registerPanelsIpc` from
-// './panels.js' and used "'panel:eval' is still registered" as its sanity
-// anchor. Wave 2 decommissions 'panel:eval' itself (see
-// simulator-module-toolbar-eval-decommission.test.ts) — after which
-// registerPanelsIpc registers NOTHING and the implementer may delete
-// panels.ts outright. Anchoring on a panels channel is therefore impossible,
-// and importing the deleted file would fail for the wrong reason. The seam
-// moves up one level to `simulatorModule.setup` (which fans out into the same
-// registrars), and the anchor moves to 'simulator:attach-native' — registered
-// by registerSimulatorIpc inside the same module, so "channel absent" still
-// provably comes from targeted removal, not from the module wiring nothing.
+// The panels registrar registers nothing (panel:eval is decommissioned; see
+// simulator-module-toolbar-eval-decommission.test.ts), so this block cannot
+// anchor on a panels channel. The seam is `simulatorModule.setup` (which fans
+// out into the same registrars), and the sanity anchor is
+// 'simulator:attach-native' — registered by registerSimulatorIpc inside the
+// same module, so "channel absent" still provably comes from targeted removal,
+// not from the module wiring nothing.
 
 async function setupSimulatorModule(): Promise<Disposable> {
   const { simulatorModule } = await import('./simulator-module.js')
@@ -196,8 +189,7 @@ describe('simulatorModule (panel cluster): dead channels are gone', () => {
   it("sanity anchor: 'simulator:attach-native' is still registered (module did not go empty)", async () => {
     const d = await setupSimulatorModule()
     // Guards against "tests above pass because simulatorModule registers
-    // nothing". Was "'panel:eval' is still registered" until Wave 2
-    // decommissioned panel:eval itself — see block comment above.
+    // nothing" — see block comment above.
     expect(stub.handled.has('simulator:attach-native')).toBe(true)
     await d.dispose()
   })
@@ -290,9 +282,7 @@ describe('registerAppIpc: app:getPreloadPath is decommissioned', () => {
 
   it("sanity anchor: 'app:getBranding' is still registered", async () => {
     const d = await setupApp()
-    // Guards against "registerAppIpc registers nothing" false green. NOTE for
-    // the implementer: app-no-header-height-channel.test.ts pins GetPreloadPath
-    // as ITS sanity anchor — swap that anchor to GetBranding in the same change.
+    // Guards against "registerAppIpc registers nothing" false green.
     expect(stub.handled.has('app:getBranding')).toBe(true)
     await d.dispose()
   })

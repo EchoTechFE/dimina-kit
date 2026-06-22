@@ -333,7 +333,7 @@ function constraintMinPxAt(
  * `simulator` panel. Matching the constrained child by "contains simulator"
  * (not "is the simulator tab group") keeps the re-pin correct after an
  * edge-drop onto the simulator turns its leading group into a nested split while
- * the constraint stays on that subtree (Codex MF3). Returns `null` only when the
+ * the constraint stays on that subtree. Returns `null` only when the
  * simulator is not inside any fixed-px region (e.g. re-docked into a flexible
  * group) — the caller then skips the live re-pin rather than guessing. Walks the
  * tree (does NOT assume `root.children[0]`).

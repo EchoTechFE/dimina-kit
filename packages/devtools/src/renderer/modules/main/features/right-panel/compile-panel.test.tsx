@@ -1,5 +1,5 @@
 /**
- * 编译信息 tab — CompilePanel component contract (TDD, NOT yet implemented).
+ * 编译信息 tab — CompilePanel component contract.
  *
  * Target file: `right-panel/compile-panel.tsx`, named export `CompilePanel`,
  * props `{ events: CompileEvent[]; onClear: () => void }` where `events` is
@@ -39,8 +39,9 @@ interface CompilePanelProps {
   onClear: () => void
 }
 
-// Static-import-free loading: the glob matches zero modules until
-// compile-panel.tsx exists, keeping tsc/eslint green in the red phase.
+// Static-import-free loading: the glob matches zero modules if
+// compile-panel.tsx is absent, keeping a missing module an assertion failure
+// rather than an import-time throw.
 const compilePanelModules = import.meta.glob('./compile-panel.tsx')
 
 async function loadCompilePanel(): Promise<ComponentType<CompilePanelProps>> {

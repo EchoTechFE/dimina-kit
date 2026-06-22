@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * TDD contract tests (FAILING-FIRST) for `createDeckLayoutClient` — the
+ * Contract tests for `createDeckLayoutClient` — the
  * RENDERER half of the「anchor slotToken 原子下发」slot-token handshake (view-handle.md「slot-token 握手」
  * "renderer client"). This client is what makes a main-process native view
  * actually FOLLOW a DOM slot:
@@ -24,11 +24,9 @@
  * drive `opts.publish(...)` directly, and a FAKE `bridge` captures the
  * grant callback / replay-drain / place sends.
  *
- * Expected initial state: RED — `./layout-client.js` does not exist yet.
  */
 
 import { describe, expect, it, vi } from 'vitest'
-// RED: module does not exist yet — implementation is intentionally absent.
 import { createDeckLayoutClient } from './layout-client.js'
 
 // ── Local mirror of view-anchor's `Placement` (cannot import: view-anchor is

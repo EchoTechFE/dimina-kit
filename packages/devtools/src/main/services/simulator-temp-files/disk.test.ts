@@ -1,5 +1,5 @@
 /**
- * Phase 1 contract tests for the main-process disk helpers in `disk.ts`.
+ * Contract tests for the main-process disk helpers in `disk.ts`.
  *
  * Spec: `packages/devtools/docs/file-system.md` §4.3, §6 P1-1 / P1-3.
  *

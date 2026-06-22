@@ -1402,13 +1402,13 @@ function makeLoadResource(ap: AppSession, page: PageSession, target: 'service' |
       // dimina's service runtime reads hostEnv as `{ systemInfo, menuRect }`
       // (core/host-env.js init → getSystemInfo/getMenuRect; invokeAPI resolves
       // getSystemInfoSync/getWindowInfo/getDeviceInfo from hostEnv.systemInfo).
-      // We previously sent the FLAT HostEnvSnapshot, so `systemInfo` was null →
-      // `wx.getSystemInfoSync()` returned null and pages reading
-      // `.screenWidth` threw. Nest it under `systemInfo`. (render does NOT read
-      // hostEnv, so this is service-only; the devtools sync-api-patch reads the
-      // separate __diminaSpawnContext.hostEnvSnapshot and is unaffected.)
-      // menuRect stays null as before — getMenuButtonBoundingClientRect is
-      // served by the sync-api-patch / DeviceShell capsule, not this path.
+      // The snapshot must be nested under `systemInfo`: a FLAT HostEnvSnapshot
+      // leaves `systemInfo` null → `wx.getSystemInfoSync()` returns null and
+      // pages reading `.screenWidth` throw. (render does NOT read hostEnv, so
+      // this is service-only; the devtools sync-api-patch reads the separate
+      // __diminaSpawnContext.hostEnvSnapshot and is unaffected.)
+      // menuRect stays null — getMenuButtonBoundingClientRect is served by the
+      // sync-api-patch / DeviceShell capsule, not this path.
       hostEnv: { systemInfo: ap.hostEnv, menuRect: null },
     },
   }

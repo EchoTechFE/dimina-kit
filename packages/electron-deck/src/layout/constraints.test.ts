@@ -1,7 +1,7 @@
 /**
  * T1 — per-child fixed-px size constraint on SplitNode.
  *
- * CONTRACT under test (the implementer MUST match these):
+ * CONTRACT under test (the implementation MUST match these):
  *
  * - `SplitNode` gains an OPTIONAL field `constraints?: readonly (SizeConstraint | null)[]`.
  * - `SizeConstraint` is a new exported type `{ readonly fixedPx: number }` where
@@ -16,8 +16,6 @@
  * ALL-NULL CHOICE (item 4): we KEEP the array. After clearing the last non-null
  * constraint, `constraints` remains an all-null array of the same length (it is
  * NOT dropped to undefined). This is asserted explicitly below.
- *
- * These tests are RED until the feature exists (missing type / missing export).
  */
 import { describe, expect, it } from 'vitest'
 import type { LayoutTree, SplitNode } from './types.js'
@@ -469,7 +467,7 @@ describe('T1 constraints — existing mutations preserve constraints', () => {
 // floor. So "is this child fixed?" === "does its constraint have `fixedPx`?" — a
 // `minPx` child is NOT fixed.
 //
-// These are RED until the type/validation/mutation support minPx; the existing
+// These guard the type/validation/mutation support for minPx; the existing
 // fixedPx tests above must keep passing (the lock semantics are preserved).
 
 describe('T2 minPx — serialize / parse round-trip', () => {

@@ -703,10 +703,10 @@ describe('async owned disposers — awaited, LIFO', () => {
   })
 })
 
-// foundation.md §9 P1 DoD#4 — literal "registry.size === 0" probe: the registry
+// literal "registry.size === 0" probe: the registry
 // is the live ledger of trusted webContents; closing all of them must leave it
 // empty, while reset (soft pool reuse) must NOT remove the connection.
-describe('registry size — empties on close, persists across reset (DoD#4)', () => {
+describe('registry size — empties on close, persists across reset', () => {
   it('registry.all() returns to length 0 after every connection closes', () => {
     const a = makeFakeWebContents()
     const b = makeFakeWebContents()
