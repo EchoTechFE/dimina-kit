@@ -134,14 +134,16 @@ describe('PanelCapabilities (drag/drop policy on descriptors)', () => {
 
 	// The type member itself must be EXPORTED (a host imports it to type a
 	// descriptor map). A pure type can't be asserted at runtime, so we pin its
-	// shape at compile time: a value typed as PanelCapabilities accepts both
+	// shape at compile time: a value typed as PanelCapabilities accepts the
 	// optional fields and nothing else. This line stops compiling if the type is
 	// missing or renamed.
-	it('PanelCapabilities is an exported type with both optional fields', () => {
-		const cap: PanelCapabilities = { draggable: true, dropPolicy: 'free' }
+	it('PanelCapabilities is an exported type with all optional fields', () => {
+		const cap: PanelCapabilities = { draggable: true, dropPolicy: 'free', closable: false }
 		const empty: PanelCapabilities = {}
 		expect(cap.draggable).toBe(true)
 		expect(cap.dropPolicy).toBe('free')
+		expect(cap.closable).toBe(false)
 		expect(empty.draggable).toBeUndefined()
+		expect(empty.closable).toBeUndefined()
 	})
 })

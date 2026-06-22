@@ -16,7 +16,7 @@ export function registerSimulatorIpc(ctx: Pick<WorkbenchContext, 'views' | 'noti
   return new IpcRegistry(ctx.senderPolicy)
     .handle(SimulatorChannel.AttachNative, (_, ...args: unknown[]) => {
       const [simulatorUrl, simWidth] = validate(SimulatorChannel.AttachNative, SimulatorAttachNativeSchema, args)
-      ctx.views.attachNativeSimulator(simulatorUrl, simWidth)
+      return ctx.views.attachNativeSimulator(simulatorUrl, simWidth)
     })
     .handle(SimulatorChannel.Detach, () => {
       ctx.views.detachSimulator()

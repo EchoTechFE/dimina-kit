@@ -35,6 +35,16 @@ export interface OpenInEditorRequest {
   column?: number
 }
 
+export interface ProjectSourceContext {
+  /** Absolute project root on disk. */
+  projectRoot: string
+  /** Resource server base URL used by the compiled miniapp. */
+  resourceBaseUrl: string
+  appId: string
+  /** Compiler output package root (`main` for the primary package). */
+  outputRoot: string
+}
+
 /**
  * Encode an open-in-editor request as a sentinel URL the DevTools front-end can
  * hand to `InspectorFrontendHost.openInNewTab(...)`. All fields ride in the
@@ -106,9 +116,12 @@ export function decodeOpenInEditorUrl(raw: string): OpenInEditorRequest | null {
  */
 export function resourceUrlToProjectRelativePath(
   resourceUrl: string,
-  expectedOrigin?: string,
+  expectedOriginOrContext?: string | ProjectSourceContext,
 ): string | null {
   if (typeof resourceUrl !== 'string' || !resourceUrl) return null
+  if (expectedOriginOrContext && typeof expectedOriginOrContext === 'object') {
+    return projectAwareResourcePath(resourceUrl, expectedOriginOrContext)
+  }
   let resource: URL
   try {
     resource = new URL(resourceUrl)
@@ -118,9 +131,9 @@ export function resourceUrlToProjectRelativePath(
   // Only http(s) dev-server sources map to project files; schemes like
   // `webpack://`, `node:`, `data:` are framework/runtime frames with no file.
   if (resource.protocol !== 'http:' && resource.protocol !== 'https:') return null
-  if (expectedOrigin) {
+  if (expectedOriginOrContext) {
     let base: URL
-    try { base = new URL(expectedOrigin) } catch { return null }
+    try { base = new URL(expectedOriginOrContext) } catch { return null }
     if (resource.origin !== base.origin) return null
   }
 
@@ -131,4 +144,245 @@ export function resourceUrlToProjectRelativePath(
   })
   if (segments.length < 2) return null
   return segments.slice(1).join('/')
+}
+
+function decodePathname(pathname: string): string {
+  return pathname.split('/').map((segment) => {
+    try { return decodeURIComponent(segment) } catch { return segment }
+  }).join('/')
+}
+
+function normalizeSlashPath(value: string): string {
+  return decodePathname(value.replace(/\\/g, '/')).replace(/\/+/g, '/')
+}
+
+function safeRelativePath(segments: string[]): string | null {
+  if (segments.length === 0 || segments.some((segment) => !segment || segment === '.' || segment === '..')) {
+    return null
+  }
+  return segments.join('/')
+}
+
+function projectAwareResourcePath(resourceUrl: string, context: ProjectSourceContext): string | null {
+  let base: URL
+  try {
+    base = new URL(context.resourceBaseUrl)
+  } catch {
+    return null
+  }
+
+  const projectRoot = normalizeSlashPath(context.projectRoot).replace(/\/$/, '')
+  const raw = resourceUrl.trim()
+  if (!raw) return null
+
+  // Chromium may hand the open-resource hook a raw absolute filesystem path.
+  const normalizedRaw = normalizeSlashPath(raw)
+  if (projectRoot && (normalizedRaw === projectRoot || normalizedRaw.startsWith(`${projectRoot}/`))) {
+    const relative = normalizedRaw.slice(projectRoot.length).replace(/^\/+/, '')
+    return safeRelativePath(relative.split('/').filter(Boolean))
+  }
+  // Sourcemap sources commonly use virtual root paths such as `/pages/x.js`.
+  // Real host filesystem paths use well-known absolute roots; when they are
+  // outside the active project they are runtime/devtools frames, not sources.
+  if (/^\/(?:Volumes|Users|home|private|tmp|var|opt|Applications)\//.test(normalizedRaw)) {
+    return null
+  }
+
+  // Reject relative runtime labels such as `service.js` or
+  // `electron/js2c/renderer_init`; project source locations must be an
+  // absolute URL/path so they can be scoped to the active project.
+  if (!raw.startsWith('/') && !/^[a-z][a-z0-9+.-]*:/i.test(raw)) return null
+
+  let resource: URL
+  try {
+    resource = raw.startsWith('/') && !raw.startsWith('//')
+      ? new URL(raw, base.origin)
+      : new URL(raw)
+  } catch {
+    return null
+  }
+
+  if (resource.protocol === 'file:') {
+    const filePath = normalizeSlashPath(resource.pathname)
+    if (!projectRoot || (filePath !== projectRoot && !filePath.startsWith(`${projectRoot}/`))) return null
+    return safeRelativePath(
+      filePath.slice(projectRoot.length).replace(/^\/+/, '').split('/').filter(Boolean),
+    )
+  }
+
+  if (resource.protocol !== 'http:' && resource.protocol !== 'https:') return null
+  if (resource.origin !== base.origin) return null
+
+  let segments = decodePathname(resource.pathname).split('/').filter(Boolean)
+  if (context.appId && segments[0] === context.appId) {
+    segments = segments.slice(1)
+    if (context.outputRoot && segments[0] === context.outputRoot) segments = segments.slice(1)
+  }
+  return safeRelativePath(segments)
+}
+
+/** Read the project/source routing metadata carried by a service-host spawn URL. */
+export function projectSourceContextFromServiceHostUrl(
+  serviceHostUrl: string,
+  activeProjectRoot?: string,
+): ProjectSourceContext | null {
+  let url: URL
+  try {
+    url = new URL(serviceHostUrl)
+  } catch {
+    return null
+  }
+  const projectRoot = url.searchParams.get('pkgRoot') || ''
+  const resourceBaseUrl = url.searchParams.get('resourceBaseUrl') ?? ''
+  const appId = url.searchParams.get('appId') ?? ''
+  const outputRoot = url.searchParams.get('root') ?? 'main'
+  if (!projectRoot || !resourceBaseUrl || !appId) return null
+  if (activeProjectRoot) {
+    const authoritativeRoot = normalizeSlashPath(projectRoot).replace(/\/+$/, '')
+    const currentRoot = normalizeSlashPath(activeProjectRoot).replace(/\/+$/, '')
+    if (!authoritativeRoot || authoritativeRoot !== currentRoot) return null
+  }
+  try {
+    new URL(resourceBaseUrl)
+  } catch {
+    return null
+  }
+  return { projectRoot, resourceBaseUrl, appId, outputRoot }
+}
+
+/**
+ * Build the DevTools-front-end glue for project source links.
+ *
+ * It keeps the existing `setOpenResourceHandler` transport, but only forwards
+ * locations that map to the active project. A DOM observer expands Chromium's
+ * basename-only console labels to project-relative paths.
+ */
+export function buildDevtoolsProjectSourceLinksScript(context: ProjectSourceContext): string {
+  const config = JSON.stringify(context)
+  const scheme = JSON.stringify(OPEN_IN_EDITOR_SCHEME)
+  return `
+    (function() {
+      try {
+        const stateKey = '__diminaProjectSourceLinksState__'
+        const previousState = globalThis[stateKey]
+        if (previousState && typeof previousState.dispose === 'function') {
+          try { previousState.dispose() } catch (_) {}
+        }
+
+        const cfg = ${config}
+        const diminaProjectSourcePath = ${projectAwareResourcePath.toString()}
+        const decodePathname = ${decodePathname.toString()}
+        const normalizeSlashPath = ${normalizeSlashPath.toString()}
+        const safeRelativePath = ${safeRelativePath.toString()}
+        const observedRoots = new Set()
+        const observers = []
+        let timer = null
+        const state = {
+          dispose() {
+            if (timer !== null) {
+              clearInterval(timer)
+              timer = null
+            }
+            for (const observer of observers.splice(0)) {
+              try { observer.disconnect() } catch (_) {}
+            }
+            observedRoots.clear()
+          },
+        }
+        globalThis[stateKey] = state
+
+        function splitLocation(value) {
+          const raw = String(value || '')
+          const match = raw.match(/^(.*?)(?::(\\d+))(?::(\\d+))?$/)
+          return match
+            ? { url: match[1], suffix: ':' + match[2] + (match[3] ? ':' + match[3] : '') }
+            : { url: raw, suffix: '' }
+        }
+
+        function rewriteLink(link) {
+          if (!link || link.dataset.diminaProjectSourcePath) return
+          const candidates = [
+            link.getAttribute && link.getAttribute('title'),
+            link.getAttribute && link.getAttribute('href'),
+            link.getAttribute && link.getAttribute('data-url'),
+          ]
+          for (const candidate of candidates) {
+            if (!candidate) continue
+            const location = splitLocation(candidate)
+            const relative = diminaProjectSourcePath(location.url, cfg)
+            if (!relative) continue
+            const textSuffix = location.suffix || ((String(link.textContent || '').match(/(:\\d+(?::\\d+)?)$/) || [])[1] || '')
+            link.textContent = relative + textSuffix
+            link.dataset.diminaProjectSourcePath = relative
+            return
+          }
+        }
+
+        function observeRoot(root) {
+          if (!root || !root.querySelectorAll || observedRoots.has(root)) return
+          observedRoots.add(root)
+
+          const observer = new MutationObserver((records) => {
+            for (const record of records) {
+              if (record.type === 'attributes') rewriteLink(record.target)
+              for (const node of record.addedNodes || []) visitNode(node)
+            }
+          })
+          observer.observe(root, {
+            subtree: true,
+            childList: true,
+            attributes: true,
+            attributeFilter: ['title', 'href', 'data-url'],
+          })
+          observers.push(observer)
+
+          for (const link of root.querySelectorAll('.devtools-link')) rewriteLink(link)
+          for (const element of root.querySelectorAll('*')) {
+            if (element.shadowRoot) observeRoot(element.shadowRoot)
+          }
+        }
+
+        function visitNode(node) {
+          if (!node) return
+          if (node.matches && node.matches('.devtools-link')) rewriteLink(node)
+          if (node.shadowRoot) observeRoot(node.shadowRoot)
+          if (!node.querySelectorAll) return
+          for (const link of node.querySelectorAll('.devtools-link')) rewriteLink(link)
+          for (const element of node.querySelectorAll('*')) {
+            if (element.shadowRoot) observeRoot(element.shadowRoot)
+          }
+        }
+
+        observeRoot(document)
+
+        let tries = 0
+        timer = setInterval(() => {
+          tries++
+          try {
+            const Host = globalThis.Host
+            const host = Host && Host.InspectorFrontendHost
+            if (host && typeof host.setOpenResourceHandler === 'function'
+                     && typeof host.openInNewTab === 'function') {
+              host.setOpenResourceHandler((url, lineNumber, columnNumber) => {
+                try {
+                  if (!diminaProjectSourcePath(String(url), cfg)) return
+                  const p = new URLSearchParams()
+                  p.set('u', String(url))
+                  if (typeof lineNumber === 'number') p.set('l', String(lineNumber))
+                  if (typeof columnNumber === 'number') p.set('c', String(columnNumber))
+                  host.openInNewTab(${scheme} + ':?' + p.toString())
+                } catch (_) {}
+              })
+              clearInterval(timer)
+              timer = null
+            }
+          } catch (_) {}
+          if (tries > 80 && timer !== null) {
+            clearInterval(timer)
+            timer = null
+          }
+        }, 50)
+      } catch (_) {}
+    })()
+  `
 }

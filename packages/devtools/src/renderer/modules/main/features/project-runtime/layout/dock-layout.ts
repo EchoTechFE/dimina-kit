@@ -55,24 +55,27 @@ export function buildDockRegistry(): PanelRegistry {
   const registry = createPanelRegistry()
   // simulator + editor are STRUCTURAL panels: `draggable:false` locks their tabs
   // (can't be picked up) AND makes them invalid drop anchors (nothing may
-  // join/split onto them). The five debug panels are `reorder-only`: draggable,
+  // join/split onto them). The five debug panels are `reorder-only` and
+  // non-closable: draggable,
   // but a drag may ONLY reorder them within their own tab strip — never tear them
-  // out into the simulator/editor regions. See PanelCapabilities in electron-deck.
+  // out into the simulator/editor regions, and their built-in tabs stay available.
+  // See PanelCapabilities in electron-deck.
   // simulator + editor draw their own chrome (device picker / file path bar), so
   // they hide the engine tab entirely — their groups render no tab strip.
   registry.register({ kind: 'dom', id: 'simulator', title: 'Simulator', draggable: false, hideTab: true })
   registry.register({ kind: 'dom', id: 'editor', title: 'Editor', draggable: false, hideTab: true })
-  registry.register({ kind: 'dom', id: 'wxml', title: 'WXML', dropPolicy: 'reorder-only' })
-  registry.register({ kind: 'dom', id: 'appdata', title: 'AppData', dropPolicy: 'reorder-only' })
-  registry.register({ kind: 'dom', id: 'storage', title: 'Storage', dropPolicy: 'reorder-only' })
+  registry.register({ kind: 'dom', id: 'wxml', title: 'WXML', dropPolicy: 'reorder-only', closable: false })
+  registry.register({ kind: 'dom', id: 'appdata', title: 'AppData', dropPolicy: 'reorder-only', closable: false })
+  registry.register({ kind: 'dom', id: 'storage', title: 'Storage', dropPolicy: 'reorder-only', closable: false })
   registry.register({
     kind: 'native',
     id: 'console',
     title: 'Console',
     nativeRef: { id: 'console' },
     dropPolicy: 'reorder-only',
+    closable: false,
   })
-  registry.register({ kind: 'dom', id: 'compile', title: '编译', dropPolicy: 'reorder-only' })
+  registry.register({ kind: 'dom', id: 'compile', title: '编译', dropPolicy: 'reorder-only', closable: false })
   return registry
 }
 

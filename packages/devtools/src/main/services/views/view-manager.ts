@@ -1,5 +1,6 @@
 import type { IpcMainEvent, WebContents } from 'electron'
 import { ipcMain, nativeTheme, shell, WebContentsView, webContents } from 'electron'
+import fs from 'node:fs'
 import path from 'path'
 import { cjsSiblingPreloadPath, mainPreloadPath } from '../../utils/paths.js'
 import { simDeskBg } from '../../utils/theme.js'
@@ -11,8 +12,10 @@ import type { RenderEvent } from '../../ipc/bridge-router.js'
 import { SimulatorCustomApiBridgeChannel } from '../../../shared/ipc-channels.js'
 import type { NativeDeviceInfo } from '../../../shared/ipc-channels.js'
 import {
-  OPEN_IN_EDITOR_SCHEME,
+  buildDevtoolsProjectSourceLinksScript,
   decodeOpenInEditorUrl,
+  type OpenInEditorRequest,
+  projectSourceContextFromServiceHostUrl,
   resourceUrlToProjectRelativePath,
 } from '../../../shared/open-in-editor.js'
 import { createSafeAreaController } from '../safe-area/index.js'
@@ -53,6 +56,8 @@ export interface ViewManagerContext {
    * `createWorkbenchContext` always supplies it.
    */
   connections: WorkbenchContext['connections']
+  /** Active project root used to validate/open console source locations. */
+  workspace?: WorkbenchContext['workspace']
   /**
    * Absolute path to the simulator preload bundle. Only consumed by the
    * native-host simulator WebContentsView (`attachNativeSimulator`); the
@@ -120,7 +125,7 @@ export interface ViewManager {
    * `simWidth` rides the wire for schema compatibility but is unused: all
    * geometry is anchor-published.
    */
-  attachNativeSimulator(simulatorUrl: string, simWidth: number): void
+  attachNativeSimulator(simulatorUrl: string, simWidth: number): Promise<void>
   /**
    * Destroy and null out the simulator view (e.g. on simulator detach).
    * Also destroys the cached settings view and hides the popover —
@@ -152,6 +157,8 @@ export interface ViewManager {
   getSimulatorWebContentsId(): number | null
   /** Return the live webContents of the currently attached simulator, or null. */
   getSimulatorWebContents(): WebContents | null
+  /** Return the active project path bound to the current native simulator. */
+  getSimulatorProjectPath(): string | null
   /** Return the settings overlay's WebContents (for renderer-notifier). */
   getSettingsWebContents(): WebContents | null
   /** Return the webContents ID of the settings overlay if alive, else null. */
@@ -317,6 +324,45 @@ export interface HostToolbarControl {
   setHeightMode(mode: HostToolbarHeightMode): void
 }
 
+export interface ProjectEditorTarget {
+  path: string
+  line?: number
+  column?: number
+}
+
+/**
+ * Resolve a DevTools source request against the service-host URL that created
+ * the inspected app. Its pkgRoot is authoritative; the workspace is only a
+ * stale-session consistency guard.
+ */
+export function resolveProjectEditorTarget(
+  serviceHostUrl: string,
+  activeProjectRoot: string | undefined,
+  req: OpenInEditorRequest,
+  isFile: (absolutePath: string) => boolean = (absolutePath) => fs.statSync(absolutePath).isFile(),
+): ProjectEditorTarget | null {
+  const sourceContext = projectSourceContextFromServiceHostUrl(
+    serviceHostUrl,
+    activeProjectRoot,
+  )
+  if (!sourceContext) return null
+  const rel = resourceUrlToProjectRelativePath(req.url, sourceContext)
+  if (!rel) return null
+  const absolute = path.resolve(sourceContext.projectRoot, ...rel.split('/'))
+  const fromRoot = path.relative(path.resolve(sourceContext.projectRoot), absolute)
+  if (!fromRoot || fromRoot.startsWith('..') || path.isAbsolute(fromRoot)) return null
+  try {
+    if (!isFile(absolute)) return null
+  } catch {
+    return null
+  }
+  return {
+    path: rel,
+    line: typeof req.line === 'number' ? req.line + 1 : undefined,
+    column: typeof req.column === 'number' ? req.column + 1 : undefined,
+  }
+}
+
 /**
  * Build a ViewManager bound to the given context. The returned object is the
  * only component allowed to instantiate or add/remove overlay WebContentsViews.
@@ -339,6 +385,8 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   // while `simulatorView` above hosts its DevTools in the right panel region.
   let nativeSimulatorView: WebContentsView | null = null
   let nativeSimulatorViewAdded = false
+  let nativeSimulatorProjectPath: string | null = null
+  let settleNativeSimulatorReady: (() => void) | null = null
   // Model A: the renderer's measured inner-screen rect is the SOLE authority for
   // the native simulator WCV bounds (see docs/simulator-render-architecture.md).
   // Cache the last rect so a report that lands before attachNativeSimulator (the
@@ -729,43 +777,19 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   // map to a project-relative path, and broadcast to the renderer's Monaco.
   const openInEditorWiredWcIds = new Set<number>()
 
-  function injectOpenResourceHandler(devtoolsWc: WebContents): void {
+  function injectOpenResourceHandler(serviceWc: WebContents, devtoolsWc: WebContents): void {
     // `setOpenResourceHandler` is the official Chromium DevTools hook IDEs use
     // to route source-link clicks to an external editor. We poll for the host
     // (it appears once the front-end finishes bootstrapping, like `UI` above)
     // and register a handler that re-emits an encoded sentinel via
     // `openInNewTab` → Electron `devtools-open-url`. Best-effort: wrapped in
     // try/catch and a bounded poll so a missing API never throws.
-    const scheme = JSON.stringify(OPEN_IN_EDITOR_SCHEME)
-    devtoolsWc.executeJavaScript(`
-      (function() {
-        try {
-          let tries = 0
-          const timer = setInterval(() => {
-            tries++
-            try {
-              const Host = globalThis.Host
-              const host = Host && Host.InspectorFrontendHost
-              if (host && typeof host.setOpenResourceHandler === 'function'
-                       && typeof host.openInNewTab === 'function') {
-                host.setOpenResourceHandler((url, lineNumber, columnNumber) => {
-                  try {
-                    const p = new URLSearchParams()
-                    p.set('u', String(url))
-                    if (typeof lineNumber === 'number') p.set('l', String(lineNumber))
-                    if (typeof columnNumber === 'number') p.set('c', String(columnNumber))
-                    host.openInNewTab(${scheme} + ':?' + p.toString())
-                  } catch (_) {}
-                })
-                clearInterval(timer)
-                return
-              }
-            } catch (_) {}
-            if (tries > 80) clearInterval(timer)
-          }, 50)
-        } catch (_) {}
-      })()
-    `).catch(() => {})
+    const sourceContext = projectSourceContextFromServiceHostUrl(
+      serviceWc.getURL(),
+      ctx.workspace?.getProjectPath?.(),
+    )
+    if (!sourceContext) return
+    devtoolsWc.executeJavaScript(buildDevtoolsProjectSourceLinksScript(sourceContext)).catch(() => {})
   }
 
   // ── DevTools tab customization: keep only Elements/Console/Network ──────────
@@ -799,9 +823,9 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     // wc is recreated per simulatorView, so a fresh host needs the handler set.
     if (!devtoolsWc.isDestroyed()) {
       if (devtoolsWc.isLoading()) {
-        devtoolsWc.once('dom-ready', () => injectOpenResourceHandler(devtoolsWc))
+        devtoolsWc.once('dom-ready', () => injectOpenResourceHandler(serviceWc, devtoolsWc))
       } else {
-        injectOpenResourceHandler(devtoolsWc)
+        injectOpenResourceHandler(serviceWc, devtoolsWc)
       }
     }
     // Attach the `devtools-open-url` decoder to the inspected service wc once
@@ -812,12 +836,13 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     const onOpenUrl = (_event: Electron.Event, url: string): void => {
       const req = decodeOpenInEditorUrl(url)
       if (!req) return // not our sentinel — leave it to Electron's default path
-      const rel = resourceUrlToProjectRelativePath(req.url)
-      if (!rel) return
-      // DevTools reports 0-based line/column; Monaco is 1-based.
-      const line = typeof req.line === 'number' ? req.line + 1 : undefined
-      const column = typeof req.column === 'number' ? req.column + 1 : undefined
-      ctx.notify.editorOpenFile({ path: rel, line, column })
+      const target = resolveProjectEditorTarget(
+        serviceWc.getURL(),
+        ctx.workspace?.getProjectPath?.(),
+        req,
+      )
+      if (!target) return
+      ctx.notify.editorOpenFile(target)
     }
     serviceWc.on('devtools-open-url', onOpenUrl)
     // Consolidate teardown onto the connection layer (foundation.md §4 / P2),
@@ -1076,11 +1101,16 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     ctx.connections.acquire(simWc).own(detachNativeCustomApiBridge)
   }
 
-  function attachNativeSimulator(simulatorUrl: string, _simWidth: number): void {
+  function attachNativeSimulator(simulatorUrl: string, _simWidth: number): Promise<void> {
     if (!ctx.preloadPath) {
       console.error('[workbench] attachNativeSimulator — preloadPath unset; cannot mount native simulator')
-      return
+      return Promise.resolve()
     }
+
+    // Unblock a superseded IPC invocation. Its renderer effect cleanup marks
+    // that generation cancelled, so this cannot schedule a stale capture.
+    settleNativeSimulatorReady?.()
+    settleNativeSimulatorReady = null
 
     // Tear down any previous native simulator view (relaunch / re-open).
     if (nativeSimulatorView) {
@@ -1098,6 +1128,11 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       } catch { /* ignore */ }
       nativeSimulatorView = null
     }
+    nativeSimulatorProjectPath = null
+
+    const ready = new Promise<void>((resolve) => {
+      settleNativeSimulatorReady = resolve
+    })
 
     // Derive THIS project's session partition from the simulator URL's appId so
     // its cookies/localStorage/cache are isolated from every other project (P0
@@ -1127,6 +1162,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       },
     })
     nativeSimulatorView = view
+    nativeSimulatorProjectPath = ctx.workspace?.getProjectPath() || null
     // Paint the WCV surface the themed desk color (simDeskBg(): dark #121212 /
     // light #e8e8e8) so a height-resize that grows the region never flashes a
     // mismatched strip before DeviceShell's desk repaints — the WCV, the desk,
@@ -1209,6 +1245,14 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
           e.preventDefault()
         }
       })
+      // The outer DeviceShell loading is insufficient: slow projects attach a
+      // render guest later. Resolve the renderer's attach IPC only after that
+      // first mini-app page has completed its own document load.
+      guestWc.once('did-finish-load', () => {
+        if (nativeSimulatorView !== view || simWc.isDestroyed()) return
+        settleNativeSimulatorReady?.()
+        settleNativeSimulatorReady = null
+      })
       // A render-host guest only attaches after a spawn, so the service window
       // exists by now — (re)point the right-panel DevTools at it. Belt-and-braces
       // with the `onRenderEvent` path in case its emit lost the attach race.
@@ -1267,9 +1311,12 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     // (The UI/view layer's Elements equivalent is the native WXML panel +
     // render-guest highlight chain, which targets the active render guest.)
     attachNativeSimulatorDevtoolsHost()
+    return ready
   }
 
   function detachSimulator(): void {
+    settleNativeSimulatorReady?.()
+    settleNativeSimulatorReady = null
     stopFollowingNativeServiceHost()
     detachNativeCustomApiBridge()
     // Stop Elements forwarding (detaches only the debugger sessions IT attached;
@@ -1308,6 +1355,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     simulatorView = null
     simulatorViewAdded = false
     simulatorWebContentsId = null
+    nativeSimulatorProjectPath = null
     // Drop the renderer-published rect so a stale "hidden" override doesn't
     // suppress the next view before its renderer republishes.
     simulatorBoundsOverride = null
@@ -1524,6 +1572,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       const wc = webContents.fromId(simulatorWebContentsId)
       return wc && !wc.isDestroyed() ? wc : null
     },
+    getSimulatorProjectPath: () => nativeSimulatorProjectPath,
     getSettingsWebContents: () => {
       if (!settingsView) return null
       if (settingsView.webContents.isDestroyed()) return null

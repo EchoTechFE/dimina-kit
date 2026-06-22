@@ -100,6 +100,17 @@ function makeRegistry(): PanelRegistry {
 	return reg
 }
 
+function makeRegistryWithLockedDebug(): PanelRegistry {
+	const reg = makeRegistry()
+	reg.register({
+		kind: 'dom',
+		id: 'debug',
+		title: 'Debug',
+		closable: false,
+	})
+	return reg
+}
+
 /** Default renderDomPanel: a marker node so tests can assert which body rendered. */
 function domBody(panelId: string) {
 	return <div data-test-dom-content={panelId}>BODY:{panelId}</div>
@@ -155,6 +166,17 @@ describe('<DockView> close affordance — rendering', () => {
 		const { container } = renderDock({ model: createLayoutModel(makeTree()), registry: makeRegistry() })
 		const editorTab = container.querySelector('[data-deck-tab="editor"]')!
 		expect(editorTab.querySelector('[data-deck-tab-close="editor"]')).not.toBeNull()
+	})
+
+	it('does not render a close affordance when the descriptor sets closable:false', () => {
+		const { container } = renderDock({
+			model: createLayoutModel(makeTree()),
+			registry: makeRegistryWithLockedDebug(),
+		})
+
+		expect(container.querySelector('[data-deck-tab="debug"]')).not.toBeNull()
+		expect(container.querySelector('[data-deck-tab-close="debug"]')).toBeNull()
+		expect(container.querySelector('[data-deck-tab-close="editor"]')).not.toBeNull()
 	})
 })
 

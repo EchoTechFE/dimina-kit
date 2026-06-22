@@ -75,7 +75,10 @@ beforeEach(async () => {
 
 function fakeMainWindow(): import('electron').BrowserWindow {
   const wc = { id: 1, isDestroyed: () => false, send: vi.fn(), getURL: () => '' }
-  return { webContents: wc } as unknown as import('electron').BrowserWindow
+  return {
+    webContents: wc,
+    isDestroyed: () => false,
+  } as unknown as import('electron').BrowserWindow
 }
 
 const sampleProject: Project = { name: 'x', path: '/p/x', lastOpened: null }
@@ -93,7 +96,21 @@ function withSimulatorId(ctx: ReturnType<typeof createWorkbenchContext>) {
   const fakeWc = { id: 1, isDestroyed: () => false, capturePage: capturePageMock }
   ;(ctx.views as unknown as { getSimulatorWebContents: () => unknown })
     .getSimulatorWebContents = () => fakeWc
+  ;(ctx.views as unknown as { getSimulatorProjectPath: () => string | null })
+    .getSimulatorProjectPath = () => ctx.workspace.getProjectPath() || '/p/x'
   return ctx
+}
+
+async function activateProject(
+  ctx: ReturnType<typeof createWorkbenchContext>,
+  projectPath: string,
+) {
+  ctx.adapter.openProject = vi.fn(async () => ({
+    port: 7788,
+    appInfo: { appId: `app:${projectPath}` },
+    close: vi.fn(async () => {}),
+  }))
+  await ctx.workspace.openProject(projectPath)
 }
 
 describe('workspace-service ↔ ProjectsProvider thumbnail hooks', () => {
@@ -113,6 +130,7 @@ describe('workspace-service ↔ ProjectsProvider thumbnail hooks', () => {
         projectsProvider: injected,
       }),
     )
+    await activateProject(ctx, '/p/x')
 
     await expect(ctx.workspace.captureThumbnail('/p/x')).resolves.not.toThrow()
     expect(fs.writeFileSync).not.toHaveBeenCalled()
@@ -157,6 +175,7 @@ describe('workspace-service ↔ ProjectsProvider thumbnail hooks', () => {
         projectsProvider: injected,
       }),
     )
+    await activateProject(ctx, '/p/x')
 
     await ctx.workspace.captureThumbnail('/p/x')
 
@@ -167,6 +186,70 @@ describe('workspace-service ↔ ProjectsProvider thumbnail hooks', () => {
     expect(String(dataUrlArg).startsWith('data:image/png;base64,')).toBe(true)
     expect(fs.writeFileSync).not.toHaveBeenCalled()
     expect(fs.mkdirSync).not.toHaveBeenCalled()
+  })
+
+  it('rejects capture when projectPath is not the active workspace project', async () => {
+    const saveThumbnail = vi.fn()
+    const ctx = withSimulatorId(
+      createWorkbenchContext({
+        mainWindow: fakeMainWindow(),
+        preloadPath: '/fake/preload.js',
+        rendererDir: '/fake/renderer',
+        projectsProvider: { ...makePartialProvider(), saveThumbnail },
+      }),
+    )
+    await activateProject(ctx, '/p/current')
+
+    await expect(ctx.workspace.captureThumbnail('/p/stale')).resolves.toBeNull()
+
+    expect(capturePageMock).not.toHaveBeenCalled()
+    expect(saveThumbnail).not.toHaveBeenCalled()
+  })
+
+  it('rejects capture when the live simulator belongs to another project session', async () => {
+    const saveThumbnail = vi.fn()
+    const ctx = withSimulatorId(
+      createWorkbenchContext({
+        mainWindow: fakeMainWindow(),
+        preloadPath: '/fake/preload.js',
+        rendererDir: '/fake/renderer',
+        projectsProvider: { ...makePartialProvider(), saveThumbnail },
+      }),
+    )
+    await activateProject(ctx, '/p/current')
+    ;(ctx.views as unknown as { getSimulatorProjectPath: () => string | null })
+      .getSimulatorProjectPath = () => '/p/previous'
+
+    await expect(ctx.workspace.captureThumbnail('/p/current')).resolves.toBeNull()
+
+    expect(capturePageMock).not.toHaveBeenCalled()
+    expect(saveThumbnail).not.toHaveBeenCalled()
+  })
+
+  it('drops an in-flight capture when the active project changes before capturePage resolves', async () => {
+    const saveThumbnail = vi.fn()
+    let finishCapture!: () => void
+    capturePageMock.mockImplementationOnce(
+      () => new Promise((resolve) => {
+        finishCapture = () => resolve({ toPNG: () => PNG_BYTES })
+      }),
+    )
+    const ctx = withSimulatorId(
+      createWorkbenchContext({
+        mainWindow: fakeMainWindow(),
+        preloadPath: '/fake/preload.js',
+        rendererDir: '/fake/renderer',
+        projectsProvider: { ...makePartialProvider(), saveThumbnail },
+      }),
+    )
+    await activateProject(ctx, '/p/current')
+
+    const capture = ctx.workspace.captureThumbnail('/p/current')
+    await ctx.workspace.closeProject()
+    finishCapture()
+
+    await expect(capture).resolves.toBeNull()
+    expect(saveThumbnail).not.toHaveBeenCalled()
   })
 
   /**

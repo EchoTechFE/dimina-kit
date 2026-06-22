@@ -38,3 +38,4 @@ export {
 	insertPanel,
 } from './mutations.js'
 export { createLayoutModel } from './model.js'
+export { closePanelForUser } from './user-actions.js'

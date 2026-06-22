@@ -66,9 +66,10 @@ export interface LayoutTree {
 /**
  * Per-panel drag/drop capability policy. All fields are OPTIONAL and
  * DEFAULT-PERMISSIVE, so existing registrations keep today's behavior (a fully
- * draggable panel that may move/split freely). The two fields are orthogonal:
+ * draggable, closable panel that may move/split freely). The fields are orthogonal:
  * `draggable` governs whether the panel is a drag SOURCE / drop ANCHOR at all;
- * `dropPolicy` governs where a draggable panel may LAND.
+ * `dropPolicy` governs where a draggable panel may LAND; `closable` governs
+ * whether DockView exposes the panel's close affordance.
  */
 export interface PanelCapabilities {
 	/**
@@ -86,6 +87,11 @@ export interface PanelCapabilities {
 	 * `undefined` is treated as `'free'`.
 	 */
 	readonly dropPolicy?: 'free' | 'reorder-only'
+	/**
+	 * When `false`, DockView does not render a close affordance for this panel.
+	 * `undefined` is treated as `true`.
+	 */
+	readonly closable?: boolean
 	/**
 	 * When `true`, this panel contributes NO tab to the group's tab strip. A
 	 * group whose every panel hides its tab renders no tab strip at all (its body

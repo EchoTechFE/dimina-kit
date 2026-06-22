@@ -169,6 +169,17 @@ describe('buildDockRegistry — split into 5 fine panels', () => {
 
     expect(registry.get('simulator')?.kind).toBe('dom')
   })
+
+  it('registers every built-in debug tab as non-closable', () => {
+    const registry = buildDockRegistry()
+
+    for (const panelId of DEBUG_PANELS) {
+      expect(
+        registry.get(panelId)?.closable,
+        `${panelId} should not expose a close affordance`,
+      ).toBe(false)
+    }
+  })
 })
 
 // ── B2. buildDefaultDockTree groups the 5 into one tab group ──────────────
