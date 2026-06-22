@@ -5,7 +5,11 @@ import {
   useState,
 } from 'react'
 import type { RefObject } from 'react'
-import { attachNativeSimulator, onSimulatorCurrentPage } from '@/shared/api'
+import {
+  attachNativeSimulator,
+  captureThumbnail,
+  onSimulatorCurrentPage,
+} from '@/shared/api'
 import type { AppInfo } from '@/shared/api'
 import {
   buildSimulatorUrl,
@@ -22,6 +26,7 @@ export interface UseSimulatorProps {
   appInfo: AppInfo | null
   compileConfig: CompileConfig
   port: number
+  projectPath: string
   /**
    * Hot-reload signal from `useSession`: bumped once per watcher rebuild
    * (`projectStatus` with `hotReload: true`). Each bump respawns the
@@ -44,6 +49,7 @@ export function useSimulator(props: UseSimulatorProps): SimulatorHookResult {
     appInfo,
     compileConfig,
     port,
+    projectPath,
     hotReloadToken,
   } = props
 
@@ -124,8 +130,41 @@ export function useSimulator(props: UseSimulatorProps): SimulatorHookResult {
     // preload picks it up synchronously (NATIVE_HOST_ENABLED reply), letting the
     // DeviceShell mount at the right bezel size / notch without a flash.
     sendDeviceInfo(deviceRef.current!)
+    let cancelled = false
+    let captureTimer: number | null = null
+
     void attachNativeSimulator(attachUrl, simPanelWidthRef.current!)
-  }, [compileStatus.status, simulatorUrl, hotReloadToken, simPanelWidthRef, deviceRef, sendDeviceInfo])
+      .then(() => {
+        if (cancelled) return
+        // Main resolves attach only after the first render guest's
+        // did-finish-load. Debounce from that real readiness point so the page
+        // gets a short paint grace period without guessing from attach start.
+        captureTimer = window.setTimeout(() => {
+          if (!cancelled) {
+            void captureThumbnail(projectPath).catch(() => {})
+          }
+        }, 3_000)
+      })
+      .catch(() => {
+        // Attach failures are surfaced by the simulator path. Thumbnail capture
+        // is best-effort and must not add an unhandled rejection.
+      })
+
+    return () => {
+      cancelled = true
+      if (captureTimer !== null) {
+        window.clearTimeout(captureTimer)
+      }
+    }
+  }, [
+    compileStatus.status,
+    simulatorUrl,
+    hotReloadToken,
+    simPanelWidthRef,
+    deviceRef,
+    sendDeviceInfo,
+    projectPath,
+  ])
 
   return {
     simulatorUrl,

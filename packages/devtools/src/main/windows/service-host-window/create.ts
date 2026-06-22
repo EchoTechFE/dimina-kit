@@ -22,6 +22,7 @@ export interface ServiceHostWindowOptions {
   appId: string
   pagePath: string
   pkgRoot: string
+  root?: string
   resourceBaseUrl: string
   hostEnvSnapshot?: Record<string, unknown>
 }
@@ -66,6 +67,7 @@ export function buildServiceHostSpawnUrl(opts: ServiceHostWindowOptions): string
   url.searchParams.set('appId', opts.appId)
   url.searchParams.set('pagePath', opts.pagePath)
   url.searchParams.set('pkgRoot', opts.pkgRoot)
+  url.searchParams.set('root', opts.root || 'main')
   url.searchParams.set('resourceBaseUrl', opts.resourceBaseUrl)
   if (opts.hostEnvSnapshot) {
     // Encode the resolved host-env so preload can hydrate

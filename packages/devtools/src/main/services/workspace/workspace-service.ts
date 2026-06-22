@@ -321,10 +321,21 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
     hasActiveSession: () => currentSession !== null,
 
     async captureThumbnail(projectPath) {
+      if (!currentSession || projectPath !== currentProjectPath) return null
       const wc = ctx.views.getSimulatorWebContents()
       if (!wc) return null
+      if (ctx.views.getSimulatorProjectPath() !== projectPath) return null
+      const session = currentSession
       try {
         const image = await wc.capturePage()
+        if (
+          currentSession !== session
+          || currentProjectPath !== projectPath
+          || ctx.views.getSimulatorWebContents() !== wc
+          || ctx.views.getSimulatorProjectPath() !== projectPath
+        ) {
+          return null
+        }
         const dataUrl = `data:image/png;base64,${image.toPNG().toString('base64')}`
         if (provider.saveThumbnail) {
           await provider.saveThumbnail(projectPath, dataUrl)

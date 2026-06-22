@@ -18,6 +18,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 type StubWebContents = {
   destroyed: boolean
   id: number
+  emit: (event: string, ...args: unknown[]) => void
   isDestroyed: () => boolean
   close: ReturnType<typeof vi.fn>
   loadFile: ReturnType<typeof vi.fn>
@@ -47,15 +48,30 @@ vi.mock('electron', () => {
     setBackgroundColor = vi.fn()
     constructor(_opts?: unknown) {
       const id = nextId++
+      const handlers = new Map<string, Array<(...args: unknown[]) => void>>()
       this.webContents = {
         destroyed: false,
         id,
+        emit(event: string, ...args: unknown[]) {
+          for (const handler of [...(handlers.get(event) ?? [])]) handler(...args)
+        },
         isDestroyed() { return this.destroyed },
         close: vi.fn(function (this: StubWebContents) { this.destroyed = true }),
         loadFile: vi.fn(() => Promise.resolve()),
         loadURL: vi.fn(() => Promise.resolve()),
-        on: vi.fn(),
-        once: vi.fn(),
+        on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+          handlers.set(event, [...(handlers.get(event) ?? []), handler])
+        }),
+        once: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+          const onceHandler = (...args: unknown[]) => {
+            handlers.set(
+              event,
+              (handlers.get(event) ?? []).filter((item) => item !== onceHandler),
+            )
+            handler(...args)
+          }
+          handlers.set(event, [...(handlers.get(event) ?? []), onceHandler])
+        }),
         setWindowOpenHandler: vi.fn(),
         setZoomFactor: vi.fn(),
         send: vi.fn(),
@@ -95,7 +111,7 @@ vi.mock('../../utils/paths.js', () => ({
 }))
 
 // Import AFTER mocks so view-manager picks up the stubs.
-import { createViewManager } from './view-manager.js'
+import { createViewManager, resolveProjectEditorTarget } from './view-manager.js'
 import { createConnectionRegistry } from '@dimina-kit/electron-deck/main'
 
 function makeContext() {
@@ -138,6 +154,51 @@ function makeContext() {
 
 beforeEach(() => {
   constructed.length = 0
+})
+
+describe('resolveProjectEditorTarget', () => {
+  const serviceHostUrl =
+    'file:///app/service-host/service.html?appId=wxabc123' +
+    '&pkgRoot=%2Fworkspace%2Fdemo&root=main' +
+    '&resourceBaseUrl=http%3A%2F%2F127.0.0.1%3A5173%2F'
+
+  it('uses URL pkgRoot, verifies the file, and converts DevTools positions for Monaco', () => {
+    const isFile = vi.fn(() => true)
+
+    expect(resolveProjectEditorTarget(
+      serviceHostUrl,
+      '/workspace/demo',
+      {
+        url: 'http://127.0.0.1:5173/pages/console-test.js',
+        line: 74,
+        column: 2,
+      },
+      isFile,
+    )).toEqual({
+      path: 'pages/console-test.js',
+      line: 75,
+      column: 3,
+    })
+    expect(isFile).toHaveBeenCalledWith('/workspace/demo/pages/console-test.js')
+  })
+
+  it('rejects missing files and a workspace inconsistent with the URL pkgRoot', () => {
+    expect(resolveProjectEditorTarget(
+      serviceHostUrl,
+      '/workspace/demo',
+      { url: 'http://127.0.0.1:5173/pages/missing.js' },
+      () => false,
+    )).toBeNull()
+
+    const isFile = vi.fn(() => true)
+    expect(resolveProjectEditorTarget(
+      serviceHostUrl,
+      '/workspace/other-project',
+      { url: 'http://127.0.0.1:5173/pages/console-test.js' },
+      isFile,
+    )).toBeNull()
+    expect(isFile).not.toHaveBeenCalled()
+  })
 })
 
 describe('ViewManager: repeated show/hide cycles do not leak', () => {
@@ -299,5 +360,37 @@ describe('getSimulatorWebContents', () => {
 
     expect(mgr.getSimulatorWebContents()).toBe(liveWc)
     expect(mockFromId).toHaveBeenCalledWith(simWc.id)
+  })
+
+  it('keeps attach pending until the first render guest finishes loading', async () => {
+    const { ctx } = makeContext()
+    const mgr = createViewManager(ctx)
+    let settled = false
+
+    const attached = Promise.resolve(mgr.attachNativeSimulator(SIM_URL, 375))
+      .then(() => {
+        settled = true
+      })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+
+    const simWc = constructed[constructed.length - 2]!.webContents
+    const guestHandlers = new Map<string, (...args: unknown[]) => void>()
+    const guestWc = {
+      isDestroyed: () => false,
+      once: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+        guestHandlers.set(event, handler)
+      }),
+      setZoomFactor: vi.fn(),
+      setWindowOpenHandler: vi.fn(),
+      on: vi.fn(),
+    }
+    simWc.emit('did-attach-webview', {}, guestWc)
+    await Promise.resolve()
+    expect(settled).toBe(false)
+
+    guestHandlers.get('did-finish-load')?.()
+    await attached
+    expect(settled).toBe(true)
   })
 })

@@ -680,7 +680,10 @@ async function handleSpawn(
 
   const simulatorWc = resolveSimulatorWebContents(ctx, opts.simulatorWcId, event.sender)
   const pagePath = normalizePagePath(opts.pagePath || 'pages/index/index')
-  const pkgRoot = path.resolve(opts.pkgRoot || process.cwd())
+  const workspaceProjectPath = typeof ctx.workspace.getProjectPath === 'function'
+    ? ctx.workspace.getProjectPath()
+    : ''
+  const pkgRoot = path.resolve(opts.pkgRoot || workspaceProjectPath || process.cwd())
   const root = opts.root || 'main'
 
   // Resource base resolution. Preferred: the simulator-supplied dev-server
@@ -735,6 +738,7 @@ async function handleSpawn(
       appId,
       pagePath,
       pkgRoot,
+      root,
       resourceBaseUrl,
       hostEnvSnapshot: hostEnv,
     })
@@ -844,6 +848,7 @@ async function handleSpawn(
         appId,
         pagePath,
         pkgRoot,
+        root,
         resourceBaseUrl,
         hostEnvSnapshot: hostEnv,
       }),

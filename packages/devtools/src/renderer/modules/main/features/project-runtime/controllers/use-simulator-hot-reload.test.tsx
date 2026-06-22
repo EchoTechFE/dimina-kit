@@ -45,6 +45,7 @@ function emitCurrentPage(pagePath: string): void {
 vi.mock('@/shared/api', () => {
   return {
     attachNativeSimulator: attachNativeSimulatorMock,
+    captureThumbnail: vi.fn(async () => null),
     onSimulatorCurrentPage: vi.fn((handler: (pagePath: string) => void) => {
       currentPageListeners.push(handler)
       return () => {
@@ -93,6 +94,7 @@ function makeBaseProps(): UseSimulatorProps & { hotReloadToken: number } {
       queryParams: [{ key: 'foo', value: 'bar' }],
     },
     port: 7788,
+    projectPath: '/tmp/hot-reload-project',
     hotReloadToken: 0,
   }
 }

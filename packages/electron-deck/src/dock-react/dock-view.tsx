@@ -23,7 +23,14 @@ import {
 } from 'react'
 import { Group, Panel, Separator } from 'react-resizable-panels'
 import type { GroupImperativeHandle, Layout } from 'react-resizable-panels'
-import { closePanel, extractPanel, movePanel, setActive, setSizes, splitPanel } from '../layout/index.js'
+import {
+	closePanelForUser,
+	extractPanel,
+	movePanel,
+	setActive,
+	setSizes,
+	splitPanel,
+} from '../layout/index.js'
 import type {
 	LayoutModel,
 	LayoutNode,
@@ -154,15 +161,14 @@ export function DockView(props: DockViewProps): ReactNode {
 		[model],
 	)
 
-	// Close write-back: a tab's close affordance funnels here, applying
-	// `closePanel` to the canonical model (which removes + collapses + re-derives
-	// active, or NO-OPs on the final panel). Same single-`apply` discipline as
-	// `handleActivate`/`handleRedock`.
+	// Close write-back: every tab close funnels through the capability-aware
+	// user action. The generic `closePanel` mutation remains available to
+	// programmatic layout transforms.
 	const handleClose = useCallback(
 		(panelId: string) => {
-			model.apply((t) => closePanel(t, panelId))
+			model.apply((t) => closePanelForUser(t, panelId, registry))
 		},
-		[model],
+		[model, registry],
 	)
 
 	// Total panels across the WHOLE tree. The close affordance is suppressed only
@@ -1052,7 +1058,7 @@ function GroupView(props: GroupViewProps): ReactNode {
 							   the WHOLE tree has one panel left (`canClose` false). Activate is
 							   kept off the tab (click stopPropagation) and a tab drag that
 							   begins here is cancelled by the tab's onDragStart guard above. */}
-							{ctx.canClose
+							{ctx.canClose && descriptor?.closable !== false
 								? (
 									<span
 										role="button"

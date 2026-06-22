@@ -8,11 +8,13 @@
  * `devtools-open-url` listener in view-manager) is not unit-testable here and is
  * verified manually; this isolates the logic that decides WHICH file + position.
  */
-import { describe, it, expect } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   OPEN_IN_EDITOR_SCHEME,
+  buildDevtoolsProjectSourceLinksScript,
   encodeOpenInEditorUrl,
   decodeOpenInEditorUrl,
+  projectSourceContextFromServiceHostUrl,
   resourceUrlToProjectRelativePath,
 } from './open-in-editor'
 
@@ -89,5 +91,223 @@ describe('resourceUrlToProjectRelativePath', () => {
   it('returns null for an unparseable URL', () => {
     expect(resourceUrlToProjectRelativePath('not a url')).toBeNull()
     expect(resourceUrlToProjectRelativePath('')).toBeNull()
+  })
+})
+
+describe('project-aware console source locations', () => {
+  const context = {
+    projectRoot: '/workspace/demo',
+    resourceBaseUrl: 'http://127.0.0.1:5173/',
+    appId: 'wxabc123',
+    outputRoot: 'main',
+  }
+
+  it('maps the compiler sourcemap absolute source path to a project-relative path', () => {
+    expect(
+      resourceUrlToProjectRelativePath('http://127.0.0.1:5173/pages/console-test.js', context),
+    ).toBe('pages/console-test.js')
+  })
+
+  it('strips appId and output root from compiled resource URLs', () => {
+    expect(
+      resourceUrlToProjectRelativePath(
+        'http://127.0.0.1:5173/wxabc123/main/pages/console-test.js',
+        context,
+      ),
+    ).toBe('pages/console-test.js')
+  })
+
+  it('maps an absolute project file URL but rejects devtools/runtime file frames', () => {
+    expect(
+      resourceUrlToProjectRelativePath('file:///workspace/demo/pages/console-test.js', context),
+    ).toBe('pages/console-test.js')
+    expect(
+      resourceUrlToProjectRelativePath(
+        'file:///Volumes/jdisk/code/dimina-kit/packages/devtools/dist/service-host/preload.cjs',
+        context,
+      ),
+    ).toBeNull()
+    expect(
+      resourceUrlToProjectRelativePath(
+        '/Volumes/jdisk/code/dimina-kit/packages/devtools/dist/service-host/preload.cjs',
+        context,
+      ),
+    ).toBeNull()
+    expect(
+      resourceUrlToProjectRelativePath('file:///workspace/dimina/fe/packages/service/dist/service.js', context),
+    ).toBeNull()
+    expect(resourceUrlToProjectRelativePath('node:events', context)).toBeNull()
+    expect(resourceUrlToProjectRelativePath('electron/js2c/renderer_init', context)).toBeNull()
+  })
+
+  it('rejects a different HTTP origin instead of treating it as project source', () => {
+    expect(
+      resourceUrlToProjectRelativePath('http://localhost:9999/pages/console-test.js', context),
+    ).toBeNull()
+  })
+
+  it('derives mapping context from the live service-host URL', () => {
+    const serviceHostUrl =
+      'file:///app/service-host/service.html?bridgeId=b1&appId=wxabc123' +
+      '&pkgRoot=%2Fworkspace%2Fdemo&root=main' +
+      '&resourceBaseUrl=http%3A%2F%2F127.0.0.1%3A5173%2F'
+    expect(projectSourceContextFromServiceHostUrl(serviceHostUrl)).toEqual(context)
+    expect(projectSourceContextFromServiceHostUrl(serviceHostUrl, '/workspace/demo/')).toEqual(context)
+    expect(projectSourceContextFromServiceHostUrl(serviceHostUrl, '/workspace/active-project')).toBeNull()
+  })
+})
+
+describe('DevTools console project-source link injection', () => {
+  const context = {
+    projectRoot: '/workspace/demo',
+    resourceBaseUrl: 'http://127.0.0.1:5173/',
+    appId: 'wxabc123',
+    outputRoot: 'main',
+  }
+  const originalMutationObserver = window.MutationObserver
+  let activeObservers: Set<MutationObserver>
+
+  beforeEach(() => {
+    document.body.replaceChildren()
+    vi.useFakeTimers()
+    activeObservers = new Set()
+    class TrackedMutationObserver extends originalMutationObserver {
+      constructor(callback: MutationCallback) {
+        super(callback)
+        activeObservers.add(this)
+      }
+
+      override disconnect(): void {
+        activeObservers.delete(this)
+        super.disconnect()
+      }
+    }
+    window.MutationObserver = TrackedMutationObserver
+    Object.defineProperty(window, 'Host', {
+      configurable: true,
+      value: {
+        InspectorFrontendHost: {
+          setOpenResourceHandler: vi.fn(),
+          openInNewTab: vi.fn(),
+        },
+      },
+    })
+  })
+
+  afterEach(() => {
+    const state = (window as typeof window & {
+      __diminaProjectSourceLinksState__?: { dispose?: () => void }
+    }).__diminaProjectSourceLinksState__
+    state?.dispose?.()
+    delete (window as typeof window & { __diminaProjectSourceLinksState__?: unknown })
+      .__diminaProjectSourceLinksState__
+    delete (window as typeof window & { Host?: unknown }).Host
+    window.MutationObserver = originalMutationObserver
+    vi.useRealTimers()
+  })
+
+  async function flushMutations(): Promise<void> {
+    await Promise.resolve()
+    await Promise.resolve()
+  }
+
+  function inject(): void {
+    window.eval(buildDevtoolsProjectSourceLinksScript(context))
+  }
+
+  it('rewrites dynamically-added project links inside nested shadow roots only', async () => {
+    const outerHost = document.createElement('div')
+    const outerRoot = outerHost.attachShadow({ mode: 'open' })
+    const innerHost = document.createElement('div')
+    const innerRoot = innerHost.attachShadow({ mode: 'open' })
+    outerRoot.append(innerHost)
+    document.body.append(outerHost)
+
+    inject()
+
+    const projectLink = document.createElement('span')
+    projectLink.className = 'devtools-link'
+    projectLink.title = 'http://127.0.0.1:5173/pages/console-test.js:75'
+    projectLink.textContent = 'console-test.js:75'
+    innerRoot.append(projectLink)
+
+    const internalLocations = [
+      'service.js:6',
+      'file:///Volumes/jdisk/code/dimina-kit/packages/devtools/dist/service-host/preload.cjs:83',
+      'node:events:508',
+      'electron/js2c/renderer_init:2',
+    ]
+    const internalLinks = internalLocations.map((location) => {
+      const link = document.createElement('span')
+      link.className = 'devtools-link'
+      link.title = location
+      link.textContent = location
+      innerRoot.append(link)
+      return link
+    })
+
+    await flushMutations()
+
+    expect(projectLink.textContent).toBe('pages/console-test.js:75')
+    expect(internalLinks.map((link) => link.textContent)).toEqual(internalLocations)
+  })
+
+  it('disposes observers and polling timers before a repeated injection', () => {
+    const host = document.createElement('div')
+    host.attachShadow({ mode: 'open' })
+    document.body.append(host)
+
+    inject()
+    const firstObserverCount = activeObservers.size
+    expect(firstObserverCount).toBeGreaterThan(1)
+    expect(vi.getTimerCount()).toBe(1)
+
+    inject()
+
+    expect(activeObservers.size).toBe(firstObserverCount)
+    expect(vi.getTimerCount()).toBe(1)
+    vi.advanceTimersByTime(50)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('routes project source clicks through the existing open-resource contract', () => {
+    inject()
+    vi.advanceTimersByTime(50)
+
+    const host = (window as typeof window & {
+      Host: {
+        InspectorFrontendHost: {
+          setOpenResourceHandler: ReturnType<typeof vi.fn>
+          openInNewTab: ReturnType<typeof vi.fn>
+        }
+      }
+    }).Host.InspectorFrontendHost
+    const handler = host.setOpenResourceHandler.mock.calls[0]?.[0] as
+      | ((url: string, line: number, column: number) => void)
+      | undefined
+    expect(handler).toBeTypeOf('function')
+
+    handler?.('http://127.0.0.1:5173/pages/console-test.js', 74, 2)
+    expect(host.openInNewTab).toHaveBeenCalledWith(
+      encodeOpenInEditorUrl({
+        url: 'http://127.0.0.1:5173/pages/console-test.js',
+        line: 74,
+        column: 2,
+      }),
+    )
+
+    handler?.('node:events', 507, 0)
+    expect(host.openInNewTab).toHaveBeenCalledTimes(1)
+  })
+
+  it('builds executable injection source', () => {
+    const script = buildDevtoolsProjectSourceLinksScript({
+      projectRoot: '/workspace/demo',
+      resourceBaseUrl: 'http://127.0.0.1:5173/',
+      appId: 'wxabc123',
+      outputRoot: 'main',
+    })
+
+    expect(() => window.eval(script)).not.toThrow()
   })
 })
