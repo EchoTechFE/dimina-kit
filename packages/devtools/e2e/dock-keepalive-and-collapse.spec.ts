@@ -9,14 +9,15 @@
  *      can prove the live DOM element survived (identity) and that a scrollable
  *      body kept its scrollTop across A→B→A.
  *
- *  B1 (simulator native WCV collapses on deactivation): the simulator is a
- *      kept-alive DOM panel; when its tab is deactivated its slot goes
- *      `display:none`. `SimulatorPanel` opts into view-anchor `guardDisplayNone`
- *      so the resulting zero-area measure publishes `{ visible:false }` →
- *      COLLAPSED 0×0 bounds, DETACHING the WebContentsView from over the now-
- *      active sibling panel. jsdom has no WCV and no IntersectionObserver
- *      geometry, so only real Electron can prove the native bounds collapse to
- *      0×0 on deactivation and restore on reactivation.
+ *  B1 (simulator native WCV collapses when hidden): the simulator is a
+ *      structural DOM panel that owns its own region (`hideTab:true`), so it has
+ *      no sibling tab to deactivate it — the real collapse trigger is the
+ *      toolbar "隐藏模拟器" toggle. Hiding it `closePanelForUser`s the panel; the
+ *      unmounting `SimulatorPanel` publishes `{ visible:false }` → COLLAPSED 0×0
+ *      bounds, DETACHING the WebContentsView from the contentView tree while
+ *      keeping the WebContents alive. jsdom has no WCV and no real layout, so
+ *      only real Electron can prove the native bounds collapse to 0×0 when the
+ *      panel is hidden and restore when it is shown again.
  *
  * The native-bounds probe mirrors `dock-real-drag.spec.ts`'s `simulatorBounds`
  * (walks each window's contentView subtree for the view whose webContents is
@@ -216,64 +217,50 @@ test('A3: a kept-alive debug body is NOT remounted across a tab switch (DOM iden
 
 // ─────────────────────── B1: simulator WCV collapse ───────────────────────
 
-test('B1: the simulator native WCV collapses (detaches, kept alive) when its kept-alive tab is deactivated, and restores on reactivation', async () => {
-  // The default tree puts the simulator ALONE in its group, so there is no
-  // sibling tab to deactivate it. Join the editor INTO the simulator's group
-  // (center drop = tab-join) so simulator + editor share one tab group; then a
-  // tab switch within that group deactivates the simulator body.
-  const joined = await mainWindow.evaluate(() => {
-    const groups = Array.from(document.querySelectorAll('[data-deck-group]')) as Array<
-      HTMLElement & { __deckHandleDrop?: (panelId: string, zone: string) => void }
-    >
-    const simGroup = groups.find((g) => g.querySelector('[data-deck-tab="simulator"]'))
-    if (!simGroup || typeof simGroup.__deckHandleDrop !== 'function') return false
-    // Drop 'editor' onto the simulator group's center → join as a sibling tab.
-    simGroup.__deckHandleDrop('editor', 'center')
-    return true
-  })
-  expect(joined, 'must be able to join editor into the simulator group').toBe(true)
+test('B1: the simulator native WCV collapses (detaches, kept alive) when the simulator panel is hidden, and restores when shown', async () => {
+  // simulator is a STRUCTURAL panel (`hideTab:true`, alone in its region) — there
+  // is no sibling tab to deactivate it. The real UI trigger for collapse is the
+  // toolbar "隐藏模拟器" toggle: it `closePanelForUser`s the simulator → the
+  // `SimulatorPanel` unmounts → its view-anchor publishes `{ visible:false }` →
+  // main maps the zero-area rect to COLLAPSE, `removeChildView`-ing the WCV from
+  // the contentView tree (detach) while keeping its WebContents alive. So the
+  // collapse is observed as `alive && bounds === null`.
+  const toggle = mainWindow.locator('[data-testid="layout-toolbar-toggle-simulator"]')
 
-  // Make the simulator the active tab and let the WCV bounds settle.
-  await activateTab(mainWindow, 'simulator')
+  // Baseline: the simulator WCV is attached with live, non-zero bounds.
   await mainWindow.waitForTimeout(500)
-
   const active = await simulatorView(electronApp)
-  expect(active.alive, 'simulator WebContents must be alive while active').toBe(true)
-  expect(active.bounds, 'active simulator WCV must be ATTACHED with live bounds').not.toBeNull()
+  expect(active.alive, 'simulator WebContents must be alive while shown').toBe(true)
+  expect(active.bounds, 'shown simulator WCV must be ATTACHED with live bounds').not.toBeNull()
   expect(
     active.bounds!.w * active.bounds!.h,
-    `active simulator WCV must have NON-ZERO area (got ${JSON.stringify(active.bounds)})`,
+    `shown simulator WCV must have NON-ZERO area (got ${JSON.stringify(active.bounds)})`,
   ).toBeGreaterThan(0)
 
-  // Deactivate the simulator by switching to its sibling 'editor' tab. The
-  // simulator body goes display:none → guardDisplayNone fires → publish
-  // { visible:false } → main maps the zero-area rect to COLLAPSE: it
-  // `removeChildView`-es the WCV from the contentView tree (detach) while
-  // keeping its WebContents alive. So the collapse is observed as
-  // `alive && bounds === null` (the view is no longer in any window's tree).
-  await activateTab(mainWindow, 'editor')
+  // Hide the simulator via the real toolbar toggle → detach-but-keep-alive.
+  await toggle.click()
   await mainWindow.waitForTimeout(800)
 
   const collapsed = await simulatorView(electronApp)
   expect(
     collapsed.alive,
-    'the simulator WebContents must stay ALIVE on deactivation (detach, not destroy)',
+    'the simulator WebContents must stay ALIVE when hidden (detach, not destroy)',
   ).toBe(true)
   expect(
     collapsed.bounds,
-    'the deactivated simulator WCV must COLLAPSE — detached from the contentView tree (no live bounds over the active sibling)',
+    'the hidden simulator WCV must COLLAPSE — detached from the contentView tree (no live bounds)',
   ).toBeNull()
 
-  // Reactivate the simulator tab → the slot re-shows → the anchor re-publishes
-  // a non-zero rect → main re-attaches the WCV and restores its bounds.
-  await activateTab(mainWindow, 'simulator')
+  // Show the simulator again → the slot re-mounts → the anchor re-publishes a
+  // non-zero rect → main re-attaches the WCV and restores its bounds.
+  await toggle.click()
   await mainWindow.waitForTimeout(800)
 
   const restored = await simulatorView(electronApp)
-  expect(restored.alive, 'simulator WebContents must still be alive after reactivation').toBe(true)
-  expect(restored.bounds, 'reactivated simulator WCV must be RE-ATTACHED with live bounds').not.toBeNull()
+  expect(restored.alive, 'simulator WebContents must still be alive after being shown again').toBe(true)
+  expect(restored.bounds, 'reshown simulator WCV must be RE-ATTACHED with live bounds').not.toBeNull()
   expect(
     restored.bounds!.w * restored.bounds!.h,
-    `reactivated simulator WCV must RESTORE to non-zero area (got ${JSON.stringify(restored.bounds)})`,
+    `reshown simulator WCV must RESTORE to non-zero area (got ${JSON.stringify(restored.bounds)})`,
   ).toBeGreaterThan(0)
 })
