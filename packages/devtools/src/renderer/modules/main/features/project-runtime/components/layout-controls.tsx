@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Button } from '@/shared/components/ui/button'
 import { cn } from '@/shared/lib/utils'
-import { closePanelForUser } from '@dimina-kit/electron-deck/layout'
+import { closePanel, closePanelForUser } from '@dimina-kit/electron-deck/layout'
 import type { LayoutModel, PanelRegistry } from '@dimina-kit/electron-deck/layout'
 import { buildPresetDockTree, listPanelVisibility, reopenPanel } from '../layout/dock-layout'
 import type { DevtoolsPosition, LayoutStoreApi, SimulatorAlignment } from '../controllers/use-layout-store'
@@ -21,8 +21,11 @@ interface LayoutControlsProps {
  * visibility — the toolbar affordance from before the dockable rewrite, restored
  * on top of the dock tree. User hide requests honor registry `closable`;
  * "show" uses `reopenPanel` to restore a missing panel at its default-aligned
- * position. The "调试器" toggle operates on all five debug panels as one region.
- * A fixed region and the last visible region can't be hidden.
+ * position. The "调试器" toggle operates on all five debug panels as one region:
+ * region visibility is DECOUPLED from each panel's per-tab `closable` capability —
+ * the debug panels are `closable:false` (no per-tab ×), yet this toggle hides the
+ * whole region via the raw `closePanel` mutation. The last visible region can't be
+ * hidden (closing the sole panel is an engine no-op, so the UI would desync).
  *
  * Active state design (matching the historical control): active → filled icon +
  * `bg-surface-active` chip + accent ring; inactive → outline icon, de-emphasised.
@@ -39,9 +42,6 @@ export function LayoutVisibilityToggles({ model, registry, simPanelWidth }: Layo
   const simulatorVisible = open.has('simulator')
   const editorVisible = open.has('editor')
   const debugVisible = DEBUG_PANELS.some((p) => open.has(p))
-  const debugHideable = DEBUG_PANELS.some(
-    (p) => open.has(p) && registry.get(p)?.closable !== false,
-  )
 
   // The number of currently-visible REGIONS — used to disable hiding the last
   // one (closing the sole panel is an engine no-op, so the UI would desync).
@@ -55,11 +55,12 @@ export function LayoutVisibilityToggles({ model, registry, simPanelWidth }: Layo
 
   function toggleDebug() {
     if (debugVisible) {
-      // Hide the whole region: close every debug panel that is currently open.
+      // Hide the whole region as a unit. Region visibility is decoupled from each
+      // panel's `closable` capability, so use the raw `closePanel` mutation rather
+      // than `closePanelForUser` — the debug panels are `closable:false` (no
+      // per-tab ×) yet the region toggle may still hide them all.
       const present = DEBUG_PANELS.filter((p) => open.has(p))
-      model.apply((t) => (
-        present.reduce((tree, p) => closePanelForUser(tree, p, registry), t)
-      ))
+      model.apply((t) => present.reduce((tree, p) => closePanel(tree, p), t))
     } else {
       // Show the region: reopen the debug panels that are absent (idempotent).
       const absent = DEBUG_PANELS.filter((p) => !open.has(p))
@@ -87,9 +88,9 @@ export function LayoutVisibilityToggles({ model, registry, simPanelWidth }: Layo
       />
       <ToggleButton
         active={debugVisible}
-        disabled={debugVisible && (!debugHideable || visibleRegions === 1)}
+        disabled={debugVisible && visibleRegions === 1}
         onClick={toggleDebug}
-        title={debugVisible && !debugHideable ? '调试器固定显示' : debugVisible ? '隐藏调试器' : '显示调试器'}
+        title={debugVisible ? '隐藏调试器' : '显示调试器'}
         testId="layout-toolbar-toggle-debug"
         icon={<DebugIcon filled={debugVisible} />}
       />

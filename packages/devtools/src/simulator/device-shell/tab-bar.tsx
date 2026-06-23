@@ -81,7 +81,7 @@ function normalizePath(p: string): string {
   return p ? p.replace(/^\/+/, '') : ''
 }
 
-function resolveIcon(
+export function resolveIcon(
   iconPath: string | undefined,
   baseUrl: string | null,
   appId: string,
@@ -92,12 +92,16 @@ function resolveIcon(
   if (/^(?:data:|blob:|https?:|\/\/)/i.test(raw)) return raw
   if (!baseUrl) return null
   const local = raw.replace(/^\/+/, '').replace(/^\.\//, '')
-  // resourceBaseUrl is rooted at `pkgRoot/main`; mini-app bundles keep
-  // tabBar icons as `static/...` relative paths beneath that root.
+  // `resourceBaseUrl` is the dev-server origin (its root), and the compiler
+  // rewrites tabBar iconPath to an absolute, server-root path
+  // `/<appId>/main/static/…`. So an already-rooted path joins onto the base
+  // verbatim — the `<appId>` segment is part of the URL, NOT to be stripped.
   if (local.startsWith(`${appId}/`)) {
-    return joinUrl(baseUrl, local.slice(appId.length + 1))
+    return joinUrl(baseUrl, local)
   }
-  return joinUrl(baseUrl, local)
+  // Bare in-package relative paths (compiler didn't rewrite) sit under the
+  // package root `<appId>/main`.
+  return joinUrl(baseUrl, `${appId}/main/${local}`)
 }
 
 function joinUrl(base: string, rel: string): string {

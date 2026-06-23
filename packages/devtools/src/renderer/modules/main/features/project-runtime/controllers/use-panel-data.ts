@@ -22,6 +22,8 @@ import type { CompileStatus, StorageItem } from './use-project-runtime-controlle
 
 export interface UsePanelDataProps {
   compileStatus: CompileStatus
+  /** Bare pagePath of the simulator's active page; AppData follows it. */
+  activePagePath?: string
 }
 
 export interface AppDataBridgeSummary {
@@ -58,7 +60,7 @@ export interface PanelDataHookResult {
 }
 
 export function usePanelData(props: UsePanelDataProps): PanelDataHookResult {
-  const { compileStatus } = props
+  const { compileStatus, activePagePath = '' } = props
 
   const [storageItems, setStorageItems] = useState<StorageItem[]>([])
 
@@ -84,7 +86,7 @@ export function usePanelData(props: UsePanelDataProps): PanelDataHookResult {
   })
   const appDataData = nativeAppData.data
 
-  const { activeBridgeId, setActiveBridge } = useActiveBridgeId(appDataData.bridges)
+  const { activeBridgeId, setActiveBridge } = useActiveBridgeId(appDataData.bridges, activePagePath)
 
   const appData: AppDataState = {
     bridges: appDataData.bridges,

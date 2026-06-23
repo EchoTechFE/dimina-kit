@@ -83,7 +83,7 @@ export interface TabBarConfig {
 | `custom` | boolean | 启用自定义 tabBar（小程序自己渲染） | 当前不支持，仅类型透传 |
 | `list[].pagePath` | string | tabBar 页路径，编译期已规范化无前导 `/` | 路由判定 / `tabBarPaths` 数组成员 |
 | `list[].text` | string | 文本 | text 节点 |
-| `list[].iconPath` | string | 默认图标，相对包根 | `resolveIcon` 拼接 `resourceBaseUrl` |
+| `list[].iconPath` | string | 默认图标，编译期改写为 server 根绝对路径 `/<appId>/main/static/…` | `resolveIcon` 直接拼到 `resourceBaseUrl`（保留 `<appId>` 段） |
 | `list[].selectedIconPath` | string | 选中图标 | 选中态切换显隐 |
 
 ## 2. 渲染实现（DeviceShell React）
