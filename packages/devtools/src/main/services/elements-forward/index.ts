@@ -447,13 +447,38 @@ export function installElementsForward(deps: ElementsForwardDeps): () => void {
     })
   }
 
-  /** enable DOM/CSS/Overlay + wire events on a guest. Best-effort. */
+  /**
+   * enable DOM/CSS/Overlay + wire events on a guest. Best-effort (never throws).
+   *
+   * `Overlay.enable` is sent ONLY AFTER `DOM.enable` has resolved: Chromium rejects
+   * `Overlay.enable` with "DOM should be enabled first" when it arrives before the
+   * DOM domain is enabled, and a silently-dropped rejection leaves Overlay disabled
+   * so every later `Overlay.highlightNode` fails with "Overlay must be enabled" and
+   * the Elements-panel hover highlight never paints. Awaiting DOM.enable first
+   * guarantees the correct enable order. CSS.enable has no such dependency and is
+   * fire-and-forget alongside.
+   */
   function primeGuest(wc: WebContents): void {
     if (!ensureGuestDebugger(wc)) return
     wireGuestEvents(wc)
-    for (const domain of ['DOM.enable', 'CSS.enable', 'Overlay.enable']) {
-      wc.debugger.sendCommand(domain).catch(() => { /* guest mid-destroy */ })
+    void enableGuestDomains(wc)
+  }
+
+  /** Enable the render domains in dependency order. Resolves; never rejects. */
+  async function enableGuestDomains(wc: WebContents): Promise<void> {
+    wc.debugger.sendCommand('CSS.enable').catch(() => { /* guest mid-destroy */ })
+    try {
+      await wc.debugger.sendCommand('DOM.enable')
+    } catch {
+      // Guest mid-destroy or DOM domain unavailable; Overlay.enable would only
+      // re-reject, so stop here rather than firing it out of order.
+      return
     }
+    // DOM.enable can settle after the guest was destroyed or the active page
+    // switched away (priming always targets the active guest). Re-check before
+    // arming Overlay so a stale/dead guest is left untouched.
+    if (disposed || !isActiveWcId(wc.id)) return
+    wc.debugger.sendCommand('Overlay.enable').catch(() => { /* guest mid-destroy */ })
   }
 
   // ── front-end → render command routing ─────────────────────────────────────
@@ -481,6 +506,14 @@ export function installElementsForward(deps: ElementsForwardDeps): () => void {
         if (!isActiveWcId(cmdWcId)) {
           replyError(cmd, 'stale render generation')
           return
+        }
+        // The front-end emits `Overlay.disable` on Elements-panel state
+        // transitions. Forwarded verbatim it disables the guest's Overlay agent,
+        // after which every `Overlay.highlightNode` fails with "Overlay must be
+        // enabled" and the hover highlight stops painting. Re-arm it so the next
+        // hover paints — only while this guest is still the active one.
+        if (cmd.method === 'Overlay.disable' && isActiveWcId(cmdWcId)) {
+          wc.debugger.sendCommand('Overlay.enable').catch(() => { /* guest gone */ })
         }
         replyResult(cmd, result)
       })
