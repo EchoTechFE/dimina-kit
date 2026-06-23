@@ -175,11 +175,28 @@ function projectAwareResourcePath(resourceUrl: string, context: ProjectSourceCon
   const raw = resourceUrl.trim()
   if (!raw) return null
 
+  // Taro/webpack build + runtime chunks are compiled output, not hand-written
+  // source. They also collide: dimina's own service runtime attributes its
+  // `log()` helper to a `common.js` on the SAME dev-server origin as the
+  // project's compiled `common.js` chunk, so the two are URL-indistinguishable
+  // and a dimina-core frame would otherwise open the project's chunk. Drop these
+  // well-known chunk basenames so a click falls through to the DevTools Sources
+  // panel instead of opening the wrong (or generated) file. Inlined (not a module
+  // const) because this function is `.toString()`-injected into the DevTools realm.
+  const excludeBuildChunk = (rel: string | null): string | null => {
+    if (!rel) return rel
+    const base = rel.split('/').pop()
+    return base === 'common.js' || base === 'vendors.js' || base === 'runtime.js'
+      || base === 'taro.js' || base === 'babelHelpers.js'
+      ? null
+      : rel
+  }
+
   // Chromium may hand the open-resource hook a raw absolute filesystem path.
   const normalizedRaw = normalizeSlashPath(raw)
   if (projectRoot && (normalizedRaw === projectRoot || normalizedRaw.startsWith(`${projectRoot}/`))) {
     const relative = normalizedRaw.slice(projectRoot.length).replace(/^\/+/, '')
-    return safeRelativePath(relative.split('/').filter(Boolean))
+    return excludeBuildChunk(safeRelativePath(relative.split('/').filter(Boolean)))
   }
   // Sourcemap sources commonly use virtual root paths such as `/pages/x.js`.
   // Real host filesystem paths use well-known absolute roots; when they are
@@ -205,9 +222,9 @@ function projectAwareResourcePath(resourceUrl: string, context: ProjectSourceCon
   if (resource.protocol === 'file:') {
     const filePath = normalizeSlashPath(resource.pathname)
     if (!projectRoot || (filePath !== projectRoot && !filePath.startsWith(`${projectRoot}/`))) return null
-    return safeRelativePath(
+    return excludeBuildChunk(safeRelativePath(
       filePath.slice(projectRoot.length).replace(/^\/+/, '').split('/').filter(Boolean),
-    )
+    ))
   }
 
   if (resource.protocol !== 'http:' && resource.protocol !== 'https:') return null
@@ -218,7 +235,7 @@ function projectAwareResourcePath(resourceUrl: string, context: ProjectSourceCon
     segments = segments.slice(1)
     if (context.outputRoot && segments[0] === context.outputRoot) segments = segments.slice(1)
   }
-  return safeRelativePath(segments)
+  return excludeBuildChunk(safeRelativePath(segments))
 }
 
 /** Read the project/source routing metadata carried by a service-host spawn URL. */

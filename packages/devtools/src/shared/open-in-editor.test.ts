@@ -157,6 +157,56 @@ describe('project-aware console source locations', () => {
   })
 })
 
+describe('excludes build/runtime chunks from open-in-editor', () => {
+  const context = {
+    projectRoot: '/workspace/demo',
+    resourceBaseUrl: 'http://127.0.0.1:5173/',
+    appId: 'wxabc123',
+    outputRoot: 'main',
+  }
+
+  it('does not route any excluded chunk basename at the dev-server origin root to the editor', () => {
+    expect(resourceUrlToProjectRelativePath('http://127.0.0.1:5173/common.js', context)).toBeNull()
+    expect(resourceUrlToProjectRelativePath('http://127.0.0.1:5173/taro.js', context)).toBeNull()
+    expect(resourceUrlToProjectRelativePath('http://127.0.0.1:5173/vendors.js', context)).toBeNull()
+    expect(resourceUrlToProjectRelativePath('http://127.0.0.1:5173/runtime.js', context)).toBeNull()
+    expect(
+      resourceUrlToProjectRelativePath('http://127.0.0.1:5173/babelHelpers.js', context),
+    ).toBeNull()
+  })
+
+  it('excludes a chunk even when nested under the appId/outputRoot path', () => {
+    expect(
+      resourceUrlToProjectRelativePath('http://127.0.0.1:5173/wxabc123/main/common.js', context),
+    ).toBeNull()
+  })
+
+  it('excludes a chunk by basename at any depth, including sub-package paths', () => {
+    expect(
+      resourceUrlToProjectRelativePath('http://127.0.0.1:5173/subpkg/common.js', context),
+    ).toBeNull()
+  })
+
+  it('still resolves real page/component sources (only exact chunk basenames are dropped)', () => {
+    expect(
+      resourceUrlToProjectRelativePath('http://127.0.0.1:5173/pages/home/home.js', context),
+    ).toBe('pages/home/home.js')
+    expect(
+      resourceUrlToProjectRelativePath('http://127.0.0.1:5173/pages/index/index.js', context),
+    ).toBe('pages/index/index.js')
+    // A basename that merely contains "common" is not an exact chunk basename.
+    expect(
+      resourceUrlToProjectRelativePath('http://127.0.0.1:5173/pages/common-utils.js', context),
+    ).toBe('pages/common-utils.js')
+  })
+
+  it('drops the dimina-core/compiled-chunk URL collision so a [service] log no longer opens common.js', () => {
+    // A dimina-core service-runtime frame and the project's compiled chunk share
+    // this URL; routing it to the editor would open the wrong file, so it is null.
+    expect(resourceUrlToProjectRelativePath('http://127.0.0.1:5173/common.js', context)).toBeNull()
+  })
+})
+
 describe('DevTools console project-source link injection', () => {
   const context = {
     projectRoot: '/workspace/demo',

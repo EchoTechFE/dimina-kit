@@ -218,7 +218,7 @@ function routeByDomain(method): 'render' | 'service' {
 | Console 捕获（service 层 → automation） | `services/service-console/` | CDP `Runtime.consoleAPICalled` attach 到 service-host wc（**非** preload monkeypatch——包装 `console.*` 会多压一帧，使前端把每条日志归因到包装器而非源码）；喂同一个 fan-out。注入的 `[视图]` 行靠 sentinel sourceURL 跳过防重复 |
 | Network 注入 | `services/network-forward/` | `DevToolsAPI.dispatchMessage`（事件） |
 | Elements 路由 | `services/elements-forward/` | hook `sendMessageToBackend` + 推回前端 |
-| 点源码 → Monaco | `view-manager` `injectOpenResourceHandler` → `shared/open-in-editor.ts` | 捕获阶段拦截 `.devtools-link` 点击 → `InspectorFrontendHost.openInNewTab(<sentinel>)`（旧 `setOpenResourceHandler` 在当前 Chromium 已移除，仅作降级 fallback） |
+| 点源码 → Monaco | `view-manager` `injectOpenResourceHandler` → `shared/open-in-editor.ts` | 捕获阶段拦截 `.devtools-link` 点击 → `InspectorFrontendHost.openInNewTab(<sentinel>)`（旧 `setOpenResourceHandler` 在当前 Chromium 已移除，仅作降级 fallback）。`projectAwareResourcePath` 只放行落在当前项目根内的源；构建/运行时 chunk（`common.js`/`vendors.js`/`runtime.js`/`taro.js`/`babelHelpers.js`）被排除——它们是编译产物，且 dimina 运行时的 `common.js` 与项目 chunk 共用同一 dev-server URL，放行会误开项目文件 |
 | tab 定制（只留 Element/Console/Network） | `services/views/devtools-tabs.ts` | DevTools view registry：`import('./ui/legacy/legacy.js')` → 把非保留 panel `maybeRemoveViewExtension` + 重注册为 **transient**（默认不在栏里、Cmd+Shift+P 仍可调出，无 `>>`/`×` 残留） |
 | 默认 Console + 关 locale infobar | `view-manager`（localStorage `panel-selectedTab`）/ `devtools-tabs.ts` | localStorage + 官方 `InspectorFrontendHost.setPreference('disable-locale-info-bar','true')` |
 
