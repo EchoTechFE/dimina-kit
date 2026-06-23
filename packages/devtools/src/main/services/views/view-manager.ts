@@ -778,12 +778,13 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   const openInEditorWiredWcIds = new Set<number>()
 
   function injectOpenResourceHandler(serviceWc: WebContents, devtoolsWc: WebContents): void {
-    // `setOpenResourceHandler` is the official Chromium DevTools hook IDEs use
-    // to route source-link clicks to an external editor. We poll for the host
-    // (it appears once the front-end finishes bootstrapping, like `UI` above)
-    // and register a handler that re-emits an encoded sentinel via
-    // `openInNewTab` → Electron `devtools-open-url`. Best-effort: wrapped in
-    // try/catch and a bounded poll so a missing API never throws.
+    // Inject the front-end glue that routes a project source-link click to our
+    // Monaco editor instead of the DevTools Sources panel: a capture-phase click
+    // interceptor re-emits an encoded sentinel via
+    // `InspectorFrontendHost.openInNewTab` → Electron `devtools-open-url`. (The
+    // legacy `setOpenResourceHandler` hook this used to rely on is gone in
+    // current Chromium, so the script keeps it only as a fallback.) Best-effort:
+    // the script is fully try/catch-wrapped so a missing API never throws.
     const sourceContext = projectSourceContextFromServiceHostUrl(
       serviceWc.getURL(),
       ctx.workspace?.getProjectPath?.(),
