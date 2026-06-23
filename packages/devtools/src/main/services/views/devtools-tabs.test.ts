@@ -39,6 +39,18 @@ describe('buildCustomizeTabsScript', () => {
     expect(src).toContain("persistence='transient'")
   })
 
+  it('reorders Sources after Network when Sources is kept', () => {
+    const src = buildCustomizeTabsScript()
+    // The Sources-last nudge keys off the Sources + Network display-name sets and
+    // moves the Sources tab to just after Network.
+    expect(src).toContain('WANT_SOURCES_LAST')
+    expect(src).toContain('insertBefore')
+    expect(src).toContain('源代码')
+    // No reorder when Sources is not in the keep-list.
+    const noSources = buildCustomizeTabsScript(['elements', 'console', 'network'])
+    expect(noSources).toContain('WANT_SOURCES_LAST = KEEPID.has(\'sources\')')
+  })
+
   it('suppresses the locale infobar via the official host preference', () => {
     const src = buildCustomizeTabsScript()
     expect(src).toContain('disable-locale-info-bar')
