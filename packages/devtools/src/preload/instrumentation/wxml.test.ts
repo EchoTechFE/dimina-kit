@@ -513,19 +513,18 @@ describe('createWxmlSource — tree extraction', () => {
     expect(tree.tagName).toBe('pages/index/index')
   })
 
-  it('does NOT treat instance as page when proxy.__page__ marker is absent', () => {
+  it('does NOT treat a nameless __scopeId component as a page when proxy.__page__ is absent', () => {
     // 子节点会继承 provides.path（Vue Object.create 链式 provides）。
-    // 缺 __page__ 标记的实例不应被误判为页面 —— 否则页面下每个子组件
-    // 都会被错误地命名成页面全路径。
-    // 这里构造一个有 components（避免走透明 template 分支）但没有
-    // proxy.__page__ 的实例，断言它走老路径返回 'page' 而非 page path。
+    // 缺 __page__ 标记的 nameless __scopeId 实例是自定义组件/模板包装，
+    // 而非页面。__page__ 才是页面的唯一权威标记：缺它就绝不能被命名为
+    // 页面全路径，也绝不能默认成 `page`（否则一个页面里会出现多个 page 根）。
     const instance = {
       type: {
         __scopeId: 'data-v-child',
         components: { 'dd-something': {} },
       },
       props: {},
-      // 有 provides.path 但缺 proxy.__page__（模拟子组件继承场景）
+      // 有 provides.path 但缺 proxy.__page__（模拟自定义组件场景）
       provides: { path: '/pages/index/index' },
       subTree: { children: [] },
     }
@@ -533,25 +532,60 @@ describe('createWxmlSource — tree extraction', () => {
 
     const tree = extract()!
     expect(tree.tagName).not.toBe('pages/index/index')
-    // 走老路径返回 'page'（__scopeId && components）
-    expect(tree.tagName).toBe('page')
+    expect(tree.tagName).not.toBe('page')
   })
 
-  it('falls back to plain `page` tagName when proxy.__page__ is absent and matches old detection', () => {
-    // 老路径：__scopeId && components 时返回 'page'
+  it('a Taro template wrapper (dd-tpl-*) under a page is transparent, not a second page', () => {
+    // 真机（Taro 小程序）实证：页面 dd-page 之下挂着编译产物 template 包装器
+    // dd-tpl-taro_tmpl / dd-tpl-tmpl_0_3，它们 nameless + __scopeId + components
+    // 且共用页面的 scopeId。它们必须透传 children，绝不能各自再生成一个 `page`。
+    const templateType = { __scopeId: 'data-v-page', components: {} }
+    const leaf = makeInstance('view', { class: 'card' })
+    const templateWrapper = {
+      type: templateType,
+      props: { data: {} },
+      appContext: { components: { 'dd-tpl-taro_tmpl': templateType } },
+      provides: { path: 'pages/index/index' },
+      subTree: { children: [{ component: leaf }] },
+    }
+    const page = {
+      type: { __scopeId: 'data-v-page', components: {} },
+      props: {},
+      proxy: { __page__: true },
+      provides: { path: 'pages/index/index' },
+      subTree: { children: [{ component: templateWrapper }] },
+    }
+    createMockIframe(page)
+
+    const tree = extract()!
+    expect(tree.tagName).toBe('pages/index/index')
+    // exactly one page root; the template wrapper is dropped, its leaf hoisted
+    // through the page's #shadow-root.
+    const shadow = tree.children.find((c) => c.tagName === '#shadow-root')!
+    expect(shadow).toBeDefined()
+    expect(shadow.children.map((c) => c.tagName)).toEqual(['view'])
+    function countPages(node: { tagName: string, children?: { tagName: string }[] }): number {
+      const self = node.tagName === 'page' ? 1 : 0
+      const kids = (node.children ?? []) as typeof node[]
+      return self + kids.reduce((n, c) => n + countPages(c), 0)
+    }
+    expect(countPages(tree)).toBe(0)
+  })
+
+  it('a nameless __scopeId component with no recoverable registration falls back to `template`', () => {
     const instance = {
       type: {
         __scopeId: 'data-v-abc',
         components: { 'dd-something': {} },
       },
       props: {},
-      // 没有 proxy.__page__
+      // 没有 proxy.__page__，也无从 parent/app 反查到注册名
       subTree: { children: [] },
     }
     createMockIframe(instance)
 
     const tree = extract()!
-    expect(tree.tagName).toBe('page')
+    expect(tree.tagName).toBe('template')
     expect(tree.children).toEqual([])
   })
 

@@ -16,20 +16,30 @@ const INTERNAL_CLASSES = new Set([
 
 const FRAMEWORK_TEMPLATE_RE = /^(taro_tmpl|tmpl_\d+)/
 
+/**
+ * Strip the `dd-` registration prefix and the `tpl-` prefix dimina adds to
+ * compiled template components (`app.component('dd-tpl-taro_tmpl', …)`), so a
+ * framework template wrapper normalizes to its bare name (`taro_tmpl`,
+ * `tmpl_0_3`) and `FRAMEWORK_TEMPLATE_RE` recognizes it.
+ */
+function normalizeRegisteredName(regName: string): string {
+  const base = regName.startsWith('dd-') ? regName.slice(3) : regName
+  return base.startsWith('tpl-') ? base.slice(4) : base
+}
+
 function resolveTemplateNameFromParent(instance: ComponentInstance): string | null {
   const parent = instance.parent as Record<string, unknown> | undefined
-  if (!parent) return null
-  const parentType = parent.type as Record<string, unknown> | undefined
+  const parentType = parent?.type as Record<string, unknown> | undefined
   const components = parentType?.components as Record<string, unknown> | undefined
   if (components) {
     for (const [regName, comp] of Object.entries(components)) {
-      if (comp === instance.type) return regName.startsWith('dd-') ? regName.slice(3) : regName
+      if (comp === instance.type) return normalizeRegisteredName(regName)
     }
   }
   const appComponents = instance.appContext?.components as Record<string, unknown> | undefined
   if (!appComponents) return null
   for (const [regName, comp] of Object.entries(appComponents)) {
-    if (comp === instance.type) return regName.startsWith('dd-') ? regName.slice(3) : regName
+    if (comp === instance.type) return normalizeRegisteredName(regName)
   }
   return null
 }
@@ -77,7 +87,12 @@ function resolveTagName(instance: ComponentInstance): string {
   if (typeof type.__tagName === 'string') return type.__tagName
   const name = (type.__name || type.name) as string | undefined
   if (!name) {
-    if (type.__scopeId && type.components) return 'page'
+    // A nameless component carrying a `__scopeId` is a compiled page, custom
+    // component, or framework template wrapper. The page is already resolved
+    // above via its authoritative `__page__` marker, so by here it is NOT a
+    // page — recover the registered tag (e.g. a Taro `taro_tmpl`/`tmpl_0_3`
+    // wrapper) and fall back to `template`. Defaulting to `page` here would
+    // mislabel every such wrapper as a second page root.
     if (type.__scopeId) return resolveTemplateNameFromParent(instance) || 'template'
     return 'unknown'
   }
@@ -131,6 +146,10 @@ function getElementSid(instance: ComponentInstance): string | undefined {
 
 function isTransparentComponent(instance: ComponentInstance, tagName: string): boolean {
   if (tagName === 'unknown') return true
+  // A framework template wrapper (Taro `taro_tmpl` / `tmpl_0_3`, whether named
+  // via `props.is` or recovered from its registration) is compiler scaffolding,
+  // not user content — pass its children straight through.
+  if (FRAMEWORK_TEMPLATE_RE.test(tagName)) return true
   if (tagName === 'template') {
     const props = instance.props as Record<string, unknown> | undefined
     const is = props?.is as string | undefined
