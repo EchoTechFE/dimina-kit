@@ -27,18 +27,28 @@ test('toolbar: refactored visual layout (no right-pane tabs, compile-mode dropdo
   await openProjectInUI(mainWindow, DEMO_APP_DIR)
   await waitForEditorReady(mainWindow)
 
-  // 1. The toolbar header band (the [data-bottom-debug-tabs] sibling
-  //    that lives at the top of the project-runtime) must not host any
-  //    role=tab elements. We check by counting tabs that are NOT inside
-  //    [data-bottom-debug-tabs].
+  // 1. The toolbar header band must not host any tab switcher: the old
+  //    right-pane DevTools/WXML/AppData/Storage tabs are gone. Every remaining
+  //    `[role="tab"]` is a DOCK tab and therefore lives inside a
+  //    `[data-deck-group]`; none stray into the toolbar/header.
   const stragglingTabs = await mainWindow.$$eval(
     '[role="tab"]',
     (els) =>
       els
-        .filter((el) => !el.closest('[data-bottom-debug-tabs]'))
+        .filter((el) => !el.closest('[data-deck-group]'))
         .map((el) => el.textContent?.trim() ?? ''),
   )
-  expect(stragglingTabs, 'no [role="tab"] should live outside the bottom debug tab bar').toEqual([])
+  expect(stragglingTabs, 'no [role="tab"] should live outside the dock (the toolbar has no tab switcher)').toEqual([])
+
+  // The dock tablist is EXACTLY the five debug panels (simulator + editor are
+  // tabless structural panels) — assert the precise set so a stray tab can't slip
+  // back in unnoticed.
+  const dockTabIds = await mainWindow.$$eval('[data-deck-tab]', (els) =>
+    els.map((el) => el.getAttribute('data-deck-tab')),
+  )
+  expect([...dockTabIds].sort(), 'the dock tablist must be exactly the five debug tabs').toEqual(
+    ['appdata', 'compile', 'console', 'storage', 'wxml'],
+  )
 
   // 2. Compile-mode dropdown trigger exists in the toolbar.
   const compileBtn = mainWindow.getByRole('button', { name: /普通编译/ })
@@ -49,7 +59,13 @@ test('toolbar: refactored visual layout (no right-pane tabs, compile-mode dropdo
   await expect(visibilityGroup).toBeVisible()
   await expect(visibilityGroup.locator('button[title="隐藏模拟器"], button[title="显示模拟器"]')).toBeVisible()
   await expect(visibilityGroup.locator('button[title="隐藏编辑器"], button[title="显示编辑器"]')).toBeVisible()
-  await expect(visibilityGroup.locator('button[title="隐藏调试器"], button[title="显示调试器"]')).toBeVisible()
+  // The debug panels are all `closable:false`, so the debug toggle is
+  // DETERMINISTICALLY in its pinned state: title "调试器固定显示" and disabled.
+  // Assert exactly that — a hide/show title here would mean the closable:false
+  // capability regressed.
+  const debugToggle = visibilityGroup.locator('button[title="调试器固定显示"]')
+  await expect(debugToggle).toBeVisible()
+  await expect(debugToggle).toBeDisabled()
 
   // Screenshot — resolve test-results relative to THIS spec file so the
   // output lands inside packages/devtools/test-results regardless of cwd.

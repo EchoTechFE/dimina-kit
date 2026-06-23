@@ -343,13 +343,28 @@ test.describe('native-host render path e2e', () => {
   })
 
   test('layout: the native simulator WebContentsView is live with the default zoom', async () => {
-    // The simulator is a top-level WebContentsView (Option A). Confirm it exists
-    // and carries the default 85% zoom factor (setZoomFactor wired, not broken).
-    // Pixel-position fidelity (bezel inset, scroll/splitter tracking) is visual QA.
-    const zoom = await electronApp.evaluate(({ webContents }) => {
-      const sim = webContents.getAllWebContents().find((wc) => wc.getURL().includes('simulator.html'))
-      return sim ? sim.getZoomFactor() : null
-    })
+    // The simulator is a top-level WebContentsView (Option A) that carries the
+    // default 85% zoom factor (setZoomFactor wired, not broken). main applies the
+    // factor only when the renderer publishes a VISIBLE simulator rect; in the
+    // off-screen automation window that first publish can lag, so poll, and if it
+    // has not landed force a re-measure via a real hide/show of the simulator
+    // panel. Pixel-position fidelity (bezel inset, scroll tracking) is visual QA.
+    const zoomOf = () =>
+      electronApp.evaluate(({ webContents }) => {
+        const sim = webContents.getAllWebContents().find((wc) => wc.getURL().includes('simulator.html'))
+        return sim ? sim.getZoomFactor() : null
+      })
+    const settled = (z: number | null): boolean => z !== null && Math.abs(z - 0.85) < 0.01
+
+    let zoom = await pollUntil(zoomOf, settled, 8000, 300).catch(() => null)
+    if (!settled(zoom)) {
+      const toggle = mainWindow.locator('[data-testid="layout-toolbar-toggle-simulator"]')
+      await toggle.click()
+      await mainWindow.waitForTimeout(500)
+      await toggle.click()
+      zoom = await pollUntil(zoomOf, settled, 8000, 300).catch(() => null)
+    }
+
     expect(zoom, 'native simulator WebContentsView should be present').not.toBeNull()
     expect(Math.abs((zoom as number) - 0.85), 'default zoom factor should be ~0.85').toBeLessThan(0.01)
   })

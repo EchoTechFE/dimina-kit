@@ -55,16 +55,24 @@ test('the sole dock layout renders (no flag, no FrameTree)', async () => {
   expect(await mainWindow.locator('[data-area="native-simulator"]').count()).toBeGreaterThanOrEqual(0)
 })
 
-test('simulator + editor + the five debug tabs are all present in the default dock', async () => {
+test('the five debug tabs surface as deck tabs; simulator + editor are tabless structural panels', async () => {
   // The default tree co-locates the five debug panels in one tab group, in
-  // pinned order. Each registered panel surfaces as a `[data-deck-tab]`.
+  // pinned order — each surfaces as a `[data-deck-tab]`. simulator + editor are
+  // STRUCTURAL panels (`hideTab:true`): they own their own region and draw their
+  // own chrome, so the dock renders NO tab for them — they are present as
+  // tabless `[data-deck-panel-body]` bodies instead.
   const tabIds = await mainWindow.evaluate(() =>
     Array.from(document.querySelectorAll('[data-deck-tab]')).map(
       (el) => el.getAttribute('data-deck-tab'),
     ),
   )
-  for (const id of ['simulator', 'editor', 'wxml', 'appdata', 'storage', 'console', 'compile']) {
-    expect(tabIds, `default dock must contain the '${id}' panel tab`).toContain(id)
+  for (const id of ['wxml', 'appdata', 'storage', 'console', 'compile']) {
+    expect(tabIds, `default dock must contain the '${id}' debug panel tab`).toContain(id)
+  }
+  for (const id of ['simulator', 'editor']) {
+    expect(tabIds, `structural panel '${id}' must NOT render a deck tab (hideTab)`).not.toContain(id)
+    const bodyCount = await mainWindow.locator(`[data-deck-panel-body="${id}"]`).count()
+    expect(bodyCount, `structural panel '${id}' must be mounted as a tabless dock body`).toBeGreaterThanOrEqual(1)
   }
 })
 
@@ -153,15 +161,24 @@ test('changing the device re-pins the simulator width live (device-width fidelit
   expect(after, 'simulator region must remain a valid positive width after device change').toBeGreaterThan(0)
 })
 
-test('a programmatic re-dock mutates the tree (drag-to-redock seam) without crashing', async () => {
-  // Drive the `__deckHandleDrop` seam on a group to re-dock the editor panel to
-  // the bottom of the group holding the debug tabs. This exercises the live
-  // mutation + persist path the user gets by dragging a tab.
-  const beforeGroups = await mainWindow.locator('[data-deck-group]').count()
+test('the drop seam rejects re-docking a structural panel — no-op, no tree mutation', async () => {
+  // editor is a STRUCTURAL panel (`draggable:false`): it can never be torn into
+  // another region. Drive the imperative `__deckHandleDrop` seam to drop it onto
+  // the debug group's bottom edge anyway — the engine must REJECT it as a true
+  // no-op: editor stays in its own group and no new group is spawned. (Legitimate
+  // within-group tab reordering is covered by dock-tab-reorder.spec.ts.)
 
-  const redocked = await mainWindow.evaluate(() => {
-    // Find the group that currently owns the 'wxml' debug tab and drop the
-    // 'editor' panel onto its bottom edge.
+  // Snapshot editor's enclosing group id + the total group count BEFORE the drop.
+  const before = await mainWindow.evaluate(() => ({
+    editorGroupId: document
+      .querySelector('[data-deck-panel-body="editor"]')
+      ?.closest('[data-deck-group]')
+      ?.getAttribute('data-deck-group') ?? null,
+    groupCount: document.querySelectorAll('[data-deck-group]').length,
+  }))
+  expect(before.editorGroupId, 'editor must start mounted inside a dock group').not.toBeNull()
+
+  const seamReached = await mainWindow.evaluate(() => {
     const groups = Array.from(document.querySelectorAll('[data-deck-group]')) as Array<
       HTMLElement & { __deckHandleDrop?: (panelId: string, zone: string) => void }
     >
@@ -170,17 +187,18 @@ test('a programmatic re-dock mutates the tree (drag-to-redock seam) without cras
     target.__deckHandleDrop('editor', 'bottom')
     return true
   })
-  expect(redocked, 'the __deckHandleDrop re-dock seam must be reachable on a group').toBe(true)
-
-  // The tree updated (group count changed or stayed valid) and the dock did not
-  // crash — groups still render and the editor panel is still somewhere.
+  expect(seamReached, 'the __deckHandleDrop seam must be reachable on a group').toBe(true)
   await mainWindow.waitForSelector('[data-deck-group]', { timeout: 5000 })
-  const afterGroups = await mainWindow.locator('[data-deck-group]').count()
-  expect(afterGroups, 'dock must still render after a re-dock').toBeGreaterThanOrEqual(1)
-  void beforeGroups
 
-  const stillHasEditor = await mainWindow.evaluate(() =>
-    document.querySelector('[data-deck-tab="editor"]') !== null,
-  )
-  expect(stillHasEditor, 'the editor panel must survive the re-dock').toBe(true)
+  // The rejected drop changed NOTHING: editor sits in the same group and the
+  // group count is unchanged (no split spawned a new group).
+  const after = await mainWindow.evaluate(() => ({
+    editorGroupId: document
+      .querySelector('[data-deck-panel-body="editor"]')
+      ?.closest('[data-deck-group]')
+      ?.getAttribute('data-deck-group') ?? null,
+    groupCount: document.querySelectorAll('[data-deck-group]').length,
+  }))
+  expect(after.editorGroupId, 'editor must NOT be re-docked into another group').toBe(before.editorGroupId)
+  expect(after.groupCount, 'a rejected structural drop must not spawn a new group').toBe(before.groupCount)
 })
