@@ -36,9 +36,12 @@
 
 /**
  * Canonical DevTools panel view ids kept in the DEFAULT tab bar (stable front-end
- * ids, unchanged for many Chromium releases): `elements`, `console`, `network`.
+ * ids, unchanged for many Chromium releases): `elements`, `console`, `network`,
+ * `sources`. Sources stays so a source-link click that isn't routed to Monaco
+ * (build/runtime chunks, framework frames) still has a panel to reveal in instead
+ * of silently no-op'ing.
  */
-export const DEVTOOLS_KEPT_VIEW_IDS: readonly string[] = ['elements', 'console', 'network']
+export const DEVTOOLS_KEPT_VIEW_IDS: readonly string[] = ['elements', 'console', 'network', 'sources']
 
 /**
  * Build the `executeJavaScript` source injected into the DevTools front-end
@@ -52,6 +55,7 @@ export function buildCustomizeTabsScript(
   // fallback path); the DevTools UI may be EN or ZH, so include both.
   const NAME_MAP: Record<string, string[]> = {
     elements: ['Elements', '元素'], console: ['Console', '控制台'], network: ['Network', '网络'],
+    sources: ['Sources', '来源', '源代码'],
   }
   const keepNames = keptIds.flatMap((id) => NAME_MAP[id] ?? [id])
   const keepIdsJson = JSON.stringify(JSON.stringify([...keptIds]))
@@ -86,7 +90,7 @@ export function buildCustomizeTabsScript(
           handled=true;
         }catch(_){} }
         // fallback: registrations not enumerable -> at least clear the bar by id
-        if(!handled){ var FALL=['timeline','resources','heap-profiler','sources','security','lighthouse','chrome-recorder','coverage','linear-memory-inspector','sensors','rendering','animations','autofill-view','medias','issues-pane']; for(var fr=0;fr<FALL.length;fr++){ try{ if(!KEEPID.has(FALL[fr])) maybeRemove(FALL[fr]); }catch(_){} } }
+        if(!handled){ var FALL=['timeline','resources','heap-profiler','security','lighthouse','chrome-recorder','coverage','linear-memory-inspector','sensors','rendering','animations','autofill-view','medias','issues-pane']; for(var fr=0;fr<FALL.length;fr++){ try{ if(!KEEPID.has(FALL[fr])) maybeRemove(FALL[fr]); }catch(_){} } }
       } else { domFallback(); }
     })();
     // DOM fallback: only if the ESM module couldn't be resolved at all.

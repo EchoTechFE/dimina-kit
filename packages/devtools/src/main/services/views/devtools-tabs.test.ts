@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { DEVTOOLS_KEPT_VIEW_IDS, buildCustomizeTabsScript } from './devtools-tabs.js'
 
 describe('DEVTOOLS_KEPT_VIEW_IDS', () => {
-  it('keeps exactly Elements / Console / Network in the default bar', () => {
-    expect([...DEVTOOLS_KEPT_VIEW_IDS]).toEqual(['elements', 'console', 'network'])
+  it('keeps Elements / Console / Network / Sources in the default bar', () => {
+    // Sources is kept so a source-link click NOT routed to Monaco (build/runtime
+    // chunks, framework frames) still has a panel to reveal in.
+    expect([...DEVTOOLS_KEPT_VIEW_IDS]).toEqual(['elements', 'console', 'network', 'sources'])
   })
 })
 
