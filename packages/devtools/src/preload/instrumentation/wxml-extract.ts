@@ -76,6 +76,28 @@ function resolvePagePath(instance: ComponentInstance): string | null {
   return path.startsWith('/') ? path.slice(1) : path
 }
 
+/**
+ * A NATIVE dimina custom component (a `usingComponents` entry) calls
+ * `provide('path', componentPath)` in its setup (render runtime), so its
+ * provided `path` DIFFERS from its parent's. A plain descendant inherits the
+ * same provides object (identical `path`) and is not a boundary; a Taro template
+ * wrapper (`dd-tpl-*`) never provides, so it never differs either. Comparing
+ * against the parent's provided path therefore isolates exactly the native
+ * component roots — matching WeChat, which shows each custom component as a node
+ * tagged with its full registered path (with a synthetic `#shadow-root` added by
+ * `wrapInShadowRoot` since the path contains `/`). Pages are handled earlier via
+ * their authoritative `__page__` marker, so this only fires for components.
+ */
+function resolveComponentPath(instance: ComponentInstance): string | null {
+  const provides = (instance as Record<string, unknown>).provides as Record<string, unknown> | undefined
+  const path = provides?.path
+  if (typeof path !== 'string' || !path) return null
+  const parent = instance.parent as Record<string, unknown> | undefined
+  const parentProvides = parent?.provides as Record<string, unknown> | undefined
+  if (path === parentProvides?.path) return null
+  return path.startsWith('/') ? path.slice(1) : path
+}
+
 function resolveTagName(instance: ComponentInstance): string {
   const type = instance.type
   if (!type) return 'unknown'
@@ -84,6 +106,11 @@ function resolveTagName(instance: ComponentInstance): string {
   // 回到 'page'。在那之前直接用 provide('path') 的路径升级 tag 名。
   const pagePath = resolvePagePath(instance)
   if (pagePath) return pagePath
+  // Native custom-component boundary → tag with its full registered path (WeChat
+  // parity). Must precede the __tagName/__name/dd- shortening below, which would
+  // otherwise collapse `dd-foo` to the bare `foo` and lose the path.
+  const componentPath = resolveComponentPath(instance)
+  if (componentPath) return componentPath
   if (typeof type.__tagName === 'string') return type.__tagName
   const name = (type.__name || type.name) as string | undefined
   if (!name) {
