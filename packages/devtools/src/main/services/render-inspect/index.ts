@@ -45,12 +45,52 @@ export interface RenderInspectorOptions {
 
 const DEFAULT_SOURCE_PATH = 'dist/render-host/render-inspect.js'
 
+/**
+ * Chrome DevTools' default Elements-panel highlight palette (content / padding /
+ * border / margin tints + the size tooltip). Mirroring it makes the WXML panel's
+ * hover box visually identical to the embedded Elements panel's.
+ */
+const HIGHLIGHT_CONFIG = {
+  showInfo: true,
+  showRulers: false,
+  showExtensionLines: false,
+  contentColor: { r: 111, g: 168, b: 220, a: 0.66 },
+  paddingColor: { r: 147, g: 196, b: 125, a: 0.55 },
+  borderColor: { r: 255, g: 229, b: 153, a: 0.66 },
+  marginColor: { r: 246, g: 178, b: 107, a: 0.66 },
+} as const
+
+/** Object group for the per-hover `Runtime.evaluate` reference, released after the draw. */
+const HOVER_OBJECT_GROUP = 'render-inspect-hover'
+
+/**
+ * Upper bound on awaiting the `DOM.enable → Overlay.enable` handshake before
+ * highlighting. A hung `DOM.enable` then degrades to a missed paint instead of a
+ * stuck hover.
+ */
+const ENABLE_HANDSHAKE_TIMEOUT_MS = 500
+
+/** Resolve when `p` settles or `ms` elapses, whichever comes first (never rejects). */
+function withTimeout(p: Promise<unknown>, ms: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, ms)
+    p.then(() => { clearTimeout(timer); resolve() }, () => { clearTimeout(timer); resolve() })
+  })
+}
+
 export function createRenderInspector(options: RenderInspectorOptions = {}): RenderInspector {
   const loadSource =
     options.loadSource ??
     (() => readFileSync(path.join(devtoolsPackageRoot, DEFAULT_SOURCE_PATH), 'utf8'))
   let cachedSource: string | null = null
   const injected = new Set<number>()
+  // Debugger sessions THIS service attached itself (nobody else owned one). Only
+  // these are detached on guest-destroy; sessions safe-area / Elements-forward
+  // own are never touched (single-owner per wc).
+  const selfAttached = new Set<number>()
+  // Per-wc `DOM.enable → Overlay.enable` handshake, started once and reused so a
+  // burst of hovers shares one enable. Cleared when the guest is destroyed.
+  const enablePromises = new Map<number, Promise<void>>()
 
   function source(): string {
     if (cachedSource === null) cachedSource = loadSource()
@@ -78,10 +118,14 @@ export function createRenderInspector(options: RenderInspectorOptions = {}): Ren
     // Consolidate the per-wc bookkeeping teardown onto the connection layer
     // (foundation.md §4 / P2) when a registry is available; fall back to the
     // bespoke `once('destroyed')` only when omitted (focused unit tests).
+    const forget = (): void => {
+      injected.delete(wc.id)
+      enablePromises.delete(wc.id)
+    }
     if (options.connections) {
-      options.connections.acquire(wc).own(() => injected.delete(wc.id))
+      options.connections.acquire(wc).own(forget)
     } else {
-      wc.once('destroyed', () => injected.delete(wc.id))
+      wc.once('destroyed', forget)
     }
     return true
   }
@@ -102,23 +146,137 @@ export function createRenderInspector(options: RenderInspectorOptions = {}): Ren
   async function highlight(wc: WebContents, sid: string): Promise<ElementInspection | null> {
     if (wc.isDestroyed()) return null
     if (!(await ensureInjected(wc))) return null
+    let inspection: ElementInspection | null
     try {
       const result = await wc.executeJavaScript(
         `window.__diminaRenderInspect ? window.__diminaRenderInspect.highlightElement(${JSON.stringify(sid)}) : null`,
       )
-      return (result as ElementInspection | null) ?? null
+      inspection = (result as ElementInspection | null) ?? null
     } catch {
       return null
     }
+    // No geometry → nothing to draw; never touch the debugger.
+    if (!inspection) return null
+    // Draw the native overlay best-effort: the inspection data must survive even
+    // if the CDP draw fails, so a rejected debugger step never propagates.
+    await drawNativeHighlight(wc, sid).catch(() => { /* best-effort draw */ })
+    return inspection
+  }
+
+  /**
+   * Paint the Chrome-style native highlight over the guest via CDP — the same
+   * `Overlay.highlightNode` the embedded Elements panel uses, so the WXML panel's
+   * hover box matches it exactly. Reuses the guest's existing debugger session
+   * (single-owner per wc; safe-area / Elements-forward has usually already
+   * attached it) and only attaches itself when nobody has.
+   *
+   * `Overlay.highlightNode` paints only while the Overlay domain is enabled, and
+   * Chromium rejects `Overlay.enable` with "DOM should be enabled first" unless
+   * DOM is enabled first. On a cold/self-attached session (WXML hovered without
+   * the Elements panel ever enabling Overlay) the highlight would silently no-op
+   * if the command raced ahead of the enable, so we AWAIT the `DOM.enable →
+   * Overlay.enable` handshake before highlighting — but only up to
+   * `ENABLE_HANDSHAKE_TIMEOUT_MS`, so a hung `DOM.enable` degrades to a missed
+   * paint rather than a stuck hover.
+   *
+   * The `Runtime.evaluate` runs in a named object group whose remote references
+   * are released in `finally`; otherwise every hover would leak a live DOM
+   * wrapper into the guest's execution context.
+   */
+  async function drawNativeHighlight(wc: WebContents, sid: string): Promise<void> {
+    if (wc.isDestroyed()) return
+    if (!ensureGuestDebugger(wc)) return
+    await withTimeout(ensureDomainsEnabled(wc), ENABLE_HANDSHAKE_TIMEOUT_MS)
+    if (wc.isDestroyed()) return
+    const expression = `window.__diminaRenderInspect && window.__diminaRenderInspect.elementFor(${JSON.stringify(sid)})`
+    try {
+      const evaluated = await wc.debugger.sendCommand('Runtime.evaluate', {
+        expression,
+        returnByValue: false,
+        objectGroup: HOVER_OBJECT_GROUP,
+      })
+      const objectId = (evaluated as { result?: { objectId?: string } } | null)?.result?.objectId
+      if (!objectId) return
+      await wc.debugger.sendCommand('Overlay.highlightNode', {
+        objectId,
+        highlightConfig: HIGHLIGHT_CONFIG,
+      })
+    } finally {
+      // Drop the hover's remote DOM reference so repeated hovers don't accumulate
+      // live wrappers in the guest context.
+      wc.debugger
+        .sendCommand('Runtime.releaseObjectGroup', { objectGroup: HOVER_OBJECT_GROUP })
+        .catch(() => { /* guest gone */ })
+    }
+  }
+
+  /**
+   * Ensure the guest's debugger is usable WITHOUT opening a second session: a
+   * webContents debugger is single-owner, so reuse the already-attached session
+   * (Elements-forward / safe-area) and only `attach('1.3')` when nobody has. The
+   * sessions we open ourselves are tracked so guest-destroy detaches only ours.
+   * Returns false when the debugger can't be made usable.
+   */
+  function ensureGuestDebugger(wc: WebContents): boolean {
+    try {
+      if (wc.debugger.isAttached()) return true
+    } catch {
+      return false
+    }
+    try {
+      wc.debugger.attach('1.3')
+      trackSelfAttached(wc)
+      return true
+    } catch {
+      // A concurrent attach (race) leaves it usable; anything else is a failure.
+      try { return wc.debugger.isAttached() } catch { return false }
+    }
+  }
+
+  /** Record a self-attached session and detach it when the guest is destroyed. */
+  function trackSelfAttached(wc: WebContents): void {
+    if (selfAttached.has(wc.id)) return
+    selfAttached.add(wc.id)
+    const detach = (): void => {
+      selfAttached.delete(wc.id)
+      try {
+        if (!wc.isDestroyed() && wc.debugger.isAttached()) wc.debugger.detach()
+      } catch { /* already gone */ }
+    }
+    if (options.connections) options.connections.acquire(wc).own(detach)
+    else { try { wc.once('destroyed', () => selfAttached.delete(wc.id)) } catch { /* fake wc */ } }
+  }
+
+  /**
+   * Enable the DOM + Overlay render domains in dependency order, ONCE per guest
+   * (the promise is cached + reused across hovers). `Overlay.enable` is sent ONLY
+   * AFTER `DOM.enable` resolves (Chromium rejects it otherwise). Resolves when
+   * Overlay is enabled; a rejection at any step is swallowed (the guest may be
+   * mid-teardown) and the cache entry is dropped so a later hover can retry.
+   */
+  function ensureDomainsEnabled(wc: WebContents): Promise<void> {
+    const cached = enablePromises.get(wc.id)
+    if (cached) return cached
+    wc.debugger.sendCommand('CSS.enable').catch(() => { /* guest mid-destroy */ })
+    const handshake = wc.debugger
+      .sendCommand('DOM.enable')
+      .then(() => {
+        if (wc.isDestroyed()) return
+        return wc.debugger.sendCommand('Overlay.enable')
+      })
+      .then(() => undefined)
+      .catch(() => {
+        // Allow a retry on the next hover (e.g. the guest was mid-destroy).
+        enablePromises.delete(wc.id)
+      })
+    enablePromises.set(wc.id, handshake)
+    return handshake
   }
 
   async function unhighlight(wc: WebContents): Promise<void> {
     if (wc.isDestroyed()) return
-    if (!(await ensureInjected(wc))) return
     try {
-      await wc.executeJavaScript(
-        'window.__diminaRenderInspect && window.__diminaRenderInspect.unhighlightElement && window.__diminaRenderInspect.unhighlightElement()',
-      )
+      await wc.debugger.sendCommand('Overlay.hideHighlight')
     } catch {
       // best-effort
     }

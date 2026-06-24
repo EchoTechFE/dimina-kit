@@ -10,17 +10,30 @@
 // ~250-line walk logic (we reuse wxml-extract verbatim through the bundle).
 //
 // The exposed surface mirrors the iframe-path `__simulatorData`
-// (highlightElement/unhighlightElement) + the WXML source's tree computation,
-// so the WXML panel and element-inspect resolve sids against ONE registry per
-// guest. Idempotent: re-injection keeps the first registry (synthetic sids
-// minted during getWxml must survive until the following highlight).
+// (getWxml/highlightElement/unhighlightElement) + `elementFor`, so the WXML
+// panel and element-inspect resolve sids against ONE registry per guest.
+// `highlightElement` only MEASURES (rect + computed style); the visual highlight
+// is drawn natively by the main process via CDP `Overlay.highlightNode` over the
+// guest's debugger session — the same overlay the embedded Chrome Elements panel
+// uses. `elementFor` returns the live element so main can grab a CDP objectId for
+// that command. Idempotent: re-injection keeps the first registry (synthetic
+// sids minted during getWxml must survive until the following highlight).
 import type { ElementInspection } from '../shared/ipc-channels.js'
 import { findElementBySid, type WxmlNode } from '../preload/shared/sid-registry.js'
 import { walkInstance, type ComponentInstance } from '../preload/instrumentation/wxml-extract.js'
 
 interface RenderInspectApi {
   getWxml(): WxmlNode | null
+  /**
+   * Measure the element with `sid`: its bounding rect + computed style. The
+   * visual highlight is drawn natively by the main process via CDP
+   * `Overlay.highlightNode` over the guest's debugger session (the same overlay
+   * the embedded Chrome Elements panel uses), so this only returns data — it
+   * does NOT paint anything in the guest.
+   */
   highlightElement(sid: string): ElementInspection | null
+  /** Resolve the sid to its live DOM element so main can grab a CDP objectId. */
+  elementFor(sid: string): HTMLElement | null
   unhighlightElement(): void
 }
 
@@ -53,30 +66,15 @@ if (!g.__diminaRenderInspect) {
       : tree
   }
 
-  let overlay: HTMLDivElement | null = null
-  const ensureOverlay = (): HTMLDivElement => {
-    if (overlay && overlay.ownerDocument === document) return overlay
-    overlay = document.createElement('div')
-    overlay.id = '__simulator-highlight'
-    overlay.style.cssText =
-      'position:fixed;pointer-events:none;z-index:999999;' +
-      'border:2px solid #1a73e8;background:rgba(26,115,232,0.12);' +
-      'transition:all 0.1s ease;display:none;border-radius:2px;box-sizing:border-box;'
-    document.body.appendChild(overlay)
-    return overlay
+  const elementFor = (sid: string): HTMLElement | null => {
+    if (!sid) return null
+    return findElementBySid(document, sid)
   }
 
   const highlightElement = (sid: string): ElementInspection | null => {
-    if (!sid) return null
-    const el = findElementBySid(document, sid)
+    const el = elementFor(sid)
     if (!el) return null
     const rect = el.getBoundingClientRect()
-    const box = ensureOverlay()
-    box.style.left = `${rect.left}px`
-    box.style.top = `${rect.top}px`
-    box.style.width = `${rect.width}px`
-    box.style.height = `${rect.height}px`
-    box.style.display = 'block'
     const style = el.ownerDocument.defaultView?.getComputedStyle(el)
     if (!style) return null
     return {
@@ -95,9 +93,10 @@ if (!g.__diminaRenderInspect) {
     }
   }
 
-  const unhighlightElement = (): void => {
-    if (overlay) overlay.style.display = 'none'
-  }
+  // The native Overlay is cleared by the main process via CDP
+  // `Overlay.hideHighlight`; the guest has no div to hide, so this is a no-op
+  // kept for the iframe-path API parity the surface comment documents.
+  const unhighlightElement = (): void => {}
 
-  g.__diminaRenderInspect = { getWxml, highlightElement, unhighlightElement }
+  g.__diminaRenderInspect = { getWxml, highlightElement, elementFor, unhighlightElement }
 }
