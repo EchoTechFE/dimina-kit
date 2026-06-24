@@ -26,6 +26,12 @@ import getStorageServiceOverride from '@codingame/monaco-vscode-storage-service-
 import getLogServiceOverride from '@codingame/monaco-vscode-log-service-override'
 import getFilesServiceOverride from '@codingame/monaco-vscode-files-service-override'
 import getExplorerServiceOverride from '@codingame/monaco-vscode-explorer-service-override'
+import getPreferencesServiceOverride from '@codingame/monaco-vscode-preferences-service-override'
+import getSearchServiceOverride from '@codingame/monaco-vscode-search-service-override'
+import getMarkersServiceOverride from '@codingame/monaco-vscode-markers-service-override'
+import getOutputServiceOverride from '@codingame/monaco-vscode-output-service-override'
+import getSnippetsServiceOverride from '@codingame/monaco-vscode-snippets-service-override'
+import getEmmetServiceOverride from '@codingame/monaco-vscode-emmet-service-override'
 import getQuickAccessServiceOverride from '@codingame/monaco-vscode-quickaccess-service-override'
 import getWorkbenchServiceOverride from '@codingame/monaco-vscode-workbench-service-override'
 import { registerExtension, ExtensionHostKind as ExtKind } from '@codingame/monaco-vscode-api/extensions'
@@ -165,12 +171,23 @@ const A2_THEME_ID = { light: 'Light Modern', dark: 'Dark Modern' } as const
  *    packages (built-in dd/wx + any downstream-contributed typings). Hiding is
  *    UI-only — tsserver still reads them. dimina projects have no real
  *    `node_modules` at the editor root, so hiding it loses nothing.
+ *  - `files.autoSave` (afterDelay) makes an edit flush to disk on its own, so a
+ *    save round-trips through `/__fs/write` → the devkit project watcher →
+ *    rebuild without the user pressing ⌘S (this is a live-preview editor; the
+ *    surprise was "edited but nothing compiled"). `highlightModifiedTabs` keeps
+ *    the brief dirty window visible.
  */
 function buildUserConfig(scheme: 'light' | 'dark'): Record<string, unknown> {
   return {
     'workbench.colorTheme': A2_THEME_ID[scheme],
     'files.associations': { '*.wxss': 'css', '*.wxs': 'javascript' },
     'files.exclude': { 'node_modules': true },
+    'files.autoSave': 'afterDelay',
+    'files.autoSaveDelay': 1000,
+    'workbench.editor.highlightModifiedTabs': true,
+    // Open files as permanent tabs, not single-click preview — preview tabs don't
+    // render the dirty (●) indicator here, and permanent tabs match the live-edit flow.
+    'workbench.editor.enablePreview': false,
     'window.commandCenter': false,
     'workbench.layoutControl.enabled': false,
     'window.customTitleBarVisibility': 'never',
@@ -206,6 +223,15 @@ async function boot(): Promise<void> {
     // Standard VS Code Explorer (file tree) view — shows the mirrored
     // file:///workspace project files in the sidebar.
     ...getExplorerServiceOverride(),
+    // Settings UI editor (the gear → Settings opens nothing without it).
+    ...getPreferencesServiceOverride(),
+    // Round out a real editing experience: Search sidebar, Problems (markers),
+    // Output panel, snippets, and Emmet (handy for wxml/wxss).
+    ...getSearchServiceOverride(),
+    ...getMarkersServiceOverride(),
+    ...getOutputServiceOverride(),
+    ...getSnippetsServiceOverride(),
+    ...getEmmetServiceOverride(),
     ...getThemeServiceOverride(),
     ...getTextmateServiceOverride(),
     ...getLanguagesServiceOverride(),

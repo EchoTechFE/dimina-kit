@@ -181,7 +181,13 @@
     "vscode-json-languageservice": "^5.7.2",
     "vscode-languageserver-textdocument": "^1.0.12",
     "@codingame/monaco-vscode-explorer-service-override": "34.0.3",
-    "@codingame/monaco-vscode-css-default-extension": "34.0.3"
+    "@codingame/monaco-vscode-css-default-extension": "34.0.3",
+    "@codingame/monaco-vscode-preferences-service-override": "34.0.3",
+    "@codingame/monaco-vscode-search-service-override": "34.0.3",
+    "@codingame/monaco-vscode-markers-service-override": "34.0.3",
+    "@codingame/monaco-vscode-output-service-override": "34.0.3",
+    "@codingame/monaco-vscode-snippets-service-override": "34.0.3",
+    "@codingame/monaco-vscode-emmet-service-override": "34.0.3"
   },
   "peerDependencies": {
     "electron": ">=36"
