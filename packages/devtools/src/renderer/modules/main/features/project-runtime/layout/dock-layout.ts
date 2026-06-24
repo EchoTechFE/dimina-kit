@@ -63,7 +63,16 @@ export function buildDockRegistry(): PanelRegistry {
   // simulator + editor draw their own chrome (device picker / file path bar), so
   // they hide the engine tab entirely — their groups render no tab strip.
   registry.register({ kind: 'dom', id: 'simulator', title: 'Simulator', draggable: false, hideTab: true })
-  registry.register({ kind: 'dom', id: 'editor', title: 'Editor', draggable: false, hideTab: true })
+  // The 'editor' slot is the embedded A2 VS Code workbench: a NATIVE slot driving
+  // the main-process workbench WebContentsView (the sole devtools editor).
+  registry.register({
+    kind: 'native',
+    id: 'editor',
+    title: 'Editor',
+    nativeRef: { id: 'workbench-a2' },
+    draggable: false,
+    hideTab: true,
+  })
   registry.register({ kind: 'dom', id: 'wxml', title: 'WXML', dropPolicy: 'reorder-only', closable: false })
   registry.register({ kind: 'dom', id: 'appdata', title: 'AppData', dropPolicy: 'reorder-only', closable: false })
   registry.register({ kind: 'dom', id: 'storage', title: 'Storage', dropPolicy: 'reorder-only', closable: false })

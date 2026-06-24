@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react'
 import { COPY_FEEDBACK_TIMEOUT_MS } from '@/shared/constants'
 import {
   getBranding,
   publishSimulatorDevtoolsBounds,
+  publishWorkbenchA2Bounds,
   publishHostToolbarBounds,
   onHostToolbarHeightChanged,
   getHostToolbarHeight,
@@ -14,7 +15,6 @@ import { ProjectToolbar } from './components/project-toolbar'
 import { SimulatorPanel } from './components/simulator-panel'
 import { DebugTabContent } from '../bottom-debug-panel/bottom-debug-panel'
 import type { BottomDebugPanelProps, DebugTabContentId } from '../bottom-debug-panel/bottom-debug-panel'
-import { MonacoEditor } from '../monaco-editor'
 import { useViewAnchor, createPlacementAnchor } from '@dimina-kit/view-anchor'
 import type { Placement, PlacementAnchorHandle } from '@dimina-kit/view-anchor'
 import { DockView } from '@dimina-kit/electron-deck/dock-react'
@@ -45,12 +45,12 @@ interface ProjectRuntimeProps {
  * The project window's main content area.
  *
  * Layout is the layout-engine `<DockView>`, owned entirely by the
- * `<DockableLayout>` child below: simulator (native WCV) + editor (in-renderer
- * Monaco) + the five debug panels (wxml/appdata/storage/console/compile, with
- * console a native overlay). The dock tree is persisted opaquely via the layout
- * store; `dock-layout.ts` seeds the default arrangement on a fresh install. All
- * native-overlay bounds-sync (simulator + console) lives inside `DockableLayout`
- * via `createPlacementAnchor`; the editor is a plain React child with no anchor.
+ * `<DockableLayout>` child below: simulator (native WCV) + editor (native A2
+ * workbench WCV) + the five debug panels (wxml/appdata/storage/console/compile,
+ * with console a native overlay). The dock tree is persisted opaquely via the
+ * layout store; `dock-layout.ts` seeds the default arrangement on a fresh
+ * install. All native-overlay bounds-sync (simulator + console + editor) lives
+ * inside `DockableLayout` via `createPlacementAnchor`.
  */
 export function ProjectRuntime({ project }: ProjectRuntimeProps) {
   const copyTimerRef = useRef<number | null>(null)
@@ -70,6 +70,9 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
   const [dockModel] = useState(() =>
     buildDockModel(layoutState.dockTree ?? null, device.simPanelWidth, DOCK_PANEL_IDS),
   )
+
+  // The 'editor' dock slot is always the embedded A2 workbench (native WCV); the
+  // registry never changes across the component's life.
   const dockRegistry = useMemo(() => buildDockRegistry(), [])
 
   // Host-controllable toolbar WCV (sits above ProjectToolbar). Dynamic-height
@@ -173,28 +176,15 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
     onClearCompileEvents: session.clearCompileEvents,
   }
 
-  // In-renderer Monaco editor — replaces the OpenSumi WebContentsView overlay.
-  // Plain React component occupying the editor panel; reads/writes the active
-  // project's files via the sandboxed `project:fs:*` IPC. `ready` gates the
-  // editor's `project:fs:listFiles` load on the main process having registered
-  // the active project (`openProject` sets the main-side path only once the
-  // compile finishes / reports `ready`; loading before then throws `ENOACTIVE`).
-  const editorNode = (
-    <MonacoEditor
-      projectPath={project.path}
-      ready={session.compileStatus.status === 'ready'}
-    />
-  )
-
   // DOM-panel renderer for DockView. `simulator` renders the SimulatorPanel
   // chrome (device/zoom pickers, compile overlays, page-path bar); SimulatorPanel
   // owns the simulator WCV anchor on its device-region div (a bare native slot
-  // would render no chrome). `editor` is the Monaco component. The four React
-  // debug tabs (wxml/appdata/storage/compile) render through DockDebugTab. The
-  // native `console` is routed to a NativeSlot by DockView, never here. A plain
-  // function (not useCallback): `debugPanelProps` is rebuilt every render with
-  // fresh handlers, so memoizing would only pin stale nodes; DockView re-reads it
-  // on each render anyway.
+  // would render no chrome). The four React debug tabs
+  // (wxml/appdata/storage/compile) render through DockDebugTab. The native
+  // `console` and `editor` slots are routed to NativeSlots by DockView, never
+  // here. A plain function (not useCallback): `debugPanelProps` is rebuilt every
+  // render with fresh handlers, so memoizing would only pin stale nodes; DockView
+  // re-reads it on each render anyway.
   const renderDomPanel = (panelId: string, opts: { active: boolean }): ReactNode => {
     if (panelId === 'simulator') {
       return (
@@ -210,7 +200,6 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
         />
       )
     }
-    if (panelId === 'editor') return editorNode
     if (
       panelId === 'wxml' ||
       panelId === 'appdata' ||
@@ -432,42 +421,76 @@ function DockableLayout(props: DockableLayoutProps): ReactNode {
     }
   }, [])
 
-  const bindNativeSlot = useCallback(
-    (panelId: string, el: HTMLElement | null) => {
-      if (panelId !== 'console') return
-      // The console overlay needs display:none detach (an inactive tab releases
-      // the WCV), `followScroll` (track ancestor scroll), AND `followGeometry`
-      // (N2): a drag-re-dock can MOVE the console slot without resizing it (e.g.
-      // a sibling re-dock shifts its x-position), and a ResizeObserver never
-      // fires on a pure translate — the geometry sentinel re-publishes the rect.
-      if (consoleAnchorRef.current) {
+  // Native 'editor' overlay: the 'editor' slot is a NATIVE panel (nativeRef
+  // 'workbench-a2'), so DockView fires `bindNativeSlot('workbench-a2', el)` for
+  // it. Bounds ride `publishWorkbenchA2Bounds`.
+  const workbenchAnchorRef = useRef<PlacementAnchorHandle | null>(null)
+  const publishWorkbench = useCallback((p: Placement) => {
+    if (p.visible) {
+      void publishWorkbenchA2Bounds({
+        x: p.bounds.x,
+        y: p.bounds.y,
+        width: p.bounds.width,
+        height: p.bounds.height,
+      })
+    } else {
+      void publishWorkbenchA2Bounds({ x: 0, y: 0, width: 0, height: 0 })
+    }
+  }, [])
+
+  // Bind/rebind/release a native-overlay anchor for `el`. The overlay needs
+  // display:none detach (an inactive tab releases the WCV), `followScroll` (track
+  // ancestor scroll), AND `followGeometry`: a drag-re-dock can MOVE the slot
+  // without resizing it, and a ResizeObserver never fires on a pure translate, so
+  // the geometry sentinel re-publishes the rect. Shared by the console and the
+  // workbench-a2 overlays (both forward-anchored DevTools-style WCVs).
+  const bindOverlayAnchor = useCallback(
+    (
+      ref: MutableRefObject<PlacementAnchorHandle | null>,
+      el: HTMLElement | null,
+      publish: (p: Placement) => void,
+    ) => {
+      if (ref.current) {
         if (el) {
-          consoleAnchorRef.current.dispose()
-          consoleAnchorRef.current = createPlacementAnchor(el, {
+          ref.current.dispose()
+          ref.current = createPlacementAnchor(el, {
             visible: true,
             guardDisplayNone: true,
             followScroll: true,
             followGeometry: true,
-            publish: publishConsole,
+            publish,
           })
         } else {
-          consoleAnchorRef.current.update({ visible: false, publish: publishConsole })
-          consoleAnchorRef.current.dispose()
-          consoleAnchorRef.current = null
+          ref.current.update({ visible: false, publish })
+          ref.current.dispose()
+          ref.current = null
         }
         return
       }
       if (el) {
-        consoleAnchorRef.current = createPlacementAnchor(el, {
+        ref.current = createPlacementAnchor(el, {
           visible: true,
           guardDisplayNone: true,
           followScroll: true,
           followGeometry: true,
-          publish: publishConsole,
+          publish,
         })
       }
     },
-    [publishConsole],
+    [],
+  )
+
+  const bindNativeSlot = useCallback(
+    (panelId: string, el: HTMLElement | null) => {
+      if (panelId === 'console') {
+        bindOverlayAnchor(consoleAnchorRef, el, publishConsole)
+        return
+      }
+      if (panelId === 'workbench-a2') {
+        bindOverlayAnchor(workbenchAnchorRef, el, publishWorkbench)
+      }
+    },
+    [bindOverlayAnchor, publishConsole, publishWorkbench],
   )
 
   // Live device-width re-pin: the simulator column's `minPx` FLOOR must follow
@@ -494,6 +517,8 @@ function DockableLayout(props: DockableLayoutProps): ReactNode {
     return () => {
       consoleAnchorRef.current?.dispose()
       consoleAnchorRef.current = null
+      workbenchAnchorRef.current?.dispose()
+      workbenchAnchorRef.current = null
     }
   }, [])
 

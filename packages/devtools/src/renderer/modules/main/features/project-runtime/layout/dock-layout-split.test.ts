@@ -136,15 +136,15 @@ describe('buildDockRegistry — split into 5 fine panels', () => {
     ).toBe('console')
   })
 
-  it('registers wxml/appdata/storage/compile/editor/simulator as DOM panels', () => {
+  it('registers wxml/appdata/storage/compile/simulator as DOM panels', () => {
     // Bug guarded: the four React-content debug tabs must be DOM panels (so
     // renderDomPanel renders them).
     //
-    // CONTRACT CHANGE (consolidation): `simulator` is now a DOM panel, not a
-    // native one. A bare native slot renders no chrome, but the simulator needs
-    // its device/zoom pickers + compile overlays + page-path bar; so
-    // `renderDomPanel('simulator')` renders `SimulatorPanel`, which owns the
-    // simulator WCV anchor itself. `console` remains the only native panel.
+    // `simulator` is a DOM panel, not a native one. A bare native slot renders no
+    // chrome, but the simulator needs its device/zoom pickers + compile overlays
+    // + page-path bar; so `renderDomPanel('simulator')` renders `SimulatorPanel`,
+    // which owns the simulator WCV anchor itself. `console` + `editor` are the
+    // native panels.
     const registry = buildDockRegistry()
 
     expect(registry.get('wxml')?.kind).toBe('dom')
@@ -152,9 +152,19 @@ describe('buildDockRegistry — split into 5 fine panels', () => {
     expect(registry.get('storage')?.kind).toBe('dom')
     expect(registry.get('compile')?.kind).toBe('dom')
 
-    expect(registry.get('editor')?.kind).toBe('dom')
-
     expect(registry.get('simulator')?.kind).toBe('dom')
+  })
+
+  it('registers editor as a NATIVE panel (the A2 workbench WebContentsView)', () => {
+    // The 'editor' slot is the embedded A2 VS Code workbench — a main-process
+    // WebContentsView (nativeRef 'workbench-a2'), the sole devtools editor.
+    const registry = buildDockRegistry()
+    const editorPanel = registry.get('editor')
+
+    expect(editorPanel?.kind).toBe('native')
+    expect(
+      editorPanel && editorPanel.kind === 'native' ? editorPanel.nativeRef.id : undefined,
+    ).toBe('workbench-a2')
   })
 
   it('registers every built-in debug tab as non-closable', () => {

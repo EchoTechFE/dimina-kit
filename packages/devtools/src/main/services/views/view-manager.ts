@@ -102,9 +102,10 @@ export interface ViewManagerContext {
  * `removeChildView`, `webContents.destroy()` and overlay `setBounds` calls
  * should live here — IPC handlers just call into the manager.
  *
- * The code editor is NOT an overlay: it renders as an in-renderer
- * `<MonacoEditor/>` React component inside the main window. The main
- * window's own renderer is the content root and is not managed here.
+ * The code editor IS an overlay: the embedded A2 VS Code workbench is a
+ * main-process WebContentsView (`attachWorkbenchA2`) hung off the main window's
+ * contentView, like the other overlays. The main window's own renderer is the
+ * content root and is not managed here.
  */
 export interface ViewManager {
   // ── DevTools ───────────────────────────────────────────────────────────
@@ -215,6 +216,32 @@ export interface ViewManager {
    * alive so re-showing it doesn't re-pay the DevTools bootstrap.
    */
   setSimulatorDevtoolsBounds(bounds: { x: number; y: number; width: number; height: number }): void
+
+  // ── Embedded A2 workbench editor WebContentsView ──────────────────────
+  /**
+   * Lazily create the A2 workbench WebContentsView, load `<url>index.html`, and
+   * add it to the contentView. `url` is the COI server's base URL (trailing
+   * slash), which serves the workbench bundle with the SharedArrayBuffer
+   * isolation headers. Idempotent: a second call is a no-op.
+   */
+  attachWorkbenchA2(url: string): Promise<void>
+  /**
+   * Apply a renderer-measured rectangle to the workbench editor view. Mirrors
+   * `setSimulatorDevtoolsBounds`: `{ width: 0, height: 0 }` is "hide" — the view
+   * is removed from the contentView (kept under settings/popover when re-added)
+   * but its WebContents stays alive. No-op until `attachWorkbenchA2` ran.
+   */
+  setWorkbenchA2Bounds(bounds: { x: number; y: number; width: number; height: number }): void
+  /** Destroy the workbench editor view (teardown). No-op if never attached. */
+  detachWorkbenchA2(): void
+  /**
+   * Reveal a project file in the embedded workbench at a 1-based line/column
+   * (the open-in-editor target coordinate convention). Drives the workbench's
+   * own vscode API over its mirrored `file:///workspace/<rel>` tree. No-op when
+   * the workbench editor is not attached (host opted out). Returns whether the
+   * request was dispatched to the workbench.
+   */
+  openFileInWorkbench(relPath: string, line: number, column: number): boolean
 
   // ── Host-controllable toolbar WebContentsView ─────────────────────────
   /**
@@ -436,6 +463,13 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   // its WebContents stays alive.
   let simulatorBoundsOverride: layout.Bounds | null = null
 
+  // ── Embedded A2 workbench editor WebContentsView ────────────────────────
+  // The opt-in VS Code workbench hosting the 'editor' dock slot. Lazily created
+  // by `attachWorkbenchA2` from the COI server URL; its bounds ride the renderer
+  // 'editor'-slot anchor (forward anchor, like the simulator DevTools overlay).
+  let workbenchA2View: WebContentsView | null = null
+  let workbenchA2ViewAdded = false
+
   // ── Host-controllable toolbar WebContentsView ───────────────────────────
   // A strip above the devtools header that the downstream host loads its own
   // content into and fully controls. Bounds come from a renderer DOM anchor
@@ -512,6 +546,89 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       raiseTopOverlays()
     }
     simulatorView.setBounds(bounds)
+  }
+
+  // ── Embedded A2 workbench editor WebContentsView ────────────────────────
+
+  async function attachWorkbenchA2(url: string): Promise<void> {
+    if (workbenchA2View) return
+    const view = new WebContentsView({
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        sandbox: false,
+      },
+    })
+    workbenchA2View = view
+    // The workbench bundle loads arbitrary URLs (docs links, etc.); route popups
+    // + cross-origin in-place navigation to the OS browser (mirror the host
+    // toolbar / native simulator hardening).
+    try {
+      view.webContents.setWindowOpenHandler(({ url: target }) => handleWindowOpenExternal(target))
+    } catch { /* stub may lack it */ }
+    ctx.windows.mainWindow.contentView.addChildView(view)
+    workbenchA2ViewAdded = true
+    // Keep settings/popover above the freshly-added base overlay.
+    raiseTopOverlays()
+    await view.webContents.loadURL(url + 'index.html').catch((err) => {
+      console.error('[workbench] attachWorkbenchA2 — loadURL failed', err)
+    })
+  }
+
+  function setWorkbenchA2Bounds(bounds: layout.Bounds): void {
+    if (!workbenchA2View || workbenchA2View.webContents.isDestroyed()) return
+    if (ctx.windows.mainWindow.isDestroyed()) return
+    // Zero-area rect means "hide" — remove the child view but keep its
+    // WebContents (and the workbench's loaded state) alive.
+    if (isHidden(bounds)) {
+      if (workbenchA2ViewAdded) {
+        try {
+          ctx.windows.mainWindow.contentView.removeChildView(workbenchA2View)
+        } catch { /* already removed */ }
+        workbenchA2ViewAdded = false
+      }
+      return
+    }
+    if (!workbenchA2ViewAdded) {
+      ctx.windows.mainWindow.contentView.addChildView(workbenchA2View)
+      workbenchA2ViewAdded = true
+      // Re-attaching this base overlay moved it to the top of the z-stack; keep
+      // any open settings/popover above it.
+      raiseTopOverlays()
+    }
+    workbenchA2View.setBounds(bounds)
+  }
+
+  function detachWorkbenchA2(): void {
+    destroyViewInternal(workbenchA2View)
+    workbenchA2View = null
+    workbenchA2ViewAdded = false
+  }
+
+  function openFileInWorkbench(relPath: string, line: number, column: number): boolean {
+    if (!workbenchA2View || workbenchA2View.webContents.isDestroyed()) return false
+    // The workbench mirrors the active project under file:///workspace/<rel>; the
+    // open-in-editor target is 1-based (editor convention) while vscode.Position
+    // is 0-based, so clamp-convert. Drive the workbench's own vscode API rather
+    // than a preload bridge — the bundle is a plain isolated http document.
+    const rel = relPath.replace(/^\/+/, '')
+    const zeroLine = Math.max(0, Math.floor(line) - 1)
+    const zeroCol = Math.max(0, Math.floor(column) - 1)
+    const script = `(async () => {
+      try {
+        const P = window.__A2_PROBE; if (!P) return false
+        const vscode = P.vscode
+        const uri = vscode.Uri.parse('file:///workspace/' + ${JSON.stringify(rel)})
+        const doc = await vscode.workspace.openTextDocument(uri)
+        const pos = new vscode.Position(${zeroLine}, ${zeroCol})
+        await vscode.window.showTextDocument(doc, { selection: new vscode.Range(pos, pos) })
+        return true
+      } catch (e) { return false }
+    })()`
+    workbenchA2View.webContents.executeJavaScript(script, true).catch((err) => {
+      console.error('[workbench] openFileInWorkbench failed', err)
+    })
+    return true
   }
 
   // ── Host-controllable toolbar WebContentsView ───────────────────────────
@@ -766,15 +883,15 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     closeNativeDevtoolsSource()
   }
 
-  // ── Open-in-editor: click a console file link → built-in Monaco ──────────
+  // ── Open-in-editor: click a console file link → A2 workbench ──────────────
   // The right-panel console is the embedded Chromium DevTools front-end. Once a
   // sourcemap maps a console frame back to source (restored by the service-host
   // importScripts sourcemap rewrite), we redirect a source-link click to OUR
-  // Monaco editor instead of the DevTools Sources panel: install an "open
+  // workbench editor instead of the DevTools Sources panel: install an "open
   // resource handler" in the front-end realm that encodes (url, line, col) into
   // a sentinel URL and asks the front-end to open it; Electron surfaces that as
   // `devtools-open-url` on the inspected (service-host) wc, which we decode,
-  // map to a project-relative path, and broadcast to the renderer's Monaco.
+  // map to a project-relative path, and reveal in the workbench WCV.
   const openInEditorWiredWcIds = new Set<number>()
 
   function injectOpenResourceHandler(serviceWc: WebContents, devtoolsWc: WebContents): void {
@@ -843,6 +960,10 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
         req,
       )
       if (!target) return
+      // Route the source link into the A2 workbench WCV (the sole editor). The
+      // renderer notify path is a defensive fallback for when the workbench view
+      // is not attached (e.g. mid-teardown).
+      if (openFileInWorkbench(target.path, target.line ?? 1, target.column ?? 1)) return
       ctx.notify.editorOpenFile(target)
     }
     serviceWc.on('devtools-open-url', onOpenUrl)
@@ -881,7 +1002,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       // so a focusing window would yank focus repeatedly (disrupting the user /
       // e2e).
       next.openDevTools({ mode: 'detach', activate: false })
-      // Redirect console source-link clicks to the built-in Monaco editor.
+      // Redirect console source-link clicks to the A2 workbench editor.
       wireOpenInEditor(next, simulatorView.webContents)
       // Keep only Elements/Console/Network tabs (front-most, in that order).
       // Re-applied on every re-point so a service-host pool swap (fresh
@@ -1479,6 +1600,8 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
 
   function disposeAll(): void {
     detachSimulator()
+    // Embedded A2 workbench editor view (no-op when the host never opted in).
+    detachWorkbenchA2()
     // Narrow channel first: close the live MessagePort + sweep the onMessage
     // registry, so a send() racing teardown reports false instead of posting
     // into a wc that is about to be closed.
@@ -1594,6 +1717,10 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     setNativeSimulatorViewBounds,
     resize,
     setSimulatorDevtoolsBounds,
+    attachWorkbenchA2,
+    setWorkbenchA2Bounds,
+    detachWorkbenchA2,
+    openFileInWorkbench,
     setHostToolbarBounds,
     setHostToolbarHeight,
     hostToolbar,

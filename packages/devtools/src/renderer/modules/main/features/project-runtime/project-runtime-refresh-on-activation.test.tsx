@@ -104,7 +104,6 @@ vi.mock('./controllers/use-layout-store', () => ({
 // (DockDebugTab) so the integrated activation path is exercised end to end.
 vi.mock('./components/project-toolbar', () => ({ ProjectToolbar: () => null }))
 vi.mock('./components/simulator-panel', () => ({ SimulatorPanel: () => null }))
-vi.mock('../monaco-editor', () => ({ MonacoEditor: () => null }))
 vi.mock('@dimina-kit/view-anchor', () => ({
   useViewAnchor: () => () => {},
   createPlacementAnchor: () => ({ update: vi.fn(), dispose: vi.fn() }),

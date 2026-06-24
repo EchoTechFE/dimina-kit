@@ -209,6 +209,28 @@ export interface CreateProjectInput {
   extra?: Record<string, unknown>
 }
 
+/**
+ * Configuration for the embedded A2 VS Code workbench editor — the sole devtools
+ * editor. This config only fine-tunes where the workbench bundle and downstream
+ * contributed extensions are served from; the editor is always on.
+ */
+export interface EditorViewConfig {
+  /**
+   * Absolute path to the built workbench bundle dir. Defaults to the
+   * devtools-bundled `dist/workbench-a2`. Override to ship a custom workbench.
+   */
+  bundleDir?: string
+  /**
+   * Downstream editor extensibility: absolute path to a directory of VS Code
+   * **web** extensions (each a folder with a `package.json` whose `browser`/
+   * `main` entry runs in the worker ext-host). The framework serves them through
+   * the workbench's same-origin COI server and the workbench registers each at
+   * boot, so a host (or qdmp) can contribute languages, commands, and views to
+   * the editor without forking the bundle. Omit for none.
+   */
+  extensionsDir?: string
+}
+
 export interface WorkbenchAppConfig extends WorkbenchConfig {
   /** Absolute path to the renderer dist directory. Defaults to dimina-devtools' built-in renderer. */
   rendererDir?: string
@@ -238,6 +260,15 @@ export interface WorkbenchAppConfig extends WorkbenchConfig {
    * just to report the denial; it may layer richer UX (e.g. a dialog) on top.
    */
   onBeforeOpenProject?: (projectPath: string) => void | Promise<void>
+  /**
+   * Fine-tune the embedded A2 VS Code workbench editor (the sole devtools
+   * editor). The 'editor' dock slot is always a main-process WebContentsView
+   * hosting the workbench (full project-wide IntelliSense, wxml LSP, dd/wx
+   * types); the framework starts the COI http server and bakes the
+   * SharedArrayBuffer switch unconditionally. Provide this only to override the
+   * bundle dir or contribute downstream extensions; omit for the defaults.
+   */
+  editorViewConfig?: EditorViewConfig
   /** Custom update checker. If provided, enables the check-for-updates feature. */
   updateChecker?: UpdateChecker
   /** Extra options applied when an updateChecker is provided. */

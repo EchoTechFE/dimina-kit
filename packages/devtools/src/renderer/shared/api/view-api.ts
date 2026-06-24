@@ -122,6 +122,17 @@ export function publishSimulatorDevtoolsBounds(bounds: ViewBounds): Promise<void
 }
 
 /**
+ * Publish the embedded A2 workbench editor placeholder's measured rectangle so
+ * the main process overlays the workbench WebContentsView precisely. `width: 0,
+ * height: 0` means the slot is hidden (the editor tab is not selected) — the
+ * main process removes the view from the contentView but keeps it alive. Only
+ * called when the host opts into the workbench editor.
+ */
+export function publishWorkbenchA2Bounds(bounds: ViewBounds): Promise<void> {
+  return invoke<void>(ViewChannel.WorkbenchA2Bounds, bounds)
+}
+
+/**
  * Publish the host-controllable toolbar placeholder's measured rectangle so the
  * main process can overlay the toolbar WebContentsView precisely. `width: 0,
  * height: 0` means the placeholder is absent (the reserved height is 0) — the

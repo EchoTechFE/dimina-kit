@@ -2,10 +2,11 @@ import { EditorChannel, type EditorOpenFilePayload } from '../../../shared/ipc-c
 import { on } from './ipc-transport'
 
 /**
- * Subscribe to "open this file in the Monaco editor" requests from the main
- * process. Drives the "click a console file link → open in editor" pipeline:
- * the embedded DevTools front-end routes a source-link click to main, which
- * maps the resource URL to a project-relative path and broadcasts it here.
+ * Subscribe to "open this file in the editor" requests from the main process.
+ * The defensive renderer-side leg of the "click a console file link → open in
+ * editor" pipeline: the embedded DevTools front-end routes a source-link click
+ * to main, which prefers revealing the file directly in the A2 workbench WCV
+ * (`openFileInWorkbench`) and only broadcasts here when that view is unavailable.
  *
  * Returns an unsubscribe function (removeListener contract).
  */

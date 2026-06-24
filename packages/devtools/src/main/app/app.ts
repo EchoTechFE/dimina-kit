@@ -39,6 +39,7 @@ import { createRenderInspector } from '../services/render-inspect/index.js'
 import { setupSimulatorTempFiles } from '../services/simulator-temp-files/index.js'
 import { SHARED_MINIAPP_PARTITION } from '../services/views/miniapp-partition.js'
 import { setupSimulatorSessionPolicy } from '../services/views/simulator-session-policy.js'
+import { startWorkbenchCoiServer } from '../services/workbench-coi-server.js'
 import { UpdateManager } from '../services/update/index.js'
 import { toDisposable, type Disposable } from '@dimina-kit/electron-deck/main'
 import { IpcRegistry } from '../utils/ipc-registry.js'
@@ -367,6 +368,12 @@ export function runDevtoolsBootstrap(config: WorkbenchAppConfig = {}): void {
   suppressInsecureCspWarnings()
   // Privileged scheme registration must run before app.whenReady (else throws).
   registerDifileScheme()
+  // The embedded A2 workbench editor (the sole devtools editor) needs
+  // SharedArrayBuffer for the TS web ext-host's project-wide IntelliSense.
+  // Electron can't flip crossOriginIsolated (electron#35905), but this switch
+  // provides SAB independently; it is purely additive (no COEP leak into
+  // simulator/console WCVs).
+  try { app.commandLine.appendSwitch('enable-features', 'SharedArrayBuffer') } catch { /* electron stub in tests */ }
 }
 
 /**
@@ -395,7 +402,7 @@ export async function createDevtoolsRuntime(config: WorkbenchAppConfig = {}): Pr
   context.connections.acquire(mainWindow.webContents)
 
   context.registry.add(registerAppIpc(context))
-  // Sandboxed project file-system IPC for the in-renderer Monaco editor.
+  // Sandboxed project file-system IPC (the renderer-side project:fs:* surface).
   context.registry.add(registerProjectFsIpc(context))
   // Referer/CORS webRequest policy for the simulator runtime's sessions (shared
   // fallback + every per-project partition). Registered into the context
@@ -592,6 +599,28 @@ export async function createDevtoolsRuntime(config: WorkbenchAppConfig = {}): Pr
       bridge: context.bridge,
     }))
   }
+  // Embedded A2 workbench editor — the sole devtools editor. Stand up the COI
+  // http server that serves the workbench bundle with the SharedArrayBuffer
+  // isolation headers and bridges `/__fs/*` onto the active project, then hand its
+  // base URL to the view manager so the 'editor' dock slot mounts the workbench
+  // WebContentsView. Both the server and the WCV tear down with the context
+  // registry.
+  const bundleDir =
+    config.editorViewConfig?.bundleDir ?? path.join(rendererDir, '..', 'workbench-a2')
+  const coiServer = await startWorkbenchCoiServer({
+    rootDir: bundleDir,
+    getProjectRoot: () => context.workspace.getProjectPath(),
+    extensionsDir: config.editorViewConfig?.extensionsDir,
+  })
+  context.registry.add(() => { void coiServer.close() })
+  context.registry.add(() => context.views.detachWorkbenchA2())
+  // Fire-and-forget: attaching the workbench creates the WebContentsView
+  // synchronously, but loading the bundle (10MB + ext-host init) must NOT gate
+  // app assemble — awaiting it here blocks the whole boot behind the editor's
+  // first paint. The view's bounds ride the renderer 'editor'-slot anchor once
+  // the dock mounts; load completes in the background.
+  void context.views.attachWorkbenchA2(coiServer.baseUrl)
+
   context.registry.add(wireAppWindowEvents(config, instance))
   context.registry.add(enableDevRendererAutoReload(rendererDir))
 
