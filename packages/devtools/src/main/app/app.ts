@@ -6,7 +6,7 @@ import fs from 'fs'
 import path from 'path'
 import type { BuiltinModuleId, MenuContext, WorkbenchAppConfig } from '../../shared/types.js'
 import type { SimulatorApiHandler } from '../services/simulator/custom-apis.js'
-import { rendererDir as defaultRendererDir, defaultPreloadPath } from '../utils/paths.js'
+import { rendererDir as defaultRendererDir, defaultPreloadPath, devtoolsPackageRoot } from '../utils/paths.js'
 import { installThemeBackgroundSync } from '../utils/theme.js'
 import { createMainWindow, wireMainWindowEvents } from '../windows/main-window/index.js'
 import { isAppQuitting } from './lifecycle.js'
@@ -605,21 +605,41 @@ export async function createDevtoolsRuntime(config: WorkbenchAppConfig = {}): Pr
   // base URL to the view manager so the 'editor' dock slot mounts the workbench
   // WebContentsView. Both the server and the WCV tear down with the context
   // registry.
+  //
+  // Default the bundle dir to the devtools package's OWN `dist/workbench-a2`
+  // (resolved from the package root), NOT relative to the caller's rendererDir:
+  // a host that overrides `rendererDir` but omits `editorViewConfig.bundleDir`
+  // would otherwise compute a path next to ITS renderer, where no workbench
+  // bundle exists → 404 / blank editor.
   const bundleDir =
-    config.editorViewConfig?.bundleDir ?? path.join(rendererDir, '..', 'workbench-a2')
-  const coiServer = await startWorkbenchCoiServer({
-    rootDir: bundleDir,
-    getProjectRoot: () => context.workspace.getProjectPath(),
-    extensionsDir: config.editorViewConfig?.extensionsDir,
-  })
-  context.registry.add(() => { void coiServer.close() })
-  context.registry.add(() => context.views.detachWorkbenchA2())
-  // Fire-and-forget: attaching the workbench creates the WebContentsView
-  // synchronously, but loading the bundle (10MB + ext-host init) must NOT gate
-  // app assemble — awaiting it here blocks the whole boot behind the editor's
-  // first paint. The view's bounds ride the renderer 'editor'-slot anchor once
-  // the dock mounts; load completes in the background.
-  void context.views.attachWorkbenchA2(coiServer.baseUrl)
+    config.editorViewConfig?.bundleDir ?? path.join(devtoolsPackageRoot, 'dist/workbench-a2')
+  // Skip the entire editor assembly when the bundle is missing. Starting the COI
+  // server and attaching the WCV against a non-existent bundle yields a silent
+  // blank editor (the WCV loads index.html → 404); a launchable app with no
+  // editor is strictly better. The view manager never gets a source, so the
+  // 'editor' slot's lazy attach is a no-op.
+  if (!fs.existsSync(path.join(bundleDir, 'index.html'))) {
+    console.warn(
+      `[workbench] editor bundle not found at ${bundleDir} — skipping embedded editor assembly`,
+    )
+  } else {
+    const coiServer = await startWorkbenchCoiServer({
+      rootDir: bundleDir,
+      getProjectRoot: () => context.workspace.getProjectPath(),
+      extensionsDir: config.editorViewConfig?.extensionsDir,
+    })
+    // Return the close promise so the registry awaits server shutdown on dispose
+    // instead of fire-and-forgetting it (a dangling http server would keep the
+    // port + event loop alive past teardown).
+    context.registry.add(() => coiServer.close())
+    context.registry.add(() => context.views.detachWorkbenchA2())
+    // Only HAND the view manager the COI URL — do NOT load yet. The heavy
+    // WebContentsView load (10MB bundle + ext-host) is deferred to the first time
+    // the 'editor' dock slot becomes visible (first non-zero bounds), so it never
+    // sits on the app boot critical path. Loading it eagerly here delayed
+    // preload/window-ready enough to trip the e2e launch health check.
+    context.views.setWorkbenchA2Source(coiServer.baseUrl)
+  }
 
   context.registry.add(wireAppWindowEvents(config, instance))
   context.registry.add(enableDevRendererAutoReload(rendererDir))

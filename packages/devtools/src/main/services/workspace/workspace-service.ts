@@ -197,6 +197,19 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
         }
       }
       clearSimulatorServicewechatReferer()
+      // Switching from one project to another must tear down the embedded
+      // workbench editor view. The workbench mirrors a single project's disk
+      // to `file:///workspace` ONCE at boot and routes `/__fs` writes at the
+      // live active project root; if the WCV survives a switch, the editor
+      // keeps showing project A's mirrored tree while saves land in project B
+      // (wrong project). Detaching destroys the WCV so the next time the
+      // 'editor' slot becomes visible it lazily re-attaches and re-mirrors the
+      // new project (setWorkbenchA2Bounds re-creates from the stored source on
+      // the first non-zero rect). Guarded on an active session so the first
+      // open (no predecessor) is a safe no-op.
+      if (currentSession !== null) {
+        ctx.views.detachWorkbenchA2()
+      }
       // Invalidate the outgoing session's onLog BEFORE teardown starts (same
       // order as closeProject below): the dying compile worker flushes
       // buffered lines DURING disposeSession(), and with the old generation

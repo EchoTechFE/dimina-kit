@@ -114,7 +114,12 @@ function makeHarness(opts?: {
       return session
     }),
   }
-  const views = { disposeAll: vi.fn(() => events.push('views.disposeAll')) }
+  const views = {
+    disposeAll: vi.fn(() => events.push('views.disposeAll')),
+    // The switch path (openProject while a session is active) detaches the
+    // embedded workbench editor so it re-mirrors the incoming project.
+    detachWorkbenchA2: vi.fn(),
+  }
   const ctx = {
     adapter,
     notify: { projectStatus: vi.fn(), compileLog: vi.fn() },

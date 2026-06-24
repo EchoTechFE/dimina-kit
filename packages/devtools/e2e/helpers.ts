@@ -308,18 +308,19 @@ export async function readConsoleErrors(electronApp: ElectronApplication): Promi
 }
 
 /**
- * Wait until the in-renderer Monaco editor is mounted in the main window.
+ * Wait until the editor dock body is mounted in the main window.
  *
- * The editor is now a plain React component (`[data-area="editor"]`
- * containing Monaco's `.monaco-editor` element) — no separate
- * WebContentsView / `dmieditor://` protocol to poll. We just wait for the
- * Monaco DOM to appear in the main window.
+ * The editor is the embedded A2 workbench, a main-process WebContentsView
+ * overlaid onto the `[data-area="editor"]` anchor div (the workbench's own DOM
+ * lives in a separate WebContents the main window cannot query). Readiness is
+ * the anchor div appearing — the dock renders it as soon as the editor structural
+ * body mounts; the WCV lazily attaches on the first non-zero bounds publish.
  */
 export async function waitForEditorReady(
   mainWindow: Page,
   timeout = 25000,
 ): Promise<void> {
-  await mainWindow.waitForSelector('[data-area="editor"] .monaco-editor', { timeout })
+  await mainWindow.waitForSelector('[data-area="editor"]', { timeout })
 }
 
 export async function waitForSimulatorWebview(

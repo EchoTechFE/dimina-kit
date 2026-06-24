@@ -1,14 +1,20 @@
 /**
- * REAL HTML5 drag-and-drop of a dock tab — the e2e counterpart to the two
- * `it.todo`s in
- * `packages/electron-deck/src/dock-react/dock-view-redock.test.tsx`:
+ * REAL HTML5 drag-and-drop of a dock tab, exercising the live PanelCapabilities
+ * gates with REAL layout geometry — the e2e counterpart to the geometry-driven
+ * drop-zone indicator and the capability gates unit-tested (against jsdom seams)
+ * in `packages/electron-deck/src/dock-react/dock-view-redock.test.tsx`.
  *
- *   it.todo('dragging a tab over the LEFT band of a group shows
- *            data-deck-drop-zone="left" and drops to split-left')
- *   it.todo('dragging a tab into the CENTER of a group shows
- *            data-deck-drop-zone="center" and drops to join')
+ * The devtools registry locks down EVERY panel: `simulator`/`editor` are
+ * `draggable:false` (locked structural anchors — no tab, never a drag source,
+ * never absorb a drop), and the five debug panels (wxml/appdata/storage/console/
+ * compile) are `dropPolicy:'reorder-only'` (may ONLY reorder within their own
+ * group, never join/split another). So with the real registry there is NO
+ * cross-group join or edge-split gesture — these tests assert exactly that
+ * contract with real geometry: the hover indicator still paints the zone
+ * (presentation is geometry-only), but the drop is REJECTED and the tree does
+ * not churn. Within-group reorder is covered by `dock-tab-reorder.spec.ts`.
  *
- * Those cannot run under jsdom (getBoundingClientRect returns 0, so
+ * Geometry can't be exercised under jsdom (getBoundingClientRect returns 0, so
  * `computeDropZone` always degenerates to `center` and no zone overlay is
  * deterministic). This spec drives the REAL gesture in a real Electron renderer
  * with real layout geometry.
@@ -104,18 +110,24 @@ async function realDragTab(
   return page.evaluate(
     async ({ draggedPanelId, targetPanelId, fx, fy }) => {
       try {
+        // The SOURCE must be a real draggable tab: only a panel with a
+        // `[data-deck-tab]` can begin an HTML5 drag (`hideTab`/`draggable:false`
+        // structural panels render no tab and can never be a drag source).
         const tab = document.querySelector(
           `[data-deck-tab="${draggedPanelId}"]`,
         ) as HTMLElement | null
         if (!tab) return { ok: false, zoneAtHover: null, indicatorSeen: false, error: `no source tab ${draggedPanelId}` }
 
-        // The group that currently owns the target panel's tab.
-        const targetTab = document.querySelector(
-          `[data-deck-tab="${targetPanelId}"]`,
-        ) as HTMLElement | null
-        if (!targetTab) return { ok: false, zoneAtHover: null, indicatorSeen: false, error: `no target tab ${targetPanelId}` }
-        const group = targetTab.closest('[data-deck-group]') as HTMLElement | null
-        if (!group) return { ok: false, zoneAtHover: null, indicatorSeen: false, error: `target tab ${targetPanelId} has no group` }
+        // The group that currently owns the target panel. A structural target
+        // (editor/simulator) has no tab — locate its group via its panel body so a
+        // drag can still be aimed AT that group's region (the drop will be gated by
+        // PanelCapabilities, but the gesture must reach the group to test it).
+        const targetEl =
+          (document.querySelector(`[data-deck-tab="${targetPanelId}"]`) as HTMLElement | null) ??
+          (document.querySelector(`[data-deck-panel-body="${targetPanelId}"]`) as HTMLElement | null)
+        if (!targetEl) return { ok: false, zoneAtHover: null, indicatorSeen: false, error: `no target panel ${targetPanelId}` }
+        const group = targetEl.closest('[data-deck-group]') as HTMLElement | null
+        if (!group) return { ok: false, zoneAtHover: null, indicatorSeen: false, error: `target panel ${targetPanelId} has no group` }
 
         const rect = group.getBoundingClientRect()
         const clientX = rect.left + rect.width * fx
@@ -201,9 +213,21 @@ async function dockFingerprint(page: PwPage): Promise<{
   return page.evaluate(() => {
     const groups = Array.from(document.querySelectorAll('[data-deck-group]')).map((g) => {
       const id = g.getAttribute('data-deck-group') ?? ''
-      const panels = Array.from(g.querySelectorAll('[data-deck-tab]')).map(
-        (t) => t.getAttribute('data-deck-tab') ?? '',
-      )
+      // A group's panels are its draggable tabs UNION its structural bodies:
+      // `hideTab` panels (simulator/editor) draw their own chrome so they carry
+      // NO `[data-deck-tab]`, only a `[data-deck-panel-body]` region. Collect both
+      // (de-duped, tab order first) so `groupOf` resolves every docked panel —
+      // including the tabless structural ones — to its owning group.
+      const seen = new Set<string>()
+      const panels: string[] = []
+      for (const t of g.querySelectorAll('[data-deck-tab]')) {
+        const pid = t.getAttribute('data-deck-tab') ?? ''
+        if (pid && !seen.has(pid)) { seen.add(pid); panels.push(pid) }
+      }
+      for (const b of g.querySelectorAll('[data-deck-panel-body]')) {
+        const pid = b.getAttribute('data-deck-panel-body') ?? ''
+        if (pid && !seen.has(pid)) { seen.add(pid); panels.push(pid) }
+      }
       return { id, panels }
     })
     const splits = Array.from(document.querySelectorAll('[data-deck-split]')).map((s) => ({
@@ -250,33 +274,44 @@ async function simulatorBounds(app: ElectronApplication): Promise<{ x: number; y
 
 // ───────────────────────── tests ─────────────────────────
 
-test('POINT 1+2 CENTER: real DnD of wxml tab into editor group center joins the tab group + shows center indicator', async () => {
-  // Make 'editor' visible/active in its group so its body anchors the drop.
-  // (wxml + editor + the debug tabs share the default tree; we drag wxml onto
-  //  the group that owns editor, at its center => tab-join.)
+test('CENTER over a locked editor group: indicator shows center, but a reorder-only debug tab dropped there is a no-op', async () => {
+  // The editor group's ACTIVE panel is `editor` (draggable:false) — a locked drop
+  // ANCHOR: nothing may join it. `wxml` is `dropPolicy:'reorder-only'` — it may
+  // ONLY reorder within its OWN group, never join another. So a real CENTER drop
+  // of wxml onto the editor group must be REJECTED (no churn), even though the
+  // geometry-driven hover indicator still paints `center` (the gate is at drop
+  // time, not hover time). Drives both PanelCapabilities gates with real geometry.
   const before = await dockFingerprint(mainWindow)
   const wxmlGroupBefore = before.groupOf['wxml']
   const editorGroupBefore = before.groupOf['editor']
   expect(wxmlGroupBefore, 'wxml must be docked before the drag').toBeTruthy()
   expect(editorGroupBefore, 'editor must be docked before the drag').toBeTruthy()
+  expect(wxmlGroupBefore, 'wxml and editor start in DIFFERENT groups').not.toBe(editorGroupBefore)
 
   const r = await realDragTab(mainWindow, 'wxml', 'editor', 0.5, 0.5)
   expect(r.error, `drag must not throw: ${r.error}`).toBeNull()
   expect(r.ok, 'drag sequence must run').toBe(true)
-  // POINT 2: the live indicator showed 'center' while hovering the interior.
+  // The live indicator paints `center` while hovering the interior (presentation
+  // is geometry-only; capability gating happens at drop).
   expect(r.indicatorSeen, 'a drop-zone indicator must appear during dragover').toBe(true)
   expect(r.zoneAtHover, 'interior hover must compute the center zone').toBe('center')
 
   await mainWindow.waitForTimeout(300)
   const after = await dockFingerprint(mainWindow)
 
-  // POINT 1 (center=join): wxml now lives in the SAME group as editor, and the
-  // overall fingerprint changed (it left its old group).
-  expect(after.groupOf['wxml'], 'wxml must have joined editor group').toBe(after.groupOf['editor'])
-  expect(JSON.stringify(after.groups)).not.toBe(JSON.stringify(before.groups))
+  // The drop is rejected on BOTH gates: wxml stays in its own group, never joins
+  // editor, and the overall group membership is unchanged.
+  expect(after.groupOf['wxml'], 'wxml stays in its own group').toBe(wxmlGroupBefore)
+  expect(after.groupOf['wxml'], 'wxml never joins the locked editor group').not.toBe(after.groupOf['editor'])
+  expect(after.groupOf, 'a rejected center drop must not churn the tree').toEqual(before.groupOf)
 })
 
-test('POINT 1+2 LEFT band: real DnD of console tab onto the far-left band of editor group splits the tree (split-left) + shows left indicator', async () => {
+test('LEFT band over a locked editor group: indicator shows left, but a reorder-only debug tab edge-dropped there introduces no split', async () => {
+  // `console` is `dropPolicy:'reorder-only'` — it may NEVER edge-split out of its
+  // group. The editor group is also a locked anchor (active `editor` is
+  // draggable:false). So an edge (far-left band) drop of console onto the editor
+  // group is REJECTED: no new split, console stays put. The hover indicator still
+  // paints `left` (geometry-only presentation).
   const before = await dockFingerprint(mainWindow)
   const consoleGroupBefore = before.groupOf['console']
   expect(consoleGroupBefore, 'console must be docked before the drag').toBeTruthy()
@@ -285,69 +320,97 @@ test('POINT 1+2 LEFT band: real DnD of console tab onto the far-left band of edi
   // Drop console onto the far-left 5% band of the group that owns editor.
   const r = await realDragTab(mainWindow, 'console', 'editor', 0.05, 0.5)
   expect(r.error, `drag must not throw: ${r.error}`).toBeNull()
-  // POINT 2: indicator showed 'left' over the left band.
+  // The indicator paints `left` over the left band (presentation is geometry-only).
   expect(r.indicatorSeen, 'a drop-zone indicator must appear during dragover').toBe(true)
   expect(r.zoneAtHover, 'far-left hover must compute the left zone').toBe('left')
 
   await mainWindow.waitForTimeout(300)
   const after = await dockFingerprint(mainWindow)
 
-  // POINT 1 (left=split): a new split now exists (a row split was introduced),
-  // console left its old group, and console is no longer co-located in the
-  // SAME group as editor (it split out to a sibling group).
-  expect(after.splits.length, 'a re-dock to an edge must introduce a new split').toBeGreaterThan(splitsBefore)
-  expect(after.groupOf['console'], 'console moved out of its original group').not.toBe(consoleGroupBefore)
-  expect(after.groupOf['console'], 'split-left places console in a different group than editor').not.toBe(after.groupOf['editor'])
-  expect(JSON.stringify(after.splits)).not.toBe(JSON.stringify(before.splits))
+  // The edge drop is rejected: no split is introduced and console stays in its
+  // original group (it never tears out toward the editor region).
+  expect(after.splits.length, 'a rejected edge drop must NOT introduce a split').toBe(splitsBefore)
+  expect(after.groupOf['console'], 'console stays in its original group').toBe(consoleGroupBefore)
+  expect(after.groupOf['console'], 'console never splits next to the locked editor').not.toBe(after.groupOf['editor'])
+  expect(after.groupOf, 'a rejected edge drop must not churn the tree').toEqual(before.groupOf)
 })
 
-test('POINT 3 no-op self-drop: dragging a tab onto its OWN group center does not crash or churn the tree', async () => {
+test('self-drop center of a reorder-only debug tab stays WITHIN its own group (never leaves, never crashes)', async () => {
   const before = await dockFingerprint(mainWindow)
-  // Pick a panel and drop it onto the center of its own group (M2 no-op).
-  const selfPanel = before.groups.find((g) => g.panels.length > 0)?.panels[0]
-  expect(selfPanel, 'need at least one docked panel').toBeTruthy()
+  // Pick a real DRAGGABLE source: a debug tab (the source must own a
+  // `[data-deck-tab]`). The structural simulator/editor panels are tabless
+  // (hideTab) and draggable:false, so they can never be a drag source.
+  const selfPanel = 'wxml'
+  const selfGroupBefore = before.groupOf[selfPanel]
+  expect(selfGroupBefore, `${selfPanel} must be docked before the drag`).toBeTruthy()
+  const memberIdsBefore = [...(before.groups.find((g) => g.id === selfGroupBefore)?.panels ?? [])].sort()
 
-  const r = await realDragTab(mainWindow, selfPanel!, selfPanel!, 0.5, 0.5)
+  // A center drop onto its OWN group is the one motion `reorder-only` permits — it
+  // REORDERS within the group (it never leaves). The exact resulting index is
+  // pointer-derived; the invariant is: same group, same membership set, no crash.
+  const r = await realDragTab(mainWindow, selfPanel, selfPanel, 0.5, 0.5)
   expect(r.error, `self-drop must not throw: ${r.error}`).toBeNull()
 
   await mainWindow.waitForTimeout(200)
   const after = await dockFingerprint(mainWindow)
-  // Tree structurally unchanged by a self-center drop (no churn).
-  expect(JSON.stringify(after.groupOf), 'self-center drop must be a no-op').toBe(JSON.stringify(before.groupOf))
-  // The dock is still alive.
+  // The panel stays in its own group (reorder-only never tears out).
+  expect(after.groupOf[selfPanel], 'self-center drop keeps the panel in its own group').toBe(selfGroupBefore)
+  // Group membership (as a SET) is unchanged — only the within-group ORDER may shift.
+  const memberIdsAfter = [...(after.groups.find((g) => g.id === selfGroupBefore)?.panels ?? [])].sort()
+  expect(memberIdsAfter, 'self-center drop preserves the group membership set').toEqual(memberIdsBefore)
+  // No panel migrated between groups, and the dock is still alive.
+  expect(after.groupOf, 'no panel changed groups').toEqual(before.groupOf)
   expect(after.groups.length).toBeGreaterThanOrEqual(1)
 })
 
-test('POINT 4 native follow: after a re-dock the simulator native WCV bounds change to track its new slot', async () => {
+test('native anchor: the simulator (draggable:false) cannot be torn out — a drag attempt is a no-op and its WCV bounds stay put', async () => {
+  // The simulator is `draggable:false` + `hideTab:true`: it renders NO tab, so it
+  // can never be a drag SOURCE, and it is a locked drop ANCHOR (nothing may
+  // re-dock against it). Its native WebContentsView is pinned to its slot; only a
+  // resize/preset change (exercised by the dock-resize/separator specs) moves it.
+  // Here we prove the negative: attempting to drag the simulator is a no-op and
+  // its live WCV bounds are unchanged.
   const beforeBounds = await simulatorBounds(electronApp)
-  expect(beforeBounds, 'simulator WCV must have live bounds before the re-dock').not.toBeNull()
+  expect(beforeBounds, 'simulator WCV must have live bounds').not.toBeNull()
+  const before = await dockFingerprint(mainWindow)
+  const simGroupBefore = before.groupOf['simulator']
+  expect(simGroupBefore, 'simulator must be docked').toBeTruthy()
 
-  // Re-dock the simulator panel itself to the BOTTOM band of the editor group:
-  // this moves its native slot to a new region, so its WCV bounds must follow.
+  // The simulator has no `[data-deck-tab]`, so realDragTab cannot pick it up — the
+  // gesture fails to even start, which IS the contract (a draggable:false panel
+  // can never be lifted).
   const r = await realDragTab(mainWindow, 'simulator', 'editor', 0.5, 0.95)
-  expect(r.error, `simulator re-dock must not throw: ${r.error}`).toBeNull()
-  expect(r.zoneAtHover, 'bottom band hover must compute the bottom zone').toBe('bottom')
+  expect(r.ok, 'a draggable:false panel cannot start a drag (no source tab)').toBe(false)
+  expect(r.error, 'the absent tab is the reason the drag never starts').toMatch(/no source tab simulator/)
 
-  // Allow the view-anchor publish + main bounds apply to settle.
-  await mainWindow.waitForTimeout(800)
+  await mainWindow.waitForTimeout(300)
+  const after = await dockFingerprint(mainWindow)
+  // The simulator stays in its group and the tree is unchanged.
+  expect(after.groupOf['simulator'], 'simulator never leaves its group').toBe(simGroupBefore)
+  expect(after.groupOf, 'a failed simulator drag must not churn the tree').toEqual(before.groupOf)
+
+  // Its native WCV bounds are still live and unchanged (no re-dock happened).
   const afterBounds = await simulatorBounds(electronApp)
-  expect(afterBounds, 'simulator WCV must still have live bounds after the re-dock').not.toBeNull()
-
-  const moved =
-    afterBounds!.x !== beforeBounds!.x ||
-    afterBounds!.y !== beforeBounds!.y ||
-    afterBounds!.w !== beforeBounds!.w ||
-    afterBounds!.h !== beforeBounds!.h
-  expect(moved, `simulator WCV bounds must change to follow its new slot (before=${JSON.stringify(beforeBounds)} after=${JSON.stringify(afterBounds)})`).toBe(true)
+  expect(afterBounds, 'simulator WCV must still have live bounds').not.toBeNull()
+  expect(afterBounds, `simulator WCV bounds must be unchanged (before=${JSON.stringify(beforeBounds)} after=${JSON.stringify(afterBounds)})`).toEqual(beforeBounds)
 })
 
-test('POINT 3 cumulative: no uncaught console errors across the whole drag sequence', async () => {
+test('cumulative: no uncaught console errors across the whole drag sequence', async () => {
   const errors = await readConsoleErrors(electronApp)
   // Filter out unrelated, pre-existing noise (DevTools/CDP, favicon, etc.) and
-  // surface only genuine page errors that a drag could plausibly cause.
-  const relevant = errors.filter((e) =>
-    !/favicon|DevTools|Autofill|net::ERR|Failed to load resource/i.test(e.message),
-  )
+  // surface only genuine page errors that a drag could plausibly cause. The
+  // 'editor' dock body lazily attaches the embedded A2 workbench WebContentsView;
+  // that third-party VS Code bundle emits its own startup warnings (extension-host
+  // iframe sandbox notes, permissions-policy) from its 127.0.0.1 COI origin —
+  // unrelated to the drag gesture, so filter by their workbench origin/source.
+  const relevant = errors.filter((e) => {
+    if (/favicon|DevTools|Autofill|net::ERR|Failed to load resource/i.test(e.message)) return false
+    if (/ExtensionHost|a2-spike|local-network-access|allow-scripts and allow-same-origin/i.test(
+      `${e.message} ${e.source} ${e.url}`,
+    )) return false
+    if (/json\.schemas is not a registered configuration|Unable to resolve nonexistent file '\/workspace'/i.test(e.message)) return false
+    return true
+  })
   expect(
     relevant,
     `no uncaught errors during drag (saw: ${JSON.stringify(relevant.slice(0, 5))})`,

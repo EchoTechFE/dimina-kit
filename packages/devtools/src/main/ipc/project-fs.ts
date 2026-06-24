@@ -152,7 +152,7 @@ export function pickWriteRoot(
  * the basename: the file's containing directory must itself be inside the
  * (realpath'd) root.
  */
-async function resolveWithinProjectRoot(abs: string, root: string): Promise<string> {
+export async function resolveWithinProjectRoot(abs: string, root: string): Promise<string> {
   // Lexical guard first (handles ENOACTIVE / EINVAL / `..` before any fs I/O).
   const lexical = enforceWithinProjectRoot(abs, root)
   const realRoot = await fs.realpath(path.resolve(root))
@@ -193,7 +193,7 @@ async function assertOpenedWithinRoot(safe: string, root: string): Promise<void>
   }
 }
 
-async function readFile(root: string, p: string): Promise<string> {
+export async function readFile(root: string, p: string): Promise<string> {
   const safe = await resolveWithinProjectRoot(p, root)
   // Open with O_NOFOLLOW so a final-component symlink swapped in AFTER the
   // realpath containment check (the TOCTOU race) is not followed out of the
@@ -206,6 +206,22 @@ async function readFile(root: string, p: string): Promise<string> {
     // returning any bytes, so an escaped read leaks nothing.
     await assertOpenedWithinRoot(safe, root)
     return await fh.readFile('utf8')
+  } finally {
+    await fh.close()
+  }
+}
+
+/**
+ * Raw-byte twin of {@link readFile}: same realpath containment + `O_NOFOLLOW`
+ * + post-open re-check, returning a Buffer for binary-safe callers (the COI
+ * `/__fs/read` bridge serves arbitrary file bytes, not just utf8 text).
+ */
+export async function readFileBuffer(root: string, p: string): Promise<Buffer> {
+  const safe = await resolveWithinProjectRoot(p, root)
+  const fh = await fs.open(safe, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW)
+  try {
+    await assertOpenedWithinRoot(safe, root)
+    return await fh.readFile()
   } finally {
     await fh.close()
   }
@@ -226,7 +242,7 @@ async function readFile(root: string, p: string): Promise<string> {
  * walk up to the root itself — `realpath(root)` is inside the root, so they
  * pass and `mkdir -p` is allowed to create the in-root intermediate dirs.
  */
-async function assertWritableAncestor(lexical: string, root: string): Promise<void> {
+export async function assertWritableAncestor(lexical: string, root: string): Promise<void> {
   const realRoot = await fs.realpath(path.resolve(root))
   // Climb to the deepest ancestor that actually exists on disk.
   let ancestor = path.dirname(lexical)
@@ -254,7 +270,7 @@ async function assertWritableAncestor(lexical: string, root: string): Promise<vo
   }
 }
 
-async function writeFile(root: string, p: string, content: string): Promise<void> {
+export async function writeFile(root: string, p: string, content: string | Buffer): Promise<void> {
   // First lexical guard so a `..` escape is rejected before any fs I/O.
   const lexical = enforceWithinProjectRoot(p, root)
   // Symlink-aware ancestor check BEFORE any mkdir, so a symlinked-out parent
@@ -280,7 +296,7 @@ async function writeFile(root: string, p: string, content: string): Promise<void
     // the realpath→open window (which O_NOFOLLOW does not guard). Reject BEFORE
     // writing, so an escaped write lands none of the user's content.
     await assertOpenedWithinRoot(safe, root)
-    const buf = Buffer.from(content, 'utf8')
+    const buf = Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf8')
     // Write the whole buffer at absolute offset 0, looping over any short write
     // (a single `write` may persist fewer than requested bytes), then truncate
     // to the exact length — the O_TRUNC-free replacement of prior contents.
@@ -294,6 +310,98 @@ async function writeFile(root: string, p: string, content: string): Promise<void
   } finally {
     await fh.close()
   }
+}
+
+/**
+ * Join a project-root-RELATIVE bridge path onto `root` so the guards resolve it
+ * against the project, not `process.cwd()`. `enforceWithinProjectRoot` runs
+ * `path.resolve(abs)`, which would resolve a bare relative path against the
+ * main-process cwd and wrongly reject every legitimate in-root file. An empty
+ * root is passed through unchanged so the guard still raises ENOACTIVE first.
+ */
+function joinRel(root: string, rel: string): string {
+  if (root === '') return ''
+  return path.resolve(root, rel)
+}
+
+/**
+ * Directory metadata twin of {@link readFile}: realpath-contain the target
+ * before `fs.stat` so a symlink inside the root pointing outside it cannot leak
+ * out-of-sandbox metadata. `rel` is a project-root-relative bridge path.
+ */
+export async function statWithin(root: string, rel: string): Promise<import('node:fs').Stats> {
+  const safe = await resolveWithinProjectRoot(joinRel(root, rel), root)
+  return fs.stat(safe)
+}
+
+/** Realpath-contained `fs.readdir` twin (see {@link statWithin}). */
+export async function readdirWithin(
+  root: string,
+  rel: string,
+): Promise<import('node:fs').Dirent[]> {
+  const safe = await resolveWithinProjectRoot(joinRel(root, rel), root)
+  return fs.readdir(safe, { withFileTypes: true })
+}
+
+/**
+ * Raw-byte read twin of {@link readFileBuffer} taking a project-root-relative
+ * bridge path (the COI `/__fs/read` bridge), with the same realpath +
+ * `O_NOFOLLOW` + post-open re-check sandbox.
+ */
+export async function readFileBufferWithin(root: string, rel: string): Promise<Buffer> {
+  return readFileBuffer(root, joinRel(root, rel))
+}
+
+/**
+ * Whole-file write taking a project-root-relative bridge path (the COI
+ * `/__fs/write` bridge); delegates to {@link writeFile} with the full sandbox.
+ */
+export async function writeFileWithin(root: string, rel: string, content: Buffer): Promise<void> {
+  return writeFile(root, joinRel(root, rel), content)
+}
+
+/**
+ * Realpath-aware `mkdir -p`: run the same writable-ancestor guard as
+ * {@link writeFile} BEFORE any mkdir, so a symlinked-out parent cannot leak an
+ * out-of-sandbox directory side-effect. `rel` is project-root-relative.
+ */
+export async function mkdirWithin(root: string, rel: string): Promise<void> {
+  const lexical = enforceWithinProjectRoot(joinRel(root, rel), root)
+  await assertWritableAncestor(lexical, root)
+  await fs.mkdir(lexical, { recursive: true })
+}
+
+/**
+ * Realpath-aware recursive delete: resolve the target through realpath so a
+ * symlink inside the root pointing outside it is rejected (EACCES) rather than
+ * having its target removed. A missing target is a no-op (`force: true`).
+ * `rel` is project-root-relative.
+ */
+export async function deleteWithin(root: string, rel: string): Promise<void> {
+  let safe: string
+  try {
+    safe = await resolveWithinProjectRoot(joinRel(root, rel), root)
+  } catch (err) {
+    // A not-yet-existing target realpaths its parent; if the parent itself is
+    // missing the delete is a no-op (nothing to remove inside the sandbox).
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw err
+  }
+  await fs.rm(safe, { recursive: true, force: true })
+}
+
+/**
+ * Realpath-aware rename: contain the source via realpath and run the
+ * writable-ancestor guard on the destination's parent BEFORE any mkdir, so
+ * neither side can follow a symlink out of the sandbox. Both paths are
+ * project-root-relative.
+ */
+export async function renameWithin(root: string, from: string, to: string): Promise<void> {
+  const safeFrom = await resolveWithinProjectRoot(joinRel(root, from), root)
+  const lexicalTo = enforceWithinProjectRoot(joinRel(root, to), root)
+  await assertWritableAncestor(lexicalTo, root)
+  await fs.mkdir(path.dirname(lexicalTo), { recursive: true })
+  await fs.rename(safeFrom, lexicalTo)
 }
 
 // ── Synchronous mirror (editor beforeunload flush) ──────────────────────────

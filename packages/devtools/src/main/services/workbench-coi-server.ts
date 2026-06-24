@@ -14,16 +14,35 @@
  * workbench's `same-origin` isolation requirement.
  *
  * `/__fs/*` bridges a `diminafs:`-style FileSystemProvider in the workbench to
- * the live active project on disk, reusing the same `enforceWithinProjectRoot`
- * containment guard as the renderer's `project:fs:*` sandbox so there is a
- * single sandbox implementation. The active project root is read per-request
- * (via the injected getter) so project switches take effect immediately.
+ * the live active project on disk, reusing the renderer `project:fs:*`
+ * sandbox's realpath-based guards (`resolveWithinProjectRoot`,
+ * `assertWritableAncestor`, and the `O_NOFOLLOW` + post-open re-check inside
+ * `readFileBuffer`/`writeFile`) so there is a SINGLE sandbox implementation: a
+ * symlink inside the root pointing outside it cannot be followed to read or
+ * write past the sandbox. The active project root is read per-request (via the
+ * injected getter) so project switches take effect immediately.
+ *
+ * Mutating actions (write/mkdir/delete/rename) additionally require a non-GET
+ * method and a same-origin (or origin-less) request, so an arbitrary localhost
+ * page cannot drive a destructive `/__fs` call. GET serves only the read-only
+ * stat/readdir/read actions.
  */
 import http from 'node:http'
 import nodeFs from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { enforceWithinProjectRoot } from '../ipc/project-fs.js'
+import {
+  readFileBufferWithin,
+  writeFileWithin,
+  statWithin,
+  readdirWithin,
+  mkdirWithin,
+  deleteWithin,
+  renameWithin,
+} from '../ipc/project-fs.js'
+
+/** Max `/__fs/write` body; enough to save large source files without OOM. */
+const MAX_FS_WRITE_BYTES = 32 * 1024 * 1024
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -47,12 +66,41 @@ function setIsolationHeaders(res: http.ServerResponse): void {
   res.setHeader('Cross-Origin-Resource-Policy', 'same-origin')
 }
 
-/** Resolve a request pathname inside `root`, rejecting traversal escapes. */
+/** Resolve a request pathname inside `root`, rejecting lexical traversal escapes. */
 function containedStaticPath(root: string, pathname: string): string | null {
   const rel = pathname.replace(/^\/+/, '') || 'index.html'
   const resolved = path.resolve(root, rel)
   if (resolved !== root && !resolved.startsWith(root + path.sep)) return null
   return resolved
+}
+
+/**
+ * Serve a static file under `root`: lexical containment, then `fs.realpath`
+ * BOTH the root and the resolved file before stat/stream, so a symlink inside
+ * `root` pointing outside it cannot be served (the lexical check alone follows
+ * symlinks because `stat`/`createReadStream` do). Sends the response itself.
+ */
+function serveStaticFile(res: http.ServerResponse, root: string, pathname: string): void {
+  const candidate = containedStaticPath(root, pathname)
+  if (!candidate) { res.writeHead(403); res.end('Forbidden'); return }
+  Promise.all([fs.realpath(root), fs.realpath(candidate)])
+    .then(([realRoot, realFile]) => {
+      if (realFile !== realRoot && !realFile.startsWith(realRoot + path.sep)) {
+        res.writeHead(403); res.end('Forbidden'); return
+      }
+      nodeFs.stat(realFile, (err, stat) => {
+        if (err || !stat.isFile()) { res.writeHead(404); res.end('Not Found'); return }
+        res.writeHead(200, {
+          'Content-Type': MIME[path.extname(realFile)] ?? 'application/octet-stream',
+          'Content-Length': stat.size,
+          'Cache-Control': 'no-store',
+        })
+        // Stream the realpath'd file (already resolved to its real on-disk
+        // location, so a symlink inside the root cannot redirect it outside).
+        nodeFs.createReadStream(realFile).pipe(res)
+      })
+    })
+    .catch(() => { if (!res.headersSent) { res.writeHead(404); res.end('Not Found') } })
 }
 
 function jsonRes(res: http.ServerResponse, code: number, obj: unknown): void {
@@ -61,20 +109,92 @@ function jsonRes(res: http.ServerResponse, code: number, obj: unknown): void {
   res.end(body)
 }
 
-function readBody(req: http.IncomingMessage): Promise<Buffer> {
+/** Thrown by {@link readBody} when the accumulated body exceeds the cap. */
+class BodyTooLargeError extends Error {
+  constructor() {
+    super('request body exceeds limit')
+    this.name = 'BodyTooLargeError'
+  }
+}
+
+/**
+ * Read a request body, aborting once it exceeds `limit` bytes so a malicious or
+ * runaway client cannot grow `chunks` without bound and exhaust memory.
+ */
+function readBody(req: http.IncomingMessage, limit = MAX_FS_WRITE_BYTES): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
-    req.on('data', (c: Buffer) => chunks.push(c))
-    req.on('end', () => resolve(Buffer.concat(chunks)))
+    let total = 0
+    let overflowed = false
+    req.on('data', (c: Buffer) => {
+      if (overflowed) return
+      total += c.length
+      if (total > limit) {
+        overflowed = true
+        chunks.length = 0
+        // Drain the rest of the body instead of holding it, so the caller can
+        // still write a 413 response on the same connection.
+        req.resume()
+        reject(new BodyTooLargeError())
+        return
+      }
+      chunks.push(c)
+    })
+    req.on('end', () => { if (!overflowed) resolve(Buffer.concat(chunks)) })
     req.on('error', reject)
   })
 }
 
+const MUTATING_FS_ACTIONS: ReadonlySet<string> = new Set(['write', 'mkdir', 'delete', 'rename'])
+
+/**
+ * Guard a mutating `/__fs` action: require a non-GET/HEAD method (so a plain
+ * navigation/image load cannot trigger a destructive call) and a same-origin
+ * request. A cross-origin page sees `Origin`/`Sec-Fetch-Site` set by the
+ * browser; we accept only same-origin or an origin-less same-origin request
+ * (the workbench's own `fetch` to its serving origin). Returns an HTTP status
+ * to reject with, or `null` when the request is allowed.
+ */
+function rejectUnsafeMutation(req: http.IncomingMessage): number | null {
+  const method = (req.method ?? 'GET').toUpperCase()
+  if (method === 'GET' || method === 'HEAD') return 405
+
+  const site = req.headers['sec-fetch-site']
+  if (typeof site === 'string' && site !== '' && site !== 'same-origin' && site !== 'none') {
+    return 403
+  }
+
+  const origin = req.headers['origin']
+  if (typeof origin === 'string' && origin !== '') {
+    const host = req.headers['host']
+    // Same-origin requires the Origin's host:port to match the request Host.
+    let originHost: string
+    try {
+      originHost = new URL(origin).host
+    } catch {
+      return 403
+    }
+    if (!host || originHost !== host) return 403
+  }
+  return null
+}
+
+/** Map a node fs error to the HTTP status the provider expects. */
+function fsErrorStatus(e: unknown): number {
+  const code = (e as { code?: string }).code
+  if (code === 'ENOACTIVE') return 409
+  if (code === 'EACCES' || code === 'EINVAL') return 403
+  if (code === 'ENOENT') return 404
+  return 500
+}
+
 /**
  * `/__fs/<action>?p=<rel>` bridge onto the live active project root.
- * `p`/`to` are POSIX paths relative to the project root; the same lexical
- * containment guard as the renderer sandbox rejects escapes (EACCES) and a
- * missing project (ENOACTIVE → surfaced as 404/409 so the provider can react).
+ * `p`/`to` are POSIX paths relative to the project root, resolved through the
+ * shared renderer sandbox guards: a symlink inside the root pointing outside it
+ * is rejected (EACCES → 403). A missing project surfaces as ENOACTIVE → 409 so
+ * the provider can stay empty rather than error. Mutating actions require a
+ * non-GET same-origin request (see {@link rejectUnsafeMutation}).
  */
 async function handleFsRequest(
   req: http.IncomingMessage,
@@ -82,60 +202,61 @@ async function handleFsRequest(
   projectRoot: string,
   url: URL,
 ): Promise<void> {
-  const rel = (url.searchParams.get('p') ?? '').replace(/^\/+/, '')
-  let target: string
-  try {
-    target = enforceWithinProjectRoot(path.resolve(projectRoot, rel || '.'), projectRoot)
-  } catch (e) {
-    const code = (e as { code?: string }).code
-    // ENOACTIVE (no project) → 409 so the provider can stay empty rather than error.
-    return jsonRes(res, code === 'ENOACTIVE' ? 409 : 403, { error: String((e as Error).message), code })
-  }
   const action = url.pathname.slice('/__fs/'.length)
+  const rel = (url.searchParams.get('p') ?? '').replace(/^\/+/, '') || '.'
+
+  if (MUTATING_FS_ACTIONS.has(action)) {
+    const rejectStatus = rejectUnsafeMutation(req)
+    if (rejectStatus !== null) {
+      return jsonRes(res, rejectStatus, { error: 'mutating fs action requires a non-GET same-origin request' })
+    }
+  }
+
   try {
     if (action === 'stat') {
-      const st = await fs.stat(target)
+      const st = await statWithin(projectRoot, rel)
       return jsonRes(res, 200, { type: st.isDirectory() ? 2 : 1, size: st.size, ctime: st.ctimeMs, mtime: st.mtimeMs })
     }
     if (action === 'readdir') {
-      const entries = await fs.readdir(target, { withFileTypes: true })
+      const entries = await readdirWithin(projectRoot, rel)
       return jsonRes(res, 200, entries.map((e) => [e.name, e.isDirectory() ? 2 : 1]))
     }
     if (action === 'read') {
-      const buf = await fs.readFile(target)
+      const buf = await readFileBufferWithin(projectRoot, rel)
       res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': buf.length })
       return void res.end(buf)
     }
     if (action === 'write') {
-      const buf = await readBody(req)
-      const dir = enforceWithinProjectRoot(path.dirname(target), projectRoot)
-      await fs.mkdir(dir, { recursive: true })
-      await fs.writeFile(target, buf)
+      let buf: Buffer
+      try {
+        buf = await readBody(req)
+      } catch (e) {
+        if (e instanceof BodyTooLargeError) return jsonRes(res, 413, { error: e.message })
+        throw e
+      }
+      await writeFileWithin(projectRoot, rel, buf)
       res.writeHead(204)
       return void res.end()
     }
     if (action === 'mkdir') {
-      await fs.mkdir(target, { recursive: true })
+      await mkdirWithin(projectRoot, rel)
       res.writeHead(204)
       return void res.end()
     }
     if (action === 'delete') {
-      await fs.rm(target, { recursive: true, force: true })
+      await deleteWithin(projectRoot, rel)
       res.writeHead(204)
       return void res.end()
     }
     if (action === 'rename') {
       const toRel = (url.searchParams.get('to') ?? '').replace(/^\/+/, '')
-      const toTarget = enforceWithinProjectRoot(path.resolve(projectRoot, toRel), projectRoot)
-      await fs.mkdir(path.dirname(toTarget), { recursive: true })
-      await fs.rename(target, toTarget)
+      await renameWithin(projectRoot, rel, toRel)
       res.writeHead(204)
       return void res.end()
     }
     return jsonRes(res, 404, { error: 'unknown fs action: ' + action })
   } catch (e) {
-    const code = (e as { code?: string }).code === 'ENOENT' ? 404 : 500
-    return jsonRes(res, code, { error: String((e as Error).message), code: (e as { code?: string }).code })
+    return jsonRes(res, fsErrorStatus(e), { error: String((e as Error).message), code: (e as { code?: string }).code })
   }
 }
 
@@ -231,39 +352,11 @@ export async function startWorkbenchCoiServer(options: WorkbenchCoiServerOptions
         return
       }
       const rel = decodeURIComponent(url.pathname.slice('/__contrib/'.length))
-      const contribPath = containedStaticPath(contribRoot, rel)
-      if (!contribPath) { res.writeHead(403); res.end('Forbidden'); return }
-      nodeFs.stat(contribPath, (err, stat) => {
-        if (err || !stat.isFile()) { res.writeHead(404); res.end('Not Found'); return }
-        res.writeHead(200, {
-          'Content-Type': MIME[path.extname(contribPath)] ?? 'application/octet-stream',
-          'Content-Length': stat.size,
-          'Cache-Control': 'no-store',
-        })
-        nodeFs.createReadStream(contribPath).pipe(res)
-      })
+      serveStaticFile(res, contribRoot, rel)
       return
     }
 
-    const filePath = containedStaticPath(root, decodeURIComponent(url.pathname))
-    if (!filePath) {
-      res.writeHead(403)
-      res.end('Forbidden')
-      return
-    }
-    nodeFs.stat(filePath, (err, stat) => {
-      if (err || !stat.isFile()) {
-        res.writeHead(404)
-        res.end('Not Found')
-        return
-      }
-      res.writeHead(200, {
-        'Content-Type': MIME[path.extname(filePath)] ?? 'application/octet-stream',
-        'Content-Length': stat.size,
-        'Cache-Control': 'no-store',
-      })
-      nodeFs.createReadStream(filePath).pipe(res)
-    })
+    serveStaticFile(res, root, decodeURIComponent(url.pathname))
   })
 
   await new Promise<void>((resolve, reject) => {

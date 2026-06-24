@@ -155,16 +155,17 @@ describe('buildDockRegistry — split into 5 fine panels', () => {
     expect(registry.get('simulator')?.kind).toBe('dom')
   })
 
-  it('registers editor as a NATIVE panel (the A2 workbench WebContentsView)', () => {
-    // The 'editor' slot is the embedded A2 VS Code workbench — a main-process
-    // WebContentsView (nativeRef 'workbench-a2'), the sole devtools editor.
+  it('registers editor as a DOM structural panel (like the simulator)', () => {
+    // The 'editor' slot is the embedded A2 VS Code workbench, but it is a DOM
+    // structural panel — exactly like the simulator. `renderDomPanel('editor')`
+    // renders `EditorPanel`, a full-size anchor div that owns the workbench
+    // WebContentsView placement itself. It must be a DOM body so the dock mounts a
+    // `[data-deck-panel-body="editor"]` region for it; a bare native slot would
+    // not give the structural-panel tabless body the layout contract expects.
     const registry = buildDockRegistry()
     const editorPanel = registry.get('editor')
 
-    expect(editorPanel?.kind).toBe('native')
-    expect(
-      editorPanel && editorPanel.kind === 'native' ? editorPanel.nativeRef.id : undefined,
-    ).toBe('workbench-a2')
+    expect(editorPanel?.kind).toBe('dom')
   })
 
   it('registers every built-in debug tab as non-closable', () => {
