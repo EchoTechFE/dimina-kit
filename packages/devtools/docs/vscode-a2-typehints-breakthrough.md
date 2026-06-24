@@ -15,6 +15,52 @@
 
 web tsserver 只把 `file://` 根当作真实 TS/JS 项目根——会加载 `jsconfig.json` 与 ambient `.d.ts`。自定义 scheme（如 `diminafs:`）下退化成 inferred project，忽略工程配置与 ambient 库，`dd` 解析成 `any`。故把磁盘项目镜像进 `file:///workspace/`（保存监听器把改动回刷磁盘，编辑仍是真的）。
 
+## ambient 类型注入：`@types` 约定（workspace 内隐藏的 node_modules/@types）
+
+dd/wx 的 ambient `.d.ts` 必须以**真实文件**的形式存在于 **workspace 根之内**（web tsserver 同步架构要求 VFS 预先填充、对 root 外同 scheme 路径抛 `AccessOutsideOfRootError`、虚拟注入进不了 program——见下「类型墙」节）。采用官方 `@types`/typeRoots 约定（orta, microsoft/vscode#172887）把它们落在 TS 模块解析能自动发现的位置：`file:///workspace/node_modules/@types/<name>/{package.json,index.d.ts}`（实现见 `spike/vscode-a2/src/typings-injection.ts`）。
+
+真机实测（monaco-vscode-api@34 web tsserver，`dd.` 目标 = 68 项）确定的行为：
+
+- **无 config 或 jsconfig**：inferred `.js` project 自动收纳所有 `node_modules/@types/*`，**无需任何 config**。
+- **用户自带 tsconfig**：`.js` 下 `@types` **不会**自动生效，需把包名追加进 `compilerOptions.types`（memfs 镜像，**绝不**写回磁盘）。仅 `files`/`typeRoots`/裸 `typeRoots:['node_modules/@types']` 均不解此 case；追加 `types` 是最小一键修法。
+- **边界**：用户若显式设 `types:[]` 主动关掉自动 `@types`，我们仍追加我们的包名（否则注入的工具链静默失效）。
+- **`^/ts-typings` 不是虚拟前缀**：在 monaco-vscode-api 下它被当字面目录名 `^` 写进 `file:///workspace/^/...`，故弃用 typeRoots 变体。
+
+落地：
+- 内置 dd/wx → `node_modules/@types/dimina/{package.json(types:index.d.ts),index.d.ts}`。
+- `files.exclude: { node_modules: true }` 把整个 `node_modules/` 从 Explorer/搜索隐藏（UI-only，tsserver 照读）。dimina 项目编辑器根无真实 `node_modules`，隐藏不损失。
+- `flushFileWorkspaceSaveToDisk` 跳过 `node_modules/**` 与 `jsconfig.json`/`tsconfig.json`，保证注入与合并只活在 memfs，用户磁盘项目零污染。
+
+## 下游接入：贡献自定义 API 类型
+
+下游宿主（如 qdmp）经已有的 `/__contrib` web 扩展机制，在其扩展 `package.json` 声明 ambient 类型：
+
+```jsonc
+{
+  "name": "qdmp-editor",
+  "publisher": "qdmp",
+  "browser": "./extension.js",       // 可选：同扩展也能带命令/语言/视图
+  "diminaWorkbench": { "typings": ["types/qdmp.d.ts"] }
+}
+```
+
+boot 时（`registerContributedExtensions` → `collectTypings`）：
+- 校验每个 typings 路径**必须**在该扩展自己的 `files` 清单内（拒绝路径穿越 / 读取 COI 上的无关文件）；
+- 从其同源 `/__contrib/<dir>/<path>` 取内容，把该扩展声明的多个 `.d.ts` 拼成一个 `@types/<sanitized-dir>/index.d.ts` 包（按扩展 dir 命名空间，互不冲突）；
+- 与内置 `@types/dimina` 同走 `@types` 自动发现 / 用户 tsconfig `types` 合并那条路径。
+
+净效果：下游 `qdmp.` 等自定义 API 获得补全/hover/类型检查，且 `node_modules/**` 同被那条 `files.exclude` 隐藏、不落用户磁盘。实测：声明 `qdmp.d.ts` 后 `qdmp.` 补全命中 `customApiAlpha/customApiBeta`，`dd.` 仍 68 项不受影响。
+
+## 为什么不用「tsserver plugin 零文件注入」（已调研 + 实测否决）
+
+「写真实文件」唯一的代价是 memfs 里有一个隐藏的 `node_modules/@types/`。曾评估能否用 tsserver plugin 做到**连隐藏文件都不要**（纯虚拟注入）。结论：技术可行但不采用。
+
+- **可行性已实测**：plugin 能加载进 web tsserver（`importPlugin` 经 `fetch` 取 `package.json` 的 `browser` 字段再 `import()`），且用内部 API `projectService.getOrCreateScriptInfoForNormalizedPath(path,false,undefined,ts.ScriptKind.TS)` + `scriptInfo.attachToProject` + `project.addRoot` + `updateGraph` 能让虚拟 `.d.ts` 真进 `getProgram().getSourceFiles()`，`dd.` 补全 + hover 均通。
+- **否决理由**：(1) 这套 API 全是 `@internal`，随 TS / monaco-vscode-api 版本可能改名/删除 → 升级时类型提示**静默全失**，每版需回归；(2) 需 patch 5.8MB minified 的 vendored `tsserver.web.js`（改写 `importPlugin` 的 probe，把 `extension-file://` 重写到同源），脆弱；(3) `getExternalFiles` 这条「半公开」路喂不出全局 ambient（只 `attachToProject`、不进 `rootFilesMap`），没有中间档，零文件只能落到最深的内部 API。
+- **社区定位**：维护者 CGNonofr 明确 `addExtraLib` 对 web tsserver by-design 无效；官方且唯一推荐就是「真实文件 + tsconfig/`@types` 引用」（vscode.dev / Theia / monaco-languageclient / @typescript/vfs / 微信 api-typings / Taro 全是这条）。plugin 零文件注入**无社区先例**。
+
+故采用 `@types` 真实文件（A'）——维护者+全行业标准、只依赖稳定的文件机制、版本升级稳健。结论由真机隔离 harness 实测（plugin 注入可行性 + `@types` 各变体行为矩阵）+ 多源联网调研（CodinGame/monaco-vscode-api issues、microsoft/TypeScript#47600、orta vscode#172887）交叉验证得出。
+
 ## dd/wx 类型墙：真因与修复
 
 **症状**：同文件内 `declare const dd2; dd2.` 补全正常（单文件模式），但跨文件 import、triple-slash 引用、jsconfig 发现、ambient `dimina.d.ts` 全部失效，`dd` 恒为 `any`。
