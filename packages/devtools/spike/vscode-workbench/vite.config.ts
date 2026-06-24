@@ -1,21 +1,22 @@
 import { defineConfig } from 'vite'
 
 /**
- * Standalone build for the A2 workbench spike. Its deps live in the devtools
+ * Standalone build for the VS Code workbench. Its deps live in the devtools
  * package (devDependencies); vite (root=this dir) resolves them upward through
  * node into packages/devtools/node_modules, so no per-spike install is needed.
  * Output served by coi-server.mjs with COOP/COEP for isolation.
  */
-// The output dir is overridable so the devtools `build:a2` target can emit the
-// workbench bundle straight into the product dist (dist/workbench-a2) instead of
-// the spike-local dist/. base stays './' so the bundle is origin-root agnostic
-// (the spike coi-server and the in-product COI server both serve it at root).
+// The output dir is overridable so the devtools `build:workbench` target can emit
+// the workbench bundle straight into the product dist (dist/vscode-workbench)
+// instead of the local dist/. base stays './' so the bundle is origin-root
+// agnostic (the standalone coi-server and the in-product COI server both serve it
+// at root).
 export default defineConfig({
   root: __dirname,
   base: './',
   build: {
     target: 'esnext',
-    outDir: process.env.A2_OUT_DIR || 'dist',
+    outDir: process.env.WORKBENCH_OUT_DIR || 'dist',
     emptyOutDir: true,
     chunkSizeWarningLimit: 50_000,
   },

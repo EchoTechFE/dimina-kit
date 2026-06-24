@@ -156,7 +156,7 @@ describe('buildDockRegistry — split into 5 fine panels', () => {
   })
 
   it('registers editor as a DOM structural panel (like the simulator)', () => {
-    // The 'editor' slot is the embedded A2 VS Code workbench, but it is a DOM
+    // The 'editor' slot is the embedded VS Code workbench, but it is a DOM
     // structural panel — exactly like the simulator. `renderDomPanel('editor')`
     // renders `EditorPanel`, a full-size anchor div that owns the workbench
     // WebContentsView placement itself. It must be a DOM body so the dock mounts a

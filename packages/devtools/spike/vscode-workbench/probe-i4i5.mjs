@@ -1,5 +1,5 @@
 /**
- * Deep I4/I5 probe: loads the A2 workbench over the COI server with the fixture
+ * Deep I4/I5 probe: loads the workbench over the COI server with the fixture
  * project as fsRoot, then drives the page-side vscode API to verify:
  *   I4: workspace folder opened (diminafs:/), readdir lists fixture files,
  *       open + edit + save round-trips through diminafs onto disk.
@@ -54,7 +54,7 @@ app.whenReady().then(async () => {
   log('loaded; waiting for exthost-alive...')
   for (let i = 0; i < 30; i++) {
     await settle(1000)
-    const st = await wc.executeJavaScript('window.__A2_STATUS')
+    const st = await wc.executeJavaScript('window.__WB_STATUS')
     if (st === 'exthost-alive' || /error/.test(String(st))) { log('status', st); break }
   }
   // Give the workspace + TS service a moment to finish.
@@ -64,8 +64,8 @@ app.whenReady().then(async () => {
   out.i4 = await wc.executeJavaScript(`(async () => {
     const r = {}
     try {
-      const P = window.__A2_PROBE
-      if (!P) return { error: 'no __A2_PROBE' }
+      const P = window.__WB_PROBE
+      if (!P) return { error: 'no __WB_PROBE' }
       const ws = await P.getService(P.IWorkspaceContextService)
       r.folders = ws.getWorkspace().folders.map(f => f.uri.toString())
       const fs = await P.getService(P.IFileService)
@@ -76,7 +76,7 @@ app.whenReady().then(async () => {
       r.wxmlHead = content.value.toString().slice(0, 120)
       // edit + save round-trip: append a marker, write (memfs), confirm the
       // save-flush listener pushed it back to disk (verified disk-side later).
-      const marker = '<!-- a2-roundtrip ' + Date.now() + ' -->'
+      const marker = '<!-- workbench-roundtrip ' + Date.now() + ' -->'
       const newText = content.value.toString() + '\\n' + marker
       await fs.writeFile(wxmlUri, P.VSBuffer.fromString(newText))
       const reread = await fs.readFile(wxmlUri)
@@ -91,14 +91,14 @@ app.whenReady().then(async () => {
   // ---- I5: open .wxml + .js, drive completion + hover via vscode API ----
   out.i5 = await wc.executeJavaScript(`(async () => {
     const r = {}
-    const P = window.__A2_PROBE
-    if (!P) return { error: 'no __A2_PROBE' }
+    const P = window.__WB_PROBE
+    if (!P) return { error: 'no __WB_PROBE' }
     const vscode = P.vscode
     const sleep = ms => new Promise(res => setTimeout(res, ms))
     // Never let a stalled provider hang the whole probe.
     const withDeadline = (p, ms, fallback) => Promise.race([p, new Promise(res => setTimeout(() => res(fallback), ms))])
-    r.wxmlStatus = window.__A2_WXML
-    r.dtsStatus = window.__A2_DTS
+    r.wxmlStatus = window.__WB_WXML
+    r.dtsStatus = window.__WB_DTS
     try {
       const ls = await P.getService(P.ILanguageService)
       r.wxmlRegistered = ls.isRegisteredLanguageId('wxml')
@@ -201,7 +201,7 @@ app.whenReady().then(async () => {
   log('I5', JSON.stringify(out.i5).slice(0, 800))
 
   // reveal Explorer
-  await wc.executeJavaScript(`(async () => { try { const P=window.__A2_PROBE; const cmd=await P.getService(P.ICommandService); await cmd.executeCommand('workbench.view.explorer') } catch(e){} })()`, true)
+  await wc.executeJavaScript(`(async () => { try { const P=window.__WB_PROBE; const cmd=await P.getService(P.ICommandService); await cmd.executeCommand('workbench.view.explorer') } catch(e){} })()`, true)
   await settle(2000)
   out.explorerLabels = await wc.executeJavaScript(`Array.from(document.querySelectorAll('.explorer-folders-view .monaco-list-row .label-name, .monaco-list-row .monaco-highlighted-label')).map(e=>(e.textContent||'').trim()).filter(Boolean).slice(0,60)`, true)
   log('explorerLabels', JSON.stringify(out.explorerLabels))

@@ -204,11 +204,11 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
       // keeps showing project A's mirrored tree while saves land in project B
       // (wrong project). Detaching destroys the WCV so the next time the
       // 'editor' slot becomes visible it lazily re-attaches and re-mirrors the
-      // new project (setWorkbenchA2Bounds re-creates from the stored source on
+      // new project (setWorkbenchBounds re-creates from the stored source on
       // the first non-zero rect). Guarded on an active session so the first
       // open (no predecessor) is a safe no-op.
       if (currentSession !== null) {
-        ctx.views.detachWorkbenchA2()
+        ctx.views.detachWorkbench()
       }
       // Invalidate the outgoing session's onLog BEFORE teardown starts (same
       // order as closeProject below): the dying compile worker flushes

@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef } from 'react'
-import { publishWorkbenchA2Bounds } from '@/shared/api'
+import { publishWorkbenchBounds } from '@/shared/api'
 import { createPlacementAnchor, type Placement, type PlacementAnchorHandle } from '@dimina-kit/view-anchor'
 import { useDockLayoutEpoch } from '@dimina-kit/electron-deck/dock-react'
 
-// The editor is the embedded A2 VS Code workbench: a main-process
+// The editor is the embedded VS Code workbench: a main-process
 // WebContentsView painted directly over this DOM dock body. This renderer panel
 // draws NO chrome — the body is a single full-size anchor div over which the
 // workbench WCV is overlaid (the workbench renders its own toolbar/tabs inside
@@ -12,7 +12,7 @@ import { useDockLayoutEpoch } from '@dimina-kit/electron-deck/dock-react'
 //
 // This component is the SOLE workbench-WCV anchor owner. It binds an imperative
 // `createPlacementAnchor` to the body div and maps its placement to
-// `publishWorkbenchA2Bounds` → main's `setWorkbenchA2Bounds`. The first non-zero
+// `publishWorkbenchBounds` → main's `setWorkbenchBounds`. The first non-zero
 // bounds lazily attaches the workbench WCV (the lazy-load contract), so the
 // anchor must publish a live rect as soon as the editor body is on screen.
 //
@@ -29,7 +29,7 @@ export function EditorPanel() {
 
   const publish = useCallback((p: Placement) => {
     if (p.visible) {
-      void publishWorkbenchA2Bounds({
+      void publishWorkbenchBounds({
         x: p.bounds.x,
         y: p.bounds.y,
         width: p.bounds.width,
@@ -37,7 +37,7 @@ export function EditorPanel() {
       })
     } else {
       // Hidden → collapse the WCV (main treats 0×0 as detach-but-keep-alive).
-      void publishWorkbenchA2Bounds({ x: 0, y: 0, width: 0, height: 0 })
+      void publishWorkbenchBounds({ x: 0, y: 0, width: 0, height: 0 })
     }
   }, [])
 

@@ -1,5 +1,5 @@
 /**
- * Screenshot-only run: load the built A2 workbench in a WCV inside a real
+ * Screenshot-only run: load the built VS Code workbench in a WCV inside a real
  * (but offscreen, never-focused) window and capturePage to scratchpad. The
  * window must be shown for the compositor to produce frames (capturePage on a
  * hidden/offscreen-rendered WCV yields UnknownVizError).
@@ -28,7 +28,7 @@ app.whenReady().then(async () => {
   try {
     mkdirSync(SHOT_DIR, { recursive: true })
     const img = await view.webContents.capturePage()
-    const p = join(SHOT_DIR, 'a2-workbench.png')
+    const p = join(SHOT_DIR, 'workbench.png')
     writeFileSync(p, img.toPNG())
     console.log('SHOT_OK=' + p + ' bytes=' + img.toPNG().length)
   } catch (e) {

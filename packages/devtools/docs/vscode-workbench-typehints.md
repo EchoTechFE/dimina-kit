@@ -1,12 +1,12 @@
-# A2 工作台：真项目编辑 + wxml LSP + dd/wx 类型提示（已 PASS）
+# VS Code 工作台：真项目编辑 + wxml LSP + dd/wx 类型提示（已 PASS）
 
-记录 A2（`@codingame/monaco-vscode-api`）VS Code 工作台在 Electron WebContentsView 中达成的编辑器能力，及攻破 dd/wx 类型墙的真因与修复。验证物在 `packages/devtools/spike/vscode-a2/`。
+记录（`@codingame/monaco-vscode-api`）VS Code 工作台在 Electron WebContentsView 中达成的编辑器能力，及攻破 dd/wx 类型墙的真因与修复。验证物在 `packages/devtools/spike/vscode-workbench/`。
 
 ## 验证结论（真机 Electron + CDP，productionized build）
 
 | 能力 | 结果 | 证据 |
 |---|---|---|
-| 工作台 + 扩展宿主在 WCV 真跑 | ✅ | `__A2_STATUS=exthost-alive`，命令 ping/pong 往返 |
+| 工作台 + 扩展宿主在 WCV 真跑 | ✅ | `__WB_STATUS=exthost-alive`，命令 ping/pong 往返 |
 | 真项目编辑（file:// memfs 镜像磁盘 193 文件） | ✅ | workspace folder=`file:///workspace`；编辑→保存→回刷磁盘 `diskHasMarker:true` |
 | wxml 语言支持（语法/补全/hover） | ✅ | 88 补全、`<view>` hover「视图容器，最基础的块级容器，类似 div」 |
 | dd/wx 类型提示 | ✅ | 补全 `getLocation/miniProgram/openLocation`；hover `const dd: Dimina.DD`（非 any）；`wx` 别名同命中 |
@@ -17,7 +17,7 @@ web tsserver 只把 `file://` 根当作真实 TS/JS 项目根——会加载 `js
 
 ## ambient 类型注入：`@types` 约定（workspace 内隐藏的 node_modules/@types）
 
-dd/wx 的 ambient `.d.ts` 必须以**真实文件**的形式存在于 **workspace 根之内**（web tsserver 同步架构要求 VFS 预先填充、对 root 外同 scheme 路径抛 `AccessOutsideOfRootError`、虚拟注入进不了 program——见下「类型墙」节）。采用官方 `@types`/typeRoots 约定（orta, microsoft/vscode#172887）把它们落在 TS 模块解析能自动发现的位置：`file:///workspace/node_modules/@types/<name>/{package.json,index.d.ts}`（实现见 `spike/vscode-a2/src/typings-injection.ts`）。
+dd/wx 的 ambient `.d.ts` 必须以**真实文件**的形式存在于 **workspace 根之内**（web tsserver 同步架构要求 VFS 预先填充、对 root 外同 scheme 路径抛 `AccessOutsideOfRootError`、虚拟注入进不了 program——见下「类型墙」节）。采用官方 `@types`/typeRoots 约定（orta, microsoft/vscode#172887）把它们落在 TS 模块解析能自动发现的位置：`file:///workspace/node_modules/@types/<name>/{package.json,index.d.ts}`（实现见 `spike/vscode-workbench/src/typings-injection.ts`）。
 
 真机实测（monaco-vscode-api@34 web tsserver，`dd.` 目标 = 68 项）确定的行为：
 
@@ -59,7 +59,7 @@ boot 时（`registerContributedExtensions` → `collectTypings`）：
 - **否决理由**：(1) 这套 API 全是 `@internal`，随 TS / monaco-vscode-api 版本可能改名/删除 → 升级时类型提示**静默全失**，每版需回归；(2) 需 patch 5.8MB minified 的 vendored `tsserver.web.js`（改写 `importPlugin` 的 probe，把 `extension-file://` 重写到同源），脆弱；(3) `getExternalFiles` 这条「半公开」路喂不出全局 ambient（只 `attachToProject`、不进 `rootFilesMap`），没有中间档，零文件只能落到最深的内部 API。
 - **社区定位**：维护者 CGNonofr 明确 `addExtraLib` 对 web tsserver by-design 无效；官方且唯一推荐就是「真实文件 + tsconfig/`@types` 引用」（vscode.dev / Theia / monaco-languageclient / @typescript/vfs / 微信 api-typings / Taro 全是这条）。plugin 零文件注入**无社区先例**。
 
-故采用 `@types` 真实文件（A'）——维护者+全行业标准、只依赖稳定的文件机制、版本升级稳健。结论由真机隔离 harness 实测（plugin 注入可行性 + `@types` 各变体行为矩阵）+ 多源联网调研（CodinGame/monaco-vscode-api issues、microsoft/TypeScript#47600、orta vscode#172887）交叉验证得出。
+故采用 `@types` 真实文件（官方约定）——维护者+全行业标准、只依赖稳定的文件机制、版本升级稳健。结论由真机隔离 harness 实测（plugin 注入可行性 + `@types` 各变体行为矩阵）+ 多源联网调研（CodinGame/monaco-vscode-api issues、microsoft/TypeScript#47600、orta vscode#172887）交叉验证得出。
 
 ## dd/wx 类型墙：真因与修复
 
@@ -102,4 +102,4 @@ boot 时（`registerContributedExtensions` → `collectTypings`）：
 2. **对下游开放编辑器能力** ✅（结构性）—— web 扩展宿主已证活，下游可加载 web 扩展。
 3. **侧边栏更多能力** ✅（结构性）—— 完整 VS Code 工作台侧边栏（资源管理器/搜索等）原生具备。
 
-剩余为**集成工程**（非编辑器能力本身）：WCV 接 dockview 布局 + ViewAnchor、open-in-editor/保存→HMR/主题桥、qdmp npm 嵌入契约重谈、A2 依赖卫生（与 renderer monaco 0.55.1 共存、打进 devtools 构建、SAB 开关进 app 启动）。
+剩余为**集成工程**（非编辑器能力本身）：WCV 接 dockview 布局 + ViewAnchor、open-in-editor/保存→HMR/主题桥、qdmp npm 嵌入契约重谈、工作台依赖卫生（与 renderer monaco 0.55.1 共存、打进 devtools 构建、SAB 开关进 app 启动）。

@@ -1,5 +1,5 @@
 /**
- * Cross-Origin-Isolation static server for the embedded A2 VS Code workbench.
+ * Cross-Origin-Isolation static server for the embedded VS Code workbench.
  *
  * The workbench needs `SharedArrayBuffer` for the TS web ext-host's
  * project-wide IntelliSense. Chromium only serves that to a document fetched
@@ -267,7 +267,7 @@ export interface WorkbenchCoiServer {
 }
 
 export interface WorkbenchCoiServerOptions {
-  /** Directory of the built workbench bundle (dist/workbench-a2). */
+  /** Directory of the built workbench bundle (dist/vscode-workbench). */
   rootDir: string
   /** Reads the live active project root ('' when none is open). */
   getProjectRoot: () => string

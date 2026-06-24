@@ -47,7 +47,7 @@ interface ProjectRuntimeProps {
  *
  * Layout is the layout-engine `<DockView>`, owned entirely by the
  * `<DockableLayout>` child below: simulator (DOM panel owning its WCV anchor) +
- * editor (DOM panel owning the A2 workbench WCV anchor) + the five debug panels
+ * editor (DOM panel owning the workbench WCV anchor) + the five debug panels
  * (wxml/appdata/storage/console/compile, with console a native overlay). The
  * dock tree is persisted opaquely via the layout store; `dock-layout.ts` seeds
  * the default arrangement on a fresh install. Simulator + editor own their own
@@ -73,7 +73,7 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
     buildDockModel(layoutState.dockTree ?? null, device.simPanelWidth, DOCK_PANEL_IDS),
   )
 
-  // The 'editor' dock slot is the embedded A2 workbench (a DOM panel owning its
+  // The 'editor' dock slot is the embedded workbench (a DOM panel owning its
   // WCV anchor); the registry never changes across the component's life.
   const dockRegistry = useMemo(() => buildDockRegistry(), [])
 
@@ -182,7 +182,7 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
   // chrome (device/zoom pickers, compile overlays, page-path bar); SimulatorPanel
   // owns the simulator WCV anchor on its device-region div (a bare native slot
   // would render no chrome). `editor` renders EditorPanel, a full-size anchor div
-  // owning the workbench A2 WCV placement. The four React debug tabs
+  // owning the workbench WCV placement. The four React debug tabs
   // (wxml/appdata/storage/compile) render through DockDebugTab. The native
   // `console` slot is routed to a NativeSlot by DockView, never here. A plain
   // function (not useCallback): `debugPanelProps` is rebuilt every render with

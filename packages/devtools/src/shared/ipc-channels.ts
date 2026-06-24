@@ -329,12 +329,12 @@ export const ViewChannel = {
    */
   HostToolbarGetHeight: 'view:host-toolbar:get-height',
   /**
-   * Update the embedded A2 workbench editor view's bounds (or hide if w/h=0).
+   * Update the embedded workbench editor view's bounds (or hide if w/h=0).
    * Forward anchor mirroring `SimulatorDevtoolsBounds`: the main renderer
    * measures the 'editor' dock slot's placeholder rect and publishes it so
    * main overlays the workbench WebContentsView precisely.
    */
-  WorkbenchA2Bounds: 'view:workbench-a2:bounds',
+  WorkbenchBounds: 'view:workbench-bounds',
 } as const
 
 export interface ViewBounds {

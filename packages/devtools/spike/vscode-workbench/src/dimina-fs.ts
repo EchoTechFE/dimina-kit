@@ -1,5 +1,5 @@
 /**
- * `diminafs:` FileSystemProvider — bridges the A2 workbench to a real on-disk
+ * `diminafs:` FileSystemProvider — bridges the workbench to a real on-disk
  * dimina project via the COI server's `/__fs/*` endpoints (see coi-server.mjs).
  *
  * Registered through `registerCustomProvider('diminafs', …)` from the

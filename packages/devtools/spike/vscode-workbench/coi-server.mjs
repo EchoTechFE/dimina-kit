@@ -1,5 +1,5 @@
 /**
- * Cross-Origin-Isolation (COI) static server for the VS Code A2 spike.
+ * Cross-Origin-Isolation (COI) static server for the VS Code workbench.
  *
  * Chromium only grants `crossOriginIsolated === true` (the gate for
  * SharedArrayBuffer) to a document fetched over **http(s)** that carries

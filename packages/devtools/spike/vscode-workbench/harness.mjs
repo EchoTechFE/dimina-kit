@@ -1,18 +1,18 @@
 /**
- * VS Code A2 death-line harness — a standalone Electron main process (no full
+ * VS Code workbench harness — a standalone Electron main process (no full
  * devtools app) that:
- *   1. starts the COI http server over the built A2 workbench bundle,
+ *   1. starts the COI http server over the built workbench bundle,
  *   2. mounts a WebContentsView in an offscreen window and loadURL()s the bundle,
  *   3. probes the death-line judgment criteria via executeJavaScript:
  *        - crossOriginIsolated === true   (CORE)
  *        - typeof SharedArrayBuffer       (CORE)
  *        - workbench/editor DOM rendered
  *        - extension-host worker alive (worker target count + a probe)
- *   4. screenshots to scratchpad, prints VSCODE_A2_RESULT=<json>, exits.
+ *   4. screenshots to scratchpad, prints VSCODE_WORKBENCH_RESULT=<json>, exits.
  *
  * Modes:
  *   --mode=baseline  serve a trivial page (validates the http+COI plumbing only)
- *   --mode=workbench serve dist/ (the real A2 bundle)  [default]
+ *   --mode=workbench serve dist/ (the real workbench bundle)  [default]
  *
  * Offscreen + never focused (background-friendly).
  */
@@ -25,7 +25,7 @@ import { startCoiServer } from './coi-server.mjs'
 // Electron 41 does NOT grant crossOriginIsolated even with COOP/COEP over http
 // (verified by coi-probe.mjs matrix). This switch enables SharedArrayBuffer
 // itself without isolation — which is what VS Code's web stack actually checks.
-if (process.env.A2_NO_SAB_FLAG !== '1') {
+if (process.env.WORKBENCH_NO_SAB_FLAG !== '1') {
   app.commandLine.appendSwitch('enable-features', 'SharedArrayBuffer')
 }
 
@@ -35,9 +35,9 @@ const SHOT_DIR = process.env.SPIKE_SHOT_DIR || join(__dirname, 'shots')
 
 const DIST_DIR = join(__dirname, 'dist')
 const BASELINE_DIR = join(__dirname, 'baseline')
-const FIXTURE_DIR = process.env.A2_FIXTURE_DIR || join(__dirname, 'fixture-project')
+const FIXTURE_DIR = process.env.WORKBENCH_FIXTURE_DIR || join(__dirname, 'fixture-project')
 
-function log(...a) { console.log('[a2-harness]', ...a) }
+function log(...a) { console.log('[workbench-harness]', ...a) }
 
 async function settle(ms) { await new Promise((r) => setTimeout(r, ms)) }
 
@@ -67,12 +67,12 @@ async function probe(wc) {
       hasWorkbench: !!document.querySelector('.monaco-workbench'),
       hasActivityBar: !!document.querySelector('.activitybar'),
       hasEditorPart: !!document.querySelector('.part.editor'),
-      // spike-injected status (workbench page sets window.__A2_STATUS)
-      a2Status: (typeof window.__A2_STATUS !== 'undefined') ? window.__A2_STATUS : null,
-      a2Error: (typeof window.__A2_ERROR !== 'undefined') ? String(window.__A2_ERROR) : null,
-      a2ExtHost: (typeof window.__A2_EXTHOST !== 'undefined') ? window.__A2_EXTHOST : null,
-      a2Wxml: (typeof window.__A2_WXML !== 'undefined') ? window.__A2_WXML : null,
-      a2Dts: (typeof window.__A2_DTS !== 'undefined') ? window.__A2_DTS : null,
+      // spike-injected status (workbench page sets window.__WB_STATUS)
+      wbStatus: (typeof window.__WB_STATUS !== 'undefined') ? window.__WB_STATUS : null,
+      wbError: (typeof window.__WB_ERROR !== 'undefined') ? String(window.__WB_ERROR) : null,
+      wbExtHost: (typeof window.__WB_EXTHOST !== 'undefined') ? window.__WB_EXTHOST : null,
+      wbWxml: (typeof window.__WB_WXML !== 'undefined') ? window.__WB_WXML : null,
+      wbDts: (typeof window.__WB_DTS !== 'undefined') ? window.__WB_DTS : null,
       // Explorer tree landmarks: row labels for known fixture files.
       explorerLabels: Array.from(document.querySelectorAll('.monaco-list-row .label-name, .explorer-item .label-name'))
         .map((el) => (el.textContent || '').trim()).filter(Boolean).slice(0, 60),
@@ -90,15 +90,15 @@ async function run() {
       `<!doctype html><html><head><meta charset="utf-8"><title>coi-baseline</title></head>
        <body><h1>COI baseline</h1>
        <script type="module">
-         window.__A2_STATUS = 'baseline-loaded'
+         window.__WB_STATUS = 'baseline-loaded'
          // spawn a same-origin module worker to prove COEP require-corp allows it
          try {
            const blobUrl = URL.createObjectURL(new Blob(
              ['self.postMessage({sab: typeof SharedArrayBuffer, coi: self.crossOriginIsolated})'],
              {type:'text/javascript'}))
            const w = new Worker(blobUrl, {type:'module'})
-           w.onmessage = (e) => { window.__A2_WORKER = e.data }
-         } catch (e) { window.__A2_ERROR = String(e) }
+           w.onmessage = (e) => { window.__WB_WORKER = e.data }
+         } catch (e) { window.__WB_ERROR = String(e) }
        </script></body></html>`)
   }
 
@@ -133,7 +133,7 @@ async function run() {
   log('loaded; settling for workbench init...')
 
   // Workbench init is async (initialize() + worker spawn + extension activation).
-  // Poll a2Status / DOM until it stabilizes, up to a cap.
+  // Poll wbStatus / DOM until it stabilizes, up to a cap.
   let last = null
   const maxWaitMs = MODE === 'baseline' ? 3000 : 30000
   const start = Date.now()
@@ -141,7 +141,7 @@ async function run() {
     await settle(1000)
     try { last = await probe(wc) } catch (e) { last = { probeError: String(e) } }
     if (MODE === 'baseline' && last.crossOriginIsolated) break
-    if (MODE !== 'baseline' && (/^exthost-/.test(last.a2Status || '') || last.a2Error)) {
+    if (MODE !== 'baseline' && (/^exthost-/.test(last.wbStatus || '') || last.wbError)) {
       break
     }
     if (MODE !== 'baseline' && (last.hasWorkbench || last.hasMonaco) && Date.now() - start > 18000) {
@@ -200,17 +200,17 @@ async function run() {
       monaco: last?.hasMonaco, workbench: last?.hasWorkbench,
       activityBar: last?.hasActivityBar, editorPart: last?.hasEditorPart,
     },
-    a2Status: last?.a2Status ?? null,
-    a2Error: last?.a2Error ?? null,
-    a2ExtHost: last?.a2ExtHost ?? null,
-    a2Wxml: last?.a2Wxml ?? null,
-    a2Dts: last?.a2Dts ?? null,
+    wbStatus: last?.wbStatus ?? null,
+    wbError: last?.wbError ?? null,
+    wbExtHost: last?.wbExtHost ?? null,
+    wbWxml: last?.wbWxml ?? null,
+    wbDts: last?.wbDts ?? null,
     explorerLabels: last?.explorerLabels ?? [],
     title: last?.title,
     bodyLen: last?.bodyLen,
     bodyTextSample: (last?.bodyText || '').slice(0, 600),
     workerTargets,
-    extHostAlive: last?.a2Status === 'exthost-alive' && last?.a2ExtHost?.ping === 'pong-from-exthost',
+    extHostAlive: last?.wbStatus === 'exthost-alive' && last?.wbExtHost?.ping === 'pong-from-exthost',
     extHostWorker: workerTargets.some((t) => /extensionHost|extHost|webWorkerExtensionHost/i.test(t.url || '')),
     anyWorker: workerTargets.some((t) => t.type === 'worker'),
     moduleWorkerProbe,
@@ -238,6 +238,6 @@ app.whenReady().then(async () => {
   } catch (e) {
     result = { ok: false, mode: MODE, fatal: String(e && e.stack ? e.stack : e) }
   }
-  console.log('VSCODE_A2_RESULT=' + JSON.stringify(result))
+  console.log('VSCODE_WORKBENCH_RESULT=' + JSON.stringify(result))
   setTimeout(() => app.exit(result.ok ? 0 : 1), 100)
 })

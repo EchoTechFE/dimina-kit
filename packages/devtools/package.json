@@ -82,11 +82,11 @@
   },
   "scripts": {
     "start": "electron dist/main/index.js",
-    "build": "pnpm build:container && pnpm build:main && pnpm build:preload && pnpm build:renderer && pnpm build:simulator && pnpm build:native-host && pnpm build:a2",
+    "build": "pnpm build:container && pnpm build:main && pnpm build:preload && pnpm build:renderer && pnpm build:simulator && pnpm build:native-host && pnpm build:workbench",
     "build:container": "node build-container.js",
     "build:native-host": "node build-native-host.mjs",
     "build:simulator": "vite build --config vite.config.simulator.ts",
-    "build:a2": "cd spike/vscode-a2 && node scripts/patch-ts-ext.mjs && A2_OUT_DIR=../../dist/workbench-a2 npx vite build",
+    "build:workbench": "cd spike/vscode-workbench && node scripts/patch-ts-ext.mjs && WORKBENCH_OUT_DIR=../../dist/vscode-workbench npx vite build",
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
     "prepack": "pnpm run build",

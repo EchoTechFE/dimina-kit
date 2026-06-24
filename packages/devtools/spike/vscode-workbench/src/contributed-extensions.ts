@@ -81,7 +81,7 @@ export async function registerContributedExtensions(): Promise<ContributedExtens
       count++
       typings.push(...(await collectTypings(ext)))
     } catch (e) {
-      console.error('[a2-workbench] contributed extension failed:', ext.dir, e)
+      console.error('[workbench] contributed extension failed:', ext.dir, e)
     }
   }
   return { count, typings }
@@ -107,7 +107,7 @@ async function collectTypings(ext: ContributedExtension): Promise<ExtraTyping[]>
   const parts: string[] = []
   for (const p of declared) {
     if (typeof p !== 'string' || !ext.files.includes(p)) {
-      console.error('[a2-workbench] ignoring typings path not in ext files:', ext.dir, p)
+      console.error('[workbench] ignoring typings path not in ext files:', ext.dir, p)
       continue
     }
     try {
@@ -115,7 +115,7 @@ async function collectTypings(ext: ContributedExtension): Promise<ExtraTyping[]>
       if (!res.ok) continue
       parts.push(await res.text())
     } catch (e) {
-      console.error('[a2-workbench] failed to fetch contributed typing:', ext.dir, p, e)
+      console.error('[workbench] failed to fetch contributed typing:', ext.dir, p, e)
     }
   }
   if (parts.length === 0) return []

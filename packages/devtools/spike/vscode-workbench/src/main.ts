@@ -1,9 +1,9 @@
 /**
- * Minimal VS Code A2 workbench bootstrap for the death-line spike.
+ * VS Code workbench bootstrap.
  *
  * Goal: render a workbench shell + start the web extension host worker so we can
  * prove (via the harness CDP probe) that the ext-host is alive and language
- * features work. Exposes window.__A2_STATUS / window.__A2_ERROR for the probe.
+ * features work. Exposes window.__WB_STATUS / window.__WB_ERROR for the probe.
  *
  * v34 (@codingame/monaco-vscode-api@34): the worker extension host needs all of
  *   (1) getExtensionServiceOverride({ enableWorkerExtensionHost: true })
@@ -90,21 +90,21 @@ import '@codingame/monaco-vscode-typescript-language-features-default-extension'
 
 declare global {
   interface Window {
-    __A2_STATUS?: string
-    __A2_ERROR?: string
-    __A2_EXTHOST?: unknown
-    __A2_WXML?: string
-    __A2_DTS?: string
-    __A2_CONTRIB?: string
+    __WB_STATUS?: string
+    __WB_ERROR?: string
+    __WB_EXTHOST?: unknown
+    __WB_WXML?: string
+    __WB_DTS?: string
+    __WB_CONTRIB?: string
     /**
      * Apply a devtools color scheme to the workbench. The main process drives
      * this over `executeJavaScript` whenever the devtools theme flips so the
      * editor tracks the surrounding app's light/dark scheme. Bound once the
      * configuration service is initialized.
      */
-    __A2_SET_THEME?: (scheme: 'light' | 'dark') => void
+    __WB_SET_THEME?: (scheme: 'light' | 'dark') => void
     /** Spike-only probe surface so the harness can drive services without bare-specifier imports in page context. */
-    __A2_PROBE?: {
+    __WB_PROBE?: {
       vscode: typeof import('vscode')
       getService: typeof getService
       IFileService: typeof IFileService
@@ -155,7 +155,7 @@ const FS_BASE_URL = location.origin + '/'
 // resources/package.json `contributes.themes[].id`). These are the modern VS
 // Code defaults and exist offline, so `workbench.colorTheme` resolves without a
 // marketplace fetch.
-const A2_THEME_ID = { light: 'Light Modern', dark: 'Dark Modern' } as const
+const WORKBENCH_THEME_ID = { light: 'Light Modern', dark: 'Dark Modern' } as const
 
 /**
  * Full user `settings.json` for the embedded editor. `updateUserConfiguration`
@@ -179,7 +179,7 @@ const A2_THEME_ID = { light: 'Light Modern', dark: 'Dark Modern' } as const
  */
 function buildUserConfig(scheme: 'light' | 'dark'): Record<string, unknown> {
   return {
-    'workbench.colorTheme': A2_THEME_ID[scheme],
+    'workbench.colorTheme': WORKBENCH_THEME_ID[scheme],
     'files.associations': { '*.wxss': 'css', '*.wxs': 'javascript' },
     'files.exclude': { 'node_modules': true },
     'files.autoSave': 'afterDelay',
@@ -244,12 +244,12 @@ async function boot(): Promise<void> {
   // disk project is mirrored into it after initialize; saves flush back to disk.
   const folderUri = URI.parse(WORKSPACE_FILE_ROOT)
 
-  window.__A2_STATUS = 'initializing'
+  window.__WB_STATUS = 'initializing'
   await initializeMonacoService(overrides, container, {
     productConfiguration: {
       // No extensionsGallery → no network/marketplace fetch (offline-safe).
-      nameShort: 'A2 Spike',
-      nameLong: 'A2 Spike Workbench',
+      nameShort: 'Dimina',
+      nameLong: 'Dimina Workbench',
     },
     // Open the project as the single workspace folder so the Explorer renders
     // the tree and the tsserver treats it as a real file:// project root.
@@ -261,13 +261,13 @@ async function boot(): Promise<void> {
       },
     },
   } as never)
-  window.__A2_STATUS = 'service-initialized'
+  window.__WB_STATUS = 'service-initialized'
 
   // Track the devtools light/dark scheme. The initial value rides the page URL
   // query (set by the main process at attach time); later flips arrive through
   // the exposed setter the main process calls over executeJavaScript.
   applyWorkbenchTheme(initialThemeScheme())
-  window.__A2_SET_THEME = (scheme) => {
+  window.__WB_SET_THEME = (scheme) => {
     applyWorkbenchTheme(scheme === 'light' ? 'light' : 'dark')
   }
 
@@ -320,7 +320,7 @@ async function boot(): Promise<void> {
     }
     await wxmlExt.whenReady()
   } catch (e) {
-    console.error('[a2-spike] wxml extension registration failed', e)
+    console.error('[workbench] wxml extension registration failed', e)
   }
 
 
@@ -328,7 +328,7 @@ async function boot(): Promise<void> {
   // `vscode` API. Activation proves the ext-host worker is alive.
   const { getApi } = await registerExtension(
     {
-      name: 'a2-spike',
+      name: 'dimina-workbench',
       publisher: 'dimina',
       version: '1.0.0',
       engines: { vscode: '*' },
@@ -347,7 +347,7 @@ async function boot(): Promise<void> {
     try {
       registerWxmlLanguage(api)
     } catch (e) {
-      console.error('[a2-spike] wxml language providers failed', e)
+      console.error('[workbench] wxml language providers failed', e)
     }
     // Dimina config-file JSON schemas (app.json / page *.json / project.config.json).
     // Self-contained provider only; the `json.schemas` user-setting path needs the
@@ -356,9 +356,9 @@ async function boot(): Promise<void> {
     try {
       registerDiminaJsonSchemas(api)
     } catch (e) {
-      console.error('[a2-spike] dimina json schemas failed', e)
+      console.error('[workbench] dimina json schemas failed', e)
     }
-    window.__A2_PROBE = {
+    window.__WB_PROBE = {
       vscode: api,
       getService,
       IFileService,
@@ -368,10 +368,10 @@ async function boot(): Promise<void> {
       URI,
       VSBuffer,
     }
-    window.__A2_WXML = 'registered'
+    window.__WB_WXML = 'registered'
   } catch (e) {
-    window.__A2_WXML = 'failed: ' + String(e)
-    console.error('[a2-spike] wxml language providers failed', e)
+    window.__WB_WXML = 'failed: ' + String(e)
+    console.error('[workbench] wxml language providers failed', e)
   }
 
   // Downstream editor extensibility: load host-contributed web extensions served
@@ -382,10 +382,10 @@ async function boot(): Promise<void> {
   try {
     const { count, typings } = await registerContributedExtensions()
     contributedTypings = typings
-    window.__A2_CONTRIB = 'loaded:' + count
+    window.__WB_CONTRIB = 'loaded:' + count
   } catch (e) {
-    window.__A2_CONTRIB = 'failed: ' + String(e)
-    console.error('[a2-spike] contributed extensions failed', e)
+    window.__WB_CONTRIB = 'failed: ' + String(e)
+    console.error('[workbench] contributed extensions failed', e)
   }
 
   // Mirror the disk project into file:///workspace + seed dd/wx ambient typings,
@@ -410,15 +410,15 @@ async function boot(): Promise<void> {
       }
     })
 
-    window.__A2_DTS = 'written:' + mirrored
+    window.__WB_DTS = 'written:' + mirrored
   } catch (e) {
-    window.__A2_DTS = 'failed: ' + String(e)
-    console.error('[a2-spike] file:// mirror + d.ts seed failed', e)
+    window.__WB_DTS = 'failed: ' + String(e)
+    console.error('[workbench] file:// mirror + d.ts seed failed', e)
   }
 
   const bootEl = document.getElementById('boot')
   if (bootEl) bootEl.remove()
-  window.__A2_STATUS = 'workbench-ready'
+  window.__WB_STATUS = 'workbench-ready'
 
   // Decisive ext-host liveness proof: registering a command + executing it only
   // succeeds if the worker extension host actually activated (commands round-trip
@@ -430,18 +430,18 @@ async function boot(): Promise<void> {
     void disp
     pingResult = await vscode.commands.executeCommand('a2spike.ping')
     const extCount = vscode.extensions.all.length
-    window.__A2_EXTHOST = { ping: pingResult, extCount }
-    window.__A2_STATUS = pingResult === 'pong-from-exthost' ? 'exthost-alive' : 'exthost-no-pong'
+    window.__WB_EXTHOST = { ping: pingResult, extCount }
+    window.__WB_STATUS = pingResult === 'pong-from-exthost' ? 'exthost-alive' : 'exthost-no-pong'
   } catch (e) {
-    window.__A2_EXTHOST = { error: String(e) }
-    window.__A2_STATUS = 'exthost-probe-failed'
+    window.__WB_EXTHOST = { error: String(e) }
+    window.__WB_STATUS = 'exthost-probe-failed'
   }
 }
 
 boot().catch((err) => {
-  window.__A2_ERROR = String(err && (err as Error).stack ? (err as Error).stack : err)
-  window.__A2_STATUS = 'error'
+  window.__WB_ERROR = String(err && (err as Error).stack ? (err as Error).stack : err)
+  window.__WB_STATUS = 'error'
   const bootEl = document.getElementById('boot')
-  if (bootEl) bootEl.textContent = 'A2 boot error: ' + window.__A2_ERROR
-  console.error('[a2-spike] boot failed', err)
+  if (bootEl) bootEl.textContent = 'workbench boot error: ' + window.__WB_ERROR
+  console.error('[workbench] boot failed', err)
 })

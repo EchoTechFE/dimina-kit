@@ -5,7 +5,7 @@ import { on } from './ipc-transport'
  * Subscribe to "open this file in the editor" requests from the main process.
  * The defensive renderer-side leg of the "click a console file link → open in
  * editor" pipeline: the embedded DevTools front-end routes a source-link click
- * to main, which prefers revealing the file directly in the A2 workbench WCV
+ * to main, which prefers revealing the file directly in the workbench WCV
  * (`openFileInWorkbench`) and only broadcasts here when that view is unavailable.
  *
  * Returns an unsubscribe function (removeListener contract).

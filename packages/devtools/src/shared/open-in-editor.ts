@@ -93,7 +93,7 @@ export function decodeOpenInEditorUrl(raw: string): OpenInEditorRequest | null {
 
 /**
  * Map a DevTools resource URL to a PROJECT-RELATIVE source path (POSIX, no
- * leading slash) — the key the A2 workbench opens files by (mirrored under
+ * leading slash) — the key the workbench opens files by (mirrored under
  * `file:///workspace/<rel>`).
  *
  * The compiler emits each `logic.js.map` with `sources` = the project-relative

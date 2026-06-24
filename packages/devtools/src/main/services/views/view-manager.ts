@@ -102,8 +102,8 @@ export interface ViewManagerContext {
  * `removeChildView`, `webContents.destroy()` and overlay `setBounds` calls
  * should live here — IPC handlers just call into the manager.
  *
- * The code editor IS an overlay: the embedded A2 VS Code workbench is a
- * main-process WebContentsView (`attachWorkbenchA2`) hung off the main window's
+ * The code editor IS an overlay: the embedded VS Code workbench is a
+ * main-process WebContentsView (`attachWorkbench`) hung off the main window's
  * contentView, like the other overlays. The main window's own renderer is the
  * content root and is not managed here.
  */
@@ -217,30 +217,30 @@ export interface ViewManager {
    */
   setSimulatorDevtoolsBounds(bounds: { x: number; y: number; width: number; height: number }): void
 
-  // ── Embedded A2 workbench editor WebContentsView ──────────────────────
+  // ── Embedded workbench editor WebContentsView ──────────────────────
   /**
-   * Lazily create the A2 workbench WebContentsView, load `<url>index.html`, and
+   * Lazily create the workbench WebContentsView, load `<url>index.html`, and
    * add it to the contentView. `url` is the COI server's base URL (trailing
    * slash), which serves the workbench bundle with the SharedArrayBuffer
    * isolation headers. Idempotent: a second call is a no-op.
    */
-  attachWorkbenchA2(url: string): Promise<void>
+  attachWorkbench(url: string): Promise<void>
   /**
    * Store the workbench COI base URL without loading it. The heavy
    * WebContentsView load is deferred to the first visible
-   * `setWorkbenchA2Bounds`, keeping it off the app boot critical path.
+   * `setWorkbenchBounds`, keeping it off the app boot critical path.
    */
-  setWorkbenchA2Source(url: string): void
+  setWorkbenchSource(url: string): void
   /**
    * Apply a renderer-measured rectangle to the workbench editor view. Mirrors
    * `setSimulatorDevtoolsBounds`: `{ width: 0, height: 0 }` is "hide" — the view
    * is removed from the contentView (kept under settings/popover when re-added)
    * but its WebContents stays alive. The first non-zero rect lazily creates +
-   * loads the workbench (from the URL set by `setWorkbenchA2Source`).
+   * loads the workbench (from the URL set by `setWorkbenchSource`).
    */
-  setWorkbenchA2Bounds(bounds: { x: number; y: number; width: number; height: number }): void
+  setWorkbenchBounds(bounds: { x: number; y: number; width: number; height: number }): void
   /** Destroy the workbench editor view (teardown). No-op if never attached. */
-  detachWorkbenchA2(): void
+  detachWorkbench(): void
   /**
    * Reveal a project file in the embedded workbench at a 1-based line/column
    * (the open-in-editor target coordinate convention). Drives the workbench's
@@ -470,21 +470,21 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   // its WebContents stays alive.
   let simulatorBoundsOverride: layout.Bounds | null = null
 
-  // ── Embedded A2 workbench editor WebContentsView ────────────────────────
+  // ── Embedded workbench editor WebContentsView ────────────────────────
   // The opt-in VS Code workbench hosting the 'editor' dock slot. Lazily created
-  // by `attachWorkbenchA2` from the COI server URL; its bounds ride the renderer
+  // by `attachWorkbench` from the COI server URL; its bounds ride the renderer
   // 'editor'-slot anchor (forward anchor, like the simulator DevTools overlay).
-  let workbenchA2View: WebContentsView | null = null
-  let workbenchA2ViewAdded = false
+  let workbenchView: WebContentsView | null = null
+  let workbenchViewAdded = false
   // Whether the devtools-theme → workbench-theme `nativeTheme` listener is live.
   // Bound lazily on first workbench attach, removed on detach.
   let workbenchThemeSyncBound = false
-  // COI server base URL for the workbench, stored by `setWorkbenchA2Source`. The
+  // COI server base URL for the workbench, stored by `setWorkbenchSource`. The
   // heavy WebContentsView load is deferred until the 'editor' slot first becomes
-  // visible (first non-zero `setWorkbenchA2Bounds`) so it never sits on the app
+  // visible (first non-zero `setWorkbenchBounds`) so it never sits on the app
   // boot critical path (which would delay preload/window-ready and trip the e2e
   // health check into a relaunch).
-  let workbenchA2Url: string | null = null
+  let workbenchUrl: string | null = null
 
   // ── Host-controllable toolbar WebContentsView ───────────────────────────
   // A strip above the devtools header that the downstream host loads its own
@@ -564,7 +564,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     simulatorView.setBounds(bounds)
   }
 
-  // ── Embedded A2 workbench editor WebContentsView ────────────────────────
+  // ── Embedded workbench editor WebContentsView ────────────────────────
 
   /** Current devtools color scheme, mirrored into the workbench's theme. */
   function workbenchThemeScheme(): 'light' | 'dark' {
@@ -573,20 +573,20 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
 
   // Push the live devtools scheme into the workbench whenever it flips. The
   // workbench is a plain isolated http document, so drive its exposed
-  // `__A2_SET_THEME` setter over executeJavaScript (mirrors openFileInWorkbench).
+  // `__WB_SET_THEME` setter over executeJavaScript (mirrors openFileInWorkbench).
   // The setter only exists once the workbench's configuration service is
   // initialized; before then the URL-query initial value already covers the
   // current scheme, and a missing setter here is a tolerated no-op.
   function pushWorkbenchTheme(): void {
-    if (!workbenchA2View || workbenchA2View.webContents.isDestroyed()) return
-    const wc = workbenchA2View.webContents
+    if (!workbenchView || workbenchView.webContents.isDestroyed()) return
+    const wc = workbenchView.webContents
     if (typeof wc.executeJavaScript !== 'function') return
-    const script = `window.__A2_SET_THEME && window.__A2_SET_THEME(${JSON.stringify(workbenchThemeScheme())})`
+    const script = `window.__WB_SET_THEME && window.__WB_SET_THEME(${JSON.stringify(workbenchThemeScheme())})`
     wc.executeJavaScript(script, true).catch(() => { /* workbench not yet ready */ })
   }
 
-  async function attachWorkbenchA2(url: string): Promise<void> {
-    if (workbenchA2View) return
+  async function attachWorkbench(url: string): Promise<void> {
+    if (workbenchView) return
     const view = new WebContentsView({
       webPreferences: {
         nodeIntegration: false,
@@ -594,11 +594,11 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
         sandbox: false,
       },
     })
-    workbenchA2View = view
+    workbenchView = view
     // Track devtools theme flips for the lifetime of the workbench view only —
     // registered here (not at construction) so test electron mocks that omit
     // `nativeTheme` and never open the editor stay unaffected. Removed in
-    // detachWorkbenchA2.
+    // detachWorkbench.
     if (!workbenchThemeSyncBound) {
       nativeTheme.on('updated', pushWorkbenchTheme)
       workbenchThemeSyncBound = true
@@ -610,62 +610,62 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       view.webContents.setWindowOpenHandler(({ url: target }) => handleWindowOpenExternal(target))
     } catch { /* stub may lack it */ }
     ctx.windows.mainWindow.contentView.addChildView(view)
-    workbenchA2ViewAdded = true
+    workbenchViewAdded = true
     // Keep settings/popover above the freshly-added base overlay.
     raiseTopOverlays()
     // Hand the workbench the current devtools scheme as a URL query so its very
     // first paint already matches (the runtime setter only exists post-init).
     const loadUrl = `${url}index.html?theme=${workbenchThemeScheme()}`
     await view.webContents.loadURL(loadUrl).catch((err) => {
-      console.error('[workbench] attachWorkbenchA2 — loadURL failed', err)
+      console.error('[workbench] attachWorkbench — loadURL failed', err)
     })
   }
 
   /** Store the COI base URL; the heavy load happens lazily on first show. */
-  function setWorkbenchA2Source(url: string): void {
-    workbenchA2Url = url
+  function setWorkbenchSource(url: string): void {
+    workbenchUrl = url
   }
 
-  function setWorkbenchA2Bounds(bounds: layout.Bounds): void {
+  function setWorkbenchBounds(bounds: layout.Bounds): void {
     if (ctx.windows.mainWindow.isDestroyed()) return
     // Zero-area rect means "hide" — remove the child view but keep its
     // WebContents (and the workbench's loaded state) alive. Never triggers the
     // lazy load: a hidden slot must not pull the workbench onto screen.
     if (isHidden(bounds)) {
-      if (workbenchA2View && workbenchA2ViewAdded && !workbenchA2View.webContents.isDestroyed()) {
+      if (workbenchView && workbenchViewAdded && !workbenchView.webContents.isDestroyed()) {
         try {
-          ctx.windows.mainWindow.contentView.removeChildView(workbenchA2View)
+          ctx.windows.mainWindow.contentView.removeChildView(workbenchView)
         } catch { /* already removed */ }
-        workbenchA2ViewAdded = false
+        workbenchViewAdded = false
       }
       return
     }
     // First time the 'editor' slot becomes visible: lazily create + load the
-    // workbench (off the boot critical path). attachWorkbenchA2 assigns
-    // workbenchA2View + addChildView synchronously, so bounds apply immediately
+    // workbench (off the boot critical path). attachWorkbench assigns
+    // workbenchView + addChildView synchronously, so bounds apply immediately
     // while the bundle loads in the background.
-    if (!workbenchA2View && workbenchA2Url) {
-      void attachWorkbenchA2(workbenchA2Url)
+    if (!workbenchView && workbenchUrl) {
+      void attachWorkbench(workbenchUrl)
     }
-    if (!workbenchA2View || workbenchA2View.webContents.isDestroyed()) return
-    if (!workbenchA2ViewAdded) {
-      ctx.windows.mainWindow.contentView.addChildView(workbenchA2View)
-      workbenchA2ViewAdded = true
+    if (!workbenchView || workbenchView.webContents.isDestroyed()) return
+    if (!workbenchViewAdded) {
+      ctx.windows.mainWindow.contentView.addChildView(workbenchView)
+      workbenchViewAdded = true
       // Re-attaching this base overlay moved it to the top of the z-stack; keep
       // any open settings/popover above it.
       raiseTopOverlays()
     }
-    workbenchA2View.setBounds(bounds)
+    workbenchView.setBounds(bounds)
   }
 
-  function detachWorkbenchA2(): void {
+  function detachWorkbench(): void {
     if (workbenchThemeSyncBound) {
       nativeTheme.removeListener('updated', pushWorkbenchTheme)
       workbenchThemeSyncBound = false
     }
-    destroyViewInternal(workbenchA2View)
-    workbenchA2View = null
-    workbenchA2ViewAdded = false
+    destroyViewInternal(workbenchView)
+    workbenchView = null
+    workbenchViewAdded = false
   }
 
   // Build the `file:///workspace/<rel>` URI string with each path SEGMENT
@@ -680,16 +680,16 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   }
 
   // Single attempt to reveal `uri` at the 0-based position in the workbench.
-  // Resolves false when `__A2_PROBE` is not yet exposed (the workbench's
+  // Resolves false when `__WB_PROBE` is not yet exposed (the workbench's
   // configuration service has not initialized) OR the open throws, so the
   // caller can retry; true once the document is shown.
   function tryRevealInWorkbench(uri: string, zeroLine: number, zeroCol: number): Promise<boolean> {
-    if (!workbenchA2View || workbenchA2View.webContents.isDestroyed()) {
+    if (!workbenchView || workbenchView.webContents.isDestroyed()) {
       return Promise.resolve(false)
     }
     const script = `(async () => {
       try {
-        const P = window.__A2_PROBE; if (!P) return false
+        const P = window.__WB_PROBE; if (!P) return false
         const vscode = P.vscode
         const uri = vscode.Uri.parse(${JSON.stringify(uri)})
         const doc = await vscode.workspace.openTextDocument(uri)
@@ -698,7 +698,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
         return true
       } catch (e) { return false }
     })()`
-    return workbenchA2View.webContents
+    return workbenchView.webContents
       .executeJavaScript(script, true)
       .then((ok) => ok === true)
       .catch(() => false)
@@ -707,13 +707,13 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   // Reveal a project file in the embedded workbench, awaiting the real open
   // result and retrying while the workbench finishes booting. The right-panel
   // console redirect (`onOpenUrl`) fires open-in-editor clicks that can land
-  // during the workbench's lazy attach/boot window, when `__A2_PROBE` is not
+  // during the workbench's lazy attach/boot window, when `__WB_PROBE` is not
   // yet exposed; without the retry the click is silently dropped (the inner
   // script returns false and the old code ignored it). Returns true only once
   // the document is actually shown; false when there is no workbench view or
   // every attempt failed.
   function openFileInWorkbench(relPath: string, line: number, column: number): boolean {
-    if (!workbenchA2View || workbenchA2View.webContents.isDestroyed()) return false
+    if (!workbenchView || workbenchView.webContents.isDestroyed()) return false
     // The workbench mirrors the active project under file:///workspace/<rel>; the
     // open-in-editor target is 1-based (editor convention) while vscode.Position
     // is 0-based, so clamp-convert. Drive the workbench's own vscode API rather
@@ -726,7 +726,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       // first lazy attach + ext-host boot. Each attempt re-checks the live view
       // so a teardown mid-retry bails cleanly.
       for (let attempt = 0; attempt < 10; attempt++) {
-        if (!workbenchA2View || workbenchA2View.webContents.isDestroyed()) return
+        if (!workbenchView || workbenchView.webContents.isDestroyed()) return
         if (await tryRevealInWorkbench(uri, zeroLine, zeroCol)) return
         await new Promise((resolve) => setTimeout(resolve, 150))
       }
@@ -987,7 +987,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     closeNativeDevtoolsSource()
   }
 
-  // ── Open-in-editor: click a console file link → A2 workbench ──────────────
+  // ── Open-in-editor: click a console file link → workbench ──────────────
   // The right-panel console is the embedded Chromium DevTools front-end. Once a
   // sourcemap maps a console frame back to source (restored by the service-host
   // importScripts sourcemap rewrite), we redirect a source-link click to OUR
@@ -1064,7 +1064,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
         req,
       )
       if (!target) return
-      // Drive the A2 workbench WCV (the sole editor) when it is attached, AND
+      // Drive the workbench WCV (the sole editor) when it is attached, AND
       // always emit `editor:openFile` — it carries the editor-agnostic mapping
       // (project-relative path + 1-based line) that downstream/consumers (and the
       // open-in-editor contract test) observe; with Monaco gone it has no
@@ -1109,7 +1109,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       // so a focusing window would yank focus repeatedly (disrupting the user /
       // e2e).
       next.openDevTools({ mode: 'detach', activate: false })
-      // Redirect console source-link clicks to the A2 workbench editor.
+      // Redirect console source-link clicks to the workbench editor.
       wireOpenInEditor(next, simulatorView.webContents)
       // Keep only Elements/Console/Network tabs (front-most, in that order).
       // Re-applied on every re-point so a service-host pool swap (fresh
@@ -1707,9 +1707,9 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
 
   function disposeAll(): void {
     detachSimulator()
-    // Embedded A2 workbench editor view (no-op when the host never opted in;
+    // Embedded workbench editor view (no-op when the host never opted in;
     // also removes the devtools-theme sync listener).
-    detachWorkbenchA2()
+    detachWorkbench()
     // Narrow channel first: close the live MessagePort + sweep the onMessage
     // registry, so a send() racing teardown reports false instead of posting
     // into a wc that is about to be closed.
@@ -1825,10 +1825,10 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     setNativeSimulatorViewBounds,
     resize,
     setSimulatorDevtoolsBounds,
-    attachWorkbenchA2,
-    setWorkbenchA2Source,
-    setWorkbenchA2Bounds,
-    detachWorkbenchA2,
+    attachWorkbench,
+    setWorkbenchSource,
+    setWorkbenchBounds,
+    detachWorkbench,
     openFileInWorkbench,
     setHostToolbarBounds,
     setHostToolbarHeight,

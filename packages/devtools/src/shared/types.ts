@@ -210,14 +210,14 @@ export interface CreateProjectInput {
 }
 
 /**
- * Configuration for the embedded A2 VS Code workbench editor — the sole devtools
+ * Configuration for the embedded VS Code workbench editor — the sole devtools
  * editor. This config only fine-tunes where the workbench bundle and downstream
  * contributed extensions are served from; the editor is always on.
  */
 export interface EditorViewConfig {
   /**
    * Absolute path to the built workbench bundle dir. Defaults to the
-   * devtools-bundled `dist/workbench-a2`. Override to ship a custom workbench.
+   * devtools-bundled `dist/vscode-workbench`. Override to ship a custom workbench.
    */
   bundleDir?: string
   /**
@@ -261,7 +261,7 @@ export interface WorkbenchAppConfig extends WorkbenchConfig {
    */
   onBeforeOpenProject?: (projectPath: string) => void | Promise<void>
   /**
-   * Fine-tune the embedded A2 VS Code workbench editor (the sole devtools
+   * Fine-tune the embedded VS Code workbench editor (the sole devtools
    * editor). The 'editor' dock slot is always a main-process WebContentsView
    * hosting the workbench (full project-wide IntelliSense, wxml LSP, dd/wx
    * types); the framework starts the COI http server and bakes the

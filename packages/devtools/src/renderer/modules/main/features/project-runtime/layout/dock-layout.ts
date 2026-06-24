@@ -67,7 +67,7 @@ export function buildDockRegistry(): PanelRegistry {
   // simulator + editor draw their own chrome (device picker / file path bar), so
   // they hide the engine tab entirely — their groups render no tab strip.
   registry.register({ kind: 'dom', id: 'simulator', title: 'Simulator', draggable: false, hideTab: true })
-  // The 'editor' slot is the embedded A2 VS Code workbench. It is a DOM panel
+  // The 'editor' slot is the embedded VS Code workbench. It is a DOM panel
   // (like the simulator): `renderDomPanel('editor')` renders `EditorPanel`, a
   // full-size anchor div that owns the workbench WebContentsView placement
   // itself (via `createPlacementAnchor`). A bare native slot would render no
