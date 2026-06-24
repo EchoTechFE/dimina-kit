@@ -91,6 +91,12 @@ importers:
       '@codingame/monaco-vscode-configuration-service-override':
         specifier: 34.0.3
         version: 34.0.3
+      '@codingame/monaco-vscode-css-default-extension':
+        specifier: 34.0.3
+        version: 34.0.3
+      '@codingame/monaco-vscode-explorer-service-override':
+        specifier: 34.0.3
+        version: 34.0.3
       '@codingame/monaco-vscode-extensions-service-override':
         specifier: 34.0.3
         version: 34.0.3
@@ -557,11 +563,17 @@ packages:
   '@codingame/monaco-vscode-configuration-service-override@34.0.3':
     resolution: {integrity: sha512-s9ejUqEy0aKgEmtYKfTuFT50JmrO8EIWU+lKuXbRgoQGtmxX7QuML2MjF18Ql1aiKv9kR5RIozClezJqmQreyA==}
 
+  '@codingame/monaco-vscode-css-default-extension@34.0.3':
+    resolution: {integrity: sha512-fPoVzmp9QWnLmwW2me3cZZm59PKQbxis/yEf8vCo9lUOtBHcM7FPh6Bol9Q9/NtFejh2MeRIY6qIiD39j3g/Lg==}
+
   '@codingame/monaco-vscode-editor-api@34.0.3':
     resolution: {integrity: sha512-kM9xYW913AFsstFjWtu5SpLfsZvzyYqbauQpxAJtSwFL7yEVPccH7RGoQB/R8H2yL5k20k3ItbrD93WLtmwLZA==}
 
   '@codingame/monaco-vscode-environment-service-override@34.0.3':
     resolution: {integrity: sha512-VXSs4Uqnvx0rTwI5lBLWrWJeTrLQcmsS92vsCXTmYsmUzufUJ1o7nkwziPKRlhWQbNBxmvnqayVhAI/EmWJ1sQ==}
+
+  '@codingame/monaco-vscode-explorer-service-override@34.0.3':
+    resolution: {integrity: sha512-XlcM7Dk0HvgHA/Hd0zDip7Tl7wt3eUtRVeu21SflvbjcOKnYsSb2DgW3VDqmWFVY+IN22JUb3ecUNaHuDMxRXA==}
 
   '@codingame/monaco-vscode-extension-api@34.0.3':
     resolution: {integrity: sha512-t0wxka60ixYKPQi7HCbG+eT00qIMykx9e0ZHwu4aal8RWFU4nmC6M3dXn03PaGdwzO2iz4Zqg17Vrf7LSCr/LA==}
@@ -5978,11 +5990,19 @@ snapshots:
       '@codingame/monaco-vscode-api': 34.0.3
       '@codingame/monaco-vscode-files-service-override': 34.0.3
 
+  '@codingame/monaco-vscode-css-default-extension@34.0.3':
+    dependencies:
+      '@codingame/monaco-vscode-api': 34.0.3
+
   '@codingame/monaco-vscode-editor-api@34.0.3':
     dependencies:
       '@codingame/monaco-vscode-api': 34.0.3
 
   '@codingame/monaco-vscode-environment-service-override@34.0.3':
+    dependencies:
+      '@codingame/monaco-vscode-api': 34.0.3
+
+  '@codingame/monaco-vscode-explorer-service-override@34.0.3':
     dependencies:
       '@codingame/monaco-vscode-api': 34.0.3
 

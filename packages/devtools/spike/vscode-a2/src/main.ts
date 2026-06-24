@@ -14,7 +14,9 @@ import 'vscode/localExtensionHost'
 
 import { initialize as initializeMonacoService } from '@codingame/monaco-vscode-api'
 import getExtensionServiceOverride, { ExtensionHostKind } from '@codingame/monaco-vscode-extensions-service-override'
-import getConfigurationServiceOverride from '@codingame/monaco-vscode-configuration-service-override'
+import getConfigurationServiceOverride, {
+  updateUserConfiguration,
+} from '@codingame/monaco-vscode-configuration-service-override'
 import getKeybindingsServiceOverride from '@codingame/monaco-vscode-keybindings-service-override'
 import getModelServiceOverride from '@codingame/monaco-vscode-model-service-override'
 import getThemeServiceOverride from '@codingame/monaco-vscode-theme-service-override'
@@ -23,6 +25,7 @@ import getLanguagesServiceOverride from '@codingame/monaco-vscode-languages-serv
 import getStorageServiceOverride from '@codingame/monaco-vscode-storage-service-override'
 import getLogServiceOverride from '@codingame/monaco-vscode-log-service-override'
 import getFilesServiceOverride from '@codingame/monaco-vscode-files-service-override'
+import getExplorerServiceOverride from '@codingame/monaco-vscode-explorer-service-override'
 import getQuickAccessServiceOverride from '@codingame/monaco-vscode-quickaccess-service-override'
 import getWorkbenchServiceOverride from '@codingame/monaco-vscode-workbench-service-override'
 import { registerExtension, ExtensionHostKind as ExtKind } from '@codingame/monaco-vscode-api/extensions'
@@ -47,14 +50,9 @@ import {
   WXML_TMGRAMMAR,
   jsonBlobUrl,
 } from './wxml-grammar'
-import { DIMINA_DTS } from './dimina-dts'
-import {
-  DIMINA_SIDEBAR_MANIFEST,
-  diminaSidebarFileUrls,
-  registerDiminaSidebar,
-} from './dimina-sidebar'
+import { seedAmbientTypings, type ExtraTyping } from './typings-injection'
 import { registerContributedExtensions } from './contributed-extensions'
-import { registerDiminaJsonSchemas, applyDiminaJsonSchemaConfig } from './dimina-json-schemas'
+import { registerDiminaJsonSchemas } from './dimina-json-schemas'
 
 // Force the ext-host worker entry into its OWN chunk. Under rolldown-vite the
 // static `new URL('…extensionHost.worker', import.meta.url)` form gets inlined
@@ -73,6 +71,9 @@ import textmateWorkerUrl from '@codingame/monaco-vscode-textmate-service-overrid
 // Built-in extensions (offline-safe; run inside the ext-host worker).
 import '@codingame/monaco-vscode-theme-defaults-default-extension'
 import '@codingame/monaco-vscode-json-default-extension'
+// CSS language (id + grammar + IntelliSense) — `.wxss` is associated with `css`
+// (see buildUserConfig) so stylesheet files highlight instead of falling to plaintext.
+import '@codingame/monaco-vscode-css-default-extension'
 // JS/TS language definitions (id + grammar) — without these `.js` files fall to
 // plaintext and the TS service never engages.
 import '@codingame/monaco-vscode-javascript-default-extension'
@@ -89,6 +90,13 @@ declare global {
     __A2_WXML?: string
     __A2_DTS?: string
     __A2_CONTRIB?: string
+    /**
+     * Apply a devtools color scheme to the workbench. The main process drives
+     * this over `executeJavaScript` whenever the devtools theme flips so the
+     * editor tracks the surrounding app's light/dark scheme. Bound once the
+     * configuration service is initialized.
+     */
+    __A2_SET_THEME?: (scheme: 'light' | 'dark') => void
     /** Spike-only probe surface so the harness can drive services without bare-specifier imports in page context. */
     __A2_PROBE?: {
       vscode: typeof import('vscode')
@@ -136,6 +144,55 @@ window.MonacoEnvironment = {
 // The page is served from the COI server root, so its origin is the fs bridge base.
 const FS_BASE_URL = location.origin + '/'
 
+// Built-in theme ids contributed by
+// `@codingame/monaco-vscode-theme-defaults-default-extension` (its
+// resources/package.json `contributes.themes[].id`). These are the modern VS
+// Code defaults and exist offline, so `workbench.colorTheme` resolves without a
+// marketplace fetch.
+const A2_THEME_ID = { light: 'Light Modern', dark: 'Dark Modern' } as const
+
+/**
+ * Full user `settings.json` for the embedded editor. `updateUserConfiguration`
+ * REPLACES the whole user config, so every setting the workbench needs lives
+ * here and is re-applied together on each theme flip:
+ *  - `workbench.colorTheme` mirrors the devtools light/dark scheme.
+ *  - `files.associations` maps `.wxss`→css and `.wxs`→javascript so those files
+ *    highlight (no dedicated wxss/wxs grammar is bundled; css/js are close).
+ *  - command center, layout controls, and the custom title bar are turned off —
+ *    that standalone-window chrome is redundant inside a docked editor panel.
+ *  - `files.exclude` hides devtools-injected tooling from the Explorer/search:
+ *    the `node_modules/` folder that holds the injected `@types/*` ambient
+ *    packages (built-in dd/wx + any downstream-contributed typings). Hiding is
+ *    UI-only — tsserver still reads them. dimina projects have no real
+ *    `node_modules` at the editor root, so hiding it loses nothing.
+ */
+function buildUserConfig(scheme: 'light' | 'dark'): Record<string, unknown> {
+  return {
+    'workbench.colorTheme': A2_THEME_ID[scheme],
+    'files.associations': { '*.wxss': 'css', '*.wxs': 'javascript' },
+    'files.exclude': { 'node_modules': true },
+    'window.commandCenter': false,
+    'workbench.layoutControl.enabled': false,
+    'window.customTitleBarVisibility': 'never',
+  }
+}
+
+/**
+ * Apply the full user config at the devtools color scheme. Runs after the
+ * configuration service is initialized (a write before that has nowhere to land).
+ * Idempotent — applying the same scheme is a no-op.
+ */
+function applyWorkbenchTheme(scheme: 'light' | 'dark'): void {
+  void updateUserConfiguration(JSON.stringify(buildUserConfig(scheme)))
+}
+
+/** Devtools color scheme passed via `index.html?theme=light|dark`; dark default. */
+function initialThemeScheme(): 'light' | 'dark' {
+  return new URLSearchParams(location.search).get('theme') === 'light'
+    ? 'light'
+    : 'dark'
+}
+
 async function boot(): Promise<void> {
   const container = document.getElementById('workbench')!
 
@@ -146,6 +203,9 @@ async function boot(): Promise<void> {
     ...getKeybindingsServiceOverride(),
     ...getModelServiceOverride(),
     ...getFilesServiceOverride(),
+    // Standard VS Code Explorer (file tree) view — shows the mirrored
+    // file:///workspace project files in the sidebar.
+    ...getExplorerServiceOverride(),
     ...getThemeServiceOverride(),
     ...getTextmateServiceOverride(),
     ...getLanguagesServiceOverride(),
@@ -176,6 +236,22 @@ async function boot(): Promise<void> {
     },
   } as never)
   window.__A2_STATUS = 'service-initialized'
+
+  // Track the devtools light/dark scheme. The initial value rides the page URL
+  // query (set by the main process at attach time); later flips arrive through
+  // the exposed setter the main process calls over executeJavaScript.
+  applyWorkbenchTheme(initialThemeScheme())
+  window.__A2_SET_THEME = (scheme) => {
+    applyWorkbenchTheme(scheme === 'light' ? 'light' : 'dark')
+  }
+
+  // Hide the Accounts entry in the activity bar — the embedded editor has no
+  // sign-in/sync, so the account avatar is dead chrome. Config can't remove it,
+  // so suppress its action item by its stable codicon class.
+  const chromeStyle = document.createElement('style')
+  chromeStyle.textContent =
+    '.monaco-workbench .activitybar .action-item:has(.codicon-accounts-view-bar-icon){display:none!important}'
+  document.head.appendChild(chromeStyle)
 
   // Built-in WXML language extension: contributes the `wxml` language id +
   // TextMate grammar + language-configuration. Runs as a system extension so it
@@ -221,21 +297,6 @@ async function boot(): Promise<void> {
     console.error('[a2-spike] wxml extension registration failed', e)
   }
 
-  // Dimina-specific sidebar: Activity Bar view container + Pages / App Config
-  // tree views. Registered as a system web extension (manifest + blob file URLs)
-  // like the wxml extension; the providers are attached against the page-side
-  // vscode API below once it is bound.
-  try {
-    const diminaExt = registerExtension(DIMINA_SIDEBAR_MANIFEST as never, ExtKind.LocalWebWorker, { system: true })
-    if ('registerFileUrl' in diminaExt) {
-      for (const f of diminaSidebarFileUrls()) {
-        diminaExt.registerFileUrl(f.path, f.url, { mimeType: f.mimeType })
-      }
-    }
-    await diminaExt.whenReady()
-  } catch (e) {
-    console.error('[a2-spike] dimina sidebar extension registration failed', e)
-  }
 
   // Registering an extension forces the worker ext-host to spin up + binds the
   // `vscode` API. Activation proves the ext-host worker is alive.
@@ -255,17 +316,19 @@ async function boot(): Promise<void> {
   // Attach WXML completion/hover providers against the page-side vscode API.
   try {
     const api = await getApi()
-    registerWxmlLanguage(api)
-    // Dimina sidebar tree views + open-page command (reads file:///workspace/app.json).
+    // Each provider registers independently so one throwing does not skip the
+    // siblings below.
     try {
-      registerDiminaSidebar(api)
+      registerWxmlLanguage(api)
     } catch (e) {
-      console.error('[a2-spike] dimina sidebar providers failed', e)
+      console.error('[a2-spike] wxml language providers failed', e)
     }
     // Dimina config-file JSON schemas (app.json / page *.json / project.config.json).
+    // Self-contained provider only; the `json.schemas` user-setting path needs the
+    // marketplace JSON language-features extension (not bundled) and would throw
+    // an uncaught "json.schemas is not a registered configuration", so it is not used.
     try {
       registerDiminaJsonSchemas(api)
-      void applyDiminaJsonSchemaConfig(api)
     } catch (e) {
       console.error('[a2-spike] dimina json schemas failed', e)
     }
@@ -286,10 +349,14 @@ async function boot(): Promise<void> {
   }
 
   // Downstream editor extensibility: load host-contributed web extensions served
-  // by the COI server at /__contrib (no-op when the host configured none).
+  // by the COI server at /__contrib (no-op when the host configured none). Also
+  // collects any ambient typings they declare (diminaWorkbench.typings), injected
+  // alongside the built-in dd/wx typings below.
+  let contributedTypings: ExtraTyping[] = []
   try {
-    const n = await registerContributedExtensions()
-    window.__A2_CONTRIB = 'loaded:' + n
+    const { count, typings } = await registerContributedExtensions()
+    contributedTypings = typings
+    window.__A2_CONTRIB = 'loaded:' + count
   } catch (e) {
     window.__A2_CONTRIB = 'failed: ' + String(e)
     console.error('[a2-spike] contributed extensions failed', e)
@@ -303,31 +370,7 @@ async function boot(): Promise<void> {
     const fileService = await getService(IFileService)
     const mirrored = await mirrorDiskToFileWorkspace(FS_BASE_URL)
 
-    const dtsUri = URI.parse(`${WORKSPACE_FILE_ROOT}/dimina.d.ts`)
-    await fileService.writeFile(dtsUri, VSBuffer.fromString(DIMINA_DTS))
-    // jsconfig with the ambient d.ts in `files` forces a ConfiguredProject that
-    // always includes the dd/wx globals.
-    const jsconfigUri = URI.parse(`${WORKSPACE_FILE_ROOT}/jsconfig.json`)
-    await fileService.writeFile(
-      jsconfigUri,
-      VSBuffer.fromString(
-        JSON.stringify(
-          {
-            compilerOptions: {
-              allowJs: true,
-              checkJs: false,
-              target: 'es2020',
-              module: 'commonjs',
-              lib: ['es2020', 'dom'],
-            },
-            files: ['dimina.d.ts'],
-            include: ['**/*.js'],
-          },
-          null,
-          2,
-        ),
-      ),
-    )
+    await seedAmbientTypings(fileService, contributedTypings)
 
     // Flush every WRITE/CREATE under the workspace back to disk (keeps editing
     // real). FileOperation.WRITE === 4, CREATE === 0.

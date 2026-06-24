@@ -32,7 +32,59 @@ import {
   TextDocument as JsonTextDocument,
   type LanguageService as JsonLanguageService,
   type JSONSchema,
+  type CompletionItem as LsCompletionItem,
+  type Range as LsRange,
+  type InsertReplaceEdit,
+  type TextEdit,
 } from 'vscode-json-languageservice'
+
+/**
+ * Map an upstream LSP CompletionItem onto a vscode.CompletionItem.
+ *
+ * The json language service returns items whose real insertion is in
+ * `textEdit` (a range-scoped replace) with `insertTextFormat: Snippet` (2)
+ * carrying `$1` / `$0` tab stops (e.g. `"pages": [$1]`). Copying `insertText`
+ * as a plain string leaks literal `${…}` placeholders and, lacking the textEdit
+ * range, leaves the quote already under the cursor → duplicated `"`. So honor
+ * Snippet via SnippetString and apply the textEdit range.
+ */
+function toVscodeCompletionItem(api: typeof vscode, item: LsCompletionItem): vscode.CompletionItem {
+  const ci = new api.CompletionItem(item.label)
+  if (item.detail) ci.detail = item.detail
+  if (item.documentation) {
+    ci.documentation =
+      typeof item.documentation === 'string'
+        ? item.documentation
+        : new api.MarkdownString(item.documentation.value)
+  }
+  if (item.sortText) ci.sortText = item.sortText
+  if (item.filterText) ci.filterText = item.filterText
+  if (item.kind != null) ci.kind = (item.kind - 1) as vscode.CompletionItemKind
+
+  const isSnippet = item.insertTextFormat === 2
+  const text = (value: string): string | vscode.SnippetString =>
+    isSnippet ? new api.SnippetString(value) : value
+
+  if (item.textEdit) {
+    // InsertReplaceEdit carries two ranges (insert/replace); prefer replace so
+    // accepting overwrites the token under the cursor rather than splicing in.
+    const edit = item.textEdit as TextEdit | InsertReplaceEdit
+    const lsRange: LsRange = 'range' in edit ? edit.range : edit.replace
+    ci.range = new api.Range(
+      lsRange.start.line,
+      lsRange.start.character,
+      lsRange.end.line,
+      lsRange.end.character,
+    )
+    ci.insertText = text(edit.newText)
+  } else if (typeof item.insertText === 'string') {
+    ci.insertText = text(item.insertText)
+  } else if (isSnippet) {
+    // Snippet format with no explicit insertText: the label IS the snippet body.
+    ci.insertText = new api.SnippetString(item.label)
+  }
+  return ci
+}
 
 /** Shared window block — used by app.json `window` and page-level *.json. */
 const WINDOW_PROPERTIES: Record<string, JSONSchema> = {
@@ -331,19 +383,7 @@ export function registerDiminaJsonSchemas(api: typeof vscode): vscode.Disposable
             json,
           )
           if (!list) return []
-          return list.items.map((item) => {
-            const ci = new api.CompletionItem(item.label)
-            if (item.detail) ci.detail = item.detail
-            if (item.documentation) {
-              ci.documentation =
-                typeof item.documentation === 'string'
-                  ? item.documentation
-                  : new api.MarkdownString(item.documentation.value)
-            }
-            if (typeof item.insertText === 'string') ci.insertText = item.insertText
-            if (item.kind != null) ci.kind = (item.kind - 1) as vscode.CompletionItemKind
-            return ci
-          })
+          return list.items.map((item) => toVscodeCompletionItem(api, item))
         },
       },
       '"',

@@ -19,12 +19,26 @@ import { VSBuffer } from '@codingame/monaco-vscode-api/vscode/vs/base/common/buf
 
 export const WORKSPACE_FILE_ROOT = 'file:///workspace'
 
+/**
+ * In-workspace `@types` root holding all devtools-injected ambient typings. TS
+ * module resolution auto-discovers `node_modules/@types/*`, so the dd/wx (and
+ * contributed) packages land here. Lives under the workspace root (the web
+ * tsserver only reads inside it), kept out of the Explorer via `files.exclude`,
+ * and never flushed back to disk. dimina projects have no real `node_modules` at
+ * the editor root, so reusing that path is safe.
+ */
+export const TYPES_ROOT = 'node_modules/@types'
+
 type FsEntry = [string, number] // [name, type] — 1 file, 2 dir
 
 async function bridgeReaddir(baseUrl: string, rel: string): Promise<FsEntry[]> {
   const u = new URL(`${baseUrl}__fs/readdir`)
   u.searchParams.set('p', rel)
   const res = await fetch(u.toString())
+  // 409 = no active project yet (ENOACTIVE). Treat as an empty tree rather than
+  // throwing: the workbench may attach before a project is open, and erroring
+  // would spew uncaught failures + leave file:///workspace unresolvable.
+  if (res.status === 409) return []
   if (!res.ok) throw new Error(`readdir ${rel}: ${res.status}`)
   return (await res.json()) as FsEntry[]
 }
@@ -66,6 +80,19 @@ export async function mirrorDiskToFileWorkspace(baseUrl: string): Promise<number
     }
   }
 
+  // The workbench attaches as soon as the 'editor' dock slot first paints, which
+  // can be a beat before the active project is set AND before its compile
+  // finishes — until then the COI `/__fs` bridge returns an empty tree (409 → []).
+  // Poll the project root until it has entries (project active), THEN mirror once.
+  // ~30s budget covers a cold compile; a genuinely empty/no-project workspace
+  // simply yields 0 after the wait (no error, no partial copy).
+  let rootEntries: FsEntry[] = []
+  for (let attempt = 0; attempt < 60; attempt++) {
+    rootEntries = await bridgeReaddir(baseUrl, '.')
+    if (rootEntries.length > 0) break
+    await new Promise((r) => setTimeout(r, 500))
+  }
+  if (rootEntries.length === 0) return 0
   await walk('')
   return count
 }
@@ -79,7 +106,11 @@ export async function flushFileWorkspaceSaveToDisk(baseUrl: string, uri: URI, co
   const full = uri.toString()
   if (!full.startsWith(prefix)) return
   const rel = decodeURIComponent(full.slice(prefix.length))
-  // Do not flush the seeded tooling files (they only exist in memfs).
-  if (rel === 'dimina.d.ts' || rel === 'jsconfig.json') return
+  // Never flush devtools-injected tooling back to disk: the injected `@types`
+  // packages live under memfs-only `node_modules/`, and a user tsconfig/jsconfig
+  // we merged the typings names into must keep its on-disk copy untouched — the
+  // merge lives only in the memfs mirror.
+  if (rel === 'node_modules/' || rel.startsWith('node_modules/')) return
+  if (rel === 'jsconfig.json' || rel === 'tsconfig.json') return
   await bridgeWrite(baseUrl, rel, content)
 }

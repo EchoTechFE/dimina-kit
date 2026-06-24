@@ -13,11 +13,23 @@
  * fetch, or one broken extension never blocks workbench boot.
  */
 import { registerExtension, ExtensionHostKind } from '@codingame/monaco-vscode-api/extensions'
+import type { ExtraTyping } from './typings-injection'
 
 interface ContributedExtension {
   dir: string
-  packageJson: { name?: string; publisher?: string } & Record<string, unknown>
+  packageJson: {
+    name?: string
+    publisher?: string
+    /** Framework contribution: ambient `.d.ts` paths to inject into the editor's TS project. */
+    diminaWorkbench?: { typings?: string[] }
+  } & Record<string, unknown>
   files: string[]
+}
+
+/** What {@link registerContributedExtensions} found: registered count + collected typings. */
+export interface ContributedExtensionsResult {
+  count: number
+  typings: ExtraTyping[]
 }
 
 const MIME_BY_EXT: Record<string, string> = {
@@ -41,16 +53,17 @@ function mimeFor(file: string): string {
  * Fetch the contribution manifest and register each extension. Returns the count
  * registered. Resolves 0 (never throws) when nothing is contributed or on error.
  */
-export async function registerContributedExtensions(): Promise<number> {
+export async function registerContributedExtensions(): Promise<ContributedExtensionsResult> {
   let list: ContributedExtension[]
   try {
     const res = await fetch('/__contrib/index.json')
-    if (!res.ok) return 0
+    if (!res.ok) return { count: 0, typings: [] }
     list = (await res.json()) as ContributedExtension[]
   } catch {
-    return 0
+    return { count: 0, typings: [] }
   }
   let count = 0
+  const typings: ExtraTyping[] = []
   for (const ext of list) {
     try {
       const reg = registerExtension(ext.packageJson as never, ExtensionHostKind.LocalWebWorker, { system: true })
@@ -66,9 +79,45 @@ export async function registerContributedExtensions(): Promise<number> {
       }
       await reg.whenReady()
       count++
+      typings.push(...(await collectTypings(ext)))
     } catch (e) {
       console.error('[a2-workbench] contributed extension failed:', ext.dir, e)
     }
   }
-  return count
+  return { count, typings }
+}
+
+/** Map an extension dir to a safe `@types` package name (no path separators / dots). */
+function typesPackageName(dir: string): string {
+  return dir.replace(/[^a-zA-Z0-9_-]/g, '-')
+}
+
+/**
+ * Collect a contributed extension's declared ambient typings into a single
+ * `@types/<name>` package. Each path in `package.json#diminaWorkbench.typings`
+ * MUST be one of the extension's own `files` (rejects path traversal / reads of
+ * unrelated COI files) and is fetched from its same-origin `/__contrib` URL. The
+ * declared `.d.ts` sources are concatenated into one package's `index.d.ts`,
+ * named after the extension dir so two extensions cannot collide. Returns at
+ * most one ExtraTyping per extension (empty when nothing valid was declared).
+ */
+async function collectTypings(ext: ContributedExtension): Promise<ExtraTyping[]> {
+  const declared = ext.packageJson.diminaWorkbench?.typings
+  if (!Array.isArray(declared) || declared.length === 0) return []
+  const parts: string[] = []
+  for (const p of declared) {
+    if (typeof p !== 'string' || !ext.files.includes(p)) {
+      console.error('[a2-workbench] ignoring typings path not in ext files:', ext.dir, p)
+      continue
+    }
+    try {
+      const res = await fetch(new URL(`/__contrib/${ext.dir}/${p}`, location.origin).toString())
+      if (!res.ok) continue
+      parts.push(await res.text())
+    } catch (e) {
+      console.error('[a2-workbench] failed to fetch contributed typing:', ext.dir, p, e)
+    }
+  }
+  if (parts.length === 0) return []
+  return [{ name: typesPackageName(ext.dir), content: parts.join('\n') }]
 }
