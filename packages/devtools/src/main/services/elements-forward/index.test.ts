@@ -41,6 +41,14 @@ describe('routeByDomain (routing table)', () => {
     }
   })
 
+  it('routes Overlay.disable and Overlay.highlightNode to the render guest', () => {
+    // The Elements highlight + its teardown both act on the render guest's
+    // Overlay domain; both must reach the render debugger, never the service host.
+    expect(routeByDomain('Overlay.highlightNode')).toBe('render')
+    expect(routeByDomain('Overlay.disable')).toBe('render')
+    expect(routeByDomain('Overlay.enable')).toBe('render')
+  })
+
   it('RED LINE: Emulation.* stays on the SERVICE host (never render)', () => {
     expect(routeByDomain('Emulation.setSafeAreaInsetsOverride')).toBe('service')
     expect(routeByDomain('Emulation.setDeviceMetricsOverride')).toBe('service')
@@ -891,6 +899,210 @@ describe('installElementsForward — connection-routed teardown', () => {
       // Connection-routed onDestroyed already dropped this wc from selfAttached,
       // so stop() must NOT detach the (now destroyed) session.
       expect(guestDbg.detach).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+// ── guest priming (enable-domain ordering) ──────────────────────────────────────
+
+// Names of the priming enable commands as they reach the guest debugger.
+function enableSendOrder(guestDbg: ReturnType<typeof fakeDebugger>): string[] {
+  return (guestDbg.sendCommand as ReturnType<typeof vi.fn>).mock.calls
+    .map((c) => c[0] as string)
+    .filter((m) => m === 'DOM.enable' || m === 'CSS.enable' || m === 'Overlay.enable')
+}
+
+describe('installElementsForward — guest priming ordering', () => {
+  // Chromium rejects `Overlay.enable` with -32000 "DOM should be enabled first"
+  // when it arrives before `DOM.enable` has completed. Priming MUST therefore let
+  // `DOM.enable` settle before sending `Overlay.enable`, not fire them
+  // concurrently. With a deferred `DOM.enable`, `Overlay.enable` must not appear
+  // on the guest until that deferral resolves.
+  it('does not send Overlay.enable to the guest until DOM.enable has resolved', async () => {
+    vi.useFakeTimers()
+    try {
+      let resolveDomEnable!: (v: unknown) => void
+      const guestDbg = fakeDebugger({
+        attached: true,
+        sendCommand: vi.fn((method: string) => {
+          if (method === 'DOM.enable') {
+            return new Promise((res) => { resolveDomEnable = res })
+          }
+          return Promise.resolve({})
+        }),
+      })
+      const guest = fakeWc({ debugger: guestDbg })
+      const devtoolsWc = devtoolsWcDrainingOnce([])
+      const bridge = fakeBridge(() => guest)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const stop = installElementsForward({ devtoolsWc: devtoolsWc as any, bridge: bridge as any })
+
+      // Priming runs as the guest is wired. DOM.enable is in flight (deferred).
+      await vi.advanceTimersByTimeAsync(400)
+      expect(enableSendOrder(guestDbg)).toContain('DOM.enable')
+      // Overlay.enable must NOT have been sent while DOM.enable is still pending.
+      expect(enableSendOrder(guestDbg)).not.toContain('Overlay.enable')
+
+      // DOM.enable completes → Overlay.enable is now allowed to go out.
+      resolveDomEnable({})
+      await vi.advanceTimersByTimeAsync(50)
+
+      const order = enableSendOrder(guestDbg)
+      expect(order).toContain('Overlay.enable')
+      // DOM.enable precedes Overlay.enable in the send order.
+      expect(order.indexOf('DOM.enable')).toBeLessThan(order.indexOf('Overlay.enable'))
+      stop()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // The priming sequence is anchored to the guest it began on. If the active
+  // render guest switches mid-enable (a page swap between DOM.enable being sent
+  // and resolving), the now-stale original guest must NOT receive Overlay.enable:
+  // its DOM tree is no longer what the front-end is looking at, and re-enabling
+  // its Overlay would paint into an abandoned tree.
+  it('does not send Overlay.enable to the original guest if the active guest switched before DOM.enable resolved', async () => {
+    vi.useFakeTimers()
+    try {
+      let resolveDomEnable!: (v: unknown) => void
+      // Guest A: DOM.enable is deferred so we can flip the active guest mid-enable.
+      const aDbg = fakeDebugger({
+        attached: true,
+        sendCommand: vi.fn((method: string) => {
+          if (method === 'DOM.enable') {
+            return new Promise((res) => { resolveDomEnable = res })
+          }
+          return Promise.resolve({})
+        }),
+      })
+      const guestA = fakeWc({ debugger: aDbg })
+      const bDbg = fakeDebugger({ attached: true })
+      const guestB = fakeWc({ debugger: bDbg })
+      const devtoolsWc = devtoolsWcDrainingOnce([])
+      const bridge = fakeSwitchableBridge(guestA)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const stop = installElementsForward({ devtoolsWc: devtoolsWc as any, bridge: bridge as any })
+
+      // Priming begins on A. DOM.enable is sent and left pending.
+      await vi.advanceTimersByTimeAsync(400)
+      expect(enableSendOrder(aDbg)).toContain('DOM.enable')
+      expect(enableSendOrder(aDbg)).not.toContain('Overlay.enable')
+
+      // Active render guest switches A → B before DOM.enable resolves.
+      bridge.setActive(guestB)
+      bridge.__emit({ kind: 'activePage', appId: 'a', bridgeId: 'b' })
+      await vi.advanceTimersByTimeAsync(5)
+
+      // A's DOM.enable finally resolves — but A is no longer the active guest.
+      resolveDomEnable({})
+      await vi.advanceTimersByTimeAsync(50)
+
+      // The stale guest A must NEVER get Overlay.enable after the switch.
+      expect(enableSendOrder(aDbg)).not.toContain('Overlay.enable')
+      stop()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // All three Elements-tree domains are ultimately enabled on the guest so the
+  // panel can read the DOM/CSS and paint the inspect overlay.
+  it('enables DOM, CSS, and Overlay on the primed guest', async () => {
+    vi.useFakeTimers()
+    try {
+      const guestDbg = fakeDebugger({ attached: true })
+      const guest = fakeWc({ debugger: guestDbg })
+      const devtoolsWc = devtoolsWcDrainingOnce([])
+      const bridge = fakeBridge(() => guest)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const stop = installElementsForward({ devtoolsWc: devtoolsWc as any, bridge: bridge as any })
+
+      await vi.advanceTimersByTimeAsync(400)
+
+      const order = enableSendOrder(guestDbg)
+      expect(order).toContain('DOM.enable')
+      expect(order).toContain('CSS.enable')
+      expect(order).toContain('Overlay.enable')
+      stop()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // Priming is best-effort: a failing enable (here DOM.enable rejects, the exact
+  // failure mode Chromium reports for an out-of-order enable) must not surface as
+  // a thrown error or a rejected priming, and the disposer must stay callable.
+  it('does not throw when a priming enable rejects', async () => {
+    vi.useFakeTimers()
+    try {
+      const guestDbg = fakeDebugger({
+        attached: true,
+        sendCommand: vi.fn((method: string) =>
+          method === 'DOM.enable'
+            ? Promise.reject(new Error('DOM should be enabled first'))
+            : Promise.resolve({})),
+      })
+      const guest = fakeWc({ debugger: guestDbg })
+      const devtoolsWc = devtoolsWcDrainingOnce([])
+      const bridge = fakeBridge(() => guest)
+
+      let stop!: () => void
+      expect(() => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        stop = installElementsForward({ devtoolsWc: devtoolsWc as any, bridge: bridge as any })
+      }).not.toThrow()
+
+      // Let the priming sequence run to completion past the rejection.
+      await vi.advanceTimersByTimeAsync(400)
+      expect(enableSendOrder(guestDbg)).toContain('DOM.enable')
+      expect(() => stop()).not.toThrow()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+// ── Overlay.disable guard (highlight survives Elements-panel state transitions) ──
+
+describe('installElementsForward — Overlay.disable guard', () => {
+  // Chrome's Elements front-end emits `Overlay.disable` on some panel state
+  // transitions. Forwarding it verbatim returns the guest's Overlay to the
+  // non-painting state, after which `Overlay.highlightNode` fails until Overlay is
+  // re-enabled. The feature must NOT leave the guest's Overlay disabled: either it
+  // never forwards `Overlay.disable` to the guest at all, or it re-enables Overlay
+  // (sends `Overlay.enable`) at or after the disable. Either strategy satisfies
+  // the requirement; this pins the net effect, not the mechanism.
+  it('does not leave the guest Overlay disabled after a forwarded Overlay.disable', async () => {
+    vi.useFakeTimers()
+    try {
+      const guestDbg = fakeDebugger({ attached: true })
+      const guest = fakeWc({ debugger: guestDbg })
+      const devtoolsWc = devtoolsWcDrainingOnce([
+        { id: 21, method: 'Overlay.disable', params: {}, sessionId: null },
+      ])
+      const bridge = fakeBridge(() => guest)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const stop = installElementsForward({ devtoolsWc: devtoolsWc as any, bridge: bridge as any })
+
+      await vi.advanceTimersByTimeAsync(400)
+
+      const sent = (guestDbg.sendCommand as ReturnType<typeof vi.fn>).mock.calls
+        .map((c) => c[0] as string)
+      const disableIdx = sent.indexOf('Overlay.disable')
+
+      if (disableIdx === -1) {
+        // Strategy (i): Overlay.disable is swallowed and never reaches the guest.
+        expect(sent).not.toContain('Overlay.disable')
+      } else {
+        // Strategy (ii): Overlay.disable is forwarded, but Overlay is re-enabled
+        // at or after it, so the guest is not left in the disabled state.
+        const reEnableIdx = sent.indexOf('Overlay.enable', disableIdx)
+        expect(reEnableIdx).toBeGreaterThanOrEqual(disableIdx)
+      }
+      stop()
     } finally {
       vi.useRealTimers()
     }

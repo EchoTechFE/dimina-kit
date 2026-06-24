@@ -36,9 +36,12 @@
 
 /**
  * Canonical DevTools panel view ids kept in the DEFAULT tab bar (stable front-end
- * ids, unchanged for many Chromium releases): `elements`, `console`, `network`.
+ * ids, unchanged for many Chromium releases): `elements`, `console`, `network`,
+ * `sources`. Sources stays so a source-link click that isn't routed to Monaco
+ * (build/runtime chunks, framework frames) still has a panel to reveal in instead
+ * of silently no-op'ing.
  */
-export const DEVTOOLS_KEPT_VIEW_IDS: readonly string[] = ['elements', 'console', 'network']
+export const DEVTOOLS_KEPT_VIEW_IDS: readonly string[] = ['elements', 'console', 'network', 'sources']
 
 /**
  * Build the `executeJavaScript` source injected into the DevTools front-end
@@ -52,13 +55,19 @@ export function buildCustomizeTabsScript(
   // fallback path); the DevTools UI may be EN or ZH, so include both.
   const NAME_MAP: Record<string, string[]> = {
     elements: ['Elements', '元素'], console: ['Console', '控制台'], network: ['Network', '网络'],
+    sources: ['Sources', '来源', '源代码'],
   }
   const keepNames = keptIds.flatMap((id) => NAME_MAP[id] ?? [id])
   const keepIdsJson = JSON.stringify(JSON.stringify([...keptIds]))
   const keepNamesJson = JSON.stringify(JSON.stringify(keepNames))
+  const srcNamesJson = JSON.stringify(JSON.stringify(NAME_MAP.sources))
+  const netNamesJson = JSON.stringify(JSON.stringify(NAME_MAP.network))
   return `(function(){try{
     var KEEPID = new Set(JSON.parse(${keepIdsJson}));
     var KEEPNAME = new Set(JSON.parse(${keepNamesJson}));
+    var SRCNAME = new Set(JSON.parse(${srcNamesJson}));
+    var NETNAME = new Set(JSON.parse(${netNamesJson}));
+    var WANT_SOURCES_LAST = KEEPID.has('sources');
     // (1) Locale infobar — official host-preference suppression (NOT localStorage).
     try { var IFH=globalThis.InspectorFrontendHost; if(IFH&&typeof IFH.setPreference==='function'){ IFH.setPreference('disable-locale-info-bar','true'); } }catch(_){}
     function deepCollect(sel,cap){ var out=[],seen=0,stack=[document]; while(stack.length&&seen<(cap||40000)){ var root=stack.pop(); try{var m=root.querySelectorAll?root.querySelectorAll(sel):[];for(var i=0;i<m.length;i++)out.push(m[i]);}catch(_){} try{var all=root.querySelectorAll?root.querySelectorAll('*'):[];for(var j=0;j<all.length;j++){seen++;if(all[j].shadowRoot)stack.push(all[j].shadowRoot);}}catch(_){} } return out; }
@@ -86,9 +95,18 @@ export function buildCustomizeTabsScript(
           handled=true;
         }catch(_){} }
         // fallback: registrations not enumerable -> at least clear the bar by id
-        if(!handled){ var FALL=['timeline','resources','heap-profiler','sources','security','lighthouse','chrome-recorder','coverage','linear-memory-inspector','sensors','rendering','animations','autofill-view','medias','issues-pane']; for(var fr=0;fr<FALL.length;fr++){ try{ if(!KEEPID.has(FALL[fr])) maybeRemove(FALL[fr]); }catch(_){} } }
+        if(!handled){ var FALL=['timeline','resources','heap-profiler','security','lighthouse','chrome-recorder','coverage','linear-memory-inspector','sensors','rendering','animations','autofill-view','medias','issues-pane']; for(var fr=0;fr<FALL.length;fr++){ try{ if(!KEEPID.has(FALL[fr])) maybeRemove(FALL[fr]); }catch(_){} } }
       } else { domFallback(); }
     })();
+    // Keep Sources LAST in the bar (after Network). Default DevTools order puts
+    // Sources between Console and Network; nudge it to just after Network. Runs in
+    // BOTH paths (registry removal leaves the kept tabs in default order). Self-
+    // stable: once Sources follows Network the condition no longer holds.
+    if(WANT_SOURCES_LAST){ var ro=0,rt=setInterval(function(){ ro++; try{
+      var tabs=deepCollect('[role="tab"]'),src=null,net=null;
+      for(var i=0;i<tabs.length;i++){ var n=txt(tabs[i]); if(SRCNAME.has(n))src=tabs[i]; else if(NETNAME.has(n))net=tabs[i]; }
+      if(src&&net&&src.parentElement&&src.parentElement===net.parentElement&&(src.compareDocumentPosition(net)&Node.DOCUMENT_POSITION_FOLLOWING)){ net.parentElement.insertBefore(src,net.nextSibling); }
+    }catch(_){} if(ro>120)clearInterval(rt); },60); }
     // DOM fallback: only if the ESM module couldn't be resolved at all.
     function domFallback(){ var cachedBar=null;
       function findBar(){ if(cachedBar&&cachedBar.isConnected)return cachedBar; cachedBar=null; var tabs=deepCollect('[role="tab"]'); var a=null; for(var i=0;i<tabs.length;i++){if(KEEPNAME.has(txt(tabs[i]))){a=tabs[i];break;}} if(!a)return null; var p=a.parentElement; while(p){try{if(p.querySelectorAll('[role="tab"]').length>1){cachedBar=p;return p;}}catch(_){} p=p.parentElement;} cachedBar=a.parentElement; return cachedBar; }

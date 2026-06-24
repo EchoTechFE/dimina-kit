@@ -161,6 +161,7 @@ export function useProjectRuntimeController(
 
   const panelDataHook = usePanelData({
     compileStatus: sessionHook.compileStatus,
+    activePagePath: simulatorHook.currentPage,
   })
 
   const rightPaneHook = useRightPane({

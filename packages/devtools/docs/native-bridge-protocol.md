@@ -276,7 +276,7 @@ simulator 的 NavigationBar 完全按微信 MiniProgram 规范实现（仅在 de
 
 页面栈跑在 DeviceShell：`page-stack-controller.ts` 是纯 reducer（`ShellState.stack` 单条可见栈 + `tabStacks` 按 tab 缓存子栈 + `currentTabPath`），每个 `PageEntry` 对应一个 `<webview>`，按 bridgeId 复用 mount。`navigateTo` / `navigateBack` / `redirectTo` / `reLaunch` / `switchTab` 五个 reducer 产出 `{ next, effects }`，effect 含 lifecycle / closePage 两类，由 DeviceShell 翻译成 `PAGE_LIFECYCLE` / `PAGE_CLOSE` / 新 page 的 `PAGE_OPEN`。完整 reducer 契约（含 URL 同步、降级行为）见 [`./page-stack.md`](./page-stack.md)。
 
-TabBar 同样由 DeviceShell 渲染（`tab-bar.tsx` + `tab-bar-state.ts`），配置来自 `app-config.json` 的 `app.tabBar`（`TabBarConfig`，`bridge-channels.ts`）。8 个动态 API 走 `applyTabAction` reducer（颜色经 `sanitizeColor` 过滤），图标路径在 `tab-bar.tsx` `resolveIcon` 内解析：`http(s):` / `data:` / `blob:` / `//` 前缀原值返回；无 base 时返回 null；否则去掉 `/`、`./` 前缀，若剩余路径以 `${appId}/` 开头则先剥掉该前缀再 `joinUrl(resourceBaseUrl, …)`，普通本地路径直接 `joinUrl`。完整 TabBar API 与样式 gap 见 [`./tab-bar.md`](./tab-bar.md)。
+TabBar 同样由 DeviceShell 渲染（`tab-bar.tsx` + `tab-bar-state.ts`），配置来自 `app-config.json` 的 `app.tabBar`（`TabBarConfig`，`bridge-channels.ts`）。8 个动态 API 走 `applyTabAction` reducer（颜色经 `sanitizeColor` 过滤），图标路径在 `tab-bar.tsx` `resolveIcon` 内解析：`http(s):` / `data:` / `blob:` / `//` 前缀原值返回；无 base 时返回 null；否则去掉 `/`、`./` 前缀，编译器已把 iconPath 改写成从 server 根起的绝对路径 `/<appId>/main/static/…`（`resourceBaseUrl` 就是该 server 根 origin），故剩余路径以 `${appId}/` 开头时**保留** `<appId>` 段直接 `joinUrl(resourceBaseUrl, local)`（剥掉会丢段 → 404）；未被编译器改写的裸相对路径则补上包根 `<appId>/main/`。完整 TabBar API 与样式 gap 见 [`./tab-bar.md`](./tab-bar.md)。
 
 ## 9. 已知缺口
 

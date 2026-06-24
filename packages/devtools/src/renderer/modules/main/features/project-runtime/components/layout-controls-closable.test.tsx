@@ -28,19 +28,50 @@ function renderControls() {
   return { model, ...rendered }
 }
 
-describe('LayoutVisibilityToggles respects registry closable capability', () => {
-  it('cannot hide any built-in debug panel through the debug toolbar toggle', () => {
+describe('LayoutVisibilityToggles decouples debug region visibility from per-panel closable', () => {
+  it('hides the whole debug region in one click even though every debug panel is closable:false', () => {
     const { getByTestId, model } = renderControls()
     const toggle = getByTestId('layout-toolbar-toggle-debug')
 
-    expect(toggle).toBeDisabled()
-    expect(toggle).toHaveAttribute('title', '调试器固定显示')
+    // Three regions visible — the debug toggle is live, not pinned.
+    expect(toggle).not.toBeDisabled()
+
     fireEvent.click(toggle)
 
     const visible = panelIds(model.get())
     for (const panelId of DEBUG_PANELS) {
-      expect(visible.has(panelId), `${panelId} must remain visible when closable:false`).toBe(true)
+      expect(visible.has(panelId), `${panelId} must leave the tree when the region is hidden`).toBe(false)
     }
+  })
+
+  it('re-shows the debug region after it was hidden', () => {
+    const { getByTestId, model } = renderControls()
+    const toggle = getByTestId('layout-toolbar-toggle-debug')
+
+    fireEvent.click(toggle) // hide
+    expect(DEBUG_PANELS.some((p) => panelIds(model.get()).has(p))).toBe(false)
+
+    fireEvent.click(toggle) // show
+    const visible = panelIds(model.get())
+    for (const panelId of DEBUG_PANELS) {
+      expect(visible.has(panelId), `${panelId} must rejoin the tree when the region is shown`).toBe(true)
+    }
+  })
+
+  it('cannot hide the debug region when it is the only visible region', () => {
+    const { getByTestId, model } = renderControls()
+
+    // Collapse the other two regions, leaving debug as the sole visible region.
+    fireEvent.click(getByTestId('layout-toolbar-toggle-simulator'))
+    fireEvent.click(getByTestId('layout-toolbar-toggle-editor'))
+
+    const toggle = getByTestId('layout-toolbar-toggle-debug')
+    expect(toggle).toBeDisabled()
+
+    fireEvent.click(toggle)
+
+    const visible = panelIds(model.get())
+    expect(DEBUG_PANELS.some((p) => visible.has(p))).toBe(true)
   })
 
   it.each(['simulator', 'editor'] as const)(

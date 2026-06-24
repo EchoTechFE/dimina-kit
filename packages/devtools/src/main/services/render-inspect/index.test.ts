@@ -22,16 +22,60 @@ import { createRenderInspector } from './index.js'
 
 const IIFE_SOURCE = '/*inspect-iife*/'
 
+/** A fake of `wc.debugger` exposing the surface the inspector drives over CDP. */
+interface FakeDebugger {
+  isAttached: ReturnType<typeof vi.fn>
+  attach: ReturnType<typeof vi.fn>
+  detach: ReturnType<typeof vi.fn>
+  sendCommand: ReturnType<typeof vi.fn>
+  on: ReturnType<typeof vi.fn>
+  removeListener: ReturnType<typeof vi.fn>
+}
+
 interface FakeWc {
   id: number
   isDestroyed: ReturnType<typeof vi.fn>
   executeJavaScript: ReturnType<typeof vi.fn>
   once: ReturnType<typeof vi.fn>
+  debugger: FakeDebugger
 }
 
+/** Record of every sendCommand invocation as a `[method, params]` tuple. */
+type SentCommand = [string, unknown]
+
+/**
+ * Per-method override map for the debugger `sendCommand` fake. A method name
+ * maps to a function returning the Promise that command should resolve/reject
+ * with; absent methods fall back to resolving `{}`.
+ */
+type SendCommandOverrides = Record<string, (params?: unknown) => Promise<unknown>>
+
 /** Captured `once('destroyed', cb)` handlers per fake wc, so tests can fire them. */
-function makeWc(id: number): FakeWc & { fireDestroyed: () => void } {
+function makeWc(id: number): FakeWc & {
+  fireDestroyed: () => void
+  sent: SentCommand[]
+  setSendCommand: (overrides: SendCommandOverrides) => void
+} {
   const destroyedCbs: Array<() => void> = []
+  const sent: SentCommand[] = []
+  let overrides: SendCommandOverrides = {}
+
+  const dbg: FakeDebugger = {
+    // Reuse path is the common case: the guest debugger is already attached by
+    // the Elements forwarder, so the inspector must NOT attach a second session.
+    isAttached: vi.fn(() => true),
+    attach: vi.fn(),
+    detach: vi.fn(),
+    sendCommand: vi.fn(async (method: string, params?: unknown) => {
+      sent.push([method, params])
+      const override = overrides[method]
+      if (override) return override(params)
+      return {}
+    }),
+    on: vi.fn(),
+    removeListener: vi.fn(),
+  }
+
   const wc: FakeWc = {
     id,
     isDestroyed: vi.fn(() => false),
@@ -42,12 +86,22 @@ function makeWc(id: number): FakeWc & { fireDestroyed: () => void } {
     once: vi.fn((event: string, cb: () => void) => {
       if (event === 'destroyed') destroyedCbs.push(cb)
     }),
+    debugger: dbg,
   }
   return Object.assign(wc, {
+    sent,
+    setSendCommand: (next: SendCommandOverrides) => {
+      overrides = next
+    },
     fireDestroyed: () => {
       for (const cb of destroyedCbs) cb()
     },
   })
+}
+
+/** A resolved `Runtime.evaluate` shape carrying the CDP objectId. */
+function evaluateResult(objectId: string): unknown {
+  return { result: { objectId } }
 }
 
 function asWc(wc: FakeWc): import('electron').WebContents {
@@ -140,7 +194,9 @@ describe('createRenderInspector — getWxml', () => {
 })
 
 describe('createRenderInspector — highlight', () => {
-  it('drives highlightElement with the JSON-encoded sid and returns the result', async () => {
+  // The injected guest API still computes the inspection geometry by sid; only
+  // the visual draw moved off executeJavaScript onto a CDP Overlay command.
+  it('drives the guest inspection by JSON-encoded sid and returns the result', async () => {
     const inspection = { sid: 'devtools-3', rect: { x: 0, y: 0, width: 1, height: 1 } }
     const wc = makeWc(1)
     wc.executeJavaScript.mockResolvedValueOnce(undefined).mockResolvedValueOnce(inspection)
@@ -149,7 +205,6 @@ describe('createRenderInspector — highlight', () => {
 
     expect(result).toEqual(inspection)
     const code = allCode(wc)
-    expect(code).toContain('highlightElement')
     expect(code).toContain(JSON.stringify('devtools-3'))
   })
 
@@ -173,29 +228,170 @@ describe('createRenderInspector — highlight', () => {
   })
 })
 
-describe('createRenderInspector — unhighlight', () => {
-  it('drives unhighlightElement', async () => {
-    const wc = makeWc(1)
-    await inspector.unhighlight(asWc(wc))
+describe('createRenderInspector — highlight draws the native CDP Overlay', () => {
+  /** Wire a wc whose injected guest API yields an inspection for the given sid. */
+  function wcWithInspection(id: number, inspection: unknown) {
+    const wc = makeWc(id)
+    wc.executeJavaScript.mockResolvedValueOnce(undefined).mockResolvedValueOnce(inspection)
+    return wc
+  }
 
-    expect(allCode(wc)).toContain('unhighlightElement')
+  const INSPECTION = {
+    sid: 'devtools-9',
+    rect: { x: 1, y: 2, width: 3, height: 4 },
+    style: {},
+  }
+
+  it('reuses an already-attached debugger and does not attach a second session', async () => {
+    const wc = wcWithInspection(1, INSPECTION)
+    wc.debugger.isAttached.mockReturnValue(true)
+    wc.setSendCommand({ 'Runtime.evaluate': async () => evaluateResult('OBJ-1') })
+
+    await inspector.highlight(asWc(wc), 'devtools-9')
+
+    expect(wc.debugger.attach).not.toHaveBeenCalled()
   })
 
-  it('swallows rejection (resolves void)', async () => {
+  it('attaches the 1.3 protocol only when the debugger is not yet attached', async () => {
+    const wc = wcWithInspection(1, INSPECTION)
+    wc.debugger.isAttached.mockReturnValue(false)
+    wc.setSendCommand({ 'Runtime.evaluate': async () => evaluateResult('OBJ-1') })
+
+    await inspector.highlight(asWc(wc), 'devtools-9')
+
+    expect(wc.debugger.attach).toHaveBeenCalledWith('1.3')
+  })
+
+  it('enables DOM before Overlay — Overlay.enable is not sent while DOM.enable hangs', async () => {
+    const wc = wcWithInspection(1, INSPECTION)
+    // DOM.enable never resolves; Chromium rejects Overlay.enable unless DOM is
+    // enabled first, so the inspector must gate Overlay.enable behind DOM.enable.
+    wc.setSendCommand({
+      'DOM.enable': () => new Promise<unknown>(() => {}),
+      'Runtime.evaluate': async () => evaluateResult('OBJ-1'),
+    })
+
+    await inspector.highlight(asWc(wc), 'devtools-9')
+
+    const methods = wc.sent.map(([method]) => method)
+    expect(methods).toContain('DOM.enable')
+    expect(methods).not.toContain('Overlay.enable')
+  })
+
+  it('resolves the element to an objectId via Runtime.evaluate (returnByValue:false)', async () => {
+    const wc = wcWithInspection(1, INSPECTION)
+    wc.setSendCommand({ 'Runtime.evaluate': async () => evaluateResult('OBJ-1') })
+
+    await inspector.highlight(asWc(wc), 'devtools-9')
+
+    const evaluate = wc.sent.find(([method]) => method === 'Runtime.evaluate')
+    expect(evaluate).toBeDefined()
+    expect(evaluate?.[1]).toMatchObject({ returnByValue: false })
+  })
+
+  it('feeds the Runtime.evaluate objectId into Overlay.highlightNode with a highlightConfig', async () => {
+    const wc = wcWithInspection(1, INSPECTION)
+    wc.setSendCommand({ 'Runtime.evaluate': async () => evaluateResult('OBJ-FROM-EVAL') })
+
+    await inspector.highlight(asWc(wc), 'devtools-9')
+
+    const evalIdx = wc.sent.findIndex(([method]) => method === 'Runtime.evaluate')
+    const hlIdx = wc.sent.findIndex(([method]) => method === 'Overlay.highlightNode')
+    expect(evalIdx).toBeGreaterThanOrEqual(0)
+    expect(hlIdx).toBeGreaterThanOrEqual(0)
+    // The highlight command carries the objectId produced by the evaluate.
+    expect(hlIdx).toBeGreaterThan(evalIdx)
+
+    const params = wc.sent[hlIdx][1] as Record<string, unknown>
+    expect(params.objectId).toBe('OBJ-FROM-EVAL')
+    expect(params.highlightConfig).toBeDefined()
+  })
+
+  it('returns the inspection even when the debugger draw rejects (data survives a failed draw)', async () => {
+    const wc = wcWithInspection(1, INSPECTION)
+    wc.setSendCommand({
+      'Runtime.evaluate': async () => evaluateResult('OBJ-1'),
+      'Overlay.highlightNode': async () => {
+        throw new Error('overlay boom')
+      },
+    })
+
+    await expect(inspector.highlight(asWc(wc), 'devtools-9')).resolves.toEqual(INSPECTION)
+  })
+
+  it('never throws when any debugger step rejects', async () => {
+    const wc = wcWithInspection(1, INSPECTION)
+    wc.setSendCommand({
+      'DOM.enable': async () => {
+        throw new Error('dom boom')
+      },
+    })
+
+    await expect(inspector.highlight(asWc(wc), 'devtools-9')).resolves.toEqual(INSPECTION)
+  })
+
+  it('returns null without touching the debugger when the guest yields no geometry', async () => {
+    const wc = makeWc(1)
+    wc.executeJavaScript.mockResolvedValueOnce(undefined).mockResolvedValueOnce(null)
+
+    const result = await inspector.highlight(asWc(wc), 'devtools-9')
+
+    expect(result).toBeNull()
+    expect(wc.debugger.sendCommand).not.toHaveBeenCalled()
+  })
+
+  it('does NOT send Overlay.highlightNode when the guest highlight call rejects', async () => {
     const wc = makeWc(1)
     wc.executeJavaScript
       .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(new Error('guest boom'))
 
+    const result = await inspector.highlight(asWc(wc), 'devtools-9')
+
+    expect(result).toBeNull()
+    const methods = wc.sent.map(([method]) => method)
+    expect(methods).not.toContain('Overlay.highlightNode')
+  })
+
+  it('touches neither executeJavaScript nor the debugger on a destroyed wc', async () => {
+    const wc = makeWc(1)
+    wc.isDestroyed.mockReturnValue(true)
+
+    const result = await inspector.highlight(asWc(wc), 'devtools-9')
+
+    expect(result).toBeNull()
+    expect(wc.executeJavaScript).not.toHaveBeenCalled()
+    expect(wc.debugger.sendCommand).not.toHaveBeenCalled()
+  })
+})
+
+describe('createRenderInspector — unhighlight', () => {
+  // The native overlay is cleared with Overlay.hideHighlight over the debugger.
+  it('sends Overlay.hideHighlight over the debugger', async () => {
+    const wc = makeWc(1)
+    await inspector.unhighlight(asWc(wc))
+
+    const methods = wc.sent.map(([method]) => method)
+    expect(methods).toContain('Overlay.hideHighlight')
+  })
+
+  it('swallows debugger rejection (resolves void)', async () => {
+    const wc = makeWc(1)
+    wc.setSendCommand({
+      'Overlay.hideHighlight': async () => {
+        throw new Error('debugger boom')
+      },
+    })
+
     await expect(inspector.unhighlight(asWc(wc))).resolves.toBeUndefined()
   })
 
-  it('is a no-op on a destroyed wc', async () => {
+  it('is a no-op on a destroyed wc (no sendCommand)', async () => {
     const wc = makeWc(1)
     wc.isDestroyed.mockReturnValue(true)
 
     await inspector.unhighlight(asWc(wc))
 
-    expect(wc.executeJavaScript).not.toHaveBeenCalled()
+    expect(wc.debugger.sendCommand).not.toHaveBeenCalled()
   })
 })

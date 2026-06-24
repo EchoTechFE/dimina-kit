@@ -513,45 +513,119 @@ describe('createWxmlSource — tree extraction', () => {
     expect(tree.tagName).toBe('pages/index/index')
   })
 
-  it('does NOT treat instance as page when proxy.__page__ marker is absent', () => {
-    // 子节点会继承 provides.path（Vue Object.create 链式 provides）。
-    // 缺 __page__ 标记的实例不应被误判为页面 —— 否则页面下每个子组件
-    // 都会被错误地命名成页面全路径。
-    // 这里构造一个有 components（避免走透明 template 分支）但没有
-    // proxy.__page__ 的实例，断言它走老路径返回 'page' 而非 page path。
+  it('does NOT treat a node that INHERITED provides.path as a page or component', () => {
+    // A descendant inherits its ancestor's provides.path (Vue Object.create
+    // chain), so its provided path EQUALS its parent's — it is neither a page
+    // (no __page__) nor a native-component boundary (path didn't change here).
+    // It must not be named the page path nor `page`.
     const instance = {
       type: {
         __scopeId: 'data-v-child',
         components: { 'dd-something': {} },
       },
       props: {},
-      // 有 provides.path 但缺 proxy.__page__（模拟子组件继承场景）
+      // Inherited page path + no __page__; the parent provides the SAME path,
+      // so this is an ordinary descendant, not a component boundary.
       provides: { path: '/pages/index/index' },
+      parent: { provides: { path: '/pages/index/index' } },
       subTree: { children: [] },
     }
     createMockIframe(instance)
 
     const tree = extract()!
     expect(tree.tagName).not.toBe('pages/index/index')
-    // 走老路径返回 'page'（__scopeId && components）
-    expect(tree.tagName).toBe('page')
+    expect(tree.tagName).not.toBe('page')
   })
 
-  it('falls back to plain `page` tagName when proxy.__page__ is absent and matches old detection', () => {
-    // 老路径：__scopeId && components 时返回 'page'
+  it('a Taro template wrapper (dd-tpl-*) under a page is transparent, not a second page', () => {
+    // 真机（Taro 小程序）实证：页面 dd-page 之下挂着编译产物 template 包装器
+    // dd-tpl-taro_tmpl / dd-tpl-tmpl_0_3，它们 nameless + __scopeId + components
+    // 且共用页面的 scopeId。它们必须透传 children，绝不能各自再生成一个 `page`。
+    const templateType = { __scopeId: 'data-v-page', components: {} }
+    const leaf = makeInstance('view', { class: 'card' })
+    const templateWrapper = {
+      type: templateType,
+      props: { data: {} },
+      appContext: { components: { 'dd-tpl-taro_tmpl': templateType } },
+      provides: { path: 'pages/index/index' },
+      subTree: { children: [{ component: leaf }] },
+    }
+    const page = {
+      type: { __scopeId: 'data-v-page', components: {} },
+      props: {},
+      proxy: { __page__: true },
+      provides: { path: 'pages/index/index' },
+      subTree: { children: [{ component: templateWrapper }] },
+    }
+    // Real Vue instances carry `parent`; the wrapper inherits the page's provides
+    // object, so its provided path EQUALS the page's — proving it is not a native
+    // component boundary (which would provide its own, different path).
+    ;(templateWrapper as Record<string, unknown>).parent = page
+    createMockIframe(page)
+
+    const tree = extract()!
+    expect(tree.tagName).toBe('pages/index/index')
+    // exactly one page root; the template wrapper is dropped, its leaf hoisted
+    // through the page's #shadow-root.
+    const shadow = tree.children.find((c) => c.tagName === '#shadow-root')!
+    expect(shadow).toBeDefined()
+    expect(shadow.children.map((c) => c.tagName)).toEqual(['view'])
+    function countPages(node: { tagName: string, children?: { tagName: string }[] }): number {
+      const self = node.tagName === 'page' ? 1 : 0
+      const kids = (node.children ?? []) as typeof node[]
+      return self + kids.reduce((n, c) => n + countPages(c), 0)
+    }
+    expect(countPages(tree)).toBe(0)
+  })
+
+  it('renders a native custom component as its full path wrapped in a #shadow-root', () => {
+    // A native dimina custom component provides its OWN path (≠ the page's) in
+    // setup. It must surface as a node tagged with that full path and wrap its
+    // rendered content in a synthetic #shadow-root — matching WeChat, which shows
+    // each custom component as a path-named node with an open shadow root.
+    const leaf = makeInstance('view', { class: 'inner' })
+    const component = {
+      type: { __scopeId: 'data-v-comp', components: {} },
+      props: {},
+      provides: { path: 'modules/components/privacy-pop/index' },
+      subTree: { children: [{ component: leaf }] },
+    }
+    const page = {
+      type: { __scopeId: 'data-v-page', components: {} },
+      props: {},
+      proxy: { __page__: true },
+      provides: { path: 'pages/index/index' },
+      subTree: { children: [{ component }] },
+    }
+    ;(component as Record<string, unknown>).parent = page
+    createMockIframe(page)
+
+    const tree = extract()!
+    expect(tree.tagName).toBe('pages/index/index')
+    const pageShadow = tree.children.find((c) => c.tagName === '#shadow-root')!
+    const comp = pageShadow.children.find(
+      (c) => c.tagName === 'modules/components/privacy-pop/index',
+    )!
+    expect(comp, 'native component should surface under the page shadow root').toBeDefined()
+    // The component's own content hangs under its OWN #shadow-root boundary.
+    expect(comp.children[0]?.tagName).toBe('#shadow-root')
+    expect(comp.children[0]?.children.map((c) => c.tagName)).toEqual(['view'])
+  })
+
+  it('a nameless __scopeId component with no recoverable registration falls back to `template`', () => {
     const instance = {
       type: {
         __scopeId: 'data-v-abc',
         components: { 'dd-something': {} },
       },
       props: {},
-      // 没有 proxy.__page__
+      // 没有 proxy.__page__，也无从 parent/app 反查到注册名
       subTree: { children: [] },
     }
     createMockIframe(instance)
 
     const tree = extract()!
-    expect(tree.tagName).toBe('page')
+    expect(tree.tagName).toBe('template')
     expect(tree.children).toEqual([])
   })
 

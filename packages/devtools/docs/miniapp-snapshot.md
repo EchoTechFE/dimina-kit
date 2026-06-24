@@ -299,7 +299,7 @@ function useNativeChannelSnapshot<T>(opts: {
 
 - `enabled` 翻 true 时 seed 一次（`invoke(getChannel)`），并订阅 `eventChannel` 的 push；`enabled` 为 false 时不 seed、不订阅（首次以 `useState(initial)` 初始化），但不会把已收到的 `data` 重置回 `initial`。
 - `data` 永远是「最后一份快照」，没有任何增量 reducer——`Event` push 与 `refresh()` 的 `GetSnapshot` 都整份替换。
-- 面板里的 **UI 态**（如 AppData 当前选中的 tab `activeBridgeId`）留在 renderer，作为对 `data` 的**单点派生**：由 `data.bridges` 推出 id 列表后，`activeBridgeId = selectedBridgeId && bridgeIds.includes(selectedBridgeId) ? selectedBridgeId : bridgeIds.at(-1) ?? null`（用户手选优先，否则跟随最新 page）。
+- 面板里的 **UI 态**（如 AppData 当前选中的 tab `activeBridgeId`）留在 renderer，作为对 `data` 的**单点派生**：由 `data.bridges` 推出 id 列表后，`activeBridgeId = selectedBridgeId && bridgeIds.includes(selectedBridgeId) ? selectedBridgeId : (activeFollowId ?? bridgeIds.at(-1) ?? null)`（用户手选优先；否则跟随模拟器当前活动页 `activePagePath`——pagePath 匹配的 bridge，匹配不到才回退到最新 page）。活动页切换（如 tabBar 切 tab）会清掉手选，让面板重新跟随屏幕上的页；见 `useActiveBridgeId`。
 
 ## 8. 这套框架还能解决什么
 

@@ -129,3 +129,76 @@ describe('useActiveBridgeId — synchronous derivation contract', () => {
     expect(result.current.activeBridgeId).toBe('B')
   })
 })
+
+describe('useActiveBridgeId — follows the simulator active page', () => {
+  // Auto-follow targets the page on screen, NOT just the last-inited bridge.
+  it('selects the bridge matching activePagePath instead of the last bridge', () => {
+    // B is last, but the active page is A → A wins.
+    const { result } = renderHook(() => useActiveBridgeId([A, B], '/a'))
+    expect(result.current.activeBridgeId).toBe('A')
+  })
+
+  // Switching a tabBar tab re-inits no bridge; only activePagePath changes.
+  it('re-follows when activePagePath changes with the same bridge set', () => {
+    const { result, rerender } = renderHook(
+      ({ active }) => useActiveBridgeId([A, B, C], active),
+      { initialProps: { active: '/a' } },
+    )
+    expect(result.current.activeBridgeId).toBe('A')
+
+    rerender({ active: '/c' })
+    expect(result.current.activeBridgeId).toBe('C')
+  })
+
+  // A tab switch overrides a stale manual pick — the panel returns to the page
+  // the user is now looking at.
+  it('drops a manual pick when the active page changes', () => {
+    const { result, rerender } = renderHook(
+      ({ active }) => useActiveBridgeId([A, B, C], active),
+      { initialProps: { active: '/a' } },
+    )
+    act(() => {
+      result.current.setActiveBridge('B')
+    })
+    expect(result.current.activeBridgeId).toBe('B')
+
+    // User switches the simulator to page C → follow C, not the pinned B.
+    rerender({ active: '/c' })
+    expect(result.current.activeBridgeId).toBe('C')
+  })
+
+  // While the active page is unchanged, a manual pick is still respected.
+  it('keeps a manual pick while activePagePath is unchanged', () => {
+    const { result, rerender } = renderHook(
+      ({ active }) => useActiveBridgeId([A, B, C], active),
+      { initialProps: { active: '/a' } },
+    )
+    act(() => {
+      result.current.setActiveBridge('B')
+    })
+    expect(result.current.activeBridgeId).toBe('B')
+
+    rerender({ active: '/a' })
+    expect(result.current.activeBridgeId).toBe('B')
+  })
+
+  // pagePath comparison tolerates a leading slash on either side.
+  it('matches activePagePath regardless of a leading slash', () => {
+    const bareA = { id: 'A', pagePath: 'pages/a/a' }
+    const bareB = { id: 'B', pagePath: 'pages/b/b' }
+    const { result } = renderHook(() => useActiveBridgeId([bareA, bareB], '/pages/a/a'))
+    expect(result.current.activeBridgeId).toBe('A')
+  })
+
+  // No active page / no matching bridge → keep the legacy newest-bridge default.
+  it('falls back to the last bridge when the active page is empty or unmatched', () => {
+    const { result, rerender } = renderHook(
+      ({ active }) => useActiveBridgeId([A, B], active),
+      { initialProps: { active: '' } },
+    )
+    expect(result.current.activeBridgeId).toBe('B')
+
+    rerender({ active: '/zzz' })
+    expect(result.current.activeBridgeId).toBe('B')
+  })
+})

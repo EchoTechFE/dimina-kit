@@ -175,11 +175,28 @@ function projectAwareResourcePath(resourceUrl: string, context: ProjectSourceCon
   const raw = resourceUrl.trim()
   if (!raw) return null
 
+  // Taro/webpack build + runtime chunks are compiled output, not hand-written
+  // source. They also collide: dimina's own service runtime attributes its
+  // `log()` helper to a `common.js` on the SAME dev-server origin as the
+  // project's compiled `common.js` chunk, so the two are URL-indistinguishable
+  // and a dimina-core frame would otherwise open the project's chunk. Drop these
+  // well-known chunk basenames so a click falls through to the DevTools Sources
+  // panel instead of opening the wrong (or generated) file. Inlined (not a module
+  // const) because this function is `.toString()`-injected into the DevTools realm.
+  const excludeBuildChunk = (rel: string | null): string | null => {
+    if (!rel) return rel
+    const base = rel.split('/').pop()
+    return base === 'common.js' || base === 'vendors.js' || base === 'runtime.js'
+      || base === 'taro.js' || base === 'babelHelpers.js'
+      ? null
+      : rel
+  }
+
   // Chromium may hand the open-resource hook a raw absolute filesystem path.
   const normalizedRaw = normalizeSlashPath(raw)
   if (projectRoot && (normalizedRaw === projectRoot || normalizedRaw.startsWith(`${projectRoot}/`))) {
     const relative = normalizedRaw.slice(projectRoot.length).replace(/^\/+/, '')
-    return safeRelativePath(relative.split('/').filter(Boolean))
+    return excludeBuildChunk(safeRelativePath(relative.split('/').filter(Boolean)))
   }
   // Sourcemap sources commonly use virtual root paths such as `/pages/x.js`.
   // Real host filesystem paths use well-known absolute roots; when they are
@@ -205,9 +222,9 @@ function projectAwareResourcePath(resourceUrl: string, context: ProjectSourceCon
   if (resource.protocol === 'file:') {
     const filePath = normalizeSlashPath(resource.pathname)
     if (!projectRoot || (filePath !== projectRoot && !filePath.startsWith(`${projectRoot}/`))) return null
-    return safeRelativePath(
+    return excludeBuildChunk(safeRelativePath(
       filePath.slice(projectRoot.length).replace(/^\/+/, '').split('/').filter(Boolean),
-    )
+    ))
   }
 
   if (resource.protocol !== 'http:' && resource.protocol !== 'https:') return null
@@ -218,7 +235,7 @@ function projectAwareResourcePath(resourceUrl: string, context: ProjectSourceCon
     segments = segments.slice(1)
     if (context.outputRoot && segments[0] === context.outputRoot) segments = segments.slice(1)
   }
-  return safeRelativePath(segments)
+  return excludeBuildChunk(safeRelativePath(segments))
 }
 
 /** Read the project/source routing metadata carried by a service-host spawn URL. */
@@ -253,8 +270,15 @@ export function projectSourceContextFromServiceHostUrl(
 /**
  * Build the DevTools-front-end glue for project source links.
  *
- * It keeps the existing `setOpenResourceHandler` transport, but only forwards
- * locations that map to the active project. A DOM observer expands Chromium's
+ * Primary transport is a capture-phase click interceptor: a project-source link
+ * click is redirected to `InspectorFrontendHost.openInNewTab(<sentinel>)` (which
+ * Electron surfaces as `devtools-open-url` on the inspected wc) and the default
+ * DevTools Sources reveal is suppressed. This survives current Chromium DevTools,
+ * where the legacy `Host.InspectorFrontendHost.setOpenResourceHandler` hook is
+ * gone (the host moved to the top-level `InspectorFrontendHost` global and that
+ * method no longer exists). The `setOpenResourceHandler` registration below is
+ * kept as a no-op-when-absent fallback for older fronts. Only locations that map
+ * to the active project are forwarded; a DOM observer expands Chromium's
  * basename-only console labels to project-relative paths.
  */
 export function buildDevtoolsProjectSourceLinksScript(context: ProjectSourceContext): string {
@@ -276,6 +300,7 @@ export function buildDevtoolsProjectSourceLinksScript(context: ProjectSourceCont
         const safeRelativePath = ${safeRelativePath.toString()}
         const observedRoots = new Set()
         const observers = []
+        const clickBindings = []
         let timer = null
         const state = {
           dispose() {
@@ -286,10 +311,105 @@ export function buildDevtoolsProjectSourceLinksScript(context: ProjectSourceCont
             for (const observer of observers.splice(0)) {
               try { observer.disconnect() } catch (_) {}
             }
+            for (const binding of clickBindings.splice(0)) {
+              try { binding.target.removeEventListener('click', binding.fn, true) } catch (_) {}
+            }
             observedRoots.clear()
           },
         }
         globalThis[stateKey] = state
+
+        // The InspectorFrontendHost that owns openInNewTab. Across DevTools
+        // versions it lives on the top-level \`InspectorFrontendHost\` global, the
+        // legacy \`Host.InspectorFrontendHost\`, or \`DevToolsHost\`; resolve at call
+        // time so a late-bootstrapped host is still found.
+        function resolveOpenInNewTabHost() {
+          const candidates = [
+            globalThis.InspectorFrontendHost,
+            globalThis.Host && globalThis.Host.InspectorFrontendHost,
+            globalThis.DevToolsHost,
+          ]
+          for (const host of candidates) {
+            if (host && typeof host.openInNewTab === 'function') return host
+          }
+          return null
+        }
+
+        // Encode (url, 0-based line, 0-based column) as the sentinel the main
+        // process decodes from \`devtools-open-url\` and routes to Monaco.
+        function openInEditor(url, line, column) {
+          const host = resolveOpenInNewTabHost()
+          if (!host) return false
+          const p = new URLSearchParams()
+          p.set('u', String(url))
+          if (typeof line === 'number' && isFinite(line)) p.set('l', String(line))
+          if (typeof column === 'number' && isFinite(column)) p.set('c', String(column))
+          try { host.openInNewTab(${scheme} + ':?' + p.toString()) } catch (_) { return false }
+          return true
+        }
+
+        // Resolve a clicked link element to a project source location. Returns
+        // the FULL resource url (the main process re-maps it against the active
+        // project) plus its display line/column when present.
+        function projectLocationForLink(link) {
+          if (!link) return null
+          const candidates = [
+            link.getAttribute && link.getAttribute('data-url'),
+            link.getAttribute && link.getAttribute('href'),
+            link.getAttribute && link.getAttribute('title'),
+          ]
+          for (const candidate of candidates) {
+            if (!candidate) continue
+            const location = splitLocation(candidate)
+            if (!diminaProjectSourcePath(location.url, cfg)) continue
+            const suffix = location.suffix
+              || ((String(link.textContent || '').match(/(:\\d+(?::\\d+)?)$/) || [])[1] || '')
+            return { url: location.url, suffix }
+          }
+          return null
+        }
+
+        // DevTools shows 1-based line:column in link text; the main process
+        // contract expects 0-based (it re-adds 1). Convert here.
+        function parseSuffix(suffix) {
+          const m = String(suffix || '').match(/^:(\\d+)(?::(\\d+))?$/)
+          if (!m) return { line: undefined, column: undefined }
+          const line = Math.max(0, parseInt(m[1], 10) - 1)
+          const column = m[2] != null ? Math.max(0, parseInt(m[2], 10) - 1) : undefined
+          return { line, column }
+        }
+
+        // Capture-phase click handler: route a project-source link click to
+        // Monaco instead of the DevTools Sources panel. Plain primary clicks only
+        // — modified clicks (cmd/ctrl/shift/alt, middle button) fall through to
+        // DevTools so its own "open in new tab" / multi-select still work.
+        function onLinkClick(event) {
+          if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+          const path = typeof event.composedPath === 'function' ? event.composedPath() : []
+          let link = null
+          for (const node of path) {
+            if (node && node.nodeType === 1 && node.classList && node.classList.contains('devtools-link')) {
+              link = node
+              break
+            }
+          }
+          if (!link) return
+          const location = projectLocationForLink(link)
+          if (!location) return
+          const { line, column } = parseSuffix(location.suffix)
+          if (!openInEditor(location.url, line, column)) return
+          event.preventDefault()
+          event.stopImmediatePropagation()
+        }
+
+        function bindClicks(target) {
+          if (!target || !target.addEventListener) return
+          for (const binding of clickBindings) {
+            if (binding.target === target) return
+          }
+          target.addEventListener('click', onLinkClick, true)
+          clickBindings.push({ target, fn: onLinkClick })
+        }
 
         function splitLocation(value) {
           const raw = String(value || '')
@@ -321,6 +441,7 @@ export function buildDevtoolsProjectSourceLinksScript(context: ProjectSourceCont
         function observeRoot(root) {
           if (!root || !root.querySelectorAll || observedRoots.has(root)) return
           observedRoots.add(root)
+          bindClicks(root)
 
           const observer = new MutationObserver((records) => {
             for (const record of records) {
@@ -355,23 +476,25 @@ export function buildDevtoolsProjectSourceLinksScript(context: ProjectSourceCont
 
         observeRoot(document)
 
+        // Fallback for older DevTools fronts that still expose the
+        // setOpenResourceHandler hook. On current Chromium the method is gone,
+        // so this poll simply times out and the capture-phase click interceptor
+        // is the only live path. When the hook IS present the interceptor still
+        // wins (it runs in capture and stops propagation), so the two never
+        // double-open the same click.
         let tries = 0
         timer = setInterval(() => {
           tries++
           try {
-            const Host = globalThis.Host
-            const host = Host && Host.InspectorFrontendHost
-            if (host && typeof host.setOpenResourceHandler === 'function'
-                     && typeof host.openInNewTab === 'function') {
+            const host = resolveOpenInNewTabHost()
+            if (host && typeof host.setOpenResourceHandler === 'function') {
               host.setOpenResourceHandler((url, lineNumber, columnNumber) => {
-                try {
-                  if (!diminaProjectSourcePath(String(url), cfg)) return
-                  const p = new URLSearchParams()
-                  p.set('u', String(url))
-                  if (typeof lineNumber === 'number') p.set('l', String(lineNumber))
-                  if (typeof columnNumber === 'number') p.set('c', String(columnNumber))
-                  host.openInNewTab(${scheme} + ':?' + p.toString())
-                } catch (_) {}
+                if (!diminaProjectSourcePath(String(url), cfg)) return
+                openInEditor(
+                  String(url),
+                  typeof lineNumber === 'number' ? lineNumber : undefined,
+                  typeof columnNumber === 'number' ? columnNumber : undefined,
+                )
               })
               clearInterval(timer)
               timer = null
