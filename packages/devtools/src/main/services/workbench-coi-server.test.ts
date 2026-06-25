@@ -5,10 +5,17 @@
  * sandbox invariants that keep an in-renderer workbench — or any localhost
  * page — from reading or mutating files outside the active project root.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+
+// The COI server pulls in `electron` transitively (project-fs → ipc-registry's
+// top-level `import { ipcMain } from 'electron'`). CI has no Electron binary, so
+// the unmocked import throws at module-eval. The server never touches ipcMain;
+// a no-op stub is enough to let the module load.
+vi.mock('electron', () => ({ ipcMain: { handle: vi.fn(), removeHandler: vi.fn(), on: vi.fn(), off: vi.fn() } }))
+
 import { startWorkbenchCoiServer, type WorkbenchCoiServer } from './workbench-coi-server.js'
 
 let tmpParent = ''
