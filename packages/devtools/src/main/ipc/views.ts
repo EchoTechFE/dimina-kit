@@ -38,6 +38,18 @@ export function registerViewsIpc(
       )
       ctx.views.setSimulatorDevtoolsBounds(bounds)
     })
+    // Embedded workbench editor: forward anchor (the MAIN renderer measures
+    // the 'editor' dock slot rect → workbench WCV bounds). invoke, mirroring
+    // SimulatorDevtoolsBounds. No-op in the view manager when the workbench view
+    // was never attached (the host did not opt into the workbench editor).
+    .handle(ViewChannel.WorkbenchBounds, (_event, ...args: unknown[]) => {
+      const [bounds] = validate(
+        ViewChannel.WorkbenchBounds,
+        ViewBoundsSchema,
+        args,
+      )
+      ctx.views.setWorkbenchBounds(bounds)
+    })
     // Host-controllable toolbar: forward anchor (the MAIN renderer measures the
     // placeholder rect → toolbar WCV bounds). invoke, mirroring
     // SimulatorDevtoolsBounds. Sender is the trusted main renderer.

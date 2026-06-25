@@ -136,15 +136,15 @@ describe('buildDockRegistry — split into 5 fine panels', () => {
     ).toBe('console')
   })
 
-  it('registers wxml/appdata/storage/compile/editor/simulator as DOM panels', () => {
+  it('registers wxml/appdata/storage/compile/simulator as DOM panels', () => {
     // Bug guarded: the four React-content debug tabs must be DOM panels (so
     // renderDomPanel renders them).
     //
-    // CONTRACT CHANGE (consolidation): `simulator` is now a DOM panel, not a
-    // native one. A bare native slot renders no chrome, but the simulator needs
-    // its device/zoom pickers + compile overlays + page-path bar; so
-    // `renderDomPanel('simulator')` renders `SimulatorPanel`, which owns the
-    // simulator WCV anchor itself. `console` remains the only native panel.
+    // `simulator` is a DOM panel, not a native one. A bare native slot renders no
+    // chrome, but the simulator needs its device/zoom pickers + compile overlays
+    // + page-path bar; so `renderDomPanel('simulator')` renders `SimulatorPanel`,
+    // which owns the simulator WCV anchor itself. `console` + `editor` are the
+    // native panels.
     const registry = buildDockRegistry()
 
     expect(registry.get('wxml')?.kind).toBe('dom')
@@ -152,9 +152,20 @@ describe('buildDockRegistry — split into 5 fine panels', () => {
     expect(registry.get('storage')?.kind).toBe('dom')
     expect(registry.get('compile')?.kind).toBe('dom')
 
-    expect(registry.get('editor')?.kind).toBe('dom')
-
     expect(registry.get('simulator')?.kind).toBe('dom')
+  })
+
+  it('registers editor as a DOM structural panel (like the simulator)', () => {
+    // The 'editor' slot is the embedded VS Code workbench, but it is a DOM
+    // structural panel — exactly like the simulator. `renderDomPanel('editor')`
+    // renders `EditorPanel`, a full-size anchor div that owns the workbench
+    // WebContentsView placement itself. It must be a DOM body so the dock mounts a
+    // `[data-deck-panel-body="editor"]` region for it; a bare native slot would
+    // not give the structural-panel tabless body the layout contract expects.
+    const registry = buildDockRegistry()
+    const editorPanel = registry.get('editor')
+
+    expect(editorPanel?.kind).toBe('dom')
   })
 
   it('registers every built-in debug tab as non-closable', () => {

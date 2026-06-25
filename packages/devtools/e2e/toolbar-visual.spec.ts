@@ -59,13 +59,13 @@ test('toolbar: refactored visual layout (no right-pane tabs, compile-mode dropdo
   await expect(visibilityGroup).toBeVisible()
   await expect(visibilityGroup.locator('button[title="隐藏模拟器"], button[title="显示模拟器"]')).toBeVisible()
   await expect(visibilityGroup.locator('button[title="隐藏编辑器"], button[title="显示编辑器"]')).toBeVisible()
-  // The debug panels are all `closable:false`, so the debug toggle is
-  // DETERMINISTICALLY in its pinned state: title "调试器固定显示" and disabled.
-  // Assert exactly that — a hide/show title here would mean the closable:false
-  // capability regressed.
-  const debugToggle = visibilityGroup.locator('button[title="调试器固定显示"]')
+  // The debug region toggle is decoupled from each panel's per-tab `closable`
+  // capability: even though the debug panels are `closable:false` (no per-tab ×),
+  // the region toggle still hides/shows the whole region as a unit. With the
+  // region visible at startup the toggle reads "隐藏调试器"; it is only disabled
+  // when debug is the LAST visible region (not the case in the default layout).
+  const debugToggle = visibilityGroup.locator('button[title="隐藏调试器"], button[title="显示调试器"]')
   await expect(debugToggle).toBeVisible()
-  await expect(debugToggle).toBeDisabled()
 
   // Screenshot — resolve test-results relative to THIS spec file so the
   // output lands inside packages/devtools/test-results regardless of cwd.

@@ -10,11 +10,13 @@
  * The coarse `debug` panel is split into FIVE independent dock panels —
  * wxml / appdata / storage / console / compile — so each is its own dockable
  * unit. `console` is the only NATIVE panel (a main-process WebContentsView
- * routed through DockView's NativeSlot). `simulator` is a DOM panel:
- * `renderDomPanel('simulator')` renders `SimulatorPanel`, which draws the
- * device/zoom chrome AND owns the simulator WebContentsView anchor itself (a
- * bare native slot would render no chrome). editor + the four React-content
- * debug tabs (wxml/appdata/storage/compile) are DOM panels too. The simulator
+ * routed through DockView's NativeSlot). `simulator` and `editor` are DOM
+ * panels: `renderDomPanel('simulator')` renders `SimulatorPanel` (device/zoom
+ * chrome + the simulator WebContentsView anchor) and `renderDomPanel('editor')`
+ * renders `EditorPanel` (a full-size anchor div owning the workbench
+ * WebContentsView placement). Both are structural DOM bodies so the dock mounts
+ * a `[data-deck-panel-body]` region for them. The four React-content debug tabs
+ * (wxml/appdata/storage/compile) are DOM panels too. The simulator
  * leaf is floored at the device's pixel width via a `minPx` constraint so the
  * phone-region never shrinks below it; its sibling stays weight-sized (an all-fixed
  * split is rejected by `validateTree`).
@@ -38,14 +40,16 @@ import type {
 import type { DevtoolsPosition, SimulatorAlignment } from '../controllers/use-layout-store'
 
 /**
- * Register the seven dock panels: DOM simulator + native console + DOM
- * editor + the four React-content debug tabs (wxml/appdata/storage/compile).
+ * Register the seven dock panels: DOM simulator + DOM editor + native console +
+ * the four React-content debug tabs (wxml/appdata/storage/compile).
  *
- * `simulator` is a DOM panel: `renderDomPanel('simulator')` renders the
- * `SimulatorPanel` CHROME (device/zoom pickers, compile overlays, page-path
- * bar) and SimulatorPanel itself owns the main-process WebContentsView anchor
- * on its device-region div (via `createPlacementAnchor`). DockView's bare
- * `NativeSlot` would render no chrome, so the simulator cannot be native.
+ * `simulator` and `editor` are DOM panels: `renderDomPanel('simulator')`
+ * renders the `SimulatorPanel` CHROME (device/zoom pickers, compile overlays,
+ * page-path bar) owning the simulator WebContentsView anchor, and
+ * `renderDomPanel('editor')` renders `EditorPanel`, a full-size anchor div that
+ * owns the workbench WebContentsView placement (via `createPlacementAnchor`).
+ * Both are structural DOM bodies so the dock mounts a `[data-deck-panel-body]`
+ * region for them.
  *
  * `console` IS native: a main-process Chromium DevTools WebContentsView
  * overlaid onto a bare placeholder rect (no chrome). The four debug tabs are
@@ -63,6 +67,12 @@ export function buildDockRegistry(): PanelRegistry {
   // simulator + editor draw their own chrome (device picker / file path bar), so
   // they hide the engine tab entirely — their groups render no tab strip.
   registry.register({ kind: 'dom', id: 'simulator', title: 'Simulator', draggable: false, hideTab: true })
+  // The 'editor' slot is the embedded VS Code workbench. It is a DOM panel
+  // (like the simulator): `renderDomPanel('editor')` renders `EditorPanel`, a
+  // full-size anchor div that owns the workbench WebContentsView placement
+  // itself (via `createPlacementAnchor`). A bare native slot would render no
+  // chrome and, more importantly, the editor must stay a structural DOM body so
+  // the dock mounts a `[data-deck-panel-body="editor"]` region for it.
   registry.register({ kind: 'dom', id: 'editor', title: 'Editor', draggable: false, hideTab: true })
   registry.register({ kind: 'dom', id: 'wxml', title: 'WXML', dropPolicy: 'reorder-only', closable: false })
   registry.register({ kind: 'dom', id: 'appdata', title: 'AppData', dropPolicy: 'reorder-only', closable: false })

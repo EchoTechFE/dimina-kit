@@ -121,7 +121,6 @@ vi.mock('./controllers/use-layout-store', () => ({
 vi.mock('./components/project-toolbar', () => ({ ProjectToolbar: () => null }))
 vi.mock('./components/simulator-panel', () => ({ SimulatorPanel: () => null }))
 vi.mock('../bottom-debug-panel/bottom-debug-panel', () => ({ DebugTabContent: () => null }))
-vi.mock('../monaco-editor', () => ({ MonacoEditor: () => null }))
 vi.mock('@dimina-kit/electron-deck/dock-react', () => ({ DockView: () => null }))
 vi.mock('@dimina-kit/electron-deck/layout', () => ({
   serializeLayout: () => '',

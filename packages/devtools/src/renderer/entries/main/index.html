@@ -12,13 +12,11 @@
   <title>Dimina DevTools</title>
   <style>
     /*
-     * The React tree always occupies the full window. The only remaining
-     * main-process overlay is the simulator's Chromium DevTools
-     * WebContentsView, positioned to match a measured placeholder rect
-     * inside the React tree (see useViewAnchor in project-runtime.tsx). The
-     * code editor is now an in-renderer <MonacoEditor/>, not an overlay, so
-     * the previous `body.editor-active { left: 50vw; width: 50vw }` hack is
-     * gone.
+     * The React tree always occupies the full window. Main-process overlays
+     * (the simulator's Chromium DevTools WebContentsView, the console, and the
+     * workbench editor WebContentsView) are positioned to match measured
+     * placeholder rects inside the React tree (see useViewAnchor /
+     * createPlacementAnchor in project-runtime.tsx).
      */
     html, body, #root { margin: 0; padding: 0; }
     html, body { width: 100vw; height: 100vh; overflow: hidden; }

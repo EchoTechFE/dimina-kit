@@ -1,6 +1,6 @@
 /**
- * Shared, pure helpers for the "click a console file link → open the built-in
- * Monaco editor" pipeline (native-host).
+ * Shared, pure helpers for the "click a console file link → open the editor"
+ * pipeline (native-host).
  *
  * The right-panel console is the embedded Chromium DevTools front-end inspecting
  * the service host. When a sourcemap maps a console frame back to source, the
@@ -93,8 +93,8 @@ export function decodeOpenInEditorUrl(raw: string): OpenInEditorRequest | null {
 
 /**
  * Map a DevTools resource URL to a PROJECT-RELATIVE source path (POSIX, no
- * leading slash) — the same key the in-renderer Monaco editor opens files by
- * (`joinPosix(root, rel)` → `project:fs:readFile`).
+ * leading slash) — the key the workbench opens files by (mirrored under
+ * `file:///workspace/<rel>`).
  *
  * The compiler emits each `logic.js.map` with `sources` = the project-relative
  * source path (e.g. `pages/home/home.js`, or `subpkg/pages/x/x.js` for a sub-

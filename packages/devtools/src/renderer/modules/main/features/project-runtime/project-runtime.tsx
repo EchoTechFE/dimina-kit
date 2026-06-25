@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react'
 import { COPY_FEEDBACK_TIMEOUT_MS } from '@/shared/constants'
 import {
   getBranding,
@@ -12,9 +12,9 @@ import { useProjectRuntimeController } from './controllers/use-project-runtime-c
 import { useLayoutStore } from './controllers/use-layout-store'
 import { ProjectToolbar } from './components/project-toolbar'
 import { SimulatorPanel } from './components/simulator-panel'
+import { EditorPanel } from './components/editor-panel'
 import { DebugTabContent } from '../bottom-debug-panel/bottom-debug-panel'
 import type { BottomDebugPanelProps, DebugTabContentId } from '../bottom-debug-panel/bottom-debug-panel'
-import { MonacoEditor } from '../monaco-editor'
 import { useViewAnchor, createPlacementAnchor } from '@dimina-kit/view-anchor'
 import type { Placement, PlacementAnchorHandle } from '@dimina-kit/view-anchor'
 import { DockView } from '@dimina-kit/electron-deck/dock-react'
@@ -26,7 +26,8 @@ import {
 } from './layout/dock-layout'
 
 // The seven dock panels after splitting the coarse `debug` into five fine ones.
-// `simulator` and `console` are native overlays; the rest are DOM panels.
+// `console` is the only native overlay; the rest are DOM panels (simulator +
+// editor own their own WCV anchors inside their DOM bodies).
 const DOCK_PANEL_IDS = new Set([
   'simulator',
   'editor',
@@ -45,12 +46,13 @@ interface ProjectRuntimeProps {
  * The project window's main content area.
  *
  * Layout is the layout-engine `<DockView>`, owned entirely by the
- * `<DockableLayout>` child below: simulator (native WCV) + editor (in-renderer
- * Monaco) + the five debug panels (wxml/appdata/storage/console/compile, with
- * console a native overlay). The dock tree is persisted opaquely via the layout
- * store; `dock-layout.ts` seeds the default arrangement on a fresh install. All
- * native-overlay bounds-sync (simulator + console) lives inside `DockableLayout`
- * via `createPlacementAnchor`; the editor is a plain React child with no anchor.
+ * `<DockableLayout>` child below: simulator (DOM panel owning its WCV anchor) +
+ * editor (DOM panel owning the workbench WCV anchor) + the five debug panels
+ * (wxml/appdata/storage/console/compile, with console a native overlay). The
+ * dock tree is persisted opaquely via the layout store; `dock-layout.ts` seeds
+ * the default arrangement on a fresh install. Simulator + editor own their own
+ * WCV anchors in `SimulatorPanel`/`EditorPanel`; only the console native-overlay
+ * bounds-sync lives inside `DockableLayout` via `createPlacementAnchor`.
  */
 export function ProjectRuntime({ project }: ProjectRuntimeProps) {
   const copyTimerRef = useRef<number | null>(null)
@@ -70,6 +72,9 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
   const [dockModel] = useState(() =>
     buildDockModel(layoutState.dockTree ?? null, device.simPanelWidth, DOCK_PANEL_IDS),
   )
+
+  // The 'editor' dock slot is the embedded workbench (a DOM panel owning its
+  // WCV anchor); the registry never changes across the component's life.
   const dockRegistry = useMemo(() => buildDockRegistry(), [])
 
   // Host-controllable toolbar WCV (sits above ProjectToolbar). Dynamic-height
@@ -173,25 +178,13 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
     onClearCompileEvents: session.clearCompileEvents,
   }
 
-  // In-renderer Monaco editor — replaces the OpenSumi WebContentsView overlay.
-  // Plain React component occupying the editor panel; reads/writes the active
-  // project's files via the sandboxed `project:fs:*` IPC. `ready` gates the
-  // editor's `project:fs:listFiles` load on the main process having registered
-  // the active project (`openProject` sets the main-side path only once the
-  // compile finishes / reports `ready`; loading before then throws `ENOACTIVE`).
-  const editorNode = (
-    <MonacoEditor
-      projectPath={project.path}
-      ready={session.compileStatus.status === 'ready'}
-    />
-  )
-
   // DOM-panel renderer for DockView. `simulator` renders the SimulatorPanel
   // chrome (device/zoom pickers, compile overlays, page-path bar); SimulatorPanel
   // owns the simulator WCV anchor on its device-region div (a bare native slot
-  // would render no chrome). `editor` is the Monaco component. The four React
-  // debug tabs (wxml/appdata/storage/compile) render through DockDebugTab. The
-  // native `console` is routed to a NativeSlot by DockView, never here. A plain
+  // would render no chrome). `editor` renders EditorPanel, a full-size anchor div
+  // owning the workbench WCV placement. The four React debug tabs
+  // (wxml/appdata/storage/compile) render through DockDebugTab. The native
+  // `console` slot is routed to a NativeSlot by DockView, never here. A plain
   // function (not useCallback): `debugPanelProps` is rebuilt every render with
   // fresh handlers, so memoizing would only pin stale nodes; DockView re-reads it
   // on each render anyway.
@@ -210,7 +203,9 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
         />
       )
     }
-    if (panelId === 'editor') return editorNode
+    if (panelId === 'editor') {
+      return <EditorPanel />
+    }
     if (
       panelId === 'wxml' ||
       panelId === 'appdata' ||
@@ -285,7 +280,8 @@ interface DockableLayoutProps {
    * simulator leaf would keep the old device width).
    */
   simPanelWidth: number
-  /** DOM-panel renderer for simulator/editor/debug (console is native → NativeSlot). */
+  /** DOM-panel renderer for simulator/editor/debug bodies (console is the only
+   * native panel → routed to a NativeSlot, never through this). */
   renderDomPanel: (panelId: string, opts: { active: boolean }) => ReactNode
   /** Persist DockView's in-session layout mutations (opaque serialized tree). */
   onPersistTree: (serialized: string) => void
@@ -361,9 +357,9 @@ function findSimulatorConstraintSite(
  *
  * The model is built SYNCHRONOUSLY in `useState`'s initializer so `<DockView>`
  * renders on the very first commit. The only native overlay this component owns
- * is the CONSOLE (the simulator WCV anchor moved into `SimulatorPanel`, which is
- * now a DOM dock panel rendering its own chrome). The simulator's device-width
- * pin is kept live via `setConstraint` on a device change.
+ * is the CONSOLE; the simulator and editor WCV anchors live in their own DOM
+ * panels (`SimulatorPanel`/`EditorPanel`). The simulator's device-width pin is
+ * kept live via `setConstraint` on a device change.
  */
 /**
  * Dock-mode wrapper for a DOM debug tab. Under DOM-panel KEEPALIVE every debug
@@ -412,12 +408,13 @@ function DockableLayout(props: DockableLayoutProps): ReactNode {
 
   // Native CONSOLE overlay (the simulator's Chromium DevTools WebContentsView).
   // Its bounds ride a SEPARATE channel (`publishSimulatorDevtoolsBounds`) from
-  // the simulator device WCV (which `SimulatorPanel` now owns). `guardDisplayNone`
+  // the simulator device WCV (which `SimulatorPanel` owns). `guardDisplayNone`
   // is on: when the console tab is inactive the slot is display:none, which must
   // DETACH the overlay (publish hidden) rather than overlay a 0×0 rect over live
-  // content. The simulator anchor is NOT here — simulator is a DOM panel and
-  // `bindNativeSlot` only fires for native panels (console), so a simulator
-  // branch here would be dead code.
+  // content. Console is the ONLY native dock panel — simulator and editor are DOM
+  // panels owning their own WCV anchors (`SimulatorPanel`/`EditorPanel`), so
+  // `bindNativeSlot` only fires for console and a simulator/editor branch here
+  // would be dead code.
   const consoleAnchorRef = useRef<PlacementAnchorHandle | null>(null)
   const publishConsole = useCallback((p: Placement) => {
     if (p.visible) {
@@ -432,42 +429,54 @@ function DockableLayout(props: DockableLayoutProps): ReactNode {
     }
   }, [])
 
-  const bindNativeSlot = useCallback(
-    (panelId: string, el: HTMLElement | null) => {
-      if (panelId !== 'console') return
-      // The console overlay needs display:none detach (an inactive tab releases
-      // the WCV), `followScroll` (track ancestor scroll), AND `followGeometry`
-      // (N2): a drag-re-dock can MOVE the console slot without resizing it (e.g.
-      // a sibling re-dock shifts its x-position), and a ResizeObserver never
-      // fires on a pure translate — the geometry sentinel re-publishes the rect.
-      if (consoleAnchorRef.current) {
+  // Bind/rebind/release the console native-overlay anchor for `el`. The overlay
+  // needs display:none detach (an inactive tab releases the WCV), `followScroll`
+  // (track ancestor scroll), AND `followGeometry`: a drag-re-dock can MOVE the
+  // slot without resizing it, and a ResizeObserver never fires on a pure
+  // translate, so the geometry sentinel re-publishes the rect.
+  const bindOverlayAnchor = useCallback(
+    (
+      ref: MutableRefObject<PlacementAnchorHandle | null>,
+      el: HTMLElement | null,
+      publish: (p: Placement) => void,
+    ) => {
+      if (ref.current) {
         if (el) {
-          consoleAnchorRef.current.dispose()
-          consoleAnchorRef.current = createPlacementAnchor(el, {
+          ref.current.dispose()
+          ref.current = createPlacementAnchor(el, {
             visible: true,
             guardDisplayNone: true,
             followScroll: true,
             followGeometry: true,
-            publish: publishConsole,
+            publish,
           })
         } else {
-          consoleAnchorRef.current.update({ visible: false, publish: publishConsole })
-          consoleAnchorRef.current.dispose()
-          consoleAnchorRef.current = null
+          ref.current.update({ visible: false, publish })
+          ref.current.dispose()
+          ref.current = null
         }
         return
       }
       if (el) {
-        consoleAnchorRef.current = createPlacementAnchor(el, {
+        ref.current = createPlacementAnchor(el, {
           visible: true,
           guardDisplayNone: true,
           followScroll: true,
           followGeometry: true,
-          publish: publishConsole,
+          publish,
         })
       }
     },
-    [publishConsole],
+    [],
+  )
+
+  const bindNativeSlot = useCallback(
+    (panelId: string, el: HTMLElement | null) => {
+      if (panelId === 'console') {
+        bindOverlayAnchor(consoleAnchorRef, el, publishConsole)
+      }
+    },
+    [bindOverlayAnchor, publishConsole],
   )
 
   // Live device-width re-pin: the simulator column's `minPx` FLOOR must follow

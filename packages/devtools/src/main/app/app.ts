@@ -6,7 +6,7 @@ import fs from 'fs'
 import path from 'path'
 import type { BuiltinModuleId, MenuContext, WorkbenchAppConfig } from '../../shared/types.js'
 import type { SimulatorApiHandler } from '../services/simulator/custom-apis.js'
-import { rendererDir as defaultRendererDir, defaultPreloadPath } from '../utils/paths.js'
+import { rendererDir as defaultRendererDir, defaultPreloadPath, devtoolsPackageRoot } from '../utils/paths.js'
 import { installThemeBackgroundSync } from '../utils/theme.js'
 import { createMainWindow, wireMainWindowEvents } from '../windows/main-window/index.js'
 import { isAppQuitting } from './lifecycle.js'
@@ -39,6 +39,7 @@ import { createRenderInspector } from '../services/render-inspect/index.js'
 import { setupSimulatorTempFiles } from '../services/simulator-temp-files/index.js'
 import { SHARED_MINIAPP_PARTITION } from '../services/views/miniapp-partition.js'
 import { setupSimulatorSessionPolicy } from '../services/views/simulator-session-policy.js'
+import { startWorkbenchCoiServer } from '../services/workbench-coi-server.js'
 import { UpdateManager } from '../services/update/index.js'
 import { toDisposable, type Disposable } from '@dimina-kit/electron-deck/main'
 import { IpcRegistry } from '../utils/ipc-registry.js'
@@ -367,6 +368,12 @@ export function runDevtoolsBootstrap(config: WorkbenchAppConfig = {}): void {
   suppressInsecureCspWarnings()
   // Privileged scheme registration must run before app.whenReady (else throws).
   registerDifileScheme()
+  // The embedded workbench editor (the sole devtools editor) needs
+  // SharedArrayBuffer for the TS web ext-host's project-wide IntelliSense.
+  // Electron can't flip crossOriginIsolated (electron#35905), but this switch
+  // provides SAB independently; it is purely additive (no COEP leak into
+  // simulator/console WCVs).
+  try { app.commandLine.appendSwitch('enable-features', 'SharedArrayBuffer') } catch { /* electron stub in tests */ }
 }
 
 /**
@@ -395,7 +402,7 @@ export async function createDevtoolsRuntime(config: WorkbenchAppConfig = {}): Pr
   context.connections.acquire(mainWindow.webContents)
 
   context.registry.add(registerAppIpc(context))
-  // Sandboxed project file-system IPC for the in-renderer Monaco editor.
+  // Sandboxed project file-system IPC (the renderer-side project:fs:* surface).
   context.registry.add(registerProjectFsIpc(context))
   // Referer/CORS webRequest policy for the simulator runtime's sessions (shared
   // fallback + every per-project partition). Registered into the context
@@ -592,6 +599,48 @@ export async function createDevtoolsRuntime(config: WorkbenchAppConfig = {}): Pr
       bridge: context.bridge,
     }))
   }
+  // Embedded workbench editor — the sole devtools editor. Stand up the COI
+  // http server that serves the workbench bundle with the SharedArrayBuffer
+  // isolation headers and bridges `/__fs/*` onto the active project, then hand its
+  // base URL to the view manager so the 'editor' dock slot mounts the workbench
+  // WebContentsView. Both the server and the WCV tear down with the context
+  // registry.
+  //
+  // Default the bundle dir to the devtools package's OWN `dist/vscode-workbench`
+  // (resolved from the package root), NOT relative to the caller's rendererDir:
+  // a host that overrides `rendererDir` but omits `editorViewConfig.bundleDir`
+  // would otherwise compute a path next to ITS renderer, where no workbench
+  // bundle exists → 404 / blank editor.
+  const bundleDir =
+    config.editorViewConfig?.bundleDir ?? path.join(devtoolsPackageRoot, 'dist/vscode-workbench')
+  // Skip the entire editor assembly when the bundle is missing. Starting the COI
+  // server and attaching the WCV against a non-existent bundle yields a silent
+  // blank editor (the WCV loads index.html → 404); a launchable app with no
+  // editor is strictly better. The view manager never gets a source, so the
+  // 'editor' slot's lazy attach is a no-op.
+  if (!fs.existsSync(path.join(bundleDir, 'index.html'))) {
+    console.warn(
+      `[workbench] editor bundle not found at ${bundleDir} — skipping embedded editor assembly`,
+    )
+  } else {
+    const coiServer = await startWorkbenchCoiServer({
+      rootDir: bundleDir,
+      getProjectRoot: () => context.workspace.getProjectPath(),
+      extensionsDir: config.editorViewConfig?.extensionsDir,
+    })
+    // Return the close promise so the registry awaits server shutdown on dispose
+    // instead of fire-and-forgetting it (a dangling http server would keep the
+    // port + event loop alive past teardown).
+    context.registry.add(() => coiServer.close())
+    context.registry.add(() => context.views.detachWorkbench())
+    // Only HAND the view manager the COI URL — do NOT load yet. The heavy
+    // WebContentsView load (10MB bundle + ext-host) is deferred to the first time
+    // the 'editor' dock slot becomes visible (first non-zero bounds), so it never
+    // sits on the app boot critical path. Loading it eagerly here delayed
+    // preload/window-ready enough to trip the e2e launch health check.
+    context.views.setWorkbenchSource(coiServer.baseUrl)
+  }
+
   context.registry.add(wireAppWindowEvents(config, instance))
   context.registry.add(enableDevRendererAutoReload(rendererDir))
 
