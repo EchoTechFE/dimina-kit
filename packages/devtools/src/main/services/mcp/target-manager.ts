@@ -48,11 +48,9 @@ export interface NativeOverview {
 export type NativeOverviewProvider = () => Promise<NativeOverview>
 
 interface TargetState {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  client: any
+  client: CDP.Client | null
   connected: boolean
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  timer: any
+  timer: ReturnType<typeof setTimeout> | null
   consoleLogs: ConsoleLogEntry[]
   networkRequests: NetworkRequestEntry[]
 }
