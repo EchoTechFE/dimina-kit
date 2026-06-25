@@ -171,11 +171,14 @@ const WORKBENCH_THEME_ID = { light: 'Light Modern', dark: 'Dark Modern' } as con
  *    packages (built-in dd/wx + any downstream-contributed typings). Hiding is
  *    UI-only — tsserver still reads them. dimina projects have no real
  *    `node_modules` at the editor root, so hiding it loses nothing.
- *  - `files.autoSave` (afterDelay) makes an edit flush to disk on its own, so a
- *    save round-trips through `/__fs/write` → the devkit project watcher →
- *    rebuild without the user pressing ⌘S (this is a live-preview editor; the
- *    surprise was "edited but nothing compiled"). `highlightModifiedTabs` keeps
- *    the brief dirty window visible.
+ *  - `files.autoSave` (afterDelay) is the contract a save round-trips through
+ *    `/__fs/write` → the devkit project watcher → rebuild without the user
+ *    pressing ⌘S (this is a live-preview editor; the surprise was "edited but
+ *    nothing compiled"). The setting alone is inert here: monaco-vscode-api's
+ *    default service set never registers the `EditorAutoSave` workbench
+ *    contribution, so nothing schedules the save. `installAutoSave` drives it
+ *    from public API instead, reading these two keys. `highlightModifiedTabs`
+ *    keeps the brief dirty window visible.
  */
 function buildUserConfig(scheme: 'light' | 'dark'): Record<string, unknown> {
   return {
@@ -208,6 +211,33 @@ function initialThemeScheme(): 'light' | 'dark' {
   return new URLSearchParams(location.search).get('theme') === 'light'
     ? 'light'
     : 'dark'
+}
+
+/**
+ * Drive `files.autoSave: afterDelay` ourselves. monaco-vscode-api's default
+ * service set ships the auto-save config keys and the Settings UI, but never
+ * imports `editor.contribution._autosave` — so `EditorAutoSave` is unregistered
+ * and the `afterDelay` timer never schedules. Without this, an edit stays dirty
+ * forever unless the user presses ⌘S, and the live-preview never recompiles.
+ *
+ * Public API only: debounce `onDidChangeTextDocument` by `files.autoSaveDelay`,
+ * then `saveAll(false)` (dirty file-scheme docs only). The save flushes through
+ * the `/__fs/write` mirror → devkit watcher → rebuild. `autoSave: 'off'` opts
+ * out. A no-op save on already-clean docs is harmless if the contribution is
+ * ever wired upstream.
+ */
+function installAutoSave(vscode: typeof import('vscode')): void {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  vscode.workspace.onDidChangeTextDocument((e) => {
+    if (e.document.uri.scheme !== 'file') return
+    const cfg = vscode.workspace.getConfiguration('files')
+    if (cfg.get<string>('autoSave') === 'off') return
+    const delay = Math.max(200, Number(cfg.get('autoSaveDelay')) || 1000)
+    if (timer) clearTimeout(timer)
+    timer = setTimeout(() => {
+      void vscode.workspace.saveAll(false)
+    }, delay)
+  })
 }
 
 async function boot(): Promise<void> {
@@ -425,6 +455,7 @@ async function boot(): Promise<void> {
   // through the ext-host). Also count loaded extensions (JSON/theme run there).
   try {
     const vscode = await import('vscode')
+    installAutoSave(vscode)
     let pingResult: unknown = null
     const disp = vscode.commands.registerCommand('a2spike.ping', () => 'pong-from-exthost')
     void disp
