@@ -56,6 +56,14 @@ import {
  */
 const DRAG_PANEL_MIME = 'application/x-deck-panel'
 
+// The panel id of the in-flight tab drag, set on `dragstart` and cleared on
+// `dragend`. The DataTransfer VALUE is unreadable during `dragover` (only `types`
+// is exposed, by spec), so the drop-indicator path can't recover the dragged id
+// from the event — it reads it from here to decide whether to paint a highlight
+// for THIS drag (e.g. a `reorder-only` panel shows none). A drag is a singleton
+// gesture, so module scope is sufficient.
+let activeDragPanelId: string | null = null
+
 export interface DockViewProps {
 	model: LayoutModel
 	registry: PanelRegistry
@@ -904,6 +912,21 @@ function GroupView(props: GroupViewProps): ReactNode {
 	// rect. `preventDefault` is required for the element to be a valid drop target.
 	const handleDragOver = (e: DragEvent<HTMLDivElement>): void => {
 		e.preventDefault()
+		// A `reorder-only` panel can ONLY land via a within-group tab-strip reorder
+		// (handled by the strip handlers, which paint no indicator). Anywhere the
+		// group body would resolve to — its own edges or ANY other group — is a
+		// no-op for it (see the GOAL B redock gates), so painting the blue drop
+		// highlight there is misleading. Suppress the indicator entirely while such
+		// a panel is in flight. The DataTransfer VALUE is unreadable during
+		// `dragover` (only `types` is, by spec), so the dragged id is recovered from
+		// `activeDragPanelId` (set on `dragstart`).
+		if (
+			activeDragPanelId !== null
+			&& ctx.registry.get(activeDragPanelId)?.dropPolicy === 'reorder-only'
+		) {
+			setDropZone(null)
+			return
+		}
 		const rect = e.currentTarget.getBoundingClientRect()
 		const zone = computeDropZone(
 			{ width: rect.width, height: rect.height },
@@ -1052,6 +1075,12 @@ function GroupView(props: GroupViewProps): ReactNode {
 								e.dataTransfer.setData(DRAG_PANEL_MIME, panelId)
 								e.dataTransfer.setData('text/plain', panelId)
 								e.dataTransfer.effectAllowed = 'move'
+								// Also expose it to the dragover indicator path (the DataTransfer
+								// value is unreadable during dragover).
+								activeDragPanelId = panelId
+							}}
+							onDragEnd={() => {
+								activeDragPanelId = null
 							}}
 							onClick={() => {
 								if (!active) ctx.onActivate(node.id, panelId)
