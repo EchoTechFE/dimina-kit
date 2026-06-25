@@ -32,3 +32,8 @@ jobs:
 
       - name: Lint, type-check, and test
         run: pnpm turbo run lint check-types test
+
+      - name: Anti-regression ratchet
+        run: |
+          node --test "tools/ratchet/*.test.mjs"
+          pnpm ratchet:check

@@ -118,8 +118,7 @@ export async function startAutomationServer(
       if (ipcMessageHostHandler) {
         try {
           if (!attachedSim.isDestroyed()) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            ;(attachedSim as any).removeListener('ipc-message-host', ipcMessageHostHandler)
+            ;(attachedSim as NodeJS.EventEmitter).removeListener('ipc-message-host', ipcMessageHostHandler)
           }
         } catch { /* noop */ }
       }
@@ -164,8 +163,7 @@ export async function startAutomationServer(
 
       attachedSim = sim
       ipcMessageHostHandler = onIpcMessageHost
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ;(sim as any).on('ipc-message-host', onIpcMessageHost)
+      ;(sim as NodeJS.EventEmitter).on('ipc-message-host', onIpcMessageHost)
       // Route the destroyed-teardown through the per-webContents connection
       // registry: the connection arms a single `wc.once('destroyed')` and runs
       // owned disposers on hard-destroy (or soft reset for pool reuse), so we no

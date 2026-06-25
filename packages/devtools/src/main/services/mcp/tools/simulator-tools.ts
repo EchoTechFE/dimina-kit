@@ -134,7 +134,7 @@ export function registerSimulatorTools(server: McpServer): void {
     if (action === 'key') {
       if (!key) return err('key requires key')
       const isSingleChar = key.length === 1
-      const down: Record<string, unknown> = { type: 'keyDown', key, code: key }
+      const down: Parameters<typeof c.Input.dispatchKeyEvent>[0] = { type: 'keyDown', key, code: key }
       if (isSingleChar) down.text = key
       await c.Input.dispatchKeyEvent(down)
       await c.Input.dispatchKeyEvent({ type: 'keyUp', key, code: key })
