@@ -106,6 +106,29 @@ describe('buildElementsHookScript', () => {
 
 // ── fakes ───────────────────────────────────────────────────────────────────────
 
+// The reconcile script (buildReconcileScript) both (re)installs the hook AND
+// drains the outbound queue in ONE round-trip, returning `{ status, batch }`; it
+// is the only executeJavaScript payload that references `splice`. A fake devtools
+// wc answers it via `reconcileResponder`: `status` is 'installed' the first tick
+// (models a freshly (re)wrapped front-end → the feature re-primes + re-pulls) and
+// 'already' after; `batch` is the queued commands, drained once. Every other
+// payload (dispatchMessage / documentUpdated) resolves to a benign value.
+function isReconcile(src: unknown): src is string {
+  return typeof src === 'string' && src.includes('splice')
+}
+function reconcileResponder(batch: unknown[] = []): (src: string) => Promise<unknown> {
+  let installed = false
+  let drained = false
+  return (src: string) => {
+    if (isReconcile(src)) {
+      const status = installed ? 'already' : ((installed = true), 'installed')
+      const b = drained ? [] : ((drained = true), batch)
+      return Promise.resolve({ status, batch: b })
+    }
+    return Promise.resolve(true)
+  }
+}
+
 function fakeDebugger(opts: {
   attached?: boolean
   sendCommand?: (method: string, params?: object) => Promise<unknown>
@@ -136,7 +159,7 @@ function fakeWc(overrides: Partial<Record<string, unknown>> = {}) {
     debugger: dbg,
     isDestroyed: vi.fn(() => false),
     isLoading: vi.fn(() => false),
-    executeJavaScript: vi.fn(() => Promise.resolve('installed')),
+    executeJavaScript: vi.fn(reconcileResponder()),
     getURL: vi.fn(() => 'pageFrame.html?pagePath=pages/home/home'),
     once: vi.fn((event: string, cb: () => void) => { handlers[event] = cb }),
     // Real WebContents exposes `on` (persistent) alongside `once`; elements-forward
@@ -164,7 +187,7 @@ function emitterWc(overrides: Partial<Record<string, unknown>> = {}) {
     debugger: dbg,
     isDestroyed: vi.fn(() => destroyed),
     isLoading: vi.fn(() => false),
-    executeJavaScript: vi.fn(() => Promise.resolve('installed')),
+    executeJavaScript: vi.fn(reconcileResponder()),
     getURL: vi.fn(() => 'pageFrame.html?pagePath=pages/home/home'),
     once: (event: string, cb: () => void) => { emitter.once(event, cb); return wc },
     on: (event: string, cb: () => void) => { emitter.on(event, cb); return wc },
@@ -201,22 +224,11 @@ function fakeSwitchableBridge(initial: unknown) {
   })
 }
 
-// A devtools host wc that drains a single outbound batch on the first 'splice'
-// poll, then nothing. Other executeJavaScript calls (hook install, dispatch)
-// resolve to a benign value.
+// A devtools host wc that drains a single outbound batch on the first reconcile
+// tick, then nothing. The reconcile script also re-asserts the hook, so its reply
+// carries both `status` and `batch` (see `reconcileResponder`).
 function devtoolsWcDrainingOnce(batch: unknown[]) {
-  let drained = false
-  return fakeWc({
-    executeJavaScript: vi.fn((src: string) => {
-      if (src.includes('splice')) {
-        if (drained) return Promise.resolve([])
-        drained = true
-        return Promise.resolve(batch)
-      }
-      if (src.includes('__diminaElementsHookInstalled')) return Promise.resolve('installed')
-      return Promise.resolve(true)
-    }),
-  })
+  return fakeWc({ executeJavaScript: vi.fn(reconcileResponder(batch)) })
 }
 
 function dispatchedMatching(devtoolsWc: ReturnType<typeof fakeWc>, needle: string): string[] {
@@ -493,17 +505,16 @@ describe('installElementsForward — generation isolation', () => {
       })
       const guestB = fakeWc({ debugger: bDbg })
 
-      // Drain B's DOM.getDocument only on the SECOND splice poll (after we've
+      // Drain B's DOM.getDocument only on the SECOND reconcile tick (after we've
       // switched to B), so the command is routed at B (the active guest).
       let calls = 0
       const devtoolsWc = fakeWc({
         executeJavaScript: vi.fn((src: string) => {
-          if (src.includes('splice')) {
+          if (isReconcile(src)) {
             calls++
-            if (calls === 2) return Promise.resolve([{ id: 8, method: 'DOM.getDocument', params: {}, sessionId: null }])
-            return Promise.resolve([])
+            const batch = calls === 2 ? [{ id: 8, method: 'DOM.getDocument', params: {}, sessionId: null }] : []
+            return Promise.resolve({ status: calls === 1 ? 'installed' : 'already', batch })
           }
-          if (src.includes('__diminaElementsHookInstalled')) return Promise.resolve('installed')
           return Promise.resolve(true)
         }),
       })
@@ -654,13 +665,15 @@ describe('installElementsForward — event re-injection', () => {
       let calls = 0
       const devtoolsWc = fakeWc({
         executeJavaScript: vi.fn((src: string) => {
-          if (src.includes('splice')) {
+          if (isReconcile(src)) {
             calls++
-            if (calls === 1) return Promise.resolve([{ id: 1, method: 'DOM.getDocument', params: {}, sessionId: null }])
-            if (calls === 2) return Promise.resolve([{ id: 2, method: 'DOM.getDocument', params: {}, sessionId: null }])
-            return Promise.resolve([])
+            const batch = calls === 1
+              ? [{ id: 1, method: 'DOM.getDocument', params: {}, sessionId: null }]
+              : calls === 2
+                ? [{ id: 2, method: 'DOM.getDocument', params: {}, sessionId: null }]
+                : []
+            return Promise.resolve({ status: calls === 1 ? 'installed' : 'already', batch })
           }
-          if (src.includes('__diminaElementsHookInstalled')) return Promise.resolve('installed')
           return Promise.resolve(true)
         }),
       })
@@ -688,13 +701,11 @@ describe('installElementsForward — degradation', () => {
     try {
       const guest = fakeWc()
       const bridge = fakeBridge(() => guest)
-      // Front-end never has the embedder global → hook returns 'partial' forever.
+      // Front-end never has the embedder global → reconcile reports 'partial'
+      // forever (hook never wraps), and the outbound queue is always empty.
       const devtoolsWc = fakeWc({
-        executeJavaScript: vi.fn((src: string) => {
-          if (src.includes('__diminaElementsHookInstalled')) return Promise.resolve('partial')
-          if (src.includes('splice')) return Promise.resolve([])
-          return Promise.resolve(true)
-        }),
+        executeJavaScript: vi.fn((src: string) =>
+          isReconcile(src) ? Promise.resolve({ status: 'partial', batch: [] }) : Promise.resolve(true)),
       })
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const stop = installElementsForward({ devtoolsWc: devtoolsWc as any, bridge: bridge as any })
@@ -752,25 +763,25 @@ describe('installElementsForward — disposer', () => {
   })
 })
 
-// ── per-load re-arm (dom-ready re-installs the front-end hook) ──────────────────
+// ── continuous re-assertion (the reconcile loop re-installs the hook) ───────────
 
-// Count executeJavaScript calls that INSTALL the front-end hook. The install
-// script (buildElementsHookScript) embeds the `__diminaElementsHookInstalled`
-// sentinel; the splice-drain poll references `__diminaElementsOutbound` (no
-// sentinel) and dispatch calls reference `dispatchMessage`. So filtering on the
-// sentinel uniquely isolates install calls.
+// Count reconcile ticks that (re)assert the front-end hook. Every reconcile
+// script (buildReconcileScript) embeds the `__diminaElementsHookInstalled`
+// sentinel; dispatch calls reference `dispatchMessage` instead. So filtering on
+// the sentinel isolates the reconcile ticks.
 function hookInstallCount(devtoolsWc: ReturnType<typeof fakeWc>): number {
   return (devtoolsWc.executeJavaScript as ReturnType<typeof vi.fn>).mock.calls
     .filter((c) => (c[0] as string).includes('__diminaElementsHookInstalled')).length
 }
 
-describe('installElementsForward — per-load re-arm', () => {
+describe('installElementsForward — continuous re-assertion', () => {
   // The hook lives in the front-end's `globalThis`; a front-end reload (notably a
-  // service-host pool swap that re-opens DevTools) wipes it. The feature uses a
-  // PERSISTENT `on('dom-ready', …)` listener (not `once`) so it re-installs the
-  // hook on EVERY load. This pins that contract: a second `dom-ready` produces a
-  // fresh install call — proving it is not single-shot.
-  it('re-installs the front-end hook on every dom-ready (not once)', async () => {
+  // service-host pool swap that re-opens DevTools on a hot-reload respawn) wipes
+  // it. The reconcile loop re-asserts the hook EVERY tick — not once, and not
+  // gated on a single `dom-ready` event — so a reloaded front-end is re-hooked on
+  // the next tick. This pins that the loop keeps issuing install calls over time
+  // (a single-shot install would stop after the first success).
+  it('keeps re-asserting the hook every tick (not single-shot)', async () => {
     vi.useFakeTimers()
     try {
       const guest = fakeWc()
@@ -779,14 +790,13 @@ describe('installElementsForward — per-load re-arm', () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const stop = installElementsForward({ devtoolsWc: devtoolsWc as any, bridge: bridge as any })
 
-      // First load's hook install runs (immediate onReady + install poll).
+      // First ticks install the hook.
       await vi.advanceTimersByTimeAsync(400)
       const afterFirst = hookInstallCount(devtoolsWc)
       expect(afterFirst).toBeGreaterThan(0)
 
-      // Front-end reloads → `dom-ready` fires again. A single-shot `once` listener
-      // would NOT re-run; the persistent one re-arms a fresh install poll.
-      devtoolsWc.__handlers['dom-ready']!()
+      // No further events — just more ticks. A single-shot install would freeze
+      // here; the reconcile loop keeps re-asserting, so a future reload is covered.
       await vi.advanceTimersByTimeAsync(400)
 
       expect(hookInstallCount(devtoolsWc)).toBeGreaterThan(afterFirst)

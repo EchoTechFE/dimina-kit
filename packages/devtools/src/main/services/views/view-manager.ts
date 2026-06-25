@@ -1219,10 +1219,18 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       try {
         stopElementsForward?.()
       } catch { /* prior disposer already gone */ }
-      stopElementsForward = installElementsForward({ devtoolsWc, bridge: ctx.bridge, connections: ctx.connections })
+      // Capture THIS instance's disposer in the destroy handler — NOT the mutable
+      // `stopElementsForward`. A respawn creates a new simulatorView whose old
+      // devtools host wc is destroyed AFTER the new instance is already installed;
+      // a handler closing over `stopElementsForward` would then dispose the CURRENT
+      // instance (its reconcile loop never gets to install the hook, so Elements
+      // falls back to the natively-inspected service host). Stop only this wc's own
+      // forward, and clear the module pointer only while it still points here.
+      const thisForward = installElementsForward({ devtoolsWc, bridge: ctx.bridge, connections: ctx.connections })
+      stopElementsForward = thisForward
       devtoolsWc.once('destroyed', () => {
-        try { stopElementsForward?.() } catch { /* already stopped */ }
-        stopElementsForward = null
+        try { thisForward() } catch { /* already stopped */ }
+        if (stopElementsForward === thisForward) stopElementsForward = null
       })
     }
     devtoolsWc.once('dom-ready', () => {

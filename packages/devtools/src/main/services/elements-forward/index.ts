@@ -145,6 +145,25 @@ export function buildElementsHookScript(): string {
   }catch(e){ return 'error:' + (e && e.message); }})()`
 }
 
+/**
+ * One reconcile tick run in the front-end realm: idempotently (re)install the
+ * hook AND drain the outbound queue in a SINGLE round-trip. The front-end's
+ * `globalThis` is wiped on every devtools (re)load (service-host pool swap on a
+ * hot-reload respawn re-opens DevTools and re-bootstraps the front-end), so the
+ * hook must be re-asserted continuously — not once on `dom-ready`. Returns
+ * `{ status, batch }`: `status` is `'installed'` the tick we (re)wrap a freshly
+ * loaded front-end (the caller re-primes + re-pulls so Elements snaps back to the
+ * render guest), `'already'` once it is in place, `'partial'` while the embedder
+ * global has not appeared yet. `batch` is the drained command queue.
+ */
+function buildReconcileScript(): string {
+  return `(function(){`
+    + `var status; try { status = ${buildElementsHookScript()}; } catch(e){ status = 'error:'+(e&&e.message); }`
+    + `var batch = []; try { if (globalThis.__diminaElementsOutbound) batch = globalThis.__diminaElementsOutbound.splice(0); } catch(_){}`
+    + `return { status: status, batch: batch };`
+    + `})()`
+}
+
 // ── main → front-end dispatch (mirrored from network-forward/index.ts) ────────
 // network-forward keeps these file-private and the task forbids touching it, so
 // they're re-implemented here. Keep the chunk contract in sync if that changes.
@@ -223,14 +242,10 @@ interface OutboundCommand {
   sessionId: string | null
 }
 
+// Reconcile cadence: each tick re-asserts the hook (idempotent) and drains the
+// outbound queue. Fast enough that a freshly reloaded front-end is re-hooked
+// within a tick, cheap because the install script short-circuits to 'already'.
 const DRAIN_INTERVAL_MS = 150
-/** Bounded retry for the front-end hook install (front-end boots asynchronously). */
-// Per-load install poll window. Must outlast the gap between a devtools
-// front-end `dom-ready` and `InspectorFrontendHost` becoming available on a
-// cold/slow open (pool cold-start). 200×50ms = 10s — generous, and each future
-// front-end load re-arms a fresh window anyway (see the `dom-ready` listener).
-const INSTALL_POLL_TRIES = 200
-const INSTALL_POLL_INTERVAL_MS = 50
 
 /**
  * Install Elements forwarding on a DevTools front-end host wc. Returns a disposer
@@ -245,8 +260,16 @@ const INSTALL_POLL_INTERVAL_MS = 50
 export function installElementsForward(deps: ElementsForwardDeps): () => void {
   const { devtoolsWc, bridge } = deps
   let disposed = false
-  let installTimer: ReturnType<typeof setInterval> | null = null
-  let drainTimer: ReturnType<typeof setInterval> | null = null
+  // A single self-healing loop drives BOTH hook (re)install and outbound drain;
+  // it never self-terminates so a front-end reload (respawn) is re-hooked.
+  let reconcileTimer: ReturnType<typeof setInterval> | null = null
+  // Teardown that can only be wired AFTER the subscriptions below exist (render
+  // events, the dom-ready listener, the connection 'closed' sub). `stop()` runs it
+  // so EVERY teardown entry point — internal wc-destroy detection, the connection
+  // 'closed'/'destroyed' handler, and the returned disposer — does the SAME full,
+  // idempotent cleanup. Without this, a wc-destroy that reaches `stop()` directly
+  // would leave the render-event subscription (and dom-ready listener) dangling.
+  let lateCleanup: (() => void) | null = null
 
   // Staleness is keyed on the CURRENT active render guest, resolved fresh from the
   // bridge per check — NOT a generation snapshot. An event/response is honoured
@@ -269,13 +292,14 @@ export function installElementsForward(deps: ElementsForwardDeps): () => void {
 
   const stop = (): void => {
     disposed = true
-    if (installTimer) { clearInterval(installTimer); installTimer = null }
-    if (drainTimer) { clearInterval(drainTimer); drainTimer = null }
+    if (reconcileTimer) { clearInterval(reconcileTimer); reconcileTimer = null }
     for (const cleanup of wiredGuests.values()) {
       try { cleanup() } catch { /* guest gone */ }
     }
     wiredGuests.clear()
     detachSelfAttached()
+    // Run the late-wired teardown once (render events, dom-ready, 'closed' sub).
+    if (lateCleanup) { const c = lateCleanup; lateCleanup = null; try { c() } catch { /* already gone */ } }
   }
 
   /** Detach every session we own; leave safe-area's alone. */
@@ -551,74 +575,69 @@ export function installElementsForward(deps: ElementsForwardDeps): () => void {
   }
   const unsubscribeRenderEvents = bridge.onRenderEvent(onRenderEvent)
 
-  // ── startup: install hook (retry until embedder exists), then drain ─────────
+  // ── self-healing reconcile loop: (re)install hook + drain, every tick ───────
 
   const onReady = (): void => {
     if (disposed) return
-    // Re-arm safe: a devtools front-end (re)load re-runs this, so clear any
-    // in-flight timers from a prior attempt before starting fresh ones — without
-    // this a reload would stack intervals (leak) and double-drain.
-    if (installTimer) { clearInterval(installTimer); installTimer = null }
-    if (drainTimer) { clearInterval(drainTimer); drainTimer = null }
-    let tries = 0
-    installTimer = setInterval(() => {
-      tries++
+    // Re-arm safe: a devtools front-end (re)load re-runs this, so clear any prior
+    // loop before starting a fresh one — without this a reload would stack
+    // intervals (leak) and double-drain.
+    if (reconcileTimer) { clearInterval(reconcileTimer); reconcileTimer = null }
+
+    // ONE loop, never self-terminating: each tick idempotently (re)installs the
+    // hook AND drains the outbound queue in a single round-trip. The earlier
+    // design stopped its install poll on first success and re-armed ONLY via
+    // `dom-ready` — but a service-host pool swap on a hot-reload respawn re-points
+    // the front-end without a reliable `dom-ready`, so the hook (which lives in
+    // the front-end `globalThis` and is wiped on every reload) stayed uninstalled
+    // and Elements fell back to the natively-inspected service host. Re-asserting
+    // the hook every tick makes re-establishment independent of any single event.
+    // The tick we freshly (re)wrap a reloaded front-end (`status === 'installed'`)
+    // we re-prime the active guest and nudge a re-pull so the panel snaps back to
+    // the render guest. We deliberately do NOT force showView('elements') — the
+    // panel stays on the user-preferred Console default; the eager DOM pull (and
+    // any later Elements click) is already routed to render.
+    reconcileTimer = setInterval(() => {
       if (disposed || devtoolsWc.isDestroyed()) { stop(); return }
       devtoolsWc
-        .executeJavaScript(buildElementsHookScript())
-        .then((status: unknown) => {
+        .executeJavaScript(buildReconcileScript())
+        .then((res: unknown) => {
           if (disposed) return
-          if (status === 'installed' || status === 'already') {
-            if (installTimer) { clearInterval(installTimer); installTimer = null }
-            // Prime the current guest, then nudge the front-end to (re-)pull DOM
-            // so the bootstrap document.getDocument is routed at the render guest.
-            // We deliberately do NOT force showView('elements') — the panel stays
-            // on the user-preferred Console default; the eager DOM pull (and any
-            // later Elements click) is already routed to render.
+          const r = (res ?? {}) as { status?: unknown, batch?: unknown }
+          if (r.status === 'installed') {
             const wc = activeRenderWc()
             if (wc) primeGuest(wc)
             pushDocumentUpdated()
           }
+          handleOutbound(r.batch)
         })
-        .catch(() => { /* booting / torn-down */ })
-      if (tries > INSTALL_POLL_TRIES && installTimer) { clearInterval(installTimer); installTimer = null }
-    }, INSTALL_POLL_INTERVAL_MS)
-
-    // Poll-drain the outbound command queue.
-    drainTimer = setInterval(() => {
-      if (disposed || devtoolsWc.isDestroyed()) { stop(); return }
-      devtoolsWc
-        .executeJavaScript('(globalThis.__diminaElementsOutbound ? __diminaElementsOutbound.splice(0) : [])')
-        .then(handleOutbound)
-        .catch(() => { /* destroyed / navigating */ })
+        .catch(() => { /* booting / navigating / torn-down — retried next tick */ })
     }, DRAIN_INTERVAL_MS)
   }
 
-  // Re-install on EVERY devtools front-end load, not once. The hook lives in the
-  // front-end's `globalThis` (`__diminaElementsHookInstalled`), so any front-end
-  // (re)load wipes it — most importantly a service-host pool SWAP, which re-opens
-  // DevTools (`pointNativeDevtoolsAtServiceWc`) and re-bootstraps the front-end.
-  // A single-shot `once('dom-ready')` left the hook uninstalled after such a
-  // reload, so Elements silently fell back to the native service-host DOM. A
-  // PERSISTENT listener re-runs the (idempotent — the sentinel returns 'already')
-  // install on each load; the immediate call covers an already-loaded wc and the
-  // first `openDevTools` whose `dom-ready` may have fired before this ran.
+  // `dom-ready` re-arms the loop promptly on a front-end (re)load; the loop itself
+  // is the durable self-healer (it re-asserts the hook every tick regardless), so
+  // a missed `dom-ready` no longer leaves Elements stuck on the service host.
   devtoolsWc.on('dom-ready', onReady)
   onReady()
   let devtoolsClosedSub: { dispose(): void } | undefined
   try {
     // Devtools front-end wc is never pool-reset → use `'closed'` (fires only on
-    // real destroy). `on('closed')` dispose() removes WITHOUT firing, so the
-    // returned teardown releases it then calls `stop()` directly — no stale
-    // `stop` disposers accumulate across re-install on a surviving devtoolsWc.
+    // real destroy). `on('closed')` dispose() removes WITHOUT firing, so `stop()`
+    // (which now disposes it) can be the sole teardown — no stale disposers
+    // accumulate across re-install on a surviving devtoolsWc.
     if (deps.connections) devtoolsClosedSub = deps.connections.acquire(devtoolsWc).on('closed', stop)
     else devtoolsWc.once('destroyed', stop)
   } catch { /* fake/minimal wc */ }
 
-  return () => {
+  // Now that every subscription exists, route them through `stop()` so a teardown
+  // from ANY entry point (returned disposer, 'closed'/'destroyed' handler, or the
+  // reconcile tick noticing the wc is gone) does the identical full cleanup.
+  lateCleanup = () => {
     try { unsubscribeRenderEvents() } catch { /* already gone */ }
     try { devtoolsClosedSub?.dispose() } catch { /* already gone */ }
     try { devtoolsWc.removeListener('dom-ready', onReady) } catch { /* already gone */ }
-    stop()
   }
+
+  return stop
 }
