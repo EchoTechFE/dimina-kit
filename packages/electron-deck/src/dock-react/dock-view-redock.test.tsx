@@ -578,6 +578,65 @@ describe('<DockView> drag-to-redock — PanelCapabilities gates (draggable / dro
 		// anchor 'sib', so the order is now ['pinned', 'sib'].
 		expect([...afterGroup.panels]).not.toEqual(['sib', 'pinned'])
 	})
+
+	// ── GOAL B (indicator): no drop highlight where it can't land ──
+	// A reorder-only panel's only valid landing is a within-strip reorder (which
+	// paints no group indicator). Hovering any group body — its own edges OR another
+	// group — is a no-op for it (the GOAL B gates above), so the `data-deck-drop-zone`
+	// highlight must NOT appear there. (Unlike the geometry-driven ZONE selection,
+	// the PRESENCE/ABSENCE of the indicator needs no real geometry, so it is
+	// testable in jsdom: computeDropZone returns 'center' for a 0×0 rect.)
+	//
+	// A DataTransfer stub that accepts setData (dragstart writes the payload).
+	function dragSource() {
+		const store: Record<string, string> = {}
+		return {
+			setData: (type: string, value: string) => { store[type] = value },
+			getData: (type: string) => store[type] ?? '',
+			effectAllowed: '',
+		}
+	}
+
+	it('GOAL B: a reorder-only tab in flight shows NO drop indicator over ANOTHER group', () => {
+		const model = createLayoutModel(capsTree())
+		const { container } = renderDock(model, capsRegistry())
+		const pinnedTab = container.querySelector('[data-deck-tab="pinned"]')!
+		const gFree = container.querySelector('[data-deck-group="g-free"]') as DeckGroupElement
+
+		fireEvent.dragStart(pinnedTab, { dataTransfer: dragSource() })
+		fireEvent.dragOver(gFree)
+
+		expect(container.querySelector('[data-deck-drop-zone]')).toBeNull()
+		fireEvent.dragEnd(pinnedTab)
+	})
+
+	it('GOAL B: a reorder-only tab in flight shows NO drop indicator over its OWN group body', () => {
+		const model = createLayoutModel(capsTree())
+		const { container } = renderDock(model, capsRegistry())
+		const pinnedTab = container.querySelector('[data-deck-tab="pinned"]')!
+		const gCap = container.querySelector('[data-deck-group="g-cap"]') as DeckGroupElement
+
+		fireEvent.dragStart(pinnedTab, { dataTransfer: dragSource() })
+		fireEvent.dragOver(gCap)
+
+		expect(container.querySelector('[data-deck-drop-zone]')).toBeNull()
+		fireEvent.dragEnd(pinnedTab)
+	})
+
+	// Control: a FREE panel still paints the indicator — the suppression is
+	// specific to reorder-only, not a blanket disable of the highlight.
+	it('control: a free tab in flight DOES show a drop indicator over a group', () => {
+		const model = createLayoutModel(capsTree())
+		const { container } = renderDock(model, capsRegistry())
+		const freeTab = container.querySelector('[data-deck-tab="free"]')!
+		const gCap = container.querySelector('[data-deck-group="g-cap"]') as DeckGroupElement
+
+		fireEvent.dragStart(freeTab, { dataTransfer: dragSource() })
+		fireEvent.dragOver(gCap)
+
+		expect(container.querySelector('[data-deck-drop-zone]')).not.toBeNull()
+		fireEvent.dragEnd(freeTab)
+	})
 })
 
 describe('<DockView> drag-to-redock — real-pointer cases (e2e only)', () => {
