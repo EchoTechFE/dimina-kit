@@ -1286,6 +1286,38 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   }
 
   /**
+   * The single teardown path for the live native-host simulator WCV, shared by
+   * relaunch (attachNativeSimulator replacing the view) and project close
+   * (detachSimulator). Detaches the view from the window, then synchronously
+   * clears its bridge sessions (render guests + service host + mappings) BEFORE
+   * the WCV's own async close(), so the next project never re-resolves,
+   * re-renders, or screenshots the outgoing guest. The sync prefix clears the
+   * maps immediately; the async tail (pool / resource-server release) is observed
+   * so a rejection is logged rather than swallowed. The simulatorWc 'destroyed'
+   * hook in bridge-router stays as an idempotent fallback. No-op when no view is
+   * live; idempotent (disposeSessionsForSimulator early-returns once a session is
+   * gone), so the eager teardown here and the 'destroyed' fallback never
+   * double-dispose. `label` only tags the diagnostic on the async-tail failure.
+   */
+  function tearDownNativeSimulatorView(label: string): void {
+    if (!nativeSimulatorView) return
+    if (nativeSimulatorViewAdded && !ctx.windows.mainWindow.isDestroyed()) {
+      try {
+        ctx.windows.mainWindow.contentView.removeChildView(nativeSimulatorView)
+      } catch { /* already removed */ }
+    }
+    try {
+      if (!nativeSimulatorView.webContents.isDestroyed()) {
+        ctx.bridge?.disposeSessionsForSimulator?.(nativeSimulatorView.webContents.id)
+          ?.catch((err) => console.warn(`[view-manager] dispose sessions (${label}) failed:`, err))
+        nativeSimulatorView.webContents.close()
+      }
+    } catch { /* ignore */ }
+    nativeSimulatorView = null
+    nativeSimulatorViewAdded = false
+  }
+
+  /**
    * NATIVE-HOST ONLY. The native simulator is a top-level WebContentsView with
    * NO embedder renderer, so the simulator-side `__diminaCustomApis` bridge
    * (`src/preload/runtime/custom-apis.ts`) cannot reach the host via
@@ -1349,28 +1381,12 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     settleNativeSimulatorReady?.()
     settleNativeSimulatorReady = null
 
-    // Tear down any previous native simulator view (relaunch / re-open).
+    // Tear down any previous native simulator view (relaunch / re-open) through
+    // the shared single teardown path. detachNativeCustomApiBridge stays here
+    // (the bridge dispatcher is re-installed per attach below).
     if (nativeSimulatorView) {
       detachNativeCustomApiBridge()
-      if (nativeSimulatorViewAdded) {
-        try {
-          ctx.windows.mainWindow.contentView.removeChildView(nativeSimulatorView)
-        } catch { /* already removed */ }
-        nativeSimulatorViewAdded = false
-      }
-      try {
-        if (!nativeSimulatorView.webContents.isDestroyed()) {
-          // Clear the outgoing project's bridge sessions (render guests +
-          // service host) synchronously BEFORE the WCV's own async close(), so a
-          // relaunch never re-resolves or re-renders the previous guest. The
-          // sync prefix clears the maps now; observe the async tail so a
-          // pool/resource release rejection is logged, not swallowed.
-          ctx.bridge?.disposeSessionsForSimulator?.(nativeSimulatorView.webContents.id)
-            ?.catch((err) => console.warn('[view-manager] dispose sessions (relaunch) failed:', err))
-          nativeSimulatorView.webContents.close()
-        }
-      } catch { /* ignore */ }
-      nativeSimulatorView = null
+      tearDownNativeSimulatorView('relaunch')
     }
     nativeSimulatorProjectPath = null
 
@@ -1579,30 +1595,10 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     // back to the console.
     ctx.networkForward?.detachSimulator()
     ctx.networkForward?.setDevtoolsHost(null)
-    // Native-host simulator content view (no-op in the default path).
-    if (nativeSimulatorView) {
-      if (nativeSimulatorViewAdded && !ctx.windows.mainWindow.isDestroyed()) {
-        try {
-          ctx.windows.mainWindow.contentView.removeChildView(nativeSimulatorView)
-        } catch { /* already removed */ }
-      }
-      try {
-        if (!nativeSimulatorView.webContents.isDestroyed()) {
-          // Project close: tear down this project's bridge sessions (render
-          // guests + service host) + all mappings synchronously before the WCV's
-          // own async close(), so reopening another project starts from a clean
-          // state instead of re-resolving / screenshotting the closed project's
-          // guest. The 'destroyed' hook stays as an idempotent fallback. The
-          // sync prefix clears the maps now; observe the async tail so a
-          // pool/resource release rejection is logged, not swallowed.
-          ctx.bridge?.disposeSessionsForSimulator?.(nativeSimulatorView.webContents.id)
-            ?.catch((err) => console.warn('[view-manager] dispose sessions (close) failed:', err))
-          nativeSimulatorView.webContents.close()
-        }
-      } catch { /* ignore */ }
-      nativeSimulatorView = null
-      nativeSimulatorViewAdded = false
-    }
+    // Native-host simulator content view (no-op in the default path) — same
+    // single teardown path as relaunch. detachNativeCustomApiBridge was already
+    // called above.
+    tearDownNativeSimulatorView('close')
     hidePopover()
     // Drop the settings view too — the previous detachAllViews() did.
     destroyViewInternal(settingsView)
