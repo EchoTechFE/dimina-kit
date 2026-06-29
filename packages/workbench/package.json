@@ -1,0 +1,92 @@
+{
+  "name": "@dimina-kit/workbench",
+  "version": "0.1.0",
+  "description": "Dimina VS Code workbench editor (@codingame/monaco-vscode-api) — embeddable in devtools and the web client.",
+  "keywords": [
+    "dimina",
+    "devtools",
+    "editor",
+    "monaco",
+    "vscode",
+    "workbench"
+  ],
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "author": "EchoTechFE",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EchoTechFE/dimina-kit.git",
+    "directory": "packages/workbench"
+  },
+  "bugs": {
+    "url": "https://github.com/EchoTechFE/dimina-kit/issues"
+  },
+  "homepage": "https://github.com/EchoTechFE/dimina-kit/tree/main/packages/workbench#readme",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./vite": {
+      "types": "./dist/vite-preset.d.ts",
+      "default": "./dist/vite-preset.js"
+    }
+  },
+  "files": [
+    "src",
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "pnpm build:lib",
+    "build:app": "node scripts/patch-ts-ext.mjs && vite build",
+    "build:lib": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
+    "build:check": "node scripts/check-workbench-build.mjs dist-app",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "dev": "node scripts/patch-ts-ext.mjs && vite",
+    "prepack": "pnpm build:lib"
+  },
+  "dependencies": {
+    "@codingame/monaco-vscode-api": "34.0.3",
+    "@codingame/monaco-vscode-configuration-service-override": "34.0.3",
+    "@codingame/monaco-vscode-css-default-extension": "34.0.3",
+    "@codingame/monaco-vscode-emmet-service-override": "34.0.3",
+    "@codingame/monaco-vscode-explorer-service-override": "34.0.3",
+    "@codingame/monaco-vscode-extensions-service-override": "34.0.3",
+    "@codingame/monaco-vscode-files-service-override": "34.0.3",
+    "@codingame/monaco-vscode-javascript-default-extension": "^34.0.3",
+    "@codingame/monaco-vscode-json-default-extension": "34.0.3",
+    "@codingame/monaco-vscode-keybindings-service-override": "34.0.3",
+    "@codingame/monaco-vscode-languages-service-override": "34.0.3",
+    "@codingame/monaco-vscode-log-service-override": "34.0.3",
+    "@codingame/monaco-vscode-markers-service-override": "34.0.3",
+    "@codingame/monaco-vscode-model-service-override": "34.0.3",
+    "@codingame/monaco-vscode-output-service-override": "34.0.3",
+    "@codingame/monaco-vscode-preferences-service-override": "34.0.3",
+    "@codingame/monaco-vscode-quickaccess-service-override": "34.0.3",
+    "@codingame/monaco-vscode-search-service-override": "34.0.3",
+    "@codingame/monaco-vscode-snippets-service-override": "34.0.3",
+    "@codingame/monaco-vscode-storage-service-override": "34.0.3",
+    "@codingame/monaco-vscode-textmate-service-override": "34.0.3",
+    "@codingame/monaco-vscode-theme-defaults-default-extension": "34.0.3",
+    "@codingame/monaco-vscode-theme-service-override": "34.0.3",
+    "@codingame/monaco-vscode-typescript-basics-default-extension": "^34.0.3",
+    "@codingame/monaco-vscode-typescript-language-features-default-extension": "34.0.3",
+    "@codingame/monaco-vscode-workbench-service-override": "34.0.3",
+    "monaco-editor": "npm:@codingame/monaco-vscode-editor-api@34",
+    "vscode": "npm:@codingame/monaco-vscode-extension-api@34",
+    "vscode-html-languageservice": "^5.6.2",
+    "vscode-json-languageservice": "^5.7.2"
+  },
+  "devDependencies": {
+    "@dimina-kit/eslint-config": "workspace:*",
+    "@dimina-kit/typescript-config": "workspace:*",
+    "@types/node": "^22.10.0",
+    "typescript": "5.9.2",
+    "vite": "^8.0.8"
+  }
+}

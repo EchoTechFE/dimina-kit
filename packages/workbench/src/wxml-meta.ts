@@ -4,8 +4,8 @@
  *
  * Source of truth mirrored from the devtools renderer's hand-authored tables
  * (packages/devtools/src/renderer/.../monaco-editor/language/wxml-data.ts).
- * Kept self-contained here so the spike bundle has no cross-tsconfig import
- * into the renderer. Only the common, stable components are covered.
+ * Kept self-contained here to avoid a cross-tsconfig import into the renderer
+ * (wxml-data.ts owns the renderer copy). Only the common, stable components are covered.
  */
 import type { IHTMLDataProvider, HTMLDataV1 } from 'vscode-html-languageservice'
 import { newHTMLDataProvider } from 'vscode-html-languageservice'
