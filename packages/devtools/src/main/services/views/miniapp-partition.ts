@@ -28,6 +28,13 @@
  * Partition CLEANUP (reclaiming on-disk `persist:` data) is intentionally NOT
  * done here — leaving the data on disk is the whole point of a `persist:`
  * partition (cache/storage survives a relaunch). That is a separate concern.
+ *
+ * MIGRATION (intentional one-time reset): folding the project path into the key
+ * means a project that previously ran on the appId-only `persist:miniapp-<appId>`
+ * now runs on `persist:miniapp-<appId>-p<hash>` and starts with empty
+ * cookies/localStorage/cache. Old data is NOT migrated — a best-effort copy
+ * could carry already-cross-contaminated state into the newly isolated space,
+ * which defeats the isolation. The reset is accepted as a one-time cost.
  */
 
 import * as electron from 'electron'

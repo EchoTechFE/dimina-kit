@@ -790,8 +790,11 @@ async function handleSpawn(
       appId,
       // Same (appId, projectPath) pair the simulator WCV uses, so this project's
       // service host and render guests land on ONE partition while a different
-      // project with the same appId is isolated.
-      projectPath: ctx.workspace?.getProjectPath?.() || undefined,
+      // project with the same appId is isolated. Use the path captured at spawn
+      // ENTRY (workspaceProjectPath), not a re-read: a project switch during the
+      // awaits above would otherwise give the service host a different path than
+      // the simulator WCV was built with, splitting the partition.
+      projectPath: workspaceProjectPath || undefined,
       pagePath,
       pkgRoot,
       root,
@@ -876,6 +879,17 @@ async function handleSpawn(
     void disposeAppSession(state, appSessionId)
   }
   simulatorWc.once('destroyed', onSimulatorDestroyed)
+  // The simulator WCV may have been torn down DURING this spawn's awaits
+  // (loadAppConfig / resource server / service-host creation) — e.g. a project
+  // close/switch that ran while we were mid-flight. In that case its 'destroyed'
+  // event already fired and the once() above will never run, so the freshly
+  // registered session would be a zombie owned by a dead simulator (the
+  // teardown's disposeSessionsForSimulator snapshot taken before appSessions.set
+  // could not have included it). Dispose now — idempotent with the graceful
+  // path — so a closed/superseded simulator can't leave a resurrected session.
+  if (simulatorWc.isDestroyed()) {
+    void disposeAppSession(state, appSessionId)
+  }
 
   if (usedPool) {
     // A pooled/fallback window passes through about:blank (warm load or the
