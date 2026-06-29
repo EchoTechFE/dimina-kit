@@ -310,8 +310,17 @@ export interface BridgeRouterHandle {
    * with the `simulatorWc.once('destroyed')` hook (`disposeAppSession`
    * early-returns once a session is gone). Optional so partial test mocks of the
    * handle need not stub it.
+   *
+   * The synchronous prefix of the underlying disposeAppSession clears every map
+   * + closes the render guests + the service window before it awaits, so the
+   * bridge is clean the moment this is called. The returned promise resolves
+   * after the async tail (pool.release / resourceServer.close) so the lifecycle
+   * owner can sequence a reopen after full teardown. NOTE: disposeAppSession
+   * catches and logs pool/resource-release failures internally, so the promise
+   * resolves rather than rejecting on those — it is a completion signal, not an
+   * error channel.
    */
-  disposeSessionsForSimulator?(simulatorWcId: number): void
+  disposeSessionsForSimulator?(simulatorWcId: number): Promise<void>
   /**
    * The flag-gated debugTap (§7) over the bridge message stream. Exposed so a
    * hidden devtools panel / automation can read `.entries()` when
@@ -347,10 +356,21 @@ function resolveCurrentApp(
     for (const ap of state.appSessions.values()) if (ap.appId === activeAppId) match = ap
     if (match) return match
   }
-  // Maps preserve insertion order; the last entry is the most recent spawn.
+  // No appId hint and no workspace session to disambiguate. Picking by appId is
+  // impossible, so fall back to the most-recent spawn — but ONLY when every live
+  // session belongs to the same app. Same-appId multiples are a respawn/reopen
+  // in progress where the newest is the live one (insertion order = spawn
+  // order). Multiple DISTINCT appIds mean a previous project is mid-teardown
+  // alongside the new one; any pick is a guess that can resolve the WRONG
+  // project's content (the screenshot/inspect-stale-app bug class), so prefer
+  // null over a wrong guess.
   let last: AppSession | undefined
-  for (const ap of state.appSessions.values()) last = ap
-  return last
+  const distinctAppIds = new Set<string>()
+  for (const ap of state.appSessions.values()) {
+    last = ap
+    distinctAppIds.add(ap.appId)
+  }
+  return distinctAppIds.size <= 1 ? last : undefined
 }
 
 export function installBridgeRouter(ctx: WorkbenchContext): void {
@@ -494,10 +514,14 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
       for (const [id, ap] of state.appSessions) {
         if (ap.simulatorWc.id === simulatorWcId) ids.push(id)
       }
-      // disposeAppSession is async only for pool.release / resourceServer.close;
-      // its synchronous prefix clears every map + closes the render guests + the
-      // service window, so the bridge is clean the moment this returns.
-      for (const id of ids) void disposeAppSession(state, id)
+      // disposeAppSession's synchronous prefix clears every map + closes the
+      // render guests + the service window, so the bridge is clean the moment
+      // this is called. The joined promise resolves after the async tail
+      // (pool.release / resourceServer.close) so a caller can sequence a reopen
+      // after full teardown. disposeAppSession logs those tail failures
+      // internally, so this resolves rather than rejecting on them — it is a
+      // completion signal, not an error channel.
+      return Promise.all(ids.map((id) => disposeAppSession(state, id))).then(() => {})
     },
     debugTap: state.debugTap,
   }

@@ -1362,8 +1362,11 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
         if (!nativeSimulatorView.webContents.isDestroyed()) {
           // Clear the outgoing project's bridge sessions (render guests +
           // service host) synchronously BEFORE the WCV's own async close(), so a
-          // relaunch never re-resolves or re-renders the previous guest.
+          // relaunch never re-resolves or re-renders the previous guest. The
+          // sync prefix clears the maps now; observe the async tail so a
+          // pool/resource release rejection is logged, not swallowed.
           ctx.bridge?.disposeSessionsForSimulator?.(nativeSimulatorView.webContents.id)
+            ?.catch((err) => console.warn('[view-manager] dispose sessions (relaunch) failed:', err))
           nativeSimulatorView.webContents.close()
         }
       } catch { /* ignore */ }
@@ -1585,8 +1588,11 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
           // guests + service host) + all mappings synchronously before the WCV's
           // own async close(), so reopening another project starts from a clean
           // state instead of re-resolving / screenshotting the closed project's
-          // guest. The 'destroyed' hook stays as an idempotent fallback.
+          // guest. The 'destroyed' hook stays as an idempotent fallback. The
+          // sync prefix clears the maps now; observe the async tail so a
+          // pool/resource release rejection is logged, not swallowed.
           ctx.bridge?.disposeSessionsForSimulator?.(nativeSimulatorView.webContents.id)
+            ?.catch((err) => console.warn('[view-manager] dispose sessions (close) failed:', err))
           nativeSimulatorView.webContents.close()
         }
       } catch { /* ignore */ }
