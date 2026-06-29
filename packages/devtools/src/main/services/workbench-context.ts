@@ -1,5 +1,5 @@
 import type { BrowserWindow } from 'electron'
-import type { CompilationAdapter, WorkbenchConfig } from '../../shared/types.js'
+import type { CompilationAdapter, CustomFileTypes, WorkbenchConfig } from '../../shared/types.js'
 import type { BridgeRouterHandle } from '../ipc/bridge-router.js'
 import type { ConsoleForwarder } from './console-forward/index.js'
 import type { NetworkForwarder } from './network-forward/index.js'
@@ -50,6 +50,9 @@ export interface WorkbenchContext {
 
   /** Custom API namespace names (e.g. ['qd']) passed to the simulator */
   apiNamespaces: string[]
+
+  /** Custom file types (e.g. .qdml/.qdss/.qds) forwarded to compilation and served to the editor via the COI `/__filetypes` endpoint. */
+  fileTypes: CustomFileTypes
 
   /** Branding name shown in title bar and getBranding IPC */
   appName: string
@@ -219,7 +222,7 @@ export interface WorkbenchContext {
  *    the main-process types, not the structural mirrors in `shared/types`.
  */
 export interface CreateContextOptions
-  extends Pick<WorkbenchConfig, 'adapter' | 'apiNamespaces' | 'appName'> {
+  extends Pick<WorkbenchConfig, 'adapter' | 'apiNamespaces' | 'appName' | 'fileTypes'> {
   mainWindow: BrowserWindow
   preloadPath: string
   rendererDir: string
@@ -242,6 +245,7 @@ export function createWorkbenchContext(opts: CreateContextOptions): WorkbenchCon
     preloadPath: opts.preloadPath,
     rendererDir: opts.rendererDir,
     apiNamespaces: opts.apiNamespaces ?? [],
+    fileTypes: opts.fileTypes ?? {},
     appName: opts.appName ?? 'Dimina DevTools',
     brandingProvider: opts.brandingProvider,
   } as WorkbenchContext

@@ -40,6 +40,8 @@ export default defineConfig(mergeConfig(workbenchVitePreset(), {
 
 `features`（默认全开）可按需关闭单项：`wxml` / `jsonSchemas` / `ambientTypings` / `contributedExtensions`。
 
+`fileTypes`（自定义文件类型）让宿主把品牌扩展名映射进编辑器：形如 `{ template: ['qdml'], style: ['qdss'], viewScript: ['qds'] }`（与 dmcc 编译器 `build()` 的 `options.fileTypes` **同形**），`template→wxml`、`style→css`、`viewScript→javascript`，经 `files.associations` 下发；与内置扩展名冲突的项被忽略。devtools 侧由主进程 `WorkbenchAppConfig.fileTypes` 经 COI server 的 `/__filetypes` 端点交给 `src/main.ts` 注入。
+
 ### 2. 预构建静态 bundle（devtools COI server 沿用）
 
 ```bash

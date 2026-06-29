@@ -53,6 +53,7 @@ import { WXML_LANGUAGE_CONFIGURATION, WXML_TMGRAMMAR, jsonBlobUrl } from './wxml
 import { seedAmbientTypings, type ExtraTyping } from './typings-injection'
 import { registerContributedExtensions } from './contributed-extensions'
 import { registerDiminaJsonSchemas } from './dimina-json-schemas'
+import { buildFileAssociations, type CustomFileTypes } from './file-type-associations'
 import type { WorkspaceSource } from './workspace/types'
 
 // Force the ext-host worker entry into its OWN chunk. Under rolldown-vite the
@@ -125,6 +126,12 @@ export interface BootWorkbenchOptions {
   product?: { nameShort?: string; nameLong?: string }
   /** Per-feature toggles; omitted features default to enabled. */
   features?: WorkbenchFeatures
+  /**
+   * Host-configured custom file types (e.g. `.qdml`/`.qdss`/`.qds`). Same shape
+   * as the dmcc compiler's `build()` `options.fileTypes`; mapped to
+   * `files.associations` so brand extensions highlight as wxml/css/javascript.
+   */
+  fileTypes?: CustomFileTypes
   /** Expose `window.__WB_PROBE` for a CDP harness (default false). */
   exposeProbe?: boolean
   /** Lifecycle status callback (`initializing` → `exthost-alive`/error). */
@@ -182,7 +189,8 @@ const WORKBENCH_THEME_ID = { light: 'Light Modern', dark: 'Dark Modern' } as con
  * here and is re-applied together on each theme flip:
  *  - `workbench.colorTheme` mirrors the host light/dark scheme.
  *  - `files.associations` maps `.wxss`→css and `.wxs`→javascript so those files
- *    highlight (no dedicated wxss/wxs grammar is bundled; css/js are close).
+ *    highlight (no dedicated wxss/wxs grammar is bundled; css/js are close), plus
+ *    any host custom file types (`.qdml`→wxml / `.qdss`→css / `.qds`→javascript).
  *  - command center, layout controls, and the custom title bar are turned off —
  *    that standalone-window chrome is redundant inside a docked editor panel.
  *  - `files.exclude` hides the `node_modules/` folder that holds the injected
@@ -193,10 +201,10 @@ const WORKBENCH_THEME_ID = { light: 'Light Modern', dark: 'Dark Modern' } as con
  *    registers the `EditorAutoSave` contribution, so `installAutoSave` drives it
  *    from public API. `highlightModifiedTabs` keeps the brief dirty window visible.
  */
-function buildUserConfig(scheme: 'light' | 'dark'): Record<string, unknown> {
+function buildUserConfig(scheme: 'light' | 'dark', fileTypes?: CustomFileTypes): Record<string, unknown> {
   return {
     'workbench.colorTheme': WORKBENCH_THEME_ID[scheme],
-    'files.associations': { '*.wxss': 'css', '*.wxs': 'javascript' },
+    'files.associations': buildFileAssociations(fileTypes),
     'files.exclude': { 'node_modules': true },
     'files.autoSave': 'afterDelay',
     'files.autoSaveDelay': 1000,
@@ -387,7 +395,7 @@ export async function bootWorkbench(options: BootWorkbenchOptions): Promise<Work
   // Track the host light/dark scheme. Initial value is options.theme; later
   // flips arrive through the returned handle.setTheme.
   const applyTheme = (scheme: 'light' | 'dark') =>
-    void updateUserConfiguration(JSON.stringify(buildUserConfig(scheme)))
+    void updateUserConfiguration(JSON.stringify(buildUserConfig(scheme, options.fileTypes)))
   applyTheme(options.theme ?? 'dark')
 
   // Hide the Accounts entry in the activity bar — the embedded editor has no

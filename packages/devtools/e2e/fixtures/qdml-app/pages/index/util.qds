@@ -1,0 +1,6 @@
+// view-script module — the editor classifies .qds as javascript via fileTypes
+module.exports = {
+  upper: function (s) {
+    return s.toUpperCase()
+  },
+}

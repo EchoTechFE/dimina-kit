@@ -11,6 +11,7 @@
  */
 import { bootWorkbench } from './boot'
 import { diskMirrorSource } from './workspace/disk-mirror'
+import type { CustomFileTypes } from './file-type-associations'
 
 declare global {
   interface Window {
@@ -30,6 +31,22 @@ function initialThemeScheme(): 'light' | 'dark' {
   return new URLSearchParams(location.search).get('theme') === 'light' ? 'light' : 'dark'
 }
 
+/**
+ * Pull the host's custom file types from the COI server's `/__filetypes`
+ * endpoint (the same bridge that serves `/__fs` + `/__contrib`). Best-effort:
+ * a missing endpoint, non-OK status, or parse error → undefined (built-in
+ * associations only), so the editor still boots.
+ */
+async function loadFileTypes(): Promise<CustomFileTypes | undefined> {
+  try {
+    const res = await fetch('/__filetypes')
+    if (!res.ok) return undefined
+    return (await res.json()) as CustomFileTypes
+  } catch {
+    return undefined
+  }
+}
+
 async function boot(): Promise<void> {
   const container = document.getElementById('workbench')!
   // The page is served from the COI server root, so its origin is the fs bridge base.
@@ -39,6 +56,7 @@ async function boot(): Promise<void> {
     container,
     workspace: diskMirrorSource({ fsBaseUrl }),
     theme: initialThemeScheme(),
+    fileTypes: await loadFileTypes(),
     exposeProbe: true,
     onStatus: (s) => {
       window.__WB_STATUS = s
