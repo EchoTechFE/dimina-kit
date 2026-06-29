@@ -15,6 +15,7 @@ import {
   setSimulatorServicewechatReferer,
 } from '../simulator/referer.js'
 import { loadWorkbenchSettings } from '../settings/index.js'
+import { createOpLock } from './op-lock.js'
 // Thumbnail FS helpers are now consumed via LocalProjectsProvider; the
 // workspace-service only sees the ProjectsProvider hook surface.
 
@@ -31,12 +32,10 @@ export interface OpenProjectResult {
 }
 
 /**
- * Runtime guard for the adapter-return boundary: `session.appInfo` must be an
- * object carrying a NON-EMPTY string `appId` (the renderer derives its IPC
- * scoping from it; a session without one cannot be driven, and the bridge's
- * handleSpawn rejects empty appIds too — so accepting `''` here would desync the
- * two layers). Loose: extra fields pass through untouched — only the
- * contract-critical `appId` is enforced.
+ * Runtime guard for the adapter-return boundary: `session.appInfo` must carry a
+ * NON-EMPTY string `appId` (the renderer scopes IPC by it; the bridge's
+ * handleSpawn also rejects empty appIds, so accepting `''` would desync layers).
+ * Loose: extra fields pass through — only the contract-critical `appId` is enforced.
  */
 const SessionAppInfoSchema = z.looseObject({ appId: z.string().min(1) })
 
@@ -109,12 +108,10 @@ export interface WorkspaceService {
 export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService {
   let currentSession: ProjectSession | null = null
   let currentProjectPath = ''
-  // True only while closeProject is tearing down (from before disposeSession
-  // until views are disposed). disposeSession nulls currentSession before it
-  // awaits session.close(), but the bridge app session lives until disposeAll
-  // later in closeProject — so during that await `resolveCurrentApp` would
-  // otherwise fall back to the dying session and resolve the closing project's
-  // guest. Bridge getters consult this to refuse resolution mid-close.
+  // True only while closeProject tears down. disposeSession nulls currentSession
+  // before awaiting session.close(), but the bridge app session lives until the
+  // later disposeAll — bridge getters consult this to refuse resolving the dying
+  // project's guest during that window.
   let closing = false
   // The last project path cleared by `closeProject`; consumed by project-fs to
   // accept an in-flight write that targets the just-closed project. Reset at
@@ -131,36 +128,10 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
   // pending, before currentSession is assigned.)
   let logGeneration = 0
 
-  // Serializes the teardown→commit sections of openProject/closeProject so they
-  // never interleave. Without it, a closeProject arriving while an openProject
-  // is awaiting the compile adapter runs disposeAll() and tears down the very
-  // views the open is building, and the two state stores (this closure's
-  // currentSession and the bridge's appSessions) desync. FIFO is sufficient:
-  // close is bounded by disposeSession()'s 5s timeout, so a queued op waits at
-  // most that long. The chain never rejects (each op releases in a finally).
-  let opLock: Promise<void> = Promise.resolve()
-  // Latest-wins half that the FIFO lock alone can't provide. `requestSeq` is a
-  // monotonic counter claimed at the START of every open/close (before any
-  // await), so it encodes REQUEST order — not hook/compile completion order.
-  // `ownerSeq` is the highest seq that has actually taken ownership of the
-  // runtime: an open promotes itself into it only AFTER passing its veto hook
-  // (so a vetoed open never supersedes an in-flight one), close promotes at
-  // entry. A critical section aborts when `mySeq !== ownerSeq` — it released the
-  // lock for the unbounded compile and a later request took over meanwhile.
-  let requestSeq = 0
-  let ownerSeq = 0
-  function takeOwnership(mySeq: number): void {
-    if (mySeq > ownerSeq) ownerSeq = mySeq
-  }
-  function acquireOpLock(): Promise<() => void> {
-    let release!: () => void
-    const next = new Promise<void>((resolve) => {
-      release = resolve
-    })
-    const prior = opLock
-    opLock = prior.then(() => next)
-    return prior.then(() => release)
-  }
+  // Serializes openProject/closeProject teardown/commit sections (FIFO) + latest-
+  // wins request tokens, so a close mid-open can't disposeAll() the views the open
+  // is building or desync currentSession vs the bridge appSessions. See op-lock.ts.
+  const opLock = createOpLock()
 
   function sendStatus(status: string, message: string, hotReload?: boolean): void {
     ctx.notify.projectStatus(hotReload ? { status, message, hotReload: true } : { status, message })
@@ -188,6 +159,104 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
     } catch (err) {
       console.error('[workspace] session close failed:', err)
     }
+  }
+
+  /**
+   * openProject critical section 1 — tear down the outgoing runtime under the op
+   * lock (the unbounded compile runs after this releases, so a queued close isn't
+   * blocked). Returns true when superseded (caller aborts without touching the
+   * newer request's runtime).
+   */
+  async function runOpenTeardown(mySeq: number): Promise<boolean> {
+    const release = await opLock.acquire()
+    try {
+      if (!opLock.isOwner(mySeq)) return true
+      clearSimulatorServicewechatReferer()
+      // Switching projects tears down the embedded workbench editor (mirrors one
+      // project's disk; saves would else hit the wrong project) AND the native
+      // simulator (its 'destroyed' hook owns the bridge session). Back-to-list
+      // never calls closeProject, so this is the only deterministic teardown.
+      if (currentSession !== null) {
+        ctx.views.detachWorkbench()
+        ctx.views.detachSimulator()
+      }
+      // Invalidate the outgoing onLog generation before teardown so the dying
+      // worker's buffered lines can't pollute the incoming compile timeline.
+      logGeneration++
+      await disposeSession()
+      currentProjectPath = ''
+      lastClosedProjectPath = ''
+      return false
+    } finally {
+      release()
+    }
+  }
+
+  /**
+   * openProject critical section 2 — commit the new session under the lock, only
+   * if still the latest request. Returns false when superseded (caller discards
+   * the freshly-opened session instead of clobbering the newer one).
+   */
+  async function runOpenCommit(
+    mySeq: number,
+    session: ProjectSession,
+    projectPath: string,
+  ): Promise<boolean> {
+    const release = await opLock.acquire()
+    try {
+      if (!opLock.isOwner(mySeq)) return false
+      currentSession = session
+      currentProjectPath = projectPath
+      return true
+    } finally {
+      release()
+    }
+  }
+
+  /**
+   * Drive the compile adapter for one open (OUTSIDE the op lock): returns the
+   * session or an error message, never throws. The onLog generation guard drops
+   * a superseded session's buffered lines.
+   */
+  async function runCompile(
+    projectPath: string,
+    sessionGeneration: number,
+  ): Promise<{ session: ProjectSession } | { error: string }> {
+    const { compile } = loadWorkbenchSettings()
+    try {
+      const session = await ctx.adapter.openProject({
+        projectPath,
+        sourcemap: true,
+        watch: compile.watch,
+        onRebuild: () => sendStatus('ready', '编译完成，已热更新', true),
+        onBuildError: (err: unknown) => sendStatus('error', String(err)),
+        onLog: (entry: { stream: 'stdout' | 'stderr'; text: string }) => {
+          if (sessionGeneration !== logGeneration) return
+          ctx.notify.compileLog({ stream: entry.stream, text: entry.text, at: Date.now() })
+        },
+      })
+      return { session }
+    } catch (err) {
+      clearSimulatorServicewechatReferer()
+      return { error: String(err) }
+    }
+  }
+
+  /**
+   * Adapter-return boundary: a session without a string appId can't be driven by
+   * the renderer, so it must never become active. Close the live resources the
+   * adapter already spun up (best-effort) and return the error message; null when
+   * valid.
+   */
+  async function rejectInvalidAppId(session: ProjectSession): Promise<string | null> {
+    if (SessionAppInfoSchema.safeParse(session.appInfo).success) return null
+    try {
+      await session.close()
+    } catch (closeErr) {
+      console.warn('[workspace] closing appId-less adapter session failed (non-fatal):', closeErr)
+    }
+    return 'adapter returned session.appInfo without a string appId — '
+      + 'the CompilationAdapter must supply appInfo.appId'
   }
 
   function applyRefererFromSession(session: ProjectSession): void {
@@ -223,88 +292,27 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
         : null,
 
     async openProject(projectPath) {
-      // Claim a request seq FIRST (before the veto hook's await) so latest-wins
-      // is decided by REQUEST order, not by which hook resolves first. Two
-      // concurrent opens whose hooks finish out of order must still let the
-      // later-requested one win.
-      const mySeq = ++requestSeq
-      // Host permission gate — runs BEFORE any side effect (referer reset,
-      // session teardown, compile/dev-server spin-up). A throwing hook vetoes
-      // the open: return early with the error and leave the currently-active
-      // session fully intact. The declarative replacement for monkey-patching
-      // this method. See WorkbenchAppConfig.onBeforeOpenProject.
+      // Claim a request seq before the veto hook's await so latest-wins is by
+      // REQUEST order, not by which hook resolves first.
+      const mySeq = opLock.nextSeq()
+      // Host permission gate (WorkbenchAppConfig.onBeforeOpenProject): a throwing
+      // hook vetoes the open and leaves the active session intact. Runs before
+      // any side effect and outside the op lock/token.
       if (ctx.onBeforeOpenProject) {
         try {
           await ctx.onBeforeOpenProject(projectPath)
         } catch (err) {
-          // Surface the veto to the status bar — symmetric with the
-          // validateProjectDir rejection below (which already emits an error
-          // status). The framework caught the error, so it owns the minimal
-          // user-visible feedback; a host gate must not have to thread
-          // `notify` through a singleton just to report why the open was
-          // denied. The host can still layer richer UX (e.g. a dialog).
           const error = err instanceof Error ? err.message : String(err)
           sendStatus('error', error)
           return { success: false, error }
         }
       }
-      // Passed the veto — NOW take ownership (promote our seq). Doing this after
-      // the hook means a vetoed open never supersedes an in-flight one. ownerSeq
-      // only grows, so an earlier request whose hook resolved late can't clobber
-      // a later request that already took over.
-      takeOwnership(mySeq)
-      // Critical section 1 — tear down the outgoing runtime. Serialized against a
-      // concurrent close so the two never interleave. The unbounded adapter
-      // compile runs AFTER this section releases the lock, so a queued close is
-      // never blocked behind a slow/hung compile.
-      const releaseTeardown = await acquireOpLock()
-      try {
-      // Superseded while waiting for the lock (a newer open/close already took
-      // over): skip teardown so we don't tear down the newer request's runtime.
-      if (mySeq !== ownerSeq) {
+      // Passed the veto — take ownership (a vetoed open never supersedes an
+      // in-flight one; ownerSeq only grows, so a late-resolving earlier request
+      // can't clobber a later one that already took over).
+      opLock.takeOwnership(mySeq)
+      if (await runOpenTeardown(mySeq)) {
         return { success: false, error: 'superseded by a newer project open/close' }
-      }
-      clearSimulatorServicewechatReferer()
-      // Switching from one project to another must tear down the embedded
-      // workbench editor view. The workbench mirrors a single project's disk
-      // to `file:///workspace` ONCE at boot and routes `/__fs` writes at the
-      // live active project root; if the WCV survives a switch, the editor
-      // keeps showing project A's mirrored tree while saves land in project B
-      // (wrong project). Detaching destroys the WCV so the next time the
-      // 'editor' slot becomes visible it lazily re-attaches and re-mirrors the
-      // new project (setWorkbenchBounds re-creates from the stored source on
-      // the first non-zero rect). Guarded on an active session so the first
-      // open (no predecessor) is a safe no-op.
-      if (currentSession !== null) {
-        ctx.views.detachWorkbench()
-        // Symmetric with detachWorkbench: switching projects must also tear
-        // down the previous project's native simulator WCV, and through its
-        // `destroyed` hook the bridge app session that WCV owns. Returning to
-        // the project list never calls closeProject (the back button only
-        // notifies windowNavigateBack), so without this the old session
-        // survives into the open: its WCV keeps painting the previous app,
-        // `resolveCurrentApp` can still resolve the stale same-appId session,
-        // and the shared `persist:miniapp-<appId>` partition lets the reopened
-        // project reuse the old guest — so the simulator renders the PREVIOUS
-        // project. Tearing it down here lets the renderer's subsequent
-        // attachNativeSimulator build a clean view for the incoming project.
-        ctx.views.detachSimulator()
-      }
-      // Invalidate the outgoing session's onLog BEFORE teardown starts (same
-      // order as closeProject below): the dying compile worker flushes
-      // buffered lines DURING disposeSession(), and with the old generation
-      // still current they would pass the staleness guard and pollute the
-      // incoming project's compile-log timeline. The new session claims its
-      // own fresh generation further down (after dispose), so its onLog
-      // forwards normally.
-      logGeneration++
-      await disposeSession()
-      currentProjectPath = ''
-      // A fresh open starts a clean sandbox window — drop any previously
-      // recorded last-closed root so it can't accept writes after this point.
-      lastClosedProjectPath = ''
-      } finally {
-        releaseTeardown()
       }
 
       // Reject obviously broken projects up front so we never spin up a
@@ -323,84 +331,32 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
       }
 
       sendStatus('compiling', '正在编译...')
-
-      const { compile } = loadWorkbenchSettings()
-
       // This open owns the log channel until the next open/close bumps the
-      // generation — the onLog closure below checks it per line.
+      // generation — runCompile's onLog closure checks it per line.
       const sessionGeneration = ++logGeneration
+      const compiled = await runCompile(projectPath, sessionGeneration)
+      if ('error' in compiled) {
+        sendStatus('error', compiled.error)
+        return { success: false, error: compiled.error }
+      }
+      const session = compiled.session
 
-      let session: Awaited<ReturnType<typeof ctx.adapter.openProject>>
-      try {
-        session = await ctx.adapter.openProject({
-          projectPath,
-          sourcemap: true,
-          watch: compile.watch,
-          onRebuild: () => sendStatus('ready', '编译完成，已热更新', true),
-          onBuildError: (err: unknown) => sendStatus('error', String(err)),
-          // Per-line dmcc log (already filtered in devkit). Stamp the
-          // wall-clock capture time here and push verbatim on the dedicated
-          // compile-log channel — never through projectStatus, whose
-          // one-event-per-payload contract feeds compileEvents. Stale lines
-          // (a closed/replaced session's worker flushing its buffers) are
-          // dropped via the generation check.
-          onLog: (entry: { stream: 'stdout' | 'stderr'; text: string }) => {
-            if (sessionGeneration !== logGeneration) return
-            ctx.notify.compileLog({
-              stream: entry.stream,
-              text: entry.text,
-              at: Date.now(),
-            })
-          },
-        })
-      } catch (err) {
-        clearSimulatorServicewechatReferer()
-        sendStatus('error', String(err))
-        return { success: false, error: String(err) }
+      const appIdError = await rejectInvalidAppId(session)
+      if (appIdError) {
+        sendStatus('error', appIdError)
+        return { success: false, error: appIdError }
       }
 
-      // Adapter-return boundary: enforce the AppInfo producer contract the
-      // moment the adapter resolves, BEFORE the session is recorded. A
-      // session without a string appId cannot be driven by the renderer, so
-      // it must never become the active session. The adapter already spun up
-      // live resources (compile watcher, dev-server port) — close them
-      // best-effort before reporting; the validation report is the law and a
-      // failing close() must not mask it (or escape as a throw).
-      if (!SessionAppInfoSchema.safeParse(session.appInfo).success) {
+      if (!(await runOpenCommit(mySeq, session, projectPath))) {
+        // Superseded during the compile above — discard the freshly-opened
+        // session (close its live compile/dev-server) rather than clobber the
+        // newer request.
         try {
           await session.close()
         } catch (closeErr) {
-          console.warn(
-            '[workspace] closing appId-less adapter session failed (non-fatal):',
-            closeErr,
-          )
+          console.warn('[workspace] closing superseded open session failed (non-fatal):', closeErr)
         }
-        const error =
-          'adapter returned session.appInfo without a string appId — ' +
-          'the CompilationAdapter must supply appInfo.appId'
-        sendStatus('error', error)
-        return { success: false, error }
-      }
-
-      // Critical section 2 — commit the new session, but only if we are still
-      // the latest request. A newer open/close that arrived during the unbounded
-      // compile above bumped opGeneration; committing now would clobber it, so
-      // discard the freshly-opened session (close its live compile/dev-server)
-      // and report superseded.
-      const releaseCommit = await acquireOpLock()
-      try {
-        if (mySeq !== ownerSeq) {
-          try {
-            await session.close()
-          } catch (closeErr) {
-            console.warn('[workspace] closing superseded open session failed (non-fatal):', closeErr)
-          }
-          return { success: false, error: 'superseded by a newer project open/close' }
-        }
-        currentSession = session
-        currentProjectPath = projectPath
-      } finally {
-        releaseCommit()
+        return { success: false, error: 'superseded by a newer project open/close' }
       }
 
       bestEffort('updateLastOpened', () => {
@@ -421,15 +377,15 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
       // then serialize against a concurrent openProject: disposeAll() must not
       // run while an open is mid-teardown/commit (it would tear down the views
       // the open is building).
-      const mySeq = ++requestSeq
-      takeOwnership(mySeq)
-      const release = await acquireOpLock()
+      const mySeq = opLock.nextSeq()
+      opLock.takeOwnership(mySeq)
+      const release = await opLock.acquire()
       try {
         // Superseded by a newer open/close that arrived while we waited for the
         // lock: that request now owns the runtime, so disposing here would tear
         // down ITS views. Skip — the newer op's own teardown covers the session
         // we meant to close.
-        if (mySeq !== ownerSeq) return
+        if (!opLock.isOwner(mySeq)) return
         // Mark the close in progress BEFORE disposeSession nulls currentSession,
         // so bridge getters refuse to resolve the dying session during the
         // session.close() await (cleared in the finally once views are gone).
@@ -462,23 +418,18 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
       if (!simulatorWc) return null
       if (ctx.views.getSimulatorProjectPath() !== projectPath) return null
       const session = currentSession
-      // In native-host the active render-host guest holds the mini-program
-      // content; the simulator WCV only holds the device-shell chrome. Capture
-      // the guest. When native-host reports no active guest (not mounted yet,
-      // mid page-switch, or destroyed) there is no page content to snapshot, so
-      // return null rather than persist a device-shell frame as if it were the
-      // page — that device-shell frame is exactly the wrong-content bug this
-      // capture path exists to avoid. Non-native-host has no guest concept, so
-      // the simulator WCV is the correct target there.
+      // Capture the active render-host guest (the mini-program content); the
+      // simulator WCV only holds the device-shell chrome. In native-host with no
+      // active guest (not mounted / mid page-switch / destroyed) return null
+      // rather than persist a device-shell frame as the page — that wrong-content
+      // frame is the bug this path exists to avoid. Non-native-host: the sim WCV.
       const bridge = ctx.bridge
       const nativeHost = bridge?.isNativeHost() ?? false
       const renderGuest = nativeHost ? (bridge?.getActiveRenderWc() ?? null) : null
       if (nativeHost && !renderGuest) return null
       const captureTarget = renderGuest ?? simulatorWc
-      // Distinguish "no content to capture" from a lifecycle error: a destroyed
-      // target means the guest/WCV is gone (teardown in flight), so there is no
-      // valid frame — return null instead of letting capturePage() throw into
-      // the catch (which can't tell the two apart).
+      // A destroyed target means teardown is in flight (no valid frame) — return
+      // null rather than let capturePage() throw indistinguishably into the catch.
       if (captureTarget.isDestroyed()) return null
       try {
         const image = await captureTarget.capturePage()
@@ -487,10 +438,8 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
           || currentProjectPath !== projectPath
           || ctx.views.getSimulatorWebContents() !== simulatorWc
           || ctx.views.getSimulatorProjectPath() !== projectPath
-          // The captured WebContents must still be the live capture target:
-          // a render guest that navigated mid-capture would otherwise persist a
-          // frame from the wrong page (the previous staleness anchor only
-          // tracked the outer WCV, not the guest we actually captured).
+          // Captured target must still be the live one: a guest that navigated
+          // mid-capture would otherwise persist a frame from the wrong page.
           || (nativeHost ? (bridge?.getActiveRenderWc() ?? null) : simulatorWc) !== captureTarget
         ) {
           return null
