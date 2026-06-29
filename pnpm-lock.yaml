@@ -97,90 +97,15 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
     devDependencies:
-      '@codingame/monaco-vscode-api':
-        specifier: 34.0.3
-        version: 34.0.3
-      '@codingame/monaco-vscode-configuration-service-override':
-        specifier: 34.0.3
-        version: 34.0.3
-      '@codingame/monaco-vscode-css-default-extension':
-        specifier: 34.0.3
-        version: 34.0.3
-      '@codingame/monaco-vscode-emmet-service-override':
-        specifier: 34.0.3
-        version: 34.0.3
-      '@codingame/monaco-vscode-explorer-service-override':
-        specifier: 34.0.3
-        version: 34.0.3
-      '@codingame/monaco-vscode-extensions-service-override':
-        specifier: 34.0.3
-        version: 34.0.3
-      '@codingame/monaco-vscode-files-service-override':
-        specifier: 34.0.3
-        version: 34.0.3
-      '@codingame/monaco-vscode-javascript-default-extension':
-        specifier: ^34.0.3
-        version: 34.0.3
-      '@codingame/monaco-vscode-json-default-extension':
-        specifier: 34.0.3
-        version: 34.0.3
-      '@codingame/monaco-vscode-keybindings-service-override':
-        specifier: 34.0.3
-        version: 34.0.3
-      '@codingame/monaco-vscode-languages-service-override':
-        specifier: 34.0.3
-        version: 34.0.3
-      '@codingame/monaco-vscode-log-service-override':
-        specifier: 34.0.3
-        version: 34.0.3
-      '@codingame/monaco-vscode-markers-service-override':
-        specifier: 34.0.3
-        version: 34.0.3
-      '@codingame/monaco-vscode-model-service-override':
-        specifier: 34.0.3
-        version: 34.0.3
-      '@codingame/monaco-vscode-output-service-override':
-        specifier: 34.0.3
-        version: 34.0.3
-      '@codingame/monaco-vscode-preferences-service-override':
-        specifier: 34.0.3
-        version: 34.0.3
-      '@codingame/monaco-vscode-quickaccess-service-override':
-        specifier: 34.0.3
-        version: 34.0.3
-      '@codingame/monaco-vscode-search-service-override':
-        specifier: 34.0.3
-        version: 34.0.3
-      '@codingame/monaco-vscode-snippets-service-override':
-        specifier: 34.0.3
-        version: 34.0.3
-      '@codingame/monaco-vscode-storage-service-override':
-        specifier: 34.0.3
-        version: 34.0.3
-      '@codingame/monaco-vscode-textmate-service-override':
-        specifier: 34.0.3
-        version: 34.0.3
-      '@codingame/monaco-vscode-theme-defaults-default-extension':
-        specifier: 34.0.3
-        version: 34.0.3
-      '@codingame/monaco-vscode-theme-service-override':
-        specifier: 34.0.3
-        version: 34.0.3
-      '@codingame/monaco-vscode-typescript-basics-default-extension':
-        specifier: ^34.0.3
-        version: 34.0.3
-      '@codingame/monaco-vscode-typescript-language-features-default-extension':
-        specifier: 34.0.3
-        version: 34.0.3
-      '@codingame/monaco-vscode-workbench-service-override':
-        specifier: 34.0.3
-        version: 34.0.3
       '@dimina-kit/eslint-config':
         specifier: workspace:*
         version: link:../eslint-config
       '@dimina-kit/typescript-config':
         specifier: workspace:*
         version: link:../typescript-config
+      '@dimina-kit/workbench':
+        specifier: workspace:*
+        version: link:../workbench
       '@playwright/test':
         specifier: ^1.59.1
         version: 1.59.1
@@ -277,9 +202,6 @@ importers:
       miniprogram-automator:
         specifier: ^0.12.1
         version: 0.12.1
-      monaco-editor:
-        specifier: npm:@codingame/monaco-vscode-editor-api@34
-        version: '@codingame/monaco-vscode-editor-api@34.0.3'
       postcss:
         specifier: ^8.5.10
         version: 8.5.10
@@ -307,18 +229,6 @@ importers:
       vitest:
         specifier: ^4.1.4
         version: 4.1.4(@types/node@22.19.17)(@vitest/coverage-v8@4.1.4)(jsdom@29.0.2)(vite@8.0.8(@types/node@22.19.17)(esbuild@0.28.0)(jiti@1.21.7)(less@4.6.4)(sass@1.99.0)(yaml@2.9.0))
-      vscode:
-        specifier: npm:@codingame/monaco-vscode-extension-api@34
-        version: '@codingame/monaco-vscode-extension-api@34.0.3'
-      vscode-html-languageservice:
-        specifier: ^5.6.2
-        version: 5.6.2
-      vscode-json-languageservice:
-        specifier: ^5.7.2
-        version: 5.7.2
-      vscode-languageserver-textdocument:
-        specifier: ^1.0.12
-        version: 1.0.12
 
   packages/electron-deck:
     dependencies:
@@ -457,6 +367,118 @@ importers:
       vitest:
         specifier: ^4.1.4
         version: 4.1.4(@types/node@24.12.2)(@vitest/coverage-v8@4.1.4)(jsdom@29.0.2)(vite@8.0.16(@types/node@24.12.2)(esbuild@0.28.0)(jiti@2.7.0)(less@4.6.4)(sass@1.99.0)(yaml@2.9.0))
+
+  packages/workbench:
+    dependencies:
+      '@codingame/monaco-vscode-api':
+        specifier: 34.0.3
+        version: 34.0.3
+      '@codingame/monaco-vscode-configuration-service-override':
+        specifier: 34.0.3
+        version: 34.0.3
+      '@codingame/monaco-vscode-css-default-extension':
+        specifier: 34.0.3
+        version: 34.0.3
+      '@codingame/monaco-vscode-emmet-service-override':
+        specifier: 34.0.3
+        version: 34.0.3
+      '@codingame/monaco-vscode-explorer-service-override':
+        specifier: 34.0.3
+        version: 34.0.3
+      '@codingame/monaco-vscode-extensions-service-override':
+        specifier: 34.0.3
+        version: 34.0.3
+      '@codingame/monaco-vscode-files-service-override':
+        specifier: 34.0.3
+        version: 34.0.3
+      '@codingame/monaco-vscode-javascript-default-extension':
+        specifier: ^34.0.3
+        version: 34.0.3
+      '@codingame/monaco-vscode-json-default-extension':
+        specifier: 34.0.3
+        version: 34.0.3
+      '@codingame/monaco-vscode-keybindings-service-override':
+        specifier: 34.0.3
+        version: 34.0.3
+      '@codingame/monaco-vscode-languages-service-override':
+        specifier: 34.0.3
+        version: 34.0.3
+      '@codingame/monaco-vscode-log-service-override':
+        specifier: 34.0.3
+        version: 34.0.3
+      '@codingame/monaco-vscode-markers-service-override':
+        specifier: 34.0.3
+        version: 34.0.3
+      '@codingame/monaco-vscode-model-service-override':
+        specifier: 34.0.3
+        version: 34.0.3
+      '@codingame/monaco-vscode-output-service-override':
+        specifier: 34.0.3
+        version: 34.0.3
+      '@codingame/monaco-vscode-preferences-service-override':
+        specifier: 34.0.3
+        version: 34.0.3
+      '@codingame/monaco-vscode-quickaccess-service-override':
+        specifier: 34.0.3
+        version: 34.0.3
+      '@codingame/monaco-vscode-search-service-override':
+        specifier: 34.0.3
+        version: 34.0.3
+      '@codingame/monaco-vscode-snippets-service-override':
+        specifier: 34.0.3
+        version: 34.0.3
+      '@codingame/monaco-vscode-storage-service-override':
+        specifier: 34.0.3
+        version: 34.0.3
+      '@codingame/monaco-vscode-textmate-service-override':
+        specifier: 34.0.3
+        version: 34.0.3
+      '@codingame/monaco-vscode-theme-defaults-default-extension':
+        specifier: 34.0.3
+        version: 34.0.3
+      '@codingame/monaco-vscode-theme-service-override':
+        specifier: 34.0.3
+        version: 34.0.3
+      '@codingame/monaco-vscode-typescript-basics-default-extension':
+        specifier: ^34.0.3
+        version: 34.0.3
+      '@codingame/monaco-vscode-typescript-language-features-default-extension':
+        specifier: 34.0.3
+        version: 34.0.3
+      '@codingame/monaco-vscode-workbench-service-override':
+        specifier: 34.0.3
+        version: 34.0.3
+      monaco-editor:
+        specifier: npm:@codingame/monaco-vscode-editor-api@34
+        version: '@codingame/monaco-vscode-editor-api@34.0.3'
+      vscode:
+        specifier: npm:@codingame/monaco-vscode-extension-api@34
+        version: '@codingame/monaco-vscode-extension-api@34.0.3'
+      vscode-html-languageservice:
+        specifier: ^5.6.2
+        version: 5.6.2
+      vscode-json-languageservice:
+        specifier: ^5.7.2
+        version: 5.7.2
+    devDependencies:
+      '@dimina-kit/eslint-config':
+        specifier: workspace:*
+        version: link:../eslint-config
+      '@dimina-kit/typescript-config':
+        specifier: workspace:*
+        version: link:../typescript-config
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.19.17
+      eslint:
+        specifier: ^10.2.1
+        version: 10.2.1(jiti@2.7.0)
+      typescript:
+        specifier: 5.9.2
+        version: 5.9.2
+      vite:
+        specifier: ^8.0.8
+        version: 8.0.16(@types/node@22.19.17)(esbuild@0.28.0)(jiti@2.7.0)(less@4.6.4)(sass@1.99.0)(yaml@2.9.0)
 
 packages:
 
@@ -7735,7 +7757,7 @@ snapshots:
       debug: 4.4.3
       minimatch: 10.2.5
       semver: 7.7.4
-      tinyglobby: 0.2.16
+      tinyglobby: 0.2.17
       ts-api-utils: 2.5.0(typescript@5.9.2)
       typescript: 5.9.2
     transitivePeerDependencies:
@@ -7877,7 +7899,7 @@ snapshots:
       '@vue/shared': 3.5.34
       estree-walker: 2.0.2
       magic-string: 0.30.21
-      postcss: 8.5.14
+      postcss: 8.5.15
       source-map-js: 1.2.1
 
   '@vue/compiler-ssr@3.5.34':
@@ -11389,7 +11411,7 @@ snapshots:
       lines-and-columns: 1.2.4
       mz: 2.7.0
       pirates: 4.0.7
-      tinyglobby: 0.2.16
+      tinyglobby: 0.2.17
       ts-interface-checker: 0.1.13
 
   sumchecker@3.0.1:

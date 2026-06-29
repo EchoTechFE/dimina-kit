@@ -57,11 +57,10 @@ import {
 const DRAG_PANEL_MIME = 'application/x-deck-panel'
 
 // The panel id of the in-flight tab drag, set on `dragstart` and cleared on
-// `dragend`. The DataTransfer VALUE is unreadable during `dragover` (only `types`
-// is exposed, by spec), so the drop-indicator path can't recover the dragged id
-// from the event — it reads it from here to decide whether to paint a highlight
-// for THIS drag (e.g. a `reorder-only` panel shows none). A drag is a singleton
-// gesture, so module scope is sufficient.
+// `dragend`/`drop`. The DataTransfer VALUE is unreadable during `dragover` (only
+// `types` is exposed, by spec), so the drop-indicator path can't recover the
+// dragged id from the event — it reads it from here instead to decide whether to
+// paint a highlight for THIS drag (e.g. a `reorder-only` panel shows none).
 let activeDragPanelId: string | null = null
 
 export interface DockViewProps {
@@ -77,6 +76,15 @@ export interface DockViewProps {
 	 */
 	renderDomPanel: (panelId: string, opts: { active: boolean }) => ReactNode
 	bindNativeSlot: (panelId: string, el: HTMLElement | null) => void
+	/**
+	 * Opt-in: while a `dropPolicy:'reorder-only'` panel is dragged, paint NO drop
+	 * indicator over a group body (its own edges or any other group) — those are
+	 * no-op targets, so the highlight is misleading. Default `false` keeps the
+	 * geometry-only indicator (it paints where the pointer is; the capability
+	 * gate still rejects the drop). Hosts that want the cleaner "no misleading
+	 * highlight" UX pass `true`.
+	 */
+	suppressReorderOnlyDropIndicator?: boolean
 }
 
 /**
@@ -142,7 +150,7 @@ export function computeFlexiblePercentages(
 }
 
 export function DockView(props: DockViewProps): ReactNode {
-	const { model, registry, renderDomPanel, bindNativeSlot } = props
+	const { model, registry, renderDomPanel, bindNativeSlot, suppressReorderOnlyDropIndicator } = props
 
 	// Snapshot the canonical tree; re-render on every external emission. The
 	// `epoch` mirrors the model revision (0 before the first apply) and is
@@ -288,6 +296,7 @@ export function DockView(props: DockViewProps): ReactNode {
 				onClose: handleClose,
 				canClose,
 				isPanelInTree,
+				suppressReorderOnlyDropIndicator: suppressReorderOnlyDropIndicator ?? false,
 			})}
 		</LayoutEpochContext.Provider>
 	)
@@ -334,6 +343,8 @@ interface RenderContext {
 	 * (closed out / never docked), and driving a re-dock on it makes the mutation
 	 * layer throw `panel not found`. A drop carrying such an id must be a no-op. */
 	isPanelInTree: (panelId: string) => boolean
+	/** See {@link DockViewProps.suppressReorderOnlyDropIndicator}. */
+	suppressReorderOnlyDropIndicator: boolean
 }
 
 /** The id of the tab group currently holding `panelId`, or `undefined` if the
@@ -912,16 +923,16 @@ function GroupView(props: GroupViewProps): ReactNode {
 	// rect. `preventDefault` is required for the element to be a valid drop target.
 	const handleDragOver = (e: DragEvent<HTMLDivElement>): void => {
 		e.preventDefault()
-		// A `reorder-only` panel can ONLY land via a within-group tab-strip reorder
-		// (handled by the strip handlers, which paint no indicator). Anywhere the
-		// group body would resolve to — its own edges or ANY other group — is a
-		// no-op for it (see the GOAL B redock gates), so painting the blue drop
-		// highlight there is misleading. Suppress the indicator entirely while such
-		// a panel is in flight. The DataTransfer VALUE is unreadable during
-		// `dragover` (only `types` is, by spec), so the dragged id is recovered from
-		// `activeDragPanelId` (set on `dragstart`).
+		// Opt-in (suppressReorderOnlyDropIndicator): a `reorder-only` panel can ONLY
+		// land via a within-group tab-strip reorder (handled by the strip handlers,
+		// which paint no indicator). Anywhere the group body would resolve to — its
+		// own edges or ANY other group — is a no-op for it, so the blue drop
+		// highlight there is misleading. When opted in, suppress it entirely while
+		// such a panel is in flight. Default keeps the geometry-only indicator (the
+		// capability gate still rejects the drop at drop time).
 		if (
-			activeDragPanelId !== null
+			ctx.suppressReorderOnlyDropIndicator
+			&& activeDragPanelId !== null
 			&& ctx.registry.get(activeDragPanelId)?.dropPolicy === 'reorder-only'
 		) {
 			setDropZone(null)
@@ -1075,8 +1086,8 @@ function GroupView(props: GroupViewProps): ReactNode {
 								e.dataTransfer.setData(DRAG_PANEL_MIME, panelId)
 								e.dataTransfer.setData('text/plain', panelId)
 								e.dataTransfer.effectAllowed = 'move'
-								// Also expose it to the dragover indicator path (the DataTransfer
-								// value is unreadable during dragover).
+								// Also expose it to the dragover indicator path (DataTransfer
+								// values are unreadable during dragover).
 								activeDragPanelId = panelId
 							}}
 							onDragEnd={() => {

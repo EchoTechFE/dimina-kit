@@ -20,8 +20,8 @@
  * stays open / index-style) rather than asserted as required, so valid-but-
  * undocumented keys are not flagged.
  *
- * Activation: the JSON language *server* extension is not part of this spike's
- * wiring, so schema IntelliSense is driven directly here via
+ * Activation: this requires no marketplace JSON-language-features extension —
+ * schema IntelliSense is driven directly here via
  * vscode-json-languageservice (completion / hover / diagnostics providers),
  * mirroring how wxml-language.ts drives vscode-html-languageservice. No
  * marketplace JSON-language-features extension is required.
@@ -34,9 +34,19 @@ import {
   type JSONSchema,
   type CompletionItem as LsCompletionItem,
   type Range as LsRange,
-  type InsertReplaceEdit,
   type TextEdit,
 } from 'vscode-json-languageservice'
+
+/**
+ * Subset of the LSP `InsertReplaceEdit` (this version of
+ * vscode-json-languageservice does not re-export the type). A completion's
+ * `textEdit` is either a plain `TextEdit` (`range`) or this (`insert`/`replace`).
+ */
+interface InsertReplaceEdit {
+  newText: string
+  insert: LsRange
+  replace: LsRange
+}
 
 /**
  * Map an upstream LSP CompletionItem onto a vscode.CompletionItem.
@@ -393,7 +403,7 @@ export function registerDiminaJsonSchemas(api: typeof vscode): vscode.Disposable
 
   disposables.push(
     api.languages.registerHoverProvider(selector, {
-      async provideHover(document, position) {
+      async provideHover(document: vscode.TextDocument, position: vscode.Position) {
         const doc = jsonDoc(document)
         const json = ls.parseJSONDocument(doc)
         const hover = await ls.doHover(

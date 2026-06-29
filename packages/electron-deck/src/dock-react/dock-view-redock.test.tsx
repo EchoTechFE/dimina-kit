@@ -85,13 +85,14 @@ function domBody(panelId: string) {
 	return <div data-test-dom-content={panelId}>BODY:{panelId}</div>
 }
 
-function renderDock(model: LayoutModel, registry: PanelRegistry) {
+function renderDock(model: LayoutModel, registry: PanelRegistry, suppressReorderOnlyDropIndicator = false) {
 	return render(
 		<DockView
 			model={model}
 			registry={registry}
 			renderDomPanel={domBody}
 			bindNativeSlot={() => {}}
+			suppressReorderOnlyDropIndicator={suppressReorderOnlyDropIndicator}
 		/>,
 	)
 }
@@ -582,10 +583,14 @@ describe('<DockView> drag-to-redock — PanelCapabilities gates (draggable / dro
 	// ── GOAL B (indicator): no drop highlight where it can't land ──
 	// A reorder-only panel's only valid landing is a within-strip reorder (which
 	// paints no group indicator). Hovering any group body — its own edges OR another
-	// group — is a no-op for it (the GOAL B gates above), so the `data-deck-drop-zone`
-	// highlight must NOT appear there. (Unlike the geometry-driven ZONE selection,
-	// the PRESENCE/ABSENCE of the indicator needs no real geometry, so it is
-	// testable in jsdom: computeDropZone returns 'center' for a 0×0 rect.)
+	// group — is a no-op for it (the GOAL B gates above). Suppressing the
+	// `data-deck-drop-zone` highlight there is OPT-IN via
+	// `suppressReorderOnlyDropIndicator` (the default keeps the geometry-only
+	// highlight so devtools' hover indicator is unaffected — see
+	// dock-view-drop-indicator.test.tsx for the default/opt-in matrix); these
+	// cases pass the flag. (Unlike the geometry-driven ZONE selection, the
+	// PRESENCE/ABSENCE of the indicator needs no real geometry, so it is testable
+	// in jsdom: computeDropZone returns 'center' for a 0×0 rect.)
 	//
 	// A DataTransfer stub that accepts setData (dragstart writes the payload).
 	function dragSource() {
@@ -597,9 +602,9 @@ describe('<DockView> drag-to-redock — PanelCapabilities gates (draggable / dro
 		}
 	}
 
-	it('GOAL B: a reorder-only tab in flight shows NO drop indicator over ANOTHER group', () => {
+	it('GOAL B: a reorder-only tab in flight shows NO drop indicator over ANOTHER group (opted in)', () => {
 		const model = createLayoutModel(capsTree())
-		const { container } = renderDock(model, capsRegistry())
+		const { container } = renderDock(model, capsRegistry(), true)
 		const pinnedTab = container.querySelector('[data-deck-tab="pinned"]')!
 		const gFree = container.querySelector('[data-deck-group="g-free"]') as DeckGroupElement
 
@@ -610,9 +615,9 @@ describe('<DockView> drag-to-redock — PanelCapabilities gates (draggable / dro
 		fireEvent.dragEnd(pinnedTab)
 	})
 
-	it('GOAL B: a reorder-only tab in flight shows NO drop indicator over its OWN group body', () => {
+	it('GOAL B: a reorder-only tab in flight shows NO drop indicator over its OWN group body (opted in)', () => {
 		const model = createLayoutModel(capsTree())
-		const { container } = renderDock(model, capsRegistry())
+		const { container } = renderDock(model, capsRegistry(), true)
 		const pinnedTab = container.querySelector('[data-deck-tab="pinned"]')!
 		const gCap = container.querySelector('[data-deck-group="g-cap"]') as DeckGroupElement
 
