@@ -1004,14 +1004,24 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     // interceptor re-emits an encoded sentinel via
     // `InspectorFrontendHost.openInNewTab` → Electron `devtools-open-url`. (The
     // legacy `setOpenResourceHandler` hook this used to rely on is gone in
-    // current Chromium, so the script keeps it only as a fallback.) Best-effort:
-    // the script is fully try/catch-wrapped so a missing API never throws.
-    const sourceContext = projectSourceContextFromServiceHostUrl(
-      serviceWc.getURL(),
-      ctx.workspace?.getProjectPath?.(),
-    )
-    if (!sourceContext) return
-    devtoolsWc.executeJavaScript(buildDevtoolsProjectSourceLinksScript(sourceContext)).catch(() => {})
+    // current Chromium, so the script keeps it only as a fallback.)
+    //
+    // Destroy-race chokepoint: this runs from a deferred `dom-ready` callback
+    // (see wireOpenInEditor), by which time the inspected service-host wc may
+    // already be torn down (pool swap / project close / relaunch). Reading
+    // `serviceWc.getURL()` on a destroyed wc throws "Object has been destroyed"
+    // synchronously, which would escape the event listener. Guard both wc and
+    // wrap the body so a teardown mid-call degrades silently (mirrors
+    // customizeDevtoolsTabs).
+    if (serviceWc.isDestroyed() || devtoolsWc.isDestroyed()) return
+    try {
+      const sourceContext = projectSourceContextFromServiceHostUrl(
+        serviceWc.getURL(),
+        ctx.workspace?.getProjectPath?.(),
+      )
+      if (!sourceContext) return
+      devtoolsWc.executeJavaScript(buildDevtoolsProjectSourceLinksScript(sourceContext)).catch(() => {})
+    } catch { /* wc torn down mid-call — degrade silently */ }
   }
 
   // ── DevTools tab customization: keep only Elements/Console/Network ──────────
