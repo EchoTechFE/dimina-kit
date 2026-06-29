@@ -209,6 +209,18 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
       // open (no predecessor) is a safe no-op.
       if (currentSession !== null) {
         ctx.views.detachWorkbench()
+        // Symmetric with detachWorkbench: switching projects must also tear
+        // down the previous project's native simulator WCV, and through its
+        // `destroyed` hook the bridge app session that WCV owns. Returning to
+        // the project list never calls closeProject (the back button only
+        // notifies windowNavigateBack), so without this the old session
+        // survives into the open: its WCV keeps painting the previous app,
+        // `resolveCurrentApp` can still resolve the stale same-appId session,
+        // and the shared `persist:miniapp-<appId>` partition lets the reopened
+        // project reuse the old guest — so the simulator renders the PREVIOUS
+        // project. Tearing it down here lets the renderer's subsequent
+        // attachNativeSimulator build a clean view for the incoming project.
+        ctx.views.detachSimulator()
       }
       // Invalidate the outgoing session's onLog BEFORE teardown starts (same
       // order as closeProject below): the dying compile worker flushes
@@ -335,17 +347,35 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
 
     async captureThumbnail(projectPath) {
       if (!currentSession || projectPath !== currentProjectPath) return null
-      const wc = ctx.views.getSimulatorWebContents()
-      if (!wc) return null
+      const simulatorWc = ctx.views.getSimulatorWebContents()
+      if (!simulatorWc) return null
       if (ctx.views.getSimulatorProjectPath() !== projectPath) return null
       const session = currentSession
+      // In native-host the active render-host guest holds the mini-program
+      // content; the simulator WCV only holds the device-shell chrome. Capture
+      // the guest. When native-host reports no active guest (not mounted yet,
+      // mid page-switch, or destroyed) there is no page content to snapshot, so
+      // return null rather than persist a device-shell frame as if it were the
+      // page — that device-shell frame is exactly the wrong-content bug this
+      // capture path exists to avoid. Non-native-host has no guest concept, so
+      // the simulator WCV is the correct target there.
+      const bridge = ctx.bridge
+      const nativeHost = bridge?.isNativeHost() ?? false
+      const renderGuest = nativeHost ? (bridge?.getActiveRenderWc() ?? null) : null
+      if (nativeHost && !renderGuest) return null
+      const captureTarget = renderGuest ?? simulatorWc
       try {
-        const image = await wc.capturePage()
+        const image = await captureTarget.capturePage()
         if (
           currentSession !== session
           || currentProjectPath !== projectPath
-          || ctx.views.getSimulatorWebContents() !== wc
+          || ctx.views.getSimulatorWebContents() !== simulatorWc
           || ctx.views.getSimulatorProjectPath() !== projectPath
+          // The captured WebContents must still be the live capture target:
+          // a render guest that navigated mid-capture would otherwise persist a
+          // frame from the wrong page (the previous staleness anchor only
+          // tracked the outer WCV, not the guest we actually captured).
+          || (nativeHost ? (bridge?.getActiveRenderWc() ?? null) : simulatorWc) !== captureTarget
         ) {
           return null
         }

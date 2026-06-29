@@ -301,6 +301,18 @@ export interface BridgeRouterHandle {
   /** Cache the selected device + push DEVICE_CHANGE to the live simulator WC(s). */
   setDevice(device: NativeDeviceInfo): void
   /**
+   * Deterministically tear down every app session bound to the given simulator
+   * WebContentsView id (project close / DeviceShell respawn). The session
+   * mappings are cleared, the render-host guest webContents are closed, and the
+   * service-host window is closed/released — synchronously, instead of waiting
+   * on the WCV's async `'destroyed'` cascade — so the next project never
+   * re-resolves or screenshots the outgoing project's render guest. Idempotent
+   * with the `simulatorWc.once('destroyed')` hook (`disposeAppSession`
+   * early-returns once a session is gone). Optional so partial test mocks of the
+   * handle need not stub it.
+   */
+  disposeSessionsForSimulator?(simulatorWcId: number): void
+  /**
    * The flag-gated debugTap (§7) over the bridge message stream. Exposed so a
    * hidden devtools panel / automation can read `.entries()` when
    * `DIMINA_DEBUG_TAP=1`; a no-op snapshot otherwise. Optional so the many
@@ -475,6 +487,17 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
           wc.send(E.DEVICE_CHANGE, device)
         }
       }
+    },
+    disposeSessionsForSimulator: (simulatorWcId) => {
+      // Snapshot ids first: disposeAppSession mutates state.appSessions.
+      const ids: string[] = []
+      for (const [id, ap] of state.appSessions) {
+        if (ap.simulatorWc.id === simulatorWcId) ids.push(id)
+      }
+      // disposeAppSession is async only for pool.release / resourceServer.close;
+      // its synchronous prefix clears every map + closes the render guests + the
+      // service window, so the bridge is clean the moment this returns.
+      for (const id of ids) void disposeAppSession(state, id)
     },
     debugTap: state.debugTap,
   }
@@ -1540,6 +1563,13 @@ async function disposeAppSession(
   for (const page of ap.pages.values()) {
     if (page.renderWc && !page.renderWc.isDestroyed()) {
       state.wcIdToBridgeId.delete(page.renderWc.id)
+      // The render-host <webview> guest is otherwise reclaimed only when its
+      // host simulator WCV is destroyed, and that cascade is async. Close it
+      // here so a project-close / respawn tears the guest down deterministically
+      // rather than leaving the outgoing project's guest alive to be
+      // screenshotted or re-resolved by the next project. Idempotent with the
+      // cascade (guarded on isDestroyed).
+      try { page.renderWc.close() } catch { /* guest already gone */ }
     }
     state.pageSessions.delete(page.bridgeId)
   }

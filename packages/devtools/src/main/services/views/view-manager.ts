@@ -1360,6 +1360,10 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       }
       try {
         if (!nativeSimulatorView.webContents.isDestroyed()) {
+          // Clear the outgoing project's bridge sessions (render guests +
+          // service host) synchronously BEFORE the WCV's own async close(), so a
+          // relaunch never re-resolves or re-renders the previous guest.
+          ctx.bridge?.disposeSessionsForSimulator?.(nativeSimulatorView.webContents.id)
           nativeSimulatorView.webContents.close()
         }
       } catch { /* ignore */ }
@@ -1577,6 +1581,12 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       }
       try {
         if (!nativeSimulatorView.webContents.isDestroyed()) {
+          // Project close: tear down this project's bridge sessions (render
+          // guests + service host) + all mappings synchronously before the WCV's
+          // own async close(), so reopening another project starts from a clean
+          // state instead of re-resolving / screenshotting the closed project's
+          // guest. The 'destroyed' hook stays as an idempotent fallback.
+          ctx.bridge?.disposeSessionsForSimulator?.(nativeSimulatorView.webContents.id)
           nativeSimulatorView.webContents.close()
         }
       } catch { /* ignore */ }
