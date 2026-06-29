@@ -118,7 +118,11 @@ function makeHarness(opts?: {
     disposeAll: vi.fn(() => events.push('views.disposeAll')),
     // The switch path (openProject while a session is active) detaches the
     // embedded workbench editor so it re-mirrors the incoming project.
-    detachWorkbench: vi.fn(),
+    detachWorkbench: vi.fn(() => events.push('views.detachWorkbench')),
+    // The switch path also tears down the previous project's native simulator
+    // WCV (and, via its destroyed hook, the bridge app session) so the
+    // reopened project can't render the previous one.
+    detachSimulator: vi.fn(() => events.push('views.detachSimulator')),
   }
   const ctx = {
     adapter,
@@ -215,6 +219,45 @@ describe('workspace-service: closeProject delivers session.close (compile-worker
     expect((workspace.getSession()!.appInfo as { appId: string }).appId).toBe('app:/tmp/projB')
   })
 
+  it('openProject(B) while A is active tears down A\'s native simulator BEFORE the adapter opens B', async () => {
+    const { ctx, views, events } = makeHarness()
+    const workspace = createWorkspaceService(ctx)
+
+    await workspace.openProject('/tmp/projA')
+    await workspace.openProject('/tmp/projB')
+
+    // Returning to the project list never calls closeProject (the back button
+    // only notifies windowNavigateBack), so the switch is the ONLY hop that can
+    // tear down the outgoing project's native simulator WCV + bridge session.
+    // Without it the reopened project renders the PREVIOUS project: the old WCV
+    // keeps painting it and resolveCurrentApp can resolve the stale session.
+    expect(
+      views.detachSimulator,
+      'switching projects must detach the previous native simulator so the reopened '
+      + 'project does not render the previous one',
+    ).toHaveBeenCalledTimes(1)
+
+    // The teardown must happen before B's adapter open, so A's WCV/bridge are
+    // gone before B's simulator attaches and spawns.
+    const detach = events.indexOf('views.detachSimulator')
+    const openB = events.indexOf('open:/tmp/projB')
+    expect(detach).toBeGreaterThanOrEqual(0)
+    expect(openB).toBeGreaterThan(detach)
+  })
+
+  it('the FIRST openProject (no predecessor) does not detach a simulator', async () => {
+    const { ctx, views } = makeHarness()
+    const workspace = createWorkspaceService(ctx)
+
+    await workspace.openProject('/tmp/projA')
+
+    expect(
+      views.detachSimulator,
+      'the first open has no previous project — detaching would tear down the view '
+      + 'the renderer is about to attach',
+    ).not.toHaveBeenCalled()
+  })
+
   it('a REJECTING session.close() must not wedge teardown: session cleared, views still disposed', async () => {
     const { ctx, views, sessions } = makeHarness({
       closeBehavior: () => Promise.reject(new Error('close blew up')),
@@ -237,3 +280,4 @@ describe('workspace-service: closeProject delivers session.close (compile-worker
     expect(views.disposeAll).toHaveBeenCalledTimes(1)
   })
 })
+

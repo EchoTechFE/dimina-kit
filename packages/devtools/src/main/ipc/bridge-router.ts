@@ -301,6 +301,27 @@ export interface BridgeRouterHandle {
   /** Cache the selected device + push DEVICE_CHANGE to the live simulator WC(s). */
   setDevice(device: NativeDeviceInfo): void
   /**
+   * Deterministically tear down every app session bound to the given simulator
+   * WebContentsView id (project close / DeviceShell respawn). The session
+   * mappings are cleared, the render-host guest webContents are closed, and the
+   * service-host window is closed/released — synchronously, instead of waiting
+   * on the WCV's async `'destroyed'` cascade — so the next project never
+   * re-resolves or screenshots the outgoing project's render guest. Idempotent
+   * with the `simulatorWc.once('destroyed')` hook (`disposeAppSession`
+   * early-returns once a session is gone). Optional so partial test mocks of the
+   * handle need not stub it.
+   *
+   * The synchronous prefix of the underlying disposeAppSession clears every map
+   * + closes the render guests + the service window before it awaits, so the
+   * bridge is clean the moment this is called. The returned promise resolves
+   * after the async tail (pool.release / resourceServer.close) so the lifecycle
+   * owner can sequence a reopen after full teardown. NOTE: disposeAppSession
+   * catches and logs pool/resource-release failures internally, so the promise
+   * resolves rather than rejecting on those — it is a completion signal, not an
+   * error channel.
+   */
+  disposeSessionsForSimulator?(simulatorWcId: number): Promise<void>
+  /**
    * The flag-gated debugTap (§7) over the bridge message stream. Exposed so a
    * hidden devtools panel / automation can read `.entries()` when
    * `DIMINA_DEBUG_TAP=1`; a no-op snapshot otherwise. Optional so the many
@@ -335,10 +356,26 @@ function resolveCurrentApp(
     for (const ap of state.appSessions.values()) if (ap.appId === activeAppId) match = ap
     if (match) return match
   }
-  // Maps preserve insertion order; the last entry is the most recent spawn.
+  // During a project close the workspace nulls its session BEFORE the bridge app
+  // session is torn down (disposeSession runs before disposeAll). Resolving here
+  // would hand a consumer the closing project's dying guest, so refuse to guess
+  // while a close is in flight.
+  if (ctx.workspace?.isClosing?.()) return undefined
+  // No appId hint and no workspace session to disambiguate. Picking by appId is
+  // impossible, so fall back to the most-recent spawn — but ONLY when every live
+  // session belongs to the same app. Same-appId multiples are a respawn/reopen
+  // in progress where the newest is the live one (insertion order = spawn
+  // order). Multiple DISTINCT appIds mean a previous project is mid-teardown
+  // alongside the new one; any pick is a guess that can resolve the WRONG
+  // project's content (the screenshot/inspect-stale-app bug class), so prefer
+  // null over a wrong guess.
   let last: AppSession | undefined
-  for (const ap of state.appSessions.values()) last = ap
-  return last
+  const distinctAppIds = new Set<string>()
+  for (const ap of state.appSessions.values()) {
+    last = ap
+    distinctAppIds.add(ap.appId)
+  }
+  return distinctAppIds.size <= 1 ? last : undefined
 }
 
 export function installBridgeRouter(ctx: WorkbenchContext): void {
@@ -475,6 +512,21 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
           wc.send(E.DEVICE_CHANGE, device)
         }
       }
+    },
+    disposeSessionsForSimulator: (simulatorWcId) => {
+      // Snapshot ids first: disposeAppSession mutates state.appSessions.
+      const ids: string[] = []
+      for (const [id, ap] of state.appSessions) {
+        if (ap.simulatorWc.id === simulatorWcId) ids.push(id)
+      }
+      // disposeAppSession's synchronous prefix clears every map + closes the
+      // render guests + the service window, so the bridge is clean the moment
+      // this is called. The joined promise resolves after the async tail
+      // (pool.release / resourceServer.close) so a caller can sequence a reopen
+      // after full teardown. disposeAppSession logs those tail failures
+      // internally, so this resolves rather than rejecting on them — it is a
+      // completion signal, not an error channel.
+      return Promise.all(ids.map((id) => disposeAppSession(state, id))).then(() => {})
     },
     debugTap: state.debugTap,
   }
@@ -736,6 +788,13 @@ async function handleSpawn(
     serviceWindow = createServiceHostWindow({
       bridgeId,
       appId,
+      // Same (appId, projectPath) pair the simulator WCV uses, so this project's
+      // service host and render guests land on ONE partition while a different
+      // project with the same appId is isolated. Use the path captured at spawn
+      // ENTRY (workspaceProjectPath), not a re-read: a project switch during the
+      // awaits above would otherwise give the service host a different path than
+      // the simulator WCV was built with, splitting the partition.
+      projectPath: workspaceProjectPath || undefined,
       pagePath,
       pkgRoot,
       root,
@@ -820,6 +879,17 @@ async function handleSpawn(
     void disposeAppSession(state, appSessionId)
   }
   simulatorWc.once('destroyed', onSimulatorDestroyed)
+  // The simulator WCV may have been torn down DURING this spawn's awaits
+  // (loadAppConfig / resource server / service-host creation) — e.g. a project
+  // close/switch that ran while we were mid-flight. In that case its 'destroyed'
+  // event already fired and the once() above will never run, so the freshly
+  // registered session would be a zombie owned by a dead simulator (the
+  // teardown's disposeSessionsForSimulator snapshot taken before appSessions.set
+  // could not have included it). Dispose now — idempotent with the graceful
+  // path — so a closed/superseded simulator can't leave a resurrected session.
+  if (simulatorWc.isDestroyed()) {
+    void disposeAppSession(state, appSessionId)
+  }
 
   if (usedPool) {
     // A pooled/fallback window passes through about:blank (warm load or the
@@ -1540,6 +1610,13 @@ async function disposeAppSession(
   for (const page of ap.pages.values()) {
     if (page.renderWc && !page.renderWc.isDestroyed()) {
       state.wcIdToBridgeId.delete(page.renderWc.id)
+      // The render-host <webview> guest is otherwise reclaimed only when its
+      // host simulator WCV is destroyed, and that cascade is async. Close it
+      // here so a project-close / respawn tears the guest down deterministically
+      // rather than leaving the outgoing project's guest alive to be
+      // screenshotted or re-resolved by the next project. Idempotent with the
+      // cascade (guarded on isDestroyed).
+      try { page.renderWc.close() } catch { /* guest already gone */ }
     }
     state.pageSessions.delete(page.bridgeId)
   }

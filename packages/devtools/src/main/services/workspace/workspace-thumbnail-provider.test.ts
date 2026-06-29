@@ -253,6 +253,208 @@ describe('workspace-service ↔ ProjectsProvider thumbnail hooks', () => {
   })
 
   /**
+   * When native-host mode is active the active render-host guest is the source
+   * of mini-program content; the simulator WCV only holds the device-shell
+   * chrome. captureThumbnail must capture the render guest, not the outer shell.
+   */
+  it('native-host: captures render guest WC instead of simulator WC', async () => {
+    const saveThumbnail = vi.fn()
+    const renderGuestCapture = vi.fn(async () => ({ toPNG: () => PNG_BYTES }))
+    const renderGuestWc = { id: 99, isDestroyed: () => false, capturePage: renderGuestCapture }
+
+    const ctx = withSimulatorId(
+      createWorkbenchContext({
+        mainWindow: fakeMainWindow(),
+        preloadPath: '/fake/preload.js',
+        rendererDir: '/fake/renderer',
+        projectsProvider: { ...makePartialProvider(), saveThumbnail },
+      }),
+    )
+    // Wire a minimal bridge handle with native-host on and the render guest available.
+    ;(ctx as unknown as { bridge: unknown }).bridge = {
+      isNativeHost: () => true,
+      getActiveRenderWc: () => renderGuestWc,
+    }
+    await activateProject(ctx, '/p/x')
+
+    const dataUrl = await ctx.workspace.captureThumbnail('/p/x')
+
+    expect(renderGuestCapture).toHaveBeenCalledTimes(1)
+    expect(capturePageMock).not.toHaveBeenCalled()
+    expect(typeof dataUrl).toBe('string')
+    expect(String(dataUrl).startsWith('data:image/png;base64,')).toBe(true)
+    expect(saveThumbnail).toHaveBeenCalledWith('/p/x', dataUrl)
+  })
+
+  /**
+   * When native-host mode is active but the render guest is not yet available
+   * (not mounted, mid page-switch, or destroyed), captureThumbnail returns null
+   * rather than falling back to the device-shell WCV. A device-shell frame is
+   * not a valid page thumbnail — it only holds phone chrome, not page content.
+   */
+  it('native-host: returns null when render guest is unavailable (no device-shell fallback)', async () => {
+    const saveThumbnail = vi.fn()
+    const ctx = withSimulatorId(
+      createWorkbenchContext({
+        mainWindow: fakeMainWindow(),
+        preloadPath: '/fake/preload.js',
+        rendererDir: '/fake/renderer',
+        projectsProvider: { ...makePartialProvider(), saveThumbnail },
+      }),
+    )
+    // Bridge reports native-host mode but no active render guest.
+    ;(ctx as unknown as { bridge: unknown }).bridge = {
+      isNativeHost: () => true,
+      getActiveRenderWc: () => null,
+    }
+    await activateProject(ctx, '/p/x')
+
+    const result = await ctx.workspace.captureThumbnail('/p/x')
+
+    expect(result).toBeNull()
+    expect(capturePageMock).not.toHaveBeenCalled()
+    expect(saveThumbnail).not.toHaveBeenCalled()
+  })
+
+  /**
+   * When the render guest changes between capture start and capture resolve
+   * (mid page-switch), captureThumbnail returns null and does not persist
+   * the stale frame. The post-capture getActiveRenderWc() check enforces this.
+   *
+   * Failure predicate: removing the staleness guard that compares
+   * getActiveRenderWc() after capture against the captured target allows
+   * saveThumbnail to be called with a frame from the wrong page — this test
+   * catches that regression.
+   */
+  it('native-host: returns null when render guest changes mid-capture (staleness guard)', async () => {
+    const saveThumbnail = vi.fn()
+    const guestACapture = vi.fn(async () => ({ toPNG: () => PNG_BYTES }))
+    const guestA = { id: 10, isDestroyed: () => false, capturePage: guestACapture }
+    const guestB = { id: 11, isDestroyed: () => false, capturePage: vi.fn() }
+
+    let getActiveRenderWcCalls = 0
+    const ctx = withSimulatorId(
+      createWorkbenchContext({
+        mainWindow: fakeMainWindow(),
+        preloadPath: '/fake/preload.js',
+        rendererDir: '/fake/renderer',
+        projectsProvider: { ...makePartialProvider(), saveThumbnail },
+      }),
+    )
+    // First call selects guestA as the capture target. The post-capture
+    // staleness check calls getActiveRenderWc() again; returning guestB at
+    // that point simulates a page navigation completing during the capture.
+    ;(ctx as unknown as { bridge: unknown }).bridge = {
+      isNativeHost: () => true,
+      getActiveRenderWc: () => (getActiveRenderWcCalls++ === 0 ? guestA : guestB),
+    }
+    await activateProject(ctx, '/p/x')
+
+    const result = await ctx.workspace.captureThumbnail('/p/x')
+
+    // guestA.capturePage resolved, but the staleness check saw guestB — null.
+    expect(guestACapture).toHaveBeenCalledTimes(1)
+    expect(result).toBeNull()
+    expect(saveThumbnail).not.toHaveBeenCalled()
+  })
+
+  /**
+   * Capture targets (simulator WC or render guest) can be destroyed before
+   * capturePage is called — e.g. the WC was torn down by a project switch that
+   * arrived between the staleness-snapshot and the actual capture call. Calling
+   * capturePage() on a destroyed WebContents throws in Electron; the guard must
+   * return null without calling capturePage at all, rather than relying on the
+   * try/catch to swallow the throw. The distinction matters because a spy on
+   * the destroyed WC lets us verify the guard fires at the right point.
+   *
+   * Failure predicate: without an isDestroyed() pre-check, capturePage is still
+   * called on the destroyed WC mock (which resolves successfully in the test
+   * double, unlike real Electron), causing saveThumbnail to be called with a
+   * stale frame — both spy assertions fire red.
+   */
+  it('returns null without calling capturePage when the simulator WC is already destroyed', async () => {
+    const saveThumbnail = vi.fn()
+    const captureOnDestroyed = vi.fn(async () => ({ toPNG: () => PNG_BYTES }))
+    const destroyedSimWc = {
+      id: 77,
+      isDestroyed: () => true,
+      capturePage: captureOnDestroyed,
+    }
+    const ctx = createWorkbenchContext({
+      mainWindow: fakeMainWindow(),
+      preloadPath: '/fake/preload.js',
+      rendererDir: '/fake/renderer',
+      projectsProvider: { ...makePartialProvider(), saveThumbnail },
+    })
+    ;(ctx.views as unknown as { getSimulatorWebContents: () => unknown })
+      .getSimulatorWebContents = () => destroyedSimWc
+    ;(ctx.views as unknown as { getSimulatorProjectPath: () => string | null })
+      .getSimulatorProjectPath = () => '/p/x'
+    ctx.adapter.openProject = vi.fn(async () => ({
+      port: 7788,
+      appInfo: { appId: 'app:/p/x' },
+      close: vi.fn(async () => {}),
+    }))
+    await ctx.workspace.openProject('/p/x')
+
+    const result = await ctx.workspace.captureThumbnail('/p/x')
+
+    expect(result).toBeNull()
+    expect(
+      captureOnDestroyed,
+      'capturePage must not be called on an already-destroyed WebContents',
+    ).not.toHaveBeenCalled()
+    expect(saveThumbnail).not.toHaveBeenCalled()
+  })
+
+  /**
+   * Native-host: same pre-check for the render guest path. The guest can be
+   * destroyed between the pre-capture liveness snapshot and the capturePage
+   * call (e.g. a page navigation tore it down). Calling capturePage on a
+   * destroyed render guest is the same bug as the simulator-WC case above —
+   * prevented by an isDestroyed() guard, not by relying on the catch branch.
+   *
+   * Failure predicate: without the guard, captureOnDestroyedGuest is called
+   * and (in the mock) resolves successfully, so saveThumbnail is called — red.
+   */
+  it('native-host: returns null without calling capturePage when render guest is already destroyed', async () => {
+    const saveThumbnail = vi.fn()
+    const captureOnDestroyedGuest = vi.fn(async () => ({ toPNG: () => PNG_BYTES }))
+    const destroyedGuest = {
+      id: 88,
+      isDestroyed: () => true,
+      capturePage: captureOnDestroyedGuest,
+    }
+    const ctx = withSimulatorId(
+      createWorkbenchContext({
+        mainWindow: fakeMainWindow(),
+        preloadPath: '/fake/preload.js',
+        rendererDir: '/fake/renderer',
+        projectsProvider: { ...makePartialProvider(), saveThumbnail },
+      }),
+    )
+    ;(ctx as unknown as { bridge: unknown }).bridge = {
+      isNativeHost: () => true,
+      getActiveRenderWc: () => destroyedGuest,
+    }
+    ctx.adapter.openProject = vi.fn(async () => ({
+      port: 7788,
+      appInfo: { appId: 'app:/p/x' },
+      close: vi.fn(async () => {}),
+    }))
+    await ctx.workspace.openProject('/p/x')
+
+    const result = await ctx.workspace.captureThumbnail('/p/x')
+
+    expect(result).toBeNull()
+    expect(
+      captureOnDestroyedGuest,
+      'capturePage must not be called on an already-destroyed render guest',
+    ).not.toHaveBeenCalled()
+    expect(saveThumbnail).not.toHaveBeenCalled()
+  })
+
+  /**
    * Bug caught: workspace ignores injected.getThumbnail and still reads
    * from local fs, returning either null or someone else's cached PNG
    * instead of the cloud thumbnail the host knows about.

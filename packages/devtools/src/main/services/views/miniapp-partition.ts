@@ -8,12 +8,15 @@
  * visible to (and clobbered by) project B; two projects open at once cross-
  * contaminate and "clear storage" on one nukes the other.
  *
- * The fix derives a STABLE per-project partition from the project identity (the
- * miniapp `appId`, which flows in via the simulator URL `?appId=` and the spawn
- * path's `appId`). Same project → same partition (storage survives a relaunch);
- * different projects → different partitions (no cross-contamination). The shape
- * mirrors the IDE state of the art (WeChat's static partition, ByteDance's
- * `persist:miniapp-<id>` dynamic partition).
+ * The fix derives a STABLE per-project partition from the project identity:
+ * the miniapp `appId` (which flows in via the simulator URL `?appId=` and the
+ * spawn path's `appId`) PLUS the project path. appId alone is insufficient —
+ * it comes from the project manifest, so two DIFFERENT project paths can declare
+ * the SAME appId and would otherwise share a partition; folding the path in
+ * isolates them. Same project (same appId + path) → same partition (storage
+ * survives a relaunch); different projects → different partitions (no cross-
+ * contamination). The shape mirrors the IDE state of the art (WeChat's static
+ * partition, ByteDance's `persist:miniapp-<id>` dynamic partition).
  *
  * The protocol handlers (`difile://`, `dmb-resource`) and webRequest policies
  * (referer / CORS) that the simulator runtime needs were installed once on the
@@ -25,6 +28,13 @@
  * Partition CLEANUP (reclaiming on-disk `persist:` data) is intentionally NOT
  * done here — leaving the data on disk is the whole point of a `persist:`
  * partition (cache/storage survives a relaunch). That is a separate concern.
+ *
+ * MIGRATION (intentional one-time reset): folding the project path into the key
+ * means a project that previously ran on the appId-only `persist:miniapp-<appId>`
+ * now runs on `persist:miniapp-<appId>-p<hash>` and starts with empty
+ * cookies/localStorage/cache. Old data is NOT migrated — a best-effort copy
+ * could carry already-cross-contaminated state into the newly isolated space,
+ * which defeats the isolation. The reset is accepted as a one-time cost.
  */
 
 import * as electron from 'electron'
@@ -48,14 +58,25 @@ const PARTITION_PREFIX = 'persist:miniapp-'
  * same key (so storage survives a relaunch); different `appId`s yield different
  * keys.
  */
-export function miniappPartitionKey(appId: string): string {
+export function miniappPartitionKey(appId: string, projectPath?: string | null): string {
   const safe = appId.replace(/[^A-Za-z0-9_-]/g, '')
   // Folding may have dropped distinguishing characters; if the input was not
   // already fully safe, append a deterministic hash of the RAW appId so two
   // distinct appIds can never alias onto the same key.
-  if (safe === appId && safe.length > 0) return safe
-  const hash = djb2(appId).toString(36)
-  return safe.length > 0 ? `${safe}-${hash}` : hash
+  const base = safe === appId && safe.length > 0
+    ? safe
+    : safe.length > 0
+      ? `${safe}-${djb2(appId).toString(36)}`
+      : djb2(appId).toString(36)
+  // `appId` comes from the project manifest, not the path — two DIFFERENT
+  // project paths can declare the SAME appId. Fold the project path into the key
+  // so those projects get isolated partitions (no storage/cache cross-talk),
+  // while the same path always yields the same suffix (a relaunch reuses its
+  // storage). Path characters aren't partition-safe, so always hash. Omitting
+  // projectPath preserves the legacy appId-only key (pre-warm pool / callers
+  // that have no project identity).
+  if (!projectPath) return base
+  return `${base}-p${djb2(projectPath).toString(36)}`
 }
 
 /**
@@ -64,9 +85,12 @@ export function miniappPartitionKey(appId: string): string {
  * matching the legacy behavior) and a `persist:miniapp-<key>` partition
  * otherwise.
  */
-export function miniappPartition(appId: string | null | undefined): string {
+export function miniappPartition(
+  appId: string | null | undefined,
+  projectPath?: string | null,
+): string {
   if (!appId) return SHARED_MINIAPP_PARTITION
-  return `${PARTITION_PREFIX}${miniappPartitionKey(appId)}`
+  return `${PARTITION_PREFIX}${miniappPartitionKey(appId, projectPath)}`
 }
 
 /** Small, stable string hash (djb2). Not cryptographic — only needs to be
