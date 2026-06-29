@@ -1,0 +1,10 @@
+{
+  "pages": [
+    "pages/index/index"
+  ],
+  "window": {
+    "navigationBarTitleText": "QDML Fixture",
+    "navigationBarBackgroundColor": "#1890ff",
+    "navigationBarTextStyle": "white"
+  }
+}

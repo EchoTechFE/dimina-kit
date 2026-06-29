@@ -1,0 +1,9 @@
+.qdml-marker {
+  color: rgb(18, 52, 86);
+  font-size: 40rpx;
+}
+
+.qdss-styled {
+  color: rgb(200, 30, 40);
+  font-weight: bold;
+}

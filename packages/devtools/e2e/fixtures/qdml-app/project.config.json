@@ -1,0 +1,5 @@
+{
+  "appid": "devtools_qdml_fixture",
+  "projectname": "devtools-qdml-fixture",
+  "description": "Fixture mini-app whose template/style/viewScript use the custom .qdml/.qdss/.qds extensions, exercising WorkbenchAppConfig.fileTypes through both compilation and the editor."
+}
