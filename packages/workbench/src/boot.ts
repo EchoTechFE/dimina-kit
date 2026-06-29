@@ -264,6 +264,64 @@ async function registerWxmlExtension(): Promise<void> {
   await wxmlExt.whenReady()
 }
 
+/**
+ * Populate the workspace from its source, seed ambient typings, and keep
+ * subsequent saves flushed back through `workspace.onSave`. Best-effort: a
+ * failure here logs but does not abort boot.
+ */
+async function populateWorkspace(
+  workspace: BootWorkbenchOptions['workspace'],
+  seedTypings: boolean,
+  contributedTypings: ExtraTyping[],
+): Promise<void> {
+  try {
+    const fileService = await getService(IFileService)
+    await workspace.populate(fileService)
+
+    if (seedTypings) {
+      await seedAmbientTypings(fileService, contributedTypings)
+    }
+
+    if (workspace.onSave) {
+      // Flush every WRITE/CREATE under the workspace. FileOperation.WRITE === 4, CREATE === 0.
+      fileService.onDidRunOperation(async (e) => {
+        if (e.operation !== 4 && e.operation !== 0) return
+        try {
+          const content = await fileService.readFile(e.resource)
+          await workspace.onSave!(e.resource, content.value.buffer)
+        } catch {
+          // best-effort flush; non-workspace resources are ignored by the source
+        }
+      })
+    }
+  } catch (e) {
+    console.error('[workbench] workspace populate + d.ts seed failed', e)
+  }
+}
+
+/**
+ * Decisive ext-host liveness proof: registering a command + executing it only
+ * succeeds if the worker extension host actually activated (commands round-trip
+ * through the ext-host). The probe command is single-shot — disposed in finally
+ * so it does not linger in the palette or leak across re-boots.
+ */
+async function probeExtHostLiveness(
+  vscode: typeof import('vscode'),
+  status: (s: string) => void,
+): Promise<void> {
+  let disposable: { dispose: () => void } | undefined
+  try {
+    disposable = vscode.commands.registerCommand('dimina.workbench.ping', () => 'pong-from-exthost')
+    const result = await vscode.commands.executeCommand<string>('dimina.workbench.ping')
+    status(result === 'pong-from-exthost' ? 'exthost-alive' : 'exthost-no-pong')
+  } catch (e) {
+    status('exthost-probe-failed')
+    console.error('[workbench] ext-host ping failed', e)
+  } finally {
+    disposable?.dispose()
+  }
+}
+
 export async function bootWorkbench(options: BootWorkbenchOptions): Promise<WorkbenchHandle> {
   const { container, workspace } = options
   const features: Required<WorkbenchFeatures> = {
@@ -411,49 +469,12 @@ export async function bootWorkbench(options: BootWorkbenchOptions): Promise<Work
   }
 
   // Populate the workspace + seed ambient typings, then keep saves flushed back.
-  try {
-    const fileService = await getService(IFileService)
-    await workspace.populate(fileService)
-
-    if (features.ambientTypings) {
-      await seedAmbientTypings(fileService, contributedTypings)
-    }
-
-    if (workspace.onSave) {
-      // Flush every WRITE/CREATE under the workspace. FileOperation.WRITE === 4, CREATE === 0.
-      fileService.onDidRunOperation(async (e) => {
-        if (e.operation !== 4 && e.operation !== 0) return
-        try {
-          const content = await fileService.readFile(e.resource)
-          await workspace.onSave!(e.resource, content.value.buffer)
-        } catch {
-          // best-effort flush; non-workspace resources are ignored by the source
-        }
-      })
-    }
-  } catch (e) {
-    console.error('[workbench] workspace populate + d.ts seed failed', e)
-  }
+  await populateWorkspace(workspace, features.ambientTypings, contributedTypings)
 
   status('workbench-ready')
   installAutoSave(vscode)
 
-  // Decisive ext-host liveness proof: registering a command + executing it only
-  // succeeds if the worker extension host actually activated (commands round-trip
-  // through the ext-host).
-  let pingDisposable: { dispose: () => void } | undefined
-  try {
-    pingDisposable = vscode.commands.registerCommand('dimina.workbench.ping', () => 'pong-from-exthost')
-    const pingResult = await vscode.commands.executeCommand('dimina.workbench.ping')
-    status(pingResult === 'pong-from-exthost' ? 'exthost-alive' : 'exthost-no-pong')
-  } catch (e) {
-    status('exthost-probe-failed')
-    console.error('[workbench] ext-host ping failed', e)
-  } finally {
-    // The probe command is single-shot — unregister it so it does not linger in
-    // the command palette or leak across re-boots.
-    pingDisposable?.dispose()
-  }
+  await probeExtHostLiveness(vscode, status)
 
   return { setTheme: (scheme) => applyTheme(scheme === 'light' ? 'light' : 'dark'), vscode }
 }

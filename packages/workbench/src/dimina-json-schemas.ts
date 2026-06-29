@@ -403,7 +403,7 @@ export function registerDiminaJsonSchemas(api: typeof vscode): vscode.Disposable
 
   disposables.push(
     api.languages.registerHoverProvider(selector, {
-      async provideHover(document, position) {
+      async provideHover(document: vscode.TextDocument, position: vscode.Position) {
         const doc = jsonDoc(document)
         const json = ls.parseJSONDocument(doc)
         const hover = await ls.doHover(

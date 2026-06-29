@@ -114,7 +114,7 @@ export function registerWxmlLanguage(api: typeof vscode): vscode.Disposable {
 
   disposables.push(
     api.languages.registerHoverProvider(selector, {
-      provideHover(document, position) {
+      provideHover(document: import('vscode').TextDocument, position: import('vscode').Position) {
         const doc = lsDoc(document)
         const html = ls.parseHTMLDocument(doc)
         const hover = ls.doHover(
