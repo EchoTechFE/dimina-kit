@@ -201,6 +201,23 @@ async function flush(): Promise<void> {
   await Promise.resolve()
 }
 
+/**
+ * Build a WorkbenchContext where workspace has no active session and exposes
+ * an explicit isClosing() stub. Used by the closing-guard suite below.
+ */
+function makeCtxWithIsClosing(closing: boolean): { ctx: WorkbenchContext; simulatorWc: MockWc } {
+  const simulatorWc = stubs.makeWebContents()
+  const ctx = {
+    registry: { add: (_fn: AnyFn) => {} },
+    simulatorApis: { has: (_name: string) => false, invoke: async () => ({}) },
+    windows: { mainWindow: { webContents: simulatorWc } },
+    workspace: { getSession: () => null, getProjectPath: () => '', isClosing: () => closing },
+    connections: createConnectionRegistry(),
+    appData: undefined,
+  } as unknown as WorkbenchContext
+  return { ctx, simulatorWc }
+}
+
 describe('bridge-router — resolveCurrentApp with no workspace session', () => {
   /**
    * Single session: when there is exactly one appId in state and no workspace
@@ -344,5 +361,62 @@ describe('bridge-router — resolveCurrentApp with no workspace session', () => 
       'same-appId two spawns: most-recent must resolve even with no workspace session',
     ).not.toBeNull()
     expect(wc!.id).toBe(resultNew.serviceWcId)
+  })
+})
+
+describe('bridge-router — resolveCurrentApp: isClosing guard prevents stale-session resolution', () => {
+  /**
+   * During closeProject() teardown, disposeSession() sets the workspace's
+   * currentSession to null before ctx.views.disposeAll() clears the bridge's
+   * appSessions Map. In that window, workspace.getSession() returns null while
+   * one residual app session remains in state. Without the isClosing guard,
+   * the single-session shortcut (distinctAppIds.size <= 1) would return that
+   * dying session as the active target, delivering the wrong project's
+   * WebContents to screenshot/inspect callers.
+   *
+   * Failure predicate: without the isClosing check in resolveCurrentApp, a
+   * single residual session passes the distinctAppIds.size <= 1 gate and is
+   * returned (not null) — the toBeNull() assertion fails.
+   */
+  it('workspace.isClosing()=true: single residual session is not resolved via the single-session shortcut', async () => {
+    const { ctx, simulatorWc } = makeCtxWithIsClosing(true)
+    installBridgeRouter(ctx)
+    await spawnApp(simulatorWc, 'app-dying')
+    await flush()
+
+    expect(
+      ctx.bridge!.getServiceWc(),
+      'while workspace is closing, getServiceWc() must return null even with one residual session — '
+      + 'the single-session shortcut must not resolve a session that belongs to a project mid-teardown',
+    ).toBeNull()
+
+    expect(
+      ctx.bridge!.getActiveBridgeId(),
+      'while workspace is closing, getActiveBridgeId() must also return null via the same guard',
+    ).toBeNull()
+  })
+
+  /**
+   * isClosing()=false (normal runtime, not in teardown) preserves the existing
+   * single-session shortcut: one app session resolves without an explicit appId.
+   * The isClosing guard must only suppress resolution during teardown — not at
+   * normal runtime where the session is live and the caller expects an answer.
+   *
+   * Failure predicate: if the guard fires unconditionally (or checks the wrong
+   * condition), getServiceWc() returns null here — the not.toBeNull() assertion
+   * fails, breaking every no-appId caller when no workspace session is active.
+   */
+  it('workspace.isClosing()=false: single session still resolves (guard does not fire outside teardown)', async () => {
+    const { ctx, simulatorWc } = makeCtxWithIsClosing(false)
+    installBridgeRouter(ctx)
+    const { serviceWcId } = await spawnApp(simulatorWc, 'app-normal')
+    await flush()
+
+    const wc = ctx.bridge!.getServiceWc()
+    expect(
+      wc,
+      'when workspace is not closing, the single-session shortcut must still resolve the session',
+    ).not.toBeNull()
+    expect(wc!.id).toBe(serviceWcId)
   })
 })

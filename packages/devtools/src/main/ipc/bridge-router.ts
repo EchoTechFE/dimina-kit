@@ -356,6 +356,11 @@ function resolveCurrentApp(
     for (const ap of state.appSessions.values()) if (ap.appId === activeAppId) match = ap
     if (match) return match
   }
+  // During a project close the workspace nulls its session BEFORE the bridge app
+  // session is torn down (disposeSession runs before disposeAll). Resolving here
+  // would hand a consumer the closing project's dying guest, so refuse to guess
+  // while a close is in flight.
+  if (ctx.workspace?.isClosing?.()) return undefined
   // No appId hint and no workspace session to disambiguate. Picking by appId is
   // impossible, so fall back to the most-recent spawn — but ONLY when every live
   // session belongs to the same app. Same-appId multiples are a respawn/reopen

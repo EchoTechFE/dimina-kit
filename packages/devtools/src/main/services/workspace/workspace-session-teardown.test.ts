@@ -483,6 +483,98 @@ describe('workspace-service: open/close serialization (lifecycle ops must not in
   })
 })
 
+describe('workspace-service: isClosing flag tracks the closeProject teardown boundary', () => {
+  /**
+   * WorkspaceService must expose isClosing() so resolveCurrentApp can suppress
+   * the stale-session fallback during the teardown window. The flag must be true
+   * from the moment closeProject() begins its critical section (before
+   * disposeSession() awaits session.close()) through to the end of teardown, and
+   * false after closeProject() resolves.
+   *
+   * Failure predicate:
+   *   - If isClosing() does not exist on the returned service, the typeof check
+   *     fails ('undefined' !== 'function').
+   *   - If isClosing() exists but returns false mid-teardown, the second expect
+   *     (closingObservation === true) fails — the guard would never fire during
+   *     the actual teardown window.
+   *   - If isClosing() stays true after closeProject() resolves, the third
+   *     expect (isClosing() === false) fails — every subsequent call would be
+   *     treated as if teardown were still in progress.
+   */
+  it('isClosing() returns true during disposeSession and false after closeProject resolves', async () => {
+    let closingObservation: boolean | undefined
+    const ref: { ws?: ReturnType<typeof createWorkspaceService> } = {}
+
+    const { ctx } = makeHarness({
+      closeBehavior: async () => {
+        // Runs inside disposeSession(), which closeProject() awaits — teardown
+        // is active at this point.
+        const ws = ref.ws as unknown as { isClosing?: () => boolean } | undefined
+        closingObservation = typeof ws?.isClosing === 'function' ? ws.isClosing() : undefined
+      },
+    })
+    const workspace = createWorkspaceService(ctx)
+    ref.ws = workspace
+
+    await workspace.openProject('/tmp/projA')
+    await workspace.closeProject()
+
+    const ws = workspace as unknown as { isClosing?: () => boolean }
+
+    expect(
+      typeof ws.isClosing,
+      'WorkspaceService must expose isClosing() — resolveCurrentApp reads it to guard the teardown window',
+    ).toBe('function')
+
+    expect(
+      closingObservation,
+      'isClosing() must return true while disposeSession() is awaited inside closeProject()',
+    ).toBe(true)
+
+    expect(
+      ws.isClosing?.(),
+      'isClosing() must return false after closeProject() has fully resolved',
+    ).toBe(false)
+  })
+
+  /**
+   * isClosing() must remain false during a normal openProject — that path has
+   * no teardown of the workspace-service's own session state (it calls
+   * disposeSession but only to clear the OLD session, not as a "close"
+   * operation visible externally). Only closeProject transitions through the
+   * closing window.
+   *
+   * Failure predicate: if isClosing() is incorrectly true during openProject's
+   * disposeSession leg, the first expect fails — the resolveCurrentApp guard
+   * would suppress session resolution even while a valid open is in progress.
+   */
+  it('isClosing() is false during openProject (teardown flag is scoped to closeProject only)', async () => {
+    let closingDuringOpen: boolean | undefined
+    const ref: { ws?: ReturnType<typeof createWorkspaceService> } = {}
+
+    const { ctx } = makeHarness({
+      closeBehavior: async () => {
+        // closeBehavior fires during the disposeSession inside openProject(B)
+        // when A is the predecessor.
+        const ws = ref.ws as unknown as { isClosing?: () => boolean } | undefined
+        closingDuringOpen = typeof ws?.isClosing === 'function' ? ws.isClosing() : undefined
+      },
+    })
+    const workspace = createWorkspaceService(ctx)
+    ref.ws = workspace
+
+    // Open A first so openProject(B) triggers disposeSession (for A).
+    await workspace.openProject('/tmp/projA')
+    await workspace.openProject('/tmp/projB')
+
+    expect(
+      closingDuringOpen,
+      'isClosing() must be false during the disposeSession leg of openProject — '
+      + 'only closeProject is a "close" from the workspace\'s perspective',
+    ).toBe(false)
+  })
+})
+
 describe('workspace-service: latest-wins (concurrent open operations)', () => {
   /**
    * When two openProject calls are issued concurrently (the second before the

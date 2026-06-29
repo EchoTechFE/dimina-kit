@@ -79,6 +79,13 @@ export interface WorkspaceService {
    */
   getLastClosedProjectPath(): string
   hasActiveSession(): boolean
+  /**
+   * True only while `closeProject` is tearing down. Bridge active-content
+   * resolution consults this to avoid resolving the dying session's guest during
+   * the close's session.close() await (when currentSession is already null but
+   * the bridge app session still exists).
+   */
+  isClosing(): boolean
 
   // ── thumbnails ──────────────────────────────────────────────────────────
   // Both methods flow through the host-injected ProjectsProvider too; a
@@ -102,6 +109,13 @@ export interface WorkspaceService {
 export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService {
   let currentSession: ProjectSession | null = null
   let currentProjectPath = ''
+  // True only while closeProject is tearing down (from before disposeSession
+  // until views are disposed). disposeSession nulls currentSession before it
+  // awaits session.close(), but the bridge app session lives until disposeAll
+  // later in closeProject — so during that await `resolveCurrentApp` would
+  // otherwise fall back to the dying session and resolve the closing project's
+  // guest. Bridge getters consult this to refuse resolution mid-close.
+  let closing = false
   // The last project path cleared by `closeProject`; consumed by project-fs to
   // accept an in-flight write that targets the just-closed project. Reset at
   // the start of every `openProject` so it never accumulates a stale root.
@@ -416,6 +430,10 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
         // down ITS views. Skip — the newer op's own teardown covers the session
         // we meant to close.
         if (mySeq !== ownerSeq) return
+        // Mark the close in progress BEFORE disposeSession nulls currentSession,
+        // so bridge getters refuse to resolve the dying session during the
+        // session.close() await (cleared in the finally once views are gone).
+        closing = true
         // Invalidate the active session's onLog BEFORE teardown starts — lines
         // flushed by the dying compile worker must not reach the panel.
         logGeneration++
@@ -427,6 +445,7 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
         currentProjectPath = ''
         ctx.views.disposeAll()
       } finally {
+        closing = false
         release()
       }
     },
@@ -435,6 +454,7 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
     getProjectPath: () => currentProjectPath,
     getLastClosedProjectPath: () => lastClosedProjectPath,
     hasActiveSession: () => currentSession !== null,
+    isClosing: () => closing,
 
     async captureThumbnail(projectPath) {
       if (!currentSession || projectPath !== currentProjectPath) return null
