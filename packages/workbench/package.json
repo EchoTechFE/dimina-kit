@@ -86,6 +86,7 @@
     "@dimina-kit/eslint-config": "workspace:*",
     "@dimina-kit/typescript-config": "workspace:*",
     "@types/node": "^22.10.0",
+    "eslint": "^10.2.1",
     "typescript": "5.9.2",
     "vite": "^8.0.8"
   }

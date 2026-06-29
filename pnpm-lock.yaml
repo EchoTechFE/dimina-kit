@@ -470,6 +470,9 @@ importers:
       '@types/node':
         specifier: ^22.10.0
         version: 22.19.17
+      eslint:
+        specifier: ^10.2.1
+        version: 10.2.1(jiti@2.7.0)
       typescript:
         specifier: 5.9.2
         version: 5.9.2
