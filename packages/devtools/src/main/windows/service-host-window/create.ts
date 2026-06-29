@@ -20,6 +20,10 @@ const serviceHostHtmlPath = path.join(devtoolsPackageRoot, 'dist/service-host/se
 export interface ServiceHostWindowOptions {
   bridgeId: string
   appId: string
+  /** Current project root. Folded into the session partition (with appId) so a
+   * different project declaring the same appId gets isolated storage. Omitted on
+   * the pre-warm pool path (no project known yet → shared partition). */
+  projectPath?: string
   pagePath: string
   pkgRoot: string
   root?: string
@@ -127,12 +131,15 @@ export function navigateServiceHost(win: BrowserWindow, url: string): Promise<vo
  * path, which passes the project's appId. Reconciling pooling with per-project
  * partitions (e.g. per-partition sub-pools) is out of scope for this change.
  */
-export function serviceHostSpec(appId?: string): ServiceHostSpec {
+export function serviceHostSpec(appId?: string, projectPath?: string): ServiceHostSpec {
   return {
     // Per-project partition when an appId is known (so this project's service
     // host shares storage ONLY with its own render side); the shared partition
     // for the pre-warm pool's default spec (no appId — see KNOWN BLOCKER below).
-    partition: appId ? miniappPartition(appId) : SERVICE_HOST_PARTITION,
+    // projectPath joins the key so same-appId/different-path projects isolate;
+    // it must match the simulator WCV's partition (view-manager passes the same
+    // (appId, projectPath)).
+    partition: appId ? miniappPartition(appId, projectPath) : SERVICE_HOST_PARTITION,
     preloadPath: serviceHostPreloadPath,
     size: { width: 980, height: 720 },
     contextIsolation: false,
@@ -150,7 +157,7 @@ export function createServiceHostWindow(opts: ServiceHostWindowOptions): Browser
   // Default (non-pooled) path: pin the service host to THIS project's partition
   // so its logic-layer localStorage/cookies are shared with the project's render
   // side only, never with other projects.
-  const win = constructServiceHostWindow({ appId: opts.appId, partition: miniappPartition(opts.appId) })
+  const win = constructServiceHostWindow({ appId: opts.appId, partition: miniappPartition(opts.appId, opts.projectPath) })
   void navigateServiceHost(win, buildServiceHostSpawnUrl(opts))
   return win
 }

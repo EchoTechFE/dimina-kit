@@ -1385,7 +1385,11 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     // (protocol handlers + CORS/referer policy) before any project content loads
     // on it — idempotent per partition.
     const route = parseRoute(simulatorUrl)
-    const partition = miniappPartition(route?.appId)
+    // Include the project path so two projects that declare the same appId at
+    // different paths get isolated partitions. The service-host window for THIS
+    // project derives its partition from the same (appId, projectPath) pair so
+    // render guests + service host still share one session.
+    const partition = miniappPartition(route?.appId, ctx.workspace?.getProjectPath())
     configureMiniappSession(partition)
 
     // The simulator preload is a CJS bundle; webPreferences.preload obeys the

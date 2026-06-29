@@ -34,7 +34,7 @@ Electron app
         ├── nativeSimulatorView : WebContentsView  ← simulator DeviceShell（顶层，托管子 webview）
         │   ← view-manager.ts 的 attachNativeSimulator 创建
         │   preload = cjsSiblingPreloadPath(ctx.preloadPath)（webPreferences.preload）
-        │   partition = persist:miniapp-<key>（项目 appId 派生，attachNativeSimulator 从 simulator URL 的 ?appId= 解析）
+        │   partition = persist:miniapp-<key>（key 由 appId + 项目路径 派生，attachNativeSimulator 从 simulator URL 的 ?appId= 解析 appId、从 workspace.getProjectPath() 取路径；同 appId 不同路径项目互相隔离）
         │   └── DeviceShell（React，device-shell.tsx）
         │       └── <webview> ×N  ← 每页一个，device-shell.tsx；不带静态 partition，
         │           由 will-attach-webview 钉到宿主 WCV 同一 per-project partition
@@ -49,7 +49,8 @@ Electron app
     （独立 top-level window，非 overlay）
 
 另起：BrowserWindow (service-host window)         ← 隐藏，跑 @dimina/service bundle
-    partition = persist:miniapp-<key>（createServiceHostWindow 传项目 appId；
+    partition = persist:miniapp-<key>（createServiceHostWindow 传项目 appId + projectPath，
+    与 simulator WCV 同一 (appId, projectPath) → 同 partition；
     预热池 / 无 appId 时回落 persist:simulator，见 serviceHostSpec / create.ts）
     preload = dist/service-host/preload.cjs
     见 createServiceHostWindow（windows/service-host-window/create.ts）
@@ -132,7 +133,7 @@ src/main/ipc/
 
 ## 3. Session 与 preload 注入
 
-> 一句话：partition 是 Chromium 存储/preload 隔离单位；dimina-kit 给**每个项目**按其 `appId` 派生一个稳定的 `persist:miniapp-<key>` partition（`miniappPartitionKey` / `miniappPartition`，`services/views/miniapp-partition.ts`），把同一项目的 mini-program 上下文（simulator WCV + render-host guests + service-host）锁在一起、跨项目互相隔离。
+> 一句话：partition 是 Chromium 存储/preload 隔离单位；dimina-kit 给**每个项目**按其 `appId` + 项目路径派生一个稳定的 `persist:miniapp-<key>` partition（`miniappPartitionKey` / `miniappPartition`，`services/views/miniapp-partition.ts`），把同一项目的 mini-program 上下文（simulator WCV + render-host guests + service-host）锁在一起、跨项目互相隔离（含两个项目声明同一 `appId` 但路径不同的情形）。
 >
 > 共享 `persist:simulator`（`SHARED_MINIAPP_PARTITION`，`miniapp-partition.ts`）只有两个用途：**预热池**（池窗在项目未知时预热，故意不做隔离，见 `service-host-window/create.ts` 的 KNOWN BLOCKER 注释）和 **appId 无法派生时的 fallback**。
 

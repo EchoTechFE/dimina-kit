@@ -788,6 +788,10 @@ async function handleSpawn(
     serviceWindow = createServiceHostWindow({
       bridgeId,
       appId,
+      // Same (appId, projectPath) pair the simulator WCV uses, so this project's
+      // service host and render guests land on ONE partition while a different
+      // project with the same appId is isolated.
+      projectPath: ctx.workspace?.getProjectPath?.() || undefined,
       pagePath,
       pkgRoot,
       root,
