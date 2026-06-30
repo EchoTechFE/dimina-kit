@@ -14,6 +14,7 @@ import {
 import { StatusBar } from './status-bar'
 import type { NativeDeviceInfo } from '../../shared/ipc-channels'
 import { TabBar } from './tab-bar'
+import { UiOverlay } from './ui-overlay'
 import {
   applyTabAction,
   makeInitialTabBarState,
@@ -319,6 +320,10 @@ export function DeviceShell({
             bottomInset={bottomInset}
           />
         )}
+        {/* Native interaction overlays (toast / loading / modal / action
+            sheet). Last in flow so it layers above the page webview + tabBar,
+            clipped to the device bezel. */}
+        <UiOverlay />
         {/* Home-indicator pill — an absolute overlay at the device bottom
             (gesture-bar devices only; the home-button SE class has bottom inset
             0). It is NOT in flow: a tab page sees the tabBar's color behind it,

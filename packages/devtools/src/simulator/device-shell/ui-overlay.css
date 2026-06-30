@@ -1,0 +1,194 @@
+/*
+ * Native interaction overlays (toast / loading / modal / action sheet) drawn
+ * inside the device frame. The `.dmui-overlay` fills `.device-shell` and sits
+ * above the page <webview> (z 100) and tabBar, matching WeChat's chrome.
+ */
+.dmui-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.dmui-mask {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  pointer-events: auto;
+}
+
+/* Toast `mask:true` blocks touches but stays visually transparent (parity with
+   WeChat — the dimmed backdrop is reserved for modal/action sheet). */
+.dmui-mask--transparent {
+  background: transparent;
+}
+
+/* ── Toast / loading ──────────────────────────────────────────────────────── */
+.dmui-toast {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-width: 120px;
+  max-width: 70%;
+  padding: 20px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.75);
+  color: #fff;
+  pointer-events: none;
+  box-sizing: border-box;
+}
+
+/* Text-only toast (icon:none, no image) is a compact pill, not a square. */
+.dmui-toast--text {
+  min-width: 0;
+  padding: 12px 18px;
+  border-radius: 8px;
+}
+
+.dmui-toast__title {
+  font: 400 14px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  text-align: center;
+  word-break: break-word;
+}
+
+.dmui-toast__icon {
+  width: 40px;
+  height: 40px;
+  fill: none;
+  stroke: #fff;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.dmui-toast__image {
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
+}
+
+.dmui-toast__spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: dmui-spin 0.8s linear infinite;
+}
+
+@keyframes dmui-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ── Modal ────────────────────────────────────────────────────────────────── */
+.dmui-modal {
+  position: relative;
+  width: 280px;
+  max-width: 80%;
+  padding-top: 24px;
+  border-radius: 12px;
+  background: #fff;
+  pointer-events: auto;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.dmui-modal__title {
+  padding: 0 24px;
+  font: 600 17px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #111827;
+  text-align: center;
+}
+
+.dmui-modal__content {
+  padding: 8px 24px 20px;
+  font: 400 15px/1.5 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #6b7280;
+  text-align: center;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.dmui-modal__input {
+  display: block;
+  width: calc(100% - 48px);
+  margin: 16px 24px 20px;
+  padding: 6px 8px;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  font-size: 15px;
+  box-sizing: border-box;
+}
+
+.dmui-modal__actions {
+  display: flex;
+  border-top: 1px solid #e5e7eb;
+}
+
+.dmui-modal__button {
+  flex: 1;
+  padding: 14px 0;
+  border: 0;
+  background: transparent;
+  font: 400 17px/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  cursor: pointer;
+}
+
+.dmui-modal__button + .dmui-modal__button {
+  border-left: 1px solid #e5e7eb;
+}
+
+/* ── Action sheet ─────────────────────────────────────────────────────────── */
+.dmui-overlay:has(.dmui-action-sheet) {
+  align-items: flex-end;
+}
+
+.dmui-action-sheet {
+  position: relative;
+  width: 100%;
+  padding: 8px;
+  pointer-events: auto;
+  box-sizing: border-box;
+}
+
+.dmui-action-sheet__items {
+  border-radius: 12px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.dmui-action-sheet__item {
+  display: block;
+  width: 100%;
+  padding: 16px 0;
+  border: 0;
+  background: transparent;
+  font: 400 17px/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  text-align: center;
+  cursor: pointer;
+}
+
+.dmui-action-sheet__item + .dmui-action-sheet__item {
+  border-top: 1px solid #ececec;
+}
+
+.dmui-action-sheet__cancel {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  padding: 16px 0;
+  border: 0;
+  border-radius: 12px;
+  background: #fff;
+  font: 600 17px/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #111827;
+  cursor: pointer;
+}
