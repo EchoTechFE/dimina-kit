@@ -85,6 +85,12 @@ export interface DockViewProps {
 	 * highlight" UX pass `true`.
 	 */
 	suppressReorderOnlyDropIndicator?: boolean
+	/**
+	 * Fires when the user clicks a tab that is ALREADY active. The host can use
+	 * this to toggle the panel's visibility (e.g. collapse the debug group).
+	 * When absent, clicking an active tab is a no-op (the existing behaviour).
+	 */
+	onActiveTabClick?: (panelId: string) => void
 }
 
 /**
@@ -150,7 +156,7 @@ export function computeFlexiblePercentages(
 }
 
 export function DockView(props: DockViewProps): ReactNode {
-	const { model, registry, renderDomPanel, bindNativeSlot, suppressReorderOnlyDropIndicator } = props
+	const { model, registry, renderDomPanel, bindNativeSlot, suppressReorderOnlyDropIndicator, onActiveTabClick } = props
 
 	// Snapshot the canonical tree; re-render on every external emission. The
 	// `epoch` mirrors the model revision (0 before the first apply) and is
@@ -291,6 +297,7 @@ export function DockView(props: DockViewProps): ReactNode {
 				renderDomPanel,
 				bindNativeSlot,
 				onActivate: handleActivate,
+				onActiveTabClick,
 				onApplyLayout: handleApplyLayout,
 				onRedock: handleRedock,
 				onClose: handleClose,
@@ -323,6 +330,7 @@ interface RenderContext {
 	renderDomPanel: (panelId: string, opts: { active: boolean }) => ReactNode
 	bindNativeSlot: (panelId: string, el: HTMLElement | null) => void
 	onActivate: (groupId: string, panelId: string) => void
+	onActiveTabClick: ((panelId: string) => void) | undefined
 	onApplyLayout: (splitId: string, weights: number[]) => void
 	onRedock: (
 		groupId: string,
@@ -1095,6 +1103,7 @@ function GroupView(props: GroupViewProps): ReactNode {
 							}}
 							onClick={() => {
 								if (!active) ctx.onActivate(node.id, panelId)
+								else ctx.onActiveTabClick?.(panelId)
 							}}
 						>
 							{title}

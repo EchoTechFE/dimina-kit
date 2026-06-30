@@ -447,6 +447,13 @@ export async function createDevtoolsRuntime(config: WorkbenchAppConfig = {}): Pr
     dispose: () => disposeContext(context),
   }
 
+  // Built-in simulator APIs: devtools-supplied wx.* implementations that run
+  // in the main process. Hosts can override any of these in their onSetup by
+  // re-registering the same name (last-write-wins on the Map).
+  instance.registerSimulatorApi('login', async () => {
+    return 'hello'
+  })
+
   if (config.onSetup) {
     await config.onSetup(instance)
   }

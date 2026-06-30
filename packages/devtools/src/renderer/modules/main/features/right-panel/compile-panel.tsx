@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { cn } from '@/shared/lib/utils'
 import type {
   CompileEvent,
@@ -32,6 +32,11 @@ function statusClass(status: string): string {
   return 'text-text-muted'
 }
 
+/** Extract the display text from a timeline item for filter matching. */
+function itemText(item: TimelineItem): string {
+  return item.kind === 'event' ? item.event.message : item.log.text
+}
+
 interface EventItem {
   kind: 'event'
   at: number
@@ -55,10 +60,37 @@ type TimelineItem = EventItem | LogItem
 /**
  * 编译 tab body: the compile-event log (projectStatus traffic) and the
  * per-line dmcc compile log merged — in the VIEW layer only — into one
- * newest-first timeline. State stays isolated in useSession.
+ * oldest-first (chronological) timeline with a text filter. State stays
+ * isolated in useSession.
  */
 export function CompilePanel({ events, logs = [], onClear }: CompilePanelProps) {
   const latest = events.length > 0 ? events[events.length - 1]! : null
+  const [filter, setFilter] = useState('')
+
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const bottomRef = useRef<HTMLDivElement>(null)
+  const shouldAutoScroll = useRef(true)
+
+  // Track whether the user has scrolled away from the bottom.
+  useEffect(() => {
+    const container = scrollRef.current
+    if (!container) return
+    const handleScroll = () => {
+      const { scrollTop, scrollHeight, clientHeight } = container
+      shouldAutoScroll.current = scrollHeight - scrollTop - clientHeight < 30
+    }
+    container.addEventListener('scroll', handleScroll)
+    return () => container.removeEventListener('scroll', handleScroll)
+  }, [])
+
+  const totalItems = events.length + logs.length
+
+  // Auto-scroll to bottom when new items arrive.
+  useEffect(() => {
+    if (shouldAutoScroll.current) {
+      bottomRef.current?.scrollIntoView({ behavior: 'auto' })
+    }
+  }, [totalItems])
 
   const timeline = useMemo<TimelineItem[]>(() => {
     const items: TimelineItem[] = []
@@ -76,55 +108,76 @@ export function CompilePanel({ events, logs = [], onClear }: CompilePanelProps) 
     for (const log of logs) {
       items.push({ kind: 'log', at: log.at, seq: log.seq, log })
     }
-    // Newest first by `at`. Within a same-`at` tie (millisecond stamps — an
-    // event and the logs of the same compile collide routinely) the shared
-    // monotonic `seq` keeps ARRIVAL order: without it, the events-then-logs
-    // concat above plus the stable sort would rank events above logs no
-    // matter which actually came first. Entries without `seq`
-    // fall back to the stable insertion order.
+    // Oldest first (chronological). Within a same-`at` tie (millisecond
+    // stamps — an event and the logs of the same compile collide routinely)
+    // the shared monotonic `seq` keeps ARRIVAL order.
     return items.sort((a, b) => {
-      if (b.at !== a.at) return b.at - a.at
+      if (a.at !== b.at) return a.at - b.at
       if (a.seq !== undefined && b.seq !== undefined) return a.seq - b.seq
       return 0
     })
   }, [events, logs])
 
+  const filtered = useMemo(() => {
+    if (!filter) return timeline
+    const lower = filter.toLowerCase()
+    return timeline.filter((item) => itemText(item).toLowerCase().includes(lower))
+  }, [timeline, filter])
+
   const isEmpty = events.length === 0 && logs.length === 0
 
   return (
     <div className="flex flex-col h-full w-full min-h-0 text-[12px]">
-      {/* Header: current-status badge (event-driven — log lines never hijack
-          it) + the single 清空 action for both stores. */}
+      {/* Header: current-status badge + filter + 清空. */}
       <div className="flex items-center gap-2 px-2 h-8 shrink-0 border-b border-border-subtle">
         {latest ? (
           <span
             data-compile-current
             data-status={latest.status}
-            className={cn('truncate font-medium', statusClass(latest.status))}
+            className={cn('truncate font-medium shrink-0', statusClass(latest.status))}
           >
             {latest.message}
           </span>
         ) : (
-          <span className="text-text-muted">编译信息</span>
+          <span className="text-text-muted shrink-0">编译信息</span>
         )}
-        <div className="flex-1" />
+        <div className="flex-1 min-w-0" />
+        <input
+          type="text"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="过滤..."
+          className="h-6 px-2 text-[12px] rounded-sm border border-border-subtle bg-surface
+                     text-text placeholder:text-text-dim
+                     focus:outline-none focus:border-text-muted
+                     w-40 shrink-0"
+        />
+        {filter && (
+          <span className="text-[11px] text-text-muted tabular-nums shrink-0">
+            {filtered.length}/{timeline.length}
+          </span>
+        )}
         <button
           type="button"
           onClick={onClear}
-          className="px-2 h-6 rounded-sm text-text-muted hover:text-text hover:bg-surface-2 transition-colors"
+          className="px-2 h-6 rounded-sm text-text-muted hover:text-text hover:bg-surface-2 transition-colors shrink-0"
         >
           清空
         </button>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-auto">
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-auto">
         {isEmpty ? (
           <div className="flex items-center justify-center h-full text-text-muted">
             暂无编译信息
           </div>
+        ) : filtered.length === 0 ? (
+          <div className="flex items-center justify-center h-full text-text-muted">
+            无匹配日志
+          </div>
         ) : (
           <ul className="px-2 py-1 space-y-0.5">
-            {timeline.map((item, index) =>
+            {filtered.map((item, index) =>
               item.kind === 'event' ? (
                 <li
                   key={`e-${item.at}-${index}`}
@@ -173,6 +226,7 @@ export function CompilePanel({ events, logs = [], onClear }: CompilePanelProps) 
                 </li>
               ),
             )}
+            <div ref={bottomRef} />
           </ul>
         )}
       </div>

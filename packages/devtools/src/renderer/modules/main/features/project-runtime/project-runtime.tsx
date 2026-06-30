@@ -18,7 +18,7 @@ import type { BottomDebugPanelProps, DebugTabContentId } from '../bottom-debug-p
 import { useViewAnchor, createPlacementAnchor } from '@dimina-kit/view-anchor'
 import type { Placement, PlacementAnchorHandle } from '@dimina-kit/view-anchor'
 import { DockView } from '@dimina-kit/electron-deck/dock-react'
-import { serializeLayout, setConstraint } from '@dimina-kit/electron-deck/layout'
+import { serializeLayout, setConstraint, closePanel } from '@dimina-kit/electron-deck/layout'
 import type { LayoutModel, LayoutNode, PanelRegistry } from '@dimina-kit/electron-deck/layout'
 import {
   buildDockModel,
@@ -528,12 +528,24 @@ function DockableLayout(props: DockableLayoutProps): ReactNode {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Clicking an already-active tab closes that panel (removes it from the
+  // tree). Structural panels (simulator/editor) are protected. Closed panels
+  // can be reopened from the toolbar Panels menu.
+  const handleActiveTabClick = useCallback(
+    (panelId: string) => {
+      if (panelId === 'simulator' || panelId === 'editor') return
+      dockModel.apply((t) => closePanel(t, panelId))
+    },
+    [dockModel],
+  )
+
   return (
     <DockView
       model={dockModel}
       registry={dockRegistry}
       renderDomPanel={renderDomPanel}
       bindNativeSlot={bindNativeSlot}
+      onActiveTabClick={handleActiveTabClick}
     />
   )
 }
