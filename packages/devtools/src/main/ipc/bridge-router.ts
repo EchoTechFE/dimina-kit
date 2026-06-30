@@ -144,6 +144,17 @@ interface AppSession {
   simulatorWc: WebContents
   serviceLoaded: boolean
   /**
+   * Outcome of `injectLogicBundle`: `null` while injection is in-flight (or not
+   * yet attempted), `true` once the compiled `logic.js` executed in the service
+   * host, `false` if it could not be fetched/injected. The compiled bundle is
+   * the ONLY source of the service AND render module registry (`modDefine`), so
+   * a `false` here means a downstream `loadResource → modRequire('app')` is
+   * GUARANTEED to throw the cryptic `module app not found` (and render
+   * `module <pagePath> not found`). Both `loadResource` sends gate on this so we
+   * surface one actionable diagnostic instead of that misleading cascade.
+   */
+  logicInjected: boolean | null
+  /**
    * Base URL every resource fetch (render bundles, service logic.js,
    * app-config.json, the dmb-resource protocol proxy) is resolved against.
    * Under the simulator path this is the dev server origin
@@ -191,6 +202,17 @@ interface PageSession {
   renderWc: WebContents | null
   renderLoaded: boolean
   resourceLoadedSent: boolean
+  /**
+   * The render guest reported `renderHostReady` while logic injection was still
+   * in-flight (`ap.logicInjected === null`), so its render `loadResource` is
+   * held: sending it before injection settles would race a failed bundle and
+   * emit the cryptic `module <pagePath> not found`. `bootServiceHost` flushes
+   * this on success and drops it on failure. The render guest fires
+   * `renderHostReady` on its own `DOMContentLoaded`, which routinely beats the
+   * async fetch+inject — without holding, the gate could only catch the rare
+   * already-settled case.
+   */
+  renderLoadPending: boolean
   windowConfig: PageWindowConfig
 }
 
@@ -813,6 +835,7 @@ async function handleSpawn(
     serviceWc: serviceWindow.webContents,
     simulatorWc,
     serviceLoaded: false,
+    logicInjected: null,
     resourceBaseUrl,
     resourceServer,
     hostEnv,
@@ -835,6 +858,7 @@ async function handleSpawn(
     renderWc: null,
     renderLoaded: false,
     resourceLoadedSent: false,
+    renderLoadPending: false,
     windowConfig: rootWindowConfig,
   }
 
@@ -907,7 +931,7 @@ async function handleSpawn(
       // Ignore the warm/about:blank load; only the real service.html boots.
       if (!serviceWindow.webContents.getURL().includes('service.html')) return
       serviceWindow.webContents.removeListener('did-finish-load', bootOnServiceLoad)
-      void bootServiceHost(state, appSession)
+      void bootServiceHost(state, appSession, ctx)
     }
     appSession.onServiceBoot = bootOnServiceLoad
     serviceWindow.webContents.on('did-finish-load', bootOnServiceLoad)
@@ -927,7 +951,7 @@ async function handleSpawn(
     // Fresh window: its only navigation is service.html (issued inside
     // createServiceHostWindow), so the first did-finish-load is the spawn load.
     serviceWindow.webContents.once('did-finish-load', () => {
-      void bootServiceHost(state, appSession)
+      void bootServiceHost(state, appSession, ctx)
     })
   }
 
@@ -970,6 +994,7 @@ async function handlePageOpen(
     renderWc: null,
     renderLoaded: false,
     resourceLoadedSent: false,
+    renderLoadPending: false,
     windowConfig,
   }
   state.pageSessions.set(bridgeId, page)
@@ -1025,26 +1050,55 @@ function handleNavCallback(state: RouterState, sender: WebContents, payload: Nav
 
 // ── Service-host boot & per-page resource handshake ──────────────────────────
 
-async function bootServiceHost(state: RouterState, ap: AppSession): Promise<void> {
+async function bootServiceHost(state: RouterState, ap: AppSession, ctx: WorkbenchContext): Promise<void> {
   // Liveness guard: never boot a session that was already disposed. With pooling,
   // the service window is recycled, so a stale did-finish-load listener from an
   // early-disposed prior owner could otherwise fire here and inject the wrong
   // app's logic.js into the next spawn (the recycled webContents is shared).
   if (state.appSessions.get(ap.appSessionId) !== ap) return
-  await injectLogicBundle(ap)
+  ap.logicInjected = await injectLogicBundle(ap)
+  if (!ap.logicInjected) {
+    // The compiled logic.js never executed, so `modDefine` registered nothing.
+    // Sending `loadResource` now would run `modRequire('app')` against an empty
+    // registry and throw the cryptic `module app not found` — masking the real
+    // cause (unreachable resource tree / failed compile / unresolved appId).
+    // Skip it and surface one actionable diagnostic instead; the render side
+    // gates on the same flag in `routeFromRender`.
+    reportLogicLoadFailure(ap, ctx)
+    return
+  }
   // serviceLoaded is flipped only when service responds with
   // `serviceResourceLoaded`; see handleContainerMsg. Setting it here would
   // race a per-page `resourceLoaded` ahead of the service-side handler.
   forwardToService(ap, makeLoadResource(ap, ap.pages.get(ap.appSessionId)!, 'service'))
+  // Flush any render `loadResource` that arrived (renderHostReady) while
+  // injection was in-flight — now that the bundle is confirmed present.
+  for (const page of ap.pages.values()) {
+    if (page.renderLoadPending) {
+      page.renderLoadPending = false
+      sendRenderLoadResource(ap, page)
+    }
+  }
 }
 
-async function injectLogicBundle(ap: AppSession): Promise<void> {
+function sendRenderLoadResource(ap: AppSession, page: PageSession): void {
+  if (page.renderWc && !page.renderWc.isDestroyed()) {
+    page.renderWc.send(C.TO_RENDER, { msg: makeLoadResource(ap, page, 'render') })
+  }
+}
+
+/** The compiled logic.js URL `injectLogicBundle` fetches (mode-dependent). */
+function logicBundleUrl(ap: AppSession): string {
+  return ap.resourceServer
+    ? new URL('logic.js', ap.resourceBaseUrl).toString()
+    : new URL(`${ap.appId}/${ap.root}/logic.js`, ap.resourceBaseUrl).toString()
+}
+
+async function injectLogicBundle(ap: AppSession): Promise<boolean> {
   // Fetch the compiled service logic over HTTP from the same base the render
   // host reads (`<base><appId>/<root>/logic.js`). The fallback local server
   // serves its root, so `<base>logic.js` resolves there too — both are http.
-  const logicUrl = ap.resourceServer
-    ? new URL('logic.js', ap.resourceBaseUrl).toString()
-    : new URL(`${ap.appId}/${ap.root}/logic.js`, ap.resourceBaseUrl).toString()
+  const logicUrl = logicBundleUrl(ap)
   try {
     const res = await fetch(logicUrl)
     if (!res.ok) throw new Error(`logic.js fetch ${res.status} at ${logicUrl}`)
@@ -1053,9 +1107,31 @@ async function injectLogicBundle(ap: AppSession): Promise<void> {
     // relative map would 404 and break sourcemapped console frames / Sources.
     const logicContent = rewriteSourceMappingUrl(await res.text(), logicUrl)
     await ap.serviceWc.executeJavaScript(`${logicContent}\n//# sourceURL=${logicUrl}`, true)
+    return true
   } catch (error) {
     console.warn('[bridge-router] unable to inject service logic.js:', error)
+    return false
   }
+}
+
+/**
+ * Emit one actionable diagnostic when the compiled logic bundle could not be
+ * loaded — the single point where "the app's compiled resource tree is
+ * unreachable" is known with certainty. Goes to the main-process log AND the
+ * guest console sink so it surfaces in the devtools Console panel where the
+ * developer would otherwise see only the misleading `module app not found`.
+ */
+function reportLogicLoadFailure(ap: AppSession, ctx: WorkbenchContext): void {
+  const hint = ap.appId === 'unknown'
+    ? ' appId could not be resolved (it fell back to "unknown") — the mini-program likely failed to compile or its project manifest/app config is missing.'
+    : ''
+  const message
+    = `[dimina-kit] Failed to load the mini-program logic bundle from ${logicBundleUrl(ap)}. `
+    + 'The service runtime has no registered modules, so no page can mount.'
+    + hint
+    + ` Verify the project compiled successfully and that the resource server serves "${ap.appId}/${ap.root}/".`
+  console.error(message)
+  ctx.guestConsole?.emit({ source: 'service', level: 'error', args: [message] })
 }
 
 function maybeSendResourceLoaded(ap: AppSession, page: PageSession): void {
@@ -1119,9 +1195,20 @@ function routeFromRender(
   ctx: WorkbenchContext,
 ): void {
   if (msg.type === 'renderHostReady') {
-    if (page.renderWc && !page.renderWc.isDestroyed()) {
-      page.renderWc.send(C.TO_RENDER, { msg: makeLoadResource(ap, page, 'render') })
+    // Logic injection definitively failed: the render bundle shares the same
+    // (unreachable) resource tree, so `loadResource` here would only produce a
+    // second cryptic `module <pagePath> not found`. bootServiceHost already
+    // surfaced the actionable diagnostic — stay silent.
+    if (ap.logicInjected === false) return
+    // Injection still in-flight: the render guest fires `renderHostReady` on its
+    // own DOMContentLoaded, which routinely beats the async fetch+inject. Hold
+    // the render `loadResource` and let `bootServiceHost` flush it once the
+    // bundle settles, so a failed bundle never reaches the render side.
+    if (ap.logicInjected === null) {
+      page.renderLoadPending = true
+      return
     }
+    sendRenderLoadResource(ap, page)
     return
   }
 

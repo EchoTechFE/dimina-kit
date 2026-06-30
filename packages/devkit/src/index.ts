@@ -163,6 +163,19 @@ export async function openProject(opts: OpenProjectOptions): Promise<ProjectSess
 			// best-effort — fall through to the 'unknown' fallback below
 		}
 	}
+	if (!initialAppInfo) {
+		// Both the compile (null AppInfo) and the project.config.json fallback
+		// failed to yield an appId. The session is still constructed below with
+		// `appId: 'unknown'` so storage prefixing stays consistent, but with that
+		// id the runtime later fetches `<base>unknown/<root>/logic.js`, which 404s
+		// → no modules register → the cryptic `module app not found`. Surface the
+		// real cause here, at the point the invalid id is produced, instead of
+		// letting it fail opaquely at injection time.
+		const reason = `[devkit] could not resolve an appId for ${projectPath}: the compiler produced no app info and project.config.json has no "appid". `
+			+ 'Falling back to "unknown" — the mini-program likely failed to compile or is missing its manifest.'
+		console.warn(reason)
+		onBuildError?.(new Error(reason))
+	}
 	const sessionApps: AppInfo[] = initialAppInfo ? [initialAppInfo] : []
 
 	// Everything after the worker exists is failure-cleaned: if the dev server
