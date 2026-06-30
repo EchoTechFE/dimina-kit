@@ -18,6 +18,7 @@ export default [
       "vite.config.*.{js,cjs,mjs,ts}",
       "build-container.js",
       "build-native-host.mjs",
+      "build-workbench.mjs",
       "e2e/**/*.{js,cjs,mjs,ts}",
       "src/main/**/*.ts",
       "src/preload/**/*.ts",

@@ -86,7 +86,7 @@
     "build:container": "node build-container.js",
     "build:native-host": "node build-native-host.mjs",
     "build:simulator": "vite build --config vite.config.simulator.ts",
-    "build:workbench": "WORKBENCH_OUT_DIR=../devtools/dist/vscode-workbench pnpm --filter @dimina-kit/workbench run build:app",
+    "build:workbench": "node build-workbench.mjs",
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
     "prepack": "pnpm run build",
