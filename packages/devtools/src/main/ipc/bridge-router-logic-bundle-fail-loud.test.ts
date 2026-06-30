@@ -1,15 +1,13 @@
 /**
- * Regression tests for the fail-loud gate in bootServiceHost: when the compiled
- * logic.js cannot be fetched, the router must suppress loadResource (which would
- * produce the misleading "module app not found") and emit one actionable error
- * via ctx.guestConsole instead. A successful fetch must produce loadResource and
- * no error emission.
+ * Regression tests for the fail-loud gate in bootServiceHost: a logic.js that
+ * cannot be fetched must suppress loadResource (which would otherwise produce
+ * the misleading "module app not found") and emit one actionable guestConsole
+ * error; a successful fetch must produce loadResource and no error.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createConnectionRegistry } from '@dimina-kit/electron-deck/main'
 
-// ── Hoisted stubs ─────────────────────────────────────────────────────────────
 const stubs = vi.hoisted(() => {
   type AnyFn = (...args: unknown[]) => unknown
   type EventBag = Record<string, Set<AnyFn>>
@@ -181,8 +179,6 @@ afterEach(() => {
   else process.env.DIMINA_PREWARM_DISABLE = PRIOR_DISABLE_ENV
 })
 
-// ── Fetch response builders ───────────────────────────────────────────────────
-
 const OK_APP_CONFIG = {
   ok: true, status: 200,
   json: async () => ({}),
@@ -223,8 +219,6 @@ function installFetchMock(logicResponse: Response) {
     return Promise.resolve(makeOkEmpty())
   }) as unknown as typeof fetch
 }
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function makeCtx(): { ctx: WorkbenchContext; simulatorWc: MockWc } {
   const simulatorWc = stubs.makeWebContents()
@@ -293,8 +287,6 @@ function renderLoadResourceCount(renderWc: MockWc): number {
   ).length
 }
 
-// ── Failure path: logic.js fetch returns 404 ─────────────────────────────────
-
 describe('bridge-router — logic bundle fetch fails (404)', () => {
   it('guards against loadResource send when logic.js returns 404: a reverted gate would forward loadResource, triggering the misleading "module app not found"', async () => {
     installFetchMock(makeFailLogic())
@@ -359,8 +351,6 @@ describe('bridge-router — logic bundle fetch fails (404)', () => {
   })
 })
 
-// ── Failure path: appId is 'unknown' → compile/manifest hint ─────────────────
-
 describe('bridge-router — logic bundle fetch fails with unknown appId', () => {
   it('emits a compile/manifest hint when appId is "unknown": guards the actionable diagnostic that tells the developer to check their build', async () => {
     installFetchMock(makeFailLogic())
@@ -388,8 +378,6 @@ describe('bridge-router — logic bundle fetch fails with unknown appId', () => 
     ).toBe(true)
   })
 })
-
-// ── Success path: logic.js fetch returns 200 ─────────────────────────────────
 
 describe('bridge-router — logic bundle fetch succeeds (200)', () => {
   it('sends loadResource to the service host when logic.js fetch and executeJavaScript succeed: a reverted gate would suppress this send', async () => {
@@ -429,8 +417,6 @@ describe('bridge-router — logic bundle fetch succeeds (200)', () => {
   })
 })
 
-// ── Optional: renderHostReady after failed injection ─────────────────────────
-
 describe('bridge-router — renderHostReady is suppressed after failed logic injection', () => {
   it('does not forward loadResource to the render webContents when logicInjected is false: guards the render-side cryptic "module not found" suppression', async () => {
     installFetchMock(makeFailLogic())
@@ -442,19 +428,8 @@ describe('bridge-router — renderHostReady is suppressed after failed logic inj
     serviceWindow.webContents.emit('did-finish-load')
     await flush()
 
-    // Wire a render webContents for the root page.
     const renderWc = stubs.makeWebContents()
-
-    // Dispatch renderHostReady via the RENDER_INVOKE ipcMain listener.
-    const renderInvokeListeners = stubs.onListeners.get(C.RENDER_INVOKE)
-    expect(renderInvokeListeners, 'RENDER_INVOKE listener must be registered').toBeTruthy()
-    const payload: RenderInvokePayload = {
-      bridgeId: result.bridgeId,
-      msg: { type: 'renderHostReady', target: 'container', body: {} },
-    }
-    for (const fn of renderInvokeListeners ?? []) {
-      ;(fn as AnyFn)({ sender: renderWc }, payload)
-    }
+    dispatchRenderHostReady(result.bridgeId, renderWc)
     await flush()
 
     const toRenderSent = renderWc.sentMessages.some(m => m.channel === C.TO_RENDER)
@@ -464,8 +439,6 @@ describe('bridge-router — renderHostReady is suppressed after failed logic inj
     ).toBe(false)
   })
 })
-
-// ── Race: renderHostReady arrives BEFORE injection settles ───────────────────
 
 describe('bridge-router — renderHostReady racing in-flight logic injection', () => {
   it('holds render loadResource for a renderHostReady that beats a failing injection, then drops it: a fast-booting render must never get the cryptic "module <pagePath> not found"', async () => {
