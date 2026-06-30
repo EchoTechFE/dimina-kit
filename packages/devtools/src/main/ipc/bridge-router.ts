@@ -759,6 +759,11 @@ async function handleSpawn(
     : ''
   const pkgRoot = path.resolve(opts.pkgRoot || workspaceProjectPath || process.cwd())
   const root = opts.root || 'main'
+  // Host-config custom API namespaces (WorkbenchContext is the single owner).
+  // Threaded into the service-host spawn URL so its preload can install the
+  // namespace globals; the simulator-supplied `opts.apiNamespaces` is derived
+  // from the same host config and is not authoritative here.
+  const apiNamespaces = ctx.apiNamespaces ?? []
 
   // Resource base resolution. Preferred: the simulator-supplied dev-server
   // origin, which statically serves the compiled `<appId>/<root>/…` tree (same
@@ -822,6 +827,7 @@ async function handleSpawn(
       root,
       resourceBaseUrl,
       hostEnvSnapshot: hostEnv,
+      apiNamespaces,
     })
   }
 
@@ -945,6 +951,7 @@ async function handleSpawn(
         root,
         resourceBaseUrl,
         hostEnvSnapshot: hostEnv,
+        apiNamespaces,
       }),
     )
   } else {

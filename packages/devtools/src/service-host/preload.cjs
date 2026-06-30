@@ -49,6 +49,17 @@ Object.defineProperty(globalThis, '__diminaSpawnContext', {
   configurable: false,
 })
 
+// Custom API namespace globals. service.js installs `globalThis[ns]` proxies for
+// `['dd','wx',...apiNamespaces]`, reading the host-configured namespaces from
+// `globalThis.__diminaApiNamespaces` first. Set it here (before service.js
+// evaluates) from the spawn URL's CSV param so page logic referencing e.g.
+// `qd.*` resolves instead of throwing `ReferenceError: qd is not defined`.
+// Absent/empty param → `[]`, leaving only the built-in `dd`/`wx`.
+const apiNamespacesRaw = params.get('apiNamespaces')
+globalThis.__diminaApiNamespaces = apiNamespacesRaw
+  ? apiNamespacesRaw.split(',').map((name) => name.trim()).filter(Boolean)
+  : []
+
 // Live host-env updates (native-host device dropdown). The binding above is
 // non-configurable, but the inner object's properties are writable — merge the
 // pushed metrics into `hostEnvSnapshot` in place. `sync-impls/system-info.ts`
