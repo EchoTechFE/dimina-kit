@@ -29,6 +29,9 @@ import {
 	vibrateShort,
 	vibrateLong,
 	scanCode,
+	getClipboardData,
+	setClipboardData,
+	getNetworkType,
 } from './simulator-api-device'
 import {
 	chooseImage,
@@ -76,6 +79,14 @@ export {
 	uploadFile,
 	uploadFileAbort,
 } from './simulator-api-network'
+import {
+	showToast,
+	hideToast,
+	showLoading,
+	hideLoading,
+	showModal,
+	showActionSheet,
+} from './simulator-api-ui'
 
 // ─── Base ────────────────────────────────────────────────────────────────────
 
@@ -217,6 +228,13 @@ export const simulatorApis: Record<string, (this: MiniAppContext, opts: any) => 
 	getSystemInfoSync,
 	getWindowInfo,
 	getSystemSetting,
+	// UI: interaction
+	showToast,
+	hideToast,
+	showLoading,
+	hideLoading,
+	showModal,
+	showActionSheet,
 	// Network
 	downloadFile,
 	uploadFile,
@@ -244,6 +262,9 @@ export const simulatorApis: Record<string, (this: MiniAppContext, opts: any) => 
 	vibrateShort,
 	vibrateLong,
 	scanCode,
+	getClipboardData,
+	setClipboardData,
+	getNetworkType,
 	// Media: Image
 	chooseImage,
 	previewImage,

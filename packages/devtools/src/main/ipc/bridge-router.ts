@@ -51,6 +51,12 @@ import {
 } from '../services/views/miniapp-partition.js'
 import { createConsoleForwarder } from '../services/console-forward/index.js'
 import { STORAGE_API_NAMES } from '../services/simulator-storage/index.js'
+import { buildPageScrollScript } from './page-scroll.js'
+import {
+  createAppLifecycleController,
+  type AppLifecycleController,
+  type AppLifecycleEvent,
+} from './app-lifecycle.js'
 
 // The compiled `logic.js` ships a RELATIVE `//# sourceMappingURL=logic.js.map`.
 // `injectLogicBundle` loads it via `executeJavaScript`, which gives the injected
@@ -262,6 +268,11 @@ interface RouterState {
    */
   debugTap: DebugTap
   /**
+   * App-level lifecycle listeners (wx.onAppShow / onAppHide / onError) keyed by
+   * appSessionId. Fired on main-window foreground/background and service errors.
+   */
+  appLifecycle: AppLifecycleController
+  /**
    * Evict the app's accumulated AppData bridges (panel registry) for every
    * page of the session. Lives on RouterState because `disposeAppSession` is
    * the single teardown chokepoint shared by BOTH dispose paths — graceful
@@ -411,6 +422,7 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
     emitRenderEvent: () => {},
     connections: ctx.connections,
     debugTap: createDebugTap({ enabled: resolveDebugTapEnabled() }),
+    appLifecycle: createAppLifecycleController(),
     evictAppDataBridges: (ap) => {
       if (!ctx.appData) return
       for (const page of ap.pages.values()) ctx.appData.evictBridge(ap.appId, page.bridgeId)
@@ -438,6 +450,8 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
     ctx.registry.add(() => clearTimeout(warmTimer))
     ctx.registry.add(() => state.pool?.dispose())
   }
+
+  installAppLifecycleDriver(ctx, state)
 
   installResourceProtocolHandlers(ctx, state)
 
@@ -1261,9 +1275,20 @@ function handleContainerMsg(
     case 'invokeAPI':
       void handleSimulatorApi(state, ap, page, msg.body, ctx)
       break
-    case 'serviceHostError':
+    case 'serviceHostError': {
       console.warn('[bridge-router] service host error:', msg.body)
+      // Forward the error to every registered `wx.onError` listener. (The dimina
+      // service runtime's App lifecycle is only onLaunch/onShow/onHide, so it
+      // does not dispatch `App.onError` — `wx.onError` is the supported path.)
+      // The service preload's `deliver` try/catch already reports errors thrown
+      // during lifecycle/event dispatch here.
+      const errBody = msg.body as { message?: unknown } | undefined
+      const errArg = errBody?.message ?? msg.body
+      for (const id of state.appLifecycle.listeners(ap.appSessionId, 'onError')) {
+        sendCallback(ap, id, errArg)
+      }
       break
+    }
     case 'consoleLog':
       // Native-host console capture: the render-host / service-host guest preloads
       // monkeypatch console.* and post each entry here (one case handles both —
@@ -1305,6 +1330,57 @@ const TAB_ACTION_NAMES = new Set([
   'showTabBarRedDot',
   'hideTabBarRedDot',
 ])
+
+/**
+ * Drive app foreground/background from the main window's visibility. Minimizing
+ * or hiding the window backgrounds the mini-program (App.onHide + wx.onAppHide);
+ * restoring or showing it foregrounds it (App.onShow + wx.onAppShow). Focus/blur
+ * is deliberately NOT used — clicking a DevTools panel would falsely fire it.
+ * The initial App.onShow fires once at spawn (service `invokeSomeLifecycle`), so
+ * the driver only handles subsequent transitions.
+ */
+function installAppLifecycleDriver(ctx: WorkbenchContext, state: RouterState): void {
+  const win = ctx.windows?.mainWindow
+  // Guard against a headless/stub mainWindow (unit tests) that isn't a real
+  // event-emitting BrowserWindow.
+  if (!win || typeof win.on !== 'function') return
+
+  const emit = (serviceEvent: 'appShow' | 'appHide', listenerEvent: AppLifecycleEvent): void => {
+    for (const ap of state.appSessions.values()) {
+      // App.onShow / onHide: the service runtime already listens for these.
+      forwardToService(ap, { type: serviceEvent, target: 'service', body: {} })
+      // wx.onAppShow / onAppHide imperative listeners.
+      for (const id of state.appLifecycle.listeners(ap.appSessionId, listenerEvent)) {
+        sendCallback(ap, id, {})
+      }
+    }
+  }
+
+  const onHide = (): void => emit('appHide', 'onAppHide')
+  const onShow = (): void => emit('appShow', 'onAppShow')
+  win.on('hide', onHide)
+  win.on('minimize', onHide)
+  win.on('show', onShow)
+  win.on('restore', onShow)
+  ctx.registry.add(() => {
+    win.off('hide', onHide)
+    win.off('minimize', onHide)
+    win.off('show', onShow)
+    win.off('restore', onShow)
+  })
+}
+
+// wx app-event API name → the lifecycle event whose listeners it (de)registers.
+const APP_LIFECYCLE_REGISTER: Record<string, AppLifecycleEvent> = {
+  onAppShow: 'onAppShow',
+  onAppHide: 'onAppHide',
+  onError: 'onError',
+}
+const APP_LIFECYCLE_UNREGISTER: Record<string, AppLifecycleEvent> = {
+  offAppShow: 'onAppShow',
+  offAppHide: 'onAppHide',
+  offError: 'onError',
+}
 
 async function handleSimulatorApi(
   state: RouterState,
@@ -1363,6 +1439,38 @@ async function handleSimulatorApi(
       sendCallback(ap, params.fail, fail)
       sendCallback(ap, params.complete, fail)
     }
+    return
+  }
+
+  // App-level lifecycle listeners (wx.onAppShow / onAppHide / onError + off*).
+  // The service encodes the listener as a keep callback id in `params.success`;
+  // we store it and re-fire on main-window foreground/background (the driver in
+  // installBridgeRouter) and on serviceHostError. `off*` clears the event's
+  // listeners for the session.
+  const lifecycleRegister = APP_LIFECYCLE_REGISTER[name]
+  if (lifecycleRegister) {
+    state.appLifecycle.register(ap.appSessionId, lifecycleRegister, params.success)
+    return
+  }
+  const lifecycleUnregister = APP_LIFECYCLE_UNREGISTER[name]
+  if (lifecycleUnregister) {
+    // off(cb) carries the same evtId as the original on(cb) → removes just that
+    // listener; off() with no callback carries no id → clears the whole event.
+    state.appLifecycle.unregister(ap.appSessionId, lifecycleUnregister, params.success)
+    return
+  }
+
+  // pageScrollTo acts on the page's render guest (scroll its document), which
+  // only the main process can reach — run the scroll script in the invoking
+  // page's render webContents rather than forwarding to the simulator.
+  if (name === 'pageScrollTo') {
+    const renderWc = page.renderWc
+    if (renderWc && !renderWc.isDestroyed()) {
+      void renderWc.executeJavaScript(buildPageScrollScript(params)).catch(() => {})
+    }
+    const successResult = { errMsg: 'pageScrollTo:ok' }
+    sendCallback(ap, params.success, successResult)
+    sendCallback(ap, params.complete, successResult)
     return
   }
 
@@ -1686,6 +1794,7 @@ async function disposeAppSession(
   const ap = state.appSessions.get(appSessionId)
   if (!ap) return
   state.appSessions.delete(appSessionId)
+  state.appLifecycle.dispose(appSessionId)
 
   // Evict AppData bridges FIRST — eviction enumerates `ap.pages`, which the
   // page teardown below progressively empties (and finally clears).

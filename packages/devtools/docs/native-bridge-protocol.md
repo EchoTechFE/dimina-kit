@@ -86,7 +86,7 @@ interface DiminaRenderBridge {
 | `renderResourceLoaded` | Render → Container | render 加载完上报 | 接收+聚合 |
 | `resourceLoaded` | Container → Service | 两端都加载完，通知 service 创建实例 | 发起 |
 | `firstRender` | Service → Render | 首屏数据 + 组件初始 props | 透明转发 |
-| `appShow` / `appHide` | Container → Service | App 前后台生命周期 | 声明保留（`PageLifecycleEvent` / `BridgeMessageType` 含此二项，main / DeviceShell 不触发） |
+| `appShow` / `appHide` | Container → Service | App 前后台生命周期 | 发起（主进程 `installAppLifecycleDriver` 按主窗口 `minimize/hide`→`appHide`、`show/restore`→`appShow` 触发，驱动 `App.onShow/onHide` 与 `wx.onAppShow/onAppHide` 监听） |
 | `stackShow` / `stackHide` | Container → Service | 页面栈进出生命周期 | 声明保留（同上，不触发） |
 | `pageShow` / `pageHide` / `pageReady` / `pageUnload` / `pageScroll` / `pageResize` / `pageRouteDone` | Render → Service | 页面生命周期与交互 | 透明转发 |
 | `mC` / `mR` / `mU` | Render → Service | Component create / ready / unmount | 透明转发 |
@@ -99,12 +99,12 @@ interface DiminaRenderBridge {
 | `domReady` | Render → Container | DOM 初始化完成，container 可隐藏 loading | 接收 |
 | `print` | Container → Render | 调试日志注入（dev only） | 发起 |
 | `renderHostReady` | Render → Container | render-host webview preload 就绪，container 回发 `loadResource` | 接收 |
-| `serviceHostError` | Service → Container | service-host boot 阶段错误上报 | 接收 |
+| `serviceHostError` | Service → Container | service-host boot / `deliver` 派发阶段错误上报 | 接收 + 触发 `wx.onError` 监听（dimina service runtime 不派发 `App.onError`） |
 | `consoleLog`（扩展消息，未具名于 `BridgeMessageType`） | Service / Render → Container | guest console 捕获转发（见 §3） | 接收 |
 
 容器（bridge-router）只需要参与以下角色：
 
-- **发起**：`loadResource`、`resourceLoaded`、`triggerCallback`、（可选）`print`；`pageShow/Hide/Unload` 由 DeviceShell reducer 经 `PAGE_LIFECYCLE` 转发（`appShow/Hide`、`stackShow/Hide` 不触发）
+- **发起**：`loadResource`、`resourceLoaded`、`triggerCallback`、（可选）`print`；`pageShow/Hide/Unload` 由 DeviceShell reducer 经 `PAGE_LIFECYCLE` 转发；`appShow/Hide` 由主进程 `installAppLifecycleDriver` 按主窗口可见性触发（`stackShow/Hide` 仍不触发）
 - **接收 + 聚合**：`serviceResourceLoaded` + `renderResourceLoaded` → `resourceLoaded`
 - **接收**：`domReady`（隐藏 loading）、`renderHostReady`、`serviceHostError`、`consoleLog`
 - **透明转发**：所有 `target: 'service' | 'render'` 的消息按 bridgeId 路由到对应 webContents
@@ -230,7 +230,7 @@ container → service 的 lifecycle 消息（`PAGE_LIFECYCLE` channel → `handl
 | pageHide | navigateTo 完成 / switchTab 离开当前 tab |
 | pageUnload | navigateBack 弹栈 / redirectTo / reLaunch / switchTab 丢弃非 tab 上层 |
 | stackShow / stackHide | 声明保留（`PageLifecycleEvent` / `BridgeMessageType` 含此二项；reducer 与 main 不触发） |
-| appShow / appHide | 声明保留（同上；main 与 DeviceShell 不触发） |
+| appShow / appHide | DeviceShell reducer 不产出；改由主进程 `installAppLifecycleDriver` 按主窗口可见性直接 `forwardToService`（不走 `PAGE_LIFECYCLE`） |
 
 main ↔ simulator 的 `SIMULATOR_EVENTS`（`src/shared/bridge-channels.ts`）：
 
