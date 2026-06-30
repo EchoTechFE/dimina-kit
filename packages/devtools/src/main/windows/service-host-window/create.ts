@@ -29,6 +29,13 @@ export interface ServiceHostWindowOptions {
   root?: string
   resourceBaseUrl: string
   hostEnvSnapshot?: Record<string, unknown>
+  /**
+   * Custom API namespace names (host config `apiNamespaces`, e.g. `['qd']`).
+   * Encoded into the spawn URL so the service-host preload can install them as
+   * `globalThis.__diminaApiNamespaces` before service.js evaluates — without
+   * which page logic referencing `qd.*` throws `ReferenceError: qd is not defined`.
+   */
+  apiNamespaces?: string[]
 }
 
 /**
@@ -78,6 +85,11 @@ export function buildServiceHostSpawnUrl(opts: ServiceHostWindowOptions): string
     // `__diminaSpawnContext.hostEnvSnapshot` before service.js loads.
     // Without this, sync-impls/system-info.ts falls back to generic defaults.
     url.searchParams.set('hostEnv', encodeURIComponent(JSON.stringify(opts.hostEnvSnapshot)))
+  }
+  if (opts.apiNamespaces && opts.apiNamespaces.length > 0) {
+    // CSV of namespace names; the preload reads this back into
+    // `globalThis.__diminaApiNamespaces`. URLSearchParams round-trips the comma.
+    url.searchParams.set('apiNamespaces', opts.apiNamespaces.join(','))
   }
   return url.toString()
 }
