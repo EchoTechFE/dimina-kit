@@ -5,7 +5,7 @@
  * template catalog, and the "新建项目" dialog.
  */
 
-import type { CompileConfig } from '../../../shared/types.js'
+import type { CompileConfig, LaunchConfig } from '../../../shared/types.js'
 import { DEFAULT_SCENE } from '../../../shared/constants.js'
 import type { Project } from './project-repository.js'
 
@@ -96,6 +96,34 @@ export interface ProjectsProvider {
    * Default when omitted: returns `null`.
    */
   getThumbnail?(dirPath: string): string | null | Promise<string | null>
+
+  /**
+   * Read saved launch configs for a project.
+   *
+   * Default when omitted: returns `[]`.
+   */
+  getLaunchConfigs?(dirPath: string): LaunchConfig[] | Promise<LaunchConfig[]>
+
+  /**
+   * Persist the full list of launch configs for a project.
+   *
+   * Default when omitted: silently no-ops.
+   */
+  saveLaunchConfigs?(dirPath: string, configs: LaunchConfig[]): void | Promise<void>
+
+  /**
+   * Read the active launch config id for a project.
+   *
+   * Default when omitted: returns `null` (normal mode).
+   */
+  getActiveLaunchConfigId?(dirPath: string): string | null | Promise<string | null>
+
+  /**
+   * Persist the active launch config id for a project.
+   *
+   * Default when omitted: silently no-ops.
+   */
+  saveActiveLaunchConfigId?(dirPath: string, id: string | null): void | Promise<void>
 }
 
 /**

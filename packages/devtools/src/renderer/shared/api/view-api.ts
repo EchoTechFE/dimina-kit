@@ -1,4 +1,4 @@
-import type { CompileConfig } from '@/shared/types'
+import type { CompileConfig, LaunchConfig } from '@/shared/types'
 import type { NativeDeviceInfo, ViewBounds } from '../../../shared/ipc-channels'
 import {
   SimulatorChannel,
@@ -13,6 +13,8 @@ export interface PopoverInitPayload {
   left: number
   config: CompileConfig
   pages: string[]
+  launchConfigs: LaunchConfig[]
+  activeLaunchConfigId: string | null
 }
 
 export interface PopoverShowPayload {
@@ -20,6 +22,8 @@ export interface PopoverShowPayload {
   left: number
   config: CompileConfig
   pages: string[]
+  launchConfigs: LaunchConfig[]
+  activeLaunchConfigId: string | null
 }
 
 /**
@@ -164,4 +168,18 @@ export function onHostToolbarHeightChanged(handler: (height: number) => void): (
  */
 export function getHostToolbarHeight(): Promise<number | undefined> {
   return invoke<number | undefined>(ViewChannel.HostToolbarGetHeight)
+}
+
+/** Listen for launch-config switch broadcasts from the main process. */
+export function onPopoverSwitchLaunchConfig(
+  handler: (id: string | null) => void,
+): () => void {
+  return on<[string | null]>(PopoverChannel.SwitchLaunchConfig, (id) => handler(id))
+}
+
+/** Listen for launch-configs update broadcasts from the main process. */
+export function onPopoverUpdateLaunchConfigs(
+  handler: (configs: LaunchConfig[]) => void,
+): () => void {
+  return on<[LaunchConfig[]]>(PopoverChannel.UpdateLaunchConfigs, (configs) => handler(configs))
 }

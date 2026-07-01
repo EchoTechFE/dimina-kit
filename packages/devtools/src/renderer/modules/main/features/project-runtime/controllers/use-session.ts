@@ -7,13 +7,17 @@ import {
 import {
   getCompileConfig,
   getProjectPages,
+  getLaunchConfigs,
+  getActiveLaunchConfigId,
+  saveLaunchConfigs,
+  saveActiveLaunchConfigId,
   onCompileLog,
   onProjectStatus,
   openProject,
   saveCompileConfig,
 } from '@/shared/api'
 import type { AppInfo, CompileLogEntry } from '@/shared/api'
-import type { CompileConfig } from '@/shared/types'
+import type { CompileConfig, LaunchConfig } from '@/shared/types'
 import { DEFAULT_SCENE } from '../../../../../../shared/constants'
 import type { CompileStatus } from './use-project-runtime-controller'
 
@@ -76,6 +80,10 @@ export interface SessionHookResult {
   /** Empty BOTH compileEvents and compileLogs (the panel's single 清空). */
   clearCompileEvents: () => void
   relaunch: (nextConfig?: CompileConfig) => Promise<void>
+  launchConfigs: LaunchConfig[]
+  activeLaunchConfigId: string | null
+  switchLaunchConfig: (id: string | null) => Promise<void>
+  updateLaunchConfigs: (configs: LaunchConfig[]) => Promise<void>
 }
 
 export function useSession(props: UseSessionProps): SessionHookResult {
@@ -93,6 +101,9 @@ export function useSession(props: UseSessionProps): SessionHookResult {
     scene: DEFAULT_SCENE,
     queryParams: [],
   })
+  const [launchConfigs, setLaunchConfigs] = useState<LaunchConfig[]>([])
+  const [activeLaunchConfigId, setActiveLaunchConfigId] = useState<string | null>(null)
+
   useEffect(() => {
     let cancelled = false
 
@@ -106,28 +117,41 @@ export function useSession(props: UseSessionProps): SessionHookResult {
           return
         }
 
-        // Fetch pages + compile config BEFORE committing port/appInfo to state,
-        // so the first <webview> render already has the correct startPage. If
-        // port is set first, simulatorUrl renders with an empty startPage and
-        // falls back to the hardcoded 'pages/index/index', triggering a wasted
-        // load for a page that doesn't exist in the compiled output.
-        const [pagesResult, config] = await Promise.all([
+        // Fetch pages + compile config + launch configs BEFORE committing
+        // port/appInfo to state, so the first render already has the correct
+        // startPage. If port is set first, simulatorUrl renders with an empty
+        // startPage and falls back to the hardcoded 'pages/index/index'.
+        const [pagesResult, config, savedLaunchConfigs, savedActiveId] = await Promise.all([
           getProjectPages(projectPath),
           getCompileConfig(projectPath),
+          getLaunchConfigs(projectPath),
+          getActiveLaunchConfigId(projectPath),
         ])
         if (cancelled) return
+
+        setLaunchConfigs(savedLaunchConfigs)
+        setActiveLaunchConfigId(savedActiveId)
+
+        // Derive the effective compile config: if an active launch config is
+        // selected AND exists in the saved list, use it; otherwise fall back
+        // to the normal compile config.
+        const activeLc = savedActiveId
+          ? savedLaunchConfigs.find((lc) => lc.id === savedActiveId)
+          : null
+
+        const effectiveConfig = activeLc ?? config
 
         setAppInfo(result.appInfo)
         setPort(result.port)
         setPages(pagesResult.pages)
         setCompileConfig({
           startPage:
-            config.startPage ||
+            effectiveConfig.startPage ||
             pagesResult.entryPagePath ||
             pagesResult.pages[0] ||
             '',
-          scene: config.scene ?? DEFAULT_SCENE,
-          queryParams: config.queryParams || [],
+          scene: effectiveConfig.scene ?? DEFAULT_SCENE,
+          queryParams: effectiveConfig.queryParams || [],
         })
         setCompileStatus({ status: 'ready', message: '编译完成' })
       } catch (err) {
@@ -244,6 +268,44 @@ export function useSession(props: UseSessionProps): SessionHookResult {
     [appInfo, compileConfig, projectPath],
   )
 
+  const switchLaunchConfig = useCallback(
+    async (id: string | null) => {
+      await saveActiveLaunchConfigId(projectPath, id)
+      setActiveLaunchConfigId(id)
+      const lc = id ? launchConfigs.find((c) => c.id === id) : null
+      if (lc) {
+        void relaunch(lc)
+      } else {
+        // Revert to normal compile config
+        const config = await getCompileConfig(projectPath)
+        const pagesResult = await getProjectPages(projectPath)
+        const normalConfig: CompileConfig = {
+          startPage:
+            config.startPage ||
+            pagesResult.entryPagePath ||
+            pagesResult.pages[0] ||
+            '',
+          scene: config.scene ?? DEFAULT_SCENE,
+          queryParams: config.queryParams || [],
+        }
+        void relaunch(normalConfig)
+      }
+    },
+    [projectPath, launchConfigs, relaunch],
+  )
+
+  const updateLaunchConfigs = useCallback(
+    async (configs: LaunchConfig[]) => {
+      await saveLaunchConfigs(projectPath, configs)
+      setLaunchConfigs(configs)
+      // If the active config was deleted, revert to normal mode
+      if (activeLaunchConfigId && !configs.some((c) => c.id === activeLaunchConfigId)) {
+        await switchLaunchConfig(null)
+      }
+    },
+    [projectPath, activeLaunchConfigId, switchLaunchConfig],
+  )
+
   return {
     compileStatus,
     appInfo,
@@ -255,5 +317,9 @@ export function useSession(props: UseSessionProps): SessionHookResult {
     compileLogs,
     clearCompileEvents,
     relaunch,
+    launchConfigs,
+    activeLaunchConfigId,
+    switchLaunchConfig,
+    updateLaunchConfigs,
   }
 }

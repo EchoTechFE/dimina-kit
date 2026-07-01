@@ -13,15 +13,21 @@ import {
   hidePopover,
   onPopoverClosed,
   onPopoverRelaunch,
+  onPopoverSwitchLaunchConfig,
+  onPopoverUpdateLaunchConfigs,
   showPopover,
 } from '@/shared/api'
-import type { CompileConfig } from '@/shared/types'
+import type { CompileConfig, LaunchConfig } from '@/shared/types'
 
 export interface UsePopoverProps {
   relaunch: (nextConfig?: CompileConfig) => Promise<void>
   compileConfig: CompileConfig
   pages: string[]
   compileDropdownRef: RefObject<HTMLDivElement | null>
+  launchConfigs: LaunchConfig[]
+  activeLaunchConfigId: string | null
+  switchLaunchConfig: (id: string | null) => Promise<void>
+  updateLaunchConfigs: (configs: LaunchConfig[]) => Promise<void>
 }
 
 export interface PopoverHookResult {
@@ -30,7 +36,16 @@ export interface PopoverHookResult {
 }
 
 export function usePopover(props: UsePopoverProps): PopoverHookResult {
-  const { relaunch, compileConfig, pages, compileDropdownRef } = props
+  const {
+    relaunch,
+    compileConfig,
+    pages,
+    compileDropdownRef,
+    launchConfigs,
+    activeLaunchConfigId,
+    switchLaunchConfig,
+    updateLaunchConfigs,
+  } = props
 
   const [showCompilePanel, setShowCompilePanel] = useState(false)
 
@@ -39,26 +54,53 @@ export function usePopover(props: UsePopoverProps): PopoverHookResult {
     relaunchRef.current = relaunch
   }, [relaunch])
 
+  const switchLaunchConfigRef = useRef(switchLaunchConfig)
+  useEffect(() => {
+    switchLaunchConfigRef.current = switchLaunchConfig
+  }, [switchLaunchConfig])
+
+  const updateLaunchConfigsRef = useRef(updateLaunchConfigs)
+  useEffect(() => {
+    updateLaunchConfigsRef.current = updateLaunchConfigs
+  }, [updateLaunchConfigs])
+
   useEffect(() => {
     const offClosed = onPopoverClosed(() => setShowCompilePanel(false))
     const offRelaunch = onPopoverRelaunch((newConfig) => {
       setShowCompilePanel(false)
       void relaunchRef.current(newConfig)
     })
+    const offSwitch = onPopoverSwitchLaunchConfig((id) => {
+      setShowCompilePanel(false)
+      void switchLaunchConfigRef.current(id)
+    })
+    const offUpdate = onPopoverUpdateLaunchConfigs((configs) => {
+      void updateLaunchConfigsRef.current(configs)
+    })
     return () => {
       offClosed()
       offRelaunch()
+      offSwitch()
+      offUpdate()
     }
   }, [])
 
   const compileConfigRef = useRef(compileConfig)
   const pagesRef = useRef(pages)
+  const launchConfigsRef = useRef(launchConfigs)
+  const activeLaunchConfigIdRef = useRef(activeLaunchConfigId)
   useEffect(() => {
     compileConfigRef.current = compileConfig
   }, [compileConfig])
   useEffect(() => {
     pagesRef.current = pages
   }, [pages])
+  useEffect(() => {
+    launchConfigsRef.current = launchConfigs
+  }, [launchConfigs])
+  useEffect(() => {
+    activeLaunchConfigIdRef.current = activeLaunchConfigId
+  }, [activeLaunchConfigId])
 
   const toggleCompilePanel = useCallback(() => {
     setShowCompilePanel((prev) => {
@@ -74,6 +116,8 @@ export function usePopover(props: UsePopoverProps): PopoverHookResult {
         left: Math.round(rect.left),
         config: compileConfigRef.current,
         pages: pagesRef.current,
+        launchConfigs: launchConfigsRef.current,
+        activeLaunchConfigId: activeLaunchConfigIdRef.current,
       })
       return true
     })

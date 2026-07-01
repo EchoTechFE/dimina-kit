@@ -1,11 +1,13 @@
 // eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
 import type { WorkbenchContext } from '../services/workbench-context.js'
 import type { WorkbenchModule } from '../services/module.js'
-import type { CompileConfig } from '../../shared/types.js'
+import type { CompileConfig, LaunchConfig } from '../../shared/types.js'
 import { PopoverChannel } from '../../shared/ipc-channels.js'
 import {
   PopoverShowSchema,
   PopoverRelaunchSchema,
+  PopoverSwitchLaunchConfigSchema,
+  PopoverUpdateLaunchConfigsSchema,
 } from '../../shared/ipc-schemas.js'
 import type { Disposable } from '@dimina-kit/electron-deck/main'
 import { validate } from '../utils/ipc-schema.js'
@@ -24,6 +26,23 @@ export function registerPopoverIpc(ctx: Pick<WorkbenchContext, 'views' | 'notify
       const [newConfig] = validate(PopoverChannel.Relaunch, PopoverRelaunchSchema, args)
       ctx.views.hidePopover()
       ctx.notify.popoverRelaunch(newConfig as CompileConfig)
+    })
+    .on(PopoverChannel.SwitchLaunchConfig, (_event, ...args: unknown[]) => {
+      const [id] = validate(
+        PopoverChannel.SwitchLaunchConfig,
+        PopoverSwitchLaunchConfigSchema,
+        args,
+      )
+      ctx.views.hidePopover()
+      ctx.notify.popoverSwitchLaunchConfig(id as string | null)
+    })
+    .on(PopoverChannel.UpdateLaunchConfigs, (_event, ...args: unknown[]) => {
+      const [configs] = validate(
+        PopoverChannel.UpdateLaunchConfigs,
+        PopoverUpdateLaunchConfigsSchema,
+        args,
+      )
+      ctx.notify.popoverUpdateLaunchConfigs(configs as LaunchConfig[])
     })
 }
 
