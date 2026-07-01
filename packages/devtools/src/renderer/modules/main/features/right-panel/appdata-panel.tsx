@@ -1,6 +1,5 @@
 import React from 'react'
 import JsonView from '@uiw/react-json-view'
-import { Button } from '@/shared/components/ui/button'
 import type { AppDataState } from '../project-runtime/controllers/use-panel-data'
 
 function bridgeLabel(bridge: { id: string; pagePath: string | null }): string {
@@ -40,27 +39,15 @@ const JSON_VIEW_STYLE: React.CSSProperties = {
 
 export function AppDataPanel({
   state,
-  onRefresh,
   onSelectBridge,
 }: {
   state: AppDataState
-  onRefresh: () => void
   onSelectBridge: (id: string) => void
 }) {
   const { bridges, activeBridgeId, entries } = state
   const anyEntries = bridges.some((b) => Object.keys(entries[b.id] ?? {}).length > 0)
   return (
-    <div className="flex flex-col overflow-hidden flex-1">
-      <div className="flex items-center px-2.5 py-1.5 border-b border-border-subtle shrink-0 bg-bg-panel">
-        <Button
-          variant="outline"
-          size="xs"
-          onClick={onRefresh}
-          className="hover:border-accent hover:text-accent"
-        >
-          ↻ 刷新
-        </Button>
-      </div>
+    <div className="flex flex-col overflow-hidden flex-1" data-testid="appdata-panel">
       {bridges.length > 1 && (
         <div className="flex gap-1 px-2 py-1 border-b border-border-subtle shrink-0 overflow-x-auto bg-bg-panel">
           {bridges.map((b) => {

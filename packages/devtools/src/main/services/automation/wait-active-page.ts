@@ -23,9 +23,11 @@
  *     down on resolve.
  */
 
-/** The render-event shape `waitForActivePage` reads (subset of `RenderEvent`). */
+/** The render-event shape `waitForActivePage` reads (subset of `RenderEvent`).
+ * Only `activePage` events end the wait; other kinds (`domReady`/`domMutated`)
+ * are inert but included so a full `RenderEvent` is assignable here. */
 export interface ActivePageEventLike {
-  kind: 'domReady' | 'activePage'
+  kind: 'domReady' | 'activePage' | 'domMutated'
   appId: string
   bridgeId: string
   pagePath?: string

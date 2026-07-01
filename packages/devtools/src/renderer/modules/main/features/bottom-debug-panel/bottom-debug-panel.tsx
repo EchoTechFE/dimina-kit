@@ -21,6 +21,9 @@ export interface BottomDebugPanelProps {
   // Data + handlers for built-in panels.
   wxmlTree: WxmlNode | null
   onRefreshWxml: () => void
+  /** Notify main when the WXML panel becomes visible/hidden (gates the live
+   * DOM observer + tree pushes so an unseen panel never walks the Vue tree). */
+  onWxmlActiveChange?: (on: boolean) => void
   onInspectWxml?: (sid: string) => Promise<ElementInspection | null>
   onClearWxmlInspection?: () => Promise<void>
 
@@ -58,17 +61,19 @@ export type DebugTabContentId = 'wxml' | 'appdata' | 'storage' | 'compile'
 export function DebugTabContent(
   props: { tabId: DebugTabContentId } & BottomDebugPanelProps,
 ): ReactNode {
+  // The panels are live (no manual refresh button): storage syncs via
+  // storageChanged, WXML via the render-guest observer, AppData via the setData
+  // tap. `onRefreshWxml/AppData/Storage` stay on BottomDebugPanelProps for the
+  // seed-on-activation edge in `DockDebugTab`, but are NOT forwarded to the panel
+  // components anymore.
   const {
     tabId,
     wxmlTree,
-    onRefreshWxml,
     onInspectWxml,
     onClearWxmlInspection,
     appData,
-    onRefreshAppData,
     onSelectAppDataBridge,
     storageItems,
-    onRefreshStorage,
     onSetStorage,
     onRemoveStorage,
     onClearStorage,
@@ -84,7 +89,6 @@ export function DebugTabContent(
       return (
         <WxmlPanel
           tree={wxmlTree}
-          onRefresh={onRefreshWxml}
           onInspectElement={onInspectWxml}
           onClearInspection={onClearWxmlInspection}
         />
@@ -93,7 +97,6 @@ export function DebugTabContent(
       return (
         <AppDataPanel
           state={appData}
-          onRefresh={onRefreshAppData}
           onSelectBridge={onSelectAppDataBridge}
         />
       )
@@ -101,7 +104,6 @@ export function DebugTabContent(
       return (
         <StoragePanel
           items={storageItems}
-          onRefresh={onRefreshStorage}
           onSet={onSetStorage}
           onRemove={onRemoveStorage}
           onClear={onClearStorage}

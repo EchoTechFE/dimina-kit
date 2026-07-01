@@ -365,6 +365,73 @@ describe('createRenderInspector — highlight draws the native CDP Overlay', () 
   })
 })
 
+/**
+ * `setWxmlObserving` (final-contract.md §6) — toggles the guest-side WXML
+ * MutationObserver that drives the simulator-wxml service's live-push path.
+ *
+ * Pinned contract:
+ *   - Injects the IIFE (once per wc, same de-dupe as getWxml/highlight) BEFORE
+ *     driving the guest call.
+ *   - Drives `window.__diminaRenderInspect.setWxmlObserving(<on>)` with the
+ *     boolean argument inlined in the executed source.
+ *   - A destroyed wc is a silent no-op: no executeJavaScript call at all.
+ *   - A rejected guest call never throws/rejects out of setWxmlObserving.
+ */
+describe('createRenderInspector — setWxmlObserving', () => {
+  it('injects the IIFE once, then drives setWxmlObserving(true)', async () => {
+    const wc = makeWc(1)
+    wc.executeJavaScript.mockResolvedValueOnce(undefined).mockResolvedValueOnce(undefined)
+
+    await (inspector as unknown as {
+      setWxmlObserving: (wc: import('electron').WebContents, on: boolean) => Promise<void>
+    }).setWxmlObserving(asWc(wc), true)
+
+    const injections = wc.executeJavaScript.mock.calls.filter((c) => String(c[0]) === IIFE_SOURCE)
+    expect(injections.length).toBe(1)
+    const code = allCode(wc)
+    expect(code).toContain('setWxmlObserving')
+    expect(code).toContain('true')
+  })
+
+  it('drives setWxmlObserving(false)', async () => {
+    const wc = makeWc(1)
+    wc.executeJavaScript.mockResolvedValueOnce(undefined).mockResolvedValueOnce(undefined)
+
+    await (inspector as unknown as {
+      setWxmlObserving: (wc: import('electron').WebContents, on: boolean) => Promise<void>
+    }).setWxmlObserving(asWc(wc), false)
+
+    const code = allCode(wc)
+    expect(code).toContain('setWxmlObserving')
+    expect(code).toContain('false')
+  })
+
+  it('is a no-op on a destroyed wc — never calls executeJavaScript', async () => {
+    const wc = makeWc(1)
+    wc.isDestroyed.mockReturnValue(true)
+
+    await expect(
+      (inspector as unknown as {
+        setWxmlObserving: (wc: import('electron').WebContents, on: boolean) => Promise<void>
+      }).setWxmlObserving(asWc(wc), true),
+    ).resolves.toBeUndefined()
+    expect(wc.executeJavaScript).not.toHaveBeenCalled()
+  })
+
+  it('never throws when the guest call rejects', async () => {
+    const wc = makeWc(1)
+    wc.executeJavaScript
+      .mockResolvedValueOnce(undefined) // injection
+      .mockRejectedValueOnce(new Error('guest boom')) // driver call
+
+    await expect(
+      (inspector as unknown as {
+        setWxmlObserving: (wc: import('electron').WebContents, on: boolean) => Promise<void>
+      }).setWxmlObserving(asWc(wc), true),
+    ).resolves.toBeUndefined()
+  })
+})
+
 describe('createRenderInspector — unhighlight', () => {
   // The native overlay is cleared with Overlay.hideHighlight over the debugger.
   it('sends Overlay.hideHighlight over the debugger', async () => {

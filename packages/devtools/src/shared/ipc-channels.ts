@@ -124,6 +124,22 @@ export type StorageWriteResult =
   | { ok: true }
   | { ok: false; error: string }
 
+/**
+ * A storage mutation reported by the service-host's SYNC wx storage APIs
+ * (`setStorageSync`/`removeStorageSync`/`clearStorageSync`). Those run inside the
+ * service-host window and write `localStorage` directly, so — unlike the async
+ * path (`runtimeInvoke`) and the panel's own writes — they never pass through
+ * main and would otherwise leave the Storage panel stale until a manual reload.
+ * The service-host posts this over `DiminaServiceBridge` as a `storageChanged`
+ * container message; bridge-router hands it to `onServiceStorageChanged`, which
+ * pushes the matching `StorageEvent` to the panel. `key` carries the full
+ * `${appId}_` prefix (same wire shape as the CDP / async paths).
+ */
+export type SyncStorageChange =
+  | { op: 'set'; key: string; value: string }
+  | { op: 'remove'; key: string }
+  | { op: 'clear' }
+
 // ── Element inspection (CDP-backed; WXML tree nodes map to real DOM by sid) ──
 export const SimulatorElementChannel = {
   Inspect: 'simulator:element:inspect',
@@ -136,6 +152,10 @@ export const SimulatorElementChannel = {
 export const SimulatorWxmlChannel = {
   GetSnapshot: 'simulator:wxml:snapshot',
   Event: 'simulator:wxml:event',
+  // renderer→main: whether the WXML panel is currently visible/active. Main
+  // only installs the render-guest DOM MutationObserver + pushes live tree
+  // updates while active, so an unseen panel never drives a full Vue-tree walk.
+  SetActive: 'simulator:wxml:setActive',
 } as const
 
 // ── AppData (native-host: main taps the service→render setData stream in

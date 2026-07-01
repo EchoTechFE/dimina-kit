@@ -74,6 +74,7 @@ interface PanelDataSlice {
   refreshAppData: () => void
   setActiveAppDataBridge: (id: string) => void
   refreshStorage: () => void
+  setWxmlActive: (on: boolean) => void
   setStorageItem: (key: string, value: string) => Promise<StorageWriteResult>
   removeStorageItem: (key: string) => Promise<StorageWriteResult>
   clearStorage: () => Promise<StorageWriteResult>
@@ -212,6 +213,7 @@ export function useProjectRuntimeController(
       refreshAppData: panelDataHook.refreshAppData,
       setActiveAppDataBridge: panelDataHook.setActiveAppDataBridge,
       refreshStorage: panelDataHook.refreshStorage,
+      setWxmlActive: panelDataHook.setWxmlActive,
       setStorageItem: panelDataHook.setStorageItem,
       removeStorageItem: panelDataHook.removeStorageItem,
       clearStorage: panelDataHook.clearStorage,
