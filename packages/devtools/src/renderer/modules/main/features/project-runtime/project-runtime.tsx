@@ -21,7 +21,7 @@ import { VIEW_ID, VIEW_LAYER } from '../../../../../shared/view-ids'
 import type { DevtoolsExtra } from '../../../../../shared/view-ids'
 import { PlacementPublisherContext, usePlacementPublisher } from './placement-publisher-context'
 import { DockView } from '@dimina-kit/electron-deck/dock-react'
-import { serializeLayout, setConstraint, closePanel } from '@dimina-kit/electron-deck/layout'
+import { serializeLayout, setConstraint, closePanelForUser } from '@dimina-kit/electron-deck/layout'
 import type { LayoutModel, LayoutNode, PanelRegistry } from '@dimina-kit/electron-deck/layout'
 import {
   buildDockModel,
@@ -572,14 +572,17 @@ function DockableLayout(props: DockableLayoutProps): ReactNode {
   }, [])
 
   // Clicking an already-active tab closes that panel (removes it from the
-  // tree). Structural panels (simulator/editor) are protected. Closed panels
-  // can be reopened from the toolbar Panels menu.
+  // tree). Structural panels (simulator/editor) are protected. Routes through
+  // `closePanelForUser` so the registry's `closable` capability is the single
+  // authority: a `closable:false` panel (the debug tabs) is never removed by an
+  // active-tab click, matching the gated `×` affordance. Closed panels can be
+  // reopened from the toolbar Panels menu.
   const handleActiveTabClick = useCallback(
     (panelId: string) => {
       if (panelId === 'simulator' || panelId === 'editor') return
-      dockModel.apply((t) => closePanel(t, panelId))
+      dockModel.apply((t) => closePanelForUser(t, panelId, dockRegistry))
     },
-    [dockModel],
+    [dockModel, dockRegistry],
   )
 
   return (
