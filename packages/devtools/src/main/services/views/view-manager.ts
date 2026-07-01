@@ -397,6 +397,31 @@ export function resolveProjectEditorTarget(
   }
 }
 
+// `webContents.executeJavaScript()` registers a transient `did-stop-loading`
+// listener on the target wc whenever that wc is still loading (Electron's
+// `waitTillCanExecuteJavaScript` defers the eval until load finishes, then
+// removes the listener). The DevTools front-end host wc takes a burst of injects
+// during its boot window — tab customization, default-panel selection, the 150ms
+// Elements-forward reconcile, and Network-forward probing all call
+// `executeJavaScript()` on it before the front-end has finished loading — so the
+// pending listeners can transiently exceed Node's default EventEmitter ceiling
+// of 10 and print a spurious `MaxListenersExceededWarning: 11 did-stop-loading
+// listeners`. They drain once the wc stops loading; this is a boot-time
+// concurrency spike, not a per-event leak. Raise the ceiling on the DevTools
+// host wc, which we knowingly inject into repeatedly during its boot window, so
+// the benign spike stays quiet. (Confirmed at runtime: the tripped emitter is
+// this host wc's `did-stop-loading`, count 11 — see the `process.on('warning')`
+// diagnostic in app bootstrap.)
+const DEVTOOLS_HOST_EXEC_JS_MAX_LISTENERS = 50
+
+function raiseExecuteJavaScriptListenerCeiling(wc: WebContents): void {
+  try {
+    if (wc.isDestroyed()) return
+    if (wc.getMaxListeners() >= DEVTOOLS_HOST_EXEC_JS_MAX_LISTENERS) return
+    wc.setMaxListeners(DEVTOOLS_HOST_EXEC_JS_MAX_LISTENERS)
+  } catch { /* torn-down / stub wc — best effort, warning is non-fatal */ }
+}
+
 /**
  * Build a ViewManager bound to the given context. The returned object is the
  * only component allowed to instantiate or add/remove overlay WebContentsViews.
@@ -1212,6 +1237,11 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     // request the `console` view, and also persist the choice via the
     // `panel-selectedTab` localStorage key so subsequent reloads honor it.
     const devtoolsWc = simulatorView.webContents
+    // The boot-time burst of `executeJavaScript()` injects on this host wc (tab
+    // customization / console default / Elements+Network forwarding below) each
+    // queue a pending `did-stop-loading` waiter while the front-end is still
+    // loading (see raiseExecuteJavaScriptListenerCeiling).
+    raiseExecuteJavaScriptListenerCeiling(devtoolsWc)
     // Hand the network forwarder THIS front-end host wc — it injects the
     // simulator WCV's Network.* CDP events into `window.DevToolsAPI.dispatchMessage`
     // here so the native Network tab renders them (falls back to the service-host
