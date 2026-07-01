@@ -198,6 +198,7 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
     appData: panelData.appData,
     onRefreshAppData: panelData.refreshAppData,
     onSelectAppDataBridge: panelData.setActiveAppDataBridge,
+    onWxmlActiveChange: panelData.setWxmlActive,
     storageItems: panelData.storageItems,
     onRefreshStorage: panelData.refreshStorage,
     onSetStorage: panelData.setStorageItem,
@@ -433,6 +434,14 @@ function DockDebugTab(
     if (tabId === 'wxml') p.onRefreshWxml()
     else if (tabId === 'appdata') p.onRefreshAppData()
     else if (tabId === 'storage') void p.onRefreshStorage()
+  }, [tabId, active])
+  // WXML visibility gate: main only runs the render-guest DOM observer + live
+  // tree pushes while the WXML panel is visible, so signal BOTH edges (not just
+  // false→true) and stop observing when the panel unmounts.
+  useEffect(() => {
+    if (tabId !== 'wxml') return
+    propsRef.current.onWxmlActiveChange?.(active)
+    return () => { propsRef.current.onWxmlActiveChange?.(false) }
   }, [tabId, active])
   return <DebugTabContent tabId={tabId} {...panelProps} />
 }

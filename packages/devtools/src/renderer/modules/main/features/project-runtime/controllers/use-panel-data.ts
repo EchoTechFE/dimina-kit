@@ -50,6 +50,8 @@ export interface PanelDataHookResult {
   refreshAppData: () => void
   setActiveAppDataBridge: (id: string) => void
   refreshStorage: () => void
+  /** Tell main whether the WXML panel is visible (gates the live DOM observer). */
+  setWxmlActive: (on: boolean) => void
   setStorageItem: (key: string, value: string) => Promise<StorageWriteResult>
   removeStorageItem: (key: string) => Promise<StorageWriteResult>
   clearStorage: () => Promise<StorageWriteResult>
@@ -100,6 +102,19 @@ export function usePanelData(props: UsePanelDataProps): PanelDataHookResult {
   const refreshStorage = useCallback(async () => {
     const items = await ipcInvoke<StorageItemDto[] | undefined>(SimulatorStorageChannel.GetSnapshot)
     if (items) setStorageItems(items)
+  }, [])
+  // Seed Storage on the ready edge (mirrors WXML/AppData's enabled-seed): the
+  // Storage panel has no manual refresh button, so an already-active tab that
+  // was empty pre-compile must auto-fetch the snapshot once the session is ready
+  // — otherwise it would stay empty until the next live storage event.
+  useEffect(() => {
+    if (ready) void refreshStorage()
+  }, [ready, refreshStorage])
+  // Tell main whether the WXML panel is visible. Main only installs the
+  // render-guest DOM MutationObserver + pushes live tree updates while active, so
+  // an unseen WXML panel never drives a full Vue-tree walk.
+  const setWxmlActive = useCallback((on: boolean) => {
+    void ipcInvoke<void>(SimulatorWxmlChannel.SetActive, on)
   }, [])
   // Write helpers — main process forwards CDP-emitted DOMStorage events back
   // through `SimulatorStorageChannel.Event`, so successful writes update the
@@ -163,6 +178,7 @@ export function usePanelData(props: UsePanelDataProps): PanelDataHookResult {
     refreshAppData,
     setActiveAppDataBridge,
     refreshStorage,
+    setWxmlActive,
     setStorageItem,
     removeStorageItem,
     clearStorage,

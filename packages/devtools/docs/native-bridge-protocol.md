@@ -101,12 +101,14 @@ interface DiminaRenderBridge {
 | `renderHostReady` | Render → Container | render-host webview preload 就绪，container 回发 `loadResource` | 接收 |
 | `serviceHostError` | Service → Container | service-host boot / `deliver` 派发阶段错误上报 | 接收 + 触发 `wx.onError` 监听（dimina service runtime 不派发 `App.onError`） |
 | `consoleLog`（扩展消息，未具名于 `BridgeMessageType`） | Service / Render → Container | guest console 捕获转发（见 §3） | 接收 |
+| `storageChanged`（扩展消息） | Service → Container | 同步 `wx.setStorageSync`/`removeStorageSync`/`clearStorageSync` 写入通知（body 为 `SyncStorageChange`，key 带 `${appId}_` 前缀） | 接收 → `ctx.onServiceStorageChanged(ap.appId, body)` → simulator-storage 推 `StorageEvent`，保持 Storage 面板实时 |
+| `wxmlChanged`（扩展消息） | Render → Container | 活动页 DOM 就地变化（render-guest MutationObserver，去抖后发） | 接收 → `emitRenderEvent({ kind:'domMutated' })` → simulator-wxml 重新 pull + push，保持 WXML 面板实时 |
 
 容器（bridge-router）只需要参与以下角色：
 
 - **发起**：`loadResource`、`resourceLoaded`、`triggerCallback`、（可选）`print`；`pageShow/Hide/Unload` 由 DeviceShell reducer 经 `PAGE_LIFECYCLE` 转发；`appShow/Hide` 由主进程 `installAppLifecycleDriver` 按主窗口可见性触发（`stackShow/Hide` 仍不触发）
 - **接收 + 聚合**：`serviceResourceLoaded` + `renderResourceLoaded` → `resourceLoaded`
-- **接收**：`domReady`（隐藏 loading）、`renderHostReady`、`serviceHostError`、`consoleLog`
+- **接收**：`domReady`（隐藏 loading）、`renderHostReady`、`serviceHostError`、`consoleLog`、`storageChanged`、`wxmlChanged`
 - **透明转发**：所有 `target: 'service' | 'render'` 的消息按 bridgeId 路由到对应 webContents
 
 ### 2.4 启动序列
@@ -135,6 +137,7 @@ dimina-fe **没有 `invokeSync` 方法**——真机端同步 API 依赖宿主 J
 
 - `sync-api-patch.ts` 在 service.js 之后加载，把 `wx` / `dd` / `qd` 三个 namespace 上的 `getStorageSync` / `setStorageSync` / `removeStorageSync` / `clearStorageSync` / `getStorageInfoSync` / `getSystemInfoSync` / `getAccountInfoSync` / `getMenuButtonBoundingClientRect` patch 成本地实现（`sync-impls/`）。
 - `sync-impls/storage.ts` 用 service 窗口的 `localStorage`（key 前缀 `${appId}_`）做同步存储。注意 storage 的**异步**侧（`wx.setStorage` 等）并不走这里：它们被 bridge-router 路由到主进程的 simulator-storage 服务（`STORAGE_API_NAMES`，见 §6），写入的是 service-host 窗口的 `file://` store。同步与异步两侧落到同一个 store。
+- 同步 storage 写在 service 窗口内直接改 `localStorage`、**不经过主进程**，所以 `sync-api-patch.ts` 在每次同步写后经 `DiminaServiceBridge.invoke` 补发一条 `storageChanged` container 消息（见 §2.3 表），让主进程把变更推给 Storage 面板——面板因此无需手动刷新按钮。异步侧由 simulator-storage 的 `runtimeInvoke` 自身推事件。
 
 > native-host 不像真机那样有"原生同步"语义，也不依赖 `SharedArrayBuffer` / `Atomics.wait` 这类 Worker 阻塞机制——它在 service-host 窗口内用 `sync-api-patch.ts` 把 `*Sync` patch 成 `sync-impls/` 本地实现。
 

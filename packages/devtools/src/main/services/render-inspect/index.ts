@@ -28,6 +28,15 @@ export interface RenderInspector {
   highlight(wc: WebContents, sid: string): Promise<ElementInspection | null>
   /** Clear any highlight overlay in the guest. */
   unhighlight(wc: WebContents): Promise<void>
+  /**
+   * Toggle the guest-side WXML MutationObserver. When on, the injected IIFE
+   * watches `document.body` and posts a debounced `wxmlChanged` over
+   * `DiminaRenderBridge` on every DOM mutation (setData), which bridge-router
+   * turns into a `domMutated` render event so the WXML panel re-pulls. Only
+   * enabled while the WXML panel is visible, so an unseen panel never drives a
+   * full Vue-tree walk. Injects the IIFE first if needed; no-op on a dead guest.
+   */
+  setWxmlObserving(wc: WebContents, on: boolean): Promise<void>
 }
 
 export interface RenderInspectorOptions {
@@ -282,5 +291,17 @@ export function createRenderInspector(options: RenderInspectorOptions = {}): Ren
     }
   }
 
-  return { getWxml, highlight, unhighlight }
+  async function setWxmlObserving(wc: WebContents, on: boolean): Promise<void> {
+    if (wc.isDestroyed()) return
+    if (!(await ensureInjected(wc))) return
+    try {
+      await wc.executeJavaScript(
+        `window.__diminaRenderInspect && window.__diminaRenderInspect.setWxmlObserving(${on ? 'true' : 'false'})`,
+      )
+    } catch {
+      // best-effort: a guest mid-teardown just stops observing on its own.
+    }
+  }
+
+  return { getWxml, highlight, unhighlight, setWxmlObserving }
 }

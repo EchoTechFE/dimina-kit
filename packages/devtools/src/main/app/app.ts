@@ -563,6 +563,11 @@ export async function createDevtoolsRuntime(config: WorkbenchAppConfig = {}): Pr
   if (storage.storageApi) {
     context.storageApi = storage.storageApi
     context.registry.add(() => { context.storageApi = undefined })
+    // SYNC wx storage writes bypass main (they hit the service-host localStorage
+    // directly); the service-host posts `storageChanged` and bridge-router routes
+    // it here so the Storage panel stays live without a manual reload.
+    context.onServiceStorageChanged = storage.onSyncStorageChange
+    context.registry.add(() => { context.onServiceStorageChanged = undefined })
   }
 
   // Native-host WXML + AppData panels: main sources the data (WXML pulled

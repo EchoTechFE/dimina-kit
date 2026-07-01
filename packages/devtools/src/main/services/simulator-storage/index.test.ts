@@ -53,7 +53,7 @@ vi.mock('electron', () => ({
 // Import AFTER the mock so the module picks up the stubs.
 import { EventEmitter } from 'node:events'
 import { createConnectionRegistry } from '@dimina-kit/electron-deck/main'
-import { SimulatorStorageChannel } from '../../../shared/ipc-channels.js'
+import { SimulatorStorageChannel, type SyncStorageChange } from '../../../shared/ipc-channels.js'
 import { setupSimulatorStorage } from './index.js'
 
 function makeHost() {
@@ -195,5 +195,84 @@ describe('setupSimulatorStorage connection-registry teardown', () => {
     expect(connections.get((childWc as unknown as { id: number }).id)).toBeUndefined()
 
     await d.dispose()
+  })
+})
+
+/**
+ * `onSyncStorageChange` (final-contract.md §5) — the SimulatorStorageHandle
+ * method bridge-router calls on a `storageChanged` container message from the
+ * service-host's SYNC wx storage APIs (setStorageSync/removeStorageSync/
+ * clearStorageSync write `localStorage` directly, bypassing main, so without
+ * this hook the panel would only reflect them after a manual reload).
+ *
+ * Pinned contract:
+ *   - `appId !== getActiveAppId()` → no push (the panel shows one active app).
+ *   - `set`    → pushes `{ type:'added', key, newValue: value }`.
+ *   - `remove` → pushes `{ type:'removed', key }`.
+ *   - `clear`  → pushes `{ type:'cleared' }`.
+ *   - a destroyed host webContents → no push.
+ * `key` already carries the full `${appId}_` prefix (set by the caller), so
+ * this method must forward it unchanged — it must NOT re-prefix or strip it.
+ */
+describe('setupSimulatorStorage — onSyncStorageChange (service-host sync write notify)', () => {
+  it('set pushes an "added" StorageEvent carrying the change key/value verbatim', () => {
+    const host = makeHost()
+    const svc = setupSimulatorStorage(host, { getActiveAppId: () => 'wx123' })
+
+    const change: SyncStorageChange = { op: 'set', key: 'wx123_foo', value: '"bar"' }
+    svc.onSyncStorageChange('wx123', change)
+
+    expect(host.send).toHaveBeenCalledWith(SimulatorStorageChannel.Event, {
+      type: 'added',
+      key: 'wx123_foo',
+      newValue: '"bar"',
+    })
+    void svc.dispose()
+  })
+
+  it('remove pushes a "removed" StorageEvent', () => {
+    const host = makeHost()
+    const svc = setupSimulatorStorage(host, { getActiveAppId: () => 'wx123' })
+
+    const change: SyncStorageChange = { op: 'remove', key: 'wx123_foo' }
+    svc.onSyncStorageChange('wx123', change)
+
+    expect(host.send).toHaveBeenCalledWith(SimulatorStorageChannel.Event, {
+      type: 'removed',
+      key: 'wx123_foo',
+    })
+    void svc.dispose()
+  })
+
+  it('clear pushes a "cleared" StorageEvent', () => {
+    const host = makeHost()
+    const svc = setupSimulatorStorage(host, { getActiveAppId: () => 'wx123' })
+
+    const change: SyncStorageChange = { op: 'clear' }
+    svc.onSyncStorageChange('wx123', change)
+
+    expect(host.send).toHaveBeenCalledWith(SimulatorStorageChannel.Event, { type: 'cleared' })
+    void svc.dispose()
+  })
+
+  it('does NOT push when the change appId does not match the active app', () => {
+    const host = makeHost()
+    const svc = setupSimulatorStorage(host, { getActiveAppId: () => 'wx123' })
+
+    svc.onSyncStorageChange('wxOTHER', { op: 'set', key: 'wxOTHER_foo', value: '1' })
+
+    expect(host.send).not.toHaveBeenCalled()
+    void svc.dispose()
+  })
+
+  it('does NOT push when the host webContents is destroyed', () => {
+    const host = makeHost()
+    ;(host.isDestroyed as ReturnType<typeof vi.fn>).mockReturnValue(true)
+    const svc = setupSimulatorStorage(host, { getActiveAppId: () => 'wx123' })
+
+    svc.onSyncStorageChange('wx123', { op: 'set', key: 'wx123_foo', value: '1' })
+
+    expect(host.send).not.toHaveBeenCalled()
+    void svc.dispose()
   })
 })

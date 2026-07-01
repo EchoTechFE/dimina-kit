@@ -43,21 +43,10 @@ test.describe('Right panel switching', () => {
   test('selecting WXML tab shows WXML panel content in main window', async ({ mainWindow }) => {
     await mainWindow.getByRole('tab', { name: 'WXML' }).click()
 
-    // Poll for the WXML panel's "刷新" button instead of a fixed sleep — it
-    // appears once the panel body mounts.
-    await expect
-      .poll(
-        () =>
-          mainWindow.evaluate(() => {
-            const buttons = document.querySelectorAll('button')
-            for (const btn of buttons) {
-              if (btn.textContent?.includes('刷新')) return true
-            }
-            return false
-          }),
-        { timeout: 5000, intervals: [100, 200, 300] },
-      )
-      .toBe(true)
+    // The WXML panel has no manual refresh button (it's live). Poll for the
+    // panel container instead of a fixed sleep — it mounts once the tab is
+    // selected.
+    await expect(mainWindow.getByTestId('wxml-panel')).toBeVisible({ timeout: 5000 })
   })
 
   test('closing project does not leave orphan right-panel views', async ({ electronApp }) => {

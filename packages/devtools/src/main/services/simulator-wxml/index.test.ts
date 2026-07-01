@@ -99,6 +99,9 @@ function makeInspector() {
     getWxml: vi.fn(async () => ({ tagName: 'view', attrs: {}, children: [] })),
     highlight: vi.fn(async () => null),
     unhighlight: vi.fn(async () => {}),
+    // final-contract.md §6/§8: the visibility gate drives the guest MutationObserver
+    // through this method on SetActive(true/false).
+    setWxmlObserving: vi.fn(async () => {}),
   } satisfies RenderInspector
 }
 
@@ -194,7 +197,11 @@ describe('setupSimulatorWxml — GetSnapshot (pull)', () => {
 })
 
 describe('setupSimulatorWxml — render event (push)', () => {
-  it('pushes the tree to host.send on a domReady event', async () => {
+  // Modified for final-contract.md §8: pushes are now gated behind SetActive(true)
+  // (the panel must be visible before a domReady drives a full Vue-tree walk), so
+  // this case seeds visibility first — the original "unconditional push" behavior
+  // is covered by the "does NOT push on domReady before SetActive(true)" case below.
+  it('pushes the tree to host.send on a domReady event once the panel is SetActive(true)', async () => {
     const { bridge, fireRenderEvent } = makeBridge()
     const inspector = makeInspector()
     const tree = { tagName: 'page', attrs: {}, children: [] }
@@ -206,6 +213,9 @@ describe('setupSimulatorWxml — render event (push)', () => {
       inspector,
       getActiveAppId: () => 'wx123',
     })
+
+    await getHandler(SimulatorWxmlChannel.SetActive)({}, true)
+    ;(host.send as ReturnType<typeof vi.fn>).mockClear() // drop the SetActive(true) seed push; isolate the domReady push
 
     fireRenderEvent({ kind: 'domReady', appId: 'wx123', bridgeId: 'bridge_1' })
     // The push pulls the tree asynchronously; let microtasks drain.
@@ -238,6 +248,159 @@ describe('setupSimulatorWxml — render event (push)', () => {
   })
 })
 
+/**
+ * Visibility gate (final-contract.md §8): the panel must be SetActive(true)
+ * before any push happens (an unseen panel must never drive a full Vue-tree
+ * walk), and SetActive must drive the guest MutationObserver on/off via
+ * `inspector.setWxmlObserving`.
+ */
+describe('setupSimulatorWxml — visibility gate (SetActive)', () => {
+  it('does NOT push on a domReady event before SetActive(true) has ever been called', async () => {
+    const { bridge, fireRenderEvent } = makeBridge()
+    const inspector = makeInspector()
+    const host = makeHost()
+    const d = setupSimulatorWxml(host, { bridge, inspector, getActiveAppId: () => 'wx123' })
+
+    fireRenderEvent({ kind: 'domReady', appId: 'wx123', bridgeId: 'bridge_1' })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(host.send).not.toHaveBeenCalled()
+    void d.dispose()
+  })
+
+  it('SetActive(true) seeds immediately: pulls once and pushes the tree to host.send', async () => {
+    const { bridge } = makeBridge()
+    const inspector = makeInspector()
+    const tree = { tagName: 'page', attrs: {}, children: [] }
+    inspector.getWxml.mockResolvedValue(tree)
+    const host = makeHost()
+    const d = setupSimulatorWxml(host, { bridge, inspector, getActiveAppId: () => 'wx123' })
+
+    await getHandler(SimulatorWxmlChannel.SetActive)({}, true)
+
+    // SetActive's handler fires schedulePull() without awaiting the pull's own
+    // async chain (getWxml → .then(host.send)), so the push lands a few
+    // microtasks after the handler call returns.
+    await vi.waitFor(() => {
+      expect(host.send).toHaveBeenCalledWith(SimulatorWxmlChannel.Event, tree)
+    })
+    void d.dispose()
+  })
+
+  it('SetActive(true) turns on guest observation for the active render wc', async () => {
+    const { bridge } = makeBridge()
+    const inspector = makeInspector()
+    const host = makeHost()
+    const d = setupSimulatorWxml(host, { bridge, inspector, getActiveAppId: () => 'wx123' })
+
+    await getHandler(SimulatorWxmlChannel.SetActive)({}, true)
+
+    expect(inspector.setWxmlObserving).toHaveBeenCalledWith(FAKE_WC, true)
+    void d.dispose()
+  })
+
+  it('SetActive(false) turns off guest observation and domMutated no longer pushes', async () => {
+    const { bridge, fireRenderEvent } = makeBridge()
+    const inspector = makeInspector()
+    const host = makeHost()
+    const d = setupSimulatorWxml(host, { bridge, inspector, getActiveAppId: () => 'wx123' })
+
+    await getHandler(SimulatorWxmlChannel.SetActive)({}, true)
+    // Let the SetActive(true) seed push land BEFORE clearing — otherwise its
+    // async host.send (which lands a few microtasks after the handler call
+    // returns) could arrive AFTER the clear and be mistaken for a post-off push.
+    await vi.waitFor(() => {
+      expect(host.send).toHaveBeenCalled()
+    })
+    ;(host.send as ReturnType<typeof vi.fn>).mockClear()
+
+    await getHandler(SimulatorWxmlChannel.SetActive)({}, false)
+    expect(inspector.setWxmlObserving).toHaveBeenCalledWith(FAKE_WC, false)
+
+    fireRenderEvent({ kind: 'domMutated', appId: 'wx123', bridgeId: 'bridge_1' })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(host.send).not.toHaveBeenCalled()
+    void d.dispose()
+  })
+
+  it('a domMutated event after SetActive(true) re-pulls and pushes', async () => {
+    const { bridge, fireRenderEvent } = makeBridge()
+    const inspector = makeInspector()
+    const tree = { tagName: 'page', attrs: {}, children: [] }
+    inspector.getWxml.mockResolvedValue(tree)
+    const host = makeHost()
+    const d = setupSimulatorWxml(host, { bridge, inspector, getActiveAppId: () => 'wx123' })
+
+    await getHandler(SimulatorWxmlChannel.SetActive)({}, true)
+    ;(host.send as ReturnType<typeof vi.fn>).mockClear() // isolate the domMutated push from the SetActive seed push
+
+    fireRenderEvent({ kind: 'domMutated', appId: 'wx123', bridgeId: 'bridge_1' })
+    await vi.waitFor(() => {
+      expect(host.send).toHaveBeenCalledWith(SimulatorWxmlChannel.Event, tree)
+    })
+    void d.dispose()
+  })
+})
+
+/**
+ * latest-wins coalescing (final-contract.md §8): a slow pull whose result
+ * arrives AFTER a newer pull has already been scheduled must be discarded —
+ * only the tree from the most-recently-scheduled pull is ever pushed. This
+ * guards against a stale tree clobbering a fresher one when two render events
+ * fire in quick succession (e.g. domReady immediately followed by domMutated).
+ */
+describe('setupSimulatorWxml — latest-wins coalescing', () => {
+  it('a slow pull that resolves after a newer one is scheduled is discarded; the newer tree wins', async () => {
+    const { bridge, fireRenderEvent } = makeBridge()
+    const inspector = makeInspector()
+    const host = makeHost()
+
+    const oldTree = { tagName: 'old', attrs: {}, children: [] }
+    const newTree = { tagName: 'new', attrs: {}, children: [] }
+
+    let resolveSlow!: (v: unknown) => void
+    const slow = new Promise((resolve) => { resolveSlow = resolve })
+    inspector.getWxml
+      .mockImplementationOnce(() => slow as Promise<typeof oldTree>)
+      .mockImplementationOnce(async () => newTree)
+
+    const d = setupSimulatorWxml(host, { bridge, inspector, getActiveAppId: () => 'wx123' })
+
+    // SetActive(true) triggers the first (slow) pull; it does not await pull
+    // completion, so this returns while `slow` is still pending.
+    const activatePromise = getHandler(SimulatorWxmlChannel.SetActive)({}, true)
+
+    // Fire a second render event WHILE the first pull is still in flight: this
+    // must coalesce into exactly one follow-up pull (not a second concurrent one).
+    fireRenderEvent({ kind: 'domMutated', appId: 'wx123', bridgeId: 'bridge_1' })
+
+    // Now resolve the slow (first, stale) pull with the OLD tree.
+    resolveSlow(oldTree)
+    await activatePromise
+    await vi.waitFor(() => {
+      // The follow-up (second, fast) pull must have run and pushed the NEW tree.
+      expect(host.send).toHaveBeenCalledWith(SimulatorWxmlChannel.Event, newTree)
+    })
+
+    // The stale old tree must never have reached host.send — the coalesced
+    // follow-up pull is strictly newer and wins.
+    expect(host.send).not.toHaveBeenCalledWith(SimulatorWxmlChannel.Event, oldTree)
+    void d.dispose()
+  })
+})
+
+/**
+ * Codex-flagged gap: SetActive(true) tries to start observing the active
+ * render wc immediately, but the active app's render guest may not exist yet
+ * (e.g. the page hasn't finished navigating). `activeWc()` returns null, so
+ * `startObserving` no-ops and `observedWc` is left null forever — the guest
+ * MutationObserver never gets turned on for that page, even once it becomes
+ * available, because nothing retries. The fix must retry observation when a
+ * `domReady` event reports the guest now exists.
+ */
 describe('setupSimulatorWxml — dispose', () => {
   it('unsubscribes onRenderEvent and removes the IPC handler', async () => {
     const { bridge, unsubscribe } = makeBridge()

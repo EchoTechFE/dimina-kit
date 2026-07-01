@@ -23,18 +23,38 @@ import { StoragePanel } from './storage-panel'
 const FULL_KEY = 'devtools_demo_001_token'
 const PREFIX = 'devtools_demo_001_'
 
+// `onRefresh` dropped from the default fixture: final-contract.md §9 removes the
+// panel's own "↻ 刷新" button (the panel is now realtime-pushed + ready-seeded,
+// see use-panel-data's storage ready-seed), so no test in this file should need
+// to supply it. Individual tests below can still override it if they want to
+// probe the (soon to be deleted) prop for backward-compat during the migration.
 function makeProps(overrides: Partial<Parameters<typeof StoragePanel>[0]> = {}) {
   return {
     items: [{ key: FULL_KEY, value: 'abc' }],
-    onRefresh: vi.fn(),
     onSet: vi.fn(async () => ({ ok: true as const })),
     onRemove: vi.fn(async () => ({ ok: true as const })),
     onClear: vi.fn(async () => ({ ok: true as const })),
     onClearAll: vi.fn(async () => ({ ok: true as const })),
     getPrefix: vi.fn().mockResolvedValue(PREFIX),
     ...overrides,
-  }
+  } as Parameters<typeof StoragePanel>[0]
 }
+
+describe('StoragePanel: no refresh button (final-contract §9)', () => {
+  it('does not render a button whose text contains "刷新"', async () => {
+    const props = makeProps()
+    const { container, findAllByText } = render(<StoragePanel {...props} />)
+
+    // Wait for the panel's async prefix-load to settle so we're asserting
+    // against the fully-rendered steady state, not a transient first paint.
+    await findAllByText('token')
+
+    const refreshButtons = Array.from(container.querySelectorAll('button')).filter((b) =>
+      (b.textContent ?? '').includes('刷新'),
+    )
+    expect(refreshButtons).toHaveLength(0)
+  })
+})
 
 describe('StoragePanel: appId-prefix stripping', () => {
   it('displays the key with the appId prefix stripped, full key kept as title (Chrome-style)', async () => {
