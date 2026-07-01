@@ -3,7 +3,7 @@
  *
  * Today `exposeDeckBridge()` exposes only the host-service / event RPC bridge
  * (probe / invoke / onEvent). It does NOT wire the three slot-token LAYOUT
- * channels (`slot-grant` PUSH, `place` send, `layout-subscribe` invoke). So
+ * channels (`slot-grant` PUSH, `snapshot` send, `layout-subscribe` invoke). So
  * every host re-implements the same preload over hard-coded `DeckChannel.*`
  * strings and hand-rolls a `bridge` for `createDeckLayoutClient`.
  *
@@ -24,6 +24,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DeckChannel } from '../shared/protocol.js'
 import type { LayoutBridge, SlotGrant } from '../client/layout-client.js'
+import type { PlacementSnapshot } from '../layout/placement-reconcile.js'
 
 // The stable global the renderer reads (`window.__electronDeckLayoutBridge`).
 // Hard-pinned here because the renderer's `createDeckLayoutClient({ bridge })`
@@ -111,6 +112,22 @@ function emitIpc(channel: string, ...args: unknown[]): void {
 	for (const l of [...listeners]) l({}, ...args)
 }
 
+// Minimal valid snapshot for sendSnapshot tests.
+function makeSnapshot(): PlacementSnapshot<{ slotToken: string }> {
+	return {
+		generation: 1,
+		epoch: 0,
+		views: [
+			{
+				viewId: 'v1',
+				placement: { visible: true, bounds: { x: 1, y: 2, width: 3, height: 4 } },
+				layer: 0,
+				extra: { slotToken: 'tok-1' },
+			},
+		],
+	}
+}
+
 beforeEach(() => {
 	mocks.exposed.clear()
 	mocks.ipcListeners.clear()
@@ -131,7 +148,7 @@ afterEach(() => {
 describe('exposeDeckLayoutBridge()', () => {
 	// ── B1: binds a LayoutBridge-shaped object under the stable global ──────────
 	describe('B1 — binding to contextBridge', () => {
-		it('B1) calls exposeInMainWorld(<stable global>, bridge) where bridge has onSlotGrant / sendPlace / subscribe', () => {
+		it('calls exposeInMainWorld(<stable global>, bridge) where bridge has onSlotGrant / sendSnapshot / subscribe', () => {
 			expect(typeof exposeDeckLayoutBridge).toBe('function')
 			exposeDeckLayoutBridge()
 			expect(mocks.exposeInMainWorld).toHaveBeenCalledTimes(1)
@@ -139,7 +156,7 @@ describe('exposeDeckLayoutBridge()', () => {
 			expect(mocks.exposeInMainWorld.mock.calls[0]?.[0]).toBe(LAYOUT_BRIDGE_GLOBAL)
 			const bridge = getExposedLayoutBridge()
 			expect(typeof bridge.onSlotGrant).toBe('function')
-			expect(typeof bridge.sendPlace).toBe('function')
+			expect(typeof bridge.sendSnapshot).toBe('function')
 			expect(typeof bridge.subscribe).toBe('function')
 		})
 	})
@@ -150,7 +167,7 @@ describe('exposeDeckLayoutBridge()', () => {
 			exposeDeckLayoutBridge()
 		})
 
-		it('B2) onSlotGrant(cb) subscribes ipcRenderer.on(SlotGrant) and invokes cb with the grant payload', () => {
+		it('onSlotGrant(cb) subscribes ipcRenderer.on(SlotGrant) and invokes cb with the grant payload', () => {
 			const bridge = getExposedLayoutBridge()
 			const received: SlotGrant[] = []
 			bridge.onSlotGrant(g => received.push(g))
@@ -158,20 +175,25 @@ describe('exposeDeckLayoutBridge()', () => {
 			expect(mocks.ipcOn).toHaveBeenCalled()
 			expect(mocks.ipcOn.mock.calls[0]?.[0]).toBe(DeckChannel.SlotGrant)
 
-			const grant: SlotGrant = { viewId: 'v1', slotId: '#sim', slotToken: 'tok-1' }
+			const grant: SlotGrant = {
+				viewId: 'v1',
+				slotId: '#sim',
+				slotToken: 'tok-1',
+				generation: 1,
+			}
 			emitIpc(DeckChannel.SlotGrant, grant)
 			expect(received).toEqual([grant])
 		})
 
-		it('B2) onSlotGrant returns a plain unsubscribe that removes the listener (no further deliveries)', () => {
+		it('onSlotGrant returns a plain unsubscribe that removes the listener (no further deliveries)', () => {
 			const bridge = getExposedLayoutBridge()
 			const received: string[] = []
 			const unsub = bridge.onSlotGrant(g => received.push(g.viewId))
 			expect(typeof unsub).toBe('function')
 
-			emitIpc(DeckChannel.SlotGrant, { viewId: 'a', slotId: '#a', slotToken: 't-a' })
+			emitIpc(DeckChannel.SlotGrant, { viewId: 'a', slotId: '#a', slotToken: 't-a', generation: 1 })
 			unsub()
-			emitIpc(DeckChannel.SlotGrant, { viewId: 'b', slotId: '#b', slotToken: 't-b' })
+			emitIpc(DeckChannel.SlotGrant, { viewId: 'b', slotId: '#b', slotToken: 't-b', generation: 2 })
 			expect(received).toEqual(['a'])
 		})
 	})
@@ -182,24 +204,21 @@ describe('exposeDeckLayoutBridge()', () => {
 			exposeDeckLayoutBridge()
 		})
 
-		it('B3) sendPlace(msg) sends/invokes the Place channel with the msg; subscribe() invokes LayoutSubscribe', () => {
+		it('sendSnapshot(snap) sends/invokes the Snapshot channel with the snap; subscribe() invokes LayoutSubscribe', () => {
 			const bridge = getExposedLayoutBridge()
 			mocks.state.invokeImpl = vi.fn(async () => undefined)
 
-			const msg = {
-				slotToken: 'tok-1',
-				placement: { visible: true as const, bounds: { x: 1, y: 2, width: 3, height: 4 } },
-			}
-			bridge.sendPlace(msg)
+			const snap = makeSnapshot()
+			bridge.sendSnapshot(snap)
 			bridge.subscribe()
 
-			// sendPlace went out on the Place channel carrying the msg (either via
+			// sendSnapshot went out on the Snapshot channel carrying the snap (either via
 			// ipcRenderer.send or .invoke — accept both transports).
-			const placeViaSend = mocks.ipcSend.mock.calls.find(c => c[0] === DeckChannel.Place)
-			const placeViaInvoke = mocks.ipcInvoke.mock.calls.find(c => c[0] === DeckChannel.Place)
-			const placeCall = placeViaSend ?? placeViaInvoke
-			expect(placeCall, 'expected a Place IPC carrying the msg').toBeTruthy()
-			expect(placeCall?.[1]).toEqual(msg)
+			const snapViaSend = mocks.ipcSend.mock.calls.find(c => c[0] === DeckChannel.Snapshot)
+			const snapViaInvoke = mocks.ipcInvoke.mock.calls.find(c => c[0] === DeckChannel.Snapshot)
+			const snapCall = snapViaSend ?? snapViaInvoke
+			expect(snapCall, 'expected a Snapshot IPC carrying the snap').toBeTruthy()
+			expect(snapCall?.[1]).toEqual(snap)
 
 			// subscribe() invoked the LayoutSubscribe channel.
 			const subViaInvoke = mocks.ipcInvoke.mock.calls.some(c => c[0] === DeckChannel.LayoutSubscribe)
@@ -207,31 +226,28 @@ describe('exposeDeckLayoutBridge()', () => {
 			expect(subViaInvoke || subViaSend, 'expected a LayoutSubscribe IPC').toBe(true)
 		})
 
-		it('B3) the exact channel strings match the framework protocol (NOT hand-duplicated)', () => {
+		it('the exact channel strings match the framework protocol (NOT hand-duplicated)', () => {
 			// Guard the literals so a drifted hand-copy in the helper is caught:
-			// onSlotGrant → ":slot-grant", sendPlace → ":place", subscribe → ":layout-subscribe".
+			// onSlotGrant → ":slot-grant", sendSnapshot → ":snapshot", subscribe → ":layout-subscribe".
 			expect(DeckChannel.SlotGrant).toBe('__electron-deck:slot-grant')
-			expect(DeckChannel.Place).toBe('__electron-deck:place')
+			expect(DeckChannel.Snapshot).toBe('__electron-deck:snapshot')
 			expect(DeckChannel.LayoutSubscribe).toBe('__electron-deck:layout-subscribe')
 
 			const bridge = getExposedLayoutBridge()
 			mocks.state.invokeImpl = vi.fn(async () => undefined)
 
 			bridge.onSlotGrant(() => {})
-			bridge.sendPlace({
-				slotToken: 't',
-				placement: { visible: true as const, bounds: { x: 0, y: 0, width: 1, height: 1 } },
-			})
+			bridge.sendSnapshot(makeSnapshot())
 			bridge.subscribe()
 
 			// onSlotGrant subscribed to exactly the slot-grant string.
 			expect(mocks.ipcOn.mock.calls.some(c => c[0] === '__electron-deck:slot-grant')).toBe(true)
-			// Place + LayoutSubscribe went out on exactly those strings (send OR invoke).
+			// Snapshot + LayoutSubscribe went out on exactly those strings (send OR invoke).
 			const allOutbound = [
 				...mocks.ipcSend.mock.calls.map(c => c[0]),
 				...mocks.ipcInvoke.mock.calls.map(c => c[0]),
 			]
-			expect(allOutbound).toContain('__electron-deck:place')
+			expect(allOutbound).toContain('__electron-deck:snapshot')
 			expect(allOutbound).toContain('__electron-deck:layout-subscribe')
 		})
 	})
@@ -254,7 +270,7 @@ describe('exposeDeckLayoutBridge()', () => {
 
 	// ── B5: structural compatibility with createDeckLayoutClient's LayoutBridge ─
 	describe('B5 — produced bridge matches LayoutBridge structurally', () => {
-		it('B5) the exposed object satisfies the LayoutBridge interface (onSlotGrant→unsub, sendPlace, subscribe)', () => {
+		it('the exposed object satisfies the LayoutBridge interface (onSlotGrant→unsub, sendSnapshot, subscribe)', () => {
 			exposeDeckLayoutBridge()
 			// Structural pin: assigning to a typed LayoutBridge is the compile-time
 			// half; the runtime half asserts the members are the right shapes.
@@ -264,7 +280,7 @@ describe('exposeDeckLayoutBridge()', () => {
 			// Not a Disposable-shaped object (must be plain callable across contextBridge).
 			expect((unsub as unknown as { dispose?: unknown }).dispose).toBeUndefined()
 			unsub()
-			expect(bridge.sendPlace.length).toBeGreaterThanOrEqual(1)
+			expect(bridge.sendSnapshot.length).toBeGreaterThanOrEqual(1)
 			expect(typeof bridge.subscribe).toBe('function')
 		})
 	})

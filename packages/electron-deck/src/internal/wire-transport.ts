@@ -106,11 +106,13 @@ export interface WireTransportDeps {
 	 */
 	readonly declaredEvents: () => readonly string[]
 	/**
-	 * OPTIONAL slot-token inbound: `__electron-deck:place` apply path. When
-	 * provided, `start()` registers the `Place` handler (same trust + main-frame
-	 * gate as invoke). On gate pass → `onPlace(senderId, slotToken, placement)`.
+	 * OPTIONAL slot-token inbound: `__electron-deck:snapshot` apply path. When
+	 * provided, `start()` registers the `Snapshot` handler (same trust + main-frame
+	 * gate as invoke). On gate pass → `onSnapshot(senderId, rawSnapshot)`. The
+	 * payload (the renderer's window-level placement table) is opaque here and
+	 * authorized/validated downstream — the wire only enforces the trust boundary.
 	 */
-	readonly onPlace?: (senderId: number, slotToken: string, placement: unknown) => void
+	readonly onSnapshot?: (senderId: number, rawSnapshot: unknown) => void
 	/**
 	 * OPTIONAL slot-token inbound: `__electron-deck:layout-subscribe` per-wc
 	 * replay request. When provided, `start()` registers the `LayoutSubscribe`
@@ -125,15 +127,15 @@ export class WireTransport {
 	private readonly deps: WireTransportDeps
 	private state: LifecycleState = 'idle'
 	private busSubscription: Disposable | null = null
-	/** Whether the optional Place / LayoutSubscribe handlers were registered
+	/** Whether the optional Snapshot / LayoutSubscribe handlers were registered
 	 *  (either eagerly at start() via deps, or lazily via armSlotChannels) — so
 	 *  dispose() only removes channels it actually registered. */
-	private placeRegistered = false
+	private snapshotRegistered = false
 	private layoutSubscribeRegistered = false
 	/** Effective slot callbacks. Populated from deps at start() (eager path, used
 	 *  by the wire unit tests) OR by {@link armSlotChannels} (lazy path, used by
 	 *  deck-app so an app with no anchored views registers only Invoke + Probe). */
-	private onPlaceCb: ((senderId: number, slotToken: string, placement: unknown) => void) | null = null
+	private onSnapshotCb: ((senderId: number, rawSnapshot: unknown) => void) | null = null
 	private onLayoutSubscribeCb: ((senderId: number) => void) | null = null
 
 	constructor(deps: WireTransportDeps) {
@@ -165,10 +167,10 @@ export class WireTransport {
 			// WireTransport unit tests drive this). deck-app instead leaves the deps
 			// undefined and arms lazily via armSlotChannels() on the first anchored
 			// placeIn, so a slot-less app registers only Invoke + Probe.
-			if (this.deps.onPlace) {
-				this.onPlaceCb = this.deps.onPlace
-				this.registerPlaceHandler()
-				cleanups.push(() => this.unregisterPlaceHandler())
+			if (this.deps.onSnapshot) {
+				this.onSnapshotCb = this.deps.onSnapshot
+				this.registerSnapshotHandler()
+				cleanups.push(() => this.unregisterSnapshotHandler())
 			}
 			if (this.deps.onLayoutSubscribe) {
 				this.onLayoutSubscribeCb = this.deps.onLayoutSubscribe
@@ -211,17 +213,17 @@ export class WireTransport {
 		}
 	}
 
-	private registerPlaceHandler(): void {
-		if (this.placeRegistered) return
-		this.deps.ipcMain.handle(DeckChannel.Place, (event, ...args) =>
-			this.handlePlace(event?.sender?.id, event?.senderFrame, event?.sender?.mainFrame, args[0]))
-		this.placeRegistered = true
+	private registerSnapshotHandler(): void {
+		if (this.snapshotRegistered) return
+		this.deps.ipcMain.handle(DeckChannel.Snapshot, (event, ...args) =>
+			this.handleSnapshot(event?.sender?.id, event?.senderFrame, event?.sender?.mainFrame, args[0]))
+		this.snapshotRegistered = true
 	}
 
-	private unregisterPlaceHandler(): void {
-		if (!this.placeRegistered) return
-		this.placeRegistered = false
-		this.tryRemoveHandler(DeckChannel.Place)
+	private unregisterSnapshotHandler(): void {
+		if (!this.snapshotRegistered) return
+		this.snapshotRegistered = false
+		this.tryRemoveHandler(DeckChannel.Snapshot)
 	}
 
 	private registerLayoutSubscribeHandler(): void {
@@ -246,13 +248,13 @@ export class WireTransport {
 	 * handler footprint at Invoke + Probe until a slot is actually minted).
 	 */
 	armSlotChannels(
-		onPlace: (senderId: number, slotToken: string, placement: unknown) => void,
+		onSnapshot: (senderId: number, rawSnapshot: unknown) => void,
 		onLayoutSubscribe: (senderId: number) => void,
 	): void {
-		this.onPlaceCb = onPlace
+		this.onSnapshotCb = onSnapshot
 		this.onLayoutSubscribeCb = onLayoutSubscribe
 		if (this.state !== 'started') return
-		this.registerPlaceHandler()
+		this.registerSnapshotHandler()
 		this.registerLayoutSubscribeHandler()
 	}
 
@@ -277,14 +279,14 @@ export class WireTransport {
 			console.error('[electron-deck] removeHandler(probe) failed:', e)
 		}
 		// Only remove the optional channels we actually registered, so a wire with
-		// no onPlace/onLayoutSubscribe deps removes exactly Invoke + Probe.
-		if (this.placeRegistered) {
-			this.placeRegistered = false
+		// no onSnapshot/onLayoutSubscribe deps removes exactly Invoke + Probe.
+		if (this.snapshotRegistered) {
+			this.snapshotRegistered = false
 			try {
-				this.deps.ipcMain.removeHandler(DeckChannel.Place)
+				this.deps.ipcMain.removeHandler(DeckChannel.Snapshot)
 			}
 			catch (e) {
-				console.error('[electron-deck] removeHandler(place) failed:', e)
+				console.error('[electron-deck] removeHandler(snapshot) failed:', e)
 			}
 		}
 		if (this.layoutSubscribeRegistered) {
@@ -369,24 +371,23 @@ export class WireTransport {
 	}
 
 	/**
-	 * `__electron-deck:place` inbound. Same gate as {@link handleInvoke}
-	 * (trust + main-frame). On any failure (malformed payload, untrusted sender,
-	 * sub-frame) → DROP silently (return undefined; never call `onPlace`).
+	 * `__electron-deck:snapshot` inbound. Same gate as {@link handleInvoke} (trust +
+	 * main-frame). On any gate failure (non-object payload, untrusted sender,
+	 * sub-frame) → DROP silently. The payload's inner shape is opaque to the wire —
+	 * authorized + validated downstream.
 	 */
-	private handlePlace(
+	private handleSnapshot(
 		senderId: number | undefined,
 		senderFrame: FrameRef | null | undefined,
 		mainFrame: FrameRef | null | undefined,
-		rawMsg: unknown,
+		rawSnapshot: unknown,
 	): void {
-		if (rawMsg === null || typeof rawMsg !== 'object' || Array.isArray(rawMsg)) return
-		const msg = rawMsg as Record<string, unknown>
-		if (typeof msg.slotToken !== 'string') return
+		if (rawSnapshot === null || typeof rawSnapshot !== 'object' || Array.isArray(rawSnapshot)) return
 
 		if (typeof senderId !== 'number' || !this.deps.senderPolicy.isTrusted(senderId)) return
 		if (!this.isMainFrameSender(senderFrame, mainFrame)) return
 
-		this.onPlaceCb?.(senderId, msg.slotToken, msg.placement)
+		this.onSnapshotCb?.(senderId, rawSnapshot)
 	}
 
 	/**

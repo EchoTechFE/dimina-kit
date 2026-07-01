@@ -329,7 +329,7 @@ const deck = createDeckLayoutClient({ bridge: window.__electronDeckLayoutBridge 
 | **ControlBus** | IPC + trust 薄 facade，真接 WireTransport | `src/host/control-bus.ts` + `src/internal/wire-transport.ts` + `src/internal/trust-set.ts` |
 | **ViewHandle / `runtime.view`** | 薄 per-view 编排：`placeIn/applyPlacement/moveTo` + `bounds()/capturePage()/webContents` | `src/main/view-handle.ts` + `src/internal/deck-app.ts` |
 | **capability / grants** | 授权层：grant 闸 + senderId 横切 + per-wc Scope + 导航撤权 | `src/host/capability.ts` + `src/internal/deck-app.ts` |
-| **layout client** | `createDeckLayoutClient({bridge})` + slot-token place/subscribe | `src/client/layout-client.ts` + `src/preload/` |
+| **layout client** | `createDeckLayoutClient({bridge})` — 中央 publisher 合并成窗口级 snapshot/subscribe（slot-token 授权 + 主进程 reconcile） | `src/client/layout-client.ts` + `src/layout/snapshot-reconcile.ts` + `src/preload/` |
 | **Window facade** | `runtime.windows.create()/.main` → `DeckWindow{window,controlWc,newSession(),onClose()}` | `src/internal/deck-app.ts` |
 
 横切契约的细化规范见 `contracts/`：view-anchor 跟随硬化（`view-anchor-following.md`）、Compositor 事务化 commit 与 teardown 顺序（`compositor-and-teardown.md`）、capability 与生命周期（`capability-and-lifecycle.md`）、统一寿命（`unified-lifetime.md`）。

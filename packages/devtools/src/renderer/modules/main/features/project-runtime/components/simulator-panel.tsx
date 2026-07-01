@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 import { Select } from '@/shared/components/ui/select'
-import { setNativeSimulatorBounds } from '@/shared/api'
 import { createPlacementAnchor, type Placement, type PlacementAnchorHandle } from '@dimina-kit/view-anchor'
+import { usePlacementPublisher } from '../placement-publisher-context'
+import { VIEW_ID, VIEW_LAYER } from '../../../../../../shared/view-ids'
 import { useDockLayoutEpoch } from '@dimina-kit/electron-deck/dock-react'
 import { cn } from '@/shared/lib/utils'
 import { DEVICES, ZOOM_OPTIONS } from '@/shared/constants'
@@ -66,20 +67,18 @@ export function SimulatorPanel({
   const zoomRef = useRef(zoom)
   const anchorHandleRef = useRef<PlacementAnchorHandle | null>(null)
 
+  const publisher = usePlacementPublisher()
+  // Placement flows to the central publisher; zoom rides in `extra` (the
+  // Placement bounds have no zoom field) so an extra-only change still emits a
+  // setBounds op that re-applies the WCV zoomFactor.
   const publish = useCallback((p: Placement) => {
-    if (p.visible) {
-      void setNativeSimulatorBounds({
-        x: p.bounds.x,
-        y: p.bounds.y,
-        width: p.bounds.width,
-        height: p.bounds.height,
-        zoom: zoomRef.current,
-      })
-    } else {
-      // Hidden → collapse the WCV (host treats 0×0 as detach-but-keep-alive).
-      void setNativeSimulatorBounds({ x: 0, y: 0, width: 0, height: 0, zoom: zoomRef.current })
-    }
-  }, [])
+    publisher?.set({
+      viewId: VIEW_ID.simulator,
+      placement: p,
+      layer: VIEW_LAYER.base,
+      extra: { zoom: zoomRef.current },
+    })
+  }, [publisher])
 
   // Ref-callback binding the placement anchor to the device-region div. Mirrors
   // the dock native-slot lifecycle: bind on mount, rebind without a hidden flash
@@ -148,8 +147,9 @@ export function SimulatorPanel({
     return () => {
       anchorHandleRef.current?.dispose()
       anchorHandleRef.current = null
+      publisher?.remove(VIEW_ID.simulator)
     }
-  }, [])
+  }, [publisher])
 
   return (
     <div className="bg-sim-bg flex flex-col overflow-hidden h-full w-full">

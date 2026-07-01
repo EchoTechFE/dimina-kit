@@ -94,6 +94,7 @@ vi.mock('../../utils/paths.js', () => ({
 
 // Import AFTER mocks so view-manager picks up the stubs.
 import { createViewManager } from './view-manager.js'
+import { simulatorDevtoolsBounds, simulatorBounds } from './placement-test-driver.js'
 import { createConnectionRegistry } from '@dimina-kit/electron-deck/main'
 
 function makeContext() {
@@ -159,7 +160,7 @@ describe('ViewManager overlay z-order: top tier (settings/popover) stays above b
 
     // The console/DevTools overlay bounds republish re-adds the base view —
     // which, without the fix, moves it ABOVE the open settings overlay.
-    mgr.setSimulatorDevtoolsBounds(VISIBLE_RECT)
+    simulatorDevtoolsBounds(mgr,VISIBLE_RECT)
 
     // Two base overlays exist; settings is the distinct top-tier view.
     expect(addChildView.mock.calls.length).toBeGreaterThan(addsAfterAttach + 1)
@@ -178,7 +179,7 @@ describe('ViewManager overlay z-order: top tier (settings/popover) stays above b
 
     // Publishing a VISIBLE native-simulator rect adds nativeSimulatorView (base
     // tier), which without the fix would occlude the open settings overlay.
-    mgr.setNativeSimulatorViewBounds(VISIBLE_SIM)
+    simulatorBounds(mgr,VISIBLE_SIM)
 
     expect(lastAdded(addChildView)).toBe(settingsView)
   })
@@ -192,7 +193,7 @@ describe('ViewManager overlay z-order: top tier (settings/popover) stays above b
     mgr.showPopover({ z: 1 })
     const popoverView = lastAdded(addChildView)
 
-    mgr.setSimulatorDevtoolsBounds(VISIBLE_RECT)
+    simulatorDevtoolsBounds(mgr,VISIBLE_RECT)
 
     expect(lastAdded(addChildView)).toBe(popoverView)
   })
@@ -206,7 +207,7 @@ describe('ViewManager overlay z-order: top tier (settings/popover) stays above b
     mgr.showPopover({ z: 1 })
     const popoverView = lastAdded(addChildView)
 
-    mgr.setNativeSimulatorViewBounds(VISIBLE_SIM)
+    simulatorBounds(mgr,VISIBLE_SIM)
 
     expect(lastAdded(addChildView)).toBe(popoverView)
   })
@@ -224,7 +225,7 @@ describe('ViewManager overlay z-order: top tier (settings/popover) stays above b
 
     // Re-add a base overlay (console/DevTools host) while both top-tier
     // overlays are open.
-    mgr.setSimulatorDevtoolsBounds(VISIBLE_RECT)
+    simulatorDevtoolsBounds(mgr,VISIBLE_RECT)
 
     // Popover must end up topmost; settings must sit immediately below it
     // (i.e. above the just-added base overlay).
@@ -249,7 +250,7 @@ describe('ViewManager overlay z-order: no spurious re-raise when nothing is open
 
     // Publish a visible native-simulator rect: the ONLY add should be the base
     // view itself — no spurious re-raise of a non-existent top-tier overlay.
-    mgr.setNativeSimulatorViewBounds(VISIBLE_SIM)
+    simulatorBounds(mgr,VISIBLE_SIM)
 
     expect(addChildView).toHaveBeenCalledTimes(1)
     expect(addChildView.mock.calls[0]![0]).toBe(nativeSimulatorView)

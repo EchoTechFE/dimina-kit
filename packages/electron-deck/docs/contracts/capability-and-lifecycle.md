@@ -185,7 +185,8 @@ slotToken 解决两件事：(a) 区分同一 control wc 上的多个原生 view 
 interface SlotGrant {
   readonly viewId: string      // Compositor 的 NativeViewRef.id
   readonly slotId: string      // DOM 占位 id（'#simulator'），renderer 用来定位 target
-  readonly slotToken: string   // 不可猜 nonce（crypto 随机），主进程私存 token→(viewId, 授权 wc)
+  readonly slotToken: string   // 不可猜 nonce（crypto 随机），主进程私存 token→(viewId, 授权 wc, zone)
+  readonly generation: number  // 主进程分配、per-wc 单调；stamp 进每帧 snapshot，reload 时更高 generation 重置主进程 reconciler
 }
 ```
 
@@ -194,14 +195,21 @@ interface SlotGrant {
 ```
 主进程 runtime.view({...}).placeIn(controlWc, { anchor:'#simulator' })
   1. Compositor 分配 viewId；生成 slotToken（nonce）
-  2. 主进程私表登记： token → { viewId, authorizedWcId: controlWc.id }
-  3. 主进程 controlWc.send('__deck:slot-grant', { viewId, slotId, slotToken })   ← push，不等 renderer 问
+  2. 主进程私表登记： token → { viewId, authorizedWcId: controlWc.id, zone }
+  3. 主进程 controlWc.send('__deck:slot-grant', { viewId, slotId, slotToken, generation })   ← push，不等 renderer 问
   ──────────────────────────────────────────────────────────────────────────
-renderer（control-layer）
+renderer（control-layer, createDeckLayoutClient）
   4. 启动即订阅 '__deck:slot-grant'（在任何 measure 之前）
   5. 收到 grant → 用 slotId 定位 DOM target → createPlacementAnchor(target, { ... })
-  6. publish 时把 slotToken 一并带上： send('__deck:place', { slotToken, placement })
+     anchor 的 publish 写进一个 **中央 placement publisher**（不是每 view 直接 IPC）
+  6. publisher 每帧把所有 anchor 的最新测量合并成 **一个窗口级 snapshot**，
+     每 view 带上自己 slot 的 token 作为 extra：
+       send('__deck:snapshot', { generation, epoch, views:[{ viewId, placement, layer, extra:{ slotToken } }] })
 ```
+
+合并成窗口级 level（而非每 view 边沿）是白屏根治：某帧 relayout 把某 slot 瞬时测成 0×0
+再恢复，会在下一帧被合并覆盖、永不发布；即便一帧坏值漏出，主进程按整张表 reconcile 会在
+≤1 帧内自愈，而不会像旧的每 view 边沿流那样把一个 view 永久卡在 detach。
 
 **保证「拿到 token 前不上报」的两条**：
 
@@ -216,23 +224,31 @@ renderer（control-layer）
 > 后拼进帧——**放在 view-anchor 包之外**：view-anchor 仍是 engine-agnostic 的纯测量器（publish
 > 是注入的 sink，它不认识 token），保住「不认识 Electron / 不认识协议」的契约。
 
-### slot 上报校验
+### slot 上报校验（clean → reconcile → dispatch）
 
-主进程收到 `{ slotToken, placement }` 的 IPC handler（trusted + main-frame 闸之上，
-复用 wire 那套）再加：
+主进程收到 `{ generation, epoch, views:[...] }` 的 snapshot IPC handler（trusted + main-frame
+闸之上，复用 wire 那套）后走三步纯函数（`src/layout/snapshot-reconcile.ts` + `placement-reconcile.ts`）：
 
 ```
-1. 查私表： token → { viewId, authorizedWcId }；查不到 → drop（伪造/过期 token）。
-2. 🔒 sender wc 匹配： event.sender.id === authorizedWcId ？否则 drop（越权：
-   B 谎报 A 的 slot）。
-3. placement.bounds 形状校验：
-   - visible:false → 直接 detach（合法，无 bounds）。
-   - visible:true → bounds.width/height 必须 ≥0；x/y 允许负（滚动跟随，
-     view-anchor `clampRect` 只 clamp width/height）。**不得把负 x/y 当非法**。
-4. 通过 → ViewHandle 对该 view setBounds / detach（Compositor 纯 z-order，不动 per-view bounds）。
+1. cleanSnapshot(raw, authorize)：逐 view 授权 + 清洗成可信 CleanSnapshot——
+   a. 查私表 token → { viewId, authorizedWcId, zone }；查不到 → 丢弃该 view。
+   b. 🔒 sender wc 匹配： senderId === authorizedWcId ？否则丢弃该 view（越权：B 谎报 A 的 slot）。
+   c. viewId / layer(zone) **取自私表，绝不取 renderer 上报的字段**（有效 token 不能拼到伪 viewId 上毒化 key）。
+   d. placement.bounds 形状校验： visible:false 合法无 bounds；visible:true 要求 width/height ≥0，
+      x/y 允许负（滚动跟随，view-anchor `clampRect` 只 clamp width/height）。**不得把负 x/y 当非法**。
+   e. viewId 去重（保留第一个）。
+   ⚠️ raw.views 非空但**全部授权失败 → 整个 snapshot 拒绝**（返回 null），绝不解释成「detach 全部」——
+      否则一次 token 瞬时失效会把仍活着的 view 全撤掉。views 本就为空（renderer 主动移除全部）则正常 reconcile→detach。
+2. reconcile(perWcState, cleanSnapshot)：按整张 desired 表 diff 上次 actual → 有序 op 列表。
+   stale 规则：generation < 上次 → 拒；generation===上次 && epoch<=lastEpoch → 拒；generation>上次 → 重置重建。
+   （level-triggered：丢/伪一帧自愈；单调 generation 让 reload 的低 generation 在途旧帧被拒。）
+3. dispatchOps → 每个受影响 view 调 ViewHandle.applyPlacement（visible:true setBounds / visible:false detach；
+   Compositor 纯 z-order 按 zone，reorder op 在 deck 侧忽略）。
 ```
 
-token 寿命：view dispose（Scope 撤）时从私表删 token，之后该 token 报的 bounds 全 drop。
+per-wc 状态：`reconcileStates`（reconcile 表）+ `perWcGeneration`（单调计数）。
+`__deck:layout-subscribe`（renderer 重订阅 / reload）→ bump 该 wc generation + 重置其 reconcile state + resend 其所有 grant（带新 generation）。
+token 寿命：view dispose（Scope 撤）/ 关窗时从私表删 token，并连带删该 wc 的 reconcile / generation 状态，之后该 token 报的 bounds 全 drop。
 
 🧪 需实证：(a) 同一 control wc 两个 slot 各自只能驱动自己的 view；(b) 构造一个 trusted
 wc 用别人的 slotToken 上报 → 被 drop（不挪动目标 view）；(c) 负 x/y（向上滚动）正常跟随

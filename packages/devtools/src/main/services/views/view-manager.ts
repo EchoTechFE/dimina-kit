@@ -40,6 +40,13 @@ import {
 } from './host-toolbar-port-channel.js'
 import { parseRoute } from '../../../shared/simulator-route.js'
 import { HEADER_H, HOST_TOOLBAR_RUNTIME_MARKER } from '../../../shared/constants.js'
+import { reconcile, createInitialState } from '@dimina-kit/electron-deck/layout'
+import type {
+  DesiredView,
+  PlacementSnapshot,
+} from '@dimina-kit/electron-deck/layout'
+import { applyViewOps, type ViewOpTarget } from './apply-view-ops.js'
+import { VIEW_ID, VIEW_LAYER, type DevtoolsExtra } from '../../../shared/view-ids.js'
 
 /**
  * Context surface used by the ViewManager. We only need a small slice of the
@@ -49,10 +56,10 @@ export interface ViewManagerContext {
   windows: WorkbenchContext['windows']
   rendererDir: string
   /**
-   * Per-webContents connection registry (foundation.md §4). The native-host
+   * Per-webContents connection registry. The native-host
    * simulator WebContentsView is acquired here so the registry tracks that
    * trusted webContents and tears its per-wc resources (the custom-api bridge
-   * `ipcMain.on`) down deterministically on destroy — see P1 DoD #3. Required:
+   * `ipcMain.on`) down deterministically on destroy. Required:
    * `createWorkbenchContext` always supplies it.
    */
   connections: WorkbenchContext['connections']
@@ -186,16 +193,6 @@ export interface ViewManager {
 
   // ── Compound operations (used by IPC handlers) ────────────────────────
   /**
-   * NATIVE-HOST ONLY. Position the simulator content WebContentsView over the
-   * renderer-measured simulator panel REGION rect (the flex:1 placeholder slot,
-   * CSS px from the main window content top-left, which maps 1:1 to overlay
-   * setBounds DIP) and apply the device zoom. The WCV fills the region as a
-   * plain rectangle; DeviceShell draws + scrolls the phone inside. No-op in the
-   * default `<webview>` path (`nativeSimulatorView` is null). See
-   * `computeNativeSimulatorViewParams`.
-   */
-  setNativeSimulatorViewBounds(params: { x: number; y: number; width: number; height: number; zoom: number }): void
-  /**
    * NATIVE-HOST ONLY. Re-push the selected device's CSS `env(safe-area-inset-*)`
    * override to every attached render-host guest (on device change). New guests
    * pick it up automatically when they attach (`did-attach-webview`).
@@ -210,12 +207,12 @@ export interface ViewManager {
 
   // ── Renderer-driven overlay bounds ────────────────────────────────────
   /**
-   * Apply a renderer-measured rectangle to the simulator's Chromium
-   * DevTools overlay view. `{ width: 0, height: 0 }` is treated as "hide" —
-   * the view is removed from the contentView but its WebContents is kept
-   * alive so re-showing it doesn't re-pay the DevTools bootstrap.
+   * Apply the renderer's window-level placement snapshot — the single source of
+   * truth for every managed native view's bounds/visibility/z-order. Merged with
+   * main-owned settings/popover desired state and reconciled against the actual
+   * view tree.
    */
-  setSimulatorDevtoolsBounds(bounds: { x: number; y: number; width: number; height: number }): void
+  setPlacementSnapshot(snapshot: PlacementSnapshot<DevtoolsExtra>): void
 
   // ── Embedded workbench editor WebContentsView ──────────────────────
   /**
@@ -231,14 +228,6 @@ export interface ViewManager {
    * `setWorkbenchBounds`, keeping it off the app boot critical path.
    */
   setWorkbenchSource(url: string): void
-  /**
-   * Apply a renderer-measured rectangle to the workbench editor view. Mirrors
-   * `setSimulatorDevtoolsBounds`: `{ width: 0, height: 0 }` is "hide" — the view
-   * is removed from the contentView (kept under settings/popover when re-added)
-   * but its WebContents stays alive. The first non-zero rect lazily creates +
-   * loads the workbench (from the URL set by `setWorkbenchSource`).
-   */
-  setWorkbenchBounds(bounds: { x: number; y: number; width: number; height: number }): void
   /** Destroy the workbench editor view (teardown). No-op if never attached. */
   detachWorkbench(): void
   /**
@@ -251,15 +240,6 @@ export interface ViewManager {
   openFileInWorkbench(relPath: string, line: number, column: number): boolean
 
   // ── Host-controllable toolbar WebContentsView ─────────────────────────
-  /**
-   * Apply a renderer-measured rectangle to the host-controllable toolbar
-   * WebContentsView (the strip above the devtools header). Forward anchor,
-   * mirroring `setSimulatorDevtoolsBounds`. `{ width: 0, height: 0 }` is
-   * treated as "hide" — the view is removed from the contentView but its
-   * WebContents (and the host's loaded content) stays alive. Lazily creates
-   * the view on the first non-empty rect.
-   */
-  setHostToolbarBounds(bounds: { x: number; y: number; width: number; height: number }): void
   /**
    * Reverse size-advertiser sink: the toolbar WCV's own renderer advertises
    * its intrinsic content height (block-axis extent); we retain it as the
@@ -421,12 +401,6 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   let nativeSimulatorViewAdded = false
   let nativeSimulatorProjectPath: string | null = null
   let settleNativeSimulatorReady: (() => void) | null = null
-  // Model A: the renderer's measured inner-screen rect is the SOLE authority for
-  // the native simulator WCV bounds (see docs/simulator-render-architecture.md).
-  // Cache the last rect so a report that lands before attachNativeSimulator (the
-  // project-open ordering) is not lost — attach replays it instead of using a
-  // coarse panel-size fallback (which raced and caused the clip/surround flips).
-  let lastRendererRect: { x: number; y: number; width: number; height: number; zoom: number } | null = null
   // NATIVE-HOST ONLY. The `ipcMain.on` listener that services the
   // `__diminaCustomApis` bridge for the current native simulator webContents
   // (see `attachNativeCustomApiBridge`). Tracked so we can remove it before
@@ -439,7 +413,6 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   // pick up the correct scale in `did-attach-webview`. Defaults to 1 (100%).
   let currentZoomFactor = 1
   let settingsView: WebContentsView | null = null
-  let settingsViewAdded = false
   let popoverView: WebContentsView | null = null
   let simulatorWebContentsId: number | null = null
   // NATIVE-HOST ONLY. The webContents the right-panel Chrome DevTools front-end
@@ -464,18 +437,12 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   let nativeDevtoolsRetryTimer: ReturnType<typeof setTimeout> | null = null
   let nativeDevtoolsRetryToken = 0
 
-  // Renderer-driven overlay bounds for the simulator DevTools view — the SOLE
-  // mount/geometry authority (no static-layout fallback). A zero-area
-  // rectangle means "hide" — the overlay is removed from the contentView but
-  // its WebContents stays alive.
-  let simulatorBoundsOverride: layout.Bounds | null = null
 
   // ── Embedded workbench editor WebContentsView ────────────────────────
   // The opt-in VS Code workbench hosting the 'editor' dock slot. Lazily created
   // by `attachWorkbench` from the COI server URL; its bounds ride the renderer
   // 'editor'-slot anchor (forward anchor, like the simulator DevTools overlay).
   let workbenchView: WebContentsView | null = null
-  let workbenchViewAdded = false
   // Whether the devtools-theme → workbench-theme `nativeTheme` listener is live.
   // Bound lazily on first workbench attach, removed on detach.
   let workbenchThemeSyncBound = false
@@ -533,35 +500,160 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     } catch { /* ignore */ }
   }
 
-  // Renderer publishes width/height = 0 to mean "hide overlay" — the
-  // surrounding React panel is unmounted/collapsed. We keep the cached
-  // value (so future republishes win over legacy layout) but remove the
-  // child view from the contentView until a non-empty rect arrives.
-  function isHidden(b: layout.Bounds): boolean {
-    return b.width <= 0 || b.height <= 0
+  // ── Placement reconciler ────────────────────────────────────────────────
+  // The main-process view tree is converged toward the renderer's declared
+  // placement by a level-triggered reconciler (docs/view-placement-reconciler.md).
+  // The renderer publishes a window-level snapshot into `baseDesired`;
+  // settings/popover are main-owned and live in `overlayDesired`. Any change
+  // merges the two, runs the pure reconcile core, and applies the ordered ops
+  // through `viewTarget`. `epochCounter` is a single monotonic tick — main is the
+  // only (serial) reconcile caller, so the core's stale guard passes by
+  // construction; `rendererGeneration` still drives the reset on renderer restart.
+  let placementState = createInitialState<DevtoolsExtra>()
+  let epochCounter = 0
+  let rendererGeneration = 0
+  const baseDesired = new Map<string, DesiredView<DevtoolsExtra>>()
+  const overlayDesired = new Map<string, DesiredView<DevtoolsExtra>>()
+
+  // simulator / simulator-devtools WCVs are built by the project-open flow, not
+  // by an attach op; gate them hidden until they exist so the reconciler never
+  // records an attach that addChildView can't perform. The view-creation sites
+  // call reconcileNow() to re-open the gate. workbench is gated until it has a
+  // source or a live view (it lazy-creates from the URL in target.attach).
+  function gateReadiness(v: DesiredView<DevtoolsExtra>): DesiredView<DevtoolsExtra> {
+    if (v.viewId === VIEW_ID.simulator && !nativeSimulatorView)
+      return { ...v, placement: { visible: false } }
+    if (v.viewId === VIEW_ID.simulatorDevtools && !simulatorView)
+      return { ...v, placement: { visible: false } }
+    if (v.viewId === VIEW_ID.workbench && !workbenchView && !workbenchUrl)
+      return { ...v, placement: { visible: false } }
+    return v
   }
 
-  function setSimulatorDevtoolsBounds(bounds: layout.Bounds): void {
-    simulatorBoundsOverride = bounds
-    if (!simulatorView || simulatorView.webContents.isDestroyed()) return
-    if (ctx.windows.mainWindow.isDestroyed()) return
-    if (isHidden(bounds)) {
-      if (simulatorViewAdded) {
-        try {
-          ctx.windows.mainWindow.contentView.removeChildView(simulatorView)
-        } catch { /* already removed */ }
-        simulatorViewAdded = false
+  function resolveView(viewId: string): WebContentsView | null {
+    switch (viewId) {
+      case VIEW_ID.simulator: return nativeSimulatorView
+      case VIEW_ID.simulatorDevtools: return simulatorView
+      case VIEW_ID.workbench: return workbenchView
+      case VIEW_ID.hostToolbar: return hostToolbarView
+      case VIEW_ID.settings: return settingsView
+      case VIEW_ID.popover: return popoverView
+      default: return null
+    }
+  }
+
+  function markAdded(viewId: string, added: boolean): void {
+    switch (viewId) {
+      case VIEW_ID.simulator: nativeSimulatorViewAdded = added; break
+      case VIEW_ID.simulatorDevtools: simulatorViewAdded = added; break
+      case VIEW_ID.hostToolbar: hostToolbarViewAdded = added; break
+      // popover has no added-flag (create == added).
+    }
+  }
+
+  // simulator zoom rides in `extra`: setBounds also drives the WCV zoomFactor and
+  // propagates it to nested render-host guests (from the old
+  // setNativeSimulatorViewBounds body).
+  function applyNativeSimulatorBounds(
+    view: WebContentsView,
+    bounds: layout.Bounds,
+    zoom: number,
+  ): void {
+    const p = layout.computeNativeSimulatorViewParams(bounds, zoom)
+    currentZoomFactor = p.zoomFactor
+    view.setBounds(p.bounds)
+    const simWc = view.webContents
+    if (!simWc.isDestroyed()) simWc.setZoomFactor(p.zoomFactor)
+    try {
+      for (const wc of webContents.getAllWebContents()) {
+        if (wc.isDestroyed()) continue
+        if (wc.hostWebContents === simWc) wc.setZoomFactor(p.zoomFactor)
       }
-      return
-    }
-    if (!simulatorViewAdded) {
-      ctx.windows.mainWindow.contentView.addChildView(simulatorView)
-      simulatorViewAdded = true
-      // Re-attaching this base overlay moved it to the top of the z-stack; keep
-      // any open settings/popover above it.
-      raiseTopOverlays()
-    }
-    simulatorView.setBounds(bounds)
+    } catch { /* hostWebContents unavailable; guests get zoom on attach */ }
+  }
+
+  const viewTarget: ViewOpTarget = {
+    attach(viewId): void {
+      if (ctx.windows.mainWindow.isDestroyed()) return
+      if (viewId === VIEW_ID.workbench && !workbenchView && workbenchUrl) {
+        // Lazy-load the workbench; attachWorkbench adds it + sets the flag.
+        void attachWorkbench(workbenchUrl)
+        return
+      }
+      if (viewId === VIEW_ID.hostToolbar) {
+        const view = ensureHostToolbarView()
+        ctx.windows.mainWindow.contentView.addChildView(view)
+        hostToolbarViewAdded = true
+        return
+      }
+      const view = resolveView(viewId)
+      if (!view) return
+      ctx.windows.mainWindow.contentView.addChildView(view)
+      markAdded(viewId, true)
+    },
+    detach(viewId): void {
+      const view = resolveView(viewId)
+      if (view && !ctx.windows.mainWindow.isDestroyed()) {
+        try { ctx.windows.mainWindow.contentView.removeChildView(view) } catch { /* already removed */ }
+      }
+      markAdded(viewId, false)
+    },
+    setBounds(viewId, bounds, extra): void {
+      const view = resolveView(viewId)
+      if (!view || view.webContents.isDestroyed()) return
+      if (viewId === VIEW_ID.simulator) {
+        applyNativeSimulatorBounds(view, bounds, extra?.zoom ?? 1)
+        return
+      }
+      view.setBounds(bounds)
+    },
+    setVisible(viewId, visible): void {
+      const view = resolveView(viewId)
+      if (!view) return
+      try { view.setVisible(visible) } catch { /* stub may lack setVisible */ }
+    },
+    reorder(order): void {
+      // A single attached view is already in place — nothing to reorder.
+      if (order.length <= 1 || ctx.windows.mainWindow.isDestroyed()) return
+      const cv = ctx.windows.mainWindow.contentView
+      for (const viewId of order) {
+        const view = resolveView(viewId)
+        if (view) {
+          try { cv.addChildView(view) } catch { /* already attached */ }
+        }
+      }
+    },
+  }
+
+  // Create the lazily-built views (host-toolbar, workbench) BEFORE reconcile so
+  // the setBounds op — which the core emits before attach — lands on a live view
+  // rather than a not-yet-created one.
+  function ensureLazyViews(): void {
+    const ht = baseDesired.get(VIEW_ID.hostToolbar)
+    if (ht?.placement.visible && !liveHostToolbarWebContents()) ensureHostToolbarView()
+    const wb = baseDesired.get(VIEW_ID.workbench)
+    if (wb?.placement.visible && !workbenchView && workbenchUrl) void attachWorkbench(workbenchUrl)
+  }
+
+  function reconcileNow(): void {
+    ensureLazyViews()
+    const views: DesiredView<DevtoolsExtra>[] = []
+    for (const v of baseDesired.values()) views.push(gateReadiness(v))
+    for (const v of overlayDesired.values()) views.push(v)
+    const result = reconcile(placementState, {
+      generation: rendererGeneration,
+      epoch: ++epochCounter,
+      views,
+    })
+    placementState = result.state
+    applyViewOps(result.ops, viewTarget)
+  }
+
+  function setPlacementSnapshot(snapshot: PlacementSnapshot<DevtoolsExtra>): void {
+    rendererGeneration = snapshot.generation
+    baseDesired.clear()
+    for (const v of snapshot.views) baseDesired.set(v.viewId, v)
+    reconcileNow()
   }
 
   // ── Embedded workbench editor WebContentsView ────────────────────────
@@ -610,9 +702,6 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       view.webContents.setWindowOpenHandler(({ url: target }) => handleWindowOpenExternal(target))
     } catch { /* stub may lack it */ }
     ctx.windows.mainWindow.contentView.addChildView(view)
-    workbenchViewAdded = true
-    // Keep settings/popover above the freshly-added base overlay.
-    raiseTopOverlays()
     // Hand the workbench the current devtools scheme as a URL query so its very
     // first paint already matches (the runtime setter only exists post-init).
     const loadUrl = `${url}index.html?theme=${workbenchThemeScheme()}`
@@ -626,38 +715,6 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     workbenchUrl = url
   }
 
-  function setWorkbenchBounds(bounds: layout.Bounds): void {
-    if (ctx.windows.mainWindow.isDestroyed()) return
-    // Zero-area rect means "hide" — remove the child view but keep its
-    // WebContents (and the workbench's loaded state) alive. Never triggers the
-    // lazy load: a hidden slot must not pull the workbench onto screen.
-    if (isHidden(bounds)) {
-      if (workbenchView && workbenchViewAdded && !workbenchView.webContents.isDestroyed()) {
-        try {
-          ctx.windows.mainWindow.contentView.removeChildView(workbenchView)
-        } catch { /* already removed */ }
-        workbenchViewAdded = false
-      }
-      return
-    }
-    // First time the 'editor' slot becomes visible: lazily create + load the
-    // workbench (off the boot critical path). attachWorkbench assigns
-    // workbenchView + addChildView synchronously, so bounds apply immediately
-    // while the bundle loads in the background.
-    if (!workbenchView && workbenchUrl) {
-      void attachWorkbench(workbenchUrl)
-    }
-    if (!workbenchView || workbenchView.webContents.isDestroyed()) return
-    if (!workbenchViewAdded) {
-      ctx.windows.mainWindow.contentView.addChildView(workbenchView)
-      workbenchViewAdded = true
-      // Re-attaching this base overlay moved it to the top of the z-stack; keep
-      // any open settings/popover above it.
-      raiseTopOverlays()
-    }
-    workbenchView.setBounds(bounds)
-  }
-
   function detachWorkbench(): void {
     if (workbenchThemeSyncBound) {
       nativeTheme.removeListener('updated', pushWorkbenchTheme)
@@ -665,7 +722,8 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     }
     destroyViewInternal(workbenchView)
     workbenchView = null
-    workbenchViewAdded = false
+    baseDesired.delete(VIEW_ID.workbench)
+    reconcileNow()
   }
 
   // Build the `file:///workspace/<rel>` URI string with each path SEGMENT
@@ -766,6 +824,9 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       } catch { /* already removed */ }
       hostToolbarViewAdded = false
     }
+    // The instance is being replaced — forget its reconciled mount state so the
+    // rebuilt view is treated as a fresh attach (not skipped as already-attached).
+    placementState.actual.delete(VIEW_ID.hostToolbar)
     // The framework's height-advertiser runtime is SESSION-resident: register
     // it on session.defaultSession (ref-counted across coexisting managers)
     // BEFORE the view exists, so the very first load already runs it. The
@@ -808,30 +869,6 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     return view
   }
 
-  function setHostToolbarBounds(bounds: layout.Bounds): void {
-    if (ctx.windows.mainWindow.isDestroyed()) return
-    // Zero-area rect means "hide" — remove the child view but keep its
-    // WebContents (and the host's loaded content) alive. Do NOT create the
-    // view just to immediately hide it.
-    if (isHidden(bounds)) {
-      if (hostToolbarView && hostToolbarViewAdded && liveHostToolbarWebContents()) {
-        try {
-          ctx.windows.mainWindow.contentView.removeChildView(hostToolbarView)
-        } catch { /* already removed */ }
-      }
-      hostToolbarViewAdded = false
-      return
-    }
-    const view = ensureHostToolbarView()
-    if (!hostToolbarViewAdded) {
-      // addChildView appends = topmost z-order, which is correct for a strip
-      // that sits above the devtools header.
-      ctx.windows.mainWindow.contentView.addChildView(view)
-      hostToolbarViewAdded = true
-    }
-    view.setBounds(bounds)
-  }
-
   // Single funnel for the height notify: retain-then-push, so the retained
   // value is exactly the last value the renderer was told. Every height
   // notify site MUST go through here — the renderer pulls the retained value
@@ -840,8 +877,8 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   function notifyHostToolbarHeight(height: number): void {
     hostToolbarLastHeight = height
     ctx.notify.hostToolbarHeightChanged(height)
-    if (settingsViewAdded) applySettingsBounds()
-    if (popoverView) applyPopoverBounds()
+    if (overlayDesired.has(VIEW_ID.settings)) applySettingsBounds()
+    if (overlayDesired.has(VIEW_ID.popover)) applyPopoverBounds()
   }
 
   function setHostToolbarHeight(extent: number): void {
@@ -861,12 +898,12 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   }
 
   function hideHostToolbar(): void {
-    if (hostToolbarView && hostToolbarViewAdded && !ctx.windows.mainWindow.isDestroyed()) {
-      try {
-        ctx.windows.mainWindow.contentView.removeChildView(hostToolbarView)
-      } catch { /* already removed */ }
-    }
-    hostToolbarViewAdded = false
+    baseDesired.set(VIEW_ID.hostToolbar, {
+      viewId: VIEW_ID.hostToolbar,
+      placement: { visible: false },
+      layer: VIEW_LAYER.hostToolbar,
+    })
+    reconcileNow()
     // Collapse the renderer placeholder to 0 too. Otherwise its anchor keeps a
     // non-zero reserved height and re-publishes bounds on the next window
     // resize, silently re-adding the view we just hid (unstable hide). Zeroing
@@ -943,16 +980,35 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     return HEADER_H + hostToolbarLastHeight
   }
 
+  // settings/popover bounds are main-computed; publish them into overlayDesired
+  // and let the reconciler place them (they are top-tier layers, so a reorder
+  // keeps them above every base overlay — the old raiseTopOverlays is gone).
   function applySettingsBounds(): void {
     if (!settingsView || ctx.windows.mainWindow.isDestroyed()) return
     const [w = 0, h = 0] = ctx.windows.mainWindow.getContentSize()
-    settingsView.setBounds(layout.computeSettingsBounds(w, h, overlayHeaderHeight()))
+    overlayDesired.set(VIEW_ID.settings, {
+      viewId: VIEW_ID.settings,
+      placement: {
+        visible: true,
+        bounds: layout.computeSettingsBounds(w, h, overlayHeaderHeight()),
+      },
+      layer: VIEW_LAYER.settings,
+    })
+    reconcileNow()
   }
 
   function applyPopoverBounds(): void {
     if (!popoverView || ctx.windows.mainWindow.isDestroyed()) return
     const [w = 0, h = 0] = ctx.windows.mainWindow.getContentSize()
-    popoverView.setBounds(layout.computePopoverBounds(w, h, overlayHeaderHeight()))
+    overlayDesired.set(VIEW_ID.popover, {
+      viewId: VIEW_ID.popover,
+      placement: {
+        visible: true,
+        bounds: layout.computePopoverBounds(w, h, overlayHeaderHeight()),
+      },
+      layer: VIEW_LAYER.popover,
+    })
+    reconcileNow()
   }
 
   function clearNativeDevtoolsRetry(): void {
@@ -1084,7 +1140,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       ctx.notify.editorOpenFile(target)
     }
     serviceWc.on('devtools-open-url', onOpenUrl)
-    // Consolidate teardown onto the connection layer (foundation.md §4 / P2),
+    // Consolidate teardown onto the connection layer,
     // but as a wc-LIFETIME resource: the open-in-editor wiring inspects this
     // service-host wc and must SURVIVE pool reuse (`reset`) — the dedup set
     // entry + listener stay valid across sessions reusing the same wc, and the
@@ -1273,11 +1329,9 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     // unadded and unsized until the first publish arrives. No static-layout
     // fallback — an attach-time computed rect raced the precise anchor rect
     // and flashed the overlay at the wrong rectangle.
-    if (simulatorBoundsOverride && !isHidden(simulatorBoundsOverride)) {
-      ctx.windows.mainWindow.contentView.addChildView(simulatorView)
-      simulatorViewAdded = true
-      simulatorView.setBounds(simulatorBoundsOverride)
-    }
+    // The view now exists: re-run the reconciler so a placement published before
+    // this attach (project-open ordering) attaches it once the gate re-opens.
+    reconcileNow()
 
     if (ctx.bridge?.isNativeHost()) {
       unsubscribeNativeRenderEvents = ctx.bridge.onRenderEvent(onNativeRenderEvent)
@@ -1325,6 +1379,8 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     } catch { /* ignore */ }
     nativeSimulatorView = null
     nativeSimulatorViewAdded = false
+    // The view is gone: gateReadiness now hides it, so reconcile detaches it.
+    reconcileNow()
   }
 
   /**
@@ -1370,8 +1426,8 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
 
     nativeCustomApiBridgeHandler = handler
     ipcMain.on(SimulatorCustomApiBridgeChannel.Request, handler)
-    // Consolidate this per-webContents teardown onto the connection layer
-    // (foundation.md §4 / P1 DoD #3): acquiring the simWc connection makes the
+    // Consolidate this per-webContents teardown onto the connection layer:
+    // acquiring the simWc connection makes the
     // registry track this trusted webContents, and `own()`-ing the detach ties
     // the ipcMain listener's lifetime to the connection so it's torn down
     // deterministically when the wc is destroyed (or the connection is reset),
@@ -1405,8 +1461,8 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     })
 
     // Derive THIS project's session partition from the simulator URL's appId so
-    // its cookies/localStorage/cache are isolated from every other project (P0
-    // debt). Same project → same partition (storage survives a relaunch);
+    // its cookies/localStorage/cache are isolated from every other project.
+    // Same project → same partition (storage survives a relaunch);
     // unknown appId → the shared fallback. Configure the partition's session
     // (protocol handlers + CORS/referer policy) before any project content loads
     // on it — idempotent per partition.
@@ -1570,13 +1626,11 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     // if the forwarder is unwired (partial test ctx) or the debugger is claimed.
     ctx.networkForward?.attachSimulator(simWc)
 
-    // Model A: bounds come ONLY from the renderer's measured inner-screen rect.
-    // If a report already landed before this attach (project-open ordering),
-    // replay it now — setNativeSimulatorViewBounds adds + sizes the view. Else
-    // the view stays unadded until the next reportBounds. No coarse fallback.
-    if (lastRendererRect) {
-      setNativeSimulatorViewBounds(lastRendererRect)
-    }
+    // Model A: bounds come ONLY from the renderer's window-level placement
+    // snapshot. The view now exists, so re-reconcile: gateReadiness admits the
+    // simulator (gated hidden while its WCV was absent) and the latest desired
+    // placement attaches + sizes it. Until the next snapshot it stays unadded.
+    reconcileNow()
 
     // Native-host page code (console.log / wx.request / Sources) runs in the
     // hidden SERVICE HOST window, not this DeviceShell host nor the render-host
@@ -1613,19 +1667,11 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     // Drop the settings view too — the previous detachAllViews() did.
     destroyViewInternal(settingsView)
     settingsView = null
-    settingsViewAdded = false
     destroyViewInternal(simulatorView)
     simulatorView = null
     simulatorViewAdded = false
     simulatorWebContentsId = null
     nativeSimulatorProjectPath = null
-    // Drop the renderer-published rect so a stale "hidden" override doesn't
-    // suppress the next view before its renderer republishes.
-    simulatorBoundsOverride = null
-    // Also drop the cached native-simulator rect: attachNativeSimulator replays
-    // lastRendererRect on attach, so a leftover rect/offset from a torn-down
-    // session must not be replayed onto a fresh re-attach (stale slice/offset).
-    lastRendererRect = null
   }
 
   // Remove (but do not destroy) the DevTools overlay from the contentView.
@@ -1664,37 +1710,12 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
         path.join(ctx.rendererDir, 'entries/settings/index.html'),
       )
     }
-    if (!settingsViewAdded) {
-      ctx.windows.mainWindow.contentView.addChildView(settingsView)
-      settingsViewAdded = true
-    }
     applySettingsBounds()
   }
 
   function hideSettings(): void {
-    if (settingsView && settingsViewAdded) {
-      try {
-        ctx.windows.mainWindow.contentView.removeChildView(settingsView)
-      } catch { /* ignore */ }
-      settingsViewAdded = false
-    }
-  }
-
-  // Keep the TOP-tier overlays (settings, popover) above the BASE-tier native
-  // overlays (the native simulator WCV + the console/DevTools WCV). Native
-  // overlays are z-ordered by `addChildView` insertion order — the last-added
-  // sits on top — so RE-attaching a base overlay while a top overlay is open
-  // (e.g. the simulator re-shows on a tab switch, or the console bounds
-  // republish re-adds it) would move the base ABOVE the open settings/popover
-  // and occlude it. Whenever a base overlay is (re)added, re-append the open top
-  // overlays so they stay on top. Settings is re-appended before popover so a
-  // simultaneously-open popover ends up topmost. A no-op when neither is open
-  // (pinned by the z-order guard test).
-  function raiseTopOverlays(): void {
-    if (ctx.windows.mainWindow.isDestroyed()) return
-    const cv = ctx.windows.mainWindow.contentView
-    if (settingsView && settingsViewAdded) cv.addChildView(settingsView)
-    if (popoverView) cv.addChildView(popoverView)
+    overlayDesired.delete(VIEW_ID.settings)
+    reconcileNow()
   }
 
   function showPopover(data: unknown): void {
@@ -1711,7 +1732,6 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     applyNavigationHardening(popover.webContents, ctx.rendererDir)
     popoverView = popover
     popover.setBackgroundColor('#00000000')
-    ctx.windows.mainWindow.contentView.addChildView(popover)
     applyPopoverBounds()
     popover.webContents.once('did-finish-load', () => {
       ctx.notify.popoverInit(popover, data)
@@ -1722,21 +1742,22 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   }
 
   function hidePopover(): void {
-    if (popoverView) {
-      destroyViewInternal(popoverView)
-      popoverView = null
-      ctx.notify.popoverClosed()
-    }
+    if (!popoverView) return
+    overlayDesired.delete(VIEW_ID.popover)
+    // Destroy the WCV first (removeChildView + close), THEN reconcile: the detach
+    // op then finds the view already gone and does not double-removeChildView.
+    destroyViewInternal(popoverView)
+    popoverView = null
+    reconcileNow()
+    ctx.notify.popoverClosed()
   }
 
   function repositionAll(): void {
     // Simulator + DevTools overlay: bounds owned by the renderer's anchor
     // publishes; their ResizeObserver/window-resize listeners re-measure, so
     // no static re-apply here.
-    if (settingsView && settingsViewAdded)
-      applySettingsBounds()
-    if (popoverView)
-      applyPopoverBounds()
+    if (overlayDesired.has(VIEW_ID.settings)) applySettingsBounds()
+    if (overlayDesired.has(VIEW_ID.popover)) applyPopoverBounds()
   }
 
   function disposeAll(): void {
@@ -1764,62 +1785,11 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     safeArea.dispose()
   }
 
-  function setNativeSimulatorViewBounds(
-    params: { x: number; y: number; width: number; height: number; zoom: number },
-  ): void {
-    // Cache unconditionally so attachNativeSimulator can replay a report that
-    // landed before the view existed (project-open ordering). This rect is the
-    // ONLY authority for the native WCV bounds.
-    lastRendererRect = params
-    if (ctx.windows.mainWindow.isDestroyed() || !nativeSimulatorView) return
-    const p = layout.computeNativeSimulatorViewParams(params, params.zoom)
-    currentZoomFactor = p.zoomFactor
-    // A zero-area rect means "hide" — the renderer reports this when the
-    // simulator panel/cell is toggled off or unmounts (toolbar toggle only
-    // mutates renderer layout state, so without this the WCV would stay
-    // painted over its old region). Mirror `setSimulatorDevtoolsBounds`:
-    // remove the child view from the contentView but keep its WebContents
-    // alive, so re-showing doesn't re-pay the simulator bootstrap.
-    if (isHidden(p.bounds)) {
-      if (nativeSimulatorViewAdded) {
-        try {
-          ctx.windows.mainWindow.contentView.removeChildView(nativeSimulatorView)
-        } catch { /* already removed */ }
-        nativeSimulatorViewAdded = false
-      }
-      return
-    }
-    if (!nativeSimulatorViewAdded) {
-      ctx.windows.mainWindow.contentView.addChildView(nativeSimulatorView)
-      nativeSimulatorViewAdded = true
-      // Re-attaching this base overlay moved it to the top of the z-stack; keep
-      // any open settings/popover above it.
-      raiseTopOverlays()
-    }
-    nativeSimulatorView.setBounds(p.bounds)
-    const simWc = nativeSimulatorView.webContents
-    if (!simWc.isDestroyed()) {
-      simWc.setZoomFactor(p.zoomFactor)
-    }
-    // Propagate zoom to any already-attached nested render-host guests so the
-    // page rescales live on zoom change (newly-attached guests get it in
-    // did-attach-webview). `webContents.getAllWebContents()` includes guests;
-    // filter to those hosted by this simulator wc.
-    try {
-      for (const wc of webContents.getAllWebContents()) {
-        if (wc.isDestroyed()) continue
-        if (wc.hostWebContents === simWc) {
-          wc.setZoomFactor(p.zoomFactor)
-        }
-      }
-    } catch { /* hostWebContents unavailable; guests get zoom on attach */ }
-  }
-
   function resize(_simWidth: number): void {
     // Simulator + DevTools overlay bounds are owned solely by the renderer's
     // anchor publishes — its ResizeObserver/window-resize listeners re-measure
     // on this same resize. No static re-apply (it raced the precise rect).
-    if (settingsViewAdded) applySettingsBounds()
+    if (overlayDesired.has(VIEW_ID.settings)) applySettingsBounds()
   }
 
   return {
@@ -1856,15 +1826,12 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     },
     getHostToolbarWebContentsId: () => liveHostToolbarWebContents()?.id ?? null,
     getHostToolbarHeight: () => hostToolbarLastHeight,
-    setNativeSimulatorViewBounds,
     resize,
-    setSimulatorDevtoolsBounds,
+    setPlacementSnapshot,
     attachWorkbench,
     setWorkbenchSource,
-    setWorkbenchBounds,
     detachWorkbench,
     openFileInWorkbench,
-    setHostToolbarBounds,
     setHostToolbarHeight,
     hostToolbar,
   }

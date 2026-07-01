@@ -12,9 +12,6 @@ export const SimulatorChannel = {
   // Ask main to create the simulator as a top-level WebContentsView (so nested
   // render-host <webview>s can attach). Native-host is the sole runtime.
   AttachNative: 'simulator:attach-native',
-  // Renderer reports the device-bezel inner-screen rect (CSS px from content
-  // top-left) + zoom so main can overlay the simulator WCV on it.
-  SetNativeBounds: 'simulator:set-native-bounds',
   // Renderer pushes the selected device's LOGICAL metrics (screen size,
   // pixelRatio, statusBarHeight, …) when the device dropdown changes. Main
   // maps it to a HostEnvSnapshot and live-updates the running service-host
@@ -289,14 +286,6 @@ export const DialogChannel = {
 // pixels relative to the window's content area (origin = top-left,
 // not including the OS chrome).
 export const ViewChannel = {
-  /** Update the simulator DevTools view's bounds (or hide if w/h = 0). */
-  SimulatorDevtoolsBounds: 'view:simulator:devtools-bounds',
-  /**
-   * Host-controllable toolbar WebContentsView (sits ABOVE the devtools built-in
-   * header). Forward anchor: the main renderer reports the toolbar placeholder's
-   * bounds (or w/h=0 to hide). invoke.
-   */
-  HostToolbarBounds: 'view:host-toolbar:bounds',
   /**
    * Reverse size-advertiser: the host-toolbar WCV's OWN renderer advertises its
    * intrinsic content height so main reserves exactly that much. Payload
@@ -329,12 +318,13 @@ export const ViewChannel = {
    */
   HostToolbarGetHeight: 'view:host-toolbar:get-height',
   /**
-   * Update the embedded workbench editor view's bounds (or hide if w/h=0).
-   * Forward anchor mirroring `SimulatorDevtoolsBounds`: the main renderer
-   * measures the 'editor' dock slot's placeholder rect and publishes it so
-   * main overlays the workbench WebContentsView precisely.
+   * Renderer → main: the window-level placement snapshot (one monotonic epoch
+   * per commit tick, one generation per renderer lifetime) that drives the view
+   * reconciler. The single source of truth for every managed native view's
+   * bounds/visibility/z-order — supersedes the per-view bounds channels above.
+   * invoke.
    */
-  WorkbenchBounds: 'view:workbench-bounds',
+  PlacementSnapshot: 'view:placement-snapshot',
 } as const
 
 export interface ViewBounds {

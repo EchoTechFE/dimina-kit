@@ -67,6 +67,7 @@ type StubView = {
   webContents: StubWebContents
   setBounds: ReturnType<typeof vi.fn>
   setBackgroundColor: ReturnType<typeof vi.fn>
+  setVisible: ReturnType<typeof vi.fn>
 }
 
 const constructed: StubView[] = []
@@ -77,6 +78,7 @@ vi.mock('electron', () => {
     webContents: StubWebContents
     setBounds = vi.fn()
     setBackgroundColor = vi.fn()
+    setVisible = vi.fn()
     constructor(_opts?: unknown) {
       const id = nextId++
       this.webContents = {
@@ -127,6 +129,7 @@ vi.mock('../../utils/paths.js', () => ({
 
 // Import AFTER mocks so view-manager picks up the stubs.
 import { createViewManager } from './view-manager.js'
+import { simulatorDevtoolsBounds } from './placement-test-driver.js'
 import { createConnectionRegistry } from '@dimina-kit/electron-deck/main'
 
 const SIM_URL = 'http://localhost:7788/simulator.html?appId=anchoronly'
@@ -239,7 +242,7 @@ describe('B1: DevTools overlay mounts ONLY from a published anchor rect', () => 
     const devtoolsView = constructed[1]!
 
     const r1 = { x: 17, y: 23, width: 301, height: 203 }
-    mgr.setSimulatorDevtoolsBounds(r1)
+    simulatorDevtoolsBounds(mgr,r1)
 
     expect(addsOf(addChildView, devtoolsView).length).toBe(1)
     // EVERY setBounds the overlay ever saw is the published rect — a leading
@@ -262,23 +265,26 @@ describe('B2-11: visibility is the anchor 0×0 single path', () => {
     const r1 = { x: 10, y: 20, width: 300, height: 200 }
     const r2 = { x: 12, y: 22, width: 320, height: 240 }
 
-    mgr.setSimulatorDevtoolsBounds(r1)
-    mgr.setSimulatorDevtoolsBounds({ x: 0, y: 0, width: 0, height: 0 })
+    simulatorDevtoolsBounds(mgr,r1)
+    simulatorDevtoolsBounds(mgr,{ x: 0, y: 0, width: 0, height: 0 })
 
-    // Hidden: removed from the contentView, NOT destroyed (re-show must not
-    // re-pay the DevTools bootstrap).
-    expect(removesOf(removeChildView, devtoolsView).length).toBe(1)
+    // Hidden via setVisible(false), NOT removeChildView: the overlay stays
+    // attached (hidden) so a re-show never re-pays the DevTools bootstrap; the
+    // WebContents is kept alive.
+    expect(removesOf(removeChildView, devtoolsView).length).toBe(0)
+    expect(devtoolsView.setVisible).toHaveBeenCalledWith(false)
     expect(devtoolsView.webContents.close).not.toHaveBeenCalled()
     expect(devtoolsView.webContents.destroyed).toBe(false)
 
-    mgr.setSimulatorDevtoolsBounds(r2)
+    simulatorDevtoolsBounds(mgr,r2)
 
-    // Re-mounted exactly once more — and the ONLY mounts ever were publish-
-    // driven (r1, then r2): an attach-time fallback mount fails the count.
+    // Mounted EXACTLY once (the r1 publish); the 0×0 hide and the r2 re-show ride
+    // setVisible(false)/(true), so there is never a second addChildView.
     expect(
       addsOf(addChildView, devtoolsView).length,
-      'mounts must be exactly the two publish-driven ones (r1 mount + r2 re-mount); any attach-time mount is the decommissioned fallback',
-    ).toBe(2)
+      'the overlay mounts once (r1); hide/re-show is setVisible, not re-mount',
+    ).toBe(1)
+    expect(devtoolsView.setVisible).toHaveBeenLastCalledWith(true)
     // The 0×0 hide call sets no bounds; every applied rect is a published one.
     expect(devtoolsView.setBounds.mock.calls).toEqual([[r1], [r2]])
   })

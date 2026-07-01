@@ -30,6 +30,7 @@ type StubView = {
   webContents: StubWebContents
   setBounds: ReturnType<typeof vi.fn>
   setBackgroundColor: ReturnType<typeof vi.fn>
+  setVisible: ReturnType<typeof vi.fn>
 }
 
 const constructed: StubView[] = []
@@ -42,6 +43,7 @@ vi.mock('electron', () => {
     webContents: StubWebContents
     setBounds = vi.fn()
     setBackgroundColor = vi.fn()
+    setVisible = vi.fn()
     constructor() {
       const id = nextId++
       this.webContents = {
@@ -90,6 +92,7 @@ vi.mock('../../utils/paths.js', () => ({
 
 // Import AFTER mocks so view-manager picks up the stubs.
 import { createViewManager } from './view-manager.js'
+import { hostToolbarBounds } from './placement-test-driver.js'
 import { createConnectionRegistry } from '@dimina-kit/electron-deck/main'
 
 function makeContext() {
@@ -136,7 +139,7 @@ describe('ViewManager: host-toolbar bounds (forward anchor, lazy create, idempot
     const { addChildView, removeChildView, ctx } = makeContext()
     const mgr = createViewManager(ctx)
 
-    mgr.setHostToolbarBounds(RECT)
+    hostToolbarBounds(mgr,RECT)
 
     // Exactly one host-toolbar WebContentsView constructed.
     expect(constructed.length).toBe(1)
@@ -156,9 +159,9 @@ describe('ViewManager: host-toolbar bounds (forward anchor, lazy create, idempot
     const { addChildView, ctx } = makeContext()
     const mgr = createViewManager(ctx)
 
-    mgr.setHostToolbarBounds(RECT)
+    hostToolbarBounds(mgr,RECT)
     const RECT2 = { x: 0, y: 0, width: 1000, height: 56 }
-    mgr.setHostToolbarBounds(RECT2)
+    hostToolbarBounds(mgr,RECT2)
 
     // No second construction.
     expect(constructed.length).toBe(1)
@@ -176,29 +179,30 @@ describe('ViewManager: host-toolbar bounds (forward anchor, lazy create, idempot
     const { addChildView, removeChildView, ctx } = makeContext()
     const mgr = createViewManager(ctx)
 
-    mgr.setHostToolbarBounds(RECT)
+    hostToolbarBounds(mgr,RECT)
     const view = constructed[0]!
 
-    // Hide via zero-area rect.
-    mgr.setHostToolbarBounds({ x: 0, y: 0, width: 0, height: 0 })
-    expect(removeChildView).toHaveBeenCalledTimes(1)
-    expect(removeChildView.mock.calls[0]![0]).toBe(view)
-    // NOT destroyed — kept alive for re-show.
+    // Hide via zero-area rect → setVisible(false), NOT removeChildView: the view
+    // stays attached (hidden) in the z-stack so a re-show never re-pays
+    // addChildView; the WebContents is kept alive.
+    hostToolbarBounds(mgr,{ x: 0, y: 0, width: 0, height: 0 })
+    expect(removeChildView).not.toHaveBeenCalled()
+    expect(view.setVisible).toHaveBeenCalledWith(false)
     expect(view.webContents.close).not.toHaveBeenCalled()
     expect(view.webContents.destroyed).toBe(false)
 
-    // Re-show: no new construction, re-adds the SAME instance.
-    mgr.setHostToolbarBounds(RECT)
+    // Re-show: no new construction, no re-add — just setVisible(true) on the SAME instance.
+    hostToolbarBounds(mgr,RECT)
     expect(constructed.length).toBe(1)
-    expect(addChildView).toHaveBeenCalledTimes(2)
-    expect(addChildView.mock.calls[1]![0]).toBe(view)
+    expect(addChildView).toHaveBeenCalledTimes(1)
+    expect(view.setVisible).toHaveBeenLastCalledWith(true)
   })
 
   it('zero-area bounds before any view exists does not construct a view just to hide it', () => {
     const { addChildView, removeChildView, ctx } = makeContext()
     const mgr = createViewManager(ctx)
 
-    mgr.setHostToolbarBounds({ x: 0, y: 0, width: 0, height: 0 })
+    hostToolbarBounds(mgr,{ x: 0, y: 0, width: 0, height: 0 })
 
     expect(constructed.length).toBe(0)
     expect(addChildView).not.toHaveBeenCalled()
@@ -240,7 +244,7 @@ describe('ViewManager: getHostToolbarWebContentsId', () => {
     const { ctx } = makeContext()
     const mgr = createViewManager(ctx)
 
-    mgr.setHostToolbarBounds(RECT)
+    hostToolbarBounds(mgr,RECT)
     const view = constructed[0]!
 
     expect(mgr.getHostToolbarWebContentsId()).toBe(view.webContents.id)
@@ -306,14 +310,16 @@ describe('ViewManager: hostToolbar host control surface', () => {
     const mgr = createViewManager(ctx)
 
     // Show it first (via bounds) so it is added to the contentView.
-    mgr.setHostToolbarBounds(RECT)
+    hostToolbarBounds(mgr,RECT)
     const view = constructed[0]!
     expect(addChildView).toHaveBeenCalledTimes(1)
 
     mgr.hostToolbar.hide()
 
-    expect(removeChildView).toHaveBeenCalledTimes(1)
-    expect(removeChildView.mock.calls[0]![0]).toBe(view)
+    // hide() collapses the strip via setVisible(false), not removeChildView; the
+    // WebContents stays alive for a later re-show.
+    expect(removeChildView).not.toHaveBeenCalled()
+    expect(view.setVisible).toHaveBeenCalledWith(false)
     expect(view.webContents.close).not.toHaveBeenCalled()
     expect(view.webContents.destroyed).toBe(false)
   })
@@ -324,7 +330,7 @@ describe('ViewManager: disposeAll tears down the host-toolbar view', () => {
     const { ctx } = makeContext()
     const mgr = createViewManager(ctx)
 
-    mgr.setHostToolbarBounds(RECT)
+    hostToolbarBounds(mgr,RECT)
     const view = constructed[0]!
     expect(mgr.getHostToolbarWebContentsId()).toBe(view.webContents.id)
 
@@ -383,7 +389,7 @@ describe('createWorkbenchSenderPolicy: host-toolbar WCV is NOT globally trusted'
     const { ctx } = makeContext()
     const mgr = createViewManager(ctx)
 
-    mgr.setHostToolbarBounds(RECT)
+    hostToolbarBounds(mgr,RECT)
     const view = constructed[0]!
 
     expect(mgr.getHostToolbarWebContentsId()).toBe(view.webContents.id)
