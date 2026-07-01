@@ -1095,24 +1095,47 @@ async function bootServiceHost(state: RouterState, ap: AppSession, ctx: Workbenc
     reportLogicLoadFailure(ap, ctx)
     return
   }
-  // serviceLoaded is flipped only when service responds with
-  // `serviceResourceLoaded`; see handleContainerMsg. Setting it here would
-  // race a per-page `resourceLoaded` ahead of the service-side handler.
-  forwardToService(ap, makeLoadResource(ap, ap.pages.get(ap.appSessionId)!, 'service'))
+  // A root page absent from the compiled manifest — most commonly a page the
+  // developer deleted, then hot-reloaded to — is not registered in logic.js.
+  // BOTH the service runtime AND the render runtime eager-`modRequire(pagePath)`
+  // it and throw `module <pagePath> not found`, which aborts the launch and
+  // leaves the simulator permanently blank. Gate BOTH sends and surface a
+  // WeChat-style diagnostic instead: the shell stays alive (an empty phone frame
+  // + a clear Console error) rather than a silent dead blank. Choosing a valid
+  // fallback page belongs at the renderer reload source (it owns the pagePath
+  // the render guest is spawned with); here we only refuse a load guaranteed to
+  // throw, so main and render never disagree about which page is live.
+  const rootPage = ap.pages.get(ap.appSessionId)
+  const rootMissing = !!rootPage && !pageInManifest(ap, rootPage.pagePath)
+  if (rootMissing) {
+    reportPageNotFound(ap, ctx, rootPage.pagePath)
+  } else if (rootPage) {
+    // serviceLoaded is flipped only when service responds with
+    // `serviceResourceLoaded`; see handleContainerMsg. Setting it here would
+    // race a per-page `resourceLoaded` ahead of the service-side handler.
+    forwardToService(ap, makeLoadResource(ap, rootPage, 'service'))
+  }
   // Flush any render `loadResource` that arrived (renderHostReady) while
   // injection was in-flight — now that the bundle is confirmed present.
+  // `sendRenderLoadResource` refuses a page absent from the manifest, so a
+  // missing root never reaches the throwing render `modRequire`.
   for (const page of ap.pages.values()) {
-    if (page.renderLoadPending) {
-      page.renderLoadPending = false
-      sendRenderLoadResource(ap, page)
-    }
+    if (!page.renderLoadPending) continue
+    page.renderLoadPending = false
+    sendRenderLoadResource(ap, page)
   }
 }
 
 function sendRenderLoadResource(ap: AppSession, page: PageSession): void {
-  if (page.renderWc && !page.renderWc.isDestroyed()) {
-    page.renderWc.send(C.TO_RENDER, { msg: makeLoadResource(ap, page, 'render') })
-  }
+  if (!page.renderWc || page.renderWc.isDestroyed()) return
+  // Single choke point for BOTH the boot flush above and the late
+  // `renderHostReady` direct-send in `routeFromRender`: never send a render load
+  // for a page absent from the compiled manifest. The render runtime
+  // eager-`modRequire`s the pagePath and would throw `module <pagePath> not
+  // found`, blanking the simulator (a page the developer deleted, then
+  // hot-reloaded to). bootServiceHost surfaces the one-shot diagnostic.
+  if (!pageInManifest(ap, page.pagePath)) return
+  page.renderWc.send(C.TO_RENDER, { msg: makeLoadResource(ap, page, 'render') })
 }
 
 /** The compiled logic.js URL `injectLogicBundle` fetches (mode-dependent). */
@@ -1159,6 +1182,24 @@ function reportLogicLoadFailure(ap: AppSession, ctx: WorkbenchContext): void {
     + hint
     + ` Verify the project compiled successfully and that the resource server serves "${ap.appId}/${ap.root}/".`
   console.error(message)
+  ctx.guestConsole?.emit({ source: 'service', level: 'error', args: [message] })
+}
+
+/** Whether `pagePath` still exists in the app's freshly compiled manifest. */
+function pageInManifest(ap: AppSession, pagePath: string): boolean {
+  return ap.manifest.pages.includes(normalizePagePath(pagePath))
+}
+
+/**
+ * WeChat-devtools-style "page does not exist" diagnostic. Emitted (main log +
+ * guest Console) when a mount targets a pagePath that is not in the compiled
+ * manifest — most commonly a page the developer deleted, then hot-reloaded.
+ */
+function reportPageNotFound(ap: AppSession, ctx: WorkbenchContext, pagePath: string): void {
+  const message
+    = `Page[${pagePath}] not found. May be caused by: 1. Forgetting to add page route in app.json. `
+    + '2. Invoking Page() in async task.'
+  console.error(`[bridge-router] ${message}`)
   ctx.guestConsole?.emit({ source: 'service', level: 'error', args: [message] })
 }
 
