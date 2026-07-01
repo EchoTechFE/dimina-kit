@@ -35,7 +35,7 @@ import type {
 } from '../../shared/bridge-channels.js'
 // eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
 import type { WorkbenchContext } from '../services/workbench-context.js'
-import type { ConnectionRegistry, DebugTap } from '@dimina-kit/electron-deck/main'
+import type { ConnectionRegistry, DebugTap, Disposable } from '@dimina-kit/electron-deck/main'
 import { createDebugTap } from '@dimina-kit/electron-deck/main'
 import { startDiminaResourceServer, type DiminaResourceServer } from '../services/dimina-resource-server.js'
 import {
@@ -196,6 +196,11 @@ interface AppSession {
    * boot this disposed session into the next spawn's window. Null on the fresh
    * path (which uses a self-removing `once`). */
   onServiceBoot: (() => void) | null
+  /** Handle for this session's `ctx.registry` shutdown-fallback entry. Disposed
+   * on normal session teardown so the registry doesn't grow one stale closure
+   * per respawn (the fallback only needs to fire at whole-app shutdown for
+   * sessions still live then). */
+  registryHandle: Disposable | null
 }
 
 interface PageSession {
@@ -867,6 +872,7 @@ async function handleSpawn(
     poolEntryId,
     onServiceClosed: null,
     onServiceBoot: null,
+    registryHandle: null,
   }
 
   const rootPage: PageSession = {
@@ -903,7 +909,7 @@ async function handleSpawn(
       state.wcIdToAppSessionId.delete(appSession.serviceWc.id)
     }
   })
-  ctx.registry.add(() => disposeAppSession(state, appSessionId))
+  appSession.registryHandle = ctx.registry.add(() => disposeAppSession(state, appSessionId))
 
   const onServiceClosed = (): void => {
     void disposeAppSession(state, appSessionId, { serviceAlreadyClosed: true })
@@ -1809,6 +1815,15 @@ async function disposeAppSession(
   const ap = state.appSessions.get(appSessionId)
   if (!ap) return
   state.appSessions.delete(appSessionId)
+  // Remove this session's shutdown-fallback registry entry so the registry does
+  // not accumulate one stale closure per respawn. Ordered AFTER the delete
+  // above: dispose() runs the wrapped fn (disposeAppSession again), which
+  // early-returns now that the session is gone — no recursion, no double-run.
+  // (At whole-app shutdown the registry marks the entry released before calling
+  // the fn, so this dispose() is a no-op then.)
+  const registryHandle = ap.registryHandle
+  ap.registryHandle = null
+  void registryHandle?.dispose()
   state.appLifecycle.dispose(appSessionId)
 
   // Evict AppData bridges FIRST — eviction enumerates `ap.pages`, which the

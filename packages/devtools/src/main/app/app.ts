@@ -1,4 +1,5 @@
 import { setupCdpPort, registerDifileScheme, suppressInsecureCspWarnings } from './bootstrap.js'
+import { installMaxListenersWarningDiagnostic } from './max-listeners-diagnostic.js'
 import { registerProjectFsIpc } from '../ipc/project-fs.js'
 
 import { app, BrowserWindow, nativeImage, session } from 'electron'
@@ -367,6 +368,10 @@ export function runDevtoolsBootstrap(config: WorkbenchAppConfig = {}): void {
   setupCdpPort()
   // Dev-only: silence Electron Insecure-CSP warning; no-op when packaged.
   suppressInsecureCspWarnings()
+  // Dev-only: decode any MaxListenersExceededWarning to the concrete wc that
+  // tripped it (id/type/url), so a stray listener accrual is pinned rather than
+  // guessed. Registered once, pre-ready; harmless if it never fires.
+  if (!app.isPackaged) installMaxListenersWarningDiagnostic()
   // Privileged scheme registration must run before app.whenReady (else throws).
   registerDifileScheme()
   // The embedded workbench editor (the sole devtools editor) needs
