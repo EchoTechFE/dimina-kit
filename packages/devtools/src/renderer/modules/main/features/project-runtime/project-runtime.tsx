@@ -2,8 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObjec
 import { COPY_FEEDBACK_TIMEOUT_MS } from '@/shared/constants'
 import {
   getBranding,
-  publishSimulatorDevtoolsBounds,
-  publishHostToolbarBounds,
+  publishPlacementSnapshot,
   onHostToolbarHeightChanged,
   getHostToolbarHeight,
 } from '@/shared/api'
@@ -17,6 +16,10 @@ import { DebugTabContent } from '../bottom-debug-panel/bottom-debug-panel'
 import type { BottomDebugPanelProps, DebugTabContentId } from '../bottom-debug-panel/bottom-debug-panel'
 import { useViewAnchor, createPlacementAnchor } from '@dimina-kit/view-anchor'
 import type { Placement, PlacementAnchorHandle } from '@dimina-kit/view-anchor'
+import { createPlacementPublisher, type PlacementPublisher } from '@dimina-kit/electron-deck/client'
+import { VIEW_ID, VIEW_LAYER } from '../../../../../shared/view-ids'
+import type { DevtoolsExtra } from '../../../../../shared/view-ids'
+import { PlacementPublisherContext, usePlacementPublisher } from './placement-publisher-context'
 import { DockView } from '@dimina-kit/electron-deck/dock-react'
 import { serializeLayout, setConstraint } from '@dimina-kit/electron-deck/layout'
 import type { LayoutModel, LayoutNode, PanelRegistry } from '@dimina-kit/electron-deck/layout'
@@ -24,6 +27,10 @@ import {
   buildDockModel,
   buildDockRegistry,
 } from './layout/dock-layout'
+
+// Bumped per ProjectRuntime mount (each project open) so the main reconciler
+// resets its actual-view table for the fresh renderer generation.
+let placementGeneration = 0
 
 // The seven dock panels after splitting the coarse `debug` into five fine ones.
 // `console` is the only native overlay; the rest are DOM panels (simulator +
@@ -77,6 +84,21 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
   // WCV anchor); the registry never changes across the component's life.
   const dockRegistry = useMemo(() => buildDockRegistry(), [])
 
+  // The single placement publisher for this project window. Each native-view
+  // anchor writes its desired placement here; the publisher coalesces one
+  // window-level snapshot per frame and forwards it to main's reconciler. A
+  // fresh generation per mount makes the reconciler drop the previous project's
+  // actual-view table.
+  const [generation] = useState(() => ++placementGeneration)
+  const publisher = useMemo<PlacementPublisher<DevtoolsExtra>>(
+    () => createPlacementPublisher<DevtoolsExtra>({
+      generation,
+      publish: (snapshot) => { void publishPlacementSnapshot(snapshot) },
+    }),
+    [generation],
+  )
+  useEffect(() => () => publisher.dispose(), [publisher])
+
   // Host-controllable toolbar WCV (sits above ProjectToolbar). Dynamic-height
   // loop: the toolbar WCV's own renderer advertises its intrinsic content
   // height (reverse size-advertiser) → main pushes it here as
@@ -109,10 +131,20 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
     })
     return unsubscribe
   }, [])
+  // Forward anchor for the host-toolbar strip. useViewAnchor publishes a Bounds
+  // (ZERO when absent); map it to a discriminated Placement written to the
+  // central publisher (host-toolbar sits above the base row via its layer).
   const hostToolbarAnchorRef = useViewAnchor({
     present: hostToolbarHeight > 0,
-    publish: publishHostToolbarBounds,
-    deps: [hostToolbarHeight],
+    publish: (bounds) => {
+      const visible = hostToolbarHeight > 0 && bounds.width > 0 && bounds.height > 0
+      publisher.set({
+        viewId: VIEW_ID.hostToolbar,
+        placement: visible ? { visible: true, bounds } : { visible: false },
+        layer: VIEW_LAYER.hostToolbar,
+      })
+    },
+    deps: [hostToolbarHeight, publisher],
   })
 
   useEffect(() => {
@@ -223,6 +255,7 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
   }
 
   return (
+    <PlacementPublisherContext.Provider value={publisher}>
     <div className="flex flex-col h-screen">
       {/*
         Placeholder reserving space for the host-controllable toolbar WCV. Its
@@ -266,6 +299,7 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
         />
       </div>
     </div>
+    </PlacementPublisherContext.Provider>
   )
 }
 
@@ -416,18 +450,17 @@ function DockableLayout(props: DockableLayoutProps): ReactNode {
   // `bindNativeSlot` only fires for console and a simulator/editor branch here
   // would be dead code.
   const consoleAnchorRef = useRef<PlacementAnchorHandle | null>(null)
+  const placementPublisher = usePlacementPublisher()
+  // Console overlay placement flows to the central publisher (discriminated
+  // Placement kept end-to-end — a hidden console publishes { visible:false },
+  // never a 0×0 rect).
   const publishConsole = useCallback((p: Placement) => {
-    if (p.visible) {
-      void publishSimulatorDevtoolsBounds({
-        x: p.bounds.x,
-        y: p.bounds.y,
-        width: p.bounds.width,
-        height: p.bounds.height,
-      })
-    } else {
-      void publishSimulatorDevtoolsBounds({ x: 0, y: 0, width: 0, height: 0 })
-    }
-  }, [])
+    placementPublisher?.set({
+      viewId: VIEW_ID.simulatorDevtools,
+      placement: p,
+      layer: VIEW_LAYER.base,
+    })
+  }, [placementPublisher])
 
   // Bind/rebind/release the console native-overlay anchor for `el`. The overlay
   // needs display:none detach (an inactive tab releases the WCV), `followScroll`
@@ -503,8 +536,9 @@ function DockableLayout(props: DockableLayoutProps): ReactNode {
     return () => {
       consoleAnchorRef.current?.dispose()
       consoleAnchorRef.current = null
+      placementPublisher?.remove(VIEW_ID.simulatorDevtools)
     }
-  }, [])
+  }, [placementPublisher])
 
   // Persist DockView's in-session layout mutations back to the store.
   useEffect(() => {

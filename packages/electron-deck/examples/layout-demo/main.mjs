@@ -356,6 +356,40 @@ async function runVerification(mainWin) {
   if (simTracked && devFollowed) log('✅ split-drag MOVED the native color blocks (renderer-driven geometry, zero host resize code).')
   else log('❌ native blocks did NOT track the split — slot-token did not cover renderer-driven resize.')
 
+  // (d) renderer-driven HIDE → the reconciler must DETACH the native simulator
+  // block (bounds() goes null) while devtools stays visible. Pure DOM display:none;
+  // no host hide code.
+  await mainWin.webContents.executeJavaScript(`window.__demoHideSim()`)
+  await sleep(500)
+  await shot(mainWin, '4-sim-hidden.png')
+  const hidden = await captureSimBounds()
+  const simDetached = !hidden.sim && !!hidden.dev
+  log('STEP4: after hide, native bounds =', JSON.stringify(hidden))
+  if (simDetached) log('✅ renderer-driven hide DETACHED the native simulator (level-triggered visible:false → reconcile detach).')
+  else log('❌ simulator did NOT detach on hide — reconcile detach path broken.')
+
+  // (e) RESTORE → the reconciler must RE-ATTACH the simulator with fresh geometry.
+  await mainWin.webContents.executeJavaScript(`window.__demoShowSim(); window.__demoSetSplit(300)`)
+  await sleep(600)
+  await shot(mainWin, '5-sim-restored.png')
+  const restored = await captureSimBounds()
+  const simRestored = !!restored.sim && restored.sim.width > 100
+  log('STEP5: after restore, native bounds =', JSON.stringify(restored))
+  if (simRestored) log('✅ renderer-driven restore RE-ATTACHED the native simulator (visible:true → reconcile attach).')
+  else log('❌ simulator did NOT re-attach on restore.')
+
+  // (f) STRESS: a burst of rapid re-splits (the white-screen bug's shape). With the
+  // level-triggered publisher+reconciler the blocks must SETTLE correctly — no view
+  // stuck detached. Assert both native blocks are visible with sane geometry after.
+  await mainWin.webContents.executeJavaScript(`window.__demoStress(40)`)
+  await sleep(800)
+  await shot(mainWin, '6-after-stress.png')
+  const settled = await captureSimBounds()
+  const bothLive = !!settled.sim && !!settled.dev && settled.sim.width > 40 && settled.dev.width > 40
+  log('STEP6: after 40-round stress, native bounds =', JSON.stringify(settled))
+  if (bothLive) log('✅ after a 40-round relayout burst BOTH native blocks are correctly placed (level-triggered self-heal — no stuck detached view).')
+  else log('❌ a native block was stuck detached after the stress burst — the white-screen failure mode.')
+
   log('ALL STEPS DONE')
 }
 

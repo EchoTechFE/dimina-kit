@@ -378,6 +378,7 @@ var __viewAnchorCore = (() => {
     let rafId = null;
     let steadyFrames = 0;
     const STEADY_CLOSE_FRAMES = 2;
+    const MAX_HIDDEN_FOLLOW_FRAMES = 30;
     let pointerHeld = false;
     let sentinelDeadline = null;
     const computePlacement = () => {
@@ -394,6 +395,10 @@ var __viewAnchorCore = (() => {
       lastPublished = p;
       publish(p);
     };
+    const shouldCloseOnHiddenPoll = () => {
+      if (lastPublished?.visible === false) return true;
+      return steadyFrames++ >= MAX_HIDDEN_FOLLOW_FRAMES;
+    };
     const sentinelFrame = () => {
       rafId = null;
       if (disposed || !visible) {
@@ -405,6 +410,14 @@ var __viewAnchorCore = (() => {
         return;
       }
       const p = computePlacement();
+      if (!p.visible) {
+        if (shouldCloseOnHiddenPoll()) {
+          sentinelDeadline = null;
+          return;
+        }
+        rafId = requestAnimationFrame(sentinelFrame);
+        return;
+      }
       if (lastPublished && samePlacement(lastPublished, p)) {
         steadyFrames++;
         if (steadyFrames >= STEADY_CLOSE_FRAMES && !pointerHeld) {

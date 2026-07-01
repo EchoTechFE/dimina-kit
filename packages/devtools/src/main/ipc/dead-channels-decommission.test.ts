@@ -241,6 +241,15 @@ describe('registerSimulatorIpc: dead channels are gone', () => {
     await d.dispose()
   })
 
+  it("no longer registers 'simulator:set-native-bounds' (superseded by the window-level placement snapshot)", async () => {
+    const d = await setupSimulator()
+    expect(
+      stub.registered('simulator:set-native-bounds'),
+      'per-view native-simulator bounds are gone; the renderer publishes ONE window-level placement snapshot (view:placement-snapshot) reconciled in main',
+    ).toBe(false)
+    await d.dispose()
+  })
+
   it("survivor pin: 'simulator:custom-apis:invoke' MUST stay registered (e2e drives it)", async () => {
     const d = await setupSimulator()
     // Catches over-deletion: removing the whole SimulatorCustomApiChannel
@@ -249,11 +258,10 @@ describe('registerSimulatorIpc: dead channels are gone', () => {
     await d.dispose()
   })
 
-  it("sanity anchor: 'simulator:attach-native' and 'simulator:set-native-bounds' are still registered", async () => {
+  it("sanity anchor: 'simulator:attach-native' is still registered", async () => {
     const d = await setupSimulator()
     // Guards against "registrar registers nothing" whole-suite false green.
     expect(stub.handled.has('simulator:attach-native')).toBe(true)
-    expect(stub.handled.has('simulator:set-native-bounds')).toBe(true)
     await d.dispose()
   })
 })

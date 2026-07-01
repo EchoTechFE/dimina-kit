@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react'
-import { publishWorkbenchBounds } from '@/shared/api'
 import { createPlacementAnchor, type Placement, type PlacementAnchorHandle } from '@dimina-kit/view-anchor'
+import { usePlacementPublisher } from '../placement-publisher-context'
+import { VIEW_ID, VIEW_LAYER } from '../../../../../../shared/view-ids'
 import { useDockLayoutEpoch } from '@dimina-kit/electron-deck/dock-react'
 
 // The editor is the embedded VS Code workbench: a main-process
@@ -27,19 +28,10 @@ import { useDockLayoutEpoch } from '@dimina-kit/electron-deck/dock-react'
 export function EditorPanel() {
   const anchorHandleRef = useRef<PlacementAnchorHandle | null>(null)
 
+  const publisher = usePlacementPublisher()
   const publish = useCallback((p: Placement) => {
-    if (p.visible) {
-      void publishWorkbenchBounds({
-        x: p.bounds.x,
-        y: p.bounds.y,
-        width: p.bounds.width,
-        height: p.bounds.height,
-      })
-    } else {
-      // Hidden → collapse the WCV (main treats 0×0 as detach-but-keep-alive).
-      void publishWorkbenchBounds({ x: 0, y: 0, width: 0, height: 0 })
-    }
-  }, [])
+    publisher?.set({ viewId: VIEW_ID.workbench, placement: p, layer: VIEW_LAYER.base })
+  }, [publisher])
 
   // Ref-callback binding the placement anchor to the editor body div. Mirrors
   // the dock native-slot lifecycle: bind on mount, rebind without a hidden flash
@@ -96,8 +88,9 @@ export function EditorPanel() {
     return () => {
       anchorHandleRef.current?.dispose()
       anchorHandleRef.current = null
+      publisher?.remove(VIEW_ID.workbench)
     }
-  }, [])
+  }, [publisher])
 
   return <div ref={anchorRef} className="h-full w-full" data-area="editor" />
 }

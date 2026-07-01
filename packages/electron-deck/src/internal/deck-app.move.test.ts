@@ -31,7 +31,7 @@ import type {
 import { DeckApp } from './deck-app.js'
 import type { MinimalIpcMain } from './wire-transport.js'
 
-const PLACE_CHANNEL = '__electron-deck:place'
+const SNAPSHOT_CHANNEL = '__electron-deck:snapshot'
 const SLOT_GRANT_CHANNEL = '__electron-deck:slot-grant'
 
 // ── Minimal fakes (copied from deck-app.slot-token.test.ts) ──────────────────
@@ -244,6 +244,7 @@ interface SlotGrant {
 	viewId: string
 	slotId: string
 	slotToken: string
+	generation: number
 }
 
 function lastWcv(electron: FakeElectron): FakeWebContentsView {
@@ -263,10 +264,35 @@ function lastSlotGrant(wc: FakeWebContentsLike): SlotGrant | null {
 	return null
 }
 
-function getPlaceHandler(ipcMain: FakeIpcMain): Handler {
-	const h = ipcMain.handlers.get(PLACE_CHANNEL)
-	if (!h) throw new Error(`"${PLACE_CHANNEL}" handler not registered`)
+function getSnapshotHandler(ipcMain: FakeIpcMain): Handler {
+	const h = ipcMain.handlers.get(SNAPSHOT_CHANNEL)
+	if (!h) throw new Error(`"${SNAPSHOT_CHANNEL}" handler not registered`)
 	return h
+}
+
+// Drive one authorized view's placement through the snapshot handler: wrap it in a
+// window-level snapshot carrying the slot's token as a per-view extra. `generation`
+// defaults to the framework-assigned value on the grant; `epoch` is caller-chosen
+// (strictly increasing within one generation to avoid stale rejection).
+function sendSnapshot(
+	handler: Handler,
+	event: FrameEvent,
+	views: Array<{ slotToken: string, placement: unknown, generation: number }>,
+	epoch: number,
+): Promise<unknown> {
+	const generation = views[0]?.generation ?? 0
+	return Promise.resolve(
+		handler(event, {
+			generation,
+			epoch,
+			views: views.map((v, i) => ({
+				viewId: `v${i}`,
+				placement: v.placement,
+				layer: 0,
+				extra: { slotToken: v.slotToken },
+			})),
+		}),
+	)
 }
 
 function mainFrameEvent(senderId: number): FrameEvent {
@@ -323,11 +349,13 @@ describe('DeckApp moveTo (public handle) — moves the view to winB substrate', 
 		// the WCV (proves register-in-dest is real, not just a native add).
 		const bGrant = lastSlotGrant(winB.webContents)
 		expect(bGrant).not.toBeNull()
-		const place = getPlaceHandler(ipcMain)
-		await place(mainFrameEvent(winB.webContents.id), {
-			slotToken: bGrant!.slotToken,
-			placement: { visible: true, bounds: { x: 7, y: 8, width: 9, height: 10 } },
-		})
+		const snapshot = getSnapshotHandler(ipcMain)
+		await sendSnapshot(
+			snapshot,
+			mainFrameEvent(winB.webContents.id),
+			[{ slotToken: bGrant!.slotToken, generation: bGrant!.generation, placement: { visible: true, bounds: { x: 7, y: 8, width: 9, height: 10 } } }],
+			0,
+		)
 		expect(wcv.setBounds).toHaveBeenCalledWith({ x: 7, y: 8, width: 9, height: 10 })
 
 		await app.shutdown()
@@ -446,21 +474,26 @@ describe('DeckApp moveTo (public handle) — slot-token re-anchor + old-token re
 		// A fresh, different token (the dest renderer's new credential).
 		expect(bGrant!.slotToken).not.toBe(oldToken)
 
-		// The OLD (winA) token was REVOKED on move: a stale `place` using it is
-		// DROPPED (no setBounds), even though it comes from the (still-trusted) winA wc.
-		const place = getPlaceHandler(ipcMain)
+		// The OLD (winA) token was REVOKED on move: a snapshot using ONLY it is
+		// fully unauthorized → rejected wholesale (no setBounds), even though it comes
+		// from the (still-trusted) winA wc.
+		const snapshot = getSnapshotHandler(ipcMain)
 		const before = wcv.setBounds.mock.calls.length
-		await place(mainFrameEvent(winA.webContents.id), {
-			slotToken: oldToken,
-			placement: { visible: true, bounds: { x: 1, y: 1, width: 1, height: 1 } },
-		})
+		await sendSnapshot(
+			snapshot,
+			mainFrameEvent(winA.webContents.id),
+			[{ slotToken: oldToken, generation: aGrant!.generation, placement: { visible: true, bounds: { x: 1, y: 1, width: 1, height: 1 } } }],
+			0,
+		)
 		expect(wcv.setBounds.mock.calls.length).toBe(before) // stale token dropped
 
 		// The NEW winB token DOES drive it (the dest renderer can now place it).
-		await place(mainFrameEvent(winB.webContents.id), {
-			slotToken: bGrant!.slotToken,
-			placement: { visible: true, bounds: { x: 2, y: 3, width: 4, height: 5 } },
-		})
+		await sendSnapshot(
+			snapshot,
+			mainFrameEvent(winB.webContents.id),
+			[{ slotToken: bGrant!.slotToken, generation: bGrant!.generation, placement: { visible: true, bounds: { x: 2, y: 3, width: 4, height: 5 } } }],
+			0,
+		)
 		expect(wcv.setBounds).toHaveBeenCalledWith({ x: 2, y: 3, width: 4, height: 5 })
 
 		await app.shutdown()

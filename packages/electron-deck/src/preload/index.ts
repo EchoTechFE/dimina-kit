@@ -72,7 +72,7 @@ export interface ExposeLayoutBridgeOptions {
 
 /**
  * 在 host preload 内调用，把三条 slot-token LAYOUT channel（`slot-grant` PUSH /
- * `place` send / `layout-subscribe` invoke）封装成一个 `LayoutBridge`-shaped
+ * `snapshot` send / `layout-subscribe` invoke）封装成一个 `LayoutBridge`-shaped
  * 对象暴露到 webview window，供 renderer：
  *
  * ```ts
@@ -106,8 +106,8 @@ export function exposeDeckLayoutBridge(options?: ExposeLayoutBridgeOptions): voi
 				ipcRenderer.removeListener(DeckChannel.SlotGrant, listener)
 			}
 		},
-		sendPlace(msg): void {
-			void ipcRenderer.invoke(DeckChannel.Place, msg).catch(() => {})
+		sendSnapshot(snapshot): void {
+			void ipcRenderer.invoke(DeckChannel.Snapshot, snapshot).catch(() => {})
 		},
 		subscribe(): void {
 			void ipcRenderer.invoke(DeckChannel.LayoutSubscribe).catch(() => {})

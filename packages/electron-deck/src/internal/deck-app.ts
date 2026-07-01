@@ -48,6 +48,13 @@ import {
 } from '../main/compositor.js'
 import { createViewHandle } from '../main/view-handle.js'
 import {
+	createInitialState,
+	reconcile,
+	cleanSnapshot,
+	dispatchOps,
+	type ReconcilerState,
+} from '../layout/index.js'
+import {
 	createCapabilityRegistry,
 	type CapabilityPolicy,
 } from '../host/capability.js'
@@ -275,15 +282,34 @@ export class DeckApp {
 	/**
 	 * slot-token registry (view-handle.md「slot-token 握手」/ capability-and-lifecycle.md「anchor slotToken 原子下发」):
 	 * each anchored `placeIn` mints an unguessable token bound to (viewId, slotId,
-	 * authorizedWcId). The `__electron-deck:place` apply path looks the token up,
-	 * checks the sender is the authorized wc (anti-spoof), validates the placement,
-	 * then `apply`s it. `resend` re-pushes the slot-grant (layout-subscribe replay).
+	 * authorizedWcId, zone). The `__electron-deck:snapshot` apply path authorizes
+	 * each of the renderer's per-view tokens (token known AND authorized to the
+	 * sender wc), DERIVES the view's identity (viewId) + z-order (zone→layer) from
+	 * this registry (never trusting the renderer-reported fields), reconciles the
+	 * cleaned window-level table, and drives each view's `apply`. `resend` re-pushes
+	 * the slot-grant (layout-subscribe replay).
 	 */
 	private readonly slotTokens = new Map<
 		string,
-		{ viewId: string, slotId: string, authorizedWcId: number, resend: () => void, apply: (placement: unknown) => void }
+		{ viewId: string, slotId: string, authorizedWcId: number, zone: number, resend: () => void, apply: (placement: unknown) => void }
 	>()
 	private slotSeq = 0
+	/**
+	 * Per-control-wc level-triggered reconciler state (keyed by authorizedWcId).
+	 * The renderer publishes a whole window-level desired-placement table each
+	 * frame; `reconcile` diffs it against the last-applied actual and emits ops, so
+	 * a lost or spurious per-view edge self-corrects instead of sticking a view
+	 * detached (the white-screen failure mode). Reset on layout-subscribe (reload)
+	 * and dropped on wc revoke.
+	 */
+	private readonly reconcileStates = new Map<number, ReconcilerState>()
+	/**
+	 * Per-control-wc strictly-monotonic generation counter. Bumped on every
+	 * layout-subscribe and stamped into each slot-grant, so a reload's higher
+	 * generation resets the reconciler regardless of IPC ordering (a late in-flight
+	 * pre-reload snapshot carries a lower generation → rejected).
+	 */
+	private readonly perWcGeneration = new Map<number, number>()
 	private _runtime: Runtime | null = null
 	private startCalled = false
 	private shutdownPromise: Promise<void> | null = null
@@ -1500,41 +1526,72 @@ export class DeckApp {
 	 */
 	private ensureSlotChannelsArmed(): void {
 		this.wireTransport?.armSlotChannels(
-			(senderId, slotToken, placement) => this.handleSlotPlace(senderId, slotToken, placement),
+			(senderId, rawSnapshot) => this.handleSnapshot(senderId, rawSnapshot),
 			senderId => this.handleLayoutSubscribe(senderId),
 		)
 	}
 
 	/**
-	 * slot-token apply path (`__electron-deck:place`). The token is the credential:
-	 * look it up, verify the sender IS the wc the token was granted to (anti-spoof),
-	 * validate the placement, then apply. Any failure → DROP (silent).
+	 * slot-token apply path (`__electron-deck:snapshot`). The renderer publishes a
+	 * whole window-level desired-placement table; each entry's slotToken is the
+	 * credential. Steps:
+	 *   1. AUTHORIZE + clean: `cleanSnapshot` keeps only views whose token is known
+	 *      AND authorized to `senderId` (anti-spoof), deriving each view's identity
+	 *      (viewId) + z-order (zone→layer) from the registry — never from the
+	 *      renderer-reported fields. A non-empty snapshot that fully fails
+	 *      authorization is rejected wholesale (returns null) so a transient token
+	 *      failure is NOT read as "detach everything".
+	 *   2. RECONCILE the cleaned table against this wc's last-applied actual state
+	 *      → an ordered op list (level-triggered; a lost/spurious frame self-heals).
+	 *   3. DISPATCH the ops onto each view's `applyPlacement` sink.
 	 */
-	private handleSlotPlace(senderId: number, slotToken: string, placement: unknown): void {
-		const entry = this.slotTokens.get(slotToken)
-		if (!entry) return // unknown / expired (revoked on dispose / window close)
-		if (entry.authorizedWcId !== senderId) return // anti-spoof: wrong wc
-		if (!isValidPlacement(placement)) return // malformed geometry
-		entry.apply(placement)
+	private handleSnapshot(senderId: number, rawSnapshot: unknown): void {
+		const clean = cleanSnapshot(rawSnapshot, (slotToken) => {
+			const entry = this.slotTokens.get(slotToken)
+			if (!entry || entry.authorizedWcId !== senderId) return null
+			return { viewId: entry.viewId, layer: entry.zone }
+		})
+		if (!clean) return // malformed OR fully-unauthorized → drop (never detach-all)
+
+		const prev = this.reconcileStates.get(senderId) ?? createInitialState()
+		const { state, ops } = reconcile(prev, clean)
+		this.reconcileStates.set(senderId, state)
+
+		// Resolve a viewId back to its apply sink. Built from ALL of this wc's live
+		// tokens (not just the cleaned snapshot) so a detach op for a view the
+		// renderer dropped can still reach its sink.
+		const applyByViewId = new Map<string, (p: unknown) => void>()
+		for (const entry of this.slotTokens.values()) {
+			if (entry.authorizedWcId === senderId) applyByViewId.set(entry.viewId, entry.apply)
+		}
+		dispatchOps(ops, state, (viewId) => applyByViewId.get(viewId) ?? null)
 	}
 
 	/**
 	 * Per-wc layout-subscribe replay (`__electron-deck:layout-subscribe`). When the
-	 * authorized control wc (re)subscribes (e.g. after reload), re-push every grant
-	 * it owns so it can re-bind its DOM slots. A DIFFERENT wc's subscribe never
-	 * receives another wc's grants.
+	 * authorized control wc (re)subscribes (e.g. after reload), BUMP its generation
+	 * and RESET its reconciler (a reload restarts the renderer's epoch at 0; without
+	 * the reset the fresh low-epoch snapshots would be rejected as stale), then
+	 * re-push every grant it owns — now carrying the bumped generation — so it can
+	 * re-bind its DOM slots. A DIFFERENT wc's subscribe never touches another wc's
+	 * state or grants.
 	 */
 	private handleLayoutSubscribe(senderId: number): void {
+		this.perWcGeneration.set(senderId, (this.perWcGeneration.get(senderId) ?? 0) + 1)
+		this.reconcileStates.delete(senderId)
 		for (const entry of this.slotTokens.values()) {
 			if (entry.authorizedWcId === senderId) entry.resend()
 		}
 	}
 
-	/** Drop every slot token authorized to `wcId` (window-close / shutdown hygiene). */
+	/** Drop every slot token + reconciler/generation state authorized to `wcId`
+	 *  (window-close / shutdown hygiene). */
 	private revokeSlotTokensForWc(wcId: number): void {
 		for (const [token, entry] of this.slotTokens) {
 			if (entry.authorizedWcId === wcId) this.slotTokens.delete(token)
 		}
+		this.reconcileStates.delete(wcId)
+		this.perWcGeneration.delete(wcId)
 	}
 
 	private handleSubWindowClosed(win: MinimalBrowserWindow, wc: MinimalWebContents): void {
@@ -2038,8 +2095,8 @@ export class DeckApp {
 				// Mint + register + push a slot-token anchor for an anchored placement on
 				// `controlWc`/`anchor`. Shared by placeIn (first placement) and moveTo
 				// (re-anchor for the dest window). Sets the captured `slotToken`.
-				const mintSlotToken = (controlWc: MinimalWebContents, anchor: string): void => {
-					// The wire's Place / LayoutSubscribe channels are
+				const mintSlotToken = (controlWc: MinimalWebContents, anchor: string, zone: number): void => {
+					// The wire's Snapshot / LayoutSubscribe channels are
 					// armed eagerly at framework start() (see bindWireTransport).
 					// This call is kept for safety/idempotency — it is a no-op when the
 					// channels are already armed.
@@ -2048,12 +2105,23 @@ export class DeckApp {
 					const token = randomUUID()
 					slotToken = token
 					void ++this.slotSeq
-					const grant = { viewId, slotId: anchor, slotToken: token }
-					const resend = (): void => { controlWc.send(DeckChannel.SlotGrant, grant) }
+					// Grant carries the wc's CURRENT generation. `resend` re-reads it each
+					// push so a layout-subscribe replay (which bumps the generation first)
+					// re-issues the grant at the new generation.
+					const resend = (): void => {
+						const grant = {
+							viewId,
+							slotId: anchor,
+							slotToken: token,
+							generation: this.perWcGeneration.get(authorizedWcId) ?? 0,
+						}
+						controlWc.send(DeckChannel.SlotGrant, grant)
+					}
 					this.slotTokens.set(token, {
 						viewId,
 						slotId: anchor,
 						authorizedWcId,
+						zone,
 						resend,
 						apply: p => { hostHandle.applyPlacement(p as ViewPlacement) },
 					})
@@ -2104,7 +2172,7 @@ export class DeckApp {
 						// the only credential the renderer needs to drive `place`.
 						const anchor = placeOpts.anchor
 						if (typeof anchor === 'string' && anchor.length > 0) {
-							mintSlotToken(controlWc, anchor)
+							mintSlotToken(controlWc, anchor, placeOpts.zone ?? 0)
 						}
 						return hostHandle
 					},
@@ -2229,7 +2297,7 @@ export class DeckApp {
 						}
 						const anchor = moveOpts.anchor
 						if (typeof anchor === 'string' && anchor.length > 0) {
-							mintSlotToken(destControlWc, anchor)
+							mintSlotToken(destControlWc, anchor, moveOpts.zone ?? 0)
 						}
 					},
 					applyPlacement: (p) => {
@@ -2411,27 +2479,6 @@ export class DeckApp {
 		}
 		return runtime
 	}
-}
-
-/**
- * Validate an inbound `__electron-deck:place` placement before applying it.
- * `{visible:false}` is always OK; `{visible:true, bounds:{x,y,width,height}}`
- * requires width≥0 && height≥0 — x/y may be ANY finite number (negative origin
- * is legitimate for scroll-follow). Anything else is rejected.
- */
-function isValidPlacement(placement: unknown): placement is ViewPlacement {
-	if (placement === null || typeof placement !== 'object') return false
-	const p = placement as Record<string, unknown>
-	if (p.visible === false) return true
-	if (p.visible !== true) return false
-	const b = p.bounds
-	if (b === null || typeof b !== 'object') return false
-	const { x, y, width, height } = b as Record<string, unknown>
-	if (typeof x !== 'number' || !Number.isFinite(x)) return false
-	if (typeof y !== 'number' || !Number.isFinite(y)) return false
-	if (typeof width !== 'number' || !Number.isFinite(width) || width < 0) return false
-	if (typeof height !== 'number' || !Number.isFinite(height) || height < 0) return false
-	return true
 }
 
 async function runWithTimeout<T>(work: MaybePromise<T>, timeoutMs: number): Promise<T> {

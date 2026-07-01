@@ -1,52 +1,21 @@
 // @vitest-environment jsdom
-/**
- * Contract tests for DEDUP of renderer grants in `createDeckLayoutClient`.
- *
- * BACKGROUND: the client must not append a NEW anchor on EVERY
- * `slot-grant`, with NO dedup by `viewId`. But the main process INTENTIONALLY
- * re-delivers a slot-grant on `layout-subscribe` replay (per-wc replay). So when
- * a grant for an already-anchored `viewId` is re-delivered, the client today
- * creates a SECOND anchor for the SAME view — both anchors keep publishing, and
- * the older one may carry a stale/revoked `slotToken`.
- *
- * FIX (the behavior these tests pin): the client tracks ONE live anchor per
- * `viewId`:
- *   - a re-delivered grant with the SAME token is a NO-OP (keep the existing
- *     anchor — do NOT create a second, do NOT dispose the first);
- *   - a grant with a NEW token for an existing `viewId` REPLACES it (dispose the
- *     old anchor, create a new one bound to the new token);
- *   - distinct `viewId`s remain independent (no dedup between them);
- *   - `dispose()` cleans every CURRENTLY-LIVE anchor exactly once (replaced/old
- *     anchors were already disposed at replacement time → not double-disposed);
- *   - a grant whose slot does not resolve creates no anchor AND does not poison
- *     the per-viewId tracking.
- *
- * Harness is intentionally identical to `layout-client.test.ts` (fake bridge +
- * fake createAnchor capturing (target, opts) + dispose spies) — REUSED verbatim
- * so these pins compose with the existing handshake/token-threading pins.
- *
- * These pin the client's per-viewId tracking: the same-token replay (#1) must
- * NOT create a 2nd anchor, and the new-token replacement (#2) must dispose the
- * old anchor and replace it.
- */
-
 import { describe, expect, it, vi } from 'vitest'
 import { createDeckLayoutClient } from './layout-client.js'
+import type { PlacementSnapshot } from '../layout/placement-reconcile.js'
 
-// ── Local mirror of view-anchor's `Placement` (cannot import: view-anchor is
-//    not a dependency of electron-deck yet).
-interface Bounds {
-  x: number
-  y: number
-  width: number
-  height: number
-}
+// ── Local mirrors ─────────────────────────────────────────────────────────────
+
+interface Bounds { x: number; y: number; width: number; height: number }
 type Placement = { visible: true; bounds: Bounds } | { visible: false }
+type Extra = { slotToken: string }
+type LayoutSnapshot = PlacementSnapshot<Extra>
 
+// SlotGrant now carries generation for renderer-lifetime tracking.
 interface SlotGrant {
   viewId: string
   slotId: string
   slotToken: string
+  generation: number
 }
 
 interface AnchorOpts {
@@ -63,42 +32,56 @@ interface CapturedAnchor {
   dispose: ReturnType<typeof vi.fn>
 }
 
-// ── Fake bridge (mirror of layout-client.test.ts) ────────────────────────────
+// ── FakeRaf ───────────────────────────────────────────────────────────────────
+
+class FakeRaf {
+  private cbs = new Map<number, () => void>()
+  private nextId = 1
+  request = vi.fn((cb: () => void): number => {
+    const id = this.nextId++
+    this.cbs.set(id, cb)
+    return id
+  })
+  cancel = vi.fn((id: number): void => { this.cbs.delete(id) })
+  flushFrame(): void {
+    const pending = [...this.cbs.entries()]
+    this.cbs.clear()
+    for (const [, cb] of pending) cb()
+  }
+}
+
+// ── Fake bridge ───────────────────────────────────────────────────────────────
+
 function makeBridge() {
-  const order: string[] = []
   let grantCb: ((g: SlotGrant) => void) | null = null
   const unsubscribe = vi.fn()
-  const sendPlace =
-    vi.fn<(msg: { slotToken: string; placement: Placement }) => void>()
+  const snapshots: LayoutSnapshot[] = []
+  const sendSnapshot = vi.fn((snap: LayoutSnapshot): void => { snapshots.push(snap) })
 
   const bridge = {
     onSlotGrant: vi.fn((cb: (g: SlotGrant) => void) => {
-      order.push('onSlotGrant')
       grantCb = cb
       return unsubscribe
     }),
-    sendPlace,
-    subscribe: vi.fn(() => {
-      order.push('subscribe')
-    }),
+    sendSnapshot,
+    subscribe: vi.fn((): void => {}),
   }
 
   return {
     bridge,
-    sendPlace,
+    sendSnapshot,
     unsubscribe,
-    order,
+    snapshots,
     emitGrant(g: SlotGrant): void {
       if (!grantCb) throw new Error('no slot-grant subscriber registered')
       grantCb(g)
     },
-    hasSubscriber(): boolean {
-      return grantCb !== null
-    },
+    hasSubscriber(): boolean { return grantCb !== null },
   }
 }
 
-// ── Fake createAnchor (mirror of layout-client.test.ts) ──────────────────────
+// ── Fake createAnchor ─────────────────────────────────────────────────────────
+
 function makeAnchorFactory() {
   const anchors: CapturedAnchor[] = []
   const createAnchor = vi.fn(
@@ -115,32 +98,35 @@ function placement(x: number): Placement {
   return { visible: true, bounds: { x, y: x, width: 10, height: 10 } }
 }
 
+// ── Dedup tests ───────────────────────────────────────────────────────────────
+
 describe('createDeckLayoutClient — dedup renderer grants by viewId', () => {
-  // ── #1 (CORE) same-token replay = no-op ────────────────────────────────────
-  it('a re-delivered grant with the SAME viewId+token does NOT create a second anchor and does NOT dispose the first', () => {
+  // ── same-token replay = no-op ─────────────────────────────────────────────
+
+  it('a re-delivered grant with the same viewId+token does NOT create a second anchor and does NOT dispose the first', () => {
+    const raf = new FakeRaf()
     const b = makeBridge()
     const a = makeAnchorFactory()
     const el = document.createElement('div')
-    const client = createDeckLayoutClient({
+    createDeckLayoutClient({
       bridge: b.bridge,
       createAnchor: a.createAnchor,
       resolveSlot: () => el,
+      requestFrame: raf.request,
+      cancelFrame: raf.cancel,
     })
-    void client
-
-    const grant: SlotGrant = { viewId: 'v1', slotId: '#a', slotToken: 'tok1' }
+    const grant: SlotGrant = { viewId: 'v1', slotId: '#a', slotToken: 'tok1', generation: 1 }
     b.emitGrant(grant)
-    // Main re-delivers the SAME grant on per-wc replay (identical token).
-    b.emitGrant({ viewId: 'v1', slotId: '#a', slotToken: 'tok1' })
+    // Replay the identical grant (per-wc replay from main).
+    b.emitGrant({ ...grant })
 
-    // PIN: exactly one anchor for v1 — the replay is a pure no-op.
     expect(a.createAnchor).toHaveBeenCalledTimes(1)
     expect(a.anchors).toHaveLength(1)
-    // The original anchor must NOT have been torn down by the replay.
     expect(a.anchors[0]?.dispose).not.toHaveBeenCalled()
   })
 
-  it('the surviving anchor after a same-token replay still publishes to the original token', () => {
+  it('after a same-token replay, the surviving anchor still appears in the snapshot with the original token', () => {
+    const raf = new FakeRaf()
     const b = makeBridge()
     const a = makeAnchorFactory()
     const el = document.createElement('div')
@@ -148,21 +134,25 @@ describe('createDeckLayoutClient — dedup renderer grants by viewId', () => {
       bridge: b.bridge,
       createAnchor: a.createAnchor,
       resolveSlot: () => el,
+      requestFrame: raf.request,
+      cancelFrame: raf.cancel,
     })
-
-    b.emitGrant({ viewId: 'v1', slotId: '#a', slotToken: 'tok1' })
-    b.emitGrant({ viewId: 'v1', slotId: '#a', slotToken: 'tok1' })
-
+    b.emitGrant({ viewId: 'v1', slotId: '#a', slotToken: 'tok1', generation: 1 })
+    b.emitGrant({ viewId: 'v1', slotId: '#a', slotToken: 'tok1', generation: 1 })
     a.anchors[0]?.opts.publish(placement(7))
-    expect(b.sendPlace).toHaveBeenCalledTimes(1)
-    expect(b.sendPlace).toHaveBeenCalledWith({
-      slotToken: 'tok1',
-      placement: placement(7),
-    })
+    raf.flushFrame()
+
+    expect(b.snapshots).toHaveLength(1)
+    const snap = b.snapshots[0]!
+    expect(snap.views).toHaveLength(1)
+    expect(snap.views[0]!.viewId).toBe('v1')
+    expect(snap.views[0]!.extra?.slotToken).toBe('tok1')
   })
 
-  // ── #2 (CORE) new-token replacement ────────────────────────────────────────
-  it('a grant with a NEW token for an existing viewId DISPOSES the old anchor and creates a replacement', () => {
+  // ── new-token replacement ─────────────────────────────────────────────────
+
+  it('a grant with a NEW token for an existing viewId disposes the old anchor and creates a replacement', () => {
+    const raf = new FakeRaf()
     const b = makeBridge()
     const a = makeAnchorFactory()
     const el = document.createElement('div')
@@ -170,20 +160,20 @@ describe('createDeckLayoutClient — dedup renderer grants by viewId', () => {
       bridge: b.bridge,
       createAnchor: a.createAnchor,
       resolveSlot: () => el,
+      requestFrame: raf.request,
+      cancelFrame: raf.cancel,
     })
+    b.emitGrant({ viewId: 'v1', slotId: '#a', slotToken: 'tok1', generation: 1 })
+    b.emitGrant({ viewId: 'v1', slotId: '#a', slotToken: 'tok2', generation: 1 })
 
-    b.emitGrant({ viewId: 'v1', slotId: '#a', slotToken: 'tok1' })
-    // Host re-issued the slot (e.g. after a moveTo / re-place): same viewId, NEW token.
-    b.emitGrant({ viewId: 'v1', slotId: '#a', slotToken: 'tok2' })
-
-    // PIN: replaced — two anchors created total, the FIRST disposed exactly once.
     expect(a.createAnchor).toHaveBeenCalledTimes(2)
     expect(a.anchors).toHaveLength(2)
     expect(a.anchors[0]?.dispose).toHaveBeenCalledTimes(1)
     expect(a.anchors[1]?.dispose).not.toHaveBeenCalled()
   })
 
-  it('after a new-token replacement the LIVE (new) anchor publishes the new token, not the stale one', () => {
+  it('after a new-token replacement, the snapshot carries the new token in extra.slotToken (stale token never appears)', () => {
+    const raf = new FakeRaf()
     const b = makeBridge()
     const a = makeAnchorFactory()
     const el = document.createElement('div')
@@ -191,25 +181,27 @@ describe('createDeckLayoutClient — dedup renderer grants by viewId', () => {
       bridge: b.bridge,
       createAnchor: a.createAnchor,
       resolveSlot: () => el,
+      requestFrame: raf.request,
+      cancelFrame: raf.cancel,
     })
-
-    b.emitGrant({ viewId: 'v1', slotId: '#a', slotToken: 'tok1' })
-    b.emitGrant({ viewId: 'v1', slotId: '#a', slotToken: 'tok2' })
-
-    // Drive the NEW (replacement) anchor → must thread tok2.
+    b.emitGrant({ viewId: 'v1', slotId: '#a', slotToken: 'tok1', generation: 1 })
+    b.emitGrant({ viewId: 'v1', slotId: '#a', slotToken: 'tok2', generation: 1 })
     a.anchors[1]?.opts.publish(placement(3))
-    expect(b.sendPlace).toHaveBeenCalledWith({
-      slotToken: 'tok2',
-      placement: placement(3),
-    })
+    raf.flushFrame()
+
+    expect(b.snapshots[0]!.views[0]!.extra?.slotToken).toBe('tok2')
     // The stale token must never appear on the wire.
-    expect(b.sendPlace).not.toHaveBeenCalledWith(
-      expect.objectContaining({ slotToken: 'tok1' }),
-    )
+    for (const snap of b.snapshots) {
+      for (const v of snap.views) {
+        expect(v.extra?.slotToken).not.toBe('tok1')
+      }
+    }
   })
 
-  // ── #3 distinct viewIds unaffected ─────────────────────────────────────────
-  it('grants for DIFFERENT viewIds create independent anchors (no dedup between them)', () => {
+  // ── distinct viewIds are independent ─────────────────────────────────────
+
+  it('grants for different viewIds create independent anchors with no dedup between them', () => {
+    const raf = new FakeRaf()
     const b = makeBridge()
     const a = makeAnchorFactory()
     const sim = document.createElement('div')
@@ -217,35 +209,32 @@ describe('createDeckLayoutClient — dedup renderer grants by viewId', () => {
     createDeckLayoutClient({
       bridge: b.bridge,
       createAnchor: a.createAnchor,
-      resolveSlot: (slotId: string) => (slotId === '#sim' ? sim : dev),
+      resolveSlot: (id) => (id === '#sim' ? sim : dev),
+      requestFrame: raf.request,
+      cancelFrame: raf.cancel,
     })
-
-    b.emitGrant({ viewId: 'v-sim', slotId: '#sim', slotToken: 'tok-sim' })
-    b.emitGrant({ viewId: 'v-dev', slotId: '#devtools', slotToken: 'tok-dev' })
+    b.emitGrant({ viewId: 'v-sim', slotId: '#sim', slotToken: 'tok-sim', generation: 1 })
+    b.emitGrant({ viewId: 'v-dev', slotId: '#devtools', slotToken: 'tok-dev', generation: 1 })
 
     expect(a.createAnchor).toHaveBeenCalledTimes(2)
-    expect(a.anchors).toHaveLength(2)
-    expect(a.anchors[0]?.target).toBe(sim)
-    expect(a.anchors[1]?.target).toBe(dev)
-    // Neither was disposed by the other's grant.
     expect(a.anchors[0]?.dispose).not.toHaveBeenCalled()
     expect(a.anchors[1]?.dispose).not.toHaveBeenCalled()
 
-    // Each still publishes to its own token (no cross-talk survives dedup).
     a.anchors[0]?.opts.publish(placement(1))
     a.anchors[1]?.opts.publish(placement(2))
-    expect(b.sendPlace).toHaveBeenCalledWith({
-      slotToken: 'tok-sim',
-      placement: placement(1),
-    })
-    expect(b.sendPlace).toHaveBeenCalledWith({
-      slotToken: 'tok-dev',
-      placement: placement(2),
-    })
+    raf.flushFrame()
+
+    const snap = b.snapshots[0]!
+    const simView = snap.views.find((v) => v.viewId === 'v-sim')
+    const devView = snap.views.find((v) => v.viewId === 'v-dev')
+    expect(simView?.extra?.slotToken).toBe('tok-sim')
+    expect(devView?.extra?.slotToken).toBe('tok-dev')
   })
 
-  // ── #4 dispose() cleans all CURRENTLY-LIVE anchors exactly once ─────────────
-  it('dispose() disposes every live anchor once and does NOT double-dispose a replaced (already-disposed) anchor', () => {
+  // ── dispose() cleans all live anchors exactly once ────────────────────────
+
+  it('dispose() disposes every live anchor once and does NOT double-dispose a replaced anchor', () => {
+    const raf = new FakeRaf()
     const b = makeBridge()
     const a = makeAnchorFactory()
     const el = document.createElement('div')
@@ -253,33 +242,32 @@ describe('createDeckLayoutClient — dedup renderer grants by viewId', () => {
       bridge: b.bridge,
       createAnchor: a.createAnchor,
       resolveSlot: () => el,
+      requestFrame: raf.request,
+      cancelFrame: raf.cancel,
     })
-
-    // v1 gets replaced (tok1 → tok2); v2 stays. After this:
-    //   anchors[0] = v1@tok1 (already disposed at replacement)
-    //   anchors[1] = v1@tok2 (live)
-    //   anchors[2] = v2@tok-b (live)
-    b.emitGrant({ viewId: 'v1', slotId: '#a', slotToken: 'tok1' })
-    b.emitGrant({ viewId: 'v1', slotId: '#a', slotToken: 'tok2' })
-    b.emitGrant({ viewId: 'v2', slotId: '#b', slotToken: 'tok-b' })
+    // v1 gets replaced (tok1→tok2); v2 stays live.
+    b.emitGrant({ viewId: 'v1', slotId: '#a', slotToken: 'tok1', generation: 1 })
+    b.emitGrant({ viewId: 'v1', slotId: '#a', slotToken: 'tok2', generation: 1 })
+    b.emitGrant({ viewId: 'v2', slotId: '#b', slotToken: 'tok-b', generation: 1 })
 
     expect(a.createAnchor).toHaveBeenCalledTimes(3)
-    // The replaced anchor was already disposed exactly once by the replacement.
+    // Replaced anchor already disposed exactly once at replacement time.
     expect(a.anchors[0]?.dispose).toHaveBeenCalledTimes(1)
 
     client.dispose()
 
-    // Bridge unsubscribed.
     expect(b.unsubscribe).toHaveBeenCalledTimes(1)
-    // The two LIVE anchors disposed exactly once each.
+    // The two live anchors disposed exactly once each.
     expect(a.anchors[1]?.dispose).toHaveBeenCalledTimes(1)
     expect(a.anchors[2]?.dispose).toHaveBeenCalledTimes(1)
     // The already-replaced anchor is NOT disposed a second time.
     expect(a.anchors[0]?.dispose).toHaveBeenCalledTimes(1)
   })
 
-  // ── #5 unresolved slot does not poison per-viewId tracking ─────────────────
-  it('a grant whose slot does NOT resolve creates no anchor and does not poison the viewId; a later resolving grant for the SAME viewId anchors normally', () => {
+  // ── unresolved slot does not poison per-viewId tracking ───────────────────
+
+  it('a grant whose slot does not resolve creates no anchor and does not poison the viewId; a later resolving grant for the same viewId anchors normally', () => {
+    const raf = new FakeRaf()
     const b = makeBridge()
     const a = makeAnchorFactory()
     const el = document.createElement('div')
@@ -287,36 +275,31 @@ describe('createDeckLayoutClient — dedup renderer grants by viewId', () => {
     createDeckLayoutClient({
       bridge: b.bridge,
       createAnchor: a.createAnchor,
-      // Slot is initially unmounted → null; later it mounts → el.
       resolveSlot: () => (mounted ? el : null),
+      requestFrame: raf.request,
+      cancelFrame: raf.cancel,
     })
-
-    // First grant for v1: slot not mounted → no anchor, no throw.
+    // First grant: slot not mounted → no anchor.
     expect(() =>
-      b.emitGrant({ viewId: 'v1', slotId: '#a', slotToken: 'tok1' }),
+      b.emitGrant({ viewId: 'v1', slotId: '#a', slotToken: 'tok1', generation: 1 }),
     ).not.toThrow()
     expect(a.createAnchor).not.toHaveBeenCalled()
 
-    // Slot mounts; a later grant for the SAME viewId must now anchor — the
-    // earlier failed resolve must not have left v1 "tracked" so this is suppressed.
+    // Slot mounts; a later grant must create the anchor normally.
     mounted = true
-    b.emitGrant({ viewId: 'v1', slotId: '#a', slotToken: 'tok2' })
-
+    b.emitGrant({ viewId: 'v1', slotId: '#a', slotToken: 'tok2', generation: 1 })
     expect(a.createAnchor).toHaveBeenCalledTimes(1)
     expect(a.anchors[0]?.target).toBe(el)
+
     a.anchors[0]?.opts.publish(placement(4))
-    expect(b.sendPlace).toHaveBeenCalledWith({
-      slotToken: 'tok2',
-      placement: placement(4),
-    })
+    raf.flushFrame()
+    expect(b.snapshots[0]!.views[0]!.extra?.slotToken).toBe('tok2')
   })
 
-  // a NEW token for an existing viewId must REVOKE the old
-  // anchor even when the NEW slot does not resolve — otherwise the stale anchor
-  // keeps publishing an already-revoked token. The old anchor is disposed and NO
-  // replacement is created; a later grant (slot now mounted) anchors with the
-  // latest token.
-  it('a new-token grant whose NEW slot is unresolved still disposes the old anchor (no stale anchor keeps publishing the revoked token)', () => {
+  // ── new-token + unresolved slot disposes old anchor + removes viewId ──────
+
+  it('a new-token grant with unresolved slot disposes the old anchor and removes the viewId from subsequent snapshots', () => {
+    const raf = new FakeRaf()
     const b = makeBridge()
     const a = makeAnchorFactory()
     const el = document.createElement('div')
@@ -325,26 +308,38 @@ describe('createDeckLayoutClient — dedup renderer grants by viewId', () => {
       bridge: b.bridge,
       createAnchor: a.createAnchor,
       resolveSlot: () => (resolves ? el : null),
+      requestFrame: raf.request,
+      cancelFrame: raf.cancel,
     })
-
-    // v1 anchored with tok1.
-    b.emitGrant({ viewId: 'v1', slotId: '#a', slotToken: 'tok1' })
+    b.emitGrant({ viewId: 'v1', slotId: '#a', slotToken: 'tok1', generation: 1 })
     expect(a.createAnchor).toHaveBeenCalledTimes(1)
-    const old = a.anchors[0]
-    expect(old?.dispose).not.toHaveBeenCalled()
+    const oldAnchor = a.anchors[0]!
 
-    // New token arrives but the (new) slot doesn't resolve right now.
+    // The anchor measures once (a real view-anchor measures on creation), so v1
+    // enters the published table — main learns about it.
+    oldAnchor.opts.publish(placement(1))
+    raf.flushFrame()
+    expect(b.snapshots.at(-1)!.views.map((v) => v.viewId)).toContain('v1')
+
+    // New token arrives but the (new) slot doesn't resolve.
     resolves = false
-    b.emitGrant({ viewId: 'v1', slotId: '#a', slotToken: 'tok2' })
-    // The stale anchor (tok1) is disposed/revoked, and NO new anchor was created.
-    expect(old?.dispose).toHaveBeenCalledTimes(1)
+    b.emitGrant({ viewId: 'v1', slotId: '#a', slotToken: 'tok2', generation: 1 })
+    // Old anchor is revoked immediately, no replacement created.
+    expect(oldAnchor.dispose).toHaveBeenCalledTimes(1)
     expect(a.createAnchor).toHaveBeenCalledTimes(1)
 
-    // Later, the slot resolves and tok2 (or a newer token) lands → anchors fresh.
+    // The revoke called publisher.remove(v1); the next flush publishes a snapshot
+    // that no longer contains v1 (main is told to detach it).
+    raf.flushFrame()
+    const lastSnap = b.snapshots.at(-1)!
+    expect(lastSnap.views.map((v) => v.viewId)).not.toContain('v1')
+
+    // Once the slot resolves again, a subsequent grant anchors with the new token.
     resolves = true
-    b.emitGrant({ viewId: 'v1', slotId: '#a', slotToken: 'tok3' })
+    b.emitGrant({ viewId: 'v1', slotId: '#a', slotToken: 'tok3', generation: 1 })
     expect(a.createAnchor).toHaveBeenCalledTimes(2)
     a.anchors[1]?.opts.publish(placement(7))
-    expect(b.sendPlace).toHaveBeenCalledWith({ slotToken: 'tok3', placement: placement(7) })
+    raf.flushFrame()
+    expect(b.snapshots.at(-1)!.views[0]!.extra?.slotToken).toBe('tok3')
   })
 })
