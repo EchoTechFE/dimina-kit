@@ -13,11 +13,14 @@
  *
  * The four content panels are NOT mocked: these tests integrate through the
  * real WxmlPanel / AppDataPanel / StoragePanel / CompilePanel so we exercise
- * real handler wiring (a refresh button actually firing the spy) and real DOM
- * (the compile log/event rows actually rendered), not identity.
+ * real rendering + handler wiring (bridge selection, compile clear) and real DOM
+ * (the compile log/event rows actually rendered), not identity. The panels are
+ * live-synced and carry NO refresh button (final-contract §9), so DebugTabContent
+ * no longer forwards an `onRefresh` to them — the per-tab guard is that each
+ * tabId mounts its own panel.
  */
 import { describe, it, expect, vi } from 'vitest'
-import { render, fireEvent, within } from '@testing-library/react'
+import { render, fireEvent } from '@testing-library/react'
 import {
   DebugTabContent,
   type BottomDebugPanelProps,
@@ -69,27 +72,22 @@ function makeProps(
 // ── DebugTabContent: reusable per-tab unit renders + forwards handlers ──────
 
 describe('DebugTabContent (reusable per-tab unit)', () => {
-  it("tabId='wxml' renders the WXML panel and forwards onRefreshWxml", () => {
-    // Bug guarded: a dropped refresh handler when extracting wxml content —
-    // clicking the panel's 刷新 button must reach the caller's spy.
-    const onRefreshWxml = vi.fn()
-    const props = makeProps({ onRefreshWxml })
+  it("tabId='wxml' renders the WXML panel", () => {
+    // Bug guarded: the wrong panel (or none) mounts for tabId='wxml'. The panel
+    // is live-synced with no refresh button, so we assert it mounts rather than
+    // clicking a (removed) refresh control.
+    const props = makeProps()
     const { getByTestId } = render(<DebugTabContent tabId="wxml" {...props} />)
 
-    const panel = getByTestId('wxml-panel')
-    fireEvent.click(within(panel).getByRole('button', { name: /刷新/ }))
-    expect(onRefreshWxml).toHaveBeenCalledTimes(1)
+    expect(getByTestId('wxml-panel')).toBeTruthy()
   })
 
-  it("tabId='appdata' renders the AppData panel and forwards onRefreshAppData", () => {
-    // Bug guarded: AppData refresh wiring dropped during extraction. The
-    // AppData panel always renders its 刷新 button.
-    const onRefreshAppData = vi.fn()
-    const props = makeProps({ onRefreshAppData })
-    const { getByRole } = render(<DebugTabContent tabId="appdata" {...props} />)
+  it("tabId='appdata' renders the AppData panel", () => {
+    // Bug guarded: the wrong panel mounts for tabId='appdata'.
+    const props = makeProps()
+    const { getByTestId } = render(<DebugTabContent tabId="appdata" {...props} />)
 
-    fireEvent.click(getByRole('button', { name: /刷新/ }))
-    expect(onRefreshAppData).toHaveBeenCalledTimes(1)
+    expect(getByTestId('appdata-panel')).toBeTruthy()
   })
 
   it("tabId='appdata' forwards onSelectAppDataBridge when a bridge is chosen", () => {
@@ -113,17 +111,14 @@ describe('DebugTabContent (reusable per-tab unit)', () => {
     expect(onSelectAppDataBridge).toHaveBeenCalledWith('b2')
   })
 
-  it("tabId='storage' renders the Storage panel and forwards onRefreshStorage", () => {
-    // Bug guarded: storage refresh handler dropped during extraction.
-    const onRefreshStorage = vi.fn()
-    const props = makeProps({ onRefreshStorage })
+  it("tabId='storage' renders the Storage panel", () => {
+    // Bug guarded: the wrong panel mounts for tabId='storage'.
+    const props = makeProps()
     const { getByTestId } = render(
       <DebugTabContent tabId="storage" {...props} />,
     )
 
-    const panel = getByTestId('storage-panel')
-    fireEvent.click(within(panel).getByRole('button', { name: /刷新/ }))
-    expect(onRefreshStorage).toHaveBeenCalledTimes(1)
+    expect(getByTestId('storage-panel')).toBeTruthy()
   })
 
   it("tabId='compile' renders the Compile panel and forwards onClearCompileEvents", () => {

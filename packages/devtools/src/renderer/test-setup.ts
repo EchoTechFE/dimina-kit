@@ -3,6 +3,8 @@ import * as matchers from '@testing-library/jest-dom/matchers'
 
 expect.extend(matchers)
 
-// jsdom does not implement scrollIntoView; stub it so components that call it
-// during effects do not throw "scrollIntoView is not a function".
-Element.prototype.scrollIntoView = vi.fn()
+// jsdom does not implement Element.prototype.scrollIntoView; components that
+// auto-scroll (e.g. the compile panel) call it during effects.
+if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = () => {}
+}

@@ -1,11 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { Button } from '@/shared/components/ui/button'
 import type { ElementInspection } from '../../../../../shared/ipc-channels'
 import type { WxmlNode } from './types.js'
 
 interface WxmlPanelProps {
   tree: WxmlNode | null
-  onRefresh: () => void
   onInspectElement?: (sid: string) => Promise<ElementInspection | null>
   onClearInspection?: () => Promise<void>
 }
@@ -203,7 +201,6 @@ function InspectionFooter({ inspection }: { inspection: ElementInspection | null
 
 export function WxmlPanel({
   tree,
-  onRefresh,
   onInspectElement,
   onClearInspection,
 }: WxmlPanelProps) {
@@ -250,16 +247,6 @@ export function WxmlPanel({
   if (!tree) {
     return (
       <div className="flex flex-col flex-1 overflow-hidden" data-testid="wxml-panel">
-        <div className="flex items-center px-2.5 py-1.5 border-b border-border-subtle shrink-0 bg-bg-panel">
-          <Button
-            variant="outline"
-            size="xs"
-            onClick={onRefresh}
-            className="hover:border-accent hover:text-accent"
-          >
-            ↻ 刷新
-          </Button>
-        </div>
         <div className="text-[12px] text-text-dim text-center px-4 py-6">
           等待小程序加载...
         </div>
@@ -268,16 +255,6 @@ export function WxmlPanel({
   }
   return (
     <div className="flex flex-col flex-1 overflow-hidden" onMouseLeave={clearInspection} data-testid="wxml-panel">
-      <div className="flex items-center px-2.5 py-1.5 border-b border-border-subtle shrink-0 bg-bg-panel">
-        <Button
-          variant="outline"
-          size="xs"
-          onClick={onRefresh}
-          className="hover:border-accent hover:text-accent"
-        >
-          ↻ 刷新
-        </Button>
-      </div>
       <div className="flex-1 overflow-y-auto p-2 font-mono text-[12px]">
         <WxmlTreeNode
           node={tree}

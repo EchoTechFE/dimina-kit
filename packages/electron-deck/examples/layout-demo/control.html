@@ -4,10 +4,10 @@
     <meta charset="utf-8" />
     <title>electron-deck layout demo — real-API control layer</title>
     <!--
-      No import map needed anymore: the renderer loads the framework's BROWSER
-      bundle (`dist/client/layout-client.browser.js`, mapped to the package's
-      `./client/browser` export), which is a dependency-inlined ESM with no bare
-      specifiers — the hand-authored `@dimina-kit/view-anchor` mapping is GONE.
+      No import map needed: the renderer loads the framework's built client entry
+      (`../../dist/client/index.js`), a Vite library build that inlines
+      `@dimina-kit/view-anchor` — no bare specifiers, so no hand-authored mapping.
+      createDeckLayoutClient wires the whole slot-token → window-snapshot path.
     -->
     <style>
       * { box-sizing: border-box; }
@@ -208,6 +208,35 @@
       // moves the splitter to an absolute simulator width so the test can prove
       // the native blocks FOLLOWED the DOM split.
       window.__demoSetSplit = (simPx) => setSimWidth(simPx)
+
+      // ── Renderer-driven hide / restore (proves the reconcile detach path) ──
+      // display:none trips view-anchor's guardDisplayNone → the anchor publishes
+      // a { visible:false } placement → the central publisher's next snapshot omits
+      // the sim's geometry → main's reconciler emits a detach. Restoring display
+      // re-measures → a { visible:true } placement → the reconciler re-attaches.
+      // No host-side hide code: visibility is 100% renderer-declared, level-driven.
+      window.__demoHideSim = () => { simEl.style.display = 'none' }
+      window.__demoShowSim = () => { simEl.style.display = '' }
+
+      // ── Stress: rapidly re-split many times in quick succession ────────────
+      // This reproduces the shape of the white-screen bug (a burst of relayouts,
+      // some of which transiently measure a slot at 0×0). With the level-triggered
+      // publisher+reconciler the native blocks must SETTLE correctly — a lost or
+      // spurious per-view frame self-heals instead of sticking a view detached.
+      // Returns after the final width is applied so the driver can assert steady state.
+      window.__demoStress = async (rounds) => {
+        const wide = splitContainer.clientWidth
+        for (let i = 0; i < rounds; i++) {
+          // Deterministic-but-varying widths (no Math.random — reproducible runs).
+          const w = 80 + ((i * 53) % Math.max(120, wide - 160))
+          setSimWidth(w)
+          // Yield a frame so the anchor's ResizeObserver/RAF actually measures each.
+          await new Promise((r) => requestAnimationFrame(r))
+        }
+        // Settle on a known-good split so the post-stress assertion is stable.
+        setSimWidth(360)
+        await new Promise((r) => requestAnimationFrame(r))
+      }
 
       // ── Composite-screenshot machinery (REUSED from the original demo) ─────
       // Native WebContentsViews are composited by the OS window-server, not into

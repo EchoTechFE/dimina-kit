@@ -106,6 +106,7 @@ vi.mock('../../utils/paths.js', () => ({
 
 // Import AFTER mocks so view-manager picks up the stubs.
 import { createViewManager } from './view-manager.js'
+import { hostToolbarBounds } from './placement-test-driver.js'
 import { createConnectionRegistry } from '@dimina-kit/electron-deck/main'
 
 function makeContext() {
@@ -146,7 +147,7 @@ describe('host-toolbar view: rebuild after the underlying webContents is destroy
     const mgr = createViewManager(ctx)
 
     // 1. First non-empty bounds: lazy-create + mount the toolbar view #1.
-    mgr.setHostToolbarBounds(RECT)
+    hostToolbarBounds(mgr,RECT)
 
     expect(constructed.length, 'first setHostToolbarBounds must lazily create the toolbar view').toBe(1)
     const firstView = constructed[0]!
@@ -159,7 +160,7 @@ describe('host-toolbar view: rebuild after the underlying webContents is destroy
 
     // 3. Next non-empty bounds must REBUILD the view (ensure-path sees the
     //    webContents is destroyed) and re-mount it so the toolbar stays visible.
-    mgr.setHostToolbarBounds(RECT)
+    hostToolbarBounds(mgr,RECT)
 
     expect(constructed.length, 'the destroyed toolbar view must be rebuilt').toBe(2)
     const secondView = constructed[1]!

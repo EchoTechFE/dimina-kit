@@ -35,9 +35,22 @@ interface RenderInspectApi {
   /** Resolve the sid to its live DOM element so main can grab a CDP objectId. */
   elementFor(sid: string): HTMLElement | null
   unhighlightElement(): void
+  /**
+   * Start/stop watching the page DOM. While on, a debounced MutationObserver
+   * posts a `wxmlChanged` message over `DiminaRenderBridge` on every DOM change
+   * (setData re-render), so main re-pulls the WXML tree — keeping the panel live
+   * without polling. Main only turns this on while the WXML panel is visible.
+   */
+  setWxmlObserving(on: boolean): void
 }
 
-const g = globalThis as unknown as { __diminaRenderInspect?: RenderInspectApi }
+/** Coalesce a burst of setData-driven mutations into one notify per frame-ish. */
+const WXML_MUTATION_DEBOUNCE_MS = 200
+
+const g = globalThis as unknown as {
+  __diminaRenderInspect?: RenderInspectApi
+  DiminaRenderBridge?: { invoke(msg: { type: string; target: string; body: unknown }): void }
+}
 
 if (!g.__diminaRenderInspect) {
   // Mirror wxml.ts getVueAppFromIframe, but the guest's own `document` IS the
@@ -98,5 +111,46 @@ if (!g.__diminaRenderInspect) {
   // kept for the iframe-path API parity the surface comment documents.
   const unhighlightElement = (): void => {}
 
-  g.__diminaRenderInspect = { getWxml, highlightElement, elementFor, unhighlightElement }
+  // ── Live WXML: watch the page DOM and notify main on mutation ──────────────
+  // `getWxml`/`highlightElement` are read-only (highlight paints via CDP Overlay,
+  // not DOM), so the observer never re-triggers itself. Debounced so a setData
+  // burst coalesces into a single `wxmlChanged` post; main re-pulls the tree.
+  let observer: MutationObserver | null = null
+  let debounceTimer: ReturnType<typeof setTimeout> | null = null
+
+  const notifyMutated = (): void => {
+    debounceTimer = null
+    g.DiminaRenderBridge?.invoke({ type: 'wxmlChanged', target: 'container', body: {} })
+  }
+
+  const setWxmlObserving = (on: boolean): void => {
+    if (on) {
+      if (observer) return
+      observer = new MutationObserver(() => {
+        if (debounceTimer !== null) clearTimeout(debounceTimer)
+        debounceTimer = setTimeout(notifyMutated, WXML_MUTATION_DEBOUNCE_MS)
+      })
+      // Main may enable observing before the guest DOM is up (SetActive can fire
+      // before the page's `document.body` exists). Observing a null body throws,
+      // so defer to DOMContentLoaded when needed — but bail if observing was
+      // turned off again before the body arrived.
+      const begin = (): void => {
+        if (!observer || !document.body) return
+        observer.observe(document.body, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          characterData: true,
+        })
+      }
+      if (document.body) begin()
+      else document.addEventListener('DOMContentLoaded', begin, { once: true })
+    } else {
+      if (debounceTimer !== null) { clearTimeout(debounceTimer); debounceTimer = null }
+      observer?.disconnect()
+      observer = null
+    }
+  }
+
+  g.__diminaRenderInspect = { getWxml, highlightElement, elementFor, unhighlightElement, setWxmlObserving }
 }

@@ -18,6 +18,12 @@ export type {
 	LayoutClientDeps,
 } from './layout-client.js'
 
+export { createPlacementPublisher } from './placement-publisher.js'
+export type {
+	PlacementPublisher,
+	PlacementPublisherDeps,
+} from './placement-publisher.js'
+
 export interface CreateDeckClientOptions {
 	/** 默认 `__electronDeckBridge`；必须与 host preload 对齐 */
 	readonly globalName?: string

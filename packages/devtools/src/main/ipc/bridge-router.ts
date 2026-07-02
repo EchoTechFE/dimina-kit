@@ -3,7 +3,7 @@ import type { IpcMainEvent, IpcMainInvokeEvent, WebContents } from 'electron'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { BRIDGE_CHANNELS as C, SIMULATOR_EVENTS as E, deviceInfoToHostEnv } from '../../shared/bridge-channels.js'
-import type { NativeDeviceInfo } from '../../shared/ipc-channels.js'
+import type { NativeDeviceInfo, SyncStorageChange } from '../../shared/ipc-channels.js'
 import { isPersistentSimulatorApi } from '../../shared/simulator-api-metadata.js'
 import { devtoolsPackageRoot } from '../utils/paths.js'
 import type {
@@ -35,7 +35,7 @@ import type {
 } from '../../shared/bridge-channels.js'
 // eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
 import type { WorkbenchContext } from '../services/workbench-context.js'
-import type { ConnectionRegistry, DebugTap } from '@dimina-kit/electron-deck/main'
+import type { ConnectionRegistry, DebugTap, Disposable } from '@dimina-kit/electron-deck/main'
 import { createDebugTap } from '@dimina-kit/electron-deck/main'
 import { startDiminaResourceServer, type DiminaResourceServer } from '../services/dimina-resource-server.js'
 import {
@@ -196,6 +196,11 @@ interface AppSession {
    * boot this disposed session into the next spawn's window. Null on the fresh
    * path (which uses a self-removing `once`). */
   onServiceBoot: (() => void) | null
+  /** Handle for this session's `ctx.registry` shutdown-fallback entry. Disposed
+   * on normal session teardown so the registry doesn't grow one stale closure
+   * per respawn (the fallback only needs to fire at whole-app shutdown for
+   * sessions still live then). */
+  registryHandle: Disposable | null
 }
 
 interface PageSession {
@@ -295,12 +300,13 @@ const API_CALL_TIMEOUT_MS = 5_000
  */
 /**
  * Render-side activity worth re-reading panel data on: a page's DOM mounted
- * (`domReady`) or the visible page changed (`activePage`). Panels that pull
- * from the active render guest (WXML/element-inspect) subscribe via
- * `BridgeRouterHandle.onRenderEvent` so they can refresh without polling.
+ * (`domReady`), the visible page changed (`activePage`), or the active page's
+ * DOM mutated in place (`domMutated`, from the render-guest MutationObserver).
+ * Panels that pull from the active render guest (WXML/element-inspect) subscribe
+ * via `BridgeRouterHandle.onRenderEvent` so they can refresh without polling.
  */
 export interface RenderEvent {
-  kind: 'domReady' | 'activePage'
+  kind: 'domReady' | 'activePage' | 'domMutated'
   appId: string
   bridgeId: string
   /** activePage only: the now-visible page's route (bare pagePath), if known.
@@ -866,6 +872,7 @@ async function handleSpawn(
     poolEntryId,
     onServiceClosed: null,
     onServiceBoot: null,
+    registryHandle: null,
   }
 
   const rootPage: PageSession = {
@@ -902,7 +909,7 @@ async function handleSpawn(
       state.wcIdToAppSessionId.delete(appSession.serviceWc.id)
     }
   })
-  ctx.registry.add(() => disposeAppSession(state, appSessionId))
+  appSession.registryHandle = ctx.registry.add(() => disposeAppSession(state, appSessionId))
 
   const onServiceClosed = (): void => {
     void disposeAppSession(state, appSessionId, { serviceAlreadyClosed: true })
@@ -1296,6 +1303,20 @@ function handleContainerMsg(
       // automation server under native-host) so it can rebroadcast as App.logAdded.
       // Guarded + non-throwing: console capture must never break message routing.
       ctx.guestConsole?.emit(msg.body)
+      break
+    case 'storageChanged':
+      // Native-host SYNC storage liveness: the service-host's `setStorageSync`/etc.
+      // write `localStorage` directly (no main round-trip), so they post the change
+      // here for the Storage panel to stay live. Trust `ap.appId` (sender-resolved),
+      // not any appId in the body. Guarded + non-throwing.
+      ctx.onServiceStorageChanged?.(ap.appId, msg.body as SyncStorageChange)
+      break
+    case 'wxmlChanged':
+      // Native-host WXML liveness: the render-guest MutationObserver posts this when
+      // the active page's DOM mutated in place (setData). Surface it as a render
+      // event so the WXML panel service re-pulls + pushes — same pipeline as
+      // domReady/activePage. Trust `page.bridgeId` (sender-resolved), not the body.
+      state.emitRenderEvent({ kind: 'domMutated', appId: ap.appId, bridgeId: page.bridgeId })
       break
     default:
       break
@@ -1794,6 +1815,15 @@ async function disposeAppSession(
   const ap = state.appSessions.get(appSessionId)
   if (!ap) return
   state.appSessions.delete(appSessionId)
+  // Remove this session's shutdown-fallback registry entry so the registry does
+  // not accumulate one stale closure per respawn. Ordered AFTER the delete
+  // above: dispose() runs the wrapped fn (disposeAppSession again), which
+  // early-returns now that the session is gone — no recursion, no double-run.
+  // (At whole-app shutdown the registry marks the entry released before calling
+  // the fn, so this dispose() is a no-op then.)
+  const registryHandle = ap.registryHandle
+  ap.registryHandle = null
+  void registryHandle?.dispose()
   state.appLifecycle.dispose(appSessionId)
 
   // Evict AppData bridges FIRST — eviction enumerates `ap.pages`, which the

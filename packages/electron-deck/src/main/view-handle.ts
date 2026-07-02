@@ -377,11 +377,13 @@ export function createViewHandle(deps: ViewHandleDeps): ViewHandle {
       // live — a stale source `place` must NOT drive setBounds during the move.
       if (migrating) return
       if (p.visible) {
-        // Ensure attached (idempotent if still mounted; a fresh instance if it
-        // was previously detached via visible:false), then drive bounds DIRECTLY
-        // on the native view (handle 直接驱动 bounds — not via the compositor).
-        ensureMounted()
+        // Set bounds BEFORE mounting so a fresh attach composites at its correct
+        // geometry (avoids the attach-then-resize flicker the reconciler's op order
+        // is built to prevent). setBounds on a not-yet-attached native view is
+        // valid; when already mounted it's a plain resize and the mount is a no-op.
+        // handle 直接驱动 bounds — bounds go straight to the native view, not the compositor.
         nativeView.setBounds(p.bounds)
+        ensureMounted()
         // Track the live on-screen rect for bounds(). Copy so a later caller
         // mutation can't alter the recorded rect.
         visibleBounds = { x: p.bounds.x, y: p.bounds.y, width: p.bounds.width, height: p.bounds.height }

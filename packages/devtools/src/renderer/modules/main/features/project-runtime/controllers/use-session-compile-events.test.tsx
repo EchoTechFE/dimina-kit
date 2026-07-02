@@ -9,8 +9,8 @@
  *    `clearCompileEvents(): void`.
  *  - Every `projectStatus` payload appends one event
  *    `{ at: number (Date.now), status, message, hotReload? }` to the END of
- *    the array (chronological order, oldest first — the panel reverses for
- *    display).
+ *    the array (chronological order, oldest first — the panel renders in this
+ *    same order and auto-scrolls to the newest row at the bottom).
  *  - The log is capped at 200 entries, FIFO (oldest dropped first).
  *  - `clearCompileEvents()` empties the log; later events accumulate again.
  *  - Switching projects (the `projectPath`-keyed openProject reset point)

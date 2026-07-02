@@ -1,34 +1,16 @@
 /**
- * TDD failing-first contract tests for "slot-token main-process plumbing"
- * (view-handle.md「slot-token 握手」/ capability-and-lifecycle.md「anchor slotToken 原子下发」) — the deck-app side:
- * the per-view slot-grant PUSH, the secure `__electron-deck:place` apply path
- * with anti-spoof, the per-wc layout-subscribe REPLAY, and token revocation on
- * view dispose.
+ * Contract tests for the slot-token main-process plumbing — deck-app side:
+ * per-view slot-grant PUSH, secure snapshot apply path with anti-spoof,
+ * per-wc layout-subscribe replay, and token revocation on view dispose.
  *
- * Source of truth: docs/contracts/capability-and-lifecycle.md「anchor slotToken 原子下发」+
- * docs/contracts/view-handle.md「slot-token 握手」+「slot-token replay 分桶」.
+ * The renderer now publishes the entire window-level placement table as one
+ * snapshot object (`__electron-deck:snapshot`). Each view entry carries its
+ * slot token in `extra.slotToken`; main uses the token to authorize the view
+ * and derive its identity + z-order from the token registry.
  *
- * What does NOT exist yet:
- *   - `runtime.view(...).placeIn(win, { anchor })` minting a slotToken and
- *     pushing `win.webContents.send('__electron-deck:slot-grant', {...})`.
- *   - the deck-app `onPlace` handler (token table + anti-spoof + placement
- *     validation) wired into WireTransport's `__electron-deck:place` channel.
- *   - the `onLayoutSubscribe` per-wc replay over `__electron-deck:layout-subscribe`.
- *
- * Every spec here exercises that runtime contract: the slot-grant `send` fires
- * (so the token-capture helper resolves) and the place handler is registered
- * (so `ipcMain.handlers.get('__electron-deck:place')` is defined). Reached
- * through a single typed escape hatch (`withView`) so the file COMPILES.
- *
- * Channel string literals are used directly ('__electron-deck:place',
- * '__electron-deck:slot-grant', '__electron-deck:layout-subscribe') because the
- * corresponding `DeckChannel.*` members are not exported.
- *
- * Fakes copied (minimal) from deck-app.host-view.test.ts: `createFakeElectron`
- * (FakeBrowserWindow with addChildView/removeChildView spies + FakeWebContents
- * with a `send` spy + a stable `webContents.id`) and `createFakeIpcMain` (a
- * `handlers` Map so we can drive the `__electron-deck:place` /
- * `__electron-deck:layout-subscribe` handlers directly).
+ * Fakes: FakeBrowserWindow (addChildView/removeChildView spies + webContents
+ * send spy) and FakeIpcMain (handlers Map to drive the snapshot /
+ * layout-subscribe IPC handlers directly).
  */
 import { describe, expect, it, vi } from 'vitest'
 import type { JsonValue, Runtime, ViewPlacement } from '../types.js'
@@ -43,15 +25,14 @@ import type {
 import { DeckApp } from './deck-app.js'
 import type { MinimalIpcMain } from './wire-transport.js'
 
-const PLACE_CHANNEL = '__electron-deck:place'
+const SNAPSHOT_CHANNEL = '__electron-deck:snapshot'
 const SLOT_GRANT_CHANNEL = '__electron-deck:slot-grant'
 const LAYOUT_SUBSCRIBE_CHANNEL = '__electron-deck:layout-subscribe'
 
-// ── Minimal fakes (copied from deck-app.host-view.test.ts) ───────────────────
+// ── Minimal fakes ─────────────────────────────────────────────────────────────
 
-// Frame-aware event shape so the place handler's main-frame gate sees a real
-// main frame (mirrors wire-transport.frame-trust.test.ts). All sends here come
-// from the main frame of the authorized wc.
+// Frame-aware event shape so the snapshot handler's main-frame gate sees a real
+// main frame. All sends here come from the main frame of the authorized wc.
 type FrameRef = { routingId: number, processId: number } | null
 interface FrameEvent {
 	sender: { id: number, mainFrame?: FrameRef }
@@ -218,11 +199,7 @@ function createFakeElectron(
 	}
 }
 
-// ── Typed escape hatch for the not-yet-typed slot-token surface ──────────────
-//
-// `placeIn`'s `anchor` option is already in the public type (stored-but-unused);
-// what's missing is the slot-grant push + the place handler. We reach `view`
-// through a loose view so absence fails at RUNTIME (no send / no handler).
+// ── Typed escape hatch for the slot-token surface ────────────────────────────
 interface ViewSource { url?: string, file?: string }
 interface HostViewHandle {
 	placeIn(win: unknown, opts: { zone?: number, anchor?: string }): HostViewHandle
@@ -236,11 +213,14 @@ function withView(runtime: Runtime): RuntimeWithView {
 	return runtime as unknown as RuntimeWithView
 }
 
-// The slot-grant payload the framework pushes to the authorized wc.
+// The slot-grant payload the framework pushes to the authorized wc. generation
+// is a per-wc monotonic counter bumped on layout-subscribe; the renderer
+// threads it back in every snapshot so stale in-flight frames are rejected.
 interface SlotGrant {
 	viewId: string
 	slotId: string
 	slotToken: string
+	generation: number
 }
 
 function lastWcv(electron: FakeElectron): FakeWebContentsView {
@@ -249,8 +229,7 @@ function lastWcv(electron: FakeElectron): FakeWebContentsView {
 	return wcv
 }
 
-// Pull the most recent slot-grant the framework `send`-pushed to `wc`. Guard:
-// if the framework never sends a slot-grant, this throws → the test fails loud.
+// Pull the most recent slot-grant the framework sent to `wc`.
 function lastSlotGrant(wc: FakeWebContentsLike): SlotGrant {
 	const calls = (wc.send as ReturnType<typeof vi.fn>).mock.calls
 	for (let i = calls.length - 1; i >= 0; i -= 1) {
@@ -271,9 +250,9 @@ function countSlotGrants(wc: FakeWebContentsLike, slotToken?: string): number {
 	}).length
 }
 
-function getPlaceHandler(ipcMain: FakeIpcMain): Handler {
-	const h = ipcMain.handlers.get(PLACE_CHANNEL)
-	if (!h) throw new Error(`"${PLACE_CHANNEL}" handler not registered`)
+function getSnapshotHandler(ipcMain: FakeIpcMain): Handler {
+	const h = ipcMain.handlers.get(SNAPSHOT_CHANNEL)
+	if (!h) throw new Error(`"${SNAPSHOT_CHANNEL}" handler not registered`)
 	return h
 }
 
@@ -283,11 +262,24 @@ function getLayoutSubscribeHandler(ipcMain: FakeIpcMain): Handler {
 	return h
 }
 
-// Build a frame-modeled event for the given wc id whose senderFrame === mainFrame
-// (a genuine main-frame sender so the gate passes when the id is trusted).
+// Build a frame-modeled event for the given wc id whose senderFrame === mainFrame.
 function mainFrameEvent(senderId: number): FrameEvent {
 	const frame: FrameRef = { routingId: 1, processId: 1000 + senderId }
 	return { sender: { id: senderId, mainFrame: frame }, senderFrame: frame }
+}
+
+// Build a raw snapshot payload. generation + epoch must be provided explicitly
+// so callers can control epoch ordering across consecutive sends.
+function buildSnapshot(
+	views: Array<{ slotToken: string; placement: object }>,
+	generation: number,
+	epoch: number,
+) {
+	return {
+		generation,
+		epoch,
+		views: views.map(v => ({ placement: v.placement, extra: { slotToken: v.slotToken } })),
+	}
 }
 
 async function bootApp(): Promise<{
@@ -309,14 +301,13 @@ async function bootApp(): Promise<{
 // 1. placeIn({anchor}) pushes a slot-grant to the authorized wc.
 // ─────────────────────────────────────────────────────────────────────────────
 describe('DeckApp slot-token — placeIn({anchor}) pushes slot-grant', () => {
-	it('1) placeIn(mainWindow,{zone:0,anchor:"#sim"}) sends __electron-deck:slot-grant with a non-empty token + matching viewId', async () => {
+	it('placeIn(mainWindow,{zone:0,anchor:"#sim"}) sends slot-grant with a non-empty token, matching viewId, and a numeric generation', async () => {
 		const { app, electron, mainWc } = await bootApp()
 
 		const handle = withView(app.runtime).view({ source: { url: 'data:text/html,x' } })
-		lastWcv(electron) // ensure a WCV was constructed for this view
+		lastWcv(electron)
 		handle.placeIn(app.runtime.mainWindow, { zone: 0, anchor: '#sim' })
 
-		// The framework pushed a slot-grant to the authorized window's wc.
 		const sendCalls = (mainWc.send as ReturnType<typeof vi.fn>).mock.calls
 			.filter(c => c[0] === SLOT_GRANT_CHANNEL)
 		expect(sendCalls.length).toBe(1)
@@ -327,6 +318,7 @@ describe('DeckApp slot-token — placeIn({anchor}) pushes slot-grant', () => {
 		expect(grant.slotId).toBe('#sim')
 		expect(typeof grant.viewId).toBe('string')
 		expect(grant.viewId.length).toBeGreaterThan(0)
+		expect(typeof grant.generation).toBe('number')
 
 		await app.shutdown()
 	})
@@ -335,20 +327,24 @@ describe('DeckApp slot-token — placeIn({anchor}) pushes slot-grant', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // 2. authorized wc + granted token → setBounds with those bounds.
 // ─────────────────────────────────────────────────────────────────────────────
-describe('DeckApp slot-token — authorized place drives setBounds', () => {
-	it('2) place from the authorized wc with the granted token + visible bounds → WCV setBounds(those bounds)', async () => {
+describe('DeckApp slot-token — authorized snapshot drives setBounds', () => {
+	it('snapshot from the authorized wc with the granted token + visible bounds → WCV setBounds(those bounds)', async () => {
 		const { app, electron, ipcMain, mainWc, mainWcId } = await bootApp()
 
 		const handle = withView(app.runtime).view({ source: { url: 'data:text/html,x' } })
 		const wcv = lastWcv(electron)
 		handle.placeIn(app.runtime.mainWindow, { zone: 0, anchor: '#sim' })
-		const { slotToken } = lastSlotGrant(mainWc)
+		const grant = lastSlotGrant(mainWc)
 
-		const place = getPlaceHandler(ipcMain)
-		await place(mainFrameEvent(mainWcId), {
-			slotToken,
-			placement: { visible: true, bounds: { x: 10, y: 20, width: 300, height: 200 } },
-		})
+		const snapshotHandler = getSnapshotHandler(ipcMain)
+		await snapshotHandler(
+			mainFrameEvent(mainWcId),
+			buildSnapshot(
+				[{ slotToken: grant.slotToken, placement: { visible: true, bounds: { x: 10, y: 20, width: 300, height: 200 } } }],
+				grant.generation,
+				0,
+			),
+		)
 
 		expect(wcv.setBounds).toHaveBeenCalledWith({ x: 10, y: 20, width: 300, height: 200 })
 
@@ -360,7 +356,7 @@ describe('DeckApp slot-token — authorized place drives setBounds', () => {
 // 3. ANTI-SPOOF (security): a different trusted wc using the same token → DROP.
 // ─────────────────────────────────────────────────────────────────────────────
 describe('DeckApp slot-token — anti-spoof (SECURITY)', () => {
-	it('3) place from a DIFFERENT trusted wc using the same token → DROPPED (no setBounds)', async () => {
+	it('snapshot from a DIFFERENT trusted wc using the same token → rejected (no setBounds)', async () => {
 		const { app, electron, ipcMain, mainWc, mainWcId } = await bootApp()
 
 		// Trust a second, unrelated webContents (a different control wc).
@@ -370,15 +366,21 @@ describe('DeckApp slot-token — anti-spoof (SECURITY)', () => {
 		const handle = withView(app.runtime).view({ source: { url: 'data:text/html,x' } })
 		const wcv = lastWcv(electron)
 		handle.placeIn(app.runtime.mainWindow, { zone: 0, anchor: '#sim' })
-		const { slotToken } = lastSlotGrant(mainWc)
+		const grant = lastSlotGrant(mainWc)
 
 		const before = wcv.setBounds.mock.calls.length
-		const place = getPlaceHandler(ipcMain)
-		// otherWc is trusted + main-frame, but is NOT the wc the token was granted to.
-		await place(mainFrameEvent(otherWc.id), {
-			slotToken,
-			placement: { visible: true, bounds: { x: 1, y: 1, width: 50, height: 50 } },
-		})
+		const snapshotHandler = getSnapshotHandler(ipcMain)
+		// otherWc is trusted + main-frame, but NOT the wc the token was granted to.
+		// authorizedWcId !== senderId → token authorization fails → whole snapshot
+		// rejected (non-empty but fully unauthorized → cleanSnapshot returns null).
+		await snapshotHandler(
+			mainFrameEvent(otherWc.id),
+			buildSnapshot(
+				[{ slotToken: grant.slotToken, placement: { visible: true, bounds: { x: 1, y: 1, width: 50, height: 50 } } }],
+				grant.generation,
+				0,
+			),
+		)
 
 		expect(wcv.setBounds.mock.calls.length).toBe(before)
 
@@ -390,20 +392,24 @@ describe('DeckApp slot-token — anti-spoof (SECURITY)', () => {
 // 4. unknown / forged token → DROP.
 // ─────────────────────────────────────────────────────────────────────────────
 describe('DeckApp slot-token — unknown token', () => {
-	it('4) unknown/forged token from the authorized wc → DROPPED (no setBounds)', async () => {
+	it('unknown/forged token from the authorized wc → rejected (no setBounds)', async () => {
 		const { app, electron, ipcMain, mainWc, mainWcId } = await bootApp()
 
 		const handle = withView(app.runtime).view({ source: { url: 'data:text/html,x' } })
 		const wcv = lastWcv(electron)
 		handle.placeIn(app.runtime.mainWindow, { zone: 0, anchor: '#sim' })
-		lastSlotGrant(mainWc) // a real grant exists, but we send a forged token
+		lastSlotGrant(mainWc) // real grant exists, but we send a forged token
 
 		const before = wcv.setBounds.mock.calls.length
-		const place = getPlaceHandler(ipcMain)
-		await place(mainFrameEvent(mainWcId), {
-			slotToken: 'totally-forged-token',
-			placement: { visible: true, bounds: { x: 1, y: 1, width: 50, height: 50 } },
-		})
+		const snapshotHandler = getSnapshotHandler(ipcMain)
+		await snapshotHandler(
+			mainFrameEvent(mainWcId),
+			buildSnapshot(
+				[{ slotToken: 'totally-forged-token', placement: { visible: true, bounds: { x: 1, y: 1, width: 50, height: 50 } } }],
+				0,
+				0,
+			),
+		)
 
 		expect(wcv.setBounds.mock.calls.length).toBe(before)
 
@@ -412,22 +418,26 @@ describe('DeckApp slot-token — unknown token', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 5. NEGATIVE ORIGIN allowed (security/correctness): negative x/y not rejected.
+// 5. NEGATIVE ORIGIN allowed: negative x/y not rejected.
 // ─────────────────────────────────────────────────────────────────────────────
 describe('DeckApp slot-token — negative origin allowed (scroll-follow)', () => {
-	it('5) authorized place with negative x/y bounds → setBounds with the negative origin (NOT rejected)', async () => {
+	it('authorized snapshot with negative x/y bounds → setBounds with the negative origin (NOT rejected)', async () => {
 		const { app, electron, ipcMain, mainWc, mainWcId } = await bootApp()
 
 		const handle = withView(app.runtime).view({ source: { url: 'data:text/html,x' } })
 		const wcv = lastWcv(electron)
 		handle.placeIn(app.runtime.mainWindow, { zone: 0, anchor: '#sim' })
-		const { slotToken } = lastSlotGrant(mainWc)
+		const grant = lastSlotGrant(mainWc)
 
-		const place = getPlaceHandler(ipcMain)
-		await place(mainFrameEvent(mainWcId), {
-			slotToken,
-			placement: { visible: true, bounds: { x: -50, y: -20, width: 300, height: 200 } },
-		})
+		const snapshotHandler = getSnapshotHandler(ipcMain)
+		await snapshotHandler(
+			mainFrameEvent(mainWcId),
+			buildSnapshot(
+				[{ slotToken: grant.slotToken, placement: { visible: true, bounds: { x: -50, y: -20, width: 300, height: 200 } } }],
+				grant.generation,
+				0,
+			),
+		)
 
 		expect(wcv.setBounds).toHaveBeenCalledWith({ x: -50, y: -20, width: 300, height: 200 })
 
@@ -439,25 +449,37 @@ describe('DeckApp slot-token — negative origin allowed (scroll-follow)', () =>
 // 6. visible:false → detach (removeChildView), not setBounds.
 // ─────────────────────────────────────────────────────────────────────────────
 describe('DeckApp slot-token — visible:false detaches', () => {
-	it('6) authorized place with {visible:false} → view detached (removeChildView), no setBounds', async () => {
+	it('authorized snapshot with {visible:false} → view detached (removeChildView), no setBounds', async () => {
 		const { app, electron, ipcMain, mainWc, mainWcId } = await bootApp()
 
 		const mainWin = electron.browserWindows[0] as unknown as FakeBrowserWindow
 		const handle = withView(app.runtime).view({ source: { url: 'data:text/html,x' } })
 		const wcv = lastWcv(electron)
 		handle.placeIn(app.runtime.mainWindow, { zone: 0, anchor: '#sim' })
-		const { slotToken } = lastSlotGrant(mainWc)
+		const grant = lastSlotGrant(mainWc)
 
-		// Make it visible first so there is something to detach.
-		const place = getPlaceHandler(ipcMain)
-		await place(mainFrameEvent(mainWcId), {
-			slotToken,
-			placement: { visible: true, bounds: { x: 0, y: 0, width: 10, height: 10 } },
-		})
+		const snapshotHandler = getSnapshotHandler(ipcMain)
+		// Epoch 0: make it visible first so there is something to detach.
+		await snapshotHandler(
+			mainFrameEvent(mainWcId),
+			buildSnapshot(
+				[{ slotToken: grant.slotToken, placement: { visible: true, bounds: { x: 0, y: 0, width: 10, height: 10 } } }],
+				grant.generation,
+				0,
+			),
+		)
 		const boundsBefore = wcv.setBounds.mock.calls.length
 		const removesBefore = mainWin.contentView.removeChildView.mock.calls.length
 
-		await place(mainFrameEvent(mainWcId), { slotToken, placement: { visible: false } })
+		// Epoch 1: hide it.
+		await snapshotHandler(
+			mainFrameEvent(mainWcId),
+			buildSnapshot(
+				[{ slotToken: grant.slotToken, placement: { visible: false } }],
+				grant.generation,
+				1,
+			),
+		)
 
 		expect(mainWin.contentView.removeChildView.mock.calls.length).toBeGreaterThan(removesBefore)
 		expect(mainWin.contentView.removeChildView).toHaveBeenCalledWith(wcv)
@@ -469,11 +491,10 @@ describe('DeckApp slot-token — visible:false detaches', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 7. REPLAY: layout-subscribe from the authorized wc re-sends its grant; a
-//    DIFFERENT wc's subscribe does NOT re-send this view's grant.
+// 7. REPLAY: layout-subscribe re-sends the grant; different wc does NOT get it.
 // ─────────────────────────────────────────────────────────────────────────────
 describe('DeckApp slot-token — per-wc layout-subscribe replay', () => {
-	it('7) layout-subscribe from the authorized wc re-sends the grant; a different wc does NOT get it', async () => {
+	it('layout-subscribe from the authorized wc re-sends the grant; a different wc does NOT get it', async () => {
 		const { app, electron, ipcMain, mainWc, mainWcId } = await bootApp()
 
 		// Trust a second control wc whose subscribe must NOT receive this grant.
@@ -504,25 +525,29 @@ describe('DeckApp slot-token — per-wc layout-subscribe replay', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 8. token revoked on dispose: a place with the stale token → DROP.
+// 8. token revoked on dispose: a snapshot with the stale token → DROP.
 // ─────────────────────────────────────────────────────────────────────────────
 describe('DeckApp slot-token — token revoked on dispose', () => {
-	it('8) after handle.dispose(), a place with the now-stale token → DROPPED (no setBounds)', async () => {
+	it('after handle.dispose(), a snapshot with the now-stale token → rejected (no setBounds)', async () => {
 		const { app, electron, ipcMain, mainWc, mainWcId } = await bootApp()
 
 		const handle = withView(app.runtime).view({ source: { url: 'data:text/html,x' } })
 		const wcv = lastWcv(electron)
 		handle.placeIn(app.runtime.mainWindow, { zone: 0, anchor: '#sim' })
-		const { slotToken } = lastSlotGrant(mainWc)
+		const grant = lastSlotGrant(mainWc)
 
 		await handle.dispose()
 
 		const before = wcv.setBounds.mock.calls.length
-		const place = getPlaceHandler(ipcMain)
-		await place(mainFrameEvent(mainWcId), {
-			slotToken,
-			placement: { visible: true, bounds: { x: 5, y: 5, width: 5, height: 5 } },
-		})
+		const snapshotHandler = getSnapshotHandler(ipcMain)
+		await snapshotHandler(
+			mainFrameEvent(mainWcId),
+			buildSnapshot(
+				[{ slotToken: grant.slotToken, placement: { visible: true, bounds: { x: 5, y: 5, width: 5, height: 5 } } }],
+				grant.generation,
+				0,
+			),
+		)
 
 		expect(wcv.setBounds.mock.calls.length).toBe(before)
 
@@ -534,7 +559,7 @@ describe('DeckApp slot-token — token revoked on dispose', () => {
 // 9. back-compat: placeIn WITHOUT anchor → no slot-grant sent.
 // ─────────────────────────────────────────────────────────────────────────────
 describe('DeckApp slot-token — placeIn without anchor (back-compat)', () => {
-	it('9) placeIn(mainWindow,{zone:0}) with NO anchor → no __electron-deck:slot-grant sent', async () => {
+	it('placeIn(mainWindow,{zone:0}) with NO anchor → no slot-grant sent', async () => {
 		const { app, electron, mainWc } = await bootApp()
 
 		const handle = withView(app.runtime).view({ source: { url: 'data:text/html,x' } })

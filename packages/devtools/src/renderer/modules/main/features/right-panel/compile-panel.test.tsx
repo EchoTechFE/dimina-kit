@@ -9,9 +9,11 @@
  *  - Empty state: no events → copy matching /暂无编译/, no rows.
  *  - Current-status badge: `[data-compile-current]` reflects the LATEST
  *    event — `data-status` attribute = its status, text contains its message.
- *  - History list: rows are `[data-compile-row]`, rendered NEWEST FIRST
- *    (reverse of the input array), each carrying `data-status` (the styling
- *    hook that makes error rows distinguishable) and an HH:MM:SS timestamp.
+ *  - History list: rows are `[data-compile-row]`, rendered OLDEST FIRST
+ *    (chronological, matching the input array — the panel is a console-style
+ *    log that auto-scrolls to the newest row at the bottom), each carrying
+ *    `data-status` (the styling hook that makes error rows distinguishable)
+ *    and an HH:MM:SS timestamp.
  *  - hotReload events render a recognizable 热更新 chip; plain events don't.
  *  - A ready event immediately preceded by a compiling event shows the
  *    elapsed time in `[data-compile-duration]` (e.g. 2.2s); unpaired ready
@@ -101,7 +103,7 @@ describe('CompilePanel (编译 tab body)', () => {
     expect(badge!.textContent).toContain('编译完成（最新）')
   })
 
-  it('lists history NEWEST FIRST with an HH:MM:SS timestamp and the message on each row', async () => {
+  it('lists history OLDEST FIRST with an HH:MM:SS timestamp and the message on each row', async () => {
     const { container } = await renderPanel([
       { at: at(9, 5, 7), status: 'compiling', message: '第一条' },
       { at: at(9, 5, 9), status: 'ready', message: '第二条' },
@@ -111,11 +113,11 @@ describe('CompilePanel (编译 tab body)', () => {
     expect(rows).toHaveLength(2)
     expect(
       rows[0]!.textContent,
-      'rows must be reverse-chronological: the newest event is the first row',
-    ).toContain('第二条')
-    expect(rows[0]!.textContent).toMatch(/09:05:09/)
-    expect(rows[1]!.textContent).toContain('第一条')
-    expect(rows[1]!.textContent).toMatch(/09:05:07/)
+      'rows must be chronological: the oldest event is the first row',
+    ).toContain('第一条')
+    expect(rows[0]!.textContent).toMatch(/09:05:07/)
+    expect(rows[1]!.textContent).toContain('第二条')
+    expect(rows[1]!.textContent).toMatch(/09:05:09/)
   })
 
   it('marks error rows distinguishably via data-status="error"', async () => {
@@ -126,12 +128,12 @@ describe('CompilePanel (编译 tab body)', () => {
 
     const rows = rowsOf(container)
     expect(rows).toHaveLength(2)
-    // Newest first → the error event is row 0.
+    // Oldest first → the error event is the last row.
     expect(
-      rows[0]!.getAttribute('data-status'),
+      rows[1]!.getAttribute('data-status'),
       'error rows must carry data-status="error" so they can be styled (and asserted) distinctly',
     ).toBe('error')
-    expect(rows[1]!.getAttribute('data-status')).toBe('ready')
+    expect(rows[0]!.getAttribute('data-status')).toBe('ready')
   })
 
   it('renders a 热更新 chip on hotReload events only', async () => {
@@ -142,12 +144,13 @@ describe('CompilePanel (编译 tab body)', () => {
 
     const rows = rowsOf(container)
     expect(rows).toHaveLength(2)
+    // Oldest first → the hotReload event is the last row.
     expect(
-      rows[0]!.textContent,
+      rows[1]!.textContent,
       'a hotReload event must carry a recognizable 热更新 marker',
     ).toMatch(/热更新/)
     expect(
-      rows[1]!.textContent,
+      rows[0]!.textContent,
       'plain events must NOT carry the 热更新 marker',
     ).not.toMatch(/热更新/)
   })
@@ -160,7 +163,8 @@ describe('CompilePanel (编译 tab body)', () => {
     ])
 
     const rows = rowsOf(container)
-    const duration = rows[0]!.querySelector<HTMLElement>('[data-compile-duration]')
+    // Oldest first → the paired ready event is the last row.
+    const duration = rows[1]!.querySelector<HTMLElement>('[data-compile-duration]')
     expect(
       duration,
       'a ready row paired with the previous compiling row must show the elapsed time in [data-compile-duration]',

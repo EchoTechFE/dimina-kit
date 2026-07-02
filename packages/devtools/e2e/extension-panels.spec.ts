@@ -42,12 +42,10 @@ test.describe('Extension Panels Data Bridge', () => {
 
   test('WXML panel renders in main window after tab switch', async ({ mainWindow }) => {
     await mainWindow.getByRole('tab', { name: 'WXML' }).click()
-    // Scope to the WXML panel: AppDataPanel stays keepalive-mounted with its
-    // own "↻ 刷新" button, so a global text locator hits 2 elements.
-    const wxmlRefresh = mainWindow.getByTestId('wxml-panel').locator('button:has-text("↻ 刷新")')
-    await wxmlRefresh.waitFor({ timeout: 8000 })
-    // Trigger a fresh fetch — without this we'd race the initial wxml IPC.
-    await wxmlRefresh.click()
+    // The WXML panel has no manual refresh button (it's live): it seeds on
+    // activation and stays reactive via the render-guest DOM observer. Wait for
+    // the panel container, then poll for the tree.
+    await mainWindow.getByTestId('wxml-panel').waitFor({ timeout: 8000 })
 
     // Assert the tree actually renders (not the "等待小程序加载..." empty
     // state). demo-app index.wxml has a <view class="container">, which the
@@ -67,8 +65,9 @@ test.describe('Extension Panels Data Bridge', () => {
 
   test('Storage panel renders in main window after tab switch', async ({ mainWindow }) => {
     await mainWindow.getByRole('tab', { name: 'Storage' }).click()
-    // Scope to StoragePanel：AppDataPanel keepalive 挂载着另一个「↻ 刷新」按钮。
-    await mainWindow.getByTestId('storage-panel').locator('button:has-text("↻ 刷新")').waitFor({ timeout: 8000 })
+    // The Storage panel has no manual refresh button (it's live). Wait for the
+    // panel container to mount.
+    await mainWindow.getByTestId('storage-panel').waitFor({ timeout: 8000 })
 
     // Under native-host the Storage panel is sourced from the main-process
     // service-host `file://` store (serviceStorage), NOT the simulator
@@ -93,7 +92,7 @@ test.describe('Extension Panels Data Bridge', () => {
     expect(set?.ok, 'Set should succeed against the service-host store').toBe(true)
 
     // The synthetic `added` event pushed after the write keeps the panel
-    // reactive; the refresh button (and GetSnapshot) provide a fallback.
+    // reactive; the panel also seeds via GetSnapshot on activation/ready.
     // Assert the key renders in the panel DOM — this catches a regression of
     // the panel never receiving service-host storage data after a tab switch.
     const text = await pollUntil(
@@ -109,8 +108,7 @@ test.describe('Extension Panels Data Bridge', () => {
     await mainWindow.waitForTimeout(500)
 
     const hasPanel = await mainWindow.evaluate(() => {
-      return document.body.innerText.includes('刷新') ||
-             document.body.innerText.includes('暂无数据') ||
+      return document.body.innerText.includes('暂无页面数据') ||
              document.body.innerText.includes('setData')
     })
 

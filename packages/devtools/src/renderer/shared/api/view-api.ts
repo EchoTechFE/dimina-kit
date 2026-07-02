@@ -6,6 +6,7 @@ import {
   WindowChannel,
   ViewChannel,
 } from '../../../shared/ipc-channels'
+import type { PlacementSnapshot } from '@dimina-kit/electron-deck/layout'
 import { invoke, on } from './ipc-transport'
 
 export interface PopoverInitPayload {
@@ -39,22 +40,6 @@ export function attachNativeSimulator(simulatorUrl: string, simWidth: number): P
 /** Detach the Chromium DevTools view. */
 export function detachSimulator(): Promise<void> {
   return invoke<void>(SimulatorChannel.Detach)
-}
-
-/**
- * NATIVE-HOST ONLY. Report the device-bezel inner-screen rect (CSS px from the
- * main window content top-left, i.e. `getBoundingClientRect()` left/top) plus
- * the device zoom percent so the main process can overlay the simulator
- * WebContentsView precisely on the bezel and scale the nested render-host page.
- */
-export function setNativeSimulatorBounds(p: {
-  x: number
-  y: number
-  width: number
-  height: number
-  zoom: number
-}): Promise<void> {
-  return invoke<void>(SimulatorChannel.SetNativeBounds, p)
 }
 
 /**
@@ -117,33 +102,16 @@ export function onSimulatorCurrentPage(handler: (pagePath: string) => void): () 
 }
 
 /**
- * Publish the simulator Chromium-DevTools placeholder's measured rectangle.
- * `width: 0, height: 0` means the overlay is hidden (e.g. the Console tab is
- * not selected) — the main process removes it from the contentView.
+ * Publish the window-level placement snapshot: the full desired-placement table
+ * for every managed native view in this commit tick (one monotonic epoch,
+ * `generation` per renderer lifetime). The renderer's central placement
+ * publisher coalesces per-frame; main reconciles this against its actual view
+ * tree. Single source of truth superseding the per-view bounds publishers.
  */
-export function publishSimulatorDevtoolsBounds(bounds: ViewBounds): Promise<void> {
-  return invoke<void>(ViewChannel.SimulatorDevtoolsBounds, bounds)
-}
-
-/**
- * Publish the embedded workbench editor placeholder's measured rectangle so
- * the main process overlays the workbench WebContentsView precisely. `width: 0,
- * height: 0` means the slot is hidden (the editor tab is not selected) — the
- * main process removes the view from the contentView but keeps it alive. Only
- * called when the host opts into the workbench editor.
- */
-export function publishWorkbenchBounds(bounds: ViewBounds): Promise<void> {
-  return invoke<void>(ViewChannel.WorkbenchBounds, bounds)
-}
-
-/**
- * Publish the host-controllable toolbar placeholder's measured rectangle so the
- * main process can overlay the toolbar WebContentsView precisely. `width: 0,
- * height: 0` means the placeholder is absent (the reserved height is 0) — the
- * main process removes the toolbar view from the contentView.
- */
-export function publishHostToolbarBounds(bounds: ViewBounds): Promise<void> {
-  return invoke<void>(ViewChannel.HostToolbarBounds, bounds)
+export function publishPlacementSnapshot(
+  snapshot: PlacementSnapshot<{ zoom?: number }>,
+): Promise<void> {
+  return invoke<void>(ViewChannel.PlacementSnapshot, snapshot)
 }
 
 /**

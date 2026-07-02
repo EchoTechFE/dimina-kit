@@ -28,6 +28,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import path from 'path'
 import { createConnectionRegistry } from '@dimina-kit/electron-deck/main'
+import { hostToolbarBounds } from './placement-test-driver.js'
 
 /** The process-level marker injected into the toolbar WCV's argv. */
 const MARKER = '--dimina-host-toolbar'
@@ -259,7 +260,7 @@ describe('R1/A.2 — runtime preload registered on defaultSession (once, ref-cou
 
     await mgr.hostToolbar.loadURL('https://a.test')
     await mgr.hostToolbar.loadFile('/abs/toolbar.html')
-    mgr.setHostToolbarBounds({ x: 0, y: 0, width: 1280, height: 48 })
+    hostToolbarBounds(mgr,{ x: 0, y: 0, width: 1280, height: 48 })
 
     expect(h.registerPreloadScript).toHaveBeenCalledTimes(1)
   })

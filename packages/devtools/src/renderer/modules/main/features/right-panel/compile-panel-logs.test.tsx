@@ -8,7 +8,7 @@
  *    oldest-first like `events`). Optional + default empty, so a render
  *    without `logs` keeps its exact behaviour (incl. the 暂无编译 empty state).
  *  - Log lines render as part of ONE timeline merged with events by `at`
- *    (newest first, matching the event row order). Merging is a VIEW
+ *    (oldest first, matching the event row order). Merging is a VIEW
  *    concern — state stays isolated in useSession.
  *  - Log rows are identifiable: `[data-compile-log]` carrying
  *    `data-stream="stdout" | "stderr"` (the styling hook that makes stderr
@@ -136,7 +136,7 @@ describe('CompilePanel: logs prop (ROUND 2 — dmcc 日志链路)', () => {
     ).toBe('stderr')
   })
 
-  it('merges events and logs into ONE timeline ordered by `at`, newest first', async () => {
+  it('merges events and logs into ONE timeline ordered by `at`, oldest first', async () => {
     const { container } = await renderPanel(
       [
         { at: at(10, 0, 0), status: 'compiling', message: '事件一' },
@@ -154,10 +154,10 @@ describe('CompilePanel: logs prop (ROUND 2 — dmcc 日志链路)', () => {
       'events ([data-compile-row]) and logs ([data-compile-log]) must interleave in one timeline',
     ).toHaveLength(4)
     const indexOf = (needle: string) => texts.findIndex((t) => t.includes(needle))
-    expect(indexOf('日志二')).toBe(0)
-    expect(indexOf('事件二')).toBe(1)
-    expect(indexOf('日志一')).toBe(2)
-    expect(indexOf('事件一')).toBe(3)
+    expect(indexOf('事件一')).toBe(0)
+    expect(indexOf('日志一')).toBe(1)
+    expect(indexOf('事件二')).toBe(2)
+    expect(indexOf('日志二')).toBe(3)
   })
 
   it('shows an HH:MM:SS timestamp on log rows (same format as event rows)', async () => {
@@ -214,7 +214,7 @@ describe('CompilePanel: logs prop (ROUND 2 — dmcc 日志链路)', () => {
  * logs no matter which actually arrived first. The pin: ties keep ARRIVAL
  * order (the suggested carrier is a shared monotonic `seq` across both
  * stores; any equivalent arrival marker works — only the rendered order is
- * pinned). Across different `at` values the newest-first order is untouched.
+ * pinned). Across different `at` values the oldest-first order is untouched.
  */
 describe('CompilePanel: same-at ties keep arrival order, not type priority', () => {
   const T = at(14, 30, 0)
@@ -258,7 +258,7 @@ describe('CompilePanel: same-at ties keep arrival order, not type priority', () 
     ).toBeLessThan(logIndex)
   })
 
-  it('different `at` values keep the existing newest-first order regardless of seq', async () => {
+  it('different `at` values keep the existing oldest-first order regardless of seq', async () => {
     const { container } = await renderPanel(
       [{ at: at(14, 30, 5), seq: 0, status: 'ready', message: '编译完成' }],
       [{ at: at(14, 30, 1), seq: 1, stream: 'stdout', text: '✔ 收集配置信息' }],
@@ -268,9 +268,9 @@ describe('CompilePanel: same-at ties keep arrival order, not type priority', () 
     const eventIndex = texts.findIndex((t) => t.includes('编译完成'))
     const logIndex = texts.findIndex((t) => t.includes('✔ 收集配置信息'))
     expect(
-      eventIndex,
+      logIndex,
       'the arrival tie-break must only apply WITHIN a same-at tie — across different `at` values the timeline '
-      + 'stays newest-first',
-    ).toBeLessThan(logIndex)
+      + 'stays oldest-first (the earlier log at 14:30:01 renders above the later event at 14:30:05)',
+    ).toBeLessThan(eventIndex)
   })
 })

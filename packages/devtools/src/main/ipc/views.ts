@@ -2,7 +2,7 @@ import type { IpcMainEvent } from 'electron'
 import { ipcMain } from 'electron'
 import { ViewChannel } from '../../shared/ipc-channels.js'
 import {
-  ViewBoundsSchema,
+  PlacementSnapshotSchema,
   HostToolbarAdvertiseHeightSchema,
 } from '../../shared/ipc-schemas.js'
 // eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
@@ -30,36 +30,17 @@ export function registerViewsIpc(
   ctx: Pick<WorkbenchContext, 'views' | 'senderPolicy'>,
 ): Disposable {
   const registry = new IpcRegistry(ctx.senderPolicy)
-    .handle(ViewChannel.SimulatorDevtoolsBounds, (_event, ...args: unknown[]) => {
-      const [bounds] = validate(
-        ViewChannel.SimulatorDevtoolsBounds,
-        ViewBoundsSchema,
+    // Window-level placement snapshot: the single source of truth for every
+    // managed native view's bounds/visibility/z-order. The renderer's central
+    // publisher coalesces one snapshot per frame; the reconciler diffs it
+    // against the actual view tree. Supersedes the per-view bounds channels.
+    .handle(ViewChannel.PlacementSnapshot, (_event, ...args: unknown[]) => {
+      const [snapshot] = validate(
+        ViewChannel.PlacementSnapshot,
+        PlacementSnapshotSchema,
         args,
       )
-      ctx.views.setSimulatorDevtoolsBounds(bounds)
-    })
-    // Embedded workbench editor: forward anchor (the MAIN renderer measures
-    // the 'editor' dock slot rect → workbench WCV bounds). invoke, mirroring
-    // SimulatorDevtoolsBounds. No-op in the view manager when the workbench view
-    // was never attached (the host did not opt into the workbench editor).
-    .handle(ViewChannel.WorkbenchBounds, (_event, ...args: unknown[]) => {
-      const [bounds] = validate(
-        ViewChannel.WorkbenchBounds,
-        ViewBoundsSchema,
-        args,
-      )
-      ctx.views.setWorkbenchBounds(bounds)
-    })
-    // Host-controllable toolbar: forward anchor (the MAIN renderer measures the
-    // placeholder rect → toolbar WCV bounds). invoke, mirroring
-    // SimulatorDevtoolsBounds. Sender is the trusted main renderer.
-    .handle(ViewChannel.HostToolbarBounds, (_event, ...args: unknown[]) => {
-      const [bounds] = validate(
-        ViewChannel.HostToolbarBounds,
-        ViewBoundsSchema,
-        args,
-      )
-      ctx.views.setHostToolbarBounds(bounds)
+      ctx.views.setPlacementSnapshot(snapshot)
     })
     // Height replay pull: a freshly-mounted main-renderer placeholder asks for
     // the last NOTIFIED toolbar height (main retains it — the toolbar's

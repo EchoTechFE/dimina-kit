@@ -6,7 +6,6 @@ interface StorageItem { key: string; value: unknown }
 
 export interface StoragePanelProps {
   items: StorageItem[]
-  onRefresh: () => void
   onSet: (key: string, value: string) => Promise<StorageWriteResult>
   onRemove: (key: string) => Promise<StorageWriteResult>
   onClear: () => Promise<StorageWriteResult>
@@ -26,7 +25,6 @@ function toEditableString(value: unknown): string {
 
 export function StoragePanel({
   items,
-  onRefresh,
   onSet,
   onRemove,
   onClear,
@@ -113,15 +111,6 @@ export function StoragePanel({
   return (
     <div className="flex flex-col overflow-hidden flex-1" data-testid="storage-panel">
       <div className="flex items-center gap-1.5 px-2.5 py-1.5 border-b border-border-subtle shrink-0 bg-bg-panel">
-        <Button
-          variant="outline"
-          size="xs"
-          onClick={onRefresh}
-          disabled={busy}
-          className="hover:border-accent hover:text-accent"
-        >
-          ↻ 刷新
-        </Button>
         <Button
           variant="outline"
           size="xs"
