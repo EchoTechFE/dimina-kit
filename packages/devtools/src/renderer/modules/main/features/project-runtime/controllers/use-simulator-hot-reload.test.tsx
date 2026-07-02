@@ -44,6 +44,10 @@ function emitCurrentPage(pagePath: string): void {
 vi.mock('@/shared/api', () => {
   return {
     attachNativeSimulator: attachNativeSimulatorMock,
+    // Soft reload is declined here (resolves false), so every token bump falls
+    // back to the hard attach path these tests assert on. The soft-accepted
+    // branch is covered by use-simulator-soft-reload.test.tsx.
+    softReloadNativeSimulator: vi.fn(async () => false),
     captureThumbnail: vi.fn(async () => null),
     onSimulatorCurrentPage: vi.fn((handler: (pagePath: string) => void) => {
       currentPageListeners.push(handler)
@@ -106,6 +110,22 @@ function renderSimulator(base: ReturnType<typeof makeBaseProps>) {
   )
 }
 
+/**
+ * Bump the token and flush the microtask the soft-reload decision runs in —
+ * the hard re-attach these tests assert on is the fallback after
+ * `softReloadNativeSimulator` (mocked above to decline) resolves.
+ */
+async function rerenderWithToken(
+  rerender: (arg: { props: ReturnType<typeof makeBaseProps> }) => void,
+  props: ReturnType<typeof makeBaseProps>,
+): Promise<void> {
+  await act(async () => {
+    rerender({ props })
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+}
+
 /** Decode the URL handed to the last `attachNativeSimulator` call. */
 function lastAttachUrl(): string {
   const calls = attachNativeSimulatorMock.mock.calls as unknown as unknown[][]
@@ -142,7 +162,7 @@ describe('useSimulator: hotReloadToken → native re-attach (resurrected PR#12 g
     ).toHaveBeenCalledTimes(1)
   })
 
-  it('a token bump re-attaches EXACTLY once, at the current page, without the startPage queryParams', () => {
+  it('a token bump re-attaches EXACTLY once, at the current page, without the startPage queryParams', async () => {
     const base = makeBaseProps()
     const { rerender } = renderSimulator(base)
     expect(attachNativeSimulatorMock).toHaveBeenCalledTimes(1)
@@ -154,7 +174,7 @@ describe('useSimulator: hotReloadToken → native re-attach (resurrected PR#12 g
     attachNativeSimulatorMock.mockClear()
 
     // Watcher rebuild completed → session bumps the token.
-    rerender({ props: { ...base, hotReloadToken: 1 } })
+    await rerenderWithToken(rerender, { ...base, hotReloadToken: 1 })
 
     expect(
       attachNativeSimulatorMock,
@@ -171,13 +191,13 @@ describe('useSimulator: hotReloadToken → native re-attach (resurrected PR#12 g
     expect(route!.entry.query).not.toHaveProperty('foo')
   })
 
-  it('a token bump with no prior navigation re-attaches at the startPage with its queryParams intact', () => {
+  it('a token bump with no prior navigation re-attaches at the startPage with its queryParams intact', async () => {
     const base = makeBaseProps()
     const { rerender } = renderSimulator(base)
     const initialUrl = lastAttachUrl()
     attachNativeSimulatorMock.mockClear()
 
-    rerender({ props: { ...base, hotReloadToken: 1 } })
+    await rerenderWithToken(rerender, { ...base, hotReloadToken: 1 })
 
     expect(attachNativeSimulatorMock).toHaveBeenCalledTimes(1)
     const route = parseRoute(lastAttachUrl())
@@ -188,14 +208,14 @@ describe('useSimulator: hotReloadToken → native re-attach (resurrected PR#12 g
     expect(lastAttachUrl()).toBe(initialUrl)
   })
 
-  it('repeated rerenders at the SAME bumped token value re-attach only once', () => {
+  it('repeated rerenders at the SAME bumped token value re-attach only once', async () => {
     const base = makeBaseProps()
     const { rerender } = renderSimulator(base)
     attachNativeSimulatorMock.mockClear()
 
-    rerender({ props: { ...base, hotReloadToken: 1 } })
-    rerender({ props: { ...base, hotReloadToken: 1 } })
-    rerender({ props: { ...base, hotReloadToken: 1 } })
+    await rerenderWithToken(rerender, { ...base, hotReloadToken: 1 })
+    await rerenderWithToken(rerender, { ...base, hotReloadToken: 1 })
+    await rerenderWithToken(rerender, { ...base, hotReloadToken: 1 })
 
     expect(
       attachNativeSimulatorMock,
@@ -203,13 +223,13 @@ describe('useSimulator: hotReloadToken → native re-attach (resurrected PR#12 g
     ).toHaveBeenCalledTimes(1)
   })
 
-  it('each successive token bump re-attaches once more (N rebuilds → N reloads)', () => {
+  it('each successive token bump re-attaches once more (N rebuilds → N reloads)', async () => {
     const base = makeBaseProps()
     const { rerender } = renderSimulator(base)
     attachNativeSimulatorMock.mockClear()
 
-    rerender({ props: { ...base, hotReloadToken: 1 } })
-    rerender({ props: { ...base, hotReloadToken: 2 } })
+    await rerenderWithToken(rerender, { ...base, hotReloadToken: 1 })
+    await rerenderWithToken(rerender, { ...base, hotReloadToken: 2 })
 
     expect(attachNativeSimulatorMock).toHaveBeenCalledTimes(2)
   })

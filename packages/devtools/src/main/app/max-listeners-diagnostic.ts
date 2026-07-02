@@ -72,8 +72,11 @@ export function describeMaxListenersWarning(warning: Error): MaxListenersWarning
  * Other warning kinds pass through untouched.
  */
 export function installMaxListenersWarningDiagnostic(
+  // Single-line JSON: the report must survive line-oriented stderr capture
+  // (the e2e MaxListeners gate collects matching LINES; a multi-line object
+  // print loses the identity fields).
   log: (report: MaxListenersWarningReport) => void = (r) =>
-    console.warn('[max-listeners]', r),
+    console.warn('[max-listeners]', JSON.stringify(r)),
 ): () => void {
   const onWarning = (warning: Error): void => {
     const report = describeMaxListenersWarning(warning)

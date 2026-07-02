@@ -52,7 +52,25 @@ export const SIMULATOR_EVENTS = {
    * synchronously at preload bridge-install); this event covers live changes.
    */
   DEVICE_CHANGE: 'simulator:device-change',
+  /**
+   * main → simulator: a watcher rebuild finished; boot a NEW app session for
+   * the carried url ({@link RelaunchPayload}) IN PLACE, keeping the live
+   * DeviceShell painted, and swap once the new session's root page reports
+   * DOM_READY (ready-then-swap soft reload). Main sends this only when the
+   * shell is live+ready; otherwise the renderer falls back to the hard
+   * attachNativeSimulator rebuild.
+   */
+  RELAUNCH: 'simulator:relaunch',
 } as const
+
+/**
+ * `simulator:relaunch` payload. `url` is a full simulator URL (same format as
+ * the simulator page's own location / AttachNative), carrying the appId and
+ * the page route the new session must boot at.
+ */
+export interface RelaunchPayload {
+  url: string
+}
 
 export const CHANNELS = BRIDGE_CHANNELS
 

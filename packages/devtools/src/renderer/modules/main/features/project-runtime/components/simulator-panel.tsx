@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Select } from '@/shared/components/ui/select'
 import { createPlacementAnchor, type Placement, type PlacementAnchorHandle } from '@dimina-kit/view-anchor'
 import { usePlacementPublisher } from '../placement-publisher-context'
@@ -66,6 +66,18 @@ export function SimulatorPanel({
   // re-publish.
   const zoomRef = useRef(zoom)
   const anchorHandleRef = useRef<PlacementAnchorHandle | null>(null)
+
+  // Whether the simulator has reached 'ready' at least once since mount. The
+  // first compile has NOTHING to show behind it, so 'compiling' blanks the
+  // region with a full overlay. A RECOMPILE, by contrast, keeps the live phone
+  // shell painted underneath — blanking it would flash the whole device away on
+  // every save. So once ready, a subsequent 'compiling' shows only a
+  // non-blocking corner indicator and the frozen previous frame stays visible.
+  const [hasBeenReady, setHasBeenReady] = useState(false)
+  useEffect(() => {
+    if (compileStatus.status === 'ready') setHasBeenReady(true)
+  }, [compileStatus.status])
+  const isRecompile = compileStatus.status === 'compiling' && hasBeenReady
 
   const publisher = usePlacementPublisher()
   // Placement flows to the central publisher; zoom rides in `extra` (the
@@ -183,9 +195,21 @@ export function SimulatorPanel({
             attachNativeSimulator) painted over this placeholder region — it
             hosts DeviceShell, which draws the whole phone and scrolls it
             natively, so the renderer never renders a `<webview>` here. */}
-        {compileStatus.status === 'compiling' && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-10">
+        {compileStatus.status === 'compiling' && !hasBeenReady && (
+          <div
+            data-testid="sim-compiling-overlay"
+            className="absolute inset-0 flex items-center justify-center bg-black/50 z-10"
+          >
             <div className="text-text-dim text-[13px]">正在编译中...</div>
+          </div>
+        )}
+        {isRecompile && (
+          <div
+            data-testid="sim-recompiling-indicator"
+            className="absolute top-2 right-2 z-10 flex items-center gap-1.5 rounded bg-black/60 px-2 py-0.5 pointer-events-none"
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
+            <span className="text-text-dim text-[11px]">编译中…</span>
           </div>
         )}
         {compileStatus.status === 'error' && (

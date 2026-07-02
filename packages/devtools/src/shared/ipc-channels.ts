@@ -18,6 +18,12 @@ export const SimulatorChannel = {
   // window — the authoritative `wx.getSystemInfoSync()` source — so the
   // mini-app sees the selected device without a relaunch.
   SetDeviceInfo: 'simulator:set-device-info',
+  // Ask main to soft-reload the LIVE simulator WCV after a watcher rebuild:
+  // main forwards a SIMULATOR_EVENTS.RELAUNCH into the shell (which boots a
+  // new app session and swaps when ready) instead of destroying the view.
+  // Resolves false when there is no live+ready shell — the renderer then falls
+  // back to the hard AttachNative rebuild.
+  SoftReload: 'simulator:soft-reload',
   Detach: 'simulator:detach',
   Console: 'simulator:console',
   // Main → renderer push of the visible top-of-stack page route whenever the

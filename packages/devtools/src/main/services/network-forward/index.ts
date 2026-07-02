@@ -64,6 +64,7 @@
  */
 import type { WebContents } from 'electron'
 import { DisposableRegistry, toDisposable, type ConnectionRegistry, type Disposable } from '@dimina-kit/electron-deck/main'
+import { isFrontendSettled } from '../views/inject-when-ready.js'
 
 /** Which layer a captured request came from (tags the fallback log line). */
 export type NetworkSource = 'service' | 'render'
@@ -524,6 +525,18 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
       // Host went away mid-flight. Keep the queue bounded (the cap applies on
       // EVERY path, not just no-host) and wait — setDevtoolsHost re-arms probing.
       trimQueue()
+      return
+    }
+    if (!isFrontendSettled(wc)) {
+      // An unsettled front-end can't run the dispatch script anyway — and every
+      // executeJavaScript against it queues one did-stop-loading waiter on the
+      // emitter, so a relaunch's network burst piles them past the MaxListeners
+      // ceiling. MUST be the shared Electron-aligned predicate (a bare
+      // isLoading() probe diverges from the internal isLoadingMainFrame gate).
+      // Hold the (bounded) queue; the next event's flush or the ready-retry
+      // delivers after the load.
+      trimQueue()
+      scheduleReadyRetry()
       return
     }
     if (sink === 'idle') beginProbing()

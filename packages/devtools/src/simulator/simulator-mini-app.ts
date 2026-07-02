@@ -312,6 +312,24 @@ export class SimulatorMiniApp {
     return getNativeHost().onSimulatorEvent<T>(channel, listener)
   }
 
+  /**
+   * Session-scoped variant of {@link onSimulatorEvent}: drops payloads that
+   * name a DIFFERENT app session. During a soft reload two DeviceShells (the
+   * live one + the incoming one) share one simulator WCV, and every
+   * SIMULATOR_EVENTS broadcast reaches both — without this filter a
+   * session-scoped event (API_CALL / NAV_ACTION / TAB_ACTION) is executed by
+   * BOTH shells, e.g. a wx.request issued by the incoming session's onLoad
+   * fires twice. Payloads without an `appSessionId` field (DEVICE_CHANGE) pass
+   * through unfiltered.
+   */
+  onSessionEvent<T = unknown>(channel: string, listener: (payload: T) => void): () => void {
+    return this.onSimulatorEvent<T>(channel, (payload) => {
+      const sid = (payload as { appSessionId?: unknown } | null | undefined)?.appSessionId
+      if (typeof sid === 'string' && sid !== this.appSessionId) return
+      listener(payload)
+    })
+  }
+
   private requireAppSessionId(): string {
     if (!this.appSessionId) {
       throw new Error('[simulator] miniApp has not been spawned yet')

@@ -9,6 +9,7 @@ import {
   attachNativeSimulator,
   captureThumbnail,
   onSimulatorCurrentPage,
+  softReloadNativeSimulator,
 } from '@/shared/api'
 import type { AppInfo } from '@/shared/api'
 import {
@@ -133,22 +134,47 @@ export function useSimulator(props: UseSimulatorProps): SimulatorHookResult {
     let cancelled = false
     let captureTimer: number | null = null
 
-    void attachNativeSimulator(attachUrl, simPanelWidthRef.current!)
-      .then(() => {
-        if (cancelled) return
-        // Main resolves attach only after the first render guest's
-        // did-finish-load. Debounce from that real readiness point so the page
-        // gets a short paint grace period without guessing from attach start.
-        captureTimer = window.setTimeout(() => {
-          if (!cancelled) {
-            void captureThumbnail(projectPath).catch(() => {})
+    const scheduleThumbnail = (): void => {
+      if (cancelled) return
+      // Short paint grace period from the readiness point (hard path: attach
+      // resolves at the first render guest's did-finish-load; soft path: the
+      // in-place swap completes well within it).
+      captureTimer = window.setTimeout(() => {
+        if (!cancelled) {
+          void captureThumbnail(projectPath).catch(() => {})
+        }
+      }, 3_000)
+    }
+
+    const hardAttach = (): void => {
+      void attachNativeSimulator(attachUrl, simPanelWidthRef.current!)
+        .then(scheduleThumbnail)
+        .catch(() => {
+          // Attach failures are surfaced by the simulator path. Thumbnail
+          // capture is best-effort and must not add an unhandled rejection.
+        })
+    }
+
+    if (isHotReload) {
+      // Soft-first: ask main to RELAUNCH the live DeviceShell in place (the
+      // phone shell never unmounts; the new session swaps in when ready). Only
+      // `true` means accepted — anything else (no live+ready shell, lenient
+      // invoke swallowing a failure) falls back to the hard rebuild.
+      void softReloadNativeSimulator(attachUrl)
+        .then((accepted) => {
+          if (cancelled) return
+          if (accepted === true) {
+            scheduleThumbnail()
+            return
           }
-        }, 3_000)
-      })
-      .catch(() => {
-        // Attach failures are surfaced by the simulator path. Thumbnail capture
-        // is best-effort and must not add an unhandled rejection.
-      })
+          hardAttach()
+        })
+        .catch(() => {
+          if (!cancelled) hardAttach()
+        })
+    } else {
+      hardAttach()
+    }
 
     return () => {
       cancelled = true

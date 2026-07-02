@@ -143,7 +143,7 @@ export function DeviceShell({
         callbacks: payload.callbacks,
       })
     }
-    return miniApp.onSimulatorEvent(E.TAB_ACTION, listener)
+    return miniApp.onSessionEvent(E.TAB_ACTION, listener)
   }, [miniApp])
 
   // ── Routing controller (navigateTo / Back / redirectTo / reLaunch / switchTab) ─
@@ -181,7 +181,7 @@ export function DeviceShell({
     const listener = (payload: NavActionPayload) => {
       void performNavAction(payload)
     }
-    return miniApp.onSimulatorEvent(E.NAV_ACTION, listener)
+    return miniApp.onSessionEvent(E.NAV_ACTION, listener)
   }, [performNavAction, miniApp])
 
   // ── invokeAPI fallback (main → simulator) ──────────────────────────────────
@@ -206,7 +206,7 @@ export function DeviceShell({
         })
       })
     }
-    return miniApp.onSimulatorEvent(E.API_CALL, listener)
+    return miniApp.onSessionEvent(E.API_CALL, listener)
   }, [miniApp])
 
   // ── Click handlers (back arrow + tab item) ────────────────────────────────
