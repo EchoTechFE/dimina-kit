@@ -8,6 +8,8 @@
   "exports": {
     ".": "./dist/compile-core.node.js",
     "./browser": "./dist/compile-core.browser.js",
+    "./pool": "./dist/pool.browser.js",
+    "./stage-worker": "./dist/stage-worker.browser.js",
     "./package.json": "./package.json"
   },
   "files": [
@@ -32,13 +34,13 @@
     "esbuild-wasm": "^0.28.0",
     "estree-walker": "^3.0.3",
     "events": "^3.3.0",
+    "memfs": "^4.57.8",
     "oxc-parser": "^0.137.0",
     "path-browserify": "^1.0.1",
     "stream-browserify": "^3.0.0",
     "util": "^0.12.5"
   },
   "devDependencies": {
-    "esbuild": "^0.28.0",
-    "memfs": "^4.57.8"
+    "esbuild": "^0.28.0"
   }
 }

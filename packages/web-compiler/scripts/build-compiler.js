@@ -139,10 +139,8 @@ if (MODE === 'node') {
   }
   opts = {
     ...common,
-    entryPoints: [path.join(root, 'src/browser-entry.js')],
     platform: 'browser',
     format: 'esm',
-    outfile: path.join(root, 'dist/compile-core.browser.js'),
     alias,
     define: {
       'process.env.NODE_ENV': '"production"',
@@ -164,5 +162,20 @@ if (MODE === 'node') {
   }
 }
 
-await esbuild.build(opts)
-console.log(`\n✅ built MODE=${MODE} USE_WASM=${USE_WASM ? 1 : 0} -> ${path.relative(root, opts.outfile)}`)
+// Browser mode ships three bundles from the same config: the core seams
+// (compile-core.browser.js), the package's resident stage worker
+// (stage-worker.browser.js, bundles the compiler + memfs), and the light-weight
+// orchestrated pool (pool.browser.js). Node mode ships only the core.
+const outputs = MODE === 'node'
+  ? [{ in: 'src/compile-core.js', out: 'dist/compile-core.node.js' }]
+  : [
+      { in: 'src/browser-entry.js', out: 'dist/compile-core.browser.js' },
+      { in: 'src/stage-worker.js', out: 'dist/stage-worker.browser.js' },
+      { in: 'src/pool.js', out: 'dist/pool.browser.js' },
+    ]
+
+for (const o of outputs) {
+  const built = { ...opts, entryPoints: [path.join(root, o.in)], outfile: path.join(root, o.out) }
+  await esbuild.build(built)
+  console.log(`✅ built MODE=${MODE} USE_WASM=${USE_WASM ? 1 : 0} -> ${o.out}`)
+}
