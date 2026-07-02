@@ -53,7 +53,14 @@ export function createCompilerPool(options = {}) {
       if (d && d.type === 'log') { if (onLog) { try { onLog({ level: d.level, message: d.message, stage }) } catch { /* ignore */ } } return }
       const r = q.shift(); if (r) r(d)
     }
-    w.onerror = (e) => { const r = q.shift(); if (r) r({ type: 'error', error: (e && e.message) || 'stage worker error' }) }
+    w.onerror = (ev) => {
+      // Worker-script-level failure (module load / uncaught). ErrorEvent.message is often
+      // empty for these — surface filename:lineno and a hint so it's not a bare "error".
+      const msg = (ev && (ev.message || (ev.error && ev.error.message)))
+        || 'worker failed to load or threw (no message — often a module-load / static-asset / cross-origin failure)'
+      const where = ev && ev.filename ? ` (${ev.filename}:${ev.lineno || 0})` : ''
+      const r = q.shift(); if (r) r({ type: 'error', error: `[web-compiler] stage '${stage}' worker error: ${msg}${where}` })
+    }
     return { stage, w, send: (m) => new Promise((res) => { q.push(res); w.postMessage(m) }) }
   })
 
@@ -61,7 +68,11 @@ export function createCompilerPool(options = {}) {
   async function warmup() {
     if (!warmed) {
       warmed = Promise.all(workers.map((x) => x.send({ type: 'warmup', toolchainSetupURL })))
-        .then((rs) => { for (const r of rs) if (r && r.type === 'error') throw new Error(r.error) })
+        .then((rs) => rs.forEach((r, i) => {
+          // The worker's own try/catch reports the REAL cause (e.g. a toolchainSetupURL
+          // import failure) as r.error — surface it verbatim, tagged with the stage.
+          if (r && r.type === 'error') throw new Error(r.error || `[web-compiler] stage '${workers[i].stage}' warmup failed`)
+        }))
         .catch((err) => { warmed = null; throw err })
     }
     return warmed
@@ -88,8 +99,10 @@ export function createCompilerPool(options = {}) {
         x.send({ type: 'compile-subset', files, workPath, stages: [x.stage] })))
       const merged = {}
       let appId, name
-      for (const pr of parts) {
-        if (!pr || pr.type === 'error') throw new Error((pr && pr.error) || 'stage worker error')
+      for (let i = 0; i < parts.length; i++) {
+        const pr = parts[i]
+        // pr.error carries the worker's real error string (message + stack) — surface it.
+        if (!pr || pr.type === 'error') throw new Error(pr && pr.error ? pr.error : `[web-compiler] stage '${workers[i].stage}' worker error`)
         appId = pr.result.appId
         name = pr.result.name
         Object.assign(merged, pr.result.files)   // stages write disjoint files -> clean union
