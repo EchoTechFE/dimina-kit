@@ -23,17 +23,17 @@
     "scripts"
   ],
   "scripts": {
-    "build:node": "MODE=node node scripts/build-compiler.js",
-    "build:browser": "MODE=browser node scripts/build-compiler.js",
+    "build:node": "node scripts/build-compiler.js node",
+    "build:browser": "node scripts/build-compiler.js browser",
     "build": "pnpm run build:node && pnpm run build:browser",
-    "test:node": "MODE=node node scripts/build-compiler.js && node --import ./scripts/register-kit.js scripts/test-node.js",
-    "test:appid": "MODE=node node scripts/build-compiler.js && node --import ./scripts/register-kit.js scripts/test-appid-fallback.js",
-    "test:hardening": "MODE=node node scripts/build-compiler.js && node --import ./scripts/register-kit.js scripts/test-hardening.js",
-    "test:decompose": "MODE=node node scripts/build-compiler.js && node --import ./scripts/register-kit.js scripts/test-decompose.js",
-    "test:realm-reuse": "MODE=node node scripts/build-compiler.js && node --import ./scripts/register-kit.js scripts/test-realm-reuse.js",
-    "test:pool-node": "MODE=node node scripts/build-compiler.js && node --import ./scripts/register-kit.js scripts/test-pool-node.js",
-    "test:pool-hardening": "MODE=node node scripts/build-compiler.js && node scripts/test-pool-hardening.js",
-    "test:npm-scan": "MODE=node node scripts/build-compiler.js && node --import ./scripts/register-kit.js scripts/test-npm-scan.js"
+    "test:node": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-node.js",
+    "test:appid": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-appid-fallback.js",
+    "test:hardening": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-hardening.js",
+    "test:decompose": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-decompose.js",
+    "test:realm-reuse": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-realm-reuse.js",
+    "test:pool-node": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-pool-node.js",
+    "test:pool-hardening": "node scripts/build-compiler.js node && node scripts/test-pool-hardening.js",
+    "test:npm-scan": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-npm-scan.js"
   },
   "dependencies": {
     "@babel/parser": "^7.29.7",
