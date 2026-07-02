@@ -1667,11 +1667,13 @@ function handleApiResponse(
     clearTimeout(pending.timer)
     return
   }
-  // Only the simulator window bound to that app may respond. Validate BEFORE
+  // Only a simulator window bound to the OWNING session may respond. Membership
+  // (senderBoundToSession), not sender-resolution equality: during a soft-reload
+  // overlap the shared simulator wc still answers the outgoing session's
+  // in-flight calls, which a latest-wins comparison would drop. Validate BEFORE
   // mutating pending state so a spoofed/foreign response can't tear down a
   // live subscription.
-  const senderApp = appByWc(state, sender)
-  if (!senderApp || senderApp.appSessionId !== ap.appSessionId) {
+  if (!senderBoundToSession(state, sender, ap)) {
     console.warn('[bridge-router] API_RESPONSE rejected: sender not bound to app session')
     return
   }

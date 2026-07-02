@@ -6,13 +6,21 @@
  * session by the id the message names, so both A and B stay independently
  * reachable through the shared wc regardless of spawn order.
  *
- * `API_RESPONSE`, however, carries only a `requestId` — no session id — so
- * the router must resolve "which session's pending does this ack belong to"
- * purely from the SENDER wc. The contract pinned here: that resolution
- * returns the LATEST-spawned STILL-ALIVE session for the wc ("latest
- * wins"), and it must stay correct as sessions are disposed in any order —
- * disposing the latest live session must make the next-latest resolvable
- * again, not leave the wc permanently unresolvable.
+ * `API_RESPONSE`, however, carries only a `requestId` — no session id. Each
+ * pending call is OWNED by the session that issued it (`pending.appSessionId`,
+ * set when the service host forwards the API via SERVICE_INVOKE); routing an
+ * API_RESPONSE always resolves the pending by that ownership, never by which
+ * session is newest. Authorization is a separate question: the SENDER wc
+ * must be BOUND to the pending's owning session — a simulator wc is bound to
+ * every session it hosts, so the shared wc authorizes an API_RESPONSE for
+ * EITHER A's or B's requestId while both are alive. A DIFFERENT simulator wc
+ * that never hosted the owning session is rejected (anti-spoofing), even for
+ * the correct requestId.
+ *
+ * Once a session is disposed it is no longer bound to any wc, so an
+ * API_RESPONSE for its former pending calls can no longer be authorized
+ * through that wc; the remaining live session(s) stay resolvable regardless
+ * of dispose order.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -329,7 +337,7 @@ describe('bridge-router — many-to-many binding of one simulator webContents to
     expect(pageHideCount(B.serviceWc, B.result.bridgeId), 'PAGE_LIFECYCLE naming B must reach B\'s service host').toBe(1)
   })
 
-  it('resolves an API_RESPONSE from the shared simulator wc to the LATEST still-alive session while both are alive', async () => {
+  it('routes an API_RESPONSE to the pending call\'s owning session for BOTH sessions sharing the wc', async () => {
     const { ctx, simulatorWc } = makeCtx()
     installBridgeRouter(ctx)
     void ctx
@@ -345,17 +353,73 @@ describe('bridge-router — many-to-many binding of one simulator webContents to
     drainSent(A.serviceWc)
     drainSent(B.serviceWc)
 
-    apiResponseFrom(simulatorWc, bRequestId, B.result.appSessionId, { event: 'canplay' })
-    expect(
-      triggerCallbacks(B.serviceWc).map(c => c.id),
-      'B\'s requestId, the latest-spawned session, must be honored while both sessions are alive',
-    ).toContain('b-success')
-
     apiResponseFrom(simulatorWc, aRequestId, A.result.appSessionId, { event: 'canplay' })
     expect(
       triggerCallbacks(A.serviceWc).map(c => c.id),
-      'A\'s requestId must be dropped while B (spawned later on the same wc) is still alive',
+      'the shared wc\'s response for A\'s requestId must reach A\'s service host even while B is alive on the same wc',
+    ).toContain('a-success')
+
+    apiResponseFrom(simulatorWc, bRequestId, B.result.appSessionId, { event: 'canplay' })
+    expect(
+      triggerCallbacks(B.serviceWc).map(c => c.id),
+      'the shared wc\'s response for B\'s requestId must reach B\'s service host — ownership routes by the pending call, not by which session is latest',
+    ).toContain('b-success')
+  })
+
+  it('keeps a persistent audioListen subscription alive for the OLDER session while a newer session shares the wc, without ever settling it', async () => {
+    const { ctx, simulatorWc } = makeCtx()
+    installBridgeRouter(ctx)
+    void ctx
+
+    const A = await spawnSession(simulatorWc, { pagePath: ROOT_A })
+    forwardAudioListen(A.serviceWc, A.result.bridgeId, { success: 'a-success', complete: 'a-complete', fail: 'a-fail' })
+    const aRequestId = latestApiCallRequestId(simulatorWc)
+
+    // B spawns on the SAME wc while A's audioListen subscription is still live.
+    await spawnSession(simulatorWc, { pagePath: ROOT_B })
+
+    drainSent(A.serviceWc)
+    apiResponseFrom(simulatorWc, aRequestId, A.result.appSessionId, { event: 'canplay' })
+    let cbs = triggerCallbacks(A.serviceWc)
+    expect(cbs.map(c => c.id), 'the first audio event after B spawns on the shared wc must still reach A').toContain('a-success')
+    expect(cbs.find(c => c.id === 'a-complete'), 'a persistent fire must not settle A\'s pending').toBeUndefined()
+
+    drainSent(A.serviceWc)
+    apiResponseFrom(simulatorWc, aRequestId, A.result.appSessionId, { event: 'ended' })
+    cbs = triggerCallbacks(A.serviceWc)
+    expect(cbs.map(c => c.id), 'a second audio event must also reach A — the subscription survives B sharing the wc').toContain('a-success')
+    expect(cbs.find(c => c.id === 'a-complete'), 'a second persistent fire must still not settle A\'s pending').toBeUndefined()
+  })
+
+  it('rejects a spoofed API_RESPONSE from a simulator wc that never hosted the owning session, and still resolves the same pending from the wc that does', async () => {
+    const { ctx, simulatorWc: simWc1 } = makeCtx()
+    installBridgeRouter(ctx)
+    void ctx
+
+    const A = await spawnSession(simWc1, { pagePath: ROOT_A })
+    await spawnSession(simWc1, { pagePath: ROOT_B })
+
+    // A second, unrelated simulator wc hosting only C — never bound to A's session.
+    const simWc2 = stubs.makeWebContents()
+    await spawnSession(simWc2, { pagePath: ROOT_C })
+
+    forwardAudioListen(A.serviceWc, A.result.bridgeId, { success: 'a-success', complete: 'a-complete', fail: 'a-fail' })
+    const aRequestId = latestApiCallRequestId(simWc1)
+
+    drainSent(A.serviceWc)
+    apiResponseFrom(simWc2, aRequestId, A.result.appSessionId, { event: 'canplay' })
+    expect(
+      triggerCallbacks(A.serviceWc).map(c => c.id),
+      'a simulator wc that never hosted A\'s session must not be authorized to answer A\'s pending call',
     ).not.toContain('a-success')
+
+    // The pending survives the rejected attempt: the SAME requestId, answered
+    // from the wc that actually hosts A, must still deliver.
+    apiResponseFrom(simWc1, aRequestId, A.result.appSessionId, { event: 'canplay' })
+    expect(
+      triggerCallbacks(A.serviceWc).map(c => c.id),
+      'the owning wc must still resolve the same pending after a spoof attempt was rejected',
+    ).toContain('a-success')
   })
 
   it('re-resolves the OLDER session through the shared simulator wc once the LATEST session is disposed', async () => {
