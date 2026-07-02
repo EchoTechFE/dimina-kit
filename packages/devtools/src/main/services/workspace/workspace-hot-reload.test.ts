@@ -4,7 +4,7 @@
  * Contract under test:
  *  - `ExpectedPayload` carries an optional `hotReload?: boolean` flag.
  *  - The `onRebuild` callback wired in `workspace-service.ts` dispatches
- *    `projectStatus({ status: 'ready', message: '编译完成，已热更新', hotReload: true })`
+ *    `projectStatus({ status: 'ready', message: '编译完成，已重启', hotReload: true })`
  *    so the renderer can call `webview.reload()` once the watcher-triggered
  *    rebuild is complete.
  *  - The initial-open path (`正在编译...` → `编译完成`) emits WITHOUT

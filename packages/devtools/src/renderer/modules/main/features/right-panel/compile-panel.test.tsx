@@ -136,10 +136,10 @@ describe('CompilePanel (编译 tab body)', () => {
     expect(rows[0]!.getAttribute('data-status')).toBe('ready')
   })
 
-  it('renders a 热更新 chip on hotReload events only', async () => {
+  it('renders a 已重启 chip on hotReload events only', async () => {
     const { container } = await renderPanel([
       { at: at(11, 0, 0), status: 'ready', message: '普通编译完成' },
-      { at: at(11, 0, 5), status: 'ready', message: '编译完成，已热更新', hotReload: true },
+      { at: at(11, 0, 5), status: 'ready', message: '编译完成，已重启', hotReload: true },
     ])
 
     const rows = rowsOf(container)
@@ -147,12 +147,12 @@ describe('CompilePanel (编译 tab body)', () => {
     // Oldest first → the hotReload event is the last row.
     expect(
       rows[1]!.textContent,
-      'a hotReload event must carry a recognizable 热更新 marker',
-    ).toMatch(/热更新/)
+      'a hotReload event must carry a recognizable 已重启 marker',
+    ).toMatch(/已重启/)
     expect(
       rows[0]!.textContent,
-      'plain events must NOT carry the 热更新 marker',
-    ).not.toMatch(/热更新/)
+      'plain events must NOT carry the 已重启 marker',
+    ).not.toMatch(/已重启/)
   })
 
   it('shows the elapsed time on a ready event paired with the immediately preceding compiling event', async () => {

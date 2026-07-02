@@ -153,7 +153,7 @@ describe('useSimulator: hotReloadToken → native re-attach (resurrected PR#12 g
     // re-render produces. Status flapping through 'ready' repeatedly (e.g.
     // rebuild notifications) must not re-attach without a token change.
     rerender({ props: { ...base } })
-    rerender({ props: { ...base, compileStatus: { status: 'ready', message: '编译完成，已热更新' } } })
+    rerender({ props: { ...base, compileStatus: { status: 'ready', message: '编译完成，已重启' } } })
     rerender({ props: { ...base } })
 
     expect(

@@ -174,7 +174,7 @@ describe('useSession: compileEvents log (编译 tab data source)', () => {
     const { result } = await renderReadySession()
 
     act(() => {
-      emitProjectStatus({ status: 'ready', message: '编译完成，已热更新', hotReload: true })
+      emitProjectStatus({ status: 'ready', message: '编译完成，已重启', hotReload: true })
     })
     act(() => {
       emitProjectStatus({ status: 'ready', message: '编译完成' })
@@ -187,7 +187,7 @@ describe('useSession: compileEvents log (编译 tab data source)', () => {
     expect(events).toHaveLength(3)
     expect(
       events[0]!.hotReload,
-      'a watcher-rebuild payload (hotReload:true) must be marked on its log entry — the panel renders the 热更新 chip off this flag',
+      'a watcher-rebuild payload (hotReload:true) must be marked on its log entry — the panel renders the 已重启 chip off this flag',
     ).toBe(true)
     expect(events[1]!.hotReload).not.toBe(true)
     expect(events[2]!.hotReload).not.toBe(true)

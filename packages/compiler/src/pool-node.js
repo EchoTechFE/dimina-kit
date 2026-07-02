@@ -15,6 +15,8 @@
 // REAL Worker/parentPort are reached via createRequire (see stage-worker-node.js).
 import { createRequire } from 'node:module'
 import nodeFs from 'node:fs'
+import nodePath from 'node:path'
+import process from 'node:process'
 import { setupCompile, resetCompilerState, STAGE_NAMES } from './compile-core.js'
 import { createDist, publishToDist } from '../../../dimina/fe/packages/compiler/src/common/publish.js'
 import { getAppConfigInfo, getAppId, getAppName } from '../../../dimina/fe/packages/compiler/src/env.js'
@@ -72,7 +74,15 @@ export function createNodeCompilerPool({ stages = STAGE_NAMES } = {}) {
     //    carry caches (assets/config) from the previous build. setupCompile computes a
     //    fresh staging dir (getTargetPath) and scaffolds it via createDist.
     resetCompilerState()
-    const ctx = await setupCompile({ fs: nodeFs, workPath, options: { fileTypes } })
+    // outputDir resolved exactly like publishToDist resolves it (against cwd), so
+    // when it sits inside the project the npm scan skips the published output —
+    // a previous build's copies must never become the next build's input.
+    const ctx = await setupCompile({
+      fs: nodeFs,
+      workPath,
+      options: { fileTypes },
+      npmScanExclude: [nodePath.resolve(process.cwd(), outputDir)],
+    })
     const { storeInfo, pages } = ctx
 
     // 2) Fan out to the resident stage workers. They restore the same storeInfo (so their
