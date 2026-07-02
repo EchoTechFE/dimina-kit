@@ -63,7 +63,7 @@ await session.close()
 
 ## 工作流程
 
-1. 在 fork 出的长驻编译子进程中调用 `@dimina/compiler` 编译小程序项目（cwd 隔离：`chdir` 只发生在子进程内，宿主进程 cwd 不被污染；编译器崩溃不会拖垮宿主，下次重编译自动重新 fork 恢复）
+1. 在 fork 出的长驻编译子进程中调用 `@dimina-kit/compiler/pool-node`(dmcc 兼容的常驻编译池)编译小程序项目（cwd 隔离：`chdir` 只发生在子进程内，宿主进程 cwd 不被污染；编译器崩溃不会拖垮宿主，下次重编译自动重新 fork 恢复）
 2. 子进程的 stdout/stderr 按行管道回父进程，经 `filterDmccLogLine` 过滤噪音后通过 `onLog` 回调送出
 3. 启动基于 Express 的 H5 容器预览服务器（含 CORS、SPA fallback、可选 live-reload）
 4. 通过 chokidar 监听项目目录变更，自动触发增量编译和页面刷新；编译进行中的变更不会丢失，会在当前编译结束后合并为恰好一次尾随重编译（trailing rebuild）
