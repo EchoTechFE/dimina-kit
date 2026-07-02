@@ -36,7 +36,7 @@ const exportAppend = {
   name: 'export-append',
   setup(build) {
     const appends = {
-      'logic-compiler.js': '\nexport { writeCompileRes }\nexport function __resetLogicState() { processedModules.clear() }\n',
+      'logic-compiler.js': '\nexport { writeCompileRes }\nexport function __resetLogicState() { processedModules.clear() }\nexport function __setEnableSourcemap(v) { enableSourcemap = !!v }\n',
       'style-compiler.js': '\nexport function __resetStyleState() { compileRes.clear() }\n',
       'view-compiler.js': '\nexport function __resetViewState() { compileResCache.clear(); wxsModuleRegistry.clear(); wxsFilePathMap.clear() }\n',
       'utils.js': '\nexport function __resetAssets() { for (const k of Object.keys(assetsMap)) delete assetsMap[k] }\n',
@@ -76,21 +76,35 @@ const common = {
   logLevel: 'info',
 }
 
+const oxcWasmAlias = USE_OXC_WASM
+  ? { 'oxc-parser': shim('oxc-parser.js'), 'oxc-walker': shim('oxc-walker.js') }
+  : {}
+
+// compile-core.node.js: the injectable in-memory seam — fs is SHIMMED so the caller
+// passes a node:fs replacement (memfs). worker_threads is shimmed (isMainThread=true)
+// to skip dmcc's parentPort bootstrap since we drive the exports inline.
+const nodeShimAlias = {
+  'node:fs': shim('fs.js'),
+  'fs': shim('fs.js'),
+  'node:worker_threads': shim('worker_threads.js'),
+  ...oxcWasmAlias,
+}
+
+// pool.node.js / stage-worker.node.js: the resident Node disk pool. fs is NATIVE
+// (dmcc writes real disk staging, then publishToDist copies to outputDir) — do NOT
+// alias it. worker_threads is STILL shimmed so dmcc's own `if(!isMainThread)` parentPort
+// bootstrap stays OFF (otherwise its handler would race ours on the same port); the pool
+// and stage worker reach the REAL Worker/parentPort via createRequire (bypasses this alias).
+const nodeNativeAlias = {
+  'node:worker_threads': shim('worker_threads.js'),
+  ...oxcWasmAlias,
+}
+
 let opts
 if (MODE === 'node') {
   opts = {
     ...common,
     platform: 'node',
-    outfile: path.join(root, 'dist/compile-core.node.js'),
-    alias: {
-      'node:fs': shim('fs.js'),
-      'fs': shim('fs.js'),
-      'node:worker_threads': shim('worker_threads.js'),
-      ...(USE_OXC_WASM ? {
-        'oxc-parser': shim('oxc-parser.js'),
-        'oxc-walker': shim('oxc-walker.js'),
-      } : {}),
-    },
     external: NODE_EXTERNAL,
   }
 } else {
@@ -167,7 +181,12 @@ if (MODE === 'node') {
 // (stage-worker.browser.js, bundles the compiler + memfs), and the light-weight
 // orchestrated pool (pool.browser.js). Node mode ships only the core.
 const outputs = MODE === 'node'
-  ? [{ in: 'src/compile-core.js', out: 'dist/compile-core.node.js' }]
+  ? [
+      { in: 'src/compile-core.js', out: 'dist/compile-core.node.js', alias: nodeShimAlias },
+      // Resident Node worker_threads disk pool (real fs, dmcc-parity output + sourcemap).
+      { in: 'src/pool-node.js', out: 'dist/pool.node.js', alias: nodeNativeAlias },
+      { in: 'src/stage-worker-node.js', out: 'dist/stage-worker.node.js', alias: nodeNativeAlias },
+    ]
   : [
       { in: 'src/browser-entry.js', out: 'dist/compile-core.browser.js' },
       { in: 'src/stage-worker.js', out: 'dist/stage-worker.browser.js' },
@@ -176,7 +195,12 @@ const outputs = MODE === 'node'
     ]
 
 for (const o of outputs) {
-  const built = { ...opts, entryPoints: [path.join(root, o.in)], outfile: path.join(root, o.out) }
+  const built = {
+    ...opts,
+    entryPoints: [path.join(root, o.in)],
+    outfile: path.join(root, o.out),
+    ...(o.alias ? { alias: o.alias } : {}),
+  }
   await esbuild.build(built)
   console.log(`✅ built MODE=${MODE} USE_WASM=${USE_WASM ? 1 : 0} -> ${o.out}`)
 }

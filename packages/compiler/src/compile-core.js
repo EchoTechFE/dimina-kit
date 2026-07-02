@@ -14,8 +14,11 @@ import {
 import { createDist } from '../../../dimina/fe/packages/compiler/src/common/publish.js'
 import { compileConfig } from '../../../dimina/fe/packages/compiler/src/core/index.js'
 import { NpmBuilder } from '../../../dimina/fe/packages/compiler/src/common/npm-builder.js'
-// compileJS exported by source; writeCompileRes + __resetLogicState appended at bundle time
-import { compileJS, writeCompileRes, __resetLogicState } from '../../../dimina/fe/packages/compiler/src/core/logic-compiler.js'
+// compileJS exported by source; writeCompileRes + __resetLogicState + __setEnableSourcemap
+// appended at bundle time (see scripts/build-compiler.js). __setEnableSourcemap flips the
+// logic compiler's module-level `enableSourcemap` — the ONLY sourcemap entry point, since
+// this package short-circuits dmcc's `parentPort` worker bootstrap (isMainThread=true shim).
+import { compileJS, writeCompileRes, __resetLogicState, __setEnableSourcemap } from '../../../dimina/fe/packages/compiler/src/core/logic-compiler.js'
 // compileML + __resetViewState (appended at bundle time)
 import { compileML, __resetViewState } from '../../../dimina/fe/packages/compiler/src/core/view-compiler.js'
 import { compileSS, __resetStyleState } from '../../../dimina/fe/packages/compiler/src/core/style-compiler.js'
@@ -160,6 +163,27 @@ const STAGES = {
 export const STAGE_NAMES = Object.keys(STAGES)
 
 /**
+ * Run ONE stage's compile functions against whatever fs backend is already active
+ * (the fs shim for the memfs path, or native node:fs when this module is bundled
+ * without the fs alias for the Node disk pool). Assumes the env singletons are
+ * already restored (caller does `resetStoreInfo`). Threads `sourcemap` into the
+ * logic stage (view/style have no sourcemap — a dmcc limitation, not ours). Kept
+ * separate from `compileStage` so the Node stage worker can drive it directly with
+ * native fs, no shim.
+ * @param {'logic'|'view'|'style'} stage
+ * @param {object} pages
+ * @param {{ sourcemap?: boolean }} [opts]
+ */
+export async function runStage(stage, pages, { sourcemap = false } = {}) {
+  const run = STAGES[stage]
+  if (!run) throw new Error(`[compiler] unknown compile stage "${stage}" (expected ${STAGE_NAMES.join('/')})`)
+  // Only the logic compiler generates sourcemaps; setting it is a harmless no-op for
+  // the other stages (they never read enableSourcemap).
+  if (stage === 'logic') __setEnableSourcemap(!!sourcemap)
+  await run(pages, makeProgress())
+}
+
+/**
  * One-time setup against the injected fs: parse config/paths, scaffold the dist
  * dir, compile app-config.json, build npm packages. Returns a SERIALIZABLE
  * context (the storeInfo bundle + page map + ids + targetPath) that each stage
@@ -204,14 +228,12 @@ export async function setupCompile({ fs, workPath = '/work', options = {} } = {}
  * Products are written into `fs`.
  * @param {{ stage: 'logic'|'view'|'style', pages: object, storeInfo: object, fs: object }} opts
  */
-export async function compileStage({ stage, pages, storeInfo: bundle, fs } = {}) {
-  const run = STAGES[stage]
-  if (!run) throw new Error(`[compiler] unknown compile stage "${stage}" (expected ${STAGE_NAMES.join('/')})`)
+export async function compileStage({ stage, pages, storeInfo: bundle, fs, sourcemap = false } = {}) {
   assertFs(fs)
   setFs(fs)
   try {
     resetStoreInfo(bundle)
-    await run(pages, makeProgress())
+    await runStage(stage, pages, { sourcemap })
   } finally {
     resetFs()
   }
