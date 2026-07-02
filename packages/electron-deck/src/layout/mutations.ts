@@ -5,6 +5,7 @@
  * cascading upward, while keeping the root a LayoutNode.
  */
 import type { LayoutNode, LayoutTree, Orientation, SizeConstraint, SplitNode, TabGroupNode } from './types.js'
+import { findGroupById, findGroupContaining } from './tree-query.js'
 
 // ───────────────────────── helpers ─────────────────────────
 
@@ -49,9 +50,10 @@ function normalize(node: LayoutNode): LayoutNode | null {
 	const rebuilt: SplitNode = { kind: 'split', id: node.id, orientation: node.orientation, children: kept, sizes: keptSizes }
 	if (!hadConstraints) return rebuilt
 	// M3 repair: dropping children can leave a multi-child split whose survivors
-	// are ALL fixed-px (the sole flexible child was the one removed). That tree is
-	// rejected by validateTree (rrp needs >= 1 weight-sized child). Deterministically
-	// clear the LAST survivor's constraint so >= 1 flexible child remains.
+	// are ALL px-sized (`fixedPx` or `minPx` — the sole flexible/`null` child was
+	// the one removed). That tree is rejected by validateTree (rrp needs >= 1
+	// weight-sized child). Deterministically clear the LAST survivor's constraint
+	// so >= 1 flexible child remains.
 	const allFixed = keptConstraints.length > 0 && !keptConstraints.some(c => c === null)
 	if (allFixed) {
 		keptConstraints[keptConstraints.length - 1] = null
@@ -68,40 +70,6 @@ function normalizeRoot(root: LayoutNode): LayoutNode {
 		throw new Error('mutation would empty the entire layout')
 	}
 	return n
-}
-
-interface Located {
-	group: TabGroupNode
-}
-
-function findGroupContaining(root: LayoutNode, panelId: string): Located | null {
-	let found: TabGroupNode | null = null
-	const walk = (n: LayoutNode): void => {
-		if (found) return
-		if (n.kind === 'tabs') {
-			if (n.panels.includes(panelId)) found = n
-		}
-		else {
-			n.children.forEach(walk)
-		}
-	}
-	walk(root)
-	return found ? { group: found } : null
-}
-
-function findGroupById(root: LayoutNode, groupId: string): TabGroupNode | null {
-	let found: TabGroupNode | null = null
-	const walk = (n: LayoutNode): void => {
-		if (found) return
-		if (n.kind === 'tabs') {
-			if (n.id === groupId) found = n
-		}
-		else {
-			n.children.forEach(walk)
-		}
-	}
-	walk(root)
-	return found
 }
 
 /** Collect every panelId present anywhere in the tree. */
@@ -252,13 +220,12 @@ export function setConstraint(
 		? [...target.constraints]
 		: target.children.map(() => null)
 	base[childIndex] = constraint
-	// M3 guard: never produce an all-FIXED-px split. If applying this constraint
-	// would leave EVERY child `fixedPx`-locked (0 weight-sized children),
-	// `validateTree`/`parseLayout` would later reject the serialized tree (rrp
-	// requires >= 1 weight-sized child). You cannot fixedPx-pin the LAST flexible
-	// child — treat it as a NO-OP. A `minPx` child is FLEXIBLE (weight-sized with a
-	// floor), so it does NOT count toward "all fixed" — pinning a `minPx` floor is
-	// always allowed.
+	// M3 guard: never produce an all-px-sized split. `fixedPx` and `minPx` both
+	// count as "constrained" here (the check is `c !== null`, not a `fixedPx`
+	// check), so setting EITHER kind of constraint on the LAST unconstrained
+	// child is a NO-OP: it would leave 0 weight-sized children, and
+	// `validateTree`/`parseLayout` later rejects a fully px-sized split (rrp
+	// requires >= 1 weight-sized child).
 	if (base.length > 0 && base.every(c => c !== null)) {
 		return t
 	}
@@ -285,9 +252,8 @@ export function setActive(t: LayoutTree, groupId: string, panelId: string): Layo
 
 /** Remove a panel from whichever group holds it; collapse. */
 function removePanel(root: LayoutNode, panelId: string): LayoutNode {
-	const located = findGroupContaining(root, panelId)
-	if (!located) throw new Error(`panel not found: ${panelId}`)
-	const { group } = located
+	const group = findGroupContaining(root, panelId)
+	if (!group) throw new Error(`panel not found: ${panelId}`)
 	const removedIndex = group.panels.indexOf(panelId)
 	const panels = group.panels.filter(p => p !== panelId)
 	const replacement = tg(group.id, panels, deriveActive(panels, group.active, removedIndex))
@@ -311,8 +277,8 @@ export function extractPanel(
 	t: LayoutTree,
 	panelId: string,
 ): { tree: LayoutTree; extracted: string } {
-	const located = findGroupContaining(t.root, panelId)
-	if (!located) throw new Error(`extractPanel: panel not found: ${panelId}`)
+	const group = findGroupContaining(t.root, panelId)
+	if (!group) throw new Error(`extractPanel: panel not found: ${panelId}`)
 	return { tree: wrap(removePanel(t.root, panelId)), extracted: panelId }
 }
 
@@ -345,34 +311,34 @@ export function movePanel(
 	panelId: string,
 	dest: { groupId: string; index?: number },
 ): LayoutTree {
-	const src = findGroupContaining(t.root, panelId)
-	if (!src) throw new Error(`movePanel: panel not found: ${panelId}`)
+	const srcGroup = findGroupContaining(t.root, panelId)
+	if (!srcGroup) throw new Error(`movePanel: panel not found: ${panelId}`)
 	const destGroup = findGroupById(t.root, dest.groupId)
 	if (!destGroup) throw new Error(`movePanel: dest group not found: ${dest.groupId}`)
 
-	if (src.group.id === destGroup.id) {
+	if (srcGroup.id === destGroup.id) {
 		// Same-group reorder: remove then re-insert at the clamped index.
-		const without = src.group.panels.filter(p => p !== panelId)
+		const without = srcGroup.panels.filter(p => p !== panelId)
 		const idx = clampInsertIndex(dest.index, without.length)
 		const panels = [...without]
 		panels.splice(idx, 0, panelId)
-		const replacement = tg(src.group.id, panels, src.group.active)
-		return wrap(normalizeRoot(replaceNode(t.root, src.group.id, replacement)))
+		const replacement = tg(srcGroup.id, panels, srcGroup.active)
+		return wrap(normalizeRoot(replaceNode(t.root, srcGroup.id, replacement)))
 	}
 
 	// Cross-group: remove from source (re-derive active + maybe collapse), then
 	// insert into dest. Compute the destination panels against the ORIGINAL dest
 	// group so the clamp matches its pre-move length.
-	const removedIndex = src.group.panels.indexOf(panelId)
-	const srcPanels = src.group.panels.filter(p => p !== panelId)
-	const srcReplacement = tg(src.group.id, srcPanels, deriveActive(srcPanels, src.group.active, removedIndex))
+	const removedIndex = srcGroup.panels.indexOf(panelId)
+	const srcPanels = srcGroup.panels.filter(p => p !== panelId)
+	const srcReplacement = tg(srcGroup.id, srcPanels, deriveActive(srcPanels, srcGroup.active, removedIndex))
 
 	const destPanels = [...destGroup.panels]
 	const idx = clampInsertIndex(dest.index, destPanels.length)
 	destPanels.splice(idx, 0, panelId)
 	const destReplacement = tg(destGroup.id, destPanels, destGroup.active)
 
-	let root = replaceNode(t.root, src.group.id, srcReplacement)
+	let root = replaceNode(t.root, srcGroup.id, srcReplacement)
 	root = replaceNode(root, destGroup.id, destReplacement)
 	return wrap(normalizeRoot(root))
 }
@@ -387,9 +353,8 @@ export function splitPanel(
 	if (hasPanel(t.root, newPanelId)) {
 		throw new Error(`splitPanel: new panel already exists in the tree: ${newPanelId}`)
 	}
-	const located = findGroupContaining(t.root, atPanelId)
-	if (!located) throw new Error(`splitPanel: panel not found: ${atPanelId}`)
-	const { group } = located
+	const group = findGroupContaining(t.root, atPanelId)
+	if (!group) throw new Error(`splitPanel: panel not found: ${atPanelId}`)
 
 	// Generated node ids must be unique within the current tree: a node literally
 	// named `${origGroupId}__sp` could already exist and produce a duplicate-id

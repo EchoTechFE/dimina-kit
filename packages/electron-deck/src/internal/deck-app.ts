@@ -702,8 +702,12 @@ export class DeckApp {
 	 * registration) — windows with no per-window deciders fall through to Electron's
 	 * default close (the framework does not preventDefault).
 	 */
-	private armSubWindowCloseMachine(win: MinimalBrowserWindow, controlWc: MinimalWebContents): void {
-		win.on('close', (e?: { preventDefault(): void }) => {
+	private armSubWindowCloseMachine(
+		win: MinimalBrowserWindow,
+		controlWc: MinimalWebContents,
+		windowScope: Scope,
+	): void {
+		const onClose = (e?: { preventDefault(): void }): void => {
 			const rec = this.windowRegistrations.get(controlWc)
 			// No registration or no live decider → let Electron close it normally
 			// (do NOT preventDefault — preserves the default-close path).
@@ -729,7 +733,34 @@ export class DeckApp {
 				rec.closing = null
 				if (!win.isDestroyed()) win.destroy() // → fires 'closed'
 			})
-		})
+		}
+		win.on('close', onClose)
+		// The 'close' listener's ownership belongs to the windowScope: its teardown
+		// (un-adopt / shutdown) removes the listener, so re-adopting the same window
+		// never accumulates stale close listeners. A fake window lacking
+		// removeListener/off degrades to leaving the listener (harmless — a torn-down
+		// or destroyed window's listeners are never consulted again).
+		windowScope.own(() => this.removeWindowListener(win, 'close', onClose))
+	}
+
+	/**
+	 * Remove a previously-registered window event listener (Electron's
+	 * `removeListener`/`off`). Tolerates minimal test fakes that expose neither by
+	 * degrading to a no-op — the caller's ownership contract is best-effort cleanup.
+	 */
+	private removeWindowListener(
+		win: MinimalBrowserWindow,
+		event: string,
+		listener: (e?: { preventDefault(): void }) => void,
+	): void {
+		const w = win as unknown as {
+			// eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
+			removeListener?: Function
+			// eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
+			off?: Function
+		}
+		const remove = w.removeListener ?? w.off
+		if (typeof remove === 'function') remove.call(win, event, listener)
 	}
 
 	/**
@@ -1354,7 +1385,7 @@ export class DeckApp {
 		// when a live per-window decider exists, so declared windows (no decider) keep
 		// Electron's default close.
 		this.buildDeckWindow(win, wc, windowScope)
-		this.armSubWindowCloseMachine(win, wc)
+		this.armSubWindowCloseMachine(win, wc, windowScope)
 		if (!deferLoad) {
 			this.safeLoad(win.webContents, opts.source)
 		}
@@ -1441,6 +1472,10 @@ export class DeckApp {
 			// can't guarantee revoke-first, but trust must still be revoked on close.
 			win.on('closed', revoke)
 		}
+		// The 'closed' revoke listener's ownership belongs to the windowScope: its
+		// teardown (un-adopt) removes it so re-adopting the same window never leaves a
+		// stale revoke listener behind.
+		windowScope.own(() => this.removeWindowListener(win, 'closed', revoke))
 		// (5) admit trust AFTER the revoke listener is armed (constructWindow order):
 		// combined with admitTrust's isDestroyed() guard, a window destroyed at any
 		// point can never leave a trusted-but-unrevoked wc.
@@ -1452,7 +1487,7 @@ export class DeckApp {
 		// keeps the host's own close handling).
 		this.bindNavigationGrantReset(wc)
 		this.buildDeckWindow(win, wc, windowScope)
-		this.armSubWindowCloseMachine(win, wc)
+		this.armSubWindowCloseMachine(win, wc, windowScope)
 		// Also run the synchronous revoke during the windowScope's teardown cascade
 		// (un-adopt / app shutdown), so substrate+trust are torn down even when no
 		// 'closed' fires (e.g. 'observe' shutdown where the host never closes it).
@@ -1938,6 +1973,19 @@ export class DeckApp {
 						this.bindNavigationGrantReset(wc)
 						return lease
 					}
+					// An ADOPTED window is not in lifetimeShadow (only framework-built
+					// windows are), but `adopt()` already admitted trust under its
+					// windowScope — recorded in wcRecords. Route the explicit lease through
+					// that SAME windowScope so it is revoked when the window closes, not
+					// left on rootScope until shutdown where a reused wc.id could inherit
+					// stale trust. `admitTrust` reuses the existing wcScope for a known wc,
+					// so this only adds a fresh lease under the window's lifetime.
+					const adopted = this.wcRecords.get(wc)
+					if (adopted) {
+						const lease = this.admitTrust(wc, adopted.windowScope)
+						this.bindNavigationGrantReset(wc)
+						return lease
+					}
 					return this._trustWebContents(wc)
 				},
 				adopt: (win, opts): Disposable => {
@@ -2329,7 +2377,14 @@ export class DeckApp {
 								while (keepAlive && group.hidden.length > keepAlive.max) {
 									const victimId = group.hidden.shift()!
 									const victim = group.handles.get(victimId)
-									if (victim) void victim.dispose()
+									// A fire-and-forget eviction: catch the victim's dispose
+									// rejection (its native teardown may throw) and log it, so an
+									// eviction never leaks an unhandled promise rejection.
+									if (victim) {
+										void victim.dispose().catch((e) => {
+											console.error('[electron-deck] keepAlive eviction dispose failed:', e)
+										})
+									}
 								}
 							}
 						}
