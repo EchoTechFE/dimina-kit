@@ -450,6 +450,12 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   // respawn (pre-warm pool recycles it), so this is re-resolved fresh via
   // `ctx.bridge.getServiceWc()` and re-pointed on every render-side event.
   let nativeDevtoolsSourceWc: WebContents | null = null
+  // `setDevToolsWebContents` requires its host argument to have never navigated
+  // (Electron contract). The front-end host wc navigates the moment it is first
+  // pointed at a service wc, so it is a one-shot resource: once used, re-pointing
+  // to a different (pool-swapped) service wc must rebuild the host
+  // (`rebuildDevtoolsHostView`) rather than target it again.
+  let devtoolsHostUsed = false
   let unsubscribeNativeRenderEvents: (() => void) | null = null
   // Disposer for the Elements-forward feature (routes the front-end's Elements
   // CDP traffic at the active render guest). Installed in
@@ -1192,6 +1198,14 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     closeNativeDevtoolsSource()
     nativeDevtoolsSourceWc = next
 
+    // The host wc is a one-shot `setDevToolsWebContents` target (Electron
+    // forbids re-pointing at an already-navigated host): once used, a
+    // service-wc swap must repoint onto a freshly rebuilt host instead.
+    if (devtoolsHostUsed) {
+      rebuildDevtoolsHostView()
+    }
+    if (!simulatorView || simulatorView.webContents.isDestroyed()) return true
+
     try {
       next.setDevToolsWebContents(simulatorView.webContents)
       // DevTools renders into the right-panel host view (simulatorView); with a
@@ -1216,6 +1230,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
         connections: ctx.connections,
         emit: (entry) => ctx.consoleForwarder?.emit(entry),
       }).stop
+      devtoolsHostUsed = true
       return true
     } catch {
       if (nativeDevtoolsSourceWc?.id === next.id) {
@@ -1268,9 +1283,14 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
 
   // ── ViewManager methods ─────────────────────────────────────────────────
 
-  function attachNativeSimulatorDevtoolsHost(): void {
-    stopFollowingNativeServiceHost()
-
+  // (Re)build the right-panel DevTools front-end host — a fresh, never-navigated
+  // `simulatorView` WebContentsView. `setDevToolsWebContents` may only target a
+  // host that has never navigated, so this is the sole path that produces a
+  // usable host: called once on attach, and again by `pointNativeDevtoolsAtServiceWc`
+  // whenever the current host has already been pointed at a service wc (a
+  // service-host pool swap must repoint onto a fresh host, not reuse the
+  // already-navigated one).
+  function rebuildDevtoolsHostView(): void {
     // Destroy old simulatorView to prevent WebContentsView leak
     if (simulatorView) {
       removeSimulatorDevtoolsView()
@@ -1363,6 +1383,15 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     // this attach (project-open ordering) attaches it once the gate re-opens.
     reconcileNow()
 
+    // A freshly built host has never navigated — it may be targeted by
+    // `setDevToolsWebContents` again.
+    devtoolsHostUsed = false
+  }
+
+  function attachNativeSimulatorDevtoolsHost(): void {
+    stopFollowingNativeServiceHost()
+    rebuildDevtoolsHostView()
+
     if (ctx.bridge?.isNativeHost()) {
       unsubscribeNativeRenderEvents = ctx.bridge.onRenderEvent(onNativeRenderEvent)
       followNativeDevtoolsServiceHost()
@@ -1409,6 +1438,15 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     } catch { /* ignore */ }
     nativeSimulatorView = null
     nativeSimulatorViewAdded = false
+    // The instance is being replaced/destroyed — forget its reconciled mount
+    // state so the NEXT rebuilt view is treated as a fresh attach. Without this,
+    // the level-triggered reconciler still records `simulator` as `attached`
+    // (the manual removeChildView above bypasses it), so the next reconcile
+    // classifies the freshly-built WebContentsView as already-attached, never
+    // emits the `attach` op, and the new view is never addChildView'd — a sticky
+    // 100%-invisible simulator after every recompile. Mirrors the hostToolbar
+    // instance-replacement handling in ensureHostToolbarView.
+    placementState.actual.delete(VIEW_ID.simulator)
     // The view is gone: gateReadiness now hides it, so reconcile detaches it.
     reconcileNow()
   }
@@ -1716,6 +1754,15 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       }
       simulatorViewAdded = false
     }
+    // The instance is being replaced/destroyed — forget its reconciled mount
+    // state so the next rebuilt host is treated as a fresh attach. Without this,
+    // the level-triggered reconciler still records `simulatorDevtools` as
+    // `attached` (the manual removeChildView above bypasses it), so it never
+    // emits the `attach` op for the rebuilt view and the new host is never
+    // addChildView'd — embedded but invisible. Mirrors the hostToolbar /
+    // simulator instance-replacement handling (ensureHostToolbarView /
+    // tearDownNativeSimulatorView).
+    placementState.actual.delete(VIEW_ID.simulatorDevtools)
   }
 
   async function showSettings(): Promise<void> {
