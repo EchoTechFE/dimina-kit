@@ -17,6 +17,18 @@
 import { Volume, createFsFromVolume } from 'memfs'
 import { setupCompile, compileStage, collectOutputs, resetCompilerState } from './compile-core.js'
 
+// The compiler logs diagnostics (missing components, unsupported wx APIs, style
+// preprocessor fallbacks, asset-copy failures, …) via console.* inside this worker,
+// where a downstream can't see them. Forward them to the pool as { type:'log' } so
+// createCompilerPool({ onLog }) can surface them; still log locally for devtools.
+for (const level of ['log', 'warn', 'error']) {
+  const orig = typeof console[level] === 'function' ? console[level].bind(console) : () => {}
+  console[level] = (...args) => {
+    try { self.postMessage({ type: 'log', level, message: args.map((a) => (typeof a === 'string' ? a : String(a))).join(' ') }) } catch { /* ignore */ }
+    orig(...args)
+  }
+}
+
 // Load the host's wasm toolchain exactly once. Memoized on the setup URL; a failed
 // load clears the cache so a later message can retry instead of replaying the reject.
 let toolchainReady = null

@@ -10,6 +10,7 @@
     "./browser": "./dist/compile-core.browser.js",
     "./pool": "./dist/pool.browser.js",
     "./stage-worker": "./dist/stage-worker.browser.js",
+    "./toolchain": "./dist/toolchain.browser.js",
     "./package.json": "./package.json"
   },
   "files": [

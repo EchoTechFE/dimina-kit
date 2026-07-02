@@ -22,6 +22,7 @@ const DEFAULT_STAGES = ['logic', 'view', 'style']
  *   toolchainSetupURL: string,      // required: ESM URL that installs __esbuildTransform/__oxcParseSync in the worker
  *   stages?: string[],              // default ['logic','view','style']
  *   workPath?: string,              // default '/work'
+ *   onLog?: (entry: { level: string, message: string }) => void,  // worker console diagnostics
  * }} options
  */
 export function createCompilerPool(options = {}) {
@@ -30,6 +31,7 @@ export function createCompilerPool(options = {}) {
     toolchainSetupURL,
     stages = DEFAULT_STAGES,
     workPath: defaultWorkPath = '/work',
+    onLog,
   } = options
   if (typeof createWorker !== 'function') {
     throw new Error('[web-compiler] createCompilerPool: options.createWorker (() => Worker) is required')
@@ -43,7 +45,14 @@ export function createCompilerPool(options = {}) {
   const workers = stages.map((stage) => {
     const w = createWorker()
     const q = []
-    w.onmessage = (e) => { const r = q.shift(); if (r) r(e.data) }
+    w.onmessage = (e) => {
+      const d = e.data
+      // Diagnostics the compiler logs inside the worker (missing components, unsupported
+      // wx APIs, style-preprocessor fallbacks, …) arrive as out-of-band { type:'log' }
+      // messages — surface them via onLog instead of pairing them with a send() reply.
+      if (d && d.type === 'log') { if (onLog) { try { onLog({ level: d.level, message: d.message, stage }) } catch { /* ignore */ } } return }
+      const r = q.shift(); if (r) r(d)
+    }
     w.onerror = (e) => { const r = q.shift(); if (r) r({ type: 'error', error: (e && e.message) || 'stage worker error' }) }
     return { stage, w, send: (m) => new Promise((res) => { q.push(res); w.postMessage(m) }) }
   })
@@ -62,16 +71,19 @@ export function createCompilerPool(options = {}) {
   let chain = Promise.resolve()
 
   /**
-   * @param {{ files: Record<string,string> } | Record<string,string>} source
-   * @param {{ workPath?: string }} [opts]
+   * Single argument, no ambiguity: pass { files, workPath }. A bare { relPath: content }
+   * map is also accepted (uses the default workPath).
+   * @param {{ files: Record<string,string>, workPath?: string } | Record<string,string>} input
    * @returns {Promise<{ appId: string, name: string, files: Record<string,string> }>}
    */
-  function compile(source, opts = {}) {
+  function compile(input = {}) {
     const run = chain.then(async () => {
       await warmup()
-      const files = source && source.files ? source.files : source
-      if (!files || typeof files !== 'object') throw new Error('[web-compiler] pool.compile: source must be a { relPath: content } map (or { files })')
-      const workPath = opts.workPath || defaultWorkPath
+      const files = input.files || input
+      if (!files || typeof files !== 'object' || !Object.keys(files).length) {
+        throw new Error('[web-compiler] pool.compile expects { files: { relPath: content }, workPath? } (or a non-empty files map)')
+      }
+      const workPath = input.workPath || defaultWorkPath
       const parts = await Promise.all(workers.map((x) =>
         x.send({ type: 'compile-subset', files, workPath, stages: [x.stage] })))
       const merged = {}

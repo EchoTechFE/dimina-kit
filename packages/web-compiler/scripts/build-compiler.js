@@ -172,6 +172,7 @@ const outputs = MODE === 'node'
       { in: 'src/browser-entry.js', out: 'dist/compile-core.browser.js' },
       { in: 'src/stage-worker.js', out: 'dist/stage-worker.browser.js' },
       { in: 'src/pool.js', out: 'dist/pool.browser.js' },
+      { in: 'src/toolchain.js', out: 'dist/toolchain.browser.js' },
     ]
 
 for (const o of outputs) {

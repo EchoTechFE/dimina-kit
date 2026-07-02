@@ -57,6 +57,7 @@ const pool = createCompilerPool({
   createWorker: () => new Worker(new URL('@dimina-kit/web-compiler/stage-worker', import.meta.url), { type: 'module' }),
   // 一个 ESM 的 URL,worker 导入它来装 wasm 工具链(见下)
   toolchainSetupURL: '/toolchain-setup.js',
+  onLog: (e) => console.warn(`[${e.stage}] ${e.message}`),   // 可选:拿到编译器诊断
 })
 
 await pool.warmup()                                 // 常驻 3 个 stage worker,wasm 只热身一次
@@ -73,34 +74,43 @@ createCompilerPool(options: {
   toolchainSetupURL: string       // 必填:worker 导入它以装 __esbuildTransform / __oxcParseSync
   stages?: string[]               // 默认 ['logic','view','style']
   workPath?: string               // 默认 '/work'
+  onLog?: (e: { level: 'log'|'warn'|'error', message: string, stage: string }) => void
+                                  // 可选:worker 内编译器的诊断(缺组件/不支持 wx API/样式降级…)转发出来
 }): {
   warmup(): Promise<void>
-  compile(source: { files: Record<string,string> } | Record<string,string>,
-          opts?: { workPath?: string }): Promise<{ appId: string, name: string, files: Record<string,string> }>
+  compile(input: { files: Record<string,string>, workPath?: string })
+    : Promise<{ appId: string, name: string, files: Record<string,string> }>
   dispose(): void
   stages: string[]
 }
 ```
 
-> `createWorker` 指向的资源是 `dist/stage-worker.browser.js`。用 bundler 时上面的 `new URL(...)` 形态最省事；若把 bundle 当静态资源托管，就 `() => new Worker('/stage-worker.browser.js', { type: 'module' })`。
+> **`createWorker` 两种写法都行**，取决于你怎么托管 `dist/stage-worker.browser.js`：
+> - 用 bundler（Vite/Webpack…）按包解析：`() => new Worker(new URL('@dimina-kit/web-compiler/stage-worker', import.meta.url), { type: 'module' })`
+> - 把 bundle 当静态资源托管：`() => new Worker('/stage-worker.browser.js', { type: 'module' })`
+>
+> **`compile` 是单参**：`{ files, workPath }` 一个对象——不要拆成两个参数、也别把 `workPath` 塞进别处。`onLog` 让你不碰 worker 就能拿到编译器那些原本只在 worker 内 `console.*` 的诊断（见「已知限制」）。
 
 ### toolchainSetupURL：宿主提供的 wasm 工具链
 
-wasm 工具链（esbuild-wasm + oxc-parser）**不能打进 bundle**（Go / WASI 运行时被打包会损坏），且它们的 `.wasm` 是宿主托管的资源——所以宿主提供**一个 ESM**，stage worker 在 warmup 时导入它，由它装好编译器 shim 依赖的两个全局钩子：
+wasm 工具链（esbuild-wasm + oxc-parser）**不能打进 bundle**（Go / WASI 运行时被打包会损坏），且它们的 `.wasm` 是宿主托管的资源——所以宿主提供**一个 ESM**（`toolchainSetupURL` 指向它），stage worker 在 warmup 时导入它，由它装好编译器 shim 依赖的两个全局钩子。用本包的助手 `@dimina-kit/web-compiler/toolchain`，这个模块就两行：
 
 ```js
-// toolchain-setup.js —— 在 stage worker 里被 import,用顶层 await
-const oxc = await import('oxc-parser')                       // 官方 wasm32-wasi 绑定
-globalThis.__oxcParseSync = oxc.parseSync
+// toolchain-setup.js —— 在 stage worker 里被 import(顶层 await)
+import { installOxc, installEsbuildFromURL } from '@dimina-kit/web-compiler/toolchain'
 
-const esbuild = await import('<你的 esbuild-wasm 浏览器 ESM>')
-await esbuild.initialize({ wasmURL: '<你的 esbuild.wasm>', worker: true })
-globalThis.__esbuildTransform = (input, options) => esbuild.transform(input, options)
+installOxc(await import('oxc-parser'))                       // oxc 只能由你的 bundler 解析,所以传进来
+await installEsbuildFromURL('/esbuild-browser.mjs', '/esbuild.wasm')   // 见下,已内置 Blob-URL 兜底
 ```
 
-> **cross-origin isolation：** oxc 的 wasm32-wasi 绑定用到 SharedArrayBuffer，页面与 worker 需开 COOP/COEP（`Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp`）。**CSS 工具链不用宿主管**：浏览器 bundle 已内联真实 `cssnano` + `autoprefixer`（autoprefixer pin 到 node 版 web-compiler 运行时解析的同一份，当前 10.5.0；`process.cwd`/`__filename`/`os.homedir` 由构建 banner/define/shim 兜好），所以 CSS 产物与 node 版 web-compiler 逐字节一致。宿主只需装 esbuild + oxc 两个钩子。
+- **`installOxc(oxcModule)`**：把 `await import('oxc-parser')`（你的 bundler 才能解析它 + 取它的 wasm）装成 `__oxcParseSync`。
+- **`installEsbuildFromURL(moduleURL, wasmURL)`**：从**静态资源 URL** 加载 esbuild-wasm 浏览器 ESM 并 `initialize`，装成 `__esbuildTransform`。
 
-参考实现与验证：`dimina-web-client` 的 `demo/toolchain-setup.js` + `demo/pool-test.html`，`npm run test:pool`（三项目产物与单线程逐结构一致）。
+> **为什么是 URL 而不是 `import`：** esbuild-wasm 的浏览器构建通常只能当**静态资源**托管（把它的 Go 运行时打包会坏），而 bundler（Vite/Webpack/Rollup）**不允许** `import()` 一个静态资源目录里的 JS——`installEsbuildFromURL` 内部用 `fetch + Blob URL` 绕过 bundler 的模块图,替你把这个坑填了。若你的 esbuild-wasm 是 npm 依赖（bundler 能解析），也可以自己 `import * as esbuild from 'esbuild-wasm'` + `esbuild.initialize({ wasmURL })` + 设 `globalThis.__esbuildTransform`,不必用这个助手。
+>
+> **cross-origin isolation：** oxc 的 wasm32-wasi 绑定用到 SharedArrayBuffer，页面与 worker 需开 COOP/COEP（`Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp`）。**CSS 工具链不用宿主管**：浏览器 bundle 已内联真实 `cssnano` + `autoprefixer`（autoprefixer pin 到 node 版 web-compiler 运行时解析的同一份，当前 10.5.0），CSS 产物与 node 版 web-compiler 逐字节一致。宿主只需装 esbuild + oxc 两个钩子。
+
+参考实现与验证：`dimina-web-client` 的 `demo/toolchain-setup.js`（用上面两个助手）+ `demo/pool-test.html`，`npm run test:pool`（三项目产物与单线程逐结构一致，并演示 `onLog`）。
 
 ## core 接缝（自定义编排）
 
@@ -226,7 +236,7 @@ async function filesFromDir(dir, prefix = '') {           // 只读递来的 han
 
 - **`files` 目前只可靠承载文本产物。** `collectOutputs` 用 utf8 读回 `targetPath` 下所有产物；图片/svg 等二进制静态资源（compiler `copyFileSync` 到 `main/static`）会被按 utf8 读坏。纯文本项目/fixture 无碍；要用真实二进制资源，需下游自行从注入的 fs 读 `main/static` 的字节，别依赖返回的 `files`。
 - **`targetPath` 来自环境。** compiler 产物目录取 `process.env.TARGET_PATH`，否则 `os.tmpdir()/dimina-fe-dist-<时间戳>`（浏览器 os shim 下通常 `/tmp/...`）。`setupCompile` 会先 `rmSync` 清空它——别把 `TARGET_PATH` 指到源码目录或共享目录。用 `setupCompile` 返回的 `targetPath` 喂 `collectOutputs`。
-- **不是全 fail-fast。** 缺 fs 方法、坏 appid、坏 `project.config.json`、miniprogram_npm 构建失败会 **reject**；但**样式预处理器失败（如当前浏览器构建暂不支持 `.less`）会被吞掉、降级用原始 CSS**，PostCSS 解析失败返回空串，资源拷贝失败只 `console.log`，logic esbuild 压缩失败回退未压缩代码。所以宜收集 worker 的 console，或在产物为空/缺失时二次校验。
+- **不是全 fail-fast。** 缺 fs 方法、坏 appid、坏 `project.config.json`、miniprogram_npm 构建失败会 **reject**；但**样式预处理器失败（如当前浏览器构建暂不支持 `.less`）会被吞掉、降级用原始 CSS**，PostCSS 解析失败返回空串，资源拷贝失败只 `console.log`，logic esbuild 压缩失败回退未压缩代码。**用 pool 时把这些拿出来的办法是 `createCompilerPool({ onLog })`**——它把 worker 内编译器的 `console.*` 诊断（带 stage 标签）转发给你；也可在产物为空/缺失时二次校验。
 
 ## 依赖前置
 
@@ -263,7 +273,8 @@ pnpm --filter @dimina-kit/web-compiler test:realm-reuse # resetCompilerState 后
 - `src/compile-core.js` — 内联编排 dmcc 的 compile 函数；导出 `compileMiniApp` 与四个接缝 `setupCompile`/`compileStage`/`collectOutputs`/`resetCompilerState`（+ `STAGE_NAMES`）。相对路径引用 `dimina` 子模块的 compiler 源码。
 - `src/browser-entry.js` — 浏览器 core 入口，导出上述接缝 + `initToolchain()`（no-op）。
 - `src/pool.js` — **编排池** `createCompilerPool`：常驻 stage worker 池、并行派发、并集合并、realm 复用；不含编译器（轻量，~3KB）。
-- `src/stage-worker.js` — **包自带的常驻 stage worker**（内联 core + memfs）：warmup 时 `import(toolchainSetupURL)` 装 wasm 钩子，每次编译 seed 私有 memfs → `setupCompile` + 指定 stage → `collectOutputs`。
+- `src/stage-worker.js` — **包自带的常驻 stage worker**（内联 core + memfs）：warmup 时 `import(toolchainSetupURL)` 装 wasm 钩子，每次编译 seed 私有 memfs → `setupCompile` + 指定 stage → `collectOutputs`；并把编译器 `console.*` 诊断转发给 pool 的 `onLog`。
+- `src/toolchain.js` — 写 `toolchainSetupURL` 模块的可选助手（`installOxc` / `installEsbuildFromURL`，后者内置 esbuild-wasm 静态资源的 Blob-URL 兜底）。导出为 `@dimina-kit/web-compiler/toolchain`。
 - `src/shims/fs.js` — **无后端的 fs 转发层**（`setFs`/`resetFs`/`getFs`）；compiler 所有 `fs.xxx` 走它，未注入即抛错。
 - `src/shims/*` — 其余 node 内置与原生依赖的浏览器替身（oxc/esbuild/less/`os.homedir`/…）。
 - `scripts/build-compiler.js` — esbuild 打包。onLoad 给 logic/view/style-compiler 与 utils 追加 `__reset*` 导出（喂 `resetCompilerState`，不改子模块源码）；浏览器分支内联真实 `cssnano`+`autoprefixer`（autoprefixer pin 到 node 运行时解析的同一份，避免 esbuild 解析到多加 `-ms-` 前缀的另一版本）；browser 模式产出 core / stage-worker / pool 三个 bundle。
