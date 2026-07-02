@@ -52,6 +52,7 @@ import { webContents as electronWebContents } from 'electron'
 import type { WebContents } from 'electron'
 import type { ConnectionRegistry } from '@dimina-kit/electron-deck/main'
 import type { BridgeRouterHandle, RenderEvent } from '../../ipc/bridge-router.js'
+import { isFrontendSettled } from '../views/inject-when-ready.js'
 
 // ── routing table (pure, testable) ───────────────────────────────────────────
 
@@ -318,6 +319,11 @@ export function installElementsForward(deps: ElementsForwardDeps): () => void {
 
   function dispatchToFrontend(message: unknown): void {
     if (disposed || devtoolsWc.isDestroyed()) return
+    // Unified settled gate (same predicate as the reconcile tick): an unsettled
+    // front-end wipes its state on load anyway, so the message is meaningless
+    // there — and the executeJavaScript would queue one did-stop-loading waiter
+    // per push (an activePage burst piles them). The post-settle tick re-primes.
+    if (!isFrontendSettled(devtoolsWc)) return
     let json: string
     try {
       json = JSON.stringify(message)
@@ -350,6 +356,9 @@ export function installElementsForward(deps: ElementsForwardDeps): () => void {
   /** Tell the front-end its document is stale → it re-pulls lazily (routed). */
   function pushDocumentUpdated(): void {
     if (disposed || devtoolsWc.isDestroyed()) return
+    // Same unified settled gate as dispatchToFrontend — render events (the
+    // activePage burst) drive this during churn.
+    if (!isFrontendSettled(devtoolsWc)) return
     let script: string
     try {
       script = buildDocumentUpdatedScript()
@@ -599,6 +608,13 @@ export function installElementsForward(deps: ElementsForwardDeps): () => void {
     // any later Elements click) is already routed to render.
     reconcileTimer = setInterval(() => {
       if (disposed || devtoolsWc.isDestroyed()) { stop(); return }
+      // An unsettled front-end can't run the script anyway, and executeJavaScript
+      // against it queues one did-stop-loading waiter PER TICK on the emitter
+      // (150ms × a seconds-long reload piles past the MaxListeners ceiling).
+      // MUST be the shared Electron-aligned predicate — a bare isLoading()
+      // probe diverges from Electron's internal isLoadingMainFrame gate and
+      // keeps piling. Skip; the first post-settle tick re-establishes the hook.
+      if (!isFrontendSettled(devtoolsWc)) return
       devtoolsWc
         .executeJavaScript(buildReconcileScript())
         .then((res: unknown) => {

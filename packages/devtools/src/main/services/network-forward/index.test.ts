@@ -75,7 +75,10 @@ function makeServiceWc() {
  * configured value to simulate the API being ready (true) or still booting
  * (false → forwarder retries / falls back).
  */
-function makeDevtoolsWc(apiReady: boolean | (() => boolean) = true) {
+function makeDevtoolsWc(
+  apiReady: boolean | (() => boolean) = true,
+  isLoading: () => boolean = () => false,
+) {
   const exec = vi.fn((_script: string, _userGesture?: boolean) =>
     Promise.resolve(typeof apiReady === 'function' ? apiReady() : apiReady))
   // The forwarder watches the host wc's 'destroyed' event to auto-clear the
@@ -84,6 +87,8 @@ function makeDevtoolsWc(apiReady: boolean | (() => boolean) = true) {
   const destroyedListeners = new Set<() => void>()
   const wc = {
     isDestroyed: () => false,
+    isLoading,
+    getURL: () => 'devtools://devtools/bundled/devtools_app.html',
     executeJavaScript: exec,
     once: (ev: string, fn: () => void) => { if (ev === 'destroyed') destroyedListeners.add(fn) },
     removeListener: (ev: string, fn: () => void) => { if (ev === 'destroyed') destroyedListeners.delete(fn) },
@@ -346,6 +351,52 @@ describe('createNetworkForwarder — native DevTools dispatch', () => {
     // requestId rewritten in the forwarded payload.
     const rws = dispatched.find((d) => d.method === 'Network.requestWillBeSent')!
     expect((rws.params as { requestId: string }).requestId).toMatch(/^dimina:sim:/)
+  })
+
+  it('holds the queue while the MAIN frame is loading even when the coarse isLoading reads false', async () => {
+    const sim = makeSimWc()
+    const svc = makeServiceWc()
+    const dt = makeDevtoolsWc(true, () => false)
+    // Electron's internal executeJavaScript gate is isLoadingMainFrame, not
+    // isLoading — the flush must consult the same predicate or every dispatch
+    // during the divergence window queues one did-stop-loading waiter.
+    Object.assign(dt.wc, { isLoadingMainFrame: () => true })
+    const fwd = createNetworkForwarder({ getServiceWc: () => svc.wc })
+    fwd.setDevtoolsHost(dt.wc)
+    fwd.attachSimulator(sim.wc)
+
+    sim.emitMessage('Network.requestWillBeSent', { requestId: 'r1', request: { url: 'https://api/x', method: 'GET' } })
+    await flushMicrotasks()
+    expect(dt.exec).not.toHaveBeenCalled()
+  })
+
+  it('holds the queue while the front-end is loading — no executeJavaScript per event, delivery resumes post-load', async () => {
+    const sim = makeSimWc()
+    const svc = makeServiceWc()
+    let loading = true
+    const dt = makeDevtoolsWc(true, () => loading)
+    const fwd = createNetworkForwarder({ getServiceWc: () => svc.wc })
+    fwd.setDevtoolsHost(dt.wc)
+    fwd.attachSimulator(sim.wc)
+
+    // A relaunch-style burst against a loading front-end: every dispatch would
+    // queue one did-stop-loading waiter on the wc emitter — the flush must not
+    // call executeJavaScript at all until the load ends.
+    for (let i = 0; i < 5; i++) {
+      sim.emitMessage('Network.requestWillBeSent', { requestId: `r${i}`, request: { url: `https://api/${i}`, method: 'GET' } })
+    }
+    await flushMicrotasks()
+    expect(dt.exec).not.toHaveBeenCalled()
+
+    loading = false
+    sim.emitMessage('Network.requestWillBeSent', { requestId: 'r-post', request: { url: 'https://api/post', method: 'GET' } })
+    await flushMicrotasks()
+    // The held burst is preserved (bounded queue) and delivered after load.
+    const dispatched = dt.exec.mock.calls.flatMap((c) => decodeDispatched(String(c[0])))
+    const urls = dispatched.map((d) => (d.params as { request?: { url?: string } }).request?.url)
+    expect(urls).toContain('https://api/0')
+    expect(urls).toContain('https://api/4')
+    expect(urls).toContain('https://api/post')
   })
 
   it('does NOT forward dataReceived (二期 deferred)', async () => {

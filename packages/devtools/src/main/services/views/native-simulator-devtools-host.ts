@@ -12,6 +12,7 @@ import { installServiceConsoleForward } from '../service-console/index.js'
 import { VIEW_ID } from '../../../shared/view-ids.js'
 import { resolveProjectEditorTarget } from './resolve-project-editor-target.js'
 import { destroyChildView } from './destroy-child-view.js'
+import { createLoadDeferredInjector } from './inject-when-ready.js'
 import type { PlacementReconciler } from './placement-reconciler.js'
 import type { ViewManagerContext } from './view-manager.js'
 
@@ -98,6 +99,10 @@ export function createDevtoolsHost(
   let stopServiceConsole: (() => void) | null = null
   let nativeDevtoolsRetryTimer: ReturnType<typeof setTimeout> | null = null
   let nativeDevtoolsRetryToken = 0
+  // Front-end injects re-fire on EVERY re-point; while the host is loading each
+  // raw executeJavaScript would queue one did-stop-loading waiter per call.
+  // The deferred injector keeps one hook per (wc, kind) with latest-wins.
+  const injectWhenReady = createLoadDeferredInjector()
   // The open-in-editor: click a console file link → workbench. The right-panel
   // console is the embedded Chromium DevTools front-end. Once a sourcemap maps a
   // console frame back to source, we redirect a source-link click to OUR
@@ -180,11 +185,7 @@ export function createDevtoolsHost(
           void devtoolsWc.executeJavaScript(buildCustomizeTabsScript()).catch(() => {})
         } catch { /* wc torn down mid-call */ }
       }
-      if (devtoolsWc.isLoading()) {
-        devtoolsWc.once('dom-ready', inject)
-      } else {
-        inject()
-      }
+      injectWhenReady(devtoolsWc, 'customize-tabs', inject)
     } catch { /* wc surface incomplete / torn down; degrade silently */ }
   }
 
@@ -192,11 +193,7 @@ export function createDevtoolsHost(
     // Inject the front-end handler on every (re)attach — the DevTools front-end
     // wc is recreated per simulatorView, so a fresh host needs the handler set.
     if (!devtoolsWc.isDestroyed()) {
-      if (devtoolsWc.isLoading()) {
-        devtoolsWc.once('dom-ready', () => injectOpenResourceHandler(serviceWc, devtoolsWc))
-      } else {
-        injectOpenResourceHandler(serviceWc, devtoolsWc)
-      }
+      injectWhenReady(devtoolsWc, 'open-in-editor', () => injectOpenResourceHandler(serviceWc, devtoolsWc))
     }
     // Attach the `devtools-open-url` decoder to the inspected service wc once
     // (the listener is keyed off the encoded sentinel scheme, so it only acts on
@@ -265,6 +262,14 @@ export function createDevtoolsHost(
       // so a focusing window would yank focus repeatedly (disrupting the user /
       // e2e).
       next.openDevTools({ mode: 'detach', activate: false })
+      // The host is factually USED the moment it navigates (openDevTools) —
+      // NOT when the whole wiring below succeeds. Flagging late lies to the
+      // retry path: a mid-wiring throw (service wc torn down mid-point) left
+      // the flag false, so the 50ms follow-retry re-pointed the SAME navigated
+      // host over and over, re-running the front-end injects each attempt
+      // until the host wc's pending executeJavaScript waiters tripped the
+      // MaxListeners ceiling. Flag first: a failed attempt rebuilds fresh.
+      devtoolsHostUsed = true
       // Redirect console source-link clicks to the workbench editor.
       wireOpenInEditor(next, simulatorView.webContents)
       // Keep only Elements/Console/Network tabs (front-most, in that order).
@@ -281,9 +286,12 @@ export function createDevtoolsHost(
         connections: ctx.connections,
         emit: (entry) => ctx.consoleForwarder?.emit(entry),
       }).stop
-      devtoolsHostUsed = true
       return true
-    } catch {
+    } catch (err) {
+      // Not silent: a throw here (service wc torn down mid-point is the common
+      // one) makes the follow-retry loop spin — leave a trace so the spin has
+      // a name in the log instead of hiding for weeks.
+      console.warn('[devtools-host] point-at-service-wc failed; retry will rebuild:', err)
       if (nativeDevtoolsSourceWc?.id === next.id) {
         nativeDevtoolsSourceWc = null
       }
@@ -398,7 +406,7 @@ export function createDevtoolsHost(
         if (stopElementsForward === thisForward) stopElementsForward = null
       })
     }
-    devtoolsWc.once('dom-ready', () => {
+    injectWhenReady(devtoolsWc, 'console-default', () => {
       devtoolsWc.executeJavaScript(`
         (function() {
           try { localStorage.setItem('panel-selectedTab', '"console"') } catch {}
