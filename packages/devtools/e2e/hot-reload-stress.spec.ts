@@ -138,6 +138,21 @@ async function getDeviceShellWebviewCount(app: ElectronApplication): Promise<num
   ).catch(() => 0)
 }
 
+/**
+ * The simulator shell WCV's webContents id, or -1 when absent. Soft reload
+ * (ready-then-swap) keeps ONE WebContentsView alive across recompiles, so this
+ * id must stay constant through the whole stress run — an id change means a
+ * round fell back to the hard teardown+rebuild path (or the shell died).
+ */
+async function getSimulatorShellWcId(app: ElectronApplication): Promise<number> {
+  return app.evaluate(({ webContents }) => {
+    const shell = webContents
+      .getAllWebContents()
+      .find((wc) => !wc.isDestroyed() && wc.getURL().includes('simulator.html'))
+    return shell ? shell.id : -1
+  })
+}
+
 /** True if the simulator shell WCV or any render-host page guest crashed. */
 async function anyGuestOrShellCrashed(app: ElectronApplication): Promise<boolean> {
   return app.evaluate(({ webContents }) => {
@@ -321,8 +336,10 @@ test.describe('Hot-reload stress (30 rapid recompiles)', () => {
     }
 
     const baseline = await getMemorySample(electronApp)
+    const baselineShellWcId = await getSimulatorShellWcId(electronApp)
+    expect(baselineShellWcId, 'a live simulator shell must exist before the stress loop').toBeGreaterThan(0)
     console.log(
-      `[hot-reload-stress] baseline workingSetSizeKb=${baseline.workingSetSizeKb} webContentsCount=${baseline.webContentsCount}`,
+      `[hot-reload-stress] baseline workingSetSizeKb=${baseline.workingSetSizeKb} webContentsCount=${baseline.webContentsCount} shellWcId=${baselineShellWcId}`,
     )
 
     const samples: MemorySample[] = []
@@ -346,6 +363,13 @@ test.describe('Hot-reload stress (30 rapid recompiles)', () => {
 
       const crashed = await anyGuestOrShellCrashed(electronApp)
       expect(crashed, `round ${i}: no render-host guest or simulator shell should crash`).toBe(false)
+
+      const shellWcId = await getSimulatorShellWcId(electronApp)
+      expect(
+        shellWcId,
+        `round ${i}: the simulator shell WCV must be the SAME webContents across recompiles ` +
+          '(soft reload swaps content inside the live shell; an id change means the round fell back to hard teardown+rebuild)',
+      ).toBe(baselineShellWcId)
 
       const sample = await getMemorySample(electronApp)
       samples.push(sample)

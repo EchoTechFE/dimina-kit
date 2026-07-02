@@ -11,12 +11,33 @@ how zoom flows.
 The renderer's `<SimulatorPanel>` draws **NO** phone and **NO** bezel — only a
 toolbar, an EMPTY flex:1 placeholder div, and a page-path bar. The simulator WCV
 is overlaid on exactly that placeholder region. Inside the WCV,
-`simulator.html` → **`DeviceShell` draws the WHOLE phone** (rounded corners,
-notch, status bar, nav-bar, page viewport, tab-bar, home-indicator) at FIXED
-device-logical size, on a gray "desk" that fills the WCV and **scrolls natively**
-when the phone is larger than the region. The WCV is a plain rectangle with no
-native corner radius — its own web-viewport is the (straight-edged) clip. The
-page itself is a render-host `<webview>` guest nested inside the DeviceShell.
+`simulator.html` → `SimulatorApp` (`src/simulator/simulator-app.tsx`) →
+**`DeviceShell` draws the WHOLE phone** (rounded corners, notch, status bar,
+nav-bar, page viewport, tab-bar, home-indicator) at FIXED device-logical size,
+on a gray "desk" that fills the WCV and **scrolls natively** when the phone is
+larger than the region. The WCV is a plain rectangle with no native corner
+radius — its own web-viewport is the (straight-edged) clip. The page itself is
+a render-host `<webview>` guest nested inside the DeviceShell.
+
+## Recompile = soft reload (ready-then-swap), not a WCV rebuild
+
+A watcher rebuild does NOT tear the WCV down. The renderer asks main to
+soft-reload (`SimulatorChannel.SoftReload`); when the shell is live+ready main
+forwards `SIMULATOR_EVENTS.RELAUNCH {url}` into the WCV, and `SimulatorApp`
+boots a SECOND app session whose DeviceShell mounts invisibly
+(`visibility:hidden` — `display:none` would keep its `<webview>` guest from
+attaching) next to the live one. When the new session's root page reports
+`DOM_READY` the two swap in a single React commit and the old session is
+disposed; a session that never becomes ready is dropped after
+`SOFT_RELOAD_TIMEOUT_MS` and the live shell stays. During the overlap BOTH
+shells receive every `SIMULATOR_EVENTS` broadcast, so session-scoped events
+(API_CALL / NAV_ACTION / TAB_ACTION) are subscribed through
+`SimulatorMiniApp.onSessionEvent`, which drops payloads naming another
+`appSessionId`. Shell wrappers render in boot order and surviving nodes never
+move in the DOM — a moved `<webview>` re-attaches and reloads its guest. The
+hard path (`attachNativeSimulator`, full teardown + rebuild) remains the
+fallback when main reports no live+ready shell, and the only path for project
+open/close and device relaunch.
 
 ```
 renderer (z2)          SimulatorPanel: toolbar / flex:1 placeholder / path-bar

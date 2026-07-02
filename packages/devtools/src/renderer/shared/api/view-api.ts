@@ -33,6 +33,18 @@ export function attachNativeSimulator(simulatorUrl: string, simWidth: number): P
   return invoke<void>(SimulatorChannel.AttachNative, simulatorUrl, simWidth)
 }
 
+/**
+ * Soft-reload the live native simulator after a watcher rebuild: main forwards
+ * a RELAUNCH into the existing DeviceShell WCV (which boots a new app session
+ * and swaps when it is ready) instead of destroying the view. Resolves `true`
+ * when main accepted; `false`/`undefined` (no live+ready shell, or the lenient
+ * invoke swallowed a failure) means the caller must fall back to the hard
+ * {@link attachNativeSimulator} rebuild.
+ */
+export function softReloadNativeSimulator(simulatorUrl: string): Promise<boolean | undefined> {
+  return invoke<boolean | undefined>(SimulatorChannel.SoftReload, simulatorUrl)
+}
+
 /** Detach the Chromium DevTools view. */
 export function detachSimulator(): Promise<void> {
   return invoke<void>(SimulatorChannel.Detach)

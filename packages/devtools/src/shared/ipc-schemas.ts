@@ -76,6 +76,17 @@ export const SimulatorAttachNativeSchema = z.tuple([
 ])
 
 /**
+ * simulator:soft-reload (native-host only) — the rebuilt simulator URL to
+ * soft-reload the live shell at. Same http(s)-only constraint as AttachNative
+ * (the URL becomes the new app session's route inside the existing WCV).
+ */
+export const SimulatorSoftReloadSchema = z.tuple([
+  z.string().url().refine((u) => u.startsWith('http://') || u.startsWith('https://'), {
+    message: 'simulator URL must be http(s)',
+  }),
+])
+
+/**
  * simulator:set-device-info (native-host only) — the selected device's logical
  * metrics, mapped by main into the service-host window's HostEnvSnapshot. Sizes
  * are bounded positive ints (logical device px); strings are bounded to keep the

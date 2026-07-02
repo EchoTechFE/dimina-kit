@@ -196,6 +196,12 @@ interface AppSession {
    * boot this disposed session into the next spawn's window. Null on the fresh
    * path (which uses a self-removing `once`). */
   onServiceBoot: (() => void) | null
+  /** The `'destroyed'` teardown hook bound to the simulator WCV, kept so dispose
+   * can detach it. The WCV is SHARED across the sessions it soft-reloads
+   * through, so a session disposed gracefully (DISPOSE IPC) must remove its
+   * own once() — otherwise every soft reload leaks one listener on the
+   * still-alive wc until the MaxListeners warning fires. */
+  onSimulatorDestroyed: (() => void) | null
   /** Handle for this session's `ctx.registry` shutdown-fallback entry. Disposed
    * on normal session teardown so the registry doesn't grow one stale closure
    * per respawn (the fallback only needs to fire at whole-app shutdown for
@@ -595,8 +601,7 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
   const onActivePage = (event: IpcMainEvent, payload: ActivePagePayload): void => {
     const ap = state.appSessions.get(payload.appSessionId)
     if (!ap) return
-    const senderApp = appByWc(state, event.sender)
-    if (!senderApp || senderApp.appSessionId !== ap.appSessionId) return
+    if (!senderBoundToSession(state, event.sender, ap)) return
     if (ap.pages.has(payload.bridgeId)) {
       ap.activeBridgeId = payload.bridgeId
       const pagePath = state.pageSessions.get(payload.bridgeId)?.pagePath
@@ -612,8 +617,7 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
   const onPageStack = (event: IpcMainEvent, payload: PageStackPayload): void => {
     const ap = state.appSessions.get(payload.appSessionId)
     if (!ap) return
-    const senderApp = appByWc(state, event.sender)
-    if (!senderApp || senderApp.appSessionId !== ap.appSessionId) return
+    if (!senderBoundToSession(state, event.sender, ap)) return
     ap.pageStack = payload.stack
   }
   ipcMain.on(C.PAGE_STACK, onPageStack)
@@ -641,8 +645,7 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
     // its tab (mirrors the default path's postMessage(pageUnload) eviction).
     if (payload.event === 'pageUnload' && ctx.appData) {
       const ap = state.appSessions.get(payload.appSessionId)
-      const senderApp = appByWc(state, event.sender)
-      if (ap && senderApp && senderApp.appSessionId === ap.appSessionId) {
+      if (ap && senderBoundToSession(state, event.sender, ap)) {
         ctx.appData.evictBridge(ap.appId, payload.bridgeId)
       }
     }
@@ -660,9 +663,10 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
     const target = resolveAppByBridgeId(state, payload.bridgeId)
     if (!target) return
     // Only the app's service window or simulator window can issue dispose.
-    const senderApp = appByWc(state, event.sender)
-    if (senderApp && senderApp.appSessionId !== target.appSessionId) {
-      console.warn(`[bridge-router] DISPOSE rejected: sender belongs to ${senderApp.appSessionId}, target ${target.appSessionId}`)
+    // (Unknown senders pass — lenient by design; senderBoundToSession covers
+    // the session's own simulator WCV even when the map names a newer session.)
+    if (!senderBoundToSession(state, event.sender, target) && appByWc(state, event.sender)) {
+      console.warn(`[bridge-router] DISPOSE rejected: sender not bound to target ${target.appSessionId}`)
       return
     }
     // AppData bridge eviction happens inside disposeAppSession (single
@@ -872,6 +876,7 @@ async function handleSpawn(
     poolEntryId,
     onServiceClosed: null,
     onServiceBoot: null,
+    onSimulatorDestroyed: null,
     registryHandle: null,
   }
 
@@ -929,6 +934,7 @@ async function handleSpawn(
   const onSimulatorDestroyed = (): void => {
     void disposeAppSession(state, appSessionId)
   }
+  appSession.onSimulatorDestroyed = onSimulatorDestroyed
   simulatorWc.once('destroyed', onSimulatorDestroyed)
   // The simulator WCV may have been torn down DURING this spawn's awaits
   // (loadAppConfig / resource server / service-host creation) — e.g. a project
@@ -1002,8 +1008,7 @@ async function handlePageOpen(
   const ap = state.appSessions.get(opts.appSessionId)
   if (!ap) throw new Error(`[bridge-router] PAGE_OPEN unknown appSession ${opts.appSessionId}`)
   // Only the simulator window owning the app can open additional pages.
-  const senderApp = appByWc(state, event.sender)
-  if (!senderApp || senderApp.appSessionId !== opts.appSessionId) {
+  if (!senderBoundToSession(state, event.sender, ap)) {
     throw new Error('[bridge-router] PAGE_OPEN rejected: caller not bound to app session')
   }
 
@@ -1040,8 +1045,7 @@ function handlePageClose(state: RouterState, sender: WebContents, payload: PageC
   }
   const ap = state.appSessions.get(page.appSessionId)
   if (!ap) return
-  const senderApp = appByWc(state, sender)
-  if (!senderApp || senderApp.appSessionId !== ap.appSessionId) {
+  if (!senderBoundToSession(state, sender, ap)) {
     console.warn('[bridge-router] PAGE_CLOSE rejected: caller not bound to app session')
     return
   }
@@ -1051,8 +1055,7 @@ function handlePageClose(state: RouterState, sender: WebContents, payload: PageC
 function handlePageLifecycle(state: RouterState, sender: WebContents, payload: PageLifecyclePayload): void {
   const ap = state.appSessions.get(payload.appSessionId)
   if (!ap) return
-  const senderApp = appByWc(state, sender)
-  if (!senderApp || senderApp.appSessionId !== ap.appSessionId) return
+  if (!senderBoundToSession(state, sender, ap)) return
 
   forwardToService(ap, {
     type: payload.event,
@@ -1064,8 +1067,7 @@ function handlePageLifecycle(state: RouterState, sender: WebContents, payload: P
 function handleNavCallback(state: RouterState, sender: WebContents, payload: NavCallbackPayload): void {
   const ap = state.appSessions.get(payload.appSessionId)
   if (!ap) return
-  const senderApp = appByWc(state, sender)
-  if (!senderApp || senderApp.appSessionId !== ap.appSessionId) return
+  if (!senderBoundToSession(state, sender, ap)) return
 
   const result = { errMsg: payload.errMsg }
   if (payload.ok) {
@@ -1809,6 +1811,23 @@ function appByWc(state: RouterState, wc: WebContents): AppSession | undefined {
   return undefined
 }
 
+/**
+ * Whether `sender` is authorized to control app session `ap`. One simulator
+ * WCV can own several live sessions at once (soft reload keeps the outgoing
+ * session alive while the incoming one boots), but `wcIdToAppSessionId` is
+ * single-valued per wc and each spawn re-points the shared entry at the newest
+ * session — resolving the sender through the map alone misattributes the older
+ * session's own control messages (its DISPOSE / lifecycle would be rejected as
+ * another session's traffic). A sender that IS the session's simulator WCV is
+ * therefore authorized directly; everything else falls back to the map.
+ */
+function senderBoundToSession(state: RouterState, sender: WebContents, ap: AppSession): boolean {
+  if (!sender.isDestroyed() && !ap.simulatorWc.isDestroyed() && ap.simulatorWc.id === sender.id) {
+    return true
+  }
+  return appByWc(state, sender)?.appSessionId === ap.appSessionId
+}
+
 function resolveAppByBridgeId(state: RouterState, bridgeId: string): AppSession | undefined {
   if (state.appSessions.has(bridgeId)) return state.appSessions.get(bridgeId)
   const page = state.pageSessions.get(bridgeId)
@@ -1929,8 +1948,28 @@ async function disposeAppSession(
   } else if (!opts.serviceAlreadyClosed && !ap.serviceWindow.isDestroyed()) {
     ap.serviceWindow.close()
   }
-  state.wcIdToAppSessionId.delete(ap.serviceWc.id)
-  state.wcIdToAppSessionId.delete(ap.simulatorWc.id)
+  // The simulator WCV outlives gracefully-disposed sessions (soft reload keeps
+  // ONE wc across every recompile), so this session's 'destroyed' once() must
+  // be detached here — left in place it accumulates one listener per soft
+  // reload until the MaxListeners warning fires. Idempotent with the
+  // destroyed-path itself (a fired once() is already gone).
+  if (ap.onSimulatorDestroyed && !ap.simulatorWc.isDestroyed()) {
+    ap.simulatorWc.removeListener('destroyed', ap.onSimulatorDestroyed)
+  }
+  ap.onSimulatorDestroyed = null
+
+  // Value-checked unbind: the simulator WCV entry is SHARED across the
+  // sessions it owns and re-pointed at the newest on every spawn. Disposing an
+  // older session (soft-reload swap retiring the outgoing one) must not delete
+  // the newer session's live binding — only remove entries that still name
+  // THIS session. Same guard for the service wc: a pooled window's entry may
+  // already belong to the next session that acquired it.
+  if (state.wcIdToAppSessionId.get(ap.serviceWc.id) === appSessionId) {
+    state.wcIdToAppSessionId.delete(ap.serviceWc.id)
+  }
+  if (state.wcIdToAppSessionId.get(ap.simulatorWc.id) === appSessionId) {
+    state.wcIdToAppSessionId.delete(ap.simulatorWc.id)
+  }
 
   // Only the local fallback server needs closing; the dev-server base is owned
   // by the workspace session, not this app session.

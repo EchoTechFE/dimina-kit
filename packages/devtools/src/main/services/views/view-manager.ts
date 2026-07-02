@@ -39,6 +39,8 @@ import {
   type HostToolbarMessageSubscription,
 } from './host-toolbar-port-channel.js'
 import { parseRoute } from '../../../shared/simulator-route.js'
+import { SIMULATOR_EVENTS } from '../../../shared/bridge-channels.js'
+import type { RelaunchPayload } from '../../../shared/bridge-channels.js'
 import { HEADER_H, HOST_TOOLBAR_RUNTIME_MARKER } from '../../../shared/constants.js'
 import { reconcile, createInitialState } from '@dimina-kit/electron-deck/layout'
 import type {
@@ -134,6 +136,16 @@ export interface ViewManager {
    * geometry is anchor-published.
    */
   attachNativeSimulator(simulatorUrl: string, simWidth: number): Promise<void>
+  /**
+   * Soft-reload the LIVE native simulator after a watcher rebuild: forward a
+   * SIMULATOR_EVENTS.RELAUNCH (carrying the rebuilt simulator URL) into the
+   * existing WCV so the shell boots a new app session in place and swaps when
+   * it is ready — the phone shell never unmounts. Returns false (no event
+   * sent) when there is no live simulator view or its shell has not finished
+   * its first boot (first render guest did-finish-load); the caller then falls
+   * back to the hard attachNativeSimulator rebuild.
+   */
+  softReloadNativeSimulator(simulatorUrl: string): boolean
   /**
    * Destroy and null out the simulator view (e.g. on simulator detach).
    * Also destroys the cached settings view and hides the popover —
@@ -426,6 +438,13 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   let nativeSimulatorViewAdded = false
   let nativeSimulatorProjectPath: string | null = null
   let settleNativeSimulatorReady: (() => void) | null = null
+  // NATIVE-HOST ONLY. Whether the CURRENT simulator view's shell finished its
+  // first boot (first render guest did-finish-load) — the precondition for a
+  // soft reload: only a fully-booted shell has the RELAUNCH listener installed,
+  // so sending earlier would silently drop the event and strand the renderer
+  // (it was told "accepted" but nothing reloads). Reset on teardown/re-attach —
+  // readiness never carries over to a rebuilt view.
+  let nativeSimulatorShellReady = false
   // NATIVE-HOST ONLY. The `ipcMain.on` listener that services the
   // `__diminaCustomApis` bridge for the current native simulator webContents
   // (see `attachNativeCustomApiBridge`). Tracked so we can remove it before
@@ -1438,6 +1457,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     } catch { /* ignore */ }
     nativeSimulatorView = null
     nativeSimulatorViewAdded = false
+    nativeSimulatorShellReady = false
     // The instance is being replaced/destroyed — forget its reconciled mount
     // state so the NEXT rebuilt view is treated as a fresh attach. Without this,
     // the level-triggered reconciler still records `simulator` as `attached`
@@ -1648,6 +1668,9 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       // first mini-app page has completed its own document load.
       guestWc.once('did-finish-load', () => {
         if (nativeSimulatorView !== view || simWc.isDestroyed()) return
+        // A loaded render guest means the shell booted end-to-end — from here
+        // on a soft reload (RELAUNCH into this live shell) is deliverable.
+        nativeSimulatorShellReady = true
         settleNativeSimulatorReady?.()
         settleNativeSimulatorReady = null
       })
@@ -1708,6 +1731,14 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     // render-guest highlight chain, which targets the active render guest.)
     attachNativeSimulatorDevtoolsHost()
     return ready
+  }
+
+  function softReloadNativeSimulator(simulatorUrl: string): boolean {
+    if (!nativeSimulatorView || nativeSimulatorView.webContents.isDestroyed()) return false
+    if (!nativeSimulatorShellReady) return false
+    const payload: RelaunchPayload = { url: simulatorUrl }
+    nativeSimulatorView.webContents.send(SIMULATOR_EVENTS.RELAUNCH, payload)
+    return true
   }
 
   function detachSimulator(): void {
@@ -1871,6 +1902,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
 
   return {
     attachNativeSimulator,
+    softReloadNativeSimulator,
     detachSimulator,
     reapplySafeArea: (device) => safeArea.reapplyAll(device),
     showSettings,
