@@ -64,9 +64,11 @@ const pool = createCompilerPool({
 
 await pool.warmup()                                 // 起 3 个常驻 stage worker;每个各自初始化一次 wasm,之后 compile 复用
 const { appId, name, files } = await pool.compile({ files: source, workPath: '/project' })
-// source: { 相对路径: 内容 };返回 files: { 产物相对路径: 内容 }
+// 入参 source 与返回 files 都是文本 map:{ 相对路径: 文本内容 };二进制资源不能靠返回 files,见「已知限制」
 pool.dispose()                                       // 用完终止 worker
 ```
+
+> **上面是最小接入代码,但浏览器环境有前置要求**(不满足会在别处报错,不像示例不完整):页面与 worker 开 COOP/COEP;`toolchainSetupURL` 能被 worker 运行时 import;esbuild browser ESM 与 `esbuild.wasm` 可作静态资源访问;npm 用户需显式装 `@oxc-parser/binding-wasm32-wasi`(`cpu:wasm32` 会被跳过);本包经 `file:`/link 引用时要配 Vite `server.fs.allow`。逐条见文末「故障排查」。
 
 `compile()` 内部：三个常驻 worker **各跑一个完整 stage**（logic / view / style），各自 seed 私有 memfs、各自 `setupCompile` + 编译该 stage，产物取并集回传；跨 `compile()` 复用同一批 worker（每次编译前自动 `resetCompilerState`）。多个 `compile()` 会自动串行（共享常驻 realm 不能并发）。
 
@@ -186,16 +188,19 @@ Node 下原生 `esbuild` / `oxc-parser` 等保持 external，运行时需能从 
 
 ### 浏览器单线程（core 直接用）
 
-只编一次、不需要并行时，直接用 core：宿主装两个 wasm 钩子，建 fs，调 `compileMiniApp`。
+只编一次、不需要并行时，直接用 core：宿主先把 wasm 工具链装成两个全局钩子（`esbuild` 必须先 `initialize`，`oxcParseSync` 来自 `oxc-parser`），再建 fs、调 `compileMiniApp`。
 
 ```js
-globalThis.__esbuildTransform = (input, options) => esbuild.transform(input, options)
-globalThis.__oxcParseSync = oxcParseSync
-
+import * as esbuild from 'esbuild-wasm'
+import { parseSync as oxcParseSync } from 'oxc-parser'
 import { Volume, createFsFromVolume } from 'memfs'
 import { compileMiniApp } from '@dimina-kit/compiler/browser'
 
-const vol = Volume.fromJSON(files, '/project')
+await esbuild.initialize({ wasmURL: '/esbuild.wasm', worker: true })
+globalThis.__esbuildTransform = (input, options) => esbuild.transform(input, options)
+globalThis.__oxcParseSync = oxcParseSync
+
+const vol = Volume.fromJSON(files, '/project')   // files: { 相对路径: 源码文本 }
 const result = await compileMiniApp({ fs: createFsFromVolume(vol), workPath: '/project' })
 ```
 
@@ -239,7 +244,9 @@ async function filesFromDir(dir, prefix = '') {           // 只读递来的 han
 
 ## fs 契约与约定
 
-- **本包不带 fs 实现。** `src/shims/fs.js` 是转发层，`compileMiniApp({ fs })` / 接缝在一次编译期间把 compiler 的 `fs.xxx` 指向你的 fs（`setFs`/`resetFs`）；不注入则任何 `fs.*` 调用直接抛错。
+> 这套 fs 契约只针对 **core / 自定义编排**(你自己注入 fs 的场景)。**用内置 pool 时下游不接触 fs**——只传 `{ files, workPath }`,stage worker 内部会为每次编译建私有 memfs 承载 `files`。
+
+- **core 不带 fs 实现。** `src/shims/fs.js` 是转发层，`compileMiniApp({ fs })` / 接缝在一次编译期间把 compiler 的 `fs.xxx` 指向你的 fs（`setFs`/`resetFs`）；不注入则任何 `fs.*` 调用直接抛错。
 - **项目目录由下游定。** `workPath`（默认 `/work`）就是你 seed 源码的目录。
 - **产物写回同一个 fs。** compiler `writeFileSync` 把产物写进你的 fs，所以传入的 fs 必须**可写**。产物目录 `targetPath` 见下。
 - **编译会修改你的 fs。** 缺 `project.config.json`/appid 时，会往 `${workPath}/project.config.json` 写入一个 appid（`dmlocalpreview`）——传入的 fs 不能当成只读快照。
