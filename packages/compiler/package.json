@@ -32,16 +32,26 @@
     "@babel/parser": "^7.29.7",
     "assert": "^2.1.0",
     "buffer": "^6.0.3",
-    "esbuild-wasm": "^0.28.0",
     "estree-walker": "^3.0.3",
     "events": "^3.3.0",
     "memfs": "^4.57.8",
-    "oxc-parser": "^0.137.0",
     "path-browserify": "^1.0.1",
     "stream-browserify": "^3.0.0",
     "util": "^0.12.5"
   },
+  "peerDependencies": {
+    "@oxc-parser/binding-wasm32-wasi": "^0.137.0",
+    "esbuild-wasm": "^0.28.0",
+    "oxc-parser": "^0.137.0"
+  },
+  "peerDependenciesMeta": {
+    "@oxc-parser/binding-wasm32-wasi": {
+      "optional": true
+    }
+  },
   "devDependencies": {
-    "esbuild": "^0.28.0"
+    "esbuild": "^0.28.0",
+    "esbuild-wasm": "^0.28.0",
+    "oxc-parser": "^0.137.0"
   }
 }
