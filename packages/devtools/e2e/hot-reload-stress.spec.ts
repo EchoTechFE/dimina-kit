@@ -99,7 +99,9 @@ async function readRenderText(app: ElectronApplication): Promise<string> {
     return await app.evaluate(async ({ webContents }) => {
       const frames = webContents
         .getAllWebContents()
-        .filter((wc) => !wc.isDestroyed() && wc.getURL().includes('pageFrame.html'))
+        // Skip loading frames: executeJavaScript on a loading wc queues one
+        // did-stop-loading waiter per poll (MaxListeners pile-up under churn).
+        .filter((wc) => !wc.isDestroyed() && !wc.isLoading() && wc.getURL().includes('pageFrame.html'))
       const texts: string[] = []
       for (const f of frames) {
         try {

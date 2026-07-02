@@ -39,6 +39,29 @@ hard path (`attachNativeSimulator`, full teardown + rebuild) remains the
 fallback when main reports no live+ready shell, and the only path for project
 open/close and device relaunch.
 
+### Leak guards on the churn cycle
+
+Coarse memory sampling can't see a leaked listener or a stale map entry, so
+resource coverage is count-based. The bridge router owns every session ledger
+(RouterState) and therefore also exposes the census — `BridgeRouterHandle.census()`,
+published to e2e as the NODE_ENV=test main-process global
+`__diminaResourceCensus`. Three layers consume it:
+
+- `src/main/ipc/bridge-router-census.test.ts` — unit: ledger shape + exact
+  return-to-baseline across spawn → dispose.
+- `e2e/soft-reload-census.spec.ts` — default suite, real Electron: 5 real
+  recompiles (round-unique marker must render) then the ledger, the shell wc
+  id and the webContents population must return exactly to baseline; closing
+  the project must return the ledger to the pre-open snapshot.
+- `e2e/hot-reload-stress.spec.ts` — manual-only (`HOT_RELOAD_STRESS=1`):
+  30-round memory-trend + webContents-count backstop for what counting can't
+  price (heap growth).
+
+Independently, the fixtures' auto `_maxListenersGate` fails any fixture-based
+test during which the app printed `MaxListenersExceededWarning` on stderr
+(`e2e/resource-guards.ts`) — the one-dead-listener-per-cycle class surfaces as
+a hard failure instead of log noise.
+
 ```
 renderer (z2)          SimulatorPanel: toolbar / flex:1 placeholder / path-bar
    │  createPlacementAnchor publishes the placeholder rect (+ zoom)
@@ -163,7 +186,7 @@ safe-area doc for the CDP wiring.)
 |---|---|
 | `src/renderer/.../project-runtime/components/simulator-panel.tsx` | z2 panel: toolbar / placeholder / path-bar; owns the simulator `createPlacementAnchor` |
 | `src/simulator/device-shell/device-shell.tsx` + `device-shell.css` | DeviceShell: draws the whole phone inside the WCV; hosts render-host `<webview>` guests |
-| `src/main/services/views/view-manager.ts` | `setNativeSimulatorViewBounds` (sole bounds authority + zoomFactor + pre-attach cache); `attachNativeSimulator` |
+| `src/main/services/views/native-simulator-view.ts` | native-simulator domain module: `attachNativeSimulator`, `softReloadNativeSimulator`, bounds/zoom application (`view-manager.ts` is the composition root wiring the per-domain view modules) |
 | `src/main/services/layout/index.ts` | `computeNativeSimulatorViewParams` |
 | `src/renderer/shared/api/view-api.ts` | `setNativeSimulatorBounds` IPC wrapper (`simulator:set-native-bounds`) |
 | `src/service-host/sync-impls/menu-button.ts` | sync `getSystemInfoSync` path (build-order sensitive) |
