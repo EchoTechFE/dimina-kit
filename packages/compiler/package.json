@@ -4,6 +4,15 @@
   "description": "dmcc compiler bundles (browser + node) that drive @dimina/compiler against a caller-injected node:fs replacement (no bundled fs)",
   "license": "MIT",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EchoTechFE/dimina-kit.git",
+    "directory": "packages/compiler"
+  },
+  "homepage": "https://github.com/EchoTechFE/dimina-kit/tree/main/packages/compiler#readme",
+  "bugs": {
+    "url": "https://github.com/EchoTechFE/dimina-kit/issues"
+  },
   "publishConfig": {
     "access": "public"
   },
