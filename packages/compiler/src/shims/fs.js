@@ -16,10 +16,10 @@ export function getFs() { return current }
 // (An identity realpath, a no-op access, or lstat aliased to stat would hand the
 // compiler wrong semantics silently.) A method the backend lacks throws.
 const call = (name) => (...args) => {
-  if (!current) throw new Error('[web-compiler] no fs backend injected — call compileMiniApp({ fs })')
+  if (!current) throw new Error('[compiler] no fs backend injected — call compileMiniApp({ fs })')
   const fn = current[name]
   if (typeof fn === 'function') return fn.apply(current, args)
-  throw new Error(`[web-compiler] injected fs is missing ${name}()`)
+  throw new Error(`[compiler] injected fs is missing ${name}()`)
 }
 
 export const existsSync = call('existsSync')
@@ -45,7 +45,7 @@ export const watch = call('watch')
 export const promises = new Proxy({}, {
   get: (_t, prop) => (...args) => {
     if (!current || !current.promises || typeof current.promises[prop] !== 'function') {
-      throw new Error(`[web-compiler] injected fs has no promises.${String(prop)}()`)
+      throw new Error(`[compiler] injected fs has no promises.${String(prop)}()`)
     }
     return current.promises[prop](...args)
   },

@@ -12,7 +12,6 @@
  * in `createCompileWorkerHandler` (dependency-injected) so it is unit-testable
  * without forking.
  */
-import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -42,8 +41,12 @@ export interface WorkerResultMessage {
 }
 
 export interface CompileWorkerHandlerDeps {
-	/** Lazy `require('@dimina/compiler')` — deferred to the first build. */
-	loadCompiler: () => WorkerBuildFn
+	/**
+	 * Lazy compiler load — deferred to the first build. May be sync (a plain
+	 * `require`) or async (a dynamic `import()` of the ESM `@dimina-kit/compiler`
+	 * pool); the handler awaits it either way. Loaded ONCE and cached.
+	 */
+	loadCompiler: () => WorkerBuildFn | Promise<WorkerBuildFn>
 	/** `process.chdir` — mutates the CHILD process cwd only. */
 	chdir: (dir: string) => void
 	/** `process.send` — replies to the parent. */
@@ -81,7 +84,7 @@ export function createCompileWorkerHandler(
 	return async (msg: unknown): Promise<void> => {
 		if (!isBuildMessage(msg)) return
 		try {
-			if (!cachedBuild) cachedBuild = deps.loadCompiler()
+			if (!cachedBuild) cachedBuild = await deps.loadCompiler()
 			deps.chdir(msg.projectPath)
 			const appInfo = await cachedBuild(
 				msg.outputDir,
@@ -165,10 +168,13 @@ const isForkedWorkerEntry
 		&& typeof process.send === 'function'
 
 if (isForkedWorkerEntry) {
-	const require = createRequire(import.meta.url)
 	const handler = createCompileWorkerHandler({
-		loadCompiler: () =>
-			require('@dimina/compiler') as WorkerBuildFn,
+		// Load @dimina-kit/compiler's resident Node worker_threads pool (drop-in for
+		// dmcc's build(): same signature, same log/error surface, but keeps its 3 stage
+		// workers WARM across rebuilds). ESM package → dynamic import (works on Node 20+);
+		// its default export is the pooled build fn.
+		loadCompiler: async () =>
+			(await import('@dimina-kit/compiler/pool-node')).default as unknown as WorkerBuildFn,
 		chdir: dir => process.chdir(dir),
 		send: (msg) => {
 			process.send?.(msg)

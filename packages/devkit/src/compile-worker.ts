@@ -64,14 +64,37 @@ export interface CompileWorker {
 /**
  * Resolve the fork target. In the published build this is the compiled
  * `dist/compile-worker-entry.js` sibling; under vitest/dev the module runs
- * from `src/`, where only the `.ts` source exists — Node ≥22.18 strips types
- * natively, so forking the `.ts` entry works (the entry is a zero-dependency,
- * erasable-syntax-only shell by design).
+ * from `src/`, where only the `.ts` source exists — the entry is a
+ * zero-dependency, erasable-syntax-only shell by design, so Node can run it
+ * with type stripping (default since 22.18; behind `--experimental-strip-types`
+ * on 22.6–22.17, which `workerExecArgv` passes for a `.ts` entry).
  */
 function resolveWorkerEntry(): string {
 	const js = path.join(__dirname, 'compile-worker-entry.js')
 	if (fs.existsSync(js)) return js
 	return path.join(__dirname, 'compile-worker-entry.ts')
+}
+
+/**
+ * execArgv for the fork. A compiled `.js` entry (the published build, engines
+ * `node >=20`) needs nothing. A `.ts` entry (vitest/dev only) needs Node type
+ * stripping: `--experimental-strip-types` exists since 22.6 — on older Node
+ * the child would die at startup with an opaque ERR_UNKNOWN_FILE_EXTENSION /
+ * bad-option crash, so fail HERE with an actionable message instead. The
+ * ExperimentalWarning is silenced because the child's stderr is the dmcc log
+ * transport. On ≥22.18 (stripping on by default) the flag is still accepted.
+ */
+function workerExecArgv(entry: string): string[] {
+	if (!entry.endsWith('.ts')) return []
+	const [major = 0, minor = 0] = process.versions.node.split('.').map(Number)
+	const hasStripTypesFlag = major > 22 || (major === 22 && minor >= 6)
+	if (!hasStripTypesFlag) {
+		throw new Error(
+			`running the compile worker from .ts source requires Node >= 22.6 for type stripping `
+			+ `(current: ${process.versions.node}); build the package and use the compiled dist entry instead`,
+		)
+	}
+	return ['--experimental-strip-types', '--disable-warning=ExperimentalWarning']
 }
 
 export function createCompileWorker(opts: CompileWorkerOptions = {}): CompileWorker {
@@ -138,10 +161,9 @@ export function createCompileWorker(opts: CompileWorkerOptions = {}): CompileWor
 		const worker = fork(entry, [], {
 			// Pipe stdout/stderr back to the parent — the dmcc log transport.
 			silent: true,
-			// Do NOT inherit the parent's execArgv (vitest/electron loaders would
-			// leak into a plain Node child). Node ≥22.18 type-strips a .ts entry
-			// by default, so no flags are needed either way.
-			execArgv: [],
+			// Explicit execArgv, NOT the parent's (vitest/electron loaders would
+			// leak into a plain Node child).
+			execArgv: workerExecArgv(entry),
 		})
 		attachLineReader(worker.stdout, 'stdout')
 		attachLineReader(worker.stderr, 'stderr')
