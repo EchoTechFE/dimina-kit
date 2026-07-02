@@ -114,7 +114,7 @@ describe('useSession: hotReload signal → hotReloadToken (resurrected PR#12 gua
     const before = readToken(result.current)
 
     act(() => {
-      emitProjectStatus({ status: 'ready', message: '编译完成，已热更新', hotReload: true })
+      emitProjectStatus({ status: 'ready', message: '编译完成，已重启', hotReload: true })
     })
 
     const after = readToken(result.current)
@@ -123,7 +123,7 @@ describe('useSession: hotReload signal → hotReloadToken (resurrected PR#12 gua
       'a watcher-rebuild notification (hotReload:true) must strictly increase hotReloadToken',
     ).toBeGreaterThan(before)
     // The status payload itself must still reach compileStatus unchanged.
-    expect(result.current.compileStatus.message).toBe('编译完成，已热更新')
+    expect(result.current.compileStatus.message).toBe('编译完成，已重启')
   })
 
   it('bumps the token once per hotReload:true notification (strictly increasing across N rebuilds)', async () => {
@@ -131,17 +131,17 @@ describe('useSession: hotReload signal → hotReloadToken (resurrected PR#12 gua
     const t0 = readToken(result.current)
 
     act(() => {
-      emitProjectStatus({ status: 'ready', message: '编译完成，已热更新', hotReload: true })
+      emitProjectStatus({ status: 'ready', message: '编译完成，已重启', hotReload: true })
     })
     const t1 = readToken(result.current)
 
     act(() => {
-      emitProjectStatus({ status: 'ready', message: '编译完成，已热更新', hotReload: true })
+      emitProjectStatus({ status: 'ready', message: '编译完成，已重启', hotReload: true })
     })
     const t2 = readToken(result.current)
 
     act(() => {
-      emitProjectStatus({ status: 'ready', message: '编译完成，已热更新', hotReload: true })
+      emitProjectStatus({ status: 'ready', message: '编译完成，已重启', hotReload: true })
     })
     const t3 = readToken(result.current)
 

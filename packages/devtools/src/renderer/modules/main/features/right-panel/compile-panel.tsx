@@ -193,7 +193,7 @@ export function CompilePanel({ events, logs = [], onClear }: CompilePanelProps) 
                   </span>
                   {item.event.hotReload === true && (
                     <span className="shrink-0 px-1 rounded-sm bg-surface-2 text-text-muted">
-                      热更新
+                      已重启
                     </span>
                   )}
                   {item.durationMs !== null && (
