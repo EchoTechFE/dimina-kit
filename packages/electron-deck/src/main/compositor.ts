@@ -139,6 +139,144 @@ const DEFAULT_ZONE = 0
  */
 const MIN_KEY_GAP = 1e-9
 
+/**
+ * The longest PREFIX of `shared` (target order) that is already an in-order
+ * subsequence of the host's current children — the largest set the
+ * append-to-top host primitive can leave untouched. `currentIndexOf` maps id
+ * → its position in the host's CURRENT children.
+ */
+function computeKeepIds(shared: readonly string[], currentIndexOf: Map<string, number>): Set<string> {
+  const keepIds = new Set<string>()
+  let prevPos = -1
+  for (const id of shared) {
+    const pos = currentIndexOf.get(id)!
+    if (pos <= prevPos) break
+    keepIds.add(id)
+    prevPos = pos
+  }
+  return keepIds
+}
+
+/** Views the host currently has but the target drops. */
+function planRemovals(
+  hostChildren: readonly NativeViewRef[],
+  targetSet: ReadonlySet<string>,
+): NativeViewRef[] {
+  const removals: NativeViewRef[] = []
+  for (const v of hostChildren) {
+    if (!targetSet.has(v.id)) removals.push(v)
+  }
+  return removals
+}
+
+/**
+ * Shared views NOT in the kept prefix must be re-added in target order;
+ * brand-new views (not currently mounted) get one explicit add. Walked in
+ * target order so each addition carries its final index.
+ */
+function planAdditions(
+  target: readonly MountedView[],
+  currentSet: ReadonlySet<string>,
+  keepIds: ReadonlySet<string>,
+): { ref: NativeViewRef; atIndex: number }[] {
+  const additions: { ref: NativeViewRef; atIndex: number }[] = []
+  target.forEach((v, i) => {
+    const isNew = !currentSet.has(v.ref.id)
+    const mustMove = currentSet.has(v.ref.id) && !keepIds.has(v.ref.id)
+    if (isNew || mustMove) additions.push({ ref: v.ref, atIndex: i })
+  })
+  return additions
+}
+
+/**
+ * Plan the minimal host removals/additions that realize `target` (see
+ * {@link Compositor.commit}'s doc-comment for the LIS-preserving strategy).
+ * Pure planning — never touches the host.
+ */
+function planCommit(
+  target: readonly MountedView[],
+  host: ContentViewHost,
+): { removals: NativeViewRef[]; additions: { ref: NativeViewRef; atIndex: number }[] } {
+  const targetIds = target.map((v) => v.ref.id)
+  const current = host.children().map((v) => v.id)
+  const targetSet = new Set(targetIds)
+  const currentSet = new Set(current)
+
+  const shared = targetIds.filter((id) => currentSet.has(id))
+  const currentIndexOf = new Map<string, number>()
+  current.forEach((id, i) => currentIndexOf.set(id, i))
+  const keepIds = computeKeepIds(shared, currentIndexOf)
+
+  return {
+    removals: planRemovals(host.children(), targetSet),
+    additions: planAdditions(target, currentSet, keepIds),
+  }
+}
+
+/** Best-effort rollback to the pre-apply snapshot order; `false` if the
+ *  rollback itself throws (native is left untrusted). */
+function rollbackToSnapshot(host: ContentViewHost, snapshot: readonly NativeViewRef[]): boolean {
+  try {
+    for (const v of host.children().slice()) host.removeChildView(v)
+    for (const v of snapshot) host.addChildView(v)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Apply a planned removals/additions batch to the host in one synchronous
+ * pass, with the no-op / destroyed-host / rollback semantics documented on
+ * {@link Compositor.commit}.
+ */
+function applyCommitPlan(
+  host: ContentViewHost,
+  removals: readonly NativeViewRef[],
+  additions: { ref: NativeViewRef; atIndex: number }[],
+): void {
+  // no-op: nothing to apply → silent, never touches host (even if destroyed).
+  if (removals.length === 0 && additions.length === 0) return
+
+  if (host.isDestroyed) {
+    // Teardown-friendly (A4.3): a destroyed host with ONLY removals is a
+    // no-op — the views are already gone with the contentView, so there is
+    // nothing to detach. Silently return (teardown commits must never throw).
+    if (additions.length === 0) return
+    // There are additions to apply to a destroyed host — impossible.
+    // Preflight throw BEFORE touching the host: native is byte-for-byte
+    // pre-commit.
+    throw new CommitError({
+      kind: 'host-destroyed',
+      applied: false,
+      message: 'commit: contentView is destroyed',
+    })
+  }
+
+  // Apply phase. Snapshot the pre-apply native order so we can roll back if a
+  // native call unexpectedly throws (host destroyed in the narrow plan→apply
+  // window). One synchronous pass: removals first, then additions in target
+  // order.
+  const snapshot = host.children().slice()
+  additions.sort((a, b) => a.atIndex - b.atIndex)
+  try {
+    for (const r of removals) host.removeChildView(r)
+    for (const a of additions) host.addChildView(a.ref)
+  } catch (applyErr) {
+    // Best-effort rollback to snapshot: clear current children, re-add the
+    // snapshot order. If rollback itself throws (host fully dying), native is
+    // left untrusted (recovered:false) — the caller must treat this host as
+    // dead.
+    const recovered = rollbackToSnapshot(host, snapshot)
+    throw new CommitError({
+      kind: 'apply-failed',
+      applied: 'partial',
+      recovered,
+      message: `commit apply failed: ${(applyErr as Error)?.message ?? applyErr}`,
+    })
+  }
+}
+
 export function createCompositor(host: ContentViewHost): Compositor {
   // Current intent state. This is the TARGET the next commit() will realize —
   // intents mutate it in place (last-state), so a commit always diffs the host's
@@ -280,18 +418,6 @@ export function createCompositor(host: ContentViewHost): Compositor {
     },
 
     commit() {
-      const target = targetOrder()
-      const targetIds = target.map((v) => v.ref.id)
-      const current = host.children().map((v) => v.id)
-
-      const targetSet = new Set(targetIds)
-      const currentSet = new Set(current)
-
-      // Plan the host calls first, THEN check for emptiness, THEN check
-      // isDestroyed — a no-op commit must neither throw nor touch the host.
-      const removals: NativeViewRef[] = []
-      const additions: { ref: NativeViewRef; atIndex: number }[] = []
-
       // The host can only `addChildView` to the TOP (append / raise). So a
       // commit keeps a set of views in place and piles the movers on top in
       // target order; for that to reproduce the target, the kept views must be
@@ -301,82 +427,10 @@ export function createCompositor(host: ContentViewHost): Compositor {
       // target order). Everything after that prefix — plus every brand-new view
       // — is a mover, re-added once in target order. This is the minimal host
       // churn: the LIS of the current∩target intersection that append-to-top can
-      // leave untouched. (See compositor.test.ts §7.)
-      const shared = targetIds.filter((id) => currentSet.has(id))
-      const currentIndexOf = new Map<string, number>()
-      current.forEach((id, i) => currentIndexOf.set(id, i))
-      const keepIds = new Set<string>()
-      let prevPos = -1
-      for (const id of shared) {
-        const pos = currentIndexOf.get(id)!
-        if (pos > prevPos) {
-          keepIds.add(id)
-          prevPos = pos
-        } else {
-          break
-        }
-      }
-
-      // Views the host currently has but the target drops → remove.
-      for (const v of host.children()) {
-        if (!targetSet.has(v.id)) removals.push(v)
-      }
-      // Shared views NOT in the kept prefix must be re-added in target order;
-      // brand-new views (not currently mounted) get one explicit add. Walk the
-      // target in order so additions carry their final index.
-      target.forEach((v, i) => {
-        const isNew = !currentSet.has(v.ref.id)
-        const mustMove = currentSet.has(v.ref.id) && !keepIds.has(v.ref.id)
-        if (isNew || mustMove) additions.push({ ref: v.ref, atIndex: i })
-      })
-
-      // no-op: nothing to apply → silent, never touches host (even if destroyed).
-      if (removals.length === 0 && additions.length === 0) return
-
-      if (host.isDestroyed) {
-        // Teardown-friendly (A4.3): a destroyed host with ONLY removals is a
-        // no-op — the views are already gone with the contentView, so there is
-        // nothing to detach. Silently return (teardown commits must never throw).
-        if (additions.length === 0) return
-        // There are additions to apply to a destroyed host — impossible.
-        // Preflight throw BEFORE touching the host: native is byte-for-byte
-        // pre-commit.
-        throw new CommitError({
-          kind: 'host-destroyed',
-          applied: false,
-          message: 'commit: contentView is destroyed',
-        })
-      }
-
-      // Apply phase. Snapshot the pre-apply native order so we can roll back if a
-      // native call unexpectedly throws (host destroyed in the narrow plan→apply
-      // window). One synchronous pass: removals first, then additions in target
-      // order.
-      const snapshot = host.children().slice()
-      additions.sort((a, b) => a.atIndex - b.atIndex)
-      try {
-        for (const r of removals) host.removeChildView(r)
-        for (const a of additions) host.addChildView(a.ref)
-      } catch (applyErr) {
-        // Best-effort rollback to snapshot: clear current children, re-add the
-        // snapshot order. If rollback itself throws (host fully dying), native is
-        // left untrusted (recovered:false) — the caller must treat this host as
-        // dead.
-        let recovered: boolean
-        try {
-          for (const v of host.children().slice()) host.removeChildView(v)
-          for (const v of snapshot) host.addChildView(v)
-          recovered = true
-        } catch {
-          recovered = false
-        }
-        throw new CommitError({
-          kind: 'apply-failed',
-          applied: 'partial',
-          recovered,
-          message: `commit apply failed: ${(applyErr as Error)?.message ?? applyErr}`,
-        })
-      }
+      // leave untouched. (See compositor.test.ts §7.) Plan the host calls first,
+      // THEN apply — a no-op commit must neither throw nor touch the host.
+      const { removals, additions } = planCommit(targetOrder(), host)
+      applyCommitPlan(host, removals, additions)
     },
 
     detachAll() {

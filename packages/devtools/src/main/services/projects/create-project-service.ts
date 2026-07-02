@@ -28,67 +28,82 @@ export interface CreateProjectCtx {
 
 const DEFAULT_TEMPLATE_ID = 'blank'
 
-export async function createProject(
-  input: CreateProjectInput,
-  ctx: CreateProjectCtx,
-): Promise<Project> {
-  // 1. name validation
-  const name = (input.name ?? '').trim()
+/** Non-empty-after-trim `input.name`, or throws. */
+function resolveName(rawName: string | undefined): string {
+  const name = (rawName ?? '').trim()
   if (name.length === 0) {
     throw new Error('Project name cannot be empty')
   }
+  return name
+}
 
-  // 2. path validation: does-not-exist OR exists+empty.
-  const target = input.path
+/** `input.path` does-not-exist OR exists+empty, or throws. */
+function validateTargetPath(target: unknown): asserts target is string {
   if (!target || typeof target !== 'string') {
     throw new Error('Project path is required')
   }
-  if (fs.existsSync(target)) {
-    const stat = fs.statSync(target)
-    if (!stat.isDirectory()) {
-      throw new Error(`Project path exists and is not a directory: ${target}`)
-    }
-    const entries = fs.readdirSync(target)
-    if (entries.length > 0) {
-      throw new Error(
-        `Project path is not empty (refusing to overwrite): ${target}`,
-      )
-    }
+  if (!fs.existsSync(target)) return
+  const stat = fs.statSync(target)
+  if (!stat.isDirectory()) {
+    throw new Error(`Project path exists and is not a directory: ${target}`)
   }
+  const entries = fs.readdirSync(target)
+  if (entries.length > 0) {
+    throw new Error(
+      `Project path is not empty (refusing to overwrite): ${target}`,
+    )
+  }
+}
 
-  // 3. template lookup (default 'blank')
-  const templateId = input.templateId ?? DEFAULT_TEMPLATE_ID
-  const template = ctx.templates.find((t) => t.id === templateId)
+/** Look up `templateId` (default 'blank') and confirm it can materialise a project. */
+function resolveTemplate(
+  templates: ProjectTemplate[],
+  templateId: string | undefined,
+): ProjectTemplate {
+  const id = templateId ?? DEFAULT_TEMPLATE_ID
+  const template = templates.find((t) => t.id === id)
   if (!template) {
-    throw new Error(`Template not found: ${templateId}`)
+    throw new Error(`Template not found: ${id}`)
   }
   if (!template.source && !template.generate) {
     throw new Error(
-      `Template '${templateId}' has neither a source directory nor a generate function`,
+      `Template '${id}' has neither a source directory nor a generate function`,
     )
   }
+  return template
+}
 
-  // 4. materialise: ensure target exists, then copy or generate.
+/** Ensure `target` exists, then copy the template's `source` tree or run its `generate`. */
+async function materializeTemplate(
+  target: string,
+  template: ProjectTemplate,
+  name: string,
+): Promise<void> {
   fs.mkdirSync(target, { recursive: true })
   if (template.generate) {
     await template.generate(target, { name })
-  } else if (template.source) {
-    if (!fs.existsSync(template.source.path)) {
-      throw new Error(
-        `Template source missing on disk: ${template.source.path}`,
-      )
-    }
-    // `recursive: true` makes cpSync mirror the entire tree (files,
-    // subdirs, symlinks). `force: true` mirrors over an empty target.
-    fs.cpSync(template.source.path, target, {
-      recursive: true,
-      force: true,
-    })
+    return
   }
+  if (!template.source) return
+  if (!fs.existsSync(template.source.path)) {
+    throw new Error(
+      `Template source missing on disk: ${template.source.path}`,
+    )
+  }
+  // `recursive: true` makes cpSync mirror the entire tree (files,
+  // subdirs, symlinks). `force: true` mirrors over an empty target.
+  fs.cpSync(template.source.path, target, {
+    recursive: true,
+    force: true,
+  })
+}
 
-  // 5. rewrite project.config.json projectname (best-effort: create the file
-  // if the template didn't ship one — gives the user a working starting
-  // point even for tiny generators).
+/**
+ * Rewrite `<target>/project.config.json`'s `projectname` (best-effort: create
+ * the file if the template didn't ship one — gives the user a working
+ * starting point even for tiny generators).
+ */
+function writeProjectConfig(target: string, name: string): void {
   const cfgPath = path.join(target, 'project.config.json')
   let cfg: Record<string, unknown> = {}
   if (fs.existsSync(cfgPath)) {
@@ -103,8 +118,23 @@ export async function createProject(
   }
   cfg.projectname = name
   fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2))
+}
 
-  // 6. register with provider — this is what makes the new project appear
+export async function createProject(
+  input: CreateProjectInput,
+  ctx: CreateProjectCtx,
+): Promise<Project> {
+  const name = resolveName(input.name)
+
+  const target = input.path
+  validateTargetPath(target)
+
+  const template = resolveTemplate(ctx.templates, input.templateId)
+
+  await materializeTemplate(target, template, name)
+  writeProjectConfig(target, name)
+
+  // register with provider — this is what makes the new project appear
   // in the list immediately after the dialog closes.
   const created = await ctx.projectsProvider.addProject(target)
   return created

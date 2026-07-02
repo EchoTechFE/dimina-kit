@@ -51,6 +51,48 @@ interface CacheEntry {
   data: Record<string, unknown>
 }
 
+/** Parse a service/worker message payload; a non-string is passed through as-is. */
+function parseMessagePayload(message: unknown): unknown {
+  if (typeof message !== 'string') return message
+  try {
+    return JSON.parse(message)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Decode a `ub` (update batch) body into patch entries, PAGE modules only —
+ * component-module updates are dropped (see `decodeWorkerMessage`).
+ */
+function decodeUpdateBatchBody(rawBody: unknown): DecodedEntry[] | null {
+  const body = rawBody as { bridgeId?: unknown; updates?: unknown } | null
+  if (!body || typeof body !== 'object') return null
+  if (typeof body.bridgeId !== 'string' || !Array.isArray(body.updates)) return null
+  const out: DecodedEntry[] = []
+  for (const u of body.updates as Array<{ moduleId?: unknown; data?: unknown }>) {
+    if (!u || typeof u.moduleId !== 'string') continue
+    if (!u.moduleId.startsWith('page_')) continue
+    out.push({ mode: 'patch', bridgeId: body.bridgeId, moduleId: u.moduleId, data: u.data })
+  }
+  return out.length > 0 ? out : null
+}
+
+/** Decode a `page_*` instance-init body into its single init entry. */
+function decodePageInitBody(moduleId: string, rawBody: unknown): DecodedEntry[] | null {
+  const body = rawBody as { bridgeId?: unknown; path?: unknown; data?: unknown } | null
+  if (!body || typeof body !== 'object') return null
+  if (typeof body.bridgeId !== 'string' || typeof body.path !== 'string') return null
+  if (!body.data || typeof body.data !== 'object') return null
+  return [{
+    mode: 'init',
+    bridgeId: body.bridgeId,
+    moduleId,
+    componentPath: body.path,
+    data: body.data as Record<string, unknown>,
+  }]
+}
+
 /**
  * Decode a service→render message into AppData entries, or null when it is not
  * AppData-relevant. Policy: surface PAGE entries only — component entries are
@@ -58,57 +100,20 @@ interface CacheEntry {
  * and never receive pageUnload, which would manifest as ghost tabs).
  */
 export function decodeWorkerMessage(message: unknown): DecodedEntry[] | null {
-  let payload = message
-  if (typeof payload === 'string') {
-    try {
-      payload = JSON.parse(payload)
-    } catch {
-      return null
-    }
-  }
+  const payload = parseMessagePayload(message)
   if (!payload || typeof payload !== 'object') return null
   const record = payload as { type?: unknown; body?: unknown }
 
-  if (record.type === 'ub') {
-    const body = record.body as { bridgeId?: unknown; updates?: unknown } | null
-    if (!body || typeof body !== 'object') return null
-    if (typeof body.bridgeId !== 'string' || !Array.isArray(body.updates)) return null
-    const out: DecodedEntry[] = []
-    for (const u of body.updates as Array<{ moduleId?: unknown; data?: unknown }>) {
-      if (!u || typeof u.moduleId !== 'string') continue
-      if (!u.moduleId.startsWith('page_')) continue
-      out.push({ mode: 'patch', bridgeId: body.bridgeId, moduleId: u.moduleId, data: u.data })
-    }
-    return out.length > 0 ? out : null
-  }
-
+  if (record.type === 'ub') return decodeUpdateBatchBody(record.body)
   if (typeof record.type === 'string' && record.type.startsWith('page_')) {
-    const body = record.body as { bridgeId?: unknown; path?: unknown; data?: unknown } | null
-    if (!body || typeof body !== 'object') return null
-    if (typeof body.bridgeId !== 'string' || typeof body.path !== 'string') return null
-    if (!body.data || typeof body.data !== 'object') return null
-    return [{
-      mode: 'init',
-      bridgeId: body.bridgeId,
-      moduleId: record.type,
-      componentPath: body.path,
-      data: body.data as Record<string, unknown>,
-    }]
+    return decodePageInitBody(record.type, record.body)
   }
-
   return null
 }
 
 /** main→worker direction: container signals page teardown so cache can evict. */
 export function decodeOutgoingMessage(message: unknown): { type: string; bridgeId?: string } | null {
-  let payload = message
-  if (typeof payload === 'string') {
-    try {
-      payload = JSON.parse(payload)
-    } catch {
-      return null
-    }
-  }
+  const payload = parseMessagePayload(message)
   if (!payload || typeof payload !== 'object') return null
   const r = payload as { type?: unknown; body?: { bridgeId?: unknown } | null }
   if (typeof r.type !== 'string') return null

@@ -219,8 +219,16 @@ export function getAccountInfoSync(this: MiniAppContext) {
 
 // ─── Collect all APIs into a map ─────────────────────────────────────────────
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const simulatorApis: Record<string, (this: MiniAppContext, opts: any) => unknown> = {
+// `opts: never` (not the wider `unknown`) so every handler below — each typed
+// with its OWN specific opts shape (`getSystemInfoAsync`'s `{ success?, complete? }`,
+// `canIUse`'s `string`, …) — remains assignable into this map: a function
+// parameter is checked contravariantly, and `never` is assignable into any
+// concrete opts type, whereas `unknown` (the caller-side "any value" type)
+// would reject every narrower handler signature here. Callers of this map
+// always cast to a caller-appropriate handler type before invoking (see
+// simulator-app.tsx / main-api-runner.ts) — this declaration only has to
+// typecheck the object literal itself.
+export const simulatorApis: Record<string, (this: MiniAppContext, opts: never) => unknown> = {
 	// Base
 	canIUse,
 	getSystemInfo,

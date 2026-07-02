@@ -11,6 +11,7 @@ import { rendererDir as defaultRendererDir, defaultPreloadPath, devtoolsPackageR
 import { installThemeBackgroundSync } from '../utils/theme.js'
 import { createMainWindow, wireMainWindowEvents } from '../windows/main-window/index.js'
 import { isAppQuitting } from './lifecycle.js'
+import { resolveNativeAppDataKeys, resolveNativeStorageOverview } from './native-overview.js'
 // eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
 import { createWorkbenchContext, type WorkbenchContext } from '../services/workbench-context.js'
 import { loadWorkbenchSettings, applyTheme } from '../services/settings/index.js'
@@ -508,30 +509,10 @@ export async function createDevtoolsRuntime(config: WorkbenchAppConfig = {}): Pr
       }
 
       if (appId) {
-        try {
-          const info = await context.storageApi?.invoke(appId, 'getStorageInfo', {})
-          if (info && typeof info === 'object') {
-            const keys = (info as { keys?: unknown }).keys
-            if (Array.isArray(keys)) {
-              overview.storageKeys = keys.filter((key): key is string => typeof key === 'string')
-              overview.storageCount = keys.length
-            }
-          }
-        } catch {
-          // Leave native storage empty when it is temporarily unavailable.
-        }
-
-        try {
-          const snapshot = context.appData?.snapshot?.(appId)
-          if (snapshot && typeof snapshot === 'object') {
-            const entries = (snapshot as { entries?: unknown }).entries
-            if (entries && typeof entries === 'object') {
-              overview.appDataKeys = Object.keys(entries)
-            }
-          }
-        } catch {
-          // Leave native appdata empty when it has not been initialized yet.
-        }
+        const storage = await resolveNativeStorageOverview(context, appId)
+        overview.storageKeys = storage.storageKeys
+        overview.storageCount = storage.storageCount
+        overview.appDataKeys = resolveNativeAppDataKeys(context, appId)
       }
 
       return overview

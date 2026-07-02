@@ -509,6 +509,73 @@ export function layoutsEquivalent(
 }
 
 /**
+ * Sum the fixed children's CURRENT live percentages (preserve their px lock).
+ * `null` when a fixed child's live % is missing — without it we cannot
+ * preserve its px lock faithfully, so the caller bails rather than corrupt it.
+ */
+function sumFixedLivePercentages(
+	childIds: readonly string[],
+	isFixedAt: (i: number) => boolean,
+	live: Record<string, number>,
+): number | null {
+	let fixedTotal = 0
+	for (let i = 0; i < childIds.length; i++) {
+		if (!isFixedAt(i)) continue
+		const livePct = live[childIds[i]!]
+		if (typeof livePct !== 'number') return null
+		fixedTotal += livePct
+	}
+	return fixedTotal
+}
+
+/** Sum the flexible children's weights (negative/NaN weights floor to 0). */
+function sumFlexWeights(
+	childIds: readonly string[],
+	sizes: readonly number[],
+	isFixedAt: (i: number) => boolean,
+): number {
+	let flexWeightTotal = 0
+	for (let i = 0; i < childIds.length; i++) {
+		if (isFixedAt(i)) continue
+		const w = sizes[i] ?? 0
+		flexWeightTotal += w > 0 ? w : 0
+	}
+	return flexWeightTotal
+}
+
+/**
+ * Distribute `remaining` percentage across the children: fixed children keep
+ * their live %; flexible children split `remaining` by weight (or evenly, if
+ * the flexible weight pool is degenerate).
+ */
+function distributeRemainingPercentage(
+	childIds: readonly string[],
+	sizes: readonly number[],
+	isFixedAt: (i: number) => boolean,
+	live: Record<string, number>,
+	remaining: number,
+	flexWeightTotal: number,
+	flexibleCount: number,
+): Record<string, number> {
+	const out: Record<string, number> = {}
+	for (let i = 0; i < childIds.length; i++) {
+		const id = childIds[i]!
+		if (isFixedAt(i)) {
+			out[id] = live[id]!
+			continue
+		}
+		if (flexWeightTotal <= 0) {
+			// Degenerate flexible weights → split the remaining space evenly.
+			out[id] = flexibleCount > 0 ? remaining / flexibleCount : remaining
+			continue
+		}
+		const w = sizes[i] ?? 0
+		out[id] = (remaining * (w > 0 ? w : 0)) / flexWeightTotal
+	}
+	return out
+}
+
+/**
  * Build the panel-ID→PERCENTAGE map for an imperative `setLayout`, given the
  * model's full-length raw `sizes` (per child) and `constraints`:
  *
@@ -531,44 +598,14 @@ function buildSetLayoutMap(
 ): Record<string, number> | null {
 	const isFixedAt = (i: number): boolean => (constraints?.[i] ?? null) !== null
 
-	// Sum the fixed children's CURRENT live percentages (preserve their px lock).
-	let fixedTotal = 0
-	for (let i = 0; i < childIds.length; i++) {
-		if (!isFixedAt(i)) continue
-		const livePct = live[childIds[i]!]
-		// Without a measured live % for a fixed child we cannot preserve its px
-		// lock faithfully — bail so we don't corrupt the fixed child.
-		if (typeof livePct !== 'number') return null
-		fixedTotal += livePct
-	}
+	const fixedTotal = sumFixedLivePercentages(childIds, isFixedAt, live)
+	if (fixedTotal === null) return null
 
 	const remaining = Math.max(0, 100 - fixedTotal)
-
-	// Flexible weight pool.
-	let flexWeightTotal = 0
-	for (let i = 0; i < childIds.length; i++) {
-		if (isFixedAt(i)) continue
-		const w = sizes[i] ?? 0
-		flexWeightTotal += w > 0 ? w : 0
-	}
+	const flexWeightTotal = sumFlexWeights(childIds, sizes, isFixedAt)
 	const flexibleCount = childIds.length - childIds.filter((_, i) => isFixedAt(i)).length
 
-	const out: Record<string, number> = {}
-	for (let i = 0; i < childIds.length; i++) {
-		const id = childIds[i]!
-		if (isFixedAt(i)) {
-			out[id] = live[id]!
-			continue
-		}
-		if (flexWeightTotal <= 0) {
-			// Degenerate flexible weights → split the remaining space evenly.
-			out[id] = flexibleCount > 0 ? remaining / flexibleCount : remaining
-			continue
-		}
-		const w = sizes[i] ?? 0
-		out[id] = (remaining * (w > 0 ? w : 0)) / flexWeightTotal
-	}
-	return out
+	return distributeRemainingPercentage(childIds, sizes, isFixedAt, live, remaining, flexWeightTotal, flexibleCount)
 }
 
 /**

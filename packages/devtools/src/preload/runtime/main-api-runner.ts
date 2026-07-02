@@ -15,8 +15,10 @@
  */
 import type { MiniAppContext } from '../../simulator/types.js'
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type LooseApiHandler = (this: any, params?: unknown) => unknown | Promise<unknown>
+// No `this` parameter: handlers are always invoked through `.call(ctx, …)`
+// below with an explicit context object, so the declared type never needs to
+// constrain (or widen away) the caller's `this`.
+type LooseApiHandler = (params?: unknown) => unknown | Promise<unknown>
 
 export interface ApiRunVerdict {
   ok: boolean

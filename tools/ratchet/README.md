@@ -29,6 +29,7 @@ and `record` writes it back so the win can't be undone.
 | `type-escapes` | [typescript-eslint] | explicit `any` + `@ts-*` suppressions | lower | per-file-count |
 | `type-coverage` | [type-coverage] | overall share of non-`any` identifiers | higher | per-key-value |
 | `file-length` | filesystem | files over 500 lines | lower | total |
+| `code-duplication` | [jscpd] | duplicated lines across clone pairs (≥50 tokens) | lower | total |
 
 Scope is production source (`packages/*/src`, excluding `*.test`/`*.spec`/`*.d.ts`).
 Test files legitimately bend these rules around fixtures — except for `file-length`,
@@ -47,7 +48,10 @@ B worsens, total flat):
 
 - **`total`** — scalar only. For `file-length`, where the metric is "how many
   files cross the limit"; growing an already-long file shouldn't fail CI, only a
-  new file crossing it (which moves the total).
+  new file crossing it (which moves the total). Also for `code-duplication`:
+  refactors legitimately move clone boundaries around (an extraction shifts where
+  a residual clone starts), so per-file accounting would flag innocent moves —
+  only a net increase in duplicated lines fails.
 - **`per-file-count`** — no file may gain offenders. Counting offenders *per file*
   (not per line) keeps it robust: moving code around a file doesn't trip it, but
   adding an `any` / a complex function to any file does.
@@ -61,6 +65,11 @@ A dimension's `gate` defaults to `total` when unset.
 - **cognitive-complexity** uses the canonical SonarJS engine via ESLint's Node
   API; the algorithm is not reimplemented. oxlint cannot replace it — SonarJS-class
   rules are type-aware ([oxc#4863]).
+- **code-duplication** runs the jscpd CLI (a local Rust binary; jscpd ≥5 ships no
+  JS API) with `--min-tokens 50` pinned, token-level matching, so renamed-identifier
+  copies still count as clones. Cognitive complexity measures how tangled one
+  function is; this dimension catches the opposite failure mode — logic that stays
+  simple per copy but is pasted across files.
 - **No dead-code dimension.** A knip-based unused-exports ratchet was tried and
   removed. The devtools packages expose extension APIs for downstream secondary
   development, so *any* export may have an out-of-repo consumer that static
@@ -91,4 +100,5 @@ Then `pnpm ratchet:record` to add it to the baseline.
 [eslint-plugin-sonarjs]: https://github.com/SonarSource/eslint-plugin-sonarjs
 [typescript-eslint]: https://typescript-eslint.io/
 [type-coverage]: https://github.com/plantain-00/type-coverage
+[jscpd]: https://github.com/kucherenko/jscpd
 [oxc#4863]: https://github.com/oxc-project/oxc/discussions/4863

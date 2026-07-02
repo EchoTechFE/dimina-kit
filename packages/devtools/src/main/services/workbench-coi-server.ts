@@ -188,6 +188,74 @@ function fsErrorStatus(e: unknown): number {
   return 500
 }
 
+/** Per-request state passed to an individual `/__fs/<action>` handler. */
+interface FsActionContext {
+  req: http.IncomingMessage
+  res: http.ServerResponse
+  projectRoot: string
+  rel: string
+  url: URL
+}
+
+async function fsStat(ctx: FsActionContext): Promise<void> {
+  const st = await statWithin(ctx.projectRoot, ctx.rel)
+  jsonRes(ctx.res, 200, { type: st.isDirectory() ? 2 : 1, size: st.size, ctime: st.ctimeMs, mtime: st.mtimeMs })
+}
+
+async function fsReaddir(ctx: FsActionContext): Promise<void> {
+  const entries = await readdirWithin(ctx.projectRoot, ctx.rel)
+  jsonRes(ctx.res, 200, entries.map((e) => [e.name, e.isDirectory() ? 2 : 1]))
+}
+
+async function fsRead(ctx: FsActionContext): Promise<void> {
+  const buf = await readFileBufferWithin(ctx.projectRoot, ctx.rel)
+  ctx.res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': buf.length })
+  ctx.res.end(buf)
+}
+
+async function fsWrite(ctx: FsActionContext): Promise<void> {
+  let buf: Buffer
+  try {
+    buf = await readBody(ctx.req)
+  } catch (e) {
+    if (e instanceof BodyTooLargeError) return jsonRes(ctx.res, 413, { error: e.message })
+    throw e
+  }
+  await writeFileWithin(ctx.projectRoot, ctx.rel, buf)
+  ctx.res.writeHead(204)
+  ctx.res.end()
+}
+
+async function fsMkdir(ctx: FsActionContext): Promise<void> {
+  await mkdirWithin(ctx.projectRoot, ctx.rel)
+  ctx.res.writeHead(204)
+  ctx.res.end()
+}
+
+async function fsDelete(ctx: FsActionContext): Promise<void> {
+  await deleteWithin(ctx.projectRoot, ctx.rel)
+  ctx.res.writeHead(204)
+  ctx.res.end()
+}
+
+async function fsRename(ctx: FsActionContext): Promise<void> {
+  const toRel = (ctx.url.searchParams.get('to') ?? '').replace(/^\/+/, '')
+  await renameWithin(ctx.projectRoot, ctx.rel, toRel)
+  ctx.res.writeHead(204)
+  ctx.res.end()
+}
+
+/** One handler per supported `/__fs/<action>` — keyed lookup replaces an if-chain. */
+const FS_ACTIONS: Readonly<Record<string, (ctx: FsActionContext) => Promise<void>>> = {
+  stat: fsStat,
+  readdir: fsReaddir,
+  read: fsRead,
+  write: fsWrite,
+  mkdir: fsMkdir,
+  delete: fsDelete,
+  rename: fsRename,
+}
+
 /**
  * `/__fs/<action>?p=<rel>` bridge onto the live active project root.
  * `p`/`to` are POSIX paths relative to the project root, resolved through the
@@ -212,51 +280,13 @@ async function handleFsRequest(
     }
   }
 
+  const handler = FS_ACTIONS[action]
+  if (!handler) return jsonRes(res, 404, { error: 'unknown fs action: ' + action })
+
   try {
-    if (action === 'stat') {
-      const st = await statWithin(projectRoot, rel)
-      return jsonRes(res, 200, { type: st.isDirectory() ? 2 : 1, size: st.size, ctime: st.ctimeMs, mtime: st.mtimeMs })
-    }
-    if (action === 'readdir') {
-      const entries = await readdirWithin(projectRoot, rel)
-      return jsonRes(res, 200, entries.map((e) => [e.name, e.isDirectory() ? 2 : 1]))
-    }
-    if (action === 'read') {
-      const buf = await readFileBufferWithin(projectRoot, rel)
-      res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': buf.length })
-      return void res.end(buf)
-    }
-    if (action === 'write') {
-      let buf: Buffer
-      try {
-        buf = await readBody(req)
-      } catch (e) {
-        if (e instanceof BodyTooLargeError) return jsonRes(res, 413, { error: e.message })
-        throw e
-      }
-      await writeFileWithin(projectRoot, rel, buf)
-      res.writeHead(204)
-      return void res.end()
-    }
-    if (action === 'mkdir') {
-      await mkdirWithin(projectRoot, rel)
-      res.writeHead(204)
-      return void res.end()
-    }
-    if (action === 'delete') {
-      await deleteWithin(projectRoot, rel)
-      res.writeHead(204)
-      return void res.end()
-    }
-    if (action === 'rename') {
-      const toRel = (url.searchParams.get('to') ?? '').replace(/^\/+/, '')
-      await renameWithin(projectRoot, rel, toRel)
-      res.writeHead(204)
-      return void res.end()
-    }
-    return jsonRes(res, 404, { error: 'unknown fs action: ' + action })
+    await handler({ req, res, projectRoot, rel, url })
   } catch (e) {
-    return jsonRes(res, fsErrorStatus(e), { error: String((e as Error).message), code: (e as { code?: string }).code })
+    jsonRes(res, fsErrorStatus(e), { error: String((e as Error).message), code: (e as { code?: string }).code })
   }
 }
 
