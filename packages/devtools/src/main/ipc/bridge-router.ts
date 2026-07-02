@@ -328,6 +328,30 @@ export interface RenderEvent {
   pagePath?: string
 }
 
+/**
+ * Point-in-time counts of every resource class RouterState owns. Leak coverage
+ * (unit + e2e) asserts EXACT equality of this ledger around a churn cycle —
+ * coarse memory sampling cannot see a leaked listener or a stale map entry, so
+ * the owner of the bookkeeping reports precise counts instead.
+ */
+export interface BridgeResourceCensus {
+  appSessions: number
+  pageSessions: number
+  serviceWcBindings: number
+  /** Distinct live simulator webContents currently hosting ≥1 session. */
+  simulatorWcs: number
+  /** Total session memberships across all simulator wcs. */
+  simulatorWcBindings: number
+  renderWcBindings: number
+  pendingApiCalls: number
+  /**
+   * `listenerCount('destroyed')` per unique live simulator wc (keyed by wc id).
+   * One teardown hook per live session — a count above the hosted-session count
+   * is the one-dead-listener-per-soft-reload leak class.
+   */
+  simulatorDestroyedListeners: Record<number, number>
+}
+
 export interface BridgeRouterHandle {
   /** Whether native-host mode is on (main is the source of truth). */
   isNativeHost(): boolean
@@ -374,6 +398,11 @@ export interface BridgeRouterHandle {
    * error channel.
    */
   disposeSessionsForSimulator?(simulatorWcId: number): Promise<void>
+  /**
+   * The router's resource ledger (see BridgeResourceCensus). Optional so the
+   * many partial BridgeRouterHandle test mocks don't each have to stub it.
+   */
+  census?(): BridgeResourceCensus
   /**
    * The flag-gated debugTap (§7) over the bridge message stream. Exposed so a
    * hidden devtools panel / automation can read `.entries()` when
@@ -586,8 +615,36 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
       return Promise.all(ids.map((id) => disposeAppSession(state, id))).then(() => {})
     },
     debugTap: state.debugTap,
+    census: (): BridgeResourceCensus => {
+      const simulatorDestroyedListeners: Record<number, number> = {}
+      let simulatorWcBindings = 0
+      for (const ids of state.simulatorWcIdToAppSessionIds.values()) simulatorWcBindings += ids.size
+      for (const ap of state.appSessions.values()) {
+        const wc = ap.simulatorWc
+        if (!wc.isDestroyed() && simulatorDestroyedListeners[wc.id] === undefined) {
+          simulatorDestroyedListeners[wc.id] = wc.listenerCount('destroyed')
+        }
+      }
+      return {
+        appSessions: state.appSessions.size,
+        pageSessions: state.pageSessions.size,
+        serviceWcBindings: state.serviceWcIdToAppSessionId.size,
+        simulatorWcs: state.simulatorWcIdToAppSessionIds.size,
+        simulatorWcBindings,
+        renderWcBindings: state.wcIdToBridgeId.size,
+        pendingApiCalls: state.pendingApiCalls.size,
+        simulatorDestroyedListeners,
+      }
+    },
   }
   ctx.bridge = bridgeHandle
+
+  // e2e resource-census probe: Playwright's electronApp.evaluate() reads the
+  // router's ledger straight off this main-process global — no IPC surface
+  // needed. Test builds only.
+  if (process.env.NODE_ENV === 'test') {
+    ;(globalThis as Record<string, unknown>).__diminaResourceCensus = () => bridgeHandle.census?.()
+  }
 
   // Always-on guest console fan-out. Owns `ctx.guestConsole` (the sink the
   // consoleLog case below routes to) so that render-layer console output is
