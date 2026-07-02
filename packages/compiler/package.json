@@ -1,5 +1,5 @@
 {
-  "name": "@dimina-kit/web-compiler",
+  "name": "@dimina-kit/compiler",
   "version": "0.0.1",
   "private": true,
   "description": "dmcc compiler bundles (browser + node) that drive @dimina/compiler against a caller-injected node:fs replacement (no bundled fs)",
@@ -8,6 +8,9 @@
   "exports": {
     ".": "./dist/compile-core.node.js",
     "./browser": "./dist/compile-core.browser.js",
+    "./pool": "./dist/pool.browser.js",
+    "./stage-worker": "./dist/stage-worker.browser.js",
+    "./toolchain": "./dist/toolchain.browser.js",
     "./package.json": "./package.json"
   },
   "files": [
@@ -21,22 +24,34 @@
     "build": "pnpm run build:node && pnpm run build:browser",
     "test:node": "MODE=node node scripts/build-compiler.js && node --import ./scripts/register-kit.js scripts/test-node.js",
     "test:appid": "MODE=node node scripts/build-compiler.js && node --import ./scripts/register-kit.js scripts/test-appid-fallback.js",
-    "test:hardening": "MODE=node node scripts/build-compiler.js && node --import ./scripts/register-kit.js scripts/test-hardening.js"
+    "test:hardening": "MODE=node node scripts/build-compiler.js && node --import ./scripts/register-kit.js scripts/test-hardening.js",
+    "test:decompose": "MODE=node node scripts/build-compiler.js && node --import ./scripts/register-kit.js scripts/test-decompose.js",
+    "test:realm-reuse": "MODE=node node scripts/build-compiler.js && node --import ./scripts/register-kit.js scripts/test-realm-reuse.js"
   },
   "dependencies": {
     "@babel/parser": "^7.29.7",
     "assert": "^2.1.0",
     "buffer": "^6.0.3",
-    "esbuild-wasm": "^0.28.0",
     "estree-walker": "^3.0.3",
     "events": "^3.3.0",
-    "oxc-parser": "^0.137.0",
+    "memfs": "^4.57.8",
     "path-browserify": "^1.0.1",
     "stream-browserify": "^3.0.0",
     "util": "^0.12.5"
   },
+  "peerDependencies": {
+    "@oxc-parser/binding-wasm32-wasi": "^0.137.0",
+    "esbuild-wasm": "^0.28.0",
+    "oxc-parser": "^0.137.0"
+  },
+  "peerDependenciesMeta": {
+    "@oxc-parser/binding-wasm32-wasi": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "esbuild": "^0.28.0",
-    "memfs": "^4.57.8"
+    "esbuild-wasm": "^0.28.0",
+    "oxc-parser": "^0.137.0"
   }
 }

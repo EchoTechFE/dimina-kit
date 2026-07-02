@@ -6,9 +6,17 @@
 //
 // This bundle carries NO fs implementation: the host injects its own node:fs
 // replacement (memfs, or anything meeting the contract) via compileMiniApp({ fs }).
-import { compileMiniApp } from './compile-core.js'
+// setupCompile/compileStage/collectOutputs are the decomposed seams the parallel
+// pipeline drives: the host runs setupCompile once, fans the stages out to workers
+// over a shared fs, then collectOutputs merges. compileMiniApp is the single-realm
+// convenience wrapper over the same seams.
+import {
+  compileMiniApp, setupCompile, compileStage, collectOutputs, resetCompilerState, STAGE_NAMES,
+} from './compile-core.js'
 
-export { compileMiniApp }
+export {
+  compileMiniApp, setupCompile, compileStage, collectOutputs, resetCompilerState, STAGE_NAMES,
+}
 
 /**
  * Kept for API stability. The host worker injects the wasm toolchain hooks
