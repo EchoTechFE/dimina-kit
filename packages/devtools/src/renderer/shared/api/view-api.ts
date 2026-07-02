@@ -1,5 +1,5 @@
 import type { CompileConfig, LaunchConfig } from '@/shared/types'
-import type { NativeDeviceInfo, ViewBounds } from '../../../shared/ipc-channels'
+import type { NativeDeviceInfo } from '../../../shared/ipc-channels'
 import {
   SimulatorChannel,
   PopoverChannel,
