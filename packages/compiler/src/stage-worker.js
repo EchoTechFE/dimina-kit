@@ -43,6 +43,17 @@ function ensureToolchain(url) {
   return toolchainReady
 }
 
+// Stages whose compile path never calls the wasm hooks (__esbuildTransform /
+// __oxcParseSync). The CSS pipeline (postcss + cssnano + autoprefixer) is inlined
+// in this bundle, so a style-only worker skips importing toolchainSetupURL entirely
+// (~13MB esbuild.wasm + oxc WASI it would never call). Unknown/custom stages and
+// messages without stage identity conservatively load the toolchain.
+const TOOLCHAIN_FREE_STAGES = new Set(['style'])
+function needsToolchain(stages) {
+  if (!Array.isArray(stages) || stages.length === 0) return true
+  return stages.some((s) => !TOOLCHAIN_FREE_STAGES.has(s))
+}
+
 function freshFs(files, workPath) {
   return createFsFromVolume(Volume.fromJSON(files, workPath))
 }
@@ -69,13 +80,18 @@ self.onmessage = async (e) => {
   try {
     if (type === 'warmup') {
       const t0 = performance.now()
-      await ensureToolchain(e.data.toolchainSetupURL)
+      // Remember the URL even when this worker's stages skip the load, so a later
+      // compile-subset that DOES need the toolchain (protocol allows any stages)
+      // can still resolve it without re-sending the URL.
+      if (e.data.toolchainSetupURL) toolchainURL = e.data.toolchainSetupURL
+      if (needsToolchain(e.data.stages)) await ensureToolchain()
       self.postMessage({ type: 'ready', ms: Math.round(performance.now() - t0) })
       return
     }
     if (type === 'compile-subset') {
       const { files, workPath = '/work', stages = ['logic', 'view', 'style'], toolchainSetupURL } = e.data
-      await ensureToolchain(toolchainSetupURL)
+      if (toolchainSetupURL) toolchainURL = toolchainSetupURL
+      if (needsToolchain(stages)) await ensureToolchain()
       const warm = !!toolchainReady
       const t = performance.now()
       const result = await compileSubset(files, workPath, stages)

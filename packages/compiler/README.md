@@ -71,9 +71,11 @@ const { appId, name, files } = await pool.compile({ files: source, workPath: '/p
 pool.dispose()                                       // 用完终止 worker
 ```
 
-> **上面是最小接入代码,但浏览器环境有前置要求**(不满足会在别处报错,不像示例不完整):页面与 worker 开 COOP/COEP;`toolchainSetupURL` 能被 worker 运行时 import;esbuild browser ESM 与 `esbuild.wasm` 可作静态资源访问;npm 用户需显式装 `@oxc-parser/binding-wasm32-wasi`(`cpu:wasm32` 会被跳过);本包经 `file:`/link 引用时要配 Vite `server.fs.allow`。逐条见文末「故障排查」。
+> **上面是最小接入代码,但浏览器环境有前置要求**(不满足会在别处报错,不像示例不完整):页面与 worker 开 COOP/COEP;`toolchainSetupURL` 能被 worker 运行时 import;esbuild browser ESM 与 `esbuild.wasm` 可作静态资源访问;npm 用户需显式装 `@oxc-parser/binding-wasm32-wasi`(`cpu:wasm32` 会被跳过);本包经 `file:`/link 引用时要配 Vite `server.fs.allow`。逐条见本节末尾的「故障排查」。
 
 `compile()` 内部：三个常驻 worker **各跑一个完整 stage**（logic / view / style），各自 seed 私有 memfs、各自 `setupCompile` + 编译该 stage，产物取并集回传；跨 `compile()` 复用同一批 worker（每次编译前自动 `resetCompilerState`）。多个 `compile()` 会自动串行（共享常驻 realm 不能并发）。
+
+> **连续触发（watch / 保存即编）要自己收敛：** pool 只保证串行，**不合并**——编译进行中再调 N 次 `compile()` 就排队 N 个全量编译，一个不少地跑完（正确性没问题，但白烧算力、垫高最后一次的延迟）。源码快照在**轮到该次编译派发时**才结构化克隆，不是调用时。触发侧应收敛成"至多一个在跑 + 一个待跑"（dirty-flag / debounce）。另外**整个应用共用一个 pool 单例**：多实例之间 realm 全隔离、不会互相污染，但结果没有跨实例顺序保证（旧编译可能晚于新编译返回，按到达顺序应用产物会拿旧盖新），还多付一份工具链常驻内存。
 
 ```ts
 createCompilerPool(options: {
@@ -121,11 +123,29 @@ await installEsbuildFromURL('/esbuild-browser.mjs', '/esbuild.wasm')   // 见下
 - **`installOxc(oxcModule)`**：把 `await import('oxc-parser')`（你的 bundler 才能解析它 + 取它的 wasm）装成 `__oxcParseSync`。
 - **`installEsbuildFromURL(moduleURL, wasmURL)`**：从**静态资源 URL** 加载 esbuild-wasm 浏览器 ESM 并 `initialize`，装成 `__esbuildTransform`。
 
+> **不是每个 worker 都会加载它：** style stage 的编译链路不调用这两个 wasm 钩子（CSS 工具链已内联，见下），所以 **style worker 在 warmup/compile 时会直接跳过 `import(toolchainSetupURL)`**——省掉一份 esbuild.wasm（~13MB）+ oxc 的加载与常驻内存。因此 **setup 模块只应安装这两个钩子**，不要在里面夹带编译所依赖的其他全局（style worker 看不到它们）；未知的自定义 stage 会保守照旧加载。
+>
 > **为什么是 URL 而不是 `import`：** esbuild-wasm 的浏览器构建通常只能当**静态资源**托管（把它的 Go 运行时打包会坏），而 bundler（Vite/Webpack/Rollup）**不允许** `import()` 一个静态资源目录里的 JS——`installEsbuildFromURL` 内部用 `fetch + Blob URL` 绕过 bundler 的模块图,替你把这个坑填了。若你的 esbuild-wasm 是 npm 依赖（bundler 能解析），也可以自己 `import * as esbuild from 'esbuild-wasm'` + `esbuild.initialize({ wasmURL })` + 设 `globalThis.__esbuildTransform`,不必用这个助手。
 >
-> **cross-origin isolation：** oxc 的 wasm32-wasi 绑定用到 SharedArrayBuffer，页面与 worker 需开 COOP/COEP（`Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp`）。**CSS 工具链不用宿主管**：浏览器 bundle 已内联真实 `cssnano` + `autoprefixer`（autoprefixer pin 到 node 版 `compile-core.node.js` 运行时解析的同一份，当前 10.5.0），CSS 产物与 node 版逐字节一致。宿主只需提供 esbuild + oxc 两个 wasm 钩子。
+> **cross-origin isolation：** oxc 的 wasm32-wasi 绑定用到 SharedArrayBuffer，页面与 worker 需开 COOP/COEP（`Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp`）。**CSS 工具链不用宿主管**：浏览器 bundle 已内联真实 `cssnano` + `autoprefixer`（autoprefixer pin 到 node 版 `compile-core.node.js` 运行时解析的同一份，当前 10.5.2），CSS 产物与 node 版逐字节一致。宿主只需提供 esbuild + oxc 两个 wasm 钩子。
 
 参考实现与验证：`dimina-web-client` 的 `demo/toolchain-setup.js`（用上面两个助手）+ `demo/pool-test.html`，`npm run test:pool`（三项目产物与单线程逐结构一致，并演示 `onLog`）。
+
+### 故障排查（接入环境）
+
+pool 的 API 本身很小，但**浏览器/bundler/包管理器环境**有几个已知坑，报错往往指向别处、很难一眼看出是环境问题。按现象对号入座：
+
+- **worker 请求 403 `outside of Vite serving allow list`（本包通过 `file:` / `pnpm link` / monorepo workspace 引用时）。** `new Worker(new URL('@dimina-kit/compiler/stage-worker', import.meta.url))` 是**运行时懒解析**,不走 Vite 依赖爬虫的预热白名单,而本包真实目录在你项目 root 之外 → 被 `server.fs.allow` 拦。把本包的**真实目录**（symlink resolve 后的 realpath,不是 node_modules 里的软链）加进 `server.fs.allow`：
+  ```js
+  // vite.config.js
+  import fs from 'node:fs'; import path from 'node:path'
+  const wcDir = fs.realpathSync(path.dirname(new URL('./node_modules/@dimina-kit/compiler/package.json', import.meta.url).pathname))
+  export default defineConfig({ server: { fs: { allow: ['.', wcDir] } }, /* … */ })
+  ```
+  （静态 `import` 的 `pool` 能穿透是因为它被爬虫预热了——这个不对称很反直觉。）
+- **`Failed to resolve import "@oxc-parser/binding-wasm32-wasi"`（用 npm、非 pnpm 时）。** `oxc-parser` 的 wasm binding 的 `package.json` 写了 `"cpu": "wasm32"`,**npm 会把它当成和 arm64/x64 互斥的真实架构而跳过安装**（optionalDependencies 平台过滤）。把它**显式**列进你自己的 `dependencies`（别指望 optional 自动装）：`npm i @oxc-parser/binding-wasm32-wasi`。pnpm 一般不会踩这个。
+- **`toolchainSetupURL` 这个文件放哪。** 它被 worker 在运行时 `import(url)`。放 `public/`（静态资源、URL 稳定）最省心,dev/prod 都成立;若放 `src/` 用 bundler 处理,dev 能过但 `vite build` 需要把它声明为独立 entry（`build.rollupOptions.input`），否则生产构建不产出这个文件。
+- **dev 模式下 3 条 `[vite] connecting…` 噪音**：3 个 stage worker 各建一条 HMR 连接,属正常,不是 worker 池重复初始化。
 
 ## Node 常驻 pool（`./pool-node`，devtools 在用）
 
@@ -300,22 +320,6 @@ async function filesFromDir(dir, prefix = '') {           // 只读递来的 han
 - **`files` 目前只可靠承载文本产物。** `collectOutputs` 用 utf8 读回 `targetPath` 下所有产物；图片/svg 等二进制静态资源（compiler `copyFileSync` 到 `main/static`）会被按 utf8 读坏。纯文本项目/fixture 无碍；要用真实二进制资源，需下游自行从注入的 fs 读 `main/static` 的字节，别依赖返回的 `files`。
 - **`targetPath` 来自环境。** compiler 产物目录取 `process.env.TARGET_PATH`，否则 `os.tmpdir()/dimina-fe-dist-<时间戳>`（浏览器 os shim 下通常 `/tmp/...`）。`setupCompile` 会先 `rmSync` 清空它——别把 `TARGET_PATH` 指到源码目录或共享目录。用 `setupCompile` 返回的 `targetPath` 喂 `collectOutputs`。
 - **不是全 fail-fast。** 缺 fs 方法、坏 appid、坏 `project.config.json`、miniprogram_npm 构建失败会 **reject**；但**样式预处理器失败（如当前浏览器构建暂不支持 `.less`）会被吞掉、降级用原始 CSS**，PostCSS 解析失败返回空串，资源拷贝失败只 `console.log`，logic esbuild 压缩失败回退未压缩代码。**用 pool 时把这些拿出来的办法是 `createCompilerPool({ onLog })`**——它把 worker 内编译器的 `console.*` 诊断（带 stage 标签）转发给你；也可在产物为空/缺失时二次校验。
-
-## 故障排查（接入环境）
-
-pool 的 API 本身很小，但**浏览器/bundler/包管理器环境**有几个已知坑，报错往往指向别处、很难一眼看出是环境问题。按现象对号入座：
-
-- **worker 请求 403 `outside of Vite serving allow list`（本包通过 `file:` / `pnpm link` / monorepo workspace 引用时）。** `new Worker(new URL('@dimina-kit/compiler/stage-worker', import.meta.url))` 是**运行时懒解析**,不走 Vite 依赖爬虫的预热白名单,而本包真实目录在你项目 root 之外 → 被 `server.fs.allow` 拦。把本包的**真实目录**（symlink resolve 后的 realpath,不是 node_modules 里的软链）加进 `server.fs.allow`：
-  ```js
-  // vite.config.js
-  import fs from 'node:fs'; import path from 'node:path'
-  const wcDir = fs.realpathSync(path.dirname(new URL('./node_modules/@dimina-kit/compiler/package.json', import.meta.url).pathname))
-  export default defineConfig({ server: { fs: { allow: ['.', wcDir] } }, /* … */ })
-  ```
-  （静态 `import` 的 `pool` 能穿透是因为它被爬虫预热了——这个不对称很反直觉。）
-- **`Failed to resolve import "@oxc-parser/binding-wasm32-wasi"`（用 npm、非 pnpm 时）。** `oxc-parser` 的 wasm binding 的 `package.json` 写了 `"cpu": "wasm32"`,**npm 会把它当成和 arm64/x64 互斥的真实架构而跳过安装**（optionalDependencies 平台过滤）。把它**显式**列进你自己的 `dependencies`（别指望 optional 自动装）：`npm i @oxc-parser/binding-wasm32-wasi`。pnpm 一般不会踩这个。
-- **`toolchainSetupURL` 这个文件放哪。** 它被 worker 在运行时 `import(url)`。放 `public/`（静态资源、URL 稳定）最省心,dev/prod 都成立;若放 `src/` 用 bundler 处理,dev 能过但 `vite build` 需要把它声明为独立 entry（`build.rollupOptions.input`），否则生产构建不产出这个文件。
-- **dev 模式下 3 条 `[vite] connecting…` 噪音**：3 个 stage worker 各建一条 HMR 连接,属正常,不是 worker 池重复初始化。
 
 ## 依赖前置
 
