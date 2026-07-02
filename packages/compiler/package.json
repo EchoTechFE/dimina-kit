@@ -29,7 +29,8 @@
     "test:decompose": "MODE=node node scripts/build-compiler.js && node --import ./scripts/register-kit.js scripts/test-decompose.js",
     "test:realm-reuse": "MODE=node node scripts/build-compiler.js && node --import ./scripts/register-kit.js scripts/test-realm-reuse.js",
     "test:pool-node": "MODE=node node scripts/build-compiler.js && node --import ./scripts/register-kit.js scripts/test-pool-node.js",
-    "test:pool-hardening": "MODE=node node scripts/build-compiler.js && node scripts/test-pool-hardening.js"
+    "test:pool-hardening": "MODE=node node scripts/build-compiler.js && node scripts/test-pool-hardening.js",
+    "test:npm-scan": "MODE=node node scripts/build-compiler.js && node --import ./scripts/register-kit.js scripts/test-npm-scan.js"
   },
   "dependencies": {
     "@babel/parser": "^7.29.7",
