@@ -1,8 +1,13 @@
 import axios from 'axios'
 import cors from 'cors'
 import express from 'express'
-import { app } from '../server.js'
 
+/**
+ * Register the proxy middleware (cors, json, /proxy) on the CALLER's express
+ * app — registration on a shared module-level app would bind these routes to
+ * whichever server imported this module first in the process.
+ */
+export function register(app) {
 // 使用cors中间件来允许所有跨域请求
 // 注意：在实际生产环境中，你应该更具体地配置CORS策略
 app.use(cors())
@@ -65,4 +70,5 @@ app.post('/proxy', async (req, res) => {
 		})
 	}
 })
+}
 

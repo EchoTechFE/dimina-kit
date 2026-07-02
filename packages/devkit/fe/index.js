@@ -3,7 +3,6 @@ import express from 'express'
 import path from 'path'
 import fs from 'fs'
 import { fileURLToPath } from 'url'
-import { app } from './server.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -18,7 +17,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
  * @returns {Promise<import('http').Server | { server: import('http').Server, reload: () => void }>}
  */
 export async function start({ port = 7788, containerDir, outputDir, simulatorDir, liveReload = false, sessionApps = [] } = {}) {
-	let liveReloadModule
+	// One express app PER start(): routes registered on a shared module-level app
+	// accumulate across sessions, and express matches the FIRST registration — a
+	// second openProject in the same process would get the first session's
+	// appList/static/SPA handlers (its dirs possibly gone) and show "暂无应用".
+	const app = express()
+	let liveReloadHandle
 	const appsDir = outputDir || containerDir
 
 	app.get('/appList.json', (_req, res) => {
@@ -58,7 +62,8 @@ export async function start({ port = 7788, containerDir, outputDir, simulatorDir
 	}
 
 	if (liveReload) {
-		liveReloadModule = await import('./live-reload.js')
+		const { createLiveReload } = await import('./live-reload.js')
+		liveReloadHandle = createLiveReload(app)
 		// Disable auto index so SPA fallback handles script injection
 		app.use(express.static(containerDir, { index: false }))
 	}
@@ -76,8 +81,9 @@ export async function start({ port = 7788, containerDir, outputDir, simulatorDir
 		})
 	}
 
-	// Load proxy server middleware (cors, json, /proxy route)
-	await import('./dimina-fe-server/index.js')
+	// Register proxy server middleware (cors, json, /proxy route)
+	const { register: registerProxy } = await import('./dimina-fe-server/index.js')
+	registerProxy(app)
 
 	// SPA fallback: serve index.html for navigation-like unmatched routes
 	// (no extension or `.html`). Asset-like misses (`.json`, `.js`, `.wxml`,
@@ -90,7 +96,7 @@ export async function start({ port = 7788, containerDir, outputDir, simulatorDir
 	// handled promise rejection.
 	// Express 5 requires a named wildcard parameter instead of bare '*'.
 	const spaFallback = liveReload
-		? liveReloadModule.injectScript(containerDir)
+		? liveReloadHandle.injectScript(containerDir)
 		: (_req, res) => res.sendFile('index.html', { root: containerDir })
 
 	app.get('/{*path}', (req, res, next) => {
@@ -107,7 +113,7 @@ export async function start({ port = 7788, containerDir, outputDir, simulatorDir
 			console.log(`Server is running on port ${port}`)
 			console.log('Press Ctrl+C to stop')
 			if (!process.env.DIMINA_NO_OPEN_BROWSER) await open(`http://localhost:${port}`)
-			resolve(liveReload ? { server, reload: liveReloadModule.reload } : server)
+			resolve(liveReload ? { server, reload: liveReloadHandle.reload } : server)
 		})
 		server.on('error', (err) => {
 			if (err.code === 'EADDRINUSE') {
