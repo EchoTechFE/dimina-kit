@@ -1,23 +1,17 @@
 /**
  * Simulator soft reload lets a recompile spawn a NEW app session (B) into the
  * SAME simulator webContents (sender) before the OLD session (A) is disposed,
- * so the two briefly overlap while the new one loads in the background. Both
- * sessions share `state.wcIdToAppSessionId` keyed by the ONE simulator wc id,
- * and B's spawn overwrites A's entry there (`bindWc` is a plain `map.set`).
+ * so the two briefly overlap while the new one loads in the background. The
+ * shared wc's sessions live in `state.simulatorWcIdToAppSessionIds` — one Set
+ * per wc, in spawn order — and `senderBoundToSession` authorizes the wc for
+ * ANY session it hosts.
  *
- * `bridge-router.ts` currently authorizes DISPOSE / ACTIVE_PAGE / PAGE_LIFECYCLE
- * by resolving `appByWc(state, event.sender)` and comparing it against the
- * message's target/owner session. During the A/B overlap window that resolves
- * to B for EVERY message the simulator wc sends, even ones that name A
- * explicitly — so A becomes unreachable through its own simulator wc the
- * moment B spawns, and `disposeAppSession`'s unconditional
- * `wcIdToAppSessionId.delete(ap.simulatorWc.id)` (run when A previously WAS the
- * live mapping owner) can also delete a binding that has since become B's.
- *
- * These three tests pin the CORRECT contract for that overlap window: the
- * simulator wc may act on behalf of whichever session a message explicitly
- * names, not just the most-recently-spawned one, and disposing an old session
- * must never corrupt the surviving one's bookkeeping.
+ * These tests pin the contract for that overlap window: the simulator wc may
+ * act on behalf of whichever session a message explicitly names (DISPOSE /
+ * ACTIVE_PAGE / PAGE_LIFECYCLE), not just the most-recently-spawned one, and
+ * disposing an old session must never corrupt the surviving one's bookkeeping
+ * (it sheds only its own Set membership) nor leave its own hooks behind on the
+ * shared wc.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -273,13 +267,13 @@ async function flush(n = 10): Promise<void> {
 }
 
 describe('bridge-router — overlapping app sessions on one simulator webContents (soft reload)', () => {
-  it('disposes the OLDER session (A) via DISPOSE even after a NEWER same-wc spawn (B) overwrote the wc→session binding', async () => {
+  it('disposes the OLDER session (A) via DISPOSE even after a NEWER session (B) spawned on the same wc', async () => {
     const { ctx, simulatorWc } = makeCtx()
     installBridgeRouter(ctx)
 
     const A = await spawnSession(simulatorWc, { pagePath: ROOT_A })
-    // B spawns from the SAME simulator wc — its bindWc() overwrites A's entry
-    // in wcIdToAppSessionId (the map is keyed by simulatorWc.id, not by session).
+    // B spawns from the SAME simulator wc — sender-resolution now favors B
+    // (latest spawn), but a message explicitly naming A must still act on A.
     const B = await spawnSession(simulatorWc, { pagePath: ROOT_B })
 
     emitDispose(simulatorWc, { bridgeId: A.result.appSessionId })
@@ -305,14 +299,10 @@ describe('bridge-router — overlapping app sessions on one simulator webContent
     // being the activeBridgeId fallback) can't hide the bug.
     const bSecondBridgeId = await openSecondPage(simulatorWc, B.result.appSessionId, SECOND_PAGE)
 
-    // Dispose A from A's OWN service-host wc (the sender-auth in the sibling
-    // "disposes the OLDER session" test above is a SEPARATE bug, not this
-    // one) — this sender unambiguously maps to A, so disposeAppSession(A)
-    // definitely runs. What THIS test pins is what happens to B's bookkeeping
-    // once it does: `disposeAppSession`'s
-    // `state.wcIdToAppSessionId.delete(ap.simulatorWc.id)` deletes whatever is
-    // CURRENTLY mapped for that wc id — which is B's entry (B's spawn
-    // overwrote A's) — not conditioned on it still being A's own mapping.
+    // Dispose A from A's OWN service-host wc — this sender unambiguously maps
+    // to A, so disposeAppSession(A) definitely runs. What THIS test pins is
+    // what happens to B's bookkeeping once it does: A's dispose must shed only
+    // A's own membership in the shared wc's session Set, leaving B's intact.
     emitDispose(A.serviceWc, { bridgeId: A.result.appSessionId })
     await flush()
 

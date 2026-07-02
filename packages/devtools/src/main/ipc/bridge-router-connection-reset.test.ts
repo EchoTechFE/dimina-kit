@@ -19,14 +19,14 @@
  *      is torn down — and a `'reset'` event fires.
  *
  *   3. The connection-routed per-serviceWc bookkeeping (the
- *      `serviceWc -> appSessionId` binding in `state.wcIdToAppSessionId`) is
- *      cleared by the reset, so the next session reusing the same wc starts
+ *      `serviceWc -> appSessionId` binding in `state.serviceWcIdToAppSessionId`)
+ *      is cleared by the reset, so the next session reusing the same wc starts
  *      clean.
  *
  * ── How this is implemented ─────────────────────────────────────────────────
  * The bridge-router acquires a connection for the RENDER guest
  * (`ensureRenderBound`) AND for the service-host webContents — the spawn binds
- * `state.wcIdToAppSessionId` and calls
+ * `state.serviceWcIdToAppSessionId` and calls
  * `state.connections.acquire(serviceWindow.webContents)`, so assertion (1)
  * (a live connection tracked after spawn) holds. On the pool-reuse dispose path,
  * `disposeAppSession` calls `state.connections.reset(id)`, driving (2)/(3).

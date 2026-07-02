@@ -251,8 +251,16 @@ interface PendingApiCall {
 interface RouterState {
   appSessions: Map<string, AppSession>
   pageSessions: Map<string, PageSession>
-  /** serviceWc + simulatorWc → appSessionId. */
-  wcIdToAppSessionId: Map<number, string>
+  /** serviceWc → appSessionId. One hidden service-host window per session, so
+   * this stays single-valued; a pooled window reused by a later session simply
+   * rebinds its wc id. */
+  serviceWcIdToAppSessionId: Map<number, string>
+  /** simulatorWc → the app sessions it hosts, in spawn (insertion) order. One
+   * simulator WCV owns SEVERAL live sessions at once (soft reload keeps the
+   * outgoing session alive while the incoming one boots), so the binding is a
+   * Set: membership authorizes the wc for any session it hosts, and insertion
+   * order lets sender→session resolution pick the latest spawn. */
+  simulatorWcIdToAppSessionIds: Map<number, Set<string>>
   /** renderWc → bridgeId. */
   wcIdToBridgeId: Map<number, string>
   /** requestId → pending API_CALL forwarded to a simulator window. */
@@ -427,7 +435,8 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
   const state: RouterState = {
     appSessions: new Map(),
     pageSessions: new Map(),
-    wcIdToAppSessionId: new Map(),
+    serviceWcIdToAppSessionId: new Map(),
+    simulatorWcIdToAppSessionIds: new Map(),
     wcIdToBridgeId: new Map(),
     pendingApiCalls: new Map(),
     pool: null,
@@ -663,8 +672,9 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
     const target = resolveAppByBridgeId(state, payload.bridgeId)
     if (!target) return
     // Only the app's service window or simulator window can issue dispose.
-    // (Unknown senders pass — lenient by design; senderBoundToSession covers
-    // the session's own simulator WCV even when the map names a newer session.)
+    // (Unknown senders pass — lenient by design; a simulator WCV is authorized
+    // for every session it hosts, so an older session's own dispose stays
+    // valid while a newer spawn shares the wc.)
     if (!senderBoundToSession(state, event.sender, target) && appByWc(state, event.sender)) {
       console.warn(`[bridge-router] DISPOSE rejected: sender not bound to target ${target.appSessionId}`)
       return
@@ -897,8 +907,8 @@ async function handleSpawn(
   state.appSessions.set(appSessionId, appSession)
   state.pageSessions.set(bridgeId, rootPage)
   appSession.pages.set(bridgeId, rootPage)
-  bindWc(state.wcIdToAppSessionId, serviceWindow.webContents, appSessionId)
-  bindWc(state.wcIdToAppSessionId, simulatorWc, appSessionId)
+  bindWc(state.serviceWcIdToAppSessionId, serviceWindow.webContents, appSessionId)
+  bindSimulatorWc(state.simulatorWcIdToAppSessionIds, simulatorWc, appSessionId)
   // Track the service-host webContents as a Connection (foundation.md §4.3) and
   // own this session's serviceWc→appSessionId binding on its CURRENT lifetime
   // segment. On a pooled-window REUSE, `disposeAppSession` calls
@@ -910,8 +920,8 @@ async function handleSpawn(
   // wc outlives individual app sessions — cross-connection state, §4.4 — so it
   // cannot hang off any single session's segment.)
   state.connections.acquire(serviceWindow.webContents).own(() => {
-    if (state.wcIdToAppSessionId.get(appSession.serviceWc.id) === appSessionId) {
-      state.wcIdToAppSessionId.delete(appSession.serviceWc.id)
+    if (state.serviceWcIdToAppSessionId.get(appSession.serviceWc.id) === appSessionId) {
+      state.serviceWcIdToAppSessionId.delete(appSession.serviceWc.id)
     }
   })
   appSession.registryHandle = ctx.registry.add(() => disposeAppSession(state, appSessionId))
@@ -1801,8 +1811,17 @@ function pageFromMsg(state: RouterState, ap: AppSession, msg: MessageEnvelope): 
 
 function appByWc(state: RouterState, wc: WebContents): AppSession | undefined {
   if (wc.isDestroyed()) return undefined
-  const appSessionId = state.wcIdToAppSessionId.get(wc.id)
+  const appSessionId = state.serviceWcIdToAppSessionId.get(wc.id)
   if (appSessionId) return state.appSessions.get(appSessionId)
+  // A simulator wc hosts several sessions during a soft reload; a message that
+  // doesn't name its session belongs to the LATEST still-alive spawn (the Set
+  // preserves spawn order).
+  const hosted = state.simulatorWcIdToAppSessionIds.get(wc.id)
+  if (hosted) {
+    let latest: AppSession | undefined
+    for (const id of hosted) latest = state.appSessions.get(id) ?? latest
+    if (latest) return latest
+  }
   const bridgeId = state.wcIdToBridgeId.get(wc.id)
   if (bridgeId) {
     const page = state.pageSessions.get(bridgeId)
@@ -1812,19 +1831,16 @@ function appByWc(state: RouterState, wc: WebContents): AppSession | undefined {
 }
 
 /**
- * Whether `sender` is authorized to control app session `ap`. One simulator
- * WCV can own several live sessions at once (soft reload keeps the outgoing
- * session alive while the incoming one boots), but `wcIdToAppSessionId` is
- * single-valued per wc and each spawn re-points the shared entry at the newest
- * session — resolving the sender through the map alone misattributes the older
- * session's own control messages (its DISPOSE / lifecycle would be rejected as
- * another session's traffic). A sender that IS the session's simulator WCV is
- * therefore authorized directly; everything else falls back to the map.
+ * Whether `sender` is authorized to control app session `ap`. A simulator WCV
+ * is authorized for EVERY session it hosts (`simulatorWcIdToAppSessionIds` is
+ * a membership set, so an older session's own control traffic stays valid
+ * while a newer spawn boots on the same wc); any other sender (service host,
+ * render guest) resolves one-to-one through `appByWc`.
  */
 function senderBoundToSession(state: RouterState, sender: WebContents, ap: AppSession): boolean {
-  if (!sender.isDestroyed() && !ap.simulatorWc.isDestroyed() && ap.simulatorWc.id === sender.id) {
-    return true
-  }
+  if (sender.isDestroyed()) return false
+  const hosted = state.simulatorWcIdToAppSessionIds.get(sender.id)
+  if (hosted) return hosted.has(ap.appSessionId)
   return appByWc(state, sender)?.appSessionId === ap.appSessionId
 }
 
@@ -1838,6 +1854,17 @@ function resolveAppByBridgeId(state: RouterState, bridgeId: string): AppSession 
 function bindWc(map: Map<number, string>, wc: WebContents, id: string): void {
   if (wc.isDestroyed()) return
   map.set(wc.id, id)
+}
+
+/** Add a session to a simulator wc's hosted set (created on first bind). */
+function bindSimulatorWc(map: Map<number, Set<string>>, wc: WebContents, id: string): void {
+  if (wc.isDestroyed()) return
+  let hosted = map.get(wc.id)
+  if (!hosted) {
+    hosted = new Set()
+    map.set(wc.id, hosted)
+  }
+  hosted.add(id)
 }
 
 function readBridgeId(msg: MessageEnvelope): string | undefined {
@@ -1958,17 +1985,20 @@ async function disposeAppSession(
   }
   ap.onSimulatorDestroyed = null
 
-  // Value-checked unbind: the simulator WCV entry is SHARED across the
-  // sessions it owns and re-pointed at the newest on every spawn. Disposing an
-  // older session (soft-reload swap retiring the outgoing one) must not delete
-  // the newer session's live binding — only remove entries that still name
-  // THIS session. Same guard for the service wc: a pooled window's entry may
-  // already belong to the next session that acquired it.
-  if (state.wcIdToAppSessionId.get(ap.serviceWc.id) === appSessionId) {
-    state.wcIdToAppSessionId.delete(ap.serviceWc.id)
+  // Value-checked unbind for the service wc: this delete runs after the
+  // pool-release await above, so on the pool path the next spawn may have
+  // already re-acquired the SAME window and rebound its wc id — only remove
+  // an entry that still names THIS session.
+  if (state.serviceWcIdToAppSessionId.get(ap.serviceWc.id) === appSessionId) {
+    state.serviceWcIdToAppSessionId.delete(ap.serviceWc.id)
   }
-  if (state.wcIdToAppSessionId.get(ap.simulatorWc.id) === appSessionId) {
-    state.wcIdToAppSessionId.delete(ap.simulatorWc.id)
+  // The simulator wc's hosted set sheds only this session; sessions that are
+  // still live on the shared wc (the soft-reload survivor) keep their
+  // membership. The map entry goes away with the last session.
+  const hosted = state.simulatorWcIdToAppSessionIds.get(ap.simulatorWc.id)
+  if (hosted) {
+    hosted.delete(appSessionId)
+    if (hosted.size === 0) state.simulatorWcIdToAppSessionIds.delete(ap.simulatorWc.id)
   }
 
   // Only the local fallback server needs closing; the dev-server base is owned
