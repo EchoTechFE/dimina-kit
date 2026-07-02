@@ -5,8 +5,9 @@ import { appendFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 // Order matters: dependency-first so consumers resolve already-published versions.
-// view-anchor → electron-deck → devkit → devtools.
+// compiler → view-anchor → electron-deck → devkit → devtools.
 const PACKAGES = [
+  { name: '@dimina-kit/compiler', dir: 'packages/compiler' },
   { name: '@dimina-kit/view-anchor', dir: 'packages/view-anchor' },
   { name: '@dimina-kit/electron-deck', dir: 'packages/electron-deck' },
   { name: '@dimina-kit/devkit', dir: 'packages/devkit' },

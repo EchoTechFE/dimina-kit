@@ -1,9 +1,12 @@
 {
   "name": "@dimina-kit/compiler",
   "version": "0.0.1",
-  "private": true,
   "description": "dmcc compiler bundles (browser + node) that drive @dimina/compiler against a caller-injected node:fs replacement (no bundled fs)",
+  "license": "MIT",
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "main": "./dist/compile-core.node.js",
   "exports": {
     ".": "./dist/compile-core.node.js",
@@ -63,6 +66,9 @@
   },
   "peerDependenciesMeta": {
     "@oxc-parser/binding-wasm32-wasi": {
+      "optional": true
+    },
+    "esbuild-wasm": {
       "optional": true
     }
   },
