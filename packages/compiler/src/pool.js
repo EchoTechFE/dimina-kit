@@ -67,7 +67,9 @@ export function createCompilerPool(options = {}) {
   let warmed = null
   async function warmup() {
     if (!warmed) {
-      warmed = Promise.all(workers.map((x) => x.send({ type: 'warmup', toolchainSetupURL })))
+      // stages tells the worker its stage identity so toolchain-free stages (style)
+      // can skip importing toolchainSetupURL at warmup.
+      warmed = Promise.all(workers.map((x) => x.send({ type: 'warmup', toolchainSetupURL, stages: [x.stage] })))
         .then((rs) => rs.forEach((r, i) => {
           // The worker's own try/catch reports the REAL cause (e.g. a toolchainSetupURL
           // import failure) as r.error — surface it verbatim, tagged with the stage.
