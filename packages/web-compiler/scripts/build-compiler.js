@@ -14,20 +14,34 @@ const shim = (f) => path.join(root, 'src/shims', f)
 const kitFeRequire = createRequire(path.resolve(root, '../../dimina/fe/package.json'))
 const sassBrowserEntry = path.join(path.dirname(kitFeRequire.resolve('sass')), 'sass.default.js')
 
+// Pin the browser CSS pipeline to the SAME autoprefixer the node build / real dmcc
+// resolve at runtime. esbuild's bundler resolution would otherwise pick a different
+// autoprefixer island (10.5.2, from the dimina fe pnpm store) than node require does
+// (10.5.0, worktree-root store); the 10.5.2 one adds stray -ms- prefixes for ie 11,
+// diverging from dmcc. Anchor the resolve at the node bundle location so browser and
+// node reference use byte-identical autoprefixer + its browserslist/caniuse island.
+const nodeRuntimeRequire = createRequire(path.join(root, 'dist/compile-core.node.js'))
+const autoprefixerEntry = nodeRuntimeRequire.resolve('autoprefixer')
+
 // MODE=node  -> Layer1: validate orchestration in Node, native esbuild/oxc kept external
 // MODE=browser -> bundle everything for the browser (pure-JS + wasm toolchain)
 const MODE = process.env.MODE || 'node'
 const USE_WASM = process.env.USE_WASM === '1' || MODE === 'browser'
 
-// Append exports for functions the compiler defines but does not export,
-// without touching the submodule source on disk.
+// Append exports for functions/reset-hooks the compiler defines but does not
+// export, without touching the submodule source on disk. The reset hooks clear
+// the compiler's module-level caches so a pooled worker realm can compile more
+// than once without cross-compile contamination (see resetCompilerState).
 const exportAppend = {
   name: 'export-append',
   setup(build) {
     const appends = {
-      'logic-compiler.js': '\nexport { writeCompileRes }\n',
+      'logic-compiler.js': '\nexport { writeCompileRes }\nexport function __resetLogicState() { processedModules.clear() }\n',
+      'style-compiler.js': '\nexport function __resetStyleState() { compileRes.clear() }\n',
+      'view-compiler.js': '\nexport function __resetViewState() { compileResCache.clear(); wxsModuleRegistry.clear(); wxsFilePathMap.clear() }\n',
+      'utils.js': '\nexport function __resetAssets() { for (const k of Object.keys(assetsMap)) delete assetsMap[k] }\n',
     }
-    build.onLoad({ filter: /core[\\/]logic-compiler\.js$/ }, async (args) => {
+    build.onLoad({ filter: /(core[\\/](logic|style|view)-compiler|common[\\/]utils)\.js$/ }, async (args) => {
       const base = path.basename(args.path)
       const src = await readFile(args.path, 'utf8')
       return { contents: src + (appends[base] || ''), loader: 'js' }
@@ -40,6 +54,12 @@ const exportAppend = {
 // while keeping native esbuild (so any failure is attributable to oxc only).
 const USE_OXC_WASM = process.env.USE_OXC_WASM === '1'
 
+// Keep the CSS pipeline external in the node build: inlining browserslist entangles
+// its config lookup with the compiler's INJECTED fs (browserslist would walk the
+// memfs project tree instead of the real disk). External keeps browserslist on real
+// node fs. NOTE: this makes the node build resolve autoprefixer from the worktree
+// root store; to compare against true dmcc, generate the reference with
+// NODE_PATH pointed at dimina/fe/node_modules (dmcc's own 10.5.2). See dump-node-ref.
 const NODE_EXTERNAL = [
   'esbuild', 'sass', 'less', 'postcss',
   'autoprefixer', 'cssnano', 'cheerio', 'htmlparser2', '@vue/compiler-sfc',
@@ -99,9 +119,18 @@ if (MODE === 'node') {
     'sass': sassBrowserEntry,
     // force esbuild-wasm's browser ESM build (not the node build)
     'esbuild-wasm': path.join(root, 'node_modules/esbuild-wasm/esm/browser.js'),
-    // no-op the browserslist-dependent postcss plugins (avoids needing global process)
-    'autoprefixer': shim('postcss-noop-plugin.js'),
-    'cssnano': shim('postcss-noop-plugin.js'),
+  }
+  // CSS pipeline: by default bundle the REAL autoprefixer + cssnano (same versions
+  // as the node/dmcc build) so the browser CSS output is byte-identical to dmcc.
+  // They pull browserslist + caniuse-lite, which only need process.env (already in
+  // the banner) since the compiler passes overrideBrowserslist and skips config
+  // lookup. Set REAL_CSS=0 to fall back to the old no-op shims (CSS left un-minified).
+  if (process.env.REAL_CSS === '0') {
+    alias['autoprefixer'] = shim('postcss-noop-plugin.js')
+    alias['cssnano'] = shim('postcss-noop-plugin.js')
+  } else {
+    // pin autoprefixer to the node/dmcc-resolved copy (see above)
+    alias['autoprefixer'] = autoprefixerEntry
   }
   if (USE_WASM) {
     alias['esbuild'] = shim('esbuild-wasm.js')
@@ -115,13 +144,21 @@ if (MODE === 'node') {
     format: 'esm',
     outfile: path.join(root, 'dist/compile-core.browser.js'),
     alias,
-    define: { 'process.env.NODE_ENV': '"production"' },
-    // Only a tiny process.env shim — NO global process object, so dart-sass,
-    // esbuild-wasm and the Go wasm runtime all correctly detect a browser env.
+    define: {
+      'process.env.NODE_ENV': '"production"',
+      // some postcss plugins reference __filename/__dirname for source locations;
+      // esbuild's browser platform leaves them undefined, so provide stable stubs.
+      '__filename': '"/index.js"',
+      '__dirname': '"/"',
+    },
+    // Tiny process shim — env + cwd only. NO process.versions.node, so dart-sass,
+    // esbuild-wasm and the Go wasm runtime still detect a browser env; cwd is needed
+    // by browserslist (real autoprefixer/cssnano) and is safe to expose.
     banner: {
       js: [
         'globalThis.global ||= globalThis;',
-        'globalThis.process ||= { env: {} };',
+        'globalThis.process ||= { env: {}, cwd: () => "/" };',
+        'globalThis.process.cwd ||= () => "/";',
       ].join('\n'),
     },
   }

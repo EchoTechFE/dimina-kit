@@ -9,16 +9,18 @@ import { setFs, resetFs } from './shims/fs.js'
 // submodule — no machine-specific absolute prefix. esbuild resolves these at
 // bundle time (see scripts/build-compiler.js).
 import {
-  storeInfo, getPages, getAppId, getAppName, getWorkPath, getTargetPath,
+  storeInfo, resetStoreInfo, getPages, getAppId, getAppName, getWorkPath, getTargetPath,
 } from '../../../dimina/fe/packages/compiler/src/env.js'
 import { createDist } from '../../../dimina/fe/packages/compiler/src/common/publish.js'
 import { compileConfig } from '../../../dimina/fe/packages/compiler/src/core/index.js'
 import { NpmBuilder } from '../../../dimina/fe/packages/compiler/src/common/npm-builder.js'
-// compileJS exported by source; writeCompileRes export appended at bundle time
-import { compileJS, writeCompileRes } from '../../../dimina/fe/packages/compiler/src/core/logic-compiler.js'
-// compileML export appended at bundle time
-import { compileML } from '../../../dimina/fe/packages/compiler/src/core/view-compiler.js'
-import { compileSS } from '../../../dimina/fe/packages/compiler/src/core/style-compiler.js'
+// compileJS exported by source; writeCompileRes + __resetLogicState appended at bundle time
+import { compileJS, writeCompileRes, __resetLogicState } from '../../../dimina/fe/packages/compiler/src/core/logic-compiler.js'
+// compileML + __resetViewState (appended at bundle time)
+import { compileML, __resetViewState } from '../../../dimina/fe/packages/compiler/src/core/view-compiler.js'
+import { compileSS, __resetStyleState } from '../../../dimina/fe/packages/compiler/src/core/style-compiler.js'
+// __resetAssets appended at bundle time (clears the never-cleared assetsMap cache)
+import { __resetAssets } from '../../../dimina/fe/packages/compiler/src/common/utils.js'
 
 function makeProgress() {
   let c = 0
@@ -113,6 +115,139 @@ function assertFs(fs) {
   }
 }
 
+// --- compile stages --------------------------------------------------------
+// The three stages read project source and each write their OWN product files;
+// no stage reads back another stage's products (verified against the compiler),
+// so they can run in any order — or concurrently in separate realms/workers over
+// a shared fs. Each function keeps the exact per-stage sequencing of the original
+// single-pass compile so output stays byte-for-byte identical.
+
+async function runLogicStage(pages, progress) {
+  // Main first (produces mainRes). A subpackage that references a shared component
+  // belonging to the main package reverse-injects it into mainRes, so the main
+  // package's logic.js must be written LAST — after every subpackage has run.
+  const mainRes = await compileJS(pages.mainPages, null, null, progress)
+  for (const [root, sub] of Object.entries(pages.subPages)) {
+    const subRes = await compileJS(sub.info, root, sub.independent ? [] : mainRes, progress)
+    await writeCompileRes(subRes, root)
+  }
+  await writeCompileRes(mainRes, null)
+}
+
+async function runViewStage(pages, progress) {
+  await compileML(pages.mainPages, null, progress)
+  for (const [root, sub] of Object.entries(pages.subPages)) {
+    await compileML(sub.info, root, progress)
+  }
+}
+
+async function runStyleStage(pages, progress) {
+  // app.css is prepended for the main package, matching the original ordering.
+  const styleMain = [{ path: 'app', id: '' }, ...pages.mainPages]
+  await compileSS(styleMain, null, progress)
+  for (const [root, sub] of Object.entries(pages.subPages)) {
+    await compileSS(sub.info, root, progress)
+  }
+}
+
+const STAGES = {
+  logic: runLogicStage,
+  view: runViewStage,
+  style: runStyleStage,
+}
+
+/** The compile stages, in the order the single-pass compile runs them. */
+export const STAGE_NAMES = Object.keys(STAGES)
+
+/**
+ * One-time setup against the injected fs: parse config/paths, scaffold the dist
+ * dir, compile app-config.json, build npm packages. Returns a SERIALIZABLE
+ * context (the storeInfo bundle + page map + ids + targetPath) that each stage
+ * restores via `compileStage`. Setup WRITES scaffolding/app-config/npm into the
+ * fs, so with a shared fs the stage workers read them without re-running setup.
+ * @param {{ fs: object, workPath?: string, options?: object }} opts
+ * @returns {Promise<{ storeInfo: object, pages: object, appId: string, name: string, targetPath: string, workPath: string }>}
+ */
+export async function setupCompile({ fs, workPath = '/work', options = {} } = {}) {
+  assertFs(fs)
+  // Guarantee a usable appId regardless of whether the project declared one.
+  ensureAppIdFs(fs, `${workPath}/project.config.json`)
+  setFs(fs)
+  try {
+    const store = storeInfo(workPath, options)
+    createDist()
+    compileConfig()
+    // findMiniprogramNpmDirs() no-ops (existsSync guard, returns []) when there is
+    // no miniprogram_npm, so this only throws on a GENUINE npm build failure.
+    try {
+      await new NpmBuilder(getWorkPath(), getTargetPath()).buildNpmPackages()
+    } catch (e) {
+      throw new Error(`[web-compiler] miniprogram_npm build failed: ${e.message}`)
+    }
+    return {
+      storeInfo: store,
+      pages: getPages(),
+      appId: getAppId(),
+      name: getAppName(),
+      targetPath: getTargetPath(),
+      workPath,
+    }
+  } finally {
+    resetFs()
+  }
+}
+
+/**
+ * Run ONE compile stage against the injected fs. `pages` and `storeInfo` come
+ * from `setupCompile`. Self-contained: it points the fs shim at `fs` and restores
+ * the compiler env from the bundle, so it can run in a fresh worker realm.
+ * Products are written into `fs`.
+ * @param {{ stage: 'logic'|'view'|'style', pages: object, storeInfo: object, fs: object }} opts
+ */
+export async function compileStage({ stage, pages, storeInfo: bundle, fs } = {}) {
+  const run = STAGES[stage]
+  if (!run) throw new Error(`[web-compiler] unknown compile stage "${stage}" (expected ${STAGE_NAMES.join('/')})`)
+  assertFs(fs)
+  setFs(fs)
+  try {
+    resetStoreInfo(bundle)
+    await run(pages, makeProgress())
+  } finally {
+    resetFs()
+  }
+}
+
+/**
+ * Collect the compiled products from the injected fs under `targetPath` into a
+ * `{ relPath: content }` map. Uses `fs` directly (no shim), so no setup needed.
+ * @param {{ fs: object, targetPath: string }} opts
+ * @returns {Record<string,string>}
+ */
+export function collectOutputs({ fs, targetPath } = {}) {
+  return readOutputs(fs, targetPath)
+}
+
+/**
+ * Clear the compiler's module-level caches so a REUSED realm (e.g. a pooled
+ * worker kept warm to amortize wasm-toolchain init) can compile a second project
+ * without contamination from the first. The env singletons (pathInfo/configInfo)
+ * are overwritten by each setupCompile's storeInfo, so they need no clearing — but
+ * these caches are keyed by module/asset path with no appId qualifier and are
+ * otherwise never reset on the inline (non-worker) path:
+ *   - logic  processedModules — else a shared page path is skipped as "done"
+ *   - style  compileRes        — CSS cache
+ *   - view   compileResCache / wxsModuleRegistry / wxsFilePathMap
+ *   - assets assetsMap         — else a reused path returns a stale uuid and the
+ *                                asset copy into the new fs is skipped
+ * Call it BEFORE compiling the next project in the same realm.
+ */
+export function resetCompilerState() {
+  __resetLogicState()
+  __resetStyleState()
+  __resetViewState()
+  __resetAssets()
+}
+
 // The compiler keeps module-level singletons (env.js pathInfo/configInfo) and the
 // fs shim has a single active backend, so two compiles in the same realm must NOT
 // overlap. Serialize calls through a promise chain — each waits for the previous
@@ -121,7 +256,8 @@ let compileChain = Promise.resolve()
 
 /**
  * Compile a mini-program against a caller-injected fs. Calls are serialized per
- * realm (see the singleton note above).
+ * realm (see the singleton note above). Convenience wrapper that runs
+ * `setupCompile` + all stages + `collectOutputs` in one realm.
  * @param {{ fs: object, workPath?: string }} opts
  *   fs:       a node:fs replacement (sync subset: existsSync/readFileSync/
  *             readdirSync{withFileTypes}/statSync/writeFileSync/mkdirSync{recursive}/
@@ -140,59 +276,13 @@ export function compileMiniApp(opts = {}) {
 }
 
 async function runCompile({ fs, workPath = '/work' } = {}) {
-  assertFs(fs)
-
-  // Guarantee a usable appId regardless of whether the project declared one.
-  ensureAppIdFs(fs, `${workPath}/project.config.json`)
-
-  // Point the compiler's fs shim at this backend for the duration of the compile.
-  setFs(fs)
-  try {
-    // 1. collect config / paths
-    storeInfo(workPath)
-    // 2. prepare dist dir, compile app-config.json
-    createDist()
-    compileConfig()
-    // 3. npm packages. findMiniprogramNpmDirs() no-ops (existsSync guard, returns
-    // []) when there's no miniprogram_npm, so this only throws on a GENUINE npm
-    // build failure — surface it instead of silently shipping missing deps.
-    try {
-      await new NpmBuilder(getWorkPath(), getTargetPath()).buildNpmPackages()
-    } catch (e) {
-      throw new Error(`[web-compiler] miniprogram_npm build failed: ${e.message}`)
-    }
-
-    const pages = getPages()
-    const progress = makeProgress()
-
-    // --- logic (logic.js) ---
-    const mainRes = await compileJS(pages.mainPages, null, null, progress)
-    for (const [root, sub] of Object.entries(pages.subPages)) {
-      const subRes = await compileJS(sub.info, root, sub.independent ? [] : mainRes, progress)
-      await writeCompileRes(subRes, root)
-    }
-    await writeCompileRes(mainRes, null)
-
-    // --- view ({page}.js) ---
-    await compileML(pages.mainPages, null, progress)
-    for (const [root, sub] of Object.entries(pages.subPages)) {
-      await compileML(sub.info, root, progress)
-    }
-
-    // --- style ({page}.css + app.css), app prepended for main like the original ---
-    const styleMain = [{ path: 'app', id: '' }, ...pages.mainPages]
-    await compileSS(styleMain, null, progress)
-    for (const [root, sub] of Object.entries(pages.subPages)) {
-      await compileSS(sub.info, root, progress)
-    }
-
-    // --- collect outputs from the injected fs (under targetPath) ---
-    return {
-      appId: getAppId(),
-      name: getAppName(),
-      files: readOutputs(fs, getTargetPath()),
-    }
-  } finally {
-    resetFs()
-  }
+  const ctx = await setupCompile({ fs, workPath })
+  const { storeInfo: bundle, pages, appId, name, targetPath } = ctx
+  // Same order as the original single pass. Stages are independent (no product
+  // read-back), so the order is not load-bearing — Phase 3 runs them concurrently
+  // in separate worker realms over a shared fs.
+  await compileStage({ stage: 'logic', pages, storeInfo: bundle, fs })
+  await compileStage({ stage: 'view', pages, storeInfo: bundle, fs })
+  await compileStage({ stage: 'style', pages, storeInfo: bundle, fs })
+  return { appId, name, files: collectOutputs({ fs, targetPath }) }
 }

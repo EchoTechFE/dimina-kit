@@ -21,7 +21,9 @@
     "build": "pnpm run build:node && pnpm run build:browser",
     "test:node": "MODE=node node scripts/build-compiler.js && node --import ./scripts/register-kit.js scripts/test-node.js",
     "test:appid": "MODE=node node scripts/build-compiler.js && node --import ./scripts/register-kit.js scripts/test-appid-fallback.js",
-    "test:hardening": "MODE=node node scripts/build-compiler.js && node --import ./scripts/register-kit.js scripts/test-hardening.js"
+    "test:hardening": "MODE=node node scripts/build-compiler.js && node --import ./scripts/register-kit.js scripts/test-hardening.js",
+    "test:decompose": "MODE=node node scripts/build-compiler.js && node --import ./scripts/register-kit.js scripts/test-decompose.js",
+    "test:realm-reuse": "MODE=node node scripts/build-compiler.js && node --import ./scripts/register-kit.js scripts/test-realm-reuse.js"
   },
   "dependencies": {
     "@babel/parser": "^7.29.7",
