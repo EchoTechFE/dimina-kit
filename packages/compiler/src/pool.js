@@ -34,10 +34,10 @@ export function createCompilerPool(options = {}) {
     onLog,
   } = options
   if (typeof createWorker !== 'function') {
-    throw new Error('[web-compiler] createCompilerPool: options.createWorker (() => Worker) is required')
+    throw new Error('[compiler] createCompilerPool: options.createWorker (() => Worker) is required')
   }
   if (!toolchainSetupURL) {
-    throw new Error('[web-compiler] createCompilerPool: options.toolchainSetupURL is required')
+    throw new Error('[compiler] createCompilerPool: options.toolchainSetupURL is required')
   }
 
   // one resident worker per stage. send() returns a promise resolved by the worker's
@@ -59,7 +59,7 @@ export function createCompilerPool(options = {}) {
       const msg = (ev && (ev.message || (ev.error && ev.error.message)))
         || 'worker failed to load or threw (no message — often a module-load / static-asset / cross-origin failure)'
       const where = ev && ev.filename ? ` (${ev.filename}:${ev.lineno || 0})` : ''
-      const r = q.shift(); if (r) r({ type: 'error', error: `[web-compiler] stage '${stage}' worker error: ${msg}${where}` })
+      const r = q.shift(); if (r) r({ type: 'error', error: `[compiler] stage '${stage}' worker error: ${msg}${where}` })
     }
     return { stage, w, send: (m) => new Promise((res) => { q.push(res); w.postMessage(m) }) }
   })
@@ -71,7 +71,7 @@ export function createCompilerPool(options = {}) {
         .then((rs) => rs.forEach((r, i) => {
           // The worker's own try/catch reports the REAL cause (e.g. a toolchainSetupURL
           // import failure) as r.error — surface it verbatim, tagged with the stage.
-          if (r && r.type === 'error') throw new Error(r.error || `[web-compiler] stage '${workers[i].stage}' warmup failed`)
+          if (r && r.type === 'error') throw new Error(r.error || `[compiler] stage '${workers[i].stage}' warmup failed`)
         }))
         .catch((err) => { warmed = null; throw err })
     }
@@ -92,7 +92,7 @@ export function createCompilerPool(options = {}) {
       await warmup()
       const files = input.files || input
       if (!files || typeof files !== 'object' || !Object.keys(files).length) {
-        throw new Error('[web-compiler] pool.compile expects { files: { relPath: content }, workPath? } (or a non-empty files map)')
+        throw new Error('[compiler] pool.compile expects { files: { relPath: content }, workPath? } (or a non-empty files map)')
       }
       const workPath = input.workPath || defaultWorkPath
       const parts = await Promise.all(workers.map((x) =>
@@ -102,7 +102,7 @@ export function createCompilerPool(options = {}) {
       for (let i = 0; i < parts.length; i++) {
         const pr = parts[i]
         // pr.error carries the worker's real error string (message + stack) — surface it.
-        if (!pr || pr.type === 'error') throw new Error(pr && pr.error ? pr.error : `[web-compiler] stage '${workers[i].stage}' worker error`)
+        if (!pr || pr.type === 'error') throw new Error(pr && pr.error ? pr.error : `[compiler] stage '${workers[i].stage}' worker error`)
         appId = pr.result.appId
         name = pr.result.name
         Object.assign(merged, pr.result.files)   // stages write disjoint files -> clean union

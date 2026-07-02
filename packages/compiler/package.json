@@ -1,5 +1,5 @@
 {
-  "name": "@dimina-kit/web-compiler",
+  "name": "@dimina-kit/compiler",
   "version": "0.0.1",
   "private": true,
   "description": "dmcc compiler bundles (browser + node) that drive @dimina/compiler against a caller-injected node:fs replacement (no bundled fs)",

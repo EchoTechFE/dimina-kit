@@ -13,7 +13,7 @@
 // wasm, so you pass the already-imported module to `installOxc`.
 //
 // Typical host toolchain-setup.js (imported by the stage worker at warmup):
-//   import { installEsbuildFromURL, installOxc } from '@dimina-kit/web-compiler/toolchain'
+//   import { installEsbuildFromURL, installOxc } from '@dimina-kit/compiler/toolchain'
 //   installOxc(await import('oxc-parser'))
 //   await installEsbuildFromURL('/esbuild-browser.mjs', '/esbuild.wasm')
 
@@ -26,7 +26,7 @@
  */
 export async function installEsbuildFromURL(moduleURL, wasmURL) {
   const code = await fetch(moduleURL).then((r) => {
-    if (!r.ok) throw new Error(`[web-compiler] installEsbuildFromURL: failed to fetch ${moduleURL} (${r.status})`)
+    if (!r.ok) throw new Error(`[compiler] installEsbuildFromURL: failed to fetch ${moduleURL} (${r.status})`)
     return r.text()
   })
   const blobURL = URL.createObjectURL(new Blob([code], { type: 'text/javascript' }))
@@ -43,7 +43,7 @@ export async function installEsbuildFromURL(moduleURL, wasmURL) {
 export function installOxc(oxcModule) {
   const parseSync = oxcModule && (oxcModule.parseSync || (oxcModule.default && oxcModule.default.parseSync))
   if (typeof parseSync !== 'function') {
-    throw new Error('[web-compiler] installOxc: expected an oxc-parser module exposing parseSync (pass `await import(\'oxc-parser\')`)')
+    throw new Error('[compiler] installOxc: expected an oxc-parser module exposing parseSync (pass `await import(\'oxc-parser\')`)')
   }
   globalThis.__oxcParseSync = parseSync
 }

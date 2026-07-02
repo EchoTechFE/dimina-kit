@@ -51,15 +51,15 @@ function ensureAppIdFs(fs, configPath) {
     try {
       config = JSON.parse(raw)
     } catch {
-      throw new Error(`[web-compiler] ${configPath} is not valid JSON; refusing to overwrite it`)
+      throw new Error(`[compiler] ${configPath} is not valid JSON; refusing to overwrite it`)
     }
     if (config === null || typeof config !== 'object' || Array.isArray(config)) {
-      throw new Error(`[web-compiler] ${configPath} must be a JSON object`)
+      throw new Error(`[compiler] ${configPath} must be a JSON object`)
     }
   }
   const { appid } = config
   if (appid !== undefined && appid !== '' && typeof appid !== 'string') {
-    throw new Error(`[web-compiler] ${configPath} "appid" must be a non-empty string`)
+    throw new Error(`[compiler] ${configPath} "appid" must be a non-empty string`)
   }
   if (!appid) {
     config.appid = SYNTHETIC_APPID
@@ -83,11 +83,11 @@ function readOutputs(fs, target) {
     seen.add(dir)
     const entries = fs.readdirSync(dir, { withFileTypes: true })
     if (!Array.isArray(entries)) {
-      throw new Error(`[web-compiler] fs.readdirSync(${dir}, { withFileTypes: true }) must return an array`)
+      throw new Error(`[compiler] fs.readdirSync(${dir}, { withFileTypes: true }) must return an array`)
     }
     for (const e of entries) {
       if (!e || typeof e.isDirectory !== 'function') {
-        throw new Error(`[web-compiler] fs.readdirSync must return Dirent entries with isDirectory()/isFile() (got ${typeof e} under ${dir})`)
+        throw new Error(`[compiler] fs.readdirSync must return Dirent entries with isDirectory()/isFile() (got ${typeof e} under ${dir})`)
       }
       const full = `${dir}/${e.name}`
       if (e.isDirectory()) walk(full)
@@ -107,11 +107,11 @@ const REQUIRED_FS = [
 
 function assertFs(fs) {
   if (!fs || typeof fs !== 'object') {
-    throw new Error('[web-compiler] compileMiniApp requires { fs }: inject a node:fs replacement (e.g. createFsFromVolume(memfs Volume)) seeded with the project source under workPath')
+    throw new Error('[compiler] compileMiniApp requires { fs }: inject a node:fs replacement (e.g. createFsFromVolume(memfs Volume)) seeded with the project source under workPath')
   }
   const missing = REQUIRED_FS.filter((m) => typeof fs[m] !== 'function')
   if (missing.length) {
-    throw new Error(`[web-compiler] injected fs is missing required method(s): ${missing.join(', ')}. Needs the sync subset ${REQUIRED_FS.join('/')}, and readdirSync must support { withFileTypes: true }.`)
+    throw new Error(`[compiler] injected fs is missing required method(s): ${missing.join(', ')}. Needs the sync subset ${REQUIRED_FS.join('/')}, and readdirSync must support { withFileTypes: true }.`)
   }
 }
 
@@ -182,7 +182,7 @@ export async function setupCompile({ fs, workPath = '/work', options = {} } = {}
     try {
       await new NpmBuilder(getWorkPath(), getTargetPath()).buildNpmPackages()
     } catch (e) {
-      throw new Error(`[web-compiler] miniprogram_npm build failed: ${e.message}`)
+      throw new Error(`[compiler] miniprogram_npm build failed: ${e.message}`)
     }
     return {
       storeInfo: store,
@@ -206,7 +206,7 @@ export async function setupCompile({ fs, workPath = '/work', options = {} } = {}
  */
 export async function compileStage({ stage, pages, storeInfo: bundle, fs } = {}) {
   const run = STAGES[stage]
-  if (!run) throw new Error(`[web-compiler] unknown compile stage "${stage}" (expected ${STAGE_NAMES.join('/')})`)
+  if (!run) throw new Error(`[compiler] unknown compile stage "${stage}" (expected ${STAGE_NAMES.join('/')})`)
   assertFs(fs)
   setFs(fs)
   try {

@@ -36,9 +36,9 @@ let toolchainURL = null
 function ensureToolchain(url) {
   if (url) toolchainURL = url
   if (!toolchainReady) {
-    if (!toolchainURL) return Promise.reject(new Error('[web-compiler] stage worker not warmed up: no toolchainSetupURL (call pool.warmup first)'))
+    if (!toolchainURL) return Promise.reject(new Error('[compiler] stage worker not warmed up: no toolchainSetupURL (call pool.warmup first)'))
     toolchainReady = import(/* @vite-ignore */ toolchainURL)
-      .catch((err) => { toolchainReady = null; throw new Error(`[web-compiler] toolchain setup failed importing ${toolchainURL}: ${(err && err.message) || err}`) })
+      .catch((err) => { toolchainReady = null; throw new Error(`[compiler] toolchain setup failed importing ${toolchainURL}: ${(err && err.message) || err}`) })
   }
   return toolchainReady
 }
