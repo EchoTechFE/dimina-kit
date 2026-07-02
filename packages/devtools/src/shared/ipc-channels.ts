@@ -216,6 +216,10 @@ export const ProjectChannel = {
   CompileLog: 'project:compileLog',
   CaptureThumbnail: 'project:captureThumbnail',
   GetThumbnail: 'project:getThumbnail',
+  GetLaunchConfigs: 'project:getLaunchConfigs',
+  SaveLaunchConfigs: 'project:saveLaunchConfigs',
+  GetActiveLaunchConfigId: 'project:getActiveLaunchConfigId',
+  SaveActiveLaunchConfigId: 'project:saveActiveLaunchConfigId',
 } as const
 
 // ── Project file system (sandboxed to active project root) ────────────────
@@ -362,6 +366,8 @@ export const PopoverChannel = {
   Relaunch: 'popover:relaunch',
   Closed: 'popover:closed',
   Init: 'popover:init',
+  SwitchLaunchConfig: 'popover:switchLaunchConfig',
+  UpdateLaunchConfigs: 'popover:updateLaunchConfigs',
 } as const
 
 // ── Window ───────────────────────────────────────────────────────────────

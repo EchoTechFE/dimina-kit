@@ -1,4 +1,4 @@
-import type { CompileConfig } from '../../shared/types.js'
+import type { CompileConfig, LaunchConfig } from '../../shared/types.js'
 import { ProjectChannel } from '../../shared/ipc-channels.js'
 import {
   ProjectCaptureThumbnailSchema,
@@ -7,6 +7,10 @@ import {
   ProjectGetThumbnailSchema,
   ProjectOpenSchema,
   ProjectSaveCompileConfigSchema,
+  ProjectGetLaunchConfigsSchema,
+  ProjectSaveLaunchConfigsSchema,
+  ProjectGetActiveLaunchConfigIdSchema,
+  ProjectSaveActiveLaunchConfigIdSchema,
 } from '../../shared/ipc-schemas.js'
 // eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
 import type { WorkbenchContext } from '../services/workbench-context.js'
@@ -59,6 +63,38 @@ export function registerSessionIpc(ctx: Pick<WorkbenchContext, 'workspace' | 'se
         args,
       )
       return ctx.workspace.getThumbnail(projectPath)
+    })
+    .handle(ProjectChannel.GetLaunchConfigs, (_, ...args: unknown[]) => {
+      const [projectPath] = validate(
+        ProjectChannel.GetLaunchConfigs,
+        ProjectGetLaunchConfigsSchema,
+        args,
+      )
+      return ctx.workspace.getLaunchConfigs(projectPath)
+    })
+    .handle(ProjectChannel.SaveLaunchConfigs, (_, ...args: unknown[]) => {
+      const [projectPath, configs] = validate(
+        ProjectChannel.SaveLaunchConfigs,
+        ProjectSaveLaunchConfigsSchema,
+        args,
+      )
+      return ctx.workspace.saveLaunchConfigs(projectPath, configs as LaunchConfig[])
+    })
+    .handle(ProjectChannel.GetActiveLaunchConfigId, (_, ...args: unknown[]) => {
+      const [projectPath] = validate(
+        ProjectChannel.GetActiveLaunchConfigId,
+        ProjectGetActiveLaunchConfigIdSchema,
+        args,
+      )
+      return ctx.workspace.getActiveLaunchConfigId(projectPath)
+    })
+    .handle(ProjectChannel.SaveActiveLaunchConfigId, (_, ...args: unknown[]) => {
+      const [projectPath, id] = validate(
+        ProjectChannel.SaveActiveLaunchConfigId,
+        ProjectSaveActiveLaunchConfigIdSchema,
+        args,
+      )
+      return ctx.workspace.saveActiveLaunchConfigId(projectPath, id as string | null)
     })
 }
 

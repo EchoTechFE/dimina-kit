@@ -730,7 +730,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     // Hand the workbench the current devtools scheme as a URL query so its very
     // first paint already matches (the runtime setter only exists post-init).
     const loadUrl = `${url}index.html?theme=${workbenchThemeScheme()}`
-    await view.webContents.loadURL(loadUrl).catch((err) => {
+    await view.webContents.loadURL(loadUrl).catch((err: unknown) => {
       console.error('[workbench] attachWorkbench — loadURL failed', err)
     })
   }
@@ -783,7 +783,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     })()`
     return workbenchView.webContents
       .executeJavaScript(script, true)
-      .then((ok) => ok === true)
+      .then((ok: boolean) => ok === true)
       .catch(() => false)
   }
 
@@ -1403,7 +1403,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     try {
       if (!nativeSimulatorView.webContents.isDestroyed()) {
         ctx.bridge?.disposeSessionsForSimulator?.(nativeSimulatorView.webContents.id)
-          ?.catch((err) => console.warn(`[view-manager] dispose sessions (${label}) failed:`, err))
+          ?.catch((err: unknown) => console.warn(`[view-manager] dispose sessions (${label}) failed:`, err))
         nativeSimulatorView.webContents.close()
       }
     } catch { /* ignore */ }
@@ -1641,7 +1641,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
       }
     })
 
-    void simWc.loadURL(simulatorUrl).catch((err) => {
+    void simWc.loadURL(simulatorUrl).catch((err: unknown) => {
       console.error('[workbench] attachNativeSimulator — loadURL failed', err)
     })
 

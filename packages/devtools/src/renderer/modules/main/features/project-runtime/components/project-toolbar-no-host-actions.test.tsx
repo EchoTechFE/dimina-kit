@@ -57,6 +57,8 @@ async function renderToolbar() {
         setDevtoolsPosition: () => {},
       }}
       simPanelWidth={375}
+      launchConfigs={[]}
+      activeLaunchConfigId={null}
     />,
   )
   // Flush mount effects + pending IPC promise resolutions so a legacy
