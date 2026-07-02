@@ -6,6 +6,8 @@ import { BRIDGE_CHANNELS as C, SIMULATOR_EVENTS as E, deviceInfoToHostEnv } from
 import type { NativeDeviceInfo, SyncStorageChange } from '../../shared/ipc-channels.js'
 import { isPersistentSimulatorApi } from '../../shared/simulator-api-metadata.js'
 import { devtoolsPackageRoot } from '../utils/paths.js'
+import { createSessionListenerBag } from './session-listener-bag.js'
+import type { SessionListenerBag } from './session-listener-bag.js'
 import type {
   ActivePagePayload,
   ApiCallPayload,
@@ -188,20 +190,18 @@ interface AppSession {
   /** Pool entry id when the service window came from the pre-warm pool; null
    * for a fresh / fallback window (destroyed, not pooled, on dispose). */
   poolEntryId: string | null
-  /** The `'closed'` listener bound to the service window, kept so dispose can
-   * detach it before releasing the window back to the pool. */
-  onServiceClosed: (() => void) | null
   /** The pool-path `'did-finish-load'` boot listener, kept so dispose can detach
    * it before releasing the (recycled) window — otherwise a stale listener could
    * boot this disposed session into the next spawn's window. Null on the fresh
    * path (which uses a self-removing `once`). */
   onServiceBoot: (() => void) | null
-  /** The `'destroyed'` teardown hook bound to the simulator WCV, kept so dispose
-   * can detach it. The WCV is SHARED across the sessions it soft-reloads
-   * through, so a session disposed gracefully (DISPOSE IPC) must remove its
-   * own once() — otherwise every soft reload leaks one listener on the
-   * still-alive wc until the MaxListeners warning fires. */
-  onSimulatorDestroyed: (() => void) | null
+  /** Session-scoped hooks on emitters that OUTLIVE this session — the shared
+   * simulator WCV's `'destroyed'` and the service window's `'closed'` — are
+   * registered through this bag so `disposeAppSession` detaches them all in
+   * one place. A hook left behind on the shared simulator wc grows by one per
+   * soft reload until the MaxListeners warning fires; a stale `'closed'` hook
+   * on a pool-recycled window re-triggers this session's teardown. */
+  listenerBag: SessionListenerBag
   /** Handle for this session's `ctx.registry` shutdown-fallback entry. Disposed
    * on normal session teardown so the registry doesn't grow one stale closure
    * per respawn (the fallback only needs to fire at whole-app shutdown for
@@ -884,9 +884,8 @@ async function handleSpawn(
     pages: new Map(),
     activeBridgeId: null,
     poolEntryId,
-    onServiceClosed: null,
     onServiceBoot: null,
-    onSimulatorDestroyed: null,
+    listenerBag: createSessionListenerBag(),
     registryHandle: null,
   }
 
@@ -929,8 +928,7 @@ async function handleSpawn(
   const onServiceClosed = (): void => {
     void disposeAppSession(state, appSessionId, { serviceAlreadyClosed: true })
   }
-  appSession.onServiceClosed = onServiceClosed
-  serviceWindow.once('closed', onServiceClosed)
+  appSession.listenerBag.once(serviceWindow, 'closed', onServiceClosed)
 
   // The simulator WCV owns the app's UI lifetime. When it is destroyed —
   // project close (`views.disposeAll`/detach) or a DeviceShell respawn
@@ -944,8 +942,7 @@ async function handleSpawn(
   const onSimulatorDestroyed = (): void => {
     void disposeAppSession(state, appSessionId)
   }
-  appSession.onSimulatorDestroyed = onSimulatorDestroyed
-  simulatorWc.once('destroyed', onSimulatorDestroyed)
+  appSession.listenerBag.once(simulatorWc, 'destroyed', onSimulatorDestroyed)
   // The simulator WCV may have been torn down DURING this spawn's awaits
   // (loadAppConfig / resource server / service-host creation) — e.g. a project
   // close/switch that ran while we were mid-flight. In that case its 'destroyed'
@@ -1942,6 +1939,15 @@ async function disposeAppSession(
   }
   ap.pages.clear()
 
+  // Detach every session-scoped hook on emitters that outlive this session —
+  // the shared simulator WCV's 'destroyed' and the service window's 'closed' —
+  // BEFORE the window is released/closed below: a pool-recycled window must
+  // not re-trigger this session's teardown from a stale 'closed', and the
+  // simulator wc must not accumulate one dead hook per soft reload until the
+  // MaxListeners warning fires. Idempotent with teardown being triggered BY
+  // one of these hooks (removing a fired once() is a no-op).
+  ap.listenerBag.dispose()
+
   if (ap.poolEntryId !== null && state.pool && !opts.serviceAlreadyClosed) {
     // Soft reuse (foundation.md §4.3): the pooled service-host webContents keeps
     // its wc.id but is about to run a NEW app session. Reset its Connection
@@ -1951,13 +1957,10 @@ async function disposeAppSession(
     // clean segment. The connection object stays alive (it's reused), so this is
     // reset (not close); a real destroy still closes it via its 'destroyed' hook.
     state.connections.reset(ap.serviceWc.id)
-    // Return the window to the pool instead of closing it. Detach the per-spawn
-    // listeners first so the pool resetting/recycling (or a later pool-side
-    // destroy) can't re-trigger disposeAppSession or boot this disposed session
-    // into the next spawn's recycled window.
-    if (ap.onServiceClosed && !ap.serviceWindow.isDestroyed()) {
-      ap.serviceWindow.removeListener('closed', ap.onServiceClosed)
-    }
+    // Return the window to the pool instead of closing it. Detach the boot
+    // listener first (the 'closed' hook already came off with the listener-bag
+    // dispose above) so a stale did-finish-load can't boot this disposed
+    // session into the next spawn's recycled window.
     if (ap.onServiceBoot && !ap.serviceWindow.isDestroyed()) {
       ap.serviceWindow.webContents.removeListener('did-finish-load', ap.onServiceBoot)
     }
@@ -1975,16 +1978,6 @@ async function disposeAppSession(
   } else if (!opts.serviceAlreadyClosed && !ap.serviceWindow.isDestroyed()) {
     ap.serviceWindow.close()
   }
-  // The simulator WCV outlives gracefully-disposed sessions (soft reload keeps
-  // ONE wc across every recompile), so this session's 'destroyed' once() must
-  // be detached here — left in place it accumulates one listener per soft
-  // reload until the MaxListeners warning fires. Idempotent with the
-  // destroyed-path itself (a fired once() is already gone).
-  if (ap.onSimulatorDestroyed && !ap.simulatorWc.isDestroyed()) {
-    ap.simulatorWc.removeListener('destroyed', ap.onSimulatorDestroyed)
-  }
-  ap.onSimulatorDestroyed = null
-
   // Value-checked unbind for the service wc: this delete runs after the
   // pool-release await above, so on the pool path the next spawn may have
   // already re-acquired the SAME window and rebound its wc id — only remove

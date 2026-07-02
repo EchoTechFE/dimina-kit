@@ -360,4 +360,30 @@ describe('bridge-router — overlapping app sessions on one simulator webContent
       'disposing A must detach A\'s own once(\'destroyed\') from the shared simulator wc, leaving only B\'s',
     ).toBe(1)
   })
+
+  it('keeps the shared simulator wc\'s \'destroyed\' hook count flat across repeated spawn→dispose (soft reload) cycles', async () => {
+    const { ctx, simulatorWc } = makeCtx()
+    installBridgeRouter(ctx)
+    void ctx
+
+    for (let cycle = 1; cycle <= 5; cycle++) {
+      const session = await spawnSession(simulatorWc, { pagePath: cycle % 2 === 0 ? ROOT_B : ROOT_A })
+      emitDispose(simulatorWc, { bridgeId: session.result.appSessionId })
+      await flush()
+
+      expect(
+        simulatorWc.listeners['destroyed']?.size ?? 0,
+        `cycle ${cycle}: a session that disposes itself must leave no 'destroyed' hooks on the surviving simulator wc`,
+      ).toBe(0)
+    }
+
+    // One more spawn with no matching dispose confirms the flat count above
+    // isn't an artifact of nothing ever being attached — a live session's
+    // hook is present and exactly one.
+    await spawnSession(simulatorWc, { pagePath: ROOT_A })
+    expect(
+      simulatorWc.listeners['destroyed']?.size ?? 0,
+      'an undisposed session leaves exactly its own \'destroyed\' hook on the simulator wc',
+    ).toBe(1)
+  })
 })
