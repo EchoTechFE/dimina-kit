@@ -18,7 +18,7 @@
 ## 提交前必跑 lint（Lint gate）
 
 - 改完代码、提交/开 PR **之前**，在受影响的包里跑一次 `pnpm lint`（devtools 的 CI `verify` 门禁是 `eslint . --max-warnings 0`，**1 个 warning 也会让 CI 红**）。typecheck / test 全绿不代表 lint 过。
-- 还要在仓库根跑一次 `pnpm ratchet:check`（CI 同名门禁，独立于 lint）。它按 baseline 卡四项**只能持平或变好**：`cognitive-complexity` / `file-length`（**单文件 > 500 行就计数，包括新增测试文件**）/ `type-coverage` / `type-escapes`（`as any` / `@ts-` 等）。Δ 为正即红。新文件别越过 500 行；要看阈值/baseline 见 `tools/ratchet/`（`snapshot.json` 是 baseline）。
+- 还要在仓库根跑一次 `pnpm ratchet:check`（CI 同名门禁，独立于 lint）。它按 baseline 卡八项**只能持平或变好**：`cognitive-complexity` / `file-length`（**单文件 > 500 行就计数，包括新增测试文件**）/ `type-coverage` / `type-escapes`（`as any` / `@ts-` 等）/ `code-duplication` / `circular-deps` / `test-report`（各套件通过测试数）/ `test-coverage`（各套件 lines 覆盖率，全 src 分母）。Δ 为正即红。新文件别越过 500 行。`test-report` / `test-coverage` 读 `pnpm test` 产出的工件（`test-report*.json` / `coverage/coverage-summary.json`），本地没跑过测试时 `ratchet:check` 会 fail loud 提示先跑。要看阈值/baseline 见 `tools/ratchet/`（`snapshot.json` 是 baseline）。
 - 新增根目录构建脚本（`build-*.mjs` / `build-*.js`）后，记得把文件名加进 `packages/devtools/eslint.config.js` 那份**按文件名授予 `globals.node` 的白名单**，否则 `process` 等会触发 `no-undef`。
 
 ## 注释规范（Comments）
