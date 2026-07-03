@@ -115,8 +115,26 @@ async function compileSubset(files, workPath, stages, bundle) {
   return { appId, name, files: out }
 }
 
+// Liveness beacon cadence while a request is being processed. The pool's watchdog
+// measures inactivity, so these keep a slow-but-alive compile from being judged dead.
+// A long synchronous wasm call still blocks the beacon — by design: prolonged total
+// silence is exactly the pool's death criterion for a wedged realm.
+// Opt-in per message (wantHeartbeat): legacy single-worker consumers of this exported
+// worker pair every message as a reply, so unsolicited heartbeats would corrupt them.
+const HEARTBEAT_INTERVAL_MS = 2000
+
 self.onmessage = async (e) => {
   const { type } = e.data || {}
+  let beacon = null
+  if (e.data && e.data.wantHeartbeat) {
+    // First beat goes out immediately: the watchdog window starts at postMessage, so a
+    // caller-configured timeout shorter than the beacon cadence must still see life
+    // before it can fire.
+    try { self.postMessage({ type: 'heartbeat' }) } catch { /* ignore */ }
+    beacon = setInterval(() => {
+      try { self.postMessage({ type: 'heartbeat' }) } catch { /* ignore */ }
+    }, HEARTBEAT_INTERVAL_MS)
+  }
   try {
     if (type === 'warmup') {
       const t0 = performance.now()
@@ -152,5 +170,7 @@ self.onmessage = async (e) => {
     }
   } catch (err) {
     self.postMessage({ type: 'error', error: String((err && err.stack) || err) })
+  } finally {
+    if (beacon) clearInterval(beacon)
   }
 }

@@ -6,6 +6,14 @@
 // That resident realm reuse is the point: watch/rebuild in an IDE amortizes worker spawn +
 // module init instead of re-paying it on every save.
 //
+// Worker supervision (inactivity watchdog, immediate terminate on death, generation guard
+// against stale replies, terminate-ack-gated respawn) is the SAME src/worker-slot.js
+// state machine the browser pool uses — a wedged-but-alive worker times out and the build
+// rejects instead of pending forever (and queueing every later build behind it). The
+// terminate-ack gate matters more here than in the browser: stage workers write a SHARED
+// real-disk staging dir, so a retry must never start while the previous attempt's worker
+// could still be writing.
+//
 // Flow per build():
 //   main   : setupCompile → prep on real disk (storeInfo/createDist/compileConfig/npm)
 //   workers: resetCompilerState + resetStoreInfo + runStage(stage) → write staging disk
@@ -18,14 +26,27 @@ import nodeFs from 'node:fs'
 import nodePath from 'node:path'
 import process from 'node:process'
 import { setupCompile, resetCompilerState, STAGE_NAMES } from './compile-core.js'
-import { createDist, publishToDist } from '../../../dimina/fe/packages/compiler/src/common/publish.js'
+import { createWorkerSlot, settleAll } from './worker-slot.js'
+import { publishToDist } from '../../../dimina/fe/packages/compiler/src/common/publish.js'
 import { getAppConfigInfo, getAppId, getAppName } from '../../../dimina/fe/packages/compiler/src/env.js'
 
 const { Worker } = createRequire(import.meta.url)('node:worker_threads')
 
+// Default INACTIVITY ceiling per stage build. The stage worker heartbeats every 2s while
+// it works, so this only expires after that much total silence — which for a live worker
+// means a truly wedged realm, not a big-but-progressing project. Deliberately more
+// generous than the browser default: disk builds run whole real projects.
+const DEFAULT_SEND_TIMEOUT_MS = 120000
+
+const WORKER_DEATH_CODES = new Set(['compiler-worker-timeout', 'compiler-worker-crashed', 'compiler-worker-dead'])
+
 /**
  * Create a resident Node stage-worker pool.
- * @param {{ stages?: string[] }} [opts]
+ * @param {{
+ *   stages?: string[],
+ *   sendTimeoutMs?: number,        // default 120000 — inactivity window per stage build
+ *   retryOnWorkerDeath?: boolean,  // default true — one transparent whole-build retry after a worker death
+ * }} [opts]
  * @returns {{ build: (outputDir:string, workPath:string, useAppIdDir?:boolean, options?:object)=>Promise<{appId:string,name:string,path:string}>, dispose: ()=>Promise<void>, stages: string[] }}
  */
 // ALL Node disk-pool builds serialize through this single module-level chain, not a
@@ -35,40 +56,46 @@ const { Worker } = createRequire(import.meta.url)('node:worker_threads')
 // (one pool publishing the other's staging dir under the other's appId).
 let chain = Promise.resolve()
 
-export function createNodeCompilerPool({ stages = STAGE_NAMES } = {}) {
+export function createNodeCompilerPool({
+  stages = STAGE_NAMES,
+  sendTimeoutMs = DEFAULT_SEND_TIMEOUT_MS,
+  retryOnWorkerDeath = true,
+} = {}) {
   const workerURL = new URL('./stage-worker.node.js', import.meta.url)
   let disposed = false
 
   const workers = stages.map((stage) => {
-    // Slot with lazy respawn: a crashed/exited worker fails the builds queued on it,
-    // vacates the slot, and the NEXT send() forks a fresh worker — a dead stage must
-    // not wedge every later rebuild (postMessage to an exited worker neither throws
-    // nor ever answers).
-    const slot = { stage, w: null, q: [] }
-    const spawn = () => {
-      const w = new Worker(workerURL)
-      const settle = (v) => { const r = slot.q.shift(); if (r) r(v) }
-      w.on('message', settle)
-      w.on('error', (e) => settle({ type: 'error', stage, error: { message: e && e.message, stack: e && e.stack } }))
-      w.on('exit', (code) => {
-        if (slot.w === w) slot.w = null
-        while (slot.q.length) settle({ type: 'error', stage, error: { message: `stage worker "${stage}" exited (code ${code})` } })
-      })
-      return w
-    }
-    // Spawn eagerly so the pool is warm from creation (the resident-realm point);
-    // only replacements after a death are lazy.
-    slot.w = spawn()
-    slot.send = (m) => new Promise((res) => {
-      if (!slot.w) slot.w = spawn()
-      slot.q.push(res)
-      slot.w.postMessage(m)
+    // `w` mirrors the current live Worker for the `_slots` test hook (crash-recovery
+    // tests terminate a live worker through it); everything else goes through the slot.
+    const entry = { stage, w: null }
+    entry.slot = createWorkerSlot({
+      name: `[compiler] stage '${stage}' worker`,
+      spawnTransport: ({ onMessage, onCrash }) => {
+        const w = new Worker(workerURL)
+        entry.w = w
+        w.on('message', onMessage)
+        w.on('error', (e) => onCrash(`stage worker "${stage}" error: ${(e && e.message) || e}`))
+        w.on('exit', (code) => onCrash(`stage worker "${stage}" exited (code ${code})`))
+        return { postMessage: (m) => w.postMessage(m), terminate: () => w.terminate() }
+      },
+      // Heartbeats are pure liveness for the inactivity watchdog, never a reply.
+      onEvent: (d) => !!(d && d.type === 'heartbeat'),
     })
-    return slot
+    // Spawn eagerly so the pool is warm from creation (the resident-realm point); a
+    // spawn failure surfaces on the first build's own ensureAlive.
+    entry.slot.ensureAlive().catch(() => {})
+    return entry
   })
 
-  async function runBuild(outputDir, workPath, useAppIdDir, options) {
+  // One full build attempt. Ends quiescent: settleAll guarantees no stage request is
+  // still in flight when it returns/throws, so a retry can't cross-pair replies.
+  async function runAttempt(outputDir, workPath, useAppIdDir, options) {
     const { sourcemap = false, fileTypes } = options || {}
+
+    // 0) Respawn anything that died (ensureAlive awaits the dead worker's terminate()
+    //    settlement first — it must be fully stopped before a new attempt touches the
+    //    shared staging dir).
+    await settleAll(workers.map((x) => x.slot.ensureAlive()))
 
     // 1) Prep once on real disk. resetCompilerState first so a warm main realm does not
     //    carry caches (assets/config) from the previous build. setupCompile computes a
@@ -87,15 +114,23 @@ export function createNodeCompilerPool({ stages = STAGE_NAMES } = {}) {
 
     // 2) Fan out to the resident stage workers. They restore the same storeInfo (so their
     //    getTargetPath() is the same staging dir) and write disjoint files concurrently.
-    const results = await Promise.all(
-      workers.map((x) => x.send({ stage: x.stage, pages, storeInfo, sourcemap })),
-    )
+    //    Worker DEATH (timeout/crash/exit) arrives as a coded rejection; the worker's own
+    //    { type:'error' } replies (real compile errors) are normalized below.
+    const results = await settleAll(workers.map((x) =>
+      x.slot.request(
+        { stage: x.stage, pages, storeInfo, sourcemap, wantHeartbeat: true },
+        { timeoutMs: sendTimeoutMs, description: `stage '${x.stage}' build` },
+      ).catch((err) => {
+        if (err && err.code && !err.stage) err.stage = x.stage
+        throw err
+      })))
     for (const r of results) {
       if (!r || r.type === 'error') {
         const info = r && r.error
         const err = new Error(`[compiler] stage "${r && r.stage}" failed: ${(info && info.message) || 'unknown error'}`)
         if (info && info.stack) err.stack = info.stack
         err.stage = r && r.stage
+        err.code = 'compiler-stage-error' // worker-reported compile error — never retried
         throw err
       }
     }
@@ -114,15 +149,29 @@ export function createNodeCompilerPool({ stages = STAGE_NAMES } = {}) {
   }
 
   function build(outputDir, workPath, useAppIdDir = true, options = {}) {
-    if (disposed) return Promise.reject(new Error('[compiler] pool has been disposed'))
-    const result = chain.then(() => runBuild(outputDir, workPath, useAppIdDir, options))
+    if (disposed) {
+      return Promise.reject(Object.assign(new Error('[compiler] pool has been disposed'), { code: 'compiler-pool-disposed' }))
+    }
+    const result = chain.then(async () => {
+      try {
+        return await runAttempt(outputDir, workPath, useAppIdDir, options)
+      } catch (err) {
+        // A worker death is often transient (OOM-killed thread, machine pressure) —
+        // retry the WHOLE build once on fresh workers. The retry's ensureAlive gates on
+        // the dead worker's terminate() ack, and setupCompile recreates the staging dir
+        // from scratch (createDist), so the failed attempt cannot contaminate it. Real
+        // compile errors are deterministic and are never retried.
+        if (!retryOnWorkerDeath || !err || !WORKER_DEATH_CODES.has(err.code)) throw err
+        return await runAttempt(outputDir, workPath, useAppIdDir, options)
+      }
+    })
     chain = result.then(() => {}, () => {})
     return result
   }
 
   async function dispose() {
     disposed = true
-    await Promise.all(workers.map((x) => (x.w ? x.w.terminate() : null)))
+    await Promise.all(workers.map((x) => x.slot.dispose()))
   }
 
   // _slots is a test hook (crash-recovery tests terminate a live worker through

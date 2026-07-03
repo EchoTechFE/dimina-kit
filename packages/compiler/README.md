@@ -85,18 +85,25 @@ createCompilerPool(options: {
   workPath?: string               // 默认 '/work'
   onLog?: (e: { level: 'log'|'warn'|'error', message: string, stage: string }) => void
                                   // 可选:worker 内编译器的诊断(缺组件/不支持 wx API/样式降级…)转发出来
+  sendTimeoutMs?: number          // 默认 30000:setup/compile-subset 的"不活动"窗口(见下)
+  warmupTimeoutMs?: number        // 默认 120000:warmup(冷加载 wasm 工具链)的不活动窗口
+  retryOnWorkerDeath?: boolean    // 默认 true:worker 死亡导致的编译失败,整次透明重试一次
 }): {
   warmup(): Promise<void>
   compile(input: { files: Record<string,string>, workPath?: string })
     : Promise<{ appId: string, name: string, files: Record<string,string> }>
-  dispose(): void
+  dispose(): Promise<void>
   stages: string[]
 }
 ```
 
+> **卡死/崩溃防护（worker 监管）：** 超时是**不活动**判据,不是硬期限——stage worker 工作时每 2s 发心跳,任何消息(心跳/日志/回复)都会重置计时,所以慢但活着的大项目编译不会被误杀;只有连续 `sendTimeoutMs` 毫秒完全静默(真卡死:同步 wasm 死循环会阻塞 worker 事件循环,连心跳都停)才判死。判死当下 worker 立即被 `terminate()`(不留僵尸烧 CPU),下次编译懒 respawn。判死导致的 `compile()` 失败默认**整次透明重试一次**(换新 worker 重放 warmup+setup+compile);第二次仍失败才向上 reject,错误带 `.code`(`'compiler-worker-timeout'` / `'compiler-worker-crashed'`),编译器自身的报错(用户源码问题)不重试。warmup 有独立的更长窗口——冷加载 13MB wasm 合法地慢,但挂死的工具链加载同样必须超时,否则会永久堵死串行编译链。
+
 > **`createWorker` 两种写法都行**，取决于你怎么托管 `dist/stage-worker.browser.js`：
 > - 用 bundler（Vite/Webpack…）按包解析：`() => new Worker(new URL('@dimina-kit/compiler/stage-worker', import.meta.url), { type: 'module' })`
 > - 把 bundle 当静态资源托管：`() => new Worker('/stage-worker.browser.js', { type: 'module' })`
+>
+> ⚠️ 静态托管时 **pool 与 worker bundle 必须同版本**（升级包后同步更新静态文件并 cache-bust）：心跳是 worker 侧行为，旧版 worker 不发心跳，看门狗会退化成"硬性无消息超时"——长编译可能被误杀。另外 `sendTimeoutMs` 别配得低于心跳周期 2s（默认 30s 远大于它，无需操心）。
 >
 > **`compile` 是单参**：`{ files, workPath }` 一个对象——不要拆成两个参数、也别把 `workPath` 塞进别处。`onLog` 让你不碰 worker 就能拿到编译器那些原本只在 worker 内 `console.*` 的诊断（见「已知限制」）。
 
@@ -168,6 +175,7 @@ const appInfo = await build(outputDir, workPath, true, { sourcemap: true, fileTy
 ```js
 import { createNodeCompilerPool } from '@dimina-kit/compiler/pool-node'
 
+// 可选项:{ stages, sendTimeoutMs = 120000, retryOnWorkerDeath = true }
 const pool = createNodeCompilerPool()
 try {
   const info = await pool.build(outputDir, workPath, true, { sourcemap: true })
@@ -182,7 +190,7 @@ try {
 
 - **写真实磁盘**（不经 `files` map），二进制静态资源完好——不受浏览器 `collectOutputs` utf8 限制。
 - **build 全局串行**：编译经过 dmcc 的进程级全局状态,所以同进程内所有 pool 实例的 build 共用一条串行链（并发调用会排队,不会互相污染产物）。
-- **worker 崩溃自愈**：某个 stage worker 意外退出时,当次 build 以该 stage 的错误结束,下一次 build 自动补一个新 worker,不会永久挂起。
+- **worker 卡死/崩溃自愈**：与浏览器 pool 同一套监管（`src/worker-slot.js`）——卡死但没退出的 worker 在连续 `sendTimeoutMs`（默认 120s）无任何消息（worker 工作时每 2s 发心跳）后判死并**立即 terminate**；意外退出/超时导致的 build 失败默认**透明重试一次**（respawn 前先等旧 worker `terminate()` 结算,staging 目录由 setupCompile 重建,失败的那次不会污染重试产物）,重试仍失败才 reject（错误带 `.code` 与 `.stage`）。`retryOnWorkerDeath: false` 恢复"第一次死就报错"的单次语义。任何情况下后续 build 都不会永久挂起。
 - 运行时依赖（sass/postcss/esbuild/oxc 等）已声明为本包 dependencies,宿主无需再装 `@dimina/compiler`。
 
 ## core 接缝（自定义编排）
