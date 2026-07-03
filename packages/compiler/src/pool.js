@@ -97,19 +97,33 @@ export function createCompilerPool(options = {}) {
         throw new Error('[compiler] pool.compile expects { files: { relPath: content }, workPath? } (or a non-empty files map)')
       }
       const workPath = input.workPath || defaultWorkPath
+
+      // Phase 1 — one worker runs setup ONCE: it allocates the scope-hash ids
+      // (page + component data-v-XXXXX) and builds miniprogram_npm/app-config.json.
+      // Broadcasting this single bundle to every stage is REQUIRED for correctness:
+      // each stage runs in its own realm, and if each ran its own setup it would roll
+      // independent random uuids, so the CSS `[data-v-X]` selectors would never match
+      // the render `Module id` and every WXSS rule would target nothing (regression
+      // guarded by scripts/test-pool-scopehash.js). This mirrors the Node disk pool,
+      // which likewise sets up once and fans the same { pages, storeInfo } out.
+      const s = await workers[0].send({ type: 'setup', files, workPath })
+      if (!s || s.type === 'error') {
+        throw new Error(s && s.error ? s.error : `[compiler] setup phase failed in stage '${workers[0].stage}' worker`)
+      }
+      const { bundle, scaffold } = s
+
+      // Phase 2 — every stage compiles in parallel against the SHARED bundle. The
+      // non-stage scaffold (app-config.json + npm, produced once) seeds the union.
       const parts = await Promise.all(workers.map((x) =>
-        x.send({ type: 'compile-subset', files, workPath, stages: [x.stage] })))
-      const merged = {}
-      let appId, name
+        x.send({ type: 'compile-subset', files, workPath, stages: [x.stage], bundle })))
+      const merged = { ...(scaffold || {}) }
       for (let i = 0; i < parts.length; i++) {
         const pr = parts[i]
         // pr.error carries the worker's real error string (message + stack) — surface it.
         if (!pr || pr.type === 'error') throw new Error(pr && pr.error ? pr.error : `[compiler] stage '${workers[i].stage}' worker error`)
-        appId = pr.result.appId
-        name = pr.result.name
         Object.assign(merged, pr.result.files)   // stages write disjoint files -> clean union
       }
-      return { appId, name, files: merged }
+      return { appId: bundle.appId, name: bundle.name, files: merged }
     })
     // keep the chain alive regardless of this compile's outcome
     chain = run.then(() => {}, () => {})
