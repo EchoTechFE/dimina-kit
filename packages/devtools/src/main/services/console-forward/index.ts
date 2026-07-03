@@ -37,11 +37,26 @@
  *   2. This forwarder re-injects ONLY `source:'render'` entries — service entries
  *      are already shown natively in the attached DevTools, so forwarding them
  *      would duplicate. (Do NOT forward `source:'service'`.)
+ *
+ * ── Diagnostics injection (optional 2nd constructor arg) ────────────────────
+ * When a `DiagnosticsBus` is supplied, this forwarder ALSO subscribes to it
+ * (`replay:true`, so entries buffered before construction are delivered too)
+ * and injects every diagnostic into the OWNING session's service-host console —
+ * main-synthesized diagnostics (page-not-found, logic-bundle-unreachable, …)
+ * otherwise never reach a real `console.*` call the CDP capture could observe.
+ * Reuses the SAME `RENDER_FORWARD_SOURCE_URL` sentinel as the render mirror, so
+ * this injection is exempt from the same loop-safety skip. A diagnostic that
+ * arrives before its session's service host is resolvable (or while it is
+ * destroyed) queues by `appSessionId` (or in a global bucket when the
+ * diagnostic carries none); `notifyServiceHostReady(appSessionId)` flushes that
+ * session's bucket plus the global bucket into its now-ready wc, then clears
+ * both — so a repeat notify never re-injects.
  */
 import type { WebContents } from 'electron'
 import { DisposableRegistry, toDisposable, type Disposable } from '@dimina-kit/electron-deck/main'
 import type { BridgeRouterHandle } from '../../ipc/bridge-router.js'
 import { RENDER_FORWARD_SOURCE_URL } from '../service-console/console-api.js'
+import type { Diagnostic, DiagnosticsBus } from '../diagnostics/index.js'
 
 /**
  * One console entry posted by a guest preload. Shape mirrors
@@ -76,6 +91,16 @@ export interface ConsoleForwarder extends Disposable {
    * render→service forward is internal and not exposed as a sink.
    */
   subscribe(sink: ConsoleSink): Disposable
+  /**
+   * Flush any diagnostic queued for `appSessionId` (plus the global,
+   * session-less queue) into that session's now-ready service-host wc.
+   * Idempotent: entries are removed from their bucket as they flush, so a
+   * repeat call for the same session injects nothing further. Call once the
+   * session's service-host webContents has actually navigated/loaded (e.g.
+   * from `bootServiceHost`, after `did-finish-load`) — calling it earlier just
+   * finds nothing resolvable and leaves the queue intact for a later call.
+   */
+  notifyServiceHostReady(appSessionId: string): void
 }
 
 /** Console levels we re-emit into the service host. Anything else maps to 'log'. */
@@ -105,11 +130,87 @@ function buildForwardScript(level: string, args: unknown[]): string {
   return `(()=>{try{const a=JSON.parse(${JSON.stringify(argsJson)});console[${JSON.stringify(method)}]('[视图]',...a)}catch(_){}})()\n//# sourceURL=${RENDER_FORWARD_SOURCE_URL}`
 }
 
+/** `Diagnostic.severity` → the literal `console.<method>` call to emit (dot form, not computed — kept greppable/CDP-attributable like a hand-written call site). */
+const DIAGNOSTIC_CONSOLE_CALL: Record<Diagnostic['severity'], string> = {
+  error: 'console.error',
+  warn: 'console.warn',
+  info: 'console.info',
+}
+
+/**
+ * Build the `executeJavaScript` source that injects one diagnostic into the
+ * service host's console, prefixed `[dimina-kit]`. Args ride as a JSON string
+ * (same anti-injection shape as `buildForwardScript`) and the sourceURL is the
+ * SAME sentinel the render mirror uses, so this line is exempt from
+ * service-console's loop-safety skip too.
+ */
+function buildDiagnosticScript(severity: Diagnostic['severity'], message: string): string {
+  const call = DIAGNOSTIC_CONSOLE_CALL[severity]
+  const argsJson = JSON.stringify([`[dimina-kit] ${message}`])
+  return `(()=>{try{const a=JSON.parse(${JSON.stringify(argsJson)});${call}(...a)}catch(_){}})()\n//# sourceURL=${RENDER_FORWARD_SOURCE_URL}`
+}
+
 export function createConsoleForwarder(
   bridge: Pick<BridgeRouterHandle, 'getServiceWc' | 'getServiceWcForBridge'>,
+  diagnostics?: DiagnosticsBus,
 ): ConsoleForwarder {
   const sinks = new Set<ConsoleSink>()
   const registry = new DisposableRegistry()
+  // Diagnostics queued because no live service-host wc could be resolved yet,
+  // bucketed by the owning appSessionId; diagnostics with no appSessionId land
+  // in `pendingGlobal` instead. `notifyServiceHostReady` drains both into the
+  // session that just became ready.
+  const pendingBySession = new Map<string, Diagnostic[]>()
+  const pendingGlobal: Diagnostic[] = []
+  // Sessions whose service host has finished loading service.html (the caller
+  // signals this via `notifyServiceHostReady`). A resolvable wc alone is NOT
+  // readiness: the window exists (and is bound) before its spawn navigation
+  // lands, and anything injected into that pre-load document is wiped by the
+  // navigation — the diagnostic would silently vanish from the Console panel.
+  const readySessions = new Set<string>()
+
+  function injectDiagnostic(wc: WebContents, d: Diagnostic): void {
+    wc.executeJavaScript(buildDiagnosticScript(d.severity, d.message), true).catch(() => {})
+  }
+
+  /**
+   * Inject a diagnostic into its owning session's service-host console, or
+   * queue it until that host is READY (not merely constructed — see
+   * `readySessions`). Ownership is strict: a session-owned diagnostic NEVER
+   * falls back to the currently-active host — while `handleSpawn` is still
+   * running, the new session's host doesn't exist yet and the "active" host
+   * is the OUTGOING session's window, so a fallback would land the message in
+   * a console about to be destroyed instead of the session it explains. Only
+   * session-less diagnostics may use the active host. Never throws — a
+   * missing/destroyed/not-yet-ready host is a normal state, not an error.
+   */
+  function handleDiagnostic(d: Diagnostic): void {
+    if (d.appSessionId) {
+      const wc = readySessions.has(d.appSessionId) && bridge.getServiceWcForBridge
+        ? bridge.getServiceWcForBridge(d.appSessionId)
+        : null
+      if (wc && !wc.isDestroyed()) {
+        injectDiagnostic(wc, d)
+        return
+      }
+      const bucket = pendingBySession.get(d.appSessionId)
+      if (bucket) bucket.push(d)
+      else pendingBySession.set(d.appSessionId, [d])
+      return
+    }
+    const wc = bridge.getServiceWc()
+    if (wc && !wc.isDestroyed()) {
+      injectDiagnostic(wc, d)
+      return
+    }
+    pendingGlobal.push(d)
+  }
+
+  if (diagnostics) {
+    // replay:true so diagnostics reported before this forwarder existed (early
+    // boot, buffered on the bus) are queued/injected here too.
+    registry.add(diagnostics.subscribe(handleDiagnostic, { replay: true }))
+  }
 
   /**
    * Render→service forward. Resolves the service host for the entry's owning
@@ -157,8 +258,31 @@ export function createConsoleForwarder(
       sinks.add(sink)
       return registry.add(toDisposable(() => { sinks.delete(sink) }))
     },
+    notifyServiceHostReady(appSessionId) {
+      // Readiness is sticky per session: from here on, session-owned
+      // diagnostics inject directly instead of queueing.
+      readySessions.add(appSessionId)
+      // Re-resolve fresh rather than trusting whatever `handleDiagnostic` saw at
+      // report time — the caller invokes this exactly when it knows the wc just
+      // became live, so that resolution wins even if an earlier snapshot was
+      // destroyed/missing.
+      const wc = bridge.getServiceWcForBridge ? bridge.getServiceWcForBridge(appSessionId) : null
+      if (!wc) return
+      const sessionEntries = pendingBySession.get(appSessionId)
+      if (sessionEntries) {
+        for (const d of sessionEntries) injectDiagnostic(wc, d)
+        pendingBySession.delete(appSessionId)
+      }
+      if (pendingGlobal.length) {
+        for (const d of pendingGlobal) injectDiagnostic(wc, d)
+        pendingGlobal.length = 0
+      }
+    },
     dispose() {
       sinks.clear()
+      pendingBySession.clear()
+      pendingGlobal.length = 0
+      readySessions.clear()
       return registry.disposeAll()
     },
   }

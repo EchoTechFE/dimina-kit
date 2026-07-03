@@ -36,6 +36,13 @@ export interface ServiceHostWindowOptions {
    * which page logic referencing `qd.*` throws `ReferenceError: qd is not defined`.
    */
   apiNamespaces?: string[]
+  /**
+   * Observes a spawn-navigation `loadURL` rejection (NOT encoded into the
+   * spawn URL). Without it the fresh-window path swallows the failure entirely
+   * — `did-finish-load` never fires, the session hangs, and the only signal is
+   * the launch watchdog's late timeout instead of the real cause.
+   */
+  onLoadFailed?: (err: unknown) => void
 }
 
 /**
@@ -99,11 +106,23 @@ export function buildServiceHostSpawnUrl(opts: ServiceHostWindowOptions): string
  * preload re-evaluates on this navigation, rebuilding `__diminaSpawnContext`.
  * Returns the load promise (resolves on did-finish-load). Attaches the dev-only
  * detached-DevTools hook, matching the original behavior.
+ *
+ * A `loadURL` rejection is swallowed — the pooled-window recycle path expects
+ * a failed navigation not to reject the caller — but `opts.onLoadFailed`, when
+ * given, still observes the original rejection reason (routed by the caller
+ * into the diagnostics bus) before this resolves.
  */
-export function navigateServiceHost(win: BrowserWindow, url: string): Promise<void> {
+export function navigateServiceHost(
+  win: BrowserWindow,
+  url: string,
+  opts?: { onLoadFailed?: (err: unknown) => void },
+): Promise<void> {
   const loaded = Promise.resolve(win.loadURL(url)).then(
     () => undefined,
-    () => undefined,
+    (err: unknown) => {
+      opts?.onLoadFailed?.(err)
+      return undefined
+    },
   )
   if (!app.isPackaged && process.env.NODE_ENV !== 'test') {
     // Recycled pooled windows get navigated repeatedly. A `once` hook that never
@@ -170,6 +189,6 @@ export function createServiceHostWindow(opts: ServiceHostWindowOptions): Browser
   // so its logic-layer localStorage/cookies are shared with the project's render
   // side only, never with other projects.
   const win = constructServiceHostWindow({ appId: opts.appId, partition: miniappPartition(opts.appId, opts.projectPath) })
-  void navigateServiceHost(win, buildServiceHostSpawnUrl(opts))
+  void navigateServiceHost(win, buildServiceHostSpawnUrl(opts), { onLoadFailed: opts.onLoadFailed })
   return win
 }

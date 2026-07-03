@@ -40,9 +40,12 @@ const JSON_VIEW_STYLE: React.CSSProperties = {
 export function AppDataPanel({
   state,
   onSelectBridge,
+  isRuntimeRunning = true,
 }: {
   state: AppDataState
   onSelectBridge: (id: string) => void
+  /** Whether the mini-program's runtime session is `running` — distinguishes "小程序未运行" from a true empty-data vacuum below. Defaults to true so callers that don't track runtime status keep the plain empty-data text. */
+  isRuntimeRunning?: boolean
 }) {
   const { bridges, activeBridgeId, entries } = state
   const anyEntries = bridges.some((b) => Object.keys(entries[b.id] ?? {}).length > 0)
@@ -72,7 +75,7 @@ export function AppDataPanel({
       )}
       {bridges.length === 0 || !anyEntries ? (
         <div className="text-[12px] text-text-dim text-center px-4 py-6">
-          暂无页面数据（仅显示 Page 级 data）
+          {isRuntimeRunning ? '暂无页面数据（仅显示 Page 级 data）' : '小程序未运行'}
         </div>
       ) : (
         // Keepalive: render every bridge's entries; hide non-active ones via

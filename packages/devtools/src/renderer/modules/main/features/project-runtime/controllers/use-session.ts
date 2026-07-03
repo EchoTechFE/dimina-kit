@@ -9,10 +9,11 @@ import {
   getProjectPages,
   onCompileLog,
   onProjectStatus,
+  onSessionRuntimeStatus,
   openProject,
   saveCompileConfig,
 } from '@/shared/api'
-import type { AppInfo, CompileLogEntry } from '@/shared/api'
+import type { AppInfo, CompileLogEntry, SessionRuntimeStatusPayload } from '@/shared/api'
 import type { CompileConfig } from '@/shared/types'
 import { DEFAULT_SCENE } from '../../../../../../shared/constants'
 import type { CompileStatus } from './use-project-runtime-controller'
@@ -76,6 +77,16 @@ export interface SessionHookResult {
   /** Empty BOTH compileEvents and compileLogs (the panel's single 清空). */
   clearCompileEvents: () => void
   relaunch: (nextConfig?: CompileConfig) => Promise<void>
+  /**
+   * Latest runtime-lifecycle push for the active session (launching/running/
+   * launch-failed/crashed, plus an optional start-page fallback). `null`
+   * before the first push and again the moment a hot-reload rebuild starts a
+   * fresh launch round — a stale terminal state (crashed/launch-failed) must
+   * never survive into the next round's launch.
+   */
+  runtimeStatus: SessionRuntimeStatusPayload | null
+  /** True once main reports the project's file watcher has died; persists for the rest of the session (cleared on project switch). */
+  watcherDead: boolean
 }
 
 export function useSession(props: UseSessionProps): SessionHookResult {
@@ -153,17 +164,34 @@ export function useSession(props: UseSessionProps): SessionHookResult {
   // re-invoked updater (StrictMode) can't burn extra numbers.
   const compileSeqRef = useRef(0)
 
+  const [runtimeStatus, setRuntimeStatus] = useState<SessionRuntimeStatusPayload | null>(null)
+  const [watcherDead, setWatcherDead] = useState(false)
+
   // Each project gets an independent compile log: switching projects (the
   // projectPath-keyed openProject reset point) drops the previous project's
-  // events AND lines. The initial mount runs this too (no-op on empty state).
+  // events AND lines, and clears runtime state carried over from the old
+  // session.
   useEffect(() => {
     setCompileEvents([])
     setCompileLogs([])
+    setRuntimeStatus(null)
+    setWatcherDead(false)
   }, [projectPath])
 
   useEffect(() => {
     return onProjectStatus((data) => {
       setCompileStatus(data)
+      // Refresh the launch-page dropdown from a hot-reload rebuild's page list
+      // when the main process could read one; a failed read omits `pages` so
+      // the previous list is left in place instead of being blanked.
+      if (data.pages) {
+        setPages(data.pages)
+      }
+      // A live watcher-death report is a session-lifetime fact — sticky until
+      // the next project open, not cleared by later projectStatus chatter.
+      if (data.watcher === 'dead') {
+        setWatcherDead(true)
+      }
       // 编译 tab event log: one entry per projectStatus payload (this
       // subscription is its ONLY source — the initial local load above sets
       // compileStatus without synthesizing an event). Functional update:
@@ -179,13 +207,29 @@ export function useSession(props: UseSessionProps): SessionHookResult {
           : next
       })
       // Hot-reload guard: a watcher rebuild (hotReload:true) bumps the token
-      // so the simulator re-attaches.
+      // so the simulator re-attaches, AND a fresh launch round is about to
+      // start — drop any terminal runtimeStatus (crashed/launch-failed) from
+      // the PREVIOUS round so it can't outlive the recompile.
       // Plain status chatter (compiling/error/ready) must NOT move the token.
       if (data.hotReload === true) {
+        setRuntimeStatus(null)
         setHotReloadToken((token) => token + 1)
       }
     })
   }, [])
+
+  // Runtime-lifecycle push (launching/running/launch-failed/crashed, plus an
+  // optional start-page fallback) — a separate channel from projectStatus
+  // because it reports on the SPAWNED app session, not the compiler. The
+  // channel is a global broadcast, so a late event from a previous project's
+  // dying session (e.g. its crash landing mid-switch) must not paint this
+  // project's panel — accept only payloads for the app currently shown.
+  useEffect(() => {
+    return onSessionRuntimeStatus((payload) => {
+      if (appInfo?.appId && payload.appId !== appInfo.appId) return
+      setRuntimeStatus(payload)
+    })
+  }, [appInfo])
 
   useEffect(() => {
     return onCompileLog((entry) => {
@@ -255,5 +299,7 @@ export function useSession(props: UseSessionProps): SessionHookResult {
     compileLogs,
     clearCompileEvents,
     relaunch,
+    runtimeStatus,
+    watcherDead,
   }
 }

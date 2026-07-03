@@ -64,7 +64,15 @@ export interface SimulatorMiniAppOptions {
 export class SimulatorMiniApp {
   readonly appId: string
   readonly scene: number
-  readonly pagePath: string
+  /**
+   * The pagePath this session actually mounted. Starts as the constructor
+   * request but is overwritten by `spawn()` with `result.resolvedPagePath` —
+   * main may have fallen back to a different root page (the request was
+   * absent from the compiled manifest), and every consumer reading this field
+   * (DeviceShell's root stack entry, persisted "resume last page" state) must
+   * see the page the session was ACTUALLY spawned with, not the request.
+   */
+  pagePath: string
   readonly query: Record<string, string>
   readonly apiRegistry: Record<string, ApiHandler | undefined> = {}
 
@@ -139,6 +147,11 @@ export class SimulatorMiniApp {
     this.serviceWcId = result.serviceWcId
     this.manifest = result.manifest
     this.rootWindowConfig = result.rootWindowConfig
+    // Reconcile with main's actual root page: a fallback (request absent from
+    // the compiled manifest) means main mounted `resolvedPagePath`, not the
+    // constructor's request — every later reader of `this.pagePath` must agree
+    // with what is actually live.
+    this.pagePath = result.resolvedPagePath
     return result.bridgeId
   }
 

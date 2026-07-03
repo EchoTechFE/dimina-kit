@@ -221,6 +221,16 @@ export interface AppManifest {
   entryPagePath: string
   pages: string[]
   tabBar?: TabBarConfig
+  /**
+   * Provenance of this manifest: `'app-config'` when built from a real
+   * compiled `app-config.json` (its `pages` list is authoritative, so mount
+   * gates can validate membership against it); `'fallback'` when
+   * app-config.json was unreachable and the manifest is a single-page stand-in
+   * built from the spawn request. Mount gates only enforce against
+   * `'app-config'` — a `'fallback'` manifest has no compiled truth to check
+   * membership against, so it must let every page/nav target through.
+   */
+  source: 'app-config' | 'fallback'
 }
 
 export interface SpawnRequest {
@@ -249,7 +259,19 @@ export interface SpawnRequest {
 export interface SpawnResult {
   appSessionId: string
   bridgeId: string
+  /** The pagePath originally requested (unchanged even when a fallback applied — see `resolvedPagePath`). */
   pagePath: string
+  /**
+   * The pagePath the root PageSession was ACTUALLY spawned with. Equal to
+   * `pagePath` unless `pageFallbackApplied` is true, in which case the request
+   * was absent from `manifest.pages` and this is `manifest.entryPagePath`
+   * (or `manifest.pages[0]` when even that isn't a member). Callers that cache
+   * "the current page" (e.g. `SimulatorMiniApp`) must reconcile against this,
+   * not the original request.
+   */
+  resolvedPagePath: string
+  /** Whether `resolvedPagePath` differs from the request because it was absent from the compiled manifest. Always false for a `'fallback'` manifest (nothing to validate against). */
+  pageFallbackApplied: boolean
   serviceWcId: number
   resourceBaseUrl: string
   manifest: AppManifest
