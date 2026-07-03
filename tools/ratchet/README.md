@@ -106,13 +106,17 @@ Three checks protect the ratchet itself, not just the dimensions it measures:
   function is; this dimension catches the opposite failure mode — logic that stays
   simple per copy but is pasted across files.
 - **circular-deps** is self-implemented (a regex over import/export-from
-  specifiers, resolved the way Node/TS would, fed into Tarjan's SCC algorithm)
-  rather than built on madge/dpdm — a single regex-and-graph pass didn't
-  justify a new dependency. Scope is deliberately narrow: only *relative*
-  imports are followed, so a detected cycle is always contained within one
-  package's `src` — a cycle formed through two packages' published entry
-  points (`@scope/pkg-a` importing `@scope/pkg-b` importing back) is out of
-  this dimension's reach and would need a package-graph-level tool instead.
+  specifiers and dynamic `import()` calls, resolved the way Node/TS would —
+  including a package's own tsconfig `paths` aliases (e.g. `@/*`) — fed into
+  Tarjan's SCC algorithm) rather than built on madge/dpdm — a single
+  regex-and-graph pass didn't justify a new dependency. Import-shaped text
+  inside comments or string literals is masked out before matching, so it
+  can't fabricate an edge. Scope is deliberately narrow: only relative and
+  same-package-alias imports are followed, so a detected cycle is always
+  contained within one package's `src` — a cycle formed through two packages'
+  published entry points (`@scope/pkg-a` importing `@scope/pkg-b` importing
+  back) is out of this dimension's reach and would need a package-graph-level
+  tool instead.
 - **No dead-code dimension.** A knip-based unused-exports ratchet was tried and
   removed. The devtools packages expose extension APIs for downstream secondary
   development, so *any* export may have an out-of-repo consumer that static

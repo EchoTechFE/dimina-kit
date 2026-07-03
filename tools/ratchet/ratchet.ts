@@ -253,9 +253,9 @@ async function readSnapshot(): Promise<Snapshot | null> {
   return JSON.parse(await readFile(SNAPSHOT, 'utf8')) as Snapshot;
 }
 
-function runGit(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+function runGit(args: string[], cwd: string = ROOT): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn('git', args, { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn('git', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (d: Buffer) => (stdout += d));
@@ -263,6 +263,78 @@ function runGit(args: string[]): Promise<{ code: number; stdout: string; stderr:
     child.on('error', reject);
     child.on('close', (code) => resolve({ code: code ?? 1, stdout, stderr }));
   });
+}
+
+// Three ways a baseline lookup at `ref` can go: a real snapshot ("ok"), a ref
+// that resolves fine but simply predates the snapshot file ("absent" — the
+// legitimate skip case), or git itself failing to resolve `ref` at all
+// ("error" — a typo'd ref, a shallow clone missing the commit, a corrupt
+// repo). baseline-guard must only treat "absent" as a free pass; collapsing
+// "error" into the same bucket would let a bad ref silently disable the
+// anti-tamper gate.
+export type BaselineSnapshotResult =
+  | { kind: 'ok'; metrics: Record<string, Metric> }
+  | { kind: 'absent' }
+  | { kind: 'error'; message: string };
+
+export async function loadBaselineSnapshotAt(
+  ref: string,
+  opts: { cwd?: string } = {},
+): Promise<BaselineSnapshotResult> {
+  const cwd = opts.cwd ?? ROOT;
+  // `git rev-parse --verify` first, separately from `git show`: it fails only
+  // when `ref` itself doesn't resolve, so its exit code is the one honest
+  // signal for "error". `git show <ref>:<path>` fails both for a bad ref AND
+  // for a valid ref missing the path — conflating those is exactly the bug
+  // this function exists to avoid.
+  const verify = await runGit(['rev-parse', '--verify', ref], cwd);
+  if (verify.code !== 0) {
+    return { kind: 'error', message: verify.stderr.trim() || `git could not resolve ref "${ref}"` };
+  }
+  const show = await runGit(['show', `${ref}:${SNAPSHOT_REPO_PATH}`], cwd);
+  if (show.code !== 0) {
+    return { kind: 'absent' };
+  }
+  try {
+    const parsed = JSON.parse(show.stdout) as { metrics?: Record<string, Metric> };
+    return { kind: 'ok', metrics: parsed.metrics ?? {} };
+  } catch {
+    return { kind: 'error', message: `snapshot.json at ${ref} is not valid JSON` };
+  }
+}
+
+// A shape guard run before a parsed snapshot.json is trusted for comparison —
+// JSON.parse succeeding only proves the file is valid JSON, not that it still
+// has the metrics shape the gate needs. A hand-corrupted or truncated
+// snapshot (missing metrics, a metric with no numeric value, …) must not read
+// as "consistent" for free.
+export function snapshotShapeErrors(parsed: unknown): string[] {
+  const errors: string[] = [];
+  if (typeof parsed !== 'object' || parsed === null) {
+    errors.push('snapshot is not an object');
+    return errors;
+  }
+  const metrics = (parsed as { metrics?: unknown }).metrics;
+  if (typeof metrics !== 'object' || metrics === null) {
+    errors.push('snapshot.metrics is missing or not an object');
+    return errors;
+  }
+  const entries = Object.entries(metrics as Record<string, unknown>);
+  if (entries.length === 0) {
+    errors.push('snapshot.metrics is empty');
+    return errors;
+  }
+  for (const [key, value] of entries) {
+    if (typeof value !== 'object' || value === null) {
+      errors.push(`metric "${key}" is not an object`);
+      continue;
+    }
+    const v = (value as { value?: unknown }).value;
+    if (typeof v !== 'number' || Number.isNaN(v)) {
+      errors.push(`metric "${key}" has no numeric value`);
+    }
+  }
+  return errors;
 }
 
 // Compares the working tree's snapshot.json against the version committed at
@@ -275,8 +347,15 @@ async function runBaselineGuard(ref: string | undefined): Promise<void> {
     console.error('baseline-guard requires a git ref, e.g. `ratchet baseline-guard origin/main`');
     process.exit(2);
   }
-  const { code, stdout } = await runGit(['show', `${ref}:${SNAPSHOT_REPO_PATH}`]);
-  if (code !== 0) {
+
+  const result = await loadBaselineSnapshotAt(ref);
+  if (result.kind === 'error') {
+    // git itself failed to resolve `ref` — fail loud rather than skip, or a
+    // typo'd/garbage ref would silently disable the anti-tamper gate.
+    console.error(`baseline-guard: could not resolve ${SNAPSHOT_REPO_PATH} at ${ref}: ${result.message}`);
+    process.exit(2);
+  }
+  if (result.kind === 'absent') {
     console.log(`baseline-guard: no ${SNAPSHOT_REPO_PATH} found at ${ref} — nothing to compare against, skipping.`);
     return;
   }
@@ -287,8 +366,17 @@ async function runBaselineGuard(ref: string | undefined): Promise<void> {
     process.exit(2);
   }
 
-  const baseline = JSON.parse(stdout) as Snapshot;
-  const { violations, removed } = baselineGuardViolations(baseline.metrics ?? {}, current.metrics ?? {});
+  const shapeErrors = [
+    ...snapshotShapeErrors({ metrics: result.metrics }).map((e) => `${ref}: ${e}`),
+    ...snapshotShapeErrors(current).map((e) => `working tree: ${e}`),
+  ];
+  if (shapeErrors.length) {
+    console.error('baseline-guard: malformed snapshot.json shape:');
+    for (const e of shapeErrors) console.error(`  • ${e}`);
+    process.exit(2);
+  }
+
+  const { violations, removed } = baselineGuardViolations(result.metrics, current.metrics ?? {});
 
   if (removed.length) {
     const message = `baseline-guard: metric(s) present at ${ref} are missing from the current snapshot.json: ${removed.join(', ')} — confirm the adapter was deleted deliberately.`;
@@ -330,6 +418,13 @@ async function main(): Promise<void> {
   }
 
   if (cmd !== 'record' && baseline) {
+    const shapeErrors = snapshotShapeErrors(baseline);
+    if (shapeErrors.length) {
+      console.error('snapshot.json has an invalid shape:');
+      for (const e of shapeErrors) console.error(`  • ${e}`);
+      process.exit(2);
+    }
+
     const orphans = orphanedMetrics(adapters.map((a) => a.id), baseline.metrics ?? {});
     if (orphans.length) {
       console.error(
