@@ -26,10 +26,12 @@ import { DockView } from './index.js'
 // ───────────────────────── helpers ─────────────────────────
 
 /**
- * Minimal DataTransfer stub for `fireEvent.dragStart`. jsdom's DataTransfer
- * is null on synthetically constructed DragEvents; the React `onDragStart`
- * handler calls `setData` and assigns `effectAllowed`, so both must exist and
- * not throw. `getData` is unused at dragstart time but included for symmetry.
+ * Minimal DataTransfer stub for `fireEvent.dragStart` / `fireEvent.dragOver`.
+ * jsdom's DataTransfer is null on synthetically constructed DragEvents; the
+ * React `onDragStart` handler calls `setData` and assigns `effectAllowed`, so
+ * both must exist and not throw. `types` carries the deck panel MIME because a
+ * genuine in-app drag always does (dragstart writes it), and the dragover
+ * handlers gate on it — a transfer without it is treated as a foreign OS drag.
  */
 function dragStartTransfer() {
 	return {
@@ -37,7 +39,7 @@ function dragStartTransfer() {
 			setData(_type: string, _value: string): void {},
 			getData(_type: string): string { return '' },
 			effectAllowed: 'none' as string,
-			types: [] as string[],
+			types: ['application/x-deck-panel'] as string[],
 		},
 	}
 }
@@ -103,7 +105,7 @@ describe('<DockView> drop indicator — reorder-only source policy', () => {
 	 * panel is the drag source. The indicator's presence implies the group accepts
 	 * the drop; a foreign group never does for a reorder-only panel.
 	 *
-	 * The implementation tracks the in-flight panel id via a module-level variable
+	 * The implementation tracks the in-flight panel id per DockView instance,
 	 * set at dragstart (DataTransfer values are unreadable during dragover). This
 	 * test drives dragstart first to establish that context, then dragover on the
 	 * foreign group, and asserts the indicator element is absent.
@@ -123,7 +125,7 @@ describe('<DockView> drop indicator — reorder-only source policy', () => {
 		fireEvent.dragStart(pinnedTab, dragStartTransfer())
 
 		// Dragover on the foreign group: the indicator must stay absent.
-		fireEvent.dragOver(gFree)
+		fireEvent.dragOver(gFree, dragStartTransfer())
 
 		expect(gFree.querySelector('[data-deck-drop-zone]')).toBeNull()
 	})
@@ -142,7 +144,7 @@ describe('<DockView> drop indicator — reorder-only source policy', () => {
 		const gFree = container.querySelector('[data-deck-group="g-free"]')!
 
 		fireEvent.dragStart(pinnedTab, dragStartTransfer())
-		fireEvent.dragOver(gFree)
+		fireEvent.dragOver(gFree, dragStartTransfer())
 
 		expect(gFree.querySelector('[data-deck-drop-zone]')).not.toBeNull()
 	})
@@ -163,7 +165,7 @@ describe('<DockView> drop indicator — reorder-only source policy', () => {
 		fireEvent.dragStart(freeTab, dragStartTransfer())
 
 		// Dragover on the other group: the indicator must appear.
-		fireEvent.dragOver(gCap)
+		fireEvent.dragOver(gCap, dragStartTransfer())
 
 		expect(gCap.querySelector('[data-deck-drop-zone]')).not.toBeNull()
 	})

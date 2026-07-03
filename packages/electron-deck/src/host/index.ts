@@ -1,6 +1,11 @@
 /**
  * `@dimina-kit/electron-deck/host` — the cross-process host-shell transport.
  *
+ * `@experimental` No production consumer yet — no host in this repo imports
+ * `@dimina-kit/electron-deck/host`; devtools assembles through `backend` /
+ * `electronDeck({ backend })` instead, without touching this subpath. Contract
+ * may change until a second real consumer adopts it.
+ *
  * These are the transport pieces the `electronDeck()` entry (exported from this
  * package's root, `@dimina-kit/electron-deck`) and domain backends construct to
  * carry `hostServices` (trusted-webview RPC) and `events` (main→webview push)

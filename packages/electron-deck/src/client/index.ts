@@ -36,6 +36,11 @@ export interface CreateDeckClientOptions {
 // (3) Electron IPC 实际走 structured clone（非 JSON），原约束的"前提"本就错；
 // (4) 真要 runtime 校验，在 transport 边界用 `runtime.ipc.handle({ validator })`
 //     与 protocol envelope（`InvokeRequest.args: readonly JsonValue[]`）已经够。
+/** @experimental No production consumer yet — pairs with `DeckConfig.hostServices`
+ *  / `events`, which only `examples/` / `spike/` set; the devtools `backend`
+ *  assembly never touches this client. `createDeckLayoutClient` and
+ *  `createPlacementPublisher` (re-exported above) are unaffected — they have
+ *  real consumers. */
 export interface DeckClient<
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	HS extends Record<keyof HS, (...args: any[]) => unknown>,
@@ -52,6 +57,7 @@ export interface DeckClient<
 	): Disposable
 }
 
+/** @experimental No production consumer yet — see the note on {@link DeckClient}. */
 export function createDeckClient<
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	HS extends Record<keyof HS, (...args: any[]) => unknown>,

@@ -57,6 +57,7 @@ class HostEventImpl<P extends JsonValue> implements HostEvent<P> {
 	}
 }
 
+/** @experimental No production consumer yet — see the note on {@link HostEvent}. */
 export function defineEvent<P extends JsonValue>(name: string): HostEvent<P> {
 	if (typeof name !== 'string' || name.length === 0) {
 		throw new TypeError('defineEvent(name): name must be a non-empty string')

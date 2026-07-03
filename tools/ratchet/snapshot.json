@@ -27,11 +27,11 @@
         "packages/devtools/src/shared/appdata-accumulator.ts:60": 27,
         "packages/devtools/src/shared/open-in-editor.ts:166": 22,
         "packages/devtools/src/simulator/device-shell/page-stack-controller.ts:57": 16,
-        "packages/electron-deck/src/dock-react/dock-view.tsx:526": 20,
+        "packages/electron-deck/src/dock-react/dock-view.tsx:202": 16,
         "packages/electron-deck/src/dock-react/drag-redock.ts:55": 36,
-        "packages/electron-deck/src/electron-deck.ts:185": 34,
+        "packages/electron-deck/src/electron-deck.ts:190": 34,
         "packages/electron-deck/src/internal/deck-app.ts:372": 23,
-        "packages/electron-deck/src/internal/deck-app.ts:2179": 22,
+        "packages/electron-deck/src/internal/deck-app.ts:2227": 22,
         "packages/electron-deck/src/layout/_fixtures.ts:96": 16,
         "packages/electron-deck/src/main/compositor.ts:282": 21,
         "packages/electron-deck/src/main/view-handle.ts:195": 16
@@ -39,7 +39,7 @@
     },
     "file-length": {
       "direction": "lower-is-better",
-      "value": 58,
+      "value": 57,
       "unit": "files > 500 lines",
       "breakdown": {
         "packages/devkit/src/compile-worker.test.ts": 1037,
@@ -72,9 +72,8 @@
         "packages/devtools/src/simulator/simulator-api-fs.ts": 850,
         "packages/devtools/src/simulator/simulator-api-media.ts": 622,
         "packages/electron-deck/src/__cross_check__/round2-fix-cross-check.test.ts": 699,
-        "packages/electron-deck/src/dock-react/dock-view-redock.test.tsx": 660,
+        "packages/electron-deck/src/dock-react/dock-view-redock.test.tsx": 663,
         "packages/electron-deck/src/dock-react/dock-view.test.tsx": 715,
-        "packages/electron-deck/src/dock-react/dock-view.tsx": 1296,
         "packages/electron-deck/src/dock-react/drag-redock.test.ts": 539,
         "packages/electron-deck/src/electron-deck.test.ts": 516,
         "packages/electron-deck/src/host/control-bus.test.ts": 571,
@@ -86,7 +85,7 @@
         "packages/electron-deck/src/internal/deck-app.move.test.ts": 662,
         "packages/electron-deck/src/internal/deck-app.slot-token.test.ts": 577,
         "packages/electron-deck/src/internal/deck-app.test.ts": 2762,
-        "packages/electron-deck/src/internal/deck-app.ts": 2495,
+        "packages/electron-deck/src/internal/deck-app.ts": 2550,
         "packages/electron-deck/src/internal/deck-app.window-seam.test.ts": 682,
         "packages/electron-deck/src/internal/deck-window-onclose-registration.test.ts": 718,
         "packages/electron-deck/src/internal/wire-transport.test.ts": 712,
@@ -97,19 +96,19 @@
         "packages/electron-deck/src/main/connection.test.ts": 743,
         "packages/electron-deck/src/main/scope.test.ts": 994,
         "packages/electron-deck/src/main/view-handle.test.ts": 1065,
-        "packages/electron-deck/src/types.ts": 570,
+        "packages/electron-deck/src/types.ts": 590,
         "packages/view-anchor/src/react.test.tsx": 562,
         "packages/view-anchor/src/view-anchor.test.ts": 1171
       }
     },
     "type-coverage": {
       "direction": "higher-is-better",
-      "value": 99.71,
+      "value": 99.72,
       "unit": "%",
       "breakdown": {
         "devkit": 99.87,
         "devtools": 99.69,
-        "electron-deck": 99.69,
+        "electron-deck": 99.7,
         "view-anchor": 100,
         "workbench": 99.87
       }
@@ -122,10 +121,10 @@
         "packages/devtools/src/preload/runtime/main-api-runner.ts:19 (any)": 1,
         "packages/devtools/src/simulator/run-api-async.ts:25 (any)": 1,
         "packages/devtools/src/simulator/simulator-api.ts:223 (any)": 1,
-        "packages/electron-deck/src/client/index.ts:41 (any)": 1,
-        "packages/electron-deck/src/client/index.ts:57 (any)": 1,
-        "packages/electron-deck/src/types.ts:101 (any)": 1,
-        "packages/electron-deck/src/types.ts:103 (any)": 1
+        "packages/electron-deck/src/client/index.ts:46 (any)": 1,
+        "packages/electron-deck/src/client/index.ts:63 (any)": 1,
+        "packages/electron-deck/src/types.ts:110 (any)": 1,
+        "packages/electron-deck/src/types.ts:112 (any)": 1
       }
     }
   }
