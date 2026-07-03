@@ -2,17 +2,18 @@
 // threshold surfaces exactly one sonarjs violation; an explicit `any` surfaces a
 // no-explicit-any violation. The rule scoring itself belongs to the upstream
 // plugins and is not re-tested here.
-// Run with: node --test tools/ratchet/cognitive-complexity.test.mjs
+// Run with: node --test tools/ratchet/adapters.test.ts
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import sonarjs from 'eslint-plugin-sonarjs';
 import tseslint from 'typescript-eslint';
-import { makeEslint } from './lib/eslint.mjs';
-import { THRESHOLD } from './adapters/cognitive-complexity.mjs';
+import type { ESLint } from 'eslint';
+import { makeEslint } from './lib/eslint.ts';
+import { THRESHOLD } from './adapters/cognitive-complexity.ts';
 
-async function lint(eslint, code) {
+async function lint(eslint: ESLint, code: string) {
   const [result] = await eslint.lintText(code, { filePath: 'probe.ts' });
-  return result.messages;
+  return result?.messages ?? [];
 }
 
 test('sonarjs flags a function above the cognitive threshold', async () => {

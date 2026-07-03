@@ -17,12 +17,13 @@
 import type { MiniAppContext } from './types'
 import { isPersistentSimulatorApi } from '../shared/simulator-api-metadata.js'
 
-// Loose handler signature: SimulatorMiniApp's apiRegistry binds `this` to the
-// MiniApp instance (a superset of MiniAppContext); the wx.* handlers in
-// simulator-api*.ts type `this` as MiniAppContext. We invoke with .call(ctx)
-// where ctx prototypes the MiniApp, so structurally both shapes work.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type LooseApiHandler = (this: any, params?: unknown) => unknown | Promise<unknown>
+// No `this` parameter: SimulatorMiniApp's apiRegistry binds `this` to the
+// MiniApp instance (a superset of MiniAppContext), while the wx.* handlers in
+// simulator-api*.ts type `this` as MiniAppContext — two incompatible `this`
+// types with no common non-bottom supertype. Omitting `this` here sidesteps
+// that: a function type with no declared `this` is compatible with either
+// caller shape, and `.call(ctx, …)` below still binds the real context.
+type LooseApiHandler = (params?: unknown) => unknown | Promise<unknown>
 
 interface MiniAppLike {
   appId: string

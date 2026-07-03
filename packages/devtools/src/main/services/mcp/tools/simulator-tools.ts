@@ -11,8 +11,130 @@
  */
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import type CDP from 'chrome-remote-interface'
 import { z } from 'zod'
 import { getClient } from '../target-manager.js'
+
+type ToolResult = { content: Array<{ type: 'text'; text: string }>; isError?: true }
+
+function ok(text: string): ToolResult {
+  return { content: [{ type: 'text', text }] }
+}
+
+function err(msg: string): ToolResult {
+  return { content: [{ type: 'text', text: `Error: ${msg}` }], isError: true }
+}
+
+async function clickAt(c: CDP.Client, x: number, y: number): Promise<void> {
+  await c.Input.dispatchMouseEvent({ type: 'mousePressed', x, y, button: 'left', clickCount: 1 })
+  await c.Input.dispatchMouseEvent({ type: 'mouseReleased', x, y, button: 'left', clickCount: 1 })
+}
+
+async function tapCoord(c: CDP.Client, x: number | undefined, y: number | undefined): Promise<ToolResult> {
+  if (typeof x !== 'number' || typeof y !== 'number') return err('tap_coord requires x and y')
+  await clickAt(c, x, y)
+  return ok(`Tapped at (${x}, ${y})`)
+}
+
+/**
+ * In-page expression evaluated by `tap_selector`: locates the nth match,
+ * scrolls it into view, and reports its center point (or a reason it can't be
+ * tapped) so the caller can dispatch a real mouse click at that point.
+ */
+function buildTapSelectorExpression(selector: string, index: number): string {
+  return `(() => {
+    const payload = ${JSON.stringify({ selector, index })}
+    try {
+      const matches = Array.from(document.querySelectorAll(payload.selector))
+      if (matches.length === 0) {
+        return { ok: false, reason: 'no_match', message: \`selector matched no elements: \${payload.selector}\` }
+      }
+      if (payload.index < 0 || payload.index >= matches.length) {
+        return { ok: false, reason: 'out_of_range', message: \`nth \${payload.index} out of range (matches: \${matches.length})\` }
+      }
+      const element = matches[payload.index]
+      element.scrollIntoView({ block: 'center', inline: 'center' })
+      const rect = element.getBoundingClientRect()
+      if (rect.width === 0 || rect.height === 0) {
+        return { ok: false, reason: 'not_visible', message: \`selector matched an element, but it is not visible or rendered (zero rect): \${payload.selector}[\${payload.index}]\` }
+      }
+      return {
+        ok: true,
+        selector: payload.selector,
+        index: payload.index,
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+        rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      return { ok: false, reason: 'selector_error', message: \`invalid selector: \${payload.selector} (\${message})\` }
+    }
+  })()`
+}
+
+type TapSelectorHit = { ok: true; selector: string; index: number; x: number; y: number; rect: { left: number; top: number; width: number; height: number } }
+type TapSelectorMiss = { ok: false; reason: string; message: string }
+
+async function tapSelector(c: CDP.Client, selector: string | undefined, nth: number | undefined): Promise<ToolResult> {
+  if (!selector) return err('tap_selector requires selector')
+  const index = nth ?? 0
+  const expression = buildTapSelectorExpression(selector, index)
+  const result = await c.Runtime.evaluate({ expression, returnByValue: true, awaitPromise: true })
+  const value = result.result?.value as TapSelectorHit | TapSelectorMiss | undefined
+  if (!value) return err(`selector evaluation returned no result: ${selector}[${index}]`)
+  if (!value.ok) return err(value.message)
+  await clickAt(c, value.x, value.y)
+  return ok(`Tapped selector ${value.selector}[${value.index}] at (${value.x}, ${value.y}) within rect (${value.rect.left}, ${value.rect.top}, ${value.rect.width} x ${value.rect.height})`)
+}
+
+async function typeText(
+  c: CDP.Client,
+  selector: string | undefined,
+  nth: number | undefined,
+  text: string | undefined,
+): Promise<ToolResult> {
+  if (!selector || typeof text !== 'string') return err('type requires selector and text')
+  const { root } = await c.DOM.getDocument({ depth: 0 })
+  const { nodeIds } = await c.DOM.querySelectorAll({ nodeId: root.nodeId, selector })
+  if (!nodeIds || nodeIds.length === 0) return err(`selector matched no elements: ${selector}`)
+  const index = nth ?? 0
+  if (index < 0 || index >= nodeIds.length) return err(`nth ${index} out of range (matches: ${nodeIds.length})`)
+  await c.DOM.focus({ nodeId: nodeIds[index] })
+  try {
+    await c.Input.insertText({ text })
+  }
+  catch {
+    for (const ch of text) {
+      await c.Input.dispatchKeyEvent({ type: 'char', text: ch })
+    }
+  }
+  return ok(`Typed ${text.length} char(s) into ${selector}[${index}]`)
+}
+
+async function scrollAt(
+  c: CDP.Client,
+  x: number | undefined,
+  y: number | undefined,
+  deltaX: number | undefined,
+  deltaY: number | undefined,
+): Promise<ToolResult> {
+  if (typeof x !== 'number' || typeof y !== 'number' || typeof deltaX !== 'number' || typeof deltaY !== 'number') {
+    return err('scroll requires x, y, deltaX, deltaY')
+  }
+  await c.Input.dispatchMouseEvent({ type: 'mouseWheel', x, y, deltaX, deltaY })
+  return ok(`Scrolled at (${x}, ${y}) by (${deltaX}, ${deltaY})`)
+}
+
+async function dispatchKey(c: CDP.Client, key: string | undefined): Promise<ToolResult> {
+  if (!key) return err('key requires key')
+  const isSingleChar = key.length === 1
+  const down: Parameters<typeof c.Input.dispatchKeyEvent>[0] = { type: 'keyDown', key, code: key }
+  if (isSingleChar) down.text = key
+  await c.Input.dispatchKeyEvent(down)
+  await c.Input.dispatchKeyEvent({ type: 'keyUp', key, code: key })
+  return ok(`Dispatched key ${key}`)
+}
 
 export function registerSimulatorTools(server: McpServer): void {
   server.tool('simulator_navigate', 'Navigate the simulator to a URL, or reload the current page', {
@@ -44,103 +166,19 @@ export function registerSimulatorTools(server: McpServer): void {
     deltaY: z.number().optional().describe('Vertical wheel delta for `scroll`'),
   }, async ({ action, x, y, selector, nth, text, key, deltaX, deltaY }) => {
     const c = getClient('simulator')
-    const err = (msg: string) => ({ content: [{ type: 'text' as const, text: `Error: ${msg}` }], isError: true })
-    const clickAt = async (cx: number, cy: number) => {
-      await c.Input.dispatchMouseEvent({ type: 'mousePressed', x: cx, y: cy, button: 'left', clickCount: 1 })
-      await c.Input.dispatchMouseEvent({ type: 'mouseReleased', x: cx, y: cy, button: 'left', clickCount: 1 })
+    switch (action) {
+      case 'tap_coord':
+        return tapCoord(c, x, y)
+      case 'tap_selector':
+        return tapSelector(c, selector, nth)
+      case 'type':
+        return typeText(c, selector, nth, text)
+      case 'scroll':
+        return scrollAt(c, x, y, deltaX, deltaY)
+      case 'key':
+        return dispatchKey(c, key)
+      default:
+        return err(`unknown action: ${String(action)}`)
     }
-
-    if (action === 'tap_coord') {
-      if (typeof x !== 'number' || typeof y !== 'number') return err('tap_coord requires x and y')
-      await clickAt(x, y)
-      return { content: [{ type: 'text' as const, text: `Tapped at (${x}, ${y})` }] }
-    }
-
-    if (action === 'tap_selector') {
-      if (!selector) return err('tap_selector requires selector')
-      const index = nth ?? 0
-      const expression = `(() => {
-        const payload = ${JSON.stringify({ selector, index })}
-        try {
-          const matches = Array.from(document.querySelectorAll(payload.selector))
-          if (matches.length === 0) {
-            return { ok: false, reason: 'no_match', message: \`selector matched no elements: \${payload.selector}\` }
-          }
-          if (payload.index < 0 || payload.index >= matches.length) {
-            return { ok: false, reason: 'out_of_range', message: \`nth \${payload.index} out of range (matches: \${matches.length})\` }
-          }
-          const element = matches[payload.index]
-          element.scrollIntoView({ block: 'center', inline: 'center' })
-          const rect = element.getBoundingClientRect()
-          if (rect.width === 0 || rect.height === 0) {
-            return { ok: false, reason: 'not_visible', message: \`selector matched an element, but it is not visible or rendered (zero rect): \${payload.selector}[\${payload.index}]\` }
-          }
-          return {
-            ok: true,
-            selector: payload.selector,
-            index: payload.index,
-            x: rect.left + rect.width / 2,
-            y: rect.top + rect.height / 2,
-            rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
-          }
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error)
-          return { ok: false, reason: 'selector_error', message: \`invalid selector: \${payload.selector} (\${message})\` }
-        }
-      })()`
-      const result = await c.Runtime.evaluate({ expression, returnByValue: true, awaitPromise: true })
-      const value = result.result?.value as
-        | { ok: true; selector: string; index: number; x: number; y: number; rect: { left: number; top: number; width: number; height: number } }
-        | { ok: false; reason: string; message: string }
-        | undefined
-      if (!value) return err(`selector evaluation returned no result: ${selector}[${index}]`)
-      if (!value.ok) return err(value.message)
-      await clickAt(value.x, value.y)
-      return {
-        content: [{
-          type: 'text' as const,
-          text: `Tapped selector ${value.selector}[${value.index}] at (${value.x}, ${value.y}) within rect (${value.rect.left}, ${value.rect.top}, ${value.rect.width} x ${value.rect.height})`,
-        }],
-      }
-    }
-
-    if (action === 'type') {
-      if (!selector || typeof text !== 'string') return err('type requires selector and text')
-      const { root } = await c.DOM.getDocument({ depth: 0 })
-      const { nodeIds } = await c.DOM.querySelectorAll({ nodeId: root.nodeId, selector })
-      if (!nodeIds || nodeIds.length === 0) return err(`selector matched no elements: ${selector}`)
-      const index = nth ?? 0
-      if (index < 0 || index >= nodeIds.length) return err(`nth ${index} out of range (matches: ${nodeIds.length})`)
-      await c.DOM.focus({ nodeId: nodeIds[index] })
-      try {
-        await c.Input.insertText({ text })
-      }
-      catch {
-        for (const ch of text) {
-          await c.Input.dispatchKeyEvent({ type: 'char', text: ch })
-        }
-      }
-      return { content: [{ type: 'text' as const, text: `Typed ${text.length} char(s) into ${selector}[${index}]` }] }
-    }
-
-    if (action === 'scroll') {
-      if (typeof x !== 'number' || typeof y !== 'number' || typeof deltaX !== 'number' || typeof deltaY !== 'number') {
-        return err('scroll requires x, y, deltaX, deltaY')
-      }
-      await c.Input.dispatchMouseEvent({ type: 'mouseWheel', x, y, deltaX, deltaY })
-      return { content: [{ type: 'text' as const, text: `Scrolled at (${x}, ${y}) by (${deltaX}, ${deltaY})` }] }
-    }
-
-    if (action === 'key') {
-      if (!key) return err('key requires key')
-      const isSingleChar = key.length === 1
-      const down: Parameters<typeof c.Input.dispatchKeyEvent>[0] = { type: 'keyDown', key, code: key }
-      if (isSingleChar) down.text = key
-      await c.Input.dispatchKeyEvent(down)
-      await c.Input.dispatchKeyEvent({ type: 'keyUp', key, code: key })
-      return { content: [{ type: 'text' as const, text: `Dispatched key ${key}` }] }
-    }
-
-    return err(`unknown action: ${action}`)
   })
 }

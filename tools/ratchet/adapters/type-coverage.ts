@@ -11,18 +11,24 @@ import { readdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import type { Adapter, MeasureResult } from '../lib/types.ts';
 
 const pexec = promisify(execFile);
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const PACKAGES = join(ROOT, 'packages');
 const BIN = join(ROOT, 'node_modules', '.bin', 'type-coverage');
 
-async function packagesWithTsconfig() {
-  const out = [];
+type TypeCoverageJson = {
+  correctCount: number;
+  totalCount: number;
+  percent: number;
+};
+
+async function packagesWithTsconfig(): Promise<string[]> {
+  const out: string[] = [];
   for (const pkg of await readdir(PACKAGES, { withFileTypes: true })) {
     if (!pkg.isDirectory()) continue;
     try {
-      await readdir(join(PACKAGES, pkg.name)); // dir exists
       const files = await readdir(join(PACKAGES, pkg.name));
       if (files.includes('tsconfig.json')) out.push(pkg.name);
     } catch {
@@ -32,8 +38,8 @@ async function packagesWithTsconfig() {
   return out;
 }
 
-async function measure() {
-  const breakdown = {};
+async function measure(): Promise<MeasureResult> {
+  const breakdown: Record<string, number> = {};
   let correct = 0;
   let total = 0;
   for (const name of await packagesWithTsconfig()) {
@@ -42,7 +48,7 @@ async function measure() {
       cwd: ROOT,
       maxBuffer: 64 * 1024 * 1024,
     });
-    const json = JSON.parse(stdout);
+    const json = JSON.parse(stdout) as TypeCoverageJson;
     correct += json.correctCount;
     total += json.totalCount;
     breakdown[name] = json.percent;
@@ -51,7 +57,7 @@ async function measure() {
   return { value: percent, unit: '%', breakdown };
 }
 
-export default {
+const adapter: Adapter = {
   id: 'type-coverage',
   title: 'Overall type coverage (non-any identifiers)',
   direction: 'higher-is-better',
@@ -59,3 +65,5 @@ export default {
   gate: 'per-key-value',
   measure,
 };
+
+export default adapter;

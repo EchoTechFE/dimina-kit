@@ -11,18 +11,19 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { Adapter, MeasureResult } from '../lib/types.ts';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const PACKAGES = join(ROOT, 'packages');
 const THRESHOLD = 500;
 
-function isSource(name) {
+function isSource(name: string): boolean {
   if (!/\.tsx?$/.test(name)) return false;
   if (/\.d\.ts$/.test(name)) return false;
   return true;
 }
 
-async function* walk(dir) {
+async function* walk(dir: string): AsyncGenerator<string> {
   let entries;
   try {
     entries = await readdir(dir, { withFileTypes: true });
@@ -37,7 +38,7 @@ async function* walk(dir) {
   }
 }
 
-function lineCount(text) {
+function lineCount(text: string): number {
   if (text.length === 0) return 0;
   let n = 1;
   for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) n++;
@@ -45,8 +46,8 @@ function lineCount(text) {
   return text.charCodeAt(text.length - 1) === 10 ? n - 1 : n;
 }
 
-async function measure() {
-  const breakdown = {};
+async function measure(): Promise<MeasureResult> {
+  const breakdown: Record<string, number> = {};
   let count = 0;
   for (const pkg of await readdir(PACKAGES, { withFileTypes: true })) {
     if (!pkg.isDirectory()) continue;
@@ -61,7 +62,7 @@ async function measure() {
   return { value: count, unit: `files > ${THRESHOLD} lines`, breakdown };
 }
 
-export default {
+const adapter: Adapter = {
   id: 'file-length',
   title: `Files over ${THRESHOLD} lines`,
   direction: 'lower-is-better',
@@ -71,3 +72,5 @@ export default {
   gate: 'total',
   measure,
 };
+
+export default adapter;

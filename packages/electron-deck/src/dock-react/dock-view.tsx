@@ -109,6 +109,45 @@ export function useDockLayoutEpoch(): number {
 	return useContext(LayoutEpochContext)
 }
 
+/**
+ * Apply a `reorder-only` panel's redock. Such a panel may ONLY reorder WITHIN
+ * its own group: it never leaves the group (a center drop into another group)
+ * and never edge-splits (any edge zone, own or other group) — those drops are
+ * rejected here. The reorder anchors on the pointer-derived index when the
+ * gesture supplies one (real drag), else on the active anchor's CURRENT index
+ * (the imperative seam carries no pointer). The pointer index is a VISIBLE-tab
+ * strip index (hideTab panels omitted, dragged tab's own slot counted); the
+ * strip↔model coordinate reconciliation lives only here.
+ */
+function applyReorderOnlyRedock(
+	model: LayoutModel,
+	registry: PanelRegistry,
+	drop: {
+		groupId: string
+		activePanelId: string
+		draggedPanelId: string
+		draggedGroupId: string | undefined
+		zone: DropZone
+		reorderIndex: number | undefined
+	},
+): void {
+	const { groupId, activePanelId, draggedPanelId, draggedGroupId, zone, reorderIndex } = drop
+	if (draggedGroupId === undefined || draggedGroupId !== groupId) return
+	if (zone !== 'center') return
+	const group = findGroupById(model.get().root, groupId)
+	let index: number | undefined
+	if (reorderIndex !== undefined && group) {
+		const visibleTabIds = group.panels.filter(
+			(panelId) => registry.get(panelId)?.hideTab !== true,
+		)
+		index = resolveReorderInsertIndex(group.panels, visibleTabIds, draggedPanelId, reorderIndex)
+	}
+	else {
+		index = group ? group.panels.indexOf(activePanelId) : undefined
+	}
+	model.apply((t) => movePanel(t, draggedPanelId, { groupId, index }))
+}
+
 export function DockView(props: DockViewProps): ReactNode {
 	const { model, registry, renderDomPanel, bindNativeSlot, suppressReorderOnlyDropIndicator, onActiveTabClick } = props
 
@@ -219,32 +258,19 @@ export function DockView(props: DockViewProps): ReactNode {
 			// locked simulator/editor can never absorb another panel. ──
 			if (registry.get(activePanelId)?.draggable === false) return
 
-			// ── PanelCapabilities gate (GOAL B): a `reorder-only` dragged panel may
-			// ONLY reorder WITHIN its own group. It never leaves the group (a center
-			// drop into another group) and never edge-splits (any edge zone, own or
-			// other group). The one motion it permits — a center drop into its OWN
-			// group — must OVERRIDE `isNoopRedock` (which would swallow it as churn).
+			// ── PanelCapabilities gate (GOAL B): a `reorder-only` dragged panel is
+			// routed to its dedicated handler BEFORE the no-op gate — its one legal
+			// motion (a center drop into its OWN group) must OVERRIDE `isNoopRedock`
+			// (which would swallow it as churn). ──
 			if (registry.get(draggedPanelId)?.dropPolicy === 'reorder-only') {
-				if (draggedGroupId === undefined || draggedGroupId !== groupId) return
-				if (zone !== 'center') return
-				// Anchor the reorder on the pointer-derived index when the gesture
-				// supplies one (real drag), else on the active anchor's CURRENT index
-				// (the imperative seam carries no pointer). The pointer index is a
-				// VISIBLE-tab strip index (hideTab panels omitted, dragged tab's own
-				// slot counted); translate it into the `movePanel` insertion index —
-				// the strip↔model coordinate reconciliation lives only here.
-				const group = findGroupById(model.get().root, groupId)
-				let index: number | undefined
-				if (reorderIndex !== undefined && group) {
-					const visibleTabIds = group.panels.filter(
-						(panelId) => registry.get(panelId)?.hideTab !== true,
-					)
-					index = resolveReorderInsertIndex(group.panels, visibleTabIds, draggedPanelId, reorderIndex)
-				}
-				else {
-					index = group ? group.panels.indexOf(activePanelId) : undefined
-				}
-				model.apply((t) => movePanel(t, draggedPanelId, { groupId, index }))
+				applyReorderOnlyRedock(model, registry, {
+					groupId,
+					activePanelId,
+					draggedPanelId,
+					draggedGroupId,
+					zone,
+					reorderIndex,
+				})
 				return
 			}
 

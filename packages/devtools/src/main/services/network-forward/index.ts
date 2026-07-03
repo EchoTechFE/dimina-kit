@@ -65,6 +65,7 @@
 import type { WebContents } from 'electron'
 import { DisposableRegistry, toDisposable, type ConnectionRegistry, type Disposable } from '@dimina-kit/electron-deck/main'
 import { isFrontendSettled } from '../views/inject-when-ready.js'
+import { packDispatchBatch } from './dispatch-batch.js'
 
 /** Which layer a captured request came from (tags the fallback log line). */
 export type NetworkSource = 'service' | 'render'
@@ -542,24 +543,9 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
     if (sink === 'idle') beginProbing()
 
     // Pack greedily up to MAX_BATCH_CHARS so one executeJavaScript stays sized;
-    // oversized single messages go via the chunked transport.
-    const batch: string[] = []
-    let batchChars = 0
-    let i = 0
-    for (; i < dispatchQueue.length; i++) {
-      const msg = dispatchQueue[i]!
-      if (msg.length > MAX_SINGLE_DISPATCH_CHARS) {
-        // Flush whatever's accumulated first to preserve ordering, then chunk.
-        if (batch.length > 0) break
-        dispatchChunked(wc, msg)
-        continue
-      }
-      if (batch.length > 0 && batchChars + msg.length > MAX_BATCH_CHARS) break
-      batch.push(msg)
-      batchChars += msg.length
-    }
-    // Everything up to i was either batched or chunk-dispatched; keep the rest.
-    const remaining = dispatchQueue.slice(i)
+    // oversized single messages go via the chunked transport (see packDispatchBatch).
+    const { batch, chunked, remaining } = packDispatchBatch(dispatchQueue, MAX_SINGLE_DISPATCH_CHARS, MAX_BATCH_CHARS)
+    for (const msg of chunked) dispatchChunked(wc, msg)
 
     if (batch.length === 0) {
       // Only chunked messages were processed this turn; continue with the rest.

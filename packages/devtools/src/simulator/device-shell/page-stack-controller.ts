@@ -54,20 +54,29 @@ export function normalizePath(p: string): string {
   return p ? p.replace(/^\/+/, '') : ''
 }
 
+/** Decode one `key=value` query-string segment, or null for an empty key/pair. */
+function parseQueryPair(pair: string): [string, string] | null {
+  if (!pair) return null
+  const eq = pair.indexOf('=')
+  const k = eq >= 0 ? pair.slice(0, eq) : pair
+  const v = eq >= 0 ? pair.slice(eq + 1) : ''
+  if (!k) return null
+  return [decodeURIComponent(k), decodeURIComponent(v)]
+}
+
+function parseQueryString(qs: string): Record<string, string> {
+  const query: Record<string, string> = {}
+  for (const pair of qs.split('&')) {
+    const parsed = parseQueryPair(pair)
+    if (parsed) query[parsed[0]] = parsed[1]
+  }
+  return query
+}
+
 export function parseUrl(raw: unknown): UrlParts {
   const str = typeof raw === 'string' ? raw : ''
   const [path, qs] = str.split('?')
-  const query: Record<string, string> = {}
-  if (qs) {
-    for (const pair of qs.split('&')) {
-      if (!pair) continue
-      const eq = pair.indexOf('=')
-      const k = eq >= 0 ? pair.slice(0, eq) : pair
-      const v = eq >= 0 ? pair.slice(eq + 1) : ''
-      if (k) query[decodeURIComponent(k)] = decodeURIComponent(v)
-    }
-  }
-  return { pagePath: normalizePath(path), query }
+  return { pagePath: normalizePath(path), query: qs ? parseQueryString(qs) : {} }
 }
 
 export function makeInitialShellState(initial: PageEntry): ShellState {

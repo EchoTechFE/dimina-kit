@@ -4,7 +4,7 @@ import type { MinimalElectron } from './internal/electron-types.js'
 import type { MinimalIpcMain } from './internal/wire-transport.js'
 import { DeckApp } from './internal/deck-app.js'
 import type { DeckAppOptions } from './internal/deck-app.js'
-import type { DeckConfig, DeckOptions, Runtime } from './types.js'
+import type { DeckConfig, DeckOptions, HostEvent, JsonValue, Runtime, ToolbarContribution } from './types.js'
 
 /**
  * `electronDeck(config, options?)` 是 framework 唯一入口（见 README §3）。
@@ -192,61 +192,27 @@ export function validateConfig(config: DeckConfig): void {
 		throw new TypeError('electronDeck(config): config must be an object')
 	}
 
-	if (config.backend !== undefined) {
-		const backend = config.backend as { assemble?: unknown }
-		if (backend === null || typeof backend !== 'object' || typeof backend.assemble !== 'function') {
-			throw new TypeError('config.backend must be a RuntimeBackend (an object with an assemble() function)')
-		}
-	}
+	validateBackendField(config.backend)
 
 	if (config.simulatorApis !== undefined) {
 		validateHandlerMap('simulatorApis', config.simulatorApis)
 	}
-
 	if (config.hostServices !== undefined) {
 		validateHandlerMap('hostServices', config.hostServices)
 	}
-
 	if (config.events !== undefined) {
-		if (!Array.isArray(config.events)) {
-			throw new TypeError('events must be an array of HostEvent (from defineEvent())')
-		}
-		for (const ev of config.events) {
-			if (!isHostEvent(ev)) {
-				throw new TypeError(
-					'events: every entry must be a HostEvent produced by defineEvent() — '
-					+ 'duck-typed shapes are rejected to avoid bind-time failures',
-				)
-			}
-		}
-		const names = new Set<string>()
-		for (const ev of config.events) {
-			if (names.has(ev.name)) {
-				throw new Error(`events: duplicate HostEvent name "${ev.name}"`)
-			}
-			names.add(ev.name)
-		}
+		validateEventsField(config.events)
 	}
-
 	if (config.toolbar !== undefined) {
-		const { source, preloadPath, height } = config.toolbar
-		if (source === null || typeof source !== 'object') {
-			throw new TypeError('toolbar.source must be { url } or { file }')
-		}
-		const hasUrl = 'url' in source && typeof (source as { url?: unknown }).url === 'string'
-		const hasFile = 'file' in source && typeof (source as { file?: unknown }).file === 'string'
-		if (hasUrl && hasFile) {
-			throw new TypeError('toolbar.source must be either { url } or { file }, not both')
-		}
-		if (!hasUrl && !hasFile) {
-			throw new TypeError('toolbar.source must be { url } or { file }')
-		}
-		if (typeof preloadPath !== 'string' || preloadPath.length === 0) {
-			throw new TypeError('toolbar.preloadPath is required and must be a non-empty string')
-		}
-		if (typeof height !== 'number' || !Number.isFinite(height) || height <= 0) {
-			throw new TypeError('toolbar.height is required and must be a positive finite number')
-		}
+		validateToolbarField(config.toolbar)
+	}
+}
+
+function validateBackendField(backend: DeckConfig['backend']): void {
+	if (backend === undefined) return
+	const candidate = backend as { assemble?: unknown }
+	if (candidate === null || typeof candidate !== 'object' || typeof candidate.assemble !== 'function') {
+		throw new TypeError('config.backend must be a RuntimeBackend (an object with an assemble() function)')
 	}
 }
 
@@ -258,6 +224,60 @@ function validateHandlerMap(fieldName: string, value: unknown): void {
 		if (typeof handler !== 'function') {
 			throw new TypeError(`${fieldName}["${name}"] must be a function`)
 		}
+	}
+}
+
+function validateEventsField(events: unknown): void {
+	if (!Array.isArray(events)) {
+		throw new TypeError('events must be an array of HostEvent (from defineEvent())')
+	}
+	assertAllHostEvents(events)
+	assertUniqueEventNames(events as readonly HostEvent<JsonValue>[])
+}
+
+/** duck-typed 事件形状会被拒绝——只接受 `defineEvent()` 产出的真实 HostEvent，避免 bind-time 才炸。 */
+function assertAllHostEvents(events: readonly unknown[]): void {
+	for (const ev of events) {
+		if (!isHostEvent(ev)) {
+			throw new TypeError(
+				'events: every entry must be a HostEvent produced by defineEvent() — '
+				+ 'duck-typed shapes are rejected to avoid bind-time failures',
+			)
+		}
+	}
+}
+
+function assertUniqueEventNames(events: readonly HostEvent<JsonValue>[]): void {
+	const names = new Set<string>()
+	for (const ev of events) {
+		if (names.has(ev.name)) {
+			throw new Error(`events: duplicate HostEvent name "${ev.name}"`)
+		}
+		names.add(ev.name)
+	}
+}
+
+function validateToolbarField(toolbar: ToolbarContribution): void {
+	assertToolbarSourceShape(toolbar.source)
+	if (typeof toolbar.preloadPath !== 'string' || toolbar.preloadPath.length === 0) {
+		throw new TypeError('toolbar.preloadPath is required and must be a non-empty string')
+	}
+	if (typeof toolbar.height !== 'number' || !Number.isFinite(toolbar.height) || toolbar.height <= 0) {
+		throw new TypeError('toolbar.height is required and must be a positive finite number')
+	}
+}
+
+function assertToolbarSourceShape(source: unknown): void {
+	if (source === null || typeof source !== 'object') {
+		throw new TypeError('toolbar.source must be { url } or { file }')
+	}
+	const hasUrl = 'url' in source && typeof (source as { url?: unknown }).url === 'string'
+	const hasFile = 'file' in source && typeof (source as { file?: unknown }).file === 'string'
+	if (hasUrl && hasFile) {
+		throw new TypeError('toolbar.source must be either { url } or { file }, not both')
+	}
+	if (!hasUrl && !hasFile) {
+		throw new TypeError('toolbar.source must be { url } or { file }')
 	}
 }
 

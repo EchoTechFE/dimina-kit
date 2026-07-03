@@ -32,6 +32,7 @@ import type {
 	MinimalWebContentsLike,
 	MinimalWebContentsView,
 } from './electron-types.js'
+import { cleanupDestOnMoveToFailure } from './deck-app-view-move.js'
 import { EventBus } from './event-bus.js'
 import { InMemoryTypedIpcRegistry } from './ipc-registry-memory.js'
 import { createTrustSet } from './trust-set.js'
@@ -140,7 +141,7 @@ interface PendingLoadFailed {
  * binds a view id to its native `WebContentsView` so the adapter can translate a
  * Compositor `NativeViewRef` into the real `addChildView`/`removeChildView` call.
  */
-interface ViewSubstrate {
+export interface ViewSubstrate {
 	compositor: Compositor
 	windowScope: Scope
 	registerView(id: string, wcv: MinimalWebContentsView): void
@@ -377,16 +378,7 @@ export class DeckApp {
 
 		// 校验在 lifecycle 转换之前；invalid config → reject，phase 不动
 		validateConfig(this.config)
-
-		// half-state guard: electron + (toolbar | windows) without
-		// wireTransport would leave the host with webviews that can never
-		// reach back via __electron-deck:invoke. Reject early with a clear msg.
-		const hasWebviewContent = !!(this.config.toolbar || this.config.windows)
-		if (this.options.electron && hasWebviewContent && !this.options.wireTransport) {
-			throw new Error(
-				'DeckAppOptions: wireTransport.ipcMain is required when config has toolbar or windows',
-			)
-		}
+		this.assertWireTransportPresentForWebviewContent()
 
 		// pre-ready + whenReady gate. Only runs when a real `app` surface is
 		// injected (production path / gate tests); fakes without `app` skip it. The
@@ -394,60 +386,103 @@ export class DeckApp {
 		// in a real main process.
 		const app = this.options.electron?.app
 		if (app) {
-			// Single-instance gate (opt-in): a second instance must quit BEFORE any
-			// side effect (beforeReady bootstrap / whenReady / window). Phase stays
-			// `init`.
-			if (this.config.app?.singleInstance && typeof app.requestSingleInstanceLock === 'function') {
-				if (!app.requestSingleInstanceLock()) {
-					try { app.quit() }
-					catch { /* best-effort */ }
-					return
-				}
-			}
-			if (this.options.backend?.beforeReady) {
-				await this.options.backend.beforeReady(app)
-			}
-			else if (this.config.app?.name) {
-				try { app.setName(this.config.app.name) }
-				catch { /* best-effort */ }
-			}
-			await app.whenReady()
-			this.bindAppLifecycle(app)
+			const shouldContinue = await this.runPreReadyGate(app)
+			// Single-instance gate lost the lock and already quit — stop here,
+			// phase stays `init` (mirrors the original early-return contract).
+			if (!shouldContinue) return
 		}
 
 		// Wrap assemble/bind in a single try; on any failure run
 		// cleanupOnError() so partially-constructed windows / handlers get
 		// disposed before the start() promise rejects.
 		try {
-			// Init → Bind
-			this.lifecycle.enter('bind')
-			this.bindDeclarativeFields()
-			this.assembleElectron()
-			this.bindWireTransport()
-			// loadURL / loadFile **必须**晚于 bindWireTransport：webContents 一旦
-			// 加载，preload 立刻执行；若 preload 调 framework bridge 时 ipcMain
-			// handler 还没注册会 "no handler" 拒绝。先注册再加载。
-			this.loadAssembledSources()
-
-			// Bind → Setup
-			this.lifecycle.enter('setup')
-			this._runtime = this.buildRuntime()
-
-			// Domain assembly before the host's imperative setup escape.
-			if (this.options.backend) {
-				await this.options.backend.assemble(this._runtime)
-			}
-			if (this.config.setup) {
-				await this.config.setup(this._runtime)
-			}
-
-			// Setup → Ready
-			this.lifecycle.enter('ready')
+			await this.runBindAndSetupPhases()
 		}
 		catch (err) {
 			await this.cleanupOnError()
 			throw err
 		}
+	}
+
+	/**
+	 * half-state guard: electron + (toolbar | windows) without wireTransport
+	 * would leave the host with webviews that can never reach back via
+	 * __electron-deck:invoke. Reject early with a clear msg.
+	 */
+	private assertWireTransportPresentForWebviewContent(): void {
+		const hasWebviewContent = !!(this.config.toolbar || this.config.windows)
+		if (this.options.electron && hasWebviewContent && !this.options.wireTransport) {
+			throw new Error(
+				'DeckAppOptions: wireTransport.ipcMain is required when config has toolbar or windows',
+			)
+		}
+	}
+
+	/**
+	 * Pre-`whenReady` sequencing: single-instance lock (opt-in, must quit
+	 * BEFORE any other side effect) → `backend.beforeReady` (or the framework's
+	 * best-effort `app.setName`) → `await app.whenReady()` → app-level lifecycle
+	 * bindings. Returns `false` when the single-instance lock was lost (the
+	 * second instance already called `app.quit()` — `start()` must stop with
+	 * phase still `init`), `true` otherwise.
+	 */
+	private async runPreReadyGate(app: MinimalApp): Promise<boolean> {
+		if (!this.acquireSingleInstanceLock(app)) {
+			return false
+		}
+		if (this.options.backend?.beforeReady) {
+			await this.options.backend.beforeReady(app)
+		}
+		else if (this.config.app?.name) {
+			try { app.setName(this.config.app.name) }
+			catch { /* best-effort */ }
+		}
+		await app.whenReady()
+		this.bindAppLifecycle(app)
+		return true
+	}
+
+	/**
+	 * Single-instance gate (opt-in): a second instance must quit BEFORE any
+	 * side effect (beforeReady bootstrap / whenReady / window). Returns `true`
+	 * when the caller should continue (not opted in, or this instance holds the
+	 * lock); `false` after the losing instance has called `app.quit()`.
+	 */
+	private acquireSingleInstanceLock(app: MinimalApp): boolean {
+		if (!this.config.app?.singleInstance || typeof app.requestSingleInstanceLock !== 'function') {
+			return true
+		}
+		if (app.requestSingleInstanceLock()) {
+			return true
+		}
+		try { app.quit() }
+		catch { /* best-effort */ }
+		return false
+	}
+
+	/** Init → Bind → Setup → Ready. Assembly/bind must run AFTER the
+	 *  whenReady gate (handled by the caller); loadURL/loadFile must run
+	 *  AFTER bindWireTransport (a preload calling the bridge before its
+	 *  ipcMain handler is registered would see a "no handler" reject). */
+	private async runBindAndSetupPhases(): Promise<void> {
+		this.lifecycle.enter('bind')
+		this.bindDeclarativeFields()
+		this.assembleElectron()
+		this.bindWireTransport()
+		this.loadAssembledSources()
+
+		this.lifecycle.enter('setup')
+		this._runtime = this.buildRuntime()
+
+		// Domain assembly before the host's imperative setup escape.
+		if (this.options.backend) {
+			await this.options.backend.assemble(this._runtime)
+		}
+		if (this.config.setup) {
+			await this.config.setup(this._runtime)
+		}
+
+		this.lifecycle.enter('ready')
 	}
 
 	/**
@@ -1305,6 +1340,17 @@ export class DeckApp {
 			`[electron-deck] runtime.view keepAlive.max must be a non-negative integer (got: ${max}); `
 			+ 'the view is NOT keep-alive-managed (no eviction).',
 		)
+	}
+
+	/** Drop `viewId` from `groupKey`'s HIDDEN list only (the group's `handles`
+	 *  entry stays — the view is still keep-alive-managed, just no longer
+	 *  evictable while visible). Idempotent: a no-op when the view isn't on the
+	 *  hidden list or the group doesn't exist. */
+	private dropViewFromKeepAliveHidden(groupKey: string, viewId: string): void {
+		const group = this.keepAliveGroups.get(groupKey)
+		if (!group) return
+		const i = group.hidden.indexOf(viewId)
+		if (i >= 0) group.hidden.splice(i, 1)
 	}
 
 	private constructWindow(
@@ -2258,58 +2304,10 @@ export class DeckApp {
 							// addChildView that throws MID-APPLY may have leaked the WCV into
 							// the dest window's contentView before throwing (the substrate's
 							// tracked `order` never recorded the failed add, so the
-							// Compositor rollback can't remove it). Balance it with an
-							// explicit dest detach so the dest window is net-zero.
-							//
-							// The cleanup must be DEFENSIVE and must
-							// NEVER mask the original moveTo error.
-							//   - Only removeChildView if the dest WCV was ACTUALLY added (a
-							//     SOURCE-commit failure never touched dest; the Compositor
-							//     rollback may already have removed it) — guard on
-							//     `children.includes(wcv)`, so we never double-remove nor remove
-							//     a child dest never had.
-							//   - Wrap the WHOLE cleanup in try/catch that swallows+logs its own
-							//     error, then ALWAYS rethrow the ORIGINAL `e` — a cleanup throw
-							//     can never shadow the real cause of the move failure.
-							// The two cleanup steps are INDEPENDENT — a throw in
-							// the native detach must NOT skip the registry unregister (else the dest
-							// substrate leaks a view it doesn't host, and a later dispose only frees
-							// `placedSubstrate`=src). Each step is its own try/catch; the original
-							// `e` is ALWAYS rethrown. (`destWin` is the DeckWindow-unwrapped
-							// dest window resolved at the top of moveTo.)
-							try {
-								// Best-effort dest detach: attempt when the WCV is a known child OR
-								// when membership is UNKNOWN (`children` absent → can't verify, but a
-								// leaked mid-apply add must still be detached; removeChildView of a
-								// non-child is a no-op in real Electron). A SOURCE-commit failure that
-								// truly never touched dest → removeChildView is a harmless no-op.
-								// Check isDestroyed() FIRST: reading `.contentView` on a destroyed
-								// BrowserWindow throws "Object has been destroyed" in real Electron, so a
-								// dead dest window must skip the contentView read entirely (its native child
-								// is already gone — nothing to detach). Without this guard the getter throws,
-								// gets caught below, and pollutes the log with a secondary destroyed error.
-								if (!destWin.isDestroyed()) {
-									const destChildren = destWin.contentView.children
-									// `== null` covers BOTH undefined and null (a null `children` would
-									// throw on `.includes`).
-									const maybeAttached = destChildren == null || destChildren.includes(wcv)
-									if (maybeAttached) {
-										destWin.contentView.removeChildView(wcv)
-									}
-								}
-							}
-							catch (cleanupErr) {
-								console.error('[electron-deck] moveTo dest detach failed (original error rethrown):', cleanupErr)
-							}
-							try {
-								// ALWAYS undo the dest registration so the dest substrate never tracks
-								// a view it doesn't host — independent of the detach above.
-								destSub.unregisterView(viewId)
-							}
-							catch (cleanupErr) {
-								console.error('[electron-deck] moveTo dest unregister failed (original error rethrown):', cleanupErr)
-							}
-							throw e
+							// Compositor rollback can't remove it) — `cleanupDestOnMoveToFailure`
+							// balances that leak with an explicit dest detach + registry
+							// unregister, then rethrows the ORIGINAL `e` (never masked).
+							cleanupDestOnMoveToFailure(destWin, destSub, wcv, viewId, e)
 						}
 						// inner.moveTo succeeded → move the substrate registration: drop
 						// from src now that the view lives in dest. For a SAME-WINDOW move
@@ -2329,13 +2327,7 @@ export class DeckApp {
 						// stale hidden entry would let a later eviction dispose a now-visible
 						// view (and skew the LRU order). Idempotent: a no-op when the view was
 						// already visible (not in the list) or has no group.
-						if (groupKey) {
-							const group = this.keepAliveGroups.get(groupKey)
-							if (group) {
-								const hi = group.hidden.indexOf(viewId)
-								if (hi >= 0) group.hidden.splice(hi, 1)
-							}
-						}
+						if (groupKey) this.dropViewFromKeepAliveHidden(groupKey, viewId)
 						// Re-issue the slot-token anchor for the dest. Revoke the OLD token
 						// first (a stale `place` from the src renderer drops), then mint a
 						// fresh one bound to the dest control wc + dest slot.

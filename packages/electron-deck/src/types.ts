@@ -95,21 +95,21 @@ export interface HostEvent<P extends JsonValue> {
 // ── DeckConfig 顶层 ─────────────────────────────────────────────────
 
 /**
- * Handler 形参故意宽松（`any[]`）—— host 写 `(p: { code: string }) => ...` 这种
- * narrower 签名必须能赋值给 `Record<string, Handler>`。framework 在 IPC 边界
- * 做 JSON 校验，narrower 类型在 webview-side `createDeckClient<HS, EV>()`
- * 通过 `Parameters<HS[K]>` 推断。返回值 framework 不约束 TS 类型，但 runtime
- * 强制要求 JSON-safe（非 JSON 值反序列化时报错）。
+ * Handler 形参故意宽松（`never[]`）—— host 写 `(p: { code: string }) => ...` 这种
+ * narrower 签名必须能赋值给 `Record<string, Handler>`。rest 参数是逆变位置：
+ * `never` 对任意具体参数类型都成立赋值（`unknown` 则不成立，会挡掉上面这种
+ * narrower 签名）。framework 在 IPC 边界做 JSON 校验，narrower 类型在
+ * webview-side `createDeckClient<HS, EV>()` 通过 `Parameters<HS[K]>` 推断。
+ * 返回值 framework 不约束 TS 类型，但 runtime 强制要求 JSON-safe（非 JSON 值
+ * 反序列化时报错）。
  *
  * `@experimental` No production consumer yet: only `examples/` / `spike/` set
  * `DeckConfig.simulatorApis` / `hostServices`; the devtools `backend` assembly
  * never touches either field. Contract may change until a second real consumer
  * adopts it.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type SimulatorApiHandler = (...args: any[]) => unknown
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type HostServiceHandler = (...args: any[]) => unknown
+export type SimulatorApiHandler = (...args: never[]) => unknown
+export type HostServiceHandler = (...args: never[]) => unknown
 
 export interface AppConfig {
 	readonly name?: string

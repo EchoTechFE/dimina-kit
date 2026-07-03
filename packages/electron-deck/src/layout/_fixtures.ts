@@ -87,6 +87,30 @@ export function expectRejects(fn: () => unknown): void {
 	}
 }
 
+/** A split's own invariants: sizes/children parity, and >= 2 children. */
+function splitNodeProblems(n: SplitNode): string[] {
+	const problems: string[] = []
+	if (n.sizes.length !== n.children.length) {
+		problems.push(`split ${n.id}: sizes ${n.sizes.length} != children ${n.children.length}`)
+	}
+	if (n.children.length < 2) {
+		problems.push(`split ${n.id}: must have >= 2 children, has ${n.children.length}`)
+	}
+	return problems
+}
+
+/** A tab group's own invariants: non-empty, and `active` present in `panels`. */
+function tabGroupProblems(n: TabGroupNode): string[] {
+	const problems: string[] = []
+	if (n.panels.length === 0) {
+		problems.push(`tabs ${n.id}: empty`)
+	}
+	if (!n.panels.includes(n.active)) {
+		problems.push(`tabs ${n.id}: active ${n.active} not in panels`)
+	}
+	return problems
+}
+
 /**
  * Structural-invariant assertions that must hold after ANY mutation.
  * Returns a list of problems ([] = ok). Used by the mutation tests to prove
@@ -96,22 +120,7 @@ export function expectRejects(fn: () => unknown): void {
 export function structuralProblems(t: LayoutTree): string[] {
 	const problems: string[] = []
 	for (const n of allNodes(t)) {
-		if (n.kind === 'split') {
-			if (n.sizes.length !== n.children.length) {
-				problems.push(`split ${n.id}: sizes ${n.sizes.length} != children ${n.children.length}`)
-			}
-			if (n.children.length < 2) {
-				problems.push(`split ${n.id}: must have >= 2 children, has ${n.children.length}`)
-			}
-		}
-		else {
-			if (n.panels.length === 0) {
-				problems.push(`tabs ${n.id}: empty`)
-			}
-			if (!n.panels.includes(n.active)) {
-				problems.push(`tabs ${n.id}: active ${n.active} not in panels`)
-			}
-		}
+		problems.push(...(n.kind === 'split' ? splitNodeProblems(n) : tabGroupProblems(n)))
 	}
 	return problems
 }

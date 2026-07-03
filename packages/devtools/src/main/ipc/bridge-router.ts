@@ -412,6 +412,34 @@ export interface BridgeRouterHandle {
   debugTap?: DebugTap
 }
 
+// Same-appId matches prefer the MOST RECENT spawn (Maps preserve insertion
+// order): after a respawn/reopen the newest session is the live one — the
+// first match could be a just-superseded session mid-teardown. The loop must
+// scan every session (no early break) so the LAST inserted match wins.
+function findAppSessionByAppId(state: RouterState, appId: string): AppSession | undefined {
+  let match: AppSession | undefined
+  for (const ap of state.appSessions.values()) if (ap.appId === appId) match = ap
+  return match
+}
+
+// No appId hint and no workspace session to disambiguate. Picking by appId is
+// impossible, so fall back to the most-recent spawn — but ONLY when every live
+// session belongs to the same app. Same-appId multiples are a respawn/reopen
+// in progress where the newest is the live one (insertion order = spawn
+// order). Multiple DISTINCT appIds mean a previous project is mid-teardown
+// alongside the new one; any pick is a guess that can resolve the WRONG
+// project's content (the screenshot/inspect-stale-app bug class), so prefer
+// null over a wrong guess.
+function resolveFallbackAppSession(state: RouterState): AppSession | undefined {
+  let last: AppSession | undefined
+  const distinctAppIds = new Set<string>()
+  for (const ap of state.appSessions.values()) {
+    last = ap
+    distinctAppIds.add(ap.appId)
+  }
+  return distinctAppIds.size <= 1 ? last : undefined
+}
+
 /**
  * Resolve the "current" app session: prefer an explicit appId, else the
  * workspace's active project, else the only / most-recently-created session.
@@ -423,19 +451,14 @@ function resolveCurrentApp(
   ctx: WorkbenchContext,
   appId?: string,
 ): AppSession | undefined {
-  // Same-appId matches prefer the MOST RECENT spawn (Maps preserve insertion
-  // order): after a respawn/reopen the newest session is the live one — the
-  // first match could be a just-superseded session mid-teardown.
   if (appId) {
-    let match: AppSession | undefined
-    for (const ap of state.appSessions.values()) if (ap.appId === appId) match = ap
+    const match = findAppSessionByAppId(state, appId)
     if (match) return match
   }
   const appInfo = ctx.workspace?.getSession?.()?.appInfo as { appId?: string } | undefined
   const activeAppId = appInfo?.appId
   if (activeAppId) {
-    let match: AppSession | undefined
-    for (const ap of state.appSessions.values()) if (ap.appId === activeAppId) match = ap
+    const match = findAppSessionByAppId(state, activeAppId)
     if (match) return match
   }
   // During a project close the workspace nulls its session BEFORE the bridge app
@@ -443,21 +466,7 @@ function resolveCurrentApp(
   // would hand a consumer the closing project's dying guest, so refuse to guess
   // while a close is in flight.
   if (ctx.workspace?.isClosing?.()) return undefined
-  // No appId hint and no workspace session to disambiguate. Picking by appId is
-  // impossible, so fall back to the most-recent spawn — but ONLY when every live
-  // session belongs to the same app. Same-appId multiples are a respawn/reopen
-  // in progress where the newest is the live one (insertion order = spawn
-  // order). Multiple DISTINCT appIds mean a previous project is mid-teardown
-  // alongside the new one; any pick is a guess that can resolve the WRONG
-  // project's content (the screenshot/inspect-stale-app bug class), so prefer
-  // null over a wrong guess.
-  let last: AppSession | undefined
-  const distinctAppIds = new Set<string>()
-  for (const ap of state.appSessions.values()) {
-    last = ap
-    distinctAppIds.add(ap.appId)
-  }
-  return distinctAppIds.size <= 1 ? last : undefined
+  return resolveFallbackAppSession(state)
 }
 
 export function installBridgeRouter(ctx: WorkbenchContext): void {
@@ -1510,6 +1519,122 @@ const APP_LIFECYCLE_UNREGISTER: Record<string, AppLifecycleEvent> = {
   offError: 'onError',
 }
 
+function handleNavBarApi(ap: AppSession, page: PageSession, name: string, params: Record<string, unknown>): void {
+  if (!ap.simulatorWc.isDestroyed()) {
+    ap.simulatorWc.send(E.NAV_BAR, {
+      bridgeId: page.bridgeId,
+      name,
+      params,
+    })
+  }
+  const successResult = { errMsg: `${name}:ok` }
+  sendCallback(ap, params.success, successResult)
+  sendCallback(ap, params.complete, successResult)
+}
+
+// Shared by handleNavActionApi/handleTabActionApi: both forward a same-shaped
+// payload to the simulator window, differing only in the event name and the
+// payload's static `name` union. Simulator-destroyed fails the callback
+// directly since there is no ack path to fail through otherwise.
+function sendActionOrFail(
+  ap: AppSession,
+  eventName: string,
+  payload: NavActionPayload | TabActionPayload,
+  name: string,
+  params: Record<string, unknown>,
+): void {
+  if (!ap.simulatorWc.isDestroyed()) {
+    ap.simulatorWc.send(eventName, payload)
+    return
+  }
+  const fail = { errMsg: `${name}:fail simulator window destroyed` }
+  sendCallback(ap, params.fail, fail)
+  sendCallback(ap, params.complete, fail)
+}
+
+function handleNavActionApi(ap: AppSession, page: PageSession, name: string, params: Record<string, unknown>): void {
+  const payload: NavActionPayload = {
+    appSessionId: ap.appSessionId,
+    bridgeId: page.bridgeId,
+    name: name as NavActionPayload['name'],
+    params,
+    callbacks: extractCallbacks(params),
+  }
+  sendActionOrFail(ap, E.NAV_ACTION, payload, name, params)
+}
+
+function handleTabActionApi(ap: AppSession, page: PageSession, name: string, params: Record<string, unknown>): void {
+  const payload: TabActionPayload = {
+    appSessionId: ap.appSessionId,
+    bridgeId: page.bridgeId,
+    name: name as TabActionPayload['name'],
+    params,
+    callbacks: extractCallbacks(params),
+  }
+  sendActionOrFail(ap, E.TAB_ACTION, payload, name, params)
+}
+
+// App-level lifecycle listeners (wx.onAppShow / onAppHide / onError + off*).
+// The service encodes the listener as a keep callback id in `params.success`;
+// we store it and re-fire on main-window foreground/background (the driver in
+// installBridgeRouter) and on serviceHostError. `off*` clears the event's
+// listeners for the session. Returns true when `name` matched a lifecycle
+// register/unregister call (fully handled), false to fall through.
+function handleAppLifecycleToggle(
+  state: RouterState,
+  ap: AppSession,
+  name: string,
+  params: Record<string, unknown>,
+): boolean {
+  const lifecycleRegister = APP_LIFECYCLE_REGISTER[name]
+  if (lifecycleRegister) {
+    state.appLifecycle.register(ap.appSessionId, lifecycleRegister, params.success)
+    return true
+  }
+  const lifecycleUnregister = APP_LIFECYCLE_UNREGISTER[name]
+  if (lifecycleUnregister) {
+    // off(cb) carries the same evtId as the original on(cb) → removes just that
+    // listener; off() with no callback carries no id → clears the whole event.
+    state.appLifecycle.unregister(ap.appSessionId, lifecycleUnregister, params.success)
+    return true
+  }
+  return false
+}
+
+// pageScrollTo acts on the page's render guest (scroll its document), which
+// only the main process can reach — run the scroll script in the invoking
+// page's render webContents rather than forwarding to the simulator.
+function handlePageScrollApi(ap: AppSession, page: PageSession, params: Record<string, unknown>): void {
+  const renderWc = page.renderWc
+  if (renderWc && !renderWc.isDestroyed()) {
+    void renderWc.executeJavaScript(buildPageScrollScript(params)).catch(() => {})
+  }
+  const successResult = { errMsg: 'pageScrollTo:ok' }
+  sendCallback(ap, params.success, successResult)
+  sendCallback(ap, params.complete, successResult)
+}
+
+// Shared try/invoke/callback pattern used by the storageApi and
+// ctx.simulatorApis branches: relay the resolved value through
+// success+complete, or the thrown error through fail+complete with a
+// namespaced errMsg.
+async function invokeSimulatorApiAndCallback(
+  ap: AppSession,
+  name: string,
+  params: Record<string, unknown>,
+  invoke: () => Promise<unknown>,
+): Promise<void> {
+  try {
+    const result = await invoke()
+    sendCallback(ap, params.success, result)
+    sendCallback(ap, params.complete, result)
+  } catch (error) {
+    const failResult = { errMsg: `${name}:fail ${error instanceof Error ? error.message : String(error)}` }
+    sendCallback(ap, params.fail, failResult)
+    sendCallback(ap, params.complete, failResult)
+  }
+}
+
 async function handleSimulatorApi(
   state: RouterState,
   ap: AppSession,
@@ -1521,84 +1646,24 @@ async function handleSimulatorApi(
   const params = normalizeParams(body.params)
 
   if (NAV_BAR_API_NAMES.has(name)) {
-    if (!ap.simulatorWc.isDestroyed()) {
-      ap.simulatorWc.send(E.NAV_BAR, {
-        bridgeId: page.bridgeId,
-        name,
-        params,
-      })
-    }
-    const successResult = { errMsg: `${name}:ok` }
-    sendCallback(ap, params.success, successResult)
-    sendCallback(ap, params.complete, successResult)
+    handleNavBarApi(ap, page, name, params)
     return
   }
 
   if (NAV_ACTION_NAMES.has(name)) {
-    const payload: NavActionPayload = {
-      appSessionId: ap.appSessionId,
-      bridgeId: page.bridgeId,
-      name: name as NavActionPayload['name'],
-      params,
-      callbacks: extractCallbacks(params),
-    }
-    if (!ap.simulatorWc.isDestroyed()) {
-      ap.simulatorWc.send(E.NAV_ACTION, payload)
-    } else {
-      const fail = { errMsg: `${name}:fail simulator window destroyed` }
-      sendCallback(ap, params.fail, fail)
-      sendCallback(ap, params.complete, fail)
-    }
+    handleNavActionApi(ap, page, name, params)
     return
   }
 
   if (TAB_ACTION_NAMES.has(name)) {
-    const payload: TabActionPayload = {
-      appSessionId: ap.appSessionId,
-      bridgeId: page.bridgeId,
-      name: name as TabActionPayload['name'],
-      params,
-      callbacks: extractCallbacks(params),
-    }
-    if (!ap.simulatorWc.isDestroyed()) {
-      ap.simulatorWc.send(E.TAB_ACTION, payload)
-    } else {
-      const fail = { errMsg: `${name}:fail simulator window destroyed` }
-      sendCallback(ap, params.fail, fail)
-      sendCallback(ap, params.complete, fail)
-    }
+    handleTabActionApi(ap, page, name, params)
     return
   }
 
-  // App-level lifecycle listeners (wx.onAppShow / onAppHide / onError + off*).
-  // The service encodes the listener as a keep callback id in `params.success`;
-  // we store it and re-fire on main-window foreground/background (the driver in
-  // installBridgeRouter) and on serviceHostError. `off*` clears the event's
-  // listeners for the session.
-  const lifecycleRegister = APP_LIFECYCLE_REGISTER[name]
-  if (lifecycleRegister) {
-    state.appLifecycle.register(ap.appSessionId, lifecycleRegister, params.success)
-    return
-  }
-  const lifecycleUnregister = APP_LIFECYCLE_UNREGISTER[name]
-  if (lifecycleUnregister) {
-    // off(cb) carries the same evtId as the original on(cb) → removes just that
-    // listener; off() with no callback carries no id → clears the whole event.
-    state.appLifecycle.unregister(ap.appSessionId, lifecycleUnregister, params.success)
-    return
-  }
+  if (handleAppLifecycleToggle(state, ap, name, params)) return
 
-  // pageScrollTo acts on the page's render guest (scroll its document), which
-  // only the main process can reach — run the scroll script in the invoking
-  // page's render webContents rather than forwarding to the simulator.
   if (name === 'pageScrollTo') {
-    const renderWc = page.renderWc
-    if (renderWc && !renderWc.isDestroyed()) {
-      void renderWc.executeJavaScript(buildPageScrollScript(params)).catch(() => {})
-    }
-    const successResult = { errMsg: 'pageScrollTo:ok' }
-    sendCallback(ap, params.success, successResult)
-    sendCallback(ap, params.complete, successResult)
+    handlePageScrollApi(ap, page, params)
     return
   }
 
@@ -1608,15 +1673,8 @@ async function handleSimulatorApi(
   // http:// origin. Without this, async writes and sync writes diverge across
   // two origins even for the running mini-app.
   if (ctx.storageApi && STORAGE_API_NAMES.has(name)) {
-    try {
-      const result = await ctx.storageApi.invoke(ap.appId, name, params)
-      sendCallback(ap, params.success, result)
-      sendCallback(ap, params.complete, result)
-    } catch (error) {
-      const failResult = { errMsg: `${name}:fail ${error instanceof Error ? error.message : String(error)}` }
-      sendCallback(ap, params.fail, failResult)
-      sendCallback(ap, params.complete, failResult)
-    }
+    const storageApi = ctx.storageApi
+    await invokeSimulatorApiAndCallback(ap, name, params, () => storageApi.invoke(ap.appId, name, params))
     return
   }
 
@@ -1626,15 +1684,7 @@ async function handleSimulatorApi(
   // MiniApp owns the DOM-touching defaults (wx.getSystemInfo, chooseImage,
   // chooseMedia, fs.*, …) and the bridge-router can't run those itself.
   if (ctx.simulatorApis.has(name)) {
-    try {
-      const result = await ctx.simulatorApis.invoke(name, params)
-      sendCallback(ap, params.success, result)
-      sendCallback(ap, params.complete, result)
-    } catch (error) {
-      const failResult = { errMsg: `${name}:fail ${error instanceof Error ? error.message : String(error)}` }
-      sendCallback(ap, params.fail, failResult)
-      sendCallback(ap, params.complete, failResult)
-    }
+    await invokeSimulatorApiAndCallback(ap, name, params, () => ctx.simulatorApis.invoke(name, params))
     return
   }
 
@@ -1950,39 +2000,22 @@ function disposePageSession(state: RouterState, ap: AppSession, page: PageSessio
   state.pageSessions.delete(page.bridgeId)
 }
 
-async function disposeAppSession(
-  state: RouterState,
-  appSessionId: string,
-  opts: { serviceAlreadyClosed?: boolean } = {},
-): Promise<void> {
-  const ap = state.appSessions.get(appSessionId)
-  if (!ap) return
-  state.appSessions.delete(appSessionId)
-  // Remove this session's shutdown-fallback registry entry so the registry does
-  // not accumulate one stale closure per respawn. Ordered AFTER the delete
-  // above: dispose() runs the wrapped fn (disposeAppSession again), which
-  // early-returns now that the session is gone — no recursion, no double-run.
-  // (At whole-app shutdown the registry marks the entry released before calling
-  // the fn, so this dispose() is a no-op then.)
-  const registryHandle = ap.registryHandle
-  ap.registryHandle = null
-  void registryHandle?.dispose()
-  state.appLifecycle.dispose(appSessionId)
-
-  // Evict AppData bridges FIRST — eviction enumerates `ap.pages`, which the
-  // page teardown below progressively empties (and finally clears).
-  state.evictAppDataBridges(ap)
-
-  // Drain any pending API calls owned by this app session. One-shot calls
-  // normally self-clean on response/timeout, but persistent (`keep: true`)
-  // subscriptions (e.g. audioListen) live with their timer cleared until
-  // teardown — without this they would leak in pendingApiCalls forever.
+// Drain any pending API calls owned by this app session. One-shot calls
+// normally self-clean on response/timeout, but persistent (`keep: true`)
+// subscriptions (e.g. audioListen) live with their timer cleared until
+// teardown — without this they would leak in pendingApiCalls forever.
+function drainPendingApiCallsForSession(state: RouterState, appSessionId: string): void {
   for (const [requestId, pending] of state.pendingApiCalls) {
     if (pending.appSessionId !== appSessionId) continue
     clearTimeout(pending.timer)
     state.pendingApiCalls.delete(requestId)
   }
+}
 
+// Closes every page's render guest and drops its wc/pageSessions bindings.
+// Caller clears `ap.pages` itself right after — this only tears each page
+// down, it doesn't touch the map.
+function closeSessionPages(state: RouterState, ap: AppSession): void {
   for (const page of ap.pages.values()) {
     if (page.renderWc && !page.renderWc.isDestroyed()) {
       state.wcIdToBridgeId.delete(page.renderWc.id)
@@ -1996,17 +2029,16 @@ async function disposeAppSession(
     }
     state.pageSessions.delete(page.bridgeId)
   }
-  ap.pages.clear()
+}
 
-  // Detach every session-scoped hook on emitters that outlive this session —
-  // the shared simulator WCV's 'destroyed' and the service window's 'closed' —
-  // BEFORE the window is released/closed below: a pool-recycled window must
-  // not re-trigger this session's teardown from a stale 'closed', and the
-  // simulator wc must not accumulate one dead hook per soft reload until the
-  // MaxListeners warning fires. Idempotent with teardown being triggered BY
-  // one of these hooks (removing a fired once() is a no-op).
-  ap.listenerBag.dispose()
-
+// Three-way release of the session's service-host window: pool release (soft
+// reuse), pool reclaim of an externally-closed window, or a plain close for
+// the unpooled path.
+async function releaseServiceWindow(
+  state: RouterState,
+  ap: AppSession,
+  opts: { serviceAlreadyClosed?: boolean },
+): Promise<void> {
   if (ap.poolEntryId !== null && state.pool && !opts.serviceAlreadyClosed) {
     // Soft reuse (foundation.md §4.3): the pooled service-host webContents keeps
     // its wc.id but is about to run a NEW app session. Reset its Connection
@@ -2032,11 +2064,14 @@ async function disposeAppSession(
     // pool only auto-reclaims on render-process-gone — so without this the in-use
     // entry leaks in the pool forever, permanently shrinking capacity. Reclaim
     // the slot explicitly (the window is already gone; releaseDestroyed won't
-    // touch it). (Audit A1)
+    // touch it).
     state.pool.releaseDestroyed(ap.poolEntryId)
   } else if (!opts.serviceAlreadyClosed && !ap.serviceWindow.isDestroyed()) {
     ap.serviceWindow.close()
   }
+}
+
+function unbindSessionFromSharedMaps(state: RouterState, ap: AppSession, appSessionId: string): void {
   // Value-checked unbind for the service wc: this delete runs after the
   // pool-release await above, so on the pool path the next spawn may have
   // already re-acquired the SAME window and rebound its wc id — only remove
@@ -2052,6 +2087,48 @@ async function disposeAppSession(
     hosted.delete(appSessionId)
     if (hosted.size === 0) state.simulatorWcIdToAppSessionIds.delete(ap.simulatorWc.id)
   }
+}
+
+async function disposeAppSession(
+  state: RouterState,
+  appSessionId: string,
+  opts: { serviceAlreadyClosed?: boolean } = {},
+): Promise<void> {
+  const ap = state.appSessions.get(appSessionId)
+  if (!ap) return
+  state.appSessions.delete(appSessionId)
+  // Remove this session's shutdown-fallback registry entry so the registry does
+  // not accumulate one stale closure per respawn. Ordered AFTER the delete
+  // above: dispose() runs the wrapped fn (disposeAppSession again), which
+  // early-returns now that the session is gone — no recursion, no double-run.
+  // (At whole-app shutdown the registry marks the entry released before calling
+  // the fn, so this dispose() is a no-op then.)
+  const registryHandle = ap.registryHandle
+  ap.registryHandle = null
+  void registryHandle?.dispose()
+  state.appLifecycle.dispose(appSessionId)
+
+  // Evict AppData bridges FIRST — eviction enumerates `ap.pages`, which the
+  // page teardown below progressively empties (and finally clears).
+  state.evictAppDataBridges(ap)
+
+  drainPendingApiCallsForSession(state, appSessionId)
+
+  closeSessionPages(state, ap)
+  ap.pages.clear()
+
+  // Detach every session-scoped hook on emitters that outlive this session —
+  // the shared simulator WCV's 'destroyed' and the service window's 'closed' —
+  // BEFORE the window is released/closed below: a pool-recycled window must
+  // not re-trigger this session's teardown from a stale 'closed', and the
+  // simulator wc must not accumulate one dead hook per soft reload until the
+  // MaxListeners warning fires. Idempotent with teardown being triggered BY
+  // one of these hooks (removing a fired once() is a no-op).
+  ap.listenerBag.dispose()
+
+  await releaseServiceWindow(state, ap, opts)
+
+  unbindSessionFromSharedMaps(state, ap, appSessionId)
 
   // Only the local fallback server needs closing; the dev-server base is owned
   // by the workspace session, not this app session.

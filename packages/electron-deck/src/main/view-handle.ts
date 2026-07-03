@@ -192,6 +192,46 @@ export function createViewHandle(deps: ViewHandleDeps): ViewHandle {
     await viewScope.close()
   }
 
+  /**
+   * Re-mount `ref` on `src` and commit. If that re-commit ALSO throws, the src
+   * host is unrecoverable — close the view (viewScope.close ⇒ dispose) so it
+   * doesn't stay homeless. Either way this always resolves (never rethrows);
+   * the caller re-throws whatever ORIGINAL error triggered the rollback.
+   */
+  async function restoreSrcOrDispose(src: PlaceTarget, srcZone: number | undefined): Promise<void> {
+    src.compositor.mount(ref, { zone: srcZone })
+    try {
+      src.compositor.commit()
+    } catch {
+      await doDispose()
+    }
+  }
+
+  /**
+   * Undo a landed dest commit (adopt failed AFTER the dest attach succeeded):
+   * unmount + commit on dest to actually reverse the native attach (best-effort
+   * — a failed detach commit leaves the host byte-for-byte and the planner
+   * already dropped the intent), then restore src and point `current` back at
+   * it BEFORE the src re-commit, so a CLOSED dispose tears down against the
+   * right window.
+   */
+  async function rollbackDestAndRestoreSrc(dest: PlaceTarget, src: PlaceTarget, srcZone: number | undefined): Promise<void> {
+    dest.compositor.unmount(ref.id)
+    try {
+      dest.compositor.commit()
+    } catch {
+      // best-effort — see doc-comment above.
+    }
+    src.compositor.mount(ref, { zone: srcZone })
+    current = src
+    currentZone = srcZone
+    try {
+      src.compositor.commit()
+    } catch {
+      await doDispose()
+    }
+  }
+
   async function doMove(
     dest: PlaceTarget,
     opts: { zone?: number; rehome?: boolean },
@@ -214,16 +254,7 @@ export function createViewHandle(deps: ViewHandleDeps): ViewHandle {
       // src.commit threw → the view never left src (CommitError leaves the host
       // byte-for-byte pre-commit). Restore the src intent + re-commit so the
       // planner is consistent with the host again. Stays AT_SRC; rethrow.
-      src.compositor.mount(ref, { zone: srcZone })
-      try {
-        src.compositor.commit()
-      } catch {
-        // CLOSED: src is unrecoverable (the restore re-commit ALSO threw) → the
-        // view is homeless. Close the view (viewScope.close ⇒ dispose) and
-        // rethrow the original src error.
-        await doDispose()
-        throw e
-      }
+      await restoreSrcOrDispose(src, srcZone)
       throw e
     }
 
@@ -235,16 +266,9 @@ export function createViewHandle(deps: ViewHandleDeps): ViewHandle {
       // dest.commit threw → ROLLBACK: re-mount on src so the view is never
       // dangling (I2). Drop the failed dest intent first.
       dest.compositor.unmount(ref.id)
-      src.compositor.mount(ref, { zone: srcZone })
-      try {
-        src.compositor.commit()
-      } catch {
-        // CLOSED: the rollback re-mount ALSO failed → the view is homeless.
-        // Close the view (viewScope.close ⇒ dispose) and rethrow the dest error.
-        await doDispose()
-        throw destErr
-      }
-      // Rolled back to AT_SRC: `current` stays src; rethrow the dest error.
+      await restoreSrcOrDispose(src, srcZone)
+      // Rolled back to AT_SRC (or CLOSED, if the restore also failed): rethrow
+      // the dest error.
       throw destErr
     }
 
@@ -272,34 +296,9 @@ export function createViewHandle(deps: ViewHandleDeps): ViewHandle {
       try {
         await donor.adopt(vs, dest.windowScope)
       } catch (adoptErr) {
-        // Undo the SUCCESSFUL dest commit: unmount AND commit on dest so the
-        // native dest attach is actually reversed (unlike the STEP-2 arm, here the
-        // dest commit landed before adopt failed, so the leaked dest child must be
-        // removed with a real dest commit — an unmount intent alone leaves it).
-        dest.compositor.unmount(ref.id)
-        try {
-          dest.compositor.commit()
-        } catch {
-          // best-effort: a failed dest detach commit (CommitError) leaves the host
-          // byte-for-byte; the planner already dropped the intent. Fall through to
-          // the src re-mount regardless — the src restore is what matters for I2.
-        }
-        // Re-mount on src (back to AT_SRC).
-        src.compositor.mount(ref, { zone: srcZone })
-        // Restore the token BEFORE the re-commit so a CLOSED dispose tears down
-        // against the right window, and a successful re-commit leaves `current`
-        // pointing at src.
-        current = src
-        currentZone = srcZone
-        try {
-          src.compositor.commit()
-        } catch {
-          // CLOSED: the rollback re-mount ALSO failed → the view is homeless.
-          await doDispose()
-          throw adoptErr
-        }
-        // Rolled back to AT_SRC: rethrow the adopt error. The view is re-mounted
-        // in src, `current` = src, and the (un-rehomed) viewScope is intact.
+        await rollbackDestAndRestoreSrc(dest, src, srcZone)
+        // Rolled back to AT_SRC (or CLOSED, if the restore also failed):
+        // rethrow the adopt error.
         throw adoptErr
       }
       // Adopt landed: the viewScope's lifetime now lives under dest's windowScope.
