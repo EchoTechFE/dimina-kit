@@ -437,6 +437,16 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
   // degrade, dropped if we go ready (so a request shows in exactly one sink).
   let probeConsoleBuffer: NetworkRequestRecord[] = []
   let readyTimeoutTimer: ReturnType<typeof setTimeout> | null = null
+  // Wall-clock deadline for the CURRENT probe, set once when 'probing' begins.
+  // scheduleReadyRetry() re-checks this on every retry so the retry chain is
+  // itself authoritative on giving up — it does not depend on winning a race
+  // against readyTimeoutTimer firing first (two timers due at the same virtual
+  // instant have no guaranteed firing order under fake timers, which let a
+  // never-ready host's retry chain outlive the nominal timeout in CI: an
+  // "Aborting after running 10000 timers" abort in `network-forward`'s
+  // ready-timeout test). readyTimeoutTimer stays as a backstop for hosts that
+  // never retry at all (e.g. the queue drains before the deadline).
+  let probeDeadline: number | null = null
 
   // ── Batched native dispatch into the DevTools front-end ───────────────────
   // Queued raw CDP messages (already namespaced + JSON-stringified) awaiting a
@@ -455,6 +465,7 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
   function beginProbing(): void {
     if (sink === 'probing') return
     sink = 'probing'
+    probeDeadline = Date.now() + DEVTOOLS_READY_TIMEOUT_MS
     if (readyTimeoutTimer) clearTimeout(readyTimeoutTimer)
     readyTimeoutTimer = setTimeout(() => {
       readyTimeoutTimer = null
@@ -466,6 +477,7 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
   /** Native path confirmed live: console buffer is moot, drop it. */
   function markReady(): void {
     sink = 'ready'
+    probeDeadline = null
     if (readyTimeoutTimer) { clearTimeout(readyTimeoutTimer); readyTimeoutTimer = null }
     if (readyRetryTimer) { clearTimeout(readyRetryTimer); readyRetryTimer = null }
     // Native rendered these requests; their buffered console copies would dup.
@@ -479,6 +491,7 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
    */
   function degradeToConsole(): void {
     sink = 'degraded'
+    probeDeadline = null
     dispatchQueue = []
     if (readyTimeoutTimer) { clearTimeout(readyTimeoutTimer); readyTimeoutTimer = null }
     if (readyRetryTimer) { clearTimeout(readyRetryTimer); readyRetryTimer = null }
@@ -605,9 +618,20 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
 
   function scheduleReadyRetry(): void {
     if (readyRetryTimer || sink === 'ready' || sink === 'degraded') return
+    // Self-terminate on the same deadline readyTimeoutTimer enforces, instead of
+    // trusting that timer to win a same-instant race against this one (see the
+    // comment on `probeDeadline`'s declaration).
+    if (probeDeadline !== null && Date.now() >= probeDeadline) {
+      degradeToConsole()
+      return
+    }
     readyRetryTimer = setTimeout(() => {
       readyRetryTimer = null
       if (sink === 'degraded') return
+      if (probeDeadline !== null && Date.now() >= probeDeadline) {
+        degradeToConsole()
+        return
+      }
       if (dispatchQueue.length > 0) scheduleFlush()
     }, READY_RETRY_MS)
   }
@@ -661,6 +685,7 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
     // A new simulator attach restarts the native sink: 'idle' until the next
     // event re-probes the (possibly already-set) host.
     sink = 'idle'
+    probeDeadline = null
     if (readyRetryTimer) { clearTimeout(readyRetryTimer); readyRetryTimer = null }
     if (readyTimeoutTimer) { clearTimeout(readyTimeoutTimer); readyTimeoutTimer = null }
     if (!wc || wc.isDestroyed()) return
@@ -824,6 +849,7 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
     // Reset the native-sink state machine for the new host.
     if (readyTimeoutTimer) { clearTimeout(readyTimeoutTimer); readyTimeoutTimer = null }
     if (readyRetryTimer) { clearTimeout(readyRetryTimer); readyRetryTimer = null }
+    probeDeadline = null
     // Records buffered while probing the OLD host are stale — drop, don't flush
     // (their native copies were already queued; on a host swap we restart clean).
     probeConsoleBuffer = []
@@ -862,6 +888,12 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
       })
     }
 
+    // A host swap while still 'probing' the OLD host must not inherit its
+    // window: beginProbing()'s `sink === 'probing'` guard would otherwise skip
+    // (re-)arming readyTimeoutTimer/probeDeadline for the NEW host, leaving it
+    // probing forever with no timeout. Force through 'idle' so beginProbing()
+    // always arms a fresh window for whichever host is now current.
+    sink = 'idle'
     beginProbing()
     if (dispatchQueue.length > 0) scheduleFlush()
   }
