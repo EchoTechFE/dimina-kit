@@ -219,9 +219,11 @@ export function buildPresetDockTree(
  *
  * Fallback-safe: `null`, malformed JSON, a structurally-illegal tree, or a
  * structurally-valid-but-orphan tree (references a panel id outside
- * `knownPanelIds`) ALL fall back to the default tree at `simPanelWidth`. Only a
- * tree that round-trips through `parseLayout` AND passes `validateTree` clean
- * against `knownPanelIds` is restored verbatim.
+ * `knownPanelIds`) ALL fall back to the default tree at `simPanelWidth`. A tree
+ * that round-trips through `parseLayout` AND passes `validateTree` clean
+ * against `knownPanelIds` is restored, then reconciled: flexible weights are
+ * sanitized and a partially-emptied debug strip is healed back to the full
+ * built-in set (see `healMissingDebugPanels`).
  */
 export function buildDockModel(
   serialized: string | null,
@@ -248,12 +250,34 @@ function restoreTreeOrDefault(
       // minimum positive value. Px children are untouched. The force-persist of
       // a healed tree lives in `DockableLayout` (it re-serializes the model and
       // overwrites the stale localStorage value when it differs).
-      return sanitizeFlexibleWeights(parsed)
+      return healMissingDebugPanels(sanitizeFlexibleWeights(parsed), simPanelWidth)
     }
   } catch {
     // malformed JSON / structurally-illegal tree — fall through to default.
   }
   return buildDefaultDockTree(simPanelWidth)
+}
+
+/**
+ * Reconcile a restored tree against the debug strip's ALL-OR-NOTHING invariant.
+ *
+ * At runtime the built-in debug panels can only leave the tree as a whole
+ * region (the toolbar "调试器" toggle); per-tab close is blocked by
+ * `closable:false`. A PERSISTED tree with a partial debug strip (>=1 but not
+ * all of `DEFAULT_DEBUG_PANELS` present) is therefore never a user intent —
+ * it is residue from an older build whose debug tabs were closable, or a tree
+ * persisted before a newer built-in panel existed. Heal it: re-insert each
+ * missing debug panel via `reopenPanel` (it rejoins the surviving mates' tab
+ * group, keeping their order and the group's active tab). A tree with ZERO
+ * debug panels is the legitimate region-hidden state and is left alone.
+ */
+function healMissingDebugPanels(tree: LayoutTree, simPanelWidth: number): LayoutTree {
+  const present = panelIdsOf(tree)
+  if (!DEFAULT_DEBUG_PANELS.some((p) => present.has(p))) return tree
+  return DEFAULT_DEBUG_PANELS.reduce(
+    (t, p) => (present.has(p) ? t : reopenPanel(t, p, simPanelWidth)),
+    tree,
+  )
 }
 
 // ── Panel visibility (reopen / list) ─────────────────────────────────────────
@@ -264,9 +288,12 @@ function restoreTreeOrDefault(
 // enumerate which panels are currently open, restoring the show/hide affordance
 // the old toolbar layout toggles offered before the dockable rewrite.
 
-/** The five debug panels, co-located in one tab group by `buildDefaultDockTree`.
- * A reopened debug panel rejoins whichever of these is still on screen. */
-const DEFAULT_DEBUG_PANELS = ['wxml', 'appdata', 'storage', 'console', 'compile']
+/** The five built-in debug panels, co-located in one tab group by
+ * `buildDefaultDockTree`. A reopened debug panel rejoins whichever of these is
+ * still on screen. SINGLE truth for "what makes up the debug region": the
+ * restore-time heal (`healMissingDebugPanels`) and the toolbar's region toggle
+ * (`layout-controls.tsx`) both read this set. */
+export const DEFAULT_DEBUG_PANELS = ['wxml', 'appdata', 'storage', 'console', 'compile']
 
 function collectPanelIds(node: LayoutNode, out: Set<string>): void {
   if (node.kind === 'tabs') {

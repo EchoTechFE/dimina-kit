@@ -79,10 +79,13 @@ export interface WorkbenchConfig {
   /** Compilation adapter */
   adapter?: CompilationAdapter
   /**
-   * @deprecated Ignored at runtime. The workbench UI always renders all four
-   * built-in panels (WXML / Console / AppData / Storage); the config no longer
-   * filters them and never lands on the context. Kept only so existing hosts
-   * passing it keep compiling.
+   * @deprecated Ignored at runtime. The config never filters the built-in
+   * panels and never lands on the context; which panels are on screen is
+   * governed solely by the persisted dock tree. A persisted tree missing part
+   * of the built-in debug strip is healed back to the full set on restore
+   * (`healMissingDebugPanels` in dock-layout.ts); the strip only disappears as
+   * a whole via the toolbar region toggle. Kept only so existing hosts passing
+   * it keep compiling.
    */
   panels?: BuiltinPanelId[]
   /** Absolute path to a custom preload script (overrides built-in simulator.js) */
