@@ -73,6 +73,15 @@ B worsens, total flat):
 
 A dimension's `gate` defaults to `total` when unset.
 
+A dimension may also declare a `tolerance` — absolute slack (same unit as the
+value) granted in the worse direction, applied to the total, the per-key
+checks, and `baseline-guard` alike (the snapshot records it so the guard sees
+it without loading adapters). Exact-count dimensions omit it; `test-coverage`
+declares `tolerance: 1` (one percentage point) because runtime coverage
+carries inherent measurement noise that a strict comparison would surface as
+false regressions. A drop inside the slack prints `✅ within tolerance` in the
+table and does not fail the gate.
+
 ## Guards beyond the per-dimension gate
 
 Three checks protect the ratchet itself, not just the dimensions it measures:

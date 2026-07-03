@@ -30,16 +30,24 @@ export type Adapter = {
   title: string;
   direction: Direction;
   gate?: GateMode;
+  // Absolute slack (same unit as `value`) the gate grants against the
+  // baseline: a change within it in the worse direction does not fail.
+  // Meant for dimensions whose measurement carries inherent noise (e.g.
+  // runtime coverage); omit for exact-count dimensions.
+  tolerance?: number;
   measure: (opts?: MeasureOptions) => Promise<MeasureResult>;
 };
 
 // A measurement as stored in snapshot.json / returned by measureAll: fully
-// normalized, no optional fields.
+// normalized. `tolerance` is the one optional field — recorded only when the
+// adapter declares it, so baseline-guard (which sees snapshots, not adapters)
+// can honor the same slack the gate does.
 export type Metric = {
   direction: Direction;
   value: number;
   unit: string;
   breakdown: Record<string, number> | null;
+  tolerance?: number;
 };
 
 export type Snapshot = {

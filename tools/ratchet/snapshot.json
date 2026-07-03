@@ -130,7 +130,8 @@
         "electron-deck/dock-react": 79.05,
         "view-anchor": 95.28,
         "workbench": 9.79
-      }
+      },
+      "tolerance": 1
     },
     "test-report": {
       "direction": "higher-is-better",

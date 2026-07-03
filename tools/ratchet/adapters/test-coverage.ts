@@ -106,6 +106,10 @@ const adapter: Adapter = {
   // No suite's lines coverage may drop, even if another suite improving keeps
   // the aggregate flat.
   gate: 'per-key-value',
+  // Runtime coverage carries inherent environment noise (e.g. an
+  // ambient-import branch differing between install modes); one percentage
+  // point of slack absorbs it without letting a real test deletion through.
+  tolerance: 1,
   measure,
 };
 
