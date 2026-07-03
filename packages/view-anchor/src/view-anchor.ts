@@ -271,6 +271,8 @@ export function createPlacementAnchor(
   let rafId: number | null = null
   let steadyFrames = 0
   const STEADY_CLOSE_FRAMES = 2
+  // Bounds hidden polls the sentinel FOLLOWS so a no-deadline window can't spin.
+  const MAX_HIDDEN_FOLLOW_FRAMES = 30
   // True while a [role="separator"] splitter drag is in progress: set on the
   // capture-phase pointerdown that opened the window, cleared on pointerup.
   // A held pointer means the drag may still resume after a static pause, so a
@@ -308,11 +310,16 @@ export function createPlacementAnchor(
     publish(p)
   }
 
+  // Hidden sentinel poll → close (true) once RO/IO recorded the real hide or the
+  // bounded follow run elapsed, else keep following (false); never publishes.
+  const shouldCloseOnHiddenPoll = (): boolean => {
+    if (lastPublished?.visible === false) return true
+    return steadyFrames++ >= MAX_HIDDEN_FOLLOW_FRAMES
+  }
+
   // One sentinel frame: measure, publish-in-frame if changed, else count toward
-  // the steady-close threshold. A changed frame re-arms; a steady frame re-arms
-  // until STEADY_CLOSE_FRAMES consecutive unchanged frames, then closes (no
-  // re-arm). Reads `disposed`/`visible` live so a frame outliving teardown is
-  // inert.
+  // the steady-close threshold. Reads `disposed`/`visible` live so a frame
+  // outliving teardown is inert.
   const sentinelFrame = (): void => {
     rafId = null
     if (disposed || !visible) {
@@ -326,6 +333,13 @@ export function createPlacementAnchor(
       return // duration elapsed → close (no re-arm)
     }
     const p = computePlacement()
+    // The sentinel FOLLOWS visible geometry and NEVER publishes a detach — a
+    // hidden poll is a relayout transient to follow until restore (the fix).
+    if (!p.visible) {
+      if (shouldCloseOnHiddenPoll()) { sentinelDeadline = null; return }
+      rafId = requestAnimationFrame(sentinelFrame)
+      return
+    }
     if (lastPublished && samePlacement(lastPublished, p)) {
       steadyFrames++
       // Steady-close only fires once the pointer is RELEASED: while a

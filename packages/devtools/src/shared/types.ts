@@ -79,10 +79,13 @@ export interface WorkbenchConfig {
   /** Compilation adapter */
   adapter?: CompilationAdapter
   /**
-   * @deprecated Ignored at runtime. The workbench UI always renders all four
-   * built-in panels (WXML / Console / AppData / Storage); the config no longer
-   * filters them and never lands on the context. Kept only so existing hosts
-   * passing it keep compiling.
+   * @deprecated Ignored at runtime. The config never filters the built-in
+   * panels and never lands on the context; which panels are on screen is
+   * governed solely by the persisted dock tree. A persisted tree missing part
+   * of the built-in debug strip is healed back to the full set on restore
+   * (`healMissingDebugPanels` in dock-layout.ts); the strip only disappears as
+   * a whole via the toolbar region toggle. Kept only so existing hosts passing
+   * it keep compiling.
    */
   panels?: BuiltinPanelId[]
   /** Absolute path to a custom preload script (overrides built-in simulator.js) */
@@ -242,15 +245,28 @@ export interface ProjectsProvider {
   saveActiveLaunchConfigId?(dirPath: string, id: string | null): void | Promise<void>
 }
 
+/**
+ * A template the user can pick from in the "新建项目" dialog. Exactly one of
+ * `source` or `generate` should be supplied; if both are omitted, the
+ * service refuses to materialise the template.
+ */
 export interface ProjectTemplate {
+  /** Stable identifier. Used by host whitelists and the `templateId` field of CreateProjectInput. */
   id: string
+  /** Human-readable label shown in the dialog. */
   name: string
   description?: string
   icon?: string
+  /** Copy-tree source. `path` must be absolute. */
   source?: { type: 'directory'; path: string }
+  /** Programmatic generator. `target` is the absolute destination directory. */
   generate?: (target: string, opts: { name: string }) => Promise<void>
 }
 
+/**
+ * Payload returned from the create-project dialog. The service uses this to
+ * scaffold disk content and to register the project with the provider.
+ */
 export interface CreateProjectInput {
   name: string
   path: string

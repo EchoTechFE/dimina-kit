@@ -19,14 +19,15 @@
     "test:coverage": "turbo run test:coverage",
     "lint": "turbo run lint",
     "dev": "turbo run dev",
-    "ratchet": "node tools/ratchet/ratchet.mjs check",
-    "ratchet:record": "node tools/ratchet/ratchet.mjs record",
-    "ratchet:check": "node tools/ratchet/ratchet.mjs check",
-    "ratchet:diff": "node tools/ratchet/ratchet.mjs diff"
+    "ratchet": "node tools/ratchet/ratchet.ts check",
+    "ratchet:record": "node tools/ratchet/ratchet.ts record",
+    "ratchet:check": "node tools/ratchet/ratchet.ts check",
+    "ratchet:diff": "node tools/ratchet/ratchet.ts diff"
   },
   "devDependencies": {
     "eslint": "^10.2.1",
     "eslint-plugin-sonarjs": "^4.1.0",
+    "jscpd": "^5.0.11",
     "turbo": "^2.9.6",
     "type-coverage": "^2.29.7",
     "typescript": "5.9.2",

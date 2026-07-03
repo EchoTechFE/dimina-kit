@@ -18,21 +18,36 @@ export type {
 	LayoutClientDeps,
 } from './layout-client.js'
 
+export { createPlacementPublisher } from './placement-publisher.js'
+export type {
+	PlacementPublisher,
+	PlacementPublisherDeps,
+} from './placement-publisher.js'
+
 export interface CreateDeckClientOptions {
 	/** 默认 `__electronDeckBridge`；必须与 host preload 对齐 */
 	readonly globalName?: string
 }
 
-// HS / EV 使用 `any` 而非 `JsonValue[]` 约束：
-// (1) host 侧 HostServiceHandler 同样是 `(...args: any[]) => unknown`，两侧对称；
+// HS / EV 使用 `never[]` 而非 `JsonValue[]` 约束：
+// (1) host 侧 HostServiceHandler 同样是 `(...args: never[]) => unknown`，两侧对称；
 // (2) JsonValue 索引签名挡掉常见 host 写法（`(p: { code: string }) => ...`），
 //     强迫 rest-only 签名时 `Parameters<HS[K]>` 推不出真实参数类型；
 // (3) Electron IPC 实际走 structured clone（非 JSON），原约束的"前提"本就错；
 // (4) 真要 runtime 校验，在 transport 边界用 `runtime.ipc.handle({ validator })`
 //     与 protocol envelope（`InvokeRequest.args: readonly JsonValue[]`）已经够。
+// `never[]` (not `unknown[]`) because rest-parameter position is checked
+// contravariantly: a handler like `(p: { code: string }) => ...` is only
+// assignable into `(...args: T[]) => unknown` when T is assignable INTO its
+// param type — `never` always is, `unknown` is not (it would reject every
+// narrower host handler, defeating point (2) above).
+/** @experimental No production consumer yet — pairs with `DeckConfig.hostServices`
+ *  / `events`, which only `examples/` / `spike/` set; the devtools `backend`
+ *  assembly never touches this client. `createDeckLayoutClient` and
+ *  `createPlacementPublisher` (re-exported above) are unaffected — they have
+ *  real consumers. */
 export interface DeckClient<
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	HS extends Record<keyof HS, (...args: any[]) => unknown>,
+	HS extends Record<keyof HS, (...args: never[]) => unknown>,
 	EV extends readonly HostEvent<JsonValue>[],
 > {
 	ready(): Promise<void>
@@ -46,9 +61,9 @@ export interface DeckClient<
 	): Disposable
 }
 
+/** @experimental No production consumer yet — see the note on {@link DeckClient}. */
 export function createDeckClient<
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	HS extends Record<keyof HS, (...args: any[]) => unknown>,
+	HS extends Record<keyof HS, (...args: never[]) => unknown>,
 	EV extends readonly HostEvent<JsonValue>[],
 >(options?: CreateDeckClientOptions): DeckClient<HS, EV> {
 	const globalName = options?.globalName ?? DEFAULT_BRIDGE_GLOBAL

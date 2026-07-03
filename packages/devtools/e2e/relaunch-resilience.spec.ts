@@ -148,10 +148,18 @@ async function relaunchViaPopover(
   targetPage: string,
 ) {
   await mainWindow.getByRole('button', { name: /普通编译/ }).click()
-  await mainWindow.waitForTimeout(800)
-
-  const popoverWcId = await electronApp.evaluate(({ webContents }) =>
-    webContents.getAllWebContents().find((wc) => wc.getURL().includes('entries/popover'))?.id || 0,
+  // The popover WCV is created asynchronously after the click; poll for it
+  // instead of a fixed sleep (a slow tick leaves the one-shot lookup empty).
+  const popoverWcId = await pollUntil(
+    () => electronApp.evaluate(({ webContents }) => {
+      const wc = webContents.getAllWebContents().find((w) => w.getURL().includes('entries/popover'))
+      // Report the popover only once it can execute JS (loaded) — injecting
+      // into a loading wc queues a did-stop-loading waiter instead.
+      return wc && !wc.isLoading() ? wc.id : 0
+    }),
+    (id) => id > 0,
+    8000,
+    200,
   )
   if (!popoverWcId) throw new Error('Popover not found')
 

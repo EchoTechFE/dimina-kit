@@ -60,6 +60,15 @@ function workerEntryPath(): string {
 	return path.join(__dirname, 'compile-worker-entry.ts')
 }
 
+/** execArgv for the entry — same rule as compile-worker.ts (a `.ts` entry needs
+ * type stripping, default only since Node 22.18; like the suite itself this
+ * assumes Node ≥22.6, where the explicit flag exists). */
+function workerExecArgv(entry: string): string[] {
+	return entry.endsWith('.ts')
+		? ['--experimental-strip-types', '--disable-warning=ExperimentalWarning']
+		: []
+}
+
 function pidAlive(pid: number): boolean {
 	try {
 		process.kill(pid, 0)
@@ -154,7 +163,8 @@ function makeFixture(): string {
 
 describe('① orphan safety net — the worker kills ITSELF when the IPC channel dies', () => {
 	it('a forked entry whose parent disconnects the IPC channel exits ON ITS OWN with code 0 (no kill from anyone)', async () => {
-		const child = fork(workerEntryPath(), [], { execArgv: [], silent: true })
+		const entry = workerEntryPath()
+		const child = fork(entry, [], { execArgv: workerExecArgv(entry), silent: true })
 		doomedPids.push(child.pid!)
 		await once(child, 'spawn')
 
@@ -189,16 +199,17 @@ describe('① orphan safety net — the worker kills ITSELF when the IPC channel
 		// stdout, then SIGKILLs ITSELF. SIGKILL is the harshest parent death —
 		// no exit handlers, no kill(child), nothing but the OS closing the
 		// IPC pipe. The orphan must notice and exit.
+		const entry = workerEntryPath()
 		const helperSource = `
 			const { fork } = require('node:child_process')
 			const fs = require('node:fs')
-			const child = fork(process.argv[1], [], { execArgv: [], silent: true })
+			const child = fork(process.argv[1], [], { execArgv: ${JSON.stringify(workerExecArgv(entry))}, silent: true })
 			child.on('spawn', () => {
 				fs.writeSync(1, 'CHILD_PID=' + child.pid + '\\n')
 				process.kill(process.pid, 'SIGKILL')
 			})
 		`
-		const parent = spawn(process.execPath, ['-e', helperSource, workerEntryPath()], {
+		const parent = spawn(process.execPath, ['-e', helperSource, entry], {
 			stdio: ['ignore', 'pipe', 'pipe'],
 		})
 		doomedPids.push(parent.pid!)

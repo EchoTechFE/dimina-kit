@@ -17,12 +17,13 @@
 import type { MiniAppContext } from './types'
 import { isPersistentSimulatorApi } from '../shared/simulator-api-metadata.js'
 
-// Loose handler signature: SimulatorMiniApp's apiRegistry binds `this` to the
-// MiniApp instance (a superset of MiniAppContext); the wx.* handlers in
-// simulator-api*.ts type `this` as MiniAppContext. We invoke with .call(ctx)
-// where ctx prototypes the MiniApp, so structurally both shapes work.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type LooseApiHandler = (this: any, params?: unknown) => unknown | Promise<unknown>
+// No `this` parameter: SimulatorMiniApp's apiRegistry binds `this` to the
+// MiniApp instance (a superset of MiniAppContext), while the wx.* handlers in
+// simulator-api*.ts type `this` as MiniAppContext — two incompatible `this`
+// types with no common non-bottom supertype. Omitting `this` here sidesteps
+// that: a function type with no declared `this` is compatible with either
+// caller shape, and `.call(ctx, …)` below still binds the real context.
+type LooseApiHandler = (params?: unknown) => unknown | Promise<unknown>
 
 interface MiniAppLike {
   appId: string
@@ -109,9 +110,25 @@ export function runApiAsync(
     const FAIL = Symbol('sim-cb-fail')
     const COMPLETE = Symbol('sim-cb-complete')
 
+    // Set when the handler wires the injected SUCCESS or FAIL sentinel. Wiring
+    // a result callback means the handler reports its verdict THROUGH that
+    // callback rather than via a synchronous return value — and, since the call
+    // may resolve on a later tick (fetch, a file-picker change event, an image
+    // onload, a modal's user-tap), the void it returns synchronously is not the
+    // final word. We use this to tell such handlers apart from genuinely
+    // synchronous ones in the sync-return path below.
+    //
+    // The forwarded params reach us with success/fail/complete stripped by main
+    // (see forwardApiCallToSimulator in bridge-router), so the params can't tell
+    // us the call is async; the wired result callback is the only signal. SUCCESS
+    // alone counts: handlers like showModal wire success-only (they don't fail)
+    // yet still deliver on user interaction.
+    let wiredResultCallback = false
+
     const ctx: MiniAppContext = Object.create(miniApp as object) as MiniAppContext
     ctx.createCallbackFunction = (id: unknown) => {
       if (id === undefined || id === null) return undefined
+      if (id === SUCCESS || id === FAIL) wiredResultCallback = true
       return (...args: unknown[]) => {
         const arg = args[0]
         if (id === SUCCESS) {
@@ -122,9 +139,23 @@ export function runApiAsync(
               ? String((arg as { errMsg?: unknown }).errMsg)
               : `${name}:fail`
           finish({ ok: false, errMsg, result: arg })
+        } else if (id === COMPLETE && !keep) {
+          // A handler that finishes via complete WITHOUT ever firing
+          // success/fail (e.g. previewImage([]) / several fs.ts guard paths
+          // early-return after onComplete). Settle so the call doesn't hang
+          // until the main-side no-handler timeout. Normal handlers fire
+          // success/fail first (settling), making this a no-op; keep
+          // subscriptions never settle on complete.
+          //
+          // INVARIANT this relies on: handlers MUST fire success/fail BEFORE
+          // complete (WeChat's own ordering). A handler that called complete
+          // first would be settled ok:true here and its real success/fail
+          // verdict dropped by the settle guard. Every simulator handler today
+          // follows result-then-complete; new ones must keep to it.
+          finish({ ok: true, result: arg })
         }
-        // COMPLETE: drop. Main fires the original complete callback against
-        // the service-side id once it receives our verdict.
+        // Main fires the original complete callback against the service-side id
+        // once it receives our verdict.
       }
     }
 
@@ -132,16 +163,18 @@ export function runApiAsync(
       params && typeof params === 'object' && !Array.isArray(params)
         ? { ...(params as Record<string, unknown>) }
         : {}
-    const hadSuccess = userParams.success !== undefined && userParams.success !== null
-    const hadFail = userParams.fail !== undefined && userParams.fail !== null
-    const hadComplete = userParams.complete !== undefined && userParams.complete !== null
 
-    // Always inject sentinel callbacks so handlers that gate on the presence
-    // of any callback (e.g. chooseImage's onSuccess/onFail paths) still drive
-    // the verdict, even if the original caller omitted them.
+    // Always inject ALL THREE sentinel callbacks. Main strips the caller's
+    // success/fail/complete before forwarding (forwardApiCallToSimulator in
+    // bridge-router), so gating injection on what the params carried would never
+    // fire — the caller's callbacks are simply gone by the time we route. In
+    // particular COMPLETE must always be injected: a handler whose only exit on
+    // some path is `onComplete()` (previewImage([]), fs.ts guard returns) relies
+    // on the COMPLETE sentinel reaching us to settle; otherwise it hangs until
+    // the main-side no-handler timeout and wrongly reports a fail.
     userParams.success = SUCCESS
     userParams.fail = FAIL
-    if (hadComplete) userParams.complete = COMPLETE
+    userParams.complete = COMPLETE
 
     try {
       const ret = (handler as LooseApiHandler).call(ctx, userParams)
@@ -155,21 +188,34 @@ export function runApiAsync(
         )
         return
       }
-      // Sync handler that ignored our injected callbacks (e.g. getSystemInfoSync)
-      // — use its return value as the success result.
-      if (!hadSuccess && !hadFail) {
-        if (keep) {
-          // Persistent subscription (`audioListen`): the handler bound its DOM
-          // listeners and returned synchronously. Its real verdicts arrive later
-          // on each media event, so resolve the promise for sequencing WITHOUT
-          // emitting — emitting here would be an empty one-shot settle that marks
-          // the call settled and drops every subsequent event fire.
-          resolve()
-        } else {
-          finish({ ok: true, result: ret })
-        }
+      // The handler returned synchronously. If it already drove a sentinel
+      // (sync success/fail), the call is settled and there is nothing to do.
+      if (settled) return
+      if (keep) {
+        // Persistent subscription (`audioListen`): the handler bound its DOM
+        // listeners and returned synchronously. Its real verdicts arrive later
+        // on each media event, so resolve the promise for sequencing WITHOUT
+        // emitting — emitting here would be an empty one-shot settle that marks
+        // the call settled and drops every subsequent event fire.
+        resolve()
+        return
       }
-      // Otherwise: wait for the captured success/fail callback above to fire.
+      if (wiredResultCallback) {
+        // The handler wired a success/fail callback and returned void without
+        // settling: it completes asynchronously and reports through the injected
+        // sentinels (request via fetch, chooseImage via the file-picker change
+        // event, showModal via the user tap, downloadFile/uploadFile, …).
+        // Settling here with the void return would emit a premature
+        // `{ ok: true, result: undefined }` and the settle guard would then drop
+        // the real verdict — the bug where a failed request fired
+        // `success(undefined)` instead of `fail`. Wait for the sentinel instead.
+        resolve()
+        return
+      }
+      // No async failure path was wired: a synchronous handler. Use its return
+      // value as the success result (e.g. getSystemInfoSync), or treat a void
+      // fire-and-forget as a bare success.
+      finish({ ok: true, result: ret })
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
       finish({ ok: false, errMsg: `${name}:fail ${msg}` })

@@ -1,9 +1,10 @@
-import { test as base, _electron, type ElectronApplication, type Page } from '@playwright/test'
+import { test as base, expect, _electron, type ElectronApplication, type Page } from '@playwright/test'
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { ProjectsChannel } from '../src/shared/ipc-channels'
 import { ipcInvoke, openProjectInUI, closeProject, resetSimulatorState } from './helpers'
+import { armMaxListenersGuard, type MaxListenersGuard } from './resource-guards'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -26,6 +27,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 export interface ElectronFixtures {
   electronApp: ElectronApplication
   mainWindow: Page
+  /**
+   * Auto fixture (leak gate): fails any test during which the Electron app's
+   * stderr printed a MaxListenersExceededWarning — a leaked-listener class that
+   * memory metrics can't see. Depend on it implicitly; never reference it.
+   */
+  _maxListenersGate: void
 }
 
 export interface ElectronWorkerFixtures {
@@ -38,6 +45,8 @@ interface WorkerElectronHandle {
   /** Force-relaunch the Electron process, replacing the held instance. */
   relaunch: () => Promise<void>
   userDataDir: string
+  /** stderr MaxListenersExceededWarning collector for the CURRENT app instance. */
+  guard: MaxListenersGuard
 }
 
 // playwright.config.ts sets DIMINA_DEVTOOLS_DATA_DIR at runner level but
@@ -115,6 +124,7 @@ export const test = base.extend<ElectronFixtures, ElectronWorkerFixtures>({
       const userDataDir = userDataDirFor(workerInfo.workerIndex)
 
       let app = await launchElectron(userDataDir)
+      let guard = armMaxListenersGuard(app)
 
       const handle: WorkerElectronHandle = {
         get app() {
@@ -123,8 +133,12 @@ export const test = base.extend<ElectronFixtures, ElectronWorkerFixtures>({
         relaunch: async () => {
           await app.close().catch(() => {})
           app = await launchElectron(userDataDir)
+          guard = armMaxListenersGuard(app)
         },
         userDataDir,
+        get guard() {
+          return guard
+        },
       } as WorkerElectronHandle
 
       await use(handle)
@@ -149,6 +163,19 @@ export const test = base.extend<ElectronFixtures, ElectronWorkerFixtures>({
     }
     await use(win)
   },
+
+  _maxListenersGate: [
+    async ({ _workerElectron }, use) => {
+      const seenBefore = _workerElectron.guard.warnings().length
+      await use(undefined)
+      const during = _workerElectron.guard.warnings().slice(seenBefore)
+      expect(
+        during,
+        'the app emitted MaxListenersExceededWarning during this test — a listener leaked on a shared emitter',
+      ).toEqual([])
+    },
+    { auto: true },
+  ],
 })
 
 /**

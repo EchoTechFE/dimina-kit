@@ -11,12 +11,56 @@ how zoom flows.
 The renderer's `<SimulatorPanel>` draws **NO** phone and **NO** bezel — only a
 toolbar, an EMPTY flex:1 placeholder div, and a page-path bar. The simulator WCV
 is overlaid on exactly that placeholder region. Inside the WCV,
-`simulator.html` → **`DeviceShell` draws the WHOLE phone** (rounded corners,
-notch, status bar, nav-bar, page viewport, tab-bar, home-indicator) at FIXED
-device-logical size, on a gray "desk" that fills the WCV and **scrolls natively**
-when the phone is larger than the region. The WCV is a plain rectangle with no
-native corner radius — its own web-viewport is the (straight-edged) clip. The
-page itself is a render-host `<webview>` guest nested inside the DeviceShell.
+`simulator.html` → `SimulatorApp` (`src/simulator/simulator-app.tsx`) →
+**`DeviceShell` draws the WHOLE phone** (rounded corners, notch, status bar,
+nav-bar, page viewport, tab-bar, home-indicator) at FIXED device-logical size,
+on a gray "desk" that fills the WCV and **scrolls natively** when the phone is
+larger than the region. The WCV is a plain rectangle with no native corner
+radius — its own web-viewport is the (straight-edged) clip. The page itself is
+a render-host `<webview>` guest nested inside the DeviceShell.
+
+## Recompile = soft reload (ready-then-swap), not a WCV rebuild
+
+A watcher rebuild does NOT tear the WCV down. The renderer asks main to
+soft-reload (`SimulatorChannel.SoftReload`); when the shell is live+ready main
+forwards `SIMULATOR_EVENTS.RELAUNCH {url}` into the WCV, and `SimulatorApp`
+boots a SECOND app session whose DeviceShell mounts invisibly
+(`visibility:hidden` — `display:none` would keep its `<webview>` guest from
+attaching) next to the live one. When the new session's root page reports
+`DOM_READY` the two swap in a single React commit and the old session is
+disposed; a session that never becomes ready is dropped after
+`SOFT_RELOAD_TIMEOUT_MS` and the live shell stays. During the overlap BOTH
+shells receive every `SIMULATOR_EVENTS` broadcast, so session-scoped events
+(API_CALL / NAV_ACTION / TAB_ACTION) are subscribed through
+`SimulatorMiniApp.onSessionEvent`, which drops payloads naming another
+`appSessionId`. Shell wrappers render in boot order and surviving nodes never
+move in the DOM — a moved `<webview>` re-attaches and reloads its guest. The
+hard path (`attachNativeSimulator`, full teardown + rebuild) remains the
+fallback when main reports no live+ready shell, and the only path for project
+open/close and device relaunch.
+
+### Leak guards on the churn cycle
+
+Coarse memory sampling can't see a leaked listener or a stale map entry, so
+resource coverage is count-based. The bridge router owns every session ledger
+(RouterState) and therefore also exposes the census — `BridgeRouterHandle.census()`,
+published to e2e as the NODE_ENV=test main-process global
+`__diminaResourceCensus`. Three layers consume it:
+
+- `src/main/ipc/bridge-router-census.test.ts` — unit: ledger shape + exact
+  return-to-baseline across spawn → dispose.
+- `e2e/soft-reload-census.spec.ts` — default suite, real Electron: 5 real
+  recompiles (round-unique marker must render) then the ledger, the shell wc
+  id and the webContents population must return exactly to baseline; closing
+  the project must return the ledger to the pre-open snapshot.
+- `e2e/hot-reload-stress.spec.ts` — manual-only (`HOT_RELOAD_STRESS=1`):
+  30-round memory-trend + webContents-count backstop for what counting can't
+  price (heap growth).
+
+Independently, the fixtures' auto `_maxListenersGate` fails any fixture-based
+test during which the app printed `MaxListenersExceededWarning` on stderr
+(`e2e/resource-guards.ts`) — the one-dead-listener-per-cycle class surfaces as
+a hard failure instead of log noise.
 
 ```
 renderer (z2)          SimulatorPanel: toolbar / flex:1 placeholder / path-bar
@@ -142,7 +186,7 @@ safe-area doc for the CDP wiring.)
 |---|---|
 | `src/renderer/.../project-runtime/components/simulator-panel.tsx` | z2 panel: toolbar / placeholder / path-bar; owns the simulator `createPlacementAnchor` |
 | `src/simulator/device-shell/device-shell.tsx` + `device-shell.css` | DeviceShell: draws the whole phone inside the WCV; hosts render-host `<webview>` guests |
-| `src/main/services/views/view-manager.ts` | `setNativeSimulatorViewBounds` (sole bounds authority + zoomFactor + pre-attach cache); `attachNativeSimulator` |
+| `src/main/services/views/native-simulator-view.ts` | native-simulator domain module: `attachNativeSimulator`, `softReloadNativeSimulator`, bounds/zoom application (`view-manager.ts` is the composition root wiring the per-domain view modules) |
 | `src/main/services/layout/index.ts` | `computeNativeSimulatorViewParams` |
 | `src/renderer/shared/api/view-api.ts` | `setNativeSimulatorBounds` IPC wrapper (`simulator:set-native-bounds`) |
 | `src/service-host/sync-impls/menu-button.ts` | sync `getSystemInfoSync` path (build-order sensitive) |

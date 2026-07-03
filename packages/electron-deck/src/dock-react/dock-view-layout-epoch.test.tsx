@@ -58,7 +58,7 @@ beforeEach(() => {
 // ───────────────────────── tests ─────────────────────────
 
 describe('useDockLayoutEpoch inside <DockView>', () => {
-	it('reports epoch 0 on first frame and bumps on each external model.apply', () => {
+	it('reports epoch 0 on first frame and bumps only on a committed model.apply', () => {
 		const sink: number[] = []
 		const model = createLayoutModel(makeTree())
 		const { container } = render(
@@ -77,16 +77,25 @@ describe('useDockLayoutEpoch inside <DockView>', () => {
 		expect(read()).toBe('0')
 		expect(sink[sink.length - 1]).toBe(0)
 
-		// First successful identity apply → revision 1.
+		// An identity apply is a no-op: nothing committed, so the epoch must NOT
+		// bump — a false "something moved" pulse would trigger native-overlay
+		// re-measures for a layout that did not change.
 		act(() => {
 			model.apply((t) => t)
+		})
+		expect(read()).toBe('0')
+		expect(sink[sink.length - 1]).toBe(0)
+
+		// A committed apply (fresh tree reference) → revision 1.
+		act(() => {
+			model.apply((t) => ({ ...t }))
 		})
 		expect(read()).toBe('1')
 		expect(sink[sink.length - 1]).toBe(1)
 
-		// Second identity apply → revision 2.
+		// A second committed apply → revision 2.
 		act(() => {
-			model.apply((t) => t)
+			model.apply((t) => ({ ...t }))
 		})
 		expect(read()).toBe('2')
 		expect(sink[sink.length - 1]).toBe(2)

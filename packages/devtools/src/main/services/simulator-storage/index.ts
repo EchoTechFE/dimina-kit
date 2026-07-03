@@ -22,6 +22,7 @@ import {
   type ElementInspection,
   type StorageItem,
   type StorageWriteResult,
+  type SyncStorageChange,
 } from '../../../shared/ipc-channels.js'
 import { IpcRegistry, type SenderPolicy } from '../../utils/ipc-registry.js'
 import type { BridgeRouterHandle } from '../../ipc/bridge-router.js'
@@ -52,6 +53,14 @@ export const STORAGE_API_NAMES = new Set([
 export interface SimulatorStorageHandle extends Disposable {
   /** Present only under native-host; wired to ctx.storageApi for bridge-router. */
   storageApi: StorageApi | null
+  /**
+   * Native-host SYNC-storage liveness: bridge-router calls this on each
+   * `storageChanged` container message the service-host posts after a
+   * `setStorageSync`/`removeStorageSync`/`clearStorageSync`. Those write the
+   * service-host `localStorage` directly (bypassing main), so they'd otherwise
+   * leave the panel stale until reload — this pushes the matching `StorageEvent`.
+   */
+  onSyncStorageChange(appId: string, change: SyncStorageChange): void
 }
 
 function isSimulatorWebview(wc: WebContents): boolean {
@@ -640,7 +649,31 @@ export function setupSimulatorStorage(
     ? { invoke: runtimeInvoke }
     : null
 
-  return { dispose: () => registry.dispose(), storageApi }
+  /**
+   * SYNC wx storage APIs run inside the service-host window and write
+   * `localStorage` directly, so they never reach `setItem`/`runtimeInvoke` here.
+   * The service-host posts the change over `DiminaServiceBridge` and bridge-router
+   * routes it here so the panel stays live. Only the ACTIVE app's changes are
+   * surfaced (the panel shows one app); the key already carries the `${appId}_`
+   * prefix, matching the CDP / async event shape.
+   */
+  function onSyncStorageChange(appId: string, change: SyncStorageChange): void {
+    if (appId !== getActiveAppId()) return
+    if (host.isDestroyed()) return
+    switch (change.op) {
+      case 'set':
+        pushSyntheticEvent({ type: 'added', key: change.key, newValue: change.value })
+        break
+      case 'remove':
+        pushSyntheticEvent({ type: 'removed', key: change.key })
+        break
+      case 'clear':
+        host.send(SimulatorStorageChannel.Event, { type: 'cleared' })
+        break
+    }
+  }
+
+  return { dispose: () => registry.dispose(), storageApi, onSyncStorageChange }
 }
 
 // Element inspection delegates to the simulator preload's __simulatorData

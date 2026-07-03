@@ -232,7 +232,7 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
         sourcemap: true,
         fileTypes: ctx.fileTypes,
         watch: compile.watch,
-        onRebuild: () => sendStatus('ready', '编译完成，已热更新', true),
+        onRebuild: () => sendStatus('ready', '编译完成，已重启', true),
         onBuildError: (err: unknown) => sendStatus('error', String(err)),
         onLog: (entry: { stream: 'stdout' | 'stderr'; text: string }) => {
           if (sessionGeneration !== logGeneration) return

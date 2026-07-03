@@ -36,8 +36,8 @@
 - **simulator 列宽 minPx 下限**：引擎的 **per-child `minPx` `constraint`** 把 simulator leaf 下限设到设备
   像素宽，分隔条拖拽与权重缩放都不改它；切设备时在模型里 `setConstraint` 重新 pin。
 - **序列化 / 恢复**：DockView 的每次布局 mutation 经 `serializeLayout` 持久化成不透明字符串
-  （`useLayoutStore` 的 `dockTree`）；下次开项目 `parseLayout` + `validateTree` 通过才原样恢复，
-  否则 fallback 到默认树。
+  （`useLayoutStore` 的 `dockTree`）；下次开项目 `parseLayout` + `validateTree` 通过后恢复并对账
+  （0 权重治愈 + debug 区域 self-heal，见 §2.3），否则 fallback 到默认树。
 
 ## 1. 数据模型（来自布局引擎）
 
@@ -120,8 +120,17 @@ simulator 子是 minPx 柔性下限（也算柔性）、sibling 是权重（`nul
 ### 2.3 fallback-safe 恢复（`buildDockModel` / `restoreTreeOrDefault`）
 
 从持久化的不透明序列化树建 `LayoutModel`。只有「`parseLayout` 往返成功 **且** `validateTree`
-对已知 panelId 集合零违规」的树才原样恢复；`null` / 坏 JSON / 结构非法 / 引用了未知面板的树**全部**
+对已知 panelId 集合零违规」的树才被恢复；`null` / 坏 JSON / 结构非法 / 引用了未知面板的树**全部**
 fallback 到 `buildDefaultDockTree(simPanelWidth)`。
+
+恢复后的树还要过两道对账（结果与持久化值不同时由 `DockableLayout` 的 mount force-persist 写回）：
+
+- `sanitizeFlexibleWeights` — 把被拖到 ~0 权重持久化下来的弹性子项抬回最小正值，防止恢复出一个
+  不可见面板。
+- `healMissingDebugPanels` — debug 区域是 all-or-nothing（工具栏「调试器」开关整体隐/显，
+  per-tab 关闭被 `closable:false` 挡住），所以**部分缺失**（≥1 个但不满 `DEFAULT_DEBUG_PANELS`
+  全集）不可能是用户意图，只能是旧版 tab 可误关的遗留坏状态、或老树缺后来新增的内置面板——缺的
+  经 `reopenPanel` 补回幸存面板所在组。**零个** debug 面板 = 合法的区域隐藏，不动。
 
 ### 2.4 串联点（`project-runtime.tsx`）
 
@@ -285,6 +294,9 @@ devtools 只提供 panel registry + 默认树 + 恢复策略 + 两个原生 over
 2. `project-runtime.tsx` — `DOCK_PANEL_IDS` 加新 id；`renderDomPanel` 加一个分支返回它的 React 节点。
 3. （可选）`buildDefaultDockTree` — 若想让新面板默认出现，把它放进某个标签组。否则用户可拖进来 /
    从命令入口加（取决于上层 UI）。
+4. 若新面板属于内置 debug 区域：加进 `DEFAULT_DEBUG_PANELS`（dock-layout.ts 导出，是「debug 区域
+   由什么组成」的单一真相，恢复期 self-heal 与工具栏区域开关都读它）——存量用户的旧持久化树会在
+   下次加载时自动补上这个新面板，无需迁移。
 
 无需碰 view-manager、无需 anchor——DOM 面板由 React 自挂载/卸载。
 

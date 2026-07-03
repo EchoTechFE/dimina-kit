@@ -3,7 +3,7 @@ import {
   SimulatorAttachNativeSchema,
   SimulatorCustomApiInvokeSchema,
   SimulatorSetDeviceInfoSchema,
-  SimulatorSetNativeBoundsSchema,
+  SimulatorSoftReloadSchema,
 } from '../../shared/ipc-schemas.js'
 import { deviceInfoToHostEnv } from '../../shared/bridge-channels.js'
 // eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
@@ -18,12 +18,12 @@ export function registerSimulatorIpc(ctx: Pick<WorkbenchContext, 'views' | 'noti
       const [simulatorUrl, simWidth] = validate(SimulatorChannel.AttachNative, SimulatorAttachNativeSchema, args)
       return ctx.views.attachNativeSimulator(simulatorUrl, simWidth)
     })
+    .handle(SimulatorChannel.SoftReload, (_, ...args: unknown[]) => {
+      const [simulatorUrl] = validate(SimulatorChannel.SoftReload, SimulatorSoftReloadSchema, args)
+      return ctx.views.softReloadNativeSimulator(simulatorUrl)
+    })
     .handle(SimulatorChannel.Detach, () => {
       ctx.views.detachSimulator()
-    })
-    .handle(SimulatorChannel.SetNativeBounds, (_, ...args: unknown[]) => {
-      const [p] = validate(SimulatorChannel.SetNativeBounds, SimulatorSetNativeBoundsSchema, args)
-      ctx.views.setNativeSimulatorViewBounds(p)
     })
     .handle(SimulatorChannel.SetDeviceInfo, (_, ...args: unknown[]) => {
       const [device] = validate(SimulatorChannel.SetDeviceInfo, SimulatorSetDeviceInfoSchema, args)

@@ -75,7 +75,10 @@ function makeServiceWc() {
  * configured value to simulate the API being ready (true) or still booting
  * (false → forwarder retries / falls back).
  */
-function makeDevtoolsWc(apiReady: boolean | (() => boolean) = true) {
+function makeDevtoolsWc(
+  apiReady: boolean | (() => boolean) = true,
+  isLoading: () => boolean = () => false,
+) {
   const exec = vi.fn((_script: string, _userGesture?: boolean) =>
     Promise.resolve(typeof apiReady === 'function' ? apiReady() : apiReady))
   // The forwarder watches the host wc's 'destroyed' event to auto-clear the
@@ -84,6 +87,8 @@ function makeDevtoolsWc(apiReady: boolean | (() => boolean) = true) {
   const destroyedListeners = new Set<() => void>()
   const wc = {
     isDestroyed: () => false,
+    isLoading,
+    getURL: () => 'devtools://devtools/bundled/devtools_app.html',
     executeJavaScript: exec,
     once: (ev: string, fn: () => void) => { if (ev === 'destroyed') destroyedListeners.add(fn) },
     removeListener: (ev: string, fn: () => void) => { if (ev === 'destroyed') destroyedListeners.delete(fn) },
@@ -348,6 +353,61 @@ describe('createNetworkForwarder — native DevTools dispatch', () => {
     expect((rws.params as { requestId: string }).requestId).toMatch(/^dimina:sim:/)
   })
 
+  it('holds the queue while the MAIN frame is loading even when the coarse isLoading reads false', async () => {
+    const sim = makeSimWc()
+    const svc = makeServiceWc()
+    const dt = makeDevtoolsWc(true, () => false)
+    // Electron's internal executeJavaScript gate is isLoadingMainFrame, not
+    // isLoading — the flush must consult the same predicate or every dispatch
+    // during the divergence window queues one did-stop-loading waiter.
+    Object.assign(dt.wc, { isLoadingMainFrame: () => true })
+    const fwd = createNetworkForwarder({ getServiceWc: () => svc.wc })
+    try {
+      fwd.setDevtoolsHost(dt.wc)
+      fwd.attachSimulator(sim.wc)
+
+      sim.emitMessage('Network.requestWillBeSent', { requestId: 'r1', request: { url: 'https://api/x', method: 'GET' } })
+      await flushMicrotasks()
+      expect(dt.exec).not.toHaveBeenCalled()
+    } finally {
+      // isLoadingMainFrame never flips back to false, so without dispose() this
+      // test's real ready-retry timer keeps re-arming past the test's end and
+      // can get adopted by a LATER test's vi.useFakeTimers() (which only
+      // intercepts new timer calls, not this already-scheduled real one) —
+      // the real cause of the CI-only flake in the ready-timeout test below.
+      void fwd.dispose()
+    }
+  })
+
+  it('holds the queue while the front-end is loading — no executeJavaScript per event, delivery resumes post-load', async () => {
+    const sim = makeSimWc()
+    const svc = makeServiceWc()
+    let loading = true
+    const dt = makeDevtoolsWc(true, () => loading)
+    const fwd = createNetworkForwarder({ getServiceWc: () => svc.wc })
+    fwd.setDevtoolsHost(dt.wc)
+    fwd.attachSimulator(sim.wc)
+
+    // A relaunch-style burst against a loading front-end: every dispatch would
+    // queue one did-stop-loading waiter on the wc emitter — the flush must not
+    // call executeJavaScript at all until the load ends.
+    for (let i = 0; i < 5; i++) {
+      sim.emitMessage('Network.requestWillBeSent', { requestId: `r${i}`, request: { url: `https://api/${i}`, method: 'GET' } })
+    }
+    await flushMicrotasks()
+    expect(dt.exec).not.toHaveBeenCalled()
+
+    loading = false
+    sim.emitMessage('Network.requestWillBeSent', { requestId: 'r-post', request: { url: 'https://api/post', method: 'GET' } })
+    await flushMicrotasks()
+    // The held burst is preserved (bounded queue) and delivered after load.
+    const dispatched = dt.exec.mock.calls.flatMap((c) => decodeDispatched(String(c[0])))
+    const urls = dispatched.map((d) => (d.params as { request?: { url?: string } }).request?.url)
+    expect(urls).toContain('https://api/0')
+    expect(urls).toContain('https://api/4')
+    expect(urls).toContain('https://api/post')
+  })
+
   it('does NOT forward dataReceived (二期 deferred)', async () => {
     const sim = makeSimWc()
     const svc = makeServiceWc()
@@ -404,16 +464,23 @@ describe('createNetworkForwarder — native DevTools dispatch', () => {
     // API reports not-ready (false): the dispatch script returns false.
     const dt = makeDevtoolsWc(false)
     const fwd = createNetworkForwarder({ getServiceWc: () => svc.wc })
-    fwd.setDevtoolsHost(dt.wc)
-    fwd.attachSimulator(sim.wc)
+    try {
+      fwd.setDevtoolsHost(dt.wc)
+      fwd.attachSimulator(sim.wc)
 
-    sim.emitMessage('Network.requestWillBeSent', { requestId: 'r1', request: { url: 'x', method: 'GET' } })
-    await flushMicrotasks()
+      sim.emitMessage('Network.requestWillBeSent', { requestId: 'r1', request: { url: 'x', method: 'GET' } })
+      await flushMicrotasks()
 
-    // It attempted the native dispatch (API said not-ready) and did NOT fall to
-    // the console for a non-terminal event — it keeps the queue for retry.
-    expect(dt.exec).toHaveBeenCalled()
-    expect(svc.exec).not.toHaveBeenCalled()
+      // It attempted the native dispatch (API said not-ready) and did NOT fall to
+      // the console for a non-terminal event — it keeps the queue for retry.
+      expect(dt.exec).toHaveBeenCalled()
+      expect(svc.exec).not.toHaveBeenCalled()
+    } finally {
+      // The API never reports ready, so without dispose() this test's real
+      // ready-retry timer leaks past the test's end — see the same-shaped
+      // comment on the 'holds the queue while the MAIN frame is loading' test.
+      void fwd.dispose()
+    }
   })
 
   it('clears the DevTools host on setDevtoolsHost(null), reverting to console', async () => {
@@ -492,6 +559,47 @@ describe('createNetworkForwarder — sink state machine (no double-display)', ()
       await vi.runAllTimersAsync()
       expect(svc.exec).toHaveBeenCalledTimes(1)
     } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('MAJOR 1: switching to a second never-ready host restarts its own ready-timeout window', async () => {
+    vi.useFakeTimers()
+    let fwd: ReturnType<typeof createNetworkForwarder> | undefined
+    try {
+      const sim = makeSimWc()
+      const svc = makeServiceWc()
+      // Neither host ever reports its DevTools API as ready.
+      const hostA = makeDevtoolsWc(false)
+      const hostB = makeDevtoolsWc(false)
+      fwd = createNetworkForwarder({ getServiceWc: () => svc.wc })
+      // attachSimulator BEFORE setDevtoolsHost: attachSimulator internally calls
+      // detachSimulator(), which resets the sink state machine to 'idle'. Calling
+      // it between the two setDevtoolsHost() calls below would reset the probing
+      // state and hide the exact race this test targets — the host switch below
+      // must land while sink is still 'probing' from hostA.
+      fwd.attachSimulator(sim.wc)
+      fwd.setDevtoolsHost(hostA.wc)
+
+      // Still inside hostA's probing window (< 5000ms) — no degrade yet.
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(svc.exec).not.toHaveBeenCalled()
+
+      // Switch hosts before hostA's ready-timeout elapses. hostB must get its
+      // OWN fresh probing window — it must not inherit/skip hostA's expiry
+      // and get stuck probing forever.
+      fwd.setDevtoolsHost(hostB.wc)
+
+      sim.emitMessage('Network.requestWillBeSent', { requestId: 'r1', request: { url: 'a', method: 'GET' } })
+      sim.emitMessage('Network.loadingFinished', { requestId: 'r1' })
+
+      // Past hostB's own 5000ms ready-timeout window (measured from the
+      // switch): the completion must degrade to the console sink.
+      await vi.advanceTimersByTimeAsync(6000)
+      expect(svc.exec).toHaveBeenCalledTimes(1)
+      expect(String(svc.exec.mock.calls[0]![0])).toContain('[网络]')
+    } finally {
+      void fwd?.dispose()
       vi.useRealTimers()
     }
   })

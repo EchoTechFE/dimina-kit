@@ -61,28 +61,21 @@ export function mapConsoleApiType(type: string | undefined): ConsoleLevel {
 const BIGINT_LITERAL = /^-?\d+n$/
 
 /**
- * A single RemoteObject → a JSON-serializable value WITHOUT a CDP round-trip
- * (shallow). Objects that need their full contents are flagged by
- * {@link needsDeepFetch} and deep-serialized by the caller; this is the
- * inline/best-effort fallback.
+ * A CDP `unserializableValue` string (specials that can't ride in `value`,
+ * e.g. `Infinity`/`NaN`/bigint literals) → the JS value it denotes. Unknown
+ * literals pass through as-is (e.g. a bigint literal stays a string).
  */
-export function remoteObjectToValue(ro: RemoteObjectLike): unknown {
-  if (!ro) return ro
-  // 1. An inlined value (CDP includes `value` for JSON-serializable primitives
-  //    and small arrays). Use `in` so falsy values (0, '', false) and an
-  //    explicit `null` are honoured rather than falling through.
-  if ('value' in ro) return ro.value
-  // 2. Specials that can't ride in `value`.
-  if (typeof ro.unserializableValue === 'string') {
-    const u = ro.unserializableValue
-    if (u === 'Infinity') return Infinity
-    if (u === '-Infinity') return -Infinity
-    if (u === 'NaN') return NaN
-    if (u === '-0') return -0
-    if (BIGINT_LITERAL.test(u)) return u
-    return u
-  }
-  // 3. Fall back by type.
+function unserializableToValue(u: string): unknown {
+  if (u === 'Infinity') return Infinity
+  if (u === '-Infinity') return -Infinity
+  if (u === 'NaN') return NaN
+  if (u === '-0') return -0
+  if (BIGINT_LITERAL.test(u)) return u
+  return u
+}
+
+/** Fallback serialization by `RemoteObject.type` when neither `value` nor `unserializableValue` is present. */
+function typeFallbackToValue(ro: RemoteObjectLike): unknown {
   switch (ro.type) {
     case 'undefined':
       return undefined
@@ -96,6 +89,24 @@ export function remoteObjectToValue(ro: RemoteObjectLike): unknown {
     default:
       return ro.description ?? '[Unknown]'
   }
+}
+
+/**
+ * A single RemoteObject → a JSON-serializable value WITHOUT a CDP round-trip
+ * (shallow). Objects that need their full contents are flagged by
+ * {@link needsDeepFetch} and deep-serialized by the caller; this is the
+ * inline/best-effort fallback.
+ */
+export function remoteObjectToValue(ro: RemoteObjectLike): unknown {
+  if (!ro) return ro
+  // An inlined value (CDP includes `value` for JSON-serializable primitives
+  // and small arrays). Use `in` so falsy values (0, '', false) and an
+  // explicit `null` are honoured rather than falling through.
+  if ('value' in ro) return ro.value
+  if (typeof ro.unserializableValue === 'string') {
+    return unserializableToValue(ro.unserializableValue)
+  }
+  return typeFallbackToValue(ro)
 }
 
 /**

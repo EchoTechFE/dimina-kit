@@ -76,19 +76,13 @@ export const SimulatorAttachNativeSchema = z.tuple([
 ])
 
 /**
- * simulator:set-native-bounds (native-host only) — the renderer-measured
- * device-bezel inner-screen rect (CSS px, from `getBoundingClientRect()`, may
- * be fractional/zero) plus the device zoom percent. Positioned 1:1 as the
- * simulator WCV overlay bounds. Coordinates are plain finite numbers (x/y may
- * be negative when scrolled off-screen); zoom is the ZOOM_OPTIONS percent.
+ * simulator:soft-reload (native-host only) — the rebuilt simulator URL to
+ * soft-reload the live shell at. Same http(s)-only constraint as AttachNative
+ * (the URL becomes the new app session's route inside the existing WCV).
  */
-export const SimulatorSetNativeBoundsSchema = z.tuple([
-  z.object({
-    x: z.number().finite(),
-    y: z.number().finite(),
-    width: z.number().finite(),
-    height: z.number().finite(),
-    zoom: z.number().finite().positive(),
+export const SimulatorSoftReloadSchema = z.tuple([
+  z.string().url().refine((u) => u.startsWith('http://') || u.startsWith('https://'), {
+    message: 'simulator URL must be http(s)',
   }),
 ])
 
@@ -118,19 +112,44 @@ export const SimulatorSetDeviceInfoSchema = z.tuple([
   }),
 ])
 
-/**
- * view:*:bounds — renderer-measured CSS pixel rectangle in window content
- * coordinates. Width/height = 0 is the canonical "overlay hidden" signal.
- * No upper bound is enforced (window can be very large); we only refuse
- * negative/NaN values that would break setBounds.
- */
+// Non-negative bounded integer used by the reverse height-advertise payload.
 const NonNegInt = z.number().int().min(0).max(100_000)
-export const ViewBoundsSchema = z.tuple([
+
+/**
+ * view:placement-snapshot — the window-level desired-placement table driving
+ * the reconciler. `generation`/`epoch` are non-negative monotonic counters.
+ * Each view carries an opaque string id, a discriminated placement (visible +
+ * bounds, or hidden — bounds are plain finite numbers: x/y may be negative when
+ * scrolled off-screen, w/h may be 0 for a visible-but-empty view), a z-order
+ * layer, and optional host extras (the simulator's zoom).
+ */
+const FiniteNum = z.number().finite()
+const PlacementSchema = z.union([
   z.object({
-    x: NonNegInt,
-    y: NonNegInt,
-    width: NonNegInt,
-    height: NonNegInt,
+    visible: z.literal(true),
+    bounds: z.object({
+      x: FiniteNum,
+      y: FiniteNum,
+      width: FiniteNum,
+      height: FiniteNum,
+    }),
+  }),
+  z.object({ visible: z.literal(false) }),
+])
+export const PlacementSnapshotSchema = z.tuple([
+  z.object({
+    generation: z.number().int().min(0),
+    epoch: z.number().int().min(0),
+    views: z.array(
+      z.object({
+        viewId: z.string().min(1).max(64),
+        placement: PlacementSchema,
+        layer: z.number().int(),
+        extra: z
+          .object({ zoom: z.number().finite().positive().optional() })
+          .optional(),
+      }),
+    ).max(64),
   }),
 ])
 

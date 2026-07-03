@@ -8,7 +8,7 @@ import { createRequire } from 'node:module'
 import chokidar from 'chokidar'
 import { createRebuildScheduler } from './rebuild-scheduler.js'
 import { createCompileWorker } from './compile-worker.js'
-import type { CompileLogEntry } from './compile-worker.js'
+import type { BuildRequest, CompileLogEntry, CompileWorker } from './compile-worker.js'
 
 export { createRebuildScheduler } from './rebuild-scheduler.js'
 export type { RebuildScheduler } from './rebuild-scheduler.js'
@@ -92,6 +92,91 @@ export interface OpenProjectOptions {
 	onLog?: (entry: CompileLogEntry) => void
 }
 
+/**
+ * Best-effort fallback when the compiler returns no AppInfo (e.g. a build
+ * racing against a just-closed project in the same Electron process): reads
+ * the canonical appid from project.config.json so storage prefixing (which
+ * keys off appInfo.appId) still lines up with the runtime instead of
+ * silently falling to 'unknown'.
+ */
+function resolveAppInfoFallback(projectPath: string): AppInfo | null {
+	try {
+		const configRaw = fs.readFileSync(path.join(projectPath, 'project.config.json'), 'utf8')
+		const config = JSON.parse(configRaw) as { appid?: string; projectname?: string }
+		if (!config.appid || typeof config.appid !== 'string' || config.appid.length === 0) return null
+		return {
+			appId: config.appid,
+			name: config.projectname ?? path.basename(projectPath),
+			path: projectPath,
+		}
+	}
+	catch {
+		// best-effort — fall through to the 'unknown' fallback in the caller
+		return null
+	}
+}
+
+/** Insert or replace `rebuilt` in the session's app list, keyed by appId. */
+function upsertSessionApp(sessionApps: AppInfo[], rebuilt: AppInfo): void {
+	const idx = sessionApps.findIndex(a => a.appId === rebuilt.appId)
+	if (idx === -1) sessionApps.push(rebuilt)
+	else sessionApps[idx] = rebuilt
+}
+
+/**
+ * Run one watcher-triggered rebuild. `getReload` is read at call time (not
+ * captured eagerly) because `reload` is only assigned once the dev server has
+ * started, after this runner is wired into the rebuild scheduler.
+ */
+async function runRebuild(
+	compileWorker: CompileWorker,
+	buildRequest: BuildRequest,
+	sessionApps: AppInfo[],
+	getReload: () => (() => void) | undefined,
+	onRebuild: (() => void) | undefined,
+	onBuildError: ((err: unknown) => void) | undefined,
+): Promise<void> {
+	try {
+		const rebuilt = (await compileWorker.build(buildRequest)) as AppInfo | null
+		if (rebuilt) upsertSessionApp(sessionApps, rebuilt)
+		getReload()?.()
+		onRebuild?.()
+	}
+	catch (e) {
+		onBuildError?.(e)
+	}
+}
+
+/**
+ * Tear down whatever partially started before `openProject` failed: the
+ * watcher, the forked compile worker, and the dev server if it was already
+ * listening. Every step is best-effort so a secondary failure here never
+ * masks the primary error the caller is about to rethrow.
+ */
+async function cleanupFailedOpen(
+	watcher: { close: () => Promise<void>; ready: Promise<void> } | null,
+	compileWorker: CompileWorker,
+	server: Server | null,
+): Promise<void> {
+	try {
+		await watcher?.close()
+	}
+	catch {
+		// best-effort — the open is already failing with the primary error
+	}
+	try {
+		await compileWorker.close()
+	}
+	catch {
+		// best-effort — never mask the primary error
+	}
+	if (server) {
+		;(server as Server & { closeAllConnections?: () => void }).closeAllConnections?.()
+		const listening = server
+		await new Promise<void>(resolve => listening.close(() => resolve()))
+	}
+}
+
 export async function openProject(opts: OpenProjectOptions): Promise<ProjectSession> {
 	const {
 		projectPath: rawProjectPath,
@@ -148,20 +233,7 @@ export async function openProject(opts: OpenProjectOptions): Promise<ProjectSess
 	// `'unknown'` is only used as a last resort when the manifest itself
 	// is missing/unreadable, preserving the original error path.
 	if (!initialAppInfo) {
-		try {
-			const configRaw = fs.readFileSync(path.join(projectPath, 'project.config.json'), 'utf8')
-			const config = JSON.parse(configRaw) as { appid?: string; projectname?: string }
-			if (config.appid && typeof config.appid === 'string' && config.appid.length > 0) {
-				initialAppInfo = {
-					appId: config.appid,
-					name: config.projectname ?? path.basename(projectPath),
-					path: projectPath,
-				}
-			}
-		}
-		catch {
-			// best-effort — fall through to the 'unknown' fallback below
-		}
+		initialAppInfo = resolveAppInfoFallback(projectPath)
 	}
 	if (!initialAppInfo) {
 		// Both the compile (null AppInfo) and the project.config.json fallback
@@ -186,22 +258,6 @@ export async function openProject(opts: OpenProjectOptions): Promise<ProjectSess
 	let reload: (() => void) | undefined
 	let watcher: { close: () => Promise<void>; ready: Promise<void> } | null = null
 
-	async function rebuild(): Promise<void> {
-		try {
-			const rebuilt = (await compileWorker.build(buildRequest)) as AppInfo | null
-			if (rebuilt) {
-				const idx = sessionApps.findIndex(a => a.appId === rebuilt.appId)
-				if (idx === -1) sessionApps.push(rebuilt)
-				else sessionApps[idx] = rebuilt
-			}
-			reload?.()
-			onRebuild?.()
-		}
-		catch (e) {
-			onBuildError?.(e)
-		}
-	}
-
 	try {
 		process.env.DIMINA_NO_OPEN_BROWSER = '1'
 		const fe = await import('../fe/index.js' as string)
@@ -220,7 +276,9 @@ export async function openProject(opts: OpenProjectOptions): Promise<ProjectSess
 		// Watcher events are routed through the scheduler so a save landing while
 		// a build is in flight is never dropped: it coalesces into exactly one
 		// trailing rebuild once the current run settles.
-		const rebuildScheduler = createRebuildScheduler(rebuild)
+		const rebuildScheduler = createRebuildScheduler(() =>
+			runRebuild(compileWorker, buildRequest, sessionApps, () => reload, onRebuild, onBuildError),
+		)
 		watcher = watch ? createProjectWatcher(projectPath, () => rebuildScheduler.schedule()) : null
 		// Don't resolve until the watcher's initial scan is done: a save landing
 		// in the gap between `openProject` resolving and chokidar going live
@@ -231,23 +289,7 @@ export async function openProject(opts: OpenProjectOptions): Promise<ProjectSess
 		await watcher?.ready
 	}
 	catch (err) {
-		try {
-			await watcher?.close()
-		}
-		catch {
-			// best-effort — the open is already failing with the primary error
-		}
-		try {
-			await compileWorker.close()
-		}
-		catch {
-			// best-effort — never mask the primary error
-		}
-		if (server) {
-			;(server as Server & { closeAllConnections?: () => void }).closeAllConnections?.()
-			const listening = server
-			await new Promise<void>(resolve => listening.close(() => resolve()))
-		}
+		await cleanupFailedOpen(watcher, compileWorker, server)
 		throw err
 	}
 

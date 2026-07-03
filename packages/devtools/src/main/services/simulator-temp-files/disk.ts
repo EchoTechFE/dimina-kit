@@ -89,49 +89,74 @@ const EXT_MIME: Record<string, string> = {
 	'.zip': 'application/zip',
 }
 
-function sniffMime(head: Buffer): string | null {
-	if (head.length >= 8
+function isPng(head: Buffer): boolean {
+	return head.length >= 8
 		&& head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47
-		&& head[4] === 0x0d && head[5] === 0x0a && head[6] === 0x1a && head[7] === 0x0a) {
-		return 'image/png'
-	}
-	if (head.length >= 3 && head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) {
-		return 'image/jpeg'
-	}
-	if (head.length >= 6
+		&& head[4] === 0x0d && head[5] === 0x0a && head[6] === 0x1a && head[7] === 0x0a
+}
+
+function isJpeg(head: Buffer): boolean {
+	return head.length >= 3 && head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff
+}
+
+function isGif(head: Buffer): boolean {
+	return head.length >= 6
 		&& head[0] === 0x47 && head[1] === 0x49 && head[2] === 0x46
-		&& head[3] === 0x38 && (head[4] === 0x37 || head[4] === 0x39) && head[5] === 0x61) {
-		return 'image/gif'
-	}
-	if (head.length >= 12
+		&& head[3] === 0x38 && (head[4] === 0x37 || head[4] === 0x39) && head[5] === 0x61
+}
+
+function isWebp(head: Buffer): boolean {
+	return head.length >= 12
 		&& head[0] === 0x52 && head[1] === 0x49 && head[2] === 0x46 && head[3] === 0x46
-		&& head[8] === 0x57 && head[9] === 0x45 && head[10] === 0x42 && head[11] === 0x50) {
-		return 'image/webp'
-	}
-	if (head.length >= 12
-		&& head[4] === 0x66 && head[5] === 0x74 && head[6] === 0x79 && head[7] === 0x70) {
-		// MP4 ftyp box: brand bytes vary, treat all as video/mp4 for now.
-		return 'video/mp4'
-	}
-	if (head.length >= 4
-		&& head[0] === 0x25 && head[1] === 0x50 && head[2] === 0x44 && head[3] === 0x46) {
-		return 'application/pdf'
-	}
-	if (head.length >= 2 && head[0] === 0x42 && head[1] === 0x4d) {
-		return 'image/bmp'
-	}
-	if (head.length >= 4
-		&& head[0] === 0x50 && head[1] === 0x4b && head[2] === 0x03 && head[3] === 0x04) {
-		return 'application/zip'
-	}
-	if (head.length >= 3 && head[0] === 0x49 && head[1] === 0x44 && head[2] === 0x33) {
-		// ID3-tagged MP3.
-		return 'audio/mpeg'
-	}
-	if (head.length >= 4 && head[0] === 0x4f && head[1] === 0x67 && head[2] === 0x67 && head[3] === 0x53) {
-		return 'audio/ogg'
-	}
-	return null
+		&& head[8] === 0x57 && head[9] === 0x45 && head[10] === 0x42 && head[11] === 0x50
+}
+
+/** MP4 ftyp box: brand bytes vary, treat all as video/mp4 for now. */
+function isMp4(head: Buffer): boolean {
+	return head.length >= 12
+		&& head[4] === 0x66 && head[5] === 0x74 && head[6] === 0x79 && head[7] === 0x70
+}
+
+function isPdf(head: Buffer): boolean {
+	return head.length >= 4
+		&& head[0] === 0x25 && head[1] === 0x50 && head[2] === 0x44 && head[3] === 0x46
+}
+
+function isBmp(head: Buffer): boolean {
+	return head.length >= 2 && head[0] === 0x42 && head[1] === 0x4d
+}
+
+function isZip(head: Buffer): boolean {
+	return head.length >= 4
+		&& head[0] === 0x50 && head[1] === 0x4b && head[2] === 0x03 && head[3] === 0x04
+}
+
+/** ID3-tagged MP3. */
+function isId3Mp3(head: Buffer): boolean {
+	return head.length >= 3 && head[0] === 0x49 && head[1] === 0x44 && head[2] === 0x33
+}
+
+function isOgg(head: Buffer): boolean {
+	return head.length >= 4 && head[0] === 0x4f && head[1] === 0x67 && head[2] === 0x67 && head[3] === 0x53
+}
+
+/** Magic-byte sniffers in priority order — first match wins. */
+const MAGIC_SNIFFERS: ReadonlyArray<{ mime: string, match: (head: Buffer) => boolean }> = [
+	{ mime: 'image/png', match: isPng },
+	{ mime: 'image/jpeg', match: isJpeg },
+	{ mime: 'image/gif', match: isGif },
+	{ mime: 'image/webp', match: isWebp },
+	{ mime: 'video/mp4', match: isMp4 },
+	{ mime: 'application/pdf', match: isPdf },
+	{ mime: 'image/bmp', match: isBmp },
+	{ mime: 'application/zip', match: isZip },
+	{ mime: 'audio/mpeg', match: isId3Mp3 },
+	{ mime: 'audio/ogg', match: isOgg },
+]
+
+function sniffMime(head: Buffer): string | null {
+	const hit = MAGIC_SNIFFERS.find((sniffer) => sniffer.match(head))
+	return hit ? hit.mime : null
 }
 
 function extMime(realPath: string): string | null {
@@ -156,6 +181,55 @@ function etagOf(mtimeMs: number, size: number): string {
 
 // -- read -------------------------------------------------------------------
 
+/** Validate `range` against `totalSize` and resolve it to a byte slice, or throws. */
+function resolveRange(range: { start: number, end: number }, totalSize: number): { sliceStart: number, sliceLen: number } {
+	const { start, end } = range
+	if (!Number.isFinite(start) || !Number.isFinite(end)) {
+		throw new RangeError(`invalid range: ${start}-${end}`)
+	}
+	if (start < 0) throw new RangeError(`range start out of bounds: ${start}`)
+	if (start > end) throw new RangeError(`range start > end: ${start} > ${end}`)
+	if (start >= totalSize) {
+		throw new RangeError(`range start beyond file size: ${start} >= ${totalSize}`)
+	}
+	const clampedEnd = Math.min(end, totalSize - 1)
+	return { sliceStart: start, sliceLen: clampedEnd - start + 1 }
+}
+
+/**
+ * Read at most the first 12 bytes for magic sniffing, regardless of whether
+ * the caller asked for a range. The head bytes from position 0 are needed to
+ * label Content-Type correctly even on a tail Range request.
+ */
+async function readHeadBytes(handle: fs.FileHandle, totalSize: number): Promise<Buffer> {
+	const head = Buffer.alloc(Math.min(12, totalSize))
+	if (head.length > 0) {
+		await handle.read(head, 0, head.length, 0)
+	}
+	return head
+}
+
+/** Full-file body, re-using `head` (already read) instead of a second read for the leading bytes. */
+async function readFullBody(handle: fs.FileHandle, head: Buffer, totalSize: number): Promise<Buffer> {
+	const bytes = Buffer.alloc(totalSize)
+	if (totalSize === 0) return bytes
+	if (totalSize <= head.length) {
+		head.copy(bytes, 0, 0, totalSize)
+		return bytes
+	}
+	head.copy(bytes, 0, 0, head.length)
+	await handle.read(bytes, head.length, totalSize - head.length, head.length)
+	return bytes
+}
+
+async function readRangeBody(handle: fs.FileHandle, sliceStart: number, sliceLen: number): Promise<Buffer> {
+	const bytes = Buffer.alloc(sliceLen)
+	if (sliceLen > 0) {
+		await handle.read(bytes, 0, sliceLen, sliceStart)
+	}
+	return bytes
+}
+
 export async function readDiskFile(
 	realPath: string,
 	opts?: DiskReadOptions,
@@ -167,50 +241,14 @@ export async function readDiskFile(
 		const mtimeMs = st.mtimeMs
 
 		const range = opts?.range
-		let sliceStart = 0
-		let sliceLen = totalSize
-		if (range) {
-			const { start, end } = range
-			if (!Number.isFinite(start) || !Number.isFinite(end)) {
-				throw new RangeError(`invalid range: ${start}-${end}`)
-			}
-			if (start < 0) throw new RangeError(`range start out of bounds: ${start}`)
-			if (start > end) throw new RangeError(`range start > end: ${start} > ${end}`)
-			if (start >= totalSize) {
-				throw new RangeError(`range start beyond file size: ${start} >= ${totalSize}`)
-			}
-			const clampedEnd = Math.min(end, totalSize - 1)
-			sliceStart = start
-			sliceLen = clampedEnd - start + 1
-		}
+		const { sliceStart, sliceLen } = range
+			? resolveRange(range, totalSize)
+			: { sliceStart: 0, sliceLen: totalSize }
 
-		// Read at most the first 12 bytes for magic sniffing, regardless of
-		// whether the caller asked for a range. We need the head bytes from
-		// position 0 to label Content-Type correctly even on a tail Range
-		// request. For full reads the head is part of the body so we re-use
-		// it without a second read.
-		const head = Buffer.alloc(Math.min(12, totalSize))
-		if (head.length > 0) {
-			await handle.read(head, 0, head.length, 0)
-		}
-
-		let bytes: Buffer
-		if (!range) {
-			bytes = Buffer.alloc(totalSize)
-			if (totalSize > 0) {
-				if (totalSize <= head.length) {
-					head.copy(bytes, 0, 0, totalSize)
-				} else {
-					head.copy(bytes, 0, 0, head.length)
-					await handle.read(bytes, head.length, totalSize - head.length, head.length)
-				}
-			}
-		} else {
-			bytes = Buffer.alloc(sliceLen)
-			if (sliceLen > 0) {
-				await handle.read(bytes, 0, sliceLen, sliceStart)
-			}
-		}
+		const head = await readHeadBytes(handle, totalSize)
+		const bytes = range
+			? await readRangeBody(handle, sliceStart, sliceLen)
+			: await readFullBody(handle, head, totalSize)
 
 		return {
 			bytes,

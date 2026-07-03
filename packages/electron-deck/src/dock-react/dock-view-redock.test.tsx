@@ -599,6 +599,9 @@ describe('<DockView> drag-to-redock — PanelCapabilities gates (draggable / dro
 			setData: (type: string, value: string) => { store[type] = value },
 			getData: (type: string) => store[type] ?? '',
 			effectAllowed: '',
+			// A genuine in-app drag always carries the deck panel MIME (dragstart
+			// writes it); the dragover handlers gate on it.
+			types: ['application/x-deck-panel'] as string[],
 		}
 	}
 
@@ -609,7 +612,7 @@ describe('<DockView> drag-to-redock — PanelCapabilities gates (draggable / dro
 		const gFree = container.querySelector('[data-deck-group="g-free"]') as DeckGroupElement
 
 		fireEvent.dragStart(pinnedTab, { dataTransfer: dragSource() })
-		fireEvent.dragOver(gFree)
+		fireEvent.dragOver(gFree, { dataTransfer: dragSource() })
 
 		expect(container.querySelector('[data-deck-drop-zone]')).toBeNull()
 		fireEvent.dragEnd(pinnedTab)
@@ -622,7 +625,7 @@ describe('<DockView> drag-to-redock — PanelCapabilities gates (draggable / dro
 		const gCap = container.querySelector('[data-deck-group="g-cap"]') as DeckGroupElement
 
 		fireEvent.dragStart(pinnedTab, { dataTransfer: dragSource() })
-		fireEvent.dragOver(gCap)
+		fireEvent.dragOver(gCap, { dataTransfer: dragSource() })
 
 		expect(container.querySelector('[data-deck-drop-zone]')).toBeNull()
 		fireEvent.dragEnd(pinnedTab)
@@ -637,7 +640,7 @@ describe('<DockView> drag-to-redock — PanelCapabilities gates (draggable / dro
 		const gCap = container.querySelector('[data-deck-group="g-cap"]') as DeckGroupElement
 
 		fireEvent.dragStart(freeTab, { dataTransfer: dragSource() })
-		fireEvent.dragOver(gCap)
+		fireEvent.dragOver(gCap, { dataTransfer: dragSource() })
 
 		expect(container.querySelector('[data-deck-drop-zone]')).not.toBeNull()
 		fireEvent.dragEnd(freeTab)

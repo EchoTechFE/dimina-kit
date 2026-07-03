@@ -5,6 +5,7 @@ import type { ConsoleForwarder } from './console-forward/index.js'
 import type { NetworkForwarder } from './network-forward/index.js'
 import type { AppDataTap } from './simulator-appdata/index.js'
 import type { StorageApi } from './simulator-storage/index.js'
+import type { SyncStorageChange } from '../../shared/ipc-channels.js'
 import {
   createConnectionRegistry,
   DisposableRegistry,
@@ -177,6 +178,16 @@ export interface WorkbenchContext {
    * Undefined on the default dimina-fe path (storage handled in the guest).
    */
   storageApi?: StorageApi
+
+  /**
+   * Native-host SYNC-storage liveness hook, set by `setupSimulatorStorage`.
+   * bridge-router calls it on each `storageChanged` container message the
+   * service-host posts after a `setStorageSync`/`removeStorageSync`/
+   * `clearStorageSync` (those write `localStorage` directly, bypassing main), so
+   * the Storage panel updates without a manual reload. Undefined on the default
+   * dimina-fe path (the CDP DOMStorage watcher covers the simulator origin there).
+   */
+  onServiceStorageChanged?: (appId: string, change: SyncStorageChange) => void
 
   /**
    * Native-host console sink. Render-layer entries arrive from

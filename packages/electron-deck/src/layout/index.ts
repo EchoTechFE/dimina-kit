@@ -39,3 +39,18 @@ export {
 } from './mutations.js'
 export { createLayoutModel } from './model.js'
 export { closePanelForUser } from './user-actions.js'
+export { findGroupById, findGroupContaining, findPanelGroupId, countPanels } from './tree-query.js'
+
+export type {
+	Bounds,
+	Placement,
+	DesiredView,
+	PlacementSnapshot,
+	ViewOp,
+	ActualView,
+	ReconcilerState,
+} from './placement-reconcile.js'
+export { createInitialState, reconcile } from './placement-reconcile.js'
+
+export type { CleanView, CleanSnapshot, Authorizer } from './snapshot-reconcile.js'
+export { cleanSnapshot, dispatchOps } from './snapshot-reconcile.js'

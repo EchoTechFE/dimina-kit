@@ -136,20 +136,38 @@ function resolveTagName(instance: ComponentInstance): string {
   return name
 }
 
+/** Props/attrs entries that never surface in the WXML panel (internal Vue plumbing, falsy booleans). */
+function isSkippedProp(key: string, value: unknown): boolean {
+  if (typeof value === 'function' || value === undefined) return true
+  if (key === 'data' || key.startsWith('__')) return true
+  return typeof value === 'boolean' && !value
+}
+
+/** Drop the `dd-` internal-marker classes so the panel shows only user-authored classes. */
+function cleanClassAttr(value: string): string {
+  return value.split(/\s+/).filter((c) => !c.startsWith('dd-')).join(' ')
+}
+
+function stringifyPropValue(value: unknown): string {
+  return typeof value === 'object' ? JSON.stringify(value) : String(value)
+}
+
+function assignProp(out: Record<string, string>, key: string, value: unknown): void {
+  if (isSkippedProp(key, value)) return
+  if (key === 'class' && typeof value === 'string') {
+    const cleaned = cleanClassAttr(value)
+    if (cleaned) out[key] = cleaned
+    return
+  }
+  out[key] = stringifyPropValue(value)
+}
+
 function extractProps(instance: ComponentInstance): Record<string, string> {
   const out: Record<string, string> = {}
   for (const raw of [instance.props, instance.attrs]) {
     if (!raw) continue
     for (const [k, v] of Object.entries(raw)) {
-      if (typeof v === 'function' || v === undefined) continue
-      if (k === 'data' || k.startsWith('__')) continue
-      if (typeof v === 'boolean' && !v) continue
-      if (k === 'class' && typeof v === 'string') {
-        const cleaned = v.split(/\s+/).filter((c) => !c.startsWith('dd-')).join(' ')
-        if (cleaned) out[k] = cleaned
-        continue
-      }
-      out[k] = typeof v === 'object' ? JSON.stringify(v) : String(v)
+      assignProp(out, k, v)
     }
   }
   return out
@@ -206,56 +224,73 @@ function isCommentVNode(vnode: Record<string, unknown>): boolean {
   return /^v-(if|else|else-if|for)$/.test(children)
 }
 
+function textNode(text: string): WxmlNode {
+  return { tagName: '#text', attrs: {}, children: [], text }
+}
+
+/** A component vnode's children come from walking its mounted instance, not `vnode.children`. */
+function childrenFromComponentVNode(component: ComponentInstance, depth: number): WxmlNode[] {
+  const result = walkInstance(component, depth + 1)
+  if (!result) return []
+  return Array.isArray(result) ? result : [result]
+}
+
+/** A `<Suspense>` vnode's visible content is whichever branch is currently active. */
+function childrenFromSuspenseVNode(suspense: Record<string, unknown>, depth: number): WxmlNode[] {
+  const activeBranch = suspense.activeBranch as Record<string, unknown> | null
+  return activeBranch ? extractChildrenFromVNode(activeBranch, depth + 1) : []
+}
+
+/**
+ * A vnode whose OWN `children` is a plain string only counts as a text node when
+ * its `type` is a symbol/string (a real element or fragment) — a component vnode
+ * with string `children` is slot content, not text, and is handled elsewhere.
+ * Returns null when this vnode is not (top-level) text, so the caller falls
+ * through to the array-children path.
+ */
+function directTextChild(vnode: Record<string, unknown>): WxmlNode[] | null {
+  if (typeof vnode.children !== 'string' || !vnode.children.trim()) return null
+  const vnodeType = vnode.type
+  if (typeof vnodeType !== 'symbol' && typeof vnodeType !== 'string') return null
+  return [textNode(vnode.children.trim())]
+}
+
+function textChildEntry(child: string): WxmlNode[] {
+  const trimmed = child.trim()
+  return trimmed ? [textNode(trimmed)] : []
+}
+
+/** A DOM-typed child (`type` is its tag name string): text leaf, internal wrapper, or a normal subtree. */
+function domTypedChildEntries(c: Record<string, unknown>, depth: number): WxmlNode[] {
+  if (isInternalElement(c)) return extractChildrenFromVNode(c, depth + 1)
+  if (typeof c.children === 'string' && c.children.trim()) return [textNode(c.children.trim())]
+  return extractChildrenFromVNode(c, depth + 1)
+}
+
+/** One entry from a vnode's `children` array, normalized to zero or more WXML nodes. */
+function extractChildEntry(child: unknown, depth: number): WxmlNode[] {
+  if (!child) return []
+  if (typeof child === 'string') return textChildEntry(child)
+  if (typeof child !== 'object') return []
+  const c = child as Record<string, unknown>
+  if (c.component) return childrenFromComponentVNode(c.component as ComponentInstance, depth)
+  if (typeof c.type === 'symbol') return extractChildrenFromVNode(c, depth + 1)
+  if (typeof c.type === 'string') return domTypedChildEntries(c, depth)
+  return extractChildrenFromVNode(c, depth + 1)
+}
+
 function extractChildrenFromVNode(vnode: Record<string, unknown> | null | undefined, depth: number): WxmlNode[] {
   if (!vnode || depth > 50) return []
   if (isCommentVNode(vnode)) return []
-  if (vnode.component) {
-    const result = walkInstance(vnode.component as ComponentInstance, depth + 1)
-    return result ? (Array.isArray(result) ? result : [result]) : []
-  }
-  if (vnode.suspense) {
-    const suspense = vnode.suspense as Record<string, unknown>
-    const activeBranch = suspense.activeBranch as Record<string, unknown> | null
-    return activeBranch ? extractChildrenFromVNode(activeBranch, depth + 1) : []
-  }
-  if (typeof vnode.children === 'string' && vnode.children.trim()) {
-    const vnodeType = vnode.type
-    if (typeof vnodeType === 'symbol' || typeof vnodeType === 'string') {
-      return [{ tagName: '#text', attrs: {}, children: [], text: vnode.children.trim() }]
-    }
-  }
+  if (vnode.component) return childrenFromComponentVNode(vnode.component as ComponentInstance, depth)
+  if (vnode.suspense) return childrenFromSuspenseVNode(vnode.suspense as Record<string, unknown>, depth)
+  const directText = directTextChild(vnode)
+  if (directText) return directText
   const kids = vnode.children
   if (!Array.isArray(kids)) return []
   const result: WxmlNode[] = []
   for (const child of kids) {
-    if (!child) continue
-    if (typeof child === 'string') {
-      const trimmed = child.trim()
-      if (trimmed) result.push({ tagName: '#text', attrs: {}, children: [], text: trimmed })
-      continue
-    }
-    if (typeof child !== 'object') continue
-    const c = child as Record<string, unknown>
-    if (c.component) {
-      const walked = walkInstance(c.component as ComponentInstance, depth + 1)
-      if (walked) result.push(...(Array.isArray(walked) ? walked : [walked]))
-      continue
-    }
-    if (typeof c.type === 'symbol') {
-      result.push(...extractChildrenFromVNode(c, depth + 1))
-      continue
-    }
-    if (typeof c.type === 'string') {
-      if (isInternalElement(c)) {
-        result.push(...extractChildrenFromVNode(c, depth + 1))
-      } else if (typeof c.children === 'string' && c.children.trim()) {
-        result.push({ tagName: '#text', attrs: {}, children: [], text: c.children.trim() })
-      } else {
-        result.push(...extractChildrenFromVNode(c, depth + 1))
-      }
-      continue
-    }
-    result.push(...extractChildrenFromVNode(c, depth + 1))
+    result.push(...extractChildEntry(child, depth))
   }
   return result
 }

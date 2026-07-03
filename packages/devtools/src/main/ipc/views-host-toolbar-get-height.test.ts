@@ -79,8 +79,7 @@ beforeEach(() => {
 /** Minimal `views` stub satisfying registerViewsIpc's runtime needs. */
 function makeViews(height = 48) {
   return {
-    setSimulatorDevtoolsBounds: vi.fn(),
-    setHostToolbarBounds: vi.fn(),
+    setPlacementSnapshot: vi.fn(),
     setHostToolbarHeight: vi.fn(),
     getHostToolbarWebContentsId: vi.fn(() => 7),
     // The retention getter under test (pinned in
@@ -157,11 +156,11 @@ describe('registerViewsIpc: view:host-toolbar:get-height (height replay pull cha
     expect(views.getHostToolbarHeight).not.toHaveBeenCalled()
 
     // Sanity that the gate above is the SHARED registry gate: the sibling
-    // HostToolbarBounds handler rejects the same untrusted sender.
-    const boundsHandler = stub.handlers.get(ViewChannel.HostToolbarBounds)
-    expect(typeof boundsHandler).toBe('function')
+    // placement-snapshot handler rejects the same untrusted sender.
+    const snapshotHandler = stub.handlers.get(ViewChannel.PlacementSnapshot)
+    expect(typeof snapshotHandler).toBe('function')
     await expect(
-      Promise.resolve(boundsHandler!(makeEvent(999), { x: 0, y: 0, width: 1, height: 1 })),
+      Promise.resolve(snapshotHandler!(makeEvent(999), { generation: 0, epoch: 0, views: [] })),
     ).rejects.toThrow(/sender rejected/i)
 
     disposable.dispose()
@@ -171,8 +170,8 @@ describe('registerViewsIpc: view:host-toolbar:get-height (height replay pull cha
     const views = makeViews()
     const disposable = registerViewsIpc({ views, senderPolicy: undefined } as never)
 
-    expect(stub.handlers.has(ViewChannel.SimulatorDevtoolsBounds)).toBe(true)
-    expect(stub.handlers.has(ViewChannel.HostToolbarBounds)).toBe(true)
+    expect(stub.handlers.has(ViewChannel.PlacementSnapshot)).toBe(true)
+    expect(stub.handlers.has(ViewChannel.HostToolbarGetHeight)).toBe(true)
     // The reverse size-advertiser stays a RAW per-id-gated ipcMain.on (send,
     // not invoke) — the new pull channel must not have disturbed it.
     expect(stub.listeners.has(ViewChannel.HostToolbarAdvertiseHeight)).toBe(true)

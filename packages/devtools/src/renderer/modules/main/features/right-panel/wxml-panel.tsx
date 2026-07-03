@@ -1,11 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { Button } from '@/shared/components/ui/button'
 import type { ElementInspection } from '../../../../../shared/ipc-channels'
 import type { WxmlNode } from './types.js'
 
 interface WxmlPanelProps {
   tree: WxmlNode | null
-  onRefresh: () => void
   onInspectElement?: (sid: string) => Promise<ElementInspection | null>
   onClearInspection?: () => Promise<void>
 }
@@ -29,131 +27,158 @@ function isDefaultExpanded(node: WxmlNode): boolean {
   return false
 }
 
-function WxmlTreeNode({ node, depth, inspectedSid, onInspect }: WxmlTreeNodeProps) {
+/** Renders a `[key, value]` attr list as `{' '}key="value"` pairs. */
+function AttrList({ entries }: { entries: Array<[string, string]> }) {
+  return (
+    <>
+      {entries.map(([k, v]) => (
+        <span key={k}>
+          {' '}
+          <span className="text-code-blue">{k}</span>
+          <span className="text-text-dim">=</span>
+          <span className="text-code-orange">&quot;{v}&quot;</span>
+        </span>
+      ))}
+    </>
+  )
+}
+
+// Text node — render as plain text.
+function WxmlTextNode({ node, depth }: { node: WxmlNode, depth: number }) {
+  return (
+    <div
+      className="py-px leading-[18px] hover:bg-surface-2"
+      style={{ paddingLeft: depth * 16 }}
+    >
+      <span className="w-3 inline-block" />
+      <span className="text-text">{node.text}</span>
+    </div>
+  )
+}
+
+// Fragment — transparent root wrapper; render children directly without extra depth/tag.
+function WxmlFragmentNode({ node, depth, inspectedSid, onInspect }: WxmlTreeNodeProps) {
+  return (
+    <>
+      {(node.children ?? []).map((child, i) => (
+        <WxmlTreeNode
+          key={i}
+          node={child}
+          depth={depth}
+          inspectedSid={inspectedSid}
+          onInspect={onInspect}
+        />
+      ))}
+    </>
+  )
+}
+
+// Shadow root — synthetic boundary for custom component internals.
+// Clickable to collapse like WeChat DevTools; default expanded; no closing tag.
+function WxmlShadowRootNode({ node, depth, inspectedSid, onInspect }: WxmlTreeNodeProps) {
   const [expanded, setExpanded] = useState(() => isDefaultExpanded(node))
   const indent = depth * 16
-  const isInspected = Boolean(node.sid && node.sid === inspectedSid)
+  const hasShadowChildren = (node.children ?? []).length > 0
+  return (
+    <div>
+      <div
+        className="py-px leading-[18px] hover:bg-surface-2 cursor-pointer"
+        style={{ paddingLeft: indent }}
+        onClick={() => hasShadowChildren && setExpanded(!expanded)}
+      >
+        <span className="text-text-dim w-3 shrink-0 inline-block text-center select-none">
+          {hasShadowChildren ? (expanded ? '▾' : '▸') : ' '}
+        </span>
+        <span className="text-text-dim italic">#shadow-root</span>
+      </div>
+      {expanded && node.children.map((child, i) => (
+        <WxmlTreeNode
+          key={i}
+          node={child}
+          depth={depth + 1}
+          inspectedSid={inspectedSid}
+          onInspect={onInspect}
+        />
+      ))}
+    </div>
+  )
+}
+
+interface WxmlRowProps {
+  node: WxmlNode
+  indent: number
+  attrEntries: Array<[string, string]>
+  isInspected: boolean
+  onMouseEnter: () => void
+}
+
+// Single text child — render inline: <tag>text</tag>
+function WxmlInlineTextRow({
+  node,
+  indent,
+  attrEntries,
+  isInspected,
+  onMouseEnter,
+  inlineText,
+}: WxmlRowProps & { inlineText: string }) {
   const rowClassName = `py-px leading-[18px] hover:bg-surface-2${isInspected ? ' bg-surface-2' : ''}`
-  const inspect = () => {
-    if (node.sid) onInspect?.(node)
-  }
+  return (
+    <div
+      className={rowClassName}
+      style={{ paddingLeft: indent }}
+      onMouseEnter={onMouseEnter}
+      data-wxml-sid={node.sid}
+    >
+      <span className="w-3 inline-block" />
+      <span className="text-code-keyword">{'<'}{node.tagName}</span>
+      <AttrList entries={attrEntries} />
+      <span className="text-code-keyword">{'>'}</span>
+      <span className="text-text">{inlineText}</span>
+      <span className="text-code-keyword">{'</'}{node.tagName}{'>'}</span>
+    </div>
+  )
+}
 
-  // Text node — render as plain text
-  if (node.tagName === '#text') {
-    return (
-      <div
-        className="py-px leading-[18px] hover:bg-surface-2"
-        style={{ paddingLeft: indent }}
-      >
-        <span className="w-3 inline-block" />
-        <span className="text-text">{node.text}</span>
-      </div>
-    )
-  }
+interface WxmlBlockRowProps extends WxmlRowProps {
+  depth: number
+  hasChildren: boolean
+  expanded: boolean
+  inspectedSid?: string | null
+  onInspect?: (node: WxmlNode) => void
+  onToggle: () => void
+}
 
-  // Fragment — transparent root wrapper; render children directly without extra depth/tag.
-  if (node.tagName === '#fragment') {
-    return (
-      <>
-        {(node.children ?? []).map((child, i) => (
-          <WxmlTreeNode
-            key={i}
-            node={child}
-            depth={depth}
-            inspectedSid={inspectedSid}
-            onInspect={onInspect}
-          />
-        ))}
-      </>
-    )
-  }
-
-  // Shadow root — synthetic boundary for custom component internals.
-  // Clickable to collapse like WeChat DevTools; default expanded; no closing tag.
-  if (node.tagName === '#shadow-root') {
-    const hasShadowChildren = (node.children ?? []).length > 0
-    return (
-      <div>
-        <div
-          className="py-px leading-[18px] hover:bg-surface-2 cursor-pointer"
-          style={{ paddingLeft: indent }}
-          onClick={() => hasShadowChildren && setExpanded(!expanded)}
-        >
-          <span className="text-text-dim w-3 shrink-0 inline-block text-center select-none">
-            {hasShadowChildren ? (expanded ? '▾' : '▸') : ' '}
-          </span>
-          <span className="text-text-dim italic">#shadow-root</span>
-        </div>
-        {expanded && node.children.map((child, i) => (
-          <WxmlTreeNode
-            key={i}
-            node={child}
-            depth={depth + 1}
-            inspectedSid={inspectedSid}
-            onInspect={onInspect}
-          />
-        ))}
-      </div>
-    )
-  }
-
-  const hasChildren = (node.children ?? []).length > 0
-  const attrEntries = Object.entries(node.attrs) as Array<[string, string]>
-
-  // Single text child — render inline: <tag>text</tag>
-  const inlineText = hasChildren && node.children.length === 1 && node.children[0]!.tagName === '#text'
-    ? node.children[0]!.text
-    : null
-
-  if (inlineText) {
-    return (
-      <div
-        className={rowClassName}
-        style={{ paddingLeft: indent }}
-        onMouseEnter={inspect}
-        data-wxml-sid={node.sid}
-      >
-        <span className="w-3 inline-block" />
-        <span className="text-code-keyword">{'<'}{node.tagName}</span>
-        {attrEntries.map(([k, v]) => (
-          <span key={k}>
-            {' '}
-            <span className="text-code-blue">{k}</span>
-            <span className="text-text-dim">=</span>
-            <span className="text-code-orange">&quot;{v}&quot;</span>
-          </span>
-        ))}
-        <span className="text-code-keyword">{'>'}</span>
-        <span className="text-text">{inlineText}</span>
-        <span className="text-code-keyword">{'</'}{node.tagName}{'>'}</span>
-      </div>
-    )
-  }
-
+// Full open/close-tag row, with children rendered underneath when expanded.
+function WxmlBlockRow({
+  node,
+  depth,
+  indent,
+  attrEntries,
+  hasChildren,
+  expanded,
+  isInspected,
+  inspectedSid,
+  onInspect,
+  onToggle,
+  onMouseEnter,
+}: WxmlBlockRowProps) {
   return (
     <div>
       <div
         className={`flex items-start hover:bg-surface-2 py-px leading-[18px]${hasChildren ? ' cursor-pointer' : ''}${isInspected ? ' bg-surface-2' : ''}`}
         style={{ paddingLeft: indent }}
-        onMouseEnter={inspect}
+        onMouseEnter={onMouseEnter}
         onClick={() => {
-          if (hasChildren) setExpanded(!expanded)
+          if (hasChildren) onToggle()
         }}
         data-wxml-sid={node.sid}
       >
         <span className="text-text-dim w-3 shrink-0 text-center select-none">
-          {hasChildren ? (expanded ? '\u25BE' : '\u25B8') : ' '}
+          {hasChildren ? (expanded ? '▾' : '▸') : ' '}
         </span>
         <span>
           <span className="text-code-keyword">{'<'}{node.tagName}</span>
-          {attrEntries.map(([k, v]) => (
-            <span key={k}>
-              {' '}
-              <span className="text-code-blue">{k}</span>
-              <span className="text-text-dim">=</span>
-              <span className="text-code-orange">&quot;{v}&quot;</span>
-            </span>
-          ))}
+          <AttrList entries={attrEntries} />
           <span className="text-code-keyword">{hasChildren ? '>' : ' />'}</span>
         </span>
       </div>
@@ -176,6 +201,63 @@ function WxmlTreeNode({ node, depth, inspectedSid, onInspect }: WxmlTreeNodeProp
       )}
     </div>
   )
+}
+
+// Ordinary element node — decides between the inline-text and block layouts.
+function WxmlElementNode({ node, depth, inspectedSid, onInspect }: WxmlTreeNodeProps) {
+  const [expanded, setExpanded] = useState(() => isDefaultExpanded(node))
+  const indent = depth * 16
+  const isInspected = Boolean(node.sid && node.sid === inspectedSid)
+  const hasChildren = (node.children ?? []).length > 0
+  const attrEntries = Object.entries(node.attrs) as Array<[string, string]>
+  const inspect = () => {
+    if (node.sid) onInspect?.(node)
+  }
+
+  // Single text child — render inline: <tag>text</tag>
+  const inlineText = hasChildren && node.children.length === 1 && node.children[0]!.tagName === '#text'
+    ? node.children[0]!.text
+    : null
+
+  if (inlineText) {
+    return (
+      <WxmlInlineTextRow
+        node={node}
+        indent={indent}
+        attrEntries={attrEntries}
+        isInspected={isInspected}
+        onMouseEnter={inspect}
+        inlineText={inlineText}
+      />
+    )
+  }
+
+  return (
+    <WxmlBlockRow
+      node={node}
+      depth={depth}
+      indent={indent}
+      attrEntries={attrEntries}
+      hasChildren={hasChildren}
+      expanded={expanded}
+      isInspected={isInspected}
+      inspectedSid={inspectedSid}
+      onInspect={onInspect}
+      onToggle={() => setExpanded(!expanded)}
+      onMouseEnter={inspect}
+    />
+  )
+}
+
+function WxmlTreeNode({ node, depth, inspectedSid, onInspect }: WxmlTreeNodeProps) {
+  if (node.tagName === '#text') return <WxmlTextNode node={node} depth={depth} />
+  if (node.tagName === '#fragment') {
+    return <WxmlFragmentNode node={node} depth={depth} inspectedSid={inspectedSid} onInspect={onInspect} />
+  }
+  if (node.tagName === '#shadow-root') {
+    return <WxmlShadowRootNode node={node} depth={depth} inspectedSid={inspectedSid} onInspect={onInspect} />
+  }
+  return <WxmlElementNode node={node} depth={depth} inspectedSid={inspectedSid} onInspect={onInspect} />
 }
 
 function InspectionFooter({ inspection }: { inspection: ElementInspection | null }) {
@@ -203,7 +285,6 @@ function InspectionFooter({ inspection }: { inspection: ElementInspection | null
 
 export function WxmlPanel({
   tree,
-  onRefresh,
   onInspectElement,
   onClearInspection,
 }: WxmlPanelProps) {
@@ -250,16 +331,6 @@ export function WxmlPanel({
   if (!tree) {
     return (
       <div className="flex flex-col flex-1 overflow-hidden" data-testid="wxml-panel">
-        <div className="flex items-center px-2.5 py-1.5 border-b border-border-subtle shrink-0 bg-bg-panel">
-          <Button
-            variant="outline"
-            size="xs"
-            onClick={onRefresh}
-            className="hover:border-accent hover:text-accent"
-          >
-            ↻ 刷新
-          </Button>
-        </div>
         <div className="text-[12px] text-text-dim text-center px-4 py-6">
           等待小程序加载...
         </div>
@@ -268,16 +339,6 @@ export function WxmlPanel({
   }
   return (
     <div className="flex flex-col flex-1 overflow-hidden" onMouseLeave={clearInspection} data-testid="wxml-panel">
-      <div className="flex items-center px-2.5 py-1.5 border-b border-border-subtle shrink-0 bg-bg-panel">
-        <Button
-          variant="outline"
-          size="xs"
-          onClick={onRefresh}
-          className="hover:border-accent hover:text-accent"
-        >
-          ↻ 刷新
-        </Button>
-      </div>
       <div className="flex-1 overflow-y-auto p-2 font-mono text-[12px]">
         <WxmlTreeNode
           node={tree}

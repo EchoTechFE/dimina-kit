@@ -35,5 +35,12 @@ jobs:
 
       - name: Anti-regression ratchet
         run: |
-          node --test "tools/ratchet/*.test.mjs"
+          pnpm exec tsc -p tools/ratchet
+          node --test "tools/ratchet/*.test.ts"
           pnpm ratchet:check
+
+      - name: Anti-regression baseline guard
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --depth=1 origin "$GITHUB_BASE_REF"
+          node tools/ratchet/ratchet.ts baseline-guard FETCH_HEAD

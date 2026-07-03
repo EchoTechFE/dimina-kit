@@ -211,6 +211,9 @@ export async function evalInSimulator<T = unknown>(
         const sim = all.find((wc) => wc.getURL().includes('simulator.html'))
           ?? all.find((wc) => wc.getType() === 'webview')
         if (!sim) throw new Error('No webview found')
+        // Don't queue a did-stop-loading waiter per retry on a loading wc —
+        // fail this attempt and let the retry/pollUntil caller re-enter.
+        if (sim.isLoading()) throw new Error('simulator wc is loading')
         return sim.executeJavaScript(expr)
       }, expression) as Promise<T>
     } catch (err) {
@@ -238,6 +241,8 @@ export async function evalInWebContentsByUrl<T = unknown>(
     const all = webContents.getAllWebContents()
     const target = all.find((wc) => wc.getURL().includes(payload.urlSubstring))
     if (!target) throw new Error(`No webContents found for ${payload.urlSubstring}`)
+    // A did-stop-loading waiter would queue per call on a loading wc; fail fast.
+    if (target.isLoading()) throw new Error(`webContents for ${payload.urlSubstring} is loading`)
     return target.executeJavaScript(payload.expression)
   }, { urlSubstring, expression }) as Promise<T>
 }
@@ -365,6 +370,11 @@ export async function waitSimulatorReady(
           const sim = all.find((wc) => wc.getURL().includes('simulator.html'))
             ?? all.find((wc) => wc.getType() === 'webview')
           if (!sim) return null
+          // A loading wc can't execute JS yet; probing it anyway queues one
+          // did-stop-loading waiter PER POLL on the emitter (Electron defers
+          // the eval), piling toward MaxListenersExceededWarning during long
+          // relaunch windows. Report not-ready without queuing.
+          if (sim.isLoading()) return null
           return sim.executeJavaScript('1')
         })
         return out === 1

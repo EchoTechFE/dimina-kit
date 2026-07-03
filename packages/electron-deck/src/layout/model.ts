@@ -34,6 +34,11 @@ export function createLayoutModel(initial: LayoutTree): LayoutModel {
 		// Compute first; if it throws, nothing below runs — revision stays put
 		// and no subscriber is notified.
 		const next = mut(current)
+		// A mutation that returns the CURRENT tree by identity changed nothing (a UI
+		// action that resolved to nothing — closing a `closable:false` panel, closing
+		// the last remaining panel): do not bump the revision or notify, so no
+		// spurious re-render fires. Re-entrant queue draining is unaffected.
+		if (next === current) return
 		current = next
 		revision += 1
 		const snap: LayoutSnapshot = { tree: current, revision }

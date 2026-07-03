@@ -1118,3 +1118,84 @@ describe('installElementsForward — Overlay.disable guard', () => {
     }
   })
 })
+
+// ── reconcile tick vs a loading front-end ───────────────────────────────────────
+
+describe('reconcile tick while the devtools front-end is loading', () => {
+  it('skips the inject while the MAIN frame is loading even when the coarse isLoading reads false', async () => {
+    vi.useFakeTimers()
+    try {
+      const guest = fakeWc()
+      // Electron's internal executeJavaScript gate is isLoadingMainFrame, not
+      // isLoading — during their divergence window every tick would queue one
+      // did-stop-loading waiter despite isLoading()===false.
+      const devtoolsWc = fakeWc({
+        isLoading: vi.fn(() => false),
+        isLoadingMainFrame: vi.fn(() => true),
+      })
+      const bridge = fakeBridge(() => guest)
+      const stop = installElementsForward(
+        { devtoolsWc, bridge } as unknown as Parameters<typeof installElementsForward>[0],
+      )
+      const execSpy = devtoolsWc.executeJavaScript as ReturnType<typeof vi.fn>
+      const callsAtInstall = execSpy.mock.calls.length
+      await vi.advanceTimersByTimeAsync(1500)
+      expect(execSpy.mock.calls.length).toBe(callsAtInstall)
+      stop()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('drops the activePage-driven documentUpdated push while the front-end is unsettled', async () => {
+    vi.useFakeTimers()
+    try {
+      const guest = fakeWc()
+      const devtoolsWc = fakeWc({
+        isLoading: vi.fn(() => false),
+        isLoadingMainFrame: vi.fn(() => true),
+      })
+      const bridge = fakeBridge(() => guest)
+      const stop = installElementsForward(
+        { devtoolsWc, bridge } as unknown as Parameters<typeof installElementsForward>[0],
+      )
+      const execSpy = devtoolsWc.executeJavaScript as ReturnType<typeof vi.fn>
+      const callsAtInstall = execSpy.mock.calls.length
+      // An activePage burst during churn drives primeGuest + pushDocumentUpdated;
+      // each push against an unsettled front-end would queue one internal waiter.
+      for (let i = 0; i < 10; i++) bridge.__emit({ kind: 'activePage', bridgeId: `b${i}` })
+      await vi.advanceTimersByTimeAsync(50)
+      expect(execSpy.mock.calls.length).toBe(callsAtInstall)
+      stop()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('skips the inject per tick while loading, resumes on the first post-load tick', async () => {
+    vi.useFakeTimers()
+    try {
+      const guest = fakeWc()
+      // A front-end mid-(re)load: executeJavaScript would queue one
+      // did-stop-loading waiter PER 150ms TICK on the wc emitter until the
+      // load ends — the reconcile loop must not inject while isLoading().
+      const devtoolsWc = fakeWc({ isLoading: vi.fn(() => true) })
+      const bridge = fakeBridge(() => guest)
+      const stop = installElementsForward(
+        { devtoolsWc, bridge } as unknown as Parameters<typeof installElementsForward>[0],
+      )
+      const execSpy = devtoolsWc.executeJavaScript as ReturnType<typeof vi.fn>
+      const callsAtInstall = execSpy.mock.calls.length
+
+      await vi.advanceTimersByTimeAsync(1500)
+      expect(execSpy.mock.calls.length).toBe(callsAtInstall)
+
+      ;(devtoolsWc.isLoading as ReturnType<typeof vi.fn>).mockReturnValue(false)
+      await vi.advanceTimersByTimeAsync(400)
+      expect(execSpy.mock.calls.length).toBeGreaterThan(callsAtInstall)
+      stop()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

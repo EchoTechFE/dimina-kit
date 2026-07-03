@@ -32,6 +32,7 @@ import type {
 	MinimalWebContentsLike,
 	MinimalWebContentsView,
 } from './electron-types.js'
+import { cleanupDestOnMoveToFailure } from './deck-app-view-move.js'
 import { EventBus } from './event-bus.js'
 import { InMemoryTypedIpcRegistry } from './ipc-registry-memory.js'
 import { createTrustSet } from './trust-set.js'
@@ -47,6 +48,13 @@ import {
 	type NativeViewRef,
 } from '../main/compositor.js'
 import { createViewHandle } from '../main/view-handle.js'
+import {
+	createInitialState,
+	reconcile,
+	cleanSnapshot,
+	dispatchOps,
+	type ReconcilerState,
+} from '../layout/index.js'
 import {
 	createCapabilityRegistry,
 	type CapabilityPolicy,
@@ -133,7 +141,7 @@ interface PendingLoadFailed {
  * binds a view id to its native `WebContentsView` so the adapter can translate a
  * Compositor `NativeViewRef` into the real `addChildView`/`removeChildView` call.
  */
-interface ViewSubstrate {
+export interface ViewSubstrate {
 	compositor: Compositor
 	windowScope: Scope
 	registerView(id: string, wcv: MinimalWebContentsView): void
@@ -275,15 +283,34 @@ export class DeckApp {
 	/**
 	 * slot-token registry (view-handle.md「slot-token 握手」/ capability-and-lifecycle.md「anchor slotToken 原子下发」):
 	 * each anchored `placeIn` mints an unguessable token bound to (viewId, slotId,
-	 * authorizedWcId). The `__electron-deck:place` apply path looks the token up,
-	 * checks the sender is the authorized wc (anti-spoof), validates the placement,
-	 * then `apply`s it. `resend` re-pushes the slot-grant (layout-subscribe replay).
+	 * authorizedWcId, zone). The `__electron-deck:snapshot` apply path authorizes
+	 * each of the renderer's per-view tokens (token known AND authorized to the
+	 * sender wc), DERIVES the view's identity (viewId) + z-order (zone→layer) from
+	 * this registry (never trusting the renderer-reported fields), reconciles the
+	 * cleaned window-level table, and drives each view's `apply`. `resend` re-pushes
+	 * the slot-grant (layout-subscribe replay).
 	 */
 	private readonly slotTokens = new Map<
 		string,
-		{ viewId: string, slotId: string, authorizedWcId: number, resend: () => void, apply: (placement: unknown) => void }
+		{ viewId: string, slotId: string, authorizedWcId: number, zone: number, resend: () => void, apply: (placement: unknown) => void }
 	>()
 	private slotSeq = 0
+	/**
+	 * Per-control-wc level-triggered reconciler state (keyed by authorizedWcId).
+	 * The renderer publishes a whole window-level desired-placement table each
+	 * frame; `reconcile` diffs it against the last-applied actual and emits ops, so
+	 * a lost or spurious per-view edge self-corrects instead of sticking a view
+	 * detached (the white-screen failure mode). Reset on layout-subscribe (reload)
+	 * and dropped on wc revoke.
+	 */
+	private readonly reconcileStates = new Map<number, ReconcilerState>()
+	/**
+	 * Per-control-wc strictly-monotonic generation counter. Bumped on every
+	 * layout-subscribe and stamped into each slot-grant, so a reload's higher
+	 * generation resets the reconciler regardless of IPC ordering (a late in-flight
+	 * pre-reload snapshot carries a lower generation → rejected).
+	 */
+	private readonly perWcGeneration = new Map<number, number>()
 	private _runtime: Runtime | null = null
 	private startCalled = false
 	private shutdownPromise: Promise<void> | null = null
@@ -351,16 +378,7 @@ export class DeckApp {
 
 		// 校验在 lifecycle 转换之前；invalid config → reject，phase 不动
 		validateConfig(this.config)
-
-		// half-state guard: electron + (toolbar | windows) without
-		// wireTransport would leave the host with webviews that can never
-		// reach back via __electron-deck:invoke. Reject early with a clear msg.
-		const hasWebviewContent = !!(this.config.toolbar || this.config.windows)
-		if (this.options.electron && hasWebviewContent && !this.options.wireTransport) {
-			throw new Error(
-				'DeckAppOptions: wireTransport.ipcMain is required when config has toolbar or windows',
-			)
-		}
+		this.assertWireTransportPresentForWebviewContent()
 
 		// pre-ready + whenReady gate. Only runs when a real `app` surface is
 		// injected (production path / gate tests); fakes without `app` skip it. The
@@ -368,60 +386,103 @@ export class DeckApp {
 		// in a real main process.
 		const app = this.options.electron?.app
 		if (app) {
-			// Single-instance gate (opt-in): a second instance must quit BEFORE any
-			// side effect (beforeReady bootstrap / whenReady / window). Phase stays
-			// `init`.
-			if (this.config.app?.singleInstance && typeof app.requestSingleInstanceLock === 'function') {
-				if (!app.requestSingleInstanceLock()) {
-					try { app.quit() }
-					catch { /* best-effort */ }
-					return
-				}
-			}
-			if (this.options.backend?.beforeReady) {
-				await this.options.backend.beforeReady(app)
-			}
-			else if (this.config.app?.name) {
-				try { app.setName(this.config.app.name) }
-				catch { /* best-effort */ }
-			}
-			await app.whenReady()
-			this.bindAppLifecycle(app)
+			const shouldContinue = await this.runPreReadyGate(app)
+			// Single-instance gate lost the lock and already quit — stop here,
+			// phase stays `init` (mirrors the original early-return contract).
+			if (!shouldContinue) return
 		}
 
 		// Wrap assemble/bind in a single try; on any failure run
 		// cleanupOnError() so partially-constructed windows / handlers get
 		// disposed before the start() promise rejects.
 		try {
-			// Init → Bind
-			this.lifecycle.enter('bind')
-			this.bindDeclarativeFields()
-			this.assembleElectron()
-			this.bindWireTransport()
-			// loadURL / loadFile **必须**晚于 bindWireTransport：webContents 一旦
-			// 加载，preload 立刻执行；若 preload 调 framework bridge 时 ipcMain
-			// handler 还没注册会 "no handler" 拒绝。先注册再加载。
-			this.loadAssembledSources()
-
-			// Bind → Setup
-			this.lifecycle.enter('setup')
-			this._runtime = this.buildRuntime()
-
-			// Domain assembly before the host's imperative setup escape.
-			if (this.options.backend) {
-				await this.options.backend.assemble(this._runtime)
-			}
-			if (this.config.setup) {
-				await this.config.setup(this._runtime)
-			}
-
-			// Setup → Ready
-			this.lifecycle.enter('ready')
+			await this.runBindAndSetupPhases()
 		}
 		catch (err) {
 			await this.cleanupOnError()
 			throw err
 		}
+	}
+
+	/**
+	 * half-state guard: electron + (toolbar | windows) without wireTransport
+	 * would leave the host with webviews that can never reach back via
+	 * __electron-deck:invoke. Reject early with a clear msg.
+	 */
+	private assertWireTransportPresentForWebviewContent(): void {
+		const hasWebviewContent = !!(this.config.toolbar || this.config.windows)
+		if (this.options.electron && hasWebviewContent && !this.options.wireTransport) {
+			throw new Error(
+				'DeckAppOptions: wireTransport.ipcMain is required when config has toolbar or windows',
+			)
+		}
+	}
+
+	/**
+	 * Pre-`whenReady` sequencing: single-instance lock (opt-in, must quit
+	 * BEFORE any other side effect) → `backend.beforeReady` (or the framework's
+	 * best-effort `app.setName`) → `await app.whenReady()` → app-level lifecycle
+	 * bindings. Returns `false` when the single-instance lock was lost (the
+	 * second instance already called `app.quit()` — `start()` must stop with
+	 * phase still `init`), `true` otherwise.
+	 */
+	private async runPreReadyGate(app: MinimalApp): Promise<boolean> {
+		if (!this.acquireSingleInstanceLock(app)) {
+			return false
+		}
+		if (this.options.backend?.beforeReady) {
+			await this.options.backend.beforeReady(app)
+		}
+		else if (this.config.app?.name) {
+			try { app.setName(this.config.app.name) }
+			catch { /* best-effort */ }
+		}
+		await app.whenReady()
+		this.bindAppLifecycle(app)
+		return true
+	}
+
+	/**
+	 * Single-instance gate (opt-in): a second instance must quit BEFORE any
+	 * side effect (beforeReady bootstrap / whenReady / window). Returns `true`
+	 * when the caller should continue (not opted in, or this instance holds the
+	 * lock); `false` after the losing instance has called `app.quit()`.
+	 */
+	private acquireSingleInstanceLock(app: MinimalApp): boolean {
+		if (!this.config.app?.singleInstance || typeof app.requestSingleInstanceLock !== 'function') {
+			return true
+		}
+		if (app.requestSingleInstanceLock()) {
+			return true
+		}
+		try { app.quit() }
+		catch { /* best-effort */ }
+		return false
+	}
+
+	/** Init → Bind → Setup → Ready. Assembly/bind must run AFTER the
+	 *  whenReady gate (handled by the caller); loadURL/loadFile must run
+	 *  AFTER bindWireTransport (a preload calling the bridge before its
+	 *  ipcMain handler is registered would see a "no handler" reject). */
+	private async runBindAndSetupPhases(): Promise<void> {
+		this.lifecycle.enter('bind')
+		this.bindDeclarativeFields()
+		this.assembleElectron()
+		this.bindWireTransport()
+		this.loadAssembledSources()
+
+		this.lifecycle.enter('setup')
+		this._runtime = this.buildRuntime()
+
+		// Domain assembly before the host's imperative setup escape.
+		if (this.options.backend) {
+			await this.options.backend.assemble(this._runtime)
+		}
+		if (this.config.setup) {
+			await this.config.setup(this._runtime)
+		}
+
+		this.lifecycle.enter('ready')
 	}
 
 	/**
@@ -676,8 +737,12 @@ export class DeckApp {
 	 * registration) — windows with no per-window deciders fall through to Electron's
 	 * default close (the framework does not preventDefault).
 	 */
-	private armSubWindowCloseMachine(win: MinimalBrowserWindow, controlWc: MinimalWebContents): void {
-		win.on('close', (e?: { preventDefault(): void }) => {
+	private armSubWindowCloseMachine(
+		win: MinimalBrowserWindow,
+		controlWc: MinimalWebContents,
+		windowScope: Scope,
+	): void {
+		const onClose = (e?: { preventDefault(): void }): void => {
 			const rec = this.windowRegistrations.get(controlWc)
 			// No registration or no live decider → let Electron close it normally
 			// (do NOT preventDefault — preserves the default-close path).
@@ -703,7 +768,34 @@ export class DeckApp {
 				rec.closing = null
 				if (!win.isDestroyed()) win.destroy() // → fires 'closed'
 			})
-		})
+		}
+		win.on('close', onClose)
+		// The 'close' listener's ownership belongs to the windowScope: its teardown
+		// (un-adopt / shutdown) removes the listener, so re-adopting the same window
+		// never accumulates stale close listeners. A fake window lacking
+		// removeListener/off degrades to leaving the listener (harmless — a torn-down
+		// or destroyed window's listeners are never consulted again).
+		windowScope.own(() => this.removeWindowListener(win, 'close', onClose))
+	}
+
+	/**
+	 * Remove a previously-registered window event listener (Electron's
+	 * `removeListener`/`off`). Tolerates minimal test fakes that expose neither by
+	 * degrading to a no-op — the caller's ownership contract is best-effort cleanup.
+	 */
+	private removeWindowListener(
+		win: MinimalBrowserWindow,
+		event: string,
+		listener: (e?: { preventDefault(): void }) => void,
+	): void {
+		const w = win as unknown as {
+			// eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
+			removeListener?: Function
+			// eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
+			off?: Function
+		}
+		const remove = w.removeListener ?? w.off
+		if (typeof remove === 'function') remove.call(win, event, listener)
 	}
 
 	/**
@@ -1250,6 +1342,17 @@ export class DeckApp {
 		)
 	}
 
+	/** Drop `viewId` from `groupKey`'s HIDDEN list only (the group's `handles`
+	 *  entry stays — the view is still keep-alive-managed, just no longer
+	 *  evictable while visible). Idempotent: a no-op when the view isn't on the
+	 *  hidden list or the group doesn't exist. */
+	private dropViewFromKeepAliveHidden(groupKey: string, viewId: string): void {
+		const group = this.keepAliveGroups.get(groupKey)
+		if (!group) return
+		const i = group.hidden.indexOf(viewId)
+		if (i >= 0) group.hidden.splice(i, 1)
+	}
+
 	private constructWindow(
 		opts: WindowContribution | (WindowCreateOptions & { title?: string }),
 		autoTrust: boolean,
@@ -1328,7 +1431,7 @@ export class DeckApp {
 		// when a live per-window decider exists, so declared windows (no decider) keep
 		// Electron's default close.
 		this.buildDeckWindow(win, wc, windowScope)
-		this.armSubWindowCloseMachine(win, wc)
+		this.armSubWindowCloseMachine(win, wc, windowScope)
 		if (!deferLoad) {
 			this.safeLoad(win.webContents, opts.source)
 		}
@@ -1415,6 +1518,10 @@ export class DeckApp {
 			// can't guarantee revoke-first, but trust must still be revoked on close.
 			win.on('closed', revoke)
 		}
+		// The 'closed' revoke listener's ownership belongs to the windowScope: its
+		// teardown (un-adopt) removes it so re-adopting the same window never leaves a
+		// stale revoke listener behind.
+		windowScope.own(() => this.removeWindowListener(win, 'closed', revoke))
 		// (5) admit trust AFTER the revoke listener is armed (constructWindow order):
 		// combined with admitTrust's isDestroyed() guard, a window destroyed at any
 		// point can never leave a trusted-but-unrevoked wc.
@@ -1426,7 +1533,7 @@ export class DeckApp {
 		// keeps the host's own close handling).
 		this.bindNavigationGrantReset(wc)
 		this.buildDeckWindow(win, wc, windowScope)
-		this.armSubWindowCloseMachine(win, wc)
+		this.armSubWindowCloseMachine(win, wc, windowScope)
 		// Also run the synchronous revoke during the windowScope's teardown cascade
 		// (un-adopt / app shutdown), so substrate+trust are torn down even when no
 		// 'closed' fires (e.g. 'observe' shutdown where the host never closes it).
@@ -1500,41 +1607,72 @@ export class DeckApp {
 	 */
 	private ensureSlotChannelsArmed(): void {
 		this.wireTransport?.armSlotChannels(
-			(senderId, slotToken, placement) => this.handleSlotPlace(senderId, slotToken, placement),
+			(senderId, rawSnapshot) => this.handleSnapshot(senderId, rawSnapshot),
 			senderId => this.handleLayoutSubscribe(senderId),
 		)
 	}
 
 	/**
-	 * slot-token apply path (`__electron-deck:place`). The token is the credential:
-	 * look it up, verify the sender IS the wc the token was granted to (anti-spoof),
-	 * validate the placement, then apply. Any failure → DROP (silent).
+	 * slot-token apply path (`__electron-deck:snapshot`). The renderer publishes a
+	 * whole window-level desired-placement table; each entry's slotToken is the
+	 * credential. Steps:
+	 *   1. AUTHORIZE + clean: `cleanSnapshot` keeps only views whose token is known
+	 *      AND authorized to `senderId` (anti-spoof), deriving each view's identity
+	 *      (viewId) + z-order (zone→layer) from the registry — never from the
+	 *      renderer-reported fields. A non-empty snapshot that fully fails
+	 *      authorization is rejected wholesale (returns null) so a transient token
+	 *      failure is NOT read as "detach everything".
+	 *   2. RECONCILE the cleaned table against this wc's last-applied actual state
+	 *      → an ordered op list (level-triggered; a lost/spurious frame self-heals).
+	 *   3. DISPATCH the ops onto each view's `applyPlacement` sink.
 	 */
-	private handleSlotPlace(senderId: number, slotToken: string, placement: unknown): void {
-		const entry = this.slotTokens.get(slotToken)
-		if (!entry) return // unknown / expired (revoked on dispose / window close)
-		if (entry.authorizedWcId !== senderId) return // anti-spoof: wrong wc
-		if (!isValidPlacement(placement)) return // malformed geometry
-		entry.apply(placement)
+	private handleSnapshot(senderId: number, rawSnapshot: unknown): void {
+		const clean = cleanSnapshot(rawSnapshot, (slotToken) => {
+			const entry = this.slotTokens.get(slotToken)
+			if (!entry || entry.authorizedWcId !== senderId) return null
+			return { viewId: entry.viewId, layer: entry.zone }
+		})
+		if (!clean) return // malformed OR fully-unauthorized → drop (never detach-all)
+
+		const prev = this.reconcileStates.get(senderId) ?? createInitialState()
+		const { state, ops } = reconcile(prev, clean)
+		this.reconcileStates.set(senderId, state)
+
+		// Resolve a viewId back to its apply sink. Built from ALL of this wc's live
+		// tokens (not just the cleaned snapshot) so a detach op for a view the
+		// renderer dropped can still reach its sink.
+		const applyByViewId = new Map<string, (p: unknown) => void>()
+		for (const entry of this.slotTokens.values()) {
+			if (entry.authorizedWcId === senderId) applyByViewId.set(entry.viewId, entry.apply)
+		}
+		dispatchOps(ops, state, (viewId) => applyByViewId.get(viewId) ?? null)
 	}
 
 	/**
 	 * Per-wc layout-subscribe replay (`__electron-deck:layout-subscribe`). When the
-	 * authorized control wc (re)subscribes (e.g. after reload), re-push every grant
-	 * it owns so it can re-bind its DOM slots. A DIFFERENT wc's subscribe never
-	 * receives another wc's grants.
+	 * authorized control wc (re)subscribes (e.g. after reload), BUMP its generation
+	 * and RESET its reconciler (a reload restarts the renderer's epoch at 0; without
+	 * the reset the fresh low-epoch snapshots would be rejected as stale), then
+	 * re-push every grant it owns — now carrying the bumped generation — so it can
+	 * re-bind its DOM slots. A DIFFERENT wc's subscribe never touches another wc's
+	 * state or grants.
 	 */
 	private handleLayoutSubscribe(senderId: number): void {
+		this.perWcGeneration.set(senderId, (this.perWcGeneration.get(senderId) ?? 0) + 1)
+		this.reconcileStates.delete(senderId)
 		for (const entry of this.slotTokens.values()) {
 			if (entry.authorizedWcId === senderId) entry.resend()
 		}
 	}
 
-	/** Drop every slot token authorized to `wcId` (window-close / shutdown hygiene). */
+	/** Drop every slot token + reconciler/generation state authorized to `wcId`
+	 *  (window-close / shutdown hygiene). */
 	private revokeSlotTokensForWc(wcId: number): void {
 		for (const [token, entry] of this.slotTokens) {
 			if (entry.authorizedWcId === wcId) this.slotTokens.delete(token)
 		}
+		this.reconcileStates.delete(wcId)
+		this.perWcGeneration.delete(wcId)
 	}
 
 	private handleSubWindowClosed(win: MinimalBrowserWindow, wc: MinimalWebContents): void {
@@ -1881,6 +2019,19 @@ export class DeckApp {
 						this.bindNavigationGrantReset(wc)
 						return lease
 					}
+					// An ADOPTED window is not in lifetimeShadow (only framework-built
+					// windows are), but `adopt()` already admitted trust under its
+					// windowScope — recorded in wcRecords. Route the explicit lease through
+					// that SAME windowScope so it is revoked when the window closes, not
+					// left on rootScope until shutdown where a reused wc.id could inherit
+					// stale trust. `admitTrust` reuses the existing wcScope for a known wc,
+					// so this only adds a fresh lease under the window's lifetime.
+					const adopted = this.wcRecords.get(wc)
+					if (adopted) {
+						const lease = this.admitTrust(wc, adopted.windowScope)
+						this.bindNavigationGrantReset(wc)
+						return lease
+					}
 					return this._trustWebContents(wc)
 				},
 				adopt: (win, opts): Disposable => {
@@ -2038,8 +2189,8 @@ export class DeckApp {
 				// Mint + register + push a slot-token anchor for an anchored placement on
 				// `controlWc`/`anchor`. Shared by placeIn (first placement) and moveTo
 				// (re-anchor for the dest window). Sets the captured `slotToken`.
-				const mintSlotToken = (controlWc: MinimalWebContents, anchor: string): void => {
-					// The wire's Place / LayoutSubscribe channels are
+				const mintSlotToken = (controlWc: MinimalWebContents, anchor: string, zone: number): void => {
+					// The wire's Snapshot / LayoutSubscribe channels are
 					// armed eagerly at framework start() (see bindWireTransport).
 					// This call is kept for safety/idempotency — it is a no-op when the
 					// channels are already armed.
@@ -2048,12 +2199,23 @@ export class DeckApp {
 					const token = randomUUID()
 					slotToken = token
 					void ++this.slotSeq
-					const grant = { viewId, slotId: anchor, slotToken: token }
-					const resend = (): void => { controlWc.send(DeckChannel.SlotGrant, grant) }
+					// Grant carries the wc's CURRENT generation. `resend` re-reads it each
+					// push so a layout-subscribe replay (which bumps the generation first)
+					// re-issues the grant at the new generation.
+					const resend = (): void => {
+						const grant = {
+							viewId,
+							slotId: anchor,
+							slotToken: token,
+							generation: this.perWcGeneration.get(authorizedWcId) ?? 0,
+						}
+						controlWc.send(DeckChannel.SlotGrant, grant)
+					}
 					this.slotTokens.set(token, {
 						viewId,
 						slotId: anchor,
 						authorizedWcId,
+						zone,
 						resend,
 						apply: p => { hostHandle.applyPlacement(p as ViewPlacement) },
 					})
@@ -2104,7 +2266,7 @@ export class DeckApp {
 						// the only credential the renderer needs to drive `place`.
 						const anchor = placeOpts.anchor
 						if (typeof anchor === 'string' && anchor.length > 0) {
-							mintSlotToken(controlWc, anchor)
+							mintSlotToken(controlWc, anchor, placeOpts.zone ?? 0)
 						}
 						return hostHandle
 					},
@@ -2142,58 +2304,10 @@ export class DeckApp {
 							// addChildView that throws MID-APPLY may have leaked the WCV into
 							// the dest window's contentView before throwing (the substrate's
 							// tracked `order` never recorded the failed add, so the
-							// Compositor rollback can't remove it). Balance it with an
-							// explicit dest detach so the dest window is net-zero.
-							//
-							// The cleanup must be DEFENSIVE and must
-							// NEVER mask the original moveTo error.
-							//   - Only removeChildView if the dest WCV was ACTUALLY added (a
-							//     SOURCE-commit failure never touched dest; the Compositor
-							//     rollback may already have removed it) — guard on
-							//     `children.includes(wcv)`, so we never double-remove nor remove
-							//     a child dest never had.
-							//   - Wrap the WHOLE cleanup in try/catch that swallows+logs its own
-							//     error, then ALWAYS rethrow the ORIGINAL `e` — a cleanup throw
-							//     can never shadow the real cause of the move failure.
-							// The two cleanup steps are INDEPENDENT — a throw in
-							// the native detach must NOT skip the registry unregister (else the dest
-							// substrate leaks a view it doesn't host, and a later dispose only frees
-							// `placedSubstrate`=src). Each step is its own try/catch; the original
-							// `e` is ALWAYS rethrown. (`destWin` is the DeckWindow-unwrapped
-							// dest window resolved at the top of moveTo.)
-							try {
-								// Best-effort dest detach: attempt when the WCV is a known child OR
-								// when membership is UNKNOWN (`children` absent → can't verify, but a
-								// leaked mid-apply add must still be detached; removeChildView of a
-								// non-child is a no-op in real Electron). A SOURCE-commit failure that
-								// truly never touched dest → removeChildView is a harmless no-op.
-								// Check isDestroyed() FIRST: reading `.contentView` on a destroyed
-								// BrowserWindow throws "Object has been destroyed" in real Electron, so a
-								// dead dest window must skip the contentView read entirely (its native child
-								// is already gone — nothing to detach). Without this guard the getter throws,
-								// gets caught below, and pollutes the log with a secondary destroyed error.
-								if (!destWin.isDestroyed()) {
-									const destChildren = destWin.contentView.children
-									// `== null` covers BOTH undefined and null (a null `children` would
-									// throw on `.includes`).
-									const maybeAttached = destChildren == null || destChildren.includes(wcv)
-									if (maybeAttached) {
-										destWin.contentView.removeChildView(wcv)
-									}
-								}
-							}
-							catch (cleanupErr) {
-								console.error('[electron-deck] moveTo dest detach failed (original error rethrown):', cleanupErr)
-							}
-							try {
-								// ALWAYS undo the dest registration so the dest substrate never tracks
-								// a view it doesn't host — independent of the detach above.
-								destSub.unregisterView(viewId)
-							}
-							catch (cleanupErr) {
-								console.error('[electron-deck] moveTo dest unregister failed (original error rethrown):', cleanupErr)
-							}
-							throw e
+							// Compositor rollback can't remove it) — `cleanupDestOnMoveToFailure`
+							// balances that leak with an explicit dest detach + registry
+							// unregister, then rethrows the ORIGINAL `e` (never masked).
+							cleanupDestOnMoveToFailure(destWin, destSub, wcv, viewId, e)
 						}
 						// inner.moveTo succeeded → move the substrate registration: drop
 						// from src now that the view lives in dest. For a SAME-WINDOW move
@@ -2213,13 +2327,7 @@ export class DeckApp {
 						// stale hidden entry would let a later eviction dispose a now-visible
 						// view (and skew the LRU order). Idempotent: a no-op when the view was
 						// already visible (not in the list) or has no group.
-						if (groupKey) {
-							const group = this.keepAliveGroups.get(groupKey)
-							if (group) {
-								const hi = group.hidden.indexOf(viewId)
-								if (hi >= 0) group.hidden.splice(hi, 1)
-							}
-						}
+						if (groupKey) this.dropViewFromKeepAliveHidden(groupKey, viewId)
 						// Re-issue the slot-token anchor for the dest. Revoke the OLD token
 						// first (a stale `place` from the src renderer drops), then mint a
 						// fresh one bound to the dest control wc + dest slot.
@@ -2229,7 +2337,7 @@ export class DeckApp {
 						}
 						const anchor = moveOpts.anchor
 						if (typeof anchor === 'string' && anchor.length > 0) {
-							mintSlotToken(destControlWc, anchor)
+							mintSlotToken(destControlWc, anchor, moveOpts.zone ?? 0)
 						}
 					},
 					applyPlacement: (p) => {
@@ -2261,7 +2369,14 @@ export class DeckApp {
 								while (keepAlive && group.hidden.length > keepAlive.max) {
 									const victimId = group.hidden.shift()!
 									const victim = group.handles.get(victimId)
-									if (victim) void victim.dispose()
+									// A fire-and-forget eviction: catch the victim's dispose
+									// rejection (its native teardown may throw) and log it, so an
+									// eviction never leaks an unhandled promise rejection.
+									if (victim) {
+										void victim.dispose().catch((e) => {
+											console.error('[electron-deck] keepAlive eviction dispose failed:', e)
+										})
+									}
 								}
 							}
 						}
@@ -2411,27 +2526,6 @@ export class DeckApp {
 		}
 		return runtime
 	}
-}
-
-/**
- * Validate an inbound `__electron-deck:place` placement before applying it.
- * `{visible:false}` is always OK; `{visible:true, bounds:{x,y,width,height}}`
- * requires width≥0 && height≥0 — x/y may be ANY finite number (negative origin
- * is legitimate for scroll-follow). Anything else is rejected.
- */
-function isValidPlacement(placement: unknown): placement is ViewPlacement {
-	if (placement === null || typeof placement !== 'object') return false
-	const p = placement as Record<string, unknown>
-	if (p.visible === false) return true
-	if (p.visible !== true) return false
-	const b = p.bounds
-	if (b === null || typeof b !== 'object') return false
-	const { x, y, width, height } = b as Record<string, unknown>
-	if (typeof x !== 'number' || !Number.isFinite(x)) return false
-	if (typeof y !== 'number' || !Number.isFinite(y)) return false
-	if (typeof width !== 'number' || !Number.isFinite(width) || width < 0) return false
-	if (typeof height !== 'number' || !Number.isFinite(height) || height < 0) return false
-	return true
 }
 
 async function runWithTimeout<T>(work: MaybePromise<T>, timeoutMs: number): Promise<T> {

@@ -32,7 +32,7 @@ export const DeckChannel = {
 	Invoke: '__electron-deck:invoke',
 	Event: '__electron-deck:event',
 	Probe: '__electron-deck:probe',
-	Place: '__electron-deck:place',
+	Snapshot: '__electron-deck:snapshot',
 	SlotGrant: '__electron-deck:slot-grant',
 	LayoutSubscribe: '__electron-deck:layout-subscribe',
 } as const

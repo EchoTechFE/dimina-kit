@@ -279,17 +279,17 @@ function createFakeWebContents(id: number): FakeWebContents {
 }
 
 describe('DeckApp — wireTransport integration', () => {
-	it('start() registers ipcMain.handle for invoke + probe + place + layout-subscribe channels', async () => {
+	it('start() registers ipcMain.handle for invoke + probe + snapshot + layout-subscribe channels', async () => {
 		const ipcMain = createFakeIpcMain()
 		const app = new DeckApp({}, { wireTransport: { ipcMain } })
 		await app.start()
-		// Channels are armed at start — the slot-token Place / LayoutSubscribe
+		// Channels are armed at start — the slot-token Snapshot / LayoutSubscribe
 		// handlers are registered eagerly (not lazily on the first anchored
 		// placeIn), so a slot-less app also registers all 4.
 		expect(ipcMain.handle).toHaveBeenCalledTimes(4)
 		const channels = ipcMain.handle.mock.calls.map(c => c[0] as string).sort()
 		expect(channels).toEqual(
-			[DeckChannel.Invoke, DeckChannel.Probe, DeckChannel.Place, DeckChannel.LayoutSubscribe].sort(),
+			[DeckChannel.Invoke, DeckChannel.Probe, DeckChannel.Snapshot, DeckChannel.LayoutSubscribe].sort(),
 		)
 	})
 
@@ -396,17 +396,17 @@ describe('DeckApp — wireTransport integration', () => {
 		await app.shutdown()
 	})
 
-	it('shutdown() calls ipcMain.removeHandler for invoke + probe + place + layout-subscribe', async () => {
+	it('shutdown() calls ipcMain.removeHandler for invoke + probe + snapshot + layout-subscribe', async () => {
 		const ipcMain = createFakeIpcMain()
 		const app = new DeckApp({}, { wireTransport: { ipcMain } })
 		await app.start()
 		await app.shutdown()
 		// Channels are armed at start, so shutdown removes all 4
-		// (the eagerly-registered Place / LayoutSubscribe handlers too).
+		// (the eagerly-registered Snapshot / LayoutSubscribe handlers too).
 		expect(ipcMain.removeHandler).toHaveBeenCalledTimes(4)
 		const removed = ipcMain.removeHandler.mock.calls.map(c => c[0] as string).sort()
 		expect(removed).toEqual(
-			[DeckChannel.Invoke, DeckChannel.Probe, DeckChannel.Place, DeckChannel.LayoutSubscribe].sort(),
+			[DeckChannel.Invoke, DeckChannel.Probe, DeckChannel.Snapshot, DeckChannel.LayoutSubscribe].sort(),
 		)
 	})
 

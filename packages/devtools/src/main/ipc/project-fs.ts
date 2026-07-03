@@ -496,6 +496,45 @@ function writeFileSync(root: string, p: string, content: string): void {
   }
 }
 
+/**
+ * Reads one directory's entries. Returns `null` (caller skips the directory)
+ * for `EACCES`/`ENOENT`/`ENOTDIR` — a directory can disappear or become
+ * unreadable between being queued and being walked. Any other error is
+ * rethrown.
+ */
+async function readDirEntriesSafe(dir: string): Promise<import('node:fs').Dirent[] | null> {
+  try {
+    return await fs.readdir(dir, { withFileTypes: true })
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code === 'EACCES' || code === 'ENOENT' || code === 'ENOTDIR') return null
+    throw err
+  }
+}
+
+/**
+ * Classifies one readdir entry: a non-`SKIP_DIRS` directory is queued for
+ * walking; a plain file is recorded as a `safeRoot`-relative POSIX path.
+ * Skipped directories and non-file/non-directory entries (symlinks, sockets,
+ * etc.) are a no-op.
+ */
+function collectListEntry(
+  entry: import('node:fs').Dirent,
+  dir: string,
+  safeRoot: string,
+  out: string[],
+  queue: string[],
+): void {
+  const full = path.join(dir, entry.name)
+  if (entry.isDirectory()) {
+    if (!SKIP_DIRS.has(entry.name)) queue.push(full)
+    return
+  }
+  if (entry.isFile()) {
+    out.push(path.relative(safeRoot, full).split(path.sep).join('/'))
+  }
+}
+
 async function listFiles(root: string, rootArg: string): Promise<string[]> {
   const safeRoot = await resolveWithinProjectRoot(rootArg, root)
   const out: string[] = []
@@ -503,24 +542,11 @@ async function listFiles(root: string, rootArg: string): Promise<string[]> {
   while (queue.length > 0) {
     if (out.length >= LIST_FILE_LIMIT) break
     const dir = queue.shift()!
-    let entries: import('node:fs').Dirent[]
-    try {
-      entries = await fs.readdir(dir, { withFileTypes: true })
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code
-      if (code === 'EACCES' || code === 'ENOENT' || code === 'ENOTDIR') continue
-      throw err
-    }
-    for (const e of entries) {
+    const entries = await readDirEntriesSafe(dir)
+    if (entries === null) continue
+    for (const entry of entries) {
       if (out.length >= LIST_FILE_LIMIT) break
-      const full = path.join(dir, e.name)
-      if (e.isDirectory()) {
-        if (SKIP_DIRS.has(e.name)) continue
-        queue.push(full)
-        continue
-      }
-      if (!e.isFile()) continue
-      out.push(path.relative(safeRoot, full).split(path.sep).join('/'))
+      collectListEntry(entry, dir, safeRoot, out, queue)
     }
   }
   return out

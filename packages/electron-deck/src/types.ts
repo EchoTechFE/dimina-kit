@@ -81,6 +81,10 @@ export interface DeckWindow {
 /**
  * `defineEvent(name)` 创建的 HostEvent。pure factory，无 side effect —— 必须在
  * `DeckConfig.events` 中显式列出 framework 才会绑 transport。
+ *
+ * `@experimental` No production consumer yet — only `examples/` / `spike/` use
+ * `defineEvent` / `DeckConfig.events`; the devtools `backend` assembly never
+ * touches either. Contract may change until a second real consumer adopts it.
  */
 export interface HostEvent<P extends JsonValue> {
 	readonly name: string
@@ -91,16 +95,21 @@ export interface HostEvent<P extends JsonValue> {
 // ── DeckConfig 顶层 ─────────────────────────────────────────────────
 
 /**
- * Handler 形参故意宽松（`any[]`）—— host 写 `(p: { code: string }) => ...` 这种
- * narrower 签名必须能赋值给 `Record<string, Handler>`。framework 在 IPC 边界
- * 做 JSON 校验，narrower 类型在 webview-side `createDeckClient<HS, EV>()`
- * 通过 `Parameters<HS[K]>` 推断。返回值 framework 不约束 TS 类型，但 runtime
- * 强制要求 JSON-safe（非 JSON 值反序列化时报错）。
+ * Handler 形参故意宽松（`never[]`）—— host 写 `(p: { code: string }) => ...` 这种
+ * narrower 签名必须能赋值给 `Record<string, Handler>`。rest 参数是逆变位置：
+ * `never` 对任意具体参数类型都成立赋值（`unknown` 则不成立，会挡掉上面这种
+ * narrower 签名）。framework 在 IPC 边界做 JSON 校验，narrower 类型在
+ * webview-side `createDeckClient<HS, EV>()` 通过 `Parameters<HS[K]>` 推断。
+ * 返回值 framework 不约束 TS 类型，但 runtime 强制要求 JSON-safe（非 JSON 值
+ * 反序列化时报错）。
+ *
+ * `@experimental` No production consumer yet: only `examples/` / `spike/` set
+ * `DeckConfig.simulatorApis` / `hostServices`; the devtools `backend` assembly
+ * never touches either field. Contract may change until a second real consumer
+ * adopts it.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type SimulatorApiHandler = (...args: any[]) => unknown
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type HostServiceHandler = (...args: any[]) => unknown
+export type SimulatorApiHandler = (...args: never[]) => unknown
+export type HostServiceHandler = (...args: never[]) => unknown
 
 export interface AppConfig {
 	readonly name?: string
@@ -139,6 +148,9 @@ export interface AppConfig {
 
 export type WebviewSource = { readonly url: string } | { readonly file: string }
 
+/** @experimental No production consumer yet — only `examples/` / `spike/` set
+ *  `DeckConfig.toolbar`; the devtools `backend` assembly never touches it.
+ *  Contract may change until a second real consumer adopts it. */
 export interface ToolbarContribution {
 	readonly source: WebviewSource
 	/** 必填：host 完全控制 preload */
@@ -215,12 +227,20 @@ export interface DeckConfig {
 	 * backend host 的主入口字段：`electronDeck({ backend })`——无需空 `{}` + options。
 	 */
 	readonly backend?: RuntimeBackend
-	/** 暴露给小程序，自动投影为 `wx.<name>` */
+	/** 暴露给小程序，自动投影为 `wx.<name>`
+	 *  @experimental No production consumer yet — only `examples/` / `spike/`
+	 *  set this; the devtools `backend` assembly never touches it. */
 	readonly simulatorApis?: Record<string, SimulatorApiHandler>
-	/** 暴露给 trusted webview（toolbar 等）的 RPC */
+	/** 暴露给 trusted webview（toolbar 等）的 RPC
+	 *  @experimental No production consumer yet — only `examples/` / `spike/`
+	 *  set this; the devtools `backend` assembly never touches it. */
 	readonly hostServices?: Record<string, HostServiceHandler>
-	/** main → webview 推送；必须显式列出，避免 module load order 隐式注册 */
+	/** main → webview 推送；必须显式列出，避免 module load order 隐式注册
+	 *  @experimental No production consumer yet — only `examples/` / `spike/`
+	 *  set this; the devtools `backend` assembly never touches it. */
 	readonly events?: readonly HostEvent<JsonValue>[]
+	/** @experimental No production consumer yet — only `examples/` / `spike/`
+	 *  set this; the devtools `backend` assembly never touches it. */
 	readonly toolbar?: ToolbarContribution
 	readonly windows?: Record<string, WindowContribution>
 	readonly menu?: MenuContribution

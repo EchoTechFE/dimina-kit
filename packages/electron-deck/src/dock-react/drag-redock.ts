@@ -41,6 +41,97 @@ export type RedockMutation =
 	}
 
 /**
+ * A zero/negative/non-finite rect has no meaningful edge bands; a non-finite
+ * point can't be classified either. Note a non-finite WIDTH/HEIGHT (e.g.
+ * Infinity) satisfies `> 0` and would otherwise slip through — `band = ef *
+ * min(Infinity, h)` yields a finite band and the point is misclassified as an
+ * EDGE zone — so reject finiteness EXPLICITLY (N1).
+ */
+function isDegenerateDropInput(width: number, height: number, x: number, y: number): boolean {
+	return (
+		!(width > 0) || !(height > 0)
+		|| !Number.isFinite(width) || !Number.isFinite(height)
+		|| !Number.isFinite(x) || !Number.isFinite(y)
+	)
+}
+
+/**
+ * Clamp the band fraction to [0, 0.5] (N1): a fraction > 0.5 makes the left
+ * and right bands (and top/bottom) OVERLAP, so a point near the right edge of
+ * a narrow rect would satisfy BOTH `inLeft` and `inRight` and be misread as
+ * `left`. Capping at 0.5 keeps the two bands disjoint.
+ */
+function clampEdgeFraction(edgeFraction: number): number {
+	return Number.isFinite(edgeFraction) ? Math.max(0, Math.min(0.5, edgeFraction)) : 0.25
+}
+
+/**
+ * A pointer dragged past the panel edge has no band membership; clamp it to
+ * the nearest edge zone. `undefined` when the point is IN the rect (the
+ * caller falls through to band classification). Both axes out (a diagonal
+ * corner): the axis with the LARGER overshoot magnitude wins; an exact tie is
+ * broken by HORIZONTAL (the x axis).
+ */
+function classifyOutOfRectDropZone(width: number, height: number, x: number, y: number): DropZone | undefined {
+	const outX = x < 0 ? x : x > width ? x - width : 0
+	const outY = y < 0 ? y : y > height ? y - height : 0
+	if (outX === 0 && outY === 0) return undefined
+
+	const magX = Math.abs(outX)
+	const magY = Math.abs(outY)
+	if (magX >= magY && magX > 0) return outX < 0 ? 'left' : 'right'
+	// Only y out, or y overshoot strictly larger.
+	return outY < 0 ? 'top' : 'bottom'
+}
+
+/** Edge-band membership for an in-rect point, plus the per-axis "is the point
+ *  in SOME band on this axis" summary the zone decision branches on. */
+interface BandMembership {
+	inLeft: boolean
+	inTop: boolean
+	activeHoriz: boolean
+	activeVert: boolean
+}
+
+function computeBandMembership(width: number, height: number, x: number, y: number, ef: number): BandMembership {
+	const band = ef * Math.min(width, height)
+	const inLeft = x < band
+	const inRight = x > width - band
+	const inTop = y < band
+	const inBottom = y > height - band
+	return { inLeft, inTop, activeHoriz: inLeft || inRight, activeVert: inTop || inBottom }
+}
+
+/**
+ * Corner tie-break (both axes active): pick the edge with the SMALLER
+ * normalized distance. Only the ACTIVE horizontal edge and ACTIVE vertical
+ * edge can compete (left vs right and top vs bottom can't both be active for
+ * a sane rect). On an exact tie, HORIZONTAL wins (`<=` on the horizontal
+ * distance).
+ */
+function cornerTieBreak(width: number, height: number, x: number, y: number, inLeft: boolean, inTop: boolean): DropZone {
+	const dHoriz = inLeft ? x / width : (width - x) / width
+	const dVert = inTop ? y / height : (height - y) / height
+	if (dHoriz <= dVert) return inLeft ? 'left' : 'right'
+	return inTop ? 'top' : 'bottom'
+}
+
+/**
+ * Classify an IN-RECT point by edge-band membership. No band => interior
+ * (`center`, the tab-join zone). One active band => that edge directly. Both
+ * axes active (a corner) => {@link cornerTieBreak}.
+ */
+function classifyInRectDropZone(width: number, height: number, x: number, y: number, ef: number): DropZone {
+	const { inLeft, inTop, activeHoriz, activeVert } = computeBandMembership(width, height, x, y, ef)
+
+	if (!activeHoriz && !activeVert) return 'center'
+	if (activeHoriz && !activeVert) return inLeft ? 'left' : 'right'
+	if (activeVert && !activeHoriz) return inTop ? 'top' : 'bottom'
+
+	return cornerTieBreak(width, height, x, y, inLeft, inTop)
+}
+
+/**
  * Classify a pointer position (RELATIVE to the rect's top-left; `(0,0)` is the
  * corner) into a drop zone.
  *
@@ -60,69 +151,14 @@ export function computeDropZone(
 	const { width, height } = rect
 	const { x, y } = point
 
-	// ── DEGENERATE / NON-FINITE guard (N1) ─────────────────────────────────
-	// A zero/negative/non-finite rect has no meaningful edge bands; a non-finite
-	// point can't be classified. Treat either as the interior (tab-join). Note a
-	// non-finite WIDTH/HEIGHT (e.g. Infinity) satisfies `> 0` and would otherwise
-	// slip through — `band = ef * min(Infinity, h)` yields a finite band and the
-	// point is misclassified as an EDGE zone — so reject finiteness EXPLICITLY.
-	if (
-		!(width > 0) || !(height > 0)
-		|| !Number.isFinite(width) || !Number.isFinite(height)
-		|| !Number.isFinite(x) || !Number.isFinite(y)
-	) {
-		return 'center'
-	}
-	// Clamp the band fraction to [0, 0.5] (N1): a fraction > 0.5 makes the left
-	// and right bands (and top/bottom) OVERLAP, so a point near the right edge of
-	// a narrow rect would satisfy BOTH `inLeft` and `inRight` and be misread as
-	// `left`. Capping at 0.5 keeps the two bands disjoint.
-	const ef = Number.isFinite(edgeFraction) ? Math.max(0, Math.min(0.5, edgeFraction)) : 0.25
+	if (isDegenerateDropInput(width, height, x, y)) return 'center'
 
-	// ── OUT-OF-RECT clamp ──────────────────────────────────────────────────
-	// A pointer dragged past the panel edge has no band membership; clamp it to
-	// the nearest edge zone. Compute the signed per-axis overshoot: negative =
-	// out the low side (left/top), positive = out the high side (right/bottom).
-	const outX = x < 0 ? x : x > width ? x - width : 0
-	const outY = y < 0 ? y : y > height ? y - height : 0
-	if (outX !== 0 || outY !== 0) {
-		const magX = Math.abs(outX)
-		const magY = Math.abs(outY)
-		// Both axes out (a diagonal corner): the axis with the LARGER overshoot
-		// magnitude wins; an exact tie is broken by HORIZONTAL (the x axis).
-		if (magX >= magY) {
-			if (magX > 0) return outX < 0 ? 'left' : 'right'
-		}
-		// Only y out, or y overshoot strictly larger.
-		return outY < 0 ? 'top' : 'bottom'
-	}
+	const ef = clampEdgeFraction(edgeFraction)
 
-	// ── BAND membership (in-rect) ──────────────────────────────────────────
-	const band = ef * Math.min(width, height)
-	const inLeft = x < band
-	const inRight = x > width - band
-	const inTop = y < band
-	const inBottom = y > height - band
+	const outOfRectZone = classifyOutOfRectDropZone(width, height, x, y)
+	if (outOfRectZone !== undefined) return outOfRectZone
 
-	const activeHoriz = inLeft || inRight
-	const activeVert = inTop || inBottom
-
-	// No band => interior => join the tab group.
-	if (!activeHoriz && !activeVert) return 'center'
-
-	// Single-axis band => that edge zone directly.
-	if (activeHoriz && !activeVert) return inLeft ? 'left' : 'right'
-	if (activeVert && !activeHoriz) return inTop ? 'top' : 'bottom'
-
-	// ── CORNER tie-break (both axes active) ────────────────────────────────
-	// Pick the edge with the SMALLER normalized distance. Only the ACTIVE
-	// horizontal edge and ACTIVE vertical edge can compete (left vs right and
-	// top vs bottom can't both be active for a sane rect). On an exact tie,
-	// HORIZONTAL wins (`<=` on the horizontal distance).
-	const dHoriz = inLeft ? x / width : (width - x) / width
-	const dVert = inTop ? y / height : (height - y) / height
-	if (dHoriz <= dVert) return inLeft ? 'left' : 'right'
-	return inTop ? 'top' : 'bottom'
+	return classifyInRectDropZone(width, height, x, y, ef)
 }
 
 /**
@@ -200,4 +236,42 @@ export function computeReorderIndex(
 		else break
 	}
 	return index
+}
+
+/**
+ * Translate a tab strip's VISIBLE-tab drop index into the insertion index
+ * `movePanel`'s same-group reorder expects.
+ *
+ * `computeReorderIndex` reports how many VISIBLE-tab midpoints the pointer has
+ * passed (0..`visibleTabIds.length`), COUNTING the dragged tab's own midpoint and
+ * measured over rects that OMIT `hideTab` panels. `movePanel` inserts into
+ * `panels.filter(p => p !== dragged)` — a different coordinate space. Two shifts
+ * reconcile them:
+ *
+ *   1. Once the pointer passes the dragged tab's OWN midpoint the strip index has
+ *      counted the dragged slot, so drop it back out (−1) to get the insertion
+ *      slot among the OTHER visible tabs.
+ *   2. Map that visible slot onto the full `panels` order (which may carry hidden
+ *      tabs the strip never measured): insert before whichever visible tab now
+ *      occupies the slot, or append when the slot is past the last visible tab.
+ */
+export function resolveReorderInsertIndex(
+	panels: readonly string[],
+	visibleTabIds: readonly string[],
+	draggedPanelId: string,
+	stripInsertIndex: number,
+): number {
+	const draggedVisibleIndex = visibleTabIds.indexOf(draggedPanelId)
+	const passedOwnMidpoint = draggedVisibleIndex >= 0 && stripInsertIndex > draggedVisibleIndex
+	const filteredVisible = visibleTabIds.filter((id) => id !== draggedPanelId)
+	const filteredPanels = panels.filter((id) => id !== draggedPanelId)
+
+	let visibleInsert = passedOwnMidpoint ? stripInsertIndex - 1 : stripInsertIndex
+	if (visibleInsert < 0) visibleInsert = 0
+	if (visibleInsert > filteredVisible.length) visibleInsert = filteredVisible.length
+
+	if (visibleInsert >= filteredVisible.length) return filteredPanels.length
+	const anchor = filteredVisible[visibleInsert]!
+	const anchorIndex = filteredPanels.indexOf(anchor)
+	return anchorIndex >= 0 ? anchorIndex : filteredPanels.length
 }

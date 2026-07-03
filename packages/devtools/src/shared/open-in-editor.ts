@@ -17,6 +17,22 @@
  * snippet's expectations.
  */
 
+import {
+  decodePathname,
+  excludeBuildChunk,
+  isOutsideKnownRoot,
+  normalizeSlashPath,
+  parseResourceUrl,
+  type ProjectSourceContext,
+  projectAwareResourcePath,
+  resolveFileProtocolPath,
+  resolveFilesystemRawPath,
+  resolveHttpProtocolPath,
+  safeRelativePath,
+} from './open-in-editor-resource-path.js'
+
+export type { ProjectSourceContext } from './open-in-editor-resource-path.js'
+
 /**
  * Sentinel scheme for the encoded "open in editor" request. A bare custom scheme
  * (no `//authority`) keeps the encoded payload entirely in the URL's path/query,
@@ -33,16 +49,6 @@ export interface OpenInEditorRequest {
   line?: number
   /** 0-based column as reported by DevTools (may be undefined). */
   column?: number
-}
-
-export interface ProjectSourceContext {
-  /** Absolute project root on disk. */
-  projectRoot: string
-  /** Resource server base URL used by the compiled miniapp. */
-  resourceBaseUrl: string
-  appId: string
-  /** Compiler output package root (`main` for the primary package). */
-  outputRoot: string
 }
 
 /**
@@ -146,98 +152,6 @@ export function resourceUrlToProjectRelativePath(
   return segments.slice(1).join('/')
 }
 
-function decodePathname(pathname: string): string {
-  return pathname.split('/').map((segment) => {
-    try { return decodeURIComponent(segment) } catch { return segment }
-  }).join('/')
-}
-
-function normalizeSlashPath(value: string): string {
-  return decodePathname(value.replace(/\\/g, '/')).replace(/\/+/g, '/')
-}
-
-function safeRelativePath(segments: string[]): string | null {
-  if (segments.length === 0 || segments.some((segment) => !segment || segment === '.' || segment === '..')) {
-    return null
-  }
-  return segments.join('/')
-}
-
-function projectAwareResourcePath(resourceUrl: string, context: ProjectSourceContext): string | null {
-  let base: URL
-  try {
-    base = new URL(context.resourceBaseUrl)
-  } catch {
-    return null
-  }
-
-  const projectRoot = normalizeSlashPath(context.projectRoot).replace(/\/$/, '')
-  const raw = resourceUrl.trim()
-  if (!raw) return null
-
-  // Taro/webpack build + runtime chunks are compiled output, not hand-written
-  // source. They also collide: dimina's own service runtime attributes its
-  // `log()` helper to a `common.js` on the SAME dev-server origin as the
-  // project's compiled `common.js` chunk, so the two are URL-indistinguishable
-  // and a dimina-core frame would otherwise open the project's chunk. Drop these
-  // well-known chunk basenames so a click falls through to the DevTools Sources
-  // panel instead of opening the wrong (or generated) file. Inlined (not a module
-  // const) because this function is `.toString()`-injected into the DevTools realm.
-  const excludeBuildChunk = (rel: string | null): string | null => {
-    if (!rel) return rel
-    const base = rel.split('/').pop()
-    return base === 'common.js' || base === 'vendors.js' || base === 'runtime.js'
-      || base === 'taro.js' || base === 'babelHelpers.js'
-      ? null
-      : rel
-  }
-
-  // Chromium may hand the open-resource hook a raw absolute filesystem path.
-  const normalizedRaw = normalizeSlashPath(raw)
-  if (projectRoot && (normalizedRaw === projectRoot || normalizedRaw.startsWith(`${projectRoot}/`))) {
-    const relative = normalizedRaw.slice(projectRoot.length).replace(/^\/+/, '')
-    return excludeBuildChunk(safeRelativePath(relative.split('/').filter(Boolean)))
-  }
-  // Sourcemap sources commonly use virtual root paths such as `/pages/x.js`.
-  // Real host filesystem paths use well-known absolute roots; when they are
-  // outside the active project they are runtime/devtools frames, not sources.
-  if (/^\/(?:Volumes|Users|home|private|tmp|var|opt|Applications)\//.test(normalizedRaw)) {
-    return null
-  }
-
-  // Reject relative runtime labels such as `service.js` or
-  // `electron/js2c/renderer_init`; project source locations must be an
-  // absolute URL/path so they can be scoped to the active project.
-  if (!raw.startsWith('/') && !/^[a-z][a-z0-9+.-]*:/i.test(raw)) return null
-
-  let resource: URL
-  try {
-    resource = raw.startsWith('/') && !raw.startsWith('//')
-      ? new URL(raw, base.origin)
-      : new URL(raw)
-  } catch {
-    return null
-  }
-
-  if (resource.protocol === 'file:') {
-    const filePath = normalizeSlashPath(resource.pathname)
-    if (!projectRoot || (filePath !== projectRoot && !filePath.startsWith(`${projectRoot}/`))) return null
-    return excludeBuildChunk(safeRelativePath(
-      filePath.slice(projectRoot.length).replace(/^\/+/, '').split('/').filter(Boolean),
-    ))
-  }
-
-  if (resource.protocol !== 'http:' && resource.protocol !== 'https:') return null
-  if (resource.origin !== base.origin) return null
-
-  let segments = decodePathname(resource.pathname).split('/').filter(Boolean)
-  if (context.appId && segments[0] === context.appId) {
-    segments = segments.slice(1)
-    if (context.outputRoot && segments[0] === context.outputRoot) segments = segments.slice(1)
-  }
-  return excludeBuildChunk(safeRelativePath(segments))
-}
-
 /** Read the project/source routing metadata carried by a service-host spawn URL. */
 export function projectSourceContextFromServiceHostUrl(
   serviceHostUrl: string,
@@ -294,10 +208,16 @@ export function buildDevtoolsProjectSourceLinksScript(context: ProjectSourceCont
         }
 
         const cfg = ${config}
-        const diminaProjectSourcePath = ${projectAwareResourcePath.toString()}
         const decodePathname = ${decodePathname.toString()}
         const normalizeSlashPath = ${normalizeSlashPath.toString()}
         const safeRelativePath = ${safeRelativePath.toString()}
+        const excludeBuildChunk = ${excludeBuildChunk.toString()}
+        const isOutsideKnownRoot = ${isOutsideKnownRoot.toString()}
+        const resolveFilesystemRawPath = ${resolveFilesystemRawPath.toString()}
+        const parseResourceUrl = ${parseResourceUrl.toString()}
+        const resolveFileProtocolPath = ${resolveFileProtocolPath.toString()}
+        const resolveHttpProtocolPath = ${resolveHttpProtocolPath.toString()}
+        const diminaProjectSourcePath = ${projectAwareResourcePath.toString()}
         const observedRoots = new Set()
         const observers = []
         const clickBindings = []

@@ -23,7 +23,7 @@ export function ProjectCard({
       onMouseLeave={() => setHovered(false)}
     >
       {thumbnail ? (
-        <img src={thumbnail} className="h-28 w-full object-cover" alt="" />
+        <img src={thumbnail} className="h-28 w-full object-cover object-top" alt="" />
       ) : (
         <div className="h-28 bg-surface-thumb" />
       )}

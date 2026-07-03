@@ -1,0 +1,88 @@
+{
+  "name": "@dimina-kit/compiler",
+  "version": "0.0.1",
+  "description": "dmcc compiler bundles (browser + node) that drive @dimina/compiler against a caller-injected node:fs replacement (no bundled fs)",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EchoTechFE/dimina-kit.git",
+    "directory": "packages/compiler"
+  },
+  "homepage": "https://github.com/EchoTechFE/dimina-kit/tree/main/packages/compiler#readme",
+  "bugs": {
+    "url": "https://github.com/EchoTechFE/dimina-kit/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "main": "./dist/compile-core.node.js",
+  "exports": {
+    ".": "./dist/compile-core.node.js",
+    "./browser": "./dist/compile-core.browser.js",
+    "./pool-node": "./dist/pool.node.js",
+    "./pool": "./dist/pool.browser.js",
+    "./stage-worker": "./dist/stage-worker.browser.js",
+    "./toolchain": "./dist/toolchain.browser.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "src",
+    "scripts"
+  ],
+  "scripts": {
+    "build:node": "node scripts/build-compiler.js node",
+    "build:browser": "node scripts/build-compiler.js browser",
+    "build": "pnpm run build:node && pnpm run build:browser",
+    "test:node": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-node.js",
+    "test:appid": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-appid-fallback.js",
+    "test:hardening": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-hardening.js",
+    "test:decompose": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-decompose.js",
+    "test:realm-reuse": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-realm-reuse.js",
+    "test:pool-node": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-pool-node.js",
+    "test:pool-hardening": "node scripts/build-compiler.js node && node scripts/test-pool-hardening.js",
+    "test:npm-scan": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-npm-scan.js",
+    "test:stage-toolchain": "node scripts/build-compiler.js browser && node scripts/test-stage-toolchain.js"
+  },
+  "dependencies": {
+    "@babel/parser": "^7.29.7",
+    "@vue/compiler-sfc": "^3.5.39",
+    "assert": "^2.1.0",
+    "autoprefixer": "^10.5.2",
+    "buffer": "^6.0.3",
+    "cheerio": "^1.2.0",
+    "cssnano": "^8.0.2",
+    "esbuild": "^0.28.1",
+    "estree-walker": "^3.0.3",
+    "events": "^3.3.0",
+    "htmlparser2": "^12.0.0",
+    "less": "^4.6.7",
+    "magic-string": "^0.30.21",
+    "memfs": "^4.57.8",
+    "oxc-parser": "^0.137.0",
+    "oxc-walker": "^1.0.0",
+    "path-browserify": "^1.0.1",
+    "postcss": "^8.5.15",
+    "postcss-selector-parser": "^7.1.4",
+    "sass": "^1.101.0",
+    "source-map-js": "^1.2.1",
+    "stream-browserify": "^3.0.0",
+    "util": "^0.12.5"
+  },
+  "peerDependencies": {
+    "@oxc-parser/binding-wasm32-wasi": "^0.137.0",
+    "esbuild-wasm": "^0.28.0"
+  },
+  "peerDependenciesMeta": {
+    "@oxc-parser/binding-wasm32-wasi": {
+      "optional": true
+    },
+    "esbuild-wasm": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "esbuild-wasm": "^0.28.0"
+  }
+}

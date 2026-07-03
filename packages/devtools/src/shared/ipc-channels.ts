@@ -12,15 +12,18 @@ export const SimulatorChannel = {
   // Ask main to create the simulator as a top-level WebContentsView (so nested
   // render-host <webview>s can attach). Native-host is the sole runtime.
   AttachNative: 'simulator:attach-native',
-  // Renderer reports the device-bezel inner-screen rect (CSS px from content
-  // top-left) + zoom so main can overlay the simulator WCV on it.
-  SetNativeBounds: 'simulator:set-native-bounds',
   // Renderer pushes the selected device's LOGICAL metrics (screen size,
   // pixelRatio, statusBarHeight, …) when the device dropdown changes. Main
   // maps it to a HostEnvSnapshot and live-updates the running service-host
   // window — the authoritative `wx.getSystemInfoSync()` source — so the
   // mini-app sees the selected device without a relaunch.
   SetDeviceInfo: 'simulator:set-device-info',
+  // Ask main to soft-reload the LIVE simulator WCV after a watcher rebuild:
+  // main forwards a SIMULATOR_EVENTS.RELAUNCH into the shell (which boots a
+  // new app session and swaps when ready) instead of destroying the view.
+  // Resolves false when there is no live+ready shell — the renderer then falls
+  // back to the hard AttachNative rebuild.
+  SoftReload: 'simulator:soft-reload',
   Detach: 'simulator:detach',
   Console: 'simulator:console',
   // Main → renderer push of the visible top-of-stack page route whenever the
@@ -124,6 +127,22 @@ export type StorageWriteResult =
   | { ok: true }
   | { ok: false; error: string }
 
+/**
+ * A storage mutation reported by the service-host's SYNC wx storage APIs
+ * (`setStorageSync`/`removeStorageSync`/`clearStorageSync`). Those run inside the
+ * service-host window and write `localStorage` directly, so — unlike the async
+ * path (`runtimeInvoke`) and the panel's own writes — they never pass through
+ * main and would otherwise leave the Storage panel stale until a manual reload.
+ * The service-host posts this over `DiminaServiceBridge` as a `storageChanged`
+ * container message; bridge-router hands it to `onServiceStorageChanged`, which
+ * pushes the matching `StorageEvent` to the panel. `key` carries the full
+ * `${appId}_` prefix (same wire shape as the CDP / async paths).
+ */
+export type SyncStorageChange =
+  | { op: 'set'; key: string; value: string }
+  | { op: 'remove'; key: string }
+  | { op: 'clear' }
+
 // ── Element inspection (CDP-backed; WXML tree nodes map to real DOM by sid) ──
 export const SimulatorElementChannel = {
   Inspect: 'simulator:element:inspect',
@@ -136,6 +155,10 @@ export const SimulatorElementChannel = {
 export const SimulatorWxmlChannel = {
   GetSnapshot: 'simulator:wxml:snapshot',
   Event: 'simulator:wxml:event',
+  // renderer→main: whether the WXML panel is currently visible/active. Main
+  // only installs the render-guest DOM MutationObserver + pushes live tree
+  // updates while active, so an unseen panel never drives a full Vue-tree walk.
+  SetActive: 'simulator:wxml:setActive',
 } as const
 
 // ── AppData (native-host: main taps the service→render setData stream in
@@ -293,14 +316,6 @@ export const DialogChannel = {
 // pixels relative to the window's content area (origin = top-left,
 // not including the OS chrome).
 export const ViewChannel = {
-  /** Update the simulator DevTools view's bounds (or hide if w/h = 0). */
-  SimulatorDevtoolsBounds: 'view:simulator:devtools-bounds',
-  /**
-   * Host-controllable toolbar WebContentsView (sits ABOVE the devtools built-in
-   * header). Forward anchor: the main renderer reports the toolbar placeholder's
-   * bounds (or w/h=0 to hide). invoke.
-   */
-  HostToolbarBounds: 'view:host-toolbar:bounds',
   /**
    * Reverse size-advertiser: the host-toolbar WCV's OWN renderer advertises its
    * intrinsic content height so main reserves exactly that much. Payload
@@ -333,12 +348,13 @@ export const ViewChannel = {
    */
   HostToolbarGetHeight: 'view:host-toolbar:get-height',
   /**
-   * Update the embedded workbench editor view's bounds (or hide if w/h=0).
-   * Forward anchor mirroring `SimulatorDevtoolsBounds`: the main renderer
-   * measures the 'editor' dock slot's placeholder rect and publishes it so
-   * main overlays the workbench WebContentsView precisely.
+   * Renderer → main: the window-level placement snapshot (one monotonic epoch
+   * per commit tick, one generation per renderer lifetime) that drives the view
+   * reconciler. The single source of truth for every managed native view's
+   * bounds/visibility/z-order — supersedes the per-view bounds channels above.
+   * invoke.
    */
-  WorkbenchBounds: 'view:workbench-bounds',
+  PlacementSnapshot: 'view:placement-snapshot',
 } as const
 
 export interface ViewBounds {

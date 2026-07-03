@@ -43,44 +43,63 @@ const workbenchTheme: React.CSSProperties = {
   '--w-rjv-line-color': 'var(--color-border-subtle)',
 } as React.CSSProperties
 
+/** A primitive matches when its stringified form contains the (lowercased) query. */
+function matchesQuery(value: unknown, lowerQuery: string): boolean {
+  return String(value).toLowerCase().includes(lowerQuery)
+}
+
+/** Filter an array: keep only elements whose filtered subtree is non-empty. */
+function filterJsonArray(value: unknown[], query: string): unknown[] | undefined {
+  const filtered = value
+    .map((item) => filterJson(item, query))
+    .filter((item) => item !== undefined)
+  return filtered.length > 0 ? filtered : undefined
+}
+
+/**
+ * Resolve one object entry: a key matching the query keeps the whole value
+ * as-is; otherwise the value itself is filtered recursively.
+ */
+function filterJsonEntry(
+  key: string,
+  val: unknown,
+  query: string,
+  lowerQuery: string,
+): { value: unknown; matched: boolean } {
+  if (key.toLowerCase().includes(lowerQuery)) return { value: val, matched: true }
+  const filteredVal = filterJson(val, query)
+  return filteredVal !== undefined ? { value: filteredVal, matched: true } : { value: undefined, matched: false }
+}
+
+function filterJsonObject(
+  value: Record<string, unknown>,
+  query: string,
+  lowerQuery: string,
+): Record<string, unknown> | undefined {
+  const result: Record<string, unknown> = {}
+  let hasMatch = false
+  for (const [key, val] of Object.entries(value)) {
+    const entry = filterJsonEntry(key, val, query, lowerQuery)
+    if (entry.matched) {
+      result[key] = entry.value
+      hasMatch = true
+    }
+  }
+  return hasMatch ? result : undefined
+}
+
 /**
  * Filter a JSON value recursively, keeping only branches whose keys or
  * stringified primitive values contain the query (case-insensitive).
+ *
+ * Exported for unit testing; not part of the component's public API.
  */
-function filterJson(value: unknown, query: string): unknown {
+export function filterJson(value: unknown, query: string): unknown {
   if (value === null || value === undefined) return undefined
   const lowerQuery = query.toLowerCase()
-
-  if (Array.isArray(value)) {
-    const filtered = value
-      .map((item) => filterJson(item, query))
-      .filter((item) => item !== undefined)
-    return filtered.length > 0 ? filtered : undefined
-  }
-
-  if (typeof value === 'object') {
-    const result: Record<string, unknown> = {}
-    let hasMatch = false
-    for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
-      if (key.toLowerCase().includes(lowerQuery)) {
-        result[key] = val
-        hasMatch = true
-      } else {
-        const filteredVal = filterJson(val, query)
-        if (filteredVal !== undefined) {
-          result[key] = filteredVal
-          hasMatch = true
-        }
-      }
-    }
-    return hasMatch ? result : undefined
-  }
-
-  // Primitive: check stringified value
-  if (String(value).toLowerCase().includes(lowerQuery)) {
-    return value
-  }
-  return undefined
+  if (Array.isArray(value)) return filterJsonArray(value, query)
+  if (typeof value === 'object') return filterJsonObject(value as Record<string, unknown>, query, lowerQuery)
+  return matchesQuery(value, lowerQuery) ? value : undefined
 }
 
 /**

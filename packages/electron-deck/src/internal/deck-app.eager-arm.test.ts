@@ -1,30 +1,22 @@
 /**
  * EAGER ARMING of the slot-token layout channels.
  *
- * Without eager arming the Place + LayoutSubscribe ipc handlers are armed
- * LAZILY — `ensureSlotChannelsArmed()` (deck-app.ts ~1095)
- * calls `wireTransport.armSlotChannels(...)`, and its ONLY call site is the
- * anchored `placeIn` path (~1569). So a `createDeckLayoutClient` that boots
- * BEFORE any view is placed sends `__electron-deck:layout-subscribe` and main
- * rejects with "No handler registered for layout-subscribe".
- *
- * The contract: the slot channels must be armed at framework START (when the
- * wire transport binds) so a layout client can subscribe before the first
- * anchored placeIn. THE GATE MUST STAY IDENTICAL — eager arming widens no
- * attack surface (trust + main-frame + token checks intact).
+ * The contract: the Snapshot + LayoutSubscribe ipc channels must be armed at
+ * framework START so a layout client can subscribe before the first anchored
+ * placeIn. THE GATE IS IDENTICAL — eager arming widens no attack surface
+ * (trust + main-frame + token/object-shape checks remain intact).
  *
  * What each spec pins:
- *   - A1: with NO views placed, the layout-subscribe handler must already be
- *         present (armed eagerly) → `handlers.has(...)` is true.
- *   - A3: the place handler is likewise present at framework START.
+ *   - A1: with NO views placed, the layout-subscribe handler is already present
+ *         (armed eagerly) → `handlers.has(...)` is true.
+ *   - A3: the snapshot handler is likewise present at framework START; a
+ *         trusted sender with an UNKNOWN token is token-gated DROP (not
+ *         "no handler registered").
  *   - A2: the gate-unchanged pin proves the untrusted-sender DROP still holds
  *         once the handler is armed eagerly.
  *
- * Reached through the SAME typed escape hatch + fakes pattern as
- * `deck-app.slot-token.test.ts` so the file COMPILES.
- *
- * Channel string literals are used directly (matching the slot-token test) so
- * the pin reads exactly what the renderer wire sends.
+ * Channel string literals are used directly so the pin reads exactly what the
+ * renderer wire sends.
  */
 import { describe, expect, it, vi } from 'vitest'
 import type { JsonValue, Runtime, ViewPlacement } from '../types.js'
@@ -39,7 +31,7 @@ import type {
 import { DeckApp } from './deck-app.js'
 import type { MinimalIpcMain } from './wire-transport.js'
 
-const PLACE_CHANNEL = '__electron-deck:place'
+const SNAPSHOT_CHANNEL = '__electron-deck:snapshot'
 const LAYOUT_SUBSCRIBE_CHANNEL = '__electron-deck:layout-subscribe'
 
 // ── Minimal fakes (mirrors deck-app.slot-token.test.ts) ──────────────────────
@@ -194,7 +186,7 @@ function createFakeElectron(
 	}
 }
 
-// ── Typed escape hatch for the not-yet-typed slot-token surface ──────────────
+// ── Typed escape hatch for the slot-token surface ────────────────────────────
 interface ViewSource { url?: string, file?: string }
 interface HostViewHandle {
 	placeIn(win: unknown, opts: { zone?: number, anchor?: string }): HostViewHandle
@@ -229,14 +221,14 @@ function getLayoutSubscribeHandler(ipcMain: FakeIpcMain): Handler {
 	return h
 }
 
-function getPlaceHandler(ipcMain: FakeIpcMain): Handler {
-	const h = ipcMain.handlers.get(PLACE_CHANNEL)
-	if (!h) throw new Error(`"${PLACE_CHANNEL}" handler not registered (armed lazily? expected eager at start())`)
+function getSnapshotHandler(ipcMain: FakeIpcMain): Handler {
+	const h = ipcMain.handlers.get(SNAPSHOT_CHANNEL)
+	if (!h) throw new Error(`"${SNAPSHOT_CHANNEL}" handler not registered (armed lazily? expected eager at start())`)
 	return h
 }
 
-// Boot an app that places NO views (no anchored placeIn → lazy arming never
-// fires → today the slot channels are absent).
+// Boot an app that places NO views (no anchored placeIn → lazy arming would
+// not fire → without eager arming the slot channels would be absent).
 async function bootAppNoViews(): Promise<{
 	app: DeckApp
 	electron: FakeElectron
@@ -252,20 +244,28 @@ async function bootAppNoViews(): Promise<{
 	return { app, electron, ipcMain, mainWc, mainWcId: mainWc.id }
 }
 
+// Build a raw snapshot payload carrying one view entry.
+function oneViewSnapshot(slotToken: string, placement: object, generation: number, epoch: number) {
+	return {
+		generation,
+		epoch,
+		views: [{ placement, extra: { slotToken } }],
+	}
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // A1 — layout-subscribe is armed at START (no views placed).
 // ─────────────────────────────────────────────────────────────────────────────
 describe('DeckApp eager-arm — layout-subscribe armed at start()', () => {
-	it('A1) immediately after start() with NO views, the layout-subscribe handler IS registered and a trusted main-frame subscribe RESOLVES (not "no handler")', async () => {
+	it('immediately after start() with NO views, the layout-subscribe handler is registered and a trusted main-frame subscribe resolves', async () => {
 		const { app, ipcMain, mainWcId } = await bootAppNoViews()
 
-		// PIN: the handler exists at start() — armed eagerly when the wire
-		// transport binds, so it is present even with no views placed.
+		// The handler exists at start() — armed eagerly when the wire transport
+		// binds, so it is present even with no views placed.
 		expect(ipcMain.handlers.has(LAYOUT_SUBSCRIBE_CHANNEL)).toBe(true)
 
-		// And invoking it from a trusted main-frame sender resolves (no "No handler
-		// registered for layout-subscribe" reject). With no grants it simply
-		// replays nothing — but it MUST NOT throw "no handler".
+		// Invoking it from a trusted main-frame sender resolves (no "No handler
+		// registered" reject). With no grants it replays nothing.
 		const layoutSubscribe = getLayoutSubscribeHandler(ipcMain)
 		await expect(
 			Promise.resolve(layoutSubscribe(mainFrameEvent(mainWcId))),
@@ -279,7 +279,7 @@ describe('DeckApp eager-arm — layout-subscribe armed at start()', () => {
 // A2 — GATE UNCHANGED by eager arming (untrusted sender still DROPPED).
 // ─────────────────────────────────────────────────────────────────────────────
 describe('DeckApp eager-arm — gate unchanged (SECURITY)', () => {
-	it('A2) an UNtrusted sender place/layout-subscribe is still DROPPED even though the channel is armed at start (no widened attack surface)', async () => {
+	it('an untrusted sender snapshot/layout-subscribe is still DROPPED even though the channel is armed at start', async () => {
 		const { app, electron, ipcMain } = await bootAppNoViews()
 
 		// Place a view WITH an anchor so a real grant + slotToken exists; eager
@@ -288,27 +288,34 @@ describe('DeckApp eager-arm — gate unchanged (SECURITY)', () => {
 		const wcv = electron.webContentsViews[electron.webContentsViews.length - 1]!
 		handle.placeIn(app.runtime.mainWindow, { zone: 0, anchor: '#sim' })
 
-		// Pull the granted token off the main wc's slot-grant push.
+		// Pull the granted token + generation off the main wc's slot-grant push.
 		const mainWc = (electron.browserWindows[0] as unknown as FakeBrowserWindow).webContents
 		const sendCalls = (mainWc.send as ReturnType<typeof vi.fn>).mock.calls
 		const grantCall = [...sendCalls].reverse().find(c => c[0] === '__electron-deck:slot-grant')
-		const slotToken = (grantCall?.[1] as { slotToken?: string } | undefined)?.slotToken
+		const grantPayload = grantCall?.[1] as { slotToken?: string; generation?: number } | undefined
+		const slotToken = grantPayload?.slotToken
+		const generation = grantPayload?.generation ?? 0
 		expect(typeof slotToken).toBe('string')
 
-		const place = getPlaceHandler(ipcMain)
+		const snapshotHandler = getSnapshotHandler(ipcMain)
 		const before = wcv.setBounds.mock.calls.length
 
-		// An UNtrusted wc presents the (valid) token. The trust gate — unchanged
+		// An untrusted wc presents the (valid) token. The trust gate — unchanged
 		// by eager arming — must DROP it: no setBounds.
 		const untrustedId = 424242 // never trusted
-		await place(untrustedMainFrameEvent(untrustedId), {
-			slotToken,
-			placement: { visible: true, bounds: { x: 9, y: 9, width: 9, height: 9 } },
-		})
+		await snapshotHandler(
+			untrustedMainFrameEvent(untrustedId),
+			oneViewSnapshot(
+				slotToken!,
+				{ visible: true, bounds: { x: 9, y: 9, width: 9, height: 9 } },
+				generation,
+				0,
+			),
+		)
 
 		expect(wcv.setBounds.mock.calls.length).toBe(before)
 
-		// And an untrusted layout-subscribe is a silent drop too (no throw).
+		// An untrusted layout-subscribe is a silent drop too (no throw).
 		const layoutSubscribe = getLayoutSubscribeHandler(ipcMain)
 		await expect(
 			Promise.resolve(layoutSubscribe(untrustedMainFrameEvent(untrustedId))),
@@ -319,25 +326,30 @@ describe('DeckApp eager-arm — gate unchanged (SECURITY)', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// A3 — Place handler likewise armed at start (token-gated, not "no handler").
+// A3 — Snapshot handler likewise armed at start (token-gated, not "no handler").
 // ─────────────────────────────────────────────────────────────────────────────
-describe('DeckApp eager-arm — place armed at start()', () => {
-	it('A3) immediately after start() with NO views, the place handler IS registered; a trusted-sender place with an UNKNOWN token is token-gated DROP (not a "no handler" reject)', async () => {
+describe('DeckApp eager-arm — snapshot handler armed at start()', () => {
+	it('immediately after start() with NO views, the snapshot handler is registered; a trusted-sender snapshot with an UNKNOWN token is token-gated DROP (not a "no handler" reject)', async () => {
 		const { app, ipcMain, mainWcId } = await bootAppNoViews()
 
-		// PIN: the place handler exists at start() — armed eagerly.
-		expect(ipcMain.handlers.has(PLACE_CHANNEL)).toBe(true)
+		// The snapshot handler exists at start() — armed eagerly.
+		expect(ipcMain.handlers.has(SNAPSHOT_CHANNEL)).toBe(true)
 
-		const place = getPlaceHandler(ipcMain)
+		const snapshotHandler = getSnapshotHandler(ipcMain)
 		// Trusted main-frame sender, but the token is unknown (no view minted one).
 		// The handler must be PRESENT and silently DROP on the token check — it must
 		// NOT reject with "no handler registered".
 		await expect(
 			Promise.resolve(
-				place(mainFrameEvent(mainWcId), {
-					slotToken: 'no-such-token',
-					placement: { visible: true, bounds: { x: 0, y: 0, width: 1, height: 1 } },
-				}),
+				snapshotHandler(
+					mainFrameEvent(mainWcId),
+					oneViewSnapshot(
+						'no-such-token',
+						{ visible: true, bounds: { x: 0, y: 0, width: 1, height: 1 } },
+						0,
+						0,
+					),
+				),
 			),
 		).resolves.not.toThrow()
 

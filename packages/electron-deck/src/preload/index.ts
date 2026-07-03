@@ -30,6 +30,11 @@ export interface ExposeBridgeOptions {
  * ```
  *
  * 见 `DeckBridge` 接口（`shared/protocol.ts`）。
+ *
+ * `@experimental` No production consumer yet — pairs with `createDeckClient` /
+ * `DeckConfig.hostServices` / `events`, which only `examples/` / `spike/` use;
+ * no host in this repo calls `exposeDeckBridge`. Contract may change until a
+ * second real consumer adopts it.
  */
 export function exposeDeckBridge(options?: ExposeBridgeOptions): void {
 	if (typeof contextBridge?.exposeInMainWorld !== 'function' || typeof ipcRenderer?.invoke !== 'function') {
@@ -72,7 +77,7 @@ export interface ExposeLayoutBridgeOptions {
 
 /**
  * 在 host preload 内调用，把三条 slot-token LAYOUT channel（`slot-grant` PUSH /
- * `place` send / `layout-subscribe` invoke）封装成一个 `LayoutBridge`-shaped
+ * `snapshot` send / `layout-subscribe` invoke）封装成一个 `LayoutBridge`-shaped
  * 对象暴露到 webview window，供 renderer：
  *
  * ```ts
@@ -106,8 +111,8 @@ export function exposeDeckLayoutBridge(options?: ExposeLayoutBridgeOptions): voi
 				ipcRenderer.removeListener(DeckChannel.SlotGrant, listener)
 			}
 		},
-		sendPlace(msg): void {
-			void ipcRenderer.invoke(DeckChannel.Place, msg).catch(() => {})
+		sendSnapshot(snapshot): void {
+			void ipcRenderer.invoke(DeckChannel.Snapshot, snapshot).catch(() => {})
 		},
 		subscribe(): void {
 			void ipcRenderer.invoke(DeckChannel.LayoutSubscribe).catch(() => {})

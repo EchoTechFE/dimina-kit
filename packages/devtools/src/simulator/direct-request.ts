@@ -65,9 +65,21 @@ export function directRequest(
   }
 
   let rurl = url
+  // Merge headers case-insensitively. HTTP header names are case-insensitive,
+  // but plain-object keys are not: a title-cased `Content-Type` default and a
+  // caller's lowercase `content-type` are two distinct object keys, and the
+  // Headers/fetch layer then joins same-named headers into one comma-separated
+  // value (`application/json, application/json`). Building a Headers collapses
+  // the casing so the caller's value wins exactly once, and the default is
+  // applied only when the caller supplied no content-type in any casing.
+  const headers = new Headers()
+  for (const [k, v] of Object.entries(header)) {
+    if (v != null) headers.set(k, String(v))
+  }
+  if (!headers.has('content-type')) headers.set('content-type', 'application/json')
   const init: RequestInit = {
     method: rm,
-    headers: { 'Content-Type': 'application/json', ...header },
+    headers,
   }
 
   if (!canHaveBody && data && typeof data === 'object' && Object.keys(data).length > 0) {
