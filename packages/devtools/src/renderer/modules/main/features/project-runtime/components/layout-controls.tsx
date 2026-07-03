@@ -3,11 +3,12 @@ import { Button } from '@/shared/components/ui/button'
 import { cn } from '@/shared/lib/utils'
 import { closePanel, closePanelForUser } from '@dimina-kit/electron-deck/layout'
 import type { LayoutModel, PanelRegistry } from '@dimina-kit/electron-deck/layout'
-import { buildPresetDockTree, listPanelVisibility, reopenPanel } from '../layout/dock-layout'
+import { buildPresetDockTree, DEFAULT_DEBUG_PANELS, listPanelVisibility, reopenPanel } from '../layout/dock-layout'
 import type { DevtoolsPosition, LayoutStoreApi, SimulatorAlignment } from '../controllers/use-layout-store'
 
-/** The five built-in debug panels managed by the single "调试器" toggle. */
-const DEBUG_PANELS = ['wxml', 'appdata', 'storage', 'console', 'compile']
+/** The five built-in debug panels managed by the single "调试器" toggle —
+ * shared with the restore-time heal so both read one set. */
+const DEBUG_PANELS = DEFAULT_DEBUG_PANELS
 
 interface LayoutControlsProps {
   model: LayoutModel
