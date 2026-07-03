@@ -209,15 +209,28 @@ export interface ProjectsProvider {
   saveCompileConfig?(dirPath: string, cfg: unknown): void | Promise<void>
 }
 
+/**
+ * A template the user can pick from in the "新建项目" dialog. Exactly one of
+ * `source` or `generate` should be supplied; if both are omitted, the
+ * service refuses to materialise the template.
+ */
 export interface ProjectTemplate {
+  /** Stable identifier. Used by host whitelists and the `templateId` field of CreateProjectInput. */
   id: string
+  /** Human-readable label shown in the dialog. */
   name: string
   description?: string
   icon?: string
+  /** Copy-tree source. `path` must be absolute. */
   source?: { type: 'directory'; path: string }
+  /** Programmatic generator. `target` is the absolute destination directory. */
   generate?: (target: string, opts: { name: string }) => Promise<void>
 }
 
+/**
+ * Payload returned from the create-project dialog. The service uses this to
+ * scaffold disk content and to register the project with the provider.
+ */
 export interface CreateProjectInput {
   name: string
   path: string

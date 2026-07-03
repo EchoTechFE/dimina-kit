@@ -11,6 +11,68 @@ import { bindDomEvents, type EventBridgeDisposer } from './event-bridge'
 import { bindCallbacks } from './simulator-api-helpers'
 import { createTempFilePath } from './temp-files'
 
+// ─── shared file-picker scaffolding ───────────────────────────────────────
+//
+// chooseImage / chooseVideo / chooseMedia all drive the browser file picker
+// through a hidden `<input type=file>`: create it, wire accept/multiple/
+// capture from the caller's options, listen for `change`, and report a
+// `${apiName}:fail cancel` when the user closes the dialog without picking
+// anything. `createFilePicker` is the single authority for that scaffold;
+// each API supplies only its accept string, multiplicity, and the
+// (possibly async) processing of the picked files.
+
+type CancelCallbacks = Pick<ReturnType<typeof bindCallbacks>, 'onFail' | 'onComplete'>
+
+interface FilePickerConfig {
+	accept: string
+	multiple: boolean
+	/** `capture` attribute value, or `undefined` to omit it (album source, or no single-camera source requested). */
+	capture?: 'user' | 'environment'
+}
+
+/** Resolves the `capture` attribute from `sourceType` + `camera`: only set when the caller asked for camera-only capture. */
+function captureAttrFor(sourceType: string[], camera: unknown): 'user' | 'environment' | undefined {
+	if (sourceType.length !== 1 || sourceType[0] !== 'camera') return undefined
+	return camera === 'front' ? 'user' : 'environment'
+}
+
+/**
+ * Drives a hidden `<input type=file>` through one pick cycle. Reports
+ * `${apiName}:fail cancel` + `complete` when the selection is empty;
+ * otherwise hands the raw (un-truncated) `FileList` to `onPick`, which owns
+ * success/fail/complete and must call `removeInput` once it is done with the
+ * picker element.
+ */
+function createFilePicker(
+	apiName: string,
+	config: FilePickerConfig,
+	cbs: CancelCallbacks,
+	onPick: (files: File[], removeInput: () => void) => void | Promise<void>,
+): void {
+	const input = document.createElement('input')
+	input.type = 'file'
+	input.accept = config.accept
+	input.multiple = config.multiple
+	if (config.capture) input.setAttribute('capture', config.capture)
+	input.style.display = 'none'
+	document.body.appendChild(input)
+
+	const removeInput = () => input.remove()
+
+	input.addEventListener('change', () => {
+		const files = Array.from(input.files || [])
+		if (files.length === 0) {
+			cbs.onFail?.({ errMsg: `${apiName}:fail cancel` })
+			cbs.onComplete?.()
+			removeInput()
+			return
+		}
+		void onPick(files, removeInput)
+	})
+
+	input.click()
+}
+
 // ─── Media: Image ────────────────────────────────────────────────────────────
 
 export function chooseImage(
@@ -25,36 +87,24 @@ export function chooseImage(
 		complete?: unknown
 	},
 ) {
-	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
+	const cbs = bindCallbacks(this, { success, fail, complete })
+	const { onSuccess, onComplete } = cbs
 	const normalizedCount = normalizeChooseMediaCount(count)
 	const normalizedSourceType = normalizeStringArray(sourceType, ['album', 'camera'])
 
-	const input = document.createElement('input')
-	input.type = 'file'
-	input.accept = 'image/*'
-	input.multiple = normalizedCount > 1
-	if (normalizedSourceType.length === 1 && normalizedSourceType[0] === 'camera') {
-		input.setAttribute('capture', camera === 'front' ? 'user' : 'environment')
-	}
-	input.style.display = 'none'
-	document.body.appendChild(input)
-
-	input.addEventListener('change', () => {
-		const files = Array.from(input.files || []).slice(0, normalizedCount)
-		if (files.length === 0) {
-			onFail?.({ errMsg: 'chooseImage:fail cancel' })
+	createFilePicker(
+		'chooseImage',
+		{ accept: 'image/*', multiple: normalizedCount > 1, capture: captureAttrFor(normalizedSourceType, camera) },
+		cbs,
+		(rawFiles, removeInput) => {
+			const files = rawFiles.slice(0, normalizedCount)
+			const tempFilePaths = files.map(f => createTempFilePath(f))
+			const tempFiles = files.map((f, i) => ({ path: tempFilePaths[i], size: f.size }))
+			onSuccess?.({ tempFilePaths, tempFiles, errMsg: 'chooseImage:ok' })
 			onComplete?.()
-			input.remove()
-			return
-		}
-		const tempFilePaths = files.map(f => createTempFilePath(f))
-		const tempFiles = files.map((f, i) => ({ path: tempFilePaths[i], size: f.size }))
-		onSuccess?.({ tempFilePaths, tempFiles, errMsg: 'chooseImage:ok' })
-		onComplete?.()
-		input.remove()
-	})
-
-	input.click()
+			removeInput()
+		},
+	)
 }
 
 export function previewImage(
@@ -379,46 +429,38 @@ export function chooseMedia(
 		complete?: unknown
 	},
 ) {
-	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
+	const cbs = bindCallbacks(this, { success, fail, complete })
+	const { onSuccess, onFail, onComplete } = cbs
 	const normalizedCount = normalizeChooseMediaCount(count)
 	const normalizedMediaType = normalizeStringArray(mediaType, ['image', 'video'])
 	const normalizedSourceType = normalizeStringArray(sourceType, ['album', 'camera'])
 
-	const input = document.createElement('input')
-	input.type = 'file'
-	input.accept = getChooseMediaAccept(normalizedMediaType)
-	input.multiple = normalizedCount > 1
-	if (normalizedSourceType.length === 1 && normalizedSourceType[0] === 'camera') {
-		input.setAttribute('capture', camera === 'front' ? 'user' : 'environment')
-	}
-	input.style.display = 'none'
-	document.body.appendChild(input)
-
-	input.addEventListener('change', async () => {
-		const files = Array.from(input.files || []).slice(0, normalizedCount)
-		if (files.length === 0) {
-			onFail?.({ errMsg: 'chooseMedia:fail cancel' })
-			onComplete?.()
-			input.remove()
-			return
-		}
-		try {
-			const tempFiles = await Promise.all(files.map(buildChooseMediaTempFile))
-			onSuccess?.({
-				tempFiles,
-				type: getChooseMediaResultType(tempFiles),
-				failedCount: 0,
-				errMsg: 'chooseMedia:ok',
-			})
-		} catch (error) {
-			onFail?.({ errMsg: `chooseMedia:fail ${(error as Error).message}` })
-		} finally {
-			onComplete?.()
-			input.remove()
-		}
-	})
-
-	input.click()
+	createFilePicker(
+		'chooseMedia',
+		{
+			accept: getChooseMediaAccept(normalizedMediaType),
+			multiple: normalizedCount > 1,
+			capture: captureAttrFor(normalizedSourceType, camera),
+		},
+		cbs,
+		async (rawFiles, removeInput) => {
+			const files = rawFiles.slice(0, normalizedCount)
+			try {
+				const tempFiles = await Promise.all(files.map(buildChooseMediaTempFile))
+				onSuccess?.({
+					tempFiles,
+					type: getChooseMediaResultType(tempFiles),
+					failedCount: 0,
+					errMsg: 'chooseMedia:ok',
+				})
+			} catch (error) {
+				onFail?.({ errMsg: `chooseMedia:fail ${(error as Error).message}` })
+			} finally {
+				onComplete?.()
+				removeInput()
+			}
+		},
+	)
 }
 
 export function chooseVideo(
@@ -433,42 +475,30 @@ export function chooseVideo(
 		complete?: unknown
 	},
 ) {
-	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
+	const cbs = bindCallbacks(this, { success, fail, complete })
+	const { onSuccess, onComplete } = cbs
 	const normalizedSourceType = normalizeStringArray(sourceType, ['album', 'camera'])
 
-	const input = document.createElement('input')
-	input.type = 'file'
-	input.accept = 'video/*'
-	if (normalizedSourceType.length === 1 && normalizedSourceType[0] === 'camera') {
-		input.setAttribute('capture', camera === 'front' ? 'user' : 'environment')
-	}
-	input.style.display = 'none'
-	document.body.appendChild(input)
-
-	input.addEventListener('change', async () => {
-		const files = Array.from(input.files || [])
-		if (files.length === 0) {
-			onFail?.({ errMsg: 'chooseVideo:fail cancel' })
+	createFilePicker(
+		'chooseVideo',
+		{ accept: 'video/*', multiple: false, capture: captureAttrFor(normalizedSourceType, camera) },
+		cbs,
+		async (files, removeInput) => {
+			const file = files[0]!
+			const tempFilePath = createTempFilePath(file)
+			const metadata = await readVideoMetadata(tempFilePath)
+			onSuccess?.({
+				tempFilePath,
+				duration: metadata.duration,
+				size: file.size,
+				width: metadata.width,
+				height: metadata.height,
+				errMsg: 'chooseVideo:ok',
+			})
 			onComplete?.()
-			input.remove()
-			return
-		}
-		const file = files[0]!
-		const tempFilePath = createTempFilePath(file)
-		const metadata = await readVideoMetadata(tempFilePath)
-		onSuccess?.({
-			tempFilePath,
-			duration: metadata.duration,
-			size: file.size,
-			width: metadata.width,
-			height: metadata.height,
-			errMsg: 'chooseVideo:ok',
-		})
-		onComplete?.()
-		input.remove()
-	})
-
-	input.click()
+			removeInput()
+		},
+	)
 }
 
 // ─── Media: Audio (container-side handlers for service-apis/audio) ──────────

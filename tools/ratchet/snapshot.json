@@ -2,7 +2,7 @@
   "metrics": {
     "code-duplication": {
       "direction": "lower-is-better",
-      "value": 625,
+      "value": 401,
       "unit": "duplicated lines",
       "breakdown": {
         "packages/devtools/src/main/ipc/project-fs.ts:167↔packages/devtools/src/main/ipc/project-fs.ts:427": 12,
@@ -11,12 +11,10 @@
         "packages/devtools/src/main/services/elements-forward/index.ts:184↔packages/devtools/src/main/services/network-forward/index.ts:301": 23,
         "packages/devtools/src/main/services/mcp/tools/context-tools.ts:189↔packages/devtools/src/main/services/mcp/tools/context-tools.ts:272": 11,
         "packages/devtools/src/main/services/mcp/tools/context-tools.ts:243↔packages/devtools/src/main/services/mcp/tools/context-tools.ts:301": 10,
-        "packages/devtools/src/main/services/projects/types.ts:98↔packages/devtools/src/shared/types.ts:209": 34,
         "packages/devtools/src/main/services/simulator-storage/index.ts:367↔packages/devtools/src/main/services/simulator-storage/index.ts:385": 8,
         "packages/devtools/src/main/services/simulator-storage/index.ts:367↔packages/devtools/src/main/services/simulator-storage/index.ts:441": 8,
         "packages/devtools/src/main/services/simulator-storage/index.ts:409↔packages/devtools/src/main/services/simulator-storage/index.ts:440": 8,
         "packages/devtools/src/main/services/views/host-toolbar-port-channel.ts:144↔packages/devtools/src/preload/runtime/host-toolbar-port.ts:83": 11,
-        "packages/devtools/src/main/utils/logger.ts:1↔packages/electron-deck/src/main/logger.ts:1": 58,
         "packages/devtools/src/preload/instrumentation/wxml.ts:23↔packages/devtools/src/render-host/render-inspect.ts:61": 6,
         "packages/devtools/src/preload/runtime/bridge.ts:75↔packages/devtools/src/render-host/render-inspect.ts:91": 17,
         "packages/devtools/src/preload/runtime/main-api-runner.ts:106↔packages/devtools/src/simulator/run-api-async.ts:177": 15,
@@ -27,34 +25,20 @@
         "packages/devtools/src/renderer/modules/main/features/project-runtime/controllers/use-device.ts:21↔packages/devtools/src/renderer/modules/main/features/project-runtime/controllers/use-project-runtime-controller.ts:52": 22,
         "packages/devtools/src/renderer/modules/main/features/project-runtime/controllers/use-panel-data.ts:45↔packages/devtools/src/renderer/modules/main/features/project-runtime/controllers/use-project-runtime-controller.ts:69": 18,
         "packages/devtools/src/renderer/modules/workbench-settings/workbench-settings.tsx:242↔packages/devtools/src/renderer/modules/workbench-settings/workbench-settings.tsx:353": 14,
-        "packages/devtools/src/service-host/sync-impls/storage.ts:48↔packages/devtools/src/simulator/simulator-api-storage.ts:42": 13,
         "packages/devtools/src/simulator/device-shell/device-shell.tsx:350↔packages/devtools/src/simulator/device-shell/device-shell.tsx:402": 11,
         "packages/devtools/src/simulator/device-shell/device-shell.tsx:350↔packages/devtools/src/simulator/device-shell/device-shell.tsx:434": 11,
         "packages/devtools/src/simulator/device-shell/device-shell.tsx:364↔packages/devtools/src/simulator/device-shell/device-shell.tsx:416": 14,
         "packages/devtools/src/simulator/device-shell/device-shell.tsx:364↔packages/devtools/src/simulator/device-shell/device-shell.tsx:444": 14,
-        "packages/devtools/src/simulator/simulator-api-device.ts:76↔packages/devtools/src/simulator/simulator-api-fs.ts:738": 6,
-        "packages/devtools/src/simulator/simulator-api-fs.ts:113↔packages/devtools/src/simulator/simulator-api-fs.ts:469": 10,
-        "packages/devtools/src/simulator/simulator-api-fs.ts:219↔packages/devtools/src/simulator/simulator-api-fs.ts:264": 9,
-        "packages/devtools/src/simulator/simulator-api-fs.ts:259↔packages/devtools/src/simulator/simulator-api-fs.ts:300": 14,
-        "packages/devtools/src/simulator/simulator-api-fs.ts:338↔packages/devtools/src/simulator/simulator-api-fs.ts:401": 9,
-        "packages/devtools/src/simulator/simulator-api-fs.ts:338↔packages/devtools/src/simulator/simulator-api-fs.ts:571": 9,
-        "packages/devtools/src/simulator/simulator-api-fs.ts:439↔packages/devtools/src/simulator/simulator-api-fs.ts:788": 7,
-        "packages/devtools/src/simulator/simulator-api-fs.ts:466↔packages/devtools/src/simulator/simulator-api-fs.ts:499": 13,
-        "packages/devtools/src/simulator/simulator-api-media.ts:35↔packages/devtools/src/simulator/simulator-api-media.ts:390": 8,
-        "packages/devtools/src/simulator/simulator-api-media.ts:36↔packages/devtools/src/simulator/simulator-api-media.ts:442": 8,
-        "packages/devtools/src/simulator/simulator-api-media.ts:391↔packages/devtools/src/simulator/simulator-api-media.ts:442": 8,
-        "packages/devtools/src/simulator/simulator-api-storage.ts:32↔packages/devtools/src/simulator/simulator-api-storage.ts:108": 7,
-        "packages/devtools/src/simulator/simulator-api-storage.ts:42↔packages/devtools/src/simulator/simulator-api-storage.ts:121": 11,
-        "packages/devtools/src/simulator/simulator-api-storage.ts:60↔packages/devtools/src/simulator/simulator-api-storage.ts:93": 6,
-        "packages/devtools/src/simulator/simulator-api-storage.ts:74↔packages/devtools/src/simulator/simulator-api-storage.ts:91": 6,
+        "packages/devtools/src/simulator/simulator-api-fs.ts:299↔packages/devtools/src/simulator/simulator-api-fs.ts:318": 13,
+        "packages/devtools/src/simulator/simulator-api-fs.ts:396↔packages/devtools/src/simulator/simulator-api-fs.ts:652": 6,
+        "packages/devtools/src/simulator/simulator-api-fs.ts:408↔packages/devtools/src/simulator/simulator-api-fs.ts:426": 12,
+        "packages/devtools/src/simulator/simulator-api-storage.ts:101↔packages/devtools/src/simulator/simulator-api-storage.ts:117": 8,
         "packages/electron-deck/src/dock-react/group-view.tsx:111↔packages/electron-deck/src/dock-react/group-view.tsx:153": 24,
         "packages/electron-deck/src/dock-react/group-view.tsx:91↔packages/electron-deck/src/dock-react/group-view.tsx:107": 6,
         "packages/electron-deck/src/layout/mutations.ts:143↔packages/electron-deck/src/layout/mutations.ts:155": 6,
         "packages/electron-deck/src/main/connection.ts:111↔packages/electron-deck/src/main/scope.ts:181": 13,
         "packages/electron-deck/src/main/connection.ts:139↔packages/electron-deck/src/main/scope.ts:378": 14,
-        "packages/electron-deck/src/main/connection.ts:69↔packages/electron-deck/src/main/scope.ts:106": 10,
-        "packages/workbench/src/dimina-json-schemas.ts:412↔packages/workbench/src/wxml-language.ts:123": 13,
-        "packages/workbench/src/dimina-json-schemas.ts:61↔packages/workbench/src/wxml-language.ts:36": 30
+        "packages/electron-deck/src/main/connection.ts:69↔packages/electron-deck/src/main/scope.ts:106": 10
       }
     },
     "cognitive-complexity": {
@@ -94,8 +78,8 @@
         "packages/devtools/src/simulator/device-shell/page-stack-controller.test.ts": 513,
         "packages/devtools/src/simulator/device-shell/tab-bar-state.test.ts": 517,
         "packages/devtools/src/simulator/simulator-api-fs.test.ts": 743,
-        "packages/devtools/src/simulator/simulator-api-fs.ts": 850,
-        "packages/devtools/src/simulator/simulator-api-media.ts": 622,
+        "packages/devtools/src/simulator/simulator-api-fs.ts": 689,
+        "packages/devtools/src/simulator/simulator-api-media.ts": 652,
         "packages/electron-deck/src/__cross_check__/round2-fix-cross-check.test.ts": 699,
         "packages/electron-deck/src/dock-react/dock-view-redock.test.tsx": 663,
         "packages/electron-deck/src/dock-react/dock-view.test.tsx": 715,
@@ -128,14 +112,14 @@
     },
     "type-coverage": {
       "direction": "higher-is-better",
-      "value": 99.72,
+      "value": 99.73,
       "unit": "%",
       "breakdown": {
         "devkit": 99.87,
         "devtools": 99.7,
-        "electron-deck": 99.71,
+        "electron-deck": 99.72,
         "view-anchor": 100,
-        "workbench": 99.87
+        "workbench": 99.89
       }
     },
     "type-escapes": {
