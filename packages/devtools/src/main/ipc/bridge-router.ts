@@ -4,7 +4,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { BRIDGE_CHANNELS as C, SIMULATOR_EVENTS as E, deviceInfoToHostEnv } from '../../shared/bridge-channels.js'
 import type { NativeDeviceInfo, SyncStorageChange } from '../../shared/ipc-channels.js'
-import { isPersistentSimulatorApi } from '../../shared/simulator-api-metadata.js'
+import { apiCallWatchdogMs, isPersistentSimulatorApi } from '../../shared/simulator-api-metadata.js'
 import { devtoolsPackageRoot } from '../utils/paths.js'
 import { createSessionListenerBag } from './session-listener-bag.js'
 import type { SessionListenerBag } from './session-listener-bag.js'
@@ -303,7 +303,6 @@ interface RouterState {
 }
 
 /** Default timeout for a simulator-forwarded API call. */
-const API_CALL_TIMEOUT_MS = 5_000
 
 /**
  * Accessor over the bridge-router's private `RouterState`, stashed on
@@ -1709,12 +1708,17 @@ function forwardApiCallToSimulator(
   const requestId = newRequestId()
   // Persistent subscriptions (`keep: true`, e.g. audioListen) bind their event
   // bridge synchronously but only emit their FIRST response when the first
-  // event fires (which can be well past the 5s no-handler window). Arming the
+  // event fires (which can be well past the no-handler window). Arming the
   // one-shot timeout would tear the subscription down before it ever delivers,
   // so keep calls run without a timeout and are reaped on page/app teardown.
   // Recognise persistent subscriptions BY NAME (`audioListen`) too: the service
   // host strips the original `keep: true` before forwarding, so `params.keep` is
   // gone by the time we route the call. See shared/simulator-api-metadata.ts.
+  //
+  // The watchdog window is per-call (apiCallWatchdogMs): network-budget APIs
+  // (request/downloadFile/uploadFile) get their wx timeout budget + grace so a
+  // slow-but-alive HTTP call is never torn down before its handler's own
+  // deadline; everything else keeps the flat 5s missing-handler window.
   const keep = params.keep === true || isPersistentSimulatorApi(name)
   const timer = keep
     ? undefined
@@ -1727,7 +1731,7 @@ function forwardApiCallToSimulator(
         const fail = { errMsg: `${pending.name}:fail no handler (timeout)` }
         sendCallback(target, pending.callbacks.fail, fail)
         sendCallback(target, pending.callbacks.complete, fail)
-      }, API_CALL_TIMEOUT_MS)
+      }, apiCallWatchdogMs(name, params))
 
   state.pendingApiCalls.set(requestId, {
     appSessionId: ap.appSessionId,
@@ -1809,7 +1813,21 @@ function handleApiResponse(
     sendCallback(ap, pending.callbacks.success, payload.result)
     sendCallback(ap, pending.callbacks.complete, payload.result ?? { errMsg: `${pending.name}:ok` })
   } else {
-    const fail = { errMsg: payload.errMsg ?? `${pending.name}:fail` }
+    // The router is a transport, not an author: the simulator-side fail result
+    // (errno etc.) must reach the service callbacks intact, so spread it
+    // through instead of rebuilding a bare { errMsg }. errMsg is guaranteed
+    // non-empty — `||` (not `??`) so an empty string (e.g. an HTTP/2 response
+    // whose statusText is always '') falls through payload.errMsg →
+    // result.errMsg → the `${name}:fail` default instead of surfacing blank.
+    const result =
+      payload.result && typeof payload.result === 'object' && !Array.isArray(payload.result)
+        ? (payload.result as Record<string, unknown>)
+        : undefined
+    const resultErrMsg = typeof result?.errMsg === 'string' ? result.errMsg : undefined
+    const fail = {
+      ...result,
+      errMsg: payload.errMsg || resultErrMsg || `${pending.name}:fail`,
+    }
     sendCallback(ap, pending.callbacks.fail, fail)
     sendCallback(ap, pending.callbacks.complete, fail)
   }

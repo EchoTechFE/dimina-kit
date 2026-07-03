@@ -16,8 +16,48 @@
  * truth, consumed by `bridge-router` (skip the one-shot timeout, keep-alive
  * responses) and `run-api-async` (no premature settle, re-fire on every event).
  */
+import { DEFAULT_REQUEST_TIMEOUT_MS } from './request-core.js'
+
 export const PERSISTENT_SIMULATOR_APIS: ReadonlySet<string> = new Set(['audioListen'])
 
 export function isPersistentSimulatorApi(name: string): boolean {
   return PERSISTENT_SIMULATOR_APIS.has(name)
+}
+
+/**
+ * APIs whose one-shot call legitimately runs as long as the caller's wx
+ * network timeout budget (`params.timeout`, default 60000ms) — the simulator
+ * handler answers when the network answers, not within a fixed router window.
+ */
+export const NETWORK_BUDGET_SIMULATOR_APIS: ReadonlySet<string> = new Set([
+  'request',
+  'downloadFile',
+  'uploadFile',
+])
+
+/**
+ * Flat watchdog window for forwarded one-shot calls whose handler is expected
+ * to answer promptly; it guards against a missing handler / dead seam.
+ */
+export const API_CALL_WATCHDOG_MS = 5_000
+
+/**
+ * How long bridge-router's one-shot "no handler" watchdog waits before
+ * tearing a forwarded simulator-API call down.
+ *
+ * Network-budget APIs get their wx timeout budget plus the flat window as
+ * forwarding grace: the handler owns the real deadline (performRequest emits
+ * `request:fail timeout` at the budget), so the watchdog only has to catch
+ * the case where no verdict ever comes back. A flat 5s window here would
+ * kill any HTTP call slower than 5s and drop its late — perfectly valid —
+ * response. Every other API keeps the flat window.
+ */
+export function apiCallWatchdogMs(
+  name: string,
+  params: Record<string, unknown> | undefined,
+): number {
+  if (!NETWORK_BUDGET_SIMULATOR_APIS.has(name)) return API_CALL_WATCHDOG_MS
+  const timeout = Number(params?.timeout)
+  const budget = timeout > 0 ? timeout : DEFAULT_REQUEST_TIMEOUT_MS
+  return budget + API_CALL_WATCHDOG_MS
 }

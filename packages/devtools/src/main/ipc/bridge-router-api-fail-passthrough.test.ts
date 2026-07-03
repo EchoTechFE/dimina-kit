@@ -1,0 +1,341 @@
+/**
+ * `handleApiResponse`'s fail path (ordinary, non-persistent API calls routed
+ * through the bridge-router — e.g. `request`) must transparently forward the
+ * simulator-side `result` object to the service-side fail callback and must
+ * never let the resolved `errMsg` be an empty string.
+ *
+ * Current defect: `handleApiResponse` builds the fail args as
+ * `{ errMsg: payload.errMsg ?? \`${name}:fail\` }` — it discards
+ * `payload.result` entirely (so fields like `errno` never reach the service,
+ * the exact loss that made HTTP-status-driven auth branching impossible), and
+ * `??` does not treat an empty-string `errMsg` as absent, so a payload with
+ * `errMsg: ''` (e.g. a fetch layer that stringifies a status with no
+ * statusText) reaches the service as a silently blank error.
+ *
+ * Contract pinned:
+ *  - `result`'s fields (e.g. `errno`) must all reach the fail callback.
+ *  - errMsg resolution: non-empty `payload.errMsg` wins; else non-empty
+ *    `result.errMsg`; else `${name}:fail`. Empty string at every level must
+ *    be treated as absent, never surfaced verbatim.
+ *  - `complete` receives the identical object `fail` received.
+ *  - `ok:true` responses are unaffected (regression guard).
+ *
+ * Seam: identical to bridge-router-keep-api.test.ts — the real
+ * `installBridgeRouter` driven through SPAWN → SERVICE_INVOKE(invokeAPI) →
+ * API_RESPONSE under an exhaustive electron mock, observed via the
+ * `triggerCallback` messages sent to the service-host webContents.
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+const stubs = vi.hoisted(() => {
+  type AnyFn = (...args: unknown[]) => unknown
+  type EventBag = Record<string, Set<AnyFn>>
+
+  const onListeners = new Map<string, Set<AnyFn>>()
+  const invokeHandlers = new Map<string, AnyFn>()
+
+  function makeEmitter() {
+    const listeners: EventBag = {}
+    const api = {
+      listeners,
+      on(event: string, fn: AnyFn) { (listeners[event] ??= new Set()).add(fn); return api },
+      once(event: string, fn: AnyFn) {
+        const wrap: AnyFn = (...a: unknown[]) => { listeners[event]?.delete(wrap); return fn(...a) }
+        ;(listeners[event] ??= new Set()).add(wrap); return api
+      },
+      off(event: string, fn: AnyFn) { listeners[event]?.delete(fn); return api },
+      removeListener(event: string, fn: AnyFn) { listeners[event]?.delete(fn); return api },
+      emit(event: string, ...a: unknown[]) { for (const fn of [...(listeners[event] ?? [])]) fn(...a) },
+    }
+    return api
+  }
+
+  let nextWcId = 8000
+  const wcById = new Map<number, ReturnType<typeof makeWebContents>>()
+  function makeWebContents() {
+    const em = makeEmitter()
+    const sent: Array<{ channel: string; payload: unknown }> = []
+    const wc = {
+      ...em,
+      id: nextWcId++,
+      destroyed: false,
+      isDestroyed() { return this.destroyed },
+      getURL: () => 'about:blank',
+      getType: () => 'window',
+      send: vi.fn((channel: string, payload: unknown) => { sent.push({ channel, payload }) }),
+      executeJavaScript: vi.fn(() => Promise.resolve(undefined)),
+      openDevTools: vi.fn(),
+      sentMessages: sent,
+    }
+    wcById.set(wc.id, wc)
+    return wc
+  }
+
+  function makeBrowserWindow() {
+    const em = makeEmitter()
+    return {
+      ...em,
+      webContents: makeWebContents(),
+      destroyed: false,
+      isDestroyed() { return this.destroyed },
+      close: vi.fn(function (this: { destroyed: boolean }) { this.destroyed = true }),
+      loadURL: vi.fn(() => Promise.resolve()),
+      loadFile: vi.fn(() => Promise.resolve()),
+    }
+  }
+
+  function reset() {
+    onListeners.clear()
+    invokeHandlers.clear()
+    wcById.clear()
+    nextWcId = 8000
+  }
+
+  return { onListeners, invokeHandlers, wcById, makeEmitter, makeWebContents, makeBrowserWindow, reset }
+})
+
+vi.mock('electron', () => {
+  type AnyFn = (...args: unknown[]) => unknown
+
+  const ipcMain = {
+    on: vi.fn((channel: string, fn: AnyFn) => {
+      ;(stubs.onListeners.get(channel) ?? stubs.onListeners.set(channel, new Set()).get(channel)!).add(fn)
+    }),
+    removeListener: vi.fn((channel: string, fn: AnyFn) => {
+      stubs.onListeners.get(channel)?.delete(fn)
+    }),
+    handle: vi.fn((channel: string, fn: AnyFn) => { stubs.invokeHandlers.set(channel, fn) }),
+    removeHandler: vi.fn((channel: string) => { stubs.invokeHandlers.delete(channel) }),
+  }
+
+  const protocolStub = { handle: vi.fn(), unhandle: vi.fn(), registerSchemesAsPrivileged: vi.fn() }
+  const sessionStub = {
+    fromPartition: vi.fn(() => ({
+      webRequest: { onBeforeSendHeaders: vi.fn(), onHeadersReceived: vi.fn() },
+      registerPreloadScript: vi.fn(),
+      protocol: { handle: vi.fn(), unhandle: vi.fn() },
+    })),
+    defaultSession: { protocol: { handle: vi.fn(), unhandle: vi.fn() } },
+  }
+
+  return {
+    ipcMain,
+    app: { isPackaged: true, getLocale: () => 'en-US', getPath: vi.fn(() => '/tmp/dimina-test-userdata') },
+    BrowserWindow: class {},
+    WebContentsView: class { webContents = {}; setBounds = vi.fn(); setBackgroundColor = vi.fn() },
+    protocol: protocolStub,
+    session: sessionStub,
+    webContents: { fromId: vi.fn(() => null), getAllWebContents: vi.fn(() => []) },
+    nativeTheme: { themeSource: 'system', on: vi.fn() },
+    default: {},
+  }
+})
+
+vi.mock('../windows/service-host-window/create.js', () => ({
+  serviceHostSpec: () => ({}),
+  serviceHostPreloadPath: '/tmp/preload.cjs',
+  SERVICE_HOST_PARTITION: 'persist:simulator',
+  buildServiceHostSpawnUrl: () => 'file:///service.html',
+  navigateServiceHost: vi.fn(() => Promise.resolve()),
+  createServiceHostWindow: vi.fn(() => stubs.makeBrowserWindow()),
+  constructServiceHostWindow: vi.fn(() => stubs.makeBrowserWindow()),
+}))
+
+import { BRIDGE_CHANNELS as C } from '../../shared/bridge-channels.js'
+import type { ApiResponsePayload, MessageEnvelope, ServiceInvokePayload, SpawnRequest, SpawnResult } from '../../shared/bridge-channels.js'
+import type { WorkbenchContext } from '../services/workbench-context.js'
+import { createConnectionRegistry } from '@dimina-kit/electron-deck/main'
+
+type AnyFn = (...args: unknown[]) => unknown
+type MockWc = ReturnType<typeof stubs.makeWebContents>
+
+let installBridgeRouter: typeof import('./bridge-router.js').installBridgeRouter
+
+beforeEach(async () => {
+  vi.resetModules()
+  stubs.reset()
+  ;({ installBridgeRouter } = await import('./bridge-router.js'))
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
+function emitOn(channel: string, sender: unknown, payload: unknown): void {
+  const fns = stubs.onListeners.get(channel)
+  if (!fns) throw new Error(`no ipcMain.on listener for ${channel}`)
+  for (const fn of [...fns]) fn({ sender }, payload)
+}
+
+function makeCtx(): { ctx: WorkbenchContext; simulatorWc: MockWc } {
+  const simulatorWc = stubs.makeWebContents()
+  const ctx = {
+    registry: { add: (_fn: AnyFn) => {} },
+    connections: createConnectionRegistry(),
+    simulatorApis: { has: (_name: string) => false, invoke: async () => ({}) },
+    windows: { mainWindow: { webContents: simulatorWc } },
+    workspace: { getSession: () => undefined },
+  } as unknown as WorkbenchContext
+  return { ctx, simulatorWc }
+}
+
+async function spawnSession(simulatorWc: MockWc): Promise<{ result: SpawnResult; serviceWc: MockWc }> {
+  const handle = stubs.invokeHandlers.get(C.SPAWN)
+  if (!handle) throw new Error('SPAWN handler not registered')
+  const req: SpawnRequest = {
+    appId: 'demo-app',
+    pagePath: 'pages/index/index',
+    resourceBaseUrl: 'http://127.0.0.1:1/',
+  }
+  const result = (await (handle as AnyFn)({ sender: simulatorWc }, req)) as SpawnResult
+  const serviceWc = stubs.wcById.get(result.serviceWcId)
+  if (!serviceWc) throw new Error(`no mock webContents with id ${result.serviceWcId}`)
+  return { result, serviceWc: serviceWc as unknown as MockWc }
+}
+
+/** Forward an ordinary (non-persistent) `request` invokeAPI from the service. */
+function forwardRequestCall(serviceWc: MockWc, bridgeId: string, callbacks: {
+  success?: unknown; complete?: unknown; fail?: unknown
+}): void {
+  const msg: MessageEnvelope = {
+    type: 'invokeAPI',
+    target: 'container',
+    body: {
+      name: 'request',
+      params: { url: 'https://example.com/api', ...callbacks },
+    },
+  }
+  const payload: ServiceInvokePayload = { bridgeId, msg }
+  emitOn(C.SERVICE_INVOKE, serviceWc, payload)
+}
+
+/** Recover the requestId the router assigned by reading the API_CALL it forwarded to the simulator. */
+function forwardedRequestId(simulatorWc: MockWc): string {
+  const apiCall = simulatorWc.sentMessages.find(m => m.channel === 'simulator:api-call')
+  if (!apiCall) throw new Error('router did not forward the API_CALL to the simulator window')
+  return (apiCall.payload as { requestId: string }).requestId
+}
+
+function triggerCallbacks(serviceWc: MockWc): Array<{ id: unknown; args: unknown }> {
+  return serviceWc.sentMessages
+    .filter(m => m.channel === C.TO_SERVICE)
+    .map(m => (m.payload as { msg?: MessageEnvelope }).msg)
+    .filter((m): m is MessageEnvelope => !!m && m.type === 'triggerCallback')
+    .map(m => m.body as { id: unknown; args: unknown })
+}
+
+async function setup(): Promise<{ ctx: WorkbenchContext; simulatorWc: MockWc; serviceWc: MockWc; requestId: string }> {
+  const { ctx, simulatorWc } = makeCtx()
+  installBridgeRouter(ctx)
+  const { result, serviceWc } = await spawnSession(simulatorWc)
+  forwardRequestCall(serviceWc, result.bridgeId, { success: 'svc-success', complete: 'svc-complete', fail: 'svc-fail' })
+  const requestId = forwardedRequestId(simulatorWc)
+  return { ctx, simulatorWc, serviceWc, requestId }
+}
+
+describe('bridge-router — handleApiResponse fail path transparently forwards `result`', () => {
+  it('an ok:false response carries every `result` field (e.g. errno) through to the fail callback args', async () => {
+    const { simulatorWc, serviceWc, requestId } = await setup()
+
+    const resp: ApiResponsePayload = { appSessionId: 'demo-app', requestId, ok: false, result: { errMsg: '', errno: 5 } }
+    emitOn(C.API_RESPONSE, simulatorWc, resp)
+
+    const cbs = triggerCallbacks(serviceWc)
+    const failFire = cbs.find(c => c.id === 'svc-fail')
+    expect(failFire, 'fail callback must fire').toBeDefined()
+    expect((failFire!.args as { errno?: number }).errno).toBe(5)
+  })
+
+  it('an empty-string payload.errMsg is treated as absent (not kept verbatim by `??`), falling back to a non-empty errMsg', async () => {
+    // `payload.errMsg ?? fallback` only falls back on null/undefined — an
+    // empty STRING survives `??` untouched, which is exactly the live bug
+    // (an h2 response with no statusText stringifies to errMsg: '').
+    const { simulatorWc, serviceWc, requestId } = await setup()
+
+    const resp: ApiResponsePayload = { appSessionId: 'demo-app', requestId, ok: false, errMsg: '', result: { errMsg: '', errno: 5 } }
+    emitOn(C.API_RESPONSE, simulatorWc, resp)
+
+    const cbs = triggerCallbacks(serviceWc)
+    const failFire = cbs.find(c => c.id === 'svc-fail')
+    const args = failFire!.args as { errMsg?: string; errno?: number }
+    expect(typeof args.errMsg).toBe('string')
+    expect(args.errMsg).not.toBe('')
+    expect(args.errMsg).toBe('request:fail')
+    expect(args.errno).toBe(5)
+  })
+})
+
+describe('bridge-router — handleApiResponse fail path errMsg resolution priority', () => {
+  it('a non-empty payload.errMsg wins over result.errMsg', async () => {
+    const { simulatorWc, serviceWc, requestId } = await setup()
+
+    const resp: ApiResponsePayload = {
+      appSessionId: 'demo-app', requestId, ok: false, errMsg: 'top-level failure',
+      result: { errMsg: 'ignored-nested-message', errno: 1 },
+    }
+    emitOn(C.API_RESPONSE, simulatorWc, resp)
+
+    const cbs = triggerCallbacks(serviceWc)
+    const failFire = cbs.find(c => c.id === 'svc-fail')
+    const args = failFire!.args as { errMsg?: string; errno?: number }
+    expect(args.errMsg).toBe('top-level failure')
+    // result's other fields must still pass through alongside the resolved errMsg.
+    expect(args.errno).toBe(1)
+  })
+
+  it('an absent payload.errMsg falls back to a non-empty result.errMsg', async () => {
+    const { simulatorWc, serviceWc, requestId } = await setup()
+
+    const resp: ApiResponsePayload = {
+      appSessionId: 'demo-app', requestId, ok: false,
+      result: { errMsg: 'nested failure reason' },
+    }
+    emitOn(C.API_RESPONSE, simulatorWc, resp)
+
+    const cbs = triggerCallbacks(serviceWc)
+    const failFire = cbs.find(c => c.id === 'svc-fail')
+    expect((failFire!.args as { errMsg?: string }).errMsg).toBe('nested failure reason')
+  })
+
+  it('no usable errMsg anywhere falls back to `${name}:fail`, and any surviving result fields still pass through', async () => {
+    const { simulatorWc, serviceWc, requestId } = await setup()
+
+    const resp: ApiResponsePayload = { appSessionId: 'demo-app', requestId, ok: false, result: { errno: 9 } }
+    emitOn(C.API_RESPONSE, simulatorWc, resp)
+
+    const cbs = triggerCallbacks(serviceWc)
+    const failFire = cbs.find(c => c.id === 'svc-fail')
+    const args = failFire!.args as { errMsg?: string; errno?: number }
+    expect(args.errMsg).toBe('request:fail')
+    expect(args.errno).toBe(9)
+  })
+})
+
+describe('bridge-router — handleApiResponse fail path complete parity', () => {
+  it('complete fires with the identical object the fail callback received', async () => {
+    const { simulatorWc, serviceWc, requestId } = await setup()
+
+    const resp: ApiResponsePayload = { appSessionId: 'demo-app', requestId, ok: false, result: { errno: 5 } }
+    emitOn(C.API_RESPONSE, simulatorWc, resp)
+
+    const cbs = triggerCallbacks(serviceWc)
+    const failFire = cbs.find(c => c.id === 'svc-fail')
+    const completeFire = cbs.find(c => c.id === 'svc-complete')
+    expect(completeFire, 'complete callback must fire').toBeDefined()
+    expect(completeFire!.args).toEqual(failFire!.args)
+  })
+})
+
+describe('bridge-router — handleApiResponse ok:true path is unaffected (regression guard)', () => {
+  it('an ok:true response still delivers `result` unchanged to the success callback', async () => {
+    const { simulatorWc, serviceWc, requestId } = await setup()
+
+    const resp: ApiResponsePayload = { appSessionId: 'demo-app', requestId, ok: true, result: { data: { a: 1 }, statusCode: 200 } }
+    emitOn(C.API_RESPONSE, simulatorWc, resp)
+
+    const cbs = triggerCallbacks(serviceWc)
+    const successFire = cbs.find(c => c.id === 'svc-success')
+    expect(successFire).toBeDefined()
+    expect(successFire!.args).toEqual({ data: { a: 1 }, statusCode: 200 })
+  })
+})
