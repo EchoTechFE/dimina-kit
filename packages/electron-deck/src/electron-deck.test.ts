@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { UndeclaredHostEventError } from './errors.js'
 import { defineEvent } from './events.js'
 import type {
@@ -497,20 +497,43 @@ describe('electronDeck(config, options) — DI', () => {
 		expect(ipcMain.handleCalls.length).toBeGreaterThanOrEqual(2)
 	})
 
-	it('with no options at all: rejects because vitest cannot load Electron main-process module', async () => {
-		// In a non-Electron environment (vitest under node), `await import("electron")`
-		// resolves to the install-time entry stub (an exported path string), so the
-		// real `ipcMain` / `BrowserWindow` are unavailable. The framework must reject
-		// with a clear error pointing the user at `options.electron` / `options.ipcMain`.
-		await expect(electronDeck({})).rejects.toThrow(/electron/i)
-	})
+	// What the ambient `await import('electron')` does depends on the machine's
+	// install mode: with a real binary present it resolves to the npm path stub,
+	// under an `--ignore-scripts` install it throws at import time. Every test
+	// below mocks the module explicitly so BOTH fallback branches run — and are
+	// counted by coverage — identically on every machine.
+	describe('lazy electron import fallback (mocked for environment independence)', () => {
+		afterEach(() => {
+			vi.doUnmock('electron')
+			vi.resetModules()
+		})
 
-	it('with electron injected but ipcMain missing: still rejects on lazy ipcMain lookup', async () => {
-		// `options.electron` alone is not enough — framework falls through to the
-		// lazy-import branch for `ipcMain`, which is undefined under vitest, so the
-		// same kind of rejection fires.
-		await expect(
-			electronDeck({}, { electron: createFakeElectron() }),
-		).rejects.toThrow(/electron|ipcMain/i)
+		async function freshElectronDeck(): Promise<typeof electronDeck> {
+			vi.resetModules()
+			const mod = await import('./electron-deck.js')
+			return mod.electronDeck
+		}
+
+		it('rejects pointing at options injection when the electron module fails to load', async () => {
+			vi.doMock('electron', () => {
+				throw new Error('Electron failed to install correctly')
+			})
+			const deck = await freshElectronDeck()
+			await expect(deck({})).rejects.toThrow(/unable to load electron/)
+		})
+
+		it('rejects on the missing main-process surface when electron resolves to the path stub', async () => {
+			vi.doMock('electron', () => ({ default: '/stub/electron-binary', ipcMain: undefined, BrowserWindow: undefined, WebContentsView: undefined }))
+			const deck = await freshElectronDeck()
+			await expect(deck({})).rejects.toThrow(/does not expose the main-process surface/)
+		})
+
+		it('with electron injected but ipcMain missing: still rejects on the missing surface', async () => {
+			vi.doMock('electron', () => ({ default: '/stub/electron-binary', ipcMain: undefined, BrowserWindow: undefined, WebContentsView: undefined }))
+			const deck = await freshElectronDeck()
+			await expect(
+				deck({}, { electron: createFakeElectron() }),
+			).rejects.toThrow(/electron|ipcMain/i)
+		})
 	})
 })

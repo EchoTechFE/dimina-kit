@@ -191,16 +191,29 @@ describe('X1 — electronDeck() entry & DeckOptions injection', () => {
 		await expect(electronDeck({}, { electron, ipcMain })).resolves.toBeUndefined()
 	})
 
-	it('rejects with an error mentioning electron when running without injection (vitest env)', async () => {
-		// No options → framework lazy-imports electron, gets stub, must reject.
-		await expect(electronDeck({})).rejects.toThrow(/electron/i)
+	// The ambient `import('electron')` result depends on the machine's install
+	// mode (real binary vs a throwing stub under --ignore-scripts installs), so
+	// these two tests pin the module to the path-stub shape — same behaviour and
+	// same coverage on every machine.
+	it('rejects with an error mentioning electron when running without injection', async () => {
+		vi.doMock('electron', () => ({ default: '/stub/electron-binary', ipcMain: undefined, BrowserWindow: undefined, WebContentsView: undefined }))
+		vi.resetModules()
+		const { electronDeck: deck } = await import('../electron-deck.js')
+		await expect(deck({})).rejects.toThrow(/electron/i)
+		vi.doUnmock('electron')
+		vi.resetModules()
 	})
 
 	it('rejects when only electron is injected but ipcMain is missing', async () => {
+		vi.doMock('electron', () => ({ default: '/stub/electron-binary', ipcMain: undefined, BrowserWindow: undefined, WebContentsView: undefined }))
+		vi.resetModules()
+		const { electronDeck: deck } = await import('../electron-deck.js')
 		const electron = makeElectron()
 		await expect(
-			electronDeck({}, { electron } as DeckOptions),
+			deck({}, { electron } as DeckOptions),
 		).rejects.toThrow(/electron|ipcMain/i)
+		vi.doUnmock('electron')
+		vi.resetModules()
 	})
 
 	it('exports DeckOptions type from the package surface', async () => {

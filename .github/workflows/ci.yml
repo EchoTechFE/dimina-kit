@@ -39,13 +39,6 @@ jobs:
           node --test "tools/ratchet/*.test.ts"
           pnpm ratchet:check
 
-      - name: Upload coverage summaries (debug)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-summaries
-          path: packages/*/coverage/**/coverage-summary.json
-
       - name: Anti-regression baseline guard
         if: github.event_name == 'pull_request'
         run: |
