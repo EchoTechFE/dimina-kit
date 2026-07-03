@@ -237,3 +237,41 @@ export function computeReorderIndex(
 	}
 	return index
 }
+
+/**
+ * Translate a tab strip's VISIBLE-tab drop index into the insertion index
+ * `movePanel`'s same-group reorder expects.
+ *
+ * `computeReorderIndex` reports how many VISIBLE-tab midpoints the pointer has
+ * passed (0..`visibleTabIds.length`), COUNTING the dragged tab's own midpoint and
+ * measured over rects that OMIT `hideTab` panels. `movePanel` inserts into
+ * `panels.filter(p => p !== dragged)` — a different coordinate space. Two shifts
+ * reconcile them:
+ *
+ *   1. Once the pointer passes the dragged tab's OWN midpoint the strip index has
+ *      counted the dragged slot, so drop it back out (−1) to get the insertion
+ *      slot among the OTHER visible tabs.
+ *   2. Map that visible slot onto the full `panels` order (which may carry hidden
+ *      tabs the strip never measured): insert before whichever visible tab now
+ *      occupies the slot, or append when the slot is past the last visible tab.
+ */
+export function resolveReorderInsertIndex(
+	panels: readonly string[],
+	visibleTabIds: readonly string[],
+	draggedPanelId: string,
+	stripInsertIndex: number,
+): number {
+	const draggedVisibleIndex = visibleTabIds.indexOf(draggedPanelId)
+	const passedOwnMidpoint = draggedVisibleIndex >= 0 && stripInsertIndex > draggedVisibleIndex
+	const filteredVisible = visibleTabIds.filter((id) => id !== draggedPanelId)
+	const filteredPanels = panels.filter((id) => id !== draggedPanelId)
+
+	let visibleInsert = passedOwnMidpoint ? stripInsertIndex - 1 : stripInsertIndex
+	if (visibleInsert < 0) visibleInsert = 0
+	if (visibleInsert > filteredVisible.length) visibleInsert = filteredVisible.length
+
+	if (visibleInsert >= filteredVisible.length) return filteredPanels.length
+	const anchor = filteredVisible[visibleInsert]!
+	const anchorIndex = filteredPanels.indexOf(anchor)
+	return anchorIndex >= 0 ? anchorIndex : filteredPanels.length
+}

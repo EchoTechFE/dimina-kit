@@ -30,6 +30,11 @@ export interface ExposeBridgeOptions {
  * ```
  *
  * 见 `DeckBridge` 接口（`shared/protocol.ts`）。
+ *
+ * `@experimental` No production consumer yet — pairs with `createDeckClient` /
+ * `DeckConfig.hostServices` / `events`, which only `examples/` / `spike/` use;
+ * no host in this repo calls `exposeDeckBridge`. Contract may change until a
+ * second real consumer adopts it.
  */
 export function exposeDeckBridge(options?: ExposeBridgeOptions): void {
 	if (typeof contextBridge?.exposeInMainWorld !== 'function' || typeof ipcRenderer?.invoke !== 'function') {

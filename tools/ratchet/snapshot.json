@@ -2,7 +2,7 @@
   "metrics": {
     "code-duplication": {
       "direction": "lower-is-better",
-      "value": 626,
+      "value": 625,
       "unit": "duplicated lines",
       "breakdown": {
         "packages/devtools/src/main/ipc/project-fs.ts:167↔packages/devtools/src/main/ipc/project-fs.ts:427": 12,
@@ -47,9 +47,9 @@
         "packages/devtools/src/simulator/simulator-api-storage.ts:42↔packages/devtools/src/simulator/simulator-api-storage.ts:121": 11,
         "packages/devtools/src/simulator/simulator-api-storage.ts:60↔packages/devtools/src/simulator/simulator-api-storage.ts:93": 6,
         "packages/devtools/src/simulator/simulator-api-storage.ts:74↔packages/devtools/src/simulator/simulator-api-storage.ts:91": 6,
-        "packages/electron-deck/src/dock-react/dock-view.tsx:1006↔packages/electron-deck/src/dock-react/dock-view.tsx:1049": 25,
-        "packages/electron-deck/src/dock-react/dock-view.tsx:986↔packages/electron-deck/src/dock-react/dock-view.tsx:1002": 6,
-        "packages/electron-deck/src/layout/mutations.ts:175↔packages/electron-deck/src/layout/mutations.ts:187": 6,
+        "packages/electron-deck/src/dock-react/group-view.tsx:111↔packages/electron-deck/src/dock-react/group-view.tsx:153": 24,
+        "packages/electron-deck/src/dock-react/group-view.tsx:91↔packages/electron-deck/src/dock-react/group-view.tsx:107": 6,
+        "packages/electron-deck/src/layout/mutations.ts:143↔packages/electron-deck/src/layout/mutations.ts:155": 6,
         "packages/electron-deck/src/main/connection.ts:111↔packages/electron-deck/src/main/scope.ts:181": 13,
         "packages/electron-deck/src/main/connection.ts:139↔packages/electron-deck/src/main/scope.ts:378": 14,
         "packages/electron-deck/src/main/connection.ts:69↔packages/electron-deck/src/main/scope.ts:106": 10,
@@ -65,7 +65,7 @@
     },
     "file-length": {
       "direction": "lower-is-better",
-      "value": 57,
+      "value": 56,
       "unit": "files > 500 lines",
       "breakdown": {
         "packages/devkit/src/compile-worker.test.ts": 1037,
@@ -97,9 +97,8 @@
         "packages/devtools/src/simulator/simulator-api-fs.ts": 850,
         "packages/devtools/src/simulator/simulator-api-media.ts": 622,
         "packages/electron-deck/src/__cross_check__/round2-fix-cross-check.test.ts": 699,
-        "packages/electron-deck/src/dock-react/dock-view-redock.test.tsx": 660,
+        "packages/electron-deck/src/dock-react/dock-view-redock.test.tsx": 663,
         "packages/electron-deck/src/dock-react/dock-view.test.tsx": 715,
-        "packages/electron-deck/src/dock-react/dock-view.tsx": 1333,
         "packages/electron-deck/src/dock-react/drag-redock.test.ts": 539,
         "packages/electron-deck/src/electron-deck.test.ts": 516,
         "packages/electron-deck/src/host/control-bus.test.ts": 571,
@@ -111,7 +110,7 @@
         "packages/electron-deck/src/internal/deck-app.move.test.ts": 662,
         "packages/electron-deck/src/internal/deck-app.slot-token.test.ts": 577,
         "packages/electron-deck/src/internal/deck-app.test.ts": 2762,
-        "packages/electron-deck/src/internal/deck-app.ts": 2487,
+        "packages/electron-deck/src/internal/deck-app.ts": 2542,
         "packages/electron-deck/src/internal/deck-app.window-seam.test.ts": 682,
         "packages/electron-deck/src/internal/deck-window-onclose-registration.test.ts": 718,
         "packages/electron-deck/src/internal/wire-transport.test.ts": 712,
@@ -122,7 +121,7 @@
         "packages/electron-deck/src/main/connection.test.ts": 743,
         "packages/electron-deck/src/main/scope.test.ts": 994,
         "packages/electron-deck/src/main/view-handle.test.ts": 1065,
-        "packages/electron-deck/src/types.ts": 570,
+        "packages/electron-deck/src/types.ts": 590,
         "packages/view-anchor/src/react.test.tsx": 562,
         "packages/view-anchor/src/view-anchor.test.ts": 1171
       }

@@ -41,6 +41,11 @@ export interface CreateDeckClientOptions {
 // assignable into `(...args: T[]) => unknown` when T is assignable INTO its
 // param type — `never` always is, `unknown` is not (it would reject every
 // narrower host handler, defeating point (2) above).
+/** @experimental No production consumer yet — pairs with `DeckConfig.hostServices`
+ *  / `events`, which only `examples/` / `spike/` set; the devtools `backend`
+ *  assembly never touches this client. `createDeckLayoutClient` and
+ *  `createPlacementPublisher` (re-exported above) are unaffected — they have
+ *  real consumers. */
 export interface DeckClient<
 	HS extends Record<keyof HS, (...args: never[]) => unknown>,
 	EV extends readonly HostEvent<JsonValue>[],
@@ -56,6 +61,7 @@ export interface DeckClient<
 	): Disposable
 }
 
+/** @experimental No production consumer yet — see the note on {@link DeckClient}. */
 export function createDeckClient<
 	HS extends Record<keyof HS, (...args: never[]) => unknown>,
 	EV extends readonly HostEvent<JsonValue>[],

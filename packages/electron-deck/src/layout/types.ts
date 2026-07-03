@@ -13,16 +13,18 @@ export type Orientation = 'row' | 'column'
  * Per-child pixel size constraint. EXACTLY ONE of the two keys is set; the value
  * is a finite number > 0 (validation lives in `serialize.ts`, not the type):
  *
- *  - `fixedPx` — LOCKED to exactly N px (min === max). A fixed child is excluded
- *    from the flexible weight pool: it never resizes, weight changes don't touch
- *    it.
- *  - `minPx` — a FLEXIBLE FLOOR: the child is weight-sized like an unconstrained
- *    child (participates in the flex pool, resizable), but never shrinks below N
- *    px. Use for a panel that must keep a minimum size while still being
- *    draggable (e.g. a simulator column floored at the device width).
+ *  - `fixedPx` — LOCKED to exactly N px (min === max). Excluded from the
+ *    flexible weight pool: it never resizes, weight changes don't touch it.
+ *  - `minPx` — px-sized with a minimum floor of N px. Like `fixedPx`, it is
+ *    excluded from the flexible weight pool (it never receives a share of the
+ *    weight-driven remainder) — but unlike `fixedPx` it has no upper bound, so
+ *    the user can still drag it wider than the floor. Use for a panel that must
+ *    keep a minimum size while still being draggable (e.g. a simulator column
+ *    floored at the device width).
  *
- * KEY SEMANTIC: "is this child fixed?" === "does the constraint carry `fixedPx`?"
- * A `minPx` child is NOT fixed — it is flexible-with-a-floor.
+ * KEY SEMANTIC: "is this child px-sized?" === "is the constraint non-null?"
+ * Both `fixedPx` and `minPx` are px-sized and excluded from the weight pool;
+ * only a `null` (or absent) constraint is weight-sized.
  */
 export interface SizeConstraint {
 	readonly fixedPx?: number

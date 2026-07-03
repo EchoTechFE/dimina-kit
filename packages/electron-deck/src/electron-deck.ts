@@ -52,6 +52,11 @@ export async function electronDeck(config: DeckConfig, options?: DeckOptions): P
  *
  * Invalid config throws a `TypeError` synchronously (matching `electronDeck`'s
  * validate-first contract) — the error surfaces, never silently deadlocks.
+ *
+ * `@experimental` No production consumer yet — the only caller in this repo is
+ * `packages/devtools/spike/popout/harness.mjs`; devtools' real entry
+ * (`launch.ts`) uses `electronDeck({ backend })` instead. Contract may change
+ * until a second real consumer adopts it.
  */
 export function startElectronDeck(
 	config: DeckConfig,

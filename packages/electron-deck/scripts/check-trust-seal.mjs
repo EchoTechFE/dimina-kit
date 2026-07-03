@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Trust-seal CI gate (P2). Fails fast if a raw trust writer is re-introduced.
+ * Trust-seal CI gate. Fails fast if a raw trust writer is re-introduced.
  *
  * The sealed trust model has exactly ONE writer — `admit(wc, owner)` — so a
  * `Scope` always owns every trust lease (no un-owned / leaked lease). This guard
