@@ -2,13 +2,13 @@
 // `value` it reports (total duplicated lines) and the `breakdown` keys the gate
 // diffs against must actually reflect real copy-paste, scoped to production
 // source under packages/*/src, with test/declaration noise excluded.
-// Run with: node --test tools/ratchet/code-duplication.test.mjs
+// Run with: node --test tools/ratchet/code-duplication.test.ts
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
-import codeDuplication from './adapters/code-duplication.mjs';
+import codeDuplication from './adapters/code-duplication.ts';
 
 // A real, sizable function body — well over jscpd's ~50-token default
 // threshold — so a verbatim copy is unambiguously flagged as a clone rather
@@ -33,7 +33,7 @@ const DUP_BLOCK = `function computeTotal(items) {
   return { total, count, discount };
 }`;
 
-async function withFixture(files, fn) {
+async function withFixture(files: Record<string, string>, fn: (root: string) => Promise<void>) {
   const root = await mkdtemp(join(tmpdir(), 'ratchet-code-dup-'));
   try {
     for (const [relPath, content] of Object.entries(files)) {
@@ -65,13 +65,13 @@ test('two production files sharing a large block are flagged as one clone', asyn
       const result = await codeDuplication.measure({ root });
       assert.ok(result.value > 0, `expected duplicated lines > 0, got ${result.value}`);
       assert.ok(result.breakdown, 'expected a non-null breakdown for a detected clone');
-      const keys = Object.keys(result.breakdown);
+      const keys = Object.keys(result.breakdown!);
       assert.equal(keys.length, 1, `expected exactly one clone pair, got ${JSON.stringify(keys)}`);
       const [key] = keys;
-      assert.ok(key.includes('orderA.ts'), `key should reference orderA.ts, got ${key}`);
-      assert.ok(key.includes('orderB.ts'), `key should reference orderB.ts, got ${key}`);
-      assert.ok(!key.includes(root), `key must be relative to root, not absolute: ${key}`);
-      assert.ok(!key.startsWith(sep), `key must not start with a path separator: ${key}`);
+      assert.ok(key!.includes('orderA.ts'), `key should reference orderA.ts, got ${key}`);
+      assert.ok(key!.includes('orderB.ts'), `key should reference orderB.ts, got ${key}`);
+      assert.ok(!key!.includes(root), `key must be relative to root, not absolute: ${key}`);
+      assert.ok(!key!.startsWith(sep), `key must not start with a path separator: ${key}`);
     },
   );
 });

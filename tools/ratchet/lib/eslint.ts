@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ESLint } from 'eslint';
 import tseslint from 'typescript-eslint';
+import type { Linter } from 'eslint';
 
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const PACKAGES = join(ROOT, 'packages');
@@ -16,7 +17,12 @@ const PACKAGES = join(ROOT, 'packages');
 // Production source only — test files legitimately bend the rules around fixtures.
 const IGNORES = ['**/*.test.{ts,tsx}', '**/*.spec.{ts,tsx}', '**/*.d.ts', '**/dist/**'];
 
-export function makeEslint({ plugins, rules }) {
+export type EslintSpec = {
+  plugins: Linter.Config['plugins'];
+  rules: Linter.RulesRecord;
+};
+
+export function makeEslint({ plugins, rules }: EslintSpec): ESLint {
   return new ESLint({
     cwd: ROOT,
     errorOnUnmatchedPattern: false, // empty packages (demo-app/workbench) ship no src
@@ -40,9 +46,9 @@ export function makeEslint({ plugins, rules }) {
   });
 }
 
-async function srcGlobs() {
+async function srcGlobs(): Promise<string[]> {
   const pkgs = await readdir(PACKAGES, { withFileTypes: true });
-  const globs = [];
+  const globs: string[] = [];
   for (const pkg of pkgs) {
     if (!pkg.isDirectory()) continue;
     globs.push(`packages/${pkg.name}/src/**/*.ts`, `packages/${pkg.name}/src/**/*.tsx`);
@@ -50,16 +56,23 @@ async function srcGlobs() {
   return globs;
 }
 
+export type LintHit = {
+  file: string;
+  line: number;
+  ruleId: string | null;
+  message: string;
+};
+
 // Lint production source and return every rule message as
 // [{ file (relative), line, ruleId, message }]. Adapters filter by ruleId.
-export async function lintAll({ plugins, rules }) {
+export async function lintAll({ plugins, rules }: EslintSpec): Promise<LintHit[]> {
   const eslint = makeEslint({ plugins, rules });
   const results = await eslint.lintFiles(await srcGlobs());
-  const hits = [];
+  const hits: LintHit[] = [];
   for (const r of results) {
     for (const m of r.messages) {
       hits.push({
-        file: r.filePath.split(`${ROOT}/`).pop(),
+        file: r.filePath.split(`${ROOT}/`).pop() ?? r.filePath,
         line: m.line,
         ruleId: m.ruleId,
         message: m.message,

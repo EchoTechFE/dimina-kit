@@ -1,5 +1,14 @@
 {
   "metrics": {
+    "circular-deps": {
+      "direction": "lower-is-better",
+      "value": 2,
+      "unit": "import cycles",
+      "breakdown": {
+        "packages/devtools/src/renderer/modules/main/features/project-runtime/controllers/use-device.ts -> packages/devtools/src/renderer/modules/main/features/project-runtime/controllers/use-panel-data.ts -> packages/devtools/src/renderer/modules/main/features/project-runtime/controllers/use-project-runtime-controller.ts -> packages/devtools/src/renderer/modules/main/features/project-runtime/controllers/use-session.ts -> packages/devtools/src/renderer/modules/main/features/project-runtime/controllers/use-simulator.ts": 5,
+        "packages/devtools/src/simulator/device-shell/menu-capsule.tsx -> packages/devtools/src/simulator/device-shell/navigation-bar.tsx": 2
+      }
+    },
     "code-duplication": {
       "direction": "lower-is-better",
       "value": 401,

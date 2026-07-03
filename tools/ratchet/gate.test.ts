@@ -1,12 +1,12 @@
 // Guards the gate's regression detection — especially that a localized regression
 // cannot hide behind an unchanged scalar total (the failure mode a plain total
-// ratchet has). Run with: node --test tools/ratchet/gate.test.mjs
+// ratchet has). Run with: node --test tools/ratchet/gate.test.ts
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { regressionsOf } from './ratchet.mjs';
+import { regressionsOf } from './ratchet.ts';
 
-const lower = (gate) => ({ direction: 'lower-is-better', gate });
-const higher = (gate) => ({ direction: 'higher-is-better', gate });
+const lower = (gate: 'total' | 'per-file-count' | 'per-key-value') => ({ direction: 'lower-is-better' as const, gate });
+const higher = (gate: 'total' | 'per-file-count' | 'per-key-value') => ({ direction: 'higher-is-better' as const, gate });
 
 test('per-file-count: net-zero swap across files is still caught', () => {
   // total stays 2, but b.ts gained an escape while a.ts shed one.

@@ -18,7 +18,8 @@ import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, sep } from 'node:path';
-import { ROOT } from '../lib/eslint.mjs';
+import { ROOT } from '../lib/eslint.ts';
+import type { Adapter, MeasureOptions, MeasureResult } from '../lib/types.ts';
 
 // jscpd's default minimum clone size, pinned so an upstream default change
 // cannot silently move the baseline.
@@ -44,7 +45,17 @@ const JSCPD_BIN = join(
   'run-jscpd.js',
 );
 
-async function srcDirs(root) {
+type JscpdDuplicate = {
+  firstFile: { name: string; start: number };
+  secondFile: { name: string; start: number };
+  lines: number;
+};
+type JscpdReport = {
+  duplicates?: JscpdDuplicate[];
+  statistics?: { total?: { duplicatedLines?: number } };
+};
+
+async function srcDirs(root: string): Promise<string[]> {
   const packagesDir = join(root, 'packages');
   if (!existsSync(packagesDir)) return [];
   const entries = await readdir(packagesDir, { withFileTypes: true });
@@ -54,7 +65,7 @@ async function srcDirs(root) {
     .filter((p) => existsSync(p));
 }
 
-function runJscpd(args) {
+function runJscpd(args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [JSCPD_BIN, ...args], {
       stdio: ['ignore', 'ignore', 'pipe'],
@@ -63,13 +74,13 @@ function runJscpd(args) {
     child.stderr.on('data', (d) => (stderr += d));
     child.on('error', reject);
     child.on('close', (code) => {
-      if (code === 0) resolve(undefined);
+      if (code === 0) resolve();
       else reject(new Error(`jscpd exited with ${code}: ${stderr}`));
     });
   });
 }
 
-async function measure(opts = {}) {
+async function measure(opts: MeasureOptions = {}): Promise<MeasureResult> {
   // jscpd reports realpath'd absolute names (macOS: /var/… → /private/var/…),
   // so the root must be realpath'd too before relativizing.
   const root = await realpath(opts.root ?? ROOT);
@@ -87,9 +98,10 @@ async function measure(opts = {}) {
       '--reporters', 'json,silent',
       '--output', out,
     ]);
-    const report = JSON.parse(await readFile(join(out, 'jscpd-report.json'), 'utf8'));
-    const rel = (name) => (name.startsWith(root + sep) ? name.slice(root.length + 1) : name);
-    const breakdown = {};
+    const raw = await readFile(join(out, 'jscpd-report.json'), 'utf8');
+    const report = JSON.parse(raw) as JscpdReport;
+    const rel = (name: string) => (name.startsWith(root + sep) ? name.slice(root.length + 1) : name);
+    const breakdown: Record<string, number> = {};
     for (const d of report.duplicates ?? []) {
       const key = `${rel(d.firstFile.name)}:${d.firstFile.start}↔${rel(d.secondFile.name)}:${d.secondFile.start}`;
       breakdown[key] = (breakdown[key] ?? 0) + d.lines;
@@ -107,10 +119,12 @@ async function measure(opts = {}) {
   }
 }
 
-export default {
+const adapter: Adapter = {
   id: 'code-duplication',
   title: `Duplicated code lines (jscpd, ≥${MIN_TOKENS} tokens)`,
   direction: 'lower-is-better',
   gate: 'total',
   measure,
 };
+
+export default adapter;
