@@ -1,3 +1,5 @@
+import { performRequest } from '../../shared/request-core.js'
+
 type Callback<T = unknown> = ((payload: T) => void) | undefined
 
 function call<T>(fn: Callback<T>, payload: T): void {
@@ -128,70 +130,38 @@ function ensureWxApi(wx: Record<string, unknown>): void {
   }
 
   if (typeof wx.request !== 'function') {
+    // Delegates to the shared wx.request core (shared/request-core.ts) — the
+    // single owner of success/fail semantics, header dedup, timeout default,
+    // and body encoding. This shim only adapts the wx.request option bag onto
+    // the core's callbacks.
     wx.request = (opts: {
       url: string
       data?: unknown
       header?: Record<string, string>
       timeout?: number
       method?: string
-      dataType?: 'json' | 'text' | 'arraybuffer'
+      dataType?: string
+      responseType?: string
       success?: Callback<unknown>
       fail?: Callback<unknown>
-      complete?: Callback<void>
-    }) => {
-      const controller = new AbortController()
-      const method = (opts.method || 'GET').toUpperCase()
-      let requestUrl = opts.url
-      const init: RequestInit = {
-        method,
-        headers: { 'Content-Type': 'application/json', ...(opts.header || {}) },
-        signal: controller.signal,
-      }
-
-      if (method === 'GET' && opts.data && typeof opts.data === 'object') {
-        const url = new URL(requestUrl, window.location.href)
-        Object.entries(opts.data as Record<string, unknown>).forEach(([key, value]) => {
-          url.searchParams.append(key, String(value))
-        })
-        requestUrl = url.toString()
-      } else if (opts.data != null) {
-        init.body = typeof opts.data === 'string' ? opts.data : JSON.stringify(opts.data)
-      }
-
-      const timeoutId = Number(opts.timeout) > 0
-        ? window.setTimeout(() => controller.abort(), Number(opts.timeout))
-        : null
-
-      fetch(requestUrl, init)
-        .then(async (response) => {
-          const headers = Object.fromEntries(response.headers.entries())
-          let data: unknown
-          if (opts.dataType === 'arraybuffer') data = await response.arrayBuffer()
-          else {
-            const text = await response.text()
-            if (opts.dataType === 'text') data = text
-            else {
-              try {
-                data = JSON.parse(text)
-              } catch {
-                data = text
-              }
-            }
-          }
-          call(opts.success, { data, statusCode: response.status, header: headers, errMsg: 'request:ok' })
-        })
-        .catch((error) => {
-          call(opts.fail, { errMsg: `request:fail ${error instanceof Error ? error.message : String(error)}` })
-        })
-        .finally(() => {
-          if (timeoutId != null) window.clearTimeout(timeoutId)
-          call(opts.complete, undefined)
-        })
-
-      return {
-        abort: () => controller.abort(),
-      }
-    }
+      complete?: Callback<unknown>
+    }) =>
+      performRequest(
+        {
+          url: opts.url,
+          data: opts.data,
+          header: opts.header,
+          timeout: opts.timeout,
+          method: opts.method,
+          dataType: opts.dataType,
+          responseType: opts.responseType,
+        },
+        {
+          success: (res) => call(opts.success, res),
+          fail: (err) => call(opts.fail, err),
+          complete: (res) => call(opts.complete, res),
+        },
+      )
   }
 }
 

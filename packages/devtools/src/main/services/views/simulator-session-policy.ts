@@ -24,6 +24,13 @@ import {
   SHARED_MINIAPP_PARTITION,
 } from './miniapp-partition.js'
 
+/** The response headers this policy owns outright (compared lowercase). */
+const CORS_OVERRIDE_HEADERS: ReadonlySet<string> = new Set([
+  'access-control-allow-origin',
+  'access-control-allow-headers',
+  'access-control-allow-methods',
+])
+
 /** Apply the simulator runtime's referer + CORS webRequest policy to one
  * session. Each session installs its own listeners (a webRequest listener is
  * per-session), so this runs once per partition. */
@@ -41,6 +48,16 @@ function applySimulatorWebRequestPolicy(simulatorSession: Session): void {
     // CORS for the native render/service hosts to fetch compiled app resources
     // cross-origin. (The COOP/COEP cross-origin-isolation headers were only for
     // the removed default-path SharedArrayBuffer sync Worker — dropped.)
+    //
+    // This policy is the single authority for these three headers: any value
+    // the server itself sent must be REPLACED, not shadowed. responseHeaders
+    // keys keep the server's original casing, so assigning the lowercase key
+    // beside an existing `Access-Control-Allow-Origin` puts BOTH on the wire —
+    // Chromium then rejects the response for carrying multiple ACAO values
+    // (`*, *`), breaking every fetch against a CORS-compliant backend.
+    for (const key of Object.keys(headers)) {
+      if (CORS_OVERRIDE_HEADERS.has(key.toLowerCase())) delete headers[key]
+    }
     headers['access-control-allow-origin'] = ['*']
     headers['access-control-allow-headers'] = ['*']
     headers['access-control-allow-methods'] = ['*']
