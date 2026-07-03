@@ -65,6 +65,9 @@ export async function measureAll(adapters: Adapter[]): Promise<Record<string, Me
         value: r.value,
         unit: r.unit ?? 'count',
         breakdown: r.breakdown ?? null,
+        // Recorded into the snapshot so baseline-guard (which never sees the
+        // adapter) grants the same slack the check gate does.
+        ...(a.tolerance !== undefined ? { tolerance: a.tolerance } : {}),
       },
     ]);
   });
@@ -74,8 +77,10 @@ export async function measureAll(adapters: Adapter[]): Promise<Record<string, Me
   return metrics;
 }
 
-function worse(direction: Direction, base: number, cur: number): boolean {
-  return direction === 'higher-is-better' ? cur < base : cur > base;
+// `tolerance` is absolute slack in the worse direction: a value still within
+// it does not count as worse. Exactly AT the tolerance boundary passes.
+function worse(direction: Direction, base: number, cur: number, tolerance = 0): boolean {
+  return direction === 'higher-is-better' ? cur < base - tolerance : cur > base + tolerance;
 }
 function better(direction: Direction, base: number, cur: number): boolean {
   return direction === 'higher-is-better' ? cur > base : cur < base;
@@ -108,6 +113,7 @@ export type MetricGuardInput = {
   value: number;
   unit?: string;
   breakdown?: Record<string, number> | null;
+  tolerance?: number;
 };
 
 // Regression detail for one dimension, honoring its `gate` mode. Returns
@@ -119,12 +125,13 @@ export type MetricGuardInput = {
 //   per-file-count — offender count per file may not rise (type-escapes, cognitive)
 //   per-key-value  — each key's value may not worsen (type-coverage: per-package %)
 export function regressionsOf(
-  a: { direction: Direction; gate?: GateMode },
+  a: { direction: Direction; gate?: GateMode; tolerance?: number },
   base: MetricSample,
   cur: MetricSample,
 ): string[] {
   const out: string[] = [];
-  if (worse(a.direction, base.value, cur.value)) {
+  const tolerance = a.tolerance ?? 0;
+  if (worse(a.direction, base.value, cur.value, tolerance)) {
     out.push(`total ${base.value} → ${cur.value}`);
   }
   const mode = a.gate ?? 'total';
@@ -141,7 +148,7 @@ export function regressionsOf(
     const c = cur.breakdown ?? {};
     for (const k of Object.keys(b).sort()) {
       const cv = c[k];
-      if (cv !== undefined && worse(a.direction, b[k] ?? 0, cv)) out.push(`${k}  ${b[k]} → ${cv}`);
+      if (cv !== undefined && worse(a.direction, b[k] ?? 0, cv, tolerance)) out.push(`${k}  ${b[k]} → ${cv}`);
     }
   }
   return out;
@@ -181,7 +188,7 @@ export function baselineGuardViolations(
       continue;
     }
     const direction: Direction = base.direction ?? 'lower-is-better';
-    if (worse(direction, base.value, pr.value)) {
+    if (worse(direction, base.value, pr.value, base.tolerance ?? 0)) {
       violations.push(`${id}: ${base.value} → ${pr.value}`);
     }
   }
@@ -203,9 +210,12 @@ function fmtDelta(base: number | null, cur: number): string {
   return d > 0 ? `+${d}` : `${d}`;
 }
 
-function statusOf(direction: Direction, base: number | null, cur: number): string {
+function statusOf(direction: Direction, base: number | null, cur: number, tolerance = 0): string {
   if (base === null) return '🆕 new';
-  if (worse(direction, base, cur)) return '❌ worse';
+  if (worse(direction, base, cur, tolerance)) return '❌ worse';
+  // Strictly worse but inside the declared slack — the gate passes, and the
+  // table must not print a "worse" the exit code contradicts.
+  if (worse(direction, base, cur)) return '✅ within tolerance';
   if (better(direction, base, cur)) return '🎉 better';
   return '✅ same';
 }
@@ -228,7 +238,7 @@ function printTable(
       delta: fmtDelta(base, cur),
       // A per-file/per-key regression can leave the scalar unchanged, so let the
       // gate's verdict override the scalar-only status.
-      status: regressedIds.has(a.id) ? '❌ worse' : statusOf(a.direction, base, cur),
+      status: regressedIds.has(a.id) ? '❌ worse' : statusOf(a.direction, base, cur, a.tolerance ?? 0),
     };
   });
   const w = (s: unknown) => String(s ?? '—');

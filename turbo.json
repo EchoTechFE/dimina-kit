@@ -41,7 +41,7 @@
     "test": {
       "dependsOn": ["^build"],
       "cache": true,
-      "outputs": []
+      "outputs": ["test-report*.json", "coverage/**"]
     },
     "test:coverage": {
       "dependsOn": ["^build"],

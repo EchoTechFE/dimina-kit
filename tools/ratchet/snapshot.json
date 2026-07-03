@@ -67,7 +67,7 @@
         "packages/devtools/src/main/app/double-close-quit.test.ts": 542,
         "packages/devtools/src/main/app/instance-ipc-extension.test.ts": 591,
         "packages/devtools/src/main/eslint-workbench-context-ratchet.test.ts": 560,
-        "packages/devtools/src/main/ipc/bridge-router.ts": 2590,
+        "packages/devtools/src/main/ipc/bridge-router.ts": 2632,
         "packages/devtools/src/main/ipc/project-fs.test.ts": 756,
         "packages/devtools/src/main/ipc/project-fs.ts": 599,
         "packages/devtools/src/main/ipc/projects-add-dialog.test.ts": 510,
@@ -89,11 +89,11 @@
         "packages/devtools/src/simulator/simulator-api-fs.test.ts": 743,
         "packages/devtools/src/simulator/simulator-api-fs.ts": 689,
         "packages/devtools/src/simulator/simulator-api-media.ts": 652,
-        "packages/electron-deck/src/__cross_check__/round2-fix-cross-check.test.ts": 699,
+        "packages/electron-deck/src/__cross_check__/round2-fix-cross-check.test.ts": 712,
         "packages/electron-deck/src/dock-react/dock-view-redock.test.tsx": 663,
         "packages/electron-deck/src/dock-react/dock-view.test.tsx": 715,
         "packages/electron-deck/src/dock-react/drag-redock.test.ts": 539,
-        "packages/electron-deck/src/electron-deck.test.ts": 516,
+        "packages/electron-deck/src/electron-deck.test.ts": 539,
         "packages/electron-deck/src/host/control-bus.test.ts": 571,
         "packages/electron-deck/src/internal/deck-app.adopt.test.ts": 547,
         "packages/electron-deck/src/internal/deck-app.host-view.test.ts": 502,
@@ -119,13 +119,40 @@
         "packages/view-anchor/src/view-anchor.test.ts": 1171
       }
     },
+    "test-coverage": {
+      "direction": "higher-is-better",
+      "value": 72.42,
+      "unit": "% lines",
+      "breakdown": {
+        "devkit": 92.72,
+        "devtools": 68.02,
+        "electron-deck": 95.22,
+        "electron-deck/dock-react": 79.05,
+        "view-anchor": 95.28,
+        "workbench": 9.79
+      },
+      "tolerance": 1
+    },
+    "test-report": {
+      "direction": "higher-is-better",
+      "value": 3614,
+      "unit": "passed tests",
+      "breakdown": {
+        "devkit": 82,
+        "devtools": 2275,
+        "electron-deck": 1019,
+        "electron-deck/dock-react": 96,
+        "view-anchor": 87,
+        "workbench": 55
+      }
+    },
     "type-coverage": {
       "direction": "higher-is-better",
       "value": 99.74,
       "unit": "%",
       "breakdown": {
         "devkit": 99.88,
-        "devtools": 99.72,
+        "devtools": 99.73,
         "electron-deck": 99.72,
         "view-anchor": 100,
         "workbench": 99.89

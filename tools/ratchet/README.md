@@ -41,6 +41,8 @@ and `record` writes it back so the win can't be undone.
 | `file-length` | filesystem | files over 500 lines | lower | total |
 | `code-duplication` | [jscpd] | duplicated lines across clone pairs (≥50 tokens) | lower | total |
 | `circular-deps` | self-implemented | import cycles among production files | lower | total |
+| `test-report` | vitest JSON reports | tests that actually passed | higher | per-key-value |
+| `test-coverage` | vitest v8 coverage summaries | lines covered by tests (all src in denominator) | higher | per-key-value |
 
 Scope is production source (`packages/*/src`, excluding `*.test`/`*.spec`/`*.d.ts`).
 Test files legitimately bend these rules around fixtures — except for `file-length`,
@@ -70,6 +72,15 @@ B worsens, total flat):
   package's coverage must hold or rise, not just the overall percentage.
 
 A dimension's `gate` defaults to `total` when unset.
+
+A dimension may also declare a `tolerance` — absolute slack (same unit as the
+value) granted in the worse direction, applied to the total, the per-key
+checks, and `baseline-guard` alike (the snapshot records it so the guard sees
+it without loading adapters). Exact-count dimensions omit it; `test-coverage`
+declares `tolerance: 1` (one percentage point) because runtime coverage
+carries inherent measurement noise that a strict comparison would surface as
+false regressions. A drop inside the slack prints `✅ within tolerance` in the
+table and does not fail the gate.
 
 ## Guards beyond the per-dimension gate
 
@@ -117,6 +128,32 @@ Three checks protect the ratchet itself, not just the dimensions it measures:
   published entry points (`@scope/pkg-a` importing `@scope/pkg-b` importing
   back) is out of this dimension's reach and would need a package-graph-level
   tool instead.
+- **test-report** does not run any tests itself — it reads the vitest JSON
+  reports (`test-report*.json`, gitignored) that each package's `test` script
+  emits via `--outputFile.json=…`, and counts `numPassedTests`. Reading the run
+  report instead of grepping source for `it(` means every way a test can stop
+  counting — deleted, `.skip`ped, excluded from the config, or newly failing —
+  lowers the number and fails the gate. The `test` script text is the single
+  source of truth for which reports must exist: a script that runs vitest
+  without declaring an `--outputFile.json` is an error, and a declared report
+  missing from disk fails with "run `pnpm test` first" rather than counting as
+  zero. In CI the test step runs before `ratchet:check`, so reports are always
+  fresh; locally, a stale report is possible if you measure without re-running
+  tests. The reports are declared as turbo outputs of the `test` task, so a
+  turbo cache hit restores them instead of leaving them missing.
+- **test-coverage** rides the same artifact pipeline: each `test` script also
+  passes `--coverage.enabled --coverage.reporter=json-summary
+  --coverage.reportsDirectory=<dir>`, and the adapter reads
+  `<dir>/coverage-summary.json` per suite (the i-th `--outputFile.json` names
+  the i-th suite, the i-th `--coverage.reportsDirectory` locates its summary; a
+  count mismatch fails loud). The CLI `--coverage.reporter=json-summary`
+  overrides the config's reporter list, so plain `pnpm test` writes only the
+  summary — the html/text reporters still run under `pnpm test:coverage`. The
+  vitest configs pin `coverage.include` to all of `src/**`, so untested files
+  count toward the denominator: without that, vitest only reports files loaded
+  during the run and a new untested file would not move the number. The gate is
+  per-suite lines %; the scalar is aggregated over real line counts, not an
+  average of percentages.
 - **No dead-code dimension.** A knip-based unused-exports ratchet was tried and
   removed. The devtools packages expose extension APIs for downstream secondary
   development, so *any* export may have an out-of-repo consumer that static

@@ -71,7 +71,7 @@
     "check:trust-seal": "node scripts/check-trust-seal.mjs",
     "check:docs-api-sync": "node scripts/check-docs-api-sync.mjs",
     "check:browser-purity": "node scripts/check-browser-purity.mjs",
-    "test": "node scripts/check-trust-seal.mjs && node scripts/check-docs-api-sync.mjs && node scripts/check-browser-purity.mjs && vitest run && vitest run --config vitest.dock-react.config.ts",
+    "test": "node scripts/check-trust-seal.mjs && node scripts/check-docs-api-sync.mjs && node scripts/check-browser-purity.mjs && vitest run --reporter=default --reporter=json --outputFile.json=test-report.json --coverage.enabled --coverage.reporter=json-summary --coverage.reportsDirectory=coverage && vitest run --config vitest.dock-react.config.ts --reporter=default --reporter=json --outputFile.json=test-report.dock-react.json --coverage.enabled --coverage.reporter=json-summary --coverage.reportsDirectory=coverage/dock-react",
     "test:dev": "vitest",
     "test:coverage": "vitest run --coverage && vitest run --config vitest.dock-react.config.ts --coverage --coverage.reportsDirectory=./coverage/dock-react",
     "test:dock-react": "vitest run --config vitest.dock-react.config.ts",

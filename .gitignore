@@ -4,6 +4,7 @@ dist
 *.tsbuildinfo
 .DS_Store
 test-results
+test-report*.json
 playwright-report
 release/
 release-*/
