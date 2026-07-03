@@ -209,6 +209,28 @@ jobs:
         working-directory: packages/devtools
         run: pnpm dist --${{ matrix.platform }} --publish never
 
+      # The compile toolchain's native bindings (@esbuild/<platform>,
+      # @oxc-parser/binding-<platform>) must ship in app.asar.unpacked or the
+      # packaged app fails at compile time. electron-builder silently drops a
+      # binding whose version loses the pnpm public-hoist slot (e.g. two esbuild
+      # versions in the workspace), so assert presence on every platform build.
+      - name: Guard packaged compile toolchain natives
+        shell: bash
+        working-directory: packages/devtools
+        run: |
+          set -euo pipefail
+          unpacked=$(find release -type d -name app.asar.unpacked | head -1)
+          if [ -z "$unpacked" ]; then
+            echo "::error::app.asar.unpacked not found under packages/devtools/release"
+            exit 1
+          fi
+          for scope in @esbuild @oxc-parser; do
+            if ! ls -d "$unpacked/node_modules/$scope"/*/ >/dev/null 2>&1; then
+              echo "::error::$scope platform binding missing from packaged app ($unpacked)"
+              exit 1
+            fi
+          done
+
       - name: Archive Linux build
         if: inputs.channel == 'release' && matrix.platform == 'linux'
         shell: bash

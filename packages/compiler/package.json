@@ -1,9 +1,21 @@
 {
   "name": "@dimina-kit/compiler",
   "version": "0.0.1",
-  "private": true,
   "description": "dmcc compiler bundles (browser + node) that drive @dimina/compiler against a caller-injected node:fs replacement (no bundled fs)",
+  "license": "MIT",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EchoTechFE/dimina-kit.git",
+    "directory": "packages/compiler"
+  },
+  "homepage": "https://github.com/EchoTechFE/dimina-kit/tree/main/packages/compiler#readme",
+  "bugs": {
+    "url": "https://github.com/EchoTechFE/dimina-kit/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "main": "./dist/compile-core.node.js",
   "exports": {
     ".": "./dist/compile-core.node.js",
@@ -20,18 +32,18 @@
     "scripts"
   ],
   "scripts": {
-    "build:node": "MODE=node node scripts/build-compiler.js",
-    "build:browser": "MODE=browser node scripts/build-compiler.js",
+    "build:node": "node scripts/build-compiler.js node",
+    "build:browser": "node scripts/build-compiler.js browser",
     "build": "pnpm run build:node && pnpm run build:browser",
-    "test:node": "MODE=node node scripts/build-compiler.js && node --import ./scripts/register-kit.js scripts/test-node.js",
-    "test:appid": "MODE=node node scripts/build-compiler.js && node --import ./scripts/register-kit.js scripts/test-appid-fallback.js",
-    "test:hardening": "MODE=node node scripts/build-compiler.js && node --import ./scripts/register-kit.js scripts/test-hardening.js",
-    "test:decompose": "MODE=node node scripts/build-compiler.js && node --import ./scripts/register-kit.js scripts/test-decompose.js",
-    "test:realm-reuse": "MODE=node node scripts/build-compiler.js && node --import ./scripts/register-kit.js scripts/test-realm-reuse.js",
-    "test:pool-node": "MODE=node node scripts/build-compiler.js && node --import ./scripts/register-kit.js scripts/test-pool-node.js",
-    "test:pool-hardening": "MODE=node node scripts/build-compiler.js && node scripts/test-pool-hardening.js",
-    "test:npm-scan": "MODE=node node scripts/build-compiler.js && node --import ./scripts/register-kit.js scripts/test-npm-scan.js",
-    "test:stage-toolchain": "MODE=browser node scripts/build-compiler.js && node scripts/test-stage-toolchain.js"
+    "test:node": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-node.js",
+    "test:appid": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-appid-fallback.js",
+    "test:hardening": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-hardening.js",
+    "test:decompose": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-decompose.js",
+    "test:realm-reuse": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-realm-reuse.js",
+    "test:pool-node": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-pool-node.js",
+    "test:pool-hardening": "node scripts/build-compiler.js node && node scripts/test-pool-hardening.js",
+    "test:npm-scan": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-npm-scan.js",
+    "test:stage-toolchain": "node scripts/build-compiler.js browser && node scripts/test-stage-toolchain.js"
   },
   "dependencies": {
     "@babel/parser": "^7.29.7",
@@ -64,6 +76,9 @@
   },
   "peerDependenciesMeta": {
     "@oxc-parser/binding-wasm32-wasi": {
+      "optional": true
+    },
+    "esbuild-wasm": {
       "optional": true
     }
   },

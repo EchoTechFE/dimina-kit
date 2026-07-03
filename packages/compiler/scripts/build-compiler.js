@@ -23,9 +23,10 @@ const sassBrowserEntry = path.join(path.dirname(kitFeRequire.resolve('sass')), '
 const nodeRuntimeRequire = createRequire(path.join(root, 'dist/compile-core.node.js'))
 const autoprefixerEntry = nodeRuntimeRequire.resolve('autoprefixer')
 
-// MODE=node  -> Layer1: validate orchestration in Node, native esbuild/oxc kept external
-// MODE=browser -> bundle everything for the browser (pure-JS + wasm toolchain)
-const MODE = process.env.MODE || 'node'
+// mode "node"    -> Layer1: validate orchestration in Node, native esbuild/oxc kept external
+// mode "browser" -> bundle everything for the browser (pure-JS + wasm toolchain)
+// Passed as argv (cross-platform; `MODE=x node ...` breaks on Windows cmd), env MODE kept as fallback.
+const MODE = process.argv[2] || process.env.MODE || 'node'
 const USE_WASM = process.env.USE_WASM === '1' || MODE === 'browser'
 
 // Append exports for functions/reset-hooks the compiler defines but does not
