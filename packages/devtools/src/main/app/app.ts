@@ -162,7 +162,7 @@ function resolveModules(config: WorkbenchAppConfig): Record<BuiltinModuleId, boo
 
 async function disposeContext(ctx: WorkbenchContext): Promise<void> {
   await ctx.workspace.closeProject()
-  await ctx.registry.dispose().catch((err) => {
+  await ctx.registry.dispose().catch((err: unknown) => {
     console.warn('[workbench] dispose registry encountered errors:', err)
   })
 }
