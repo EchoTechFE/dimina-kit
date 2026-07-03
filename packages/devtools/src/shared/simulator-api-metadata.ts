@@ -16,7 +16,7 @@
  * truth, consumed by `bridge-router` (skip the one-shot timeout, keep-alive
  * responses) and `run-api-async` (no premature settle, re-fire on every event).
  */
-import { DEFAULT_REQUEST_TIMEOUT_MS } from './request-core.js'
+import { MAX_TIMEOUT_MS, resolveTimeoutBudgetMs } from './request-core.js'
 
 export const PERSISTENT_SIMULATOR_APIS: ReadonlySet<string> = new Set(['audioListen'])
 
@@ -57,7 +57,9 @@ export function apiCallWatchdogMs(
   params: Record<string, unknown> | undefined,
 ): number {
   if (!NETWORK_BUDGET_SIMULATOR_APIS.has(name)) return API_CALL_WATCHDOG_MS
-  const timeout = Number(params?.timeout)
-  const budget = timeout > 0 ? timeout : DEFAULT_REQUEST_TIMEOUT_MS
-  return budget + API_CALL_WATCHDOG_MS
+  // resolveTimeoutBudgetMs rejects non-finite/oversized caller timeouts, and
+  // the final clamp keeps budget+grace inside setTimeout's range — an
+  // overflowing delay would wrap to ~1ms and fire the watchdog immediately.
+  const budget = resolveTimeoutBudgetMs(params?.timeout)
+  return Math.min(budget + API_CALL_WATCHDOG_MS, MAX_TIMEOUT_MS)
 }

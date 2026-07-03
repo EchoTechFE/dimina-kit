@@ -73,6 +73,25 @@ export interface RequestCoreCallbacks {
  */
 export const DEFAULT_REQUEST_TIMEOUT_MS = 60_000
 
+/**
+ * Largest delay setTimeout honours (2^31-1 ms). Anything above overflows the
+ * signed-32-bit timer register and fires ~immediately (~1ms) instead of late —
+ * so an oversized caller timeout must be rejected, never passed through.
+ */
+export const MAX_TIMEOUT_MS = 2_147_483_647
+
+/**
+ * Resolve a caller-supplied wx timeout into a usable budget: a finite positive
+ * number within setTimeout's range is honoured; anything else (absent, 0,
+ * negative, NaN, Infinity, overflowing) falls back to the wx default. Shared
+ * by performRequest and the bridge-router watchdog (apiCallWatchdogMs) so the
+ * two layers can never disagree on what a valid timeout is.
+ */
+export function resolveTimeoutBudgetMs(timeout: unknown): number {
+  const t = Number(timeout)
+  return Number.isFinite(t) && t > 0 && t <= MAX_TIMEOUT_MS ? t : DEFAULT_REQUEST_TIMEOUT_MS
+}
+
 function buildHeaders(header: Record<string, string> | undefined): Headers {
   const headers = new Headers()
   for (const [key, value] of Object.entries(header ?? {})) {
@@ -165,7 +184,7 @@ export function performRequest(
     callbacks.complete?.(err)
   }
 
-  const timeoutMs = Number(opts.timeout) > 0 ? Number(opts.timeout) : DEFAULT_REQUEST_TIMEOUT_MS
+  const timeoutMs = resolveTimeoutBudgetMs(opts.timeout)
   const timer = setTimeout(() => {
     settleFail({ errMsg: 'request:fail timeout' })
     controller.abort()
