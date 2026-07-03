@@ -58,21 +58,61 @@ function freshFs(files, workPath) {
   return createFsFromVolume(Volume.fromJSON(files, workPath))
 }
 
+// Run setupCompile ONCE for a compile: parse config, allocate the scope-hash ids
+// (page + component `data-v-XXXXX`), scaffold app-config.json + miniprogram_npm.
+// Returns the SERIALIZABLE id bundle every stage worker must share, plus the
+// non-stage scaffold files. Sharing this one bundle across the per-stage realms is
+// what keeps the CSS `[data-v-X]` selectors and the render `Module id` in agreement:
+// if each stage ran its own setupCompile it would roll its own random uuids and every
+// WXSS rule would target a selector that never renders (see scripts/test-pool-scopehash.js).
+async function runSetup(files, workPath) {
+  const fs = freshFs(files, workPath)
+  resetCompilerState()
+  const ctx = await setupCompile({ fs, workPath })
+  const map = collectOutputs({ fs, targetPath: ctx.targetPath })
+  const scaffold = {}
+  for (const k of Object.keys(map)) if (map[k] != null) scaffold[k] = map[k]
+  const bundle = {
+    pages: ctx.pages,
+    storeInfo: ctx.storeInfo,
+    targetPath: ctx.targetPath,
+    appId: ctx.appId,
+    name: ctx.name,
+  }
+  return { bundle, scaffold }
+}
+
 // Compile only the requested stages against a fresh memfs seeded with the source.
 // resetCompilerState() clears the compiler's module-level caches so this warm realm
 // stays correct across compiles. Stages write disjoint products; we return this
 // worker's subset and the pool unions them.
-async function compileSubset(files, workPath, stages) {
+//
+// With a `bundle` (from runSetup), the stage reuses the coordinator's shared ids
+// (mirroring the Node disk pool, which broadcasts the same { pages, storeInfo } to
+// every stage worker) instead of running its own setupCompile — the fix for the
+// cross-stage scope-hash mismatch. Stages read source from `workPath` and write
+// disjoint products; they never read the setup scaffold, so it is not seeded here.
+// Without a bundle the worker stays self-contained (single-worker / legacy callers).
+async function compileSubset(files, workPath, stages, bundle) {
   const fs = freshFs(files, workPath)
   resetCompilerState()
-  const ctx = await setupCompile({ fs, workPath })
-  for (const stage of stages) {
-    await compileStage({ stage, pages: ctx.pages, storeInfo: ctx.storeInfo, fs })
+  let appId, name, targetPath
+  if (bundle) {
+    for (const stage of stages) {
+      await compileStage({ stage, pages: bundle.pages, storeInfo: bundle.storeInfo, fs })
+    }
+    ;({ appId, name, targetPath } = bundle)
+  } else {
+    const ctx = await setupCompile({ fs, workPath })
+    for (const stage of stages) {
+      await compileStage({ stage, pages: ctx.pages, storeInfo: ctx.storeInfo, fs })
+    }
+    ;({ appId, name, targetPath } = ctx)
   }
-  const map = collectOutputs({ fs, targetPath: ctx.targetPath })
+  const map = collectOutputs({ fs, targetPath })
   const out = {}
   for (const k of Object.keys(map)) if (map[k] != null) out[k] = map[k]
-  return { appId: ctx.appId, name: ctx.name, files: out }
+  return { appId, name, files: out }
 }
 
 self.onmessage = async (e) => {
@@ -88,13 +128,25 @@ self.onmessage = async (e) => {
       self.postMessage({ type: 'ready', ms: Math.round(performance.now() - t0) })
       return
     }
+    if (type === 'setup') {
+      // Coordinator phase: one worker parses config, allocates the shared scope-hash
+      // ids and builds miniprogram_npm once. setupCompile's npm build can invoke the
+      // wasm toolchain, so ensure it's loaded regardless of this worker's own stage.
+      const { files, workPath = '/work', toolchainSetupURL } = e.data
+      if (toolchainSetupURL) toolchainURL = toolchainSetupURL
+      await ensureToolchain()
+      const t = performance.now()
+      const { bundle, scaffold } = await runSetup(files, workPath)
+      self.postMessage({ type: 'setup-done', bundle, scaffold, ms: Math.round(performance.now() - t) })
+      return
+    }
     if (type === 'compile-subset') {
-      const { files, workPath = '/work', stages = ['logic', 'view', 'style'], toolchainSetupURL } = e.data
+      const { files, workPath = '/work', stages = ['logic', 'view', 'style'], bundle, toolchainSetupURL } = e.data
       if (toolchainSetupURL) toolchainURL = toolchainSetupURL
       if (needsToolchain(stages)) await ensureToolchain()
       const warm = !!toolchainReady
       const t = performance.now()
-      const result = await compileSubset(files, workPath, stages)
+      const result = await compileSubset(files, workPath, stages, bundle)
       self.postMessage({ type: 'done', result, ms: Math.round(performance.now() - t), warm })
       return
     }
