@@ -209,6 +209,9 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
     compileEvents: session.compileEvents,
     compileLogs: session.compileLogs,
     onClearCompileEvents: session.clearCompileEvents,
+    // Distinguishes "小程序未运行" from a true empty-data vacuum in the debug
+    // panels' empty states — non-running includes null (never reported yet).
+    isRuntimeRunning: session.runtimeStatus?.phase === 'running',
   }
 
   // DOM-panel renderer for DockView. `simulator` renders the SimulatorPanel
@@ -233,6 +236,9 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
           currentPage={simulator.currentPage}
           copied={copied}
           onCopyPagePath={copyPagePath}
+          runtimeStatus={session.runtimeStatus}
+          watcherDead={session.watcherDead}
+          onRelaunch={() => session.relaunch()}
         />
       )
     }

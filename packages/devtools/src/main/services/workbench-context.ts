@@ -2,6 +2,7 @@ import type { BrowserWindow } from 'electron'
 import type { CompilationAdapter, CustomFileTypes, WorkbenchConfig } from '../../shared/types.js'
 import type { BridgeRouterHandle } from '../ipc/bridge-router.js'
 import type { ConsoleForwarder } from './console-forward/index.js'
+import type { DiagnosticsBus } from './diagnostics/index.js'
 import type { NetworkForwarder } from './network-forward/index.js'
 import type { AppDataTap } from './simulator-appdata/index.js'
 import type { StorageApi } from './simulator-storage/index.js'
@@ -207,6 +208,16 @@ export interface WorkbenchContext {
    * installed.
    */
   consoleForwarder?: ConsoleForwarder
+
+  /**
+   * Authoritative diagnostics bus for main-synthesized developer diagnostics
+   * (page-not-found, logic-bundle-unreachable, service-host-navigation-failed,
+   * …), set by `installBridgeRouter`. `consoleForwarder` subscribes to it so
+   * every diagnostic also surfaces in the owning session's embedded DevTools
+   * Console panel, not just the main-process log. Undefined until the bridge
+   * router is installed.
+   */
+  diagnostics?: DiagnosticsBus
 
   /**
    * Native-host network forwarder, set in app bootstrap. Attaches the CDP

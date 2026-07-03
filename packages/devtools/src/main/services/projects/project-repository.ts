@@ -131,7 +131,8 @@ export function getProjectPages(dirPath: string): ProjectPages {
       pages: appJson.pages || [],
       entryPagePath: appJson.entryPagePath || appJson.pages?.[0] || '',
     }
-  } catch {
+  } catch (err) {
+    log.warn(`Failed to read project pages from ${appJsonPath}`, err)
     return { pages: [], entryPagePath: '' }
   }
 }

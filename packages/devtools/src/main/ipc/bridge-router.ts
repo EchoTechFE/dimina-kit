@@ -51,7 +51,8 @@ import {
   registerMiniappSessionConfigurator,
   SHARED_MINIAPP_PARTITION,
 } from '../services/views/miniapp-partition.js'
-import { createConsoleForwarder } from '../services/console-forward/index.js'
+import { createConsoleForwarder, type GuestConsoleEntry } from '../services/console-forward/index.js'
+import { createDiagnosticsBus } from '../services/diagnostics/index.js'
 import { STORAGE_API_NAMES } from '../services/simulator-storage/index.js'
 import { buildPageScrollScript } from './page-scroll.js'
 import {
@@ -98,6 +99,14 @@ function rewriteSourceMappingUrl(source: string, scriptUrl: string): string {
 }
 
 const STACK_ID = 'stack_0'
+
+/**
+ * Watchdog window a spawned session gets to reach `'running'` (root page
+ * `domReady`) before `handleSpawn`'s launch timer reports `'launch-failed'`
+ * with `code: 'timeout'`. Exported so tests can assert against the real
+ * constant instead of a magic number.
+ */
+export const LAUNCH_TIMEOUT_MS = 20_000
 
 /** Hard ceiling on the pre-warm pool, mirroring ServiceHostPool/doc §3.3. */
 const PREWARM_MAX_POOL_SIZE = 4
@@ -207,6 +216,29 @@ interface AppSession {
    * per respawn (the fallback only needs to fire at whole-app shutdown for
    * sessions still live then). */
   registryHandle: Disposable | null
+  /**
+   * Whether this session has reached `'running'` (its root page reported
+   * `domReady`). Gates the single 'launching' → 'running' transition — a
+   * second `domReady` on the same session (e.g. a tab re-render) must not
+   * re-fire the notification.
+   */
+  running: boolean
+  /**
+   * `LAUNCH_TIMEOUT_MS` watchdog armed at the end of `handleSpawn`. Cleared
+   * the moment the session settles one way or another (running, launch
+   * failure, crash, or disposal) so a stale timer can never fire a
+   * 'launch-failed' after the session has already resolved — see
+   * `clearLaunchTimer`.
+   */
+  launchTimer: NodeJS.Timeout | null
+  /**
+   * The start-page fallback applied at spawn (`resolveRootPagePath`), or null
+   * when the requested page was mounted verbatim. A fact about the WHOLE
+   * launch round, not any single phase: every runtime-status push carries it
+   * (see `pushRuntimeStatus`), so a later phase change (e.g. 'running') cannot
+   * silently drop it while the renderer's fallback banner is still showing it.
+   */
+  pageFallback: { requested: string; resolved: string } | null
 }
 
 interface PageSession {
@@ -660,13 +692,28 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
   // Chrome DevTools (attached to the service host) prefixed `[视图]` — regardless
   // of whether an automation client is connected. Automation now SUBSCRIBES to
   // this forwarder instead of clobbering `ctx.guestConsole`.
-  const consoleForwarder = createConsoleForwarder(bridgeHandle)
+  // Authoritative diagnostics bus (see workbench-context.ts): the single place
+  // main-synthesized diagnostics are born. The forwarder subscribes to it so
+  // every diagnostic also lands in the owning session's embedded DevTools
+  // Console panel, not just the main-process log / automation subscribers.
+  // A caller (host embedding, or a test) may have already installed one on
+  // `ctx` before `installBridgeRouter` runs — respect it instead of
+  // clobbering it with a fresh bus; only a bus WE create here is ours to
+  // dispose on teardown.
+  const ownsDiagnosticsBus = ctx.diagnostics === undefined
+  const diagnosticsBus = ctx.diagnostics ?? createDiagnosticsBus()
+  ctx.diagnostics = diagnosticsBus
+  const consoleForwarder = createConsoleForwarder(bridgeHandle, diagnosticsBus)
   ctx.consoleForwarder = consoleForwarder
   ctx.guestConsole = consoleForwarder
   ctx.registry.add(() => {
     void consoleForwarder.dispose()
     ctx.consoleForwarder = undefined
     ctx.guestConsole = undefined
+    if (ownsDiagnosticsBus) {
+      diagnosticsBus.dispose()
+      ctx.diagnostics = undefined
+    }
   })
 
   // DeviceShell → main: record the visible top-of-stack page bridgeId so the
@@ -840,6 +887,68 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
 
 // ── Spawn / Open / Close ─────────────────────────────────────────────────────
 
+/** Clear a session's launch-timeout watchdog, if still armed. Idempotent. */
+function clearLaunchTimer(ap: AppSession): void {
+  if (ap.launchTimer === null) return
+  clearTimeout(ap.launchTimer)
+  ap.launchTimer = null
+}
+
+/**
+ * Arm the `LAUNCH_TIMEOUT_MS` watchdog for a freshly spawned session. Fires
+ * `'launch-failed'` (`code: 'timeout'`) exactly once, and only if the session
+ * is both still registered (not disposed) and has not already reached
+ * `'running'` — both settle paths clear the timer themselves, but a timer
+ * queued just before either lands could still fire on the old macrotask queue.
+ */
+function startLaunchTimer(state: RouterState, ctx: WorkbenchContext, ap: AppSession): void {
+  ap.launchTimer = setTimeout(() => {
+    ap.launchTimer = null
+    if (ap.running) return
+    if (state.appSessions.get(ap.appSessionId) !== ap) return
+    const reason = `Service host did not report readiness within ${LAUNCH_TIMEOUT_MS}ms`
+    ctx.diagnostics?.report({
+      severity: 'error',
+      code: 'launch-timeout',
+      message: reason,
+      appSessionId: ap.appSessionId,
+    })
+    pushRuntimeStatus(ctx, ap, { phase: 'launch-failed', code: 'timeout', reason })
+  }, LAUNCH_TIMEOUT_MS)
+}
+
+/**
+ * Flip a session to `'running'` on its root page's first `domReady` — the
+ * single source-of-truth transition out of `'launching'`. Guarded by
+ * `ap.running` so a later re-render of the same root page (or any non-root
+ * page) never re-fires the notification or re-clears an already-cleared timer.
+ */
+function markSessionRunning(ctx: WorkbenchContext, ap: AppSession, page: PageSession): void {
+  if (!page.isRoot || ap.running) return
+  ap.running = true
+  clearLaunchTimer(ap)
+  pushRuntimeStatus(ctx, ap, { phase: 'running' })
+}
+
+/**
+ * The single chokepoint for session runtime-status pushes. Every event
+ * carries the session's launch-round facts (appId + pageFallback) alongside
+ * the phase change — the renderer replaces its runtimeStatus wholesale, so an
+ * event that omitted a still-true fallback would silently blank the fallback
+ * banner the moment the phase advances past 'launching'.
+ */
+function pushRuntimeStatus(
+  ctx: WorkbenchContext,
+  session: Pick<AppSession, 'appId' | 'pageFallback'>,
+  status: { phase: 'launching' | 'running' | 'launch-failed' | 'crashed'; code?: string; reason?: string },
+): void {
+  ctx.notify?.sessionRuntimeStatus?.({
+    appId: session.appId,
+    ...status,
+    ...(session.pageFallback ? { pageFallback: session.pageFallback } : {}),
+  })
+}
+
 async function handleSpawn(
   state: RouterState,
   ctx: WorkbenchContext,
@@ -894,10 +1003,22 @@ async function handleSpawn(
   // server, or at the local server root for the fallback path.
   const appConfig = await loadAppConfig(
     resourceServer ? resourceServer.baseUrl : `${resourceBaseUrl}${appId}/${root}/`,
+    ({ url, error }) => {
+      ctx.diagnostics?.report({
+        severity: 'error',
+        code: 'app-config-unreachable',
+        message: `app-config.json unreachable at ${url}: ${String(error)}`,
+        appSessionId,
+      })
+    },
   )
   const manifest = buildAppManifest(appConfig, pagePath)
-  const rootWindowConfig = resolvePageWindowConfig(appConfig, pagePath)
-  const isTab = isTabPage(appConfig, pagePath)
+  const { resolvedPagePath, pageFallbackApplied } = resolveRootPagePath(manifest, pagePath)
+  if (pageFallbackApplied) {
+    reportPageNotFound(ctx, appSessionId, pagePath, resolvedPagePath)
+  }
+  const rootWindowConfig = resolvePageWindowConfig(appConfig, resolvedPagePath)
+  const isTab = isTabPage(appConfig, resolvedPagePath)
 
   // Acquire a pre-warmed service-host window when pooling is enabled; otherwise
   // construct one fresh (default). A pooled/fallback window is warmed on
@@ -906,12 +1027,33 @@ async function handleSpawn(
   const usedPool = state.pool !== null
   let poolEntryId: string | null = null
   let serviceWindow: BrowserWindow
+  // Shared spawn-navigation failure handler (fresh AND pooled paths): without
+  // it a loadURL rejection is fully swallowed — did-finish-load never fires and
+  // the only signal is the launch watchdog's late timeout instead of the cause.
+  const reportServiceHostNavigationFailed = (spawnUrl: string, err: unknown): void => {
+    const message = `Failed to navigate service host to ${spawnUrl}: ${String(err)}`
+    ctx.diagnostics?.report({
+      severity: 'error',
+      code: 'service-host-navigation-failed',
+      message,
+      appSessionId,
+    })
+    // The session registers after window construction; resolve it fresh so the
+    // fresh-path callback (created pre-registration) still clears the watchdog.
+    const ap = state.appSessions.get(appSessionId)
+    if (ap) clearLaunchTimer(ap)
+    pushRuntimeStatus(
+      ctx,
+      ap ?? { appId, pageFallback: pageFallbackApplied ? { requested: pagePath, resolved: resolvedPagePath } : null },
+      { phase: 'launch-failed', code: 'service-host-navigation-failed', reason: message },
+    )
+  }
   if (state.pool) {
     const acquired = await state.pool.acquire(serviceHostSpec())
     serviceWindow = acquired.win
     poolEntryId = acquired.entryId
   } else {
-    serviceWindow = createServiceHostWindow({
+    const freshWindowOptions = {
       bridgeId,
       appId,
       // Same (appId, projectPath) pair the simulator WCV uses, so this project's
@@ -921,12 +1063,16 @@ async function handleSpawn(
       // awaits above would otherwise give the service host a different path than
       // the simulator WCV was built with, splitting the partition.
       projectPath: workspaceProjectPath || undefined,
-      pagePath,
+      pagePath: resolvedPagePath,
       pkgRoot,
       root,
       resourceBaseUrl,
       hostEnvSnapshot: hostEnv,
       apiNamespaces,
+    }
+    serviceWindow = createServiceHostWindow({
+      ...freshWindowOptions,
+      onLoadFailed: err => reportServiceHostNavigationFailed(buildServiceHostSpawnUrl(freshWindowOptions), err),
     })
   }
 
@@ -952,12 +1098,15 @@ async function handleSpawn(
     onServiceBoot: null,
     listenerBag: createSessionListenerBag(),
     registryHandle: null,
+    running: false,
+    launchTimer: null,
+    pageFallback: pageFallbackApplied ? { requested: pagePath, resolved: resolvedPagePath } : null,
   }
 
   const rootPage: PageSession = {
     bridgeId,
     appSessionId,
-    pagePath,
+    pagePath: resolvedPagePath,
     query: opts.query ?? {},
     isRoot: true,
     isTab,
@@ -1040,19 +1189,19 @@ async function handleSpawn(
     }
     appSession.onServiceBoot = bootOnServiceLoad
     serviceWindow.webContents.on('did-finish-load', bootOnServiceLoad)
-    void navigateServiceHost(
-      serviceWindow,
-      buildServiceHostSpawnUrl({
-        bridgeId,
-        appId,
-        pagePath,
-        pkgRoot,
-        root,
-        resourceBaseUrl,
-        hostEnvSnapshot: hostEnv,
-        apiNamespaces,
-      }),
-    )
+    const spawnUrl = buildServiceHostSpawnUrl({
+      bridgeId,
+      appId,
+      pagePath: resolvedPagePath,
+      pkgRoot,
+      root,
+      resourceBaseUrl,
+      hostEnvSnapshot: hostEnv,
+      apiNamespaces,
+    })
+    void navigateServiceHost(serviceWindow, spawnUrl, {
+      onLoadFailed: err => reportServiceHostNavigationFailed(spawnUrl, err),
+    })
   } else {
     // Fresh window: its only navigation is service.html (issued inside
     // createServiceHostWindow), so the first did-finish-load is the spawn load.
@@ -1061,10 +1210,35 @@ async function handleSpawn(
     })
   }
 
+  // Service-host crash (renderer process gone): a session-scoped hook on the
+  // service webContents, bound via the listener bag so `disposeAppSession`
+  // detaches it (matching the 'closed'/'destroyed' hooks registered above).
+  // Not a `.once` — a pooled service window can recover and crash again
+  // across its lifetime, and each crash is independently worth surfacing.
+  // Fires whether the crash lands before or after 'running'; only the launch
+  // timer needs clearing (it may already be null) since a running session no
+  // longer has one armed.
+  const onServiceCrashed = (): void => {
+    clearLaunchTimer(appSession)
+    ctx.diagnostics?.report({
+      severity: 'error',
+      code: 'service-host-crashed',
+      message: `Service host renderer process gone for appSessionId=${appSessionId}`,
+      appSessionId,
+    })
+    pushRuntimeStatus(ctx, appSession, { phase: 'crashed', code: 'service-host-crashed' })
+  }
+  appSession.listenerBag.on(serviceWindow.webContents, 'render-process-gone', onServiceCrashed)
+
+  pushRuntimeStatus(ctx, appSession, { phase: 'launching' })
+  startLaunchTimer(state, ctx, appSession)
+
   return {
     appSessionId,
     bridgeId,
     pagePath,
+    resolvedPagePath,
+    pageFallbackApplied,
     serviceWcId: serviceWindow.webContents.id,
     resourceBaseUrl,
     manifest,
@@ -1085,6 +1259,15 @@ async function handlePageOpen(
   }
 
   const pagePath = normalizePagePath(opts.pagePath)
+  // Defense-in-depth against a page absent from the compiled manifest: the
+  // nav gate (handleNavActionApi) already blocks normal navigateTo/switchTab
+  // traffic upstream, but PAGE_OPEN is reachable directly (any IPC caller), so
+  // this refuses to register a PageSession main can never load resources for.
+  // Only enforced against a real compiled manifest ('app-config') — a
+  // 'fallback' manifest has no compiled truth to validate membership against.
+  if (ap.manifest.source === 'app-config' && !ap.manifest.pages.includes(pagePath)) {
+    throw new Error(`[bridge-router] PAGE_OPEN rejected: page-not-found "${pagePath}" is not in the compiled manifest`)
+  }
   const bridgeId = opts.bridgeId || newBridgeId()
   const windowConfig = resolvePageWindowConfig(ap.appConfig, pagePath)
   const isTab = isTabPage(ap.appConfig, pagePath)
@@ -1158,6 +1341,10 @@ async function bootServiceHost(state: RouterState, ap: AppSession, ctx: Workbenc
   // early-disposed prior owner could otherwise fire here and inject the wrong
   // app's logic.js into the next spawn (the recycled webContents is shared).
   if (state.appSessions.get(ap.appSessionId) !== ap) return
+  // The service wc just did-finish-load'd (that's how this got invoked) — flush
+  // any diagnostic queued for this session (or the global bucket) into its now
+  // resolvable console. Safe to call even when nothing is queued.
+  ctx.consoleForwarder?.notifyServiceHostReady?.(ap.appSessionId)
   ap.logicInjected = await injectLogicBundle(ap)
   if (!ap.logicInjected) {
     // The compiled logic.js never executed, so `modDefine` registered nothing.
@@ -1166,7 +1353,9 @@ async function bootServiceHost(state: RouterState, ap: AppSession, ctx: Workbenc
     // cause (unreachable resource tree / failed compile / unresolved appId).
     // Skip it and surface one actionable diagnostic instead; the render side
     // gates on the same flag in `routeFromRender`.
-    reportLogicLoadFailure(ap, ctx)
+    const reason = reportLogicLoadFailure(ap, ctx)
+    clearLaunchTimer(ap)
+    pushRuntimeStatus(ctx, ap, { phase: 'launch-failed', code: 'logic-bundle-unreachable', reason })
     return
   }
   // A root page absent from the compiled manifest — most commonly a page the
@@ -1182,7 +1371,7 @@ async function bootServiceHost(state: RouterState, ap: AppSession, ctx: Workbenc
   const rootPage = ap.pages.get(ap.appSessionId)
   const rootMissing = !!rootPage && !pageInManifest(ap, rootPage.pagePath)
   if (rootMissing) {
-    reportPageNotFound(ap, ctx, rootPage.pagePath)
+    reportPageNotFound(ctx, ap.appSessionId, rootPage.pagePath)
   } else if (rootPage) {
     // serviceLoaded is flipped only when service responds with
     // `serviceResourceLoaded`; see handleContainerMsg. Setting it here would
@@ -1242,38 +1431,73 @@ async function injectLogicBundle(ap: AppSession): Promise<boolean> {
 /**
  * Emit one actionable diagnostic when the compiled logic bundle could not be
  * loaded — the single point where "the app's compiled resource tree is
- * unreachable" is known with certainty. Goes to the main-process log AND the
- * guest console sink so it surfaces in the devtools Console panel where the
+ * unreachable" is known with certainty. Reported through `ctx.diagnostics`,
+ * which mirrors it to the main-process log AND — via `consoleForwarder`'s
+ * subscription — injects it into the service host's own console, so it
+ * actually surfaces in the embedded DevTools Console panel where the
  * developer would otherwise see only the misleading `module app not found`.
+ * `guestConsole.emit` is kept alongside for the automation `App.logAdded`
+ * subscriber, which does not consume the diagnostics bus.
+ *
+ * Returns the short (pre-hint) form of the message so `bootServiceHost` can
+ * reuse it verbatim as the `sessionRuntimeStatus` `reason` instead of
+ * duplicating the wording.
  */
-function reportLogicLoadFailure(ap: AppSession, ctx: WorkbenchContext): void {
+function reportLogicLoadFailure(ap: AppSession, ctx: WorkbenchContext): string {
   const hint = ap.appId === 'unknown'
     ? ' appId could not be resolved (it fell back to "unknown") — the mini-program likely failed to compile or its project manifest/app config is missing.'
     : ''
+  const shortReason = `[dimina-kit] Failed to load the mini-program logic bundle from ${logicBundleUrl(ap)}.`
   const message
-    = `[dimina-kit] Failed to load the mini-program logic bundle from ${logicBundleUrl(ap)}. `
+    = `${shortReason} `
     + 'The service runtime has no registered modules, so no page can mount.'
     + hint
     + ` Verify the project compiled successfully and that the resource server serves "${ap.appId}/${ap.root}/".`
-  console.error(message)
+  ctx.diagnostics?.report({
+    severity: 'error',
+    code: 'logic-bundle-unreachable',
+    message,
+    appSessionId: ap.appSessionId,
+  })
   ctx.guestConsole?.emit({ source: 'service', level: 'error', args: [message] })
+  return shortReason
 }
 
 /** Whether `pagePath` still exists in the app's freshly compiled manifest. */
 function pageInManifest(ap: AppSession, pagePath: string): boolean {
+  // A 'fallback' manifest (app-config.json unreachable) holds only the spawn
+  // request — no compiled truth to check membership against. Every mount gate
+  // keyed on manifest membership must agree: the nav/PAGE_OPEN front gates
+  // already let a fallback manifest through, so this back gate (render
+  // loadResource) must too, or a page they admitted silently never loads.
+  if (ap.manifest.source !== 'app-config') return true
   return ap.manifest.pages.includes(normalizePagePath(pagePath))
 }
 
 /**
- * WeChat-devtools-style "page does not exist" diagnostic. Emitted (main log +
- * guest Console) when a mount targets a pagePath that is not in the compiled
- * manifest — most commonly a page the developer deleted, then hot-reloaded.
+ * WeChat-devtools-style "page does not exist" diagnostic. Reported through
+ * `ctx.diagnostics` (main log + injected into the embedded Console panel via
+ * `consoleForwarder`) when a mount targets a pagePath that is not in the
+ * compiled manifest — most commonly a page the developer deleted, then
+ * hot-reloaded. `guestConsole.emit` is kept alongside for the automation
+ * subscriber.
  */
-function reportPageNotFound(ap: AppSession, ctx: WorkbenchContext, pagePath: string): void {
-  const message
+function reportPageNotFound(
+  ctx: WorkbenchContext,
+  appSessionId: string,
+  pagePath: string,
+  fallbackTo?: string,
+): void {
+  const base
     = `Page[${pagePath}] not found. May be caused by: 1. Forgetting to add page route in app.json. `
     + '2. Invoking Page() in async task.'
-  console.error(`[bridge-router] ${message}`)
+  const message = fallbackTo ? `${base} Falling back to "${fallbackTo}".` : base
+  ctx.diagnostics?.report({
+    severity: 'error',
+    code: 'page-not-found',
+    message,
+    appSessionId,
+  })
   ctx.guestConsole?.emit({ source: 'service', level: 'error', args: [message] })
 }
 
@@ -1369,6 +1593,19 @@ function routeFromRender(
   }
 }
 
+/**
+ * Report 'service-uncaught-error' for a consoleLog(source:'service') body —
+ * the service preload's uncaught error/unhandledrejection post. CDP's
+ * `Runtime.consoleAPICalled` (services/service-console) never observes these
+ * (they never call `console.*`), so this diagnostics report is the only way
+ * one reaches the Console panel / main log.
+ */
+function reportServiceUncaughtError(ctx: WorkbenchContext, ap: AppSession, body: GuestConsoleEntry): void {
+  const severity = body.level === 'error' ? 'error' : body.level === 'warn' ? 'warn' : 'info'
+  const message = Array.isArray(body.args) ? body.args.map(a => String(a)).join(' ') : String(body.args ?? '')
+  ctx.diagnostics?.report({ severity, code: 'service-uncaught-error', message, appSessionId: ap.appSessionId })
+}
+
 function handleContainerMsg(
   ap: AppSession,
   page: PageSession,
@@ -1393,12 +1630,12 @@ function handleContainerMsg(
         ap.simulatorWc.send(E.DOM_READY, { bridgeId: page.bridgeId })
       }
       state.emitRenderEvent({ kind: 'domReady', appId: ap.appId, bridgeId: page.bridgeId })
+      markSessionRunning(ctx, ap, page)
       break
     case 'invokeAPI':
       void handleSimulatorApi(state, ap, page, msg.body, ctx)
       break
     case 'serviceHostError': {
-      console.warn('[bridge-router] service host error:', msg.body)
       // Forward the error to every registered `wx.onError` listener. (The dimina
       // service runtime's App lifecycle is only onLaunch/onShow/onHide, so it
       // does not dispatch `App.onError` — `wx.onError` is the supported path.)
@@ -1406,19 +1643,31 @@ function handleContainerMsg(
       // during lifecycle/event dispatch here.
       const errBody = msg.body as { message?: unknown } | undefined
       const errArg = errBody?.message ?? msg.body
+      // Reported through the diagnostics bus (main log + Console-panel
+      // injection); `ctx.diagnostics.report` replaces the bare `console.warn`
+      // this case used to make directly.
+      ctx.diagnostics?.report({
+        severity: 'error',
+        code: 'service-host-error',
+        message: String(errArg),
+        appSessionId: ap.appSessionId,
+      })
       for (const id of state.appLifecycle.listeners(ap.appSessionId, 'onError')) {
         sendCallback(ap, id, errArg)
       }
       break
     }
-    case 'consoleLog':
+    case 'consoleLog': {
       // Native-host console capture: the render-host / service-host guest preloads
       // monkeypatch console.* and post each entry here (one case handles both —
       // distinguish via msg.body.source). Forward to the console sink (set by the
       // automation server under native-host) so it can rebroadcast as App.logAdded.
       // Guarded + non-throwing: console capture must never break message routing.
       ctx.guestConsole?.emit(msg.body)
+      const body = msg.body as GuestConsoleEntry | undefined
+      if (body?.source === 'service') reportServiceUncaughtError(ctx, ap, body)
       break
+    }
     case 'storageChanged':
       // Native-host SYNC storage liveness: the service-host's `setStorageSync`/etc.
       // write `localStorage` directly (no main round-trip), so they post the change
@@ -1531,6 +1780,15 @@ function handleNavBarApi(ap: AppSession, page: PageSession, name: string, params
   sendCallback(ap, params.complete, successResult)
 }
 
+// Fails a nav/tab action's service-side callback through the same success/
+// complete dispatch every other API branch uses — the one mechanism for
+// answering a call that never reaches (or never should reach) the simulator.
+function failActionCallback(ap: AppSession, params: Record<string, unknown>, errMsg: string): void {
+  const fail = { errMsg }
+  sendCallback(ap, params.fail, fail)
+  sendCallback(ap, params.complete, fail)
+}
+
 // Shared by handleNavActionApi/handleTabActionApi: both forward a same-shaped
 // payload to the simulator window, differing only in the event name and the
 // payload's static `name` union. Simulator-destroyed fails the callback
@@ -1546,12 +1804,56 @@ function sendActionOrFail(
     ap.simulatorWc.send(eventName, payload)
     return
   }
-  const fail = { errMsg: `${name}:fail simulator window destroyed` }
-  sendCallback(ap, params.fail, fail)
-  sendCallback(ap, params.complete, fail)
+  failActionCallback(ap, params, `${name}:fail simulator window destroyed`)
 }
 
-function handleNavActionApi(ap: AppSession, page: PageSession, name: string, params: Record<string, unknown>): void {
+/** The bare page path a nav/tab action targets (query-stripped, normalized), or undefined for an action carrying none (navigateBack). */
+function extractNavTargetPagePath(params: Record<string, unknown>): string | undefined {
+  const raw = params.url
+  if (typeof raw !== 'string' || !raw) return undefined
+  return normalizePagePath(raw.split('?')[0] ?? raw)
+}
+
+interface NavTargetVerdict {
+  ok: boolean
+  errMsg?: string
+  /** Whether the failure is a genuine "page not found" (worth a diagnostic), vs. e.g. switchTab's "not a tabBar page" (the page exists, just isn't tab-able). */
+  reportNotFound?: boolean
+}
+
+/**
+ * Whether a nav/tab action's target page is mountable — checked ONLY against
+ * a real compiled manifest (`source === 'app-config'`); a `'fallback'`
+ * manifest can't tell mountable from not, so it lets everything through.
+ */
+function checkNavTarget(ap: AppSession, name: string, targetPagePath: string): NavTargetVerdict {
+  if (ap.manifest.source !== 'app-config') return { ok: true }
+  if (!ap.manifest.pages.includes(targetPagePath)) {
+    return { ok: false, errMsg: `${name}:fail page "${targetPagePath}" is not found`, reportNotFound: true }
+  }
+  if (name === 'switchTab') {
+    const inTabBar = ap.manifest.tabBar?.list.some(item => normalizePagePath(item.pagePath) === targetPagePath) ?? false
+    if (!inTabBar) return { ok: false, errMsg: 'switchTab:fail can not switch to no-tabBar page' }
+  }
+  return { ok: true }
+}
+
+function handleNavActionApi(
+  ap: AppSession,
+  ctx: WorkbenchContext,
+  page: PageSession,
+  name: string,
+  params: Record<string, unknown>,
+): void {
+  const targetPagePath = extractNavTargetPagePath(params)
+  if (targetPagePath !== undefined) {
+    const verdict = checkNavTarget(ap, name, targetPagePath)
+    if (!verdict.ok) {
+      if (verdict.reportNotFound) reportPageNotFound(ctx, ap.appSessionId, targetPagePath)
+      failActionCallback(ap, params, verdict.errMsg!)
+      return
+    }
+  }
   const payload: NavActionPayload = {
     appSessionId: ap.appSessionId,
     bridgeId: page.bridgeId,
@@ -1650,7 +1952,7 @@ async function handleSimulatorApi(
   }
 
   if (NAV_ACTION_NAMES.has(name)) {
-    handleNavActionApi(ap, page, name, params)
+    handleNavActionApi(ap, ctx, page, name, params)
     return
   }
 
@@ -2115,6 +2417,10 @@ async function disposeAppSession(
   const ap = state.appSessions.get(appSessionId)
   if (!ap) return
   state.appSessions.delete(appSessionId)
+  // Prevent a leaked/stale watchdog: without this, a session disposed while
+  // still 'launching' (e.g. project close mid-launch) would fire its timer
+  // `LAUNCH_TIMEOUT_MS` later against an already-torn-down session.
+  clearLaunchTimer(ap)
   // Remove this session's shutdown-fallback registry entry so the registry does
   // not accumulate one stale closure per respawn. Ordered AFTER the delete
   // above: dispose() runs the wrapped fn (disposeAppSession again), which
@@ -2159,7 +2465,17 @@ async function disposeAppSession(
 
 // ── App-config / manifest parsing ───────────────────────────────────────────
 
-async function loadAppConfig(resourceBase: string): Promise<RawAppConfig> {
+/**
+ * Fetch+parse `app-config.json`. Pure (no `ctx`, no diagnostics dependency) —
+ * a non-2xx response or a parse/network failure reports through `onUnreachable`
+ * (the caller routes it into `ctx.diagnostics`) and returns `{}` either way, so
+ * the spawn flow always continues with a manifest that just falls back to a
+ * single-page/no-tabBar shape (`buildAppManifest`'s fallback).
+ */
+async function loadAppConfig(
+  resourceBase: string,
+  onUnreachable?: (info: { url: string; error: unknown }) => void,
+): Promise<RawAppConfig> {
   // `resourceBase` is the dir/URL that directly contains `app-config.json`:
   // the dev server's `<base><appId>/<root>/` (http) or the local fallback
   // server root (also http). Both are HTTP, so a single fetch path covers them.
@@ -2167,23 +2483,59 @@ async function loadAppConfig(resourceBase: string): Promise<RawAppConfig> {
   try {
     const res = await fetch(cfgUrl)
     if (!res.ok) {
+      const error = new Error(`app-config.json fetch ${res.status} at ${cfgUrl}`)
       console.warn(`[bridge-router] no app-config.json at ${cfgUrl} (${res.status})`)
+      onUnreachable?.({ url: cfgUrl, error })
       return {}
     }
     return await res.json() as RawAppConfig
   } catch (error) {
     console.warn('[bridge-router] failed to fetch/parse app-config.json:', error)
+    onUnreachable?.({ url: cfgUrl, error })
     return {}
   }
 }
 
 function buildAppManifest(appConfig: RawAppConfig, fallbackEntry: string): AppManifest {
   const entry = appConfig.app?.entryPagePath || fallbackEntry
-  const pages = appConfig.app?.pages?.length ? appConfig.app.pages : [entry]
+  const hasCompiledPages = !!appConfig.app?.pages?.length
+  const pages = hasCompiledPages ? appConfig.app!.pages! : [entry]
   const tabBar = appConfig.app?.tabBar && Array.isArray(appConfig.app.tabBar.list) && appConfig.app.tabBar.list.length > 0
     ? appConfig.app.tabBar
     : undefined
-  return { entryPagePath: normalizePagePath(entry), pages: pages.map(normalizePagePath), tabBar }
+  return {
+    entryPagePath: normalizePagePath(entry),
+    pages: pages.map(normalizePagePath),
+    tabBar,
+    // 'app-config' means `pages` above is the real compiled list mount gates
+    // can trust; 'fallback' means app-config.json was unreachable and `pages`
+    // is just the single requested page — nothing to validate membership
+    // against, so every gate keyed on this source lets it through unchanged.
+    source: hasCompiledPages ? 'app-config' : 'fallback',
+  }
+}
+
+/**
+ * Resolve the root page a spawn actually mounts against the compiled
+ * manifest. The request is trusted verbatim unless the manifest is a real
+ * compiled one (`source === 'app-config'`) AND the request is absent from its
+ * `pages` — in that case the request is unmountable (most commonly a start
+ * page removed by a hot reload) and resolution falls back to
+ * `manifest.entryPagePath`, or `manifest.pages[0]` when even the entry isn't a
+ * member. A `'fallback'` manifest contains only the request itself, so there
+ * is trivially nothing to fall back from.
+ */
+function resolveRootPagePath(
+  manifest: AppManifest,
+  requestedPagePath: string,
+): { resolvedPagePath: string; pageFallbackApplied: boolean } {
+  if (manifest.source !== 'app-config' || manifest.pages.includes(requestedPagePath)) {
+    return { resolvedPagePath: requestedPagePath, pageFallbackApplied: false }
+  }
+  const resolvedPagePath = manifest.pages.includes(manifest.entryPagePath)
+    ? manifest.entryPagePath
+    : manifest.pages[0]
+  return { resolvedPagePath, pageFallbackApplied: true }
 }
 
 function resolvePageWindowConfig(appConfig: RawAppConfig, pagePath: string): PageWindowConfig {

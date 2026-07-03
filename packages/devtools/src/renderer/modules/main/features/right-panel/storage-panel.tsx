@@ -11,6 +11,8 @@ export interface StoragePanelProps {
   onClear: () => Promise<StorageWriteResult>
   onClearAll: () => Promise<StorageWriteResult>
   getPrefix: () => Promise<string>
+  /** Whether the mini-program's runtime session is `running` — distinguishes "小程序未运行" from a true empty-data vacuum below. Defaults to true (running) so callers that don't track runtime status keep the plain empty-data text. */
+  isRuntimeRunning?: boolean
 }
 
 /** Stringifies arbitrary StorageItem values for editing in a text input. */
@@ -30,6 +32,7 @@ export function StoragePanel({
   onClear,
   onClearAll,
   getPrefix,
+  isRuntimeRunning = true,
 }: StoragePanelProps) {
   const [editing, setEditing] = useState<{ key: string; draft: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -154,7 +157,7 @@ export function StoragePanel({
             {items.length === 0 ? (
               <tr>
                 <td colSpan={3} className="text-[12px] text-text-dim text-center px-4 py-6">
-                  暂无 Storage 数据
+                  {isRuntimeRunning ? '暂无 Storage 数据' : '小程序未运行'}
                 </td>
               </tr>
             ) : items.map((item) => {

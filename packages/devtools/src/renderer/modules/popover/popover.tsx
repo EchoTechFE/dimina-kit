@@ -79,6 +79,11 @@ export default function Popover() {
               setConfig((c) => ({ ...c, startPage: e.target.value }))
             }
           >
+            {config.startPage && !pages.includes(config.startPage) && (
+              <option value={config.startPage}>
+                {config.startPage}（页面不存在）
+              </option>
+            )}
             {pages.map((pg) => (
               <option key={pg} value={pg}>
                 {pg}

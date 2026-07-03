@@ -156,7 +156,7 @@ dimina-fe **没有 `invokeSync` 方法**——真机端同步 API 依赖宿主 J
 
 service-host preload（`src/service-host/preload.cjs`）在真实 spawn（带 bridgeId）后 monkeypatch `console.{log,warn,error,info,debug}`、`error` / `unhandledrejection` 事件，把每条记录序列化（`safeSerializeArg`）后经 `DiminaServiceBridge.invoke` 发一条 `consoleLog` container 消息（`source: 'service'`）。
 
-bridge-router 的 `handleContainerMsg` 在 `consoleLog` 分支调 `ctx.guestConsole?.emit(msg.body)`。`guestConsole` 由 automation 服务设置，把它重广播为 `App.logAdded` 事件。render-host preload 走同一条 `consoleLog` 通道（`source: 'render'`）。
+bridge-router 的 `handleContainerMsg` 在 `consoleLog` 分支调 `ctx.guestConsole?.emit(msg.body)`。`guestConsole` 指向 `console-forward` 服务（automation 通过 `subscribe` 挂在其上，把每条记录重广播为 `App.logAdded` 事件）。render-host preload 走同一条 `consoleLog` 通道（`source: 'render'`）。`source:'service'` 的 `consoleLog`（preload 合成的未捕获 error/unhandledrejection 上报，CDP 观测不到）还会额外经 `ctx.diagnostics` 报 `service-uncaught-error` 诊断——诊断总线（`services/diagnostics/`）是 main 合成诊断的唯一出生点，`console-forward` 订阅它并把每条诊断注入归属 session 的 service-host console（`[dimina-kit]` 前缀 + loop-safety sentinel），使其真正出现在内嵌 DevTools Console 面板。
 
 ## 4. 进程拓扑
 
@@ -201,7 +201,7 @@ bridge-router 的 session 数据结构（字段全集）：
 
 - **service loader 自身的 importScripts**：`@dimina/service` 的 Worker-style 运行时检测到自己处于 worker 形态时，loader（dimina-fe `service/src/core/loader.js`）调 `globalThis.importScripts(\`${baseUrl}${appId}/${root}/logic.js\`)`。BrowserWindow 没有 `importScripts`，所以 `service-host/preload.cjs` 给 `globalThis.importScripts` 装了一个 shim：同步 XHR 取脚本 + 间接 `eval`（`(0, eval)(...)`）在 global scope 执行，使脚本里的 `modDefine(...)` 注册进 service loader `modRequire` 读取的同一份 AMD 注册表。
 - **bridge-router 主进程预注入**：`bootServiceHost` → `injectLogicBundle` 在 service window `did-finish-load` 后，HTTP fetch logic.js 并 `serviceWc.executeJavaScript(content, true)`，**注入成功后才发** `loadResource`。fetch URL 视模式而定：本地 fallback `DiminaResourceServer`（`ap.resourceServer` 非空）取 `new URL('logic.js', resourceBaseUrl)` = `<base>logic.js`（其 root 已是 `pkgRoot/root`）；dev-server 模式取 `new URL('<appId>/<root>/logic.js', resourceBaseUrl)` = `<base><appId>/<root>/logic.js`。
-  - **注入失败（fetch 非 2xx / executeJavaScript 抛错）= fail-loud**：`injectLogicBundle` 返回 `false`，`ap.logicInjected` 记为 `false`，`bootServiceHost` **不再发 service `loadResource`**（否则 `modRequire('app')` 必抛 `module app not found`，掩盖真因），改由 `reportLogicLoadFailure` 打一条可操作诊断到主进程 `console.error` 与 `ctx.guestConsole`（Console 面板）。
+  - **注入失败（fetch 非 2xx / executeJavaScript 抛错）= fail-loud**：`injectLogicBundle` 返回 `false`，`ap.logicInjected` 记为 `false`，`bootServiceHost` **不再发 service `loadResource`**（否则 `modRequire('app')` 必抛 `module app not found`，掩盖真因），改由 `reportLogicLoadFailure` 经 `ctx.diagnostics` 报 `logic-bundle-unreachable` 诊断（总线镜像主进程 console，并由 `console-forward` 注入 service-host console → 内嵌 DevTools Console 面板；host 未就绪时按 session 排队、`bootServiceHost` 经 `notifyServiceHostReady` 冲洗），`ctx.guestConsole.emit` 保留给 automation 订阅者。
   - **render 侧确定性门**：render guest 在自身 `DOMContentLoaded` 就发 `renderHostReady`，通常**早于**异步 fetch+inject 落定。`routeFromRender` 据 `ap.logicInjected` 三态处理：`false` → 跳过 render `loadResource`（避免第二条 `module <pagePath> not found`）；`null`（注入仍在途）→ 把该页 `loadResource` 挂起（`page.renderLoadPending`），由 `bootServiceHost` 落定后统一冲洗（成功才发、失败丢弃）——保证失败的 bundle 永不到达 render 侧；`true` → 立即发。
   - appId 兜底成 `'unknown'`（编译无产出且 `project.config.json` 无 `appid`，见 devkit `index.ts`，该处已 `console.warn` + `onBuildError` 上抛）时，dev-server 路径会 fetch `<base>unknown/<root>/logic.js` 而 404，由此触发上述 fail-loud 路径。
 

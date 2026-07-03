@@ -90,6 +90,14 @@ export interface OpenProjectOptions {
 	 * worker's piped stdout/stderr, tagged with their source stream.
 	 */
 	onLog?: (entry: CompileLogEntry) => void
+	/**
+	 * Fired when the file watcher emits `'error'` (EMFILE, permission loss, …)
+	 * AFTER its initial scan already resolved `ready` — i.e. the session is
+	 * live and auto-rebuild-on-save has silently stopped working. A pre-ready
+	 * error instead rejects `openProject` itself (see `createProjectWatcher`),
+	 * so this only ever fires once per session, at most.
+	 */
+	onWatcherError?: (err: unknown) => void
 }
 
 /**
@@ -190,6 +198,7 @@ export async function openProject(opts: OpenProjectOptions): Promise<ProjectSess
 		onRebuild,
 		onBuildError,
 		onLog,
+		onWatcherError,
 	} = opts
 	const projectPath = path.resolve(rawProjectPath)
 	const buildOptions = { sourcemap, fileTypes }
@@ -279,7 +288,9 @@ export async function openProject(opts: OpenProjectOptions): Promise<ProjectSess
 		const rebuildScheduler = createRebuildScheduler(() =>
 			runRebuild(compileWorker, buildRequest, sessionApps, () => reload, onRebuild, onBuildError),
 		)
-		watcher = watch ? createProjectWatcher(projectPath, () => rebuildScheduler.schedule()) : null
+		watcher = watch
+			? createProjectWatcher(projectPath, () => rebuildScheduler.schedule(), onWatcherError)
+			: null
 		// Don't resolve until the watcher's initial scan is done: a save landing
 		// in the gap between `openProject` resolving and chokidar going live
 		// (fsevents stream not yet active on macOS) would otherwise be silently
@@ -321,6 +332,7 @@ export async function openProject(opts: OpenProjectOptions): Promise<ProjectSess
 export function createProjectWatcher(
 	projectPath: string,
 	onChange: () => void | Promise<void>,
+	onWatcherError?: (err: unknown) => void,
 ): { close: () => Promise<void>; ready: Promise<void> } {
 	// Ignore dotfiles/dot-directories that live *inside* the project (.git,
 	// .DS_Store, editor scratch, etc.) without nuking the whole watch when the
@@ -356,12 +368,24 @@ export function createProjectWatcher(
 	// A watcher 'error' before the initial scan completes (EMFILE, permission
 	// loss, …) must REJECT `ready`: resolving only on 'ready' would leave
 	// `await watcher.ready` — and the whole openProject — hung forever. The
-	// listener also doubles as the EventEmitter unhandled-'error' guard. A
-	// post-ready 'error' makes the reject a settled-promise no-op.
+	// listener also doubles as the EventEmitter unhandled-'error' guard. Once
+	// `ready` has settled, the reject above is a no-op — that's the live-session
+	// case (watcher died mid-session, not at open time) and is instead surfaced
+	// through `onWatcherError`, the only remaining signal that auto-rebuild has
+	// silently stopped.
+	let readySettled = false
 	const ready = new Promise<void>((resolve, reject) => {
-		watcher.once('ready', () => resolve())
+		watcher.once('ready', () => {
+			readySettled = true
+			resolve()
+		})
 		watcher.on('error', (err: unknown) => {
-			reject(err instanceof Error ? err : new Error(String(err)))
+			if (!readySettled) {
+				readySettled = true
+				reject(err instanceof Error ? err : new Error(String(err)))
+				return
+			}
+			onWatcherError?.(err)
 		})
 	})
 	return {

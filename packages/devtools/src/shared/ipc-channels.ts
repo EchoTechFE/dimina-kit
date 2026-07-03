@@ -224,6 +224,17 @@ export const ProjectChannel = {
   GetThumbnail: 'project:getThumbnail',
 } as const
 
+// ── Session runtime status ───────────────────────────────────────────────
+//
+// Main → renderer push of the post-compile SESSION lifecycle (spawn → running
+// → crash/timeout), distinct from `ProjectChannel.Status` which only tracks
+// compile outcomes. Compile succeeding tells the renderer nothing about
+// whether the simulator actually booted — this channel closes that gap.
+
+export const SessionChannel = {
+  RuntimeStatus: 'session:runtimeStatus',
+} as const
+
 // ── Project file system (sandboxed to active project root) ────────────────
 //
 // Read/write access to the active project's files, used by the in-renderer
