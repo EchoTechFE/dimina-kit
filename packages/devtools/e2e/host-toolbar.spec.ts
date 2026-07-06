@@ -7,7 +7,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURES = path.resolve(__dirname, 'fixtures', 'host-toolbar')
 
 /**
- * Wave 3 R1 — host toolbar framework runtime is SESSION-RESIDENT (real app).
+ * Host toolbar framework runtime is SESSION-RESIDENT (real app).
  *
  * THE INCIDENT THIS SPEC EXISTS FOR: the height advertiser used to ride the
  * toolbar WCV's `webPreferences.preload`; a host calling
@@ -175,9 +175,9 @@ test.describe('Host toolbar: session-resident height advertiser (R1)', () => {
   })
 
   test('no leak: the main window main world carries no toolbar-runtime / host-preload globals', async () => {
-    // E2E expression of codex condition 2: the session preload executes in
-    // EVERY defaultSession renderer (including this main window — spike item
-    // 4), but the marker+isMainFrame guard must make it return before
+    // The session preload executes in EVERY defaultSession renderer
+    // (including this main window), but the marker+isMainFrame guard must
+    // make it return before
     // touching the page: no advertiser globals, and — critically — the
     // HOST's preload must never be session-registered (an implementation
     // that "fixes" setPreloadPath by registering the host preload on the
