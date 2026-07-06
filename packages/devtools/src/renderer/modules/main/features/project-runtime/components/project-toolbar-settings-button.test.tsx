@@ -57,8 +57,6 @@ async function renderToolbar() {
         setDevtoolsPosition: () => {},
       }}
       simPanelWidth={375}
-      launchConfigs={[]}
-      activeLaunchConfigId={null}
     />,
   )
   await act(async () => {

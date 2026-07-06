@@ -1,4 +1,4 @@
-import type { CompileConfig, LaunchConfig } from '@/shared/types'
+import type { CompileConfig } from '@/shared/types'
 import { PopoverChannel } from '../../../shared/ipc-channels'
 import { send } from './ipc-transport'
 
@@ -9,14 +9,4 @@ import { send } from './ipc-transport'
  */
 export function emitPopoverRelaunch(config: CompileConfig): void {
   send(PopoverChannel.Relaunch, config)
-}
-
-/** Switch to a named launch config (by id) or revert to normal mode (null). */
-export function emitPopoverSwitchLaunchConfig(id: string | null): void {
-  send(PopoverChannel.SwitchLaunchConfig, id)
-}
-
-/** Persist an updated launch configs list from the popover editor. */
-export function emitPopoverUpdateLaunchConfigs(configs: LaunchConfig[]): void {
-  send(PopoverChannel.UpdateLaunchConfigs, configs)
 }

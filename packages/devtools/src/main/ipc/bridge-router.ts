@@ -533,7 +533,7 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
     const warmTimer = setTimeout(() => {
       void pool
         .init({ defaultPoolSize: prewarmPoolSize, defaultSpec: serviceHostSpec(), maxPoolSize: PREWARM_MAX_POOL_SIZE })
-        .catch((error: unknown) => {
+        .catch((error) => {
           console.warn('[bridge-router] webview pool warm-up failed:', error)
         })
     }, 500)
@@ -2457,7 +2457,7 @@ async function disposeAppSession(
   // Only the local fallback server needs closing; the dev-server base is owned
   // by the workspace session, not this app session.
   if (ap.resourceServer) {
-    await ap.resourceServer.close().catch((error: unknown) => {
+    await ap.resourceServer.close().catch((error) => {
       console.warn('[bridge-router] resource server close failed:', error)
     })
   }

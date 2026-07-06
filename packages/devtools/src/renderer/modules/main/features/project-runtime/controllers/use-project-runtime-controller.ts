@@ -178,10 +178,6 @@ export function useProjectRuntimeController(
     compileConfig: sessionHook.compileConfig,
     pages: sessionHook.pages,
     compileDropdownRef,
-    launchConfigs: sessionHook.launchConfigs,
-    activeLaunchConfigId: sessionHook.activeLaunchConfigId,
-    switchLaunchConfig: sessionHook.switchLaunchConfig,
-    updateLaunchConfigs: sessionHook.updateLaunchConfigs,
   })
 
   // ── Assemble slices ───────────────────────────────────────────────────────
