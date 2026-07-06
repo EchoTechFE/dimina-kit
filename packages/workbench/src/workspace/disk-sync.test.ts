@@ -22,7 +22,16 @@ function makeBase(): WorkspaceSource {
 
 function makeBridge(overrides: Partial<WalAuditBridge> = {}): WalAuditBridge {
   return {
-    readdir: vi.fn().mockResolvedValue([]),
+    // Real-contract shape: `/__fs/readdir` succeeds only for directories —
+    // on a file path it rejects (ENOTDIR -> 500). The watch-batch directory
+    // expansion (wal-audit.ts's expandWatchBatch) relies on that rejection to
+    // classify a non-ledger path as a plain file; a readdir that resolves []
+    // for EVERY path would make it swallow file events as "empty directory".
+    readdir: vi.fn().mockImplementation((_baseUrl: string, rel: string) =>
+      rel === '.' || rel === ''
+        ? Promise.resolve([])
+        : Promise.reject(new Error(`ENOTDIR: not a directory: ${rel}`)),
+    ),
     read: vi.fn().mockResolvedValue(new Uint8Array()),
     write: vi.fn().mockResolvedValue(undefined),
     delete: vi.fn().mockResolvedValue(undefined),

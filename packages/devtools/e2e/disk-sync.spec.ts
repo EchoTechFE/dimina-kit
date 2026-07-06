@@ -147,6 +147,62 @@ test.describe('fs-core disk↔editor sync (embedded workbench)', () => {
     }
   })
 
+  test('bulk external churn: 200 files created then deleted externally all reconcile into and out of the editor', async ({
+    electronApp,
+  }) => {
+    const BULK_N = 200
+    const bulkDir = path.join(DEMO_APP_DIR, 'pages', 'index', 'e2e-bulk')
+    // Counts (inside the page, one round trip) how many of the N bulk files
+    // are readable through the editor's own IFileService with the expected
+    // content — the same service every other assertion in this file uses.
+    const countExpr = (n: number) => `Promise.race([
+      (async () => {
+        const p = window.__WB_PROBE
+        const fileService = await p.getService(p.IFileService)
+        let present = 0
+        for (let i = 0; i < ${n}; i++) {
+          const uri = p.URI.parse('file:///workspace/pages/index/e2e-bulk/f' + i + '.txt')
+          try {
+            const c = await fileService.readFile(uri)
+            if (c.value.toString() === 'bulk ' + i) present++
+          } catch (e) { /* not (yet) present */ }
+        }
+        return present
+      })(),
+      new Promise((resolve) => setTimeout(() => resolve(-1), 15000)),
+    ])`
+
+    try {
+      fs.rmSync(bulkDir, { recursive: true, force: true })
+      const before = await runInWorkbench<{ walGen: number }>(electronApp, 'window.__WB_AUDIT.status()')
+
+      fs.mkdirSync(bulkDir, { recursive: true })
+      for (let i = 0; i < BULK_N; i++) fs.writeFileSync(path.join(bulkDir, `f${i}.txt`), `bulk ${i}`, 'utf8')
+
+      const landed = await pollUntil(
+        () => runInWorkbench<number>(electronApp, countExpr(BULK_N)),
+        (n) => n === BULK_N,
+        60_000,
+        1000,
+      )
+      expect(landed, `all ${BULK_N} externally created files must reach the editor`).toBe(BULK_N)
+
+      const after = await runInWorkbench<{ walGen: number }>(electronApp, 'window.__WB_AUDIT.status()')
+      expect(after.walGen, 'the ledger must have recorded the bulk batch').toBeGreaterThan(before.walGen)
+
+      fs.rmSync(bulkDir, { recursive: true })
+      const gone = await pollUntil(
+        () => runInWorkbench<number>(electronApp, countExpr(BULK_N)),
+        (n) => n === 0,
+        60_000,
+        1000,
+      )
+      expect(gone, 'all bulk files must leave the editor after the external recursive delete').toBe(0)
+    } finally {
+      fs.rmSync(bulkDir, { recursive: true, force: true })
+    }
+  })
+
   test('save echo consolidation: a human save does not double-advance the ledger via its own watcher echo', async ({
     electronApp,
   }) => {

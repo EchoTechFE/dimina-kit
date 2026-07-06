@@ -146,6 +146,17 @@ function defaultWatchEvents(
   return (onBatch, onDead) => {
     if (typeof EventSource === 'undefined') return () => {}
     const es = new EventSource(`${fsBaseUrl}__fs/watch`)
+    es.onopen = () => {
+      // (Re)connected. Anything the watcher reported while the stream was
+      // down is gone for good (SSE here has no replay) — reconcile the whole
+      // tree instead: the watch-batch expansion turns '.' into a names-only
+      // disk walk unioned with the ledger's paths, so both missed creations
+      // and missed deletions land. On the FIRST open this is a harmless
+      // no-op reconcile of the just-seeded tree. Observed need: a 200-file
+      // external burst dropping the stream right before an rm -rf left the
+      // editor holding the whole deleted tree.
+      onBatch(['.'])
+    }
     es.onmessage = (ev) => {
       let msg: { paths?: string[]; watcherDead?: boolean }
       try {
@@ -159,10 +170,14 @@ function defaultWatchEvents(
       }
       if (Array.isArray(msg.paths) && msg.paths.length > 0) onBatch(msg.paths)
     }
-    // A non-2xx / non-event-stream response (e.g. 409 ENOACTIVE) fails the
-    // connection permanently per the EventSource spec (no auto-retry); a
-    // dropped live stream fires the same event, so both funnel into onDead.
-    es.onerror = () => onDead()
+    es.onerror = () => {
+      // A transient drop leaves readyState at CONNECTING and EventSource
+      // auto-retries — do NOT kill the channel for that; the onopen
+      // reconcile above heals whatever the gap swallowed. Only a
+      // permanently CLOSED stream (non-2xx / non-event-stream response,
+      // e.g. 409 ENOACTIVE, per the EventSource spec) is dead.
+      if (es.readyState === EventSource.CLOSED) onDead()
+    }
     return () => es.close()
   }
 }
@@ -198,12 +213,14 @@ const defaultBridge: WalAuditBridge = {
   delete: bridgeDelete,
 }
 
-/** Walk the live project tree over the `/__fs` bridge and hand every file to
- * `onFile` — the concrete implementation behind devtools' `TruthPort.walk`. */
+/** Walk the live project tree (or the subtree at `startRel`) over the `/__fs`
+ * bridge and hand every file to `onFile` — the concrete implementation behind
+ * devtools' `TruthPort.walk` and the watch-batch directory expansion. */
 async function walkDisk(
   bridge: WalAuditBridge,
   fsBaseUrl: string,
   onFile: (rel: string, content: Uint8Array) => Promise<void>,
+  startRel = '',
 ): Promise<void> {
   async function walk(rel: string): Promise<void> {
     const entries = await bridge.readdir(fsBaseUrl, rel || '.')
@@ -213,7 +230,7 @@ async function walkDisk(
       else await onFile(childRel, await bridge.read(fsBaseUrl, childRel))
     }
   }
-  await walk('')
+  await walk(startRel)
 }
 
 /** Union of every path a turn's diff touched — `from`/`to` both count (a move affects both sides). */
@@ -236,9 +253,107 @@ export function walAuditSource(base: WorkspaceSource, opts: WalAuditOptions): Wo
   let client: WalAuditClientLike | undefined
   let engine: SyncEngine | undefined
 
+  /** FSEvents-style recursive watchers COALESCE a write burst into ancestor-
+   * DIRECTORY events (and an overflow surfaces as a null filename, which the
+   * SSE server reports as '.') — so a watched path is not necessarily a file.
+   * Observed: a 200-file external burst delivered only 132 per-file events;
+   * the rest arrived as their parent directory. Expand every directory-ish
+   * path into "everything that may have changed under it": the union of the
+   * files actually on disk under it (creations/modifications, via walk) and
+   * the ledger paths recorded under it (deletions — a coalesced `rm -rf`
+   * never names the files it removed). The engine content-compares every
+   * reported path, so over-reporting is a no-op; UNDER-reporting is what
+   * loses data. Paths the ledger already knows are files skip the readdir
+   * probe entirely, so the common per-file event costs nothing extra. */
+  /** List file paths (names only — NO content reads) under `startRel` via
+   * bridge readdir recursion. `walkDisk` is unusable for listing: its
+   * `onFile` contract fetches every file's bytes, which under a 200-file
+   * burst turned each expansion pass into 200 content downloads. */
+  async function listDiskNames(startRel: string, out: Set<string>): Promise<void> {
+    async function walk(rel: string): Promise<void> {
+      const entries = await bridge.readdir(opts.fsBaseUrl, rel || '.')
+      for (const [name, type] of entries) {
+        const childRel = rel ? `${rel}/${name}` : name
+        if (type === 2) await walk(childRel)
+        else out.add(childRel)
+      }
+    }
+    await walk(startRel)
+  }
+
+  async function expandWatchBatch(paths: string[]): Promise<string[]> {
+    let ledgerPaths: string[] = []
+    if (client) {
+      try {
+        ledgerPaths = (await client.ls()).paths
+      } catch { /* ledger unavailable — disk-side expansion below still applies */ }
+    }
+    const ledgerSet = new Set(ledgerPaths)
+    const out = new Set<string>()
+    for (const p of paths) {
+      if (p !== '.' && ledgerSet.has(p)) {
+        out.add(p) // a file the ledger knows — no probe needed
+        continue
+      }
+      const rel = p === '.' ? '' : p
+      let listable = true
+      try {
+        await listDiskNames(rel, out)
+      } catch {
+        // Not a directory (plain new file), or a deleted path — either way
+        // report it as-is and let the engine's read decide. A tree mutating
+        // mid-walk also lands here: the paths collected so far still count.
+        listable = false
+      }
+      if (!listable && p !== '.') out.add(p)
+      // Ledger paths under the prefix cover coalesced deletions (a directory
+      // event for an `rm -rf`'d tree); for a plain file path the prefix
+      // matches nothing, and '.' (overflow rescan) unions the whole ledger.
+      const prefix = rel ? `${rel}/` : ''
+      for (const q of ledgerPaths) {
+        if (prefix === '' || q.startsWith(prefix)) out.add(q)
+      }
+    }
+    return [...out]
+  }
+
+  /** Serialize + coalesce watch batches through the expansion: during a burst
+   * the SSE stream delivers a batch every debounce window, and each one
+   * expands to (roughly) the same directory's full listing — expanding them
+   * one-by-one floods the engine's ledger FIFO with thousands of duplicate
+   * no-op turns and queues a subsequent deletion burst tens of seconds out.
+   * Raw paths accumulate in `pendingRaw` while one expansion is in flight;
+   * each loop iteration drains EVERYTHING accumulated so far into a single
+   * expansion pass, so a burst costs one pass per pass-duration, not one per
+   * SSE batch. */
+  let pendingRaw = new Set<string>()
+  let expansionRunning = false
+  function enqueueWatchPaths(paths: string[], onBatch: (paths: string[]) => void): void {
+    for (const p of paths) pendingRaw.add(p)
+    if (expansionRunning) return
+    expansionRunning = true
+    void (async () => {
+      try {
+        while (pendingRaw.size) {
+          const raw = [...pendingRaw]
+          pendingRaw = new Set<string>()
+          try {
+            const expanded = await expandWatchBatch(raw)
+            if (expanded.length) onBatch(expanded)
+          } catch (e) {
+            console.warn('[workbench] watch batch expansion failed', e)
+          }
+        }
+      } finally {
+        expansionRunning = false
+      }
+    })()
+  }
+
   /** Devtools' `TruthPort`: reads/writes/deletes/walks over the `/__fs`
    * bridge, change notifications over `watchEvents` (default: the `/__fs/watch`
-   * SSE stream) — a 'push' port. */
+   * SSE stream) — a 'push' port whose batches are directory-expanded first
+   * (see {@link expandWatchBatch}). */
   function makeTruthPort(): TruthPort {
     return {
       capabilities: { watch: 'push' },
@@ -246,7 +361,11 @@ export function walAuditSource(base: WorkspaceSource, opts: WalAuditOptions): Wo
       write: (rel, bytes) => bridge.write(opts.fsBaseUrl, rel, bytes),
       delete: (rel) => bridge.delete(opts.fsBaseUrl, rel),
       walk: (onFile) => walkDisk(bridge, opts.fsBaseUrl, onFile),
-      changes: (onBatch, onDead) => (opts.watchEvents ?? defaultWatchEvents(opts.fsBaseUrl))(onBatch, onDead),
+      changes: (onBatch, onDead) =>
+        (opts.watchEvents ?? defaultWatchEvents(opts.fsBaseUrl))(
+          (paths) => enqueueWatchPaths(paths, onBatch),
+          onDead,
+        ),
     }
   }
 

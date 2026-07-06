@@ -142,7 +142,104 @@ test.describe('fs-core WAL audit ledger (embedded workbench)', () => {
         'rollback must remove the file the turn created (it did not exist before turnBegin)',
       ).toBe(false)
     } finally {
+      // rollback does NOT close the turn — leave it open and the next test's
+      // beginTurn fails with "a turn is already active".
+      await runInWorkbench(electronApp, `window.__WB_AUDIT.endTurn(${JSON.stringify(turnId)}).catch(() => {})`)
       if (fs.existsSync(absPath)) fs.unlinkSync(absPath)
+    }
+  })
+
+  test('agent turn under external write storm: rollback is protectively refused, agent and external writes both intact', async ({
+    electronApp,
+  }) => {
+    const STORM_N = 30
+    const agentRel = 'pages/index/e2e-storm-agent.txt'
+    const agentAbs = path.join(DEMO_APP_DIR, agentRel)
+    const stormDir = path.join(DEMO_APP_DIR, 'pages', 'index', 'e2e-storm')
+    const turnId = `t-e2e-storm-${Date.now()}`
+    const marker = `E2E_STORM_AGENT_${Date.now()}`
+
+    try {
+      if (fs.existsSync(agentAbs)) fs.unlinkSync(agentAbs)
+      fs.rmSync(stormDir, { recursive: true, force: true })
+
+      // Same ledger-quiescence precondition as the plain agent-turn test above.
+      await pollUntil(
+        async () => {
+          const a = await runInWorkbench<{ walGen: number }>(electronApp, 'window.__WB_AUDIT.status()')
+          await new Promise((r) => setTimeout(r, 1200))
+          const b = await runInWorkbench<{ walGen: number }>(electronApp, 'window.__WB_AUDIT.status()')
+          return a.walGen === b.walGen
+        },
+        (quiet) => quiet === true,
+        30_000,
+        100,
+      )
+
+      await runInWorkbench(electronApp, `window.__WB_AUDIT.beginTurn(${JSON.stringify(turnId)})`)
+      await runInWorkbench(
+        electronApp,
+        `window.__WB_AUDIT.agentWrite(${JSON.stringify(agentRel)}, ${JSON.stringify(marker)}, ${JSON.stringify(turnId)})`,
+      )
+      await pollUntil(
+        () => Promise.resolve(fs.existsSync(agentAbs) ? fs.readFileSync(agentAbs, 'utf8') : null),
+        (t) => t === marker,
+        20_000,
+        300,
+      )
+
+      // External storm lands INSIDE the open turn window, as human ledger writes.
+      fs.mkdirSync(stormDir, { recursive: true })
+      for (let i = 0; i < STORM_N; i++) fs.writeFileSync(path.join(stormDir, `s${i}.txt`), `storm ${i}`, 'utf8')
+      const stormLandedGen = await pollUntil(
+        () => runInWorkbench<{ walGen: number }>(electronApp, 'window.__WB_AUDIT.status()'),
+        (s) => s.walGen > 0,
+        20_000,
+        500,
+      )
+      // Wait for the storm to fully wash through (ledger quiet again) so the
+      // rollback below races nothing.
+      await pollUntil(
+        async () => {
+          const a = await runInWorkbench<{ walGen: number }>(electronApp, 'window.__WB_AUDIT.status()')
+          await new Promise((r) => setTimeout(r, 1200))
+          const b = await runInWorkbench<{ walGen: number }>(electronApp, 'window.__WB_AUDIT.status()')
+          return a.walGen === b.walGen
+        },
+        (quiet) => quiet === true,
+        30_000,
+        100,
+      )
+      expect(stormLandedGen.walGen).toBeGreaterThan(0)
+
+      // fs-core's restore-conflict check refuses to roll back over human
+      // ledger writes that landed after the turn's checkpoint — with 30
+      // external files recorded inside the window, the rollback MUST be
+      // refused rather than partially unwinding a tree the human (external
+      // truth) has since moved.
+      const rollback = await runInWorkbench<{ ok: boolean; message?: string }>(
+        electronApp,
+        `(async () => {
+          try {
+            await window.__WB_AUDIT.rollback(${JSON.stringify(turnId)})
+            return { ok: true }
+          } catch (e) {
+            return { ok: false, message: String((e && (e.message || e)) || 'unknown') }
+          }
+        })()`,
+      )
+      expect(rollback.ok, `rollback over ${STORM_N} interleaved human writes must be refused (got: ${JSON.stringify(rollback)})`).toBe(false)
+
+      // Protective refusal means NOTHING was unwound: the agent's file and
+      // every storm file are still exactly where they were.
+      expect(fs.readFileSync(agentAbs, 'utf8'), 'agent write must survive the refused rollback').toBe(marker)
+      for (let i = 0; i < STORM_N; i++) {
+        expect(fs.readFileSync(path.join(stormDir, `s${i}.txt`), 'utf8')).toBe(`storm ${i}`)
+      }
+    } finally {
+      await runInWorkbench(electronApp, `window.__WB_AUDIT.endTurn(${JSON.stringify(turnId)}).catch(() => {})`)
+      fs.rmSync(stormDir, { recursive: true, force: true })
+      if (fs.existsSync(agentAbs)) fs.unlinkSync(agentAbs)
     }
   })
 })

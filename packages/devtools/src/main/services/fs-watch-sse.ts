@@ -85,9 +85,11 @@ export function handleFsWatchRequest(
   }
 
   function onChange(_event: string, filename: string | Buffer | null): void {
-    if (!filename) return
-    const rel = filename.toString().split(path.sep).join('/')
-    if (!shouldReportWatchPath(rel)) return
+    // FSEvents overflow delivers a null filename ("something changed,
+    // rescan"). Dropping it loses data; report '.' and let the client's
+    // watch-batch expansion (wal-audit.ts) reconcile the whole tree.
+    const rel = filename ? filename.toString().split(path.sep).join('/') : '.'
+    if (rel !== '.' && !shouldReportWatchPath(rel)) return
     pending.add(rel)
     if (!debounceTimer) {
       debounceTimer = setTimeout(() => {
