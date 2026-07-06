@@ -171,6 +171,55 @@ describe('filterDmccLogLine — KEEP rules (real dmcc signal from the spike arch
 	})
 })
 
+describe('filterDmccLogLine — DROP rules (packaged-app Node DeprecationWarning noise, electron/electron#47390)', () => {
+	// Electron's asar fs shim (`asarStatsToFsStats`) uses the deprecated
+	// `fs.Stats` constructor, so Node prints a process-level
+	// DeprecationWarning pair on the compile worker's stderr the first time a
+	// packaged app stats a file inside app.asar. The developer's own code
+	// never runs in the compile worker, so these lines are never actionable
+	// and must be dropped.
+	it('drops the Node process-level DeprecationWarning line, with or without a DEP code', () => {
+		const filter = getFilter()
+		expect(filter('(node:4984) [DEP0180] DeprecationWarning: fs.Stats constructor is deprecated.')).toBeNull()
+		expect(filter('(node:90165) DeprecationWarning: Buffer() is deprecated due to security and usability issues.')).toBeNull()
+	})
+
+	it('drops the trace-deprecation hint line that follows, regardless of the binary name', () => {
+		const filter = getFilter()
+		expect(filter('(Use `千岛开发者工具 Helper --trace-deprecation ...` to show where the warning was created)')).toBeNull()
+		expect(filter('(Use `node --trace-deprecation ...` to show where the warning was created)')).toBeNull()
+	})
+
+	it('drops ANSI-colored variants of both lines', () => {
+		const filter = getFilter()
+		expect(filter('[33m(node:4984) [DEP0180] DeprecationWarning: fs.Stats constructor is deprecated.[39m')).toBeNull()
+		expect(filter('[33m(Use `node --trace-deprecation ...` to show where the warning was created)[39m')).toBeNull()
+	})
+})
+
+describe('filterDmccLogLine — KEEP rules (guards against over-filtering Node warnings)', () => {
+	it('keeps other Node process-level warnings that are not DeprecationWarnings', () => {
+		const filter = getFilter()
+		// These can carry real signal (leak / experimental-API notices) and are
+		// not the asar-shim noise this filter targets.
+		const lines = [
+			'(node:123) MaxListenersExceededWarning: Possible EventEmitter memory leak detected.',
+			'(node:123) ExperimentalWarning: VM Modules is an experimental feature.',
+		]
+		for (const line of lines) {
+			expect(filter(line), `non-deprecation Node warning must be kept: ${JSON.stringify(line)}`).toBe(line)
+		}
+	})
+
+	it('keeps a compiler diagnostic that merely mentions DeprecationWarning mid-sentence', () => {
+		const filter = getFilter()
+		// Does not start with the `(node:<pid>)` prefix, so it is not the
+		// Node process-level warning form — default-keep applies.
+		const line = '[logic] esbuild 转换失败 app.js: DeprecationWarning something'
+		expect(filter(line)).toBe(line)
+	})
+})
+
 describe('filterDmccLogLine — ANSI stripping happens BEFORE rule matching', () => {
 	it('strips ANSI from a kept line and returns the cleaned text', () => {
 		const filter = getFilter()

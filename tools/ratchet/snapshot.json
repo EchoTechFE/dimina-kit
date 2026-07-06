@@ -124,7 +124,7 @@
       "value": 72.87,
       "unit": "% lines",
       "breakdown": {
-        "devkit": 93.46,
+        "devkit": 93.24,
         "devtools": 68.29,
         "electron-deck": 95.23,
         "electron-deck/dock-react": 79.05,
@@ -135,10 +135,10 @@
     },
     "test-report": {
       "direction": "higher-is-better",
-      "value": 3674,
+      "value": 3679,
       "unit": "passed tests",
       "breakdown": {
-        "devkit": 124,
+        "devkit": 129,
         "devtools": 2288,
         "electron-deck": 1024,
         "electron-deck/dock-react": 96,
