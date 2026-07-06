@@ -232,3 +232,57 @@ describe('walAuditSource — outbound echo consolidation on save', () => {
     expect(client.write).toHaveBeenCalledTimes(0)
   })
 })
+
+describe('walAuditSource — disk sync: file replaced by a same-named directory', () => {
+  it('retires the stale ledger FILE record (bridge EISDIR→404) and ingests the new subtree', async () => {
+    const watch = makeWatch()
+    const applyToEditor = vi.fn().mockResolvedValue(undefined)
+    const dirFileBytes = new TextEncoder().encode('dir file')
+    const bridge = makeBridge({
+      // Disk state AFTER the replacement: `foo` is a directory holding bar.js.
+      readdir: vi.fn().mockImplementation((_baseUrl: string, rel: string) => {
+        if (rel === '.' || rel === '') return Promise.resolve([['foo', 2]])
+        if (rel === 'foo') return Promise.resolve([['bar.js', 1]])
+        return Promise.reject(new Error(`ENOTDIR: not a directory: ${rel}`))
+      }),
+      read: vi.fn().mockImplementation((_baseUrl: string, rel: string) => {
+        // Reading `foo` itself: it is a directory now — the real bridge maps
+        // EISDIR to HTTP 404 (workbench-coi-server.ts's fsErrorStatus).
+        if (rel === 'foo') return Promise.reject(Object.assign(new Error('EISDIR'), { status: 404 }))
+        if (rel === 'foo/bar.js') return Promise.resolve(dirFileBytes)
+        return Promise.reject(Object.assign(new Error('not found'), { status: 404 }))
+      }),
+    })
+    const client = makeClient({
+      ls: vi.fn().mockResolvedValue({ paths: ['foo'] }), // ledger still thinks `foo` is a FILE
+      read: vi.fn().mockImplementation((rel: string) => {
+        if (rel === 'foo') return Promise.resolve({ content: 'old file content' })
+        return Promise.reject(Object.assign(new Error('not found'), { code: 'not-found' }))
+      }),
+    })
+    const source = walAuditSource(makeBase(), {
+      fsBaseUrl: 'https://fs.example/',
+      createClient: vi.fn().mockResolvedValue(client),
+      bridge,
+      watchEvents: watch.watchEvents,
+      applyToEditor,
+    })
+
+    await source.populate(fakeFileService)
+    ;(client.write as ReturnType<typeof vi.fn>).mockClear()
+    ;(client.rm as ReturnType<typeof vi.fn>).mockClear()
+    applyToEditor.mockClear()
+
+    // The watcher names only the parent path — expansion must probe it even
+    // though the ledger knows `foo` as a file (the skip-known-files shortcut
+    // was exactly the hole that dropped the new subtree).
+    watch.emitBatch(['foo'])
+
+    await vi.waitFor(() => {
+      expect(client.rm).toHaveBeenCalledWith('foo', { actor: 'human' })
+      expect(client.write).toHaveBeenCalledWith('foo/bar.js', 'dir file', { actor: 'human' })
+    })
+    expect(applyToEditor).toHaveBeenCalledWith('foo', null)
+    expect(applyToEditor).toHaveBeenCalledWith('foo/bar.js', dirFileBytes)
+  })
+})

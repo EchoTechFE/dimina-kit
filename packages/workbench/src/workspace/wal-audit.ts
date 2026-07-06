@@ -288,24 +288,30 @@ export function walAuditSource(base: WorkspaceSource, opts: WalAuditOptions): Wo
         ledgerPaths = (await client.ls()).paths
       } catch { /* ledger unavailable — disk-side expansion below still applies */ }
     }
-    const ledgerSet = new Set(ledgerPaths)
     const out = new Set<string>()
     for (const p of paths) {
-      if (p !== '.' && ledgerSet.has(p)) {
-        out.add(p) // a file the ledger knows — no probe needed
-        continue
-      }
+      // Every path gets the readdir probe — including ones the ledger knows
+      // as files: a file can have been REPLACED by a same-named directory,
+      // and skipping the probe for "known files" would silently drop that
+      // directory's whole subtree (the watcher only names the parent). A
+      // probe on a plain file is one failing local readdir — cheap, and the
+      // burst-coalescing below means it is paid per merged pass, not per
+      // event.
       const rel = p === '.' ? '' : p
-      let listable = true
       try {
         await listDiskNames(rel, out)
       } catch {
         // Not a directory (plain new file), or a deleted path — either way
         // report it as-is and let the engine's read decide. A tree mutating
         // mid-walk also lands here: the paths collected so far still count.
-        listable = false
       }
-      if (!listable && p !== '.') out.add(p)
+      // Report the path ITSELF in both cases: unlistable → the engine's read
+      // decides (new file / deletion); listable (a directory) → the ledger
+      // may still hold a same-named FILE record from before the replacement,
+      // and the engine's read now gets the bridge's EISDIR→404 and retires
+      // it. For an ordinary directory the ledger has no record — read 404 +
+      // absent record is a no-op.
+      if (p !== '.') out.add(p)
       // Ledger paths under the prefix cover coalesced deletions (a directory
       // event for an `rm -rf`'d tree); for a plain file path the prefix
       // matches nothing, and '.' (overflow rescan) unions the whole ledger.

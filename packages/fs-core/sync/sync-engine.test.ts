@@ -555,7 +555,7 @@ describe('createSyncEngine — extreme contention: bidirectional same-path churn
     ])
     // The echo batch produced no editor apply; the external edit produced one.
     expect(applyToEditor).toHaveBeenCalledTimes(1)
-    expect(applyToEditor.mock.calls[0][0]).toBe('f.js')
+    expect(applyToEditor).toHaveBeenCalledWith('f.js', expect.anything())
   })
 
   it('serializes an inbound batch against an in-flight onHumanSave ledger write on the same path (FIFO, no interleaved corruption)', async () => {
@@ -674,10 +674,22 @@ describe('createSyncEngine — bulk inbound batches', () => {
     expect(new Set(w.ledgerWrites.map(([rel]) => rel)).size).toBe(300)
 
     // Full echo re-delivery (the watcher reporting our own already-recorded
-    // tree, e.g. after a debounce hiccup): zero additional commits.
+    // tree, e.g. after a debounce hiccup): zero additional commits. The
+    // negative assertion waits for REAL quiescence (two consecutive samples
+    // with no new ledger writes) instead of a fixed sleep, so a slower
+    // implementation cannot slip a late duplicate past the check.
     w.ledgerWrites.length = 0
     w.watch.emitBatch(paths)
-    await new Promise((r) => setTimeout(r, 50))
-    await vi.waitFor(() => expect(w.ledgerWrites).toHaveLength(0))
+    let lastCount = -1
+    await vi.waitFor(
+      () => {
+        if (w.ledgerWrites.length !== lastCount) {
+          lastCount = w.ledgerWrites.length
+          throw new Error('ledger still settling')
+        }
+      },
+      { timeout: 10_000, interval: 100 },
+    )
+    expect(w.ledgerWrites).toHaveLength(0)
   })
 })

@@ -237,6 +237,18 @@ describe('/__fs/readdir dependency-dir filtering', () => {
     const top = (await (await fetch(`${server.baseUrl}__fs/readdir?p=.`)).json()) as Array<[string, number]>
     expect(top).toContainEqual(['dist', 1])
   })
+
+  it('answers 404 to /__fs/read of a DIRECTORY path (EISDIR — as a file it does not exist)', async () => {
+    // The sync engine's not-found discipline may only retire a ledger FILE
+    // record on an explicit not-found; when an external change replaces a
+    // file with a same-named directory, this mapping is what lets the stale
+    // record retire instead of being skipped forever as a transient failure.
+    server = await startWith({})
+    await fs.mkdir(path.join(projectRoot, 'was-a-file'), { recursive: true })
+    await fs.writeFile(path.join(projectRoot, 'was-a-file', 'inner.js'), 'x')
+    const res = await fetch(`${server.baseUrl}__fs/read?p=was-a-file`)
+    expect(res.status).toBe(404)
+  })
 })
 
 describe('no active project', () => {

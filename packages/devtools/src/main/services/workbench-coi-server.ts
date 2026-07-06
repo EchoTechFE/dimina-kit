@@ -187,6 +187,11 @@ function fsErrorStatus(e: unknown): number {
   if (code === 'ENOACTIVE') return 409
   if (code === 'EACCES' || code === 'EINVAL') return 403
   if (code === 'ENOENT') return 404
+  // Reading a path that is (now) a DIRECTORY: as a *file* it does not exist.
+  // 404 lets the sync engine's not-found discipline retire the stale ledger
+  // FILE record when an external change replaces a file with a same-named
+  // directory — a 500 would make it skip forever ("transient failure").
+  if (code === 'EISDIR') return 404
   return 500
 }
 

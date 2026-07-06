@@ -42,3 +42,13 @@ describe('shouldReportWatchPath', () => {
     expect(shouldReportWatchPath('/abs/path.js')).toBe(false)
   })
 })
+
+describe('shouldReportWatchPath — documented edge', () => {
+  it('pins the accepted narrowing: a plain FILE named exactly like a skip dir is unreported', () => {
+    // readdir would still LIST such a file (only directories are filtered
+    // there) — the watcher cannot cheaply know file-vs-dir for a deleted
+    // path, so it drops the name outright. Documented in fs-watch-sse.ts.
+    expect(shouldReportWatchPath('dist')).toBe(false)
+    expect(shouldReportWatchPath('build')).toBe(false)
+  })
+})

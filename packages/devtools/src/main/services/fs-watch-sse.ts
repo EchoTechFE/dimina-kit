@@ -108,10 +108,14 @@ export function handleFsWatchRequest(
 
   // The active project root has no dedicated close/switch event to subscribe
   // to; poll the same getter `handleFsRequest` uses, on the debounce cadence,
-  // so a closed or switched project tears this stream down promptly.
+  // so a closed or switched project tears this stream down promptly. Push
+  // `watcherDead` BEFORE ending so the client gets a deterministic
+  // end-of-channel signal instead of depending on how its EventSource
+  // classifies the reconnect-then-409 that would follow a bare close.
   liveCheck = setInterval(() => {
     if (closed) return
     if (getProjectRoot() !== watchedRoot) {
+      res.write(`data: ${JSON.stringify({ watcherDead: true })}\n\n`)
       cleanup()
       res.end()
     }
