@@ -7,7 +7,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURES = path.resolve(__dirname, 'fixtures', 'host-toolbar')
 
 /**
- * Wave 3 R1 — host toolbar framework runtime is SESSION-RESIDENT (real app).
+ * Host toolbar framework runtime is SESSION-RESIDENT (real app).
  *
  * THE INCIDENT THIS SPEC EXISTS FOR: the height advertiser used to ride the
  * toolbar WCV's `webPreferences.preload`; a host calling
@@ -175,9 +175,9 @@ test.describe('Host toolbar: session-resident height advertiser (R1)', () => {
   })
 
   test('no leak: the main window main world carries no toolbar-runtime / host-preload globals', async () => {
-    // E2E expression of codex condition 2: the session preload executes in
-    // EVERY defaultSession renderer (including this main window — spike item
-    // 4), but the marker+isMainFrame guard must make it return before
+    // The session preload executes in EVERY defaultSession renderer
+    // (including this main window), but the marker+isMainFrame guard must
+    // make it return before
     // touching the page: no advertiser globals, and — critically — the
     // HOST's preload must never be session-registered (an implementation
     // that "fixes" setPreloadPath by registering the host preload on the
@@ -195,5 +195,43 @@ test.describe('Host toolbar: session-resident height advertiser (R1)', () => {
       ),
     )
     expect(leaks).toEqual([])
+  })
+
+  test('closing the project detaches the toolbar WCV — no residue over the project list', async () => {
+    // Closing a project unmounts ProjectRuntime; its placement publisher's
+    // dispose() flushes a final EMPTY snapshot so main's level-triggered
+    // reconciler detaches every renderer-placed view. Without that flush the
+    // reconciler stays frozen on the last non-empty snapshot and the toolbar
+    // strip (88px from the test above) remains attached+visible on top of the
+    // project-list page, covering its search box until the next project open.
+
+    /** Is the toolbar WCV currently among any window's contentView children? */
+    const toolbarAttached = () => electronApp.evaluate(({ BrowserWindow }) => {
+      const g = globalThis as unknown as {
+        __e2eHostToolbarInstance: {
+          context: { views: { hostToolbar: { webContents: { id: number; isDestroyed(): boolean } | null } } }
+        }
+      }
+      const wc = g.__e2eHostToolbarInstance.context.views.hostToolbar.webContents
+      if (!wc || wc.isDestroyed()) return false
+      return BrowserWindow.getAllWindows().some((win) => {
+        const children = win.contentView.children as Array<{ webContents?: { id: number } }>
+        return children.some((v) => v.webContents?.id === wc.id)
+      })
+    })
+
+    // Meaningfulness guard: the strip really is mounted while the project is
+    // open — otherwise the post-close assertion would pass vacuously.
+    expect(await toolbarAttached()).toBe(true)
+
+    await closeProject(mainWindow)
+
+    const attachedAfterClose = await pollUntil(
+      toolbarAttached,
+      (attached) => attached === false,
+      15_000,
+      300,
+    )
+    expect(attachedAfterClose).toBe(false)
   })
 })

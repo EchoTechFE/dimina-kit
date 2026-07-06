@@ -419,7 +419,13 @@ export function createProjectWatcher(
 			// (rel starts with '..') must never be ignored.
 			if (!rel || rel.startsWith('..'))
 				return false
-			return rel.split('/').some(seg => seg.startsWith('.'))
+			// `node_modules` (any depth) is excluded like vite/webpack exclude
+			// it: the compiler never reads it directly (its real npm input is
+			// the built `miniprogram_npm/`, which stays watched), while watching
+			// it makes chokidar hold thousands of per-directory fs.watch handles
+			// — a multi-second `watcher.close()` on session close, a slow
+			// initial scan, and spurious rebuilds on dependency churn.
+			return rel.split('/').some(seg => seg.startsWith('.') || seg === 'node_modules')
 		},
 		persistent: true,
 		ignoreInitial: true,

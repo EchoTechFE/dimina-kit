@@ -41,6 +41,10 @@ const api = vi.hoisted(() => {
     getBranding: vi.fn(() => Promise.resolve({ appName: 'Test App' })),
     publishSimulatorDevtoolsBounds: vi.fn(() => Promise.resolve()),
     publishHostToolbarBounds: vi.fn(() => Promise.resolve()),
+    // The publisher's unmount dispose flushes a final empty snapshot through
+    // this — irrelevant to the replay assertions, but the mocked module must
+    // export it or every unmount throws.
+    publishPlacementSnapshot: vi.fn(() => Promise.resolve()),
     onHostToolbarHeightChanged: vi.fn((handler: (height: number) => void) => {
       heightListeners.push(handler)
       return () => {
@@ -48,9 +52,7 @@ const api = vi.hoisted(() => {
         if (i >= 0) heightListeners.splice(i, 1)
       }
     }),
-    // FUTURE view-api export (the replay pull). The mock provides it so the
-    // implemented component finds it here; today's component ignoring it is
-    // exactly the red state.
+    // The replay pull: the component pulls the retained height on mount.
     getHostToolbarHeight: vi.fn((): Promise<number | undefined> => Promise.resolve(0)),
   }
 })
@@ -59,6 +61,7 @@ vi.mock('@/shared/api', () => ({
   getBranding: api.getBranding,
   publishSimulatorDevtoolsBounds: api.publishSimulatorDevtoolsBounds,
   publishHostToolbarBounds: api.publishHostToolbarBounds,
+  publishPlacementSnapshot: api.publishPlacementSnapshot,
   onHostToolbarHeightChanged: api.onHostToolbarHeightChanged,
   getHostToolbarHeight: api.getHostToolbarHeight,
 }))
@@ -169,7 +172,7 @@ beforeEach(() => {
 })
 
 describe('ProjectRuntime: host-toolbar height replay on mount', () => {
-  it('regression pin (GREEN today): a live push after mount drives the placeholder', async () => {
+  it('a live push after mount drives the placeholder', async () => {
     // Today's working path — the dynamic-height loop while the component is
     // mounted. Pins that the replay fix does not break it, and self-validates
     // this harness (the placeholder renders and reacts inside these mocks, so

@@ -29,6 +29,10 @@ export interface PlacementPublisher<Extra = unknown> {
   set(view: DesiredView<Extra>): void
   // Drop a view from the desired table and schedule a coalesced publish.
   remove(viewId: string): void
+  // End this source of truth: cancel any pending frame and synchronously
+  // publish one final EMPTY snapshot (the death of the publisher is itself a
+  // level — nothing is desired), so a level-triggered consumer releases every
+  // view this publisher placed. Idempotent; set()/remove() are no-ops after.
   dispose(): void
 }
 
@@ -86,6 +90,22 @@ export function createPlacementPublisher<Extra = unknown>(
         cancelFrame(frameId)
         frameId = null
       }
+      // The publisher is the renderer-side source of truth for desired
+      // placement, and the main-side reconciler is level-triggered: it keeps
+      // applying whatever level it last received. The source of truth dying is
+      // itself a level — nothing is desired anymore — so flush one final empty
+      // snapshot synchronously. Without it the last non-empty snapshot stays
+      // frozen in main and every view it placed survives its owner (e.g. a
+      // host toolbar strip overlaying the page that replaces the unmounted
+      // one). The epoch stays monotonic so the reconciler can't reject the
+      // flush as stale; a late flush from an old renderer generation is
+      // rejected by the reconciler's generation guard, so racing a successor
+      // publisher is safe.
+      deps.publish({
+        generation: readGeneration(),
+        epoch: epoch++,
+        views: [],
+      })
     },
   }
 }

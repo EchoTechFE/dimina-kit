@@ -3,6 +3,7 @@
 // Harness separated from workspace-session-teardown.test.ts to avoid coupling
 // the leak-proofing suite to deferred-adapter timing assumptions.
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { makeViewsSpy, makeCtxWith, makeClosingHarness } from './workspace-lifecycle-race.testutil.js'
 
 // ── electron stub ────────────────────────────────────────────────────────
 vi.mock('electron', () => {
@@ -47,71 +48,12 @@ vi.mock('../projects/project-repository.js', () => ({
   updateProjectSettings: vi.fn(),
 }))
 
-type WorkbenchContext = import('../workbench-context.js').WorkbenchContext
 let createWorkspaceService: typeof import('./workspace-service.js').createWorkspaceService
-
-function stubProjectsProvider(): import('../projects/types.js').ProjectsProvider {
-  return {
-    listProjects: vi.fn(() => []),
-    addProject: vi.fn((p: string) => ({ name: 'fake', path: p, lastOpened: null })),
-    removeProject: vi.fn(),
-  }
-}
 
 beforeEach(async () => {
   vi.resetModules()
   ;({ createWorkspaceService } = await import('./workspace-service.js'))
 })
-
-function makeViewsSpy() {
-  const events: string[] = []
-  const views = {
-    disposeAll: vi.fn(() => { events.push('views.disposeAll') }),
-    // Project-scoped teardown: closeProject must call THIS, never disposeAll
-    // (which would also kill the host toolbar — see view-manager-dispose-scopes.test.ts).
-    disposeProjectViews: vi.fn(() => { events.push('views.disposeProjectViews') }),
-    detachWorkbench: vi.fn(() => { events.push('views.detachWorkbench') }),
-    detachSimulator: vi.fn(() => { events.push('views.detachSimulator') }),
-  }
-  return { views, events }
-}
-
-function makeCtxWith(
-  views: ReturnType<typeof makeViewsSpy>['views'],
-  adapter: { openProject: ReturnType<typeof vi.fn> },
-) {
-  return {
-    adapter,
-    notify: { projectStatus: vi.fn(), compileLog: vi.fn() },
-    views,
-    projectsProvider: stubProjectsProvider(),
-  } as unknown as WorkbenchContext
-}
-
-// Minimal harness for the isClosing tests: sessions whose close() calls the given behavior.
-function makeClosingHarness(closeBehavior: () => Promise<void>) {
-  const adapter = {
-    openProject: vi.fn(async ({ projectPath }: { projectPath: string }) => ({
-      port: 7788,
-      appInfo: { appId: `app:${projectPath}` },
-      close: vi.fn(closeBehavior),
-    })),
-  }
-  const views = {
-    disposeAll: vi.fn(),
-    disposeProjectViews: vi.fn(),
-    detachWorkbench: vi.fn(),
-    detachSimulator: vi.fn(),
-  }
-  return {
-    ctx: {
-      adapter,
-      notify: { projectStatus: vi.fn(), compileLog: vi.fn() },
-      views,
-      projectsProvider: stubProjectsProvider(),
-    } as unknown as WorkbenchContext,
-  }
-}
 describe('workspace-service: open/close serialization (lifecycle ops must not interleave)', () => {
   /**
    * The zombie state: openProject(B) sets currentSession=B but closeProject()

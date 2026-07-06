@@ -35,7 +35,7 @@ async function settle(ms = READY_DELAY_MS): Promise<void> {
 
 describe('createProjectWatcher', () => {
 	let tempDir: string
-	let handle: { close: () => Promise<void> } | undefined
+	let handle: { close: () => Promise<void>, ready: Promise<void> } | undefined
 
 	beforeEach(() => {
 		tempDir = makeTempProject()
@@ -248,5 +248,95 @@ describe('createProjectWatcher', () => {
 
 		await settle(500)
 		expect(onChange).not.toHaveBeenCalled()
+	})
+
+	it('stays quiet when a file inside node_modules changes', async () => {
+		// Why this matters: a project with 87 dependencies puts chokidar under
+		// watch for 1232+ directories inside node_modules, making close() take
+		// seconds and letting dependency-internal file churn (postinstall
+		// scripts, lockfile-driven reinstalls) trigger spurious rebuilds.
+		// node_modules anywhere under the project — not just at the root — must
+		// be excluded from the watch entirely.
+		const nodeModulesDir = path.join(tempDir, 'node_modules', 'lodash')
+		fs.mkdirSync(nodeModulesDir, { recursive: true })
+		const target = path.join(nodeModulesDir, 'index.js')
+		fs.writeFileSync(target, '// vendored')
+
+		const onChange = vi.fn()
+		handle = createProjectWatcher(tempDir, onChange)
+		await handle.ready
+
+		fs.writeFileSync(target, '// vendored, changed')
+
+		await settle(500)
+		expect(onChange).not.toHaveBeenCalled()
+	})
+
+	it('stays quiet when a file inside a nested package node_modules changes', async () => {
+		// Why this matters: node_modules can recur at any depth (npm/pnpm
+		// dependency trees, workspace packages with their own node_modules).
+		// A watcher that only ignores the top-level node_modules segment would
+		// still get flooded by these nested trees.
+		const nestedNodeModules = path.join(tempDir, 'packages', 'a', 'node_modules', 'b')
+		fs.mkdirSync(nestedNodeModules, { recursive: true })
+		const target = path.join(nestedNodeModules, 'x.js')
+		fs.writeFileSync(target, '// nested vendored')
+
+		const onChange = vi.fn()
+		handle = createProjectWatcher(tempDir, onChange)
+		await handle.ready
+
+		fs.writeFileSync(target, '// nested vendored, changed')
+
+		await settle(500)
+		expect(onChange).not.toHaveBeenCalled()
+	})
+
+	it('fires onChange for changes inside miniprogram_npm', async () => {
+		// Why this matters: miniprogram_npm is the mini-app compiler's real
+		// input — the built npm output that the compiler reads directly, not a
+		// vendor tree to hide. A node_modules-ignoring rule that over-matches
+		// (e.g. any path segment containing "node_modules" as a substring, or a
+		// blanket "*npm*" pattern) would wrongly silence this directory too.
+		const npmDir = path.join(tempDir, 'miniprogram_npm', 'some-pkg')
+		fs.mkdirSync(npmDir, { recursive: true })
+		const target = path.join(npmDir, 'index.js')
+		fs.writeFileSync(target, '// built npm output')
+
+		const onChange = vi.fn()
+		handle = createProjectWatcher(tempDir, onChange)
+		await settle()
+
+		fs.writeFileSync(target, '// built npm output, changed')
+
+		await vi.waitFor(
+			() => expect(onChange).toHaveBeenCalled(),
+			{ timeout: 2000 },
+		)
+	})
+
+	it('fires onChange for source edits when the project itself sits under an ancestor node_modules directory', async () => {
+		// Why this matters: same shape as the dotted-ancestor regression above —
+		// a project can legitimately live inside a node_modules directory (e.g.
+		// a demo/fixture project bundled inside a pnpm-installed package). Only
+		// node_modules segments *under* projectPath should be ignored; an
+		// ancestor node_modules segment must not disable the watch for the
+		// project's own source.
+		const ancestorNodeModules = path.join(tempDir, 'node_modules', 'some-demo-pkg')
+		const projectRoot = path.join(ancestorNodeModules, 'demo-app')
+		fs.mkdirSync(projectRoot, { recursive: true })
+		const target = path.join(projectRoot, 'app.json')
+		fs.writeFileSync(target, '{}')
+
+		const onChange = vi.fn()
+		handle = createProjectWatcher(projectRoot, onChange)
+		await settle()
+
+		fs.writeFileSync(target, '{"a":1}')
+
+		await vi.waitFor(
+			() => expect(onChange).toHaveBeenCalled(),
+			{ timeout: 2000 },
+		)
 	})
 })

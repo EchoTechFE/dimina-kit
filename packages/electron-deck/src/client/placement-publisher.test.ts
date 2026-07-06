@@ -301,8 +301,61 @@ describe('createPlacementPublisher', () => {
       expect(raf.cancel).toHaveBeenCalled()
     })
 
-    it('does not publish when the pending frame fires after dispose', () => {
-      // Capture the callback before disposal so we can call it manually.
+    it('flushes exactly one empty snapshot when disposed, even with no prior set() calls', () => {
+      // The renderer-side publisher is the single source of truth for a
+      // native view's desired placement; main's reconciler is level-triggered
+      // and keeps applying whatever it last received. If dispose() only
+      // cancels the pending frame without publishing anything, the last
+      // truthful snapshot (or "nothing was ever set") stays frozen in main
+      // forever — a host toolbar view stays attached+visible after the
+      // renderer that owned it is gone. Death of the source of truth must
+      // itself publish as a level: empty.
+      const publisher = createPlacementPublisher({
+        generation: 1,
+        publish,
+        requestFrame: raf.request,
+        cancelFrame: raf.cancel,
+      })
+      publisher.dispose()
+      expect(publish).toHaveBeenCalledOnce()
+      const snap = nthSnapshot(0)
+      expect(snap.views).toEqual([])
+      expect(snap.generation).toBe(1)
+    })
+
+    it('re-reads a function-form generation for the dispose flush', () => {
+      let currentGen = 5
+      const publisher = createPlacementPublisher({
+        generation: () => currentGen,
+        publish,
+        requestFrame: raf.request,
+        cancelFrame: raf.cancel,
+      })
+      currentGen = 11
+      publisher.dispose()
+      expect(nthSnapshot(0).generation).toBe(11)
+    })
+
+    it('stamps the dispose flush with an epoch strictly greater than any prior publish', () => {
+      const publisher = createPlacementPublisher({
+        generation: 1,
+        publish,
+        requestFrame: raf.request,
+        cancelFrame: raf.cancel,
+      })
+      publisher.set(makeView('a'))
+      raf.flushFrame()
+      const priorEpoch = nthSnapshot(0).epoch
+
+      publisher.dispose()
+      expect(publish).toHaveBeenCalledTimes(2)
+      expect(nthSnapshot(1).epoch).toBeGreaterThan(priorEpoch)
+    })
+
+    it('does not publish again when the pre-dispose frame callback fires after dispose', () => {
+      // Capture the callback before disposal so we can call it manually,
+      // simulating a rAF callback that was already queued by the platform
+      // and fires despite cancelFrame having been invoked.
       let captured: (() => void) | undefined
       const customRequest = vi.fn((cb: () => void): number => {
         captured = cb
@@ -316,12 +369,16 @@ describe('createPlacementPublisher', () => {
       })
       publisher.set(makeView('a'))
       publisher.dispose()
-      // Invoke the captured callback after dispose to simulate a stale frame.
+      // dispose() already flushed the final empty snapshot synchronously.
+      expect(publish).toHaveBeenCalledOnce()
+      expect(nthSnapshot(0).views).toEqual([])
+
+      // A stale pre-dispose frame firing afterward must not publish again.
       captured?.()
-      expect(publish).not.toHaveBeenCalled()
+      expect(publish).toHaveBeenCalledOnce()
     })
 
-    it('does not publish after dispose even when set is called and frame fires', () => {
+    it('does not publish again after dispose even when set is called and a frame fires', () => {
       const publisher = createPlacementPublisher({
         generation: 1,
         publish,
@@ -329,9 +386,40 @@ describe('createPlacementPublisher', () => {
         cancelFrame: raf.cancel,
       })
       publisher.dispose()
+      expect(publish).toHaveBeenCalledOnce()
+
       publisher.set(makeView('a'))
       raf.flushFrame()
-      expect(publish).not.toHaveBeenCalled()
+      expect(publish).toHaveBeenCalledOnce()
+    })
+
+    it('is idempotent: a second dispose() call does not publish again', () => {
+      const publisher = createPlacementPublisher({
+        generation: 1,
+        publish,
+        requestFrame: raf.request,
+        cancelFrame: raf.cancel,
+      })
+      publisher.dispose()
+      expect(publish).toHaveBeenCalledOnce()
+
+      publisher.dispose()
+      expect(publish).toHaveBeenCalledOnce()
+    })
+
+    it('ignores set()/remove() calls after dispose without scheduling a frame', () => {
+      const publisher = createPlacementPublisher({
+        generation: 1,
+        publish,
+        requestFrame: raf.request,
+        cancelFrame: raf.cancel,
+      })
+      publisher.dispose()
+      raf.request.mockClear()
+
+      publisher.set(makeView('a'))
+      publisher.remove('a')
+      expect(raf.request).not.toHaveBeenCalled()
     })
   })
 

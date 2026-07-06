@@ -121,12 +121,12 @@
     },
     "test-coverage": {
       "direction": "higher-is-better",
-      "value": 72.72,
+      "value": 72.81,
       "unit": "% lines",
       "breakdown": {
-        "devkit": 93.56,
-        "devtools": 68.09,
-        "electron-deck": 95.22,
+        "devkit": 92.18,
+        "devtools": 68.28,
+        "electron-deck": 95.23,
         "electron-deck/dock-react": 79.05,
         "view-anchor": 95.28,
         "workbench": 9.79
@@ -135,12 +135,12 @@
     },
     "test-report": {
       "direction": "higher-is-better",
-      "value": 3649,
+      "value": 3663,
       "unit": "passed tests",
       "breakdown": {
-        "devkit": 109,
-        "devtools": 2283,
-        "electron-deck": 1019,
+        "devkit": 113,
+        "devtools": 2288,
+        "electron-deck": 1024,
         "electron-deck/dock-react": 96,
         "view-anchor": 87,
         "workbench": 55
@@ -148,7 +148,7 @@
     },
     "type-coverage": {
       "direction": "higher-is-better",
-      "value": 99.74,
+      "value": 99.75,
       "unit": "%",
       "breakdown": {
         "devkit": 99.9,

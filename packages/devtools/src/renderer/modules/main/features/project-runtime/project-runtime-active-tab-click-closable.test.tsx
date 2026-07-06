@@ -34,6 +34,9 @@ const api = vi.hoisted(() => ({
   getBranding: vi.fn(() => Promise.resolve({ appName: 'Test App' })),
   publishSimulatorDevtoolsBounds: vi.fn(() => Promise.resolve()),
   publishHostToolbarBounds: vi.fn(() => Promise.resolve()),
+  // Unmount dispose flushes a final empty snapshot through this; the mocked
+  // module must export it or every unmount throws.
+  publishPlacementSnapshot: vi.fn(() => Promise.resolve()),
   onHostToolbarHeightChanged: vi.fn((_h: (height: number) => void) => () => {}),
   getHostToolbarHeight: vi.fn((): Promise<number | undefined> => Promise.resolve(0)),
 }))
@@ -41,6 +44,7 @@ vi.mock('@/shared/api', () => ({
   getBranding: api.getBranding,
   publishSimulatorDevtoolsBounds: api.publishSimulatorDevtoolsBounds,
   publishHostToolbarBounds: api.publishHostToolbarBounds,
+  publishPlacementSnapshot: api.publishPlacementSnapshot,
   onHostToolbarHeightChanged: api.onHostToolbarHeightChanged,
   getHostToolbarHeight: api.getHostToolbarHeight,
 }))
