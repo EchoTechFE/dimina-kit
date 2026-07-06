@@ -177,31 +177,57 @@ if (MODE === 'node') {
   }
 }
 
-// Browser mode ships three bundles from the same config: the core seams
+// Node mode builds with esbuild `splitting`: compile-core.js loads the three stage
+// compilers via dynamic import (lazy per-stage toolchains), and only code-splitting
+// keeps that lazy at runtime — a single-file bundle would hoist each stage's external
+// heavy imports (`import 'sass'`, …) back to the entry's top level, silently loading
+// every toolchain in every realm again. Each build gets its own chunk dir because the
+// two builds alias fs differently (shimmed vs native): same source, different chunks.
+//
+// Browser mode ships single-file bundles from the same config: the core seams
 // (compile-core.browser.js), the package's resident stage worker
 // (stage-worker.browser.js, bundles the compiler + memfs), and the light-weight
-// orchestrated pool (pool.browser.js). Node mode ships only the core.
-const outputs = MODE === 'node'
+// orchestrated pool (pool.browser.js). No splitting needed there: everything is
+// bundled (no externals to hoist), and esbuild inlines the dynamic imports as
+// deferred `__esm` initializers — module init still runs on first use.
+const builds = MODE === 'node'
   ? [
-      { in: 'src/compile-core.js', out: 'dist/compile-core.node.js', alias: nodeShimAlias },
+      {
+        entries: [{ in: 'src/compile-core.js', out: 'compile-core.node' }],
+        alias: nodeShimAlias,
+        chunkDir: 'compile-core.node-chunks',
+      },
       // Resident Node worker_threads disk pool (real fs, dmcc-parity output + sourcemap).
-      { in: 'src/pool-node.js', out: 'dist/pool.node.js', alias: nodeNativeAlias },
-      { in: 'src/stage-worker-node.js', out: 'dist/stage-worker.node.js', alias: nodeNativeAlias },
+      {
+        entries: [
+          { in: 'src/pool-node.js', out: 'pool.node' },
+          { in: 'src/stage-worker-node.js', out: 'stage-worker.node' },
+        ],
+        alias: nodeNativeAlias,
+        chunkDir: 'pool.node-chunks',
+      },
     ]
   : [
-      { in: 'src/browser-entry.js', out: 'dist/compile-core.browser.js' },
-      { in: 'src/stage-worker.js', out: 'dist/stage-worker.browser.js' },
-      { in: 'src/pool.js', out: 'dist/pool.browser.js' },
-      { in: 'src/toolchain.js', out: 'dist/toolchain.browser.js' },
+      { entries: [{ in: 'src/browser-entry.js', out: 'compile-core.browser' }] },
+      { entries: [{ in: 'src/stage-worker.js', out: 'stage-worker.browser' }] },
+      { entries: [{ in: 'src/pool.js', out: 'pool.browser' }] },
+      { entries: [{ in: 'src/toolchain.js', out: 'toolchain.browser' }] },
     ]
 
-for (const o of outputs) {
+const { rm } = await import('node:fs/promises')
+for (const b of builds) {
   const built = {
     ...opts,
-    entryPoints: [path.join(root, o.in)],
-    outfile: path.join(root, o.out),
-    ...(o.alias ? { alias: o.alias } : {}),
+    entryPoints: b.entries.map((e) => ({ in: path.join(root, e.in), out: e.out })),
+    outdir: path.join(root, 'dist'),
+    ...(b.alias ? { alias: b.alias } : {}),
+    ...(b.chunkDir
+      ? { splitting: true, chunkNames: `${b.chunkDir}/[name]-[hash]` }
+      : {}),
   }
+  // Chunk names embed content hashes; stale ones from earlier builds would pile up in
+  // dist (and ship in the npm package), so each build owns and clears its chunk dir.
+  if (b.chunkDir) await rm(path.join(root, 'dist', b.chunkDir), { recursive: true, force: true })
   await esbuild.build(built)
-  console.log(`✅ built MODE=${MODE} USE_WASM=${USE_WASM ? 1 : 0} -> ${o.out}`)
+  console.log(`✅ built MODE=${MODE} USE_WASM=${USE_WASM ? 1 : 0} -> ${b.entries.map((e) => `dist/${e.out}.js`).join(', ')}`)
 }

@@ -40,12 +40,20 @@ const DEFAULT_SEND_TIMEOUT_MS = 120000
 
 const WORKER_DEATH_CODES = new Set(['compiler-worker-timeout', 'compiler-worker-crashed', 'compiler-worker-dead'])
 
+// Default idle window before the pool shrinks (terminates its resident stage workers to
+// release their memory — a warm worker set holds hundreds of MB of toolchain + compile
+// allocations). Shrinking is transparent: the next build's ensureAlive respawns fresh
+// workers, paying only their spawn + own-stage toolchain load again. Five minutes keeps
+// rapid edit-compile loops warm while an IDE left idle overnight stops holding the memory.
+const DEFAULT_IDLE_SHRINK_MS = 300000
+
 /**
  * Create a resident Node stage-worker pool.
  * @param {{
  *   stages?: string[],
  *   sendTimeoutMs?: number,        // default 120000 — inactivity window per stage build
  *   retryOnWorkerDeath?: boolean,  // default true — one transparent whole-build retry after a worker death
+ *   idleShrinkMs?: number|false,   // default 300000 — idle ms before workers are shrunk; 0/false/Infinity disables
  * }} [opts]
  * @returns {{ build: (outputDir:string, workPath:string, useAppIdDir?:boolean, options?:object)=>Promise<{appId:string,name:string,path:string}>, dispose: ()=>Promise<void>, stages: string[] }}
  */
@@ -60,6 +68,7 @@ export function createNodeCompilerPool({
   stages = STAGE_NAMES,
   sendTimeoutMs = DEFAULT_SEND_TIMEOUT_MS,
   retryOnWorkerDeath = true,
+  idleShrinkMs = DEFAULT_IDLE_SHRINK_MS,
 } = {}) {
   const workerURL = new URL('./stage-worker.node.js', import.meta.url)
   let disposed = false
@@ -71,7 +80,9 @@ export function createNodeCompilerPool({
     entry.slot = createWorkerSlot({
       name: `[compiler] stage '${stage}' worker`,
       spawnTransport: ({ onMessage, onCrash }) => {
-        const w = new Worker(workerURL)
+        // workerData carries the worker's stage identity so it can preload its OWN
+        // stage's toolchain at spawn (and only that one) — see stage-worker-node.js.
+        const w = new Worker(workerURL, { workerData: { stage } })
         entry.w = w
         w.on('message', onMessage)
         w.on('error', (e) => onCrash(`stage worker "${stage}" error: ${(e && e.message) || e}`))
@@ -86,6 +97,35 @@ export function createNodeCompilerPool({
     entry.slot.ensureAlive().catch(() => {})
     return entry
   })
+
+  // --- idle shrink ----------------------------------------------------------
+  // Armed whenever THIS pool has no build queued or running (including right after
+  // creation — a pool that is spawned but never builds must not hold its workers
+  // forever); cancelled the moment a new build arrives. When it fires, every slot's
+  // transport is terminated (slot.shrink() — a no-op under in-flight traffic by
+  // design) and the next build's ensureAlive respawns transparently. unref()'d so
+  // the pending timer itself never pins an otherwise-done process; while workers
+  // are alive THEY hold the event loop, which is exactly what lets the timer fire.
+  const shrinkEnabled = idleShrinkMs > 0 && idleShrinkMs < Infinity
+  let idleTimer = null
+  let activeBuilds = 0
+
+  function cancelIdleShrink() {
+    if (idleTimer) { clearTimeout(idleTimer); idleTimer = null }
+  }
+
+  function armIdleShrink() {
+    if (!shrinkEnabled || disposed) return
+    cancelIdleShrink()
+    idleTimer = setTimeout(() => {
+      idleTimer = null
+      if (disposed || activeBuilds > 0) return
+      for (const x of workers) x.slot.shrink()
+    }, idleShrinkMs)
+    if (typeof idleTimer.unref === 'function') idleTimer.unref()
+  }
+
+  armIdleShrink()
 
   // One full build attempt. Ends quiescent: settleAll guarantees no stage request is
   // still in flight when it returns/throws, so a retry can't cross-pair replies.
@@ -152,6 +192,9 @@ export function createNodeCompilerPool({
     if (disposed) {
       return Promise.reject(Object.assign(new Error('[compiler] pool has been disposed'), { code: 'compiler-pool-disposed' }))
     }
+    // New activity: a pending shrink is off the table until this pool drains again.
+    cancelIdleShrink()
+    activeBuilds += 1
     const result = chain.then(async () => {
       try {
         return await runAttempt(outputDir, workPath, useAppIdDir, options)
@@ -166,11 +209,17 @@ export function createNodeCompilerPool({
       }
     })
     chain = result.then(() => {}, () => {})
+    const settled = () => {
+      activeBuilds -= 1
+      if (activeBuilds === 0) armIdleShrink()
+    }
+    result.then(settled, settled)
     return result
   }
 
   async function dispose() {
     disposed = true
+    cancelIdleShrink()
     await Promise.all(workers.map((x) => x.slot.dispose()))
   }
 

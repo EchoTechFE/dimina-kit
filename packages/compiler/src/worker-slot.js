@@ -151,6 +151,20 @@ export function createWorkerSlot({ name, spawnTransport, onEvent }) {
     })
   }
 
+  // Idle reclamation: terminate the live transport to release its memory while keeping
+  // the slot usable — the next ensureAlive() respawns a fresh generation, exactly like
+  // recovery after a death. Refuses to act under in-flight traffic (a shrink must never
+  // reject a pending request; the pool only shrinks a drained queue). Returns the
+  // terminate() settlement so a caller CAN await full teardown, but never has to.
+  function shrink() {
+    if (disposed || dead || pending.length) return terminationAck
+    dead = true
+    const t = transport
+    transport = null
+    terminationAck = settleTerminate(t)
+    return terminationAck
+  }
+
   async function dispose() {
     if (disposed) return
     disposed = true
@@ -169,6 +183,7 @@ export function createWorkerSlot({ name, spawnTransport, onEvent }) {
     isDead: () => dead,
     ensureAlive,
     request,
+    shrink,
     dispose,
   }
 }
