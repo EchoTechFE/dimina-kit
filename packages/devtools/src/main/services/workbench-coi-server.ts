@@ -26,11 +26,6 @@
  * method and a same-origin (or origin-less) request, so an arbitrary localhost
  * page cannot drive a destructive `/__fs` call. GET serves only the read-only
  * stat/readdir/read actions.
- *
- * `/__fs/watch` is a read-only SSE stream of the active project's disk changes
- * (devtools-fs-core-feasibility.md §7), decoupled from the compile session so
- * the editor's memfs↔disk sync engine has a source that stays live regardless
- * of compile state; see {@link handleFsWatchRequest}.
  */
 import http from 'node:http'
 import nodeFs from 'node:fs'
@@ -45,8 +40,6 @@ import {
   deleteWithin,
   renameWithin,
 } from '../ipc/project-fs.js'
-import { handleFsWatchRequest } from './fs-watch-sse.js'
-import { jsonRes } from './http-json.js'
 
 /** Max `/__fs/write` body; enough to save large source files without OOM. */
 const MAX_FS_WRITE_BYTES = 32 * 1024 * 1024
@@ -108,6 +101,12 @@ function serveStaticFile(res: http.ServerResponse, root: string, pathname: strin
       })
     })
     .catch(() => { if (!res.headersSent) { res.writeHead(404); res.end('Not Found') } })
+}
+
+function jsonRes(res: http.ServerResponse, code: number, obj: unknown): void {
+  const body = Buffer.from(JSON.stringify(obj))
+  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': body.length })
+  res.end(body)
 }
 
 /** Thrown by {@link readBody} when the accumulated body exceeds the cap. */
@@ -371,13 +370,6 @@ export async function startWorkbenchCoiServer(options: WorkbenchCoiServerOptions
   const server = http.createServer((req, res) => {
     setIsolationHeaders(res)
     const url = new URL(req.url ?? '/', 'http://127.0.0.1')
-
-    // Special-cased ahead of the generic `/__fs/*` dispatch: unlike every other
-    // action, this is a long-lived SSE stream, not a one-shot JSON response.
-    if (url.pathname === '/__fs/watch') {
-      handleFsWatchRequest(req, res, options.getProjectRoot)
-      return
-    }
 
     if (url.pathname.startsWith('/__fs/')) {
       handleFsRequest(req, res, options.getProjectRoot(), url).catch((e) => {

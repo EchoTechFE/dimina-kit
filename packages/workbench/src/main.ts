@@ -11,8 +11,6 @@
  */
 import { bootWorkbench } from './boot'
 import { diskMirrorSource } from './workspace/disk-mirror'
-import { walAuditSource } from './workspace/wal-audit'
-import type { WalAuditSurface } from './workspace/wal-audit'
 import type { CustomFileTypes } from './file-type-associations'
 
 declare global {
@@ -25,16 +23,6 @@ declare global {
      * editor tracks the surrounding app's light/dark scheme.
      */
     __WB_SET_THEME?: (scheme: 'light' | 'dark') => void
-    /**
-     * fs-core WAL audit surface (turnBegin/turnEnd/agentWrite/agentRm/diff/rollback)
-     * layered on top of the disk-mirror save path — see `walAuditSource`. Follows
-     * the same `window.__WB_*` CDP-reachable convention as the rest of this probe
-     * surface (`__WB_STATUS`/`__WB_PROBE`), for a future agent host to drive over
-     * `executeJavaScript`. Disk/git stay the source of truth; this is bookkeeping
-     * on top, degrading to `undefined`-method-free-but-rejecting calls if the
-     * OPFS ledger failed to initialize (see wal-audit.ts).
-     */
-    __WB_AUDIT?: WalAuditSurface
   }
 }
 
@@ -59,45 +47,14 @@ async function loadFileTypes(): Promise<CustomFileTypes | undefined> {
   }
 }
 
-/**
- * `walAuditSource`'s disk→editor sync callback: push an inbound disk change
- * into the live memfs through the SAME page-side vscode API instance the rest
- * of this entry uses (`window.__WB_PROBE`, set inside `bootWorkbench` before
- * `populateWorkspace` — see boot.ts). Skips a buffer the user has unsaved
- * edits in (VS Code convention: never clobber a dirty document); a clean
- * buffer is refreshed unconditionally so a git checkout / external edit shows
- * up without reopening the project.
- */
-async function applyDiskChangeToEditor(rel: string, content: Uint8Array | null): Promise<void> {
-  const probe = window.__WB_PROBE
-  if (!probe) return
-  const uri = probe.URI.parse(`file:///workspace/${rel}`)
-  const [fileService, textFileService] = await Promise.all([
-    probe.getService(probe.IFileService),
-    probe.getService(probe.ITextFileService),
-  ])
-  if (textFileService.isDirty(uri)) return
-  try {
-    if (content === null) await fileService.del(uri)
-    else await fileService.writeFile(uri, probe.VSBuffer.wrap(content))
-  } catch (e) {
-    console.warn('[workbench] disk-sync apply to editor failed', rel, e)
-  }
-}
-
 async function boot(): Promise<void> {
   const container = document.getElementById('workbench')!
   // The page is served from the COI server root, so its origin is the fs bridge base.
   const fsBaseUrl = location.origin + '/'
 
-  const workspace = walAuditSource(diskMirrorSource({ fsBaseUrl }), {
-    fsBaseUrl,
-    applyToEditor: applyDiskChangeToEditor,
-  })
-
   const handle = await bootWorkbench({
     container,
-    workspace,
+    workspace: diskMirrorSource({ fsBaseUrl }),
     theme: initialThemeScheme(),
     fileTypes: await loadFileTypes(),
     exposeProbe: true,
@@ -107,7 +64,6 @@ async function boot(): Promise<void> {
   })
 
   window.__WB_SET_THEME = handle.setTheme
-  window.__WB_AUDIT = workspace.audit
 
   const bootEl = document.getElementById('boot')
   if (bootEl) bootEl.remove()
