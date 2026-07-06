@@ -11,56 +11,15 @@
 import fs from 'fs'
 import path from 'path'
 import { test, expect } from './fixtures'
-import { DEMO_APP_DIR, openProjectInUI, closeProject, pollUntil, ipcInvoke } from './helpers'
-import { ViewChannel } from '../src/shared/ipc-channels'
-import type { ElectronApplication } from '@playwright/test'
-
-/** Run `expr` inside the embedded workbench's WebContentsView (found by probing `window.__WB_STATUS`). */
-async function runInWorkbench<T>(app: ElectronApplication, expr: string): Promise<T> {
-  return app.evaluate(async ({ webContents }, e) => {
-    const wcs = webContents.getAllWebContents().filter((wc) => !wc.isDestroyed())
-    for (const wc of wcs) {
-      try {
-        const s = await wc.executeJavaScript('typeof window.__WB_STATUS === "string" ? window.__WB_STATUS : null')
-        if (typeof s === 'string') return wc.executeJavaScript(e)
-      } catch {
-        // not the workbench wc (or not yet navigated) — try the next one
-      }
-    }
-    throw new Error('workbench webContents not found')
-  }, expr) as Promise<T>
-}
-
-async function workbenchStatus(app: ElectronApplication): Promise<string | null> {
-  return app.evaluate(async ({ webContents }) => {
-    const wcs = webContents.getAllWebContents().filter((wc) => !wc.isDestroyed())
-    for (const wc of wcs) {
-      try {
-        const s = await wc.executeJavaScript('typeof window.__WB_STATUS === "string" ? window.__WB_STATUS : null')
-        if (typeof s === 'string') return s
-      } catch {
-        // skip
-      }
-    }
-    return null
-  })
-}
+import { DEMO_APP_DIR, openProjectInUI, closeProject, pollUntil } from './helpers'
+import { runInWorkbench, attachWorkbenchAndWaitReady } from './workbench-probe'
 
 test.describe('fs-core WAL audit ledger (embedded workbench)', () => {
   test.setTimeout(180_000)
 
   test.beforeEach(async ({ mainWindow, electronApp }) => {
     await openProjectInUI(mainWindow, DEMO_APP_DIR, { waitMs: 60_000 })
-    // Force the lazily-attached workbench WCV to load, same as qdml-filetypes.spec.ts —
-    // best-effort (the natural dock-slot-visible attach path also works without this).
-    await ipcInvoke(mainWindow, ViewChannel.WorkbenchBounds, { x: 0, y: 0, width: 900, height: 700 }).catch(() => {})
-
-    const status = await pollUntil(
-      () => workbenchStatus(electronApp),
-      (s) => s === 'workbench-ready' || s === 'exthost-alive',
-      90_000,
-      1500,
-    )
+    const status = await attachWorkbenchAndWaitReady(mainWindow, electronApp)
     expect(status, 'workbench must reach a ready status before driving __WB_AUDIT').toMatch(
       /workbench-ready|exthost-alive/,
     )

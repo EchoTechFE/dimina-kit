@@ -59,12 +59,41 @@ async function loadFileTypes(): Promise<CustomFileTypes | undefined> {
   }
 }
 
+/**
+ * `walAuditSource`'s disk→editor sync callback: push an inbound disk change
+ * into the live memfs through the SAME page-side vscode API instance the rest
+ * of this entry uses (`window.__WB_PROBE`, set inside `bootWorkbench` before
+ * `populateWorkspace` — see boot.ts). Skips a buffer the user has unsaved
+ * edits in (VS Code convention: never clobber a dirty document); a clean
+ * buffer is refreshed unconditionally so a git checkout / external edit shows
+ * up without reopening the project.
+ */
+async function applyDiskChangeToEditor(rel: string, content: Uint8Array | null): Promise<void> {
+  const probe = window.__WB_PROBE
+  if (!probe) return
+  const uri = probe.URI.parse(`file:///workspace/${rel}`)
+  const [fileService, textFileService] = await Promise.all([
+    probe.getService(probe.IFileService),
+    probe.getService(probe.ITextFileService),
+  ])
+  if (textFileService.isDirty(uri)) return
+  try {
+    if (content === null) await fileService.del(uri)
+    else await fileService.writeFile(uri, probe.VSBuffer.wrap(content))
+  } catch (e) {
+    console.warn('[workbench] disk-sync apply to editor failed', rel, e)
+  }
+}
+
 async function boot(): Promise<void> {
   const container = document.getElementById('workbench')!
   // The page is served from the COI server root, so its origin is the fs bridge base.
   const fsBaseUrl = location.origin + '/'
 
-  const workspace = walAuditSource(diskMirrorSource({ fsBaseUrl }), { fsBaseUrl })
+  const workspace = walAuditSource(diskMirrorSource({ fsBaseUrl }), {
+    fsBaseUrl,
+    applyToEditor: applyDiskChangeToEditor,
+  })
 
   const handle = await bootWorkbench({
     container,

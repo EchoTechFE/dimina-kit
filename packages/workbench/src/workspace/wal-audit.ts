@@ -23,6 +23,20 @@
  * `/__fs` bridge but do not push the new content back into the editor's memfs
  * mirror (devtools has no disk watcher), so an already-open editor buffer can
  * keep showing pre-agent content until the project is reopened.
+ *
+ * Disk↔editor sync engine (devtools-fs-core-feasibility.md §7): once the
+ * ledger initializes, this module also subscribes to the main process's
+ * `/__fs/watch` SSE stream (`watchEvents`, defaulting to an `EventSource`) and
+ * treats the ledger as the arbiter of "did this change already happen": an
+ * inbound disk change whose content matches what the ledger already has on
+ * record is the echo of our own last write and is dropped; genuinely new
+ * content is recorded (`actor:'human'`) and, if a host `applyToEditor` is
+ * injected, pushed into the live editor buffer (a deletion passes `null`).
+ * Symmetrically, `onSave` compares against the ledger's current content before
+ * recording, so an inbound `applyToEditor` write does not bounce back out as a
+ * second no-op ledger entry. A dead watcher (`onDead`) stops the subscription
+ * once and falls back to today's open-time-only mirror; a ledger that never
+ * initialized never starts a subscription at all.
  */
 import { ProjectFsClient } from '@dimina-kit/fs-core/client'
 import { bridgeReaddir, bridgeRead, bridgeWrite, bridgeDelete, relFromWorkspaceUri } from '../fs-bridge'
@@ -94,6 +108,53 @@ export interface WalAuditOptions {
   createClient?: (opts: { projectId: string }) => Promise<WalAuditClientLike>
   /** Test/host seam: the `/__fs` bridge calls. Defaults to file-workspace.ts's bridge. */
   bridge?: WalAuditBridge
+  /**
+   * Test/host seam: subscribe to inbound disk-change batches. Called once the
+   * ledger is up; returns an unsubscribe function. Defaults to an
+   * `EventSource` against `${fsBaseUrl}__fs/watch` (see {@link defaultWatchEvents}).
+   */
+  watchEvents?: (onBatch: (paths: string[]) => void, onDead: () => void) => () => void
+  /**
+   * Host seam: push an inbound disk change into the live editor buffer.
+   * `content === null` means the path was deleted. Omitted → the ledger still
+   * records the change but the editor's memfs is left untouched (matching
+   * today's open-time-only mirror for the visible buffer). Never touches
+   * monaco/vscode from THIS module — the host implements it.
+   */
+  applyToEditor?: (rel: string, content: Uint8Array | null) => Promise<void>
+}
+
+/**
+ * Default `watchEvents`: an `EventSource` against the main process's
+ * `/__fs/watch` SSE stream (see workbench-coi-server.ts). Degrades to a no-op
+ * subscription when `EventSource` is not global (e.g. a non-browser test
+ * runner) rather than throwing out of `startSync`.
+ */
+function defaultWatchEvents(
+  fsBaseUrl: string,
+): (onBatch: (paths: string[]) => void, onDead: () => void) => () => void {
+  return (onBatch, onDead) => {
+    if (typeof EventSource === 'undefined') return () => {}
+    const es = new EventSource(`${fsBaseUrl}__fs/watch`)
+    es.onmessage = (ev) => {
+      let msg: { paths?: string[]; watcherDead?: boolean }
+      try {
+        msg = JSON.parse(ev.data) as { paths?: string[]; watcherDead?: boolean }
+      } catch {
+        return
+      }
+      if (msg.watcherDead) {
+        onDead()
+        return
+      }
+      if (Array.isArray(msg.paths) && msg.paths.length > 0) onBatch(msg.paths)
+    }
+    // A non-2xx / non-event-stream response (e.g. 409 ENOACTIVE) fails the
+    // connection permanently per the EventSource spec (no auto-retry); a
+    // dropped live stream fires the same event, so both funnel into onDead.
+    es.onerror = () => onDead()
+    return () => es.close()
+  }
 }
 
 const DEFAULT_PROJECT_ID = 'devtools-workspace'
@@ -180,13 +241,117 @@ export function walAuditSource(base: WorkspaceSource, opts: WalAuditOptions): Wo
     }
   }
 
+  let stopSync: () => void = () => {}
+
+  /**
+   * FIFO queue serializing every compare-then-record against the ledger (the
+   * inbound watch batches AND the onSave accounting step). Without it the two
+   * race: an SSE echo's compare-read can run while the onSave ledger write is
+   * still in flight (or while a second debounce batch of the same fs event is
+   * being processed), see stale content, and re-record the identical bytes —
+   * observed live as one save advancing walGen three times. Serialized, the
+   * loser of the race sees the winner's write and absorbs it as an echo.
+   * The chain swallows step rejections (each caller handles its own errors),
+   * so one failed step can never wedge the queue.
+   */
+  let ledgerTurn: Promise<unknown> = Promise.resolve()
+  function enqueueLedgerTurn<T>(fn: () => Promise<T>): Promise<T> {
+    const next = ledgerTurn.then(fn, fn)
+    ledgerTurn = next.catch(() => {})
+    return next
+  }
+
+  /**
+   * Process one inbound disk-change batch, one path at a time. Compares disk
+   * content against the ledger's own record of that path: identical content is
+   * the echo of our own last write (human save or agent replay) and is
+   * dropped with no ledger write and no `applyToEditor` call; a disk read
+   * failure (404/unreadable) is treated as a deletion. Genuinely new content
+   * is recorded (`actor:'human'`) and handed to `applyToEditor` (if injected).
+   * Errors from any single path are logged and do not abort the rest of the
+   * batch — this is best-effort accounting layered on disk, never a gate.
+   */
+  async function handleInboundPath(rel: string): Promise<void> {
+    if (!client) return
+    let diskBytes: Uint8Array | null
+    try {
+      diskBytes = await bridge.read(opts.fsBaseUrl, rel)
+    } catch {
+      diskBytes = null
+    }
+
+    let ledgerContent: string | undefined
+    try {
+      ledgerContent = (await client.read(rel)).content
+    } catch {
+      // Not in the ledger yet (or a transient read failure) — treated the same
+      // as "no prior recorded content", so a real disk file always gets
+      // recorded/applied below rather than silently dropped.
+      ledgerContent = undefined
+    }
+
+    if (diskBytes === null) {
+      if (ledgerContent === undefined) return // already absent from both sides
+      await client.rm(rel, { actor: 'human' })
+      await opts.applyToEditor?.(rel, null)
+      return
+    }
+
+    const diskText = decoder.decode(diskBytes)
+    if (ledgerContent !== undefined && diskText === ledgerContent) return // echo of our own write
+
+    await client.write(rel, diskText, { actor: 'human' })
+    await opts.applyToEditor?.(rel, diskBytes)
+  }
+
+  async function handleBatch(paths: string[]): Promise<void> {
+    for (const rel of paths) {
+      try {
+        // Per-path (not per-batch) queue turns, so a long batch cannot starve
+        // an interleaved onSave accounting step of its FIFO position.
+        await enqueueLedgerTurn(() => handleInboundPath(rel))
+      } catch (e) {
+        console.warn('[workbench] wal disk-sync failed for', rel, e)
+      }
+    }
+  }
+
+  /** Subscribe to `watchEvents` once the ledger is up. `active` gates BOTH
+   * callbacks so a late/duplicate event delivered after `onDead` (or after a
+   * fresh `populate()` superseded this subscription) is a guaranteed no-op,
+   * not just best-effort — the fake `EventSource` a test injects can otherwise
+   * still invoke a captured callback directly. */
+  function startSync(): void {
+    let active = true
+    const watchEvents = opts.watchEvents ?? defaultWatchEvents(opts.fsBaseUrl)
+    const dispose = watchEvents(
+      (paths) => {
+        if (!active) return
+        void handleBatch(paths)
+      },
+      () => {
+        if (!active) return
+        active = false
+        console.warn('[workbench] wal disk-sync watcher died — reverting to open-time mirror only')
+        dispose()
+      },
+    )
+    stopSync = () => {
+      active = false
+      dispose()
+    }
+  }
+
   async function initLedger(): Promise<void> {
     try {
       client?.destroy()
       client = undefined
+      stopSync()
+      stopSync = () => {}
       const c = await createClient({ projectId })
       await seedFromDisk(c)
       client = c
+      startSync()
     } catch (e) {
       client = undefined
       console.warn('[workbench] wal audit unavailable — falling back to disk-only', e)
@@ -247,10 +412,28 @@ export function walAuditSource(base: WorkspaceSource, opts: WalAuditOptions): Wo
     onSave: base.onSave
       ? async (uri: URI, content: Uint8Array) => {
           await base.onSave!(uri, content)
-          if (!client) return
+          // Capture the live client: a re-populate() may swap it while this
+          // save's queued ledger turn is still waiting its FIFO slot.
+          const c = client
+          if (!c) return
           try {
             const rel = relFromWorkspaceUri(uri)
-            if (rel !== null) await client.write(rel, decoder.decode(content), { actor: 'human' })
+            if (rel === null) return
+            const text = decoder.decode(content)
+            // Outbound echo consolidation: skip the ledger write when the
+            // content already matches the ledger's record (e.g. this save is
+            // the direct result of an inbound `applyToEditor` refresh) — an
+            // onDidRunOperation from that refresh would otherwise re-record
+            // the identical content as a second no-op human write. Runs as a
+            // ledgerTurn so the compare-then-write cannot interleave with an
+            // inbound watch batch's (see enqueueLedgerTurn).
+            await enqueueLedgerTurn(async () => {
+              const unchanged = await c
+                .read(rel)
+                .then((r) => r.content === text)
+                .catch(() => false)
+              if (!unchanged) await c.write(rel, text, { actor: 'human' })
+            })
           } catch (e) {
             console.warn('[workbench] wal ledger write failed (save already landed on disk)', e)
           }
