@@ -1,6 +1,7 @@
 {
   "$schema": "https://turborepo.dev/schema.json",
   "ui": "tui",
+  "globalDependencies": [".dimina-rev"],
   "globalEnv": [
     "ESBUILD_BINARY_PATH",
     "DIMINA_NO_OPEN_BROWSER",

@@ -23,3 +23,6 @@ coverage/
 *.jks
 *.keystore
 .repro/
+
+# CI 生成：dimina submodule 指针，作为 turbo globalDependencies 让 submodule bump 使缓存失效
+.dimina-rev
