@@ -68,11 +68,11 @@ export interface WalAuditClientLike {
   diff(turnId?: string): Promise<{ changes: Array<{ path?: string; from?: string; to?: string; op?: string }>; cpId?: string }>
   read(path: string): Promise<{ content: string; rev?: number }>
   ls(): Promise<{ paths: string[] }>
-  // Typed from the worker's ACTUAL opStatus payload (fs-core.worker.js), which
-  // has per-stage gens (walGen/memGen/appendedGen/…) and NO plain `gen` —
-  // client.d.ts's `gen` field is a doc bug in the frozen TCB port, tracked for
-  // an upstream (dimina-web-client) fix. Only the subset this module relies on
-  // is declared; the real client returns a richer object.
+  // client.d.ts's status() now mirrors the worker's real opStatus payload
+  // (fs-core.worker.js) — per-stage gens (walGen/memGen/appendedGen/…), no
+  // plain `gen`. This is a deliberately narrowed subset: only the fields this
+  // module actually reads are declared here; the real client returns the
+  // richer object typed in client.d.ts.
   status(): Promise<{ mode: string; walGen: number; epoch: number }>
   destroy(): void
 }

@@ -34,7 +34,18 @@ export declare class ProjectFsClient {
 
   read(path: string): Promise<{ content: string; rev?: number }>
   ls(): Promise<{ paths: string[] }>
-  status(): Promise<{ mode: string; gen: number; epoch: number; memGen?: number }>
+  status(): Promise<{
+    mode: string
+    appendedGen: number
+    walGen: number
+    memGen: number
+    ackGen: number
+    compactGen: number
+    epoch: number
+    walStartGen: number
+    checkpoints: string[]
+    turn: { turnId: string; cpId: string; expiresAt: number; ops: number } | null
+  }>
   snapshot(opts?: { gen?: number }): Promise<{ files: Record<string, string>; gen: number; stale: boolean }>
   grep(pattern: string, opts?: Record<string, unknown>): Promise<unknown>
   glob(pattern: string, opts?: Record<string, unknown>): Promise<unknown>
