@@ -5,7 +5,7 @@ import { registerProjectFsIpc } from '../ipc/project-fs.js'
 import { app, BrowserWindow, nativeImage, session } from 'electron'
 import fs from 'fs'
 import path from 'path'
-import type { BuiltinModuleId, MenuContext, WorkbenchAppConfig } from '../../shared/types.js'
+import type { BuiltinModuleId, LaunchConfig, MenuContext, WorkbenchAppConfig } from '../../shared/types.js'
 import type { SimulatorApiHandler } from '../services/simulator/custom-apis.js'
 import { rendererDir as defaultRendererDir, defaultPreloadPath, devtoolsPackageRoot } from '../utils/paths.js'
 import { installThemeBackgroundSync } from '../utils/theme.js'
@@ -75,6 +75,10 @@ export interface WorkbenchAppInstance {
   automationServer?: AutomationServer
   updateManager?: UpdateManager
   dispose: () => Promise<void>
+
+  getLaunchConfigs: () => Promise<LaunchConfig[]>
+  setLaunchConfigs: (configs: LaunchConfig[]) => Promise<void>
+  setActiveLaunchConfig: (id: string | null) => Promise<void>
 }
 
 /**
@@ -159,7 +163,7 @@ function resolveModules(config: WorkbenchAppConfig): Record<BuiltinModuleId, boo
 
 async function disposeContext(ctx: WorkbenchContext): Promise<void> {
   await ctx.workspace.closeProject()
-  await ctx.registry.dispose().catch((err) => {
+  await ctx.registry.dispose().catch((err: unknown) => {
     console.warn('[workbench] dispose registry encountered errors:', err)
   })
 }
@@ -456,6 +460,24 @@ export async function createDevtoolsRuntime(config: WorkbenchAppConfig = {}): Pr
     registerSimulatorApi: (name: string, handler: SimulatorApiHandler) =>
       context.registry.add(toDisposable(context.simulatorApis.register(name, handler))),
     dispose: () => disposeContext(context),
+
+    async getLaunchConfigs() {
+      const projectPath = context.workspace.getProjectPath()
+      if (!projectPath) return []
+      return context.workspace.getLaunchConfigs(projectPath)
+    },
+    async setLaunchConfigs(configs: LaunchConfig[]) {
+      const projectPath = context.workspace.getProjectPath()
+      if (!projectPath) return
+      await context.workspace.saveLaunchConfigs(projectPath, configs)
+      context.notify.popoverUpdateLaunchConfigs(configs)
+    },
+    async setActiveLaunchConfig(id: string | null) {
+      const projectPath = context.workspace.getProjectPath()
+      if (!projectPath) return
+      await context.workspace.saveActiveLaunchConfigId(projectPath, id)
+      context.notify.popoverSwitchLaunchConfig(id)
+    },
   }
 
   // Built-in simulator APIs: devtools-supplied wx.* implementations that run

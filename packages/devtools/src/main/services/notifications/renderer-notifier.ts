@@ -1,5 +1,5 @@
 import type { BrowserWindow, WebContents, WebContentsView } from 'electron'
-import type { CompileConfig } from '../../../shared/types.js'
+import type { CompileConfig, LaunchConfig } from '../../../shared/types.js'
 import {
   ProjectChannel,
   SessionChannel,
@@ -112,6 +112,10 @@ export interface RendererNotifier {
   popoverClosed(): void
   /** Ask the main renderer to relaunch the simulator with a new config. */
   popoverRelaunch(config: CompileConfig): void
+  /** Ask the main renderer to switch to a launch config (or null for normal). */
+  popoverSwitchLaunchConfig(id: string | null): void
+  /** Ask the main renderer to update its launch configs list. */
+  popoverUpdateLaunchConfigs(configs: LaunchConfig[]): void
   /**
    * Push the reserved host-toolbar height to the main renderer so its toolbar
    * placeholder div resizes (closes the host-toolbar dynamic-height loop).
@@ -184,6 +188,12 @@ export function createRendererNotifier(ctx: NotifierContext): RendererNotifier {
     },
     popoverRelaunch(config) {
       sendToMain(PopoverChannel.Relaunch, config)
+    },
+    popoverSwitchLaunchConfig(id) {
+      sendToMain(PopoverChannel.SwitchLaunchConfig, id)
+    },
+    popoverUpdateLaunchConfigs(configs) {
+      sendToMain(PopoverChannel.UpdateLaunchConfigs, configs)
     },
     hostToolbarHeightChanged(height) {
       sendToMain(ViewChannel.HostToolbarHeightChanged, height)

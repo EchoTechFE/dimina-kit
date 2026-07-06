@@ -1,5 +1,5 @@
-// Re-export canonical CompileConfig from shared types
-export type { CompileConfig } from '../../shared/types'
+// Re-export canonical types from shared types
+export type { CompileConfig, LaunchConfig } from '../../shared/types'
 
 export interface Project {
   name: string

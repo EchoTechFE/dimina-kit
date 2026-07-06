@@ -108,11 +108,11 @@ export function CompilePanel({ events, logs = [], onClear }: CompilePanelProps) 
     for (const log of logs) {
       items.push({ kind: 'log', at: log.at, seq: log.seq, log })
     }
-    // Oldest first (chronological). Within a same-`at` tie (millisecond
-    // stamps — an event and the logs of the same compile collide routinely)
-    // the shared monotonic `seq` keeps ARRIVAL order.
+    // Newest first (reverse-chronological). Within a same-`at` tie
+    // (millisecond stamps — an event and the logs of the same compile collide
+    // routinely) the shared monotonic `seq` keeps ARRIVAL order.
     return items.sort((a, b) => {
-      if (a.at !== b.at) return a.at - b.at
+      if (a.at !== b.at) return b.at - a.at
       if (a.seq !== undefined && b.seq !== undefined) return a.seq - b.seq
       return 0
     })

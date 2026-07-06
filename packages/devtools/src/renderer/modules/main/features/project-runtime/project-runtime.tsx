@@ -287,6 +287,8 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
         dockRegistry={dockRegistry}
         layout={layout}
         simPanelWidth={device.simPanelWidth}
+        launchConfigs={session.launchConfigs}
+        activeLaunchConfigId={session.activeLaunchConfigId}
       />
 
       <div className="flex-1 min-h-0 overflow-hidden">

@@ -143,10 +143,10 @@ export function createRenderInspector(options: RenderInspectorOptions = {}): Ren
     if (wc.isDestroyed()) return null
     if (!(await ensureInjected(wc))) return null
     try {
-      const result = await wc.executeJavaScript(
+      const result: WxmlNode | null = (await wc.executeJavaScript(
         'window.__diminaRenderInspect ? window.__diminaRenderInspect.getWxml() : null',
-      )
-      return (result as WxmlNode | null) ?? null
+      )) as WxmlNode | null
+      return result ?? null
     } catch {
       return null
     }
@@ -157,10 +157,10 @@ export function createRenderInspector(options: RenderInspectorOptions = {}): Ren
     if (!(await ensureInjected(wc))) return null
     let inspection: ElementInspection | null
     try {
-      const result = await wc.executeJavaScript(
+      const result: ElementInspection | null = (await wc.executeJavaScript(
         `window.__diminaRenderInspect ? window.__diminaRenderInspect.highlightElement(${JSON.stringify(sid)}) : null`,
-      )
-      inspection = (result as ElementInspection | null) ?? null
+      )) as ElementInspection | null
+      inspection = result ?? null
     } catch {
       return null
     }
@@ -199,12 +199,12 @@ export function createRenderInspector(options: RenderInspectorOptions = {}): Ren
     if (wc.isDestroyed()) return
     const expression = `window.__diminaRenderInspect && window.__diminaRenderInspect.elementFor(${JSON.stringify(sid)})`
     try {
-      const evaluated = await wc.debugger.sendCommand('Runtime.evaluate', {
+      const evaluated: { result?: { objectId?: string } } | null = (await wc.debugger.sendCommand('Runtime.evaluate', {
         expression,
         returnByValue: false,
         objectGroup: HOVER_OBJECT_GROUP,
-      })
-      const objectId = (evaluated as { result?: { objectId?: string } } | null)?.result?.objectId
+      })) as { result?: { objectId?: string } } | null
+      const objectId = evaluated?.result?.objectId
       if (!objectId) return
       await wc.debugger.sendCommand('Overlay.highlightNode', {
         objectId,

@@ -1,4 +1,4 @@
-import type { CompileConfig, Project } from '@/shared/types'
+import type { CompileConfig, LaunchConfig, Project } from '@/shared/types'
 import type { CustomCreateProjectDialogResult } from '../../../shared/types'
 import type { ProjectCreateDefaults } from '../../../shared/ipc-channels'
 import { ProjectsChannel, DialogChannel, ProjectChannel, SessionChannel } from '../../../shared/ipc-channels'
@@ -147,6 +147,36 @@ export function captureThumbnail(projectPath: string): Promise<string | null> {
 /** Load a previously saved thumbnail for the given project. */
 export function getThumbnail(projectPath: string): Promise<string | null> {
   return invoke<string | null>(ProjectChannel.GetThumbnail, projectPath)
+}
+
+/** Read saved launch configs for a project. */
+export function getLaunchConfigs(projectPath: string): Promise<LaunchConfig[]> {
+  return invoke<LaunchConfig[]>(ProjectChannel.GetLaunchConfigs, projectPath)
+    .then((r) => r ?? [])
+}
+
+/** Persist the full list of launch configs for a project. */
+export function saveLaunchConfigs(
+  projectPath: string,
+  configs: LaunchConfig[],
+): Promise<void> {
+  return invokeStrict<void>(ProjectChannel.SaveLaunchConfigs, projectPath, configs)
+}
+
+/** Read the active launch config id for a project. */
+export function getActiveLaunchConfigId(
+  projectPath: string,
+): Promise<string | null> {
+  return invoke<string | null>(ProjectChannel.GetActiveLaunchConfigId, projectPath)
+    .then((r) => r ?? null)
+}
+
+/** Persist the active launch config id for a project. */
+export function saveActiveLaunchConfigId(
+  projectPath: string,
+  id: string | null,
+): Promise<void> {
+  return invokeStrict<void>(ProjectChannel.SaveActiveLaunchConfigId, projectPath, id)
 }
 
 // ── create-project IPC wrappers ─────────────────────────────────────────

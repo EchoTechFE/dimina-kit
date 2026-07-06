@@ -1,7 +1,7 @@
 import { app } from 'electron'
 import path from 'path'
 import fs from 'fs'
-import type { CompileConfig } from '../../../shared/types.js'
+import type { CompileConfig, LaunchConfig } from '../../../shared/types.js'
 import { DEFAULT_SCENE } from '../../../shared/constants.js'
 import { createLogger } from '../../utils/logger.js'
 
@@ -12,6 +12,8 @@ export interface Project {
   path: string
   lastOpened?: string | null
   compileConfig?: CompileConfig
+  launchConfigs?: LaunchConfig[]
+  activeLaunchConfigId?: string | null
 }
 
 export interface ProjectPages {
@@ -164,6 +166,40 @@ export function getProjectSettings(projectPath: string): ProjectSettings {
     }
   } catch {
     return { uploadWithSourceMap: false }
+  }
+}
+
+export function getLaunchConfigs(dirPath: string): LaunchConfig[] {
+  const project = load().find((p) => p.path === dirPath)
+  return project?.launchConfigs ?? []
+}
+
+export function saveLaunchConfigs(
+  dirPath: string,
+  configs: LaunchConfig[],
+): void {
+  const projects = load()
+  const idx = projects.findIndex((p) => p.path === dirPath)
+  if (idx >= 0) {
+    projects[idx] = { ...projects[idx], launchConfigs: configs } as Project
+    save(projects)
+  }
+}
+
+export function getActiveLaunchConfigId(dirPath: string): string | null {
+  const project = load().find((p) => p.path === dirPath)
+  return project?.activeLaunchConfigId ?? null
+}
+
+export function saveActiveLaunchConfigId(
+  dirPath: string,
+  id: string | null,
+): void {
+  const projects = load()
+  const idx = projects.findIndex((p) => p.path === dirPath)
+  if (idx >= 0) {
+    projects[idx] = { ...projects[idx], activeLaunchConfigId: id } as Project
+    save(projects)
   }
 }
 
