@@ -1,4 +1,4 @@
-import type { CompileConfig } from '@/shared/types'
+import type { CompileConfig, LaunchConfig } from '@/shared/types'
 import type { NativeDeviceInfo } from '../../../shared/ipc-channels'
 import {
   SimulatorChannel,

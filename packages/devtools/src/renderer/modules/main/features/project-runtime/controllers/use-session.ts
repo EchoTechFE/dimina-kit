@@ -18,7 +18,7 @@ import {
   saveCompileConfig,
 } from '@/shared/api'
 import type { AppInfo, CompileLogEntry, SessionRuntimeStatusPayload } from '@/shared/api'
-import type { CompileConfig } from '@/shared/types'
+import type { CompileConfig, LaunchConfig } from '@/shared/types'
 import { DEFAULT_SCENE } from '../../../../../../shared/constants'
 import type { CompileStatus } from './use-project-runtime-controller'
 
@@ -60,6 +60,8 @@ export interface SessionHookResult {
   port: number
   pages: string[]
   compileConfig: CompileConfig
+  launchConfigs: LaunchConfig[]
+  activeLaunchConfigId: string | null
   /**
    * Strictly-increasing counter, bumped once per `projectStatus` payload that
    * carries `hotReload: true` (a watcher rebuild finished). `use-simulator.ts`
@@ -81,6 +83,8 @@ export interface SessionHookResult {
   /** Empty BOTH compileEvents and compileLogs (the panel's single 清空). */
   clearCompileEvents: () => void
   relaunch: (nextConfig?: CompileConfig) => Promise<void>
+  switchLaunchConfig: (id: string | null) => Promise<void>
+  updateLaunchConfigs: (configs: LaunchConfig[]) => Promise<void>
   /**
    * Latest runtime-lifecycle push for the active session (launching/running/
    * launch-failed/crashed, plus an optional start-page fallback). `null`
@@ -352,11 +356,15 @@ export function useSession(props: UseSessionProps): SessionHookResult {
     port,
     pages,
     compileConfig,
+    launchConfigs,
+    activeLaunchConfigId,
     hotReloadToken,
     compileEvents,
     compileLogs,
     clearCompileEvents,
     relaunch,
+    switchLaunchConfig,
+    updateLaunchConfigs,
     runtimeStatus,
     watcherDead,
   }
