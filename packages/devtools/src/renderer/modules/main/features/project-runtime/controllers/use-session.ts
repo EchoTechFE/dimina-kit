@@ -359,5 +359,6 @@ export function useSession(props: UseSessionProps): SessionHookResult {
     relaunch,
     runtimeStatus,
     watcherDead,
+    updateLaunchConfigs,
   }
 }
