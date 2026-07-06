@@ -43,6 +43,7 @@ import {
   ICommandService,
   ILanguageService,
   IWorkspaceContextService,
+  ITextFileService,
 } from '@codingame/monaco-vscode-api'
 import { URI } from '@codingame/monaco-vscode-api/vscode/vs/base/common/uri'
 import { VSBuffer } from '@codingame/monaco-vscode-api/vscode/vs/base/common/buffer'
@@ -92,6 +93,9 @@ export interface WorkbenchProbe {
   ICommandService: typeof ICommandService
   ILanguageService: typeof ILanguageService
   IWorkspaceContextService: typeof IWorkspaceContextService
+  /** Dirty-buffer check — used by a host's `applyToEditor` (wal-audit.ts's disk
+   * sync engine) to skip refreshing a file the user has unsaved edits in. */
+  ITextFileService: typeof ITextFileService
   URI: typeof URI
   VSBuffer: typeof VSBuffer
 }
@@ -458,6 +462,7 @@ export async function bootWorkbench(options: BootWorkbenchOptions): Promise<Work
       ICommandService,
       ILanguageService,
       IWorkspaceContextService,
+      ITextFileService,
       URI,
       VSBuffer,
     }
