@@ -119,6 +119,8 @@ reconcile 行为契约：
 
 隐藏用 `setVisible(false)` 而非 `removeChildView`：视图保持在树里、保住 z-order 槽位与 webContents，恢复只需 `setVisible(true)`，无 re-add / raiseTopOverlays 抖动。真正的 `detach`（removeChildView + close）只在视图生命周期销毁时走。
 
+**publisher 生命期契约（真相源死亡即空电平）**：`createPlacementPublisher` 的 `dispose()` 在取消待发帧后，**同步 flush 恰好一次空快照**（`views: []`，epoch 继续单调）。level-triggered 的 main 侧只会应用收到的最新电平——若真相源静默消失，最后一帧非空快照会永久冻结在 main，publisher 放置过的视图全部越过其所有者存活（曾表现为：关闭项目后 host-toolbar 条带残留覆盖项目列表页）。空电平让 reconciler 对所有 renderer 放置的视图统一走 detach（removeChildView，不销毁 WCV；宿主级的 host-toolbar WCV 与保留高度跨项目存活，下次 open 由新 generation 快照重新挂载）。与后继 publisher 的竞态由 generation 护栏兜住：旧 generation 的迟到 flush 被整体拒绝。
+
 ## Codex 对抗提出的 9 条前置条件 → 逐条如何被吸收
 
 | # | 漏洞 | 本设计的吸收方式 |

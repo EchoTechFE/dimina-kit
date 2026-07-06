@@ -370,7 +370,15 @@ describe('createDeckLayoutClient — handshake, anchor opts, snapshot sink, gene
     expect(a.anchors[1]?.dispose).toHaveBeenCalledTimes(1)
   })
 
-  it('a grant arriving after dispose() creates no anchor and does not schedule a snapshot', () => {
+  it('dispose() flushes exactly one final empty snapshot through the internal publisher, and a grant arriving after dispose() creates no anchor and schedules no further snapshot', () => {
+    // The renderer is the single source of truth for desired placement; the
+    // main-side reconciler is level-triggered and keeps applying whatever it
+    // last received. Cancelling the pending frame without publishing left the
+    // last truthful (non-empty) snapshot frozen in main after the renderer
+    // that owned it tore down — a leftover native view stayed
+    // attached+visible over the page underneath. dispose() must publish the
+    // "desired is now empty" level itself, exactly once, via the client's
+    // internal placement publisher.
     const raf = new FakeRaf()
     const b = makeBridge()
     const a = makeAnchorFactory()
@@ -383,11 +391,16 @@ describe('createDeckLayoutClient — handshake, anchor opts, snapshot sink, gene
       cancelFrame: raf.cancel,
     })
     client.dispose()
+
+    expect(b.sendSnapshot).toHaveBeenCalledTimes(1)
+    expect(b.snapshots[0]?.views).toEqual([])
+
     if (b.hasSubscriber()) {
       b.emitGrant({ viewId: 'v1', slotId: '#a', slotToken: 'tok-a', generation: 1 })
     }
     raf.flushFrame()
     expect(a.createAnchor).not.toHaveBeenCalled()
-    expect(b.sendSnapshot).not.toHaveBeenCalled()
+    // No additional snapshot beyond dispose()'s own final flush.
+    expect(b.sendSnapshot).toHaveBeenCalledTimes(1)
   })
 })
