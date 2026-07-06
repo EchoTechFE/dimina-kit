@@ -170,6 +170,8 @@ const appInfo = await build(outputDir, workPath, true, { sourcemap: true, fileTy
 // 成功 → { appId, name, path };失败 → undefined(错误已打到 stderr,同 dmcc)
 ```
 
+配套导出：`warmDefaultPool()` 提前创建这个 singleton 池并拉起 stage worker（不 build、无输出，项目无关——热备胎宿主在没有项目打开时调用,让第一次真实 build 从热池起步）；`disposeDefaultPool()` 显式回收。
+
 **结构化用法（`createNodeCompilerPool`）**——要抛错误对象、显式回收 worker 时用：
 
 ```js

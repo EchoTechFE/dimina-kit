@@ -259,6 +259,19 @@ export default async function build(outputDir, workPath, useAppIdDir = true, opt
   }
 }
 
+/**
+ * Create the lazy singleton pool (if absent) and wait for its stage workers to be
+ * up — WITHOUT building anything and without any stdout. A host that knows a build
+ * is coming (e.g. a warm-standby compile worker forked while no project is open)
+ * calls this so the first real `build()` starts on already-spawned, toolchain-warm
+ * workers. Spawn failures are swallowed here and resurface on the first build's
+ * own ensureAlive — warming is best-effort acceleration, never a failure source.
+ */
+export async function warmDefaultPool() {
+  if (!singleton) singleton = createNodeCompilerPool()
+  await Promise.all(singleton._slots.map((x) => x.slot.ensureAlive().catch(() => {})))
+}
+
 /** Terminate the lazy singleton pool's workers (no-op if never used). */
 export async function disposeDefaultPool() {
   if (singleton) {
