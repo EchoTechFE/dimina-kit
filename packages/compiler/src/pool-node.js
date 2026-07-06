@@ -167,7 +167,9 @@ export function createNodeCompilerPool({
     for (const r of results) {
       if (!r || r.type === 'error') {
         const info = r && r.error
-        const err = new Error(`[compiler] stage "${r && r.stage}" failed: ${(info && info.message) || 'unknown error'}`)
+        const cause = (info && info.message) || 'unknown error'
+        const hint = oxcNativeBindingHint(cause)
+        const err = new Error(`[compiler] stage "${r && r.stage}" failed: ${cause}${hint ? ` — ${hint}` : ''}`)
         if (info && info.stack) err.stack = info.stack
         err.stage = r && r.stage
         err.code = 'compiler-stage-error' // worker-reported compile error — never retried
@@ -232,19 +234,40 @@ export function createNodeCompilerPool({
 // user-facing compile-log lines a host (e.g. devkit/devtools' log panel) already scrapes.
 const STAGE_TITLES = { logic: '编译页面逻辑', view: '编译页面文件', style: '编译样式文件' }
 
+/**
+ * Map a failure message to an actionable packaging hint when it is oxc-parser's
+ * "missing runtime binding" error (thrown when NEITHER the platform-native
+ * `@oxc-parser/binding-<platform>` package NOR the `@oxc-parser/binding-wasm32-wasi`
+ * fallback resolves at runtime). Neither package is a direct dependency of a
+ * typical host, so app bundlers (e.g. electron-builder's dependency collection)
+ * silently drop them — and the raw oxc message says nothing about packaging.
+ * Returns null for every other message.
+ * @param {string} message
+ * @returns {string | null}
+ */
+export function oxcNativeBindingHint(message) {
+  if (!/Cannot find native binding/i.test(String(message))) return null
+  return 'oxc-parser 的运行时绑定没有被打进宿主应用：@dimina-kit/compiler 的 Node 编译路径需要 '
+    + `@oxc-parser/binding-${process.platform}-${process.arch}（平台原生绑定）或 `
+    + '@oxc-parser/binding-wasm32-wasi（wasm 兜底）二者之一实际存在于包内。'
+    + '打包分发（如 electron-builder）时请把其中一个显式声明为宿主依赖，避免依赖收集时被丢弃'
+}
+
 // Lazy singleton pool — a DROP-IN replacement for dmcc's `build(targetPath, workPath,
-// useAppIdDir, options)`, matching its behavior on BOTH the happy and error paths so a
-// host that consumed dmcc keeps working unchanged:
+// useAppIdDir, options)` with ONE deliberate divergence on the error path:
 //   • the first call spins up the resident workers; every later call (a watch rebuild)
 //     reuses them warm;
 //   • on success it emits `✔ 输出编译产物` on stdout (dmcc's listr2 completion line — the
 //     pool has no listr2, so the equivalent user-facing line is surfaced here);
-//   • on failure it reports the failing stage + summary on stderr and RESOLVES undefined
-//     (never rethrows), exactly like dmcc's build() catch (index.js) — the host normalizes
-//     undefined to a null appInfo and the error detail (incl. dmcc's own
-//     `[logic] esbuild 转换失败 …`) still reaches the log channel.
-// Callers that want structured throwing errors + explicit teardown should use
-// createNodeCompilerPool() directly instead.
+//   • on failure it reports the failing stage + summary on stderr (same lines a dmcc
+//     host already scrapes: `✖ <stage>` + `<workPath> 编译出错: …`) and then REJECTS
+//     with the error. dmcc's own build() swallows the error and resolves undefined,
+//     which makes a failed compile indistinguishable from benign "no app info" — a
+//     host would start a session that can only 404. Rejecting keeps the log surface
+//     identical while giving callers a real failure signal; a resolved null/undefined
+//     no longer means "compile failed", only "no app info to report".
+// Callers that want structured errors (`.stage`/`.code`) + explicit teardown should
+// use createNodeCompilerPool() directly instead.
 let singleton = null
 export default async function build(outputDir, workPath, useAppIdDir = true, options = {}) {
   if (!singleton) singleton = createNodeCompilerPool()
@@ -255,7 +278,7 @@ export default async function build(outputDir, workPath, useAppIdDir = true, opt
   } catch (e) {
     if (e && e.stage) console.error(`✖ ${STAGE_TITLES[e.stage] || e.stage}`)
     console.error(`${workPath} 编译出错: ${e && e.message}`)
-    return undefined
+    throw e
   }
 }
 

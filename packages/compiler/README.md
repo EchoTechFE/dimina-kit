@@ -160,17 +160,19 @@ Node 宿主（Electron devtools、CLI watch 服务等）用这个导出替代直
 
 dmcc 每次 `build()` 都新建 3 个 worker_threads、编完销毁，每次重编都要重新加载 sass/postcss/esbuild/oxc 并重启 esbuild 服务进程；本 pool 只在第一次付这笔钱。实测 watch 热重编（`dimina/fe/example` 全部 5 个 demo）比 dmcc 快 1.6–4×（base 826→207ms、weui 2716→763ms）；冷启动略慢于 dmcc（3 个 worker 首次加载 bundle），"打开一次、保存无数次"的 devtools 场景下净赚。数据与方法见 [`docs/compile-fs-experiments.md`](./docs/compile-fs-experiments.md)。
 
-**dmcc drop-in（默认导出）**——签名、返回值、日志面貌与 dmcc `build()` 一致，宿主原有的日志抓取（`✔ 输出编译产物` / `✖ <stage>` / `<workPath> 编译出错:`）不用改：
+**dmcc drop-in（默认导出）**——签名、成功返回值、日志面貌与 dmcc `build()` 一致，宿主原有的日志抓取（`✔ 输出编译产物` / `✖ <stage>` / `<workPath> 编译出错:`）不用改。**错误路径与 dmcc 刻意分歧：编译失败会 reject**（dmcc 吞错 resolve undefined，失败编译与"无 app 信息"从此不可区分，宿主会带着兜底 appId 启动一个只能 404 的会话）——失败时先照旧把 `✖ <stage>` + `编译出错:` 打到 stderr，再把错误抛给调用方：
 
 ```js
 import build from '@dimina-kit/compiler/pool-node'
 
 // 首次调用起常驻 worker,后续调用(watch 重编)复用
 const appInfo = await build(outputDir, workPath, true, { sourcemap: true, fileTypes })
-// 成功 → { appId, name, path };失败 → undefined(错误已打到 stderr,同 dmcc)
+// 成功 → { appId, name, path };编译失败 → reject(错误同时已打到 stderr,日志面貌同 dmcc)
 ```
 
-配套导出：`warmDefaultPool()` 提前创建这个 singleton 池并拉起 stage worker（不 build、无输出，项目无关——热备胎宿主在没有项目打开时调用,让第一次真实 build 从热池起步）；`disposeDefaultPool()` 显式回收。
+配套导出：`warmDefaultPool()` 提前创建这个 singleton 池并拉起 stage worker（不 build、无输出，项目无关——热备胎宿主在没有项目打开时调用,让第一次真实 build 从热池起步）；`disposeDefaultPool()` 显式回收；`oxcNativeBindingHint(message)` 把 oxc-parser 的 "Cannot find native binding" 报错映射成打包提示（其他消息返回 null）——stage 失败的 reject message 命中时会自动附带这条提示。
+
+> **Electron 打包分发注意（oxc-parser 运行时绑定）**：Node 编译路径依赖 oxc-parser，其运行时需要 `@oxc-parser/binding-<platform>-<arch>`（平台原生 `.node`）或 `@oxc-parser/binding-wasm32-wasi`（wasm 兜底）**二者之一实际存在于分发包内**。它们都不是宿主的直接依赖，electron-builder 等工具收集依赖时容易丢——丢了之后每次编译都在 logic stage 报 `Cannot find native binding`。宿主打包时请把其中一个显式声明为自己的 dependency（或在打包配置里强制收集）。
 
 **结构化用法（`createNodeCompilerPool`）**——要抛错误对象、显式回收 worker 时用：
 
