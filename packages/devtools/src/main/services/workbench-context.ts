@@ -282,6 +282,11 @@ export function createWorkbenchContext(opts: CreateContextOptions): WorkbenchCon
   ctx.simulatorApis = createSimulatorApiRegistry()
   ctx.windows = createWindowService(opts.mainWindow)
   ctx.views = createViewManager(ctx)
+  // Full view teardown belongs to the CONTEXT's life, not a project's:
+  // closeProject only disposes project-scoped views, so this registration is
+  // the one place that releases the HOST-scoped toolbar (its view and the
+  // ref-counted session-runtime preload) when the app/context winds down.
+  ctx.registry.add(() => ctx.views.disposeAll())
   ctx.notify = createRendererNotifier(ctx)
   // Lazy closure (not a bound snapshot): reads ctx.windows/notify/rendererDir
   // at call time through the live context, which structurally satisfies the
