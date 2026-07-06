@@ -11,6 +11,10 @@ jobs:
   verify:
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: read
+      pull-requests: write
+
     steps:
       - name: Rewrite submodule SSH URL to HTTPS
         shell: bash
@@ -35,9 +39,43 @@ jobs:
 
       - name: Anti-regression ratchet
         run: |
+          set -o pipefail
           pnpm exec tsc -p tools/ratchet
           node --test "tools/ratchet/*.test.ts"
-          pnpm ratchet:check
+          pnpm ratchet:check 2>&1 | tee ratchet-check.log
+
+      # Upserts one sticky comment (keyed by the marker) with the ratchet
+      # table, so the PR always shows the latest baseline-vs-current state
+      # without stacking a new comment per push.
+      - name: Ratchet report PR comment
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs')
+            let log = ''
+            try { log = fs.readFileSync('ratchet-check.log', 'utf8') } catch { return }
+            const start = log.indexOf('metric ')
+            const table = (start === -1 ? log : log.slice(start)).replace(/ ELIFECYCLE.*$/ms, '').trim()
+            if (!table) return
+            const marker = '<!-- ratchet-report -->'
+            const body = `${marker}\n### Anti-regression ratchet\n\n\`\`\`\n${table}\n\`\`\`\n`
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.issue.number, per_page: 100,
+            })
+            const existing = comments.find(c => c.body && c.body.includes(marker))
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                comment_id: existing.id, body,
+              })
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: context.issue.number, body,
+              })
+            }
 
       - name: Anti-regression baseline guard
         if: github.event_name == 'pull_request'

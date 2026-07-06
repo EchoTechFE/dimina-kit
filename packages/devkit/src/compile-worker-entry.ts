@@ -40,17 +40,41 @@ export interface WorkerResultMessage {
 	error?: { message: string }
 }
 
+/** Reply to `{ cmd: 'ping' }` — the warm-standby manager's health probe. */
+export interface WorkerPongMessage {
+	type: 'pong'
+	id: string
+}
+
+/** Reply to `{ cmd: 'prewarm' }` — ok:false carries the load/warm failure. */
+export interface WorkerPrewarmResultMessage {
+	type: 'prewarm-result'
+	id: string
+	ok: boolean
+	error?: string
+}
+
+export type WorkerOutboundMessage
+	= WorkerResultMessage | WorkerPongMessage | WorkerPrewarmResultMessage
+
 export interface CompileWorkerHandlerDeps {
 	/**
-	 * Lazy compiler load — deferred to the first build. May be sync (a plain
-	 * `require`) or async (a dynamic `import()` of the ESM `@dimina-kit/compiler`
-	 * pool); the handler awaits it either way. Loaded ONCE and cached.
+	 * Lazy compiler load — deferred to the first build (or an explicit prewarm).
+	 * May be sync (a plain `require`) or async (a dynamic `import()` of the ESM
+	 * `@dimina-kit/compiler` pool); the handler awaits it either way. Loaded
+	 * ONCE and cached — a build after a prewarm reuses the prewarmed load.
 	 */
 	loadCompiler: () => WorkerBuildFn | Promise<WorkerBuildFn>
 	/** `process.chdir` — mutates the CHILD process cwd only. */
 	chdir: (dir: string) => void
 	/** `process.send` — replies to the parent. */
-	send: (msg: WorkerResultMessage) => void
+	send: (msg: WorkerOutboundMessage) => void
+	/**
+	 * Optional deep warm-up run by `{ cmd: 'prewarm' }` after the compiler
+	 * loads (e.g. spinning up the resident pool's stage workers so the first
+	 * real build starts on warm threads). Project-agnostic by contract.
+	 */
+	warmPool?: () => Promise<void>
 }
 
 interface BuildMessage {
@@ -68,13 +92,32 @@ function isBuildMessage(msg: unknown): msg is BuildMessage {
 	)
 }
 
+function isCommandWithId(msg: unknown, cmd: string): msg is { cmd: string, id: string } {
+	return (
+		typeof msg === 'object'
+		&& msg !== null
+		&& (msg as { cmd?: unknown }).cmd === cmd
+		&& typeof (msg as { id?: unknown }).id === 'string'
+	)
+}
+
 /**
- * Build the fork-side IPC message handler. Non-build messages are ignored
+ * Build the fork-side IPC message handler. Unknown messages are ignored
  * (no compiler load, no reply). A build command chdirs into the project,
  * runs the compiler exactly as the old in-process call sites did, and ALWAYS
  * replies — `@dimina/compiler` swallows compile errors internally (resolves
  * undefined), which is normalized to `appInfo: null`; a genuine throw still
  * replies with `error.message` so the parent never hangs on a lost build.
+ *
+ * Two warm-standby commands ride the same channel:
+ *  - `{ cmd: 'ping', id }` → `{ type: 'pong', id }`. Pure liveness; never
+ *    loads the compiler (a health check on a cold-idle spare must stay cheap).
+ *  - `{ cmd: 'prewarm', id }` → loads the compiler into the SAME cache the
+ *    build path uses, then awaits `deps.warmPool?.()`, and always replies
+ *    `{ type: 'prewarm-result', id, ok, error? }` (a failed prewarm reports —
+ *    it never throws out of the handler). Deliberately NO chdir: a prewarmed
+ *    spare stays project-agnostic, which is what makes adopting it into ANY
+ *    next-opened project safe.
  */
 export function createCompileWorkerHandler(
 	deps: CompileWorkerHandlerDeps,
@@ -82,6 +125,26 @@ export function createCompileWorkerHandler(
 	let cachedBuild: WorkerBuildFn | null = null
 
 	return async (msg: unknown): Promise<void> => {
+		if (isCommandWithId(msg, 'ping')) {
+			deps.send({ type: 'pong', id: msg.id })
+			return
+		}
+		if (isCommandWithId(msg, 'prewarm')) {
+			try {
+				if (!cachedBuild) cachedBuild = await deps.loadCompiler()
+				await deps.warmPool?.()
+				deps.send({ type: 'prewarm-result', id: msg.id, ok: true })
+			}
+			catch (err) {
+				deps.send({
+					type: 'prewarm-result',
+					id: msg.id,
+					ok: false,
+					error: err instanceof Error ? err.message : String(err),
+				})
+			}
+			return
+		}
 		if (!isBuildMessage(msg)) return
 		try {
 			if (!cachedBuild) cachedBuild = await deps.loadCompiler()
@@ -175,6 +238,13 @@ if (isForkedWorkerEntry) {
 		// its default export is the pooled build fn.
 		loadCompiler: async () =>
 			(await import('@dimina-kit/compiler/pool-node')).default as unknown as WorkerBuildFn,
+		// Deep prewarm for the warm-standby spare: spin up the resident pool's stage
+		// workers ahead of the first build. Optional-chained so an older compiler
+		// package without the export degrades to load-only prewarm.
+		warmPool: async () => {
+			const pool = await import('@dimina-kit/compiler/pool-node') as { warmDefaultPool?: () => Promise<void> }
+			await pool.warmDefaultPool?.()
+		},
 		chdir: dir => process.chdir(dir),
 		send: (msg) => {
 			process.send?.(msg)

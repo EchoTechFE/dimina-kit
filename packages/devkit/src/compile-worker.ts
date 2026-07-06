@@ -35,6 +35,16 @@ export interface CompileLogEntry {
 export interface CompileWorkerOptions {
 	/** Filtered dmcc log lines (already through `filterDmccLogLine`). */
 	onLog?: (entry: CompileLogEntry) => void
+	/**
+	 * An already-forked compile-worker-entry process to reuse for the first
+	 * build (a warm-standby hand-off) instead of paying a fresh fork + compiler
+	 * import. Must be an IPC fork with piped stdio — the same shape spawnWorker
+	 * produces. Pure accelerator: an adoptee that is already dead (or dies
+	 * before the first build) is simply skipped and the next build forks fresh.
+	 * Once adopted, the process is owned by this worker exactly like a
+	 * self-forked one — close() kills it, its death rejects in-flight builds.
+	 */
+	adopt?: ChildProcess
 }
 
 export interface BuildRequest {
@@ -68,8 +78,12 @@ export interface CompileWorker {
  * zero-dependency, erasable-syntax-only shell by design, so Node can run it
  * with type stripping (default since 22.18; behind `--experimental-strip-types`
  * on 22.6–22.17, which `workerExecArgv` passes for a `.ts` entry).
+ *
+ * Exported (with `workerExecArgv`) as the single authority on the fork shape:
+ * the warm-standby manager forks the SAME entry with the SAME execArgv, so a
+ * spare is indistinguishable from a worker this module forks itself.
  */
-function resolveWorkerEntry(): string {
+export function resolveWorkerEntry(): string {
 	const js = path.join(__dirname, 'compile-worker-entry.js')
 	if (fs.existsSync(js)) return js
 	return path.join(__dirname, 'compile-worker-entry.ts')
@@ -84,7 +98,7 @@ function resolveWorkerEntry(): string {
  * ExperimentalWarning is silenced because the child's stderr is the dmcc log
  * transport. On ≥22.18 (stripping on by default) the flag is still accepted.
  */
-function workerExecArgv(entry: string): string[] {
+export function workerExecArgv(entry: string): string[] {
 	if (!entry.endsWith('.ts')) return []
 	const [major = 0, minor = 0] = process.versions.node.split('.').map(Number)
 	const hasStripTypesFlag = major > 22 || (major === 22 && minor >= 6)
@@ -156,15 +170,10 @@ export function createCompileWorker(opts: CompileWorkerOptions = {}): CompileWor
 		stream.on('close', flush)
 	}
 
-	function spawnWorker(): ChildProcess {
-		const entry = resolveWorkerEntry()
-		const worker = fork(entry, [], {
-			// Pipe stdout/stderr back to the parent — the dmcc log transport.
-			silent: true,
-			// Explicit execArgv, NOT the parent's (vitest/electron loaders would
-			// leak into a plain Node child).
-			execArgv: workerExecArgv(entry),
-		})
+	// Attach the log pipes, result routing and death handling to a worker
+	// process — the SAME wiring whether the process was self-forked or adopted
+	// from a warm standby (an inline copy for one of the two would drift).
+	function wireWorker(worker: ChildProcess): ChildProcess {
 		attachLineReader(worker.stdout, 'stdout')
 		attachLineReader(worker.stderr, 'stderr')
 		// Shared, idempotent death handler for 'exit' / 'close' / 'error': the
@@ -216,6 +225,28 @@ export function createCompileWorker(opts: CompileWorkerOptions = {}): CompileWor
 		worker.on('close', () => settleDeath('compile worker exited unexpectedly mid-build'))
 		worker.on('error', (err: Error) => settleDeath(`compile worker errored: ${err.message}`))
 		return worker
+	}
+
+	function spawnWorker(): ChildProcess {
+		const entry = resolveWorkerEntry()
+		return wireWorker(fork(entry, [], {
+			// Pipe stdout/stderr back to the parent — the dmcc log transport.
+			silent: true,
+			// Explicit execArgv, NOT the parent's (vitest/electron loaders would
+			// leak into a plain Node child).
+			execArgv: workerExecArgv(entry),
+		}))
+	}
+
+	// Adopt the warm-standby hand-off, if any, at creation time — wiring
+	// immediately (not at the first build) so a spare that dies in the gap is
+	// handled by the normal death path (child cleared → next build re-forks)
+	// instead of being discovered as a broken pipe mid-build. An adoptee that
+	// is ALREADY dead is skipped outright: its death events fired before any
+	// listener could attach, so wiring it would leave a permanently wedged
+	// child slot.
+	if (opts.adopt && opts.adopt.exitCode === null && opts.adopt.signalCode === null && opts.adopt.connected) {
+		child = wireWorker(opts.adopt)
 	}
 
 	function runBuild(req: BuildRequest): Promise<WorkerAppInfo | null> {

@@ -2,6 +2,7 @@ import type { BrowserWindow, WebContents, WebContentsView } from 'electron'
 import type { CompileConfig, LaunchConfig } from '../../../shared/types.js'
 import {
   ProjectChannel,
+  SessionChannel,
   WindowChannel,
   SettingsChannel,
   PopoverChannel,
@@ -21,6 +22,41 @@ export interface ProjectStatusPayload {
   message: string
   /** True when the status update is emitted by the file-watcher rebuild loop. */
   hotReload?: boolean
+  /** Freshly-read page list, carried on a hot-reload status so the launch dropdown stays current. Absent when the read failed or wasn't attempted. */
+  pages?: string[]
+  /** Present (`'dead'`) once the project's file watcher has stopped — saves no longer trigger an automatic rebuild. */
+  watcher?: 'dead'
+}
+
+/**
+ * Payload for the `session:runtimeStatus` push — the post-compile SESSION
+ * lifecycle main tracks per `appSessionId` in bridge-router (`AppSession`
+ * itself is main-private; this is the public projection). A successful
+ * compile only means the resource tree exists; it says nothing about whether
+ * the simulator actually booted — this closes that gap.
+ */
+export interface SessionRuntimeStatusPayload {
+  appId: string
+  phase: 'launching' | 'running' | 'launch-failed' | 'crashed'
+  /**
+   * Machine-readable cause, present on `'launch-failed'` and `'crashed'`:
+   * `'timeout'` — the launch watchdog (`LAUNCH_TIMEOUT_MS`) expired before the
+   * root page reported `domReady`; `'logic-bundle-unreachable'` — the
+   * compiled `logic.js` could not be fetched/executed;
+   * `'service-host-navigation-failed'` — the service-host window failed to
+   * navigate to its spawn URL; `'service-host-crashed'` — the service host's
+   * renderer process was gone. Plain `string` (not a literal union) so an
+   * unrecognized future code degrades gracefully instead of a type error.
+   */
+  code?: string
+  /** Human-readable detail, mirroring the short form of the matching `ctx.diagnostics` report. */
+  reason?: string
+  /**
+   * Present on `'launching'` when `handleSpawn`'s page-mount gate
+   * (`resolveRootPagePath`) substituted the resolved page for the request —
+   * i.e. `SpawnResult.pageFallbackApplied` was true for this spawn.
+   */
+  pageFallback?: { requested: string; resolved: string }
 }
 
 /**
@@ -66,6 +102,8 @@ export interface RendererNotifier {
   // ── Main window ──────────────────────────────────────────────────────────
   /** Broadcast project compile status transitions to the main renderer. */
   projectStatus(payload: ProjectStatusPayload): void
+  /** Broadcast a session's post-compile runtime lifecycle to the main renderer. */
+  sessionRuntimeStatus(payload: SessionRuntimeStatusPayload): void
   /** Push one per-line dmcc compile-log entry to the main renderer. */
   compileLog(payload: CompileLogPayload): void
   /** Ask the main renderer to navigate back to its landing screen. */
@@ -135,6 +173,9 @@ export function createRendererNotifier(ctx: NotifierContext): RendererNotifier {
   return {
     projectStatus(payload) {
       sendToMain(ProjectChannel.Status, payload)
+    },
+    sessionRuntimeStatus(payload) {
+      sendToMain(SessionChannel.RuntimeStatus, payload)
     },
     compileLog(payload) {
       sendToMain(ProjectChannel.CompileLog, payload)

@@ -1,7 +1,7 @@
 import type { CompileConfig, LaunchConfig, Project } from '@/shared/types'
 import type { CustomCreateProjectDialogResult } from '../../../shared/types'
 import type { ProjectCreateDefaults } from '../../../shared/ipc-channels'
-import { ProjectsChannel, DialogChannel, ProjectChannel } from '../../../shared/ipc-channels'
+import { ProjectsChannel, DialogChannel, ProjectChannel, SessionChannel } from '../../../shared/ipc-channels'
 import { invoke, invokeStrict, on } from './ipc-transport'
 
 export interface AppInfo {
@@ -22,6 +22,24 @@ export interface ProjectStatus {
   message: string
   /** True when the rebuild was triggered by the file watcher — the simulator should reload. */
   hotReload?: boolean
+  /** Freshly-read page list, carried on a hot-reload status so the launch dropdown stays current. Absent when the read failed or wasn't attempted. */
+  pages?: string[]
+  /** Present (`'dead'`) once the project's file watcher has stopped — saves no longer trigger an automatic rebuild. */
+  watcher?: 'dead'
+}
+
+/**
+ * Post-compile SESSION runtime lifecycle for the active app (mirrors main's
+ * `SessionRuntimeStatusPayload`). A successful compile only means the
+ * resource tree exists; this tracks whether the simulator actually booted.
+ */
+export interface SessionRuntimeStatusPayload {
+  appId: string
+  phase: 'launching' | 'running' | 'launch-failed' | 'crashed'
+  pageFallback?: { requested: string; resolved: string }
+  reason?: string
+  /** e.g. 'timeout' | 'logic-bundle-unreachable' | 'service-host-navigation-failed' | 'service-host-crashed'. */
+  code?: string
 }
 
 /**
@@ -109,6 +127,16 @@ export function onCompileLog(
   handler: (entry: CompileLogEntry) => void,
 ): () => void {
   return on<[CompileLogEntry]>(ProjectChannel.CompileLog, (entry) => handler(entry))
+}
+
+/**
+ * Subscribe to session runtime-lifecycle broadcasts from the main process
+ * (mirrors `onProjectStatus`). Returns the transport unsubscribe function.
+ */
+export function onSessionRuntimeStatus(
+  handler: (status: SessionRuntimeStatusPayload) => void,
+): () => void {
+  return on<[SessionRuntimeStatusPayload]>(SessionChannel.RuntimeStatus, (status) => handler(status))
 }
 
 /** Capture a screenshot of the simulator and save it as a thumbnail. */

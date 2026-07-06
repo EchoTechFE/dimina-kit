@@ -2,8 +2,8 @@ import type React from 'react'
 import { useEffect, useRef } from 'react'
 import type { RefObject } from 'react'
 import { DEVICES, SIM_PANEL_PADDING } from '@/shared/constants'
-import type { AppInfo, ProjectStatus } from '@/shared/api'
-import type { CompileConfig, LaunchConfig } from '@/shared/types'
+import type { AppInfo, ProjectStatus, SessionRuntimeStatusPayload } from '@/shared/api'
+import type { CompileConfig } from '@/shared/types'
 import type { ElementInspection, StorageWriteResult } from '../../../../../../shared/ipc-channels'
 import type { WxmlNode } from '../../right-panel/types.js'
 import { DEFAULT_RIGHT_PANE_STATE } from '../types'
@@ -47,10 +47,10 @@ interface SessionSlice {
   /** Clears both compileEvents and compileLogs. */
   clearCompileEvents: () => void
   relaunch: (nextConfig?: CompileConfig) => Promise<void>
-  launchConfigs: LaunchConfig[]
-  activeLaunchConfigId: string | null
-  switchLaunchConfig: (id: string | null) => Promise<void>
-  updateLaunchConfigs: (configs: LaunchConfig[]) => Promise<void>
+  /** Latest runtime-lifecycle push for the active session; null when healthy/unreported, or right after a hot-reload starts a fresh launch round. */
+  runtimeStatus: SessionRuntimeStatusPayload | null
+  /** True once the project's file watcher has died for this session. */
+  watcherDead: boolean
 }
 
 interface DeviceSlice {
@@ -197,10 +197,8 @@ export function useProjectRuntimeController(
       compileLogs: sessionHook.compileLogs,
       clearCompileEvents: sessionHook.clearCompileEvents,
       relaunch: sessionHook.relaunch,
-      launchConfigs: sessionHook.launchConfigs,
-      activeLaunchConfigId: sessionHook.activeLaunchConfigId,
-      switchLaunchConfig: sessionHook.switchLaunchConfig,
-      updateLaunchConfigs: sessionHook.updateLaunchConfigs,
+      runtimeStatus: sessionHook.runtimeStatus,
+      watcherDead: sessionHook.watcherDead,
     },
     device: {
       device: deviceHook.device,

@@ -14,5 +14,14 @@ export default defineConfig({
 		setupFiles: ['./src/dock-react/_test-setup.ts'],
 		globals: true,
 		testTimeout: 15000,
+		coverage: {
+			provider: 'v8',
+			reporter: ['text', 'text-summary', 'html', 'json-summary'],
+			reportsDirectory: './coverage/dock-react',
+			// Denominator = the dock-react sources this suite owns (the main
+			// vitest.config.ts excludes them), so uncovered files still count.
+			include: ['src/dock-react/**/*.{ts,tsx}'],
+			exclude: ['**/*.test.{ts,tsx}', '**/_test-setup.ts', '**/__test-stubs__/**'],
+		},
 	},
 })

@@ -47,7 +47,7 @@
     "build:check": "node scripts/check-workbench-build.mjs dist-app",
     "check-types": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
-    "test": "vitest run",
+    "test": "vitest run --reporter=default --reporter=json --outputFile.json=test-report.json --coverage.enabled --coverage.reporter=json-summary --coverage.reportsDirectory=coverage",
     "test:dev": "vitest",
     "test:coverage": "vitest run --coverage",
     "dev": "node scripts/patch-ts-ext.mjs && vite",

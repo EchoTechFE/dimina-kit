@@ -28,7 +28,9 @@ const withTimeout = (p, ms, label) => Promise.race([
 ])
 
 // --- idle-death recovery: kill a warm worker, next build must succeed --------
-const pool = createNodeCompilerPool()
+// retryOnWorkerDeath is off for this pool: the mid-build scenario below asserts
+// single-attempt rejection semantics (transparent retry has its own scenario).
+const pool = createNodeCompilerPool({ retryOnWorkerDeath: false })
 const info1 = await pool.build(dir('a1'), APP, true, {})
 chk(!!info1.appId, `baseline build ok (appId ${info1.appId}, path ${info1.path})`)
 await pool._slots[1].w.terminate() // kill the view worker while idle
@@ -44,13 +46,23 @@ chk(/exited/.test(String(midResult)), `mid-flight worker death rejects the build
 const info3 = await withTimeout(pool.build(dir('b2'), APP, true, {}), 120000, 'build after mid-flight death')
 chk(info3.appId === info1.appId, 'next build after mid-flight death succeeds via respawn')
 
+const treeOk = (d, i) => fs.existsSync(path.join(d, i.appId, 'main', 'logic.js')) && fs.existsSync(path.join(d, i.appId, 'main', 'app.css'))
+
+// --- transparent retry: a mid-build worker death is invisible to the caller ---
+const poolR = createNodeCompilerPool() // retryOnWorkerDeath defaults to true
+const retryBuild = poolR.build(dir('r1'), APP, true, {})
+setTimeout(() => { poolR._slots[0].w?.terminate() }, 30) // kill logic worker mid-flight
+const retryInfo = await withTimeout(retryBuild, 240000, 'mid-flight-death build with retry')
+chk(retryInfo && retryInfo.appId === info1.appId && treeOk(dir('r1'), retryInfo),
+  'a mid-build worker death is transparently retried once and the build still publishes intact output')
+await poolR.dispose()
+
 // --- two pool instances, concurrent builds → module-level serialization ------
 const poolB = createNodeCompilerPool()
 const [x, y] = await withTimeout(
   Promise.all([pool.build(dir('c1'), APP, true, {}), poolB.build(dir('c2'), APP, true, {})]),
   240000, 'cross-pool concurrent builds',
 )
-const treeOk = (d, i) => fs.existsSync(path.join(d, i.appId, 'main', 'logic.js')) && fs.existsSync(path.join(d, i.appId, 'main', 'app.css'))
 chk(x.appId === y.appId && treeOk(dir('c1'), x) && treeOk(dir('c2'), y),
   'concurrent builds from two pool instances both publish intact output (serialized)')
 

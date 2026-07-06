@@ -6,6 +6,12 @@
 //   - realm reuse across compiles (resetCompilerState inside the worker)
 //   - dispatch + disjoint-output merge
 //
+// Worker supervision (inactivity watchdog, immediate terminate on death, generation
+// guard against stale replies, terminate-ack-gated respawn) lives in src/worker-slot.js
+// — this file only describes how to spawn a browser Worker and what the compile
+// protocol looks like. A compile attempt killed by worker death (timeout/crash) is
+// transparently retried exactly once on a fresh worker (retryOnWorkerDeath).
+//
 // What stays with the downstream is only what is genuinely host-specific:
 //   - createWorker(): how to spawn a module Worker running this package's stage worker
 //     (bundler/hosting-specific — one line)
@@ -13,8 +19,24 @@
 //     (esbuild.wasm / oxc wasm are host-hosted assets)
 //   - the source itself (a { relPath: content } map). OPFS is intentionally NOT here:
 //     it's an optional zero-copy source-distribution the downstream can layer on.
+import { createWorkerSlot, settleAll } from './worker-slot.js'
 
 const DEFAULT_STAGES = ['logic', 'view', 'style']
+
+// Default INACTIVITY ceiling for a setup/compile-subset round trip. The stage worker
+// heartbeats while it works, so any sign of life resets this window — it only expires
+// after that much total silence, which for a live worker means it is truly wedged
+// (e.g. a synchronous wasm loop blocking its event loop). Without it, a stuck worker
+// would leave compile() (and the downstream fallback keyed off its rejection) pending
+// forever.
+const DEFAULT_SEND_TIMEOUT_MS = 30000
+
+// Warmup gets its own, longer window: a cold wasm-toolchain fetch (~13MB) can
+// legitimately dwarf a compile step, but a hung toolchain import must STILL reject
+// eventually — an unguarded warmup would wedge the serial compile chain forever.
+const DEFAULT_WARMUP_TIMEOUT_MS = 120000
+
+const WORKER_DEATH_CODES = new Set(['compiler-worker-timeout', 'compiler-worker-crashed', 'compiler-worker-dead'])
 
 /**
  * @param {{
@@ -23,6 +45,9 @@ const DEFAULT_STAGES = ['logic', 'view', 'style']
  *   stages?: string[],              // default ['logic','view','style']
  *   workPath?: string,              // default '/work'
  *   onLog?: (entry: { level: string, message: string }) => void,  // worker console diagnostics
+ *   sendTimeoutMs?: number,         // default 30000 — inactivity window per setup/compile-subset round trip
+ *   warmupTimeoutMs?: number,       // default 120000 — inactivity window for the warmup round trip
+ *   retryOnWorkerDeath?: boolean,   // default true — one transparent whole-attempt retry after a worker death
  * }} options
  */
 export function createCompilerPool(options = {}) {
@@ -32,6 +57,9 @@ export function createCompilerPool(options = {}) {
     stages = DEFAULT_STAGES,
     workPath: defaultWorkPath = '/work',
     onLog,
+    sendTimeoutMs = DEFAULT_SEND_TIMEOUT_MS,
+    warmupTimeoutMs = DEFAULT_WARMUP_TIMEOUT_MS,
+    retryOnWorkerDeath = true,
   } = options
   if (typeof createWorker !== 'function') {
     throw new Error('[compiler] createCompilerPool: options.createWorker (() => Worker) is required')
@@ -40,44 +68,120 @@ export function createCompilerPool(options = {}) {
     throw new Error('[compiler] createCompilerPool: options.toolchainSetupURL is required')
   }
 
-  // one resident worker per stage. send() returns a promise resolved by the worker's
-  // next message; replies are FIFO so a per-worker queue pairs them up.
+  let disposed = false
+
   const workers = stages.map((stage) => {
-    const w = createWorker()
-    const q = []
-    w.onmessage = (e) => {
-      const d = e.data
-      // Diagnostics the compiler logs inside the worker (missing components, unsupported
-      // wx APIs, style-preprocessor fallbacks, …) arrive as out-of-band { type:'log' }
-      // messages — surface them via onLog instead of pairing them with a send() reply.
-      if (d && d.type === 'log') { if (onLog) { try { onLog({ level: d.level, message: d.message, stage }) } catch { /* ignore */ } } return }
-      const r = q.shift(); if (r) r(d)
-    }
-    w.onerror = (ev) => {
-      // Worker-script-level failure (module load / uncaught). ErrorEvent.message is often
-      // empty for these — surface filename:lineno and a hint so it's not a bare "error".
-      const msg = (ev && (ev.message || (ev.error && ev.error.message)))
-        || 'worker failed to load or threw (no message — often a module-load / static-asset / cross-origin failure)'
-      const where = ev && ev.filename ? ` (${ev.filename}:${ev.lineno || 0})` : ''
-      const r = q.shift(); if (r) r({ type: 'error', error: `[compiler] stage '${stage}' worker error: ${msg}${where}` })
-    }
-    return { stage, w, send: (m) => new Promise((res) => { q.push(res); w.postMessage(m) }) }
+    const name = `[compiler] stage '${stage}' worker`
+    const slot = createWorkerSlot({
+      name,
+      spawnTransport: ({ onMessage, onCrash }) => {
+        const w = createWorker()
+        w.onmessage = (e) => onMessage(e.data)
+        w.onerror = (ev) => {
+          // Worker-script-level failure (module load / uncaught). ErrorEvent.message is
+          // often empty for these — surface filename:lineno and a hint so it's not a
+          // bare "error".
+          const msg = (ev && (ev.message || (ev.error && ev.error.message)))
+            || 'worker failed to load or threw (no message — often a module-load / static-asset / cross-origin failure)'
+          const where = ev && ev.filename ? ` (${ev.filename}:${ev.lineno || 0})` : ''
+          onCrash(`${name} error: ${msg}${where}`)
+        }
+        w.onmessageerror = () => {
+          onCrash(`${name} sent an unstructured-clonable message (onmessageerror)`)
+        }
+        return { postMessage: (m) => w.postMessage(m), terminate: () => w.terminate() }
+      },
+      onEvent: (d) => {
+        // Diagnostics the compiler logs inside the worker (missing components,
+        // unsupported wx APIs, style-preprocessor fallbacks, …) arrive as out-of-band
+        // { type:'log' } messages — surface them via onLog instead of pairing them
+        // with a request reply.
+        if (d && d.type === 'log') {
+          if (onLog) { try { onLog({ level: d.level, message: d.message, stage }) } catch { /* ignore */ } }
+          return true
+        }
+        // Heartbeats exist purely as liveness for the slot's inactivity watchdog.
+        if (d && d.type === 'heartbeat') return true
+        return false
+      },
+    })
+    const entry = { stage, slot, warmed: null, warmedGen: 0 }
+    // Spawn eagerly so the pool is warm from creation; a spawn failure surfaces on the
+    // first compile()'s own ensureAlive rather than as an unhandled rejection here.
+    slot.ensureAlive().catch(() => {})
+    return entry
   })
 
-  let warmed = null
-  async function warmup() {
-    if (!warmed) {
+  // Sends a protocol message and normalizes the worker's own { type:'error' } replies
+  // (real compile errors — message + stack from inside the worker) into throws. Worker
+  // DEATH (timeout/crash) instead arrives as a coded rejection from the slot.
+  async function requestChecked(entry, msg, description, timeoutMs) {
+    const r = await entry.slot.request(msg, { timeoutMs, description })
+    if (!r || r.type === 'error') {
+      // Stable classification for downstream: worker-reported compile/setup errors get
+      // their own code, distinct from the worker-death codes that gate the retry.
+      throw Object.assign(
+        new Error(r && r.error ? r.error : `[compiler] ${description} failed in stage '${entry.stage}' worker`),
+        { code: 'compiler-stage-error', stage: entry.stage },
+      )
+    }
+    return r
+  }
+
+  // (Re)warms one stage: respawns after a death (ensureAlive awaits the dead worker's
+  // terminate() settlement first), then memoizes the warmup round trip per generation —
+  // a live warm slot just awaits an already-resolved promise here.
+  async function ensureWarm(entry) {
+    const { slot } = entry
+    await slot.ensureAlive()
+    if (!entry.warmed || entry.warmedGen !== slot.generation) {
+      entry.warmedGen = slot.generation
       // stages tells the worker its stage identity so toolchain-free stages (style)
       // can skip importing toolchainSetupURL at warmup.
-      warmed = Promise.all(workers.map((x) => x.send({ type: 'warmup', toolchainSetupURL, stages: [x.stage] })))
-        .then((rs) => rs.forEach((r, i) => {
-          // The worker's own try/catch reports the REAL cause (e.g. a toolchainSetupURL
-          // import failure) as r.error — surface it verbatim, tagged with the stage.
-          if (r && r.type === 'error') throw new Error(r.error || `[compiler] stage '${workers[i].stage}' warmup failed`)
-        }))
-        .catch((err) => { warmed = null; throw err })
+      entry.warmed = requestChecked(
+        entry,
+        { type: 'warmup', toolchainSetupURL, stages: [entry.stage], wantHeartbeat: true },
+        'warmup',
+        warmupTimeoutMs,
+      ).then(() => {}).catch((err) => {
+        if (entry.warmedGen === slot.generation) entry.warmed = null
+        throw err
+      })
+      entry.warmed.catch(() => {}) // observed even when an attempt aborts early on a sibling's failure
     }
-    return warmed
+    return entry.warmed
+  }
+
+  function warmup() {
+    return settleAll(workers.map(ensureWarm))
+  }
+
+  // One full compile attempt against the resident realms. Ends quiescent: settleAll
+  // guarantees no request is still in flight when it returns/throws, so a retry can
+  // start fresh without cross-attempt FIFO pairing.
+  async function runAttempt(files, workPath) {
+    await settleAll(workers.map(ensureWarm))
+
+    // Phase 1 — one worker runs setup ONCE: it allocates the scope-hash ids
+    // (page + component data-v-XXXXX) and builds miniprogram_npm/app-config.json.
+    // Broadcasting this single bundle to every stage is REQUIRED for correctness:
+    // each stage runs in its own realm, and if each ran its own setup it would roll
+    // independent random uuids, so the CSS `[data-v-X]` selectors would never match
+    // the render `Module id` and every WXSS rule would target nothing (regression
+    // guarded by scripts/test-pool-scopehash.js). This mirrors the Node disk pool,
+    // which likewise sets up once and fans the same { pages, storeInfo } out.
+    const s = await requestChecked(workers[0], { type: 'setup', files, workPath, wantHeartbeat: true }, 'setup', sendTimeoutMs)
+    const { bundle, scaffold } = s
+
+    // Phase 2 — every stage compiles in parallel against the SHARED bundle. The
+    // non-stage scaffold (app-config.json + npm, produced once) seeds the union.
+    const parts = await settleAll(workers.map((x) =>
+      requestChecked(x, { type: 'compile-subset', files, workPath, stages: [x.stage], bundle, wantHeartbeat: true }, 'compile-subset', sendTimeoutMs)))
+    const merged = { ...(scaffold || {}) }
+    for (const pr of parts) {
+      Object.assign(merged, pr.result.files) // stages write disjoint files -> clean union
+    }
+    return { appId: bundle.appId, name: bundle.name, files: merged }
   }
 
   // Compiles share the resident realms, so they must not overlap — serialize them.
@@ -91,33 +195,32 @@ export function createCompilerPool(options = {}) {
    */
   function compile(input = {}) {
     const run = chain.then(async () => {
-      await warmup()
+      if (disposed) {
+        throw Object.assign(new Error('[compiler] pool has been disposed'), { code: 'compiler-pool-disposed' })
+      }
       const files = input.files || input
       if (!files || typeof files !== 'object' || !Object.keys(files).length) {
         throw new Error('[compiler] pool.compile expects { files: { relPath: content }, workPath? } (or a non-empty files map)')
       }
       const workPath = input.workPath || defaultWorkPath
-      const parts = await Promise.all(workers.map((x) =>
-        x.send({ type: 'compile-subset', files, workPath, stages: [x.stage] })))
-      const merged = {}
-      let appId, name
-      for (let i = 0; i < parts.length; i++) {
-        const pr = parts[i]
-        // pr.error carries the worker's real error string (message + stack) — surface it.
-        if (!pr || pr.type === 'error') throw new Error(pr && pr.error ? pr.error : `[compiler] stage '${workers[i].stage}' worker error`)
-        appId = pr.result.appId
-        name = pr.result.name
-        Object.assign(merged, pr.result.files)   // stages write disjoint files -> clean union
+      try {
+        return await runAttempt(files, workPath)
+      } catch (err) {
+        // A worker death is often transient (memory pressure, tab freeze, a one-off
+        // toolchain stall) — retry the WHOLE attempt once on fresh workers. Real
+        // compile errors (bad user source) are deterministic and are never retried.
+        if (!retryOnWorkerDeath || !err || !WORKER_DEATH_CODES.has(err.code)) throw err
+        return await runAttempt(files, workPath)
       }
-      return { appId, name, files: merged }
     })
     // keep the chain alive regardless of this compile's outcome
     chain = run.then(() => {}, () => {})
     return run
   }
 
-  function dispose() {
-    for (const x of workers) { try { x.w.terminate() } catch { /* ignore */ } }
+  async function dispose() {
+    disposed = true
+    await Promise.all(workers.map((x) => x.slot.dispose()))
   }
 
   return { warmup, compile, dispose, stages: [...stages] }

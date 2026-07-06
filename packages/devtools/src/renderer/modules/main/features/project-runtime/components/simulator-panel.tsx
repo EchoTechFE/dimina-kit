@@ -6,6 +6,7 @@ import { VIEW_ID, VIEW_LAYER } from '../../../../../../shared/view-ids'
 import { useDockLayoutEpoch } from '@dimina-kit/electron-deck/dock-react'
 import { cn } from '@/shared/lib/utils'
 import { DEVICES, ZOOM_OPTIONS } from '@/shared/constants'
+import { FallbackBanner, RuntimeErrorOverlay, WatcherDeadBar, type SimulatorRuntimeStatus } from './simulator-runtime-banners'
 
 interface Device {
   name: string
@@ -22,6 +23,12 @@ interface SimulatorPanelProps {
   currentPage: string
   copied: boolean
   onCopyPagePath: () => void
+  /** Latest runtime-lifecycle push for the active session; null when healthy/unreported. Optional for embedders that don't wire runtime-status (defaults to null: no overlay/banner). */
+  runtimeStatus?: SimulatorRuntimeStatus | null
+  /** True once the project's file watcher has died for this session. */
+  watcherDead?: boolean
+  /** Re-runs the current launch config (the toolbar's existing 刷新/relaunch action). */
+  onRelaunch?: () => void
 }
 
 export function SimulatorPanel({
@@ -33,6 +40,9 @@ export function SimulatorPanel({
   currentPage,
   copied,
   onCopyPagePath,
+  runtimeStatus = null,
+  watcherDead = false,
+  onRelaunch = () => {},
 }: SimulatorPanelProps) {
   // The simulator is a main-process WebContentsView (native-host is the sole
   // runtime) painted directly over the flex:1 placeholder below. This renderer
@@ -77,6 +87,21 @@ export function SimulatorPanel({
   useEffect(() => {
     if (compileStatus.status === 'ready') setHasBeenReady(true)
   }, [compileStatus.status])
+
+  // Runtime-lifecycle derived flags. A compile failure has nothing running to
+  // report on, so it always wins over a runtime error — the two overlays are
+  // mutually exclusive.
+  const isRuntimeTerminalError = runtimeStatus?.phase === 'launch-failed' || runtimeStatus?.phase === 'crashed'
+
+  // Fallback-banner dismissal: remembered only for the CURRENT launch round.
+  // `runtimeStatus` is reset to null the moment a new round starts (hot-reload
+  // reset in use-session), so clearing the dismissal on that null edge means a
+  // repeat fallback in a later round is never silently swallowed.
+  const [fallbackDismissed, setFallbackDismissed] = useState(false)
+  useEffect(() => {
+    if (!runtimeStatus) setFallbackDismissed(false)
+  }, [runtimeStatus])
+  const showFallbackBanner = Boolean(runtimeStatus?.pageFallback) && !isRuntimeTerminalError && !fallbackDismissed
   const isRecompile = compileStatus.status === 'compiling' && hasBeenReady
 
   const publisher = usePlacementPublisher()
@@ -186,6 +211,16 @@ export function SimulatorPanel({
         </Select>
       </div>
 
+      {/* Persistent, never covers the device region below (contract: "不遮内容"). */}
+      {watcherDead && <WatcherDeadBar />}
+      {showFallbackBanner && runtimeStatus?.pageFallback && (
+        <FallbackBanner
+          requested={runtimeStatus.pageFallback.requested}
+          resolved={runtimeStatus.pageFallback.resolved}
+          onDismiss={() => setFallbackDismissed(true)}
+        />
+      )}
+
       <div
         ref={anchorRef}
         className="flex-1 min-h-0 bg-sim-bg relative"
@@ -221,6 +256,16 @@ export function SimulatorPanel({
               </div>
             </div>
           </div>
+        )}
+        {/* Compile failure always wins when both are true. */}
+        {compileStatus.status !== 'error' && runtimeStatus
+          && (runtimeStatus.phase === 'launch-failed' || runtimeStatus.phase === 'crashed') && (
+          <RuntimeErrorOverlay
+            phase={runtimeStatus.phase}
+            code={runtimeStatus.code}
+            reason={runtimeStatus.reason}
+            onRelaunch={onRelaunch}
+          />
         )}
       </div>
 

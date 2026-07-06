@@ -41,9 +41,18 @@
     "test:decompose": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-decompose.js",
     "test:realm-reuse": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-realm-reuse.js",
     "test:pool-node": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-pool-node.js",
+    "test:pool-scopehash": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-pool-scopehash.js",
     "test:pool-hardening": "node scripts/build-compiler.js node && node scripts/test-pool-hardening.js",
+    "test:pool-worker-hardening": "node scripts/test-pool-worker-hardening.js",
+    "test:worker-slot": "node scripts/test-worker-slot.js",
+    "test:pool-watchdog": "node scripts/test-pool-watchdog.js",
+    "test:lazy-toolchain": "node scripts/build-compiler.js node && node scripts/test-lazy-toolchain.js",
+    "test:idle-shrink": "node scripts/build-compiler.js node && node scripts/test-idle-shrink.js",
+    "test:warm-default": "node scripts/build-compiler.js node && node scripts/test-warm-default.js",
     "test:npm-scan": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-npm-scan.js",
-    "test:stage-toolchain": "node scripts/build-compiler.js browser && node scripts/test-stage-toolchain.js"
+    "test:stage-toolchain": "node scripts/build-compiler.js browser && node scripts/test-stage-toolchain.js",
+    "test:stage-worker-message-order": "node scripts/build-compiler.js node && node scripts/test-stage-worker-message-order.js",
+    "test:stage-load-retry": "node scripts/build-compiler.js node && node scripts/test-stage-load-retry.js"
   },
   "dependencies": {
     "@babel/parser": "^7.29.7",

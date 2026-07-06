@@ -99,6 +99,10 @@ async function bootShellSession(spec: {
  */
 export function SimulatorApp() {
   const [slots, setSlots] = useState<ShellSlots>({ current: null, pending: null })
+  // Set only by the initial-boot effect below; a failure here means `current`
+  // never gets committed, so the render must show this instead of the (empty)
+  // shell list — otherwise the simulator area stays permanently blank.
+  const [bootError, setBootError] = useState<string | null>(null)
   // Authoritative slot state for the bridge-event handlers (registered once).
   // Written SYNCHRONOUSLY by commitSlots, never by a passive effect: bridge
   // events arrive outside React's batching, so an effect-synced mirror lags
@@ -124,12 +128,17 @@ export function SimulatorApp() {
     void (async () => {
       try {
         const route = parseLocationRoute(window.location.search)
-        if (!route) return
+        if (!route) {
+          console.error('[simulator] boot failed: no launch route in window.location.search')
+          if (!cancelled) setBootError('缺少启动参数，无法确定要打开的小程序页面。')
+          return
+        }
         const shell = await bootShellSession(bootSpecFromEntry(route.appId, route.entry))
         if (cancelled) return
         commitSlots({ ...slotsRef.current, current: shell })
       } catch (err) {
         console.error('[simulator] native-host boot failed:', err)
+        if (!cancelled) setBootError(err instanceof Error ? err.message : String(err))
       }
     })()
     return () => {
@@ -218,6 +227,34 @@ export function SimulatorApp() {
   const shells: Array<{ shell: ShellSession; role: 'current' | 'pending' }> = []
   if (slots.current) shells.push({ shell: slots.current, role: 'current' })
   if (slots.pending) shells.push({ shell: slots.pending, role: 'pending' })
+
+  // Initial boot never committed a `current` shell — render the failure
+  // instead of an empty device area.
+  if (bootError) {
+    return (
+      <div
+        data-testid="sim-boot-error"
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 8,
+          height: '100%',
+          width: '100%',
+          padding: 24,
+          boxSizing: 'border-box',
+          background: '#1e1e1e',
+          color: '#e0e0e0',
+          textAlign: 'center',
+          fontSize: 13,
+        }}
+      >
+        <div style={{ fontSize: 15, fontWeight: 600 }}>小程序启动失败</div>
+        <div style={{ opacity: 0.85, wordBreak: 'break-word' }}>{bootError}</div>
+      </div>
+    )
+  }
 
   return (
     <Suspense fallback={null}>

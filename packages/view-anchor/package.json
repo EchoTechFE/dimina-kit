@@ -42,7 +42,7 @@
     "build:docs": "node scripts/build-docs.mjs",
     "check-types": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
-    "test": "vitest run",
+    "test": "vitest run --reporter=default --reporter=json --outputFile.json=test-report.json --coverage.enabled --coverage.reporter=json-summary --coverage.reportsDirectory=coverage",
     "test:dev": "vitest",
     "test:coverage": "vitest run --coverage",
     "prepack": "pnpm run build"

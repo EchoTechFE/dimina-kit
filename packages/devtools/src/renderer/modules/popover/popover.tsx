@@ -156,23 +156,29 @@ export default function Popover() {
         style={{ top: position.top, left: position.left }}
         onClick={(e) => e.stopPropagation()}
       >
-        {editorState === null ? (
-          /* ── List view ────────────────────────────────────────── */
-          <div className="p-2">
-            {/* Normal compile entry */}
-            <button
-              type="button"
-              className={
-                'w-full flex items-center gap-2 px-2.5 py-1.5 rounded text-[12px] text-left hover:bg-surface-hover'
-                + (activeLaunchConfigId === null ? ' bg-surface-active' : '')
-              }
-              onClick={() => handleSwitchConfig(null)}
-            >
-              <span className="w-4 text-center text-accent shrink-0">
-                {activeLaunchConfigId === null ? '✓' : ''}
-              </span>
-              <span className="flex-1 text-text truncate">普通编译</span>
-            </button>
+        <div className="flex items-center gap-2.5 mb-3">
+          <label className="w-16 shrink-0 text-code-label text-[12px]">
+            启动页面
+          </label>
+          <Select
+            className="flex-1 min-w-0 bg-surface-input border-text-dim text-text text-[12px] py-0.5"
+            value={config.startPage}
+            onChange={(e) =>
+              setConfig((c) => ({ ...c, startPage: e.target.value }))
+            }
+          >
+            {config.startPage && !pages.includes(config.startPage) && (
+              <option value={config.startPage}>
+                {config.startPage}（页面不存在）
+              </option>
+            )}
+            {pages.map((pg) => (
+              <option key={pg} value={pg}>
+                {pg}
+              </option>
+            ))}
+          </Select>
+        </div>
 
             {/* Saved launch configs */}
             {launchConfigs.map((lc) => (

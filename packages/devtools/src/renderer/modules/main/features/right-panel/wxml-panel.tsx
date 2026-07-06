@@ -6,6 +6,8 @@ interface WxmlPanelProps {
   tree: WxmlNode | null
   onInspectElement?: (sid: string) => Promise<ElementInspection | null>
   onClearInspection?: () => Promise<void>
+  /** Whether the mini-program's runtime session is `running` — distinguishes "小程序未运行" from the normal "waiting for the tree" empty state below. Defaults to true so callers that don't track runtime status keep the plain waiting text. */
+  isRuntimeRunning?: boolean
 }
 
 interface WxmlTreeNodeProps {
@@ -287,6 +289,7 @@ export function WxmlPanel({
   tree,
   onInspectElement,
   onClearInspection,
+  isRuntimeRunning = true,
 }: WxmlPanelProps) {
   const [inspection, setInspection] = useState<ElementInspection | null>(null)
   // 序号 + rAF 用于解决 hover 触发的两个独立问题：
@@ -332,7 +335,7 @@ export function WxmlPanel({
     return (
       <div className="flex flex-col flex-1 overflow-hidden" data-testid="wxml-panel">
         <div className="text-[12px] text-text-dim text-center px-4 py-6">
-          等待小程序加载...
+          {isRuntimeRunning ? '等待小程序加载...' : '小程序未运行'}
         </div>
       </div>
     )

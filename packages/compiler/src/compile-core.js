@@ -14,16 +14,67 @@ import {
 import { createDist } from '../../../dimina/fe/packages/compiler/src/common/publish.js'
 import { compileConfig } from '../../../dimina/fe/packages/compiler/src/core/index.js'
 import { NpmBuilder } from '../../../dimina/fe/packages/compiler/src/common/npm-builder.js'
-// compileJS exported by source; writeCompileRes + __resetLogicState + __setEnableSourcemap
-// appended at bundle time (see scripts/build-compiler.js). __setEnableSourcemap flips the
-// logic compiler's module-level `enableSourcemap` — the ONLY sourcemap entry point, since
-// this package short-circuits dmcc's `parentPort` worker bootstrap (isMainThread=true shim).
-import { compileJS, writeCompileRes, __resetLogicState, __setEnableSourcemap } from '../../../dimina/fe/packages/compiler/src/core/logic-compiler.js'
-// compileML + __resetViewState (appended at bundle time)
-import { compileML, __resetViewState } from '../../../dimina/fe/packages/compiler/src/core/view-compiler.js'
-import { compileSS, __resetStyleState } from '../../../dimina/fe/packages/compiler/src/core/style-compiler.js'
 // __resetAssets appended at bundle time (clears the never-cleared assetsMap cache)
 import { __resetAssets } from '../../../dimina/fe/packages/compiler/src/common/utils.js'
+
+// --- lazy per-stage toolchain loading ---------------------------------------
+//
+// The three stage compilers are loaded on demand, NOT statically: each one drags a
+// heavy toolchain behind it (style: sass + cssnano + less + postcss ≈ 150MB RSS per
+// realm; view: cheerio + @vue/compiler-sfc; logic: esbuild + oxc), and every realm
+// that imports this module — the pool's main thread AND each worker_threads stage
+// worker, each with its own isolated module registry — would otherwise pay for ALL
+// of them while using at most one. Deferring the import keeps every realm loaded
+// with exactly its own stage's toolchain (setupCompile's own chain — config-compiler,
+// NpmBuilder, env/publish/utils — is all light, so the main thread loads none).
+//
+// NOTE for bundling: this only stays lazy if the dynamic imports become real runtime
+// chunks. scripts/build-compiler.js builds the node bundles with esbuild `splitting`
+// for exactly that reason — a single-file bundle would hoist each chunk's external
+// `import 'sass'` back to the entry's top level and silently defeat the laziness.
+//
+// The per-stage export surfaces (compileJS/writeCompileRes/__reset*/__setEnableSourcemap
+// are partly appended at bundle time — see build-compiler.js exportAppend):
+//   logic: compileJS, writeCompileRes, __resetLogicState, __setEnableSourcemap
+//   view:  compileML, __resetViewState
+//   style: compileSS, __resetStyleState
+const STAGE_IMPORTERS = {
+  logic: () => import('../../../dimina/fe/packages/compiler/src/core/logic-compiler.js'),
+  view: () => import('../../../dimina/fe/packages/compiler/src/core/view-compiler.js'),
+  style: () => import('../../../dimina/fe/packages/compiler/src/core/style-compiler.js'),
+}
+const stageLoads = new Map()   // stage -> in-flight/settled import promise
+const stageModules = new Map() // stage -> SETTLED module namespace (reset targets)
+
+function loadStageModule(stage) {
+  if (!stageLoads.has(stage)) {
+    // Only a SUCCESSFUL load is memoized. A rejection (missing chunk, transient fs
+    // error) clears the memo so the next call re-imports — a repaired install
+    // recovers in place instead of replaying the cached failure forever.
+    const load = STAGE_IMPORTERS[stage]().then((m) => {
+      stageModules.set(stage, m)
+      return m
+    }, (err) => {
+      if (stageLoads.get(stage) === load) stageLoads.delete(stage)
+      throw err
+    })
+    stageLoads.set(stage, load)
+  }
+  return stageLoads.get(stage)
+}
+
+/**
+ * Warm ONE stage's toolchain ahead of its first compile (e.g. a stage worker that
+ * knows its identity at spawn). Memoized; a failure surfaces again on the first
+ * compile's own load, so callers may fire-and-forget.
+ * @param {'logic'|'view'|'style'} stage
+ */
+export function preloadStage(stage) {
+  if (!STAGE_IMPORTERS[stage]) {
+    return Promise.reject(new Error(`[compiler] unknown compile stage "${stage}" (expected ${STAGE_NAMES.join('/')})`))
+  }
+  return loadStageModule(stage).then(() => {})
+}
 
 function makeProgress() {
   let c = 0
@@ -237,6 +288,7 @@ function assertFs(fs) {
 // single-pass compile so output stays byte-for-byte identical.
 
 async function runLogicStage(pages, progress) {
+  const { compileJS, writeCompileRes } = await loadStageModule('logic')
   // Main first (produces mainRes). A subpackage that references a shared component
   // belonging to the main package reverse-injects it into mainRes, so the main
   // package's logic.js must be written LAST — after every subpackage has run.
@@ -249,6 +301,7 @@ async function runLogicStage(pages, progress) {
 }
 
 async function runViewStage(pages, progress) {
+  const { compileML } = await loadStageModule('view')
   await compileML(pages.mainPages, null, progress)
   for (const [root, sub] of Object.entries(pages.subPages)) {
     await compileML(sub.info, root, progress)
@@ -256,6 +309,7 @@ async function runViewStage(pages, progress) {
 }
 
 async function runStyleStage(pages, progress) {
+  const { compileSS } = await loadStageModule('style')
   // app.css is prepended for the main package, matching the original ordering.
   const styleMain = [{ path: 'app', id: '' }, ...pages.mainPages]
   await compileSS(styleMain, null, progress)
@@ -288,9 +342,9 @@ export const STAGE_NAMES = Object.keys(STAGES)
 export async function runStage(stage, pages, { sourcemap = false } = {}) {
   const run = STAGES[stage]
   if (!run) throw new Error(`[compiler] unknown compile stage "${stage}" (expected ${STAGE_NAMES.join('/')})`)
-  // Only the logic compiler generates sourcemaps; setting it is a harmless no-op for
-  // the other stages (they never read enableSourcemap).
-  if (stage === 'logic') __setEnableSourcemap(!!sourcemap)
+  // Only the logic compiler owns a sourcemap switch (view/style never read it), so the
+  // flag lives on the lazily-loaded logic module and is set right before its stage runs.
+  if (stage === 'logic') (await loadStageModule('logic')).__setEnableSourcemap(!!sourcemap)
   await run(pages, makeProgress())
 }
 
@@ -382,9 +436,12 @@ export function collectOutputs({ fs, targetPath } = {}) {
  * Call it BEFORE compiling the next project in the same realm.
  */
 export function resetCompilerState() {
-  __resetLogicState()
-  __resetStyleState()
-  __resetViewState()
+  // Only stage modules that actually LOADED in this realm carry cache state; a stage
+  // that never loaded (lazy per-stage toolchains) has nothing to clear, and resetting
+  // must never force-load a toolchain this realm doesn't use. A module still mid-load
+  // is equally safe to skip: its caches are born empty.
+  const STAGE_RESETS = { logic: '__resetLogicState', view: '__resetViewState', style: '__resetStyleState' }
+  for (const [stage, mod] of stageModules) mod[STAGE_RESETS[stage]]()
   __resetAssets()
 }
 

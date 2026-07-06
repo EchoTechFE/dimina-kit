@@ -11,13 +11,14 @@
  * promise — it returns `undefined`. `runApiAsync` therefore sees a sync return
  * of `undefined` and (because the params had no success/fail) immediately emits
  * `{ ok: true, result: undefined }` BEFORE the async fetch settles. On actual
- * failure (network error, non-2xx) the real `onFail` sentinel fires later but
- * `settled` is already true, so it is ignored. The premature `ok: true` verdict
- * is the sole emission — wrong on every axis.
+ * network failure the real `onFail` sentinel fires later but `settled` is
+ * already true, so it is ignored. The premature `ok: true` verdict is the sole
+ * emission — wrong on every axis.
  *
- * Contract the tests encode:
+ * Contract the tests encode (wx.request semantics: HTTP status never decides
+ * success vs fail — only a network-layer failure does):
  *   1. fetch reject → verdict must be ok:false, NOT ok:true
- *   2. fetch 500    → verdict must be ok:false, NOT ok:true
+ *   2. fetch 500    → verdict ok:true carrying statusCode 500 in result
  *   3. fetch 200    → verdict ok:true AND result contains the parsed body
  *   4. (regression guard) sync handler unrelated to request → still settles ok:true
  */
@@ -78,7 +79,7 @@ describe('runApiAsync + directRequest — wx.request routing (stripped params)',
     expect(emits.some((v) => v.ok === false)).toBe(true)
   })
 
-  it('2. non-2xx response (HTTP 500) routes to fail (ok:false), NOT ok:true', async () => {
+  it('2. non-2xx response (HTTP 500) routes to success (ok:true) carrying statusCode 500, never fail', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(() => Promise.resolve(new Response('Internal Server Error', { status: 500 }))),
@@ -92,8 +93,12 @@ describe('runApiAsync + directRequest — wx.request routing (stripped params)',
     })
     await drainAsync()
 
-    expect(emits.some((v) => v.ok === true)).toBe(false)
-    expect(emits.some((v) => v.ok === false)).toBe(true)
+    // wx.request contract: an HTTP response — any status — is a SUCCESS; the
+    // service branches on result.statusCode (401 → re-login, 500 → retry).
+    expect(emits.some((v) => v.ok === false)).toBe(false)
+    const successVerdict = emits.find((v) => v.ok === true)
+    expect(successVerdict).toBeDefined()
+    expect(successVerdict!.result).toMatchObject({ statusCode: 500 })
   })
 
   it('3. successful 200 JSON response emits ok:true with parsed body in result (not undefined)', async () => {

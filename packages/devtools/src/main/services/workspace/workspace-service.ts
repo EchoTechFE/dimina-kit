@@ -136,8 +136,8 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
   // is building or desync currentSession vs the bridge appSessions. See op-lock.ts.
   const opLock = createOpLock()
 
-  function sendStatus(status: string, message: string, hotReload?: boolean): void {
-    ctx.notify.projectStatus(hotReload ? { status, message, hotReload: true } : { status, message })
+  function sendStatus(status: string, message: string, hotReload?: boolean, pages?: string[], watcherDead?: boolean): void {
+    ctx.notify.projectStatus({ status, message, ...(hotReload ? { hotReload: true } : {}), ...(pages ? { pages } : {}), ...(watcherDead ? { watcher: 'dead' as const } : {}) })
   }
 
   function bestEffort(label: string, fn: () => void): void {
@@ -232,8 +232,17 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
         sourcemap: true,
         fileTypes: ctx.fileTypes,
         watch: compile.watch,
-        onRebuild: () => sendStatus('ready', '编译完成，已重启', true),
+        onRebuild: () => {
+          // getProjectPages never throws — failure yields the empty-pages
+          // shape. Empty means "read failed or degenerate project" (a valid
+          // app.json names ≥1 page) and is withheld so the renderer keeps its
+          // previous dropdown instead of blanking; the push is never blocked.
+          const { pages } = repo.getProjectPages(projectPath)
+          sendStatus('ready', '编译完成，已重启', true, pages.length ? pages : undefined)
+        },
         onBuildError: (err: unknown) => sendStatus('error', String(err)),
+        // Watcher died mid-session (EMFILE, permission loss, …): non-fatal, so 'ready' stays but `watcher: 'dead'` flags that saves no longer auto-rebuild.
+        onWatcherError: () => sendStatus('ready', '文件监听已停止，保存不再触发自动编译', false, undefined, true),
         onLog: (entry: { stream: 'stdout' | 'stderr'; text: string }) => {
           if (sessionGeneration !== logGeneration) return
           ctx.notify.compileLog({ stream: entry.stream, text: entry.text, at: Date.now() })

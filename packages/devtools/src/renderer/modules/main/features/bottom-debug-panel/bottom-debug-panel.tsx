@@ -44,6 +44,15 @@ export interface BottomDebugPanelProps {
   compileEvents?: CompileEvent[]
   compileLogs?: CompileLogEntry[]
   onClearCompileEvents?: () => void
+
+  /**
+   * True while the compiled mini-program's runtime session is actually
+   * `running`. Lets WxmlPanel/AppDataPanel/StoragePanel distinguish "小程序未
+   * 运行" from a true empty-data vacuum in their empty states. Optional
+   * (defaults to `true`) so embedders that don't wire runtime status keep
+   * their pre-existing empty-state text.
+   */
+  isRuntimeRunning?: boolean
 }
 
 /** The four DOM debug tabs DebugTabContent can render (Console is native). */
@@ -82,6 +91,7 @@ export function DebugTabContent(
     compileEvents = [],
     compileLogs = [],
     onClearCompileEvents,
+    isRuntimeRunning = true,
   } = props
 
   switch (tabId) {
@@ -91,6 +101,7 @@ export function DebugTabContent(
           tree={wxmlTree}
           onInspectElement={onInspectWxml}
           onClearInspection={onClearWxmlInspection}
+          isRuntimeRunning={isRuntimeRunning}
         />
       )
     case 'appdata':
@@ -98,6 +109,7 @@ export function DebugTabContent(
         <AppDataPanel
           state={appData}
           onSelectBridge={onSelectAppDataBridge}
+          isRuntimeRunning={isRuntimeRunning}
         />
       )
     case 'storage':
@@ -109,6 +121,7 @@ export function DebugTabContent(
           onClear={onClearStorage}
           onClearAll={onClearAllStorage}
           getPrefix={getStoragePrefix}
+          isRuntimeRunning={isRuntimeRunning}
         />
       )
     case 'compile':

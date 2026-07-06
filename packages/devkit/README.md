@@ -59,6 +59,22 @@ await session.close()
 | `port`    | `number`              | 实际监听的端口                      |
 | `close`   | `() => Promise<void>` | 关闭文件监听和预览服务器            |
 
+### enableCompileWorkerStandby（热备胎，可选加速器）
+
+进程级开关：预先 fork 一个**项目无关**的编译子进程并预热编译器（不 chdir、不编译任何项目），之后每次 `openProject` 自动领养它——首编省掉 fork + 编译器加载（实测 ~1.6s）；每次 `session.close()` 后自动补一个新备胎。**纯加速器**：备胎的任何失效（悄悄死亡、健康检查失败、崩溃熔断）都自动退化为原有的冷 fork 路径，绝不影响 openProject 的成败。
+
+```typescript
+import { enableCompileWorkerStandby } from '@dimina-kit/devkit'
+
+const standby = enableCompileWorkerStandby({
+  onEvent: ev => console.log('[standby]', ev.type, ev.pid ?? '', ev.reason ?? ''),
+})
+// …应用退出时：
+await standby.dispose() // 杀掉备胎；之后 openProject 永远走冷路径，不再补胎
+```
+
+稳定性设计（面向发布到用户机器）：领养前 ping/pong 健康检查（默认 1s 超时，卡死的备胎会被杀掉而不是交出去）；意外死亡自动补胎，但 30 秒内连死 3 次触发熔断（`degraded`，本次会话内永久停用，防 fork 风暴）；`onEvent` 暴露完整生命周期（`spawned` / `prewarmed` / `adopted` / `health-check-failed` / `died` / `degraded`）供接入诊断。未调用此 API 时行为与之前完全一致。
+
 ---
 
 ## 工作流程
