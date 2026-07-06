@@ -466,3 +466,218 @@ describe('createSyncEngine — consumeInboundEcho (poll host outbound echo suppr
     expect(engine.consumeInboundEcho('never-touched.js', 'anything')).toBe(false)
   })
 })
+
+/** Stateful world for contention tests: a truth-source `disk` and a ledger
+ * that actually HOLD content, so interleaving tests can assert final-state
+ * convergence (ledger == disk) instead of just call counts. `ledgerWrites`
+ * records every (rel, text) the engine committed, in order — the lost-update
+ * detector: a value that should have been recorded exactly once must appear
+ * exactly once, an echo must not appear at all. */
+function makeStatefulWorld(initialDisk: Record<string, string> = {}) {
+  const encoder = new TextEncoder()
+  const disk = new Map<string, Uint8Array>(
+    Object.entries(initialDisk).map(([rel, text]) => [rel, encoder.encode(text)]),
+  )
+  const ledger = new Map<string, string>()
+  const ledgerWrites: Array<[string, string]> = []
+  const client: SyncClientLike = {
+    write: vi.fn(async (rel: string, text: string) => {
+      ledger.set(rel, text)
+      ledgerWrites.push([rel, text])
+    }),
+    rm: vi.fn(async (rel: string) => {
+      ledger.delete(rel)
+    }),
+    read: vi.fn(async (rel: string) => {
+      if (!ledger.has(rel)) throw Object.assign(new Error('not in ledger'), { code: 'not-found' })
+      return { content: ledger.get(rel) as string }
+    }),
+    ls: vi.fn(async () => ({ paths: [...ledger.keys()] })),
+  }
+  const watch = makeWatch()
+  const port = makePort({
+    capabilities: { watch: 'poll' },
+    read: vi.fn(async (rel: string) => {
+      const bytes = disk.get(rel)
+      if (!bytes) throw Object.assign(new Error('not on disk'), { code: 'not-found' })
+      return bytes
+    }),
+    walk: vi.fn(async (onFile: (rel: string, bytes: Uint8Array) => Promise<void>) => {
+      for (const [rel, bytes] of disk) await onFile(rel, bytes)
+    }),
+    changes: watch.changes,
+  })
+  return {
+    disk,
+    ledger,
+    ledgerWrites,
+    client,
+    port,
+    watch,
+    setDisk(rel: string, text: string) {
+      disk.set(rel, encoder.encode(text))
+    },
+    delDisk(rel: string) {
+      disk.delete(rel)
+    },
+  }
+}
+
+describe('createSyncEngine — extreme contention: bidirectional same-path churn', () => {
+  it('converges ledger == disk with no lost update and no echo re-record across an inbound/save/inbound interleave', async () => {
+    const w = makeStatefulWorld({ 'f.js': 'v1' })
+    const applyToEditor = vi.fn().mockResolvedValue(undefined)
+    const engine = createSyncEngine(w.client, w.port, { applyToEditor })
+
+    await engine.populateLedger() // seeds v1
+    engine.start()
+
+    // Human save: per the host contract the truth source is written FIRST,
+    // then onHumanSave records. The scanner may then report that same disk
+    // mtime change — the echo the engine must absorb.
+    w.setDisk('f.js', 'v2-human')
+    await engine.onHumanSave('f.js', 'v2-human')
+    w.watch.emitBatch(['f.js']) // poll echo of our own save
+
+    // External edit races right behind the echo.
+    w.setDisk('f.js', 'v3-external')
+    w.watch.emitBatch(['f.js'])
+
+    await vi.waitFor(() => expect(w.ledger.get('f.js')).toBe('v3-external'))
+
+    // Convergence: ledger text == disk bytes.
+    expect(new TextDecoder().decode(w.disk.get('f.js'))).toBe('v3-external')
+    // No lost update, no duplicate: seed v1, save v2, inbound v3 — each once.
+    expect(w.ledgerWrites.filter(([rel]) => rel === 'f.js').map(([, text]) => text)).toEqual([
+      'v1',
+      'v2-human',
+      'v3-external',
+    ])
+    // The echo batch produced no editor apply; the external edit produced one.
+    expect(applyToEditor).toHaveBeenCalledTimes(1)
+    expect(applyToEditor.mock.calls[0][0]).toBe('f.js')
+  })
+
+  it('serializes an inbound batch against an in-flight onHumanSave ledger write on the same path (FIFO, no interleaved corruption)', async () => {
+    const w = makeStatefulWorld({ 'f.js': 'v1' })
+    // Hold the save's ledger write mid-flight so the inbound batch provably
+    // queues BEHIND it rather than interleaving.
+    let releaseSave!: () => void
+    const gate = new Promise<void>((r) => {
+      releaseSave = r
+    })
+    const realWrite = w.client.write as ReturnType<typeof vi.fn>
+    let held = false
+    realWrite.mockImplementation(async (rel: string, text: string) => {
+      if (!held && text === 'v2-human') {
+        held = true
+        await gate
+      }
+      w.ledger.set(rel, text)
+      w.ledgerWrites.push([rel, text])
+    })
+    const engine = createSyncEngine(w.client, w.port)
+
+    await engine.populateLedger()
+    engine.start()
+
+    w.setDisk('f.js', 'v2-human')
+    const savePromise = engine.onHumanSave('f.js', 'v2-human') // blocks on gate inside its FIFO slot
+    w.setDisk('f.js', 'v-ext') // external write lands while the save is still in flight
+    w.watch.emitBatch(['f.js'])
+
+    await new Promise((r) => setTimeout(r, 20)) // give the batch every chance to (wrongly) overtake
+    expect(w.ledger.get('f.js')).toBe('v1') // nothing committed while the save holds the FIFO
+
+    releaseSave()
+    await savePromise
+    await vi.waitFor(() => expect(w.ledger.get('f.js')).toBe('v-ext'))
+    // Strict FIFO order: seed, then the save, then the external content.
+    expect(w.ledgerWrites.map(([, text]) => text)).toEqual(['v1', 'v2-human', 'v-ext'])
+  })
+})
+
+describe('createSyncEngine — extreme contention: write→delete→write collapse within one notification window', () => {
+  it('a path that ended at new content after intermediate states records ONLY the final content, never an rm', async () => {
+    const w = makeStatefulWorld({ 'f.js': 'v1' })
+    const applyToEditor = vi.fn().mockResolvedValue(undefined)
+    const engine = createSyncEngine(w.client, w.port, { applyToEditor })
+    await engine.populateLedger()
+    engine.start()
+
+    // Disk raced through v1 -> (deleted) -> v-final before the (debounced/
+    // polled) notification is processed; the engine reads AT APPLY TIME and
+    // must see only the final state.
+    w.delDisk('f.js')
+    w.setDisk('f.js', 'v-final')
+    w.watch.emitBatch(['f.js'])
+
+    await vi.waitFor(() => expect(w.ledger.get('f.js')).toBe('v-final'))
+    expect(w.client.rm).not.toHaveBeenCalled()
+    expect(applyToEditor).toHaveBeenCalledTimes(1)
+  })
+
+  it('a path that ended deleted after intermediate rewrites performs exactly one rm and one editor null-apply', async () => {
+    const w = makeStatefulWorld({ 'f.js': 'v1' })
+    const applyToEditor = vi.fn().mockResolvedValue(undefined)
+    const engine = createSyncEngine(w.client, w.port, { applyToEditor })
+    await engine.populateLedger()
+    engine.start()
+
+    w.setDisk('f.js', 'v2') // intermediate state nobody will ever observe
+    w.delDisk('f.js')
+    w.watch.emitBatch(['f.js'])
+
+    await vi.waitFor(() => expect(w.client.rm).toHaveBeenCalledTimes(1))
+    expect(w.client.rm).toHaveBeenCalledWith('f.js', { actor: 'human' })
+    expect(applyToEditor).toHaveBeenCalledTimes(1)
+    expect(applyToEditor).toHaveBeenCalledWith('f.js', null)
+    expect(w.ledger.has('f.js')).toBe(false)
+  })
+
+  it('a duplicated path within one batch commits exactly once (second occurrence absorbs as its own echo)', async () => {
+    const w = makeStatefulWorld()
+    const applyToEditor = vi.fn().mockResolvedValue(undefined)
+    const engine = createSyncEngine(w.client, w.port, { applyToEditor })
+    await engine.populateLedger()
+    engine.start()
+
+    w.setDisk('f.js', 'v1')
+    w.watch.emitBatch(['f.js', 'f.js', 'f.js'])
+
+    await vi.waitFor(() => expect(w.ledger.get('f.js')).toBe('v1'))
+    await new Promise((r) => setTimeout(r, 10))
+    expect(w.ledgerWrites.filter(([rel]) => rel === 'f.js')).toHaveLength(1)
+    expect(applyToEditor).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('createSyncEngine — bulk inbound batches', () => {
+  it('a 300-path batch lands every file exactly once, and its full echo re-delivery commits nothing', async () => {
+    const w = makeStatefulWorld()
+    for (let i = 0; i < 300; i++) w.setDisk(`bulk/f${i}.js`, `content-${i}`)
+    const engine = createSyncEngine(w.client, w.port)
+    await engine.populateLedger()
+    // populateLedger already seeded all 300 — reset the write log so the
+    // batch-driven commits below are counted from zero. (A REAL bulk batch
+    // arrives post-seed, e.g. `git checkout` switching branches.)
+    for (let i = 0; i < 300; i++) w.setDisk(`bulk/f${i}.js`, `checkout-${i}`)
+    engine.start()
+    const paths = [...w.disk.keys()]
+    ;(w.client.write as ReturnType<typeof vi.fn>).mockClear()
+    w.ledgerWrites.length = 0
+
+    w.watch.emitBatch(paths)
+    await vi.waitFor(() => expect(w.ledger.get('bulk/f299.js')).toBe('checkout-299'), { timeout: 10_000 })
+
+    expect(w.ledgerWrites).toHaveLength(300)
+    expect(new Set(w.ledgerWrites.map(([rel]) => rel)).size).toBe(300)
+
+    // Full echo re-delivery (the watcher reporting our own already-recorded
+    // tree, e.g. after a debounce hiccup): zero additional commits.
+    w.ledgerWrites.length = 0
+    w.watch.emitBatch(paths)
+    await new Promise((r) => setTimeout(r, 50))
+    await vi.waitFor(() => expect(w.ledgerWrites).toHaveLength(0))
+  })
+})
