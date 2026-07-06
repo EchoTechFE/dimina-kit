@@ -19,6 +19,7 @@ import { performRequest, type RequestFailResult, type RequestSuccessResult } fro
 
 async function flushMicrotasks(times = 5): Promise<void> {
   for (let i = 0; i < times; i++) await Promise.resolve()
+  await new Promise((resolve) => setTimeout(resolve, 0))
 }
 
 function okResponse(body: BodyInit = '{}'): Response {

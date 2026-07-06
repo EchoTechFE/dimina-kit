@@ -5,6 +5,7 @@ import { Select } from '@/shared/components/ui/select'
 import { DEFAULT_SCENE } from '../../../shared/constants'
 import { POPOVER_WIDTH_PX, POPOVER_MARGIN_PX } from '../../shared/constants'
 import {
+  emitPopoverRelaunch,
   emitPopoverSwitchLaunchConfig,
   emitPopoverUpdateLaunchConfigs,
   hidePopover,
@@ -13,6 +14,7 @@ import {
 import type { CompileConfig, LaunchConfig } from '../../shared/types'
 
 type EditorState =
+  | { mode: 'normal' }
   | { mode: 'create' }
   | { mode: 'edit'; id: string }
 
@@ -21,6 +23,11 @@ export default function Popover() {
   const [pages, setPages] = useState<string[]>([])
   const [launchConfigs, setLaunchConfigs] = useState<LaunchConfig[]>([])
   const [activeLaunchConfigId, setActiveLaunchConfigId] = useState<string | null>(null)
+  const [normalConfig, setNormalConfig] = useState<CompileConfig>({
+    startPage: '',
+    scene: DEFAULT_SCENE,
+    queryParams: [],
+  })
 
   // null = list view, non-null = editor view
   const [editorState, setEditorState] = useState<EditorState | null>(null)
@@ -34,11 +41,19 @@ export default function Popover() {
   useEffect(() => {
     return onPopoverInit((data) => {
       setPages(data.pages)
-      setLaunchConfigs(data.launchConfigs ?? [])
-      setActiveLaunchConfigId(data.activeLaunchConfigId ?? null)
+      const nextLaunchConfigs = data.launchConfigs ?? []
+      const nextActiveLaunchConfigId = data.activeLaunchConfigId ?? null
+      setLaunchConfigs(nextLaunchConfigs)
+      setActiveLaunchConfigId(nextActiveLaunchConfigId)
+      setNormalConfig(data.config)
       const maxLeft = window.innerWidth - POPOVER_WIDTH_PX - POPOVER_MARGIN_PX
       setPosition({ top: data.top, left: Math.min(data.left, maxLeft) })
-      setEditorState(null)
+      if (nextLaunchConfigs.length === 0 && nextActiveLaunchConfigId === null) {
+        setEditorState({ mode: 'normal' })
+        setEditorConfig(data.config)
+      } else {
+        setEditorState(null)
+      }
     })
   }, [])
 
@@ -51,6 +66,11 @@ export default function Popover() {
   const handleSwitchConfig = useCallback((id: string | null) => {
     emitPopoverSwitchLaunchConfig(id)
   }, [])
+
+  const handleStartNormalEdit = useCallback(() => {
+    setEditorState({ mode: 'normal' })
+    setEditorConfig(normalConfig)
+  }, [normalConfig])
 
   const handleStartEdit = useCallback((lc: LaunchConfig) => {
     setEditorState({ mode: 'edit', id: lc.id })
@@ -109,6 +129,12 @@ export default function Popover() {
 
   function handleEditorSave() {
     if (!editorState) return
+    if (editorState.mode === 'normal') {
+      setNormalConfig(editorConfig)
+      emitPopoverRelaunch(editorConfig)
+      void hidePopover()
+      return
+    }
     const trimmed = editorName.trim()
     if (!trimmed) return
 
@@ -142,10 +168,17 @@ export default function Popover() {
   }
 
   function handleEditorCancel() {
+    if (editorState?.mode === 'normal' && launchConfigs.length === 0 && activeLaunchConfigId === null) {
+      void hidePopover()
+      return
+    }
     setEditorState(null)
   }
 
   // ── Render ──────────────────────────────────────────────────────────────
+
+  const showMissingStartPageOption =
+    editorConfig.startPage !== '' && !pages.includes(editorConfig.startPage)
 
   return (
     <>
@@ -166,7 +199,10 @@ export default function Popover() {
                 'w-full flex items-center gap-2 px-2.5 py-1.5 rounded text-[12px] text-left hover:bg-surface-hover'
                 + (activeLaunchConfigId === null ? ' bg-surface-active' : '')
               }
-              onClick={() => handleSwitchConfig(null)}
+              onClick={() => {
+                if (activeLaunchConfigId === null) handleStartNormalEdit()
+                else handleSwitchConfig(null)
+              }}
             >
               <span className="w-4 text-center text-accent shrink-0">
                 {activeLaunchConfigId === null ? '✓' : ''}
@@ -231,18 +267,20 @@ export default function Popover() {
         ) : (
           /* ── Editor view ──────────────────────────────────────── */
           <div className="p-3.5">
-            <div className="flex items-center gap-2.5 mb-3">
-              <label className="w-16 shrink-0 text-code-label text-[12px]">
-                名称
-              </label>
-              <Input
-                className="flex-1 min-w-0 bg-surface-input border-text-dim text-text text-[12px]"
-                value={editorName}
-                placeholder="编译模式名称"
-                onChange={(e) => setEditorName(e.target.value)}
-                autoFocus
-              />
-            </div>
+            {editorState.mode !== 'normal' && (
+              <div className="flex items-center gap-2.5 mb-3">
+                <label className="w-16 shrink-0 text-code-label text-[12px]">
+                  名称
+                </label>
+                <Input
+                  className="flex-1 min-w-0 bg-surface-input border-text-dim text-text text-[12px]"
+                  value={editorName}
+                  placeholder="编译模式名称"
+                  onChange={(e) => setEditorName(e.target.value)}
+                  autoFocus
+                />
+              </div>
+            )}
 
             <div className="flex items-center gap-2.5 mb-3">
               <label className="w-16 shrink-0 text-code-label text-[12px]">
@@ -255,6 +293,11 @@ export default function Popover() {
                   setEditorConfig((c) => ({ ...c, startPage: e.target.value }))
                 }
               >
+                {showMissingStartPageOption && (
+                  <option value={editorConfig.startPage}>
+                    {editorConfig.startPage}（页面不存在）
+                  </option>
+                )}
                 {pages.map((pg) => (
                   <option key={pg} value={pg}>
                     {pg}
@@ -321,7 +364,10 @@ export default function Popover() {
             </div>
 
             <div className="flex gap-2 mt-3.5">
-              <Button onClick={handleEditorSave} disabled={!editorName.trim()}>
+              <Button
+                onClick={handleEditorSave}
+                disabled={editorState.mode !== 'normal' && !editorName.trim()}
+              >
                 保存
               </Button>
               <Button variant="outline" onClick={handleEditorCancel}>

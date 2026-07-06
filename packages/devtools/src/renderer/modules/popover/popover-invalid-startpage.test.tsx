@@ -18,11 +18,13 @@
  * extra option (regression guard against always rendering it).
  */
 import React from 'react'
-import { act, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const { popoverInitListeners } = vi.hoisted(() => ({
+const { popoverInitListeners, emitPopoverRelaunch, hidePopover } = vi.hoisted(() => ({
   popoverInitListeners: [] as Array<(payload: unknown) => void>,
+  emitPopoverRelaunch: vi.fn(),
+  hidePopover: vi.fn(async () => {}),
 }))
 
 function emitPopoverInit(payload: {
@@ -30,6 +32,8 @@ function emitPopoverInit(payload: {
   left: number
   pages: string[]
   config: { startPage: string; scene: number; queryParams: { key: string; value: string }[] }
+  launchConfigs?: Array<{ id: string; name: string; startPage: string; scene: number; queryParams: { key: string; value: string }[] }>
+  activeLaunchConfigId?: string | null
 }): void {
   for (const fn of [...popoverInitListeners]) fn(payload)
 }
@@ -42,14 +46,16 @@ vi.mock('@/shared/api', () => ({
       if (i >= 0) popoverInitListeners.splice(i, 1)
     }
   }),
-  emitPopoverRelaunch: vi.fn(),
-  hidePopover: vi.fn(async () => {}),
+  emitPopoverRelaunch,
+  hidePopover,
 }))
 
 import Popover from './popover'
 
 beforeEach(() => {
   popoverInitListeners.length = 0
+  emitPopoverRelaunch.mockClear()
+  hidePopover.mockClear()
 })
 
 describe('Popover — invalid startPage must render an explicit option, not silently fall back', () => {
@@ -113,5 +119,55 @@ describe('Popover — invalid startPage must render an explicit option, not sile
     const select = screen.getByRole('combobox') as HTMLSelectElement
     const options = Array.from(select.querySelectorAll('option'))
     expect(options.some((o) => o.textContent?.includes('页面不存在'))).toBe(false)
+  })
+
+  it('starts in the normal compile editor and relaunches with the init config when no saved launch configs exist', () => {
+    render(<Popover />)
+    act(() => {
+      emitPopoverInit({
+        top: 0,
+        left: 0,
+        pages: ['pages/index/index', 'pages/other/other'],
+        config: {
+          startPage: 'pages/other/other',
+          scene: 2024,
+          queryParams: [{ key: 'foo', value: 'bar' }],
+        },
+      })
+    })
+
+    expect(screen.getByRole('combobox')).toHaveValue('pages/other/other')
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    expect(emitPopoverRelaunch).toHaveBeenCalledWith({
+      startPage: 'pages/other/other',
+      scene: 2024,
+      queryParams: [{ key: 'foo', value: 'bar' }],
+    })
+    expect(hidePopover).toHaveBeenCalled()
+  })
+
+  it('opens the normal compile editor from the list when normal mode is already active alongside saved launch configs', () => {
+    render(<Popover />)
+    act(() => {
+      emitPopoverInit({
+        top: 0,
+        left: 0,
+        pages: ['pages/index/index', 'pages/other/other'],
+        launchConfigs: [
+          {
+            id: 'lc-1',
+            name: '自定义编译',
+            startPage: 'pages/index/index',
+            scene: 1011,
+            queryParams: [],
+          },
+        ],
+        activeLaunchConfigId: null,
+        config: { startPage: 'pages/other/other', scene: 1011, queryParams: [] },
+      })
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /普通编译/ }))
+    expect(screen.getByRole('combobox')).toHaveValue('pages/other/other')
   })
 })

@@ -47,6 +47,8 @@ vi.mock('@/shared/api', () => {
       scene: 1011,
       queryParams: [],
     })),
+    getLaunchConfigs: vi.fn(async () => []),
+    getActiveLaunchConfigId: vi.fn(async () => null),
     saveCompileConfig: vi.fn(async () => {}),
     onSessionRuntimeStatus: vi.fn(() => () => {}),
     onProjectStatus: vi.fn((handler: (s: unknown) => void) => {
