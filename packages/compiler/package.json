@@ -43,6 +43,7 @@
     "test:pool-node": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-pool-node.js",
     "test:pool-scopehash": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-pool-scopehash.js",
     "test:pool-hardening": "node scripts/build-compiler.js node && node scripts/test-pool-hardening.js",
+    "test:pool-toolchain-death": "node scripts/build-compiler.js node && node scripts/test-pool-toolchain-death.js",
     "test:pool-worker-hardening": "node scripts/test-pool-worker-hardening.js",
     "test:worker-slot": "node scripts/test-worker-slot.js",
     "test:pool-watchdog": "node scripts/test-pool-watchdog.js",

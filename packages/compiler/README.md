@@ -170,9 +170,11 @@ const appInfo = await build(outputDir, workPath, true, { sourcemap: true, fileTy
 // 成功 → { appId, name, path };编译失败 → reject(错误同时已打到 stderr,日志面貌同 dmcc)
 ```
 
-配套导出：`warmDefaultPool()` 提前创建这个 singleton 池并拉起 stage worker（不 build、无输出，项目无关——热备胎宿主在没有项目打开时调用,让第一次真实 build 从热池起步）；`disposeDefaultPool()` 显式回收；`oxcNativeBindingHint(message)` 把 oxc-parser 的 "Cannot find native binding" 报错映射成打包提示（其他消息返回 null）——stage 失败的 reject message 命中时会自动附带这条提示。
+配套导出：`warmDefaultPool()` 提前创建这个 singleton 池并拉起 stage worker（不 build、无输出，项目无关——热备胎宿主在没有项目打开时调用,让第一次真实 build 从热池起步）；`disposeDefaultPool()` 显式回收；`oxcNativeBindingHint(message)` 把 oxc-parser 的 "Cannot find native binding" 报错映射成打包提示、`esbuildAsarSpawnHint(message)` 把 esbuild 二进制困在 app.asar 内的 spawn ENOENT 报错映射成 asarUnpack 提示（其他消息都返回 null）——stage 失败的 reject message 命中时会自动附带对应提示。
 
 > **Electron 打包分发注意（oxc-parser 运行时绑定）**：Node 编译路径依赖 oxc-parser，其运行时需要 `@oxc-parser/binding-<platform>-<arch>`（平台原生 `.node`）或 `@oxc-parser/binding-wasm32-wasi`（wasm 兜底）**二者之一实际存在于分发包内**。它们都不是宿主的直接依赖，electron-builder 等工具收集依赖时容易丢——丢了之后每次编译都在 logic stage 报 `Cannot find native binding`。宿主打包时请把其中一个显式声明为自己的 dependency（或在打包配置里强制收集）。
+
+> **Electron 打包分发注意（esbuild 原生二进制）**：esbuild 的 JS 库要 `child_process.spawn` 自己的平台二进制（`@esbuild/<platform>-<arch>` 里的 `esbuild.exe` / `bin/esbuild`），而 Electron 的 asar 补丁只覆盖 `execFile` 不覆盖 `spawn`——二进制留在 app.asar 内会必现 `spawn ... ENOENT`（Windows 报 `The service was stopped`，之后同一 realm 的每次调用都是 `The service is no longer running: write EPIPE`）。宿主打包配置需 `asarUnpack: ['**/node_modules/esbuild/**', '**/node_modules/@esbuild/**']`，并让 `ESBUILD_BINARY_PATH` 指向 app.asar.unpacked 下的真实文件（`@dimina-kit/devkit` 检测到自己跑在 asar 内时会自动设置）。
 
 **结构化用法（`createNodeCompilerPool`）**——要抛错误对象、显式回收 worker 时用：
 
@@ -195,6 +197,7 @@ try {
 - **写真实磁盘**（不经 `files` map），二进制静态资源完好——不受浏览器 `collectOutputs` utf8 限制。
 - **build 全局串行**：编译经过 dmcc 的进程级全局状态,所以同进程内所有 pool 实例的 build 共用一条串行链（并发调用会排队,不会互相污染产物）。
 - **worker 卡死/崩溃自愈**：与浏览器 pool 同一套监管（`src/worker-slot.js`）——卡死但没退出的 worker 在连续 `sendTimeoutMs`（默认 120s）无任何消息（worker 工作时每 2s 发心跳）后判死并**立即 terminate**；意外退出/超时导致的 build 失败默认**透明重试一次**（respawn 前先等旧 worker `terminate()` 结算,staging 目录由 setupCompile 重建,失败的那次不会污染重试产物）,重试仍失败才 reject（错误带 `.code` 与 `.stage`）。`retryOnWorkerDeath: false` 恢复"第一次死就报错"的单次语义。任何情况下后续 build 都不会永久挂起。
+- **工具链 service 死亡同样自愈**：esbuild 靠常驻的二进制子进程（service）干活,它死掉后（打包环境 spawn ENOENT、被 OOM/杀毒杀掉）该 worker realm 内的每次 esbuild 调用都永久报 `The service is no longer running: write EPIPE`——worker 线程还活着但已不可用。pool 把这类 stage 报错（`The service was stopped` / `is no longer running`）归类为 `.code === 'compiler-toolchain-dead'` 而非普通编译错误：命中的 worker 当场回收,享受与 worker 死亡相同的透明重试;环境修好后（如二进制就位）下一次 build 在新 realm 上自动恢复,不会带着死 service 永远失败。
 - **按 stage 懒加载工具链**：worker 在 spawn 时拿到自己的 stage 身份,只加载该 stage 的工具链——logic 只有 esbuild+oxc,view 只有 cheerio/@vue/compiler-sfc 系,style 才有 sass/cssnano/less;主线程一个重依赖都不加载。这依赖 node bundle 的 esbuild code-splitting(stage 编译器是运行时按需 import 的 chunk,见 `dist/pool.node-chunks/`),消费方无感。诊断:给 stage worker 发 `{ type: 'introspect' }` 会回 `{ type: 'introspect', stage, loaded: string[] }`(该 realm require cache 里实际出现的重依赖清单;纯 ESM 包如 cheerio 不经 CJS cache,天然不在此口径内)。
 - **idle 自动收缩**：最后一个 build 结束后闲置超过 `idleShrinkMs`（默认 5 分钟,`0`/`false`/`Infinity` 关闭）,pool 终止全部常驻 worker 释放内存（热 worker 组常驻数百 MB）;pool 本身仍可用,下一次 build 透明 respawn（重付 spawn+本 stage 工具链加载,秒级）。收缩绝不打断在途 build（计时只在队列排空后启动,新 build 到来即取消）,收缩后进程不会被遗留句柄钉住。
 - 运行时依赖（sass/postcss/esbuild/oxc 等）已声明为本包 dependencies,宿主无需再装 `@dimina/compiler`。

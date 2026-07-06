@@ -121,11 +121,11 @@
     },
     "test-coverage": {
       "direction": "higher-is-better",
-      "value": 72.81,
+      "value": 72.87,
       "unit": "% lines",
       "breakdown": {
-        "devkit": 92.18,
-        "devtools": 68.28,
+        "devkit": 93.46,
+        "devtools": 68.29,
         "electron-deck": 95.23,
         "electron-deck/dock-react": 79.05,
         "view-anchor": 95.28,
@@ -135,10 +135,10 @@
     },
     "test-report": {
       "direction": "higher-is-better",
-      "value": 3663,
+      "value": 3674,
       "unit": "passed tests",
       "breakdown": {
-        "devkit": 113,
+        "devkit": 124,
         "devtools": 2288,
         "electron-deck": 1024,
         "electron-deck/dock-react": 96,
