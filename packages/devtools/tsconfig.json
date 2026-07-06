@@ -8,7 +8,11 @@
     "noImplicitAny": false,
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/renderer/*"]
+      "@/*": ["src/renderer/*"],
+      "@dimina-kit/compiler/*": ["../compiler/src/*"],
+      "@dimina-kit/devkit": ["../devkit/src/index.ts"],
+      "@dimina-kit/electron-deck": ["../electron-deck/src/index.ts"],
+      "@dimina-kit/electron-deck/*": ["../electron-deck/src/*"]
     }
   },
   "include": ["src"],
