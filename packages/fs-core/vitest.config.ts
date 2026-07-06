@@ -19,6 +19,15 @@ export default defineConfig({
         'dist/**',
         '**/*.config.*',
         '**/*.d.ts',
+        // Browser-only OPFS code: SyncAccessHandle / Web Locks / dedicated
+        // workers do not exist in the Node/jsdom vitest environment, so these
+        // files are not executable here at all. Their behavioral coverage
+        // lives in the consumers' browser e2e suites (dimina-web-client's
+        // fs/kernel batteries and the devtools Electron smoke).
+        'src/fs-core.worker.js',
+        'src/fs-query.worker.js',
+        'src/client.js',
+        'src/disk-mirror.js',
       ],
     },
   },
