@@ -41,10 +41,15 @@
     "./zip": {
       "types": "./src/zip.d.ts",
       "default": "./src/zip.js"
+    },
+    "./sync": {
+      "types": "./sync/sync-engine.d.ts",
+      "default": "./sync/sync-engine.js"
     }
   },
   "files": [
-    "src"
+    "src",
+    "sync"
   ],
   "scripts": {
     "check-types": "tsc --noEmit",

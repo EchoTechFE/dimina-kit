@@ -31,6 +31,20 @@ export default [
     },
   },
   {
+    // sync/ is hand-authored (not a ported/frozen file): it runs in both
+    // browser (devtools/web-client) and Node (vitest) hosts, so it needs
+    // both globals, but keeps the package's NORMAL rules — no
+    // no-unused-vars/no-explicit-any relaxation like the src/ overrides
+    // above.
+    files: ["sync/**/*.js"],
+    languageOptions: {
+      globals: {
+        ...globals.browser,
+        ...globals.node,
+      },
+    },
+  },
+  {
     ignores: ["coverage/**"],
   },
 ];

@@ -2,7 +2,7 @@ import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
   test: {
-    include: ['src/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'sync/**/*.test.ts'],
     globals: true,
     coverage: {
       provider: 'v8',
@@ -11,7 +11,7 @@ export default defineConfig({
       // Uncovered src files count toward the denominator — without an explicit
       // include, vitest only reports files loaded during the run, so a new
       // untested file would not lower the percentage.
-      include: ['src/**/*.{ts,tsx,js,jsx}'],
+      include: ['src/**/*.{ts,tsx,js,jsx}', 'sync/**/*.{ts,tsx,js,jsx}'],
       exclude: [
         '**/*.test.{ts,tsx}',
         '**/__checks__/**',
