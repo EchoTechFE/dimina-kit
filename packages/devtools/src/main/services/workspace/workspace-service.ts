@@ -387,9 +387,9 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
 
     async closeProject() {
       // Claim a request seq and take ownership immediately (close has no veto),
-      // then serialize against a concurrent openProject: disposeAll() must not
-      // run while an open is mid-teardown/commit (it would tear down the views
-      // the open is building).
+      // then serialize against a concurrent openProject: disposeProjectViews()
+      // must not run while an open is mid-teardown/commit (it would tear down
+      // the views the open is building).
       const mySeq = opLock.nextSeq()
       opLock.takeOwnership(mySeq)
       const release = await opLock.acquire()
@@ -412,7 +412,10 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
         // debounced write already in flight can still be accepted against it.
         if (currentProjectPath !== '') lastClosedProjectPath = currentProjectPath
         currentProjectPath = ''
-        ctx.views.disposeAll()
+        // Project-scoped views only. The host toolbar is HOST-scoped and must
+        // survive closing a project — its full teardown (disposeAll) runs from
+        // the context registry at app teardown instead.
+        ctx.views.disposeProjectViews()
       } finally {
         closing = false
         release()

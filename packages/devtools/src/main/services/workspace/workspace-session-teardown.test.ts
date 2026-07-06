@@ -116,6 +116,9 @@ function makeHarness(opts?: {
   }
   const views = {
     disposeAll: vi.fn(() => events.push('views.disposeAll')),
+    // Project-scoped teardown: closeProject must call THIS, never disposeAll
+    // (which would also kill the host toolbar — see view-manager-dispose-scopes.test.ts).
+    disposeProjectViews: vi.fn(() => events.push('views.disposeProjectViews')),
     // The switch path (openProject while a session is active) detaches the
     // embedded workbench editor so it re-mirrors the incoming project.
     detachWorkbench: vi.fn(() => events.push('views.detachWorkbench')),
@@ -140,7 +143,7 @@ beforeEach(async () => {
 
 describe('workspace-service: closeProject delivers session.close (compile-worker teardown conduction)', () => {
   it('closeProject() awaits session.close exactly once, clears the session, and disposes views only AFTER close settled', async () => {
-    const { ctx, events, sessions } = makeHarness()
+    const { ctx, events, sessions, views } = makeHarness()
     const workspace = createWorkspaceService(ctx)
 
     const result = await workspace.openProject('/tmp/projA')
@@ -159,16 +162,20 @@ describe('workspace-service: closeProject delivers session.close (compile-worker
     expect(workspace.getSession()).toBeNull()
 
     // Ordering: the compiler must be dead before the UI it reports into is
-    // torn down — disposeAll first would leave a window where worker output
-    // targets disposed views.
+    // torn down — disposeProjectViews first would leave a window where worker
+    // output targets disposed views.
     const closeEnd = events.indexOf('close-end:/tmp/projA')
-    const disposeAll = events.indexOf('views.disposeAll')
+    const disposeProjectViews = events.indexOf('views.disposeProjectViews')
     expect(closeEnd, 'session close must have settled').toBeGreaterThanOrEqual(0)
-    expect(disposeAll, 'views.disposeAll must have run during closeProject').toBeGreaterThanOrEqual(0)
+    expect(disposeProjectViews, 'views.disposeProjectViews must have run during closeProject').toBeGreaterThanOrEqual(0)
     expect(
-      disposeAll,
-      'views.disposeAll must run AFTER session.close settled',
+      disposeProjectViews,
+      'views.disposeProjectViews must run AFTER session.close settled',
     ).toBeGreaterThan(closeEnd)
+
+    // closeProject must never reach for the wider disposeAll — that would also
+    // destroy the host toolbar, which is the HOST's, not any one project's.
+    expect(views.disposeAll).not.toHaveBeenCalled()
   })
 
   it('closeProject() is idempotent — the second call never closes the same session twice', async () => {
@@ -277,7 +284,11 @@ describe('workspace-service: closeProject delivers session.close (compile-worker
       'even when close() rejects the session must be dropped — keeping a half-dead session makes '
       + 'every later teardown path skip it (hasActiveSession guards) and the worker leaks for good',
     ).toBe(false)
-    expect(views.disposeAll).toHaveBeenCalledTimes(1)
+    expect(views.disposeProjectViews).toHaveBeenCalledTimes(1)
+    expect(
+      views.disposeAll,
+      'closeProject must never call disposeAll — that would also destroy the host toolbar',
+    ).not.toHaveBeenCalled()
   })
 })
 

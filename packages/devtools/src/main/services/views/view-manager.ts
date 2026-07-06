@@ -142,7 +142,21 @@ export interface ViewManager {
   // ── Aggregate ──────────────────────────────────────────────────────────
   /** Re-apply layout for every currently visible overlay (on window resize). */
   repositionAll(): void
-  /** Destroy all overlay webContents and null out the cached views. */
+  /**
+   * Destroy the PROJECT-scoped views: the simulator (with its devtools host
+   * and settings/popover overlays), the embedded workbench editor, and the
+   * per-guest safe-area sessions. Deliberately does NOT touch the host
+   * toolbar — its webContents lifecycle belongs to the HOST, so it survives
+   * closing a project. This is what `workspace.closeProject()` calls.
+   */
+  disposeProjectViews(): void
+  /**
+   * Destroy ALL managed views: everything `disposeProjectViews()` covers PLUS
+   * the host toolbar (its view, port channel, and the ref-counted
+   * session-runtime preload registration). App/window teardown only — the
+   * context's DisposableRegistry runs this so the toolbar's session-level
+   * resources are released exactly once, at the end of the manager's life.
+   */
   disposeAll(): void
 
   // ── State queries ─────────────────────────────────────────────────────
@@ -366,16 +380,24 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     overlayPanels.reapplyPresentOverlays()
   }
 
-  function disposeAll(): void {
+  function disposeProjectViews(): void {
     // Aggregate simulator detach first (native simulator + devtools host +
-    // settings/popover), then the workbench, the host toolbar, and the
-    // per-guest safe-area sessions.
+    // settings/popover), then the workbench, then the per-guest safe-area
+    // sessions. The host toolbar is exempt: it is HOST-scoped (the host loads
+    // and drives it; the height-replay machinery exists precisely for the
+    // close-project → reopen flow), so a project's teardown must not kill it.
     nativeSimulator.detachSimulator()
     // Embedded workbench editor view (no-op when the host never opted in;
     // also removes the devtools-theme sync listener).
     workbench.detachWorkbench()
-    hostToolbar.dispose()
     safeArea.dispose()
+  }
+
+  function disposeAll(): void {
+    disposeProjectViews()
+    // Host-scoped teardown: the toolbar view, its port channel, and the
+    // ref-counted session-runtime preload registration.
+    hostToolbar.dispose()
   }
 
   return {
@@ -388,6 +410,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     showPopover: overlayPanels.showPopover,
     hidePopover: overlayPanels.hidePopover,
     repositionAll: () => overlayPanels.reapplyPresentOverlays(),
+    disposeProjectViews,
     disposeAll,
     getSimulatorWebContentsId: nativeSimulator.getSimulatorWebContentsId,
     getSimulatorWebContents: nativeSimulator.getSimulatorWebContents,

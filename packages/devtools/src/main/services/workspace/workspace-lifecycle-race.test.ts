@@ -67,6 +67,9 @@ function makeViewsSpy() {
   const events: string[] = []
   const views = {
     disposeAll: vi.fn(() => { events.push('views.disposeAll') }),
+    // Project-scoped teardown: closeProject must call THIS, never disposeAll
+    // (which would also kill the host toolbar — see view-manager-dispose-scopes.test.ts).
+    disposeProjectViews: vi.fn(() => { events.push('views.disposeProjectViews') }),
     detachWorkbench: vi.fn(() => { events.push('views.detachWorkbench') }),
     detachSimulator: vi.fn(() => { events.push('views.detachSimulator') }),
   }
@@ -96,6 +99,7 @@ function makeClosingHarness(closeBehavior: () => Promise<void>) {
   }
   const views = {
     disposeAll: vi.fn(),
+    disposeProjectViews: vi.fn(),
     detachWorkbench: vi.fn(),
     detachSimulator: vi.fn(),
   }
@@ -111,13 +115,21 @@ function makeClosingHarness(closeBehavior: () => Promise<void>) {
 describe('workspace-service: open/close serialization (lifecycle ops must not interleave)', () => {
   /**
    * The zombie state: openProject(B) sets currentSession=B but closeProject()
-   * has already called views.disposeAll — so the live session has no views to
-   * render into. A serialized queue prevents this by ensuring closeProject runs
-   * only after openProject's adapter await has fully committed or been aborted.
+   * has already called views.disposeProjectViews — so the live session has no
+   * views to render into. A serialized queue prevents this by ensuring
+   * closeProject runs only after openProject's adapter await has fully
+   * committed or been aborted.
    *
    * Failure predicate: without serialization, closeProject() races the adapter
-   * await and calls disposeAll while currentSession ends up set to B — the
-   * assertion `views.disposeAll not called when B is live` catches the race.
+   * await and calls disposeProjectViews while currentSession ends up set to B
+   * — the assertion `views.disposeProjectViews not called when B is live`
+   * catches the race.
+   *
+   * disposeProjectViews replaces disposeAll here (closeProject's new contract:
+   * it must dispose only project-scoped views, never the host toolbar via
+   * disposeAll — see view-manager-dispose-scopes.test.ts). The `views.disposeAll
+   * not called` assertion pins that closeProject never reaches for the wider
+   * teardown.
    */
   it('concurrent openProject(B) + closeProject() do not produce zombie state (B live, views already disposed)', async () => {
     const { views, events } = makeViewsSpy()
@@ -152,35 +164,40 @@ describe('workspace-service: open/close serialization (lifecycle ops must not in
     await Promise.all([openBPromise, closePromise])
 
     // Post-settle invariant: the session and views must be self-consistent.
-    // Zombie = session live (B) + views already disposeAll'd.
+    // Zombie = session live (B) + views already disposeProjectViews'd.
     // Either terminal state is acceptable:
-    //   (a) B is active → disposeAll must NOT have run yet
-    //   (b) clean close → session cleared + disposeAll called once
+    //   (a) B is active → disposeProjectViews must NOT have run yet
+    //   (b) clean close → session cleared + disposeProjectViews called once
     const finalSession = workspace.getSession()
     if (finalSession !== null) {
       expect(
-        views.disposeAll,
-        'disposeAll must not fire while B is the live active session — that is the zombie state',
+        views.disposeProjectViews,
+        'disposeProjectViews must not fire while B is the live active session — that is the zombie state',
       ).not.toHaveBeenCalled()
     } else {
       expect(
-        views.disposeAll,
-        'clean close terminal state must have disposed views exactly once',
+        views.disposeProjectViews,
+        'clean close terminal state must have disposed project views exactly once',
       ).toHaveBeenCalledTimes(1)
     }
+    expect(
+      views.disposeAll,
+      'closeProject must never call disposeAll — that would also destroy the host toolbar',
+    ).not.toHaveBeenCalled()
   })
 
   /**
    * Ordering constraint: when closeProject() races an openProject(B) that
-   * has a slow adapter, disposeAll must not appear BEFORE B's adapter settles.
-   * Firing disposeAll mid-adapter-await tears down views while B's setup is
+   * has a slow adapter, disposeProjectViews must not appear BEFORE B's adapter
+   * settles. Firing it mid-adapter-await tears down views while B's setup is
    * still in flight — the same zombie root cause from a different angle.
    *
-   * Failure predicate: without serialization, closeProject's disposeAll call
-   * runs while the adapter awaits resolveB, so events.indexOf('views.disposeAll')
-   * < events.indexOf('adapter-end:/B') — the assertion flips for red.
+   * Failure predicate: without serialization, closeProject's disposeProjectViews
+   * call runs while the adapter awaits resolveB, so
+   * events.indexOf('views.disposeProjectViews') < events.indexOf('adapter-end:/B')
+   * — the assertion flips for red.
    */
-  it('disposeAll does not fire in the middle of B adapter await (open/close event ordering)', async () => {
+  it('disposeProjectViews does not fire in the middle of B adapter await (open/close event ordering)', async () => {
     const { views, events } = makeViewsSpy()
     let resolveB!: () => void
     const bDeferred = new Promise<void>((resolve) => { resolveB = resolve })
@@ -206,7 +223,7 @@ describe('workspace-service: open/close serialization (lifecycle ops must not in
     resolveB()
     await Promise.all([openBPromise, closePromise])
 
-    const disposeIdx = events.indexOf('views.disposeAll')
+    const disposeIdx = events.indexOf('views.disposeProjectViews')
     const adapterEndBIdx = events.indexOf('adapter-end:/B')
 
     // Only assert ordering when both events actually fired. If the serialized
@@ -215,10 +232,15 @@ describe('workspace-service: open/close serialization (lifecycle ops must not in
     if (disposeIdx >= 0 && adapterEndBIdx >= 0) {
       expect(
         disposeIdx,
-        'disposeAll must come AFTER adapter-end:/B — firing it earlier tears down '
+        'disposeProjectViews must come AFTER adapter-end:/B — firing it earlier tears down '
         + 'views while B setup is in flight',
       ).toBeGreaterThan(adapterEndBIdx)
     }
+
+    expect(
+      views.disposeAll,
+      'closeProject must never call disposeAll — that would also destroy the host toolbar',
+    ).not.toHaveBeenCalled()
   })
 
   /**
@@ -275,9 +297,13 @@ describe('workspace-service: open/close serialization (lifecycle ops must not in
     await closePromise // hangs here forever if the lock still spans the adapter await
 
     expect(
-      views.disposeAll,
-      'closeProject must reach disposeAll — it must not be blocked by B\'s hung adapter',
+      views.disposeProjectViews,
+      'closeProject must reach disposeProjectViews — it must not be blocked by B\'s hung adapter',
     ).toHaveBeenCalledTimes(1)
+    expect(
+      views.disposeAll,
+      'closeProject must never call disposeAll — that would also destroy the host toolbar',
+    ).not.toHaveBeenCalled()
   })
 })
 
