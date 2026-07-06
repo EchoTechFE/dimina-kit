@@ -278,16 +278,22 @@ export async function openProject(opts: OpenProjectOptions): Promise<ProjectSess
 		initialAppInfo = (await compileWorker.build(buildRequest)) as AppInfo | null
 	}
 	catch (err) {
+		// The first compile failing IS the open failing: a compile error rejects
+		// out of the worker (the pool relays it as a real rejection), and a
+		// session started anyway could only serve 404s (no artifacts in
+		// outputDir) while the real cause stays invisible. Tear down and rethrow
+		// so the host sees the compile error as openProject's failure.
 		await compileWorker.close()
 		// A failed open consumed the spare too — refill (fire-and-forget) so the
 		// NEXT open attempt still starts warm.
 		refillStandby()
 		throw err
 	}
-	// When the compiler is racing (e.g. opening a project that was just
-	// closed elsewhere in the same Electron process) `build()` can return
-	// null even though the manifest on disk is perfectly readable. The
-	// fallback to `{ appId: 'unknown' }` is load-bearing for
+	// A compile FAILURE rejects above — a resolved null never means "compile
+	// failed". It means the compiler had no app info to report: e.g. racing a
+	// project that was just closed elsewhere in the same Electron process,
+	// where the manifest on disk is perfectly readable. The fallback to
+	// `{ appId: 'unknown' }` is load-bearing for
 	// any consumer that calls `wx.setStorageSync` — the dimina runtime
 	// stores values under `${appId}_${key}` and the devtools storage panel
 	// also derives its IPC prefix from `appInfo.appId`. A stale `unknown`
@@ -308,7 +314,7 @@ export async function openProject(opts: OpenProjectOptions): Promise<ProjectSess
 		// real cause here, at the point the invalid id is produced, instead of
 		// letting it fail opaquely at injection time.
 		const reason = `[devkit] could not resolve an appId for ${projectPath}: the compiler produced no app info and project.config.json has no "appid". `
-			+ 'Falling back to "unknown" — the mini-program likely failed to compile or is missing its manifest.'
+			+ 'Falling back to "unknown" — the mini-program is likely missing its manifest.'
 		console.warn(reason)
 		onBuildError?.(new Error(reason))
 	}

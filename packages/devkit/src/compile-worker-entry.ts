@@ -105,9 +105,11 @@ function isCommandWithId(msg: unknown, cmd: string): msg is { cmd: string, id: s
  * Build the fork-side IPC message handler. Unknown messages are ignored
  * (no compiler load, no reply). A build command chdirs into the project,
  * runs the compiler exactly as the old in-process call sites did, and ALWAYS
- * replies — `@dimina/compiler` swallows compile errors internally (resolves
- * undefined), which is normalized to `appInfo: null`; a genuine throw still
- * replies with `error.message` so the parent never hangs on a lost build.
+ * replies — a compile failure rejects out of the pool's build() and is
+ * relayed as `error.message` (the parent rejects its in-flight build on it),
+ * so the parent never hangs on a lost build and never mistakes a failed
+ * compile for success. A resolved null/undefined appInfo carries no error:
+ * it means "no app info to report" and is normalized to `appInfo: null`.
  *
  * Two warm-standby commands ride the same channel:
  *  - `{ cmd: 'ping', id }` → `{ type: 'pong', id }`. Pure liveness; never

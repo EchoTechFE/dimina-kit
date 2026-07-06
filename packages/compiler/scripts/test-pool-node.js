@@ -8,7 +8,7 @@
 // and require our pool to match dmcc only where dmcc matches itself. Assets (uuid-named)
 // are matched by CONTENT hash multiset instead of name. Sourcemap is asserted against
 // dmcc's own map (parity), since that is the format devtools already consumes.
-import { readdirSync, readFileSync, statSync, rmSync, mkdirSync } from 'node:fs'
+import { readdirSync, readFileSync, statSync, rmSync, mkdirSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
@@ -42,7 +42,12 @@ function readTree(root) {
 }
 
 const dmccBuild = (await import('../../../dimina/fe/packages/compiler/src/index.js')).default
-const { createNodeCompilerPool } = await import('../dist/pool.node.js')
+const poolNodeModule = await import('../dist/pool.node.js')
+const { createNodeCompilerPool } = poolNodeModule
+// Destructured lazily below (may be absent pre-fix): the default drop-in build(),
+// the pure oxc-native-binding-hint mapper, and the lazy-singleton disposer.
+const defaultBuild = poolNodeModule.default
+const { oxcNativeBindingHint, disposeDefaultPool } = poolNodeModule
 
 // --- reference: dmcc twice ------------------------------------------------
 console.log(`[ref] dmcc build ×2 (sourcemap) from ${APP}`)
@@ -113,5 +118,90 @@ checkAgainstDmcc(readTree(path.join(dir('ours1'), appInfo1.appId)), 'cold')
 checkAgainstDmcc(readTree(path.join(dir('ours2'), appInfo2.appId)), 'warm')
 
 console.log(`[sourcemap] logic.js.map: ${refMap.sources.length} sources, sourcesContent present, matches dmcc ✅`)
-console.log(failed ? '\n❌ FAIL' : '\n✅ PASS: resident Node pool is dmcc-equivalent (incl. sourcemap) on cold+warm builds')
+
+// --- failure contract: the default drop-in build() must REJECT a broken compile ------------------
+// (never resolve undefined and let the caller mistake a failed compile for success), and the pool
+// must expose a pure helper that turns a missing-oxc-native-binding message into an actionable
+// packaging hint (checked as a string mapping only — a real environment can't be made to lack the
+// binding on demand).
+console.log("[fail] broken fixture: default build() must reject, not resolve undefined")
+function writeBrokenFixture(root) {
+  const write = (rel, content) => {
+    const target = path.join(root, rel)
+    mkdirSync(path.dirname(target), { recursive: true })
+    writeFileSync(target, content)
+  }
+  write('project.config.json', JSON.stringify({ appid: 'fixture_app_broken', projectname: 'fixture-broken' }))
+  write('app.json', JSON.stringify({ pages: ['pages/index/index'] }))
+  write('app.js', 'App({})\n')
+  write('app.wxss', 'page { font-size: 14px; }\n')
+  write('pages/index/index.json', '{}\n')
+  // Unbalanced brace + bad tokens — same corruption shape used by devkit's
+  // open-project-compile-log fixture, chosen because it fails the logic stage
+  // rather than being silently absorbed by esbuild's error-tolerant fallback.
+  write('pages/index/index.js', 'Page({ data: { msg: "hi" } })\nconst broken = {{{ ;;; <<<\n')
+  write('pages/index/index.wxml', '<view>{{msg}}</view>\n')
+  write('pages/index/index.wxss', '.x { color: red; }\n')
+}
+const brokenRoot = dir('broken-fixture')
+mkdirSync(brokenRoot, { recursive: true })
+writeBrokenFixture(brokenRoot)
+
+if (typeof defaultBuild !== 'function') {
+  fail('pool.node.js must have a default export `build(outputDir, workPath, useAppIdDir?, options?)` — default export is missing/not a function')
+}
+else {
+  let brokenResolvedValue
+  let brokenRejectedError
+  try {
+    brokenResolvedValue = await defaultBuild(dir('broken-out'), brokenRoot, true, {})
+  }
+  catch (e) {
+    brokenRejectedError = e
+  }
+  if (brokenRejectedError === undefined) {
+    fail(`default build() must REJECT on a broken compile — instead it resolved to ${JSON.stringify(brokenResolvedValue)} (a swallowed error looks like success to every caller)`)
+  }
+  else if (!(brokenRejectedError instanceof Error) || !brokenRejectedError.message) {
+    fail(`default build() rejected but without a usable Error message: ${brokenRejectedError}`)
+  }
+  else if (!/stage "logic" failed/.test(brokenRejectedError.message)) {
+    fail(`default build() rejection message must name the failing stage, got: ${brokenRejectedError.message.split('\n')[0]}`)
+  }
+  else if (!/Transform failed/.test(brokenRejectedError.message)) {
+    fail(`default build() rejection message must carry the underlying compile reason (esbuild transform failure), got: ${brokenRejectedError.message.split('\n')[0]}`)
+  }
+  else {
+    console.log(`[fail] ✅ default build() rejected with: ${brokenRejectedError.message.split('\n')[0]}`)
+  }
+}
+
+// --- oxcNativeBindingHint: pure message -> actionable-packaging-hint mapper -----------------------
+if (typeof oxcNativeBindingHint !== 'function') {
+  fail('pool.node.js must export a named `oxcNativeBindingHint(message)` helper — export is missing')
+}
+else {
+  const hint = oxcNativeBindingHint('Cannot find native binding. It means oxc-parser was not installed correctly for this platform.')
+  if (typeof hint !== 'string' || !hint.includes('@oxc-parser/binding-') || !hint.includes('wasm32-wasi')) {
+    fail(`oxcNativeBindingHint must mention both the native platform binding package (@oxc-parser/binding-*) and the wasm32-wasi fallback, got: ${JSON.stringify(hint)}`)
+  }
+  else {
+    console.log('[fail] ✅ oxcNativeBindingHint surfaces a packaging fix for a missing native binding')
+  }
+  const noHint = oxcNativeBindingHint('some unrelated compile error')
+  if (noHint !== null) {
+    fail(`oxcNativeBindingHint must return null for a message that is not the native-binding failure, got: ${JSON.stringify(noHint)}`)
+  }
+}
+
+// The default export is a lazy module-level singleton pool (resident worker threads) — the
+// broken-fixture build above spun it up, so the process cannot exit cleanly without disposing it.
+if (typeof disposeDefaultPool !== 'function') {
+  fail('pool.node.js must export `disposeDefaultPool()` to tear down the lazy default-export singleton pool')
+}
+else {
+  await disposeDefaultPool()
+}
+
+console.log(failed ? '\n❌ FAIL' : '\n✅ PASS: resident Node pool is dmcc-equivalent (incl. sourcemap) on cold+warm builds, and rejects broken compiles')
 process.exit(failed ? 1 : 0)

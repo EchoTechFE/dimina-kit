@@ -48,7 +48,7 @@ await session.close()
 | `outputDir`    | `string`                 | --      | 编译产物输出目录，默认 `<os.tmpdir()>/dimina-kit/<projectPath 哈希前 12 位>`（每个项目独立） |
 | `watch`        | `boolean`                | `true`  | 为 `false` 时跳过 chokidar 文件监听 / 自动重编译循环                                        |
 | `onRebuild`    | `() => void`             | --      | 文件变更触发重新编译后的回调                                                                 |
-| `onBuildError` | `(err: unknown) => void` | --      | 编译出错时的回调                                                                             |
+| `onBuildError` | `(err: unknown) => void` | --      | watch 重编译出错时的回调；**初次编译失败不走这里，而是直接 reject `openProject` 本身**（见下） |
 | `onLog`        | `(entry) => void`        | --      | 逐行编译日志回调；`entry = { stream: 'stdout' \| 'stderr', text }`，已经过内置噪音过滤（`filterDmccLogLine`） |
 
 #### 返回值 ProjectSession
@@ -58,6 +58,12 @@ await session.close()
 | `appInfo` | `AppInfo`             | 应用信息（`appId`、`name`、`path`） |
 | `port`    | `number`              | 实际监听的端口                      |
 | `close`   | `() => Promise<void>` | 关闭文件监听和预览服务器            |
+
+#### 失败语义
+
+- **初次编译失败 → `openProject` reject**，错误即编译失败原因（`[compiler] stage "…" failed: …`）；不会带着 project.config.json 的兜底 appId 启动一个必然 404 的会话。reject 前编译日志行已全部送达 `onLog`，已启动的编译子进程会被清理。
+- **watch 重编译失败 → `onBuildError(err)`**，会话保持存活，修复文件保存后自动重编译恢复。
+- **Electron 打包分发**：编译路径需要 oxc-parser 的运行时绑定实际存在于分发包内（`@oxc-parser/binding-<platform>-<arch>` 或 `@oxc-parser/binding-wasm32-wasi` 之一），它们不是宿主的直接依赖，容易被 electron-builder 依赖收集丢弃——缺失时每次编译都会以 `Cannot find native binding` 失败（错误信息会附带打包提示）。详见 `@dimina-kit/compiler` README 的打包注意一节。
 
 ### enableCompileWorkerStandby（热备胎，可选加速器）
 

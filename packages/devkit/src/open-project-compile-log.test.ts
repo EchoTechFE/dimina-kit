@@ -20,17 +20,22 @@ import { writeUntilSettled } from './watch-rebuild.testutil.js'
  *    `onLog?: (entry: { stream: 'stdout' | 'stderr'; text: string }) => void`.
  *  - BOTH compile paths — the first compile inside `openProject` and the
  *    watcher-driven `rebuild()` — deliver every dmcc line (already filtered
- *    through `filterDmccLogLine`) to `opts.onLog`.
+ *    through `filterDmccLogLine`) to `opts.onLog`, whether that compile
+ *    succeeds or fails.
  *  - When `onLog` is NOT passed, no stdout/stderr capture is engaged:
  *    `process.stdout/stderr.write` and `isTTY` stay untouched during the build
  *    (zero-overhead contract, pinned by the last test).
+ *  - A FIRST-compile failure rejects `openProject` itself — no session, no
+ *    silent fallback to the `project.config.json` appid. `@dimina-kit/compiler`'s
+ *    `build()` rejects instead of swallowing the compile error, the forked
+ *    compile worker forwards it as an IPC error reply, and `compileWorker.build()`
+ *    turns that into a rejected promise that `openProject` propagates verbatim.
+ *    The failing stage and underlying reason still land on `opts.onLog` before
+ *    the rejection — the log channel and the rejection surface the same failure.
  *
  * These are real integration tests: they run the actual `@dimina/compiler`
  * against a tiny generated fixture project in os.tmpdir() (~3s per compile,
- * validated by the spike's fixture probe). The compiler swallows compile
- * errors internally (`build()` catches + console.errors, never rethrows), so
- * the error-fixture open still resolves — the log channel is the only way
- * the error reaches the UI, which is exactly what these tests pin.
+ * validated by the spike's fixture probe).
  */
 
 type LogEntry = { stream: 'stdout' | 'stderr'; text: string }
@@ -92,18 +97,40 @@ function expectNoNoise(texts: string[]): void {
 }
 
 describe('openProject onLog — first compile (integration, real dmcc)', () => {
-	it('streams filtered compile-error lines to onLog when the first compile fails', async () => {
+	it('rejects openProject itself when the first compile fails, after streaming every filtered log line to onLog', async () => {
 		const root = makeFixture({ brokenIndexJs: true })
 		const entries: LogEntry[] = []
 		const logOpts = { onLog: (entry: LogEntry) => entries.push(entry) }
 
-		const session = await devkit.openProject({
-			projectPath: root,
-			watch: false,
-			outputDir: path.join(root, '.out'),
-			...logOpts,
-		})
-		openSessions.push(session)
+		let caught: unknown
+		try {
+			const session = await devkit.openProject({
+				projectPath: root,
+				watch: false,
+				outputDir: path.join(root, '.out'),
+				...logOpts,
+			})
+			// Only reached if openProject wrongly resolved — track it for teardown
+			// so a false-negative pass here still doesn't leak a dev server/watcher.
+			openSessions.push(session)
+		}
+		catch (err) {
+			caught = err
+		}
+
+		expect(
+			caught,
+			'openProject must REJECT when the first compile fails — a broken project must never silently open a session',
+		).toBeInstanceOf(Error)
+		const message = (caught as Error).message
+		expect(
+			message,
+			'the rejection must name the failing stage, not a generic wrapper message',
+		).toMatch(/stage "logic" failed/)
+		expect(
+			message,
+			'the rejection must carry the underlying compile reason (esbuild transform failure), not just the stage name',
+		).toMatch(/Transform failed/)
 
 		expect(
 			entries.length,
