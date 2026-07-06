@@ -27,6 +27,16 @@ const DROP_RULES: RegExp[] = [
 	// Stack-trace frames (esbuild / Node internals) — the message line above
 	// them is kept; frames are noise for a compile panel.
 	/^\s+at /,
+	// Node process-level DeprecationWarnings + the `--trace-deprecation` hint
+	// Node prints after the first one. The developer's code never runs in the
+	// compile worker, so these are never actionable in a compile panel. Packaged
+	// Electron apps ALWAYS emit one: the asar fs shim's asarStatsToFsStats uses
+	// the deprecated fs.Stats constructor (electron/electron#47390), so the
+	// first stat of an in-asar file prints the DEP0180 pair to stderr. Only the
+	// DeprecationWarning form is dropped — other `(node:pid)` warnings
+	// (MaxListenersExceeded, Experimental) can carry real signal and are kept.
+	/^\(node:\d+\) (?:\[DEP\d+\] )?DeprecationWarning: /,
+	/^\(Use `.+--trace-deprecation .*` to show where the warning was created\)/,
 ]
 
 /**
