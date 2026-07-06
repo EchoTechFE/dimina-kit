@@ -39,6 +39,30 @@ function readEditorContentExpr(rel: string): string {
   ])`
 }
 
+/** Same contract as {@link readEditorContentExpr} but for a binary file: reads
+ * the resource through `IFileService` and returns the raw bytes base64-encoded
+ * (so the test can compare byte-for-byte without decoding through UTF-8,
+ * which would corrupt NUL/non-UTF-8 content), or `null` when absent. */
+function readEditorBytesBase64Expr(rel: string): string {
+  return `Promise.race([
+    (async () => {
+      const p = window.__WB_PROBE
+      const fileService = await p.getService(p.IFileService)
+      const uri = p.URI.parse('file:///workspace/' + ${JSON.stringify(rel)})
+      try {
+        const content = await fileService.readFile(uri)
+        const bytes = content.value.buffer
+        let bin = ''
+        for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i])
+        return btoa(bin)
+      } catch (e) {
+        return null
+      }
+    })(),
+    new Promise((resolve) => setTimeout(() => resolve('__POLL_TIMEOUT__'), 5000)),
+  ])`
+}
+
 test.describe('fs-core disk↔editor sync (embedded workbench)', () => {
   test.setTimeout(180_000)
 
@@ -163,6 +187,50 @@ test.describe('fs-core disk↔editor sync (embedded workbench)', () => {
       ).toBe(afterSave.walGen)
     } finally {
       fs.writeFileSync(wxmlPath, original, 'utf8')
+      // Wait for the restore itself to round-trip through the watcher before
+      // the test ends — otherwise its ledger write can still be in flight
+      // (past the 80ms debounce) when the NEXT test starts, and that test
+      // would misread this cleanup's gen bump as its own.
+      await pollUntil(
+        () => runInWorkbench<string | null>(electronApp, readEditorContentExpr('pages/index/index.wxml')),
+        (content) => content === original,
+        20_000,
+        500,
+      ).catch(() => {}) // best-effort: never fail the test on cleanup-settling timeout
+    }
+  })
+
+  test('external binary write: a NUL-containing file round-trips byte-for-byte into the editor without advancing the WAL gen', async ({
+    electronApp,
+  }) => {
+    const rel = 'pages/index/e2e-disk-sync-binary.bin'
+    const absPath = path.join(DEMO_APP_DIR, rel)
+    // A small binary blob: NUL byte first (well within the engine's 8192-byte
+    // sniff window), plus a spread of non-UTF-8-safe byte values.
+    const bytes = Buffer.from([0x00, 0x01, 0x02, 0xff, 0xfe, 0x50, 0x4e, 0x47, 0x00, 0x0d, 0x0a])
+    const expectedBase64 = bytes.toString('base64')
+
+    try {
+      if (fs.existsSync(absPath)) fs.unlinkSync(absPath)
+      const before = await runInWorkbench<{ walGen: number }>(electronApp, 'window.__WB_AUDIT.status()')
+
+      fs.writeFileSync(absPath, bytes)
+
+      await pollUntil(
+        () => runInWorkbench<string | null>(electronApp, readEditorBytesBase64Expr(rel)),
+        (b64) => b64 === expectedBase64,
+        20_000,
+        500,
+      )
+
+      // Binary content never enters the fs-core ledger (packages/fs-core/sync
+      // binary layering) — the WAL gen must NOT advance because of it, unlike
+      // the analogous text write test above.
+      await new Promise((r) => setTimeout(r, 2000))
+      const after = await runInWorkbench<{ walGen: number }>(electronApp, 'window.__WB_AUDIT.status()')
+      expect(after.walGen, 'a binary write must not advance the fs-core ledger WAL gen').toBe(before.walGen)
+    } finally {
+      if (fs.existsSync(absPath)) fs.unlinkSync(absPath)
     }
   })
 })

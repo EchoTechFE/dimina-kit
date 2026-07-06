@@ -42,8 +42,13 @@ export interface SyncEngine {
    * matches the ledger's current record for that path. Call AFTER the save
    * has landed at the truth source: this is best-effort accounting, never a
    * gate on the save itself.
+   *
+   * `content` accepts either the already-decoded text (legacy string path)
+   * or the raw saved bytes (`Uint8Array`) — pass raw bytes so the engine can
+   * sniff for binary content (see sync-engine.js's "Binary layering" doc) and
+   * route it to the session-scoped `binaryIndex` instead of the ledger.
    */
-  onHumanSave(rel: string, text: string): Promise<void>
+  onHumanSave(rel: string, content: string | Uint8Array): Promise<void>
   /** Subscribe to `port.changes` and start reconciling inbound batches. */
   start(): void
   /** Tear down the `port.changes` subscription. Idempotent. */

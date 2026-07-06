@@ -267,3 +267,135 @@ describe('createSyncEngine — pendingWrite is a structural no-op for a push por
     expect(applyToEditor).toHaveBeenCalledWith('a.js', new TextEncoder().encode('externally new'))
   })
 })
+
+describe('createSyncEngine — binary layering: sniff boundary', () => {
+  it('classifies a NUL inside the first 8192 bytes as binary but a NUL beyond it as text', async () => {
+    const withinSniff = new Uint8Array(100).fill(65) // 'A'
+    withinSniff[50] = 0
+    const beyondSniff = new Uint8Array(8192 + 10).fill(65)
+    beyondSniff[8192 + 5] = 0 // NUL sits outside the first 8192 bytes
+
+    const watch = makeWatch()
+    const applyToEditor = vi.fn().mockResolvedValue(undefined)
+    const port = makePort({
+      changes: watch.changes,
+      read: vi
+        .fn()
+        .mockResolvedValueOnce(withinSniff)
+        .mockResolvedValueOnce(beyondSniff),
+    })
+    const client = makeClient({ read: vi.fn().mockRejectedValue(Object.assign(new Error('not found'), { code: 'not-found' })) })
+    const engine = createSyncEngine(client, port, { applyToEditor })
+
+    await engine.populateLedger()
+    engine.start()
+    watch.emitBatch(['within.bin'])
+    // sha256hex uses the real crypto.subtle.digest — a genuinely async
+    // native op, not a same-tick mock resolution like the rest of this
+    // file's fakes, so a single `flush()` macrotask isn't a reliable wait.
+    // Poll instead of guessing a fixed extra delay.
+    await vi.waitFor(() => expect(applyToEditor).toHaveBeenCalledWith('within.bin', withinSniff))
+    watch.emitBatch(['beyond.txt'])
+    await vi.waitFor(() => expect(client.write).toHaveBeenCalledWith('beyond.txt', expect.any(String), { actor: 'human' }))
+
+    // within.bin: NUL inside the sniff window — binary path, ledger untouched, editor gets raw bytes.
+    expect(client.write).toHaveBeenCalledTimes(1) // only beyond.txt goes through the text path
+    // beyond.txt: NUL outside the sniff window — treated as text (decoded, possibly with a replacement char).
+    expect(applyToEditor).toHaveBeenCalledWith('beyond.txt', beyondSniff)
+  })
+})
+
+describe('createSyncEngine — binary layering: inbound new/changed binary content', () => {
+  it('does not touch the ledger, updates binaryIndex, and applies the raw bytes to the editor exactly once', async () => {
+    const watch = makeWatch()
+    const applyToEditor = vi.fn().mockResolvedValue(undefined)
+    const bytes = new Uint8Array([0, 1, 2, 3, 4])
+    const port = makePort({ changes: watch.changes, read: vi.fn().mockResolvedValue(bytes) })
+    const client = makeClient()
+    const engine = createSyncEngine(client, port, { applyToEditor })
+
+    await engine.populateLedger()
+    engine.start()
+    watch.emitBatch(['image.png'])
+    await vi.waitFor(() => expect(applyToEditor).toHaveBeenCalledTimes(1))
+
+    expect(client.write).toHaveBeenCalledTimes(0)
+    expect(client.read).not.toHaveBeenCalledWith('image.png')
+    expect(applyToEditor).toHaveBeenCalledWith('image.png', bytes)
+  })
+})
+
+describe('createSyncEngine — binary layering: inbound echo (identical hash+size)', () => {
+  it('performs zero actions when the same binary bytes are observed again', async () => {
+    const watch = makeWatch()
+    const applyToEditor = vi.fn().mockResolvedValue(undefined)
+    const bytes = new Uint8Array([0, 9, 8, 7])
+    const port = makePort({ changes: watch.changes, read: vi.fn().mockResolvedValue(bytes) })
+    const client = makeClient()
+    const engine = createSyncEngine(client, port, { applyToEditor })
+
+    await engine.populateLedger()
+    engine.start()
+    watch.emitBatch(['image.png'])
+    await vi.waitFor(() => expect(applyToEditor).toHaveBeenCalledTimes(1))
+    applyToEditor.mockClear()
+
+    // Same bytes observed again (e.g. a duplicate/coalesced fs event) — same size+hash, so it's an echo.
+    watch.emitBatch(['image.png'])
+    await flush()
+
+    expect(client.write).toHaveBeenCalledTimes(0)
+    expect(applyToEditor).toHaveBeenCalledTimes(0)
+  })
+})
+
+describe('createSyncEngine — binary layering: inbound deletion', () => {
+  it('applies a null delete to the editor and does not call client.rm for a binaryIndex-only path', async () => {
+    const watch = makeWatch()
+    const applyToEditor = vi.fn().mockResolvedValue(undefined)
+    const bytes = new Uint8Array([0, 1, 2, 3])
+    const port = makePort({
+      changes: watch.changes,
+      read: vi.fn().mockResolvedValueOnce(bytes).mockRejectedValueOnce(Object.assign(new Error('gone'), { status: 404 })),
+    })
+    const client = makeClient()
+    const engine = createSyncEngine(client, port, { applyToEditor })
+
+    await engine.populateLedger()
+    engine.start()
+    watch.emitBatch(['image.png']) // first observed: enters binaryIndex
+    await vi.waitFor(() => expect(applyToEditor).toHaveBeenCalledTimes(1))
+    applyToEditor.mockClear()
+
+    watch.emitBatch(['image.png']) // now deleted at the truth source
+    await flush()
+
+    expect(client.rm).toHaveBeenCalledTimes(0)
+    expect(applyToEditor).toHaveBeenCalledTimes(1)
+    expect(applyToEditor).toHaveBeenCalledWith('image.png', null)
+  })
+})
+
+describe('createSyncEngine — binary layering: onHumanSave with binary content', () => {
+  it('skips the ledger write and does not call applyToEditor for a binary save', async () => {
+    const port = makePort()
+    const client = makeClient()
+    const engine = createSyncEngine(client, port)
+
+    await engine.populateLedger()
+    await engine.onHumanSave('image.png', new Uint8Array([0, 1, 2, 3]))
+
+    expect(client.write).toHaveBeenCalledTimes(0)
+  })
+
+  it('still records a plain-string save exactly as before (text path unaffected)', async () => {
+    const port = makePort()
+    const client = makeClient({ read: vi.fn().mockResolvedValue({ content: 'old' }) })
+    const engine = createSyncEngine(client, port)
+
+    await engine.populateLedger()
+    await engine.onHumanSave('a.js', 'new text')
+
+    expect(client.write).toHaveBeenCalledWith('a.js', 'new text', { actor: 'human' })
+  })
+})

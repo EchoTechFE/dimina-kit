@@ -231,7 +231,6 @@ export function walAuditSource(base: WorkspaceSource, opts: WalAuditOptions): Wo
   const projectId = opts.projectId ?? DEFAULT_PROJECT_ID
   const bridge = opts.bridge ?? defaultBridge
   const createClient = opts.createClient ?? defaultCreateClient
-  const decoder = new TextDecoder()
   const encoder = new TextEncoder()
 
   let client: WalAuditClientLike | undefined
@@ -331,8 +330,10 @@ export function walAuditSource(base: WorkspaceSource, opts: WalAuditOptions): Wo
           try {
             const rel = relFromWorkspaceUri(uri)
             if (rel === null) return
-            const text = decoder.decode(content)
-            await eng.onHumanSave(rel, text)
+            // Raw bytes, not pre-decoded text: onHumanSave sniffs for binary
+            // content itself (fs-core/sync's binary layering) before deciding
+            // whether to decode.
+            await eng.onHumanSave(rel, content)
           } catch (e) {
             console.warn('[workbench] wal ledger write failed (save already landed on disk)', e)
           }

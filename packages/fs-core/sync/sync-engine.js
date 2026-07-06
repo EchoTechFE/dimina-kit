@@ -29,7 +29,34 @@
  *    is still in flight. When `pendingWrite` misses, the engine falls back
  *    to today's content comparison (truth-source bytes vs. the ledger's own
  *    record) — the only judgement a push host ever actually exercises.
+ *
+ * Binary layering (v1): the first 8192 bytes of a file are sniffed for a NUL
+ * byte to classify it binary. A binary file never reaches the fs-core
+ * ledger (`client.write`/`read`) — it is tracked only in the in-memory
+ * `binaryIndex` (`rel -> { size, sha256 }`), and echo judgement for it is
+ * size+hash equality instead of a ledger content compare. What/why this is
+ * narrower than the text path: binary changes get NO WAL audit and NO
+ * rollback (the audit turn surface — `diff`/`restore` — is a string-content
+ * contract; v1 does not support an agent writing binary inside a turn), and
+ * `binaryIndex` is session-scoped — it is cleared and rebuilt from scratch on
+ * every `populateLedger()`, exactly like the ledger's own text reconciliation.
  */
+
+const BINARY_SNIFF_BYTES = 8192
+
+/** True when the first `BINARY_SNIFF_BYTES` of `bytes` contain a NUL byte. */
+function looksBinary(bytes) {
+  const len = Math.min(bytes.length, BINARY_SNIFF_BYTES)
+  for (let i = 0; i < len; i++) {
+    if (bytes[i] === 0) return true
+  }
+  return false
+}
+
+async function sha256hex(bytes) {
+  const digest = await crypto.subtle.digest('SHA-256', bytes)
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
+}
 
 /**
  * True when `error` denotes "path does not exist" per the TruthPort error
@@ -54,6 +81,13 @@ export function createSyncEngine(client, port, opts = {}) {
   const pendingWrite = new Set()
 
   /**
+   * Binary files never enter the fs-core ledger — see the module doc's
+   * "Binary layering" section. Session-scoped: rebuilt from scratch on every
+   * `populateLedger()`.
+   */
+  const binaryIndex = new Map()
+
+  /**
    * FIFO queue serializing every compare-then-record against the ledger
    * (inbound change batches AND the onHumanSave accounting step). Without it
    * the two race: an inbound echo's compare-read can run while an
@@ -75,14 +109,22 @@ export function createSyncEngine(client, port, opts = {}) {
    * same persisted ledger identity) and are removed so the ledger ends up
    * exactly matching the walked tree. */
   async function seedFromDisk() {
+    binaryIndex.clear()
     const seen = new Set()
     await port.walk(async (rel, bytes) => {
       seen.add(rel)
+      if (looksBinary(bytes)) {
+        binaryIndex.set(rel, { size: bytes.length, sha256: await sha256hex(bytes) })
+        return // binary never enters the ledger
+      }
       await client.write(rel, decoder.decode(bytes), { actor: 'human' })
     })
     const { paths } = await client.ls()
     for (const p of paths) {
-      if (!seen.has(p)) await client.rm(p, { actor: 'human' })
+      // Residue from a previous session, OR a path that used to be
+      // ledgered as text but is now classified binary (migration cleanup —
+      // binaryIndex.has(p) is authoritative once the walk above ran).
+      if (!seen.has(p) || binaryIndex.has(p)) await client.rm(p, { actor: 'human' })
     }
   }
 
@@ -113,6 +155,36 @@ export function createSyncEngine(client, port, opts = {}) {
       bytes = null
     }
 
+    if (bytes === null) {
+      // Deletion. A path the binaryIndex knows about was never in the
+      // ledger (it never took the client.write path), so removal here is
+      // index-only — no client.rm.
+      if (binaryIndex.has(rel)) {
+        binaryIndex.delete(rel)
+        await applyToEditor?.(rel, null)
+        return
+      }
+      let ledgerContent
+      try {
+        ledgerContent = (await client.read(rel)).content
+      } catch {
+        ledgerContent = undefined
+      }
+      if (ledgerContent === undefined) return // already absent from both sides
+      await client.rm(rel, { actor: 'human' })
+      await applyToEditor?.(rel, null)
+      return
+    }
+
+    if (looksBinary(bytes)) {
+      const prior = binaryIndex.get(rel)
+      const sha256 = await sha256hex(bytes)
+      if (prior && prior.size === bytes.length && prior.sha256 === sha256) return // echo: same bytes already indexed
+      binaryIndex.set(rel, { size: bytes.length, sha256 })
+      await applyToEditor?.(rel, bytes)
+      return
+    }
+
     let ledgerContent
     try {
       ledgerContent = (await client.read(rel)).content
@@ -122,13 +194,6 @@ export function createSyncEngine(client, port, opts = {}) {
       // source always gets recorded/applied below rather than silently
       // dropped.
       ledgerContent = undefined
-    }
-
-    if (bytes === null) {
-      if (ledgerContent === undefined) return // already absent from both sides
-      await client.rm(rel, { actor: 'human' })
-      await applyToEditor?.(rel, null)
-      return
     }
 
     const text = decoder.decode(bytes)
@@ -191,10 +256,23 @@ export function createSyncEngine(client, port, opts = {}) {
    * onSave wrapper decides whether a ledger-write failure should be
    * swallowed (best-effort accounting must never unwind a save that already
    * landed at the truth source).
+   *
+   * `content` may be the decoded text (string, unchanged legacy path) or the
+   * raw saved bytes (`Uint8Array`) — passing raw bytes lets this function
+   * sniff for binary (see module doc's "Binary layering" section) before
+   * deciding whether to decode. A binary save skips the ledger write
+   * entirely and only updates `binaryIndex`.
    */
-  async function onHumanSave(rel, text) {
+  async function onHumanSave(rel, content) {
     pendingWrite.add(rel)
     try {
+      if (content instanceof Uint8Array && looksBinary(content)) {
+        await enqueueLedgerTurn(async () => {
+          binaryIndex.set(rel, { size: content.length, sha256: await sha256hex(content) })
+        })
+        return
+      }
+      const text = typeof content === 'string' ? content : decoder.decode(content)
       await enqueueLedgerTurn(async () => {
         const unchanged = await client
           .read(rel)
