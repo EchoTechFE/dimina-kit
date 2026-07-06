@@ -368,6 +368,8 @@ pnpm --filter @dimina-kit/compiler test:pool-node   # Node pool 与 dmcc 冷+热
 pnpm --filter @dimina-kit/compiler test:pool-scopehash # 浏览器 pool 跨 stage scope-hash 内容级一致(CSS data-v-* ⊆ render Module id;文件集校验看不见这层)
 pnpm --filter @dimina-kit/compiler test:lazy-toolchain # 按 stage 懒加载边界:主 realm 零重依赖、各 worker 只有本 stage 工具链、spawn 即按身份预热
 pnpm --filter @dimina-kit/compiler test:idle-shrink    # idle 收缩:超时终止 worker、下次 build 透明复活、活动取消、进程可自然退出
+pnpm --filter @dimina-kit/compiler test:stage-worker-message-order # stage worker 回复严格按请求到达序串行(build 在途时 introspect 不抢 FIFO 配对)
+pnpm --filter @dimina-kit/compiler test:stage-load-retry           # stage 工具链加载失败不缓存,chunk 恢复后 preloadStage 可重试成功
 ```
 
 `pool` 的浏览器端到端验证在 `dimina-web-client`（`npm run test:pool`，Playwright 驱动，产物与单线程逐结构一致）。`pool-node` 的宿主端验证在 `@dimina-kit/devkit` 测试套件（真实 fork + `openProject`）。

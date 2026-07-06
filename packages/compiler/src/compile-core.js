@@ -48,10 +48,17 @@ const stageModules = new Map() // stage -> SETTLED module namespace (reset targe
 
 function loadStageModule(stage) {
   if (!stageLoads.has(stage)) {
-    stageLoads.set(stage, STAGE_IMPORTERS[stage]().then((m) => {
+    // Only a SUCCESSFUL load is memoized. A rejection (missing chunk, transient fs
+    // error) clears the memo so the next call re-imports — a repaired install
+    // recovers in place instead of replaying the cached failure forever.
+    const load = STAGE_IMPORTERS[stage]().then((m) => {
       stageModules.set(stage, m)
       return m
-    }))
+    }, (err) => {
+      if (stageLoads.get(stage) === load) stageLoads.delete(stage)
+      throw err
+    })
+    stageLoads.set(stage, load)
   }
   return stageLoads.get(stage)
 }

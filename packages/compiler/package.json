@@ -50,7 +50,9 @@
     "test:idle-shrink": "node scripts/build-compiler.js node && node scripts/test-idle-shrink.js",
     "test:warm-default": "node scripts/build-compiler.js node && node scripts/test-warm-default.js",
     "test:npm-scan": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-npm-scan.js",
-    "test:stage-toolchain": "node scripts/build-compiler.js browser && node scripts/test-stage-toolchain.js"
+    "test:stage-toolchain": "node scripts/build-compiler.js browser && node scripts/test-stage-toolchain.js",
+    "test:stage-worker-message-order": "node scripts/build-compiler.js node && node scripts/test-stage-worker-message-order.js",
+    "test:stage-load-retry": "node scripts/build-compiler.js node && node scripts/test-stage-load-retry.js"
   },
   "dependencies": {
     "@babel/parser": "^7.29.7",

@@ -53,7 +53,18 @@ function loadedHeavyPackages() {
 // truly wedged worker (blocked event loop) goes silent and is caught in one window.
 const HEARTBEAT_INTERVAL_MS = 2000
 
-parentPort.on('message', async (msg) => {
+// The pool pairs replies with requests FIFO, so EVERY reply-producing message must be
+// processed strictly in arrival order — an introspect answered while a build is in flight
+// would steal the build's reply slot (the build "succeeds" with the introspect payload).
+// Heartbeats are emitted out-of-band from inside a build and are not part of the pairing.
+// The chain swallows a message's unexpected throw: each handler already reports failures
+// through its reply, and a rejected chain would wedge the worker for all later messages.
+let inbox = Promise.resolve()
+parentPort.on('message', (msg) => {
+  inbox = inbox.then(() => handleMessage(msg)).catch(() => {})
+})
+
+async function handleMessage(msg) {
   // Diagnostic probe: report which heavy toolchain packages this realm has loaded.
   // Answered inline (never enters the compile path), FIFO-paired like any reply.
   if (msg && msg.type === 'introspect') {
@@ -88,4 +99,4 @@ parentPort.on('message', async (msg) => {
   } finally {
     if (beacon) clearInterval(beacon)
   }
-})
+}

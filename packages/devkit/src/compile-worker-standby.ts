@@ -37,8 +37,9 @@ export interface CompileWorkerStandby {
 	ensure: () => void
 	/**
 	 * Health-check the spare and hand it over (the caller owns it afterwards;
-	 * pass it to `createCompileWorker({ adopt })`). Returns null — never
-	 * throws, never hangs — when there is no healthy spare to give.
+	 * pass it to `createCompileWorker({ adopt })`). Only a fully-prewarmed
+	 * ('ready') spare is ever handed over. Returns null — never throws, never
+	 * hangs — when there is no healthy prewarmed spare to give.
 	 */
 	adopt: () => Promise<ChildProcess | null>
 	/** Kill the spare (waiting for real death) and shut the manager down for good. */
@@ -55,6 +56,8 @@ export interface CompileWorkerStandbyOptions {
 	breakerMaxDeaths?: number
 	/** ping→pong deadline for adopt()'s health check. Default 1000. */
 	healthCheckTimeoutMs?: number
+	/** dispose()'s grace period between the polite kill and a SIGKILL escalation. Default 5000. */
+	disposeGraceMs?: number
 	/** Fork target override (tests script the spare's behavior). Default: the real compile-worker-entry. */
 	entry?: string
 }
@@ -73,6 +76,7 @@ export function createCompileWorkerStandby(
 		breakerWindowMs = 30_000,
 		breakerMaxDeaths = 3,
 		healthCheckTimeoutMs = 1000,
+		disposeGraceMs = 5000,
 	} = opts
 
 	let state: StandbyState = 'empty'
@@ -260,6 +264,11 @@ export function createCompileWorkerStandby(
 				emit({ type: 'health-check-failed', reason: 'spare died before adoption' })
 				return null
 			}
+			// Only a spare whose prewarm has COMPLETED is proven usable. A still-warming
+			// spare stays with the manager — its prewarm-result (including a failure,
+			// which the manager must kill and account for) needs the manager's own
+			// listener. The caller simply cold-forks this once.
+			if (state !== 'ready') return null
 			const healthy = await pingCheck(child)
 			if (spare !== child) {
 				// Died during the check — the death path already took over.
@@ -299,9 +308,18 @@ export function createCompileWorkerStandby(
 				const done = (): void => resolve()
 				child.once('exit', done)
 				child.once('error', done)
-				// Bounded: a spare that somehow ignores the kill must not wedge the
-				// host's quit path — the kill was issued, the wait is best-effort.
-				const guard = setTimeout(done, 5000)
+				// Bounded AND final: a spare that ignores the polite kill for the whole
+				// grace period is force-killed so it cannot outlive the host, and the
+				// quit path is never wedged waiting for a graceful exit.
+				const guard = setTimeout(() => {
+					try {
+						child.kill('SIGKILL')
+					}
+					catch {
+						// already gone
+					}
+					done()
+				}, disposeGraceMs)
 				guard.unref?.()
 				try {
 					child.kill()
