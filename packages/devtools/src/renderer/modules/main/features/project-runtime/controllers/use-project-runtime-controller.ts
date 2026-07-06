@@ -3,7 +3,7 @@ import { useEffect, useRef } from 'react'
 import type { RefObject } from 'react'
 import { DEVICES, SIM_PANEL_PADDING } from '@/shared/constants'
 import type { AppInfo, ProjectStatus, SessionRuntimeStatusPayload } from '@/shared/api'
-import type { CompileConfig } from '@/shared/types'
+import type { CompileConfig, LaunchConfig } from '@/shared/types'
 import type { ElementInspection, StorageWriteResult } from '../../../../../../shared/ipc-channels'
 import type { WxmlNode } from '../../right-panel/types.js'
 import { DEFAULT_RIGHT_PANE_STATE } from '../types'
@@ -51,6 +51,8 @@ interface SessionSlice {
   runtimeStatus: SessionRuntimeStatusPayload | null
   /** True once the project's file watcher has died for this session. */
   watcherDead: boolean
+  launchConfigs: LaunchConfig[]
+  activeLaunchConfigId: string | null
 }
 
 interface DeviceSlice {
@@ -199,6 +201,8 @@ export function useProjectRuntimeController(
       relaunch: sessionHook.relaunch,
       runtimeStatus: sessionHook.runtimeStatus,
       watcherDead: sessionHook.watcherDead,
+      launchConfigs: sessionHook.launchConfigs,
+      activeLaunchConfigId: sessionHook.activeLaunchConfigId,
     },
     device: {
       device: deviceHook.device,

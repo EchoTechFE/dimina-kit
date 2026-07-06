@@ -18,7 +18,7 @@ import {
   saveCompileConfig,
 } from '@/shared/api'
 import type { AppInfo, CompileLogEntry, SessionRuntimeStatusPayload } from '@/shared/api'
-import type { CompileConfig } from '@/shared/types'
+import type { CompileConfig, LaunchConfig } from '@/shared/types'
 import { DEFAULT_SCENE } from '../../../../../../shared/constants'
 import type { CompileStatus } from './use-project-runtime-controller'
 
@@ -91,6 +91,10 @@ export interface SessionHookResult {
   runtimeStatus: SessionRuntimeStatusPayload | null
   /** True once main reports the project's file watcher has died; persists for the rest of the session (cleared on project switch). */
   watcherDead: boolean
+  launchConfigs: LaunchConfig[]
+  activeLaunchConfigId: string | null
+  switchLaunchConfig: (id: string | null) => Promise<void>
+  updateLaunchConfigs: (configs: LaunchConfig[]) => Promise<void>
 }
 
 export function useSession(props: UseSessionProps): SessionHookResult {
@@ -359,6 +363,9 @@ export function useSession(props: UseSessionProps): SessionHookResult {
     relaunch,
     runtimeStatus,
     watcherDead,
+    launchConfigs,
+    activeLaunchConfigId,
+    switchLaunchConfig,
     updateLaunchConfigs,
   }
 }
