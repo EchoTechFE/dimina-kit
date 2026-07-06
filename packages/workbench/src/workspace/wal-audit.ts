@@ -146,6 +146,13 @@ function defaultWatchEvents(
   return (onBatch, onDead) => {
     if (typeof EventSource === 'undefined') return () => {}
     const es = new EventSource(`${fsBaseUrl}__fs/watch`)
+    // Throttle for the reconnect reconcile below: a flapping stream (server
+    // restart loop, EventSource auto-retry storm) must not queue a full-tree
+    // reconcile per attempt — '.' expands to an O(project) walk + ledger
+    // union, so one pass per window is plenty (the pass itself reconciles
+    // everything that happened in between).
+    const FULL_RECONCILE_MIN_INTERVAL_MS = 5000
+    let lastFullReconcileAt = 0
     es.onopen = () => {
       // (Re)connected. Anything the watcher reported while the stream was
       // down is gone for good (SSE here has no replay) — reconcile the whole
@@ -155,6 +162,9 @@ function defaultWatchEvents(
       // no-op reconcile of the just-seeded tree. Observed need: a 200-file
       // external burst dropping the stream right before an rm -rf left the
       // editor holding the whole deleted tree.
+      const now = Date.now()
+      if (now - lastFullReconcileAt < FULL_RECONCILE_MIN_INTERVAL_MS) return
+      lastFullReconcileAt = now
       onBatch(['.'])
     }
     es.onmessage = (ev) => {
@@ -263,8 +273,9 @@ export function walAuditSource(base: WorkspaceSource, opts: WalAuditOptions): Wo
    * the ledger paths recorded under it (deletions — a coalesced `rm -rf`
    * never names the files it removed). The engine content-compares every
    * reported path, so over-reporting is a no-op; UNDER-reporting is what
-   * loses data. Paths the ledger already knows are files skip the readdir
-   * probe entirely, so the common per-file event costs nothing extra. */
+   * loses data. EVERY path gets the readdir probe — even ledger-known files,
+   * which may have been replaced by a same-named directory (see
+   * expandWatchPath); burst-coalescing keeps that probe per merged pass. */
   /** List file paths (names only — NO content reads) under `startRel` via
    * bridge readdir recursion. `walkDisk` is unusable for listing: its
    * `onFile` contract fetches every file's bytes, which under a 200-file
@@ -412,16 +423,47 @@ export function walAuditSource(base: WorkspaceSource, opts: WalAuditOptions): Wo
     endTurn: (turnId) => (client ? client.turnEnd(turnId) : UNAVAILABLE()),
     async agentWrite(rel, content, turnId) {
       if (!client) return UNAVAILABLE()
+      // Snapshot the prior ledger record BEFORE writing — the compensation
+      // below needs it. `null` = the path did not exist in the ledger.
+      const prior = await client
+        .read(rel)
+        .then((r) => r.content)
+        .catch(() => null)
       // WAL first: fs-core's turn enforcement decides before anything touches disk.
       // A rejection here (e.g. turn-closed) must propagate — the bridge write below
       // must never run for a write the ledger refused.
       await client.write(rel, content, { actor: 'agent', turnId })
-      await bridge.write(opts.fsBaseUrl, rel, encoder.encode(content))
+      try {
+        await bridge.write(opts.fsBaseUrl, rel, encoder.encode(content))
+      } catch (e) {
+        // Truth-source write failed (oversize 413, disk full, bridge down):
+        // the ledger now records content the disk never received — left
+        // uncompensated, every later diff/rollback reasons from a forked
+        // ledger. Put the ledger back to its prior state INSIDE the same
+        // turn (the WAL keeps an honest attempt+undo trail), then surface
+        // the original failure. Compensation errors are swallowed: the
+        // primary failure must win, and a still-forked path converges back
+        // toward disk on the next reconcile (disk is the truth source).
+        if (prior === null) await client.rm(rel, { actor: 'agent', turnId }).catch(() => {})
+        else await client.write(rel, prior, { actor: 'agent', turnId }).catch(() => {})
+        throw e
+      }
     },
     async agentRm(rel, turnId) {
       if (!client) return UNAVAILABLE()
+      const prior = await client
+        .read(rel)
+        .then((r) => r.content)
+        .catch(() => null)
       await client.rm(rel, { actor: 'agent', turnId })
-      await bridge.delete(opts.fsBaseUrl, rel)
+      try {
+        await bridge.delete(opts.fsBaseUrl, rel)
+      } catch (e) {
+        // Mirror of agentWrite's compensation: disk still has the file, so
+        // the ledger must keep its record too.
+        if (prior !== null) await client.write(rel, prior, { actor: 'agent', turnId }).catch(() => {})
+        throw e
+      }
     },
     diff: (turnId) => (client ? client.diff(turnId) : UNAVAILABLE()),
     async rollback(turnId) {
@@ -429,7 +471,32 @@ export function walAuditSource(base: WorkspaceSource, opts: WalAuditOptions): Wo
       const { cpId, changes } = await client.diff(turnId)
       if (!cpId) throw new Error(`no checkpoint anchor recorded for turn ${turnId}`)
       await client.restore(cpId)
-      for (const rel of diffPaths(changes)) await replayPath(rel)
+      // Best-effort replay: one path's bridge failure must not strand every
+      // OTHER path un-replayed (that would maximize the ledger/disk fork).
+      // Failures are collected and surfaced explicitly — for those paths the
+      // ledger is restored while disk still holds the turn's content, and
+      // the next reconcile converges the ledger back toward disk (truth
+      // source wins), so the fork is bounded, visible, and self-healing.
+      const failed: string[] = []
+      let firstCause: unknown
+      for (const rel of diffPaths(changes)) {
+        try {
+          await replayPath(rel)
+        } catch (e) {
+          failed.push(rel)
+          firstCause ??= e
+        }
+      }
+      if (failed.length) {
+        throw Object.assign(
+          new Error(
+            `rollback replayed the ledger but disk replay failed for ${failed.length} path(s): ` +
+              `${failed.join(', ')} — these stay at the turn's content on disk until the next reconcile; ` +
+              `first cause: ${String(firstCause)}`,
+          ),
+          { failedPaths: failed, cause: firstCause },
+        )
+      }
     },
     status: () => (client ? client.status() : UNAVAILABLE()),
   }

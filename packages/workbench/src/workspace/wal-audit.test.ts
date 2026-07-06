@@ -310,3 +310,97 @@ describe('walAuditSource — graceful degradation when the fs-core client fails 
     await expect(source.audit.rollback('t1')).rejects.toThrow()
   })
 })
+
+describe('walAuditSource — truth-write failure compensation (ledger must not fork from disk)', () => {
+  function makeCompClient(overrides: Partial<WalAuditClientLike> = {}): WalAuditClientLike {
+    return {
+      write: vi.fn().mockResolvedValue(undefined),
+      rm: vi.fn().mockResolvedValue(undefined),
+      restore: vi.fn().mockResolvedValue(undefined),
+      turnBegin: vi.fn().mockResolvedValue(undefined),
+      turnEnd: vi.fn().mockResolvedValue(undefined),
+      diff: vi.fn().mockResolvedValue({ changes: [] }),
+      read: vi.fn().mockRejectedValue(Object.assign(new Error('nf'), { code: 'not-found' })),
+      ls: vi.fn().mockResolvedValue({ paths: [] }),
+      status: vi.fn().mockResolvedValue({ mode: 'rw', walGen: 0, epoch: 0 }),
+      destroy: vi.fn(),
+      ...overrides,
+    }
+  }
+
+  it('agentWrite: a bridge failure (e.g. 413 oversize) rolls the NEW ledger record back out via rm', async () => {
+    const client = makeCompClient() // read → not-found: the path did not exist before
+    const bridge = makeBridge({ write: vi.fn().mockRejectedValue(Object.assign(new Error('413'), { status: 413 })) })
+    const source = walAuditSource(makeBase(), {
+      fsBaseUrl: 'https://fs.example',
+      createClient: vi.fn().mockResolvedValue(client),
+      bridge,
+    })
+    await source.populate(fakeFileService)
+
+    await expect(source.audit.agentWrite('big.bin', 'x'.repeat(64), 't-1')).rejects.toThrow('413')
+    expect(client.write).toHaveBeenCalledWith('big.bin', 'x'.repeat(64), { actor: 'agent', turnId: 't-1' })
+    // Compensation: the path had no prior record, so the forked record is removed.
+    expect(client.rm).toHaveBeenCalledWith('big.bin', { actor: 'agent', turnId: 't-1' })
+  })
+
+  it('agentWrite: a bridge failure on an EXISTING path writes the prior content back', async () => {
+    const client = makeCompClient({ read: vi.fn().mockResolvedValue({ content: 'prior content' }) })
+    const bridge = makeBridge({ write: vi.fn().mockRejectedValue(new Error('disk full')) })
+    const source = walAuditSource(makeBase(), {
+      fsBaseUrl: 'https://fs.example',
+      createClient: vi.fn().mockResolvedValue(client),
+      bridge,
+    })
+    await source.populate(fakeFileService)
+
+    await expect(source.audit.agentWrite('a.js', 'new content', 't-1')).rejects.toThrow('disk full')
+    const writes = (client.write as ReturnType<typeof vi.fn>).mock.calls
+    expect(writes).toContainEqual(['a.js', 'new content', { actor: 'agent', turnId: 't-1' }])
+    expect(writes[writes.length - 1]).toEqual(['a.js', 'prior content', { actor: 'agent', turnId: 't-1' }])
+    expect(client.rm).not.toHaveBeenCalled()
+  })
+
+  it('agentRm: a bridge delete failure writes the removed record back', async () => {
+    const client = makeCompClient({ read: vi.fn().mockResolvedValue({ content: 'still on disk' }) })
+    const bridge = makeBridge({ delete: vi.fn().mockRejectedValue(new Error('EACCES')) })
+    const source = walAuditSource(makeBase(), {
+      fsBaseUrl: 'https://fs.example',
+      createClient: vi.fn().mockResolvedValue(client),
+      bridge,
+    })
+    await source.populate(fakeFileService)
+
+    await expect(source.audit.agentRm('a.js', 't-1')).rejects.toThrow('EACCES')
+    expect(client.rm).toHaveBeenCalledWith('a.js', { actor: 'agent', turnId: 't-1' })
+    expect(client.write).toHaveBeenCalledWith('a.js', 'still on disk', { actor: 'agent', turnId: 't-1' })
+  })
+
+  it('rollback: one path failing its disk replay does not strand the others, and the error names it', async () => {
+    const client = makeCompClient({
+      diff: vi.fn().mockResolvedValue({
+        cpId: 'cp-1',
+        changes: [{ path: 'ok-1.js' }, { path: 'bad.js' }, { path: 'ok-2.js' }],
+      }),
+      read: vi.fn().mockImplementation((rel: string) => Promise.resolve({ content: `restored ${rel}` })),
+    })
+    const bridge = makeBridge({
+      write: vi.fn().mockImplementation((_base: string, rel: string) =>
+        rel === 'bad.js' ? Promise.reject(new Error('bridge down for bad.js')) : Promise.resolve(undefined),
+      ),
+    })
+    const source = walAuditSource(makeBase(), {
+      fsBaseUrl: 'https://fs.example',
+      createClient: vi.fn().mockResolvedValue(client),
+      bridge,
+    })
+    await source.populate(fakeFileService)
+
+    await expect(source.audit.rollback('t-1')).rejects.toThrow(/bad\.js/)
+    expect(client.restore).toHaveBeenCalledWith('cp-1')
+    // Both healthy paths were still replayed to disk despite bad.js failing.
+    const written = (bridge.write as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[1])
+    expect(written).toContain('ok-1.js')
+    expect(written).toContain('ok-2.js')
+  })
+})
