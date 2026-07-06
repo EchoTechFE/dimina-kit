@@ -30,6 +30,22 @@
  *    to today's content comparison (truth-source bytes vs. the ledger's own
  *    record) — the only judgement a push host ever actually exercises.
  *
+ * Inbound-echo consumption (`consumeInboundEcho`, `inboundApplied`): a 'poll'
+ * host (e.g. the web local-directory adapter) drives its OWN outbound path
+ * OUTSIDE this module — it reads the ledger and writes the truth source
+ * directly, not through `onHumanSave` — so a change this engine just applied
+ * INBOUND (disk -> ledger, via `handleInboundPath`) can race that host's
+ * outbound scan and get echoed straight back to disk before the poll
+ * baseline ever settles. `inboundApplied` (`rel -> {kind:'text'|'binary'|
+ * 'delete', ...}`) records exactly what `handleInboundPath` just applied,
+ * overwriting any prior entry for the same path; `consumeInboundEcho(rel,
+ * content)` lets such a host check "is this outbound write about to re-emit
+ * an inbound change I haven't published yet?" immediately BEFORE writing to
+ * the truth source, consuming (clearing) the record on a match so it is a
+ * one-shot suppression, not a standing content cache. A miss (different
+ * content, or no record at all) returns false and leaves any existing record
+ * untouched — it is not this call's echo to consume.
+ *
  * Binary layering (v1): the first 8192 bytes of a file are sniffed for a NUL
  * byte to classify it binary. A binary file never reaches the fs-core
  * ledger (`client.write`/`read`) — it is tracked only in the in-memory
@@ -56,6 +72,13 @@ function looksBinary(bytes) {
 async function sha256hex(bytes) {
   const digest = await crypto.subtle.digest('SHA-256', bytes)
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+/** Byte-for-byte equality — used by `consumeInboundEcho`'s binary-content match. */
+function bytesEqual(a, b) {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
+  return true
 }
 
 /**
@@ -88,6 +111,16 @@ export function createSyncEngine(client, port, opts = {}) {
   const binaryIndex = new Map()
 
   /**
+   * `rel -> { kind: 'text', text } | { kind: 'binary', bytes } | { kind: 'delete' }`
+   * — see the module doc's "Inbound-echo consumption" section. Written by
+   * `handleInboundPath` immediately after it actually applies an inbound
+   * change (ledger write/rm, or a binary/delete index update); consumed
+   * (checked + cleared on a match) by `consumeInboundEcho`. Session-scoped,
+   * same as `binaryIndex` — cleared on every `populateLedger()`.
+   */
+  const inboundApplied = new Map()
+
+  /**
    * FIFO queue serializing every compare-then-record against the ledger
    * (inbound change batches AND the onHumanSave accounting step). Without it
    * the two race: an inbound echo's compare-read can run while an
@@ -110,6 +143,7 @@ export function createSyncEngine(client, port, opts = {}) {
    * exactly matching the walked tree. */
   async function seedFromDisk() {
     binaryIndex.clear()
+    inboundApplied.clear()
     const seen = new Set()
     await port.walk(async (rel, bytes) => {
       seen.add(rel)
@@ -161,6 +195,7 @@ export function createSyncEngine(client, port, opts = {}) {
       // index-only — no client.rm.
       if (binaryIndex.has(rel)) {
         binaryIndex.delete(rel)
+        inboundApplied.set(rel, { kind: 'delete' })
         await applyToEditor?.(rel, null)
         return
       }
@@ -172,6 +207,7 @@ export function createSyncEngine(client, port, opts = {}) {
       }
       if (ledgerContent === undefined) return // already absent from both sides
       await client.rm(rel, { actor: 'human' })
+      inboundApplied.set(rel, { kind: 'delete' })
       await applyToEditor?.(rel, null)
       return
     }
@@ -181,6 +217,7 @@ export function createSyncEngine(client, port, opts = {}) {
       const sha256 = await sha256hex(bytes)
       if (prior && prior.size === bytes.length && prior.sha256 === sha256) return // echo: same bytes already indexed
       binaryIndex.set(rel, { size: bytes.length, sha256 })
+      inboundApplied.set(rel, { kind: 'binary', bytes })
       await applyToEditor?.(rel, bytes)
       return
     }
@@ -200,7 +237,30 @@ export function createSyncEngine(client, port, opts = {}) {
     if (ledgerContent !== undefined && text === ledgerContent) return // echo of our own write
 
     await client.write(rel, text, { actor: 'human' })
+    inboundApplied.set(rel, { kind: 'text', text })
     await applyToEditor?.(rel, bytes)
+  }
+
+  /**
+   * One-shot check for a 'poll' host's own outbound path: "is `content` (the
+   * bytes/text about to be written to the truth source for `rel`, or `null`
+   * for a delete) exactly what `handleInboundPath` just applied FROM that
+   * same truth source?" A match means writing it back out would be a pure
+   * echo — the host should skip the write entirely — and the record is
+   * cleared (consumed) so it cannot match again. See the module doc's
+   * "Inbound-echo consumption" section for why a push host (devtools) never
+   * needs this: its outbound path goes through `onHumanSave`/`pendingWrite`
+   * instead.
+   */
+  function consumeInboundEcho(rel, content) {
+    const entry = inboundApplied.get(rel)
+    if (!entry) return false
+    let matches
+    if (content === null) matches = entry.kind === 'delete'
+    else if (typeof content === 'string') matches = entry.kind === 'text' && entry.text === content
+    else matches = entry.kind === 'binary' && bytesEqual(entry.bytes, content)
+    if (matches) inboundApplied.delete(rel)
+    return matches
   }
 
   async function handleBatch(paths) {
@@ -288,6 +348,7 @@ export function createSyncEngine(client, port, opts = {}) {
   return {
     populateLedger: seedFromDisk,
     onHumanSave,
+    consumeInboundEcho,
     start,
     stop,
   }

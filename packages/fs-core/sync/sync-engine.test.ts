@@ -399,3 +399,70 @@ describe('createSyncEngine — binary layering: onHumanSave with binary content'
     expect(client.write).toHaveBeenCalledWith('a.js', 'new text', { actor: 'human' })
   })
 })
+
+describe('createSyncEngine — consumeInboundEcho (poll host outbound echo suppression)', () => {
+  it('matches the exact text an inbound batch just applied, once — a second consume misses', async () => {
+    const watch = makeWatch()
+    const port = makePort({
+      changes: watch.changes,
+      read: vi.fn().mockResolvedValue(new TextEncoder().encode('from disk')),
+    })
+    const client = makeClient({ read: vi.fn().mockResolvedValue({ content: 'old' }) })
+    const engine = createSyncEngine(client, port)
+
+    await engine.populateLedger()
+    engine.start()
+    watch.emitBatch(['a.js'])
+    await vi.waitFor(() => expect(client.write).toHaveBeenCalledWith('a.js', 'from disk', { actor: 'human' }))
+
+    expect(engine.consumeInboundEcho('a.js', 'from disk')).toBe(true)
+    expect(engine.consumeInboundEcho('a.js', 'from disk')).toBe(false)
+  })
+
+  it('does not match different content, and leaves the record intact for a later correct match', async () => {
+    const watch = makeWatch()
+    const port = makePort({
+      changes: watch.changes,
+      read: vi.fn().mockResolvedValue(new TextEncoder().encode('from disk')),
+    })
+    const client = makeClient({ read: vi.fn().mockResolvedValue({ content: 'old' }) })
+    const engine = createSyncEngine(client, port)
+
+    await engine.populateLedger()
+    engine.start()
+    watch.emitBatch(['a.js'])
+    await vi.waitFor(() => expect(client.write).toHaveBeenCalledWith('a.js', 'from disk', { actor: 'human' }))
+
+    expect(engine.consumeInboundEcho('a.js', 'something else')).toBe(false)
+    expect(engine.consumeInboundEcho('a.js', 'from disk')).toBe(true)
+  })
+
+  it('matches a delete marker only with content === null', async () => {
+    const watch = makeWatch()
+    const port = makePort({
+      changes: watch.changes,
+      read: vi.fn().mockRejectedValue(Object.assign(new Error('gone'), { code: 'not-found' })),
+    })
+    const client = makeClient({ read: vi.fn().mockResolvedValue({ content: 'was here' }) })
+    const engine = createSyncEngine(client, port)
+
+    await engine.populateLedger()
+    engine.start()
+    watch.emitBatch(['gone.js'])
+    await vi.waitFor(() => expect(client.rm).toHaveBeenCalledWith('gone.js', { actor: 'human' }))
+
+    expect(engine.consumeInboundEcho('gone.js', 'not a delete')).toBe(false)
+    expect(engine.consumeInboundEcho('gone.js', null)).toBe(true)
+    expect(engine.consumeInboundEcho('gone.js', null)).toBe(false)
+  })
+
+  it('returns false for a path with no inbound record at all', async () => {
+    const port = makePort()
+    const client = makeClient()
+    const engine = createSyncEngine(client, port)
+
+    await engine.populateLedger()
+
+    expect(engine.consumeInboundEcho('never-touched.js', 'anything')).toBe(false)
+  })
+})

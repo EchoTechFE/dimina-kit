@@ -49,6 +49,18 @@ export interface SyncEngine {
    * route it to the session-scoped `binaryIndex` instead of the ledger.
    */
   onHumanSave(rel: string, content: string | Uint8Array): Promise<void>
+  /**
+   * One-shot check for a 'poll' host's own outbound path (see sync-engine.js's
+   * "Inbound-echo consumption" doc): call this BEFORE writing `content` (the
+   * decoded text, raw bytes, or `null` for a delete) for `rel` out to the
+   * truth source. Returns `true` when it exactly matches what
+   * `handleInboundPath` just applied FROM that same truth source — that
+   * write would be a pure echo, so the caller should skip it — and clears
+   * the record so it cannot match again (one-shot, not a standing cache).
+   * Returns `false` on any mismatch or when there is no record at all,
+   * leaving any existing record untouched.
+   */
+  consumeInboundEcho(rel: string, content: string | Uint8Array | null): boolean
   /** Subscribe to `port.changes` and start reconciling inbound batches. */
   start(): void
   /** Tear down the `port.changes` subscription. Idempotent. */
