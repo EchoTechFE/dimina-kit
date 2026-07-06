@@ -58,6 +58,10 @@ vi.mock('@/shared/api', () => {
       queryParams: [],
     })),
     saveCompileConfig: vi.fn(async () => {}),
+    getLaunchConfigs: vi.fn(async () => []),
+    getActiveLaunchConfigId: vi.fn(async () => null),
+    saveLaunchConfigs: vi.fn(async () => {}),
+    saveActiveLaunchConfigId: vi.fn(async () => {}),
     onSessionRuntimeStatus: vi.fn(() => () => {}),
     onProjectStatus: vi.fn((handler: (s: unknown) => void) => {
       projectStatusListeners.push(handler)
