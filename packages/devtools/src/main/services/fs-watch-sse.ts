@@ -19,20 +19,25 @@
 import type http from 'node:http'
 import nodeFs from 'node:fs'
 import path from 'node:path'
+import { SKIP_DIRS } from '../ipc/project-fs.js'
 import { jsonRes } from './http-json.js'
 
 /** Debounce window for batching change notifications (ms). */
 const WATCH_DEBOUNCE_MS = 80
 
-/** Directory prefixes never reported to the SSE stream. */
-const WATCH_IGNORED_PREFIXES = ['node_modules/', '.git/', 'dist/']
-
 /** `false` for build/vcs/dependency churn, the empty string, and any path that
- * (defensively — `fs.watch`'s filename is always root-relative) escapes the root. */
+ * (defensively — `fs.watch`'s filename is always root-relative) escapes the root.
+ * Matches SKIP_DIRS as a path SEGMENT at any depth — the same set `/__fs/readdir`
+ * omits, so the watcher never reports paths the editor mirror cannot see (a
+ * prefix match would let `packages/x/node_modules/...` through). The one
+ * accepted edge: a plain FILE named exactly like a skip dir (e.g. `dist`)
+ * is also unreported, though readdir would list it. */
 function shouldReportWatchPath(rel: string): boolean {
   if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) return false
-  return !WATCH_IGNORED_PREFIXES.some((prefix) => rel.startsWith(prefix))
+  return !rel.split('/').some((segment) => SKIP_DIRS.has(segment))
 }
+
+export const __testing = { shouldReportWatchPath }
 
 export function handleFsWatchRequest(
   req: http.IncomingMessage,

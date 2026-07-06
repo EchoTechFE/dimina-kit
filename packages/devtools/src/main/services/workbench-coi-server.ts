@@ -44,6 +44,7 @@ import {
   mkdirWithin,
   deleteWithin,
   renameWithin,
+  SKIP_DIRS,
 } from '../ipc/project-fs.js'
 import { handleFsWatchRequest } from './fs-watch-sse.js'
 import { jsonRes } from './http-json.js'
@@ -205,7 +206,12 @@ async function fsStat(ctx: FsActionContext): Promise<void> {
 
 async function fsReaddir(ctx: FsActionContext): Promise<void> {
   const entries = await readdirWithin(ctx.projectRoot, ctx.rel)
-  jsonRes(ctx.res, 200, entries.map((e) => [e.name, e.isDirectory() ? 2 : 1]))
+  // Directories in SKIP_DIRS (node_modules, .git, dist, ...) are omitted at
+  // every level: the workbench mirror and the WAL ledger seed walk whatever
+  // this returns, so listing them would pull entire dependency trees into the
+  // editor memfs and the OPFS ledger. Same-named FILES stay visible.
+  const visible = entries.filter((e) => !(e.isDirectory() && SKIP_DIRS.has(e.name)))
+  jsonRes(ctx.res, 200, visible.map((e) => [e.name, e.isDirectory() ? 2 : 1]))
 }
 
 async function fsRead(ctx: FsActionContext): Promise<void> {

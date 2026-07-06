@@ -54,7 +54,10 @@ import { ProjectFsChannel } from '../../shared/ipc-channels.js'
 /** Cap for `listFiles` — huge monorepos would otherwise stall the renderer. */
 const LIST_FILE_LIMIT = 5000
 
-const SKIP_DIRS: ReadonlySet<string> = new Set([
+/** Dependency/VCS/build directories invisible to every project-tree consumer:
+ * IPC `listFiles`, the `/__fs/readdir` bridge (so the workbench mirror and the
+ * WAL ledger seed never walk into them), and the `/__fs/watch` change stream. */
+export const SKIP_DIRS: ReadonlySet<string> = new Set([
   'node_modules', '.git', '.svn', '.hg', 'dist', 'build',
   '.next', '.cache', '.turbo', '.parcel-cache', '.nuxt', '.output', '.vite',
 ])
