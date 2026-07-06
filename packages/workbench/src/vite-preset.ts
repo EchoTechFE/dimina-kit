@@ -42,42 +42,6 @@ function workbenchMonacoDeps(): string[] {
 }
 
 /**
- * Virtual specifiers that resolve to the real fs-core worker files. `@dimina-kit/fs-core`
- * only exports `./client` / `./agent-tools` / `./disk-mirror` / `./zip` (its
- * package.json `exports` map has no entry for the raw `*.worker.js` files, and
- * that map is frozen — see the fs-core transplant invariant), so a bare
- * `@dimina-kit/fs-core/src/fs-core.worker.js` import is not resolvable through
- * Node's exports-field algorithm. `resolve.alias` bypasses the exports map
- * entirely (it substitutes the specifier before package resolution runs), so
- * these virtual ids let a host statically `import … from 'virtual:fs-core/core-worker?worker&url'`
- * (the same `?worker&url` idiom as the monaco/vscode workers above) without
- * touching fs-core's own manifest. Resolved via the sibling of the `./client`
- * export (the one path guaranteed to exist), not a hardcoded `src/` join, so a
- * future fs-core layout change only needs the exports map, not this alias.
- *
- * Uses REGEXP `find` entries (not plain string keys) so only the `virtual:…`
- * prefix is substituted and the `?worker&url` query rollup/vite need to detect
- * the worker-asset transform survives onto the replacement path unmodified —
- * a plain string-keyed alias only matches the FULL specifier verbatim, which
- * never matches once a query is appended, and rolldown then fails to resolve
- * the raw `virtual:…?worker&url` string as a real package specifier.
- */
-function fsCoreWorkerAliases(): Array<{ find: RegExp; replacement: string }> {
-  try {
-    const clientEntry = require.resolve('@dimina-kit/fs-core/client')
-    const srcDir = dirname(clientEntry)
-    return [
-      { find: /^virtual:fs-core\/core-worker/, replacement: join(srcDir, 'fs-core.worker.js') },
-      { find: /^virtual:fs-core\/query-worker/, replacement: join(srcDir, 'fs-query.worker.js') },
-    ]
-  } catch {
-    // A source consumer without the fs-core dependency (e.g. web-client before
-    // it opts in) never imports these virtual ids, so no alias entries is inert.
-    return []
-  }
-}
-
-/**
  * Dev-server plugin: serve the static assets the api reaches via
  * `new URL('…', import.meta.url)` from PRE-BUNDLED deps, whose computed URL
  * otherwise points into `.vite/deps` and 404s in dev.
@@ -161,7 +125,6 @@ export function workbenchVitePreset(): UserConfig {
     plugins: [workbenchCssInlinePlugin(), workbenchDevAssetsPlugin()],
     resolve: {
       dedupe: workbenchMonacoDeps(),
-      alias: fsCoreWorkerAliases(),
     },
     optimizeDeps: {
       include: [

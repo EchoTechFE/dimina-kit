@@ -54,7 +54,6 @@
     "prepack": "pnpm build:lib"
   },
   "dependencies": {
-    "@dimina-kit/fs-core": "workspace:*",
     "@codingame/monaco-vscode-api": "34.0.3",
     "@codingame/monaco-vscode-configuration-service-override": "34.0.3",
     "@codingame/monaco-vscode-css-default-extension": "34.0.3",

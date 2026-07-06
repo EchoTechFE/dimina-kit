@@ -24,17 +24,4 @@ export { inMemorySeedSource } from './workspace/in-memory-seed'
 export type { InMemorySeedOptions } from './workspace/in-memory-seed'
 export type { WorkspaceSource } from './workspace/types'
 
-// WAL audit decorator: layers an `@dimina-kit/fs-core` turn/rollback ledger over
-// a disk-backed WorkspaceSource. devtools' `src/main.ts` wires this over
-// `diskMirrorSource`; exported here for a host to construct/inspect explicitly
-// (e.g. a future agent surface driving `audit` directly instead of through the
-// `window.__WB_AUDIT` CDP probe).
-export { walAuditSource } from './workspace/wal-audit'
-export type {
-  WalAuditOptions,
-  WalAuditSurface,
-  WalAuditClientLike,
-  WalAuditBridge,
-} from './workspace/wal-audit'
-
 export { WORKSPACE_FILE_ROOT } from './file-workspace'

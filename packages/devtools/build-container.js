@@ -162,19 +162,6 @@ if (isFreshBuild(inputFingerprint)) {
   process.exit(0)
 }
 
-// The dimina submodule must be populated before we spawn `pnpm build` with
-// cwd=DIMINA_FE: if package.json is missing there (fresh clone / fresh git
-// worktree without `git submodule update --init`), pnpm walks UP the directory
-// tree, finds the monorepo root, and runs the root `turbo run build` — which
-// re-enters this script and recurses without bound until the machine OOMs.
-if (!existsSync(join(DIMINA_FE, 'package.json'))) {
-  console.error(
-    `dimina submodule is not initialized (${join(DIMINA_FE, 'package.json')} missing).\n` +
-      'Run `git submodule update --init dimina` first.',
-  )
-  process.exit(1)
-}
-
 // 上游 dimina/fe vite 在 GITHUB_ACTIONS 存在时把 base 改成 '/dimina/'
 // （他们自己 GH Pages demo 部署路径），会导致 CI 产物里 pageFrame.html
 // 和 BASE_URL 都被注入 /dimina/ 前缀，运行时全部 404。我们 container
