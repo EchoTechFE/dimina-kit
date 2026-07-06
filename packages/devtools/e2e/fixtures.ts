@@ -229,6 +229,13 @@ export async function findWindowByUrl(
  */
 export interface UseSharedProjectOptions {
   openOptions?: Parameters<typeof openProjectInUI>[2]
+  /**
+   * Timeout for the one-time `beforeAll` project open. Playwright's beforeAll
+   * runs under the CONFIG default hook timeout (60s) — `test.setTimeout` at
+   * describe level does not reach it — and a first open that triggers a full
+   * demo-app compile can exceed that. Omitted → Playwright's default stands.
+   */
+  openTimeoutMs?: number
 }
 
 export function useSharedProject(
@@ -236,11 +243,12 @@ export function useSharedProject(
   projectDir: string,
   options: UseSharedProjectOptions = {},
 ): void {
-  const { openOptions } = options
+  const { openOptions, openTimeoutMs } = options
 
   // beforeAll/afterAll only receive worker-scoped fixtures, so we rely on
   // _workerElectron and grab the firstWindow ourselves.
   testObj.beforeAll(async ({ _workerElectron }) => {
+    if (openTimeoutMs !== undefined) testObj.setTimeout(openTimeoutMs)
     const win = await _workerElectron.app.firstWindow()
     await openProjectInUI(win, projectDir, openOptions)
   })

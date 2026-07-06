@@ -56,6 +56,6 @@ export async function attachWorkbenchAndWaitReady(
     () => workbenchStatus(electronApp),
     (s) => s === 'workbench-ready' || s === 'exthost-alive',
     timeoutMs,
-    1500,
+    500,
   )
 }

@@ -10,15 +10,21 @@
  */
 import fs from 'fs'
 import path from 'path'
-import { test, expect } from './fixtures'
-import { DEMO_APP_DIR, openProjectInUI, closeProject, pollUntil } from './helpers'
+import { test, expect, useSharedProject } from './fixtures'
+import { DEMO_APP_DIR, pollUntil } from './helpers'
 import { runInWorkbench, attachWorkbenchAndWaitReady } from './workbench-probe'
 
 test.describe('fs-core WAL audit ledger (embedded workbench)', () => {
   test.setTimeout(180_000)
 
+  // Open the project ONCE for the whole file (worker-scoped Electron is
+  // already shared); each per-test open/close cost a full open+workbench-ready
+  // cycle (~40-60s each). Workbench readiness is likewise per-open, so only
+  // the first test pays the attach+ready wait.
+  useSharedProject(test, DEMO_APP_DIR, { openOptions: { waitMs: 60_000 }, openTimeoutMs: 120_000 })
+  let workbenchReady = false
   test.beforeEach(async ({ mainWindow, electronApp }) => {
-    await openProjectInUI(mainWindow, DEMO_APP_DIR, { waitMs: 60_000 })
+    if (workbenchReady) return
     const status = await attachWorkbenchAndWaitReady(mainWindow, electronApp)
     expect(status, 'workbench must reach a ready status before driving __WB_AUDIT').toMatch(
       /workbench-ready|exthost-alive/,
@@ -29,10 +35,7 @@ test.describe('fs-core WAL audit ledger (embedded workbench)', () => {
     // that OPFS actually came up; the tests below prove that separately).
     const hasAudit = await runInWorkbench<boolean>(electronApp, 'typeof window.__WB_AUDIT !== "undefined"')
     expect(hasAudit, 'main.ts must install window.__WB_AUDIT alongside the workspace source').toBe(true)
-  })
-
-  test.afterEach(async ({ mainWindow }) => {
-    await closeProject(mainWindow)
+    workbenchReady = true
   })
 
   test('human save: editing through the real file service updates disk and advances the fs-core ledger gen', async ({
@@ -91,6 +94,23 @@ test.describe('fs-core WAL audit ledger (embedded workbench)', () => {
 
     try {
       if (fs.existsSync(absPath)) fs.unlinkSync(absPath)
+
+      // With the shared project, the previous test's disk-restore is still
+      // washing through the sync engine as human ledger writes; one landing
+      // after turnBegin's checkpoint makes fs-core's restore-conflict check
+      // (correctly) reject the rollback ("human edits since baseGen"). Wait
+      // for the ledger to go quiet before opening the turn.
+      await pollUntil(
+        async () => {
+          const a = await runInWorkbench<{ walGen: number }>(electronApp, 'window.__WB_AUDIT.status()')
+          await new Promise((r) => setTimeout(r, 1200))
+          const b = await runInWorkbench<{ walGen: number }>(electronApp, 'window.__WB_AUDIT.status()')
+          return a.walGen === b.walGen
+        },
+        (quiet) => quiet === true,
+        30_000,
+        100,
+      )
 
       await runInWorkbench(electronApp, `window.__WB_AUDIT.beginTurn(${JSON.stringify(turnId)})`)
       await runInWorkbench(

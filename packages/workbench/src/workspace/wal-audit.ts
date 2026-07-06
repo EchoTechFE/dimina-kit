@@ -266,7 +266,11 @@ export function walAuditSource(base: WorkspaceSource, opts: WalAuditOptions): Wo
    * content against the ledger's own record of that path: identical content is
    * the echo of our own last write (human save or agent replay) and is
    * dropped with no ledger write and no `applyToEditor` call; a disk read
-   * failure (404/unreadable) is treated as a deletion. Genuinely new content
+   * that fails with HTTP 404 (the COI server's ENOENT mapping — see
+   * fs-bridge.ts) is a deletion. Any OTHER read failure is transient
+   * (bridge/server hiccup) and skips the path entirely: fabricating a
+   * deletion from it would rm the ledger record AND close the file in the
+   * editor while it still exists on disk. Genuinely new content
    * is recorded (`actor:'human'`) and handed to `applyToEditor` (if injected).
    * Errors from any single path are logged and do not abort the rest of the
    * batch — this is best-effort accounting layered on disk, never a gate.
@@ -276,7 +280,11 @@ export function walAuditSource(base: WorkspaceSource, opts: WalAuditOptions): Wo
     let diskBytes: Uint8Array | null
     try {
       diskBytes = await bridge.read(opts.fsBaseUrl, rel)
-    } catch {
+    } catch (e) {
+      if ((e as { status?: number } | null)?.status !== 404) {
+        console.warn('[workbench] wal disk-sync: transient bridge read failure, skipping', rel, e)
+        return
+      }
       diskBytes = null
     }
 

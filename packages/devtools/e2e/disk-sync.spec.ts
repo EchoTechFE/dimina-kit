@@ -11,8 +11,8 @@
  */
 import fs from 'fs'
 import path from 'path'
-import { test, expect } from './fixtures'
-import { DEMO_APP_DIR, openProjectInUI, closeProject, pollUntil } from './helpers'
+import { test, expect, useSharedProject } from './fixtures'
+import { DEMO_APP_DIR, pollUntil } from './helpers'
 import { runInWorkbench, attachWorkbenchAndWaitReady } from './workbench-probe'
 
 /** Read a workspace-relative file's content through the SAME `IFileService`
@@ -42,16 +42,19 @@ function readEditorContentExpr(rel: string): string {
 test.describe('fs-core disk↔editor sync (embedded workbench)', () => {
   test.setTimeout(180_000)
 
+  // Open the project ONCE for the whole file (worker-scoped Electron is
+  // already shared); each per-test open/close cost a full open+workbench-ready
+  // cycle (~40-60s each). Workbench readiness is likewise per-open, so only
+  // the first test pays the attach+ready wait.
+  useSharedProject(test, DEMO_APP_DIR, { openOptions: { waitMs: 60_000 }, openTimeoutMs: 120_000 })
+  let workbenchReady = false
   test.beforeEach(async ({ mainWindow, electronApp }) => {
-    await openProjectInUI(mainWindow, DEMO_APP_DIR, { waitMs: 60_000 })
+    if (workbenchReady) return
     const status = await attachWorkbenchAndWaitReady(mainWindow, electronApp)
     expect(status, 'workbench must reach a ready status before driving the sync engine').toMatch(
       /workbench-ready|exthost-alive/,
     )
-  })
-
-  test.afterEach(async ({ mainWindow }) => {
-    await closeProject(mainWindow)
+    workbenchReady = true
   })
 
   test('external write: an fs.writeFileSync on the active project updates the editor buffer and advances the ledger gen', async ({

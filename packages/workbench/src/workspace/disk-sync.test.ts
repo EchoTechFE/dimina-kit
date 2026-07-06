@@ -128,7 +128,11 @@ describe('walAuditSource — disk sync: external delete', () => {
   it('removes the path from the ledger and applies a null delete to the editor', async () => {
     const watch = makeWatch()
     const applyToEditor = vi.fn().mockResolvedValue(undefined)
-    const bridge = makeBridge({ read: vi.fn().mockRejectedValue(new Error('404')) })
+    // The real bridgeRead attaches the HTTP status; only 404 (ENOENT) may be
+    // read as a deletion.
+    const bridge = makeBridge({
+      read: vi.fn().mockRejectedValue(Object.assign(new Error('read gone.js: 404'), { status: 404 })),
+    })
     const client = makeClient({ read: vi.fn().mockResolvedValue({ content: 'was here' }) })
     const source = walAuditSource(makeBase(), {
       fsBaseUrl: 'https://fs.example/',
@@ -146,6 +150,32 @@ describe('walAuditSource — disk sync: external delete', () => {
     expect(client.rm).toHaveBeenCalledWith('gone.js', { actor: 'human' })
     expect(applyToEditor).toHaveBeenCalledTimes(1)
     expect(applyToEditor).toHaveBeenCalledWith('gone.js', null)
+  })
+})
+
+describe('walAuditSource — disk sync: transient bridge failure', () => {
+  it('skips the path — no ledger rm, no ledger write, no editor apply', async () => {
+    const watch = makeWatch()
+    const applyToEditor = vi.fn().mockResolvedValue(undefined)
+    // No `status` on the rejection (worker crash / network hiccup shape) —
+    // must NOT be interpreted as a deletion.
+    const bridge = makeBridge({ read: vi.fn().mockRejectedValue(new Error('bridge gone')) })
+    const client = makeClient({ read: vi.fn().mockResolvedValue({ content: 'still here' }) })
+    const source = walAuditSource(makeBase(), {
+      fsBaseUrl: 'https://fs.example/',
+      createClient: vi.fn().mockResolvedValue(client),
+      bridge,
+      watchEvents: watch.watchEvents,
+      applyToEditor,
+    })
+
+    await source.populate(fakeFileService)
+    watch.emitBatch(['flaky.js'])
+    await flush()
+
+    expect(client.rm).toHaveBeenCalledTimes(0)
+    expect(client.write).toHaveBeenCalledTimes(0)
+    expect(applyToEditor).toHaveBeenCalledTimes(0)
   })
 })
 

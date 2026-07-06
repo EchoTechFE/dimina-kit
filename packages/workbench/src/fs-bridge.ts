@@ -38,7 +38,10 @@ export async function bridgeRead(baseUrl: string, rel: string): Promise<Uint8Arr
   const u = new URL(`${baseUrl}__fs/read`)
   u.searchParams.set('p', rel)
   const res = await fetch(u.toString())
-  if (!res.ok) throw new Error(`read ${rel}: ${res.status}`)
+  // `status` is attached so callers can tell "file does not exist" (404 —
+  // the COI server maps ENOENT to it) from a transient bridge failure: the
+  // sync engine must only treat the former as a deletion.
+  if (!res.ok) throw Object.assign(new Error(`read ${rel}: ${res.status}`), { status: res.status })
   return new Uint8Array(await res.arrayBuffer())
 }
 
