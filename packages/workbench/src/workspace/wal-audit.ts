@@ -281,45 +281,41 @@ export function walAuditSource(base: WorkspaceSource, opts: WalAuditOptions): Wo
     await walk(startRel)
   }
 
+  /** Expand ONE watch path into `out`. Every path gets the readdir probe —
+   * including ones the ledger knows as files: a file can have been REPLACED
+   * by a same-named directory, and skipping the probe for "known files"
+   * would silently drop that directory's whole subtree (the watcher only
+   * names the parent). A probe on a plain file is one failing local readdir
+   * — cheap, and burst-coalescing means it is paid per merged pass, not per
+   * event. The path ITSELF is reported in both cases: unlistable → the
+   * engine's read decides (new file / deletion); listable (a directory) →
+   * the ledger may still hold a same-named FILE record from before the
+   * replacement, retired via the bridge's EISDIR→404. Ledger paths under the
+   * prefix cover coalesced deletions (a directory event for an `rm -rf`'d
+   * tree); for a plain file the prefix matches nothing, and '.' (overflow
+   * rescan) unions the whole ledger. */
+  async function expandWatchPath(p: string, ledgerPaths: string[], out: Set<string>): Promise<void> {
+    const rel = p === '.' ? '' : p
+    try {
+      await listDiskNames(rel, out)
+    } catch {
+      // Not a directory (plain new file), or a deleted path — either way the
+      // path itself is reported below and the engine's read decides. A tree
+      // mutating mid-walk also lands here: paths collected so far still count.
+    }
+    if (p !== '.') out.add(p)
+    const prefix = rel ? `${rel}/` : ''
+    for (const q of ledgerPaths) {
+      if (prefix === '' || q.startsWith(prefix)) out.add(q)
+    }
+  }
+
   async function expandWatchBatch(paths: string[]): Promise<string[]> {
-    let ledgerPaths: string[] = []
-    if (client) {
-      try {
-        ledgerPaths = (await client.ls()).paths
-      } catch { /* ledger unavailable — disk-side expansion below still applies */ }
-    }
+    const ledgerPaths = await (client
+      ? client.ls().then((r) => r.paths).catch(() => [] as string[]) // unavailable — disk-side expansion still applies
+      : Promise.resolve([] as string[]))
     const out = new Set<string>()
-    for (const p of paths) {
-      // Every path gets the readdir probe — including ones the ledger knows
-      // as files: a file can have been REPLACED by a same-named directory,
-      // and skipping the probe for "known files" would silently drop that
-      // directory's whole subtree (the watcher only names the parent). A
-      // probe on a plain file is one failing local readdir — cheap, and the
-      // burst-coalescing below means it is paid per merged pass, not per
-      // event.
-      const rel = p === '.' ? '' : p
-      try {
-        await listDiskNames(rel, out)
-      } catch {
-        // Not a directory (plain new file), or a deleted path — either way
-        // report it as-is and let the engine's read decide. A tree mutating
-        // mid-walk also lands here: the paths collected so far still count.
-      }
-      // Report the path ITSELF in both cases: unlistable → the engine's read
-      // decides (new file / deletion); listable (a directory) → the ledger
-      // may still hold a same-named FILE record from before the replacement,
-      // and the engine's read now gets the bridge's EISDIR→404 and retires
-      // it. For an ordinary directory the ledger has no record — read 404 +
-      // absent record is a no-op.
-      if (p !== '.') out.add(p)
-      // Ledger paths under the prefix cover coalesced deletions (a directory
-      // event for an `rm -rf`'d tree); for a plain file path the prefix
-      // matches nothing, and '.' (overflow rescan) unions the whole ledger.
-      const prefix = rel ? `${rel}/` : ''
-      for (const q of ledgerPaths) {
-        if (prefix === '' || q.startsWith(prefix)) out.add(q)
-      }
-    }
+    for (const p of paths) await expandWatchPath(p, ledgerPaths, out)
     return [...out]
   }
 
