@@ -58,7 +58,7 @@
     },
     "file-length": {
       "direction": "lower-is-better",
-      "value": 56,
+      "value": 57,
       "unit": "files > 500 lines",
       "breakdown": {
         "packages/devkit/src/compile-worker.test.ts": 1037,
@@ -79,6 +79,7 @@
         "packages/devtools/src/main/services/simulator-storage/index.ts": 688,
         "packages/devtools/src/main/services/views/host-toolbar-port-channel.test.ts": 510,
         "packages/devtools/src/main/services/views/native-simulator-devtools-host.ts": 504,
+        "packages/devtools/src/main/services/workspace/workspace-lifecycle-race.test.ts": 525,
         "packages/devtools/src/preload/instrumentation/app-data.test.ts": 865,
         "packages/devtools/src/preload/instrumentation/wxml.test.ts": 777,
         "packages/devtools/src/preload/miniapp-snapshot/host.test.ts": 561,
@@ -121,12 +122,12 @@
     },
     "test-coverage": {
       "direction": "higher-is-better",
-      "value": 72.72,
+      "value": 72.8,
       "unit": "% lines",
       "breakdown": {
-        "devkit": 93.56,
-        "devtools": 68.09,
-        "electron-deck": 95.22,
+        "devkit": 92.18,
+        "devtools": 68.26,
+        "electron-deck": 95.23,
         "electron-deck/dock-react": 79.05,
         "view-anchor": 95.28,
         "workbench": 9.79
@@ -135,12 +136,12 @@
     },
     "test-report": {
       "direction": "higher-is-better",
-      "value": 3649,
+      "value": 3663,
       "unit": "passed tests",
       "breakdown": {
-        "devkit": 109,
-        "devtools": 2283,
-        "electron-deck": 1019,
+        "devkit": 113,
+        "devtools": 2288,
+        "electron-deck": 1024,
         "electron-deck/dock-react": 96,
         "view-anchor": 87,
         "workbench": 55
@@ -148,7 +149,7 @@
     },
     "type-coverage": {
       "direction": "higher-is-better",
-      "value": 99.74,
+      "value": 99.75,
       "unit": "%",
       "breakdown": {
         "devkit": 99.9,
