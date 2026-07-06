@@ -7,8 +7,63 @@ on:
       - main
   workflow_dispatch:
 
+# A newer push to the same ref supersedes the running verification — cancel it
+# instead of finishing a result nobody will read.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  verify:
+  # lint + check-types need no test artifacts, so they run on their own runner
+  # in parallel with the test/ratchet job instead of serializing in front of it.
+  lint-and-types:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Rewrite submodule SSH URL to HTTPS
+        shell: bash
+        run: git config --global url."https://github.com/".insteadOf "git@github.com:"
+
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - uses: pnpm/action-setup@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      # The compiler build reads dimina submodule sources (inputs outside its
+      # package dir, invisible to turbo's default hashing). The pointer file is
+      # a turbo globalDependency, so a submodule bump invalidates every cache.
+      - name: Record submodule revision for turbo hashing
+        run: git rev-parse HEAD:dimina > .dimina-rev
+
+      # Persist turbo's content-addressed cache across runs: unchanged
+      # packages' build/lint/check-types replay instead of re-running.
+      - name: Restore turbo cache
+        uses: actions/cache@v4
+        with:
+          path: .turbo
+          key: turbo-${{ runner.os }}-${{ github.sha }}-lint
+          restore-keys: |
+            turbo-${{ runner.os }}-${{ github.sha }}-
+            turbo-${{ runner.os }}-
+
+      - name: Install workspace deps
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Lint and type-check
+        run: pnpm turbo run lint check-types --cache-dir=.turbo
+
+  # ratchet consumes the test run's artifacts (test-report / coverage), so test
+  # and ratchet stay serialized within this job — everything else runs beside it.
+  test-and-ratchet:
     runs-on: ubuntu-latest
 
     permissions:
@@ -31,11 +86,28 @@ jobs:
           node-version-file: .node-version
           cache: pnpm
 
+      # Same submodule-pointer anchor as lint-and-types: a dimina bump must
+      # invalidate the turbo cache (compiler build reads submodule sources).
+      - name: Record submodule revision for turbo hashing
+        run: git rev-parse HEAD:dimina > .dimina-rev
+
+      # Persist turbo's cache: a cache-hit test task replays its recorded
+      # outputs (test-report*.json + coverage/**) — exactly the artifacts the
+      # ratchet step consumes, so replayed packages still feed the gate.
+      - name: Restore turbo cache
+        uses: actions/cache@v4
+        with:
+          path: .turbo
+          key: turbo-${{ runner.os }}-${{ github.sha }}-test
+          restore-keys: |
+            turbo-${{ runner.os }}-${{ github.sha }}-
+            turbo-${{ runner.os }}-
+
       - name: Install workspace deps
         run: pnpm install --frozen-lockfile --ignore-scripts
 
-      - name: Lint, type-check, and test
-        run: pnpm turbo run lint check-types test
+      - name: Test
+        run: pnpm turbo run test --cache-dir=.turbo
 
       - name: Anti-regression ratchet
         run: |
