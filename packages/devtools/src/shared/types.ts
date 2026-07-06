@@ -109,17 +109,6 @@ export interface CompileConfig {
   queryParams: { key: string; value: string }[]
 }
 
-/**
- * Named launch configuration — a saved compile config with an identity.
- * Users create these from the compile-mode popover to persist frequently
- * used start-page / scene / query-param combinations and switch between
- * them without recompilation.
- */
-export interface LaunchConfig extends CompileConfig {
-  id: string
-  name: string
-}
-
 export interface IpcResult<T = unknown> {
   success: boolean
   data?: T
@@ -202,23 +191,6 @@ export interface WorkbenchHostInstance {
     name: string,
     handler: SimulatorApiHandler,
   ): import('@dimina-kit/electron-deck/main').Disposable
-
-  /**
-   * Read all saved launch configs for the active project.
-   * Returns an empty array when no project is open or no configs exist.
-   */
-  getLaunchConfigs(): Promise<LaunchConfig[]>
-
-  /**
-   * Persist the full list of launch configs for the active project.
-   */
-  setLaunchConfigs(configs: LaunchConfig[]): Promise<void>
-
-  /**
-   * Activate a named launch config (by id) or revert to normal mode (null).
-   * Persists the selection and notifies the renderer to relaunch.
-   */
-  setActiveLaunchConfig(id: string | null): Promise<void>
 }
 
 /**
@@ -238,11 +210,6 @@ export interface ProjectsProvider {
   updateLastOpened?(dirPath: string): void | Promise<void>
   getCompileConfig?(dirPath: string): unknown
   saveCompileConfig?(dirPath: string, cfg: unknown): void | Promise<void>
-
-  getLaunchConfigs?(dirPath: string): unknown[] | Promise<unknown[]>
-  saveLaunchConfigs?(dirPath: string, configs: unknown[]): void | Promise<void>
-  getActiveLaunchConfigId?(dirPath: string): string | null | Promise<string | null>
-  saveActiveLaunchConfigId?(dirPath: string, id: string | null): void | Promise<void>
 }
 
 /**

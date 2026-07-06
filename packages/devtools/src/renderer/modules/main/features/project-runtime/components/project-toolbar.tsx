@@ -11,7 +11,6 @@ import {
   LayoutDevtoolsPositionToggles,
 } from './layout-controls'
 import type { LayoutStoreApi } from '../controllers/use-layout-store'
-import type { LaunchConfig } from '@/shared/types'
 
 interface ProjectToolbarProps {
   compileDropdownRef: React.RefObject<HTMLDivElement | null>
@@ -26,8 +25,6 @@ interface ProjectToolbarProps {
   layout: LayoutStoreApi
   /** Current device width — seeds a reopened simulator's fixed-px column. */
   simPanelWidth: number
-  launchConfigs: LaunchConfig[]
-  activeLaunchConfigId: string | null
 }
 
 /**
@@ -49,13 +46,7 @@ export function ProjectToolbar({
   dockRegistry,
   layout,
   simPanelWidth,
-  launchConfigs,
-  activeLaunchConfigId,
 }: ProjectToolbarProps) {
-  const activeConfig = activeLaunchConfigId
-    ? launchConfigs.find((c) => c.id === activeLaunchConfigId)
-    : null
-  const compileLabel = activeConfig ? activeConfig.name : '普通编译'
   return (
     <div className="flex flex-col shrink-0">
       <div
@@ -75,7 +66,7 @@ export function ProjectToolbar({
             className={cn(showCompilePanel && 'border-accent')}
             title="编译模式"
           >
-            {compileLabel} <span className="text-[10px] text-text-secondary">▾</span>
+            普通编译 <span className="text-[10px] text-text-secondary">▾</span>
           </Button>
         </div>
 

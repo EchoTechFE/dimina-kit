@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { AppInfo, CompileConfig, LaunchConfig, ProjectSession } from '../../../shared/types.js'
+import type { AppInfo, CompileConfig, ProjectSession } from '../../../shared/types.js'
 // eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
 import type { WorkbenchContext } from '../workbench-context.js'
 import * as repo from '../projects/project-repository.js'
@@ -98,13 +98,10 @@ export interface WorkspaceService {
   getCompileConfig(projectPath: string): Promise<CompileConfig>
   saveCompileConfig(projectPath: string, config: CompileConfig): Promise<void>
   getProjectSettings(projectPath: string): ProjectSettings
-  updateProjectSettings(projectPath: string, patch: Partial<ProjectSettings>): void
-
-  // ── launch configs ─────────────────────────────────────────────────────
-  getLaunchConfigs(projectPath: string): Promise<LaunchConfig[]>
-  saveLaunchConfigs(projectPath: string, configs: LaunchConfig[]): Promise<void>
-  getActiveLaunchConfigId(projectPath: string): Promise<string | null>
-  saveActiveLaunchConfigId(projectPath: string, id: string | null): Promise<void>
+  updateProjectSettings(
+    projectPath: string,
+    patch: Partial<ProjectSettings>,
+  ): void
 }
 
 /** Build a workspace service bound to the given workbench context. */
@@ -499,14 +496,5 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
     getProjectSettings: (projectPath) => repo.getProjectSettings(projectPath),
     updateProjectSettings: (projectPath, patch) =>
       repo.updateProjectSettings(projectPath, patch),
-
-    getLaunchConfigs: async (p) =>
-      (provider.getLaunchConfigs ? await provider.getLaunchConfigs(p) : []) as LaunchConfig[],
-    saveLaunchConfigs: async (p, c) => { if (provider.saveLaunchConfigs) await provider.saveLaunchConfigs(p, c) },
-    getActiveLaunchConfigId: async (p) =>
-      provider.getActiveLaunchConfigId ? await provider.getActiveLaunchConfigId(p) : null,
-    saveActiveLaunchConfigId: async (p, id) => {
-      if (provider.saveActiveLaunchConfigId) await provider.saveActiveLaunchConfigId(p, id)
-    },
   }
 }

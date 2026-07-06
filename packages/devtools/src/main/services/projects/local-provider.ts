@@ -23,12 +23,5 @@ export function createLocalProjectsProvider(): ProjectsProvider {
     saveThumbnail: (dirPath, dataUrl) =>
       saveThumbnailFromDataUrl(dirPath, dataUrl),
     getThumbnail: (dirPath) => loadThumbnail(dirPath),
-    getLaunchConfigs: (dirPath) => repo.getLaunchConfigs(dirPath),
-    saveLaunchConfigs: (dirPath, configs) =>
-      repo.saveLaunchConfigs(dirPath, configs),
-    getActiveLaunchConfigId: (dirPath) =>
-      repo.getActiveLaunchConfigId(dirPath),
-    saveActiveLaunchConfigId: (dirPath, id) =>
-      repo.saveActiveLaunchConfigId(dirPath, id),
   }
 }
