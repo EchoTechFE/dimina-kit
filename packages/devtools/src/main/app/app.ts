@@ -14,6 +14,7 @@ import { isAppQuitting } from './lifecycle.js'
 import { resolveNativeAppDataKeys, resolveNativeStorageOverview } from './native-overview.js'
 // eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
 import { createWorkbenchContext, type WorkbenchContext } from '../services/workbench-context.js'
+import { setupCompileWorkerStandby } from '../services/compile-standby.js'
 import { loadWorkbenchSettings, applyTheme } from '../services/settings/index.js'
 import { installAppMenu } from '../menu/index.js'
 import {
@@ -420,6 +421,10 @@ export async function createDevtoolsRuntime(config: WorkbenchAppConfig = {}): Pr
   // backgroundColor on theme change — windows otherwise keep the stale
   // creation-time color (see installThemeBackgroundSync).
   context.registry.add(installThemeBackgroundSync())
+  // Warm-standby compile worker: only meaningful for the devkit-backed
+  // default adapter (a host-injected adapter has no devkit fork to adopt the
+  // spare). Registered into the registry so the spare dies with the context.
+  if (!config.adapter) context.registry.add(setupCompileWorkerStandby(context))
   registerBuiltinModules(config, context)
 
   // Wire the simulator-side difile:// protocol handler + temp-file IPC

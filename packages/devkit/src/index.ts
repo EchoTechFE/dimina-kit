@@ -9,12 +9,60 @@ import chokidar from 'chokidar'
 import { createRebuildScheduler } from './rebuild-scheduler.js'
 import { createCompileWorker } from './compile-worker.js'
 import type { BuildRequest, CompileLogEntry, CompileWorker } from './compile-worker.js'
+import { createCompileWorkerStandby } from './compile-worker-standby.js'
+import type { CompileWorkerStandby, CompileWorkerStandbyOptions } from './compile-worker-standby.js'
 
 export { createRebuildScheduler } from './rebuild-scheduler.js'
 export type { RebuildScheduler } from './rebuild-scheduler.js'
 export { filterDmccLogLine } from './compile-log.js'
 export { createCompileWorker } from './compile-worker.js'
 export type { CompileLogEntry, CompileWorker } from './compile-worker.js'
+export { createCompileWorkerStandby } from './compile-worker-standby.js'
+export type {
+	CompileWorkerStandby,
+	CompileWorkerStandbyOptions,
+	StandbyEvent,
+	StandbyState,
+} from './compile-worker-standby.js'
+
+// ── warm standby (opt-in) ──────────────────────────────────────────────────
+//
+// One module-level spare compile worker shared by every `openProject` in this
+// process. While no project is open the spare sits forked + prewarmed
+// (project-agnostic — it never chdirs, see compile-worker-entry); openProject
+// adopts it for the first compile and each session close refills it. Purely
+// additive: hosts that never call `enableCompileWorkerStandby` get exactly the
+// cold-fork behavior they had before.
+let standbyManager: CompileWorkerStandby | null = null
+
+/**
+ * Turn on the warm-standby accelerator and start warming the first spare
+ * immediately. Idempotent while the returned manager is live — repeat calls
+ * return the SAME manager (their opts are ignored). After `dispose()` (host
+ * shutdown, or a test tearing down) a new call builds a fresh manager. The
+ * caller owns disposal; a disposed manager makes every openProject fall back
+ * to cold forks and never spawns again.
+ */
+export function enableCompileWorkerStandby(
+	opts?: CompileWorkerStandbyOptions,
+): CompileWorkerStandby {
+	if (standbyManager && standbyManager.state !== 'disposed') return standbyManager
+	standbyManager = createCompileWorkerStandby(opts)
+	standbyManager.ensure()
+	return standbyManager
+}
+
+/**
+ * Refill the spare after a compile worker has been consumed and fully closed.
+ * Fire-and-forget BY DESIGN: the fork happens asynchronously inside the
+ * manager, so a session close never waits on (and can never be wedged by)
+ * standby work — the refill-on-graceful-close deadlock class stays
+ * structurally impossible. No-ops when the standby is off, already warming,
+ * or disposed.
+ */
+function refillStandby(): void {
+	standbyManager?.ensure()
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const require = createRequire(import.meta.url)
@@ -213,8 +261,12 @@ export async function openProject(opts: OpenProjectOptions): Promise<ProjectSess
 	// Compilation runs in a long-lived forked worker — the worker chdirs in
 	// its OWN process, so this (host) process never mutates its cwd, and dmcc
 	// terminal output arrives on the worker's piped streams (delivered to
-	// `onLog` line-by-line after `filterDmccLogLine`).
-	const compileWorker = createCompileWorker({ onLog })
+	// `onLog` line-by-line after `filterDmccLogLine`). When the warm standby is
+	// enabled and holds a healthy spare, adopt it: the first compile then runs
+	// on an already-forked, toolchain-warm process. adopt() degrades to null on
+	// every failure path, which lands in the normal cold-fork behavior.
+	const adopted = standbyManager ? await standbyManager.adopt() : null
+	const compileWorker = createCompileWorker({ onLog, ...(adopted ? { adopt: adopted } : {}) })
 	const buildRequest = {
 		projectPath,
 		outputDir: resolvedOutputDir,
@@ -227,6 +279,9 @@ export async function openProject(opts: OpenProjectOptions): Promise<ProjectSess
 	}
 	catch (err) {
 		await compileWorker.close()
+		// A failed open consumed the spare too — refill (fire-and-forget) so the
+		// NEXT open attempt still starts warm.
+		refillStandby()
 		throw err
 	}
 	// When the compiler is racing (e.g. opening a project that was just
@@ -301,6 +356,7 @@ export async function openProject(opts: OpenProjectOptions): Promise<ProjectSess
 	}
 	catch (err) {
 		await cleanupFailedOpen(watcher, compileWorker, server)
+		refillStandby()
 		throw err
 	}
 
@@ -314,9 +370,13 @@ export async function openProject(opts: OpenProjectOptions): Promise<ProjectSess
 		close: async () => {
 			await watcher?.close()
 			// Kill the long-lived compile worker and WAIT for the child to be
-			// actually dead — only kill, never re-fork on a graceful close (a
-			// refill here would wedge process teardown).
+			// actually dead — THIS worker is never re-forked on a graceful close
+			// (an awaited refill here would wedge process teardown).
 			await compileWorker.close()
+			// The standby refill is different: fire-and-forget into the manager
+			// (nothing here waits on it), sequenced after the old worker's death
+			// so spare + dying worker never hold memory simultaneously.
+			refillStandby()
 			;(liveServer as Server & { closeAllConnections?: () => void }).closeAllConnections?.()
 			await new Promise<void>(resolve => liveServer.close(() => resolve()))
 		},

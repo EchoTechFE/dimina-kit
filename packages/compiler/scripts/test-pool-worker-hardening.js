@@ -93,6 +93,7 @@ async function main() {
     createWorker,
     toolchainSetupURL: 'fake://toolchain.js',
     sendTimeoutMs: 200, // short, so the test doesn't wait 30s
+    retryOnWorkerDeath: false, // this scenario asserts single-attempt rejection semantics (transparent retry is covered by test-pool-watchdog.js)
   })
 
   const t0 = Date.now()
@@ -121,6 +122,7 @@ async function main() {
     createWorker,
     toolchainSetupURL: 'fake://toolchain.js',
     sendTimeoutMs: 200,
+    retryOnWorkerDeath: false, // single-attempt rejection semantics, same as scenario A
   })
 
   const r1 = await withTimeout(
