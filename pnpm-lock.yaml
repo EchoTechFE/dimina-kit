@@ -551,6 +551,9 @@ importers:
       '@codingame/monaco-vscode-workbench-service-override':
         specifier: 34.0.3
         version: 34.0.3
+      '@dimina-kit/fs-core':
+        specifier: workspace:*
+        version: link:../fs-core
       monaco-editor:
         specifier: npm:@codingame/monaco-vscode-editor-api@34
         version: '@codingame/monaco-vscode-editor-api@34.0.3'

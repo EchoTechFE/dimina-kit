@@ -11,6 +11,8 @@
  */
 import { bootWorkbench } from './boot'
 import { diskMirrorSource } from './workspace/disk-mirror'
+import { walAuditSource } from './workspace/wal-audit'
+import type { WalAuditSurface } from './workspace/wal-audit'
 import type { CustomFileTypes } from './file-type-associations'
 
 declare global {
@@ -23,6 +25,16 @@ declare global {
      * editor tracks the surrounding app's light/dark scheme.
      */
     __WB_SET_THEME?: (scheme: 'light' | 'dark') => void
+    /**
+     * fs-core WAL audit surface (turnBegin/turnEnd/agentWrite/agentRm/diff/rollback)
+     * layered on top of the disk-mirror save path — see `walAuditSource`. Follows
+     * the same `window.__WB_*` CDP-reachable convention as the rest of this probe
+     * surface (`__WB_STATUS`/`__WB_PROBE`), for a future agent host to drive over
+     * `executeJavaScript`. Disk/git stay the source of truth; this is bookkeeping
+     * on top, degrading to `undefined`-method-free-but-rejecting calls if the
+     * OPFS ledger failed to initialize (see wal-audit.ts).
+     */
+    __WB_AUDIT?: WalAuditSurface
   }
 }
 
@@ -52,9 +64,11 @@ async function boot(): Promise<void> {
   // The page is served from the COI server root, so its origin is the fs bridge base.
   const fsBaseUrl = location.origin + '/'
 
+  const workspace = walAuditSource(diskMirrorSource({ fsBaseUrl }), { fsBaseUrl })
+
   const handle = await bootWorkbench({
     container,
-    workspace: diskMirrorSource({ fsBaseUrl }),
+    workspace,
     theme: initialThemeScheme(),
     fileTypes: await loadFileTypes(),
     exposeProbe: true,
@@ -64,6 +78,7 @@ async function boot(): Promise<void> {
   })
 
   window.__WB_SET_THEME = handle.setTheme
+  window.__WB_AUDIT = workspace.audit
 
   const bootEl = document.getElementById('boot')
   if (bootEl) bootEl.remove()
