@@ -1,0 +1,72 @@
+{
+  "name": "@dimina-kit/fs-core",
+  "version": "0.1.0",
+  "description": "Zero-dependency OPFS WAL filesystem core for the web, with an agent capability gate.",
+  "keywords": [
+    "dimina",
+    "opfs",
+    "filesystem",
+    "wal",
+    "agent"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "author": "EchoTechFE",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EchoTechFE/dimina-kit.git",
+    "directory": "packages/fs-core"
+  },
+  "bugs": {
+    "url": "https://github.com/EchoTechFE/dimina-kit/issues"
+  },
+  "homepage": "https://github.com/EchoTechFE/dimina-kit/tree/main/packages/fs-core#readme",
+  "exports": {
+    "./client": {
+      "types": "./src/client.d.ts",
+      "default": "./src/client.js"
+    },
+    "./agent-tools": {
+      "types": "./src/agent-tools.d.ts",
+      "default": "./src/agent-tools.js"
+    },
+    "./disk-mirror": {
+      "types": "./src/disk-mirror.d.ts",
+      "default": "./src/disk-mirror.js"
+    },
+    "./zip": {
+      "types": "./src/zip.d.ts",
+      "default": "./src/zip.js"
+    },
+    "./sync": {
+      "types": "./sync/sync-engine.d.ts",
+      "default": "./sync/sync-engine.js"
+    }
+  },
+  "files": [
+    "src",
+    "sync"
+  ],
+  "scripts": {
+    "check-types": "tsc --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run --reporter=default --reporter=json --outputFile.json=test-report.json --coverage.enabled --coverage.reporter=json-summary --coverage.reportsDirectory=coverage",
+    "test:dev": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "devDependencies": {
+    "@dimina-kit/eslint-config": "workspace:*",
+    "@dimina-kit/typescript-config": "workspace:*",
+    "@vitest/coverage-v8": "^4.1.4",
+    "eslint": "^10.2.1",
+    "typescript": "5.9.2",
+    "vitest": "^4.1.4"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "extends": "@dimina-kit/typescript-config/base.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": ["src", "sync"],
+  "exclude": ["node_modules"]
+}

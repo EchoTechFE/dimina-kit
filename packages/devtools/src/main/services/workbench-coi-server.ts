@@ -26,6 +26,11 @@
  * method and a same-origin (or origin-less) request, so an arbitrary localhost
  * page cannot drive a destructive `/__fs` call. GET serves only the read-only
  * stat/readdir/read actions.
+ *
+ * `/__fs/watch` is a read-only SSE stream of the active project's disk changes
+ * (devtools-fs-core-feasibility.md §7), decoupled from the compile session so
+ * the editor's memfs↔disk sync engine has a source that stays live regardless
+ * of compile state; see {@link handleFsWatchRequest}.
  */
 import http from 'node:http'
 import nodeFs from 'node:fs'
@@ -39,7 +44,10 @@ import {
   mkdirWithin,
   deleteWithin,
   renameWithin,
+  SKIP_DIRS,
 } from '../ipc/project-fs.js'
+import { handleFsWatchRequest } from './fs-watch-sse.js'
+import { jsonRes } from './http-json.js'
 
 /** Max `/__fs/write` body; enough to save large source files without OOM. */
 const MAX_FS_WRITE_BYTES = 32 * 1024 * 1024
@@ -101,12 +109,6 @@ function serveStaticFile(res: http.ServerResponse, root: string, pathname: strin
       })
     })
     .catch(() => { if (!res.headersSent) { res.writeHead(404); res.end('Not Found') } })
-}
-
-function jsonRes(res: http.ServerResponse, code: number, obj: unknown): void {
-  const body = Buffer.from(JSON.stringify(obj))
-  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': body.length })
-  res.end(body)
 }
 
 /** Thrown by {@link readBody} when the accumulated body exceeds the cap. */
@@ -185,6 +187,11 @@ function fsErrorStatus(e: unknown): number {
   if (code === 'ENOACTIVE') return 409
   if (code === 'EACCES' || code === 'EINVAL') return 403
   if (code === 'ENOENT') return 404
+  // Reading a path that is (now) a DIRECTORY: as a *file* it does not exist.
+  // 404 lets the sync engine's not-found discipline retire the stale ledger
+  // FILE record when an external change replaces a file with a same-named
+  // directory — a 500 would make it skip forever ("transient failure").
+  if (code === 'EISDIR') return 404
   return 500
 }
 
@@ -204,7 +211,12 @@ async function fsStat(ctx: FsActionContext): Promise<void> {
 
 async function fsReaddir(ctx: FsActionContext): Promise<void> {
   const entries = await readdirWithin(ctx.projectRoot, ctx.rel)
-  jsonRes(ctx.res, 200, entries.map((e) => [e.name, e.isDirectory() ? 2 : 1]))
+  // Directories in SKIP_DIRS (node_modules, .git, dist, ...) are omitted at
+  // every level: the workbench mirror and the WAL ledger seed walk whatever
+  // this returns, so listing them would pull entire dependency trees into the
+  // editor memfs and the OPFS ledger. Same-named FILES stay visible.
+  const visible = entries.filter((e) => !(e.isDirectory() && SKIP_DIRS.has(e.name)))
+  jsonRes(ctx.res, 200, visible.map((e) => [e.name, e.isDirectory() ? 2 : 1]))
 }
 
 async function fsRead(ctx: FsActionContext): Promise<void> {
@@ -370,6 +382,13 @@ export async function startWorkbenchCoiServer(options: WorkbenchCoiServerOptions
   const server = http.createServer((req, res) => {
     setIsolationHeaders(res)
     const url = new URL(req.url ?? '/', 'http://127.0.0.1')
+
+    // Special-cased ahead of the generic `/__fs/*` dispatch: unlike every other
+    // action, this is a long-lived SSE stream, not a one-shot JSON response.
+    if (url.pathname === '/__fs/watch') {
+      handleFsWatchRequest(req, res, options.getProjectRoot)
+      return
+    }
 
     if (url.pathname.startsWith('/__fs/')) {
       handleFsRequest(req, res, options.getProjectRoot(), url).catch((e) => {

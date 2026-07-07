@@ -208,6 +208,49 @@ describe('request body size limit on /__fs/write', () => {
   })
 })
 
+describe('/__fs/readdir dependency-dir filtering', () => {
+  it('omits SKIP_DIRS directories at every level so the mirror/ledger walk never descends into them', async () => {
+    server = await startWith({})
+    await fs.mkdir(path.join(projectRoot, 'node_modules', 'pkg'), { recursive: true })
+    await fs.writeFile(path.join(projectRoot, 'node_modules', 'pkg', 'index.js'), 'dep')
+    await fs.mkdir(path.join(projectRoot, 'packages', 'x', 'node_modules'), { recursive: true })
+    await fs.writeFile(path.join(projectRoot, 'packages', 'x', 'main.js'), 'src')
+    await fs.writeFile(path.join(projectRoot, 'app.js'), 'src')
+
+    const top = (await (await fetch(`${server.baseUrl}__fs/readdir?p=.`)).json()) as Array<[string, number]>
+    const topNames = top.map(([name]) => name)
+    expect(topNames).toContain('app.js')
+    expect(topNames).toContain('packages')
+    expect(topNames).not.toContain('node_modules')
+
+    const nested = (await (
+      await fetch(`${server.baseUrl}__fs/readdir?p=${encodeURIComponent('packages/x')}`)
+    ).json()) as Array<[string, number]>
+    const nestedNames = nested.map(([name]) => name)
+    expect(nestedNames).toContain('main.js')
+    expect(nestedNames).not.toContain('node_modules')
+  })
+
+  it('keeps a plain FILE named like a skip dir visible (only directories are filtered)', async () => {
+    server = await startWith({})
+    await fs.writeFile(path.join(projectRoot, 'dist'), 'a file, not a build dir')
+    const top = (await (await fetch(`${server.baseUrl}__fs/readdir?p=.`)).json()) as Array<[string, number]>
+    expect(top).toContainEqual(['dist', 1])
+  })
+
+  it('answers 404 to /__fs/read of a DIRECTORY path (EISDIR — as a file it does not exist)', async () => {
+    // The sync engine's not-found discipline may only retire a ledger FILE
+    // record on an explicit not-found; when an external change replaces a
+    // file with a same-named directory, this mapping is what lets the stale
+    // record retire instead of being skipped forever as a transient failure.
+    server = await startWith({})
+    await fs.mkdir(path.join(projectRoot, 'was-a-file'), { recursive: true })
+    await fs.writeFile(path.join(projectRoot, 'was-a-file', 'inner.js'), 'x')
+    const res = await fetch(`${server.baseUrl}__fs/read?p=was-a-file`)
+    expect(res.status).toBe(404)
+  })
+})
+
 describe('no active project', () => {
   it('responds 409 to readdir so the provider stays empty rather than erroring', async () => {
     server = await startWith({ getProjectRoot: () => '' })
