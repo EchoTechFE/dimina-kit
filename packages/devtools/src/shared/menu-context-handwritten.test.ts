@@ -43,9 +43,8 @@ type Equal<X, Y> =
 function staticAssert<_T extends true>(): void {}
 
 // ═════════════════════════════════════════════════════════════════════════
-// §1 Members the narrow contract must KEEP (green pins — compile today via
-// the Omit projection, and post-fix only if the hand-written shape carries
-// them; this encodes the audited consumption surface).
+// §1 Members the narrow contract must KEEP (pins that the hand-written shape
+// carries them; this encodes the audited consumption surface).
 // ═════════════════════════════════════════════════════════════════════════
 
 function _menuConsumptionPin(menuCtx: MenuContext): void {

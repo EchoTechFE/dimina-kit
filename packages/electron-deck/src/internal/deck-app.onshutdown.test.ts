@@ -1,5 +1,5 @@
 /**
- * TDD failing-first contract tests for the NEW `RuntimeBackend.onShutdown?()`
+ * Contract tests for the NEW `RuntimeBackend.onShutdown?()`
  * hook.
  *
  * Contract under test:

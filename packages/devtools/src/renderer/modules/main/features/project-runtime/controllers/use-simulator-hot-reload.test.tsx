@@ -135,7 +135,7 @@ function lastAttachUrl(): string {
   return url as string
 }
 
-describe('useSimulator: hotReloadToken → native re-attach (resurrected PR#12 guard, deleted in PR#39)', () => {
+describe('useSimulator: hotReloadToken → native re-attach (resurrected hot-reload guard)', () => {
   it('attaches exactly once on mount (baseline)', () => {
     const base = makeBaseProps()
     renderSimulator(base)

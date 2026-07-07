@@ -1,6 +1,5 @@
 /**
- * bridge-router — `storageChanged` / `wxmlChanged` container-message routing
- * (final-contract.md §3).
+ * bridge-router — `storageChanged` / `wxmlChanged` container-message routing.
  *
  * Pinned contract (both cases MUST trust the SENDER-resolved identity, never
  * anything embedded in the message body — a compromised/buggy guest could
@@ -204,7 +203,7 @@ function bindRenderWc(bridgeId: string): MockWc {
   return renderWc
 }
 
-describe('bridge-router — storageChanged container message (final-contract §3)', () => {
+describe('bridge-router — storageChanged container message', () => {
   it('calls ctx.onServiceStorageChanged with the SENDER-resolved appId, ignoring an appId embedded in the body', async () => {
     const { ctx, simulatorWc } = makeCtx()
     installBridgeRouter(ctx)
@@ -242,7 +241,7 @@ describe('bridge-router — storageChanged container message (final-contract §3
   })
 })
 
-describe('bridge-router — wxmlChanged container message (final-contract §3)', () => {
+describe('bridge-router — wxmlChanged container message', () => {
   it('emits a domMutated RenderEvent using the SENDER-resolved bridgeId, ignoring a bridgeId embedded in the body', async () => {
     const { ctx, simulatorWc } = makeCtx()
     installBridgeRouter(ctx)

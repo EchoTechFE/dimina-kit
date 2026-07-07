@@ -20,7 +20,8 @@ import { createMeasureLoop } from './measure-loop.js'
  * loop (advertise → host resizes view → remeasure) never converges (it
  * oscillates or stays "stable but wrong"). Measuring `<body>`/`<html>` is the
  * classic mistake — their size *is* the view size. See
- * `docs/bidirectional-design.md` §4/§5.
+ * `docs/bidirectional-design.md`'s single-axis-ownership and trust-boundary
+ * sections.
  */
 export function createSizeAdvertiser(
   target: HTMLElement,
@@ -62,7 +63,7 @@ export function createSizeAdvertiser(
       `[view-anchor] size-advertiser: <${target === doc.body ? 'body' : 'html'}>'s ` +
         `${axis} size is the host-given view size, not the content size — the ` +
         `advertiser will never shrink to content. Measure a shrink-to-fit wrapper. ` +
-        `See bidirectional-design.md §4.`,
+        `See bidirectional-design.md's single-axis-ownership section.`,
     )
   }
 

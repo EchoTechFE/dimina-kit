@@ -327,7 +327,7 @@ describe('reserved namespace: write APIs reject _tmp and _store', () => {
 
 describe('fsSaveFile vpath contract', () => {
 	// A _tmp source must materialize into _store and produce a _store/* vpath
-	// (see _tmp materialization, docs/file-system.md §6).
+	// (see _tmp materialization, docs/file-system.md).
 	it('fsSaveFile from a difile://_tmp/* source materializes into _store', async () => {
 		const original = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x10, 0x11, 0x12])
 		const tmpUrl = 'difile://_tmp/saveFile-from-tmp.jpg'
@@ -414,7 +414,7 @@ describe('fsSaveFile vpath contract', () => {
 
 // ─── 4. FSM read-class dispatch ──────────────────────────────────────────────
 //
-// Read-class FSM entries dispatch by vpath kind (docs/file-system.md §6):
+// Read-class FSM entries dispatch by vpath kind (docs/file-system.md):
 //
 //   - `_tmp/<id>`   → bytes pulled from the renderer Blob Map (temp-files.ts)
 //   - `_store/<id>` → bytes pulled from the main-process disk (~/.dimina/files/_store)
@@ -431,7 +431,7 @@ describe('fsSaveFile vpath contract', () => {
 //   - `_tmp` reads of an unknown URL must surface an ENOENT-shaped fail.
 //   - `_store` / `usr` reads must successfully round-trip from real disk.
 //   - `fsReaddir` on `_tmp` and `_store` must fail — those namespaces are
-//     flat (no dir tree) per the design note in §3.1.
+//     flat (no dir tree) per the design note in docs/file-system.md.
 
 function md5HexOf(buf: Buffer): string {
 	return nodeCrypto.createHash('md5').update(buf).digest('hex')

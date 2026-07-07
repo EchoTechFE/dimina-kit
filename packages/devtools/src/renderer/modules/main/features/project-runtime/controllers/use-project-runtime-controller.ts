@@ -159,8 +159,8 @@ export function useProjectRuntimeController(
     compileConfig: sessionHook.compileConfig,
     port: sessionHook.port,
     projectPath,
-    // Watcher-rebuild signal (resurrected PR#12 hot-reload guard, deleted in
-    // PR#39): each bump makes use-simulator respawn the DeviceShell once.
+    // Watcher-rebuild signal (resurrects the hot-reload guard a later refactor
+    // deleted): each bump makes use-simulator respawn the DeviceShell once.
     hotReloadToken: sessionHook.hotReloadToken,
   })
 

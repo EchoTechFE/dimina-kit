@@ -1,5 +1,5 @@
 /**
- * sync-api-patch — SYNC storage write notify (final-contract.md §2).
+ * sync-api-patch — SYNC storage write notify.
  *
  * `setStorageSync`/`removeStorageSync`/`clearStorageSync` write `localStorage`
  * directly inside the service-host window and never round-trip through main
@@ -63,7 +63,7 @@ afterEach(() => {
   ;(globalThis as unknown as { wx?: unknown }).wx = ORIGINAL_WX
 })
 
-describe('sync-api-patch — SYNC storage write notify (final-contract §2)', () => {
+describe('sync-api-patch — SYNC storage write notify', () => {
   it('setStorageSync writes localStorage under the ${appId}_ prefix and notifies main with a SET storageChanged message', async () => {
     const invoke = vi.fn()
     const wx = await loadPatchedWx(invoke)

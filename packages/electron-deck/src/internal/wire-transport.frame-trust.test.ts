@@ -1,11 +1,10 @@
-// TDD (failing-first): frame-level trust for gated invoke.
+// Frame-level trust for gated invoke.
 //
-// Contract under test (NOT yet implemented):
-// The wire `handleInvoke` currently gates ONLY on `event.sender.id` via
-// senderPolicy. That lets a sub-frame (iframe) inside a TRUSTED webContents
-// spoof the main frame and reach gated invoke. We add a defense-in-depth
-// main-frame check that mirrors devtools' verified `isMainFrameSender`
-// (packages/devtools/src/main/utils/ipc-registry.ts):
+// The wire `handleInvoke` gates on `event.sender.id` via senderPolicy AND on
+// frame identity — without the latter, a sub-frame (iframe) inside a TRUSTED
+// webContents could spoof the main frame and reach gated invoke. The
+// defense-in-depth main-frame check mirrors devtools' verified
+// `isMainFrameSender` (packages/devtools/src/main/utils/ipc-registry.ts):
 //
 //   const frame = event.senderFrame; const main = event.sender.mainFrame
 //   - both undefined  → frame-unaware test stub → skip frame check (senderId
@@ -15,18 +14,9 @@
 //                     → main frame → ALLOW
 //   - otherwise (sub frame) → REJECT
 //
-// Rejection returns an InvokeFailure with the NEW reserved code
-// DECK_CODE.UntrustedFrame === 'DECK_UNTRUSTED_FRAME'.
-//
-// These tests assert the literal 'DECK_UNTRUSTED_FRAME' rather than importing
-// DECK_CODE.UntrustedFrame, because that member does not exist yet and importing
-// it would be a compile error rather than a clean test failure.
-//
-// Implementer note: `handleInvoke` today only receives `senderId` (see
-// start(): `(event, ...args) => this.handleInvoke(event?.sender?.id, args[0])`).
-// To satisfy this contract the registered invoke handler must additionally read
-// `event.senderFrame` + `event.sender.mainFrame` and pass them into (or perform
-// the check before delegating to) `handleInvoke`.
+// Rejection returns an InvokeFailure with code DECK_CODE.UntrustedFrame ===
+// 'DECK_UNTRUSTED_FRAME'. These tests assert the literal 'DECK_UNTRUSTED_FRAME'
+// value rather than importing DECK_CODE.UntrustedFrame.
 
 import { describe, expect, it, vi } from 'vitest'
 import type { JsonValue, SenderPolicy } from '../types.js'

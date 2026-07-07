@@ -3,11 +3,12 @@
  * must apply BEFORE forwarding `navigateTo`/`redirectTo`/`reLaunch`/`switchTab`
  * to the simulator window.
  *
- * ── The bug being pinned (TDD red) ──────────────────────────────────────────
- * Today `handleSimulatorApi` forwards any NAV_ACTION_NAMES/TAB_ACTION_NAMES
- * call straight to the simulator window with no manifest check at all. A
+ * ── The bug this guards against ─────────────────────────────────────────────
+ * Without the check below, `handleSimulatorApi` forwards any
+ * NAV_ACTION_NAMES/TAB_ACTION_NAMES call straight to the simulator window
+ * with no manifest check at all. A
  * `wx.navigateTo({ url: '/pages/removed/removed' })` to a page the developer
- * deleted (and the compiler no longer emits) is silently handed to the
+ * deleted (and the compiler no longer emits) would be silently handed to the
  * DeviceShell, which will try to open a page the render/service runtimes were
  * never given a module for — deep, hard-to-diagnose failure, and the
  * service-side `fail` callback may never fire at all (device-shell's own

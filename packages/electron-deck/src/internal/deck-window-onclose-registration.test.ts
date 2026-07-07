@@ -1,5 +1,5 @@
 /**
- * TDD failing-first contract tests for the LOCKED "DeckWindow facade"
+ * Contract tests for the LOCKED "DeckWindow facade"
  * (.repro/deck-window-facade-LOCKED.md — C4 + C6).
  *
  * ───────────────────────────────────────────────────────────────────────────

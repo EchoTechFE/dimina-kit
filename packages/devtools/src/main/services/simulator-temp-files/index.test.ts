@@ -1,7 +1,7 @@
 /**
  * Contract tests for the pure `difile://` request dispatcher.
  *
- * Spec: `packages/devtools/docs/file-system.md` §4.3, §6 P1-2 / P1-3.
+ * Spec: `packages/devtools/docs/file-system.md`.
  *
  * Electron's `simSession.protocol.handle` is unreachable from vitest, so the
  * dispatch body is factored out into an exported pure function

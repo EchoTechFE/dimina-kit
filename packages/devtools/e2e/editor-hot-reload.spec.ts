@@ -1,8 +1,8 @@
 /**
  * Editor save → dmcc rebuild → simulator hot reload.
  *
- * Regression spec for "保存后模拟器不刷新": PR #39 (a85fb6dc) deleted the
- * PR #12 `<webview>`-era `hotReload → reload()` wiring without adding a
+ * Regression spec for "保存后模拟器不刷新": a later refactor (a85fb6dc) deleted
+ * the `<webview>`-era `hotReload → reload()` wiring without adding a
  * native-host equivalent. The whole upstream chain still works — the Monaco
  * write path lands on disk, chokidar fires, dmcc recompiles in ~1-2s and the
  * toolbar flips to "编译完成，已热更新" — but the renderer drops the

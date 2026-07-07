@@ -35,13 +35,9 @@ import { describe, it, expect, beforeAll } from 'vitest'
 
 import type { Disposable } from './disposable.js'
 
-// ── TDD red: the implementation (`./scope.js`) does NOT exist yet ────────────
-//
-// We load it dynamically so the FAILURE is a runtime/assertion failure (the
-// module fails to resolve at test time, turning every spec red) rather than a
-// hard compile error that would prevent the suite from running at all. Once
-// `createScope` / `Scope` ship, `beforeAll` resolves the real exports and the
-// already-written specs exercise the contract.
+// We load `./scope.js` dynamically so a broken/missing export surfaces as a
+// runtime/assertion failure (every spec goes red) rather than a hard compile
+// error that would prevent the suite from running at all.
 //
 // `Scope` is the structural contract these tests pin (the import target's
 // public type). We keep a local mirror so the specs read against a real type;
@@ -53,7 +49,6 @@ interface Scope {
   reset(): Promise<void>
   close(): Promise<void>
   on(event: 'reset' | 'closed', cb: () => void): Disposable
-  // ── pinned contract for the not-yet-implemented re-parenting op ────────────
   // `adopt(child, newParent)` detaches `child` from THIS scope's current segment
   // and re-attaches it to `newParent`'s current segment WITHOUT resetting or
   // closing the child (its own()ed resources stay live). It only changes "who
@@ -64,7 +59,6 @@ interface Scope {
 let createScope: () => Scope
 
 beforeAll(async () => {
-  // `./scope.js` now exists; the dynamic import resolves the real `createScope`.
   const mod = (await import('./scope.js')) as { createScope: () => Scope }
   createScope = mod.createScope
 })

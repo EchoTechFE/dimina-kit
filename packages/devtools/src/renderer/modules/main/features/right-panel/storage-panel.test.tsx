@@ -23,11 +23,10 @@ import { StoragePanel } from './storage-panel'
 const FULL_KEY = 'devtools_demo_001_token'
 const PREFIX = 'devtools_demo_001_'
 
-// `onRefresh` dropped from the default fixture: final-contract.md §9 removes the
-// panel's own "↻ 刷新" button (the panel is now realtime-pushed + ready-seeded,
-// see use-panel-data's storage ready-seed), so no test in this file should need
-// to supply it. Individual tests below can still override it if they want to
-// probe the (soon to be deleted) prop for backward-compat during the migration.
+// `onRefresh` dropped from the default fixture: the panel no longer has its
+// own "↻ 刷新" button (it is realtime-pushed + ready-seeded, see
+// use-panel-data's storage ready-seed), so no test in this file should need
+// to supply it.
 function makeProps(overrides: Partial<Parameters<typeof StoragePanel>[0]> = {}) {
   return {
     items: [{ key: FULL_KEY, value: 'abc' }],
@@ -40,7 +39,7 @@ function makeProps(overrides: Partial<Parameters<typeof StoragePanel>[0]> = {}) 
   } as Parameters<typeof StoragePanel>[0]
 }
 
-describe('StoragePanel: no refresh button (final-contract §9)', () => {
+describe('StoragePanel: no refresh button', () => {
   it('does not render a button whose text contains "刷新"', async () => {
     const props = makeProps()
     const { container, findAllByText } = render(<StoragePanel {...props} />)

@@ -1,7 +1,7 @@
 /**
  * Contract tests for the main-process `simulator:fs:*` IPC channel handlers.
  *
- * Spec: `packages/devtools/docs/file-system.md` §4.4, §6 P1-7.
+ * Spec: `packages/devtools/docs/file-system.md`.
  *
  *   simulator:fs:read    payload { realPath, range? }
  *                        → { bytes: ArrayBuffer | Buffer, mime, etag, totalSize }

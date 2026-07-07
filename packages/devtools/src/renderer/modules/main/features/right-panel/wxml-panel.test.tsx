@@ -1,5 +1,5 @@
 /**
- * WxmlPanel — no refresh button (final-contract.md §9).
+ * WxmlPanel — no refresh button.
  *
  * The panel is now realtime-pushed via the visibility-gated live pipeline
  * (SetActive(true) seeds + subscribes to domReady/domMutated pushes; see
@@ -24,7 +24,7 @@ function refreshButtons(container: HTMLElement): HTMLButtonElement[] {
   )
 }
 
-describe('WxmlPanel: no refresh button (final-contract §9)', () => {
+describe('WxmlPanel: no refresh button', () => {
   it('does not render a refresh button when a tree is loaded', () => {
     const { container } = render(<WxmlPanel tree={TREE} />)
     expect(refreshButtons(container)).toHaveLength(0)

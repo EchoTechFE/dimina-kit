@@ -5,16 +5,17 @@
 /**
  * Contract spec for the ServiceHostPool main-process singleton described in
  * docs/prewarm-webview.md (design v0.1) and implemented in `./pool.ts`. These
- * tests pin the documented contract (§3.5.4 API surface + §3.5.3 state machine
- * + §3.4 reset checklist + §3.6 edge cases).
+ * tests pin the documented contract (API surface, state machine, reset
+ * checklist, and edge cases from prewarm-webview.md).
  *
- * Several assertions pin the strict form of the contract — F1 webPreferences
- * parity, F2 init crash-resilience, F3 crash-destroys-window, F4 navigate-
- * before-clear ordering, and F5 resize evicts-oldest-first — alongside the
- * F6/F7/F8/F9 hardening checks. Do NOT relax these to make them pass — fix the
- * impl instead.
+ * Several assertions pin the strict form of the contract — webPreferences
+ * parity, init crash-resilience, crash-destroys-window, navigate-
+ * before-clear ordering, and resize evicts-oldest-first — alongside further
+ * hardening checks covering render-process-gone refill occupancy, pool-size
+ * clamping, storage-bucket coverage, and destroyed-window handling. Do NOT
+ * relax these to make them pass — fix the impl instead.
  *
- * ── Construction API assumption (shape (a), per task + doc §3.5.4) ──────────
+ * ── Construction API assumption (shape (a)) ─────────────────────────────────
  *   const pool = new ServiceHostPool()
  *   await pool.init({ defaultPoolSize, defaultSpec })   // pre-warms entries
  * Rationale: the doc's ServiceHostPoolService surface is `init(opts: {
@@ -40,7 +41,8 @@
  * + a fresh warming/ready entry in getStats(). The pool registers a
  * `'render-process-gone'` listener on each pooled window's webContents.
  *
- * partition note: §3.2 vs §3.4 contradict each other (`persist:simulator` vs
+ * partition note: the doc's type/state-machine section and reset-checklist
+ * section contradict each other (`persist:simulator` vs
  * `persist:simulator:pool-${id}`). Tests treat spec.partition as opaque and
  * never hard-assert its value. Spec identity for reuse is keyed on preloadPath.
  */
@@ -72,14 +74,14 @@ type StubWindow = {
   destroy: ReturnType<typeof vi.fn>
   isDestroyed: ReturnType<typeof vi.fn>
   setBounds: ReturnType<typeof vi.fn>
-  // A1: window-level event registration (`win.once('closed', …)` / `win.on(...)`),
-  // distinct from the webContents handlers above. Recorded so the A1 tests can
-  // fire the pool's `'closed'` reclaim hook.
+  // Window-level event registration (`win.once('closed', …)` / `win.on(...)`),
+  // distinct from the webContents handlers above. Recorded so the
+  // graceful-close-leak tests can fire the pool's `'closed'` reclaim hook.
   on: ReturnType<typeof vi.fn>
   once: ReturnType<typeof vi.fn>
   __winHandlers: Handlers
   __destroyed: boolean
-  // F1: full BrowserWindow constructor opts, captured so tests can assert
+  // Full BrowserWindow constructor opts, captured so tests can assert
   // webPreferences parity with the real service-host window.
   __opts: any
 }
@@ -88,18 +90,18 @@ const constructed: StubWindow[] = []
 // Per-partition stub session, so reset assertions can inspect clearStorageData.
 const sessions = new Map<string, any>()
 const clearStorageData = vi.fn(() => {
-  orderLog.push('clearStorageData') // F4: storage-clear marker
+  orderLog.push('clearStorageData') // storage-clear marker
   return Promise.resolve()
 })
 const clearCache = vi.fn(() => Promise.resolve())
 
-// ── F4: invocation-order log ─────────────────────────────────────────────────
+// ── invocation-order log ─────────────────────────────────────────────────────
 // The mock's loadURL / clearStorageData push a label here so a test can assert
 // the reset path navigates (loadURL) BEFORE it clears storage. Tests that ignore
 // it are unaffected; cleared in beforeEach.
 const orderLog: string[] = []
 
-// ── F2: opt-in deferred-load mode ────────────────────────────────────────────
+// ── opt-in deferred-load mode ────────────────────────────────────────────────
 // When `deferLoads` is true, every `loadURL` returns a Promise parked in
 // `pendingLoads` that the test resolves manually via `resolveAllLoads()`. When
 // false (the DEFAULT) loads resolve immediately, so tests that never touch these
@@ -130,7 +132,7 @@ vi.mock('electron', () => {
     destroy: ReturnType<typeof vi.fn>
     isDestroyed: ReturnType<typeof vi.fn>
     setBounds = vi.fn()
-    // A1: window-level event handlers (e.g. `win.once('closed', …)`).
+    // Window-level event handlers (e.g. `win.once('closed', …)`).
     on: ReturnType<typeof vi.fn>
     once: ReturnType<typeof vi.fn>
     __winHandlers: Handlers
@@ -139,10 +141,10 @@ vi.mock('electron', () => {
     constructor(opts: any) {
       const id = nextId++
       const handlers: Handlers = {}
-      // A1: separate registry for window-level (not webContents) handlers.
+      // Separate registry for window-level (not webContents) handlers.
       const winHandlers: Handlers = {}
       const self = this
-      // F1: keep the full constructor opts for webPreferences parity checks.
+      // Keep the full constructor opts for webPreferences parity checks.
       this.__opts = opts
       this.__winHandlers = winHandlers
       this.on = vi.fn((evt: string, cb: (...a: any[]) => void) => {
@@ -158,7 +160,7 @@ vi.mock('electron', () => {
         destroyed: false,
         isDestroyed() { return this.destroyed },
         loadURL: vi.fn(() => {
-          orderLog.push('loadURL') // F4: navigate marker
+          orderLog.push('loadURL') // navigate marker
           if (deferLoads) {
             return new Promise<void>((resolve) => { pendingLoads.push(resolve) })
           }
@@ -261,7 +263,7 @@ function fireRenderProcessGone(win: StubWindow): number {
   return hs.length
 }
 
-// A1: fire the window-level `'closed'` handlers the pool registers via
+// Fire the window-level `'closed'` handlers the pool registers via
 // `win.once('closed', …)`. Mirrors fireRenderProcessGone but reads the
 // window-level registry. Returns how many handlers ran.
 function fireClosed(win: StubWindow): number {
@@ -316,9 +318,9 @@ describe('ServiceHostPool — state machine (warming → ready → in-use → re
     expect(stats.inUse).toBe(1)
     expect(stats.ready).toBe(0)
 
-    // F4: isolate the reset path's invocation order — only events from here on
-    // belong to the reset. Doc §3.5.3 (lines ~418-421) + §3.4「等待时序」require
-    // navigate-to-blank FIRST, then clear storage.
+    // Isolate the reset path's invocation order — only events from here on
+    // belong to the reset. The doc requires navigate-to-blank FIRST, then
+    // clear storage.
     orderLog.length = 0
     const relP = pool.release(entryId, win as any)
     // reset path navigates to about:blank then waits for did-finish-load.
@@ -329,15 +331,15 @@ describe('ServiceHostPool — state machine (warming → ready → in-use → re
     // Reset must actually clear storage on the way back to ready.
     expect(clearStorageData).toHaveBeenCalled()
 
-    // F4: the FIRST navigate must precede the FIRST storage clear.
+    // The FIRST navigate must precede the FIRST storage clear.
     const firstLoad = orderLog.indexOf('loadURL')
     const firstClear = orderLog.indexOf('clearStorageData')
     expect(firstLoad).toBeGreaterThanOrEqual(0)
     expect(firstClear).toBeGreaterThanOrEqual(0)
     expect(firstLoad).toBeLessThan(firstClear)
 
-    // F6: reset must hit the documented storage buckets (doc §3.4「必须」rows)
-    // and clear the HTTP cache.
+    // Reset must hit the documented storage buckets (prewarm-webview.md's
+    // required rows) and clear the HTTP cache.
     expect(clearStorageData).toHaveBeenCalledWith({
       storages: expect.arrayContaining([
         'cookies',
@@ -356,8 +358,8 @@ describe('ServiceHostPool — state machine (warming → ready → in-use → re
   })
 })
 
-describe('ServiceHostPool — webPreferences parity (F1)', () => {
-  // F1: the pooled window must carry the SAME process-model flags as the real
+describe('ServiceHostPool — webPreferences parity', () => {
+  // The pooled window must carry the SAME process-model flags as the real
   // service-host window it replaces (create.ts:19-32): sandbox/contextIsolation/
   // nodeIntegration all explicit, plus preload + partition from the spec.
   it('constructs pooled windows with the service-host process-model flags', async () => {
@@ -452,7 +454,7 @@ describe('ServiceHostPool — release', () => {
       fbWin.__destroyed === true
     expect(destroyed).toBe(true)
 
-    // F9: a fallback window (entryId === null) was never in the pool, so neither
+    // A fallback window (entryId === null) was never in the pool, so neither
     // the total nor the ready count may change on its release. Exact, not <=:
     // catches a fallback being wrongly re-pooled as warming/resetting (total
     // grows while ready stays put).
@@ -464,7 +466,8 @@ describe('ServiceHostPool — release', () => {
   it('releasing an entry whose spec no longer matches the pool spec disposes it (not kept ready)', async () => {
     // Initialize the pool with spec A, acquire from it, then change the pool's
     // current spec to B (preloadPath mismatch) by acquiring with spec B — which
-    // per §3.6 destroys mismatched entries and rebuilds. On release of the old
+    // which destroys mismatched entries and rebuilds (see prewarm-webview.md).
+    // On release of the old
     // (spec A) entry, the entry must transition to disposing, not ready.
     const pool = new ServiceHostPool()
     const initP = pool.init({ defaultPoolSize: 1, defaultSpec: specA() })
@@ -489,7 +492,7 @@ describe('ServiceHostPool — release', () => {
     await relP
     await flush()
 
-    // F9: the mismatched entry must leave the pool entirely — total drops by
+    // The mismatched entry must leave the pool entirely — total drops by
     // exactly one and ready is unchanged. Exact assertions (not <=) catch the
     // entry being wrongly re-pooled as warming/resetting (total would grow while
     // ready stayed flat).
@@ -563,7 +566,7 @@ describe('ServiceHostPool — resize', () => {
     expect(stats.ready).toBe(0)
   })
 
-  // F5: shrinking to k>0 must evict the OLDEST entries first and keep the k
+  // Shrinking to k>0 must evict the OLDEST entries first and keep the k
   // most-recently-created. `constructed` is in creation order, so the last
   // element is the newest.
   it('resize(3 → 1) disposes the two OLDEST windows and keeps the newest', async () => {
@@ -615,7 +618,7 @@ describe('ServiceHostPool — render-process-gone', () => {
     // Let the refill warm up.
     await flush()
 
-    // F3: onGone must tear down the crashed BrowserWindow, not just delete the
+    // onGone must tear down the crashed BrowserWindow, not just delete the
     // entry from the map. A leaked window is a leaked render process — the
     // crashed window MUST be destroyed/closed.
     const crashedTornDown =
@@ -624,8 +627,8 @@ describe('ServiceHostPool — render-process-gone', () => {
       pooledWin.__destroyed === true
     expect(crashedTornDown).toBe(true)
 
-    // F7: exact occupancy after the refill settles (target = 1). Combined with
-    // F3 this fully pins the total/destroy story.
+    // Exact occupancy after the refill settles (target = 1). Combined with the
+    // teardown assertion above, this fully pins the total/destroy story.
     const stats = pool.getStats()
     expect(stats.total).toBe(1)
     expect(stats.ready).toBe(1)

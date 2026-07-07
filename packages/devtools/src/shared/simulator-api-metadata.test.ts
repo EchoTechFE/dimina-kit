@@ -1,7 +1,7 @@
 /**
  * Contract for the subscription-class ("persistent") simulator-API registry.
  *
- * Bug being pinned (TDD red): under native-host, the dimina submodule strips the
+ * Bug being pinned: under native-host, the dimina submodule strips the
  * service-side `keep: true` flag off subscription APIs before the params reach
  * the container. By the time `audioListen` is forwarded, `keep` is gone, so the
  * runtime can no longer tell a one-shot API from a persistent subscription by
@@ -9,7 +9,7 @@
  * single shared metadata module both `run-api-async` (simulator side) and
  * `bridge-router` (main side) consult.
  *
- * This module does not exist yet — the import below is the red. The contract:
+ * The contract:
  *   - `PERSISTENT_SIMULATOR_APIS` is a Set of the subscription-class API names.
  *     Today the only such API is `audioListen` (it carries the 9 audio DOM
  *     events canplay/play/timeupdate/ended/…).

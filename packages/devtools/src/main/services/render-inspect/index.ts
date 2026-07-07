@@ -43,7 +43,7 @@ export interface RenderInspectorOptions {
   /** Override the injected IIFE source (default: read the built bundle). Test seam. */
   loadSource?: () => string
   /**
-   * Connection registry (foundation.md §4 / P2). When provided, the per-wc
+   * Connection registry (see foundation.md's teardown-paths section). When provided, the per-wc
    * `injected` bookkeeping is torn down via the wc's connection (deterministic
    * with the rest of that webContents's resources) instead of a bespoke
    * `once('destroyed')`. Optional so focused unit tests can omit it (they fall
@@ -125,7 +125,7 @@ export function createRenderInspector(options: RenderInspectorOptions = {}): Ren
     }
     injected.add(wc.id)
     // Consolidate the per-wc bookkeeping teardown onto the connection layer
-    // (foundation.md §4 / P2) when a registry is available; fall back to the
+    // (see foundation.md) when a registry is available; fall back to the
     // bespoke `once('destroyed')` only when omitted (focused unit tests).
     const forget = (): void => {
       injected.delete(wc.id)

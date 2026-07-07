@@ -1,5 +1,5 @@
 /**
- * TDD red-phase: header deduplication contract for `directRequest`.
+ * Header deduplication contract for `directRequest`.
  *
  * The runtime merges a default `Content-Type: application/json` with the
  * caller-supplied `header` map. Because the default key uses title-case

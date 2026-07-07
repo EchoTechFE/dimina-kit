@@ -1,7 +1,7 @@
 /**
  * Guards `SimulatorMiniApp.spawn()`'s bookkeeping of the resolved root page.
  *
- * ── The bug being pinned (TDD red) ──────────────────────────────────────────
+ * ── The bug being pinned ────────────────────────────────────────────────────
  * `handleSpawn` (main) now resolves a root pagePath absent from the compiled
  * manifest to a fallback page (`manifest.entryPagePath`, else `pages[0]`) and
  * reports the outcome on `SpawnResult` (`resolvedPagePath`,

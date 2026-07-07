@@ -3,20 +3,21 @@
  * ("persistent") simulator APIs — concretely `audioListen` (the audio DOM-event
  * bridge: canplay / play / timeupdate / ended / …).
  *
- * ── The bug being pinned (TDD red) ──────────────────────────────────────────
+ * ── The bug this guards against ─────────────────────────────────────────────
  * Under native-host the dimina submodule strips the service-side `keep: true`
  * flag off the params before they reach the container. So when the service asks
  * the bridge-router to forward `audioListen`, the params arrive as just
  * `{ audioId }` — `keep` is gone.
  *
- * The bridge-router currently decides "is this a persistent subscription?"
- * purely from `params.keep === true` (forwardApiCallToSimulator). With `keep`
- * stripped that is false, so the router treats `audioListen` as an ORDINARY
- * one-shot call:
+ * Without the fix below, the bridge-router would decide "is this a persistent
+ * subscription?" purely from `params.keep === true` (forwardApiCallToSimulator).
+ * With `keep` stripped that is false, so the router would treat `audioListen`
+ * as an ORDINARY one-shot call:
  *   - it arms the 5s no-handler timeout; and
  *   - the first response tears the pending down and fires `complete`.
- * Either way the subscription dies after one (or zero) events — the later audio
- * events (`play`, `timeupdate`, `ended`) never reach the service callback.
+ * Either way the subscription would die after one (or zero) events — the later
+ * audio events (`play`, `timeupdate`, `ended`) would never reach the service
+ * callback.
  *
  * The contract pinned here (the fix recognises persistence BY NAME via
  * `isPersistentSimulatorApi('audioListen')`, not from a `keep` flag that is no
@@ -193,7 +194,7 @@ function makeCtx(): { ctx: WorkbenchContext; simulatorWc: MockWc } {
   const ctx = {
     registry: { add: (_fn: AnyFn) => {} },
     // bridge-router now acquires a Connection for the service-host wc at spawn
-    // (foundation.md §4.3); a real registry satisfies that without affecting
+    // (see foundation.md); a real registry satisfies that without affecting
     // these keep-API assertions.
     connections: createConnectionRegistry(),
     simulatorApis: { has: (_name: string) => false, invoke: async () => ({}) },

@@ -2,7 +2,7 @@
  * Main-process disk reader/writer backing `difile://_store/*` and
  * `difile://<usr-rel>` URLs.
  *
- * Spec: `packages/devtools/docs/file-system.md` §6 P1-1 / P1-3.
+ * Spec: `packages/devtools/docs/file-system.md`.
  *
  *   - `readDiskFile(realPath, opts?)`: read a (possibly ranged) slice of a
  *     file inside the USER_DATA_PATH sandbox. Returns `bytes` plus the

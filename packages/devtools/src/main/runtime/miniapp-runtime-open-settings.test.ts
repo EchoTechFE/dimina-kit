@@ -35,7 +35,7 @@ type Not<B extends boolean> = B extends true ? false : true
 function staticAssert<_T extends true>(): void {}
 
 // ═════════════════════════════════════════════════════════════════════════
-// §1 Members gained. Real bug caught (post-flip): `openSettings` drops off
+// §1 Members gained. Real bug caught: `openSettings` drops off
 // either surface and hosts lose their only sanctioned way to open settings.
 // ═════════════════════════════════════════════════════════════════════════
 
@@ -53,7 +53,7 @@ function _openSettingsConsumptionPin(rt: MiniappRuntime, ctx: WorkbenchContext):
 void _openSettingsConsumptionPin
 
 // ═════════════════════════════════════════════════════════════════════════
-// §2 Members lost. Real bug caught (post-flip): re-adding `windows` /
+// §2 Members lost. Real bug caught: re-adding `windows` /
 // `rendererDir` re-promises a pass-through that types can't honor (windows)
 // or duplicates the /paths export (rendererDir).
 // ═════════════════════════════════════════════════════════════════════════

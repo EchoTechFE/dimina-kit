@@ -13,11 +13,8 @@
  *    reloaded in place), `attachNativeSimulator` must NOT be called — no hard
  *    rebuild on top of a successful soft one.
  *  - When it resolves `false` or `undefined` (soft reload unsupported/failed),
- *    the hook falls back to `attachNativeSimulator(attachUrl, …)` — today's
+ *    the hook falls back to `attachNativeSimulator(attachUrl, …)` — the
  *    hard-rebuild behavior — with the SAME url.
- *
- * `useSimulator` today has no `softReloadNativeSimulator` import at all, so
- * every "was it called" assertion below fails.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
@@ -35,9 +32,8 @@ function emitCurrentPage(pagePath: string): void {
   for (const fn of [...currentPageListeners]) fn(pagePath)
 }
 
-// Mocking an export ('softReloadNativeSimulator') that does not exist yet on
-// '@/shared/api' is fine — vi.mock replaces the whole module with this
-// factory, so the real module's current exports are irrelevant here.
+// vi.mock replaces the whole '@/shared/api' module with this factory, so
+// the real module's current exports are irrelevant here.
 vi.mock('@/shared/api', () => {
   return {
     attachNativeSimulator: attachNativeSimulatorMock,

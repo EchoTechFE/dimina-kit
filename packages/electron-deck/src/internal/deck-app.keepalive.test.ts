@@ -1,5 +1,5 @@
 /**
- * TDD failing-first contract tests for "keepAlive" (view-handle.md「keepAlive 保活」/
+ * Contract tests for "keepAlive" (view-handle.md「keepAlive 保活」/
  * docs/contracts/capability-and-lifecycle.md「tab 保活归属」). TWO parts:
  *
  * PART 1 — LIFETIME / LEAK FIX (the critical half). Today a `runtime.view`'s

@@ -1,7 +1,7 @@
 /**
  * Main-process `simulator:fs:*` IPC channel handlers.
  *
- * Spec: `packages/devtools/docs/file-system.md` §4.4, §6 P1-7.
+ * Spec: `packages/devtools/docs/file-system.md`.
  *
  * Each handler is the pure function that backs one IPC channel:
  *

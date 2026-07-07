@@ -1,7 +1,7 @@
 /**
  * vpath resolver.
  *
- * Spec: `docs/file-system.md` §3.3 — single resolver shared by every FSM
+ * Spec: `docs/file-system.md` — single resolver shared by every FSM
  * entry, the renderer-side temp store, and the main-process
  * protocol.handle / disk reader.
  *

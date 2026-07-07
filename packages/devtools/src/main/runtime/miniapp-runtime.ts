@@ -1,6 +1,6 @@
 /**
- * MiniappRuntime — the stable, host-facing contract surface (foundation.md §3
- * "MiniappRuntime 契约" layer).
+ * MiniappRuntime — the stable, host-facing contract surface documented in
+ * host-migration.md's public-contract section.
  *
  * HAND-WRITTEN, not derived from `WorkbenchContext`. A `Pick`-style projection
  * would drag every nested internal service type (ViewManager,
@@ -18,7 +18,8 @@
  *  - `workspace.openProject` stays writable (no `readonly`) for backward
  *    compat: hosts MAY still gate permissions by reassigning it. The preferred
  *    path is now the declarative `WorkbenchAppConfig.onBeforeOpenProject` hook
- *    (runs before any side effect, throw to veto) — see host-migration.md §7.
+ *    (runs before any side effect, throw to veto) — see host-migration.md's
+ *    `onBeforeOpenProject` hook section.
  *
  * `asMiniappRuntime(ctx)` is an identity return — the contract is a typed
  * VIEW onto the live context, not a snapshot/projection. That is what makes

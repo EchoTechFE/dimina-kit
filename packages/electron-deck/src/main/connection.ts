@@ -1,6 +1,6 @@
 /**
  * Connection-layer primitive (`Connection` / `ConnectionRegistry`) described in
- * packages/electron-deck/docs/foundation.md §4.
+ * packages/electron-deck/docs/foundation.md's two-teardown-paths section.
  *
  * A `Connection` is one trusted webContents (keyed by the unforgeable `wc.id`).
  * It holds a single `DisposableRegistry` as its "lifetime segment" container.
@@ -10,7 +10,7 @@
  *   - soft reset   → dispose segment, swap in a fresh registry, fire 'reset',
  *                    connection stays alive & registered.
  *
- * §4.3: the terminal hook is `'destroyed'` (NOT `'render-process-gone'`), and
+ * The terminal hook is `'destroyed'` (NOT `'render-process-gone'`), and
  * `DisposableRegistry.disposeAll` is async (LIFO) — so close/reset are async.
  */
 import type { WebContents } from 'electron'
@@ -112,7 +112,7 @@ export function createConnectionRegistry(): ConnectionRegistry {
 
     function emit(ev: LifecycleEvent): void {
       const set = ev === 'reset' ? resetListeners : closedListeners
-      // Isolate faults so one throwing listener can't block the rest (§9).
+      // Isolate faults so one throwing listener can't block the rest.
       for (const cb of [...set]) {
         try {
           cb()
@@ -129,7 +129,7 @@ export function createConnectionRegistry(): ConnectionRegistry {
         return alive
       },
       own(d) {
-        // Race safety (§8): after close, do not delegate to the disposed
+        // Race safety: after close, do not delegate to the disposed
         // segment (that throws). Dispose the late resource immediately and
         // hand back a harmless no-op handle.
         if (!alive) {
@@ -172,7 +172,7 @@ export function createConnectionRegistry(): ConnectionRegistry {
       emit('closed')
     }
 
-    // Hard destroy — the real terminal hook (§4.3). `once` auto-removes and the
+    // Hard destroy — the real terminal hook. `once` auto-removes and the
     // `alive` guard inside close() makes repeated triggers idempotent.
     wc.once('destroyed', () => {
       close()

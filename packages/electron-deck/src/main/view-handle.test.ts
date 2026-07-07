@@ -70,12 +70,9 @@ interface ViewHandle {
   dispose(): Promise<void>
 }
 
-// ── TDD red: `./view-handle.js` does NOT exist yet ───────────────────────────
-//
-// Loaded dynamically in `beforeAll` so the missing module turns these specs red
-// at test time (a resolve/runtime failure) rather than a hard compile error that
-// would prevent the whole suite from running. Once `createViewHandle` ships, the
-// import resolves and the already-written specs exercise the contract.
+// Loaded dynamically in `beforeAll` so a broken/missing export turns these specs
+// red at test time (a resolve/runtime failure) rather than a hard compile error
+// that would prevent the whole suite from running.
 let createViewHandle: (deps: { nativeView: NativeView; scope: Scope }) => ViewHandle
 
 beforeAll(async () => {

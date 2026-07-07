@@ -1,12 +1,12 @@
 /**
- * usePanelData — Storage ready-seed (final-contract.md §9, P0).
+ * usePanelData — Storage ready-seed.
  *
  * Pinned contract:
  *   - WXML + AppData already auto-seed via `useNativeChannelSnapshot`'s
  *     `enabled: ready` effect, but Storage has its own hand-rolled state
  *     (`storageItems` + `refreshStorage`) that historically only populated on
- *     a manual refresh-button click. Now that the refresh button is gone
- *     (§9), an already-mounted Storage tab that was empty pre-compile would
+ *     a manual refresh-button click. Now that the refresh button is gone,
+ *     an already-mounted Storage tab that was empty pre-compile would
  *     stay empty forever without an explicit ready-edge seed.
  *   - `usePanelData` must auto-invoke `SimulatorStorageChannel.GetSnapshot`
  *     as soon as `compileStatus.status === 'ready'`, with NO caller-driven
@@ -39,7 +39,7 @@ beforeEach(() => {
   invokeMock.mockResolvedValue(undefined)
 })
 
-describe('usePanelData — Storage ready-seed (final-contract §9 P0)', () => {
+describe('usePanelData — Storage ready-seed', () => {
   it('auto-invokes SimulatorStorageChannel.GetSnapshot and populates storageItems once ready, without a manual refreshStorage() call', async () => {
     const items = [{ key: 'wxAPP_a', value: '1' }]
     invokeMock.mockImplementation((channel: string) => {
