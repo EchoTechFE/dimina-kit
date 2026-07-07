@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { createServer, type Server } from 'node:http'
 import { createRequire } from 'node:module'
 import chokidar from 'chokidar'
+import { applyEsbuildBinaryPath } from './esbuild-binary-path.js'
 import { createRebuildScheduler } from './rebuild-scheduler.js'
 import { createCompileWorker } from './compile-worker.js'
 import type { BuildRequest, CompileLogEntry, CompileWorker } from './compile-worker.js'
@@ -67,21 +68,20 @@ function refillStandby(): void {
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const require = createRequire(import.meta.url)
 
-// esbuild's native binary is shipped inside node_modules, but when packaged
-// via electron-builder it lives in app.asar. asarUnpack puts the real binary
-// in app.asar.unpacked — but esbuild computes its binary path from __dirname,
-// which still points inside app.asar. Redirect it explicitly via require.resolve
-// so we don't hard-code the hoisting depth (pnpm vs npm layouts differ).
-if (!process.env.ESBUILD_BINARY_PATH && __dirname.includes('app.asar')) {
-	const platform = `${process.platform}-${process.arch}`
-	try {
-		const resolved = require.resolve(`@esbuild/${platform}/bin/esbuild`)
-		process.env.ESBUILD_BINARY_PATH = resolved.replace(/app\.asar([\\/])/, 'app.asar.unpacked$1')
-	}
-	catch {
-		// fall through — esbuild will surface a clearer error if the binary is truly missing
-	}
-}
+// Packaged inside app.asar, esbuild's native binary must be spawned from
+// app.asar.unpacked — resolved via require.resolve so the hoisting depth
+// (pnpm vs npm layouts) is never hard-coded. The per-platform binary layout
+// and every failure diagnostic live in esbuild-binary-path.ts. The env var is
+// set before any compile worker forks, and forks inherit it.
+applyEsbuildBinaryPath({
+	dirname: __dirname,
+	env: process.env,
+	platform: process.platform,
+	arch: process.arch,
+	resolve: require.resolve,
+	exists: fs.existsSync,
+	warn: console.warn,
+})
 
 function getRandomPort(): Promise<number> {
 	return new Promise((resolve, reject) => {

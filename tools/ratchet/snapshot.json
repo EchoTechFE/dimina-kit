@@ -121,10 +121,10 @@
     },
     "test-coverage": {
       "direction": "higher-is-better",
-      "value": 72.82,
+      "value": 72.87,
       "unit": "% lines",
       "breakdown": {
-        "devkit": 92.18,
+        "devkit": 93.24,
         "devtools": 68.29,
         "electron-deck": 95.23,
         "electron-deck/dock-react": 79.05,
@@ -135,10 +135,10 @@
     },
     "test-report": {
       "direction": "higher-is-better",
-      "value": 3668,
+      "value": 3679,
       "unit": "passed tests",
       "breakdown": {
-        "devkit": 118,
+        "devkit": 129,
         "devtools": 2288,
         "electron-deck": 1024,
         "electron-deck/dock-react": 96,
