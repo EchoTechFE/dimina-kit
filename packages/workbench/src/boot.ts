@@ -48,7 +48,7 @@ import {
 import { URI } from '@codingame/monaco-vscode-api/vscode/vs/base/common/uri'
 import { VSBuffer } from '@codingame/monaco-vscode-api/vscode/vs/base/common/buffer'
 
-import { TYPES_ROOT } from './file-workspace'
+import { TYPES_ROOT, sweepStaleRestoredEditors } from './file-workspace'
 import { registerWxmlLanguage } from './wxml-language'
 import { WXML_LANGUAGE_CONFIGURATION, WXML_TMGRAMMAR, jsonBlobUrl } from './wxml-grammar'
 import { seedAmbientTypings, type ExtraTyping } from './typings-injection'
@@ -483,6 +483,11 @@ export async function bootWorkbench(options: BootWorkbenchOptions): Promise<Work
 
   // Populate the workspace + seed ambient typings, then keep saves flushed back.
   await populateWorkspace(workspace, features.ambientTypings, contributedTypings)
+
+  // Restored tabs can reference files this project's mirror does not contain
+  // (all projects share one persisted editor-state memento) — close them now
+  // that the workspace is populated. See sweepStaleRestoredEditors.
+  await sweepStaleRestoredEditors(vscode, folderUri)
 
   status('workbench-ready')
   installAutoSave(vscode)

@@ -19,6 +19,7 @@ import { URI } from '@codingame/monaco-vscode-api/vscode/vs/base/common/uri'
 import { VSBuffer } from '@codingame/monaco-vscode-api/vscode/vs/base/common/buffer'
 import { WORKSPACE_FILE_ROOT, bridgeReaddir, bridgeRead, bridgeWrite, relFromWorkspaceUri } from './fs-bridge'
 import type { FsEntry } from './fs-bridge'
+import { closeStaleWorkspaceEditors, type UriLike } from './stale-editor-sweep'
 
 export {
   WORKSPACE_FILE_ROOT,
@@ -68,6 +69,37 @@ export async function mirrorDiskToFileWorkspace(baseUrl: string): Promise<number
   if (rootEntries.length === 0) return 0
   await walk('')
   return count
+}
+
+/**
+ * Close restored editor tabs whose files are absent from the populated
+ * workspace. Every project shares one persisted editor-state memento (the
+ * workspace identity is the constant `file:///workspace`), so after a project
+ * switch the restored tabs can point at files the new mirror does not contain
+ * — stranding "file was not found" placeholder editors that never self-heal
+ * (the placeholder only recovers on a file ADDED event, which never fires for
+ * a file this project lacks). Runs after population; failures only log — boot
+ * must not die on a state-hygiene step. The sweep decision itself lives in
+ * stale-editor-sweep.ts (monaco-free, unit-tested).
+ */
+export async function sweepStaleRestoredEditors(
+  vscodeApi: typeof import('vscode'),
+  workspaceRoot: UriLike,
+): Promise<void> {
+  try {
+    const fileService = await getService(IFileService)
+    const closed = await closeStaleWorkspaceEditors({
+      tabGroups: vscodeApi.window.tabGroups,
+      TabInputText: vscodeApi.TabInputText,
+      workspaceRoot,
+      exists: (uri) => fileService.exists(URI.from({ scheme: uri.scheme, path: uri.path })),
+    })
+    if (closed > 0) {
+      console.info(`[workbench] closed ${closed} restored editor tab(s) whose files are absent from this workspace`)
+    }
+  } catch (e) {
+    console.error('[workbench] stale restored-editor sweep failed', e)
+  }
 }
 
 /**
