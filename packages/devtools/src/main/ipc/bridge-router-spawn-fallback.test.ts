@@ -1,14 +1,15 @@
 /**
  * Guards handleSpawn's root-page resolution against the compiled manifest.
  *
- * ── The bug being pinned (TDD red) ──────────────────────────────────────────
- * Today a spawn's requested `pagePath` is trusted verbatim: it becomes the
- * root PageSession's pagePath, its rootWindowConfig/isTab, and the page
- * `bootServiceHost` sends `loadResource` for — even when app-config.json's
- * compiled `pages` list does not contain it (a start page removed by a hot
- * reload). Today that root-missing case is caught deep inside
- * `bootServiceHost` (see `pageInManifest`/`rootMissing`), which REFUSES to
- * load anything: the simulator stays permanently blank with no recovery.
+ * ── The bug this guards against ─────────────────────────────────────────────
+ * Without the check below, a spawn's requested `pagePath` would be trusted
+ * verbatim: it becomes the root PageSession's pagePath, its
+ * rootWindowConfig/isTab, and the page `bootServiceHost` sends `loadResource`
+ * for — even when app-config.json's compiled `pages` list does not contain
+ * it (a start page removed by a hot reload). That root-missing case would be
+ * caught deep inside `bootServiceHost` (see `pageInManifest`/`rootMissing`),
+ * which REFUSES to load anything: the simulator stays permanently blank with
+ * no recovery.
  *
  * The fix moves the check to the request boundary: `handleSpawn` must decide
  * up front whether the requested pagePath is actually mountable, and if not,

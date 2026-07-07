@@ -108,11 +108,12 @@ const STACK_ID = 'stack_0'
  */
 export const LAUNCH_TIMEOUT_MS = 20_000
 
-/** Hard ceiling on the pre-warm pool, mirroring ServiceHostPool/doc §3.3. */
+/** Hard ceiling on the pre-warm pool, mirroring ServiceHostPool/prewarm-webview.md. */
 const PREWARM_MAX_POOL_SIZE = 4
 
 /**
- * Resolve the pre-warm pool size from env (doc §6). Returns 0 (OFF) unless
+ * Resolve the pre-warm pool size from env (see prewarm-webview.md's config
+ * section). Returns 0 (OFF) unless
  * `DIMINA_PREWARM_POOL_SIZE` is a positive integer and `DIMINA_PREWARM_DISABLE`
  * is not set. Default OFF — pooling is opt-in so the spawn path is unchanged
  * unless explicitly enabled.
@@ -126,7 +127,7 @@ function resolvePrewarmPoolSize(): number {
   return Math.min(n, PREWARM_MAX_POOL_SIZE)
 }
 
-/** debugTap (§7) is opt-in via `DIMINA_DEBUG_TAP=1` — off everywhere else. */
+/** debugTap (see foundation.md) is opt-in via `DIMINA_DEBUG_TAP=1` — off everywhere else. */
 function resolveDebugTapEnabled(): boolean {
   return process.env.DIMINA_DEBUG_TAP === '1'
 }
@@ -302,14 +303,14 @@ interface RouterState {
   /** Fan-out for render-side activity (domReady / active-page); set in install. */
   emitRenderEvent: (event: RenderEvent) => void
   /**
-   * Per-webContents connection registry (foundation.md §4). Render guests and
+   * Per-webContents connection registry (see foundation.md). Render guests and
    * service-host windows are acquired here so their per-wc bookkeeping tears
    * down with the connection (destroy → close, pool reuse → reset) instead of
    * bespoke `once('destroyed')` listeners scattered through the router.
    */
   connections: ConnectionRegistry
   /**
-   * Flag-gated ring buffer (foundation.md §7) over the cross-wc bridge message
+   * Flag-gated ring buffer (see foundation.md) over the cross-wc bridge message
    * stream. Off by default (near-free no-op); when `DIMINA_DEBUG_TAP=1` it
    * records every SERVICE_INVOKE / RENDER_INVOKE / *_PUBLISH / API_RESPONSE at
    * the dispatch chokepoint (connection id + appSession + channel + direction)
@@ -435,7 +436,7 @@ export interface BridgeRouterHandle {
    */
   census?(): BridgeResourceCensus
   /**
-   * The flag-gated debugTap (§7) over the bridge message stream. Exposed so a
+   * The flag-gated debugTap (see foundation.md) over the bridge message stream. Exposed so a
    * hidden devtools panel / automation can read `.entries()` when
    * `DIMINA_DEBUG_TAP=1`; a no-op snapshot otherwise. Optional so the many
    * partial `BridgeRouterHandle` test mocks don't each have to stub it.
@@ -525,8 +526,8 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
   if (prewarmPoolSize > 0) {
     const pool = new ServiceHostPool()
     state.pool = pool
-    // Defer warm-up off the cold-start critical path (doc §3.3: app.ready +
-    // idle). Warming eagerly here races main-window startup — it creates an
+    // Defer warm-up off the cold-start critical path (see prewarm-webview.md:
+    // app.ready + idle). Warming eagerly here races main-window startup — it creates an
     // extra hidden BrowserWindow before the workbench renderer has settled,
     // which made the e2e's first-window/preload-readiness flaky. The timer is
     // cancelled on teardown so it can't warm a disposed pool.
@@ -798,7 +799,7 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
   ipcMain.on(C.DISPOSE, onDispose)
   ctx.registry.add(() => { ipcMain.removeListener(C.DISPOSE, onDispose) })
 
-  // debugTap (§7) ingress recorder — near-free no-op unless DIMINA_DEBUG_TAP=1.
+  // debugTap (see foundation.md) ingress recorder — near-free no-op unless DIMINA_DEBUG_TAP=1.
   // Hung on the bridge dispatch chokepoint so the cross-wc message flow is
   // inspectable (the first real consumer of the workbench debugTap primitive).
   const tapIn = (channel: string, sender: WebContents, payload: unknown): void => {
@@ -1122,7 +1123,8 @@ async function handleSpawn(
   appSession.pages.set(bridgeId, rootPage)
   bindWc(state.serviceWcIdToAppSessionId, serviceWindow.webContents, appSessionId)
   bindSimulatorWc(state.simulatorWcIdToAppSessionIds, simulatorWc, appSessionId)
-  // Track the service-host webContents as a Connection (foundation.md §4.3) and
+  // Track the service-host webContents as a Connection (the soft-reuse
+  // teardown path documented in foundation.md) and
   // own this session's serviceWc→appSessionId binding on its CURRENT lifetime
   // segment. On a pooled-window REUSE, `disposeAppSession` calls
   // `connections.reset(serviceWc.id)` → this owned cleanup fires + a fresh
@@ -1130,7 +1132,8 @@ async function handleSpawn(
   // real destroy the connection closes and fires it too. The cleanup is guarded
   // by `appSessionId` so it only clears a binding that is still THIS session's.
   // (The simulatorWc binding stays manual in `disposeAppSession`: the simulator
-  // wc outlives individual app sessions — cross-connection state, §4.4 — so it
+  // wc outlives individual app sessions — cross-connection state documented in
+  // foundation.md — so it
   // cannot hang off any single session's segment.)
   state.connections.acquire(serviceWindow.webContents).own(() => {
     if (state.serviceWcIdToAppSessionId.get(appSession.serviceWc.id) === appSessionId) {
@@ -2215,8 +2218,8 @@ function ensureRenderBound(state: RouterState, sender: WebContents, bridgeId: st
     page.renderWc = sender
     state.wcIdToBridgeId.set(sender.id, bridgeId)
     // Consolidate the render-guest bookkeeping teardown onto the connection
-    // layer (foundation.md §4 / P2): the render guest is its own webContents =
-    // its own connection (§4.4); own() ties this cleanup to its lifetime so it
+    // layer (see foundation.md): the render guest is its own webContents =
+    // its own connection; own() ties this cleanup to its lifetime so it
     // fires on destroy, replacing the bespoke `once('destroyed')`. acquire() is
     // idempotent — re-binding the same sender re-uses its connection.
     state.connections.acquire(sender).own(() => {
@@ -2360,7 +2363,7 @@ async function releaseServiceWindow(
   opts: { serviceAlreadyClosed?: boolean },
 ): Promise<void> {
   if (ap.poolEntryId !== null && state.pool && !opts.serviceAlreadyClosed) {
-    // Soft reuse (foundation.md §4.3): the pooled service-host webContents keeps
+    // Soft reuse (see foundation.md): the pooled service-host webContents keeps
     // its wc.id but is about to run a NEW app session. Reset its Connection
     // BEFORE returning it to the pool — dispose this session's owned segment
     // (the serviceWc binding cleanup) and swap a fresh one — so an old in-flight

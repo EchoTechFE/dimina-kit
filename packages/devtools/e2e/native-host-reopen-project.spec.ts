@@ -165,7 +165,7 @@ test.describe('native-host close + reopen disposes old render guests and mounts 
   })
 
   test('close disposes render guests and reopen mounts fresh guests with a new bridgeId', async () => {
-    // ── Phase 1: open project A ──────────────────────────────────────────────
+    // ── Step 1: open project A ───────────────────────────────────────────────
 
     await openProjectInUI(mainWindow, FIXTURE_A, { waitMs: 25000 })
     await waitForSimulatorWebview(electronApp)
@@ -184,7 +184,7 @@ test.describe('native-host close + reopen disposes old render guests and mounts 
     const guestCountA = await countLiveGuests(electronApp)
     expect(guestCountA, 'project A must have at least one live render guest').toBeGreaterThanOrEqual(1)
 
-    // ── Phase 2: close project A ─────────────────────────────────────────────
+    // ── Step 2: close project A ──────────────────────────────────────────────
 
     await closeProject(mainWindow)
 
@@ -206,7 +206,7 @@ test.describe('native-host close + reopen disposes old render guests and mounts 
       `all render guests from project A (bridgeId ${bridgeIdA}) must be destroyed after close`,
     ).toBe(0)
 
-    // ── Phase 3: open project B ──────────────────────────────────────────────
+    // ── Step 3: open project B ───────────────────────────────────────────────
 
     await openProjectInUI(mainWindow, FIXTURE_B, { waitMs: 25000 })
     await waitForSimulatorWebview(electronApp)

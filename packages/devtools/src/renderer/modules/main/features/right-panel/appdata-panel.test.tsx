@@ -1,5 +1,5 @@
 /**
- * AppDataPanel — no refresh button (final-contract.md §9).
+ * AppDataPanel — no refresh button.
  *
  * The panel is now realtime-pushed (main pushes `SimulatorAppDataChannel.Event`
  * on every service→render setData) and ready-seeded (`useNativeChannelSnapshot`'s
@@ -22,7 +22,7 @@ function makeState(overrides: Partial<AppDataState> = {}): AppDataState {
   }
 }
 
-describe('AppDataPanel: no refresh button (final-contract §9)', () => {
+describe('AppDataPanel: no refresh button', () => {
   it('does not render a button whose text contains "刷新"', () => {
     const { container } = render(
       <AppDataPanel state={makeState()} onSelectBridge={vi.fn()} />,

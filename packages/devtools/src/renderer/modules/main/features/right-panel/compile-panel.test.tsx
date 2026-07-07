@@ -20,15 +20,15 @@
  *    events (first event, or previous event isn't compiling) show none.
  *  - The 清空 button calls `onClear`.
  *
- * The module is loaded via `import.meta.glob` so this file typechecks and
- * lints while the component does not exist yet — the glob simply matches
- * nothing and the load helper goes red with an explicit message.
+ * The module is loaded via `import.meta.glob` rather than a static import, so
+ * a missing `compile-panel.tsx` fails this suite with an explicit assertion
+ * message instead of an import-time throw.
  */
 import { describe, it, expect, vi } from 'vitest'
 import type { ComponentType } from 'react'
 import { render, fireEvent } from '@testing-library/react'
 
-/** Structural duplicate of the future `CompileEvent` export from use-session. */
+/** Structural duplicate of the `CompileEvent` export from use-session. */
 interface CompileEvent {
   at: number
   status: string
@@ -50,7 +50,7 @@ async function loadCompilePanel(): Promise<ComponentType<CompilePanelProps>> {
   const loader = compilePanelModules['./compile-panel.tsx']
   expect(
     loader,
-    'right-panel/compile-panel.tsx does not exist yet — create it with a named CompilePanel export (TDD red)',
+    'right-panel/compile-panel.tsx must exist with a named CompilePanel export',
   ).toBeTruthy()
   const mod = (await loader!()) as { CompilePanel?: ComponentType<CompilePanelProps> }
   expect(

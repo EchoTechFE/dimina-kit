@@ -162,7 +162,7 @@ export function createCompilerPool(options = {}) {
   async function runAttempt(files, workPath) {
     await settleAll(workers.map(ensureWarm))
 
-    // Phase 1 — one worker runs setup ONCE: it allocates the scope-hash ids
+    // Setup step — one worker runs setup ONCE: it allocates the scope-hash ids
     // (page + component data-v-XXXXX) and builds miniprogram_npm/app-config.json.
     // Broadcasting this single bundle to every stage is REQUIRED for correctness:
     // each stage runs in its own realm, and if each ran its own setup it would roll
@@ -173,7 +173,7 @@ export function createCompilerPool(options = {}) {
     const s = await requestChecked(workers[0], { type: 'setup', files, workPath, wantHeartbeat: true }, 'setup', sendTimeoutMs)
     const { bundle, scaffold } = s
 
-    // Phase 2 — every stage compiles in parallel against the SHARED bundle. The
+    // Compile step — every stage compiles in parallel against the SHARED bundle. The
     // non-stage scaffold (app-config.json + npm, produced once) seeds the union.
     const parts = await settleAll(workers.map((x) =>
       requestChecked(x, { type: 'compile-subset', files, workPath, stages: [x.stage], bundle, wantHeartbeat: true }, 'compile-subset', sendTimeoutMs)))

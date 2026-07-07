@@ -1,6 +1,6 @@
 /**
- * Integration test for the bridge-router's flag-gated debugTap (foundation.md
- * §7) wired onto the live cross-wc bridge message stream.
+ * Integration test for the bridge-router's flag-gated debugTap (see
+ * foundation.md) wired onto the live cross-wc bridge message stream.
  *
  * ── The contract being pinned ───────────────────────────────────────────────
  * The bridge-router records every ingress bridge message (SERVICE_INVOKE /

@@ -406,7 +406,7 @@ export async function createDevtoolsRuntime(config: WorkbenchAppConfig = {}): Pr
 
   // Anchor the main window's renderer as the first Connection. Resources
   // scoped to the main webContents (acquired by later wiring) tear down with
-  // it; see packages/electron-deck/docs/foundation.md §4.
+  // it; see packages/electron-deck/docs/foundation.md (teardown paths).
   context.connections.acquire(mainWindow.webContents)
 
   context.registry.add(registerAppIpc(context))

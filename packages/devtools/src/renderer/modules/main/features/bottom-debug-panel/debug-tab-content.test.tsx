@@ -15,7 +15,7 @@
  * real WxmlPanel / AppDataPanel / StoragePanel / CompilePanel so we exercise
  * real rendering + handler wiring (bridge selection, compile clear) and real DOM
  * (the compile log/event rows actually rendered), not identity. The panels are
- * live-synced and carry NO refresh button (final-contract §9), so DebugTabContent
+ * live-synced and carry NO refresh button, so DebugTabContent
  * no longer forwards an `onRefresh` to them — the per-tab guard is that each
  * tabId mounts its own panel.
  */

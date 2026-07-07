@@ -53,7 +53,7 @@ async function loadCompilePanel(): Promise<ComponentType<CompilePanelProps>> {
   const loader = compilePanelModules['./compile-panel.tsx']
   expect(
     loader,
-    'right-panel/compile-panel.tsx does not exist yet — create it with a named CompilePanel export (TDD red)',
+    'right-panel/compile-panel.tsx must exist with a named CompilePanel export',
   ).toBeTruthy()
   const mod = (await loader!()) as { CompilePanel?: ComponentType<CompilePanelProps> }
   expect(

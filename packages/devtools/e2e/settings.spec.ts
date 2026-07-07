@@ -12,8 +12,7 @@ import { ProjectChannel, ProjectsChannel } from '../src/shared/ipc-channels'
 
 /**
  * UI-driven settings flow. The embedded settings overlay is opened the way a
- * USER opens it — clicking the toolbar's 设置 button (Wave 2 ④ restores this
- * entry point; until it lands these tests are RED) — instead of the previous
+ * USER opens it — clicking the toolbar's 设置 button — instead of the previous
  * raw `ipcInvoke('settings:setVisible', true)` backdoor, which kept passing
  * even while the overlay was unreachable from the actual UI.
  */

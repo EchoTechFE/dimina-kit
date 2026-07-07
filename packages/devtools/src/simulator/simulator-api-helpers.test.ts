@@ -1,10 +1,7 @@
 /**
- * Failing (red) tests for the two helper utilities planned in P5:
+ * Tests for the two helper utilities in simulator-api-helpers.ts:
  *   - bindCallbacks(ctx, opts) — wraps success/fail/complete via createCallbackFunction
  *   - notSupportedApi(apiName) — factory for "not supported in simulator" stubs
- *
- * The target file (simulator-api-helpers.ts) does not exist yet, so every
- * import resolves to nothing and all tests fail at module resolution.
  */
 
 import { describe, expect, it, vi } from 'vitest'

@@ -33,7 +33,7 @@ import * as devkit from './index.js'
  *    Returns the cleaned (ANSI-stripped) line, or null to drop.
  *
  * All sample lines in this file are copied VERBATIM from the spike archives
- * (see `.repro/dmcc-log-spike/RESULTS.md` §2/§3).
+ * (see `.repro/dmcc-log-spike/RESULTS.md`'s sample and filter-rule sections).
  */
 
 type FilterFn = (line: string) => string | null

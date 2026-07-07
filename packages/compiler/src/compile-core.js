@@ -476,8 +476,8 @@ async function runCompile({ fs, workPath = '/work' } = {}) {
   const ctx = await setupCompile({ fs, workPath })
   const { storeInfo: bundle, pages, appId, name, targetPath } = ctx
   // Same order as the original single pass. Stages are independent (no product
-  // read-back), so the order is not load-bearing — Phase 3 runs them concurrently
-  // in separate worker realms over a shared fs.
+  // read-back), so the order is not load-bearing — the worker pool (pool.js) runs
+  // them concurrently in separate worker realms over a shared fs.
   await compileStage({ stage: 'logic', pages, storeInfo: bundle, fs })
   await compileStage({ stage: 'view', pages, storeInfo: bundle, fs })
   await compileStage({ stage: 'style', pages, storeInfo: bundle, fs })

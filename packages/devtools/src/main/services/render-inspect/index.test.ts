@@ -366,7 +366,7 @@ describe('createRenderInspector — highlight draws the native CDP Overlay', () 
 })
 
 /**
- * `setWxmlObserving` (final-contract.md §6) — toggles the guest-side WXML
+ * `setWxmlObserving` — toggles the guest-side WXML
  * MutationObserver that drives the simulator-wxml service's live-push path.
  *
  * Pinned contract:

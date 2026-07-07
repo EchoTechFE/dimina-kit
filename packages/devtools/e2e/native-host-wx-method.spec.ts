@@ -3,19 +3,15 @@
  * `wx.*` method under DIMINA_NATIVE_HOST=1.
  *
  * Navigation methods (navigateTo/redirectTo/reLaunch/switchTab/navigateBack)
- * already route correctly under native-host — see
+ * route correctly under native-host — see
  * `native-host-render.spec.ts` ("App.callWxMethod switchTab navigates …"):
  * the handler special-cases NAV_METHODS and runs them on the authoritative
- * service-host `wx`. The GAP this spec pins: a NON-nav wx method that drives
- * the mini-app UI (here `setNavigationBarTitle`) must ALSO reach the
- * service-host `wx` so its effect is real. Today under native-host the handler
- * only special-cases NAV_METHODS; every other method falls through to
- * `evalInSim` → the simulator TOP-window `wx`, which under native-host exposes
- * only nav + a few sync helpers and does NOT carry `setNavigationBarTitle`.
- * The call therefore errors ("wx.setNavigationBarTitle is not a function") and
- * the DeviceShell navigation-bar title never changes. Once `App.callWxMethod`
- * routes non-nav wx calls to the service-host `wx` under native-host, the
- * title updates and this spec goes GREEN.
+ * service-host `wx`. This spec pins the same guarantee for a NON-nav wx
+ * method that drives the mini-app UI (here `setNavigationBarTitle`): it must
+ * ALSO reach the service-host `wx` so its effect is real, rather than falling
+ * through to `evalInSim` → the simulator TOP-window `wx`, which under
+ * native-host exposes only nav + a few sync helpers and does NOT carry
+ * `setNavigationBarTitle`.
  *
  * Chosen method + assertion (see report): `setNavigationBarTitle` with
  * `{ title: 'C5-PROBE' }`, asserting the DeviceShell nav-bar title text
@@ -23,12 +19,12 @@
  * `src/simulator/device-shell/navigation-bar.tsx`) changes from the fixture's
  * "TabBar Fixture" to "C5-PROBE".
  *
- * Why the side-effect contract and NOT `getSystemInfoSync`: against the current
- * build, `App.callWxMethod('getSystemInfoSync')` already returns a usable
- * result, because the simulator top-window `wx` happens to carry that sync
- * helper — so a getSystemInfoSync return-value assertion is GREEN today and
- * does NOT pin the gap. `setNavigationBarTitle` is a non-nav method that the
- * top-window `wx` lacks, so it is the discriminating, robustly-RED contract for
+ * Why the side-effect contract and NOT `getSystemInfoSync`: the simulator
+ * top-window `wx` happens to carry that sync helper, so
+ * `App.callWxMethod('getSystemInfoSync')` returns a usable result regardless
+ * of whether non-nav methods route to the service-host `wx` — it does NOT
+ * discriminate the contract. `setNavigationBarTitle` is a non-nav method that
+ * the top-window `wx` lacks, so it is the discriminating contract for
  * "non-nav wx must route to the service-host wx under native-host".
  */
 import { test, expect, _electron, type ElectronApplication, type Page as PwPage } from '@playwright/test'

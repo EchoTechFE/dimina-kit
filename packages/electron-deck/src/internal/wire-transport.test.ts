@@ -419,7 +419,7 @@ describe('WireTransport — invoke handler: error serialization', () => {
 
 	// DeckRemoteError 携带显式空字符串 remoteName 时表达 "未知来源" 的意图，
 	// 不能被 invokeName 友好覆盖（`||` → `??`）。
-	it('host throwing DeckRemoteError with empty remoteName preserves "" (codex #9 — ?? over ||)', async () => {
+	it('host throwing DeckRemoteError with empty remoteName preserves "" (?? over ||)', async () => {
 		const h = makeHarness({
 			trustedIds: [1],
 			invokeHost: async () => {

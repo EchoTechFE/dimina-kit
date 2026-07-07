@@ -33,8 +33,8 @@ const FIXTURES = path.resolve(__dirname, 'fixtures', 'host-toolbar')
  * globalThis) and the host-toolbar fixtures. Electron e2e; runs on local
  * macOS without extra setup (NODE_ENV=test, off-screen windows).
  *
- * RED today: the reopen/cold-start placeholder stays at 0 and the retention
- * getter does not exist.
+ * Guards that reopen/cold-start recovers the advertised height instead of
+ * leaving the placeholder stuck at 0, via the retention getter.
  */
 
 /** Measured height of the main-window toolbar placeholder (CSS px, rounded). */
@@ -92,7 +92,7 @@ test.describe('Host toolbar height replay: close project → reopen (determinist
   test('the placeholder recovers the advertised 64px after close → reopen', async () => {
     const placeholderHeight = placeholderHeightOf(mainWindow)
 
-    // Precondition (GREEN today — same flow as host-toolbar.spec.ts): with
+    // Precondition (same flow as host-toolbar.spec.ts): with
     // the project open, the advertise → notify → placeholder loop lands 64.
     await loadToolbar64(electronApp)
     const before = await pollUntil(placeholderHeight, (v) => v === 64, 30_000, 300)

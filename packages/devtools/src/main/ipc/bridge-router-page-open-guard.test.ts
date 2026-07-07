@@ -1,13 +1,14 @@
 /**
  * Guards `handlePageOpen`'s defense gate against the compiled manifest.
  *
- * ── The bug being pinned (TDD red) ──────────────────────────────────────────
- * Today `handlePageOpen` (PAGE_OPEN) builds and registers a PageSession for
- * ANY `pagePath` the caller supplies, with no manifest check — unlike the
- * spawn-time root page (which the sibling fix resolves against
- * `ap.manifest.pages`), a non-root `PAGE_OPEN` for a page the developer
- * deleted (hot-reloaded to) still creates a zombie PageSession that main will
- * later try to load resources for, and that never has a valid render target.
+ * ── The bug this guards against ─────────────────────────────────────────────
+ * Without the check below, `handlePageOpen` (PAGE_OPEN) would build and
+ * register a PageSession for ANY `pagePath` the caller supplies, with no
+ * manifest check — unlike the spawn-time root page (which the sibling fix
+ * resolves against `ap.manifest.pages`), a non-root `PAGE_OPEN` for a page
+ * the developer deleted (hot-reloaded to) would still create a zombie
+ * PageSession that main will later try to load resources for, and that
+ * never has a valid render target.
  *
  * The fix rejects the PAGE_OPEN call outright (before any PageSession is
  * registered) when `opts.pagePath` is absent from `ap.manifest.pages` AND the

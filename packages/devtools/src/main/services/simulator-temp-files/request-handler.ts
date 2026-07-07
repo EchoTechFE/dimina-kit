@@ -1,7 +1,7 @@
 /**
  * Pure dispatcher for `difile://` URL requests.
  *
- * Spec: `packages/devtools/docs/file-system.md` §4.3.
+ * Spec: `packages/devtools/docs/file-system.md`.
  *
  * The shipping implementation in `index.ts` registers a thin
  * `simSession.protocol.handle('difile')` wrapper that delegates here; the race

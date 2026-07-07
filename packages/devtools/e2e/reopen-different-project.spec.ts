@@ -88,7 +88,7 @@ test.describe('simulator content after close-reopen with a different project', (
     mainWindow,
     electronApp,
   }) => {
-    // ── Phase 1: open project A and verify its content renders ────────────
+    // ── Step 1: open project A and verify its content renders ─────────────
     await openProjectInUI(mainWindow, PROJECT_A_DIR, { waitMs: 60_000 })
     await waitForSimulatorWebview(electronApp)
 
@@ -109,7 +109,7 @@ test.describe('simulator content after close-reopen with a different project', (
       `project A's simulator must not already contain project B's marker "${MARKER_B}" (fixture sanity)`,
     ).not.toContain(MARKER_B)
 
-    // ── Phase 2: close project A ──────────────────────────────────────────
+    // ── Step 2: close project A ───────────────────────────────────────────
     await closeProject(mainWindow)
 
     // Confirm all render-host guests from project A are destroyed before
@@ -121,11 +121,11 @@ test.describe('simulator content after close-reopen with a different project', (
       15_000,
       300,
     ).catch(() => {
-      // Non-blocking: if guests linger past the deadline the phase-3 negative
+      // Non-blocking: if guests linger past the deadline the next step's negative
       // assertion ("Go Detail" must be absent) will catch the residue bug.
     })
 
-    // ── Phase 3: open project B and assert clean content ──────────────────
+    // ── Step 3: open project B and assert clean content ───────────────────
     await openProjectInUI(mainWindow, PROJECT_B_DIR, { waitMs: 60_000 })
     await waitForSimulatorWebview(electronApp)
 

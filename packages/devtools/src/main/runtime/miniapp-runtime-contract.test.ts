@@ -32,8 +32,8 @@ type KeyType<T, K extends PropertyKey> = K extends keyof T ? T[K] : never
 function staticAssert<_T extends true>(): void {}
 
 // ═════════════════════════════════════════════════════════════════════════
-// §1 Members the contract MUST GAIN (absent from today's Pick projection).
-// Real bug caught (post-flip): a refactor drops the member from the contract
+// §1 Members the contract MUST GAIN (absent from a straight Pick projection).
+// Real bug caught: a refactor drops the member from the contract
 // and every downstream host using it breaks on upgrade instead of in our CI.
 // ═════════════════════════════════════════════════════════════════════════
 
@@ -52,7 +52,8 @@ staticAssert<Not<HasKey<MiniappRuntime, 'windows'>>>()
 staticAssert<HasKey<MiniappRuntime, 'registry'>>()
 
 // `registry.add` must accept a bare `() => void` dispose fn (a downstream host's call shape).
-// (Vacuous-today pin, same mechanism as above.)
+// Real constraint now that `registry` is on the contract — before it existed,
+// `KeyType` resolved to `never`, which would have made this check vacuously true.
 staticAssert<
   KeyType<KeyType<MiniappRuntime, 'registry'>, 'add'> extends (
     dispose: () => void,
@@ -62,8 +63,8 @@ staticAssert<
 >()
 
 // ═════════════════════════════════════════════════════════════════════════
-// §2 Members the contract MUST LOSE (present today via Pick; a downstream host has ZERO
-// uses — audited). Real bug caught (post-flip): someone re-widens the
+// §2 Members the contract MUST LOSE (present via a straight Pick; a downstream host has ZERO
+// uses — audited). Real bug caught: someone re-widens the
 // contract, silently re-promising internal plumbing to hosts (先窄后宽 —
 // adding back later is a deliberate minor bump, not an accident).
 // ═════════════════════════════════════════════════════════════════════════
@@ -109,7 +110,7 @@ staticAssert<Not<HasKey<MiniappRuntime['notify'], 'editorOpenFile'>>>()
 // ═════════════════════════════════════════════════════════════════════════
 // §4 Function-VALUED properties, not method syntax. Under strictFunctionTypes
 // method signatures compare bivariantly, so a wrongly-narrowed implementation
-// (or host override) slips past the sentinel. Real bug caught (post-flip): a
+// (or host override) slips past the sentinel. Real bug caught: a
 // contract member written as `m(x: T): R` instead of `m: (x: T) => R` lets a
 // narrower-param function typecheck as the member — the monkey-patch /
 // drift-sentinel guarantees silently weaken.
@@ -204,7 +205,7 @@ const thisTestFile = import.meta.url.startsWith('file:')
   : import.meta.url
 const contractSourcePath = path.join(path.dirname(thisTestFile), 'miniapp-runtime.ts')
 
-describe('MiniappRuntime contract (R3) — hand-written, Electron-free module', () => {
+describe('MiniappRuntime contract — hand-written, Electron-free module', () => {
   it('is hand-written: MiniappRuntime is NOT declared via a Pick<…> projection', () => {
     // Real bug: `Pick<WorkbenchContext, …>` puts every nested internal service
     // type on the public semver face — internal refactors of ViewManager /
@@ -217,7 +218,7 @@ describe('MiniappRuntime contract (R3) — hand-written, Electron-free module', 
     ).toBe(false)
   })
 
-  it('never imports electron (no Electron types/values on the contract surface) [green pin]', () => {
+  it('never imports electron (no Electron types/values on the contract surface)', () => {
     // Real bug: someone "conveniently" types a member with WebContents /
     // BrowserWindow — every Electron major then leaks into the contract's
     // semver, and non-Electron consumers of the type can no longer compile.
@@ -228,7 +229,7 @@ describe('MiniappRuntime contract (R3) — hand-written, Electron-free module', 
     ).toBe(false)
   })
 
-  it('asMiniappRuntime is an identity return (typed view, not a projection object) [green pin]', () => {
+  it('asMiniappRuntime is an identity return (typed view, not a projection object)', () => {
     // Real bug: returning a new object of copied members means a downstream
     // host's monkey-patch of workspace.openProject patches a dead copy and the
     // permission gate silently stops gating.

@@ -35,9 +35,6 @@
  *  - `asMiniappRuntime`'s identity-assignment sentinel must KEEP compiling,
  *    which forces `WorkspaceService.getSession` (the live implementation
  *    type) to be retyped in the same pass — no cast laundering.
- *
- * The `@ts-expect-error` markers below are compile-time guards: if a marked
- * line ever compiles, the directive becomes an unused-directive error (TS2578).
  */
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -57,7 +54,7 @@ type SessionDto = NonNullable<ReturnType<MiniappRuntime['workspace']['getSession
 
 // ═════════════════════════════════════════════════════════════════════════
 // §1 The exported type must exist (module + public barrel).
-// Real bug caught (post-flip): the structured type silently drops off the
+// Real bug caught: the structured type silently drops off the
 // public surface and hosts are back to deep-importing internals or casting.
 // ═════════════════════════════════════════════════════════════════════════
 
@@ -70,7 +67,7 @@ void _barrelTypePin
 
 // ═════════════════════════════════════════════════════════════════════════
 // §2 `getSession().appInfo` is no longer `unknown`.
-// Real bug caught (post-flip): someone re-widens the DTO back to `unknown`
+// Real bug caught: someone re-widens the DTO back to `unknown`
 // and every host cast comes back, contradicting host-migration.md.
 // ═════════════════════════════════════════════════════════════════════════
 
@@ -79,7 +76,7 @@ staticAssert<Not<Equal<SessionDto['appInfo'], unknown>>>()
 // ═════════════════════════════════════════════════════════════════════════
 // §3 `ProjectSession['appInfo']` — the `AppInfo | unknown` union is
 // meaningless (it collapses to `unknown`; the `AppInfo` arm guards nothing).
-// Real bug caught (post-flip): the collapsed union sneaks back in, making
+// Real bug caught: the collapsed union sneaks back in, making
 // the declared `AppInfo` shape pure documentation-theater again.
 // ═════════════════════════════════════════════════════════════════════════
 
@@ -87,8 +84,9 @@ staticAssert<Not<Equal<ProjectSession['appInfo'], unknown>>>()
 
 // ═════════════════════════════════════════════════════════════════════════
 // §4 Host consumption pin — the doc's "无需再 cast" promise, written as code.
-// Each marked line is the exact cast-free access a downstream host
-// performs; today every one is a compile error on `unknown`.
+// Each line below is the exact cast-free access a downstream host
+// performs; it compiles only because `appInfo` is typed as
+// `MiniappSessionAppInfo`, not `unknown`.
 // ═════════════════════════════════════════════════════════════════════════
 
 function _appInfoCastFreeConsumptionPin(rt: MiniappRuntime): void {
@@ -110,10 +108,9 @@ function _appInfoCastFreeConsumptionPin(rt: MiniappRuntime): void {
 void _appInfoCastFreeConsumptionPin
 
 // ═════════════════════════════════════════════════════════════════════════
-// §5 Field-shape pins — REVISED in the incremental round: `appId` REQUIRED,
-// the rest optional. (Vacuously green today — `unknown` accepts anything —
-// and REAL constraints the moment the slot is structured.)
-// Real bug caught (post-flip):
+// §5 Field-shape pins: `appId` REQUIRED, the rest optional. Real constraints
+// now that the slot is structured — `unknown` would otherwise accept anything.
+// Real bug caught:
 //  - making name/path/appName REQUIRED would reject devkit's real shape and
 //    minimal custom adapters (the `appIdOnly` pin);
 //  - making appId OPTIONAL would silently re-legalize the appId-less session
@@ -131,16 +128,15 @@ function _appInfoShapeAcceptancePin(): void {
 void _appInfoShapeAcceptancePin
 
 function _appIdIsRequiredPin(info: AppInfoFromModule): string {
-  // Compiles today (the suppressed import above resolves to an error-any);
-  // post-flip this is the PERMANENT compile-time guard that `appId` is
-  // required and non-optional — were it `appId?: string`, returning
+  // The PERMANENT compile-time guard that `appId` is required and
+  // non-optional — were it `appId?: string`, returning
   // `string | undefined` as `string` would not compile.
   return info.appId
 }
 void _appIdIsRequiredPin
 
 // ═════════════════════════════════════════════════════════════════════════
-// §6 The identity sentinel must KEEP compiling (green today and after).
+// §6 The identity sentinel must KEEP compiling.
 // This is the pin that forces `WorkspaceService.getSession`'s return type to
 // be restructured in the same pass — `asMiniappRuntime` is `return ctx`, so
 // the live context must STRUCTURALLY satisfy the structured contract, not
@@ -173,8 +169,7 @@ describe('feedback ① — MiniappSessionAppInfo: structured session appInfo (do
   })
 
   it('MiniappSessionAppInfo declares appId REQUIRED — `appId: string`, not `appId?:`', () => {
-    // ⚠ Revised pin (see header): the first wave specified appId optional.
-    // Real bug (post-flip): an optional appId re-opens the gap this item
+    // Real bug: an optional appId re-opens the gap this item
     // closes — hosts are back to `if (!appInfo.appId)` defensive code for a
     // field production always supplies and the renderer always needs.
     const source = readFileSync(contractSourcePath, 'utf8')

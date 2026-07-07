@@ -96,7 +96,7 @@ export interface ServiceHostPoolInitOptions {
   defaultPoolSize: number
   /** Spec used to warm the initial entries. */
   defaultSpec: ServiceHostSpec
-  /** Hard ceiling on pooled entries. Clamped to ≤ 4 (doc §3.3). Default 3. */
+  /** Hard ceiling on pooled entries. Clamped to ≤ 4 (see prewarm-webview.md). Default 3. */
   maxPoolSize?: number
 }
 
@@ -112,10 +112,10 @@ interface PoolEntry {
 /** Blank placeholder URL loaded while warming / after reset. */
 const BLANK_URL = 'about:blank'
 
-/** Hard ceiling on pool size regardless of requested size (doc §3.3). */
+/** Hard ceiling on pool size regardless of requested size (see prewarm-webview.md). */
 const HARD_MAX_POOL_SIZE = 4
 
-/** Storage buckets cleared on every release (doc §3.4 "必须" rows). */
+/** Storage buckets cleared on every release (see prewarm-webview.md's reset checklist). */
 const RESET_STORAGES = [
   'cookies',
   'localstorage',
@@ -151,7 +151,7 @@ export class ServiceHostPool {
   /**
    * Hand a ready window matching `spec` to the caller. If none is ready, fall
    * back to synchronously constructing a fresh window — never blocking on warm
-   * (doc §3.1 "绝不阻塞 acquire"). Fallback windows carry `entryId === null` and
+   * (see prewarm-webview.md's invariants section). Fallback windows carry `entryId === null` and
    * are destroyed (not pooled) on release.
    *
    * A spec change (different `preloadPath`) tears down all *pooled* entries and
@@ -249,7 +249,7 @@ export class ServiceHostPool {
 
   /**
    * Re-target the pool. `target` is clamped to `[0, maxPoolSize]`. Pooled
-   * entries beyond the target are disposed OLDEST-FIRST (doc §3.3/§3.6); in-use
+   * entries beyond the target are disposed OLDEST-FIRST (see prewarm-webview.md); in-use
    * entries are untouched. Does not warm new entries up (use `init` / refill).
    */
   resize(target: number): void {
@@ -404,7 +404,7 @@ export class ServiceHostPool {
 
   /**
    * Reset a released window back to a clean, blank state. Order matters
-   * (doc §3.5.3 / §3.4「等待时序」): navigate to blank FIRST so the old document
+   * (see prewarm-webview.md's state-machine and reset-ordering sections): navigate to blank FIRST so the old document
    * stops running and in-flight requests are aborted, THEN clear storage — so a
    * still-live old page cannot re-populate storage after the clear.
    */

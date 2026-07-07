@@ -41,9 +41,8 @@ vi.mock('./ipc-transport', () => transport)
 
 import * as viewApi from './view-api'
 
-// Future wire name, asserted literally on purpose: the enum entry
-// (ViewChannel.HostToolbarGetHeight) does not exist yet, and a wrapper that
-// hits any other wire name silently replays nothing.
+// Wire name asserted literally on purpose: a wrapper that drifts to any
+// other wire name than ViewChannel.HostToolbarGetHeight silently replays nothing.
 const GET_HEIGHT_CHANNEL = 'view:host-toolbar:get-height'
 
 type InvokeCall = [channel: string, ...args: unknown[]]

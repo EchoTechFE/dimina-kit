@@ -1,6 +1,7 @@
 /**
  * Behavior tests for the bridge-router's CONNECTION-LAYER wiring of the
- * service-host webContents (foundation.md §4.3 + §9 P1 DoD#4 + §10).
+ * service-host webContents (see foundation.md's connection-registry and
+ * reset sections).
  *
  * ── The contract being pinned (implemented + verified) ──────────────────────
  * The bridge-router tracks every service-host webContents through the

@@ -99,7 +99,7 @@ function makeInspector() {
     getWxml: vi.fn(async () => ({ tagName: 'view', attrs: {}, children: [] })),
     highlight: vi.fn(async () => null),
     unhighlight: vi.fn(async () => {}),
-    // final-contract.md §6/§8: the visibility gate drives the guest MutationObserver
+    // The visibility gate drives the guest MutationObserver
     // through this method on SetActive(true/false).
     setWxmlObserving: vi.fn(async () => {}),
   } satisfies RenderInspector
@@ -197,7 +197,7 @@ describe('setupSimulatorWxml — GetSnapshot (pull)', () => {
 })
 
 describe('setupSimulatorWxml — render event (push)', () => {
-  // Modified for final-contract.md §8: pushes are now gated behind SetActive(true)
+  // Pushes are gated behind SetActive(true)
   // (the panel must be visible before a domReady drives a full Vue-tree walk), so
   // this case seeds visibility first — the original "unconditional push" behavior
   // is covered by the "does NOT push on domReady before SetActive(true)" case below.
@@ -249,7 +249,7 @@ describe('setupSimulatorWxml — render event (push)', () => {
 })
 
 /**
- * Visibility gate (final-contract.md §8): the panel must be SetActive(true)
+ * Visibility gate: the panel must be SetActive(true)
  * before any push happens (an unseen panel must never drive a full Vue-tree
  * walk), and SetActive must drive the guest MutationObserver on/off via
  * `inspector.setWxmlObserving`.
@@ -346,7 +346,7 @@ describe('setupSimulatorWxml — visibility gate (SetActive)', () => {
 })
 
 /**
- * latest-wins coalescing (final-contract.md §8): a slow pull whose result
+ * latest-wins coalescing: a slow pull whose result
  * arrives AFTER a newer pull has already been scheduled must be discarded —
  * only the tree from the most-recently-scheduled pull is ever pushed. This
  * guards against a stale tree clobbering a fresher one when two render events

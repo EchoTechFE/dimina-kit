@@ -81,15 +81,15 @@ beforeEach(() => {
 })
 
 /**
- * Read the (future) `hotReloadToken` off the session result. Typed as a
- * structural lookup so this test file compiles before the implementation
- * lands; the runtime assertion is what goes red.
+ * Read `hotReloadToken` off the session result via a structural cast (rather
+ * than relying on `SessionHookResult`'s concrete field) so this suite fails
+ * on a runtime assertion, not a type error, if the shape drifts.
  */
 function readToken(session: SessionHookResult): number {
   const token = (session as unknown as { hotReloadToken?: unknown }).hotReloadToken
   expect(
     typeof token,
-    'useSession must expose a numeric hotReloadToken (resurrect the PR#12 hot-reload guard deleted in PR#39)',
+    'useSession must expose a numeric hotReloadToken (the hot-reload guard)',
   ).toBe('number')
   return token as number
 }
@@ -104,7 +104,7 @@ async function renderReadySession() {
   return rendered
 }
 
-describe('useSession: hotReload signal → hotReloadToken (resurrected PR#12 guard, deleted in PR#39)', () => {
+describe('useSession: hotReload signal → hotReloadToken (resurrected hot-reload guard)', () => {
   it('exposes hotReloadToken as a number from the first ready render', async () => {
     const { result } = await renderReadySession()
     readToken(result.current)

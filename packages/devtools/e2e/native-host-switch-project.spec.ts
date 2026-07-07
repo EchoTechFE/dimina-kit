@@ -127,7 +127,7 @@ test.describe('native-host switch project via back-button path disposes old gues
   })
 
   test('switching projects without closeProject renders project B content and destroys project A guests', async () => {
-    // ── Phase 1: open project A and verify its content renders ────────────
+    // ── Step 1: open project A and verify its content renders ─────────────
     await openProjectInUI(mainWindow, PROJECT_A_DIR, { waitMs: 60_000 })
     await waitForSimulatorWebview(electronApp)
 
@@ -148,14 +148,14 @@ test.describe('native-host switch project via back-button path disposes old gues
       `project A must not already contain project B's marker "${MARKER_B}" (fixture sanity)`,
     ).not.toContain(MARKER_B)
 
-    // ── Phase 2: switch to project B WITHOUT calling closeProject ─────────
+    // ── Step 2: switch to project B WITHOUT calling closeProject ──────────
     // openProjectInUI emits window:navigateBack (renderer-only), then clicks
     // the project B card. The main process session for A is still alive when
     // openProject(B) fires — this is the branch under test.
     await openProjectInUI(mainWindow, PROJECT_B_DIR, { waitMs: 60_000 })
     await waitForSimulatorWebview(electronApp)
 
-    // ── Phase 3: assert project B renders and A is fully gone ─────────────
+    // ── Step 3: assert project B renders and A is fully gone ──────────────
 
     const textB = await pollUntil(
       () => readRenderGuestText(electronApp),

@@ -97,7 +97,7 @@ export function useSimulator(props: UseSimulatorProps): SimulatorHookResult {
   // then drives SPAWN → DeviceShell. `currentPage` mirrors the URL (page-stack
   // nav happens inside the WCV and arrives via onSimulatorCurrentPage above).
   //
-  // `hotReloadToken` resurrects the PR#12 hot-reload guard deleted in PR#39:
+  // `hotReloadToken` resurrects the hot-reload guard a later refactor deleted:
   // a watcher rebuild bumps the token, the effect re-runs exactly once, and
   // `attachNativeSimulator` tears down + respawns the DeviceShell (the
   // native-host reload primitive, view-manager.ts attachNativeSimulator).

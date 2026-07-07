@@ -2,8 +2,8 @@
  * 编译信息 tab — data source contract.
  *
  * `useSession` already subscribes to every `projectStatus` payload (it feeds
- * `compileStatus` + the PR#43 `hotReloadToken`). This suite pins the NEW
- * compile-event log built on that same subscription:
+ * `compileStatus` + `hotReloadToken`). This suite pins the compile-event log
+ * built on that same subscription:
  *
  *  - `useSession` exposes `compileEvents: CompileEvent[]` and
  *    `clearCompileEvents(): void`.
@@ -16,11 +16,10 @@
  *  - Switching projects (the `projectPath`-keyed openProject reset point)
  *    clears the log — each project gets an independent log.
  *
- * Today `useSession` returns no `compileEvents`, so every test here is red.
- * Implementation note: export the `CompileEvent` interface from
- * `use-session.ts` so consumers (controller slice, CompilePanel props) can
- * import it — this file deliberately duplicates the shape structurally
- * because the export does not exist yet.
+ * The `CompileEvent` interface is exported from `use-session.ts` so consumers
+ * (controller slice, CompilePanel props) can import it; this file deliberately
+ * duplicates the shape structurally rather than importing it, so a drift
+ * between the two shapes fails this suite instead of silently type-checking.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
@@ -83,7 +82,7 @@ beforeEach(() => {
   projectStatusListeners.length = 0
 })
 
-/** Structural duplicate of the future `CompileEvent` export (see header). */
+/** Structural duplicate of the `CompileEvent` export (see header). */
 interface CompileEventShape {
   at: number
   status: string
@@ -92,9 +91,9 @@ interface CompileEventShape {
 }
 
 /**
- * Read the (future) `compileEvents` off the session result. Structural lookup
- * so this file compiles before the implementation lands; the runtime
- * assertion is what goes red.
+ * Read `compileEvents` off the session result via a structural cast (rather
+ * than relying on `SessionHookResult`'s concrete field) so this suite fails
+ * on a runtime assertion, not a type error, if the shape drifts.
  */
 function readEvents(session: SessionHookResult): CompileEventShape[] {
   const events = (session as unknown as { compileEvents?: unknown }).compileEvents

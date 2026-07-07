@@ -1,6 +1,7 @@
 /**
  * Behavior tests for the connection-layer primitive (`Connection` /
- * `ConnectionRegistry`) described in packages/electron-deck/docs/foundation.md §4.
+ * `ConnectionRegistry`) described in packages/electron-deck/docs/foundation.md's
+ * two-teardown-paths section.
  *
  * Connection-layer contract tests (the implementation in `./connection.js` is
  * in place; these pin its behavior):

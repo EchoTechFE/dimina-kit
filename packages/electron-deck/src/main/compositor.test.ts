@@ -43,13 +43,9 @@
  */
 import { describe, it, expect, beforeAll } from 'vitest'
 
-// ── TDD red: the implementation (`./compositor.js`) does NOT exist yet ────────
-//
-// We load it dynamically so the FAILURE is a runtime/assertion failure (the
-// module fails to resolve at test time, turning every spec red) rather than a
-// hard compile error that would prevent the suite from running at all. Once
-// `createCompositor` / the `Compositor` contract ship, `beforeAll` resolves the
-// real export and the already-written specs exercise the contract.
+// We load `./compositor.js` dynamically so a broken/missing export surfaces as
+// a runtime/assertion failure (every spec goes red) rather than a hard compile
+// error that would prevent the suite from running at all.
 //
 // We mirror the public contract types locally so the specs read against real
 // types; the implementation's exported shapes must be assignable to these.
@@ -67,7 +63,6 @@ interface Compositor {
   unmount(viewId: string): void
   reorder(viewId: string, opts: { zone?: number; before?: string | null }): void
   commit(): void
-  // ── TDD red: `detachAll` is not implemented on the compositor yet (Part 1).
   // Folds the intent to EMPTY and commits, removing all of this window's native
   // views from the host. Reuses the teardown-friendly removals-only-on-destroyed
   // path (commit failure semantics), so on an already-destroyed host it is SILENT (no throw).
@@ -77,11 +72,9 @@ interface Compositor {
 let createCompositor: (host: ContentViewHost) => Compositor
 
 beforeAll(async () => {
-  // `./compositor.js` now exists; the dynamic import resolves the real
-  // `createCompositor`. Cast via `unknown`: the real `Compositor` does not yet
-  // carry `detachAll` (TDD red, Part 1), so a direct cast is rejected — the
-  // missing method surfaces at RUNTIME (`detachAll is not a function`) in the
-  // Part-1 specs, not as a hard compile error that would break module load.
+  // Cast via `unknown`: the real `Compositor.detachAll` is optional
+  // (`detachAll?(): void`) while this local mirror pins it as always-present,
+  // so a direct cast is rejected by the structural type checker.
   const mod = (await import('./compositor.js')) as unknown as {
     createCompositor: (host: ContentViewHost) => Compositor
   }
@@ -153,10 +146,11 @@ function ref(id: string): NativeViewRef {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. mount idempotency
-// Codex pin: mount of an ALREADY-mounted view is a pure no-op — it does NOT
+// Mount of an ALREADY-mounted view is a pure no-op — it does NOT
 // re-append, does NOT change that view's order key / mount sequence, and the
 // committed order is identical before vs. after the redundant mount. (Only a
-// genuinely-new mount appends; see §7 for the host-call count proof.)
+// genuinely-new mount appends; see "commit — minimal steps via LIS" below for
+// the host-call count proof.)
 // ─────────────────────────────────────────────────────────────────────────────
 describe('mount — idempotent for an already-mounted view', () => {
   it('re-mounting a mounted view does not change committed order', () => {
@@ -195,11 +189,11 @@ describe('mount — idempotent for an already-mounted view', () => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 2. mount epoch (mountSeq)
-// Codex pin: unmount(id) then mount(a NEW ref with the same id) is a NEW
+// unmount(id) then mount(a NEW ref with the same id) is a NEW
 // instance — it gets a fresh mount sequence and lands at the zone's TOP (end),
-// it does NOT inherit the old view's prior order. The idempotent no-op of §1
-// applies ONLY to views that are STILL mounted; an unmount→re-mount is never a
-// no-op.
+// it does NOT inherit the old view's prior order. The already-mounted no-op
+// above applies ONLY to views that are STILL mounted; an unmount→re-mount is
+// never a no-op.
 // ─────────────────────────────────────────────────────────────────────────────
 describe('mount epoch — unmount then re-mount is a new instance', () => {
   it('re-mounting after unmount lands at the top, not the old position', () => {
@@ -239,7 +233,7 @@ describe('mount epoch — unmount then re-mount is a new instance', () => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 3. reorder — zero perturbation of unrelated views
-// Codex pin: reorder(B, {before: C}) places B immediately before C and leaves
+// reorder(B, {before: C}) places B immediately before C and leaves
 // the relative order of every OTHER view unchanged. before:null means "to the
 // end of the zone" (topmost).
 // ─────────────────────────────────────────────────────────────────────────────
@@ -277,7 +271,7 @@ describe('reorder — minimal perturbation; before-anchor semantics', () => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 4. reorder — change zone
-// Codex pin: reorder(B,{zone: higher}) moves B into the higher zone; after
+// reorder(B,{zone: higher}) moves B into the higher zone; after
 // commit B sits ABOVE every view that remains in a lower zone (zones stack:
 // all of zone N renders below all of zone N+1).
 // ─────────────────────────────────────────────────────────────────────────────
@@ -306,7 +300,7 @@ describe('reorder — moving a view to a higher zone raises it above the lower z
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 5. illegal `before` → synchronous throw
-// Codex pin: a `before` that names a non-existent / unmounted id, OR a `before`
+// A `before` that names a non-existent / unmounted id, OR a `before`
 // whose zone conflicts with an explicit `zone` arg, must throw SYNCHRONOUSLY
 // from reorder() — never silently no-op or defer the error to commit().
 // ─────────────────────────────────────────────────────────────────────────────
@@ -350,7 +344,7 @@ describe('reorder — illegal before throws synchronously', () => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 6. batch = last-state (intent collapses, not a write-log replay)
-// Codex pin: multiple reorders of the SAME view before a single commit reflect
+// Multiple reorders of the SAME view before a single commit reflect
 // ONLY the final intent (no intermediate stops); a mixed batch of
 // mount/unmount/reorder across several views commits once, directly to the
 // target total order (the planner diffs current→target, it does not replay the
@@ -391,7 +385,7 @@ describe('batch — commit reflects final intent only (last-state semantics)', (
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 7. commit — minimal host operations (LIS over the current∩target intersection)
-// Codex pin: commit computes the LONGEST INCREASING SUBSEQUENCE of views that
+// Commit computes the LONGEST INCREASING SUBSEQUENCE of views that
 // are ALREADY in their correct relative order and leaves THOSE untouched (no
 // remove/add) — only the views that must move are re-added. The LIS is computed
 // over the intersection of currently-mounted and target views; a genuinely NEW
@@ -450,7 +444,7 @@ describe('commit — minimal steps via LIS; new views are explicitly added', () 
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 8. commit into a destroyed host → synchronous throw
-// Codex pin: when host.isDestroyed === true at commit time, commit() throws
+// When host.isDestroyed === true at commit time, commit() throws
 // synchronously (the spike showed addChildView into a destroyed contentView
 // throws synchronously — the planner must surface that, not swallow it).
 // ─────────────────────────────────────────────────────────────────────────────
@@ -469,7 +463,7 @@ describe('commit — destroyed host throws synchronously', () => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 9. rebalance — fractional order-key exhaustion does not perturb visible order
-// Codex pin: repeatedly reordering a view to sit just-before the same neighbor
+// Repeatedly reordering a view to sit just-before the same neighbor
 // (taking the fractional midpoint over and over) eventually exhausts float
 // precision; the Compositor must RENUMBER (rebalance) that zone's order keys
 // internally, and the visible committed order must be IDENTICAL before and
@@ -533,9 +527,7 @@ describe('rebalance — precision-exhausting reorders keep visible order intact'
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 10. commit — transactional failure semantics (commit failure semantics)  [TDD red: CommitError
-//     is not exported yet, and the new destroyed/rollback behaviors are not
-//     implemented — the old code throws a generic Error.]
+// 10. commit — transactional failure semantics (commit failure semantics)
 //
 // Contract: commit() returns void on success (native == target). On failure it
 // throws a typed `CommitError extends Error` describing the consistent state the
@@ -546,7 +538,7 @@ describe('rebalance — precision-exhausting reorders keep visible order intact'
 //     readonly recovered?: boolean   // only for kind:'apply-failed'
 //   }
 //
-// The new key behaviors vs. the old generic throw:
+// Key behaviors (a typed, differentiated throw rather than a generic one):
 //   • a no-op commit is silent even on a destroyed host (nothing to do);
 //   • a destroyed host with ADDITIONS pending → typed host-destroyed throw, host
 //     untouched (applied:false);
@@ -557,9 +549,8 @@ describe('rebalance — precision-exhausting reorders keep visible order intact'
 //     whether the rollback restored the snapshot (recovered:true/false).
 // ─────────────────────────────────────────────────────────────────────────────
 describe('commit — transactional failure semantics (commit failure semantics, CommitError)', () => {
-	// The typed error is imported lazily alongside `createCompositor` so the
-	// missing export turns these specs (and only these) red, rather than breaking
-	// module load for the whole file. Mirrors the public shape locally.
+	// The typed error is imported lazily alongside `createCompositor`, and its
+	// shape is mirrored locally rather than imported as a type.
 	interface CommitErrorShape extends Error {
 		readonly kind: 'host-destroyed' | 'apply-failed'
 		readonly applied: false | 'partial'
@@ -568,10 +559,9 @@ describe('commit — transactional failure semantics (commit failure semantics, 
 	let CommitError: new (...args: never[]) => CommitErrorShape
 
 	beforeAll(async () => {
-		// Cast via `unknown`: `CommitError` is not exported yet (TDD red), so the
-		// real module type lacks it. The runtime read of `mod.CommitError` is
-		// `undefined` until it ships, turning the specs below red at assertion
-		// time rather than breaking module load.
+		// Cast via `unknown`: the real constructor takes a specific options object,
+		// which is not assignable to this mirror's opaque `(...args: never[])`
+		// signature, so a direct cast is rejected by the structural type checker.
 		const mod = (await import('./compositor.js')) as unknown as {
 			CommitError: new (...args: never[]) => CommitErrorShape
 		}
@@ -804,8 +794,7 @@ describe('commit — transactional failure semantics (commit failure semantics, 
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 11. detachAll — fold to EMPTY + commit (Part 1; ViewHandle increment 1)
-//     [TDD red: `detachAll` is not implemented on the compositor yet.]
+// 11. detachAll — fold to EMPTY + commit
 //
 // Contract: `detachAll()` folds the intent state to EMPTY and commits, so every
 // native view this window's compositor mounted is removed from the host. Because

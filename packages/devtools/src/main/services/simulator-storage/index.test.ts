@@ -199,7 +199,7 @@ describe('setupSimulatorStorage connection-registry teardown', () => {
 })
 
 /**
- * `onSyncStorageChange` (final-contract.md §5) — the SimulatorStorageHandle
+ * `onSyncStorageChange` — the SimulatorStorageHandle
  * method bridge-router calls on a `storageChanged` container message from the
  * service-host's SYNC wx storage APIs (setStorageSync/removeStorageSync/
  * clearStorageSync write `localStorage` directly, bypassing main, so without

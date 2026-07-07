@@ -1,5 +1,5 @@
 /**
- * Lifecycle phase machine — see workbench-model.md §5.
+ * Lifecycle phase machine.
  *
  * 8 个 phase 严格递增，无跳跃：
  *   init → bind → setup → ready → drain → cleanup → destroy → quit

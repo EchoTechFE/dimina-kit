@@ -173,10 +173,10 @@ beforeEach(() => {
 
 describe('ProjectRuntime: host-toolbar height replay on mount', () => {
   it('a live push after mount drives the placeholder', async () => {
-    // Today's working path — the dynamic-height loop while the component is
-    // mounted. Pins that the replay fix does not break it, and self-validates
-    // this harness (the placeholder renders and reacts inside these mocks, so
-    // the red tests below fail on the missing replay, not on a broken rig).
+    // The dynamic-height loop while the component is mounted. Pins that the
+    // replay fix does not break it, and self-validates this harness (the
+    // placeholder renders and reacts inside these mocks, so the replay tests
+    // below fail on a missing replay, not on a broken rig).
     const { container } = renderRuntime()
 
     expect(placeholderHeight(container)).toBe('0px')

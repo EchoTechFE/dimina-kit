@@ -427,7 +427,8 @@ export function createCompositor(host: ContentViewHost): Compositor {
       // target order). Everything after that prefix — plus every brand-new view
       // — is a mover, re-added once in target order. This is the minimal host
       // churn: the LIS of the current∩target intersection that append-to-top can
-      // leave untouched. (See compositor.test.ts §7.) Plan the host calls first,
+      // leave untouched. (See compositor.test.ts's "commit — minimal host
+      // operations" section.) Plan the host calls first,
       // THEN apply — a no-op commit must neither throw nor touch the host.
       const { removals, additions } = planCommit(targetOrder(), host)
       applyCommitPlan(host, removals, additions)

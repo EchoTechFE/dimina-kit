@@ -4,7 +4,7 @@
  * 9 audio DOM events (canplay / play / timeupdate / ended / …) from the
  * container back to the service-side dispatcher.
  *
- * ── The bug being pinned (TDD red) ──────────────────────────────────────────
+ * ── The bug being pinned ────────────────────────────────────────────────────
  * Under native-host, the dimina submodule strips the service-side `keep: true`
  * flag (and the success/fail callback ids) off the params before they reach the
  * container. So by the time `audioListen` is forwarded into `runApiAsync`, the

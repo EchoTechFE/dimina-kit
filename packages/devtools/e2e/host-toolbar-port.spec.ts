@@ -7,8 +7,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURES = path.resolve(__dirname, 'fixtures', 'host-toolbar')
 
 /**
- * Wave 3 R2 — HostToolbarControl gated narrow channel (MessagePort edition),
- * REAL APP. TDD-RED until R2 lands (`hostToolbar.onMessage/send` don't exist).
+ * R2 — HostToolbarControl gated narrow channel (MessagePort edition),
+ * REAL APP.
  *
  * Contract pinned here (the parts only a live Electron can prove):
  *  - bidirectional round trip page ⇄ main over the transferred MessagePort,
