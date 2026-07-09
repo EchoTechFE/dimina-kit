@@ -9,6 +9,9 @@ export declare class ProjectFsClient {
   projectId: string
   clientId: string
 
+  /** 当前单写者状态，见 client.js get mode() 注释。 */
+  readonly mode: 'starting' | 'writer' | 'readonly' | 'draining' | 'dead'
+
   /** Test-only: wipes a project's entire persisted layer. */
   static wipe(projectId: string): Promise<void>
 
@@ -65,5 +68,7 @@ export declare class ProjectFsClient {
 
   seed(files: Record<string, string>): Promise<{ seeded: boolean; count: number }>
   onChange(cb: (evt: any) => void): () => void
+  /** 订阅 mode 变化；返回退订函数。 */
+  onModeChange(cb: (mode: 'starting' | 'writer' | 'readonly' | 'draining' | 'dead') => void): () => void
   destroy(): void
 }
