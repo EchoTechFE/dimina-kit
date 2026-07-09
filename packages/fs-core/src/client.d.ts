@@ -30,10 +30,22 @@ export declare class ProjectFsClient {
 
   turnBegin(turnId: string, opts?: Record<string, unknown>): Promise<unknown>
   turnEnd(turnId: string): Promise<unknown>
-  diff(turnId?: string): Promise<{ changes: unknown[] }>
+  /** WAL actor/turnId 审计标注免费提供该 turn 的改动清单。`changes` 条目形状为
+   * `{ gen, op, path?, from?, to? }`（对应 fs-core.worker.js opDiff() 的 `.map(...)`）。 */
+  diff(turnId?: string): Promise<{
+    turnId: string
+    changes: Array<{ gen: number; op: string; path?: string; from?: string; to?: string }>
+    cpId: string | undefined
+    auditWindow: { cap: number; sinceGen: number }
+  }>
 
-  read(path: string): Promise<{ content: string; rev?: number }>
-  ls(): Promise<{ paths: string[] }>
+  /** W4 纵深加固令牌门：特权方法，只应由内核在 boot 早期调用一次，把只有内核持有的随机令牌
+   * 交给 fs-core；此后 actor:'agent' 的写类 op 必须在 opts 里携带匹配的 agentToken
+   * （fs-core 侧强制，见 fs-core.worker.js checkTurn/armAgentToken）。 */
+  armAgentTokenGate(token: string): Promise<{ armed: boolean; idempotent?: boolean }>
+
+  read(path: string): Promise<{ content: string; rev?: number; gen: number }>
+  ls(): Promise<{ paths: string[]; gen: number }>
   status(): Promise<{
     mode: string
     appendedGen: number
