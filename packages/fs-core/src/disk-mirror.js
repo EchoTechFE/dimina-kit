@@ -11,13 +11,28 @@ export function createDiskMirror(fs) {
   let last = new Map() // path -> content（上次已镜像的内容）
   let timer = null
   let syncing = false
+  let pending = false // syncAll 运行期间又发生了变更，结束后需要再镜像一轮
 
-  async function pick() {
-    if (!window.showDirectoryPicker) throw new Error('showDirectoryPicker 不可用（需要 Chromium）')
-    dir = await window.showDirectoryPicker({ mode: 'readwrite' })
+  /** @param {FileSystemDirectoryHandle} [handle] 已获取授权的目录句柄；传了就直接用（跳过
+   * showDirectoryPicker 弹窗），调用方自行负责获取授权（例如复用宿主已有的句柄）。 */
+  async function pick(handle) {
+    if (handle) {
+      dir = handle
+    } else {
+      if (!window.showDirectoryPicker) throw new Error('showDirectoryPicker 不可用（需要 Chromium）')
+      dir = await window.showDirectoryPicker({ mode: 'readwrite' })
+    }
     last = new Map()
     const r = await syncAll()
     return { name: dir.name, ...r }
+  }
+
+  /** 停用镜像：取消挂起的防抖定时器，清空目录句柄与镜像记账，使后续任何 syncAll
+   * 调用（包括仍在飞行中的定时器回调）在入口处天然短路。 */
+  function dispose() {
+    clearTimeout(timer)
+    dir = null
+    last = new Map()
   }
 
   async function syncAll() {
@@ -53,14 +68,25 @@ export function createDiskMirror(fs) {
       return { written, removed, gen: snap.gen }
     } finally {
       syncing = false
+      if (pending && dir) {
+        pending = false
+        schedule()
+      }
     }
   }
 
   function schedule() {
     if (!dir) return
+    if (syncing) {
+      // 一轮 syncAll 正在进行中：这次变更不能被这轮同步捕获（快照已在读取途中），
+      // 也不能立刻并发再跑一轮（syncAll 自身会在入口处丢弃）。记一个 pending，
+      // 交给上面 syncAll 的 finally 在这轮结束后重新排期，保证不丢更新。
+      pending = true
+      return
+    }
     clearTimeout(timer)
     timer = setTimeout(() => { syncAll().catch(() => {}) }, 2000)
   }
 
-  return { pick, syncAll, schedule, get active() { return !!dir } }
+  return { pick, syncAll, schedule, dispose, get active() { return !!dir } }
 }
