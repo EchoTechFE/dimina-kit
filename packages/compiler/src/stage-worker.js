@@ -65,10 +65,10 @@ function freshFs(files, workPath) {
 // what keeps the CSS `[data-v-X]` selectors and the render `Module id` in agreement:
 // if each stage ran its own setupCompile it would roll its own random uuids and every
 // WXSS rule would target a selector that never renders (see scripts/test-pool-scopehash.js).
-async function runSetup(files, workPath) {
+async function runSetup(files, workPath, options) {
   const fs = freshFs(files, workPath)
   resetCompilerState()
-  const ctx = await setupCompile({ fs, workPath })
+  const ctx = await setupCompile({ fs, workPath, options })
   const map = collectOutputs({ fs, targetPath: ctx.targetPath })
   const scaffold = {}
   for (const k of Object.keys(map)) if (map[k] != null) scaffold[k] = map[k]
@@ -93,7 +93,11 @@ async function runSetup(files, workPath) {
 // cross-stage scope-hash mismatch. Stages read source from `workPath` and write
 // disjoint products; they never read the setup scaffold, so it is not seeded here.
 // Without a bundle the worker stays self-contained (single-worker / legacy callers).
-async function compileSubset(files, workPath, stages, bundle) {
+// `options` (e.g. { fileTypes }) is only used on the no-bundle fallback path: with a
+// bundle, its storeInfo already carries the normalized dialect from the coordinator's
+// setupCompile call (see runSetup below / pool.js's runAttempt), restored via
+// compileStage -> resetStoreInfo, so re-deriving it here would be redundant.
+async function compileSubset(files, workPath, stages, bundle, options) {
   const fs = freshFs(files, workPath)
   resetCompilerState()
   let appId, name, targetPath
@@ -103,7 +107,7 @@ async function compileSubset(files, workPath, stages, bundle) {
     }
     ;({ appId, name, targetPath } = bundle)
   } else {
-    const ctx = await setupCompile({ fs, workPath })
+    const ctx = await setupCompile({ fs, workPath, options })
     for (const stage of stages) {
       await compileStage({ stage, pages: ctx.pages, storeInfo: ctx.storeInfo, fs })
     }
@@ -150,21 +154,21 @@ self.onmessage = async (e) => {
       // Coordinator phase: one worker parses config, allocates the shared scope-hash
       // ids and builds miniprogram_npm once. setupCompile's npm build can invoke the
       // wasm toolchain, so ensure it's loaded regardless of this worker's own stage.
-      const { files, workPath = '/work', toolchainSetupURL } = e.data
+      const { files, workPath = '/work', options, toolchainSetupURL } = e.data
       if (toolchainSetupURL) toolchainURL = toolchainSetupURL
       await ensureToolchain()
       const t = performance.now()
-      const { bundle, scaffold } = await runSetup(files, workPath)
+      const { bundle, scaffold } = await runSetup(files, workPath, options)
       self.postMessage({ type: 'setup-done', bundle, scaffold, ms: Math.round(performance.now() - t) })
       return
     }
     if (type === 'compile-subset') {
-      const { files, workPath = '/work', stages = ['logic', 'view', 'style'], bundle, toolchainSetupURL } = e.data
+      const { files, workPath = '/work', stages = ['logic', 'view', 'style'], bundle, options, toolchainSetupURL } = e.data
       if (toolchainSetupURL) toolchainURL = toolchainSetupURL
       if (needsToolchain(stages)) await ensureToolchain()
       const warm = !!toolchainReady
       const t = performance.now()
-      const result = await compileSubset(files, workPath, stages, bundle)
+      const result = await compileSubset(files, workPath, stages, bundle, options)
       self.postMessage({ type: 'done', result, ms: Math.round(performance.now() - t), warm })
       return
     }

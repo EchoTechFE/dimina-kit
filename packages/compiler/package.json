@@ -1,6 +1,6 @@
 {
   "name": "@dimina-kit/compiler",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "dmcc compiler bundles (browser + node) that drive @dimina/compiler against a caller-injected node:fs replacement (no bundled fs)",
   "license": "MIT",
   "type": "module",
@@ -53,7 +53,8 @@
     "test:npm-scan": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-npm-scan.js",
     "test:stage-toolchain": "node scripts/build-compiler.js browser && node scripts/test-stage-toolchain.js",
     "test:stage-worker-message-order": "node scripts/build-compiler.js node && node scripts/test-stage-worker-message-order.js",
-    "test:stage-load-retry": "node scripts/build-compiler.js node && node scripts/test-stage-load-retry.js"
+    "test:stage-load-retry": "node scripts/build-compiler.js node && node scripts/test-stage-load-retry.js",
+    "test:pool-filetypes": "node scripts/build-compiler.js node && node scripts/build-compiler.js browser && node scripts/test-pool-filetypes.js"
   },
   "dependencies": {
     "@babel/parser": "^7.29.7",
