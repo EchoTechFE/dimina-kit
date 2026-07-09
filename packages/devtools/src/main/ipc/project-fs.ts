@@ -50,16 +50,23 @@ import type { Disposable } from '@dimina-kit/electron-deck/main'
 import { IpcRegistry } from '../utils/ipc-registry.js'
 import { validate } from '../utils/ipc-schema.js'
 import { ProjectFsChannel } from '../../shared/ipc-channels.js'
+import { WATCH_IGNORE_DIRS } from '@dimina-kit/devkit/watch-ignore'
 
 /** Cap for `listFiles` — huge monorepos would otherwise stall the renderer. */
 const LIST_FILE_LIMIT = 5000
 
 /** Dependency/VCS/build directories invisible to every project-tree consumer:
  * IPC `listFiles`, the `/__fs/readdir` bridge (so the workbench mirror and the
- * WAL ledger seed never walk into them), and the `/__fs/watch` change stream. */
+ * WAL ledger seed never walk into them), and the `/__fs/watch` change stream.
+ * Derived from devkit's `WATCH_IGNORE_DIRS` (the shared never-source core:
+ * node_modules + VCS) so the `node_modules` omission that once wedged
+ * `watcher.close()` can never drift back on this side, PLUS the editor mirror's
+ * own build-output names (`dist`/`build`/tool caches) — which the devkit
+ * recompile watcher deliberately does NOT ignore, since app.json may declare
+ * pages under such paths. */
 export const SKIP_DIRS: ReadonlySet<string> = new Set([
-  'node_modules', '.git', '.svn', '.hg', 'dist', 'build',
-  '.next', '.cache', '.turbo', '.parcel-cache', '.nuxt', '.output', '.vite',
+  ...WATCH_IGNORE_DIRS,
+  'dist', 'build', '.next', '.cache', '.turbo', '.parcel-cache', '.nuxt', '.output', '.vite',
 ])
 
 const PathArg = z.string().min(1)

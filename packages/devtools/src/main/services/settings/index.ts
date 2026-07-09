@@ -16,7 +16,13 @@ export interface WorkbenchSettings {
   }
   compile: {
     /** Watch project files and auto-recompile on change. */
-    watch: boolean
+    autoBuild: boolean
+  }
+  preview: {
+    /** Reload the simulator once a watcher-triggered rebuild lands. Independent
+     * of `compile.autoBuild`: "auto-compile on save, reload manually" is valid
+     * and preserves the running page stack / form state across a save. */
+    autoReload: boolean
   }
   theme: ThemeSource
   /**
@@ -38,7 +44,10 @@ const DEFAULTS: WorkbenchSettings = {
     port: 7789,
   },
   compile: {
-    watch: true,
+    autoBuild: true,
+  },
+  preview: {
+    autoReload: true,
   },
   theme: 'system',
   lastCreateBaseDir: null,
@@ -46,6 +55,14 @@ const DEFAULTS: WorkbenchSettings = {
 
 function getSettingsFile(): string {
   return path.join(app.getPath('userData'), 'dimina-workbench-settings.json')
+}
+
+/** Accept `value` only when it is a real boolean, else `fallback`. A bare `??`
+ * chain guards only null/undefined, so a hand-edited or corrupt config with a
+ * stringy `"false"` would pass through and read as truthy downstream — silently
+ * keeping a toggle ON when the user meant OFF. */
+function pickBool(value: unknown, fallback: boolean): boolean {
+  return typeof value === 'boolean' ? value : fallback
 }
 
 export function loadWorkbenchSettings(): WorkbenchSettings {
@@ -64,7 +81,16 @@ export function loadWorkbenchSettings(): WorkbenchSettings {
         port: data.mcp?.port ?? DEFAULTS.mcp.port,
       },
       compile: {
-        watch: data.compile?.watch ?? DEFAULTS.compile.watch,
+        // Legacy files persisted a single `compile.watch`; the new schema
+        // splits it into `compile.autoBuild` (recompile on save) and
+        // `preview.autoReload` (reload the simulator afterwards). Prefer the new
+        // key, fall back to the legacy one so an old settings file keeps its
+        // "auto-compile" choice; `preview.autoReload` defaults to true (the old
+        // always-reload behavior) when the file predates the split.
+        autoBuild: pickBool(data.compile?.autoBuild, pickBool(data.compile?.watch, DEFAULTS.compile.autoBuild)),
+      },
+      preview: {
+        autoReload: pickBool(data.preview?.autoReload, DEFAULTS.preview.autoReload),
       },
       theme,
       lastCreateBaseDir:
@@ -78,6 +104,7 @@ export function loadWorkbenchSettings(): WorkbenchSettings {
       cdp: { ...DEFAULTS.cdp },
       mcp: { ...DEFAULTS.mcp },
       compile: { ...DEFAULTS.compile },
+      preview: { ...DEFAULTS.preview },
     }
   }
 }

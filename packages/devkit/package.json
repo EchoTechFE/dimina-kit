@@ -33,6 +33,10 @@
         ".": {
             "types": "./dist/index.d.ts",
             "default": "./dist/index.js"
+        },
+        "./watch-ignore": {
+            "types": "./dist/watch-ignore.d.ts",
+            "default": "./dist/watch-ignore.js"
         }
     },
     "files": [

@@ -222,20 +222,20 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
     projectPath: string,
     sessionGeneration: number,
   ): Promise<{ session: ProjectSession } | { error: string }> {
-    const { compile } = loadWorkbenchSettings()
+    const { compile, preview } = loadWorkbenchSettings()
     try {
       const session = await ctx.adapter.openProject({
         projectPath,
         sourcemap: true,
         fileTypes: ctx.fileTypes,
-        watch: compile.watch,
+        // Two independent gates: autoBuild = recompile on save; autoReload = refresh the simulator afterwards (off ⇒ page/form state survives; hotReload below stays false so the native simulator, which has no SSE reload, isn't refreshed).
+        watch: compile.autoBuild,
+        autoReload: preview.autoReload,
         onRebuild: () => {
-          // getProjectPages never throws — failure yields the empty-pages
-          // shape. Empty means "read failed or degenerate project" (a valid
-          // app.json names ≥1 page) and is withheld so the renderer keeps its
-          // previous dropdown instead of blanking; the push is never blocked.
+          // getProjectPages never throws; empty pages (read failed / degenerate
+          // project) are withheld so the renderer keeps its previous dropdown.
           const { pages } = repo.getProjectPages(projectPath)
-          sendStatus('ready', '编译完成，已重启', true, pages.length ? pages : undefined)
+          sendStatus('ready', preview.autoReload ? '编译完成，已重启' : '编译完成', preview.autoReload, pages.length ? pages : undefined)
         },
         onBuildError: (err: unknown) => sendStatus('error', String(err)),
         // Watcher died mid-session (EMFILE, permission loss, …): non-fatal, so 'ready' stays but `watcher: 'dead'` flags that saves no longer auto-rebuild.

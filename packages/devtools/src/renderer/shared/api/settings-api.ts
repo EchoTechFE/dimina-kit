@@ -15,14 +15,25 @@ export interface McpSettings {
 }
 
 export interface CompileSettings {
-  watch: boolean
+  /** Watch project files and auto-recompile on change. */
+  autoBuild: boolean
+}
+
+export interface PreviewSettings {
+  /** Reload the simulator once a watcher-triggered rebuild lands. */
+  autoReload: boolean
 }
 
 export interface WorkbenchSettingsValue {
   cdp: CdpSettings
   mcp: McpSettings
   compile: CompileSettings
+  preview: PreviewSettings
   theme: ThemeSource
+  /** Required by the main-process save schema — kept on the renderer value so a
+   * `saveWorkbenchSettings({ ...settings })` before `getWorkbenchSettings()`
+   * backfills is not rejected for a missing field. Round-tripped untouched. */
+  lastCreateBaseDir: string | null
 }
 
 export interface CdpStatus {

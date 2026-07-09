@@ -47,6 +47,7 @@ await session.close()
 | `containerDir` | `string`                 | --      | H5 容器静态资源目录；不传则使用内置 `dimina-fe-container`                                    |
 | `outputDir`    | `string`                 | --      | 编译产物输出目录，默认 `<os.tmpdir()>/dimina-kit/<projectPath 哈希前 12 位>`（每个项目独立） |
 | `watch`        | `boolean`                | `true`  | 为 `false` 时跳过 chokidar 文件监听 / 自动重编译循环                                        |
+| `autoReload`   | `boolean`                | `true`  | 为 `false` 时，watch 重编译完成后**不**触发预览 live-reload（`onRebuild` 仍照常回调）——保留当前页面栈 / 表单状态，仅手动刷新。与 `watch` 独立 |
 | `onRebuild`    | `() => void`             | --      | 文件变更触发重新编译后的回调                                                                 |
 | `onBuildError` | `(err: unknown) => void` | --      | watch 重编译出错时的回调；**初次编译失败不走这里，而是直接 reject `openProject` 本身**（见下） |
 | `onLog`        | `(entry) => void`        | --      | 逐行编译日志回调；`entry = { stream: 'stdout' \| 'stderr', text }`，已经过内置噪音过滤（`filterDmccLogLine`） |
