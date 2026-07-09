@@ -62,13 +62,11 @@ class FakeDirHandle {
   /** Test helper: reads mirrored content at a '/'-joined path, or undefined if absent. */
   read(path: string): string | undefined {
     const parts = path.split('/')
-    let d: FakeDirHandle = this
-    for (const seg of parts.slice(0, -1)) {
-      const next = d.dirs.get(seg)
-      if (!next) return undefined
-      d = next
-    }
-    return d.fileHandles.get(parts[parts.length - 1] as string)?.content
+    const dir = parts.slice(0, -1).reduce<FakeDirHandle | undefined>(
+      (d, seg) => d?.dirs.get(seg),
+      this,
+    )
+    return dir?.fileHandles.get(parts[parts.length - 1] as string)?.content
   }
 }
 
