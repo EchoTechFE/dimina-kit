@@ -24,10 +24,10 @@ export default defineConfig({
         // files are not executable here at all. Their behavioral coverage
         // lives in the consumers' browser e2e suites (dimina-web-client's
         // fs/kernel batteries and the devtools Electron smoke).
-        'src/fs-core.worker.js',
-        'src/fs-query.worker.js',
-        'src/client.js',
-        'src/disk-mirror.js',
+        'src/fs-core.worker.ts',
+        'src/fs-query.worker.ts',
+        'src/client.ts',
+        'src/disk-mirror.ts',
       ],
     },
   },

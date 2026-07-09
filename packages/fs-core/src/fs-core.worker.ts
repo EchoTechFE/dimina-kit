@@ -15,6 +15,20 @@
  * ack 语义：已 ack 必恢复；未 ack 可能恢复 —— opId 幂等消歧。
  */
 
+/** FileSystemFileHandle.move() postdates this TS lib version's ambient types
+ * (feature-detected at the call site via `if (fh.move) …`, matching the
+ * runtime's own defensive check). */
+declare global {
+  interface FileSystemFileHandle {
+    move?(name: string): Promise<void>
+  }
+}
+
+interface WorkerError extends Error {
+  code?: string
+  extra?: Record<string, unknown>
+}
+
 const enc = new TextEncoder()
 const dec = new TextDecoder()
 
@@ -28,22 +42,22 @@ const CRC_TABLE = (() => {
   }
   return t
 })()
-function crc32(bytes, start = 0, end = bytes.length) {
+function crc32(bytes: Uint8Array, start = 0, end: number = bytes.length): number {
   let c = 0xffffffff
-  for (let i = start; i < end; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8)
+  for (let i = start; i < end; i++) c = CRC_TABLE[(c ^ bytes[i]!) & 0xff]! ^ (c >>> 8)
   return (c ^ 0xffffffff) >>> 0
 }
 
-async function sha256hex(bytes) {
-  const d = await crypto.subtle.digest('SHA-256', bytes)
+async function sha256hex(bytes: Uint8Array): Promise<string> {
+  const d = await crypto.subtle.digest('SHA-256', bytes as BufferSource)
   return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
 // ───────────────────────── 常量 ─────────────────────────
-const OP = { WRITE: 1, RM: 2, MV: 3, MKDIR: 4, CHECKPOINT: 5, RESTORE: 6 }
-const OP_NAME = { 1: 'write', 2: 'rm', 3: 'mv', 4: 'mkdir', 5: 'checkpoint', 6: 'restore' }
+const OP = { WRITE: 1, RM: 2, MV: 3, MKDIR: 4, CHECKPOINT: 5, RESTORE: 6 } as const
+const OP_NAME: Record<number, string> = { 1: 'write', 2: 'rm', 3: 'mv', 4: 'mkdir', 5: 'checkpoint', 6: 'restore' }
 // §4.7 restore 冲突检查只关心"写类"操作（改变文件内容/存在性），checkpoint 本身不算
-const WRITE_OPCODES = new Set([OP.WRITE, OP.RM, OP.MV, OP.RESTORE])
+const WRITE_OPCODES = new Set<number>([OP.WRITE, OP.RM, OP.MV, OP.RESTORE])
 const INLINE_MAX = 4096          // payload ≤4KB 内联进 WAL 记录
 const GROUP_WINDOW_MS = 50       // 人类写组提交窗口
 const SEGMENT_ROTATE_BYTES = 4 * 1024 * 1024
@@ -58,9 +72,16 @@ const SB_MAGIC = 0x44574331      // 'DWC1'
 const SLOT_SIZE = 64
 const DERIVED_PREFIXES = ['node_modules/', '.checkpoints/']
 
+interface SlotInfo {
+  epoch: number
+  compactGen: number
+  walStartGen: number
+  manifestCrc: number
+}
+
 // ───────────────────────── superblock 槽编解码 ─────────────────────────
 // 布局：magic u32 | epoch u32 | compactGen f64 | walStartGen f64 | manifestCrc u32 | pad→60 | crc32 u32
-function encodeSlot(s) {
+function encodeSlot(s: SlotInfo): Uint8Array {
   const buf = new ArrayBuffer(SLOT_SIZE)
   const dv = new DataView(buf)
   dv.setUint32(0, SB_MAGIC)
@@ -71,7 +92,7 @@ function encodeSlot(s) {
   dv.setUint32(60, crc32(new Uint8Array(buf, 0, 60)))
   return new Uint8Array(buf)
 }
-function decodeSlot(bytes) {
+function decodeSlot(bytes: Uint8Array): SlotInfo | null {
   if (bytes.length < SLOT_SIZE) return null
   const dv = new DataView(bytes.buffer, bytes.byteOffset, SLOT_SIZE)
   if (dv.getUint32(60) !== crc32(bytes, 0, 60)) return null
@@ -84,8 +105,15 @@ function decodeSlot(bytes) {
   }
 }
 
+interface WalRecord {
+  gen: number
+  epoch: number
+  opcode: number
+  meta: any
+}
+
 // ───────────────────────── WAL 记录编解码 ─────────────────────────
-function frameRecord(gen, epoch, opcode, meta) {
+function frameRecord(gen: number, epoch: number, opcode: number, meta: unknown): Uint8Array {
   const metaBytes = enc.encode(JSON.stringify(meta))
   const len = 8 + 4 + 1 + 2 + metaBytes.length + 4 + 1
   const buf = new ArrayBuffer(4 + len)
@@ -103,7 +131,7 @@ function frameRecord(gen, epoch, opcode, meta) {
   return u8
 }
 /** 解析一条记录；返回 {rec, next} 或 null（framing/CRC/commit 任一失败）。 */
-function parseRecord(u8, off) {
+function parseRecord(u8: Uint8Array, off: number): { rec: WalRecord; next: number } | null {
   if (off + 4 > u8.length) return null
   const dv = new DataView(u8.buffer, u8.byteOffset)
   const len = dv.getUint32(off)
@@ -123,10 +151,10 @@ function parseRecord(u8, off) {
 }
 
 // ───────────────────────── 路径监狱 ─────────────────────────
-function normalizePath(p) {
+function normalizePath(p: unknown): string | null {
   if (typeof p !== 'string' || !p || p.includes('\0') || p.includes('\\')) return null
   if (p.startsWith('/')) return null
-  const parts = []
+  const parts: string[] = []
   for (const seg of p.split('/')) {
     if (seg === '' || seg === '.') continue
     if (seg === '..') return null
@@ -135,55 +163,94 @@ function normalizePath(p) {
   return parts.length ? parts.join('/') : null
 }
 
+interface MirrorEntry {
+  content: string
+  rev: number
+}
+
+interface AuditEntry {
+  gen: number
+  opcode: number
+  actor?: string
+  turnId?: string
+  path?: string
+  from?: string
+  to?: string
+  cpId?: string
+}
+
+interface TurnState {
+  turnId: string
+  cpId: string
+  expiresAt: number
+  ops: number
+}
+
+interface WindowOp {
+  respond: (r: Record<string, unknown>) => void
+  gen: number
+  path?: string
+  actor?: string
+  opId?: string
+  extra?: Record<string, unknown>
+}
+
+type Respond = (r: Record<string, unknown>) => void
+
 // ───────────────────────── core 主体 ─────────────────────────
 class FsCore {
-  constructor() {
-    this.mode = 'starting'        // starting | writer | readonly | draining | dead
-    this.mirror = new Map()       // path -> {content, rev}
-    this.checkpoints = new Map()  // cpId -> blobHash(map JSON)
-    this.opIds = new Map()        // opId -> {gen}（LRU 窗口 OPID_WINDOW）
-    this.appendedGen = 0
-    this.walGen = 0
-    this.memGen = 0
-    this.ackGen = 0
-    this.compactGen = 0
-    this.epoch = 0
-    this.walStartGen = 1
-    this.staged = new Map()       // path -> {content,rev} | null（窗口内已 append 未 flush）
-    this.windowOps = []           // [{respond, gen, path, actor}]
-    this.flushTimer = null
-    this.chain = Promise.resolve()
-    this.clientPort = null
-    this.queryPort = null
-    this.releaseLock = null
-    this.walHandle = null
-    this.walOffset = 0
-    this.sbHandle = null
-    this.currentSlot = 0
-    this.turn = null              // {turnId, cpId, expiresAt, ops} —— 内存态：worker 重启即失效（安全默认）
-    this.auditLog = []            // [{gen, opcode, actor, turnId, path, from, to, cpId}] 环形
-    // W4 纵深加固令牌门（docs/k3-terminal-split-plan.md §6 替代方案 A / §8.3）：只有内核持有的
-    // 随机令牌，一次性置位（armAgentToken）。null = 未 arm（门不生效，checkTurn 不额外校验）——
-    // 保证不起内核的裸 fs 场景（fs 域单测/工具，如 test:fs-smoke/test:fs-wal 直连 client）零回归。
-    // 同 worker 重启即失效（内存态，不落 WAL/持久层），与 this.turn 同一安全默认。
-    this.agentToken = null
-  }
+  mode: 'starting' | 'writer' | 'readonly' | 'draining' | 'dead' = 'starting'
+  mirror = new Map<string, MirrorEntry>()
+  checkpoints = new Map<string, { h: string; gen: number }>()
+  opIds = new Map<string, { gen: number }>()
+  appendedGen = 0
+  walGen = 0
+  memGen = 0
+  ackGen = 0
+  compactGen = 0
+  epoch = 0
+  walStartGen = 1
+  staged = new Map<string, MirrorEntry | null>()
+  windowOps: WindowOp[] = []
+  flushTimer: ReturnType<typeof setTimeout> | null = null
+  chain: Promise<unknown> = Promise.resolve()
+  clientPort: { postMessage: (msg: unknown) => void } | null = null
+  queryPort: MessagePort | null = null
+  releaseLock: (() => void) | null = null
+  walHandle: FileSystemSyncAccessHandle | null = null
+  walOffset = 0
+  sbHandle: FileSystemSyncAccessHandle | null = null
+  currentSlot = 0
+  turn: TurnState | null = null // {turnId, cpId, expiresAt, ops} —— 内存态：worker 重启即失效（安全默认）
+  auditLog: AuditEntry[] = [] // [{gen, opcode, actor, turnId, path, from, to, cpId}] 环形
+  // W4 纵深加固令牌门（docs/k3-terminal-split-plan.md §6 替代方案 A / §8.3）：只有内核持有的
+  // 随机令牌，一次性置位（armAgentToken）。null = 未 arm（门不生效，checkTurn 不额外校验）——
+  // 保证不起内核的裸 fs 场景（fs 域单测/工具，如 test:fs-smoke/test:fs-wal 直连 client）零回归。
+  // 同 worker 重启即失效（内存态，不落 WAL/持久层），与 this.turn 同一安全默认。
+  agentToken: string | null = null
+
+  projectId!: string
+  root!: FileSystemDirectoryHandle
+  bc!: BroadcastChannel
+  lastSegStart!: number
+  lastSegValidEnd!: number
+  manifestCrc!: number
 
   // ── 启动：锁 → 恢复 → 打开写句柄 → 全量同步 query ──
-  async start(projectId) {
+  async start(projectId: string): Promise<void> {
     this.projectId = projectId
     this.root = await (await navigator.storage.getDirectory()).getDirectoryHandle(projectId, { create: true })
     this.bc = new BroadcastChannel('dwc:' + projectId)
     this.bc.onmessage = (e) => this.onBroadcast(e.data)
 
     // 排队等锁；3s 拿不到先以只读服务，granted 后升级。禁止 steal。
-    const granted = new Promise((resolve) => {
+    const granted = new Promise<Lock | null>((resolve) => {
       navigator.locks.request('dwc:writer:' + projectId, { mode: 'exclusive' }, (lock) => {
         resolve(lock)
-        return new Promise((release) => { this.releaseLock = release })
+        return new Promise<void>((release) => { this.releaseLock = release })
       }).catch(() => resolve(null))
     })
-    const winner = await Promise.race([granted, new Promise((r) => setTimeout(() => r('timeout'), 3000))])
+    const winner = await Promise.race([granted, new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), 3000))])
     if (winner === 'timeout') {
       await this.recover()
       this.mode = 'readonly'
@@ -199,7 +266,7 @@ class FsCore {
     this.welcome()
   }
 
-  async becomeWriter() {
+  async becomeWriter(): Promise<void> {
     await this.recover() // 旧写者可能刚交出——以盘上状态为准重建
     // epoch 递增写入候选槽（防御性护栏：记录归属可判别）
     this.sbHandle = await (await this.root.getFileHandle('superblock', { create: true })).createSyncAccessHandle()
@@ -216,20 +283,20 @@ class FsCore {
     if (this.walOffset > SEGMENT_ROTATE_BYTES) this.enqueue(() => this.compactNow())
   }
 
-  writeSuperblock() {
+  writeSuperblock(): void {
     const cand = 1 - this.currentSlot
     const bytes = encodeSlot({ epoch: this.epoch, compactGen: this.compactGen, walStartGen: this.walStartGen, manifestCrc: this.manifestCrc || 0 })
-    const n = this.sbHandle.write(bytes, { at: cand * SLOT_SIZE })
+    const n = this.sbHandle!.write(bytes, { at: cand * SLOT_SIZE })
     if (n !== SLOT_SIZE) throw new Error('superblock partial write: ' + n)
-    this.sbHandle.flush()
+    this.sbHandle!.flush()
     this.currentSlot = cand
   }
 
   // ── 恢复：superblock 选槽 → manifest → 顺序回放 WAL 段（完整前缀截断） ──
-  async recover() {
+  async recover(): Promise<void> {
     this.mirror.clear(); this.checkpoints.clear(); this.opIds.clear()
     this.auditLog = []; this.turn = null
-    let sb = null
+    let sb: SlotInfo | null = null
     try {
       const f = await (await this.root.getFileHandle('superblock')).getFile()
       const u8 = new Uint8Array(await f.arrayBuffer())
@@ -254,25 +321,25 @@ class FsCore {
       const bytes = new Uint8Array(await f.arrayBuffer())
       if (crc32(bytes) !== this.manifestCrc) throw new Error('manifest CRC mismatch (gen ' + this.compactGen + ')')
       const m = JSON.parse(dec.decode(bytes))
-      for (const [path, ent] of Object.entries(m.files)) {
+      for (const [path, ent] of Object.entries(m.files) as Array<[string, { h: string; rev: number }]>) {
         this.mirror.set(path, { content: await this.readBlob(ent.h), rev: ent.rev })
       }
-      for (const [cpId, entry] of Object.entries(m.checkpoints || {})) this.checkpoints.set(cpId, entry)
+      for (const [cpId, entry] of Object.entries(m.checkpoints || {}) as Array<[string, { h: string; gen: number }]>) this.checkpoints.set(cpId, entry)
       gen = m.gen
     }
 
     // 列出 ≥ walStartGen 的段，按 startGen 升序回放；段边界优先于段内垃圾尾
-    const segs = []
+    const segs: number[] = []
     for await (const [name] of this.root.entries()) {
       const m = /^wal\.(\d+)$/.exec(name)
-      if (m && +m[1] >= this.walStartGen) segs.push(+m[1])
+      if (m && +m[1]! >= this.walStartGen) segs.push(+m[1]!)
     }
     segs.sort((a, b) => a - b)
-    this.lastSegStart = segs.length ? segs[segs.length - 1] : this.walStartGen
+    this.lastSegStart = segs.length ? segs[segs.length - 1]! : this.walStartGen
     this.lastSegValidEnd = 0
-    const replayed = []
+    const replayed: WalRecord[] = []
     for (let i = 0; i < segs.length; i++) {
-      const stopBefore = i + 1 < segs.length ? segs[i + 1] : Infinity
+      const stopBefore = i + 1 < segs.length ? segs[i + 1]! : Infinity
       const f = await (await this.root.getFileHandle('wal.' + segs[i])).getFile()
       const u8 = new Uint8Array(await f.arrayBuffer())
       let off = 0
@@ -300,11 +367,11 @@ class FsCore {
     }
   }
 
-  epochFloor(replayed) {
-    return replayed.length ? replayed[replayed.length - 1].epoch : 0 // epoch 单调不减
+  epochFloor(replayed: WalRecord[]): number {
+    return replayed.length ? replayed[replayed.length - 1]!.epoch : 0 // epoch 单调不减
   }
 
-  async applyRecord(r) {
+  async applyRecord(r: WalRecord): Promise<void> {
     const m = r.meta
     switch (r.opcode) {
       case OP.WRITE: {
@@ -321,8 +388,8 @@ class FsCore {
       case OP.MKDIR: break // 目录隐式；记录仅为审计
       case OP.CHECKPOINT: this.checkpoints.set(m.cpId, { h: m.h, gen: r.gen }); break
       case OP.RESTORE: {
-        const map = JSON.parse(await this.readBlob(m.h))
-        const next = new Map()
+        const map = JSON.parse(await this.readBlob(m.h)) as Record<string, string>
+        const next = new Map<string, MirrorEntry>()
         for (const [path, h] of Object.entries(map)) next.set(path, { content: await this.readBlob(h), rev: r.gen })
         this.mirror = next
         break
@@ -331,7 +398,7 @@ class FsCore {
   }
 
   // ── blob 存取 ──
-  async ensureBlob(content) {
+  async ensureBlob(content: string): Promise<string> {
     const bytes = enc.encode(content)
     const h = await sha256hex(bytes)
     const d2 = await (await this.root.getDirectoryHandle('blobs', { create: true })).getDirectoryHandle(h.slice(0, 2), { create: true })
@@ -341,34 +408,34 @@ class FsCore {
     sh.write(bytes); sh.flush(); sh.close()
     return h
   }
-  async readBlob(h) {
+  async readBlob(h: string): Promise<string> {
     const f = await (await (await (await this.root.getDirectoryHandle('blobs')).getDirectoryHandle(h.slice(0, 2))).getFileHandle(h)).getFile()
     return f.text()
   }
 
   // ── 写路径 ──
-  enqueue(fn) {
-    const run = this.chain.then(fn)
+  enqueue<T>(fn: () => T | Promise<T>): Promise<T> {
+    const run = this.chain.then(fn) as Promise<T>
     this.chain = run.catch(() => {}) // 链条不断；错误在 fn 内部转为 RPC error
     return run
   }
 
   /** 校验+成帧+append —— 同一同步块，无让出点（能力/CAS/turn 二次校验就在这里）。 */
-  appendSync(opcode, meta, checks) {
+  appendSync(opcode: number, meta: Record<string, unknown>, checks?: () => void): number {
     if (this.mode !== 'writer') throw rpcErr('readonly', 'fs-core is ' + this.mode)
     if (checks) checks()
     if (this.walOffset > SEGMENT_ROTATE_BYTES) throw rpcErr('rotate-needed', 'internal') // 上游先 rotate
     const gen = this.appendedGen + 1
     const frame = frameRecord(gen, this.epoch, opcode, meta)
-    const n = this.walHandle.write(frame, { at: this.walOffset })
+    const n = this.walHandle!.write(frame, { at: this.walOffset })
     if (n !== frame.length) throw new Error('WAL partial write')
     this.walOffset += frame.length
     this.appendedGen = gen
-    this.audit({ gen, opcode, actor: meta.actor, turnId: meta.turnId, path: meta.path, from: meta.from, to: meta.to, cpId: meta.cpId })
+    this.audit({ gen, opcode, actor: meta.actor as string | undefined, turnId: meta.turnId as string | undefined, path: meta.path as string | undefined, from: meta.from as string | undefined, to: meta.to as string | undefined, cpId: meta.cpId as string | undefined })
     return gen
   }
 
-  audit(entry) {
+  audit(entry: AuditEntry): void {
     this.auditLog.push(entry)
     if (this.auditLog.length > AUDIT_CAP) this.auditLog.splice(0, this.auditLog.length - AUDIT_CAP)
   }
@@ -382,7 +449,7 @@ class FsCore {
    * 校验顺序刻意放在 turn 有效性判定之后：turnId 完全不匹配/已过期的旧行为（'turn-closed'）
    * 保持不变（fs 域既有 e2e 的等价断言不回归），令牌门只在"turn 确实活跃且 turnId 匹配"这一步
    * 追加第二道拒绝，精确对应 blocker #6 的伪造场景。 */
-  checkTurn(actor, turnId, agentToken) {
+  checkTurn(actor: string | undefined, turnId: string | undefined, agentToken: string | undefined): void {
     if (actor !== 'agent') return
     const t = this.turn
     if (!t || t.turnId !== turnId) throw rpcErr('turn-closed', 'agent write requires an active turn (got ' + turnId + ')')
@@ -395,7 +462,7 @@ class FsCore {
 
   /** 令牌门铸造：一次性置位，已置位后收到不同令牌一律拒绝（防篡改，攻击者二次 arm 顶不掉内核
    * 铸造的原令牌）；同令牌重放幂等 ok（kernel 重连/重试安全）。错误信息不回显任何令牌值。 */
-  armAgentToken(token) {
+  armAgentToken(token: unknown): { armed: boolean; idempotent?: boolean } {
     if (typeof token !== 'string' || !token) throw rpcErr('bad-args', 'agent token must be a non-empty string')
     if (this.agentToken === null) { this.agentToken = token; return { armed: true } }
     if (this.agentToken === token) return { armed: true, idempotent: true }
@@ -405,13 +472,13 @@ class FsCore {
   /** §4.7 restore 冲突执法：非 force 时在 appendSync 同步块内调用，无让出点。
    * auditLog 是容量 AUDIT_CAP 的环——若其最老条目已晚于 baseGen+1，说明 (baseGen, 最老审计]
    * 区间的历史已被丢弃（compaction 或环覆盖），无法证明期间没有人类写，一律保守拒绝。 */
-  checkRestoreConflict(baseGen) {
-    const oldestGen = this.auditLog.length ? this.auditLog[0].gen : this.appendedGen + 1
+  checkRestoreConflict(baseGen: number): void {
+    const oldestGen = this.auditLog.length ? this.auditLog[0]!.gen : this.appendedGen + 1
     if (oldestGen > baseGen + 1) {
       throw rpcErr('restore-conflict', 'audit log does not cover baseGen ' + baseGen, { humanPaths: [], auditGap: true })
     }
-    const humanPaths = []
-    const seen = new Set()
+    const humanPaths: string[] = []
+    const seen = new Set<string>()
     for (const e of this.auditLog) {
       if (e.gen <= baseGen || e.actor !== 'human' || !WRITE_OPCODES.has(e.opcode)) continue
       const p = e.opcode === OP.MV ? (e.to || e.from) : e.opcode === OP.RESTORE ? '(restore:' + e.cpId + ')' : e.path
@@ -420,9 +487,9 @@ class FsCore {
     if (humanPaths.length) throw rpcErr('restore-conflict', 'human edits since baseGen ' + baseGen, { humanPaths })
   }
 
-  curOf(path) { return this.staged.has(path) ? this.staged.get(path) : this.mirror.get(path) || null }
+  curOf(path: string): MirrorEntry | null { return this.staged.has(path) ? this.staged.get(path) ?? null : this.mirror.get(path) || null }
 
-  checkWrite(path, ifMatch, actor) {
+  checkWrite(path: unknown, ifMatch: unknown, _actor: string | undefined): string {
     const norm = normalizePath(path)
     if (!norm) throw rpcErr('bad-path', 'invalid path: ' + path)
     for (const p of DERIVED_PREFIXES) if (norm.startsWith(p)) throw rpcErr('derived-readonly', norm + ' is derived area')
@@ -437,12 +504,12 @@ class FsCore {
 
   /** 段超阈值 → 影子 compaction（物化 manifest + 新段 + superblock 翻转），
    * 而不是裸换段：WAL 长度被真正回收，重放成本有上界（P1 compaction 上线）。 */
-  async rotateIfNeeded() {
+  async rotateIfNeeded(): Promise<void> {
     if (this.walOffset <= SEGMENT_ROTATE_BYTES) return
     await this.compactNow()
   }
 
-  async newSegment(startGen) {
+  async newSegment(startGen: number): Promise<void> {
     const name = 'wal.' + startGen
     const fh = await this.root.getFileHandle(name + '.tmp', { create: true })
     const sh = await fh.createSyncAccessHandle()
@@ -454,12 +521,12 @@ class FsCore {
   }
 
   /** 组提交边界：flush WAL → 应用 staged → 推 diff → ack → 事件。 */
-  flushWindow() {
+  flushWindow(): void {
     if (this.flushTimer) { clearTimeout(this.flushTimer); this.flushTimer = null }
     if (!this.windowOps.length) return
-    this.walHandle.flush()
+    this.walHandle!.flush()
     this.walGen = this.appendedGen
-    const diff = {}
+    const diff: Record<string, MirrorEntry | null> = {}
     for (const [path, ent] of this.staged) {
       if (ent === null) this.mirror.delete(path)
       else this.mirror.set(path, ent)
@@ -468,7 +535,7 @@ class FsCore {
     this.staged.clear()
     this.memGen = this.walGen
     this.pushDiff(diff, this.memGen)
-    const paths = []
+    const paths: string[] = []
     let actor = 'human'
     for (const w of this.windowOps) {
       this.ackGen = Math.max(this.ackGen, w.gen)
@@ -482,18 +549,18 @@ class FsCore {
     this.bc.postMessage({ type: 'fs-change', gen: this.memGen })
   }
 
-  rememberOpId(opId, v) {
+  rememberOpId(opId: string, v: { gen: number }): void {
     this.opIds.set(opId, v)
-    if (this.opIds.size > OPID_WINDOW) this.opIds.delete(this.opIds.keys().next().value)
+    if (this.opIds.size > OPID_WINDOW) this.opIds.delete(this.opIds.keys().next().value!)
   }
 
-  scheduleFlush(immediate) {
+  scheduleFlush(immediate?: boolean): void {
     if (immediate) { this.flushWindow(); return }
     if (!this.flushTimer) this.flushTimer = setTimeout(() => this.enqueue(() => this.flushWindow()), GROUP_WINDOW_MS)
   }
 
   // ── RPC 实现 ──
-  async opWrite({ path, content, ifMatch, actor = 'human', turnId, agentToken, opId }, respond) {
+  async opWrite({ path, content, ifMatch, actor = 'human', turnId, agentToken, opId }: { path: string; content: unknown; ifMatch?: number | null; actor?: string; turnId?: string; agentToken?: string; opId?: string }, respond: Respond): Promise<void> {
     if (typeof content !== 'string') throw rpcErr('bad-args', 'content must be string')
     await this.rotateIfNeeded()
     const payload = enc.encode(content).length <= INLINE_MAX ? { inline: content } : { h: await this.ensureBlob(content) }
@@ -501,14 +568,13 @@ class FsCore {
     // agentToken 只用于 checkTurn 校验，绝不进 meta（meta 落 WAL，持久且经 fs_diff/审计环可读——
     // 令牌绝不可持久化或经任何读路径回显）。
     const meta = { opId, path: norm, actor, turnId, ifMatch, payload }
-    let gen
-    gen = this.appendSync(OP.WRITE, meta, () => { this.checkTurn(actor, turnId, agentToken); return this.checkWrite(path, ifMatch, actor) })
-    this.staged.set(norm, { content, rev: gen })
-    this.windowOps.push({ respond, gen, path: norm, actor, opId })
+    const gen = this.appendSync(OP.WRITE, meta, () => { this.checkTurn(actor, turnId, agentToken); this.checkWrite(path, ifMatch, actor) })
+    this.staged.set(norm!, { content, rev: gen })
+    this.windowOps.push({ respond, gen, path: norm!, actor, opId })
     this.scheduleFlush(actor === 'agent')
   }
 
-  async opEdit({ path, old, next, ifMatch, actor = 'human', turnId, agentToken, opId }, respond) {
+  async opEdit({ path, old, next, ifMatch, actor = 'human', turnId, agentToken, opId }: { path: string; old: string; next: string; ifMatch?: number; actor?: string; turnId?: string; agentToken?: string; opId?: string }, respond: Respond): Promise<void> {
     const norm = normalizePath(path)
     const cur = norm && this.curOf(norm)
     if (!cur) throw rpcErr('not-found', String(path))
@@ -519,30 +585,28 @@ class FsCore {
     return this.opWrite({ path, content, ifMatch: ifMatch !== undefined ? ifMatch : cur.rev, actor, turnId, agentToken, opId }, respond)
   }
 
-  async opRm({ path, actor = 'human', turnId, agentToken, opId }, respond) {
+  async opRm({ path, actor = 'human', turnId, agentToken, opId }: { path: string; actor?: string; turnId?: string; agentToken?: string; opId?: string }, respond: Respond): Promise<void> {
     await this.rotateIfNeeded()
-    let gen
-    gen = this.appendSync(OP.RM, { opId, path: normalizePath(path), actor, turnId }, () => {
+    const gen = this.appendSync(OP.RM, { opId, path: normalizePath(path), actor, turnId }, () => {
       this.checkTurn(actor, turnId, agentToken)
       const norm = this.checkWrite(path, undefined, actor)
       if (!this.curOf(norm)) throw rpcErr('not-found', norm)
     })
-    this.staged.set(normalizePath(path), null)
-    this.windowOps.push({ respond, gen, path: normalizePath(path), actor, opId })
+    this.staged.set(normalizePath(path)!, null)
+    this.windowOps.push({ respond, gen, path: normalizePath(path)!, actor, opId })
     this.scheduleFlush(true)
   }
 
-  async opMv({ from, to, actor = 'human', turnId, agentToken, opId }, respond) {
+  async opMv({ from, to, actor = 'human', turnId, agentToken, opId }: { from: string; to: string; actor?: string; turnId?: string; agentToken?: string; opId?: string }, respond: Respond): Promise<void> {
     await this.rotateIfNeeded()
-    const nf = normalizePath(from); const nt = normalizePath(to)
-    let gen
-    gen = this.appendSync(OP.MV, { opId, from: nf, to: nt, actor, turnId }, () => {
+    const nf = normalizePath(from)!; const nt = normalizePath(to)!
+    const gen = this.appendSync(OP.MV, { opId, from: nf, to: nt, actor, turnId }, () => {
       this.checkTurn(actor, turnId, agentToken)
       this.checkWrite(from, undefined, actor); this.checkWrite(to, undefined, actor)
       if (!this.curOf(nf)) throw rpcErr('not-found', nf)
       if (this.curOf(nt)) throw rpcErr('cas-mismatch', nt + ' exists')
     })
-    const e = this.curOf(nf)
+    const e = this.curOf(nf)!
     this.staged.set(nf, null)
     this.staged.set(nt, { content: e.content, rev: gen })
     this.windowOps.push({ respond, gen, path: nt, actor, opId })
@@ -550,10 +614,10 @@ class FsCore {
   }
 
   /** checkpoint 物化（干净边界 + blob 去重近乎免费）。调用方须在 enqueue 串行链内。 */
-  async makeCheckpoint({ opId, actor, turnId }) {
+  async makeCheckpoint({ opId, actor, turnId }: { opId?: string; actor?: string; turnId?: string }): Promise<{ cpId: string; gen: number }> {
     this.flushWindow() // checkpoint 基于干净边界
     await this.rotateIfNeeded()
-    const map = {}
+    const map: Record<string, string> = {}
     for (const [path, ent] of this.mirror) map[path] = await this.ensureBlob(ent.content)
     const h = await this.ensureBlob(JSON.stringify(map))
     const cpId = 'cp-' + (this.appendedGen + 1)
@@ -566,13 +630,13 @@ class FsCore {
   }
 
   /** P5 LRU：Map 按插入序，裁掉最老的（活跃 turn 的锚点必然在最近 N 个内）。 */
-  trimCheckpoints() {
+  trimCheckpoints(): void {
     while (this.checkpoints.size > CHECKPOINT_KEEP) {
-      this.checkpoints.delete(this.checkpoints.keys().next().value)
+      this.checkpoints.delete(this.checkpoints.keys().next().value!)
     }
   }
 
-  async opCheckpoint({ actor = 'human', turnId, agentToken, opId }, respond) {
+  async opCheckpoint({ actor = 'human', turnId, agentToken, opId }: { actor?: string; turnId?: string; agentToken?: string; opId?: string }, respond: Respond): Promise<void> {
     // actor:'agent' 的 checkpoint 同其余写类 op 一样受 turn 执法（否则 turn 外可伪造 agent
     // checkpoint 审计记录）。opTurnBegin 铸造自己的锚点时直调 makeCheckpoint，不经这里。
     this.checkTurn(actor, turnId, agentToken)
@@ -582,7 +646,7 @@ class FsCore {
   }
 
   // ── P4 turn 能力：铸造（checkpoint 锚 + 激活）→ 执法（checkTurn）→ 撤销 ──
-  async opTurnBegin({ turnId, ttlMs, opId }, respond) {
+  async opTurnBegin({ turnId, ttlMs, opId }: { turnId: string; ttlMs?: number; opId?: string }, respond: Respond): Promise<void> {
     if (!turnId || typeof turnId !== 'string') throw rpcErr('bad-args', 'turnId required')
     if (this.turn && Date.now() <= this.turn.expiresAt) {
       throw rpcErr('turn-active', 'a turn is already active: ' + this.turn.turnId)
@@ -595,44 +659,44 @@ class FsCore {
     this.scheduleFlush(true)
   }
 
-  opTurnEnd({ turnId }, respond) {
+  opTurnEnd({ turnId }: { turnId: string }, respond: Respond): void {
     const active = !!(this.turn && this.turn.turnId === turnId)
-    const ops = active ? this.turn.ops : 0
+    const ops = active ? this.turn!.ops : 0
     if (active) this.turn = null // 单线程同步置位：撤销即刻生效，无竞态窗口
     respond({ ok: true, result: { turnId, closed: active, ops } })
   }
 
   /** fs_diff：内存审计环里该 turn 的全部改动（WAL actor/turnId 标注免费提供）。 */
-  opDiff({ turnId }) {
+  opDiff({ turnId }: { turnId?: string }): { turnId: string | undefined; changes: Array<{ gen: number; op: string; path?: string; from?: string; to?: string }>; cpId: string | undefined; auditWindow: { cap: number; sinceGen: number } } {
     const changes = this.auditLog
       .filter((e) => e.turnId === turnId && e.opcode !== OP.CHECKPOINT)
-      .map((e) => ({ gen: e.gen, op: OP_NAME[e.opcode], path: e.path, from: e.from, to: e.to }))
+      .map((e) => ({ gen: e.gen, op: OP_NAME[e.opcode]!, path: e.path, from: e.from, to: e.to }))
     const cpId = this.turn && this.turn.turnId === turnId ? this.turn.cpId
       : (this.auditLog.find((e) => e.turnId === turnId && e.opcode === OP.CHECKPOINT) || {}).cpId
-    return { turnId, changes, cpId, auditWindow: { cap: AUDIT_CAP, sinceGen: this.auditLog.length ? this.auditLog[0].gen : this.memGen } }
+    return { turnId, changes, cpId, auditWindow: { cap: AUDIT_CAP, sinceGen: this.auditLog.length ? this.auditLog[0]!.gen : this.memGen } }
   }
 
   /** §4.7 restore 冲突策略：payload 支持 {cpId, baseGen?, force?}。baseGen 缺省时
    * 从 checkpoint 自身记录的 gen 推导（checkpoint 创建时已存 {h, gen}）。非 force 时在
    * appendSync 同步块内做冲突检查（见 checkRestoreConflict）；force:true 全部跳过。
    * turn 执法（checkTurn）不受 force 影响——agent 场景仍必须在活跃 turn 内。 */
-  async opRestore({ cpId, baseGen, force = false, actor = 'human', turnId, agentToken, opId }, respond) {
+  async opRestore({ cpId, baseGen, force = false, actor = 'human', turnId, agentToken, opId }: { cpId: string; baseGen?: number; force?: boolean; actor?: string; turnId?: string; agentToken?: string; opId?: string }, respond: Respond): Promise<void> {
     this.flushWindow()
     await this.rotateIfNeeded()
     const entry = this.checkpoints.get(cpId)
     if (!entry) throw rpcErr('not-found', 'checkpoint ' + cpId)
     const effectiveBaseGen = typeof baseGen === 'number' ? baseGen : entry.gen
-    const map = JSON.parse(await this.readBlob(entry.h))
-    const files = {}
+    const map = JSON.parse(await this.readBlob(entry.h)) as Record<string, string>
+    const files: Record<string, string> = {}
     for (const [path, bh] of Object.entries(map)) files[path] = await this.readBlob(bh)
     const gen = this.appendSync(OP.RESTORE, { opId, cpId, h: entry.h, actor, turnId }, () => {
       this.checkTurn(actor, turnId, agentToken)
       if (this.mode === 'draining') throw rpcErr('draining', 'handing over')
       if (!force) this.checkRestoreConflict(effectiveBaseGen)
     })
-    this.walHandle.flush()
+    this.walHandle!.flush()
     this.walGen = gen
-    const next = new Map()
+    const next = new Map<string, MirrorEntry>()
     for (const [path, content] of Object.entries(files)) next.set(path, { content, rev: gen })
     this.mirror = next
     this.memGen = this.walGen
@@ -645,29 +709,29 @@ class FsCore {
   }
 
   // 影子 compaction：新 blob → manifest → 新段(.tmp→rename) → superblock 翻转 → GC
-  async opCompact(_args, respond) {
+  async opCompact(_args: unknown, respond: Respond): Promise<void> {
     const r = await this.compactNow()
     respond({ ok: true, result: r })
   }
 
   /** 必须在 enqueue 串行链内调用（写路径 rotateIfNeeded / 手动 compact RPC / 启动补偿）。 */
-  async compactNow() {
+  async compactNow(): Promise<{ gen: number; skipped?: boolean }> {
     this.flushWindow()
     const G = this.memGen
     if (G === this.compactGen) return { gen: G, skipped: true }
-    const files = {}
+    const files: Record<string, { h: string; rev: number }> = {}
     for (const [path, ent] of this.mirror) files[path] = { h: await this.ensureBlob(ent.content), rev: ent.rev }
     const checkpoints = Object.fromEntries(this.checkpoints)
     const manifestBytes = enc.encode(JSON.stringify({ gen: G, epoch: this.epoch, files, checkpoints }))
     const mDir = await this.root.getDirectoryHandle('manifests', { create: true })
     const mh = await (await mDir.getFileHandle(G + '.json', { create: true })).createSyncAccessHandle()
     mh.write(manifestBytes); mh.flush(); mh.close()
-    const oldSegs = []
+    const oldSegs: number[] = []
     for await (const [name] of this.root.entries()) {
       const m = /^wal\.(\d+)$/.exec(name)
-      if (m) oldSegs.push(+m[1])
+      if (m) oldSegs.push(+m[1]!)
     }
-    this.walHandle.close()
+    this.walHandle!.close()
     await this.newSegment(G + 1)
     this.lastSegStart = G + 1
     this.manifestCrc = crc32(manifestBytes)
@@ -676,17 +740,18 @@ class FsCore {
     this.writeSuperblock() // 原子翻转点：此后恢复走新 manifest+新段
     // GC：旧段 + 无引用 blob（引用 = manifest files ∪ checkpoint map 及其内部 hash）
     for (const s of oldSegs) { try { await this.root.removeEntry('wal.' + s) } catch {} }
-    const referenced = new Set(Object.values(files).map((f) => f.h))
+    const referenced = new Set<string>(Object.values(files).map((f) => f.h))
     for (const entry of this.checkpoints.values()) {
       referenced.add(entry.h)
-      try { for (const bh of Object.values(JSON.parse(await this.readBlob(entry.h)))) referenced.add(bh) } catch {}
+      try { for (const bh of Object.values(JSON.parse(await this.readBlob(entry.h)) as Record<string, string>)) referenced.add(bh) } catch {}
     }
     try {
       const blobs = await this.root.getDirectoryHandle('blobs')
       for await (const [d2name, d2] of blobs.entries()) {
+        void d2name
         if (d2.kind !== 'directory') continue
-        for await (const [name] of d2.entries()) {
-          if (!referenced.has(name)) { try { await d2.removeEntry(name) } catch {} }
+        for await (const [name] of (d2 as FileSystemDirectoryHandle).entries()) {
+          if (!referenced.has(name)) { try { await (d2 as FileSystemDirectoryHandle).removeEntry(name) } catch {} }
         }
       }
     } catch {}
@@ -700,13 +765,13 @@ class FsCore {
   }
 
   // ── 读类 ──
-  opRead({ path }) {
+  opRead({ path }: { path: string }): { content: string; rev: number; gen: number } {
     const norm = normalizePath(path)
     const e = norm && this.mirror.get(norm)
     if (!e) throw rpcErr('not-found', String(path))
     return { content: e.content, rev: e.rev, gen: this.memGen } // P0：镜像在内存，64KB 路由约束成为空转（见 §2.1）
   }
-  opLs() { return { paths: [...this.mirror.keys()].sort(), gen: this.memGen } }
+  opLs(): { paths: string[]; gen: number } { return { paths: [...this.mirror.keys()].sort(), gen: this.memGen } }
   opStatus() {
     const { mode, appendedGen, walGen, memGen, ackGen, compactGen, epoch, walStartGen } = this
     return {
@@ -717,31 +782,31 @@ class FsCore {
   }
 
   // ── query 同步 / 事件 ──
-  pushDiff(diff, gen) {
+  pushDiff(diff: Record<string, MirrorEntry | null>, gen: number): void {
     if (!this.queryPort) return
-    const wire = {}
+    const wire: Record<string, { content: string; rev: number } | null> = {}
     for (const [p, ent] of Object.entries(diff)) wire[p] = ent ? { content: ent.content, rev: ent.rev } : null
     this.queryPort.postMessage({ gen, diff: wire })
   }
-  pushFullToQuery() {
+  pushFullToQuery(): void {
     if (!this.queryPort) return
-    const files = {}
+    const files: Record<string, { content: string; rev: number }> = {}
     for (const [p, ent] of this.mirror) files[p] = { content: ent.content, rev: ent.rev }
     this.queryPort.postMessage({ gen: this.memGen, full: true, files })
   }
-  event(e) { if (this.clientPort) this.clientPort.postMessage(e) }
-  welcome() {
+  event(e: Record<string, unknown>): void { if (this.clientPort) this.clientPort.postMessage(e) }
+  welcome(): void {
     this.event({ type: 'WELCOME', epoch: this.epoch, memGen: this.memGen, readonly: this.mode !== 'writer', mode: this.mode })
   }
 
   // ── 协作交接（禁 steal）──
-  async onBroadcast(msg) {
+  async onBroadcast(msg: { type?: string }): Promise<void> {
     if (msg.type === 'handover-request' && this.mode === 'writer') {
       this.mode = 'draining'
       await this.enqueue(async () => {
         this.flushWindow()
-        this.walHandle.close(); this.walHandle = null
-        this.sbHandle.close(); this.sbHandle = null
+        this.walHandle!.close(); this.walHandle = null
+        this.sbHandle!.close(); this.sbHandle = null
         this.mode = 'readonly'
         if (this.releaseLock) { this.releaseLock(); this.releaseLock = null }
         this.bc.postMessage({ type: 'handover-done', gen: this.memGen })
@@ -750,28 +815,29 @@ class FsCore {
     }
   }
 
-  handleRpc(msg) {
-    const respond = (r) => this.clientPort.postMessage({ id: msg.id, ...r })
-    const fail = (e) => respond({ ok: false, code: e.code || 'internal', error: e.message || String(e), ...(e.extra || {}) })
+  handleRpc(msg: { id: number; opId?: string; args?: Record<string, unknown>; op: string }): void {
+    const respond: Respond = (r) => this.clientPort!.postMessage({ id: msg.id, ...r })
+    const fail = (e: WorkerError) => respond({ ok: false, code: e.code || 'internal', error: e.message || String(e), ...(e.extra || {}) })
     // opId 幂等：已知 opId 直接返回既有结果
     if (msg.opId && this.opIds.has(msg.opId)) {
-      respond({ ok: true, result: { ...this.opIds.get(msg.opId), rev: this.opIds.get(msg.opId).gen, idempotent: true } })
+      const known = this.opIds.get(msg.opId)!
+      respond({ ok: true, result: { ...known, rev: known.gen, idempotent: true } })
       return
     }
-    const a = { ...msg.args, opId: msg.opId }
-    const table = {
-      write: () => this.opWrite(a, respond),
-      edit: () => this.opEdit(a, respond),
-      rm: () => this.opRm(a, respond),
-      mv: () => this.opMv(a, respond),
+    const a: Record<string, any> = { ...msg.args, opId: msg.opId }
+    const table: Record<string, () => void | Promise<void>> = {
+      write: () => this.opWrite(a as any, respond),
+      edit: () => this.opEdit(a as any, respond),
+      rm: () => this.opRm(a as any, respond),
+      mv: () => this.opMv(a as any, respond),
       mkdir: () => { respond({ ok: true, result: { gen: this.memGen } }) }, // 目录隐式，保留 API
-      checkpoint: () => this.opCheckpoint(a, respond),
-      restore: () => this.opRestore(a, respond),
+      checkpoint: () => this.opCheckpoint(a as any, respond),
+      restore: () => this.opRestore(a as any, respond),
       compact: () => this.opCompact(a, respond),
-      turnBegin: () => this.opTurnBegin(a, respond),
-      turnEnd: () => this.opTurnEnd(a, respond),
+      turnBegin: () => this.opTurnBegin(a as any, respond),
+      turnEnd: () => this.opTurnEnd(a as any, respond),
       diff: () => respond({ ok: true, result: this.opDiff(a) }),
-      read: () => respond({ ok: true, result: this.opRead(a) }),
+      read: () => respond({ ok: true, result: this.opRead(a as any) }),
       ls: () => respond({ ok: true, result: this.opLs() }),
       status: () => respond({ ok: true, result: this.opStatus() }),
       // W4 令牌门铸造（§6 替代方案 A / §8.3）：纯内存状态置位，无 I/O、不让出，
@@ -781,25 +847,30 @@ class FsCore {
     const fn = table[msg.op]
     if (!fn) { fail(rpcErr('bad-op', String(msg.op))); return }
     if (['write', 'edit', 'rm', 'mv', 'checkpoint', 'restore', 'compact', 'turnBegin', 'turnEnd'].includes(msg.op)) {
-      this.enqueue(async () => { try { await fn() } catch (e) { fail(e) } })
+      this.enqueue(async () => { try { await fn() } catch (e) { fail(e as WorkerError) } })
     } else {
-      try { fn() } catch (e) { fail(e) }
+      try { fn() } catch (e) { fail(e as WorkerError) }
     }
   }
 }
 
-function rpcErr(code, message, extra) { const e = new Error(message); e.code = code; if (extra) e.extra = extra; return e }
+function rpcErr(code: string, message: string, extra?: Record<string, unknown>): WorkerError {
+  const e = new Error(message) as WorkerError
+  e.code = code
+  if (extra) e.extra = extra
+  return e
+}
 
 // ───────────────────────── 入口 ─────────────────────────
 const core = new FsCore()
-self.onmessage = async (e) => {
+self.onmessage = async (e: MessageEvent) => {
   const msg = e.data
   if (msg.type === 'HELLO') {
     core.clientPort = self // 单客户端 P0：直接用 worker 主端口
     core.queryPort = msg.queryPort || null
     try {
       await core.start(msg.projectId)
-    } catch (err) {
+    } catch (err: any) {
       self.postMessage({ type: 'FATAL', error: String((err && err.stack) || err) })
     }
     return

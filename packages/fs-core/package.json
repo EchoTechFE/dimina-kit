@@ -1,6 +1,6 @@
 {
   "name": "@dimina-kit/fs-core",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "description": "Zero-dependency OPFS WAL filesystem core for the web, with an agent capability gate.",
   "keywords": [
     "dimina",
@@ -27,36 +27,39 @@
   "homepage": "https://github.com/EchoTechFE/dimina-kit/tree/main/packages/fs-core#readme",
   "exports": {
     "./client": {
-      "types": "./src/client.d.ts",
-      "default": "./src/client.js"
+      "types": "./src/client.ts",
+      "default": "./dist/client.js"
     },
     "./agent-tools": {
-      "types": "./src/agent-tools.d.ts",
-      "default": "./src/agent-tools.js"
+      "types": "./src/agent-tools.ts",
+      "default": "./dist/agent-tools.js"
     },
     "./disk-mirror": {
-      "types": "./src/disk-mirror.d.ts",
-      "default": "./src/disk-mirror.js"
+      "types": "./src/disk-mirror.ts",
+      "default": "./dist/disk-mirror.js"
     },
     "./zip": {
-      "types": "./src/zip.d.ts",
-      "default": "./src/zip.js"
+      "types": "./src/zip.ts",
+      "default": "./dist/zip.js"
     },
     "./sync": {
-      "types": "./sync/sync-engine.d.ts",
-      "default": "./sync/sync-engine.js"
+      "types": "./sync/sync-engine.ts",
+      "default": "./dist/sync/sync-engine.js"
     }
   },
   "files": [
+    "dist",
     "src",
     "sync"
   ],
   "scripts": {
-    "check-types": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json && tsc -p tsconfig.worker.build.json && tsc -p tsconfig.sync.build.json",
+    "check-types": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.worker.json",
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run --reporter=default --reporter=json --outputFile.json=test-report.json --coverage.enabled --coverage.reporter=json-summary --coverage.reportsDirectory=coverage",
     "test:dev": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "prepack": "pnpm run build"
   },
   "devDependencies": {
     "@dimina-kit/eslint-config": "workspace:*",

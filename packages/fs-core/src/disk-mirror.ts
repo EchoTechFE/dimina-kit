@@ -6,16 +6,39 @@
  * 策略：fs-change 防抖 2s 全量比对同步（内容不变的文件跳过 —— 内容比对在内存，
  * 磁盘只写变更）；删除按上次镜像记录清理。授权需要用户手势，无授权时静默不动。
  */
-export function createDiskMirror(fs) {
-  let dir = null
-  let last = new Map() // path -> content（上次已镜像的内容）
-  let timer = null
+
+/** Structural shape disk-mirror.js actually calls on a directory handle —
+ * deliberately looser than the DOM lib's `FileSystemDirectoryHandle` (which
+ * also requires `resolve`/`isSameEntry`) so any handle-like object a consumer
+ * already holds — a real FSA handle, or a project's own narrower wrapper type
+ * — can be injected via `pick(handle)` without a structural mismatch. */
+export interface DiskMirrorDirectoryHandle {
+  name: string
+  getDirectoryHandle(name: string, options?: { create?: boolean }): Promise<DiskMirrorDirectoryHandle>
+  getFileHandle(name: string, options?: { create?: boolean }): Promise<{
+    createWritable(): Promise<{ write(data: unknown): Promise<void>; close(): Promise<void> }>
+  }>
+  removeEntry?(name: string, options?: { recursive?: boolean }): Promise<void>
+}
+
+// showDirectoryPicker isn't in TS's shipped DOM lib yet (real Chromium-only API).
+declare global {
+  interface Window {
+    showDirectoryPicker?(options?: { mode?: 'read' | 'readwrite' }): Promise<DiskMirrorDirectoryHandle>
+  }
+}
+
+/** `fs` is typed loosely (`any`) for the same reason as in agent-tools.ts. */
+export function createDiskMirror(fs: any) {
+  let dir: DiskMirrorDirectoryHandle | null = null
+  let last = new Map<string, string>() // path -> content（上次已镜像的内容）
+  let timer: ReturnType<typeof setTimeout> | undefined
   let syncing = false
   let pending = false // syncAll 运行期间又发生了变更，结束后需要再镜像一轮
 
-  /** @param {FileSystemDirectoryHandle} [handle] 已获取授权的目录句柄；传了就直接用（跳过
+  /** @param handle 已获取授权的目录句柄；传了就直接用（跳过
    * showDirectoryPicker 弹窗），调用方自行负责获取授权（例如复用宿主已有的句柄）。 */
-  async function pick(handle) {
+  async function pick(handle?: DiskMirrorDirectoryHandle) {
     if (handle) {
       dir = handle
     } else {
@@ -35,18 +58,18 @@ export function createDiskMirror(fs) {
     last = new Map()
   }
 
-  async function syncAll() {
+  async function syncAll(): Promise<{ written: number; removed: number; gen: number } | null> {
     if (!dir || syncing) return null
     syncing = true
     try {
-      const snap = await fs.snapshot()
+      const snap: { files: Record<string, string>; gen: number } = await fs.snapshot()
       let written = 0
       for (const [p, content] of Object.entries(snap.files)) {
         if (last.get(p) === content) continue
         const parts = p.split('/')
         let d = dir
         for (const seg of parts.slice(0, -1)) d = await d.getDirectoryHandle(seg, { create: true })
-        const fh = await d.getFileHandle(parts[parts.length - 1], { create: true })
+        const fh = await d.getFileHandle(parts[parts.length - 1] as string, { create: true })
         const w = await fh.createWritable()
         await w.write(content)
         await w.close()
@@ -60,7 +83,7 @@ export function createDiskMirror(fs) {
           const parts = p.split('/')
           let d = dir
           for (const seg of parts.slice(0, -1)) d = await d.getDirectoryHandle(seg)
-          await d.removeEntry(parts[parts.length - 1])
+          await d.removeEntry?.(parts[parts.length - 1] as string)
         } catch { /* 目录已不在等：忽略 */ }
         last.delete(p)
         removed++

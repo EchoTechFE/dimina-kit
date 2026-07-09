@@ -4,5 +4,7 @@
     "noEmit": true
   },
   "include": ["src", "sync"],
-  "exclude": ["node_modules"]
+  // The two worker entry points need the WebWorker (not DOM) lib — see
+  // tsconfig.worker.json, which type-checks them as a separate program.
+  "exclude": ["node_modules", "src/fs-core.worker.ts", "src/fs-query.worker.ts"]
 }

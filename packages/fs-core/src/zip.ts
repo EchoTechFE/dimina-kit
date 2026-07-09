@@ -13,16 +13,16 @@ const CRC_TABLE = (() => {
   }
   return t
 })()
-function crc32(bytes) {
+function crc32(bytes: Uint8Array): number {
   let c = 0xffffffff
-  for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8)
+  for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]!) & 0xff]! ^ (c >>> 8)
   return (c ^ 0xffffffff) >>> 0
 }
 
 /** files: {relPath: string content} → Uint8Array（ZIP，UTF-8 文件名）。 */
-export function makeZip(files) {
-  const parts = []
-  const central = []
+export function makeZip(files: Record<string, string>): Uint8Array {
+  const parts: Uint8Array[] = []
+  const central: Uint8Array[] = []
   let offset = 0
   for (const [path, content] of Object.entries(files)) {
     const name = enc.encode(path)

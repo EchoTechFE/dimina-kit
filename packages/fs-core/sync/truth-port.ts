@@ -1,6 +1,6 @@
 /**
  * TruthPort: the external-truth-source adapter the sync engine (see
- * sync-engine.d.ts) talks to. Concrete adapters live with their host: devtools'
+ * sync-engine.ts) talks to. Concrete adapters live with their host: devtools'
  * is `/__fs` HTTP bridge reads/writes + an SSE change stream (workbench's
  * wal-audit.ts); a future web local-directory adapter would wrap the File
  * System Access API with poll-based change detection instead.
@@ -52,7 +52,7 @@ export interface TruthPort {
    * Subscribe to inbound change batches. `onBatch` receives a batch of
    * changed relative paths; `onDead` fires at most once when the change
    * channel is permanently gone (the host should treat this as a downgrade
-   * to no live sync, not a transient hiccup — see sync-engine.d.ts's `stop`).
+   * to no live sync, not a transient hiccup — see sync-engine.ts's `stop`).
    * Returns a `dispose` that tears down the subscription.
    */
   changes(onBatch: (paths: string[]) => void, onDead: () => void): () => void
