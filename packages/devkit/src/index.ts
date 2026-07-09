@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { createServer, type Server } from 'node:http'
 import { createRequire } from 'node:module'
 import chokidar from 'chokidar'
+import { WATCH_IGNORE_DIRS } from './watch-ignore.js'
 import { applyEsbuildBinaryPath } from './esbuild-binary-path.js'
 import { createRebuildScheduler } from './rebuild-scheduler.js'
 import { createCompileWorker } from './compile-worker.js'
@@ -13,6 +14,7 @@ import type { BuildRequest, CompileLogEntry, CompileWorker } from './compile-wor
 import { createCompileWorkerStandby } from './compile-worker-standby.js'
 import type { CompileWorkerStandby, CompileWorkerStandbyOptions } from './compile-worker-standby.js'
 
+export { WATCH_IGNORE_DIRS } from './watch-ignore.js'
 export { createRebuildScheduler } from './rebuild-scheduler.js'
 export type { RebuildScheduler } from './rebuild-scheduler.js'
 export { filterDmccLogLine } from './compile-log.js'
@@ -130,6 +132,13 @@ export interface OpenProjectOptions {
 	outputDir?: string
 	/** When false, skip the chokidar file-watcher / auto-rebuild loop. Default true. */
 	watch?: boolean
+	/**
+	 * When false, a completed watcher rebuild does NOT live-reload the preview
+	 * (the SSE `reload` → container `window.location.reload()`); `onRebuild`
+	 * still fires so the host learns the build finished, but the page stack /
+	 * form state survives. Independent of `watch`. Default true.
+	 */
+	autoReload?: boolean
 	onRebuild?: () => void
 	onBuildError?: (err: unknown) => void
 	/**
@@ -180,26 +189,40 @@ function upsertSessionApp(sessionApps: AppInfo[], rebuilt: AppInfo): void {
 }
 
 /**
- * Run one watcher-triggered rebuild. `getReload` is read at call time (not
- * captured eagerly) because `reload` is only assigned once the dev server has
- * started, after this runner is wired into the rebuild scheduler.
+ * Compose the "build completed" subscriber — the single place deciding which of
+ * two INDEPENDENT reactions run: live-reloading the preview, and the caller's
+ * `onRebuild`. Reload is attached only when `autoReload` is on (so auto-compile
+ * can stay ON while reload is OFF, preserving page/form state); when off,
+ * `getReload` is not even called. `getReload` is read at call time because the
+ * dev server's `reload` is assigned after this subscriber is wired.
  */
+export function composeBuildCompleted(opts: {
+	autoReload: boolean
+	getReload: () => (() => void) | undefined
+	onRebuild?: () => void
+}): () => void {
+	return () => {
+		if (opts.autoReload) opts.getReload()?.()
+		opts.onRebuild?.()
+	}
+}
+
+/** Run one watcher-triggered rebuild, then fan out to the build-completed
+ * subscriber (reload + onRebuild); a build failure routes to onBuildFailed. */
 async function runRebuild(
 	compileWorker: CompileWorker,
 	buildRequest: BuildRequest,
 	sessionApps: AppInfo[],
-	getReload: () => (() => void) | undefined,
-	onRebuild: (() => void) | undefined,
-	onBuildError: ((err: unknown) => void) | undefined,
+	onBuildCompleted: () => void,
+	onBuildFailed: (err: unknown) => void,
 ): Promise<void> {
 	try {
 		const rebuilt = (await compileWorker.build(buildRequest)) as AppInfo | null
 		if (rebuilt) upsertSessionApp(sessionApps, rebuilt)
-		getReload()?.()
-		onRebuild?.()
+		onBuildCompleted()
 	}
 	catch (e) {
-		onBuildError?.(e)
+		onBuildFailed(e)
 	}
 }
 
@@ -243,6 +266,7 @@ export async function openProject(opts: OpenProjectOptions): Promise<ProjectSess
 		containerDir: overrideContainerDir,
 		outputDir,
 		watch = true,
+		autoReload = true,
 		onRebuild,
 		onBuildError,
 		onLog,
@@ -346,8 +370,13 @@ export async function openProject(opts: OpenProjectOptions): Promise<ProjectSess
 		// Watcher events are routed through the scheduler so a save landing while
 		// a build is in flight is never dropped: it coalesces into exactly one
 		// trailing rebuild once the current run settles.
+		const onBuildCompleted = composeBuildCompleted({
+			autoReload,
+			getReload: () => reload,
+			onRebuild,
+		})
 		const rebuildScheduler = createRebuildScheduler(() =>
-			runRebuild(compileWorker, buildRequest, sessionApps, () => reload, onRebuild, onBuildError),
+			runRebuild(compileWorker, buildRequest, sessionApps, onBuildCompleted, err => onBuildError?.(err)),
 		)
 		watcher = watch
 			? createProjectWatcher(projectPath, () => rebuildScheduler.schedule(), onWatcherError)
@@ -419,13 +448,17 @@ export function createProjectWatcher(
 			// (rel starts with '..') must never be ignored.
 			if (!rel || rel.startsWith('..'))
 				return false
-			// `node_modules` (any depth) is excluded like vite/webpack exclude
-			// it: the compiler never reads it directly (its real npm input is
-			// the built `miniprogram_npm/`, which stays watched), while watching
-			// it makes chokidar hold thousands of per-directory fs.watch handles
-			// — a multi-second `watcher.close()` on session close, a slow
-			// initial scan, and spurious rebuilds on dependency churn.
-			return rel.split('/').some(seg => seg.startsWith('.') || seg === 'node_modules')
+			// Ignore all dotfiles/dot-dirs plus the shared never-source core
+			// (`WATCH_IGNORE_DIRS`: node_modules + VCS), kept in one place so the
+			// devtools editor mirror can't drift from this on the load-bearing
+			// `node_modules` omission. NOT build-output dirs like `dist`/`build`
+			// (app.json may put pages there — the compiler must see those edits).
+			// Watching `node_modules` makes chokidar hold thousands of
+			// per-directory handles — a multi-second `watcher.close()`, a slow
+			// initial scan, and spurious rebuilds on dependency churn; the
+			// compiler's real npm input is the built `miniprogram_npm/`, which
+			// stays watched.
+			return rel.split('/').some(seg => seg.startsWith('.') || WATCH_IGNORE_DIRS.has(seg))
 		},
 		persistent: true,
 		ignoreInitial: true,

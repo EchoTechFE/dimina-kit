@@ -204,7 +204,10 @@ export const WorkbenchSettingsSaveSchema = z.tuple([
       port: z.number().int().min(0).max(65535),
     }),
     compile: z.looseObject({
-      watch: z.boolean(),
+      autoBuild: z.boolean(),
+    }),
+    preview: z.looseObject({
+      autoReload: z.boolean(),
     }),
     theme: z.enum(['system', 'light', 'dark']),
     lastCreateBaseDir: z.union([z.string(), z.null()]),

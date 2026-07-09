@@ -98,14 +98,18 @@ function ThemeModeSelector({ theme, onSelect }: { theme: ThemeSource, onSelect: 
 }
 
 function GeneralTab({
-  watchEnabled,
-  onWatchChange,
+  autoBuildEnabled,
+  onAutoBuildChange,
+  autoReloadEnabled,
+  onAutoReloadChange,
   theme,
   onThemeChange,
   saved,
 }: {
-  watchEnabled: boolean
-  onWatchChange: (watch: boolean) => void
+  autoBuildEnabled: boolean
+  onAutoBuildChange: (autoBuild: boolean) => void
+  autoReloadEnabled: boolean
+  onAutoReloadChange: (autoReload: boolean) => void
   theme: ThemeSource
   onThemeChange: (theme: ThemeSource) => void
   saved: boolean
@@ -114,17 +118,16 @@ function GeneralTab({
     <div className="space-y-4">
       <section className="rounded-lg border border-border p-4 space-y-4 bg-bg">
         <div>
-          <h2 className="text-[13px] font-medium mb-1">编译</h2>
-          <p className="text-[11px] leading-relaxed text-text-secondary">
-            开启后，打开项目时会监听源文件改动并自动重新编译。关闭则只在打开/手动重新编译时构建。配置在下次打开项目时生效。
-          </p>
+          <h2 className="text-[13px] font-medium mb-1">编译与预览</h2>
+          <p className="text-[11px] leading-relaxed text-text-secondary">开启「自动编译」后，打开项目时会监听源文件改动并自动重新编译。开启「自动刷新」后，每次编译完成会刷新模拟器；关闭它可保留当前页面栈与表单状态，仅手动刷新。配置在下次打开项目时生效。</p>
         </div>
         <div className="flex items-center justify-between">
           <span className="text-[12px] text-text-secondary">监听文件变化自动编译</span>
-          <ToggleSwitch
-            checked={watchEnabled}
-            onClick={() => onWatchChange(!watchEnabled)}
-          />
+          <ToggleSwitch checked={autoBuildEnabled} onClick={() => onAutoBuildChange(!autoBuildEnabled)} />
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-[12px] text-text-secondary">编译完成后自动刷新模拟器</span>
+          <ToggleSwitch checked={autoReloadEnabled} onClick={() => onAutoReloadChange(!autoReloadEnabled)} />
         </div>
       </section>
 
@@ -369,8 +372,10 @@ export default function WorkbenchSettings() {
   const [settings, setSettings] = useState<WorkbenchSettingsValue>({
     cdp: { enabled: false, port: DEFAULT_CDP_PORT },
     mcp: { enabled: false, port: 7789 },
-    compile: { watch: true },
+    compile: { autoBuild: true },
+    preview: { autoReload: true },
     theme: 'system',
+    lastCreateBaseDir: null, // required by save schema; overwritten on first load
   })
   const [cdpStatus, setCdpStatus] = useState<CdpStatus | null>(null)
   const [mcpStatus, setMcpStatus] = useState<McpStatus | null>(null)
@@ -421,8 +426,7 @@ export default function WorkbenchSettings() {
     void saveWorkbenchSettings(next)
   }
 
-  function handleWatchChange(watch: boolean) {
-    const next = { ...settings, compile: { ...settings.compile, watch } }
+  function persistSettings(next: WorkbenchSettingsValue) {
     setSettings(next)
     void saveWorkbenchSettings(next).then(flashSaved)
   }
@@ -454,8 +458,10 @@ export default function WorkbenchSettings() {
       <div className="flex-1 overflow-y-auto p-4">
         {activeTab === 'general' && (
           <GeneralTab
-            watchEnabled={settings.compile.watch}
-            onWatchChange={handleWatchChange}
+            autoBuildEnabled={settings.compile.autoBuild}
+            onAutoBuildChange={(autoBuild) => persistSettings({ ...settings, compile: { ...settings.compile, autoBuild } })}
+            autoReloadEnabled={settings.preview.autoReload}
+            onAutoReloadChange={(autoReload) => persistSettings({ ...settings, preview: { ...settings.preview, autoReload } })}
             theme={settings.theme}
             onThemeChange={handleThemeChange}
             saved={saved}
