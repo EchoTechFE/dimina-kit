@@ -70,6 +70,21 @@ function groupIdOf(tree: LayoutTree, panelId: string): string | null {
 }
 
 /**
+ * The split node whose DIRECT child is the tab group holding `panelId` (i.e.
+ * `panelId`'s immediate parent split), or null if `panelId` is the tree root's
+ * sole group (no parent split) or is absent entirely.
+ */
+function parentSplitOfGroupHolding(node: LayoutNode, panelId: string): Extract<LayoutNode, { kind: 'split' }> | null {
+  if (node.kind === 'tabs') return null
+  for (const child of node.children) {
+    if (child.kind === 'tabs' && child.panels.includes(panelId)) return node
+    const hit = parentSplitOfGroupHolding(child, panelId)
+    if (hit) return hit
+  }
+  return null
+}
+
+/**
  * Is `simulator` floored via a `minPx === W` constraint? Walk every split:
  * for each child index i whose subtree CONTAINS `simulator`, check whether that
  * split carries `constraints[i].minPx === W`.
@@ -145,6 +160,25 @@ describe('reopenPanel — re-insert a closed panel at a default-aligned spot', (
     expect(validateTree(reopened, KNOWN_7)).toEqual([])
   })
 
+  it('A3b: regression — reopening `editor` keeps the debug region as ONE group, never splitting wxml off from its mates', () => {
+    // Reproduces the reported bug: hide editor, then show it again. All five
+    // debug panels must still share the SAME tab group afterward — not have
+    // wxml peeled off into its own group beside editor while
+    // appdata/storage/console/compile are left behind in the original group.
+    const closed = closePanel(buildDefaultDockTree(W), 'editor')
+    const debugGroupIdBefore = groupIdOf(closed, 'wxml')
+    expect(debugGroupIdBefore).not.toBeNull()
+
+    const reopened = reopenPanel(closed, 'editor', W)
+
+    const debugGroupIdAfter = groupIdOf(reopened, 'wxml')
+    expect(debugGroupIdAfter).not.toBeNull()
+    for (const id of DEBUG_PANELS) {
+      expect(groupIdOf(reopened, id)).toBe(debugGroupIdAfter)
+    }
+    expect(validateTree(reopened, KNOWN_7)).toEqual([])
+  })
+
   it('A4: reopening `simulator` re-pins it to minPx === simPanelWidth', () => {
     const closed = closePanel(buildDefaultDockTree(W), 'simulator')
     expect(collectPanelIds(closed.root).has('simulator')).toBe(false)
@@ -165,6 +199,31 @@ describe('reopenPanel — re-insert a closed panel at a default-aligned spot', (
 
     expect(simulatorPinnedTo(reopened.root, altW)).toBe(true)
     expect(simulatorPinnedTo(reopened.root, W)).toBe(false)
+  })
+
+  it('A4c: regression — reopening `simulator` sits it beside the ENTIRE rest of the tree, never squeezing a sibling to zero width', () => {
+    // Reproduces the reported bug: hide simulator, then show it again. Editor
+    // (and every debug panel) must still be reachable as full peers of
+    // simulator afterward — not merged into a 50/50 split with just ONE of
+    // them, which is what let the device-width floor swallow that one
+    // sibling's entire slot and render it as if it had vanished.
+    const closed = closePanel(buildDefaultDockTree(W), 'simulator')
+    const restBefore = collectPanelIds(closed.root) // editor + 5 debug panels, no simulator
+
+    const reopened = reopenPanel(closed, 'simulator', W)
+
+    const parentSplit = parentSplitOfGroupHolding(reopened.root, 'simulator')
+    expect(parentSplit).not.toBeNull()
+    // Every panel that existed before the reopen must live in the sibling
+    // side(s) of simulator's immediate parent split — i.e. simulator was
+    // attached beside the WHOLE prior tree, not nested inside a slice of it.
+    const siblingPanelIds = new Set<string>()
+    for (const child of parentSplit!.children) {
+      if (child.kind === 'tabs' && child.panels.includes('simulator')) continue
+      collectPanelIds(child, siblingPanelIds)
+    }
+    expect(siblingPanelIds).toEqual(restBefore)
+    expect(validateTree(reopened, KNOWN_7)).toEqual([])
   })
 
   it('A5: idempotent — reopening an ALREADY-present id returns an equal tree, no throw, no dup', () => {

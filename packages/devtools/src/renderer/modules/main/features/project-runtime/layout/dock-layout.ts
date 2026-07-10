@@ -28,8 +28,10 @@ import {
   parseLayout,
   sanitizeFlexibleWeights,
   setConstraint,
+  splitGroup,
   splitPanel,
   validateTree,
+  wrapRoot,
 } from '@dimina-kit/electron-deck/layout'
 import type {
   LayoutModel,
@@ -358,8 +360,11 @@ function pinSimulatorWidth(tree: LayoutTree, simPanelWidth: number): LayoutTree 
  *    siblings are gone it recreates a debug region below the editor (or beside
  *    the simulator).
  *  - `editor` re-splits above the debug region (or beside the simulator).
- *  - `simulator` re-splits as the leading column and is re-pinned to its fixed
- *    device width.
+ *  - `simulator` is re-attached as a top-level sibling of the ENTIRE rest of the
+ *    tree (`wrapRoot`, not a `splitPanel` against one specific panel) and
+ *    re-pinned to its fixed device width — nesting it inside just one sibling's
+ *    slot would let the device-width floor consume that whole (already-narrower)
+ *    slot, squeezing the sibling to zero rendered width.
  */
 export function reopenPanel(
   tree: LayoutTree,
@@ -384,17 +389,33 @@ export function reopenPanel(
   }
 
   if (panelId === 'editor') {
-    // Editor sits above the debug region in the main column.
+    // Editor sits above the debug region in the main column. The debug region is
+    // ONE multi-tab group (wxml/appdata/storage/console/compile) — split against
+    // that GROUP, not one of its member panels: `splitPanel` targeting a panel
+    // that belongs to a multi-panel group peels just that one tab out and strands
+    // its siblings behind in the original group (WXML detaching from the
+    // AppData/Storage/Console/编译 tab strip after an editor hide->show).
     const debug = firstPresent(present, DEFAULT_DEBUG_PANELS)
-    if (debug) return splitPanel(tree, debug, 'column', 'editor', 'before')
+    if (debug) {
+      const gid = groupIdContaining(tree.root, debug)!
+      return splitGroup(tree, gid, 'column', 'editor', 'before')
+    }
     if (present.has('simulator')) return splitPanel(tree, 'simulator', 'row', 'editor', 'after')
     return splitPanel(tree, [...present][0]!, 'column', 'editor', 'before')
   }
 
   if (panelId === 'simulator') {
-    // Simulator is the leading fixed-width column.
-    const anchor = firstPresent(present, ['editor', ...DEFAULT_DEBUG_PANELS]) ?? [...present][0]!
-    const split = splitPanel(tree, anchor, 'row', 'simulator', 'before')
+    // Simulator is a top-level leading column beside the ENTIRE rest of the
+    // tree — wrapRoot (not splitPanel against a single anchor panel) so it
+    // never ends up sharing a slot with just one other panel. `splitPanel`
+    // used to target `editor` specifically, which replaced editor's own
+    // single-panel group with a 50/50 [simulator, editor] split; once
+    // `pinSimulatorWidth` floored that split's simulator side at the device
+    // width, the floor could consume the whole (already-narrower) slot and
+    // squeeze editor to zero rendered width — e.g. after a hide→show of the
+    // simulator, editor would visually vanish even though it was still
+    // present in the tree.
+    const split = wrapRoot(tree, 'simulator', 'row', 'before')
     return pinSimulatorWidth(split, simPanelWidth)
   }
 

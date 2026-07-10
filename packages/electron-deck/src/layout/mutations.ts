@@ -343,6 +343,88 @@ export function movePanel(
 	return wrap(normalizeRoot(root))
 }
 
+/**
+ * Wrap the CURRENT ENTIRE tree as one side of a brand-new top-level split, with
+ * `newPanelId` (in its own fresh single-panel group) as the other side. Unlike
+ * `splitPanel` — which carves the new panel into whichever single panel's own
+ * slot it targets, so that panel now shares its slot 50/50 with the new one —
+ * this makes the new panel a peer of EVERYTHING already in the tree, regardless
+ * of that tree's internal shape (row, column, or arbitrarily nested).
+ *
+ * Use for panels whose home position is "beside the rest of the layout as a
+ * whole" (e.g. re-showing a hidden simulator column that must sit alongside
+ * editor + debug together, not nested inside just one of them). Splitting into
+ * a single sibling's slot instead of the whole tree is what let a `minPx` floor
+ * on the new panel consume that one sibling's entire (already-narrower) slot,
+ * squeezing it to zero rendered width.
+ */
+export function wrapRoot(
+	t: LayoutTree,
+	newPanelId: string,
+	dir: Orientation,
+	side: 'before' | 'after',
+): LayoutTree {
+	if (hasPanel(t.root, newPanelId)) {
+		throw new Error(`wrapRoot: new panel already exists in the tree: ${newPanelId}`)
+	}
+	const taken = collectNodeIds(t.root)
+	const rootId = t.root.id
+	const newGroup = tg(freshId(taken, `${rootId}__new`), [newPanelId], newPanelId)
+	const rest = cloneNode(t.root)
+	const children: LayoutNode[] = side === 'after' ? [rest, newGroup] : [newGroup, rest]
+	const newSplit: SplitNode = {
+		kind: 'split',
+		id: freshId(taken, `${rootId}__wrap`),
+		orientation: dir,
+		children,
+		sizes: [1, 1],
+	}
+	return wrap(newSplit)
+}
+
+/**
+ * Split at the position of an EXISTING group, keeping ALL of its panels
+ * together as one side and a brand-new single-panel group as the other side.
+ *
+ * Unlike `splitPanel` — which resolves its anchor through a single PANEL id
+ * and, when that panel's group holds more than one panel, only extracts that
+ * one member (leaving its siblings behind in the original group) — this takes
+ * a GROUP id directly and never touches the group's contents. Use it when the
+ * new panel's home is "beside this specific region as a whole" (e.g. the
+ * editor reopening beside the multi-tab debug region): resolving that through
+ * `splitPanel` against one of the region's tabs would sever that one tab from
+ * its siblings into its own group, exactly the failure `wrapRoot` fixed for
+ * "beside the whole tree" — this is the same fix scoped to one known group
+ * instead of the root, since wrapping the whole tree would also drag in
+ * siblings the caller never meant to move (e.g. the simulator column).
+ */
+export function splitGroup(
+	t: LayoutTree,
+	groupId: string,
+	dir: Orientation,
+	newPanelId: string,
+	side: 'before' | 'after',
+): LayoutTree {
+	if (hasPanel(t.root, newPanelId)) {
+		throw new Error(`splitGroup: new panel already exists in the tree: ${newPanelId}`)
+	}
+	const group = findGroupById(t.root, groupId)
+	if (!group) throw new Error(`splitGroup: group not found: ${groupId}`)
+
+	const taken = collectNodeIds(t.root)
+	const newGroup = tg(freshId(taken, `${groupId}__new`), [newPanelId], newPanelId)
+	const origGroup = cloneNode(group)
+	const children: LayoutNode[] = side === 'after' ? [origGroup, newGroup] : [newGroup, origGroup]
+	const newSplit: SplitNode = {
+		kind: 'split',
+		id: freshId(taken, `${groupId}__sp`),
+		orientation: dir,
+		children,
+		sizes: [1, 1],
+	}
+	return wrap(normalizeRoot(replaceNode(t.root, groupId, newSplit)))
+}
+
 export function splitPanel(
 	t: LayoutTree,
 	atPanelId: string,

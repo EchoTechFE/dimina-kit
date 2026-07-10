@@ -35,8 +35,10 @@ import {
 	setActive,
 	setConstraint,
 	setSizes,
+	splitGroup,
 	splitPanel,
 	validateTree,
+	wrapRoot,
 } from './index.js'
 import {
 	allNodes,
@@ -572,6 +574,179 @@ describe('splitPanel', () => {
 		const t = tree(tabs('g', ['p1'], 'p1'))
 		const before = frozenCopy(t)
 		splitPanel(t, 'p1', 'row', 'q', 'after')
+		expect(t).toEqual(before)
+	})
+})
+
+// ───────────────────────── splitGroup ─────────────────────────
+
+describe('splitGroup', () => {
+	it("'after' places the existing group first, the new panel group second", () => {
+		const t = tree(tabs('g', ['p1'], 'p1'))
+		const out = splitGroup(t, 'g', 'column', 'q', 'after')
+		expect(out.root.kind).toBe('split')
+		const s = out.root as SplitNode
+		expect(s.orientation).toBe('column')
+		expect(s.sizes).toEqual([1, 1])
+		const first = s.children[0] as TabGroupNode
+		const second = s.children[1] as TabGroupNode
+		expect(first.id).toBe('g')
+		expect(first.panels).toEqual(['p1'])
+		expect(second.panels).toEqual(['q'])
+		expect(second.active).toBe('q')
+		expectStructurallySound(out)
+	})
+
+	it("'before' places the new panel group first", () => {
+		const t = tree(tabs('g', ['p1'], 'p1'))
+		const out = splitGroup(t, 'g', 'row', 'q', 'before')
+		const s = out.root as SplitNode
+		const first = s.children[0] as TabGroupNode
+		const second = s.children[1] as TabGroupNode
+		expect(first.panels).toEqual(['q'])
+		expect(second.id).toBe('g')
+		expect(second.panels).toEqual(['p1'])
+		expectStructurallySound(out)
+	})
+
+	it('keeps a MULTI-panel group intact as a single unit — unlike splitPanel, no member is stripped out', () => {
+		// This is the property that distinguishes splitGroup from splitPanel: the
+		// group is resolved by id, not through one of its panels, so every panel it
+		// held stays together in the SAME group after the split.
+		const t = tree(tabs('g-debug', ['wxml', 'appdata', 'storage', 'console', 'compile'], 'wxml'))
+		const out = splitGroup(t, 'g-debug', 'column', 'editor', 'before')
+		const debugGroup = findGroup(out, 'g-debug')!
+		expect(debugGroup.panels).toEqual(['wxml', 'appdata', 'storage', 'console', 'compile'])
+		expect(debugGroup.active).toBe('wxml')
+		expect(groupOf(out, 'editor')!.panels).toEqual(['editor'])
+		expectStructurallySound(out)
+	})
+
+	it('preserves a multi-group tree — only the target group is repositioned', () => {
+		const t = base() // row s0: g1[p1,p2], g2[p3,p4]
+		const out = splitGroup(t, 'g1', 'column', 'q', 'before')
+		// g2 untouched, still a direct sibling structure elsewhere in the tree.
+		expect(groupOf(out, 'p3')!.panels).toEqual(['p3', 'p4'])
+		expect(groupOf(out, 'p1')!.panels).toEqual(['p1', 'p2'])
+		expect(allPanels(out).sort()).toEqual(['p1', 'p2', 'p3', 'p4', 'q'])
+		expectStructurallySound(out)
+	})
+
+	it('throws when groupId does not exist', () => {
+		expectRejects(() => splitGroup(base(), 'ghost', 'row', 'q', 'after'))
+	})
+
+	it('rejects a newPanelId that duplicates an existing panel', () => {
+		expectRejects(() => splitGroup(base(), 'g1', 'row', 'p1', 'after'))
+		// sanity: a genuinely new panel id still succeeds
+		const out = splitGroup(base(), 'g1', 'row', 'q', 'after')
+		expect(allPanels(out).sort()).toEqual(['p1', 'p2', 'p3', 'p4', 'q'])
+		expectStructurallySound(out)
+	})
+
+	it('generates collision-free node ids even when the deterministic id is taken', () => {
+		const t = tree(
+			split('s0', 'row', [
+				tabs('g', ['p1'], 'p1'),
+				tabs('g__sp', ['x'], 'x'),
+			]),
+		)
+		const out = splitGroup(t, 'g', 'column', 'q', 'after')
+		const ids = allNodes(out).map(n => n.id)
+		expect(new Set(ids).size).toBe(ids.length) // all distinct
+		expect(structuralProblems(out)).toEqual([])
+		expect(validateTree(out, new Set(allPanels(out)))).toEqual([])
+	})
+
+	it('is pure', () => {
+		const t = tree(tabs('g', ['p1'], 'p1'))
+		const before = frozenCopy(t)
+		splitGroup(t, 'g', 'row', 'q', 'after')
+		expect(t).toEqual(before)
+	})
+})
+
+// ───────────────────────── wrapRoot ─────────────────────────
+
+describe('wrapRoot', () => {
+	it("'before' places the new panel group first, wrapping the WHOLE existing tree as the other child", () => {
+		const t = base() // row s0: g1[p1,p2], g2[p3,p4]
+		const out = wrapRoot(t, 'q', 'row', 'before')
+		expect(out.root.kind).toBe('split')
+		const s = out.root as SplitNode
+		expect(s.orientation).toBe('row')
+		expect(s.children.length).toBe(2)
+		expect(s.sizes).toEqual([1, 1])
+		const first = s.children[0] as TabGroupNode
+		expect(first.panels).toEqual(['q'])
+		expect(first.active).toBe('q')
+		// the OTHER child is the entire original tree, not just one of its groups.
+		const second = s.children[1] as SplitNode
+		expect(second.id).toBe('s0')
+		expect(allPanels(tree(second)).sort()).toEqual(['p1', 'p2', 'p3', 'p4'])
+		expectStructurallySound(out)
+	})
+
+	it("'after' wraps the existing tree then the new panel group", () => {
+		const t = base()
+		const out = wrapRoot(t, 'q', 'column', 'after')
+		const s = out.root as SplitNode
+		expect(s.orientation).toBe('column')
+		const first = s.children[0] as SplitNode
+		const second = s.children[1] as TabGroupNode
+		expect(first.id).toBe('s0')
+		expect(second.panels).toEqual(['q'])
+		expectStructurallySound(out)
+	})
+
+	it('wraps a MULTI-group tree as a single unit — unlike splitPanel, no existing group loses panels', () => {
+		// This is the property that distinguishes wrapRoot from splitPanel: the new
+		// panel becomes a peer of EVERYTHING already in the tree, so every
+		// pre-existing group keeps every panel it had.
+		const t = base()
+		const out = wrapRoot(t, 'q', 'row', 'before')
+		expect(groupOf(out, 'p1')!.panels).toEqual(['p1', 'p2'])
+		expect(groupOf(out, 'p3')!.panels).toEqual(['p3', 'p4'])
+		expect(allPanels(out).sort()).toEqual(['p1', 'p2', 'p3', 'p4', 'q'])
+		expectStructurallySound(out)
+	})
+
+	it('wraps a single-group tree same as splitPanel would (degenerate case)', () => {
+		const t = tree(tabs('g', ['p1'], 'p1'))
+		const out = wrapRoot(t, 'q', 'row', 'before')
+		const s = out.root as SplitNode
+		expect(s.children.map((c) => (c as TabGroupNode).panels)).toEqual([['q'], ['p1']])
+		expectStructurallySound(out)
+	})
+
+	it('rejects a newPanelId that duplicates an existing panel', () => {
+		expectRejects(() => wrapRoot(base(), 'p1', 'row', 'after'))
+		// sanity: a genuinely new panel id still succeeds
+		const out = wrapRoot(base(), 'q', 'row', 'after')
+		expect(allPanels(out).sort()).toEqual(['p1', 'p2', 'p3', 'p4', 'q'])
+		expectStructurallySound(out)
+	})
+
+	it('generates collision-free node ids even when the deterministic id is taken', () => {
+		// The impl mints ids off the root's own id with `__new` / `__wrap` suffixes.
+		// Pre-seed a node already named 's0__wrap' so a naive minting would collide.
+		const t = tree(
+			split('s0', 'row', [
+				tabs('g1', ['p1'], 'p1'),
+				tabs('s0__wrap', ['x'], 'x'),
+			]),
+		)
+		const out = wrapRoot(t, 'q', 'column', 'after')
+		const ids = allNodes(out).map((n) => n.id)
+		expect(new Set(ids).size).toBe(ids.length) // all distinct
+		expect(structuralProblems(out)).toEqual([])
+		expect(validateTree(out, new Set(allPanels(out)))).toEqual([])
+	})
+
+	it('is pure', () => {
+		const t = base()
+		const before = frozenCopy(t)
+		wrapRoot(t, 'q', 'row', 'before')
 		expect(t).toEqual(before)
 	})
 })
