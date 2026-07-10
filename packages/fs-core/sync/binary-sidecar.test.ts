@@ -35,7 +35,9 @@ describe('createBinarySidecar — index + echo judgement', () => {
     const sc = createBinarySidecar()
     expect(await sc.put('a.png', png(1))).toBe(true)
     expect(sc.has('a.png')).toBe(true)
-    expect(sc.entry('a.png')).toEqual({ size: 6, sha256: expect.stringMatching(/^[0-9a-f]{64}$/) })
+    const entry = sc.entry('a.png')
+    expect(entry?.size).toBe(6)
+    expect(entry?.sha256).toMatch(/^[0-9a-f]{64}$/)
     expect(sc.size).toBe(1)
   })
 
