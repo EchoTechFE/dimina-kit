@@ -20,7 +20,18 @@ export const WORKSPACE_FILE_ROOT = 'file:///workspace'
  */
 export const TYPES_ROOT = 'node_modules/@types'
 
-export type FsEntry = [string, number] // [name, type] — 1 file, 2 dir
+/**
+ * `[name, type, size?, mtimeMs?]` — type: 1 file, 2 dir. `size`/`mtimeMs` are
+ * only ever populated for FILE entries (directories carry no useful stat for
+ * the sync engine's purposes) and are the raw `fs.Stats` values from the
+ * devtools main process (`readdirWithin`, project-fs.ts). A minimal
+ * evolution of the original `[name, type]` shape — every existing
+ * destructuring call site (`const [name, type] of entries`) stays valid
+ * unchanged, since JS array destructuring ignores extra trailing elements.
+ * Consumed by wal-audit-watch-expand.ts's stat-diffing to decide which
+ * watch-reported paths actually changed without re-reading their content.
+ */
+export type FsEntry = [name: string, type: number, size?: number, mtimeMs?: number]
 
 export async function bridgeReaddir(baseUrl: string, rel: string): Promise<FsEntry[]> {
   const u = new URL(`${baseUrl}__fs/readdir`)

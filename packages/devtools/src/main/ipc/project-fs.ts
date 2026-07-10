@@ -344,13 +344,47 @@ export async function statWithin(root: string, rel: string): Promise<import('nod
   return fs.stat(safe)
 }
 
-/** Realpath-contained `fs.readdir` twin (see {@link statWithin}). */
-export async function readdirWithin(
-  root: string,
-  rel: string,
-): Promise<import('node:fs').Dirent[]> {
+/**
+ * One `readdirWithin` result entry. Directories carry no stat (the caller —
+ * the `/__fs/readdir` bridge handler — never needs it: a directory recurses
+ * instead of being compared). `size`/`mtimeMs` are omitted (not `null`) when
+ * the entry raced a concurrent delete between `readdir` and `stat` — the
+ * bridge wire format then drops them too, which the sync engine's watch
+ * expansion (dimina-kit workbench's wal-audit-watch-expand.ts) treats as
+ * "always changed" rather than risking a false stat match.
+ */
+export interface ReaddirStatEntry {
+  name: string
+  isDirectory: boolean
+  size?: number
+  mtimeMs?: number
+}
+
+/**
+ * Realpath-contained `fs.readdir` twin (see {@link statWithin}) that also
+ * `fs.stat`s every FILE entry (size + mtimeMs) — the disk-side half of the
+ * sync engine's stat-diffing (see wal-audit-watch-expand.ts's module doc):
+ * a watch-reported directory is only worth a full content re-read when a
+ * file's stat inside it actually moved, and the `/__fs/readdir` bridge is
+ * the one HTTP round trip cheap enough to do that check on every watch
+ * event without itself re-reading file bytes.
+ */
+export async function readdirWithin(root: string, rel: string): Promise<ReaddirStatEntry[]> {
   const safe = await resolveWithinProjectRoot(joinRel(root, rel), root)
-  return fs.readdir(safe, { withFileTypes: true })
+  const dirents = await fs.readdir(safe, { withFileTypes: true })
+  return Promise.all(
+    dirents.map(async (d): Promise<ReaddirStatEntry> => {
+      if (d.isDirectory()) return { name: d.name, isDirectory: true }
+      try {
+        const st = await fs.stat(path.join(safe, d.name))
+        return { name: d.name, isDirectory: false, size: st.size, mtimeMs: st.mtimeMs }
+      } catch {
+        // Entry vanished (or became unreadable) between readdir and stat —
+        // report it stat-less; see this function's doc for why that is safe.
+        return { name: d.name, isDirectory: false }
+      }
+    }),
+  )
 }
 
 /**

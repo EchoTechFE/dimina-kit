@@ -234,8 +234,14 @@ describe('/__fs/readdir dependency-dir filtering', () => {
   it('keeps a plain FILE named like a skip dir visible (only directories are filtered)', async () => {
     server = await startWith({})
     await fs.writeFile(path.join(projectRoot, 'dist'), 'a file, not a build dir')
-    const top = (await (await fetch(`${server.baseUrl}__fs/readdir?p=.`)).json()) as Array<[string, number]>
-    expect(top).toContainEqual(['dist', 1])
+    const top = (await (await fetch(`${server.baseUrl}__fs/readdir?p=.`)).json()) as Array<
+      [string, number, number?, number?]
+    >
+    const dist = top.find(([name]) => name === 'dist')
+    // File entries now carry `size`/`mtimeMs` (sync engine watch-batch
+    // stat-diffing — see wal-audit-watch-expand.ts); a directory entry stays
+    // the plain `[name, 2]` shape.
+    expect(dist).toEqual(['dist', 1, 'a file, not a build dir'.length, expect.any(Number)])
   })
 
   it('answers 404 to /__fs/read of a DIRECTORY path (EISDIR — as a file it does not exist)', async () => {
