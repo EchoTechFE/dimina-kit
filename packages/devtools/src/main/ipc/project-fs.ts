@@ -350,7 +350,7 @@ export async function statWithin(root: string, rel: string): Promise<import('nod
  * instead of being compared). `size`/`mtimeMs` are omitted (not `null`) when
  * the entry raced a concurrent delete between `readdir` and `stat` — the
  * bridge wire format then drops them too, which the sync engine's watch
- * expansion (dimina-kit workbench's wal-audit-watch-expand.ts) treats as
+ * expansion (@dimina-kit/fs-core/sync/watch-expander) treats as
  * "always changed" rather than risking a false stat match.
  */
 export interface ReaddirStatEntry {
@@ -363,7 +363,7 @@ export interface ReaddirStatEntry {
 /**
  * Realpath-contained `fs.readdir` twin (see {@link statWithin}) that also
  * `fs.stat`s every FILE entry (size + mtimeMs) — the disk-side half of the
- * sync engine's stat-diffing (see wal-audit-watch-expand.ts's module doc):
+ * sync engine's stat-diffing (see @dimina-kit/fs-core/sync/watch-expander's module doc):
  * a watch-reported directory is only worth a full content re-read when a
  * file's stat inside it actually moved, and the `/__fs/readdir` bridge is
  * the one HTTP round trip cheap enough to do that check on every watch

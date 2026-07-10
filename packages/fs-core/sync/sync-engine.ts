@@ -319,9 +319,9 @@ export function createSyncEngine(
    * A batch is trusted as-is: the port adapter (see truth-port.ts's
    * `changes` doc) is responsible for turning a watcher's coalesced/lossy
    * events into the actual set of paths worth re-examining BEFORE calling
-   * this engine — devtools' adapter (wal-audit.ts +
-   * wal-audit-watch-expand.ts) does that via a stat-level disk compare
-   * against a session index, so paths arriving here have already earned
+   * this engine — devtools' adapter (dimina-kit workbench's wal-audit.ts +
+   * this package's ./watch-expander.ts) does that via a stat-level disk
+   * compare against a session index, so paths arriving here have already earned
    * their re-examination and no further expansion happens at this layer.
    */
   async function handleBatch(paths: string[]): Promise<void> {

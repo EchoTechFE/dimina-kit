@@ -217,8 +217,8 @@ async function fsReaddir(ctx: FsActionContext): Promise<void> {
   // editor memfs and the OPFS ledger. Same-named FILES stay visible.
   const visible = entries.filter((e) => !(e.isDirectory && SKIP_DIRS.has(e.name)))
   // Wire shape: `[name, type]` for a directory, `[name, type, size, mtimeMs]`
-  // for a file — the sync engine's watch-batch stat-diffing (workbench's
-  // wal-audit-watch-expand.ts) needs size+mtimeMs to tell a stat-unchanged
+  // for a file — the sync engine's watch-batch stat-diffing
+  // (@dimina-kit/fs-core/sync/watch-expander) needs size+mtimeMs to tell a stat-unchanged
   // survivor from an actually-modified file without re-reading its content.
   // `size`/`mtimeMs` are simply absent (not `null`) for a stat-less entry
   // (readdirWithin's readdir/stat race) — the client side then always

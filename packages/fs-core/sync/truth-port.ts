@@ -64,9 +64,9 @@ export interface TruthPort {
    * that scope against a session index, and report every path whose stat
    * actually moved, plus ledger paths in scope that vanished from disk).
    * `handleBatch` in sync-engine.ts takes `onBatch`'s paths at face value
-   * and does no further expansion — see devtools' adapter
-   * (dimina-kit workbench's wal-audit.ts + wal-audit-watch-expand.ts) for a
-   * concrete implementation of this contract.
+   * and does no further expansion — ./watch-expander.ts is the optional
+   * helper implementing exactly that recovery; see devtools' adapter
+   * (dimina-kit workbench's wal-audit.ts) for a concrete assembly.
    */
   changes(onBatch: (paths: string[]) => void, onDead: () => void): () => void
 }
