@@ -38,9 +38,9 @@
         "packages/devtools/src/simulator/device-shell/device-shell.tsx:350↔packages/devtools/src/simulator/device-shell/device-shell.tsx:434": 11,
         "packages/devtools/src/simulator/device-shell/device-shell.tsx:364↔packages/devtools/src/simulator/device-shell/device-shell.tsx:416": 14,
         "packages/devtools/src/simulator/device-shell/device-shell.tsx:364↔packages/devtools/src/simulator/device-shell/device-shell.tsx:444": 14,
-        "packages/devtools/src/simulator/simulator-api-fs.ts:299↔packages/devtools/src/simulator/simulator-api-fs.ts:318": 13,
-        "packages/devtools/src/simulator/simulator-api-fs.ts:396↔packages/devtools/src/simulator/simulator-api-fs.ts:652": 6,
-        "packages/devtools/src/simulator/simulator-api-fs.ts:408↔packages/devtools/src/simulator/simulator-api-fs.ts:426": 12,
+        "packages/devtools/src/simulator/simulator-api-fs.ts:328↔packages/devtools/src/simulator/simulator-api-fs.ts:347": 13,
+        "packages/devtools/src/simulator/simulator-api-fs.ts:425↔packages/devtools/src/simulator/simulator-api-fs.ts:681": 6,
+        "packages/devtools/src/simulator/simulator-api-fs.ts:437↔packages/devtools/src/simulator/simulator-api-fs.ts:455": 12,
         "packages/devtools/src/simulator/simulator-api-storage.ts:101↔packages/devtools/src/simulator/simulator-api-storage.ts:117": 8,
         "packages/electron-deck/src/dock-react/group-view.tsx:111↔packages/electron-deck/src/dock-react/group-view.tsx:153": 24,
         "packages/electron-deck/src/dock-react/group-view.tsx:91↔packages/electron-deck/src/dock-react/group-view.tsx:107": 6,
@@ -87,7 +87,7 @@
         "packages/devtools/src/simulator/device-shell/page-stack-controller.test.ts": 513,
         "packages/devtools/src/simulator/device-shell/tab-bar-state.test.ts": 517,
         "packages/devtools/src/simulator/simulator-api-fs.test.ts": 743,
-        "packages/devtools/src/simulator/simulator-api-fs.ts": 689,
+        "packages/devtools/src/simulator/simulator-api-fs.ts": 718,
         "packages/devtools/src/simulator/simulator-api-media.ts": 652,
         "packages/electron-deck/src/__cross_check__/round2-fix-cross-check.test.ts": 712,
         "packages/electron-deck/src/dock-react/dock-view-redock.test.tsx": 663,
@@ -121,29 +121,29 @@
     },
     "test-coverage": {
       "direction": "higher-is-better",
-      "value": 72.98,
+      "value": 73.15,
       "unit": "% lines",
       "breakdown": {
         "devkit": 93.31,
-        "devtools": 68.04,
+        "devtools": 68.03,
         "electron-deck": 95.23,
         "electron-deck/dock-react": 79.05,
-        "fs-core": 92.3,
+        "fs-core": 94.29,
         "view-anchor": 95.28,
-        "workbench": 31.77
+        "workbench": 32.45
       },
       "tolerance": 1
     },
     "test-report": {
       "direction": "higher-is-better",
-      "value": 3790,
+      "value": 3823,
       "unit": "passed tests",
       "breakdown": {
         "devkit": 147,
         "devtools": 2306,
         "electron-deck": 1024,
         "electron-deck/dock-react": 96,
-        "fs-core": 45,
+        "fs-core": 78,
         "view-anchor": 87,
         "workbench": 85
       }
@@ -156,7 +156,7 @@
         "devkit": 99.91,
         "devtools": 99.73,
         "electron-deck": 99.72,
-        "fs-core": 99.88,
+        "fs-core": 99.96,
         "view-anchor": 100,
         "workbench": 99.91
       }
