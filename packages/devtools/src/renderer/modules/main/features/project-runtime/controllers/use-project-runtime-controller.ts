@@ -4,8 +4,7 @@ import type { RefObject } from 'react'
 import { DEVICES, SIM_PANEL_PADDING } from '@/shared/constants'
 import type { AppInfo, ProjectStatus, SessionRuntimeStatusPayload } from '@/shared/api'
 import type { CompileConfig } from '@/shared/types'
-import type { StorageWriteResult } from '../../../../../../shared/ipc-channels'
-import type { WxmlPanelSource } from '@dimina-kit/wxml-inspect'
+import type { StoragePanelSource, WxmlPanelSource } from '@dimina-kit/inspect'
 import { DEFAULT_RIGHT_PANE_STATE } from '../types'
 import type { RightPaneState, RightPaneTabId } from '../types'
 
@@ -22,11 +21,6 @@ import { usePopover } from './use-popover'
 export type DeviceType = typeof DEVICES[number]
 
 export type CompileStatus = ProjectStatus
-
-export interface StorageItem {
-  key: string
-  value: unknown
-}
 
 export interface ProjectRuntimeControllerProps {
   projectPath: string
@@ -73,16 +67,11 @@ interface SimulatorSlice {
 interface PanelDataSlice {
   wxmlSource: WxmlPanelSource
   wxmlEnabled: boolean
+  storageSource: StoragePanelSource
+  storageEnabled: boolean
   appData: AppDataState
-  storageItems: StorageItem[]
   refreshAppData: () => void
   setActiveAppDataBridge: (id: string) => void
-  refreshStorage: () => void
-  setStorageItem: (key: string, value: string) => Promise<StorageWriteResult>
-  removeStorageItem: (key: string) => Promise<StorageWriteResult>
-  clearStorage: () => Promise<StorageWriteResult>
-  clearAllStorage: () => Promise<StorageWriteResult>
-  getStoragePrefix: () => Promise<string>
 }
 
 interface RightPaneSlice {
@@ -211,16 +200,11 @@ export function useProjectRuntimeController(
     panelData: {
       wxmlSource: panelDataHook.wxmlSource,
       wxmlEnabled: panelDataHook.wxmlEnabled,
+      storageSource: panelDataHook.storageSource,
+      storageEnabled: panelDataHook.storageEnabled,
       appData: panelDataHook.appData,
-      storageItems: panelDataHook.storageItems,
       refreshAppData: panelDataHook.refreshAppData,
       setActiveAppDataBridge: panelDataHook.setActiveAppDataBridge,
-      refreshStorage: panelDataHook.refreshStorage,
-      setStorageItem: panelDataHook.setStorageItem,
-      removeStorageItem: panelDataHook.removeStorageItem,
-      clearStorage: panelDataHook.clearStorage,
-      clearAllStorage: panelDataHook.clearAllStorage,
-      getStoragePrefix: panelDataHook.getStoragePrefix,
     },
     rightPane: {
       rightPane: rightPaneHook.rightPane,

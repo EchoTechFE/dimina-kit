@@ -37,7 +37,7 @@ vi.mock('electron', () => ({
 
 import type { BridgeRouterHandle, RenderEvent } from '../../ipc/bridge-router.js'
 import type { RenderInspector } from '../render-inspect/index.js'
-import type { WxmlNode } from '@dimina-kit/wxml-inspect'
+import type { WxmlNode } from '@dimina-kit/inspect'
 import { SimulatorWxmlChannel } from '../../../shared/ipc-channels.js'
 import { setupSimulatorWxml } from './index.js'
 

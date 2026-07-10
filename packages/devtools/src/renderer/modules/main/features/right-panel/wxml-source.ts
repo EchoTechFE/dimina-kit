@@ -1,5 +1,5 @@
 // Electron-IPC implementation of the shared WxmlPanelSource contract: the
-// WXML panel's data wiring lives in @dimina-kit/wxml-inspect
+// WXML panel's data wiring lives in @dimina-kit/inspect
 // (ConnectedWxmlPanel); this host only says how the five operations travel —
 // over the renderer's single ipc-transport touchpoint to the main-process
 // simulator-wxml / render-inspect services.
@@ -9,7 +9,7 @@ import {
   SimulatorWxmlChannel,
   type ElementInspection,
 } from '../../../../../shared/ipc-channels'
-import type { WxmlNode, WxmlPanelSource } from '@dimina-kit/wxml-inspect'
+import type { WxmlNode, WxmlPanelSource } from '@dimina-kit/inspect'
 
 export function createIpcWxmlPanelSource(): WxmlPanelSource {
   return {

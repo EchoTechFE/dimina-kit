@@ -25,9 +25,7 @@ import {
   DebugTabContent,
   type BottomDebugPanelProps,
 } from './bottom-debug-panel'
-import type { WxmlNode, WxmlPanelSource } from '@dimina-kit/wxml-inspect'
-
-const okWrite = async () => ({ ok: true as const })
+import type { StoragePanelSource, WxmlNode, WxmlPanelSource } from '@dimina-kit/inspect'
 
 /** A minimal one-node WXML tree served through the fake source. */
 function makeWxmlTree(): WxmlNode {
@@ -50,6 +48,19 @@ function makeWxmlSource(): WxmlPanelSource {
   }
 }
 
+/** Inert StoragePanelSource: seeds an empty list, never pushes live events. */
+function makeStorageSource(): StoragePanelSource {
+  return {
+    getSnapshot: async () => [],
+    subscribe: () => () => {},
+    setActive: () => {},
+    setItem: async () => ({ ok: true as const }),
+    removeItem: async () => ({ ok: true as const }),
+    clear: async () => ({ ok: true as const }),
+    getPrefix: async () => '',
+  }
+}
+
 /**
  * Full prop bag for DebugTabContent. Spies are individually overridable so a
  * test can assert a specific handler fires.
@@ -64,13 +75,7 @@ function makeProps(
     appData: { bridges: [], activeBridgeId: null, entries: {} },
     onRefreshAppData: vi.fn(),
     onSelectAppDataBridge: vi.fn(),
-    storageItems: [],
-    onRefreshStorage: vi.fn(),
-    onSetStorage: okWrite,
-    onRemoveStorage: okWrite,
-    onClearStorage: okWrite,
-    onClearAllStorage: okWrite,
-    getStoragePrefix: async () => '',
+    storageSource: makeStorageSource(),
     compileEvents: [],
     compileLogs: [],
     onClearCompileEvents: vi.fn(),

@@ -11,3 +11,6 @@ export {
   type WxmlInspectorOptions,
 } from './inspector.js'
 export type { WxmlPanelSource } from './panel-source.js'
+export type { StorageItem, StorageEvent, StorageWriteResult } from './storage-types.js'
+export type { StoragePanelSource } from './storage-source.js'
+export { applyStorageEvent } from './storage-reducer.js'

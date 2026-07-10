@@ -9,8 +9,8 @@
  */
 import { describe, expect, it } from 'vitest'
 import { render } from '@testing-library/react'
-import { WxmlPanel } from '@dimina-kit/wxml-inspect/panel'
-import type { WxmlNode } from '@dimina-kit/wxml-inspect'
+import { WxmlPanel } from '@dimina-kit/inspect/panel'
+import type { WxmlNode } from '@dimina-kit/inspect'
 
 const TREE: WxmlNode = {
   tagName: 'view',

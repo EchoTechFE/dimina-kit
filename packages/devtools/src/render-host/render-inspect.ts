@@ -7,7 +7,7 @@
 // `executeJavaScript` (no worldId) runs there too — so injecting keeps the
 // inspector, the DOM it reads, and the sid registry all in one realm. It also
 // avoids the preload `require()`-a-sibling sandbox caveat. The walk/measure/
-// observe logic lives in @dimina-kit/wxml-inspect (shared across hosts) and is
+// observe logic lives in @dimina-kit/inspect (shared across hosts) and is
 // reused through the bundle — this file only wires it to the Electron-side
 // transport (`DiminaRenderBridge`).
 //
@@ -21,7 +21,7 @@
 // that command. Idempotent: re-injection keeps the first registry (synthetic
 // sids minted during getWxml must survive until the following highlight).
 import type { ElementInspection } from '../shared/ipc-channels.js'
-import { createWxmlInspector, type WxmlNode } from '@dimina-kit/wxml-inspect'
+import { createWxmlInspector, type WxmlNode } from '@dimina-kit/inspect'
 
 interface RenderInspectApi {
   getWxml(): WxmlNode | null

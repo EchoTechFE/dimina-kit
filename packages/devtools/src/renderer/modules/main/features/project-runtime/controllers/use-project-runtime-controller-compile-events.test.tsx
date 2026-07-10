@@ -61,20 +61,27 @@ vi.mock('./use-simulator', () => ({
 
 vi.mock('./use-panel-data', () => ({
   usePanelData: vi.fn(() => ({
-    wxmlTree: null,
+    wxmlSource: {
+      getSnapshot: vi.fn(async () => null),
+      subscribe: vi.fn(() => () => {}),
+      setActive: vi.fn(),
+      inspect: vi.fn(async () => null),
+      clearInspection: vi.fn(),
+    },
+    wxmlEnabled: true,
+    storageSource: {
+      getSnapshot: vi.fn(async () => []),
+      subscribe: vi.fn(() => () => {}),
+      setActive: vi.fn(),
+      setItem: vi.fn(async () => ({ ok: true })),
+      removeItem: vi.fn(async () => ({ ok: true })),
+      clear: vi.fn(async () => ({ ok: true })),
+      getPrefix: vi.fn(async () => ''),
+    },
+    storageEnabled: true,
     appData: { bridges: [], activeBridgeId: null, entries: {} },
-    storageItems: [],
-    refreshWxml: vi.fn(),
     refreshAppData: vi.fn(),
     setActiveAppDataBridge: vi.fn(),
-    refreshStorage: vi.fn(),
-    setStorageItem: vi.fn(),
-    removeStorageItem: vi.fn(),
-    clearStorage: vi.fn(),
-    clearAllStorage: vi.fn(),
-    getStoragePrefix: vi.fn(),
-    inspectWxmlElement: vi.fn(),
-    clearWxmlElementInspection: vi.fn(),
   })),
 }))
 

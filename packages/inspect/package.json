@@ -1,6 +1,6 @@
 {
-  "name": "@dimina-kit/wxml-inspect",
-  "version": "0.2.0",
+  "name": "@dimina-kit/inspect",
+  "version": "0.3.0",
   "description": "Host-agnostic WXML tree extraction and inspection for dimina render layers: Vue runtime walk, stable-id registry, mutation-observing inspector, and a React tree panel.",
   "keywords": [
     "dimina",
@@ -18,12 +18,12 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/EchoTechFE/dimina-kit.git",
-    "directory": "packages/wxml-inspect"
+    "directory": "packages/inspect"
   },
   "bugs": {
     "url": "https://github.com/EchoTechFE/dimina-kit/issues"
   },
-  "homepage": "https://github.com/EchoTechFE/dimina-kit/tree/main/packages/wxml-inspect#readme",
+  "homepage": "https://github.com/EchoTechFE/dimina-kit/tree/main/packages/inspect#readme",
   "exports": {
     ".": {
       "types": "./src/index.ts",

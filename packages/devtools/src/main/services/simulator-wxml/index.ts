@@ -15,7 +15,7 @@
  */
 import type { WebContents } from 'electron'
 import { SimulatorWxmlChannel } from '../../../shared/ipc-channels.js'
-import type { WxmlNode } from '@dimina-kit/wxml-inspect'
+import type { WxmlNode } from '@dimina-kit/inspect'
 import type { BridgeRouterHandle } from '../../ipc/bridge-router.js'
 import { DisposableRegistry, type Disposable } from '@dimina-kit/electron-deck/main'
 import { IpcRegistry, type SenderPolicy } from '../../utils/ipc-registry.js'

@@ -11,7 +11,7 @@
     },
     "code-duplication": {
       "direction": "lower-is-better",
-      "value": 400,
+      "value": 384,
       "unit": "duplicated lines",
       "breakdown": {
         "packages/devtools/src/main/ipc/project-fs.ts:177↔packages/devtools/src/main/ipc/project-fs.ts:471": 12,
@@ -24,15 +24,14 @@
         "packages/devtools/src/main/services/simulator-storage/index.ts:367↔packages/devtools/src/main/services/simulator-storage/index.ts:441": 8,
         "packages/devtools/src/main/services/simulator-storage/index.ts:409↔packages/devtools/src/main/services/simulator-storage/index.ts:440": 8,
         "packages/devtools/src/main/services/views/host-toolbar-port-channel.ts:144↔packages/devtools/src/preload/runtime/host-toolbar-port.ts:83": 11,
-        "packages/devtools/src/preload/instrumentation/wxml.ts:23↔packages/wxml-inspect/src/inspector.ts:48": 6,
-        "packages/devtools/src/preload/runtime/bridge.ts:75↔packages/wxml-inspect/src/inspector.ts:78": 17,
+        "packages/devtools/src/preload/instrumentation/wxml.ts:23↔packages/inspect/src/inspector.ts:48": 6,
+        "packages/devtools/src/preload/runtime/bridge.ts:75↔packages/inspect/src/inspector.ts:78": 17,
         "packages/devtools/src/preload/runtime/main-api-runner.ts:106↔packages/devtools/src/simulator/run-api-async.ts:177": 15,
         "packages/devtools/src/preload/runtime/main-api-runner.ts:81↔packages/devtools/src/simulator/run-api-async.ts:132": 11,
         "packages/devtools/src/renderer/modules/main/features/project-runtime/components/editor-panel.tsx:33↔packages/devtools/src/renderer/modules/main/features/project-runtime/components/simulator-panel.tsx:117": 14,
         "packages/devtools/src/renderer/modules/main/features/project-runtime/components/editor-panel.tsx:49↔packages/devtools/src/renderer/modules/main/features/project-runtime/components/simulator-panel.tsx:132": 13,
         "packages/devtools/src/renderer/modules/main/features/project-runtime/components/editor-panel.tsx:70↔packages/devtools/src/renderer/modules/main/features/project-runtime/components/simulator-panel.tsx:162": 22,
-        "packages/devtools/src/renderer/modules/main/features/project-runtime/controllers/use-device.ts:21↔packages/devtools/src/renderer/modules/main/features/project-runtime/controllers/use-project-runtime-controller.ts:56": 22,
-        "packages/devtools/src/renderer/modules/main/features/project-runtime/controllers/use-panel-data.ts:44↔packages/devtools/src/renderer/modules/main/features/project-runtime/controllers/use-project-runtime-controller.ts:73": 17,
+        "packages/devtools/src/renderer/modules/main/features/project-runtime/controllers/use-device.ts:21↔packages/devtools/src/renderer/modules/main/features/project-runtime/controllers/use-project-runtime-controller.ts:50": 22,
         "packages/devtools/src/renderer/modules/workbench-settings/workbench-settings.tsx:245↔packages/devtools/src/renderer/modules/workbench-settings/workbench-settings.tsx:356": 14,
         "packages/devtools/src/simulator/device-shell/device-shell.tsx:350↔packages/devtools/src/simulator/device-shell/device-shell.tsx:402": 11,
         "packages/devtools/src/simulator/device-shell/device-shell.tsx:350↔packages/devtools/src/simulator/device-shell/device-shell.tsx:434": 11,
@@ -82,7 +81,7 @@
         "packages/devtools/src/preload/instrumentation/app-data.test.ts": 865,
         "packages/devtools/src/preload/instrumentation/wxml.test.ts": 777,
         "packages/devtools/src/preload/miniapp-snapshot/host.test.ts": 561,
-        "packages/devtools/src/renderer/modules/main/features/project-runtime/project-runtime.tsx": 594,
+        "packages/devtools/src/renderer/modules/main/features/project-runtime/project-runtime.tsx": 588,
         "packages/devtools/src/shared/open-in-editor.test.ts": 537,
         "packages/devtools/src/simulator/device-shell/page-stack-controller.test.ts": 513,
         "packages/devtools/src/simulator/device-shell/tab-bar-state.test.ts": 517,
@@ -121,47 +120,47 @@
     },
     "test-coverage": {
       "direction": "higher-is-better",
-      "value": 73.27,
+      "value": 73.35,
       "unit": "% lines",
       "breakdown": {
-        "devkit": 93.54,
-        "devtools": 68.09,
+        "devkit": 93.31,
+        "devtools": 68.23,
         "electron-deck": 95.23,
         "electron-deck/dock-react": 79.05,
         "fs-core": 94.71,
+        "inspect": 69.07,
         "view-anchor": 95.28,
-        "workbench": 35.34,
-        "wxml-inspect": 69.62
+        "workbench": 35.34
       },
       "tolerance": 1
     },
     "test-report": {
       "direction": "higher-is-better",
-      "value": 3856,
+      "value": 3883,
       "unit": "passed tests",
       "breakdown": {
         "devkit": 147,
-        "devtools": 2306,
+        "devtools": 2310,
         "electron-deck": 1024,
         "electron-deck/dock-react": 96,
         "fs-core": 77,
+        "inspect": 54,
         "view-anchor": 87,
-        "workbench": 88,
-        "wxml-inspect": 31
+        "workbench": 88
       }
     },
     "type-coverage": {
       "direction": "higher-is-better",
-      "value": 99.75,
+      "value": 99.76,
       "unit": "%",
       "breakdown": {
         "devkit": 99.91,
         "devtools": 99.73,
         "electron-deck": 99.72,
         "fs-core": 99.96,
+        "inspect": 99.97,
         "view-anchor": 100,
-        "workbench": 99.91,
-        "wxml-inspect": 99.96
+        "workbench": 99.91
       }
     },
     "type-escapes": {
