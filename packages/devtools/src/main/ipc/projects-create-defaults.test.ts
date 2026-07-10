@@ -63,7 +63,8 @@ const settingsState = vi.hoisted(() => ({
   current: {
     cdp: { enabled: false, port: 9222 },
     mcp: { enabled: false, port: 7789 },
-    compile: { watch: true },
+    compile: { autoBuild: true },
+    preview: { autoReload: true },
     theme: 'system' as const,
     lastCreateBaseDir: null as string | null,
   },
@@ -92,7 +93,8 @@ beforeEach(async () => {
   settingsState.current = {
     cdp: { enabled: false, port: 9222 },
     mcp: { enabled: false, port: 7789 },
-    compile: { watch: true },
+    compile: { autoBuild: true },
+    preview: { autoReload: true },
     theme: 'system',
     lastCreateBaseDir: null,
   }

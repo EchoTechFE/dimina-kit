@@ -315,6 +315,31 @@ describe('createProjectWatcher', () => {
 		)
 	})
 
+	it('fires onChange for edits inside a `dist` directory (a mini-app may legitimately name a source dir dist/build)', async () => {
+		// Why this matters: the compile watcher must NOT blanket-ignore build-tool
+		// names like `dist`/`build` — app.json can declare pages/components under
+		// arbitrary paths (e.g. `pages/build/index`), and the compiler reads them
+		// as source. Only the perf-critical, never-source dirs (node_modules, VCS)
+		// are ignored here; hiding `dist`/`build` is the devtools *editor mirror*'s
+		// concern, not the recompile trigger's. The compiler's own output lands in
+		// os.tmpdir(), outside the watched project, so there is no self-loop to fear.
+		const distDir = path.join(tempDir, 'dist')
+		fs.mkdirSync(distDir, { recursive: true })
+		const target = path.join(distDir, 'index.js')
+		fs.writeFileSync(target, '// page source')
+
+		const onChange = vi.fn()
+		handle = createProjectWatcher(tempDir, onChange)
+		await handle.ready
+
+		fs.writeFileSync(target, '// page source, changed')
+
+		await vi.waitFor(
+			() => expect(onChange).toHaveBeenCalled(),
+			{ timeout: 2000 },
+		)
+	})
+
 	it('fires onChange for source edits when the project itself sits under an ancestor node_modules directory', async () => {
 		// Why this matters: same shape as the dotted-ancestor regression above —
 		// a project can legitimately live inside a node_modules directory (e.g.
