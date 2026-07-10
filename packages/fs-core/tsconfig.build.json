@@ -16,6 +16,8 @@
     "node_modules",
     "src/fs-core.worker.ts",
     "src/fs-query.worker.ts",
+    "src/fs-core-recovery.ts",
+    "src/fs-core-write-ops.ts",
     "src/**/*.test.ts",
     "src/__checks__/**"
   ]

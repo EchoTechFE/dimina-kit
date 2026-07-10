@@ -9,19 +9,39 @@
  *  - inputSchema 用简化记法（K2 交付 Agent 组时再换成正式 JSON Schema + MCP server 包装）。
  *  - fs_read 返回完整内容，绝不截断（上游 8000 字符腰斩教训）。
  *
- * `fs` is typed loosely (`any`): every real caller passes an already-`any`-typed
- * ProjectFsClient handle, so nothing is gained by re-deriving its shape here.
+ * `AgentToolsFs` only declares the methods this file actually calls on the
+ * ProjectFsClient handle it's given (structurally, so any object shaped like
+ * it — including test mocks — works without importing the concrete class).
  */
+export interface AgentToolsFs {
+  read(path: string): unknown
+  ls(): unknown
+  glob(pattern: string): unknown
+  grep(pattern: string, opts?: Record<string, unknown>): unknown
+  write(path: string, content: string, opts?: Record<string, unknown>): unknown
+  edit(path: string, old: string, next: string, opts?: Record<string, unknown>): unknown
+  mv(from: string, to: string, opts?: Record<string, unknown>): unknown
+  rm(path: string, opts?: Record<string, unknown>): unknown
+  checkpoint(opts?: Record<string, unknown>): unknown
+  restore(cpId: string, opts?: Record<string, unknown>): unknown
+  diff(turnId?: string): unknown
+  turnBegin(turnId: string, opts?: Record<string, unknown>): Promise<Record<string, unknown>>
+  turnEnd(turnId: string): unknown
+}
 
 export interface AgentTool {
   name: string
   description: string
   inputSchema: unknown
-  execute: (...args: any[]) => unknown
+  // Method shorthand (not an arrow-typed property): TS checks method members
+  // bivariantly, so each tool below can implement `execute` with its own
+  // narrower, concrete parameter shape (e.g. `({ path }: { path: string })`)
+  // instead of every implementation having to accept `unknown[]` directly.
+  execute(...args: unknown[]): unknown
   dangerous?: boolean
 }
 
-export function createAgentTools(fs: any): {
+export function createAgentTools(fs: AgentToolsFs): {
   tools: AgentTool[]
   byName: Record<string, AgentTool>
   beginTurn(opts?: Record<string, unknown>): Promise<{ turnId: string } & Record<string, unknown>>
@@ -48,8 +68,15 @@ export function createAgentTools(fs: any): {
   }
 
   const agentOpts = () => ({ actor: 'agent', turnId: activeTurn })
-  const T = (name: string, description: string, inputSchema: unknown, execute: (...args: any[]) => unknown, extra?: Record<string, unknown>): AgentTool =>
-    ({ name, description, inputSchema, execute, ...extra })
+  // E is inferred fresh per call from whatever concrete `execute` is passed
+  // (e.g. `({ path }: { path: string }) => …`) rather than checked against one
+  // fixed function type, so each tool below keeps its own narrow parameter
+  // shape; assigning it into the returned object's `execute` member is safe
+  // because AgentTool.execute is a method (bivariant), not an arrow-typed
+  // property.
+  function T<E extends (...args: never[]) => unknown>(name: string, description: string, inputSchema: unknown, execute: E, extra?: Record<string, unknown>): AgentTool {
+    return { name, description, inputSchema, execute, ...extra }
+  }
 
   const tools: AgentTool[] = [
     // 读/查询（路由 fs-query，不占写路径）
@@ -77,7 +104,7 @@ export function createAgentTools(fs: any): {
       ({ cpId, force }: { cpId: string; force?: boolean }) => fs.restore(cpId, { ...agentOpts(), force }),
       { dangerous: true }),
     T('fs_diff', '列出某轮 turn 的全部改动（默认当前 turn）', { turnId: 'string?' },
-      ({ turnId }: { turnId?: string } = {}) => fs.diff(turnId || activeTurn)),
+      ({ turnId }: { turnId?: string } = {}) => fs.diff(turnId ?? activeTurn ?? undefined)),
   ]
 
   return {

@@ -24,7 +24,15 @@ export default defineConfig({
         // files are not executable here at all. Their behavioral coverage
         // lives in the consumers' browser e2e suites (dimina-web-client's
         // fs/kernel batteries and the devtools Electron smoke).
+        // fs-core-recovery.ts / fs-core-write-ops.ts are the same worker-only
+        // code as fs-core.worker.ts — physically split out (file-length /
+        // cognitive-complexity), not a new testable surface. The lib-neutral
+        // pure-function modules under worker-lib/ they both depend on are
+        // deliberately NOT excluded — those run fine under Node and are
+        // covered by src/worker-lib/*.test.ts.
         'src/fs-core.worker.ts',
+        'src/fs-core-recovery.ts',
+        'src/fs-core-write-ops.ts',
         'src/fs-query.worker.ts',
         'src/client.ts',
         'src/disk-mirror.ts',

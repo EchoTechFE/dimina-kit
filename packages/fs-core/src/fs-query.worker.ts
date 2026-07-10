@@ -9,6 +9,10 @@ interface MirrorEntry {
   rev?: number
 }
 
+interface QueryOpError extends Error {
+  code?: string
+}
+
 interface SyncMsg {
   gen: number
   full?: boolean
@@ -58,15 +62,32 @@ function whenGen(gen: number | undefined): Promise<void> {
   })
 }
 
+const GLOB_SPECIAL_RE = /[.+^${}()|[\]\\]/
+
+/** Translates the glob token starting at `pattern[i]`; returns the regex
+ * fragment plus how many EXTRA characters (beyond the one at `i`) it consumed,
+ * so the caller's loop index can skip over a consumed double-star (with or
+ * without a trailing slash). */
+function translateGlobToken(pattern: string, i: number): { token: string; skip: number } {
+  const c = pattern[i]
+  if (c === '*') {
+    if (pattern[i + 1] === '*') {
+      const slash = pattern[i + 2] === '/'
+      return { token: slash ? '(?:.*/)?' : '.*', skip: slash ? 2 : 1 }
+    }
+    return { token: '[^/]*', skip: 0 }
+  }
+  if (c === '?') return { token: '[^/]', skip: 0 }
+  const escaped = GLOB_SPECIAL_RE.test(c!) ? '\\' + c : c!
+  return { token: escaped, skip: 0 }
+}
+
 function globToRegExp(pattern: string): RegExp {
   let re = ''
   for (let i = 0; i < pattern.length; i++) {
-    const c = pattern[i]
-    if (c === '*') {
-      if (pattern[i + 1] === '*') { re += pattern[i + 2] === '/' ? '(?:.*/)?' : '.*'; i += pattern[i + 2] === '/' ? 2 : 1 }
-      else re += '[^/]*'
-    } else if (c === '?') re += '[^/]'
-    else re += /[.+^${}()|[\]\\]/.test(c!) ? '\\' + c : c
+    const { token, skip } = translateGlobToken(pattern, i)
+    re += token
+    i += skip
   }
   return new RegExp('^' + re + '$')
 }
@@ -117,9 +138,15 @@ self.onmessage = async (e: MessageEvent) => {
   }
   if (msg.id === undefined) return
   try {
-    const result = await (ops as Record<string, (args: any) => Promise<unknown>>)[msg.op]!(msg.args || {})
+    // ops's members are declared via method shorthand with their own distinct
+    // arg shapes; dispatching by dynamic string key needs one widening cast —
+    // through `unknown` since the concrete shapes don't structurally overlap
+    // with a single dynamic-args signature.
+    const dispatch = ops as unknown as Record<string, (args: Record<string, unknown>) => Promise<unknown>>
+    const result = await dispatch[msg.op]!(msg.args || {})
     self.postMessage({ id: msg.id, ok: true, result })
-  } catch (err: any) {
-    self.postMessage({ id: msg.id, ok: false, code: err.code || 'internal', error: err.message || String(err) })
+  } catch (err) {
+    const e = err as QueryOpError
+    self.postMessage({ id: msg.id, ok: false, code: e.code || 'internal', error: e.message || String(err) })
   }
 }

@@ -1,23 +1,16 @@
 import { config } from "@dimina-kit/eslint-config/base";
 import globals from "globals";
 
-/** @type {import("eslint").Linter.Config[]} */
 export default [
   ...config,
   {
     // Ported TCB source — runs in browser main-thread + worker contexts.
-    // Loosely-shaped external handles/RPC message payloads are typed `any`
-    // on purpose throughout (see each file's header comment: re-deriving
-    // their shape buys nothing), so `no-explicit-any` stays off here.
     files: ["src/*.ts"],
     languageOptions: {
       globals: {
         ...globals.browser,
         ...globals.worker,
       },
-    },
-    rules: {
-      "@typescript-eslint/no-explicit-any": "off",
     },
   },
   {
@@ -29,6 +22,15 @@ export default [
     languageOptions: {
       globals: {
         ...globals.browser,
+        ...globals.node,
+      },
+    },
+  },
+  {
+    // Node build script (esbuild CLI wrapper), not shipped runtime code.
+    files: ["build-workers.mjs"],
+    languageOptions: {
+      globals: {
         ...globals.node,
       },
     },

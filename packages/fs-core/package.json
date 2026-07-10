@@ -53,7 +53,7 @@
     "sync"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && tsc -p tsconfig.worker.build.json && tsc -p tsconfig.sync.build.json",
+    "build": "tsc -p tsconfig.build.json && tsc -p tsconfig.sync.build.json && node build-workers.mjs",
     "check-types": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.worker.json",
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run --reporter=default --reporter=json --outputFile.json=test-report.json --coverage.enabled --coverage.reporter=json-summary --coverage.reportsDirectory=coverage",
@@ -65,6 +65,7 @@
     "@dimina-kit/eslint-config": "workspace:*",
     "@dimina-kit/typescript-config": "workspace:*",
     "@vitest/coverage-v8": "^4.1.4",
+    "esbuild": "^0.28.1",
     "eslint": "^10.2.1",
     "typescript": "5.9.2",
     "vitest": "^4.1.4"

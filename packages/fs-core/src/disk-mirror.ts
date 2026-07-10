@@ -28,8 +28,12 @@ declare global {
   }
 }
 
-/** `fs` is typed loosely (`any`) for the same reason as in agent-tools.ts. */
-export function createDiskMirror(fs: any) {
+/** Only the one ProjectFsClient method disk-mirror actually calls. */
+export interface DiskMirrorFs {
+  snapshot(): Promise<{ files: Record<string, string>; gen: number }>
+}
+
+export function createDiskMirror(fs: DiskMirrorFs) {
   let dir: DiskMirrorDirectoryHandle | null = null
   let last = new Map<string, string>() // path -> content（上次已镜像的内容）
   let timer: ReturnType<typeof setTimeout> | undefined

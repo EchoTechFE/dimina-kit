@@ -12,6 +12,6 @@
     // only exists in that sub-lib, not in the base "WebWorker" one.
     "lib": ["ES2022", "WebWorker", "WebWorker.Iterable", "WebWorker.AsyncIterable"]
   },
-  "include": ["src/fs-core.worker.ts", "src/fs-query.worker.ts"],
+  "include": ["src/fs-core.worker.ts", "src/fs-query.worker.ts", "src/fs-core-recovery.ts", "src/fs-core-write-ops.ts"],
   "exclude": ["node_modules"]
 }

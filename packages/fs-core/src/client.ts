@@ -7,15 +7,63 @@ const WRITE_TIMEOUT_MS = 8000
 
 type Mode = 'starting' | 'writer' | 'readonly' | 'draining' | 'dead'
 
+/**
+ * Loosely-shaped dynamic message bag flowing over the fs-core worker's main
+ * port: both the WELCOME/PONG/event messages (`event()`/`welcome()` in
+ * fs-core.worker.ts) and the RPC reply messages (`respond()`/`fail()` there)
+ * land here, distinguished at runtime by which optional fields are present.
+ * One flat interface (rather than a narrowed union) matches how the code
+ * actually reads it — every field is optional and independently checked.
+ */
+export interface CoreMessage {
+  type?: string
+  evt?: string
+  error?: string
+  mode?: Mode
+  readonly?: boolean
+  gen?: number
+  id?: number
+  ok?: boolean
+  result?: unknown
+  code?: string
+  humanPaths?: string[]
+  auditGap?: boolean
+  actor?: string
+  paths?: string[]
+  count?: number
+  restore?: string
+  t?: number
+}
+
 interface PendingEntry {
-  resolve: (v: any) => void
-  reject: (e: any) => void
+  resolve: (v: unknown) => void
+  reject: (e: unknown) => void
   timer: ReturnType<typeof setTimeout> | null
 }
 
 interface QPendingEntry {
-  resolve: (v: any) => void
-  reject: (e: any) => void
+  resolve: (v: unknown) => void
+  reject: (e: unknown) => void
+}
+
+interface DiffResult {
+  turnId: string
+  changes: Array<{ gen: number; op: string; path?: string; from?: string; to?: string }>
+  cpId: string | undefined
+  auditWindow: { cap: number; sinceGen: number }
+}
+
+interface StatusResult {
+  mode: string
+  appendedGen: number
+  walGen: number
+  memGen: number
+  ackGen: number
+  compactGen: number
+  epoch: number
+  walStartGen: number
+  checkpoints: string[]
+  turn: { turnId: string; cpId: string; expiresAt: number; ops: number } | null
 }
 
 export class ProjectFsClient {
@@ -25,11 +73,11 @@ export class ProjectFsClient {
   query!: Worker
   pending!: Map<number, PendingEntry>
   qPending!: Map<number, QPendingEntry>
-  changeCbs!: Set<(evt: any) => void>
+  changeCbs!: Set<(evt: CoreMessage) => void>
   modeCbs!: Set<(mode: Mode) => void>
   _mode!: Mode
   seq!: number
-  welcome: any
+  welcome: CoreMessage | null = null
   pingTimer!: ReturnType<typeof setInterval>
   lastPong!: number
   private _retried?: boolean
@@ -65,7 +113,7 @@ export class ProjectFsClient {
     c.welcome = null
 
     const chan = new MessageChannel()
-    const welcomed = new Promise<any>((resolve, reject) => {
+    const welcomed = new Promise<CoreMessage>((resolve, reject) => {
       c.core.onmessage = (e) => c._onCoreMessage(e.data, resolve, reject)
       c.core.onerror = (e) => reject(new Error('fs-core worker error: ' + e.message))
     })
@@ -80,34 +128,42 @@ export class ProjectFsClient {
     return c
   }
 
-  _onCoreMessage(msg: any, resolveWelcome: ((v: any) => void) | null, rejectWelcome: ((e: any) => void) | null) {
-    if (msg.type === 'WELCOME') { if (resolveWelcome) resolveWelcome(msg); return }
-    if (msg.type === 'FATAL') {
-      this._setMode('dead')
-      const err = new Error('fs-core fatal: ' + msg.error)
-      if (rejectWelcome) rejectWelcome(err)
-      for (const [, p] of this.pending) p.reject(err)
-      this.pending.clear()
-      return
-    }
+  _onCoreMessage(msg: CoreMessage, resolveWelcome: ((v: CoreMessage) => void) | null, rejectWelcome: ((e: Error) => void) | null): void {
+    if (msg.type === 'WELCOME') { this._handleWelcome(msg, resolveWelcome); return }
+    if (msg.type === 'FATAL') { this._handleFatal(msg, rejectWelcome); return }
     if (msg.type === 'PONG') { this.lastPong = Date.now(); return }
-    if (msg.evt) {
-      if (msg.evt === 'writer-granted') this._setMode('writer')
-      else if (msg.evt === 'writer-lost') this._setMode('readonly')
-      for (const cb of this.changeCbs) { try { cb(msg) } catch {} }
-      return
-    }
-    if (msg.id !== undefined) {
-      const p = this.pending.get(msg.id)
-      if (!p) return
-      this.pending.delete(msg.id)
-      if (p.timer) clearTimeout(p.timer)
-      if (msg.ok) p.resolve(msg.result)
-      else p.reject(Object.assign(new Error(msg.error), { code: msg.code, ...(msg.humanPaths !== undefined ? { humanPaths: msg.humanPaths } : {}), ...(msg.auditGap !== undefined ? { auditGap: msg.auditGap } : {}) }))
-    }
+    if (msg.evt) { this._handleEvt(msg); return }
+    if (msg.id !== undefined) this._handleRpcReply(msg)
   }
 
-  _onQueryMessage(msg: any) {
+  _handleWelcome(msg: CoreMessage, resolveWelcome: ((v: CoreMessage) => void) | null): void {
+    if (resolveWelcome) resolveWelcome(msg)
+  }
+
+  _handleFatal(msg: CoreMessage, rejectWelcome: ((e: Error) => void) | null): void {
+    this._setMode('dead')
+    const err = new Error('fs-core fatal: ' + msg.error)
+    if (rejectWelcome) rejectWelcome(err)
+    for (const [, p] of this.pending) p.reject(err)
+    this.pending.clear()
+  }
+
+  _handleEvt(msg: CoreMessage): void {
+    if (msg.evt === 'writer-granted') this._setMode('writer')
+    else if (msg.evt === 'writer-lost') this._setMode('readonly')
+    for (const cb of this.changeCbs) { try { cb(msg) } catch {} }
+  }
+
+  _handleRpcReply(msg: CoreMessage): void {
+    const p = this.pending.get(msg.id!)
+    if (!p) return
+    this.pending.delete(msg.id!)
+    if (p.timer) clearTimeout(p.timer)
+    if (msg.ok) p.resolve(msg.result)
+    else p.reject(Object.assign(new Error(msg.error), { code: msg.code, ...(msg.humanPaths !== undefined ? { humanPaths: msg.humanPaths } : {}), ...(msg.auditGap !== undefined ? { auditGap: msg.auditGap } : {}) }))
+  }
+
+  _onQueryMessage(msg: CoreMessage): void {
     if (msg.id === undefined) return
     const p = this.qPending.get(msg.id)
     if (!p) return
@@ -116,15 +172,16 @@ export class ProjectFsClient {
     else p.reject(Object.assign(new Error(msg.error), { code: msg.code }))
   }
 
-  _rpc(op: string, args: Record<string, unknown>, { opId, timeout }: { opId?: string; timeout?: number } = {}): Promise<any> {
+  _rpc<T = unknown>(op: string, args: Record<string, unknown>, { opId, timeout }: { opId?: string; timeout?: number } = {}): Promise<T> {
     const id = ++this.seq
-    return new Promise((resolve, reject) => {
+    return new Promise<T>((resolve, reject) => {
+      const entryResolve = resolve as (v: unknown) => void
       const timer = timeout
         ? setTimeout(() => {
             // 超时重试一次：同 opId 幂等（fs-core 对已知 opId 返回既有结果）
             if (opId && !this._retried) {
               const retryId = ++this.seq
-              this.pending.set(retryId, { resolve, reject, timer: setTimeout(() => { this.pending.delete(retryId); reject(new Error(op + ' timeout (after retry)')) }, timeout) })
+              this.pending.set(retryId, { resolve: entryResolve, reject, timer: setTimeout(() => { this.pending.delete(retryId); reject(new Error(op + ' timeout (after retry)')) }, timeout) })
               this.pending.delete(id)
               this.core.postMessage({ id: retryId, op, args, opId })
             } else {
@@ -133,21 +190,21 @@ export class ProjectFsClient {
             }
           }, timeout)
         : null
-      this.pending.set(id, { resolve, reject, timer })
+      this.pending.set(id, { resolve: entryResolve, reject, timer })
       this.core.postMessage({ id, op, args, opId })
     })
   }
 
-  _qrpc(op: string, args: Record<string, unknown>): Promise<any> {
+  _qrpc<T = unknown>(op: string, args: Record<string, unknown>): Promise<T> {
     const id = ++this.seq
-    return new Promise((resolve, reject) => {
-      this.qPending.set(id, { resolve, reject })
+    return new Promise<T>((resolve, reject) => {
+      this.qPending.set(id, { resolve: resolve as (v: unknown) => void, reject })
       this.query.postMessage({ id, op, args })
     })
   }
 
-  _writeOp(op: string, args: Record<string, unknown>): Promise<any> {
-    return this._rpc(op, args, { opId: crypto.randomUUID(), timeout: WRITE_TIMEOUT_MS })
+  _writeOp<T = unknown>(op: string, args: Record<string, unknown>): Promise<T> {
+    return this._rpc<T>(op, args, { opId: crypto.randomUUID(), timeout: WRITE_TIMEOUT_MS })
   }
 
   // ── 写 API（{actor:'human'|'agent', turnId, ifMatch} 透传）──
@@ -166,12 +223,7 @@ export class ProjectFsClient {
   turnBegin(turnId: string, opts: Record<string, unknown> = {}): Promise<unknown> { return this._writeOp('turnBegin', { turnId, ...opts }) }
   turnEnd(turnId: string): Promise<unknown> { return this._writeOp('turnEnd', { turnId }) }
   /** 该 turn 的改动清单（WAL actor/turnId 审计标注免费提供）。 */
-  diff(turnId?: string): Promise<{
-    turnId: string
-    changes: Array<{ gen: number; op: string; path?: string; from?: string; to?: string }>
-    cpId: string | undefined
-    auditWindow: { cap: number; sinceGen: number }
-  }> { return this._rpc('diff', { turnId }) }
+  diff(turnId?: string): Promise<DiffResult> { return this._rpc<DiffResult>('diff', { turnId }) }
 
   /** W4 纵深加固令牌门（docs/k3-terminal-split-plan.md §6 替代方案 A / §8.3）：特权方法，只应
    * 由内核（kernel.js createKernel）在 boot 早期调用一次，把只有内核持有的随机令牌交给 fs-core；
@@ -183,18 +235,7 @@ export class ProjectFsClient {
   // ── 读 API：小读走 core（权威），查询/快照走 query（不占写路径）──
   read(path: string): Promise<{ content: string; rev?: number; gen: number }> { return this._rpc('read', { path }) }
   ls(): Promise<{ paths: string[]; gen: number }> { return this._rpc('ls', {}) }
-  status(): Promise<{
-    mode: string
-    appendedGen: number
-    walGen: number
-    memGen: number
-    ackGen: number
-    compactGen: number
-    epoch: number
-    walStartGen: number
-    checkpoints: string[]
-    turn: { turnId: string; cpId: string; expiresAt: number; ops: number } | null
-  }> { return this._rpc('status', {}) }
+  status(): Promise<StatusResult> { return this._rpc<StatusResult>('status', {}) }
   snapshot(opts: { gen?: number } = {}): Promise<{ files: Record<string, string>; gen: number; stale: boolean }> { return this._qrpc('snapshot', opts) }
   grep(pattern: string, opts: Record<string, unknown> = {}): Promise<unknown> { return this._qrpc('grep', { pattern, ...opts }) }
   glob(pattern: string, opts: Record<string, unknown> = {}): Promise<unknown> { return this._qrpc('glob', { pattern, ...opts }) }
@@ -211,7 +252,7 @@ export class ProjectFsClient {
     return { seeded: true, count: entries.length }
   }
 
-  onChange(cb: (evt: any) => void): () => void {
+  onChange(cb: (evt: CoreMessage) => void): () => void {
     this.changeCbs.add(cb)
     return () => this.changeCbs.delete(cb)
   }
@@ -222,7 +263,7 @@ export class ProjectFsClient {
    * writer-granted/writer-lost 事件驱动，供宿主向用户呈现"另一个标签页持有写权"之类提示。 */
   get mode(): Mode { return this._mode }
 
-  _setMode(mode: Mode) {
+  _setMode(mode: Mode): void {
     if (this._mode === mode) return
     this._mode = mode
     for (const cb of this.modeCbs) { try { cb(mode) } catch {} }
@@ -234,7 +275,7 @@ export class ProjectFsClient {
     return () => this.modeCbs.delete(cb)
   }
 
-  destroy() {
+  destroy(): void {
     clearInterval(this.pingTimer)
     this._setMode('dead')
     this.core.terminate()

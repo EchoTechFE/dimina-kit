@@ -4,7 +4,18 @@
     "noEmit": true
   },
   "include": ["src", "sync"],
-  // The two worker entry points need the WebWorker (not DOM) lib — see
-  // tsconfig.worker.json, which type-checks them as a separate program.
-  "exclude": ["node_modules", "src/fs-core.worker.ts", "src/fs-query.worker.ts"]
+  // The two worker entry points (plus the worker-only modules they pull in —
+  // fs-core-recovery.ts / fs-core-write-ops.ts, which reference OPFS/Worker-only
+  // types like FileSystemSyncAccessHandle) need the WebWorker (not DOM) lib —
+  // see tsconfig.worker.json, which type-checks them as a separate program.
+  // Everything under src/worker-lib/ is deliberately lib-neutral (see that
+  // directory's file headers) so it stays compilable by BOTH programs and is
+  // NOT excluded here.
+  "exclude": [
+    "node_modules",
+    "src/fs-core.worker.ts",
+    "src/fs-query.worker.ts",
+    "src/fs-core-recovery.ts",
+    "src/fs-core-write-ops.ts"
+  ]
 }
