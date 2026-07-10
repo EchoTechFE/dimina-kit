@@ -56,11 +56,11 @@ describe('createBinarySidecar — index + echo judgement', () => {
     expect(await sc.put('a.png', png(2))).toBe(true)
   })
 
-  it('remove() reports whether an entry existed and emits null once', () => {
+  it('remove() reports whether an entry existed and emits null once', async () => {
     const sc = createBinarySidecar()
     const onChange = vi.fn()
     sc.onChange(onChange)
-    expect(sc.remove('ghost.png')).toBe(false)
+    await expect(sc.remove('ghost.png')).resolves.toBe(false)
     expect(onChange).not.toHaveBeenCalled()
   })
 
@@ -101,7 +101,7 @@ describe('createBinarySidecar — retainBytes host shape', () => {
     })
     const off = sc.onChange((rel, bytes) => seen.push([rel, bytes]))
     await sc.put('a.png', png(1))
-    sc.remove('a.png')
+    await sc.remove('a.png')
     expect(seen).toEqual([
       ['a.png', png(1)],
       ['a.png', null],
@@ -128,12 +128,29 @@ describe('createBinarySidecar — retainBytes host shape', () => {
     expect(onChange).not.toHaveBeenCalled()
   })
 
+  it('a put issued AFTER reset() queues behind it and lands in the NEW session (never silently swallowed by the swap)', async () => {
+    const sc = createBinarySidecar({ retainBytes: true })
+    const resetting = sc.reset({ 'seed.png': png(1) })
+    const putting = sc.put('live.png', png(2))
+    await Promise.all([resetting, putting])
+    expect(sc.keys().sort()).toEqual(['live.png', 'seed.png'])
+  })
+
+  it('overlapping resets resolve in CALLER order: the later caller wins even when the earlier one hashes longer', async () => {
+    const sc = createBinarySidecar({ retainBytes: true })
+    const slow = Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`slow${i}.png`, png(i)]))
+    const r1 = sc.reset(slow)
+    const r2 = sc.reset({ 'winner.png': png(9) })
+    await Promise.all([r1, r2])
+    expect(sc.keys()).toEqual(['winner.png'])
+  })
+
   it('clear() is a silent session reseed: no per-entry removal events', async () => {
     const sc = createBinarySidecar({ retainBytes: true })
     await sc.put('a.png', png(1))
     const onChange = vi.fn()
     sc.onChange(onChange)
-    sc.clear()
+    await sc.clear()
     expect(sc.size).toBe(0)
     expect(sc.toRecord()).toEqual({})
     expect(onChange).not.toHaveBeenCalled()

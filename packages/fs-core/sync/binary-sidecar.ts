@@ -71,8 +71,8 @@ export interface BinarySidecar {
    * what is already recorded (same size + sha256) — nothing changes and no
    * event fires — and `true` when the entry was created or updated. */
   put(rel: string, bytes: Uint8Array): Promise<boolean>
-  /** Remove `rel`. Returns whether an entry actually existed. */
-  remove(rel: string): boolean
+  /** Remove `rel`. Resolves to whether an entry actually existed. */
+  remove(rel: string): Promise<boolean>
   has(rel: string): boolean
   entry(rel: string): BinarySidecarEntry | undefined
   /** The retained bytes for `rel` — always `undefined` without `retainBytes`. */
@@ -80,9 +80,9 @@ export interface BinarySidecar {
   keys(): string[]
   readonly size: number
   /** Session reseed: drop everything, silently (see the module doc). */
-  clear(): void
-  /** `clear()` + `put()` every entry of `files` — the bulk reseed a host's
-   * project-open path uses. */
+  clear(): Promise<void>
+  /** Bulk session reseed: replace the whole content with `files` — the reseed
+   * a host's project-open path uses. */
   reset(files: Record<string, Uint8Array>): Promise<void>
   /** Snapshot of the retained bytes (`retainBytes` hosts only; empty otherwise). */
   toRecord(): Record<string, Uint8Array>
@@ -102,6 +102,26 @@ export function createBinarySidecar(opts: BinarySidecarOptions = {}): BinarySide
   let store = new Map<string, Uint8Array>()
   const changeCbs = new Set<(rel: string, bytes: Uint8Array | null) => void>()
 
+  /**
+   * FIFO serializing every MUTATION (put/remove/clear/reset) in caller order.
+   * Without it, a put whose (async) hashing straddles an in-flight reset()
+   * lands on maps the reset is about to swap away — the mutation silently
+   * vanishes — and two overlapping resets resolve as "last swapper wins"
+   * instead of "last caller wins". Serialized, a mutation issued after
+   * reset() runs after it and lands in the NEW session; one issued before is
+   * superseded by it — nothing races across a session boundary. READS
+   * (has/entry/bytes/keys/overlay/toRecord) stay synchronous against the
+   * currently visible maps: reset's one-step swap keeps them consistent.
+   * The chain swallows step rejections so one failed mutation cannot wedge
+   * the queue.
+   */
+  let mutationTurn: Promise<unknown> = Promise.resolve()
+  function enqueueMutation<T>(fn: () => T | Promise<T>): Promise<T> {
+    const next = mutationTurn.then(fn, fn) as Promise<T>
+    mutationTurn = next.catch(() => {})
+    return next
+  }
+
   function emit(rel: string, bytes: Uint8Array | null): void {
     for (const cb of changeCbs) {
       try {
@@ -114,20 +134,24 @@ export function createBinarySidecar(opts: BinarySidecarOptions = {}): BinarySide
   }
 
   return {
-    async put(rel, bytes) {
-      const sha256 = await sha256hex(bytes)
-      const prior = index.get(rel)
-      if (prior && prior.size === bytes.length && prior.sha256 === sha256) return false
-      index.set(rel, { size: bytes.length, sha256 })
-      if (retainBytes) store.set(rel, bytes)
-      emit(rel, bytes)
-      return true
+    put(rel, bytes) {
+      return enqueueMutation(async () => {
+        const sha256 = await sha256hex(bytes)
+        const prior = index.get(rel)
+        if (prior && prior.size === bytes.length && prior.sha256 === sha256) return false
+        index.set(rel, { size: bytes.length, sha256 })
+        if (retainBytes) store.set(rel, bytes)
+        emit(rel, bytes)
+        return true
+      })
     },
     remove(rel) {
-      const existed = index.delete(rel)
-      store.delete(rel)
-      if (existed) emit(rel, null)
-      return existed
+      return enqueueMutation(() => {
+        const existed = index.delete(rel)
+        store.delete(rel)
+        if (existed) emit(rel, null)
+        return existed
+      })
     },
     has: (rel) => index.has(rel),
     entry: (rel) => index.get(rel),
@@ -137,23 +161,28 @@ export function createBinarySidecar(opts: BinarySidecarOptions = {}): BinarySide
       return index.size
     },
     clear() {
-      index.clear()
-      store.clear()
+      return enqueueMutation(() => {
+        index.clear()
+        store.clear()
+      })
     },
-    async reset(files) {
-      // Atomic to readers: hashing runs against LOCAL maps and the visible
-      // state is swapped in one synchronous step at the end — a concurrent
-      // overlay()/toRecord()/entry() sees either the old set or the new set,
-      // never an empty or half-built one. Silent by design (see the module
-      // doc): a session reseed fires no per-entry events.
-      const nextIndex = new Map<string, BinarySidecarEntry>()
-      const nextStore = new Map<string, Uint8Array>()
-      for (const [rel, bytes] of Object.entries(files)) {
-        nextIndex.set(rel, { size: bytes.length, sha256: await sha256hex(bytes) })
-        if (retainBytes) nextStore.set(rel, bytes)
-      }
-      index = nextIndex
-      store = nextStore
+    reset(files) {
+      return enqueueMutation(async () => {
+        // Atomic to readers: hashing runs against LOCAL maps and the visible
+        // state is swapped in one synchronous step at the end — a concurrent
+        // overlay()/toRecord()/entry() sees either the old set or the new
+        // set, never an empty or half-built one. Silent by design (see the
+        // module doc): a session reseed fires no per-entry events. Ordering
+        // vs other mutations comes from the mutation FIFO above.
+        const nextIndex = new Map<string, BinarySidecarEntry>()
+        const nextStore = new Map<string, Uint8Array>()
+        for (const [rel, bytes] of Object.entries(files)) {
+          nextIndex.set(rel, { size: bytes.length, sha256: await sha256hex(bytes) })
+          if (retainBytes) nextStore.set(rel, bytes)
+        }
+        index = nextIndex
+        store = nextStore
+      })
     },
     toRecord: () => Object.fromEntries(store),
     overlay(files) {

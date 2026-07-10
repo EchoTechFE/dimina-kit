@@ -195,7 +195,7 @@ export function createSyncEngine(
    * same persisted ledger identity) and are removed so the ledger ends up
    * exactly matching the walked tree. */
   async function seedFromDisk(): Promise<void> {
-    binaryIndex.clear()
+    await binaryIndex.clear()
     inboundApplied.clear()
     const seen = new Set<string>()
     await port.walk(async (rel, bytes) => {
@@ -247,7 +247,7 @@ export function createSyncEngine(
       // ledger (it never took the client.write path), so removal here is
       // index-only — no client.rm.
       if (binaryIndex.has(rel)) {
-        binaryIndex.remove(rel)
+        await binaryIndex.remove(rel)
         inboundApplied.set(rel, { kind: 'delete' })
         await applyToEditor?.(rel, null)
         return
