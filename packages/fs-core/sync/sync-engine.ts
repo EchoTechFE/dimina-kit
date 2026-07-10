@@ -46,18 +46,19 @@
  * content, or no record at all) returns false and leaves any existing record
  * untouched — it is not this call's echo to consume.
  *
- * Binary layering (v1): the first 8192 bytes of a file are sniffed for a NUL
- * byte to classify it binary. A binary file never reaches the fs-core
- * ledger (`client.write`/`read`) — it is tracked only in the in-memory
- * `binaryIndex` (`rel -> { size, sha256 }`), and echo judgement for it is
- * size+hash equality instead of a ledger content compare. What/why this is
- * narrower than the text path: binary changes get NO WAL audit and NO
- * rollback (the audit turn surface — `diff`/`restore` — is a string-content
- * contract; v1 does not support an agent writing binary inside a turn), and
- * `binaryIndex` is session-scoped — it is cleared and rebuilt from scratch on
- * every `populateLedger()`, exactly like the ledger's own text reconciliation.
+ * Binary layering: classification (NUL sniff), the `rel -> {size, sha256}`
+ * index, and echo judgement (size+hash equality instead of a ledger content
+ * compare) are all owned by ./binary-sidecar.ts — see that module's doc; this
+ * engine holds an INDEX-ONLY sidecar. A binary file never reaches the fs-core
+ * ledger (`client.write`/`read`). What/why this is narrower than the text
+ * path: binary changes get NO WAL audit and NO rollback (the audit turn
+ * surface — `diff`/`restore` — is a string-content contract; the engine does
+ * not support an agent writing binary inside a turn), and the sidecar is
+ * session-scoped — cleared and rebuilt from scratch on every
+ * `populateLedger()`, exactly like the ledger's own text reconciliation.
  */
 
+import { bytesEqual, createBinarySidecar, looksBinary } from './binary-sidecar.js'
 import type { TruthPort } from './truth-port.js'
 
 export type { TruthPort, TruthPortCapabilities } from './truth-port.js'
@@ -123,29 +124,6 @@ export interface SyncEngine {
   stop(): void
 }
 
-const BINARY_SNIFF_BYTES = 8192
-
-/** True when the first `BINARY_SNIFF_BYTES` of `bytes` contain a NUL byte. */
-function looksBinary(bytes: Uint8Array): boolean {
-  const len = Math.min(bytes.length, BINARY_SNIFF_BYTES)
-  for (let i = 0; i < len; i++) {
-    if (bytes[i] === 0) return true
-  }
-  return false
-}
-
-async function sha256hex(bytes: Uint8Array): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', bytes as BufferSource)
-  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
-}
-
-/** Byte-for-byte equality — used by `consumeInboundEcho`'s binary-content match. */
-function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
-  if (a.length !== b.length) return false
-  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
-  return true
-}
-
 /**
  * True when `error` denotes "path does not exist" per the TruthPort error
  * contract (see truth-port.ts): `error.code === 'not-found'` or
@@ -180,10 +158,10 @@ export function createSyncEngine(
 
   /**
    * Binary files never enter the fs-core ledger — see the module doc's
-   * "Binary layering" section. Session-scoped: rebuilt from scratch on every
-   * `populateLedger()`.
+   * "Binary layering" section. Index-only (this engine never needs the bytes
+   * back); session-scoped: rebuilt from scratch on every `populateLedger()`.
    */
-  const binaryIndex = new Map<string, { size: number; sha256: string }>()
+  const binaryIndex = createBinarySidecar()
 
   /**
    * `rel -> { kind: 'text', text } | { kind: 'binary', bytes } | { kind: 'delete' }`
@@ -223,7 +201,7 @@ export function createSyncEngine(
     await port.walk(async (rel, bytes) => {
       seen.add(rel)
       if (looksBinary(bytes)) {
-        binaryIndex.set(rel, { size: bytes.length, sha256: await sha256hex(bytes) })
+        await binaryIndex.put(rel, bytes)
         return // binary never enters the ledger
       }
       await client.write(rel, decoder.decode(bytes), { actor: 'human' })
@@ -269,7 +247,7 @@ export function createSyncEngine(
       // ledger (it never took the client.write path), so removal here is
       // index-only — no client.rm.
       if (binaryIndex.has(rel)) {
-        binaryIndex.delete(rel)
+        binaryIndex.remove(rel)
         inboundApplied.set(rel, { kind: 'delete' })
         await applyToEditor?.(rel, null)
         return
@@ -288,10 +266,9 @@ export function createSyncEngine(
     }
 
     if (looksBinary(bytes)) {
-      const prior = binaryIndex.get(rel)
-      const sha256 = await sha256hex(bytes)
-      if (prior && prior.size === bytes.length && prior.sha256 === sha256) return // echo: same bytes already indexed
-      binaryIndex.set(rel, { size: bytes.length, sha256 })
+      // Echo judgement is the sidecar's put(): `false` = same size+sha256
+      // already indexed, i.e. the echo of our own last write.
+      if (!(await binaryIndex.put(rel, bytes))) return
       inboundApplied.set(rel, { kind: 'binary', bytes })
       await applyToEditor?.(rel, bytes)
       return
@@ -432,7 +409,7 @@ export function createSyncEngine(
     try {
       if (content instanceof Uint8Array && looksBinary(content)) {
         await enqueueLedgerTurn(async () => {
-          binaryIndex.set(rel, { size: content.length, sha256: await sha256hex(content) })
+          await binaryIndex.put(rel, content)
         })
         return
       }

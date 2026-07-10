@@ -3,37 +3,20 @@
  * 起 fs-core / fs-query 两个 worker，牵好 core→query 的 diff 端口，
  * 暴露 Promise API；写请求自动带 opId，超时重试幂等（同 opId 重发）。
  */
+import type { CoreMessage, FsCoreMode } from './worker-lib/protocol.js'
+
+// The wire contract (error codes, event names, message shapes) lives in
+// worker-lib/protocol.ts — shared verbatim with the worker's own emit sites —
+// and is re-exported here so consumers can match on symbols instead of
+// quoting string literals from worker source.
+export { FS_CORE_ERROR_CODES, getFsCoreErrorCode, isFsCoreErrorCode } from './worker-lib/protocol.js'
+export type {
+  CoreMessage, CoreWireMessage, FsCoreErrorCode, FsCoreErrorExtras, FsCoreEventName, FsCoreMode,
+} from './worker-lib/protocol.js'
+
 const WRITE_TIMEOUT_MS = 8000
 
-type Mode = 'starting' | 'writer' | 'readonly' | 'draining' | 'dead'
-
-/**
- * Loosely-shaped dynamic message bag flowing over the fs-core worker's main
- * port: both the WELCOME/PONG/event messages (`event()`/`welcome()` in
- * fs-core.worker.ts) and the RPC reply messages (`respond()`/`fail()` there)
- * land here, distinguished at runtime by which optional fields are present.
- * One flat interface (rather than a narrowed union) matches how the code
- * actually reads it — every field is optional and independently checked.
- */
-export interface CoreMessage {
-  type?: string
-  evt?: string
-  error?: string
-  mode?: Mode
-  readonly?: boolean
-  gen?: number
-  id?: number
-  ok?: boolean
-  result?: unknown
-  code?: string
-  humanPaths?: string[]
-  auditGap?: boolean
-  actor?: string
-  paths?: string[]
-  count?: number
-  restore?: string
-  t?: number
-}
+type Mode = FsCoreMode
 
 interface PendingEntry {
   resolve: (v: unknown) => void
@@ -80,7 +63,6 @@ export class ProjectFsClient {
   welcome: CoreMessage | null = null
   pingTimer!: ReturnType<typeof setInterval>
   lastPong!: number
-  private _retried?: boolean
 
   /** 测试用：抹掉一个项目的全部持久层（只能在无 core 运行时调用）。 */
   static async wipe(projectId: string): Promise<void> {
@@ -88,6 +70,11 @@ export class ProjectFsClient {
     try { await root.removeEntry(projectId, { recursive: true }) } catch {}
   }
 
+  /** `coreUrl`/`queryUrl` default to the `/ide/fs/` deployment convention of
+   * the original dwc host (documented in this package's README「使用」节);
+   * every other real host serves the worker files elsewhere and passes both
+   * URLs explicitly — see `resolveWorkerFiles` (`./worker-files`) for the
+   * authoritative file-name/sibling contract. */
   static async connect({
     projectId,
     coreUrl = '/ide/fs/fs-core.worker.js',
@@ -178,8 +165,10 @@ export class ProjectFsClient {
       const entryResolve = resolve as (v: unknown) => void
       const timer = timeout
         ? setTimeout(() => {
-            // 超时重试一次：同 opId 幂等（fs-core 对已知 opId 返回既有结果）
-            if (opId && !this._retried) {
+            // 超时重试一次：同 opId 幂等（fs-core 对已知 opId 返回既有结果）；
+            // 重试自己的 timer 只会终止性 reject，不会再进这个分支，所以每次
+            // 调用恰好一次重试。
+            if (opId) {
               const retryId = ++this.seq
               this.pending.set(retryId, { resolve: entryResolve, reject, timer: setTimeout(() => { this.pending.delete(retryId); reject(new Error(op + ' timeout (after retry)')) }, timeout) })
               this.pending.delete(id)

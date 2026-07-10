@@ -45,6 +45,23 @@
     "./sync": {
       "types": "./sync/sync-engine.ts",
       "default": "./dist/sync/sync-engine.js"
+    },
+    "./sync/binary-sidecar": {
+      "types": "./sync/binary-sidecar.ts",
+      "default": "./dist/sync/binary-sidecar.js"
+    },
+    "./sync/watch-expander": {
+      "types": "./sync/watch-expander.ts",
+      "default": "./dist/sync/watch-expander.js"
+    },
+    "./protocol": {
+      "types": "./src/worker-lib/protocol.ts",
+      "default": "./dist/worker-lib/protocol.js"
+    },
+    "./worker-files": {
+      "types": "./src/worker-files.ts",
+      "require": "./dist/worker-files.cjs",
+      "default": "./dist/worker-files.js"
     }
   },
   "files": [

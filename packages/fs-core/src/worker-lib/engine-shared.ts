@@ -6,6 +6,7 @@
  * （WebWorker lib）两个 program 同时编译。
  */
 import type { WalRecord } from './wal-codec.js'
+import type { FsCoreErrorCode } from './protocol.js'
 
 export const OP = { WRITE: 1, RM: 2, MV: 3, MKDIR: 4, CHECKPOINT: 5, RESTORE: 6 } as const
 export const OP_NAME: Record<number, string> = { 1: 'write', 2: 'rm', 3: 'mv', 4: 'mkdir', 5: 'checkpoint', 6: 'restore' }
@@ -57,11 +58,14 @@ export interface WindowOp {
 export type Respond = (r: Record<string, unknown>) => void
 
 export interface WorkerError extends Error {
-  code?: string
+  code?: FsCoreErrorCode
   extra?: Record<string, unknown>
 }
 
-export function rpcErr(code: string, message: string, extra?: Record<string, unknown>): WorkerError {
+/** `code` is typed against the exported wire contract (worker-lib/protocol.ts),
+ * so the set of codes this worker can throw and the set consumers can match on
+ * are the same list by construction. */
+export function rpcErr(code: FsCoreErrorCode, message: string, extra?: Record<string, unknown>): WorkerError {
   const e = new Error(message) as WorkerError
   e.code = code
   if (extra) e.extra = extra

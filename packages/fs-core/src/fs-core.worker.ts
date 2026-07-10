@@ -23,6 +23,7 @@ import { rpcErr, type MirrorEntry, type Respond, type TurnState, type WindowOp, 
 import type {
   CheckpointArgs, DiffArgs, EditArgs, MvArgs, ReadArgs, RestoreArgs, RmArgs, TurnBeginArgs, TurnEndArgs, WriteArgs,
 } from './worker-lib/rpc-types.js'
+import type { CoreWireMessage, FsCoreMode } from './worker-lib/protocol.js'
 
 /** FileSystemFileHandle.move() postdates this TS lib version's ambient types
  * (feature-detected at the call site via `if (fh.move) …`, matching the
@@ -35,7 +36,7 @@ declare global {
 
 // ───────────────────────── core 主体 ─────────────────────────
 export class FsCore {
-  mode: 'starting' | 'writer' | 'readonly' | 'draining' | 'dead' = 'starting'
+  mode: FsCoreMode = 'starting'
   mirror = new Map<string, MirrorEntry>()
   checkpoints = new Map<string, { h: string; gen: number }>()
   opIds = new Map<string, { gen: number }>()
@@ -86,7 +87,7 @@ export class FsCore {
   opStatus() { return recovery.opStatus(this) }
   pushDiff(diff: Record<string, MirrorEntry | null>, gen: number): void { recovery.pushDiff(this, diff, gen) }
   pushFullToQuery(): void { recovery.pushFullToQuery(this) }
-  event(e: Record<string, unknown>): void { recovery.event(this, e) }
+  event(e: CoreWireMessage): void { recovery.event(this, e) }
   welcome(): void { recovery.welcome(this) }
   onBroadcast(msg: { type?: string }): Promise<void> { return recovery.onBroadcast(this, msg) }
 

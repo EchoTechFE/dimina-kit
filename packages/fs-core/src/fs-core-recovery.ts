@@ -12,6 +12,7 @@ import {
   type SlotInfo, type WalRecord,
 } from './worker-lib/wal-codec.js'
 import { normalizePath } from './worker-lib/paths.js'
+import type { CoreWireMessage } from './worker-lib/protocol.js'
 import { epochFloor, OP, OPID_WINDOW, rpcErr, SEGMENT_ROTATE_BYTES, type MirrorEntry } from './worker-lib/engine-shared.js'
 
 export { epochFloor }
@@ -258,7 +259,7 @@ export function pushFullToQuery(core: FsCore): void {
   for (const [p, ent] of core.mirror) files[p] = { content: ent.content, rev: ent.rev }
   core.queryPort.postMessage({ gen: core.memGen, full: true, files })
 }
-export function event(core: FsCore, e: Record<string, unknown>): void { if (core.clientPort) core.clientPort.postMessage(e) }
+export function event(core: FsCore, e: CoreWireMessage): void { if (core.clientPort) core.clientPort.postMessage(e) }
 export function welcome(core: FsCore): void {
   core.event({ type: 'WELCOME', epoch: core.epoch, memGen: core.memGen, readonly: core.mode !== 'writer', mode: core.mode })
 }
