@@ -96,8 +96,10 @@ export interface BinarySidecar {
 
 export function createBinarySidecar(opts: BinarySidecarOptions = {}): BinarySidecar {
   const retainBytes = opts.retainBytes === true
-  const index = new Map<string, BinarySidecarEntry>()
-  const store = new Map<string, Uint8Array>()
+  // `let` (not const): reset() swaps in fully-built replacement maps in one
+  // synchronous step — see its body.
+  let index = new Map<string, BinarySidecarEntry>()
+  let store = new Map<string, Uint8Array>()
   const changeCbs = new Set<(rel: string, bytes: Uint8Array | null) => void>()
 
   function emit(rel: string, bytes: Uint8Array | null): void {
@@ -139,9 +141,19 @@ export function createBinarySidecar(opts: BinarySidecarOptions = {}): BinarySide
       store.clear()
     },
     async reset(files) {
-      index.clear()
-      store.clear()
-      for (const [rel, bytes] of Object.entries(files)) await this.put(rel, bytes)
+      // Atomic to readers: hashing runs against LOCAL maps and the visible
+      // state is swapped in one synchronous step at the end — a concurrent
+      // overlay()/toRecord()/entry() sees either the old set or the new set,
+      // never an empty or half-built one. Silent by design (see the module
+      // doc): a session reseed fires no per-entry events.
+      const nextIndex = new Map<string, BinarySidecarEntry>()
+      const nextStore = new Map<string, Uint8Array>()
+      for (const [rel, bytes] of Object.entries(files)) {
+        nextIndex.set(rel, { size: bytes.length, sha256: await sha256hex(bytes) })
+        if (retainBytes) nextStore.set(rel, bytes)
+      }
+      index = nextIndex
+      store = nextStore
     },
     toRecord: () => Object.fromEntries(store),
     overlay(files) {

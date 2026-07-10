@@ -112,6 +112,22 @@ describe('createBinarySidecar — retainBytes host shape', () => {
     expect(seen).toHaveLength(2)
   })
 
+  it('reset() is atomic to readers and silent: a mid-reset read sees the OLD set, and no events fire', async () => {
+    const sc = createBinarySidecar({ retainBytes: true })
+    await sc.put('old.png', png(1))
+    const onChange = vi.fn()
+    sc.onChange(onChange)
+    const resetting = sc.reset({ 'new.png': png(2) })
+    // Hashing has suspended reset(); a concurrent reader (compile/export
+    // overlaying the sidecar) must still see the complete old set — never an
+    // empty or half-built one.
+    expect(sc.keys()).toEqual(['old.png'])
+    expect(sc.toRecord()).toEqual({ 'old.png': png(1) })
+    await resetting
+    expect(sc.keys()).toEqual(['new.png'])
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
   it('clear() is a silent session reseed: no per-entry removal events', async () => {
     const sc = createBinarySidecar({ retainBytes: true })
     await sc.put('a.png', png(1))
