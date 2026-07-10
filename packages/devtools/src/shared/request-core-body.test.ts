@@ -17,8 +17,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { performRequest, type RequestFailResult, type RequestSuccessResult } from './request-core'
 
-async function flushMicrotasks(times = 5): Promise<void> {
-  for (let i = 0; i < times; i++) await Promise.resolve()
+async function flushAsyncTurns(times = 5): Promise<void> {
+  for (let i = 0; i < times; i++) {
+    await Promise.resolve()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
 }
 
 function okResponse(body: BodyInit = '{}'): Response {
@@ -35,7 +38,7 @@ describe('performRequest — method default and GET/HEAD query encoding', () => 
     vi.stubGlobal('fetch', fetchMock)
 
     performRequest({ url: 'https://example.com/api', data: { a: 1, b: 'x' } }, {})
-    await flushMicrotasks()
+    await flushAsyncTurns()
 
     const [urlArg, init] = fetchMock.mock.calls[0]
     const url = new URL(String(urlArg))
@@ -49,7 +52,7 @@ describe('performRequest — method default and GET/HEAD query encoding', () => 
     vi.stubGlobal('fetch', fetchMock)
 
     performRequest({ url: 'https://example.com/api', method: 'HEAD', data: { q: 'search term' } }, {})
-    await flushMicrotasks()
+    await flushAsyncTurns()
 
     const [urlArg, init] = fetchMock.mock.calls[0]
     const url = new URL(String(urlArg))
@@ -64,7 +67,7 @@ describe('performRequest — non-GET/HEAD body encoding', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     performRequest({ url: 'https://example.com/api', method: 'POST', data: 'raw=body&x=1' }, {})
-    await flushMicrotasks()
+    await flushAsyncTurns()
 
     const init = fetchMock.mock.calls[0][1]
     expect(init?.body).toBe('raw=body&x=1')
@@ -75,7 +78,7 @@ describe('performRequest — non-GET/HEAD body encoding', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     performRequest({ url: 'https://example.com/api', method: 'POST', data: { a: 1, b: 'x' } }, {})
-    await flushMicrotasks()
+    await flushAsyncTurns()
 
     const init = fetchMock.mock.calls[0][1]
     expect(init?.body).toBe(JSON.stringify({ a: 1, b: 'x' }))
@@ -91,7 +94,7 @@ describe('performRequest — non-GET/HEAD body encoding', () => {
       header: { 'content-type': 'application/x-www-form-urlencoded' },
       data: { a: 1, b: 'x' },
     }, {})
-    await flushMicrotasks()
+    await flushAsyncTurns()
 
     const init = fetchMock.mock.calls[0][1]
     expect(typeof init?.body).toBe('string')
@@ -108,7 +111,7 @@ describe('performRequest — dataType (default "json")', () => {
     const success = vi.fn<(res: RequestSuccessResult) => void>()
 
     performRequest({ url: 'https://example.com/api' }, { success })
-    await flushMicrotasks()
+    await flushAsyncTurns()
 
     expect(success).toHaveBeenCalledTimes(1)
     expect(success.mock.calls[0][0].data).toEqual({ ok: true, n: 3 })
@@ -120,7 +123,7 @@ describe('performRequest — dataType (default "json")', () => {
     const fail = vi.fn<(err: RequestFailResult) => void>()
 
     performRequest({ url: 'https://example.com/api' }, { success, fail })
-    await flushMicrotasks()
+    await flushAsyncTurns()
 
     expect(fail).not.toHaveBeenCalled()
     expect(success).toHaveBeenCalledTimes(1)
@@ -133,7 +136,7 @@ describe('performRequest — dataType (default "json")', () => {
     const success = vi.fn<(res: RequestSuccessResult) => void>()
 
     performRequest({ url: 'https://example.com/api', dataType: 'text' }, { success })
-    await flushMicrotasks()
+    await flushAsyncTurns()
 
     expect(success.mock.calls[0][0].data).toBe(jsonText)
   })
@@ -146,7 +149,7 @@ describe('performRequest — responseType "arraybuffer"', () => {
     const success = vi.fn<(res: RequestSuccessResult) => void>()
 
     performRequest({ url: 'https://example.com/api', responseType: 'arraybuffer' }, { success })
-    await flushMicrotasks()
+    await flushAsyncTurns()
 
     const data = success.mock.calls[0][0].data
     expect(data).toBeInstanceOf(ArrayBuffer)
@@ -159,7 +162,7 @@ describe('performRequest — responseType "arraybuffer"', () => {
     const success = vi.fn<(res: RequestSuccessResult) => void>()
 
     performRequest({ url: 'https://example.com/api', dataType: 'arraybuffer' }, { success })
-    await flushMicrotasks()
+    await flushAsyncTurns()
 
     const data = success.mock.calls[0][0].data
     expect(data).toBeInstanceOf(ArrayBuffer)

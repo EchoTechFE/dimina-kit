@@ -105,14 +105,9 @@ test.describe('Extension Panels Data Bridge', () => {
 
   test('AppData panel renders in main window after tab switch', async ({ mainWindow }) => {
     await mainWindow.getByRole('tab', { name: 'AppData' }).click()
-    await mainWindow.waitForTimeout(500)
-
-    const hasPanel = await mainWindow.evaluate(() => {
-      return document.body.innerText.includes('暂无页面数据') ||
-             document.body.innerText.includes('setData')
-    })
-
-    expect(hasPanel).toBe(true)
+    const panel = mainWindow.getByTestId('appdata-panel')
+    await panel.waitFor({ timeout: 8000 })
+    await expect(panel).toBeVisible()
   })
 
   test('no orphan right-panel WebContentsView exists', async ({ electronApp }) => {

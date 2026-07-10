@@ -35,6 +35,8 @@
   },
   "pnpm": {
     "overrides": {
+      "html-encoding-sniffer": "4.0.0",
+      "jsdom": "26.1.0",
       "minimist@<1.2.8": "^1.2.8"
     }
   },

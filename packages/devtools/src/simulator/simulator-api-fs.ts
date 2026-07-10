@@ -30,13 +30,42 @@ import { resolveTempFilePath } from './temp-files'
 async function _tmpBytes(url: string): Promise<Buffer> {
 	try {
 		const blob = await resolveTempFilePath(url)
-		const ab = await blob.arrayBuffer()
-		return Buffer.from(new Uint8Array(ab))
+		return await blobToBuffer(blob)
 	}
 	catch (err) {
 		const msg = err instanceof Error ? err.message : String(err)
 		throw new Error(`ENOENT: no such file (${url}): ${msg}`, { cause: err })
 	}
+}
+
+function isArrayBuffer(value: unknown): value is ArrayBuffer {
+	return Object.prototype.toString.call(value) === '[object ArrayBuffer]'
+}
+
+async function blobToBuffer(blob: Blob): Promise<Buffer> {
+	const readable = blob as Blob & { arrayBuffer?: () => Promise<ArrayBuffer> }
+	if (typeof readable.arrayBuffer === 'function') {
+		const ab = await readable.arrayBuffer()
+		return Buffer.from(new Uint8Array(ab))
+	}
+
+	if (typeof FileReader !== 'function') {
+		throw new Error('Blob cannot be read as ArrayBuffer')
+	}
+
+	return new Promise((resolve, reject) => {
+		const reader = new FileReader()
+		reader.onerror = () => reject(reader.error ?? new Error('Blob read failed'))
+		reader.onload = () => {
+			const result = reader.result
+			if (!isArrayBuffer(result)) {
+				reject(new Error('Blob read did not return an ArrayBuffer'))
+				return
+			}
+			resolve(Buffer.from(new Uint8Array(result)))
+		}
+		reader.readAsArrayBuffer(blob)
+	})
 }
 
 // In Electron renderer, Node.js built-ins are available via require.
