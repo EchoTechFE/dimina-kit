@@ -18,6 +18,10 @@
  *    `TruthPort`: reads/writes/deletes/walks go over the `/__fs` bridge
  *    (fs-bridge.ts), and change notifications come from an `EventSource`
  *    against the main process's `/__fs/watch` SSE stream — a 'push' port.
+ *    Raw watch batches are only HINTS (macOS FSEvents coalesces bursts and
+ *    drops children of a recursive delete); before reaching the engine they
+ *    pass through wal-audit-watch-expand.ts's stat-level disk compare — see
+ *    that module's header — and the engine trusts the expanded batch as-is.
  *  - the fs-core `client` directly, for the parts that are NOT the sync
  *    engine's job: the programmatic turn-door surface below
  *    (beginTurn/endTurn/agentWrite/agentRm/diff/rollback/status) calls
@@ -49,6 +53,7 @@ import { relFromWorkspaceUri } from '../fs-bridge'
 import { defaultBridge, defaultWatchEvents, walkDisk, diffPaths } from './wal-audit-transport'
 import type { WalAuditBridge } from './wal-audit-transport'
 export type { WalAuditBridge } from './wal-audit-transport'
+import { createWatchExpander } from './wal-audit-watch-expand'
 import type { WorkspaceSource } from './types'
 import type { IFileService } from '@codingame/monaco-vscode-api'
 // Type-only import — erased at build time, so it does not pull the real
@@ -160,71 +165,18 @@ export function walAuditSource(base: WorkspaceSource, opts: WalAuditOptions): Wo
   let client: WalAuditClientLike | undefined
   let engine: SyncEngine | undefined
 
-  /** FSEvents-style recursive watchers COALESCE a write burst into ancestor-
-   * DIRECTORY events (and an overflow surfaces as a null filename, which the
-   * SSE server reports as '.') — so a watched path is not necessarily a file.
-   * Observed: a 200-file external burst delivered only 132 per-file events;
-   * the rest arrived as their parent directory. Expand every directory-ish
-   * path into "everything that may have changed under it": the union of the
-   * files actually on disk under it (creations/modifications, via walk) and
-   * the ledger paths recorded under it (deletions — a coalesced `rm -rf`
-   * never names the files it removed). The engine content-compares every
-   * reported path, so over-reporting is a no-op; UNDER-reporting is what
-   * loses data. EVERY path gets the readdir probe — even ledger-known files,
-   * which may have been replaced by a same-named directory (see
-   * expandWatchPath); burst-coalescing keeps that probe per merged pass. */
-  /** List file paths (names only — NO content reads) under `startRel` via
-   * bridge readdir recursion. `walkDisk` is unusable for listing: its
-   * `onFile` contract fetches every file's bytes, which under a 200-file
-   * burst turned each expansion pass into 200 content downloads. */
-  async function listDiskNames(startRel: string, out: Set<string>): Promise<void> {
-    async function walk(rel: string): Promise<void> {
-      const entries = await bridge.readdir(opts.fsBaseUrl, rel || '.')
-      for (const [name, type] of entries) {
-        const childRel = rel ? `${rel}/${name}` : name
-        if (type === 2) await walk(childRel)
-        else out.add(childRel)
-      }
-    }
-    await walk(startRel)
-  }
-
-  /** Expand ONE watch path into `out`. Every path gets the readdir probe —
-   * including ones the ledger knows as files: a file can have been REPLACED
-   * by a same-named directory, and skipping the probe for "known files"
-   * would silently drop that directory's whole subtree (the watcher only
-   * names the parent). A probe on a plain file is one failing local readdir
-   * — cheap, and burst-coalescing means it is paid per merged pass, not per
-   * event. The path ITSELF is reported in both cases: unlistable → the
-   * engine's read decides (new file / deletion); listable (a directory) →
-   * the ledger may still hold a same-named FILE record from before the
-   * replacement, retired via the bridge's EISDIR→404. Ledger paths under the
-   * prefix cover coalesced deletions (a directory event for an `rm -rf`'d
-   * tree); for a plain file the prefix matches nothing, and '.' (overflow
-   * rescan) unions the whole ledger. */
-  async function expandWatchPath(p: string, ledgerPaths: string[], out: Set<string>): Promise<void> {
-    const rel = p === '.' ? '' : p
-    try {
-      await listDiskNames(rel, out)
-    } catch {
-      // Not a directory (plain new file), or a deleted path — either way the
-      // path itself is reported below and the engine's read decides. A tree
-      // mutating mid-walk also lands here: paths collected so far still count.
-    }
-    if (p !== '.') out.add(p)
-    const prefix = rel ? `${rel}/` : ''
-    for (const q of ledgerPaths) {
-      if (prefix === '' || q.startsWith(prefix)) out.add(q)
-    }
-  }
+  /** Turns a raw watch batch (possibly coalesced/lossy — see that module's
+   * doc) into the paths worth re-examining, via a stat-level disk compare
+   * against a session-scoped index instead of re-reading content. Reset on
+   * every `initLedger()` (a fresh ledger needs a fresh index — see
+   * {@link createWatchExpander}'s "Index lifecycle" doc). */
+  const watchExpander = createWatchExpander(bridge, opts.fsBaseUrl)
 
   async function expandWatchBatch(paths: string[]): Promise<string[]> {
     const ledgerPaths = await (client
       ? client.ls().then((r) => r.paths).catch(() => [] as string[]) // unavailable — disk-side expansion still applies
       : Promise.resolve([] as string[]))
-    const out = new Set<string>()
-    for (const p of paths) await expandWatchPath(p, ledgerPaths, out)
-    return [...out]
+    return watchExpander.expandWatchBatch(paths, ledgerPaths)
   }
 
   /** Serialize + coalesce watch batches through the expansion: during a burst
@@ -285,9 +237,19 @@ export function walAuditSource(base: WorkspaceSource, opts: WalAuditOptions): Wo
       client?.destroy()
       client = undefined
       engine = undefined
+      // A fresh ledger needs a fresh watch-expansion stat index — a path's
+      // last-seen stat from a previous project/session must never suppress
+      // a report against the NEW ledger's content.
+      watchExpander.resetIndex()
       const c = await createClient({ projectId })
       const eng = createSyncEngine(c, makeTruthPort(), { applyToEditor: opts.applyToEditor })
       await eng.populateLedger()
+      // Seed the stat index from the now-reconciled disk tree BEFORE the
+      // watch subscription goes live, so the first post-open watch batch
+      // only reports genuine post-seed changes instead of re-treating the
+      // whole tree as "new" (see wal-audit-watch-expand.ts's "Index
+      // lifecycle" doc).
+      await watchExpander.warmFromDisk()
       client = c
       engine = eng
       eng.start()

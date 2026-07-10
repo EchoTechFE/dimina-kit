@@ -5,12 +5,16 @@
  * out so the orchestration module stays within the repo file-length gate.
  */
 import { bridgeReaddir, bridgeRead, bridgeWrite, bridgeDelete } from '../fs-bridge'
+import type { FsEntry } from '../fs-bridge'
+export type { FsEntry } from '../fs-bridge'
 
 /** The `/__fs` bridge calls this module needs — defaults to the real bridge
  * (file-workspace.ts); injectable for tests. Also the raw material the
- * devtools `TruthPort` below is assembled from. */
+ * devtools `TruthPort` below is assembled from. `readdir`'s `FsEntry` carries
+ * `size`/`mtimeMs` for FILE entries (see fs-bridge.ts) — wal-audit-watch-expand.ts's
+ * stat-diffing is the reason this bridge exposes stat at all. */
 export interface WalAuditBridge {
-  readdir(baseUrl: string, rel: string): Promise<Array<[string, number]>>
+  readdir(baseUrl: string, rel: string): Promise<FsEntry[]>
   read(baseUrl: string, rel: string): Promise<Uint8Array>
   write(baseUrl: string, rel: string, content: Uint8Array): Promise<void>
   delete(baseUrl: string, rel: string): Promise<void>

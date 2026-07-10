@@ -14,9 +14,9 @@
       "value": 401,
       "unit": "duplicated lines",
       "breakdown": {
-        "packages/devtools/src/main/ipc/project-fs.ts:177↔packages/devtools/src/main/ipc/project-fs.ts:437": 12,
-        "packages/devtools/src/main/ipc/project-fs.ts:264↔packages/devtools/src/main/ipc/project-fs.ts:456": 18,
-        "packages/devtools/src/main/services/dimina-resource-server.ts:30↔packages/devtools/src/main/services/workbench-coi-server.ts:422": 12,
+        "packages/devtools/src/main/ipc/project-fs.ts:177↔packages/devtools/src/main/ipc/project-fs.ts:471": 12,
+        "packages/devtools/src/main/ipc/project-fs.ts:264↔packages/devtools/src/main/ipc/project-fs.ts:490": 18,
+        "packages/devtools/src/main/services/dimina-resource-server.ts:30↔packages/devtools/src/main/services/workbench-coi-server.ts:433": 12,
         "packages/devtools/src/main/services/elements-forward/index.ts:184↔packages/devtools/src/main/services/network-forward/index.ts:301": 23,
         "packages/devtools/src/main/services/mcp/tools/context-tools.ts:189↔packages/devtools/src/main/services/mcp/tools/context-tools.ts:272": 11,
         "packages/devtools/src/main/services/mcp/tools/context-tools.ts:243↔packages/devtools/src/main/services/mcp/tools/context-tools.ts:301": 10,
@@ -38,9 +38,9 @@
         "packages/devtools/src/simulator/device-shell/device-shell.tsx:350↔packages/devtools/src/simulator/device-shell/device-shell.tsx:434": 11,
         "packages/devtools/src/simulator/device-shell/device-shell.tsx:364↔packages/devtools/src/simulator/device-shell/device-shell.tsx:416": 14,
         "packages/devtools/src/simulator/device-shell/device-shell.tsx:364↔packages/devtools/src/simulator/device-shell/device-shell.tsx:444": 14,
-        "packages/devtools/src/simulator/simulator-api-fs.ts:299↔packages/devtools/src/simulator/simulator-api-fs.ts:318": 13,
-        "packages/devtools/src/simulator/simulator-api-fs.ts:396↔packages/devtools/src/simulator/simulator-api-fs.ts:652": 6,
-        "packages/devtools/src/simulator/simulator-api-fs.ts:408↔packages/devtools/src/simulator/simulator-api-fs.ts:426": 12,
+        "packages/devtools/src/simulator/simulator-api-fs.ts:328↔packages/devtools/src/simulator/simulator-api-fs.ts:347": 13,
+        "packages/devtools/src/simulator/simulator-api-fs.ts:425↔packages/devtools/src/simulator/simulator-api-fs.ts:681": 6,
+        "packages/devtools/src/simulator/simulator-api-fs.ts:437↔packages/devtools/src/simulator/simulator-api-fs.ts:455": 12,
         "packages/devtools/src/simulator/simulator-api-storage.ts:101↔packages/devtools/src/simulator/simulator-api-storage.ts:117": 8,
         "packages/electron-deck/src/dock-react/group-view.tsx:111↔packages/electron-deck/src/dock-react/group-view.tsx:153": 24,
         "packages/electron-deck/src/dock-react/group-view.tsx:91↔packages/electron-deck/src/dock-react/group-view.tsx:107": 6,
@@ -69,7 +69,7 @@
         "packages/devtools/src/main/eslint-workbench-context-ratchet.test.ts": 560,
         "packages/devtools/src/main/ipc/bridge-router.ts": 2635,
         "packages/devtools/src/main/ipc/project-fs.test.ts": 756,
-        "packages/devtools/src/main/ipc/project-fs.ts": 609,
+        "packages/devtools/src/main/ipc/project-fs.ts": 643,
         "packages/devtools/src/main/ipc/projects-add-dialog.test.ts": 510,
         "packages/devtools/src/main/services/elements-forward/index.test.ts": 1201,
         "packages/devtools/src/main/services/elements-forward/index.ts": 659,
@@ -87,7 +87,7 @@
         "packages/devtools/src/simulator/device-shell/page-stack-controller.test.ts": 513,
         "packages/devtools/src/simulator/device-shell/tab-bar-state.test.ts": 517,
         "packages/devtools/src/simulator/simulator-api-fs.test.ts": 743,
-        "packages/devtools/src/simulator/simulator-api-fs.ts": 689,
+        "packages/devtools/src/simulator/simulator-api-fs.ts": 718,
         "packages/devtools/src/simulator/simulator-api-media.ts": 652,
         "packages/electron-deck/src/__cross_check__/round2-fix-cross-check.test.ts": 712,
         "packages/electron-deck/src/dock-react/dock-view-redock.test.tsx": 663,
@@ -121,31 +121,31 @@
     },
     "test-coverage": {
       "direction": "higher-is-better",
-      "value": 72.98,
+      "value": 73.21,
       "unit": "% lines",
       "breakdown": {
         "devkit": 93.31,
         "devtools": 68.04,
         "electron-deck": 95.23,
         "electron-deck/dock-react": 79.05,
-        "fs-core": 92.3,
+        "fs-core": 94.71,
         "view-anchor": 95.28,
-        "workbench": 31.77
+        "workbench": 35.34
       },
       "tolerance": 1
     },
     "test-report": {
       "direction": "higher-is-better",
-      "value": 3790,
+      "value": 3825,
       "unit": "passed tests",
       "breakdown": {
         "devkit": 147,
         "devtools": 2306,
         "electron-deck": 1024,
         "electron-deck/dock-react": 96,
-        "fs-core": 45,
+        "fs-core": 77,
         "view-anchor": 87,
-        "workbench": 85
+        "workbench": 88
       }
     },
     "type-coverage": {
@@ -156,7 +156,7 @@
         "devkit": 99.91,
         "devtools": 99.73,
         "electron-deck": 99.72,
-        "fs-core": 99.88,
+        "fs-core": 99.96,
         "view-anchor": 100,
         "workbench": 99.91
       }

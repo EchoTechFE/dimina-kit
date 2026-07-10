@@ -4,12 +4,13 @@
  * Not a runtime test — only needs to satisfy `tsc --noEmit`.
  */
 import type { ProjectFsClient } from '@dimina-kit/fs-core/client'
-import type { AgentTool } from '@dimina-kit/fs-core/agent-tools'
+import type { AgentTool, AgentToolsFs } from '@dimina-kit/fs-core/agent-tools'
 import { createAgentTools } from '@dimina-kit/fs-core/agent-tools'
+import type { DiskMirrorFs } from '@dimina-kit/fs-core/disk-mirror'
 import { createDiskMirror } from '@dimina-kit/fs-core/disk-mirror'
 import { makeZip } from '@dimina-kit/fs-core/zip'
 
-export function typesSmoke(client: ProjectFsClient, fs: unknown): {
+export function typesSmoke(client: ProjectFsClient, fs: AgentToolsFs & DiskMirrorFs): {
   tool: AgentTool | undefined
   zip: Uint8Array
   mirrorActive: boolean

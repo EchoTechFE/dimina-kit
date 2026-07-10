@@ -58,10 +58,75 @@
  * every `populateLedger()`, exactly like the ledger's own text reconciliation.
  */
 
+import type { TruthPort } from './truth-port.js'
+
+export type { TruthPort, TruthPortCapabilities } from './truth-port.js'
+
+/**
+ * The slice of the fs-core ledger client the sync engine calls. Kept narrow
+ * (vs. the full `ProjectFsClient` surface) so a host/test double only has to
+ * implement what this module actually uses. Turn enforcement
+ * (turnBegin/turnEnd/diff/restore) and destroy() are NOT part of this
+ * surface — they belong to a host's own audit-turn surface, which talks to
+ * the real client directly (see dimina-kit workbench's wal-audit.ts).
+ */
+export interface SyncClientLike {
+  write(path: string, content: string, opts?: Record<string, unknown>): Promise<unknown>
+  rm(path: string, opts?: Record<string, unknown>): Promise<unknown>
+  read(path: string): Promise<{ content: string; rev?: number }>
+  ls(): Promise<{ paths: string[] }>
+}
+
+export interface SyncEngineOptions {
+  /**
+   * Host seam: push an inbound change into the live editor buffer.
+   * `bytes === null` means the path was deleted. Omitted — the ledger still
+   * records the change but the editor buffer is left untouched.
+   */
+  applyToEditor?: (rel: string, bytes: Uint8Array | null) => Promise<void>
+}
+
+export interface SyncEngine {
+  /**
+   * Walk the port's tree into the ledger and reconcile residue: ledger paths
+   * absent from the walk are removed, so the ledger ends up exactly matching
+   * the truth source. Call once (per session) before `start()`.
+   */
+  populateLedger(): Promise<void>
+  /**
+   * Record a human save's content in the ledger — skipped when it already
+   * matches the ledger's current record for that path. Call AFTER the save
+   * has landed at the truth source: this is best-effort accounting, never a
+   * gate on the save itself.
+   *
+   * `content` accepts either the already-decoded text (legacy string path)
+   * or the raw saved bytes (`Uint8Array`) — pass raw bytes so the engine can
+   * sniff for binary content (see this module's "Binary layering" doc) and
+   * route it to the session-scoped `binaryIndex` instead of the ledger.
+   */
+  onHumanSave(rel: string, content: string | Uint8Array): Promise<void>
+  /**
+   * One-shot check for a 'poll' host's own outbound path (see this module's
+   * "Inbound-echo consumption" doc): call this BEFORE writing `content` (the
+   * decoded text, raw bytes, or `null` for a delete) for `rel` out to the
+   * truth source. Returns `true` when it exactly matches what
+   * `handleInboundPath` just applied FROM that same truth source — that
+   * write would be a pure echo, so the caller should skip it — and clears
+   * the record so it cannot match again (one-shot, not a standing cache).
+   * Returns `false` on any mismatch or when there is no record at all,
+   * leaving any existing record untouched.
+   */
+  consumeInboundEcho(rel: string, content: string | Uint8Array | null): boolean
+  /** Subscribe to `port.changes` and start reconciling inbound batches. */
+  start(): void
+  /** Tear down the `port.changes` subscription. Idempotent. */
+  stop(): void
+}
+
 const BINARY_SNIFF_BYTES = 8192
 
 /** True when the first `BINARY_SNIFF_BYTES` of `bytes` contain a NUL byte. */
-function looksBinary(bytes) {
+function looksBinary(bytes: Uint8Array): boolean {
   const len = Math.min(bytes.length, BINARY_SNIFF_BYTES)
   for (let i = 0; i < len; i++) {
     if (bytes[i] === 0) return true
@@ -69,13 +134,13 @@ function looksBinary(bytes) {
   return false
 }
 
-async function sha256hex(bytes) {
-  const digest = await crypto.subtle.digest('SHA-256', bytes)
+async function sha256hex(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', bytes as BufferSource)
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
 /** Byte-for-byte equality — used by `consumeInboundEcho`'s binary-content match. */
-function bytesEqual(a, b) {
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
   if (a.length !== b.length) return false
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
   return true
@@ -83,15 +148,25 @@ function bytesEqual(a, b) {
 
 /**
  * True when `error` denotes "path does not exist" per the TruthPort error
- * contract (see truth-port.d.ts): `error.code === 'not-found'` or
+ * contract (see truth-port.ts): `error.code === 'not-found'` or
  * `error.status === 404`. Every other rejection is "unavailable" (transient
  * I/O failure, permission loss, dead connection, ...).
  */
-function isNotFoundError(error) {
-  return Boolean(error) && (error.code === 'not-found' || error.status === 404)
+function isNotFoundError(error: unknown): boolean {
+  const e = error as { code?: unknown; status?: unknown } | null | undefined
+  return Boolean(e) && (e!.code === 'not-found' || e!.status === 404)
 }
 
-export function createSyncEngine(client, port, opts = {}) {
+type InboundApplied =
+  | { kind: 'text'; text: string }
+  | { kind: 'binary'; bytes: Uint8Array }
+  | { kind: 'delete' }
+
+export function createSyncEngine(
+  client: SyncClientLike,
+  port: TruthPort,
+  opts: SyncEngineOptions = {},
+): SyncEngine {
   const decoder = new TextDecoder()
   const applyToEditor = opts.applyToEditor
 
@@ -101,14 +176,14 @@ export function createSyncEngine(client, port, opts = {}) {
    * called and cleared unconditionally (`finally`) once that write's own
    * ledgerTurn slot finishes, success or failure.
    */
-  const pendingWrite = new Set()
+  const pendingWrite = new Set<string>()
 
   /**
    * Binary files never enter the fs-core ledger — see the module doc's
    * "Binary layering" section. Session-scoped: rebuilt from scratch on every
    * `populateLedger()`.
    */
-  const binaryIndex = new Map()
+  const binaryIndex = new Map<string, { size: number; sha256: string }>()
 
   /**
    * `rel -> { kind: 'text', text } | { kind: 'binary', bytes } | { kind: 'delete' }`
@@ -118,7 +193,7 @@ export function createSyncEngine(client, port, opts = {}) {
    * (checked + cleared on a match) by `consumeInboundEcho`. Session-scoped,
    * same as `binaryIndex` — cleared on every `populateLedger()`.
    */
-  const inboundApplied = new Map()
+  const inboundApplied = new Map<string, InboundApplied>()
 
   /**
    * FIFO queue serializing every compare-then-record against the ledger
@@ -130,9 +205,9 @@ export function createSyncEngine(client, port, opts = {}) {
    * rejections (each caller handles its own errors), so one failed step can
    * never wedge the queue.
    */
-  let ledgerTurn = Promise.resolve()
-  function enqueueLedgerTurn(fn) {
-    const next = ledgerTurn.then(fn, fn)
+  let ledgerTurn: Promise<unknown> = Promise.resolve()
+  function enqueueLedgerTurn<T>(fn: () => T | Promise<T>): Promise<T> {
+    const next = ledgerTurn.then(fn, fn) as Promise<T>
     ledgerTurn = next.catch(() => {})
     return next
   }
@@ -141,10 +216,10 @@ export function createSyncEngine(client, port, opts = {}) {
    * walk did not produce are residue (e.g. from a previous session under the
    * same persisted ledger identity) and are removed so the ledger ends up
    * exactly matching the walked tree. */
-  async function seedFromDisk() {
+  async function seedFromDisk(): Promise<void> {
     binaryIndex.clear()
     inboundApplied.clear()
-    const seen = new Set()
+    const seen = new Set<string>()
     await port.walk(async (rel, bytes) => {
       seen.add(rel)
       if (looksBinary(bytes)) {
@@ -167,18 +242,18 @@ export function createSyncEngine(client, port, opts = {}) {
    * doc); a miss falls back to content comparison: identical content is the
    * echo of our own last write and is dropped with no ledger write and no
    * `applyToEditor` call. A `port.read` rejection classified as not-found
-   * (see truth-port.d.ts) is a deletion; any other rejection
+   * (see truth-port.ts) is a deletion; any other rejection
    * ("unavailable") is transient and skips the path entirely — inferring a
    * deletion from it would rm the ledger record and close the file in the
    * editor while it still exists at the truth source.
    */
-  async function handleInboundPath(rel) {
+  async function handleInboundPath(rel: string): Promise<void> {
     if (pendingWrite.has(rel)) {
       pendingWrite.delete(rel)
       return
     }
 
-    let bytes
+    let bytes: Uint8Array | null
     try {
       bytes = await port.read(rel)
     } catch (e) {
@@ -199,7 +274,7 @@ export function createSyncEngine(client, port, opts = {}) {
         await applyToEditor?.(rel, null)
         return
       }
-      let ledgerContent
+      let ledgerContent: string | undefined
       try {
         ledgerContent = (await client.read(rel)).content
       } catch {
@@ -222,7 +297,7 @@ export function createSyncEngine(client, port, opts = {}) {
       return
     }
 
-    let ledgerContent
+    let ledgerContent: string | undefined
     try {
       ledgerContent = (await client.read(rel)).content
     } catch {
@@ -252,10 +327,10 @@ export function createSyncEngine(client, port, opts = {}) {
    * needs this: its outbound path goes through `onHumanSave`/`pendingWrite`
    * instead.
    */
-  function consumeInboundEcho(rel, content) {
+  function consumeInboundEcho(rel: string, content: string | Uint8Array | null): boolean {
     const entry = inboundApplied.get(rel)
     if (!entry) return false
-    let matches
+    let matches: boolean
     if (content === null) matches = entry.kind === 'delete'
     else if (typeof content === 'string') matches = entry.kind === 'text' && entry.text === content
     else matches = entry.kind === 'binary' && bytesEqual(entry.bytes, content)
@@ -263,7 +338,16 @@ export function createSyncEngine(client, port, opts = {}) {
     return matches
   }
 
-  async function handleBatch(paths) {
+  /**
+   * A batch is trusted as-is: the port adapter (see truth-port.ts's
+   * `changes` doc) is responsible for turning a watcher's coalesced/lossy
+   * events into the actual set of paths worth re-examining BEFORE calling
+   * this engine — devtools' adapter (wal-audit.ts +
+   * wal-audit-watch-expand.ts) does that via a stat-level disk compare
+   * against a session index, so paths arriving here have already earned
+   * their re-examination and no further expansion happens at this layer.
+   */
+  async function handleBatch(paths: string[]): Promise<void> {
     for (const rel of paths) {
       try {
         // Per-path (not per-batch) queue turns, so a long batch cannot
@@ -276,18 +360,38 @@ export function createSyncEngine(client, port, opts = {}) {
     }
   }
 
+  let pendingInboundPaths = new Set<string>()
+  let inboundBatchRunning = false
+  function enqueueInboundBatch(paths: string[]): void {
+    for (const rel of paths) pendingInboundPaths.add(rel)
+    if (inboundBatchRunning) return
+    inboundBatchRunning = true
+    void (async () => {
+      try {
+        while (pendingInboundPaths.size) {
+          const raw = [...pendingInboundPaths]
+          pendingInboundPaths = new Set<string>()
+          await handleBatch(raw)
+        }
+      } finally {
+        inboundBatchRunning = false
+        if (pendingInboundPaths.size) enqueueInboundBatch([])
+      }
+    })()
+  }
+
   let stopWatching = () => {}
 
   /** Subscribe to `port.changes`. `active` gates BOTH callbacks so a
    * late/duplicate event delivered after `onDead` (or after a fresh
    * `start()` superseded this subscription) is a guaranteed no-op, not just
    * best-effort. */
-  function start() {
+  function start(): void {
     let active = true
     const dispose = port.changes(
       (paths) => {
         if (!active) return
-        void handleBatch(paths)
+        enqueueInboundBatch(paths)
       },
       () => {
         if (!active) return
@@ -302,7 +406,7 @@ export function createSyncEngine(client, port, opts = {}) {
     }
   }
 
-  function stop() {
+  function stop(): void {
     stopWatching()
     stopWatching = () => {}
   }
@@ -323,7 +427,7 @@ export function createSyncEngine(client, port, opts = {}) {
    * deciding whether to decode. A binary save skips the ledger write
    * entirely and only updates `binaryIndex`.
    */
-  async function onHumanSave(rel, content) {
+  async function onHumanSave(rel: string, content: string | Uint8Array): Promise<void> {
     pendingWrite.add(rel)
     try {
       if (content instanceof Uint8Array && looksBinary(content)) {

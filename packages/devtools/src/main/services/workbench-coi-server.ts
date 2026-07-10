@@ -215,8 +215,19 @@ async function fsReaddir(ctx: FsActionContext): Promise<void> {
   // every level: the workbench mirror and the WAL ledger seed walk whatever
   // this returns, so listing them would pull entire dependency trees into the
   // editor memfs and the OPFS ledger. Same-named FILES stay visible.
-  const visible = entries.filter((e) => !(e.isDirectory() && SKIP_DIRS.has(e.name)))
-  jsonRes(ctx.res, 200, visible.map((e) => [e.name, e.isDirectory() ? 2 : 1]))
+  const visible = entries.filter((e) => !(e.isDirectory && SKIP_DIRS.has(e.name)))
+  // Wire shape: `[name, type]` for a directory, `[name, type, size, mtimeMs]`
+  // for a file — the sync engine's watch-batch stat-diffing (workbench's
+  // wal-audit-watch-expand.ts) needs size+mtimeMs to tell a stat-unchanged
+  // survivor from an actually-modified file without re-reading its content.
+  // `size`/`mtimeMs` are simply absent (not `null`) for a stat-less entry
+  // (readdirWithin's readdir/stat race) — the client side then always
+  // treats it as changed.
+  jsonRes(
+    ctx.res,
+    200,
+    visible.map((e) => (e.isDirectory ? [e.name, 2] : [e.name, 1, e.size, e.mtimeMs])),
+  )
 }
 
 async function fsRead(ctx: FsActionContext): Promise<void> {

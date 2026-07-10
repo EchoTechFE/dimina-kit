@@ -159,7 +159,7 @@ export function createCompilerPool(options = {}) {
   // One full compile attempt against the resident realms. Ends quiescent: settleAll
   // guarantees no request is still in flight when it returns/throws, so a retry can
   // start fresh without cross-attempt FIFO pairing.
-  async function runAttempt(files, workPath) {
+  async function runAttempt(files, workPath, options) {
     await settleAll(workers.map(ensureWarm))
 
     // Setup step — one worker runs setup ONCE: it allocates the scope-hash ids
@@ -170,7 +170,12 @@ export function createCompilerPool(options = {}) {
     // the render `Module id` and every WXSS rule would target nothing (regression
     // guarded by scripts/test-pool-scopehash.js). This mirrors the Node disk pool,
     // which likewise sets up once and fans the same { pages, storeInfo } out.
-    const s = await requestChecked(workers[0], { type: 'setup', files, workPath, wantHeartbeat: true }, 'setup', sendTimeoutMs)
+    // `options` (e.g. { fileTypes }) only needs to reach THIS setup call: dmcc's
+    // storeInfo() bakes the normalized dialect into the returned storeInfo object
+    // (dimina/fe/packages/compiler/src/env.js:106-120), which rides inside `bundle`
+    // below and is restored per-stage via resetStoreInfo (compile-core.js's
+    // compileStage -> env.js:122-132) — so compile-subset never needs its own copy.
+    const s = await requestChecked(workers[0], { type: 'setup', files, workPath, options, wantHeartbeat: true }, 'setup', sendTimeoutMs)
     const { bundle, scaffold } = s
 
     // Compile step — every stage compiles in parallel against the SHARED bundle. The
@@ -188,9 +193,16 @@ export function createCompilerPool(options = {}) {
   let chain = Promise.resolve()
 
   /**
-   * Single argument, no ambiguity: pass { files, workPath }. A bare { relPath: content }
-   * map is also accepted (uses the default workPath).
-   * @param {{ files: Record<string,string>, workPath?: string } | Record<string,string>} input
+   * Single argument, no ambiguity: pass { files, workPath, options }. A bare
+   * { relPath: content } map is also accepted (uses the default workPath, no options).
+   * @param {{
+   *   files: Record<string,string>,
+   *   workPath?: string,
+   *   options?: { fileTypes?: { template?: string[], style?: string[], viewScript?: string[] } },
+   * } | Record<string,string>} input
+   *   options.fileTypes lets a caller register a custom template/style/view-script
+   *   dialect (e.g. { template: ['qdml'], style: ['qdss'], viewScript: ['qds'] }) —
+   *   forwarded to the setup worker's `setupCompile` (dmcc's storeInfo).
    * @returns {Promise<{ appId: string, name: string, files: Record<string,string> }>}
    */
   function compile(input = {}) {
@@ -200,17 +212,18 @@ export function createCompilerPool(options = {}) {
       }
       const files = input.files || input
       if (!files || typeof files !== 'object' || !Object.keys(files).length) {
-        throw new Error('[compiler] pool.compile expects { files: { relPath: content }, workPath? } (or a non-empty files map)')
+        throw new Error('[compiler] pool.compile expects { files: { relPath: content }, workPath?, options? } (or a non-empty files map)')
       }
       const workPath = input.workPath || defaultWorkPath
+      const options = input.options || {}
       try {
-        return await runAttempt(files, workPath)
+        return await runAttempt(files, workPath, options)
       } catch (err) {
         // A worker death is often transient (memory pressure, tab freeze, a one-off
         // toolchain stall) — retry the WHOLE attempt once on fresh workers. Real
         // compile errors (bad user source) are deterministic and are never retried.
         if (!retryOnWorkerDeath || !err || !WORKER_DEATH_CODES.has(err.code)) throw err
-        return await runAttempt(files, workPath)
+        return await runAttempt(files, workPath, options)
       }
     })
     // keep the chain alive regardless of this compile's outcome

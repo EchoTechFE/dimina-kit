@@ -455,13 +455,16 @@ let compileChain = Promise.resolve()
  * Compile a mini-program against a caller-injected fs. Calls are serialized per
  * realm (see the singleton note above). Convenience wrapper that runs
  * `setupCompile` + all stages + `collectOutputs` in one realm.
- * @param {{ fs: object, workPath?: string }} opts
+ * @param {{ fs: object, workPath?: string, options?: { fileTypes?: { template?: string[], style?: string[], viewScript?: string[] } } }} opts
  *   fs:       a node:fs replacement (sync subset: existsSync/readFileSync/
  *             readdirSync{withFileTypes}/statSync/writeFileSync/mkdirSync{recursive}/
  *             copyFileSync/rmSync), already seeded with the project source under
  *             `workPath`. The compiler also writes products back into it, and a
  *             missing project.config.json appid is written into it.
  *   workPath: project root inside the fs, default '/work'.
+ *   options:  forwarded to `setupCompile` -> dmcc's `storeInfo` (custom file-type
+ *             dialect, e.g. { fileTypes: { template: ['qdml'], style: ['qdss'],
+ *             viewScript: ['qds'] } }).
  * @returns {Promise<{ appId: string, name: string, files: Record<string,string> }>}
  */
 export function compileMiniApp(opts = {}) {
@@ -472,8 +475,8 @@ export function compileMiniApp(opts = {}) {
   return result
 }
 
-async function runCompile({ fs, workPath = '/work' } = {}) {
-  const ctx = await setupCompile({ fs, workPath })
+async function runCompile({ fs, workPath = '/work', options = {} } = {}) {
+  const ctx = await setupCompile({ fs, workPath, options })
   const { storeInfo: bundle, pages, appId, name, targetPath } = ctx
   // Same order as the original single pass. Stages are independent (no product
   // read-back), so the order is not load-bearing — the worker pool (pool.js) runs

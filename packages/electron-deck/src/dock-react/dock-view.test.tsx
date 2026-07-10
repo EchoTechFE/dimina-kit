@@ -239,8 +239,8 @@ describe('<DockView> active body rendering', () => {
 		const slot = container.querySelector<HTMLElement>('[data-deck-native-slot="nativeCam"]')!
 		// jsdom expands the `flex: 1` shorthand to `1 1 0%`; assert flex-grow:1.
 		expect(slot.style.flexGrow).toBe('1')
-		expect(slot.style.minWidth).toBe('0px')
-		expect(slot.style.minHeight).toBe('0px')
+		expect(['0', '0px']).toContain(slot.style.minWidth)
+		expect(['0', '0px']).toContain(slot.style.minHeight)
 		expect(slot.style.height).toBe('100%')
 		// the enclosing group is a fill flex-column so the slot has space to fill.
 		const group = container.querySelector<HTMLElement>('[data-deck-group="g"]')!

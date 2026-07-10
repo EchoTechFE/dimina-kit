@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const PACKAGES = [
+  'packages/fs-core',
   'packages/compiler',
   'packages/view-anchor',
   'packages/electron-deck',

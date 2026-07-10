@@ -35,10 +35,13 @@ function hangingFetch(): ReturnType<typeof vi.fn> {
   return vi.fn(() => new Promise(() => {}))
 }
 
-/** Flush the microtask queue enough times for a chained .then/.catch/.finally
- * pipeline to settle without relying on fake timers. */
-async function flushMicrotasks(times = 5): Promise<void> {
-  for (let i = 0; i < times; i++) await Promise.resolve()
+/** Flush enough async turns for fetch body readers that may resolve via tasks
+ * instead of microtasks under jsdom. */
+async function flushAsyncTurns(times = 5): Promise<void> {
+  for (let i = 0; i < times; i++) {
+    await Promise.resolve()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
 }
 
 afterEach(() => {
@@ -55,7 +58,7 @@ describe('performRequest — HTTP status never decides success vs fail', () => {
     const fail = vi.fn<(err: RequestFailResult) => void>()
 
     performRequest({ url: 'https://example.com/x' }, { success, fail })
-    await flushMicrotasks()
+    await flushAsyncTurns()
 
     expect(fail).not.toHaveBeenCalled()
     expect(success).toHaveBeenCalledTimes(1)
@@ -72,7 +75,7 @@ describe('performRequest — HTTP status never decides success vs fail', () => {
     const fail = vi.fn<(err: RequestFailResult) => void>()
 
     performRequest({ url: 'https://example.com/x' }, { success, fail })
-    await flushMicrotasks()
+    await flushAsyncTurns()
 
     expect(fail).not.toHaveBeenCalled()
     expect(success).toHaveBeenCalledTimes(1)
@@ -85,7 +88,7 @@ describe('performRequest — HTTP status never decides success vs fail', () => {
     const fail = vi.fn<(err: RequestFailResult) => void>()
 
     performRequest({ url: 'https://example.com/x' }, { success, fail })
-    await flushMicrotasks()
+    await flushAsyncTurns()
 
     expect(success).not.toHaveBeenCalled()
     expect(fail).toHaveBeenCalledTimes(1)
@@ -147,7 +150,7 @@ describe('performRequest — abort', () => {
 
     const handle = performRequest({ url: 'https://example.com/x' }, { success, fail })
     handle.abort()
-    await flushMicrotasks()
+    await flushAsyncTurns()
 
     expect(success).not.toHaveBeenCalled()
     expect(fail).toHaveBeenCalledTimes(1)
@@ -168,7 +171,7 @@ describe('performRequest — complete callback', () => {
     const complete = vi.fn<(res: RequestSuccessResult | RequestFailResult) => void>()
 
     performRequest({ url: 'https://example.com/x' }, { success, complete })
-    await flushMicrotasks()
+    await flushAsyncTurns()
 
     expect(complete).toHaveBeenCalledTimes(1)
     expect(complete).toHaveBeenCalledWith(success.mock.calls[0][0])
@@ -180,7 +183,7 @@ describe('performRequest — complete callback', () => {
     const complete = vi.fn<(res: RequestSuccessResult | RequestFailResult) => void>()
 
     performRequest({ url: 'https://example.com/x' }, { fail, complete })
-    await flushMicrotasks()
+    await flushAsyncTurns()
 
     expect(complete).toHaveBeenCalledTimes(1)
     expect(complete).toHaveBeenCalledWith(fail.mock.calls[0][0])
@@ -193,7 +196,7 @@ describe('performRequest — header merge is case-insensitive and never duplicat
     vi.stubGlobal('fetch', fetchMock)
 
     performRequest({ url: 'https://example.com/x', method: 'POST', header: { 'content-type': 'application/json' }, data: {} }, {})
-    await flushMicrotasks()
+    await flushAsyncTurns()
 
     const init = fetchMock.mock.calls[0][1]
     const headers = new Headers(init?.headers as HeadersInit)
@@ -206,7 +209,7 @@ describe('performRequest — header merge is case-insensitive and never duplicat
     vi.stubGlobal('fetch', fetchMock)
 
     performRequest({ url: 'https://example.com/x', method: 'POST', data: {} }, {})
-    await flushMicrotasks()
+    await flushAsyncTurns()
 
     const init = fetchMock.mock.calls[0][1]
     const headers = new Headers(init?.headers as HeadersInit)
@@ -219,7 +222,7 @@ describe('performRequest — header merge is case-insensitive and never duplicat
     vi.stubGlobal('fetch', fetchMock)
 
     performRequest({ url: 'https://example.com/x', method: 'POST', header: { 'Content-Type': 'application/x-www-form-urlencoded' }, data: {} }, {})
-    await flushMicrotasks()
+    await flushAsyncTurns()
 
     const init = fetchMock.mock.calls[0][1]
     const headers = new Headers(init?.headers as HeadersInit)

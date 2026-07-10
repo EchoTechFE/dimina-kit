@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "@dimina-kit/typescript-config/base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // Dedicated-worker globals only — no DOM lib. The two libs declare
+    // incompatible shapes for shared identifiers (Window vs. WorkerGlobalScope,
+    // etc.), so this config fully overrides `lib` (does not merge with the
+    // base's DOM-inclusive set) rather than appending to it. WebWorker.AsyncIterable
+    // is required for `FileSystemDirectoryHandle.entries()`/`keys()`/`values()`
+    // (recover()/compactNow() use `for await` over directory entries), which
+    // only exists in that sub-lib, not in the base "WebWorker" one.
+    "lib": ["ES2022", "WebWorker", "WebWorker.Iterable", "WebWorker.AsyncIterable"]
+  },
+  "include": ["src/fs-core.worker.ts", "src/fs-query.worker.ts", "src/fs-core-recovery.ts", "src/fs-core-write-ops.ts"],
+  "exclude": ["node_modules"]
+}
