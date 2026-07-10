@@ -28,8 +28,9 @@ export const TYPES_ROOT = 'node_modules/@types'
  * evolution of the original `[name, type]` shape — every existing
  * destructuring call site (`const [name, type] of entries`) stays valid
  * unchanged, since JS array destructuring ignores extra trailing elements.
- * Consumed by wal-audit-watch-expand.ts's stat-diffing to decide which
- * watch-reported paths actually changed without re-reading their content.
+ * Consumed by `@dimina-kit/fs-core/sync/watch-expander`'s stat-diffing to
+ * decide which watch-reported paths actually changed without re-reading
+ * their content.
  */
 export type FsEntry = [name: string, type: number, size?: number, mtimeMs?: number]
 

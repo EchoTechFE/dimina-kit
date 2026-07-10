@@ -10,7 +10,7 @@
  * main process drive over CDP / executeJavaScript.
  */
 import { bootWorkbench } from './boot'
-import { diskMirrorSource } from './workspace/disk-mirror'
+import { diskMirrorSource } from './workspace/disk-workspace-source'
 import { walAuditSource } from './workspace/wal-audit'
 import type { WalAuditSurface } from './workspace/wal-audit'
 import type { CustomFileTypes } from './file-type-associations'

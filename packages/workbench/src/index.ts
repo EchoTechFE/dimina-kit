@@ -18,8 +18,12 @@ export type {
 export { buildFileAssociations } from './file-type-associations'
 export type { CustomFileTypes } from './file-type-associations'
 
-export { diskMirrorSource } from './workspace/disk-mirror'
-export type { DiskMirrorOptions } from './workspace/disk-mirror'
+// File lives at disk-workspace-source.ts: the "mirror a real disk project
+// into the editor memfs" DIRECTION is the opposite of fs-core's own
+// `disk-mirror` export (OPFS → local directory one-way export), and the two
+// must not share a basename. The exported names stay stable.
+export { diskMirrorSource } from './workspace/disk-workspace-source'
+export type { DiskMirrorOptions } from './workspace/disk-workspace-source'
 export { inMemorySeedSource } from './workspace/in-memory-seed'
 export type { InMemorySeedOptions } from './workspace/in-memory-seed'
 export type { WorkspaceSource } from './workspace/types'

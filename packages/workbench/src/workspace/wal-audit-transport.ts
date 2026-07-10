@@ -11,8 +11,9 @@ export type { FsEntry } from '../fs-bridge'
 /** The `/__fs` bridge calls this module needs — defaults to the real bridge
  * (file-workspace.ts); injectable for tests. Also the raw material the
  * devtools `TruthPort` below is assembled from. `readdir`'s `FsEntry` carries
- * `size`/`mtimeMs` for FILE entries (see fs-bridge.ts) — wal-audit-watch-expand.ts's
- * stat-diffing is the reason this bridge exposes stat at all. */
+ * `size`/`mtimeMs` for FILE entries (see fs-bridge.ts) — the stat-diffing of
+ * `@dimina-kit/fs-core/sync/watch-expander` is the reason this bridge
+ * exposes stat at all. */
 export interface WalAuditBridge {
   readdir(baseUrl: string, rel: string): Promise<FsEntry[]>
   read(baseUrl: string, rel: string): Promise<Uint8Array>
