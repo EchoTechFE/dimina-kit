@@ -20,11 +20,21 @@ share a single implementation and stay wire-compatible.
     `highlightElement(sid)` (measure-only), `elementFor(sid)`,
     `setObserving(on)` (debounced `onMutated` callback while a panel is
     visible), `dispose()`.
-- `@dimina-kit/wxml-inspect/panel` — `WxmlPanel`, the React tree component
-  (React ≥ 18 peer). Styling uses Tailwind utility classes over CSS variables
-  (`--color-code-blue`, `--color-surface-2`, …); the consuming app provides
-  the Tailwind theme mapping and variable values, and must include this
-  package's sources in its Tailwind content scan.
+- `@dimina-kit/wxml-inspect/panel` — the React layer (React ≥ 18 peer):
+  - `WxmlPanel` — the pure tree view (props in, no data wiring).
+  - `ConnectedWxmlPanel` — the panel's data wiring, written once against
+    `WxmlPanelSource`: seed on the (enabled && active) rising edge, live
+    updates via the push subscription, visibility gating, hover inspection.
+    Hosts render it with their source implementation and never duplicate the
+    wiring.
+  - Styling uses Tailwind utility classes over CSS variables
+    (`--color-code-blue`, `--color-surface-2`, …); the consuming app provides
+    the Tailwind theme mapping and variable values, and must include this
+    package's sources in its Tailwind content scan.
+- `WxmlPanelSource` (main entry, type-only) — the five-operation transport
+  contract behind the panel: `getSnapshot` / `subscribe` / `setActive` /
+  `inspect` / `clearInspection`. Each host implements only how these travel
+  (Electron IPC channels, preview-iframe postMessage, …).
 
 ## Contract notes
 

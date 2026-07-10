@@ -191,14 +191,11 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
   const debugPanelProps: BottomDebugPanelProps = {
     rightPane: rightPane.rightPane,
     onSelectTab: rightPane.selectRightPane,
-    wxmlTree: panelData.wxmlTree,
-    onRefreshWxml: panelData.refreshWxml,
-    onInspectWxml: panelData.inspectWxmlElement,
-    onClearWxmlInspection: panelData.clearWxmlElementInspection,
+    wxmlSource: panelData.wxmlSource,
+    wxmlEnabled: panelData.wxmlEnabled,
     appData: panelData.appData,
     onRefreshAppData: panelData.refreshAppData,
     onSelectAppDataBridge: panelData.setActiveAppDataBridge,
-    onWxmlActiveChange: panelData.setWxmlActive,
     storageItems: panelData.storageItems,
     onRefreshStorage: panelData.refreshStorage,
     onSetStorage: panelData.setStorageItem,
@@ -437,19 +434,13 @@ function DockDebugTab(
     prevActive.current = active
     if (!becameActive) return
     const p = propsRef.current
-    if (tabId === 'wxml') p.onRefreshWxml()
-    else if (tabId === 'appdata') p.onRefreshAppData()
+    if (tabId === 'appdata') p.onRefreshAppData()
     else if (tabId === 'storage') void p.onRefreshStorage()
   }, [tabId, active])
-  // WXML visibility gate: main only runs the render-guest DOM observer + live
-  // tree pushes while the WXML panel is visible, so signal BOTH edges (not just
-  // false→true) and stop observing when the panel unmounts.
-  useEffect(() => {
-    if (tabId !== 'wxml') return
-    propsRef.current.onWxmlActiveChange?.(active)
-    return () => { propsRef.current.onWxmlActiveChange?.(false) }
-  }, [tabId, active])
-  return <DebugTabContent tabId={tabId} {...panelProps} />
+  // WXML has no branch here: its activation-edge seed AND visibility gate
+  // (main only runs the render-guest DOM observer while the panel is visible)
+  // both live in the shared ConnectedWxmlPanel, driven by `wxmlActive`.
+  return <DebugTabContent tabId={tabId} {...panelProps} wxmlActive={active} />
 }
 
 function DockableLayout(props: DockableLayoutProps): ReactNode {

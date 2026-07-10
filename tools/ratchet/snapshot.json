@@ -11,7 +11,7 @@
     },
     "code-duplication": {
       "direction": "lower-is-better",
-      "value": 401,
+      "value": 400,
       "unit": "duplicated lines",
       "breakdown": {
         "packages/devtools/src/main/ipc/project-fs.ts:177↔packages/devtools/src/main/ipc/project-fs.ts:471": 12,
@@ -32,7 +32,7 @@
         "packages/devtools/src/renderer/modules/main/features/project-runtime/components/editor-panel.tsx:49↔packages/devtools/src/renderer/modules/main/features/project-runtime/components/simulator-panel.tsx:132": 13,
         "packages/devtools/src/renderer/modules/main/features/project-runtime/components/editor-panel.tsx:70↔packages/devtools/src/renderer/modules/main/features/project-runtime/components/simulator-panel.tsx:162": 22,
         "packages/devtools/src/renderer/modules/main/features/project-runtime/controllers/use-device.ts:21↔packages/devtools/src/renderer/modules/main/features/project-runtime/controllers/use-project-runtime-controller.ts:56": 22,
-        "packages/devtools/src/renderer/modules/main/features/project-runtime/controllers/use-panel-data.ts:45↔packages/devtools/src/renderer/modules/main/features/project-runtime/controllers/use-project-runtime-controller.ts:73": 18,
+        "packages/devtools/src/renderer/modules/main/features/project-runtime/controllers/use-panel-data.ts:44↔packages/devtools/src/renderer/modules/main/features/project-runtime/controllers/use-project-runtime-controller.ts:73": 17,
         "packages/devtools/src/renderer/modules/workbench-settings/workbench-settings.tsx:245↔packages/devtools/src/renderer/modules/workbench-settings/workbench-settings.tsx:356": 14,
         "packages/devtools/src/simulator/device-shell/device-shell.tsx:350↔packages/devtools/src/simulator/device-shell/device-shell.tsx:402": 11,
         "packages/devtools/src/simulator/device-shell/device-shell.tsx:350↔packages/devtools/src/simulator/device-shell/device-shell.tsx:434": 11,
@@ -82,7 +82,7 @@
         "packages/devtools/src/preload/instrumentation/app-data.test.ts": 865,
         "packages/devtools/src/preload/instrumentation/wxml.test.ts": 777,
         "packages/devtools/src/preload/miniapp-snapshot/host.test.ts": 561,
-        "packages/devtools/src/renderer/modules/main/features/project-runtime/project-runtime.tsx": 603,
+        "packages/devtools/src/renderer/modules/main/features/project-runtime/project-runtime.tsx": 594,
         "packages/devtools/src/shared/open-in-editor.test.ts": 537,
         "packages/devtools/src/simulator/device-shell/page-stack-controller.test.ts": 513,
         "packages/devtools/src/simulator/device-shell/tab-bar-state.test.ts": 517,
@@ -121,23 +121,23 @@
     },
     "test-coverage": {
       "direction": "higher-is-better",
-      "value": 73.28,
+      "value": 73.27,
       "unit": "% lines",
       "breakdown": {
         "devkit": 93.54,
-        "devtools": 68.11,
+        "devtools": 68.09,
         "electron-deck": 95.23,
         "electron-deck/dock-react": 79.05,
         "fs-core": 94.71,
         "view-anchor": 95.28,
         "workbench": 35.34,
-        "wxml-inspect": 67.71
+        "wxml-inspect": 69.62
       },
       "tolerance": 1
     },
     "test-report": {
       "direction": "higher-is-better",
-      "value": 3844,
+      "value": 3856,
       "unit": "passed tests",
       "breakdown": {
         "devkit": 147,
@@ -147,7 +147,7 @@
         "fs-core": 77,
         "view-anchor": 87,
         "workbench": 88,
-        "wxml-inspect": 19
+        "wxml-inspect": 31
       }
     },
     "type-coverage": {
@@ -161,7 +161,7 @@
         "fs-core": 99.96,
         "view-anchor": 100,
         "workbench": 99.91,
-        "wxml-inspect": 99.95
+        "wxml-inspect": 99.96
       }
     },
     "type-escapes": {

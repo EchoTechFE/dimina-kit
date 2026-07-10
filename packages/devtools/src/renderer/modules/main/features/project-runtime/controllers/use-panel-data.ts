@@ -1,22 +1,21 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useState,
 } from 'react'
 import { useActiveBridgeId } from './use-active-bridge-id'
 import { invoke as ipcInvoke, on as ipcOn } from '@/shared/api/ipc-transport'
 import {
   SimulatorAppDataChannel,
-  SimulatorElementChannel,
   SimulatorStorageChannel,
-  SimulatorWxmlChannel,
-  type ElementInspection,
   type StorageEvent,
   type StorageItem as StorageItemDto,
   type StorageWriteResult,
 } from '../../../../../../shared/ipc-channels'
 import type { AppDataSnapshot } from '../../../../../../preload/instrumentation/app-data'
-import type { WxmlNode } from '@dimina-kit/wxml-inspect'
+import type { WxmlPanelSource } from '@dimina-kit/wxml-inspect'
+import { createIpcWxmlPanelSource } from '../../right-panel/wxml-source'
 import { useNativeChannelSnapshot } from './use-native-channel-snapshot'
 import type { CompileStatus, StorageItem } from './use-project-runtime-controller'
 
@@ -43,22 +42,21 @@ const EMPTY_APP_DATA_SNAPSHOT: AppDataSnapshot = {
 }
 
 export interface PanelDataHookResult {
-  wxmlTree: WxmlNode | null
+  /** WXML data travels through the shared source contract (ConnectedWxmlPanel
+   * owns seed/subscribe/visibility); this hook only provides the IPC transport
+   * implementation plus the readiness gate. */
+  wxmlSource: WxmlPanelSource
+  wxmlEnabled: boolean
   appData: AppDataState
   storageItems: StorageItem[]
-  refreshWxml: () => void
   refreshAppData: () => void
   setActiveAppDataBridge: (id: string) => void
   refreshStorage: () => void
-  /** Tell main whether the WXML panel is visible (gates the live DOM observer). */
-  setWxmlActive: (on: boolean) => void
   setStorageItem: (key: string, value: string) => Promise<StorageWriteResult>
   removeStorageItem: (key: string) => Promise<StorageWriteResult>
   clearStorage: () => Promise<StorageWriteResult>
   clearAllStorage: () => Promise<StorageWriteResult>
   getStoragePrefix: () => Promise<string>
-  inspectWxmlElement: (sid: string) => Promise<ElementInspection | null>
-  clearWxmlElementInspection: () => Promise<void>
 }
 
 export function usePanelData(props: UsePanelDataProps): PanelDataHookResult {
@@ -72,13 +70,10 @@ export function usePanelData(props: UsePanelDataProps): PanelDataHookResult {
   // the hidden service-host window — neither reachable from the simulator
   // preload — so WXML + AppData are sourced from the main process
   // (simulator-wxml / simulator-appdata services) over dedicated channels:
-  // seed via GetSnapshot + live updates via Event.
-  const nativeWxml = useNativeChannelSnapshot<WxmlNode | null>({
-    getChannel: SimulatorWxmlChannel.GetSnapshot,
-    eventChannel: SimulatorWxmlChannel.Event,
-    initial: null,
-    enabled: ready,
-  })
+  // seed via GetSnapshot + live updates via Event. For WXML that whole wiring
+  // lives in the shared ConnectedWxmlPanel; this hook only hands it the IPC
+  // transport (wxmlSource) and the readiness gate (wxmlEnabled).
+  const wxmlSource = useMemo(() => createIpcWxmlPanelSource(), [])
 
   const nativeAppData = useNativeChannelSnapshot<AppDataSnapshot>({
     getChannel: SimulatorAppDataChannel.GetSnapshot,
@@ -110,12 +105,6 @@ export function usePanelData(props: UsePanelDataProps): PanelDataHookResult {
   useEffect(() => {
     if (ready) void refreshStorage()
   }, [ready, refreshStorage])
-  // Tell main whether the WXML panel is visible. Main only installs the
-  // render-guest DOM MutationObserver + pushes live tree updates while active, so
-  // an unseen WXML panel never drives a full Vue-tree walk.
-  const setWxmlActive = useCallback((on: boolean) => {
-    void ipcInvoke<void>(SimulatorWxmlChannel.SetActive, on)
-  }, [])
   // Write helpers — main process forwards CDP-emitted DOMStorage events back
   // through `SimulatorStorageChannel.Event`, so successful writes update the
   // panel via the existing push subscription. No optimistic local state.
@@ -143,13 +132,6 @@ export function usePanelData(props: UsePanelDataProps): PanelDataHookResult {
     const r = await ipcInvoke<string | undefined>(SimulatorStorageChannel.GetActivePrefix)
     return r ?? ''
   }, [])
-  const inspectWxmlElement = useCallback(async (sid: string) => {
-    return await ipcInvoke<ElementInspection | null>(SimulatorElementChannel.Inspect, sid)
-  }, [])
-  const clearWxmlElementInspection = useCallback(async () => {
-    await ipcInvoke<void>(SimulatorElementChannel.Clear)
-  }, [])
-
   // Subscribe to live storage events forwarded by the main-process CDP
   // listener. Push events keep the panel reactive without polling; the
   // refresh button still hits GetSnapshot for a full reload.
@@ -171,20 +153,17 @@ export function usePanelData(props: UsePanelDataProps): PanelDataHookResult {
   }, [])
 
   return {
-    wxmlTree: nativeWxml.data,
+    wxmlSource,
+    wxmlEnabled: ready,
     appData,
     storageItems,
-    refreshWxml: nativeWxml.refresh,
     refreshAppData,
     setActiveAppDataBridge,
     refreshStorage,
-    setWxmlActive,
     setStorageItem,
     removeStorageItem,
     clearStorage,
     clearAllStorage,
     getStoragePrefix,
-    inspectWxmlElement,
-    clearWxmlElementInspection,
   }
 }

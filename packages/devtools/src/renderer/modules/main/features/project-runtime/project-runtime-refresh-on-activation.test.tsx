@@ -7,13 +7,17 @@
  * whole session, leaving the panel stale on every re-activation.
  *
  * ── THE CONTRACT ─────────────────────────────────────────────────────────────
- * `DockDebugTab` fires the WXML/AppData/Storage per-tab refresh when its panel
+ * `DockDebugTab` fires the AppData/Storage per-tab refresh when its panel
  * BECOMES active — including the keepalive case where it was already mounted and
  * is merely RE-activated — NOT only on first mount. Concretely:
  *   - first activation (mount, active) → refresh fires once;
  *   - tab away and back → refresh fires AGAIN on re-activation, WITHOUT the body
  *     having remounted (keepalive: the same DebugTabContent instance persists);
  *   - staying mounted-but-inactive → no refresh.
+ * WXML's activation-edge seed lives in the shared ConnectedWxmlPanel (covered
+ * by @dimina-kit/wxml-inspect's own suite); the contract at THIS layer is that
+ * DockDebugTab feeds it a correct `wxmlActive` on every activation flip while
+ * the body stays mounted.
  *
  * We render the REAL `<DockView>` + the REAL ProjectRuntime dock wiring (only the
  * controller + @/shared/api + the leaf DebugTabContent are mocked). The
@@ -53,7 +57,6 @@ vi.mock('@/shared/api', () => ({
 
 // ── Controller mock: refresh spies the assertions watch ─────────────────────
 const refresh = vi.hoisted(() => ({
-  wxml: vi.fn(),
   appData: vi.fn(),
   storage: vi.fn(() => Promise.resolve()),
 }))
@@ -76,10 +79,14 @@ vi.mock('./controllers/use-project-runtime-controller', () => ({
     },
     simulator: { currentPage: null },
     panelData: {
-      wxmlTree: null,
-      refreshWxml: refresh.wxml,
-      inspectWxmlElement: vi.fn(),
-      clearWxmlElementInspection: vi.fn(),
+      wxmlSource: {
+        getSnapshot: vi.fn(async () => null),
+        subscribe: vi.fn(() => () => {}),
+        setActive: vi.fn(),
+        inspect: vi.fn(async () => null),
+        clearInspection: vi.fn(),
+      },
+      wxmlEnabled: true,
       appData: null,
       refreshAppData: refresh.appData,
       setActiveAppDataBridge: vi.fn(),
@@ -118,16 +125,21 @@ vi.mock('@dimina-kit/view-anchor', () => ({
 // not under test here; the refresh wiring lives in DockDebugTab, above it.
 const tabMounts = vi.hoisted(() => new Map<string, number>())
 const tabUnmounts = vi.hoisted(() => new Map<string, number>())
+// Every wxmlActive value the wxml tab's DebugTabContent renders with, in
+// order — the assertions watch its edges across tab switches.
+const wxmlActiveLog = vi.hoisted(() => [] as boolean[])
 vi.mock('../bottom-debug-panel/bottom-debug-panel', () => ({
-  DebugTabContent: ({ tabId }: { tabId: string }) => {
+  DebugTabContent: ({ tabId, wxmlActive }: { tabId: string, wxmlActive?: boolean }) => {
     // jsx-free instrumentation via effects.
-    return DebugTabStub({ tabId })
+    return DebugTabStub({ tabId, wxmlActive })
   },
 }))
 
 // A tiny instrumented stub component (declared after the mock to keep the mock
-// hoist-safe). Records every real mount + unmount of a given tabId.
-function DebugTabStub({ tabId }: { tabId: string }) {
+// hoist-safe). Records every real mount + unmount of a given tabId, plus the
+// wxmlActive stream the wxml tab receives.
+function DebugTabStub({ tabId, wxmlActive }: { tabId: string, wxmlActive?: boolean }) {
+  if (tabId === 'wxml') wxmlActiveLog.push(!!wxmlActive)
   useEffect(() => {
     tabMounts.set(tabId, (tabMounts.get(tabId) ?? 0) + 1)
     return () => {
@@ -191,7 +203,7 @@ function activate(panelId: string): void {
 beforeEach(() => {
   tabMounts.clear()
   tabUnmounts.clear()
-  refresh.wxml.mockClear()
+  wxmlActiveLog.length = 0
   refresh.appData.mockClear()
   refresh.storage.mockClear()
   dockModelHolder.model = null
@@ -218,44 +230,38 @@ describe('ProjectRuntime: refresh on tab ACTIVATION under keepalive', () => {
     expect(tabMounts.get('wxml'), 'wxml body must not remount on switch-back').toBe(1)
   })
 
-  // Refresh must fire on RE-ACTIVATION, not only first mount. The wxml
-  // refresh fires once on initial activation; after tabbing away and back it must
-  // fire AGAIN — driven by the activation edge, not a remount. On HEAD the
-  // mount-based effect happens to re-fire because the body remounts, so the COUNT
-  // alone is not discriminating; this test is meaningful in tandem with the
-  // no-remount assertion above (the fix must keep this re-fire WHILE the body
-  // stays mounted). We assert the user-visible outcome: refresh ran again.
-  it('fires the wxml refresh again when wxml is re-activated', () => {
+  // The WXML stale-data guard is a two-link chain: ConnectedWxmlPanel re-seeds
+  // on every wxmlActive false→true rising edge (guarded in the wxml-inspect
+  // suite), and THIS layer must deliver that flip — active → inactive → active
+  // again — to the kept-alive (never remounted) DebugTabContent instance.
+  it('drives wxmlActive across a tab round-trip while the body stays mounted', () => {
     render(<ProjectRuntime project={PROJECT} />)
 
-    // Initial activation refresh.
-    expect(refresh.wxml).toHaveBeenCalledTimes(1)
+    // wxml starts as the active tab.
+    expect(wxmlActiveLog.at(-1)).toBe(true)
 
     activate('appdata') // wxml inactive
-    activate('wxml') // re-activated
+    expect(wxmlActiveLog.at(-1)).toBe(false)
 
-    // Re-activation must refresh wxml again (stale-data guard).
-    expect(refresh.wxml.mock.calls.length).toBeGreaterThanOrEqual(2)
+    activate('wxml') // re-activated → the rising edge ConnectedWxmlPanel re-seeds on
+    expect(wxmlActiveLog.at(-1)).toBe(true)
   })
 
   // A panel that is kept-alive but INACTIVE must NOT refresh. Switching
-  // wxml→appdata fires appdata's refresh exactly once (on appdata activation) and
-  // does NOT keep firing wxml's refresh while wxml sits mounted-but-hidden. On a
-  // wrong keepalive impl that re-runs every panel's mount effect on every render,
-  // wxml's refresh would fire spuriously while inactive. We pin: after activating
-  // appdata, the wxml refresh count does NOT increase beyond its single initial
-  // activation, and appdata refreshed exactly once.
+  // wxml→appdata fires appdata's refresh (on appdata activation) while the
+  // mounted-but-hidden wxml body reads wxmlActive=false — ConnectedWxmlPanel
+  // makes no source calls while inactive (guarded in the wxml-inspect suite),
+  // so a spurious `true` here is exactly the stale-refresh bug this pins.
   it('does not refresh a mounted-but-inactive tab; only the newly-active one refreshes', () => {
     render(<ProjectRuntime project={PROJECT} />)
 
-    expect(refresh.wxml).toHaveBeenCalledTimes(1) // initial wxml activation
-    const wxmlBefore = refresh.wxml.mock.calls.length
+    expect(wxmlActiveLog.at(-1)).toBe(true) // initial wxml activation
 
     activate('appdata')
 
     // appdata refreshed on its activation.
     expect(refresh.appData.mock.calls.length).toBeGreaterThanOrEqual(1)
-    // wxml, now mounted-but-inactive, did NOT refresh again.
-    expect(refresh.wxml.mock.calls.length, 'inactive wxml must not re-refresh').toBe(wxmlBefore)
+    // wxml, now mounted-but-inactive, must read inactive (no re-seed source).
+    expect(wxmlActiveLog.at(-1), 'inactive wxml must read wxmlActive=false').toBe(false)
   })
 })

@@ -10,3 +10,4 @@ export {
   type WxmlInspector,
   type WxmlInspectorOptions,
 } from './inspector.js'
+export type { WxmlPanelSource } from './panel-source.js'

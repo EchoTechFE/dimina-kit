@@ -1,7 +1,7 @@
 import { type ReactNode } from 'react'
-import type { WxmlNode } from '@dimina-kit/wxml-inspect'
-import type { ElementInspection, StorageWriteResult } from '../../../../../shared/ipc-channels.js'
-import { WxmlPanel } from '@dimina-kit/wxml-inspect/panel'
+import type { WxmlPanelSource } from '@dimina-kit/wxml-inspect'
+import type { StorageWriteResult } from '../../../../../shared/ipc-channels.js'
+import { ConnectedWxmlPanel } from '@dimina-kit/wxml-inspect/panel'
 import { AppDataPanel } from '../right-panel/appdata-panel.js'
 import { StoragePanel } from '../right-panel/storage-panel.js'
 import { CompilePanel } from '../right-panel/compile-panel.js'
@@ -19,13 +19,11 @@ export interface BottomDebugPanelProps {
   onSelectTab: (id: RightPaneTabId) => void
 
   // Data + handlers for built-in panels.
-  wxmlTree: WxmlNode | null
-  onRefreshWxml: () => void
-  /** Notify main when the WXML panel becomes visible/hidden (gates the live
-   * DOM observer + tree pushes so an unseen panel never walks the Vue tree). */
-  onWxmlActiveChange?: (on: boolean) => void
-  onInspectWxml?: (sid: string) => Promise<ElementInspection | null>
-  onClearWxmlInspection?: () => Promise<void>
+  /** WXML data wiring lives in the shared ConnectedWxmlPanel: the host only
+   * supplies the IPC transport (source), the readiness gate (enabled) and —
+   * via DebugTabContent's `wxmlActive` — the tab-visibility gate. */
+  wxmlSource: WxmlPanelSource
+  wxmlEnabled?: boolean
 
   appData: AppDataState
   onRefreshAppData: () => void
@@ -68,18 +66,19 @@ export type DebugTabContentId = 'wxml' | 'appdata' | 'storage' | 'compile'
  * mounts for each fine debug panel, so no handler is duplicated or dropped.
  */
 export function DebugTabContent(
-  props: { tabId: DebugTabContentId } & BottomDebugPanelProps,
+  props: { tabId: DebugTabContentId, wxmlActive?: boolean } & BottomDebugPanelProps,
 ): ReactNode {
   // The panels are live (no manual refresh button): storage syncs via
   // storageChanged, WXML via the render-guest observer, AppData via the setData
-  // tap. `onRefreshWxml/AppData/Storage` stay on BottomDebugPanelProps for the
+  // tap. `onRefreshAppData/Storage` stay on BottomDebugPanelProps for the
   // seed-on-activation edge in `DockDebugTab`, but are NOT forwarded to the panel
-  // components anymore.
+  // components anymore; WXML's activation-edge seed + visibility gate live in
+  // the shared ConnectedWxmlPanel, driven by `wxmlActive`.
   const {
     tabId,
-    wxmlTree,
-    onInspectWxml,
-    onClearWxmlInspection,
+    wxmlSource,
+    wxmlEnabled = true,
+    wxmlActive = true,
     appData,
     onSelectAppDataBridge,
     storageItems,
@@ -97,10 +96,10 @@ export function DebugTabContent(
   switch (tabId) {
     case 'wxml':
       return (
-        <WxmlPanel
-          tree={wxmlTree}
-          onInspectElement={onInspectWxml}
-          onClearInspection={onClearWxmlInspection}
+        <ConnectedWxmlPanel
+          source={wxmlSource}
+          enabled={wxmlEnabled}
+          active={wxmlActive}
           isRuntimeRunning={isRuntimeRunning}
         />
       )

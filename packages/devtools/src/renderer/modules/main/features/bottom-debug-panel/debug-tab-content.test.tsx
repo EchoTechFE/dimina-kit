@@ -25,11 +25,11 @@ import {
   DebugTabContent,
   type BottomDebugPanelProps,
 } from './bottom-debug-panel'
-import type { WxmlNode } from '@dimina-kit/wxml-inspect'
+import type { WxmlNode, WxmlPanelSource } from '@dimina-kit/wxml-inspect'
 
 const okWrite = async () => ({ ok: true as const })
 
-/** A minimal one-node WXML tree whose 刷新 button is always rendered. */
+/** A minimal one-node WXML tree served through the fake source. */
 function makeWxmlTree(): WxmlNode {
   return {
     tagName: 'view',
@@ -37,6 +37,17 @@ function makeWxmlTree(): WxmlNode {
     children: [],
     sid: 'sid-root',
   } as unknown as WxmlNode
+}
+
+/** Inert WxmlPanelSource: seeds the minimal tree, never pushes live updates. */
+function makeWxmlSource(): WxmlPanelSource {
+  return {
+    getSnapshot: async () => makeWxmlTree(),
+    subscribe: () => () => {},
+    setActive: () => {},
+    inspect: async () => null,
+    clearInspection: () => {},
+  }
 }
 
 /**
@@ -49,9 +60,7 @@ function makeProps(
   return {
     rightPane: { selected: 'wxml', simulatorVisible: true },
     onSelectTab: vi.fn(),
-    wxmlTree: makeWxmlTree(),
-    onRefreshWxml: vi.fn(),
-    onInspectWxml: vi.fn(async () => null),
+    wxmlSource: makeWxmlSource(),
     appData: { bridges: [], activeBridgeId: null, entries: {} },
     onRefreshAppData: vi.fn(),
     onSelectAppDataBridge: vi.fn(),
