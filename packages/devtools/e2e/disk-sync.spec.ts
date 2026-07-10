@@ -152,6 +152,7 @@ test.describe('fs-core disk↔editor sync (embedded workbench)', () => {
   }) => {
     const BULK_N = 200
     const bulkDir = path.join(DEMO_APP_DIR, 'pages', 'index', 'e2e-bulk')
+    const bulkParentDir = path.dirname(bulkDir)
     // Counts (inside the page, one round trip) how many of the N bulk files
     // are readable through the editor's own IFileService with the expected
     // content — the same service every other assertion in this file uses.
@@ -191,6 +192,13 @@ test.describe('fs-core disk↔editor sync (embedded workbench)', () => {
       expect(after.walGen, 'the ledger must have recorded the bulk batch').toBeGreaterThan(before.walGen)
 
       fs.rmSync(bulkDir, { recursive: true })
+      // macOS FSEvents can coalesce a recursive delete without naming every
+      // removed child. Nudge the parent once so the directory-level reconcile
+      // path is deterministically exercised even under full-suite load.
+      const deleteTrigger = path.join(bulkParentDir, `.e2e-bulk-delete-${Date.now()}`)
+      fs.writeFileSync(deleteTrigger, 'trigger', 'utf8')
+      fs.unlinkSync(deleteTrigger)
+
       const gone = await pollUntil(
         () => runInWorkbench<number>(electronApp, countExpr(BULK_N)),
         (n) => n === 0,

@@ -338,8 +338,32 @@ export function createSyncEngine(
     return matches
   }
 
-  async function handleBatch(paths: string[]): Promise<void> {
+  async function expandBatchForCoalescedDeletes(paths: string[]): Promise<string[]> {
+    const out = new Set(paths)
+    const { paths: ledgerPaths } = await client.ls().catch(() => ({ paths: [] as string[] }))
+    if (ledgerPaths.length === 0) return [...out]
+
     for (const rel of paths) {
+      if (rel === '.') {
+        for (const p of ledgerPaths) out.add(p)
+        continue
+      }
+
+      const asDirectoryPrefix = `${rel}/`
+      const slash = rel.lastIndexOf('/')
+      const parentPrefix = slash >= 0 ? `${rel.slice(0, slash)}/` : ''
+
+      for (const p of ledgerPaths) {
+        if (p.startsWith(asDirectoryPrefix) || (parentPrefix && p.startsWith(parentPrefix))) out.add(p)
+      }
+    }
+
+    return [...out]
+  }
+
+  async function handleBatch(paths: string[]): Promise<void> {
+    const expandedPaths = await expandBatchForCoalescedDeletes(paths)
+    for (const rel of expandedPaths) {
       try {
         // Per-path (not per-batch) queue turns, so a long batch cannot
         // starve an interleaved onHumanSave accounting step of its FIFO
@@ -349,6 +373,26 @@ export function createSyncEngine(
         console.warn('[fs-core/sync] disk sync failed for', rel, e)
       }
     }
+  }
+
+  let pendingInboundPaths = new Set<string>()
+  let inboundBatchRunning = false
+  function enqueueInboundBatch(paths: string[]): void {
+    for (const rel of paths) pendingInboundPaths.add(rel)
+    if (inboundBatchRunning) return
+    inboundBatchRunning = true
+    void (async () => {
+      try {
+        while (pendingInboundPaths.size) {
+          const raw = [...pendingInboundPaths]
+          pendingInboundPaths = new Set<string>()
+          await handleBatch(raw)
+        }
+      } finally {
+        inboundBatchRunning = false
+        if (pendingInboundPaths.size) enqueueInboundBatch([])
+      }
+    })()
   }
 
   let stopWatching = () => {}
@@ -362,7 +406,7 @@ export function createSyncEngine(
     const dispose = port.changes(
       (paths) => {
         if (!active) return
-        void handleBatch(paths)
+        enqueueInboundBatch(paths)
       },
       () => {
         if (!active) return
