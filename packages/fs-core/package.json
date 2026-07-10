@@ -1,6 +1,6 @@
 {
   "name": "@dimina-kit/fs-core",
-  "version": "0.3.0-dev.1",
+  "version": "0.3.0-dev.2",
   "description": "Zero-dependency OPFS WAL filesystem core for the web, with an agent capability gate.",
   "keywords": [
     "dimina",
