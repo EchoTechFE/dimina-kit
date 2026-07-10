@@ -12,7 +12,7 @@ import {
   NAVIGATION_TIMEOUT_MS,
 } from '../shared/constants.js'
 import type { MiniappSnapshotSource } from '../miniapp-snapshot/types.js'
-import { walkInstance, type ComponentInstance } from './wxml-extract.js'
+import { walkInstance, type ComponentInstance } from '@dimina-kit/wxml-inspect'
 import { getActivePageIframe } from '../shared/page-iframe.js'
 
 function getVueAppFromIframe(iframe: HTMLIFrameElement): ComponentInstance | null {

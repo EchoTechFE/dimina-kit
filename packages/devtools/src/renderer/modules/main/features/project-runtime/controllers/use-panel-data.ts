@@ -16,7 +16,7 @@ import {
   type StorageWriteResult,
 } from '../../../../../../shared/ipc-channels'
 import type { AppDataSnapshot } from '../../../../../../preload/instrumentation/app-data'
-import type { WxmlNode } from '../../right-panel/types.js'
+import type { WxmlNode } from '@dimina-kit/wxml-inspect'
 import { useNativeChannelSnapshot } from './use-native-channel-snapshot'
 import type { CompileStatus, StorageItem } from './use-project-runtime-controller'
 

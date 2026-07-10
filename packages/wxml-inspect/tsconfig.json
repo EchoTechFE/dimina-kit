@@ -1,0 +1,9 @@
+{
+  "extends": "@dimina-kit/typescript-config/base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "jsx": "react-jsx"
+  },
+  "include": ["src"],
+  "exclude": ["node_modules"]
+}

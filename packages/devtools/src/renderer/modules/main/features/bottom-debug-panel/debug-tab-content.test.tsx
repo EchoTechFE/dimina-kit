@@ -25,7 +25,7 @@ import {
   DebugTabContent,
   type BottomDebugPanelProps,
 } from './bottom-debug-panel'
-import type { WxmlNode } from '../right-panel/types'
+import type { WxmlNode } from '@dimina-kit/wxml-inspect'
 
 const okWrite = async () => ({ ok: true as const })
 

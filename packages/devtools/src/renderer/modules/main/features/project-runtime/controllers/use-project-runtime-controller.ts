@@ -5,7 +5,7 @@ import { DEVICES, SIM_PANEL_PADDING } from '@/shared/constants'
 import type { AppInfo, ProjectStatus, SessionRuntimeStatusPayload } from '@/shared/api'
 import type { CompileConfig } from '@/shared/types'
 import type { ElementInspection, StorageWriteResult } from '../../../../../../shared/ipc-channels'
-import type { WxmlNode } from '../../right-panel/types.js'
+import type { WxmlNode } from '@dimina-kit/wxml-inspect'
 import { DEFAULT_RIGHT_PANE_STATE } from '../types'
 import type { RightPaneState, RightPaneTabId } from '../types'
 

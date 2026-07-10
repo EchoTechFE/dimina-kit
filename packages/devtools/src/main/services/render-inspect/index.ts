@@ -19,7 +19,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { devtoolsPackageRoot } from '../../utils/paths.js'
 import type { ElementInspection } from '../../../shared/ipc-channels.js'
-import type { WxmlNode } from '../../../preload/shared/sid-registry.js'
+import type { WxmlNode } from '@dimina-kit/wxml-inspect'
 
 export interface RenderInspector {
   /** Inject (once per wc) the inspector IIFE, then read the WXML tree. */

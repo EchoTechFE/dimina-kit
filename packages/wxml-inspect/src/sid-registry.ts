@@ -1,16 +1,7 @@
-// Stable-id registry for WXML nodes, shared by the iframe-path extractor
-// (preload/instrumentation/wxml-extract + runtime/bridge) and the native-host
-// render-guest inspector (render-host/render-inspect). It is dependency-free so
-// the render-inspect bundle injected into the guest main world stays small and
-// doesn't drag in the iframe/exposeOnMainWorld machinery from runtime/bridge.
-
-export interface WxmlNode {
-  tagName: string
-  attrs: Record<string, string>
-  children: WxmlNode[]
-  text?: string
-  sid?: string
-}
+// Stable-id registry for WXML nodes, shared by every extractor that walks a
+// render-layer document (host iframe extractors, injected guest inspectors,
+// browser preview bridges). It is dependency-free so injected bundles stay
+// small and don't drag in host-specific machinery.
 
 // 合成 sid 注册表：用 WeakMap 把元素 ↔ sid 双向绑定，避免在源 DOM 上写
 // `data-*` 属性（提取本应只读，且属性形式会污染用户的快照/选择器）。
@@ -41,5 +32,14 @@ export function findElementBySid(doc: Document, sid: string): HTMLElement | null
     if (el.ownerDocument !== doc) return null
     return el
   }
-  return doc.querySelector(`[data-sid="${CSS.escape(sid)}"]`) as HTMLElement | null
+  return doc.querySelector(`[data-sid="${escapeForAttrSelector(sid)}"]`) as HTMLElement | null
+}
+
+// `CSS.escape` only exists in real browser realms (jsdom has no `window.CSS`).
+// Inside a double-quoted attribute selector, escaping backslashes and quotes
+// is sufficient, so fall back to that when the host lacks the API.
+function escapeForAttrSelector(value: string): string {
+  const impl = (globalThis as { CSS?: { escape?: (v: string) => string } }).CSS?.escape
+  if (impl) return impl(value)
+  return value.replace(/[\\"]/g, '\\$&')
 }

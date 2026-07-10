@@ -24,8 +24,8 @@
         "packages/devtools/src/main/services/simulator-storage/index.ts:367↔packages/devtools/src/main/services/simulator-storage/index.ts:441": 8,
         "packages/devtools/src/main/services/simulator-storage/index.ts:409↔packages/devtools/src/main/services/simulator-storage/index.ts:440": 8,
         "packages/devtools/src/main/services/views/host-toolbar-port-channel.ts:144↔packages/devtools/src/preload/runtime/host-toolbar-port.ts:83": 11,
-        "packages/devtools/src/preload/instrumentation/wxml.ts:23↔packages/devtools/src/render-host/render-inspect.ts:61": 6,
-        "packages/devtools/src/preload/runtime/bridge.ts:75↔packages/devtools/src/render-host/render-inspect.ts:91": 17,
+        "packages/devtools/src/preload/instrumentation/wxml.ts:23↔packages/wxml-inspect/src/inspector.ts:48": 6,
+        "packages/devtools/src/preload/runtime/bridge.ts:75↔packages/wxml-inspect/src/inspector.ts:78": 17,
         "packages/devtools/src/preload/runtime/main-api-runner.ts:106↔packages/devtools/src/simulator/run-api-async.ts:177": 15,
         "packages/devtools/src/preload/runtime/main-api-runner.ts:81↔packages/devtools/src/simulator/run-api-async.ts:132": 11,
         "packages/devtools/src/renderer/modules/main/features/project-runtime/components/editor-panel.tsx:33↔packages/devtools/src/renderer/modules/main/features/project-runtime/components/simulator-panel.tsx:117": 14,
@@ -121,22 +121,23 @@
     },
     "test-coverage": {
       "direction": "higher-is-better",
-      "value": 73.21,
+      "value": 73.28,
       "unit": "% lines",
       "breakdown": {
-        "devkit": 93.31,
-        "devtools": 68.04,
+        "devkit": 93.54,
+        "devtools": 68.11,
         "electron-deck": 95.23,
         "electron-deck/dock-react": 79.05,
         "fs-core": 94.71,
         "view-anchor": 95.28,
-        "workbench": 35.34
+        "workbench": 35.34,
+        "wxml-inspect": 67.71
       },
       "tolerance": 1
     },
     "test-report": {
       "direction": "higher-is-better",
-      "value": 3825,
+      "value": 3844,
       "unit": "passed tests",
       "breakdown": {
         "devkit": 147,
@@ -145,7 +146,8 @@
         "electron-deck/dock-react": 96,
         "fs-core": 77,
         "view-anchor": 87,
-        "workbench": 88
+        "workbench": 88,
+        "wxml-inspect": 19
       }
     },
     "type-coverage": {
@@ -158,7 +160,8 @@
         "electron-deck": 99.72,
         "fs-core": 99.96,
         "view-anchor": 100,
-        "workbench": 99.91
+        "workbench": 99.91,
+        "wxml-inspect": 99.95
       }
     },
     "type-escapes": {
