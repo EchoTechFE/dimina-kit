@@ -53,7 +53,7 @@
     "sync"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && tsc -p tsconfig.sync.build.json && node build-workers.mjs",
+    "build": "tsc -p tsconfig.build.json && tsc -p tsconfig.sync.build.json && node build-workers.js",
     "check-types": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.worker.json",
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run --reporter=default --reporter=json --outputFile.json=test-report.json --coverage.enabled --coverage.reporter=json-summary --coverage.reportsDirectory=coverage",

@@ -28,7 +28,7 @@ export default [
   },
   {
     // Node build script (esbuild CLI wrapper), not shipped runtime code.
-    files: ["build-workers.mjs"],
+    files: ["build-workers.js"],
     languageOptions: {
       globals: {
         ...globals.node,

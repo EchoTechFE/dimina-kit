@@ -40,7 +40,7 @@ const realProcess = globalThis.process
 globalThis.process = { env: {}, cwd: () => '/' }
 
 const WORKER_URL = new URL('../dist/stage-worker.browser.js', import.meta.url).href
-const TOOLCHAIN_URL = new URL('./toolchain-setup-node-native.mjs', import.meta.url).href
+const TOOLCHAIN_URL = new URL('./toolchain-setup-node-native.js', import.meta.url).href
 const WORK_PATH = '/work'
 
 const FIXTURE_FILES = {
