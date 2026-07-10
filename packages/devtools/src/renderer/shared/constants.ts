@@ -17,6 +17,12 @@ export const DEVICES = [
 
 export const ZOOM_OPTIONS = [100, 85, 75, 50] as const
 
+/** Sentinel selection for the simulator's auto-fit zoom mode. */
+export const AUTO_ZOOM = 'auto' as const
+
+/** The simulator zoom dropdown's value: a fixed percent, or auto-fit. */
+export type ZoomSetting = typeof ZOOM_OPTIONS[number] | typeof AUTO_ZOOM
+
 // Fixed toolbar header height — re-exported from the cross-process shared
 // module so main (view layout) and renderer (toolbar/popover) can't drift.
 export { HEADER_H } from '../../shared/constants'

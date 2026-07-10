@@ -1,7 +1,7 @@
 import type React from 'react'
 import { useEffect, useRef } from 'react'
 import type { RefObject } from 'react'
-import { DEVICES, SIM_PANEL_PADDING } from '@/shared/constants'
+import { DEVICES, SIM_PANEL_PADDING, type ZoomSetting } from '@/shared/constants'
 import type { AppInfo, ProjectStatus, SessionRuntimeStatusPayload } from '@/shared/api'
 import type { CompileConfig } from '@/shared/types'
 import type { StoragePanelSource, WxmlPanelSource } from '@dimina-kit/inspect'
@@ -49,7 +49,7 @@ interface SessionSlice {
 
 interface DeviceSlice {
   device: DeviceType
-  zoom: number
+  zoom: ZoomSetting
   simPanelWidth: number
   setSimPanelWidth: (width: number) => void
   handleDeviceChange: (e: React.ChangeEvent<HTMLSelectElement>) => void

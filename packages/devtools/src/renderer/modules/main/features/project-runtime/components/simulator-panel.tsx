@@ -1,34 +1,80 @@
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Select } from '@/shared/components/ui/select'
-import { createPlacementAnchor, type Placement, type PlacementAnchorHandle } from '@dimina-kit/view-anchor'
-import { usePlacementPublisher } from '../placement-publisher-context'
-import { VIEW_ID, VIEW_LAYER } from '../../../../../../shared/view-ids'
-import { useDockLayoutEpoch } from '@dimina-kit/electron-deck/dock-react'
-import { cn } from '@/shared/lib/utils'
-import { DEVICES, ZOOM_OPTIONS } from '@/shared/constants'
-import { FallbackBanner, RuntimeErrorOverlay, WatcherDeadBar, type SimulatorRuntimeStatus } from './simulator-runtime-banners'
+import React, {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
+import { Select } from "@/shared/components/ui/select";
+import {
+  createPlacementAnchor,
+  type Bounds,
+  type Placement,
+  type PlacementAnchorHandle,
+} from "@dimina-kit/view-anchor";
+import { usePlacementPublisher } from "../placement-publisher-context";
+import { VIEW_ID, VIEW_LAYER } from "../../../../../../shared/view-ids";
+import { useDockLayoutEpoch } from "@dimina-kit/electron-deck/dock-react";
+import { cn } from "@/shared/lib/utils";
+import {
+  AUTO_ZOOM,
+  DEVICES,
+  ZOOM_OPTIONS,
+  type ZoomSetting,
+} from "@/shared/constants";
+import {
+  FallbackBanner,
+  RuntimeErrorOverlay,
+  WatcherDeadBar,
+  type SimulatorRuntimeStatus,
+} from "./simulator-runtime-banners";
 
 interface Device {
-  name: string
-  width: number
-  height: number
+  name: string;
+  width: number;
+  height: number;
 }
 
 interface SimulatorPanelProps {
-  device: Device
-  zoom: number
-  onDeviceChange: (e: React.ChangeEvent<HTMLSelectElement>) => void
-  onZoomChange: (e: React.ChangeEvent<HTMLSelectElement>) => void
-  compileStatus: { status: string; message: string }
-  currentPage: string
-  copied: boolean
-  onCopyPagePath: () => void
+  device: Device;
+  zoom: ZoomSetting;
+  onDeviceChange: (e: React.ChangeEvent<HTMLSelectElement>) => void;
+  onZoomChange: (e: React.ChangeEvent<HTMLSelectElement>) => void;
+  compileStatus: { status: string; message: string };
+  currentPage: string;
+  copied: boolean;
+  onCopyPagePath: () => void;
   /** Latest runtime-lifecycle push for the active session; null when healthy/unreported. Optional for embedders that don't wire runtime-status (defaults to null: no overlay/banner). */
-  runtimeStatus?: SimulatorRuntimeStatus | null
+  runtimeStatus?: SimulatorRuntimeStatus | null;
   /** True once the project's file watcher has died for this session. */
-  watcherDead?: boolean
+  watcherDead?: boolean;
   /** Re-runs the current launch config (the toolbar's existing 刷新/relaunch action). */
-  onRelaunch?: () => void
+  onRelaunch?: () => void;
+}
+
+// DeviceShell's scrollable desk reserves 24px on each edge and the handset has
+// a 1px border on each edge. Auto-fit must include this fixed frame or a phone
+// that numerically matches its region still overflows by a few pixels.
+const AUTO_FIT_FRAME = 2 * (24 + 1);
+
+// Resolves the auto-fit zoom percent from the measured device-region box: the
+// largest whole-percent scale (capped at 100) that lets the framed device fit
+// inside `bounds` without cropping either axis. Rounding down deliberately
+// leaves a small safety margin, avoiding a native scrollbar from fractional
+// device-pixel rounding. A zero-area measurement (unstable first layout, or a
+// guardDisplayNone hidden tick) returns `fallback` unchanged instead of
+// collapsing to 0.
+function computeAutoZoom(
+  bounds: Bounds,
+  device: { width: number; height: number },
+  fallback: number,
+): number {
+  if (bounds.width <= 0 || bounds.height <= 0) return fallback;
+  const ratio = Math.min(
+    bounds.width / (device.width + AUTO_FIT_FRAME),
+    bounds.height / (device.height + AUTO_FIT_FRAME),
+  );
+  return Math.max(1, Math.min(100, Math.floor(ratio * 100)));
 }
 
 export function SimulatorPanel({
@@ -74,8 +120,18 @@ export function SimulatorPanel({
   // main can `setZoomFactor` the WCV; it is kept in a ref so the imperative
   // publisher always reads the LIVE value, and a zoom change forces one
   // re-publish.
-  const zoomRef = useRef(zoom)
-  const anchorHandleRef = useRef<PlacementAnchorHandle | null>(null)
+  // Holds the last RESOLVED numeric zoom (never AUTO_ZOOM) — what actually
+  // rides in the publish payload. Seeded with a number even when the initial
+  // selection is 'auto', so the very first publish (before any measurement)
+  // never carries a non-numeric value across the extra.zoom → IPC boundary.
+  const zoomRef = useRef<number>(typeof zoom === "number" ? zoom : 100);
+  // The user's raw selection (a fixed percent, or 'auto'). Read live inside
+  // `publish` via ref so that callback's identity can stay pinned to
+  // `[publisher]` instead of being recreated on every zoom change.
+  const zoomModeRef = useRef<ZoomSetting>(zoom);
+  // Device dimensions, read live inside `publish` for the same reason.
+  const deviceRef = useRef(device);
+  const anchorHandleRef = useRef<PlacementAnchorHandle | null>(null);
 
   // Whether the simulator has reached 'ready' at least once since mount. The
   // first compile has NOTHING to show behind it, so 'compiling' blanks the
@@ -83,61 +139,76 @@ export function SimulatorPanel({
   // shell painted underneath — blanking it would flash the whole device away on
   // every save. So once ready, a subsequent 'compiling' shows only a
   // non-blocking corner indicator and the frozen previous frame stays visible.
-  const [hasBeenReady, setHasBeenReady] = useState(false)
+  const [hasBeenReady, setHasBeenReady] = useState(false);
   useEffect(() => {
-    if (compileStatus.status === 'ready') setHasBeenReady(true)
-  }, [compileStatus.status])
+    if (compileStatus.status === "ready") setHasBeenReady(true);
+  }, [compileStatus.status]);
 
   // Runtime-lifecycle derived flags. A compile failure has nothing running to
   // report on, so it always wins over a runtime error — the two overlays are
   // mutually exclusive.
-  const isRuntimeTerminalError = runtimeStatus?.phase === 'launch-failed' || runtimeStatus?.phase === 'crashed'
+  const isRuntimeTerminalError =
+    runtimeStatus?.phase === "launch-failed" ||
+    runtimeStatus?.phase === "crashed";
 
   // Fallback-banner dismissal: remembered only for the CURRENT launch round.
   // `runtimeStatus` is reset to null the moment a new round starts (hot-reload
   // reset in use-session), so clearing the dismissal on that null edge means a
   // repeat fallback in a later round is never silently swallowed.
-  const [fallbackDismissed, setFallbackDismissed] = useState(false)
+  const [fallbackDismissed, setFallbackDismissed] = useState(false);
   useEffect(() => {
-    if (!runtimeStatus) setFallbackDismissed(false)
-  }, [runtimeStatus])
-  const showFallbackBanner = Boolean(runtimeStatus?.pageFallback) && !isRuntimeTerminalError && !fallbackDismissed
-  const isRecompile = compileStatus.status === 'compiling' && hasBeenReady
+    if (!runtimeStatus) setFallbackDismissed(false);
+  }, [runtimeStatus]);
+  const showFallbackBanner =
+    Boolean(runtimeStatus?.pageFallback) &&
+    !isRuntimeTerminalError &&
+    !fallbackDismissed;
+  const isRecompile = compileStatus.status === "compiling" && hasBeenReady;
 
-  const publisher = usePlacementPublisher()
+  const publisher = usePlacementPublisher();
   // Placement flows to the central publisher; zoom rides in `extra` (the
   // Placement bounds have no zoom field) so an extra-only change still emits a
   // setBounds op that re-applies the WCV zoomFactor.
-  const publish = useCallback((p: Placement) => {
-    publisher?.set({
-      viewId: VIEW_ID.simulator,
-      placement: p,
-      layer: VIEW_LAYER.base,
-      extra: { zoom: zoomRef.current },
-    })
-  }, [publisher])
+  const publish = useCallback(
+    (p: Placement) => {
+      if (p.visible) {
+        const mode = zoomModeRef.current;
+        zoomRef.current =
+          mode === AUTO_ZOOM
+            ? computeAutoZoom(p.bounds, deviceRef.current, zoomRef.current)
+            : mode;
+      }
+      publisher?.set({
+        viewId: VIEW_ID.simulator,
+        placement: p,
+        layer: VIEW_LAYER.base,
+        extra: { zoom: zoomRef.current },
+      });
+    },
+    [publisher],
+  );
 
   // Ref-callback binding the placement anchor to the device-region div. Mirrors
   // the dock native-slot lifecycle: bind on mount, rebind without a hidden flash
   // on element swap, publish-hidden-then-dispose on unmount.
   const anchorRef = useCallback(
     (el: HTMLDivElement | null) => {
-      const existing = anchorHandleRef.current
+      const existing = anchorHandleRef.current;
       if (existing) {
         if (el) {
-          existing.dispose()
+          existing.dispose();
           anchorHandleRef.current = createPlacementAnchor(el, {
             visible: true,
             followGeometry: true,
             guardDisplayNone: true,
             publish,
-          })
+          });
         } else {
-          existing.update({ visible: false, publish })
-          existing.dispose()
-          anchorHandleRef.current = null
+          existing.update({ visible: false, publish });
+          existing.dispose();
+          anchorHandleRef.current = null;
         }
-        return
+        return;
       }
       if (el) {
         anchorHandleRef.current = createPlacementAnchor(el, {
@@ -145,21 +216,22 @@ export function SimulatorPanel({
           followGeometry: true,
           guardDisplayNone: true,
           publish,
-        })
+        });
       }
     },
     [publish],
-  )
+  );
 
   // Keep the live zoom in the ref BEFORE paint (so a geometry event firing
   // between commit and a passive effect never reads a stale zoom), then force one
   // re-publish so main re-applies `setZoomFactor` on zoom change.
   useLayoutEffect(() => {
-    zoomRef.current = zoom
-  })
+    zoomModeRef.current = zoom;
+    deviceRef.current = device;
+  });
   useLayoutEffect(() => {
-    anchorHandleRef.current?.update({ visible: true, publish })
-  }, [zoom, publish])
+    anchorHandleRef.current?.update({ visible: true, publish });
+  }, [zoom, device, publish]);
 
   // Follow a pure-translate layout reorder. A dock preset change (simulator
   // left↔right flip, devtools-position move) reorders this panel's slot
@@ -173,20 +245,20 @@ export function SimulatorPanel({
   // (epoch 0) pulses once over the just-published initial rect — a harmless
   // steady-close. Outside a `<DockView>` the epoch is a constant 0 and this
   // never re-fires.
-  const layoutEpoch = useDockLayoutEpoch()
+  const layoutEpoch = useDockLayoutEpoch();
   useEffect(() => {
-    anchorHandleRef.current?.pulse(300)
-  }, [layoutEpoch])
+    anchorHandleRef.current?.pulse(300);
+  }, [layoutEpoch]);
 
   // Hard-unmount safety: the ref-callback `null` cleanup also disposes, but a
   // teardown that skips the ref cleanup must not leak a live anchor.
   useEffect(() => {
     return () => {
-      anchorHandleRef.current?.dispose()
-      anchorHandleRef.current = null
-      publisher?.remove(VIEW_ID.simulator)
-    }
-  }, [publisher])
+      anchorHandleRef.current?.dispose();
+      anchorHandleRef.current = null;
+      publisher?.remove(VIEW_ID.simulator);
+    };
+  }, [publisher]);
 
   return (
     <div className="bg-sim-bg flex flex-col overflow-hidden h-full w-full">
@@ -201,13 +273,14 @@ export function SimulatorPanel({
         <Select
           value={zoom}
           onChange={onZoomChange}
-          className="max-w-16"
+          className="w-[76px] shrink-0"
         >
           {ZOOM_OPTIONS.map((z) => (
             <option key={z} value={z}>
               {z}%
             </option>
           ))}
+          <option value={AUTO_ZOOM}>自适应</option>
         </Select>
       </div>
 
@@ -230,7 +303,7 @@ export function SimulatorPanel({
             attachNativeSimulator) painted over this placeholder region — it
             hosts DeviceShell, which draws the whole phone and scrolls it
             natively, so the renderer never renders a `<webview>` here. */}
-        {compileStatus.status === 'compiling' && !hasBeenReady && (
+        {compileStatus.status === "compiling" && !hasBeenReady && (
           <div
             data-testid="sim-compiling-overlay"
             className="absolute inset-0 flex items-center justify-center bg-black/50 z-10"
@@ -247,10 +320,12 @@ export function SimulatorPanel({
             <span className="text-text-dim text-[11px]">编译中…</span>
           </div>
         )}
-        {compileStatus.status === 'error' && (
+        {compileStatus.status === "error" && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/70 z-10">
             <div className="text-center p-4">
-              <div className="text-status-error text-[14px] font-medium mb-2">编译失败</div>
+              <div className="text-status-error text-[14px] font-medium mb-2">
+                编译失败
+              </div>
               <div className="text-status-error text-[11px] max-w-[280px] break-words">
                 {compileStatus.message}
               </div>
@@ -258,27 +333,29 @@ export function SimulatorPanel({
           </div>
         )}
         {/* Compile failure always wins when both are true. */}
-        {compileStatus.status !== 'error' && runtimeStatus
-          && (runtimeStatus.phase === 'launch-failed' || runtimeStatus.phase === 'crashed') && (
-          <RuntimeErrorOverlay
-            phase={runtimeStatus.phase}
-            code={runtimeStatus.code}
-            reason={runtimeStatus.reason}
-            onRelaunch={onRelaunch}
-          />
-        )}
+        {compileStatus.status !== "error" &&
+          runtimeStatus &&
+          (runtimeStatus.phase === "launch-failed" ||
+            runtimeStatus.phase === "crashed") && (
+            <RuntimeErrorOverlay
+              phase={runtimeStatus.phase}
+              code={runtimeStatus.code}
+              reason={runtimeStatus.reason}
+              onRelaunch={onRelaunch}
+            />
+          )}
       </div>
 
       <div className="flex items-center px-2.5 bg-sim-bottom border-t border-border-subtle shrink-0 h-[30px] min-w-0">
         <div className="flex items-center gap-1 min-w-0">
           <span className="text-[11px] text-text-dim truncate min-w-0">
-            {currentPage || '—'}
+            {currentPage || "—"}
           </span>
           {currentPage && (
             <button
               className={cn(
-                'shrink-0 flex items-center justify-center w-4 h-4 rounded transition-colors',
-                copied ? 'text-accent' : 'text-text-dim hover:text-text'
+                "shrink-0 flex items-center justify-center w-4 h-4 rounded transition-colors",
+                copied ? "text-accent" : "text-text-dim hover:text-text",
               )}
               onClick={onCopyPagePath}
               title="复制路径"
@@ -316,5 +393,5 @@ export function SimulatorPanel({
         </div>
       </div>
     </div>
-  )
+  );
 }

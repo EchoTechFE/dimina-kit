@@ -6,7 +6,7 @@ import {
   useState,
 } from 'react'
 import type { RefObject } from 'react'
-import { DEVICES } from '@/shared/constants'
+import { AUTO_ZOOM, DEVICES, type ZoomSetting } from '@/shared/constants'
 import { setNativeDeviceInfo } from '@/shared/api'
 import {
   clampPanelWidth,
@@ -20,7 +20,7 @@ export interface UseDeviceProps {
 
 export interface DeviceHookResult {
   device: DeviceType
-  zoom: number
+  zoom: ZoomSetting
   simPanelWidth: number
   setSimPanelWidth: (width: number) => void
   handleDeviceChange: (e: React.ChangeEvent<HTMLSelectElement>) => void
@@ -49,7 +49,7 @@ export function useDevice(props: UseDeviceProps): DeviceHookResult {
   const { initialDevice } = props
 
   const [device, setDevice] = useState<DeviceType>(initialDevice)
-  const [zoom, setZoom] = useState(85)
+  const [zoom, setZoom] = useState<ZoomSetting>(85)
   const [simPanelWidth, setSimPanelWidth] = useState(() =>
     computeSimPanelWidth(initialDevice.width),
   )
@@ -101,7 +101,7 @@ export function useDevice(props: UseDeviceProps): DeviceHookResult {
 
   const handleZoomChange = useCallback(
     (e: React.ChangeEvent<HTMLSelectElement>) => {
-      setZoom(Number(e.target.value))
+      setZoom(e.target.value === AUTO_ZOOM ? AUTO_ZOOM : (Number(e.target.value) as ZoomSetting))
     },
     [],
   )
