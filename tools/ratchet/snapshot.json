@@ -14,9 +14,9 @@
       "value": 401,
       "unit": "duplicated lines",
       "breakdown": {
-        "packages/devtools/src/main/ipc/project-fs.ts:177↔packages/devtools/src/main/ipc/project-fs.ts:437": 12,
-        "packages/devtools/src/main/ipc/project-fs.ts:264↔packages/devtools/src/main/ipc/project-fs.ts:456": 18,
-        "packages/devtools/src/main/services/dimina-resource-server.ts:30↔packages/devtools/src/main/services/workbench-coi-server.ts:422": 12,
+        "packages/devtools/src/main/ipc/project-fs.ts:177↔packages/devtools/src/main/ipc/project-fs.ts:471": 12,
+        "packages/devtools/src/main/ipc/project-fs.ts:264↔packages/devtools/src/main/ipc/project-fs.ts:490": 18,
+        "packages/devtools/src/main/services/dimina-resource-server.ts:30↔packages/devtools/src/main/services/workbench-coi-server.ts:433": 12,
         "packages/devtools/src/main/services/elements-forward/index.ts:184↔packages/devtools/src/main/services/network-forward/index.ts:301": 23,
         "packages/devtools/src/main/services/mcp/tools/context-tools.ts:189↔packages/devtools/src/main/services/mcp/tools/context-tools.ts:272": 11,
         "packages/devtools/src/main/services/mcp/tools/context-tools.ts:243↔packages/devtools/src/main/services/mcp/tools/context-tools.ts:301": 10,
@@ -69,7 +69,7 @@
         "packages/devtools/src/main/eslint-workbench-context-ratchet.test.ts": 560,
         "packages/devtools/src/main/ipc/bridge-router.ts": 2635,
         "packages/devtools/src/main/ipc/project-fs.test.ts": 756,
-        "packages/devtools/src/main/ipc/project-fs.ts": 609,
+        "packages/devtools/src/main/ipc/project-fs.ts": 643,
         "packages/devtools/src/main/ipc/projects-add-dialog.test.ts": 510,
         "packages/devtools/src/main/services/elements-forward/index.test.ts": 1201,
         "packages/devtools/src/main/services/elements-forward/index.ts": 659,
@@ -121,31 +121,31 @@
     },
     "test-coverage": {
       "direction": "higher-is-better",
-      "value": 73.15,
+      "value": 73.21,
       "unit": "% lines",
       "breakdown": {
         "devkit": 93.31,
-        "devtools": 68.03,
+        "devtools": 68.04,
         "electron-deck": 95.23,
         "electron-deck/dock-react": 79.05,
-        "fs-core": 94.29,
+        "fs-core": 94.71,
         "view-anchor": 95.28,
-        "workbench": 32.45
+        "workbench": 35.34
       },
       "tolerance": 1
     },
     "test-report": {
       "direction": "higher-is-better",
-      "value": 3823,
+      "value": 3825,
       "unit": "passed tests",
       "breakdown": {
         "devkit": 147,
         "devtools": 2306,
         "electron-deck": 1024,
         "electron-deck/dock-react": 96,
-        "fs-core": 78,
+        "fs-core": 77,
         "view-anchor": 87,
-        "workbench": 85
+        "workbench": 88
       }
     },
     "type-coverage": {

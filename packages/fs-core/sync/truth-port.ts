@@ -54,6 +54,19 @@ export interface TruthPort {
    * channel is permanently gone (the host should treat this as a downgrade
    * to no live sync, not a transient hiccup — see sync-engine.ts's `stop`).
    * Returns a `dispose` that tears down the subscription.
+   *
+   * Compensation for a lossy/coalescing underlying watcher (e.g. macOS
+   * FSEvents merging a write burst into ancestor-directory events, or
+   * dropping some of a burst entirely) is THIS PORT'S responsibility, not
+   * the engine's: the adapter is the one that knows its own watcher's
+   * failure modes and how to recover the true changed set (typically:
+   * treat a reported path as a scope hint, stat-compare the disk under
+   * that scope against a session index, and report every path whose stat
+   * actually moved, plus ledger paths in scope that vanished from disk).
+   * `handleBatch` in sync-engine.ts takes `onBatch`'s paths at face value
+   * and does no further expansion — see devtools' adapter
+   * (dimina-kit workbench's wal-audit.ts + wal-audit-watch-expand.ts) for a
+   * concrete implementation of this contract.
    */
   changes(onBatch: (paths: string[]) => void, onDead: () => void): () => void
 }

@@ -692,20 +692,4 @@ describe('createSyncEngine — bulk inbound batches', () => {
     )
     expect(w.ledgerWrites).toHaveLength(0)
   })
-
-  it('reconciles coalesced recursive deletes when the watcher reports only sibling file paths', async () => {
-    const w = makeStatefulWorld()
-    for (let i = 0; i < 200; i++) w.setDisk(`bulk/f${i}.txt`, `bulk ${i}`)
-    const applyToEditor = vi.fn().mockResolvedValue(undefined)
-    const engine = createSyncEngine(w.client, w.port, { applyToEditor })
-    await engine.populateLedger()
-    engine.start()
-
-    for (let i = 0; i < 200; i++) w.delDisk(`bulk/f${i}.txt`)
-    w.watch.emitBatch(['bulk/f0.txt', 'bulk/f17.txt', 'bulk/f88.txt'])
-
-    await vi.waitFor(() => expect(w.ledger.size).toBe(0), { timeout: 10_000 })
-    expect(w.client.rm).toHaveBeenCalledTimes(200)
-    expect(applyToEditor).toHaveBeenCalledWith('bulk/f199.txt', null)
-  })
 })

@@ -338,32 +338,17 @@ export function createSyncEngine(
     return matches
   }
 
-  async function expandBatchForCoalescedDeletes(paths: string[]): Promise<string[]> {
-    const out = new Set(paths)
-    const { paths: ledgerPaths } = await client.ls().catch(() => ({ paths: [] as string[] }))
-    if (ledgerPaths.length === 0) return [...out]
-
-    for (const rel of paths) {
-      if (rel === '.') {
-        for (const p of ledgerPaths) out.add(p)
-        continue
-      }
-
-      const asDirectoryPrefix = `${rel}/`
-      const slash = rel.lastIndexOf('/')
-      const parentPrefix = slash >= 0 ? `${rel.slice(0, slash)}/` : ''
-
-      for (const p of ledgerPaths) {
-        if (p.startsWith(asDirectoryPrefix) || (parentPrefix && p.startsWith(parentPrefix))) out.add(p)
-      }
-    }
-
-    return [...out]
-  }
-
+  /**
+   * A batch is trusted as-is: the port adapter (see truth-port.ts's
+   * `changes` doc) is responsible for turning a watcher's coalesced/lossy
+   * events into the actual set of paths worth re-examining BEFORE calling
+   * this engine — devtools' adapter (wal-audit.ts +
+   * wal-audit-watch-expand.ts) does that via a stat-level disk compare
+   * against a session index, so paths arriving here have already earned
+   * their re-examination and no further expansion happens at this layer.
+   */
   async function handleBatch(paths: string[]): Promise<void> {
-    const expandedPaths = await expandBatchForCoalescedDeletes(paths)
-    for (const rel of expandedPaths) {
+    for (const rel of paths) {
       try {
         // Per-path (not per-batch) queue turns, so a long batch cannot
         // starve an interleaved onHumanSave accounting step of its FIFO
