@@ -25,11 +25,9 @@ import {
   DebugTabContent,
   type BottomDebugPanelProps,
 } from './bottom-debug-panel'
-import type { WxmlNode } from '../right-panel/types'
+import type { StoragePanelSource, WxmlNode, WxmlPanelSource } from '@dimina-kit/inspect'
 
-const okWrite = async () => ({ ok: true as const })
-
-/** A minimal one-node WXML tree whose 刷新 button is always rendered. */
+/** A minimal one-node WXML tree served through the fake source. */
 function makeWxmlTree(): WxmlNode {
   return {
     tagName: 'view',
@@ -37,6 +35,30 @@ function makeWxmlTree(): WxmlNode {
     children: [],
     sid: 'sid-root',
   } as unknown as WxmlNode
+}
+
+/** Inert WxmlPanelSource: seeds the minimal tree, never pushes live updates. */
+function makeWxmlSource(): WxmlPanelSource {
+  return {
+    getSnapshot: async () => makeWxmlTree(),
+    subscribe: () => () => {},
+    setActive: () => {},
+    inspect: async () => null,
+    clearInspection: () => {},
+  }
+}
+
+/** Inert StoragePanelSource: seeds an empty list, never pushes live events. */
+function makeStorageSource(): StoragePanelSource {
+  return {
+    getSnapshot: async () => [],
+    subscribe: () => () => {},
+    setActive: () => {},
+    setItem: async () => ({ ok: true as const }),
+    removeItem: async () => ({ ok: true as const }),
+    clear: async () => ({ ok: true as const }),
+    getPrefix: async () => '',
+  }
 }
 
 /**
@@ -49,19 +71,11 @@ function makeProps(
   return {
     rightPane: { selected: 'wxml', simulatorVisible: true },
     onSelectTab: vi.fn(),
-    wxmlTree: makeWxmlTree(),
-    onRefreshWxml: vi.fn(),
-    onInspectWxml: vi.fn(async () => null),
+    wxmlSource: makeWxmlSource(),
     appData: { bridges: [], activeBridgeId: null, entries: {} },
     onRefreshAppData: vi.fn(),
     onSelectAppDataBridge: vi.fn(),
-    storageItems: [],
-    onRefreshStorage: vi.fn(),
-    onSetStorage: okWrite,
-    onRemoveStorage: okWrite,
-    onClearStorage: okWrite,
-    onClearAllStorage: okWrite,
-    getStoragePrefix: async () => '',
+    storageSource: makeStorageSource(),
     compileEvents: [],
     compileLogs: [],
     onClearCompileEvents: vi.fn(),

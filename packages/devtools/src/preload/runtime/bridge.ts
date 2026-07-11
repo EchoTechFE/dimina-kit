@@ -1,13 +1,13 @@
 import type { ElementInspection } from '../../shared/ipc-channels.js'
 import { exposeOnMainWorld } from '../shared/expose.js'
 import { getActivePageIframe } from '../shared/page-iframe.js'
-import { findElementBySid, type WxmlNode } from '../shared/sid-registry.js'
+import { findElementBySid, type WxmlNode } from '@dimina-kit/inspect'
 
 // Re-export so existing importers (wxml.ts, shared/types.ts, renderer panels)
 // keep their `from '../runtime/bridge.js'` path while the registry lives in the
 // dependency-free shared module.
-export type { WxmlNode } from '../shared/sid-registry.js'
-export { registerSyntheticSid } from '../shared/sid-registry.js'
+export type { WxmlNode } from '@dimina-kit/inspect'
+export { registerSyntheticSid } from '@dimina-kit/inspect'
 
 export interface Snapshot<T> {
   gen: number

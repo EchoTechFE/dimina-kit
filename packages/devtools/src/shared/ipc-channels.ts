@@ -116,16 +116,11 @@ export const SimulatorStorageChannel = {
   Event: 'simulator:storage:event',
 } as const
 
-export interface StorageItem { key: string; value: string }
-export type StorageEvent =
-  | { type: 'added'; key: string; newValue: string }
-  | { type: 'updated'; key: string; oldValue: string; newValue: string }
-  | { type: 'removed'; key: string }
-  | { type: 'cleared' }
-
-export type StorageWriteResult =
-  | { ok: true }
-  | { ok: false; error: string }
+// The storage wire-format shapes are owned by the shared inspect package
+// (any host's transport carries the same StorageItem/StorageEvent/
+// StorageWriteResult); this channel file re-exports them so IPC consumers
+// keep a single import point.
+export type { StorageEvent, StorageItem, StorageWriteResult } from '@dimina-kit/inspect'
 
 /**
  * A storage mutation reported by the service-host's SYNC wx storage APIs
@@ -169,25 +164,10 @@ export const SimulatorAppDataChannel = {
   Event: 'simulator:appdata:event',
 } as const
 
-export interface ElementInspection {
-  sid: string
-  rect: {
-    x: number
-    y: number
-    width: number
-    height: number
-  }
-  style: {
-    display: string
-    position: string
-    boxSizing: string
-    margin: string
-    padding: string
-    color: string
-    backgroundColor: string
-    fontSize: string
-  }
-}
+// The element-inspection payload shape is owned by the shared inspect
+// package (it is produced inside render-layer documents by any host); this
+// channel file re-exports it so IPC consumers keep a single import point.
+export type { ElementInspection } from '@dimina-kit/inspect'
 
 // ── Workbench settings ───────────────────────────────────────────────────
 

@@ -1,4 +1,5 @@
-import { type WxmlNode, registerSyntheticSid } from '../shared/sid-registry.js'
+import { registerSyntheticSid } from './sid-registry.js'
+import type { WxmlNode } from './types.js'
 
 export interface ComponentInstance extends Record<string, unknown> {
   type?: Record<string, unknown>

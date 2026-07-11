@@ -18,7 +18,7 @@
  */
 import { describe, it, expect, vi } from 'vitest'
 import { render, fireEvent, waitFor, within } from '@testing-library/react'
-import { StoragePanel } from './storage-panel'
+import { StoragePanel } from '@dimina-kit/inspect/panel'
 
 const FULL_KEY = 'devtools_demo_001_token'
 const PREFIX = 'devtools_demo_001_'

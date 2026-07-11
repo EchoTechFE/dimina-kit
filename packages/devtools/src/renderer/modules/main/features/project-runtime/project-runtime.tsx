@@ -191,21 +191,13 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
   const debugPanelProps: BottomDebugPanelProps = {
     rightPane: rightPane.rightPane,
     onSelectTab: rightPane.selectRightPane,
-    wxmlTree: panelData.wxmlTree,
-    onRefreshWxml: panelData.refreshWxml,
-    onInspectWxml: panelData.inspectWxmlElement,
-    onClearWxmlInspection: panelData.clearWxmlElementInspection,
+    wxmlSource: panelData.wxmlSource,
+    wxmlEnabled: panelData.wxmlEnabled,
+    storageSource: panelData.storageSource,
+    storageEnabled: panelData.storageEnabled,
     appData: panelData.appData,
     onRefreshAppData: panelData.refreshAppData,
     onSelectAppDataBridge: panelData.setActiveAppDataBridge,
-    onWxmlActiveChange: panelData.setWxmlActive,
-    storageItems: panelData.storageItems,
-    onRefreshStorage: panelData.refreshStorage,
-    onSetStorage: panelData.setStorageItem,
-    onRemoveStorage: panelData.removeStorageItem,
-    onClearStorage: panelData.clearStorage,
-    onClearAllStorage: panelData.clearAllStorage,
-    getStoragePrefix: panelData.getStoragePrefix,
     compileEvents: session.compileEvents,
     compileLogs: session.compileLogs,
     onClearCompileEvents: session.clearCompileEvents,
@@ -437,19 +429,12 @@ function DockDebugTab(
     prevActive.current = active
     if (!becameActive) return
     const p = propsRef.current
-    if (tabId === 'wxml') p.onRefreshWxml()
-    else if (tabId === 'appdata') p.onRefreshAppData()
-    else if (tabId === 'storage') void p.onRefreshStorage()
+    if (tabId === 'appdata') p.onRefreshAppData()
   }, [tabId, active])
-  // WXML visibility gate: main only runs the render-guest DOM observer + live
-  // tree pushes while the WXML panel is visible, so signal BOTH edges (not just
-  // false→true) and stop observing when the panel unmounts.
-  useEffect(() => {
-    if (tabId !== 'wxml') return
-    propsRef.current.onWxmlActiveChange?.(active)
-    return () => { propsRef.current.onWxmlActiveChange?.(false) }
-  }, [tabId, active])
-  return <DebugTabContent tabId={tabId} {...panelProps} />
+  // WXML and Storage have no branch here: their activation-edge seed AND
+  // visibility gate both live in the shared ConnectedWxmlPanel /
+  // ConnectedStoragePanel, driven by `tabActive`.
+  return <DebugTabContent tabId={tabId} {...panelProps} tabActive={active} />
 }
 
 function DockableLayout(props: DockableLayoutProps): ReactNode {

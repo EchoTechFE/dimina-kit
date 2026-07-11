@@ -1,9 +1,7 @@
 import { type ReactNode } from 'react'
-import type { WxmlNode } from '../right-panel/types.js'
-import type { ElementInspection, StorageWriteResult } from '../../../../../shared/ipc-channels.js'
-import { WxmlPanel } from '../right-panel/wxml-panel.js'
+import type { StoragePanelSource, WxmlPanelSource } from '@dimina-kit/inspect'
+import { ConnectedStoragePanel, ConnectedWxmlPanel } from '@dimina-kit/inspect/panel'
 import { AppDataPanel } from '../right-panel/appdata-panel.js'
-import { StoragePanel } from '../right-panel/storage-panel.js'
 import { CompilePanel } from '../right-panel/compile-panel.js'
 import type { AppDataState } from '../project-runtime/controllers/use-panel-data.js'
 import type {
@@ -12,32 +10,23 @@ import type {
 } from '../project-runtime/controllers/use-session.js'
 import type { RightPaneState, RightPaneTabId } from '../project-runtime/types.js'
 
-interface StorageItem { key: string; value: unknown }
-
 export interface BottomDebugPanelProps {
   rightPane: RightPaneState
   onSelectTab: (id: RightPaneTabId) => void
 
   // Data + handlers for built-in panels.
-  wxmlTree: WxmlNode | null
-  onRefreshWxml: () => void
-  /** Notify main when the WXML panel becomes visible/hidden (gates the live
-   * DOM observer + tree pushes so an unseen panel never walks the Vue tree). */
-  onWxmlActiveChange?: (on: boolean) => void
-  onInspectWxml?: (sid: string) => Promise<ElementInspection | null>
-  onClearWxmlInspection?: () => Promise<void>
+  /** WXML and Storage data wiring lives in the shared ConnectedWxmlPanel /
+   * ConnectedStoragePanel: the host only supplies the IPC transports
+   * (sources), the readiness gates (enabled) and — via DebugTabContent's
+   * `tabActive` — the tab-visibility gate. */
+  wxmlSource: WxmlPanelSource
+  wxmlEnabled?: boolean
+  storageSource: StoragePanelSource
+  storageEnabled?: boolean
 
   appData: AppDataState
   onRefreshAppData: () => void
   onSelectAppDataBridge: (id: string) => void
-
-  storageItems: StorageItem[]
-  onRefreshStorage: () => void
-  onSetStorage: (key: string, value: string) => Promise<StorageWriteResult>
-  onRemoveStorage: (key: string) => Promise<StorageWriteResult>
-  onClearStorage: () => Promise<StorageWriteResult>
-  onClearAllStorage: () => Promise<StorageWriteResult>
-  getStoragePrefix: () => Promise<string>
 
   // 编译 tab: event log + per-line dmcc log, pure passthrough to
   // CompilePanel. Optional so embedders without a compile feed keep working.
@@ -68,26 +57,23 @@ export type DebugTabContentId = 'wxml' | 'appdata' | 'storage' | 'compile'
  * mounts for each fine debug panel, so no handler is duplicated or dropped.
  */
 export function DebugTabContent(
-  props: { tabId: DebugTabContentId } & BottomDebugPanelProps,
+  props: { tabId: DebugTabContentId, tabActive?: boolean } & BottomDebugPanelProps,
 ): ReactNode {
   // The panels are live (no manual refresh button): storage syncs via
   // storageChanged, WXML via the render-guest observer, AppData via the setData
-  // tap. `onRefreshWxml/AppData/Storage` stay on BottomDebugPanelProps for the
-  // seed-on-activation edge in `DockDebugTab`, but are NOT forwarded to the panel
-  // components anymore.
+  // tap. `onRefreshAppData` stays on BottomDebugPanelProps for the
+  // seed-on-activation edge in `DockDebugTab`, but is NOT forwarded to the panel
+  // components anymore; WXML's and Storage's activation-edge seed + visibility
+  // gate live in the shared connected containers, driven by `tabActive`.
   const {
     tabId,
-    wxmlTree,
-    onInspectWxml,
-    onClearWxmlInspection,
+    wxmlSource,
+    wxmlEnabled = true,
+    storageSource,
+    storageEnabled = true,
+    tabActive = true,
     appData,
     onSelectAppDataBridge,
-    storageItems,
-    onSetStorage,
-    onRemoveStorage,
-    onClearStorage,
-    onClearAllStorage,
-    getStoragePrefix,
     compileEvents = [],
     compileLogs = [],
     onClearCompileEvents,
@@ -97,10 +83,10 @@ export function DebugTabContent(
   switch (tabId) {
     case 'wxml':
       return (
-        <WxmlPanel
-          tree={wxmlTree}
-          onInspectElement={onInspectWxml}
-          onClearInspection={onClearWxmlInspection}
+        <ConnectedWxmlPanel
+          source={wxmlSource}
+          enabled={wxmlEnabled}
+          active={tabActive}
           isRuntimeRunning={isRuntimeRunning}
         />
       )
@@ -114,13 +100,10 @@ export function DebugTabContent(
       )
     case 'storage':
       return (
-        <StoragePanel
-          items={storageItems}
-          onSet={onSetStorage}
-          onRemove={onRemoveStorage}
-          onClear={onClearStorage}
-          onClearAll={onClearAllStorage}
-          getPrefix={getStoragePrefix}
+        <ConnectedStoragePanel
+          source={storageSource}
+          enabled={storageEnabled}
+          active={tabActive}
           isRuntimeRunning={isRuntimeRunning}
         />
       )

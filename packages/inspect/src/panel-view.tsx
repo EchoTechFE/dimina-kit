@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import type { ElementInspection } from '../../../../../shared/ipc-channels'
-import type { WxmlNode } from './types.js'
+import type { ElementInspection, WxmlNode } from './types.js'
 
 interface WxmlPanelProps {
   tree: WxmlNode | null

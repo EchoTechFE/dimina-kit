@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    // Types for consumers are served straight from these .ts sources (see the
+    // package.json exports map's `types` condition) — dist is runtime-only, so
+    // skip generating unused .d.ts/.d.ts.map alongside it.
+    "declaration": false,
+    "declarationMap": false,
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "include": ["src"],
+  "exclude": ["node_modules", "src/**/*.test.ts", "src/**/*.test.tsx"]
+}

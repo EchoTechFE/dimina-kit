@@ -1,0 +1,73 @@
+{
+  "name": "@dimina-kit/inspect",
+  "version": "0.3.0",
+  "description": "Host-agnostic WXML tree extraction and inspection for dimina render layers: Vue runtime walk, stable-id registry, mutation-observing inspector, and a React tree panel.",
+  "keywords": [
+    "dimina",
+    "wxml",
+    "devtools",
+    "inspector"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "author": "EchoTechFE",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EchoTechFE/dimina-kit.git",
+    "directory": "packages/inspect"
+  },
+  "bugs": {
+    "url": "https://github.com/EchoTechFE/dimina-kit/issues"
+  },
+  "homepage": "https://github.com/EchoTechFE/dimina-kit/tree/main/packages/inspect#readme",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./panel": {
+      "types": "./src/panel.tsx",
+      "default": "./dist/panel.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check-types": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run --reporter=default --reporter=json --outputFile.json=test-report.json --coverage.enabled --coverage.reporter=json-summary --coverage.reportsDirectory=coverage",
+    "test:dev": "vitest",
+    "prepack": "pnpm run build"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@dimina-kit/eslint-config": "workspace:*",
+    "@dimina-kit/typescript-config": "workspace:*",
+    "@types/react": "^18.3.12",
+    "@testing-library/react": "^16.3.2",
+    "react-dom": "^18.3.1",
+    "@vitest/coverage-v8": "^4.1.4",
+    "eslint": "^10.2.1",
+    "jsdom": "^29.0.2",
+    "react": "^18.3.1",
+    "typescript": "5.9.2",
+    "vitest": "^4.1.4"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
