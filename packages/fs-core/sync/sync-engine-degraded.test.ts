@@ -205,6 +205,61 @@ describe('createSyncEngine — onDegraded: ledger write failure while reconcilin
   })
 })
 
+describe('createSyncEngine — onDegraded: ledger read failure while confirming a deletion', () => {
+  it('a transient ledger read failure during an inbound delete reports stage "reconcile" and never rms the ledger', async () => {
+    // Inbound delete path: the truth source says not-found, and the engine
+    // then reads the ledger to decide between "remove the record" and
+    // "already absent from both sides". A TRANSIENT ledger read failure
+    // (worker hiccup/timeout — no not-found code) leaves the ledger state
+    // unknown: treating it as "already absent" would silently strand a stale
+    // ledger record with the host none the wiser. The engine must degrade
+    // instead, and must never rm against an unknown ledger state.
+    const watch = makeWatch()
+    const onDegraded = vi.fn<(d: SyncDegradation) => void>()
+    const ledgerError = new Error('worker hiccup')
+    const port = makePort({
+      changes: watch.changes,
+      read: vi.fn().mockRejectedValue(Object.assign(new Error('gone'), { code: 'not-found' })),
+    })
+    const client = makeClient({ read: vi.fn().mockRejectedValue(ledgerError) })
+    const engine = createSyncEngine(client, port, { onDegraded })
+
+    await engine.populateLedger()
+    engine.start()
+    watch.emitBatch(['gone.js'])
+    await flush()
+
+    expect(onDegraded).toHaveBeenCalledWith({
+      kind: 'path-sync-failed',
+      rel: 'gone.js',
+      stage: 'reconcile',
+      error: ledgerError,
+    })
+    expect(client.rm).not.toHaveBeenCalled()
+  })
+
+  it('a genuine both-sides-absent deletion (ledger read rejects not-found) stays silent — no degradation, no rm', async () => {
+    const watch = makeWatch()
+    const onDegraded = vi.fn<(d: SyncDegradation) => void>()
+    const port = makePort({
+      changes: watch.changes,
+      read: vi.fn().mockRejectedValue(Object.assign(new Error('gone'), { code: 'not-found' })),
+    })
+    const client = makeClient({
+      read: vi.fn().mockRejectedValue(Object.assign(new Error('not in ledger'), { code: 'not-found' })),
+    })
+    const engine = createSyncEngine(client, port, { onDegraded })
+
+    await engine.populateLedger()
+    engine.start()
+    watch.emitBatch(['gone.js'])
+    await flush()
+
+    expect(onDegraded).not.toHaveBeenCalled()
+    expect(client.rm).not.toHaveBeenCalled()
+  })
+})
+
 describe('createSyncEngine — onDegraded: a throwing host callback never wedges the engine', () => {
   it('processes a later, unrelated batch normally after onDegraded itself throws', async () => {
     const watch = makeWatch()

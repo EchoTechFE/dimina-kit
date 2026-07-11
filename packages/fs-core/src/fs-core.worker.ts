@@ -74,6 +74,10 @@ export class FsCore {
   manifestCrc!: number
   // 写者锁排队中（granted/仲裁失败时复位）——requestHandover 据此判断是否需要重新排队
   writerLockQueued = false
+  // 写者锁已持有（granted 一刻置位；排干释放/升级失败清理时复位）。granted 与
+  // mode='writer' 之间有异步窗口（recover/开句柄）——requestHandover 据此避免
+  // 在升级在途时再排一个陈旧锁请求
+  writerLockHeld = false
   // 交接请求合并标志：一个 pending 周期内重复 requestHandover 不追加锁请求/不重复广播；
   // becomeWriter（自己赢了）或 handover-done 广播（别人赢了）复位
   handoverRequested = false

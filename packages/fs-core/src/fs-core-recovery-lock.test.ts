@@ -27,6 +27,9 @@ interface FakeCore {
   bc: unknown
   mode: FsCoreMode
   releaseLock: (() => void) | null
+  writerLockQueued: boolean
+  sbHandle: { close: () => void } | null
+  walHandle: { close: () => void } | null
   recover: () => Promise<void>
   becomeWriter: () => Promise<void>
   pushFullToQuery: () => void
@@ -43,6 +46,9 @@ function makeCore(overrides: Partial<FakeCore> = {}): FakeCore {
     bc: undefined,
     mode: 'starting',
     releaseLock: null,
+    writerLockQueued: false,
+    sbHandle: null,
+    walHandle: null,
     recover: vi.fn(async () => {}),
     becomeWriter: vi.fn(async () => {}),
     pushFullToQuery: vi.fn(),
@@ -155,5 +161,65 @@ describe('fs-core-recovery start() — writer-lock arbitration', () => {
     expect(core.becomeWriter).not.toHaveBeenCalled()
     expect(core.mode).toBe('dead')
     expect(core.event).toHaveBeenCalledWith(expect.objectContaining({ type: 'FATAL' }))
+  })
+
+  it('releases the writer lock, closes handles, and dies when becomeWriter fails after a timely grant', async () => {
+    // The lock callback's held-lock promise settles only through
+    // core.releaseLock(); a becomeWriter failure that skips the release keeps
+    // every other tab queued behind a dead writer forever.
+    vi.useFakeTimers()
+    let held!: Promise<unknown>
+    const request: LockRequestFn = vi.fn((_name, _opts, cb) => { held = cb({}); return held })
+    stubBrowserGlobals(request)
+    const core = makeCore({
+      becomeWriter: vi.fn(() => Promise.reject(new Error('superblock open failed'))),
+      // Simulates handles becomeWriter opened before it threw — failure
+      // cleanup must not leave them dangling.
+      sbHandle: { close: vi.fn() },
+      walHandle: { close: vi.fn() },
+    })
+
+    await expect(recovery.start(core as unknown as FsCore, 'proj-e')).rejects.toThrow()
+
+    let released = false
+    held.then(() => { released = true })
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(released).toBe(true)
+    expect(core.releaseLock).toBeNull()
+    expect(core.mode).toBe('dead')
+    expect(core.sbHandle).toBeNull()
+    expect(core.walHandle).toBeNull()
+  })
+
+  it('a deferred upgrade whose becomeWriter fails releases the lock and reports FATAL instead of staying readonly', async () => {
+    vi.useFakeTimers()
+    let grantCb!: (lock: unknown) => Promise<void>
+    const request: LockRequestFn = vi.fn((_name, _opts, cb) => {
+      grantCb = cb
+      return new Promise(() => {})
+    })
+    stubBrowserGlobals(request)
+    const core = makeCore({
+      becomeWriter: vi.fn(() => Promise.reject(new Error('wal segment open failed'))),
+      sbHandle: { close: vi.fn() },
+      walHandle: { close: vi.fn() },
+    })
+
+    const startPromise = recovery.start(core as unknown as FsCore, 'proj-f')
+    await vi.advanceTimersByTimeAsync(3000)
+    await startPromise
+    expect(core.mode).toBe('readonly')
+
+    const held = grantCb({})
+    let released = false
+    held.then(() => { released = true })
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(core.becomeWriter).toHaveBeenCalledTimes(1)
+    expect(core.mode).toBe('dead')
+    expect(core.event).toHaveBeenCalledWith(expect.objectContaining({ type: 'FATAL' }))
+    expect(released).toBe(true)
+    expect(core.releaseLock).toBeNull()
   })
 })

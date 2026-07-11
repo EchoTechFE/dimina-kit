@@ -232,7 +232,16 @@ export function createSyncEngine(
       let ledgerContent: string | undefined
       try {
         ledgerContent = (await client.read(rel)).content
-      } catch {
+      } catch (e) {
+        if (!isNotFoundError(e)) {
+          // A transient ledger read failure is NOT "already absent" — rm'ing
+          // (or silently skipping) on unknown ledger state would either drop
+          // a record we could not confirm or leave it stale with no signal.
+          // Skip the path and surface it; the next change event retries.
+          console.warn('[fs-core/sync] ledger read failed while confirming a deletion, skipping', rel, e)
+          degrade({ kind: 'path-sync-failed', rel, stage: 'reconcile', error: e })
+          return
+        }
         ledgerContent = undefined
       }
       if (ledgerContent === undefined) return // already absent from both sides

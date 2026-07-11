@@ -31,6 +31,7 @@ function queueWriterLock(core: FsCore): Promise<Lock | null> {
   return new Promise<Lock | null>((resolve, reject) => {
     navigator.locks.request('dwc:writer:' + core.projectId, { mode: 'exclusive' }, (lock) => {
       core.writerLockQueued = false
+      core.writerLockHeld = true
       resolve(lock)
       return new Promise<void>((release) => { core.releaseLock = release })
     }).catch((err) => {
@@ -41,15 +42,37 @@ function queueWriterLock(core: FsCore): Promise<Lock | null> {
 }
 
 /**
- * 只读服务期间的延迟升级路径：granted → 排队任务里 becomeWriter；
- * rejected → 该 worker 永远无法升级写者，诚实死掉（FATAL 事件 + dead），
- * 而不是静默滞留 readonly 让宿主误以为还在正常排队。
+ * 拿到锁之后的升级（becomeWriter）失败时的收尾：升级失败的 worker 既当不了
+ * 写者也不该再占着锁——关掉可能已打开的句柄、释放写者锁（后面排队的 tab 才
+ * 有机会接手）、置 dead。FATAL 的发出留给调用方（启动路径由 HELLO catch 发，
+ * 延迟路径由 wireDeferredWriterUpgrade 发），避免双发。
+ */
+function failWriterUpgrade(core: FsCore): void {
+  try { core.sbHandle?.close() } catch { /* 尽力关闭；句柄可能没开成 */ }
+  try { core.walHandle?.close() } catch { /* 同上 */ }
+  core.sbHandle = null
+  core.walHandle = null
+  if (core.releaseLock) { core.releaseLock(); core.releaseLock = null }
+  core.writerLockHeld = false
+  core.mode = 'dead'
+}
+
+/**
+ * 只读服务期间的延迟升级路径：granted → 排队任务里 becomeWriter，失败则
+ * 释放锁 + FATAL + dead（不能让后续排队的 tab 堵在一个死写者后面）；
+ * rejected → 该 worker 永远无法升级写者，同样诚实死掉——绝不静默滞留
+ * readonly 让宿主误以为还在正常排队。
  */
 function wireDeferredWriterUpgrade(core: FsCore, granted: Promise<Lock | null>): void {
   granted.then(
     async (lock) => {
       if (!lock || core.mode === 'dead') return
-      await core.enqueue(async () => { await core.becomeWriter() })
+      try {
+        await core.enqueue(async () => { await core.becomeWriter() })
+      } catch (err) {
+        failWriterUpgrade(core)
+        core.event({ type: 'FATAL', error: 'writer upgrade failed: ' + String(err) })
+      }
     },
     (err) => {
       core.mode = 'dead'
@@ -77,7 +100,14 @@ export async function start(core: FsCore, projectId: string): Promise<void> {
     wireDeferredWriterUpgrade(core, granted)
     return
   }
-  await core.becomeWriter()
+  try {
+    await core.becomeWriter()
+  } catch (err) {
+    // 拿到锁但升级失败：释放锁再上抛（HELLO catch 发 FATAL）——否则后面排队
+    // 的 tab 永远堵在一个死写者后面。
+    failWriterUpgrade(core)
+    throw err
+  }
   core.welcome()
 }
 
@@ -96,6 +126,9 @@ export function requestHandover(core: FsCore): { requested?: true; mode?: FsCore
   // starting 尚未仲裁出身份——都如实回报状态、不广播、不动锁队列。
   if (core.mode !== 'readonly') return { mode: core.mode }
   if (core.handoverRequested) return { requested: true }
+  // 锁已到手、becomeWriter 在途（granted 与 mode='writer' 之间的异步窗口）：
+  // 升级马上完成，再排队/广播只会留下一个日后可能抢锁的陈旧请求。
+  if (core.writerLockHeld) return { requested: true }
   core.handoverRequested = true
   if (!core.writerLockQueued) {
     // 曾排干交出写权的 worker：原锁请求已了结，重新排队并接回升级路径。
@@ -339,6 +372,7 @@ export async function onBroadcast(core: FsCore, msg: { type?: string }): Promise
       core.sbHandle!.close(); core.sbHandle = null
       core.mode = 'readonly'
       if (core.releaseLock) { core.releaseLock(); core.releaseLock = null }
+      core.writerLockHeld = false
       core.bc.postMessage({ type: 'handover-done', gen: core.memGen })
       core.event({ evt: 'writer-lost', gen: core.memGen })
     })

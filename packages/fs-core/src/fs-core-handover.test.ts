@@ -22,6 +22,7 @@ interface FakeCore {
   mode: FsCoreMode
   bc: { postMessage: (msg: unknown) => void }
   writerLockQueued: boolean
+  writerLockHeld: boolean
   handoverRequested: boolean
   becomeWriter: () => Promise<void>
   enqueue: (fn: () => unknown) => Promise<unknown>
@@ -32,6 +33,7 @@ function makeCore(overrides: Partial<FakeCore> = {}): FakeCore {
     mode: 'readonly',
     bc: { postMessage: vi.fn() },
     writerLockQueued: false,
+    writerLockHeld: false,
     handoverRequested: false,
     becomeWriter: vi.fn(async () => {}),
     enqueue: vi.fn((fn: () => unknown) => Promise.resolve(fn())),
@@ -109,6 +111,24 @@ describe('fs-core-recovery requestHandover() — readonly-initiated handover req
     expect(core.bc.postMessage).toHaveBeenCalledTimes(1)
     expect(core.bc.postMessage).toHaveBeenCalledWith({ type: 'handover-request' })
     expect(request).not.toHaveBeenCalled()
+  })
+
+  it('mode readonly with the lock already granted (upgrade in flight) neither re-queues nor broadcasts', async () => {
+    // Window between lock grant and becomeWriter completion: the lock callback
+    // clears writerLockQueued at grant time, but mode stays 'readonly' until
+    // the async recover finishes. Acting here would queue a stale second lock
+    // request (which could later grab the lease and corrupt the handover) and
+    // broadcast a pointless drain to the outgoing writer.
+    const request: LockRequestFn = vi.fn()
+    vi.stubGlobal('navigator', { locks: { request } })
+    const core = makeCore({ mode: 'readonly', writerLockQueued: false, writerLockHeld: true })
+
+    const result = await requestHandover(core as unknown as FsCore)
+
+    expect(result).toEqual({ requested: true })
+    expect(request).not.toHaveBeenCalled()
+    expect(core.bc.postMessage).not.toHaveBeenCalled()
+    expect(core.handoverRequested).toBe(false)
   })
 
   it('mode readonly with no lock queued issues a fresh writer-lock request and upgrades once granted', async () => {
