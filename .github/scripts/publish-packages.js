@@ -5,13 +5,14 @@ import { appendFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 // Order matters: dependency-first so consumers resolve already-published versions.
-// fs-core → compiler → view-anchor → electron-deck → devkit → devtools.
+// fs-core → compiler → view-anchor → electron-deck → devkit → inspect → devtools.
 const PACKAGES = [
   { name: '@dimina-kit/fs-core', dir: 'packages/fs-core' },
   { name: '@dimina-kit/compiler', dir: 'packages/compiler' },
   { name: '@dimina-kit/view-anchor', dir: 'packages/view-anchor' },
   { name: '@dimina-kit/electron-deck', dir: 'packages/electron-deck' },
   { name: '@dimina-kit/devkit', dir: 'packages/devkit' },
+  { name: '@dimina-kit/inspect', dir: 'packages/inspect' },
   { name: '@dimina-kit/devtools', dir: 'packages/devtools' },
 ]
 
