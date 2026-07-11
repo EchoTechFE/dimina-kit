@@ -17,7 +17,10 @@
     "noEmit": false,
     "outDir": "dist/worker-lib",
     "rootDir": "src/worker-lib",
-    "incremental": true
+    "incremental": true,
+    // 增量状态必须与产物同生共死：落在包根会在 `rm -rf dist` 后残留，让 tsc
+    // 误信输出仍在而跳过发射（TS6305）。放进 dist 使清理天然原子。
+    "tsBuildInfoFile": "dist/worker-lib/.tsbuildinfo"
   },
   // Sole owner of dist/worker-lib/** — tsconfig.build.json excludes
   // src/worker-lib and references this project instead of also emitting it,

@@ -1,6 +1,17 @@
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      // The package.json `imports` self-reference resolves its `default`
+      // condition to dist/ — but this package's unit tests must not depend
+      // on its own build output (CI's test task only guarantees UPSTREAM
+      // builds via ^build, so dist/ may not exist). Pin the self-reference
+      // back to the source file for the test runner.
+      '#worker-lib/wal-codec.js': fileURLToPath(new URL('./src/worker-lib/wal-codec.ts', import.meta.url)),
+    },
+  },
   test: {
     include: ['src/**/*.test.ts', 'sync/**/*.test.ts'],
     globals: true,
