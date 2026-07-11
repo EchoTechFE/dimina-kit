@@ -12,12 +12,52 @@ import {
   type SlotInfo, type WalRecord,
 } from './worker-lib/wal-codec.js'
 import { normalizePath } from './worker-lib/paths.js'
-import type { CoreWireMessage } from './worker-lib/protocol.js'
+import type { CoreWireMessage, FsCoreMode } from './worker-lib/protocol.js'
 import { epochFloor, OP, OPID_WINDOW, rpcErr, SEGMENT_ROTATE_BYTES, type MirrorEntry } from './worker-lib/engine-shared.js'
 
 export { epochFloor }
 
 // ── 启动：锁 → 恢复 → 打开写句柄 → 全量同步 query ──
+
+/**
+ * 发起（或重新发起）写者锁排队。resolve = granted（回调持锁直到
+ * core.releaseLock 被调用）；reject = 锁仲裁本身失败（不是"被别人占着"——
+ * 排队会一直等，reject 只发生在 Web Locks 层异常，如上下文销毁中）。
+ * 能跑 fs-core（OPFS SyncAccessHandle）的环境必有 Web Locks，因此 reject
+ * 一律按致命处理，绝不允许无锁当写者（互斥基座坏了 ≠ 无人竞争）。
+ */
+function queueWriterLock(core: FsCore): Promise<Lock | null> {
+  core.writerLockQueued = true
+  return new Promise<Lock | null>((resolve, reject) => {
+    navigator.locks.request('dwc:writer:' + core.projectId, { mode: 'exclusive' }, (lock) => {
+      core.writerLockQueued = false
+      resolve(lock)
+      return new Promise<void>((release) => { core.releaseLock = release })
+    }).catch((err) => {
+      core.writerLockQueued = false
+      reject(err instanceof Error ? err : new Error(String(err)))
+    })
+  })
+}
+
+/**
+ * 只读服务期间的延迟升级路径：granted → 排队任务里 becomeWriter；
+ * rejected → 该 worker 永远无法升级写者，诚实死掉（FATAL 事件 + dead），
+ * 而不是静默滞留 readonly 让宿主误以为还在正常排队。
+ */
+function wireDeferredWriterUpgrade(core: FsCore, granted: Promise<Lock | null>): void {
+  granted.then(
+    async (lock) => {
+      if (!lock || core.mode === 'dead') return
+      await core.enqueue(async () => { await core.becomeWriter() })
+    },
+    (err) => {
+      core.mode = 'dead'
+      core.event({ type: 'FATAL', error: 'writer lock arbitration failed: ' + String(err) })
+    },
+  )
+}
+
 export async function start(core: FsCore, projectId: string): Promise<void> {
   core.projectId = projectId
   core.root = await (await navigator.storage.getDirectory()).getDirectoryHandle(projectId, { create: true })
@@ -25,29 +65,48 @@ export async function start(core: FsCore, projectId: string): Promise<void> {
   core.bc.onmessage = (e: MessageEvent) => core.onBroadcast(e.data)
 
   // 排队等锁；3s 拿不到先以只读服务，granted 后升级。禁止 steal。
-  const granted = new Promise<Lock | null>((resolve) => {
-    navigator.locks.request('dwc:writer:' + projectId, { mode: 'exclusive' }, (lock) => {
-      resolve(lock)
-      return new Promise<void>((release) => { core.releaseLock = release })
-    }).catch(() => resolve(null))
-  })
+  // 超时前锁仲裁失败 → 这里直接抛出 → HELLO catch 发 FATAL（client 侧 connect
+  // 拒绝）——绝不落入 becomeWriter。
+  const granted = queueWriterLock(core)
   const winner = await Promise.race([granted, new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), 3000))])
   if (winner === 'timeout') {
     await core.recover()
     core.mode = 'readonly'
     core.pushFullToQuery()
     core.welcome()
-    granted.then(async (lock) => {
-      if (!lock || core.mode === 'dead') return
-      await core.enqueue(async () => { await core.becomeWriter() })
-    })
+    wireDeferredWriterUpgrade(core, granted)
     return
   }
   await core.becomeWriter()
   core.welcome()
 }
 
+/**
+ * readonly 端主动请求写权交接（协作交接协议的发起半边；接收半边见
+ * {@link onBroadcast}）：广播 handover-request 让现任写者排干释放，自己的
+ * 排队锁请求随之 granted → 升级。何时调用是宿主的策略（如用户在"另一个
+ * 标签页持有写权"提示上点"在此接管"）——本函数只提供机制，绝不自动重发。
+ * 同一 pending 周期内重复调用被合并（不追加锁请求、不重复广播）；收到
+ * handover-done 广播即周期结束（见 onBroadcast），可再次发起。
+ */
+export function requestHandover(core: FsCore): { requested?: true; mode?: FsCoreMode } {
+  if (core.mode === 'writer') return { mode: 'writer' }
+  if (core.mode === 'draining') throw rpcErr('draining', 'writer is handing over')
+  // 只有 readonly 端有交接可言：dead 自己永远升级不了（让健康写者排干是纯伤害），
+  // starting 尚未仲裁出身份——都如实回报状态、不广播、不动锁队列。
+  if (core.mode !== 'readonly') return { mode: core.mode }
+  if (core.handoverRequested) return { requested: true }
+  core.handoverRequested = true
+  if (!core.writerLockQueued) {
+    // 曾排干交出写权的 worker：原锁请求已了结，重新排队并接回升级路径。
+    wireDeferredWriterUpgrade(core, queueWriterLock(core))
+  }
+  core.bc.postMessage({ type: 'handover-request' })
+  return { requested: true }
+}
+
 export async function becomeWriter(core: FsCore): Promise<void> {
+  core.handoverRequested = false // 升级即周期终结：此前发起的交接请求已达成
   await core.recover() // 旧写者可能刚交出——以盘上状态为准重建
   // epoch 递增写入候选槽（防御性护栏：记录归属可判别）
   core.sbHandle = await (await core.root.getFileHandle('superblock', { create: true })).createSyncAccessHandle()
@@ -231,7 +290,7 @@ export function opRead(core: FsCore, { path }: { path: string }): { content: str
   const norm = normalizePath(path)
   const e = norm && core.mirror.get(norm)
   if (!e) throw rpcErr('not-found', String(path))
-  return { content: e.content, rev: e.rev, gen: core.memGen } // P0：镜像在内存，64KB 路由约束成为空转（见 §2.1）
+  return { content: e.content, rev: e.rev, gen: core.memGen } // 镜像常驻内存，读直接命中权威状态，无需按内容大小分流
 }
 export function opLs(core: FsCore): { paths: string[]; gen: number } { return { paths: [...core.mirror.keys()].sort(), gen: core.memGen } }
 export function opStatus(core: FsCore): {
@@ -266,6 +325,12 @@ export function welcome(core: FsCore): void {
 
 // ── 协作交接（禁 steal）──
 export async function onBroadcast(core: FsCore, msg: { type?: string }): Promise<void> {
+  if (msg.type === 'handover-done' && core.mode !== 'writer') {
+    // 一个交接周期已完成（某个写者排干释放）。无论本 worker 是否是赢家，
+    // 合并标志都复位：没抢到锁的 readonly 端可以再次向新写者发起请求。
+    core.handoverRequested = false
+    return
+  }
   if (msg.type === 'handover-request' && core.mode === 'writer') {
     core.mode = 'draining'
     await core.enqueue(async () => {

@@ -1,5 +1,5 @@
 /**
- * fs-core worker — ProjectFS 单写者权威（P0，同 origin 形态）。
+ * fs-core worker — ProjectFS 单写者权威（同 origin 形态）。
  *
  * 持久层（OPFS，无物化文件树）：
  *   <projectId>/blobs/<h2>/<sha256>   内容寻址、不可变、写后 flush
@@ -60,7 +60,7 @@ export class FsCore {
   currentSlot = 0
   turn: TurnState | null = null // {turnId, cpId, expiresAt, ops} —— 内存态：worker 重启即失效（安全默认）
   auditLog: Array<{ gen: number; opcode: number; actor?: string; turnId?: string; path?: string; from?: string; to?: string; cpId?: string }> = [] // 环形
-  // W4 纵深加固令牌门（docs/k3-terminal-split-plan.md §6 替代方案 A / §8.3）：只有内核持有的
+  // 纵深加固令牌门：只有内核持有的
   // 随机令牌，一次性置位（armAgentToken）。null = 未 arm（门不生效，checkTurn 不额外校验）——
   // 保证不起内核的裸 fs 场景（fs 域单测/工具，如 test:fs-smoke/test:fs-wal 直连 client）零回归。
   // 同 worker 重启即失效（内存态，不落 WAL/持久层），与 this.turn 同一安全默认。
@@ -72,6 +72,11 @@ export class FsCore {
   lastSegStart!: number
   lastSegValidEnd!: number
   manifestCrc!: number
+  // 写者锁排队中（granted/仲裁失败时复位）——requestHandover 据此判断是否需要重新排队
+  writerLockQueued = false
+  // 交接请求合并标志：一个 pending 周期内重复 requestHandover 不追加锁请求/不重复广播；
+  // becomeWriter（自己赢了）或 handover-done 广播（别人赢了）复位
+  handoverRequested = false
 
   // ── 启动/恢复/只读查询（fs-core-recovery.ts） ──
   start(projectId: string): Promise<void> { return recovery.start(this, projectId) }
@@ -90,6 +95,7 @@ export class FsCore {
   event(e: CoreWireMessage): void { recovery.event(this, e) }
   welcome(): void { recovery.welcome(this) }
   onBroadcast(msg: { type?: string }): Promise<void> { return recovery.onBroadcast(this, msg) }
+  requestHandover(): { requested?: true; mode?: FsCoreMode } { return recovery.requestHandover(this) }
 
   // ── 写路径/compaction（fs-core-write-ops.ts） ──
   enqueue<T>(fn: () => T | Promise<T>): Promise<T> { return writeOps.enqueue(this, fn) }
@@ -149,9 +155,12 @@ export class FsCore {
       read: () => respond({ ok: true, result: this.opRead(a as unknown as ReadArgs) }),
       ls: () => respond({ ok: true, result: this.opLs() }),
       status: () => respond({ ok: true, result: this.opStatus() }),
-      // W4 令牌门铸造（§6 替代方案 A / §8.3）：纯内存状态置位，无 I/O、不让出，
+      // 令牌门铸造：纯内存状态置位，无 I/O、不让出，
       // 不入 WAL 序列化链——同步分支即可（同 read/ls/status），不打扰组提交/恢复逻辑。
       armAgentTokenGate: () => respond({ ok: true, result: this.armAgentToken(a.token) }),
+      // 协作交接发起（readonly 端）：广播 + 必要时重新排队锁，纯内存/信道操作，
+      // 不碰 WAL——同步分支（升级本身走 becomeWriter 的 enqueue 路径）。
+      requestHandover: () => respond({ ok: true, result: this.requestHandover() }),
     }
     const fn = table[msg.op]
     if (!fn) { fail(rpcErr('bad-op', String(msg.op))); return }
@@ -168,7 +177,7 @@ const core = new FsCore()
 self.onmessage = async (e: MessageEvent) => {
   const msg = e.data
   if (msg.type === 'HELLO') {
-    core.clientPort = self // 单客户端 P0：直接用 worker 主端口
+    core.clientPort = self // 单客户端形态：直接用 worker 主端口
     core.queryPort = msg.queryPort || null
     try {
       await core.start(msg.projectId)

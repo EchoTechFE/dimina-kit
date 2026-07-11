@@ -1,5 +1,5 @@
 /**
- * ProjectFsClient — 主线程侧 ProjectFS 封装（P0，同 origin）。
+ * ProjectFsClient — 主线程侧 ProjectFS 封装（同 origin）。
  * 起 fs-core / fs-query 两个 worker，牵好 core→query 的 diff 端口，
  * 暴露 Promise API；写请求自动带 opId，超时重试幂等（同 opId 重发）。
  */
@@ -203,18 +203,18 @@ export class ProjectFsClient {
   mv(from: string, to: string, opts: Record<string, unknown> = {}): Promise<unknown> { return this._writeOp('mv', { from, to, ...opts }) }
   mkdir(path: string, opts: Record<string, unknown> = {}): Promise<unknown> { return this._writeOp('mkdir', { path, ...opts }) }
   checkpoint(opts: Record<string, unknown> = {}): Promise<unknown> { return this._writeOp('checkpoint', { ...opts }) }
-  /** opts: {baseGen?, force?} 透传给 fs-core（§4.7 restore 冲突策略）；baseGen 缺省时
+  /** opts: {baseGen?, force?} 透传给 fs-core（restore 冲突策略）；baseGen 缺省时
    * fs-core 从 checkpoint 自身记录的 gen 推导。 */
   restore(cpId: string, opts: Record<string, unknown> = {}): Promise<unknown> { return this._writeOp('restore', { cpId, ...opts }) }
   compact(): Promise<unknown> { return this._rpc('compact', {}, { timeout: 30000 }) }
 
-  // ── P4 turn 能力：铸造（附带 checkpoint 锚）→ agent 写执法 → 撤销 ──
+  // ── turn 能力：铸造（附带 checkpoint 锚）→ agent 写执法 → 撤销 ──
   turnBegin(turnId: string, opts: Record<string, unknown> = {}): Promise<unknown> { return this._writeOp('turnBegin', { turnId, ...opts }) }
   turnEnd(turnId: string): Promise<unknown> { return this._writeOp('turnEnd', { turnId }) }
   /** 该 turn 的改动清单（WAL actor/turnId 审计标注免费提供）。 */
   diff(turnId?: string): Promise<DiffResult> { return this._rpc<DiffResult>('diff', { turnId }) }
 
-  /** W4 纵深加固令牌门（docs/k3-terminal-split-plan.md §6 替代方案 A / §8.3）：特权方法，只应
+  /** 纵深加固令牌门：特权方法，只应
    * 由内核（kernel.js createKernel）在 boot 早期调用一次，把只有内核持有的随机令牌交给 fs-core；
    * 此后 actor:'agent' 的写类 op 必须在 opts 里携带匹配的 agentToken（fs-core 侧强制，见
    * fs-core.worker.js checkTurn/armAgentToken）。无 opId/超时重试——一次性 admin 调用，非写路径
@@ -222,6 +222,13 @@ export class ProjectFsClient {
   armAgentTokenGate(token: string): Promise<{ armed: boolean; idempotent?: boolean }> { return this._rpc('armAgentTokenGate', { token }) }
 
   // ── 读 API：小读走 core（权威），查询/快照走 query（不占写路径）──
+  /** readonly 端主动请求写权交接（协作交接协议，禁 steal）：现任写者排干释放后，
+   * 本 client 的排队锁请求 granted → mode 经 writer-granted 事件翻转（订阅
+   * onModeChange 观察结果）。只有 readonly 会真正行动：writer/dead/starting 上
+   * 调用是 no-op（如实返回 {mode}），draining 以错误码 'draining' 拒绝。
+   * 何时调用是宿主策略——典型是用户在"另一个标签页持有写权"提示上点"在此接管"。 */
+  requestHandover(): Promise<{ requested?: boolean; mode?: FsCoreMode }> { return this._rpc('requestHandover', {}) }
+
   read(path: string): Promise<{ content: string; rev?: number; gen: number }> { return this._rpc('read', { path }) }
   ls(): Promise<{ paths: string[]; gen: number }> { return this._rpc('ls', {}) }
   status(): Promise<StatusResult> { return this._rpc<StatusResult>('status', {}) }

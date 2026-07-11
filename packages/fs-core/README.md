@@ -27,6 +27,7 @@ npm i @dimina-kit/fs-core
 - **`/disk-mirror`**：OPFS 真相源 → 本地目录的**单向导出**（File System Access，防抖全量比对写盘）。适用于"fs-core 即真相源"的宿主（如 qdmp-web-workbench）想把内容落到本地磁盘。
 - **`/sync`**：**外部真相源 ↔ fs-core 账本的双向对账引擎**（TruthPort 抽象外部真相源；echo 判据、FIFO 序列化、二进制侧车）。适用于"磁盘才是真相源、fs-core 只记账"的宿主（如 dimina-kit workbench 经 `/__fs` 桥 + SSE watch）。
 - 一个宿主真需要双向时，正确姿势是给 `/sync` 写一个 poll 形态的 TruthPort 适配器，而不是把 `/disk-mirror` 养成第二个同步引擎。
+- **未来 poll 适配器须自持的不变量**（引擎只服务 push 形态宿主，不内置 poll 侧机制）：poll 宿主自己驱动出站扫描（读账本→写真相源），因此必须自己防"刚从真相源灌入的变更被自己的出站扫描原样回写"——抑制记录须**一次性消费**（命中即清除，不是常驻内容缓存）、匹配须区分文本/字节/删除三种形态、且**绝不能把真相源"读不到"（瞬时 I/O 失败）推断为删除**。
 
 ## 使用
 
@@ -45,6 +46,16 @@ const fs = await ProjectFsClient.connect({
 await fs.write('app.json', '{}')
 const { content } = await fs.read('app.json')
 ```
+
+### 多标签页单写者与协作交接
+
+同一 `projectId` 只有一个写者（Web Locks 排队，禁 steal）：后开的标签页 3s 拿不到锁即以
+readonly 服务（`fs.mode === 'readonly'`，经 `onModeChange` 订阅变化），锁 granted 后自动升级。
+readonly 端可调 `fs.requestHandover()` 主动请求交接——现任写者排干释放，本端随之升级
+（结果经 `writer-granted` 事件/`onModeChange` 回报）。何时发起是宿主的 UI 策略（如在
+"另一个标签页持有写权"提示上放"在此接管"动作），fs-core 只提供机制、绝不自动重发。
+锁仲裁本身失败（Web Locks 层异常，非"被人占着"）一律 FATAL——绝不无锁当写者，也绝不静默
+滞留 readonly。
 
 ## Worker 产物约束
 

@@ -1,11 +1,10 @@
 /**
- * Contract tests for `createSyncEngine` — the engine extracted from
- * dimina-kit workbench's `wal-audit.ts` (devtools-fs-core-feasibility.md
- * §7+§8). These replay, against fake `client`/`port` doubles, the SAME six
- * disk<->editor sync scenarios workbench's `disk-sync.test.ts` covers against
- * `walAuditSource` — the equivalence judge for this extraction: the engine
- * must produce byte-identical observable behavior (ledger writes/rms,
- * `applyToEditor` calls) for the same inputs.
+ * Contract tests for `createSyncEngine`. These replay, against fake
+ * `client`/`port` doubles, the SAME six disk<->editor sync scenarios
+ * workbench's `disk-sync.test.ts` covers against `walAuditSource` — the
+ * cross-package equivalence judge: the engine must produce byte-identical
+ * observable behavior (ledger writes/rms, `applyToEditor` calls) for the
+ * same inputs as the wal-audit layer built on it.
  */
 import { describe, expect, it, vi } from 'vitest'
 import { createSyncEngine } from './sync-engine.js'
@@ -214,17 +213,16 @@ describe('createSyncEngine — populateLedger reconciles ledger residue', () => 
   })
 })
 
-describe('createSyncEngine — pendingWrite is a structural no-op for a push port', () => {
-  it('an in-flight onHumanSave never lets a same-path inbound batch observe a pendingWrite hit', async () => {
+describe('createSyncEngine — ledgerTurn FIFO orders an in-flight save before a same-path inbound batch', () => {
+  it('a same-path inbound batch queued behind a slow onHumanSave still gets content-compared and recorded', async () => {
     // Both onHumanSave and an inbound batch enqueue onto the SAME ledgerTurn
-    // FIFO. Registering pendingWrite happens synchronously when onHumanSave
-    // is called, and it is cleared inside onHumanSave's own queued turn —
-    // strictly before any LATER-queued inbound turn for the same path can
-    // run. This test proves that guarantee: even when onHumanSave's ledger
-    // write is deliberately slow, a same-path inbound batch queued right
-    // after it still falls through to ordinary content comparison (the disk
-    // content differs from the ledger's post-save record), not a
-    // pendingWrite short-circuit.
+    // FIFO, so a later-queued inbound turn for the same path always runs
+    // AFTER the save's ledger write completed. This test proves that
+    // guarantee: even when onHumanSave's ledger write is deliberately slow,
+    // a same-path inbound batch queued right after it is judged by ordinary
+    // content comparison against the post-save ledger record (the disk
+    // content differs, so it must be recorded) — never silently absorbed as
+    // the save's own echo.
     let resolveWrite: () => void = () => {}
     const writeGate = new Promise<void>((resolve) => {
       resolveWrite = resolve
@@ -254,14 +252,12 @@ describe('createSyncEngine — pendingWrite is a structural no-op for a push por
     await savePromise
     await flush()
 
-    // If the inbound turn had observed a pendingWrite hit, it would have
-    // absorbed the batch silently (zero client.write / applyToEditor calls
+    // If the inbound turn had been misjudged as the save's echo, it would
+    // have been absorbed silently (zero client.write / applyToEditor calls
     // for 'a.js' beyond the save itself). Instead it ran AFTER onHumanSave's
-    // turn cleared pendingWrite, fell through to ordinary content
-    // comparison (ledger's mocked, unchanged 'old' record vs. the port's
-    // 'externally new' bytes), and recorded + applied the inbound change —
-    // proving the pendingWrite branch is a structural no-op for this push
-    // port, exactly as it is for the real devtools adapter.
+    // queued turn, was content-compared (ledger's mocked, unchanged 'old'
+    // record vs. the port's 'externally new' bytes), and recorded + applied
+    // the inbound change.
     expect(client.write).toHaveBeenCalledWith('a.js', 'new from human', { actor: 'human' })
     expect(client.write).toHaveBeenCalledWith('a.js', 'externally new', { actor: 'human' })
     expect(applyToEditor).toHaveBeenCalledWith('a.js', new TextEncoder().encode('externally new'))
@@ -397,73 +393,6 @@ describe('createSyncEngine — binary layering: onHumanSave with binary content'
     await engine.onHumanSave('a.js', 'new text')
 
     expect(client.write).toHaveBeenCalledWith('a.js', 'new text', { actor: 'human' })
-  })
-})
-
-describe('createSyncEngine — consumeInboundEcho (poll host outbound echo suppression)', () => {
-  it('matches the exact text an inbound batch just applied, once — a second consume misses', async () => {
-    const watch = makeWatch()
-    const port = makePort({
-      changes: watch.changes,
-      read: vi.fn().mockResolvedValue(new TextEncoder().encode('from disk')),
-    })
-    const client = makeClient({ read: vi.fn().mockResolvedValue({ content: 'old' }) })
-    const engine = createSyncEngine(client, port)
-
-    await engine.populateLedger()
-    engine.start()
-    watch.emitBatch(['a.js'])
-    await vi.waitFor(() => expect(client.write).toHaveBeenCalledWith('a.js', 'from disk', { actor: 'human' }))
-
-    expect(engine.consumeInboundEcho('a.js', 'from disk')).toBe(true)
-    expect(engine.consumeInboundEcho('a.js', 'from disk')).toBe(false)
-  })
-
-  it('does not match different content, and leaves the record intact for a later correct match', async () => {
-    const watch = makeWatch()
-    const port = makePort({
-      changes: watch.changes,
-      read: vi.fn().mockResolvedValue(new TextEncoder().encode('from disk')),
-    })
-    const client = makeClient({ read: vi.fn().mockResolvedValue({ content: 'old' }) })
-    const engine = createSyncEngine(client, port)
-
-    await engine.populateLedger()
-    engine.start()
-    watch.emitBatch(['a.js'])
-    await vi.waitFor(() => expect(client.write).toHaveBeenCalledWith('a.js', 'from disk', { actor: 'human' }))
-
-    expect(engine.consumeInboundEcho('a.js', 'something else')).toBe(false)
-    expect(engine.consumeInboundEcho('a.js', 'from disk')).toBe(true)
-  })
-
-  it('matches a delete marker only with content === null', async () => {
-    const watch = makeWatch()
-    const port = makePort({
-      changes: watch.changes,
-      read: vi.fn().mockRejectedValue(Object.assign(new Error('gone'), { code: 'not-found' })),
-    })
-    const client = makeClient({ read: vi.fn().mockResolvedValue({ content: 'was here' }) })
-    const engine = createSyncEngine(client, port)
-
-    await engine.populateLedger()
-    engine.start()
-    watch.emitBatch(['gone.js'])
-    await vi.waitFor(() => expect(client.rm).toHaveBeenCalledWith('gone.js', { actor: 'human' }))
-
-    expect(engine.consumeInboundEcho('gone.js', 'not a delete')).toBe(false)
-    expect(engine.consumeInboundEcho('gone.js', null)).toBe(true)
-    expect(engine.consumeInboundEcho('gone.js', null)).toBe(false)
-  })
-
-  it('returns false for a path with no inbound record at all', async () => {
-    const port = makePort()
-    const client = makeClient()
-    const engine = createSyncEngine(client, port)
-
-    await engine.populateLedger()
-
-    expect(engine.consumeInboundEcho('never-touched.js', 'anything')).toBe(false)
   })
 })
 

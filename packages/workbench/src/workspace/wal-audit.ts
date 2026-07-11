@@ -13,8 +13,8 @@
  * `@dimina-kit/fs-core`:
  *  - `./sync`'s `createSyncEngine` — the memfs<->disk arbitration engine
  *    (ledgerTurn FIFO, echo judgement, seed/reconcile, inbound batches; see
- *    that module's header for the full design, devtools-fs-core-feasibility.md
- *    §7+§8). This file's only job on that front is assembling devtools' own
+ *    that module's header for the full design). This file's only job on that
+ *    front is assembling devtools' own
  *    `TruthPort`: reads/writes/deletes/walks go over the `/__fs` bridge
  *    (fs-bridge.ts), and change notifications come from an `EventSource`
  *    against the main process's `/__fs/watch` SSE stream — a 'push' port.
@@ -28,7 +28,8 @@
  *    (beginTurn/endTurn/agentWrite/agentRm/diff/rollback/status) calls
  *    `client.turnBegin`/`turnEnd`/`diff`/`restore` itself — this is
  *    audit/turn bookkeeping, not disk<->editor sync, and stays here per the
- *    architecture's `kernel`-free boundary (§6.4 of the feasibility doc).
+ *    architecture's `kernel`-free boundary (the engine never learns about
+ *    turns — see its module header).
  *
  * The OPFS ledger is reseeded from disk on every `populate()` (a devtools
  * project open is a one-shot mirror with no disk watcher, so the ledger
@@ -51,7 +52,7 @@
  */
 import { ProjectFsClient } from '@dimina-kit/fs-core/client'
 import { createSyncEngine } from '@dimina-kit/fs-core/sync'
-import type { SyncEngine, TruthPort } from '@dimina-kit/fs-core/sync'
+import type { SyncDegradation, SyncEngine, TruthPort } from '@dimina-kit/fs-core/sync'
 import { createWatchExpander } from '@dimina-kit/fs-core/sync/watch-expander'
 import { relFromWorkspaceUri } from '../fs-bridge'
 import { defaultBridge, defaultWatchEvents, walkDisk, diffPaths } from './wal-audit-transport'
@@ -133,7 +134,18 @@ export interface WalAuditOptions {
    * monaco/vscode from THIS module — the host implements it.
    */
   applyToEditor?: (rel: string, content: Uint8Array | null) => Promise<void>
+  /**
+   * Host seam: surface a degradation — the sync engine's own
+   * {@link SyncDegradation} forwarded verbatim, plus this layer's
+   * `ledger-unavailable` (the fs-core client/ledger failed to initialize and
+   * the source fell back to disk-only). Called in addition to the console
+   * warning; a throwing callback never breaks the layer that reported it.
+   */
+  onDegraded?: (degradation: WalAuditDegradation) => void
 }
+
+/** See {@link WalAuditOptions.onDegraded}. */
+export type WalAuditDegradation = SyncDegradation | { kind: 'ledger-unavailable'; error: unknown }
 
 const DEFAULT_PROJECT_ID = 'devtools-workspace'
 
@@ -164,6 +176,16 @@ export function walAuditSource(base: WorkspaceSource, opts: WalAuditOptions): Wo
   const bridge = opts.bridge ?? defaultBridge
   const createClient = opts.createClient ?? defaultCreateClient
   const encoder = new TextEncoder()
+
+  /** Surface a degradation to the host — a throwing callback is the host's
+   * own bug and must not break the layer that reported it. */
+  function degrade(degradation: WalAuditDegradation): void {
+    try {
+      opts.onDegraded?.(degradation)
+    } catch (e) {
+      console.warn('[workbench] onDegraded callback threw', e)
+    }
+  }
 
   let client: WalAuditClientLike | undefined
   let engine: SyncEngine | undefined
@@ -247,7 +269,12 @@ export function walAuditSource(base: WorkspaceSource, opts: WalAuditOptions): Wo
       // a report against the NEW ledger's content.
       watchExpander.resetIndex()
       const c = await createClient({ projectId })
-      const eng = createSyncEngine(c, makeTruthPort(), { applyToEditor: opts.applyToEditor })
+      const eng = createSyncEngine(c, makeTruthPort(), {
+        applyToEditor: opts.applyToEditor,
+        // The engine's degradations ARE this layer's degradations — forwarded
+        // verbatim so the host needs one seam, not two.
+        onDegraded: degrade,
+      })
       await eng.populateLedger()
       // Seed the stat index from the now-reconciled disk tree BEFORE the
       // watch subscription goes live, so the first post-open watch batch
@@ -262,6 +289,7 @@ export function walAuditSource(base: WorkspaceSource, opts: WalAuditOptions): Wo
       client = undefined
       engine = undefined
       console.warn('[workbench] wal audit unavailable — falling back to disk-only', e)
+      degrade({ kind: 'ledger-unavailable', error: e })
     }
   }
 

@@ -1,7 +1,7 @@
 /**
- * Sync arbitration engine — the memfs<->disk synchronization core factored
- * out of dimina-kit's workbench `wal-audit.ts` (see
- * devtools-fs-core-feasibility.md §7+§8). A host wires a `client` (the
+ * Sync arbitration engine — the memfs<->disk synchronization core shared by
+ * every host that pairs an fs-core ledger with an external truth source.
+ * A host wires a `client` (the
  * fs-core ledger: write/rm/read/ls) and a `TruthPort` (its external truth
  * source — devtools' `/__fs` bridge + SSE watch, or a future FSA
  * local-directory adapter) and gets back an engine that keeps the ledger,
@@ -10,41 +10,29 @@
  * host's own audit-turn surface talks to `client` directly for that (see
  * wal-audit.ts).
  *
- * Echo judgement (both directions):
+ * Echo judgement (both directions, content comparison against the ledger's
+ * own record):
  *  - Outbound (`onHumanSave`): before recording, compare the saved text
  *    against the ledger's current record for that path — identical content
  *    is a no-op (the ledger already reflects it), skipping a redundant
- *    write.
- *  - Inbound (`changes` batches, via `handleInboundPath`): first check
- *    `pendingWrite` — an entry there was registered by an `onHumanSave` still
- *    in flight for the same path, and its presence means this inbound
- *    notification is that write's own echo, absorbed with no ledger write
- *    and no editor refresh. This check is a structural no-op for a 'push'
- *    port (devtools' SSE): registration and clearing both happen inside the
- *    SAME `ledgerTurn` FIFO slot as the write they guard (see
- *    `onHumanSave`), so by the time any later-queued inbound turn for that
- *    path runs, the entry is already gone — the branch exists for a future
- *    'poll' host whose change detection runs OUTSIDE this FIFO (e.g. an
- *    mtime/size sweep) and can therefore observe the entry while the write
- *    is still in flight. When `pendingWrite` misses, the engine falls back
- *    to today's content comparison (truth-source bytes vs. the ledger's own
- *    record) — the only judgement a push host ever actually exercises.
+ *    write. The onHumanSave accounting step and inbound batches run through
+ *    the same `ledgerTurn` FIFO, so an inbound notification for a path whose
+ *    save is still in flight always observes the completed ledger write and
+ *    absorbs itself via that same comparison.
+ *  - Inbound (`changes` batches, via `handleInboundPath`): truth-source
+ *    bytes equal to the ledger's record are the echo of our own last write —
+ *    dropped with no ledger write and no editor refresh.
+ * This engine serves 'push' ports only (the port notifies; the host's
+ * outbound writes go through `onHumanSave`). A future 'poll' host whose
+ * outbound scan runs outside this module must own its own one-shot echo
+ * suppression — see the README's「两套磁盘机制的划界」section for the
+ * invariants such an adapter has to satisfy.
  *
- * Inbound-echo consumption (`consumeInboundEcho`, `inboundApplied`): a 'poll'
- * host (e.g. the web local-directory adapter) drives its OWN outbound path
- * OUTSIDE this module — it reads the ledger and writes the truth source
- * directly, not through `onHumanSave` — so a change this engine just applied
- * INBOUND (disk -> ledger, via `handleInboundPath`) can race that host's
- * outbound scan and get echoed straight back to disk before the poll
- * baseline ever settles. `inboundApplied` (`rel -> {kind:'text'|'binary'|
- * 'delete', ...}`) records exactly what `handleInboundPath` just applied,
- * overwriting any prior entry for the same path; `consumeInboundEcho(rel,
- * content)` lets such a host check "is this outbound write about to re-emit
- * an inbound change I haven't published yet?" immediately BEFORE writing to
- * the truth source, consuming (clearing) the record on a match so it is a
- * one-shot suppression, not a standing content cache. A miss (different
- * content, or no record at all) returns false and leaves any existing record
- * untouched — it is not this call's echo to consume.
+ * Degradation is loud (`onDegraded`): a dead watcher and a path that failed
+ * to sync (truth-source read failure, or a ledger write/rm failure while
+ * reconciling) are surfaced to the host through {@link SyncDegradation} in
+ * addition to the console warning — silently skipping them would let the
+ * ledger drift with no operator-visible signal.
  *
  * Binary layering: classification (NUL sniff), the `rel -> {size, sha256}`
  * index, and echo judgement (size+hash equality instead of a ledger content
@@ -58,7 +46,7 @@
  * `populateLedger()`, exactly like the ledger's own text reconciliation.
  */
 
-import { bytesEqual, createBinarySidecar, looksBinary } from './binary-sidecar.js'
+import { createBinarySidecar, looksBinary } from './binary-sidecar.js'
 import type { TruthPort } from './truth-port.js'
 
 export type { TruthPort, TruthPortCapabilities } from './truth-port.js'
@@ -78,6 +66,20 @@ export interface SyncClientLike {
   ls(): Promise<{ paths: string[] }>
 }
 
+/**
+ * A host-visible sync degradation (see the module doc's "Degradation is
+ * loud" paragraph):
+ *  - `watcher-dead`: the port's change subscription died — from now on the
+ *    ledger only reflects the open-time mirror plus already-processed
+ *    batches.
+ *  - `path-sync-failed`: one path failed to reconcile and was skipped;
+ *    `stage` says where — `truth-read` (the truth source's read rejected
+ *    transiently) or `reconcile` (the ledger write/rm itself failed).
+ */
+export type SyncDegradation =
+  | { kind: 'watcher-dead' }
+  | { kind: 'path-sync-failed'; rel: string; stage: 'truth-read' | 'reconcile'; error: unknown }
+
 export interface SyncEngineOptions {
   /**
    * Host seam: push an inbound change into the live editor buffer.
@@ -85,6 +87,12 @@ export interface SyncEngineOptions {
    * records the change but the editor buffer is left untouched.
    */
   applyToEditor?: (rel: string, bytes: Uint8Array | null) => Promise<void>
+  /**
+   * Host seam: surface a {@link SyncDegradation}. Called in addition to the
+   * console warning, never instead of it; a throwing callback is the host's
+   * own bug and never breaks the engine.
+   */
+  onDegraded?: (degradation: SyncDegradation) => void
 }
 
 export interface SyncEngine {
@@ -106,18 +114,6 @@ export interface SyncEngine {
    * route it to the session-scoped `binaryIndex` instead of the ledger.
    */
   onHumanSave(rel: string, content: string | Uint8Array): Promise<void>
-  /**
-   * One-shot check for a 'poll' host's own outbound path (see this module's
-   * "Inbound-echo consumption" doc): call this BEFORE writing `content` (the
-   * decoded text, raw bytes, or `null` for a delete) for `rel` out to the
-   * truth source. Returns `true` when it exactly matches what
-   * `handleInboundPath` just applied FROM that same truth source — that
-   * write would be a pure echo, so the caller should skip it — and clears
-   * the record so it cannot match again (one-shot, not a standing cache).
-   * Returns `false` on any mismatch or when there is no record at all,
-   * leaving any existing record untouched.
-   */
-  consumeInboundEcho(rel: string, content: string | Uint8Array | null): boolean
   /** Subscribe to `port.changes` and start reconciling inbound batches. */
   start(): void
   /** Tear down the `port.changes` subscription. Idempotent. */
@@ -135,11 +131,6 @@ function isNotFoundError(error: unknown): boolean {
   return Boolean(e) && (e!.code === 'not-found' || e!.status === 404)
 }
 
-type InboundApplied =
-  | { kind: 'text'; text: string }
-  | { kind: 'binary'; bytes: Uint8Array }
-  | { kind: 'delete' }
-
 export function createSyncEngine(
   client: SyncClientLike,
   port: TruthPort,
@@ -148,13 +139,15 @@ export function createSyncEngine(
   const decoder = new TextDecoder()
   const applyToEditor = opts.applyToEditor
 
-  /**
-   * Paths with an `onHumanSave` write in flight — see the module doc's
-   * "Echo judgement" section. Registered synchronously when `onHumanSave` is
-   * called and cleared unconditionally (`finally`) once that write's own
-   * ledgerTurn slot finishes, success or failure.
-   */
-  const pendingWrite = new Set<string>()
+  /** Surface a degradation to the host — a throwing callback is the host's
+   * own bug and must not break the reconciliation that reported it. */
+  function degrade(degradation: SyncDegradation): void {
+    try {
+      opts.onDegraded?.(degradation)
+    } catch (e) {
+      console.warn('[fs-core/sync] onDegraded callback threw', e)
+    }
+  }
 
   /**
    * Binary files never enter the fs-core ledger — see the module doc's
@@ -162,16 +155,6 @@ export function createSyncEngine(
    * back); session-scoped: rebuilt from scratch on every `populateLedger()`.
    */
   const binaryIndex = createBinarySidecar()
-
-  /**
-   * `rel -> { kind: 'text', text } | { kind: 'binary', bytes } | { kind: 'delete' }`
-   * — see the module doc's "Inbound-echo consumption" section. Written by
-   * `handleInboundPath` immediately after it actually applies an inbound
-   * change (ledger write/rm, or a binary/delete index update); consumed
-   * (checked + cleared on a match) by `consumeInboundEcho`. Session-scoped,
-   * same as `binaryIndex` — cleared on every `populateLedger()`.
-   */
-  const inboundApplied = new Map<string, InboundApplied>()
 
   /**
    * FIFO queue serializing every compare-then-record against the ledger
@@ -196,7 +179,6 @@ export function createSyncEngine(
    * exactly matching the walked tree. */
   async function seedFromDisk(): Promise<void> {
     await binaryIndex.clear()
-    inboundApplied.clear()
     const seen = new Set<string>()
     await port.walk(async (rel, bytes) => {
       seen.add(rel)
@@ -216,27 +198,23 @@ export function createSyncEngine(
   }
 
   /**
-   * Process one inbound path. `pendingWrite` is checked first (see module
-   * doc); a miss falls back to content comparison: identical content is the
-   * echo of our own last write and is dropped with no ledger write and no
-   * `applyToEditor` call. A `port.read` rejection classified as not-found
+   * Process one inbound path via content comparison: identical content is
+   * the echo of our own last write and is dropped with no ledger write and
+   * no `applyToEditor` call. A `port.read` rejection classified as not-found
    * (see truth-port.ts) is a deletion; any other rejection
-   * ("unavailable") is transient and skips the path entirely — inferring a
-   * deletion from it would rm the ledger record and close the file in the
-   * editor while it still exists at the truth source.
+   * ("unavailable") is transient and skips the path entirely (surfaced as a
+   * `truth-read` degradation) — inferring a deletion from it would rm the
+   * ledger record and close the file in the editor while it still exists at
+   * the truth source.
    */
   async function handleInboundPath(rel: string): Promise<void> {
-    if (pendingWrite.has(rel)) {
-      pendingWrite.delete(rel)
-      return
-    }
-
     let bytes: Uint8Array | null
     try {
       bytes = await port.read(rel)
     } catch (e) {
       if (!isNotFoundError(e)) {
         console.warn('[fs-core/sync] transient port read failure, skipping', rel, e)
+        degrade({ kind: 'path-sync-failed', rel, stage: 'truth-read', error: e })
         return
       }
       bytes = null
@@ -248,7 +226,6 @@ export function createSyncEngine(
       // index-only — no client.rm.
       if (binaryIndex.has(rel)) {
         await binaryIndex.remove(rel)
-        inboundApplied.set(rel, { kind: 'delete' })
         await applyToEditor?.(rel, null)
         return
       }
@@ -260,7 +237,6 @@ export function createSyncEngine(
       }
       if (ledgerContent === undefined) return // already absent from both sides
       await client.rm(rel, { actor: 'human' })
-      inboundApplied.set(rel, { kind: 'delete' })
       await applyToEditor?.(rel, null)
       return
     }
@@ -269,7 +245,6 @@ export function createSyncEngine(
       // Echo judgement is the sidecar's put(): `false` = same size+sha256
       // already indexed, i.e. the echo of our own last write.
       if (!(await binaryIndex.put(rel, bytes))) return
-      inboundApplied.set(rel, { kind: 'binary', bytes })
       await applyToEditor?.(rel, bytes)
       return
     }
@@ -289,30 +264,7 @@ export function createSyncEngine(
     if (ledgerContent !== undefined && text === ledgerContent) return // echo of our own write
 
     await client.write(rel, text, { actor: 'human' })
-    inboundApplied.set(rel, { kind: 'text', text })
     await applyToEditor?.(rel, bytes)
-  }
-
-  /**
-   * One-shot check for a 'poll' host's own outbound path: "is `content` (the
-   * bytes/text about to be written to the truth source for `rel`, or `null`
-   * for a delete) exactly what `handleInboundPath` just applied FROM that
-   * same truth source?" A match means writing it back out would be a pure
-   * echo — the host should skip the write entirely — and the record is
-   * cleared (consumed) so it cannot match again. See the module doc's
-   * "Inbound-echo consumption" section for why a push host (devtools) never
-   * needs this: its outbound path goes through `onHumanSave`/`pendingWrite`
-   * instead.
-   */
-  function consumeInboundEcho(rel: string, content: string | Uint8Array | null): boolean {
-    const entry = inboundApplied.get(rel)
-    if (!entry) return false
-    let matches: boolean
-    if (content === null) matches = entry.kind === 'delete'
-    else if (typeof content === 'string') matches = entry.kind === 'text' && entry.text === content
-    else matches = entry.kind === 'binary' && bytesEqual(entry.bytes, content)
-    if (matches) inboundApplied.delete(rel)
-    return matches
   }
 
   /**
@@ -333,6 +285,7 @@ export function createSyncEngine(
         await enqueueLedgerTurn(() => handleInboundPath(rel))
       } catch (e) {
         console.warn('[fs-core/sync] disk sync failed for', rel, e)
+        degrade({ kind: 'path-sync-failed', rel, stage: 'reconcile', error: e })
       }
     }
   }
@@ -362,10 +315,27 @@ export function createSyncEngine(
   /** Subscribe to `port.changes`. `active` gates BOTH callbacks so a
    * late/duplicate event delivered after `onDead` (or after a fresh
    * `start()` superseded this subscription) is a guaranteed no-op, not just
-   * best-effort. */
+   * best-effort. The subscription is torn down through `disposeOnce`: the
+   * TruthPort contract does not require an idempotent dispose, and a host's
+   * `onDegraded` callback may synchronously call `engine.stop()` — without
+   * the guard that re-enters the same dispose a second time. */
   function start(): void {
     let active = true
-    const dispose = port.changes(
+    let disposed = false
+    // "dispose requested" and "dispose implementation available" are split:
+    // a port may fire onDead synchronously DURING the changes() call, before
+    // its dispose function even exists — the request is recorded via
+    // `disposed` and the implementation is invoked right after the
+    // subscription call returns it (see below). Declared-then-assigned (not
+    // `const`) precisely so that a during-subscription disposeOnce() reads
+    // `undefined` instead of hitting a temporal dead zone.
+    let disposeImpl: (() => void) | undefined = undefined
+    function disposeOnce(): void {
+      if (disposed) return
+      disposed = true
+      disposeImpl?.()
+    }
+    disposeImpl = port.changes(
       (paths) => {
         if (!active) return
         enqueueInboundBatch(paths)
@@ -374,12 +344,16 @@ export function createSyncEngine(
         if (!active) return
         active = false
         console.warn('[fs-core/sync] watcher died — reverting to open-time mirror only')
-        dispose()
+        disposeOnce()
+        degrade({ kind: 'watcher-dead' })
       },
     )
+    // Dispose was requested during subscription (synchronous onDead): the
+    // implementation exists now — honor the request exactly once.
+    if (disposed) disposeImpl()
     stopWatching = () => {
       active = false
-      dispose()
+      disposeOnce()
     }
   }
 
@@ -389,12 +363,11 @@ export function createSyncEngine(
   }
 
   /**
-   * Outbound accounting for a human save: registers `rel` in `pendingWrite`
-   * for the duration of the ledger compare-then-write (see module doc),
-   * skips the ledger write when the saved text already matches the ledger's
-   * record, and runs inside the same `ledgerTurn` FIFO as inbound batches so
-   * the two can never interleave. Errors propagate to the caller — a host's
-   * onSave wrapper decides whether a ledger-write failure should be
+   * Outbound accounting for a human save: skips the ledger write when the
+   * saved text already matches the ledger's record, and runs inside the same
+   * `ledgerTurn` FIFO as inbound batches so the two can never interleave
+   * (see module doc's "Echo judgement"). Errors propagate to the caller — a
+   * host's onSave wrapper decides whether a ledger-write failure should be
    * swallowed (best-effort accounting must never unwind a save that already
    * landed at the truth source).
    *
@@ -405,31 +378,25 @@ export function createSyncEngine(
    * entirely and only updates `binaryIndex`.
    */
   async function onHumanSave(rel: string, content: string | Uint8Array): Promise<void> {
-    pendingWrite.add(rel)
-    try {
-      if (content instanceof Uint8Array && looksBinary(content)) {
-        await enqueueLedgerTurn(async () => {
-          await binaryIndex.put(rel, content)
-        })
-        return
-      }
-      const text = typeof content === 'string' ? content : decoder.decode(content)
+    if (content instanceof Uint8Array && looksBinary(content)) {
       await enqueueLedgerTurn(async () => {
-        const unchanged = await client
-          .read(rel)
-          .then((r) => r.content === text)
-          .catch(() => false)
-        if (!unchanged) await client.write(rel, text, { actor: 'human' })
+        await binaryIndex.put(rel, content)
       })
-    } finally {
-      pendingWrite.delete(rel)
+      return
     }
+    const text = typeof content === 'string' ? content : decoder.decode(content)
+    await enqueueLedgerTurn(async () => {
+      const unchanged = await client
+        .read(rel)
+        .then((r) => r.content === text)
+        .catch(() => false)
+      if (!unchanged) await client.write(rel, text, { actor: 'human' })
+    })
   }
 
   return {
     populateLedger: seedFromDisk,
     onHumanSave,
-    consumeInboundEcho,
     start,
     stop,
   }

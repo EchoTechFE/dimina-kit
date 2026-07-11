@@ -12,7 +12,7 @@
 import { bootWorkbench } from './boot'
 import { diskMirrorSource } from './workspace/disk-workspace-source'
 import { walAuditSource } from './workspace/wal-audit'
-import type { WalAuditSurface } from './workspace/wal-audit'
+import type { WalAuditDegradation, WalAuditSurface } from './workspace/wal-audit'
 import type { CustomFileTypes } from './file-type-associations'
 
 declare global {
@@ -35,6 +35,13 @@ declare global {
      * OPFS ledger failed to initialize (see wal-audit.ts).
      */
     __WB_AUDIT?: WalAuditSurface
+    /**
+     * Sync degradations observed this session (watcher death, per-path sync
+     * failures, ledger init failure), newest last — the CDP-reachable view of
+     * `walAuditSource`'s `onDegraded` seam, so the harness/main process can
+     * assert "no silent sync loss" instead of scraping console output.
+     */
+    __WB_SYNC_DEGRADATIONS?: WalAuditDegradation[]
   }
 }
 
@@ -93,6 +100,9 @@ async function boot(): Promise<void> {
   const workspace = walAuditSource(diskMirrorSource({ fsBaseUrl }), {
     fsBaseUrl,
     applyToEditor: applyDiskChangeToEditor,
+    onDegraded: (d) => {
+      ;(window.__WB_SYNC_DEGRADATIONS ??= []).push(d)
+    },
   })
 
   const handle = await bootWorkbench({

@@ -12,6 +12,11 @@
     // only exists in that sub-lib, not in the base "WebWorker" one.
     "lib": ["ES2022", "WebWorker", "WebWorker.Iterable", "WebWorker.AsyncIterable"]
   },
-  "include": ["src/fs-core.worker.ts", "src/fs-query.worker.ts", "src/fs-core-recovery.ts", "src/fs-core-write-ops.ts"],
+  "include": [
+    "src/fs-core.worker.ts", "src/fs-query.worker.ts", "src/fs-core-recovery.ts", "src/fs-core-write-ops.ts",
+    // Drive fs-core-recovery.ts directly (structural fake `FsCore` instances) —
+    // see tsconfig.json's exclude for why these two live in this program instead.
+    "src/fs-core-recovery-lock.test.ts", "src/fs-core-handover.test.ts"
+  ],
   "exclude": ["node_modules"]
 }

@@ -11,11 +11,20 @@
   // Everything under src/worker-lib/ is deliberately lib-neutral (see that
   // directory's file headers) so it stays compilable by BOTH programs and is
   // NOT excluded here.
+  //
+  // src/fs-core-recovery-lock.test.ts / src/fs-core-handover.test.ts drive
+  // fs-core-recovery.ts directly (structural fake `FsCore` instances) and
+  // import its `FsCore` type — that transitively pulls the worker-only files
+  // above into whichever program checks them, so these two test files are
+  // excluded here and checked under tsconfig.worker.json instead (see its
+  // `include`).
   "exclude": [
     "node_modules",
     "src/fs-core.worker.ts",
     "src/fs-query.worker.ts",
     "src/fs-core-recovery.ts",
-    "src/fs-core-write-ops.ts"
+    "src/fs-core-write-ops.ts",
+    "src/fs-core-recovery-lock.test.ts",
+    "src/fs-core-handover.test.ts"
   ]
 }
