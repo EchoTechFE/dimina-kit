@@ -1,15 +1,8 @@
 #!/usr/bin/env node
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { NPM_PACKAGES } from './npm-packages.js'
 
-const PACKAGES = [
-  'packages/fs-core',
-  'packages/compiler',
-  'packages/view-anchor',
-  'packages/electron-deck',
-  'packages/devkit',
-  'packages/devtools',
-]
 const suffix = process.env.DEV_VERSION_SUFFIX
 
 if (!suffix) {
@@ -17,11 +10,11 @@ if (!suffix) {
   process.exit(1)
 }
 
-for (const pkg of PACKAGES) {
-  const path = join(process.cwd(), pkg, 'package.json')
+for (const { dir } of NPM_PACKAGES) {
+  const path = join(process.cwd(), dir, 'package.json')
   const json = JSON.parse(readFileSync(path, 'utf8'))
   const original = json.version
   json.version = `${original}-${suffix}`
   writeFileSync(path, `${JSON.stringify(json, null, 2)}\n`)
-  console.log(`${pkg}: ${original} -> ${json.version}`)
+  console.log(`${dir}: ${original} -> ${json.version}`)
 }
