@@ -19,6 +19,13 @@
     "src/fs-core-recovery.ts",
     "src/fs-core-write-ops.ts",
     "src/**/*.test.ts",
-    "src/__checks__/**"
-  ]
+    "src/__checks__/**",
+    // Built by tsconfig.worker-lib.build.json (its own composite project —
+    // see that file's header) — excluded here so dist/worker-lib/** has one
+    // writer. zip.ts still imports it by relative path; the reference below
+    // redirects that import to the composite project's .d.ts instead of
+    // pulling the raw .ts source (and re-emitting it) into this program.
+    "src/worker-lib"
+  ],
+  "references": [{ "path": "./tsconfig.worker-lib.build.json" }]
 }

@@ -39,6 +39,18 @@ for (const { src, outfile } of ENTRIES) {
   if (r.status !== 0) process.exit(r.status ?? 1)
 }
 
+// worker-files.ts additionally ships as CJS (exports map `require` condition)
+// so CommonJS hosts (e.g. qdmp-web-workbench's server.cjs) can consume the
+// worker-artifact contract without require(esm) support.
+{
+  const r = spawnSync(
+    'npx',
+    ['esbuild', 'src/worker-files.ts', '--format=cjs', '--platform=neutral', '--target=es2022', '--outfile=dist/worker-files.cjs'],
+    { cwd: __dirname, stdio: 'inherit', shell: true },
+  )
+  if (r.status !== 0) process.exit(r.status ?? 1)
+}
+
 // Self-check: assert both bundles are single-file, import-free ESM.
 let failed = false
 for (const { outfile } of ENTRIES) {

@@ -1,10 +1,14 @@
 /**
- * Watch-batch expansion: turns raw `fs.watch`-style paths (which may be
- * coalesced ancestor-DIRECTORY events, an overflow `'.'` full-tree rescan, or
- * the name of a file that no longer exists) into the set of paths the sync
- * engine should actually re-examine (see sync-engine.ts's `handleBatch`,
- * which — per truth-port.ts's `TruthPort.changes` doc — trusts this module's
- * output as-is and does no expansion of its own).
+ * Watch-batch expansion — an OPTIONAL port-side helper for assembling a
+ * `TruthPort.changes` adapter (see truth-port.ts: turning a watcher's
+ * coalesced/lossy events into the actual set of paths worth re-examining is
+ * the PORT's responsibility; sync-engine.ts's `handleBatch` trusts the
+ * expanded batch as-is and does no expansion of its own). It turns raw
+ * `fs.watch`-style paths (which may be coalesced ancestor-DIRECTORY events,
+ * an overflow `'.'` full-tree rescan, or the name of a file that no longer
+ * exists) into the set of paths the sync engine should actually re-examine.
+ * The only dependency is a stat-capable `readdir` (one listing call, no
+ * content bytes) — see {@link WatchExpanderReaddir}.
  *
  * Why events are only a HINT, not the truth: FSEvents-style recursive
  * watchers COALESCE a write burst into ancestor-DIRECTORY events (and an
@@ -14,10 +18,10 @@
  * file, and "nothing was reported for path X" does not mean X is unchanged.
  *
  * How stat-level truth-checking works (the git-index/rsync pattern): for
- * every watch path, this module lists the DISK's current (size, mtimeMs) for
- * every file in that path's scope (itself + its parent directory — the same
- * scope FSEvents coalescing collapses onto) and diffs it against a
- * session-scoped index of what it last saw for each file:
+ * every watch path, this module lists the TRUTH SOURCE's current
+ * (size, mtimeMs) for every file in that path's scope (itself + its parent
+ * directory — the same scope FSEvents coalescing collapses onto) and diffs it
+ * against a session-scoped index of what it last saw for each file:
  *   - a ledger path inside the scanned scope that is now missing from the
  *     disk listing is reported as a deletion (this is what recovers a
  *     coalesced `rm -rf`, which a real watcher may name only a few of the
@@ -28,9 +32,9 @@
  *   - a disk file whose stat is UNCHANGED is a stat-confirmed survivor and is
  *     never reported. This is the whole point: an N-file directory with one
  *     real change no longer costs the engine N content reads (readdir stats
- *     are cheap — one HTTP round trip per directory level, no bytes — while
- *     the engine's `handleInboundPath` does a full `port.read` per reported
- *     path);
+ *     are cheap — one listing round trip per directory level, no bytes —
+ *     while the engine's `handleInboundPath` does a full `port.read` per
+ *     reported path);
  *   - the event path `p` ITSELF is additionally, unconditionally reported
  *     UNLESS it is currently a confirmed live, listable directory with no
  *     ledger record sitting at that exact path. Content can change without a
@@ -63,23 +67,32 @@
  * PARENT-scope prefix (when the watcher instead names a sibling or the
  * parent directory — the record no longer matches the replaced path's own
  * now-a-directory prefix, only the parent's). Either way the engine's
- * `port.read` gets EISDIR (mapped to 404 by the devtools bridge), which its
- * not-found discipline treats as a deletion.
+ * `port.read` gets EISDIR (mapped to a not-found by e.g. the devtools
+ * bridge), which its not-found discipline treats as a deletion.
  *
  * Index lifecycle: `resetIndex()` clears the session-scoped stat index —
- * call it whenever the ledger itself is reseeded (wal-audit.ts's
- * `initLedger`), so a stale index can never survive a project switch or
- * ledger rebuild. `warmFromDisk()` then seeds it directly from the CURRENT
- * disk tree right after the reseed (also called from `initLedger`, once the
- * ledger walk itself has completed) — without this, the first watch batch
- * after every project open would see an all-cold index and re-report every
- * file it touches, defeating the point of stat-diffing for exactly the
- * common case (a directory-level event shortly after open). A path this
- * module has never seen at all (warm-up included) is always reported on its
- * first sighting — nothing is missed by a partial/failed warm-up, it just
- * costs that one file's content read instead of being skipped.
+ * call it whenever the ledger itself is reseeded (e.g. dimina-kit
+ * wal-audit.ts's `initLedger`), so a stale index can never survive a project
+ * switch or ledger rebuild. `warmFromDisk()` then seeds it directly from the
+ * CURRENT disk tree right after the reseed (called once the ledger walk
+ * itself has completed) — without this, the first watch batch after every
+ * project open would see an all-cold index and re-report every file it
+ * touches, defeating the point of stat-diffing for exactly the common case
+ * (a directory-level event shortly after open). A path this module has never
+ * seen at all (warm-up included) is always reported on its first sighting —
+ * nothing is missed by a partial/failed warm-up, it just costs that one
+ * file's content read instead of being skipped.
  */
-import type { WalAuditBridge } from './wal-audit-transport'
+
+/** One truth-source directory entry: `[name, type, size?, mtimeMs?]` with
+ * `type === 2` meaning directory. `size`/`mtimeMs` are expected for FILE
+ * entries — a stat-less entry safely degrades to "always report" (see
+ * {@link toDiskStat}). */
+export type WatchExpanderEntry = [name: string, type: number, size?: number, mtimeMs?: number]
+
+/** The single dependency: list one directory (project-relative path, `'.'`
+ * or `''` = the root) of the truth source, with per-file stats. */
+export type WatchExpanderReaddir = (rel: string) => Promise<WatchExpanderEntry[]>
 
 interface DiskStat {
   size: number
@@ -100,18 +113,17 @@ export interface WatchExpander {
   warmFromDisk(): Promise<void>
 }
 
-/** A stat-less disk entry (readdir/stat race on the devtools side — see
- * project-fs.ts's `readdirWithin`) never matches a cached stat: `NaN !== NaN`
- * unconditionally, so a racy entry is always reported rather than risking a
- * false "unchanged" skip. */
+/** A stat-less disk entry (a readdir/stat race on the truth-source side)
+ * never matches a cached stat: `NaN !== NaN` unconditionally, so a racy
+ * entry is always reported rather than risking a false "unchanged" skip. */
 function toDiskStat(size: number | undefined, mtimeMs: number | undefined): DiskStat {
   return { size: size ?? Number.NaN, mtimeMs: mtimeMs ?? Number.NaN }
 }
 
 /** `rel`'s scope prefixes for the ledger-deletion sweep: itself-as-a-directory
- * and its parent directory — the same two listings {@link listDiskStats}
- * below probes. `''` (the whole-ledger prefix) only ever arises from the
- * `'.'` overflow rescan, handled by the caller before this is reached. */
+ * and its parent directory — the same two listings {@link createWatchExpander}'s
+ * `listDiskStats` probes. `''` (the whole-ledger prefix) only ever arises from
+ * the `'.'` overflow rescan, handled by the caller before this is reached. */
 function scopePrefixes(rel: string): { prefixes: Set<string>; parentRel: string; slash: number } {
   const slash = rel.lastIndexOf('/')
   const parentRel = slash >= 0 ? rel.slice(0, slash) : ''
@@ -129,19 +141,18 @@ function inScope(q: string, prefixes: Set<string>): boolean {
   return false
 }
 
-export function createWatchExpander(bridge: WalAuditBridge, fsBaseUrl: string): WatchExpander {
+export function createWatchExpander(readdir: WatchExpanderReaddir): WatchExpander {
   /** Session-scoped: `rel -> last stat this module reported for it`. Cleared
    * by `resetIndex()`, seeded by `warmFromDisk()`; see this module's doc
    * "Index lifecycle". */
   let statIndex = new Map<string, DiskStat>()
 
-  /** List every FILE's current (size, mtimeMs) under `startRel`, recursively,
-   * via bridge readdir — NO content reads (unlike `walkDisk`, which fetches
-   * every file's bytes and would turn each expansion pass back into a
-   * content-read storm). */
+  /** List every FILE's current (size, mtimeMs) under `startRel`, recursively
+   * — NO content reads (a content walk would turn each expansion pass back
+   * into a content-read storm). */
   async function listDiskStats(startRel: string, out: Map<string, DiskStat>): Promise<void> {
     async function walk(rel: string): Promise<void> {
-      const entries = await bridge.readdir(fsBaseUrl, rel || '.')
+      const entries = await readdir(rel || '.')
       for (const [name, type, size, mtimeMs] of entries) {
         const childRel = rel ? `${rel}/${name}` : name
         if (type === 2) await walk(childRel)

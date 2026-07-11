@@ -1,39 +1,93 @@
 /**
- * ProjectFsClient — 主线程侧 ProjectFS 封装（P0，同 origin）。
+ * ProjectFsClient — 主线程侧 ProjectFS 封装（同 origin）。
  * 起 fs-core / fs-query 两个 worker，牵好 core→query 的 diff 端口，
  * 暴露 Promise API；写请求自动带 opId，超时重试幂等（同 opId 重发）。
  */
+import type { CoreMessage, FsCoreMode } from './worker-lib/protocol.js'
+
+// The wire contract (error codes, event names, message shapes) lives in
+// worker-lib/protocol.ts — shared verbatim with the worker's own emit sites —
+// and is re-exported here so consumers can match on symbols instead of
+// quoting string literals from worker source.
+export { FS_CORE_ERROR_CODES, getFsCoreErrorCode, isFsCoreErrorCode } from './worker-lib/protocol.js'
+export type {
+  CoreMessage, CoreWireMessage, FsCoreErrorCode, FsCoreErrorExtras, FsCoreEventName, FsCoreMode,
+} from './worker-lib/protocol.js'
+
+// ── Write-API opts/results — the client-side mirror of the worker RPC args
+// in worker-lib/rpc-types.ts, narrowed to what a caller actually supplies
+// (the worker also accepts `opId`, but callers never set it directly —
+// `_writeOp` stamps one via `crypto.randomUUID()` for the idempotent-retry
+// contract). `actor` is a literal union here (rpc-types.ts's `WriteArgs` etc.
+// use a plain `string` because the worker only validates it at runtime) so
+// that a typo'd actor is a compile error at the call site.
+export interface FsWriteCallOpts {
+  actor?: 'human' | 'agent'
+  turnId?: string
+  agentToken?: string
+  ifMatch?: number | null
+}
+
+export interface FsCheckpointOpts {
+  actor?: 'human' | 'agent'
+  turnId?: string
+  agentToken?: string
+}
+
+export interface FsRestoreOpts extends FsCheckpointOpts {
+  baseGen?: number
+  force?: boolean
+}
+
+export interface FsTurnBeginOpts {
+  ttlMs?: number
+}
+
+export interface FsWriteResult {
+  gen: number
+  rev: number
+  idempotent?: boolean
+}
+
+export interface FsCheckpointResult extends FsWriteResult {
+  cpId: string
+}
+
+export interface FsTurnBeginResult extends FsWriteResult {
+  turnId: string
+  cpId: string
+  expiresAt: number
+}
+
+export interface FsTurnEndResult {
+  turnId: string
+  closed: boolean
+  ops: number
+}
+
+/** opRestore's respond replaces the mirror wholesale rather than appending to
+ * it, so it carries no `rev` — see fs-core-write-ops.ts's `opRestore`. */
+export interface FsRestoreResult {
+  gen: number
+  restored: number
+}
+
+/** Directories are implicit (no tracked entry), so mkdir's respond carries
+ * only `gen`, no `rev` — see fs-core.worker.ts's `mkdir` dispatch. */
+export interface FsMkdirResult {
+  gen: number
+}
+
+/** compactNow's return shape (fs-core.worker.ts) — `skipped` when the
+ * active segment was already below the rotation threshold. */
+export interface FsCompactResult {
+  gen: number
+  skipped?: boolean
+}
+
 const WRITE_TIMEOUT_MS = 8000
 
-type Mode = 'starting' | 'writer' | 'readonly' | 'draining' | 'dead'
-
-/**
- * Loosely-shaped dynamic message bag flowing over the fs-core worker's main
- * port: both the WELCOME/PONG/event messages (`event()`/`welcome()` in
- * fs-core.worker.ts) and the RPC reply messages (`respond()`/`fail()` there)
- * land here, distinguished at runtime by which optional fields are present.
- * One flat interface (rather than a narrowed union) matches how the code
- * actually reads it — every field is optional and independently checked.
- */
-export interface CoreMessage {
-  type?: string
-  evt?: string
-  error?: string
-  mode?: Mode
-  readonly?: boolean
-  gen?: number
-  id?: number
-  ok?: boolean
-  result?: unknown
-  code?: string
-  humanPaths?: string[]
-  auditGap?: boolean
-  actor?: string
-  paths?: string[]
-  count?: number
-  restore?: string
-  t?: number
-}
+type Mode = FsCoreMode
 
 interface PendingEntry {
   resolve: (v: unknown) => void
@@ -80,7 +134,6 @@ export class ProjectFsClient {
   welcome: CoreMessage | null = null
   pingTimer!: ReturnType<typeof setInterval>
   lastPong!: number
-  private _retried?: boolean
 
   /** 测试用：抹掉一个项目的全部持久层（只能在无 core 运行时调用）。 */
   static async wipe(projectId: string): Promise<void> {
@@ -88,6 +141,11 @@ export class ProjectFsClient {
     try { await root.removeEntry(projectId, { recursive: true }) } catch {}
   }
 
+  /** `coreUrl`/`queryUrl` default to the `/ide/fs/` deployment convention of
+   * the original dwc host (documented in this package's README「使用」节);
+   * every other real host serves the worker files elsewhere and passes both
+   * URLs explicitly — see `resolveWorkerFiles` (`./worker-files`) for the
+   * authoritative file-name/sibling contract. */
   static async connect({
     projectId,
     coreUrl = '/ide/fs/fs-core.worker.js',
@@ -178,8 +236,10 @@ export class ProjectFsClient {
       const entryResolve = resolve as (v: unknown) => void
       const timer = timeout
         ? setTimeout(() => {
-            // 超时重试一次：同 opId 幂等（fs-core 对已知 opId 返回既有结果）
-            if (opId && !this._retried) {
+            // 超时重试一次：同 opId 幂等（fs-core 对已知 opId 返回既有结果）；
+            // 重试自己的 timer 只会终止性 reject，不会再进这个分支，所以每次
+            // 调用恰好一次重试。
+            if (opId) {
               const retryId = ++this.seq
               this.pending.set(retryId, { resolve: entryResolve, reject, timer: setTimeout(() => { this.pending.delete(retryId); reject(new Error(op + ' timeout (after retry)')) }, timeout) })
               this.pending.delete(id)
@@ -208,24 +268,24 @@ export class ProjectFsClient {
   }
 
   // ── 写 API（{actor:'human'|'agent', turnId, ifMatch} 透传）──
-  write(path: string, content: string, opts: Record<string, unknown> = {}): Promise<unknown> { return this._writeOp('write', { path, content, ...opts }) }
-  edit(path: string, old: string, next: string, opts: Record<string, unknown> = {}): Promise<unknown> { return this._writeOp('edit', { path, old, next, ...opts }) }
-  rm(path: string, opts: Record<string, unknown> = {}): Promise<unknown> { return this._writeOp('rm', { path, ...opts }) }
-  mv(from: string, to: string, opts: Record<string, unknown> = {}): Promise<unknown> { return this._writeOp('mv', { from, to, ...opts }) }
-  mkdir(path: string, opts: Record<string, unknown> = {}): Promise<unknown> { return this._writeOp('mkdir', { path, ...opts }) }
-  checkpoint(opts: Record<string, unknown> = {}): Promise<unknown> { return this._writeOp('checkpoint', { ...opts }) }
-  /** opts: {baseGen?, force?} 透传给 fs-core（§4.7 restore 冲突策略）；baseGen 缺省时
+  write(path: string, content: string, opts: FsWriteCallOpts = {}): Promise<FsWriteResult> { return this._writeOp<FsWriteResult>('write', { path, content, ...opts }) }
+  edit(path: string, old: string, next: string, opts: FsWriteCallOpts = {}): Promise<FsWriteResult> { return this._writeOp<FsWriteResult>('edit', { path, old, next, ...opts }) }
+  rm(path: string, opts: FsWriteCallOpts = {}): Promise<FsWriteResult> { return this._writeOp<FsWriteResult>('rm', { path, ...opts }) }
+  mv(from: string, to: string, opts: FsWriteCallOpts = {}): Promise<FsWriteResult> { return this._writeOp<FsWriteResult>('mv', { from, to, ...opts }) }
+  mkdir(path: string, opts: FsWriteCallOpts = {}): Promise<FsMkdirResult> { return this._writeOp<FsMkdirResult>('mkdir', { path, ...opts }) }
+  checkpoint(opts: FsCheckpointOpts = {}): Promise<FsCheckpointResult> { return this._writeOp<FsCheckpointResult>('checkpoint', { ...opts }) }
+  /** opts.baseGen/force 透传给 fs-core（restore 冲突策略）；baseGen 缺省时
    * fs-core 从 checkpoint 自身记录的 gen 推导。 */
-  restore(cpId: string, opts: Record<string, unknown> = {}): Promise<unknown> { return this._writeOp('restore', { cpId, ...opts }) }
-  compact(): Promise<unknown> { return this._rpc('compact', {}, { timeout: 30000 }) }
+  restore(cpId: string, opts: FsRestoreOpts = {}): Promise<FsRestoreResult> { return this._writeOp<FsRestoreResult>('restore', { cpId, ...opts }) }
+  compact(): Promise<FsCompactResult> { return this._rpc<FsCompactResult>('compact', {}, { timeout: 30000 }) }
 
-  // ── P4 turn 能力：铸造（附带 checkpoint 锚）→ agent 写执法 → 撤销 ──
-  turnBegin(turnId: string, opts: Record<string, unknown> = {}): Promise<unknown> { return this._writeOp('turnBegin', { turnId, ...opts }) }
-  turnEnd(turnId: string): Promise<unknown> { return this._writeOp('turnEnd', { turnId }) }
+  // ── turn 能力：铸造（附带 checkpoint 锚）→ agent 写执法 → 撤销 ──
+  turnBegin(turnId: string, opts: FsTurnBeginOpts = {}): Promise<FsTurnBeginResult> { return this._writeOp<FsTurnBeginResult>('turnBegin', { turnId, ...opts }) }
+  turnEnd(turnId: string): Promise<FsTurnEndResult> { return this._writeOp<FsTurnEndResult>('turnEnd', { turnId }) }
   /** 该 turn 的改动清单（WAL actor/turnId 审计标注免费提供）。 */
   diff(turnId?: string): Promise<DiffResult> { return this._rpc<DiffResult>('diff', { turnId }) }
 
-  /** W4 纵深加固令牌门（docs/k3-terminal-split-plan.md §6 替代方案 A / §8.3）：特权方法，只应
+  /** 纵深加固令牌门：特权方法，只应
    * 由内核（kernel.js createKernel）在 boot 早期调用一次，把只有内核持有的随机令牌交给 fs-core；
    * 此后 actor:'agent' 的写类 op 必须在 opts 里携带匹配的 agentToken（fs-core 侧强制，见
    * fs-core.worker.js checkTurn/armAgentToken）。无 opId/超时重试——一次性 admin 调用，非写路径
@@ -233,6 +293,13 @@ export class ProjectFsClient {
   armAgentTokenGate(token: string): Promise<{ armed: boolean; idempotent?: boolean }> { return this._rpc('armAgentTokenGate', { token }) }
 
   // ── 读 API：小读走 core（权威），查询/快照走 query（不占写路径）──
+  /** readonly 端主动请求写权交接（协作交接协议，禁 steal）：现任写者排干释放后，
+   * 本 client 的排队锁请求 granted → mode 经 writer-granted 事件翻转（订阅
+   * onModeChange 观察结果）。只有 readonly 会真正行动：writer/dead/starting 上
+   * 调用是 no-op（如实返回 {mode}），draining 以错误码 'draining' 拒绝。
+   * 何时调用是宿主策略——典型是用户在"另一个标签页持有写权"提示上点"在此接管"。 */
+  requestHandover(): Promise<{ requested?: boolean; mode?: FsCoreMode }> { return this._rpc('requestHandover', {}) }
+
   read(path: string): Promise<{ content: string; rev?: number; gen: number }> { return this._rpc('read', { path }) }
   ls(): Promise<{ paths: string[]; gen: number }> { return this._rpc('ls', {}) }
   status(): Promise<StatusResult> { return this._rpc<StatusResult>('status', {}) }

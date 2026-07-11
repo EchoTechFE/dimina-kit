@@ -1,12 +1,12 @@
 /**
- * Agent 工具面（P4）—— MCP 形状的工具表包装 ProjectFsClient。
+ * Agent 工具面 —— MCP 形状的工具表包装 ProjectFsClient。
  *
- * 设计对应架构文档 §13：Agent 拿到的不是裸 FS，而是这张工具表 +（宿主铸造的）
+ * 设计立场：Agent 拿到的不是裸 FS，而是这张工具表 +（宿主铸造的）
  * turn 能力。要点：
  *  - execute 自动注入 {actor:'agent', turnId}：turnId 由 beginTurn 铸造并闭包持有，
  *    不出现在工具参数里 —— 模型伪造不了别的 turn。
  *  - 真正的执法在 fs-core（checkTurn 与 WAL append 同一同步块）；这里只是便利面。
- *  - inputSchema 用简化记法（K2 交付 Agent 组时再换成正式 JSON Schema + MCP server 包装）。
+ *  - inputSchema 用简化记法（对外交付 Agent 集成时再换成正式 JSON Schema + MCP server 包装）。
  *  - fs_read 返回完整内容，绝不截断（上游 8000 字符腰斩教训）。
  *
  * `AgentToolsFs` only declares the methods this file actually calls on the

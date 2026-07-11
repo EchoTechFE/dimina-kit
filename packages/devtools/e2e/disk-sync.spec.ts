@@ -192,9 +192,10 @@ test.describe('fs-core disk↔editor sync (embedded workbench)', () => {
 
       fs.rmSync(bulkDir, { recursive: true })
       // macOS FSEvents can coalesce a recursive delete without naming every
-      // removed child — the sync engine's watch-batch stat-diffing (workbench's
-      // wal-audit-watch-expand.ts) must reconcile the whole bulk directory from
-      // whatever partial event(s) actually arrive, with no synthetic nudge.
+      // removed child — the sync engine's watch-batch stat-diffing
+      // (@dimina-kit/fs-core/sync/watch-expander) must reconcile the whole bulk
+      // directory from whatever partial event(s) actually arrive, with no
+      // synthetic nudge.
       const gone = await pollUntil(
         () => runInWorkbench<number>(electronApp, countExpr(BULK_N)),
         (n) => n === 0,

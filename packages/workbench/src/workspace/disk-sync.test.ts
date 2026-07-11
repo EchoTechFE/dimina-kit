@@ -1,8 +1,8 @@
 /**
- * Contract tests for `walAuditSource`'s disk↔editor sync engine
- * (devtools-fs-core-feasibility.md §7): the ledger arbitrates whether an
- * inbound `/__fs/watch` batch is genuinely new content or the echo of our own
- * last write, and a dead watcher stops the subscription for good.
+ * Contract tests for `walAuditSource`'s disk↔editor sync engine: the ledger
+ * arbitrates whether an inbound `/__fs/watch` batch is genuinely new content
+ * or the echo of our own last write, and a dead watcher stops the
+ * subscription for good.
  */
 import { describe, expect, it, vi } from 'vitest'
 import type { WorkspaceSource } from './types.js'

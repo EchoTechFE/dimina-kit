@@ -1,5 +1,5 @@
 /**
- * store-only ZIP 打包（P5 导出出口）—— 无压缩、无依赖，全浏览器可用。
+ * store-only ZIP 打包（导出出口）—— 无压缩、无依赖，全浏览器可用。
  * 项目导出走"另一介质"才真正提升持久等级；zip 是最低门槛的那条出口。
  */
 import { crc32 } from './worker-lib/wal-codec.js'

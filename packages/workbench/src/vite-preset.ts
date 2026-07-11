@@ -42,18 +42,19 @@ function workbenchMonacoDeps(): string[] {
 }
 
 /**
- * Virtual specifiers that resolve to the real fs-core worker files. `@dimina-kit/fs-core`
- * only exports `./client` / `./agent-tools` / `./disk-mirror` / `./zip` (its
- * package.json `exports` map has no entry for the raw `*.worker.js` files, and
- * that map is frozen — see the fs-core transplant invariant), so a bare
- * `@dimina-kit/fs-core/src/fs-core.worker.js` import is not resolvable through
- * Node's exports-field algorithm. `resolve.alias` bypasses the exports map
- * entirely (it substitutes the specifier before package resolution runs), so
- * these virtual ids let a host statically `import … from 'virtual:fs-core/core-worker?worker&url'`
- * (the same `?worker&url` idiom as the monaco/vscode workers above) without
- * touching fs-core's own manifest. Resolved via the sibling of the `./client`
- * export (the one path guaranteed to exist), not a hardcoded `src/` join, so a
- * future fs-core layout change only needs the exports map, not this alias.
+ * Virtual specifiers that resolve to the real fs-core worker files.
+ * `@dimina-kit/fs-core`'s package.json `exports` map has no entry for the raw
+ * `*.worker.js` files (deliberate — the artifacts follow the literal
+ * sibling-copy contract stated in fs-core's `./worker-files` export), so a
+ * bare `@dimina-kit/fs-core/src/fs-core.worker.js` import is not resolvable
+ * through Node's exports-field algorithm. `resolve.alias` bypasses the
+ * exports map entirely (it substitutes the specifier before package
+ * resolution runs), so these virtual ids let a host statically
+ * `import … from 'virtual:fs-core/core-worker?worker&url'` (the same
+ * `?worker&url` idiom as the monaco/vscode workers above). Resolution
+ * delegates to fs-core's own `resolveWorkerFiles` (the single authority for
+ * the names + sibling rule), keyed off the `./client` export — a future
+ * fs-core layout change only needs that helper, not this alias.
  *
  * Uses REGEXP `find` entries (not plain string keys) so only the `virtual:…`
  * prefix is substituted and the `?worker&url` query rollup/vite need to detect
@@ -64,11 +65,12 @@ function workbenchMonacoDeps(): string[] {
  */
 function fsCoreWorkerAliases(): Array<{ find: RegExp; replacement: string }> {
   try {
-    const clientEntry = require.resolve('@dimina-kit/fs-core/client')
-    const srcDir = dirname(clientEntry)
+    const { resolveWorkerFiles } = require('@dimina-kit/fs-core/worker-files') as typeof import('@dimina-kit/fs-core/worker-files')
+    const { files } = resolveWorkerFiles(require.resolve('@dimina-kit/fs-core/client'))
+    const [coreWorkerPath, queryWorkerPath] = files
     return [
-      { find: /^virtual:fs-core\/core-worker/, replacement: join(srcDir, 'fs-core.worker.js') },
-      { find: /^virtual:fs-core\/query-worker/, replacement: join(srcDir, 'fs-query.worker.js') },
+      { find: /^virtual:fs-core\/core-worker/, replacement: coreWorkerPath! },
+      { find: /^virtual:fs-core\/query-worker/, replacement: queryWorkerPath! },
     ]
   } catch {
     // A source consumer without the fs-core dependency (e.g. web-client before

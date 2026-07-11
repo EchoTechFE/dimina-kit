@@ -13,21 +13,23 @@
  * `@dimina-kit/fs-core`:
  *  - `./sync`'s `createSyncEngine` — the memfs<->disk arbitration engine
  *    (ledgerTurn FIFO, echo judgement, seed/reconcile, inbound batches; see
- *    that module's header for the full design, devtools-fs-core-feasibility.md
- *    §7+§8). This file's only job on that front is assembling devtools' own
+ *    that module's header for the full design). This file's only job on that
+ *    front is assembling devtools' own
  *    `TruthPort`: reads/writes/deletes/walks go over the `/__fs` bridge
  *    (fs-bridge.ts), and change notifications come from an `EventSource`
  *    against the main process's `/__fs/watch` SSE stream — a 'push' port.
  *    Raw watch batches are only HINTS (macOS FSEvents coalesces bursts and
  *    drops children of a recursive delete); before reaching the engine they
- *    pass through wal-audit-watch-expand.ts's stat-level disk compare — see
- *    that module's header — and the engine trusts the expanded batch as-is.
+ *    pass through `@dimina-kit/fs-core/sync/watch-expander`'s stat-level disk
+ *    compare — see that module's header — and the engine trusts the expanded
+ *    batch as-is.
  *  - the fs-core `client` directly, for the parts that are NOT the sync
  *    engine's job: the programmatic turn-door surface below
  *    (beginTurn/endTurn/agentWrite/agentRm/diff/rollback/status) calls
  *    `client.turnBegin`/`turnEnd`/`diff`/`restore` itself — this is
  *    audit/turn bookkeeping, not disk<->editor sync, and stays here per the
- *    architecture's `kernel`-free boundary (§6.4 of the feasibility doc).
+ *    architecture's `kernel`-free boundary (the engine never learns about
+ *    turns — see its module header).
  *
  * The OPFS ledger is reseeded from disk on every `populate()` (a devtools
  * project open is a one-shot mirror with no disk watcher, so the ledger
@@ -40,20 +42,22 @@
  * OPFS/worker init failures degrade to plain base behavior: `populate`/`onSave`
  * keep working, and every `audit` method rejects with 'wal audit unavailable'.
  *
- * Known limitation: `agentWrite`/`agentRm`/`rollback` write disk through the
- * `/__fs` bridge but do not push the new content back into the editor's memfs
- * mirror (devtools has no disk watcher for the turn-door path), so an
- * already-open editor buffer can keep showing pre-agent content until the
- * project is reopened.
+ * Editor propagation for the turn-door: `agentWrite`/`agentRm`/`rollback`
+ * write disk through the `/__fs` bridge (devtools has no disk watcher for
+ * that path), then push the new content into the live editor buffer through
+ * the SAME `applyToEditor` seam the sync engine's inbound path uses —
+ * best-effort: disk and ledger are already consistent by then, so an editor
+ * refresh failure only logs (the buffer converges on the next reconcile or
+ * reopen) and never fails the agent operation itself.
  */
 import { ProjectFsClient } from '@dimina-kit/fs-core/client'
 import { createSyncEngine } from '@dimina-kit/fs-core/sync'
-import type { SyncEngine, TruthPort } from '@dimina-kit/fs-core/sync'
+import type { SyncDegradation, SyncEngine, TruthPort } from '@dimina-kit/fs-core/sync'
+import { createWatchExpander } from '@dimina-kit/fs-core/sync/watch-expander'
 import { relFromWorkspaceUri } from '../fs-bridge'
 import { defaultBridge, defaultWatchEvents, walkDisk, diffPaths } from './wal-audit-transport'
 import type { WalAuditBridge } from './wal-audit-transport'
 export type { WalAuditBridge } from './wal-audit-transport'
-import { createWatchExpander } from './wal-audit-watch-expand'
 import type { WorkspaceSource } from './types'
 import type { IFileService } from '@codingame/monaco-vscode-api'
 // Type-only import — erased at build time, so it does not pull the real
@@ -130,7 +134,18 @@ export interface WalAuditOptions {
    * monaco/vscode from THIS module — the host implements it.
    */
   applyToEditor?: (rel: string, content: Uint8Array | null) => Promise<void>
+  /**
+   * Host seam: surface a degradation — the sync engine's own
+   * {@link SyncDegradation} forwarded verbatim, plus this layer's
+   * `ledger-unavailable` (the fs-core client/ledger failed to initialize and
+   * the source fell back to disk-only). Called in addition to the console
+   * warning; a throwing callback never breaks the layer that reported it.
+   */
+  onDegraded?: (degradation: WalAuditDegradation) => void
 }
+
+/** See {@link WalAuditOptions.onDegraded}. */
+export type WalAuditDegradation = SyncDegradation | { kind: 'ledger-unavailable'; error: unknown }
 
 const DEFAULT_PROJECT_ID = 'devtools-workspace'
 
@@ -162,6 +177,16 @@ export function walAuditSource(base: WorkspaceSource, opts: WalAuditOptions): Wo
   const createClient = opts.createClient ?? defaultCreateClient
   const encoder = new TextEncoder()
 
+  /** Surface a degradation to the host — a throwing callback is the host's
+   * own bug and must not break the layer that reported it. */
+  function degrade(degradation: WalAuditDegradation): void {
+    try {
+      opts.onDegraded?.(degradation)
+    } catch (e) {
+      console.warn('[workbench] onDegraded callback threw', e)
+    }
+  }
+
   let client: WalAuditClientLike | undefined
   let engine: SyncEngine | undefined
 
@@ -169,8 +194,10 @@ export function walAuditSource(base: WorkspaceSource, opts: WalAuditOptions): Wo
    * doc) into the paths worth re-examining, via a stat-level disk compare
    * against a session-scoped index instead of re-reading content. Reset on
    * every `initLedger()` (a fresh ledger needs a fresh index — see
-   * {@link createWatchExpander}'s "Index lifecycle" doc). */
-  const watchExpander = createWatchExpander(bridge, opts.fsBaseUrl)
+   * {@link createWatchExpander}'s "Index lifecycle" doc). The expander's one
+   * dependency is a stat-capable readdir — the `/__fs` bridge's, curried
+   * with this source's base URL. */
+  const watchExpander = createWatchExpander((rel) => bridge.readdir(opts.fsBaseUrl, rel))
 
   async function expandWatchBatch(paths: string[]): Promise<string[]> {
     const ledgerPaths = await (client
@@ -242,12 +269,17 @@ export function walAuditSource(base: WorkspaceSource, opts: WalAuditOptions): Wo
       // a report against the NEW ledger's content.
       watchExpander.resetIndex()
       const c = await createClient({ projectId })
-      const eng = createSyncEngine(c, makeTruthPort(), { applyToEditor: opts.applyToEditor })
+      const eng = createSyncEngine(c, makeTruthPort(), {
+        applyToEditor: opts.applyToEditor,
+        // The engine's degradations ARE this layer's degradations — forwarded
+        // verbatim so the host needs one seam, not two.
+        onDegraded: degrade,
+      })
       await eng.populateLedger()
       // Seed the stat index from the now-reconciled disk tree BEFORE the
       // watch subscription goes live, so the first post-open watch batch
       // only reports genuine post-seed changes instead of re-treating the
-      // whole tree as "new" (see wal-audit-watch-expand.ts's "Index
+      // whole tree as "new" (see the watch-expander module's "Index
       // lifecycle" doc).
       await watchExpander.warmFromDisk()
       client = c
@@ -257,6 +289,18 @@ export function walAuditSource(base: WorkspaceSource, opts: WalAuditOptions): Wo
       client = undefined
       engine = undefined
       console.warn('[workbench] wal audit unavailable — falling back to disk-only', e)
+      degrade({ kind: 'ledger-unavailable', error: e })
+    }
+  }
+
+  /** Turn-door editor propagation (see the module doc's "Editor propagation"
+   * paragraph): disk and ledger are already consistent when this runs, so a
+   * refresh failure only logs — it must never fail the agent operation. */
+  async function refreshEditor(rel: string, content: Uint8Array | null): Promise<void> {
+    try {
+      await opts.applyToEditor?.(rel, content)
+    } catch (e) {
+      console.warn('[workbench] turn-door editor refresh failed (disk and ledger are already consistent)', rel, e)
     }
   }
 
@@ -264,7 +308,10 @@ export function walAuditSource(base: WorkspaceSource, opts: WalAuditOptions): Wo
     // client is checked non-null by every caller of this helper before the loop starts.
     try {
       const { content } = await client!.read(rel)
-      await bridge.write(opts.fsBaseUrl, rel, encoder.encode(content))
+      const bytes = encoder.encode(content)
+      await bridge.write(opts.fsBaseUrl, rel, bytes)
+      await refreshEditor(rel, bytes)
+      return
     } catch (e) {
       // ONLY fs-core's 'not-found' rejection (fs-core.worker.js opRead → rpcErr
       // code 'not-found', surfaced on the client Error as `.code`) means "this
@@ -274,6 +321,7 @@ export function walAuditSource(base: WorkspaceSource, opts: WalAuditOptions): Wo
       // file on a transient read error would destroy it.
       if ((e as { code?: string } | null)?.code !== 'not-found') throw e
       await bridge.delete(opts.fsBaseUrl, rel)
+      await refreshEditor(rel, null)
     }
   }
 
@@ -292,8 +340,9 @@ export function walAuditSource(base: WorkspaceSource, opts: WalAuditOptions): Wo
       // A rejection here (e.g. turn-closed) must propagate — the bridge write below
       // must never run for a write the ledger refused.
       await client.write(rel, content, { actor: 'agent', turnId })
+      const bytes = encoder.encode(content)
       try {
-        await bridge.write(opts.fsBaseUrl, rel, encoder.encode(content))
+        await bridge.write(opts.fsBaseUrl, rel, bytes)
       } catch (e) {
         // Truth-source write failed (oversize 413, disk full, bridge down):
         // the ledger now records content the disk never received — left
@@ -307,6 +356,7 @@ export function walAuditSource(base: WorkspaceSource, opts: WalAuditOptions): Wo
         else await client.write(rel, prior, { actor: 'agent', turnId }).catch(() => {})
         throw e
       }
+      await refreshEditor(rel, bytes)
     },
     async agentRm(rel, turnId) {
       if (!client) return UNAVAILABLE()
@@ -323,6 +373,7 @@ export function walAuditSource(base: WorkspaceSource, opts: WalAuditOptions): Wo
         if (prior !== null) await client.write(rel, prior, { actor: 'agent', turnId }).catch(() => {})
         throw e
       }
+      await refreshEditor(rel, null)
     },
     diff: (turnId) => (client ? client.diff(turnId) : UNAVAILABLE()),
     async rollback(turnId) {

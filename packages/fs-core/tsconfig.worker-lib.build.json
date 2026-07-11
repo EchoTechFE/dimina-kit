@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // composite (which forces declaration + incremental) is what lets
+    // tsconfig.build.json and tsconfig.sync.build.json each `reference` this
+    // project instead of re-compiling src/worker-lib themselves: a reference
+    // resolves a cross-tree import (e.g. sync/binary-sidecar.ts importing
+    // src/worker-lib/wal-codec.ts, via the package.json `imports` self-map)
+    // against this project's .d.ts output rather than pulling the raw .ts
+    // into its own program — the latter would violate that program's
+    // `rootDir` (TS6059) since src/worker-lib sits outside both "sync" and,
+    // once excluded below, "src"'s own build scope.
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true,
+    "noEmit": false,
+    "outDir": "dist/worker-lib",
+    "rootDir": "src/worker-lib",
+    "incremental": true,
+    // 增量状态必须与产物同生共死：落在包根会在 `rm -rf dist` 后残留，让 tsc
+    // 误信输出仍在而跳过发射（TS6305）。放进 dist 使清理天然原子。
+    "tsBuildInfoFile": "dist/worker-lib/.tsbuildinfo"
+  },
+  // Sole owner of dist/worker-lib/** — tsconfig.build.json excludes
+  // src/worker-lib and references this project instead of also emitting it,
+  // so no other build config writes here.
+  "include": ["src/worker-lib"],
+  "exclude": ["node_modules", "src/worker-lib/**/*.test.ts"]
+}

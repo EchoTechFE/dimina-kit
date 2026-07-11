@@ -238,9 +238,9 @@ describe('/__fs/readdir dependency-dir filtering', () => {
       [string, number, number?, number?]
     >
     const dist = top.find(([name]) => name === 'dist')
-    // File entries now carry `size`/`mtimeMs` (sync engine watch-batch
-    // stat-diffing — see wal-audit-watch-expand.ts); a directory entry stays
-    // the plain `[name, 2]` shape.
+    // File entries carry `size`/`mtimeMs` (sync engine watch-batch
+    // stat-diffing — see @dimina-kit/fs-core/sync/watch-expander); a directory
+    // entry stays the plain `[name, 2]` shape.
     expect(dist).toEqual(['dist', 1, 'a file, not a build dir'.length, expect.any(Number)])
   })
 

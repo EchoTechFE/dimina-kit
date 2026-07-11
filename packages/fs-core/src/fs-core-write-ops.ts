@@ -11,7 +11,7 @@ import { DERIVED_PREFIXES, normalizePath } from './worker-lib/paths.js'
 import {
   AUDIT_CAP, CHECKPOINT_KEEP, GROUP_WINDOW_MS, OP, OP_NAME, OPID_WINDOW, rpcErr, SEGMENT_ROTATE_BYTES,
   TURN_DEFAULT_TTL_MS, TURN_MAX_OPS, WRITE_OPCODES,
-  type AuditEntry, type MirrorEntry, type Respond,
+  type AuditEntry, type MirrorEntry, type OpIdResult, type Respond,
 } from './worker-lib/engine-shared.js'
 import type {
   CheckpointArgs, EditArgs, MvArgs, RestoreArgs, RmArgs, TurnBeginArgs, TurnEndArgs, WriteArgs,
@@ -46,13 +46,13 @@ export function audit(core: FsCore, entry: AuditEntry): void {
 
 /** turn 执法（agent 专属）：在 append 前的同一同步块内调用，无让出点，
  * 撤销（turnEnd/过期）与写入之间不存在竞态窗口。human 写不受限。
- * W4 纵深加固（第二道锁，docs/k3-terminal-split-plan.md §6 替代方案 A / §8.3）：门已
+ * 纵深加固（第二道锁）：门已
  * arm（core.agentToken !== null）时，即使 turnId 猜对/偷到、turn 仍活跃，也必须携带匹配
  * 的 agentToken，否则拒绝 —— 威胁模型是"B realm 内代码拿到裸 window.__FS_CLIENT 后伪造
  * {actor:'agent', turnId} 直写"，令牌只有内核持有（kernel.js 闭包，从不落 window）。
  * 校验顺序刻意放在 turn 有效性判定之后：turnId 完全不匹配/已过期的旧行为（'turn-closed'）
  * 保持不变（fs 域既有 e2e 的等价断言不回归），令牌门只在"turn 确实活跃且 turnId 匹配"这一步
- * 追加第二道拒绝，精确对应 blocker #6 的伪造场景。 */
+ * 追加第二道拒绝，精确对应上述伪造场景。 */
 export function checkTurn(core: FsCore, actor: string | undefined, turnId: string | undefined, agentToken: string | undefined): void {
   if (actor !== 'agent') return
   const t = core.turn
@@ -73,7 +73,7 @@ export function armAgentToken(core: FsCore, token: unknown): { armed: boolean; i
   throw rpcErr('agent-token-gate-armed', 'agent token gate already armed with a different token')
 }
 
-/** §4.7 restore 冲突执法：非 force 时在 appendSync 同步块内调用，无让出点。
+/** restore 冲突执法：非 force 时在 appendSync 同步块内调用，无让出点。
  * auditLog 是容量 AUDIT_CAP 的环——若其最老条目已晚于 baseGen+1，说明 (baseGen, 最老审计]
  * 区间的历史已被丢弃（compaction 或环覆盖），无法证明期间没有人类写，一律保守拒绝。 */
 export function checkRestoreConflict(core: FsCore, baseGen: number): void {
@@ -107,7 +107,7 @@ export function checkWrite(core: FsCore, path: unknown, ifMatch: unknown, _actor
 }
 
 /** 段超阈值 → 影子 compaction（物化 manifest + 新段 + superblock 翻转），
- * 而不是裸换段：WAL 长度被真正回收，重放成本有上界（P1 compaction 上线）。 */
+ * 而不是裸换段：WAL 长度被真正回收，重放成本有上界。 */
 export async function rotateIfNeeded(core: FsCore): Promise<void> {
   if (core.walOffset <= SEGMENT_ROTATE_BYTES) return
   await core.compactNow()
@@ -143,7 +143,9 @@ export function flushWindow(core: FsCore): void {
   let actor = 'human'
   for (const w of core.windowOps) {
     core.ackGen = Math.max(core.ackGen, w.gen)
-    if (w.opId) core.rememberOpId(w.opId, { gen: w.gen })
+    // 缓存与 respond 同形（含 extra）——超时重试的重放必须携带首个响应的全部
+    // 字段（cpId/turnId/expiresAt），见 engine-shared.ts 的 OpIdResult。
+    if (w.opId) core.rememberOpId(w.opId, { gen: w.gen, rev: w.gen, ...w.extra })
     w.respond({ ok: true, result: { gen: w.gen, rev: w.gen, ...w.extra } })
     if (w.path) paths.push(w.path)
     if (w.actor === 'agent') actor = 'agent'
@@ -153,7 +155,7 @@ export function flushWindow(core: FsCore): void {
   core.bc.postMessage({ type: 'fs-change', gen: core.memGen })
 }
 
-export function rememberOpId(core: FsCore, opId: string, v: { gen: number }): void {
+export function rememberOpId(core: FsCore, opId: string, v: OpIdResult): void {
   core.opIds.set(opId, v)
   if (core.opIds.size > OPID_WINDOW) core.opIds.delete(core.opIds.keys().next().value!)
 }
@@ -233,7 +235,7 @@ export async function makeCheckpoint(core: FsCore, { opId, actor, turnId }: { op
   return { cpId, gen }
 }
 
-/** P5 LRU：Map 按插入序，裁掉最老的（活跃 turn 的锚点必然在最近 N 个内）。 */
+/** checkpoint LRU：Map 按插入序，裁掉最老的（活跃 turn 的锚点必然在最近 N 个内）。 */
 export function trimCheckpoints(core: FsCore): void {
   while (core.checkpoints.size > CHECKPOINT_KEEP) {
     core.checkpoints.delete(core.checkpoints.keys().next().value!)
@@ -249,7 +251,7 @@ export async function opCheckpoint(core: FsCore, { actor = 'human', turnId, agen
   core.scheduleFlush(true)
 }
 
-// ── P4 turn 能力：铸造（checkpoint 锚 + 激活）→ 执法（checkTurn）→ 撤销 ──
+// ── turn 能力：铸造（checkpoint 锚 + 激活）→ 执法（checkTurn）→ 撤销 ──
 export async function opTurnBegin(core: FsCore, { turnId, ttlMs, opId }: TurnBeginArgs, respond: Respond): Promise<void> {
   if (!turnId || typeof turnId !== 'string') throw rpcErr('bad-args', 'turnId required')
   if (core.turn && Date.now() <= core.turn.expiresAt) {
@@ -280,7 +282,7 @@ export function opDiff(core: FsCore, { turnId }: { turnId?: string }): { turnId:
   return { turnId, changes, cpId, auditWindow: { cap: AUDIT_CAP, sinceGen: core.auditLog.length ? core.auditLog[0]!.gen : core.memGen } }
 }
 
-/** §4.7 restore 冲突策略：payload 支持 {cpId, baseGen?, force?}。baseGen 缺省时
+/** restore 冲突策略：payload 支持 {cpId, baseGen?, force?}。baseGen 缺省时
  * 从 checkpoint 自身记录的 gen 推导（checkpoint 创建时已存 {h, gen}）。非 force 时在
  * appendSync 同步块内做冲突检查（见 checkRestoreConflict）；force:true 全部跳过。
  * turn 执法（checkTurn）不受 force 影响——agent 场景仍必须在活跃 turn 内。 */
@@ -305,7 +307,8 @@ export async function opRestore(core: FsCore, { cpId, baseGen, force = false, ac
   core.mirror = next
   core.memGen = core.walGen
   core.ackGen = gen
-  if (opId) core.rememberOpId(opId, { gen })
+  // 缓存与 respond 同形（restore 无 rev、带 restored）——见 OpIdResult。
+  if (opId) core.rememberOpId(opId, { gen, restored: Object.keys(files).length })
   core.pushFullToQuery()
   respond({ ok: true, result: { gen, restored: Object.keys(files).length } })
   core.event({ evt: 'fs-change', gen, actor, count: Object.keys(files).length, restore: cpId })

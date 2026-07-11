@@ -1,5 +1,5 @@
 /**
- * fs-core worker — ProjectFS 单写者权威（P0，同 origin 形态）。
+ * fs-core worker — ProjectFS 单写者权威（同 origin 形态）。
  *
  * 持久层（OPFS，无物化文件树）：
  *   <projectId>/blobs/<h2>/<sha256>   内容寻址、不可变、写后 flush
@@ -19,10 +19,11 @@
 import * as recovery from './fs-core-recovery.js'
 import * as writeOps from './fs-core-write-ops.js'
 import type { WalRecord } from './worker-lib/wal-codec.js'
-import { rpcErr, type MirrorEntry, type Respond, type TurnState, type WindowOp, type WorkerError } from './worker-lib/engine-shared.js'
+import { rpcErr, type MirrorEntry, type OpIdResult, type Respond, type TurnState, type WindowOp, type WorkerError } from './worker-lib/engine-shared.js'
 import type {
   CheckpointArgs, DiffArgs, EditArgs, MvArgs, ReadArgs, RestoreArgs, RmArgs, TurnBeginArgs, TurnEndArgs, WriteArgs,
 } from './worker-lib/rpc-types.js'
+import type { CoreWireMessage, FsCoreMode } from './worker-lib/protocol.js'
 
 /** FileSystemFileHandle.move() postdates this TS lib version's ambient types
  * (feature-detected at the call site via `if (fh.move) …`, matching the
@@ -35,10 +36,10 @@ declare global {
 
 // ───────────────────────── core 主体 ─────────────────────────
 export class FsCore {
-  mode: 'starting' | 'writer' | 'readonly' | 'draining' | 'dead' = 'starting'
+  mode: FsCoreMode = 'starting'
   mirror = new Map<string, MirrorEntry>()
   checkpoints = new Map<string, { h: string; gen: number }>()
-  opIds = new Map<string, { gen: number }>()
+  opIds = new Map<string, OpIdResult>()
   appendedGen = 0
   walGen = 0
   memGen = 0
@@ -59,7 +60,7 @@ export class FsCore {
   currentSlot = 0
   turn: TurnState | null = null // {turnId, cpId, expiresAt, ops} —— 内存态：worker 重启即失效（安全默认）
   auditLog: Array<{ gen: number; opcode: number; actor?: string; turnId?: string; path?: string; from?: string; to?: string; cpId?: string }> = [] // 环形
-  // W4 纵深加固令牌门（docs/k3-terminal-split-plan.md §6 替代方案 A / §8.3）：只有内核持有的
+  // 纵深加固令牌门：只有内核持有的
   // 随机令牌，一次性置位（armAgentToken）。null = 未 arm（门不生效，checkTurn 不额外校验）——
   // 保证不起内核的裸 fs 场景（fs 域单测/工具，如 test:fs-smoke/test:fs-wal 直连 client）零回归。
   // 同 worker 重启即失效（内存态，不落 WAL/持久层），与 this.turn 同一安全默认。
@@ -71,6 +72,15 @@ export class FsCore {
   lastSegStart!: number
   lastSegValidEnd!: number
   manifestCrc!: number
+  // 写者锁排队中（granted/仲裁失败时复位）——requestHandover 据此判断是否需要重新排队
+  writerLockQueued = false
+  // 写者锁已持有（granted 一刻置位；排干释放/升级失败清理时复位）。granted 与
+  // mode='writer' 之间有异步窗口（recover/开句柄）——requestHandover 据此避免
+  // 在升级在途时再排一个陈旧锁请求
+  writerLockHeld = false
+  // 交接请求合并标志：一个 pending 周期内重复 requestHandover 不追加锁请求/不重复广播；
+  // becomeWriter（自己赢了）或 handover-done 广播（别人赢了）复位
+  handoverRequested = false
 
   // ── 启动/恢复/只读查询（fs-core-recovery.ts） ──
   start(projectId: string): Promise<void> { return recovery.start(this, projectId) }
@@ -86,9 +96,10 @@ export class FsCore {
   opStatus() { return recovery.opStatus(this) }
   pushDiff(diff: Record<string, MirrorEntry | null>, gen: number): void { recovery.pushDiff(this, diff, gen) }
   pushFullToQuery(): void { recovery.pushFullToQuery(this) }
-  event(e: Record<string, unknown>): void { recovery.event(this, e) }
+  event(e: CoreWireMessage): void { recovery.event(this, e) }
   welcome(): void { recovery.welcome(this) }
   onBroadcast(msg: { type?: string }): Promise<void> { return recovery.onBroadcast(this, msg) }
+  requestHandover(): { requested?: true; mode?: FsCoreMode } { return recovery.requestHandover(this) }
 
   // ── 写路径/compaction（fs-core-write-ops.ts） ──
   enqueue<T>(fn: () => T | Promise<T>): Promise<T> { return writeOps.enqueue(this, fn) }
@@ -102,7 +113,7 @@ export class FsCore {
   rotateIfNeeded(): Promise<void> { return writeOps.rotateIfNeeded(this) }
   newSegment(startGen: number): Promise<void> { return writeOps.newSegment(this, startGen) }
   flushWindow(): void { writeOps.flushWindow(this) }
-  rememberOpId(opId: string, v: { gen: number }): void { writeOps.rememberOpId(this, opId, v) }
+  rememberOpId(opId: string, v: OpIdResult): void { writeOps.rememberOpId(this, opId, v) }
   scheduleFlush(immediate?: boolean): void { writeOps.scheduleFlush(this, immediate) }
   opWrite(args: WriteArgs, respond: Respond): Promise<void> { return writeOps.opWrite(this, args, respond) }
   opEdit(args: EditArgs, respond: Respond): Promise<void> { return writeOps.opEdit(this, args, respond) }
@@ -121,10 +132,11 @@ export class FsCore {
   handleRpc(msg: { id: number; opId?: string; args?: Record<string, unknown>; op: string }): void {
     const respond: Respond = (r) => this.clientPort!.postMessage({ id: msg.id, ...r })
     const fail = (e: WorkerError) => respond({ ok: false, code: e.code || 'internal', error: e.message || String(e), ...(e.extra || {}) })
-    // opId 幂等：已知 opId 直接返回既有结果
+    // opId 幂等：已知 opId 原样重放缓存的完整结果（见 OpIdResult）。rev 只在
+    // 缓存没有时兜底为 gen（WAL 回放重建的跨会话条目只有 {gen}）。
     if (msg.opId && this.opIds.has(msg.opId)) {
       const known = this.opIds.get(msg.opId)!
-      respond({ ok: true, result: { ...known, rev: known.gen, idempotent: true } })
+      respond({ ok: true, result: { rev: known.gen, ...known, idempotent: true } })
       return
     }
     const a: Record<string, unknown> = { ...msg.args, opId: msg.opId }
@@ -148,9 +160,12 @@ export class FsCore {
       read: () => respond({ ok: true, result: this.opRead(a as unknown as ReadArgs) }),
       ls: () => respond({ ok: true, result: this.opLs() }),
       status: () => respond({ ok: true, result: this.opStatus() }),
-      // W4 令牌门铸造（§6 替代方案 A / §8.3）：纯内存状态置位，无 I/O、不让出，
+      // 令牌门铸造：纯内存状态置位，无 I/O、不让出，
       // 不入 WAL 序列化链——同步分支即可（同 read/ls/status），不打扰组提交/恢复逻辑。
       armAgentTokenGate: () => respond({ ok: true, result: this.armAgentToken(a.token) }),
+      // 协作交接发起（readonly 端）：广播 + 必要时重新排队锁，纯内存/信道操作，
+      // 不碰 WAL——同步分支（升级本身走 becomeWriter 的 enqueue 路径）。
+      requestHandover: () => respond({ ok: true, result: this.requestHandover() }),
     }
     const fn = table[msg.op]
     if (!fn) { fail(rpcErr('bad-op', String(msg.op))); return }
@@ -167,7 +182,7 @@ const core = new FsCore()
 self.onmessage = async (e: MessageEvent) => {
   const msg = e.data
   if (msg.type === 'HELLO') {
-    core.clientPort = self // 单客户端 P0：直接用 worker 主端口
+    core.clientPort = self // 单客户端形态：直接用 worker 主端口
     core.queryPort = msg.queryPort || null
     try {
       await core.start(msg.projectId)

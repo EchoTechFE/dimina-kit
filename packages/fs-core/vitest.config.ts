@@ -1,6 +1,17 @@
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      // The package.json `imports` self-reference resolves its `default`
+      // condition to dist/ — but this package's unit tests must not depend
+      // on its own build output (CI's test task only guarantees UPSTREAM
+      // builds via ^build, so dist/ may not exist). Pin the self-reference
+      // back to the source file for the test runner.
+      '#worker-lib/wal-codec.js': fileURLToPath(new URL('./src/worker-lib/wal-codec.ts', import.meta.url)),
+    },
+  },
   test: {
     include: ['src/**/*.test.ts', 'sync/**/*.test.ts'],
     globals: true,
@@ -19,11 +30,15 @@ export default defineConfig({
         'dist/**',
         '**/*.config.*',
         '**/*.d.ts',
-        // Browser-only OPFS code: SyncAccessHandle / Web Locks / dedicated
-        // workers do not exist in the Node/jsdom vitest environment, so these
-        // files are not executable here at all. Their behavioral coverage
-        // lives in the consumers' browser e2e suites (dimina-web-client's
-        // fs/kernel batteries and the devtools Electron smoke).
+        // Browser-only OPFS code: SyncAccessHandle / dedicated workers do not
+        // exist in the Node/jsdom vitest environment, so the data path of
+        // these files is not executable here. (The lock-arbitration decision
+        // logic in fs-core-recovery.ts IS unit-tested with stubbed navigator
+        // globals — fs-core-recovery-lock.test.ts / fs-core-handover.test.ts
+        // — but that covers a sliver of the file, so it stays out of the
+        // coverage denominator.) Their behavioral coverage lives in the
+        // consumers' browser e2e suites (dimina-web-client's fs/kernel
+        // batteries and the devtools Electron smoke).
         // fs-core-recovery.ts / fs-core-write-ops.ts are the same worker-only
         // code as fs-core.worker.ts — physically split out (file-length /
         // cognitive-complexity), not a new testable surface. The lib-neutral
