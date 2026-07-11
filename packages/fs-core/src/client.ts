@@ -14,6 +14,77 @@ export type {
   CoreMessage, CoreWireMessage, FsCoreErrorCode, FsCoreErrorExtras, FsCoreEventName, FsCoreMode,
 } from './worker-lib/protocol.js'
 
+// ── Write-API opts/results — the client-side mirror of the worker RPC args
+// in worker-lib/rpc-types.ts, narrowed to what a caller actually supplies
+// (the worker also accepts `opId`, but callers never set it directly —
+// `_writeOp` stamps one via `crypto.randomUUID()` for the idempotent-retry
+// contract). `actor` is a literal union here (rpc-types.ts's `WriteArgs` etc.
+// use a plain `string` because the worker only validates it at runtime) so
+// that a typo'd actor is a compile error at the call site.
+export interface FsWriteCallOpts {
+  actor?: 'human' | 'agent'
+  turnId?: string
+  agentToken?: string
+  ifMatch?: number | null
+}
+
+export interface FsCheckpointOpts {
+  actor?: 'human' | 'agent'
+  turnId?: string
+  agentToken?: string
+}
+
+export interface FsRestoreOpts extends FsCheckpointOpts {
+  baseGen?: number
+  force?: boolean
+}
+
+export interface FsTurnBeginOpts {
+  ttlMs?: number
+}
+
+export interface FsWriteResult {
+  gen: number
+  rev: number
+  idempotent?: boolean
+}
+
+export interface FsCheckpointResult extends FsWriteResult {
+  cpId: string
+}
+
+export interface FsTurnBeginResult extends FsWriteResult {
+  turnId: string
+  cpId: string
+  expiresAt: number
+}
+
+export interface FsTurnEndResult {
+  turnId: string
+  closed: boolean
+  ops: number
+}
+
+/** opRestore's respond replaces the mirror wholesale rather than appending to
+ * it, so it carries no `rev` — see fs-core-write-ops.ts's `opRestore`. */
+export interface FsRestoreResult {
+  gen: number
+  restored: number
+}
+
+/** Directories are implicit (no tracked entry), so mkdir's respond carries
+ * only `gen`, no `rev` — see fs-core.worker.ts's `mkdir` dispatch. */
+export interface FsMkdirResult {
+  gen: number
+}
+
+/** compactNow's return shape (fs-core.worker.ts) — `skipped` when the
+ * active segment was already below the rotation threshold. */
+export interface FsCompactResult {
+  gen: number
+  skipped?: boolean
+}
+
 const WRITE_TIMEOUT_MS = 8000
 
 type Mode = FsCoreMode
@@ -197,20 +268,20 @@ export class ProjectFsClient {
   }
 
   // ── 写 API（{actor:'human'|'agent', turnId, ifMatch} 透传）──
-  write(path: string, content: string, opts: Record<string, unknown> = {}): Promise<unknown> { return this._writeOp('write', { path, content, ...opts }) }
-  edit(path: string, old: string, next: string, opts: Record<string, unknown> = {}): Promise<unknown> { return this._writeOp('edit', { path, old, next, ...opts }) }
-  rm(path: string, opts: Record<string, unknown> = {}): Promise<unknown> { return this._writeOp('rm', { path, ...opts }) }
-  mv(from: string, to: string, opts: Record<string, unknown> = {}): Promise<unknown> { return this._writeOp('mv', { from, to, ...opts }) }
-  mkdir(path: string, opts: Record<string, unknown> = {}): Promise<unknown> { return this._writeOp('mkdir', { path, ...opts }) }
-  checkpoint(opts: Record<string, unknown> = {}): Promise<unknown> { return this._writeOp('checkpoint', { ...opts }) }
-  /** opts: {baseGen?, force?} 透传给 fs-core（restore 冲突策略）；baseGen 缺省时
+  write(path: string, content: string, opts: FsWriteCallOpts = {}): Promise<FsWriteResult> { return this._writeOp<FsWriteResult>('write', { path, content, ...opts }) }
+  edit(path: string, old: string, next: string, opts: FsWriteCallOpts = {}): Promise<FsWriteResult> { return this._writeOp<FsWriteResult>('edit', { path, old, next, ...opts }) }
+  rm(path: string, opts: FsWriteCallOpts = {}): Promise<FsWriteResult> { return this._writeOp<FsWriteResult>('rm', { path, ...opts }) }
+  mv(from: string, to: string, opts: FsWriteCallOpts = {}): Promise<FsWriteResult> { return this._writeOp<FsWriteResult>('mv', { from, to, ...opts }) }
+  mkdir(path: string, opts: FsWriteCallOpts = {}): Promise<FsMkdirResult> { return this._writeOp<FsMkdirResult>('mkdir', { path, ...opts }) }
+  checkpoint(opts: FsCheckpointOpts = {}): Promise<FsCheckpointResult> { return this._writeOp<FsCheckpointResult>('checkpoint', { ...opts }) }
+  /** opts.baseGen/force 透传给 fs-core（restore 冲突策略）；baseGen 缺省时
    * fs-core 从 checkpoint 自身记录的 gen 推导。 */
-  restore(cpId: string, opts: Record<string, unknown> = {}): Promise<unknown> { return this._writeOp('restore', { cpId, ...opts }) }
-  compact(): Promise<unknown> { return this._rpc('compact', {}, { timeout: 30000 }) }
+  restore(cpId: string, opts: FsRestoreOpts = {}): Promise<FsRestoreResult> { return this._writeOp<FsRestoreResult>('restore', { cpId, ...opts }) }
+  compact(): Promise<FsCompactResult> { return this._rpc<FsCompactResult>('compact', {}, { timeout: 30000 }) }
 
   // ── turn 能力：铸造（附带 checkpoint 锚）→ agent 写执法 → 撤销 ──
-  turnBegin(turnId: string, opts: Record<string, unknown> = {}): Promise<unknown> { return this._writeOp('turnBegin', { turnId, ...opts }) }
-  turnEnd(turnId: string): Promise<unknown> { return this._writeOp('turnEnd', { turnId }) }
+  turnBegin(turnId: string, opts: FsTurnBeginOpts = {}): Promise<FsTurnBeginResult> { return this._writeOp<FsTurnBeginResult>('turnBegin', { turnId, ...opts }) }
+  turnEnd(turnId: string): Promise<FsTurnEndResult> { return this._writeOp<FsTurnEndResult>('turnEnd', { turnId }) }
   /** 该 turn 的改动清单（WAL actor/turnId 审计标注免费提供）。 */
   diff(turnId?: string): Promise<DiffResult> { return this._rpc<DiffResult>('diff', { turnId }) }
 

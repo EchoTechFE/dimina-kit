@@ -14,9 +14,10 @@
   },
   "include": [
     "src/fs-core.worker.ts", "src/fs-query.worker.ts", "src/fs-core-recovery.ts", "src/fs-core-write-ops.ts",
-    // Drive fs-core-recovery.ts directly (structural fake `FsCore` instances) —
-    // see tsconfig.json's exclude for why these two live in this program instead.
-    "src/fs-core-recovery-lock.test.ts", "src/fs-core-handover.test.ts"
+    // Drive fs-core-recovery.ts / fs-core-write-ops.ts directly (structural
+    // fake `FsCore` instances) — see tsconfig.json's exclude for why these
+    // test files live in this program instead.
+    "src/fs-core-recovery-lock.test.ts", "src/fs-core-handover.test.ts", "src/fs-core-opid-replay.test.ts"
   ],
   "exclude": ["node_modules"]
 }

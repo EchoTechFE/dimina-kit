@@ -8,6 +8,21 @@
     "outDir": "dist/sync",
     "rootDir": "sync"
   },
-  "include": ["sync"],
-  "exclude": ["node_modules", "sync/**/*.test.ts"]
+  "include": [
+    "sync"
+  ],
+  "exclude": [
+    "node_modules",
+    "sync/**/*.test.ts"
+  ],
+  // binary-sidecar.ts imports src/worker-lib/wal-codec.ts (its `sha256hex`)
+  // via the package.json `imports` self-map (`#worker-lib/...`) — this
+  // program's rootDir is "sync", so without this reference the cross-tree
+  // file would fail rootDir validation (TS6059) when emitted; the reference
+  // redirects it to tsconfig.worker-lib.build.json's .d.ts output instead.
+  "references": [
+    {
+      "path": "./tsconfig.worker-lib.build.json"
+    }
+  ]
 }

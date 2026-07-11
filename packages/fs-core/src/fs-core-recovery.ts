@@ -268,6 +268,8 @@ export async function recover(core: FsCore): Promise<void> {
   core.appendedGen = core.walGen = core.memGen = core.ackGen = gen
   core.trimCheckpoints() // 回放会重新加回历史 checkpoint 记录 → 恢复后同样裁剪
   for (const r of replayed.slice(-OPID_WINDOW)) {
+    // 只有 {gen}：WAL 不记录内存态 extras（cpId/turnId/expiresAt/restored），
+    // 这些条目服务跨会话去重，同会话超时重试永远命中 live 缓存的完整形状。
     if (r.meta.opId) core.rememberOpId(r.meta.opId, { gen: r.gen })
   }
   if (!segs.length) {

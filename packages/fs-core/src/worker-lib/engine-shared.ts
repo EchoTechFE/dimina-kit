@@ -55,6 +55,16 @@ export interface WindowOp {
   extra?: Record<string, unknown>
 }
 
+/** An opId's cached RPC result, replayed verbatim (+`idempotent: true`) when
+ * the same opId is re-sent after a response timeout. The live write path
+ * caches the FULL respond payload (`{gen, rev, ...extra}` / restore's
+ * `{gen, restored}`) so a replay carries the same fields the first response
+ * did — `cpId`/`turnId`/`expiresAt`/`restored` included. Entries rebuilt by
+ * WAL replay after a worker restart only carry `{gen}` (the WAL does not
+ * record memory-only extras); those entries serve cross-session dedup, which
+ * a same-session retry never hits. */
+export type OpIdResult = { gen: number; rev?: number } & Record<string, unknown>
+
 export type Respond = (r: Record<string, unknown>) => void
 
 export interface WorkerError extends Error {

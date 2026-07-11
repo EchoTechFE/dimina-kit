@@ -11,7 +11,7 @@ import { DERIVED_PREFIXES, normalizePath } from './worker-lib/paths.js'
 import {
   AUDIT_CAP, CHECKPOINT_KEEP, GROUP_WINDOW_MS, OP, OP_NAME, OPID_WINDOW, rpcErr, SEGMENT_ROTATE_BYTES,
   TURN_DEFAULT_TTL_MS, TURN_MAX_OPS, WRITE_OPCODES,
-  type AuditEntry, type MirrorEntry, type Respond,
+  type AuditEntry, type MirrorEntry, type OpIdResult, type Respond,
 } from './worker-lib/engine-shared.js'
 import type {
   CheckpointArgs, EditArgs, MvArgs, RestoreArgs, RmArgs, TurnBeginArgs, TurnEndArgs, WriteArgs,
@@ -143,7 +143,9 @@ export function flushWindow(core: FsCore): void {
   let actor = 'human'
   for (const w of core.windowOps) {
     core.ackGen = Math.max(core.ackGen, w.gen)
-    if (w.opId) core.rememberOpId(w.opId, { gen: w.gen })
+    // 缓存与 respond 同形（含 extra）——超时重试的重放必须携带首个响应的全部
+    // 字段（cpId/turnId/expiresAt），见 engine-shared.ts 的 OpIdResult。
+    if (w.opId) core.rememberOpId(w.opId, { gen: w.gen, rev: w.gen, ...w.extra })
     w.respond({ ok: true, result: { gen: w.gen, rev: w.gen, ...w.extra } })
     if (w.path) paths.push(w.path)
     if (w.actor === 'agent') actor = 'agent'
@@ -153,7 +155,7 @@ export function flushWindow(core: FsCore): void {
   core.bc.postMessage({ type: 'fs-change', gen: core.memGen })
 }
 
-export function rememberOpId(core: FsCore, opId: string, v: { gen: number }): void {
+export function rememberOpId(core: FsCore, opId: string, v: OpIdResult): void {
   core.opIds.set(opId, v)
   if (core.opIds.size > OPID_WINDOW) core.opIds.delete(core.opIds.keys().next().value!)
 }
@@ -305,7 +307,8 @@ export async function opRestore(core: FsCore, { cpId, baseGen, force = false, ac
   core.mirror = next
   core.memGen = core.walGen
   core.ackGen = gen
-  if (opId) core.rememberOpId(opId, { gen })
+  // 缓存与 respond 同形（restore 无 rev、带 restored）——见 OpIdResult。
+  if (opId) core.rememberOpId(opId, { gen, restored: Object.keys(files).length })
   core.pushFullToQuery()
   respond({ ok: true, result: { gen, restored: Object.keys(files).length } })
   core.event({ evt: 'fs-change', gen, actor, count: Object.keys(files).length, restore: cpId })

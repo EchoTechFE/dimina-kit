@@ -30,6 +30,8 @@
  * re-read the sidecar wholesale, same as it re-reads the ledger.
  */
 
+import { sha256hex } from '#worker-lib/wal-codec.js'
+
 const BINARY_SNIFF_BYTES = 8192
 
 /** True when the first {@link BINARY_SNIFF_BYTES} of `bytes` contain a NUL
@@ -40,18 +42,6 @@ export function looksBinary(bytes: Uint8Array): boolean {
     if (bytes[i] === 0) return true
   }
   return false
-}
-
-export async function sha256hex(bytes: Uint8Array): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', bytes as BufferSource)
-  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
-}
-
-/** Byte-for-byte equality. */
-export function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
-  if (a.length !== b.length) return false
-  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
-  return true
 }
 
 export interface BinarySidecarEntry {

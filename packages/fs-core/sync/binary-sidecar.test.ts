@@ -5,7 +5,7 @@
  * ledger" handling builds on.
  */
 import { describe, expect, it, vi } from 'vitest'
-import { bytesEqual, createBinarySidecar, looksBinary } from './binary-sidecar.js'
+import { createBinarySidecar, looksBinary } from './binary-sidecar.js'
 
 const png = (...bytes: number[]) => new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0, ...bytes])
 
@@ -19,14 +19,6 @@ describe('looksBinary', () => {
     const big = new Uint8Array(10000).fill(0x61)
     big[9500] = 0 // NUL beyond the 8192-byte window
     expect(looksBinary(big)).toBe(false)
-  })
-})
-
-describe('bytesEqual', () => {
-  it('compares byte-for-byte', () => {
-    expect(bytesEqual(png(1), png(1))).toBe(true)
-    expect(bytesEqual(png(1), png(2))).toBe(false)
-    expect(bytesEqual(png(), png(1))).toBe(false)
   })
 })
 

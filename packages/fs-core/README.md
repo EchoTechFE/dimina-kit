@@ -27,8 +27,8 @@ const fs = await ProjectFsClient.connect({
   coreUrl: '/ide/fs/fs-core.worker.js',
   queryUrl: '/ide/fs/fs-query.worker.js',
 })
-await fs.write('app.json', '{}')
-const { content } = await fs.read('app.json')
+const { gen, rev } = await fs.write('app.json', '{}') // 写 API 的 opts 与返回值全部类型化
+const { content } = await fs.read('app.json')         //（FsWriteCallOpts / FsWriteResult 等随 /client 导出）
 
 // 错误处理按符号匹配（错误码契约见 `/protocol`）：
 import { isFsCoreErrorCode } from '@dimina-kit/fs-core/protocol'

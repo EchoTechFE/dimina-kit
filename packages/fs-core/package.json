@@ -25,6 +25,12 @@
     "url": "https://github.com/EchoTechFE/dimina-kit/issues"
   },
   "homepage": "https://github.com/EchoTechFE/dimina-kit/tree/main/packages/fs-core#readme",
+  "imports": {
+    "#worker-lib/wal-codec.js": {
+      "types": "./src/worker-lib/wal-codec.ts",
+      "default": "./dist/worker-lib/wal-codec.js"
+    }
+  },
   "exports": {
     "./client": {
       "types": "./src/client.ts",
@@ -70,7 +76,7 @@
     "sync"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && tsc -p tsconfig.sync.build.json && node build-workers.js",
+    "build": "tsc -p tsconfig.worker-lib.build.json && tsc -p tsconfig.build.json && tsc -p tsconfig.sync.build.json && node build-workers.js",
     "check-types": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.worker.json",
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run --reporter=default --reporter=json --outputFile.json=test-report.json --coverage.enabled --coverage.reporter=json-summary --coverage.reportsDirectory=coverage",

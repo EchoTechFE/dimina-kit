@@ -1,9 +1,12 @@
 /**
- * WAL 编解码（纯函数，lib 中立）—— crc32、superblock 槽、WAL 记录成帧/解析。
- * 从 fs-core.worker.ts 抽出：不含任何 OPFS/Worker 专属 API，可被主 tsconfig
- * （DOM lib）与 tsconfig.worker.json（WebWorker lib）两个 program 同时编译，
- * 因此 zip.ts（主 program 侧）与 fs-core.worker.ts（worker program 侧）
- * 都能 import 同一份 crc32/CRC_TABLE 实现（消除重复代码）。
+ * WAL 编解码（纯函数，lib 中立）—— crc32、superblock 槽、WAL 记录成帧/解析、
+ * sha256hex。从 fs-core.worker.ts 抽出：不含任何 OPFS/Worker 专属 API，可被
+ * 主 tsconfig（DOM lib）与 tsconfig.worker.json（WebWorker lib）两个 program
+ * 同时编译，因此 zip.ts（主 program 侧）与 fs-core.worker.ts（worker program
+ * 侧）都能 import 同一份 crc32/CRC_TABLE 实现（消除重复代码）。sync/ 侧
+ * （独立 rootDir 的第三个 tsc program）经 package.json 的 `imports` 自引用
+ * （`#worker-lib/wal-codec.js`，见 tsconfig.worker-lib.build.json）复用同一份
+ * sha256hex，同样消除重复代码。
  *
  * WAL 记录成帧：
  *   [u32 len][u64 gen][u32 epoch][u8 opcode][u16 metaLen][meta JSON][u32 crc32][u8 0xC1]

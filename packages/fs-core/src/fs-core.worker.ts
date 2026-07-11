@@ -19,7 +19,7 @@
 import * as recovery from './fs-core-recovery.js'
 import * as writeOps from './fs-core-write-ops.js'
 import type { WalRecord } from './worker-lib/wal-codec.js'
-import { rpcErr, type MirrorEntry, type Respond, type TurnState, type WindowOp, type WorkerError } from './worker-lib/engine-shared.js'
+import { rpcErr, type MirrorEntry, type OpIdResult, type Respond, type TurnState, type WindowOp, type WorkerError } from './worker-lib/engine-shared.js'
 import type {
   CheckpointArgs, DiffArgs, EditArgs, MvArgs, ReadArgs, RestoreArgs, RmArgs, TurnBeginArgs, TurnEndArgs, WriteArgs,
 } from './worker-lib/rpc-types.js'
@@ -39,7 +39,7 @@ export class FsCore {
   mode: FsCoreMode = 'starting'
   mirror = new Map<string, MirrorEntry>()
   checkpoints = new Map<string, { h: string; gen: number }>()
-  opIds = new Map<string, { gen: number }>()
+  opIds = new Map<string, OpIdResult>()
   appendedGen = 0
   walGen = 0
   memGen = 0
@@ -113,7 +113,7 @@ export class FsCore {
   rotateIfNeeded(): Promise<void> { return writeOps.rotateIfNeeded(this) }
   newSegment(startGen: number): Promise<void> { return writeOps.newSegment(this, startGen) }
   flushWindow(): void { writeOps.flushWindow(this) }
-  rememberOpId(opId: string, v: { gen: number }): void { writeOps.rememberOpId(this, opId, v) }
+  rememberOpId(opId: string, v: OpIdResult): void { writeOps.rememberOpId(this, opId, v) }
   scheduleFlush(immediate?: boolean): void { writeOps.scheduleFlush(this, immediate) }
   opWrite(args: WriteArgs, respond: Respond): Promise<void> { return writeOps.opWrite(this, args, respond) }
   opEdit(args: EditArgs, respond: Respond): Promise<void> { return writeOps.opEdit(this, args, respond) }
@@ -132,10 +132,11 @@ export class FsCore {
   handleRpc(msg: { id: number; opId?: string; args?: Record<string, unknown>; op: string }): void {
     const respond: Respond = (r) => this.clientPort!.postMessage({ id: msg.id, ...r })
     const fail = (e: WorkerError) => respond({ ok: false, code: e.code || 'internal', error: e.message || String(e), ...(e.extra || {}) })
-    // opId 幂等：已知 opId 直接返回既有结果
+    // opId 幂等：已知 opId 原样重放缓存的完整结果（见 OpIdResult）。rev 只在
+    // 缓存没有时兜底为 gen（WAL 回放重建的跨会话条目只有 {gen}）。
     if (msg.opId && this.opIds.has(msg.opId)) {
       const known = this.opIds.get(msg.opId)!
-      respond({ ok: true, result: { ...known, rev: known.gen, idempotent: true } })
+      respond({ ok: true, result: { rev: known.gen, ...known, idempotent: true } })
       return
     }
     const a: Record<string, unknown> = { ...msg.args, opId: msg.opId }
