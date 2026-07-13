@@ -33,6 +33,8 @@ export {
 	setActive,
 	movePanel,
 	splitPanel,
+	splitGroup,
+	wrapRoot,
 	closePanel,
 	extractPanel,
 	insertPanel,
