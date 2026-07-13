@@ -142,31 +142,83 @@ export function layoutsEquivalent(
 }
 
 /**
+ * A real measurement of the split's container, along its layout axis (width
+ * for a `row` split, height for `column`) — the ONLY reliable source for a
+ * px-constrained child's target percentage right after a fresh Group mount,
+ * when rrp has not yet established a trustworthy live layout for it (see
+ * `buildSetLayoutMap`).
+ */
+export interface MeasuredContainer {
+	/** Real measured pixel size of the split's container. */
+	containerPx: number
+	/**
+	 * Whether a `minPx` child's CURRENT live percentage should be trusted over
+	 * recomputing it from `constraint.minPx`. `minPx` is a FLOOR, not a lock —
+	 * the user may have legitimately dragged it wider, and an ONGOING sync
+	 * (this flag `true`) must not snap that back down to the floor. Only the
+	 * FIRST sync after a fresh Group remount (this flag `false`) has no such
+	 * history to preserve, so the floor is authoritative there. `fixedPx`
+	 * children are unaffected by this flag — a locked child is always computed
+	 * from the measurement, in both cases.
+	 */
+	trustLiveForMinPx: boolean
+}
+
+/**
  * Build the panel-ID→PERCENTAGE map for an imperative `setLayout`, given the
  * model's full-length raw `sizes` (per child) and `constraints`:
  *
- *  - FIXED (px-pinned) children keep their CURRENT measured percentage (read
- *    from the live `getLayout()`); they are NOT derived from weights, so a
- *    flexible-weights change never disturbs their pixel lock.
+ *  - FIXED (px-pinned) children normally keep their CURRENT measured
+ *    percentage (read from the live `getLayout()`) — they are NOT derived
+ *    from weights, so a flexible-weights change never disturbs their pixel
+ *    lock. When `measured` is supplied, a `fixedPx` child is instead always
+ *    computed from the real container size (it never legitimately differs
+ *    from its exact px value), and a `minPx` child is too, but ONLY when
+ *    `measured.trustLiveForMinPx` is `false` — see `MeasuredContainer`. This
+ *    matters because right after `<Group>` cold-mounts a `minPx`/`fixedPx`
+ *    child whose content is itself a NESTED split, rrp's own mount-time
+ *    px→percentage conversion for that child can land on a degenerate ratio
+ *    (observed: a pinned child grabbing ~99% while its lone flexible sibling
+ *    collapses to rrp's floor) — the live layout it reports is simply wrong,
+ *    and blindly trusting it would perpetuate the collapse forever (there is
+ *    no subsequent event that would ever correct it).
  *  - The REMAINING percentage (100 − Σ fixed%) is distributed across the
  *    FLEXIBLE children in proportion to their weights.
  *
  * Returns `null` when the map can't be built faithfully (e.g. `live` is empty —
- * jsdom's stub — or a fixed child's live % is missing), so the caller skips the
- * `setLayout` rather than pushing a corrupt total. The result always sums to
- * ~100 over all children.
+ * jsdom's stub — or a fixed child's live % is missing and no `measured`
+ * fallback applies), so the caller skips the `setLayout` rather than pushing a
+ * corrupt total. The result always sums to ~100 over all children.
  */
 export function buildSetLayoutMap(
 	childIds: readonly string[],
 	sizes: readonly number[],
 	constraints: readonly (SizeConstraint | null)[] | undefined,
 	live: Record<string, number>,
+	measured?: MeasuredContainer,
 ): Record<string, number> | null {
 	const isFixedAt = (i: number): boolean => (constraints?.[i] ?? null) !== null
 
-	const fixedTotal = sumFixedLivePercent(childIds, isFixedAt, live)
-	// Without a measured live % for a fixed child we cannot preserve its px
-	// lock faithfully — bail so we don't corrupt the fixed child.
+	// The target percentage for a FIXED (px-constrained) child at index `i`.
+	// Prefers a direct px→percentage computation from a real measurement over
+	// trusting rrp's live-reported value — see the doc comment above for why.
+	const fixedPercentAt = (i: number): number | null => {
+		const constraint = constraints?.[i] ?? null
+		if (measured && measured.containerPx > 0 && constraint) {
+			if (constraint.fixedPx != null) {
+				return (constraint.fixedPx / measured.containerPx) * 100
+			}
+			if (constraint.minPx != null && !measured.trustLiveForMinPx) {
+				return (constraint.minPx / measured.containerPx) * 100
+			}
+		}
+		const livePct = live[childIds[i]!]
+		return typeof livePct === 'number' ? livePct : null
+	}
+
+	const fixedTotal = sumFixedPercent(childIds, isFixedAt, fixedPercentAt)
+	// Without a usable percentage for a fixed child we cannot build a faithful
+	// map — bail so we don't corrupt the fixed child.
 	if (fixedTotal === null) return null
 
 	const remaining = Math.max(0, 100 - fixedTotal)
@@ -185,28 +237,28 @@ export function buildSetLayoutMap(
 	for (let i = 0; i < childIds.length; i++) {
 		const id = childIds[i]!
 		out[id] = isFixedAt(i)
-			? live[id]!
+			? fixedPercentAt(i)!
 			: flexibleShare(sizes[i] ?? 0, remaining, flexWeightTotal, flexibleCount)
 	}
 	return out
 }
 
 /**
- * Sum the fixed children's CURRENT live percentages (preserving their px
- * lock). Null when a fixed child has no measured live % — the caller cannot
- * build a faithful map then.
+ * Sum the fixed children's target percentages (via `fixedPercentAt`). Null
+ * when any fixed child has no usable percentage — the caller cannot build a
+ * faithful map then.
  */
-function sumFixedLivePercent(
+function sumFixedPercent(
 	childIds: readonly string[],
 	isFixedAt: (i: number) => boolean,
-	live: Record<string, number>,
+	fixedPercentAt: (i: number) => number | null,
 ): number | null {
 	let fixedTotal = 0
 	for (let i = 0; i < childIds.length; i++) {
 		if (!isFixedAt(i)) continue
-		const livePct = live[childIds[i]!]
-		if (typeof livePct !== 'number') return null
-		fixedTotal += livePct
+		const pct = fixedPercentAt(i)
+		if (pct === null) return null
+		fixedTotal += pct
 	}
 	return fixedTotal
 }

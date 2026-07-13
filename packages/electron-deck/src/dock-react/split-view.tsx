@@ -61,6 +61,10 @@ export function SplitView(props: SplitViewProps): ReactNode {
 	// The rrp Group's imperative handle (getLayout/setLayout) — the seam through
 	// which the model becomes the source of truth for the visible split ratio.
 	const groupRef = useRef<GroupImperativeHandle | null>(null)
+	// The split's own wrapper element — read for its REAL measured pixel size
+	// (Bug #3 defense, see `runSync`). Set by `setSplitRef` alongside the other
+	// imperative seams on the same element.
+	const containerElRef = useRef<HTMLDivElement | null>(null)
 	// Keep the latest node reachable from the imperative ref + drag callbacks
 	// without re-binding the ref on every render. The sync effect reads the
 	// freshest `node` directly (it re-runs when `node.sizes` change), so it does
@@ -190,6 +194,7 @@ export function SplitView(props: SplitViewProps): ReactNode {
 	// land on the same engine path; the `__deckGroupApi` handle lets hosts/tests
 	// read the LIVE split layout (M1 model→view sync seam).
 	const setSplitRef = (el: DeckSplitElement | null): void => {
+		containerElRef.current = el
 		if (el) {
 			el.__deckApplyLayout = (weights: number[]) => {
 				// Mirror handleLayoutChanged: a fixed child's stored weight is never
@@ -221,31 +226,64 @@ export function SplitView(props: SplitViewProps): ReactNode {
 	// Push the model's FLEXIBLE weights into the live Group via `setLayout` so the
 	// model is the source of truth for the visible split post-mount (without it rrp
 	// freezes at the mount-time `defaultSize`). Reads the FRESHEST `node` from the
-	// ref so an external `setSizes` syncs against the latest model. Returns true if
-	// a `setLayout` was actually pushed.
-	const runSync = useCallback((): boolean => {
+	// ref so an external `setSizes` syncs against the latest model.
+	//
+	// `isFreshRemount` is `true` exactly once per Group instance — the first sync
+	// right after it mounted (see the `childCountKey` effect below). Bug #3 defense:
+	// when a `minPx`/`fixedPx` child's content is itself a NESTED split, rrp's
+	// mount-time px→percentage conversion for that child can land on a degenerate
+	// ratio (observed: the pinned child grabbing ~99% while its lone flexible
+	// sibling collapses to rrp's floor) — and because nothing ever re-measures
+	// afterward, that wrong `live` value would otherwise be trusted and
+	// perpetuated forever. On this first sync we instead derive the fixed child's
+	// target percentage from a REAL measurement of the split's own container
+	// (`containerElRef`), bypassing rrp's untrustworthy live value. Every
+	// subsequent sync (`isFreshRemount: false`) keeps trusting `live` for a
+	// `minPx` child, since the user may have legitimately dragged it wider than
+	// its floor by then — see `MeasuredContainer`.
+	//
+	// Returns `stuck: true` when nothing needed pushing OR the push is confirmed
+	// (by re-reading `getLayout()`) to have taken hold — `false` when rrp is not
+	// ready yet (`groupRef` unpopulated) or SILENTLY CLAMPED our push back to a
+	// stale constraint (empirically: right after a fresh mount, rrp's own
+	// `derivedPanelConstraints` for the nested-split pinned child can still
+	// reflect the same bad initial measurement, and `validatePanelGroupLayout`
+	// rejects a legitimate corrective value against it — the constraint only
+	// self-corrects once rrp's ResizeObserver re-measures on a LATER frame). The
+	// `childCountKey` effect below retries (bounded) on `stuck: false`.
+	const runSync = useCallback((isFreshRemount: boolean): { pushed: boolean; stuck: boolean } => {
 		const api = groupRef.current
-		if (!api) return false
+		if (!api) return { pushed: false, stuck: false }
 		const cur = nodeRef.current
 		const curChildIds = cur.children.map((c) => c.id)
 
 		const live = api.getLayout()
-		// jsdom's stub returns `{}` (no measured geometry) — buildSetLayoutMap then
-		// returns null for any fixed child, and for the all-flexible case the
-		// equivalence check below sees missing live ids and proceeds; but `setLayout`
-		// is a no-op under jsdom anyway. In a real renderer `live` is populated.
-		const targetMap = buildSetLayoutMap(curChildIds, cur.sizes, cur.constraints, live)
-		if (!targetMap) return false
+		const containerEl = containerElRef.current
+		const containerRect = containerEl?.getBoundingClientRect()
+		const containerPx = containerRect
+			? (cur.orientation === 'row' ? containerRect.width : containerRect.height)
+			: 0
+		const measured = containerPx > 0 ? { containerPx, trustLiveForMinPx: !isFreshRemount } : undefined
+		// jsdom's stub returns `{}` (no measured geometry) and a 0 `getBoundingClientRect`
+		// — `measured` is then `undefined` and `buildSetLayoutMap` falls back to its
+		// live-trusting behavior, which in turn returns null for any fixed child; but
+		// `setLayout` is a no-op under jsdom anyway. In a real renderer both are populated.
+		const targetMap = buildSetLayoutMap(curChildIds, cur.sizes, cur.constraints, live, measured)
+		if (!targetMap) return { pushed: false, stuck: false }
 
 		// SET-side redundant-push skip: don't re-push a layout the live Group already
 		// satisfies. This is the loop break on the SET side — pushing an identical
 		// layout would re-emit `onLayoutChanged`, but its flexible ratios match the
 		// model so the normalized compare in `handleLayoutChanged` skips the write-back
 		// anyway; this skip just avoids the redundant work.
-		if (layoutsEquivalent(live, targetMap, curChildIds)) return false
+		if (layoutsEquivalent(live, targetMap, curChildIds)) return { pushed: false, stuck: true }
 
 		api.setLayout(targetMap)
-		return true
+		// Confirm the push actually stuck — rrp's `setLayout` validates the
+		// incoming layout against its OWN panel constraints and silently clamps
+		// anything that violates them (see the doc comment above).
+		const stuck = layoutsEquivalent(api.getLayout(), targetMap, curChildIds)
+		return { pushed: true, stuck }
 	}, [])
 
 	// Re-run the sync whenever the model's raw weights change (every external
@@ -263,8 +301,46 @@ export function SplitView(props: SplitViewProps): ReactNode {
 	// snapping back to the per-Panel defaults. A pure weight resize (same count)
 	// already re-syncs via `sizesKey`; this only adds the count edge.
 	const childCountKey = node.children.length
+	// Tracks the child count as of the LAST sync, so this render can tell whether
+	// the Group instance behind `groupRef` is the one that was already synced
+	// (an ordinary weight change) or a brand new one (`key={node.children.length}`
+	// just remounted it, or this is the very first mount — seeded `null` so the
+	// initial sync is ALSO treated as fresh, covering a session that restores
+	// straight into a shape prone to Bug #3, e.g. `belowSimulator`).
+	const prevChildCountKeyRef = useRef<number | null>(null)
+	// Bug #3 defense (continued from `runSync`'s doc comment): an ordinary
+	// (non-remount) sync sticks synchronously today — pinned so this fix does
+	// not add latency to that already-working path. A FRESH remount's push can
+	// get silently clamped by a stale rrp constraint that only self-corrects a
+	// couple of animation frames later; retry (bounded, empirically converges
+	// within 2 frames) until `runSync` confirms the push stuck, rather than
+	// hard-coding an exact frame count that could be too short on a slower host.
+	const MAX_FRESH_REMOUNT_SYNC_ATTEMPTS = 8
 	useEffect(() => {
-		runSync()
+		const isFreshRemount = prevChildCountKeyRef.current !== childCountKey
+		prevChildCountKeyRef.current = childCountKey
+
+		if (!isFreshRemount) {
+			runSync(false)
+			return
+		}
+
+		let cancelled = false
+		let rafId = 0
+		let attempts = 0
+		const tick = (): void => {
+			if (cancelled) return
+			attempts += 1
+			const { stuck } = runSync(true)
+			if (!stuck && attempts < MAX_FRESH_REMOUNT_SYNC_ATTEMPTS) {
+				rafId = requestAnimationFrame(tick)
+			}
+		}
+		rafId = requestAnimationFrame(tick)
+		return () => {
+			cancelled = true
+			cancelAnimationFrame(rafId)
+		}
 		// Keyed on `sizesKey` + `childCountKey`; `runSync` reads `node`/`childIds`/
 		// `constraints` fresh from the ref, so they cannot go stale relative to either.
 	}, [sizesKey, childCountKey, runSync])
