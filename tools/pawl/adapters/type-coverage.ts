@@ -1,4 +1,4 @@
-// Type-coverage ratchet — wraps the `type-coverage` CLI (mature, local, OSS),
+// Type-coverage gate — wraps the `type-coverage` CLI (mature, local, OSS),
 // which reports the share of identifiers with a non-`any` type. There is no root
 // tsconfig, so the adapter runs type-coverage once per package that ships a
 // tsconfig.json and aggregates the raw counts into one overall percentage.

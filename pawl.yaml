@@ -1,54 +1,53 @@
-# pawl — anti-regression quality ratchet (https://github.com/tiangong-dev/pawl)
+# pawl — anti-regression quality gate (https://github.com/tiangong-dev/pawl)
 # `pawl check` fails when any dimension regresses against pawl.snapshot.json;
 # `pawl record` locks in improvements. Every dimension here is an exec
-# adapter delegating to tools/ratchet/pawl-adapter.ts <id>, which imports the
-# matching tools/ratchet/adapters/<id>.ts unchanged — the TS ratchet
-# (tools/ratchet/ratchet.ts) and pawl measure every dimension with the exact
-# same code, so they can never disagree on a value. The dimina/ submodule is
-# out of scope for all of them (the adapters themselves only ever walk
-# packages/).
+# adapter delegating to tools/pawl/pawl-adapter.ts <id>, which imports the
+# matching tools/pawl/adapters/<id>.ts unchanged — each adapter's measure() is
+# the single source of that dimension's number, so the value pawl gates on is
+# exactly the value the adapter tests exercise. The dimina/ submodule is out of
+# scope for all of them (the adapters themselves only ever walk packages/).
 
 dimensions:
   - id: "file-length"
     title: "Files over 500 lines"
     direction: "lower-is-better"
     gate: "total"
-    command: "node tools/ratchet/pawl-adapter.ts file-length"
+    command: "node tools/pawl/pawl-adapter.ts file-length"
 
   - id: "type-escapes"
     title: "Explicit any + @ts-* suppressions (typescript-eslint)"
     direction: "lower-is-better"
     gate: "per-file-count"
     timeout: "10m"
-    command: "node tools/ratchet/pawl-adapter.ts type-escapes"
+    command: "node tools/pawl/pawl-adapter.ts type-escapes"
 
   - id: "cognitive-complexity"
     title: "Functions over cognitive-complexity 15 (sonarjs)"
     direction: "lower-is-better"
     gate: "per-file-count"
     timeout: "10m"
-    command: "node tools/ratchet/pawl-adapter.ts cognitive-complexity"
+    command: "node tools/pawl/pawl-adapter.ts cognitive-complexity"
 
   - id: "code-duplication"
     title: "Duplicated code lines (jscpd, >=50 tokens)"
     direction: "lower-is-better"
     gate: "total"
     timeout: "10m"
-    command: "node tools/ratchet/pawl-adapter.ts code-duplication"
+    command: "node tools/pawl/pawl-adapter.ts code-duplication"
 
   - id: "circular-deps"
     title: "Circular imports within a package (packages/*/src)"
     direction: "lower-is-better"
     gate: "total"
     timeout: "10m"
-    command: "node tools/ratchet/pawl-adapter.ts circular-deps"
+    command: "node tools/pawl/pawl-adapter.ts circular-deps"
 
   - id: "type-coverage"
     title: "Overall type coverage (non-any identifiers)"
     direction: "higher-is-better"
     gate: "per-key-value"
     timeout: "10m"
-    command: "node tools/ratchet/pawl-adapter.ts type-coverage"
+    command: "node tools/pawl/pawl-adapter.ts type-coverage"
 
   - id: "test-coverage"
     title: "Lines covered by tests (vitest v8, all src in denominator)"
@@ -56,11 +55,11 @@ dimensions:
     gate: "per-key-value"
     tolerance: 1
     timeout: "10m"
-    command: "node tools/ratchet/pawl-adapter.ts test-coverage"
+    command: "node tools/pawl/pawl-adapter.ts test-coverage"
 
   - id: "test-report"
     title: "Passed tests (vitest JSON reports)"
     direction: "higher-is-better"
     gate: "per-key-value"
     timeout: "10m"
-    command: "node tools/ratchet/pawl-adapter.ts test-report"
+    command: "node tools/pawl/pawl-adapter.ts test-report"

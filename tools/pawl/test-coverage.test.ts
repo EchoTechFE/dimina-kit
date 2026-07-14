@@ -1,5 +1,5 @@
-// Guards the test-coverage ratchet adapter, whose job is to make a v8/istanbul
-// lines-coverage regression on any suite show up as a red `ratchet:check`
+// Guards the test-coverage gate adapter, whose job is to make a v8/istanbul
+// lines-coverage regression on any suite show up as a red `pawl:check`
 // instead of silently disappearing. Three contracts are covered:
 //   - expectedCoverageOf: parses a package's `scripts.test` text into the
 //     coverage-summary.json director(y/ies) it declares, deriving the same
@@ -14,7 +14,7 @@
 //     `value`, breaking down per-suite pct into `breakdown`, and rejecting
 //     (not swallowing) when a declared coverage-summary.json is missing from
 //     disk.
-// Run with: node --test tools/ratchet/test-coverage.test.ts
+// Run with: node --test tools/pawl/test-coverage.test.ts
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
@@ -29,7 +29,7 @@ function summary(covered: number, total: number, pct: number): unknown {
 async function makeRoot(
   pkgs: Record<string, { packageJson: unknown; coverage?: Record<string, unknown> }>,
 ): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), 'ratchet-test-coverage-'));
+  const root = await mkdtemp(join(tmpdir(), 'gate-test-coverage-'));
   const packagesDir = join(root, 'packages');
   await mkdir(packagesDir, { recursive: true });
   for (const [name, def] of Object.entries(pkgs)) {

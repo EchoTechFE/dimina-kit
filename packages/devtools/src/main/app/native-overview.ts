@@ -4,7 +4,7 @@ import type { StorageApi } from '../services/simulator-storage/index.js'
 /**
  * Narrow view of the fields the native overview provider reads. Depending on
  * this instead of the full `WorkbenchContext` grab-bag keeps this module out
- * of the workbench-context import ratchet.
+ * of the workbench-context import gate.
  */
 export interface NativeOverviewContext {
   storageApi?: StorageApi

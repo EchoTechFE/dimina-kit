@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// Thin bridge from pawl's exec-adapter contract to the ratchet adapters under
+// Thin bridge from pawl's exec-adapter contract to the gate adapters under
 // ./adapters — each adapter's measure() is the single source of the number, so
 // the value pawl gates on is exactly the value the adapter tests exercise.
 //
-// Usage: node tools/ratchet/pawl-adapter.ts <adapter-id>
+// Usage: node tools/pawl/pawl-adapter.ts <adapter-id>
 //
 // Contract (see /Volumes/jdisk/code/pawl/internal/pawl/measure.go
 // parseAdapterOutput): exit 0 with exactly one JSON object on stdout —
@@ -23,7 +23,7 @@ const ADAPTERS_DIR = join(HERE, 'adapters');
 async function main(): Promise<void> {
   const id = process.argv[2];
   if (!id) {
-    console.error('usage: node tools/ratchet/pawl-adapter.ts <adapter-id>');
+    console.error('usage: node tools/pawl/pawl-adapter.ts <adapter-id>');
     process.exit(2);
   }
 

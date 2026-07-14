@@ -154,7 +154,7 @@ reconcile 行为契约：
 5. ✅ 4 个 anchor 消费方（simulator / editor / host-toolbar / console）的 publish 回调改为写 `createPlacementPublisher`；`project-runtime` 建 publisher（generation-per-mount）经 React context 下发；判别式端到端保留（不再拍平 0×0）。
 6. ✅ 新通道 `view:placement-snapshot` 接线，main handler → `setPlacementSnapshot` → reconcile → applyViewOps。settings/popover 由 main 维护 `overlayDesired` 并入 reconcile（layer 恒高于 base），删 `raiseTopOverlays`。
 7. ✅ 删旧路径：4 条 bounds 通道 + handler、4 个 `setXxxBounds` adapter、`isHidden`、散落 raiseTopOverlays、两处竞速缓存（`lastRendererRect`/`simulatorBoundsOverride`），受影响单测重写到 `setPlacementSnapshot`。
-8. ✅ 全门禁（tsc 0 / eslint 0 / ratchet 全绿，type-coverage 反升 99.68→99.69 / vitest devtools 1755 + electron-deck 942）+ 真机 e2e（反复切设备 16 次 `visibilityState` 保持 visible 不白屏；切 tab；切项目；host-toolbar；settings）。
+8. ✅ 全门禁（tsc 0 / eslint 0 / gate 全绿，type-coverage 反升 99.68→99.69 / vitest devtools 1755 + electron-deck 942）+ 真机 e2e（反复切设备 16 次 `visibilityState` 保持 visible 不白屏；切 tab；切项目；host-toolbar；settings）。
 
 9. ✅ **electron-deck 自己的 `createDeckLayoutClient`（slot-token 布局握手）也收敛到共享内核**（不再是 follow-up）。它原是 per-view edge-triggered（同病），现改为：renderer 侧每个 anchor 的测量写进中央 `createPlacementPublisher` → 窗口级 snapshot；main 侧 `handleSnapshot` 走 `cleanSnapshot`（按 slotToken 授权 + viewId 从 registry 派生，防投毒）→ per-wc `reconcile` → `dispatchOps` 塌缩进 ViewHandle 两态 sink（`electron-deck/src/layout/snapshot-reconcile.ts`）。capability 模型保全（token 仍是唯一凭证、anti-spoof 不变）。Codex 对抗评审 5 FLAW 全吸收：Q1 全无效 snapshot 整体拒绝（不 detach-all）/ Q2 ViewHandle setBounds 前置消首挂闪 / Q3+Q4 main 分配单调 generation（`SlotGrant.generation`）+ reconcile `generation<prev` 护栏，reload 不靠 IPC 保序 / Q5 旧 `place` 通道全删无 compat shim（消费者全在包内）。`examples/layout-demo` 加 hide/restore + 40 轮 stress 场景真机证 level-triggered 自愈。
 

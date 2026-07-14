@@ -1,6 +1,6 @@
-// Guards the test-report ratchet adapter, whose job is to make a passed-test-count
+// Guards the test-report gate adapter, whose job is to make a passed-test-count
 // regression (deleted test, `.skip`, or a newly failing test) show up as a red
-// `ratchet:check` instead of silently disappearing. Three contracts are covered:
+// `pawl:check` instead of silently disappearing. Three contracts are covered:
 //   - expectedReportsOf: parses a package's `scripts.test` text into the vitest
 //     JSON report(s) it declares, deriving a stable key per report. A vitest
 //     package that forgot to wire an --outputFile.json must fail loud rather than
@@ -10,7 +10,7 @@
 //   - measure(): the end-to-end scan across `<root>/packages/*/package.json`,
 //     summing passed counts into `value`/`breakdown`, and rejecting (not
 //     swallowing) when a declared report file is missing from disk.
-// Run with: node --test tools/ratchet/test-report.test.ts
+// Run with: node --test tools/pawl/test-report.test.ts
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
@@ -19,7 +19,7 @@ import { join } from 'node:path';
 import adapter, { expectedReportsOf, passedCountOf } from './adapters/test-report.ts';
 
 async function makeRoot(pkgs: Record<string, { packageJson: unknown; reports?: Record<string, unknown> }>): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), 'ratchet-test-report-'));
+  const root = await mkdtemp(join(tmpdir(), 'gate-test-report-'));
   const packagesDir = join(root, 'packages');
   await mkdir(packagesDir, { recursive: true });
   for (const [name, def] of Object.entries(pkgs)) {

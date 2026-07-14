@@ -1,7 +1,7 @@
-# ratchet — dimina-kit's anti-regression adapters
+# pawl — dimina-kit's anti-regression adapters
 
 The anti-regression gate is [**pawl**](https://github.com/tiangong-dev/pawl), a
-language-agnostic quality ratchet: it snapshots one number per dimension and
+language-agnostic quality gate: it snapshots one number per dimension and
 fails CI when any dimension regresses. This directory holds only the
 dimina-kit-specific **adapters** — the `measure()` functions that compute each
 number. The gate engine (record / check / diff / baseline-guard, the gate
@@ -10,10 +10,10 @@ modes, tolerance, and the guards below) lives in pawl, configured by
 [`../../pawl.snapshot.json`](../../pawl.snapshot.json).
 
 Each dimension in `pawl.yaml` is an [exec adapter] whose `command` is
-`node tools/ratchet/pawl-adapter.ts <id>`. [`pawl-adapter.ts`](./pawl-adapter.ts)
+`node tools/pawl/pawl-adapter.ts <id>`. [`pawl-adapter.ts`](./pawl-adapter.ts)
 imports the matching [`adapters/<id>.ts`](./adapters) unchanged, runs its
 `measure()`, and prints the `{ value, unit, breakdown }` JSON pawl consumes.
-Because the adapter code is the single source of the number, `pnpm ratchet:check`
+Because the adapter code is the single source of the number, `pnpm pawl:check`
 and any future direct engine call can never disagree on a value.
 
 The underlying analyzer is an implementation detail of each adapter. Swapping a
@@ -24,8 +24,8 @@ The adapters and `pawl-adapter.ts` are TypeScript run directly by Node's native
 type stripping (no `tsx`/`ts-node`). That constrains the syntax to what's
 erasable — no `enum`, `namespace`, or constructor parameter properties — and
 every local import must carry an explicit `.ts`/`.js` extension.
-`tools/ratchet/tsconfig.json` typechecks the directory in isolation
-(`pnpm exec tsc -p tools/ratchet`); it is not part of any package's
+`tools/pawl/tsconfig.json` typechecks the directory in isolation
+(`pnpm exec tsc -p tools/pawl`); it is not part of any package's
 `check-types` task.
 
 [exec adapter]: https://github.com/tiangong-dev/pawl#custom-adapters
@@ -33,15 +33,15 @@ every local import must carry an explicit `.ts`/`.js` extension.
 ## Commands
 
 ```bash
-pnpm ratchet:record          # measure every dimension and (over)write the baseline
-pnpm ratchet:check           # measure + compare; exit 1 on any regression — the CI gate
-pnpm ratchet:diff            # measure + compare, print the table, never fail
+pnpm pawl:record          # measure every dimension and (over)write the baseline
+pnpm pawl:check           # measure + compare; exit 1 on any regression — the CI gate
+pnpm pawl:diff            # measure + compare, print the table, never fail
 pnpm exec pawl baseline-guard <git-ref>
                              # compare the working tree's pawl.snapshot.json against
                              # the version committed at <ref> — the PR-vs-base-branch gate
 ```
 
-The `ratchet:*` scripts are thin aliases for `pawl {check,record,diff}` (pawl is
+The `pawl:*` scripts are thin aliases for `pawl {check,record,diff}` (pawl is
 pinned as `@pawl-tools/cli` in the root `devDependencies`). Record establishes
 the baseline and locks in improvements after cleanup. After a verified cleanup,
 `diff` shows the gain (e.g. `type-escapes 11 → 10 🎉 better`) and `record` writes
@@ -66,7 +66,7 @@ which counts test files too: a giant test burns the AI context window just like 
 giant source file does.
 
 The lint-backed adapters run with `noInlineConfig`, so an `// eslint-disable`
-comment cannot hide a violation from the ratchet — the baseline measures the real
+comment cannot hide a violation from the gate — the baseline measures the real
 escape surface, and the gate can't be bypassed by suppressing.
 
 ### Gate strictness
@@ -97,7 +97,7 @@ drop inside the slack prints `✅ within tolerance` and does not fail the gate.
 
 ## Guards beyond the per-dimension gate
 
-pawl protects the ratchet itself, not just the dimensions it measures:
+pawl protects the gate itself, not just the dimensions it measures:
 
 - **Cannot-measure is exit 2, never a silent zero.** If an adapter crashes,
   times out, or prints non-JSON, pawl aborts with exit 2 rather than reading the
@@ -110,7 +110,7 @@ pawl protects the ratchet itself, not just the dimensions it measures:
   code, not that the file's history is honest.
 - **Improvement notice.** When `check` runs on CI (`GITHUB_ACTIONS` set) and at
   least one dimension improved since the snapshot, pawl prints a `::notice::`
-  naming the improved dimensions and pointing at `pnpm ratchet:record` — so an
+  naming the improved dimensions and pointing at `pnpm pawl:record` — so an
   unrecorded win surfaces on the PR itself.
 
 ## Notes & known limits
@@ -144,7 +144,7 @@ pawl protects the ratchet itself, not just the dimensions it measures:
   source of truth for which reports must exist: a script that runs vitest
   without declaring an `--outputFile.json` is an error, and a declared report
   missing from disk fails with "run `pnpm test` first" rather than counting as
-  zero. In CI the test step runs before `ratchet:check`, so reports are always
+  zero. In CI the test step runs before `pawl:check`, so reports are always
   fresh; locally, a stale report is possible if you measure without re-running
   tests. The reports are declared as turbo outputs of the `test` task, so a
   turbo cache hit restores them instead of leaving them missing.
@@ -161,7 +161,7 @@ pawl protects the ratchet itself, not just the dimensions it measures:
   during the run and a new untested file would not move the number. The gate is
   per-suite lines %; the scalar is aggregated over real line counts, not an
   average of percentages.
-- **No dead-code dimension.** A knip-based unused-exports ratchet was tried and
+- **No dead-code dimension.** A knip-based unused-exports gate was tried and
   removed. The devtools packages expose extension APIs for downstream secondary
   development, so *any* export may have an out-of-repo consumer that static
   analysis cannot see — "unused" never means "deletable", and gating it would
@@ -192,9 +192,9 @@ pawl protects the ratchet itself, not just the dimensions it measures:
    ```
 
 2. Add a dimension to [`../../pawl.yaml`](../../pawl.yaml) with
-   `command: "node tools/ratchet/pawl-adapter.ts my-metric"` and the matching
+   `command: "node tools/pawl/pawl-adapter.ts my-metric"` and the matching
    `direction` / `gate` / `tolerance`.
-3. `pnpm ratchet:record` to add it to the baseline.
+3. `pnpm pawl:record` to add it to the baseline.
 
 Keep the adapter's `measure()` as the only place the number is computed — that's
 what guarantees the value the gate reads is the value your tests exercise.

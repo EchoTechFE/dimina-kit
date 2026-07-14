@@ -1,4 +1,4 @@
-// Type-escape ratchet — counts the escape hatches that quietly erode type safety:
+// Type-escape gate — counts the escape hatches that quietly erode type safety:
 // explicit `any` (annotations and `as any` casts) and `@ts-*` suppression
 // comments. It uses the mature typescript-eslint rules `no-explicit-any` and
 // `ban-ts-comment` rather than a regex, so comments and string literals never

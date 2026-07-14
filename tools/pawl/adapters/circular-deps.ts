@@ -1,4 +1,4 @@
-// Circular-import ratchet — flags production files under packages/*/src whose
+// Circular-import gate — flags production files under packages/*/src whose
 // imports (static, dynamic, or through a tsconfig `paths` alias) form a
 // cycle. A cycle means initialization order depends on which file happens to
 // load first, which is a recurring source of "works until you touch an

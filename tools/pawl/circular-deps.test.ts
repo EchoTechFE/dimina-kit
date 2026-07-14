@@ -1,10 +1,10 @@
-// Guards the circular-deps ratchet's contract with the engine: the scalar
+// Guards the circular-deps gate's contract with the engine: the scalar
 // `value` (count of import cycles) and the `breakdown` keys the gate diffs
 // against must reflect real circular imports in production source under
 // packages/*/src, with root-relative (not absolute) paths, and must not choke
 // when a resolver style (extension vs. extensionless import) isn't the one it
 // happens to prefer.
-// Run with: node --test tools/ratchet/circular-deps.test.ts
+// Run with: node --test tools/pawl/circular-deps.test.ts
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
@@ -13,7 +13,7 @@ import { join, sep } from 'node:path';
 import circularDeps from './adapters/circular-deps.ts';
 
 async function withFixture(files: Record<string, string>, fn: (root: string) => Promise<void>) {
-  const root = await mkdtemp(join(tmpdir(), 'ratchet-circular-deps-'));
+  const root = await mkdtemp(join(tmpdir(), 'gate-circular-deps-'));
   try {
     for (const [relPath, content] of Object.entries(files)) {
       const full = join(root, relPath);

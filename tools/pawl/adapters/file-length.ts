@@ -1,4 +1,4 @@
-// File-length ratchet — counts source files longer than THRESHOLD lines. Long
+// File-length gate — counts source files longer than THRESHOLD lines. Long
 // files are a maintainability smell and, just as importantly here, a direct cost
 // to AI-assisted development: a 2000-line file burns the context window before any
 // work begins. Keeping files bounded keeps them reviewable by humans and loadable

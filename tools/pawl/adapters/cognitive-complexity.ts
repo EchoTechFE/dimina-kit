@@ -1,4 +1,4 @@
-// Cognitive-complexity ratchet — delegates scoring to eslint-plugin-sonarjs, the
+// Cognitive-complexity gate — delegates scoring to eslint-plugin-sonarjs, the
 // canonical SonarSource implementation (it IS the SonarJS engine), driven through
 // ESLint's Node API. We do not reimplement the algorithm.
 //

@@ -19,10 +19,9 @@
     "test:coverage": "turbo run test:coverage",
     "lint": "turbo run lint",
     "dev": "turbo run dev",
-    "ratchet": "pawl check",
-    "ratchet:record": "pawl record",
-    "ratchet:check": "pawl check",
-    "ratchet:diff": "pawl diff"
+    "pawl:check": "pawl check",
+    "pawl:record": "pawl record",
+    "pawl:diff": "pawl diff"
   },
   "devDependencies": {
     "@pawl-tools/cli": "0.1.2",
