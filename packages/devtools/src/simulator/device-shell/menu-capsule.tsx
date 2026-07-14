@@ -9,13 +9,14 @@ export interface MenuCapsuleProps {
   platform: NavBarPlatform
   statusBarHeight: number
   textStyle: NavigationBarTextStyle
+  onMoreClick?: () => void
 }
 
 /**
- * Static visual stand-in for the WeChat capsule (more / close).
- * No click handler — WeChat does not expose a tap event for the capsule.
+ * Capsule bar (more / close) rendered in the navigation-bar area.
+ * The "more" dot button opens the capsule menu popup via `onMoreClick`.
  */
-export function MenuCapsule({ platform, statusBarHeight, textStyle }: MenuCapsuleProps) {
+export function MenuCapsule({ platform, statusBarHeight, textStyle, onMoreClick }: MenuCapsuleProps) {
   const width = platform === 'ios' ? 87 : 95
   const height = 32
   const top = statusBarHeight + (platform === 'ios' ? 4 : 6)
@@ -27,7 +28,7 @@ export function MenuCapsule({ platform, statusBarHeight, textStyle }: MenuCapsul
       style={{ width, height, top, right }}
       aria-hidden="true"
     >
-      <div className="menu-capsule__more">
+      <div className="menu-capsule__more" onClick={onMoreClick}>
         <span /><span /><span />
       </div>
       <div className="menu-capsule__divider" />

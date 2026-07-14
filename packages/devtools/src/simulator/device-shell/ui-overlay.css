@@ -192,3 +192,196 @@
   color: #111827;
   cursor: pointer;
 }
+
+/* ── Half sheet (joinIsland) ─────────────────────────────────────────────── */
+.dmui-overlay:has(.dmui-half-sheet) {
+  align-items: flex-end;
+}
+
+.dmui-half-sheet {
+  position: relative;
+  width: 100%;
+  background: #fff;
+  border-radius: 12px 12px 0 0;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  animation: dmui-slide-up 0.3s ease-out;
+}
+
+@keyframes dmui-slide-up {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+
+.dmui-half-sheet__title {
+  font: 400 16px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #202020;
+  text-align: center;
+  padding: 20px 20px 16px;
+}
+
+.dmui-half-sheet__divider {
+  height: 0.5px;
+  background: #f2f2f2;
+}
+
+.dmui-half-sheet__row {
+  display: flex;
+  align-items: center;
+  padding: 16px 20px;
+}
+
+.dmui-half-sheet__avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.dmui-half-sheet__info {
+  flex: 1;
+  min-width: 0;
+  margin-left: 12px;
+}
+
+.dmui-half-sheet__name {
+  font: 500 16px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #202020;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dmui-half-sheet__members {
+  font: 400 12px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #999;
+  margin-top: 4px;
+}
+
+.dmui-half-sheet__join {
+  flex-shrink: 0;
+  height: 36px;
+  padding: 0 20px;
+  border: 0;
+  border-radius: 18px;
+  background: #222;
+  color: #fff;
+  font: 400 14px/36px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  cursor: pointer;
+}
+
+.dmui-half-sheet__cancel {
+  font: 400 16px/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #999;
+  text-align: center;
+  padding: 16px 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+/* ── Bottom sheet (shared by capsule menu, share sheet, open post) ────── */
+.dmui-overlay:has(.dmui-bottom-sheet) { align-items: flex-end; }
+
+.dmui-bottom-sheet {
+  position: relative;
+  width: 100%;
+  background: #fff;
+  border-radius: 16px 16px 0 0;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  animation: dmui-slide-up 0.3s ease-out;
+}
+
+.dmui-bottom-sheet__title {
+  font: 400 16px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #202020;
+  text-align: center;
+  padding: 20px 20px 16px;
+}
+
+.dmui-bottom-sheet__divider { height: 0.5px; background: #f2f2f2; }
+
+.dmui-bottom-sheet__grid {
+  display: flex;
+  flex-wrap: wrap;
+  padding: 16px 20px;
+  gap: 16px;
+}
+
+.dmui-bottom-sheet__grid-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+  min-width: 56px;
+}
+
+.dmui-bottom-sheet__icon-circle {
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  background: #f5f5f5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+}
+
+.dmui-bottom-sheet__icon-img { width: 32px; height: 32px; }
+
+.dmui-bottom-sheet__item-label {
+  font: 400 12px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #333;
+}
+
+.dmui-bottom-sheet__cancel {
+  font: 400 16px/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #999;
+  text-align: center;
+  padding: 16px 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+/* ── Capsule menu header ─────────────────────────────────────────────────── */
+.dmui-capsule-menu__header {
+  display: flex;
+  align-items: center;
+  padding: 20px 20px 16px;
+}
+
+.dmui-capsule-menu__avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 10px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.dmui-capsule-menu__avatar--placeholder { background: #e5e7eb; }
+
+.dmui-capsule-menu__app-info { flex: 1; min-width: 0; margin-left: 12px; }
+
+.dmui-capsule-menu__app-name {
+  font: 500 16px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #202020;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dmui-capsule-menu__app-version {
+  font: 400 12px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #999;
+  margin-top: 4px;
+}
+

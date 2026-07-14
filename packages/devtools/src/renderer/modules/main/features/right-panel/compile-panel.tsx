@@ -77,7 +77,7 @@ export function CompilePanel({ events, logs = [], onClear }: CompilePanelProps) 
     if (!container) return
     const handleScroll = () => {
       const { scrollTop, scrollHeight, clientHeight } = container
-      shouldAutoScroll.current = scrollHeight - scrollTop - clientHeight < 30
+      shouldAutoScroll.current = scrollHeight - scrollTop - clientHeight < 20
     }
     container.addEventListener('scroll', handleScroll)
     return () => container.removeEventListener('scroll', handleScroll)

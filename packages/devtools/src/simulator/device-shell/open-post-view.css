@@ -1,0 +1,175 @@
+/* Full-page publish overlay matching HarmonyOS LitePublishPostPage. */
+.dmui-publish {
+	position: absolute;
+	inset: 0;
+	z-index: 300;
+	display: flex;
+	flex-direction: column;
+	background: #fff;
+	pointer-events: auto;
+}
+
+/* ── Nav bar ─────────────────────────────────────────────────────────────── */
+.dmui-publish__nav {
+	display: flex;
+	align-items: center;
+	height: 44px;
+	padding: 0 12px;
+	border-bottom: 0.5px solid #f2f2f2;
+	flex-shrink: 0;
+}
+
+.dmui-publish__back {
+	width: 32px;
+	height: 32px;
+	border: 0;
+	background: transparent;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	cursor: pointer;
+	color: #333;
+	padding: 0;
+	flex-shrink: 0;
+}
+
+.dmui-publish__island-chip {
+	flex: 1;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 4px;
+	min-width: 0;
+}
+
+.dmui-publish__chip-avatar {
+	width: 16px;
+	height: 16px;
+	border-radius: 4px;
+	object-fit: cover;
+	flex-shrink: 0;
+}
+
+.dmui-publish__chip-avatar--placeholder {
+	background: #e5e7eb;
+}
+
+.dmui-publish__chip-name {
+	font: 500 14px/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+	color: #333;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	max-width: 100px;
+}
+
+.dmui-publish__chip-tag {
+	font: 400 10px/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+	color: #999;
+	padding: 1px 4px;
+	border: 0.5px solid #ddd;
+	border-radius: 2px;
+	flex-shrink: 0;
+}
+
+.dmui-publish__submit {
+	height: 28px;
+	padding: 0 16px;
+	border: 0;
+	border-radius: 14px;
+	background: #222;
+	color: #fff;
+	font: 500 13px/28px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+	cursor: pointer;
+	flex-shrink: 0;
+}
+
+.dmui-publish__submit--disabled {
+	background: #ccc;
+	cursor: default;
+}
+
+/* ── Body (scrollable content area) ──────────────────────────────────────── */
+.dmui-publish__body {
+	flex: 1;
+	overflow-y: auto;
+	padding: 16px;
+}
+
+.dmui-publish__images {
+	display: flex;
+	gap: 8px;
+	margin-bottom: 16px;
+	overflow-x: auto;
+}
+
+.dmui-publish__image-add {
+	width: 72px;
+	height: 72px;
+	border: 1px dashed #ddd;
+	border-radius: 8px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	cursor: pointer;
+	flex-shrink: 0;
+	background: #fafafa;
+}
+
+.dmui-publish__title {
+	display: block;
+	width: 100%;
+	border: 0;
+	border-bottom: 0.5px solid #f2f2f2;
+	padding: 12px 0;
+	font: 500 16px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+	color: #333;
+	outline: none;
+	box-sizing: border-box;
+}
+
+.dmui-publish__title::placeholder {
+	color: #ccc;
+	font-weight: 400;
+}
+
+.dmui-publish__content {
+	display: block;
+	width: 100%;
+	min-height: 180px;
+	border: 0;
+	padding: 12px 0;
+	font: 400 15px/1.6 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+	color: #333;
+	outline: none;
+	resize: none;
+	box-sizing: border-box;
+}
+
+.dmui-publish__content::placeholder {
+	color: #ccc;
+}
+
+/* ── Bottom toolbar ──────────────────────────────────────────────────────── */
+.dmui-publish__toolbar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 8px 16px;
+	border-top: 0.5px solid #f2f2f2;
+	flex-shrink: 0;
+}
+
+.dmui-publish__count {
+	font: 400 12px/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+	color: #999;
+}
+
+.dmui-publish__privacy {
+	border: 0;
+	background: transparent;
+	font: 400 12px/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+	color: #666;
+	cursor: pointer;
+	padding: 4px 8px;
+}
