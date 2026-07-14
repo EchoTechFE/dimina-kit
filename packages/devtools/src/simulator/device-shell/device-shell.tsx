@@ -1,20 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { SIMULATOR_EVENTS as E } from '../../shared/bridge-channels'
-import type {
-  ApiCallPayload,
-  NavActionPayload,
-  TabActionPayload,
-} from '../../shared/bridge-channels'
+import type { ApiCallPayload, NavActionPayload, TabActionPayload } from '../../shared/bridge-channels'
 import type { SimulatorMiniApp } from '../simulator-mini-app'
 import { runApiAsync } from '../run-api-async'
-import {
-  NavigationBar,
-  type NavBarPlatform,
-} from './navigation-bar'
+import { NavigationBar, type NavBarPlatform } from './navigation-bar'
 import { StatusBar } from './status-bar'
 import type { NativeDeviceInfo } from '../../shared/ipc-channels'
 import { TabBar } from './tab-bar'
 import { UiOverlay } from './ui-overlay'
+import { showCapsuleMenu } from './capsule-menu-handler'
 import {
   applyTabAction,
   makeInitialTabBarState,
@@ -234,6 +228,11 @@ export function DeviceShell({
     })
   }, [miniApp, performNavAction])
 
+  const handleMoreClick = useCallback(() => {
+    const s = stateRef.current.shell.stack
+    showCapsuleMenu(miniApp.appId, s[s.length - 1].navBar.title)
+  }, [miniApp])
+
   // ── Rendering ─────────────────────────────────────────────────────────────
   const top = shell.stack[shell.stack.length - 1]
   const mounted = enumerateMounted(shell)
@@ -286,6 +285,7 @@ export function DeviceShell({
           statusBarHeight={statusBarHeight}
           navBarHeight={NAV_BAR_HEIGHT}
           onBack={handleBack}
+          onMoreClick={handleMoreClick}
         />
         <div className="device-shell__viewport">
           {mounted.map(({ entry, visible }) => (

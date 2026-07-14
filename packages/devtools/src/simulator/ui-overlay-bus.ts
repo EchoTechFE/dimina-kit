@@ -44,7 +44,57 @@ export interface ActionSheetDialogState {
   onSelect: (index: number) => void
 }
 
-export type DialogState = ModalDialogState | ActionSheetDialogState
+export interface HalfSheetDialogState {
+  kind: 'halfSheet'
+  islandName: string
+  islandAvatar: string
+  memberCount: string
+  /** The renderer calls this with `true` (join) or `false` (cancel / mask tap). */
+  onResult: (confirmed: boolean) => void
+}
+
+export interface CapsuleMenuItem {
+  label: string
+  icon: string
+}
+
+export interface CapsuleMenuDialogState {
+  kind: 'capsuleMenu'
+  appName: string
+  appAvatar: string
+  appVersion: string
+  items: CapsuleMenuItem[]
+  /** The renderer calls this with the tapped item index, or -1 to cancel. */
+  onSelect: (index: number) => void
+}
+
+export interface ShareDialogState {
+  kind: 'share'
+  type: 'link' | 'image'
+  title: string
+  desc: string
+  url: string
+  cover: string
+  image: string
+  /** The renderer calls this with the tapped platform index, or -1 to cancel. */
+  onSelect: (index: number) => void
+}
+
+export interface OpenPostDialogState {
+  kind: 'openPost'
+  islandName: string
+  islandImage: string
+  /** The renderer calls this with `true` (confirm) or `false` (cancel). */
+  onResult: (confirmed: boolean) => void
+}
+
+export type DialogState =
+  | ModalDialogState
+  | ActionSheetDialogState
+  | HalfSheetDialogState
+  | CapsuleMenuDialogState
+  | ShareDialogState
+  | OpenPostDialogState
 
 export interface UiOverlayState {
   toast: ToastState | null

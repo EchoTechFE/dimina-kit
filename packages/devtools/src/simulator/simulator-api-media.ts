@@ -179,6 +179,45 @@ export function compressImage(
 	img.src = src
 }
 
+export function saveCanvasTempFile(
+	this: MiniAppContext,
+	{ dataURL, success, fail, complete }: {
+		dataURL?: string
+		fileType?: string
+		success?: unknown
+		fail?: unknown
+		complete?: unknown
+	},
+) {
+	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
+
+	if (!dataURL) {
+		onFail?.({ errMsg: 'canvasToTempFilePath:fail missing dataURL' })
+		onComplete?.()
+		return
+	}
+
+	const match = /^data:([^;]+);base64,(.+)$/.exec(dataURL)
+	if (!match) {
+		onFail?.({ errMsg: 'canvasToTempFilePath:fail invalid data URL' })
+		onComplete?.()
+		return
+	}
+
+	try {
+		const mimeType = match[1]!
+		const raw = atob(match[2]!)
+		const bytes = new Uint8Array(raw.length)
+		for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i)
+		const blob = new Blob([bytes], { type: mimeType })
+		const tempFilePath = createTempFilePath(blob)
+		onSuccess?.({ tempFilePath, errMsg: 'canvasToTempFilePath:ok' })
+	} catch (error) {
+		onFail?.({ errMsg: `canvasToTempFilePath:fail ${(error as Error).message}` })
+	}
+	onComplete?.()
+}
+
 export function saveImageToPhotosAlbum(
 	this: MiniAppContext,
 	{ filePath, success, fail, complete }: { filePath: string; success?: unknown; fail?: unknown; complete?: unknown },

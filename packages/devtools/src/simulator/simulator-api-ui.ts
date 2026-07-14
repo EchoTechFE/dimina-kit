@@ -145,3 +145,107 @@ export function showActionSheet(this: MiniAppContext, opts: ActionSheetOpts = {}
     },
   })
 }
+
+interface ShareOpts {
+  type?: string
+  title?: string
+  desc?: string
+  url?: string
+  cover?: string
+  image?: string
+  success?: unknown
+  fail?: unknown
+  complete?: unknown
+}
+
+export function share(this: MiniAppContext, opts: ShareOpts = {}) {
+  const { onSuccess, onFail, onComplete } = bindCallbacks(this, opts)
+  let settled = false
+  const shareType = (opts.type === 'image' ? 'image' : 'link') as 'link' | 'image'
+  uiOverlayBus.showDialog({
+    kind: 'share',
+    type: shareType,
+    title: opts.title ?? '',
+    desc: opts.desc ?? '',
+    url: opts.url ?? '',
+    cover: opts.cover ?? '',
+    image: opts.image ?? '',
+    onSelect: (index) => {
+      if (settled) return
+      settled = true
+      uiOverlayBus.hideDialog()
+      if (index === -1) {
+        onFail?.({ errMsg: 'share:fail cancel' })
+      } else {
+        onSuccess?.({ errMsg: 'share:ok' })
+      }
+      onComplete?.()
+    },
+  })
+}
+
+interface OpenPostOpts {
+  islandId?: string
+  appId?: string
+  islandName?: string
+  islandImage?: string
+  joined?: boolean
+  bizData?: string
+  spuId?: string
+  files?: string
+  success?: unknown
+  fail?: unknown
+  complete?: unknown
+}
+
+export function openPost(this: MiniAppContext, opts: OpenPostOpts = {}) {
+  const { onSuccess, onFail, onComplete } = bindCallbacks(this, opts)
+  let settled = false
+  uiOverlayBus.showDialog({
+    kind: 'openPost',
+    islandName: opts.islandName ?? '',
+    islandImage: opts.islandImage ?? '',
+    onResult: (confirmed) => {
+      if (settled) return
+      settled = true
+      uiOverlayBus.hideDialog()
+      if (confirmed) {
+        onSuccess?.({ islandId: opts.islandId ?? '', errMsg: 'openPost:ok' })
+      } else {
+        onFail?.({ errMsg: 'openPost:fail cancel' })
+      }
+      onComplete?.()
+    },
+  })
+}
+
+interface JoinIslandOpts {
+  islandName?: string
+  islandAvatar?: string
+  memberCount?: string
+  success?: unknown
+  fail?: unknown
+  complete?: unknown
+}
+
+export function joinIsland(this: MiniAppContext, opts: JoinIslandOpts = {}) {
+  const { onSuccess, onFail, onComplete } = bindCallbacks(this, opts)
+  let settled = false
+  uiOverlayBus.showDialog({
+    kind: 'halfSheet',
+    islandName: opts.islandName ?? 'Mock Island',
+    islandAvatar: opts.islandAvatar ?? '',
+    memberCount: opts.memberCount ?? '128',
+    onResult: (confirmed) => {
+      if (settled) return
+      settled = true
+      uiOverlayBus.hideDialog()
+      if (confirmed) {
+        onSuccess?.({ errMsg: 'joinIsland:ok' })
+      } else {
+        onFail?.({ errMsg: 'joinIsland:fail cancel' })
+      }
+      onComplete?.()
+    },
+  })
+}
