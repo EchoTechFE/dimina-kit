@@ -109,6 +109,9 @@ jobs:
       - name: Test
         run: pnpm turbo run test --cache-dir=.turbo
 
+      # pawl (Go) is the ratchet engine; tools/ratchet keeps only the adapters
+      # pawl's exec dimensions delegate to (via pawl-adapter.ts), so their
+      # measure() code is guarded by the adapter tests below before the gate runs.
       - name: Anti-regression ratchet
         run: |
           set -o pipefail
@@ -153,4 +156,4 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           git fetch --depth=1 origin "$GITHUB_BASE_REF"
-          node tools/ratchet/ratchet.ts baseline-guard FETCH_HEAD
+          pnpm exec pawl baseline-guard FETCH_HEAD

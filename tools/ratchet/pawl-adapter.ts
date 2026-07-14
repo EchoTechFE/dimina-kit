@@ -1,8 +1,7 @@
 #!/usr/bin/env node
-// Thin bridge from pawl's exec-adapter contract to the existing ratchet
-// adapters under ./adapters — reused verbatim, not reimplemented, so pawl
-// and `node tools/ratchet/ratchet.ts` measure every dimension with the
-// exact same code and can never disagree on a value.
+// Thin bridge from pawl's exec-adapter contract to the ratchet adapters under
+// ./adapters — each adapter's measure() is the single source of the number, so
+// the value pawl gates on is exactly the value the adapter tests exercise.
 //
 // Usage: node tools/ratchet/pawl-adapter.ts <adapter-id>
 //
@@ -47,9 +46,10 @@ async function main(): Promise<void> {
 
   try {
     const result = await adapter.measure();
-    // Same normalization ratchet.ts applies when it builds a Metric
-    // (measureAll: `unit: r.unit ?? 'count'`) — the Adapter type carries no
-    // top-level `unit`, only measure()'s result does.
+    // Normalize measure()'s result into pawl's exec JSON: unit defaults to
+    // 'count' (the Adapter type carries no top-level unit, only the result
+    // does), and an empty breakdown collapses to null so pawl treats it as
+    // "no per-key detail" rather than an empty gate set.
     process.stdout.write(
       JSON.stringify({
         value: result.value,
