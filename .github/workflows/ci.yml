@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   # lint + check-types need no test artifacts, so they run on their own runner
-  # in parallel with the test/ratchet job instead of serializing in front of it.
+  # in parallel with the test/gate job instead of serializing in front of it.
   lint-and-types:
     runs-on: ubuntu-latest
 
@@ -61,9 +61,9 @@ jobs:
       - name: Lint and type-check
         run: pnpm turbo run lint check-types --cache-dir=.turbo
 
-  # ratchet consumes the test run's artifacts (test-report / coverage), so test
-  # and ratchet stay serialized within this job — everything else runs beside it.
-  test-and-ratchet:
+  # gate consumes the test run's artifacts (test-report / coverage), so test
+  # and gate stay serialized within this job — everything else runs beside it.
+  test-and-pawl:
     runs-on: ubuntu-latest
 
     permissions:
@@ -93,7 +93,7 @@ jobs:
 
       # Persist turbo's cache: a cache-hit test task replays its recorded
       # outputs (test-report*.json + coverage/**) — exactly the artifacts the
-      # ratchet step consumes, so replayed packages still feed the gate.
+      # gate step consumes, so replayed packages still feed the gate.
       - name: Restore turbo cache
         uses: actions/cache@v4
         with:
@@ -109,29 +109,32 @@ jobs:
       - name: Test
         run: pnpm turbo run test --cache-dir=.turbo
 
-      - name: Anti-regression ratchet
+      # pawl (Go) is the gate engine; tools/pawl keeps only the adapters
+      # pawl's exec dimensions delegate to (via pawl-adapter.ts), so their
+      # measure() code is guarded by the adapter tests below before the gate runs.
+      - name: Anti-regression gate
         run: |
           set -o pipefail
-          pnpm exec tsc -p tools/ratchet
-          node --test "tools/ratchet/*.test.ts"
-          pnpm ratchet:check 2>&1 | tee ratchet-check.log
+          pnpm exec tsc -p tools/pawl
+          node --test "tools/pawl/*.test.ts"
+          pnpm pawl:check 2>&1 | tee gate-check.log
 
-      # Upserts one sticky comment (keyed by the marker) with the ratchet
+      # Upserts one sticky comment (keyed by the marker) with the gate
       # table, so the PR always shows the latest baseline-vs-current state
       # without stacking a new comment per push.
-      - name: Ratchet report PR comment
+      - name: Gate report PR comment
         if: always() && github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs')
             let log = ''
-            try { log = fs.readFileSync('ratchet-check.log', 'utf8') } catch { return }
+            try { log = fs.readFileSync('gate-check.log', 'utf8') } catch { return }
             const start = log.indexOf('metric ')
             const table = (start === -1 ? log : log.slice(start)).replace(/ ELIFECYCLE.*$/ms, '').trim()
             if (!table) return
-            const marker = '<!-- ratchet-report -->'
-            const body = `${marker}\n### Anti-regression ratchet\n\n\`\`\`\n${table}\n\`\`\`\n`
+            const marker = '<!-- pawl-report -->'
+            const body = `${marker}\n### Anti-regression gate\n\n\`\`\`\n${table}\n\`\`\`\n`
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner, repo: context.repo.repo,
               issue_number: context.issue.number, per_page: 100,
@@ -153,4 +156,4 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           git fetch --depth=1 origin "$GITHUB_BASE_REF"
-          node tools/ratchet/ratchet.ts baseline-guard FETCH_HEAD
+          pnpm exec pawl baseline-guard FETCH_HEAD

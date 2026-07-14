@@ -1,4 +1,4 @@
-// Shared types for the ratchet engine and its adapters. One `Adapter` shape
+// Shared types for the gate engine and its adapters. One `Adapter` shape
 // is the contract every dimension (cognitive-complexity, type-escapes,
 // circular-deps, …) must satisfy so the engine can measure, snapshot, and
 // gate them uniformly regardless of which underlying tool an adapter wraps.
@@ -6,7 +6,7 @@
 export type Direction = 'lower-is-better' | 'higher-is-better';
 
 // How `check` compares a re-measured value against the snapshot. Defaults to
-// 'total' when an adapter omits it. See tools/ratchet/README.md for the
+// 'total' when an adapter omits it. See tools/pawl/README.md for the
 // per-mode rationale.
 export type GateMode = 'total' | 'per-file-count' | 'per-key-value';
 

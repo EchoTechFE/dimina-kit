@@ -1,10 +1,10 @@
-// Guards the circular-deps ratchet's contract with the engine: the scalar
+// Guards the circular-deps gate's contract with the engine: the scalar
 // `value` (count of import cycles) and the `breakdown` keys the gate diffs
 // against must reflect real circular imports in production source under
 // packages/*/src, with root-relative (not absolute) paths, and must not choke
 // when a resolver style (extension vs. extensionless import) isn't the one it
 // happens to prefer.
-// Run with: node --test tools/ratchet/circular-deps.test.ts
+// Run with: node --test tools/pawl/circular-deps.test.ts
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
@@ -13,7 +13,7 @@ import { join, sep } from 'node:path';
 import circularDeps from './adapters/circular-deps.ts';
 
 async function withFixture(files: Record<string, string>, fn: (root: string) => Promise<void>) {
-  const root = await mkdtemp(join(tmpdir(), 'ratchet-circular-deps-'));
+  const root = await mkdtemp(join(tmpdir(), 'gate-circular-deps-'));
   try {
     for (const [relPath, content] of Object.entries(files)) {
       const full = join(root, relPath);
@@ -105,6 +105,87 @@ describe('circular-deps detection', () => {
       async (root) => {
         const result = await circularDeps.measure({ root });
         assert.equal(result.value, 0, `expected test-only cycles to be ignored, got ${result.value}`);
+      },
+    );
+  });
+});
+
+// tsconfig `paths` aliases must be resolved: an alias-mediated cycle (e.g. via
+// `@/*`) is still a cycle, and a one-way alias reference must not be fabricated
+// into one.
+describe('circular-deps detection: tsconfig `paths` aliases', () => {
+  it('flags a cycle formed entirely through a tsconfig path alias', async () => {
+    await withFixture(
+      {
+        'packages/foo/tsconfig.json': JSON.stringify({
+          compilerOptions: { baseUrl: '.', paths: { '@/*': ['src/renderer/*'] } },
+        }),
+        'packages/foo/src/renderer/a.ts': `import { b } from '@/b';\nexport const a = 1;\nexport function useB() { return b; }\n`,
+        'packages/foo/src/renderer/b.ts': `import { a } from '@/a';\nexport const b = 1;\nexport function useA() { return a; }\n`,
+      },
+      async (root) => {
+        const result = await circularDeps.measure({ root });
+        assert.ok(result.value >= 1, `expected an alias-mediated cycle to be detected, got ${result.value}`);
+        const keys = Object.keys(result.breakdown ?? {});
+        const key = keys.find((k) => k.includes('a.ts') && k.includes('b.ts'));
+        assert.ok(key, `expected a breakdown key referencing both a.ts and b.ts, got ${JSON.stringify(keys)}`);
+      },
+    );
+  });
+
+  it('does not fabricate a cycle for a one-way alias reference', async () => {
+    await withFixture(
+      {
+        'packages/foo/tsconfig.json': JSON.stringify({
+          compilerOptions: { baseUrl: '.', paths: { '@/*': ['src/renderer/*'] } },
+        }),
+        'packages/foo/src/renderer/a.ts': `import { b } from '@/b';\nexport const a = 1;\nexport function useB() { return b; }\n`,
+        'packages/foo/src/renderer/b.ts': `export const b = 1;\n`,
+      },
+      async (root) => {
+        const result = await circularDeps.measure({ root });
+        assert.equal(result.value, 0, `expected 0 cycles for a one-way alias import, got ${result.value}`);
+      },
+    );
+  });
+});
+
+// A cycle hidden behind a dynamic import() still makes initialization
+// load-order-dependent, so dynamic import() must be followed like a static one.
+describe('circular-deps detection: dynamic import()', () => {
+  it('flags a cycle formed through a dynamic import()', async () => {
+    await withFixture(
+      {
+        'packages/foo/src/a.ts': `export const load = () => import('./b.ts');\n`,
+        'packages/foo/src/b.ts': `import { load } from './a.ts';\nexport function b() { return load; }\n`,
+      },
+      async (root) => {
+        const result = await circularDeps.measure({ root });
+        assert.ok(result.value >= 1, `expected a dynamic-import cycle to be detected, got ${result.value}`);
+        const keys = Object.keys(result.breakdown ?? {});
+        const key = keys.find((k) => k.includes('a.ts') && k.includes('b.ts'));
+        assert.ok(key, `expected a breakdown key referencing both a.ts and b.ts, got ${JSON.stringify(keys)}`);
+      },
+    );
+  });
+});
+
+// Import-shaped text inside comments or string literals is not a real edge —
+// counting it would fabricate cycles out of documentation/examples.
+describe('circular-deps detection: comments and string literals', () => {
+  it('ignores import syntax inside a comment and a string literal', async () => {
+    await withFixture(
+      {
+        'packages/foo/src/a.ts': `// import { x } from './b.ts'\nconst s = "import { y } from './b.ts'";\nexport const a = 1;\nexport const marker = s;\n`,
+        'packages/foo/src/b.ts': `import { a } from './a.ts';\nexport function b() { return a; }\n`,
+      },
+      async (root) => {
+        const result = await circularDeps.measure({ root });
+        assert.equal(
+          result.value,
+          0,
+          `comment/string text must not be parsed as an import edge, got ${result.value} cycle(s)`,
+        );
       },
     );
   });

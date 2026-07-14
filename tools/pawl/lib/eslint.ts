@@ -1,4 +1,4 @@
-// Shared ESLint plumbing for the lint-backed ratchet adapters (cognitive
+// Shared ESLint plumbing for the lint-backed gate adapters (cognitive
 // complexity, type escapes). Adapters pass the plugins + rules they care about;
 // this module owns the parser, the production-source scope, and the empty-package
 // handling. It is the single place to repoint if the linter is ever swapped
@@ -31,7 +31,7 @@ export function makeEslint({ plugins, rules }: EslintSpec): ESLint {
       { ignores: IGNORES },
       {
         files: ['**/*.ts', '**/*.tsx'],
-        // Ignore inline `eslint-disable` comments: the ratchet must measure the
+        // Ignore inline `eslint-disable` comments: the gate must measure the
         // real escape surface, not what has been suppressed away — otherwise a new
         // violation could slip past simply by adding a disable directive.
         linterOptions: { noInlineConfig: true },

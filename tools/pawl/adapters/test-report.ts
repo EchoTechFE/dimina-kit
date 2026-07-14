@@ -1,9 +1,9 @@
-// Test-report ratchet — counts tests that actually PASSED, straight from the
+// Test-report gate — counts tests that actually PASSED, straight from the
 // vitest JSON reports the packages' `test` scripts emit (`--outputFile.json=…`).
 // Reading the run report instead of grepping source for `it(` means every way a
 // test can stop counting — deleted, `.skip`ped, excluded from the config, or
 // newly failing — shows up as the same thing: a lower passed count, and a red
-// `ratchet:check`.
+// `pawl:check`.
 //
 // The set of reports is derived from each package's `scripts.test` text, so the
 // script that PRODUCES a report is the single source of truth for which reports
@@ -11,7 +11,7 @@
 //   - a `test` script that runs vitest but declares no --outputFile.json is an
 //     error, not a silently uncounted package;
 //   - a declared report missing from disk is an error ("run `pnpm test` first"),
-//     not a zero. In CI the test step always precedes `ratchet:check`, so
+//     not a zero. In CI the test step always precedes `pawl:check`, so
 //     reports are fresh by construction.
 
 import { readdir, readFile } from 'node:fs/promises';
@@ -40,7 +40,7 @@ export function expectedReportsOf(
   if (out.length === 0) {
     throw new Error(
       `package "${pkgName}" runs vitest but its test script declares no --outputFile.json report — ` +
-        'wire one up so the test-report ratchet can count it.',
+        'wire one up so the test-report gate can count it.',
     );
   }
   return out;

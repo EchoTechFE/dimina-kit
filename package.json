@@ -19,12 +19,12 @@
     "test:coverage": "turbo run test:coverage",
     "lint": "turbo run lint",
     "dev": "turbo run dev",
-    "ratchet": "node tools/ratchet/ratchet.ts check",
-    "ratchet:record": "node tools/ratchet/ratchet.ts record",
-    "ratchet:check": "node tools/ratchet/ratchet.ts check",
-    "ratchet:diff": "node tools/ratchet/ratchet.ts diff"
+    "pawl:check": "pawl check",
+    "pawl:record": "pawl record",
+    "pawl:diff": "pawl diff"
   },
   "devDependencies": {
+    "@pawl-tools/cli": "0.1.2",
     "eslint": "^10.2.1",
     "eslint-plugin-sonarjs": "^4.1.0",
     "jscpd": "^5.0.11",

@@ -1,6 +1,6 @@
 /**
- * Spec for the WorkbenchContext import RATCHET (eslint.config.js
- * `no-restricted-syntax`). The ratchet exists to forbid GROWTH of dependencies
+ * Spec for the WorkbenchContext import GATE (eslint.config.js
+ * `no-restricted-syntax`). The gate exists to forbid GROWTH of dependencies
  * on the WorkbenchContext grab-bag type from non-whitelisted modules. This file
  * pins every AST shape the rule must catch plus the exemption mechanism.
  *
@@ -34,7 +34,7 @@
  * snapshot make any add/remove (even budget-neutral churn) a visible diff.
  *
  * JSDoc `@type {import('…').WorkbenchContext}` and triple-slash references are
- * deliberately NOT ratcheted: they live in comment trivia (no AST node for
+ * deliberately NOT gateed: they live in comment trivia (no AST node for
  * no-restricted-syntax), have no compile effect in .ts sources, and pull in
  * declaration files rather than the symbol — a bespoke comment-scanning rule is
  * out of scope.
@@ -81,23 +81,23 @@ async function lintProbe(code: string): Promise<ESLint.LintResult> {
   return lintAt(PROBE_FILE, code)
 }
 
-function ratchetMessages(result: ESLint.LintResult) {
+function gateMessages(result: ESLint.LintResult) {
   return result.messages.filter((m) => m.ruleId === 'no-restricted-syntax')
 }
 
-function ratchetMessagesOnLine(result: ESLint.LintResult, line: number) {
-  return ratchetMessages(result).filter((m) => m.line === line)
+function gateMessagesOnLine(result: ESLint.LintResult, line: number) {
+  return gateMessages(result).filter((m) => m.line === line)
 }
 
 /**
- * The exact inline exemption marker the ratchet uses. The `-- …` justification
+ * The exact inline exemption marker the gate uses. The `-- …` justification
  * suffix is contractual (greppable audit trail); eslint only consumes the
  * directive part before `--`.
  */
 const GRANDFATHER_COMMENT =
   '// eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only'
 
-describe('③ WorkbenchContext import ratchet', () => {
+describe('③ WorkbenchContext import gate', () => {
   it('named type import is flagged (GREEN pin — existing coverage must not regress)', async () => {
     const result = await lintProbe(
       [
@@ -109,7 +109,7 @@ describe('③ WorkbenchContext import ratchet', () => {
     )
 
     expect(
-      ratchetMessages(result),
+      gateMessages(result),
       'the named-import form must stay flagged by no-restricted-syntax',
     ).not.toHaveLength(0)
   })
@@ -117,7 +117,7 @@ describe('③ WorkbenchContext import ratchet', () => {
   it('namespace import + qualified access is flagged', async () => {
     // The selector only matches ImportSpecifier nodes, so
     // `import * as Wb` + `Wb.WorkbenchContext` grows a new full-context
-    // dependency without tripping CI — the exact growth the ratchet exists to
+    // dependency without tripping CI — the exact growth the gate exists to
     // forbid.
     const result = await lintProbe(
       [
@@ -129,7 +129,7 @@ describe('③ WorkbenchContext import ratchet', () => {
     )
 
     expect(
-      ratchetMessages(result),
+      gateMessages(result),
       'the namespace-import bypass must be reported by no-restricted-syntax',
     ).not.toHaveLength(0)
   })
@@ -147,16 +147,16 @@ describe('③ WorkbenchContext import ratchet', () => {
     )
 
     expect(
-      ratchetMessages(result),
+      gateMessages(result),
       'the type-only namespace-import bypass must be reported by no-restricted-syntax',
     ).not.toHaveLength(0)
   })
 })
 
-describe('④ WorkbenchContext ratchet — round 2 bypasses', () => {
+describe('④ WorkbenchContext gate — round 2 bypasses', () => {
   it('type-query import (TSImportType) is flagged', async () => {
     // `import('…').WorkbenchContext` in type position is a TSImportType node —
-    // no ImportDeclaration, no ImportSpecifier — so a naive ratchet never fires.
+    // no ImportDeclaration, no ImportSpecifier — so a naive gate never fires.
     // A real instance exists in the tree (src/shared/types.ts:132) and is
     // grandfathered, but a NON-exempt file writing the same thing must be
     // reported.
@@ -169,7 +169,7 @@ describe('④ WorkbenchContext ratchet — round 2 bypasses', () => {
     )
 
     expect(
-      ratchetMessages(result),
+      gateMessages(result),
       'the type-query import bypass must be reported by no-restricted-syntax',
     ).not.toHaveLength(0)
   })
@@ -185,7 +185,7 @@ describe('④ WorkbenchContext ratchet — round 2 bypasses', () => {
       ].join('\n'),
     )
     expect(
-      ratchetMessages(plain),
+      gateMessages(plain),
       'the named re-export bypass must be reported by no-restricted-syntax',
     ).not.toHaveLength(0)
 
@@ -200,7 +200,7 @@ describe('④ WorkbenchContext ratchet — round 2 bypasses', () => {
       ].join('\n'),
     )
     expect(
-      ratchetMessages(aliased),
+      gateMessages(aliased),
       'the ALIASED named re-export must be reported too (match local.name, not exported.name)',
     ).not.toHaveLength(0)
   })
@@ -219,7 +219,7 @@ describe('④ WorkbenchContext ratchet — round 2 bypasses', () => {
     )
 
     expect(
-      ratchetMessages(result),
+      gateMessages(result),
       'the type re-export bypass must be reported by no-restricted-syntax',
     ).not.toHaveLength(0)
   })
@@ -227,13 +227,13 @@ describe('④ WorkbenchContext ratchet — round 2 bypasses', () => {
   it('export-star from workbench-context is flagged', async () => {
     // `export *` (ExportAllDeclaration) re-exports the
     // whole barrel — including WorkbenchContext — with no specifier node of
-    // any kind. Equivalent leak, completely invisible to the ratchet.
+    // any kind. Equivalent leak, completely invisible to the gate.
     const result = await lintProbe(
       ["export * from '../services/workbench-context.js'", ''].join('\n'),
     )
 
     expect(
-      ratchetMessages(result),
+      gateMessages(result),
       'the export-star bypass must be reported by no-restricted-syntax',
     ).not.toHaveLength(0)
   })
@@ -275,8 +275,8 @@ describe('④ WorkbenchContext ratchet — round 2 bypasses', () => {
     )
 
     expect(
-      ratchetMessages(result),
-      'inline-grandfathered lines must not be flagged by the ratchet',
+      gateMessages(result),
+      'inline-grandfathered lines must not be flagged by the gate',
     ).toHaveLength(0)
   })
 
@@ -288,18 +288,18 @@ describe('④ WorkbenchContext ratchet — round 2 bypasses', () => {
     )
 
     expect(
-      ratchetMessages(result),
+      gateMessages(result),
       're-exporting unrelated modules must stay allowed',
     ).toHaveLength(0)
   })
 })
 
-describe('⑤ WorkbenchContext ratchet — round 3: dynamic import & augmentation', () => {
+describe('⑤ WorkbenchContext gate — round 3: dynamic import & augmentation', () => {
   it('dynamic import() expression is flagged', async () => {
     // A RUNTIME `import('…/workbench-context.js')` is an ImportExpression node —
     // not an ImportDeclaration, not a TSImportType (which is type-position only)
     // — so a module could otherwise lazily load the whole grab-bag at runtime
-    // without tripping the ratchet at all.
+    // without tripping the gate at all.
     const result = await lintProbe(
       [
         'export async function loadFullContext() {',
@@ -311,7 +311,7 @@ describe('⑤ WorkbenchContext ratchet — round 3: dynamic import & augmentatio
     )
 
     expect(
-      ratchetMessages(result),
+      gateMessages(result),
       'the dynamic-import (ImportExpression) bypass must be reported by no-restricted-syntax',
     ).not.toHaveLength(0)
   })
@@ -334,7 +334,7 @@ describe('⑤ WorkbenchContext ratchet — round 3: dynamic import & augmentatio
     )
 
     expect(
-      ratchetMessages(result),
+      gateMessages(result),
       'the module-augmentation bypass must be reported by no-restricted-syntax',
     ).not.toHaveLength(0)
   })
@@ -360,13 +360,13 @@ describe('⑤ WorkbenchContext ratchet — round 3: dynamic import & augmentatio
     )
 
     expect(
-      ratchetMessages(result),
+      gateMessages(result),
       'dynamic import / module augmentation of unrelated modules must stay allowed',
     ).toHaveLength(0)
   })
 })
 
-describe('⑥ WorkbenchContext ratchet — round 3: exemption granularity goes inline', () => {
+describe('⑥ WorkbenchContext gate — round 3: exemption granularity goes inline', () => {
   // The per-file `no-restricted-syntax: "off"` block in eslint.config.js is
   // revoked; each grandfathered VIOLATION LINE instead carries
   // GRANDFATHER_COMMENT. Behavioral contract pinned here: exempt lines stay
@@ -391,7 +391,7 @@ describe('⑥ WorkbenchContext ratchet — round 3: exemption granularity goes i
     )
 
     expect(
-      ratchetMessages(result),
+      gateMessages(result),
       'the inline-grandfathered import line must not be reported',
     ).toHaveLength(0)
   })
@@ -399,7 +399,7 @@ describe('⑥ WorkbenchContext ratchet — round 3: exemption granularity goes i
   it('grandfathered file: a NEW uncommented violation must be reported', async () => {
     // Without per-line granularity, an already-grandfathered file could grow
     // ARBITRARY new WorkbenchContext dependencies invisibly — the exact growth
-    // the ratchet exists to forbid.
+    // the gate exists to forbid.
     // Line 2 carries the grandfather marker (line 1) and stays exempt; the
     // namespace import on line 3 is new and unmarked, and MUST be reported.
     const result = await lintAt(
@@ -415,11 +415,11 @@ describe('⑥ WorkbenchContext ratchet — round 3: exemption granularity goes i
     )
 
     expect(
-      ratchetMessagesOnLine(result, 3),
+      gateMessagesOnLine(result, 3),
       'a new unmarked violation inside a grandfathered file must be reported',
     ).not.toHaveLength(0)
     expect(
-      ratchetMessagesOnLine(result, 2),
+      gateMessagesOnLine(result, 2),
       'the inline-grandfathered line must stay exempt even when the file has new violations',
     ).toHaveLength(0)
   })
@@ -438,7 +438,7 @@ describe('⑥ WorkbenchContext ratchet — round 3: exemption granularity goes i
     )
 
     expect(
-      ratchetMessages(result),
+      gateMessages(result),
       'the inline-exempted public re-export in api.ts must not be reported',
     ).toHaveLength(0)
   })
@@ -459,21 +459,21 @@ describe('⑥ WorkbenchContext ratchet — round 3: exemption granularity goes i
     )
 
     expect(
-      ratchetMessagesOnLine(result, 3),
+      gateMessagesOnLine(result, 3),
       'a new unmarked violation in api.ts must be reported',
     ).not.toHaveLength(0)
     expect(
-      ratchetMessagesOnLine(result, 2),
+      gateMessagesOnLine(result, 2),
       'the inline-exempted re-export line must stay exempt even when api.ts has new violations',
     ).toHaveLength(0)
   })
 })
 
-describe('⑦ WorkbenchContext ratchet — round 4: grandfather inventory ceiling', () => {
+describe('⑦ WorkbenchContext gate — round 4: grandfather inventory ceiling', () => {
   /**
    * The greppable audit token inside GRANDFATHER_COMMENT. Counted as an exact
    * substring so re-formatting the directive part (`eslint-disable-line` vs
-   * `-next-line`, spacing) cannot dodge the inventory — what is ratcheted is
+   * `-next-line`, spacing) cannot dodge the inventory — what is gateed is
    * the JUSTIFICATION marker every exemption must carry.
    */
   const MARKER = 'grandfathered(workbench-context): shrink-only'

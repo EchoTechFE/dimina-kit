@@ -1,8 +1,8 @@
-// Guards the code-duplication ratchet's contract with the engine: the scalar
+// Guards the code-duplication gate's contract with the engine: the scalar
 // `value` it reports (total duplicated lines) and the `breakdown` keys the gate
 // diffs against must actually reflect real copy-paste, scoped to production
 // source under packages/*/src, with test/declaration noise excluded.
-// Run with: node --test tools/ratchet/code-duplication.test.ts
+// Run with: node --test tools/pawl/code-duplication.test.ts
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
@@ -34,7 +34,7 @@ const DUP_BLOCK = `function computeTotal(items) {
 }`;
 
 async function withFixture(files: Record<string, string>, fn: (root: string) => Promise<void>) {
-  const root = await mkdtemp(join(tmpdir(), 'ratchet-code-dup-'));
+  const root = await mkdtemp(join(tmpdir(), 'gate-code-dup-'));
   try {
     for (const [relPath, content] of Object.entries(files)) {
       const full = join(root, relPath);
@@ -79,7 +79,7 @@ test('two production files sharing a large block are flagged as one clone', asyn
 test('a block duplicated between a .test.ts fixture and a production file is not counted', async () => {
   // Guards against test-fixture noise inflating production duplication: a test
   // file legitimately re-declaring a helper for its own assertions must not
-  // make the ratchet think production code duplicated itself.
+  // make the gate think production code duplicated itself.
   await withFixture(
     {
       'packages/foo/src/order.ts': `export type Item = { id: string; price: number; onSale: boolean; taxable: boolean };\n\n${DUP_BLOCK}\n`,
@@ -108,7 +108,7 @@ test('a block duplicated inside a .d.ts declaration file is not counted', async 
 test('duplicates inside node_modules/build/generated dirs under src are not counted', async () => {
   // Guards against vendored deps and build/codegen output inflating production
   // duplication: generated or third-party copies of a source block are not
-  // production copy-paste and must not move the ratchet.
+  // production copy-paste and must not move the gate.
   await withFixture(
     {
       'packages/foo/src/a.ts': `export type Item = { id: string; price: number; onSale: boolean; taxable: boolean };\n\n${DUP_BLOCK}\n`,

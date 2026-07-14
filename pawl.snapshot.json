@@ -5,8 +5,8 @@
       "value": 2,
       "unit": "import cycles",
       "breakdown": {
-        "packages/devtools/src/renderer/modules/main/features/project-runtime/controllers/use-device.ts -> packages/devtools/src/renderer/modules/main/features/project-runtime/controllers/use-panel-data.ts -> packages/devtools/src/renderer/modules/main/features/project-runtime/controllers/use-project-runtime-controller.ts -> packages/devtools/src/renderer/modules/main/features/project-runtime/controllers/use-session.ts -> packages/devtools/src/renderer/modules/main/features/project-runtime/controllers/use-simulator.ts": 5,
-        "packages/devtools/src/simulator/device-shell/menu-capsule.tsx -> packages/devtools/src/simulator/device-shell/navigation-bar.tsx": 2
+        "packages/devtools/src/renderer/modules/main/features/project-runtime/controllers/use-device.ts -\u003e packages/devtools/src/renderer/modules/main/features/project-runtime/controllers/use-panel-data.ts -\u003e packages/devtools/src/renderer/modules/main/features/project-runtime/controllers/use-project-runtime-controller.ts -\u003e packages/devtools/src/renderer/modules/main/features/project-runtime/controllers/use-session.ts -\u003e packages/devtools/src/renderer/modules/main/features/project-runtime/controllers/use-simulator.ts": 5,
+        "packages/devtools/src/simulator/device-shell/menu-capsule.tsx -\u003e packages/devtools/src/simulator/device-shell/navigation-bar.tsx": 2
       }
     },
     "code-duplication": {
@@ -52,13 +52,13 @@
     "cognitive-complexity": {
       "direction": "lower-is-better",
       "value": 0,
-      "unit": "fns > 15",
-      "breakdown": {}
+      "unit": "fns \u003e 15",
+      "breakdown": null
     },
     "file-length": {
       "direction": "lower-is-better",
       "value": 56,
-      "unit": "files > 500 lines",
+      "unit": "files \u003e 500 lines",
       "breakdown": {
         "packages/devkit/src/compile-worker.test.ts": 1037,
         "packages/devtools/src/main/app/app.ts": 653,
@@ -120,11 +120,11 @@
     },
     "test-coverage": {
       "direction": "higher-is-better",
-      "value": 73.35,
+      "value": 73.1,
       "unit": "% lines",
       "breakdown": {
         "devkit": 93.31,
-        "devtools": 68.23,
+        "devtools": 68.04,
         "electron-deck": 95.23,
         "electron-deck/dock-react": 79.05,
         "fs-core": 94.71,
@@ -136,11 +136,11 @@
     },
     "test-report": {
       "direction": "higher-is-better",
-      "value": 3883,
+      "value": 3879,
       "unit": "passed tests",
       "breakdown": {
         "devkit": 147,
-        "devtools": 2310,
+        "devtools": 2306,
         "electron-deck": 1024,
         "electron-deck/dock-react": 96,
         "fs-core": 77,
@@ -151,23 +151,23 @@
     },
     "type-coverage": {
       "direction": "higher-is-better",
-      "value": 99.76,
+      "value": 99.75,
       "unit": "%",
       "breakdown": {
         "devkit": 99.91,
-        "devtools": 99.73,
+        "devtools": 99.71,
         "electron-deck": 99.72,
-        "fs-core": 99.96,
+        "fs-core": 99.97,
         "inspect": 99.97,
         "view-anchor": 100,
-        "workbench": 99.91
+        "workbench": 99.93
       }
     },
     "type-escapes": {
       "direction": "lower-is-better",
       "value": 0,
       "unit": "explicit any / ts-comments",
-      "breakdown": {}
+      "breakdown": null
     }
   }
 }

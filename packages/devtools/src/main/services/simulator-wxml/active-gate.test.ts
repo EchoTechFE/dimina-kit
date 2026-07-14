@@ -2,7 +2,7 @@
  * setupSimulatorWxml — visibility-gate lifecycle + coalescing edge cases.
  *
  * Split from index.test.ts (which owns registration / pull / push / dispose) to
- * keep each file focused and under the length ratchet. These pin the codex-flagged
+ * keep each file focused and under the length gate. These pin the codex-flagged
  * race fixes: the DOM observer must (re)attach once the render guest exists, an
  * in-flight pull must not push after the panel is hidden/disposed, and events
  * from a non-active app must not drive a spurious walk of the visible page.

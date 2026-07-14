@@ -1,4 +1,4 @@
-// Code-duplication ratchet — delegates clone detection to jscpd (token-based
+// Code-duplication gate — delegates clone detection to jscpd (token-based
 // copy-paste detection, local Rust binary, no online service). Token-level
 // matching also catches "similar" code where only identifiers/literals changed
 // slightly, not just byte-identical blocks.
@@ -87,7 +87,7 @@ async function measure(opts: MeasureOptions = {}): Promise<MeasureResult> {
   const dirs = await srcDirs(root);
   if (dirs.length === 0) return { value: 0, unit: 'duplicated lines', breakdown: {} };
 
-  const out = await mkdtemp(join(tmpdir(), 'ratchet-jscpd-'));
+  const out = await mkdtemp(join(tmpdir(), 'gate-jscpd-'));
   try {
     await runJscpd([
       ...dirs,

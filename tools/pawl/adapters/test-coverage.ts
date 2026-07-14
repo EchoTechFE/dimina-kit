@@ -1,4 +1,4 @@
-// Test-coverage ratchet — reads the v8 `coverage-summary.json` each package's
+// Test-coverage gate — reads the v8 `coverage-summary.json` each package's
 // `test` script emits (`--coverage.enabled --coverage.reporter=json-summary
 // --coverage.reportsDirectory=<dir>`) and gates on lines coverage. The vitest
 // configs pin `coverage.include` to all of `src/**`, so the denominator counts
@@ -33,7 +33,7 @@ export function expectedCoverageOf(
     throw new Error(
       `package "${pkgName}" declares ${reports.length} vitest report(s) but ${dirs.length} ` +
         '--coverage.reportsDirectory flag(s) — every suite must emit a coverage summary so the ' +
-        'test-coverage ratchet can count it.',
+        'test-coverage gate can count it.',
     );
   }
   return reports.map((r, i) => ({ key: r.key, dir: dirs[i] }));

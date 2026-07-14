@@ -2,7 +2,7 @@
 // threshold surfaces exactly one sonarjs violation; an explicit `any` surfaces a
 // no-explicit-any violation. The rule scoring itself belongs to the upstream
 // plugins and is not re-tested here.
-// Run with: node --test tools/ratchet/adapters.test.ts
+// Run with: node --test tools/pawl/adapters.test.ts
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import sonarjs from 'eslint-plugin-sonarjs';
