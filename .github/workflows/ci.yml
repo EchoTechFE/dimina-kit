@@ -109,15 +109,21 @@ jobs:
       - name: Test
         run: pnpm turbo run test --cache-dir=.turbo
 
+      # Install the pawl binary through its own GitHub Action (no npm launcher
+      # needed on CI); the adapters below still run via Node.
+      - name: Install pawl
+        uses: tiangong-dev/pawl@v0.2.0
+
       # pawl (Go) is the gate engine; tools/pawl keeps only the adapters
       # pawl's exec dimensions delegate to (via pawl-adapter.ts), so their
       # measure() code is guarded by the adapter tests below before the gate runs.
+      # --format json gives the PR-comment step a structured verdict to render.
       - name: Anti-regression gate
         run: |
           set -o pipefail
           pnpm exec tsc -p tools/pawl
           node --test "tools/pawl/*.test.ts"
-          pnpm pawl:check 2>&1 | tee gate-check.log
+          pawl check --format json | tee gate.json
 
       # Upserts one sticky comment (keyed by the marker) with the gate
       # table, so the PR always shows the latest baseline-vs-current state
@@ -128,13 +134,29 @@ jobs:
         with:
           script: |
             const fs = require('fs')
-            let log = ''
-            try { log = fs.readFileSync('gate-check.log', 'utf8') } catch { return }
-            const start = log.indexOf('metric ')
-            const table = (start === -1 ? log : log.slice(start)).replace(/ ELIFECYCLE.*$/ms, '').trim()
-            if (!table) return
+            let report
+            try { report = JSON.parse(fs.readFileSync('gate.json', 'utf8')) } catch { return }
+            if (!report || !Array.isArray(report.metrics)) return
+            const cell = (v) => (v === null || v === undefined) ? '—' : String(v)
+            const delta = (m) => {
+              if (m.base === null || m.base === undefined) return 'new'
+              const d = Math.round((m.current - m.base) * 100) / 100
+              return d > 0 ? `+${d}` : `${d}`
+            }
+            const rows = report.metrics.map(
+              (m) => `| ${m.id} | ${cell(m.base)} | ${cell(m.current)} | ${delta(m)} | ${m.status} |`,
+            )
+            const table = ['| metric | baseline | current | Δ | status |', '|---|---|---|---|---|', ...rows].join('\n')
+            const regressed = report.metrics.filter((m) => (m.regressions || []).some((r) => !r.suppressed))
+            const details = regressed.length
+              ? '\n\n**Regressions**\n' + regressed.map(
+                  (m) => `- \`${m.id}\` — ${m.title}\n` +
+                    m.regressions.filter((r) => !r.suppressed).map((r) => `  - ${r.message}`).join('\n'),
+                ).join('\n')
+              : ''
+            const verdict = report.exit_code === 0 ? '✅ no regressions' : '❌ regressions'
             const marker = '<!-- pawl-report -->'
-            const body = `${marker}\n### Anti-regression gate\n\n\`\`\`\n${table}\n\`\`\`\n`
+            const body = `${marker}\n### Anti-regression gate — ${verdict}\n\n${table}${details}\n`
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner, repo: context.repo.repo,
               issue_number: context.issue.number, per_page: 100,
@@ -156,4 +178,4 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           git fetch --depth=1 origin "$GITHUB_BASE_REF"
-          pnpm exec pawl baseline-guard FETCH_HEAD
+          pawl baseline-guard FETCH_HEAD
