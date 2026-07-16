@@ -46,6 +46,7 @@ import { startWorkbenchCoiServer } from '../services/workbench-coi-server.js'
 import { UpdateManager } from '../services/update/index.js'
 import { toDisposable, type Disposable } from '@dimina-kit/electron-deck/main'
 import { IpcRegistry } from '../utils/ipc-registry.js'
+import { WindowChannel } from '../../shared/ipc-channels.js'
 
 const DEFAULT_MODULES: Record<BuiltinModuleId, boolean> = {
   projects: true,
@@ -276,7 +277,11 @@ function setupMcp(): Disposable | null {
   return startMcpServer(cdpPort, settings.mcp.port)
 }
 
-function wireAppWindowEvents(config: WorkbenchAppConfig, instance: WorkbenchAppInstance): Disposable {
+function wireAppWindowEvents(
+  config: WorkbenchAppConfig,
+  instance: WorkbenchAppInstance,
+  isOnProjectScreen: () => boolean,
+): Disposable {
   const { mainWindow, context } = instance
   // In-flight guard: `closeProject()` is async, and the window stays open
   // (preventDefault'd) while it runs — a second close click during that window
@@ -309,14 +314,26 @@ function wireAppWindowEvents(config: WorkbenchAppConfig, instance: WorkbenchAppI
         return
       }
 
-      if (!context.workspace.hasActiveSession()) return
+      // Keep the app alive on close whenever EITHER a live compiled session
+      // exists OR the renderer reports it is on a project screen. The renderer
+      // enters the project screen (and reports it) before openProject resolves,
+      // so a FAILED open — invalid/non-existent project, no session ever
+      // created — still parks the renderer there showing the compile-failed
+      // overlay. Keying off `hasActiveSession()` alone let that close fall
+      // through with no preventDefault → the last window is destroyed →
+      // `window-all-closed` → `app.quit()`, quitting the whole app instead of
+      // returning to the list. The two signals answer one question ("is the
+      // user inside a project, so close means back-to-list?"); the renderer's
+      // screen is the authority and hasActiveSession is a resource-safety belt
+      // (never destroy the window while a live session runs behind it).
+      if (!context.workspace.hasActiveSession() && !isOnProjectScreen()) return
 
-      // Close button while a project session is open: stay in the workbench
-      // and surface the project list. Tear down only the session — do NOT
-      // dispose `context.registry`, which owns every IPC handler (projects,
-      // dialog, settings…). Disposing it would leave the renderer alive but
-      // unable to invoke anything, so subsequent clicks on Import/etc. would
-      // raise `No handler registered for ...`.
+      // Close button while inside a project: stay in the workbench and surface
+      // the project list. Tear down only the session — do NOT dispose
+      // `context.registry`, which owns every IPC handler (projects, dialog,
+      // settings…). Disposing it would leave the renderer alive but unable to
+      // invoke anything, so subsequent clicks on Import/etc. would raise
+      // `No handler registered for ...`.
       e.preventDefault()
       closing = true
       try {
@@ -646,7 +663,24 @@ export async function createDevtoolsRuntime(config: WorkbenchAppConfig = {}): Pr
     context.views.setWorkbenchSource(coiServer.baseUrl)
   }
 
-  context.registry.add(wireAppWindowEvents(config, instance))
+  // Main's mirror of the renderer's top-level screen. The renderer's `page`
+  // state is the single authority; it pushes every change over
+  // WindowChannel.ScreenState. Main reads this mirror in the window-close
+  // decision so a close while the renderer is parked on a project screen (even
+  // a failed open with no session) returns to the list instead of quitting.
+  let rendererScreen: 'list' | 'project' = 'list'
+  context.registry.add(
+    new IpcRegistry(context.senderPolicy).handle(
+      WindowChannel.ScreenState,
+      (_e, screen) => {
+        rendererScreen = screen === 'project' ? 'project' : 'list'
+      },
+    ),
+  )
+
+  context.registry.add(
+    wireAppWindowEvents(config, instance, () => rendererScreen === 'project'),
+  )
   context.registry.add(enableDevRendererAutoReload(rendererDir))
 
   return instance

@@ -99,6 +99,17 @@ export function onWindowNavigateBack(handler: () => void): () => void {
 }
 
 /**
+ * Report the current top-level screen to main so its window-close decision
+ * knows whether to return to the project list or quit the app. Call on every
+ * screen change, including entering a project (BEFORE the open resolves — a
+ * failed open then leaves main's mirror = 'project', so closing returns to the
+ * list instead of quitting). Fire-and-forget.
+ */
+export function notifyWindowScreen(screen: 'list' | 'project'): void {
+  void invoke<void>(WindowChannel.ScreenState, screen)
+}
+
+/**
  * NATIVE-HOST ONLY. Subscribe to the visible page route pushed by main on every
  * in-app navigation (the page stack lives in the DeviceShell WebContentsView,
  * so the renderer can't observe it from `<webview>` nav events). The default

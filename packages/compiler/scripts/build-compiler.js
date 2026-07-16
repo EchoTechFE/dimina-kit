@@ -121,6 +121,8 @@ if (MODE === 'node') {
     'node:url': shim('url.js'),
     'url': shim('url.js'),
     'node:worker_threads': shim('worker_threads.js'),
+    'node:crypto': shim('crypto.js'),
+    'crypto': shim('crypto.js'),
     'node:path': 'path-browserify',
     'path': 'path-browserify',
     'node:events': 'events',

@@ -13,6 +13,7 @@ import {
   getThumbnail,
   listProjects,
   listTemplates,
+  notifyWindowScreen,
   onWindowNavigateBack,
   openCreateProjectDialog,
   removeProject,
@@ -59,6 +60,13 @@ export default function Main() {
       ),
     ).then((entries) => setThumbnails(Object.fromEntries(entries)))
   }, [projectList])
+
+  // Report our top-level screen to main so its window-close decision knows
+  // whether to return to the project list or quit. Fires on entry (including a
+  // failed open, which parks on the project screen) and on every change.
+  useEffect(() => {
+    notifyWindowScreen(page === 'project' ? 'project' : 'list')
+  }, [page])
 
   useEffect(() => {
     const off = onWindowNavigateBack(() => {
