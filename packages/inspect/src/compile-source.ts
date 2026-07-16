@@ -5,7 +5,10 @@
 // in-page compile-service callback, or anything else.
 import type { CompileEvent, CompileLogEntry } from './compile-types.js'
 
-/** The seed payload: both stores, chronological (oldest first). */
+/** The seed payload: both stores, chronological (oldest first). Cross-stream
+ * order between an event and a log sharing the same millisecond `at` is only
+ * preserved when the host stamps `seq` itself — an unstamped snapshot gets
+ * `seq` assigned per store (events first), so such ties sort event-first. */
 export interface CompileFeedSnapshot {
   events: CompileEvent[]
   logs: CompileLogEntry[]

@@ -132,7 +132,7 @@ export function AppDataPanel({
               >
                 {keys.length === 0 ? (
                   <div className="text-[12px] text-text-dim text-center px-4 py-6">
-                    暂无页面数据（仅显示 Page 级 data）
+                    {isRuntimeRunning ? '暂无页面数据（仅显示 Page 级 data）' : '小程序未运行'}
                   </div>
                 ) : (
                   keys.map((comp) => (

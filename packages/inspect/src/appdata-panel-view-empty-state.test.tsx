@@ -34,6 +34,25 @@ describe('AppDataPanel: empty-state copy reflects whether the session is actuall
     ).toBe(true)
   })
 
+  it('keeps the "not running" copy inside a kept-alive bridge container whose entries are empty', () => {
+    // A host-built snapshot can carry a bridge with zero entries; the
+    // per-bridge empty text must not claim "no page data yet" while the
+    // session is actually down.
+    const state: AppDataState = {
+      bridges: [{ id: 'b1', pagePath: 'pages/index/index' }],
+      activeBridgeId: 'b1',
+      entries: { b1: {} },
+    }
+    const { getByTestId } = render(
+      <AppDataPanel state={state} onSelectBridge={() => {}} isRuntimeRunning={false} />,
+    )
+    const text = getByTestId('appdata-panel').textContent ?? ''
+    expect(
+      text.includes('未运行'),
+      `expected the per-bridge empty state to signal the session is not running; got: "${text}"`,
+    ).toBe(true)
+  })
+
   it('keeps the existing "暂无页面数据" copy (unchanged) once running', () => {
     const { getByTestId, getByText } = render(<AppDataPanel {...makeProps(true)} />)
     expect(getByText('暂无页面数据（仅显示 Page 级 data）')).toBeTruthy()
