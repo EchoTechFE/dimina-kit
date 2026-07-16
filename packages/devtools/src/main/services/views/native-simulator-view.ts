@@ -11,6 +11,7 @@ import {
 } from '../simulator/custom-apis.js'
 import type { SafeAreaController } from '../safe-area/index.js'
 import { configureMiniappSession, miniappPartition } from './miniapp-partition.js'
+import { refreshGuestStylesheets } from './refresh-styles.js'
 import { parseRoute } from '../../../shared/simulator-route.js'
 import { SIMULATOR_EVENTS } from '../../../shared/bridge-channels.js'
 import type { RelaunchPayload } from '../../../shared/bridge-channels.js'
@@ -19,37 +20,6 @@ import type { DevtoolsHost } from './native-simulator-devtools-host.js'
 import type { OverlayPanelsView } from './overlay-panels-view.js'
 import type { PlacementReconciler } from './placement-reconciler.js'
 import type { ViewManagerContext } from './view-manager.js'
-
-/**
- * Injected into each live render-host guest to hot-swap its stylesheets in
- * place: for every `<link rel=stylesheet>`, insert a cache-busted clone
- * (`?__hmr=<ts>`) so the browser re-fetches the recompiled `.css` and re-applies
- * it against the already-mounted DOM, then drop the stale sheet once the fresh
- * one loads (no unstyled flash). Recurses into same-origin iframes because a
- * render-host page nests its content in an iframe. Self-contained (runs in the
- * guest realm via `executeJavaScript`), defensive (never throws). Mirrors
- * `@dimina-kit/devkit`'s `refreshStylesheets` (the SSE web-preview equivalent).
- */
-const REFRESH_STYLES_JS = `(function refresh(doc){
-  try {
-    var links = doc.querySelectorAll('link[rel="stylesheet"]');
-    for (var i = 0; i < links.length; i++) {
-      var link = links[i];
-      try {
-        var u = new URL(link.href, doc.baseURI || undefined);
-        u.searchParams.set('__hmr', String(Date.now()));
-        var next = link.cloneNode();
-        next.href = u.href;
-        next.addEventListener('load', (function(stale){ return function(){ stale.remove(); }; })(link));
-        link.parentNode.insertBefore(next, link.nextSibling);
-      } catch (e) {}
-    }
-    var frames = doc.querySelectorAll('iframe');
-    for (var j = 0; j < frames.length; j++) {
-      try { if (frames[j].contentDocument) refresh(frames[j].contentDocument); } catch (e) {}
-    }
-  } catch (e) {}
-})(document);`
 
 /**
  * NATIVE-HOST ONLY. The native simulator is a top-level WebContentsView (the
@@ -453,32 +423,17 @@ export function createNativeSimulatorView(
   }
 
   /**
-   * Style-only hot swap: cache-bust every render-host stylesheet `<link>` in
-   * place so a recompiled `.css` re-applies against the already-mounted page
-   * WITHOUT respawning the DeviceShell — the page stack / form state / scroll
-   * position and window focus all survive (unlike `softReloadNativeSimulator`,
-   * which reboots the whole app session). Runs the refresh in every live
-   * render-host guest, found via `hostWebContents === simWc` — the same nesting
-   * pattern `applyNativeSimulatorBounds` uses to reach the guests. Returns false
-   * when the shell isn't ready or no guest is live, so the caller falls back to a
-   * full reload rather than silently swallowing the rebuild.
+   * Style-only hot swap: cache-bust every render-host stylesheet in place so a
+   * recompiled `.css` re-applies against the already-mounted page WITHOUT
+   * respawning the DeviceShell — page stack / form state / scroll / focus all
+   * survive (unlike `softReloadNativeSimulator`, which reboots the app session).
+   * Returns false when the shell isn't ready or no guest is live, so the caller
+   * falls back to a full reload rather than silently swallowing the rebuild.
    */
   function refreshSimulatorStyles(): boolean {
     const view = nativeSimulatorView
     if (!view || view.webContents.isDestroyed() || !nativeSimulatorShellReady) return false
-    const simWc = view.webContents
-    let refreshed = 0
-    try {
-      for (const wc of webContents.getAllWebContents()) {
-        if (wc.isDestroyed()) continue
-        if (wc.hostWebContents !== simWc) continue
-        wc.executeJavaScript(REFRESH_STYLES_JS).catch(() => { /* guest torn down mid-refresh */ })
-        refreshed++
-      }
-    } catch {
-      return false
-    }
-    return refreshed > 0
+    return refreshGuestStylesheets(view)
   }
 
   function detachSimulator(): void {

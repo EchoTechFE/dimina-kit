@@ -200,7 +200,7 @@ describe('composeBuildCompleted: onRebuild receives the style-only verdict', () 
 
 		fn(['a.wxss', 'a.js'])
 
-		expect(onRebuild.mock.calls[0]![0].styleOnly).toBe(false)
+		expect((onRebuild.mock.calls[0]![0] as { styleOnly: boolean }).styleOnly).toBe(false)
 	})
 
 	it('a custom styleExts-only change (e.g. .qdss) reports styleOnly:true', () => {
@@ -215,7 +215,7 @@ describe('composeBuildCompleted: onRebuild receives the style-only verdict', () 
 
 		fn(['theme.qdss'])
 
-		expect(onRebuild.mock.calls[0]![0].styleOnly).toBe(true)
+		expect((onRebuild.mock.calls[0]![0] as { styleOnly: boolean }).styleOnly).toBe(true)
 	})
 
 	it('called with no changedPaths reports styleOnly:false and an empty changedPaths array', () => {
