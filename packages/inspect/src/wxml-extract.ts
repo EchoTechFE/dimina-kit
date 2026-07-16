@@ -55,71 +55,25 @@ function pascalToKebab(name: string): string {
   return name.replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase()
 }
 
-/**
- * Read the page's source path off Vue's provide/inject. dimina runtime.js 在
- * dd-page 的 setup() 里调用 `provide('path', path)`，Vue 把它存到
- * `instance.provides`。我们利用这个把页面节点的 tagName 从硬编码 `page`
- * 升级为页面全路径（如 `pages/index/index`），对齐微信开发者工具。
- */
-function resolvePagePath(instance: ComponentInstance): string | null {
-  // dimina runtime 在 dd-page 的 setup 里 `instance.proxy.__page__ = true` 并
-  // `provide('path', path)`。两个标记同时具备才视为页面层级，避免 dd-page
-  // 的子节点继承 provides.path 后被误判（Vue 用 Object.create 链式 provides）。
-  const proxy = (instance as Record<string, unknown>).proxy as
-    | Record<string, unknown>
-    | undefined
-  if (proxy?.__page__ !== true) return null
-  const provides = (instance as Record<string, unknown>).provides as
-    | Record<string, unknown>
-    | undefined
-  const path = provides?.path
-  if (typeof path !== 'string' || !path) return null
-  return path.startsWith('/') ? path.slice(1) : path
-}
-
-/**
- * A NATIVE dimina custom component (a `usingComponents` entry) calls
- * `provide('path', componentPath)` in its setup (render runtime), so its
- * provided `path` DIFFERS from its parent's. A plain descendant inherits the
- * same provides object (identical `path`) and is not a boundary; a Taro template
- * wrapper (`dd-tpl-*`) never provides, so it never differs either. Comparing
- * against the parent's provided path therefore isolates exactly the native
- * component roots — matching WeChat, which shows each custom component as a node
- * tagged with its full registered path (with a synthetic `#shadow-root` added by
- * `wrapInShadowRoot` since the path contains `/`). Pages are handled earlier via
- * their authoritative `__page__` marker, so this only fires for components.
- */
-function resolveComponentPath(instance: ComponentInstance): string | null {
-  const provides = (instance as Record<string, unknown>).provides as Record<string, unknown> | undefined
-  const path = provides?.path
-  if (typeof path !== 'string' || !path) return null
-  const parent = instance.parent as Record<string, unknown> | undefined
-  const parentProvides = parent?.provides as Record<string, unknown> | undefined
-  if (path === parentProvides?.path) return null
-  return path.startsWith('/') ? path.slice(1) : path
-}
-
-function resolveTagName(instance: ComponentInstance): string {
+export function resolveTagName(instance: ComponentInstance): string {
   const type = instance.type
   if (!type) return 'unknown'
-  // 页面层级优先：dd-page 没有 __tagName/__name，且 home 页等无 usingComponents
-  // 的页面 type.components 为 undefined，会落到 resolveTemplateNameFromParent
-  // 回到 'page'。在那之前直接用 provide('path') 的路径升级 tag 名。
-  const pagePath = resolvePagePath(instance)
-  if (pagePath) return pagePath
-  // Native custom-component boundary → tag with its full registered path (WeChat
-  // parity). Must precede the __tagName/__name/dd- shortening below, which would
-  // otherwise collapse `dd-foo` to the bare `foo` and lose the path.
-  const componentPath = resolveComponentPath(instance)
-  if (componentPath) return componentPath
+  // Authoritative source-path identity: the render runtime sets each compiled
+  // page/custom-component's Vue `name` to its miniprogram module path. A name
+  // containing `/` IS that source path — trust it directly (WeChat parity).
+  // It is per-type (not inherited via provides), so a descendant never leaks its
+  // ancestor's path, and it needs no live provide/inject chain to reconstruct.
+  const nameId = (type.name || type.__name) as string | undefined
+  if (nameId && nameId.includes('/')) {
+    return nameId.startsWith('/') ? nameId.slice(1) : nameId
+  }
   if (typeof type.__tagName === 'string') return type.__tagName
   const name = (type.__name || type.name) as string | undefined
   if (!name) {
-    // A nameless component carrying a `__scopeId` is a compiled page, custom
-    // component, or framework template wrapper. The page is already resolved
-    // above via its authoritative `__page__` marker, so by here it is NOT a
-    // page — recover the registered tag (e.g. a Taro `taro_tmpl`/`tmpl_0_3`
-    // wrapper) and fall back to `template`. Defaulting to `page` here would
+    // A nameless component carrying a `__scopeId` is a framework template
+    // wrapper (e.g. a Taro `taro_tmpl`/`tmpl_0_3`) — pages and custom components
+    // carry a path `name` and are resolved above. Recover the registered tag and
+    // fall back to `template`; never default to `page` here, which would
     // mislabel every such wrapper as a second page root.
     if (type.__scopeId) return resolveTemplateNameFromParent(instance) || 'template'
     return 'unknown'

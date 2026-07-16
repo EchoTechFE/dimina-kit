@@ -58,13 +58,13 @@ function freshFs(files, workPath) {
   return createFsFromVolume(Volume.fromJSON(files, workPath))
 }
 
-// Run setupCompile ONCE for a compile: parse config, allocate the scope-hash ids
-// (page + component `data-v-XXXXX`), scaffold app-config.json + miniprogram_npm.
-// Returns the SERIALIZABLE id bundle every stage worker must share, plus the
-// non-stage scaffold files. Sharing this one bundle across the per-stage realms is
-// what keeps the CSS `[data-v-X]` selectors and the render `Module id` in agreement:
-// if each stage ran its own setupCompile it would roll its own random uuids and every
-// WXSS rule would target a selector that never renders (see scripts/test-pool-scopehash.js).
+// Run setupCompile ONCE for a compile: parse config, build the scaffold
+// (app-config.json + miniprogram_npm), and collect the { pages, storeInfo } bundle.
+// Sharing this one bundle across the per-stage realms lets the heavy setup work (npm
+// build, config parse) run once instead of per stage. Scope ids are a deterministic
+// hash(path) (dimina utils.js), so the CSS `[data-v-<id>]` selectors and the render
+// `Module id` agree across stages no matter who runs setup — the shared bundle is a
+// de-dup optimization, not a scope-correctness requirement (see scripts/test-pool-scopehash.js).
 async function runSetup(files, workPath, options) {
   const fs = freshFs(files, workPath)
   resetCompilerState()
@@ -87,11 +87,12 @@ async function runSetup(files, workPath, options) {
 // stays correct across compiles. Stages write disjoint products; we return this
 // worker's subset and the pool unions them.
 //
-// With a `bundle` (from runSetup), the stage reuses the coordinator's shared ids
-// (mirroring the Node disk pool, which broadcasts the same { pages, storeInfo } to
-// every stage worker) instead of running its own setupCompile — the fix for the
-// cross-stage scope-hash mismatch. Stages read source from `workPath` and write
-// disjoint products; they never read the setup scaffold, so it is not seeded here.
+// With a `bundle` (from runSetup), the stage reuses the coordinator's { pages, storeInfo }
+// instead of re-running setupCompile — so the npm build / config parse happens once, not
+// per stage (mirroring the Node disk pool). Scope ids are a deterministic hash(path), so
+// reusing the bundle vs re-deriving would yield the same `data-v-<id>` either way. Stages
+// read source from `workPath` and write disjoint products; they never read the setup
+// scaffold, so it is not seeded here.
 // Without a bundle the worker stays self-contained (single-worker / legacy callers).
 // `options` (e.g. { fileTypes }) is only used on the no-bundle fallback path: with a
 // bundle, its storeInfo already carries the normalized dialect from the coordinator's
