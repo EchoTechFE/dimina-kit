@@ -44,7 +44,7 @@ vi.mock('electron', () => ({
 
 // Import AFTER the mock so the module picks up the stubs.
 import type { MessageEnvelope } from '../../../shared/bridge-channels.js'
-import type { AppDataSnapshot } from '../../../shared/appdata-accumulator.js'
+import type { AppDataSnapshot } from '@dimina-kit/inspect'
 import { SimulatorAppDataChannel } from '../../../shared/ipc-channels.js'
 import { setupSimulatorAppData } from './index.js'
 

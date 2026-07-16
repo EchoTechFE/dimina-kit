@@ -25,7 +25,7 @@ import {
   DebugTabContent,
   type BottomDebugPanelProps,
 } from './bottom-debug-panel'
-import type { StoragePanelSource, WxmlNode, WxmlPanelSource } from '@dimina-kit/inspect'
+import type { AppDataPanelSource, StoragePanelSource, WxmlNode, WxmlPanelSource } from '@dimina-kit/inspect'
 
 /** A minimal one-node WXML tree served through the fake source. */
 function makeWxmlTree(): WxmlNode {
@@ -61,6 +61,15 @@ function makeStorageSource(): StoragePanelSource {
   }
 }
 
+/** Inert AppDataPanelSource: seeds an empty snapshot, never pushes live updates. */
+function makeAppDataSource(): AppDataPanelSource {
+  return {
+    getSnapshot: async () => ({ bridges: [], entries: {} }),
+    subscribe: () => () => {},
+    setActive: () => {},
+  }
+}
+
 /**
  * Full prop bag for DebugTabContent. Spies are individually overridable so a
  * test can assert a specific handler fires.
@@ -72,10 +81,8 @@ function makeProps(
     rightPane: { selected: 'wxml', simulatorVisible: true },
     onSelectTab: vi.fn(),
     wxmlSource: makeWxmlSource(),
-    appData: { bridges: [], activeBridgeId: null, entries: {} },
-    onRefreshAppData: vi.fn(),
-    onSelectAppDataBridge: vi.fn(),
     storageSource: makeStorageSource(),
+    appDataSource: makeAppDataSource(),
     compileEvents: [],
     compileLogs: [],
     onClearCompileEvents: vi.fn(),
@@ -104,25 +111,29 @@ describe('DebugTabContent (reusable per-tab unit)', () => {
     expect(getByTestId('appdata-panel')).toBeTruthy()
   })
 
-  it("tabId='appdata' forwards onSelectAppDataBridge when a bridge is chosen", () => {
-    // Bug guarded: the bridge-selector handler dropped during extraction. With
-    // >1 bridge, the panel renders a button per bridge wired to onSelectBridge.
-    const onSelectAppDataBridge = vi.fn()
-    const props = makeProps({
-      onSelectAppDataBridge,
-      appData: {
+  it("tabId='appdata' feeds the source through to ConnectedAppDataPanel and switches the active bridge tab on click", async () => {
+    // Bug guarded: DebugTabContent must actually forward `appDataSource` to
+    // ConnectedAppDataPanel (the bridge-tab wiring itself is guarded by
+    // @dimina-kit/inspect's own suite) — a dropped or wrong-shaped source
+    // would leave the panel showing no bridge tabs at all.
+    const source: AppDataPanelSource = {
+      getSnapshot: async () => ({
         bridges: [
           { id: 'b1', pagePath: 'pages/a' },
           { id: 'b2', pagePath: 'pages/b' },
         ],
-        activeBridgeId: 'b1',
-        entries: {},
-      } as BottomDebugPanelProps['appData'],
-    })
-    const { getByRole } = render(<DebugTabContent tabId="appdata" {...props} />)
+        entries: { b1: { 'pages/a': { a: 1 } }, b2: { 'pages/b': { b: 2 } } },
+      }),
+      subscribe: () => () => {},
+      setActive: () => {},
+    }
+    const props = makeProps({ appDataSource: source })
+    const { findByRole, container } = render(<DebugTabContent tabId="appdata" {...props} />)
 
-    fireEvent.click(getByRole('button', { name: 'pages/b' }))
-    expect(onSelectAppDataBridge).toHaveBeenCalledWith('b2')
+    fireEvent.click(await findByRole('button', { name: 'pages/b' }))
+
+    const activeBridge = container.querySelector('[data-bridge-id="b2"]') as HTMLElement | null
+    expect(activeBridge?.style.display).toBe('flex')
   })
 
   it("tabId='storage' renders the Storage panel", () => {

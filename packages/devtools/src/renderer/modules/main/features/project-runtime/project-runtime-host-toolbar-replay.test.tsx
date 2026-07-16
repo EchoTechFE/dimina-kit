@@ -90,9 +90,12 @@ vi.mock('./controllers/use-project-runtime-controller', () => ({
       refreshWxml: vi.fn(),
       inspectWxmlElement: vi.fn(),
       clearWxmlElementInspection: vi.fn(),
-      appData: null,
-      refreshAppData: vi.fn(),
-      setActiveAppDataBridge: vi.fn(),
+      appDataSource: {
+        getSnapshot: vi.fn(async () => ({ bridges: [], entries: {} })),
+        subscribe: vi.fn(() => () => {}),
+        setActive: vi.fn(),
+      },
+      appDataEnabled: true,
       storageSource: {
         getSnapshot: vi.fn(async () => []),
         subscribe: vi.fn(() => () => {}),

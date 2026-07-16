@@ -15,6 +15,7 @@ import {
 } from '@/shared/api'
 import type { AppInfo, CompileLogEntry, SessionRuntimeStatusPayload } from '@/shared/api'
 import type { CompileConfig } from '@/shared/types'
+import type { CompileEvent } from '@dimina-kit/inspect'
 import { DEFAULT_SCENE } from '../../../../../../shared/constants'
 import type { CompileStatus } from './use-project-runtime-controller'
 
@@ -22,26 +23,12 @@ export interface UseSessionProps {
   projectPath: string
 }
 
-/**
- * One entry of the 编译 tab's event log. Sourced EXCLUSIVELY from
- * `projectStatus` payloads — per-line dmcc output lands in `compileLogs`
- * instead; the two stores never cross (merging is a view concern).
- */
-export interface CompileEvent {
-  /** Wall-clock capture time (Date.now) of the payload's arrival. */
-  at: number
-  status: string
-  message: string
-  /** True when the payload came from a watcher rebuild (热更新 chip). */
-  hotReload?: boolean
-  /**
-   * Optional shared monotonic arrival counter spanning compile events AND
-   * compile logs — the panel's same-`at` tie-break: `at` is a
-   * millisecond stamp, so an event and the log lines of the same compile
-   * routinely collide on it.
-   */
-  seq?: number
-}
+// The 编译 tab's event log entry shape lives in @dimina-kit/inspect (shared
+// with CompilePanel); re-exported here so existing importers (the controller
+// slice, tests) keep their `from '.../use-session'` path. Sourced EXCLUSIVELY
+// from `projectStatus` payloads — per-line dmcc output lands in `compileLogs`
+// instead; the two stores never cross (merging is a view concern).
+export type { CompileEvent }
 
 export type { CompileLogEntry }
 

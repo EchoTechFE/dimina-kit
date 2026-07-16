@@ -19,7 +19,7 @@ import {
   decodeWorkerMessage,
   decodedToInput,
   type AppDataSnapshot,
-} from '../../../shared/appdata-accumulator.js'
+} from '@dimina-kit/inspect'
 import { DisposableRegistry, type Disposable } from '@dimina-kit/electron-deck/main'
 import { IpcRegistry, type SenderPolicy } from '../../utils/ipc-registry.js'
 
