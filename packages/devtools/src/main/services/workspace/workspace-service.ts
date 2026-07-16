@@ -1,5 +1,5 @@
-import { z } from 'zod'
 import type { AppInfo, CompileConfig, ProjectSession } from '../../../shared/types.js'
+import { rejectInvalidAppId, validateProjectDirSafe } from './open-project-guards.js'
 // eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
 import type { WorkbenchContext } from '../workbench-context.js'
 import * as repo from '../projects/project-repository.js'
@@ -31,14 +31,6 @@ export interface OpenProjectResult {
   appInfo?: AppInfo
   error?: string
 }
-
-/**
- * Runtime guard for the adapter-return boundary: `session.appInfo` must carry a
- * NON-EMPTY string `appId` (the renderer scopes IPC by it; the bridge's
- * handleSpawn also rejects empty appIds, so accepting `''` would desync layers).
- * Loose: extra fields pass through — only the contract-critical `appId` is enforced.
- */
-const SessionAppInfoSchema = z.looseObject({ appId: z.string().min(1) })
 
 /**
  * The single source of truth for project + session + project-settings.
@@ -248,23 +240,6 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
     }
   }
 
-  /**
-   * Adapter-return boundary: a session without a string appId can't be driven by
-   * the renderer, so it must never become active. Close the live resources the
-   * adapter already spun up (best-effort) and return the error message; null when
-   * valid.
-   */
-  async function rejectInvalidAppId(session: ProjectSession): Promise<string | null> {
-    if (SessionAppInfoSchema.safeParse(session.appInfo).success) return null
-    try {
-      await session.close()
-    } catch (closeErr) {
-      console.warn('[workspace] closing appId-less adapter session failed (non-fatal):', closeErr)
-    }
-    return 'adapter returned session.appInfo without a string appId — '
-      + 'the CompilationAdapter must supply appInfo.appId'
-  }
-
   function applyRefererFromSession(session: ProjectSession): void {
     const appInfo = session.appInfo as { appId?: string; version?: string }
     if (appInfo && typeof appInfo.appId === 'string' && appInfo.appId.length > 0) {
@@ -317,7 +292,14 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
       // in-flight one; ownerSeq only grows, so a late-resolving earlier request
       // can't clobber a later one that already took over).
       opLock.takeOwnership(mySeq)
+      // Defer the workbench editor's heavy attach while this open's
+      // boot-critical window (old-session teardown + first compile) runs.
+      // The release is idempotent and bound to this hold, so every exit path
+      // below releases unconditionally; the gate's own cap timer backstops
+      // any future path that forgets to.
+      const releaseWorkbenchHold = ctx.views.holdWorkbenchAttach()
       if (await runOpenTeardown(mySeq)) {
+        releaseWorkbenchHold()
         return { success: false, error: 'superseded by a newer project open/close' }
       }
 
@@ -328,10 +310,9 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
       // `fetch(…).then(r=>r.text()).then(JSON.parse)` pipeline dies on the
       // dev server's HTML SPA fallback with
       // `SyntaxError: Unexpected token '<', "<!doctype "…`.
-      const dirError = provider.validateProjectDir
-        ? await provider.validateProjectDir(projectPath)
-        : null
+      const dirError = await validateProjectDirSafe(provider, projectPath)
       if (dirError) {
+        releaseWorkbenchHold()
         sendStatus('error', dirError)
         return { success: false, error: dirError }
       }
@@ -341,6 +322,9 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
       // generation — runCompile's onLog closure checks it per line.
       const sessionGeneration = ++logGeneration
       const compiled = await runCompile(projectPath, sessionGeneration)
+      // The compile settling — success OR failure — ends the boot-critical
+      // window (a failed compile is when the user needs the editor most).
+      releaseWorkbenchHold()
       if ('error' in compiled) {
         sendStatus('error', compiled.error)
         return { success: false, error: compiled.error }
@@ -392,6 +376,11 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
         // down ITS views. Skip — the newer op's own teardown covers the session
         // we meant to close.
         if (!opLock.isOwner(mySeq)) return
+        // Void any in-flight open's workbench attach hold BEFORE the teardown
+        // awaits below: the superseded open's compile can settle mid-close, and
+        // its release (or the gate's cap) must not rebuild the editor view for
+        // a project that is being closed.
+        ctx.views.cancelWorkbenchAttachHold()
         // Mark the close in progress BEFORE disposeSession nulls currentSession,
         // so bridge getters refuse to resolve the dying session during the
         // session.close() await (cleared in the finally once views are gone).

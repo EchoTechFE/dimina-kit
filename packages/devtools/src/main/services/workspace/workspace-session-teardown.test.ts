@@ -116,6 +116,8 @@ function makeHarness(opts?: {
   }
   const views = {
     disposeAll: vi.fn(() => events.push('views.disposeAll')),
+    holdWorkbenchAttach: vi.fn(() => vi.fn()),
+    cancelWorkbenchAttachHold: vi.fn(),
     // Project-scoped teardown: closeProject must call THIS, never disposeAll
     // (which would also kill the host toolbar — see view-manager-dispose-scopes.test.ts).
     disposeProjectViews: vi.fn(() => events.push('views.disposeProjectViews')),

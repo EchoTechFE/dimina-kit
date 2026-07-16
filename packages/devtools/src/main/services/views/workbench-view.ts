@@ -15,7 +15,16 @@ export interface WorkbenchView {
   setWorkbenchSource(url: string): void
   detachWorkbench(): void
   openFileInWorkbench(relPath: string, line: number, column: number): boolean
+  holdWorkbenchAttach(): () => void
+  cancelWorkbenchAttachHold(): void
 }
+
+/**
+ * Upper bound on how long a hold may defer the workbench attach. A hung or
+ * very slow first compile (or a lost release on some open path) degrades to a
+ * bounded editor delay plus a warn — never a permanently blank editor slot.
+ */
+const ATTACH_HOLD_CAP_MS = 3000
 
 export function createWorkbenchView(
   ctx: ViewManagerContext,
@@ -29,8 +38,20 @@ export function createWorkbenchView(
   // heavy WebContentsView load is deferred until the 'editor' slot first becomes
   // visible (first non-zero `setWorkbenchBounds`) so it never sits on the app
   // boot critical path (which would delay preload/window-ready and trip the e2e
-  // health check into a relaunch).
+  // health check into a relaunch), and further deferred while an attach hold
+  // (below) is in force.
   let workbenchUrl: string | null = null
+  // Attach gate: while held (and the view does not exist yet), the lazy attach
+  // is deferred so the workbench's heavy load never competes with a project
+  // open's boot-critical window (old-session teardown + first compile) for
+  // CPU. Generation-tagged: a newer hold supersedes an older one (latest-wins,
+  // mirroring the open op-lock), so a superseded open's late release cannot
+  // open a newer open's gate. The gate only postpones creation — it never
+  // hides or destroys an existing view, and detachWorkbench leaves it intact
+  // (an in-flight open holds across the old view's teardown).
+  let attachHeld = false
+  let attachHoldGeneration = 0
+  let attachHoldTimer: ReturnType<typeof setTimeout> | null = null
 
   /** Current devtools color scheme, mirrored into the workbench's theme. */
   function workbenchThemeScheme(): 'light' | 'dark' {
@@ -89,6 +110,55 @@ export function createWorkbenchView(
     workbenchUrl = url
   }
 
+  // Release the gate for `generation` (stale generations no-op) and replay the
+  // reconcile so a pending visible desired attaches through the normal lazy
+  // path. `viaCap` marks the self-release at the hold cap — loud, so a slow
+  // compile and a lost release stay distinguishable from a normal settle.
+  function releaseAttachHold(generation: number, viaCap: boolean): void {
+    if (!attachHeld || generation !== attachHoldGeneration) return
+    attachHeld = false
+    if (attachHoldTimer) {
+      clearTimeout(attachHoldTimer)
+      attachHoldTimer = null
+    }
+    if (viaCap) {
+      console.warn(
+        `[workbench] attach gate: hold not released within ${ATTACH_HOLD_CAP_MS}ms (compile still running or a release was lost) — attaching now`,
+      )
+    }
+    reconciler.reconcileNow()
+  }
+
+  /**
+   * Close the attach gate until the returned release fn runs, a newer hold
+   * supersedes it, explicit user intent (openFileInWorkbench) opens it, or the
+   * cap timer fires. The release fn is idempotent and generation-bound.
+   */
+  function holdWorkbenchAttach(): () => void {
+    const generation = ++attachHoldGeneration
+    attachHeld = true
+    if (attachHoldTimer) clearTimeout(attachHoldTimer)
+    attachHoldTimer = setTimeout(() => releaseAttachHold(generation, true), ATTACH_HOLD_CAP_MS)
+    return () => releaseAttachHold(generation, false)
+  }
+
+  /**
+   * Void the current hold WITHOUT the release replay: the gate belongs to an
+   * open request, and a teardown that preempts it (closeProject / app-level
+   * disposeAll) invalidates that request — its late release or cap firing must
+   * not rebuild the view after the project is gone. Bumping the generation
+   * turns every pending release fn into a no-op; no-op when nothing is held.
+   */
+  function cancelWorkbenchAttachHold(): void {
+    if (!attachHeld && !attachHoldTimer) return
+    attachHeld = false
+    attachHoldGeneration++
+    if (attachHoldTimer) {
+      clearTimeout(attachHoldTimer)
+      attachHoldTimer = null
+    }
+  }
+
   function detachWorkbench(): void {
     if (workbenchThemeSyncBound) {
       nativeTheme.removeListener('updated', pushWorkbenchTheme)
@@ -96,7 +166,16 @@ export function createWorkbenchView(
     }
     destroyChildView(ctx.windows.mainWindow, workbenchView)
     workbenchView = null
-    reconciler.deleteBaseDesired(VIEW_ID.workbench)
+    if (attachHeld) {
+      // A held detach is a project-switch teardown: the renderer published the
+      // incoming project's placement before the open started, so that desired
+      // is the ONLY thing the release replay can rebuild the view from — keep
+      // it (gateHidden hides it while held) and just forget the destroyed
+      // instance so the rebuilt view is treated as a fresh attach.
+      reconciler.forgetActual(VIEW_ID.workbench)
+    } else {
+      reconciler.deleteBaseDesired(VIEW_ID.workbench)
+    }
     reconciler.reconcileNow()
   }
 
@@ -145,6 +224,10 @@ export function createWorkbenchView(
   // the document is actually shown; false when there is no workbench view or
   // every attempt failed.
   function openFileInWorkbench(relPath: string, line: number, column: number): boolean {
+    // Explicit user intent (a source-link click) beats the boot-priority
+    // scheduling: open the gate first so the release's reconcile replay can
+    // lazy-create the view synchronously before the liveness check below.
+    if (attachHeld) releaseAttachHold(attachHoldGeneration, false)
     if (!workbenchView || workbenchView.webContents.isDestroyed()) return false
     // The workbench mirrors the active project under file:///workspace/<rel>; the
     // open-in-editor target is 1-based (editor convention) while vscode.Position
@@ -168,12 +251,12 @@ export function createWorkbenchView(
   }
 
   // workbench is gated until it has a source or a live view (it lazy-creates
-  // from the URL in the attach op).
+  // from the URL in the attach op), and while an attach hold is in force.
   reconciler.registerView(VIEW_ID.workbench, {
     getView: () => workbenchView,
-    gateHidden: () => !workbenchView && !workbenchUrl,
+    gateHidden: () => !workbenchView && (!workbenchUrl || attachHeld),
     beforeAttach: () => {
-      if (!workbenchView && workbenchUrl) {
+      if (!workbenchView && workbenchUrl && !attachHeld) {
         // Lazy-load the workbench; attachWorkbench adds it to the contentView.
         void attachWorkbench(workbenchUrl)
         return true
@@ -181,9 +264,9 @@ export function createWorkbenchView(
       return false
     },
     ensureLazy: (desired) => {
-      if (desired?.placement.visible && !workbenchView && workbenchUrl) void attachWorkbench(workbenchUrl)
+      if (desired?.placement.visible && !workbenchView && workbenchUrl && !attachHeld) void attachWorkbench(workbenchUrl)
     },
   })
 
-  return { attachWorkbench, setWorkbenchSource, detachWorkbench, openFileInWorkbench }
+  return { attachWorkbench, setWorkbenchSource, detachWorkbench, openFileInWorkbench, holdWorkbenchAttach, cancelWorkbenchAttachHold }
 }

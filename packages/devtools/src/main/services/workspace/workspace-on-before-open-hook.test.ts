@@ -91,7 +91,7 @@ function makeHarness(opts?: {
       return session
     }),
   }
-  const views = { disposeAll: vi.fn(() => events.push('views.disposeAll')) }
+  const views = { disposeAll: vi.fn(() => events.push('views.disposeAll')), holdWorkbenchAttach: vi.fn(() => vi.fn()) }
   const ctx = {
     adapter,
     notify: { projectStatus: vi.fn(), compileLog: vi.fn() },

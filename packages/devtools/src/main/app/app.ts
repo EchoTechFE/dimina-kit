@@ -654,7 +654,14 @@ export async function createDevtoolsRuntime(config: WorkbenchAppConfig = {}): Pr
     // instead of fire-and-forgetting it (a dangling http server would keep the
     // port + event loop alive past teardown).
     context.registry.add(() => coiServer.close())
-    context.registry.add(() => context.views.detachWorkbench())
+    // The registry disposes LIFO, so this runs BEFORE the context-level
+    // disposeAll: void any in-flight open's attach hold here too, or a stale
+    // release / cap firing could rebuild the workbench during the awaited
+    // coiServer.close() above, before disposeAll's own cancel runs.
+    context.registry.add(() => {
+      context.views.cancelWorkbenchAttachHold()
+      context.views.detachWorkbench()
+    })
     // Only HAND the view manager the COI URL — do NOT load yet. The heavy
     // WebContentsView load (10MB bundle + ext-host) is deferred to the first time
     // the 'editor' dock slot becomes visible (first non-zero bounds), so it never
