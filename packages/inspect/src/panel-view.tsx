@@ -22,7 +22,11 @@ interface WxmlTreeNodeProps {
  * - 路径式 tag（含 `/`）= 页面或自定义组件，默认展开（让用户一眼看清组件层级）
  * - 普通 DOM 节点（view/text 等）默认折叠，需要用户手动点开
  */
-function isDefaultExpanded(node: WxmlNode): boolean {
+function isDefaultExpanded(node: WxmlNode, depth: number): boolean {
+  // The root always opens expanded: collapsed, it hides the entire tree
+  // behind one ▸ row and the panel reads as blank — regardless of what tag
+  // shape the runtime gives the root (plain `page`, a component path, …).
+  if (depth === 0) return true
   if (node.tagName === '#shadow-root') return true
   if (node.tagName.includes('/')) return true
   return false
@@ -77,7 +81,7 @@ function WxmlFragmentNode({ node, depth, inspectedSid, onInspect }: WxmlTreeNode
 // Shadow root — synthetic boundary for custom component internals.
 // Clickable to collapse like WeChat DevTools; default expanded; no closing tag.
 function WxmlShadowRootNode({ node, depth, inspectedSid, onInspect }: WxmlTreeNodeProps) {
-  const [expanded, setExpanded] = useState(() => isDefaultExpanded(node))
+  const [expanded, setExpanded] = useState(() => isDefaultExpanded(node, depth))
   const indent = depth * 16
   const hasShadowChildren = (node.children ?? []).length > 0
   return (
@@ -206,7 +210,7 @@ function WxmlBlockRow({
 
 // Ordinary element node — decides between the inline-text and block layouts.
 function WxmlElementNode({ node, depth, inspectedSid, onInspect }: WxmlTreeNodeProps) {
-  const [expanded, setExpanded] = useState(() => isDefaultExpanded(node))
+  const [expanded, setExpanded] = useState(() => isDefaultExpanded(node, depth))
   const indent = depth * 16
   const isInspected = Boolean(node.sid && node.sid === inspectedSid)
   const hasChildren = (node.children ?? []).length > 0
