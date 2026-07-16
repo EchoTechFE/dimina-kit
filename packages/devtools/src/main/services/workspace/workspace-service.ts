@@ -231,11 +231,22 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
         // Two independent gates: autoBuild = recompile on save; autoReload = refresh the simulator afterwards (off ⇒ page/form state survives; hotReload below stays false so the native simulator, which has no SSE reload, isn't refreshed).
         watch: compile.autoBuild,
         autoReload: preview.autoReload,
-        onRebuild: () => {
+        onRebuild: (info) => {
           // getProjectPages never throws; empty pages (read failed / degenerate
           // project) are withheld so the renderer keeps its previous dropdown.
           const { pages } = repo.getProjectPages(projectPath)
-          sendStatus('ready', preview.autoReload ? '编译完成，已重启' : '编译完成', preview.autoReload, pages.length ? pages : undefined)
+          const pageList = pages.length ? pages : undefined
+          // Style-only rebuild fast path: hot-swap the render-host stylesheets in
+          // place instead of respawning the DeviceShell — the page stack / form
+          // state / scroll / window focus all survive (no jitter, no focus
+          // steal). `hotReload: false` keeps the renderer from bumping its reload
+          // token (the respawn signal). Falls through to the full reload when the
+          // swap can't run (no live render guest yet) so an edit is never dropped.
+          if (info?.styleOnly && preview.autoReload && ctx.views.refreshSimulatorStyles()) {
+            sendStatus('ready', '样式已热更新', false, pageList)
+            return
+          }
+          sendStatus('ready', preview.autoReload ? '编译完成，已重启' : '编译完成', preview.autoReload, pageList)
         },
         onBuildError: (err: unknown) => sendStatus('error', String(err)),
         // Watcher died mid-session (EMFILE, permission loss, …): non-fatal, so 'ready' stays but `watcher: 'dead'` flags that saves no longer auto-rebuild.

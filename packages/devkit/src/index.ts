@@ -103,7 +103,7 @@ type FeStart = (opts: {
 	simulatorDir?: string
 	liveReload?: boolean
 	sessionApps?: Array<{ appId: string; name: string; path: string }>
-}) => Promise<{ server: Server; reload: () => void }>
+}) => Promise<{ server: Server; reload: () => void; reloadStyles?: () => void }>
 
 export interface AppInfo {
 	appId: string
@@ -133,13 +133,23 @@ export interface OpenProjectOptions {
 	/** When false, skip the chokidar file-watcher / auto-rebuild loop. Default true. */
 	watch?: boolean
 	/**
-	 * When false, a completed watcher rebuild does NOT live-reload the preview
-	 * (the SSE `reload` → container `window.location.reload()`); `onRebuild`
-	 * still fires so the host learns the build finished, but the page stack /
-	 * form state survives. Independent of `watch`. Default true.
+	 * When false, a completed watcher rebuild does NOT touch the preview at all;
+	 * `onRebuild` still fires so the host learns the build finished, but the page
+	 * stack / form state survives. When true (default), the preview reacts to the
+	 * rebuild: a rebuild touching ONLY stylesheets hot-swaps each `<link>` in
+	 * place (SSE `reload-style` — page stack / form state survive), while any
+	 * other change does a full page reload (SSE `reload` → container
+	 * `window.location.reload()`). Independent of `watch`.
 	 */
 	autoReload?: boolean
-	onRebuild?: () => void
+	/**
+	 * Fired after each successful watcher rebuild. `info.changedPaths` are the
+	 * files that triggered it; `info.styleOnly` is true when every one is a
+	 * stylesheet (see {@link isStyleOnlyChange}) — the host can then hot-swap
+	 * styles in place instead of a full reload. Both are absent (undefined) for
+	 * the SSE-driven web-preview path; native hosts read them to pick a fast path.
+	 */
+	onRebuild?: (info?: { changedPaths: string[]; styleOnly: boolean }) => void
 	onBuildError?: (err: unknown) => void
 	/**
 	 * Per-line dmcc compile log, already filtered through `filterDmccLogLine`
@@ -189,37 +199,86 @@ function upsertSessionApp(sessionApps: AppInfo[], rebuilt: AppInfo): void {
 }
 
 /**
+ * Stylesheet extensions whose recompile can hot-swap in place (no full reload):
+ * the built-in `wx*`/`dd*` style dialects plus the CSS pre-processors dimina
+ * feeds through. A rebuild touching ONLY these can swap each `<link>` instead of
+ * reloading the page, because the compiled CSS scope id is a deterministic
+ * `hash(path)` — the recompiled `.css` keeps the same `[data-v-<id>]` selectors,
+ * so they still match the already-mounted DOM. Custom dialects (`.qdss`) are
+ * added per-project via `fileTypes.style`.
+ */
+const DEFAULT_STYLE_EXTS = ['.wxss', '.ddss', '.css', '.less', '.scss', '.sass']
+
+/**
+ * True iff `changedPaths` is non-empty AND every path is a stylesheet — the
+ * precondition for a style-only hot swap. Empty is false: "no known paths"
+ * (e.g. a coalesced rebuild that lost its change list) must fall back to a full
+ * reload rather than silently assume styles-only. `extraStyleExts` (from
+ * `fileTypes.style`) is merged in; a leading dot is optional and matching is
+ * case-insensitive.
+ */
+export function isStyleOnlyChange(changedPaths: string[], extraStyleExts: string[] = []): boolean {
+	if (changedPaths.length === 0) return false
+	const exts = new Set(
+		[...DEFAULT_STYLE_EXTS, ...extraStyleExts.map(e => (e.startsWith('.') ? e : `.${e}`))]
+			.map(e => e.toLowerCase()),
+	)
+	return changedPaths.every(p => exts.has(path.extname(p).toLowerCase()))
+}
+
+/**
  * Compose the "build completed" subscriber — the single place deciding which of
- * two INDEPENDENT reactions run: live-reloading the preview, and the caller's
- * `onRebuild`. Reload is attached only when `autoReload` is on (so auto-compile
- * can stay ON while reload is OFF, preserving page/form state); when off,
- * `getReload` is not even called. `getReload` is read at call time because the
- * dev server's `reload` is assigned after this subscriber is wired.
+ * two INDEPENDENT reactions run: reflecting the rebuild in the preview, and the
+ * caller's `onRebuild`. When `autoReload` is on and the rebuild touched ONLY
+ * stylesheets (`isStyleOnlyChange`), it hot-swaps the stylesheets in place
+ * (`getReloadStyles`) so the page stack / form state survives; otherwise it does
+ * a full `getReload()` page reload. With `autoReload` off, neither is called
+ * (auto-compile stays on, preview frozen). Both `getReload`/`getReloadStyles`
+ * are read at call time because the dev server assigns them after this
+ * subscriber is wired; `getReloadStyles` may be absent (older fe server) — then
+ * even a style-only change falls back to a full reload.
  */
 export function composeBuildCompleted(opts: {
 	autoReload: boolean
 	getReload: () => (() => void) | undefined
-	onRebuild?: () => void
-}): () => void {
-	return () => {
-		if (opts.autoReload) opts.getReload()?.()
-		opts.onRebuild?.()
+	getReloadStyles?: () => (() => void) | undefined
+	styleExts?: string[]
+	onRebuild?: (info?: { changedPaths: string[]; styleOnly: boolean }) => void
+}): (changedPaths?: string[]) => void {
+	return (changedPaths = []) => {
+		const styleOnly = isStyleOnlyChange(changedPaths, opts.styleExts)
+		if (opts.autoReload) {
+			const reloadStyles = opts.getReloadStyles?.()
+			if (reloadStyles && styleOnly) {
+				reloadStyles()
+			}
+			else {
+				opts.getReload()?.()
+			}
+		}
+		// Hand the host the same style-only verdict the SSE dispatch used, so a
+		// native host (devtools simulator — no SSE client) can pick its OWN fast
+		// path (in-place stylesheet swap) instead of a full simulator respawn.
+		opts.onRebuild?.({ changedPaths, styleOnly })
 	}
 }
 
 /** Run one watcher-triggered rebuild, then fan out to the build-completed
- * subscriber (reload + onRebuild); a build failure routes to onBuildFailed. */
+ * subscriber (style hot-swap or full reload + onRebuild); a build failure routes
+ * to onBuildFailed. `changedPaths` are the files that triggered THIS rebuild —
+ * threaded so the subscriber can pick a style-only hot swap over a full reload. */
 async function runRebuild(
 	compileWorker: CompileWorker,
 	buildRequest: BuildRequest,
 	sessionApps: AppInfo[],
-	onBuildCompleted: () => void,
+	onBuildCompleted: (changedPaths: string[]) => void,
 	onBuildFailed: (err: unknown) => void,
+	changedPaths: string[] = [],
 ): Promise<void> {
 	try {
 		const rebuilt = (await compileWorker.build(buildRequest)) as AppInfo | null
 		if (rebuilt) upsertSessionApp(sessionApps, rebuilt)
-		onBuildCompleted()
+		onBuildCompleted(changedPaths)
 	}
 	catch (e) {
 		onBuildFailed(e)
@@ -350,6 +409,7 @@ export async function openProject(opts: OpenProjectOptions): Promise<ProjectSess
 	// propagates — otherwise every failed open leaks a whole compiler process.
 	let server: Server | null = null
 	let reload: (() => void) | undefined
+	let reloadStyles: (() => void) | undefined
 	let watcher: { close: () => Promise<void>; ready: Promise<void> } | null = null
 
 	try {
@@ -366,6 +426,7 @@ export async function openProject(opts: OpenProjectOptions): Promise<ProjectSess
 		})
 		server = started.server
 		reload = started.reload
+		reloadStyles = started.reloadStyles
 
 		// Watcher events are routed through the scheduler so a save landing while
 		// a build is in flight is never dropped: it coalesces into exactly one
@@ -373,13 +434,27 @@ export async function openProject(opts: OpenProjectOptions): Promise<ProjectSess
 		const onBuildCompleted = composeBuildCompleted({
 			autoReload,
 			getReload: () => reload,
+			getReloadStyles: () => reloadStyles,
+			styleExts: fileTypes?.style,
 			onRebuild,
 		})
-		const rebuildScheduler = createRebuildScheduler(() =>
-			runRebuild(compileWorker, buildRequest, sessionApps, onBuildCompleted, err => onBuildError?.(err)),
-		)
+		// The scheduler coalesces N saves into one trailing rebuild, so the changed
+		// paths accumulate here and are drained (not lost) at the moment that run
+		// actually starts. Draining at run-start — before the build's await — lets
+		// saves landing DURING the build accumulate cleanly for the next trailing
+		// run. An empty set means "changes unknown" → composeBuildCompleted falls
+		// back to a full reload rather than a style-only swap.
+		const pendingChanges = new Set<string>()
+		const rebuildScheduler = createRebuildScheduler(() => {
+			const changed = [...pendingChanges]
+			pendingChanges.clear()
+			return runRebuild(compileWorker, buildRequest, sessionApps, onBuildCompleted, err => onBuildError?.(err), changed)
+		})
 		watcher = watch
-			? createProjectWatcher(projectPath, () => rebuildScheduler.schedule(), onWatcherError)
+			? createProjectWatcher(projectPath, (changedPath) => {
+				if (changedPath) pendingChanges.add(changedPath)
+				rebuildScheduler.schedule()
+			}, onWatcherError)
 			: null
 		// Don't resolve until the watcher's initial scan is done: a save landing
 		// in the gap between `openProject` resolving and chokidar going live
@@ -426,7 +501,7 @@ export async function openProject(opts: OpenProjectOptions): Promise<ProjectSess
  */
 export function createProjectWatcher(
 	projectPath: string,
-	onChange: () => void | Promise<void>,
+	onChange: (changedPath?: string) => void | Promise<void>,
 	onWatcherError?: (err: unknown) => void,
 ): { close: () => Promise<void>; ready: Promise<void> } {
 	// Ignore dotfiles/dot-directories that live *inside* the project (.git,
@@ -467,9 +542,9 @@ export function createProjectWatcher(
 	// source file all surface as onChange. Listening only to 'change' silently
 	// dropped the "developer added a new page" case (a chokidar 'add' event)
 	// and made auto-compile feel broken on a common save pattern.
-	watcher.on('add', () => { void onChange() })
-	watcher.on('change', () => { void onChange() })
-	watcher.on('unlink', () => { void onChange() })
+	watcher.on('add', (p: string) => { void onChange(p) })
+	watcher.on('change', (p: string) => { void onChange(p) })
+	watcher.on('unlink', (p: string) => { void onChange(p) })
 	// A watcher 'error' before the initial scan completes (EMFILE, permission
 	// loss, …) must REJECT `ready`: resolving only on 'ready' would leave
 	// `await watcher.ready` — and the whole openProject — hung forever. The

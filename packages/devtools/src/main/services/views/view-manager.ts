@@ -120,6 +120,13 @@ export interface ViewManager {
    */
   softReloadNativeSimulator(simulatorUrl: string): boolean
   /**
+   * Style-only fast path after a watcher rebuild: hot-swap the render-host
+   * stylesheets in place (no shell respawn), preserving the page stack / form
+   * state / focus. Returns false when no live+ready guest exists so the caller
+   * falls back to the full soft reload.
+   */
+  refreshSimulatorStyles(): boolean
+  /**
    * Destroy and null out the simulator view (e.g. on simulator detach).
    * Also destroys the cached settings view and hides the popover —
    * preserves the aggregate `detachAllViews` behaviour of the previous
@@ -403,6 +410,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   return {
     attachNativeSimulator: nativeSimulator.attachNativeSimulator,
     softReloadNativeSimulator: nativeSimulator.softReloadNativeSimulator,
+    refreshSimulatorStyles: nativeSimulator.refreshSimulatorStyles,
     detachSimulator: nativeSimulator.detachSimulator,
     reapplySafeArea: (device) => safeArea.reapplyAll(device),
     showSettings: overlayPanels.showSettings,

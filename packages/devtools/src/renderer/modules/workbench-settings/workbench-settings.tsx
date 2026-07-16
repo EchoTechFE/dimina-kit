@@ -119,7 +119,7 @@ function GeneralTab({
       <section className="rounded-lg border border-border p-4 space-y-4 bg-bg">
         <div>
           <h2 className="text-[13px] font-medium mb-1">编译与预览</h2>
-          <p className="text-[11px] leading-relaxed text-text-secondary">开启「自动编译」后，打开项目时会监听源文件改动并自动重新编译。开启「自动刷新」后，每次编译完成会刷新模拟器；关闭它可保留当前页面栈与表单状态，仅手动刷新。配置在下次打开项目时生效。</p>
+          <p className="text-[11px] leading-relaxed text-text-secondary">开启「自动编译」后，打开项目时会监听源文件改动并自动重新编译。开启「自动刷新」后，每次编译完成会刷新模拟器（仅改样式时原地热替换，保留当前页面栈与表单状态）；关闭它则任何改动都不刷新，仅手动刷新。配置在下次打开项目时生效。</p>
         </div>
         <div className="flex items-center justify-between">
           <span className="text-[12px] text-text-secondary">监听文件变化自动编译</span>
