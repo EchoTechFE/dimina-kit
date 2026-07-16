@@ -11,6 +11,7 @@ import {
 } from '../simulator/custom-apis.js'
 import type { SafeAreaController } from '../safe-area/index.js'
 import { configureMiniappSession, miniappPartition } from './miniapp-partition.js'
+import { refreshGuestStylesheets } from './refresh-styles.js'
 import { parseRoute } from '../../../shared/simulator-route.js'
 import { SIMULATOR_EVENTS } from '../../../shared/bridge-channels.js'
 import type { RelaunchPayload } from '../../../shared/bridge-channels.js'
@@ -31,6 +32,12 @@ import type { ViewManagerContext } from './view-manager.js'
 export interface NativeSimulatorView {
   attachNativeSimulator(simulatorUrl: string, simWidth: number): Promise<void>
   softReloadNativeSimulator(simulatorUrl: string): boolean
+  /**
+   * Hot-swap stylesheets in every live render-host guest WITHOUT respawning the
+   * shell (page stack / form state / focus survive). Returns false when no live
+   * guest exists, so the caller falls back to a full reload.
+   */
+  refreshSimulatorStyles(): boolean
   detachSimulator(): void
   getSimulatorWebContentsId(): number | null
   getSimulatorWebContents(): WebContents | null
@@ -415,6 +422,20 @@ export function createNativeSimulatorView(
     return true
   }
 
+  /**
+   * Style-only hot swap: cache-bust every render-host stylesheet in place so a
+   * recompiled `.css` re-applies against the already-mounted page WITHOUT
+   * respawning the DeviceShell — page stack / form state / scroll / focus all
+   * survive (unlike `softReloadNativeSimulator`, which reboots the app session).
+   * Returns false when the shell isn't ready or no guest is live, so the caller
+   * falls back to a full reload rather than silently swallowing the rebuild.
+   */
+  function refreshSimulatorStyles(): boolean {
+    const view = nativeSimulatorView
+    if (!view || view.webContents.isDestroyed() || !nativeSimulatorShellReady) return false
+    return refreshGuestStylesheets(view)
+  }
+
   function detachSimulator(): void {
     settleNativeSimulatorReady?.()
     settleNativeSimulatorReady = null
@@ -454,6 +475,7 @@ export function createNativeSimulatorView(
   return {
     attachNativeSimulator,
     softReloadNativeSimulator,
+    refreshSimulatorStyles,
     detachSimulator,
     getSimulatorWebContentsId: () => simulatorWebContentsId,
     getSimulatorWebContents: () => {

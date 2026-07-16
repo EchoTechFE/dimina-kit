@@ -55,6 +55,7 @@ function makeProps(): UseSimulatorProps & { projectPath: string } {
     },
     port: 7788,
     hotReloadToken: 0,
+    relaunchNonce: 0,
     projectPath: PROJECT_PATH,
   }
 }

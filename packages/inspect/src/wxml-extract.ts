@@ -144,12 +144,35 @@ function getElementSid(instance: ComponentInstance): string | undefined {
   return registerSyntheticSid(el)
 }
 
+/**
+ * The absolute component path a `dd-wrapper` carries in its `name` prop/attr, or
+ * null. dimina wraps EVERY custom-component template root in
+ * `<dd-wrapper name="/components/foo/foo">`; the path always starts with `/`,
+ * which a user-authored `name` attr essentially never does.
+ */
+function wrapperPathName(instance: ComponentInstance): string | null {
+  for (const raw of [instance.props, instance.attrs]) {
+    const n = (raw as Record<string, unknown> | undefined)?.name
+    if (typeof n === 'string' && n.startsWith('/')) return n
+  }
+  return null
+}
+
 function isTransparentComponent(instance: ComponentInstance, tagName: string): boolean {
   if (tagName === 'unknown') return true
   // A framework template wrapper (Taro `taro_tmpl` / `tmpl_0_3`, whether named
   // via `props.is` or recovered from its registration) is compiler scaffolding,
   // not user content — pass its children straight through.
   if (FRAMEWORK_TEMPLATE_RE.test(tagName)) return true
+  // dimina wraps every custom-component template root in a
+  // `<dd-wrapper name="/path">`. Under the name-path model the ENCLOSING
+  // component instance already carries that same source path as its own node
+  // (its Vue `name` IS the path), so surfacing the wrapper too would emit a
+  // SECOND identical path node — the doubled `<components/foo/foo>` layer. The
+  // wrapper is redundant scaffolding: pass its children through. Gated on a
+  // path-shaped `name` so a user-authored `<wrapper name="x">` is never
+  // swallowed (dimina paths always start with `/`).
+  if (tagName === 'wrapper' && wrapperPathName(instance)) return true
   if (tagName === 'template') {
     const props = instance.props as Record<string, unknown> | undefined
     const is = props?.is as string | undefined
@@ -251,45 +274,6 @@ function extractChildrenFromVNode(vnode: Record<string, unknown> | null | undefi
 }
 
 /**
- * Reverse-map Dimina's `<wrapper name="/components/foo/foo">` (used to host
- * every user-defined component) back to the source-level tag the user wrote
- * in WXML (e.g. `<foo>`).
- *
- * The wrapper carries the registered component path in its `name` Vue prop.
- * By convention (also followed by miniprogram tooling), the registered key is
- * the last path segment, optionally stripping a trailing `/index`. We can't
- * see the page's `usingComponents` map from inside the Vue instance, so this
- * convention-based recovery is best-effort: if the user picked a different
- * registration key than the directory name (e.g. `usingComponents:
- * { myCounter: '/components/counter/counter' }`), the panel will show
- * `counter`, not `myCounter`.
- *
- * The path heuristic also resolves a name-collision risk: a user-written
- * `<counter name="x">` would land in the same `attrs.name` slot as the
- * wrapper-internal path. We only unwrap when the value looks like an absolute
- * component path (leading `/`), which dimina always emits but a user would
- * almost never type as a literal attr.
- */
-function unwrapCustomComponent(node: WxmlNode): WxmlNode {
-  if (node.tagName !== 'wrapper') return node
-  const path = node.attrs?.name
-  if (typeof path !== 'string' || !path.startsWith('/')) return node
-  // 去掉前导 `/` 后保留原路径形式（保留所有斜杠，不做 kebab/dash 转换）。
-  // 仅当路径以 `/index` 结尾且剥离后仍至少剩一段时才剥（`/index` 单独存在则
-  // 退回 wrapper，避免出现空 tagName）。
-  const stripped = path.replace(/^\//, '')
-  const withoutIndex = stripped.endsWith('/index') ? stripped.slice(0, -'/index'.length) : stripped
-  const recovered = withoutIndex || stripped
-  if (!recovered || recovered === 'index') return node
-  const nextAttrs: Record<string, string> = {}
-  for (const [k, v] of Object.entries(node.attrs)) {
-    if (k === 'name') continue
-    nextAttrs[k] = v
-  }
-  return { ...node, tagName: recovered, attrs: nextAttrs }
-}
-
-/**
  * 把"用户授权"层级（页面 / 自定义组件，tagName 以路径形式呈现，含 `/`）
  * 的 children 包一层合成 `#shadow-root`，对齐微信开发者工具：组件本身
  * 与内部实现之间用 shadow-root 边界视觉分隔。
@@ -316,5 +300,5 @@ export function walkInstance(instance: ComponentInstance, depth: number): WxmlNo
   const node: WxmlNode = { tagName, attrs: extractProps(instance), children }
   const sid = getElementSid(instance)
   if (sid) node.sid = sid
-  return wrapInShadowRoot(unwrapCustomComponent(node))
+  return wrapInShadowRoot(node)
 }

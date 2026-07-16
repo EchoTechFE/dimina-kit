@@ -78,6 +78,11 @@ export interface SessionHookResult {
   clearCompileEvents: () => void
   relaunch: (nextConfig?: CompileConfig) => Promise<void>
   /**
+   * Bumped on every explicit `relaunch` so the simulator attach effect forces a
+   * fresh hard attach at `startPage` even when the URL is unchanged.
+   */
+  relaunchNonce: number
+  /**
    * Latest runtime-lifecycle push for the active session (launching/running/
    * launch-failed/crashed, plus an optional start-page fallback). `null`
    * before the first push and again the moment a hot-reload rebuild starts a
@@ -256,6 +261,14 @@ export function useSession(props: UseSessionProps): SessionHookResult {
   }, [])
 
   const isRefreshing = useRef(false)
+  // Bumped by every explicit relaunch (重新编译 / error-overlay retry). The
+  // native attach effect keys re-attaches on `simulatorUrl` OR this nonce, so an
+  // explicit relaunch forces a fresh hard attach at `startPage` EVEN when the
+  // resulting URL is byte-identical. Without it, relaunching to a `startPage`
+  // that equals the current config's `startPage` yields an unchanged
+  // `simulatorUrl`, the effect never re-runs, and the simulator stays on
+  // whatever page it drifted to (in-app nav / hot reload) instead of resetting.
+  const [relaunchNonce, setRelaunchNonce] = useState(0)
 
   const relaunch = useCallback(
     async (nextConfig: CompileConfig = compileConfig) => {
@@ -273,6 +286,9 @@ export function useSession(props: UseSessionProps): SessionHookResult {
           await saveCompileConfig(projectPath, nextConfig)
           // Triggers the native re-attach effect (simulatorUrl depends on this).
           setCompileConfig(nextConfig)
+          // Force the re-attach even when nextConfig leaves simulatorUrl
+          // unchanged — an explicit relaunch always resets to startPage.
+          setRelaunchNonce((n) => n + 1)
           setCompileStatus({ status: 'ready', message: '刷新完成' })
         } finally {
           isRefreshing.current = false
@@ -299,6 +315,7 @@ export function useSession(props: UseSessionProps): SessionHookResult {
     compileLogs,
     clearCompileEvents,
     relaunch,
+    relaunchNonce,
     runtimeStatus,
     watcherDead,
   }

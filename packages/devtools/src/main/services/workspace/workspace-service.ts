@@ -3,6 +3,7 @@ import type { AppInfo, CompileConfig, ProjectSession } from '../../../shared/typ
 // eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
 import type { WorkbenchContext } from '../workbench-context.js'
 import * as repo from '../projects/project-repository.js'
+import { reportRebuildStatus } from './rebuild-status.js'
 import type {
   Project,
   ProjectPages,
@@ -228,15 +229,10 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
         projectPath,
         sourcemap: true,
         fileTypes: ctx.fileTypes,
-        // Two independent gates: autoBuild = recompile on save; autoReload = refresh the simulator afterwards (off ⇒ page/form state survives; hotReload below stays false so the native simulator, which has no SSE reload, isn't refreshed).
+        // Two independent gates: autoBuild = recompile on save; autoReload = reflect the rebuild in the simulator afterwards (off ⇒ page/form state survives). A style-only rebuild takes the in-place stylesheet hot-swap path (see reportRebuildStatus); any other change does a full reload.
         watch: compile.autoBuild,
         autoReload: preview.autoReload,
-        onRebuild: () => {
-          // getProjectPages never throws; empty pages (read failed / degenerate
-          // project) are withheld so the renderer keeps its previous dropdown.
-          const { pages } = repo.getProjectPages(projectPath)
-          sendStatus('ready', preview.autoReload ? '编译完成，已重启' : '编译完成', preview.autoReload, pages.length ? pages : undefined)
-        },
+        onRebuild: info => reportRebuildStatus(info, { projectPath, repo, autoReload: preview.autoReload, refreshSimulatorStyles: ctx.views.refreshSimulatorStyles, sendStatus }),
         onBuildError: (err: unknown) => sendStatus('error', String(err)),
         // Watcher died mid-session (EMFILE, permission loss, …): non-fatal, so 'ready' stays but `watcher: 'dead'` flags that saves no longer auto-rebuild.
         onWatcherError: () => sendStatus('ready', '文件监听已停止，保存不再触发自动编译', false, undefined, true),
