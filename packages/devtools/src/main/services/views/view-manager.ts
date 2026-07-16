@@ -231,11 +231,29 @@ export interface ViewManager {
   /**
    * Store the workbench COI base URL without loading it. The heavy
    * WebContentsView load is deferred to the first visible
-   * `setWorkbenchBounds`, keeping it off the app boot critical path.
+   * `setWorkbenchBounds` — and further deferred while `holdWorkbenchAttach`
+   * is in force — keeping it off the app boot critical path.
    */
   setWorkbenchSource(url: string): void
   /** Destroy the workbench editor view (teardown). No-op if never attached. */
   detachWorkbench(): void
+  /**
+   * Close the workbench attach gate: while held (and the view does not exist
+   * yet), the lazy attach is deferred so the editor's heavy load stays out of
+   * a project open's boot-critical window (teardown + first compile). Returns
+   * an idempotent release fn bound to this hold; a newer hold supersedes it
+   * (its release becomes a no-op), explicit user intent (openFileInWorkbench)
+   * opens the gate, and a 3s cap self-releases with a warn so the editor is
+   * never deferred unboundedly. The gate never hides or destroys a live view.
+   */
+  holdWorkbenchAttach(): () => void
+  /**
+   * Void the current workbench attach hold WITHOUT the release replay. For
+   * teardown paths that preempt an in-flight open (closeProject, disposeAll):
+   * the superseded open's late release or its cap firing must not rebuild the
+   * editor view after the project is gone. No-op when nothing is held.
+   */
+  cancelWorkbenchAttachHold(): void
   /**
    * Reveal a project file in the embedded workbench at a 1-based line/column
    * (the open-in-editor target coordinate convention). Drives the workbench's
@@ -401,6 +419,10 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   }
 
   function disposeAll(): void {
+    // App-level teardown invalidates any in-flight open's attach hold first,
+    // so the held-detach preserve path below can't keep a desired around for
+    // a release/cap replay to rebuild.
+    workbench.cancelWorkbenchAttachHold()
     disposeProjectViews()
     // Host-scoped teardown: the toolbar view, its port channel, and the
     // ref-counted session-runtime preload registration.
@@ -434,6 +456,8 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     setWorkbenchSource: workbench.setWorkbenchSource,
     detachWorkbench: workbench.detachWorkbench,
     openFileInWorkbench: workbench.openFileInWorkbench,
+    holdWorkbenchAttach: workbench.holdWorkbenchAttach,
+    cancelWorkbenchAttachHold: workbench.cancelWorkbenchAttachHold,
     setHostToolbarHeight: hostToolbar.setHostToolbarHeight,
     hostToolbar: hostToolbar.control,
   }

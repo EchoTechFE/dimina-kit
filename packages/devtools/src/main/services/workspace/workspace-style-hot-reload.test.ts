@@ -111,7 +111,7 @@ async function openProjectWithSettings(settingsJson: unknown) {
   const ctx = {
     adapter,
     notify: { projectStatus },
-    views: { disposeAll: vi.fn(), refreshSimulatorStyles },
+    views: { disposeAll: vi.fn(), refreshSimulatorStyles, holdWorkbenchAttach: vi.fn(() => vi.fn()) },
     projectsProvider: stubProjectsProvider(),
   } as unknown as WorkbenchContext
 

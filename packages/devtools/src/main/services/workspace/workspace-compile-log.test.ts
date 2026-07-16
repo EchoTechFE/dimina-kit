@@ -104,7 +104,7 @@ function makeHarness() {
   const ctx = {
     adapter,
     notify: { projectStatus, compileLog },
-    views: { disposeProjectViews: vi.fn(), disposeAll: vi.fn(), detachWorkbench: vi.fn(), detachSimulator: vi.fn() },
+    views: { disposeProjectViews: vi.fn(), disposeAll: vi.fn(), detachWorkbench: vi.fn(), detachSimulator: vi.fn(), holdWorkbenchAttach: vi.fn(() => vi.fn()), cancelWorkbenchAttachHold: vi.fn() },
     projectsProvider: stubProjectsProvider(),
   } as unknown as WorkbenchContext
 
