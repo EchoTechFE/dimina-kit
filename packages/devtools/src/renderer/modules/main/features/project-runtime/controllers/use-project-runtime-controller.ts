@@ -148,6 +148,9 @@ export function useProjectRuntimeController(
     // Watcher-rebuild signal (resurrects the hot-reload guard a later refactor
     // deleted): each bump makes use-simulator respawn the DeviceShell once.
     hotReloadToken: sessionHook.hotReloadToken,
+    // Explicit-relaunch signal: forces a hard re-attach at startPage even when
+    // the URL is unchanged (重新编译 / retry resetting the drifted page).
+    relaunchNonce: sessionHook.relaunchNonce,
   })
 
   const panelDataHook = usePanelData({
