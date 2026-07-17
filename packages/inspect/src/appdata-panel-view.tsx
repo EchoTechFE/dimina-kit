@@ -31,13 +31,30 @@ function bridgeLabel(bridge: { id: string; pagePath: string | null }): string {
   return bridge.pagePath ?? bridge.id
 }
 
+function isThenable(v: unknown): v is PromiseLike<boolean> {
+  return v != null && (typeof v === 'object' || typeof v === 'function')
+    && typeof (v as { then?: unknown }).then === 'function'
+}
+
 /** One page's merged state: its component entries shallow-merged in insertion
- * order (later entries win) — the single root object the tree renders. */
+ * order (later entries win) — the single root object the tree renders. Copies
+ * via defineProperty, NOT Object.assign: an own enumerable `__proto__` data
+ * key (JSON.parse can produce one) would trigger the legacy setter under
+ * [[Set]], silently rebasing the merged object's prototype and dropping the
+ * key from the tree. */
 function mergeEntries(bridgeEntries: Record<string, unknown>): Record<string, unknown> {
   const merged: Record<string, unknown> = {}
   for (const key of Object.keys(bridgeEntries)) {
     const data = bridgeEntries[key]
-    if (data && typeof data === 'object') Object.assign(merged, data)
+    if (!data || typeof data !== 'object') continue
+    for (const dataKey of Object.keys(data)) {
+      Object.defineProperty(merged, dataKey, {
+        value: (data as Record<string, unknown>)[dataKey],
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      })
+    }
   }
   return merged
 }
@@ -114,8 +131,11 @@ export function AppDataPanel({
       apply(false)
       return
     }
-    if (result instanceof Promise) {
-      void result.then(v => v !== false, () => false).then(apply)
+    // Duck-typed, not `instanceof Promise`: a cross-realm promise or plain
+    // thenable is still an ASYNC result — treating it as a sync truthy value
+    // would count it as an instant success and release the write gate early.
+    if (isThenable(result)) {
+      void Promise.resolve(result).then(v => v !== false, () => false).then(apply)
       return
     }
     apply(result !== false)

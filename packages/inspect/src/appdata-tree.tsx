@@ -197,8 +197,10 @@ function TreeNode({ path, label, value, depth, unsafeSegments, ctx }: {
   // runtime's string-path `set()` — the patch key would be re-split on the
   // dots/brackets inside the key and write a DIFFERENT field. A single-segment
   // (top-level) key is safe regardless of content: the runtime's own-key check
-  // short-circuits before path parsing. Unsafe rows render read-only.
-  const pathAmbiguous = depth > 1 && unsafeSegments
+  // short-circuits before path parsing. `__proto__` is unwritable at ANY
+  // depth: the runtime's isUnsafeProperty drops the write outright. Unsafe
+  // rows render read-only.
+  const pathAmbiguous = (depth > 1 && unsafeSegments) || label === '__proto__'
   const editable = primitive && ctx.onCommit !== undefined && !pathAmbiguous
   return (
     <div
