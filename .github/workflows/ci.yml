@@ -123,7 +123,7 @@ jobs:
       # the --format json verdict, then enforces the gate exit code. The install
       # leaves pawl on PATH, so baseline-guard below reuses it.
       - name: Anti-regression gate
-        uses: tiangong-dev/pawl@v0.3.1
+        uses: tiangong-dev/pawl@v0.4.0
         with:
           command: check
 
