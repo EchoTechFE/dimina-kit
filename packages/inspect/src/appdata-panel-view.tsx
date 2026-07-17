@@ -3,7 +3,7 @@
 // per page bridge, plus an expand/collapse/undo/redo toolbar. Pure
 // presentation — bridge selection and data feeds live in the connected
 // container (or the host, when it renders this view directly).
-import React, { useState } from 'react'
+import React, { useRef, useState } from 'react'
 import { AppDataTree, type AppDataTreeCommand } from './appdata-tree.js'
 import type { AppDataSnapshot } from './appdata-accumulator.js'
 
@@ -79,6 +79,12 @@ export function AppDataPanel({
   const [command, setCommand] = useState<AppDataTreeCommand | null>(null)
   const [undoStack, setUndoStack] = useState<EditRecord[]>([])
   const [redoStack, setRedoStack] = useState<EditRecord[]>([])
+  // Replay (undo/redo) in-flight gate. The ref blocks reentry synchronously —
+  // a second click before the async dispatch settles would read the SAME top
+  // record and replay it twice, duplicating it onto the opposite stack. The
+  // state mirror disables the buttons while pending.
+  const replayInFlight = useRef(false)
+  const [replayPending, setReplayPending] = useState(false)
 
   const emptyText = isRuntimeRunning ? '暂无页面数据（仅显示 Page 级 data）' : '小程序未运行'
 
@@ -90,15 +96,23 @@ export function AppDataPanel({
   /** Dispatch a write, then run `apply` with its acceptance: only an explicit
    * `false` (sync or resolved) is a rejection — `void` keeps fire-and-forget
    * hosts working. A synchronous result settles synchronously so the stacks
-   * (and their buttons) update in the same event turn as the click. */
+   * (and their buttons) update in the same event turn as the click. A thrown
+   * error or rejected promise (IPC torn down mid-edit) settles as a rejection
+   * instead of escaping as an unhandled rejection. */
   const dispatch = (
     bridgeId: string,
     patch: Record<string, unknown>,
     apply: (ok: boolean) => void,
   ): void => {
-    const result = onSetData?.(bridgeId, patch)
+    let result: void | boolean | Promise<boolean>
+    try {
+      result = onSetData?.(bridgeId, patch)
+    } catch {
+      apply(false)
+      return
+    }
     if (result instanceof Promise) {
-      void result.then(v => apply(v !== false))
+      void result.then(v => v !== false, () => false).then(apply)
       return
     }
     apply(result !== false)
@@ -114,6 +128,27 @@ export function AppDataPanel({
 
   const bridgeIsLive = (bridgeId: string): boolean => bridges.some(b => b.id === bridgeId)
 
+  /** Replay one record in either direction, gated so only ONE replay is ever
+   * in flight: the ref rejects reentry synchronously (before any re-render),
+   * the pending state disables the buttons for the async gap. */
+  const replay = (
+    record: EditRecord,
+    value: unknown,
+    move: (record: EditRecord) => void,
+  ): void => {
+    if (replayInFlight.current) return
+    replayInFlight.current = true
+    setReplayPending(true)
+    dispatch(record.bridgeId, { [record.path]: value }, (ok) => {
+      replayInFlight.current = false
+      setReplayPending(false)
+      // A rejected replay (runtime refused the write) leaves both stacks
+      // untouched so the UI state never claims an undo that didn't happen.
+      if (!ok) return
+      move(record)
+    })
+  }
+
   const undo = (): void => {
     const record = undoStack.at(-1)
     if (!record) return
@@ -123,12 +158,9 @@ export function AppDataPanel({
       setUndoStack(stack => stack.filter(r => r !== record))
       return
     }
-    dispatch(record.bridgeId, { [record.path]: record.before }, (ok) => {
-      // A rejected replay (runtime refused the write) leaves both stacks
-      // untouched so the UI state never claims an undo that didn't happen.
-      if (!ok) return
-      setUndoStack(stack => stack.filter(r => r !== record))
-      setRedoStack(stack => [...stack, record])
+    replay(record, record.before, (r) => {
+      setUndoStack(stack => stack.filter(item => item !== r))
+      setRedoStack(stack => [...stack, r])
     })
   }
 
@@ -139,10 +171,9 @@ export function AppDataPanel({
       setRedoStack(stack => stack.filter(r => r !== record))
       return
     }
-    dispatch(record.bridgeId, { [record.path]: record.after }, (ok) => {
-      if (!ok) return
-      setRedoStack(stack => stack.filter(r => r !== record))
-      setUndoStack(stack => [...stack, record])
+    replay(record, record.after, (r) => {
+      setRedoStack(stack => stack.filter(item => item !== r))
+      setUndoStack(stack => [...stack, r])
     })
   }
 
@@ -192,8 +223,8 @@ export function AppDataPanel({
         >
           <ToolbarButton title="全部展开" onClick={() => issueCommand('expanded')}>⊕</ToolbarButton>
           <ToolbarButton title="全部收起" onClick={() => issueCommand('collapsed')}>⊖</ToolbarButton>
-          <ToolbarButton title="撤销" disabled={undoStack.length === 0} onClick={undo}>↶</ToolbarButton>
-          <ToolbarButton title="重做" disabled={redoStack.length === 0} onClick={redo}>↷</ToolbarButton>
+          <ToolbarButton title="撤销" disabled={undoStack.length === 0 || replayPending} onClick={undo}>↶</ToolbarButton>
+          <ToolbarButton title="重做" disabled={redoStack.length === 0 || replayPending} onClick={redo}>↷</ToolbarButton>
         </div>
         {/* Keepalive: every bridge's tree stays mounted (hidden via display:
             none) so expand/collapse state survives page switches. */}

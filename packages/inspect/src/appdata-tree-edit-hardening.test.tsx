@@ -66,6 +66,20 @@ function unsafeBooleanState(): AppDataState {
   }
 }
 
+function nestedEmptyKeyState(): AppDataState {
+  return {
+    bridges: [{ id: 'b1', pagePath: '/pages/index/index' }],
+    activeBridgeId: 'b1',
+    entries: {
+      b1: {
+        comp: {
+          profile: { '': 'A', safe: 'B' },
+        },
+      },
+    },
+  }
+}
+
 function checkboxFor(container: HTMLElement, path: string): HTMLInputElement {
   const row = container.querySelector(`[data-path="${path}"]`) as HTMLElement
   return row.querySelector('input[type="checkbox"]') as HTMLInputElement
@@ -84,6 +98,23 @@ function rowByKey(container: HTMLElement, key: string): HTMLElement {
   const label = candidates.find((el) => el.tagName === 'SPAN' && el.className.includes('text-code-blue'))
   if (!label) throw new Error(`no row found for key "${key}"`)
   return label.closest('div') as HTMLElement
+}
+
+/** Finds a tree row whose key label is the empty string — `getByText('')`
+ * can't target it, since an empty string matches too much. */
+function rowByEmptyKey(container: HTMLElement): HTMLElement {
+  const spans = container.querySelectorAll('span.text-code-blue')
+  const label = Array.from(spans).find((el) => el.textContent === '')
+  if (!label) throw new Error('no row found for the empty key')
+  return label.closest('div') as HTMLElement
+}
+
+/** Resolves/rejects on demand — lets a test hold `onSetData` open mid-dispatch
+ * to exercise pending/reentrancy behavior before settling it. */
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((res) => { resolve = res })
+  return { promise, resolve }
 }
 
 describe('AppDataPanel: unsafe nested-key paths are read-only', () => {
@@ -261,5 +292,93 @@ describe('AppDataPanel: number edit rejects non-finite input', () => {
 
     expect(onSetData).not.toHaveBeenCalled()
     expect(within(container).queryByRole('textbox')).toBeNull()
+  })
+})
+
+describe('AppDataPanel: a nested empty-string key is read-only', () => {
+  it('gives the empty-key row no data-path and blocks its double-click editor — the runtime toPath for `profile.` resolves to just [\'profile\'], so a write would clobber the whole object', () => {
+    const { container, getByText } = render(
+      <AppDataPanel state={nestedEmptyKeyState()} onSelectBridge={vi.fn()} onSetData={vi.fn()} />,
+    )
+    fireEvent.click(getByText('profile'))
+    const row = rowByEmptyKey(container)
+
+    expect(row.hasAttribute('data-path')).toBe(false)
+    fireEvent.dblClick(within(row).getByTestId('appdata-value'))
+    expect(within(container).queryByRole('textbox')).toBeNull()
+  })
+
+  it('keeps the sibling `profile.safe` row editable — only the empty key is blocked', () => {
+    const onSetData = vi.fn()
+    const { container, getByText } = render(
+      <AppDataPanel state={nestedEmptyKeyState()} onSelectBridge={vi.fn()} onSetData={onSetData} />,
+    )
+    fireEvent.click(getByText('profile'))
+    const row = rowByKey(container, 'safe')
+    expect(row.getAttribute('data-path')).toBe('profile.safe')
+
+    fireEvent.dblClick(within(row).getByTestId('appdata-value'))
+    const input = within(container).getByRole('textbox') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'updated' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    expect(onSetData).toHaveBeenCalledWith('b1', { 'profile.safe': 'updated' })
+  })
+})
+
+describe('AppDataPanel: 撤销 guards against a second click racing an in-flight dispatch', () => {
+  it('calls onSetData once, disables 撤销 while pending, and settles into a single redo record', async () => {
+    const onSetData = vi.fn<(bridgeId: string, patch: Record<string, unknown>) => boolean | Promise<boolean>>(() => true)
+    const { container, getByTitle } = render(
+      <AppDataPanel state={editableState()} onSelectBridge={vi.fn()} onSetData={onSetData} />,
+    )
+    fireEvent.click(checkboxFor(container, 'flag'))
+    expect((getByTitle('撤销') as HTMLButtonElement).disabled).toBe(false)
+
+    const write = deferred<boolean>()
+    onSetData.mockImplementation(() => write.promise)
+    onSetData.mockClear()
+
+    fireEvent.click(getByTitle('撤销'))
+    // The write is in flight — the undo stack is still nonempty, so the
+    // button must be disabled by pending state, not by an empty stack.
+    expect((getByTitle('撤销') as HTMLButtonElement).disabled).toBe(true)
+
+    fireEvent.click(getByTitle('撤销'))
+    write.resolve(true)
+
+    await waitFor(() => expect((getByTitle('重做') as HTMLButtonElement).disabled).toBe(false))
+    expect(onSetData).toHaveBeenCalledTimes(1)
+    expect((getByTitle('撤销') as HTMLButtonElement).disabled).toBe(true)
+
+    fireEvent.click(getByTitle('重做'))
+    await waitFor(() => expect((getByTitle('重做') as HTMLButtonElement).disabled).toBe(true))
+  })
+})
+
+describe('AppDataPanel: a rejected dispatch is treated as failure, not an unhandled rejection', () => {
+  it('leaves 撤销 disabled and raises no unhandled promise rejection when onSetData rejects', async () => {
+    const unhandled: unknown[] = []
+    const onUnhandledRejection = (reason: unknown): void => { unhandled.push(reason) }
+    process.on('unhandledRejection', onUnhandledRejection)
+
+    try {
+      const onSetData = vi.fn(() => Promise.reject(new Error('ipc torn down')))
+      const { container, getByTitle } = render(
+        <AppDataPanel state={editableState()} onSelectBridge={vi.fn()} onSetData={onSetData} />,
+      )
+      fireEvent.click(checkboxFor(container, 'flag'))
+
+      await waitFor(() => expect(onSetData).toHaveBeenCalled())
+      expect((getByTitle('撤销') as HTMLButtonElement).disabled).toBe(true)
+
+      // Gives Node's unhandled-rejection detection a turn to fire before the
+      // assertion, so an uncaught rejection inside `dispatch` surfaces here
+      // rather than bleeding into a later, unrelated test.
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(unhandled).toHaveLength(0)
+    } finally {
+      process.off('unhandledRejection', onUnhandledRejection)
+    }
   })
 })

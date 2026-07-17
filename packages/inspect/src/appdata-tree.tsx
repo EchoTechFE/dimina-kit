@@ -145,9 +145,12 @@ function ValueCell({ path, value, editable, ctx }: {
 }
 
 /** True when a key segment would be re-parsed by the runtime's lodash-style
- * `toPath` (dots / brackets). Array indices are numbers and always safe. */
+ * `toPath` (dots / brackets), or silently DROPPED by it (empty keys — toPath
+ * never pushes an empty segment, so `profile.` parses to just `['profile']`
+ * and a write would overwrite the parent). Array indices are numbers and
+ * always safe. */
 function segmentUnsafe(key: string | number): boolean {
-  return typeof key === 'string' && /[.[\]]/.test(key)
+  return typeof key === 'string' && (key === '' || /[.[\]]/.test(key))
 }
 
 function TreeNode({ path, label, value, depth, unsafeSegments, ctx }: {

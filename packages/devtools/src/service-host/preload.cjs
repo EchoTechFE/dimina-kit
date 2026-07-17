@@ -215,7 +215,13 @@ const { applyAppDataSetData } = require('./appdata-set-data.cjs')
 
 ipcRenderer.on(CHANNELS.APPDATA_SET_DATA, (_event, payload) => {
   if (!payload || typeof payload.bridgeId !== 'string' || !payload.data) return
-  applyAppDataSetData(globalThis.getCurrentPages, payload.bridgeId, payload.data)
+  const applied = applyAppDataSetData(globalThis.getCurrentPages, payload.bridgeId, payload.data)
+  // Narrow race: main resolved a live service window but the page unloaded
+  // before this handler ran — the write is dropped here. Surface it in the
+  // service console (captured via CDP) so the silent no-op is diagnosable.
+  if (!applied) {
+    console.warn(`[service-host] appdata set-data dropped: no live page for bridge ${payload.bridgeId}`)
+  }
 })
 
 // ── Uncaught error capture (native-host) ────────────────────────────────────
