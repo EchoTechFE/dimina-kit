@@ -19,5 +19,7 @@ export function createIpcAppDataPanelSource(): AppDataPanelSource {
     // (__simulatorData.getAppdata()) depends on it independent of any panel
     // being open, so there is no visibility gate to wire here.
     setActive: () => {},
+    setData: async (bridgeId, patch) =>
+      (await ipcInvoke<boolean | undefined>(SimulatorAppDataChannel.SetData, { bridgeId, data: patch })) ?? false,
   }
 }

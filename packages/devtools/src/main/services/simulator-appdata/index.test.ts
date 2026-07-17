@@ -45,7 +45,7 @@ vi.mock('electron', () => ({
 // Import AFTER the mock so the module picks up the stubs.
 import type { MessageEnvelope } from '../../../shared/bridge-channels.js'
 import type { AppDataSnapshot } from '@dimina-kit/inspect'
-import { SimulatorAppDataChannel } from '../../../shared/ipc-channels.js'
+import { ServiceHostChannel, SimulatorAppDataChannel } from '../../../shared/ipc-channels.js'
 import { setupSimulatorAppData } from './index.js'
 
 type IpcHandler = (event: unknown, ...args: unknown[]) => unknown
@@ -302,5 +302,135 @@ describe('setupSimulatorAppData — dispose', () => {
 
     expect(ipcMainStub.removeHandler).toHaveBeenCalledWith(SimulatorAppDataChannel.GetSnapshot)
     expect(ipcHandlers.has(SimulatorAppDataChannel.GetSnapshot)).toBe(false)
+  })
+})
+
+// ── SetData (renderer edit write-back) ─────────────────────────────────────
+//
+// The panel edits a value and the change must reach the running page: main
+// resolves the owning service-host WebContents via `options.bridge.getServiceWcForBridge`
+// and forwards `{ bridgeId, data }` over `ServiceHostChannel.AppDataSetData`. The
+// service-host preload (out of scope here) applies it via `page.setData(data)`.
+//
+// `SimulatorAppDataChannel.SetData`, `ServiceHostChannel.AppDataSetData` and
+// `SimulatorAppDataOptions.bridge` are frozen contract members this suite pins
+// but does not yet declare on the source types — read through untyped views so
+// the suite type-checks against today's narrower types while still exercising
+// the real runtime object (undefined channel key / excess-property rejection
+// are exactly the "not implemented yet" signal these tests are meant to fail on).
+const untypedAppDataChannel = SimulatorAppDataChannel as Record<string, string>
+const untypedServiceHostChannel = ServiceHostChannel as Record<string, string>
+const SET_DATA_CHANNEL = untypedAppDataChannel.SetData as unknown as string
+const APPDATA_SET_DATA_CHANNEL = untypedServiceHostChannel.AppDataSetData as unknown as string
+
+/** A bridge accessor stub resolving a fixed WebContents (or null) for any bridgeId. */
+function makeBridge(wc: Electron.WebContents | null) {
+  return { getServiceWcForBridge: vi.fn((_bridgeId: string) => wc) }
+}
+
+/** Builds options with a `bridge` accessor not yet declared on SimulatorAppDataOptions. */
+function optionsWithBridge(
+  bridge: ReturnType<typeof makeBridge>,
+): Parameters<typeof setupSimulatorAppData>[1] {
+  return { getActiveAppId: () => APP, bridge } as unknown as Parameters<
+    typeof setupSimulatorAppData
+  >[1]
+}
+
+const VALID_SET_DATA_PAYLOAD = { bridgeId: 'b1', data: { count: 1 } }
+
+describe('setupSimulatorAppData — SetData (registration)', () => {
+  it('registers ipcMain.handle for SetData regardless of whether options.bridge is provided', () => {
+    const svc = setupSimulatorAppData(makeHost(), { getActiveAppId: () => APP })
+    expect(ipcMainStub.handle).toHaveBeenCalledWith(SET_DATA_CHANNEL, expect.any(Function))
+    void svc.dispose()
+  })
+})
+
+describe('setupSimulatorAppData — SetData (forwarding a valid edit)', () => {
+  it("resolves the bridge's service WebContents, sends AppDataSetData, and returns true", async () => {
+    const serviceWc = makeHost()
+    const bridge = makeBridge(serviceWc)
+    const svc = setupSimulatorAppData(makeHost(), optionsWithBridge(bridge))
+
+    const result = await getHandler(SET_DATA_CHANNEL)({}, VALID_SET_DATA_PAYLOAD)
+
+    expect(bridge.getServiceWcForBridge).toHaveBeenCalledWith('b1')
+    expect(serviceWc.send).toHaveBeenCalledWith(APPDATA_SET_DATA_CHANNEL, {
+      bridgeId: 'b1',
+      data: { count: 1 },
+    })
+    expect(result).toBe(true)
+    void svc.dispose()
+  })
+
+  it('returns false and sends nothing when options.bridge is not provided', async () => {
+    const svc = setupSimulatorAppData(makeHost(), { getActiveAppId: () => APP })
+
+    const result = await getHandler(SET_DATA_CHANNEL)({}, VALID_SET_DATA_PAYLOAD)
+
+    expect(result).toBe(false)
+    void svc.dispose()
+  })
+
+  it('returns false when getServiceWcForBridge resolves no WebContents for the bridgeId', async () => {
+    const bridge = makeBridge(null)
+    const svc = setupSimulatorAppData(makeHost(), optionsWithBridge(bridge))
+
+    const result = await getHandler(SET_DATA_CHANNEL)({}, VALID_SET_DATA_PAYLOAD)
+
+    expect(result).toBe(false)
+    void svc.dispose()
+  })
+
+  it('returns false without sending when the resolved service WebContents is destroyed', async () => {
+    const serviceWc = makeHost()
+    ;(serviceWc.isDestroyed as ReturnType<typeof vi.fn>).mockReturnValue(true)
+    const bridge = makeBridge(serviceWc)
+    const svc = setupSimulatorAppData(makeHost(), optionsWithBridge(bridge))
+
+    const result = await getHandler(SET_DATA_CHANNEL)({}, VALID_SET_DATA_PAYLOAD)
+
+    expect(result).toBe(false)
+    expect(serviceWc.send).not.toHaveBeenCalled()
+    void svc.dispose()
+  })
+})
+
+describe('setupSimulatorAppData — SetData (payload validation)', () => {
+  it.each([
+    ['undefined payload', undefined],
+    ['null payload', null],
+    ['string payload', 'nope'],
+    ['array payload', ['x']],
+    ['missing bridgeId', { data: { a: 1 } }],
+    ['empty-string bridgeId', { bridgeId: '', data: { a: 1 } }],
+    ['non-string bridgeId', { bridgeId: 42, data: { a: 1 } }],
+    ['missing data', { bridgeId: 'b1' }],
+    ['array data', { bridgeId: 'b1', data: ['x'] }],
+    ['null data', { bridgeId: 'b1', data: null }],
+    ['empty-object data', { bridgeId: 'b1', data: {} }],
+  ])('rejects an invalid payload (%s) — returns false, sends nothing', async (_label, payload) => {
+    const serviceWc = makeHost()
+    const bridge = makeBridge(serviceWc)
+    const svc = setupSimulatorAppData(makeHost(), optionsWithBridge(bridge))
+
+    const result = await getHandler(SET_DATA_CHANNEL)({}, payload)
+
+    expect(result).toBe(false)
+    expect(serviceWc.send).not.toHaveBeenCalled()
+    void svc.dispose()
+  })
+})
+
+describe('setupSimulatorAppData — SetData (dispose)', () => {
+  it('removes the SetData IPC handler alongside GetSnapshot', () => {
+    const svc = setupSimulatorAppData(makeHost(), { getActiveAppId: () => APP })
+    expect(ipcHandlers.has(SET_DATA_CHANNEL)).toBe(true)
+
+    void svc.dispose()
+
+    expect(ipcMainStub.removeHandler).toHaveBeenCalledWith(SET_DATA_CHANNEL)
+    expect(ipcHandlers.has(SET_DATA_CHANNEL)).toBe(false)
   })
 })

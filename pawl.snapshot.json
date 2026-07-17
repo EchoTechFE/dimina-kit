@@ -59,7 +59,7 @@
       "unit": "files \u003e 500 lines",
       "breakdown": {
         "packages/devkit/src/compile-worker.test.ts": 1037,
-        "packages/devtools/src/main/app/app.ts": 694,
+        "packages/devtools/src/main/app/app.ts": 697,
         "packages/devtools/src/main/app/close-with-active-session.test.ts": 561,
         "packages/devtools/src/main/app/double-close-quit.test.ts": 542,
         "packages/devtools/src/main/app/instance-ipc-extension.test.ts": 591,
@@ -118,15 +118,15 @@
     },
     "test-coverage": {
       "direction": "higher-is-better",
-      "value": 73.83,
+      "value": 74.05,
       "unit": "% lines",
       "breakdown": {
-        "devkit": 93.77,
-        "devtools": 68.15,
+        "devkit": 93.56,
+        "devtools": 68.2,
         "electron-deck": 95.35,
         "electron-deck/dock-react": 78.6,
         "fs-core": 99.19,
-        "inspect": 73.14,
+        "inspect": 77.51,
         "view-anchor": 95.28,
         "workbench": 35.71
       },
@@ -134,15 +134,15 @@
     },
     "test-report": {
       "direction": "higher-is-better",
-      "value": 4165,
+      "value": 4248,
       "unit": "passed tests",
       "breakdown": {
         "devkit": 177,
-        "devtools": 2369,
+        "devtools": 2397,
         "electron-deck": 1050,
         "electron-deck/dock-react": 96,
         "fs-core": 133,
-        "inspect": 152,
+        "inspect": 207,
         "view-anchor": 87,
         "workbench": 101
       }
@@ -156,7 +156,7 @@
         "devtools": 99.73,
         "electron-deck": 99.72,
         "fs-core": 99.97,
-        "inspect": 99.98,
+        "inspect": 99.99,
         "view-anchor": 100,
         "workbench": 99.93
       }

@@ -13,7 +13,7 @@
  */
 import type { WebContents } from 'electron'
 import type { MessageEnvelope } from '../../../shared/bridge-channels.js'
-import { SimulatorAppDataChannel } from '../../../shared/ipc-channels.js'
+import { ServiceHostChannel, SimulatorAppDataChannel } from '../../../shared/ipc-channels.js'
 import {
   AppDataAccumulator,
   decodeWorkerMessage,
@@ -39,6 +39,10 @@ export interface SimulatorAppDataService extends AppDataTap, Disposable {}
 export interface SimulatorAppDataOptions {
   getActiveAppId: () => string | null
   senderPolicy?: SenderPolicy
+  /** Resolves the service-host WebContents owning a page bridge — the SetData
+   * write-back target. Absent (host without a service bridge) → edits are
+   * rejected with `false`. */
+  bridge?: { getServiceWcForBridge: (bridgeId: string) => WebContents | null }
 }
 
 const EMPTY_SNAPSHOT: AppDataSnapshot = { bridges: [], entries: {} }
@@ -95,6 +99,23 @@ export function setupSimulatorAppData(
     const appId = getActiveAppId()
     if (!appId) return EMPTY_SNAPSHOT
     return accumulators.get(appId)?.snapshot() ?? EMPTY_SNAPSHOT
+  })
+
+  /** A plain, non-empty `{key: value}` patch — the only shape page.setData accepts. */
+  function isValidSetDataPatch(data: unknown): data is Record<string, unknown> {
+    return !!data && typeof data === 'object' && !Array.isArray(data)
+      && Object.keys(data as Record<string, unknown>).length > 0
+  }
+
+  ipc.handle(SimulatorAppDataChannel.SetData, (_event, payload: unknown) => {
+    const p = payload as { bridgeId?: unknown; data?: unknown } | null
+    if (!p || typeof p !== 'object') return false
+    if (typeof p.bridgeId !== 'string' || p.bridgeId.length === 0) return false
+    if (!isValidSetDataPatch(p.data)) return false
+    const wc = options.bridge?.getServiceWcForBridge(p.bridgeId)
+    if (!wc || wc.isDestroyed()) return false
+    wc.send(ServiceHostChannel.AppDataSetData, { bridgeId: p.bridgeId, data: p.data })
+    return true
   })
 
   // disposeAll runs LIFO; add the IPC registry LAST so it is torn down first —

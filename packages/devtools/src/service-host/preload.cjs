@@ -8,6 +8,9 @@ const CHANNELS = {
   // wx.getSystemInfoSync() reflects the newly-selected device without a
   // relaunch. Mirrors ServiceHostChannel.HostEnvUpdate in shared/ipc-channels.ts.
   HOST_ENV_UPDATE: 'service-host:host-env:update',
+  // main → this window: AppData-panel edit write-back. Mirrors
+  // ServiceHostChannel.AppDataSetData in shared/ipc-channels.ts.
+  APPDATA_SET_DATA: 'service-host:appdata:set-data',
 }
 
 const params = new URLSearchParams(globalThis.location && globalThis.location.search || '')
@@ -201,6 +204,24 @@ if (typeof globalThis.importScripts !== 'function') {
 
 ipcRenderer.on(CHANNELS.TO_SERVICE, (_event, payload) => {
   deliver(payload && payload.msg)
+})
+
+// AppData-panel edit write-back. The service runtime evaluates in THIS window's
+// global context (contextIsolation: false), so `globalThis.getCurrentPages` is
+// the runtime's real page stack once boot has installed it. The pure resolver
+// lives in a sibling .cjs (unit-tested in appdata-set-data.test.ts), required
+// relative to this preload so it resolves from dist/service-host at runtime.
+const { applyAppDataSetData } = require('./appdata-set-data.cjs')
+
+ipcRenderer.on(CHANNELS.APPDATA_SET_DATA, (_event, payload) => {
+  if (!payload || typeof payload.bridgeId !== 'string' || !payload.data) return
+  const applied = applyAppDataSetData(globalThis.getCurrentPages, payload.bridgeId, payload.data)
+  // Narrow race: main resolved a live service window but the page unloaded
+  // before this handler ran — the write is dropped here. Surface it in the
+  // service console (captured via CDP) so the silent no-op is diagnosable.
+  if (!applied) {
+    console.warn(`[service-host] appdata set-data dropped: no live page for bridge ${payload.bridgeId}`)
+  }
 })
 
 // ── Uncaught error capture (native-host) ────────────────────────────────────
