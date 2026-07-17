@@ -254,6 +254,24 @@ test.describe('native-host WXML highlight via CDP Overlay (not a div)', () => {
     await shutdownApp(handle)
   })
 
+  test('the WXML tree root is the page module path wrapped in #shadow-root (WeChat parity)', async () => {
+    // The render runtime injects each compiled page/component's Vue `name` as
+    // its miniprogram module path; the panel trusts a `/`-containing name as
+    // the tag and separates the component from its internals with a synthetic
+    // #shadow-root. A bare `<page>` root means the container bundle lost the
+    // name=path injection (e.g. built from a stale dimina checkout).
+    const tree = await ipcInvoke<WxmlNode | null>(handle.win, SimulatorWxmlChannel.GetSnapshot)
+    expect(tree, 'WXML snapshot should exist').toBeTruthy()
+    // The snapshot root may be a synthetic #fragment (multi-root wrapper the
+    // panel renders transparently); the page node is its first child then.
+    const pageNode = tree!.tagName === '#fragment' ? tree!.children?.[0] : tree
+    expect(pageNode?.tagName, 'page node tag should be the page module path, not <page>').toContain('/')
+    expect(
+      pageNode?.children?.[0]?.tagName,
+      'the page node children should sit under a synthetic #shadow-root boundary',
+    ).toBe('#shadow-root')
+  })
+
   test('the render-host inspector IIFE owns the guest realm (not the iframe div path)', async () => {
     // Reading the WXML tree injects the IIFE; afterwards the guest must expose
     // __diminaRenderInspect, proving highlight resolves sids against the
