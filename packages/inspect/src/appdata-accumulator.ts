@@ -8,10 +8,11 @@
  *   • instance init: `type === 'page_*'`, body `{bridgeId, path, data}` with the
  *     COMPLETE initial state.
  *
- * Default (dimina-fe) path: the simulator preload sniffs these as Worker
- * `message` events (app-data.ts). Native-host path: they flow service→render
- * through bridge-router (SERVICE_PUBLISH). Both feed this one accumulator so the
- * decode/merge/page-only/init-gate policy can't drift between modes.
+ * Hosts differ only in where they tap that stream — an Electron preload
+ * sniffing Worker `message` events, a main-process service→render forward, or
+ * a same-origin web workbench observing the pageFrame's Worker. Every tap
+ * feeds this one accumulator so the decode/merge/page-only/init-gate policy
+ * can't drift between hosts.
  */
 
 /**

@@ -9,7 +9,7 @@
  *    without `logs` keeps its exact behaviour (incl. the 暂无编译 empty state).
  *  - Log lines render as part of ONE timeline merged with events by `at`
  *    (oldest first, matching the event row order). Merging is a VIEW
- *    concern — state stays isolated in useSession.
+ *    concern — feed state stays with the owner.
  *  - Log rows are identifiable: `[data-compile-log]` carrying
  *    `data-stream="stdout" | "stderr"` (the styling hook that makes stderr
  *    lines distinguishable), the line text, and an HH:MM:SS timestamp like
@@ -45,20 +45,13 @@ interface CompilePanelProps {
   onClear: () => void
 }
 
-// The glob matches zero modules if compile-panel.tsx is absent, keeping a
-// missing module an assertion failure rather than an import-time throw.
-const compilePanelModules = import.meta.glob('./compile-panel.tsx')
-
 async function loadCompilePanel(): Promise<ComponentType<CompilePanelProps>> {
-  const loader = compilePanelModules['./compile-panel.tsx']
-  expect(
-    loader,
-    'right-panel/compile-panel.tsx must exist with a named CompilePanel export',
-  ).toBeTruthy()
-  const mod = (await loader!()) as { CompilePanel?: ComponentType<CompilePanelProps> }
+  const mod = (await import('./compile-panel-view.js')) as {
+    CompilePanel?: ComponentType<CompilePanelProps>
+  }
   expect(
     mod.CompilePanel,
-    'compile-panel.tsx must have a named export `CompilePanel`',
+    'compile-panel-view.tsx must have a named export `CompilePanel`',
   ).toBeTruthy()
   return mod.CompilePanel!
 }
@@ -89,7 +82,7 @@ function timelineTextsOf(container: HTMLElement): string[] {
   ).map((el) => el.textContent ?? '')
 }
 
-describe('CompilePanel: logs prop (ROUND 2 — dmcc 日志链路)', () => {
+describe('CompilePanel: logs prop（dmcc 日志链路）', () => {
   it('renders log lines as [data-compile-log] rows with the line text', async () => {
     const { container } = await renderPanel(
       [],

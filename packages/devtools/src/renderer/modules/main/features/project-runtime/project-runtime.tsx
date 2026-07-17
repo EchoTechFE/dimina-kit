@@ -195,9 +195,9 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
     wxmlEnabled: panelData.wxmlEnabled,
     storageSource: panelData.storageSource,
     storageEnabled: panelData.storageEnabled,
-    appData: panelData.appData,
-    onRefreshAppData: panelData.refreshAppData,
-    onSelectAppDataBridge: panelData.setActiveAppDataBridge,
+    appDataSource: panelData.appDataSource,
+    appDataEnabled: panelData.appDataEnabled,
+    activePagePath: simulator.currentPage,
     compileEvents: session.compileEvents,
     compileLogs: session.compileLogs,
     onClearCompileEvents: session.clearCompileEvents,
@@ -397,43 +397,16 @@ function findSimulatorConstraintSite(
 /**
  * Dock-mode wrapper for a DOM debug tab. Under DOM-panel KEEPALIVE every debug
  * tab body stays MOUNTED (inactive ones hidden), so this component is NOT
- * remounted on a tab switch — its `active` prop flips instead. It fires the
- * per-tab data refresh off the `active` false→true edge (mirroring
- * `BottomDebugPanel.handleSelectTab`, M3): the dock tab strip drives activation
- * through the layout model and never calls `handleSelectTab`, so without this the
- * WXML/AppData/Storage panels would show stale data when re-activated.
- * `'compile'` is push-fed (projectStatus + compileLog), so it needs no refresh.
- * Refresh handlers are read through a ref so the activation effect depends only
- * on `tabId`/`active` (the props object is rebuilt every render and would
- * otherwise re-fire the refresh on every render).
+ * remounted on a tab switch — its `active` prop flips instead, forwarded here
+ * as `tabActive`. WXML's, Storage's and AppData's activation-edge seed AND
+ * visibility gate all live in the shared ConnectedWxmlPanel /
+ * ConnectedStoragePanel / ConnectedAppDataPanel, driven by that prop —
+ * `'compile'` is push-fed (projectStatus + compileLog) and needs no seed at
+ * all — so this wrapper does no refresh bookkeeping of its own.
  */
 function DockDebugTab(
   { tabId, active, panelProps }: { tabId: DebugTabContentId; active: boolean; panelProps: BottomDebugPanelProps },
 ): ReactNode {
-  // Keep the latest refresh handlers in a ref (updated in an effect, not during
-  // render) so the activation effect can depend only on `tabId`/`active`. This
-  // effect has no deps → it runs on every commit and, by declaration order,
-  // BEFORE the activation effect below, so the ref is always current when a
-  // refresh fires.
-  const propsRef = useRef(panelProps)
-  useEffect(() => {
-    propsRef.current = panelProps
-  })
-  // Refresh on the false→true activation edge (NOT every render): a kept-alive
-  // body is never remounted, so the refresh must be driven by becoming active.
-  // The initial commit (active=true) counts as the first edge (prev defaults to
-  // false). A mounted-but-inactive tab (active=false) never refreshes.
-  const prevActive = useRef(false)
-  useEffect(() => {
-    const becameActive = active && !prevActive.current
-    prevActive.current = active
-    if (!becameActive) return
-    const p = propsRef.current
-    if (tabId === 'appdata') p.onRefreshAppData()
-  }, [tabId, active])
-  // WXML and Storage have no branch here: their activation-edge seed AND
-  // visibility gate both live in the shared ConnectedWxmlPanel /
-  // ConnectedStoragePanel, driven by `tabActive`.
   return <DebugTabContent tabId={tabId} {...panelProps} tabActive={active} />
 }
 

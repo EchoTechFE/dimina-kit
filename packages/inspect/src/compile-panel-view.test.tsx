@@ -1,9 +1,9 @@
 /**
  * 编译信息 tab — CompilePanel component contract.
  *
- * Target file: `right-panel/compile-panel.tsx`, named export `CompilePanel`,
+ * Target file: `compile-panel-view.tsx`, named export `CompilePanel`,
  * props `{ events: CompileEvent[]; onClear: () => void }` where `events` is
- * the chronological (oldest-first) log from `useSession().compileEvents`.
+ * the host's chronological (oldest-first) compile-event log.
  *
  * Pinned contract:
  *  - Empty state: no events → copy matching /暂无编译/, no rows.
@@ -20,15 +20,14 @@
  *    events (first event, or previous event isn't compiling) show none.
  *  - The 清空 button calls `onClear`.
  *
- * The module is loaded via `import.meta.glob` rather than a static import, so
- * a missing `compile-panel.tsx` fails this suite with an explicit assertion
- * message instead of an import-time throw.
+ * The module is loaded via a dynamic import so a missing named export fails
+ * with an explicit assertion message instead of an import-time throw.
  */
 import { describe, it, expect, vi } from 'vitest'
 import type { ComponentType } from 'react'
 import { render, fireEvent } from '@testing-library/react'
 
-/** Structural duplicate of the `CompileEvent` export from use-session. */
+/** Structural duplicate of the `CompileEvent` export from compile-types. */
 interface CompileEvent {
   at: number
   status: string
@@ -41,21 +40,13 @@ interface CompilePanelProps {
   onClear: () => void
 }
 
-// Static-import-free loading: the glob matches zero modules if
-// compile-panel.tsx is absent, keeping a missing module an assertion failure
-// rather than an import-time throw.
-const compilePanelModules = import.meta.glob('./compile-panel.tsx')
-
 async function loadCompilePanel(): Promise<ComponentType<CompilePanelProps>> {
-  const loader = compilePanelModules['./compile-panel.tsx']
-  expect(
-    loader,
-    'right-panel/compile-panel.tsx must exist with a named CompilePanel export',
-  ).toBeTruthy()
-  const mod = (await loader!()) as { CompilePanel?: ComponentType<CompilePanelProps> }
+  const mod = (await import('./compile-panel-view.js')) as {
+    CompilePanel?: ComponentType<CompilePanelProps>
+  }
   expect(
     mod.CompilePanel,
-    'compile-panel.tsx must have a named export `CompilePanel`',
+    'compile-panel-view.tsx must have a named export `CompilePanel`',
   ).toBeTruthy()
   return mod.CompilePanel!
 }

@@ -1,6 +1,40 @@
+// The pure AppData panel view: per-page bridge tabs over cumulative setData
+// state, each component path rendered as a collapsible JSON tree. Pure
+// presentation — bridge selection and data feeds live in the connected
+// container (or the host, when it renders this view directly).
 import React from 'react'
-import JsonView from '@uiw/react-json-view'
-import type { AppDataState } from '../project-runtime/controllers/use-panel-data'
+import * as jsonViewModule from '@uiw/react-json-view'
+import type { AppDataSnapshot } from './appdata-accumulator.js'
+
+// The package ships CJS-flavoured type declarations (no `"type": "module"`),
+// so what `default` types as depends on the consumer's moduleResolution:
+// under NodeNext it is the whole module.exports object with the component on
+// `.default`; under Bundler (and in vite/vitest at runtime) it IS the
+// component (a forwardRef exotic object, so a typeof-function probe can't
+// tell the shapes apart; the interop namespace is the only shape carrying a
+// `default` key). The conditional type and the `in` probe resolve the
+// component under BOTH semantics — this package typechecks under NodeNext
+// and is also typechecked from source by Bundler-resolution consumers.
+type ModuleDefault = (typeof jsonViewModule)['default']
+type JsonViewComponent = ModuleDefault extends { default: infer C } ? C : ModuleDefault
+const moduleDefault: JsonViewComponent | { default: JsonViewComponent } = jsonViewModule.default
+// A type predicate (not a bare `in` check): plain `in` narrowing intersects
+// `Record<'default', unknown>` onto the component branch, degrading the
+// conditional's type to unknown.
+function isInteropNamespace(
+  m: JsonViewComponent | { default: JsonViewComponent },
+): m is { default: JsonViewComponent } {
+  return 'default' in m
+}
+const JsonView: JsonViewComponent
+  = isInteropNamespace(moduleDefault) ? moduleDefault.default : moduleDefault
+
+/** The view's full input state: a snapshot plus which bridge tab is active. */
+export interface AppDataPanelState {
+  bridges: AppDataSnapshot['bridges']
+  activeBridgeId: string | null
+  entries: AppDataSnapshot['entries']
+}
 
 function bridgeLabel(bridge: { id: string; pagePath: string | null }): string {
   return bridge.pagePath ?? bridge.id
@@ -37,18 +71,19 @@ const JSON_VIEW_STYLE: React.CSSProperties = {
   whiteSpace: 'pre-wrap',
 } as React.CSSProperties
 
+export interface AppDataPanelProps {
+  state: AppDataPanelState
+  onSelectBridge: (id: string) => void
+  /** Whether the mini-program's runtime session is `running` — distinguishes "小程序未运行" from a true empty-data vacuum below. Defaults to true so callers that don't track runtime status keep the plain empty-data text. */
+  isRuntimeRunning?: boolean
+}
+
 export function AppDataPanel({
   state,
   onSelectBridge,
   isRuntimeRunning = true,
-}: {
-  state: AppDataState
-  onSelectBridge: (id: string) => void
-  /** Whether the mini-program's runtime session is `running` — distinguishes "小程序未运行" from a true empty-data vacuum below. Defaults to true so callers that don't track runtime status keep the plain empty-data text. */
-  isRuntimeRunning?: boolean
-}) {
+}: AppDataPanelProps) {
   const { bridges, activeBridgeId, entries } = state
-  const anyEntries = bridges.some((b) => Object.keys(entries[b.id] ?? {}).length > 0)
   return (
     <div className="flex flex-col overflow-hidden flex-1" data-testid="appdata-panel">
       {bridges.length > 1 && (
@@ -73,11 +108,13 @@ export function AppDataPanel({
           })}
         </div>
       )}
-      {bridges.length === 0 || !anyEntries ? (
+      {bridges.length === 0 ? (
         <div className="text-[12px] text-text-dim text-center px-4 py-6">
           {isRuntimeRunning ? '暂无页面数据（仅显示 Page 级 data）' : '小程序未运行'}
         </div>
       ) : (
+        // A bridge with zero entries still gets its keepalive container (with
+        // the per-bridge empty text) so live pushes land in a mounted tab.
         // Keepalive: render every bridge's entries; hide non-active ones via
         // `display: none` so the JsonView instances stay mounted and preserve
         // their expand/collapse state across tab switches.
@@ -95,7 +132,7 @@ export function AppDataPanel({
               >
                 {keys.length === 0 ? (
                   <div className="text-[12px] text-text-dim text-center px-4 py-6">
-                    暂无页面数据（仅显示 Page 级 data）
+                    {isRuntimeRunning ? '暂无页面数据（仅显示 Page 级 data）' : '小程序未运行'}
                   </div>
                 ) : (
                   keys.map((comp) => (

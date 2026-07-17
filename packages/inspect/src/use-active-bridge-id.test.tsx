@@ -14,9 +14,7 @@
 import { describe, it, expect } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 
-// This import will fail until the implementing agent creates the file —
-// that is the intended red state.
-import { useActiveBridgeId } from './use-active-bridge-id'
+import { useActiveBridgeId } from './use-active-bridge-id.js'
 
 const A = { id: 'A', pagePath: '/a' }
 const B = { id: 'B', pagePath: '/b' }

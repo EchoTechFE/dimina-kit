@@ -10,8 +10,7 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import { render } from '@testing-library/react'
-import { AppDataPanel } from './appdata-panel'
-import type { AppDataState } from '../project-runtime/controllers/use-panel-data'
+import { AppDataPanel, type AppDataPanelState as AppDataState } from './appdata-panel-view.js'
 
 function makeState(overrides: Partial<AppDataState> = {}): AppDataState {
   return {

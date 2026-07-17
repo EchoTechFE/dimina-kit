@@ -1,9 +1,6 @@
 import { type ReactNode } from 'react'
-import type { StoragePanelSource, WxmlPanelSource } from '@dimina-kit/inspect'
-import { ConnectedStoragePanel, ConnectedWxmlPanel } from '@dimina-kit/inspect/panel'
-import { AppDataPanel } from '../right-panel/appdata-panel.js'
-import { CompilePanel } from '../right-panel/compile-panel.js'
-import type { AppDataState } from '../project-runtime/controllers/use-panel-data.js'
+import type { AppDataPanelSource, StoragePanelSource, WxmlPanelSource } from '@dimina-kit/inspect'
+import { ConnectedAppDataPanel, ConnectedStoragePanel, ConnectedWxmlPanel, CompilePanel } from '@dimina-kit/inspect/panel'
 import type {
   CompileEvent,
   CompileLogEntry,
@@ -15,18 +12,19 @@ export interface BottomDebugPanelProps {
   onSelectTab: (id: RightPaneTabId) => void
 
   // Data + handlers for built-in panels.
-  /** WXML and Storage data wiring lives in the shared ConnectedWxmlPanel /
-   * ConnectedStoragePanel: the host only supplies the IPC transports
-   * (sources), the readiness gates (enabled) and — via DebugTabContent's
-   * `tabActive` — the tab-visibility gate. */
+  /** WXML, Storage and AppData data wiring lives in the shared
+   * ConnectedWxmlPanel / ConnectedStoragePanel / ConnectedAppDataPanel: the
+   * host only supplies the IPC transports (sources), the readiness gates
+   * (enabled) and — via DebugTabContent's `tabActive` — the tab-visibility
+   * gate. */
   wxmlSource: WxmlPanelSource
   wxmlEnabled?: boolean
   storageSource: StoragePanelSource
   storageEnabled?: boolean
-
-  appData: AppDataState
-  onRefreshAppData: () => void
-  onSelectAppDataBridge: (id: string) => void
+  appDataSource: AppDataPanelSource
+  appDataEnabled?: boolean
+  /** The simulator's active page path; AppData's bridge tabs auto-follow it. */
+  activePagePath?: string
 
   // 编译 tab: event log + per-line dmcc log, pure passthrough to
   // CompilePanel. Optional so embedders without a compile feed keep working.
@@ -61,19 +59,18 @@ export function DebugTabContent(
 ): ReactNode {
   // The panels are live (no manual refresh button): storage syncs via
   // storageChanged, WXML via the render-guest observer, AppData via the setData
-  // tap. `onRefreshAppData` stays on BottomDebugPanelProps for the
-  // seed-on-activation edge in `DockDebugTab`, but is NOT forwarded to the panel
-  // components anymore; WXML's and Storage's activation-edge seed + visibility
-  // gate live in the shared connected containers, driven by `tabActive`.
+  // tap. WXML's, Storage's and AppData's activation-edge seed + visibility gate
+  // all live in the shared connected containers, driven by `tabActive`.
   const {
     tabId,
     wxmlSource,
     wxmlEnabled = true,
     storageSource,
     storageEnabled = true,
+    appDataSource,
+    appDataEnabled = true,
+    activePagePath,
     tabActive = true,
-    appData,
-    onSelectAppDataBridge,
     compileEvents = [],
     compileLogs = [],
     onClearCompileEvents,
@@ -92,10 +89,12 @@ export function DebugTabContent(
       )
     case 'appdata':
       return (
-        <AppDataPanel
-          state={appData}
-          onSelectBridge={onSelectAppDataBridge}
+        <ConnectedAppDataPanel
+          source={appDataSource}
+          enabled={appDataEnabled}
+          active={tabActive}
           isRuntimeRunning={isRuntimeRunning}
+          activePagePath={activePagePath}
         />
       )
     case 'storage':

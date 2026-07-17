@@ -1,19 +1,25 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { cn } from '@/shared/lib/utils'
-import type {
-  CompileEvent,
-  CompileLogEntry,
-} from '../project-runtime/controllers/use-session.js'
+// The pure 编译 panel view: the host's compile-status events and per-line
+// compiler log merged — in the VIEW layer only — into one oldest-first
+// (chronological) timeline with a text filter. Pure presentation — feed
+// state lives in the connected container (or the host, when it renders this
+// view directly).
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import type { CompileEvent, CompileLogEntry } from './compile-types.js'
+
+/** Join the truthy class fragments (the panel's only class-composition need). */
+function cn(...parts: Array<string | false | undefined>): string {
+  return parts.filter(Boolean).join(' ')
+}
 
 export interface CompilePanelProps {
-  /** Chronological (oldest-first) compile-event log from useSession. */
+  /** Chronological (oldest-first) compile-event log. */
   events: CompileEvent[]
   /**
-   * Chronological (oldest-first) per-line dmcc log. Optional: omitting it
+   * Chronological (oldest-first) per-line compiler log. Optional: omitting it
    * keeps the event-only behaviour (incl. the 暂无编译 empty state).
    */
   logs?: CompileLogEntry[]
-  /** Clear the log (drives useSession.clearCompileEvents — both stores). */
+  /** Clear the log (the owner empties both stores). */
   onClear: () => void
 }
 
@@ -57,12 +63,6 @@ interface LogItem {
 
 type TimelineItem = EventItem | LogItem
 
-/**
- * 编译 tab body: the compile-event log (projectStatus traffic) and the
- * per-line dmcc compile log merged — in the VIEW layer only — into one
- * oldest-first (chronological) timeline with a text filter. State stays
- * isolated in useSession.
- */
 export function CompilePanel({ events, logs = [], onClear }: CompilePanelProps) {
   const latest = events.length > 0 ? events[events.length - 1]! : null
   const [filter, setFilter] = useState('')
@@ -85,10 +85,11 @@ export function CompilePanel({ events, logs = [], onClear }: CompilePanelProps) 
 
   const totalItems = events.length + logs.length
 
-  // Auto-scroll to bottom when new items arrive.
+  // Auto-scroll to bottom when new items arrive. Optional-call: jsdom-class
+  // environments don't implement scrollIntoView.
   useEffect(() => {
     if (shouldAutoScroll.current) {
-      bottomRef.current?.scrollIntoView({ behavior: 'auto' })
+      bottomRef.current?.scrollIntoView?.({ behavior: 'auto' })
     }
   }, [totalItems])
 
