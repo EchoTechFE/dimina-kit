@@ -52,12 +52,13 @@ export function ConnectedAppDataPanel({
 
   const { activeBridgeId, setActiveBridge } = useActiveBridgeId(snapshot.bridges, activePagePath)
 
-  // Only a source with a write-back channel makes the tree editable; the
-  // authoritative new value arrives back through the snapshot push, so the
-  // dispatch result is not awaited here.
+  // Only a source with a write-back channel makes the tree editable. The
+  // dispatch result flows through to the panel: its undo/redo stacks only
+  // advance when the runtime actually accepted the write. The authoritative
+  // new VALUE still arrives back through the snapshot push, never locally.
   const setData = source.setData?.bind(source)
   const onSetData = setData
-    ? (bridgeId: string, patch: Record<string, unknown>): void => { void setData(bridgeId, patch) }
+    ? (bridgeId: string, patch: Record<string, unknown>): Promise<boolean> => setData(bridgeId, patch)
     : undefined
 
   return (

@@ -20,8 +20,11 @@ export interface AppDataPanelProps {
   /** Whether the mini-program's runtime session is `running` — distinguishes "小程序未运行" from a true empty-data vacuum below. Defaults to true so callers that don't track runtime status keep the plain empty-data text. */
   isRuntimeRunning?: boolean
   /** Write-back for tree edits (setData path syntax keys). Absent → the tree
-   * renders read-only: no checkboxes, double-click is inert. */
-  onSetData?: (bridgeId: string, patch: Record<string, unknown>) => void
+   * renders read-only: no checkboxes, double-click is inert. The return value
+   * reports whether the write was dispatched to a live runtime: `false` (sync
+   * or resolved) rejects the edit — the undo/redo stacks only advance on
+   * success. `void`/`undefined` counts as success (fire-and-forget hosts). */
+  onSetData?: (bridgeId: string, patch: Record<string, unknown>) => void | boolean | Promise<boolean>
 }
 
 function bridgeLabel(bridge: { id: string; pagePath: string | null }): string {
@@ -84,26 +87,63 @@ export function AppDataPanel({
     setCommand({ seq: (command?.seq ?? 0) + 1, mode, bridgeId: activeBridgeId })
   }
 
-  const commitEdit = (bridgeId: string) => (path: string, next: unknown, prev: unknown): void => {
-    onSetData?.(bridgeId, { [path]: next })
-    setUndoStack([...undoStack, { bridgeId, path, before: prev, after: next }])
-    setRedoStack([])
+  /** Dispatch a write, then run `apply` with its acceptance: only an explicit
+   * `false` (sync or resolved) is a rejection — `void` keeps fire-and-forget
+   * hosts working. A synchronous result settles synchronously so the stacks
+   * (and their buttons) update in the same event turn as the click. */
+  const dispatch = (
+    bridgeId: string,
+    patch: Record<string, unknown>,
+    apply: (ok: boolean) => void,
+  ): void => {
+    const result = onSetData?.(bridgeId, patch)
+    if (result instanceof Promise) {
+      void result.then(v => apply(v !== false))
+      return
+    }
+    apply(result !== false)
   }
+
+  const commitEdit = (bridgeId: string) => (path: string, next: unknown, prev: unknown): void => {
+    dispatch(bridgeId, { [path]: next }, (ok) => {
+      if (!ok) return
+      setUndoStack(stack => [...stack, { bridgeId, path, before: prev, after: next }])
+      setRedoStack([])
+    })
+  }
+
+  const bridgeIsLive = (bridgeId: string): boolean => bridges.some(b => b.id === bridgeId)
 
   const undo = (): void => {
     const record = undoStack.at(-1)
     if (!record) return
-    onSetData?.(record.bridgeId, { [record.path]: record.before })
-    setUndoStack(undoStack.slice(0, -1))
-    setRedoStack([...redoStack, record])
+    if (!bridgeIsLive(record.bridgeId)) {
+      // The page this edit targeted is gone — replaying it can only write into
+      // the void. Drop the record without dispatching.
+      setUndoStack(stack => stack.filter(r => r !== record))
+      return
+    }
+    dispatch(record.bridgeId, { [record.path]: record.before }, (ok) => {
+      // A rejected replay (runtime refused the write) leaves both stacks
+      // untouched so the UI state never claims an undo that didn't happen.
+      if (!ok) return
+      setUndoStack(stack => stack.filter(r => r !== record))
+      setRedoStack(stack => [...stack, record])
+    })
   }
 
   const redo = (): void => {
     const record = redoStack.at(-1)
     if (!record) return
-    onSetData?.(record.bridgeId, { [record.path]: record.after })
-    setRedoStack(redoStack.slice(0, -1))
-    setUndoStack([...undoStack, record])
+    if (!bridgeIsLive(record.bridgeId)) {
+      setRedoStack(stack => stack.filter(r => r !== record))
+      return
+    }
+    dispatch(record.bridgeId, { [record.path]: record.after }, (ok) => {
+      if (!ok) return
+      setRedoStack(stack => stack.filter(r => r !== record))
+      setUndoStack(stack => [...stack, record])
+    })
   }
 
   if (bridges.length === 0) {

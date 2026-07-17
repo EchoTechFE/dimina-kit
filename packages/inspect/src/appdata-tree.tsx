@@ -73,8 +73,12 @@ interface NodeContext {
   onCommit?: (path: string, next: unknown, prev: unknown) => void
 }
 
-function ValueCell({ path, value, ctx }: { path: string; value: unknown; ctx: NodeContext }) {
-  const editable = ctx.onCommit !== undefined
+function ValueCell({ path, value, editable, ctx }: {
+  path: string
+  value: unknown
+  editable: boolean
+  ctx: NodeContext
+}) {
   if (typeof value === 'boolean') {
     return (
       <span className="inline-flex items-center gap-1 text-code-keyword">
@@ -100,7 +104,9 @@ function ValueCell({ path, value, ctx }: { path: string; value: unknown; ctx: No
         const draft = ctx.state.draft.trim()
         const next = Number(draft)
         ctx.endEdit()
-        if (draft === '' || Number.isNaN(next)) return
+        // Only finite numbers commit: Infinity/-Infinity (and 1e309-style
+        // overflow) are not serializable AppData values.
+        if (draft === '' || !Number.isFinite(next)) return
         ctx.onCommit?.(path, next, prev)
         return
       }
@@ -138,11 +144,19 @@ function ValueCell({ path, value, ctx }: { path: string; value: unknown; ctx: No
   )
 }
 
-function TreeNode({ path, label, value, depth, ctx }: {
+/** True when a key segment would be re-parsed by the runtime's lodash-style
+ * `toPath` (dots / brackets). Array indices are numbers and always safe. */
+function segmentUnsafe(key: string | number): boolean {
+  return typeof key === 'string' && /[.[\]]/.test(key)
+}
+
+function TreeNode({ path, label, value, depth, unsafeSegments, ctx }: {
   path: string
   label: string
   value: unknown
   depth: number
+  /** Some segment on this node's path (its own key included) contains `.`/`[`/`]`. */
+  unsafeSegments: boolean
   ctx: NodeContext
 }) {
   const indent = { paddingLeft: depth * 14 }
@@ -168,6 +182,7 @@ function TreeNode({ path, label, value, depth, ctx }: {
             label={String(key)}
             value={child}
             depth={depth + 1}
+            unsafeSegments={unsafeSegments || segmentUnsafe(key)}
             ctx={ctx}
           />
         ))}
@@ -175,16 +190,23 @@ function TreeNode({ path, label, value, depth, ctx }: {
     )
   }
   const primitive = typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
+  // A multi-segment path with an unsafe segment cannot round-trip through the
+  // runtime's string-path `set()` — the patch key would be re-split on the
+  // dots/brackets inside the key and write a DIFFERENT field. A single-segment
+  // (top-level) key is safe regardless of content: the runtime's own-key check
+  // short-circuits before path parsing. Unsafe rows render read-only.
+  const pathAmbiguous = depth > 1 && unsafeSegments
+  const editable = primitive && ctx.onCommit !== undefined && !pathAmbiguous
   return (
     <div
       className="flex items-center gap-1 px-2 py-px text-[12px] font-mono"
       style={indent}
-      {...(primitive && ctx.onCommit !== undefined ? { 'data-path': path } : {})}
+      {...(editable ? { 'data-path': path } : {})}
     >
       <span className="w-3 shrink-0" />
       <span className="text-code-blue">{label}</span>
       <span className="text-text-secondary">:</span>
-      <ValueCell path={path} value={value} ctx={ctx} />
+      <ValueCell path={path} value={value} editable={editable} ctx={ctx} />
     </div>
   )
 }
@@ -232,7 +254,7 @@ export function AppDataTree({ root, bridgeId, command, onCommit }: AppDataTreePr
 
   return (
     <div data-testid="appdata-tree" className="py-1">
-      <TreeNode path={ROOT_PATH} label="object" value={root} depth={0} ctx={ctx} />
+      <TreeNode path={ROOT_PATH} label="object" value={root} depth={0} unsafeSegments={false} ctx={ctx} />
     </div>
   )
 }
