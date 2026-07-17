@@ -49,10 +49,16 @@
  *  ✅ Forwarded to the native Network tab: requestWillBeSent, responseReceived,
  *     loadingFinished, loadingFailed (+ requestWillBeSentExtraInfo /
  *     responseReceivedExtraInfo when present, for accurate headers/status).
- *  ⏳ TODO (二期): `dataReceived` per-chunk forwarding (skipped to avoid an
- *     executeJavaScript per chunk), and response body / preview (needs hooking
- *     `InspectorFrontendHost.sendMessageToBackend` + a prefetched body cache so
- *     the front-end's `Network.getResponseBody` round-trip resolves).
+ *  ✅ Response body / preview and request post data: prefetched from the
+ *     simulator's CDP session at loadingFinished into a bounded cache keyed by
+ *     the VIRTUAL id (`bodies`, see NetworkBodyProvider). The front-end's
+ *     `Network.getResponseBody` / `Network.getRequestPostData` round-trips for
+ *     `dimina:sim:` ids are intercepted by the outbound CDP gate that
+ *     elements-forward installs on `InspectorFrontendHost.sendMessageToBackend`
+ *     and answered from that cache — the service-host backend the front-end
+ *     natively talks to has never heard of these ids.
+ *  ⏳ TODO: `dataReceived` per-chunk forwarding (skipped to avoid an
+ *     executeJavaScript per chunk).
  *  ⚠️ NOT captured here: requests issued from inside a render-host `<webview>`
  *     guest (page-level resource loads / page `fetch`). The safe-area service
  *     already owns each guest's `wc.debugger`, and `debugger.attach` is
@@ -66,6 +72,35 @@ import type { WebContents } from 'electron'
 import { DisposableRegistry, toDisposable, type ConnectionRegistry, type Disposable } from '@dimina-kit/electron-deck/main'
 import { isFrontendSettled } from '../views/inject-when-ready.js'
 import { packDispatchBatch } from './dispatch-batch.js'
+import { PrefetchCache, DEFAULT_PER_ENTRY_MAX_CHARS } from './body-cache.js'
+
+/**
+ * Namespace prefix of every virtual requestId this forwarder injects into the
+ * DevTools front-end. SINGLE SOURCE for the literal: the front-end outbound
+ * gate (elements-forward) keys its `Network.getResponseBody` /
+ * `Network.getRequestPostData` interception on this exact prefix, so the two
+ * modules can never drift apart on what counts as "one of ours".
+ */
+export const VIRTUAL_REQUEST_ID_PREFIX = 'dimina:sim:'
+
+/** CDP `Network.getResponseBody` result shape (served from the prefetch cache). */
+export interface CdpResponseBody {
+  body: string
+  base64Encoded: boolean
+}
+
+/**
+ * Answers the front-end's body/post-data lookups for virtual requestIds. The
+ * outbound CDP gate (elements-forward) consumes this: it intercepts the
+ * front-end's `Network.getResponseBody` / `Network.getRequestPostData` for
+ * `dimina:sim:` ids (the service-host backend has never heard of them) and
+ * replies from here instead. Rejections carry the same not-found message a
+ * real CDP backend produces for an unknown requestId.
+ */
+export interface NetworkBodyProvider {
+  getResponseBody(requestId: string): Promise<CdpResponseBody>
+  getRequestPostData(requestId: string): Promise<{ postData: string }>
+}
 
 /** Which layer a captured request came from (tags the fallback log line). */
 export type NetworkSource = 'service' | 'render'
@@ -116,6 +151,17 @@ export interface NetworkForwarder extends Disposable {
   /** Detach from the current simulator WCV (without disposing the forwarder). */
   detachSimulator(): void
   /**
+   * Wire a render-host guest wc (pageFrame) for Network capture — page-level
+   * resource loads (images/fonts/page fetch) that never touch the simulator's
+   * network stack. Idempotent per wc. REUSES an already-attached debugger
+   * session (safe-area attaches guests first) — attaches itself only when no
+   * one has, and detaches ONLY self-attached sessions on dispose; sessions it
+   * doesn't own are never detached. Events share the simulator capture's
+   * virtual-id namespace prefix (distinct epochs keep them collision-free) and
+   * the same body prefetch cache.
+   */
+  attachRenderGuest(wc: WebContents): void
+  /**
    * Point the forwarder at the WebContents hosting the DevTools FRONT-END (the
    * primary, native-Network-tab sink). Pass null when that view is torn down so
    * we fall back to the console line. Re-callable across DevTools re-creates.
@@ -126,6 +172,13 @@ export interface NetworkForwarder extends Disposable {
    * (e.g. a main-process direct send). Uses the console fallback sink.
    */
   report(record: NetworkRequestRecord): void
+  /**
+   * Body/post-data lookups for the virtual requestIds this forwarder injected,
+   * backed by the loadingFinished-time prefetch cache. Keyed by virtual id, so
+   * entries stay valid across detach/re-attach (each attach epoch mints
+   * non-colliding ids); dispose() drops them all.
+   */
+  readonly bodies: NetworkBodyProvider
 }
 
 // ── requestId namespacing (pure, testable) ──────────────────────────────────
@@ -214,7 +267,7 @@ export class RequestIdNamespace {
       this.map.set(rawId, existing)
       return existing.virtual
     }
-    const virtual = `dimina:sim:${this.epoch}:${this.seq++}:${rawId}`
+    const virtual = `${VIRTUAL_REQUEST_ID_PREFIX}${this.epoch}:${this.seq++}:${rawId}`
     this.map.set(rawId, { virtual, expires: t + this.ttlMs, active: true })
     this.evict(t)
     return virtual
@@ -362,10 +415,10 @@ function buildForwardScript(record: NetworkRequestRecord): string {
     + `}catch(_){}})()`
 }
 
-/** CDP `Network.requestWillBeSent` params slice the fallback reads. */
+/** CDP `Network.requestWillBeSent` params slice the fallback + prefetch read. */
 interface RequestWillBeSent {
   requestId: string
-  request: { url: string; method: string }
+  request: { url: string; method: string; hasPostData?: boolean; postData?: string }
 }
 /** CDP `Network.responseReceived` params slice the fallback reads. */
 interface ResponseReceived {
@@ -418,13 +471,94 @@ const READY_RETRY_MS = 100
  */
 type SinkState = 'idle' | 'probing' | 'ready' | 'degraded'
 
+/**
+ * Minimal synchronous teardown collector — structurally compatible with
+ * `DisposableRegistry.add` (so `wireNetworkCapture` can target either) but
+ * its `disposeAll` runs every entry IMMEDIATELY, in one synchronous pass.
+ * `DisposableRegistry.disposeAll` is async and only runs its LIFO entries one
+ * `await` apart — fine for the simulator's fire-and-forget detach, but wrong
+ * for a render guest: a destroy-then-immediately-re-emit (no microtask in
+ * between — exactly how a real `wc.once('destroyed', ...)` firing during
+ * teardown looks) must see the debugger 'message' listener ALREADY gone, not
+ * gone-after-a-tick.
+ */
+interface CaptureTeardown {
+  add(fn: () => void): void
+}
+function createSyncTeardown(): CaptureTeardown & { disposeAll(): void } {
+  const fns: Array<() => void> = []
+  return {
+    add: (fn) => { fns.push(fn) },
+    disposeAll: () => {
+      for (const fn of fns.splice(0).reverse()) {
+        try { fn() } catch { /* best-effort */ }
+      }
+    },
+  }
+}
+
 export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkForwarder {
   const registry = new DisposableRegistry()
+
+  // ── Response body / post-data prefetch (serves the front-end's clicks) ─────
+  // Keyed by VIRTUAL requestId and owned by the forwarder (not the attach):
+  // epochs make ids non-colliding, so entries stay servable across a simulator
+  // detach/re-attach while the panel still shows the old rows. Bounded + TTL'd
+  // in the cache itself.
+  const bodyCache = new PrefetchCache<CdpResponseBody>((v) => v.body.length)
+  const postDataCache = new PrefetchCache<{ postData: string }>((v) => v.postData.length)
+
+  // ── Prefetch admission control ──────────────────────────────────────────────
+  // Every completed request (simulator + all render guests combined — this
+  // counter is forwarder-wide, not per-attach) would otherwise trigger an
+  // unconditional `Network.getResponseBody` CDP round-trip that must
+  // materialize the FULL body into main-process memory before the cache's own
+  // per-entry/total-size limits can reject it (those limits apply only to
+  // SETTLED entries — a pending fetch counts 0 and is eviction-exempt). A page
+  // that finishes many large resources at once (e.g. many concurrent images —
+  // exactly the render-guest capture path) could otherwise pile up unboundedly
+  // many simultaneous full-body reads. This caps how many prefetches (body +
+  // post-data combined) may be in flight at once; once at the cap, further
+  // completions are simply skipped — the panel's Response tab 404s for those
+  // (same as any other not-found id) rather than the process risking a memory
+  // spike. `primeWithAdmission`'s bookkeeping only counts a slot when the cache
+  // actually started a new fetch (PrefetchCache.prime()'s idempotent no-op
+  // return doesn't consume one).
+  const MAX_CONCURRENT_PREFETCHES = 32
+  let pendingPrefetchCount = 0
+  /**
+   * `fetch` MUST be an `async` function (both current call sites in
+   * `prefetchBodies` are). An `async` function can never throw synchronously —
+   * any exception in its body is spec-guaranteed to surface as a rejected
+   * promise instead — which is what guarantees `release()` always eventually
+   * runs via the `.then()` below. A plain (non-async) function that throws
+   * synchronously when CALLED would bypass `.then()` entirely and leak this
+   * slot forever (`PrefetchCache.prime` catches that synchronous throw and
+   * still reports `started: true`), so never pass one here.
+   */
+  function primeWithAdmission<V>(cache: PrefetchCache<V>, id: string, fetch: () => Promise<V>): void {
+    if (pendingPrefetchCount >= MAX_CONCURRENT_PREFETCHES) return
+    pendingPrefetchCount++
+    let released = false
+    const release = (): void => { if (!released) { released = true; pendingPrefetchCount-- } }
+    const started = cache.prime(id, () => fetch().then(
+      (v) => { release(); return v },
+      (err) => { release(); throw err },
+    ))
+    if (!started) release()
+  }
 
   // The simulator WCV we currently have a debugger session on, and the
   // per-attach teardown (debugger listeners + detach). Null when not attached.
   let simWc: WebContents | null = null
   let attachDisposables: DisposableRegistry | null = null
+
+  // Render-host guests wired for capture: wc.id → SYNCHRONOUS per-guest
+  // teardown (message listener + destroyed watcher). Guests whose debugger
+  // session WE attached (nobody owned it yet) are tracked separately so
+  // dispose detaches only ours.
+  const guestWired = new Map<number, ReturnType<typeof createSyncTeardown>>()
+  const guestSelfAttached = new Map<number, WebContents>()
 
   // The DevTools front-end host wc (primary sink), set by the ViewManager.
   let devtoolsWc: WebContents | null = null
@@ -694,6 +828,218 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
     } catch { /* already detached / mid-destroy */ }
   }
 
+  /**
+   * Wire one wc's already-usable debugger session for Network capture: a fresh
+   * per-attach requestId namespace (epochs keep ids from ever colliding across
+   * sources/attaches), the raw-event forward into the DevTools front-end, the
+   * loadingFinished-time body/post-data prefetch, and the console-fallback
+   * bookkeeping (tagged with `source`). Shared verbatim by the simulator
+   * attach (owner semantics) and every render-guest attach (shared-session
+   * semantics) — the capture pipeline is identical, only session ownership
+   * differs. The 'message' listener teardown is registered on `attach`.
+   */
+  function wireNetworkCapture(wc: WebContents, source: NetworkSource, attach: CaptureTeardown, epoch: string): void {
+    const ns = new RequestIdNamespace(epoch)
+
+    // Fallback bookkeeping: requestId → in-flight request, for the console line
+    // when the native dispatch path is unusable.
+    const pending = new Map<string, Pending>()
+
+    // Raw ids whose requestWillBeSent announced a post body that was NOT
+    // inlined (`hasPostData` without `postData`) — the only case the front-end
+    // round-trips `Network.getRequestPostData`. Consumed at loadingFinished.
+    const postDataWanted = new Set<string>()
+
+    /**
+     * Prefetch the response body (and, when flagged, the post data) from this
+     * wc's CDP session the moment the request finishes — the renderer may
+     * evict the resource soon after, so a click-time fetch would race it.
+     * Gated exactly like event forwarding: with no devtools host to serve
+     * (idle-without-host / degraded) there is no panel to click, so buffering
+     * bodies would only burn memory.
+     */
+    const prefetchBodies = (rawId: string, encodedDataLength?: number): void => {
+      if (sink === 'degraded') return
+      if (sink === 'idle' && !resolveDevtoolsWc()) return
+      const virtualId = ns.resolve(rawId)
+      // Skip the CDP round-trip entirely for a response already known (from
+      // the wire size CDP reports at completion) to exceed the cache's own
+      // per-entry ceiling — no point materializing a full body into main-
+      // process memory just to have the cache reject it after the fact. This
+      // is a best-effort heuristic (encodedDataLength is the ON-THE-WIRE size;
+      // a decompressed body can be larger), not a hard guarantee — the
+      // concurrency cap below is what actually bounds worst-case memory.
+      const knownOversized = typeof encodedDataLength === 'number' && encodedDataLength > DEFAULT_PER_ENTRY_MAX_CHARS
+      if (!knownOversized) {
+        primeWithAdmission(bodyCache, virtualId, async (): Promise<CdpResponseBody> => {
+          const raw: unknown = await wc.debugger.sendCommand('Network.getResponseBody', { requestId: rawId })
+          const r = raw as { body?: unknown, base64Encoded?: unknown } | null | undefined
+          if (!r || typeof r.body !== 'string') throw new Error('response body unavailable')
+          return { body: r.body, base64Encoded: r.base64Encoded === true }
+        })
+      }
+      if (!postDataWanted.delete(rawId)) return
+      primeWithAdmission(postDataCache, virtualId, async (): Promise<{ postData: string }> => {
+        const raw: unknown = await wc.debugger.sendCommand('Network.getRequestPostData', { requestId: rawId })
+        const r = raw as { postData?: unknown } | null | undefined
+        if (!r || typeof r.postData !== 'string') throw new Error('post data unavailable')
+        return { postData: r.postData }
+      })
+    }
+
+    // ── Fallback bookkeeping handlers — one per Network.* method, each kept
+    // simple so `onMessage` itself stays a flat dispatch (not a branchy switch). ──
+
+    function onRequestWillBeSent(params: unknown): void {
+      const p = params as RequestWillBeSent
+      if (!p?.request) return
+      if (pending.size >= MAX_PENDING) pending.clear()
+      pending.set(p.requestId, { url: p.request.url, method: p.request.method, status: 0 })
+      // A body announced but not inlined is the one case the panel will
+      // round-trip `Network.getRequestPostData` — flag it for prefetch.
+      if (p.request.hasPostData === true && typeof p.request.postData !== 'string') {
+        if (postDataWanted.size >= MAX_PENDING) postDataWanted.clear()
+        postDataWanted.add(p.requestId)
+      }
+    }
+
+    function onResponseReceived(params: unknown): void {
+      const p = params as ResponseReceived
+      const req = pending.get(p.requestId)
+      if (req) req.status = p.response?.status ?? 0
+    }
+
+    function onLoadingFinished(params: unknown): void {
+      const p = params as { requestId: string, encodedDataLength?: number }
+      if (typeof p?.requestId === 'string') prefetchBodies(p.requestId, p.encodedDataLength)
+      const req = pending.get(p.requestId)
+      if (!req) return
+      pending.delete(p.requestId)
+      maybeFallback({ source, url: req.url, method: req.method, status: req.status })
+    }
+
+    function onLoadingFailed(params: unknown): void {
+      const p = params as LoadingFailed
+      postDataWanted.delete(p?.requestId)
+      const req = pending.get(p.requestId)
+      if (!req) return
+      pending.delete(p.requestId)
+      maybeFallback({
+        source,
+        url: req.url,
+        method: req.method,
+        status: req.status,
+        errorText: p.canceled ? 'canceled' : (p.errorText || 'failed'),
+      })
+    }
+
+    const FALLBACK_HANDLERS: Readonly<Record<string, (params: unknown) => void>> = {
+      'Network.requestWillBeSent': onRequestWillBeSent,
+      'Network.responseReceived': onResponseReceived,
+      'Network.loadingFinished': onLoadingFinished,
+      'Network.loadingFailed': onLoadingFailed,
+    }
+
+    const onMessage = (_event: Electron.Event, method: string, params: unknown): void => {
+      // ── Primary sink: forward the raw CDP event into the DevTools front-end ──
+      if (FORWARDED_METHODS.has(method)) {
+        const rewritten = rewriteRequestId(method, params, ns)
+        enqueueNative(rewritten.method, rewritten.params)
+      } else if (REWRITE_REQUEST_ID_METHODS.has(method)) {
+        // Methods we namespace but don't forward (dataReceived): still resolve
+        // so the id mapping stays coherent if forwarding is added later.
+        rewriteRequestId(method, params, ns)
+      }
+
+      // ── Fallback bookkeeping (used only when native dispatch is unusable) ──
+      FALLBACK_HANDLERS[method]?.(params)
+    }
+
+    wc.debugger.on('message', onMessage)
+    attach.add(() => {
+      try { wc.debugger.removeListener('message', onMessage) } catch { /* wc gone */ }
+    })
+  }
+
+  /** Drop one guest's wiring; detach its session only when we attached it. */
+  function cleanupGuest(wcId: number): void {
+    const teardown = guestWired.get(wcId)
+    guestWired.delete(wcId)
+    teardown?.disposeAll()
+    const owned = guestSelfAttached.get(wcId)
+    guestSelfAttached.delete(wcId)
+    if (!owned || owned.isDestroyed()) return
+    try {
+      if (owned.debugger.isAttached()) owned.debugger.detach()
+    } catch { /* already detached / mid-destroy */ }
+  }
+
+  function attachRenderGuest(wc: WebContents): void {
+    if (!wc || wc.isDestroyed()) return
+    if (guestWired.has(wc.id)) return
+
+    // Reuse an already-attached session (safe-area / elements own guest
+    // sessions); attach ourselves ONLY when nobody has — and remember it, so
+    // dispose detaches exactly the sessions we created and no one else's.
+    try {
+      if (!wc.debugger.isAttached()) {
+        wc.debugger.attach('1.3')
+        guestSelfAttached.set(wc.id, wc)
+      }
+    } catch (err) {
+      console.warn('[network-forward] guest debugger.attach failed; render network not captured:', err instanceof Error ? err.message : err)
+      return
+    }
+
+    const teardown = createSyncTeardown()
+    guestWired.set(wc.id, teardown)
+    wireNetworkCapture(wc, 'render', teardown, `g${wc.id}-${Date.now()}`)
+
+    // Mirror attachSimulator's own 'detach' handling: the shared debugger
+    // session can be torn down by an owner OTHER than us (another feature
+    // releasing it, or a real Chrome DevTools window attaching to the same
+    // target) without this wc ever being destroyed. Without this, `guestWired`
+    // would keep the wc.id forever and the `guestWired.has(wc.id)` idempotency
+    // guard above would permanently block re-wiring on the next
+    // `attachRenderGuest(wc)` call. `cleanupGuest` is the right full teardown
+    // here (not just clearing the map): it also removes the now-stale
+    // 'message'/'closed' listeners this attach installed, so a later re-attach
+    // starts from a clean slate instead of layering a second 'message'
+    // listener on top (which would double-forward every subsequent event).
+    const onDetach = (): void => cleanupGuest(wc.id)
+    wc.debugger.on('detach', onDetach)
+    teardown.add(() => {
+      try { wc.debugger.removeListener('detach', onDetach) } catch { /* wc gone */ }
+    })
+
+    const onDestroyed = (): void => cleanupGuest(wc.id)
+    // Route the destroyed-teardown through the connection registry's 'closed'
+    // EVENT (not `own()`) when one is available — `Connection.close()` calls
+    // `emit('closed')` unconditionally and synchronously, independent of
+    // whatever else is registered on that connection's segment. `own()` would
+    // instead enqueue `onDestroyed` into the segment's own async LIFO
+    // disposal, whose synchronous guarantee depends entirely on registration
+    // order (only the segment's LAST-registered resource runs before the
+    // segment's disposeAll() suspends) — a footgun if any other feature later
+    // owns a resource on the same guest's connection after this one attaches.
+    // `elements-forward`'s guest teardown already uses this same `on('closed')`
+    // pattern for the identical reason.
+    const connections = bridge.connections
+    if (connections) {
+      const closedSub = connections.acquire(wc).on('closed', onDestroyed)
+      teardown.add(() => { closedSub.dispose() })
+    } else {
+      wc.once('destroyed', onDestroyed)
+      teardown.add(() => {
+        try { wc.removeListener('destroyed', onDestroyed) } catch { /* wc gone */ }
+      })
+    }
+
+    void wc.debugger.sendCommand('Network.enable').catch((err) => {
+      console.warn('[network-forward] guest Network.enable failed:', err instanceof Error ? err.message : err)
+    })
+  }
+
   function attachSimulator(wc: WebContents): void {
     if (!wc || wc.isDestroyed()) return
     if (simWc === wc && !wc.isDestroyed()) return
@@ -712,71 +1058,7 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
     const attach = new DisposableRegistry()
     attachDisposables = attach
 
-    // Per-attach requestId namespace: a fresh epoch each attach guarantees ids
-    // from a previous simulator session can never collide with this one.
-    const ns = new RequestIdNamespace(String(Date.now()))
-
-    // Fallback bookkeeping: requestId → in-flight request, for the console line
-    // when the native dispatch path is unusable.
-    const pending = new Map<string, Pending>()
-
-    const onMessage = (_event: Electron.Event, method: string, params: unknown): void => {
-      // ── Primary sink: forward the raw CDP event into the DevTools front-end ──
-      if (FORWARDED_METHODS.has(method)) {
-        const rewritten = rewriteRequestId(method, params, ns)
-        enqueueNative(rewritten.method, rewritten.params)
-      } else if (REWRITE_REQUEST_ID_METHODS.has(method)) {
-        // Methods we namespace but don't forward (dataReceived, 二期): still
-        // resolve so the id mapping stays coherent if forwarding is added later.
-        rewriteRequestId(method, params, ns)
-      }
-
-      // ── Fallback bookkeeping (used only when native dispatch is unusable) ──
-      switch (method) {
-        case 'Network.requestWillBeSent': {
-          const p = params as RequestWillBeSent
-          if (!p?.request) return
-          if (pending.size >= MAX_PENDING) pending.clear()
-          pending.set(p.requestId, { url: p.request.url, method: p.request.method, status: 0 })
-          break
-        }
-        case 'Network.responseReceived': {
-          const p = params as ResponseReceived
-          const req = pending.get(p.requestId)
-          if (req) req.status = p.response?.status ?? 0
-          break
-        }
-        case 'Network.loadingFinished': {
-          const p = params as { requestId: string }
-          const req = pending.get(p.requestId)
-          if (!req) return
-          pending.delete(p.requestId)
-          maybeFallback({ source: 'service', url: req.url, method: req.method, status: req.status })
-          break
-        }
-        case 'Network.loadingFailed': {
-          const p = params as LoadingFailed
-          const req = pending.get(p.requestId)
-          if (!req) return
-          pending.delete(p.requestId)
-          maybeFallback({
-            source: 'service',
-            url: req.url,
-            method: req.method,
-            status: req.status,
-            errorText: p.canceled ? 'canceled' : (p.errorText || 'failed'),
-          })
-          break
-        }
-        default:
-          break
-      }
-    }
-
-    wc.debugger.on('message', onMessage)
-    attach.add(() => {
-      try { wc.debugger.removeListener('message', onMessage) } catch { /* wc gone */ }
-    })
+    wireNetworkCapture(wc, 'service', attach, String(Date.now()))
 
     const onDetach = (): void => { if (simWc === wc) { simWc = null } }
     wc.debugger.on('detach', onDetach)
@@ -904,15 +1186,38 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
     if (readyTimeoutTimer) { clearTimeout(readyTimeoutTimer); readyTimeoutTimer = null }
     if (readyRetryTimer) { clearTimeout(readyRetryTimer); readyRetryTimer = null }
   })
-  registry.add(() => detachSimulator())
+  registry.add(() => {
+    bodyCache.clear()
+    postDataCache.clear()
+  })
+  // LAST registered → FIRST (and synchronously) run by the LIFO disposeAll:
+  // every debugger session (simulator + all render guests) must already be
+  // detached and every 'message' listener already removed before `dispose()`
+  // returns control to an un-awaited caller (every real call site is
+  // `fwd.dispose()` with no `await`) — a guest event arriving in the SAME
+  // tick as dispose() must never be forwarded. Both detachSimulator() and the
+  // guest cleanup loop are themselves fully synchronous (createSyncTeardown),
+  // so bundling them into ONE disposer guarantees both complete before the
+  // registry's disposeAll() suspends at its first `await`; splitting them
+  // into separate registry.add() calls would only make ONE of them the
+  // LIFO-first (synchronous) entry and silently defer the other.
+  registry.add(() => {
+    detachSimulator()
+    for (const wcId of [...guestWired.keys()]) cleanupGuest(wcId)
+  })
 
   return {
     attachSimulator,
     detachSimulator,
+    attachRenderGuest,
     setDevtoolsHost: (wc) => applyDevtoolsHost(wc),
     // report() has no observing debugger, so there's no live CDP event to push
     // natively — surface it via the console fallback line.
     report: (record) => forwardToConsole(record),
+    bodies: {
+      getResponseBody: (requestId) => bodyCache.lookup(requestId),
+      getRequestPostData: (requestId) => postDataCache.lookup(requestId),
+    },
     dispose: () => registry.disposeAll(),
   }
 }

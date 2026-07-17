@@ -326,6 +326,12 @@ export function createNativeSimulatorView(
       // render-host URL in will-attach (FIFO).
       const isTabGuest = pendingGuestIsTab.shift() ?? false
       safeArea.applyToGuest(guestWc, ctx.bridge?.getDevice() ?? null, isTabGuest)
+      // Page-level resource loads (images/fonts/page fetch) run in THIS guest's
+      // network stack, never the simulator's — without this, only wx.request
+      // (forwarded to the simulator) shows in the Network panel and everything
+      // the page itself loads is invisible. Shares the already-attached
+      // safe-area debugger session (never a second attach/detach owner).
+      ctx.networkForward?.attachRenderGuest(guestWc)
       guestWc.setWindowOpenHandler(({ url }) => handleWindowOpenExternal(url))
       guestWc.on('will-navigate', (e, url) => {
         try {

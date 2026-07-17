@@ -1,11 +1,12 @@
 import { EventEmitter } from 'node:events'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createConnectionRegistry } from '@dimina-kit/electron-deck/main'
 import {
   buildElementsHookScript,
   installElementsForward,
   isRenderEventMethod,
   routeByDomain,
+  routeOutboundCommand,
 } from './index.js'
 
 // ── electron mock ──────────────────────────────────────────────────────────────
@@ -1193,6 +1194,238 @@ describe('reconcile tick while the devtools front-end is loading', () => {
       ;(devtoolsWc.isLoading as ReturnType<typeof vi.fn>).mockReturnValue(false)
       await vi.advanceTimersByTimeAsync(400)
       expect(execSpy.mock.calls.length).toBeGreaterThan(callsAtInstall)
+      stop()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+// ── network body route (fixes "Failed to load response data" in the panel) ──
+//
+// The front-end's Network.getResponseBody / Network.getRequestPostData calls
+// for a request the panel learned about through network-forward carry a
+// virtual (dimina:sim:-prefixed) requestId that no attached backend
+// recognizes. routeOutboundCommand is the pure classifier that picks these
+// two methods+virtual-id combinations out as 'network' (vs. the existing
+// 'render'/'service' split); the hook script embeds the same classification
+// client-side so the queued item already carries its route, and the drain
+// loop answers 'network' items from the NetworkBodyProvider instead of
+// routing them at the render guest debugger.
+
+describe('routeOutboundCommand (pure)', () => {
+  it('routes the render-tree domains to "render"', () => {
+    for (const method of [
+      'DOM.getDocument',
+      'CSS.getMatchedStylesForNode',
+      'Overlay.highlightNode',
+      'DOMSnapshot.captureSnapshot',
+      'DOMDebugger.getEventListeners',
+    ]) {
+      expect(routeOutboundCommand(method, {})).toBe('render')
+    }
+  })
+
+  it('routes Network.getResponseBody / getRequestPostData with a virtual (dimina:sim:) requestId to "network"', () => {
+    expect(routeOutboundCommand('Network.getResponseBody', { requestId: 'dimina:sim:E1:1:r1' })).toBe('network')
+    expect(routeOutboundCommand('Network.getRequestPostData', { requestId: 'dimina:sim:E1:1:r1' })).toBe('network')
+  })
+
+  it('routes the same two Network methods to "service" when the requestId is NOT a virtual id', () => {
+    // A real backend can answer these for its own (non-simulator) requestIds;
+    // only the dimina:sim: namespace is ours to intercept.
+    expect(routeOutboundCommand('Network.getResponseBody', { requestId: 'raw-id' })).toBe('service')
+    expect(routeOutboundCommand('Network.getRequestPostData', { requestId: 'raw-id' })).toBe('service')
+  })
+
+  it('routes to "service" when params are malformed (missing/non-string requestId)', () => {
+    expect(routeOutboundCommand('Network.getResponseBody', {})).toBe('service')
+    expect(routeOutboundCommand('Network.getResponseBody', { requestId: 42 })).toBe('service')
+    expect(routeOutboundCommand('Network.getResponseBody', null)).toBe('service')
+  })
+
+  it('routes every other CDP method to "service"', () => {
+    for (const method of ['Runtime.evaluate', 'Page.navigate', 'Emulation.setDeviceMetricsOverride', 'Network.enable']) {
+      expect(routeOutboundCommand(method, {})).toBe('service')
+    }
+  })
+})
+
+describe('buildElementsHookScript — network route interception', () => {
+  // Chrome DevTools' embedder API is `InspectorFrontendHost.sendMessageToBackend(message: string)`
+  // where `message` is the JSON-encoded CDP command. The hook wraps it; we
+  // expose the fake host under both resolution paths real bundled DevTools
+  // builds use (flat global and Host-namespaced) so the test is agnostic to
+  // which one the injected script reads.
+  function installHookOn(win: typeof window): { sendMessageToBackend: ReturnType<typeof vi.fn> } {
+    const sendMessageToBackend = vi.fn()
+    const fakeHost = { sendMessageToBackend }
+    ;(win as unknown as { InspectorFrontendHost?: unknown }).InspectorFrontendHost = fakeHost
+    ;(win as unknown as { Host?: unknown }).Host = { InspectorFrontendHost: fakeHost }
+    win.eval(buildElementsHookScript())
+    return { sendMessageToBackend }
+  }
+
+  function sendToHook(win: typeof window, message: string): void {
+    const host = (win as unknown as { InspectorFrontendHost: { sendMessageToBackend: (m: string) => void } })
+      .InspectorFrontendHost
+    host.sendMessageToBackend(message)
+  }
+
+  function outboundQueue(win: typeof window): Array<{ id: number; method: string; params: unknown; route?: string }> {
+    return (win as unknown as { __diminaElementsOutbound?: unknown[] }).__diminaElementsOutbound as never ?? []
+  }
+
+  afterEach(() => {
+    delete (window as unknown as { InspectorFrontendHost?: unknown }).InspectorFrontendHost
+    delete (window as unknown as { Host?: unknown }).Host
+    delete (window as unknown as { __diminaElementsOutbound?: unknown }).__diminaElementsOutbound
+    delete (window as unknown as { __diminaElementsHookInstalled?: unknown }).__diminaElementsHookInstalled
+  })
+
+  it('queues a Network.getResponseBody call for a virtual requestId under route "network", without forwarding it to the real backend', () => {
+    const { sendMessageToBackend } = installHookOn(window)
+
+    sendToHook(window, JSON.stringify({
+      id: 5, method: 'Network.getResponseBody', params: { requestId: 'dimina:sim:E1:1:r1' }, sessionId: null,
+    }))
+
+    expect(sendMessageToBackend).not.toHaveBeenCalled()
+    const queued = outboundQueue(window)
+    expect(queued.find((m) => m.id === 5)).toMatchObject({
+      method: 'Network.getResponseBody',
+      params: { requestId: 'dimina:sim:E1:1:r1' },
+      route: 'network',
+    })
+  })
+
+  it('passes a Network.getResponseBody call through unmodified when the requestId is not a virtual dimina:sim: id', () => {
+    const { sendMessageToBackend } = installHookOn(window)
+    const raw = JSON.stringify({
+      id: 6, method: 'Network.getResponseBody', params: { requestId: 'raw-non-virtual' }, sessionId: null,
+    })
+
+    sendToHook(window, raw)
+
+    expect(sendMessageToBackend).toHaveBeenCalledWith(raw)
+    expect(outboundQueue(window).find((m) => m.id === 6)).toBeUndefined()
+  })
+
+  it('still queues a render-domain command under route "render" (network interception does not disturb it)', () => {
+    installHookOn(window)
+
+    sendToHook(window, JSON.stringify({ id: 7, method: 'DOM.getDocument', params: {}, sessionId: null }))
+
+    expect(outboundQueue(window).find((m) => m.id === 7)).toMatchObject({ method: 'DOM.getDocument', route: 'render' })
+  })
+})
+
+describe('installElementsForward — network body route (main process drain)', () => {
+  it('drains a route: "network" getResponseBody command through deps.network and dispatches the resolved result', async () => {
+    vi.useFakeTimers()
+    try {
+      const guest = fakeWc()
+      const devtoolsWc = devtoolsWcDrainingOnce([
+        { id: 30, method: 'Network.getResponseBody', params: { requestId: 'dimina:sim:E1:1:r1' }, sessionId: null, route: 'network' },
+      ])
+      const bridge = fakeBridge(() => guest)
+      const network = {
+        getResponseBody: vi.fn(() => Promise.resolve({ body: 'hi', base64Encoded: false })),
+        getRequestPostData: vi.fn(() => Promise.resolve({ postData: '' })),
+      }
+      const stop = installElementsForward(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        { devtoolsWc: devtoolsWc as any, bridge: bridge as any, network },
+      )
+
+      await vi.advanceTimersByTimeAsync(400)
+
+      expect(network.getResponseBody).toHaveBeenCalledWith('dimina:sim:E1:1:r1')
+      const dispatched = dispatchedMatching(devtoolsWc, '\\"id\\":30')
+      expect(dispatched.length).toBeGreaterThan(0)
+      expect(dispatched.some((s) => s.includes('result'))).toBe(true)
+      expect(dispatched.some((s) => s.includes('\\"body\\":\\"hi\\"'))).toBe(true)
+      // Never routed at the render guest — it answers from the provider only.
+      expect((guest.debugger.sendCommand as ReturnType<typeof vi.fn>).mock.calls
+        .some((c) => c[0] === 'Network.getResponseBody')).toBe(false)
+      stop()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('drains a route: "network" command that rejects and dispatches a -32000 CDP error with the rejection message', async () => {
+    vi.useFakeTimers()
+    try {
+      const guest = fakeWc()
+      const devtoolsWc = devtoolsWcDrainingOnce([
+        { id: 31, method: 'Network.getRequestPostData', params: { requestId: 'dimina:sim:E1:1:r9' }, sessionId: null, route: 'network' },
+      ])
+      const bridge = fakeBridge(() => guest)
+      const network = {
+        getResponseBody: vi.fn(() => Promise.resolve({ body: '', base64Encoded: false })),
+        getRequestPostData: vi.fn(() => Promise.reject(new Error('No resource with given identifier found'))),
+      }
+      const stop = installElementsForward(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        { devtoolsWc: devtoolsWc as any, bridge: bridge as any, network },
+      )
+
+      await vi.advanceTimersByTimeAsync(400)
+
+      const dispatched = dispatchedMatching(devtoolsWc, '\\"id\\":31')
+      expect(dispatched.some((s) => s.includes('No resource with given identifier found') && s.includes('-32000'))).toBe(true)
+      stop()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('replies with a not-found CDP error for a route: "network" command when no network provider is wired', async () => {
+    vi.useFakeTimers()
+    try {
+      const guest = fakeWc()
+      const devtoolsWc = devtoolsWcDrainingOnce([
+        { id: 32, method: 'Network.getResponseBody', params: { requestId: 'dimina:sim:E1:1:r1' }, sessionId: null, route: 'network' },
+      ])
+      const bridge = fakeBridge(() => guest)
+      const stop = installElementsForward(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        { devtoolsWc: devtoolsWc as any, bridge: bridge as any }, // no `network` deps supplied
+      )
+
+      await vi.advanceTimersByTimeAsync(400)
+
+      const dispatched = dispatchedMatching(devtoolsWc, '\\"id\\":32')
+      expect(dispatched.some((s) => s.includes('No resource with given identifier found') && s.includes('-32000'))).toBe(true)
+      expect((guest.debugger.sendCommand as ReturnType<typeof vi.fn>).mock.calls
+        .some((c) => c[0] === 'Network.getResponseBody')).toBe(false)
+      stop()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('treats a drained item with no route field as "render" (back-compat with pre-network hook payloads)', async () => {
+    vi.useFakeTimers()
+    try {
+      const guestDbg = fakeDebugger({
+        sendCommand: vi.fn((method: string) =>
+          method === 'DOM.getDocument' ? Promise.resolve({ root: { nodeId: 1 } }) : Promise.resolve({})),
+      })
+      const guest = fakeWc({ debugger: guestDbg })
+      const devtoolsWc = devtoolsWcDrainingOnce([
+        { id: 33, method: 'DOM.getDocument', params: {}, sessionId: null }, // no `route`
+      ])
+      const bridge = fakeBridge(() => guest)
+      const stop = installElementsForward(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        { devtoolsWc: devtoolsWc as any, bridge: bridge as any },
+      )
+
+      await vi.advanceTimersByTimeAsync(400)
+
+      expect(guestDbg.sendCommand).toHaveBeenCalledWith('DOM.getDocument', {})
       stop()
     } finally {
       vi.useRealTimers()

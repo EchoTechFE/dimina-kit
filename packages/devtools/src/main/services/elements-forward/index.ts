@@ -7,10 +7,16 @@
  * The DevTools front-end is a `devtools://` page with NO dimina preload, so we
  * drive it through the same two-way poll bridge the network-forward path uses:
  *   • front-end → main : we wrap `InspectorFrontendHost.sendMessageToBackend` in
- *     the front-end realm. Commands whose method is in the RENDER domain set
- *     (DOM/CSS/Overlay/DOMSnapshot/DOMDebugger) are NOT passed to the original
- *     embedder channel — they're pushed onto `globalThis.__diminaElementsOutbound`
- *     and main drains that array (splice) on a poll. EVERY OTHER method
+ *     the front-end realm — the ONE outbound CDP gate every injected-panel
+ *     feature routes through (`routeOutboundCommand` is the single decision
+ *     table). Commands whose method is in the RENDER domain set
+ *     (DOM/CSS/Overlay/DOMSnapshot/DOMDebugger), plus `Network.getResponseBody`
+ *     / `Network.getRequestPostData` for `dimina:sim:` virtual requestIds
+ *     (which only the network forwarder's prefetch cache can answer — the
+ *     natively-inspected service host has never heard of them), are NOT passed
+ *     to the original embedder channel — they're pushed onto
+ *     `globalThis.__diminaElementsOutbound` tagged with their route and main
+ *     drains that array (splice) on a poll. EVERY OTHER method
  *     (Runtime/Console/Page/Target/Emulation/…) calls through to the original, so
  *     the service-host inspection (Console, Sources) and crucially the safe-area
  *     `Emulation.setSafeAreaInsetsOverride` are untouched.
@@ -53,11 +59,19 @@ import type { WebContents } from 'electron'
 import type { ConnectionRegistry } from '@dimina-kit/electron-deck/main'
 import type { BridgeRouterHandle, RenderEvent } from '../../ipc/bridge-router.js'
 import { isFrontendSettled } from '../views/inject-when-ready.js'
+import { VIRTUAL_REQUEST_ID_PREFIX, type NetworkBodyProvider } from '../network-forward/index.js'
 
 // ── routing table (pure, testable) ───────────────────────────────────────────
 
-/** Which target a front-end CDP command is routed to. */
-export type CdpRoute = 'render' | 'service'
+/**
+ * Which target a front-end CDP command is routed to.
+ *  render  — the active render guest's debugger (the Elements tree).
+ *  network — the network forwarder's prefetch cache (body/post-data lookups
+ *            for `dimina:sim:` virtual requestIds that only exist there).
+ *  service — the original embedder channel (the service host the front-end
+ *            natively inspects).
+ */
+export type CdpRoute = 'render' | 'network' | 'service'
 
 /**
  * CDP domains that target the RENDER GUEST'S document tree. A command in one of
@@ -98,28 +112,75 @@ export function isRenderEventMethod(method: string): boolean {
   return routeByDomain(method) === 'render'
 }
 
+/**
+ * The Network commands answered from the network forwarder's prefetch cache
+ * when they target a virtual requestId. Only these two: they're the panel's
+ * body/post-data round-trips. Every other Network.* stays on the service path
+ * (a virtual id there errors exactly like an unknown id would — harmless).
+ */
+const NETWORK_BODY_METHODS: readonly string[] = [
+  'Network.getResponseBody',
+  'Network.getRequestPostData',
+]
+
+/**
+ * Full outbound routing decision — the SINGLE authority for where a front-end
+ * CDP command goes. `routeByDomain` covers the method-only render split; this
+ * adds the params-dependent network split. The hook script inlines an
+ * equivalent test driven by the same literals, so the two cannot drift.
+ *
+ * A non-string / missing requestId routes to 'service': only the
+ * `dimina:sim:` namespace is ours to answer, and the real backend is the
+ * correct authority for its own ids.
+ */
+export function routeOutboundCommand(method: string, params: unknown): CdpRoute {
+  if (routeByDomain(method) === 'render') return 'render'
+  if (NETWORK_BODY_METHODS.includes(method)) {
+    const requestId = (params as { requestId?: unknown } | null | undefined)?.requestId
+    if (typeof requestId === 'string' && requestId.startsWith(VIRTUAL_REQUEST_ID_PREFIX)) {
+      return 'network'
+    }
+  }
+  return 'service'
+}
+
 // ── front-end injection (the front-end → main half of the bridge) ────────────
 
 /**
  * The JS injected into the DevTools front-end realm. Idempotent (sentinel guard).
- * Wraps `InspectorFrontendHost.sendMessageToBackend`: a RENDER-domain command is
- * pushed onto `globalThis.__diminaElementsOutbound` (drained by main) and NOT
- * forwarded to the original embedder channel (main answers it from the render
- * guest); every other command calls through to the original (service-host path).
+ * Wraps `InspectorFrontendHost.sendMessageToBackend` — the ONE outbound CDP
+ * gate for every command the front-end emits. A command that routes 'render'
+ * or 'network' (same decision table as {@link routeOutboundCommand}) is pushed
+ * onto `globalThis.__diminaElementsOutbound` tagged with its route and NOT
+ * forwarded to the original embedder channel (main answers it — from the
+ * render guest or the network prefetch cache respectively); every other
+ * command calls through to the original (service-host path).
  *
  * Returns `'installed'` / `'already'` on success, `'partial'` while the embedder
  * global is not yet present (so the caller retries), `'error:…'` on a real fault.
  */
 export function buildElementsHookScript(): string {
   const prefixes = JSON.stringify(RENDER_DOMAIN_PREFIXES)
+  const netMethods = JSON.stringify(NETWORK_BODY_METHODS)
+  const vprefix = JSON.stringify(VIRTUAL_REQUEST_ID_PREFIX)
   return `(function(){try{
     if (globalThis.__diminaElementsHookInstalled) return 'already';
     var OUT = (globalThis.__diminaElementsOutbound = globalThis.__diminaElementsOutbound || []);
     var PREFIXES = ${prefixes};
+    var NET_METHODS = ${netMethods};
+    var VPREFIX = ${vprefix};
     function isRender(method){
       if (!method) return false;
       for (var i=0;i<PREFIXES.length;i++){ if (method.indexOf(PREFIXES[i])===0) return true; }
       return false;
+    }
+    function routeOf(m){
+      if (!m || !m.method) return 'service';
+      if (isRender(m.method)) return 'render';
+      if (NET_METHODS.indexOf(m.method) >= 0 && m.params
+          && typeof m.params.requestId === 'string'
+          && m.params.requestId.indexOf(VPREFIX) === 0) return 'network';
+      return 'service';
     }
     var IFH = globalThis.InspectorFrontendHost;
     if (IFH && typeof IFH.sendMessageToBackend === 'function' && !IFH.__diminaElementsWrapped){
@@ -127,12 +188,15 @@ export function buildElementsHookScript(): string {
       IFH.sendMessageToBackend = function(message){
         try {
           var m = (typeof message === 'string') ? JSON.parse(message) : message;
-          if (m && isRender(m.method)){
-            // Intercept: hand it to main to route at the render guest. Do NOT
-            // call the original embedder channel (would hit the service host).
+          var route = routeOf(m);
+          if (route !== 'service'){
+            // Intercept: hand it to main to answer (render guest / network
+            // cache). Do NOT call the original embedder channel — the service
+            // host either has the wrong tree or has never heard of the id.
             OUT.push({ id: (m && typeof m.id === 'number') ? m.id : null,
               method: m.method, params: m.params || {},
-              sessionId: (m && m.sessionId) ? m.sessionId : null });
+              sessionId: (m && m.sessionId) ? m.sessionId : null,
+              route: route });
             return;
           }
         } catch(_){ /* fall through to original on any parse hiccup */ }
@@ -233,14 +297,23 @@ export interface ElementsForwardDeps {
    * unchanged; absent → the `once('destroyed')` fallback is used.
    */
   connections?: ConnectionRegistry
+  /**
+   * Answers intercepted `Network.getResponseBody` / `Network.getRequestPostData`
+   * lookups for `dimina:sim:` virtual requestIds (the network forwarder's
+   * prefetch cache). Absent → those commands settle with the standard CDP
+   * not-found error, the same answer the mis-routed service-host backend gave.
+   */
+  network?: NetworkBodyProvider
 }
 
-/** One drained front-end command awaiting routing at the render guest. */
+/** One drained front-end command awaiting routing (render guest / network cache). */
 interface OutboundCommand {
   id: number | null
   method: string
   params: unknown
   sessionId: string | null
+  /** Routing tag stamped by the hook script; absent on render (legacy) payloads. */
+  route?: string
 }
 
 // Reconcile cadence: each tick re-asserts the hook (idempotent) and drains the
@@ -556,13 +629,46 @@ export function installElementsForward(deps: ElementsForwardDeps): () => void {
       })
   }
 
-  /** Process a drained batch of front-end commands. */
+  /**
+   * Answer a network-routed command from the provider. Never touches the render
+   * guest: the body lives in the network forwarder's prefetch cache (or
+   * nowhere). A missing provider or a rejected lookup settles the command with
+   * the canonical CDP not-found error so the front-end renders its normal
+   * failure state instead of leaking a forever-pending request.
+   */
+  function answerNetworkCommand(cmd: OutboundCommand): void {
+    const provider = deps.network
+    const requestId = (cmd.params as { requestId?: unknown } | null | undefined)?.requestId
+    if (!provider || typeof requestId !== 'string') {
+      replyError(cmd, 'No resource with given identifier found')
+      return
+    }
+    const lookup = cmd.method === 'Network.getRequestPostData'
+      ? provider.getRequestPostData(requestId)
+      : provider.getResponseBody(requestId)
+    lookup.then(
+      (result: unknown) => {
+        if (!disposed) replyResult(cmd, result)
+      },
+      (err: unknown) => {
+        if (!disposed) replyError(cmd, err instanceof Error ? err.message : String(err))
+      },
+    )
+  }
+
+  /** Process a drained batch of front-end commands, splitting by route tag. */
   function handleOutbound(batch: unknown): void {
     if (!Array.isArray(batch)) return
     for (const raw of batch) {
       if (!raw || typeof raw !== 'object') continue
       const cmd = raw as OutboundCommand
       if (typeof cmd.method !== 'string') continue
+      if (cmd.route === 'network') {
+        answerNetworkCommand(cmd)
+        continue
+      }
+      // 'render' — and any untagged legacy payload, which only ever carried
+      // render-domain commands.
       routeCommand(cmd)
     }
   }
