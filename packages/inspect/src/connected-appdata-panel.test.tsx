@@ -55,6 +55,14 @@ async function flush() {
   })
 }
 
+/** Finds a Pages sidebar row by its rendered label (pagePath, or id when pagePath is null). */
+function pageItem(label: string): HTMLElement {
+  const items = screen.getAllByTestId('appdata-page-item')
+  const found = items.find(el => (el.textContent ?? '').trim() === label)
+  if (!found) throw new Error(`no page item labeled "${label}" among [${items.map(el => el.textContent).join(', ')}]`)
+  return found
+}
+
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
@@ -254,7 +262,7 @@ describe('ConnectedAppDataPanel: rendering contract', () => {
     expect(screen.getByTestId('appdata-panel').textContent).toContain('暂无页面数据（仅显示 Page 级 data）')
   })
 
-  it('hides the tab bar when there is only a single bridge', async () => {
+  it('renders the Pages sidebar with a single item even when there is only one bridge', async () => {
     const { source, getSnapshotQueue } = createFakeSource()
     getSnapshotQueue.push(Promise.resolve(snapshot([{ id: 'b1', pagePath: '/pages/index/index' }], {
       b1: { 'pages/index/index': { count: 1 } },
@@ -262,10 +270,11 @@ describe('ConnectedAppDataPanel: rendering contract', () => {
     render(<ConnectedAppDataPanel source={source} />)
     await flush()
 
-    expect(screen.queryByTitle('b1')).toBeNull()
+    expect(screen.getByTestId('appdata-pages')).not.toBeNull()
+    expect(screen.getAllByTestId('appdata-page-item')).toHaveLength(1)
   })
 
-  it('renders one tab button per bridge, labeled by pagePath and falling back to id when pagePath is null', async () => {
+  it('renders one Pages sidebar item per bridge, labeled by pagePath and falling back to id when pagePath is null', async () => {
     const { source, getSnapshotQueue } = createFakeSource()
     getSnapshotQueue.push(Promise.resolve(snapshot([
       { id: 'b1', pagePath: '/pages/index/index' },
@@ -277,10 +286,9 @@ describe('ConnectedAppDataPanel: rendering contract', () => {
     render(<ConnectedAppDataPanel source={source} />)
     await flush()
 
-    const tab1 = screen.getByTitle('b1')
-    const tab2 = screen.getByTitle('b2')
-    expect(tab1.textContent).toBe('/pages/index/index')
-    expect(tab2.textContent).toBe('b2')
+    const labels = screen.getAllByTestId('appdata-page-item').map(el => (el.textContent ?? '').trim())
+    expect(labels).toContain('/pages/index/index')
+    expect(labels).toContain('b2')
   })
 
   it('keeps every bridge container mounted and toggles display instead of unmounting on tab switch', async () => {
@@ -303,7 +311,7 @@ describe('ConnectedAppDataPanel: rendering contract', () => {
     expect(c2.style.display).toBe('flex')
     expect(c1.style.display).toBe('none')
 
-    fireEvent.click(screen.getByTitle('b1'))
+    fireEvent.click(pageItem('/pages/index/index'))
 
     expect(c1.style.display).toBe('flex')
     expect(c2.style.display).toBe('none')
@@ -312,7 +320,7 @@ describe('ConnectedAppDataPanel: rendering contract', () => {
     expect(document.querySelector('[data-bridge-id="b2"]')).toBe(c2)
   })
 
-  it('renders one data section per entry key, headed by the key itself', async () => {
+  it('merges every entry\'s data into one tree so no bridge data is lost through the connected wiring', async () => {
     const { source, getSnapshotQueue } = createFakeSource()
     getSnapshotQueue.push(Promise.resolve(snapshot([{ id: 'b1', pagePath: null }], {
       b1: {
@@ -323,9 +331,9 @@ describe('ConnectedAppDataPanel: rendering contract', () => {
     render(<ConnectedAppDataPanel source={source} />)
     await flush()
 
-    const container = within(document.querySelector('[data-bridge-id="b1"]') as HTMLElement)
-    expect(container.getByText('pages/index/index')).not.toBeNull()
-    expect(container.getByText('components/foo/foo')).not.toBeNull()
+    const tree = within(document.querySelector('[data-bridge-id="b1"]') as HTMLElement).getByTestId('appdata-tree')
+    expect(tree.textContent).toContain('count')
+    expect(tree.textContent).toContain('visible')
   })
 })
 
@@ -373,7 +381,7 @@ describe('ConnectedAppDataPanel: active bridge auto-follow', () => {
     render(<ConnectedAppDataPanel source={source} />)
     await flush()
 
-    fireEvent.click(screen.getByTitle('b1'))
+    fireEvent.click(pageItem('/pages/index/index'))
     expect((document.querySelector('[data-bridge-id="b1"]') as HTMLElement).style.display).toBe('flex')
 
     act(() => {
@@ -393,7 +401,7 @@ describe('ConnectedAppDataPanel: active bridge auto-follow', () => {
     render(<ConnectedAppDataPanel source={source} />)
     await flush()
 
-    fireEvent.click(screen.getByTitle('b1'))
+    fireEvent.click(pageItem('/pages/index/index'))
     expect((document.querySelector('[data-bridge-id="b1"]') as HTMLElement).style.display).toBe('flex')
 
     act(() => {
@@ -415,7 +423,7 @@ describe('ConnectedAppDataPanel: active bridge auto-follow', () => {
     await flush()
     expect((document.querySelector('[data-bridge-id="b1"]') as HTMLElement).style.display).toBe('flex')
 
-    fireEvent.click(screen.getByTitle('b2'))
+    fireEvent.click(pageItem('/pages/detail/detail'))
     expect((document.querySelector('[data-bridge-id="b2"]') as HTMLElement).style.display).toBe('flex')
 
     rerender(<ConnectedAppDataPanel source={source} activePagePath="/pages/detail/detail" />)

@@ -74,6 +74,14 @@ export const ServiceHostChannel = {
    * `__diminaSpawnContext.hostEnvSnapshot` in place (see `service-host/preload.cjs`).
    */
   HostEnvUpdate: 'service-host:host-env:update',
+  /**
+   * NATIVE-HOST ONLY. Deliver an AppData-panel edit (`{bridgeId, data}`) into
+   * the service-host window. The preload resolves the page instance via
+   * `getCurrentPages()` and calls `page.setData(data)`, so the resulting `ub`
+   * publish flows back through the normal service→render tap — the panel
+   * refreshes from the runtime's own state, not an optimistic local echo.
+   */
+  AppDataSetData: 'service-host:appdata:set-data',
 } as const
 
 // ── Custom simulator APIs (downstream-registered, main-process handlers) ──
@@ -162,6 +170,9 @@ export const SimulatorWxmlChannel = {
 export const SimulatorAppDataChannel = {
   GetSnapshot: 'simulator:appdata:snapshot',
   Event: 'simulator:appdata:event',
+  // renderer → main invoke: write an AppData-panel edit back into the running
+  // page (forwarded to the service host via ServiceHostChannel.AppDataSetData).
+  SetData: 'simulator:appdata:set-data',
 } as const
 
 // The element-inspection payload shape is owned by the shared inspect

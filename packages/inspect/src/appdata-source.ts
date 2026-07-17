@@ -15,4 +15,9 @@ export interface AppDataPanelSource {
   /** Visibility gate: hosts whose feed costs something (listeners, walks)
    * only keep it armed while some panel is visible. */
   setActive(on: boolean): void
+  /** Write an edit back into the running page (`page.setData(patch)`); patch
+   * keys use setData path syntax (`a.b`, `list[0].id`). Resolves true when the
+   * write was dispatched to a live runtime. Absent → the host has no
+   * write-back channel and the panel renders read-only. */
+  setData?: (bridgeId: string, patch: Record<string, unknown>) => Promise<boolean>
 }

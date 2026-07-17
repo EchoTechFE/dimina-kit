@@ -608,6 +608,9 @@ export async function createDevtoolsRuntime(config: WorkbenchAppConfig = {}): Pr
     const appDataService = setupSimulatorAppData(mainWindow.webContents, {
       senderPolicy: context.senderPolicy,
       getActiveAppId,
+      // AppData-panel edit write-back target: the service-host window owning
+      // the edited page bridge.
+      bridge: context.bridge,
     })
     // bridge-router feeds this via ctx.appData (service→render tap + evict).
     context.appData = appDataService

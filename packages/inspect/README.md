@@ -44,7 +44,8 @@ wire-compatible.
     their source contracts: seed on the (enabled && active) rising edge, live
     updates via the push subscription, visibility gating, plus the
     panel-specific parts — hover inspection (WXML), write forwarding
-    (Storage), bridge-tab auto-follow of the active page (AppData), FIFO caps
+    (Storage), Pages-sidebar auto-follow of the active page plus `setData`
+    edit write-back when the source provides `setData` (AppData), FIFO caps
     and arrival-order `seq` stamping (编译). Hosts render them with their
     source implementation and never duplicate the wiring.
   - Styling uses Tailwind utility classes over CSS variables
@@ -52,7 +53,7 @@ wire-compatible.
     the Tailwind theme mapping and variable values, and must include this
     package's sources in its Tailwind content scan.
   - The panels fill their host: their roots use `flex-1` / `h-full`, and
-    AppData's kept-alive bridge tabs are `absolute inset-0`. The host must
+    AppData's kept-alive per-page trees are `absolute inset-0`. The host must
     mount them inside a sized flex container (`height: 100%; display: flex;
     flex-direction: column`) — in a plain unsized block the AppData content
     collapses to zero height and the panel reads as blank.

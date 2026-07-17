@@ -111,11 +111,11 @@ describe('DebugTabContent (reusable per-tab unit)', () => {
     expect(getByTestId('appdata-panel')).toBeTruthy()
   })
 
-  it("tabId='appdata' feeds the source through to ConnectedAppDataPanel and switches the active bridge tab on click", async () => {
+  it("tabId='appdata' feeds the source through to ConnectedAppDataPanel and switches the active page on a sidebar click", async () => {
     // Bug guarded: DebugTabContent must actually forward `appDataSource` to
-    // ConnectedAppDataPanel (the bridge-tab wiring itself is guarded by
+    // ConnectedAppDataPanel (the Pages-sidebar wiring itself is guarded by
     // @dimina-kit/inspect's own suite) — a dropped or wrong-shaped source
-    // would leave the panel showing no bridge tabs at all.
+    // would leave the panel showing no page rows at all.
     const source: AppDataPanelSource = {
       getSnapshot: async () => ({
         bridges: [
@@ -128,9 +128,10 @@ describe('DebugTabContent (reusable per-tab unit)', () => {
       setActive: () => {},
     }
     const props = makeProps({ appDataSource: source })
-    const { findByRole, container } = render(<DebugTabContent tabId="appdata" {...props} />)
+    const { findAllByTestId, container } = render(<DebugTabContent tabId="appdata" {...props} />)
 
-    fireEvent.click(await findByRole('button', { name: 'pages/b' }))
+    const pageItems = await findAllByTestId('appdata-page-item')
+    fireEvent.click(pageItems.find(el => (el.textContent ?? '').trim() === 'pages/b')!)
 
     const activeBridge = container.querySelector('[data-bridge-id="b2"]') as HTMLElement | null
     expect(activeBridge?.style.display).toBe('flex')

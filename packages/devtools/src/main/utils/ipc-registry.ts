@@ -1,6 +1,6 @@
 import type { IpcMainEvent, IpcMainInvokeEvent, WebContents } from 'electron'
 import { ipcMain } from 'electron'
-import { DisposableRegistry, type Disposable } from '@dimina-kit/electron-deck/main'
+import { type Disposable } from '@dimina-kit/electron-deck/main'
 import { IpcValidationError } from './ipc-schema.js'
 import { createLogger } from './logger.js'
 
@@ -101,7 +101,13 @@ function isMainFrameSender(event: IpcMainEvent | IpcMainInvokeEvent): boolean {
  * opted out.
  */
 export class IpcRegistry implements Disposable {
-  private registry = new DisposableRegistry()
+  // Every cleanup is a synchronous ipcMain.removeHandler/removeListener call,
+  // so dispose() can (and must) run them all before returning: callers
+  // `dispose()` without awaiting and rely on every channel being unregistered
+  // synchronously — an async registry would leave all but the first handler
+  // live until a later microtask.
+  private cleanups: Array<() => void> = []
+  private _disposed = false
 
   constructor(private policy?: SenderPolicy) {}
 
@@ -124,7 +130,7 @@ export class IpcRegistry implements Disposable {
         }
       : fn
     ipcMain.handle(channel, guarded)
-    this.registry.add(() => ipcMain.removeHandler(channel))
+    this.cleanups.push(() => ipcMain.removeHandler(channel))
     return this
   }
 
@@ -167,9 +173,7 @@ export class IpcRegistry implements Disposable {
       }
     }
     ipcMain.on(channel, listener)
-    this.registry.add(() => {
-      ipcMain.removeListener(channel, listener)
-    })
+    this.cleanups.push(() => ipcMain.removeListener(channel, listener))
     return this
   }
 
@@ -202,13 +206,30 @@ export class IpcRegistry implements Disposable {
         }
       : (event: IpcMainEvent, ...args: unknown[]) => safeInvoke(event, args)
     ipcMain.on(channel, guarded)
-    this.registry.add(() => {
-      ipcMain.removeListener(channel, guarded)
-    })
+    this.cleanups.push(() => ipcMain.removeListener(channel, guarded))
     return this
   }
 
   dispose(): Promise<void> {
-    return this.registry.dispose()
+    // Synchronous drain (LIFO, idempotent): every channel is unregistered
+    // before this returns; the promise only carries aggregated errors.
+    if (this._disposed) return Promise.resolve()
+    this._disposed = true
+    const items = this.cleanups.slice().reverse()
+    this.cleanups = []
+    const errors: unknown[] = []
+    for (const cleanup of items) {
+      try {
+        cleanup()
+      } catch (e) {
+        errors.push(e)
+      }
+    }
+    if (errors.length > 0) {
+      return Promise.reject(
+        new AggregateError(errors, 'IpcRegistry encountered errors during dispose'),
+      )
+    }
+    return Promise.resolve()
   }
 }
