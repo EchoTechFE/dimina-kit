@@ -51,6 +51,11 @@ wire-compatible.
     (`--color-code-blue`, `--color-surface-2`, …); the consuming app provides
     the Tailwind theme mapping and variable values, and must include this
     package's sources in its Tailwind content scan.
+  - The panels fill their host: their roots use `flex-1` / `h-full`, and
+    AppData's kept-alive bridge tabs are `absolute inset-0`. The host must
+    mount them inside a sized flex container (`height: 100%; display: flex;
+    flex-direction: column`) — in a plain unsized block the AppData content
+    collapses to zero height and the panel reads as blank.
 - `WxmlPanelSource` (main entry, type-only) — the five-operation transport
   contract behind the WXML panel: `getSnapshot` / `subscribe` / `setActive` /
   `inspect` / `clearInspection`. Each host implements only how these travel
