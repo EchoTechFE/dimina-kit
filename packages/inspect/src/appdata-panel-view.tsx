@@ -79,12 +79,15 @@ export function AppDataPanel({
   const [command, setCommand] = useState<AppDataTreeCommand | null>(null)
   const [undoStack, setUndoStack] = useState<EditRecord[]>([])
   const [redoStack, setRedoStack] = useState<EditRecord[]>([])
-  // Replay (undo/redo) in-flight gate. The ref blocks reentry synchronously —
-  // a second click before the async dispatch settles would read the SAME top
-  // record and replay it twice, duplicating it onto the opposite stack. The
-  // state mirror disables the buttons while pending.
-  const replayInFlight = useRef(false)
-  const [replayPending, setReplayPending] = useState(false)
+  // The single write gate: at most ONE write (commit OR replay) is ever in
+  // flight. The ref blocks reentry synchronously — a concurrent replay would
+  // move the same record twice, a concurrent commit would settle out of
+  // action order (undo then reverts the wrong field) or resurrect a redo
+  // branch the commit just invalidated. The panel has no local echo, so a
+  // gated-away click is a clean no-op. The state mirror disables the
+  // undo/redo buttons while pending.
+  const writeInFlight = useRef(false)
+  const [writePending, setWritePending] = useState(false)
 
   const emptyText = isRuntimeRunning ? '暂无页面数据（仅显示 Page 级 data）' : '小程序未运行'
 
@@ -118,8 +121,25 @@ export function AppDataPanel({
     apply(result !== false)
   }
 
+  /** The only entry to `dispatch` — every write (commit and replay) passes
+   * through the gate so a second write can never start while one is pending. */
+  const performWrite = (
+    bridgeId: string,
+    patch: Record<string, unknown>,
+    apply: (ok: boolean) => void,
+  ): void => {
+    if (writeInFlight.current) return
+    writeInFlight.current = true
+    setWritePending(true)
+    dispatch(bridgeId, patch, (ok) => {
+      writeInFlight.current = false
+      setWritePending(false)
+      apply(ok)
+    })
+  }
+
   const commitEdit = (bridgeId: string) => (path: string, next: unknown, prev: unknown): void => {
-    dispatch(bridgeId, { [path]: next }, (ok) => {
+    performWrite(bridgeId, { [path]: next }, (ok) => {
       if (!ok) return
       setUndoStack(stack => [...stack, { bridgeId, path, before: prev, after: next }])
       setRedoStack([])
@@ -128,20 +148,13 @@ export function AppDataPanel({
 
   const bridgeIsLive = (bridgeId: string): boolean => bridges.some(b => b.id === bridgeId)
 
-  /** Replay one record in either direction, gated so only ONE replay is ever
-   * in flight: the ref rejects reentry synchronously (before any re-render),
-   * the pending state disables the buttons for the async gap. */
+  /** Replay one record in either direction through the shared write gate. */
   const replay = (
     record: EditRecord,
     value: unknown,
     move: (record: EditRecord) => void,
   ): void => {
-    if (replayInFlight.current) return
-    replayInFlight.current = true
-    setReplayPending(true)
-    dispatch(record.bridgeId, { [record.path]: value }, (ok) => {
-      replayInFlight.current = false
-      setReplayPending(false)
+    performWrite(record.bridgeId, { [record.path]: value }, (ok) => {
       // A rejected replay (runtime refused the write) leaves both stacks
       // untouched so the UI state never claims an undo that didn't happen.
       if (!ok) return
@@ -223,8 +236,8 @@ export function AppDataPanel({
         >
           <ToolbarButton title="全部展开" onClick={() => issueCommand('expanded')}>⊕</ToolbarButton>
           <ToolbarButton title="全部收起" onClick={() => issueCommand('collapsed')}>⊖</ToolbarButton>
-          <ToolbarButton title="撤销" disabled={undoStack.length === 0 || replayPending} onClick={undo}>↶</ToolbarButton>
-          <ToolbarButton title="重做" disabled={redoStack.length === 0 || replayPending} onClick={redo}>↷</ToolbarButton>
+          <ToolbarButton title="撤销" disabled={undoStack.length === 0 || writePending} onClick={undo}>↶</ToolbarButton>
+          <ToolbarButton title="重做" disabled={redoStack.length === 0 || writePending} onClick={redo}>↷</ToolbarButton>
         </div>
         {/* Keepalive: every bridge's tree stays mounted (hidden via display:
             none) so expand/collapse state survives page switches. */}
