@@ -33,6 +33,10 @@ export function UpdateDialog() {
   const [stage, setStage] = useState<Stage>('prompt')
   const [progress, setProgress] = useState(0)
   const [error, setError] = useState('')
+  // Which action produced the current error stage — the 'error' stage is
+  // shared between handleDownload and handleInstall so the description text
+  // and the Retry button's target action stay correct for whichever failed.
+  const [failedAction, setFailedAction] = useState<'download' | 'install'>('download')
 
   useEffect(() => {
     return ipcOn<[UpdateInfo]>(UpdateChannel.Available, (updateInfo) => {
@@ -62,18 +66,31 @@ export function UpdateDialog() {
         setStage('ready')
       } else {
         setError(result.error || 'Download failed')
+        setFailedAction('download')
         setStage('error')
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
+      setFailedAction('download')
       setStage('error')
     }
   }, [])
 
-  const handleInstall = useCallback(() => {
-    void invokeStrict(UpdateChannel.Install).catch((err: unknown) => {
-      console.warn('[update] install failed:', err)
-    })
+  const handleInstall = useCallback(async () => {
+    try {
+      const result = await invokeStrict<{ success: boolean; error?: string }>(UpdateChannel.Install)
+      if (!result.success) {
+        setError(result.error || 'Install failed')
+        setFailedAction('install')
+        setStage('error')
+      }
+      // On success the main process calls app.quit() right after resolving —
+      // no further renderer state transition needed, the app is closing.
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+      setFailedAction('install')
+      setStage('error')
+    }
   }, [])
 
   const handleClose = useCallback(() => {
@@ -100,7 +117,7 @@ export function UpdateDialog() {
             {stage === 'prompt' && `New version ${info.version} is available.`}
             {stage === 'downloading' && `Downloading... ${progress}%`}
             {stage === 'ready' && 'Download complete. Click install to restart and apply the update.'}
-            {stage === 'error' && `Download failed: ${error}`}
+            {stage === 'error' && `${failedAction === 'install' ? 'Install' : 'Download'} failed: ${error}`}
           </DialogDescription>
         </DialogHeader>
 
@@ -138,7 +155,7 @@ export function UpdateDialog() {
               <Button variant="outline" onClick={handleClose}>
                 Close
               </Button>
-              <Button onClick={handleDownload}>Retry</Button>
+              <Button onClick={failedAction === 'install' ? handleInstall : handleDownload}>Retry</Button>
             </>
           )}
         </DialogFooter>
