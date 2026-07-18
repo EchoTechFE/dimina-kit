@@ -2,11 +2,22 @@ import { app } from 'electron'
 import { launch } from './app/launch.js'
 import { createGitHubReleaseChecker } from './services/update/index.js'
 
-// Only the packaged standalone app self-updates against this repo's GitHub
-// Releases; `pnpm dev` runs stay quiet (no API calls, no update dialog) —
-// same app.isPackaged gate used elsewhere for dev-only behavior. Hosts that
-// embed devtools via `launch(config)` supply their own `updateChecker` (or
-// none) and are unaffected — this default only applies to this entry point.
+// Only a packaged RELEASE-channel build self-updates against this repo's
+// GitHub Releases:
+// - `pnpm dev` runs stay quiet (no API calls, no update dialog) — same
+//   app.isPackaged gate used elsewhere for dev-only behavior.
+// - A packaged DEV-channel build (release.yml's `channel: dev` — distributed
+//   only as a 30-day Actions artifact for QA/branch testing, never a GitHub
+//   Release) must NOT get this either: release.yml's dev channel never
+//   creates a GitHub Release, so /releases/latest always reflects the
+//   RELEASE channel — a dev build would be prompted to "update" to an
+//   unrelated stable build, and clicking it would silently swap out the
+//   very branch/PR build the person downloaded it to test. dev-channel
+//   versions always carry bump-dev-version.js's `-dev.<timestamp>` suffix;
+//   release-channel versions never do — use that as the channel signal.
+// - Hosts that embed devtools via `launch(config)` supply their own
+//   `updateChecker` (or none) and are unaffected — this default only
+//   applies to this entry point.
 //
 // Custom parseVersion, NOT the default asset-name fallback and NOT
 // 'trailing-number':
@@ -21,7 +32,10 @@ import { createGitHubReleaseChecker } from './services/update/index.js'
 //   capture greedily swallows the trailing `-mac-arm64.dmg` as a "prerelease"
 //   tag, so the update dialog would show a garbled "0.5.0-mac-arm64.dmg".
 //   Extract just the clean `x.y.z` from our own known asset naming instead.
-const updateChecker = app.isPackaged
+// Short-circuited: app.getVersion() must only be read once isPackaged is
+// already known true, both because it's meaningless before then and because
+// some minimal test/dev electron mocks don't stub getVersion() at all.
+const updateChecker = app.isPackaged && !app.getVersion().includes('-dev.')
   ? createGitHubReleaseChecker({
       owner: 'EchoTechFE',
       repo: 'dimina-kit',

@@ -14,11 +14,12 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
-const state = vi.hoisted(() => ({ isPackaged: false }))
+const state = vi.hoisted(() => ({ isPackaged: false, version: '0.4.0' }))
 
 vi.mock('electron', () => ({
   app: {
     get isPackaged() { return state.isPackaged },
+    getVersion: () => state.version,
     exit: vi.fn(),
   },
 }))
@@ -39,13 +40,16 @@ vi.mock('./services/update/index.js', () => ({
 
 beforeEach(() => {
   vi.resetModules()
+  state.isPackaged = false
+  state.version = '0.4.0'
   launchMock.mockClear()
   createGitHubReleaseCheckerMock.mockClear()
 })
 
 describe('main entry: standalone update-checker wiring', () => {
-  it('packaged app: launch() receives a GitHub-release updateChecker for EchoTechFE/dimina-kit', async () => {
+  it('packaged RELEASE-channel build (no -dev. suffix): launch() receives a GitHub-release updateChecker for EchoTechFE/dimina-kit', async () => {
     state.isPackaged = true
+    state.version = '0.4.0'
 
     await import('./index.js')
 
@@ -84,7 +88,23 @@ describe('main entry: standalone update-checker wiring', () => {
     expect(config?.updateChecker).toBe(createGitHubReleaseCheckerMock.mock.results[0]?.value)
   })
 
-  it('dev (unpackaged) run: launch() gets no updateChecker — no GitHub API calls, no update dialog', async () => {
+  it('packaged DEV-channel build (-dev.<timestamp> suffix): launch() gets no updateChecker', async () => {
+    // release.yml's dev channel never creates a GitHub Release — /releases/latest
+    // always reflects the release channel — so a dev build must not be
+    // prompted to "update" to an unrelated stable build (and silently swap
+    // out the branch/PR build it was downloaded to test).
+    state.isPackaged = true
+    state.version = '0.4.1-dev.20260716123738'
+
+    await import('./index.js')
+
+    expect(createGitHubReleaseCheckerMock).not.toHaveBeenCalled()
+    expect(launchMock).toHaveBeenCalledTimes(1)
+    const config = launchMock.mock.calls[0]?.[0]
+    expect(config?.updateChecker).toBeUndefined()
+  })
+
+  it('pnpm dev (unpackaged) run: launch() gets no updateChecker — no GitHub API calls, no update dialog', async () => {
     state.isPackaged = false
 
     await import('./index.js')
