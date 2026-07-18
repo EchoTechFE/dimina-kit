@@ -30,6 +30,7 @@ import {
 // the size preflight must consult the SAME limit PrefetchCache enforces on a
 // settled entry, not a hand-picked number this test guesses at.
 import { DEFAULT_PER_ENTRY_MAX_CHARS } from './body-cache.js'
+import { createCdpSessionBroker } from '../cdp-session/index.js'
 
 /** Run all pending microtasks (the native dispatch path is microtask-flushed). */
 async function flushMicrotasks(): Promise<void> {
@@ -190,7 +191,15 @@ describe('createNetworkForwarder', () => {
     expect(svc.exec).not.toHaveBeenCalled()
   })
 
-  it('re-attaching to a new WCV detaches the previous one', () => {
+  // Previously this forced a physical `debugger.detach()` on the old wc. That
+  // was itself an instance of the bug this whole broker migration fixes: the
+  // SAME simulator wc's debugger session is independently used by
+  // simulator-storage (DOMStorage capture) — an unconditional detach here,
+  // just because network-forward moved its own attention to a new wc, would
+  // kill simulator-storage's capture too if it was still using `a` at that
+  // moment. Now we only release OUR OWN lease/wiring; the broker alone
+  // decides whether an actual detach ever happens.
+  it('re-attaching to a new WCV releases OUR lease on the previous one WITHOUT forcing a physical detach', () => {
     const a = makeSimWc()
     const b = makeSimWc()
     const svc = makeServiceWc()
@@ -199,8 +208,35 @@ describe('createNetworkForwarder', () => {
     fwd.attachSimulator(a.wc)
     fwd.attachSimulator(b.wc)
 
-    expect(a.dbg.detach).toHaveBeenCalledTimes(1)
+    expect(a.dbg.detach).not.toHaveBeenCalled()
     expect(b.dbg.attach).toHaveBeenCalledWith('1.3')
+
+    // Our OWN wiring for `a` is torn down, though — no stale double-forward.
+    a.emitMessage('Network.requestWillBeSent', { requestId: 'stale', request: { url: 'https://old/x', method: 'GET' } })
+    a.emitMessage('Network.loadingFinished', { requestId: 'stale' })
+    expect(svc.exec).not.toHaveBeenCalled()
+  })
+
+  it('switching attention away from a wc does not kill a DIFFERENT consumer still using its shared session (fixes the simulator dual-detach bug)', () => {
+    const a = makeSimWc()
+    const b = makeSimWc()
+    const svc = makeServiceWc()
+    const broker = createCdpSessionBroker()
+    const fwd = createNetworkForwarder({ getServiceWc: () => svc.wc, broker })
+
+    fwd.attachSimulator(a.wc)
+    // Models simulator-storage independently holding its own lease on the
+    // SAME wc `a` — e.g. via its own did-finish-load handler.
+    const otherConsumerLease = broker.acquire(a.wc)!
+
+    fwd.attachSimulator(b.wc) // network-forward moves on to a different wc
+
+    // The other consumer's lease must still work: the shared session was
+    // never actually detached just because network-forward stopped using it.
+    a.sendCommand.mockClear()
+    void otherConsumerLease.send('DOMStorage.enable')
+    expect(a.sendCommand).toHaveBeenCalledWith('DOMStorage.enable')
+    expect(a.dbg.detach).not.toHaveBeenCalled()
   })
 
   it('never throws when the service host is missing', () => {
@@ -1195,6 +1231,11 @@ describe('createNetworkForwarder — render-host guest capture', () => {
   // `id: undefined` would silently collide onto the SAME connection object.
   function makeGuestWc(initiallyAttached: boolean, id = 7) {
     let attached = initiallyAttached
+    // Mirrors real Electron: isDestroyed() flips true synchronously as
+    // 'destroyed' fires (previously hardcoded to always-false here, which
+    // masked the broker migration's need to tell "genuinely destroyed" apart
+    // from "session merely detached" — both looked identical to that code).
+    let destroyed = false
     const listeners = new Map<string, Set<(...args: unknown[]) => void>>()
     const destroyedListeners = new Set<() => void>()
     const sendCommand = vi.fn((_method: string, _params?: object) => Promise.resolve({}) as Promise<unknown>)
@@ -1213,7 +1254,7 @@ describe('createNetworkForwarder — render-host guest capture', () => {
     }
     const wc = {
       id,
-      isDestroyed: () => false,
+      isDestroyed: () => destroyed,
       debugger: dbg,
       once: (ev: string, fn: () => void) => { if (ev === 'destroyed') destroyedListeners.add(fn) },
       removeListener: (ev: string, fn: () => void) => { if (ev === 'destroyed') destroyedListeners.delete(fn) },
@@ -1222,14 +1263,24 @@ describe('createNetworkForwarder — render-host guest capture', () => {
       // A detached CDP session cannot deliver events — mirrors real Electron:
       // an externally-detached debugger simply stops emitting 'message'.
       if (!attached) return
-      for (const fn of listeners.get('message') ?? []) (fn as DbgListener)({}, method, params)
+      // Snapshot before iterating — real Node/Electron EventEmitter.emit()
+      // invokes only the listeners registered AT emit time; a listener added
+      // during dispatch (e.g. the broker self-healing and re-registering on
+      // THIS SAME Set from inside the current callback) must not be picked up
+      // by the current emit's still-running iteration.
+      for (const fn of [...(listeners.get('message') ?? [])]) (fn as DbgListener)({}, method, params)
     }
-    const emitDestroyed = () => { for (const fn of [...destroyedListeners]) fn() }
+    const emitDestroyed = () => { destroyed = true; for (const fn of [...destroyedListeners]) fn() }
     /** Simulate the debugger session being torn down by an owner OTHER than
      * network-forward itself (e.g. a real Chrome DevTools window attaching). */
     const emitDetach = () => {
       attached = false
-      for (const fn of listeners.get('detach') ?? []) (fn as () => void)()
+      // Snapshot before iterating — see emitMessage's comment. Without this,
+      // the broker's self-heal (re-attach + re-register a 'detach' listener
+      // on this SAME Set, synchronously, from inside the callback this very
+      // iteration is invoking) gets picked up by the still-running loop and
+      // cascades indefinitely, even though only ONE real detach occurred.
+      for (const fn of [...(listeners.get('detach') ?? [])]) (fn as () => void)()
     }
     return { wc, dbg, sendCommand, emitMessage, emitDestroyed, emitDetach }
   }
@@ -1491,12 +1542,12 @@ describe('createNetworkForwarder — render-host guest capture', () => {
     expect(dt.exec).not.toHaveBeenCalled()
   })
 
-  // attachSimulator resets its own `simWc` pointer on a debugger 'detach' event
-  // so a later attachSimulator(sameWc) can re-attach. attachRenderGuest has no
-  // equivalent: once wired, guestWired keeps the wc.id forever, so an external
-  // detach (e.g. the user opening a real Chrome DevTools window against the
-  // same target) permanently blocks re-attachment via the `guestWired.has()`
-  // idempotency guard.
+  // attachRenderGuest now goes through the shared CdpSessionBroker (see
+  // cdp-session/index.ts), whose lease.onDetach fires on any external detach
+  // and drops network-forward's wiring. This test additionally calls
+  // attachRenderGuest a second time — itself now a harmless no-op once the
+  // broker's onDetach has already re-wired automatically (see the dedicated
+  // "self-heals WITHOUT any external re-attach call" test below for that).
   it('recovers render-guest capture after the shared debugger session is externally detached', async () => {
     const guest = makeGuestWc(true) // already attached by another owner (safe-area)
     const dt = makeDevtoolsWc(true)
@@ -1525,5 +1576,105 @@ describe('createNetworkForwarder — render-host guest capture', () => {
     await flushMicrotasks()
 
     expect(dt.exec).toHaveBeenCalled()
+  })
+
+  // The actual fix (not just "a second attachRenderGuest call works"):
+  // attachRenderGuest is only ever called ONCE per guest in production, from
+  // `did-attach-webview` at webview creation — nothing else calls it again
+  // for that guest's remaining lifetime. Before this migration, an external
+  // detach therefore killed capture permanently (`guestWired` kept the wc.id
+  // forever, blocking re-wiring). Now the broker's `lease.onDetach` reacts to
+  // the detach itself and re-wires — no external caller involved at all.
+  it('self-heals after an external detach WITHOUT any external re-attach call', async () => {
+    // The self-heal is deliberately delayed (RENDER_GUEST_REATTACH_DELAY_MS) —
+    // a rapid burst of detach events (e.g. a page navigation cycling the
+    // debugger session through several intermediate states) must NOT retry
+    // inline on every one of them, which pegged the process in a tight loop
+    // (confirmed via instrumentation against a real Electron respawn e2e).
+    // Fake timers make the delay deterministic here instead of a real sleep.
+    vi.useFakeTimers()
+    try {
+      const guest = makeGuestWc(true) // already attached by another owner (safe-area)
+      const dt = makeDevtoolsWc(true)
+      const svc = makeServiceWc()
+      const fwd = createNetworkForwarder({ getServiceWc: () => svc.wc })
+      fwd.setDevtoolsHost(dt.wc)
+      fwd.attachRenderGuest(guest.wc) // the ONE, sole call — mirrors did-attach-webview
+
+      guest.emitMessage('Network.requestWillBeSent', {
+        requestId: 'g1', request: { url: 'https://img/x.png', method: 'GET' },
+      })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dt.exec).toHaveBeenCalled()
+      dt.exec.mockClear()
+
+      // Something outside network-forward detaches the shared debugger session
+      // (another owner releasing it, or a real Chrome DevTools window). Nothing
+      // calls attachRenderGuest again after this — production never would.
+      guest.emitDetach()
+
+      // Immediately after the detach (before the self-heal delay elapses),
+      // capture must still be down — proves the retry really is delayed, not
+      // just eventually consistent by coincidence.
+      guest.emitMessage('Network.requestWillBeSent', {
+        requestId: 'too-soon', request: { url: 'https://img/too-soon.png', method: 'GET' },
+      })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dt.exec).not.toHaveBeenCalled()
+
+      // Advance past the self-heal delay: capture must resume on its own.
+      await vi.advanceTimersByTimeAsync(400)
+
+      guest.emitMessage('Network.requestWillBeSent', {
+        requestId: 'g2', request: { url: 'https://img/y.png', method: 'GET' },
+      })
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(dt.exec).toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('throttles the self-heal so a chain of rapid detach events cannot retry faster than the delay window', async () => {
+    // Regression guard for the exact failure mode found via real-Electron
+    // instrumentation during a hot-reload respawn: a page navigation cycles
+    // the debugger session through several detach events in quick succession
+    // (each self-heal re-attach immediately followed by another detach as the
+    // frame keeps swapping), and retrying INLINE on every one of them pegged
+    // the main process in a tight synchronous loop (thousands of attach/detach
+    // cycles within seconds). Simulates N such rounds and asserts the total
+    // elapsed (virtual) time is bounded below by N × the delay — i.e. each
+    // round genuinely waited out the throttle instead of firing back-to-back.
+    vi.useFakeTimers()
+    try {
+      const guest = makeGuestWc(false) // starts unattached: network-forward self-attaches
+      const dt = makeDevtoolsWc(true)
+      const svc = makeServiceWc()
+      const fwd = createNetworkForwarder({ getServiceWc: () => svc.wc })
+      fwd.setDevtoolsHost(dt.wc)
+      fwd.attachRenderGuest(guest.wc)
+      await vi.advanceTimersByTimeAsync(0)
+
+      const attachCalls = (): number => (guest.dbg.attach as ReturnType<typeof vi.fn>).mock.calls.length
+      const initialAttaches = attachCalls()
+      expect(initialAttaches).toBeGreaterThan(0)
+
+      const ROUNDS = 5
+      for (let round = 1; round <= ROUNDS; round++) {
+        guest.emitDetach()
+        // Advancing by LESS than the delay must never trigger the re-attach —
+        // this is what "throttled" means: the retry cannot outrun the window,
+        // no matter how fast the caller fires the next detach.
+        await vi.advanceTimersByTimeAsync(50)
+        expect(attachCalls()).toBe(initialAttaches + round - 1)
+        // Now cross the delay boundary: exactly one re-attach fires, which
+        // re-registers a fresh 'detach' listener for the next round.
+        await vi.advanceTimersByTimeAsync(300)
+        expect(attachCalls()).toBe(initialAttaches + round)
+      }
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

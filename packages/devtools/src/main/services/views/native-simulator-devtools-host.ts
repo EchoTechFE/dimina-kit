@@ -403,6 +403,9 @@ export function createDevtoolsHost(
         devtoolsWc,
         bridge: ctx.bridge,
         connections: ctx.connections,
+        // Shared session broker (see cdp-session/index.ts) — undefined falls
+        // back to a private instance owned by this call.
+        broker: ctx.cdpSessionBroker,
         // Body/post-data lookups for the virtual requestIds the network
         // forwarder injects — answered from its prefetch cache when the
         // front-end's Response tab round-trips Network.getResponseBody.

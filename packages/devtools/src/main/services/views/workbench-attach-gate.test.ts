@@ -64,6 +64,7 @@ vi.mock('../../utils/paths.js', () => ({
 import { createViewManager } from './view-manager.js'
 import { workbenchBounds } from './placement-test-driver.js'
 import { createConnectionRegistry } from '@dimina-kit/electron-deck/main'
+import { createCdpSessionBroker } from '../cdp-session/index.js'
 
 function makeContext() {
   const addChildView = vi.fn()
@@ -83,6 +84,7 @@ function makeContext() {
       panels: ['console', 'wxml', 'storage', 'appdata'],
       notify: { popoverInit: vi.fn(), popoverClosed: vi.fn() } as unknown as import('../notifications/renderer-notifier.js').RendererNotifier,
       connections: createConnectionRegistry(),
+      cdpSessionBroker: createCdpSessionBroker(),
       preloadPath: '/stub/sim-preload.js',
     },
   }

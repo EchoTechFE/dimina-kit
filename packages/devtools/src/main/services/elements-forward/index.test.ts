@@ -5,9 +5,12 @@ import {
   buildElementsHookScript,
   installElementsForward,
   isRenderEventMethod,
+  NETWORK_BODY_METHODS,
+  RENDER_DOMAIN_PREFIXES,
   routeByDomain,
   routeOutboundCommand,
 } from './index.js'
+import { VIRTUAL_REQUEST_ID_PREFIX } from '../network-forward/index.js'
 
 // ── electron mock ──────────────────────────────────────────────────────────────
 // The feature lazily `require('electron').webContents.fromId(id)` in
@@ -1317,6 +1320,76 @@ describe('buildElementsHookScript — network route interception', () => {
     sendToHook(window, JSON.stringify({ id: 7, method: 'DOM.getDocument', params: {}, sessionId: null }))
 
     expect(outboundQueue(window).find((m) => m.id === 7)).toMatchObject({ method: 'DOM.getDocument', route: 'render' })
+  })
+
+  // Equivalence corpus: the hook script inlines a hand-written JS mirror of
+  // `routeOutboundCommand` (same literals, separate code) so it can classify a
+  // command client-side without a round-trip to main. The three hand-picked
+  // cases above only sample that mirror; this sweep is driven directly by the
+  // exported `RENDER_DOMAIN_PREFIXES` / `NETWORK_BODY_METHODS` constants (the
+  // single source both the TS function and the injected script read from), so
+  // it automatically covers any future addition to either list and fails the
+  // moment the script's `routeOf()` diverges from `routeOutboundCommand()` for
+  // any case it produces.
+  it('matches routeOutboundCommand for every method the exported routing constants can produce', () => {
+    const { sendMessageToBackend } = installHookOn(window)
+
+    const renderMethodSamples = RENDER_DOMAIN_PREFIXES.flatMap((prefix) => [
+      `${prefix}enable`,
+      `${prefix}someOtherMethod`,
+    ])
+    const serviceControlMethods = [
+      'Runtime.evaluate',
+      'Page.navigate',
+      'Emulation.setDeviceMetricsOverride',
+      'Emulation.setSafeAreaInsetsOverride',
+      'Console.enable',
+      'Debugger.enable',
+      'Target.attachToTarget',
+      'Input.dispatchKeyEvent',
+      'Profiler.start',
+      'Log.enable',
+      // Network.* methods OTHER than the two body methods must stay on service.
+      'Network.enable',
+      'Network.requestWillBeSent',
+    ]
+    const requestIdVariants: Array<{ requestId?: string }> = [
+      { requestId: `${VIRTUAL_REQUEST_ID_PREFIX}E1:1:r1` },
+      { requestId: 'raw-id-not-virtual' },
+      {},
+    ]
+
+    let nextId = 10_000
+    const cases: Array<{ id: number; method: string; params: Record<string, unknown>; expected: ReturnType<typeof routeOutboundCommand> }> = []
+    for (const method of renderMethodSamples) {
+      cases.push({ id: nextId++, method, params: {}, expected: routeOutboundCommand(method, {}) })
+    }
+    for (const method of serviceControlMethods) {
+      cases.push({ id: nextId++, method, params: {}, expected: routeOutboundCommand(method, {}) })
+    }
+    for (const method of NETWORK_BODY_METHODS) {
+      for (const variant of requestIdVariants) {
+        const params = variant.requestId === undefined ? {} : { requestId: variant.requestId }
+        cases.push({ id: nextId++, method, params, expected: routeOutboundCommand(method, params) })
+      }
+    }
+
+    // Sanity: the corpus must actually exercise all three routes, or this test
+    // would pass trivially without ever checking the render/network arms.
+    expect(new Set(cases.map((c) => c.expected))).toEqual(new Set(['render', 'network', 'service']))
+
+    for (const c of cases) {
+      const raw = JSON.stringify({ id: c.id, method: c.method, params: c.params, sessionId: null })
+      sendToHook(window, raw)
+
+      const queuedEntry = outboundQueue(window).find((m) => m.id === c.id)
+      if (c.expected === 'service') {
+        expect(sendMessageToBackend.mock.calls.some((call) => call[0] === raw)).toBe(true)
+        expect(queuedEntry).toBeUndefined()
+      } else {
+        expect(queuedEntry).toMatchObject({ method: c.method, route: c.expected })
+      }
+    }
   })
 })
 

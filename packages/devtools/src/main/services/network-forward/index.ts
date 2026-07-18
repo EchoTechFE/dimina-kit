@@ -59,20 +59,26 @@
  *     natively talks to has never heard of these ids.
  *  ⏳ TODO: `dataReceived` per-chunk forwarding (skipped to avoid an
  *     executeJavaScript per chunk).
- *  ⚠️ NOT captured here: requests issued from inside a render-host `<webview>`
- *     guest (page-level resource loads / page `fetch`). The safe-area service
- *     already owns each guest's `wc.debugger`, and `debugger.attach` is
- *     single-owner — bringing those in needs a shared CDP broker. `source:'render'`
- *     is reserved for when that's added (later).
+ *  ✅ Requests issued from inside a render-host `<webview>` guest (page-level
+ *     resource loads / page `fetch`, tagged `source: 'render'`) — `attachRenderGuest`
+ *     acquires a lease from the shared `CdpSessionBroker` (cdp-session/index.ts),
+ *     which is single owner of every render-guest `wc.debugger` session across
+ *     this forwarder, safe-area, elements-forward and render-inspect. An
+ *     external detach (another owner releasing the shared session, or a real
+ *     Chrome DevTools window) self-heals via the lease's `onDetach` — capture
+ *     re-wires itself even though `attachRenderGuest` is only ever called ONCE
+ *     per guest (at webview creation).
  *  ⚠️ NOT observable by any `webContents.debugger`: a request a host module issues
  *     directly from the MAIN process. Those need an explicit `report()` call
  *     (exposed below; it uses the console fallback path).
  */
 import type { WebContents } from 'electron'
-import { DisposableRegistry, toDisposable, type ConnectionRegistry, type Disposable } from '@dimina-kit/electron-deck/main'
+import { SyncDisposableRegistry, toDisposable, type ConnectionRegistry, type Disposable } from '@dimina-kit/electron-deck/main'
 import { isFrontendSettled } from '../views/inject-when-ready.js'
 import { packDispatchBatch } from './dispatch-batch.js'
 import { PrefetchCache, DEFAULT_PER_ENTRY_MAX_CHARS } from './body-cache.js'
+import { PROBE_DEVTOOLS_API, MAX_SINGLE_DISPATCH_CHARS, CHUNK_CHARS, buildChunkedDispatchScript } from './frontend-dispatch.js'
+import { createCdpSessionBroker, type CdpSessionBroker, type CdpSessionLease } from '../cdp-session/index.js'
 
 /**
  * Namespace prefix of every virtual requestId this forwarder injects into the
@@ -138,6 +144,18 @@ export interface NetworkForwarderBridge {
    * `once('destroyed')` fallback is used, so existing callers compile unchanged.
    */
   connections?: ConnectionRegistry
+  /**
+   * Shared CDP session broker (see cdp-session/index.ts) that owns every
+   * render-guest debugger session's attach/detach lifecycle — safe-area,
+   * elements-forward and render-inspect acquire leases from the same
+   * instance. Absent → a private broker is created and owned for this
+   * forwarder's lifetime (torn down on `dispose()`), so existing standalone
+   * callers/tests compile and behave unchanged, just without cross-module
+   * session sharing. Only consumed by the render-guest capture path
+   * (`attachRenderGuest`) for now — the simulator path keeps attaching
+   * directly.
+   */
+  broker?: CdpSessionBroker
 }
 
 export interface NetworkForwarder extends Disposable {
@@ -153,10 +171,13 @@ export interface NetworkForwarder extends Disposable {
   /**
    * Wire a render-host guest wc (pageFrame) for Network capture — page-level
    * resource loads (images/fonts/page fetch) that never touch the simulator's
-   * network stack. Idempotent per wc. REUSES an already-attached debugger
-   * session (safe-area attaches guests first) — attaches itself only when no
-   * one has, and detaches ONLY self-attached sessions on dispose; sessions it
-   * doesn't own are never detached. Events share the simulator capture's
+   * network stack. Idempotent per wc. Acquires a lease from the shared
+   * `CdpSessionBroker` (cdp-session/index.ts) — reuses an already-attached
+   * session (safe-area / elements-forward / render-inspect may have attached
+   * first) or self-attaches when no one has; the broker alone decides who may
+   * detach. Self-heals after an external detach (the lease's `onDetach`
+   * re-wires automatically) even though this is only ever called ONCE per
+   * guest, at webview creation. Events share the simulator capture's
    * virtual-id namespace prefix (distinct epochs keep them collision-free) and
    * the same body prefetch cache.
    */
@@ -334,10 +355,6 @@ export function rewriteRequestId(
 
 // ── DevTools front-end injection (the primary sink) ─────────────────────────
 
-/** Probe the front-end realm exposes `DevToolsAPI.dispatchMessage`. */
-const PROBE_DEVTOOLS_API
-  = `(window.DevToolsAPI && typeof window.DevToolsAPI.dispatchMessage === 'function')`
-
 /**
  * Build the `executeJavaScript` source that dispatches a BATCH of raw CDP
  * messages into the DevTools front-end. Each message is carried as a JSON
@@ -354,39 +371,6 @@ function buildDispatchScript(messages: string[]): string {
     + `return true;`
     + `}catch(_){return false}})()`
 }
-
-/**
- * Build the `executeJavaScript` source for a chunked dispatch of one large CDP
- * message — DevTools' own transport caps a single `dispatchMessage` payload, so
- * the front-end exposes `dispatchMessageChunk(messageChunk, messageSize)` where
- * the FIRST chunk carries the total size and EVERY SUBSEQUENT chunk is called
- * with the chunk ONLY (second arg omitted). This matches Chromium's
- * `devtools_ui_bindings.cc` DispatchProtocolMessage, whose front-end treats a
- * call with a second argument as the start of a new message and a call without
- * one as a continuation. Passing 0 (the previous behaviour) risked the
- * front-end mis-reading a continuation as a fresh 0-size message. Returns false
- * when the API isn't available.
- */
-function buildChunkedDispatchScript(chunks: string[], totalSize: number): string {
-  const arr = JSON.stringify(chunks)
-  return `(()=>{try{`
-    + `if(!(window.DevToolsAPI&&typeof window.DevToolsAPI.dispatchMessageChunk==='function'))return false;`
-    + `const cs=JSON.parse(${JSON.stringify(arr)});`
-    + `for(let i=0;i<cs.length;i++){`
-    + `try{`
-    // First chunk: (chunk, totalSize). Subsequent chunks: (chunk) — second arg
-    // omitted, NOT 0, per Chromium's continuation contract.
-    + `if(i===0){window.DevToolsAPI.dispatchMessageChunk(cs[i], ${totalSize})}`
-    + `else{window.DevToolsAPI.dispatchMessageChunk(cs[i])}`
-    + `}catch(_){}`
-    + `}`
-    + `return true;`
-    + `}catch(_){return false}})()`
-}
-
-/** A single dispatch payload may not exceed this many UTF-16 chars; chunk above. */
-const MAX_SINGLE_DISPATCH_CHARS = 1_000_000
-const CHUNK_CHARS = 256 * 1024
 
 /**
  * Upper bound on the COMBINED size (in UTF-16 chars) of the messages packed into
@@ -471,34 +455,9 @@ const READY_RETRY_MS = 100
  */
 type SinkState = 'idle' | 'probing' | 'ready' | 'degraded'
 
-/**
- * Minimal synchronous teardown collector — structurally compatible with
- * `DisposableRegistry.add` (so `wireNetworkCapture` can target either) but
- * its `disposeAll` runs every entry IMMEDIATELY, in one synchronous pass.
- * `DisposableRegistry.disposeAll` is async and only runs its LIFO entries one
- * `await` apart — fine for the simulator's fire-and-forget detach, but wrong
- * for a render guest: a destroy-then-immediately-re-emit (no microtask in
- * between — exactly how a real `wc.once('destroyed', ...)` firing during
- * teardown looks) must see the debugger 'message' listener ALREADY gone, not
- * gone-after-a-tick.
- */
-interface CaptureTeardown {
-  add(fn: () => void): void
-}
-function createSyncTeardown(): CaptureTeardown & { disposeAll(): void } {
-  const fns: Array<() => void> = []
-  return {
-    add: (fn) => { fns.push(fn) },
-    disposeAll: () => {
-      for (const fn of fns.splice(0).reverse()) {
-        try { fn() } catch { /* best-effort */ }
-      }
-    },
-  }
-}
-
 export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkForwarder {
-  const registry = new DisposableRegistry()
+  const registry = new SyncDisposableRegistry()
+  let disposed = false
 
   // ── Response body / post-data prefetch (serves the front-end's clicks) ─────
   // Keyed by VIRTUAL requestId and owned by the forwarder (not the attach):
@@ -548,17 +507,23 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
     if (!started) release()
   }
 
-  // The simulator WCV we currently have a debugger session on, and the
-  // per-attach teardown (debugger listeners + detach). Null when not attached.
+  // The simulator WCV we currently have a debugger session on, our broker
+  // lease for it, and the per-attach teardown (message listener). Null when
+  // not attached.
   let simWc: WebContents | null = null
-  let attachDisposables: DisposableRegistry | null = null
+  let simLease: CdpSessionLease | null = null
+  let attachDisposables: SyncDisposableRegistry | null = null
 
   // Render-host guests wired for capture: wc.id → SYNCHRONOUS per-guest
-  // teardown (message listener + destroyed watcher). Guests whose debugger
-  // session WE attached (nobody owned it yet) are tracked separately so
-  // dispose detaches only ours.
-  const guestWired = new Map<number, ReturnType<typeof createSyncTeardown>>()
-  const guestSelfAttached = new Map<number, WebContents>()
+  // teardown (message listener + broker lease). Attach/detach ownership for
+  // these sessions lives entirely in the shared broker now (see cdp-session/
+  // index.ts) — this map only tracks OUR OWN wiring (the 'message' listener
+  // wireNetworkCapture installs), not who may detach the underlying session.
+  const guestWired = new Map<number, SyncDisposableRegistry>()
+  // Own (and dispose on this forwarder's own dispose()) a private broker only
+  // when the caller didn't supply a shared one.
+  const ownsBroker = !bridge.broker
+  const broker = bridge.broker ?? createCdpSessionBroker({ connections: bridge.connections })
 
   // The DevTools front-end host wc (primary sink), set by the ViewManager.
   let devtoolsWc: WebContents | null = null
@@ -806,12 +771,25 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
     wc.executeJavaScript(script, true).catch(() => {})
   }
 
+  /**
+   * Stop USING the simulator wc's session. Releases our own lease (message
+   * listener + Network capture wiring) but never forces a physical
+   * `debugger.detach()` — this same simulator wc's debugger session is also
+   * independently used by simulator-storage (DOMStorage capture), and an
+   * unconditional detach here would kill ITS capture too, exactly like an
+   * unconditional detach on ITS side would kill ours. The broker (see
+   * cdp-session/index.ts) is the only thing that decides when an actual
+   * detach happens (wc destroy, or its own top-level dispose() for a
+   * self-attached session) — never a single consumer switching away.
+   */
   function detachSimulator(): void {
-    const wc = simWc
     simWc = null
+    const lease = simLease
+    simLease = null
     const ad = attachDisposables
     attachDisposables = null
-    if (ad) void ad.disposeAll().catch(() => {})
+    if (ad) { try { ad.disposeAll() } catch { /* best-effort teardown */ } }
+    lease?.dispose()
     // Drop any queued-but-unflushed messages so a new attach starts clean, and
     // reset the native-sink state machine (the next attach re-probes the host).
     dispatchQueue = []
@@ -822,10 +800,6 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
     probeDeadline = null
     if (readyRetryTimer) { clearTimeout(readyRetryTimer); readyRetryTimer = null }
     if (readyTimeoutTimer) { clearTimeout(readyTimeoutTimer); readyTimeoutTimer = null }
-    if (!wc || wc.isDestroyed()) return
-    try {
-      if (wc.debugger.isAttached()) wc.debugger.detach()
-    } catch { /* already detached / mid-destroy */ }
   }
 
   /**
@@ -838,7 +812,7 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
    * semantics) — the capture pipeline is identical, only session ownership
    * differs. The 'message' listener teardown is registered on `attach`.
    */
-  function wireNetworkCapture(wc: WebContents, source: NetworkSource, attach: CaptureTeardown, epoch: string): void {
+  function wireNetworkCapture(wc: WebContents, source: NetworkSource, attach: SyncDisposableRegistry, epoch: string): void {
     const ns = new RequestIdNamespace(epoch)
 
     // Fallback bookkeeping: requestId → in-flight request, for the console line
@@ -961,135 +935,119 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
     })
   }
 
-  /** Drop one guest's wiring; detach its session only when we attached it. */
+  /** Drop one guest's wiring (message listener + broker lease). Attach/detach
+   *  ownership of the underlying session is entirely the broker's concern. */
   function cleanupGuest(wcId: number): void {
     const teardown = guestWired.get(wcId)
     guestWired.delete(wcId)
     teardown?.disposeAll()
-    const owned = guestSelfAttached.get(wcId)
-    guestSelfAttached.delete(wcId)
-    if (!owned || owned.isDestroyed()) return
-    try {
-      if (owned.debugger.isAttached()) owned.debugger.detach()
-    } catch { /* already detached / mid-destroy */ }
   }
 
-  function attachRenderGuest(wc: WebContents): void {
-    if (!wc || wc.isDestroyed()) return
-    if (guestWired.has(wc.id)) return
+  /**
+   * A page navigation/reload on the render guest (e.g. a hot-reload respawn)
+   * can cycle the debugger session through several detach events in rapid
+   * succession as the frame swaps through intermediate states, even though
+   * the wc itself is never destroyed. Retrying the re-attach INLINE on every
+   * one of them (no delay) turns that burst into a tight synchronous loop —
+   * confirmed by instrumentation: thousands of attach/detach cycles within a
+   * couple seconds during one respawn, pegging the main process. A short
+   * delay bounds retries to roughly one attempt per window regardless of how
+   * fast the detach events arrive, while still recovering well within a
+   * user-visible timeframe for the genuine "someone else stole the session"
+   * case this self-heal exists for.
+   */
+  const RENDER_GUEST_REATTACH_DELAY_MS = 300
 
-    // Reuse an already-attached session (safe-area / elements own guest
-    // sessions); attach ourselves ONLY when nobody has — and remember it, so
-    // dispose detaches exactly the sessions we created and no one else's.
-    try {
-      if (!wc.debugger.isAttached()) {
-        wc.debugger.attach('1.3')
-        guestSelfAttached.set(wc.id, wc)
-      }
-    } catch (err) {
-      console.warn('[network-forward] guest debugger.attach failed; render network not captured:', err instanceof Error ? err.message : err)
+  /**
+   * Wire one render guest for Network capture via the shared broker.
+   *
+   * The lease's `onDetach` fires on EITHER an external detach (another owner
+   * releasing the shared session, or a real Chrome DevTools window stealing
+   * it) OR the guest being destroyed (see cdp-session/index.ts) — either way
+   * our wiring is torn down and, if the guest is still alive, re-wired (after
+   * `RENDER_GUEST_REATTACH_DELAY_MS`) so capture self-heals. Previously
+   * `attachRenderGuest` only ever ran ONCE per guest (at webview creation,
+   * from `did-attach-webview`), so any detach permanently killed capture for
+   * that guest's remaining lifetime — nothing else ever called it again.
+   */
+  function wireRenderGuest(wc: WebContents): void {
+    if (guestWired.has(wc.id)) return
+    const lease = broker.acquire(wc)
+    if (!lease) {
+      console.warn('[network-forward] guest debugger session unavailable; render network not captured')
       return
     }
 
-    const teardown = createSyncTeardown()
+    const teardown = new SyncDisposableRegistry()
     guestWired.set(wc.id, teardown)
     wireNetworkCapture(wc, 'render', teardown, `g${wc.id}-${Date.now()}`)
 
-    // Mirror attachSimulator's own 'detach' handling: the shared debugger
-    // session can be torn down by an owner OTHER than us (another feature
-    // releasing it, or a real Chrome DevTools window attaching to the same
-    // target) without this wc ever being destroyed. Without this, `guestWired`
-    // would keep the wc.id forever and the `guestWired.has(wc.id)` idempotency
-    // guard above would permanently block re-wiring on the next
-    // `attachRenderGuest(wc)` call. `cleanupGuest` is the right full teardown
-    // here (not just clearing the map): it also removes the now-stale
-    // 'message'/'closed' listeners this attach installed, so a later re-attach
-    // starts from a clean slate instead of layering a second 'message'
-    // listener on top (which would double-forward every subsequent event).
-    const onDetach = (): void => cleanupGuest(wc.id)
-    wc.debugger.on('detach', onDetach)
+    const detachSub = lease.onDetach(() => {
+      cleanupGuest(wc.id)
+      if (wc.isDestroyed()) return
+      const timer = setTimeout(() => {
+        if (!disposed && !wc.isDestroyed()) wireRenderGuest(wc)
+      }, RENDER_GUEST_REATTACH_DELAY_MS)
+      // Best-effort: if the whole forwarder tears down before this fires,
+      // there is nothing to clear it from (this guest's own teardown already
+      // ran via cleanupGuest above) — the disposed check above is the guard.
+      timer.unref?.()
+    })
     teardown.add(() => {
-      try { wc.debugger.removeListener('detach', onDetach) } catch { /* wc gone */ }
+      detachSub.dispose()
+      lease.dispose()
     })
 
-    const onDestroyed = (): void => cleanupGuest(wc.id)
-    // Route the destroyed-teardown through the connection registry's 'closed'
-    // EVENT (not `own()`) when one is available — `Connection.close()` calls
-    // `emit('closed')` unconditionally and synchronously, independent of
-    // whatever else is registered on that connection's segment. `own()` would
-    // instead enqueue `onDestroyed` into the segment's own async LIFO
-    // disposal, whose synchronous guarantee depends entirely on registration
-    // order (only the segment's LAST-registered resource runs before the
-    // segment's disposeAll() suspends) — a footgun if any other feature later
-    // owns a resource on the same guest's connection after this one attaches.
-    // `elements-forward`'s guest teardown already uses this same `on('closed')`
-    // pattern for the identical reason.
-    const connections = bridge.connections
-    if (connections) {
-      const closedSub = connections.acquire(wc).on('closed', onDestroyed)
-      teardown.add(() => { closedSub.dispose() })
-    } else {
-      wc.once('destroyed', onDestroyed)
-      teardown.add(() => {
-        try { wc.removeListener('destroyed', onDestroyed) } catch { /* wc gone */ }
-      })
-    }
-
-    void wc.debugger.sendCommand('Network.enable').catch((err) => {
+    void lease.send('Network.enable').catch((err) => {
       console.warn('[network-forward] guest Network.enable failed:', err instanceof Error ? err.message : err)
     })
   }
 
+  function attachRenderGuest(wc: WebContents): void {
+    if (!wc || wc.isDestroyed()) return
+    wireRenderGuest(wc)
+  }
+
+  /**
+   * Attach (or reuse) the simulator wc's shared session via the broker. The
+   * SAME wc is independently used by simulator-storage (DOMStorage capture) —
+   * `broker.acquire` reuses its session rather than fighting it for exclusive
+   * ownership, and our own switch-away/dispose only ever releases OUR lease
+   * (see detachSimulator), never forces a physical detach that would kill
+   * simulator-storage's capture too.
+   */
   function attachSimulator(wc: WebContents): void {
     if (!wc || wc.isDestroyed()) return
     if (simWc === wc && !wc.isDestroyed()) return
     detachSimulator()
 
-    try {
-      if (!wc.debugger.isAttached()) {
-        wc.debugger.attach('1.3')
-      }
-    } catch (err) {
-      console.warn('[network-forward] debugger.attach failed; simulator network not captured:', err instanceof Error ? err.message : err)
+    const lease = broker.acquire(wc)
+    if (!lease) {
+      console.warn('[network-forward] debugger session unavailable; simulator network not captured')
       return
     }
 
     simWc = wc
-    const attach = new DisposableRegistry()
+    simLease = lease
+    const attach = new SyncDisposableRegistry()
     attachDisposables = attach
 
     wireNetworkCapture(wc, 'service', attach, String(Date.now()))
 
-    const onDetach = (): void => { if (simWc === wc) { simWc = null } }
-    wc.debugger.on('detach', onDetach)
-    attach.add(() => {
-      try { wc.debugger.removeListener('detach', onDetach) } catch { /* wc gone */ }
+    const detachSub = lease.onDetach(() => {
+      if (simWc !== wc) return
+      simWc = null
+      simLease = null
+      // Tear down OUR OWN wiring (wireNetworkCapture's 'message' listener) —
+      // the broker already removed its own; without this, our listener would
+      // keep receiving events from a session we no longer track as "current".
+      const ad = attachDisposables
+      attachDisposables = null
+      if (ad) { try { ad.disposeAll() } catch { /* best-effort teardown */ } }
     })
+    attach.add(() => detachSub.dispose())
 
-    const onDestroyed = (): void => {
-      if (simWc === wc) {
-        simWc = null
-        const ad = attachDisposables
-        attachDisposables = null
-        if (ad) void ad.disposeAll().catch(() => {})
-      }
-    }
-    // Route the destroyed-teardown through the connection registry when one is
-    // available (deterministic disposal on wc destroy / connection reset);
-    // otherwise keep the bespoke `once('destroyed')` watcher. WHAT onDestroyed
-    // does is unchanged — only WHERE it's registered.
-    const reg = bridge.connections
-    if (reg) {
-      const owned = reg.acquire(wc).own(onDestroyed)
-      attach.add(() => owned.dispose())
-    } else {
-      wc.once('destroyed', onDestroyed)
-      attach.add(() => {
-        try { wc.removeListener('destroyed', onDestroyed) } catch { /* wc gone */ }
-      })
-    }
-
-    void wc.debugger.sendCommand('Network.enable').catch((err) => {
+    void lease.send('Network.enable').catch((err) => {
       console.warn('[network-forward] Network.enable failed:', err instanceof Error ? err.message : err)
     })
   }
@@ -1180,6 +1138,7 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
     if (dispatchQueue.length > 0) scheduleFlush()
   }
 
+  registry.add(() => { disposed = true })
   registry.add(() => {
     devtoolsHostDisposable?.dispose()
     devtoolsHostDisposable = null
@@ -1190,20 +1149,21 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
     bodyCache.clear()
     postDataCache.clear()
   })
-  // LAST registered → FIRST (and synchronously) run by the LIFO disposeAll:
-  // every debugger session (simulator + all render guests) must already be
+  // Every debugger session (simulator + all render guests) must already be
   // detached and every 'message' listener already removed before `dispose()`
   // returns control to an un-awaited caller (every real call site is
   // `fwd.dispose()` with no `await`) — a guest event arriving in the SAME
-  // tick as dispose() must never be forwarded. Both detachSimulator() and the
-  // guest cleanup loop are themselves fully synchronous (createSyncTeardown),
-  // so bundling them into ONE disposer guarantees both complete before the
-  // registry's disposeAll() suspends at its first `await`; splitting them
-  // into separate registry.add() calls would only make ONE of them the
-  // LIFO-first (synchronous) entry and silently defer the other.
+  // tick as dispose() must never be forwarded. `registry` is a
+  // SyncDisposableRegistry, so every entry below runs to completion before
+  // disposeAll() returns — no ordering dependency between them.
+  registry.add(() => detachSimulator())
   registry.add(() => {
-    detachSimulator()
     for (const wcId of [...guestWired.keys()]) cleanupGuest(wcId)
+  })
+  // Only detach sessions we self-attached if we own the broker's lifecycle —
+  // a shared/injected broker keeps serving other consumers past our dispose().
+  registry.add(() => {
+    if (ownsBroker) broker.dispose()
   })
 
   return {

@@ -1,14 +1,22 @@
 /**
  * Reattach regression for `setupSimulatorStorage`.
  *
+ * `attachToSim`/`detachFromSim` go through the shared `CdpSessionBroker` (see
+ * cdp-session/index.ts): the broker is the ONE thing that ever calls
+ * `wc.debugger.on('message'/'detach', …)`, fanning events out to every lease
+ * (simulator-storage's, and independently network-forward's, on the same wc).
+ * So "exactly one debugger listener" here pins the broker's fan-out
+ * invariant, not simulator-storage registering its own.
+ *
  * Verifies:
  *   - Re-feeding the same simulator webContents through the
  *     `app.on('web-contents-created')` + `did-finish-load` path is a no-op:
  *     `attachToSim()` short-circuits via `if (attachedWc === wc) return`,
  *     so the debugger 'message' listener is NOT registered twice.
- *   - When the attached simulator wc is destroyed, the old wc's debugger
- *     listeners are removed eagerly (via attachDisposables in onDestroyed),
- *     not left to leak until the next attachToSim call.
+ *   - When the attached simulator wc is destroyed, the broker's session
+ *     cleanup removes its own debugger listeners on that wc (`onWcDestroyed`
+ *     in cdp-session/index.ts), not left to leak until the next attachToSim
+ *     call.
  *   - When a NEW simulator wc subsequently appears, its 'message' listener
  *     is registered exactly once on the new wc.
  *   - Final `dispose()` clears the active debugger listener.
@@ -230,9 +238,10 @@ describe('setupSimulatorStorage — reattach does not stack listeners', () => {
     expect(dbgMessageListenerCount(wcA)).toBe(1)
     const onWcCreated = getWcCreatedCallback()
 
-    // Destroy wcA. The 'destroyed' once-listener inside attachToSim sets
-    // attachedWc = null. The detach itself happens lazily on the next
-    // attachToSim call (no explicit cleanup is wired to wc destruction).
+    // Destroy wcA. The broker's own wc-destroy watcher (registered inside
+    // its `acquire(wc)` when this attach happened) sets attachedWc = null via
+    // `lease.onDetach` and removes ITS debugger listeners on wcA synchronously
+    // — see cdp-session/index.ts's `onWcDestroyed`.
     wcA.destroyed = true
     wcA.emit('destroyed')
 
@@ -247,12 +256,9 @@ describe('setupSimulatorStorage — reattach does not stack listeners', () => {
     expect(dbgMessageListenerCount(wcB)).toBe(1)
     expect(dbgDetachListenerCount(wcB)).toBe(1)
 
-    // When the attached wc is destroyed, `onDestroyed` now disposes
-    // `attachDisposables` synchronously (modulo a microtask for the
-    // disposable registry's async drain). That removes wcA's debugger
-    // listeners, so a stale reference can never linger past the wc's
-    // lifetime — even though wcA can no longer emit, holding refs is a
-    // leak the lifecycle refactor should not accept.
+    // The broker's wc-destroy cleanup removes wcA's debugger listeners so a
+    // stale reference can never linger past the wc's lifetime — even though
+    // wcA can no longer emit, holding refs would be a leak.
     await Promise.resolve()
     await Promise.resolve()
     expect(dbgMessageListenerCount(wcA)).toBe(0)
