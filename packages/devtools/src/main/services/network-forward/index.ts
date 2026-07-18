@@ -520,15 +520,22 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
   // index.ts) — this map only tracks OUR OWN wiring (the 'message' listener
   // wireNetworkCapture installs), not who may detach the underlying session.
   const guestWired = new Map<number, SyncDisposableRegistry>()
-  // wc.id → a render-guest retry already scheduled (acquire refused, or an
-  // established session got detached). `guestWired` alone cannot de-duplicate
-  // repeat `attachRenderGuest` calls during this window — it is only
-  // populated on a SUCCESSFUL acquire — so without this set, calling
-  // `attachRenderGuest(wc)` again while the exclusive holder keeps refusing
-  // spawns a second, independent 300ms retry chain that never merges with the
-  // first, silently doubling (and, on further repeat calls, multiplying)
-  // retry attempts for one guest.
-  const guestRetryPending = new Set<number>()
+  // wc.id → the generation token of the most recently scheduled render-guest
+  // retry (acquire refused, or an established session got detached).
+  // `guestWired` alone cannot de-duplicate repeat `attachRenderGuest` calls
+  // during this window — it is only populated on a SUCCESSFUL acquire — so
+  // without this, calling `attachRenderGuest(wc)` again while the exclusive
+  // holder keeps refusing spawns a second, independent 300ms retry chain.
+  // A bare presence flag is NOT enough: a stale timer from an EARLIER retry
+  // cycle (superseded by an intervening successful reattach, itself followed
+  // by a fresh detach that scheduled its own new retry) would, on firing,
+  // unconditionally clear whatever is recorded — including that newer retry's
+  // own marker — and then reschedule itself, forking back into two parallel
+  // chains. A monotonic generation token lets a fired timer recognize its own
+  // staleness (its captured token no longer matches the current one) and
+  // no-op instead of touching state it no longer owns.
+  const guestRetryGeneration = new Map<number, number>()
+  let nextRenderGuestRetryGeneration = 0
   // Own (and dispose on this forwarder's own dispose()) a private broker only
   // when the caller didn't supply a shared one.
   const ownsBroker = !bridge.broker
@@ -987,17 +994,23 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
    * used to give up permanently instead of retrying, so capture never
    * recovered even once the holder released it.
    *
-   * De-duplicated via `guestRetryPending`: a repeat `attachRenderGuest(wc)`
+   * De-duplicated via `guestRetryGeneration`: a repeat `attachRenderGuest(wc)`
    * call while one guest's retry is already pending must join the SAME
    * chain, not start an independent second one — `guestWired` alone cannot
    * catch this because it is only populated once acquire actually succeeds.
+   * Each schedule mints a fresh generation token; the fired timer only acts
+   * if its captured token is still the current one, so a stale timer whose
+   * generation has since been superseded silently no-ops instead of clearing
+   * (and forking) a newer retry's bookkeeping.
    */
   function scheduleRenderGuestRetry(wc: WebContents): void {
     if (wc.isDestroyed()) return
-    if (guestRetryPending.has(wc.id)) return
-    guestRetryPending.add(wc.id)
+    if (guestRetryGeneration.has(wc.id)) return
+    const generation = ++nextRenderGuestRetryGeneration
+    guestRetryGeneration.set(wc.id, generation)
     const timer = setTimeout(() => {
-      guestRetryPending.delete(wc.id)
+      if (guestRetryGeneration.get(wc.id) !== generation) return
+      guestRetryGeneration.delete(wc.id)
       if (!disposed && !wc.isDestroyed()) wireRenderGuest(wc)
     }, RENDER_GUEST_REATTACH_DELAY_MS)
     // Best-effort: if the whole forwarder tears down before this fires, there
@@ -1037,11 +1050,11 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
       return
     }
 
-    // This wc is now genuinely wired — drop any stale pending-retry marker
-    // (e.g. from an earlier detach cycle superseded by THIS successful
-    // acquire) so a LATER detach can freely schedule its own fresh retry
-    // instead of being silently swallowed by a leftover flag.
-    guestRetryPending.delete(wc.id)
+    // This wc is now genuinely wired — drop any stale pending-retry
+    // generation (e.g. from an earlier detach cycle superseded by THIS
+    // successful acquire) so a LATER detach can freely mint its own fresh
+    // generation instead of being silently swallowed by a leftover entry.
+    guestRetryGeneration.delete(wc.id)
     const teardown = new SyncDisposableRegistry()
     guestWired.set(wc.id, teardown)
     wireNetworkCapture(wc, 'render', teardown, `g${wc.id}-${Date.now()}`)

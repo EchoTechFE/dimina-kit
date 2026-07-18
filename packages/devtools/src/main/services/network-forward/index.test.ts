@@ -1807,4 +1807,75 @@ describe('createNetworkForwarder — render-host guest capture', () => {
       vi.useRealTimers()
     }
   })
+
+  // `guestRetryPending` only records THAT a retry is pending for a wc.id, not
+  // WHICH scheduled timer currently owns that pending state. A stale timer —
+  // one scheduled by an earlier failed acquire, still ticking down after an
+  // intervening explicit re-attach succeeded and was THEN detached again
+  // (which schedules its OWN, newer retry) — unconditionally clears whatever
+  // pending-retry flag exists when it wakes up, even though a different,
+  // newer timer now owns that flag. That lets one guest fork into two
+  // independent 300ms retry chains instead of merging into one: the stale
+  // timer's own failed re-attempt re-schedules a further timer right where it
+  // wiped out the newer chain's bookkeeping, so from that point on both
+  // chains keep re-arming each other indefinitely. A stale retry timer must
+  // recognize it has been superseded and no-op, never clear a newer retry's
+  // pending-state bookkeeping.
+  it('does not let a stale retry timer clear a NEWER retry scheduled after an intervening success+detach, which would fork into two parallel retry chains', async () => {
+    vi.useFakeTimers()
+    try {
+      const guest = makeGuestWc(false)
+      const dt = makeDevtoolsWc(true)
+      const svc = makeServiceWc()
+      const fwd = createNetworkForwarder({ getServiceWc: () => svc.wc })
+      fwd.setDevtoolsHost(dt.wc)
+
+      const attachCalls = (): number => (guest.dbg.attach as ReturnType<typeof vi.fn>).mock.calls.length
+
+      // 1) First attach attempt fails → acquire() refuses → schedules retry A,
+      //    due RENDER_GUEST_REATTACH_DELAY_MS (300ms) from now.
+      guest.dbg.attach.mockImplementationOnce(() => { throw new Error('exclusively held') })
+      fwd.attachRenderGuest(guest.wc)
+      expect(attachCalls()).toBe(1)
+
+      // 2) BEFORE retry A's window elapses, an explicit re-attach (e.g. the
+      //    exclusive holder having already let go) succeeds — using the base
+      //    (non-once) mock implementation, which sets `attached = true`.
+      fwd.attachRenderGuest(guest.wc)
+      expect(attachCalls()).toBe(2)
+      const afterHandoff = attachCalls()
+
+      // 3) attach() refuses again from here on — models the session getting
+      //    exclusively re-claimed right after this handoff, so whichever retry
+      //    fires next keeps failing (needed so the detach below genuinely
+      //    schedules retry B instead of instantly re-succeeding).
+      guest.dbg.attach.mockImplementation(() => { throw new Error('exclusively held') })
+
+      // 4) The just-successfully-wired session is detached again. This
+      //    schedules retry B, due 300ms from THIS instant — the same virtual
+      //    instant as retry A above, since no fake time has elapsed since
+      //    step 1 — so both are due at the same tick.
+      guest.emitDetach()
+
+      // 5) Advance exactly to retry A's original due time. Both A and B fire
+      //    within this one tick. A stale A must recognize it is superseded
+      //    and no-op; only B (the current, legitimate retry) may attempt
+      //    attach().
+      await vi.advanceTimersByTimeAsync(300)
+      // Correct behaviour: exactly ONE more attach() attempt (retry B's). The
+      // fork bug produces TWO more attempts — retry A wrongly retries on its
+      // own, on top of retry B — because A's unconditional delete erased B's
+      // pending-state entry before B ran.
+      expect(attachCalls()).toBe(afterHandoff + 1)
+
+      // 6) A further 300ms window must show the SAME single-chain cadence,
+      //    not an ever-widening fork — two parallel chains would each keep
+      //    re-arming one more attempt every window from here on.
+      const afterFirstWindow = attachCalls()
+      await vi.advanceTimersByTimeAsync(300)
+      expect(attachCalls()).toBe(afterFirstWindow + 1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
