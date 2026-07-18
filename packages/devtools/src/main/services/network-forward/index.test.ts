@@ -1404,6 +1404,52 @@ describe('createNetworkForwarder — render-host guest capture', () => {
     expect(opens.length).toBe(1)
   })
 
+  // The idempotency test above only covers the acquire-SUCCESS branch:
+  // `guestWired` (the map the top-of-function guard checks) is only populated
+  // AFTER `broker.acquire()` succeeds, so it says nothing about repeat calls
+  // made while acquire() is failing. While the exclusive holder (e.g. a real
+  // Chrome DevTools window) still holds the session, guestWired never gets an
+  // entry for this wc, so a second attachRenderGuest call for the SAME wc
+  // finds no guard tripped and schedules its OWN independent
+  // scheduleRenderGuestRetry timer, in addition to the first call's — two
+  // retry chains racing on the same RENDER_GUEST_REATTACH_DELAY_MS cadence.
+  // Per-wc idempotency must hold on this branch too: no matter how many times
+  // attachRenderGuest is called for a wc that is stuck failing to acquire,
+  // there must be exactly one retry chain, so attach() fires once per retry
+  // window — not once per outstanding attachRenderGuest call.
+  it('is idempotent per guest wc on the acquire-FAILURE branch too — calling attachRenderGuest twice while acquire keeps failing must not double the retry cadence', async () => {
+    vi.useFakeTimers()
+    try {
+      const guest = makeGuestWc(false)
+      // Every attach attempt fails for the whole test — models an exclusive
+      // holder that never releases the session during this window.
+      guest.dbg.attach.mockImplementation(() => { throw new Error('exclusively held') })
+      const dt = makeDevtoolsWc(true)
+      const svc = makeServiceWc()
+      const fwd = createNetworkForwarder({ getServiceWc: () => svc.wc })
+      fwd.setDevtoolsHost(dt.wc)
+
+      fwd.attachRenderGuest(guest.wc) // attempt #1: acquire() fails synchronously, schedules a retry
+      fwd.attachRenderGuest(guest.wc) // a second call for the SAME wc, made while that retry is still pending
+
+      const attachCalls = (): number => (guest.dbg.attach as ReturnType<typeof vi.fn>).mock.calls.length
+      const afterInitialCalls = attachCalls()
+      expect(afterInitialCalls).toBeGreaterThan(0)
+
+      // Advance exactly one RENDER_GUEST_REATTACH_DELAY_MS window (300ms —
+      // the same literal the throttle test above advances by). If the two
+      // attachRenderGuest calls share one retry chain, this window produces
+      // exactly ONE more attach() attempt, identical to what a single
+      // attachRenderGuest call alone would produce (see the "retries
+      // acquiring the guest session..." test). If they spawned two
+      // independent chains instead, this window produces TWO more attempts.
+      await vi.advanceTimersByTimeAsync(300)
+      expect(attachCalls()).toBe(afterInitialCalls + 1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('stops forwarding once the render-host guest wc is destroyed', async () => {
     const guest = makeGuestWc(false)
     const dt = makeDevtoolsWc(true)

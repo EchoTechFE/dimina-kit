@@ -520,6 +520,15 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
   // index.ts) — this map only tracks OUR OWN wiring (the 'message' listener
   // wireNetworkCapture installs), not who may detach the underlying session.
   const guestWired = new Map<number, SyncDisposableRegistry>()
+  // wc.id → a render-guest retry already scheduled (acquire refused, or an
+  // established session got detached). `guestWired` alone cannot de-duplicate
+  // repeat `attachRenderGuest` calls during this window — it is only
+  // populated on a SUCCESSFUL acquire — so without this set, calling
+  // `attachRenderGuest(wc)` again while the exclusive holder keeps refusing
+  // spawns a second, independent 300ms retry chain that never merges with the
+  // first, silently doubling (and, on further repeat calls, multiplying)
+  // retry attempts for one guest.
+  const guestRetryPending = new Set<number>()
   // Own (and dispose on this forwarder's own dispose()) a private broker only
   // when the caller didn't supply a shared one.
   const ownsBroker = !bridge.broker
@@ -977,10 +986,18 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
    * held elsewhere, e.g. a real Chrome DevTools window) — that second case
    * used to give up permanently instead of retrying, so capture never
    * recovered even once the holder released it.
+   *
+   * De-duplicated via `guestRetryPending`: a repeat `attachRenderGuest(wc)`
+   * call while one guest's retry is already pending must join the SAME
+   * chain, not start an independent second one — `guestWired` alone cannot
+   * catch this because it is only populated once acquire actually succeeds.
    */
   function scheduleRenderGuestRetry(wc: WebContents): void {
     if (wc.isDestroyed()) return
+    if (guestRetryPending.has(wc.id)) return
+    guestRetryPending.add(wc.id)
     const timer = setTimeout(() => {
+      guestRetryPending.delete(wc.id)
       if (!disposed && !wc.isDestroyed()) wireRenderGuest(wc)
     }, RENDER_GUEST_REATTACH_DELAY_MS)
     // Best-effort: if the whole forwarder tears down before this fires, there
@@ -999,6 +1016,14 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
    * `attachRenderGuest` only ever ran ONCE per guest (at webview creation,
    * from `did-attach-webview`), so any detach permanently killed capture for
    * that guest's remaining lifetime — nothing else ever called it again.
+   *
+   * `guestWired` alone guards re-entry once successfully wired. A repeat call
+   * while acquire keeps failing is deliberately NOT blocked here (only the
+   * TIMER that call would schedule is de-duplicated, in
+   * `scheduleRenderGuestRetry`) — an explicit re-attach right after a detach
+   * must still get its own immediate `acquire()` attempt (the exclusive
+   * holder may have already released it by then), not be forced to wait out
+   * a stale pending window.
    */
   function wireRenderGuest(wc: WebContents): void {
     if (guestWired.has(wc.id)) return
@@ -1012,6 +1037,11 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
       return
     }
 
+    // This wc is now genuinely wired — drop any stale pending-retry marker
+    // (e.g. from an earlier detach cycle superseded by THIS successful
+    // acquire) so a LATER detach can freely schedule its own fresh retry
+    // instead of being silently swallowed by a leftover flag.
+    guestRetryPending.delete(wc.id)
     const teardown = new SyncDisposableRegistry()
     guestWired.set(wc.id, teardown)
     wireNetworkCapture(wc, 'render', teardown, `g${wc.id}-${Date.now()}`)
