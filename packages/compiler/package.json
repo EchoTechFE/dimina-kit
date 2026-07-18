@@ -61,7 +61,7 @@
     "@babel/parser": "^7.29.7",
     "@vue/compiler-sfc": "^3.5.39",
     "assert": "^2.1.0",
-    "autoprefixer": "^10.5.2",
+    "autoprefixer": "^10.5.3",
     "buffer": "^6.0.3",
     "cheerio": "^1.2.0",
     "cssnano": "^8.0.2",
@@ -72,10 +72,10 @@
     "less": "^4.6.7",
     "magic-string": "^0.30.21",
     "memfs": "^4.57.8",
-    "oxc-parser": "^0.137.0",
+    "oxc-parser": "^0.139.0",
     "oxc-walker": "^1.0.0",
     "path-browserify": "^1.0.1",
-    "postcss": "^8.5.15",
+    "postcss": "^8.5.19",
     "postcss-selector-parser": "^7.1.4",
     "sass": "^1.101.0",
     "source-map-js": "^1.2.1",
@@ -83,8 +83,8 @@
     "util": "^0.12.5"
   },
   "peerDependencies": {
-    "@oxc-parser/binding-wasm32-wasi": "^0.137.0",
-    "esbuild-wasm": "^0.28.0"
+    "@oxc-parser/binding-wasm32-wasi": "^0.139.0",
+    "esbuild-wasm": "^0.28.1"
   },
   "peerDependenciesMeta": {
     "@oxc-parser/binding-wasm32-wasi": {
@@ -95,6 +95,6 @@
     }
   },
   "devDependencies": {
-    "esbuild-wasm": "^0.28.0"
+    "esbuild-wasm": "^0.28.1"
   }
 }
