@@ -1,27 +1,20 @@
+/*
+ * Matches dimina's native capsule (always an opaque white pill with dark
+ * icons, independent of the nav bar's textStyle — see
+ * DiminaActivity.kt#MiniProgramCapsuleButton / DMPPageController.swift#makeCapsuleButton).
+ */
 .menu-capsule {
   position: absolute;
   display: flex;
   align-items: center;
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.6);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
+  background: #ffffff;
   box-sizing: border-box;
-  border: 0.5px solid rgba(0, 0, 0, 0.08);
+  border: 0.5px solid #e5e5e5;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  color: #1f1f1f;
   overflow: hidden;
   pointer-events: none; /* visual stand-in only */
-}
-
-.menu-capsule--white {
-  background: rgba(255, 255, 255, 0.15);
-  border-color: rgba(255, 255, 255, 0.4);
-  color: #ffffff;
-}
-
-.menu-capsule--black {
-  background: rgba(255, 255, 255, 0.85);
-  border-color: rgba(0, 0, 0, 0.08);
-  color: #000000;
 }
 
 .menu-capsule__more,
@@ -33,23 +26,31 @@
 }
 
 .menu-capsule__more {
-  gap: 3px;
+  /* native packs the three dots almost touching (~0.8px edge gap) */
+  gap: 1px;
   pointer-events: auto;
   cursor: pointer;
 }
 
-.menu-capsule__more span {
-  width: 4px;
-  height: 4px;
+.menu-capsule__dot {
   border-radius: 50%;
   background: currentColor;
+}
+
+.menu-capsule__dot--side {
+  width: 4px;
+  height: 4px;
+}
+
+.menu-capsule__dot--mid {
+  width: 6.4px;
+  height: 6.4px;
 }
 
 .menu-capsule__divider {
   width: 0.5px;
   height: 16px;
-  background: currentColor;
-  opacity: 0.4;
+  background: #e9e9e9;
 }
 
 .menu-capsule__close svg {
