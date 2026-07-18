@@ -32,6 +32,7 @@
     "scripts"
   ],
   "scripts": {
+    "check:wasm-alignment": "node scripts/check-wasm-alignment.js",
     "build:node": "node scripts/build-compiler.js node",
     "build:browser": "node scripts/build-compiler.js browser",
     "build": "pnpm run build:node && pnpm run build:browser",
@@ -59,7 +60,7 @@
   },
   "dependencies": {
     "@babel/parser": "^7.29.7",
-    "@vue/compiler-sfc": "^3.5.39",
+    "@vue/compiler-sfc": "^3.5.40",
     "assert": "^2.1.0",
     "autoprefixer": "^10.5.3",
     "buffer": "^6.0.3",
