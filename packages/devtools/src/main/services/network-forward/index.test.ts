@@ -1677,4 +1677,88 @@ describe('createNetworkForwarder — render-host guest capture', () => {
       vi.useRealTimers()
     }
   })
+
+  // wireRenderGuest's onDetach self-heal only covers a session that was
+  // acquired successfully and LATER lost. It says nothing about the FIRST
+  // acquire() call itself returning null (the exclusive holder — e.g. a real
+  // Chrome DevTools window — was already attached at the moment
+  // attachRenderGuest ran, before any lease/onDetach subscription exists to
+  // react to anything). That first-failure path only console.warns and
+  // returns, with no timer scheduled anywhere — so if the exclusive holder
+  // later lets go, nothing ever notices and this guest's network capture is
+  // dead for the rest of its life even though the wc itself is perfectly
+  // alive. A first-attempt acquire() failure must be retried on the same
+  // delayed cadence as an external detach, not treated as a permanent give-up.
+  it('retries acquiring the guest session after the very first attempt is refused, so capture recovers once the exclusive holder lets go', async () => {
+    vi.useFakeTimers()
+    try {
+      const guest = makeGuestWc(false) // unattached: attachRenderGuest will try to self-attach
+      // First attach attempt is refused — models the debugger being exclusively
+      // held elsewhere (e.g. a real Chrome DevTools window) at the exact moment
+      // attachRenderGuest runs. Every attempt after that succeeds — models that
+      // holder later releasing the session (e.g. the user closes that window).
+      guest.dbg.attach.mockImplementationOnce(() => { throw new Error('exclusively held') })
+      const dt = makeDevtoolsWc(true)
+      const svc = makeServiceWc()
+      const fwd = createNetworkForwarder({ getServiceWc: () => svc.wc })
+      fwd.setDevtoolsHost(dt.wc)
+
+      fwd.attachRenderGuest(guest.wc) // acquire() fails synchronously here
+
+      // Nothing calls attachRenderGuest again in production for this guest —
+      // any recovery has to come from a retry the forwarder scheduled itself.
+      // Advance well past a self-heal delay window to give that retry a chance
+      // to fire (without assuming any particular retry count or exact cadence).
+      await vi.advanceTimersByTimeAsync(400)
+
+      guest.emitMessage('Network.requestWillBeSent', {
+        requestId: 'g1', request: { url: 'https://img/x.png', method: 'GET' },
+      })
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(dt.exec).toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // The retry from the test above must not degrade into a timer that keeps
+  // firing forever for a guest that is already gone. If acquire() keeps
+  // failing for this guest's entire lifetime and the guest wc is destroyed
+  // mid-retry, the retry loop must observe that and stop — not keep
+  // re-scheduling attach attempts against a dead wc indefinitely.
+  it('stops retrying once the guest wc is destroyed, even while acquire keeps failing, instead of leaking a retry timer for a dead guest', async () => {
+    vi.useFakeTimers()
+    try {
+      const guest = makeGuestWc(false)
+      // Every attach attempt fails for as long as the guest is alive — models
+      // an exclusive holder that never releases the session during this
+      // guest's lifetime.
+      guest.dbg.attach.mockImplementation(() => { throw new Error('exclusively held') })
+      const dt = makeDevtoolsWc(true)
+      const svc = makeServiceWc()
+      const fwd = createNetworkForwarder({ getServiceWc: () => svc.wc })
+      fwd.setDevtoolsHost(dt.wc)
+
+      fwd.attachRenderGuest(guest.wc)
+
+      // Let enough virtual time pass for more than one retry round so this
+      // assertion actually exercises a running retry loop rather than the
+      // single attempt attachRenderGuest itself always makes regardless of
+      // any retry logic existing at all.
+      await vi.advanceTimersByTimeAsync(2000)
+      const attachCallsBeforeDestroy = guest.dbg.attach.mock.calls.length
+      expect(attachCallsBeforeDestroy).toBeGreaterThan(1)
+
+      guest.emitDestroyed()
+
+      // Plenty of virtual time for many more retry rounds if the loop kept
+      // going after the wc died.
+      await vi.advanceTimersByTimeAsync(10_000)
+
+      expect(guest.dbg.attach.mock.calls.length).toBe(attachCallsBeforeDestroy)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

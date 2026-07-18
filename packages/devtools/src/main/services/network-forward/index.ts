@@ -146,14 +146,14 @@ export interface NetworkForwarderBridge {
   connections?: ConnectionRegistry
   /**
    * Shared CDP session broker (see cdp-session/index.ts) that owns every
-   * render-guest debugger session's attach/detach lifecycle — safe-area,
-   * elements-forward and render-inspect acquire leases from the same
-   * instance. Absent → a private broker is created and owned for this
-   * forwarder's lifetime (torn down on `dispose()`), so existing standalone
-   * callers/tests compile and behave unchanged, just without cross-module
-   * session sharing. Only consumed by the render-guest capture path
-   * (`attachRenderGuest`) for now — the simulator path keeps attaching
-   * directly.
+   * render-guest AND simulator debugger session's attach/detach lifecycle —
+   * safe-area, elements-forward, render-inspect and simulator-storage acquire
+   * leases from the same instance. Absent → a private broker is created and
+   * owned for this forwarder's lifetime (torn down on `dispose()`), so
+   * existing standalone callers/tests compile and behave unchanged, just
+   * without cross-module session sharing. Both `attachRenderGuest` and
+   * `attachSimulator` go through it — see detachSimulator's docstring for why
+   * the simulator path never forces a physical detach either.
    */
   broker?: CdpSessionBroker
 }
@@ -944,19 +944,49 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
   }
 
   /**
-   * A page navigation/reload on the render guest (e.g. a hot-reload respawn)
-   * can cycle the debugger session through several detach events in rapid
-   * succession as the frame swaps through intermediate states, even though
-   * the wc itself is never destroyed. Retrying the re-attach INLINE on every
-   * one of them (no delay) turns that burst into a tight synchronous loop —
-   * confirmed by instrumentation: thousands of attach/detach cycles within a
-   * couple seconds during one respawn, pegging the main process. A short
-   * delay bounds retries to roughly one attempt per window regardless of how
-   * fast the detach events arrive, while still recovering well within a
-   * user-visible timeframe for the genuine "someone else stole the session"
-   * case this self-heal exists for.
+   * A hot-reload respawn replaces the render-host `<webview>` guest with a
+   * fresh one (see simulator-app.tsx's ready-then-swap session commit); the
+   * OLD guest's wc is closed asynchronously as part of the old session's
+   * teardown (bridge-router's `closeSessionPages`), so there is a window
+   * where `wc.isDestroyed()` is still `false` but the debugger session is
+   * already gone (Electron reports `detach` with reason `"target closed"` —
+   * confirmed via instrumentation against a real respawn: every detach in
+   * that run carried this exact reason, one per closing guest, never a
+   * repeated storm on one guest). Retrying the re-attach INLINE on every
+   * `detach` (no delay) raced that async teardown: each re-attach attempt
+   * landed inside the still-closing window and immediately produced another
+   * `detach`, self-sustaining a tight synchronous loop (confirmed by
+   * instrumentation: thousands of attach/detach cycles within a couple
+   * seconds) until the wc finally finished closing — there is no public
+   * Electron event for "this wc's close is about to complete", so the only
+   * available signal to end the loop is `wc.isDestroyed()` itself, which the
+   * retry already checks. This delay does not wait for any timing to
+   * "settle" — it only paces the retry slower than the async close, so the
+   * loop's real termination check (`wc.isDestroyed()` / `disposed`) has a
+   * chance to observe the close having finished before the next attempt.
    */
   const RENDER_GUEST_REATTACH_DELAY_MS = 300
+
+  /**
+   * Schedule one more `wireRenderGuest(wc)` attempt after
+   * `RENDER_GUEST_REATTACH_DELAY_MS`, guarded so a guest that has since been
+   * destroyed (or a forwarder that has since been disposed) never gets a
+   * stray retry. Shared by both places capture can fail to be wired: an
+   * established session later getting detached, AND `broker.acquire()`
+   * itself refusing on the very first attempt (the session is exclusively
+   * held elsewhere, e.g. a real Chrome DevTools window) — that second case
+   * used to give up permanently instead of retrying, so capture never
+   * recovered even once the holder released it.
+   */
+  function scheduleRenderGuestRetry(wc: WebContents): void {
+    if (wc.isDestroyed()) return
+    const timer = setTimeout(() => {
+      if (!disposed && !wc.isDestroyed()) wireRenderGuest(wc)
+    }, RENDER_GUEST_REATTACH_DELAY_MS)
+    // Best-effort: if the whole forwarder tears down before this fires, there
+    // is nothing to clear it from — the disposed check above is the guard.
+    timer.unref?.()
+  }
 
   /**
    * Wire one render guest for Network capture via the shared broker.
@@ -974,7 +1004,11 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
     if (guestWired.has(wc.id)) return
     const lease = broker.acquire(wc)
     if (!lease) {
-      console.warn('[network-forward] guest debugger session unavailable; render network not captured')
+      // Not terminal — the exclusive holder may release the session later.
+      // Retry on the same cadence as the onDetach self-heal below, or this
+      // guest's capture would die for its whole remaining lifetime the very
+      // first time acquire() lost the race.
+      scheduleRenderGuestRetry(wc)
       return
     }
 
@@ -984,14 +1018,7 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
 
     const detachSub = lease.onDetach(() => {
       cleanupGuest(wc.id)
-      if (wc.isDestroyed()) return
-      const timer = setTimeout(() => {
-        if (!disposed && !wc.isDestroyed()) wireRenderGuest(wc)
-      }, RENDER_GUEST_REATTACH_DELAY_MS)
-      // Best-effort: if the whole forwarder tears down before this fires,
-      // there is nothing to clear it from (this guest's own teardown already
-      // ran via cleanupGuest above) — the disposed check above is the guard.
-      timer.unref?.()
+      scheduleRenderGuestRetry(wc)
     })
     teardown.add(() => {
       detachSub.dispose()
