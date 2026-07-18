@@ -74,10 +74,18 @@ jobs:
         include:
           - os: ubuntu-latest
             platform: linux
+            arch: x64
           - os: macos-latest
             platform: mac
+            arch: arm64
+          # macos-13 (Intel) is deprecated; macos-15-intel is the last x86_64
+          # image GitHub Actions will host (through Aug 2027).
+          - os: macos-15-intel
+            platform: mac
+            arch: x64
           - os: windows-latest
             platform: win
+            arch: x64
 
     runs-on: ${{ matrix.os }}
 
@@ -111,8 +119,8 @@ jobs:
           path: |
             ~/Library/Caches/electron
             ${{ github.workspace }}/.cache/electron-builder
-          key: electron-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: electron-${{ runner.os }}-
+          key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: electron-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Cache Electron binaries (Linux)
         if: runner.os == 'Linux'
@@ -153,7 +161,7 @@ jobs:
             dimina/fe/packages/render/dist
             dimina/fe/packages/common/dist
             dimina/fe/packages/container/dist
-          key: dimina-container-v2-${{ runner.os }}-${{ steps.dimina.outputs.sha }}-${{ hashFiles('packages/devtools/build-container.js', 'packages/devtools/vite.config.api.js', 'packages/devtools/container-runtime.js', 'packages/devtools/src/simulator/service-apis/**') }}
+          key: dimina-container-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.dimina.outputs.sha }}-${{ hashFiles('packages/devtools/build-container.js', 'packages/devtools/vite.config.api.js', 'packages/devtools/container-runtime.js', 'packages/devtools/src/simulator/service-apis/**') }}
 
       - name: Install workspace deps
         run: pnpm install --frozen-lockfile --prefer-offline
@@ -207,7 +215,10 @@ jobs:
 
       - name: Package Electron app
         working-directory: packages/devtools
-        run: pnpm dist --${{ matrix.platform }} --publish never
+        # electron-builder defaults to the host arch when no --x64/--arm64 flag
+        # is given; mac needs it explicit since two mac runners (arm64 + Intel)
+        # now share this job.
+        run: pnpm dist --${{ matrix.platform }}${{ matrix.platform == 'mac' && format(' --{0}', matrix.arch) || '' }} --publish never
 
       # The compile toolchain's native bindings (@esbuild/<platform>,
       # @oxc-parser/binding-<platform>) must ship in app.asar.unpacked or the
@@ -253,6 +264,7 @@ jobs:
         working-directory: packages/devtools/release
         env:
           VER: ${{ steps.ver.outputs.version }}
+          ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -261,13 +273,13 @@ jobs:
             echo "Expected exactly 1 dmg, found ${#dmgs[@]}: ${dmgs[*]}" >&2
             exit 1
           fi
-          mv "${dmgs[0]}" "dimina-devtools-${VER}-mac.dmg"
+          mv "${dmgs[0]}" "dimina-devtools-${VER}-mac-${ARCH}.dmg"
 
       - name: Upload built client (dev)
         if: inputs.channel == 'dev'
         uses: actions/upload-artifact@v7
         with:
-          name: dimina-devtools-${{ matrix.platform }}
+          name: dimina-devtools-${{ matrix.platform }}-${{ matrix.arch }}
           path: |
             packages/devtools/release/linux-unpacked
             packages/devtools/release/win-unpacked
@@ -279,7 +291,7 @@ jobs:
         if: inputs.channel == 'release'
         uses: actions/upload-artifact@v7
         with:
-          name: dimina-devtools-${{ matrix.platform }}
+          name: dimina-devtools-${{ matrix.platform }}-${{ matrix.arch }}
           path: |
             packages/devtools/release/dimina-devtools-*.tar.gz
             packages/devtools/release/dimina-devtools-*.zip
