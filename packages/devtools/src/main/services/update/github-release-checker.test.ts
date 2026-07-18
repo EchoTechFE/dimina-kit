@@ -74,14 +74,29 @@ beforeEach(async () => {
   ;({ createGitHubReleaseChecker } = await import('./github-release-checker.js'))
 })
 
-function releaseJson(assetName: string): string {
+// defaultPickAsset filters release assets by the CURRENT process.platform/arch
+// (correct production behavior — pick the asset matching the user's OS). A
+// real release.yml run always ships all platform assets together in one
+// release; a fixture with only a mac .dmg would find no match at all when
+// this suite runs on a linux CI runner (process.platform === 'linux'), and
+// checkForUpdates would fall through its unrelated `if (!asset) return null`
+// regardless of whether the version comparison was correct — exactly the gap
+// that let 3 of these tests pass locally on macOS and fail on CI. Ship one
+// asset per platform/arch so whichever OS runs this suite finds a match.
+function releaseJson(version: string): string {
+  const names = [
+    `dimina-devtools-${version}-mac-arm64.dmg`,
+    `dimina-devtools-${version}-mac-x64.dmg`,
+    `dimina-devtools-${version}-win-x64.zip`,
+    `dimina-devtools-${version}-linux-x64.tar.gz`,
+  ]
   return JSON.stringify({
     tag_name: 'release-20260706-5', // matches release.yml's real tag shape — no semver in it
     name: '',
     body: 'notes',
     prerelease: false,
     draft: false,
-    assets: [{ name: assetName, browser_download_url: `https://example.test/${assetName}`, size: 100 }],
+    assets: names.map((name) => ({ name, browser_download_url: `https://example.test/${name}`, size: 100 })),
   })
 }
 
@@ -100,7 +115,7 @@ describe('createGitHubReleaseChecker: default (semver) scheme against real relea
     // fallback — see entry-update-checker-wiring.test.ts.
     const infoPromise = checker().checkForUpdates('0.4.0')
     const { res } = harness.captured[0]!
-    res.emit('data', releaseJson('dimina-devtools-0.5.0-mac-arm64.dmg'))
+    res.emit('data', releaseJson('0.5.0'))
     res.emit('end')
 
     await expect(infoPromise).resolves.toMatchObject({ version: '0.5.0-mac-arm64.dmg' })
@@ -113,7 +128,7 @@ describe('createGitHubReleaseChecker: default (semver) scheme against real relea
     // it still correctly sorts as "not newer" than the current "0.4.0".
     const infoPromise = checker().checkForUpdates('0.4.0')
     const { res } = harness.captured[0]!
-    res.emit('data', releaseJson('dimina-devtools-0.4.0-mac-arm64.dmg'))
+    res.emit('data', releaseJson('0.4.0'))
     res.emit('end')
 
     await expect(infoPromise).resolves.toBeNull()
@@ -138,7 +153,7 @@ describe('createGitHubReleaseChecker: default (semver) scheme against real relea
     })
     const infoPromise = customChecker.checkForUpdates('0.4.0')
     const { res } = harness.captured[0]!
-    res.emit('data', releaseJson('dimina-devtools-0.5.0-mac-arm64.dmg'))
+    res.emit('data', releaseJson('0.5.0'))
     res.emit('end')
 
     await expect(infoPromise).resolves.toMatchObject({ version: '0.5.0' })
@@ -157,7 +172,7 @@ describe('createGitHubReleaseChecker: default (semver) scheme against real relea
     })
     const infoPromise = trailingChecker.checkForUpdates('0.4.0')
     const { res } = harness.captured[0]!
-    res.emit('data', releaseJson('dimina-devtools-0.4.0-mac-arm64.dmg'))
+    res.emit('data', releaseJson('0.4.0'))
     res.emit('end')
 
     await expect(infoPromise).resolves.toMatchObject({ version: '5' })
