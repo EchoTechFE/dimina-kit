@@ -58,6 +58,23 @@ jobs:
       - name: Install workspace deps
         run: pnpm install --frozen-lockfile --ignore-scripts
 
+      # dimina/fe is its own pnpm workspace (outside the root pnpm-workspace.yaml,
+      # and it doesn't commit a lockfile — fe/.gitignore excludes pnpm-lock.yaml),
+      # so its dependencies aren't installed by the step above and there is no
+      # lockfile to freeze against. The wasm-alignment check below resolves the
+      # toolchain from this install to detect drift against upstream.
+      - name: Install dimina/fe workspace deps
+        run: pnpm -C dimina/fe install --no-frozen-lockfile --ignore-scripts
+
+      # Deliberately NOT run through `turbo run lint`: dimina/fe has no committed
+      # lockfile, so the upstream toolchain version this check resolves can drift
+      # purely from time passing (a new oxc-parser/esbuild patch landing upstream)
+      # with none of packages/compiler's own tracked files changing. Turbo's task
+      # cache is keyed off exactly those tracked files, so a cached run would
+      # silently replay a stale pass and hide the drift this check exists to catch.
+      - name: Check wasm toolchain alignment with upstream
+        run: pnpm --filter @dimina-kit/compiler run check:wasm-alignment
+
       - name: Lint and type-check
         run: pnpm turbo run lint check-types --cache-dir=.turbo
 

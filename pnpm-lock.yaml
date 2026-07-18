@@ -47,8 +47,8 @@ importers:
         specifier: ^0.139.0
         version: 0.139.0
       '@vue/compiler-sfc':
-        specifier: ^3.5.39
-        version: 3.5.39
+        specifier: ^3.5.40
+        version: 3.5.40
       assert:
         specifier: ^2.1.0
         version: 2.1.0
@@ -2607,20 +2607,20 @@ packages:
   '@vscode/l10n@0.0.18':
     resolution: {integrity: sha512-KYSIHVmslkaCDyw013pphY+d7x1qV8IZupYfeIfzNA+nsaWHbn5uPuQRvdRFsa9zFzGeudPuoGoZ1Op4jrJXIQ==}
 
-  '@vue/compiler-core@3.5.39':
-    resolution: {integrity: sha512-16KBTEXAJCpDr0mwlw+AZyhu8iyC7R3S2vBwsI7QnWJU6X3WKc9VKeNEZpiMdZ569qWhz9574L3vV55qRL0Vtw==}
+  '@vue/compiler-core@3.5.40':
+    resolution: {integrity: sha512-39E8IgOhTbVDnoJFMKc2DvYnypcZwUqgUhQkccva/0m6FUwtIKSGV7n1hpVmYcFaoRAwf9pBcwnKlCEsN63ZEQ==}
 
-  '@vue/compiler-dom@3.5.39':
-    resolution: {integrity: sha512-oQPigALqYbNxTNPvNgSOe+czwVExfbVF02lz8jP0S3AXJiu3jxYDygNUiqSep4ezzW8XgnubqH63My2A7JR/vg==}
+  '@vue/compiler-dom@3.5.40':
+    resolution: {integrity: sha512-pwkx4vqlqOspFstrcmzwkKLePVMD3PT65imRzLhanU2V1Fj4K13g6OXjanOyzw3aTAuRk84BOmY8f3rEHqPaVA==}
 
-  '@vue/compiler-sfc@3.5.39':
-    resolution: {integrity: sha512-d0ki86iOyN8LoZPBmk5SJWNwHP19CnDDCfuo//+2WJa2g5Ke0Jay983PIBIcSSzldC68I8DrD5GrHV3OSDfodg==}
+  '@vue/compiler-sfc@3.5.40':
+    resolution: {integrity: sha512-gIf497P4kpuALcvs5n3AEg1Vdn0pSY4XbjASIfHNYF1/MP3T2Mf2STERTubysBxCRxzJGJYtF/O7vwJrxFB3Vw==}
 
-  '@vue/compiler-ssr@3.5.39':
-    resolution: {integrity: sha512-Ce7/wvwMHai74bdszfXExdazFigYnlF9zgCmEQUcM1j0fOymlouZ7XilTYNo8oUjhlnjYOZbGrcYKuqjz89Ucw==}
+  '@vue/compiler-ssr@3.5.40':
+    resolution: {integrity: sha512-rrE5xiXG663+vHCHa3J9p2z5OcBRjXmoqenprJxAFQxg5pSshzeBiCE6pu46axapRJ2Adk0YDA2BRZVjiHXnhg==}
 
-  '@vue/shared@3.5.39':
-    resolution: {integrity: sha512-l1rrBtBfTnmxvtsvdQDXltUUy8S1Y+ZaqdfUzmAnJkTd8Z8rv5v/ytW+TKiqEOWyHPoqtPlNFSs0lhRmYVSHVA==}
+  '@vue/shared@3.5.40':
+    resolution: {integrity: sha512-WxnBtruIqOoV3rA4jeKDWzrYI5h7Cp4+pjwDi8kWGHz+IslhiN+wguLVVhtv2l8VoU02rzDCVfDjgCl1lNpZVg==}
 
   '@xmldom/xmldom@0.8.13':
     resolution: {integrity: sha512-KRYzxepc14G/CEpEGc3Yn+JKaAeT63smlDr+vjB8jRfgTBBI9wRj/nkQEO+ucV8p8I9bfKLWp37uHgFrbntPvw==}
@@ -3740,8 +3740,8 @@ packages:
     resolution: {integrity: sha512-CTXd6rk/M3/ULNQj8FBqBWHYBVYybQ3VPBw0xGKFe3tuH7ytT6ACnvzpIQ3UZtB8yvUKC2cXn1a+x+5EVQLovA==}
     engines: {node: '>=14.14'}
 
-  fs-extra@11.3.5:
-    resolution: {integrity: sha512-eKpRKAovdpZtR1WopLHxlBWvAgPny3c4gX1G5Jhwmmw4XJj0ifSD5qB5TOo8hmA0wlRKDAOAhEE1yVPgs6Fgcg==}
+  fs-extra@11.3.6:
+    resolution: {integrity: sha512-w8ZNZr2mKIc7qeNaQ9AVPT1+iFaI+Avd4xudVOvdDJ8VytREi1Ft5Ih7hd9jjehod8vAM5GMsfQ/TpPf4EyoEA==}
     engines: {node: '>=14.14'}
 
   fs-extra@7.0.1:
@@ -6699,7 +6699,7 @@ snapshots:
     dependencies:
       cross-dirname: 0.1.0
       debug: 4.4.3
-      fs-extra: 11.3.5
+      fs-extra: 11.3.6
       minimist: 1.2.8
       postject: 1.0.0-alpha.6
     transitivePeerDependencies:
@@ -8326,37 +8326,37 @@ snapshots:
 
   '@vscode/l10n@0.0.18': {}
 
-  '@vue/compiler-core@3.5.39':
+  '@vue/compiler-core@3.5.40':
     dependencies:
       '@babel/parser': 7.29.7
-      '@vue/shared': 3.5.39
+      '@vue/shared': 3.5.40
       entities: 7.0.1
       estree-walker: 2.0.2
       source-map-js: 1.2.1
 
-  '@vue/compiler-dom@3.5.39':
+  '@vue/compiler-dom@3.5.40':
     dependencies:
-      '@vue/compiler-core': 3.5.39
-      '@vue/shared': 3.5.39
+      '@vue/compiler-core': 3.5.40
+      '@vue/shared': 3.5.40
 
-  '@vue/compiler-sfc@3.5.39':
+  '@vue/compiler-sfc@3.5.40':
     dependencies:
       '@babel/parser': 7.29.7
-      '@vue/compiler-core': 3.5.39
-      '@vue/compiler-dom': 3.5.39
-      '@vue/compiler-ssr': 3.5.39
-      '@vue/shared': 3.5.39
+      '@vue/compiler-core': 3.5.40
+      '@vue/compiler-dom': 3.5.40
+      '@vue/compiler-ssr': 3.5.40
+      '@vue/shared': 3.5.40
       estree-walker: 2.0.2
       magic-string: 0.30.21
       postcss: 8.5.19
       source-map-js: 1.2.1
 
-  '@vue/compiler-ssr@3.5.39':
+  '@vue/compiler-ssr@3.5.40':
     dependencies:
-      '@vue/compiler-dom': 3.5.39
-      '@vue/shared': 3.5.39
+      '@vue/compiler-dom': 3.5.40
+      '@vue/shared': 3.5.40
 
-  '@vue/shared@3.5.39': {}
+  '@vue/shared@3.5.40': {}
 
   '@xmldom/xmldom@0.8.13': {}
 
@@ -9832,7 +9832,7 @@ snapshots:
       jsonfile: 6.2.0
       universalify: 2.0.1
 
-  fs-extra@11.3.5:
+  fs-extra@11.3.6:
     dependencies:
       graceful-fs: 4.2.11
       jsonfile: 6.2.1
