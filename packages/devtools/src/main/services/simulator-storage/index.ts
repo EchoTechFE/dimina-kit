@@ -2,16 +2,22 @@
  * SimulatorStorageWatcher
  *
  * Attaches the Chrome DevTools Protocol debugger to the simulator <webview>
- * and forwards `DOMStorage.*` events to the renderer host.
+ * and forwards `DOMStorage.*` events to the renderer host. The SAME simulator
+ * wc's debugger session is independently captured by network-forward
+ * (Network.* events); both acquire a lease from the shared `CdpSessionBroker`
+ * (see cdp-session/index.ts) rather than each attaching/detaching directly —
+ * releasing our own lease never forces a physical detach that would kill the
+ * other's capture.
  *
  * Trade-offs vs a preload-side localStorage.setItem hook:
  *   + Uses standard browser protocol; no preload injection
  *   + Captures every change including ones bypassing wx (api-compat fallback,
  *     direct localStorage.setItem from devtools, etc.)
  *   + Decouples panel UI from dimina runtime's wx implementation
- *   - debugger.attach is mutually exclusive with Chrome DevTools (F12).
- *     If a user opens DevTools on the simulator the debugger detaches and
- *     events stop flowing until they close it.
+ *   - debugger.attach is mutually exclusive with a REAL Chrome DevTools window
+ *     (F12) attaching to the same target from outside the broker. If a user
+ *     opens one, the shared session detaches externally and events stop
+ *     flowing until they close it.
  */
 
 import { app, webContents as wcStatic, type WebContents } from 'electron'
@@ -28,6 +34,7 @@ import { IpcRegistry, type SenderPolicy } from '../../utils/ipc-registry.js'
 import type { BridgeRouterHandle } from '../../ipc/bridge-router.js'
 import type { RenderInspector } from '../render-inspect/index.js'
 import { decodeStorageValue, encodeStorageValue, serviceStorage } from './service-storage-ops.js'
+import { createCdpSessionBroker, type CdpSessionBroker, type CdpSessionLease } from '../cdp-session/index.js'
 
 /**
  * Runtime async-storage handler (native-host). bridge-router routes async
@@ -112,6 +119,17 @@ export interface SimulatorStorageOptions {
    * not adopted the connection layer compile and behave unchanged.
    */
   connections?: ConnectionRegistry
+  /**
+   * Shared CDP session broker (see cdp-session/index.ts) that owns the
+   * simulator wc's debugger session lifecycle — network-forward independently
+   * captures Network.* events on the SAME simulator wc, and an unconditional
+   * `debugger.detach()` here (the pre-migration behavior) would kill ITS
+   * capture too, exactly as an unconditional detach on its side would kill
+   * ours. Absent → a private broker is created and owned for this module's
+   * lifetime (torn down on `dispose()`), so existing standalone callers/tests
+   * compile and behave unchanged, just without cross-module session sharing.
+   */
+  broker?: CdpSessionBroker
 }
 
 export function setupSimulatorStorage(
@@ -129,8 +147,12 @@ export function setupSimulatorStorage(
     if (!options.bridge?.isNativeHost()) return null
     return options.bridge.getServiceWc(getActiveAppId() ?? undefined)
   }
+  // Own (and dispose on this module's own dispose()) a private broker only
+  // when the caller didn't supply a shared one.
+  const ownsBroker = !options.broker
+  const broker = options.broker ?? createCdpSessionBroker({ connections: options.connections })
   let attachedWc: WebContents | null = null
-  let attachDisposables: DisposableRegistry | null = null
+  let attachedLease: CdpSessionLease | null = null
   /**
    * Cached origin discovered via `executeJavaScript('location.origin')` on
    * first use. The simulator <webview> loads `simulator.html` from a stable
@@ -145,79 +167,49 @@ export function setupSimulatorStorage(
     return appId ? `${appId}_` : null
   }
 
+  /**
+   * Release OUR OWN lease on the simulator wc's shared session — never a
+   * physical `debugger.detach()`. The SAME wc is independently captured by
+   * network-forward (Network.* events); an unconditional detach here would
+   * kill its capture too. The broker (cdp-session/index.ts) alone decides
+   * when an actual detach happens.
+   */
   function detachFromSim(): void {
     if (!attachedWc) return
-    const wc = attachedWc
     attachedWc = null
     cachedOrigin = null
-    const ad = attachDisposables
-    attachDisposables = null
-    if (ad) void ad.disposeAll().catch(() => {})
-    try {
-      if (!wc.isDestroyed() && wc.debugger.isAttached()) {
-        wc.debugger.detach()
-      }
-    } catch {
-      // best-effort
-    }
+    const lease = attachedLease
+    attachedLease = null
+    lease?.dispose()
   }
 
   async function attachToSim(wc: WebContents): Promise<void> {
     if (attachedWc === wc) return
     if (wc.isDestroyed()) return
     detachFromSim()
+
+    const lease = broker.acquire(wc)
+    if (!lease) {
+      console.warn('[storage-watcher] attach failed: debugger session unavailable')
+      return
+    }
     try {
-      if (!wc.debugger.isAttached()) {
-        wc.debugger.attach('1.3')
-      }
-      await wc.debugger.sendCommand('DOMStorage.enable')
-
-      const attach = new DisposableRegistry()
-      attachDisposables = attach
-
-      const onMessage = (_event: Electron.Event, method: string, params: unknown) =>
-        forwardCdpMessage(method, params)
-      wc.debugger.on('message', onMessage)
-      attach.add(() => safeOff(wc.debugger as unknown as Parameters<typeof safeOff>[0], 'message', onMessage as (...args: unknown[]) => void))
-
-      const onDetach = () => {
-        if (attachedWc === wc) attachedWc = null
-      }
-      wc.debugger.on('detach', onDetach)
-      attach.add(() => safeOff(wc.debugger as unknown as Parameters<typeof safeOff>[0], 'detach', onDetach as (...args: unknown[]) => void))
-
-      const onDestroyed = () => {
-        // When the attached wc is destroyed, the lingering attachDisposables
-        // hold listener refs to a wc that will never emit again. Dispose the
-        // registry here so debugger/wc listeners are removed deterministically
-        // and a subsequent attachToSim() starts from a clean slate.
-        if (attachedWc === wc) {
-          attachedWc = null
-          const ad = attachDisposables
-          attachDisposables = null
-          if (ad) void ad.disposeAll().catch(() => {})
-        }
-      }
-      if (options.connections) {
-        // Route through the connection layer: own() disposes onDestroyed
-        // deterministically on wc destroy / connection reset, and the returned
-        // Disposable lets us release it early when this attach segment tears
-        // down (detach / re-attach).
-        const owned = options.connections.acquire(wc).own(onDestroyed)
-        attach.add(() => owned.dispose())
-      } else {
-        try {
-          wc.once('destroyed', onDestroyed)
-        } catch {
-          // fake-wc safety (unit tests pass a wc without a real emitter)
-        }
-        attach.add(() => safeOff(wc as unknown as Parameters<typeof safeOff>[0], 'destroyed', onDestroyed as (...args: unknown[]) => void))
-      }
-
-      attachedWc = wc
+      await lease.send('DOMStorage.enable')
     } catch (e) {
       console.warn('[storage-watcher] attach failed:', (e as Error).message)
+      lease.dispose()
+      return
     }
+
+    lease.onMessage((method, params) => forwardCdpMessage(method, params))
+    // Fires on external detach OR the wc being destroyed (see cdp-session's
+    // design doc) — either way our tracking of this wc as "attached" is stale.
+    lease.onDetach(() => {
+      if (attachedWc === wc) { attachedWc = null; attachedLease = null }
+    })
+
+    attachedWc = wc
+    attachedLease = lease
   }
 
   function forwardCdpMessage(method: string, params: unknown): void {
@@ -592,6 +584,11 @@ export function setupSimulatorStorage(
 
   // Detach active CDP session last
   registry.add(() => detachFromSim())
+  // Only detach sessions we self-attached if we own the broker's lifecycle —
+  // a shared/injected broker keeps serving other consumers past our dispose().
+  registry.add(() => {
+    if (ownsBroker) broker.dispose()
+  })
 
   // ── Runtime async-storage unification (native-host) ───────────────────────
   // bridge-router routes async wx.setStorage/etc. here so they hit the SAME

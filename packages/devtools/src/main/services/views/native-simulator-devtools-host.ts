@@ -399,7 +399,18 @@ export function createDevtoolsHost(
       // instance (its reconcile loop never gets to install the hook, so Elements
       // falls back to the natively-inspected service host). Stop only this wc's own
       // forward, and clear the module pointer only while it still points here.
-      const thisForward = installElementsForward({ devtoolsWc, bridge: ctx.bridge, connections: ctx.connections })
+      const thisForward = installElementsForward({
+        devtoolsWc,
+        bridge: ctx.bridge,
+        connections: ctx.connections,
+        // Shared session broker (see cdp-session/index.ts) — undefined falls
+        // back to a private instance owned by this call.
+        broker: ctx.cdpSessionBroker,
+        // Body/post-data lookups for the virtual requestIds the network
+        // forwarder injects — answered from its prefetch cache when the
+        // front-end's Response tab round-trips Network.getResponseBody.
+        network: ctx.networkForward?.bodies,
+      })
       stopElementsForward = thisForward
       devtoolsWc.once('destroyed', () => {
         try { thisForward() } catch { /* already stopped */ }

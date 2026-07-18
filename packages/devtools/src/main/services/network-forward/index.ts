@@ -49,23 +49,64 @@
  *  ✅ Forwarded to the native Network tab: requestWillBeSent, responseReceived,
  *     loadingFinished, loadingFailed (+ requestWillBeSentExtraInfo /
  *     responseReceivedExtraInfo when present, for accurate headers/status).
- *  ⏳ TODO (二期): `dataReceived` per-chunk forwarding (skipped to avoid an
- *     executeJavaScript per chunk), and response body / preview (needs hooking
- *     `InspectorFrontendHost.sendMessageToBackend` + a prefetched body cache so
- *     the front-end's `Network.getResponseBody` round-trip resolves).
- *  ⚠️ NOT captured here: requests issued from inside a render-host `<webview>`
- *     guest (page-level resource loads / page `fetch`). The safe-area service
- *     already owns each guest's `wc.debugger`, and `debugger.attach` is
- *     single-owner — bringing those in needs a shared CDP broker. `source:'render'`
- *     is reserved for when that's added (later).
+ *  ✅ Response body / preview and request post data: prefetched from the
+ *     simulator's CDP session at loadingFinished into a bounded cache keyed by
+ *     the VIRTUAL id (`bodies`, see NetworkBodyProvider). The front-end's
+ *     `Network.getResponseBody` / `Network.getRequestPostData` round-trips for
+ *     `dimina:sim:` ids are intercepted by the outbound CDP gate that
+ *     elements-forward installs on `InspectorFrontendHost.sendMessageToBackend`
+ *     and answered from that cache — the service-host backend the front-end
+ *     natively talks to has never heard of these ids.
+ *  ⏳ TODO: `dataReceived` per-chunk forwarding (skipped to avoid an
+ *     executeJavaScript per chunk).
+ *  ✅ Requests issued from inside a render-host `<webview>` guest (page-level
+ *     resource loads / page `fetch`, tagged `source: 'render'`) — `attachRenderGuest`
+ *     acquires a lease from the shared `CdpSessionBroker` (cdp-session/index.ts),
+ *     which is single owner of every render-guest `wc.debugger` session across
+ *     this forwarder, safe-area, elements-forward and render-inspect. An
+ *     external detach (another owner releasing the shared session, or a real
+ *     Chrome DevTools window) self-heals via the lease's `onDetach` — capture
+ *     re-wires itself even though `attachRenderGuest` is only ever called ONCE
+ *     per guest (at webview creation).
  *  ⚠️ NOT observable by any `webContents.debugger`: a request a host module issues
  *     directly from the MAIN process. Those need an explicit `report()` call
  *     (exposed below; it uses the console fallback path).
  */
 import type { WebContents } from 'electron'
-import { DisposableRegistry, toDisposable, type ConnectionRegistry, type Disposable } from '@dimina-kit/electron-deck/main'
+import { SyncDisposableRegistry, toDisposable, type ConnectionRegistry, type Disposable } from '@dimina-kit/electron-deck/main'
 import { isFrontendSettled } from '../views/inject-when-ready.js'
 import { packDispatchBatch } from './dispatch-batch.js'
+import { PrefetchCache, DEFAULT_PER_ENTRY_MAX_CHARS } from './body-cache.js'
+import { PROBE_DEVTOOLS_API, MAX_SINGLE_DISPATCH_CHARS, CHUNK_CHARS, buildChunkedDispatchScript } from './frontend-dispatch.js'
+import { createCdpSessionBroker, type CdpSessionBroker, type CdpSessionLease } from '../cdp-session/index.js'
+
+/**
+ * Namespace prefix of every virtual requestId this forwarder injects into the
+ * DevTools front-end. SINGLE SOURCE for the literal: the front-end outbound
+ * gate (elements-forward) keys its `Network.getResponseBody` /
+ * `Network.getRequestPostData` interception on this exact prefix, so the two
+ * modules can never drift apart on what counts as "one of ours".
+ */
+export const VIRTUAL_REQUEST_ID_PREFIX = 'dimina:sim:'
+
+/** CDP `Network.getResponseBody` result shape (served from the prefetch cache). */
+export interface CdpResponseBody {
+  body: string
+  base64Encoded: boolean
+}
+
+/**
+ * Answers the front-end's body/post-data lookups for virtual requestIds. The
+ * outbound CDP gate (elements-forward) consumes this: it intercepts the
+ * front-end's `Network.getResponseBody` / `Network.getRequestPostData` for
+ * `dimina:sim:` ids (the service-host backend has never heard of them) and
+ * replies from here instead. Rejections carry the same not-found message a
+ * real CDP backend produces for an unknown requestId.
+ */
+export interface NetworkBodyProvider {
+  getResponseBody(requestId: string): Promise<CdpResponseBody>
+  getRequestPostData(requestId: string): Promise<{ postData: string }>
+}
 
 /** Which layer a captured request came from (tags the fallback log line). */
 export type NetworkSource = 'service' | 'render'
@@ -103,6 +144,18 @@ export interface NetworkForwarderBridge {
    * `once('destroyed')` fallback is used, so existing callers compile unchanged.
    */
   connections?: ConnectionRegistry
+  /**
+   * Shared CDP session broker (see cdp-session/index.ts) that owns every
+   * render-guest AND simulator debugger session's attach/detach lifecycle —
+   * safe-area, elements-forward, render-inspect and simulator-storage acquire
+   * leases from the same instance. Absent → a private broker is created and
+   * owned for this forwarder's lifetime (torn down on `dispose()`), so
+   * existing standalone callers/tests compile and behave unchanged, just
+   * without cross-module session sharing. Both `attachRenderGuest` and
+   * `attachSimulator` go through it — see detachSimulator's docstring for why
+   * the simulator path never forces a physical detach either.
+   */
+  broker?: CdpSessionBroker
 }
 
 export interface NetworkForwarder extends Disposable {
@@ -116,6 +169,20 @@ export interface NetworkForwarder extends Disposable {
   /** Detach from the current simulator WCV (without disposing the forwarder). */
   detachSimulator(): void
   /**
+   * Wire a render-host guest wc (pageFrame) for Network capture — page-level
+   * resource loads (images/fonts/page fetch) that never touch the simulator's
+   * network stack. Idempotent per wc. Acquires a lease from the shared
+   * `CdpSessionBroker` (cdp-session/index.ts) — reuses an already-attached
+   * session (safe-area / elements-forward / render-inspect may have attached
+   * first) or self-attaches when no one has; the broker alone decides who may
+   * detach. Self-heals after an external detach (the lease's `onDetach`
+   * re-wires automatically) even though this is only ever called ONCE per
+   * guest, at webview creation. Events share the simulator capture's
+   * virtual-id namespace prefix (distinct epochs keep them collision-free) and
+   * the same body prefetch cache.
+   */
+  attachRenderGuest(wc: WebContents): void
+  /**
    * Point the forwarder at the WebContents hosting the DevTools FRONT-END (the
    * primary, native-Network-tab sink). Pass null when that view is torn down so
    * we fall back to the console line. Re-callable across DevTools re-creates.
@@ -126,6 +193,13 @@ export interface NetworkForwarder extends Disposable {
    * (e.g. a main-process direct send). Uses the console fallback sink.
    */
   report(record: NetworkRequestRecord): void
+  /**
+   * Body/post-data lookups for the virtual requestIds this forwarder injected,
+   * backed by the loadingFinished-time prefetch cache. Keyed by virtual id, so
+   * entries stay valid across detach/re-attach (each attach epoch mints
+   * non-colliding ids); dispose() drops them all.
+   */
+  readonly bodies: NetworkBodyProvider
 }
 
 // ── requestId namespacing (pure, testable) ──────────────────────────────────
@@ -214,7 +288,7 @@ export class RequestIdNamespace {
       this.map.set(rawId, existing)
       return existing.virtual
     }
-    const virtual = `dimina:sim:${this.epoch}:${this.seq++}:${rawId}`
+    const virtual = `${VIRTUAL_REQUEST_ID_PREFIX}${this.epoch}:${this.seq++}:${rawId}`
     this.map.set(rawId, { virtual, expires: t + this.ttlMs, active: true })
     this.evict(t)
     return virtual
@@ -281,10 +355,6 @@ export function rewriteRequestId(
 
 // ── DevTools front-end injection (the primary sink) ─────────────────────────
 
-/** Probe the front-end realm exposes `DevToolsAPI.dispatchMessage`. */
-const PROBE_DEVTOOLS_API
-  = `(window.DevToolsAPI && typeof window.DevToolsAPI.dispatchMessage === 'function')`
-
 /**
  * Build the `executeJavaScript` source that dispatches a BATCH of raw CDP
  * messages into the DevTools front-end. Each message is carried as a JSON
@@ -301,39 +371,6 @@ function buildDispatchScript(messages: string[]): string {
     + `return true;`
     + `}catch(_){return false}})()`
 }
-
-/**
- * Build the `executeJavaScript` source for a chunked dispatch of one large CDP
- * message — DevTools' own transport caps a single `dispatchMessage` payload, so
- * the front-end exposes `dispatchMessageChunk(messageChunk, messageSize)` where
- * the FIRST chunk carries the total size and EVERY SUBSEQUENT chunk is called
- * with the chunk ONLY (second arg omitted). This matches Chromium's
- * `devtools_ui_bindings.cc` DispatchProtocolMessage, whose front-end treats a
- * call with a second argument as the start of a new message and a call without
- * one as a continuation. Passing 0 (the previous behaviour) risked the
- * front-end mis-reading a continuation as a fresh 0-size message. Returns false
- * when the API isn't available.
- */
-function buildChunkedDispatchScript(chunks: string[], totalSize: number): string {
-  const arr = JSON.stringify(chunks)
-  return `(()=>{try{`
-    + `if(!(window.DevToolsAPI&&typeof window.DevToolsAPI.dispatchMessageChunk==='function'))return false;`
-    + `const cs=JSON.parse(${JSON.stringify(arr)});`
-    + `for(let i=0;i<cs.length;i++){`
-    + `try{`
-    // First chunk: (chunk, totalSize). Subsequent chunks: (chunk) — second arg
-    // omitted, NOT 0, per Chromium's continuation contract.
-    + `if(i===0){window.DevToolsAPI.dispatchMessageChunk(cs[i], ${totalSize})}`
-    + `else{window.DevToolsAPI.dispatchMessageChunk(cs[i])}`
-    + `}catch(_){}`
-    + `}`
-    + `return true;`
-    + `}catch(_){return false}})()`
-}
-
-/** A single dispatch payload may not exceed this many UTF-16 chars; chunk above. */
-const MAX_SINGLE_DISPATCH_CHARS = 1_000_000
-const CHUNK_CHARS = 256 * 1024
 
 /**
  * Upper bound on the COMBINED size (in UTF-16 chars) of the messages packed into
@@ -362,10 +399,10 @@ function buildForwardScript(record: NetworkRequestRecord): string {
     + `}catch(_){}})()`
 }
 
-/** CDP `Network.requestWillBeSent` params slice the fallback reads. */
+/** CDP `Network.requestWillBeSent` params slice the fallback + prefetch read. */
 interface RequestWillBeSent {
   requestId: string
-  request: { url: string; method: string }
+  request: { url: string; method: string; hasPostData?: boolean; postData?: string }
 }
 /** CDP `Network.responseReceived` params slice the fallback reads. */
 interface ResponseReceived {
@@ -419,12 +456,90 @@ const READY_RETRY_MS = 100
 type SinkState = 'idle' | 'probing' | 'ready' | 'degraded'
 
 export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkForwarder {
-  const registry = new DisposableRegistry()
+  const registry = new SyncDisposableRegistry()
+  let disposed = false
 
-  // The simulator WCV we currently have a debugger session on, and the
-  // per-attach teardown (debugger listeners + detach). Null when not attached.
+  // ── Response body / post-data prefetch (serves the front-end's clicks) ─────
+  // Keyed by VIRTUAL requestId and owned by the forwarder (not the attach):
+  // epochs make ids non-colliding, so entries stay servable across a simulator
+  // detach/re-attach while the panel still shows the old rows. Bounded + TTL'd
+  // in the cache itself.
+  const bodyCache = new PrefetchCache<CdpResponseBody>((v) => v.body.length)
+  const postDataCache = new PrefetchCache<{ postData: string }>((v) => v.postData.length)
+
+  // ── Prefetch admission control ──────────────────────────────────────────────
+  // Every completed request (simulator + all render guests combined — this
+  // counter is forwarder-wide, not per-attach) would otherwise trigger an
+  // unconditional `Network.getResponseBody` CDP round-trip that must
+  // materialize the FULL body into main-process memory before the cache's own
+  // per-entry/total-size limits can reject it (those limits apply only to
+  // SETTLED entries — a pending fetch counts 0 and is eviction-exempt). A page
+  // that finishes many large resources at once (e.g. many concurrent images —
+  // exactly the render-guest capture path) could otherwise pile up unboundedly
+  // many simultaneous full-body reads. This caps how many prefetches (body +
+  // post-data combined) may be in flight at once; once at the cap, further
+  // completions are simply skipped — the panel's Response tab 404s for those
+  // (same as any other not-found id) rather than the process risking a memory
+  // spike. `primeWithAdmission`'s bookkeeping only counts a slot when the cache
+  // actually started a new fetch (PrefetchCache.prime()'s idempotent no-op
+  // return doesn't consume one).
+  const MAX_CONCURRENT_PREFETCHES = 32
+  let pendingPrefetchCount = 0
+  /**
+   * `fetch` MUST be an `async` function (both current call sites in
+   * `prefetchBodies` are). An `async` function can never throw synchronously —
+   * any exception in its body is spec-guaranteed to surface as a rejected
+   * promise instead — which is what guarantees `release()` always eventually
+   * runs via the `.then()` below. A plain (non-async) function that throws
+   * synchronously when CALLED would bypass `.then()` entirely and leak this
+   * slot forever (`PrefetchCache.prime` catches that synchronous throw and
+   * still reports `started: true`), so never pass one here.
+   */
+  function primeWithAdmission<V>(cache: PrefetchCache<V>, id: string, fetch: () => Promise<V>): void {
+    if (pendingPrefetchCount >= MAX_CONCURRENT_PREFETCHES) return
+    pendingPrefetchCount++
+    let released = false
+    const release = (): void => { if (!released) { released = true; pendingPrefetchCount-- } }
+    const started = cache.prime(id, () => fetch().then(
+      (v) => { release(); return v },
+      (err) => { release(); throw err },
+    ))
+    if (!started) release()
+  }
+
+  // The simulator WCV we currently have a debugger session on, our broker
+  // lease for it, and the per-attach teardown (message listener). Null when
+  // not attached.
   let simWc: WebContents | null = null
-  let attachDisposables: DisposableRegistry | null = null
+  let simLease: CdpSessionLease | null = null
+  let attachDisposables: SyncDisposableRegistry | null = null
+
+  // Render-host guests wired for capture: wc.id → SYNCHRONOUS per-guest
+  // teardown (message listener + broker lease). Attach/detach ownership for
+  // these sessions lives entirely in the shared broker now (see cdp-session/
+  // index.ts) — this map only tracks OUR OWN wiring (the 'message' listener
+  // wireNetworkCapture installs), not who may detach the underlying session.
+  const guestWired = new Map<number, SyncDisposableRegistry>()
+  // wc.id → the generation token of the most recently scheduled render-guest
+  // retry (acquire refused, or an established session got detached).
+  // `guestWired` alone cannot de-duplicate repeat `attachRenderGuest` calls
+  // during this window — it is only populated on a SUCCESSFUL acquire — so
+  // without this, calling `attachRenderGuest(wc)` again while the exclusive
+  // holder keeps refusing spawns a second, independent 300ms retry chain.
+  // A bare presence flag is NOT enough: a stale timer from an EARLIER retry
+  // cycle (superseded by an intervening successful reattach, itself followed
+  // by a fresh detach that scheduled its own new retry) would, on firing,
+  // unconditionally clear whatever is recorded — including that newer retry's
+  // own marker — and then reschedule itself, forking back into two parallel
+  // chains. A monotonic generation token lets a fired timer recognize its own
+  // staleness (its captured token no longer matches the current one) and
+  // no-op instead of touching state it no longer owns.
+  const guestRetryGeneration = new Map<number, number>()
+  let nextRenderGuestRetryGeneration = 0
+  // Own (and dispose on this forwarder's own dispose()) a private broker only
+  // when the caller didn't supply a shared one.
+  const ownsBroker = !bridge.broker
+  const broker = bridge.broker ?? createCdpSessionBroker({ connections: bridge.connections })
 
   // The DevTools front-end host wc (primary sink), set by the ViewManager.
   let devtoolsWc: WebContents | null = null
@@ -672,12 +787,25 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
     wc.executeJavaScript(script, true).catch(() => {})
   }
 
+  /**
+   * Stop USING the simulator wc's session. Releases our own lease (message
+   * listener + Network capture wiring) but never forces a physical
+   * `debugger.detach()` — this same simulator wc's debugger session is also
+   * independently used by simulator-storage (DOMStorage capture), and an
+   * unconditional detach here would kill ITS capture too, exactly like an
+   * unconditional detach on ITS side would kill ours. The broker (see
+   * cdp-session/index.ts) is the only thing that decides when an actual
+   * detach happens (wc destroy, or its own top-level dispose() for a
+   * self-attached session) — never a single consumer switching away.
+   */
   function detachSimulator(): void {
-    const wc = simWc
     simWc = null
+    const lease = simLease
+    simLease = null
     const ad = attachDisposables
     attachDisposables = null
-    if (ad) void ad.disposeAll().catch(() => {})
+    if (ad) { try { ad.disposeAll() } catch { /* best-effort teardown */ } }
+    lease?.dispose()
     // Drop any queued-but-unflushed messages so a new attach starts clean, and
     // reset the native-sink state machine (the next attach re-probes the host).
     dispatchQueue = []
@@ -688,37 +816,119 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
     probeDeadline = null
     if (readyRetryTimer) { clearTimeout(readyRetryTimer); readyRetryTimer = null }
     if (readyTimeoutTimer) { clearTimeout(readyTimeoutTimer); readyTimeoutTimer = null }
-    if (!wc || wc.isDestroyed()) return
-    try {
-      if (wc.debugger.isAttached()) wc.debugger.detach()
-    } catch { /* already detached / mid-destroy */ }
   }
 
-  function attachSimulator(wc: WebContents): void {
-    if (!wc || wc.isDestroyed()) return
-    if (simWc === wc && !wc.isDestroyed()) return
-    detachSimulator()
-
-    try {
-      if (!wc.debugger.isAttached()) {
-        wc.debugger.attach('1.3')
-      }
-    } catch (err) {
-      console.warn('[network-forward] debugger.attach failed; simulator network not captured:', err instanceof Error ? err.message : err)
-      return
-    }
-
-    simWc = wc
-    const attach = new DisposableRegistry()
-    attachDisposables = attach
-
-    // Per-attach requestId namespace: a fresh epoch each attach guarantees ids
-    // from a previous simulator session can never collide with this one.
-    const ns = new RequestIdNamespace(String(Date.now()))
+  /**
+   * Wire one wc's already-usable debugger session for Network capture: a fresh
+   * per-attach requestId namespace (epochs keep ids from ever colliding across
+   * sources/attaches), the raw-event forward into the DevTools front-end, the
+   * loadingFinished-time body/post-data prefetch, and the console-fallback
+   * bookkeeping (tagged with `source`). Shared verbatim by the simulator
+   * attach (owner semantics) and every render-guest attach (shared-session
+   * semantics) — the capture pipeline is identical, only session ownership
+   * differs. The 'message' listener teardown is registered on `attach`.
+   */
+  function wireNetworkCapture(wc: WebContents, source: NetworkSource, attach: SyncDisposableRegistry, epoch: string): void {
+    const ns = new RequestIdNamespace(epoch)
 
     // Fallback bookkeeping: requestId → in-flight request, for the console line
     // when the native dispatch path is unusable.
     const pending = new Map<string, Pending>()
+
+    // Raw ids whose requestWillBeSent announced a post body that was NOT
+    // inlined (`hasPostData` without `postData`) — the only case the front-end
+    // round-trips `Network.getRequestPostData`. Consumed at loadingFinished.
+    const postDataWanted = new Set<string>()
+
+    /**
+     * Prefetch the response body (and, when flagged, the post data) from this
+     * wc's CDP session the moment the request finishes — the renderer may
+     * evict the resource soon after, so a click-time fetch would race it.
+     * Gated exactly like event forwarding: with no devtools host to serve
+     * (idle-without-host / degraded) there is no panel to click, so buffering
+     * bodies would only burn memory.
+     */
+    const prefetchBodies = (rawId: string, encodedDataLength?: number): void => {
+      if (sink === 'degraded') return
+      if (sink === 'idle' && !resolveDevtoolsWc()) return
+      const virtualId = ns.resolve(rawId)
+      // Skip the CDP round-trip entirely for a response already known (from
+      // the wire size CDP reports at completion) to exceed the cache's own
+      // per-entry ceiling — no point materializing a full body into main-
+      // process memory just to have the cache reject it after the fact. This
+      // is a best-effort heuristic (encodedDataLength is the ON-THE-WIRE size;
+      // a decompressed body can be larger), not a hard guarantee — the
+      // concurrency cap below is what actually bounds worst-case memory.
+      const knownOversized = typeof encodedDataLength === 'number' && encodedDataLength > DEFAULT_PER_ENTRY_MAX_CHARS
+      if (!knownOversized) {
+        primeWithAdmission(bodyCache, virtualId, async (): Promise<CdpResponseBody> => {
+          const raw: unknown = await wc.debugger.sendCommand('Network.getResponseBody', { requestId: rawId })
+          const r = raw as { body?: unknown, base64Encoded?: unknown } | null | undefined
+          if (!r || typeof r.body !== 'string') throw new Error('response body unavailable')
+          return { body: r.body, base64Encoded: r.base64Encoded === true }
+        })
+      }
+      if (!postDataWanted.delete(rawId)) return
+      primeWithAdmission(postDataCache, virtualId, async (): Promise<{ postData: string }> => {
+        const raw: unknown = await wc.debugger.sendCommand('Network.getRequestPostData', { requestId: rawId })
+        const r = raw as { postData?: unknown } | null | undefined
+        if (!r || typeof r.postData !== 'string') throw new Error('post data unavailable')
+        return { postData: r.postData }
+      })
+    }
+
+    // ── Fallback bookkeeping handlers — one per Network.* method, each kept
+    // simple so `onMessage` itself stays a flat dispatch (not a branchy switch). ──
+
+    function onRequestWillBeSent(params: unknown): void {
+      const p = params as RequestWillBeSent
+      if (!p?.request) return
+      if (pending.size >= MAX_PENDING) pending.clear()
+      pending.set(p.requestId, { url: p.request.url, method: p.request.method, status: 0 })
+      // A body announced but not inlined is the one case the panel will
+      // round-trip `Network.getRequestPostData` — flag it for prefetch.
+      if (p.request.hasPostData === true && typeof p.request.postData !== 'string') {
+        if (postDataWanted.size >= MAX_PENDING) postDataWanted.clear()
+        postDataWanted.add(p.requestId)
+      }
+    }
+
+    function onResponseReceived(params: unknown): void {
+      const p = params as ResponseReceived
+      const req = pending.get(p.requestId)
+      if (req) req.status = p.response?.status ?? 0
+    }
+
+    function onLoadingFinished(params: unknown): void {
+      const p = params as { requestId: string, encodedDataLength?: number }
+      if (typeof p?.requestId === 'string') prefetchBodies(p.requestId, p.encodedDataLength)
+      const req = pending.get(p.requestId)
+      if (!req) return
+      pending.delete(p.requestId)
+      maybeFallback({ source, url: req.url, method: req.method, status: req.status })
+    }
+
+    function onLoadingFailed(params: unknown): void {
+      const p = params as LoadingFailed
+      postDataWanted.delete(p?.requestId)
+      const req = pending.get(p.requestId)
+      if (!req) return
+      pending.delete(p.requestId)
+      maybeFallback({
+        source,
+        url: req.url,
+        method: req.method,
+        status: req.status,
+        errorText: p.canceled ? 'canceled' : (p.errorText || 'failed'),
+      })
+    }
+
+    const FALLBACK_HANDLERS: Readonly<Record<string, (params: unknown) => void>> = {
+      'Network.requestWillBeSent': onRequestWillBeSent,
+      'Network.responseReceived': onResponseReceived,
+      'Network.loadingFinished': onLoadingFinished,
+      'Network.loadingFailed': onLoadingFailed,
+    }
 
     const onMessage = (_event: Electron.Event, method: string, params: unknown): void => {
       // ── Primary sink: forward the raw CDP event into the DevTools front-end ──
@@ -726,88 +936,188 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
         const rewritten = rewriteRequestId(method, params, ns)
         enqueueNative(rewritten.method, rewritten.params)
       } else if (REWRITE_REQUEST_ID_METHODS.has(method)) {
-        // Methods we namespace but don't forward (dataReceived, 二期): still
-        // resolve so the id mapping stays coherent if forwarding is added later.
+        // Methods we namespace but don't forward (dataReceived): still resolve
+        // so the id mapping stays coherent if forwarding is added later.
         rewriteRequestId(method, params, ns)
       }
 
       // ── Fallback bookkeeping (used only when native dispatch is unusable) ──
-      switch (method) {
-        case 'Network.requestWillBeSent': {
-          const p = params as RequestWillBeSent
-          if (!p?.request) return
-          if (pending.size >= MAX_PENDING) pending.clear()
-          pending.set(p.requestId, { url: p.request.url, method: p.request.method, status: 0 })
-          break
-        }
-        case 'Network.responseReceived': {
-          const p = params as ResponseReceived
-          const req = pending.get(p.requestId)
-          if (req) req.status = p.response?.status ?? 0
-          break
-        }
-        case 'Network.loadingFinished': {
-          const p = params as { requestId: string }
-          const req = pending.get(p.requestId)
-          if (!req) return
-          pending.delete(p.requestId)
-          maybeFallback({ source: 'service', url: req.url, method: req.method, status: req.status })
-          break
-        }
-        case 'Network.loadingFailed': {
-          const p = params as LoadingFailed
-          const req = pending.get(p.requestId)
-          if (!req) return
-          pending.delete(p.requestId)
-          maybeFallback({
-            source: 'service',
-            url: req.url,
-            method: req.method,
-            status: req.status,
-            errorText: p.canceled ? 'canceled' : (p.errorText || 'failed'),
-          })
-          break
-        }
-        default:
-          break
-      }
+      FALLBACK_HANDLERS[method]?.(params)
     }
 
     wc.debugger.on('message', onMessage)
     attach.add(() => {
       try { wc.debugger.removeListener('message', onMessage) } catch { /* wc gone */ }
     })
+  }
 
-    const onDetach = (): void => { if (simWc === wc) { simWc = null } }
-    wc.debugger.on('detach', onDetach)
-    attach.add(() => {
-      try { wc.debugger.removeListener('detach', onDetach) } catch { /* wc gone */ }
+  /** Drop one guest's wiring (message listener + broker lease). Attach/detach
+   *  ownership of the underlying session is entirely the broker's concern. */
+  function cleanupGuest(wcId: number): void {
+    const teardown = guestWired.get(wcId)
+    guestWired.delete(wcId)
+    teardown?.disposeAll()
+  }
+
+  /**
+   * A hot-reload respawn replaces the render-host `<webview>` guest with a
+   * fresh one (see simulator-app.tsx's ready-then-swap session commit); the
+   * OLD guest's wc is closed asynchronously as part of the old session's
+   * teardown (bridge-router's `closeSessionPages`), so there is a window
+   * where `wc.isDestroyed()` is still `false` but the debugger session is
+   * already gone (Electron reports `detach` with reason `"target closed"` —
+   * confirmed via instrumentation against a real respawn: every detach in
+   * that run carried this exact reason, one per closing guest, never a
+   * repeated storm on one guest). Retrying the re-attach INLINE on every
+   * `detach` (no delay) raced that async teardown: each re-attach attempt
+   * landed inside the still-closing window and immediately produced another
+   * `detach`, self-sustaining a tight synchronous loop (confirmed by
+   * instrumentation: thousands of attach/detach cycles within a couple
+   * seconds) until the wc finally finished closing — there is no public
+   * Electron event for "this wc's close is about to complete", so the only
+   * available signal to end the loop is `wc.isDestroyed()` itself, which the
+   * retry already checks. This delay does not wait for any timing to
+   * "settle" — it only paces the retry slower than the async close, so the
+   * loop's real termination check (`wc.isDestroyed()` / `disposed`) has a
+   * chance to observe the close having finished before the next attempt.
+   */
+  const RENDER_GUEST_REATTACH_DELAY_MS = 300
+
+  /**
+   * Schedule one more `wireRenderGuest(wc)` attempt after
+   * `RENDER_GUEST_REATTACH_DELAY_MS`, guarded so a guest that has since been
+   * destroyed (or a forwarder that has since been disposed) never gets a
+   * stray retry. Shared by both places capture can fail to be wired: an
+   * established session later getting detached, AND `broker.acquire()`
+   * itself refusing on the very first attempt (the session is exclusively
+   * held elsewhere, e.g. a real Chrome DevTools window) — that second case
+   * used to give up permanently instead of retrying, so capture never
+   * recovered even once the holder released it.
+   *
+   * De-duplicated via `guestRetryGeneration`: a repeat `attachRenderGuest(wc)`
+   * call while one guest's retry is already pending must join the SAME
+   * chain, not start an independent second one — `guestWired` alone cannot
+   * catch this because it is only populated once acquire actually succeeds.
+   * Each schedule mints a fresh generation token; the fired timer only acts
+   * if its captured token is still the current one, so a stale timer whose
+   * generation has since been superseded silently no-ops instead of clearing
+   * (and forking) a newer retry's bookkeeping.
+   */
+  function scheduleRenderGuestRetry(wc: WebContents): void {
+    if (wc.isDestroyed()) return
+    if (guestRetryGeneration.has(wc.id)) return
+    const generation = ++nextRenderGuestRetryGeneration
+    guestRetryGeneration.set(wc.id, generation)
+    const timer = setTimeout(() => {
+      if (guestRetryGeneration.get(wc.id) !== generation) return
+      guestRetryGeneration.delete(wc.id)
+      if (!disposed && !wc.isDestroyed()) wireRenderGuest(wc)
+    }, RENDER_GUEST_REATTACH_DELAY_MS)
+    // Best-effort: if the whole forwarder tears down before this fires, there
+    // is nothing to clear it from — the disposed check above is the guard.
+    timer.unref?.()
+  }
+
+  /**
+   * Wire one render guest for Network capture via the shared broker.
+   *
+   * The lease's `onDetach` fires on EITHER an external detach (another owner
+   * releasing the shared session, or a real Chrome DevTools window stealing
+   * it) OR the guest being destroyed (see cdp-session/index.ts) — either way
+   * our wiring is torn down and, if the guest is still alive, re-wired (after
+   * `RENDER_GUEST_REATTACH_DELAY_MS`) so capture self-heals. Previously
+   * `attachRenderGuest` only ever ran ONCE per guest (at webview creation,
+   * from `did-attach-webview`), so any detach permanently killed capture for
+   * that guest's remaining lifetime — nothing else ever called it again.
+   *
+   * `guestWired` alone guards re-entry once successfully wired. A repeat call
+   * while acquire keeps failing is deliberately NOT blocked here (only the
+   * TIMER that call would schedule is de-duplicated, in
+   * `scheduleRenderGuestRetry`) — an explicit re-attach right after a detach
+   * must still get its own immediate `acquire()` attempt (the exclusive
+   * holder may have already released it by then), not be forced to wait out
+   * a stale pending window.
+   */
+  function wireRenderGuest(wc: WebContents): void {
+    if (guestWired.has(wc.id)) return
+    const lease = broker.acquire(wc)
+    if (!lease) {
+      // Not terminal — the exclusive holder may release the session later.
+      // Retry on the same cadence as the onDetach self-heal below, or this
+      // guest's capture would die for its whole remaining lifetime the very
+      // first time acquire() lost the race.
+      scheduleRenderGuestRetry(wc)
+      return
+    }
+
+    // This wc is now genuinely wired — drop any stale pending-retry
+    // generation (e.g. from an earlier detach cycle superseded by THIS
+    // successful acquire) so a LATER detach can freely mint its own fresh
+    // generation instead of being silently swallowed by a leftover entry.
+    guestRetryGeneration.delete(wc.id)
+    const teardown = new SyncDisposableRegistry()
+    guestWired.set(wc.id, teardown)
+    wireNetworkCapture(wc, 'render', teardown, `g${wc.id}-${Date.now()}`)
+
+    const detachSub = lease.onDetach(() => {
+      cleanupGuest(wc.id)
+      scheduleRenderGuestRetry(wc)
+    })
+    teardown.add(() => {
+      detachSub.dispose()
+      lease.dispose()
     })
 
-    const onDestroyed = (): void => {
-      if (simWc === wc) {
-        simWc = null
-        const ad = attachDisposables
-        attachDisposables = null
-        if (ad) void ad.disposeAll().catch(() => {})
-      }
-    }
-    // Route the destroyed-teardown through the connection registry when one is
-    // available (deterministic disposal on wc destroy / connection reset);
-    // otherwise keep the bespoke `once('destroyed')` watcher. WHAT onDestroyed
-    // does is unchanged — only WHERE it's registered.
-    const reg = bridge.connections
-    if (reg) {
-      const owned = reg.acquire(wc).own(onDestroyed)
-      attach.add(() => owned.dispose())
-    } else {
-      wc.once('destroyed', onDestroyed)
-      attach.add(() => {
-        try { wc.removeListener('destroyed', onDestroyed) } catch { /* wc gone */ }
-      })
+    void lease.send('Network.enable').catch((err) => {
+      console.warn('[network-forward] guest Network.enable failed:', err instanceof Error ? err.message : err)
+    })
+  }
+
+  function attachRenderGuest(wc: WebContents): void {
+    if (!wc || wc.isDestroyed()) return
+    wireRenderGuest(wc)
+  }
+
+  /**
+   * Attach (or reuse) the simulator wc's shared session via the broker. The
+   * SAME wc is independently used by simulator-storage (DOMStorage capture) —
+   * `broker.acquire` reuses its session rather than fighting it for exclusive
+   * ownership, and our own switch-away/dispose only ever releases OUR lease
+   * (see detachSimulator), never forces a physical detach that would kill
+   * simulator-storage's capture too.
+   */
+  function attachSimulator(wc: WebContents): void {
+    if (!wc || wc.isDestroyed()) return
+    if (simWc === wc && !wc.isDestroyed()) return
+    detachSimulator()
+
+    const lease = broker.acquire(wc)
+    if (!lease) {
+      console.warn('[network-forward] debugger session unavailable; simulator network not captured')
+      return
     }
 
-    void wc.debugger.sendCommand('Network.enable').catch((err) => {
+    simWc = wc
+    simLease = lease
+    const attach = new SyncDisposableRegistry()
+    attachDisposables = attach
+
+    wireNetworkCapture(wc, 'service', attach, String(Date.now()))
+
+    const detachSub = lease.onDetach(() => {
+      if (simWc !== wc) return
+      simWc = null
+      simLease = null
+      // Tear down OUR OWN wiring (wireNetworkCapture's 'message' listener) —
+      // the broker already removed its own; without this, our listener would
+      // keep receiving events from a session we no longer track as "current".
+      const ad = attachDisposables
+      attachDisposables = null
+      if (ad) { try { ad.disposeAll() } catch { /* best-effort teardown */ } }
+    })
+    attach.add(() => detachSub.dispose())
+
+    void lease.send('Network.enable').catch((err) => {
       console.warn('[network-forward] Network.enable failed:', err instanceof Error ? err.message : err)
     })
   }
@@ -898,21 +1208,46 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
     if (dispatchQueue.length > 0) scheduleFlush()
   }
 
+  registry.add(() => { disposed = true })
   registry.add(() => {
     devtoolsHostDisposable?.dispose()
     devtoolsHostDisposable = null
     if (readyTimeoutTimer) { clearTimeout(readyTimeoutTimer); readyTimeoutTimer = null }
     if (readyRetryTimer) { clearTimeout(readyRetryTimer); readyRetryTimer = null }
   })
+  registry.add(() => {
+    bodyCache.clear()
+    postDataCache.clear()
+  })
+  // Every debugger session (simulator + all render guests) must already be
+  // detached and every 'message' listener already removed before `dispose()`
+  // returns control to an un-awaited caller (every real call site is
+  // `fwd.dispose()` with no `await`) — a guest event arriving in the SAME
+  // tick as dispose() must never be forwarded. `registry` is a
+  // SyncDisposableRegistry, so every entry below runs to completion before
+  // disposeAll() returns — no ordering dependency between them.
   registry.add(() => detachSimulator())
+  registry.add(() => {
+    for (const wcId of [...guestWired.keys()]) cleanupGuest(wcId)
+  })
+  // Only detach sessions we self-attached if we own the broker's lifecycle —
+  // a shared/injected broker keeps serving other consumers past our dispose().
+  registry.add(() => {
+    if (ownsBroker) broker.dispose()
+  })
 
   return {
     attachSimulator,
     detachSimulator,
+    attachRenderGuest,
     setDevtoolsHost: (wc) => applyDevtoolsHost(wc),
     // report() has no observing debugger, so there's no live CDP event to push
     // natively — surface it via the console fallback line.
     report: (record) => forwardToConsole(record),
+    bodies: {
+      getResponseBody: (requestId) => bodyCache.lookup(requestId),
+      getRequestPostData: (requestId) => postDataCache.lookup(requestId),
+    },
     dispose: () => registry.disposeAll(),
   }
 }

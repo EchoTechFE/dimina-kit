@@ -113,6 +113,7 @@ vi.mock('../../utils/paths.js', () => ({
 // Import AFTER mocks so view-manager picks up the stubs.
 import { createViewManager, resolveProjectEditorTarget } from './view-manager.js'
 import { createConnectionRegistry } from '@dimina-kit/electron-deck/main'
+import { createCdpSessionBroker } from '../cdp-session/index.js'
 
 function makeContext() {
   const addChildView = vi.fn()
@@ -145,6 +146,7 @@ function makeContext() {
       // These overlay-lifecycle tests don't touch the native simulator, so an
       // empty real registry satisfies the type without affecting behaviour.
       connections: createConnectionRegistry(),
+      cdpSessionBroker: createCdpSessionBroker(),
       // Lets attachNativeSimulator proceed past its preload guard in the
       // getSimulatorWebContents tests below; inert for the overlay tests.
       preloadPath: '/stub/sim-preload.js',

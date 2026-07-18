@@ -33,6 +33,15 @@ export interface ViewManagerContext {
    * `createWorkbenchContext` always supplies it.
    */
   connections: WorkbenchContext['connections']
+  /**
+   * Shared CDP session broker (see cdp-session/index.ts). safe-area acquires
+   * render-guest debugger leases through it instead of attaching directly, so
+   * it shares sessions with elements-forward/render-inspect/network-forward
+   * rather than fighting them for exclusive ownership. Optional so partial
+   * test contexts compile (safe-area falls back to a private broker
+   * instance); `createWorkbenchContext` always supplies the real one.
+   */
+  cdpSessionBroker?: WorkbenchContext['cdpSessionBroker']
   /** Active project root used to validate/open console source locations. */
   workspace?: WorkbenchContext['workspace']
   /**
@@ -373,7 +382,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   // CSS env(safe-area-inset-*) simulation for render-host guests (per device).
   // Driven from did-attach-webview in the simulator domain and re-pushed on
   // device change via reapplySafeArea. Torn down in disposeAll.
-  const safeArea = createSafeAreaController({ connections: ctx.connections })
+  const safeArea = createSafeAreaController({ connections: ctx.connections, broker: ctx.cdpSessionBroker })
 
   // The single level-triggered placement reconciler every view domain shares —
   // the sole owner of placement state (docs/view-placement-reconciler.md). Each

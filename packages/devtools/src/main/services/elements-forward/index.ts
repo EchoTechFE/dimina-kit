@@ -3,14 +3,20 @@
  * the right-panel Chrome DevTools front-end, which natively inspects the
  * service-host (logic layer).
  *
- * ── Mechanism (no preload, no broker) ────────────────────────────────────────
+ * ── Mechanism (no preload) ───────────────────────────────────────────────────
  * The DevTools front-end is a `devtools://` page with NO dimina preload, so we
  * drive it through the same two-way poll bridge the network-forward path uses:
  *   • front-end → main : we wrap `InspectorFrontendHost.sendMessageToBackend` in
- *     the front-end realm. Commands whose method is in the RENDER domain set
- *     (DOM/CSS/Overlay/DOMSnapshot/DOMDebugger) are NOT passed to the original
- *     embedder channel — they're pushed onto `globalThis.__diminaElementsOutbound`
- *     and main drains that array (splice) on a poll. EVERY OTHER method
+ *     the front-end realm — the ONE outbound CDP gate every injected-panel
+ *     feature routes through (`routeOutboundCommand` is the single decision
+ *     table). Commands whose method is in the RENDER domain set
+ *     (DOM/CSS/Overlay/DOMSnapshot/DOMDebugger), plus `Network.getResponseBody`
+ *     / `Network.getRequestPostData` for `dimina:sim:` virtual requestIds
+ *     (which only the network forwarder's prefetch cache can answer — the
+ *     natively-inspected service host has never heard of them), are NOT passed
+ *     to the original embedder channel — they're pushed onto
+ *     `globalThis.__diminaElementsOutbound` tagged with their route and main
+ *     drains that array (splice) on a poll. EVERY OTHER method
  *     (Runtime/Console/Page/Target/Emulation/…) calls through to the original, so
  *     the service-host inspection (Console, Sources) and crucially the safe-area
  *     `Emulation.setSafeAreaInsetsOverride` are untouched.
@@ -18,16 +24,17 @@
  *     `window.DevToolsAPI.dispatchMessage(json)` (chunked for large payloads —
  *     `DOM.getDocument` can be big — mirroring network-forward/index.ts).
  *
- * ── Why no broker / no safe-area changes ─────────────────────────────────────
- * `webContents.debugger` is single-owner per wc, and the safe-area service has
- * already `attach('1.3')`-ed each render guest. We REUSE that already-attached
- * session (`sendCommand` + an extra `on('message')` listener on the SAME
- * `wc.debugger`); we never attach a second session and never detach one we don't
- * own. `DOM.enable`/`CSS.enable`/`Overlay.enable` do not reset the safe-area
- * `Emulation` override, so this is purely additive. ONLY when a guest's debugger
- * is NOT attached (safe-area degraded) do we `attach('1.3')` ourselves — tracked
- * in a `Set<wc.id>` so dispose/guest-destroy detaches ONLY the sessions we own;
- * safe-area's are never touched.
+ * ── Render-guest CDP session (via the shared broker) ─────────────────────────
+ * `webContents.debugger` is single-owner per wc, so this and every other
+ * feature that needs a render guest's session (safe-area, render-inspect,
+ * network-forward) `acquire()` a lease from the shared `CdpSessionBroker`
+ * (see cdp-session/index.ts) instead of each hand-rolling its own attach/
+ * reuse/detach bookkeeping — that duplication used to mean whichever module
+ * happened to attach first was the de facto owner, and any other module's
+ * `detach()` could steal the session out from under the others. The broker is
+ * the single owner of "who attached, who may detach"; `DOM.enable`/
+ * `CSS.enable`/`Overlay.enable` never touch the safe-area `Emulation`
+ * override, so sharing a session this way is purely additive.
  *
  * ── Staleness (active-guest, NOT a generation counter) ───────────────────────
  * A response/event is honoured only while its originating guest is STILL the
@@ -45,26 +52,37 @@
  * polling: it never throws, never blocks, never disturbs Console/Network/safe-area.
  *
  * This is a production feature (no env gate, default on for the native simulator).
- * It deliberately re-implements the small pure helpers it needs (routing table,
- * hook + dispatch scripts) as self-contained code.
+ * The routing table (below) is self-contained; the front-end dispatch transport
+ * (`buildChunkedDispatchScript` + its size constants) is shared with
+ * network-forward via `../network-forward/frontend-dispatch.js` so the two
+ * can never drift on the chunk-continuation protocol.
  */
-import { webContents as electronWebContents } from 'electron'
 import type { WebContents } from 'electron'
 import type { ConnectionRegistry } from '@dimina-kit/electron-deck/main'
 import type { BridgeRouterHandle, RenderEvent } from '../../ipc/bridge-router.js'
 import { isFrontendSettled } from '../views/inject-when-ready.js'
+import { VIRTUAL_REQUEST_ID_PREFIX, type NetworkBodyProvider } from '../network-forward/index.js'
+import { PROBE_DEVTOOLS_API, MAX_SINGLE_DISPATCH_CHARS, CHUNK_CHARS, buildChunkedDispatchScript } from '../network-forward/frontend-dispatch.js'
+import { createCdpSessionBroker, type CdpSessionBroker, type CdpSessionLease } from '../cdp-session/index.js'
 
 // ── routing table (pure, testable) ───────────────────────────────────────────
 
-/** Which target a front-end CDP command is routed to. */
-export type CdpRoute = 'render' | 'service'
+/**
+ * Which target a front-end CDP command is routed to.
+ *  render  — the active render guest's debugger (the Elements tree).
+ *  network — the network forwarder's prefetch cache (body/post-data lookups
+ *            for `dimina:sim:` virtual requestIds that only exist there).
+ *  service — the original embedder channel (the service host the front-end
+ *            natively inspects).
+ */
+export type CdpRoute = 'render' | 'network' | 'service'
 
 /**
  * CDP domains that target the RENDER GUEST'S document tree. A command in one of
  * these is intercepted and sent to the active render guest's debugger instead of
  * the service host the front-end nominally inspects.
  */
-const RENDER_DOMAIN_PREFIXES: readonly string[] = [
+export const RENDER_DOMAIN_PREFIXES: readonly string[] = [
   'DOM.',
   'CSS.',
   'Overlay.',
@@ -98,28 +116,75 @@ export function isRenderEventMethod(method: string): boolean {
   return routeByDomain(method) === 'render'
 }
 
+/**
+ * The Network commands answered from the network forwarder's prefetch cache
+ * when they target a virtual requestId. Only these two: they're the panel's
+ * body/post-data round-trips. Every other Network.* stays on the service path
+ * (a virtual id there errors exactly like an unknown id would — harmless).
+ */
+export const NETWORK_BODY_METHODS: readonly string[] = [
+  'Network.getResponseBody',
+  'Network.getRequestPostData',
+]
+
+/**
+ * Full outbound routing decision — the SINGLE authority for where a front-end
+ * CDP command goes. `routeByDomain` covers the method-only render split; this
+ * adds the params-dependent network split. The hook script inlines an
+ * equivalent test driven by the same literals, so the two cannot drift.
+ *
+ * A non-string / missing requestId routes to 'service': only the
+ * `dimina:sim:` namespace is ours to answer, and the real backend is the
+ * correct authority for its own ids.
+ */
+export function routeOutboundCommand(method: string, params: unknown): CdpRoute {
+  if (routeByDomain(method) === 'render') return 'render'
+  if (NETWORK_BODY_METHODS.includes(method)) {
+    const requestId = (params as { requestId?: unknown } | null | undefined)?.requestId
+    if (typeof requestId === 'string' && requestId.startsWith(VIRTUAL_REQUEST_ID_PREFIX)) {
+      return 'network'
+    }
+  }
+  return 'service'
+}
+
 // ── front-end injection (the front-end → main half of the bridge) ────────────
 
 /**
  * The JS injected into the DevTools front-end realm. Idempotent (sentinel guard).
- * Wraps `InspectorFrontendHost.sendMessageToBackend`: a RENDER-domain command is
- * pushed onto `globalThis.__diminaElementsOutbound` (drained by main) and NOT
- * forwarded to the original embedder channel (main answers it from the render
- * guest); every other command calls through to the original (service-host path).
+ * Wraps `InspectorFrontendHost.sendMessageToBackend` — the ONE outbound CDP
+ * gate for every command the front-end emits. A command that routes 'render'
+ * or 'network' (same decision table as {@link routeOutboundCommand}) is pushed
+ * onto `globalThis.__diminaElementsOutbound` tagged with its route and NOT
+ * forwarded to the original embedder channel (main answers it — from the
+ * render guest or the network prefetch cache respectively); every other
+ * command calls through to the original (service-host path).
  *
  * Returns `'installed'` / `'already'` on success, `'partial'` while the embedder
  * global is not yet present (so the caller retries), `'error:…'` on a real fault.
  */
 export function buildElementsHookScript(): string {
   const prefixes = JSON.stringify(RENDER_DOMAIN_PREFIXES)
+  const netMethods = JSON.stringify(NETWORK_BODY_METHODS)
+  const vprefix = JSON.stringify(VIRTUAL_REQUEST_ID_PREFIX)
   return `(function(){try{
     if (globalThis.__diminaElementsHookInstalled) return 'already';
     var OUT = (globalThis.__diminaElementsOutbound = globalThis.__diminaElementsOutbound || []);
     var PREFIXES = ${prefixes};
+    var NET_METHODS = ${netMethods};
+    var VPREFIX = ${vprefix};
     function isRender(method){
       if (!method) return false;
       for (var i=0;i<PREFIXES.length;i++){ if (method.indexOf(PREFIXES[i])===0) return true; }
       return false;
+    }
+    function routeOf(m){
+      if (!m || !m.method) return 'service';
+      if (isRender(m.method)) return 'render';
+      if (NET_METHODS.indexOf(m.method) >= 0 && m.params
+          && typeof m.params.requestId === 'string'
+          && m.params.requestId.indexOf(VPREFIX) === 0) return 'network';
+      return 'service';
     }
     var IFH = globalThis.InspectorFrontendHost;
     if (IFH && typeof IFH.sendMessageToBackend === 'function' && !IFH.__diminaElementsWrapped){
@@ -127,12 +192,15 @@ export function buildElementsHookScript(): string {
       IFH.sendMessageToBackend = function(message){
         try {
           var m = (typeof message === 'string') ? JSON.parse(message) : message;
-          if (m && isRender(m.method)){
-            // Intercept: hand it to main to route at the render guest. Do NOT
-            // call the original embedder channel (would hit the service host).
+          var route = routeOf(m);
+          if (route !== 'service'){
+            // Intercept: hand it to main to answer (render guest / network
+            // cache). Do NOT call the original embedder channel — the service
+            // host either has the wrong tree or has never heard of the id.
             OUT.push({ id: (m && typeof m.id === 'number') ? m.id : null,
               method: m.method, params: m.params || {},
-              sessionId: (m && m.sessionId) ? m.sessionId : null });
+              sessionId: (m && m.sessionId) ? m.sessionId : null,
+              route: route });
             return;
           }
         } catch(_){ /* fall through to original on any parse hiccup */ }
@@ -165,42 +233,13 @@ function buildReconcileScript(): string {
     + `})()`
 }
 
-// ── main → front-end dispatch (mirrored from network-forward/index.ts) ────────
-// network-forward keeps these file-private and the task forbids touching it, so
-// they're re-implemented here. Keep the chunk contract in sync if that changes.
-
-const PROBE_DEVTOOLS_API
-  = `(window.DevToolsAPI && typeof window.DevToolsAPI.dispatchMessage === 'function')`
-
-/** A single dispatch payload may not exceed this many UTF-16 chars; chunk above. */
-const MAX_SINGLE_DISPATCH_CHARS = 1_000_000
-const CHUNK_CHARS = 256 * 1024
+// ── main → front-end dispatch (shared transport with network-forward) ───────
 
 /** Dispatch ONE small CDP message (response or event) into the front-end. */
 function buildDispatchScript(message: string): string {
   return `(()=>{try{`
     + `if(!${PROBE_DEVTOOLS_API})return false;`
     + `window.DevToolsAPI.dispatchMessage(JSON.parse(${JSON.stringify(message)}));`
-    + `return true;`
-    + `}catch(_){return false}})()`
-}
-
-/**
- * Dispatch one LARGE message via `dispatchMessageChunk`: the FIRST chunk carries
- * the total size, every SUBSEQUENT chunk omits the second arg (Chromium's
- * continuation contract). Returns false when the chunk API isn't present yet.
- */
-function buildChunkedDispatchScript(chunks: string[], totalSize: number): string {
-  const arr = JSON.stringify(chunks)
-  return `(()=>{try{`
-    + `if(!(window.DevToolsAPI&&typeof window.DevToolsAPI.dispatchMessageChunk==='function'))return false;`
-    + `const cs=JSON.parse(${JSON.stringify(arr)});`
-    + `for(let i=0;i<cs.length;i++){`
-    + `try{`
-    + `if(i===0){window.DevToolsAPI.dispatchMessageChunk(cs[i], ${totalSize})}`
-    + `else{window.DevToolsAPI.dispatchMessageChunk(cs[i])}`
-    + `}catch(_){}`
-    + `}`
     + `return true;`
     + `}catch(_){return false}})()`
 }
@@ -225,22 +264,42 @@ export interface ElementsForwardDeps {
    */
   appId?: string
   /**
-   * Optional connection registry. When present, per-webContents teardowns
-   * (the devtools front-end wc's `stop`, and each render guest's `onDestroyed`)
-   * are routed through `connections.acquire(wc).own(cleanup)` so they fire
-   * deterministically on wc destroy / connection reset — replacing the bespoke
-   * `wc.once('destroyed', cleanup)` hook. Optional so existing callers compile
-   * unchanged; absent → the `once('destroyed')` fallback is used.
+   * Optional connection registry. When present, the devtools front-end wc's
+   * own `stop` teardown is routed through `connections.acquire(wc).own(cleanup)`
+   * so it fires deterministically on wc destroy / connection reset — replacing
+   * the bespoke `wc.once('destroyed', cleanup)` hook. Optional so existing
+   * callers compile unchanged; absent → the `once('destroyed')` fallback is
+   * used. Also threaded into the PRIVATE fallback broker (see `broker` below)
+   * when no shared broker is supplied, so that broker's own render-guest
+   * wc-destroy tracking is connection-routed too.
    */
   connections?: ConnectionRegistry
+  /**
+   * Answers intercepted `Network.getResponseBody` / `Network.getRequestPostData`
+   * lookups for `dimina:sim:` virtual requestIds (the network forwarder's
+   * prefetch cache). Absent → those commands settle with the standard CDP
+   * not-found error, the same answer the mis-routed service-host backend gave.
+   */
+  network?: NetworkBodyProvider
+  /**
+   * Shared CDP session broker (see cdp-session/index.ts) that owns every
+   * render-guest debugger session's attach/detach lifecycle — safe-area,
+   * render-inspect and network-forward acquire leases from the same instance.
+   * Absent → a private broker is created and owned for this call's lifetime
+   * (torn down on `stop()`), so existing standalone callers/tests compile and
+   * behave unchanged, just without cross-module session sharing.
+   */
+  broker?: CdpSessionBroker
 }
 
-/** One drained front-end command awaiting routing at the render guest. */
+/** One drained front-end command awaiting routing (render guest / network cache). */
 interface OutboundCommand {
   id: number | null
   method: string
   params: unknown
   sessionId: string | null
+  /** Routing tag stamped by the hook script; absent on render (legacy) payloads. */
+  route?: string
 }
 
 // Reconcile cadence: each tick re-asserts the hook (idempotent) and drains the
@@ -249,9 +308,13 @@ interface OutboundCommand {
 const DRAIN_INTERVAL_MS = 150
 
 /**
- * Install Elements forwarding on a DevTools front-end host wc. Returns a disposer
- * (`stop`) that clears timers, unsubscribes render events, detaches ONLY the
- * debugger sessions this feature attached, and removes every listener it added.
+ * Install Elements forwarding on a DevTools front-end host wc. Returns a
+ * disposer (`stop`) that clears timers, unsubscribes render events, releases
+ * every broker lease this call acquired, and — only when no `deps.broker` was
+ * supplied (this call owns its private broker) — disposes that broker too
+ * (which detaches ONLY the sessions it self-attached). When `deps.broker` IS
+ * supplied (the shared, app-wide instance), `stop()` never disposes it: other
+ * consumers may still be using it.
  *
  * Best-effort + defensive throughout: a destroyed wc ends the feature; every
  * executeJavaScript / sendCommand is wrapped so a torn-down guest never throws
@@ -260,6 +323,10 @@ const DRAIN_INTERVAL_MS = 150
  */
 export function installElementsForward(deps: ElementsForwardDeps): () => void {
   const { devtoolsWc, bridge } = deps
+  // Own (and tear down on stop()) a private broker only when the caller didn't
+  // supply a shared one — see ElementsForwardDeps.broker.
+  const ownsBroker = !deps.broker
+  const broker = deps.broker ?? createCdpSessionBroker({ connections: deps.connections })
   let disposed = false
   // A single self-healing loop drives BOTH hook (re)install and outbound drain;
   // it never self-terminates so a front-end reload (respawn) is re-hooked.
@@ -283,36 +350,22 @@ export function installElementsForward(deps: ElementsForwardDeps): () => void {
     return a != null && a.id === id
   }
 
-  // Render guests we've added our `on('message')` listener to (keyed wc.id →
-  // cleanup) so a re-resolve of the same guest doesn't double-subscribe.
-  const wiredGuests = new Map<number, () => void>()
-
-  // Debugger sessions THIS feature attached (safe-area was degraded). dispose /
-  // guest-destroy detaches ONLY these; sessions safe-area owns are never touched.
-  const selfAttached = new Set<number>()
+  // Render guests we've acquired a broker lease for (keyed wc.id) so a
+  // re-resolve of the same guest doesn't double-subscribe.
+  const guestLeases = new Map<number, CdpSessionLease>()
 
   const stop = (): void => {
     disposed = true
     if (reconcileTimer) { clearInterval(reconcileTimer); reconcileTimer = null }
-    for (const cleanup of wiredGuests.values()) {
-      try { cleanup() } catch { /* guest gone */ }
+    for (const lease of guestLeases.values()) {
+      try { lease.dispose() } catch { /* already gone */ }
     }
-    wiredGuests.clear()
-    detachSelfAttached()
+    guestLeases.clear()
+    // Only detach sessions we self-attached if we own the broker's lifecycle —
+    // a shared/injected broker keeps serving other consumers past our stop().
+    if (ownsBroker) broker.dispose()
     // Run the late-wired teardown once (render events, dom-ready, 'closed' sub).
     if (lateCleanup) { const c = lateCleanup; lateCleanup = null; try { c() } catch { /* already gone */ } }
-  }
-
-  /** Detach every session we own; leave safe-area's alone. */
-  function detachSelfAttached(): void {
-    for (const wcId of selfAttached) {
-      const wc = wcFromId(wcId)
-      if (!wc) continue
-      try {
-        if (!wc.isDestroyed() && wc.debugger.isAttached()) wc.debugger.detach()
-      } catch { /* already detached / destroyed */ }
-    }
-    selfAttached.clear()
   }
 
   // ── main → front-end dispatch ──────────────────────────────────────────────
@@ -383,17 +436,7 @@ export function installElementsForward(deps: ElementsForwardDeps): () => void {
     dispatchToFrontend(msg)
   }
 
-  // ── webContents lookup (id → wc), tolerant of fakes/teardown ────────────────
-
-  function wcFromId(id: number): WebContents | null {
-    try {
-      return electronWebContents?.fromId?.(id) ?? null
-    } catch {
-      return null
-    }
-  }
-
-  // ── render-guest CDP session (reuse safe-area's; self-attach only if needed) ─
+  // ── render-guest CDP session (via the shared broker) ────────────────────────
 
   /** The active render guest, re-resolved fresh (pool/page swaps go stale). */
   function activeRenderWc(): WebContents | null {
@@ -406,78 +449,40 @@ export function installElementsForward(deps: ElementsForwardDeps): () => void {
   }
 
   /**
-   * Ensure the guest's debugger is usable. Reuse the already-attached session if
-   * safe-area attached it; only `attach('1.3')` ourselves when nobody has — and
-   * record that wc in `selfAttached` so we (and only we) detach it later. Returns
-   * false when the debugger can't be made usable.
+   * Get-or-create this guest's broker lease and wire our render-event
+   * re-injection listener on it ONCE. DOM./CSS./Overlay./DOMSnapshot./
+   * DOMDebugger. EVENTS (no id) from the CURRENT generation are dispatched
+   * into the front-end so the Elements panel updates live; events arriving
+   * after the generation moved on are dropped. `lease.onDetach` — which fires
+   * on an external detach OR the guest being destroyed (see cdp-session's
+   * design doc) — drops our cache entry so the NEXT call re-acquires fresh
+   * instead of operating on a dead lease forever.
    */
-  function ensureGuestDebugger(wc: WebContents): boolean {
-    try {
-      if (wc.debugger.isAttached()) return true
-    } catch {
-      return false
-    }
-    try {
-      wc.debugger.attach('1.3')
-      selfAttached.add(wc.id)
-      return true
-    } catch {
-      // Either someone else just attached (race → it IS usable) or attach truly
-      // failed. Treat "already attached" as success, anything else as failure.
-      try { return wc.debugger.isAttached() } catch { return false }
-    }
-  }
+  function ensureGuestLease(wc: WebContents): CdpSessionLease | null {
+    const existing = guestLeases.get(wc.id)
+    if (existing) return existing
+    const lease = broker.acquire(wc)
+    if (!lease) return null
 
-  /**
-   * Add our render-event re-injection listener to a guest's debugger ONCE. DOM./
-   * CSS./Overlay./DOMSnapshot./DOMDebugger. EVENTS (no id) from the CURRENT
-   * generation are dispatched into the front-end so the Elements panel updates
-   * live; events arriving after the generation moved on are dropped. The listener
-   * is removed when the guest wc is destroyed (and on stop()).
-   */
-  function wireGuestEvents(wc: WebContents): void {
-    if (wiredGuests.has(wc.id)) return
-    const onMessage = (_event: Electron.Event, method: string, params: unknown): void => {
+    lease.onMessage((method, params) => {
       if (disposed) return
-      // Honour events only while this guest is STILL the active one — checked per
-      // event, so re-activating a previously-wired guest resumes forwarding.
+      // Honour events only while this guest is STILL the active one — checked
+      // per event, so re-activating a previously-wired guest resumes forwarding.
       if (!isActiveWcId(wc.id)) return
       if (isRenderEventMethod(method)) {
         dispatchToFrontend({ method, params })
       }
-    }
-    try {
-      wc.debugger.on('message', onMessage)
-    } catch {
-      return
-    }
-    const onDestroyed = (): void => {
-      const cleanup = wiredGuests.get(wc.id)
-      if (cleanup) { wiredGuests.delete(wc.id); try { cleanup() } catch { /* gone */ } }
-      // A destroyed guest is no longer the active one, so its in-flight commands
-      // fail `isActiveWcId` and settle as errors on their own — no global bump
-      // (which would wrongly stale OTHER, still-active guests' commands).
-      // If we own this wc's session there is nothing left to detach; drop it.
-      selfAttached.delete(wc.id)
-    }
-    let closedSub: { dispose(): void } | undefined
-    try {
-      // Route the guest teardown through the connection registry's `'closed'`
-      // event when present. Render guests are NEVER pool-reset, so `'closed'`
-      // (fires only on real wc destroy) is the correct lifetime — and crucially
-      // `on('closed')` returns a handle whose `dispose()` REMOVES the listener
-      // WITHOUT firing it, matching the original `removeListener` semantics.
-      // (`own()` would fire `onDestroyed` on release AND mutate `wiredGuests`
-      // mid-drain in stop() — wrong here; see foundation.md §4.3.) Same
-      // try/catch guards a fake/minimal wc that lacks once/emitter wiring.
-      if (deps.connections) closedSub = deps.connections.acquire(wc).on('closed', onDestroyed)
-      else wc.once('destroyed', onDestroyed)
-    } catch { /* fake/minimal wc */ }
-    wiredGuests.set(wc.id, () => {
-      try { wc.debugger.removeListener('message', onMessage) } catch { /* gone */ }
-      try { closedSub?.dispose() } catch { /* gone */ }
-      try { wc.removeListener('destroyed', onDestroyed) } catch { /* gone */ }
     })
+    lease.onDetach(() => {
+      // A destroyed/detached guest is no longer the active one, so its
+      // in-flight commands fail `isActiveWcId` and settle as errors on their
+      // own — no global bump (which would wrongly stale OTHER, still-active
+      // guests' commands).
+      guestLeases.delete(wc.id)
+    })
+
+    guestLeases.set(wc.id, lease)
+    return lease
   }
 
   /**
@@ -490,18 +495,24 @@ export function installElementsForward(deps: ElementsForwardDeps): () => void {
    * the Elements-panel hover highlight never paints. Awaiting DOM.enable first
    * guarantees the correct enable order. CSS.enable has no such dependency and is
    * fire-and-forget alongside.
+   *
+   * This does NOT delegate to `lease.ensureRenderDomains()`: that helper has no
+   * concept of "active guest", but a priming sequence started on a guest that
+   * stops being active mid-flight must NOT arm Overlay on the now-abandoned
+   * tree (checked again below) — a per-consumer concern only elements-forward
+   * has, so it keeps its own sequence, just dispatched through the lease.
    */
   function primeGuest(wc: WebContents): void {
-    if (!ensureGuestDebugger(wc)) return
-    wireGuestEvents(wc)
-    void enableGuestDomains(wc)
+    const lease = ensureGuestLease(wc)
+    if (!lease) return
+    void enableGuestDomains(wc, lease)
   }
 
   /** Enable the render domains in dependency order. Resolves; never rejects. */
-  async function enableGuestDomains(wc: WebContents): Promise<void> {
-    wc.debugger.sendCommand('CSS.enable').catch(() => { /* guest mid-destroy */ })
+  async function enableGuestDomains(wc: WebContents, lease: CdpSessionLease): Promise<void> {
+    lease.send('CSS.enable').catch(() => { /* guest mid-destroy */ })
     try {
-      await wc.debugger.sendCommand('DOM.enable')
+      await lease.send('DOM.enable')
     } catch {
       // Guest mid-destroy or DOM domain unavailable; Overlay.enable would only
       // re-reject, so stop here rather than firing it out of order.
@@ -511,7 +522,7 @@ export function installElementsForward(deps: ElementsForwardDeps): () => void {
     // switched away (priming always targets the active guest). Re-check before
     // arming Overlay so a stale/dead guest is left untouched.
     if (disposed || !isActiveWcId(wc.id)) return
-    wc.debugger.sendCommand('Overlay.enable').catch(() => { /* guest mid-destroy */ })
+    lease.send('Overlay.enable').catch(() => { /* guest mid-destroy */ })
   }
 
   // ── front-end → render command routing ─────────────────────────────────────
@@ -522,18 +533,18 @@ export function installElementsForward(deps: ElementsForwardDeps): () => void {
       replyError(cmd, 'no active render guest')
       return
     }
-    if (!ensureGuestDebugger(wc)) {
+    const lease = ensureGuestLease(wc)
+    if (!lease) {
       replyError(cmd, 'render guest debugger unavailable')
       return
     }
-    wireGuestEvents(wc)
     // The wc this command is dispatched to. A response that resolves after the
     // active guest changed (this wc is no longer active) is for a tree the
     // front-end has abandoned: settle the id with an error (no pending leak) but
     // do NOT feed its result into the new tree.
     const cmdWcId = wc.id
-    wc.debugger
-      .sendCommand(cmd.method, (cmd.params ?? {}) as object)
+    lease
+      .send(cmd.method, (cmd.params ?? {}) as object)
       .then((result: unknown) => {
         if (disposed) return
         if (!isActiveWcId(cmdWcId)) {
@@ -546,7 +557,7 @@ export function installElementsForward(deps: ElementsForwardDeps): () => void {
         // enabled" and the hover highlight stops painting. Re-arm it so the next
         // hover paints — only while this guest is still the active one.
         if (cmd.method === 'Overlay.disable' && isActiveWcId(cmdWcId)) {
-          wc.debugger.sendCommand('Overlay.enable').catch(() => { /* guest gone */ })
+          lease.send('Overlay.enable').catch(() => { /* guest gone */ })
         }
         replyResult(cmd, result)
       })
@@ -556,13 +567,46 @@ export function installElementsForward(deps: ElementsForwardDeps): () => void {
       })
   }
 
-  /** Process a drained batch of front-end commands. */
+  /**
+   * Answer a network-routed command from the provider. Never touches the render
+   * guest: the body lives in the network forwarder's prefetch cache (or
+   * nowhere). A missing provider or a rejected lookup settles the command with
+   * the canonical CDP not-found error so the front-end renders its normal
+   * failure state instead of leaking a forever-pending request.
+   */
+  function answerNetworkCommand(cmd: OutboundCommand): void {
+    const provider = deps.network
+    const requestId = (cmd.params as { requestId?: unknown } | null | undefined)?.requestId
+    if (!provider || typeof requestId !== 'string') {
+      replyError(cmd, 'No resource with given identifier found')
+      return
+    }
+    const lookup = cmd.method === 'Network.getRequestPostData'
+      ? provider.getRequestPostData(requestId)
+      : provider.getResponseBody(requestId)
+    lookup.then(
+      (result: unknown) => {
+        if (!disposed) replyResult(cmd, result)
+      },
+      (err: unknown) => {
+        if (!disposed) replyError(cmd, err instanceof Error ? err.message : String(err))
+      },
+    )
+  }
+
+  /** Process a drained batch of front-end commands, splitting by route tag. */
   function handleOutbound(batch: unknown): void {
     if (!Array.isArray(batch)) return
     for (const raw of batch) {
       if (!raw || typeof raw !== 'object') continue
       const cmd = raw as OutboundCommand
       if (typeof cmd.method !== 'string') continue
+      if (cmd.route === 'network') {
+        answerNetworkCommand(cmd)
+        continue
+      }
+      // 'render' — and any untagged legacy payload, which only ever carried
+      // render-domain commands.
       routeCommand(cmd)
     }
   }

@@ -548,11 +548,12 @@ export async function createDevtoolsRuntime(config: WorkbenchAppConfig = {}): Pr
   // Native-host inspector: injects the render-guest IIFE and drives WXML /
   // element-highlight against the active render-host <webview>. Reused by
   // the storage panel (element inspect) and the WXML panel service.
-  const renderInspector = createRenderInspector({ connections: context.connections })
+  const renderInspector = createRenderInspector({ connections: context.connections, broker: context.cdpSessionBroker })
 
   const storage = setupSimulatorStorage(mainWindow.webContents, {
     senderPolicy: context.senderPolicy,
     connections: context.connections,
+    broker: context.cdpSessionBroker,
     // Per-project filter for the simulator-storage panel: the simulator
     // uses a fixed `persist:simulator` partition + a fixed simulator.html
     // origin, so localStorage is shared across every project that has
@@ -594,6 +595,7 @@ export async function createDevtoolsRuntime(config: WorkbenchAppConfig = {}): Pr
     const networkForward = createNetworkForwarder({
       getServiceWc: (appId) => context.bridge?.getServiceWc(appId) ?? null,
       connections: context.connections,
+      broker: context.cdpSessionBroker,
     })
     context.networkForward = networkForward
     context.registry.add(networkForward)
