@@ -277,6 +277,12 @@ function downloadFile(
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const headers = ghHeaders(token)
+    // Awaited before every reject so callers (and tests) that observe the
+    // rejection never race a partial file still being unlinked — fs.unlink's
+    // callback form settles asynchronously, after the promise had already
+    // rejected, which left a truncated/aborted download file on disk for a
+    // window after the caller believed cleanup was done.
+    const cleanup = () => fs.promises.unlink(dest).catch(() => {})
     // GitHub asset downloads redirect to signed S3 URLs; keep following them.
     const attempt = (target: string, redirectsLeft: number) => {
       const req = https.get(target, { headers }, (res: IncomingMessage) => {
@@ -311,11 +317,24 @@ function downloadFile(
             onProgress((received / total) * 100)
           }
         })
+        // `.pipe()` does not forward source stream errors to the destination —
+        // an aborted/reset connection here would otherwise surface as an
+        // unhandled 'error' event on `res` (crashes the process) instead of
+        // rejecting this promise.
+        res.on('error', async (err) => { out.destroy(); await cleanup(); reject(err) })
         res.pipe(out)
-        out.on('finish', () => { out.close(); resolve() })
-        out.on('error', (err) => { fs.unlink(dest, () => {}); reject(err) })
+        out.on('finish', async () => {
+          out.close()
+          if (total > 0 && received !== total) {
+            await cleanup()
+            reject(new Error(`Downloaded ${received} bytes, expected ${total} — update download was truncated`))
+            return
+          }
+          resolve()
+        })
+        out.on('error', async (err) => { await cleanup(); reject(err) })
       })
-      req.on('error', (err) => { fs.unlink(dest, () => {}); reject(err) })
+      req.on('error', async (err) => { await cleanup(); reject(err) })
     }
     attempt(url, 5)
   })

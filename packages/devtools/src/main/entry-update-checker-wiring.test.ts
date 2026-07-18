@@ -49,16 +49,39 @@ describe('main entry: standalone update-checker wiring', () => {
 
     await import('./index.js')
 
-    expect(createGitHubReleaseCheckerMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        owner: 'EchoTechFE',
-        repo: 'dimina-kit',
-        versionScheme: 'trailing-number',
-      }),
-    )
+    // versionScheme must stay unset (default 'semver'): 'trailing-number' would
+    // compare the release tag's `-N` counter against app.getVersion() and
+    // report an update on every single check forever (see index.ts comment).
+    expect(createGitHubReleaseCheckerMock).toHaveBeenCalledTimes(1)
+    const checkerOpts = createGitHubReleaseCheckerMock.mock.calls[0]?.[0] as {
+      owner: string
+      repo: string
+      versionScheme?: string
+      parseVersion?: (release: { assets: Array<{ name: string }> }) => string | null
+    }
+    expect(checkerOpts).toMatchObject({ owner: 'EchoTechFE', repo: 'dimina-kit' })
+    expect(checkerOpts.versionScheme).toBeUndefined()
+
+    // parseVersion must extract a clean x.y.z from this repo's own asset
+    // naming (`dimina-devtools-<ver>-<platform>-<arch>.<ext>`), not the
+    // built-in fallback's SEMVER_RE — that regex's optional prerelease-suffix
+    // capture greedily swallows the trailing `-mac-arm64.dmg` and would show
+    // a garbled "0.5.0-mac-arm64.dmg" in the update dialog.
+    expect(checkerOpts.parseVersion).toBeInstanceOf(Function)
+    expect(
+      checkerOpts.parseVersion!({ assets: [{ name: 'dimina-devtools-0.5.0-mac-arm64.dmg' }] }),
+    ).toBe('0.5.0')
+    expect(
+      checkerOpts.parseVersion!({ assets: [{ name: 'dimina-devtools-0.5.0-win-x64.zip' }] }),
+    ).toBe('0.5.0')
+    expect(checkerOpts.parseVersion!({ assets: [{ name: 'unrelated-asset.txt' }] })).toBeNull()
+
     expect(launchMock).toHaveBeenCalledTimes(1)
     const config = launchMock.mock.calls[0]?.[0]
-    expect(config?.updateChecker).toBeDefined()
+    // Identity, not just truthiness — passing some other truthy value under
+    // `updateChecker` would satisfy toBeDefined() without actually wiring the
+    // factory's checker through to launch().
+    expect(config?.updateChecker).toBe(createGitHubReleaseCheckerMock.mock.results[0]?.value)
   })
 
   it('dev (unpackaged) run: launch() gets no updateChecker — no GitHub API calls, no update dialog', async () => {

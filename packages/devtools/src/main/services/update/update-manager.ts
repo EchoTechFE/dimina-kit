@@ -62,8 +62,21 @@ export class UpdateManager {
       const currentVersion = this.getCurrentVersion()
       const info = await this.checker.checkForUpdates(currentVersion)
       if (info) {
+        // The periodic timer re-runs check() forever (see startPeriodicCheck),
+        // including after the user already downloaded this same update but
+        // before they clicked Install. Only invalidate downloadedPath when the
+        // update identity actually changed — unconditionally nulling it here
+        // would silently no-op a later install() (it's a bare `if (this.downloadedPath)`)
+        // for anyone who takes longer than one check interval to act. Compare
+        // downloadUrl too, not just version: a re-uploaded/replaced asset can
+        // keep the same version string under a different URL, and reusing the
+        // stale downloadedPath would then install bytes that were never
+        // actually verified against this checkForUpdates() result.
+        const isSameUpdate =
+          this.latestUpdate?.version === info.version &&
+          this.latestUpdate?.downloadUrl === info.downloadUrl
         this.latestUpdate = info
-        this.downloadedPath = null
+        if (!isSameUpdate) this.downloadedPath = null
         return { hasUpdate: true, info }
       }
       return { hasUpdate: false }
@@ -89,11 +102,23 @@ export class UpdateManager {
     }
   }
 
-  install(): void {
-    if (this.downloadedPath) {
-      shell.openPath(this.downloadedPath)
-      app.quit()
+  async install(): Promise<{ success: boolean; error?: string }> {
+    if (!this.downloadedPath) {
+      return { success: false, error: 'No update downloaded' }
     }
+    // shell.openPath() resolves (never rejects) with an empty string on
+    // success or an error message on failure — it was previously fired
+    // fire-and-forget immediately followed by app.quit(), so a failure (e.g.
+    // no application associated with the installer) silently closed the app
+    // without ever launching the installer, and the renderer had no way to
+    // know anything went wrong.
+    const failure = await shell.openPath(this.downloadedPath)
+    if (failure) {
+      console.warn('[UpdateManager] install failed:', failure)
+      return { success: false, error: failure }
+    }
+    app.quit()
+    return { success: true }
   }
 
   /**
