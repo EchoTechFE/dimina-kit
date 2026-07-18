@@ -133,11 +133,11 @@
     },
     "test-report": {
       "direction": "higher-is-better",
-      "value": 4336,
+      "value": 4338,
       "unit": "passed tests",
       "breakdown": {
         "devkit": 177,
-        "devtools": 2476,
+        "devtools": 2478,
         "electron-deck": 1059,
         "electron-deck/dock-react": 96,
         "fs-core": 133,
