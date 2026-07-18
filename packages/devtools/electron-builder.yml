@@ -18,6 +18,7 @@ extraMetadata:
 files:
   - dist/**/*
   - package.json
+  - templates/**/*
   - '!**/*.map'
   # The compile runtime is @dimina-kit/compiler's node bundles (loaded by
   # @dimina-kit/devkit's forked compile worker). They keep sass / less /

@@ -408,7 +408,18 @@ export function runDevtoolsBootstrap(config: WorkbenchAppConfig = {}): void {
  * v2 `RuntimeBackend.assemble` reuses the exact same body (parity by shared
  * implementation, not behavioural re-creation).
  */
-export async function createDevtoolsRuntime(config: WorkbenchAppConfig = {}): Promise<WorkbenchAppInstance> {
+export async function createDevtoolsRuntime(
+  config: WorkbenchAppConfig = {},
+  /**
+   * Fired the instant the `WorkbenchAppInstance` exists — BEFORE `config.onSetup`
+   * is awaited below, which may run arbitrarily long host code (including
+   * loading the host-toolbar, which opens a live MessagePort). A caller that
+   * only learns `instance` from this function's return value would not see it
+   * until `onSetup` resolves, leaving a window where an app-quit teardown hook
+   * has nothing to dispose yet a live toolbar port already exists.
+   */
+  onInstanceCreated?: (instance: WorkbenchAppInstance) => void,
+): Promise<WorkbenchAppInstance> {
   // Self-gate on Electron readiness: this builds a BrowserWindow immediately, so
   // it must run after `app.whenReady()`. The framework backend path already
   // awaited it (idempotent no-op here); this guards any direct caller against
@@ -474,6 +485,7 @@ export async function createDevtoolsRuntime(config: WorkbenchAppConfig = {}): Pr
       context.registry.add(toDisposable(context.simulatorApis.register(name, handler))),
     dispose: () => disposeContext(context),
   }
+  onInstanceCreated?.(instance)
 
   // Built-in simulator APIs: devtools-supplied wx.* implementations that run
   // in the main process. Hosts can override any of these in their onSetup by

@@ -90,9 +90,16 @@ async function materializeTemplate(
       `Template source missing on disk: ${template.source.path}`,
     )
   }
-  // `recursive: true` makes cpSync mirror the entire tree (files,
-  // subdirs, symlinks). `force: true` mirrors over an empty target.
-  fs.cpSync(template.source.path, target, {
+  // `recursive: true` makes cp mirror the entire tree (files, subdirs,
+  // symlinks). `force: true` mirrors over an empty target. `fs.promises.cp`
+  // (not the sync `fs.cpSync`) deliberately: cpSync's no-filter directory
+  // walk takes Node's native `cpSyncCopyDir` fast path, whose internal
+  // filesystem calls can `abort()` the whole process on certain errors
+  // (long/restricted/non-ASCII paths — nodejs/node#63970) instead of
+  // throwing a catchable JS exception. The async `cp` walks in pure JS and
+  // turns the same failures into a normal rejection this function already
+  // propagates to its IPC-boundary try/catch.
+  await fs.promises.cp(template.source.path, target, {
     recursive: true,
     force: true,
   })

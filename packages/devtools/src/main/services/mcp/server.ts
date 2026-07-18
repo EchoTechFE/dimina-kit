@@ -49,7 +49,6 @@ export function startMcpServer(resolvedCdpPort: number, mcpPort: number): Dispos
   connectTarget('simulator').catch(() => {})
   connectTarget('workbench').catch(() => {})
 
-  const server = buildServer()
   const transports = new Map<string, SSEServerTransport>()
 
   const httpServer = createServer(async (req, res) => {
@@ -59,7 +58,27 @@ export function startMcpServer(resolvedCdpPort: number, mcpPort: number): Dispos
       const transport = new SSEServerTransport('/message', res)
       transports.set(transport.sessionId, transport)
       res.on('close', () => transports.delete(transport.sessionId))
-      await server.connect(transport)
+      try {
+        // A fresh McpServer PER CONNECTION: the SDK's Protocol is strictly
+        // 1:1 with its transport (`connect()` throws "Already connected to a
+        // transport" if `this._transport` is already set), so reusing one
+        // global server across concurrent SSE clients breaks every
+        // connection after the first. Registration only builds tool-call
+        // closures over already-shared module-level state (target-manager's
+        // CDP connections/listeners) — it has no per-call side effects, so
+        // building N servers is cheap and duplicates nothing.
+        await buildServer().connect(transport)
+      } catch (err) {
+        transports.delete(transport.sessionId)
+        // `connect()` calls `transport.start()` (writes the SSE 200 + headers)
+        // BEFORE it can throw, so a post-start failure here has already sent
+        // headers — writeHead would itself throw. End the response instead so
+        // the client's stream closes cleanly rather than hanging forever with
+        // an open connection nothing will ever write to again.
+        if (!res.headersSent) res.writeHead(500).end('MCP connect failed')
+        else res.end()
+        console.error('[MCP] SSE connect failed:', err)
+      }
     } else if (req.method === 'POST' && url.pathname === '/message') {
       const sessionId = url.searchParams.get('sessionId') ?? ''
       const transport = transports.get(sessionId)
