@@ -409,6 +409,14 @@ export const AutomationChannel = {
   GetPort: 'automation:port',
 } as const
 
+// ── Standalone internal (app-wide) DevTools debug window ─────────────────
+
+export const InternalDevtoolsChannel = {
+  // Open (or focus, if already open) the internal debug DevTools, hosted in
+  // its own dedicated window (see internal-devtools-window/index.ts).
+  Open: 'internal-devtools:open',
+} as const
+
 // ── Embedded settings overlay ────────────────────────────────────────────
 
 export const SettingsChannel = {

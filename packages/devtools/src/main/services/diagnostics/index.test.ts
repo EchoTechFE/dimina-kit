@@ -80,6 +80,40 @@ describe('createDiagnosticsBus — report + live dispatch', () => {
   })
 })
 
+describe('createDiagnosticsBus — audience', () => {
+  it('carries an explicit `audience` through to the dispatched entry untouched', () => {
+    const bus = createDiagnosticsBus()
+    const received: Diagnostic[] = []
+    bus.subscribe((d) => { received.push(d) })
+
+    bus.report({ severity: 'info', code: 'compile-standby', message: 'compile standby spawned pid=1', audience: 'internal' })
+    bus.report({ severity: 'error', code: 'page-not-found', message: 'Page[pages/x/x] not found', audience: 'user' })
+
+    expect(received[0]?.audience).toBe('internal')
+    expect(received[1]?.audience).toBe('user')
+  })
+
+  it('leaves `audience` undefined on the dispatched entry when the caller omits it (no forced default at the bus level — downstream consumers decide how to treat undefined)', () => {
+    const bus = createDiagnosticsBus()
+    const received: Diagnostic[] = []
+    bus.subscribe((d) => { received.push(d) })
+
+    bus.report({ severity: 'error', code: 'page-not-found', message: 'Page[pages/x/x] not found' })
+
+    expect(received[0]?.audience).toBeUndefined()
+  })
+
+  it('replays a buffered diagnostic\'s `audience` unchanged to a subscriber that joins later', () => {
+    const bus = createDiagnosticsBus()
+    bus.report({ severity: 'info', code: 'compile-standby', message: 'compile standby adopted pid=2', audience: 'internal' })
+
+    const received: Diagnostic[] = []
+    bus.subscribe((d) => { received.push(d) })
+
+    expect(received[0]?.audience).toBe('internal')
+  })
+})
+
 describe('createDiagnosticsBus — replay buffer', () => {
   it('replays prior entries in order to a subscriber by default (replay defaults true)', () => {
     const bus = createDiagnosticsBus()

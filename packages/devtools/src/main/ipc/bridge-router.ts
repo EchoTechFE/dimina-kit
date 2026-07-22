@@ -403,6 +403,10 @@ export interface BridgeRouterHandle {
    * before the first PAGE_STACK signal. Optional: only the native-host bridge
    * provides it (the default path derives the stack from the simulator URL). */
   getPageStack?(appId?: string): PageStackEntry[] | null
+  /** The current (or named) app session's resource-server baseUrl (serves
+   * that session's framework js/css), or null when no matching session
+   * exists. Per-session, never a global singleton — see AppSession.resourceBaseUrl. */
+  getResourceBaseUrl?(appId?: string): string | null
   /** Subscribe to render-side activity (domReady / active-page change). */
   onRenderEvent(listener: (event: RenderEvent) => void): () => void
   /** The currently-selected device (renderer toolbar), or null pre-selection. */
@@ -613,6 +617,10 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
     getPageStack: (appId) => {
       const ap = resolveCurrentApp(state, ctx, appId)
       return ap?.pageStack ?? null
+    },
+    getResourceBaseUrl: (appId) => {
+      const ap = resolveCurrentApp(state, ctx, appId)
+      return ap?.resourceBaseUrl ?? null
     },
     getActiveRenderWc: (appId) => {
       const ap = resolveCurrentApp(state, ctx, appId)
