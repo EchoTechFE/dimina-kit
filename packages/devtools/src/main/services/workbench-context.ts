@@ -4,6 +4,7 @@ import type { BridgeRouterHandle } from '../ipc/bridge-router.js'
 import type { ConsoleForwarder } from './console-forward/index.js'
 import type { DiagnosticsBus } from './diagnostics/index.js'
 import type { NetworkForwarder } from './network-forward/index.js'
+import type { InternalDevtoolsWindow } from '../windows/internal-devtools-window/index.js'
 import { createCdpSessionBroker, type CdpSessionBroker } from './cdp-session/index.js'
 import type { AppDataTap } from './simulator-appdata/index.js'
 import type { StorageApi } from './simulator-storage/index.js'
@@ -240,6 +241,16 @@ export interface WorkbenchContext {
    * DevTools host exist. Undefined until bootstrap wires it.
    */
   networkForward?: NetworkForwarder
+
+  /**
+   * Controller for the standalone internal (app-wide) DevTools debug window
+   * — the independent floating CDP panel that debugs the whole Electron app
+   * (as opposed to the right-panel CDP, which inspects only the user's
+   * mini-program). Assembled in app bootstrap via
+   * `createInternalDevtoolsWindow(mainWindow)`; undefined only in contexts
+   * that skip that wiring (e.g. narrow test doubles).
+   */
+  internalDevtoolsWindow?: InternalDevtoolsWindow
 }
 
 /**

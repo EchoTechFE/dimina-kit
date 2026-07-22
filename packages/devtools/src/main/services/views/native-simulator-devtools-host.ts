@@ -7,6 +7,7 @@ import {
 } from '../../../shared/open-in-editor.js'
 import type { RenderEvent } from '../../ipc/bridge-router.js'
 import { buildCustomizeTabsScript } from './devtools-tabs.js'
+import { buildConsoleFilterScript } from './console-filter.js'
 import { installElementsForward } from '../elements-forward/index.js'
 import { installServiceConsoleForward } from '../service-console/index.js'
 import { VIEW_ID } from '../../../shared/view-ids.js'
@@ -189,6 +190,24 @@ export function createDevtoolsHost(
     } catch { /* wc surface incomplete / torn down; degrade silently */ }
   }
 
+  // User-facing Console de-noise: hide dimina
+  // framework internal log lines from THIS right-panel Console — the
+  // standalone internal DevTools window (native-only, wired elsewhere) shows
+  // them unfiltered. Re-applied on every re-point, same policy as
+  // customizeDevtoolsTabs.
+  function applyConsoleFilter(devtoolsWc: WebContents): void {
+    try {
+      if (devtoolsWc.isDestroyed()) return
+      const inject = (): void => {
+        if (devtoolsWc.isDestroyed()) return
+        try {
+          void devtoolsWc.executeJavaScript(buildConsoleFilterScript()).catch(() => {})
+        } catch { /* wc torn down mid-call */ }
+      }
+      injectWhenReady(devtoolsWc, 'console-filter', inject)
+    } catch { /* wc surface incomplete / torn down; degrade silently */ }
+  }
+
   function wireOpenInEditor(serviceWc: WebContents, devtoolsWc: WebContents): void {
     // Inject the front-end handler on every (re)attach — the DevTools front-end
     // wc is recreated per simulatorView, so a fresh host needs the handler set.
@@ -276,6 +295,9 @@ export function createDevtoolsHost(
       // Re-applied on every re-point so a service-host pool swap (fresh
       // openDevTools) re-asserts the custom tab bar.
       customizeDevtoolsTabs(simulatorView.webContents)
+      // De-noise the user-facing Console: hide
+      // dimina framework internal log lines from THIS panel by default.
+      applyConsoleFilter(simulatorView.webContents)
       // Capture service-layer console via CDP (NOT a preload monkeypatch, which
       // would clobber native source attribution) and feed it to the console
       // fan-out (automation `App.logAdded`). Bound to THIS service wc; replaced
@@ -367,8 +389,15 @@ export function createDevtoolsHost(
     // Instead drive the front-end's own view manager: the bundled DevTools
     // exposes `UI.ViewManager.instance().showView(id)` on `globalThis.UI`
     // once the front-end has finished bootstrapping. We poll for it and
-    // request the `console` view, and also persist the choice via the
-    // `panel-selectedTab` localStorage key so subsequent reloads honor it.
+    // request the `console` view. (This live call is the entire mechanism —
+    // an earlier `localStorage.setItem('panel-selectedTab', …)` alongside it
+    // was dead code: this setting is Global-storage-backed via
+    // `InspectorFrontendHost.setPreference`/`getPreferences`, not
+    // `window.localStorage`, on Chrome 146 — confirmed by reading the real
+    // Electron host Preferences file, which persists it as
+    // `panel-selected-tab`, kebab-case. Removed rather than "fixed", since
+    // the live showView() call already fully achieves the intended effect
+    // without needing any persisted setting.)
     const devtoolsWc = simulatorView.webContents
     // The boot-time burst of `executeJavaScript()` injects on this host wc (tab
     // customization / console default / Elements+Network forwarding below) each
@@ -420,7 +449,6 @@ export function createDevtoolsHost(
     injectWhenReady(devtoolsWc, 'console-default', () => {
       devtoolsWc.executeJavaScript(`
         (function() {
-          try { localStorage.setItem('panel-selectedTab', '"console"') } catch {}
           let tries = 0
           const timer = setInterval(() => {
             tries++

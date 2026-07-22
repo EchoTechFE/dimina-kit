@@ -10,6 +10,9 @@ import type { SimulatorApiHandler } from '../services/simulator/custom-apis.js'
 import { rendererDir as defaultRendererDir, defaultPreloadPath, devtoolsPackageRoot } from '../utils/paths.js'
 import { installThemeBackgroundSync } from '../utils/theme.js'
 import { createMainWindow, wireMainWindowEvents } from '../windows/main-window/index.js'
+import { createInternalDevtoolsWindow } from '../windows/internal-devtools-window/index.js'
+import { createGlobalConsoleMirror } from '../services/console-forward/global-console-mirror.js'
+import { createGlobalDiagnosticsMirror } from '../services/console-forward/global-diagnostics-mirror.js'
 import { isAppQuitting } from './lifecycle.js'
 import { resolveNativeAppDataKeys, resolveNativeStorageOverview } from './native-overview.js'
 // eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
@@ -19,6 +22,7 @@ import { loadWorkbenchSettings, applyTheme } from '../services/settings/index.js
 import { installAppMenu } from '../menu/index.js'
 import {
   registerAppIpc,
+  registerInternalDevtoolsIpc,
   popoverModule,
   projectsModule,
   sessionModule,
@@ -440,6 +444,16 @@ export async function createDevtoolsRuntime(
   context.registry.add(registerAppIpc(context))
   // Sandboxed project file-system IPC (the renderer-side project:fs:* surface).
   context.registry.add(registerProjectFsIpc(context))
+  // Standalone internal (app-wide) DevTools debug window controller — the
+  // independent floating CDP panel that debugs the whole Electron app (as
+  // opposed to the right-panel CDP, which inspects only the user's
+  // mini-program). Assembled before the IPC handler below so a request
+  // arriving right after boot always finds it.
+  context.internalDevtoolsWindow = createInternalDevtoolsWindow(mainWindow)
+  context.registry.add(toDisposable(() => context.internalDevtoolsWindow?.dispose()))
+  // Unconditional (not a toggleable BUILTIN_MODULES entry): it's core dev
+  // tooling, not a host-configurable feature.
+  context.registry.add(registerInternalDevtoolsIpc(context))
   // Referer/CORS webRequest policy for the simulator runtime's sessions (shared
   // fallback + every per-project partition). Registered into the context
   // registry so its configurator + per-session listeners are torn down with the
@@ -454,6 +468,44 @@ export async function createDevtoolsRuntime(
   // spare). Registered into the registry so the spare dies with the context.
   if (!config.adapter) context.registry.add(setupCompileWorkerStandby(context))
   registerBuiltinModules(config, context)
+
+  // Global console mirror: while the standalone
+  // internal DevTools window is open, mirror every guest console entry
+  // (service + render, UNFILTERED — see global-console-mirror.ts) into it —
+  // each open replays the forwarder's current history buffer first (see that
+  // module's doc comment for why the subscribe lifecycle is gated on
+  // onHostChanged rather than subscribed once at construction time).
+  // `context.consoleForwarder` is assembled by the simulator module's
+  // installBridgeRouter just above; absent only when that builtin module was
+  // disabled via config. The Console panel shows the INSPECTED target's own
+  // console (mainWindow, per internal-devtools-window.ts's
+  // setDevToolsWebContents relationship) — NOT the front-end host page's
+  // console, so `target` is always mainWindow.webContents, never the hostWc
+  // onHostChanged hands the mirror.
+  if (context.consoleForwarder && context.internalDevtoolsWindow) {
+    const consoleMirror = createGlobalConsoleMirror(
+      context.consoleForwarder,
+      mainWindow.webContents,
+      context.internalDevtoolsWindow.onHostChanged,
+    )
+    context.registry.add(toDisposable(() => consoleMirror.dispose()))
+  }
+
+  // Global diagnostics mirror (same wiring, same INSPECTED-side
+  // target rationale as the console mirror above): every diagnostic —
+  // including `audience:'internal'` ones console-forward's own service-host
+  // injection now skips (see compile-standby.ts / index.ts's handleDiagnostic
+  // gate) — surfaces here instead of vanishing. `context.diagnostics` is
+  // assembled alongside `context.consoleForwarder` by the same
+  // installBridgeRouter call.
+  if (context.diagnostics && context.internalDevtoolsWindow) {
+    const diagnosticsMirror = createGlobalDiagnosticsMirror(
+      context.diagnostics,
+      mainWindow.webContents,
+      context.internalDevtoolsWindow.onHostChanged,
+    )
+    context.registry.add(toDisposable(() => diagnosticsMirror.dispose()))
+  }
 
   // Wire the simulator-side difile:// protocol handler + temp-file IPC
   // before host onSetup so any host-driven simulator boot sees the
@@ -606,12 +658,33 @@ export async function createDevtoolsRuntime(
     // DevTools host exist; getServiceWc here is the fallback sink target.
     const networkForward = createNetworkForwarder({
       getServiceWc: (appId) => context.bridge?.getServiceWc(appId) ?? null,
+      getResourceServerBaseUrl: () => context.bridge?.getResourceBaseUrl?.() ?? null,
+      // The simulator shell's own static-asset server (serves simulator.html
+      // + its JS/CSS, independent from the resource server above — see
+      // NetworkForwarderBridge.getSimulatorServerBaseUrl's doc). Host is
+      // always 'localhost' — see shared/simulator-route.ts's
+      // buildSimulatorUrlFromSpec default. Absent (null port) when no
+      // project is open.
+      getSimulatorServerBaseUrl: () => {
+        const port = context.workspace?.getSession()?.port
+        return typeof port === 'number' ? `http://localhost:${port}/` : null
+      },
       connections: context.connections,
       broker: context.cdpSessionBroker,
     })
     context.networkForward = networkForward
     context.registry.add(networkForward)
     context.registry.add(() => { context.networkForward = undefined })
+    // Global mirror: once the standalone internal
+    // DevTools window builds its own front-end host, mirror the full
+    // unfiltered Network stream into it. Attached AFTER context.networkForward
+    // is assigned above — the callback re-reads the mutable field on every
+    // fire, so ordering only matters for readability here, not correctness.
+    context.registry.add(toDisposable(
+      context.internalDevtoolsWindow?.onHostChanged((hostWc) => {
+        context.networkForward?.setGlobalDevtoolsHost(hostWc)
+      }) ?? (() => {}),
+    ))
 
     context.registry.add(setupSimulatorWxml(mainWindow.webContents, {
       senderPolicy: context.senderPolicy,
