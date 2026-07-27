@@ -19,6 +19,7 @@
     "test:coverage": "turbo run test:coverage",
     "lint": "turbo run lint",
     "dev": "turbo run dev",
+    "check:electron-peer-sync": "node scripts/check-electron-peer-sync.mjs",
     "pawl:check": "pawl check",
     "pawl:record": "pawl record",
     "pawl:diff": "pawl diff"

@@ -75,6 +75,14 @@ jobs:
       - name: Check wasm toolchain alignment with upstream
         run: pnpm --filter @dimina-kit/compiler run check:wasm-alignment
 
+      # Catches the case that bit qdmp-devtools: devDependencies.electron
+      # got bumped in packages/devtools or packages/electron-deck but
+      # peerDependencies.electron (the only version signal downstream hosts
+      # see, since devDependencies are never installed by consumers) was left
+      # on the old major.
+      - name: Check electron peerDependencies stay in sync with devDependencies
+        run: pnpm run check:electron-peer-sync
+
       - name: Lint and type-check
         run: pnpm turbo run lint check-types --cache-dir=.turbo
 
