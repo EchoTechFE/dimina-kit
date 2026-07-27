@@ -109,14 +109,20 @@ scheme            ├─ getAllWindows() 逐窗口      → setBackgroundColor(
 
 ## 已知限制
 
-在 Linux 上，`updated` 事件**不会**因「操作系统级」的主题切换而触发
-（[electron/electron#25925](https://github.com/electron/electron/issues/25925)），
-只对代码里显式赋值 `nativeTheme.themeSource` 触发。
+在部分 Linux 桌面环境（KDE Plasma + Wayland、以及其他 wlroots 系合成器）上，
+「操作系统级」的主题切换会让 `updated` 触发时携带**过期或取反**的
+`shouldUseDarkColors`，而不是不触发——这是 Chromium ≥142 引入的 regression
+（[electron/electron#48736](https://github.com/electron/electron/issues/48736)，
+对应 [crbug 462191707](https://issues.chromium.org/issues/462191707)，截至
+2026-06 仍未修复），跟更早的
+[electron/electron#25925](https://github.com/electron/electron/issues/25925)
+（已于 Electron 13、2021 年修复）是两回事。GNOME/GTK-portal 桌面不受影响。
 
 影响范围：
 
 - **应用内切换主题**（设置面板选浅色/深色）走 `applyTheme()` 的显式赋值，
   在所有平台（含 Linux）都正常 —— 不受此限制影响。
-- 仅「主题设为『跟随系统』+ 用户在 Linux 上改了操作系统主题」这一条路径会失效。
-  且这是 Electron 上游限制：此时连渲染层的 `prefers-color-scheme` 都不会更新，
-  整个应用都不响应 —— 不是窗口背景这一层能解决的问题。
+- 仅「主题设为『跟随系统』+ 用户在受影响的 Linux 桌面环境上改了操作系统主题」
+  这一条路径会失效。且这是 Electron 上游限制：此时连渲染层的
+  `prefers-color-scheme` 都会取反或陈旧，整个应用都不响应 ——
+  不是窗口背景这一层能解决的问题。
