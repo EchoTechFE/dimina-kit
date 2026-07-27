@@ -36,6 +36,10 @@ interface FakeDiagnostic {
   code: string
   message: string
   appSessionId?: string
+  /** Contract 1 (not yet on the real `Diagnostic` type): `'internal'` diagnostics
+   *  must never reach the user-facing service host — see the "audience" describe
+   *  block below. Undefined/`'user'` behave exactly like today. */
+  audience?: 'user' | 'internal'
   ts: number
 }
 interface FakeDiagnosticsBus {
@@ -287,6 +291,98 @@ describe('createConsoleForwarder(bridge, diagnostics) — queue + notifyServiceH
     fwd.notifyServiceHostReady('session-A')
 
     expect(target.exec).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('createConsoleForwarder(bridge, diagnostics) — audience gating', () => {
+  it('does NOT inject an audience:"internal" diagnostic into a resolved, ready service host', () => {
+    const target = makeWc()
+    const diagnostics = makeFakeDiagnosticsBus()
+    const fwd = createConsoleForwarder(
+      { getServiceWc: () => target.wc, getServiceWcForBridge: () => target.wc },
+      diagnostics as never,
+    )
+    fwd.notifyServiceHostReady('session-A')
+
+    diagnostics.report({
+      severity: 'info',
+      code: 'compile-standby',
+      message: 'compile standby spawned pid=89193',
+      appSessionId: 'session-A',
+      audience: 'internal',
+    })
+
+    expect(target.exec).not.toHaveBeenCalled()
+  })
+
+  it('does NOT inject a session-less audience:"internal" diagnostic even when the active service host resolves', () => {
+    const active = makeWc()
+    const diagnostics = makeFakeDiagnosticsBus()
+    createConsoleForwarder(
+      { getServiceWc: () => active.wc, getServiceWcForBridge: () => null },
+      diagnostics as never,
+    )
+
+    diagnostics.report({
+      severity: 'info',
+      code: 'compile-standby',
+      message: 'compile standby prewarmed pid=89193',
+      audience: 'internal',
+    })
+
+    expect(active.exec).not.toHaveBeenCalled()
+  })
+
+  it('never queues an audience:"internal" diagnostic — a later notifyServiceHostReady for its session does not retroactively inject it', () => {
+    // If handleDiagnostic queued internal diagnostics like user ones, this would
+    // catch it: the host is unresolvable at report() time, then becomes
+    // resolvable once notifyServiceHostReady fires for that session.
+    const owning = makeWc()
+    const diagnostics = makeFakeDiagnosticsBus()
+    const fwd = createConsoleForwarder(
+      { getServiceWc: () => null, getServiceWcForBridge: (id) => (id === 'session-A' ? owning.wc : null) },
+      diagnostics as never,
+    )
+
+    diagnostics.report({
+      severity: 'info',
+      code: 'compile-standby',
+      message: 'compile standby adopted pid=89193',
+      appSessionId: 'session-A',
+      audience: 'internal',
+    })
+    fwd.notifyServiceHostReady('session-A')
+
+    expect(owning.exec).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['user' as const, 'explicit audience:"user"'],
+    [undefined, 'omitted audience'],
+  ])('injects exactly like before when audience is %s (%s)', (audience: 'user' | undefined, _label: string) => {
+    const target = makeWc()
+    const diagnostics = makeFakeDiagnosticsBus()
+    createConsoleForwarder(
+      { getServiceWc: () => target.wc, getServiceWcForBridge: () => null },
+      diagnostics as never,
+    )
+
+    diagnostics.report({ severity: 'error', code: 'page-not-found', message: 'Page[pages/x/x] not found', audience })
+
+    expect(target.exec).toHaveBeenCalledTimes(1)
+    expect(String(target.exec.mock.calls[0]![0])).toContain('Page[pages/x/x] not found')
+  })
+
+  it('an audience:"internal" diagnostic reported while no host resolves anywhere must not throw', () => {
+    const diagnostics = makeFakeDiagnosticsBus()
+    createConsoleForwarder(
+      { getServiceWc: () => null, getServiceWcForBridge: () => null },
+      diagnostics as never,
+    )
+
+    expect(() => {
+      diagnostics.report({ severity: 'info', code: 'compile-standby', message: 'compile standby spawned pid=1', audience: 'internal' })
+    }).not.toThrow()
   })
 })
 

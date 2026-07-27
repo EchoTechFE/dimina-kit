@@ -5,6 +5,7 @@ import {
   publishPlacementSnapshot,
   onHostToolbarHeightChanged,
   getHostToolbarHeight,
+  openInternalDevtools,
 } from '@/shared/api'
 import type { Project } from '@/shared/types'
 import { useProjectRuntimeController } from './controllers/use-project-runtime-controller'
@@ -231,6 +232,7 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
           runtimeStatus={session.runtimeStatus}
           watcherDead={session.watcherDead}
           onRelaunch={() => session.relaunch()}
+          onOpenInternalDevtools={() => { void openInternalDevtools() }}
         />
       )
     }

@@ -57,6 +57,7 @@ import { DisposableRegistry, toDisposable, type Disposable } from '@dimina-kit/e
 import type { BridgeRouterHandle } from '../../ipc/bridge-router.js'
 import { RENDER_FORWARD_SOURCE_URL } from '../service-console/console-api.js'
 import type { Diagnostic, DiagnosticsBus } from '../diagnostics/index.js'
+import { isInternalLogMessage } from './internal-log.js'
 
 /**
  * One console entry posted by a guest preload. Shape mirrors
@@ -89,8 +90,20 @@ export interface ConsoleForwarder extends Disposable {
    * Register an external sink (e.g. automation WS broadcast). Returns a
    * Disposable that unregisters it. Sinks see EVERY entry (both layers) — the
    * render→service forward is internal and not exposed as a sink.
+   *
+   * A bounded history buffer (200 entries, oldest dropped first — mirrors
+   * `DiagnosticsBus`'s `DEFAULT_BUFFER_CAP` ring-buffer style) records every
+   * entry regardless of whether anyone is subscribed. `opts.replay` (default
+   * `false`, UNLIKE `DiagnosticsBus` whose default is `true`) opts a new
+   * subscriber into draining that buffer, in order, before receiving live
+   * entries. Default stays non-replaying because the existing automation
+   * subscriber (`services/automation/index.ts`) wants only entries from the
+   * moment it subscribes — a history dump on an existing WS connection would
+   * be a surprise duplicate broadcast. `{replay:true}` exists for the global
+   * console mirror, whose whole point is to catch up a standalone debug
+   * window opened well after boot.
    */
-  subscribe(sink: ConsoleSink): Disposable
+  subscribe(sink: ConsoleSink, opts?: { replay?: boolean }): Disposable
   /**
    * Flush any diagnostic queued for `appSessionId` (plus the global,
    * session-less queue) into that session's now-ready service-host wc.
@@ -156,6 +169,12 @@ export function createConsoleForwarder(
 ): ConsoleForwarder {
   const sinks = new Set<ConsoleSink>()
   const registry = new DisposableRegistry()
+  // Bounded history ring buffer backing `subscribe(sink, {replay:true})` —
+  // see the interface doc comment above. Every entry is recorded regardless
+  // of whether anyone is subscribed, so a replaying subscriber that arrives
+  // long after boot (the standalone global debug window) still catches up.
+  const CONSOLE_BUFFER_CAP = 200
+  const buffer: GuestConsoleEntry[] = []
   // Diagnostics queued because no live service-host wc could be resolved yet,
   // bucketed by the owning appSessionId; diagnostics with no appSessionId land
   // in `pendingGlobal` instead. `notifyServiceHostReady` drains both into the
@@ -185,6 +204,15 @@ export function createConsoleForwarder(
    * missing/destroyed/not-yet-ready host is a normal state, not an error.
    */
   function handleDiagnostic(d: Diagnostic): void {
+    // Internal-audience diagnostics (e.g. compile-standby's warm-pool
+    // lifecycle) are devtools-tooling-only state — never inject them into a
+    // project's service host (the right-panel CDP is natively attached
+    // there), and never queue them either: queuing exists so a diagnostic
+    // survives until ITS session's host becomes resolvable, which is
+    // meaningless for something that must never reach any service host.
+    // (See global-diagnostics-mirror.ts for where these actually surface —
+    // the independent, unfiltered "debug the whole app" panel.)
+    if (d.audience === 'internal') return
     if (d.appSessionId) {
       const wc = readySessions.has(d.appSessionId) && bridge.getServiceWcForBridge
         ? bridge.getServiceWcForBridge(d.appSessionId)
@@ -217,9 +245,19 @@ export function createConsoleForwarder(
    * page (multi-app safe), falling back to the active app's service host when
    * the bridgeId is unknown — that's the host the embedded DevTools inspects.
    * No-op on a destroyed/missing host so we never write to a torn-down wc (pool
-   * reuse / session swap can swap the host out under us).
+   * reuse / session swap can swap the host out under us). Skips dimina
+   * framework-internal render-layer log lines (`isInternalLogMessage`) —
+   * those must never reach the project's right-panel console at all (the
+   * global console mirror still sees them via the `sinks` broadcast in
+   * `emit()`, which runs before this function). This is the source-level fix
+   * for the render half of the noise console-filter.ts's front-end text
+   * filter used to paper over; the service-layer half (`[service]` lines,
+   * native CDP-observed, no interception point available — see
+   * service-host/preload.cjs's "console.* is deliberately NOT patched"
+   * comment) still needs that filter.
    */
   function forwardRenderToServiceHost(entry: GuestConsoleEntry): void {
+    if (isInternalLogMessage(entry)) return
     let wc: WebContents | null = null
     if (entry.bridgeId && bridge.getServiceWcForBridge) {
       wc = bridge.getServiceWcForBridge(entry.bridgeId)
@@ -246,6 +284,8 @@ export function createConsoleForwarder(
     // (render only — see loop-safety invariant in the module header).
     emit(raw) {
       const entry = (raw ?? {}) as GuestConsoleEntry
+      buffer.push(entry)
+      if (buffer.length > CONSOLE_BUFFER_CAP) buffer.shift()
       for (const sink of sinks) {
         try { sink(entry) } catch { /* a sink must never break the others */ }
       }
@@ -254,7 +294,12 @@ export function createConsoleForwarder(
       // (see header).
       if (entry.source === 'render') forwardRenderToServiceHost(entry)
     },
-    subscribe(sink) {
+    subscribe(sink, opts) {
+      if (opts?.replay) {
+        for (const entry of buffer) {
+          try { sink(entry) } catch { /* isolate a replay throw same as a live one */ }
+        }
+      }
       sinks.add(sink)
       return registry.add(toDisposable(() => { sinks.delete(sink) }))
     },
@@ -280,6 +325,7 @@ export function createConsoleForwarder(
     },
     dispose() {
       sinks.clear()
+      buffer.length = 0
       pendingBySession.clear()
       pendingGlobal.length = 0
       readySessions.clear()

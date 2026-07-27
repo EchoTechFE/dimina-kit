@@ -64,7 +64,7 @@ function makeFakeDevkit(): {
   }
 }
 
-type ReportArg = { severity: string; code: string; message: string }
+type ReportArg = { severity: string; code: string; message: string; audience?: string }
 
 /** Minimal DiagnosticsBus double — report is the only method under test. */
 function makeFakeDiagnostics(): { bus: DiagnosticsBus; reports: ReportArg[] } {
@@ -132,6 +132,28 @@ describe('setupCompileWorkerStandby — event → diagnostics mapping', () => {
     expect(reports[3]!.message).toContain('died')
     expect(reports[4]!.message).toContain('health-check-failed')
     expect(reports[5]!.message).toContain('degraded')
+
+    await handle.dispose()
+  })
+
+  it('tags every reported diagnostic audience:"internal" — this is compile-worker toolchain telemetry, not a fact about the user\'s project, so it must never surface in the user-facing service-host console', async () => {
+    const setup = await getSetup()
+    const devkit = makeFakeDevkit()
+    const { bus, reports } = makeFakeDiagnostics()
+    const handle = setup({ diagnostics: bus }, { loadDevkit: async () => devkit.module })
+    await vi.waitFor(() => {
+      expect(devkit.enable).toHaveBeenCalledTimes(1)
+    })
+
+    devkit.emit({ type: 'spawned', pid: 89193 })
+    devkit.emit({ type: 'prewarmed', pid: 89193 })
+    devkit.emit({ type: 'adopted', pid: 89193 })
+    devkit.emit({ type: 'degraded', reason: '3 deaths in 30000ms' })
+
+    expect(reports).toHaveLength(4)
+    for (const report of reports) {
+      expect(report.audience).toBe('internal')
+    }
 
     await handle.dispose()
   })

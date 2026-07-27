@@ -79,6 +79,8 @@ import { packDispatchBatch } from './dispatch-batch.js'
 import { PrefetchCache, DEFAULT_PER_ENTRY_MAX_CHARS } from './body-cache.js'
 import { PROBE_DEVTOOLS_API, MAX_SINGLE_DISPATCH_CHARS, CHUNK_CHARS, buildChunkedDispatchScript } from './frontend-dispatch.js'
 import { createCdpSessionBroker, type CdpSessionBroker, type CdpSessionLease } from '../cdp-session/index.js'
+import { isUserFacingRequest } from './user-facing.js'
+import { installGlobalNetworkBodyGate } from './global-body-gate.js'
 
 /**
  * Namespace prefix of every virtual requestId this forwarder injects into the
@@ -137,6 +139,26 @@ export interface NetworkForwarderBridge {
    */
   getDevtoolsWc?(): WebContents | null
   /**
+   * The dimina resource server's baseUrl (e.g. `'http://127.0.0.1:54321/'`),
+   * when running — consulted by `isUserFacingRequest` so the framework
+   * bundle it serves is classified as host-internal, not business traffic.
+   * Absent → that origin check is simply skipped (the scheme rule alone
+   * still filters out file:// / difile:// / devtools:// framework loads).
+   */
+  getResourceServerBaseUrl?(): string | null
+  /**
+   * The simulator's own static-asset server baseUrl (serves `simulator.html`
+   * + its JS/CSS — a devkit-owned server, independent from the resource
+   * server above, on its own dynamically-assigned port), when a project is
+   * open — consulted by `isUserFacingRequest` alongside
+   * `getResourceServerBaseUrl` so the simulator SHELL's own asset loading
+   * (captured because `attachSimulator` CDP-observes that whole
+   * WebContentsView, not just the mini-app's own `wx.request` calls) isn't
+   * misclassified as the developer's business traffic. Absent → that origin
+   * check is simply skipped.
+   */
+  getSimulatorServerBaseUrl?(): string | null
+  /**
    * Optional connection-layer registry (`@dimina-kit/electron-deck/main`). When
    * present, per-webContents teardowns route through `acquire(wc).own(d)` so the
    * Connection disposes them deterministically on wc destroy / reset (replacing
@@ -188,6 +210,17 @@ export interface NetworkForwarder extends Disposable {
    * we fall back to the console line. Re-callable across DevTools re-creates.
    */
   setDevtoolsHost(wc: WebContents | null): void
+  /**
+   * Point the forwarder at the WebContents hosting the standalone internal
+   * (app-wide) DevTools window's front-end — the global mirror sink.
+   * Unlike `setDevtoolsHost` (the user-facing sink), this has NO probing/
+   * ready/degraded state machine and NO console fallback: every
+   * FORWARDED_METHODS event is mirrored here raw and UNFILTERED (no
+   * `isUserFacingRequest` gating) whenever a host is set, best-effort (a
+   * failed dispatch is silently dropped — nobody depends on this path having
+   * a fallback). Pass null when the window closes.
+   */
+  setGlobalDevtoolsHost(wc: WebContents | null): void
   /**
    * Manually surface a request that no `webContents.debugger` can observe
    * (e.g. a main-process direct send). Uses the console fallback sink.
@@ -546,6 +579,162 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
   // Teardown for the wc 'destroyed' watcher on the current host (clears the host).
   let devtoolsHostDisposable: Disposable | null = null
 
+  // ── Global mirror sink ──────────────────────────────────────────────────────
+  // The standalone internal (app-wide) DevTools window's front-end host wc.
+  // Deliberately NO probing/ready/degraded state machine and NO console
+  // fallback — see setGlobalDevtoolsHost's doc comment.
+  let globalDevtoolsWc: WebContents | null = null
+  let globalDevtoolsHostDisposable: Disposable | null = null
+  // Dedicated network-only outbound gate (body/post-data lookups) for the
+  // CURRENT global host — never elements-forward's gate, see
+  // global-body-gate.ts's header for why. Stopped whenever the host changes
+  // or clears.
+  let globalBodyGateStop: (() => void) | null = null
+  // Bounded in-order hold for global-mirror messages arriving while the
+  // global host's front-end has not settled yet (its boot window) — without
+  // it those events are silently unrecoverable, breaking the window's
+  // full-stream promise. Scoped strictly to the CURRENT host: cleared when
+  // the host changes/clears, never replayed into a different host.
+  const MAX_GLOBAL_PENDING_QUEUE = 2000
+  let globalPendingQueue: string[] = []
+  let globalPendingOverflowWarned = false
+  let globalFlushTimer: ReturnType<typeof setTimeout> | null = null
+  // Wall-clock bound on the settle-poll (not on the queue itself): a
+  // front-end that never settles stops being polled after this, and the
+  // still-held queue flushes via the next incoming event instead.
+  const GLOBAL_FLUSH_POLL_MAX_MS = 60_000
+
+  function clearGlobalPending(): void {
+    globalPendingQueue = []
+    globalPendingOverflowWarned = false
+    if (globalFlushTimer) {
+      clearTimeout(globalFlushTimer)
+      globalFlushTimer = null
+    }
+  }
+
+  function scheduleGlobalFlush(startedAt = Date.now()): void {
+    if (globalFlushTimer) return
+    if (Date.now() - startedAt >= GLOBAL_FLUSH_POLL_MAX_MS) return
+    // unref'd like scheduleRenderGuestRetry's timer: a settle-poll must
+    // never be what keeps the process (or a test file) alive.
+    globalFlushTimer = setTimeout(() => {
+      globalFlushTimer = null
+      if (globalPendingQueue.length === 0) return
+      if (!globalDevtoolsWc || globalDevtoolsWc.isDestroyed()) {
+        clearGlobalPending()
+        return
+      }
+      if (!isFrontendSettled(globalDevtoolsWc)) {
+        scheduleGlobalFlush(startedAt)
+        return
+      }
+      flushGlobalPending()
+    }, READY_RETRY_MS)
+    globalFlushTimer.unref?.()
+  }
+
+  /** Drain the pending queue into the (settled) global host, oldest first,
+   * packed greedily under the same per-script size bound as the native sink —
+   * and through the SAME chunked transport for messages past
+   * MAX_SINGLE_DISPATCH_CHARS: a single oversized message stitched into one
+   * giant executeJavaScript overflows the IPC/script limit and the whole
+   * call rejects into a silent drop. */
+  function flushGlobalPending(): void {
+    if (globalPendingQueue.length === 0) return
+    const target = globalDevtoolsWc
+    if (!target || target.isDestroyed()) {
+      clearGlobalPending()
+      return
+    }
+    while (globalPendingQueue.length > 0) {
+      const { batch, chunked, remaining } = packDispatchBatch(globalPendingQueue, MAX_SINGLE_DISPATCH_CHARS, MAX_BATCH_CHARS)
+      globalPendingQueue = remaining
+      for (const msg of chunked) dispatchChunked(target, msg)
+      if (batch.length > 0) {
+        target.executeJavaScript(buildDispatchScript(batch), true).catch(() => { /* best-effort */ })
+      }
+    }
+    globalPendingOverflowWarned = false
+  }
+
+  function enqueueGlobalPending(json: string): void {
+    if (globalPendingQueue.length >= MAX_GLOBAL_PENDING_QUEUE) {
+      globalPendingQueue.shift()
+      // Not silent: dropping past the cap means the window's full-stream
+      // promise is degraded — say so once per overflow episode, not per event.
+      if (!globalPendingOverflowWarned) {
+        globalPendingOverflowWarned = true
+        console.warn(`[network-forward] global mirror queue overflow (cap ${MAX_GLOBAL_PENDING_QUEUE}): dropping oldest events while the debug window front-end is still loading`)
+      }
+    }
+    globalPendingQueue.push(json)
+    scheduleGlobalFlush()
+  }
+
+  function applyGlobalDevtoolsHost(host: WebContents | null): void {
+    globalDevtoolsHostDisposable?.dispose()
+    globalDevtoolsHostDisposable = null
+    globalBodyGateStop?.()
+    globalBodyGateStop = null
+    // Queued events belong to the PREVIOUS host's boot window — never carry
+    // them across a host change (or into "no host").
+    clearGlobalPending()
+    globalDevtoolsWc = host && !host.isDestroyed() ? host : null
+    if (!globalDevtoolsWc) return
+    const target = globalDevtoolsWc
+    const onHostDestroyed = (): void => {
+      if (globalDevtoolsWc === target) globalDevtoolsWc = null
+      globalBodyGateStop?.()
+      globalBodyGateStop = null
+      clearGlobalPending()
+    }
+    const reg = bridge.connections
+    if (reg && typeof target.once === 'function') {
+      const owned = reg.acquire(target).own(onHostDestroyed)
+      globalDevtoolsHostDisposable = toDisposable(() => owned.dispose())
+    } else {
+      if (typeof target.once === 'function') target.once('destroyed', onHostDestroyed)
+      globalDevtoolsHostDisposable = toDisposable(() => {
+        try { target.removeListener?.('destroyed', onHostDestroyed) } catch { /* gone */ }
+      })
+    }
+    globalBodyGateStop = installGlobalNetworkBodyGate(target, {
+      getResponseBody: (requestId) => bodyCache.lookup(requestId),
+      getRequestPostData: (requestId) => postDataCache.lookup(requestId),
+    })
+  }
+
+  /** Best-effort mirror of one raw CDP message into the global host. */
+  function dispatchToGlobal(method: string, params: unknown): void {
+    if (!globalDevtoolsWc || globalDevtoolsWc.isDestroyed()) return
+    let json: string
+    try {
+      json = JSON.stringify({ method, params })
+    } catch {
+      return
+    }
+    // Same settled gate every other injection point in this file uses: an
+    // unsettled front-end wipes its state on load anyway, and executeJavaScript
+    // against it queues one did-stop-loading waiter per call — piling toward
+    // the MaxListeners ceiling during the global host's boot window. Unlike
+    // those injection points, the events here are NOT re-derivable later, so
+    // they queue for a post-settle flush instead of dropping.
+    if (!isFrontendSettled(globalDevtoolsWc)) {
+      enqueueGlobalPending(json)
+      return
+    }
+    // Anything still queued flushes first so delivery order matches arrival.
+    flushGlobalPending()
+    // Oversized single messages take the chunked transport, mirroring the
+    // native sink's flushDispatch — see flushGlobalPending's doc.
+    if (json.length > MAX_SINGLE_DISPATCH_CHARS) {
+      dispatchChunked(globalDevtoolsWc, json)
+      return
+    }
+    globalDevtoolsWc.executeJavaScript(buildDispatchScript([json]), true).catch(() => { /* best-effort */ })
+  }
+
   // ── Native-sink state machine ─────────────────────────────────────────────
   let sink: SinkState = 'idle'
   // Buffered completed-request records while 'probing' — flushed to console if we
@@ -835,6 +1024,13 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
     // when the native dispatch path is unusable.
     const pending = new Map<string, Pending>()
 
+    // User-facing classification, decided ONCE at
+    // requestWillBeSent (the only event carrying a url) and consulted by every
+    // later event on the same rawId — later events (responseReceived/
+    // loadingFinished/loadingFailed) carry no url, so they cannot re-derive
+    // the verdict; they must remember it.
+    const userFacingByRawId = new Map<string, boolean>()
+
     // Raw ids whose requestWillBeSent announced a post body that was NOT
     // inlined (`hasPostData` without `postData`) — the only case the front-end
     // round-trips `Network.getRequestPostData`. Consumed at loadingFinished.
@@ -849,8 +1045,15 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
      * bodies would only burn memory.
      */
     const prefetchBodies = (rawId: string, encodedDataLength?: number): void => {
-      if (sink === 'degraded') return
-      if (sink === 'idle' && !resolveDevtoolsWc()) return
+      // Skip only when NEITHER consumer can use the body: the user-facing
+      // sink is unusable (degraded, or idle with no host) AND the global
+      // mirror has no host either. Either alone is enough reason to prefetch
+      // — global-body-gate answers Network.getResponseBody/getRequestPostData
+      // from this same cache, and it must not 404 just because the
+      // user-facing sink happens to be closed/degraded.
+      const userSinkUsable = sink !== 'degraded' && !(sink === 'idle' && !resolveDevtoolsWc())
+      const globalUsable = globalDevtoolsWc !== null && !globalDevtoolsWc.isDestroyed()
+      if (!userSinkUsable && !globalUsable) return
       const virtualId = ns.resolve(rawId)
       // Skip the CDP round-trip entirely for a response already known (from
       // the wire size CDP reports at completion) to exceed the cache's own
@@ -899,21 +1102,30 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
       if (req) req.status = p.response?.status ?? 0
     }
 
+    /** Shared "request terminated" bookkeeping for both loadingFinished and
+     *  loadingFailed: drop the classification + pending record, returning the
+     *  pending entry (or undefined if it was already gone/never seen). */
+    function retirePending(rawId: string): Pending | undefined {
+      userFacingByRawId.delete(rawId)
+      const req = pending.get(rawId)
+      if (!req) return undefined
+      pending.delete(rawId)
+      return req
+    }
+
     function onLoadingFinished(params: unknown): void {
       const p = params as { requestId: string, encodedDataLength?: number }
       if (typeof p?.requestId === 'string') prefetchBodies(p.requestId, p.encodedDataLength)
-      const req = pending.get(p.requestId)
+      const req = retirePending(p?.requestId)
       if (!req) return
-      pending.delete(p.requestId)
       maybeFallback({ source, url: req.url, method: req.method, status: req.status })
     }
 
     function onLoadingFailed(params: unknown): void {
       const p = params as LoadingFailed
       postDataWanted.delete(p?.requestId)
-      const req = pending.get(p.requestId)
+      const req = retirePending(p?.requestId)
       if (!req) return
-      pending.delete(p.requestId)
       maybeFallback({
         source,
         url: req.url,
@@ -930,11 +1142,59 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
       'Network.loadingFailed': onLoadingFailed,
     }
 
+    /**
+     * Resolve (and, on `requestWillBeSent`, record) whether `rawId` is
+     * user-facing. MUST be computed eagerly here — not deferred to
+     * `onRequestWillBeSent` below, which runs AFTER this in `onMessage` — a
+     * `requestWillBeSent` is itself a FORWARDED_METHODS event whose own
+     * routing decision depends on the very verdict it establishes. Every
+     * later event for the same rawId (no url of its own) just looks up the
+     * recorded verdict; an unknown rawId fails open (user-facing) rather
+     * than silently hiding it.
+     */
+    function resolveUserFacing(method: string, params: unknown, rawId: string | undefined): boolean {
+      if (method === 'Network.requestWillBeSent') {
+        const url = (params as RequestWillBeSent | null | undefined)?.request?.url
+        const verdict = typeof url === 'string'
+          ? isUserFacingRequest(url, [bridge.getResourceServerBaseUrl?.(), bridge.getSimulatorServerBaseUrl?.()])
+          : true
+        if (rawId) {
+          if (userFacingByRawId.size >= MAX_PENDING) userFacingByRawId.clear()
+          userFacingByRawId.set(rawId, verdict)
+        }
+        return verdict
+      }
+      if (rawId && userFacingByRawId.has(rawId)) return userFacingByRawId.get(rawId)!
+      // `Network.requestWillBeSentExtraInfo` can arrive BEFORE its own
+      // `requestWillBeSent` (real CDP ordering) — it carries no url, so an
+      // unrecorded rawId here means "classification not yet known", not
+      // "capture attached mid-flight". Fail CLOSED for this one case: the
+      // very next event for the same rawId is (almost always) the real
+      // requestWillBeSent, which establishes the true verdict immediately —
+      // dropping this one early line is a far smaller cost than leaking an
+      // internal resource's ExtraInfo into the user-facing panel before its
+      // classification is even known. Every OTHER "rawId never seen" case
+      // (e.g. capture attached mid-flight, no requestWillBeSent ever coming)
+      // keeps failing open — there is no better signal available there.
+      if (method === 'Network.requestWillBeSentExtraInfo') return false
+      return true
+    }
+
     const onMessage = (_event: Electron.Event, method: string, params: unknown): void => {
       // ── Primary sink: forward the raw CDP event into the DevTools front-end ──
       if (FORWARDED_METHODS.has(method)) {
         const rewritten = rewriteRequestId(method, params, ns)
-        enqueueNative(rewritten.method, rewritten.params)
+        // Global mirror: full, unfiltered — independent of the
+        // user-facing sink's classification and state machine.
+        dispatchToGlobal(rewritten.method, rewritten.params)
+        // User-facing sink: only requests isUserFacingRequest() judged as the
+        // developer's own business traffic — internal/framework resource
+        // loads are mirrored to the global window ONLY.
+        const rawId = (params as { requestId?: unknown } | null | undefined)?.requestId
+        const userFacing = resolveUserFacing(method, params, typeof rawId === 'string' ? rawId : undefined)
+        if (userFacing) {
+          enqueueNative(rewritten.method, rewritten.params)
+        }
       } else if (REWRITE_REQUEST_ID_METHODS.has(method)) {
         // Methods we namespace but don't forward (dataReceived): still resolve
         // so the id mapping stays coherent if forwarding is added later.
@@ -1216,6 +1476,17 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
     if (readyRetryTimer) { clearTimeout(readyRetryTimer); readyRetryTimer = null }
   })
   registry.add(() => {
+    globalDevtoolsHostDisposable?.dispose()
+    globalDevtoolsHostDisposable = null
+    globalBodyGateStop?.()
+    globalBodyGateStop = null
+    globalDevtoolsWc = null
+    // A live settle-poll timer at dispose time is a real-timer leak (this
+    // suite's flaky-test history: undisposed timers adopted by later tests'
+    // fake clocks).
+    clearGlobalPending()
+  })
+  registry.add(() => {
     bodyCache.clear()
     postDataCache.clear()
   })
@@ -1241,6 +1512,7 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
     detachSimulator,
     attachRenderGuest,
     setDevtoolsHost: (wc) => applyDevtoolsHost(wc),
+    setGlobalDevtoolsHost: (wc) => applyGlobalDevtoolsHost(wc),
     // report() has no observing debugger, so there's no live CDP event to push
     // natively — surface it via the console fallback line.
     report: (record) => forwardToConsole(record),

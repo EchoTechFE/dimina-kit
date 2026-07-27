@@ -72,6 +72,7 @@ function makeBridge() {
       listener = cb
       return unsubscribe
     }),
+    onServiceHostReady: vi.fn(() => () => {}),
     getDevice: vi.fn(() => null),
     setDevice: vi.fn(),
   } satisfies BridgeRouterHandle

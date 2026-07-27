@@ -62,7 +62,7 @@ import type { ConnectionRegistry } from '@dimina-kit/electron-deck/main'
 import type { BridgeRouterHandle, RenderEvent } from '../../ipc/bridge-router.js'
 import { isFrontendSettled } from '../views/inject-when-ready.js'
 import { VIRTUAL_REQUEST_ID_PREFIX, type NetworkBodyProvider } from '../network-forward/index.js'
-import { PROBE_DEVTOOLS_API, MAX_SINGLE_DISPATCH_CHARS, CHUNK_CHARS, buildChunkedDispatchScript } from '../network-forward/frontend-dispatch.js'
+import { buildSingleDispatchScript, createFrontendReplyChannel, answerNetworkBodyCommand, drainOutboundBatch } from '../network-forward/frontend-dispatch.js'
 import { createCdpSessionBroker, type CdpSessionBroker, type CdpSessionLease } from '../cdp-session/index.js'
 
 // ── routing table (pure, testable) ───────────────────────────────────────────
@@ -235,19 +235,10 @@ function buildReconcileScript(): string {
 
 // ── main → front-end dispatch (shared transport with network-forward) ───────
 
-/** Dispatch ONE small CDP message (response or event) into the front-end. */
-function buildDispatchScript(message: string): string {
-  return `(()=>{try{`
-    + `if(!${PROBE_DEVTOOLS_API})return false;`
-    + `window.DevToolsAPI.dispatchMessage(JSON.parse(${JSON.stringify(message)}));`
-    + `return true;`
-    + `}catch(_){return false}})()`
-}
-
 /** Script that nudges the front-end to discard its document and lazily re-pull. */
 function buildDocumentUpdatedScript(): string {
   const msg = JSON.stringify({ method: 'DOM.documentUpdated', params: {} })
-  return buildDispatchScript(msg)
+  return buildSingleDispatchScript(msg)
 }
 
 // ── deps ─────────────────────────────────────────────────────────────────────
@@ -368,43 +359,13 @@ export function installElementsForward(deps: ElementsForwardDeps): () => void {
     if (lateCleanup) { const c = lateCleanup; lateCleanup = null; try { c() } catch { /* already gone */ } }
   }
 
-  // ── main → front-end dispatch ──────────────────────────────────────────────
+  // ── main → front-end dispatch (shared transport, see frontend-dispatch.js) ──
 
-  function dispatchToFrontend(message: unknown): void {
-    if (disposed || devtoolsWc.isDestroyed()) return
-    // Unified settled gate (same predicate as the reconcile tick): an unsettled
-    // front-end wipes its state on load anyway, so the message is meaningless
-    // there — and the executeJavaScript would queue one did-stop-loading waiter
-    // per push (an activePage burst piles them). The post-settle tick re-primes.
-    if (!isFrontendSettled(devtoolsWc)) return
-    let json: string
-    try {
-      json = JSON.stringify(message)
-    } catch {
-      return
-    }
-    if (json.length > MAX_SINGLE_DISPATCH_CHARS) {
-      const chunks: string[] = []
-      for (let i = 0; i < json.length; i += CHUNK_CHARS) {
-        chunks.push(json.slice(i, i + CHUNK_CHARS))
-      }
-      let script: string
-      try {
-        script = buildChunkedDispatchScript(chunks, json.length)
-      } catch {
-        return
-      }
-      devtoolsWc.executeJavaScript(script, true).catch(() => { /* booting/torn-down */ })
-      return
-    }
-    let script: string
-    try {
-      script = buildDispatchScript(json)
-    } catch {
-      return
-    }
-    devtoolsWc.executeJavaScript(script, true).catch(() => { /* booting/torn-down */ })
-  }
+  // Reply to a front-end command id, passing the ORIGINAL id + sessionId
+  // straight through (no mapping) — the same settled-gate + chunking +
+  // reply-shape contract network-forward's global body gate uses, so the two
+  // outbound-gate features can never drift.
+  const { dispatchToFrontend, replyResult, replyError } = createFrontendReplyChannel(devtoolsWc, () => disposed)
 
   /** Tell the front-end its document is stale → it re-pulls lazily (routed). */
   function pushDocumentUpdated(): void {
@@ -419,21 +380,6 @@ export function installElementsForward(deps: ElementsForwardDeps): () => void {
       return
     }
     devtoolsWc.executeJavaScript(script, true).catch(() => { /* booting/torn-down */ })
-  }
-
-  /**
-   * Reply to a front-end command id, passing the ORIGINAL id + sessionId straight
-   * through (no mapping). Only the front-end-supplied sessionId is echoed back.
-   */
-  function replyResult(cmd: OutboundCommand, result: unknown): void {
-    const msg: Record<string, unknown> = { id: cmd.id, result }
-    if (cmd.sessionId) msg.sessionId = cmd.sessionId
-    dispatchToFrontend(msg)
-  }
-  function replyError(cmd: OutboundCommand, message: string): void {
-    const msg: Record<string, unknown> = { id: cmd.id, error: { code: -32000, message } }
-    if (cmd.sessionId) msg.sessionId = cmd.sessionId
-    dispatchToFrontend(msg)
   }
 
   // ── render-guest CDP session (via the shared broker) ────────────────────────
@@ -570,45 +516,24 @@ export function installElementsForward(deps: ElementsForwardDeps): () => void {
   /**
    * Answer a network-routed command from the provider. Never touches the render
    * guest: the body lives in the network forwarder's prefetch cache (or
-   * nowhere). A missing provider or a rejected lookup settles the command with
-   * the canonical CDP not-found error so the front-end renders its normal
-   * failure state instead of leaking a forever-pending request.
+   * nowhere). Shared with network-forward's dedicated global body gate — see
+   * answerNetworkBodyCommand's doc comment for the not-found/reply contract.
    */
   function answerNetworkCommand(cmd: OutboundCommand): void {
-    const provider = deps.network
-    const requestId = (cmd.params as { requestId?: unknown } | null | undefined)?.requestId
-    if (!provider || typeof requestId !== 'string') {
-      replyError(cmd, 'No resource with given identifier found')
-      return
-    }
-    const lookup = cmd.method === 'Network.getRequestPostData'
-      ? provider.getRequestPostData(requestId)
-      : provider.getResponseBody(requestId)
-    lookup.then(
-      (result: unknown) => {
-        if (!disposed) replyResult(cmd, result)
-      },
-      (err: unknown) => {
-        if (!disposed) replyError(cmd, err instanceof Error ? err.message : String(err))
-      },
-    )
+    answerNetworkBodyCommand(cmd, deps.network, { replyResult, replyError })
   }
 
   /** Process a drained batch of front-end commands, splitting by route tag. */
   function handleOutbound(batch: unknown): void {
-    if (!Array.isArray(batch)) return
-    for (const raw of batch) {
-      if (!raw || typeof raw !== 'object') continue
-      const cmd = raw as OutboundCommand
-      if (typeof cmd.method !== 'string') continue
+    drainOutboundBatch<OutboundCommand>(batch, (cmd) => {
       if (cmd.route === 'network') {
         answerNetworkCommand(cmd)
-        continue
+        return
       }
       // 'render' — and any untagged legacy payload, which only ever carried
       // render-domain commands.
       routeCommand(cmd)
-    }
+    })
   }
 
   // ── follow the active guest across page switches ───────────────────────────
