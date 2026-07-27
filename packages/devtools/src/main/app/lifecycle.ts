@@ -5,6 +5,15 @@ import { app, globalShortcut } from 'electron'
 // BEFORE each window's `close` event, so the main-window onClose handler can
 // read this to tell "the whole app is exiting" apart from "the user closed a
 // single project window" and avoid swallowing the quit.
+//
+// Deliberately a ONE-WAY latch: Electron emits no "quit was canceled" signal
+// to reset on, and any heuristic reset (timers, window-created probes) risks
+// flipping back to false DURING a real quit — which would re-arm the very
+// close-interception this flag exists to disable and abort the quit. The
+// cost of staying latched after a hypothetically-canceled quit (no in-repo
+// cancel path exists; a renderer `beforeunload` could in principle create
+// one) is a degraded-but-functional state, strictly cheaper than a broken
+// quit.
 let appIsQuitting = false
 
 export function isAppQuitting(): boolean {

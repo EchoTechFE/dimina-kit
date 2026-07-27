@@ -123,13 +123,31 @@ function makeHostChangedController(): {
   }
 }
 
+
+/** Test-harness broker: routes Runtime.evaluate straight back to the target
+ * wc's own executeJavaScript spy (same arity, same promise semantics), so
+ * every existing script-content / gating / retry assertion keeps observing
+ * through `exec` unchanged while the mirror itself now talks CDP. */
+const passthroughBroker = {
+  acquire: (wc: WebContents) => ({
+    send: (_method: string, params?: object) =>
+      Promise.resolve((wc as unknown as { executeJavaScript: (s: string, g: boolean) => unknown })
+        .executeJavaScript((params as { expression?: string } | undefined)?.expression ?? '', true)),
+    onMessage: () => ({ dispose: () => {} }),
+    onDetach: () => ({ dispose: () => {} }),
+    ensureRenderDomains: () => Promise.resolve(),
+    dispose: () => {},
+  }),
+  dispose: () => {},
+} as unknown as import('../cdp-session/index.js').CdpSessionBroker
+
 describe('createGlobalDiagnosticsMirror — installation', () => {
   it('registers an onHostChanged handler exactly once at install time, without subscribing to the bus yet (window not open)', () => {
     const { bus, subscribeSpy } = makeFakeDiagnosticsBus()
     const { onHostChanged, registerSpy } = makeHostChangedController()
     const { wc: target } = makeWc()
 
-    createGlobalDiagnosticsMirror(bus, target, onHostChanged)
+    createGlobalDiagnosticsMirror(bus, target, onHostChanged, { broker: passthroughBroker })
 
     expect(registerSpy).toHaveBeenCalledTimes(1)
     expect(subscribeSpy).not.toHaveBeenCalled()
@@ -142,7 +160,7 @@ describe('createGlobalDiagnosticsMirror — opening the window replays history i
     const { onHostChanged, fire } = makeHostChangedController()
     const { wc: target } = makeWc()
     const { wc: host } = makeWc()
-    createGlobalDiagnosticsMirror(bus, target, onHostChanged)
+    createGlobalDiagnosticsMirror(bus, target, onHostChanged, { broker: passthroughBroker })
 
     fire(host)
 
@@ -166,7 +184,7 @@ describe('createGlobalDiagnosticsMirror — opening the window replays history i
     // ever been constructed, let alone opened.
     report({ severity: 'info', code: 'compile-standby', message: 'compile standby spawned pid=89193', audience: 'internal' })
 
-    createGlobalDiagnosticsMirror(bus, target, onHostChanged)
+    createGlobalDiagnosticsMirror(bus, target, onHostChanged, { broker: passthroughBroker })
     fire(host)
     await flushMicrotasks()
 
@@ -183,7 +201,7 @@ describe('createGlobalDiagnosticsMirror — opening the window replays history i
     report({ severity: 'info', code: 'compile-standby', message: 'm1', audience: 'internal' })
     report({ severity: 'error', code: 'page-not-found', message: 'm2', audience: 'user' })
 
-    createGlobalDiagnosticsMirror(bus, target, onHostChanged)
+    createGlobalDiagnosticsMirror(bus, target, onHostChanged, { broker: passthroughBroker })
     fire(host)
     await flushMicrotasks()
 
@@ -197,7 +215,7 @@ describe('createGlobalDiagnosticsMirror — opening the window replays history i
     const { onHostChanged, fire } = makeHostChangedController()
     const { wc: target, exec: targetExec } = makeWc()
     const { wc: host, exec: hostExec } = makeWc()
-    createGlobalDiagnosticsMirror(bus, target, onHostChanged)
+    createGlobalDiagnosticsMirror(bus, target, onHostChanged, { broker: passthroughBroker })
 
     fire(host)
     report({ severity: 'info', code: 'compile-standby', message: 'm', audience: 'internal' })
@@ -212,7 +230,7 @@ describe('createGlobalDiagnosticsMirror — opening the window replays history i
     const { onHostChanged, fire } = makeHostChangedController()
     const { wc: target, exec } = makeWc()
     const { wc: host } = makeWc()
-    createGlobalDiagnosticsMirror(bus, target, onHostChanged)
+    createGlobalDiagnosticsMirror(bus, target, onHostChanged, { broker: passthroughBroker })
     fire(host)
 
     report({ severity: 'info', code: 'compile-standby', message: 'internal one', audience: 'internal' })
@@ -231,7 +249,7 @@ describe('createGlobalDiagnosticsMirror — closing the window pauses consumptio
     const { onHostChanged, fire } = makeHostChangedController()
     const { wc: target } = makeWc()
     const { wc: host } = makeWc()
-    createGlobalDiagnosticsMirror(bus, target, onHostChanged)
+    createGlobalDiagnosticsMirror(bus, target, onHostChanged, { broker: passthroughBroker })
 
     fire(host)
     fire(null)
@@ -245,7 +263,7 @@ describe('createGlobalDiagnosticsMirror — closing the window pauses consumptio
     const { onHostChanged, fire } = makeHostChangedController()
     const { wc: target, exec } = makeWc()
     const { wc: host } = makeWc()
-    createGlobalDiagnosticsMirror(bus, target, onHostChanged)
+    createGlobalDiagnosticsMirror(bus, target, onHostChanged, { broker: passthroughBroker })
 
     fire(host)
     fire(null)
@@ -261,7 +279,7 @@ describe('createGlobalDiagnosticsMirror — closing the window pauses consumptio
     const { onHostChanged, fire } = makeHostChangedController()
     const { wc: target, exec } = makeWc()
     const { wc: host } = makeWc()
-    createGlobalDiagnosticsMirror(bus, target, onHostChanged)
+    createGlobalDiagnosticsMirror(bus, target, onHostChanged, { broker: passthroughBroker })
 
     fire(host)
     fire(null)
@@ -289,7 +307,7 @@ describe('createGlobalDiagnosticsMirror — reopen does not double-inject alread
     const { onHostChanged, fire } = makeHostChangedController()
     const { wc: target, exec } = makeWc()
     const { wc: host } = makeWc()
-    createGlobalDiagnosticsMirror(bus, target, onHostChanged)
+    createGlobalDiagnosticsMirror(bus, target, onHostChanged, { broker: passthroughBroker })
 
     fire(host)
     report({ severity: 'info', code: 'compile-standby', message: 'shown once', audience: 'internal' })
@@ -309,7 +327,7 @@ describe('createGlobalDiagnosticsMirror — reopen does not double-inject alread
     const { onHostChanged, fire } = makeHostChangedController()
     const { wc: target, exec } = makeWc()
     const { wc: host } = makeWc()
-    createGlobalDiagnosticsMirror(bus, target, onHostChanged)
+    createGlobalDiagnosticsMirror(bus, target, onHostChanged, { broker: passthroughBroker })
 
     fire(host)
     report({ severity: 'info', code: 'compile-standby', message: 'old', audience: 'internal' })
@@ -332,7 +350,7 @@ describe('createGlobalDiagnosticsMirror — settled/destroyed target gate', () =
     const { onHostChanged, fire } = makeHostChangedController()
     const { wc: target, exec } = makeWc({ destroyed: true })
     const { wc: host } = makeWc()
-    createGlobalDiagnosticsMirror(bus, target, onHostChanged)
+    createGlobalDiagnosticsMirror(bus, target, onHostChanged, { broker: passthroughBroker })
 
     fire(host)
     expect(() => report({ severity: 'info', code: 'compile-standby', message: 'm', audience: 'internal' })).not.toThrow()
@@ -346,7 +364,7 @@ describe('createGlobalDiagnosticsMirror — settled/destroyed target gate', () =
     const { onHostChanged, fire } = makeHostChangedController()
     const { wc: target, exec } = makeWc({ loading: true, url: 'devtools://devtools/bundled/devtools_app.html' })
     const { wc: host } = makeWc()
-    createGlobalDiagnosticsMirror(bus, target, onHostChanged)
+    createGlobalDiagnosticsMirror(bus, target, onHostChanged, { broker: passthroughBroker })
 
     fire(host)
     report({ severity: 'info', code: 'compile-standby', message: 'm', audience: 'internal' })
@@ -362,7 +380,7 @@ describe('createGlobalDiagnosticsMirror — dispose', () => {
     const { onHostChanged, fire, unregisterSpy } = makeHostChangedController()
     const { wc: target } = makeWc()
     const { wc: host } = makeWc()
-    const mirror = createGlobalDiagnosticsMirror(bus, target, onHostChanged)
+    const mirror = createGlobalDiagnosticsMirror(bus, target, onHostChanged, { broker: passthroughBroker })
 
     fire(host)
     mirror.dispose()
@@ -375,7 +393,7 @@ describe('createGlobalDiagnosticsMirror — dispose', () => {
     const { bus } = makeFakeDiagnosticsBus()
     const { onHostChanged, unregisterSpy } = makeHostChangedController()
     const { wc: target } = makeWc()
-    const mirror = createGlobalDiagnosticsMirror(bus, target, onHostChanged)
+    const mirror = createGlobalDiagnosticsMirror(bus, target, onHostChanged, { broker: passthroughBroker })
 
     expect(() => mirror.dispose()).not.toThrow()
     expect(unregisterSpy).toHaveBeenCalledTimes(1)
@@ -392,7 +410,7 @@ describe('createGlobalDiagnosticsMirror — severity mapping and format', () => 
     const { onHostChanged, fire } = makeHostChangedController()
     const { wc: target, exec } = makeWc()
     const { wc: host } = makeWc()
-    createGlobalDiagnosticsMirror(bus, target, onHostChanged)
+    createGlobalDiagnosticsMirror(bus, target, onHostChanged, { broker: passthroughBroker })
     fire(host)
 
     report({ severity, code: 'x', message: 'm', audience: 'internal' })
@@ -406,7 +424,7 @@ describe('createGlobalDiagnosticsMirror — severity mapping and format', () => 
     const { onHostChanged, fire } = makeHostChangedController()
     const { wc: target, exec } = makeWc()
     const { wc: host } = makeWc()
-    createGlobalDiagnosticsMirror(bus, target, onHostChanged)
+    createGlobalDiagnosticsMirror(bus, target, onHostChanged, { broker: passthroughBroker })
     fire(host)
 
     report({ severity: 'info', code: 'compile-standby', message: 'compile standby spawned pid=89193', audience: 'internal' })
@@ -422,7 +440,7 @@ describe('createGlobalDiagnosticsMirror — severity mapping and format', () => 
     const { onHostChanged, fire } = makeHostChangedController()
     const { wc: target, exec } = makeWc()
     const { wc: host } = makeWc()
-    createGlobalDiagnosticsMirror(bus, target, onHostChanged)
+    createGlobalDiagnosticsMirror(bus, target, onHostChanged, { broker: passthroughBroker })
     fire(host)
 
     report({ severity: 'info', code: 'compile-standby', message: 'm', audience: 'internal' })

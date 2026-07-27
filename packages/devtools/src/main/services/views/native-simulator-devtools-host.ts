@@ -1,13 +1,14 @@
 import type { WebContents } from 'electron'
-import { WebContentsView } from 'electron'
+import { WebContentsView, webContents as electronWebContents } from 'electron'
 import {
   buildDevtoolsProjectSourceLinksScript,
   decodeOpenInEditorUrl,
   projectSourceContextFromServiceHostUrl,
 } from '../../../shared/open-in-editor.js'
-import type { RenderEvent } from '../../ipc/bridge-router.js'
+import type { RenderEvent, ServiceHostReadyEvent } from '../../ipc/bridge-router.js'
 import { buildCustomizeTabsScript } from './devtools-tabs.js'
-import { buildConsoleFilterScript } from './console-filter.js'
+import { buildConsoleFilterScript, buildLiveConsoleFilterScript } from './console-filter.js'
+import { whenFrontendBootstrapped } from './frontend-bootstrap-gate.js'
 import { installElementsForward } from '../elements-forward/index.js'
 import { installServiceConsoleForward } from '../service-console/index.js'
 import { VIEW_ID } from '../../../shared/view-ids.js'
@@ -90,6 +91,7 @@ export function createDevtoolsHost(
   // (`rebuildDevtoolsHostView`) rather than target it again.
   let devtoolsHostUsed = false
   let unsubscribeNativeRenderEvents: (() => void) | null = null
+  let unsubscribeNativeServiceHostReady: (() => void) | null = null
   // Disposer for the Elements-forward feature (routes the front-end's Elements
   // CDP traffic at the active render guest). Installed in
   // `attach`, stopped on detach / host destroyed.
@@ -138,6 +140,12 @@ export function createDevtoolsHost(
         unsubscribeNativeRenderEvents()
       } catch { /* ignore */ }
       unsubscribeNativeRenderEvents = null
+    }
+    if (unsubscribeNativeServiceHostReady) {
+      try {
+        unsubscribeNativeServiceHostReady()
+      } catch { /* ignore */ }
+      unsubscribeNativeServiceHostReady = null
     }
     closeNativeDevtoolsSource()
   }
@@ -194,15 +202,27 @@ export function createDevtoolsHost(
   // framework internal log lines from THIS right-panel Console — the
   // standalone internal DevTools window (native-only, wired elsewhere) shows
   // them unfiltered. Re-applied on every re-point, same policy as
-  // customizeDevtoolsTabs.
+  // customizeDevtoolsTabs. Runs BOTH the persisted-preference write (for a
+  // not-yet-constructed panel) AND the live-object drive (for a panel that's
+  // already constructed by the time this injection lands, or finishes
+  // constructing shortly after — see console-filter.ts's header comment for
+  // why the persisted write alone cannot cover that case).
+  // Bootstrap-gated: the live script touches `Console.ConsoleView.instance()`,
+  // which — fired before the front-end's own bootstrap completes —
+  // constructs IssuesManager early and permanently kills that bootstrap (see
+  // frontend-bootstrap-gate.ts). Gate resolving false = degrade silently,
+  // this module's standing convention.
   function applyConsoleFilter(devtoolsWc: WebContents): void {
     try {
       if (devtoolsWc.isDestroyed()) return
       const inject = (): void => {
-        if (devtoolsWc.isDestroyed()) return
-        try {
-          void devtoolsWc.executeJavaScript(buildConsoleFilterScript()).catch(() => {})
-        } catch { /* wc torn down mid-call */ }
+        void whenFrontendBootstrapped(devtoolsWc).then((ready) => {
+          if (!ready || devtoolsWc.isDestroyed()) return
+          try {
+            void devtoolsWc.executeJavaScript(buildConsoleFilterScript()).catch(() => {})
+            void devtoolsWc.executeJavaScript(buildLiveConsoleFilterScript()).catch(() => {})
+          } catch { /* wc torn down mid-call */ }
+        })
       }
       injectWhenReady(devtoolsWc, 'console-filter', inject)
     } catch { /* wc surface incomplete / torn down; degrade silently */ }
@@ -334,8 +354,26 @@ export function createDevtoolsHost(
     return pointNativeDevtoolsAtServiceWc(wc)
   }
 
-  function scheduleNativeDevtoolsFollow(appId?: string, attempt = 0): void {
-    if (attempt >= 20) return
+  // Bound on how long the FALLBACK poll (below) keeps retrying before giving
+  // up — a pure safety valve, not the real mechanism. The real mechanism is
+  // `onNativeServiceHostReady` (an event, not a poll): it fires the moment
+  // `ctx.bridge.getServiceWc` is GUARANTEED to resolve, so this fallback only
+  // exists for the residual gap where `followNativeDevtoolsServiceHost` runs
+  // from a render event that races ahead of that event somehow. A fixed short
+  // attempt count here (originally 20×50ms = 1s) was the actual production
+  // bug this module was fixed for: under real machine load,
+  // `ctx.bridge.getServiceWc(appId)` can take longer than 1s to resolve, and
+  // once the fixed budget ran out the right-panel DevTools attach was
+  // silently, permanently lost for the rest of that session (confirmed via
+  // real reproduction + timing instrumentation). Bounded by WALL-CLOCK time
+  // (generous — normal resolution is well under a second) rather than a
+  // small attempt count, since the fallback's whole job is to outlast a slow
+  // machine, not a slow algorithm.
+  const NATIVE_DEVTOOLS_FALLBACK_POLL_MAX_MS = 60_000
+  const NATIVE_DEVTOOLS_FALLBACK_POLL_INTERVAL_MS = 50
+
+  function scheduleNativeDevtoolsFollow(appId?: string, startedAt = Date.now()): void {
+    if (Date.now() - startedAt >= NATIVE_DEVTOOLS_FALLBACK_POLL_MAX_MS) return
     if (!ctx.bridge?.isNativeHost()) return
     const token = nativeDevtoolsRetryToken
     if (nativeDevtoolsRetryTimer) clearTimeout(nativeDevtoolsRetryTimer)
@@ -343,8 +381,8 @@ export function createDevtoolsHost(
       nativeDevtoolsRetryTimer = null
       if (token !== nativeDevtoolsRetryToken) return
       if (pointNativeDevtoolsAtActiveServiceHost(appId)) return
-      scheduleNativeDevtoolsFollow(appId, attempt + 1)
-    }, 50)
+      scheduleNativeDevtoolsFollow(appId, startedAt)
+    }, NATIVE_DEVTOOLS_FALLBACK_POLL_INTERVAL_MS)
   }
 
   function followNativeDevtoolsServiceHost(appId?: string): void {
@@ -353,10 +391,50 @@ export function createDevtoolsHost(
     scheduleNativeDevtoolsFollow(appId)
   }
 
+  // The real mechanism: fires the moment a service host's `service.html`
+  // did-finish-load's, i.e. the exact instant `serviceWcId` is guaranteed
+  // resolvable — no polling, no race against a fixed retry budget. Resolves
+  // the wc DIRECTLY via the id the event carries (never re-resolving through
+  // `getServiceWc(appId)`, which during same-app respawn overlap returns the
+  // newest session, not necessarily the one that fired this event), then
+  // validates the event against that same authority before acting — see the
+  // generation gate below.
+  function onNativeServiceHostReady(event: ServiceHostReadyEvent): void {
+    if (!ctx.bridge?.isNativeHost()) return
+    if (!simulatorView || simulatorView.webContents.isDestroyed()) return
+    const wc = electronWebContents.fromId(event.serviceWcId)
+    if (!wc || wc.isDestroyed()) return
+    // Generation gate: `getServiceWc` resolves the NEWEST live session
+    // (bridge-router's findAppSessionByAppId is last-inserted-wins), so an
+    // event it CONTRADICTS is a superseded session's late-arriving ready —
+    // repointing there would resurrect a dying host (the newer session's own
+    // ready does/did the real repoint). An authority that cannot resolve at
+    // all fails OPEN: the event is the only signal available, and dropping
+    // it would strand the attach on nothing. Fail-open cannot stick to a
+    // dying wc in practice — the direct emit is same-tick with bootServiceHost
+    // (session still registered), the catch-up path re-validates the session
+    // before delivering, and even a hypothetical miss just makes point()
+    // return false into the wall-clock-bounded fallback.
+    const current = ctx.bridge.getServiceWc(event.appId)
+    if (current && current.id !== event.serviceWcId) return
+    // Only a SUCCESSFUL repoint may retire the standing fallback poll — a
+    // failed attempt (service wc torn down mid-point is the common race)
+    // must leave/re-arm it, or this very event cancels the retry that would
+    // have eventually attached.
+    if (pointNativeDevtoolsAtServiceWc(wc)) {
+      clearNativeDevtoolsRetry()
+      return
+    }
+    scheduleNativeDevtoolsFollow(event.appId)
+  }
+
   // Render-side activity (a page DOM mounting / the visible page changing)
   // always follows a spawn or respawn, by which point the service window exists
   // (and may have been swapped by the pool). Re-resolve + re-point the DevTools
-  // at the now-current service host on every such event.
+  // at the now-current service host on every such event. Belt-and-suspenders
+  // alongside `onNativeServiceHostReady` — by the time a render event fires,
+  // the service host that produced it is definitionally already resolvable,
+  // so this path should normally resolve immediately (no fallback poll needed).
   function onNativeRenderEvent(event: RenderEvent): void {
     if (event.kind !== 'activePage' && event.kind !== 'domReady') return
     followNativeDevtoolsServiceHost(event.appId)
@@ -386,18 +464,17 @@ export function createDevtoolsHost(
     // Default DevTools to Console panel (Chrome DevTools defaults to Elements).
     // The DevTools UI lives inside closed shadow roots, so a light-DOM
     // querySelector('[role="tab"]') cannot reach the tab bar to click it.
-    // Instead drive the front-end's own view manager: the bundled DevTools
-    // exposes `UI.ViewManager.instance().showView(id)` on `globalThis.UI`
-    // once the front-end has finished bootstrapping. We poll for it and
-    // request the `console` view. (This live call is the entire mechanism —
-    // an earlier `localStorage.setItem('panel-selectedTab', …)` alongside it
-    // was dead code: this setting is Global-storage-backed via
-    // `InspectorFrontendHost.setPreference`/`getPreferences`, not
-    // `window.localStorage`, on Chrome 146 — confirmed by reading the real
-    // Electron host Preferences file, which persists it as
-    // `panel-selected-tab`, kebab-case. Removed rather than "fixed", since
-    // the live showView() call already fully achieves the intended effect
-    // without needing any persisted setting.)
+    // Instead drive the front-end's own view manager via `globalThis.EUI`
+    // (the bundle's real exposure of the ui/legacy namespace) — NOT
+    // `globalThis.UI`, which never exists on this front-end build (same
+    // finding devtools-tabs.ts records; an earlier `UI.…`-polling version of
+    // this script was dead code and the panel silently defaulted to
+    // Elements). Gated on frontend bootstrap: `ViewManager.instance()` is a
+    // singleton construction, only safe after the front-end's own MainImpl
+    // finished wiring (see frontend-bootstrap-gate.ts). (A persisted
+    // `panel-selected-tab` preference write is NOT an alternative mechanism —
+    // this custom devtools:// host persists nothing to disk; see
+    // console-filter.ts's header.)
     const devtoolsWc = simulatorView.webContents
     // The boot-time burst of `executeJavaScript()` injects on this host wc (tab
     // customization / console default / Elements+Network forwarding below) each
@@ -447,26 +524,21 @@ export function createDevtoolsHost(
       })
     }
     injectWhenReady(devtoolsWc, 'console-default', () => {
-      devtoolsWc.executeJavaScript(`
-        (function() {
-          let tries = 0
-          const timer = setInterval(() => {
-            tries++
+      void whenFrontendBootstrapped(devtoolsWc).then((ready) => {
+        if (!ready || devtoolsWc.isDestroyed()) return
+        devtoolsWc.executeJavaScript(`
+          (function() {
             try {
-              const UI = globalThis.UI
-              const vm = UI && UI.ViewManager && typeof UI.ViewManager.instance === 'function'
-                ? UI.ViewManager.instance()
+              var EUI = globalThis.EUI
+              var vm = EUI && EUI.ViewManager && EUI.ViewManager.ViewManager
+                && typeof EUI.ViewManager.ViewManager.instance === 'function'
+                ? EUI.ViewManager.ViewManager.instance()
                 : null
-              if (vm && typeof vm.showView === 'function') {
-                vm.showView('console')
-                clearInterval(timer)
-                return
-              }
-            } catch {}
-            if (tries > 80) clearInterval(timer)
-          }, 50)
-        })()
-      `).catch(() => {})
+              if (vm && typeof vm.showView === 'function') void vm.showView('console')
+            } catch (_) {}
+          })()
+        `).catch(() => {})
+      })
     })
 
     // Anchor-only mount: the renderer's published rect is the SOLE authority.
@@ -490,6 +562,7 @@ export function createDevtoolsHost(
 
     if (ctx.bridge?.isNativeHost()) {
       unsubscribeNativeRenderEvents = ctx.bridge.onRenderEvent(onNativeRenderEvent)
+      unsubscribeNativeServiceHostReady = ctx.bridge.onServiceHostReady(onNativeServiceHostReady)
       followNativeDevtoolsServiceHost()
     }
   }

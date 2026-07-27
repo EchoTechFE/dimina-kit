@@ -1,8 +1,10 @@
 import type { WebContents } from 'electron'
 import type { Disposable } from '@dimina-kit/electron-deck/main'
 import type { ConsoleForwarder, GuestConsoleEntry } from './index.js'
+import type { CdpSessionBroker } from '../cdp-session/index.js'
 import { isFrontendSettled } from '../views/inject-when-ready.js'
 import { createOpenGatedRelay } from './open-gated-relay.js'
+import { injectViaCdp } from './cdp-inject.js'
 
 /** Console levels safe to re-emit; anything else maps to 'log' — mirrors
  *  console-forward/index.ts's FORWARDABLE_LEVELS. */
@@ -50,6 +52,7 @@ export function createGlobalConsoleMirror(
   forwarder: Pick<ConsoleForwarder, 'subscribe'>,
   target: WebContents,
   onHostChanged: (handler: (hostWc: WebContents | null) => void) => () => void,
+  opts: { broker: CdpSessionBroker },
 ): Disposable {
   function inject(entry: GuestConsoleEntry): boolean | Promise<boolean> {
     if (target.isDestroyed()) return false
@@ -60,25 +63,22 @@ export function createGlobalConsoleMirror(
     } catch {
       return false
     }
-    // Report the real outcome (not fire-and-forget) — createOpenGatedRelay
-    // only marks an entry permanently "injected" on a confirmed `true`; a
-    // silently-swallowed rejection used to black-hole entries forever (see
-    // that module's doc comment for the full story). Still surface the
-    // failure somewhere observable instead of a bare `.catch(() => {})` —
-    // main-process stderr is the one sink that's always there, matching
-    // DiagnosticsBus's own "always-visible" precedent.
-    return target.executeJavaScript(script, true).then(
-      () => true,
-      (err) => {
-        console.warn('[global-console-mirror] injection failed, will retry on next reopen:', err instanceof Error ? err.message : String(err))
-        return false
-      },
-    )
+    // Transport is CDP `Runtime.evaluate` over the shared debugger-session
+    // broker — NEVER `target.executeJavaScript`: Electron's internal
+    // ExecuteJavaScript RPC hangs FOREVER on a wc that is simultaneously the
+    // inspected side of `setDevToolsWebContents` (the standalone debug
+    // window) AND attached by an external CDP client (remote-debugging-port,
+    // which bootstrap's setupCdpPort enables by default when unpackaged and
+    // whenever cdp/mcp settings are on) — real-machine repro. The debugger
+    // channel is unaffected. Report the real outcome (not fire-and-forget) —
+    // createOpenGatedRelay only marks an entry permanently "injected" on a
+    // confirmed `true`, and its inject timeout bounds any residual hang.
+    return injectViaCdp(opts.broker, target, script, 'global-console-mirror')
   }
 
   return createOpenGatedRelay<GuestConsoleEntry, WebContents>(
     onHostChanged,
-    (sink, opts) => forwarder.subscribe(sink, opts),
+    (sink, opts2) => forwarder.subscribe(sink, opts2),
     inject,
   )
 }

@@ -9,8 +9,8 @@
  * this filter. This front-end filter is what's left for the half that has no
  * other interception point (see console-filter.ts's header comment).
  */
-import { describe, expect, it } from 'vitest'
-import { buildConsoleFilterScript, DEFAULT_INTERNAL_LOG_FILTER } from './console-filter.js'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { buildConsoleFilterScript, buildLiveConsoleFilterScript, DEFAULT_INTERNAL_LOG_FILTER } from './console-filter.js'
 
 /** Extract the regex source from DevTools' negative-filter syntax `-/regex/`. */
 function extractNegativeFilterRegex(negativeFilter: string): RegExp {
@@ -155,5 +155,196 @@ describe('buildConsoleFilterScript self-healing default', () => {
   it('regression: buildConsoleFilterScript() with no argument still seeds DEFAULT_INTERNAL_LOG_FILTER', () => {
     const store = runScript(buildConsoleFilterScript(), {})
     expect(store[KEY]).toBe(JSON.stringify(DEFAULT_INTERNAL_LOG_FILTER))
+  })
+})
+
+/**
+ * `buildLiveConsoleFilterScript` — the fix for the gap the persisted
+ * preference above cannot close: a Console panel that has ALREADY
+ * constructed itself (or finishes constructing shortly after injection) by
+ * the time the script runs never re-reads that preference, so its live
+ * filter box stays empty and framework `[service]` lines leak straight
+ * through unfiltered (real repro this session). The real API this drives —
+ * `Console.ConsoleView.instance().filter.textFilterUI.setValue()` +
+ * `.updateCurrentFilter()` + `.onFilterChanged()` — was found via a live
+ * probe against the actual bundled front-end (not guessed); see
+ * console-filter.ts's doc comment.
+ *
+ * These tests run the actual generated script (via `new Function`) against a
+ * fake `Console.ConsoleView` + `filter` object, the same technique the
+ * suite above uses for the fake `InspectorFrontendHost`.
+ */
+describe('buildLiveConsoleFilterScript', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  /** A fake `filter.textFilterUI` + `filter` pair mirroring the real
+   * ConsoleViewFilter surface this script actually calls. */
+  function createFakeFilter(initialValue = '') {
+    let value = initialValue
+    const updateCurrentFilter = vi.fn()
+    const onFilterChanged = vi.fn()
+    return {
+      textFilterUI: {
+        value: () => value,
+        setValue: (v: string) => { value = v },
+      },
+      updateCurrentFilter,
+      onFilterChanged,
+      get value() { return value },
+    }
+  }
+
+  /** A "bootstrap already finished" EUI stub: the script's in-realm probe
+   * (ShortcutRegistry.instance() not throwing) must pass before it touches
+   * ConsoleView at all — these tests exercise the post-probe filter flow. */
+  function createReadyEui() {
+    return { ShortcutRegistry: { ShortcutRegistry: { instance: () => ({}) } } }
+  }
+
+  function createFakeGlobalThis(filter: ReturnType<typeof createFakeFilter> | null) {
+    return {
+      EUI: createReadyEui(),
+      Console: filter
+        ? { ConsoleView: { instance: () => ({ filter }) } }
+        : undefined,
+    }
+  }
+
+  it('applies the default immediately when the live filter box is unset', () => {
+    const filter = createFakeFilter('')
+    const fakeGlobalThis = createFakeGlobalThis(filter)
+    new Function('globalThis', buildLiveConsoleFilterScript())(fakeGlobalThis)
+
+    expect(filter.value).toBe(DEFAULT_INTERNAL_LOG_FILTER)
+    expect(filter.updateCurrentFilter).toHaveBeenCalledTimes(1)
+    expect(filter.onFilterChanged).toHaveBeenCalledTimes(1)
+  })
+
+  it('re-applies (idempotently) when the live filter box already equals this exact default', () => {
+    const filter = createFakeFilter(DEFAULT_INTERNAL_LOG_FILTER)
+    const fakeGlobalThis = createFakeGlobalThis(filter)
+    new Function('globalThis', buildLiveConsoleFilterScript())(fakeGlobalThis)
+
+    expect(filter.value).toBe(DEFAULT_INTERNAL_LOG_FILTER)
+    expect(filter.updateCurrentFilter).toHaveBeenCalledTimes(1)
+  })
+
+  it('does NOT overwrite a real user customization in the live filter box', () => {
+    const userValue = '-/我自己手打的过滤规则/'
+    const filter = createFakeFilter(userValue)
+    const fakeGlobalThis = createFakeGlobalThis(filter)
+    new Function('globalThis', buildLiveConsoleFilterScript())(fakeGlobalThis)
+
+    expect(filter.value).toBe(userValue)
+    expect(filter.updateCurrentFilter).not.toHaveBeenCalled()
+    expect(filter.onFilterChanged).not.toHaveBeenCalled()
+  })
+
+  it('retries on a bounded interval until Console.ConsoleView becomes available, then applies', () => {
+    let filter: ReturnType<typeof createFakeFilter> | null = null
+    const fakeGlobalThis: { EUI?: unknown; Console?: unknown } = { EUI: createReadyEui() }
+    Object.defineProperty(fakeGlobalThis, 'Console', {
+      get: () => (filter ? { ConsoleView: { instance: () => ({ filter }) } } : undefined),
+    })
+
+    new Function('globalThis', buildLiveConsoleFilterScript())(fakeGlobalThis)
+
+    // Not available yet — no attempt could have applied anything.
+    vi.advanceTimersByTime(300)
+
+    // ConsoleView "finishes constructing" partway through the poll window.
+    filter = createFakeFilter('')
+    vi.advanceTimersByTime(200)
+
+    expect(filter.value).toBe(DEFAULT_INTERNAL_LOG_FILTER)
+    expect(filter.updateCurrentFilter).toHaveBeenCalledTimes(1)
+  })
+
+  it('gives up after the bounded number of attempts if Console.ConsoleView never becomes available', () => {
+    // The generated script schedules retries via the ambient `setTimeout`
+    // (not `globalThis.setTimeout`) — spy on the real (fake-timer-backed)
+    // global to count scheduled attempts.
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout')
+    const fakeGlobalThis = createFakeGlobalThis(null)
+
+    new Function('globalThis', buildLiveConsoleFilterScript())(fakeGlobalThis)
+    vi.runAllTimers()
+
+    // Bounded — some finite number of scheduled retries, not an infinite loop.
+    expect(setTimeoutSpy.mock.calls.length).toBeGreaterThan(0)
+    expect(setTimeoutSpy.mock.calls.length).toBeLessThan(200)
+  })
+})
+
+/**
+ * Every poll tick in the generated script must first check front-end
+ * bootstrap readiness through the same in-realm probe
+ * `frontend-bootstrap-gate.ts` exposes as `FRONTEND_BOOTSTRAP_PROBE_SCRIPT`
+ * (`EUI.ShortcutRegistry.ShortcutRegistry.instance()`, wrapped in try/catch).
+ * A tick that finds the probe not-yet-ready must schedule its next retry
+ * WITHOUT touching `Console.ConsoleView.instance()` — an early construction
+ * of that singleton is the exact bootstrap-killing failure mode
+ * `frontend-bootstrap-gate.ts`'s header comment documents (an
+ * `IssuesManager.instance({ensureFirst: true})` conflict that permanently
+ * strands `MainImpl`'s bootstrap with no tabs at all).
+ */
+describe('buildLiveConsoleFilterScript gates every poll tick on the front-end bootstrap probe', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => {
+    vi.useRealTimers()
+    delete (globalThis as Record<string, unknown>).EUI
+  })
+
+  it('places the ShortcutRegistry bootstrap probe ahead of the ConsoleView.instance reference in the generated script', () => {
+    const script = buildLiveConsoleFilterScript()
+    const probeIndex = script.indexOf('ShortcutRegistry')
+    const consoleViewIndex = script.indexOf('ConsoleView.instance')
+
+    expect(probeIndex).toBeGreaterThan(-1)
+    expect(consoleViewIndex).toBeGreaterThan(-1)
+    expect(probeIndex).toBeLessThan(consoleViewIndex)
+  })
+
+  it('never calls Console.ConsoleView.instance() while the bootstrap probe is not ready, and keeps retrying', () => {
+    const consoleViewInstance = vi.fn(() => ({ filter: null }))
+    const fakeGlobalThis = {
+      EUI: { ShortcutRegistry: { ShortcutRegistry: { instance: () => { throw new Error('not ready') } } } },
+      Console: { ConsoleView: { instance: consoleViewInstance } },
+    }
+
+    new Function('globalThis', buildLiveConsoleFilterScript())(fakeGlobalThis)
+    vi.advanceTimersByTime(1000)
+
+    expect(consoleViewInstance).not.toHaveBeenCalled()
+  })
+
+  it('applies the filter through the existing ConsoleView flow only after the bootstrap probe reports ready', () => {
+    let euiReady = false
+    let filterValue = ''
+    const updateCurrentFilter = vi.fn()
+    const fakeFilter = {
+      textFilterUI: {
+        value: () => filterValue,
+        setValue: (v: string) => { filterValue = v },
+      },
+      updateCurrentFilter,
+      onFilterChanged: vi.fn(),
+    }
+    const fakeGlobalThis: Record<string, unknown> = {
+      Console: { ConsoleView: { instance: () => ({ filter: fakeFilter }) } },
+    }
+    Object.defineProperty(fakeGlobalThis, 'EUI', {
+      get: () => (euiReady ? { ShortcutRegistry: { ShortcutRegistry: { instance: () => ({}) } } } : undefined),
+    })
+
+    new Function('globalThis', buildLiveConsoleFilterScript())(fakeGlobalThis)
+    vi.advanceTimersByTime(300)
+    expect(filterValue, 'the bootstrap probe never reported ready yet, so the live filter must stay untouched').toBe('')
+
+    euiReady = true
+    vi.advanceTimersByTime(200)
+    expect(filterValue).toBe(DEFAULT_INTERNAL_LOG_FILTER)
+    expect(updateCurrentFilter).toHaveBeenCalledTimes(1)
   })
 })

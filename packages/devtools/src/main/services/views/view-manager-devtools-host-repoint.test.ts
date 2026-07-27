@@ -27,209 +27,28 @@
  * REBUILD the host (`simulatorView`) — a fresh, never-navigated
  * `WebContentsView` — rather than calling `setDevToolsWebContents` again on
  * the wc that already hosted a previous generation.
+ *
+ * Harness (electron mock, makeContext, makeServiceWc) lives in
+ * view-manager-devtools-host-test-fixtures.ts, shared with
+ * view-manager-service-host-ready.test.ts.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import type { RenderEvent } from '../../ipc/bridge-router.js'
 
-// ── electron stub ───────────────────────────────────────────────────────────
-// Tracks every WebContentsView ever constructed (construction order:
-// attachNativeSimulator builds [0] = the native simulator content view, then
-// attachNativeSimulatorDevtoolsHost builds [1] = the DevTools front-end host
-// view — same ordering documented in the sibling max-listeners/anchor-only
-// tests).
-type StubWebContents = {
-  destroyed: boolean
-  id: number
-  isDestroyed: () => boolean
-  close: ReturnType<typeof vi.fn>
-  loadURL: ReturnType<typeof vi.fn>
-  loadFile: ReturnType<typeof vi.fn>
-  on: ReturnType<typeof vi.fn>
-  once: ReturnType<typeof vi.fn>
-  removeListener: ReturnType<typeof vi.fn>
-  setWindowOpenHandler: ReturnType<typeof vi.fn>
-  setZoomFactor: ReturnType<typeof vi.fn>
-  send: ReturnType<typeof vi.fn>
-  setMaxListeners: ReturnType<typeof vi.fn>
-  getMaxListeners: ReturnType<typeof vi.fn>
-  isLoading: ReturnType<typeof vi.fn>
-  executeJavaScript: ReturnType<typeof vi.fn>
-  setDevToolsWebContents: ReturnType<typeof vi.fn>
-  openDevTools: ReturnType<typeof vi.fn>
-  isDevToolsOpened: ReturnType<typeof vi.fn>
-  closeDevTools: ReturnType<typeof vi.fn>
-  getURL: ReturnType<typeof vi.fn>
-}
-type StubView = {
-  webContents: StubWebContents
-  setBounds: ReturnType<typeof vi.fn>
-  setBackgroundColor: ReturnType<typeof vi.fn>
-}
+vi.mock('electron', async () =>
+  (await import('./view-manager-devtools-host-test-fixtures.js')).electronModuleMock())
+vi.mock('../../utils/paths.js', async () =>
+  (await import('./view-manager-devtools-host-test-fixtures.js')).pathsModuleMock())
 
-const constructed: StubView[] = []
-
-vi.mock('electron', () => {
-  let nextId = 1
-  class WebContentsView {
-    webContents: StubWebContents
-    setBounds = vi.fn()
-    setBackgroundColor = vi.fn()
-    constructor(_opts?: unknown) {
-      const id = nextId++
-      this.webContents = {
-        destroyed: false,
-        id,
-        isDestroyed() { return this.destroyed },
-        close: vi.fn(function (this: StubWebContents) { this.destroyed = true }),
-        loadURL: vi.fn(() => Promise.resolve()),
-        loadFile: vi.fn(() => Promise.resolve()),
-        on: vi.fn(),
-        once: vi.fn(),
-        removeListener: vi.fn(),
-        setWindowOpenHandler: vi.fn(),
-        setZoomFactor: vi.fn(),
-        send: vi.fn(),
-        setMaxListeners: vi.fn(),
-        getMaxListeners: vi.fn(() => 10),
-        // DevTools front-end host wc surface (this stub is used for
-        // `simulatorView.webContents`, i.e. the right-panel DevTools host).
-        isLoading: vi.fn(() => false),
-        executeJavaScript: vi.fn(() => Promise.resolve()),
-        setDevToolsWebContents: vi.fn(),
-        openDevTools: vi.fn(),
-        isDevToolsOpened: vi.fn(() => false),
-        closeDevTools: vi.fn(),
-        getURL: vi.fn(() => ''),
-      }
-      constructed.push(this as unknown as StubView)
-    }
-  }
-  const ipcMain = {
-    on: vi.fn(),
-    removeListener: vi.fn(),
-    handle: vi.fn(),
-    removeHandler: vi.fn(),
-  }
-  return {
-    WebContentsView,
-    ipcMain,
-    shell: { openExternal: vi.fn() },
-    nativeTheme: { shouldUseDarkColors: false, on: vi.fn(), removeListener: vi.fn() },
-    webContents: {
-      fromId: vi.fn(() => undefined),
-      getAllWebContents: vi.fn(() => []),
-    },
-    default: { ipcMain },
-  }
-})
-
-vi.mock('../../utils/paths.js', () => ({
-  mainPreloadPath: '/stub/preload.js',
-  hostToolbarPreloadPath: '/stub/host-toolbar-preload.js',
-  cjsSiblingPreloadPath: (p: string) => p.replace(/\.js$/, '.cjs'),
-  devtoolsPackageRoot: '/stub/devtools-pkg-root',
-}))
-
-// Import AFTER mocks so view-manager picks up the stubs.
 import { createViewManager } from './view-manager.js'
 import { simulatorDevtoolsBounds } from './placement-test-driver.js'
-import { createConnectionRegistry } from '@dimina-kit/electron-deck/main'
-
-const SIM_URL = 'http://localhost:7788/simulator.html?appId=repoint'
-
-/** A hidden SERVICE-HOST BrowserWindow wc (top-level, can host DevTools). */
-function makeServiceWc(id: number): StubWebContents {
-  return {
-    destroyed: false,
-    id,
-    isDestroyed() { return this.destroyed },
-    close: vi.fn(),
-    loadURL: vi.fn(() => Promise.resolve()),
-    loadFile: vi.fn(() => Promise.resolve()),
-    on: vi.fn(),
-    once: vi.fn(),
-    removeListener: vi.fn(),
-    setWindowOpenHandler: vi.fn(),
-    setZoomFactor: vi.fn(),
-    send: vi.fn(),
-    setMaxListeners: vi.fn(),
-    getMaxListeners: vi.fn(() => 10),
-    isLoading: vi.fn(() => false),
-    executeJavaScript: vi.fn(() => Promise.resolve()),
-    setDevToolsWebContents: vi.fn(),
-    openDevTools: vi.fn(),
-    isDevToolsOpened: vi.fn(() => true),
-    closeDevTools: vi.fn(),
-    getURL: vi.fn(() => ''),
-  }
-}
-
-function makeContext() {
-  const addChildView = vi.fn()
-  const removeChildView = vi.fn()
-  const contentView = { addChildView, removeChildView, children: [] }
-  const mainWindow = {
-    destroyed: false,
-    contentView,
-    isDestroyed() { return this.destroyed },
-    getContentSize: () => [1280, 980],
-  }
-  const notify = {
-    popoverInit: vi.fn(),
-    popoverClosed: vi.fn(),
-    hostToolbarHeightChanged: vi.fn(),
-  }
-
-  // ── ctx.bridge stub ───────────────────────────────────────────────────────
-  // Minimal `BridgeRouterHandle`: `getServiceWc` resolves to whatever the test
-  // currently points `currentServiceWc` at (simulating a pre-warm-pool swap
-  // between render events), and `onRenderEvent` fans a manually-driven
-  // `RenderEvent` out to every subscriber (view-manager's own follow-path AND
-  // elements-forward's internal subscription both register here).
-  let currentServiceWc: StubWebContents | null = null
-  const renderEventListeners = new Set<(event: RenderEvent) => void>()
-  const bridge = {
-    isNativeHost: () => true,
-    resolveRenderWc: () => null,
-    getServiceWc: vi.fn(() => currentServiceWc),
-    getServiceWcForBridge: () => null,
-    getActiveRenderWc: () => null,
-    getActiveBridgeId: () => null,
-    onRenderEvent: (listener: (event: RenderEvent) => void) => {
-      renderEventListeners.add(listener)
-      return () => renderEventListeners.delete(listener)
-    },
-    getDevice: () => null,
-    setDevice: () => {},
-    disposeSessionsForSimulator: () => Promise.resolve(),
-  }
-
-  function setActiveServiceWc(wc: StubWebContents): void {
-    currentServiceWc = wc
-  }
-  function emitRenderEvent(event: RenderEvent): void {
-    for (const l of [...renderEventListeners]) l(event)
-  }
-
-  return {
-    addChildView,
-    removeChildView,
-    setActiveServiceWc,
-    emitRenderEvent,
-    ctx: {
-      windows: {
-        mainWindow: mainWindow as unknown as import('electron').BrowserWindow,
-      } as import('../window-service.js').WindowService,
-      rendererDir: '/stub/renderer',
-      panels: ['console', 'wxml', 'storage', 'appdata'],
-      notify: notify as unknown as import('../notifications/renderer-notifier.js').RendererNotifier,
-      connections: createConnectionRegistry(),
-      preloadPath: '/stub/sim-preload.js',
-      bridge: bridge as unknown as import('../workbench-context.js').WorkbenchContext['bridge'],
-    },
-  }
-}
-
+import {
+  constructed,
+  makeContext,
+  makeServiceWc,
+  SIM_URL,
+  type StubView,
+  type StubWebContents,
+} from './view-manager-devtools-host-test-fixtures.js'
 beforeEach(() => {
   constructed.length = 0
   // elements-forward installs a 150ms self-healing reconcile `setInterval`
@@ -373,3 +192,4 @@ describe('DevTools front-end host view: the rebuilt host is re-attached to conte
     ).toBe(1)
   })
 })
+

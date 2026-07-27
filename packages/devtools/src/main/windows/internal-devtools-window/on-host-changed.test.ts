@@ -169,18 +169,16 @@ describe('createInternalDevtoolsWindow.onHostChanged: fresh build', () => {
 })
 
 describe('createInternalDevtoolsWindow.onHostChanged: reuse open() while visible', () => {
-  it('fires again with the SAME host webContents (a repeat show is safe — dedup lives downstream)', () => {
+  it('does NOT re-notify with the same host (transition dedup at the source — downstream consumers like network-forward clear real state on every notification, so a repeat is not free)', () => {
     const ctrl = createInternalDevtoolsWindow(target)
     const handler = vi.fn()
     ctrl.onHostChanged(handler)
     ctrl.open()
-    const hostWc = hostWcOf(lastWindow())
     handler.mockClear()
 
     ctrl.open()
 
-    expect(handler).toHaveBeenCalledTimes(1)
-    expect(handler).toHaveBeenCalledWith(hostWc)
+    expect(handler).not.toHaveBeenCalled()
   })
 })
 

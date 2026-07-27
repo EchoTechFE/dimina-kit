@@ -120,13 +120,31 @@ function makeHostChangedController(): {
   }
 }
 
+
+/** Test-harness broker: routes Runtime.evaluate straight back to the target
+ * wc's own executeJavaScript spy (same arity, same promise semantics), so
+ * every existing script-content / gating / retry assertion keeps observing
+ * through `exec` unchanged while the mirror itself now talks CDP. */
+const passthroughBroker = {
+  acquire: (wc: WebContents) => ({
+    send: (_method: string, params?: object) =>
+      Promise.resolve((wc as unknown as { executeJavaScript: (s: string, g: boolean) => unknown })
+        .executeJavaScript((params as { expression?: string } | undefined)?.expression ?? '', true)),
+    onMessage: () => ({ dispose: () => {} }),
+    onDetach: () => ({ dispose: () => {} }),
+    ensureRenderDomains: () => Promise.resolve(),
+    dispose: () => {},
+  }),
+  dispose: () => {},
+} as unknown as import('../cdp-session/index.js').CdpSessionBroker
+
 describe('createGlobalConsoleMirror — installation', () => {
   it('registers an onHostChanged handler exactly once at install time, without subscribing to the forwarder yet (window not open)', () => {
     const { forwarder, subscribeSpy } = makeFakeForwarder()
     const { onHostChanged, registerSpy } = makeHostChangedController()
     const { wc: target } = makeWc()
 
-    createGlobalConsoleMirror(forwarder, target, onHostChanged)
+    createGlobalConsoleMirror(forwarder, target, onHostChanged, { broker: passthroughBroker })
 
     expect(registerSpy).toHaveBeenCalledTimes(1)
     expect(subscribeSpy).not.toHaveBeenCalled()
@@ -139,7 +157,7 @@ describe('createGlobalConsoleMirror — opening the window replays history into 
     const { onHostChanged, fire } = makeHostChangedController()
     const { wc: target } = makeWc()
     const { wc: host } = makeWc()
-    createGlobalConsoleMirror(forwarder, target, onHostChanged)
+    createGlobalConsoleMirror(forwarder, target, onHostChanged, { broker: passthroughBroker })
 
     fire(host)
 
@@ -156,7 +174,7 @@ describe('createGlobalConsoleMirror — opening the window replays history into 
     // Entries happen while nobody has opened the standalone window yet —
     // e.g. framework console output at app boot.
     emit({ source: 'service', level: 'log', args: ['before window ever opened'] })
-    createGlobalConsoleMirror(forwarder, target, onHostChanged)
+    createGlobalConsoleMirror(forwarder, target, onHostChanged, { broker: passthroughBroker })
 
     fire(host)
     await flushMicrotasks()
@@ -170,7 +188,7 @@ describe('createGlobalConsoleMirror — opening the window replays history into 
     const { onHostChanged, fire } = makeHostChangedController()
     const { wc: target, exec: targetExec } = makeWc()
     const { wc: host, exec: hostExec } = makeWc()
-    createGlobalConsoleMirror(forwarder, target, onHostChanged)
+    createGlobalConsoleMirror(forwarder, target, onHostChanged, { broker: passthroughBroker })
 
     fire(host)
     emit({ source: 'service', level: 'log', args: ['hi'] })
@@ -185,7 +203,7 @@ describe('createGlobalConsoleMirror — opening the window replays history into 
     const { onHostChanged, fire } = makeHostChangedController()
     const { wc: target, exec } = makeWc()
     const { wc: host } = makeWc()
-    createGlobalConsoleMirror(forwarder, target, onHostChanged)
+    createGlobalConsoleMirror(forwarder, target, onHostChanged, { broker: passthroughBroker })
 
     fire(host)
     emit({ source: 'render', level: 'warn', args: ['live entry'] })
@@ -202,7 +220,7 @@ describe('createGlobalConsoleMirror — closing the window pauses consumption; r
     const { onHostChanged, fire } = makeHostChangedController()
     const { wc: target } = makeWc()
     const { wc: host } = makeWc()
-    createGlobalConsoleMirror(forwarder, target, onHostChanged)
+    createGlobalConsoleMirror(forwarder, target, onHostChanged, { broker: passthroughBroker })
 
     fire(host)
     fire(null)
@@ -216,7 +234,7 @@ describe('createGlobalConsoleMirror — closing the window pauses consumption; r
     const { onHostChanged, fire } = makeHostChangedController()
     const { wc: target, exec } = makeWc()
     const { wc: host } = makeWc()
-    createGlobalConsoleMirror(forwarder, target, onHostChanged)
+    createGlobalConsoleMirror(forwarder, target, onHostChanged, { broker: passthroughBroker })
 
     fire(host)
     fire(null)
@@ -232,7 +250,7 @@ describe('createGlobalConsoleMirror — closing the window pauses consumption; r
     const { onHostChanged, fire } = makeHostChangedController()
     const { wc: target, exec } = makeWc()
     const { wc: host } = makeWc()
-    createGlobalConsoleMirror(forwarder, target, onHostChanged)
+    createGlobalConsoleMirror(forwarder, target, onHostChanged, { broker: passthroughBroker })
 
     fire(host)
     fire(null)
@@ -257,7 +275,7 @@ describe('createGlobalConsoleMirror — closing the window pauses consumption; r
     const { onHostChanged, fire } = makeHostChangedController()
     const { wc: target, exec } = makeWc()
     const { wc: host } = makeWc()
-    createGlobalConsoleMirror(forwarder, target, onHostChanged)
+    createGlobalConsoleMirror(forwarder, target, onHostChanged, { broker: passthroughBroker })
 
     fire(host)
     emit({ source: 'service', level: 'log', args: ['1'] })
@@ -293,7 +311,7 @@ describe('createGlobalConsoleMirror — reopen does not double-inject already-sh
     const { onHostChanged, fire } = makeHostChangedController()
     const { wc: target, exec } = makeWc()
     const { wc: host } = makeWc()
-    createGlobalConsoleMirror(forwarder, target, onHostChanged)
+    createGlobalConsoleMirror(forwarder, target, onHostChanged, { broker: passthroughBroker })
 
     fire(host)
     emit({ source: 'service', level: 'log', args: ['shown once'] })
@@ -313,7 +331,7 @@ describe('createGlobalConsoleMirror — reopen does not double-inject already-sh
     const { onHostChanged, fire } = makeHostChangedController()
     const { wc: target, exec } = makeWc()
     const { wc: host } = makeWc()
-    createGlobalConsoleMirror(forwarder, target, onHostChanged)
+    createGlobalConsoleMirror(forwarder, target, onHostChanged, { broker: passthroughBroker })
 
     fire(host)
     emit({ source: 'service', level: 'log', args: ['old'] })
@@ -336,7 +354,7 @@ describe('createGlobalConsoleMirror — settled/destroyed target gate', () => {
     const { onHostChanged, fire } = makeHostChangedController()
     const { wc: target, exec } = makeWc({ destroyed: true })
     const { wc: host } = makeWc()
-    createGlobalConsoleMirror(forwarder, target, onHostChanged)
+    createGlobalConsoleMirror(forwarder, target, onHostChanged, { broker: passthroughBroker })
 
     fire(host)
     expect(() => emit({ source: 'service', level: 'log', args: ['x'] })).not.toThrow()
@@ -349,7 +367,7 @@ describe('createGlobalConsoleMirror — settled/destroyed target gate', () => {
     const { onHostChanged, fire } = makeHostChangedController()
     const { wc: target, exec } = makeWc({ loading: true, url: 'devtools://devtools/bundled/devtools_app.html' })
     const { wc: host } = makeWc()
-    createGlobalConsoleMirror(forwarder, target, onHostChanged)
+    createGlobalConsoleMirror(forwarder, target, onHostChanged, { broker: passthroughBroker })
 
     fire(host)
     emit({ source: 'service', level: 'log', args: ['x'] })
@@ -364,7 +382,7 @@ describe('createGlobalConsoleMirror — dispose', () => {
     const { onHostChanged, fire, unregisterSpy } = makeHostChangedController()
     const { wc: target } = makeWc()
     const { wc: host } = makeWc()
-    const mirror = createGlobalConsoleMirror(forwarder, target, onHostChanged)
+    const mirror = createGlobalConsoleMirror(forwarder, target, onHostChanged, { broker: passthroughBroker })
 
     fire(host)
     mirror.dispose()
@@ -377,7 +395,7 @@ describe('createGlobalConsoleMirror — dispose', () => {
     const { forwarder } = makeFakeForwarder()
     const { onHostChanged, unregisterSpy } = makeHostChangedController()
     const { wc: target } = makeWc()
-    const mirror = createGlobalConsoleMirror(forwarder, target, onHostChanged)
+    const mirror = createGlobalConsoleMirror(forwarder, target, onHostChanged, { broker: passthroughBroker })
 
     expect(() => mirror.dispose()).not.toThrow()
     expect(unregisterSpy).toHaveBeenCalledTimes(1)

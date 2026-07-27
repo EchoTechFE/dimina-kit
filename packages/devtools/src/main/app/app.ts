@@ -449,7 +449,10 @@ export async function createDevtoolsRuntime(
   // opposed to the right-panel CDP, which inspects only the user's
   // mini-program). Assembled before the IPC handler below so a request
   // arriving right after boot always finds it.
-  context.internalDevtoolsWindow = createInternalDevtoolsWindow(mainWindow)
+  // `isAppQuitting` lets the controller stop intercepting 'close' during a
+  // real quit — its habitual preventDefault()+hide() would otherwise cancel
+  // the quit itself and strand the process with a hidden window.
+  context.internalDevtoolsWindow = createInternalDevtoolsWindow(mainWindow, { isAppQuitting })
   context.registry.add(toDisposable(() => context.internalDevtoolsWindow?.dispose()))
   // Unconditional (not a toggleable BUILTIN_MODULES entry): it's core dev
   // tooling, not a host-configurable feature.
@@ -487,6 +490,9 @@ export async function createDevtoolsRuntime(
       context.consoleForwarder,
       mainWindow.webContents,
       context.internalDevtoolsWindow.onHostChanged,
+      // CDP transport (never executeJavaScript) — see the mirror's inject()
+      // doc for the setDevToolsWebContents + external-CDP double-attach hang.
+      { broker: context.cdpSessionBroker },
     )
     context.registry.add(toDisposable(() => consoleMirror.dispose()))
   }
@@ -503,6 +509,7 @@ export async function createDevtoolsRuntime(
       context.diagnostics,
       mainWindow.webContents,
       context.internalDevtoolsWindow.onHostChanged,
+      { broker: context.cdpSessionBroker },
     )
     context.registry.add(toDisposable(() => diagnosticsMirror.dispose()))
   }

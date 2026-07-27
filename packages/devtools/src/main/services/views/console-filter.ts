@@ -64,16 +64,21 @@
  * build's regex, missing the `[视图] ` prefix, survived across rebuilds and
  * silently never updated).
  *
- * This only covers the persisted setting a FRESH (not-yet-constructed)
- * Console panel reads at boot — the timing `applyConsoleFilter` actually
- * runs at (right after a fresh `openDevTools()`, before the front-end has
- * finished booting panels; see native-simulator-devtools-host.ts). It does
- * NOT reactively update an ALREADY-open, already-constructed Console panel's
- * live filter box; that would need driving the front-end's live
- * `Common.Settings` object directly (the same live-API-driving family as
- * `showView()`/`registerViewExtension` in devtools-tabs.ts), which isn't
- * implemented here since the one real call site always applies this before
- * the front-end has booted.
+ * This covers the persisted setting a FRESH (not-yet-constructed) Console
+ * panel would read at boot. It does NOT by itself update an
+ * ALREADY-constructed Console panel's live filter box — real-machine
+ * evidence (empirical probe against the actual bundled Console panel, this
+ * session) showed the panel's own async bootstrap (Settings storage wiring,
+ * i18n, ActionRegistry, …) can still be constructing itself well after
+ * `applyConsoleFilter`'s injection point (right after `openDevTools()`,
+ * gated on `did-stop-loading` — the top document finishing load, NOT the
+ * front-end's own panel construction), so this preference write can land
+ * before OR after the panel reads it, and a "before" write does nothing for
+ * that already-visible filter box. `buildLiveConsoleFilterScript` below
+ * closes that gap by driving the panel's live filter object directly, with a
+ * bounded poll (no fixed delay — there is no public "Console panel
+ * constructed" event to await, only a checkable condition) standing in for
+ * the missing event this repo's own conventions call for.
  */
 
 /**
@@ -125,4 +130,107 @@ export function buildConsoleFilterScript(negativeFilter: string = DEFAULT_INTERN
       } catch(_){}
     });
   }catch(_){}})()`
+}
+
+// Bound on how long `buildLiveConsoleFilterScript`'s in-realm poll retries
+// before giving up — mirrors this module's other bounded waits (e.g.
+// internal-devtools-window's CLOSE_WATCHDOG_MS): wait for the real condition,
+// but never forever. `Console.ConsoleView` was observed (real-machine probe,
+// this session) fully constructible well within a few seconds of the
+// front-end's document settling; this leaves generous headroom.
+const LIVE_FILTER_POLL_MAX_ATTEMPTS = 100
+const LIVE_FILTER_POLL_INTERVAL_MS = 100
+
+/**
+ * Build the `executeJavaScript` source that drives the Console panel's LIVE
+ * filter object directly — the fix for the gap `buildConsoleFilterScript`'s
+ * persisted-preference write cannot close (see this module's header
+ * comment). Empirically discovered live API (real-machine probe against the
+ * actual bundled `devtools://` Console panel, this session — not a guess):
+ *   `Console.ConsoleView.instance().filter` exposes `textFilterUI` (the
+ *   visible input box — `.setValue(text)` updates what the user sees) and
+ *   `updateCurrentFilter()` / `onFilterChanged()` (re-parses the box's value
+ *   into the filter actually applied to messages, and re-applies it to
+ *   already-shown AND future messages). Verified end-to-end: after this
+ *   sequence, a fresh `[service]`-prefixed message logged afterward is
+ *   immediately hidden, matching the already-shown ones.
+ *
+ * Same "don't clobber a real user choice" contract as
+ * `buildConsoleFilterScript`, judged against the LIVE box value instead of a
+ * persisted one: only applies when the box currently reads empty (unset) or
+ * already equals this exact default (re-applying is a harmless no-op,
+ * correctly handles a re-point re-running this script against a panel that
+ * already has it applied).
+ *
+ * `Console.ConsoleView` has no lifecycle EVENT marking "fully constructed" —
+ * only the checkable condition of whether calling `.instance()` and reaching
+ * into `.filter.textFilterUI` throws. Retries on a bounded interval (see
+ * `LIVE_FILTER_POLL_MAX_ATTEMPTS`/`_INTERVAL_MS`) rather than a single fixed
+ * delay, and stops immediately on either success or a detected user
+ * customization — it does not keep polling once there is nothing left to do.
+ *
+ * Every tick gates on the front-end bootstrap probe BEFORE touching
+ * `ConsoleView.instance()`: an early construction transitively creates
+ * IssuesManager and permanently kills the front-end's own bootstrap
+ * (`ensureFirst` conflict in MainImpl.#createAppUI) — see
+ * frontend-bootstrap-gate.ts for the full mechanism. The main process
+ * additionally holds this whole injection behind `whenFrontendBootstrapped`;
+ * the in-realm probe is defense in depth for any other caller of this
+ * script builder.
+ */
+export function buildLiveConsoleFilterScript(negativeFilter: string = DEFAULT_INTERNAL_LOG_FILTER): string {
+  const filterJson = JSON.stringify(negativeFilter)
+  const maxAttempts = JSON.stringify(LIVE_FILTER_POLL_MAX_ATTEMPTS)
+  const intervalMs = JSON.stringify(LIVE_FILTER_POLL_INTERVAL_MS)
+  return `(function(){
+    var VALUE = ${filterJson};
+    var attempts = 0;
+    function bootstrapReady() {
+      try {
+        var eui = globalThis.EUI;
+        if (!eui || !eui.ShortcutRegistry || !eui.ShortcutRegistry.ShortcutRegistry) return false;
+        eui.ShortcutRegistry.ShortcutRegistry.instance();
+        return true;
+      } catch (_) { return false; }
+    }
+    function tryApply() {
+      attempts++;
+      var scheduleRetry = attempts < ${maxAttempts};
+      // In-realm bootstrap probe FIRST (defense in depth on top of the
+      // main-process whenFrontendBootstrapped gate): touching
+      // Console.ConsoleView.instance() before the front-end's own
+      // MainImpl bootstrap completes constructs IssuesManager early and
+      // permanently kills that bootstrap (ensureFirst conflict) — the probe
+      // throws BEFORE constructing anything, so a not-ready tick costs
+      // nothing and never touches ConsoleView.
+      if (!bootstrapReady()) {
+        if (scheduleRetry) { setTimeout(tryApply, ${intervalMs}); return; }
+        console.warn('[console-filter] gave up applying the live Console filter after ' + attempts + ' attempts — the front-end bootstrap never completed');
+        return;
+      }
+      try {
+        var ConsoleNS = globalThis.Console;
+        var view = ConsoleNS && ConsoleNS.ConsoleView ? ConsoleNS.ConsoleView.instance() : null;
+        var f = view ? view.filter : null;
+        if (!f || !f.textFilterUI || typeof f.textFilterUI.setValue !== 'function' || typeof f.textFilterUI.value !== 'function') {
+          if (scheduleRetry) { setTimeout(tryApply, ${intervalMs}); return; }
+          console.warn('[console-filter] gave up applying the live Console filter after ' + attempts + ' attempts — Console.ConsoleView never became usable');
+          return;
+        }
+        var current = f.textFilterUI.value();
+        var isUnset = current === undefined || current === null || current === '';
+        var isOurDefault = current === VALUE;
+        if (isUnset || isOurDefault) {
+          f.textFilterUI.setValue(VALUE);
+          if (typeof f.updateCurrentFilter === 'function') f.updateCurrentFilter();
+          if (typeof f.onFilterChanged === 'function') f.onFilterChanged();
+        }
+        // Either applied, or a real user customization was detected — both
+        // are terminal: nothing left for a later retry to accomplish.
+      } catch(_) {
+        if (scheduleRetry) setTimeout(tryApply, ${intervalMs});
+      }
+    }
+    tryApply();
+  })()`
 }

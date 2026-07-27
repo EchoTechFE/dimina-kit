@@ -295,3 +295,116 @@ describe('createInternalDevtoolsWindow: target already destroyed', () => {
     expect(() => ctrl.open()).not.toThrow()
   })
 })
+
+/**
+ * `createInternalDevtoolsWindow(target, { isAppQuitting })` — during app quit
+ * the standalone DevTools window must NOT intercept its own native 'close':
+ * every other window is closing for real at the same time, and this
+ * controller's habitual preventDefault()+hide() would keep the process alive
+ * with a hidden window nothing will ever show again. `isAppQuitting()` lets
+ * the caller (app.ts's quitting flag) tell this controller "let it go".
+ */
+describe('createInternalDevtoolsWindow: close during app quit is not intercepted', () => {
+  it('does not call event.preventDefault() when opts.isAppQuitting() returns true, letting the native close destroy the window, and reports null via onHostChanged afterward', () => {
+    const ctrl = createInternalDevtoolsWindow(target, { isAppQuitting: () => true })
+    const handler = vi.fn()
+    ctrl.onHostChanged(handler)
+    ctrl.open()
+    handler.mockClear()
+    const hostWindow = lastWindow()
+
+    ;(hostWindow.close as unknown as () => void)()
+
+    // The mock's close() only leaves hide() uncalled and the window destroyed
+    // when preventDefault was never invoked on the emitted 'close' event.
+    expect(hostWindow.hide).not.toHaveBeenCalled()
+    expect(hostWindow.isDestroyed()).toBe(true)
+    expect(handler).toHaveBeenCalledWith(null)
+  })
+
+  it('still intercepts close (hide, not destroy) when opts.isAppQuitting() returns false', () => {
+    const ctrl = createInternalDevtoolsWindow(target, { isAppQuitting: () => false })
+    ctrl.open()
+    const hostWindow = lastWindow()
+
+    ;(hostWindow.close as unknown as () => void)()
+
+    expect(hostWindow.isDestroyed()).toBe(false)
+    expect(hostWindow.hide).toHaveBeenCalledTimes(1)
+  })
+
+  it('still intercepts close (hide, not destroy) when opts is omitted entirely', () => {
+    const ctrl = createInternalDevtoolsWindow(target)
+    ctrl.open()
+    const hostWindow = lastWindow()
+
+    ;(hostWindow.close as unknown as () => void)()
+
+    expect(hostWindow.isDestroyed()).toBe(false)
+    expect(hostWindow.hide).toHaveBeenCalledTimes(1)
+  })
+})
+
+/**
+ * `onHostChanged`'s catch-up replay: a subscriber registered AFTER the window
+ * is already built and visible must still learn the current host — otherwise
+ * a consumer wired up after `open()` (or that resubscribes) never receives an
+ * initial value and stays stuck believing there is no host at all. The replay
+ * runs a microtask later (matching this repo's `onServiceHostReady`
+ * catch-up pattern), and must re-check that the subscription is still live
+ * and the window still visible by the time it fires.
+ */
+describe('createInternalDevtoolsWindow.onHostChanged: catch-up replay for a late subscriber', () => {
+  it('replays the current host wc to a subscriber registered after open(), one microtask later (not synchronously)', async () => {
+    const ctrl = createInternalDevtoolsWindow(target)
+    ctrl.open()
+    const hostWindow = lastWindow()
+    const hostWc = (hostWindow.contentView.children[0] as { webContents: unknown }).webContents
+    const handler = vi.fn()
+
+    ctrl.onHostChanged(handler)
+
+    expect(handler, 'must not replay synchronously inside onHostChanged() itself').not.toHaveBeenCalled()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(handler).toHaveBeenCalledTimes(1)
+    expect(handler).toHaveBeenCalledWith(hostWc)
+  })
+
+  it('does not replay when the subscriber unsubscribes before the catch-up microtask runs', async () => {
+    const ctrl = createInternalDevtoolsWindow(target)
+    ctrl.open()
+    const handler = vi.fn()
+
+    const unsubscribe = ctrl.onHostChanged(handler)
+    unsubscribe()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  it('does not replay when the window has never been opened', async () => {
+    const ctrl = createInternalDevtoolsWindow(target)
+    const handler = vi.fn()
+
+    ctrl.onHostChanged(handler)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  it('does not replay when the window is currently hidden (closed via native close)', async () => {
+    const ctrl = createInternalDevtoolsWindow(target)
+    ctrl.open()
+    ;(lastWindow().close as unknown as () => void)()
+    const handler = vi.fn()
+
+    ctrl.onHostChanged(handler)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(handler).not.toHaveBeenCalled()
+  })
+})

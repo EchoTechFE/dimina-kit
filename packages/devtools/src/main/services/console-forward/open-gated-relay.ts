@@ -49,23 +49,60 @@ import type { Disposable } from '@dimina-kit/electron-deck/main'
  * the entry back to absent, so the next replay (e.g. the next window reopen)
  * gets a real retry instead of a silent, permanent loss.
  */
+export interface OpenGatedRelayOptions {
+  /**
+   * Bounds how long ONE in-flight `inject()` attempt may hold an entry
+   * `'pending'`. An `inject()` promise that never settles (real incident:
+   * `executeJavaScript` against a wc that is simultaneously the inspected
+   * side of `setDevToolsWebContents` AND attached by an external CDP client
+   * hangs forever) would otherwise black-hole the entry permanently — never
+   * shown, never retried. Past this bound the entry becomes retryable again
+   * on the next replay. The timed-out attempt's promise may still settle
+   * LATE; its settlement is generation-stamped and ignored when stale.
+   */
+  injectTimeoutMs?: number
+}
+
+const DEFAULT_INJECT_TIMEOUT_MS = 10_000
+
 export function createOpenGatedRelay<TEntry extends object, THost = unknown>(
   onHostChanged: (handler: (host: THost | null) => void) => () => void,
   subscribe: (sink: (entry: TEntry) => void, opts: { replay: true }) => Disposable,
   inject: (entry: TEntry) => boolean | Promise<boolean>,
+  opts?: OpenGatedRelayOptions,
 ): Disposable {
-  const state = new WeakMap<TEntry, 'pending' | 'done'>()
+  const injectTimeoutMs = opts?.injectTimeoutMs ?? DEFAULT_INJECT_TIMEOUT_MS
+  // Generation stamp per attempt: only the attempt matching the entry's
+  // CURRENT pending generation may act on settling — a stale (timed-out,
+  // superseded) attempt's late result must neither mark the entry done nor
+  // disturb a newer attempt's pending status.
+  const state = new WeakMap<TEntry, { phase: 'pending' | 'done'; generation: number }>()
+  let generationSeq = 0
+  const inFlightTimers = new Set<ReturnType<typeof setTimeout>>()
   let live: Disposable | null = null
 
   function deliver(entry: TEntry): void {
     if (state.has(entry)) return
-    state.set(entry, 'pending')
+    const generation = ++generationSeq
+    state.set(entry, { phase: 'pending', generation })
+    const timer = setTimeout(() => {
+      inFlightTimers.delete(timer)
+      const cur = state.get(entry)
+      if (cur && cur.phase === 'pending' && cur.generation === generation) state.delete(entry)
+    }, injectTimeoutMs)
+    timer.unref?.()
+    inFlightTimers.add(timer)
+    const settle = (ok: boolean): void => {
+      clearTimeout(timer)
+      inFlightTimers.delete(timer)
+      const cur = state.get(entry)
+      if (!cur || cur.phase !== 'pending' || cur.generation !== generation) return
+      if (ok) state.set(entry, { phase: 'done', generation })
+      else state.delete(entry)
+    }
     Promise.resolve()
       .then(() => inject(entry))
-      .then(
-        (ok) => { if (ok) state.set(entry, 'done'); else state.delete(entry) },
-        () => { state.delete(entry) },
-      )
+      .then((ok) => settle(ok === true), () => settle(false))
   }
 
   const unregister = onHostChanged((host) => {
@@ -75,6 +112,8 @@ export function createOpenGatedRelay<TEntry extends object, THost = unknown>(
 
   return {
     dispose: () => {
+      for (const timer of inFlightTimers) clearTimeout(timer)
+      inFlightTimers.clear()
       live?.dispose()
       live = null
       unregister()

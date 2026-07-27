@@ -331,14 +331,26 @@ describe('main-process wiring: internalDevtoolsWindow host changes drive the glo
 
       const hostWc = currentHostWc()
       const mainWc = instance.mainWindow.webContents
-      const mainSpy = vi.spyOn(mainWc, 'executeJavaScript')
-      const hostSpy = vi.spyOn(hostWc, 'executeJavaScript')
+      // The mirror's transport is CDP Runtime.evaluate over the debugger
+      // broker (never executeJavaScript — see global-console-mirror.ts's
+      // inject() doc), so the observable is the wc's debugger channel.
+      type Dbg = { debugger: { sendCommand: ReturnType<typeof vi.fn> } }
+      const mainSend = vi.spyOn((mainWc as unknown as Dbg).debugger, 'sendCommand')
+      const hostSend = vi.spyOn((hostWc as unknown as Dbg).debugger, 'sendCommand')
+      const mainExec = vi.spyOn(mainWc, 'executeJavaScript')
+      const hostExec = vi.spyOn(hostWc, 'executeJavaScript')
 
       ctx.consoleForwarder!.emit({ source: 'service', level: 'log', args: ['target-check'] })
       await flushMicrotasks()
 
-      expect(mainSpy).toHaveBeenCalledTimes(1)
-      expect(hostSpy).not.toHaveBeenCalled()
+      const mainEvaluates = mainSend.mock.calls.filter((c) => c[0] === 'Runtime.evaluate')
+      expect(mainEvaluates.length).toBe(1)
+      const hostEvaluates = hostSend.mock.calls.filter((c) => c[0] === 'Runtime.evaluate')
+      expect(hostEvaluates.length).toBe(0)
+      // Transport regression guard: the deadlock-prone executeJavaScript RPC
+      // must not be used against EITHER wc.
+      expect(mainExec).not.toHaveBeenCalled()
+      expect(hostExec).not.toHaveBeenCalled()
     } finally {
       await instance.dispose()
     }
@@ -354,12 +366,13 @@ describe('main-process wiring: internalDevtoolsWindow host changes drive the glo
       const ctx = instance.context as unknown as ConsoleForwardWiringContext
       ctx.internalDevtoolsWindow!.open()
       const mainWc = instance.mainWindow.webContents
-      const mainSpy = vi.spyOn(mainWc, 'executeJavaScript')
+      type Dbg = { debugger: { sendCommand: ReturnType<typeof vi.fn> } }
+      const mainSend = vi.spyOn((mainWc as unknown as Dbg).debugger, 'sendCommand')
 
       ctx.internalDevtoolsWindow!.dispose()
       ctx.consoleForwarder!.emit({ source: 'service', level: 'error', args: ['after-close'] })
 
-      expect(mainSpy).not.toHaveBeenCalled()
+      expect(mainSend.mock.calls.filter((c) => c[0] === 'Runtime.evaluate').length).toBe(0)
     } finally {
       await instance.dispose()
     }

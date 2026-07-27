@@ -1,8 +1,10 @@
 import type { WebContents } from 'electron'
 import type { Disposable } from '@dimina-kit/electron-deck/main'
 import type { Diagnostic, DiagnosticsBus } from '../diagnostics/index.js'
+import type { CdpSessionBroker } from '../cdp-session/index.js'
 import { isFrontendSettled } from '../views/inject-when-ready.js'
 import { createOpenGatedRelay } from './open-gated-relay.js'
+import { injectViaCdp } from './cdp-inject.js'
 
 /** `Diagnostic.severity` → the literal `console.<method>` call — same mapping
  *  console-forward/index.ts's DIAGNOSTIC_CONSOLE_CALL uses (kept local since
@@ -56,27 +58,29 @@ export function createGlobalDiagnosticsMirror(
   diagnostics: Pick<DiagnosticsBus, 'subscribe'>,
   target: WebContents,
   onHostChanged: (handler: (hostWc: WebContents | null) => void) => () => void,
+  opts: { broker: CdpSessionBroker },
 ): Disposable {
   function inject(d: Diagnostic): boolean | Promise<boolean> {
     if (target.isDestroyed()) return false
     if (!isFrontendSettled(target)) return false
-    // Report the real outcome — createOpenGatedRelay only marks an entry
-    // permanently "injected" on a confirmed `true`; a silently-swallowed
-    // rejection used to black-hole diagnostics forever (see that module's
-    // doc comment). Still surface the failure somewhere observable instead
-    // of a bare `.catch(() => {})`.
-    return target.executeJavaScript(buildMirrorScript(d.severity, d.message), true).then(
-      () => true,
-      (err) => {
-        console.warn('[global-diagnostics-mirror] injection failed, will retry on next reopen:', err instanceof Error ? err.message : String(err))
-        return false
-      },
-    )
+    let script: string
+    try {
+      script = buildMirrorScript(d.severity, d.message)
+    } catch {
+      return false
+    }
+    // Transport is CDP `Runtime.evaluate` over the shared debugger-session
+    // broker — never `target.executeJavaScript`, whose internal RPC hangs
+    // forever under the setDevToolsWebContents + external-CDP-client double
+    // attach (see cdp-inject.ts / global-console-mirror.ts; same target,
+    // same failure). Report the real outcome — createOpenGatedRelay only
+    // marks an entry permanently "injected" on a confirmed `true`.
+    return injectViaCdp(opts.broker, target, script, 'global-diagnostics-mirror')
   }
 
   return createOpenGatedRelay<Diagnostic, WebContents>(
     onHostChanged,
-    (sink, opts) => diagnostics.subscribe(sink, opts),
+    (sink, opts2) => diagnostics.subscribe(sink, opts2),
     inject,
   )
 }

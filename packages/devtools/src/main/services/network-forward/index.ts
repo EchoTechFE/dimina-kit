@@ -590,12 +590,96 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
   // global-body-gate.ts's header for why. Stopped whenever the host changes
   // or clears.
   let globalBodyGateStop: (() => void) | null = null
+  // Bounded in-order hold for global-mirror messages arriving while the
+  // global host's front-end has not settled yet (its boot window) — without
+  // it those events are silently unrecoverable, breaking the window's
+  // full-stream promise. Scoped strictly to the CURRENT host: cleared when
+  // the host changes/clears, never replayed into a different host.
+  const MAX_GLOBAL_PENDING_QUEUE = 2000
+  let globalPendingQueue: string[] = []
+  let globalPendingOverflowWarned = false
+  let globalFlushTimer: ReturnType<typeof setTimeout> | null = null
+  // Wall-clock bound on the settle-poll (not on the queue itself): a
+  // front-end that never settles stops being polled after this, and the
+  // still-held queue flushes via the next incoming event instead.
+  const GLOBAL_FLUSH_POLL_MAX_MS = 60_000
+
+  function clearGlobalPending(): void {
+    globalPendingQueue = []
+    globalPendingOverflowWarned = false
+    if (globalFlushTimer) {
+      clearTimeout(globalFlushTimer)
+      globalFlushTimer = null
+    }
+  }
+
+  function scheduleGlobalFlush(startedAt = Date.now()): void {
+    if (globalFlushTimer) return
+    if (Date.now() - startedAt >= GLOBAL_FLUSH_POLL_MAX_MS) return
+    // unref'd like scheduleRenderGuestRetry's timer: a settle-poll must
+    // never be what keeps the process (or a test file) alive.
+    globalFlushTimer = setTimeout(() => {
+      globalFlushTimer = null
+      if (globalPendingQueue.length === 0) return
+      if (!globalDevtoolsWc || globalDevtoolsWc.isDestroyed()) {
+        clearGlobalPending()
+        return
+      }
+      if (!isFrontendSettled(globalDevtoolsWc)) {
+        scheduleGlobalFlush(startedAt)
+        return
+      }
+      flushGlobalPending()
+    }, READY_RETRY_MS)
+    globalFlushTimer.unref?.()
+  }
+
+  /** Drain the pending queue into the (settled) global host, oldest first,
+   * packed greedily under the same per-script size bound as the native sink —
+   * and through the SAME chunked transport for messages past
+   * MAX_SINGLE_DISPATCH_CHARS: a single oversized message stitched into one
+   * giant executeJavaScript overflows the IPC/script limit and the whole
+   * call rejects into a silent drop. */
+  function flushGlobalPending(): void {
+    if (globalPendingQueue.length === 0) return
+    const target = globalDevtoolsWc
+    if (!target || target.isDestroyed()) {
+      clearGlobalPending()
+      return
+    }
+    while (globalPendingQueue.length > 0) {
+      const { batch, chunked, remaining } = packDispatchBatch(globalPendingQueue, MAX_SINGLE_DISPATCH_CHARS, MAX_BATCH_CHARS)
+      globalPendingQueue = remaining
+      for (const msg of chunked) dispatchChunked(target, msg)
+      if (batch.length > 0) {
+        target.executeJavaScript(buildDispatchScript(batch), true).catch(() => { /* best-effort */ })
+      }
+    }
+    globalPendingOverflowWarned = false
+  }
+
+  function enqueueGlobalPending(json: string): void {
+    if (globalPendingQueue.length >= MAX_GLOBAL_PENDING_QUEUE) {
+      globalPendingQueue.shift()
+      // Not silent: dropping past the cap means the window's full-stream
+      // promise is degraded — say so once per overflow episode, not per event.
+      if (!globalPendingOverflowWarned) {
+        globalPendingOverflowWarned = true
+        console.warn(`[network-forward] global mirror queue overflow (cap ${MAX_GLOBAL_PENDING_QUEUE}): dropping oldest events while the debug window front-end is still loading`)
+      }
+    }
+    globalPendingQueue.push(json)
+    scheduleGlobalFlush()
+  }
 
   function applyGlobalDevtoolsHost(host: WebContents | null): void {
     globalDevtoolsHostDisposable?.dispose()
     globalDevtoolsHostDisposable = null
     globalBodyGateStop?.()
     globalBodyGateStop = null
+    // Queued events belong to the PREVIOUS host's boot window — never carry
+    // them across a host change (or into "no host").
+    clearGlobalPending()
     globalDevtoolsWc = host && !host.isDestroyed() ? host : null
     if (!globalDevtoolsWc) return
     const target = globalDevtoolsWc
@@ -603,6 +687,7 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
       if (globalDevtoolsWc === target) globalDevtoolsWc = null
       globalBodyGateStop?.()
       globalBodyGateStop = null
+      clearGlobalPending()
     }
     const reg = bridge.connections
     if (reg && typeof target.once === 'function') {
@@ -620,18 +705,31 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
     })
   }
 
-  /** Best-effort, unbatched mirror of one raw CDP message into the global host. */
+  /** Best-effort mirror of one raw CDP message into the global host. */
   function dispatchToGlobal(method: string, params: unknown): void {
     if (!globalDevtoolsWc || globalDevtoolsWc.isDestroyed()) return
-    // Same settled gate every other injection point in this file uses: an
-    // unsettled front-end wipes its state on load anyway, and executeJavaScript
-    // against it queues one did-stop-loading waiter per call — piling toward
-    // the MaxListeners ceiling during the global host's boot window.
-    if (!isFrontendSettled(globalDevtoolsWc)) return
     let json: string
     try {
       json = JSON.stringify({ method, params })
     } catch {
+      return
+    }
+    // Same settled gate every other injection point in this file uses: an
+    // unsettled front-end wipes its state on load anyway, and executeJavaScript
+    // against it queues one did-stop-loading waiter per call — piling toward
+    // the MaxListeners ceiling during the global host's boot window. Unlike
+    // those injection points, the events here are NOT re-derivable later, so
+    // they queue for a post-settle flush instead of dropping.
+    if (!isFrontendSettled(globalDevtoolsWc)) {
+      enqueueGlobalPending(json)
+      return
+    }
+    // Anything still queued flushes first so delivery order matches arrival.
+    flushGlobalPending()
+    // Oversized single messages take the chunked transport, mirroring the
+    // native sink's flushDispatch — see flushGlobalPending's doc.
+    if (json.length > MAX_SINGLE_DISPATCH_CHARS) {
+      dispatchChunked(globalDevtoolsWc, json)
       return
     }
     globalDevtoolsWc.executeJavaScript(buildDispatchScript([json]), true).catch(() => { /* best-effort */ })
@@ -1383,6 +1481,10 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
     globalBodyGateStop?.()
     globalBodyGateStop = null
     globalDevtoolsWc = null
+    // A live settle-poll timer at dispose time is a real-timer leak (this
+    // suite's flaky-test history: undisposed timers adopted by later tests'
+    // fake clocks).
+    clearGlobalPending()
   })
   registry.add(() => {
     bodyCache.clear()

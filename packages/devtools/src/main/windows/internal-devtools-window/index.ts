@@ -32,6 +32,15 @@ import { BrowserWindow, View, WebContentsView } from 'electron'
  * same host sidesteps the entire bug class instead of chasing a fast
  * "really detached now" signal that does not exist.
  */
+export interface InternalDevtoolsWindowOptions {
+  /** Authority for "the app is quitting right now" (see app/lifecycle.ts).
+   * During a real quit every window is closing for real — the controller's
+   * habitual close-interception (preventDefault + hide) would CANCEL the
+   * quit and leave the process alive with a hidden window nothing will ever
+   * show again, so a truthy answer here lets the native close proceed. */
+  isAppQuitting?: () => boolean
+}
+
 export interface InternalDevtoolsWindow {
   /** Create (on the very first call) and show/focus the window, attaching
    * its DevTools front-end host to `target`'s DevTools exactly once. Every
@@ -48,19 +57,43 @@ export interface InternalDevtoolsWindow {
    * when the window is hidden (user close) or destroyed (`dispose()`).
    * Global CDP consumers (network-forward, service-console) gate their
    * dispatch target here — hidden means "stop spending work mirroring into
-   * a window nobody can see," not "the attachment is gone." Returns an
-   * unsubscribe. */
+   * a window nobody can see," not "the attachment is gone." A subscriber
+   * registering while the window is ALREADY visible gets the current host
+   * replayed one microtask later (same catch-up contract as bridge-router's
+   * `onServiceHostReady`) — consumers wired up after `open()` must not stay
+   * stuck believing there is no host. Returns an unsubscribe. */
   onHostChanged(handler: (hostWc: WebContents | null) => void): () => void
 }
 
-export function createInternalDevtoolsWindow(target: BrowserWindow): InternalDevtoolsWindow {
+export function createInternalDevtoolsWindow(
+  target: BrowserWindow,
+  opts?: InternalDevtoolsWindowOptions,
+): InternalDevtoolsWindow {
   let win: BrowserWindow | null = null
+  // The host WebContentsView, kept so open()/close paths can push the host
+  // transition themselves (see notifyHostChanged's dedup comment).
+  let hostView: WebContentsView | null = null
   const hostChangedHandlers = new Set<(hostWc: WebContents | null) => void>()
+  // The host wc subscribers currently see (non-null only while the window is
+  // visible) — the single value the late-subscriber catch-up replays.
+  let currentHost: WebContents | null = null
 
   // A throwing handler must never stop the fan-out — console-forward's own
   // `sink(entry)` broadcast (console-forward/index.ts) uses the same
   // isolation for exactly this reason.
+  //
+  // Dedups on the TRANSITION, not the event count: this controller pushes
+  // the transition explicitly at every point it performs one (open(), the
+  // intercepted close, dispose/'closed'), AND the native 'show'/'hide'
+  // handlers below may report the same transition again. The explicit push
+  // is the authority — on real macOS the native events were observed
+  // (instrumented-bundle trace against the live app) to fire for NEITHER
+  // `show()`/`showInactive()` NOR `hide()`, which left every subscriber
+  // permanently believing the window never opened; the events are kept only
+  // as belt-and-suspenders for external show/hide paths.
   function notifyHostChanged(hostWc: WebContents | null): void {
+    if (hostWc === currentHost) return
+    currentHost = hostWc
     for (const handler of [...hostChangedHandlers]) {
       try { handler(hostWc) } catch (err) {
         console.warn('[internal-devtools-window] onHostChanged handler threw, other handlers still ran:', err instanceof Error ? err.message : String(err))
@@ -93,6 +126,7 @@ export function createInternalDevtoolsWindow(target: BrowserWindow): InternalDev
     // children — mirror main-window/create.ts's pattern: wrap it in a fresh
     // `View` so the host can be added as a child.
     const view = new WebContentsView()
+    hostView = view
     const container = new View()
     container.addChildView(view)
     hostWindow.contentView = container
@@ -103,9 +137,25 @@ export function createInternalDevtoolsWindow(target: BrowserWindow): InternalDev
     // instead of destroy — see module doc for why destroying and rebuilding
     // this attachment cannot be made reliable. `dispose()` bypasses this via
     // `win.destroy()`, which Electron guarantees does NOT emit 'close'.
+    // EXCEPT during a real app quit: preventDefault() on 'close' while the
+    // app is quitting CANCELS the quit itself (Electron closes every window
+    // as part of quit and aborts if any refuses), stranding the process with
+    // a hidden window — let the native close proceed instead.
     hostWindow.on('close', (event) => {
+      if (opts?.isAppQuitting?.()) return
       event.preventDefault()
       hostWindow.hide()
+      // Push the transition ourselves — the native 'hide' event is not
+      // reliable (see notifyHostChanged's dedup comment).
+      notifyHostChanged(null)
+    })
+    // Any real destruction (quit-time close above, or dispose()'s destroy())
+    // must both release the controller's handle and tell subscribers the
+    // host is gone.
+    hostWindow.on('closed', () => {
+      if (win !== hostWindow) return
+      win = null
+      notifyHostChanged(null)
     })
     hostWindow.on('hide', () => notifyHostChanged(null))
     hostWindow.on('show', () => notifyHostChanged(view.webContents))
@@ -131,15 +181,37 @@ export function createInternalDevtoolsWindow(target: BrowserWindow): InternalDev
         win!.show()
         win!.focus()
       }
+      // Push the transition ourselves — the native 'show' event is not
+      // reliable (see notifyHostChanged's dedup comment); relying on it left
+      // the mirrors permanently unsubscribed on real macOS.
+      if (hostView) notifyHostChanged(hostView.webContents)
     },
     dispose() {
       if (!win) return
-      if (!win.isDestroyed()) win.destroy()
-      win = null
-      notifyHostChanged(null)
+      const hostWindow = win
+      // destroy() emits 'closed', whose handler above nulls `win` and
+      // notifies subscribers — the fallback below only covers a window that
+      // was somehow already destroyed without that handler having run.
+      if (!hostWindow.isDestroyed()) hostWindow.destroy()
+      if (win === hostWindow) {
+        win = null
+        notifyHostChanged(null)
+      }
     },
     onHostChanged(handler) {
       hostChangedHandlers.add(handler)
+      // Late-subscriber catch-up (see the interface doc): replayed a
+      // microtask later, never synchronously, and re-validated at fire time —
+      // an unsubscribe or a hide landing before the microtask must win.
+      if (currentHost) {
+        queueMicrotask(() => {
+          if (!hostChangedHandlers.has(handler)) return
+          if (!currentHost) return
+          try { handler(currentHost) } catch (err) {
+            console.warn('[internal-devtools-window] onHostChanged catch-up handler threw:', err instanceof Error ? err.message : String(err))
+          }
+        })
+      }
       return () => { hostChangedHandlers.delete(handler) }
     },
   }
