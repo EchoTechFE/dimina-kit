@@ -200,7 +200,8 @@ interface AppConfigFixture {
   pages?: string[]
   tabBar?: TabBarConfig
   window?: Partial<PageWindowConfig>
-  modules?: Record<string, { window?: Partial<PageWindowConfig> }>
+  // Flat — no `.window` wrapper — matches the compiler's actual app-config.json shape.
+  modules?: Record<string, Partial<PageWindowConfig>>
 }
 
 function makeAppConfigResponse(fixture: AppConfigFixture): Response {
@@ -331,7 +332,9 @@ describe('handleSpawn — resolves the root pagePath against the compiled manife
       entryPagePath: ENTRY_PAGE,
       pages: [ENTRY_PAGE, OTHER_PAGE],
       window: { navigationBarTitleText: 'App Default' },
-      modules: { [ENTRY_PAGE]: { window: { navigationBarTitleText: 'Entry Title' } } },
+      // `modules[path]` fields sit FLAT (no `.window` wrapper) — matches the
+      // compiler's actual app-config.json shape (see resolvePageWindowConfig).
+      modules: { [ENTRY_PAGE]: { navigationBarTitleText: 'Entry Title' } },
     })
     const { ctx, simulatorWc } = makeCtx()
     installBridgeRouter(ctx)

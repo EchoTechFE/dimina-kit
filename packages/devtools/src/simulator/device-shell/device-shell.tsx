@@ -20,6 +20,7 @@ import {
   mutatePageNavBar,
   navBarFromConfig,
   normalizePath,
+  pageBackgroundColor,
   parseUrl,
   reduceNavBar,
   reduceNavigateBack,
@@ -292,18 +293,18 @@ export function DeviceShell({
             <webview
               key={entry.bridgeId}
               className="device-shell__webview"
-              src={miniApp.createRenderHostUrl(entry.bridgeId, entry.pagePath, entry.isTab)}
+              src={miniApp.createRenderHostUrl(entry.bridgeId, entry.pagePath, entry.isTab, pageBackgroundColor(entry.windowConfig))}
               preload={preload}
               // No static partition here: the renderer doesn't know the
-              // per-project partition. Main owns it — the host WCV's
-              // `will-attach-webview` handler (view-manager.ts) stamps every
-              // render-host guest onto this project's `persist:miniapp-<key>`
-              // partition. Hardcoding `persist:simulator` here would request the
-              // shared session pre-attach and defeat per-project isolation.
+              // per-project partition — the host WCV's `will-attach-webview`
+              // handler (view-manager.ts) stamps every render-host guest onto
+              // this project's `persist:miniapp-<key>` partition instead.
               allowpopups="true"
               style={{
                 display: visible ? 'flex' : 'none',
                 zIndex: visible ? 100 : 1,
+                // White-flash fix (WeChat/Android/Harmony parity): host-painted primer.
+                backgroundColor: pageBackgroundColor(entry.windowConfig),
               }}
             />
           ))}

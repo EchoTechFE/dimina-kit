@@ -9,12 +9,30 @@ const CHANNELS = {
 const params = new URLSearchParams(globalThis.location && globalThis.location.search || '')
 const bridgeId = params.get('bridgeId')
 const pagePath = params.get('pagePath') || 'pages/index/index'
+const bgColor = params.get('bgColor')
 const pendingMessages = []
 let onMessageFn = null
 let drainScheduled = false
 
 if (!bridgeId) {
   throw new Error('[render-host] missing bridgeId in URL query')
+}
+
+// WeChat parity: prime the page's OWN document with its configured
+// `window.backgroundColor` before pageFrame.css / @dimina/render load — mirrors
+// the real dimina/fe container's `webview.js` (`applyPageStyle()` sets
+// `root.style.backgroundColor` before the inner iframe navigates). Without
+// this the guest's document background is UA-default white until the page's
+// own CSS paints, which is the white flash on every page transition. Applied
+// as early as the preload can reach `document.documentElement` and again on
+// DOMContentLoaded in case the element wasn't attached yet.
+if (bgColor) {
+  const applyBackgroundColor = () => {
+    if (document.documentElement) document.documentElement.style.backgroundColor = bgColor
+    if (document.body) document.body.style.backgroundColor = bgColor
+  }
+  applyBackgroundColor()
+  globalThis.addEventListener('DOMContentLoaded', applyBackgroundColor)
 }
 
 function reportError(stage, error) {

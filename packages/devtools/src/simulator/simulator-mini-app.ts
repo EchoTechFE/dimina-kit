@@ -35,7 +35,7 @@ interface NativeHostBridge {
   notifyApiResponse(payload: ApiResponsePayload): void
   notifyActivePage(payload: ActivePagePayload): void
   notifyPageStack(payload: PageStackPayload): void
-  createRenderHostUrl(opts: { bridgeId: string; appId: string; pagePath: string; isTab?: boolean }): string
+  createRenderHostUrl(opts: { bridgeId: string; appId: string; pagePath: string; isTab?: boolean; backgroundColor?: string }): string
   renderPreloadUrl: string
   device?: NativeDeviceInfo
   onSimulatorEvent<T = unknown>(channel: string, listener: (payload: T) => void): () => void
@@ -302,12 +302,13 @@ export class SimulatorMiniApp {
     }
   }
 
-  createRenderHostUrl(bridgeId: string, pagePath?: string, isTab?: boolean): string {
+  createRenderHostUrl(bridgeId: string, pagePath?: string, isTab?: boolean, backgroundColor?: string): string {
     return getNativeHost().createRenderHostUrl({
       bridgeId,
       appId: this.appId,
       pagePath: pagePath ?? this.pagePath,
       isTab,
+      backgroundColor,
     })
   }
 

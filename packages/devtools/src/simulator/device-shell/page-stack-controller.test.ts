@@ -6,6 +6,7 @@ import {
   mutatePageNavBar,
   navBarFromConfig,
   normalizePath,
+  pageBackgroundColor,
   parseUrl,
   reduceNavBar,
   reduceNavigateBack,
@@ -407,6 +408,18 @@ describe('navBarFromConfig', () => {
     expect(navBarFromConfig({ homeButton: true }, 'x').homeButtonVisible).toBe(true)
     // Defensive: non-true truthy values are rejected.
     expect(navBarFromConfig({ homeButton: 1 as unknown as boolean }, 'x').homeButtonVisible).toBe(false)
+  })
+})
+
+// ── pageBackgroundColor ────────────────────────────────────────────────────
+
+describe('pageBackgroundColor', () => {
+  it('defaults to #ffffff when window.backgroundColor is unconfigured (Android/Harmony parity)', () => {
+    expect(pageBackgroundColor({})).toBe('#ffffff')
+  })
+
+  it('uses the merged window.backgroundColor when configured', () => {
+    expect(pageBackgroundColor({ backgroundColor: '#123456' })).toBe('#123456')
   })
 })
 

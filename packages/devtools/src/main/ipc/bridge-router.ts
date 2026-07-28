@@ -148,7 +148,10 @@ function summarizeBridgeMsg(payload: unknown): string | undefined {
 
 interface RawAppConfig {
   app?: { window?: PageWindowConfig; tabBar?: TabBarConfig; entryPagePath?: string; pages?: string[] }
-  modules?: Record<string, { window?: PageWindowConfig; root?: string } | undefined>
+  // The compiler's actual `app-config.json` shape has each page's window-config
+  // fields FLAT on `modules[path]` (no `.window` wrapper) — confirmed against a
+  // live compiled fixture. `root` is carried alongside for the page's asset root.
+  modules?: Record<string, (PageWindowConfig & { root?: string }) | undefined>
 }
 
 interface AppSession {
@@ -2638,8 +2641,7 @@ function resolveRootPagePath(
 function resolvePageWindowConfig(appConfig: RawAppConfig, pagePath: string): PageWindowConfig {
   const normalized = normalizePagePath(pagePath)
   const appWindow = appConfig.app?.window ?? {}
-  const pageEntry = appConfig.modules?.[normalized]
-  const pageWindow = pageEntry?.window ?? {}
+  const pageWindow = appConfig.modules?.[normalized] ?? {}
   return {
     navigationBarTitleText:
       pageWindow.navigationBarTitleText ?? appWindow.navigationBarTitleText ?? '',
