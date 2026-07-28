@@ -25,6 +25,14 @@ export interface RenderHostUrlOptions {
   /** Whether this page is a tabBar page. Surfaced on the URL so main can pick
    *  the bottom safe-area policy at `did-attach-webview` (services/safe-area). */
   isTab?: boolean
+  /** The page's resolved `window.backgroundColor` (page ∪ app-level, already
+   *  defaulted — see `pageBackgroundColor` in page-stack-controller.ts).
+   *  Surfaced on the URL as `bgColor`: render-host/preload.cjs reads it and
+   *  primes the guest's own document background before the page's own CSS
+   *  loads. `WebContents` (the `<webview>` guest) has no `setBackgroundColor`,
+   *  so main never consumes this — DeviceShell separately primes the host
+   *  `<webview>` element's own CSS background from the same source. */
+  backgroundColor?: string
 }
 
 export interface DiminaNativeHostBridge {
@@ -112,6 +120,7 @@ function buildBridge(cfg: NativeHostConfig): DiminaNativeHostBridge {
       url.searchParams.set('appId', opts.appId)
       url.searchParams.set('pagePath', opts.pagePath)
       if (opts.isTab) url.searchParams.set('isTab', '1')
+      if (opts.backgroundColor) url.searchParams.set('bgColor', opts.backgroundColor)
       return url.toString()
     },
     renderPreloadUrl: cfg.renderPreloadUrl,

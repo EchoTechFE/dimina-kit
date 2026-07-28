@@ -298,6 +298,10 @@ export function createNativeSimulatorView(
     // URL in will-attach (where `params.src` carries the full URL) and consumed
     // FIFO in the matching did-attach — `guestWc.getURL()` is still empty there.
     // Per-attach scope: a fresh simWc + handlers are built on every (re)attach.
+    // (The guest's `bgColor` query param — WeChat/Android/Harmony white-flash
+    // parity — is consumed entirely outside main: device-shell.tsx's `<webview>`
+    // CSS background and render-host/preload.cjs both read it directly, since
+    // `WebContents` has no `setBackgroundColor` for main to call here.)
     const pendingGuestIsTab: boolean[] = []
     simWc.on('will-attach-webview', (_event, webPreferences, params) => {
       ;(webPreferences as Electron.WebPreferences).partition = partition

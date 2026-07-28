@@ -39,5 +39,6 @@ Page({
   onShow: function () { record('a', 'onShow') },
   onHide: function () { record('a', 'onHide') },
   onUnload: function () { record('a', 'onUnload') },
-  goBack: function () { wx.navigateBack() }
+  goBack: function () { wx.navigateBack() },
+  goB: function () { wx.navigateTo({ url: '/pages/b/b' }) }
 })

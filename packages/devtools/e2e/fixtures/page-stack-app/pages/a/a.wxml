@@ -1,2 +1,3 @@
 <view class="page-marker page-a">A PAGE</view>
 <button class="btn nav-back-btn" bindtap="goBack">Go Back</button>
+<button class="btn nav-b-btn" bindtap="goB" data-path="/pages/b/b">Go B</button>

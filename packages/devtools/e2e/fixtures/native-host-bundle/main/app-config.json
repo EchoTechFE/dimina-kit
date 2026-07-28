@@ -22,19 +22,19 @@
   },
   "modules": {
     "pages/index/index": {
-      "window": { "navigationBarTitleText": "Home" },
+      "navigationBarTitleText": "Home",
       "root": "main"
     },
     "pages/cart/cart": {
-      "window": { "navigationBarTitleText": "Cart" },
+      "navigationBarTitleText": "Cart",
       "root": "main"
     },
     "pages/me/me": {
-      "window": { "navigationBarTitleText": "Me" },
+      "navigationBarTitleText": "Me",
       "root": "main"
     },
     "pages/detail/detail": {
-      "window": { "navigationBarTitleText": "Detail" },
+      "navigationBarTitleText": "Detail",
       "root": "main"
     }
   }

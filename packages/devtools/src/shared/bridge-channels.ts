@@ -184,8 +184,11 @@ export function deviceInfoToHostEnv(d: NativeDeviceInfo): Partial<HostEnvSnapsho
 
 /**
  * Subset of WeChat page `window` config plus tabBar list, parsed from
- * `app-config.json` (`{app:{window,tabBar,pages,entryPagePath}, modules:{[pagePath]:{window}}}`).
- * Mirrors mergePageConfig in dimina-fe: page-level keys override app-level.
+ * `app-config.json` (`{app:{window,tabBar,pages,entryPagePath}, modules:{[pagePath]:{...flat page.json fields,root?}}}`).
+ * `modules[pagePath]` is FLAT — the compiler assigns the page's own `.json` file
+ * content as-is (see `dimina/fe/packages/compiler/src/env.js` `collectionPageJson()`),
+ * not wrapped under a `.window` key. Mirrors mergePageConfig in dimina-fe:
+ * page-level keys override app-level.
  */
 export interface PageWindowConfig {
   navigationBarTitleText?: string

@@ -318,6 +318,19 @@ export function enumerateMounted(state: ShellState): MountedEntry[] {
 // ── NavigationBar derivations ───────────────────────────────────────────
 
 /**
+ * The page's own body background — WeChat/Android/Harmony parity: primes the
+ * native render surface with `window.backgroundColor` (page-level override ∪
+ * app-level default) BEFORE the page's own document paints, so switching
+ * pages never flashes Chromium's default white during the gap between guest
+ * attach and the new page's first composited frame. Defaults to `#ffffff`
+ * when unconfigured (same default Android's `MergedPageConfig` and Harmony's
+ * `DMPPageStyle.getBackGroundColor()` fall back to).
+ */
+export function pageBackgroundColor(config: PageWindowConfig): string {
+  return (config.backgroundColor as string | undefined) ?? '#ffffff'
+}
+
+/**
  * Build the initial NavigationBar state from a page's merged window config
  * (app-config.json `window` ∪ page-level overrides). The fallback title is
  * used when `navigationBarTitleText` is unset (typically the appId).
