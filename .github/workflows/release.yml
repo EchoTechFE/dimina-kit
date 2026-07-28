@@ -206,6 +206,8 @@ jobs:
             -not -path '*/@parcel+watcher*/**' \
             -not -path '*/lightningcss-*/**' \
             -not -path '*/iconv-corefoundation/**' \
+            -not -path '*/@electron-internal/**' \
+            -not -path '*/@electron-internal+extract-zip*/**' \
             | head -5)
           if [ -n "$leaks" ]; then
             echo "::error::native .node binaries found; revisit npmRebuild:false"
