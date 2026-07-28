@@ -5,6 +5,7 @@ import {
   getMcpStatus,
   getWorkbenchSettings,
   onWorkbenchSettingsInit,
+  restartWorkbench,
   saveWorkbenchSettings,
   setWorkbenchTheme,
 } from '@/shared/api'
@@ -28,6 +29,24 @@ export const THEME_LABELS: Record<ThemeSource, string> = {
   system: '跟随系统',
   dark: '深色',
   light: '浅色',
+}
+
+const MCP_SERVER_NAME = 'dimina'
+
+export function buildMcpClientRegistration(port: number) {
+  const url = `http://127.0.0.1:${port}/sse`
+  return {
+    url,
+    claudeCode: `claude mcp add --transport sse ${MCP_SERVER_NAME} ${url}`,
+    codex: `codex mcp add ${MCP_SERVER_NAME} --url ${url}`,
+    mcpJson: `{
+  "mcpServers": {
+    "${MCP_SERVER_NAME}": {
+      "url": "${url}"
+    }
+  }
+}`,
+  }
 }
 
 function ToggleSwitch({
@@ -188,6 +207,15 @@ export function computeNeedsRestart(cdpStatus: CdpStatus | null, cdp: WorkbenchS
   return cdp.enabled && cdpStatus.active && cdp.port !== cdpStatus.activePort
 }
 
+export function computeMcpNeedsRestart(
+  mcpStatus: McpStatus | null,
+  mcp: WorkbenchSettingsValue['mcp'],
+): boolean {
+  if (!mcpStatus) return false
+  if (mcp.enabled !== mcpStatus.running) return true
+  return mcp.enabled && mcpStatus.running && mcp.port !== mcpStatus.activePort
+}
+
 function DebugTab({
   cdpEnabled,
   onToggleCdp,
@@ -300,7 +328,9 @@ function McpTab({
   onMcpPortInputChange,
   mcpStatus,
   mcpPort,
+  needsRestart,
   onSave,
+  onRestart,
   saved,
 }: {
   mcpEnabled: boolean
@@ -309,9 +339,13 @@ function McpTab({
   onMcpPortInputChange: (value: string) => void
   mcpStatus: McpStatus | null
   mcpPort: number
+  needsRestart: boolean
   onSave: () => void
+  onRestart: () => void
   saved: boolean
 }) {
+  const registration = buildMcpClientRegistration(mcpPort)
+
   return (
     <section className="rounded-lg border border-border p-4 space-y-4 bg-bg">
       <div>
@@ -344,15 +378,35 @@ function McpTab({
 
       <McpStatusPanel mcpEnabled={mcpEnabled} mcpStatus={mcpStatus} />
 
+      {needsRestart && (
+        <div className="rounded px-3 py-2 text-[12px] border bg-warn-bg text-[var(--color-status-warn)] flex items-center justify-between gap-3">
+          <span>配置已变更，需要重启应用后生效</span>
+          <button
+            onClick={onRestart}
+            className="h-7 px-3 rounded text-[12px] font-medium text-white bg-accent hover:bg-accent-hover shrink-0"
+          >
+            保存并重启
+          </button>
+        </div>
+      )}
+
+      <div className="rounded p-3 border border-border bg-surface">
+        <div className="text-[11px] font-medium mb-2 text-text-secondary">本地客户端注册</div>
+        <div className="space-y-3">
+          <div>
+            <div className="text-[11px] mb-1 text-text-dim">Claude Code</div>
+            <pre className="text-[11px] whitespace-pre-wrap leading-relaxed text-[var(--color-code-blue)] font-mono">{registration.claudeCode}</pre>
+          </div>
+          <div>
+            <div className="text-[11px] mb-1 text-text-dim">Codex</div>
+            <pre className="text-[11px] whitespace-pre-wrap leading-relaxed text-[var(--color-code-blue)] font-mono">{registration.codex}</pre>
+          </div>
+        </div>
+      </div>
+
       <div className="rounded p-3 border border-border bg-surface">
         <div className="text-[11px] font-medium mb-2 text-text-secondary">`.mcp.json` 示例（SSE 传输）</div>
-        <pre className="text-[11px] whitespace-pre-wrap leading-relaxed text-[var(--color-code-blue)] font-mono">{`{
-  "mcpServers": {
-    "dimina-devtools": {
-      "url": "http://127.0.0.1:${mcpPort}/sse"
-    }
-  }
-}`}</pre>
+        <pre className="text-[11px] whitespace-pre-wrap leading-relaxed text-[var(--color-code-blue)] font-mono">{registration.mcpJson}</pre>
       </div>
 
       <div className="flex items-center gap-3">
@@ -431,17 +485,22 @@ export default function WorkbenchSettings() {
     void saveWorkbenchSettings(next).then(flashSaved)
   }
 
-  async function handleSave() {
+  function buildSettingsFromInputs(): WorkbenchSettingsValue | null {
     const port = parseInt(portInput, 10)
-    if (Number.isNaN(port) || port < 1024 || port > 65535) return
+    if (Number.isNaN(port) || port < 1024 || port > 65535) return null
     const mcpPort = parseInt(mcpPortInput, 10)
-    if (Number.isNaN(mcpPort) || mcpPort < 1024 || mcpPort > 65535) return
+    if (Number.isNaN(mcpPort) || mcpPort < 1024 || mcpPort > 65535) return null
 
-    const next: WorkbenchSettingsValue = {
+    return {
       ...settings,
       cdp: { ...settings.cdp, port },
       mcp: { ...settings.mcp, port: mcpPort },
     }
+  }
+
+  async function handleSave() {
+    const next = buildSettingsFromInputs()
+    if (!next) return
     setSettings(next)
     await saveWorkbenchSettings(next)
     setCdpStatus(await getCdpStatus())
@@ -449,7 +508,17 @@ export default function WorkbenchSettings() {
     flashSaved()
   }
 
-  const needsRestart = computeNeedsRestart(cdpStatus, settings.cdp)
+  async function handleRestart() {
+    const next = buildSettingsFromInputs()
+    if (!next) return
+    setSettings(next)
+    await saveWorkbenchSettings(next)
+    await restartWorkbench()
+  }
+
+  const pendingSettings = buildSettingsFromInputs() ?? settings
+  const needsRestart = computeNeedsRestart(cdpStatus, pendingSettings.cdp)
+  const mcpNeedsRestart = computeMcpNeedsRestart(mcpStatus, pendingSettings.mcp)
 
   return (
     <div className="flex flex-col h-screen bg-surface text-text">
@@ -488,8 +557,10 @@ export default function WorkbenchSettings() {
             mcpPortInput={mcpPortInput}
             onMcpPortInputChange={setMcpPortInput}
             mcpStatus={mcpStatus}
-            mcpPort={settings.mcp.port}
+            mcpPort={pendingSettings.mcp.port}
+            needsRestart={mcpNeedsRestart}
             onSave={handleSave}
+            onRestart={handleRestart}
             saved={saved}
           />
         )}

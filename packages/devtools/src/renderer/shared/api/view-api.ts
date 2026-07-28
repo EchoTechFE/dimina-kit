@@ -99,6 +99,21 @@ export function onWindowNavigateBack(handler: () => void): () => void {
 }
 
 /**
+ * Listen for the open-project push from the main process (MCP `project_open`).
+ * The renderer owns the open path — mounting ProjectRuntime is what compiles
+ * the project and attaches the simulator — so main asks instead of opening
+ * the workspace session itself.
+ */
+export function onWindowOpenProject(
+  handler: (project: { name: string; path: string }) => void,
+): () => void {
+  return on<[{ name: string; path: string }]>(
+    WindowChannel.OpenProject,
+    (project) => handler(project),
+  )
+}
+
+/**
  * NATIVE-HOST ONLY. Subscribe to the visible page route pushed by main on every
  * in-app navigation (the page stack lives in the DeviceShell WebContentsView,
  * so the renderer can't observe it from `<webview>` nav events). The default

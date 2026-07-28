@@ -108,6 +108,14 @@ export interface RendererNotifier {
   compileLog(payload: CompileLogPayload): void
   /** Ask the main renderer to navigate back to its landing screen. */
   windowNavigateBack(): void
+  /**
+   * Ask the main renderer to open a project (mount the project runtime and
+   * start the compile), exactly as if the user clicked it in the list. The
+   * renderer owns the open path — the simulator only mounts when the
+   * ProjectRuntime component does — so main-side callers (MCP `project_open`)
+   * push this instead of calling `workspace.openProject` directly.
+   */
+  windowOpenProject(payload: { name: string; path: string }): void
   /** Tell the main renderer the compile popover has been closed. */
   popoverClosed(): void
   /** Ask the main renderer to relaunch the simulator with a new config. */
@@ -178,6 +186,9 @@ export function createRendererNotifier(ctx: NotifierContext): RendererNotifier {
     },
     windowNavigateBack() {
       sendToMain(WindowChannel.NavigateBack)
+    },
+    windowOpenProject(payload) {
+      sendToMain(WindowChannel.OpenProject, payload)
     },
     popoverClosed() {
       sendToMain(PopoverChannel.Closed)

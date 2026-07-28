@@ -267,13 +267,21 @@ async function setupAutomation(instance: WorkbenchAppInstance): Promise<void> {
   }
 }
 
-function setupMcp(): Disposable | null {
+function setupMcp(context: WorkbenchContext): Disposable | null {
   const settings = loadWorkbenchSettings()
   if (!settings.mcp.enabled) return null
 
   const cdpPortSwitch = app.commandLine.getSwitchValue('remote-debugging-port')
   const cdpPort = cdpPortSwitch ? parseInt(cdpPortSwitch, 10) : settings.cdp.port
-  return startMcpServer(cdpPort, settings.mcp.port)
+  return startMcpServer(cdpPort, settings.mcp.port, {
+    workspace: context.workspace,
+    sessionStatus: context.sessionStatus,
+    compileLogs: context.compileLogBuffer,
+    // The renderer owns the open path (mounting ProjectRuntime compiles and
+    // attaches the simulator), so project_open pushes it there.
+    requestOpenInUi: (p) => context.notify.windowOpenProject(p),
+    requestNavigateBack: () => context.notify.windowNavigateBack(),
+  })
 }
 
 function wireAppWindowEvents(config: WorkbenchAppConfig, instance: WorkbenchAppInstance): Disposable {
@@ -482,7 +490,7 @@ export async function createDevtoolsRuntime(config: WorkbenchAppConfig = {}): Pr
   }
 
   await setupAutomation(instance)
-  const mcp = setupMcp()
+  const mcp = setupMcp(context)
   if (mcp) context.registry.add(mcp)
 
   // Resolve the active project's appId. Shared by the storage panel filter

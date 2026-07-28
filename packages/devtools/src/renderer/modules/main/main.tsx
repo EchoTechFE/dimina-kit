@@ -14,6 +14,7 @@ import {
   listProjects,
   listTemplates,
   onWindowNavigateBack,
+  onWindowOpenProject,
   openCreateProjectDialog,
   removeProject,
 } from '@/shared/api'
@@ -69,6 +70,15 @@ export default function Main() {
     })
     return off
   }, [appName])
+
+  // Main-pushed open (MCP project_open): same path as a user click — mounting
+  // ProjectRuntime (keyed by path) is what compiles and attaches the simulator.
+  useEffect(() => {
+    return onWindowOpenProject((p) => {
+      setCurrentProject({ name: p.name, path: p.path })
+      setPage('project')
+    })
+  }, [])
 
   async function handleAdd() {
     const dirPath = await chooseProjectDirectory()

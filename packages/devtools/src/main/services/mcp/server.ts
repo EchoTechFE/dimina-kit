@@ -16,13 +16,14 @@ import { connectTarget, setCdpPort } from './target-manager.js'
 import { recordMcpFailed, recordMcpStarted, recordMcpStopped } from './status.js'
 import { registerCommonTargetTools } from './tool-registry.js'
 import { registerContextTools } from './tools/context-tools.js'
+import { registerProjectTools, type McpProjectHost } from './tools/project-tools.js'
 import { registerSimulatorTools } from './tools/simulator-tools.js'
 import { registerWorkbenchTools } from './tools/workbench-tools.js'
 
 const require = createRequire(import.meta.url)
 const pkg = require('../../../../package.json') as { version: string }
 
-function buildServer(): McpServer {
+function buildServer(projectHost: McpProjectHost): McpServer {
   const server = new McpServer({
     name: '@dimina-kit/devtools',
     version: pkg.version,
@@ -39,17 +40,24 @@ function buildServer(): McpServer {
   // Cross-target: AI orientation overview
   registerContextTools(server)
 
+  // Project lifecycle (open/close/status/wait/compile logs).
+  registerProjectTools(server, projectHost)
+
   return server
 }
 
-export function startMcpServer(resolvedCdpPort: number, mcpPort: number): Disposable {
+export function startMcpServer(
+  resolvedCdpPort: number,
+  mcpPort: number,
+  projectHost: McpProjectHost,
+): Disposable {
   setCdpPort(resolvedCdpPort)
 
   // Connect to both targets (non-blocking)
   connectTarget('simulator').catch(() => {})
   connectTarget('workbench').catch(() => {})
 
-  const server = buildServer()
+  const server = buildServer(projectHost)
   const transports = new Map<string, SSEServerTransport>()
 
   const httpServer = createServer(async (req, res) => {

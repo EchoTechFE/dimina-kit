@@ -7,8 +7,13 @@
  * test just guards the mapping stays complete and correct.
  */
 import { describe, expect, it } from 'vitest'
-import { computeNeedsRestart, THEME_LABELS } from './workbench-settings'
-import type { CdpStatus, WorkbenchSettingsValue } from '@/shared/api'
+import {
+  buildMcpClientRegistration,
+  computeMcpNeedsRestart,
+  computeNeedsRestart,
+  THEME_LABELS,
+} from './workbench-settings'
+import type { CdpStatus, McpStatus, WorkbenchSettingsValue } from '@/shared/api'
 
 function cdpStatus(overrides: Partial<CdpStatus> = {}): CdpStatus {
   return {
@@ -23,6 +28,21 @@ function cdpStatus(overrides: Partial<CdpStatus> = {}): CdpStatus {
 
 function cdpConfig(overrides: Partial<WorkbenchSettingsValue['cdp']> = {}): WorkbenchSettingsValue['cdp'] {
   return { enabled: false, port: 9222, ...overrides }
+}
+
+function mcpStatus(overrides: Partial<McpStatus> = {}): McpStatus {
+  return {
+    configured: false,
+    configuredPort: 7789,
+    running: false,
+    activePort: null,
+    error: null,
+    ...overrides,
+  }
+}
+
+function mcpConfig(overrides: Partial<WorkbenchSettingsValue['mcp']> = {}): WorkbenchSettingsValue['mcp'] {
+  return { enabled: false, port: 7789, ...overrides }
 }
 
 describe('computeNeedsRestart', () => {
@@ -68,6 +88,57 @@ describe('THEME_LABELS', () => {
       system: '跟随系统',
       dark: '深色',
       light: '浅色',
+    })
+  })
+})
+
+describe('computeMcpNeedsRestart', () => {
+  it('never nags before any MCP status has been observed', () => {
+    expect(computeMcpNeedsRestart(null, mcpConfig({ enabled: true }))).toBe(false)
+  })
+
+  it('nags when MCP is enabled in settings but the server is not running yet', () => {
+    expect(computeMcpNeedsRestart(
+      mcpStatus({ running: false, activePort: null }),
+      mcpConfig({ enabled: true, port: 7789 }),
+    )).toBe(true)
+  })
+
+  it('nags when MCP is disabled in settings but the server is still running', () => {
+    expect(computeMcpNeedsRestart(
+      mcpStatus({ running: true, activePort: 7789 }),
+      mcpConfig({ enabled: false, port: 7789 }),
+    )).toBe(true)
+  })
+
+  it('nags when MCP is running on a different port than the configured one', () => {
+    expect(computeMcpNeedsRestart(
+      mcpStatus({ running: true, activePort: 7789 }),
+      mcpConfig({ enabled: true, port: 7790 }),
+    )).toBe(true)
+  })
+
+  it('does not nag when MCP config and runtime agree', () => {
+    expect(computeMcpNeedsRestart(
+      mcpStatus({ running: true, activePort: 7789 }),
+      mcpConfig({ enabled: true, port: 7789 }),
+    )).toBe(false)
+  })
+})
+
+describe('buildMcpClientRegistration', () => {
+  it('builds Claude Code, Codex, and JSON registration snippets for the configured port', () => {
+    expect(buildMcpClientRegistration(7789)).toEqual({
+      url: 'http://127.0.0.1:7789/sse',
+      claudeCode: 'claude mcp add --transport sse dimina http://127.0.0.1:7789/sse',
+      codex: 'codex mcp add dimina --url http://127.0.0.1:7789/sse',
+      mcpJson: `{
+  "mcpServers": {
+    "dimina": {
+      "url": "http://127.0.0.1:7789/sse"
+    }
+  }
+}`,
     })
   })
 })

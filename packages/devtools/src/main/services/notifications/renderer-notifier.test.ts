@@ -78,6 +78,25 @@ describe('RendererNotifier — destroyed targets no-op', () => {
     expect(mainWindow.webContents.send).toHaveBeenCalledTimes(1)
   })
 
+  it('windowOpenProject: sends the project payload on window:openProject and respects destroy', () => {
+    const mainWindow = makeBrowserWindow()
+    const ctx = {
+      windows: { mainWindow: mainWindow as unknown as Electron.BrowserWindow },
+      views: { getSettingsWebContents: () => null },
+    }
+    const notifier = createRendererNotifier(ctx)
+
+    notifier.windowOpenProject({ name: 'demo', path: '/proj/demo' })
+    expect(mainWindow.webContents.send).toHaveBeenCalledWith(
+      WindowChannel.OpenProject,
+      { name: 'demo', path: '/proj/demo' },
+    )
+
+    mainWindow.destroyed = true
+    expect(() => notifier.windowOpenProject({ name: 'demo', path: '/proj/demo' })).not.toThrow()
+    expect(mainWindow.webContents.send).toHaveBeenCalledTimes(1)
+  })
+
   it('popoverRelaunch: sends with payload while alive, no-ops after destruction', () => {
     const mainWindow = makeBrowserWindow()
     const ctx = {
