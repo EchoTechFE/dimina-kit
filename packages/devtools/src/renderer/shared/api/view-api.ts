@@ -99,6 +99,21 @@ export function onWindowNavigateBack(handler: () => void): () => void {
 }
 
 /**
+ * Listen for the open-project push from the main process (MCP `project_open`).
+ * The renderer owns the open path — mounting ProjectRuntime is what compiles
+ * the project and attaches the simulator — so main asks instead of opening
+ * the workspace session itself.
+ */
+export function onWindowOpenProject(
+  handler: (project: { name: string; path: string }) => void,
+): () => void {
+  return on<[{ name: string; path: string }]>(
+    WindowChannel.OpenProject,
+    (project) => handler(project),
+  )
+}
+
+/**
  * Report the current top-level screen to main so its window-close decision
  * knows whether to return to the project list or quit the app. Call on every
  * screen change, including entering a project (BEFORE the open resolves — a

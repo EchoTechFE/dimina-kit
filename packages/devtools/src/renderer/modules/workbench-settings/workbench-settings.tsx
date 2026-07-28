@@ -5,6 +5,7 @@ import {
   getMcpStatus,
   getWorkbenchSettings,
   onWorkbenchSettingsInit,
+  restartWorkbench,
   saveWorkbenchSettings,
   setWorkbenchTheme,
 } from '@/shared/api'
@@ -14,6 +15,7 @@ import type {
   WorkbenchSettingsValue,
   ThemeSource,
 } from '@/shared/api'
+import { computeMcpNeedsRestart, McpTab } from './mcp-settings-tab'
 
 const TABS = [
   { id: 'general', label: '通用' },
@@ -257,117 +259,6 @@ function DebugTab({
   )
 }
 
-function StatusRow({ color, children }: { color: string, children: React.ReactNode }) {
-  return (
-    <div className="flex items-center gap-2">
-      <span
-        className="inline-block w-2 h-2 rounded-full"
-        style={{ background: color }}
-      />
-      <span className="text-[12px] text-text-secondary">{children}</span>
-    </div>
-  )
-}
-
-function McpStatusPanel({ mcpEnabled, mcpStatus }: { mcpEnabled: boolean, mcpStatus: McpStatus | null }) {
-  return (
-    <div className="rounded p-3 space-y-2 border border-border bg-surface">
-      <div className="text-[11px] font-medium text-text-secondary">当前状态</div>
-      {!mcpEnabled ? (
-        <StatusRow color="var(--color-text-dim)">MCP 未启用</StatusRow>
-      ) : mcpStatus?.running ? (
-        <StatusRow color="var(--color-status-success)">
-          MCP 已运行 - 端口 {mcpStatus.activePort}
-        </StatusRow>
-      ) : (
-        <StatusRow color="var(--color-status-error, #e54d4d)">
-          MCP 未运行
-          {mcpStatus?.error === 'port-in-use'
-            ? `（端口 ${mcpStatus.configuredPort} 已被占用）`
-            : mcpStatus?.error
-              ? `（${mcpStatus.error}）`
-              : ''}
-        </StatusRow>
-      )}
-    </div>
-  )
-}
-
-function McpTab({
-  mcpEnabled,
-  onToggleMcp,
-  mcpPortInput,
-  onMcpPortInputChange,
-  mcpStatus,
-  mcpPort,
-  onSave,
-  saved,
-}: {
-  mcpEnabled: boolean
-  onToggleMcp: () => void
-  mcpPortInput: string
-  onMcpPortInputChange: (value: string) => void
-  mcpStatus: McpStatus | null
-  mcpPort: number
-  onSave: () => void
-  saved: boolean
-}) {
-  return (
-    <section className="rounded-lg border border-border p-4 space-y-4 bg-bg">
-      <div>
-        <h2 className="text-[13px] font-medium mb-1">MCP 配置</h2>
-        <p className="text-[11px] leading-relaxed text-text-secondary">
-          AI 助手可以通过 MCP 连接当前开发工具，读取 console、截图、执行 JS、查看 DOM / Storage /
-          网络请求。启用后开发工具启动时会自动监听 SSE 端点，并自动启用 CDP。
-        </p>
-      </div>
-
-      <div className="flex items-center justify-between">
-        <span className="text-[12px] text-text-secondary">启用 MCP 服务</span>
-        <ToggleSwitch checked={mcpEnabled} onClick={onToggleMcp} />
-      </div>
-
-      <div className="flex items-center gap-3">
-        <label className="text-[12px] shrink-0 w-16 text-text-secondary">SSE 端口</label>
-        <input
-          type="number"
-          min={1024}
-          max={65535}
-          value={mcpPortInput}
-          onChange={(e) => onMcpPortInputChange(e.target.value)}
-          disabled={!mcpEnabled}
-          className="w-24 h-7 px-2 rounded text-[12px] outline-none bg-surface border border-border text-text"
-          style={{ opacity: mcpEnabled ? 1 : 0.4 }}
-        />
-        <span className="text-[11px] text-text-dim">默认 7789</span>
-      </div>
-
-      <McpStatusPanel mcpEnabled={mcpEnabled} mcpStatus={mcpStatus} />
-
-      <div className="rounded p-3 border border-border bg-surface">
-        <div className="text-[11px] font-medium mb-2 text-text-secondary">`.mcp.json` 示例（SSE 传输）</div>
-        <pre className="text-[11px] whitespace-pre-wrap leading-relaxed text-[var(--color-code-blue)] font-mono">{`{
-  "mcpServers": {
-    "dimina-devtools": {
-      "url": "http://127.0.0.1:${mcpPort}/sse"
-    }
-  }
-}`}</pre>
-      </div>
-
-      <div className="flex items-center gap-3">
-        <button
-          onClick={onSave}
-          className="h-7 px-4 rounded text-[13px] font-medium text-white bg-accent hover:bg-accent-hover"
-        >
-          保存
-        </button>
-        {saved && <span className="text-[11px] text-status-success">已保存</span>}
-      </div>
-    </section>
-  )
-}
-
 export default function WorkbenchSettings() {
   const [settings, setSettings] = useState<WorkbenchSettingsValue>({
     cdp: { enabled: false, port: DEFAULT_CDP_PORT },
@@ -431,17 +322,22 @@ export default function WorkbenchSettings() {
     void saveWorkbenchSettings(next).then(flashSaved)
   }
 
-  async function handleSave() {
+  function buildSettingsFromInputs(): WorkbenchSettingsValue | null {
     const port = parseInt(portInput, 10)
-    if (Number.isNaN(port) || port < 1024 || port > 65535) return
+    if (Number.isNaN(port) || port < 1024 || port > 65535) return null
     const mcpPort = parseInt(mcpPortInput, 10)
-    if (Number.isNaN(mcpPort) || mcpPort < 1024 || mcpPort > 65535) return
+    if (Number.isNaN(mcpPort) || mcpPort < 1024 || mcpPort > 65535) return null
 
-    const next: WorkbenchSettingsValue = {
+    return {
       ...settings,
       cdp: { ...settings.cdp, port },
       mcp: { ...settings.mcp, port: mcpPort },
     }
+  }
+
+  async function handleSave() {
+    const next = buildSettingsFromInputs()
+    if (!next) return
     setSettings(next)
     await saveWorkbenchSettings(next)
     setCdpStatus(await getCdpStatus())
@@ -449,7 +345,17 @@ export default function WorkbenchSettings() {
     flashSaved()
   }
 
-  const needsRestart = computeNeedsRestart(cdpStatus, settings.cdp)
+  async function handleRestart() {
+    const next = buildSettingsFromInputs()
+    if (!next) return
+    setSettings(next)
+    await saveWorkbenchSettings(next)
+    await restartWorkbench()
+  }
+
+  const pendingSettings = buildSettingsFromInputs() ?? settings
+  const needsRestart = computeNeedsRestart(cdpStatus, pendingSettings.cdp)
+  const mcpNeedsRestart = computeMcpNeedsRestart(mcpStatus, pendingSettings.mcp)
 
   return (
     <div className="flex flex-col h-screen bg-surface text-text">
@@ -488,8 +394,10 @@ export default function WorkbenchSettings() {
             mcpPortInput={mcpPortInput}
             onMcpPortInputChange={setMcpPortInput}
             mcpStatus={mcpStatus}
-            mcpPort={settings.mcp.port}
+            mcpPort={pendingSettings.mcp.port}
+            needsRestart={mcpNeedsRestart}
             onSave={handleSave}
+            onRestart={handleRestart}
             saved={saved}
           />
         )}

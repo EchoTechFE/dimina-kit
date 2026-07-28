@@ -16,13 +16,14 @@ import { connectTarget, setCdpPort } from './target-manager.js'
 import { recordMcpFailed, recordMcpStarted, recordMcpStopped } from './status.js'
 import { registerCommonTargetTools } from './tool-registry.js'
 import { registerContextTools } from './tools/context-tools.js'
+import { registerProjectTools, type McpProjectHost } from './tools/project-tools.js'
 import { registerSimulatorTools } from './tools/simulator-tools.js'
 import { registerWorkbenchTools } from './tools/workbench-tools.js'
 
 const require = createRequire(import.meta.url)
 const pkg = require('../../../../package.json') as { version: string }
 
-function buildServer(): McpServer {
+function buildServer(projectHost: McpProjectHost): McpServer {
   const server = new McpServer({
     name: '@dimina-kit/devtools',
     version: pkg.version,
@@ -39,10 +40,17 @@ function buildServer(): McpServer {
   // Cross-target: AI orientation overview
   registerContextTools(server)
 
+  // Project lifecycle (open/close/status/wait/compile logs).
+  registerProjectTools(server, projectHost)
+
   return server
 }
 
-export function startMcpServer(resolvedCdpPort: number, mcpPort: number): Disposable {
+export function startMcpServer(
+  resolvedCdpPort: number,
+  mcpPort: number,
+  projectHost: McpProjectHost,
+): Disposable {
   setCdpPort(resolvedCdpPort)
 
   // Connect to both targets (non-blocking)
@@ -67,7 +75,7 @@ export function startMcpServer(resolvedCdpPort: number, mcpPort: number): Dispos
         // closures over already-shared module-level state (target-manager's
         // CDP connections/listeners) — it has no per-call side effects, so
         // building N servers is cheap and duplicates nothing.
-        await buildServer().connect(transport)
+        await buildServer(projectHost).connect(transport)
       } catch (err) {
         transports.delete(transport.sessionId)
         // `connect()` calls `transport.start()` (writes the SSE 200 + headers)

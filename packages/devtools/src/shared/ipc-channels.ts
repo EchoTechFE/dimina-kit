@@ -186,6 +186,7 @@ export const WorkbenchSettingsChannel = {
   Get: 'workbenchSettings:get',
   Save: 'workbenchSettings:save',
   SetTheme: 'workbenchSettings:setTheme',
+  Restart: 'workbenchSettings:restart',
   GetCdpStatus: 'workbenchSettings:getCdpStatus',
   GetMcpStatus: 'workbenchSettings:getMcpStatus',
   Init: 'workbenchSettings:init',
@@ -376,6 +377,7 @@ export const PopoverChannel = {
 
 export const WindowChannel = {
   NavigateBack: 'window:navigateBack',
+  OpenProject: 'window:openProject',
   // Renderer → main: the renderer's current top-level screen ('project' when
   // inside a project screen, 'list' on the project list / landing). The
   // renderer pushes this on every screen change, including the moment it enters

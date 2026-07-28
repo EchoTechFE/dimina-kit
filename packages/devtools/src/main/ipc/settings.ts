@@ -48,6 +48,10 @@ export function registerSettingsIpc(ctx: Pick<WorkbenchContext, 'views' | 'notif
       )
       applyTheme(theme)
     })
+    .handle(WorkbenchSettingsChannel.Restart, () => {
+      app.relaunch()
+      app.quit()
+    })
     .handle(WorkbenchSettingsChannel.GetCdpStatus, () => {
       const settings = loadWorkbenchSettings()
       const switchValue = app.commandLine.getSwitchValue('remote-debugging-port')

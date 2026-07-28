@@ -115,6 +115,11 @@ export function setWorkbenchTheme(theme: ThemeSource): Promise<void> {
   return invoke<void>(WorkbenchSettingsChannel.SetTheme, theme)
 }
 
+/** Relaunch the devtools process so startup-only settings take effect. */
+export function restartWorkbench(): Promise<void> {
+  return invoke<void>(WorkbenchSettingsChannel.Restart)
+}
+
 /**
  * Subscribe to active-color-scheme flips (OS change or in-app SetTheme). The
  * app's CSS reacts to `prefers-color-scheme` on its own; this is for JS

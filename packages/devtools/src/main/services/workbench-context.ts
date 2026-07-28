@@ -21,6 +21,15 @@ import {
   createRendererNotifier,
   type RendererNotifier,
 } from './notifications/renderer-notifier.js'
+import {
+  createCompileLogBuffer,
+  type CompileLogBuffer,
+} from './workspace/compile-log-buffer.js'
+import {
+  createSessionStatusStore,
+  type SessionStatusStore,
+} from './workspace/session-status-store.js'
+import { tapNotifierIntoStores } from './workspace/status-tap.js'
 import { createViewManager, type ViewManager } from './views/view-manager.js'
 import { createWindowService, type WindowService } from './window-service.js'
 import { openSettingsWindow } from '../windows/settings-window/index.js'
@@ -72,6 +81,20 @@ export interface WorkbenchContext {
 
   /** Unified main → renderer event dispatcher */
   notify: RendererNotifier
+
+  /**
+   * Authoritative, queryable compile status of the active session. Fed by the
+   * notifier tap (every `notify.projectStatus` is recorded here first), read
+   * by MCP `project_status` / awaited by `project_open` / `project_wait_ready`.
+   */
+  sessionStatus: SessionStatusStore
+
+  /**
+   * Cursor-readable ring buffer over the compile log lines. Fed by the
+   * notifier tap (every `notify.compileLog` is appended here first), read
+   * incrementally by MCP `compile_logs`.
+   */
+  compileLogBuffer: CompileLogBuffer
 
   /**
    * Open (or re-focus) the standalone workbench-settings window. First-class
@@ -310,7 +333,16 @@ export function createWorkbenchContext(opts: CreateContextOptions): WorkbenchCon
   // the one place that releases the HOST-scoped toolbar (its view and the
   // ref-counted session-runtime preload) when the app/context winds down.
   ctx.registry.add(() => ctx.views.disposeAll())
-  ctx.notify = createRendererNotifier(ctx)
+  ctx.sessionStatus = createSessionStatusStore()
+  ctx.compileLogBuffer = createCompileLogBuffer()
+  // Tap the notify gate: the two compile-state pushes land in the
+  // main-process authorities above BEFORE the renderer broadcast, so MCP
+  // reads and the renderer view derive from the same single site.
+  ctx.notify = tapNotifierIntoStores(
+    createRendererNotifier(ctx),
+    ctx.sessionStatus,
+    ctx.compileLogBuffer,
+  )
   // Lazy closure (not a bound snapshot): reads ctx.windows/notify/rendererDir
   // at call time through the live context, which structurally satisfies the
   // helper's narrow OpenSettingsWindowDeps.
