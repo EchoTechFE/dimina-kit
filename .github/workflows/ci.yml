@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   # lint + check-types need no test artifacts, so they run on their own runner
-  # in parallel with the test/ratchet job instead of serializing in front of it.
+  # in parallel with the test/gate job instead of serializing in front of it.
   lint-and-types:
     runs-on: ubuntu-latest
 
@@ -58,12 +58,37 @@ jobs:
       - name: Install workspace deps
         run: pnpm install --frozen-lockfile --ignore-scripts
 
+      # dimina/fe is its own pnpm workspace (outside the root pnpm-workspace.yaml,
+      # and it doesn't commit a lockfile — fe/.gitignore excludes pnpm-lock.yaml),
+      # so its dependencies aren't installed by the step above and there is no
+      # lockfile to freeze against. The wasm-alignment check below resolves the
+      # toolchain from this install to detect drift against upstream.
+      - name: Install dimina/fe workspace deps
+        run: pnpm -C dimina/fe install --no-frozen-lockfile --ignore-scripts
+
+      # Deliberately NOT run through `turbo run lint`: dimina/fe has no committed
+      # lockfile, so the upstream toolchain version this check resolves can drift
+      # purely from time passing (a new oxc-parser/esbuild patch landing upstream)
+      # with none of packages/compiler's own tracked files changing. Turbo's task
+      # cache is keyed off exactly those tracked files, so a cached run would
+      # silently replay a stale pass and hide the drift this check exists to catch.
+      - name: Check wasm toolchain alignment with upstream
+        run: pnpm --filter @dimina-kit/compiler run check:wasm-alignment
+
+      # Catches the case that bit qdmp-devtools: devDependencies.electron
+      # got bumped in packages/devtools or packages/electron-deck but
+      # peerDependencies.electron (the only version signal downstream hosts
+      # see, since devDependencies are never installed by consumers) was left
+      # on the old major.
+      - name: Check electron peerDependencies stay in sync with devDependencies
+        run: pnpm run check:electron-peer-sync
+
       - name: Lint and type-check
         run: pnpm turbo run lint check-types --cache-dir=.turbo
 
-  # ratchet consumes the test run's artifacts (test-report / coverage), so test
-  # and ratchet stay serialized within this job — everything else runs beside it.
-  test-and-ratchet:
+  # gate consumes the test run's artifacts (test-report / coverage), so test
+  # and gate stay serialized within this job — everything else runs beside it.
+  test-and-pawl:
     runs-on: ubuntu-latest
 
     permissions:
@@ -93,7 +118,7 @@ jobs:
 
       # Persist turbo's cache: a cache-hit test task replays its recorded
       # outputs (test-report*.json + coverage/**) — exactly the artifacts the
-      # ratchet step consumes, so replayed packages still feed the gate.
+      # gate step consumes, so replayed packages still feed the gate.
       - name: Restore turbo cache
         uses: actions/cache@v4
         with:
@@ -109,48 +134,26 @@ jobs:
       - name: Test
         run: pnpm turbo run test --cache-dir=.turbo
 
-      - name: Anti-regression ratchet
+      # pawl's exec dimensions delegate to the TypeScript adapters in tools/pawl
+      # (via pawl-adapter.ts); compile them and run their guarding tests before
+      # the gate invokes them.
+      - name: Build & test pawl adapters
         run: |
           set -o pipefail
-          pnpm exec tsc -p tools/ratchet
-          node --test "tools/ratchet/*.test.ts"
-          pnpm ratchet:check 2>&1 | tee ratchet-check.log
+          pnpm exec tsc -p tools/pawl
+          node --test "tools/pawl/*.test.ts"
 
-      # Upserts one sticky comment (keyed by the marker) with the ratchet
-      # table, so the PR always shows the latest baseline-vs-current state
-      # without stacking a new comment per push.
-      - name: Ratchet report PR comment
-        if: always() && github.event_name == 'pull_request'
-        uses: actions/github-script@v7
+      # setup-pawl installs the binary, runs `check`, and (comment defaults on)
+      # upserts one sticky baseline-vs-current comment on the PR rendered from
+      # the --format json verdict, then enforces the gate exit code. The install
+      # leaves pawl on PATH, so baseline-guard below reuses it.
+      - name: Anti-regression gate
+        uses: tiangong-dev/pawl@v0.4.0
         with:
-          script: |
-            const fs = require('fs')
-            let log = ''
-            try { log = fs.readFileSync('ratchet-check.log', 'utf8') } catch { return }
-            const start = log.indexOf('metric ')
-            const table = (start === -1 ? log : log.slice(start)).replace(/ ELIFECYCLE.*$/ms, '').trim()
-            if (!table) return
-            const marker = '<!-- ratchet-report -->'
-            const body = `${marker}\n### Anti-regression ratchet\n\n\`\`\`\n${table}\n\`\`\`\n`
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner, repo: context.repo.repo,
-              issue_number: context.issue.number, per_page: 100,
-            })
-            const existing = comments.find(c => c.body && c.body.includes(marker))
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner, repo: context.repo.repo,
-                comment_id: existing.id, body,
-              })
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner, repo: context.repo.repo,
-                issue_number: context.issue.number, body,
-              })
-            }
+          command: check
 
       - name: Anti-regression baseline guard
         if: github.event_name == 'pull_request'
         run: |
           git fetch --depth=1 origin "$GITHUB_BASE_REF"
-          node tools/ratchet/ratchet.ts baseline-guard FETCH_HEAD
+          pawl baseline-guard FETCH_HEAD

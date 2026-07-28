@@ -302,6 +302,14 @@ interface RouterState {
   pool: ServiceHostPool | null
   /** Fan-out for render-side activity (domReady / active-page); set in install. */
   emitRenderEvent: (event: RenderEvent) => void
+  /** Fan-out for `ServiceHostReadyEvent`; set in install. */
+  emitServiceHostReady: (event: ServiceHostReadyEvent) => void
+  /** The most recent `ServiceHostReadyEvent`, for `onServiceHostReady`'s
+   * missed-signal catch-up (a subscriber registering after the event already
+   * fired for the still-live session must not wait forever) — re-validated
+   * against `appSessions`/`serviceWc.isDestroyed()` at catch-up time, never
+   * replayed blindly. Null before the first session ever boots. */
+  lastServiceHostReady: ServiceHostReadyEvent | null
   /**
    * Per-webContents connection registry (see foundation.md). Render guests and
    * service-host windows are acquired here so their per-wc bookkeeping tears
@@ -361,6 +369,34 @@ export interface RenderEvent {
 }
 
 /**
+ * Fires once per app session, the moment its hidden SERVICE HOST window's
+ * `service.html` document has `did-finish-load`'d — i.e. `serviceWcId` is
+ * GUARANTEED resolvable via `webContents.fromId(serviceWcId)` right now. This
+ * is document readiness, NOT mini-app runtime readiness: `injectLogicBundle`
+ * and the service's own `serviceResourceLoaded` handshake both happen AFTER
+ * this fires (see `bootServiceHost`) — a consumer that needs "the mini-app
+ * has actually booted" must not treat this as that signal.
+ *
+ * Exists so a consumer that needs to act on the service host wc THE MOMENT it
+ * becomes resolvable (e.g. attaching the right-panel DevTools front-end) has
+ * a real event to react to instead of polling `getServiceWc(appId)` on a
+ * fixed retry budget and silently giving up if that budget is exhausted
+ * before the wc resolves under load — the bug this event was added to fix
+ * (see `native-simulator-devtools-host.ts`'s `onServiceHostReady` subscriber).
+ *
+ * `appId`-keyed resolution (`getServiceWc(appId)`) is NOT equivalent to this
+ * event during same-app respawn overlap — `getServiceWc` returns the MOST
+ * RECENT live session for that appId, which may not be the specific session
+ * that just fired this event. Consumers that must target the EXACT session
+ * should resolve `serviceWcId` directly rather than re-resolving by `appId`.
+ */
+export interface ServiceHostReadyEvent {
+  appId: string
+  appSessionId: string
+  serviceWcId: number
+}
+
+/**
  * Point-in-time counts of every resource class RouterState owns. Leak coverage
  * (unit + e2e) asserts EXACT equality of this ledger around a churn cycle —
  * coarse memory sampling cannot see a leaked listener or a stale map entry, so
@@ -403,8 +439,17 @@ export interface BridgeRouterHandle {
    * before the first PAGE_STACK signal. Optional: only the native-host bridge
    * provides it (the default path derives the stack from the simulator URL). */
   getPageStack?(appId?: string): PageStackEntry[] | null
+  /** The current (or named) app session's resource-server baseUrl (serves
+   * that session's framework js/css), or null when no matching session
+   * exists. Per-session, never a global singleton — see AppSession.resourceBaseUrl. */
+  getResourceBaseUrl?(appId?: string): string | null
   /** Subscribe to render-side activity (domReady / active-page change). */
   onRenderEvent(listener: (event: RenderEvent) => void): () => void
+  /** Subscribe to a service host's `did-finish-load` readiness (see
+   * `ServiceHostReadyEvent`'s doc comment). A subscriber registering after
+   * the still-live session's event already fired gets a missed-signal
+   * catch-up — it never needs to poll. */
+  onServiceHostReady(listener: (event: ServiceHostReadyEvent) => void): () => void
   /** The currently-selected device (renderer toolbar), or null pre-selection. */
   getDevice(): NativeDeviceInfo | null
   /** Cache the selected device + push DEVICE_CHANGE to the live simulator WC(s). */
@@ -511,6 +556,8 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
     pendingApiCalls: new Map(),
     pool: null,
     emitRenderEvent: () => {},
+    emitServiceHostReady: () => {},
+    lastServiceHostReady: null,
     connections: ctx.connections,
     debugTap: createDebugTap({ enabled: resolveDebugTapEnabled() }),
     appLifecycle: createAppLifecycleController(),
@@ -584,6 +631,20 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
   }
   state.emitRenderEvent = emitRenderEvent
 
+  // Subscribers to `ServiceHostReadyEvent` (see its doc comment). Separate
+  // from `renderEventListeners`: this is session-scoped (appSessionId +
+  // serviceWcId), not page/bridgeId-scoped like `RenderEvent`.
+  const serviceHostReadyListeners = new Set<(event: ServiceHostReadyEvent) => void>()
+  const emitServiceHostReady = (event: ServiceHostReadyEvent): void => {
+    state.lastServiceHostReady = event
+    for (const listener of serviceHostReadyListeners) {
+      try { listener(event) } catch (error) {
+        console.warn('[bridge-router] service-host-ready listener threw:', error)
+      }
+    }
+  }
+  state.emitServiceHostReady = emitServiceHostReady
+
   // Expose a thin accessor over RouterState so other main services (storage,
   // automation, appdata) can resolve live render/service WebContents without
   // owning router state. Getters resolve fresh — the pre-warm pool can swap
@@ -614,6 +675,10 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
       const ap = resolveCurrentApp(state, ctx, appId)
       return ap?.pageStack ?? null
     },
+    getResourceBaseUrl: (appId) => {
+      const ap = resolveCurrentApp(state, ctx, appId)
+      return ap?.resourceBaseUrl ?? null
+    },
     getActiveRenderWc: (appId) => {
       const ap = resolveCurrentApp(state, ctx, appId)
       if (!ap) return null
@@ -623,6 +688,30 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
     onRenderEvent: (listener) => {
       renderEventListeners.add(listener)
       return () => renderEventListeners.delete(listener)
+    },
+    onServiceHostReady: (listener) => {
+      serviceHostReadyListeners.add(listener)
+      // Missed-signal catch-up (mirrors host-toolbar-port-channel.ts's
+      // `onReady`): a subscriber registering AFTER the session it cares
+      // about already booted must not wait forever for an event that
+      // already happened. Scheduled on a microtask (never synchronous —
+      // matches the same-tick-dispose/re-attach safety the host-toolbar
+      // pattern documents) and RE-VALIDATED at fire time: the session must
+      // still be live and still bound to the SAME serviceWcId the event
+      // captured, so a session that respawned/closed between registration
+      // and the microtask can't resurrect a stale attach.
+      const candidate = state.lastServiceHostReady
+      if (candidate) {
+        queueMicrotask(() => {
+          if (!serviceHostReadyListeners.has(listener)) return
+          const ap = state.appSessions.get(candidate.appSessionId)
+          if (!ap || ap.serviceWc.isDestroyed() || ap.serviceWc.id !== candidate.serviceWcId) return
+          try { listener(candidate) } catch (error) {
+            console.warn('[bridge-router] service-host-ready catch-up listener threw:', error)
+          }
+        })
+      }
+      return () => serviceHostReadyListeners.delete(listener)
     },
     getDevice: () => currentDevice,
     setDevice: (device) => {
@@ -1348,6 +1437,11 @@ async function bootServiceHost(state: RouterState, ap: AppSession, ctx: Workbenc
   // any diagnostic queued for this session (or the global bucket) into its now
   // resolvable console. Safe to call even when nothing is queued.
   ctx.consoleForwarder?.notifyServiceHostReady?.(ap.appSessionId)
+  // Same authoritative moment, exposed as a general subscribable event (see
+  // `ServiceHostReadyEvent`'s doc comment) — other main-process consumers
+  // (the right-panel DevTools attach) need this exact signal too and must
+  // not poll `getServiceWc` on a fixed retry budget for it.
+  state.emitServiceHostReady({ appId: ap.appId, appSessionId: ap.appSessionId, serviceWcId: ap.serviceWc.id })
   ap.logicInjected = await injectLogicBundle(ap)
   if (!ap.logicInjected) {
     // The compiled logic.js never executed, so `modDefine` registered nothing.

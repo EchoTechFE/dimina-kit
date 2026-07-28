@@ -43,6 +43,18 @@ const TIMING_FUNC_MAP: Record<NonNullable<NavigationBarState['colorAnimation']>[
   easeInOut: 'ease-in-out',
 }
 
+// Native back-arrow glyphs are filled wedges, not a stroked chevron.
+// iOS: exact path from Assets.xcassets/arrow-back-{dark,light}.imageset (both
+// color variants share this path). Android: Icons.AutoMirrored.Filled.KeyboardArrowLeft
+// is a compiled androidx vector with no source in this repo to read; its path is
+// the standard Material Design "keyboard_arrow_left" glyph, verified against
+// google/material-design-icons (src/hardware/keyboard_arrow_left/materialicons/24px.svg)
+// rather than reproduced from memory.
+const BACK_ARROW_PATH: Record<NavBarPlatform, string> = {
+  ios: 'M17.51 3.87L15.73 2.1 5.84 12l9.9 9.9 1.77-1.77L9.38 12l8.13-8.13z',
+  android: 'M15.41 16.59L10.83 12l4.58-4.59L14 6l-6 6 6 6 1.41-1.41z',
+}
+
 /**
  * Simulator navigation bar aligned with WeChat MiniProgram spec
  * (see packages/devtools/docs/native-bridge-protocol.md NavigationBar section):
@@ -73,6 +85,11 @@ export function NavigationBar({
   const showBack = stackDepth > 1
   const showHome = !showBack && state.homeButtonVisible
   const titleAlign = platform === 'ios' ? 'center' : 'left'
+  // Native back-arrow icon size differs per platform: iOS's arrow-back
+  // SVG asset renders at its 24pt viewBox; Android's
+  // Icons.AutoMirrored.Filled.KeyboardArrowLeft is explicitly sized 30dp
+  // (DiminaActivity.kt CenterAlignedTopAppBar navigationIcon).
+  const backIconSize = platform === 'android' ? 30 : 24
 
   const containerStyle: React.CSSProperties = {
     backgroundColor: state.backgroundColor,
@@ -102,8 +119,8 @@ export function NavigationBar({
                   aria-label="Back"
                   onClick={onBack}
                 >
-                  <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
-                    <path d="M15 18l-6-6 6-6" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                  <svg viewBox="0 0 24 24" width={backIconSize} height={backIconSize} aria-hidden="true">
+                    <path d={BACK_ARROW_PATH[platform]} fill="currentColor" />
                   </svg>
                 </button>
               )}
@@ -135,7 +152,6 @@ export function NavigationBar({
       <MenuCapsule
         platform={platform}
         statusBarHeight={statusBarHeight}
-        textStyle={state.textStyle}
         onMoreClick={onMoreClick}
       />
     </header>

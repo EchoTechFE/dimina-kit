@@ -9,9 +9,11 @@ interface SpawnContext {
 }
 
 /**
- * wx.getMenuButtonBoundingClientRect() — synchronous, returns the WeChat
- * capsule geometry. iOS: width 87, Android: width 95, height 32, top =
- * statusBarHeight + (4|6), right = (7|10). See navigation-bar spec.
+ * wx.getMenuButtonBoundingClientRect() — synchronous, returns the capsule
+ * geometry mirrored from dimina's native containers: width 87, height 32
+ * on both platforms; top = statusBarHeight + 6 (iOS) / + 16 (Android), since
+ * the nav bar content height differs (44 vs 64); right/left are absolute
+ * pixel positions (right = windowWidth - 10). See menu-button-geometry.ts.
  *
  * Pulls platform + dimensions from spawn-time host env snapshot (delivered
  * via `?hostEnv=` URL query, see service-host/preload.cjs).

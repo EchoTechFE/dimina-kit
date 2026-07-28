@@ -87,6 +87,13 @@ describe('createWxmlSource — tree extraction', () => {
     return src.snapshot()
   }
 
+  /** Count nodes in the tree (including the root) whose tagName equals `tag`. */
+  function countNodesByTag(node: { tagName: string; children?: unknown[] }, tag: string): number {
+    const self = node.tagName === tag ? 1 : 0
+    const kids = (node.children ?? []) as { tagName: string; children?: unknown[] }[]
+    return self + kids.reduce((n, c) => n + countNodesByTag(c, tag), 0)
+  }
+
   beforeEach(() => {
     vi.clearAllMocks()
     src = null
@@ -365,69 +372,83 @@ describe('createWxmlSource — tree extraction', () => {
     expect(tree.tagName).toBe('view3d')
   })
 
-  // ── Wrapper unwrap (user-defined component reverse-mapping) ──────────
+  // ── dd-wrapper transparency + component/page path identity ───────────
   //
-  // Dimina hosts every user-defined component inside `<wrapper name="<path>">`.
-  // The WXML panel must reverse-map this back to the source-level tag the
-  // user wrote (the last path segment, optionally minus `/index`).
+  // dimina wraps every custom-component template root in `<dd-wrapper
+  // name="<path>">`. The enclosing component instance already carries that
+  // same path via `type.name`, so the wrapper is redundant scaffolding: it
+  // must pass its children through instead of emitting a second path node.
+  // A `wrapper` WITHOUT a path-shaped `name` is not scaffolding and stays a
+  // literal `wrapper` node.
 
-  it('unwraps wrapper into the full user component path', () => {
-    const innerText = makeInstance('text', {})
-    const instance = makeInstance(
-      'wrapper',
-      { name: '/components/counter/counter' },
-      [innerText],
-    )
-    createMockIframe(instance)
+  it('collapses the double Vue-instance layer (component + its dd-wrapper subTree root) into ONE node', () => {
+    // Regression for the doubled-node bug: a real custom component renders as
+    // TWO nested Vue instances that both carry the path — the outer component
+    // instance (holding the user's usage props) and its subTree root
+    // `dd-wrapper` (holding only the fell-through `bind:change`). The panel
+    // used to show BOTH as `components/counter/counter`, each with its own
+    // #shadow-root. It must now show exactly one.
+    const inner = makeInstance('view', { class: 'counter-wrapper' })
+    const wrapper = {
+      type: { __tagName: 'wrapper' },
+      props: { name: '/components/counter/counter', 'bind:change': 'onCounterChange' },
+      subTree: { children: [{ component: inner }] },
+    }
+    const component = {
+      type: { name: '/components/counter/counter' },
+      props: { label: '默认计数器', initial: 0, step: 1, 'bind:change': 'onCounterChange' },
+      subTree: { children: [{ component: wrapper }] },
+    }
+    createMockIframe(component)
 
     const tree = extract()!
-    // 对齐微信开发者工具：自定义组件用全路径作 tag 名
     expect(tree.tagName).toBe('components/counter/counter')
-    // `name` 属性是 dimina 内部包装信息，应当从面板上的 attrs 里去掉
-    expect(tree.attrs).not.toHaveProperty('name')
-    // 自定义组件下插入合成的 `#shadow-root` 把组件本身和内部实现分隔开
+    // The OUTER instance's usage props surface (numbers stringified) — the
+    // wrapper's own (redundant) `bind:change` does not double them up.
+    expect(tree.attrs).toEqual({
+      label: '默认计数器',
+      initial: '0',
+      step: '1',
+      'bind:change': 'onCounterChange',
+    })
     expect(tree.children).toHaveLength(1)
     expect(tree.children[0].tagName).toBe('#shadow-root')
-    expect(tree.children[0].attrs).toEqual({})
+    expect(tree.children[0].children).toHaveLength(1)
+    expect(tree.children[0].children[0].tagName).toBe('view')
+    expect(countNodesByTag(tree, 'components/counter/counter')).toBe(1)
+    expect(countNodesByTag(tree, 'wrapper')).toBe(0)
+  })
+
+  it('a path-named wrapper nested under its owning component is transparent (no wrapper tag, no doubled path)', () => {
+    const innerText = makeInstance('text', {})
+    const wrapper = {
+      type: { __tagName: 'wrapper' },
+      props: { name: '/components/foo/foo' },
+      subTree: { children: [{ component: innerText }] },
+    }
+    const component = {
+      type: { name: '/components/foo/foo' },
+      props: {},
+      subTree: { children: [{ component: wrapper }] },
+    }
+    createMockIframe(component)
+
+    const tree = extract()!
+    expect(tree.tagName).toBe('components/foo/foo')
+    expect(tree.children).toHaveLength(1)
+    expect(tree.children[0].tagName).toBe('#shadow-root')
     expect(tree.children[0].children).toHaveLength(1)
     expect(tree.children[0].children[0].tagName).toBe('text')
+    expect(countNodesByTag(tree, 'wrapper')).toBe(0)
+    expect(countNodesByTag(tree, 'components/foo/foo')).toBe(1)
   })
 
-  it('strips trailing /index when unwrapping wrapper', () => {
-    const innerText = makeInstance('text', {})
-    const instance = makeInstance('wrapper', { name: '/components/foo/index' }, [innerText])
+  it('surfaces a component path with a trailing /index segment verbatim (no path stripping)', () => {
+    const instance = { type: { name: '/components/foo/index' }, props: {}, subTree: { children: [] } }
     createMockIframe(instance)
 
     const tree = extract()!
-    expect(tree.tagName).toBe('components/foo')
-    // 仍旧包一层 shadow-root
-    expect(tree.children).toHaveLength(1)
-    expect(tree.children[0].tagName).toBe('#shadow-root')
-    expect(tree.children[0].children[0].tagName).toBe('text')
-  })
-
-  it('falls back to wrapper when path is just /index (nothing left after stripping)', () => {
-    // 边界：剥光 `/index` 后没有剩余段，退回 wrapper 避免空 tagName
-    const instance = makeInstance('wrapper', { name: '/index' })
-    createMockIframe(instance)
-
-    const tree = extract()!
-    expect(tree.tagName).toBe('wrapper')
-  })
-
-  it('preserves non-name attrs and children through wrapper unwrap', () => {
-    const instance = makeInstance('wrapper', {
-      name: '/components/counter/counter',
-      'bind:change': 'onCounterChange',
-      label: 'demo',
-    })
-    createMockIframe(instance)
-
-    const tree = extract()!
-    expect(tree.tagName).toBe('components/counter/counter')
-    expect(tree.attrs).toEqual({ 'bind:change': 'onCounterChange', label: 'demo' })
-    // 没有真实子节点时不插入 shadow-root，children 保持空数组
-    expect(tree.children).toEqual([])
+    expect(tree.tagName).toBe('components/foo/index')
   })
 
   it('leaves wrapper tag alone when name attr is missing or empty', () => {
@@ -435,13 +456,13 @@ describe('createWxmlSource — tree extraction', () => {
     createMockIframe(instance)
 
     const tree = extract()!
-    // 没法推导真实组件名，保持 wrapper（避免误展示成空字符串）
+    // 没法推导真实组件路径，保持 wrapper（避免误展示成空字符串）
     expect(tree.tagName).toBe('wrapper')
   })
 
-  it('does not unwrap when name attr is a user-supplied non-path value', () => {
-    // 用户写 `<counter name="x">`，与 wrapper 内部 `name=path` 在 Vue prop 层冲突。
-    // dimina 自己生成的路径必以 `/` 开头；用户字面量几乎不会。这里以 `/` 为启发避免误剥。
+  it('does not treat a user-supplied non-path name as scaffolding', () => {
+    // 用户写 `<counter name="x">`，与 dd-wrapper 内部 `name=path` 在 Vue prop 层冲突。
+    // dimina 自己生成的路径必以 `/` 开头；用户字面量几乎不会。这里以 `/` 为启发避免误吞。
     const instance = makeInstance('wrapper', { name: 'user-name' })
     createMockIframe(instance)
 
@@ -450,42 +471,19 @@ describe('createWxmlSource — tree extraction', () => {
     expect(tree.attrs).toEqual({ name: 'user-name' })
   })
 
-  it('preserves wrapper children inside shadow-root when unwrapping', () => {
-    // unwrap 不应丢失子节点；子节点会被包一层 #shadow-root
-    const innerText = makeInstance('text', {})
-    const instance = makeInstance(
-      'wrapper',
-      { name: '/components/counter/counter' },
-      [innerText],
-    )
-    createMockIframe(instance)
-
-    const tree = extract()!
-    expect(tree.tagName).toBe('components/counter/counter')
-    expect(tree.children).toHaveLength(1)
-    expect(tree.children[0].tagName).toBe('#shadow-root')
-    expect(tree.children[0].children).toHaveLength(1)
-    expect(tree.children[0].children[0].tagName).toBe('text')
-  })
-
   // ── Page node: full path + #shadow-root (WeChat-style) ────────────────
   //
-  // dimina runtime.js 在 dd-page 的 setup() 里调用 provide('path', path)
-  // 把页面路径暴露给 Vue 的 provide/inject 体系。devtools 应该利用这个
-  // 信息把页面节点的 tagName 从硬编码的 `page` 升级为页面全路径
-  // （如 `pages/index/index`），并把页面 children 包一层 #shadow-root。
+  // The render runtime sets each compiled page's Vue `type.name` to its
+  // miniprogram module path. devtools trusts that directly (see
+  // `resolveTagName`) to upgrade the page node's tagName from the hardcoded
+  // `page` to the full path (e.g. `pages/index/index`), and wraps the page's
+  // children in a synthetic #shadow-root.
 
-  it('uses page path from provides.path when proxy.__page__ marker is present', () => {
-    // 模拟 dimina runtime dd-page setup 写入的两个标记：
-    //   instance.proxy.__page__ = true
-    //   provide('path', path)  → instance.provides.path
-    // 缺一不可（避免子节点继承 provides 时被误判）。
+  it('resolves the page node identity from type.name and wraps its children in a #shadow-root', () => {
     const innerView = makeInstance('view', {})
     const instance = {
-      type: { __scopeId: 'data-v-abc' },
+      type: { name: 'pages/index/index' },
       props: {},
-      proxy: { __page__: true },
-      provides: { path: '/pages/index/index' },
       subTree: { children: [{ component: innerView }] },
     }
     createMockIframe(instance)
@@ -498,19 +496,10 @@ describe('createWxmlSource — tree extraction', () => {
     expect(tree.children[0].children[0].tagName).toBe('view')
   })
 
-  it('handles page path without leading slash (real runtime emits both forms)', () => {
-    // 实测 dimina runtime 上 home 页 provides.path 是 `pages/index/index`（无前导 `/`）
-    const instance = {
-      type: { __scopeId: 'data-v-abc' },
-      props: {},
-      proxy: { __page__: true },
-      provides: { path: 'pages/index/index' },
-      subTree: { children: [] },
-    }
-    createMockIframe(instance)
-
-    const tree = extract()!
-    expect(tree.tagName).toBe('pages/index/index')
+  it('strips a leading slash from a page path (both forms occur at runtime)', () => {
+    const withSlash = { type: { name: '/pages/index/index' }, props: {}, subTree: { children: [] } }
+    createMockIframe(withSlash)
+    expect(extract()!.tagName).toBe('pages/index/index')
   })
 
   it('does NOT treat a node that INHERITED provides.path as a page or component', () => {
@@ -538,29 +527,23 @@ describe('createWxmlSource — tree extraction', () => {
   })
 
   it('a Taro template wrapper (dd-tpl-*) under a page is transparent, not a second page', () => {
-    // 真机（Taro 小程序）实证：页面 dd-page 之下挂着编译产物 template 包装器
-    // dd-tpl-taro_tmpl / dd-tpl-tmpl_0_3，它们 nameless + __scopeId + components
-    // 且共用页面的 scopeId。它们必须透传 children，绝不能各自再生成一个 `page`。
+    // 真机（Taro 小程序）实证：页面之下挂着编译产物 template 包装器
+    // dd-tpl-taro_tmpl / dd-tpl-tmpl_0_3，它们 nameless，只能靠父级/appContext
+    // 的组件注册表反查回注册名。它们必须透传 children，绝不能各自再生成一个
+    // `page` 或路径节点。
     const templateType = { __scopeId: 'data-v-page', components: {} }
     const leaf = makeInstance('view', { class: 'card' })
     const templateWrapper = {
       type: templateType,
       props: { data: {} },
       appContext: { components: { 'dd-tpl-taro_tmpl': templateType } },
-      provides: { path: 'pages/index/index' },
       subTree: { children: [{ component: leaf }] },
     }
     const page = {
-      type: { __scopeId: 'data-v-page', components: {} },
+      type: { name: 'pages/index/index' },
       props: {},
-      proxy: { __page__: true },
-      provides: { path: 'pages/index/index' },
       subTree: { children: [{ component: templateWrapper }] },
     }
-    // Real Vue instances carry `parent`; the wrapper inherits the page's provides
-    // object, so its provided path EQUALS the page's — proving it is not a native
-    // component boundary (which would provide its own, different path).
-    ;(templateWrapper as Record<string, unknown>).parent = page
     createMockIframe(page)
 
     const tree = extract()!
@@ -570,46 +553,27 @@ describe('createWxmlSource — tree extraction', () => {
     const shadow = tree.children.find((c) => c.tagName === '#shadow-root')!
     expect(shadow).toBeDefined()
     expect(shadow.children.map((c) => c.tagName)).toEqual(['view'])
-    function countPages(node: { tagName: string, children?: { tagName: string }[] }): number {
-      const self = node.tagName === 'page' ? 1 : 0
-      const kids = (node.children ?? []) as typeof node[]
-      return self + kids.reduce((n, c) => n + countPages(c), 0)
-    }
-    expect(countPages(tree)).toBe(0)
+    expect(countNodesByTag(tree, 'page')).toBe(0)
   })
 
   it('renders a native custom component as its full path wrapped in a #shadow-root', () => {
-    // A native dimina custom component provides its OWN path (≠ the page's) in
-    // setup. It must surface as a node tagged with that full path and wrap its
-    // rendered content in a synthetic #shadow-root — matching WeChat, which shows
-    // each custom component as a path-named node with an open shadow root.
+    // A native dimina custom component's `type.name` IS its own path. It
+    // surfaces as a node tagged with that full path and wraps its rendered
+    // content in a synthetic #shadow-root — matching WeChat, which shows each
+    // custom component as a path-named node with an open shadow root.
     const leaf = makeInstance('view', { class: 'inner' })
     const component = {
-      type: { __scopeId: 'data-v-comp', components: {} },
+      type: { name: '/components/comp/comp' },
       props: {},
-      provides: { path: 'modules/components/privacy-pop/index' },
       subTree: { children: [{ component: leaf }] },
     }
-    const page = {
-      type: { __scopeId: 'data-v-page', components: {} },
-      props: {},
-      proxy: { __page__: true },
-      provides: { path: 'pages/index/index' },
-      subTree: { children: [{ component }] },
-    }
-    ;(component as Record<string, unknown>).parent = page
-    createMockIframe(page)
+    createMockIframe(component)
 
     const tree = extract()!
-    expect(tree.tagName).toBe('pages/index/index')
-    const pageShadow = tree.children.find((c) => c.tagName === '#shadow-root')!
-    const comp = pageShadow.children.find(
-      (c) => c.tagName === 'modules/components/privacy-pop/index',
-    )!
-    expect(comp, 'native component should surface under the page shadow root').toBeDefined()
-    // The component's own content hangs under its OWN #shadow-root boundary.
-    expect(comp.children[0]?.tagName).toBe('#shadow-root')
-    expect(comp.children[0]?.children.map((c) => c.tagName)).toEqual(['view'])
+    expect(tree.tagName).toBe('components/comp/comp')
+    expect(tree.children).toHaveLength(1)
+    expect(tree.children[0].tagName).toBe('#shadow-root')
+    expect(tree.children[0].children.map((c) => c.tagName)).toEqual(['view'])
   })
 
   it('a nameless __scopeId component with no recoverable registration falls back to `template`', () => {

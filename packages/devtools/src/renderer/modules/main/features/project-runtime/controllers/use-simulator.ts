@@ -34,6 +34,13 @@ export interface UseSimulatorProps {
    * DeviceShell exactly once via `attachNativeSimulator`.
    */
   hotReloadToken: number
+  /**
+   * Explicit-relaunch signal from `useSession`: bumped once per 重新编译 / retry.
+   * Unlike `hotReloadToken` (a soft reload preserving the current page), this
+   * forces a hard re-attach at `startPage` even when `simulatorUrl` is
+   * unchanged, so an explicit relaunch always resets the drifted page.
+   */
+  relaunchNonce: number
 }
 
 export interface SimulatorHookResult {
@@ -52,6 +59,7 @@ export function useSimulator(props: UseSimulatorProps): SimulatorHookResult {
     port,
     projectPath,
     hotReloadToken,
+    relaunchNonce,
   } = props
 
   const simulatorUrl = useMemo(() => {
@@ -105,6 +113,10 @@ export function useSimulator(props: UseSimulatorProps): SimulatorHookResult {
     if (compileStatus.status !== 'ready') return
     if (!simulatorUrl) return
 
+    // An explicit relaunch (relaunchNonce bumped, token unchanged) is NOT a hot
+    // reload: it hard-attaches at `startPage` (the else branch below), resetting
+    // the drifted page — even when `simulatorUrl` is byte-identical, because
+    // `relaunchNonce` is in this effect's deps.
     const isHotReload = hotReloadToken !== attachedHotReloadTokenRef.current
     attachedHotReloadTokenRef.current = hotReloadToken
 
@@ -186,6 +198,7 @@ export function useSimulator(props: UseSimulatorProps): SimulatorHookResult {
     compileStatus.status,
     simulatorUrl,
     hotReloadToken,
+    relaunchNonce,
     simPanelWidthRef,
     deviceRef,
     sendDeviceInfo,

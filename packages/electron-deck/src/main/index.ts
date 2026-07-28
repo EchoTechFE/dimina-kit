@@ -13,6 +13,7 @@ export {
 } from './connection.js'
 export {
   DisposableRegistry,
+  SyncDisposableRegistry,
   toDisposable,
   type Disposable,
   type DisposeFn,

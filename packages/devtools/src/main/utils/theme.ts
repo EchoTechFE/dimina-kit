@@ -44,12 +44,16 @@ export function simDeskBg(): string {
  * The defect is platform-agnostic, so the fix is too: one `nativeTheme`
  * `updated` listener re-syncs every current and future BrowserWindow.
  *
- * Known limitation: on Linux the `updated` event does not fire for OS-level
- * system theme changes (electron/electron#25925) — only for explicit
- * `nativeTheme.themeSource` assignments. In-app theme switches go through
- * `applyTheme()` and are unaffected on every platform; the gap is limited to
- * Linux + `theme: 'system'` + an OS theme change, an upstream Electron
- * limitation that also leaves the renderer's `prefers-color-scheme` stale.
+ * Known limitation: on some Linux desktops (KDE Plasma + Wayland and other
+ * wlroots compositors) an OS-level system theme change flips `updated` with
+ * a stale/inverted `shouldUseDarkColors` instead of the correct value — a
+ * Chromium ≥142 regression (electron/electron#48736, crbug 462191707, open
+ * as of 2026-06) distinct from the older #25925 (fixed since Electron 13,
+ * 2021). GNOME/GTK-portal desktops are unaffected. In-app theme switches go
+ * through `applyTheme()` and are unaffected on every platform; the gap is
+ * limited to the affected Linux desktops + `theme: 'system'` + an OS theme
+ * change, an upstream Electron limitation that also leaves the renderer's
+ * `prefers-color-scheme` stale.
  *
  * Returns a Disposable that detaches the listener. Install it once during
  * app setup and hand the Disposable to the workbench registry.

@@ -251,7 +251,7 @@ SIMULATOR_EVENTS = {
 
 ## 7. NavigationBar 微信对齐
 
-simulator 的 NavigationBar 完全按微信 MiniProgram 规范实现（仅在 devtools 对齐，不参照各端 native）。
+simulator 的 NavigationBar 按微信 MiniProgram 规范实现；胶囊（capsule）的尺寸/位置/视觉则对齐 dimina 各端 native 的实际渲染（见下），而非独立于 native 的一套数值。
 
 **视觉**（`src/simulator/device-shell/navigation-bar.tsx`、`menu-capsule.tsx`、`navigation-bar.css`、`menu-capsule.css`）：
 
@@ -264,8 +264,10 @@ simulator 的 NavigationBar 完全按微信 MiniProgram 规范实现（仅在 de
 
 **胶囊** geometry（`src/simulator/device-shell/menu-button-geometry.ts` `getMenuCapsuleRect`）：
 
-- iOS 87×32，top = statusBarHeight + 4，right = 7；Android 95×32，top = statusBarHeight + 6，right = 10
-- 纯函数 geometry，service-host sync impl 与 React 组件共享
+- 尺寸/间距对齐 native（iOS `MenuAPI.swift` `DMPMenuButtonLayout` / Android `MenuButtonGeometry.kt`）：两端胶囊都是 87×32，trailing spacing 都是 10；两端的差异只在 nav bar content height 不同（iOS 44、Android 64），所以 top 偏移不同：iOS = statusBarHeight + 6，Android = statusBarHeight + 16
+- `right`/`left` 是绝对像素坐标（`right = windowWidth - 10`），不是到边缘的 margin——这与 `wx.getMenuButtonBoundingClientRect()` 的真实返回契约一致
+- 纯函数 geometry，service-host sync impl 与 React 组件共享同一份常量/函数（此前 React 组件曾各自硬编码一套数值，与 geometry 模块和 native 都不一致，已改为直接复用）
+- 视觉上胶囊始终是不透明白底 + 深色（`#1F1F1F`）图标，不随 `navigationBarTextStyle` 切换主题——这也是对齐 native（两端 native 实现均未做胶囊主题联动）
 
 **API 路由**（`NAV_BAR_API_NAMES`，见 §6）：
 

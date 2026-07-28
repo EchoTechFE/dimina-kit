@@ -39,6 +39,23 @@ hard path (`attachNativeSimulator`, full teardown + rebuild) remains the
 fallback when main reports no live+ready shell, and the only path for project
 open/close and device relaunch.
 
+### Style-only rebuild = in-place stylesheet swap (no session reboot)
+
+A rebuild that touched ONLY stylesheets is a THIRD, lighter path — no session
+reboot at all. `@dimina-kit/devkit` reports `onRebuild({ styleOnly })` (true when
+every changed file is a stylesheet, `isStyleOnlyChange`); the compiled CSS scope
+id is a deterministic `hash(path)`, so a recompiled `.css` keeps the same
+`[data-v-<id>]` selectors and re-applies against the already-mounted DOM. When
+`styleOnly` and `preview.autoReload` are both set, `workspace-service` calls
+`views.refreshSimulatorStyles()` INSTEAD of the soft reload: it runs a small
+cache-bust script (`?__hmr=<ts>` on every `<link rel=stylesheet>`, recursing
+iframes) in each live render-host guest (`hostWebContents === simWc`). The page
+stack / form state / scroll / window focus all survive — no ready-then-swap, no
+flash. It reports status with `hotReload: false` so the renderer never bumps its
+reload token. Falls back to the soft reload when no live guest exists (returns
+false), so a style edit is never silently dropped. Mirrors the SSE
+`reload-style` path devkit serves to the standalone web-preview container.
+
 ### Leak guards on the churn cycle
 
 Coarse memory sampling can't see a leaked listener or a stale map entry, so

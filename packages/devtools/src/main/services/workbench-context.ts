@@ -4,6 +4,8 @@ import type { BridgeRouterHandle } from '../ipc/bridge-router.js'
 import type { ConsoleForwarder } from './console-forward/index.js'
 import type { DiagnosticsBus } from './diagnostics/index.js'
 import type { NetworkForwarder } from './network-forward/index.js'
+import type { InternalDevtoolsWindow } from '../windows/internal-devtools-window/index.js'
+import { createCdpSessionBroker, type CdpSessionBroker } from './cdp-session/index.js'
 import type { AppDataTap } from './simulator-appdata/index.js'
 import type { StorageApi } from './simulator-storage/index.js'
 import type { SyncStorageChange } from '../../shared/ipc-channels.js'
@@ -180,6 +182,15 @@ export interface WorkbenchContext {
   connections: ConnectionRegistry
 
   /**
+   * Single owner of every render-guest `wc.debugger` (CDP) session: safe-area,
+   * elements-forward, render-inspect and network-forward all `acquire()` a
+   * lease from this instead of each hand-rolling their own attach/reuse/detach
+   * bookkeeping (see cdp-session/index.ts's design doc for why that duplication
+   * was a real bug, not just repetition).
+   */
+  cdpSessionBroker: CdpSessionBroker
+
+  /**
    * Accessor over the bridge-router's private state, set by `installBridgeRouter`.
    * Lets other main services (simulator-storage, automation, appdata) resolve
    * live render/service WebContents and the native-host flag without owning
@@ -253,6 +264,16 @@ export interface WorkbenchContext {
    * DevTools host exist. Undefined until bootstrap wires it.
    */
   networkForward?: NetworkForwarder
+
+  /**
+   * Controller for the standalone internal (app-wide) DevTools debug window
+   * — the independent floating CDP panel that debugs the whole Electron app
+   * (as opposed to the right-panel CDP, which inspects only the user's
+   * mini-program). Assembled in app bootstrap via
+   * `createInternalDevtoolsWindow(mainWindow)`; undefined only in contexts
+   * that skip that wiring (e.g. narrow test doubles).
+   */
+  internalDevtoolsWindow?: InternalDevtoolsWindow
 }
 
 /**
@@ -301,6 +322,8 @@ export function createWorkbenchContext(opts: CreateContextOptions): WorkbenchCon
   // NOT here — the constructor stays side-effect-free so focused unit tests can
   // build a context with a minimal mainWindow fake.
   ctx.connections = createConnectionRegistry()
+  ctx.cdpSessionBroker = createCdpSessionBroker({ connections: ctx.connections })
+  ctx.registry.add(() => ctx.cdpSessionBroker.dispose())
   ctx.trustedWindowSenderIds = new Map<number, number>()
   ctx.simulatorApis = createSimulatorApiRegistry()
   ctx.windows = createWindowService(opts.mainWindow)

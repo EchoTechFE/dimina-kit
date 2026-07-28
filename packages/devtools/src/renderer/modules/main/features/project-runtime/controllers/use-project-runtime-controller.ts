@@ -4,7 +4,7 @@ import type { RefObject } from 'react'
 import { DEVICES, SIM_PANEL_PADDING, type ZoomSetting } from '@/shared/constants'
 import type { AppInfo, ProjectStatus, SessionRuntimeStatusPayload } from '@/shared/api'
 import type { CompileConfig } from '@/shared/types'
-import type { StoragePanelSource, WxmlPanelSource } from '@dimina-kit/inspect'
+import type { AppDataPanelSource, StoragePanelSource, WxmlPanelSource } from '@dimina-kit/inspect'
 import { DEFAULT_RIGHT_PANE_STATE } from '../types'
 import type { RightPaneState, RightPaneTabId } from '../types'
 
@@ -12,7 +12,7 @@ import { useDevice } from './use-device'
 import { useSession } from './use-session'
 import type { CompileEvent, CompileLogEntry } from './use-session'
 import { useSimulator } from './use-simulator'
-import { usePanelData, type AppDataState } from './use-panel-data'
+import { usePanelData } from './use-panel-data'
 import { useRightPane } from './use-right-pane'
 import { usePopover } from './use-popover'
 
@@ -69,9 +69,8 @@ interface PanelDataSlice {
   wxmlEnabled: boolean
   storageSource: StoragePanelSource
   storageEnabled: boolean
-  appData: AppDataState
-  refreshAppData: () => void
-  setActiveAppDataBridge: (id: string) => void
+  appDataSource: AppDataPanelSource
+  appDataEnabled: boolean
 }
 
 interface RightPaneSlice {
@@ -148,6 +147,9 @@ export function useProjectRuntimeController(
     // Watcher-rebuild signal (resurrects the hot-reload guard a later refactor
     // deleted): each bump makes use-simulator respawn the DeviceShell once.
     hotReloadToken: sessionHook.hotReloadToken,
+    // Explicit-relaunch signal: forces a hard re-attach at startPage even when
+    // the URL is unchanged (重新编译 / retry resetting the drifted page).
+    relaunchNonce: sessionHook.relaunchNonce,
   })
 
   const panelDataHook = usePanelData({
@@ -202,9 +204,8 @@ export function useProjectRuntimeController(
       wxmlEnabled: panelDataHook.wxmlEnabled,
       storageSource: panelDataHook.storageSource,
       storageEnabled: panelDataHook.storageEnabled,
-      appData: panelDataHook.appData,
-      refreshAppData: panelDataHook.refreshAppData,
-      setActiveAppDataBridge: panelDataHook.setActiveAppDataBridge,
+      appDataSource: panelDataHook.appDataSource,
+      appDataEnabled: panelDataHook.appDataEnabled,
     },
     rightPane: {
       rightPane: rightPaneHook.rightPane,

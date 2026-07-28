@@ -62,7 +62,7 @@ export async function fsWriteContractSmoke(client: ProjectFsClient): Promise<voi
 // ── Reverse guards: opts objects that violate the contract must NOT
 // type-check against it. Expressed as an "assign to never on regression"
 // trick (no @ts-expect-error — that counts as a type-escape under this
-// repo's ratchet): `Assignable<Bad, Good>` is `false` today, so `Guard`
+// repo's gate): `Assignable<Bad, Good>` is `false` today, so `Guard`
 // below is `true` and the `const` assignment is inert; if a future change
 // widens FsWriteCallOpts enough that `Bad` becomes assignable, `Guard`
 // collapses to `never` and this file stops compiling.
@@ -77,7 +77,7 @@ void _guardRejectsBadActorLiteral
 // above (every FsWriteCallOpts field is optional, so `{ turnid: 'x' }`
 // structurally satisfies it once the mismatched key is erased by widening).
 // Expressing "this typo must be rejected" as a standing assertion would
-// therefore need either @ts-expect-error (banned by the ratchet) or a
+// therefore need either @ts-expect-error (banned by the gate) or a
 // direct literal assignment that hard-fails compilation forever (defeats
 // the point of a check file meant to go green). Left unexpressed here;
 // verified manually instead — see below.

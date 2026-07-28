@@ -14,7 +14,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
  * @param {string} [opts.simulatorDir] - Optional directory containing simulator shell assets
  * @param {boolean} [opts.liveReload=false] - Enable live reload via SSE
  * @param {Array<{ appId: string; name: string; path: string }>} [opts.sessionApps=[]] - Runtime app list injected by caller
- * @returns {Promise<import('http').Server | { server: import('http').Server, reload: () => void }>}
+ * @returns {Promise<import('http').Server | { server: import('http').Server, reload: () => void, reloadStyles: () => void }>}
  */
 export async function start({ port = 7788, containerDir, outputDir, simulatorDir, liveReload = false, sessionApps = [] } = {}) {
 	// One express app PER start(): routes registered on a shared module-level app
@@ -113,7 +113,7 @@ export async function start({ port = 7788, containerDir, outputDir, simulatorDir
 			console.log(`Server is running on port ${port}`)
 			console.log('Press Ctrl+C to stop')
 			if (!process.env.DIMINA_NO_OPEN_BROWSER) await open(`http://localhost:${port}`)
-			resolve(liveReload ? { server, reload: liveReloadHandle.reload } : server)
+			resolve(liveReload ? { server, reload: liveReloadHandle.reload, reloadStyles: liveReloadHandle.reloadStyles } : server)
 		})
 		server.on('error', (err) => {
 			if (err.code === 'EADDRINUSE') {

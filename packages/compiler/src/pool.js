@@ -162,14 +162,15 @@ export function createCompilerPool(options = {}) {
   async function runAttempt(files, workPath, options) {
     await settleAll(workers.map(ensureWarm))
 
-    // Setup step — one worker runs setup ONCE: it allocates the scope-hash ids
-    // (page + component data-v-XXXXX) and builds miniprogram_npm/app-config.json.
-    // Broadcasting this single bundle to every stage is REQUIRED for correctness:
-    // each stage runs in its own realm, and if each ran its own setup it would roll
-    // independent random uuids, so the CSS `[data-v-X]` selectors would never match
-    // the render `Module id` and every WXSS rule would target nothing (regression
-    // guarded by scripts/test-pool-scopehash.js). This mirrors the Node disk pool,
-    // which likewise sets up once and fans the same { pages, storeInfo } out.
+    // Setup step — one worker runs setup ONCE: it parses config, builds
+    // miniprogram_npm + app-config.json (the npm build can invoke the wasm toolchain)
+    // and produces the scaffold. The resulting { pages, storeInfo } bundle is
+    // broadcast to every stage so this heavy work runs once instead of per stage.
+    // Scope ids are a deterministic hash(path) (dimina utils.js), so each stage would
+    // derive identical `data-v-<id>` even from its own setup — the broadcast is a
+    // de-dup optimization, NOT a scope-correctness requirement (scripts/test-pool-scopehash.js
+    // asserts per-stage independent setup stays scope-consistent). Mirrors the Node
+    // disk pool, which likewise sets up once and fans the same { pages, storeInfo } out.
     // `options` (e.g. { fileTypes }) only needs to reach THIS setup call: dmcc's
     // storeInfo() bakes the normalized dialect into the returned storeInfo object
     // (dimina/fe/packages/compiler/src/env.js:106-120), which rides inside `bundle`

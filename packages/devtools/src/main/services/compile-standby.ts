@@ -64,6 +64,10 @@ export function setupCompileWorkerStandby(
         severity: EVENT_SEVERITY[ev.type] ?? 'info',
         code: 'compile-standby',
         message: detail,
+        // Devtools-tooling-only state, unrelated to the inspected mini-program
+        // — must never reach the right-panel (user-facing) Console panel; see
+        // console-forward/index.ts's audience gate and global-diagnostics-mirror.ts.
+        audience: 'internal',
       })
     } catch {
       // telemetry must never break the standby

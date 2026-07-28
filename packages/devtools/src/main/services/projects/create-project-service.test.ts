@@ -277,3 +277,85 @@ describe('createProject — happy path', () => {
     expect(cfg.projectname).toBe('CG')
   })
 })
+
+/**
+ * Contract: template-source copying must avoid Node's synchronous
+ * `fs.cpSync` native fast path (`cpSyncCopyDir`, used whenever no `filter`
+ * option is passed). Without a `filter`, that internal binding can
+ * `abort()`/`std::terminate()` the whole process on certain filesystem
+ * errors (long paths, restricted permissions, non-ASCII paths — mainly hit
+ * on Windows) instead of throwing a catchable JS exception
+ * (tracked upstream as nodejs/node#63970). `fs.promises.cp` is Node's
+ * fully-async, pure-JS-path copy implementation and never reaches that
+ * native binding.
+ */
+describe('createProject — async copy avoids fs.cpSync native fast path', () => {
+  it('copies the template source via fs.promises.cp, never fs.cpSync', async () => {
+    const target = path.join(makeTmpDir(), 'new')
+    const fixture = makeFixtureTemplate()
+    const ctx = makeCtx({
+      templates: [
+        {
+          id: 'blank',
+          name: 'Blank',
+          source: { type: 'directory', path: fixture },
+        },
+      ],
+    })
+
+    const cpSyncSpy = vi.spyOn(fs, 'cpSync')
+    const cpAsyncSpy = vi.spyOn(fs.promises, 'cp')
+
+    try {
+      await createProject(
+        { name: 'My App', path: target, templateId: 'blank' },
+        ctx,
+      )
+
+      expect(cpSyncSpy).not.toHaveBeenCalled()
+      expect(cpAsyncSpy).toHaveBeenCalledTimes(1)
+      expect(cpAsyncSpy).toHaveBeenCalledWith(
+        fixture,
+        target,
+        expect.objectContaining({ recursive: true, force: true }),
+      )
+      // The copy still actually happened.
+      expect(fs.existsSync(path.join(target, 'app.json'))).toBe(true)
+    } finally {
+      cpSyncSpy.mockRestore()
+      cpAsyncSpy.mockRestore()
+    }
+  })
+
+  it('propagates a template-copy failure as an awaited rejection from createProject(...)', async () => {
+    const target = path.join(makeTmpDir(), 'new')
+    const fixture = makeFixtureTemplate()
+    const ctx = makeCtx({
+      templates: [
+        {
+          id: 'blank',
+          name: 'Blank',
+          source: { type: 'directory', path: fixture },
+        },
+      ],
+    })
+
+    const copyError = new Error(
+      'simulated copy failure (e.g. EPERM on a restricted path)',
+    )
+    const cpAsyncSpy = vi
+      .spyOn(fs.promises, 'cp')
+      .mockRejectedValue(copyError)
+
+    try {
+      await expect(
+        createProject(
+          { name: 'My App', path: target, templateId: 'blank' },
+          ctx,
+        ),
+      ).rejects.toThrow(copyError.message)
+    } finally {
+      cpAsyncSpy.mockRestore()
+    }
+  })
+})

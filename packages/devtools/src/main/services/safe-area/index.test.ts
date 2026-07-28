@@ -10,22 +10,31 @@
  * The fallback path (no `connections`) is covered by the existing
  * device/safe-area behaviour; here we focus on the connection-routed teardown.
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import type { WebContents } from 'electron'
 
 import { createConnectionRegistry } from '@dimina-kit/electron-deck/main'
 import { createSafeAreaController } from './index.js'
+import { createCdpSessionBroker } from '../cdp-session/index.js'
 
 type AnyFn = (...args: unknown[]) => unknown
 
 /** Minimal emitter-backed WebContents fake (id/once/emit/isDestroyed + the
  *  debugger surface safe-area touches). `sink` captures every `sendCommand`. */
+// The broker (see cdp-session/index.ts, which safe-area now goes through
+// instead of touching wc.debugger directly) reads isAttached()/on()/
+// removeListener() in addition to attach()/detach()/sendCommand() — this fake
+// grows the same surface. Existing assertions (connection-routed teardown,
+// per-page-type bottom inset) are unchanged; only the mock's surface area
+// needed to widen to match the broker's dependency.
 function makeWc(
   id: number,
   sink?: Array<{ method: string; params: unknown }>,
 ): WebContents & { emit: (e: string) => void } {
   const listeners: Record<string, Set<AnyFn>> = {}
+  const dbgListeners: Record<string, Set<AnyFn>> = {}
   let destroyed = false
+  let dbgAttached = false
   const wc = {
     id,
     once(event: string, fn: AnyFn) {
@@ -42,12 +51,19 @@ function makeWc(
     },
     isDestroyed: () => destroyed,
     debugger: {
-      attach: () => {},
-      detach: () => {},
+      isAttached: () => dbgAttached,
+      attach: vi.fn(() => { dbgAttached = true }),
+      detach: vi.fn(() => {
+        if (!dbgAttached) return
+        dbgAttached = false
+        for (const fn of [...(dbgListeners.detach ?? [])]) fn()
+      }),
       sendCommand: (method: string, params: unknown) => {
         sink?.push({ method, params })
         return Promise.resolve({})
       },
+      on: (event: string, fn: AnyFn) => { (dbgListeners[event] ??= new Set()).add(fn) },
+      removeListener: (event: string, fn: AnyFn) => { dbgListeners[event]?.delete(fn) },
     },
   }
   return wc as unknown as WebContents & { emit: (e: string) => void }
@@ -121,5 +137,54 @@ describe('createSafeAreaController per-page-type bottom inset', () => {
     controller.reapplyAll(DEVICE)
     expect(lastInsets(sinkTab).bottom).toBe(0)
     expect(lastInsets(sinkPage).bottom).toBe(34)
+  })
+
+  // A codex adversarial review caught this: `applyToGuest` never subscribed to
+  // `lease.onDetach`, so after an external detach `reapplyAll`/`override` kept
+  // calling `.send()` on a dead lease instead of reacquiring — env overrides
+  // would silently stop recovering for a still-live guest.
+  it('reacquires and keeps applying insets after the debugger session is externally detached', () => {
+    const sink: Array<{ method: string; params: unknown }> = []
+    const wc = makeWc(5, sink)
+    const controller = createSafeAreaController()
+    controller.applyToGuest(wc, DEVICE, false)
+    expect(lastInsets(sink).bottom).toBe(34)
+
+    // Something outside safe-area detaches the shared debugger session
+    // (another owner releasing it, or a real Chrome DevTools window).
+    ;(wc.debugger.detach as unknown as () => void)()
+    sink.length = 0
+
+    // reapplyAll must reacquire (not silently no-op on a stale lease) and
+    // keep applying the SAME page-type policy this guest attached with.
+    controller.reapplyAll(DEVICE)
+    expect(sink.length).toBeGreaterThan(0)
+    expect(lastInsets(sink).bottom).toBe(34)
+  })
+})
+
+describe('createSafeAreaController broker ownership', () => {
+  it('disposes a private (non-injected) broker on dispose(), detaching self-attached sessions', () => {
+    const wc = makeWc(6)
+    const controller = createSafeAreaController() // no broker injected -> owns a private one
+    controller.applyToGuest(wc, null, false)
+    expect(wc.debugger.attach).toHaveBeenCalled()
+
+    controller.dispose()
+
+    expect(wc.debugger.detach).toHaveBeenCalledTimes(1)
+  })
+
+  it('does NOT dispose an injected (shared) broker on dispose() — other consumers may still need it', () => {
+    const broker = createCdpSessionBroker()
+    const wc = makeWc(7)
+    const controller = createSafeAreaController({ broker })
+    controller.applyToGuest(wc, null, false)
+    expect(wc.debugger.attach).toHaveBeenCalled()
+
+    controller.dispose()
+
+    // The shared broker's session must survive this controller's own dispose.
+    expect(wc.debugger.detach).not.toHaveBeenCalled()
   })
 })

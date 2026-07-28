@@ -21,11 +21,20 @@ export interface Diagnostic {
   message: string
   appSessionId?: string
   ts: number
+  /**
+   * Who this diagnostic is for. `'internal'` means devtools-tooling-only
+   * state (e.g. compile-standby's warm-pool lifecycle) that must never reach
+   * the per-project service-host console the right-panel CDP is attached to
+   * — see `console-forward/index.ts`'s `handleDiagnostic` gate. `'user'` or
+   * omitted means the existing behavior: a real diagnostic about the
+   * inspected mini-program, injected into that project's Console panel.
+   */
+  audience?: 'user' | 'internal'
 }
 
 export interface DiagnosticsBus {
   /** Record one diagnostic: buffers it, mirrors it to the main-process console, and synchronously notifies every live subscriber. No-op after `dispose()`. */
-  report(d: { severity: DiagnosticSeverity; code: string; message: string; appSessionId?: string }): void
+  report(d: { severity: DiagnosticSeverity; code: string; message: string; appSessionId?: string; audience?: 'user' | 'internal' }): void
   /**
    * Register a sink. With `replay` (default true) the sink is first called,
    * in order, for every buffered diagnostic still held, then for every

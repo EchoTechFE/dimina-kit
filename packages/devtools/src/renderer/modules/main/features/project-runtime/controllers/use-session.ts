@@ -15,6 +15,7 @@ import {
 } from '@/shared/api'
 import type { AppInfo, CompileLogEntry, SessionRuntimeStatusPayload } from '@/shared/api'
 import type { CompileConfig } from '@/shared/types'
+import type { CompileEvent } from '@dimina-kit/inspect'
 import { DEFAULT_SCENE } from '../../../../../../shared/constants'
 import type { CompileStatus } from './use-project-runtime-controller'
 
@@ -22,26 +23,12 @@ export interface UseSessionProps {
   projectPath: string
 }
 
-/**
- * One entry of the 编译 tab's event log. Sourced EXCLUSIVELY from
- * `projectStatus` payloads — per-line dmcc output lands in `compileLogs`
- * instead; the two stores never cross (merging is a view concern).
- */
-export interface CompileEvent {
-  /** Wall-clock capture time (Date.now) of the payload's arrival. */
-  at: number
-  status: string
-  message: string
-  /** True when the payload came from a watcher rebuild (热更新 chip). */
-  hotReload?: boolean
-  /**
-   * Optional shared monotonic arrival counter spanning compile events AND
-   * compile logs — the panel's same-`at` tie-break: `at` is a
-   * millisecond stamp, so an event and the log lines of the same compile
-   * routinely collide on it.
-   */
-  seq?: number
-}
+// The 编译 tab's event log entry shape lives in @dimina-kit/inspect (shared
+// with CompilePanel); re-exported here so existing importers (the controller
+// slice, tests) keep their `from '.../use-session'` path. Sourced EXCLUSIVELY
+// from `projectStatus` payloads — per-line dmcc output lands in `compileLogs`
+// instead; the two stores never cross (merging is a view concern).
+export type { CompileEvent }
 
 export type { CompileLogEntry }
 
@@ -77,6 +64,11 @@ export interface SessionHookResult {
   /** Empty BOTH compileEvents and compileLogs (the panel's single 清空). */
   clearCompileEvents: () => void
   relaunch: (nextConfig?: CompileConfig) => Promise<void>
+  /**
+   * Bumped on every explicit `relaunch` so the simulator attach effect forces a
+   * fresh hard attach at `startPage` even when the URL is unchanged.
+   */
+  relaunchNonce: number
   /**
    * Latest runtime-lifecycle push for the active session (launching/running/
    * launch-failed/crashed, plus an optional start-page fallback). `null`
@@ -256,6 +248,14 @@ export function useSession(props: UseSessionProps): SessionHookResult {
   }, [])
 
   const isRefreshing = useRef(false)
+  // Bumped by every explicit relaunch (重新编译 / error-overlay retry). The
+  // native attach effect keys re-attaches on `simulatorUrl` OR this nonce, so an
+  // explicit relaunch forces a fresh hard attach at `startPage` EVEN when the
+  // resulting URL is byte-identical. Without it, relaunching to a `startPage`
+  // that equals the current config's `startPage` yields an unchanged
+  // `simulatorUrl`, the effect never re-runs, and the simulator stays on
+  // whatever page it drifted to (in-app nav / hot reload) instead of resetting.
+  const [relaunchNonce, setRelaunchNonce] = useState(0)
 
   const relaunch = useCallback(
     async (nextConfig: CompileConfig = compileConfig) => {
@@ -273,6 +273,9 @@ export function useSession(props: UseSessionProps): SessionHookResult {
           await saveCompileConfig(projectPath, nextConfig)
           // Triggers the native re-attach effect (simulatorUrl depends on this).
           setCompileConfig(nextConfig)
+          // Force the re-attach even when nextConfig leaves simulatorUrl
+          // unchanged — an explicit relaunch always resets to startPage.
+          setRelaunchNonce((n) => n + 1)
           setCompileStatus({ status: 'ready', message: '刷新完成' })
         } finally {
           isRefreshing.current = false
@@ -299,6 +302,7 @@ export function useSession(props: UseSessionProps): SessionHookResult {
     compileLogs,
     clearCompileEvents,
     relaunch,
+    relaunchNonce,
     runtimeStatus,
     watcherDead,
   }

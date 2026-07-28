@@ -3,6 +3,7 @@ import type { CustomCreateProjectDialogResult } from '../../../shared/types'
 import type { ProjectCreateDefaults } from '../../../shared/ipc-channels'
 import { ProjectsChannel, DialogChannel, ProjectChannel, SessionChannel } from '../../../shared/ipc-channels'
 import { invoke, invokeStrict, on } from './ipc-transport'
+import type { CompileLogEntry } from '@dimina-kit/inspect'
 
 export interface AppInfo {
   appId: string
@@ -42,24 +43,12 @@ export interface SessionRuntimeStatusPayload {
   code?: string
 }
 
-/**
- * One per-line dmcc compile-log entry pushed by the main process on
- * `project:compileLog` (see `RendererNotifier.compileLog`). `at` is the
- * main-process capture timestamp.
- */
-export interface CompileLogEntry {
-  at: number
-  stream: 'stdout' | 'stderr'
-  text: string
-  /**
-   * Optional shared monotonic arrival counter spanning compile EVENTS and
-   * LOGS. `at` is a millisecond stamp, so a status event and the log lines
-   * of the same compile routinely collide on the same `at` — the panel uses
-   * `seq` as the same-`at` tie-break so the merged timeline keeps true
-   * arrival order.
-   */
-  seq?: number
-}
+// The per-line dmcc compile-log entry shape lives in @dimina-kit/inspect
+// (shared with CompilePanel); re-exported here so existing importers keep
+// their `from '.../project-api'` path. Pushed by the main process on
+// `project:compileLog` (see `RendererNotifier.compileLog`); `at` is the
+// main-process capture timestamp.
+export type { CompileLogEntry }
 
 /** Enumerate all known projects from the workspace store. */
 export function listProjects(): Promise<Project[]> {

@@ -82,6 +82,7 @@ function makeBaseProps(): UseSimulatorProps {
     port: 7788,
     projectPath: '/tmp/soft-reload-project',
     hotReloadToken: 0,
+    relaunchNonce: 0,
   }
 }
 

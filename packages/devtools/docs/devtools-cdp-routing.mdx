@@ -97,7 +97,7 @@ direction: right
   </thead>
   <tbody>
     <tr><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)', color: 'hsl(160 70% 70%)' }}><b>Console</b></td><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)' }}>service-host（逻辑层）</td><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)' }}>Electron 原生 attach</td><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)' }}>✅ 零开销</td></tr>
-    <tr><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)', color: 'hsl(28 80% 70%)' }}><b>Network</b></td><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)' }}>simulator WCV</td><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)' }}>CDP 抓取 + dispatchMessage 注入</td><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)' }}>✅ 一期（列表/headers/timing）</td></tr>
+    <tr><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)', color: 'hsl(28 80% 70%)' }}><b>Network</b></td><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)' }}>simulator WCV + 每个 active render guest（页面本体的图片/字体等资源加载）</td><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)' }}>CDP 抓取 + dispatchMessage 注入；body/postData 预取缓存回答（forwarder 级并发上限 + 大小预筛防内存打爆）</td><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)' }}>✅ 列表/headers/timing/Response body/请求 payload</td></tr>
     <tr><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)', color: 'hsl(210 80% 72%)' }}><b>Elements</b></td><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)' }}>active render guest</td><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)' }}>sendMessageToBackend hook + 路由</td><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)' }}>🟢 已落地（默认开启，只读浏览）</td></tr>
     <tr><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)', opacity: .6 }}>Sources/Memory/…</td><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)' }}>—</td><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)' }}>转 transient（不删除）</td><td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)' }}>✅ 默认隐藏，Cmd+Shift+P 可调出</td></tr>
   </tbody>
@@ -144,7 +144,7 @@ function routeByDomain(method): 'render' | 'service' {
 }`}</pre>
 </div>
 
-- **出站**：前端的 `InspectorFrontendHost.sendMessageToBackend` 被包了一层。命中 render 前缀的命令被拦下，交给主进程转发到 active render guest；**其余一切（含 Emulation / Page / Target）原样透传 = 原生 service-host**。Network 面板则由 network-forward 反向注入——它监听 simulator 的 Network.\* **事件**并 dispatch 进前端（前端发出的 Network 命令本身仍透传给 service-host；`getResponseBody` 等命令往返是二期）。
+- **出站**：前端的 `InspectorFrontendHost.sendMessageToBackend` 被包了一层——**唯一**的出站 CDP 闸口（`routeOutboundCommand` 是唯一判据函数）。命中 render 前缀的命令被拦下，交给主进程转发到 active render guest；`Network.getResponseBody` / `Network.getRequestPostData` 且 requestId 带 `dimina:sim:` 虚拟前缀的，由主进程从 network-forward 的预取缓存回答（service-host 根本不认识这些 id）；**其余一切（含 Emulation / Page / Target）原样透传 = 原生 service-host**。Network 面板的**事件**侧由 network-forward 反向注入——它监听 simulator 的 Network.\* 事件并 dispatch 进前端。
 - **入站**：render 的响应/事件、simulator 的 Network 事件，都经 `window.DevToolsAPI.dispatchMessage` 推送回前端（大 payload 走 `dispatchMessageChunk` 分片）。
 - **三个后端**：`service-host` 是**隐式默认**（不拦、透传即得）；`render`（elements-forward）认领 DOM / CSS / Overlay / DOMSnapshot / DOMDebugger；`simulator`（network-forward）认领 Network。
 
@@ -160,7 +160,7 @@ function routeByDomain(method): 'render' | 'service' {
   </tr></thead>
   <tbody>
     <tr><td style={{ padding: '7px', border: '1px solid hsl(0 0% 24%)' }}>Runtime / Console / Debugger / Profiler / Log / Sources</td><td style={{ padding: '7px', border: '1px solid hsl(0 0% 24%)', color: 'hsl(160 70% 70%)' }}>service-host</td><td style={{ padding: '7px', border: '1px solid hsl(0 0% 24%)' }}>原生透传（零开销）</td></tr>
-    <tr><td style={{ padding: '7px', border: '1px solid hsl(0 0% 24%)' }}>Network（事件）</td><td style={{ padding: '7px', border: '1px solid hsl(0 0% 24%)', color: 'hsl(28 80% 70%)' }}>simulator WCV</td><td style={{ padding: '7px', border: '1px solid hsl(0 0% 24%)' }}>抓 simulator 的 Network.* 事件 → requestId 命名空间化 → 推送到面板前端</td></tr>
+    <tr><td style={{ padding: '7px', border: '1px solid hsl(0 0% 24%)' }}>Network（事件 + body/postData 回查）</td><td style={{ padding: '7px', border: '1px solid hsl(0 0% 24%)', color: 'hsl(28 80% 70%)' }}>simulator WCV + 每个 active render guest</td><td style={{ padding: '7px', border: '1px solid hsl(0 0% 24%)' }}>抓 simulator（`wx.request` 等）与 render guest（页面本体图片/字体等资源加载）各自的 Network.* 事件 → requestId 命名空间化 → 推送到面板前端；loadingFinished 时预取 body/postData 存有界缓存（forwarder 级并发上限 + 按 `encodedDataLength` 预筛跳过明显超限的），前端对 `dimina:sim:` id 的 `getResponseBody`/`getRequestPostData` 经出站闸口从缓存回答</td></tr>
     <tr><td style={{ padding: '7px', border: '1px solid hsl(0 0% 24%)' }}>DOM / CSS / Overlay / DOMSnapshot / DOMDebugger</td><td style={{ padding: '7px', border: '1px solid hsl(0 0% 24%)', color: 'hsl(210 80% 72%)' }}>active render guest</td><td style={{ padding: '7px', border: '1px solid hsl(0 0% 24%)' }}>转发 render debugger + 推回前端</td></tr>
     <tr style={{ background: 'hsl(0 50% 12%)' }}><td style={{ padding: '7px', border: '1px solid hsl(0 40% 35%)' }}><b>Emulation</b> 🚫</td><td style={{ padding: '7px', border: '1px solid hsl(0 40% 35%)', color: 'hsl(160 70% 70%)' }}>service-host（红线）</td><td style={{ padding: '7px', border: '1px solid hsl(0 40% 35%)' }}>safe-area 主进程直发，前端 Emulation 绝不路由 render</td></tr>
     <tr><td style={{ padding: '7px', border: '1px solid hsl(0 0% 24%)' }}>Page / Target / Input</td><td style={{ padding: '7px', border: '1px solid hsl(0 0% 24%)' }}>service-host</td><td style={{ padding: '7px', border: '1px solid hsl(0 0% 24%)' }}>透传（结构性默认，同 Emulation）</td></tr>
@@ -173,7 +173,7 @@ function routeByDomain(method): 'render' | 'service' {
 
 ### 为什么要收敛成这层（vs 维持两套各自打补丁）
 
-1. **消双 hook 冲突**：Elements 已 hook `sendMessageToBackend`；Network 二期（`getResponseBody`）也要 hook 它。两处各自 monkey-patch 会互相覆盖——只有让 router 持**唯一**包装器才安全。
+1. **消双 hook 冲突（已按此原则落地）**：`sendMessageToBackend` 只有 elements-forward 安装的**唯一**包装器；Network 的 `getResponseBody`/`getRequestPostData` 拦截没有另起 monkey-patch，而是并入同一闸口的路由表（`routeOutboundCommand`），主进程 drain 时按 route 标签分派给 render guest 或 network 预取缓存。两处各自 monkey-patch 会互相覆盖——唯一包装器是安全的结构保证。
 2. **去重**：chunk / dispatch / 轮询这套样板，现在 network-forward 和 elements-forward **各写了一份**，收敛后只需一份。
 3. **单 lifecycle owner**：pool-swap 重指向、frontend re-ready 时统一 rebind。当前各服务自管：`installElementsForward` 持续监听 devtoolsWc 的 `dom-ready`，每次前端（重）加载都幂等重装 hook（前端重载 / pool-swap 重开 DevTools 会清空 `globalThis.__diminaElementsHookInstalled`，单次 `once` 会让 Elements 回落到 service-host DOM）；network-forward 经 `setDevtoolsHost` 重 arm。收敛的收益是把这套 re-ready 重绑交给一个 owner，而非两个服务各自监听。
 
@@ -184,7 +184,7 @@ function routeByDomain(method): 'render' | 'service' {
 ## 5. Elements 路由的两个关键约束
 
 - **DOM re-pull 是主机制，不是兜底**：DevTools 前端在 bootstrap 阶段就 eager 发 `DOM.enable` + `DOM.getDocument`（不等用户点 Elements），首拉打到的是 service-host。所以 active render guest 一旦就绪/切换，靠 `DOM.documentUpdated` 触发前端重拉、把 DOM 树换成 render 的真身。
-- **复用 safe-area 的 debugger session，不抽 broker**：Elements 路由不为 render guest 单独 attach 一个 debugger，而是直接复用 safe-area 服务已 attach 的 session（`sendCommand` + 额外 `on('message')`），只在 safe-area 降级、没人 attach 时才自己 `attach('1.3')`，且只 detach 自己 attach 的。零 safe-area 改动。
+- **经共享 `CdpSessionBroker` 拿 render guest 会话**（`services/cdp-session/`）：safe-area、elements-forward、render-inspect、network-forward 四个消费者都从同一个 broker `acquire(wc)` 拿 lease，而不是各自维护"复用已 attach 的、没人 attach 我才自己 attach"的记账——这套模式曾各写一份，谁先 detach 就误杀别人正在用的会话（已修复的真实 bug）。broker 是"谁 attach、谁能 detach"的唯一权威：一个 consumer 释放 lease 从不强制物理 detach，只有 broker 自己的顶层 `dispose()`（应用生命周期）才会 detach 它自己 attach 过的会话；外部 detach（真实 Chrome DevTools 抢占）或 wc 销毁会经 `lease.onDetach` 通知，consumer 借此自愈重新 acquire。
 
 ---
 
@@ -199,7 +199,7 @@ function routeByDomain(method): 'render' | 'service' {
   </tr></thead>
   <tbody>
     <tr>
-      <td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)', verticalAlign: 'top' }}>看 render DOM 树 / 改不了的只读浏览<br/>matched / computed styles（只读）<br/>选取高亮（inspect element）<br/>Network 请求列表 / headers / timing</td>
+      <td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)', verticalAlign: 'top' }}>看 render DOM 树 / 改不了的只读浏览<br/>matched / computed styles（只读）<br/>选取高亮（inspect element）<br/>Network 请求列表 / headers / timing / Response body / 请求 payload（预取缓存回答）</td>
       <td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)', verticalAlign: 'top' }}>Console <code>$0</code> 求值（Runtime 落 service，拿不到 render 节点）<br/>Elements → Sources 跳转<br/>Network initiator 栈跳源<br/>样式编辑回写（二期）</td>
     </tr>
   </tbody>
@@ -216,14 +216,14 @@ function routeByDomain(method): 'render' | 'service' {
 | Console（前端 attach） | Electron `setDevToolsWebContents`（`view-manager` `pointNativeDevtoolsAtServiceWc`） | 原生 attach 到 service-host |
 | Console 汇聚（guest console sink） | `services/console-forward/` | 拥有 `consoleLog` sink：把 render 层（`source:'render'`）的日志重新打进 service-host 窗口的 `console`（带 `[视图]` 前缀），使前端在 service-host 一处即可看到两层日志，并 fan-out 给 automation `App.logAdded`。同时订阅 `services/diagnostics/` 总线：main 合成诊断（page-not-found / logic-bundle-unreachable / app-config-unreachable 等）以 `[dimina-kit]` 前缀注入**归属 session** 的 service-host console（host 未就绪按 session 排队，`notifyServiceHostReady` 冲洗；同用 sentinel 防回环） |
 | Console 捕获（service 层 → automation） | `services/service-console/` | CDP `Runtime.consoleAPICalled` attach 到 service-host wc（**非** preload monkeypatch——包装 `console.*` 会多压一帧，使前端把每条日志归因到包装器而非源码）；喂同一个 fan-out。注入的 `[视图]` 行靠 sentinel sourceURL 跳过防重复 |
-| Network 注入 | `services/network-forward/` | `DevToolsAPI.dispatchMessage`（事件） |
-| Elements 路由 | `services/elements-forward/` | hook `sendMessageToBackend` + 推回前端 |
+| Network 注入 | `services/network-forward/` | `attachSimulator` + `attachRenderGuest` 均经共享 `CdpSessionBroker`（`services/cdp-session/`）拿会话 lease 抓事件、`DevToolsAPI.dispatchMessage` 注入前端；render guest 会话意外 detach 时经 `lease.onDetach` 自愈重新 acquire（此前 `attachRenderGuest` 只在 guest 创建时调一次，外部 detach 会永久断抓包——已修复）；loadingFinished 预取 body/postData 入有界缓存（`bodies`，forwarder 级并发上限 + 大小预筛），供出站闸口回答 `dimina:sim:` id 的 `getResponseBody`/`getRequestPostData` |
+| Elements 路由 + 出站 CDP 闸口 | `services/elements-forward/` | hook `sendMessageToBackend`（唯一包装器，`routeOutboundCommand` 路由 render/network/service 三路）+ 推回前端 |
 | 点源码 → Monaco | `view-manager` `injectOpenResourceHandler` → `shared/open-in-editor.ts` | 捕获阶段拦截 `.devtools-link` 点击 → `InspectorFrontendHost.openInNewTab(<sentinel>)`（旧 `setOpenResourceHandler` 在当前 Chromium 已移除，仅作降级 fallback）。`projectAwareResourcePath` 只放行落在当前项目根内的源；构建/运行时 chunk（`common.js`/`vendors.js`/`runtime.js`/`taro.js`/`babelHelpers.js`）被排除——它们是编译产物，且 dimina 运行时的 `common.js` 与项目 chunk 共用同一 dev-server URL，放行会误开项目文件 |
 | tab 定制（保留 Element/Console/Network/Sources） | `services/views/devtools-tabs.ts` | DevTools view registry：`import('./ui/legacy/legacy.js')` → 把非保留 panel `maybeRemoveViewExtension` + 重注册为 **transient**（默认不在栏里、Cmd+Shift+P 仍可调出，无 `>>`/`×` 残留）。Sources 保留：未路由到 Monaco 的源链接点击（构建/运行时 chunk、框架帧）落到这里显示，不再静默无反应 |
 | 默认 Console + 关 locale infobar | `view-manager`（localStorage `panel-selectedTab`）/ `devtools-tabs.ts` | localStorage + 官方 `InspectorFrontendHost.setPreference('disable-locale-info-bar','true')` |
 
 > **Elements 路由两个要点**：
-> 1. **复用、不抢占**：直接用 safe-area 已 attach 的那个 debugger session 收发（只在 safe-area 降级、没人 attach 时才自己 `attach('1.3')`），且只 detach 自己 attach 的，绝不动别人的。
+> 1. **复用、不抢占**：经共享 `CdpSessionBroker` 拿 render guest 的 debugger session lease（safe-area / render-inspect / network-forward 用同一个 broker 实例），broker 内部决定复用已 attach 的还是自己 attach——consumer 自己从不直接 `attach`/`detach`，也就没人能误杀别人正在用的会话。
 > 2. **实时判陈旧，而非快照**：一条事件/响应是否已过期，是按「它来自的那个 wc **此刻是否仍是 active render guest**」当场判定的（代码里的 `isActiveWcId`），没有用任何 generation 计数快照。好处是 `switchTab` / `navigateBack` 切回旧页后，旧 guest 的 DOM 增量事件能**自动恢复**转发——快照式实现会把它永久 strand 在过期态。
 
 ---

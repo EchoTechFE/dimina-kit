@@ -95,13 +95,13 @@ export default [
       ],
     },
   },
-  // ── WorkbenchContext import RATCHET ───────────────────────────────────────
+  // ── WorkbenchContext import GATE ───────────────────────────────────────
   // Production modules must not grow new dependencies on the full
   // `WorkbenchContext` grab-bag: depend on `MiniappRuntime` / `MenuContext` /
   // a module-local narrow deps interface instead.
   //
   // EXEMPTION MECHANISM (round 3): exemptions are PER-LINE inline directives,
-  // not per-file config entries. Each violation existing when the ratchet
+  // not per-file config entries. Each violation existing when the gate
   // landed carries
   //   // eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
   // directly above it. The inline marker set is shrink-only: migrate a line
@@ -124,7 +124,7 @@ export default [
         {
           selector: "ImportSpecifier[imported.name='WorkbenchContext']",
           message:
-            "Ratchet: do not import WorkbenchContext outside assembly layers. Depend on MiniappRuntime / MenuContext / a module-local narrow deps interface instead (exemptions are inline grandfathered(workbench-context) directives; shrink-only).",
+            "Gate: do not import WorkbenchContext outside assembly layers. Depend on MiniappRuntime / MenuContext / a module-local narrow deps interface instead (exemptions are inline grandfathered(workbench-context) directives; shrink-only).",
         },
         {
           // Namespace bypass: `import * as Wb from '…/workbench-context.js'`
@@ -135,7 +135,7 @@ export default [
           selector:
             "ImportDeclaration[source.value=/workbench-context(\\.js)?$/] ImportNamespaceSpecifier",
           message:
-            "Ratchet: do not namespace-import workbench-context outside assembly layers. Depend on MiniappRuntime / MenuContext / a module-local narrow deps interface instead (exemptions are inline grandfathered(workbench-context) directives; shrink-only).",
+            "Gate: do not namespace-import workbench-context outside assembly layers. Depend on MiniappRuntime / MenuContext / a module-local narrow deps interface instead (exemptions are inline grandfathered(workbench-context) directives; shrink-only).",
         },
         {
           // Type-query bypass: `type T = import('…/workbench-context.js').X`
@@ -146,7 +146,7 @@ export default [
           // reasoning as the namespace-import selector above.
           selector: "TSImportType[source.value=/workbench-context(\\.js)?$/]",
           message:
-            "Ratchet: do not type-query import('…/workbench-context.js') outside assembly layers. Depend on MiniappRuntime / MenuContext / a module-local narrow deps interface instead (exemptions are inline grandfathered(workbench-context) directives; shrink-only).",
+            "Gate: do not type-query import('…/workbench-context.js') outside assembly layers. Depend on MiniappRuntime / MenuContext / a module-local narrow deps interface instead (exemptions are inline grandfathered(workbench-context) directives; shrink-only).",
         },
         {
           // Re-export bypass: `export { WorkbenchContext } from '…'` (plus
@@ -158,7 +158,7 @@ export default [
           selector:
             "ExportNamedDeclaration[source.value=/workbench-context(\\.js)?$/] ExportSpecifier[local.name='WorkbenchContext']",
           message:
-            "Ratchet: do not re-export WorkbenchContext outside assembly layers — that creates a new distribution point for the grab-bag. Depend on MiniappRuntime / MenuContext / a module-local narrow deps interface instead (exemptions are inline grandfathered(workbench-context) directives; shrink-only).",
+            "Gate: do not re-export WorkbenchContext outside assembly layers — that creates a new distribution point for the grab-bag. Depend on MiniappRuntime / MenuContext / a module-local narrow deps interface instead (exemptions are inline grandfathered(workbench-context) directives; shrink-only).",
         },
         {
           // Export-star bypass: `export * from '…/workbench-context.js'`
@@ -168,7 +168,7 @@ export default [
           selector:
             "ExportAllDeclaration[source.value=/workbench-context(\\.js)?$/]",
           message:
-            "Ratchet: do not `export *` from workbench-context outside assembly layers — it re-exports the whole grab-bag. Depend on MiniappRuntime / MenuContext / a module-local narrow deps interface instead (exemptions are inline grandfathered(workbench-context) directives; shrink-only).",
+            "Gate: do not `export *` from workbench-context outside assembly layers — it re-exports the whole grab-bag. Depend on MiniappRuntime / MenuContext / a module-local narrow deps interface instead (exemptions are inline grandfathered(workbench-context) directives; shrink-only).",
         },
         {
           // Dynamic-import bypass: a RUNTIME `import('…/workbench-context.js')`
@@ -179,7 +179,7 @@ export default [
           selector:
             "ImportExpression[source.value=/workbench-context(\\.js)?$/]",
           message:
-            "Ratchet: do not dynamically import('…/workbench-context.js') outside assembly layers. Depend on MiniappRuntime / MenuContext / a module-local narrow deps interface instead (exemptions are inline grandfathered(workbench-context) directives; shrink-only).",
+            "Gate: do not dynamically import('…/workbench-context.js') outside assembly layers. Depend on MiniappRuntime / MenuContext / a module-local narrow deps interface instead (exemptions are inline grandfathered(workbench-context) directives; shrink-only).",
         },
         {
           // Module-augmentation bypass: `declare module '…/workbench-context.js'
@@ -193,7 +193,7 @@ export default [
           selector:
             "TSModuleDeclaration[id.value=/workbench-context(\\.js)?$/]",
           message:
-            "Ratchet: do not augment ('declare module') workbench-context outside assembly layers — that silently widens the grab-bag for everyone. Depend on MiniappRuntime / MenuContext / a module-local narrow deps interface instead (exemptions are inline grandfathered(workbench-context) directives; shrink-only).",
+            "Gate: do not augment ('declare module') workbench-context outside assembly layers — that silently widens the grab-bag for everyone. Depend on MiniappRuntime / MenuContext / a module-local narrow deps interface instead (exemptions are inline grandfathered(workbench-context) directives; shrink-only).",
         },
       ],
     },

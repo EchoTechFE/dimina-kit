@@ -144,6 +144,53 @@ describe('createConsoleForwarder', () => {
     expect(exec).not.toHaveBeenCalled()
   })
 
+  it('does NOT forward a render-layer entry that is dimina framework-internal log output', () => {
+    const { wc, exec } = makeWc()
+    const fwd = createConsoleForwarder({
+      getServiceWc: () => wc,
+      getServiceWcForBridge: () => null,
+    })
+
+    fwd.emit(render(['[system]', 'render lifecycle log']))
+    fwd.emit(render(['[service]', 'bridge log']))
+    fwd.emit(render(['[service] extra detail', 'more']))
+
+    expect(exec).not.toHaveBeenCalled()
+  })
+
+  it('still forwards a render-layer entry that is an ordinary business console call (no false-positive internal-log skip)', () => {
+    const { wc, exec } = makeWc()
+    const fwd = createConsoleForwarder({
+      getServiceWc: () => wc,
+      getServiceWcForBridge: () => null,
+    })
+
+    fwd.emit(render(['hello', 123]))
+
+    expect(exec).toHaveBeenCalledTimes(1)
+    const script = String(exec.mock.calls[0]![0])
+    expect(script).toContain('console["log"]')
+    expect(script).toContain('[视图]')
+    expect(script).toContain(JSON.stringify(JSON.stringify(['hello', 123])))
+  })
+
+  it('still delivers a render-layer internal-log entry to subscribers even though it is skipped for the service-host forward', () => {
+    const { wc, exec } = makeWc()
+    const fwd = createConsoleForwarder({
+      getServiceWc: () => wc,
+      getServiceWcForBridge: () => null,
+    })
+    const sink = vi.fn()
+    fwd.subscribe(sink)
+
+    fwd.emit(render(['[system]', 'render lifecycle log']))
+
+    expect(sink).toHaveBeenCalledTimes(1)
+    expect((sink.mock.calls[0]![0] as GuestConsoleEntry).args).toEqual(['[system]', 'render lifecycle log'])
+    // The internal-log gate only affects the service-host forward, not the sink fan-out.
+    expect(exec).not.toHaveBeenCalled()
+  })
+
   it('one throwing subscriber does not break the others or the mirror', () => {
     const { wc, exec } = makeWc()
     const fwd = createConsoleForwarder({
@@ -158,5 +205,116 @@ describe('createConsoleForwarder', () => {
     expect(() => fwd.emit(render(['x']))).not.toThrow()
     expect(good).toHaveBeenCalledTimes(1)
     expect(exec).toHaveBeenCalledTimes(1)
+  })
+})
+
+/**
+ * `ConsoleForwarder.subscribe` replay behavior.
+ *
+ * The forwarder now keeps a bounded history buffer (mirroring
+ * `DiagnosticsBus`'s `DEFAULT_BUFFER_CAP` ring-buffer style) so a subscriber
+ * that opts into `{replay:true}` can catch up on entries emitted before it
+ * subscribed — this is what `createGlobalConsoleMirror` needs to fix the
+ * "standalone debug window shows an empty Console panel" bug.
+ *
+ * The default MUST stay non-replaying (`replay` defaults to `false`, the
+ * OPPOSITE of `DiagnosticsBus`'s default): `automation/index.ts:92` already
+ * calls `ctx.consoleForwarder?.subscribe((entry) => {...})` with no second
+ * argument, relying on "a new subscriber only sees entries emitted after it
+ * subscribes" — a history dump replayed into that existing call site would
+ * rebroadcast stale `App.logAdded` events to every newly-connected
+ * automation client. That existing behavior must not regress.
+ */
+describe('createConsoleForwarder — subscribe replay', () => {
+  it('a subscriber with no options at all does NOT receive entries emitted before it subscribed (regression guard for automation/index.ts:92)', () => {
+    const { wc } = makeWc()
+    const fwd = createConsoleForwarder({ getServiceWc: () => wc, getServiceWcForBridge: () => null })
+    fwd.emit(render(['before subscribe']))
+
+    const sink = vi.fn()
+    fwd.subscribe(sink)
+    fwd.emit(render(['after subscribe']))
+
+    expect(sink).toHaveBeenCalledTimes(1)
+    expect((sink.mock.calls[0]![0] as GuestConsoleEntry).args).toEqual(['after subscribe'])
+  })
+
+  it('a subscriber with {replay:false} explicitly does not receive entries emitted before it subscribed', () => {
+    const { wc } = makeWc()
+    const fwd = createConsoleForwarder({ getServiceWc: () => wc, getServiceWcForBridge: () => null })
+    fwd.emit(render(['before subscribe']))
+
+    const sink = vi.fn()
+    fwd.subscribe(sink, { replay: false })
+    fwd.emit(render(['after subscribe']))
+
+    expect(sink).toHaveBeenCalledTimes(1)
+    expect((sink.mock.calls[0]![0] as GuestConsoleEntry).args).toEqual(['after subscribe'])
+  })
+
+  it('subscribe(sink, {replay:true}) replays every buffered entry, in order, before any newly-emitted entry reaches it', () => {
+    const { wc } = makeWc()
+    const fwd = createConsoleForwarder({ getServiceWc: () => wc, getServiceWcForBridge: () => null })
+    fwd.emit(render(['e1']))
+    fwd.emit(render(['e2']))
+
+    const sink = vi.fn()
+    fwd.subscribe(sink, { replay: true })
+
+    expect(sink).toHaveBeenCalledTimes(2)
+    expect((sink.mock.calls[0]![0] as GuestConsoleEntry).args).toEqual(['e1'])
+    expect((sink.mock.calls[1]![0] as GuestConsoleEntry).args).toEqual(['e2'])
+
+    fwd.emit(render(['e3']))
+    expect(sink).toHaveBeenCalledTimes(3)
+    expect((sink.mock.calls[2]![0] as GuestConsoleEntry).args).toEqual(['e3'])
+  })
+
+  it('emit() buffers entries even while there is no subscriber at all yet, so a later {replay:true} subscriber still catches up', () => {
+    const { wc } = makeWc()
+    const fwd = createConsoleForwarder({ getServiceWc: () => wc, getServiceWcForBridge: () => null })
+    // Nothing has ever subscribed at this point.
+    fwd.emit(render(['nobody was listening']))
+
+    const sink = vi.fn()
+    fwd.subscribe(sink, { replay: true })
+
+    expect(sink).toHaveBeenCalledTimes(1)
+    expect((sink.mock.calls[0]![0] as GuestConsoleEntry).args).toEqual(['nobody was listening'])
+  })
+
+  it('the history buffer is bounded at 200 entries and drops the oldest once full (mirrors DiagnosticsBus\'s DEFAULT_BUFFER_CAP ring-buffer style)', () => {
+    const { wc } = makeWc()
+    const fwd = createConsoleForwarder({ getServiceWc: () => wc, getServiceWcForBridge: () => null })
+    for (let i = 0; i < 201; i++) {
+      fwd.emit(render([i]))
+    }
+
+    const sink = vi.fn()
+    fwd.subscribe(sink, { replay: true })
+
+    expect(sink).toHaveBeenCalledTimes(200)
+    // Entry 0 was evicted to make room for entry 200 — the buffer keeps the
+    // most recent 200, i.e. indices 1..200.
+    expect((sink.mock.calls[0]![0] as GuestConsoleEntry).args).toEqual([1])
+    expect((sink.mock.calls[199]![0] as GuestConsoleEntry).args).toEqual([200])
+  })
+
+  it('each subscription\'s replay option is independent — a replaying sink sees history while a non-replaying sink registered at the same moment does not', () => {
+    const { wc } = makeWc()
+    const fwd = createConsoleForwarder({ getServiceWc: () => wc, getServiceWcForBridge: () => null })
+    fwd.emit(render(['history']))
+
+    const replaySink = vi.fn()
+    const liveOnlySink = vi.fn()
+    fwd.subscribe(replaySink, { replay: true })
+    fwd.subscribe(liveOnlySink)
+
+    expect(replaySink).toHaveBeenCalledTimes(1)
+    expect(liveOnlySink).not.toHaveBeenCalled()
+
+    fwd.emit(render(['live']))
+    expect(replaySink).toHaveBeenCalledTimes(2)
+    expect(liveOnlySink).toHaveBeenCalledTimes(1)
   })
 })

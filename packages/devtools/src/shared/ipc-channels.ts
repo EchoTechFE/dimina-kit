@@ -74,6 +74,14 @@ export const ServiceHostChannel = {
    * `__diminaSpawnContext.hostEnvSnapshot` in place (see `service-host/preload.cjs`).
    */
   HostEnvUpdate: 'service-host:host-env:update',
+  /**
+   * NATIVE-HOST ONLY. Deliver an AppData-panel edit (`{bridgeId, data}`) into
+   * the service-host window. The preload resolves the page instance via
+   * `getCurrentPages()` and calls `page.setData(data)`, so the resulting `ub`
+   * publish flows back through the normal service→render tap — the panel
+   * refreshes from the runtime's own state, not an optimistic local echo.
+   */
+  AppDataSetData: 'service-host:appdata:set-data',
 } as const
 
 // ── Custom simulator APIs (downstream-registered, main-process handlers) ──
@@ -162,6 +170,9 @@ export const SimulatorWxmlChannel = {
 export const SimulatorAppDataChannel = {
   GetSnapshot: 'simulator:appdata:snapshot',
   Event: 'simulator:appdata:event',
+  // renderer → main invoke: write an AppData-panel edit back into the running
+  // page (forwarded to the service host via ServiceHostChannel.AppDataSetData).
+  SetData: 'simulator:appdata:set-data',
 } as const
 
 // The element-inspection payload shape is owned by the shared inspect
@@ -367,6 +378,13 @@ export const PopoverChannel = {
 export const WindowChannel = {
   NavigateBack: 'window:navigateBack',
   OpenProject: 'window:openProject',
+  // Renderer → main: the renderer's current top-level screen ('project' when
+  // inside a project screen, 'list' on the project list / landing). The
+  // renderer pushes this on every screen change, including the moment it enters
+  // a project — BEFORE the open resolves — so a FAILED open (no session) still
+  // leaves main's mirror = 'project'. The window-close decision reads it so
+  // closing a stuck/failed project returns to the list instead of quitting.
+  ScreenState: 'window:screenState',
 } as const
 
 // ── App ──────────────────────────────────────────────────────────────────
@@ -391,6 +409,14 @@ export const MiniappSnapshotChannel = {
 
 export const AutomationChannel = {
   GetPort: 'automation:port',
+} as const
+
+// ── Standalone internal (app-wide) DevTools debug window ─────────────────
+
+export const InternalDevtoolsChannel = {
+  // Open (or focus, if already open) the internal debug DevTools, hosted in
+  // its own dedicated window (see internal-devtools-window/index.ts).
+  Open: 'internal-devtools:open',
 } as const
 
 // ── Embedded settings overlay ────────────────────────────────────────────

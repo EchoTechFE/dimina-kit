@@ -55,71 +55,25 @@ function pascalToKebab(name: string): string {
   return name.replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase()
 }
 
-/**
- * Read the page's source path off Vue's provide/inject. dimina runtime.js 在
- * dd-page 的 setup() 里调用 `provide('path', path)`，Vue 把它存到
- * `instance.provides`。我们利用这个把页面节点的 tagName 从硬编码 `page`
- * 升级为页面全路径（如 `pages/index/index`），对齐微信开发者工具。
- */
-function resolvePagePath(instance: ComponentInstance): string | null {
-  // dimina runtime 在 dd-page 的 setup 里 `instance.proxy.__page__ = true` 并
-  // `provide('path', path)`。两个标记同时具备才视为页面层级，避免 dd-page
-  // 的子节点继承 provides.path 后被误判（Vue 用 Object.create 链式 provides）。
-  const proxy = (instance as Record<string, unknown>).proxy as
-    | Record<string, unknown>
-    | undefined
-  if (proxy?.__page__ !== true) return null
-  const provides = (instance as Record<string, unknown>).provides as
-    | Record<string, unknown>
-    | undefined
-  const path = provides?.path
-  if (typeof path !== 'string' || !path) return null
-  return path.startsWith('/') ? path.slice(1) : path
-}
-
-/**
- * A NATIVE dimina custom component (a `usingComponents` entry) calls
- * `provide('path', componentPath)` in its setup (render runtime), so its
- * provided `path` DIFFERS from its parent's. A plain descendant inherits the
- * same provides object (identical `path`) and is not a boundary; a Taro template
- * wrapper (`dd-tpl-*`) never provides, so it never differs either. Comparing
- * against the parent's provided path therefore isolates exactly the native
- * component roots — matching WeChat, which shows each custom component as a node
- * tagged with its full registered path (with a synthetic `#shadow-root` added by
- * `wrapInShadowRoot` since the path contains `/`). Pages are handled earlier via
- * their authoritative `__page__` marker, so this only fires for components.
- */
-function resolveComponentPath(instance: ComponentInstance): string | null {
-  const provides = (instance as Record<string, unknown>).provides as Record<string, unknown> | undefined
-  const path = provides?.path
-  if (typeof path !== 'string' || !path) return null
-  const parent = instance.parent as Record<string, unknown> | undefined
-  const parentProvides = parent?.provides as Record<string, unknown> | undefined
-  if (path === parentProvides?.path) return null
-  return path.startsWith('/') ? path.slice(1) : path
-}
-
-function resolveTagName(instance: ComponentInstance): string {
+export function resolveTagName(instance: ComponentInstance): string {
   const type = instance.type
   if (!type) return 'unknown'
-  // 页面层级优先：dd-page 没有 __tagName/__name，且 home 页等无 usingComponents
-  // 的页面 type.components 为 undefined，会落到 resolveTemplateNameFromParent
-  // 回到 'page'。在那之前直接用 provide('path') 的路径升级 tag 名。
-  const pagePath = resolvePagePath(instance)
-  if (pagePath) return pagePath
-  // Native custom-component boundary → tag with its full registered path (WeChat
-  // parity). Must precede the __tagName/__name/dd- shortening below, which would
-  // otherwise collapse `dd-foo` to the bare `foo` and lose the path.
-  const componentPath = resolveComponentPath(instance)
-  if (componentPath) return componentPath
+  // Authoritative source-path identity: the render runtime sets each compiled
+  // page/custom-component's Vue `name` to its miniprogram module path. A name
+  // containing `/` IS that source path — trust it directly (WeChat parity).
+  // It is per-type (not inherited via provides), so a descendant never leaks its
+  // ancestor's path, and it needs no live provide/inject chain to reconstruct.
+  const nameId = (type.name || type.__name) as string | undefined
+  if (nameId && nameId.includes('/')) {
+    return nameId.startsWith('/') ? nameId.slice(1) : nameId
+  }
   if (typeof type.__tagName === 'string') return type.__tagName
   const name = (type.__name || type.name) as string | undefined
   if (!name) {
-    // A nameless component carrying a `__scopeId` is a compiled page, custom
-    // component, or framework template wrapper. The page is already resolved
-    // above via its authoritative `__page__` marker, so by here it is NOT a
-    // page — recover the registered tag (e.g. a Taro `taro_tmpl`/`tmpl_0_3`
-    // wrapper) and fall back to `template`. Defaulting to `page` here would
+    // A nameless component carrying a `__scopeId` is a framework template
+    // wrapper (e.g. a Taro `taro_tmpl`/`tmpl_0_3`) — pages and custom components
+    // carry a path `name` and are resolved above. Recover the registered tag and
+    // fall back to `template`; never default to `page` here, which would
     // mislabel every such wrapper as a second page root.
     if (type.__scopeId) return resolveTemplateNameFromParent(instance) || 'template'
     return 'unknown'
@@ -190,12 +144,35 @@ function getElementSid(instance: ComponentInstance): string | undefined {
   return registerSyntheticSid(el)
 }
 
+/**
+ * The absolute component path a `dd-wrapper` carries in its `name` prop/attr, or
+ * null. dimina wraps EVERY custom-component template root in
+ * `<dd-wrapper name="/components/foo/foo">`; the path always starts with `/`,
+ * which a user-authored `name` attr essentially never does.
+ */
+function wrapperPathName(instance: ComponentInstance): string | null {
+  for (const raw of [instance.props, instance.attrs]) {
+    const n = (raw as Record<string, unknown> | undefined)?.name
+    if (typeof n === 'string' && n.startsWith('/')) return n
+  }
+  return null
+}
+
 function isTransparentComponent(instance: ComponentInstance, tagName: string): boolean {
   if (tagName === 'unknown') return true
   // A framework template wrapper (Taro `taro_tmpl` / `tmpl_0_3`, whether named
   // via `props.is` or recovered from its registration) is compiler scaffolding,
   // not user content — pass its children straight through.
   if (FRAMEWORK_TEMPLATE_RE.test(tagName)) return true
+  // dimina wraps every custom-component template root in a
+  // `<dd-wrapper name="/path">`. Under the name-path model the ENCLOSING
+  // component instance already carries that same source path as its own node
+  // (its Vue `name` IS the path), so surfacing the wrapper too would emit a
+  // SECOND identical path node — the doubled `<components/foo/foo>` layer. The
+  // wrapper is redundant scaffolding: pass its children through. Gated on a
+  // path-shaped `name` so a user-authored `<wrapper name="x">` is never
+  // swallowed (dimina paths always start with `/`).
+  if (tagName === 'wrapper' && wrapperPathName(instance)) return true
   if (tagName === 'template') {
     const props = instance.props as Record<string, unknown> | undefined
     const is = props?.is as string | undefined
@@ -297,45 +274,6 @@ function extractChildrenFromVNode(vnode: Record<string, unknown> | null | undefi
 }
 
 /**
- * Reverse-map Dimina's `<wrapper name="/components/foo/foo">` (used to host
- * every user-defined component) back to the source-level tag the user wrote
- * in WXML (e.g. `<foo>`).
- *
- * The wrapper carries the registered component path in its `name` Vue prop.
- * By convention (also followed by miniprogram tooling), the registered key is
- * the last path segment, optionally stripping a trailing `/index`. We can't
- * see the page's `usingComponents` map from inside the Vue instance, so this
- * convention-based recovery is best-effort: if the user picked a different
- * registration key than the directory name (e.g. `usingComponents:
- * { myCounter: '/components/counter/counter' }`), the panel will show
- * `counter`, not `myCounter`.
- *
- * The path heuristic also resolves a name-collision risk: a user-written
- * `<counter name="x">` would land in the same `attrs.name` slot as the
- * wrapper-internal path. We only unwrap when the value looks like an absolute
- * component path (leading `/`), which dimina always emits but a user would
- * almost never type as a literal attr.
- */
-function unwrapCustomComponent(node: WxmlNode): WxmlNode {
-  if (node.tagName !== 'wrapper') return node
-  const path = node.attrs?.name
-  if (typeof path !== 'string' || !path.startsWith('/')) return node
-  // 去掉前导 `/` 后保留原路径形式（保留所有斜杠，不做 kebab/dash 转换）。
-  // 仅当路径以 `/index` 结尾且剥离后仍至少剩一段时才剥（`/index` 单独存在则
-  // 退回 wrapper，避免出现空 tagName）。
-  const stripped = path.replace(/^\//, '')
-  const withoutIndex = stripped.endsWith('/index') ? stripped.slice(0, -'/index'.length) : stripped
-  const recovered = withoutIndex || stripped
-  if (!recovered || recovered === 'index') return node
-  const nextAttrs: Record<string, string> = {}
-  for (const [k, v] of Object.entries(node.attrs)) {
-    if (k === 'name') continue
-    nextAttrs[k] = v
-  }
-  return { ...node, tagName: recovered, attrs: nextAttrs }
-}
-
-/**
  * 把"用户授权"层级（页面 / 自定义组件，tagName 以路径形式呈现，含 `/`）
  * 的 children 包一层合成 `#shadow-root`，对齐微信开发者工具：组件本身
  * 与内部实现之间用 shadow-root 边界视觉分隔。
@@ -362,5 +300,5 @@ export function walkInstance(instance: ComponentInstance, depth: number): WxmlNo
   const node: WxmlNode = { tagName, attrs: extractProps(instance), children }
   const sid = getElementSid(instance)
   if (sid) node.sid = sid
-  return wrapInShadowRoot(unwrapCustomComponent(node))
+  return wrapInShadowRoot(node)
 }

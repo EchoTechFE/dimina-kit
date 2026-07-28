@@ -10,6 +10,9 @@ import type { SimulatorApiHandler } from '../services/simulator/custom-apis.js'
 import { rendererDir as defaultRendererDir, defaultPreloadPath, devtoolsPackageRoot } from '../utils/paths.js'
 import { installThemeBackgroundSync } from '../utils/theme.js'
 import { createMainWindow, wireMainWindowEvents } from '../windows/main-window/index.js'
+import { createInternalDevtoolsWindow } from '../windows/internal-devtools-window/index.js'
+import { createGlobalConsoleMirror } from '../services/console-forward/global-console-mirror.js'
+import { createGlobalDiagnosticsMirror } from '../services/console-forward/global-diagnostics-mirror.js'
 import { isAppQuitting } from './lifecycle.js'
 import { resolveNativeAppDataKeys, resolveNativeStorageOverview } from './native-overview.js'
 // eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
@@ -19,6 +22,7 @@ import { loadWorkbenchSettings, applyTheme } from '../services/settings/index.js
 import { installAppMenu } from '../menu/index.js'
 import {
   registerAppIpc,
+  registerInternalDevtoolsIpc,
   popoverModule,
   projectsModule,
   sessionModule,
@@ -46,6 +50,7 @@ import { startWorkbenchCoiServer } from '../services/workbench-coi-server.js'
 import { UpdateManager } from '../services/update/index.js'
 import { toDisposable, type Disposable } from '@dimina-kit/electron-deck/main'
 import { IpcRegistry } from '../utils/ipc-registry.js'
+import { WindowChannel } from '../../shared/ipc-channels.js'
 
 const DEFAULT_MODULES: Record<BuiltinModuleId, boolean> = {
   projects: true,
@@ -284,7 +289,11 @@ function setupMcp(context: WorkbenchContext): Disposable | null {
   })
 }
 
-function wireAppWindowEvents(config: WorkbenchAppConfig, instance: WorkbenchAppInstance): Disposable {
+function wireAppWindowEvents(
+  config: WorkbenchAppConfig,
+  instance: WorkbenchAppInstance,
+  isOnProjectScreen: () => boolean,
+): Disposable {
   const { mainWindow, context } = instance
   // In-flight guard: `closeProject()` is async, and the window stays open
   // (preventDefault'd) while it runs — a second close click during that window
@@ -317,14 +326,26 @@ function wireAppWindowEvents(config: WorkbenchAppConfig, instance: WorkbenchAppI
         return
       }
 
-      if (!context.workspace.hasActiveSession()) return
+      // Keep the app alive on close whenever EITHER a live compiled session
+      // exists OR the renderer reports it is on a project screen. The renderer
+      // enters the project screen (and reports it) before openProject resolves,
+      // so a FAILED open — invalid/non-existent project, no session ever
+      // created — still parks the renderer there showing the compile-failed
+      // overlay. Keying off `hasActiveSession()` alone let that close fall
+      // through with no preventDefault → the last window is destroyed →
+      // `window-all-closed` → `app.quit()`, quitting the whole app instead of
+      // returning to the list. The two signals answer one question ("is the
+      // user inside a project, so close means back-to-list?"); the renderer's
+      // screen is the authority and hasActiveSession is a resource-safety belt
+      // (never destroy the window while a live session runs behind it).
+      if (!context.workspace.hasActiveSession() && !isOnProjectScreen()) return
 
-      // Close button while a project session is open: stay in the workbench
-      // and surface the project list. Tear down only the session — do NOT
-      // dispose `context.registry`, which owns every IPC handler (projects,
-      // dialog, settings…). Disposing it would leave the renderer alive but
-      // unable to invoke anything, so subsequent clicks on Import/etc. would
-      // raise `No handler registered for ...`.
+      // Close button while inside a project: stay in the workbench and surface
+      // the project list. Tear down only the session — do NOT dispose
+      // `context.registry`, which owns every IPC handler (projects, dialog,
+      // settings…). Disposing it would leave the renderer alive but unable to
+      // invoke anything, so subsequent clicks on Import/etc. would raise
+      // `No handler registered for ...`.
       e.preventDefault()
       closing = true
       try {
@@ -399,7 +420,18 @@ export function runDevtoolsBootstrap(config: WorkbenchAppConfig = {}): void {
  * v2 `RuntimeBackend.assemble` reuses the exact same body (parity by shared
  * implementation, not behavioural re-creation).
  */
-export async function createDevtoolsRuntime(config: WorkbenchAppConfig = {}): Promise<WorkbenchAppInstance> {
+export async function createDevtoolsRuntime(
+  config: WorkbenchAppConfig = {},
+  /**
+   * Fired the instant the `WorkbenchAppInstance` exists — BEFORE `config.onSetup`
+   * is awaited below, which may run arbitrarily long host code (including
+   * loading the host-toolbar, which opens a live MessagePort). A caller that
+   * only learns `instance` from this function's return value would not see it
+   * until `onSetup` resolves, leaving a window where an app-quit teardown hook
+   * has nothing to dispose yet a live toolbar port already exists.
+   */
+  onInstanceCreated?: (instance: WorkbenchAppInstance) => void,
+): Promise<WorkbenchAppInstance> {
   // Self-gate on Electron readiness: this builds a BrowserWindow immediately, so
   // it must run after `app.whenReady()`. The framework backend path already
   // awaited it (idempotent no-op here); this guards any direct caller against
@@ -420,6 +452,19 @@ export async function createDevtoolsRuntime(config: WorkbenchAppConfig = {}): Pr
   context.registry.add(registerAppIpc(context))
   // Sandboxed project file-system IPC (the renderer-side project:fs:* surface).
   context.registry.add(registerProjectFsIpc(context))
+  // Standalone internal (app-wide) DevTools debug window controller — the
+  // independent floating CDP panel that debugs the whole Electron app (as
+  // opposed to the right-panel CDP, which inspects only the user's
+  // mini-program). Assembled before the IPC handler below so a request
+  // arriving right after boot always finds it.
+  // `isAppQuitting` lets the controller stop intercepting 'close' during a
+  // real quit — its habitual preventDefault()+hide() would otherwise cancel
+  // the quit itself and strand the process with a hidden window.
+  context.internalDevtoolsWindow = createInternalDevtoolsWindow(mainWindow, { isAppQuitting })
+  context.registry.add(toDisposable(() => context.internalDevtoolsWindow?.dispose()))
+  // Unconditional (not a toggleable BUILTIN_MODULES entry): it's core dev
+  // tooling, not a host-configurable feature.
+  context.registry.add(registerInternalDevtoolsIpc(context))
   // Referer/CORS webRequest policy for the simulator runtime's sessions (shared
   // fallback + every per-project partition). Registered into the context
   // registry so its configurator + per-session listeners are torn down with the
@@ -434,6 +479,48 @@ export async function createDevtoolsRuntime(config: WorkbenchAppConfig = {}): Pr
   // spare). Registered into the registry so the spare dies with the context.
   if (!config.adapter) context.registry.add(setupCompileWorkerStandby(context))
   registerBuiltinModules(config, context)
+
+  // Global console mirror: while the standalone
+  // internal DevTools window is open, mirror every guest console entry
+  // (service + render, UNFILTERED — see global-console-mirror.ts) into it —
+  // each open replays the forwarder's current history buffer first (see that
+  // module's doc comment for why the subscribe lifecycle is gated on
+  // onHostChanged rather than subscribed once at construction time).
+  // `context.consoleForwarder` is assembled by the simulator module's
+  // installBridgeRouter just above; absent only when that builtin module was
+  // disabled via config. The Console panel shows the INSPECTED target's own
+  // console (mainWindow, per internal-devtools-window.ts's
+  // setDevToolsWebContents relationship) — NOT the front-end host page's
+  // console, so `target` is always mainWindow.webContents, never the hostWc
+  // onHostChanged hands the mirror.
+  if (context.consoleForwarder && context.internalDevtoolsWindow) {
+    const consoleMirror = createGlobalConsoleMirror(
+      context.consoleForwarder,
+      mainWindow.webContents,
+      context.internalDevtoolsWindow.onHostChanged,
+      // CDP transport (never executeJavaScript) — see the mirror's inject()
+      // doc for the setDevToolsWebContents + external-CDP double-attach hang.
+      { broker: context.cdpSessionBroker },
+    )
+    context.registry.add(toDisposable(() => consoleMirror.dispose()))
+  }
+
+  // Global diagnostics mirror (same wiring, same INSPECTED-side
+  // target rationale as the console mirror above): every diagnostic —
+  // including `audience:'internal'` ones console-forward's own service-host
+  // injection now skips (see compile-standby.ts / index.ts's handleDiagnostic
+  // gate) — surfaces here instead of vanishing. `context.diagnostics` is
+  // assembled alongside `context.consoleForwarder` by the same
+  // installBridgeRouter call.
+  if (context.diagnostics && context.internalDevtoolsWindow) {
+    const diagnosticsMirror = createGlobalDiagnosticsMirror(
+      context.diagnostics,
+      mainWindow.webContents,
+      context.internalDevtoolsWindow.onHostChanged,
+      { broker: context.cdpSessionBroker },
+    )
+    context.registry.add(toDisposable(() => diagnosticsMirror.dispose()))
+  }
 
   // Wire the simulator-side difile:// protocol handler + temp-file IPC
   // before host onSetup so any host-driven simulator boot sees the
@@ -465,6 +552,7 @@ export async function createDevtoolsRuntime(config: WorkbenchAppConfig = {}): Pr
       context.registry.add(toDisposable(context.simulatorApis.register(name, handler))),
     dispose: () => disposeContext(context),
   }
+  onInstanceCreated?.(instance)
 
   // Built-in simulator APIs: devtools-supplied wx.* implementations that run
   // in the main process. Hosts can override any of these in their onSetup by
@@ -539,11 +627,12 @@ export async function createDevtoolsRuntime(config: WorkbenchAppConfig = {}): Pr
   // Native-host inspector: injects the render-guest IIFE and drives WXML /
   // element-highlight against the active render-host <webview>. Reused by
   // the storage panel (element inspect) and the WXML panel service.
-  const renderInspector = createRenderInspector({ connections: context.connections })
+  const renderInspector = createRenderInspector({ connections: context.connections, broker: context.cdpSessionBroker })
 
   const storage = setupSimulatorStorage(mainWindow.webContents, {
     senderPolicy: context.senderPolicy,
     connections: context.connections,
+    broker: context.cdpSessionBroker,
     // Per-project filter for the simulator-storage panel: the simulator
     // uses a fixed `persist:simulator` partition + a fixed simulator.html
     // origin, so localStorage is shared across every project that has
@@ -584,11 +673,33 @@ export async function createDevtoolsRuntime(config: WorkbenchAppConfig = {}): Pr
     // DevTools host exist; getServiceWc here is the fallback sink target.
     const networkForward = createNetworkForwarder({
       getServiceWc: (appId) => context.bridge?.getServiceWc(appId) ?? null,
+      getResourceServerBaseUrl: () => context.bridge?.getResourceBaseUrl?.() ?? null,
+      // The simulator shell's own static-asset server (serves simulator.html
+      // + its JS/CSS, independent from the resource server above — see
+      // NetworkForwarderBridge.getSimulatorServerBaseUrl's doc). Host is
+      // always 'localhost' — see shared/simulator-route.ts's
+      // buildSimulatorUrlFromSpec default. Absent (null port) when no
+      // project is open.
+      getSimulatorServerBaseUrl: () => {
+        const port = context.workspace?.getSession()?.port
+        return typeof port === 'number' ? `http://localhost:${port}/` : null
+      },
       connections: context.connections,
+      broker: context.cdpSessionBroker,
     })
     context.networkForward = networkForward
     context.registry.add(networkForward)
     context.registry.add(() => { context.networkForward = undefined })
+    // Global mirror: once the standalone internal
+    // DevTools window builds its own front-end host, mirror the full
+    // unfiltered Network stream into it. Attached AFTER context.networkForward
+    // is assigned above — the callback re-reads the mutable field on every
+    // fire, so ordering only matters for readability here, not correctness.
+    context.registry.add(toDisposable(
+      context.internalDevtoolsWindow?.onHostChanged((hostWc) => {
+        context.networkForward?.setGlobalDevtoolsHost(hostWc)
+      }) ?? (() => {}),
+    ))
 
     context.registry.add(setupSimulatorWxml(mainWindow.webContents, {
       senderPolicy: context.senderPolicy,
@@ -599,6 +710,9 @@ export async function createDevtoolsRuntime(config: WorkbenchAppConfig = {}): Pr
     const appDataService = setupSimulatorAppData(mainWindow.webContents, {
       senderPolicy: context.senderPolicy,
       getActiveAppId,
+      // AppData-panel edit write-back target: the service-host window owning
+      // the edited page bridge.
+      bridge: context.bridge,
     })
     // bridge-router feeds this via ctx.appData (service→render tap + evict).
     context.appData = appDataService
@@ -645,7 +759,14 @@ export async function createDevtoolsRuntime(config: WorkbenchAppConfig = {}): Pr
     // instead of fire-and-forgetting it (a dangling http server would keep the
     // port + event loop alive past teardown).
     context.registry.add(() => coiServer.close())
-    context.registry.add(() => context.views.detachWorkbench())
+    // The registry disposes LIFO, so this runs BEFORE the context-level
+    // disposeAll: void any in-flight open's attach hold here too, or a stale
+    // release / cap firing could rebuild the workbench during the awaited
+    // coiServer.close() above, before disposeAll's own cancel runs.
+    context.registry.add(() => {
+      context.views.cancelWorkbenchAttachHold()
+      context.views.detachWorkbench()
+    })
     // Only HAND the view manager the COI URL — do NOT load yet. The heavy
     // WebContentsView load (10MB bundle + ext-host) is deferred to the first time
     // the 'editor' dock slot becomes visible (first non-zero bounds), so it never
@@ -654,7 +775,24 @@ export async function createDevtoolsRuntime(config: WorkbenchAppConfig = {}): Pr
     context.views.setWorkbenchSource(coiServer.baseUrl)
   }
 
-  context.registry.add(wireAppWindowEvents(config, instance))
+  // Main's mirror of the renderer's top-level screen. The renderer's `page`
+  // state is the single authority; it pushes every change over
+  // WindowChannel.ScreenState. Main reads this mirror in the window-close
+  // decision so a close while the renderer is parked on a project screen (even
+  // a failed open with no session) returns to the list instead of quitting.
+  let rendererScreen: 'list' | 'project' = 'list'
+  context.registry.add(
+    new IpcRegistry(context.senderPolicy).handle(
+      WindowChannel.ScreenState,
+      (_e, screen) => {
+        rendererScreen = screen === 'project' ? 'project' : 'list'
+      },
+    ),
+  )
+
+  context.registry.add(
+    wireAppWindowEvents(config, instance, () => rendererScreen === 'project'),
+  )
   context.registry.add(enableDevRendererAutoReload(rendererDir))
 
   return instance

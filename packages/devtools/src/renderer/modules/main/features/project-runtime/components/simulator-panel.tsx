@@ -50,6 +50,10 @@ interface SimulatorPanelProps {
   watcherDead?: boolean;
   /** Re-runs the current launch config (the toolbar's existing 刷新/relaunch action). */
   onRelaunch?: () => void;
+  /** Opens the standalone internal (app-wide) DevTools debug window. Unlike
+   * the page-path copy button, debugging the whole app is independent of the
+   * current page, so the button always renders. */
+  onOpenInternalDevtools?: () => void;
 }
 
 // DeviceShell's scrollable desk reserves 24px on each edge and the handset has
@@ -89,6 +93,7 @@ export function SimulatorPanel({
   runtimeStatus = null,
   watcherDead = false,
   onRelaunch = () => {},
+  onOpenInternalDevtools = () => {},
 }: SimulatorPanelProps) {
   // The simulator is a main-process WebContentsView (native-host is the sole
   // runtime) painted directly over the flex:1 placeholder below. This renderer
@@ -391,6 +396,36 @@ export function SimulatorPanel({
             </button>
           )}
         </div>
+
+        {/* Opens the standalone internal (app-wide) DevTools debug window —
+            debugs the whole Electron app + top-level info, separate from the
+            right-panel CDP that inspects the user's mini-program. Always
+            rendered: unlike the page-path copy button, it's independent of
+            the current page. */}
+        <button
+          className="ml-auto shrink-0 flex items-center justify-center w-4 h-4 rounded text-text-dim hover:text-text transition-colors"
+          onClick={onOpenInternalDevtools}
+          title="调试开发者工具"
+          data-testid="sim-open-internal-devtools"
+        >
+          <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
+            <rect
+              x="3"
+              y="3.5"
+              width="5"
+              height="5.5"
+              rx="1.5"
+              stroke="currentColor"
+              strokeWidth="1"
+            />
+            <path
+              d="M4 3.5V3a1.5 1.5 0 013 0v.5M1.5 5.5H3M8 5.5h1.5M2 8.5l1.3-1M9 8.5l-1.3-1M2 3l1.3 1M9 3L7.7 4"
+              stroke="currentColor"
+              strokeWidth="1"
+              strokeLinecap="round"
+            />
+          </svg>
+        </button>
       </div>
     </div>
   );

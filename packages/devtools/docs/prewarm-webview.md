@@ -29,7 +29,7 @@ dimina-kit Electron 容器里对等的实现是 `ServiceHostPool`（`src/main/se
 | C. 页面骨架 | 加载 service.html / pageFrame.html、CSS 解析、runtime 初始化 | 网络/磁盘 + parse | 50–120 ms |
 | D. service 业务 | service-host boot：`injectLogicBundle` → `loadResource` → 创建 App + Page 实例 | 业务路径 | 100–400 ms（取决于 app） |
 
-> 上面是按 Electron 41 在 M1 / 16GB 上的典型量级估算，不是 e2e 实测。
+> 上面是按 Electron 43 在 M1 / 16GB 上的典型量级估算，不是 e2e 实测。
 
 ### 1.2 具体路径
 

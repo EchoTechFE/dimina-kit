@@ -32,6 +32,7 @@
     "scripts"
   ],
   "scripts": {
+    "check:wasm-alignment": "node scripts/check-wasm-alignment.js",
     "build:node": "node scripts/build-compiler.js node",
     "build:browser": "node scripts/build-compiler.js browser",
     "build": "pnpm run build:node && pnpm run build:browser",
@@ -42,6 +43,7 @@
     "test:realm-reuse": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-realm-reuse.js",
     "test:pool-node": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-pool-node.js",
     "test:pool-scopehash": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-pool-scopehash.js",
+    "test:crypto-shim": "node scripts/test-crypto-shim.js",
     "test:pool-hardening": "node scripts/build-compiler.js node && node scripts/test-pool-hardening.js",
     "test:pool-toolchain-death": "node scripts/build-compiler.js node && node scripts/test-pool-toolchain-death.js",
     "test:pool-worker-hardening": "node scripts/test-pool-worker-hardening.js",
@@ -58,9 +60,9 @@
   },
   "dependencies": {
     "@babel/parser": "^7.29.7",
-    "@vue/compiler-sfc": "^3.5.39",
+    "@vue/compiler-sfc": "^3.5.40",
     "assert": "^2.1.0",
-    "autoprefixer": "^10.5.2",
+    "autoprefixer": "^10.5.3",
     "buffer": "^6.0.3",
     "cheerio": "^1.2.0",
     "cssnano": "^8.0.2",
@@ -68,22 +70,22 @@
     "estree-walker": "^3.0.3",
     "events": "^3.3.0",
     "htmlparser2": "^12.0.0",
-    "less": "^4.6.7",
+    "less": "^4.8.1",
     "magic-string": "^0.30.21",
     "memfs": "^4.57.8",
-    "oxc-parser": "^0.137.0",
+    "oxc-parser": "^0.140.0",
     "oxc-walker": "^1.0.0",
     "path-browserify": "^1.0.1",
-    "postcss": "^8.5.15",
+    "postcss": "^8.5.23",
     "postcss-selector-parser": "^7.1.4",
-    "sass": "^1.101.0",
+    "sass": "^1.102.0",
     "source-map-js": "^1.2.1",
     "stream-browserify": "^3.0.0",
     "util": "^0.12.5"
   },
   "peerDependencies": {
-    "@oxc-parser/binding-wasm32-wasi": "^0.137.0",
-    "esbuild-wasm": "^0.28.0"
+    "@oxc-parser/binding-wasm32-wasi": "^0.140.0",
+    "esbuild-wasm": "^0.28.1"
   },
   "peerDependenciesMeta": {
     "@oxc-parser/binding-wasm32-wasi": {
@@ -94,6 +96,6 @@
     }
   },
   "devDependencies": {
-    "esbuild-wasm": "^0.28.0"
+    "esbuild-wasm": "^0.28.1"
   }
 }

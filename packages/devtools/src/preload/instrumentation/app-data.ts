@@ -9,14 +9,14 @@ import {
   decodeWorkerMessage,
   type AppDataInput,
   type AppDataSnapshot,
-} from '../../shared/appdata-accumulator.js'
+} from '@dimina-kit/inspect'
 
 // Window augmentation is in ../types.ts
 
 // Re-exported so existing importers (use-panel-data, types) keep their
-// `from '.../app-data'` path while the cumulative logic moved to the shared,
+// `from '.../app-data'` path while the cumulative logic lives in the shared,
 // framework-agnostic accumulator reused by the native-host main service.
-export type { AppDataSnapshot } from '../../shared/appdata-accumulator.js'
+export type { AppDataSnapshot } from '@dimina-kit/inspect'
 
 /**
  * The AppData snapshot data source.

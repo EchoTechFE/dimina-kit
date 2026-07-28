@@ -79,9 +79,12 @@ vi.mock('./use-panel-data', () => ({
       getPrefix: vi.fn(async () => ''),
     },
     storageEnabled: true,
-    appData: { bridges: [], activeBridgeId: null, entries: {} },
-    refreshAppData: vi.fn(),
-    setActiveAppDataBridge: vi.fn(),
+    appDataSource: {
+      getSnapshot: vi.fn(async () => ({ bridges: [], entries: {} })),
+      subscribe: vi.fn(() => () => {}),
+      setActive: vi.fn(),
+    },
+    appDataEnabled: true,
   })),
 }))
 

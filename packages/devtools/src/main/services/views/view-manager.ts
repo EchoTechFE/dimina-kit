@@ -33,6 +33,15 @@ export interface ViewManagerContext {
    * `createWorkbenchContext` always supplies it.
    */
   connections: WorkbenchContext['connections']
+  /**
+   * Shared CDP session broker (see cdp-session/index.ts). safe-area acquires
+   * render-guest debugger leases through it instead of attaching directly, so
+   * it shares sessions with elements-forward/render-inspect/network-forward
+   * rather than fighting them for exclusive ownership. Optional so partial
+   * test contexts compile (safe-area falls back to a private broker
+   * instance); `createWorkbenchContext` always supplies the real one.
+   */
+  cdpSessionBroker?: WorkbenchContext['cdpSessionBroker']
   /** Active project root used to validate/open console source locations. */
   workspace?: WorkbenchContext['workspace']
   /**
@@ -119,6 +128,13 @@ export interface ViewManager {
    * back to the hard attachNativeSimulator rebuild.
    */
   softReloadNativeSimulator(simulatorUrl: string): boolean
+  /**
+   * Style-only fast path after a watcher rebuild: hot-swap the render-host
+   * stylesheets in place (no shell respawn), preserving the page stack / form
+   * state / focus. Returns false when no live+ready guest exists so the caller
+   * falls back to the full soft reload.
+   */
+  refreshSimulatorStyles(): boolean
   /**
    * Destroy and null out the simulator view (e.g. on simulator detach).
    * Also destroys the cached settings view and hides the popover —
@@ -224,11 +240,29 @@ export interface ViewManager {
   /**
    * Store the workbench COI base URL without loading it. The heavy
    * WebContentsView load is deferred to the first visible
-   * `setWorkbenchBounds`, keeping it off the app boot critical path.
+   * `setWorkbenchBounds` — and further deferred while `holdWorkbenchAttach`
+   * is in force — keeping it off the app boot critical path.
    */
   setWorkbenchSource(url: string): void
   /** Destroy the workbench editor view (teardown). No-op if never attached. */
   detachWorkbench(): void
+  /**
+   * Close the workbench attach gate: while held (and the view does not exist
+   * yet), the lazy attach is deferred so the editor's heavy load stays out of
+   * a project open's boot-critical window (teardown + first compile). Returns
+   * an idempotent release fn bound to this hold; a newer hold supersedes it
+   * (its release becomes a no-op), explicit user intent (openFileInWorkbench)
+   * opens the gate, and a 3s cap self-releases with a warn so the editor is
+   * never deferred unboundedly. The gate never hides or destroys a live view.
+   */
+  holdWorkbenchAttach(): () => void
+  /**
+   * Void the current workbench attach hold WITHOUT the release replay. For
+   * teardown paths that preempt an in-flight open (closeProject, disposeAll):
+   * the superseded open's late release or its cap firing must not rebuild the
+   * editor view after the project is gone. No-op when nothing is held.
+   */
+  cancelWorkbenchAttachHold(): void
   /**
    * Reveal a project file in the embedded workbench at a 1-based line/column
    * (the open-in-editor target coordinate convention). Drives the workbench's
@@ -348,7 +382,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   // CSS env(safe-area-inset-*) simulation for render-host guests (per device).
   // Driven from did-attach-webview in the simulator domain and re-pushed on
   // device change via reapplySafeArea. Torn down in disposeAll.
-  const safeArea = createSafeAreaController({ connections: ctx.connections })
+  const safeArea = createSafeAreaController({ connections: ctx.connections, broker: ctx.cdpSessionBroker })
 
   // The single level-triggered placement reconciler every view domain shares —
   // the sole owner of placement state (docs/view-placement-reconciler.md). Each
@@ -394,6 +428,10 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   }
 
   function disposeAll(): void {
+    // App-level teardown invalidates any in-flight open's attach hold first,
+    // so the held-detach preserve path below can't keep a desired around for
+    // a release/cap replay to rebuild.
+    workbench.cancelWorkbenchAttachHold()
     disposeProjectViews()
     // Host-scoped teardown: the toolbar view, its port channel, and the
     // ref-counted session-runtime preload registration.
@@ -403,6 +441,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   return {
     attachNativeSimulator: nativeSimulator.attachNativeSimulator,
     softReloadNativeSimulator: nativeSimulator.softReloadNativeSimulator,
+    refreshSimulatorStyles: nativeSimulator.refreshSimulatorStyles,
     detachSimulator: nativeSimulator.detachSimulator,
     reapplySafeArea: (device) => safeArea.reapplyAll(device),
     showSettings: overlayPanels.showSettings,
@@ -426,6 +465,8 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     setWorkbenchSource: workbench.setWorkbenchSource,
     detachWorkbench: workbench.detachWorkbench,
     openFileInWorkbench: workbench.openFileInWorkbench,
+    holdWorkbenchAttach: workbench.holdWorkbenchAttach,
+    cancelWorkbenchAttachHold: workbench.cancelWorkbenchAttachHold,
     setHostToolbarHeight: hostToolbar.setHostToolbarHeight,
     hostToolbar: hostToolbar.control,
   }

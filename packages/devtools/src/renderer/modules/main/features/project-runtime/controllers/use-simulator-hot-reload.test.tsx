@@ -99,6 +99,7 @@ function makeBaseProps(): UseSimulatorProps & { hotReloadToken: number } {
     port: 7788,
     projectPath: '/tmp/hot-reload-project',
     hotReloadToken: 0,
+    relaunchNonce: 0,
   }
 }
 
