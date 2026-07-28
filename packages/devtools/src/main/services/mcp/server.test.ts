@@ -29,6 +29,9 @@ import net from 'node:net'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import type { Disposable } from '@dimina-kit/electron-deck/main'
+import { createCompileLogBuffer } from '../workspace/compile-log-buffer.js'
+import { createSessionStatusStore } from '../workspace/session-status-store.js'
+import type { McpProjectHost } from './tools/project-tools.js'
 
 vi.mock('./target-manager.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./target-manager.js')>()
@@ -178,10 +181,28 @@ let disposable: Disposable | null = null
 let port = 0
 const openReqs: http.ClientRequest[] = []
 
+function createProjectHost(): McpProjectHost {
+  return {
+    workspace: {
+      validateProjectDir: vi.fn(async () => null),
+      hasProject: vi.fn(async () => false),
+      addProject: vi.fn(async (dirPath: string) => ({ name: 'test-project', path: dirPath })),
+      listProjects: vi.fn(async () => []),
+      closeProject: vi.fn(async () => {}),
+      getProjectPath: vi.fn(() => ''),
+      hasActiveSession: vi.fn(() => false),
+    },
+    sessionStatus: createSessionStatusStore(),
+    compileLogs: createCompileLogBuffer(),
+    requestOpenInUi: vi.fn(),
+    requestNavigateBack: vi.fn(),
+  }
+}
+
 beforeEach(async () => {
   port = await getFreePort()
   // resolvedCdpPort is irrelevant: connectTarget/setCdpPort are stubbed above.
-  disposable = startMcpServer(19222, port)
+  disposable = startMcpServer(19222, port, createProjectHost())
   await waitForListening(port)
 })
 

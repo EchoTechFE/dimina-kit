@@ -8,11 +8,13 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  buildMcpClientRegistration,
-  computeMcpNeedsRestart,
   computeNeedsRestart,
   THEME_LABELS,
 } from './workbench-settings'
+import {
+  buildMcpClientRegistration,
+  computeMcpNeedsRestart,
+} from './mcp-settings-tab'
 import type { CdpStatus, McpStatus, WorkbenchSettingsValue } from '@/shared/api'
 
 function cdpStatus(overrides: Partial<CdpStatus> = {}): CdpStatus {

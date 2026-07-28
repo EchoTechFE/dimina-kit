@@ -1,12 +1,30 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { registerCommonTargetTools } from './tool-registry.js'
-import { getTargetState, type TargetKind } from './target-manager.js'
+import { getTargetState, type ConsoleLogEntry, type NetworkRequestEntry, type TargetKind } from './target-manager.js'
 
 type ToolResult = {
   content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>
   isError?: boolean
 }
 type ToolHandler = (args: Record<string, unknown>) => Promise<ToolResult>
+type Client = NonNullable<ReturnType<typeof getTargetState>['client']>
+type DomRoot = Awaited<ReturnType<Client['DOM']['getDocument']>>['root']
+
+function parseJson<T>(text: string): T {
+  return JSON.parse(text) as T
+}
+
+function createDomRoot(overrides: Partial<DomRoot> = {}): DomRoot {
+  return {
+    nodeId: 1,
+    backendNodeId: 1,
+    nodeType: 9,
+    nodeName: '#document',
+    localName: '',
+    nodeValue: '',
+    ...overrides,
+  }
+}
 
 function captureTools(kind: TargetKind) {
   const handlers = new Map<string, ToolHandler>()
@@ -104,7 +122,7 @@ describe('console_logs', () => {
     const { call } = captureTools('simulator')
 
     const result = await call('simulator_console_logs', { limit: 50 })
-    const entries = JSON.parse(result.content[0]!.text!)
+    const entries = parseJson<ConsoleLogEntry[]>(result.content[0]!.text!)
     expect(entries).toHaveLength(2)
   })
 
@@ -117,11 +135,15 @@ describe('console_logs', () => {
     ]
     const { call } = captureTools('simulator')
 
-    const byWarning = JSON.parse((await call('simulator_console_logs', { limit: 50, level: 'warning' })).content[0]!.text!)
+    const byWarning = parseJson<ConsoleLogEntry[]>(
+      (await call('simulator_console_logs', { limit: 50, level: 'warning' })).content[0]!.text!,
+    )
     expect(byWarning).toHaveLength(2)
-    expect(byWarning.map((e: { text: string }) => e.text)).toEqual(['w1', 'w2'])
+    expect(byWarning.map((e) => e.text)).toEqual(['w1', 'w2'])
 
-    const byWarn = JSON.parse((await call('simulator_console_logs', { limit: 50, level: 'warn' })).content[0]!.text!)
+    const byWarn = parseJson<ConsoleLogEntry[]>(
+      (await call('simulator_console_logs', { limit: 50, level: 'warn' })).content[0]!.text!,
+    )
     expect(byWarn).toHaveLength(2)
   })
 
@@ -133,7 +155,7 @@ describe('console_logs', () => {
     ]
     const { call } = captureTools('simulator')
 
-    const entries = JSON.parse(
+    const entries = parseJson<ConsoleLogEntry[]>(
       (await call('simulator_console_logs', { limit: 50, sinceTimestamp: '2025-01-01T00:00:01.000Z' })).content[0]!.text!,
     )
     expect(entries).toHaveLength(1)
@@ -147,7 +169,7 @@ describe('console_logs', () => {
     }))
     const { call } = captureTools('simulator')
 
-    const entries = JSON.parse((await call('simulator_console_logs', { limit: 3 })).content[0]!.text!)
+    const entries = parseJson<ConsoleLogEntry[]>((await call('simulator_console_logs', { limit: 3 })).content[0]!.text!)
     expect(entries).toHaveLength(3)
     expect(entries[0].text).toBe('msg7')
   })
@@ -175,7 +197,12 @@ describe('evaluate', () => {
     const state = getTargetState('simulator')
     vi.mocked(state.client!.Runtime.evaluate).mockResolvedValue({
       result: { type: 'undefined' },
-      exceptionDetails: { text: 'ReferenceError: x is not defined' },
+      exceptionDetails: {
+        exceptionId: 1,
+        text: 'ReferenceError: x is not defined',
+        lineNumber: 0,
+        columnNumber: 0,
+      },
     })
     const { call } = captureTools('simulator')
 
@@ -201,14 +228,14 @@ describe('get_dom', () => {
   afterEach(() => resetState('simulator'))
 
   it('calls DOM.getDocument with the provided depth', async () => {
-    const fakeRoot = { nodeId: 1, nodeName: 'html' }
+    const fakeRoot = createDomRoot({ nodeName: 'html', localName: 'html' })
     const state = getTargetState('simulator')
     vi.mocked(state.client!.DOM.getDocument).mockResolvedValue({ root: fakeRoot })
     const { call } = captureTools('simulator')
 
     const result = await call('simulator_get_dom', { depth: 5 })
     expect(state.client!.DOM.getDocument).toHaveBeenCalledWith({ depth: 5 })
-    expect(JSON.parse(result.content[0]!.text!)).toEqual(fakeRoot)
+    expect(parseJson<DomRoot>(result.content[0]!.text!)).toEqual(fakeRoot)
   })
 })
 
@@ -224,7 +251,7 @@ describe('network_log', () => {
     ]
     const { call } = captureTools('simulator')
 
-    const entries = JSON.parse((await call('simulator_network_log', { limit: 20 })).content[0]!.text!)
+    const entries = parseJson<NetworkRequestEntry[]>((await call('simulator_network_log', { limit: 20 })).content[0]!.text!)
     expect(entries).toHaveLength(2)
   })
 
@@ -237,9 +264,11 @@ describe('network_log', () => {
     ]
     const { call } = captureTools('simulator')
 
-    const entries = JSON.parse((await call('simulator_network_log', { limit: 20, minStatus: 400 })).content[0]!.text!)
+    const entries = parseJson<NetworkRequestEntry[]>(
+      (await call('simulator_network_log', { limit: 20, minStatus: 400 })).content[0]!.text!,
+    )
     expect(entries).toHaveLength(2)
-    expect(entries.map((e: { url: string }) => e.url)).toEqual(['/err', '/failed'])
+    expect(entries.map((e) => e.url)).toEqual(['/err', '/failed'])
   })
 
   it('excludes status=0 when minStatus < 400', async () => {
@@ -250,7 +279,9 @@ describe('network_log', () => {
     ]
     const { call } = captureTools('simulator')
 
-    const entries = JSON.parse((await call('simulator_network_log', { limit: 20, minStatus: 200 })).content[0]!.text!)
+    const entries = parseJson<NetworkRequestEntry[]>(
+      (await call('simulator_network_log', { limit: 20, minStatus: 200 })).content[0]!.text!,
+    )
     expect(entries).toHaveLength(1)
     expect(entries[0].url).toBe('/ok')
   })
@@ -262,7 +293,7 @@ describe('network_log', () => {
     }))
     const { call } = captureTools('simulator')
 
-    const entries = JSON.parse((await call('simulator_network_log', { limit: 3 })).content[0]!.text!)
+    const entries = parseJson<NetworkRequestEntry[]>((await call('simulator_network_log', { limit: 3 })).content[0]!.text!)
     expect(entries).toHaveLength(3)
     expect(entries[0].url).toBe('/api/7')
   })

@@ -12,6 +12,11 @@ type ToolResult = {
   isError?: boolean
 }
 type ToolHandler = (args: Record<string, unknown>) => Promise<ToolResult>
+type WorkbenchTarget = Pick<Awaited<ReturnType<typeof listTargets>>[number], 'id' | 'type' | 'title' | 'url'>
+
+function parseJson<T>(text: string): T {
+  return JSON.parse(text) as T
+}
 
 function captureTools() {
   const handlers = new Map<string, ToolHandler>()
@@ -38,7 +43,7 @@ describe('workbench_list_targets', () => {
     const { call } = captureTools()
 
     const result = await call('workbench_list_targets')
-    const targets = JSON.parse(result.content[0]!.text)
+    const targets = parseJson<WorkbenchTarget[]>(result.content[0]!.text)
 
     expect(targets).toHaveLength(2)
     expect(targets[0]).toEqual({ id: 't1', type: 'page', title: 'Main', url: 'https://localhost/main' })

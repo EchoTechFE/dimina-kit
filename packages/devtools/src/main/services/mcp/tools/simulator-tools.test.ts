@@ -7,6 +7,24 @@ type ToolResult = {
   isError?: boolean
 }
 type ToolHandler = (args: Record<string, unknown>) => Promise<ToolResult>
+type Client = NonNullable<ReturnType<typeof getTargetState>['client']>
+type DomRoot = Awaited<ReturnType<Client['DOM']['getDocument']>>['root']
+
+function parseJson<T>(text: string): T {
+  return JSON.parse(text) as T
+}
+
+function createDomRoot(overrides: Partial<DomRoot> = {}): DomRoot {
+  return {
+    nodeId: 1,
+    backendNodeId: 1,
+    nodeType: 9,
+    nodeName: '#document',
+    localName: '',
+    nodeValue: '',
+    ...overrides,
+  }
+}
 
 function captureTools() {
   const handlers = new Map<string, ToolHandler>()
@@ -83,7 +101,7 @@ describe('simulator_navigate', () => {
 
     const result = await call('simulator_navigate', { url: 'https://example.com' })
     expect(state.client!.Page.navigate).toHaveBeenCalledWith({ url: 'https://example.com' })
-    const parsed = JSON.parse(result.content[0]!.text)
+    const parsed = parseJson<{ frameId: string; loaderId: string }>(result.content[0]!.text)
     expect(parsed).toMatchObject({ frameId: 'f1', loaderId: 'l1' })
   })
 
@@ -126,6 +144,7 @@ describe('simulator_input — tap_selector', () => {
     const state = getTargetState('simulator')
     vi.mocked(state.client!.Runtime.evaluate).mockResolvedValue({
       result: {
+        type: 'object',
         value: {
           ok: true, selector: '.btn', index: 0,
           x: 50, y: 60, rect: { left: 25, top: 35, width: 50, height: 50 },
@@ -142,7 +161,7 @@ describe('simulator_input — tap_selector', () => {
   it('returns isError for no_match', async () => {
     const state = getTargetState('simulator')
     vi.mocked(state.client!.Runtime.evaluate).mockResolvedValue({
-      result: { value: { ok: false, reason: 'no_match', message: 'selector matched no elements: .missing' } },
+      result: { type: 'object', value: { ok: false, reason: 'no_match', message: 'selector matched no elements: .missing' } },
     })
     const { call } = captureTools()
 
@@ -154,7 +173,7 @@ describe('simulator_input — tap_selector', () => {
   it('returns isError for out_of_range', async () => {
     const state = getTargetState('simulator')
     vi.mocked(state.client!.Runtime.evaluate).mockResolvedValue({
-      result: { value: { ok: false, reason: 'out_of_range', message: 'nth 5 out of range (matches: 2)' } },
+      result: { type: 'object', value: { ok: false, reason: 'out_of_range', message: 'nth 5 out of range (matches: 2)' } },
     })
     const { call } = captureTools()
 
@@ -166,7 +185,7 @@ describe('simulator_input — tap_selector', () => {
   it('returns isError for not_visible', async () => {
     const state = getTargetState('simulator')
     vi.mocked(state.client!.Runtime.evaluate).mockResolvedValue({
-      result: { value: { ok: false, reason: 'not_visible', message: 'not visible or rendered (zero rect)' } },
+      result: { type: 'object', value: { ok: false, reason: 'not_visible', message: 'not visible or rendered (zero rect)' } },
     })
     const { call } = captureTools()
 
@@ -178,7 +197,7 @@ describe('simulator_input — tap_selector', () => {
   it('returns isError for selector_error', async () => {
     const state = getTargetState('simulator')
     vi.mocked(state.client!.Runtime.evaluate).mockResolvedValue({
-      result: { value: { ok: false, reason: 'selector_error', message: 'invalid selector: [[[' } },
+      result: { type: 'object', value: { ok: false, reason: 'selector_error', message: 'invalid selector: [[[' } },
     })
     const { call } = captureTools()
 
@@ -194,7 +213,7 @@ describe('simulator_input — type', () => {
 
   it('focuses the element and inserts text via insertText', async () => {
     const state = getTargetState('simulator')
-    vi.mocked(state.client!.DOM.getDocument).mockResolvedValue({ root: { nodeId: 1 } })
+    vi.mocked(state.client!.DOM.getDocument).mockResolvedValue({ root: createDomRoot() })
     vi.mocked(state.client!.DOM.querySelectorAll).mockResolvedValue({ nodeIds: [10] })
     const { call } = captureTools()
 
@@ -206,7 +225,7 @@ describe('simulator_input — type', () => {
 
   it('falls back to per-character dispatchKeyEvent when insertText throws', async () => {
     const state = getTargetState('simulator')
-    vi.mocked(state.client!.DOM.getDocument).mockResolvedValue({ root: { nodeId: 1 } })
+    vi.mocked(state.client!.DOM.getDocument).mockResolvedValue({ root: createDomRoot() })
     vi.mocked(state.client!.DOM.querySelectorAll).mockResolvedValue({ nodeIds: [10] })
     vi.mocked(state.client!.Input.insertText).mockRejectedValue(new Error('not supported'))
     const { call } = captureTools()
