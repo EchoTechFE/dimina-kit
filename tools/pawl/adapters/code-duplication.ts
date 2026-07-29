@@ -18,7 +18,7 @@ import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, sep } from 'node:path';
-import { ROOT } from '../lib/eslint.ts';
+import { ROOT } from '../lib/root.ts';
 import type { Adapter, MeasureOptions, MeasureResult } from '../lib/types.ts';
 
 // jscpd's default minimum clone size, pinned so an upstream default change

@@ -1,32 +1,49 @@
 # pawl — anti-regression quality gate (https://github.com/tiangong-dev/pawl)
 # `pawl check` fails when any dimension regresses against pawl.snapshot.json;
-# `pawl record` locks in improvements. Every dimension here is an exec
-# adapter delegating to tools/pawl/pawl-adapter.ts <id>, which imports the
-# matching tools/pawl/adapters/<id>.ts unchanged — each adapter's measure() is
-# the single source of that dimension's number, so the value pawl gates on is
-# exactly the value the adapter tests exercise. The dimina/ submodule is out of
-# scope for all of them (the adapters themselves only ever walk packages/).
+# `pawl record` locks in improvements. Every dimension is either a native
+# builtin or a project-specific exec adapter. Builtins own the generic
+# filesystem/ESLint integration; exec adapters remain only where dimina-kit
+# needs monorepo aggregation or richer project-specific measurements. The
+# dimina/ submodule is out of scope for every dimension.
 
 dimensions:
   - id: "file-length"
     title: "Files over 500 lines"
     direction: "lower-is-better"
     gate: "total"
-    command: "node tools/pawl/pawl-adapter.ts file-length"
+    builtin: "file-length"
+    options:
+      threshold: 500
+      include:
+        - "packages/*/src/**/*.ts"
+        - "packages/*/src/**/*.tsx"
+      exclude:
+        - "**/*.d.ts"
+        - "**/node_modules/**"
+        - "**/dist/**"
 
   - id: "type-escapes"
     title: "Explicit any + @ts-* suppressions (typescript-eslint)"
     direction: "lower-is-better"
     gate: "per-file-count"
     timeout: "10m"
-    command: "node tools/pawl/pawl-adapter.ts type-escapes"
+    builtin: "eslint"
+    options:
+      command: 'pnpm exec eslint "packages/*/src/**/*.{ts,tsx}" --config tools/pawl/eslint-gate.config.mjs --format json'
+      rules:
+        - "@typescript-eslint/no-explicit-any"
+        - "@typescript-eslint/ban-ts-comment"
 
   - id: "cognitive-complexity"
     title: "Functions over cognitive-complexity 15 (sonarjs)"
     direction: "lower-is-better"
     gate: "per-file-count"
     timeout: "10m"
-    command: "node tools/pawl/pawl-adapter.ts cognitive-complexity"
+    builtin: "eslint"
+    options:
+      command: 'pnpm exec eslint "packages/*/src/**/*.{ts,tsx}" --config tools/pawl/eslint-gate.config.mjs --format json'
+      rules:
+        - "sonarjs/cognitive-complexity"
 
   - id: "code-duplication"
     title: "Duplicated code lines (jscpd, >=50 tokens)"

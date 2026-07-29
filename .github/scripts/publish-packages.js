@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { appendFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { NPM_PACKAGES as PACKAGES } from './npm-packages.js'
+import { isPrereleaseVersion, parseSemver } from './version-utils.js'
 
 const channel = process.env.CHANNEL
 const npmTag = process.env.NPM_TAG
@@ -25,6 +26,17 @@ for (const pkg of PACKAGES) {
     readFileSync(join(process.cwd(), pkg.dir, 'package.json'), 'utf8'),
   )
   const localVersion = pkgJson.version
+  parseSemver(localVersion)
+
+  // `latest` must never silently become a prerelease merely because a package
+  // kept a development version in its committed manifest.
+  if (channel === 'release' && isPrereleaseVersion(localVersion)) {
+    console.error(
+      `Refusing to publish ${pkg.name}@${localVersion} to the latest tag: ` +
+      'release packages must use a stable SemVer version.',
+    )
+    process.exit(1)
+  }
 
   let remoteVersion = null
   if (channel === 'release') {
