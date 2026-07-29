@@ -195,7 +195,7 @@ vi.mock('electron', () => {
 // Stub the service-host window-creation module (the fresh path); the pooled
 // path goes through the fake pool below, so these are only used if pooling is
 // off. `serviceHostSpec` is read by the pool wiring at install time.
-vi.mock('../windows/service-host-window/create.js', () => ({
+vi.mock('dimina-electron-runtime/main/service-host-window', () => ({
   serviceHostSpec: () => ({}),
   serviceHostPreloadPath: '/tmp/preload.cjs',
   SERVICE_HOST_PARTITION: 'persist:simulator',
@@ -207,7 +207,7 @@ vi.mock('../windows/service-host-window/create.js', () => ({
 
 // Replace the real ServiceHostPool with the controllable fake so the
 // pool-reuse dispose branch runs without constructing real BrowserWindows.
-vi.mock('../services/service-host-pool/pool.js', () => ({
+vi.mock('dimina-electron-runtime/main/service-host-pool', () => ({
   ServiceHostPool: stubs.FakeServiceHostPool,
 }))
 

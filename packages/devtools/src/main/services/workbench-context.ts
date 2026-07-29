@@ -1,4 +1,9 @@
 import type { BrowserWindow } from 'electron'
+import {
+  createRuntimeEvents,
+  type RuntimeContext,
+  type RuntimeEvents,
+} from 'dimina-electron-runtime/main/runtime-context'
 import type { CompilationAdapter, CustomFileTypes, WorkbenchConfig } from '../../shared/types.js'
 import type { BridgeRouterHandle } from '../ipc/bridge-router.js'
 import type { ConsoleForwarder } from './console-forward/index.js'
@@ -58,7 +63,7 @@ import type { CustomCreateProjectDialogResult } from '../../shared/types.js'
  * Shared mutable state for the workbench application.
  * Passed to each IPC module so they can read/write shared state without closures.
  */
-export interface WorkbenchContext {
+export interface WorkbenchContext extends RuntimeContext {
   adapter: CompilationAdapter
   /** Absolute path to the preload script loaded into the simulator webview */
   preloadPath: string
@@ -179,6 +184,9 @@ export interface WorkbenchContext {
 
   /** Aggregates dispose handlers for every IPC handler, listener, watcher, and CDP session registered by the workbench. */
   registry: DisposableRegistry
+
+  /** Runtime-domain events consumed by optional DevTools panels and renderer notifications. */
+  events: RuntimeEvents
 
   /**
    * Per-webContents connection registry. Each trusted webContents (main window,
@@ -327,6 +335,20 @@ export function createWorkbenchContext(opts: CreateContextOptions): WorkbenchCon
   } as WorkbenchContext
 
   ctx.registry = new DisposableRegistry()
+  ctx.events = createRuntimeEvents()
+  ctx.registry.add(ctx.events.on('session-status', (payload) => {
+    ctx.notify?.sessionRuntimeStatus(payload)
+  }))
+  ctx.registry.add(ctx.events.on('app-data-evict', ({ appId, bridgeId }) => {
+    ctx.appData?.evictBridge(appId, bridgeId)
+  }))
+  ctx.registry.add(ctx.events.on('app-data-message', ({ appId, message }) => {
+    ctx.appData?.onServiceToRender(appId, message)
+  }))
+  ctx.registry.add(ctx.events.on('storage-changed', ({ appId, change }) => {
+    ctx.onServiceStorageChanged?.(appId, change)
+  }))
+  ctx.registry.add(() => ctx.events.clear())
   // Empty connection registry as a first-class context field. Connections are
   // acquired by real wiring points (app bootstrap, view-manager endpoints),
   // NOT here — the constructor stays side-effect-free so focused unit tests can

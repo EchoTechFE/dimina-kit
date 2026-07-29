@@ -56,6 +56,10 @@ interface DeviceShellState {
 export function DeviceShell(
   { miniApp, bridgeId, platform = 'ios', active = true }: DeviceShellProps,
 ) {
+  const embedded = useMemo(
+    () => new URLSearchParams(window.location.search).get('embedded') === '1',
+    [],
+  )
   // The selected device drives the bezel size + status bar height + notch.
   // Initial value rides the native-host bridge config (race-free); live toolbar
   // changes arrive over DEVICE_CHANGE.
@@ -65,9 +69,11 @@ export function DeviceShell(
   // DeviceShell draws the WHOLE phone at fixed device-logical size on a gray
   // desk that fills the WCV and scrolls when the phone overflows the region.
   // Only the chrome metrics below are derived from the device.
-  const statusBarHeight = device?.safeAreaInsets.top
-    ?? (platform === 'ios' ? STATUS_BAR_HEIGHT_IOS : STATUS_BAR_HEIGHT_ANDROID)
-  const bottomInset = device?.safeAreaInsets.bottom ?? 0
+  const statusBarHeight = embedded
+    ? 0
+    : (device?.safeAreaInsets.top
+      ?? (platform === 'ios' ? STATUS_BAR_HEIGHT_IOS : STATUS_BAR_HEIGHT_ANDROID))
+  const bottomInset = embedded ? 0 : (device?.safeAreaInsets.bottom ?? 0)
   const notchType = device?.notchType ?? 'none'
   const preload = useMemo(() => miniApp.getRenderPreloadUrl(), [miniApp])
   const tabBarConfig = useMemo(() => miniApp.getTabBarConfig(), [miniApp])
@@ -247,14 +253,16 @@ export function DeviceShell(
   }, [miniApp, shell.stack])
 
   return (
-    <main className="device-shell-root">
+    <main className={`device-shell-root${embedded ? ' device-shell-root--embedded' : ''}`}>
       <section
-        className="device-shell"
+        className={`device-shell${embedded ? ' device-shell--embedded' : ''}`}
         aria-label="Dimina simulator"
         // Fixed device-logical size so the phone never squishes with the
         // window/flex: the desk (.device-shell-root) scrolls when it overflows.
         // Omitted when device is null → CSS sizing fallback fills the desk.
-        style={device ? { width: device.screenWidth, height: device.screenHeight } : undefined}
+        style={!embedded && device
+          ? { width: device.screenWidth, height: device.screenHeight }
+          : undefined}
       >
         {/*
           Status bar overlay (time / icons / notch) pinned to the device top,
@@ -262,11 +270,13 @@ export function DeviceShell(
           `statusBarHeight` below it (paddingTop), so default nav blends its bg
           up into the status area while custom nav shows the page through it.
         */}
-        <StatusBar
-          height={statusBarHeight}
-          notchType={notchType}
-          textStyle={top.navBar.textStyle}
-        />
+        {!embedded && (
+          <StatusBar
+            height={statusBarHeight}
+            notchType={notchType}
+            textStyle={top.navBar.textStyle}
+          />
+        )}
         {/*
           Default nav-bar is in-flow (reserves its own height); custom nav-bar
           is an absolute overlay and the webview renders full-bleed beneath it.

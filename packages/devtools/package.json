@@ -86,7 +86,7 @@
   },
   "scripts": {
     "start": "electron dist/main/index.js",
-    "build": "pnpm build:container && pnpm build:main && pnpm build:preload && pnpm build:renderer && pnpm build:simulator && pnpm build:native-host && pnpm build:workbench",
+    "build": "pnpm --filter dimina-electron-runtime build && pnpm build:container && pnpm build:main && pnpm build:preload && pnpm build:renderer && pnpm build:simulator && pnpm build:native-host && pnpm build:workbench",
     "build:container": "node build-container.js",
     "build:native-host": "node build-native-host.mjs",
     "build:simulator": "vite build --config vite.config.simulator.ts",
@@ -111,6 +111,7 @@
   "dependencies": {
     "@dimina-kit/devkit": "workspace:*",
     "@dimina-kit/electron-deck": "workspace:*",
+    "dimina-electron-runtime": "workspace:*",
     "@dimina-kit/view-anchor": "workspace:*",
     "@dimina-kit/inspect": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",

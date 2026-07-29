@@ -14,7 +14,7 @@
  *      exported (it is part of `instance.registerSimulatorApi`'s signature),
  *      re-routed through `./services/simulator/custom-apis.js`.
  *  D4. `package.json` drops the `./simulator-apis` subpath export.
- *  D5. The factory + interface + handler type SURVIVE in custom-apis.ts:
+ *  D5. The factory + interface + handler type SURVIVE in the runtime-owned custom-apis.ts:
  *      `SimulatorApiHandler`, `SimulatorApiRegistry`, `createSimulatorApiRegistry`.
  *
  * These assertions pin the clean break: the global, the wrapper file, the
@@ -115,8 +115,12 @@ describe('Requirement D5: createSimulatorApiRegistry + types survive in custom-a
     expect(typeof reg.clear).toBe('function')
   })
 
-  it('custom-apis.ts still declares the SimulatorApiHandler / SimulatorApiRegistry types', async () => {
-    const src = await readFile(repoFile('services/simulator/custom-apis.ts'), 'utf8')
+  it('runtime-owned custom-apis.ts still declares the SimulatorApiHandler / SimulatorApiRegistry types', async () => {
+    const runtimeSource = resolve(
+      HERE,
+      '../../../electron-runtime/src/main/services/simulator/custom-apis.ts',
+    )
+    const src = await readFile(runtimeSource, 'utf8')
     expect(
       /\bSimulatorApiHandler\b/.test(src),
       'custom-apis.ts must keep the SimulatorApiHandler type',
