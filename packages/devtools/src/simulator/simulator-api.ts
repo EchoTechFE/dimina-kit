@@ -37,7 +37,6 @@ import {
 	chooseImage,
 	previewImage,
 	compressImage,
-	saveCanvasTempFile,
 	saveImageToPhotosAlbum,
 	getImageInfo,
 	chooseMedia,
@@ -87,9 +86,6 @@ import {
 	hideLoading,
 	showModal,
 	showActionSheet,
-	share,
-	openPost,
-	joinIsland,
 } from './simulator-api-ui'
 
 // ─── Base ────────────────────────────────────────────────────────────────────
@@ -247,9 +243,6 @@ export const simulatorApis: Record<string, (this: MiniAppContext, opts: never) =
 	hideLoading,
 	showModal,
 	showActionSheet,
-	share,
-	openPost,
-	joinIsland,
 	// Network
 	downloadFile,
 	uploadFile,
@@ -284,7 +277,6 @@ export const simulatorApis: Record<string, (this: MiniAppContext, opts: never) =
 	chooseImage,
 	previewImage,
 	compressImage,
-	saveCanvasTempFile,
 	saveImageToPhotosAlbum,
 	getImageInfo,
 	// Media: Video

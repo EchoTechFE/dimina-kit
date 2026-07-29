@@ -30,6 +30,10 @@
   gap: 1px;
   pointer-events: auto;
   cursor: pointer;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
 }
 
 .menu-capsule__dot {

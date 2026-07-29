@@ -1,14 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { SIMULATOR_EVENTS as E } from '../../shared/bridge-channels'
-import type { ApiCallPayload, NavActionPayload, TabActionPayload } from '../../shared/bridge-channels'
+import type {
+  ApiCallPayload,
+  NavActionPayload,
+  TabActionPayload,
+} from '../../shared/bridge-channels'
 import type { SimulatorMiniApp } from '../simulator-mini-app'
+import type { DeviceShellProps } from './device-shell-types'
 import { runApiAsync } from '../run-api-async'
-import { NavigationBar, type NavBarPlatform } from './navigation-bar'
+import { NavigationBar } from './navigation-bar'
 import { StatusBar } from './status-bar'
 import type { NativeDeviceInfo } from '../../shared/ipc-channels'
 import { TabBar } from './tab-bar'
 import { UiOverlay } from './ui-overlay'
-import { showCapsuleMenu } from './capsule-menu-handler'
+import {
+  dispatchSimulatorCapsuleMore,
+  SimulatorUiExtensionLayer,
+} from './simulator-ui-extension-layer'
 import {
   applyTabAction,
   makeInitialTabBarState,
@@ -34,18 +42,7 @@ import {
 } from './page-stack-controller'
 import './device-shell.css'
 
-export interface DeviceShellProps {
-  miniApp: SimulatorMiniApp
-  bridgeId: string
-  width?: number
-  height?: number
-  /**
-   * Which platform's NavigationBar conventions to emulate.
-   * iOS: title centered, status bar height 44.
-   * Android: title left-aligned, status bar height varies.
-   */
-  platform?: NavBarPlatform
-}
+export type { DeviceShellProps } from './device-shell-types'
 
 const STATUS_BAR_HEIGHT_IOS = 44
 const STATUS_BAR_HEIGHT_ANDROID = 24
@@ -56,11 +53,9 @@ interface DeviceShellState {
   tabBar: TabBarState
 }
 
-export function DeviceShell({
-  miniApp,
-  bridgeId,
-  platform = 'ios',
-}: DeviceShellProps) {
+export function DeviceShell(
+  { miniApp, bridgeId, platform = 'ios', active = true }: DeviceShellProps,
+) {
   // The selected device drives the bezel size + status bar height + notch.
   // Initial value rides the native-host bridge config (race-free); live toolbar
   // changes arrive over DEVICE_CHANGE.
@@ -229,14 +224,12 @@ export function DeviceShell({
     })
   }, [miniApp, performNavAction])
 
-  const handleMoreClick = useCallback(() => {
-    const s = stateRef.current.shell.stack
-    showCapsuleMenu(miniApp.appId, s[s.length - 1].navBar.title)
-  }, [miniApp])
-
   // ── Rendering ─────────────────────────────────────────────────────────────
   const top = shell.stack[shell.stack.length - 1]
   const mounted = enumerateMounted(shell)
+  const handleMore = useCallback(() => {
+    dispatchSimulatorCapsuleMore(miniApp.appId, top.navBar.title, top.pagePath)
+  }, [miniApp.appId, top.navBar.title, top.pagePath])
 
   // Tell main which page is the visible top-of-stack so main-side panels
   // (WXML/element-inspect) and automation can target the active render
@@ -286,7 +279,7 @@ export function DeviceShell({
           statusBarHeight={statusBarHeight}
           navBarHeight={NAV_BAR_HEIGHT}
           onBack={handleBack}
-          onMoreClick={handleMoreClick}
+          onMore={handleMore}
         />
         <div className="device-shell__viewport">
           {mounted.map(({ entry, visible }) => (
@@ -325,6 +318,7 @@ export function DeviceShell({
             sheet). Last in flow so it layers above the page webview + tabBar,
             clipped to the device bezel. */}
         <UiOverlay />
+        <SimulatorUiExtensionLayer active={active} appId={miniApp.appId} />
         {/* Home-indicator pill — an absolute overlay at the device bottom
             (gesture-bar devices only; the home-button SE class has bottom inset
             0). It is NOT in flow: a tab page sees the tabBar's color behind it,

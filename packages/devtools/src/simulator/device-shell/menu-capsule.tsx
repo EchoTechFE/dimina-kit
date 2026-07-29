@@ -14,31 +14,35 @@ export { getMenuCapsuleRect, type MenuButtonRect as MenuCapsuleRect } from './me
 export interface MenuCapsuleProps {
   platform: NavBarPlatform
   statusBarHeight: number
-  onMoreClick?: () => void
+  onMore?: () => void
 }
 
 /**
- * Capsule bar (more / close) rendered in the navigation-bar area.
- * The "more" dot button opens the capsule menu popup via `onMoreClick`.
+ * Capsule bar (more / close) rendered in the navigation-bar area. The generic
+ * simulator emits a semantic action; product-specific menus remain downstream.
  *
  * Native containers render the capsule as an opaque white pill with dark
  * icons regardless of the nav bar's textStyle (see MenuButtonGeometry.kt /
  * MenuAPI.swift), so this does not theme off navBar textStyle either.
  */
-export function MenuCapsule({ platform, statusBarHeight, onMoreClick }: MenuCapsuleProps) {
+export function MenuCapsule({ platform, statusBarHeight, onMore }: MenuCapsuleProps) {
   const top = statusBarHeight + getMenuCapsuleTopOffset(platform)
 
   return (
     <div
       className="menu-capsule"
       style={{ width: MENU_CAPSULE_WIDTH, height: MENU_CAPSULE_HEIGHT, top, right: MENU_CAPSULE_TRAILING_SPACING }}
-      aria-hidden="true"
     >
-      <div className="menu-capsule__more" onClick={onMoreClick}>
+      <button
+        type="button"
+        className="menu-capsule__more"
+        aria-label="More"
+        onClick={onMore}
+      >
         <span className="menu-capsule__dot menu-capsule__dot--side" />
         <span className="menu-capsule__dot menu-capsule__dot--mid" />
         <span className="menu-capsule__dot menu-capsule__dot--side" />
-      </div>
+      </button>
       <div className="menu-capsule__divider" />
       <div className="menu-capsule__close">
         {/* Native draws a hollow ring + filled center dot, not an "X" — see

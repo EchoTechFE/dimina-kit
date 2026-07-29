@@ -137,3 +137,16 @@
   border-radius: 999px;
   background: #111827;
 }
+
+/**
+ * Stable mount point for trusted downstream simulator UI extensions. Dimina
+ * owns the layer and clipping; extensions opt their own children back into
+ * pointer events.
+ */
+.device-shell__extension-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 400;
+  overflow: hidden;
+  pointer-events: none;
+}
