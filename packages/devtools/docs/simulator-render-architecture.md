@@ -39,6 +39,33 @@ hard path (`attachNativeSimulator`, full teardown + rebuild) remains the
 fallback when main reports no live+ready shell, and the only path for project
 open/close and device relaunch.
 
+## Downstream UI extensions
+
+Product UI does not belong in the generic DeviceShell and downstream hosts do
+not reach into its DOM. The public split is:
+
+1. `instance.registerSimulatorApi(name, handler)` exposes the mini-program
+   command.
+2. `instance.registerSimulatorUiExtension({ id, rendererScriptPath })` loads a
+   trusted renderer bundle and returns an `invoke()` handle.
+3. The bundle registers its renderer implementation through
+   `@dimina-kit/devtools/simulator-ui`.
+
+`createSimulatorUiExtensionRegistry` follows the exact native simulator WCV,
+re-reads and loads registered bundles after each top-level document finishes,
+verifies each
+bundle registered the matching ID, and unregisters it with the context.
+`DeviceShell` owns a clipped `data-dimina-simulator-overlay-root` above the
+built-in `UiOverlay`. Only the shell whose role is `current` attaches that root
+to the runtime. During ready-then-swap, the old mount is aborted/disposed and
+the same extension mounts against the promoted shell's root; pending shells
+never receive product UI.
+
+The framework also translates simulator chrome interactions into semantic
+actions. The capsule more button dispatches `capsule.more` with app/page
+metadata to registered renderer extensions, so downstream code never depends
+on `.menu-capsule__more`, `.device-shell`, or click-capture timing.
+
 ### Style-only rebuild = in-place stylesheet swap (no session reboot)
 
 A rebuild that touched ONLY stylesheets is a THIRD, lighter path — no session
@@ -203,6 +230,8 @@ safe-area doc for the CDP wiring.)
 |---|---|
 | `src/renderer/.../project-runtime/components/simulator-panel.tsx` | z2 panel: toolbar / placeholder / path-bar; owns the simulator `createPlacementAnchor` |
 | `src/simulator/device-shell/device-shell.tsx` + `device-shell.css` | DeviceShell: draws the whole phone inside the WCV; hosts render-host `<webview>` guests |
+| `src/simulator/ui-extension-runtime.ts` | renderer-side extension registry, active-root handoff, invoke routing, and semantic chrome actions |
+| `src/main/services/simulator/ui-extensions.ts` | per-context trusted bundle registry that follows the native simulator WCV |
 | `src/main/services/views/native-simulator-view.ts` | native-simulator domain module: `attachNativeSimulator`, `softReloadNativeSimulator`, bounds/zoom application (`view-manager.ts` is the composition root wiring the per-domain view modules) |
 | `src/main/services/layout/index.ts` | `computeNativeSimulatorViewParams` |
 | `src/renderer/shared/api/view-api.ts` | `setNativeSimulatorBounds` IPC wrapper (`simulator:set-native-bounds`) |

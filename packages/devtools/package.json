@@ -37,6 +37,7 @@
     ".": "./dist/main/api.js",
     "./launch": "./dist/main/app/launch.js",
     "./types": "./dist/shared/types.js",
+    "./simulator-ui": "./dist/shared/simulator-ui.js",
     "./context": "./dist/main/services/workbench-context.js",
     "./projects-provider": "./dist/main/services/projects/index.js",
     "./create-window": "./dist/main/windows/main-window/index.js",
@@ -52,6 +53,9 @@
       ],
       "types": [
         "dist/shared/types.d.ts"
+      ],
+      "simulator-ui": [
+        "dist/shared/simulator-ui.d.ts"
       ],
       "context": [
         "dist/main/services/workbench-context.d.ts"

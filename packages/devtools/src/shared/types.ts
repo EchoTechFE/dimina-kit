@@ -191,6 +191,16 @@ export interface WorkbenchHostInstance {
     name: string,
     handler: SimulatorApiHandler,
   ): import('@dimina-kit/electron-deck/main').Disposable
+
+  /**
+   * Installs a trusted downstream renderer bundle into this context's
+   * simulator UI runtime. Dimina owns the active DeviceShell mount point and
+   * reload/dispose lifecycle; the host owns the rendered DOM and business
+   * semantics.
+   */
+  registerSimulatorUiExtension(
+    registration: import('./simulator-ui.js').SimulatorUiExtensionRegistration,
+  ): import('./simulator-ui.js').SimulatorUiExtensionHandle
 }
 
 /**

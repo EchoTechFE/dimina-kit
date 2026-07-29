@@ -77,6 +77,11 @@ export interface ViewManagerContext {
    * Optional so partial test contexts compile.
    */
   simulatorApis?: WorkbenchContext['simulatorApis']
+  /**
+   * Host-registered UI extensions that follow the native simulator WCV.
+   * Optional only for focused view-manager test doubles.
+   */
+  simulatorUiExtensions?: WorkbenchContext['simulatorUiExtensions']
 }
 
 /**

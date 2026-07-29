@@ -6,6 +6,10 @@ import { app, BrowserWindow, nativeImage, session } from 'electron'
 import fs from 'fs'
 import path from 'path'
 import type { BuiltinModuleId, MenuContext, WorkbenchAppConfig } from '../../shared/types.js'
+import type {
+  SimulatorUiExtensionHandle,
+  SimulatorUiExtensionRegistration,
+} from '../../shared/simulator-ui.js'
 import type { SimulatorApiHandler } from '../services/simulator/custom-apis.js'
 import { rendererDir as defaultRendererDir, defaultPreloadPath, devtoolsPackageRoot } from '../utils/paths.js'
 import { installThemeBackgroundSync } from '../utils/theme.js'
@@ -77,6 +81,10 @@ export interface WorkbenchAppInstance {
   registerTrustedWindow: (win: BrowserWindow) => Disposable
   /** Registers a simulator custom API into this context's registry. */
   registerSimulatorApi: (name: string, handler: SimulatorApiHandler) => Disposable
+  /** Registers a downstream renderer extension for the simulator device UI. */
+  registerSimulatorUiExtension: (
+    registration: SimulatorUiExtensionRegistration,
+  ) => SimulatorUiExtensionHandle
   automationServer?: AutomationServer
   updateManager?: UpdateManager
   dispose: () => Promise<void>
@@ -550,6 +558,14 @@ export async function createDevtoolsRuntime(
       context.registry.add(registerTrustedWindow(context, win)),
     registerSimulatorApi: (name: string, handler: SimulatorApiHandler) =>
       context.registry.add(toDisposable(context.simulatorApis.register(name, handler))),
+    registerSimulatorUiExtension: (registration: SimulatorUiExtensionRegistration) => {
+      const extension = context.simulatorUiExtensions.register(registration)
+      const owned = context.registry.add(extension)
+      return {
+        dispose: () => owned.dispose(),
+        invoke: (method, params) => extension.invoke(method, params),
+      }
+    },
     dispose: () => disposeContext(context),
   }
   onInstanceCreated?.(instance)

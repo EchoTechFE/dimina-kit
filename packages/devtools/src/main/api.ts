@@ -35,6 +35,10 @@ export type { Project, ProjectPages, ProjectSettings } from './services/projects
 
 // ── Simulator extension surface ──────────────────────────────────────────
 export type { SimulatorApiHandler } from './services/simulator/custom-apis.js'
+export type {
+  SimulatorUiExtensionHandle,
+  SimulatorUiExtensionRegistration,
+} from '../shared/simulator-ui.js'
 
 // ── Paths ────────────────────────────────────────────────────────────────
 export {

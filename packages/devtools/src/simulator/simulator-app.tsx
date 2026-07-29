@@ -1,4 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
+// Install the public renderer bridge before the top-level document finishes
+// loading. Host bundles are injected on did-finish-load, while DeviceShell is
+// lazy and may not have requested its chunk yet.
+import './ui-extension-runtime'
 import { directRequest } from './direct-request'
 import { simulatorApis } from './simulator-api'
 import { registerCustomApis } from './custom-api-boot'
@@ -274,6 +278,7 @@ export function SimulatorApp() {
             miniApp={shell.miniApp}
             bridgeId={shell.bridgeId}
             platform={shell.miniApp.platform}
+            active={role === 'current'}
           />
         </div>
       ))}

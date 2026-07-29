@@ -53,6 +53,13 @@ launch({
     // simulator 自定义 API：per-context
     instance.registerSimulatorApi('login', (params) => myLogin(params))
 
+    // simulator 下游 UI：框架管理 DeviceShell 挂载点与生命周期
+    const nativeUi = instance.registerSimulatorUiExtension({
+      id: 'my.native-ui',
+      rendererScriptPath: '/absolute/path/to/native-ui.js',
+    })
+    instance.registerSimulatorApi('share', params => nativeUi.invoke('share', params))
+
     // 自定义 IPC：经 gated 的 IpcRegistry，不再裸 ipcMain.handle
     instance.ipc.handle('my:action', () => collectStats())
 
@@ -207,6 +214,7 @@ src/
 | 方法 | 说明 |
 | --- | --- |
 | `instance.registerSimulatorApi(name, handler)` | 注册 simulator 自定义 API，小程序里 `wx.<name>()` 调用（详见下方"Simulator 自定义 API"）。返回 `Disposable` |
+| `instance.registerSimulatorUiExtension({ id, rendererScriptPath })` | 注册可信 renderer bundle。框架负责注入当前 simulator、稳定 Overlay Root、soft reload 的 current/pending 切换和销毁；返回可 `invoke()` 的句柄 |
 | `instance.ipc` | `IpcRegistry` 实例，`instance.ipc.handle(channel, fn)` 注册自定义 IPC；已绑定 `senderPolicy` 网关 |
 | `instance.registerTrustedWindow(win)` | 把 host 自有弹窗 `BrowserWindow` 加入受信 sender 集，否则其发起的 `instance.ipc` 调用会被网关拒绝。窗口关闭即移除 |
 
@@ -479,6 +487,66 @@ launch({
 - `dispose()` 只会移除自己创建的那次注册——如果之后被别人覆盖了，旧的 disposer 是 no-op。
 - 调用未注册且容器内也没有的 name：小程序侧拿到 reject，错误信息里带 name。
 - Handler 可同步或异步返回；**返回值需可 JSON 序列化**（IPC 限制）。函数、Symbol、Map/Set、循环引用都会丢失。
+
+---
+
+## Simulator UI 扩展
+
+需要分享面板、授权弹窗等产品 UI 的下游 host，应同时使用两个正交接口：
+
+- `registerSimulatorApi` 定义小程序侧 `wx.*` 命令。
+- `registerSimulatorUiExtension` 安装下游 renderer bundle，并通过返回句柄把命令送到 UI。
+
+主进程只注册绝对路径指向的可信构建产物：
+
+```typescript
+const nativeUi = instance.registerSimulatorUiExtension({
+  id: 'my.native-ui',
+  rendererScriptPath: fileURLToPath(
+    new URL('../renderer/native-ui.js', import.meta.url),
+  ),
+})
+
+instance.registerSimulatorApi('share', params =>
+  nativeUi.invoke('share', params),
+)
+```
+
+renderer bundle 使用 `@dimina-kit/devtools/simulator-ui` 注册实现：
+
+```typescript
+import { registerSimulatorUiExtension } from '@dimina-kit/devtools/simulator-ui'
+
+let runtime
+
+registerSimulatorUiExtension({
+  id: 'my.native-ui',
+  mount({ overlayRoot, appId, signal }) {
+    runtime = createNativeUi({ root: overlayRoot, appId })
+    signal.addEventListener('abort', () => runtime.destroy(), { once: true })
+    return () => runtime.destroy()
+  },
+  invoke(method, params) {
+    return runtime.invoke(method, params)
+  },
+  onChromeAction(action) {
+    if (action.name !== 'capsule.more') return false
+    runtime.showMoreMenu(action)
+    return true
+  },
+})
+```
+
+契约边界：
+
+- 框架只提供设备内的稳定 Overlay Root，不接收 React Component，因而不绑定下游 React 版本。
+- 只有可见的 current `DeviceShell` 持有挂载点；soft reload 提升 pending shell 时，旧 mount 先收到 abort/cleanup，再在新 root 上 mount。
+- Overlay Root 默认不拦截页面点击；扩展实际创建的交互层需要设置 `pointer-events: auto`。
+- 胶囊菜单通过语义动作 `capsule.more` 分发，不应查询 `.menu-capsule__more` 或拦截 DOM click。
+- `id` 在一个 context 内唯一；script 必须用相同 `id` 注册 renderer 实现，否则安装失败。
+- 每次 simulator 顶层文档完成加载时都会重新读取 `rendererScriptPath`，因此开发态重建
+  bundle 后执行硬 reload 即可加载新代码；soft reload 只切换 DeviceShell 挂载点，不重复执行 bundle。
+- `dispose()` 会注销 renderer 实现；context 销毁时自动执行。`invoke()` 参数和返回值必须可跨 Electron IPC/`executeJavaScript` 序列化。
 
 ---
 

@@ -42,6 +42,10 @@ import {
   createSimulatorApiRegistry,
   type SimulatorApiRegistry,
 } from './simulator/custom-apis.js'
+import {
+  createSimulatorUiExtensionRegistry,
+  type SimulatorUiExtensionRegistry,
+} from './simulator/ui-extensions.js'
 import { resolveTemplates, sanitizeTemplates } from './projects/templates.js'
 import { BUILTIN_TEMPLATES } from './projects/builtin-templates.js'
 import type {
@@ -166,6 +170,12 @@ export interface WorkbenchContext {
    * One registry per context — no process-global crosstalk.
    */
   simulatorApis: SimulatorApiRegistry
+
+  /**
+   * Per-context downstream simulator UI extensions. It owns renderer bundle
+   * installation and follows the active native simulator WebContentsView.
+   */
+  simulatorUiExtensions: SimulatorUiExtensionRegistry
 
   /** Aggregates dispose handlers for every IPC handler, listener, watcher, and CDP session registered by the workbench. */
   registry: DisposableRegistry
@@ -326,6 +336,8 @@ export function createWorkbenchContext(opts: CreateContextOptions): WorkbenchCon
   ctx.registry.add(() => ctx.cdpSessionBroker.dispose())
   ctx.trustedWindowSenderIds = new Map<number, number>()
   ctx.simulatorApis = createSimulatorApiRegistry()
+  ctx.simulatorUiExtensions = createSimulatorUiExtensionRegistry()
+  ctx.registry.add(() => ctx.simulatorUiExtensions.clear())
   ctx.windows = createWindowService(opts.mainWindow)
   ctx.views = createViewManager(ctx)
   // Full view teardown belongs to the CONTEXT's life, not a project's:

@@ -114,6 +114,7 @@ export function createNativeSimulatorView(
    */
   function tearDownNativeSimulatorView(label: string): void {
     if (!nativeSimulatorView) return
+    ctx.simulatorUiExtensions?.detach(nativeSimulatorView.webContents)
     if (nativeSimulatorViewAdded && !ctx.windows.mainWindow.isDestroyed()) {
       try {
         ctx.windows.mainWindow.contentView.removeChildView(nativeSimulatorView)
@@ -268,6 +269,10 @@ export function createNativeSimulatorView(
     // and the renderer placeholder behind it are all the same color.
     view.setBackgroundColor(simDeskBg())
     const simWc = view.webContents
+    // Downstream UI bundles follow this exact WCV. The registry waits for the
+    // top-level simulator document to finish loading before installation and
+    // drops the association through the shared teardown path above.
+    ctx.simulatorUiExtensions?.attach(simWc)
 
     // Keep the WCV surface in sync with the active color scheme. The
     // process-wide installThemeBackgroundSync() re-syncs BrowserWindows on a

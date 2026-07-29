@@ -16,6 +16,10 @@ import type { NativeDeviceInfo } from '../../shared/ipc-channels'
 import { TabBar } from './tab-bar'
 import { UiOverlay } from './ui-overlay'
 import {
+  attachSimulatorUiRoot,
+  dispatchSimulatorChromeAction,
+} from '../ui-extension-runtime'
+import {
   applyTabAction,
   makeInitialTabBarState,
   type TabBarState,
@@ -45,6 +49,8 @@ export interface DeviceShellProps {
   bridgeId: string
   width?: number
   height?: number
+  /** Only the visible shell owns the downstream extension layer. */
+  active?: boolean
   /**
    * Which platform's NavigationBar conventions to emulate.
    * iOS: title centered, status bar height 44.
@@ -66,6 +72,7 @@ export function DeviceShell({
   miniApp,
   bridgeId,
   platform = 'ios',
+  active = true,
 }: DeviceShellProps) {
   // The selected device drives the bezel size + status bar height + notch.
   // Initial value rides the native-host bridge config (race-free); live toolbar
@@ -102,7 +109,13 @@ export function DeviceShell({
   // Ref mirror of state so async controllers can read current value without
   // closing over a stale snapshot.
   const stateRef = useRef<DeviceShellState>({ shell, tabBar })
+  const extensionRootRef = useRef<HTMLDivElement>(null)
   useEffect(() => { stateRef.current = { shell, tabBar } }, [shell, tabBar])
+  useEffect(() => {
+    const root = extensionRootRef.current
+    if (!active || !root) return
+    return attachSimulatorUiRoot(root, miniApp.appId)
+  }, [active, miniApp.appId])
 
   const applySideEffects = useCallback((effects: SideEffect[]) => {
     for (const effect of effects) {
@@ -238,6 +251,14 @@ export function DeviceShell({
   // ── Rendering ─────────────────────────────────────────────────────────────
   const top = shell.stack[shell.stack.length - 1]
   const mounted = enumerateMounted(shell)
+  const handleMore = useCallback(() => {
+    void dispatchSimulatorChromeAction({
+      name: 'capsule.more',
+      appId: miniApp.appId,
+      appName: top.navBar.title || miniApp.appId,
+      pagePath: top.pagePath,
+    })
+  }, [miniApp.appId, top.navBar.title, top.pagePath])
 
   // Tell main which page is the visible top-of-stack so main-side panels
   // (WXML/element-inspect) and automation can target the active render
@@ -287,6 +308,7 @@ export function DeviceShell({
           statusBarHeight={statusBarHeight}
           navBarHeight={NAV_BAR_HEIGHT}
           onBack={handleBack}
+          onMore={handleMore}
         />
         <div className="device-shell__viewport">
           {mounted.map(({ entry, visible }) => (
@@ -325,6 +347,11 @@ export function DeviceShell({
             sheet). Last in flow so it layers above the page webview + tabBar,
             clipped to the device bezel. */}
         <UiOverlay />
+        <div
+          ref={extensionRootRef}
+          className="device-shell__extension-layer"
+          data-dimina-simulator-overlay-root
+        />
         {/* Home-indicator pill — an absolute overlay at the device bottom
             (gesture-bar devices only; the home-button SE class has bottom inset
             0). It is NOT in flow: a tab page sees the tabBar's color behind it,
