@@ -269,11 +269,8 @@ export function createNativeSimulatorView(
     // and the renderer placeholder behind it are all the same color.
     view.setBackgroundColor(simDeskBg())
     const simWc = view.webContents
-    // Downstream UI bundles follow this exact WCV. The registry waits for the
-    // top-level simulator document to finish loading before installation and
-    // drops the association through the shared teardown path above.
+    // Keep downstream UI bundles bound to this WCV until shared teardown.
     ctx.simulatorUiExtensions?.attach(simWc)
-
     // Keep the WCV surface in sync with the active color scheme. The
     // process-wide installThemeBackgroundSync() re-syncs BrowserWindows on a
     // theme switch, but this top-level WebContentsView is not a window, so its
