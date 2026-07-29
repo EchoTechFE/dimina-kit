@@ -33,7 +33,6 @@ export interface NavigationBarProps {
   navBarHeight: number
   onBack?: () => void
   onHome?: () => void
-  onMoreClick?: () => void
 }
 
 const TIMING_FUNC_MAP: Record<NonNullable<NavigationBarState['colorAnimation']>['timingFunc'], string> = {
@@ -73,7 +72,6 @@ export function NavigationBar({
   navBarHeight,
   onBack,
   onHome,
-  onMoreClick,
 }: NavigationBarProps) {
   const transition = useMemo(() => {
     if (!state.colorAnimation || state.colorAnimation.durationMs <= 0) return undefined
@@ -152,7 +150,6 @@ export function NavigationBar({
       <MenuCapsule
         platform={platform}
         statusBarHeight={statusBarHeight}
-        onMoreClick={onMoreClick}
       />
     </header>
   )

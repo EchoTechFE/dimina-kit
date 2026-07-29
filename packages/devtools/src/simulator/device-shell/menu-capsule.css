@@ -28,8 +28,6 @@
 .menu-capsule__more {
   /* native packs the three dots almost touching (~0.8px edge gap) */
   gap: 1px;
-  pointer-events: auto;
-  cursor: pointer;
 }
 
 .menu-capsule__dot {
