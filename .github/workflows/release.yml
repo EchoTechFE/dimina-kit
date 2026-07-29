@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       channel:
-        description: 'Channel — dev: timestamp-suffix versions, npm dist-tag dev, no GitHub Release. release: package.json versions, npm dist-tag latest, time-named GitHub Release with diff-based notes.'
+        description: 'Channel — dev: normalized x.y.z-dev.<timestamp> versions, npm dist-tag dev, no GitHub Release. release: stable package.json versions, npm dist-tag latest, time-named GitHub Release with diff-based notes.'
         type: choice
         options:
           - dev

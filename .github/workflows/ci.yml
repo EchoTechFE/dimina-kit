@@ -134,14 +134,14 @@ jobs:
       - name: Test
         run: pnpm turbo run test --cache-dir=.turbo
 
-      # pawl's exec dimensions delegate to the TypeScript adapters in tools/pawl
-      # (via pawl-adapter.ts); compile them and run their guarding tests before
-      # the gate invokes them.
-      - name: Build & test pawl adapters
+      # Compile the remaining project-specific pawl adapters and test both the
+      # adapter contracts and release-version helpers before either gate or
+      # release workflow consumes them.
+      - name: Build & test repository tooling
         run: |
           set -o pipefail
           pnpm exec tsc -p tools/pawl
-          node --test "tools/pawl/*.test.ts"
+          node --test ".github/scripts/*.test.js" "tools/pawl/*.test.ts"
 
       # setup-pawl installs the binary, runs `check`, and (comment defaults on)
       # upserts one sticky baseline-vs-current comment on the PR rendered from

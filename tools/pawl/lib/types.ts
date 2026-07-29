@@ -1,7 +1,6 @@
-// Shared types for the gate engine and its adapters. One `Adapter` shape
-// is the contract every dimension (cognitive-complexity, type-escapes,
-// circular-deps, …) must satisfy so the engine can measure, snapshot, and
-// gate them uniformly regardless of which underlying tool an adapter wraps.
+// Shared types for dimina-kit's project-specific exec adapters. Pawl builtins
+// bypass this bridge; the remaining adapters use this shape so pawl can
+// measure them through tools/pawl/pawl-adapter.ts.
 
 export type Direction = 'lower-is-better' | 'higher-is-better';
 
