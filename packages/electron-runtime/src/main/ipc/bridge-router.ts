@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url'
 import { BRIDGE_CHANNELS as C, SIMULATOR_EVENTS as E, deviceInfoToHostEnv } from '../../shared/bridge-channels.js'
 import type { NativeDeviceInfo, SyncStorageChange } from '../../shared/runtime-types.js'
 import { apiCallWatchdogMs, isPersistentSimulatorApi } from '../../shared/simulator-api-metadata.js'
-import { runtimePackageRoot } from '../utils/paths.js'
+import { resolveRuntimeAssetPaths } from '../utils/paths.js'
 import { createSessionListenerBag } from './session-listener-bag.js'
 import type { SessionListenerBag } from './session-listener-bag.js'
 import type {
@@ -549,6 +549,8 @@ function resolveCurrentApp(
 }
 
 export function installBridgeRouter(ctx: RuntimeContext): void {
+  const runtimeAssets = ctx.assets ?? resolveRuntimeAssetPaths()
+  ctx.assets = runtimeAssets
   const state: RouterState = {
     appSessions: new Map(),
     pageSessions: new Map(),
@@ -583,7 +585,11 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
     // cancelled on teardown so it can't warm a disposed pool.
     const warmTimer = setTimeout(() => {
       void pool
-        .init({ defaultPoolSize: prewarmPoolSize, defaultSpec: serviceHostSpec(), maxPoolSize: PREWARM_MAX_POOL_SIZE })
+        .init({
+          defaultPoolSize: prewarmPoolSize,
+          defaultSpec: serviceHostSpec(undefined, undefined, runtimeAssets),
+          maxPoolSize: PREWARM_MAX_POOL_SIZE,
+        })
         .catch((error) => {
           console.warn('[bridge-router] webview pool warm-up failed:', error)
         })
@@ -613,8 +619,8 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
     // time the simulator preload runs this sendSync).
     const reply: NativeHostConfig = {
       enabled: true,
-      renderHostHtmlUrl: pathToFileURL(path.join(runtimePackageRoot, 'dist/render-host/pageFrame.html')).toString(),
-      renderPreloadUrl: pathToFileURL(path.join(runtimePackageRoot, 'dist/render-host/preload.cjs')).toString(),
+      renderHostHtmlUrl: pathToFileURL(runtimeAssets.renderHostHtmlPath).toString(),
+      renderPreloadUrl: pathToFileURL(runtimeAssets.renderHostPreloadPath).toString(),
       device: currentDevice ?? undefined,
     }
     event.returnValue = reply
@@ -776,7 +782,14 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
   // router's ledger straight off this main-process global — no IPC surface
   // needed. Test builds only.
   if (process.env.NODE_ENV === 'test') {
-    ;(globalThis as Record<string, unknown>).__diminaResourceCensus = () => bridgeHandle.census?.()
+    const globalState = globalThis as Record<string, unknown>
+    const censusProbe = () => bridgeHandle.census?.()
+    globalState.__diminaResourceCensus = censusProbe
+    ctx.registry.add(() => {
+      if (globalState.__diminaResourceCensus === censusProbe) {
+        delete globalState.__diminaResourceCensus
+      }
+    })
   }
 
   // Always-on guest console fan-out. Owns `ctx.guestConsole` (the sink the
@@ -1048,6 +1061,7 @@ async function handleSpawn(
   event: IpcMainInvokeEvent,
   opts: SpawnRequest,
 ): Promise<SpawnResult> {
+  const runtimeAssets = ctx.assets ?? resolveRuntimeAssetPaths()
   const appId = opts.appId
   if (!appId) throw new Error('[bridge-router] spawn requires appId')
   const bridgeId = opts.bridgeId || newBridgeId()
@@ -1142,7 +1156,9 @@ async function handleSpawn(
     )
   }
   if (state.pool) {
-    const acquired = await state.pool.acquire(serviceHostSpec())
+    const acquired = await state.pool.acquire(
+      serviceHostSpec(undefined, undefined, runtimeAssets),
+    )
     serviceWindow = acquired.win
     poolEntryId = acquired.entryId
   } else {
@@ -1162,6 +1178,7 @@ async function handleSpawn(
       resourceBaseUrl,
       hostEnvSnapshot: hostEnv,
       apiNamespaces,
+      assets: runtimeAssets,
     }
     serviceWindow = createServiceHostWindow({
       ...freshWindowOptions,
@@ -1293,6 +1310,7 @@ async function handleSpawn(
       resourceBaseUrl,
       hostEnvSnapshot: hostEnv,
       apiNamespaces,
+      assets: runtimeAssets,
     })
     void navigateServiceHost(serviceWindow, spawnUrl, {
       onLoadFailed: err => reportServiceHostNavigationFailed(spawnUrl, err),

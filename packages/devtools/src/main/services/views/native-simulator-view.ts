@@ -395,7 +395,7 @@ export function createNativeSimulatorView(
       }
     })
 
-    void simWc.loadURL(simulatorUrl).catch((err) => {
+    void simWc.loadURL(simulatorUrl).catch((err: unknown) => {
       console.error('[workbench] attachNativeSimulator — loadURL failed', err)
     })
 

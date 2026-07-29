@@ -160,6 +160,7 @@ export function setupSimulatorTempFiles(simSession: Session): Disposable {
 	// tests) is replaced rather than throwing. Trusts that session's senders for
 	// the temp-file / fs IPC channels.
 	const installedSessions = new Set<Session>()
+	let unregisterConfigurator: (() => void) | null = null
 	function installOnSession(sess: Session): void {
 		trustedSessions.add(sess)
 		if (installedSessions.has(sess)) return
@@ -172,34 +173,10 @@ export function setupSimulatorTempFiles(simSession: Session): Disposable {
 		sess.protocol.handle('difile', difileHandler)
 	}
 
-	installOnSession(simSession)
-	// Apply to every per-project miniapp partition session (current + future).
-	const unregisterConfigurator = registerMiniappSessionConfigurator((sess) => installOnSession(sess))
-
-	// Renderer FSM → main fs operations bridge. The same simulator-only sender
-	// policy applies — registry instance is shared.
-	registry.handle('simulator:fs:read', (_event, payload) =>
-		handleFsRead(payload as Parameters<typeof handleFsRead>[0]),
-	)
-	registry.handle('simulator:fs:write', (_event, payload) =>
-		handleFsWrite(payload as Parameters<typeof handleFsWrite>[0]),
-	)
-	registry.handle('simulator:fs:stat', (_event, payload) =>
-		handleFsStat(payload as Parameters<typeof handleFsStat>[0]),
-	)
-	registry.handle('simulator:fs:readdir', (_event, payload) =>
-		handleFsReaddir(payload as Parameters<typeof handleFsReaddir>[0]),
-	)
-	registry.handle('simulator:fs:unlink', (_event, payload) =>
-		handleFsUnlink(payload as Parameters<typeof handleFsUnlink>[0]),
-	)
-	registry.handle('simulator:fs:mkdir', (_event, payload) =>
-		handleFsMkdir(payload as Parameters<typeof handleFsMkdir>[0]),
-	)
-
-	return toDisposable(async () => {
+	const cleanup = (): void => {
 		disposed = true
-		unregisterConfigurator()
+		unregisterConfigurator?.()
+		unregisterConfigurator = null
 		drainAllWaiters()
 		store.clear()
 		for (const sess of installedSessions) {
@@ -209,6 +186,38 @@ export function setupSimulatorTempFiles(simSession: Session): Disposable {
 				// May already have been unhandled by app shutdown.
 			}
 		}
-		await registry.dispose()
-	})
+		registry.dispose()
+	}
+
+	try {
+		installOnSession(simSession)
+		// Apply to every per-project miniapp partition session (current + future).
+		unregisterConfigurator = registerMiniappSessionConfigurator((sess) => installOnSession(sess))
+
+		// Renderer FSM → main fs operations bridge. The same simulator-only sender
+		// policy applies — registry instance is shared.
+		registry.handle('simulator:fs:read', (_event, payload) =>
+			handleFsRead(payload as Parameters<typeof handleFsRead>[0]),
+		)
+		registry.handle('simulator:fs:write', (_event, payload) =>
+			handleFsWrite(payload as Parameters<typeof handleFsWrite>[0]),
+		)
+		registry.handle('simulator:fs:stat', (_event, payload) =>
+			handleFsStat(payload as Parameters<typeof handleFsStat>[0]),
+		)
+		registry.handle('simulator:fs:readdir', (_event, payload) =>
+			handleFsReaddir(payload as Parameters<typeof handleFsReaddir>[0]),
+		)
+		registry.handle('simulator:fs:unlink', (_event, payload) =>
+			handleFsUnlink(payload as Parameters<typeof handleFsUnlink>[0]),
+		)
+		registry.handle('simulator:fs:mkdir', (_event, payload) =>
+			handleFsMkdir(payload as Parameters<typeof handleFsMkdir>[0]),
+		)
+	} catch (error) {
+		cleanup()
+		throw error
+	}
+
+	return toDisposable(cleanup)
 }

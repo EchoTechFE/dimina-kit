@@ -85,21 +85,30 @@ function clearSimulatorWebRequestPolicy(simulatorSession: Session): void {
  */
 export function setupSimulatorSessionPolicy(): Disposable {
   const configured = new Set<Session>()
+  let unregister: (() => void) | null = null
   function install(sess: Session): void {
     if (configured.has(sess)) return
     configured.add(sess)
     applySimulatorWebRequestPolicy(sess)
   }
 
-  // Shared fallback session (pre-warm pool + unknown-appId path).
-  install(session.fromPartition(SHARED_MINIAPP_PARTITION))
-  // Every per-project miniapp partition session (current + future) gets the
-  // same referer/CORS policy so isolated projects load resources identically.
-  const unregister = registerMiniappSessionConfigurator((sess) => install(sess))
-
-  return toDisposable(() => {
-    unregister()
+  const cleanup = (): void => {
+    unregister?.()
+    unregister = null
     for (const sess of configured) clearSimulatorWebRequestPolicy(sess)
     configured.clear()
-  })
+  }
+
+  try {
+    // Shared fallback session (pre-warm pool + unknown-appId path).
+    install(session.fromPartition(SHARED_MINIAPP_PARTITION))
+    // Every per-project miniapp partition session (current + future) gets the
+    // same referer/CORS policy so isolated projects load resources identically.
+    unregister = registerMiniappSessionConfigurator((sess) => install(sess))
+  } catch (error) {
+    cleanup()
+    throw error
+  }
+
+  return toDisposable(cleanup)
 }

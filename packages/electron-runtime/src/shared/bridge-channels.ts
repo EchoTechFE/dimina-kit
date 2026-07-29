@@ -63,6 +63,12 @@ export const SIMULATOR_EVENTS = {
   RELAUNCH: 'simulator:relaunch',
 } as const
 
+/** Native simulator preload ↔ owning Electron main-process custom API bridge. */
+export const SimulatorCustomApiBridgeChannel = {
+  Request: 'simulator:custom-apis:bridge-request',
+  Response: 'simulator:custom-apis:bridge-response',
+} as const
+
 /**
  * `simulator:relaunch` payload. `url` is a full simulator URL (same format as
  * the simulator page's own location / AttachNative), carrying the appId and

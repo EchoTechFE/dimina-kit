@@ -30,7 +30,8 @@ import {
   createSimulatorApiRegistry,
   type SimulatorApiHandler,
 } from './main/services/simulator/custom-apis.js'
-import { runtimeSimulatorDir } from './main/utils/paths.js'
+import { resolveRuntimeAssetPaths } from './main/utils/paths.js'
+import { SIMULATOR_EVENTS } from './shared/bridge-channels.js'
 import type { NativeDeviceInfo } from './shared/runtime-types.js'
 
 export interface ElectronRuntimeProjectOptions {
@@ -68,6 +69,11 @@ export interface CreateElectronRuntimeOptions {
   /** Host/compiler integration. The runtime deliberately has no devkit dependency. */
   adapter: ElectronRuntimeCompilerAdapter
   apiNamespaces?: string[]
+  /**
+   * Absolute path to this package's copied dist/ directory. Required when the
+   * host bundles the runtime's main-process code instead of externalizing it.
+   */
+  assetsRoot?: string
 }
 
 export interface ElectronMiniappSession {
@@ -94,36 +100,44 @@ let activeRuntime = false
 let schemesRegistered = false
 
 /**
+ * Process-global privileged scheme descriptors. Hosts that register their own
+ * schemes must merge these into their single pre-ready Electron registration.
+ */
+export const ELECTRON_RUNTIME_SCHEMES = [
+  {
+    scheme: 'difile',
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+      stream: true,
+    },
+  },
+  {
+    scheme: 'dmb-resource',
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+      stream: true,
+    },
+  },
+] as const satisfies readonly Electron.CustomScheme[]
+
+/**
  * Register the custom schemes required by file-system/temp-file APIs.
- * Call once before `app.whenReady()`; registration is process-global.
+ * Call once before `app.whenReady()` only when the host has no other privileged
+ * schemes. Electron permits one process-global registration call; other hosts
+ * should merge ELECTRON_RUNTIME_SCHEMES into their own call instead.
  */
 export function registerElectronRuntimeSchemes(): void {
   if (schemesRegistered) return
   if (app.isReady()) {
     throw new Error('registerElectronRuntimeSchemes() must run before Electron app is ready')
   }
-  protocol.registerSchemesAsPrivileged([
-    {
-      scheme: 'difile',
-      privileges: {
-        standard: true,
-        secure: true,
-        supportFetchAPI: true,
-        corsEnabled: true,
-        stream: true,
-      },
-    },
-    {
-      scheme: 'dmb-resource',
-      privileges: {
-        standard: true,
-        secure: true,
-        supportFetchAPI: true,
-        corsEnabled: true,
-        stream: true,
-      },
-    },
-  ])
+  protocol.registerSchemesAsPrivileged([...ELECTRON_RUNTIME_SCHEMES])
   schemesRegistered = true
 }
 
@@ -148,7 +162,26 @@ function buildSimulatorUrl(
   return `http://127.0.0.1:${port}/simulator.html?${params.toString()}`
 }
 
-export function createElectronRuntime(options: CreateElectronRuntimeOptions): ElectronRuntime {
+async function captureCleanup(
+  errors: unknown[],
+  cleanup: () => void | Promise<void>,
+): Promise<void> {
+  try {
+    await cleanup()
+  } catch (error) {
+    errors.push(error)
+  }
+}
+
+function throwCleanupErrors(errors: unknown[], message: string): void {
+  if (errors.length === 0) return
+  if (errors.length === 1) throw errors[0]
+  throw new AggregateError(errors, message)
+}
+
+export async function createElectronRuntime(
+  options: CreateElectronRuntimeOptions,
+): Promise<ElectronRuntime> {
   if (!app.isReady()) {
     throw new Error('dimina-electron-runtime must be created after Electron app is ready')
   }
@@ -158,6 +191,7 @@ export function createElectronRuntime(options: CreateElectronRuntimeOptions): El
   if (!options.hostWindow || options.hostWindow.isDestroyed()) {
     throw new Error('hostWindow must be a live BrowserWindow')
   }
+  const assets = resolveRuntimeAssetPaths(options.assetsRoot)
   const registry = new DisposableRegistry()
   const events: RuntimeEvents = createRuntimeEvents()
   const simulatorApis = createSimulatorApiRegistry()
@@ -172,6 +206,7 @@ export function createElectronRuntime(options: CreateElectronRuntimeOptions): El
 
   const ctx = {
     apiNamespaces: options.apiNamespaces ?? [],
+    assets,
     workspace: {
       getSession: () => compilerSession,
       getProjectPath: () => projectPath,
@@ -184,15 +219,34 @@ export function createElectronRuntime(options: CreateElectronRuntimeOptions): El
     events,
   } as RuntimeContext
 
-  installBridgeRouter(ctx)
-  ctx.storageApi = createRuntimeStorageApi((appId) => ctx.bridge?.getServiceWc(appId) ?? null)
-  registry.add(setupSimulatorSessionPolicy())
-  registry.add(setupSimulatorTempFiles(
-    electronSession.fromPartition(SHARED_MINIAPP_PARTITION),
-  ))
+  const cleanupProcessResources = async (errors: unknown[]): Promise<void> => {
+    await captureCleanup(errors, () => registry.dispose())
+    for (const cleanup of [() => simulatorApis.clear(), () => events.clear()]) {
+      try {
+        cleanup()
+      } catch (error) {
+        errors.push(error)
+      }
+    }
+  }
+
   activeRuntime = true
+  try {
+    installBridgeRouter(ctx)
+    ctx.storageApi = createRuntimeStorageApi((appId) => ctx.bridge?.getServiceWc(appId) ?? null)
+    registry.add(setupSimulatorSessionPolicy())
+    registry.add(setupSimulatorTempFiles(
+      electronSession.fromPartition(SHARED_MINIAPP_PARTITION),
+    ))
+  } catch (setupError) {
+    const errors: unknown[] = [setupError]
+    await cleanupProcessResources(errors)
+    activeRuntime = false
+    throwCleanupErrors(errors, 'Electron runtime setup and rollback failed')
+  }
 
   let disposed = false
+  let disposePromise: Promise<void> | null = null
 
   const enqueue = <T>(operation: () => Promise<T>): Promise<T> => {
     const result = lifecycleQueue.then(operation, operation)
@@ -215,8 +269,14 @@ export function createElectronRuntime(options: CreateElectronRuntimeOptions): El
     projectPath = ''
     clearSimulatorServicewechatReferer()
     try {
-      await viewSession?.dispose()
-      await compileSession?.close()
+      const errors: unknown[] = []
+      if (viewSession) {
+        await captureCleanup(errors, () => viewSession.dispose())
+      }
+      if (compileSession) {
+        await captureCleanup(errors, () => compileSession.close())
+      }
+      throwCleanupErrors(errors, 'Mini-app session disposal failed')
     } finally {
       closing = false
     }
@@ -231,29 +291,44 @@ export function createElectronRuntime(options: CreateElectronRuntimeOptions): El
 
         const generation = ++projectGeneration
         let latestUrl = ''
+        let rebuildRevision = 0
+        const relaunchWhenReady = (revision: number): void => {
+          const target = miniappSession
+          if (!target || !latestUrl) return
+          void target.ready.then(() => {
+            if (
+              revision !== rebuildRevision
+              || generation !== projectGeneration
+              || miniappSession !== target
+            ) return
+            const wc = target.view.webContents
+            if (!wc.isDestroyed()) {
+              wc.send(SIMULATOR_EVENTS.RELAUNCH, { url: latestUrl })
+            }
+          }).catch(() => {
+            // The readiness rejection is already exposed through session.ready.
+          })
+        }
         let session: ElectronRuntimeCompilerSession
         try {
           session = await options.adapter.openProject({
-          projectPath,
-          simulatorDir: runtimeSimulatorDir,
-          watch: projectOptions.watch,
-          autoReload: false,
-          onRebuild: () => {
-            if (generation !== projectGeneration) return
-            const wc = miniappSession?.view.webContents
-            if (wc && !wc.isDestroyed() && latestUrl) {
-              wc.send('simulator:relaunch', { url: latestUrl })
-            }
-          },
-          onBuildError: (error) => {
-            if (generation !== projectGeneration) return
-            events.emit('session-status', {
-              appId: compilerSession?.appInfo.appId ?? '',
-              phase: 'launch-failed',
-              code: 'compile-error',
-              reason: error instanceof Error ? error.message : String(error),
-            })
-          },
+            projectPath,
+            simulatorDir: assets.simulatorDir,
+            watch: projectOptions.watch,
+            autoReload: false,
+            onRebuild: () => {
+              if (generation !== projectGeneration) return
+              relaunchWhenReady(++rebuildRevision)
+            },
+            onBuildError: (error) => {
+              if (generation !== projectGeneration) return
+              events.emit('session-status', {
+                appId: compilerSession?.appInfo.appId ?? '',
+                phase: 'launch-failed',
+                code: 'compile-error',
+                reason: error instanceof Error ? error.message : String(error),
+              })
+            },
           })
         } catch (error) {
           if (generation === projectGeneration) projectPath = ''
@@ -278,6 +353,7 @@ export function createElectronRuntime(options: CreateElectronRuntimeOptions): El
             appId: session.appInfo.appId,
             projectPath,
             simulatorUrl: latestUrl,
+            assets,
           })
         } catch (error) {
           compilerSession = null
@@ -307,6 +383,10 @@ export function createElectronRuntime(options: CreateElectronRuntimeOptions): El
             (error) => settle(() => reject(error)),
           )
         })
+        // Disposal may reject readiness before a host starts awaiting it.
+        // Preserve the rejection for callers while preventing a process-level
+        // unhandledRejection in that timing window.
+        void ready.catch(() => {})
 
         const result: ElectronMiniappSession = {
           view: embedded.view,
@@ -318,25 +398,27 @@ export function createElectronRuntime(options: CreateElectronRuntimeOptions): El
         }
         embeddedSession = embedded
         miniappSession = result
+        if (rebuildRevision > 0) relaunchWhenReady(rebuildRevision)
         return result
       })
     },
     registerApi: (name, handler) => simulatorApis.register(name, handler),
     setDevice: (device) => ctx.bridge?.setDevice(device),
     on: (name, listener) => events.on(name, listener),
-    async dispose() {
-      if (disposed) return
+    dispose() {
+      if (disposePromise) return disposePromise
       disposed = true
-      await enqueue(async () => {
+      disposePromise = enqueue(async () => {
+        const errors: unknown[] = []
         try {
-          await closeActiveSession()
-          await Promise.resolve(registry.dispose())
-          simulatorApis.clear()
-          events.clear()
+          await captureCleanup(errors, closeActiveSession)
+          await cleanupProcessResources(errors)
         } finally {
           activeRuntime = false
         }
+        throwCleanupErrors(errors, 'Electron runtime disposal failed')
       })
+      return disposePromise
     },
   }
 }
@@ -352,3 +434,6 @@ export type {
   SessionRuntimeStatus,
 } from './main/runtime-events.js'
 export type { SimulatorApiHandler } from './main/services/simulator/custom-apis.js'
+export {
+  ElectronRuntimeSessionDisposedError,
+} from './main/embedded-view.js'

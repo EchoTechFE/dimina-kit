@@ -58,6 +58,7 @@ import type {
   ProjectTemplate,
 } from './projects/types.js'
 import type { CustomCreateProjectDialogResult } from '../../shared/types.js'
+import { runtimeAssetPaths } from '../utils/paths.js'
 
 /**
  * Shared mutable state for the workbench application.
@@ -326,6 +327,7 @@ export interface CreateContextOptions
 export function createWorkbenchContext(opts: CreateContextOptions): WorkbenchContext {
   const ctx = {
     adapter: opts.adapter ?? defaultAdapter,
+    assets: runtimeAssetPaths,
     preloadPath: opts.preloadPath,
     rendererDir: opts.rendererDir,
     apiNamespaces: opts.apiNamespaces ?? [],

@@ -56,10 +56,7 @@ interface DeviceShellState {
 export function DeviceShell(
   { miniApp, bridgeId, platform = 'ios', active = true }: DeviceShellProps,
 ) {
-  const embedded = useMemo(
-    () => new URLSearchParams(window.location.search).get('embedded') === '1',
-    [],
-  )
+  const embedded = new URLSearchParams(window.location.search).get('embedded') === '1'
   // The selected device drives the bezel size + status bar height + notch.
   // Initial value rides the native-host bridge config (race-free); live toolbar
   // changes arrive over DEVICE_CHANGE.
@@ -69,10 +66,8 @@ export function DeviceShell(
   // DeviceShell draws the WHOLE phone at fixed device-logical size on a gray
   // desk that fills the WCV and scrolls when the phone overflows the region.
   // Only the chrome metrics below are derived from the device.
-  const statusBarHeight = embedded
-    ? 0
-    : (device?.safeAreaInsets.top
-      ?? (platform === 'ios' ? STATUS_BAR_HEIGHT_IOS : STATUS_BAR_HEIGHT_ANDROID))
+  const statusBarHeight = embedded ? 0 : (device?.safeAreaInsets.top
+    ?? (platform === 'ios' ? STATUS_BAR_HEIGHT_IOS : STATUS_BAR_HEIGHT_ANDROID))
   const bottomInset = embedded ? 0 : (device?.safeAreaInsets.bottom ?? 0)
   const notchType = device?.notchType ?? 'none'
   const preload = useMemo(() => miniApp.getRenderPreloadUrl(), [miniApp])

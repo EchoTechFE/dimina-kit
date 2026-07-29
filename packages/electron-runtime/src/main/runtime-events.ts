@@ -29,7 +29,13 @@ export function createRuntimeEvents(): RuntimeEvents {
   const listeners = new Map<keyof RuntimeEventMap, Set<(payload: never) => void>>()
   return {
     emit(name, payload) {
-      for (const listener of listeners.get(name) ?? []) listener(payload as never)
+      for (const listener of listeners.get(name) ?? []) {
+        try {
+          listener(payload as never)
+        } catch (error) {
+          console.error(`[electron-runtime] '${String(name)}' listener failed`, error)
+        }
+      }
     },
     on(name, listener) {
       let bucket = listeners.get(name)

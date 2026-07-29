@@ -14,15 +14,22 @@ import {
   handleCustomApiBridgeRequest,
   type CustomApiBridgeRequest,
 } from './services/simulator/custom-apis.js'
-import { runtimeSimulatorPreloadPath } from './utils/paths.js'
-
-const CUSTOM_API_REQUEST = 'simulator:custom-apis:bridge-request'
-const CUSTOM_API_RESPONSE = 'simulator:custom-apis:bridge-response'
+import type { RuntimeAssetPaths } from './utils/paths.js'
+import { SimulatorCustomApiBridgeChannel } from '../shared/bridge-channels.js'
 
 export interface EmbeddedMiniappView {
   view: WebContentsView
   ready: Promise<void>
   dispose(): Promise<void>
+}
+
+export class ElectronRuntimeSessionDisposedError extends Error {
+  readonly code = 'ERR_ELECTRON_RUNTIME_SESSION_DISPOSED'
+
+  constructor() {
+    super('Mini-app session was disposed before it became ready')
+    this.name = 'ElectronRuntimeSessionDisposedError'
+  }
 }
 
 function allowRuntimeNavigation(url: string): boolean {
@@ -55,6 +62,7 @@ export function createEmbeddedMiniappView(
     appId: string
     projectPath: string
     simulatorUrl: string
+    assets: RuntimeAssetPaths
   },
 ): EmbeddedMiniappView {
   const partition = miniappPartition(options.appId, options.projectPath)
@@ -66,7 +74,7 @@ export function createEmbeddedMiniappView(
       contextIsolation: false,
       sandbox: false,
       webviewTag: true,
-      preload: runtimeSimulatorPreloadPath,
+      preload: options.assets.simulatorPreloadPath,
       partition,
     },
   })
@@ -82,8 +90,16 @@ export function createEmbeddedMiniappView(
       settled = true
       resolve()
     }
-    rejectReady = reject
+    rejectReady = (error) => {
+      if (settled) return
+      settled = true
+      reject(error)
+    }
   })
+  // The SDK forwards this promise to the host, but disposal may happen before
+  // the host starts awaiting it. Mark the internal promise handled while
+  // preserving its rejected state for every external await.
+  void ready.catch(() => {})
 
   simulatorWc.on('will-attach-webview', (_event, preferences, params) => {
     ;(preferences as Electron.WebPreferences).partition = partition
@@ -101,36 +117,53 @@ export function createEmbeddedMiniappView(
     const value = request as CustomApiBridgeRequest | undefined
     if (!value || typeof value.id !== 'number') return
     void handleCustomApiBridgeRequest(ctx.simulatorApis, value).then((response) => {
-      if (!simulatorWc.isDestroyed()) simulatorWc.send(CUSTOM_API_RESPONSE, response)
+      if (!simulatorWc.isDestroyed()) {
+        simulatorWc.send(SimulatorCustomApiBridgeChannel.Response, response)
+      }
     })
   }
-  ipcMain.on(CUSTOM_API_REQUEST, customApiHandler)
+  ipcMain.on(SimulatorCustomApiBridgeChannel.Request, customApiHandler)
 
   void simulatorWc.loadURL(options.simulatorUrl).catch((error) => {
-    if (!settled) {
-      settled = true
-      rejectReady(error)
-    }
+    rejectReady(error)
   })
 
-  let disposed = false
+  let disposePromise: Promise<void> | null = null
   return {
     view,
     ready,
-    async dispose() {
-      if (disposed) return
-      disposed = true
-      ipcMain.removeListener(CUSTOM_API_REQUEST, customApiHandler)
-      await ctx.bridge?.disposeSessionsForSimulator?.(simulatorWc.id)
-      try {
-        if (!ctx.windows.mainWindow.isDestroyed()) {
-          ctx.windows.mainWindow.contentView.removeChildView(view)
+    dispose() {
+      if (disposePromise) return disposePromise
+      rejectReady(new ElectronRuntimeSessionDisposedError())
+      disposePromise = (async () => {
+        const errors: unknown[] = []
+        try {
+          ipcMain.removeListener(SimulatorCustomApiBridgeChannel.Request, customApiHandler)
+        } catch (error) {
+          errors.push(error)
         }
-      } catch {
-        // The host may have already detached the view; disposal stays idempotent.
-      }
-      if (!simulatorWc.isDestroyed()) simulatorWc.close()
-      resolveReady()
+        try {
+          await ctx.bridge?.disposeSessionsForSimulator?.(simulatorWc.id)
+        } catch (error) {
+          errors.push(error)
+        }
+        try {
+          if (!ctx.windows.mainWindow.isDestroyed()) {
+            ctx.windows.mainWindow.contentView.removeChildView(view)
+          }
+        } catch {
+          // The host may have already detached the view; disposal stays idempotent.
+        }
+        try {
+          if (!simulatorWc.isDestroyed()) simulatorWc.close()
+        } catch (error) {
+          errors.push(error)
+        }
+        if (errors.length > 0) {
+          throw new AggregateError(errors, 'Embedded mini-app view disposal failed')
+        }
+      })()
+      return disposePromise
     },
   }
 }

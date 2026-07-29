@@ -1,7 +1,9 @@
 import { app, BrowserWindow } from 'electron'
-import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { runtimePackageRoot } from '../../utils/paths.js'
+import {
+  resolveRuntimeAssetPaths,
+  type RuntimeAssetPaths,
+} from '../../utils/paths.js'
 import type { ServiceHostSpec } from '../../services/service-host-pool/pool.js'
 import { configureMiniappSession, miniappPartition, SHARED_MINIAPP_PARTITION } from '../../services/views/miniapp-partition.js'
 
@@ -12,10 +14,6 @@ import { configureMiniappSession, miniappPartition, SHARED_MINIAPP_PARTITION } f
  * their localStorage/cookies are shared with that project's render side only.
  */
 export const SERVICE_HOST_PARTITION = SHARED_MINIAPP_PARTITION
-
-/** Absolute path to the service-host preload (loaded at runtime by path). */
-export const serviceHostPreloadPath = path.join(runtimePackageRoot, 'dist/service-host/preload.cjs')
-const serviceHostHtmlPath = path.join(runtimePackageRoot, 'dist/service-host/service.html')
 
 export interface ServiceHostWindowOptions {
   bridgeId: string
@@ -36,6 +34,8 @@ export interface ServiceHostWindowOptions {
    * which page logic referencing `qd.*` throws `ReferenceError: qd is not defined`.
    */
   apiNamespaces?: string[]
+  /** Runtime asset paths resolved by the owning integration. */
+  assets?: RuntimeAssetPaths
   /**
    * Observes a spawn-navigation `loadURL` rejection (NOT encoded into the
    * spawn URL). Without it the fresh-window path swallows the failure entirely
@@ -53,8 +53,13 @@ export interface ServiceHostWindowOptions {
  * the service-host preload depends on (it `require('electron')` and writes
  * globals onto the page realm).
  */
-export function constructServiceHostWindow(opts: { appId?: string; partition?: string } = {}): BrowserWindow {
+export function constructServiceHostWindow(opts: {
+  appId?: string
+  partition?: string
+  assets?: RuntimeAssetPaths
+} = {}): BrowserWindow {
   const partition = opts.partition ?? SERVICE_HOST_PARTITION
+  const assets = opts.assets ?? resolveRuntimeAssetPaths()
   // Apply the simulator runtime's protocol handlers + webRequest policies to
   // THIS project's session before the window loads. Idempotent per partition.
   configureMiniappSession(partition)
@@ -68,7 +73,7 @@ export function constructServiceHostWindow(opts: { appId?: string; partition?: s
       nodeIntegration: false,
       contextIsolation: false,
       sandbox: false,
-      preload: serviceHostPreloadPath,
+      preload: assets.serviceHostPreloadPath,
       devTools: true,
     },
   })
@@ -80,7 +85,8 @@ export function constructServiceHostWindow(opts: { appId?: string; partition?: s
  * resourceBaseUrl/hostEnv).
  */
 export function buildServiceHostSpawnUrl(opts: ServiceHostWindowOptions): string {
-  const url = new URL(pathToFileURL(serviceHostHtmlPath).toString())
+  const assets = opts.assets ?? resolveRuntimeAssetPaths()
+  const url = new URL(pathToFileURL(assets.serviceHostHtmlPath).toString())
   url.searchParams.set('bridgeId', opts.bridgeId)
   url.searchParams.set('appId', opts.appId)
   url.searchParams.set('pagePath', opts.pagePath)
@@ -162,7 +168,11 @@ export function navigateServiceHost(
  * path, which passes the project's appId. Reconciling pooling with per-project
  * partitions (e.g. per-partition sub-pools) is out of scope for this change.
  */
-export function serviceHostSpec(appId?: string, projectPath?: string): ServiceHostSpec {
+export function serviceHostSpec(
+  appId?: string,
+  projectPath?: string,
+  assets: RuntimeAssetPaths = resolveRuntimeAssetPaths(),
+): ServiceHostSpec {
   return {
     // Per-project partition when an appId is known (so this project's service
     // host shares storage ONLY with its own render side); the shared partition
@@ -171,7 +181,7 @@ export function serviceHostSpec(appId?: string, projectPath?: string): ServiceHo
     // it must match the simulator WCV's partition (view-manager passes the same
     // (appId, projectPath)).
     partition: appId ? miniappPartition(appId, projectPath) : SERVICE_HOST_PARTITION,
-    preloadPath: serviceHostPreloadPath,
+    preloadPath: assets.serviceHostPreloadPath,
     size: { width: 980, height: 720 },
     contextIsolation: false,
     sandbox: false,
@@ -188,7 +198,11 @@ export function createServiceHostWindow(opts: ServiceHostWindowOptions): Browser
   // Default (non-pooled) path: pin the service host to THIS project's partition
   // so its logic-layer localStorage/cookies are shared with the project's render
   // side only, never with other projects.
-  const win = constructServiceHostWindow({ appId: opts.appId, partition: miniappPartition(opts.appId, opts.projectPath) })
+  const win = constructServiceHostWindow({
+    appId: opts.appId,
+    partition: miniappPartition(opts.appId, opts.projectPath),
+    assets: opts.assets,
+  })
   void navigateServiceHost(win, buildServiceHostSpawnUrl(opts), { onLoadFailed: opts.onLoadFailed })
   return win
 }

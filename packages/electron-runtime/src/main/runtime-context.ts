@@ -9,6 +9,7 @@ import type { DiagnosticsBus } from './services/diagnostics/index.js'
 import type { RuntimeStorageApi } from './services/storage.js'
 import type { SimulatorApiRegistry } from './services/simulator/custom-apis.js'
 import type { RuntimeEvents } from './runtime-events.js'
+import type { RuntimeAssetPaths } from './utils/paths.js'
 
 export { createRuntimeEvents } from './runtime-events.js'
 export type { RuntimeEvents } from './runtime-events.js'
@@ -22,6 +23,8 @@ export interface RuntimeWorkspace {
 /** Main-process dependencies consumed by the native mini-app bridge. */
 export interface RuntimeContext {
   apiNamespaces: string[]
+  /** Resolved lazily by low-level consumers when omitted. */
+  assets?: RuntimeAssetPaths
   workspace: RuntimeWorkspace
   windows: { mainWindow: BrowserWindow }
   registry: DisposableRegistry

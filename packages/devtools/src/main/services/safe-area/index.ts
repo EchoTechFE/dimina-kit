@@ -107,7 +107,7 @@ export function createSafeAreaController(options: { connections?: ConnectionRegi
     }
     void lease
       .send('Emulation.setSafeAreaInsetsOverride', { insets: guestInsets(device, isTabPage) })
-      .catch((err) => {
+      .catch((err: unknown) => {
         console.warn('[safe-area] setSafeAreaInsetsOverride failed:', err instanceof Error ? err.message : err)
       })
   }

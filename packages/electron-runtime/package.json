@@ -117,17 +117,20 @@
   },
   "files": [
     "dist",
+    "!dist/**/*.js.map",
+    "!dist/**/*.d.ts.map",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "build": "pnpm --filter @dimina-kit/electron-deck build && tsc -p tsconfig.build.json && node build-assets.mjs",
+    "build": "tsc -p tsconfig.build.json",
     "build:code": "tsc -p tsconfig.build.json",
     "build:assets": "node build-assets.mjs",
+    "build:package": "pnpm --filter @dimina-kit/electron-deck build && pnpm run build:code && pnpm run build:assets",
     "check-types": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
-    "test": "vitest run",
-    "prepack": "pnpm run build"
+    "test": "vitest run --reporter=default --reporter=json --outputFile.json=test-report.json --coverage.enabled --coverage.reporter=json-summary --coverage.reportsDirectory=coverage",
+    "prepack": "pnpm run build:package"
   },
   "dependencies": {
     "@dimina-kit/electron-deck": "workspace:*"
@@ -136,6 +139,7 @@
     "@dimina-kit/typescript-config": "workspace:*",
     "@dimina-kit/eslint-config": "workspace:*",
     "@types/node": "^22.15.3",
+    "@vitest/coverage-v8": "^4.1.4",
     "electron": "^43.2.0",
     "eslint": "^10.2.1",
     "typescript": "5.9.2",
