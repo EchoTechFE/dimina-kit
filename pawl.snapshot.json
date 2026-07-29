@@ -48,8 +48,8 @@
     "cognitive-complexity": {
       "direction": "lower-is-better",
       "value": 0,
-      "unit": "fns \u003e 15",
-      "breakdown": null
+      "unit": "issues",
+      "breakdown": {}
     },
     "file-length": {
       "direction": "lower-is-better",
@@ -165,8 +165,8 @@
     "type-escapes": {
       "direction": "lower-is-better",
       "value": 0,
-      "unit": "explicit any / ts-comments",
-      "breakdown": null
+      "unit": "issues",
+      "breakdown": {}
     }
   }
 }

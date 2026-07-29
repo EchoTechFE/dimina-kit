@@ -2,23 +2,21 @@
 
 The anti-regression gate is [**pawl**](https://github.com/tiangong-dev/pawl), a
 language-agnostic quality gate: it snapshots one number per dimension and
-fails CI when any dimension regresses. This directory holds only the
-dimina-kit-specific **adapters** — the `measure()` functions that compute each
-number. The gate engine (record / check / diff / baseline-guard, the gate
-modes, tolerance, and the guards below) lives in pawl, configured by
-[`../../pawl.yaml`](../../pawl.yaml); the baseline is
-[`../../pawl.snapshot.json`](../../pawl.snapshot.json).
+fails CI when any dimension regresses. Generic measurements use pawl's native
+builtins directly: `file-length` uses the filesystem builtin, while
+`type-escapes` and `cognitive-complexity` use the ESLint builtin with the
+isolated [`eslint-gate.config.mjs`](./eslint-gate.config.mjs).
 
-Each dimension in `pawl.yaml` is an [exec adapter] whose `command` is
-`node tools/pawl/pawl-adapter.ts <id>`. [`pawl-adapter.ts`](./pawl-adapter.ts)
-imports the matching [`adapters/<id>.ts`](./adapters) unchanged, runs its
-`measure()`, and prints the `{ value, unit, breakdown }` JSON pawl consumes.
-Because the adapter code is the single source of the number, `pnpm pawl:check`
-and any future direct engine call can never disagree on a value.
+This directory keeps custom TypeScript adapters only for dimina-kit-specific
+measurements such as monorepo-wide type/test coverage and circular dependency
+resolution. For those dimensions, [`pawl-adapter.ts`](./pawl-adapter.ts) imports
+the matching [`adapters/<id>.ts`](./adapters), runs `measure()`, and prints the
+`{ value, unit, breakdown }` JSON pawl consumes.
 
-The underlying analyzer is an implementation detail of each adapter. Swapping a
-tool (e.g. eslint → oxlint) means rewriting one adapter while the recorded
-baseline and the CI gate stay put. Everything runs locally — no online services.
+The engine, builtins, gate modes, tolerance, and baseline guards live in pawl,
+configured by [`../../pawl.yaml`](../../pawl.yaml); the recorded baseline is
+[`../../pawl.snapshot.json`](../../pawl.snapshot.json). Everything runs locally
+with no online services.
 
 The adapters and `pawl-adapter.ts` are TypeScript run directly by Node's native
 type stripping (no `tsx`/`ts-node`). That constrains the syntax to what's
@@ -51,10 +49,10 @@ it back so the win can't be undone.
 
 | id | tool | metric | direction | gate |
 |----|------|--------|-----------|------|
-| `cognitive-complexity` | [eslint-plugin-sonarjs] | functions over cognitive complexity 15 | lower | per-file-count |
-| `type-escapes` | [typescript-eslint] | explicit `any` + `@ts-*` suppressions | lower | per-file-count |
+| `cognitive-complexity` | pawl ESLint builtin + [eslint-plugin-sonarjs] | functions over cognitive complexity 15 | lower | per-file-count |
+| `type-escapes` | pawl ESLint builtin + [typescript-eslint] | explicit `any` + `@ts-*` suppressions | lower | per-file-count |
 | `type-coverage` | [type-coverage] | overall share of non-`any` identifiers | higher | per-key-value |
-| `file-length` | filesystem | files over 500 lines | lower | total |
+| `file-length` | pawl filesystem builtin | files over 500 lines | lower | total |
 | `code-duplication` | [jscpd] | duplicated lines across clone pairs (≥50 tokens) | lower | total |
 | `circular-deps` | self-implemented | import cycles among production files | lower | total |
 | `test-report` | vitest JSON reports | tests that actually passed | higher | per-key-value |
@@ -65,9 +63,10 @@ Test files legitimately bend these rules around fixtures — except for `file-le
 which counts test files too: a giant test burns the AI context window just like a
 giant source file does.
 
-The lint-backed adapters run with `noInlineConfig`, so an `// eslint-disable`
+The isolated ESLint gate config sets `noInlineConfig`, so an `// eslint-disable`
 comment cannot hide a violation from the gate — the baseline measures the real
-escape surface, and the gate can't be bypassed by suppressing.
+escape surface, and the gate can't be bypassed by suppressing. Pawl owns ESLint
+JSON parsing, rule filtering, path normalization, and exit-code semantics.
 
 ### Gate strictness
 
@@ -115,9 +114,9 @@ pawl protects the gate itself, not just the dimensions it measures:
 
 ## Notes & known limits
 
-- **cognitive-complexity** uses the canonical SonarJS engine via ESLint's Node
-  API; the algorithm is not reimplemented. oxlint cannot replace it — SonarJS-class
-  rules are type-aware ([oxc#4863]).
+- **cognitive-complexity** uses the canonical SonarJS rule through pawl's ESLint
+  builtin; the algorithm is not reimplemented. oxlint cannot replace it —
+  SonarJS-class rules are type-aware ([oxc#4863]).
 - **code-duplication** runs the jscpd CLI (a local Rust binary; jscpd ≥5 ships no
   JS API) with `--min-tokens 50` pinned, token-level matching, so renamed-identifier
   copies still count as clones. Cognitive complexity measures how tangled one
@@ -171,7 +170,11 @@ pawl protects the gate itself, not just the dimensions it measures:
   Reintroducing it would require declaring every public entry point in a knip
   config first, and even then export-level detection stays unusable.
 
-## Adding a dimension
+## Adding a custom exec dimension
+
+Prefer a pawl builtin when one already matches the metric. Add a custom exec
+adapter only for project-specific aggregation or semantics that the builtins do
+not express:
 
 1. Drop a `*.ts` in [`adapters/`](./adapters) with a default export shaped like
    `Adapter` (see [`lib/types.ts`](./lib/types.ts)):
