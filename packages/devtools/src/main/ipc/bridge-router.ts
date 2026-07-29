@@ -8,6 +8,7 @@ import {
 } from 'dimina-electron-runtime/main/runtime-context'
 import type { SessionRuntimeStatus, SyncStorageChange } from 'dimina-electron-runtime'
 import type { MessageEnvelope } from '../../shared/bridge-channels.js'
+import { runtimeAssetPaths } from '../utils/paths.js'
 
 type DevtoolsBridgeContext = Omit<RuntimeContext, 'events'> & {
   events?: RuntimeEvents
@@ -25,6 +26,12 @@ type DevtoolsBridgeContext = Omit<RuntimeContext, 'events'> & {
  * package itself stays unaware of panels and renderer notifications.
  */
 export function installBridgeRouter(ctx: DevtoolsBridgeContext): void {
+  // The DevTools integration owns a complete copy of the runtime assets. Keep
+  // compatibility contexts (including embedders/tests that assemble the
+  // context manually) on that copy instead of falling back to the standalone
+  // package's optional dist assets.
+  ctx.assets ??= runtimeAssetPaths
+
   if (!ctx.events) {
     const events = createRuntimeEvents()
     ctx.events = events
