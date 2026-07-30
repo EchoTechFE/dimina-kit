@@ -8,6 +8,28 @@ vi.mock('../../../common', () => ({
 
 type NativeEvent = Record<string, unknown>
 
+interface SocketTaskHandle {
+	socketId: string
+	readyState: number
+	CONNECTING: number
+	OPEN: number
+	CLOSING: number
+	CLOSED: number
+	send(opts?: Record<string, unknown>): void
+	close(opts?: Record<string, unknown>): void
+	onOpen(listener: (payload: unknown) => void): void
+	onMessage(listener: (payload: unknown) => void): void
+	onError(listener: (payload: unknown) => void): void
+	onClose(listener: (payload: unknown) => void): void
+}
+
+interface SocketApiModule {
+	connectSocket(opts?: Record<string, unknown>): SocketTaskHandle
+	sendSocketMessage(opts?: Record<string, unknown>): void
+	closeSocket(opts?: Record<string, unknown>): void
+	onSocketMessage(listener: (payload: unknown) => void): void
+}
+
 function flushMicrotask(): Promise<void> {
 	return new Promise(resolve => queueMicrotask(resolve))
 }
@@ -27,7 +49,7 @@ async function loadSocketApi() {
 			;(params.success as (payload: unknown) => void)?.({ errMsg: 'closeSocket:ok' })
 		}
 	})
-	const api = await import('./index')
+	const api: SocketApiModule = await import('./index')
 	return {
 		api,
 		emit(payload: NativeEvent) {
