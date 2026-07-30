@@ -1,6 +1,10 @@
 import type { IpcMainEvent, IpcMainInvokeEvent, WebContents } from 'electron'
 import { ipcMain } from 'electron'
-import { type Disposable } from '@dimina-kit/electron-deck/main'
+import {
+  isMainFrameIpcSender,
+  type Disposable,
+  type IpcSenderPolicy,
+} from '@dimina-kit/electron-deck/main'
 import { IpcValidationError } from './ipc-schema.js'
 import { createLogger } from './logger.js'
 
@@ -40,7 +44,7 @@ function isThenable(v: unknown): v is PromiseLike<unknown> {
  * Returns true when the calling WebContents is allowed to invoke / emit on
  * the channel, false otherwise.
  */
-export type SenderPolicy = (sender: WebContents) => boolean
+export type SenderPolicy = IpcSenderPolicy
 
 function summarizeSender(sender: WebContents): string {
   if (sender.isDestroyed()) return '<destroyed>'
@@ -66,23 +70,6 @@ function summarizeSender(sender: WebContents): string {
  * possibly null) from a frame-unaware unit-test stub (neither present) and only
  * skip the check for the latter (the sender-id white-list still gates tests).
  */
-type FrameRef = { routingId: number; processId: number } | null | undefined
-function isMainFrameSender(event: IpcMainEvent | IpcMainInvokeEvent): boolean {
-  // Read via loose casts: the Electron types declare these always-present, but
-  // unit-test stubs legitimately omit them — and real events can carry a null
-  // senderFrame after navigation/destruction.
-  const frame = (event as { senderFrame?: FrameRef }).senderFrame
-  const main = (event.sender as { mainFrame?: FrameRef }).mainFrame
-  // Frame-unaware stub (NEITHER field modeled) → not a real frame boundary; the
-  // sender-id white-list is the gate. Real events always have both, so they fall
-  // through to the strict check; a partial/malformed event (only one field) also
-  // falls through and fail-closes below rather than escaping here.
-  if (frame === undefined && main === undefined) return true
-  // Real event, unresolvable frame (navigate-after-send / destroyed) → reject.
-  if (frame == null || main == null) return false
-  return frame.routingId === main.routingId && frame.processId === main.processId
-}
-
 /**
  * Tiny fluent helper that wraps every `ipcMain.handle` / `ipcMain.on` with a
  * matching removeHandler/removeListener registered into an internal registry.
@@ -120,7 +107,7 @@ export class IpcRegistry implements Disposable {
     const guarded: HandleFn = policy
       ? async (event: IpcMainInvokeEvent, ...args: unknown[]) => {
           const sender = event.sender
-          if (!policy(sender) || !isMainFrameSender(event)) {
+          if (!policy(sender) || !isMainFrameIpcSender(event)) {
             console.warn(
               `[ipc] sender rejected for channel '${channel}' (${summarizeSender(sender)})`,
             )
@@ -145,27 +132,28 @@ export class IpcRegistry implements Disposable {
   handleSync(channel: string, fn: (event: IpcMainEvent, ...args: unknown[]) => unknown): this {
     const policy = this.policy
     const listener = (event: IpcMainEvent, ...args: unknown[]) => {
+      const syncEvent = event as IpcMainEvent & { returnValue: unknown }
       // Everything — including the policy check — runs inside the try so EVERY
       // path sets `event.returnValue`. sendSync blocks the renderer until it is
       // set, so an unset value (e.g. a throwing policy fn) would hang the
       // renderer forever; the catch guarantees a sentinel instead.
       try {
-        if (policy && (!policy(event.sender) || !isMainFrameSender(event))) {
+        if (policy && (!policy(event.sender) || !isMainFrameIpcSender(event))) {
           console.warn(
             `[ipc] sender rejected for channel '${channel}' (${summarizeSender(event.sender)})`,
           )
-          event.returnValue = {
+          syncEvent.returnValue = {
             ok: false,
             code: 'EREJECTED',
             message: `IPC sender rejected for channel ${channel}`,
           }
           return
         }
-        event.returnValue = fn(event, ...args)
+        syncEvent.returnValue = fn(event, ...args)
       } catch (err) {
         reportListenerError(channel, err)
         const code = (err as NodeJS.ErrnoException)?.code
-        event.returnValue = {
+        syncEvent.returnValue = {
           ok: false,
           code: typeof code === 'string' ? code : 'EUNKNOWN',
           message: err instanceof Error ? err.message : String(err),
@@ -187,7 +175,7 @@ export class IpcRegistry implements Disposable {
           // Async listeners would otherwise leak rejections into Electron's
           // event loop as `UnhandledPromiseRejection`. Funnel them into the
           // same logger path as sync throws.
-          Promise.resolve(ret).catch((err) => reportListenerError(channel, err))
+          Promise.resolve(ret).catch((err: unknown) => reportListenerError(channel, err))
         }
       } catch (err) {
         reportListenerError(channel, err)
@@ -196,7 +184,7 @@ export class IpcRegistry implements Disposable {
     const guarded: ListenerFn = policy
       ? (event: IpcMainEvent, ...args: unknown[]) => {
           const sender = event.sender
-          if (!policy(sender) || !isMainFrameSender(event)) {
+          if (!policy(sender) || !isMainFrameIpcSender(event)) {
             console.warn(
               `[ipc] sender rejected for channel '${channel}' (${summarizeSender(sender)})`,
             )

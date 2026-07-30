@@ -16,8 +16,8 @@
  * Chosen method + assertion (see report): `setNavigationBarTitle` with
  * `{ title: 'C5-PROBE' }`, asserting the DeviceShell nav-bar title text
  * (`.nav-bar__title-text` in the simulator WebContentsView DOM, see
- * `src/simulator/device-shell/navigation-bar.tsx`) changes from the fixture's
- * "TabBar Fixture" to "C5-PROBE".
+ * `src/simulator/device-shell/navigation-bar.tsx`) changes from the entry
+ * page's configured "Home" title to "C5-PROBE".
  *
  * Why the side-effect contract and NOT `getSystemInfoSync`: the simulator
  * top-window `wx` happens to carry that sync helper, so
@@ -155,15 +155,16 @@ test.describe('native-host App.callWxMethod (non-nav) e2e', () => {
     )
     expect(shellMounted, 'DeviceShell .device-shell-root should mount under DIMINA_NATIVE_HOST=1').toBe(true)
 
-    // Baseline: the default nav bar renders the fixture's configured title and is
-    // not already our probe value (so the post-call assertion is meaningful).
+    // Baseline: the entry page's window config overrides the app-level default
+    // ("TabBar Fixture") with "Home", and is not already our probe value (so
+    // the post-call assertion is meaningful).
     const before = await pollUntil(
       () => navBarTitle(),
       (t) => typeof t === 'string' && t.length > 0,
       25000,
       300,
     )
-    expect(before, 'nav-bar title should render the fixture default before the call').toBe('TabBar Fixture')
+    expect(before, 'nav-bar title should render the entry page title before the call').toBe('Home')
     expect(before, 'baseline title must differ from the probe value').not.toBe(PROBE_TITLE)
 
     // The contract under test: a NON-navigation wx method invoked via

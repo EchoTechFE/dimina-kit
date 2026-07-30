@@ -30,6 +30,16 @@ vi.mock('electron', () => ({
 
 import { createServiceHostWindow } from './create.js'
 
+const TEST_ASSETS = {
+  root: '/runtime/dist',
+  simulatorDir: '/runtime/dist/simulator',
+  simulatorPreloadPath: '/runtime/dist/preload/simulator.cjs',
+  renderHostHtmlPath: '/runtime/dist/render-host/pageFrame.html',
+  renderHostPreloadPath: '/runtime/dist/render-host/preload.cjs',
+  serviceHostHtmlPath: '/runtime/dist/service-host/service.html',
+  serviceHostPreloadPath: '/runtime/dist/service-host/preload.cjs',
+}
+
 describe('createServiceHostWindow — fresh-path onLoadFailed threading', () => {
   it('forwards the spawn-navigation loadURL rejection to opts.onLoadFailed', async () => {
     const onLoadFailed = vi.fn()
@@ -39,6 +49,7 @@ describe('createServiceHostWindow — fresh-path onLoadFailed threading', () => 
       pagePath: 'pages/index/index',
       pkgRoot: '/tmp',
       resourceBaseUrl: 'http://127.0.0.1:1/',
+      assets: TEST_ASSETS,
       onLoadFailed,
     })
 

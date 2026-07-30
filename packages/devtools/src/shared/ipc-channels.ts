@@ -33,36 +33,11 @@ export const SimulatorChannel = {
 } as const
 
 /** iPhone bezel cutout family driving the device-shell notch visual. */
-export type NotchType = 'none' | 'notch' | 'dynamic-island'
-
-/** Per-device safe-area insets in CSS px (portrait). */
-export interface SafeAreaInsets {
-  top: number
-  right: number
-  bottom: number
-  left: number
-}
-
-/**
- * Logical device metrics pushed by the renderer device dropdown under
- * native-host (`SimulatorChannel.SetDeviceInfo`). Mirrors a row of the renderer
- * `DEVICES` table; main maps it onto a `HostEnvSnapshot` for the service-host
- * window so `wx.getSystemInfoSync()` reflects the selected device, relays it to
- * the simulator WCV (DeviceShell: bezel size + status bar + notch), and drives
- * the CSS `env(safe-area-inset-*)` override on render-host guests.
- */
-export interface NativeDeviceInfo {
-  brand: string
-  model: string
-  system: string
-  platform: string
-  pixelRatio: number
-  screenWidth: number
-  screenHeight: number
-  statusBarHeight: number
-  notchType: NotchType
-  safeAreaInsets: SafeAreaInsets
-}
+export type {
+  NativeDeviceInfo,
+  NotchType,
+  SafeAreaInsets,
+} from 'dimina-electron-runtime'
 
 // ── Service host (main → hidden service-host window) ─────────────────────
 
@@ -106,11 +81,10 @@ export const SimulatorCustomApiChannel = {
 // `<webview>.send`, no longer exists — native-host is the sole runtime.)
 //
 // Request/response are correlated by `id` so multiple concurrent invokes can
-// be in flight at once.
-export const SimulatorCustomApiBridgeChannel = {
-  Request: 'simulator:custom-apis:bridge-request',
-  Response: 'simulator:custom-apis:bridge-response',
-} as const
+// be in flight at once. The standalone runtime owns the wire contract.
+export {
+  SimulatorCustomApiBridgeChannel,
+} from 'dimina-electron-runtime/shared/bridge-channels'
 
 // ── Storage (CDP-backed; main process attaches the debugger to the
 // simulator guest and forwards DOMStorage events to the renderer) ──

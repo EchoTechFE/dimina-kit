@@ -111,6 +111,7 @@
   "dependencies": {
     "@dimina-kit/devkit": "workspace:*",
     "@dimina-kit/electron-deck": "workspace:*",
+    "dimina-electron-runtime": "workspace:*",
     "@dimina-kit/view-anchor": "workspace:*",
     "@dimina-kit/inspect": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",

@@ -150,7 +150,7 @@ vi.mock('electron', () => {
   }
 })
 
-vi.mock('../windows/service-host-window/create.js', () => ({
+vi.mock('dimina-electron-runtime/main/service-host-window', () => ({
   serviceHostSpec: () => ({}),
   serviceHostPreloadPath: '/tmp/preload.cjs',
   SERVICE_HOST_PARTITION: 'persist:simulator',

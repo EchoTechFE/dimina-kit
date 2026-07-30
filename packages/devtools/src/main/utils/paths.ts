@@ -1,6 +1,7 @@
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import type { RuntimeContext } from 'dimina-electron-runtime/main/runtime-context'
 
 // Hardcoded relative jumps like '../../dist/renderer' break under the
 // esbuild single-file bundle (dist/main/index.bundle.js): every inlined
@@ -14,7 +15,7 @@ function resolveDevtoolsPackageRoot(): string {
   while (dir !== root) {
     const pkgPath = path.join(dir, 'package.json')
     try {
-      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as { name?: string }
       if (pkg.name === '@dimina-kit/devtools') return dir
     } catch {}
     dir = path.dirname(dir)
@@ -69,6 +70,24 @@ export const hostToolbarRuntimePreloadPath = path.join(
 )
 
 export const simulatorDir = path.join(devtoolsPackageRoot, 'dist/simulator')
+
+/**
+ * DevTools builds its own copy of every native mini-app runtime asset. Pin the
+ * shared runtime bridge to that copy so a packaged client never depends on the
+ * standalone npm package's optional asset assembly step.
+ */
+export const runtimeAssetPaths = {
+  root: path.join(devtoolsPackageRoot, 'dist'),
+  simulatorDir,
+  simulatorPreloadPath: path.join(
+    devtoolsPackageRoot,
+    'dist/preload/windows/simulator.cjs',
+  ),
+  renderHostHtmlPath: path.join(devtoolsPackageRoot, 'dist/render-host/pageFrame.html'),
+  renderHostPreloadPath: path.join(devtoolsPackageRoot, 'dist/render-host/preload.cjs'),
+  serviceHostHtmlPath: path.join(devtoolsPackageRoot, 'dist/service-host/service.html'),
+  serviceHostPreloadPath: path.join(devtoolsPackageRoot, 'dist/service-host/preload.cjs'),
+} satisfies NonNullable<RuntimeContext['assets']>
 
 export function getRendererDir(): string {
   return rendererDir

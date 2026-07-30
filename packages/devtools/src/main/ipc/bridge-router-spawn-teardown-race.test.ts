@@ -144,7 +144,7 @@ vi.mock('electron', () => {
 
 // Pooling is OFF in this suite (fresh-window path), so every spawn goes through
 // createServiceHostWindow. Opts are recorded for BUG-1 assertions.
-vi.mock('../windows/service-host-window/create.js', () => ({
+vi.mock('dimina-electron-runtime/main/service-host-window', () => ({
   serviceHostSpec: () => ({}),
   serviceHostPreloadPath: '/tmp/preload.cjs',
   SERVICE_HOST_PARTITION: 'persist:simulator',

@@ -152,7 +152,7 @@ vi.mock('electron', () => {
 // Pooling is OFF in this suite — every spawn takes the fresh-window path, so
 // the overlap between A and B is purely the shared-simulator-wc mapping, not
 // a shared pooled service window.
-vi.mock('../windows/service-host-window/create.js', () => ({
+vi.mock('dimina-electron-runtime/main/service-host-window', () => ({
   serviceHostSpec: () => ({}),
   serviceHostPreloadPath: '/tmp/preload.cjs',
   SERVICE_HOST_PARTITION: 'persist:simulator',

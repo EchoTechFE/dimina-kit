@@ -142,7 +142,7 @@ vi.mock('electron', () => {
 // `createServiceHostWindow` (called by handleSpawn) constructs a BrowserWindow
 // and navigates it; stub the window-creation module so spawn yields our mock
 // window (whose webContents records `send`s) without touching real Electron.
-vi.mock('../windows/service-host-window/create.js', () => ({
+vi.mock('dimina-electron-runtime/main/service-host-window', () => ({
   serviceHostSpec: () => ({}),
   serviceHostPreloadPath: '/tmp/preload.cjs',
   SERVICE_HOST_PARTITION: 'persist:simulator',
