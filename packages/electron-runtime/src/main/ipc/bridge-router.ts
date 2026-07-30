@@ -52,6 +52,18 @@ import {
 } from '../services/views/miniapp-partition.js'
 import { createConsoleForwarder, type GuestConsoleEntry } from '../services/console-forward/index.js'
 import { createDiagnosticsBus } from '../services/diagnostics/index.js'
+import {
+  createNativeWebSocketService,
+  type NativeCloseSocketOptions,
+  type NativeConnectSocketOptions,
+  type NativeSendSocketMessageOptions,
+  type NativeWebSocketService,
+  type NativeWebSocketTrace,
+} from '../services/native-websocket/index.js'
+
+// Re-exported so embedders (devtools network panel) can type a trace listener
+// against the single source without reaching into the service module.
+export type { NativeWebSocketTrace } from '../services/native-websocket/index.js'
 import { STORAGE_API_NAMES } from '../services/storage.js'
 import { buildPageScrollScript } from './page-scroll.js'
 import {
@@ -129,6 +141,19 @@ function resolvePrewarmPoolSize(): number {
 /** debugTap (see foundation.md) is opt-in via `DIMINA_DEBUG_TAP=1` — off everywhere else. */
 function resolveDebugTapEnabled(): boolean {
   return process.env.DIMINA_DEBUG_TAP === '1'
+}
+
+/**
+ * Optional client-style idle teardown for sockets, opt-in via
+ * `DIMINA_SOCKET_IDLE_TIMEOUT_MS`. WeChat documents the mechanism without a
+ * duration, so the service default (disabled) applies unless set.
+ */
+function socketIdleTimeoutMsFromEnv(): number | undefined {
+  const raw = process.env.DIMINA_SOCKET_IDLE_TIMEOUT_MS
+  if (!raw) return undefined
+  const value = Number(raw)
+  if (!Number.isFinite(value) || value <= 0) return undefined
+  return Math.floor(value)
 }
 
 /**
@@ -334,6 +359,8 @@ interface RouterState {
    * appSessionId. Fired on main-window foreground/background and service errors.
    */
   appLifecycle: AppLifecycleController
+  /** Main-process WebSocket transport. Uses Node net/tls through `ws`, never Chromium. */
+  nativeWebSocket: NativeWebSocketService
   /**
    * Evict the app's accumulated AppData bridges (panel registry) for every
    * page of the session. Lives on RouterState because `disposeAppSession` is
@@ -452,6 +479,12 @@ export interface BridgeRouterHandle {
    * the still-live session's event already fired gets a missed-signal
    * catch-up — it never needs to poll. */
   onServiceHostReady(listener: (event: ServiceHostReadyEvent) => void): () => void
+  /** Subscribe to the native WebSocket transport's trace stream (created /
+   * handshake / frame / close per socket, keyed by owner appSessionId). Pure
+   * observation — subscribing never alters API forwarding. Each `created`
+   * socketId is guaranteed exactly one terminal `closed`. Optional so partial
+   * test mocks of the handle need not stub it. */
+  onNativeWebSocketTrace?(listener: (ownerId: string, event: NativeWebSocketTrace) => void): () => void
   /** The currently-selected device (renderer toolbar), or null pre-selection. */
   getDevice(): NativeDeviceInfo | null
   /** Cache the selected device + push DEVICE_CHANGE to the live simulator WC(s). */
@@ -565,12 +598,16 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
     connections: ctx.connections,
     debugTap: createDebugTap({ enabled: resolveDebugTapEnabled() }),
     appLifecycle: createAppLifecycleController(),
+    nativeWebSocket: createNativeWebSocketService({
+      idleTimeoutMs: socketIdleTimeoutMsFromEnv(),
+    }),
     evictAppDataBridges: (ap) => {
       for (const page of ap.pages.values()) {
         ctx.events.emit('app-data-evict', { appId: ap.appId, bridgeId: page.bridgeId })
       }
     },
   }
+  ctx.registry.add(() => state.nativeWebSocket.dispose())
 
   // Opt-in (default OFF) pre-warm pool for service-host windows. When enabled,
   // handleSpawn acquires a warm window instead of constructing one per spawn.
@@ -654,6 +691,20 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
   }
   state.emitServiceHostReady = emitServiceHostReady
 
+  // Subscribers to the native WebSocket trace stream (devtools Network panel).
+  // The service exposes a SINGLE tracer; the router fans out from here, so the
+  // service itself never knows how many observers exist. Pure subscription:
+  // no forwarding path awaits or reorders on this channel.
+  const nativeWebSocketTraceListeners = new Set<(ownerId: string, event: NativeWebSocketTrace) => void>()
+  state.nativeWebSocket.setTracer((ownerId, event) => {
+    for (const listener of nativeWebSocketTraceListeners) {
+      try { listener(ownerId, event) } catch (error) {
+        console.warn('[bridge-router] websocket-trace listener threw:', error)
+      }
+    }
+  })
+  ctx.registry.add(() => nativeWebSocketTraceListeners.clear())
+
   // Expose a thin accessor over RouterState so other main services (storage,
   // automation, appdata) can resolve live render/service WebContents without
   // owning router state. Getters resolve fresh — the pre-warm pool can swap
@@ -721,6 +772,10 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
         })
       }
       return () => serviceHostReadyListeners.delete(listener)
+    },
+    onNativeWebSocketTrace: (listener) => {
+      nativeWebSocketTraceListeners.add(listener)
+      return () => nativeWebSocketTraceListeners.delete(listener)
     },
     getDevice: () => currentDevice,
     setDevice: (device) => {
@@ -1862,8 +1917,14 @@ function installAppLifecycleDriver(ctx: RuntimeContext, state: RouterState): voi
     }
   }
 
-  const onHide = (): void => emit('appHide', 'onAppHide')
-  const onShow = (): void => emit('appShow', 'onAppShow')
+  const onHide = (): void => {
+    state.nativeWebSocket.setBackgrounded(true)
+    emit('appHide', 'onAppHide')
+  }
+  const onShow = (): void => {
+    state.nativeWebSocket.setBackgrounded(false)
+    emit('appShow', 'onAppShow')
+  }
   win.on('hide', onHide)
   win.on('minimize', onHide)
   win.on('show', onShow)
@@ -2048,13 +2109,94 @@ async function invokeSimulatorApiAndCallback(
 ): Promise<void> {
   try {
     const result = await invoke()
+    const errMsg = result && typeof result === 'object' && 'errMsg' in result
+      ? String((result as { errMsg?: unknown }).errMsg ?? '')
+      : ''
+    if (errMsg.startsWith(`${name}:fail`)) {
+      sendCallback(ap, params.fail, result)
+      sendCallback(ap, params.complete, result)
+      return
+    }
     sendCallback(ap, params.success, result)
     sendCallback(ap, params.complete, result)
   } catch (error) {
-    const failResult = { errMsg: `${name}:fail ${error instanceof Error ? error.message : String(error)}` }
+    const message = error instanceof Error ? error.message : String(error)
+    const failResult = {
+      errMsg: message.startsWith(`${name}:fail`) ? message : `${name}:fail ${message}`,
+    }
     sendCallback(ap, params.fail, failResult)
     sendCallback(ap, params.complete, failResult)
   }
+}
+
+const NATIVE_WEBSOCKET_API_NAMES = new Set([
+  'socketListen',
+  'connectSocket',
+  'sendSocketMessage',
+  'closeSocket',
+])
+
+async function handleNativeWebSocketApi(
+  state: RouterState,
+  ap: AppSession,
+  name: string,
+  params: Record<string, unknown>,
+): Promise<void> {
+  if (name === 'socketListen') {
+    const callbackId = params.success
+    state.nativeWebSocket.listen(ap.appSessionId, (event) => {
+      // disposeAppSession removes the owner/listener before dropping the app
+      // session, so no Native event can bleed into a pooled service window.
+      sendCallback(ap, callbackId, event)
+    })
+    return
+  }
+
+  if (name === 'connectSocket') {
+    const options: NativeConnectSocketOptions = {
+      socketId: typeof params.socketId === 'string' ? params.socketId : '',
+      url: typeof params.url === 'string' ? params.url : '',
+      header: params.header as Record<string, unknown> | undefined,
+      protocols: params.protocols as string[] | undefined,
+      timeout: params.timeout as number | undefined,
+      perMessageDeflate: params.perMessageDeflate as boolean | undefined,
+      tcpNoDelay: params.tcpNoDelay as boolean | undefined,
+      forceCellularNetwork: params.forceCellularNetwork as boolean | undefined,
+    }
+    await invokeSimulatorApiAndCallback(
+      ap,
+      name,
+      params,
+      async () => state.nativeWebSocket.connect(ap.appSessionId, options),
+    )
+    return
+  }
+
+  if (name === 'sendSocketMessage') {
+    const options: NativeSendSocketMessageOptions = {
+      socketId: typeof params.socketId === 'string' ? params.socketId : '',
+      data: params.data,
+    }
+    await invokeSimulatorApiAndCallback(
+      ap,
+      name,
+      params,
+      () => state.nativeWebSocket.send(ap.appSessionId, options),
+    )
+    return
+  }
+
+  const options: NativeCloseSocketOptions = {
+    socketId: typeof params.socketId === 'string' ? params.socketId : '',
+    code: params.code as number | undefined,
+    reason: params.reason as string | undefined,
+  }
+  await invokeSimulatorApiAndCallback(
+    ap,
+    name,
+    params,
+    async () => state.nativeWebSocket.close(ap.appSessionId, options),
+  )
 }
 
 async function handleSimulatorApi(
@@ -2086,6 +2228,14 @@ async function handleSimulatorApi(
 
   if (name === 'pageScrollTo') {
     handlePageScrollApi(ap, page, params)
+    return
+  }
+
+  // Preserve the synchronous forwarding path for every non-WebSocket API:
+  // awaiting a generic "maybe handled" check would insert a microtask before
+  // API_CALL delivery and reorder existing service/simulator bridge traffic.
+  if (NATIVE_WEBSOCKET_API_NAMES.has(name)) {
+    await handleNativeWebSocketApi(state, ap, name, params)
     return
   }
 
@@ -2552,6 +2702,7 @@ async function disposeAppSession(
   ap.registryHandle = null
   void registryHandle?.dispose()
   state.appLifecycle.dispose(appSessionId)
+  state.nativeWebSocket.disposeOwner(appSessionId)
 
   // Evict AppData bridges FIRST — eviction enumerates `ap.pages`, which the
   // page teardown below progressively empties (and finally clears).

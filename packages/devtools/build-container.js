@@ -31,10 +31,14 @@ const INJECTED_FILES = [
   { src: join(SIMULATOR_DIR, 'service-apis/file/index.js'), dest: join(SERVICE_SRC, 'src/api/core/file/index.js') },
   { src: join(SIMULATOR_DIR, 'service-apis/audio/index.js'), dest: join(SERVICE_SRC, 'src/api/core/media/audio/index.js') },
   { src: join(SIMULATOR_DIR, 'service-apis/network/upload/index.js'), dest: join(SERVICE_SRC, 'src/api/core/network/upload/index.js') },
+  { src: join(SIMULATOR_DIR, 'service-apis/network/websocket/index.js'), dest: join(SERVICE_SRC, 'src/api/core/network/websocket/index.js') },
 ]
+
+const injectedFileBackups = new Map()
 
 function injectFiles() {
   for (const { src, dest } of INJECTED_FILES) {
+    injectedFileBackups.set(dest, existsSync(dest) ? readFileSync(dest) : null)
     mkdirSync(dirname(dest), { recursive: true })
     cpSync(src, dest)
   }
@@ -43,16 +47,12 @@ function injectFiles() {
 
 function cleanupInjectedFiles() {
   for (const { dest } of INJECTED_FILES) {
-    const rel = relative(DIMINA_ROOT, dest)
-    // If upstream tracks this path, restore the original via git checkout so
-    // the submodule doesn't end up with a dirty deletion (e.g. file/index.js
-    // is a real upstream file we overwrite, not a new file we add).
-    const tracked = spawnSync('git', ['ls-files', '--error-unmatch', rel], {
-      cwd: DIMINA_ROOT,
-      stdio: 'ignore',
-    }).status === 0
-    if (tracked) {
-      spawnSync('git', ['checkout', '--', rel], { cwd: DIMINA_ROOT })
+    const backup = injectedFileBackups.get(dest)
+    // Restore the exact pre-build bytes rather than `git checkout`: a feature
+    // worktree may intentionally have uncommitted edits in an upstream file
+    // that devtools temporarily overlays (notably websocket/index.js).
+    if (backup !== null && backup !== undefined) {
+      writeFileSync(dest, backup)
       continue
     }
     rmSync(dest, { force: true })

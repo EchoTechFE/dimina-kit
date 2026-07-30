@@ -133,12 +133,14 @@
     "prepack": "pnpm run build:package"
   },
   "dependencies": {
-    "@dimina-kit/electron-deck": "workspace:*"
+    "@dimina-kit/electron-deck": "workspace:*",
+    "ws": "^8.20.0"
   },
   "devDependencies": {
     "@dimina-kit/typescript-config": "workspace:*",
     "@dimina-kit/eslint-config": "workspace:*",
     "@types/node": "^22.15.3",
+    "@types/ws": "^8.18.1",
     "@vitest/coverage-v8": "^4.1.4",
     "electron": "^43.2.0",
     "eslint": "^10.2.1",
