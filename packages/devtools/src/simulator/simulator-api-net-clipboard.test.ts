@@ -93,62 +93,59 @@ describe('resolveNetworkType', () => {
 
 // ─── getClipboardData ─────────────────────────────────────────────────────────
 
+function stubClipboardBridge(overrides: { readText?: () => string; writeText?: (t: string) => void } = {}) {
+  const bridge = {
+    readText: overrides.readText ?? (() => 'hello'),
+    writeText: overrides.writeText ?? (() => {}),
+  }
+  vi.stubGlobal('__diminaClipboard', bridge)
+  return bridge
+}
+
 describe('getClipboardData', () => {
   beforeEach(() => {
-    vi.stubGlobal('navigator', {
-      clipboard: { readText: vi.fn().mockResolvedValue('hello') },
-    })
+    stubClipboardBridge()
   })
 
-  it('calls success with { data, errMsg } on resolve', async () => {
+  it('calls success with { data, errMsg } synchronously', () => {
     const ctx = makeCtx()
     const success = vi.fn()
     const complete = vi.fn()
-    await getClipboardData.call(ctx, { success, complete })
-    await flush()
+    getClipboardData.call(ctx, { success, complete })
     expect(success).toHaveBeenCalledWith({ data: 'hello', errMsg: 'getClipboardData:ok' })
-  })
-
-  it('calls complete after success', async () => {
-    const ctx = makeCtx()
-    const complete = vi.fn()
-    await getClipboardData.call(ctx, { complete })
-    await flush()
     expect(complete).toHaveBeenCalledTimes(1)
   })
 
-  it('does not call success before the promise resolves', () => {
+  it('calls complete after success', () => {
     const ctx = makeCtx()
-    const success = vi.fn()
-    getClipboardData.call(ctx, { success })
-    // synchronously — promise not yet settled
-    expect(success).not.toHaveBeenCalled()
+    const complete = vi.fn()
+    getClipboardData.call(ctx, { complete })
+    expect(complete).toHaveBeenCalledTimes(1)
   })
 
-  it('calls fail (errMsg starts with getClipboardData:fail) on readText reject', async () => {
-    vi.stubGlobal('navigator', {
-      clipboard: { readText: vi.fn().mockRejectedValue(new Error('denied')) },
+  it('calls fail when readText throws', () => {
+    stubClipboardBridge({
+      readText: () => { throw new Error('denied') },
     })
     const ctx = makeCtx()
     const success = vi.fn()
     const fail = vi.fn()
     const complete = vi.fn()
-    await getClipboardData.call(ctx, { success, fail, complete })
-    await flush()
+    getClipboardData.call(ctx, { success, fail, complete })
     expect(success).not.toHaveBeenCalled()
     expect(fail).toHaveBeenCalledTimes(1)
     expect((fail.mock.calls[0][0] as { errMsg: string }).errMsg).toMatch(/^getClipboardData:fail/)
     expect(complete).toHaveBeenCalledTimes(1)
   })
 
-  it('calls complete even on reject', async () => {
-    vi.stubGlobal('navigator', {
-      clipboard: { readText: vi.fn().mockRejectedValue(new Error('denied')) },
-    })
+  it('calls fail when bridge is unavailable', () => {
+    vi.stubGlobal('__diminaClipboard', undefined)
     const ctx = makeCtx()
+    const fail = vi.fn()
     const complete = vi.fn()
-    await getClipboardData.call(ctx, { complete })
-    await flush()
+    getClipboardData.call(ctx, { fail, complete })
+    expect(fail).toHaveBeenCalledTimes(1)
+    expect((fail.mock.calls[0][0] as { errMsg: string }).errMsg).toMatch(/^getClipboardData:fail/)
     expect(complete).toHaveBeenCalledTimes(1)
   })
 })
@@ -156,64 +153,69 @@ describe('getClipboardData', () => {
 // ─── setClipboardData ─────────────────────────────────────────────────────────
 
 describe('setClipboardData', () => {
-  const writeText = vi.fn().mockResolvedValue(undefined)
+  const writeText = vi.fn()
 
   beforeEach(() => {
-    writeText.mockResolvedValue(undefined)
-    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    writeText.mockReset()
+    stubClipboardBridge({ writeText })
   })
 
-  it('calls fail with data-required errMsg when data is undefined', async () => {
+  it('calls fail with data-required errMsg when data is undefined', () => {
     const ctx = makeCtx()
     const success = vi.fn()
     const fail = vi.fn()
     const complete = vi.fn()
-    await setClipboardData.call(ctx, { success, fail, complete })
-    await flush()
+    setClipboardData.call(ctx, { success, fail, complete })
     expect(fail).toHaveBeenCalledWith({ errMsg: 'setClipboardData:fail data is required' })
     expect(success).not.toHaveBeenCalled()
     expect(complete).toHaveBeenCalledTimes(1)
   })
 
-  it('does not call writeText when data is missing', async () => {
+  it('does not call writeText when data is missing', () => {
     const ctx = makeCtx()
-    await setClipboardData.call(ctx, {})
-    await flush()
+    setClipboardData.call(ctx, {})
     expect(writeText).not.toHaveBeenCalled()
   })
 
-  it('calls writeText with the provided data string', async () => {
+  it('calls writeText with the provided data string', () => {
     const ctx = makeCtx()
-    await setClipboardData.call(ctx, { data: 'copied!' })
-    await flush()
+    setClipboardData.call(ctx, { data: 'copied!' })
     expect(writeText).toHaveBeenCalledWith('copied!')
   })
 
-  it('calls success with { errMsg: "setClipboardData:ok" } on writeText resolve', async () => {
+  it('calls success with { errMsg: "setClipboardData:ok" }', () => {
     const ctx = makeCtx()
     const success = vi.fn()
-    await setClipboardData.call(ctx, { data: 'text', success })
-    await flush()
+    setClipboardData.call(ctx, { data: 'text', success })
     expect(success).toHaveBeenCalledWith({ errMsg: 'setClipboardData:ok' })
   })
 
-  it('calls complete after writeText resolves', async () => {
+  it('calls complete after writeText', () => {
     const ctx = makeCtx()
     const complete = vi.fn()
-    await setClipboardData.call(ctx, { data: 'text', complete })
-    await flush()
+    setClipboardData.call(ctx, { data: 'text', complete })
     expect(complete).toHaveBeenCalledTimes(1)
   })
 
-  it('calls fail (errMsg starts with setClipboardData:fail) on writeText reject', async () => {
-    writeText.mockRejectedValue(new Error('write denied'))
+  it('calls fail when writeText throws', () => {
+    writeText.mockImplementation(() => { throw new Error('write denied') })
     const ctx = makeCtx()
     const success = vi.fn()
     const fail = vi.fn()
     const complete = vi.fn()
-    await setClipboardData.call(ctx, { data: 'text', success, fail, complete })
-    await flush()
+    setClipboardData.call(ctx, { data: 'text', success, fail, complete })
     expect(success).not.toHaveBeenCalled()
+    expect(fail).toHaveBeenCalledTimes(1)
+    expect((fail.mock.calls[0][0] as { errMsg: string }).errMsg).toMatch(/^setClipboardData:fail/)
+    expect(complete).toHaveBeenCalledTimes(1)
+  })
+
+  it('calls fail when bridge is unavailable', () => {
+    vi.stubGlobal('__diminaClipboard', undefined)
+    const ctx = makeCtx()
+    const fail = vi.fn()
+    const complete = vi.fn()
+    setClipboardData.call(ctx, { data: 'text', fail, complete })
     expect(fail).toHaveBeenCalledTimes(1)
     expect((fail.mock.calls[0][0] as { errMsg: string }).errMsg).toMatch(/^setClipboardData:fail/)
     expect(complete).toHaveBeenCalledTimes(1)

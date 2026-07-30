@@ -11,6 +11,7 @@ import { installConsoleInstrumentation } from '../instrumentation/console.js'
 import { createAppDataSource } from '../instrumentation/app-data.js'
 import { setupApiCompatHook } from '../shared/api-compat.js'
 import { installNativeHostBridge } from '../runtime/native-host.js'
+import { installClipboardBridge } from '../runtime/clipboard.js'
 
 // Note: storage panel data is sourced from the main process via the CDP
 // DOMStorage domain (src/main/services/simulator-storage). No preload-side
@@ -25,6 +26,7 @@ installSimulatorBridge()
 installCustomApisBridge()
 installTempFileBridge()
 installConsoleInstrumentation()
+installClipboardBridge()
 
 // Native-host render path: self-gating bridge that exposes
 // `window.__diminaNativeHost` so simulator/main.tsx boots the DeviceShell +

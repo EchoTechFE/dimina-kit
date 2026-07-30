@@ -73,21 +73,33 @@ export const scanCode = notSupportedApi('scanCode')
 
 // ─── Device: Clipboard ───────────────────────────────────────────────────────
 
+interface ClipboardBridge {
+	readText(): string
+	writeText(text: string): void
+}
+
+function getClipboardBridge(): ClipboardBridge | undefined {
+	return (window as unknown as Record<string, unknown>).__diminaClipboard as ClipboardBridge | undefined
+}
+
 export function getClipboardData(
 	this: MiniAppContext,
 	{ success, fail, complete }: { success?: unknown; fail?: unknown; complete?: unknown } = {},
 ) {
 	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
-	return navigator.clipboard.readText().then(
-		(data) => {
-			onSuccess?.({ data, errMsg: 'getClipboardData:ok' })
-			onComplete?.()
-		},
-		(error: unknown) => {
-			onFail?.({ errMsg: `getClipboardData:fail ${(error as Error)?.message ?? error}` })
-			onComplete?.()
-		},
-	)
+	const bridge = getClipboardBridge()
+	if (!bridge) {
+		onFail?.({ errMsg: 'getClipboardData:fail clipboard bridge unavailable' })
+		onComplete?.()
+		return
+	}
+	try {
+		const data = bridge.readText()
+		onSuccess?.({ data, errMsg: 'getClipboardData:ok' })
+	} catch (error: unknown) {
+		onFail?.({ errMsg: `getClipboardData:fail ${(error as Error)?.message ?? error}` })
+	}
+	onComplete?.()
 }
 
 export function setClipboardData(
@@ -95,22 +107,24 @@ export function setClipboardData(
 	{ data, success, fail, complete }: { data?: string; success?: unknown; fail?: unknown; complete?: unknown } = {},
 ) {
 	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
-	// Parity with the native ClipboardApi: `data` is required.
 	if (typeof data !== 'string') {
 		onFail?.({ errMsg: 'setClipboardData:fail data is required' })
 		onComplete?.()
-		return Promise.resolve()
+		return
 	}
-	return navigator.clipboard.writeText(data).then(
-		() => {
-			onSuccess?.({ errMsg: 'setClipboardData:ok' })
-			onComplete?.()
-		},
-		(error: unknown) => {
-			onFail?.({ errMsg: `setClipboardData:fail ${(error as Error)?.message ?? error}` })
-			onComplete?.()
-		},
-	)
+	const bridge = getClipboardBridge()
+	if (!bridge) {
+		onFail?.({ errMsg: 'setClipboardData:fail clipboard bridge unavailable' })
+		onComplete?.()
+		return
+	}
+	try {
+		bridge.writeText(data)
+		onSuccess?.({ errMsg: 'setClipboardData:ok' })
+	} catch (error: unknown) {
+		onFail?.({ errMsg: `setClipboardData:fail ${(error as Error)?.message ?? error}` })
+	}
+	onComplete?.()
 }
 
 // ─── Device: Network type ────────────────────────────────────────────────────
