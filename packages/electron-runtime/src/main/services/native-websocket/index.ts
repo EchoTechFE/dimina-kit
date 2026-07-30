@@ -1,4 +1,4 @@
-import type { ClientRequest, IncomingMessage } from 'node:http'
+import type { ClientRequest } from 'node:http'
 import type { Socket } from 'node:net'
 import { WebSocket } from 'ws'
 import {
@@ -13,98 +13,63 @@ import {
   normalizeTimeout,
   validateClose,
 } from './normalize.js'
+import type { ProfileRecorder } from './transport.js'
+import {
+  attachSocketProfile,
+  binaryMessage,
+  completeProfile,
+  errorMessage,
+  now,
+  responseHeaders,
+} from './transport.js'
+import { createSocketTracer, type NativeWebSocketTracer, type SocketTracer } from './trace.js'
+import type {
+  NativeWebSocketEvent,
+  NativeWebSocketResult,
+  NativeWebSocketService,
+  NativeWebSocketServiceOptions,
+} from './types.js'
 
 export { DEFAULT_SOCKET_TIMEOUT_MS, MAX_CLOSE_REASON_BYTES, MAX_SOCKET_TASKS } from './normalize.js'
+export type { NativeSocketProfile } from './transport.js'
+export type { NativeWebSocketTrace, NativeWebSocketTracer } from './trace.js'
+export type {
+  NativeCloseSocketOptions,
+  NativeConnectSocketOptions,
+  NativeSendSocketMessageOptions,
+  NativeWebSocketEvent,
+  NativeWebSocketResult,
+  NativeWebSocketService,
+  NativeWebSocketServiceOptions,
+} from './types.js'
 
-export interface NativeSocketProfile {
-  connectEnd: number
-  connectStart: number
-  cost: number
-  domainLookUpEnd: number
-  domainLookUpStart: number
-  fetchStart: number
-  handshakeCost: number
-  rtt: number
-}
-
-export type NativeWebSocketEvent =
-  | {
-      socketId: string
-      event: 'open'
-      header: Record<string, string>
-      profile: NativeSocketProfile
-    }
-  | {
-      socketId: string
-      event: 'message'
-      data: string | ArrayBuffer
-    }
-  | {
-      socketId: string
-      event: 'error'
-      errMsg: string
-    }
-  | {
-      socketId: string
-      event: 'close'
-      code: number
-      reason: string
-    }
-
-export interface NativeConnectSocketOptions {
-  socketId: string
-  url: string
-  header?: Record<string, unknown>
-  protocols?: string[]
-  timeout?: number
-  perMessageDeflate?: boolean
-  tcpNoDelay?: boolean
-  /**
-   * Kept for wx.connectSocket contract compatibility. A desktop developer tool
-   * cannot select a cellular interface, so true is an explicit no-op.
-   */
-  forceCellularNetwork?: boolean
-}
-
-export interface NativeSendSocketMessageOptions {
-  socketId: string
-  data: unknown
-}
-
-export interface NativeCloseSocketOptions {
-  socketId: string
-  code?: number
-  reason?: string
-}
-
-export interface NativeWebSocketResult {
-  errMsg: string
-}
-
-export interface NativeWebSocketService {
-  listen(ownerId: string, listener: (event: NativeWebSocketEvent) => void): void
-  connect(ownerId: string, options: NativeConnectSocketOptions): NativeWebSocketResult
-  send(ownerId: string, options: NativeSendSocketMessageOptions): Promise<NativeWebSocketResult>
-  close(ownerId: string, options: NativeCloseSocketOptions): NativeWebSocketResult
-  disposeOwner(ownerId: string): void
-  dispose(): void
-}
-
-interface ProfileRecorder {
-  fetchStart: number
-  domainLookUpStart: number
-  domainLookUpEnd: number
-  connectStart: number
-  connectEnd: number
-}
+/**
+ * Mini-program background network policy (official "网络使用说明"): after the
+ * app stays in the background for this grace period, live socket connections
+ * are interrupted. Client-initiated teardown surfaces as onClose only — never
+ * onError ("由客户端机制断开的长连，不会触发 socketError 事件").
+ */
+export const DEFAULT_BACKGROUND_GRACE_MS = 5_000
+export const BACKGROUND_CLOSE_REASON = 'interrupted'
+export const IDLE_CLOSE_REASON = 'idle timeout'
+export const INTERRUPTED_ERRMSG_SUFFIX = 'interrupted'
+const CLIENT_TEARDOWN_CODE = 1006
 
 interface SocketEntry {
   socket: WebSocket
+  opened: boolean
   errorEmitted: boolean
+  /** Per-socket trace emitter; its `closed()` is the idempotent terminal event. */
+  tracer: SocketTracer
   timer: NodeJS.Timeout
+  idleTimer?: NodeJS.Timeout
   profile: ProfileRecorder
   responseHeader: Record<string, string>
   tcpNoDelay: boolean
+  transportHandles: {
+    request?: ClientRequest
+    socket?: Socket
+  }
 }
 
 interface OwnerSockets {
@@ -112,92 +77,24 @@ interface OwnerSockets {
   listener?: (event: NativeWebSocketEvent) => void
 }
 
-function now(): number {
-  return Date.now()
+function interruptedResult(name: string): NativeWebSocketResult {
+  return { errMsg: `${name}:fail ${INTERRUPTED_ERRMSG_SUFFIX}` }
 }
 
-function responseHeaders(response: IncomingMessage): Record<string, string> {
-  const result: Record<string, string> = {}
-  const raw = response.rawHeaders
-  for (let index = 0; index + 1 < raw.length; index += 2) {
-    const name = raw[index]
-    const value = raw[index + 1]
-    if (!name || value === undefined) continue
-    result[name] = result[name] ? `${result[name]}, ${value}` : value
-  }
-  return result
+function positiveMs(raw: number | undefined): number {
+  if (raw === undefined || !Number.isFinite(raw) || raw <= 0) return 0
+  return Math.floor(raw)
 }
 
-function arrayBufferFromBuffer(buffer: Buffer): ArrayBuffer {
-  // Copy through this realm's Uint8Array. Buffer's backing ArrayBuffer can
-  // originate in Node's realm while the service-host callback is observed from
-  // another V8 realm; returning it directly breaks `instanceof ArrayBuffer`.
-  const bytes = new Uint8Array(buffer.byteLength)
-  bytes.set(buffer)
-  return bytes.buffer
-}
-
-function binaryMessage(data: WebSocket.RawData): ArrayBuffer {
-  if (data instanceof ArrayBuffer) return data
-  if (Array.isArray(data)) return arrayBufferFromBuffer(Buffer.concat(data))
-  return arrayBufferFromBuffer(data)
-}
-
-function attachSocketProfile(
-  request: ClientRequest,
-  profile: ProfileRecorder,
-  tcpNoDelay: boolean,
-  onSocket: (socket: Socket) => void,
-): void {
-  const attach = (socket: Socket): void => {
-    onSocket(socket)
-    profile.domainLookUpStart = now()
-    socket.setNoDelay(tcpNoDelay)
-    socket.once('lookup', () => {
-      profile.domainLookUpEnd = now()
-      profile.connectStart = profile.domainLookUpEnd
-    })
-    const connected = (): void => {
-      if (profile.domainLookUpEnd === 0) {
-        profile.domainLookUpStart = profile.fetchStart
-        profile.domainLookUpEnd = profile.fetchStart
-      }
-      if (profile.connectStart === 0) profile.connectStart = profile.domainLookUpEnd
-      profile.connectEnd = now()
-    }
-    if ('encrypted' in socket) socket.once('secureConnect', connected)
-    else socket.once('connect', connected)
-  }
-  if (request.socket) attach(request.socket)
-  else request.once('socket', attach)
-}
-
-function completeProfile(profile: ProfileRecorder, openedAt: number): NativeSocketProfile {
-  const connectStart = profile.connectStart || profile.fetchStart
-  const connectEnd = profile.connectEnd || openedAt
-  const domainLookUpStart = profile.domainLookUpStart || profile.fetchStart
-  const domainLookUpEnd = profile.domainLookUpEnd || domainLookUpStart
-  return {
-    fetchStart: profile.fetchStart,
-    domainLookUpStart,
-    domainLookUpEnd,
-    connectStart,
-    connectEnd,
-    rtt: Math.max(0, connectEnd - connectStart),
-    handshakeCost: Math.max(0, openedAt - connectEnd),
-    cost: Math.max(0, openedAt - profile.fetchStart),
-  }
-}
-
-function errorMessage(error: Error): string {
-  if (/timed?\s*out|timeout/i.test(error.message)) {
-    return 'connectSocket:fail timeout'
-  }
-  return `connectSocket:fail ${error.message || 'WebSocket connection failed'}`
-}
-
-export function createNativeWebSocketService(): NativeWebSocketService {
+export function createNativeWebSocketService(
+  options: NativeWebSocketServiceOptions = {},
+): NativeWebSocketService {
   const owners = new Map<string, OwnerSockets>()
+  const idleTimeoutMs = positiveMs(options.idleTimeoutMs)
+  const backgroundGraceMs = positiveMs(options.backgroundGraceMs) || DEFAULT_BACKGROUND_GRACE_MS
+  let backgrounded = false
+  let backgroundTimer: NodeJS.Timeout | undefined
+  let tracer: NativeWebSocketTracer | undefined
 
   const owner = (ownerId: string): OwnerSockets => {
     let sockets = owners.get(ownerId)
@@ -212,14 +109,108 @@ export function createNativeWebSocketService(): NativeWebSocketService {
     owners.get(ownerId)?.listener?.(event)
   }
 
+  const releaseOwnerIfIdle = (ownerId: string, current: OwnerSockets): void => {
+    // The re-lookup guards against a late ws event captured by a disposed
+    // owner deleting a re-registered owner's entry under the same ownerId.
+    if (current.sockets.size === 0 && !current.listener && owners.get(ownerId) === current) {
+      owners.delete(ownerId)
+    }
+  }
+
+  const clearEntryTimers = (entry: SocketEntry): void => {
+    clearTimeout(entry.timer)
+    if (entry.idleTimer) clearTimeout(entry.idleTimer)
+  }
+
+  /**
+   * Client-side teardown shared by background interruption and idle shutdown:
+   * sever the transport without a handshake close, then surface exactly one
+   * close event (1006) — onError never fires for client-mechanism teardowns.
+   */
+  const teardownSocket = (
+    ownerId: string,
+    socketId: string,
+    current: OwnerSockets,
+    entry: SocketEntry,
+    event: NativeWebSocketEvent | undefined,
+  ): void => {
+    current.sockets.delete(socketId)
+    entry.tracer.closed()
+    clearEntryTimers(entry)
+    entry.socket.removeAllListeners()
+    // ws aborts a CONNECTING socket asynchronously (nextTick emitErrorAndClose);
+    // without a listener that error would escape as an uncaught exception.
+    entry.socket.on('error', () => {})
+    entry.transportHandles.request?.destroy()
+    entry.transportHandles.socket?.destroy()
+    try {
+      entry.socket.terminate()
+    } catch {
+      // Best-effort teardown; the entry is already detached from the registry.
+    }
+    if (event) emit(ownerId, event)
+    releaseOwnerIfIdle(ownerId, current)
+  }
+
+  const teardownAllForBackground = (): void => {
+    backgroundTimer = undefined
+    for (const [ownerId, current] of Array.from(owners.entries())) {
+      for (const [socketId, entry] of Array.from(current.sockets.entries())) {
+        if (entry.opened) {
+          teardownSocket(ownerId, socketId, current, entry, {
+            socketId,
+            event: 'close',
+            code: CLIENT_TEARDOWN_CODE,
+            reason: BACKGROUND_CLOSE_REASON,
+          })
+        } else if (!entry.errorEmitted) {
+          // A socket still handshaking fails the connect instead of reporting
+          // a close: onClose only exists for connections that once opened.
+          entry.errorEmitted = true
+          entry.tracer.frameError(interruptedResult('connectSocket').errMsg)
+          teardownSocket(ownerId, socketId, current, entry, {
+            socketId,
+            event: 'error',
+            errMsg: interruptedResult('connectSocket').errMsg,
+          })
+        } else {
+          // Already errored mid-handshake: the failure was reported, so the
+          // background teardown only reclaims the entry.
+          teardownSocket(ownerId, socketId, current, entry, undefined)
+        }
+      }
+    }
+  }
+
+  const armIdleTimer = (ownerId: string, socketId: string): void => {
+    if (!idleTimeoutMs) return
+    const current = owners.get(ownerId)
+    const entry = current?.sockets.get(socketId)
+    if (!current || !entry) return
+    if (entry.idleTimer) clearTimeout(entry.idleTimer)
+    entry.idleTimer = setTimeout(() => {
+      if (!entry.opened) return
+      teardownSocket(ownerId, socketId, current, entry, {
+        socketId,
+        event: 'close',
+        code: CLIENT_TEARDOWN_CODE,
+        reason: IDLE_CLOSE_REASON,
+      })
+    }, idleTimeoutMs)
+  }
+
   const disposeOwner = (ownerId: string): void => {
     const current = owners.get(ownerId)
     if (!current) return
     owners.delete(ownerId)
     current.listener = undefined
     for (const entry of current.sockets.values()) {
-      clearTimeout(entry.timer)
+      entry.tracer.closed()
+      clearEntryTimers(entry)
       entry.socket.removeAllListeners()
+      // Same async-abort swallow as teardownSocket: terminating a CONNECTING
+      // socket emits its error on the next tick.
+      entry.socket.on('error', () => {})
       try {
         entry.socket.terminate()
       } catch {
@@ -236,6 +227,7 @@ export function createNativeWebSocketService(): NativeWebSocketService {
 
     connect(ownerId, options) {
       try {
+        if (backgrounded) throw apiError('connectSocket', INTERRUPTED_ERRMSG_SUFFIX)
         const current = owner(ownerId)
         if (!options.socketId || current.sockets.has(options.socketId)) {
           throw apiError('connectSocket', 'invalid socketId')
@@ -257,47 +249,58 @@ export function createNativeWebSocketService(): NativeWebSocketService {
           connectStart: 0,
           connectEnd: 0,
         }
-        let transportSocket: Socket | undefined
-        let transportRequest: ClientRequest | undefined
 
-        const socket = new WebSocket(url, protocols, {
+        // finishRequest fires synchronously inside the WebSocket constructor,
+        // so transport handles are pinned through a mutable holder the entry
+        // shares with the setup callbacks.
+        const transportHandles: SocketEntry['transportHandles'] = {}
+
+        const socketTracer = createSocketTracer(() => tracer, ownerId, options.socketId)
+        const socket = socketTracer.traceConstruction(url, protocols, () => new WebSocket(url, protocols, {
           headers: header,
           perMessageDeflate: options.perMessageDeflate === true,
           finishRequest(request) {
-            transportRequest = request
+            transportHandles.request = request
+            socketTracer.handshakeRequest(request)
             attachSocketProfile(request, profile, tcpNoDelay, (transport) => {
-              transportSocket = transport
+              transportHandles.socket = transport
             })
             request.end()
           },
-        })
+        }))
 
         const entry: SocketEntry = {
           socket,
+          opened: false,
           errorEmitted: false,
+          tracer: socketTracer,
           timer: setTimeout(() => {
             if (socket.readyState !== WebSocket.CONNECTING) return
             entry.errorEmitted = true
+            socketTracer.frameError('connectSocket:fail timed out')
             emit(ownerId, {
               socketId: options.socketId,
               event: 'error',
               errMsg: 'connectSocket:fail timed out',
             })
-            transportRequest?.destroy()
-            transportSocket?.destroy()
+            entry.transportHandles.request?.destroy()
+            entry.transportHandles.socket?.destroy()
             socket.terminate()
           }, timeout),
           profile,
           responseHeader: {},
           tcpNoDelay,
+          transportHandles,
         }
         current.sockets.set(options.socketId, entry)
 
         socket.once('upgrade', (response) => {
           entry.responseHeader = responseHeaders(response)
+          socketTracer.handshakeResponse(response)
         })
         socket.once('open', () => {
           clearTimeout(entry.timer)
+          entry.opened = true
           const openedAt = now()
           const transport = (socket as WebSocket & { _socket?: Socket })._socket
           transport?.setNoDelay(entry.tcpNoDelay)
@@ -307,37 +310,54 @@ export function createNativeWebSocketService(): NativeWebSocketService {
             header: entry.responseHeader,
             profile: completeProfile(profile, openedAt),
           })
+          armIdleTimer(ownerId, options.socketId)
         })
         socket.on('message', (data, isBinary) => {
+          socketTracer.frameReceived(data, isBinary)
           emit(ownerId, {
             socketId: options.socketId,
             event: 'message',
             data: isBinary ? binaryMessage(data) : data.toString(),
           })
+          armIdleTimer(ownerId, options.socketId)
+        })
+        socket.on('ping', () => {
+          socketTracer.pingFrame()
+          armIdleTimer(ownerId, options.socketId)
+        })
+        socket.on('pong', () => {
+          socketTracer.pongFrame()
+          armIdleTimer(ownerId, options.socketId)
         })
         socket.on('error', (error) => {
           if (entry.errorEmitted) return
           entry.errorEmitted = true
+          socketTracer.frameError(errorMessage(error))
           emit(ownerId, {
             socketId: options.socketId,
             event: 'error',
             errMsg: errorMessage(error),
           })
           if (socket.readyState === WebSocket.CONNECTING) {
-            transportSocket?.destroy()
+            entry.transportHandles.socket?.destroy()
             socket.terminate()
           }
         })
         socket.once('close', (code, reason) => {
-          clearTimeout(entry.timer)
+          clearEntryTimers(entry)
           current.sockets.delete(options.socketId)
-          emit(ownerId, {
-            socketId: options.socketId,
-            event: 'close',
-            code,
-            reason: reason.toString(),
-          })
-          if (current.sockets.size === 0 && !current.listener) owners.delete(ownerId)
+          socketTracer.closed()
+          // onClose only exists for connections that once opened; a failed
+          // connect reports error alone (real-device contract).
+          if (entry.opened) {
+            emit(ownerId, {
+              socketId: options.socketId,
+              event: 'close',
+              code,
+              reason: reason.toString(),
+            })
+          }
+          releaseOwnerIfIdle(ownerId, current)
         })
 
         return { errMsg: 'connectSocket:ok' }
@@ -347,6 +367,9 @@ export function createNativeWebSocketService(): NativeWebSocketService {
     },
 
     send(ownerId, options) {
+      if (backgrounded) {
+        return Promise.resolve(interruptedResult('sendSocketMessage'))
+      }
       const entry = owners.get(ownerId)?.sockets.get(options.socketId)
       if (!entry || entry.socket.readyState !== WebSocket.OPEN) {
         return Promise.resolve(apiFailureResult(
@@ -360,12 +383,18 @@ export function createNativeWebSocketService(): NativeWebSocketService {
       } catch (error) {
         return Promise.resolve(apiFailureResult('sendSocketMessage', error))
       }
+      // Traced at call time (not in the ack callback) so the panel's frame
+      // order matches the order wx.sendSocketMessage was invoked.
+      entry.tracer.frameSent(data)
       return new Promise((resolve) => {
         entry.socket.send(data, (error) => {
           if (error) {
-            resolve(apiFailureResult('sendSocketMessage', error))
+            const failure = apiFailureResult('sendSocketMessage', error)
+            entry.tracer.frameError(failure.errMsg)
+            resolve(failure)
             return
           }
+          armIdleTimer(ownerId, options.socketId)
           resolve({ errMsg: 'sendSocketMessage:ok' })
         })
       })
@@ -373,11 +402,25 @@ export function createNativeWebSocketService(): NativeWebSocketService {
 
     close(ownerId, options) {
       try {
-        const entry = owners.get(ownerId)?.sockets.get(options.socketId)
-        if (!entry || entry.socket.readyState === WebSocket.CLOSED) {
+        if (backgrounded) throw apiError('closeSocket', INTERRUPTED_ERRMSG_SUFFIX)
+        const current = owners.get(ownerId)
+        const entry = current?.sockets.get(options.socketId)
+        if (!current || !entry || entry.socket.readyState === WebSocket.CLOSED) {
           throw apiError('closeSocket', 'WebSocket is not connected')
         }
         const { code, reason } = validateClose(options.code, options.reason)
+        if (entry.socket.readyState === WebSocket.CONNECTING) {
+          // Closing mid-handshake is a client-initiated teardown: ws would
+          // otherwise surface its abort error, while the client-mechanism
+          // policy reports exactly one close carrying the caller's code.
+          teardownSocket(ownerId, options.socketId, current, entry, {
+            socketId: options.socketId,
+            event: 'close',
+            code,
+            reason,
+          })
+          return { errMsg: 'closeSocket:ok' }
+        }
         entry.socket.close(code, reason)
         return { errMsg: 'closeSocket:ok' }
       } catch (error) {
@@ -385,9 +428,29 @@ export function createNativeWebSocketService(): NativeWebSocketService {
       }
     },
 
+    setBackgrounded(flag) {
+      if (flag === backgrounded) return
+      backgrounded = flag
+      if (backgroundTimer) {
+        clearTimeout(backgroundTimer)
+        backgroundTimer = undefined
+      }
+      if (backgrounded) {
+        backgroundTimer = setTimeout(teardownAllForBackground, backgroundGraceMs)
+      }
+    },
+
+    setTracer(next) {
+      tracer = next
+    },
+
     disposeOwner,
 
     dispose() {
+      if (backgroundTimer) {
+        clearTimeout(backgroundTimer)
+        backgroundTimer = undefined
+      }
       for (const ownerId of Array.from(owners.keys())) disposeOwner(ownerId)
     },
   }

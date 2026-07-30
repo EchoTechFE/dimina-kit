@@ -717,6 +717,16 @@ export async function createDevtoolsRuntime(
       }) ?? (() => {}),
     ))
 
+    // Main-process WebSocket traffic (wx.connectSocket runs on the Node `ws`
+    // transport, invisible to any webContents debugger): bridge-router fans
+    // the trace stream out here, and the forwarder synthesizes it into
+    // Network.webSocket* CDP events for the same Network panel sinks.
+    context.registry.add(toDisposable(
+      context.bridge?.onNativeWebSocketTrace?.((ownerId, event) => {
+        context.networkForward?.reportWebSocketTrace(ownerId, event)
+      }) ?? (() => {}),
+    ))
+
     context.registry.add(setupSimulatorWxml(mainWindow.webContents, {
       senderPolicy: context.senderPolicy,
       bridge: context.bridge,

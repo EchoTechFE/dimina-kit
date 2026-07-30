@@ -14,7 +14,12 @@ const CLOSING = 2
 const CLOSED = 3
 
 let nextSocketId = 1
-let latestSocketTask = null
+// Global legacy APIs (wx.sendSocketMessage / wx.onSocketMessage / …) bind to a
+// single task: the first connection that is still alive. Rebinding happens
+// only at the next connectSocket call once the bound task is CLOSED — a close
+// event alone never moves the binding to a younger connection (WeChat base
+// library contract).
+let boundSocketTask = null
 let nativeListenerInstalled = false
 const tasks = new Map()
 
@@ -54,11 +59,23 @@ function createListenerStore() {
 	}
 }
 
-const globalListeners = {
-	open: createListenerStore(),
-	message: createListenerStore(),
-	error: createListenerStore(),
-	close: createListenerStore(),
+// Global wx.onSocket* are single-slot setters: a later registration overwrites
+// the earlier one ("仅最后一次生效"). SocketTask.on* stay listener-mode.
+const globalSlots = {
+	open: null,
+	message: null,
+	error: null,
+	close: null,
+}
+
+function setGlobalSlot(type, listener) {
+	if (isFunction(listener)) globalSlots[type] = listener
+}
+
+function clearGlobalSlot(type, listener) {
+	if (listener === undefined || globalSlots[type] === listener) {
+		globalSlots[type] = null
+	}
 }
 
 function nativeEvent(payload) {
@@ -88,6 +105,8 @@ class SocketTask {
 		this.CLOSED = CLOSED
 		this._readyState = CONNECTING
 		this._opts = opts
+		this._opened = false
+		this._started = false
 		this._connectSettled = false
 		this._terminal = false
 		this._listeners = {
@@ -104,7 +123,9 @@ class SocketTask {
 
 	_dispatch(type, payload) {
 		this._listeners[type].dispatch(payload)
-		globalListeners[type].dispatch(payload)
+		if (this === boundSocketTask && globalSlots[type]) {
+			invokeCallback(globalSlots[type], payload)
+		}
 	}
 
 	_settleConnect(kind, payload) {
@@ -115,9 +136,6 @@ class SocketTask {
 
 	_cleanup() {
 		tasks.delete(this.socketId)
-		if (latestSocketTask === this) {
-			latestSocketTask = Array.from(tasks.values()).at(-1) || null
-		}
 	}
 
 	_failConnect(payload) {
@@ -130,6 +148,10 @@ class SocketTask {
 	}
 
 	_start() {
+		// A task closed before its start microtask ran must never touch the
+		// network — otherwise the native open would resurrect a dead task.
+		if (this._terminal) return
+		this._started = true
 		try {
 			ensureNativeListener()
 			invokeAPI('connectSocket', {
@@ -150,6 +172,7 @@ class SocketTask {
 		const { event } = payload
 		if (event === 'open') {
 			if (this._terminal) return
+			this._opened = true
 			this._readyState = OPEN
 			this._dispatch('open', {
 				header: payload.header || {},
@@ -163,10 +186,17 @@ class SocketTask {
 			return
 		}
 		if (event === 'error') {
+			if (this._terminal) return
 			this._readyState = CLOSED
 			this._dispatch('error', {
 				errMsg: payload.errMsg || 'connectSocket:fail WebSocket connection failed',
 			})
+			// A connection that never opened is terminal on error alone — no
+			// close event follows (real-device contract), so release it here.
+			if (!this._opened) {
+				this._terminal = true
+				this._cleanup()
+			}
 			return
 		}
 		if (event === 'close') {
@@ -185,7 +215,7 @@ class SocketTask {
 		const payload = opts && typeof opts === 'object' ? opts : {}
 		if (this._readyState !== OPEN) {
 			callbackResult(payload, 'fail', {
-				errMsg: 'sendSocketMessage:fail WebSocket is not connected',
+				errMsg: 'SocketTask.send:fail SocketTask.readyState is not OPEN',
 			})
 			return
 		}
@@ -225,6 +255,22 @@ class SocketTask {
 		}
 		const previousReadyState = this._readyState
 		this._readyState = CLOSING
+		if (!this._started) {
+			// Closed before the start microtask ran: no native entry exists, so
+			// finalize locally — connect settles as ok (the API was invoked),
+			// one close event answers the caller's close, nothing reaches IPC.
+			this._terminal = true
+			this._readyState = CLOSED
+			const code = typeof payload.code === 'number' ? payload.code : 1000
+			const reason = typeof payload.reason === 'string' ? payload.reason : ''
+			this._settleConnect('success', { errMsg: 'connectSocket:ok' })
+			callbackResult(payload, 'success', { errMsg: 'closeSocket:ok' })
+			queueMicrotask(() => {
+				this._dispatch('close', { code, reason })
+			})
+			this._cleanup()
+			return
+		}
 		invokeAPI('closeSocket', {
 			...payload,
 			socketId: this.socketId,
@@ -254,36 +300,47 @@ export function connectSocket(opts = {}) {
 	const socketId = `socket_${Date.now()}_${nextSocketId++}`
 	const task = new SocketTask(socketId, opts && typeof opts === 'object' ? opts : {})
 	tasks.set(socketId, task)
-	latestSocketTask = task
+	if (!boundSocketTask || boundSocketTask.readyState === CLOSED) {
+		boundSocketTask = task
+	}
 	queueMicrotask(() => task._start())
 	return task
 }
 
 export function sendSocketMessage(opts = {}) {
-	if (!latestSocketTask) {
+	if (!boundSocketTask || boundSocketTask.readyState !== OPEN) {
 		callbackResult(opts, 'fail', {
 			errMsg: 'sendSocketMessage:fail WebSocket is not connected',
 		})
 		return
 	}
-	return latestSocketTask.send(opts)
+	return boundSocketTask.send(opts)
 }
 
 export function closeSocket(opts = {}) {
-	if (!latestSocketTask) {
+	// The base library closes every live connection of the app even when the
+	// bound task is already CLOSED — the fail callback fires, then the sweep
+	// below still runs. Non-bound tasks are closed bare.
+	const boundUsable = boundSocketTask && boundSocketTask.readyState !== CLOSED
+	if (!boundUsable) {
 		callbackResult(opts, 'fail', {
 			errMsg: 'closeSocket:fail WebSocket is not connected',
 		})
-		return
+	} else {
+		boundSocketTask.close(opts)
 	}
-	return latestSocketTask.close(opts)
+	for (const task of tasks.values()) {
+		if (task !== boundSocketTask && task.readyState !== CLOSED) {
+			task.close({})
+		}
+	}
 }
 
-export function onSocketOpen(listener) { globalListeners.open.add(listener) }
-export function offSocketOpen(listener) { globalListeners.open.remove(listener) }
-export function onSocketMessage(listener) { globalListeners.message.add(listener) }
-export function offSocketMessage(listener) { globalListeners.message.remove(listener) }
-export function onSocketError(listener) { globalListeners.error.add(listener) }
-export function offSocketError(listener) { globalListeners.error.remove(listener) }
-export function onSocketClose(listener) { globalListeners.close.add(listener) }
-export function offSocketClose(listener) { globalListeners.close.remove(listener) }
+export function onSocketOpen(listener) { setGlobalSlot('open', listener) }
+export function offSocketOpen(listener) { clearGlobalSlot('open', listener) }
+export function onSocketMessage(listener) { setGlobalSlot('message', listener) }
+export function offSocketMessage(listener) { clearGlobalSlot('message', listener) }
+export function onSocketError(listener) { setGlobalSlot('error', listener) }
+export function offSocketError(listener) { clearGlobalSlot('error', listener) }
+export function onSocketClose(listener) { setGlobalSlot('close', listener) }
+export function offSocketClose(listener) { clearGlobalSlot('close', listener) }

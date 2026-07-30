@@ -68,9 +68,11 @@
  *     Chrome DevTools window) self-heals via the lease's `onDetach` — capture
  *     re-wires itself even though `attachRenderGuest` is only ever called ONCE
  *     per guest (at webview creation).
- *  ⚠️ NOT observable by any `webContents.debugger`: a request a host module issues
- *     directly from the MAIN process. Those need an explicit `report()` call
- *     (exposed below; it uses the console fallback path).
+ *  ⚠️ NOT observable by any `webContents.debugger`: traffic a host module issues
+ *     directly from the MAIN process. Plain requests need an explicit `report()`
+ *     call (console fallback path); `wx.connectSocket` sockets (Node `ws`
+ *     transport) arrive as trace events via `reportWebSocketTrace` and are
+ *     synthesized into `Network.webSocket*` CDP messages (see websocket.ts).
  */
 import type { WebContents } from 'electron'
 import { SyncDisposableRegistry, toDisposable, type ConnectionRegistry, type Disposable } from '@dimina-kit/electron-deck/main'
@@ -81,6 +83,8 @@ import { PROBE_DEVTOOLS_API, MAX_SINGLE_DISPATCH_CHARS, CHUNK_CHARS, buildChunke
 import { createCdpSessionBroker, type CdpSessionBroker, type CdpSessionLease } from '../cdp-session/index.js'
 import { isUserFacingRequest } from './user-facing.js'
 import { installGlobalNetworkBodyGate } from './global-body-gate.js'
+import { WebSocketTraceSynthesizer } from './websocket.js'
+import type { NativeWebSocketTrace } from '../../ipc/bridge-router.js'
 
 /**
  * Namespace prefix of every virtual requestId this forwarder injects into the
@@ -226,6 +230,15 @@ export interface NetworkForwarder extends Disposable {
    * (e.g. a main-process direct send). Uses the console fallback sink.
    */
   report(record: NetworkRequestRecord): void
+  /**
+   * Surface one main-process WebSocket trace event (wx.connectSocket traffic
+   * lives on the Node `ws` transport, invisible to any debugger) as a
+   * synthesized `Network.webSocket*` CDP event, injected through the SAME
+   * channels as forwarded simulator traffic: the global mirror unfiltered,
+   * plus the user-facing native sink when the socket's url classified
+   * user-facing. Best-effort like every injection point — never throws.
+   */
+  reportWebSocketTrace(sessionId: string, event: NativeWebSocketTrace): void
   /**
    * Body/post-data lookups for the virtual requestIds this forwarder injected,
    * backed by the loadingFinished-time prefetch cache. Keyed by virtual id, so
@@ -811,14 +824,17 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
   }
 
   /** Trim the native queue to its cap, preferring to keep request-opening events.
-   * Active requests' first events (requestWillBeSent / ...ExtraInfo) are retained
-   * so later responseReceived/loadingFinished never become orphans in the panel;
-   * we drop the oldest NON-opening (low-value / completion) events first. */
+   * Active requests' first events (requestWillBeSent / ...ExtraInfo /
+   * webSocketCreated) are retained so later responseReceived/loadingFinished/
+   * webSocket* events never become orphans in the panel (the front-end
+   * silently drops events for an unknown requestId); we drop the oldest
+   * NON-opening (low-value / completion) events first. */
   function trimQueue(): void {
     if (dispatchQueue.length <= MAX_DISPATCH_QUEUE) return
     const isOpener = (json: string): boolean =>
       json.includes('"Network.requestWillBeSent"')
       || json.includes('"Network.requestWillBeSentExtraInfo"')
+      || json.includes('"Network.webSocketCreated"')
     // First pass: drop oldest non-opener events.
     const kept: string[] = []
     let over = dispatchQueue.length - MAX_DISPATCH_QUEUE
@@ -1507,6 +1523,26 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
     if (ownsBroker) broker.dispose()
   })
 
+  // ── Main-process WebSocket trace → synthesized Network.webSocket* CDP ─────
+  // One synthesizer for the forwarder's lifetime: its virtual-id epoch keeps
+  // `dimina:ws:` ids collision-free across simulator re-attaches, and its
+  // per-socket verdict cache mirrors resolveUserFacing's decide-once rule.
+  const wsSynthesizer = new WebSocketTraceSynthesizer({
+    epoch: String(Date.now()),
+    internalOrigins: () => [bridge.getResourceServerBaseUrl?.(), bridge.getSimulatorServerBaseUrl?.()],
+  })
+
+  function reportWebSocketTrace(sessionId: string, event: NativeWebSocketTrace): void {
+    if (disposed) return
+    const message = wsSynthesizer.synthesize(sessionId, event)
+    if (!message) return
+    // Global mirror first (full, unfiltered), then the user-facing native
+    // sink gated on the created-time verdict — the same routing
+    // wireNetworkCapture's onMessage uses for simulator traffic.
+    dispatchToGlobal(message.method, message.params)
+    if (message.userFacing) enqueueNative(message.method, message.params)
+  }
+
   return {
     attachSimulator,
     detachSimulator,
@@ -1516,6 +1552,7 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
     // report() has no observing debugger, so there's no live CDP event to push
     // natively — surface it via the console fallback line.
     report: (record) => forwardToConsole(record),
+    reportWebSocketTrace,
     bodies: {
       getResponseBody: (requestId) => bodyCache.lookup(requestId),
       getRequestPostData: (requestId) => postDataCache.lookup(requestId),

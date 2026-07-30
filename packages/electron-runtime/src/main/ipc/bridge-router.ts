@@ -58,7 +58,12 @@ import {
   type NativeConnectSocketOptions,
   type NativeSendSocketMessageOptions,
   type NativeWebSocketService,
+  type NativeWebSocketTrace,
 } from '../services/native-websocket/index.js'
+
+// Re-exported so embedders (devtools network panel) can type a trace listener
+// against the single source without reaching into the service module.
+export type { NativeWebSocketTrace } from '../services/native-websocket/index.js'
 import { STORAGE_API_NAMES } from '../services/storage.js'
 import { buildPageScrollScript } from './page-scroll.js'
 import {
@@ -136,6 +141,19 @@ function resolvePrewarmPoolSize(): number {
 /** debugTap (see foundation.md) is opt-in via `DIMINA_DEBUG_TAP=1` — off everywhere else. */
 function resolveDebugTapEnabled(): boolean {
   return process.env.DIMINA_DEBUG_TAP === '1'
+}
+
+/**
+ * Optional client-style idle teardown for sockets, opt-in via
+ * `DIMINA_SOCKET_IDLE_TIMEOUT_MS`. WeChat documents the mechanism without a
+ * duration, so the service default (disabled) applies unless set.
+ */
+function socketIdleTimeoutMsFromEnv(): number | undefined {
+  const raw = process.env.DIMINA_SOCKET_IDLE_TIMEOUT_MS
+  if (!raw) return undefined
+  const value = Number(raw)
+  if (!Number.isFinite(value) || value <= 0) return undefined
+  return Math.floor(value)
 }
 
 /**
@@ -461,6 +479,12 @@ export interface BridgeRouterHandle {
    * the still-live session's event already fired gets a missed-signal
    * catch-up — it never needs to poll. */
   onServiceHostReady(listener: (event: ServiceHostReadyEvent) => void): () => void
+  /** Subscribe to the native WebSocket transport's trace stream (created /
+   * handshake / frame / close per socket, keyed by owner appSessionId). Pure
+   * observation — subscribing never alters API forwarding. Each `created`
+   * socketId is guaranteed exactly one terminal `closed`. Optional so partial
+   * test mocks of the handle need not stub it. */
+  onNativeWebSocketTrace?(listener: (ownerId: string, event: NativeWebSocketTrace) => void): () => void
   /** The currently-selected device (renderer toolbar), or null pre-selection. */
   getDevice(): NativeDeviceInfo | null
   /** Cache the selected device + push DEVICE_CHANGE to the live simulator WC(s). */
@@ -574,7 +598,9 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
     connections: ctx.connections,
     debugTap: createDebugTap({ enabled: resolveDebugTapEnabled() }),
     appLifecycle: createAppLifecycleController(),
-    nativeWebSocket: createNativeWebSocketService(),
+    nativeWebSocket: createNativeWebSocketService({
+      idleTimeoutMs: socketIdleTimeoutMsFromEnv(),
+    }),
     evictAppDataBridges: (ap) => {
       for (const page of ap.pages.values()) {
         ctx.events.emit('app-data-evict', { appId: ap.appId, bridgeId: page.bridgeId })
@@ -665,6 +691,20 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
   }
   state.emitServiceHostReady = emitServiceHostReady
 
+  // Subscribers to the native WebSocket trace stream (devtools Network panel).
+  // The service exposes a SINGLE tracer; the router fans out from here, so the
+  // service itself never knows how many observers exist. Pure subscription:
+  // no forwarding path awaits or reorders on this channel.
+  const nativeWebSocketTraceListeners = new Set<(ownerId: string, event: NativeWebSocketTrace) => void>()
+  state.nativeWebSocket.setTracer((ownerId, event) => {
+    for (const listener of nativeWebSocketTraceListeners) {
+      try { listener(ownerId, event) } catch (error) {
+        console.warn('[bridge-router] websocket-trace listener threw:', error)
+      }
+    }
+  })
+  ctx.registry.add(() => nativeWebSocketTraceListeners.clear())
+
   // Expose a thin accessor over RouterState so other main services (storage,
   // automation, appdata) can resolve live render/service WebContents without
   // owning router state. Getters resolve fresh — the pre-warm pool can swap
@@ -732,6 +772,10 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
         })
       }
       return () => serviceHostReadyListeners.delete(listener)
+    },
+    onNativeWebSocketTrace: (listener) => {
+      nativeWebSocketTraceListeners.add(listener)
+      return () => nativeWebSocketTraceListeners.delete(listener)
     },
     getDevice: () => currentDevice,
     setDevice: (device) => {
@@ -1873,8 +1917,14 @@ function installAppLifecycleDriver(ctx: RuntimeContext, state: RouterState): voi
     }
   }
 
-  const onHide = (): void => emit('appHide', 'onAppHide')
-  const onShow = (): void => emit('appShow', 'onAppShow')
+  const onHide = (): void => {
+    state.nativeWebSocket.setBackgrounded(true)
+    emit('appHide', 'onAppHide')
+  }
+  const onShow = (): void => {
+    state.nativeWebSocket.setBackgrounded(false)
+    emit('appShow', 'onAppShow')
+  }
   win.on('hide', onHide)
   win.on('minimize', onHide)
   win.on('show', onShow)

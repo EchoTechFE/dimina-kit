@@ -7,7 +7,7 @@ import {
   type RawData,
   type WebSocket,
 } from 'ws'
-import { createNativeWebSocketService } from './index.js'
+import { createNativeWebSocketService, type NativeWebSocketTrace } from './index.js'
 
 export interface ConnectOptions {
   socketId: string
@@ -29,6 +29,11 @@ export interface CloseOptions {
   socketId: string
   code?: number
   reason?: string
+}
+
+export interface NativeWebSocketServiceOptions {
+  idleTimeoutMs?: number
+  backgroundGraceMs?: number
 }
 
 export interface SocketProfile {
@@ -62,6 +67,8 @@ export interface NativeWebSocketService {
   connect(ownerId: string, options: ConnectOptions): ApiResult | Promise<ApiResult>
   send(ownerId: string, options: SendOptions): ApiResult | Promise<ApiResult>
   close(ownerId: string, options: CloseOptions): ApiResult | Promise<ApiResult>
+  setBackgrounded(backgrounded: boolean): unknown
+  setTracer(tracer: ((ownerId: string, event: NativeWebSocketTrace) => void) | undefined): unknown
   disposeOwner(ownerId: string): unknown
   dispose(): unknown
 }
@@ -74,6 +81,8 @@ export interface EchoPeer {
     extensions: string
   }>
   closeFrames: Array<{ code: number, reason: string }>
+  pingClients(): void
+  terminateClients(): void
   close(): Promise<void>
 }
 
@@ -137,10 +146,36 @@ const netServers: Array<{
   sockets: Set<NetSocket>
 }> = []
 
-export function newService(): NativeWebSocketService {
-  const service = createNativeWebSocketService() as unknown as NativeWebSocketService
+export function newService(options?: NativeWebSocketServiceOptions): NativeWebSocketService {
+  const service = createNativeWebSocketService(options) as unknown as NativeWebSocketService
   services.push(service)
   return service
+}
+
+export interface TraceRecord {
+  ownerId: string
+  event: NativeWebSocketTrace
+}
+
+export function newTracedService(options?: NativeWebSocketServiceOptions): {
+  service: NativeWebSocketService
+  traces: TraceRecord[]
+} {
+  const service = newService(options)
+  const traces: TraceRecord[] = []
+  service.setTracer((ownerId, event) => {
+    traces.push({ ownerId, event })
+  })
+  return { service, traces }
+}
+
+export function traceTypesOf(
+  traces: TraceRecord[],
+  socketId: string,
+): Array<NativeWebSocketTrace['type']> {
+  return traces
+    .filter(trace => trace.event.socketId === socketId)
+    .map(trace => trace.event.type)
 }
 
 export function headerValue(
@@ -195,6 +230,12 @@ export async function startEchoPeer(options: {
     url: `ws://127.0.0.1:${address.port}/native-contract`,
     requests,
     closeFrames,
+    pingClients() {
+      for (const client of clients) client.ping()
+    },
+    terminateClients() {
+      for (const client of clients) client.terminate()
+    },
     async close() {
       for (const client of clients) client.terminate()
       await new Promise<void>((resolve, reject) => {
@@ -241,6 +282,15 @@ export async function startBlackholeServer(): Promise<{
     acceptedConnection,
     closedConnections,
   }
+}
+
+export async function refusedLoopbackUrl(): Promise<string> {
+  const temporary = createServer()
+  temporary.listen(0, '127.0.0.1')
+  await once(temporary, 'listening')
+  const port = (temporary.address() as AddressInfo).port
+  await new Promise<void>(resolve => temporary.close(() => resolve()))
+  return `ws://127.0.0.1:${port}/refused`
 }
 
 export async function connectAndWait(
