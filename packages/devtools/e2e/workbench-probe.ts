@@ -5,9 +5,10 @@
  *
  * Hardened against a sibling webContents stuck mid-load (hot-reload DeviceShell
  * respawns leave one around while we probe):
- *  - skip `isLoading()` webContents — `executeJavaScript` on a loading wc
- *    queues a did-stop-loading waiter and can hang the whole outer
- *    `app.evaluate` indefinitely (same guard as helpers.waitSimulatorReady);
+ *  - skip webContents without a committed URL or still loading —
+ *    `executeJavaScript` queues a did-stop-loading waiter unless Electron sees
+ *    both a URL and a settled main frame. Repeatedly probing a newly-created
+ *    blank wc otherwise leaks one waiter per call;
  *  - race every probe/eval with a timeout so one stuck wc costs a poll
  *    iteration, not the entire test timeout.
  */
@@ -20,7 +21,9 @@ export async function runInWorkbench<T>(app: ElectronApplication, expr: string):
   return app.evaluate(async ({ webContents }, e) => {
     const withTimeout = <V>(p: Promise<V>, ms: number): Promise<V> =>
       Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error('wc probe timeout')), ms))])
-    const wcs = webContents.getAllWebContents().filter((wc) => !wc.isDestroyed() && !wc.isLoading())
+    const wcs = webContents
+      .getAllWebContents()
+      .filter((wc) => !wc.isDestroyed() && wc.getURL() !== '' && !wc.isLoading())
     for (const wc of wcs) {
       try {
         const s = await withTimeout(

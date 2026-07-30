@@ -483,9 +483,9 @@ describe('⑦ WorkbenchContext gate — round 4: grandfather inventory ceiling',
    * this ceiling (and the exact count + snapshot below) in the same change.
    * Shrinking without touching the ceiling still passes the hard gate (only
    * the exact-count/snapshot assertions below will ask for an update); ADDING
-   * a 23rd directive necessarily fails here.
+   * a 22nd directive necessarily fails here.
    */
-  const CEILING = 22
+  const CEILING = 21
 
   function listSourceFiles(dir: string): string[] {
     const out: string[] = []
@@ -518,7 +518,7 @@ describe('⑦ WorkbenchContext gate — round 4: grandfather inventory ceiling',
       .map(([file, n]) => `${file} ×${n}`)
       .sort()
 
-    // ① HARD GATE — a 23rd inline exemption anywhere under src/ goes red.
+    // ① HARD GATE — a 22nd inline exemption anywhere under src/ goes red.
     expect(
       total,
       `the shrink-only grandfather inventory must never grow past ${CEILING}; ` +
@@ -532,12 +532,11 @@ describe('⑦ WorkbenchContext gate — round 4: grandfather inventory ceiling',
       total,
       'grandfather inventory changed — update the exact count, the snapshot ' +
         'below, AND (when shrinking) lower the ceiling in the same change',
-    ).toBe(22)
+    ).toBe(21)
     expect(distribution).toEqual([
       'src/main/api.ts ×1',
       'src/main/app/app.ts ×2',
       'src/main/ipc/app.ts ×1',
-      'src/main/ipc/bridge-router.ts ×1',
       'src/main/ipc/popover.ts ×1',
       'src/main/ipc/project-fs.ts ×1',
       'src/main/ipc/projects.ts ×1',

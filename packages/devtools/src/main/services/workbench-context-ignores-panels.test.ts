@@ -88,6 +88,20 @@ describe('panels decommission: createWorkbenchContext ignores the config', () =>
   })
 })
 
+describe('standalone runtime assets in the DevTools host', () => {
+  it('pins the shared runtime bridge to the assets built into DevTools', () => {
+    const ctx = contextModule.createWorkbenchContext(
+      makeOpts() as never,
+    )
+
+    expect(ctx.assets?.root).toMatch(/packages[/\\]devtools[/\\]dist$/)
+    expect(ctx.assets?.simulatorPreloadPath)
+      .toMatch(/packages[/\\]devtools[/\\]dist[/\\]preload[/\\]windows[/\\]simulator\.cjs$/)
+    expect(ctx.assets?.serviceHostHtmlPath)
+      .toMatch(/packages[/\\]devtools[/\\]dist[/\\]service-host[/\\]service\.html$/)
+  })
+})
+
 describe('panels decommission: the panels-derived module exports are deleted', () => {
   it('getDefaultTab is no longer exported from workbench-context', () => {
     expect(

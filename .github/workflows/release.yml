@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       channel:
-        description: 'Channel — dev: timestamp-suffix versions, npm dist-tag dev, no GitHub Release. release: package.json versions, npm dist-tag latest, time-named GitHub Release with diff-based notes.'
+        description: 'Channel — dev: normalized x.y.z-dev.<timestamp> versions, npm dist-tag dev, no GitHub Release. release: stable package.json versions, npm dist-tag latest, time-named GitHub Release with diff-based notes.'
         type: choice
         options:
           - dev
@@ -370,6 +370,12 @@ jobs:
 
       - name: Build packages
         run: pnpm run build
+
+      # The regular turbo build emits runtime code only so test/type-check jobs
+      # do not recursively build dimina/fe assets. Publishing uses
+      # --ignore-scripts, so assemble the standalone package explicitly here.
+      - name: Build standalone Electron runtime package
+        run: pnpm --filter dimina-electron-runtime build:package
 
       - name: Publish changed packages
         id: publish

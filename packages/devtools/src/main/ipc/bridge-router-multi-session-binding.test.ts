@@ -161,7 +161,7 @@ vi.mock('electron', () => {
 // Pooling OFF: every spawn takes the fresh-window path, so the shared-wc
 // binding under test is purely the router's own bookkeeping, not a pooled
 // service window's identity.
-vi.mock('../windows/service-host-window/create.js', () => ({
+vi.mock('dimina-electron-runtime/main/service-host-window', () => ({
   serviceHostSpec: () => ({}),
   serviceHostPreloadPath: '/tmp/preload.cjs',
   SERVICE_HOST_PARTITION: 'persist:simulator',

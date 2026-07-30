@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Thin bridge from pawl's exec-adapter contract to the gate adapters under
-// ./adapters — each adapter's measure() is the single source of the number, so
-// the value pawl gates on is exactly the value the adapter tests exercise.
+// Thin bridge from pawl's exec-adapter contract to dimina-kit's
+// project-specific adapters under ./adapters. Generic filesystem and ESLint
+// dimensions use pawl builtins directly and never pass through this file.
 //
 // Usage: node tools/pawl/pawl-adapter.ts <adapter-id>
 //

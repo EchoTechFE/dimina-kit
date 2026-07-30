@@ -31,6 +31,16 @@ vi.mock('electron', () => ({
 import { buildServiceHostSpawnUrl } from './create.js'
 import type { ServiceHostWindowOptions } from './create.js'
 
+const TEST_ASSETS = {
+  root: '/runtime/dist',
+  simulatorDir: '/runtime/dist/simulator',
+  simulatorPreloadPath: '/runtime/dist/preload/simulator.cjs',
+  renderHostHtmlPath: '/runtime/dist/render-host/pageFrame.html',
+  renderHostPreloadPath: '/runtime/dist/render-host/preload.cjs',
+  serviceHostHtmlPath: '/runtime/dist/service-host/service.html',
+  serviceHostPreloadPath: '/runtime/dist/service-host/preload.cjs',
+}
+
 const BASE_OPTS: ServiceHostWindowOptions = {
   bridgeId: 'bridge-1',
   appId: 'test-app',
@@ -38,6 +48,7 @@ const BASE_OPTS: ServiceHostWindowOptions = {
   pkgRoot: '/tmp/pkg',
   resourceBaseUrl: 'http://127.0.0.1:8080/',
   root: 'main',
+  assets: TEST_ASSETS,
 }
 
 describe('buildServiceHostSpawnUrl — apiNamespaces query param', () => {

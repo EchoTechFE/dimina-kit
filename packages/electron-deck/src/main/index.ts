@@ -37,6 +37,10 @@ export {
 } from './view-handle.js'
 export { createLogger, setLogLevel, type Logger } from './logger.js'
 export {
+  isMainFrameIpcSender,
+  type IpcSenderPolicy,
+} from './ipc-sender.js'
+export {
   createDebugTap,
   type DebugTap,
   type DebugTapEntry,

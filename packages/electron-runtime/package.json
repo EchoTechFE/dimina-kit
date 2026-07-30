@@ -1,0 +1,154 @@
+{
+  "name": "dimina-electron-runtime",
+  "version": "0.1.0",
+  "description": "Embeddable Dimina mini-app runtime for Electron hosts",
+  "keywords": [
+    "dimina",
+    "mini-app",
+    "electron",
+    "runtime",
+    "sdk"
+  ],
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EchoTechFE/dimina-kit.git",
+    "directory": "packages/electron-runtime"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./shared/bridge-channels": {
+      "types": "./dist/shared/bridge-channels.d.ts",
+      "default": "./dist/shared/bridge-channels.js"
+    },
+    "./shared/simulator-api-metadata": {
+      "types": "./dist/shared/simulator-api-metadata.d.ts",
+      "default": "./dist/shared/simulator-api-metadata.js"
+    },
+    "./shared/request-core": {
+      "types": "./dist/shared/request-core.d.ts",
+      "default": "./dist/shared/request-core.js"
+    },
+    "./shared/vpath": {
+      "types": "./dist/shared/vpath.d.ts",
+      "default": "./dist/shared/vpath.js"
+    },
+    "./main/bridge-router": {
+      "types": "./dist/main/ipc/bridge-router.d.ts",
+      "default": "./dist/main/ipc/bridge-router.js"
+    },
+    "./main/runtime-context": {
+      "types": "./dist/main/runtime-context.d.ts",
+      "default": "./dist/main/runtime-context.js"
+    },
+    "./main/session-listener-bag": {
+      "types": "./dist/main/ipc/session-listener-bag.d.ts",
+      "default": "./dist/main/ipc/session-listener-bag.js"
+    },
+    "./main/page-scroll": {
+      "types": "./dist/main/ipc/page-scroll.d.ts",
+      "default": "./dist/main/ipc/page-scroll.js"
+    },
+    "./main/app-lifecycle": {
+      "types": "./dist/main/ipc/app-lifecycle.d.ts",
+      "default": "./dist/main/ipc/app-lifecycle.js"
+    },
+    "./main/dimina-resource-server": {
+      "types": "./dist/main/services/dimina-resource-server.d.ts",
+      "default": "./dist/main/services/dimina-resource-server.js"
+    },
+    "./main/miniapp-partition": {
+      "types": "./dist/main/services/views/miniapp-partition.d.ts",
+      "default": "./dist/main/services/views/miniapp-partition.js"
+    },
+    "./main/custom-apis": {
+      "types": "./dist/main/services/simulator/custom-apis.d.ts",
+      "default": "./dist/main/services/simulator/custom-apis.js"
+    },
+    "./main/service-host-pool": {
+      "types": "./dist/main/services/service-host-pool/pool.d.ts",
+      "default": "./dist/main/services/service-host-pool/pool.js"
+    },
+    "./main/service-host-window": {
+      "types": "./dist/main/windows/service-host-window/create.d.ts",
+      "default": "./dist/main/windows/service-host-window/create.js"
+    },
+    "./main/service-storage-ops": {
+      "types": "./dist/main/services/service-storage-ops.d.ts",
+      "default": "./dist/main/services/service-storage-ops.js"
+    },
+    "./main/diagnostics": {
+      "types": "./dist/main/services/diagnostics/index.d.ts",
+      "default": "./dist/main/services/diagnostics/index.js"
+    },
+    "./main/console-forward": {
+      "types": "./dist/main/services/console-forward/index.d.ts",
+      "default": "./dist/main/services/console-forward/index.js"
+    },
+    "./main/internal-log": {
+      "types": "./dist/main/services/console-forward/internal-log.d.ts",
+      "default": "./dist/main/services/console-forward/internal-log.js"
+    },
+    "./main/referer": {
+      "types": "./dist/main/services/simulator/referer.d.ts",
+      "default": "./dist/main/services/simulator/referer.js"
+    },
+    "./main/session-policy": {
+      "types": "./dist/main/services/views/simulator-session-policy.d.ts",
+      "default": "./dist/main/services/views/simulator-session-policy.js"
+    },
+    "./main/temp-files": {
+      "types": "./dist/main/services/simulator-temp-files/index.d.ts",
+      "default": "./dist/main/services/simulator-temp-files/index.js"
+    },
+    "./main/temp-files/*": {
+      "types": "./dist/main/services/simulator-temp-files/*.d.ts",
+      "default": "./dist/main/services/simulator-temp-files/*.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.js.map",
+    "!dist/**/*.d.ts.map",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "build:code": "tsc -p tsconfig.build.json",
+    "build:assets": "node build-assets.mjs",
+    "build:package": "pnpm --filter @dimina-kit/electron-deck build && pnpm run build:code && pnpm run build:assets",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run --reporter=default --reporter=json --outputFile.json=test-report.json --coverage.enabled --coverage.reporter=json-summary --coverage.reportsDirectory=coverage",
+    "prepack": "pnpm run build:package"
+  },
+  "dependencies": {
+    "@dimina-kit/electron-deck": "workspace:*"
+  },
+  "devDependencies": {
+    "@dimina-kit/typescript-config": "workspace:*",
+    "@dimina-kit/eslint-config": "workspace:*",
+    "@types/node": "^22.15.3",
+    "@vitest/coverage-v8": "^4.1.4",
+    "electron": "^43.2.0",
+    "eslint": "^10.2.1",
+    "typescript": "5.9.2",
+    "vitest": "^4.1.4"
+  },
+  "peerDependencies": {
+    "electron": "^43.2.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

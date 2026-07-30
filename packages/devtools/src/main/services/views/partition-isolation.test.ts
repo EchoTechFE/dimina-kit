@@ -154,6 +154,16 @@ import {
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
+const TEST_ASSETS = {
+  root: '/runtime/dist',
+  simulatorDir: '/runtime/dist/simulator',
+  simulatorPreloadPath: '/runtime/dist/preload/simulator.cjs',
+  renderHostHtmlPath: '/runtime/dist/render-host/pageFrame.html',
+  renderHostPreloadPath: '/runtime/dist/render-host/preload.cjs',
+  serviceHostHtmlPath: '/runtime/dist/service-host/service.html',
+  serviceHostPreloadPath: '/runtime/dist/service-host/preload.cjs',
+}
+
 /** Minimal compileConfig accepted by buildSimulatorUrl. */
 const COMPILE = { startPage: 'pages/index/index', scene: 1001, queryParams: [] } as never
 
@@ -297,11 +307,15 @@ describe('intra-project session sharing', () => {
     simMgr.attachNativeSimulator(simUrlFor(APP_A), 375)
     const simPartition = latestView().webPreferences?.partition as string | undefined
 
-    const spec = serviceHostSpec(APP_A)
+    const spec = serviceHostSpec(APP_A, undefined, TEST_ASSETS)
     expect(spec.partition).toMatch(/^persist:miniapp-/)
     expect(spec.partition).toBe(simPartition)
 
-    const win = constructServiceHostWindow({ appId: APP_A, partition: spec.partition })
+    const win = constructServiceHostWindow({
+      appId: APP_A,
+      partition: spec.partition,
+      assets: TEST_ASSETS,
+    })
     const wp = (win as unknown as { webContents: { __wp?: Record<string, unknown> } })
     // BrowserWindow webPreferences aren't readable post-construction in the real
     // API, so the spec (the value handed to the window) is the observable seam;
@@ -311,15 +325,16 @@ describe('intra-project session sharing', () => {
   })
 
   it('two different projects get DIFFERENT service-host partitions (no cross-project storage)', () => {
-    const a = serviceHostSpec(APP_A).partition
-    const b = serviceHostSpec(APP_B).partition
+    const a = serviceHostSpec(APP_A, undefined, TEST_ASSETS).partition
+    const b = serviceHostSpec(APP_B, undefined, TEST_ASSETS).partition
     expect(a).toMatch(/^persist:miniapp-/)
     expect(b).toMatch(/^persist:miniapp-/)
     expect(a).not.toBe(b)
   })
 
   it('the same project yields a stable service-host partition across calls', () => {
-    expect(serviceHostSpec(APP_A).partition).toBe(serviceHostSpec(APP_A).partition)
+    expect(serviceHostSpec(APP_A, undefined, TEST_ASSETS).partition)
+      .toBe(serviceHostSpec(APP_A, undefined, TEST_ASSETS).partition)
   })
 })
 
