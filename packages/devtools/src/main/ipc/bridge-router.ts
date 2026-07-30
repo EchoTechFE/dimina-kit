@@ -53,6 +53,13 @@ import {
 } from '../services/views/miniapp-partition.js'
 import { createConsoleForwarder, type GuestConsoleEntry } from '../services/console-forward/index.js'
 import { createDiagnosticsBus } from '../services/diagnostics/index.js'
+import {
+  createNativeWebSocketService,
+  type NativeCloseSocketOptions,
+  type NativeConnectSocketOptions,
+  type NativeSendSocketMessageOptions,
+  type NativeWebSocketService,
+} from '../services/native-websocket/index.js'
 import { STORAGE_API_NAMES } from '../services/simulator-storage/index.js'
 import { buildPageScrollScript } from './page-scroll.js'
 import {
@@ -320,6 +327,8 @@ interface RouterState {
    * bespoke `once('destroyed')` listeners scattered through the router.
    */
   connections: ConnectionRegistry
+  /** Main-process WebSocket transport. Uses Node net/tls through `ws`, never Chromium. */
+  nativeWebSocket: NativeWebSocketService
   /**
    * Flag-gated ring buffer (see foundation.md) over the cross-wc bridge message
    * stream. Off by default (near-free no-op); when `DIMINA_DEBUG_TAP=1` it
@@ -562,6 +571,7 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
     emitServiceHostReady: () => {},
     lastServiceHostReady: null,
     connections: ctx.connections,
+    nativeWebSocket: createNativeWebSocketService(),
     debugTap: createDebugTap({ enabled: resolveDebugTapEnabled() }),
     appLifecycle: createAppLifecycleController(),
     evictAppDataBridges: (ap) => {
@@ -569,6 +579,7 @@ export function installBridgeRouter(ctx: WorkbenchContext): void {
       for (const page of ap.pages.values()) ctx.appData.evictBridge(ap.appId, page.bridgeId)
     },
   }
+  ctx.registry.add(() => state.nativeWebSocket.dispose())
 
   // Opt-in (default OFF) pre-warm pool for service-host windows. When enabled,
   // handleSpawn acquires a warm window instead of constructing one per spawn.
@@ -2027,13 +2038,94 @@ async function invokeSimulatorApiAndCallback(
 ): Promise<void> {
   try {
     const result = await invoke()
+    const errMsg = result && typeof result === 'object' && 'errMsg' in result
+      ? String((result as { errMsg?: unknown }).errMsg ?? '')
+      : ''
+    if (errMsg.startsWith(`${name}:fail`)) {
+      sendCallback(ap, params.fail, result)
+      sendCallback(ap, params.complete, result)
+      return
+    }
     sendCallback(ap, params.success, result)
     sendCallback(ap, params.complete, result)
   } catch (error) {
-    const failResult = { errMsg: `${name}:fail ${error instanceof Error ? error.message : String(error)}` }
+    const message = error instanceof Error ? error.message : String(error)
+    const failResult = {
+      errMsg: message.startsWith(`${name}:fail`) ? message : `${name}:fail ${message}`,
+    }
     sendCallback(ap, params.fail, failResult)
     sendCallback(ap, params.complete, failResult)
   }
+}
+
+const NATIVE_WEBSOCKET_API_NAMES = new Set([
+  'socketListen',
+  'connectSocket',
+  'sendSocketMessage',
+  'closeSocket',
+])
+
+async function handleNativeWebSocketApi(
+  state: RouterState,
+  ap: AppSession,
+  name: string,
+  params: Record<string, unknown>,
+): Promise<void> {
+  if (name === 'socketListen') {
+    const callbackId = params.success
+    state.nativeWebSocket.listen(ap.appSessionId, (event) => {
+      // disposeAppSession removes the owner/listener before dropping the app
+      // session, so no Native event can bleed into a pooled service window.
+      sendCallback(ap, callbackId, event)
+    })
+    return
+  }
+
+  if (name === 'connectSocket') {
+    const options: NativeConnectSocketOptions = {
+      socketId: typeof params.socketId === 'string' ? params.socketId : '',
+      url: typeof params.url === 'string' ? params.url : '',
+      header: params.header as Record<string, unknown> | undefined,
+      protocols: params.protocols as string[] | undefined,
+      timeout: params.timeout as number | undefined,
+      perMessageDeflate: params.perMessageDeflate as boolean | undefined,
+      tcpNoDelay: params.tcpNoDelay as boolean | undefined,
+      forceCellularNetwork: params.forceCellularNetwork as boolean | undefined,
+    }
+    await invokeSimulatorApiAndCallback(
+      ap,
+      name,
+      params,
+      async () => state.nativeWebSocket.connect(ap.appSessionId, options),
+    )
+    return
+  }
+
+  if (name === 'sendSocketMessage') {
+    const options: NativeSendSocketMessageOptions = {
+      socketId: typeof params.socketId === 'string' ? params.socketId : '',
+      data: params.data,
+    }
+    await invokeSimulatorApiAndCallback(
+      ap,
+      name,
+      params,
+      () => state.nativeWebSocket.send(ap.appSessionId, options),
+    )
+    return
+  }
+
+  const options: NativeCloseSocketOptions = {
+    socketId: typeof params.socketId === 'string' ? params.socketId : '',
+    code: params.code as number | undefined,
+    reason: params.reason as string | undefined,
+  }
+  await invokeSimulatorApiAndCallback(
+    ap,
+    name,
+    params,
+    async () => state.nativeWebSocket.close(ap.appSessionId, options),
+  )
 }
 
 async function handleSimulatorApi(
@@ -2065,6 +2157,14 @@ async function handleSimulatorApi(
 
   if (name === 'pageScrollTo') {
     handlePageScrollApi(ap, page, params)
+    return
+  }
+
+  // Preserve the synchronous forwarding path for every non-WebSocket API:
+  // awaiting a generic "maybe handled" check would insert a microtask before
+  // API_CALL delivery and reorder existing service/simulator bridge traffic.
+  if (NATIVE_WEBSOCKET_API_NAMES.has(name)) {
+    await handleNativeWebSocketApi(state, ap, name, params)
     return
   }
 
@@ -2210,7 +2310,6 @@ function handleApiResponse(
   // One-shot path (default): fire the verdict's callbacks once and clean up.
   state.pendingApiCalls.delete(payload.requestId)
   clearTimeout(pending.timer)
-
   if (payload.ok) {
     sendCallback(ap, pending.callbacks.success, payload.result)
     sendCallback(ap, pending.callbacks.complete, payload.result ?? { errMsg: `${pending.name}:ok` })
@@ -2531,6 +2630,7 @@ async function disposeAppSession(
   ap.registryHandle = null
   void registryHandle?.dispose()
   state.appLifecycle.dispose(appSessionId)
+  state.nativeWebSocket.disposeOwner(appSessionId)
 
   // Evict AppData bridges FIRST — eviction enumerates `ap.pages`, which the
   // page teardown below progressively empties (and finally clears).
