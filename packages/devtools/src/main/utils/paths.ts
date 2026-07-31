@@ -1,7 +1,7 @@
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import type { RuntimeContext } from 'dimina-electron-runtime/main/runtime-context'
+import type { RuntimeContext } from '@dimina-kit/electron-runtime/main/runtime-context'
 
 // Hardcoded relative jumps like '../../dist/renderer' break under the
 // esbuild single-file bundle (dist/main/index.bundle.js): every inlined

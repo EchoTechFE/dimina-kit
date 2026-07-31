@@ -1,1 +1,1 @@
-export * from 'dimina-electron-runtime/shared/request-core'
+export * from '@dimina-kit/electron-runtime/shared/request-core'

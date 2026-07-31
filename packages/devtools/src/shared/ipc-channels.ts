@@ -37,7 +37,7 @@ export type {
   NativeDeviceInfo,
   NotchType,
   SafeAreaInsets,
-} from 'dimina-electron-runtime'
+} from '@dimina-kit/electron-runtime'
 
 // ── Service host (main → hidden service-host window) ─────────────────────
 
@@ -84,7 +84,7 @@ export const SimulatorCustomApiChannel = {
 // be in flight at once. The standalone runtime owns the wire contract.
 export {
   SimulatorCustomApiBridgeChannel,
-} from 'dimina-electron-runtime/shared/bridge-channels'
+} from '@dimina-kit/electron-runtime/shared/bridge-channels'
 
 // ── Storage (CDP-backed; main process attaches the debugger to the
 // simulator guest and forwards DOMStorage events to the renderer) ──

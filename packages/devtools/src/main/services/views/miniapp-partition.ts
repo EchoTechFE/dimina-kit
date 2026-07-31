@@ -1,1 +1,1 @@
-export * from 'dimina-electron-runtime/main/miniapp-partition'
+export * from '@dimina-kit/electron-runtime/main/miniapp-partition'

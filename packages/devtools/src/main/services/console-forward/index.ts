@@ -1,1 +1,1 @@
-export * from 'dimina-electron-runtime/main/console-forward'
+export * from '@dimina-kit/electron-runtime/main/console-forward'

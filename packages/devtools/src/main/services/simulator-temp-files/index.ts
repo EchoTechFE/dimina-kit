@@ -1,1 +1,1 @@
-export * from 'dimina-electron-runtime/main/temp-files'
+export * from '@dimina-kit/electron-runtime/main/temp-files'

@@ -183,10 +183,10 @@ export async function createElectronRuntime(
   options: CreateElectronRuntimeOptions,
 ): Promise<ElectronRuntime> {
   if (!app.isReady()) {
-    throw new Error('dimina-electron-runtime must be created after Electron app is ready')
+    throw new Error('@dimina-kit/electron-runtime must be created after Electron app is ready')
   }
   if (activeRuntime) {
-    throw new Error('dimina-electron-runtime currently supports one active runtime per process')
+    throw new Error('@dimina-kit/electron-runtime currently supports one active runtime per process')
   }
   if (!options.hostWindow || options.hostWindow.isDestroyed()) {
     throw new Error('hostWindow must be a live BrowserWindow')

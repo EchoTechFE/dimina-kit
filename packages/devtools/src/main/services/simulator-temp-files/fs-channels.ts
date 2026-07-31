@@ -1,1 +1,1 @@
-export * from 'dimina-electron-runtime/main/temp-files/fs-channels'
+export * from '@dimina-kit/electron-runtime/main/temp-files/fs-channels'

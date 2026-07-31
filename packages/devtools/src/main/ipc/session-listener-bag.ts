@@ -1,1 +1,1 @@
-export * from 'dimina-electron-runtime/main/session-listener-bag'
+export * from '@dimina-kit/electron-runtime/main/session-listener-bag'

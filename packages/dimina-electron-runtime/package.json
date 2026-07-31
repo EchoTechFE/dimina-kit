@@ -1,5 +1,5 @@
 {
-  "name": "dimina-electron-runtime",
+  "name": "@dimina-kit/electron-runtime",
   "version": "0.1.0",
   "description": "Embeddable Dimina mini-app runtime for Electron hosts",
   "keywords": [
@@ -17,7 +17,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/EchoTechFE/dimina-kit.git",
-    "directory": "packages/electron-runtime"
+    "directory": "packages/dimina-electron-runtime"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

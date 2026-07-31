@@ -138,7 +138,7 @@ vi.mock('electron', () => {
 })
 
 // Pooling is OFF in this suite — every spawn takes the fresh-window path.
-vi.mock('dimina-electron-runtime/main/service-host-window', () => ({
+vi.mock('@dimina-kit/electron-runtime/main/service-host-window', () => ({
   serviceHostSpec: () => ({}),
   serviceHostPreloadPath: '/tmp/preload.cjs',
   SERVICE_HOST_PARTITION: 'persist:simulator',

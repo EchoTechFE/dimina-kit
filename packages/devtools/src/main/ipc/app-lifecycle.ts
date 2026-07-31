@@ -1,1 +1,1 @@
-export * from 'dimina-electron-runtime/main/app-lifecycle'
+export * from '@dimina-kit/electron-runtime/main/app-lifecycle'

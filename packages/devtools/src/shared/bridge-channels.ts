@@ -1,1 +1,1 @@
-export * from 'dimina-electron-runtime/shared/bridge-channels'
+export * from '@dimina-kit/electron-runtime/shared/bridge-channels'

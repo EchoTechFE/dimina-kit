@@ -1,4 +1,4 @@
-# dimina-electron-runtime
+# @dimina-kit/electron-runtime
 
 Embed a Dimina mini-app in an existing Electron application. The host owns
 Electron's `app`, `BrowserWindow`, layout, and shutdown lifecycle; this package
@@ -9,7 +9,7 @@ import { app, BrowserWindow } from 'electron'
 import {
   createElectronRuntime,
   registerElectronRuntimeSchemes,
-} from 'dimina-electron-runtime'
+} from '@dimina-kit/electron-runtime'
 import { openProject } from '@dimina-kit/devkit'
 
 registerElectronRuntimeSchemes()
@@ -38,7 +38,7 @@ that registration, merge the exported descriptors into its one call instead:
 
 ```ts
 import { protocol } from 'electron'
-import { ELECTRON_RUNTIME_SCHEMES } from 'dimina-electron-runtime'
+import { ELECTRON_RUNTIME_SCHEMES } from '@dimina-kit/electron-runtime'
 
 protocol.registerSchemesAsPrivileged([
   ...ELECTRON_RUNTIME_SCHEMES,
@@ -49,7 +49,7 @@ protocol.registerSchemesAsPrivileged([
 ## Bundling and assets
 
 The package ships renderer, preload, and HTML assets under its `dist/`
-directory. When the main-process bundler keeps `dimina-electron-runtime`
+directory. When the main-process bundler keeps `@dimina-kit/electron-runtime`
 external, the runtime resolves that directory from the installed package.
 
 When bundling the runtime code into the host's main bundle, copy the package's

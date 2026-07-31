@@ -146,7 +146,7 @@ vi.mock('electron', () => {
 // The fresh-window path goes through createServiceHostWindow; the pooled path
 // builds the spawn URL via buildServiceHostSpawnUrl. The latter is a capturing
 // vi.fn so the pooled branch's opts (including apiNamespaces) are observable.
-vi.mock('dimina-electron-runtime/main/service-host-window', () => ({
+vi.mock('@dimina-kit/electron-runtime/main/service-host-window', () => ({
   serviceHostSpec: () => ({}),
   serviceHostPreloadPath: '/tmp/preload.cjs',
   SERVICE_HOST_PARTITION: 'persist:simulator',
@@ -162,7 +162,7 @@ vi.mock('dimina-electron-runtime/main/service-host-window', () => ({
 // Mocked pre-warm pool: `acquire` hands back a warmed window stub so the pooled
 // spawn branch (state.pool !== null) runs without a real BrowserWindow. `init`/
 // `dispose` are inert — the warm-up timer is never advanced in these tests.
-vi.mock('dimina-electron-runtime/main/service-host-pool', () => ({
+vi.mock('@dimina-kit/electron-runtime/main/service-host-pool', () => ({
   ServiceHostPool: class {
     init = vi.fn(() => Promise.resolve())
     dispose = vi.fn(() => Promise.resolve())

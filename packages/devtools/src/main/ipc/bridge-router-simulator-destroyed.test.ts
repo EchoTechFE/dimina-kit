@@ -178,7 +178,7 @@ vi.mock('electron', () => {
 // Stub the service-host window-creation module: pooling is OFF in this suite,
 // so every spawn goes through createServiceHostWindow (recorded for close()
 // assertions). `serviceHostSpec` is read at install time.
-vi.mock('dimina-electron-runtime/main/service-host-window', () => ({
+vi.mock('@dimina-kit/electron-runtime/main/service-host-window', () => ({
   serviceHostSpec: () => ({}),
   serviceHostPreloadPath: '/tmp/preload.cjs',
   SERVICE_HOST_PARTITION: 'persist:simulator',

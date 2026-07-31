@@ -1,1 +1,1 @@
-export * from 'dimina-electron-runtime/main/referer'
+export * from '@dimina-kit/electron-runtime/main/referer'

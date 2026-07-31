@@ -1,1 +1,1 @@
-export * from 'dimina-electron-runtime/main/service-storage-ops'
+export * from '@dimina-kit/electron-runtime/main/service-storage-ops'
