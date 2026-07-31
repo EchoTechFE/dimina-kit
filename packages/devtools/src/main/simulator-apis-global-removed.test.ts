@@ -118,7 +118,7 @@ describe('Requirement D5: createSimulatorApiRegistry + types survive in custom-a
   it('runtime-owned custom-apis.ts still declares the SimulatorApiHandler / SimulatorApiRegistry types', async () => {
     const runtimeSource = resolve(
       HERE,
-      '../../../electron-runtime/src/main/services/simulator/custom-apis.ts',
+      '../../../dimina-electron-runtime/src/main/services/simulator/custom-apis.ts',
     )
     const src = await readFile(runtimeSource, 'utf8')
     expect(

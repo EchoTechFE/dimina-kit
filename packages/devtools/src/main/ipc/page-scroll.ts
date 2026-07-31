@@ -1,1 +1,1 @@
-export * from 'dimina-electron-runtime/main/page-scroll'
+export * from '@dimina-kit/electron-runtime/main/page-scroll'

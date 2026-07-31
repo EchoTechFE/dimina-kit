@@ -3,7 +3,7 @@ import {
   createRuntimeEvents,
   type RuntimeContext,
   type RuntimeEvents,
-} from 'dimina-electron-runtime/main/runtime-context'
+} from '@dimina-kit/electron-runtime/main/runtime-context'
 import type { CompilationAdapter, CustomFileTypes, WorkbenchConfig } from '../../shared/types.js'
 import type { BridgeRouterHandle } from '../ipc/bridge-router.js'
 import type { ConsoleForwarder } from './console-forward/index.js'

@@ -1,12 +1,12 @@
-export * from 'dimina-electron-runtime/main/bridge-router'
+export * from '@dimina-kit/electron-runtime/main/bridge-router'
 
-import { installBridgeRouter as installRuntimeBridgeRouter } from 'dimina-electron-runtime/main/bridge-router'
+import { installBridgeRouter as installRuntimeBridgeRouter } from '@dimina-kit/electron-runtime/main/bridge-router'
 import {
   createRuntimeEvents,
   type RuntimeContext,
   type RuntimeEvents,
-} from 'dimina-electron-runtime/main/runtime-context'
-import type { SessionRuntimeStatus, SyncStorageChange } from 'dimina-electron-runtime'
+} from '@dimina-kit/electron-runtime/main/runtime-context'
+import type { SessionRuntimeStatus, SyncStorageChange } from '@dimina-kit/electron-runtime'
 import type { MessageEnvelope } from '../../shared/bridge-channels.js'
 import { runtimeAssetPaths } from '../utils/paths.js'
 

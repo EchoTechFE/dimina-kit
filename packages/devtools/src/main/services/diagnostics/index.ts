@@ -1,1 +1,1 @@
-export * from 'dimina-electron-runtime/main/diagnostics'
+export * from '@dimina-kit/electron-runtime/main/diagnostics'

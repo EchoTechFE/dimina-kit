@@ -1,5 +1,5 @@
 import { app, protocol } from 'electron'
-import { ELECTRON_RUNTIME_SCHEMES } from 'dimina-electron-runtime'
+import { ELECTRON_RUNTIME_SCHEMES } from '@dimina-kit/electron-runtime'
 import { DEFAULT_CDP_PORT } from '../../shared/constants.js'
 import { loadWorkbenchSettings } from '../services/settings/index.js'
 

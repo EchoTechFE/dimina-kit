@@ -375,7 +375,7 @@ jobs:
       # do not recursively build dimina/fe assets. Publishing uses
       # --ignore-scripts, so assemble the standalone package explicitly here.
       - name: Build standalone Electron runtime package
-        run: pnpm --filter dimina-electron-runtime build:package
+        run: pnpm --filter @dimina-kit/electron-runtime build:package
 
       - name: Publish changed packages
         id: publish

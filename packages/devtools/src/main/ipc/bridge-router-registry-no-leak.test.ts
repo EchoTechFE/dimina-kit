@@ -91,7 +91,7 @@ const stubs = vi.hoisted(() => {
   return { onListeners, invokeHandlers, wcById, createdWindows, makeEmitter, makeWebContents, makeBrowserWindow, createWindowForSpawn, reset }
 })
 
-vi.mock('dimina-electron-runtime/main/dimina-resource-server', () => ({
+vi.mock('@dimina-kit/electron-runtime/main/dimina-resource-server', () => ({
   startDiminaResourceServer: vi.fn(async () => ({
     baseUrl: 'http://127.0.0.1:19888/',
     close: vi.fn(() => Promise.resolve()),
@@ -135,7 +135,7 @@ vi.mock('electron', () => {
   }
 })
 
-vi.mock('dimina-electron-runtime/main/service-host-window', () => ({
+vi.mock('@dimina-kit/electron-runtime/main/service-host-window', () => ({
   serviceHostSpec: () => ({}),
   serviceHostPreloadPath: '/tmp/preload.cjs',
   SERVICE_HOST_PARTITION: 'persist:simulator',

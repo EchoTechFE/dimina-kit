@@ -1,1 +1,1 @@
-export * from 'dimina-electron-runtime/shared/simulator-api-metadata'
+export * from '@dimina-kit/electron-runtime/shared/simulator-api-metadata'

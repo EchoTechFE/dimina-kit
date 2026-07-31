@@ -1,1 +1,1 @@
-export * from 'dimina-electron-runtime/main/custom-apis'
+export * from '@dimina-kit/electron-runtime/main/custom-apis'

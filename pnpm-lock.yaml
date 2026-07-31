@@ -168,6 +168,9 @@ importers:
       '@dimina-kit/electron-deck':
         specifier: workspace:*
         version: link:../electron-deck
+      '@dimina-kit/electron-runtime':
+        specifier: workspace:*
+        version: link:../dimina-electron-runtime
       '@dimina-kit/inspect':
         specifier: workspace:*
         version: link:../inspect
@@ -180,9 +183,6 @@ importers:
       chrome-remote-interface:
         specifier: ^0.34.0
         version: 0.34.0
-      dimina-electron-runtime:
-        specifier: workspace:*
-        version: link:../electron-runtime
       ws:
         specifier: ^8.20.0
         version: 8.20.0
@@ -323,6 +323,43 @@ importers:
         specifier: ^4.1.4
         version: 4.1.4(@types/node@22.19.17)(@vitest/coverage-v8@4.1.4)(jsdom@26.1.0)(vite@8.0.8(@types/node@22.19.17)(esbuild@0.28.1)(jiti@1.21.7)(less@4.8.1)(sass@1.102.0)(yaml@2.9.0))
 
+  packages/dimina-electron-runtime:
+    dependencies:
+      '@dimina-kit/electron-deck':
+        specifier: workspace:*
+        version: link:../electron-deck
+      ws:
+        specifier: ^8.20.0
+        version: 8.20.0
+    devDependencies:
+      '@dimina-kit/eslint-config':
+        specifier: workspace:*
+        version: link:../eslint-config
+      '@dimina-kit/typescript-config':
+        specifier: workspace:*
+        version: link:../typescript-config
+      '@types/node':
+        specifier: ^22.15.3
+        version: 22.19.17
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
+      '@vitest/coverage-v8':
+        specifier: ^4.1.4
+        version: 4.1.4(vitest@4.1.4)
+      electron:
+        specifier: ^43.2.0
+        version: 43.2.0
+      eslint:
+        specifier: ^10.2.1
+        version: 10.2.1(jiti@2.7.0)
+      typescript:
+        specifier: 5.9.2
+        version: 5.9.2
+      vitest:
+        specifier: ^4.1.4
+        version: 4.1.4(@types/node@22.19.17)(@vitest/coverage-v8@4.1.4)(jsdom@26.1.0)(vite@8.0.16(@types/node@22.19.17)(esbuild@0.28.1)(jiti@2.7.0)(less@4.8.1)(sass@1.102.0)(yaml@2.9.0))
+
   packages/electron-deck:
     dependencies:
       '@dimina-kit/view-anchor':
@@ -380,43 +417,6 @@ importers:
       vite:
         specifier: ^8.0.16
         version: 8.0.16(@types/node@22.19.17)(esbuild@0.28.1)(jiti@2.7.0)(less@4.8.1)(sass@1.102.0)(yaml@2.9.0)
-      vitest:
-        specifier: ^4.1.4
-        version: 4.1.4(@types/node@22.19.17)(@vitest/coverage-v8@4.1.4)(jsdom@26.1.0)(vite@8.0.16(@types/node@22.19.17)(esbuild@0.28.1)(jiti@2.7.0)(less@4.8.1)(sass@1.102.0)(yaml@2.9.0))
-
-  packages/electron-runtime:
-    dependencies:
-      '@dimina-kit/electron-deck':
-        specifier: workspace:*
-        version: link:../electron-deck
-      ws:
-        specifier: ^8.20.0
-        version: 8.20.0
-    devDependencies:
-      '@dimina-kit/eslint-config':
-        specifier: workspace:*
-        version: link:../eslint-config
-      '@dimina-kit/typescript-config':
-        specifier: workspace:*
-        version: link:../typescript-config
-      '@types/node':
-        specifier: ^22.15.3
-        version: 22.19.17
-      '@types/ws':
-        specifier: ^8.18.1
-        version: 8.18.1
-      '@vitest/coverage-v8':
-        specifier: ^4.1.4
-        version: 4.1.4(vitest@4.1.4)
-      electron:
-        specifier: ^43.2.0
-        version: 43.2.0
-      eslint:
-        specifier: ^10.2.1
-        version: 10.2.1(jiti@2.7.0)
-      typescript:
-        specifier: 5.9.2
-        version: 5.9.2
       vitest:
         specifier: ^4.1.4
         version: 4.1.4(@types/node@22.19.17)(@vitest/coverage-v8@4.1.4)(jsdom@26.1.0)(vite@8.0.16(@types/node@22.19.17)(esbuild@0.28.1)(jiti@2.7.0)(less@4.8.1)(sass@1.102.0)(yaml@2.9.0))
@@ -1655,6 +1655,7 @@ packages:
   '@oxc-parser/binding-wasm32-wasi@0.139.0':
     resolution: {integrity: sha512-rNU0pO+/CVPC2qZ+xtX5R2cOje9Q75q3UkfgwUCPlplqxMv6Iffd5tMPGVMCLGnPINxPlmi0WPsW94HltbYvfQ==}
     engines: {node: ^20.19.0 || >=22.12.0}
+    cpu: [wasm32]
 
   '@oxc-parser/binding-win32-arm64-msvc@0.139.0':
     resolution: {integrity: sha512-JPEmfncZfqAFiGsAN6UZSMIBqnG8wn8buywRacFOWjP+9dZwcs03SsBp4tmyjM/4l/VoH/IuThrW1Jof3OyQUw==}

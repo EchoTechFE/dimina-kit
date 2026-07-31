@@ -1,1 +1,1 @@
-export * from 'dimina-electron-runtime/main/service-host-pool'
+export * from '@dimina-kit/electron-runtime/main/service-host-pool'

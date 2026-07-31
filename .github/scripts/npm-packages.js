@@ -2,7 +2,7 @@
 
 // Single source of truth for which workspace packages are npm-publishable.
 // Order matters: dependency-first so consumers resolve already-published versions.
-// fs-core → compiler → view-anchor → electron-deck → electron-runtime →
+// fs-core → compiler → view-anchor → electron-deck → dimina-electron-runtime →
 // devkit → inspect → devtools.
 //
 // Consumed by both bump-dev-version.js (version bump) and publish-packages.js
@@ -13,7 +13,7 @@ export const NPM_PACKAGES = [
   { name: '@dimina-kit/compiler', dir: 'packages/compiler' },
   { name: '@dimina-kit/view-anchor', dir: 'packages/view-anchor' },
   { name: '@dimina-kit/electron-deck', dir: 'packages/electron-deck' },
-  { name: 'dimina-electron-runtime', dir: 'packages/electron-runtime' },
+  { name: '@dimina-kit/electron-runtime', dir: 'packages/dimina-electron-runtime' },
   { name: '@dimina-kit/devkit', dir: 'packages/devkit' },
   { name: '@dimina-kit/inspect', dir: 'packages/inspect' },
   { name: '@dimina-kit/devtools', dir: 'packages/devtools' },

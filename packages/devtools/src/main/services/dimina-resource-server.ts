@@ -1,1 +1,1 @@
-export * from 'dimina-electron-runtime/main/dimina-resource-server'
+export * from '@dimina-kit/electron-runtime/main/dimina-resource-server'

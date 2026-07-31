@@ -1,1 +1,1 @@
-export * from 'dimina-electron-runtime/shared/vpath'
+export * from '@dimina-kit/electron-runtime/shared/vpath'

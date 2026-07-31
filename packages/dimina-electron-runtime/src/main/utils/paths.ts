@@ -31,7 +31,7 @@ function isRuntimePackage(dir: string): boolean {
     const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')) as {
       name?: string
     }
-    return pkg.name === 'dimina-electron-runtime'
+    return pkg.name === '@dimina-kit/electron-runtime'
   } catch {
     return false
   }
@@ -60,8 +60,8 @@ function resolveRuntimePackageRoot(): string | null {
   }
   for (const candidate of [
     process.cwd(),
-    path.join(process.cwd(), 'packages/electron-runtime'),
-    path.join(process.cwd(), '../electron-runtime'),
+    path.join(process.cwd(), 'packages/dimina-electron-runtime'),
+    path.join(process.cwd(), '../dimina-electron-runtime'),
   ]) {
     const resolved = walkForRuntimePackage(candidate)
     if (resolved) return resolved
@@ -91,7 +91,7 @@ export function resolveRuntimeAssetPaths(assetsRoot?: string): RuntimeAssetPaths
   const root = path.resolve(assetsRoot ?? (packageRoot ? path.join(packageRoot, 'dist') : ''))
   if (!assetsRoot && !packageRoot) {
     throw new Error(
-      'dimina-electron-runtime assets could not be resolved after bundling; '
+      '@dimina-kit/electron-runtime assets could not be resolved after bundling; '
       + 'copy the package dist directory and pass its absolute path as assetsRoot',
     )
   }
@@ -99,7 +99,7 @@ export function resolveRuntimeAssetPaths(assetsRoot?: string): RuntimeAssetPaths
     !fs.existsSync(path.join(root, relativePath)))
   if (missing.length > 0) {
     throw new Error(
-      `dimina-electron-runtime assetsRoot is incomplete (${root}); missing: ${missing.join(', ')}`,
+      `@dimina-kit/electron-runtime assetsRoot is incomplete (${root}); missing: ${missing.join(', ')}`,
     )
   }
   return createAssetPaths(root)

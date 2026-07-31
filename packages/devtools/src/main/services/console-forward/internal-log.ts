@@ -1,1 +1,1 @@
-export * from 'dimina-electron-runtime/main/internal-log'
+export * from '@dimina-kit/electron-runtime/main/internal-log'
