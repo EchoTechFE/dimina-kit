@@ -74,7 +74,7 @@
     "magic-string": "^0.30.21",
     "memfs": "^4.57.8",
     "oxc-parser": "^0.139.0",
-    "oxc-walker": "^1.0.0",
+    "oxc-walker": "^1.1.1",
     "path-browserify": "^1.0.1",
     "postcss": "^8.5.25",
     "postcss-selector-parser": "^7.1.4",
