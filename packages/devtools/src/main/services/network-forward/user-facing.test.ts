@@ -29,6 +29,14 @@ describe('isUserFacingRequest', () => {
     expect(isUserFacingRequest('difile://simulator-temp/foo.png')).toBe(false)
   })
 
+  // Modifying test: render-host documents now navigate on `dmb-resource://`
+  // (same-origin as package assets). That scheme must stay host-internal —
+  // otherwise every pageFrame / static-asset load leaks into the Network panel.
+  it('hides a dmb-resource:// request (render-host + package asset protocol)', () => {
+    expect(isUserFacingRequest('dmb-resource://b1/__sdk__/render-host/pageFrame.html')).toBe(false)
+    expect(isUserFacingRequest('dmb-resource://b1/static/avatars/x.png')).toBe(false)
+  })
+
   it('hides a devtools:// request (bundled front-end asset)', () => {
     expect(isUserFacingRequest('devtools://devtools/bundled/x.js')).toBe(false)
   })

@@ -16,6 +16,7 @@ import type {
   SpawnRequest,
   SpawnResult,
 } from '../../shared/bridge-channels.js'
+import { buildRenderHostDocumentUrl } from '../../shared/dmb-resource-url.js'
 import { exposeOnMainWorld } from '../shared/expose.js'
 
 export interface RenderHostUrlOptions {
@@ -114,14 +115,9 @@ function buildBridge(cfg: NativeHostConfig): DiminaNativeHostBridge {
       ipcRenderer.send(C.PAGE_STACK, payload)
     },
     createRenderHostUrl(opts) {
-      // `URL` + `URLSearchParams` are web globals — no node:url needed.
-      const url = new URL(cfg.renderHostHtmlUrl)
-      url.searchParams.set('bridgeId', opts.bridgeId)
-      url.searchParams.set('appId', opts.appId)
-      url.searchParams.set('pagePath', opts.pagePath)
-      if (opts.isTab) url.searchParams.set('isTab', '1')
-      if (opts.backgroundColor) url.searchParams.set('bgColor', opts.backgroundColor)
-      return url.toString()
+      // Same-origin document on `dmb-resource://<bridgeId>/__sdk__/…` so relative
+      // package image paths resolve against the resource server, not file:// asar.
+      return buildRenderHostDocumentUrl(opts)
     },
     renderPreloadUrl: cfg.renderPreloadUrl,
     device: cfg.device,
