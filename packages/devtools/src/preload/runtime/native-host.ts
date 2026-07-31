@@ -22,6 +22,8 @@ import { exposeOnMainWorld } from '../shared/expose.js'
 export interface RenderHostUrlOptions {
   bridgeId: string
   appId: string
+  /** The page's resource root inside the mini-app package (e.g. `'main'`), from `SpawnResult.root`. */
+  root: string
   pagePath: string
   /** Whether this page is a tabBar page. Surfaced on the URL so main can pick
    *  the bottom safe-area policy at `did-attach-webview` (services/safe-area). */
@@ -115,7 +117,8 @@ function buildBridge(cfg: NativeHostConfig): DiminaNativeHostBridge {
       ipcRenderer.send(C.PAGE_STACK, payload)
     },
     createRenderHostUrl(opts) {
-      // Same-origin document on `dmb-resource://<bridgeId>/__sdk__/…` so relative
+      // Same-origin document on `dmb-resource://<bridgeId>/<appId>/<root>/<page directory>/__frame__.html`
+      // (path depth tracks the page's package directory depth) so relative
       // package image paths resolve against the resource server, not file:// asar.
       return buildRenderHostDocumentUrl(opts)
     },

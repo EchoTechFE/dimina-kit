@@ -285,6 +285,8 @@ export interface SpawnResult {
   pageFallbackApplied: boolean
   serviceWcId: number
   resourceBaseUrl: string
+  /** The page's resource root inside the mini-app package (e.g. `'main'`). Threaded to `createRenderHostUrl` so the render-host document URL can encode it — see `dmb-resource-url.ts`. */
+  root: string
   manifest: AppManifest
   rootWindowConfig: PageWindowConfig
 }

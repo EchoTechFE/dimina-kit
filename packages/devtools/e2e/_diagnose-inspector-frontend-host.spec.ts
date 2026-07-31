@@ -31,6 +31,7 @@ import {
   ipcInvoke,
   pollUntil,
   evalInWebContentsByUrl,
+  RENDER_GUEST_URL_MARKER,
 } from './helpers'
 import { AutomationChannel } from '../src/shared/ipc-channels'
 import { buildConsoleFilterScript } from '../src/main/services/views/console-filter'
@@ -103,9 +104,9 @@ test.describe('DIAGNOSE: InspectorFrontendHost.setPreference/getPreferences real
     // Wait for a render-host guest so the service host (and therefore the
     // right-panel DevTools front-end pointed at it) is fully up.
     await pollUntil(
-      () => electronApp.evaluate(({ webContents }) =>
-        webContents.getAllWebContents().some((wc) => !wc.isDestroyed() && wc.getURL().includes('pageFrame.html')),
-      ),
+      () => electronApp.evaluate(({ webContents }, marker) =>
+        webContents.getAllWebContents().some((wc) => !wc.isDestroyed() && wc.getURL().includes(marker)),
+      RENDER_GUEST_URL_MARKER),
       (present) => present === true,
       30000,
       300,

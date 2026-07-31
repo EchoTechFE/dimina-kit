@@ -2,7 +2,7 @@
  * MiniProgram — controls the mini program instance running in the devtools simulator.
  *
  * Architecture:
- *   - The simulator is a webview containing an iframe (pageFrame.html)
+ *   - The simulator is a webview containing an iframe (__frame__.html)
  *   - The mini program page renders inside the iframe via Vue
  *   - Page route lives in the simulator URL (see shared/simulator-route)
  *   - Navigation works by clicking DOM elements or IPC

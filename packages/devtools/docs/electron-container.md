@@ -352,8 +352,13 @@ native-host simulator 走另一套，且不在 renderer 里——它是顶层 `W
 ### 6.3 资源协议 `dmb-resource://`
 
 - 注册位置：`installResourceProtocolHandlers`（`bridge-router.ts`），注册到默认 protocol + shared fallback session，并经 partition configurator 注册到每个 per-project `persist:miniapp-<key>` session。
-- 拒绝条件：URL hostname 对不上任何 AppSession 的 bridgeId → 404。
-- 路径来源：所有 fetch 最后都 redirect 到 AppSession 的 `resourceBaseUrl`——正常是 dev server origin，无 dev server 时降级到本地 `DiminaResourceServer`；两种情况下 mini-program 都只能读 base 暴露的资源，读不到任意 fs。
+- 拒绝条件：URL hostname（bridgeId）对不上任何 AppSession → 404，先于下面的路径路由判断（`handleDmbResourceRequest`，`dmb-resource/handle-request.ts`）。已 dispose / 从未存在的 bridgeId 对任何路径（含 SDK 文档）都拿不到 200——这也是 stale-guest 检测能成立的前提。
+- session 解析通过后，路径分两段路由（`handleDmbResourceRequest`，`dmb-resource/handle-request.ts`）：
+  1. `/__sdk__/*` → 本地 runtime dist（render-host/native-host 文件）。
+  2. 其余路径中，**最后一段是保留文件名 `__frame__.html`** 的（形如 `/<appId>/<root>/<页面目录>/__frame__.html`）→ 同样从本地 runtime dist 读同一份 SDK `render-host/pageFrame.html`，不管 appId/root/页面目录具体是什么；不满足这条的 → `fetch` 到该 session 的 `resourceBaseUrl`（不带前缀剥离，和改动前的行为完全一致）。
+
+  `__frame__.html` 是 render-host `<webview>` 实际导航到的文档 URL（`buildRenderHostDocumentUrl`，`dmb-resource-url.ts`）的保留文件名，**直接挂在页面自己的包路径下**（没有单独的虚拟前缀，双下划线命名和 `/__sdk__/` 同一套约定，避免和真实编译产物同名冲突）：appId/root/页面目录编进 URL path（不只是 query string），使文档自身的目录深度和页面在小程序包内的真实目录深度一致，页面里手写的相对路径资源引用经浏览器原生 URL 解析后天然落在正确的包路径下，而不是 SDK 或 origin 相对路径。
+- 路径来源：分支 2 的兜底 fetch 最后都 redirect 到 AppSession 的 `resourceBaseUrl`——正常是 dev server origin，无 dev server 时降级到本地 `DiminaResourceServer`；两种情况下 mini-program 都只能读 base 暴露的资源，读不到任意 fs。
 
 ### 6.4 数据目录隔离（e2e 场景）
 

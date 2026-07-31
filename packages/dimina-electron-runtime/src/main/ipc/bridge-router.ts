@@ -653,15 +653,17 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
   const onNativeHostQuery = (event: IpcMainEvent): void => {
     // native-host is the sole runtime: always reply enabled. `renderHostHtmlUrl`
     // is a legacy placeholder — createRenderHostUrl builds a per-bridge
-    // `dmb-resource://` document URL so relative package assets resolve on the
-    // same origin as the resource server (WeChat `/__pageframe__/` / Android
-    // `/jssdk/` shape). `device` rides along so DeviceShell mounts with the
-    // right bezel size synchronously (SetDeviceInfo precedes AttachNative).
+    // `dmb-resource://<bridgeId>/<appId>/<root>/<page directory>/__frame__.html`
+    // document URL (see dmb-resource-url.ts) so a page's own relative asset
+    // references resolve on the package's own path, not a fixed SDK path.
+    // `device` rides along so DeviceShell mounts with the right bezel size
+    // synchronously (SetDeviceInfo precedes AttachNative).
     const reply: NativeHostConfig = {
       enabled: true,
       renderHostHtmlUrl: buildRenderHostDocumentUrl({
         bridgeId: '_',
         appId: '_',
+        root: '_',
         pagePath: '_',
       }),
       renderPreloadUrl: pathToFileURL(runtimeAssets.renderHostPreloadPath).toString(),
@@ -1416,6 +1418,7 @@ async function handleSpawn(
     pageFallbackApplied,
     serviceWcId: serviceWindow.webContents.id,
     resourceBaseUrl,
+    root,
     manifest,
     rootWindowConfig,
   }
@@ -2859,9 +2862,11 @@ function installResourceProtocolHandlers(
   sdkRoot: string,
 ): void {
   // Same-origin document + package assets: `/__sdk__/*` is the runtime dist
-  // (pageFrame / native-host); every other path proxies to the session's
-  // resourceBaseUrl. Mirrors WeChat's `/__pageframe__/` + package root and
-  // Android's `/jssdk/` + `/jsapp/` on one asset origin.
+  // (pageFrame / native-host). A path whose last segment is the reserved
+  // `DMB_PAGEFRAME_DOC_NAME` (the render-host document, which
+  // buildRenderHostDocumentUrl places directly under the page's own package
+  // path — see dmb-resource-url.ts) also serves from the runtime dist.
+  // Everything else proxies to the session's resourceBaseUrl.
   const handler: ProtocolHandler = async (request) => {
     return handleDmbResourceRequest({
       requestUrl: request.url,

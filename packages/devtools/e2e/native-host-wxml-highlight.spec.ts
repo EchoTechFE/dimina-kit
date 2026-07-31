@@ -5,7 +5,7 @@
  *
  * Three discriminating facts, asserted against the REAL render-host guest under
  * DIMINA_NATIVE_HOST=1 (a top-level WebContentsView hosting per-page
- * `pageFrame.html` <webview>s):
+ * `__frame__.html` <webview>s):
  *
  *  1. Negative — the render-host inspector IIFE owns the guest realm
  *     (`window.__diminaRenderInspect` is present) AND no `#__simulator-highlight`
@@ -29,7 +29,7 @@
  *     `DOM`-before-`Overlay` ordering is guarded deterministically by the unit
  *     test in render-inspect/index.test.ts instead.
  *
- * The negative assertion runs against the GUEST (pageFrame.html) document, never
+ * The negative assertion runs against the GUEST (__frame__.html) document, never
  * the simulator iframe — the iframe path's `#__simulator-highlight` is alive and
  * irrelevant here.
  */
@@ -44,6 +44,7 @@ import {
   ipcInvoke,
   pollUntil,
   evalInWebContentsByUrl,
+  RENDER_GUEST_URL_MARKER,
 } from './helpers'
 import {
   AutomationChannel,
@@ -132,16 +133,16 @@ function collectSids(node: WxmlNode | null | undefined, out: string[]): void {
   for (const c of node.children ?? []) collectSids(c, out)
 }
 
-/** Probe the live render guest (pageFrame.html) main world. */
+/** Probe the live render guest (__frame__.html) main world. */
 function evalInGuest<T>(app: ElectronApplication, expression: string): Promise<T | null> {
-  return evalInWebContentsByUrl<T>(app, 'pageFrame.html', expression).catch(() => null)
+  return evalInWebContentsByUrl<T>(app, RENDER_GUEST_URL_MARKER, expression).catch(() => null)
 }
 
-/** Count live render-guest webContents (pageFrame.html). */
+/** Count live render-guest webContents (__frame__.html). */
 function guestCount(app: ElectronApplication): Promise<number> {
-  return app.evaluate(({ webContents }) =>
-    webContents.getAllWebContents().filter((wc) => wc.getURL().includes('pageFrame.html') && !wc.isDestroyed()).length,
-  )
+  return app.evaluate(({ webContents }, marker) =>
+    webContents.getAllWebContents().filter((wc) => wc.getURL().includes(marker) && !wc.isDestroyed()).length,
+  RENDER_GUEST_URL_MARKER)
 }
 
 /**
@@ -152,7 +153,7 @@ function guestCount(app: ElectronApplication): Promise<number> {
  * compositor paints over the page (Playwright page screenshots can't reach
  * nested webview content; a direct WebContents capture can).
  *
- * The guest selection (`pageFrame.html`) must be the SAME one the Inspect hover
+ * The guest selection (`__frame__.html`) must be the SAME one the Inspect hover
  * targets; callers guard that by asserting a single live guest before measuring.
  */
 async function captureGuestStats(app: ElectronApplication, baselineB64: string | null, tol = 24): Promise<{
@@ -164,7 +165,7 @@ async function captureGuestStats(app: ElectronApplication, baselineB64: string |
   return app.evaluate(async ({ webContents }, payload) => {
     const guest = webContents
       .getAllWebContents()
-      .find((wc) => wc.getURL().includes('pageFrame.html') && !wc.isDestroyed())
+      .find((wc) => wc.getURL().includes(payload.marker) && !wc.isDestroyed())
     if (!guest) return null
     const img = await guest.capturePage()
     const buf = img.toBitmap() // BGRA, row-major
@@ -191,7 +192,7 @@ async function captureGuestStats(app: ElectronApplication, baselineB64: string |
       }
     }
     return { b64, changed, bluish, total }
-  }, { baselineB64, tol })
+  }, { baselineB64, tol, marker: RENDER_GUEST_URL_MARKER })
 }
 
 /** Walk the WXML tree (once it's up) and return its sids in tree order. */

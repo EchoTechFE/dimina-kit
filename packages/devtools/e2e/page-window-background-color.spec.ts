@@ -33,7 +33,7 @@
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { test, expect } from './fixtures'
-import { openProjectInUI, evalInWebContentsByUrl, evalInSimulator, pollUntil } from './helpers'
+import { openProjectInUI, evalInWebContentsByUrl, evalInSimulator, pollUntil, RENDER_GUEST_URL_MARKER } from './helpers'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURE_DIR = path.resolve(__dirname, 'fixtures', 'page-stack-app')
@@ -59,13 +59,13 @@ test.describe('page window.backgroundColor primes the render guest', () => {
 
     const homeGuestBg = await evalInWebContentsByUrl<string>(
       electronApp,
-      'pageFrame.html',
+      RENDER_GUEST_URL_MARKER,
       '(getComputedStyle(document.documentElement).backgroundColor)',
     )
     expect(homeGuestBg).toBe(DEFAULT_BG_RGB)
 
     // Navigate to page A (backgroundColor: #123456) via a real tap — bindtap="goA".
-    const clicked = await evalInWebContentsByUrl<boolean>(electronApp, 'pageFrame.html', `(() => {
+    const clicked = await evalInWebContentsByUrl<boolean>(electronApp, RENDER_GUEST_URL_MARKER, `(() => {
       const el = document.querySelector('[data-path="/pages/a/a"]')
       if (!el) return false
       el.dispatchEvent(new MouseEvent('click', { bubbles: true }))

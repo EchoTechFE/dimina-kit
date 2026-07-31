@@ -44,6 +44,7 @@ import {
   pollUntil,
   evalInSimulator,
   findButtonByText,
+  RENDER_GUEST_URL_MARKER,
 } from './helpers'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -92,16 +93,16 @@ let originalHomeWxml = ''
  * Concatenated visible text of every render-host page guest. Returns '' when
  * no guest is ready yet (callers poll). Copied from editor-hot-reload.spec.ts
  * — screenshots can't capture nested webview content, so we read
- * `document.body.innerText` of each `pageFrame.html` guest directly in main.
+ * `document.body.innerText` of each `__frame__.html` guest directly in main.
  */
 async function readRenderText(app: ElectronApplication): Promise<string> {
   try {
-    return await app.evaluate(async ({ webContents }) => {
+    return await app.evaluate(async ({ webContents }, marker) => {
       const frames = webContents
         .getAllWebContents()
         // Skip loading frames: executeJavaScript on a loading wc queues one
         // did-stop-loading waiter per poll (MaxListeners pile-up under churn).
-        .filter((wc) => !wc.isDestroyed() && !wc.isLoading() && wc.getURL().includes('pageFrame.html'))
+        .filter((wc) => !wc.isDestroyed() && !wc.isLoading() && wc.getURL().includes(marker))
       const texts: string[] = []
       for (const f of frames) {
         try {
@@ -111,7 +112,7 @@ async function readRenderText(app: ElectronApplication): Promise<string> {
         }
       }
       return texts.join('\n---FRAME---\n')
-    })
+    }, RENDER_GUEST_URL_MARKER)
   } catch {
     return ''
   }
@@ -157,12 +158,12 @@ async function getSimulatorShellWcId(app: ElectronApplication): Promise<number> 
 
 /** True if the simulator shell WCV or any render-host page guest crashed. */
 async function anyGuestOrShellCrashed(app: ElectronApplication): Promise<boolean> {
-  return app.evaluate(({ webContents }) => {
+  return app.evaluate(({ webContents }, marker) => {
     const all = webContents.getAllWebContents().filter((wc) => !wc.isDestroyed())
     const shell = all.find((wc) => wc.getURL().includes('simulator.html'))
-    const guests = all.filter((wc) => wc.getURL().includes('pageFrame.html'))
+    const guests = all.filter((wc) => wc.getURL().includes(marker))
     return (shell ? shell.isCrashed() : false) || guests.some((wc) => wc.isCrashed())
-  })
+  }, RENDER_GUEST_URL_MARKER)
 }
 
 interface MemorySample {

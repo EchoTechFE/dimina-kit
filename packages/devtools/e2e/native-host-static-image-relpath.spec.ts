@@ -1,14 +1,24 @@
 /**
  * E2E (native-host only): local package image paths must resolve against the
  * `dmb-resource://` render-host document, not the old `file://…/pageFrame.html`
- * asar URL.
+ * asar URL — and must land on the package's own `<appId>/<root>/…` path, not
+ * just anywhere on the dmb-resource origin.
  *
  * Guards the downstream report where `<image src="../../static/avatars/…">`
  * resolved into the developer-tools install directory and failed with
- * naturalWidth 0. The render host now navigates
- * `dmb-resource://<bridgeId>/__sdk__/render-host/pageFrame.html` (WeChat
- * `/__pageframe__/` / Android `/jssdk/` shape) so relative and root-absolute
- * package paths stay on the package resource origin.
+ * naturalWidth 0. Fixing that revealed a second bug: the render host used to
+ * navigate a *fixed* `dmb-resource://<bridgeId>/__sdk__/render-host/pageFrame.html`
+ * for every page, so a relative reference always resolved relative to that
+ * fixed SDK path, never to the page's real location in the package (it landed
+ * one level too shallow, missing the `<appId>/<root>/` prefix). The render
+ * host now navigates `dmb-resource://<bridgeId>/<appId>/<root>/<page
+ * directory>/__frame__.html` — directly under the page's own package path,
+ * no separate virtual prefix, with `__frame__.html` (a reserved name that
+ * can't collide with a real compiled package file) marking it as the
+ * document rather than a package resource — so the document's own directory
+ * depth tracks the page's directory depth inside the package, and a
+ * hand-written relative reference resolves, via the browser's own WHATWG
+ * algorithm, to the correct package path.
  *
  * Self-launches its own native-host electron — do not set
  * `process.env.DIMINA_NATIVE_HOST` at module scope (poisons --workers=1).
@@ -24,6 +34,7 @@ import {
   ipcInvoke,
   pollUntil,
   evalInSimulator,
+  RENDER_GUEST_URL_MARKER,
 } from './helpers'
 import { AutomationChannel } from '../src/shared/ipc-channels'
 
@@ -45,21 +56,32 @@ interface ProbeResult {
   }>
 }
 
+// Modifying the 'pageFrame.html' match: the render-host document is no longer
+// served at a URL containing that literal filename (see the file header) —
+// its reserved document name is now `__frame__.html` (RENDER_GUEST_URL_MARKER).
+// The marker is passed through `electronApp.evaluate`'s payload rather than
+// hardcoded inside the closure: that closure is serialized and run in
+// Electron's main process, so it can't close over this file's imported
+// constant — it only sees whatever comes through as a normal argument.
 async function evalInActivePageFrame<T>(expression: string): Promise<T> {
-  return electronApp.evaluate(async ({ webContents }, expr) => {
+  return electronApp.evaluate(async ({ webContents }, payload) => {
     const pages = webContents.getAllWebContents().filter((wc) =>
-      !wc.isDestroyed() && wc.getURL().includes('pageFrame.html'),
+      !wc.isDestroyed() && wc.getURL().includes(payload.marker),
     )
     const target = pages[pages.length - 1]
-    if (!target) throw new Error('No pageFrame.html render-host guest')
+    if (!target) throw new Error(`No ${payload.marker} render-host guest`)
     if (target.isLoading()) throw new Error('pageFrame guest is still loading')
-    return target.executeJavaScript(expr)
-  }, expression) as Promise<T>
+    return target.executeJavaScript(payload.expr)
+  }, { marker: RENDER_GUEST_URL_MARKER, expr: expression }) as Promise<T>
 }
 
 async function readProbe(): Promise<ProbeResult | null> {
+  // Plain template-literal interpolation, not a serialized closure — this
+  // string is built here in the test process, then shipped as inert text for
+  // `executeJavaScript` to run inside the guest, so importing the constant
+  // works normally (unlike the `electronApp.evaluate` closure above).
   return evalInActivePageFrame<ProbeResult | null>(`(() => {
-    if (!location.href.includes('pageFrame.html')) return null
+    if (!location.href.includes('${RENDER_GUEST_URL_MARKER}')) return null
     const relativeResolved = new URL('../../static/avatars/probe.png', location.href).href
     const absoluteResolved = new URL('/staticimagerelpath/main/static/probe.png', location.href).href
     const images = [...document.querySelectorAll('img')].map((img) => ({
@@ -144,24 +166,39 @@ test.describe('native-host local static image path resolution', () => {
     await electronApp?.close().catch(() => {})
   })
 
-  test('render-host document is dmb-resource under /__sdk__/ and local images load', async () => {
+  // Modifying this test's document-URL assertions: they pinned the OLD, fixed
+  // `/__sdk__/render-host/pageFrame.html` document path. That fixed path is
+  // exactly the bug this fix removes — the document's URL now encodes
+  // `<appId>/<root>/<page directory>` directly (no separate virtual prefix)
+  // so its own directory depth tracks the page's package directory depth
+  // (see the file header). Fixture appId is `staticimagerelpath`, default
+  // root `main` (see `fixtures/static-image-relpath-app/project.config.json`).
+  //
+  // Modifying the `relativeResolved` assertion: it only checked the *tail*
+  // of the resolved path (`/static/avatars/probe.png$`), which the old,
+  // still-buggy `dmb-resource://.../static/avatars/probe.png` form (missing
+  // the `staticimagerelpath/main/` prefix entirely) would also have matched
+  // — the exact bug this fix addresses. Assert the full package-relative path.
+  test('render-host document is dmb-resource under <appId>/<root>/… and local images load', async () => {
     const ready = await pollUntil(
       () => readProbe(),
       (p) => !!p
-        && p.documentUrl.includes('pageFrame.html')
+        && p.documentUrl.includes(RENDER_GUEST_URL_MARKER)
         && p.documentUrl.startsWith('dmb-resource://'),
       30000,
       400,
     )
     expect(ready, 'pageFrame guest should navigate on dmb-resource://').not.toBeNull()
-    expect(ready!.documentUrl).toContain('/__sdk__/render-host/pageFrame.html')
+    expect(ready!.documentUrl).toContain('/staticimagerelpath/main/')
+    expect(ready!.documentUrl).toMatch(/\/__frame__\.html(\?|$)/)
     expect(ready!.documentUrl.startsWith('file:')).toBe(false)
 
-    // Browser-relative package paths climb out of /__sdk__/render-host/ to the
-    // package root on the same dmb-resource origin (the reported failure mode
-    // was file:///…/app.asar/…/devtools/static/…).
+    // The relative reference now resolves with the appId/root prefix intact
+    // (the reported failure mode was file:///…/app.asar/…/devtools/static/…,
+    // and the intermediate, still-buggy form was a dmb-resource:// URL that
+    // dropped the appId/root prefix entirely).
     expect(ready!.relativeResolved.startsWith('dmb-resource://')).toBe(true)
-    expect(ready!.relativeResolved).toMatch(/\/static\/avatars\/probe\.png$/)
+    expect(ready!.relativeResolved).toMatch(/\/staticimagerelpath\/main\/static\/avatars\/probe\.png$/)
     expect(ready!.relativeResolved.startsWith('file:')).toBe(false)
     expect(ready!.absoluteResolved.startsWith('dmb-resource://')).toBe(true)
 
@@ -192,6 +229,14 @@ test.describe('native-host local static image path resolution', () => {
       ).toBe(true)
       expect(img.currentSrc.startsWith('file:'), `currentSrc must not be file: (${img.currentSrc})`).toBe(false)
       expect(img.currentSrc.includes('app.asar'), `currentSrc must not land in app.asar (${img.currentSrc})`).toBe(false)
+      // Modifying: the prior checks above would pass even for the old buggy
+      // `dmb-resource://.../static/avatars/...` form (missing the appId/root
+      // prefix) as long as it happened to decode — assert the real package
+      // path landed, not just "somewhere non-file/asar".
+      expect(
+        img.currentSrc.includes('/staticimagerelpath/main/'),
+        `currentSrc must land under staticimagerelpath/main/ (got ${img.currentSrc})`,
+      ).toBe(true)
     }
   })
 })

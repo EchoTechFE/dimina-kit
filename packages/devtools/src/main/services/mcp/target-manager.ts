@@ -12,11 +12,15 @@
 
 import CDP from 'chrome-remote-interface'
 import { DEFAULT_CDP_PORT } from '../../../shared/constants.js'
+import { DMB_PAGEFRAME_DOC_NAME } from '../../../shared/dmb-resource-url.js'
 
 const SIMULATOR_URL_PATTERN = 'localhost:7788'
 // Native-host: the real mini-app page runs in a nested render-host <webview>
 // guest whose CDP target URL carries the render frame + the page's bridgeId.
-const RENDER_GUEST_PATTERN = 'pageFrame.html'
+// Import the shared reserved doc name rather than hand-writing a second
+// literal — that duplication is exactly what let this pattern drift out of
+// sync with the actual document URL shape (dmb-resource-url.ts).
+const RENDER_GUEST_PATTERN = DMB_PAGEFRAME_DOC_NAME
 const MAX_BUFFER = 500
 const RECONNECT_INTERVAL_MS = 3000
 
