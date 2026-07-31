@@ -1,0 +1,7 @@
+.wrap {
+  padding: 24rpx;
+}
+.probe-image {
+  width: 120rpx;
+  height: 120rpx;
+}

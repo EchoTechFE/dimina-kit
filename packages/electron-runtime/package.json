@@ -42,6 +42,10 @@
       "types": "./dist/shared/vpath.d.ts",
       "default": "./dist/shared/vpath.js"
     },
+    "./shared/dmb-resource-url": {
+      "types": "./dist/shared/dmb-resource-url.d.ts",
+      "default": "./dist/shared/dmb-resource-url.js"
+    },
     "./main/bridge-router": {
       "types": "./dist/main/ipc/bridge-router.d.ts",
       "default": "./dist/main/ipc/bridge-router.js"

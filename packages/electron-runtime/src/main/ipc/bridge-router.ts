@@ -39,6 +39,8 @@ import type { RuntimeContext } from '../runtime-context.js'
 import type { ConnectionRegistry, DebugTap, Disposable } from '@dimina-kit/electron-deck/main'
 import { createDebugTap } from '@dimina-kit/electron-deck/main'
 import { startDiminaResourceServer, type DiminaResourceServer } from '../services/dimina-resource-server.js'
+import { handleDmbResourceRequest } from '../services/dmb-resource/handle-request.js'
+import { buildRenderHostDocumentUrl } from '../services/dmb-resource/render-host-url.js'
 import {
   buildServiceHostSpawnUrl,
   createServiceHostWindow,
@@ -637,7 +639,7 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
 
   installAppLifecycleDriver(ctx, state)
 
-  installResourceProtocolHandlers(ctx, state)
+  installResourceProtocolHandlers(ctx, state, runtimeAssets.root)
 
   // The currently-selected device (renderer toolbar). Cached here so it can ride
   // the NATIVE_HOST_ENABLED reply (race-free DeviceShell init) and so the
@@ -649,14 +651,19 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
   // nor can it compute file paths (no node:path/url in the guest preload), so it
   // asks main synchronously at install time for the flag + the render-host URLs.
   const onNativeHostQuery = (event: IpcMainEvent): void => {
-    // native-host is the sole runtime: always reply enabled with the render-host
-    // file:// URLs the simulator preload needs. `device` rides along so the
-    // DeviceShell mounts with the right bezel size synchronously (the renderer
-    // pushes SetDeviceInfo before AttachNative, so the cache is populated by the
-    // time the simulator preload runs this sendSync).
+    // native-host is the sole runtime: always reply enabled. `renderHostHtmlUrl`
+    // is a legacy placeholder — createRenderHostUrl builds a per-bridge
+    // `dmb-resource://` document URL so relative package assets resolve on the
+    // same origin as the resource server (WeChat `/__pageframe__/` / Android
+    // `/jssdk/` shape). `device` rides along so DeviceShell mounts with the
+    // right bezel size synchronously (SetDeviceInfo precedes AttachNative).
     const reply: NativeHostConfig = {
       enabled: true,
-      renderHostHtmlUrl: pathToFileURL(runtimeAssets.renderHostHtmlPath).toString(),
+      renderHostHtmlUrl: buildRenderHostDocumentUrl({
+        bridgeId: '_',
+        appId: '_',
+        pagePath: '_',
+      }),
       renderPreloadUrl: pathToFileURL(runtimeAssets.renderHostPreloadPath).toString(),
       device: currentDevice ?? undefined,
     }
@@ -2846,13 +2853,24 @@ function normalizePagePath(p: string): string {
 
 // ── Protocol handlers ───────────────────────────────────────────────────────
 
-function installResourceProtocolHandlers(ctx: RuntimeContext, state: RouterState): void {
+function installResourceProtocolHandlers(
+  ctx: RuntimeContext,
+  state: RouterState,
+  sdkRoot: string,
+): void {
+  // Same-origin document + package assets: `/__sdk__/*` is the runtime dist
+  // (pageFrame / native-host); every other path proxies to the session's
+  // resourceBaseUrl. Mirrors WeChat's `/__pageframe__/` + package root and
+  // Android's `/jssdk/` + `/jsapp/` on one asset origin.
   const handler: ProtocolHandler = async (request) => {
-    const url = new URL(request.url)
-    const ap = resolveAppByBridgeId(state, url.hostname)
-    if (!ap) return new Response('Bridge session not found', { status: 404 })
-    const target = new URL(url.pathname.replace(/^\/+/, '') + url.search, ap.resourceBaseUrl)
-    return fetch(target)
+    return handleDmbResourceRequest({
+      requestUrl: request.url,
+      sdkRoot,
+      resolveSession: (bridgeId) => {
+        const ap = resolveAppByBridgeId(state, bridgeId)
+        return ap ? { resourceBaseUrl: ap.resourceBaseUrl } : null
+      },
+    })
   }
 
   const simulatorSession = electronSession.fromPartition(SHARED_MINIAPP_PARTITION)

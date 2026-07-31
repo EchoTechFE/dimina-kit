@@ -81,9 +81,11 @@ export interface RelaunchPayload {
 export const CHANNELS = BRIDGE_CHANNELS
 
 /**
- * Reply to a `NATIVE_HOST_ENABLED` sendSync. Main supplies the render-host
- * file:// URLs (computed with node:path/url, which the simulator webview's
- * preload lacks) so the preload can build the native-host bridge.
+ * Reply to a `NATIVE_HOST_ENABLED` sendSync. Main supplies render-host asset
+ * URLs (preload still needs a `file://` path for the guest preload script).
+ * The pageFrame document itself is built per-bridge as `dmb-resource://…`
+ * via `buildRenderHostDocumentUrl` — `renderHostHtmlUrl` is only a legacy
+ * placeholder kept for the config shape.
  */
 export interface NativeHostConfig {
   enabled: boolean

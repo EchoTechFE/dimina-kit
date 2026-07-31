@@ -1,33 +1,37 @@
 import { app, protocol } from 'electron'
+import { ELECTRON_RUNTIME_SCHEMES } from 'dimina-electron-runtime'
 import { DEFAULT_CDP_PORT } from '../../shared/constants.js'
 import { loadWorkbenchSettings } from '../services/settings/index.js'
 
 let difileSchemeRegistered = false
 
 /**
- * Register `difile://` as a privileged scheme so `simSession.protocol.handle`
- * can serve `difile://devtools/{uuid}` URLs from the simulator webview without
- * tripping CSP / fetch-API restrictions. Must be called before `app.whenReady`.
+ * Register privileged custom schemes before `app.whenReady`.
  *
- * Idempotent — subsequent calls are no-ops because Electron throws if the same
- * scheme is registered twice.
+ * Electron allows only one process-global `registerSchemesAsPrivileged` call, so
+ * this merges the runtime's `difile` + `dmb-resource` descriptors (required for
+ * render-host documents / ES module fetches on `dmb-resource://`) and keeps
+ * `bypassCSP` on `difile` for the simulator temp-file path.
+ *
+ * Idempotent — subsequent calls are no-ops because Electron throws if schemes
+ * are registered twice.
  */
 export function registerDifileScheme(): void {
   if (difileSchemeRegistered) return
   difileSchemeRegistered = true
-  protocol.registerSchemesAsPrivileged([
-    {
-      scheme: 'difile',
-      privileges: {
-        standard: true,
-        secure: true,
-        supportFetchAPI: true,
-        stream: true,
-        bypassCSP: true,
-        corsEnabled: true,
-      },
-    },
-  ])
+  protocol.registerSchemesAsPrivileged(
+    ELECTRON_RUNTIME_SCHEMES.map((entry) => (
+      entry.scheme === 'difile'
+        ? {
+            scheme: entry.scheme,
+            privileges: {
+              ...entry.privileges,
+              bypassCSP: true,
+            },
+          }
+        : { scheme: entry.scheme, privileges: { ...entry.privileges } }
+    )),
+  )
 }
 
 /**

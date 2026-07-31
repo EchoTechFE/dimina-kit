@@ -1,0 +1,9 @@
+<view class="wrap">
+  <image
+    class="probe-image"
+    src="{{avatarSrc}}"
+    mode="aspectFit"
+    data-testid="probe-image"
+  />
+  <text>static-image-relpath</text>
+</view>
