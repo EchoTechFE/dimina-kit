@@ -1,6 +1,5 @@
 import { access, readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
-import { createRequire } from 'node:module'
 import path from 'node:path'
 
 function printUsage() {
@@ -40,31 +39,28 @@ async function exists(p) {
 
 // package.json only records the declared semver *range* (e.g. "^3.5.39");
 // for a dep whose major is >=1 that range also matches later minors
-// installed independently on each side. Walk the actual node_modules
-// resolution each side's own package.json would use, and climb to the
-// nearest package.json whose name matches (not just the first package.json
-// found, which could belong to a nested dependency).
+// installed independently on each side. Find the installed package directory
+// by walking node_modules/<name>/package.json upward from the anchor — the
+// same directory order Node's resolver uses. Deliberately NOT
+// createRequire().resolve(): version comparison only needs the package
+// directory, not a loadable entry point, and an ESM-only exports map (no
+// `require` condition — e.g. oxc-walker@1.1.x) makes require-resolution
+// throw ERR_PACKAGE_PATH_NOT_EXPORTED for a perfectly installed package.
 //
 // requiredPrefix guards the upstream (dimina/fe) side specifically: dimina/fe
 // is nested inside this repo, so if its own node_modules isn't installed,
-// Node's resolution walks up past it and can silently land in kit's own
-// hoisted node_modules — "resolved" would then just be comparing kit against
+// the walk climbs up past it and can silently land in kit's own hoisted
+// node_modules — "resolved" would then just be comparing kit against
 // itself and reporting false alignment. Reject any resolution that doesn't
 // land under dimina/fe instead of treating it as a valid answer.
 async function resolveInstalledVersion(anchorPackageJsonPath, depName, requiredPrefix) {
-  let entry
-  try {
-    entry = createRequire(anchorPackageJsonPath).resolve(depName)
-  } catch {
-    return null
-  }
-  if (requiredPrefix && !entry.startsWith(requiredPrefix + path.sep)) {
-    return null
-  }
-  let dir = path.dirname(entry)
+  let dir = path.dirname(anchorPackageJsonPath)
   for (let hop = 0; hop < 16; hop++) {
-    const candidate = path.join(dir, 'package.json')
+    const candidate = path.join(dir, 'node_modules', ...depName.split('/'), 'package.json')
     if (await exists(candidate)) {
+      if (requiredPrefix && !candidate.startsWith(requiredPrefix + path.sep)) {
+        return null
+      }
       const pkg = await readJson(candidate)
       if (pkg.name === depName) return pkg.version
     }
