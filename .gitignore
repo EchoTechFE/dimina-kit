@@ -30,3 +30,6 @@ coverage/
 # compiler pool-node 测试脚手架临时目录 / devkit 覆盖率明细产物
 .tmp-pool-node/
 coverage-detail/
+
+# scripts/patrol.sh 的只读巡检输出
+patrol-reports/
