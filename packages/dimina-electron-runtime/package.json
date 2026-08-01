@@ -42,6 +42,10 @@
       "types": "./dist/shared/vpath.d.ts",
       "default": "./dist/shared/vpath.js"
     },
+    "./shared/node-bindings": {
+      "types": "./dist/shared/node-bindings.d.ts",
+      "default": "./dist/shared/node-bindings.js"
+    },
     "./shared/dmb-resource-url": {
       "types": "./dist/shared/dmb-resource-url.d.ts",
       "default": "./dist/shared/dmb-resource-url.js"

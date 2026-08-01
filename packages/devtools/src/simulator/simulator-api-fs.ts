@@ -18,8 +18,9 @@
  */
 
 import type { MiniAppContext } from './types'
-import { bindCallbacks, notSupportedApi } from './simulator-api-helpers'
-import { resolveVPath, type ResolvedVPath } from '../shared/vpath.js'
+import { bindCallbacks } from './simulator-api-helpers'
+import { getNodeBindings } from '../shared/node-bindings.js'
+import { resolveVPath, sandboxBase, type ResolvedVPath } from '../shared/vpath.js'
 import { resolveTempFilePath } from './temp-files'
 
 /**
@@ -42,11 +43,23 @@ function isArrayBuffer(value: unknown): value is ArrayBuffer {
 	return Object.prototype.toString.call(value) === '[object ArrayBuffer]'
 }
 
+/**
+ * `Buffer` for Blob materialization: the simulator document has no global
+ * `Buffer` (nodeIntegration is off and the vite bundle does not polyfill
+ * it), so take the constructor from the preload-published node bindings;
+ * vitest/node contexts have the global.
+ */
+const BufferImpl: typeof Buffer | undefined =
+	getNodeBindings().buffer?.Buffer ?? (typeof Buffer !== 'undefined' ? Buffer : undefined)
+
 async function blobToBuffer(blob: Blob): Promise<Buffer> {
+	if (!BufferImpl) {
+		throw new Error('Buffer binding unavailable')
+	}
 	const readable = blob as Blob & { arrayBuffer?: () => Promise<ArrayBuffer> }
 	if (typeof readable.arrayBuffer === 'function') {
 		const ab = await readable.arrayBuffer()
-		return Buffer.from(new Uint8Array(ab))
+		return BufferImpl.from(new Uint8Array(ab))
 	}
 
 	if (typeof FileReader !== 'function') {
@@ -62,19 +75,33 @@ async function blobToBuffer(blob: Blob): Promise<Buffer> {
 				reject(new Error('Blob read did not return an ArrayBuffer'))
 				return
 			}
-			resolve(Buffer.from(new Uint8Array(result)))
+			resolve(BufferImpl.from(new Uint8Array(result)))
 		}
 		reader.readAsArrayBuffer(blob)
 	})
 }
 
-// In Electron renderer, Node.js built-ins are available via require.
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const _fs: typeof import('fs') = (typeof require !== 'undefined') ? require('fs') : null as unknown as typeof import('fs')
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const _path: typeof import('path') = (typeof require !== 'undefined') ? require('path') : null as unknown as typeof import('path')
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const _crypto: typeof import('crypto') = (typeof require !== 'undefined') ? require('crypto') : null as unknown as typeof import('crypto')
+/**
+ * Real Node built-ins: the preload-published bindings in the simulator
+ * document (nodeIntegration is off there and the vite bundle stubs `node:*`
+ * imports), `require` under vitest/node. Each candidate is validated by
+ * probing a required member function — the vite stubs are truthy objects, so
+ * truthiness alone would wave a dead module through and the guard below
+ * (`guardFsAvailable`) would then let calls crash mid-handler.
+ */
+function resolveNodeModule<T>(fromBindings: T | undefined, name: string, probe: (mod: T) => boolean): T {
+	if (fromBindings && probe(fromBindings)) return fromBindings
+	if (typeof require !== 'undefined') {
+		// eslint-disable-next-line @typescript-eslint/no-require-imports
+		const mod = require(name) as T
+		if (mod && probe(mod)) return mod
+	}
+	return null as unknown as T
+}
+
+const _fs = resolveNodeModule(getNodeBindings().fs, 'fs', m => typeof m.readFile === 'function')
+const _path = resolveNodeModule(getNodeBindings().path, 'path', m => typeof m.join === 'function')
+const _crypto = resolveNodeModule(getNodeBindings().crypto, 'crypto', m => typeof m.createHash === 'function')
 
 type FsCallbacks = ReturnType<typeof bindCallbacks>
 type NodeStats = import('fs').Stats
@@ -99,13 +126,62 @@ function guardFsAvailable(apiName: string, cbs: FsCallbacks): boolean {
 	return true
 }
 
-/** Resolves `p` via `resolveVPath`, or reports `${apiName}:fail invalid or unsafe path` and runs `complete`. */
+/**
+ * True when any path component from the sandbox base down to `realPath` is a
+ * symlink. `resolveVPath` validates the requested STRING (no `..`, stays
+ * under the base after normalize) but never inspects the disk — a symlink
+ * planted inside `usr/` would otherwise let Node's default follow-symlinks
+ * behavior read or write through to a target outside the sandbox. `lstat`
+ * (not `stat`/`exists`) sees the link itself, so dangling links — which
+ * `fs.writeFile` would still follow to CREATE the outside target — are
+ * caught too. The base itself may legitimately be a symlink (macOS tmpdir);
+ * only components below it are checked.
+ */
+function containsSymlink(realPath: string): boolean {
+	const rel = _path.relative(sandboxBase(), realPath)
+	if (!rel || rel.startsWith('..')) return false
+	let cur = sandboxBase()
+	for (const seg of rel.split(_path.sep)) {
+		cur = _path.join(cur, seg)
+		let entry: import('fs').Stats
+		try {
+			entry = _fs.lstatSync(cur)
+		} catch {
+			// Nothing on disk from here down — nothing left to follow.
+			return false
+		}
+		if (entry.isSymbolicLink()) return true
+	}
+	return false
+}
+
+/**
+ * Resolves `p` via `resolveVPath` and asserts the resolved disk path does not
+ * pass through a sandbox-internal symlink, or reports `${apiName}:fail
+ * invalid or unsafe path` and runs `complete`.
+ */
 function resolveOrBail(p: unknown, apiName: string, cbs: FsCallbacks): ResolvedVPath | undefined {
 	const v = resolveVPath(p)
-	if (v) return v
+	if (v && (!v.realPath || !_fs || !containsSymlink(v.realPath))) return v
 	cbs.onFail?.({ errMsg: `${apiName}:fail invalid or unsafe path` })
 	cbs.onComplete?.()
 	return undefined
+}
+
+/**
+ * wx `Stats` payload: numeric mode bits, byte size, SECOND-unit epoch
+ * timestamps — wx and the dimina native clients all report seconds, while
+ * Node's `atimeMs`/`mtimeMs` are milliseconds.
+ */
+function toWxStats(s: NodeStats): Record<string, unknown> {
+	return {
+		size: s.size,
+		mode: s.mode,
+		lastAccessedTime: Math.floor(s.atimeMs / 1000),
+		lastModifiedTime: Math.floor(s.mtimeMs / 1000),
+		isFile: s.isFile(),
+		isDirectory: s.isDirectory(),
+	}
 }
 
 /**
@@ -168,7 +244,16 @@ function mkdirpThenWrite(
 			cbs.onComplete?.()
 			return
 		}
-		writeFn(nodeComplete(apiName, cbs, () => okExtra))
+		// fs.writeFile/copyFile validate their arguments synchronously (a
+		// numeric `data`, an unknown `encoding`); this callback runs after the
+		// wire handler's own try/catch has already returned, so an unguarded
+		// throw here would leave the call with no verdict at all.
+		try {
+			writeFn(nodeComplete(apiName, cbs, () => okExtra))
+		} catch (err) {
+			cbs.onFail?.({ errMsg: `${apiName}:fail ${err instanceof Error ? err.message : String(err)}` })
+			cbs.onComplete?.()
+		}
 	})
 }
 
@@ -240,53 +325,78 @@ export function fsStat(
 	}
 	const resolved = v.realPath
 	if (recursive) {
-		// Build a map of path → stat info for the directory tree
+		// Map of RELATIVE path → stats for the tree, keyed the way wx and the
+		// dimina native clients key it: the queried directory itself as "."
+		// plus `relative(root, entry)`-style descendants — never a host
+		// absolute path (that would leak the sandbox location to mini-program
+		// code). Any readdir/stat error fails the whole call: silently
+		// dropping a failed entry would present an incomplete tree as ok.
 		const statsMap: Record<string, unknown> = {}
+		let settled = false
+		const failOnce = (err: Error) => {
+			if (settled) return
+			settled = true
+			onFail?.({ errMsg: `fsStat:fail ${err.message}` })
+			onComplete?.()
+		}
+		const okOnce = () => {
+			if (settled) return
+			settled = true
+			onSuccess?.({ stats: statsMap, errMsg: 'fsStat:ok' })
+			onComplete?.()
+		}
+		const relKey = (full: string): string => {
+			const rel = _path.relative(resolved, full)
+			return rel === '' ? '.' : rel.split(_path.sep).join('/')
+		}
+		// `lstat`, never `stat`: `resolveOrBail`'s symlink fence only inspects
+		// the REQUESTED root path — a symlink discovered mid-walk would
+		// otherwise be followed (leaking sandbox-external metadata into the
+		// map) while its Dirent still reads as a non-directory (leaving a
+		// truncated tree). A symlink anywhere in the walk fails the whole
+		// call; the recursion decision uses the same lstat result.
+		const statInto = (full: string, cb: (err: Error | null, isDirectory?: boolean) => void) => {
+			_fs.lstat(full, (err, s) => {
+				if (err) { cb(err); return }
+				if (s.isSymbolicLink()) {
+					cb(new Error('invalid or unsafe path'))
+					return
+				}
+				statsMap[relKey(full)] = toWxStats(s)
+				cb(null, s.isDirectory())
+			})
+		}
 		const walkDir = (dir: string, cb: (err: Error | null) => void) => {
 			_fs.readdir(dir, { withFileTypes: true }, (err, entries) => {
 				if (err) { cb(err); return }
 				let pending = entries.length
 				if (pending === 0) { cb(null); return }
+				let erred = false
+				const done = (e: Error | null) => {
+					if (erred) return
+					if (e) { erred = true; cb(e); return }
+					if (--pending === 0) cb(null)
+				}
 				for (const entry of entries) {
 					const full = _path.join(dir, entry.name)
-					_fs.stat(full, (statErr, s) => {
-						if (!statErr) {
-							statsMap[full] = {
-								size: s.size,
-								mode: s.mode,
-								lastAccessedTime: s.atimeMs,
-								lastModifiedTime: s.mtimeMs,
-								isFile: s.isFile(),
-								isDirectory: s.isDirectory(),
-							}
-						}
-						if (entry.isDirectory()) {
-							walkDir(full, () => { if (--pending === 0) cb(null) })
-						} else {
-							if (--pending === 0) cb(null)
-						}
+					statInto(full, (statErr, isDirectory) => {
+						if (statErr) { done(statErr); return }
+						if (isDirectory) walkDir(full, done)
+						else done(null)
 					})
 				}
 			})
 		}
-		walkDir(resolved, (err) => {
-			if (err) {
-				onFail?.({ errMsg: `fsStat:fail ${err.message}` })
-			} else {
-				onSuccess?.({ stats: statsMap, errMsg: 'fsStat:ok' })
-			}
-			onComplete?.()
+		statInto(resolved, (rootErr) => {
+			if (rootErr) { failOnce(rootErr); return }
+			walkDir(resolved, (err) => {
+				if (err) failOnce(err)
+				else okOnce()
+			})
 		})
 	} else {
 		_fs.stat(resolved, nodeComplete('fsStat', cbs, (s: NodeStats) => ({
-			stats: {
-				size: s.size,
-				mode: s.mode,
-				lastAccessedTime: s.atimeMs,
-				lastModifiedTime: s.mtimeMs,
-				isFile: s.isFile(),
-				isDirectory: s.isDirectory(),
-			},
+			stats: toWxStats(s),
 		})))
 	}
 }
@@ -467,9 +577,16 @@ export function fsRmdir(
 	const v = resolveOrBail(dirPath, 'fsRmdir', cbs)
 	if (!v) return
 	if (!ensureWritable(v, 'fsRmdir', cbs)) return
-	// Node 14+: rm with recursive; older Node: rmdir with recursive flag
-	const rmFn = (_fs as typeof _fs & { rm?: typeof _fs.rmdir }).rm ?? _fs.rmdir
-	rmFn(v.realPath, { recursive } as Parameters<typeof _fs.rmdir>[1], nodeComplete('fsRmdir', cbs))
+	// The two cases need different Node primitives: `fs.rm` without
+	// `recursive` refuses directories outright (ERR_FS_EISDIR) even when
+	// empty, while wx's non-recursive rmdir removes an empty directory and
+	// fails only on a non-empty one — exactly `fs.rmdir`'s contract.
+	if (recursive) {
+		const rmFn = (_fs as typeof _fs & { rm?: typeof _fs.rmdir }).rm ?? _fs.rmdir
+		rmFn(v.realPath, { recursive: true } as Parameters<typeof _fs.rmdir>[1], nodeComplete('fsRmdir', cbs))
+	} else {
+		_fs.rmdir(v.realPath, nodeComplete('fsRmdir', cbs))
+	}
 }
 
 export function fsReaddir(
@@ -510,22 +627,22 @@ export function fsGetFileInfo(
 	if (guardFsAvailable('fsGetFileInfo', cbs)) return
 	const v = resolveOrBail(filePath, 'fsGetFileInfo', cbs)
 	if (!v) return
+	// wx and every dimina native client default digestAlgorithm to md5 and
+	// always include the digest — a missing digest is a fail, not a silently
+	// smaller success payload.
+	const algorithm = digestAlgorithm === 'sha1' ? 'sha1' : 'md5'
 	if (v.kind === 'tmp') {
 		_tmpBytes(filePath).then(
 			(buf) => {
-				const result: Record<string, unknown> = { size: buf.length, errMsg: 'fsGetFileInfo:ok' }
-				if (digestAlgorithm) {
-					try {
-						const hash = _crypto.createHash(digestAlgorithm === 'md5' ? 'md5' : 'sha1')
-						hash.update(buf)
-						result.digest = hash.digest('hex')
-					}
-					catch {
-						// crypto unavailable — fall through without digest.
-					}
+				try {
+					const hash = _crypto.createHash(algorithm)
+					hash.update(buf)
+					onSuccess?.({ size: buf.length, digest: hash.digest('hex'), errMsg: 'fsGetFileInfo:ok' })
+					onComplete?.()
+				} catch (hashErr) {
+					onFail?.({ errMsg: `fsGetFileInfo:fail ${(hashErr as Error).message}` })
+					onComplete?.()
 				}
-				onSuccess?.(result)
-				onComplete?.()
 			},
 			tmpFailHandler('fsGetFileInfo', cbs),
 		)
@@ -543,29 +660,22 @@ export function fsGetFileInfo(
 			onComplete?.()
 			return
 		}
-		const result: Record<string, unknown> = { size: s.size, errMsg: 'fsGetFileInfo:ok' }
-		if (digestAlgorithm) {
-			// Compute digest if crypto is available
-			try {
-				const hash = _crypto.createHash(digestAlgorithm === 'md5' ? 'md5' : 'sha1')
-				const stream = _fs.createReadStream(resolved)
-				stream.on('data', (chunk) => hash.update(chunk as Buffer))
-				stream.on('end', () => {
-					result.digest = hash.digest('hex')
-					onSuccess?.(result)
-					onComplete?.()
-				})
-				stream.on('error', (hashErr) => {
-					onFail?.({ errMsg: `fsGetFileInfo:fail ${hashErr.message}` })
-					onComplete?.()
-				})
-				return
-			} catch {
-				// crypto not available, skip digest
-			}
+		try {
+			const hash = _crypto.createHash(algorithm)
+			const stream = _fs.createReadStream(resolved)
+			stream.on('data', (chunk) => hash.update(chunk as Buffer))
+			stream.on('end', () => {
+				onSuccess?.({ size: s.size, digest: hash.digest('hex'), errMsg: 'fsGetFileInfo:ok' })
+				onComplete?.()
+			})
+			stream.on('error', (hashErr) => {
+				onFail?.({ errMsg: `fsGetFileInfo:fail ${hashErr.message}` })
+				onComplete?.()
+			})
+		} catch (hashErr) {
+			onFail?.({ errMsg: `fsGetFileInfo:fail ${(hashErr as Error).message}` })
+			onComplete?.()
 		}
-		onSuccess?.(result)
-		onComplete?.()
 	})
 }
 
@@ -581,9 +691,47 @@ export function fsGetFileInfo(
  *   - source from `_store/` or the user-data area is copied byte-for-byte to a
  *     freshly minted `_store/{uuid}.{ext}` entry under the sandbox base.
  */
+/**
+ * Resolves the saveFile destination. wx contract: an explicit `filePath`
+ * names the exact destination and is echoed back as `savedFilePath` — it
+ * goes through the same validator + writable gate as every other
+ * write-class destination, so runtime-owned `_tmp/` / `_store/` targets
+ * fail with permission denied. Only when `filePath` is omitted is a fresh
+ * `_store/{uuid}` vpath minted. Reports fail + complete and returns
+ * undefined when the destination is invalid.
+ */
+function resolveSaveFileDestination(
+	tempFilePath: string,
+	filePath: string | undefined,
+	cbs: FsCallbacks,
+): { savedFilePath: string; destReal: string } | undefined {
+	if (typeof filePath === 'string' && filePath) {
+		const dest = resolveOrBail(filePath, 'fsSaveFile', cbs)
+		if (!dest) return undefined
+		if (!ensureWritable(dest, 'fsSaveFile', cbs)) return undefined
+		return { savedFilePath: filePath, destReal: dest.realPath }
+	}
+	const ext = _path.extname(tempFilePath) || ''
+	const id = _crypto.randomUUID() + ext
+	const savedFilePath = `difile://_store/${id}`
+	const destResolved = resolveVPath(savedFilePath)
+	if (!destResolved || !destResolved.realPath) {
+		// Defensive: a freshly minted vpath must always resolve.
+		cbs.onFail?.({ errMsg: 'fsSaveFile:fail unable to allocate destination' })
+		cbs.onComplete?.()
+		return undefined
+	}
+	if (containsSymlink(destResolved.realPath)) {
+		cbs.onFail?.({ errMsg: 'fsSaveFile:fail invalid or unsafe path' })
+		cbs.onComplete?.()
+		return undefined
+	}
+	return { savedFilePath, destReal: destResolved.realPath }
+}
+
 export function fsSaveFile(
 	this: MiniAppContext,
-	{ tempFilePath, filePath: _filePath, success, fail, complete }: {
+	{ tempFilePath, filePath, success, fail, complete }: {
 		tempFilePath: string
 		filePath?: string
 		success?: unknown
@@ -591,23 +739,15 @@ export function fsSaveFile(
 		complete?: unknown
 	},
 ) {
-	void _filePath
 	const cbs = bindCallbacks(this, { success, fail, complete })
 	const { onFail, onComplete } = cbs
 	if (guardFsAvailable('fsSaveFile', cbs)) return
 	const src = resolveOrBail(tempFilePath, 'fsSaveFile', cbs)
 	if (!src) return
-	const ext = _path.extname(tempFilePath) || ''
-	const id = _crypto.randomUUID() + ext
-	const savedFilePath = `difile://_store/${id}`
-	const destResolved = resolveVPath(savedFilePath)
-	if (!destResolved || !destResolved.realPath) {
-		// Defensive: a freshly minted vpath must always resolve.
-		onFail?.({ errMsg: 'fsSaveFile:fail unable to allocate destination' })
-		onComplete?.()
-		return
-	}
-	const destReal = destResolved.realPath
+
+	const destination = resolveSaveFileDestination(tempFilePath, filePath, cbs)
+	if (!destination) return
+	const { savedFilePath, destReal } = destination
 
 	if (src.kind === 'tmp') {
 		// Materialize the renderer Blob into _store on disk.
@@ -620,6 +760,28 @@ export function fsSaveFile(
 	if (!src.realPath) {
 		onFail?.({ errMsg: 'fsSaveFile:fail invalid src path' })
 		onComplete?.()
+		return
+	}
+	if (src.realPath === destReal) {
+		// Source and destination normalize to the same file: saving a file
+		// onto itself is a defined no-op success, not whatever the host
+		// Node's same-file copyFile happens to do. Still a no-op only for a
+		// real file — resolveOrBail validates the path string, not the disk,
+		// so a missing or directory source must fail here like any other save.
+		_fs.stat(src.realPath, (statErr, st) => {
+			if (statErr) {
+				onFail?.({ errMsg: `fsSaveFile:fail ${statErr.message}` })
+				onComplete?.()
+				return
+			}
+			if (!st.isFile()) {
+				onFail?.({ errMsg: `fsSaveFile:fail illegal operation on a directory, copyfile '${tempFilePath}'` })
+				onComplete?.()
+				return
+			}
+			cbs.onSuccess?.({ savedFilePath, errMsg: 'fsSaveFile:ok' })
+			onComplete?.()
+		})
 		return
 	}
 	mkdirpThenWrite(destReal, 'fsSaveFile', cbs, done => _fs.copyFile(src.realPath!, destReal, done), { savedFilePath })
@@ -636,7 +798,7 @@ export function fsGetSavedFileList(
 	{ success, fail, complete }: { success?: unknown; fail?: unknown; complete?: unknown } = {},
 ) {
 	const cbs = bindCallbacks(this, { success, fail, complete })
-	const { onSuccess, onComplete } = cbs
+	const { onSuccess, onFail, onComplete } = cbs
 	if (guardFsAvailable('fsGetSavedFileList', cbs)) return
 	const storeVpath = resolveVPath('difile://_store/')
 	const storeDir = storeVpath?.realPath
@@ -647,8 +809,14 @@ export function fsGetSavedFileList(
 	}
 	_fs.readdir(storeDir, (err, files) => {
 		if (err) {
-			// Directory may not exist yet — return empty list
-			onSuccess?.({ fileList: [], errMsg: 'fsGetSavedFileList:ok' })
+			// Only "the store directory does not exist yet" is a legitimate
+			// empty list; any other readdir error (ENOTDIR, EACCES, EIO)
+			// masked as an empty success would hide real breakage.
+			if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+				onSuccess?.({ fileList: [], errMsg: 'fsGetSavedFileList:ok' })
+			} else {
+				onFail?.({ errMsg: `fsGetSavedFileList:fail ${err.message}` })
+			}
 			onComplete?.()
 			return
 		}
@@ -659,17 +827,26 @@ export function fsGetSavedFileList(
 			return
 		}
 		const fileList: Array<{ filePath: string; size: number; createTime: number }> = []
+		let settled = false
 		for (const name of files) {
 			const full = _path.join(storeDir, name)
 			_fs.stat(full, (statErr, s) => {
-				if (!statErr) {
-					fileList.push({
-						filePath: `difile://_store/${name}`,
-						size: s.size,
-						createTime: s.birthtimeMs,
-					})
+				if (settled) return
+				if (statErr) {
+					// A partial list would misrepresent the store's contents.
+					settled = true
+					onFail?.({ errMsg: `fsGetSavedFileList:fail ${statErr.message}` })
+					onComplete?.()
+					return
 				}
+				fileList.push({
+					filePath: `difile://_store/${name}`,
+					size: s.size,
+					// wx createTime is a seconds-unit epoch.
+					createTime: Math.floor(s.birthtimeMs / 1000),
+				})
 				if (--pending === 0) {
+					settled = true
 					onSuccess?.({ fileList, errMsg: 'fsGetSavedFileList:ok' })
 					onComplete?.()
 				}
@@ -715,4 +892,23 @@ export function fsTruncate(
 	_fs.truncate(v.realPath, length, nodeComplete('fsTruncate', cbs))
 }
 
-export const fsUnzip = notSupportedApi('fsUnzip')
+/**
+ * Synchronous "vpath → bytes" read for consumers that must resolve within one
+ * task (saveImageToPhotosAlbum builds its download anchor synchronously so
+ * its success/fail verdict precedes `complete`). Returns null when Node fs is
+ * unavailable, the vpath does not resolve to a disk-backed file (`_tmp/*`
+ * bytes live in the renderer Blob registry — resolve those through
+ * `resolveTempFilePath` instead), the resolved path passes through a
+ * sandbox-internal symlink, or the read itself fails.
+ */
+export function readVPathBytesSync(p: unknown): Buffer | null {
+	if (!_fs) return null
+	const v = resolveVPath(p)
+	if (!v?.realPath) return null
+	if (containsSymlink(v.realPath)) return null
+	try {
+		return _fs.readFileSync(v.realPath)
+	} catch {
+		return null
+	}
+}

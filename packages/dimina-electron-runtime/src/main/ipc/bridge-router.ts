@@ -2372,6 +2372,18 @@ function handleApiResponse(
     return
   }
 
+  // Handler-received ack: the simulator located a live handler and wired its
+  // callbacks, so the call can no longer be "unhandled" — disarm the
+  // no-handler watchdog but keep the pending entry alive for the real
+  // verdict. Firing a timeout failure here while a slow handler (large disk
+  // write, a modal awaiting the user) still runs would tell the service the
+  // operation failed even though the underlying work completes afterwards.
+  if (payload.ack) {
+    clearTimeout(pending.timer)
+    pending.timer = undefined
+    return
+  }
+
   // Persistent-subscription fire (keep: true, e.g. audioListen). Re-fire the
   // service-side success callback on EVERY response without tearing the call
   // down: do not delete pending, do not fire `complete`. The 5s no-handler

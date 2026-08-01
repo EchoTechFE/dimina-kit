@@ -73,7 +73,7 @@
     "less": "^4.8.1",
     "magic-string": "^0.30.21",
     "memfs": "^4.57.8",
-    "oxc-parser": "^0.139.0",
+    "oxc-parser": "^0.140.0",
     "oxc-walker": "^1.1.1",
     "path-browserify": "^1.0.1",
     "postcss": "^8.5.25",
@@ -84,7 +84,7 @@
     "util": "^0.12.5"
   },
   "peerDependencies": {
-    "@oxc-parser/binding-wasm32-wasi": "^0.139.0",
+    "@oxc-parser/binding-wasm32-wasi": "^0.140.0",
     "esbuild-wasm": "^0.28.1"
   },
   "peerDependenciesMeta": {

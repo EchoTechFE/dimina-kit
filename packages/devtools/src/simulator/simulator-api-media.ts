@@ -9,7 +9,8 @@
 import type { MiniAppContext } from './types'
 import { bindDomEvents, type EventBridgeDisposer } from './event-bridge'
 import { bindCallbacks } from './simulator-api-helpers'
-import { createTempFilePath } from './temp-files'
+import { readVPathBytesSync } from './simulator-api-fs'
+import { createTempFilePath, resolveTempFilePath } from './temp-files'
 
 // ─── shared file-picker scaffolding ───────────────────────────────────────
 //
@@ -185,12 +186,61 @@ export function saveImageToPhotosAlbum(
 ) {
 	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
 
-	try {
+	const triggerDownload = (href: string) => {
 		const a = document.createElement('a')
-		a.href = filePath
+		a.href = href
 		a.download = 'image'
 		a.click()
-		onSuccess?.({ errMsg: 'saveImageToPhotosAlbum:ok' })
+	}
+
+	if (typeof filePath === 'string' && filePath.startsWith('difile://_tmp/')) {
+		// The simulator's temp-file scheme (chooseImage / chooseMedia /
+		// compressImage mint these via createTempFilePath): the bytes live in
+		// the renderer Blob registry, so resolution is async. The async branch
+		// owns its whole verdict — success/fail strictly before complete.
+		resolveTempFilePath(filePath)
+			.then(
+				blob =>
+					new Promise<string>((resolve, reject) => {
+						const reader = new FileReader()
+						reader.onerror = () => reject(reader.error ?? new Error('blob read failed'))
+						reader.onload = () => resolve(String(reader.result))
+						reader.readAsDataURL(blob)
+					}),
+			)
+			.then(
+				(href) => {
+					triggerDownload(href)
+					onSuccess?.({ errMsg: 'saveImageToPhotosAlbum:ok' })
+					onComplete?.()
+				},
+				(err: unknown) => {
+					const msg = err instanceof Error ? err.message : String(err)
+					onFail?.({ errMsg: `saveImageToPhotosAlbum:fail ${msg}` })
+					onComplete?.()
+				},
+			)
+		return
+	}
+
+	try {
+		if (typeof filePath === 'string' && filePath.startsWith('difile://')) {
+			const bytes = readVPathBytesSync(filePath)
+			if (bytes) {
+				// A data: href keeps the whole verdict synchronous (success before
+				// complete) without needing URL.createObjectURL.
+				triggerDownload(`data:application/octet-stream;base64,${bytes.toString('base64')}`)
+				onSuccess?.({ errMsg: 'saveImageToPhotosAlbum:ok' })
+			} else {
+				onFail?.({ errMsg: 'saveImageToPhotosAlbum:fail no such file' })
+			}
+		} else {
+			// Real dimina clients (Android / iOS / Harmony) only accept a local
+			// file path — a dataURL, remote http(s) URL, or blob: URL (which no
+			// simulator code path ever mints as a filePath) fails on device, so
+			// the simulator must not "succeed" on it either.
+			onFail?.({ errMsg: 'saveImageToPhotosAlbum:fail invalid file path' })
+		}
 	} catch (error) {
 		onFail?.({ errMsg: `saveImageToPhotosAlbum:fail ${(error as Error).message}` })
 	}

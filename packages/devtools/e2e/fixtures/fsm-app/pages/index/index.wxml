@@ -1,0 +1,2 @@
+<view class="page-marker page-index">FSM PAGE</view>
+<text class="fsm-result">{{resultJson}}</text>

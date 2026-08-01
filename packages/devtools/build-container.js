@@ -27,31 +27,64 @@ const SIMULATOR_DIR = join(__dirname, 'src/simulator')
 
 // Devtools-specific API files to inject into dimina source before building.
 // These files are maintained in simulator/service-apis/ instead of upstream dimina.
+// `preserveOriginalAs`: before the overlay lands on `dest`, the upstream
+// original is copied to this sibling path so the overlay can import and
+// delegate to it (the file shim re-exports upstream's async FSM surface).
 const INJECTED_FILES = [
-  { src: join(SIMULATOR_DIR, 'service-apis/file/index.js'), dest: join(SERVICE_SRC, 'src/api/core/file/index.js') },
+  {
+    src: join(SIMULATOR_DIR, 'service-apis/file/index.js'),
+    dest: join(SERVICE_SRC, 'src/api/core/file/index.js'),
+    preserveOriginalAs: join(SERVICE_SRC, 'src/api/core/file/upstream-impl.js'),
+  },
   { src: join(SIMULATOR_DIR, 'service-apis/audio/index.js'), dest: join(SERVICE_SRC, 'src/api/core/media/audio/index.js') },
   { src: join(SIMULATOR_DIR, 'service-apis/network/upload/index.js'), dest: join(SERVICE_SRC, 'src/api/core/network/upload/index.js') },
   { src: join(SIMULATOR_DIR, 'service-apis/network/websocket/index.js'), dest: join(SERVICE_SRC, 'src/api/core/network/websocket/index.js') },
 ]
 
-const injectedFileBackups = new Map()
+// Transaction journal for the injected-file overlay: one entry per path this
+// run has actually TOUCHED, recorded before mutating it. Cleanup restores
+// journal entries only (in reverse order) — iterating INJECTED_FILES there
+// instead would conflate "never processed" with "did not exist" and delete
+// upstream files a mid-loop injection failure never touched.
+const injectionJournal = []
 
 function injectFiles() {
-  for (const { src, dest } of INJECTED_FILES) {
-    injectedFileBackups.set(dest, existsSync(dest) ? readFileSync(dest) : null)
+  for (const { src, dest, preserveOriginalAs } of INJECTED_FILES) {
+    // A leftover backup file means a previous injected build never cleaned
+    // up (crash/kill between inject and cleanup). Copying the current dest
+    // over it would capture the OVERLAY as the "upstream original" and the
+    // shim would then delegate to itself — fail loudly instead.
+    if (preserveOriginalAs && existsSync(preserveOriginalAs)) {
+      throw new Error(
+        `${preserveOriginalAs} already exists — a previous injected build did not clean up. ` +
+          `Restore the dimina submodule (e.g. \`git -C dimina checkout -- fe/\` and remove the leftover file) before rebuilding.`,
+      )
+    }
+    if (preserveOriginalAs && !existsSync(dest)) {
+      throw new Error(
+        `cannot preserve ${dest} as ${preserveOriginalAs}: the upstream original is missing`,
+      )
+    }
+    const entry = { dest, backup: existsSync(dest) ? readFileSync(dest) : null, preserveOriginalAs }
     mkdirSync(dirname(dest), { recursive: true })
+    injectionJournal.push(entry)
+    if (preserveOriginalAs) {
+      cpSync(dest, preserveOriginalAs)
+    }
     cpSync(src, dest)
   }
   console.log('Injected devtools API files into dimina source')
 }
 
 function cleanupInjectedFiles() {
-  for (const { dest } of INJECTED_FILES) {
-    const backup = injectedFileBackups.get(dest)
+  for (const { dest, backup, preserveOriginalAs } of [...injectionJournal].reverse()) {
+    if (preserveOriginalAs) {
+      rmSync(preserveOriginalAs, { force: true })
+    }
     // Restore the exact pre-build bytes rather than `git checkout`: a feature
     // worktree may intentionally have uncommitted edits in an upstream file
     // that devtools temporarily overlays (notably websocket/index.js).
-    if (backup !== null && backup !== undefined) {
+    if (backup !== null) {
       writeFileSync(dest, backup)
       continue
     }
@@ -62,6 +95,7 @@ function cleanupInjectedFiles() {
       try { rmSync(dir, { recursive: false }); dir = dirname(dir) } catch { break }
     }
   }
+  injectionJournal.length = 0
   console.log('Cleaned up injected files from dimina source')
 }
 
@@ -182,7 +216,10 @@ if (!existsSync(join(DIMINA_FE, 'package.json'))) {
 const buildEnv = { ...process.env, GITHUB_ACTIONS: '' }
 
 // Inject + build wrapped in try/finally so cleanup always runs and leaves the
-// submodule clean even if the build fails.
+// submodule clean even if the build fails. `process.exit()` terminates
+// without unwinding a pending `finally`, so the failure status is carried out
+// of the try and acted on only AFTER cleanup has restored the submodule.
+let buildFailureStatus = null
 try {
   injectFiles()
 
@@ -195,10 +232,14 @@ try {
   })
 
   if (mainBuild.status !== 0) {
-    process.exit(mainBuild.status ?? 1)
+    buildFailureStatus = mainBuild.status ?? 1
   }
 } finally {
   cleanupInjectedFiles()
+}
+
+if (buildFailureStatus !== null) {
+  process.exit(buildFailureStatus)
 }
 
 // 3. Sync build output into TARGET_DIST. Clear only the entries this build

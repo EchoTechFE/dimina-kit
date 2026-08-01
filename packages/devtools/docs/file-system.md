@@ -4,19 +4,15 @@
 
 ## 当前能用什么
 
-> [!WARNING]
-> `wx.getFileSystemManager()` 上每个方法目前都会 `fail` / `throw`，错误信息 `not supported by the dimina runtime`。  
-> 这是与 dimina iOS / Android / Harmony 三端**真机现状**主动对齐——三端都还没挂 FSM 后端，simulator 也不能比真机走得远，否则你的代码在 devtools 跑通，上真机就崩。
-
-你现在可以直接用这些能力：
-
 - ✅ `wx.chooseImage` / `wx.chooseMedia` / `wx.chooseVideo` / `wx.compressImage` / `wx.downloadFile`：返回 `difile://_tmp/...` 路径
 - ✅ `<image src="difile://...">` / `<video src="difile://...">` 渲染
-- ✅ `wx.uploadFile`、`wx.previewImage`、`wx.saveImageToPhotosAlbum`：直接吃 `difile://` 路径
-- ❌ `wx.getFileSystemManager()` 上每个方法
-- ❌ 任何往 `${wx.env.USER_DATA_PATH}/...` 写入的操作（FSM 关掉就没写入入口）
+- ✅ `wx.uploadFile`、`wx.previewImage`：直接吃 `difile://` 路径
+- ✅ `wx.saveImageToPhotosAlbum`：只接受 `difile://` 本地路径（含 `difile://_tmp/` 临时文件）；dataURL / http(s) / `blob:` 会 `fail invalid file path`——与真机（Android/iOS/Harmony 都只吃本地文件路径）一致
+- ✅ `wx.getFileSystemManager()` 的全部 16 个异步方法：`access` / `stat` / `readFile` / `writeFile` / `appendFile` / `copyFile` / `rename` / `unlink` / `mkdir` / `rmdir` / `readdir` / `getFileInfo` / `saveFile` / `getSavedFileList` / `removeSavedFile` / `truncate`
+- ❌ 同步 API（`*Sync`）：直接 throw——service 线程跑在 Web Worker 里，与容器之间只有异步 postMessage 桥，同步返回值结构上不可能
+- ❌ 无容器后端的异步方法（`unzip`、fd 系列 `open`/`close`/`read`/`write`/`fstat`/`ftruncate`、`readCompressedFile`/`readZipEntry`）：`fail not supported by the devtools simulator (no container backend)`
 
-底层链路已经接好，只是 FSM 入口被关掉。把 `service-apis/file/index.js` 里每个方法换回 `invokeAPI('fs<Api>', opts)` 就能一键放开。
+`wx.canIUse('FileSystemManager.<name>')` 的答案与上面的支持面一一对应（名单由 `service-apis/file/index.js` 的 `fileSystemManagerAPINames` 驱动）。
 
 ## 三种 difile 路径
 
@@ -31,8 +27,8 @@ difile://<rel>                  ← USER_DATA_PATH 用户区，可读可写
 `_tmp/` 和 `_store/` 是 **runtime-owned 保留段**——只能由 simulator 内部产生，开发者代码写入会被拒。用户区 (`difile://<rel>`) 是唯一可读可写的命名空间。
 
 > [!TIP]
-> `wx.env.USER_DATA_PATH` 的字面值是 `'difile://'`（与 dimina 上游契约一致，不 mimic 真机的 `'wxfile://usr'`）。  
-> 你拼 `${wx.env.USER_DATA_PATH}/foo.txt` 得到 `difile:///foo.txt`（三个斜线）—— resolver 在解析时自动剥除前导斜杠，与 `difile://foo.txt` 等价。
+> `wx.env.USER_DATA_PATH` 的字面值是 `'difile://usr'`（dimina 上游 `base/index.js` 的 env 契约，不 mimic wx 真机的 `'wxfile://usr'`）。`usr` 只是用户区里一个普通的第一段路径，没有额外语义；你拼 `${wx.env.USER_DATA_PATH}/foo.txt` 得到 `difile://usr/foo.txt`，落盘在 `~/.dimina/files/usr/` 下。  
+> 手写 `difile:///foo.txt`（三斜线）也合法——resolver 解析时自动剥除前导斜杠，与 `difile://foo.txt` 等价。
 
 ## 预览并上传选择的图片
 
@@ -61,10 +57,7 @@ wx.chooseImage({
 3. `<image src="difile://_tmp/...">` 触发 webview GET → main 进程 `protocol.handle('difile')` 命中 store → 200 + 正确 MIME
 4. `wx.uploadFile` 在 renderer 直接拿 Blob 拼 multipart，零跨进程拷贝
 
-## 持久化与读回（FSM 放开后）
-
-> [!WARNING]
-> 下面的代码示例描述的是 FSM 启用后的行为。**当前所有这些调用都会 fail / throw**，因为 service 层注入被关掉了（见上一节）。底层支持已经写好，等上游 dimina 三端把 FSM 后端补齐后会一并启用。
+## 持久化与读回
 
 把临时文件转成持久文件用 `saveFile`，它是 **copy 而不是 move**——源 `_tmp` 路径仍然可读：
 
@@ -81,7 +74,7 @@ fsm.saveFile({
 
 fsm.readFile({
   filePath: wx.getStorageSync('avatar'),
-  success: ({ data }) => { /* data 是 Buffer */ },
+  success: ({ data }) => { /* 不带 encoding 时 data 是 ArrayBuffer */ },
 })
 
 fsm.removeSavedFile({
@@ -97,7 +90,7 @@ fsm.removeSavedFile({
 
 ```js
 const fsm = wx.getFileSystemManager()
-const USER = wx.env.USER_DATA_PATH  // 'difile://'
+const USER = wx.env.USER_DATA_PATH  // 'difile://usr'
 
 fsm.writeFile({
   filePath: `${USER}/notes/2026/q1.json`,
@@ -145,9 +138,9 @@ simulator 在文件这块**主动选择对齐上游 dimina，而不是 wx 真机
 
 **主动差异：**
 
-- `wx.env.USER_DATA_PATH` 字面值是 `'difile://'`（dimina 上游契约），不是 wx 真机的 `'wxfile://usr'`。开发者代码拼 `${USER_DATA_PATH}/foo` 仍然可移植；只是直接 `console.log` 看到的字面值不同。
+- `wx.env.USER_DATA_PATH` 字面值是 `'difile://usr'`（dimina 上游契约），不是 wx 真机的 `'wxfile://usr'`。开发者代码拼 `${USER_DATA_PATH}/foo` 仍然可移植；只是直接 `console.log` 看到的字面值不同。
 - 保留段用**路径段**（`_tmp/` `_store/`）而不是 wx 的命名前缀（`tmp_` `store_`）。dimina 一致采用路径段风格，下划线前缀也避开了开发者真实文件命名。
-- 同步 API（`*Sync`）、fd 系列（open / close / read / write / fstat / ftruncate）、`readZipEntry` / `readCompressedFile` / `unzip` 不实现，会 throw 或 fail。
+- 同步 API（`*Sync`）不实现（service 线程与容器之间是异步 postMessage 桥，同步返回值结构上不可能），会 throw；fd 系列（open / close / read / write / fstat / ftruncate）、`readZipEntry` / `readCompressedFile` / `unzip` 无容器后端，会 fail。`wx.canIUse` 对这些一律答 `false`。
 
 ## 排查 difile 请求时看哪里
 
@@ -173,7 +166,9 @@ simulator 在文件这块**主动选择对齐上游 dimina，而不是 wx 真机
    FileSystemManager.<api> (renderer)
         ↓ resolveVPath → kind 分流
         ├ tmp        → renderer Blob Map → arrayBuffer
-        └ store/usr  → renderer Node fs（Electron renderer 直拿 fs）
+        └ store/usr  → renderer Node fs（经 preload 发布的 node bindings；
+                        simulator 文档 nodeIntegration 关闭，vite 会把
+                        node:* stub 掉，真模块由 preload 挂到共享 world）
 ```
 
 `_tmp` 写入是异步的（`Blob.arrayBuffer()` → `ipcRenderer.send`），但 renderer 拿到 vpath 就会立刻把它喂给 `<img.src>` 触发 GET。如果 GET 早于 IPC 落地，`protocol.handle` 会 park 在 per-url 等待器上，等 `simulator:temp-file:write` 到达时 drain；最长等 500 毫秒，超时返 404。
@@ -183,9 +178,11 @@ simulator 在文件这块**主动选择对齐上游 dimina，而不是 wx 真机
 | 模块 | 文件 |
 |---|---|
 | vpath 校验器（main + renderer 共用） | `src/shared/vpath.ts` |
+| node bindings（preload 发布真 node 模块给 simulator 文档） | `src/shared/node-bindings.ts` + `src/preload/runtime/node-bindings.ts` |
 | renderer temp store | `src/simulator/temp-files.ts` |
-| renderer FSM 入口 | `src/simulator/simulator-api-fs.ts` |
-| FSM 声明（被禁的那层） | `src/simulator/service-apis/file/index.js` |
+| renderer FSM 实现 | `src/simulator/simulator-api-fs.ts` |
+| `FileSystemManager.*` wire-name 适配层（base64 哨兵编解码 + errMsg 短名） | `src/simulator/simulator-api-fsm.ts` |
+| service 层 overlay（sync throw / 无后端 fail / canIUse 名单） | `src/simulator/service-apis/file/index.js` |
 | preload IPC sink | `src/preload/runtime/temp-files.ts` |
 | main 端 store + protocol.handle | `src/main/services/simulator-temp-files/{index,store,resolver}.ts` |
 | main 端磁盘读写 | `src/main/services/simulator-temp-files/disk.ts` |
@@ -197,7 +194,7 @@ simulator 在文件这块**主动选择对齐上游 dimina，而不是 wx 真机
 你可能在 dev 时碰到的：
 
 - **`_tmp` 文件不跨项目持久**：单进程 FIFO 容量 200，新文件进、旧文件被挤掉。
-- **多项目共享同一个用户区**：所有项目落到同一份 `~/.dimina/files/`，没有按 appId 隔离。
+- **多项目共享同一个用户区**：所有项目落到同一份 `~/.dimina/files/`，没有按 appId 隔离。真机端有隔离（Android `PathUtils.pathToReal` 按 appId 解析用户根），所以这是一个已知的 parity 缺口：项目 A 写入的用户文件与 `_store` 项在 simulator 里对项目 B 可见。修复需要给 vpath 契约、`difile://` 协议 handler 与 fs IPC 通道统一引入与 miniapp partition 同源的 `appId + projectPath` scope，属独立工作项。
 - **超大文件未优化**：renderer Blob + IPC + main Buffer 三份内存拷贝；`disk.readDiskFile` 读全文不切片。dev 场景一般没事，单文件几百 MB 时要小心。
 
 实现层面（一般你不需要操心）：
