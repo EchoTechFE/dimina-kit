@@ -372,3 +372,64 @@ describe('getFileInfo digest defaults to md5 and supports sha1', () => {
 		expect(r.complete).toBe(true)
 	})
 })
+
+// ─── rmdir: the recursive flag selects the correct Node primitive ──────────
+//
+// `fs.rm(dir, { recursive: false })` refuses directories outright
+// (ERR_FS_EISDIR) — even empty ones — while wx's non-recursive
+// `FileSystemManager.rmdir` removes an empty directory and fails only on a
+// non-empty one. The two cases need different primitives: `fs.rmdir` for
+// non-recursive, `fs.rm(recursive: true)` for recursive.
+
+describe('rmdir honors the recursive flag', () => {
+	it('rmdir without recursive removes an EMPTY directory', async () => {
+		nodeFs.mkdirSync(nodePath.join(usrDir(), 'empty-dir'))
+		const r = await invoke('rmdir', { dirPath: 'difile://usr/empty-dir' })
+		expect(r.fail, `rmdir of an empty dir failed: ${JSON.stringify(r.fail)}`).toBeUndefined()
+		expect(r.success).toMatchObject({ errMsg: 'rmdir:ok' })
+		expect(nodeFs.existsSync(nodePath.join(usrDir(), 'empty-dir'))).toBe(false)
+	})
+
+	it('rmdir without recursive fails on a NON-empty directory (only recursive removes contents)', async () => {
+		nodeFs.mkdirSync(nodePath.join(usrDir(), 'full-dir'))
+		nodeFs.writeFileSync(nodePath.join(usrDir(), 'full-dir', 'f.txt'), 'x')
+		const r = await invoke('rmdir', { dirPath: 'difile://usr/full-dir' })
+		expect(r.success, 'non-recursive rmdir of a non-empty dir must not succeed').toBeUndefined()
+		expect(getErrMsg(r.fail)).toMatch(/^rmdir:fail /)
+		expect(nodeFs.existsSync(nodePath.join(usrDir(), 'full-dir', 'f.txt'))).toBe(true)
+	})
+
+	it('rmdir with recursive:true removes a non-empty directory tree', async () => {
+		nodeFs.mkdirSync(nodePath.join(usrDir(), 'tree', 'sub'), { recursive: true })
+		nodeFs.writeFileSync(nodePath.join(usrDir(), 'tree', 'sub', 'f.txt'), 'x')
+		const r = await invoke('rmdir', { dirPath: 'difile://usr/tree', recursive: true })
+		expect(r.fail, `recursive rmdir failed: ${JSON.stringify(r.fail)}`).toBeUndefined()
+		expect(nodeFs.existsSync(nodePath.join(usrDir(), 'tree'))).toBe(false)
+	})
+})
+
+// ─── writeFile: malformed arguments settle as fail/complete, never an
+// uncaught throw ───────────────────────────────────────────────────────────
+//
+// `fs.writeFile` validates its arguments synchronously — but the write is
+// scheduled from inside the deferred `mkdir -p` callback, after the wire
+// handler's own try/catch has already returned. Without a catch at the
+// deferred call site, malformed `data`/`encoding` becomes an uncaught
+// renderer exception and the mini-program call hangs with no verdict (the
+// handler ACK has already disarmed the main-process watchdog by then).
+
+describe('writeFile with malformed arguments settles instead of throwing uncaught', () => {
+	it('writeFile(data: number) fails with "writeFile:fail ..." and completes', async () => {
+		const r = await invoke('writeFile', { filePath: 'difile://usr/bad-data.txt', data: 12345 })
+		expect(r.success, 'malformed data must not succeed').toBeUndefined()
+		expect(getErrMsg(r.fail)).toMatch(/^writeFile:fail /)
+		expect(r.complete).toBe(true)
+	})
+
+	it('writeFile with an unknown encoding fails with "writeFile:fail ..." and completes', async () => {
+		const r = await invoke('writeFile', { filePath: 'difile://usr/bad-enc.txt', data: 'x', encoding: 'not-an-encoding' })
+		expect(r.success, 'an unknown encoding must not succeed').toBeUndefined()
+		expect(getErrMsg(r.fail)).toMatch(/^writeFile:fail /)
+		expect(r.complete).toBe(true)
+	})
+})

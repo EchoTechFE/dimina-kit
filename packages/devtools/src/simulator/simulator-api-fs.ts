@@ -244,7 +244,16 @@ function mkdirpThenWrite(
 			cbs.onComplete?.()
 			return
 		}
-		writeFn(nodeComplete(apiName, cbs, () => okExtra))
+		// fs.writeFile/copyFile validate their arguments synchronously (a
+		// numeric `data`, an unknown `encoding`); this callback runs after the
+		// wire handler's own try/catch has already returned, so an unguarded
+		// throw here would leave the call with no verdict at all.
+		try {
+			writeFn(nodeComplete(apiName, cbs, () => okExtra))
+		} catch (err) {
+			cbs.onFail?.({ errMsg: `${apiName}:fail ${err instanceof Error ? err.message : String(err)}` })
+			cbs.onComplete?.()
+		}
 	})
 }
 
@@ -568,9 +577,16 @@ export function fsRmdir(
 	const v = resolveOrBail(dirPath, 'fsRmdir', cbs)
 	if (!v) return
 	if (!ensureWritable(v, 'fsRmdir', cbs)) return
-	// Node 14+: rm with recursive; older Node: rmdir with recursive flag
-	const rmFn = (_fs as typeof _fs & { rm?: typeof _fs.rmdir }).rm ?? _fs.rmdir
-	rmFn(v.realPath, { recursive } as Parameters<typeof _fs.rmdir>[1], nodeComplete('fsRmdir', cbs))
+	// The two cases need different Node primitives: `fs.rm` without
+	// `recursive` refuses directories outright (ERR_FS_EISDIR) even when
+	// empty, while wx's non-recursive rmdir removes an empty directory and
+	// fails only on a non-empty one — exactly `fs.rmdir`'s contract.
+	if (recursive) {
+		const rmFn = (_fs as typeof _fs & { rm?: typeof _fs.rmdir }).rm ?? _fs.rmdir
+		rmFn(v.realPath, { recursive: true } as Parameters<typeof _fs.rmdir>[1], nodeComplete('fsRmdir', cbs))
+	} else {
+		_fs.rmdir(v.realPath, nodeComplete('fsRmdir', cbs))
+	}
 }
 
 export function fsReaddir(
@@ -749,9 +765,23 @@ export function fsSaveFile(
 	if (src.realPath === destReal) {
 		// Source and destination normalize to the same file: saving a file
 		// onto itself is a defined no-op success, not whatever the host
-		// Node's same-file copyFile happens to do.
-		cbs.onSuccess?.({ savedFilePath, errMsg: 'fsSaveFile:ok' })
-		onComplete?.()
+		// Node's same-file copyFile happens to do. Still a no-op only for a
+		// real file — resolveOrBail validates the path string, not the disk,
+		// so a missing or directory source must fail here like any other save.
+		_fs.stat(src.realPath, (statErr, st) => {
+			if (statErr) {
+				onFail?.({ errMsg: `fsSaveFile:fail ${statErr.message}` })
+				onComplete?.()
+				return
+			}
+			if (!st.isFile()) {
+				onFail?.({ errMsg: `fsSaveFile:fail illegal operation on a directory, copyfile '${tempFilePath}'` })
+				onComplete?.()
+				return
+			}
+			cbs.onSuccess?.({ savedFilePath, errMsg: 'fsSaveFile:ok' })
+			onComplete?.()
+		})
 		return
 	}
 	mkdirpThenWrite(destReal, 'fsSaveFile', cbs, done => _fs.copyFile(src.realPath!, destReal, done), { savedFilePath })

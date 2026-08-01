@@ -33,7 +33,9 @@
 
 import { getFileSystemManager as getUpstreamFileSystemManager } from './upstream-impl.js'
 
-const USER_DATA_PATH = 'difile://'
+// Mirrors the value `wx.env.USER_DATA_PATH` answers (upstream
+// `core/base/index.js` owns that env object; this overlay never touches it).
+const USER_DATA_PATH = 'difile://usr'
 
 /** Async methods with a working container backend in the devtools simulator. */
 export const fileSystemManagerAPINames = [

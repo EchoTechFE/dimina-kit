@@ -147,8 +147,7 @@ describe('fsSaveFile where filePath resolves to the SAME realPath as tempFilePat
 		const w = await invoke(fsWriteFile, { filePath: 'difile://usr/same2.txt', data: 'normalized-same-content', encoding: 'utf8' })
 		expect(w.fail, `seed write failed: ${JSON.stringify(w.fail)}`).toBeUndefined()
 
-		// `resolveVPath` strips leading slashes after the scheme (the
-		// `wx.env.USER_DATA_PATH = 'difile://'` convention), so
+		// `resolveVPath` strips leading slashes after the scheme, so
 		// 'difile:///usr/same2.txt' resolves to the exact same realPath as
 		// 'difile://usr/same2.txt' despite the differing spelling.
 		const s = await invoke(fsSaveFile, { tempFilePath: 'difile://usr/same2.txt', filePath: 'difile:///usr/same2.txt' })
@@ -158,5 +157,26 @@ describe('fsSaveFile where filePath resolves to the SAME realPath as tempFilePat
 		const r = await invoke(fsReadFile, { filePath: 'difile://usr/same2.txt', encoding: 'utf8' })
 		expect(r.fail).toBeUndefined()
 		expect(r.success).toMatchObject({ data: 'normalized-same-content' })
+	})
+})
+
+// ─── same-path save still requires the source to exist on disk ─────────────
+//
+// `resolveOrBail` validates the path STRING (scheme, no `..`, symlink
+// segments) but never stats what's on disk, so the same-realPath no-op
+// branch must verify the source itself before echoing success.
+
+describe('fsSaveFile same-path no-op still requires an existing source file', () => {
+	it('saveFile(tempFilePath === filePath) with a MISSING source fails instead of fabricating ok', async () => {
+		const s = await invoke(fsSaveFile, { tempFilePath: 'difile://usr/ghost.txt', filePath: 'difile://usr/ghost.txt' })
+		expect(s.success, `a missing source must not save: ${JSON.stringify(s.success)}`).toBeUndefined()
+		expect(getErrMsg(s.fail)).toMatch(/^fsSaveFile:fail /)
+	})
+
+	it('saveFile(tempFilePath === filePath) pointing at a DIRECTORY fails instead of echoing ok', async () => {
+		nodeFs.mkdirSync(nodePath.join(sandboxHome, 'files', 'usr', 'a-dir'))
+		const s = await invoke(fsSaveFile, { tempFilePath: 'difile://usr/a-dir', filePath: 'difile://usr/a-dir' })
+		expect(s.success, `a directory source must not save: ${JSON.stringify(s.success)}`).toBeUndefined()
+		expect(getErrMsg(s.fail)).toMatch(/^fsSaveFile:fail /)
 	})
 })

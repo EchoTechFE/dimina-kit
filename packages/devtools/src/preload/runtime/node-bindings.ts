@@ -24,14 +24,22 @@ import { NODE_BINDINGS_GLOBAL, type DiminaNodeBindings } from '../../shared/node
 
 export function installNodeBindings(): void {
 	// contextIsolation:false means page scripts share this world: freeze the
-	// bag (no member swap) and publish it non-writable (no wholesale `=`
-	// replacement), so a compromised page script cannot substitute a spoofed
-	// `fs` for the vpath resolver / FSM backends to trust.
+	// bag (no member swap) and publish it non-writable AND non-configurable —
+	// writable:false alone still leaves `delete` and a defineProperty
+	// redefinition open to any same-world script, so the full lock needs
+	// configurable:false too. A compromised page script then cannot
+	// substitute a spoofed `fs` for the vpath resolver / FSM backends to
+	// trust by any route.
+	const existing = Object.getOwnPropertyDescriptor(globalThis, NODE_BINDINGS_GLOBAL)
+	if (existing && !existing.configurable) {
+		// Already locked (redefining a non-configurable property throws).
+		return
+	}
 	const bindings: DiminaNodeBindings = Object.freeze({ fs, os, path, crypto, buffer })
 	Object.defineProperty(globalThis, NODE_BINDINGS_GLOBAL, {
 		value: bindings,
 		writable: false,
-		configurable: true,
+		configurable: false,
 		enumerable: true,
 	})
 }

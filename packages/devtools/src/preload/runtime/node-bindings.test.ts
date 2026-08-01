@@ -70,6 +70,35 @@ describe('installNodeBindings publishes a read-only, non-replaceable bindings ba
 		expect(bag!.fs, 'writing to a frozen bindings member must not change it').toBe(originalFs)
 	})
 
+	it('the property is non-configurable — delete and defineProperty replacement both fail, the bag survives', () => {
+		installNodeBindings()
+		const original = currentBag()
+		const descriptor = Object.getOwnPropertyDescriptor(globalThis, NODE_BINDINGS_GLOBAL)
+		expect(
+			descriptor!.configurable,
+			'a configurable property can be deleted or redefined by any same-world page script, defeating the non-replaceable contract',
+		).toBe(false)
+
+		try {
+			delete (globalThis as Record<string, unknown>)[NODE_BINDINGS_GLOBAL]
+		} catch {
+			// strict mode throws on deleting a non-configurable property
+		}
+		expect(currentBag(), 'delete must not remove the bindings').toBe(original)
+
+		expect(() =>
+			Object.defineProperty(globalThis, NODE_BINDINGS_GLOBAL, { value: { fs: {} }, configurable: true }),
+		).toThrow(TypeError)
+		expect(currentBag(), 'defineProperty must not replace the bindings').toBe(original)
+	})
+
+	it('installNodeBindings is idempotent — a second call leaves the locked binding in place instead of throwing', () => {
+		installNodeBindings()
+		const first = currentBag()
+		expect(() => installNodeBindings()).not.toThrow()
+		expect(currentBag()).toBe(first)
+	})
+
 	it('globalThis.__diminaNodeBindings cannot be replaced wholesale by a later assignment', () => {
 		installNodeBindings()
 		const original = currentBag()

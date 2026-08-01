@@ -85,9 +85,10 @@ export function resolveVPath(url: unknown): ResolvedVPath | null {
 	// renderer. Pull the rejection up to the validator.
 	if (decoded.includes('\0')) return null
 
-	// Developer convention: `wx.env.USER_DATA_PATH = 'difile://'` so a write
-	// like `${USER_DATA_PATH}/foo.txt` produces `difile:///foo.txt`. Strip
-	// leading slashes so that path-joins cleanly under the sandbox base.
+	// `wx.env.USER_DATA_PATH` is `'difile://usr'` (upstream `core/base`), but
+	// hand-written paths also arrive as `difile:///foo.txt` (extra slashes
+	// after the scheme). Strip leading slashes so both spellings path-join
+	// cleanly under the sandbox base.
 	decoded = decoded.replace(/^[/\\]+/, '')
 	if (decoded.length === 0) return null
 
