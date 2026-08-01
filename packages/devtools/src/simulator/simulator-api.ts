@@ -50,25 +50,7 @@ import {
 	audioSeek,
 	audioDestroy,
 } from './simulator-api-media'
-import {
-	fsAccess,
-	fsStat,
-	fsReadFile,
-	fsWriteFile,
-	fsAppendFile,
-	fsCopyFile,
-	fsRename,
-	fsUnlink,
-	fsMkdir,
-	fsRmdir,
-	fsReaddir,
-	fsGetFileInfo,
-	fsSaveFile,
-	fsGetSavedFileList,
-	fsRemoveSavedFile,
-	fsTruncate,
-	fsUnzip,
-} from './simulator-api-fs'
+import { fileSystemManagerApis } from './simulator-api-fsm'
 import {
 	downloadFile,
 	uploadFile,
@@ -291,22 +273,7 @@ export const simulatorApis: Record<string, (this: MiniAppContext, opts: never) =
 	audioStop,
 	audioSeek,
 	audioDestroy,
-	// Filesystem (service-apis/file)
-	fsAccess,
-	fsStat,
-	fsReadFile,
-	fsWriteFile,
-	fsAppendFile,
-	fsCopyFile,
-	fsRename,
-	fsUnlink,
-	fsMkdir,
-	fsRmdir,
-	fsReaddir,
-	fsGetFileInfo,
-	fsSaveFile,
-	fsGetSavedFileList,
-	fsRemoveSavedFile,
-	fsTruncate,
-	fsUnzip,
+	// Filesystem: the service thread invokes the dotted FileSystemManager.*
+	// wire names (see simulator-api-fsm.ts).
+	...fileSystemManagerApis,
 }

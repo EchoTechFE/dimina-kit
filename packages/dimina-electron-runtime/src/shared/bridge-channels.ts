@@ -448,6 +448,15 @@ export interface ApiResponsePayload {
    * Cleanup happens on page/app teardown instead.
    */
   keep?: boolean
+  /**
+   * Handler-received acknowledgement. The simulator sends this as soon as it
+   * has located a live handler for the forwarded call — before the handler
+   * produces its verdict. Main disarms the no-handler watchdog but keeps the
+   * pending call alive: a slow operation (large disk write, a modal waiting
+   * on the user) must not be reported failed while the underlying work still
+   * completes. No service-side callback fires for an ack.
+   */
+  ack?: boolean
 }
 
 /**

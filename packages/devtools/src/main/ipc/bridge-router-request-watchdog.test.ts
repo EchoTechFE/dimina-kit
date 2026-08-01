@@ -295,3 +295,46 @@ describe('bridge-router — non-network API calls keep the flat 5000ms watchdog 
     expect((failFire!.args as { errMsg?: string }).errMsg).toBe('showToast:fail no handler (timeout)')
   })
 })
+
+// ─── ack: a simulator-side "still working on it" signal must extend, not resolve, the pending call ──
+//
+// `handleApiResponse` currently treats ANY `API_RESPONSE` with a matching
+// `requestId` as the terminal verdict: `payload.ok` truthy -> success,
+// falsy -> fail — there is no third "acknowledged, not done yet" outcome.
+// `ApiResponsePayload` (bridge-channels.ts) has no `ack` field either. This
+// is a genuinely new (not yet implemented) wire contract, not a bug in an
+// existing one; the wire shape below (`{ requestId, ack: true }`, no `ok`)
+// is a proposal, not a pinned interface — `emitOn`'s payload parameter is
+// `unknown`, so the literal object compiles without widening
+// `ApiResponsePayload` itself. The assertions pin the OBSERVABLE behavior an
+// implementation must produce: an ack must not resolve the call, and it must
+// not prevent the real, later verdict from being delivered.
+describe('bridge-router — a simulator-side ack must not resolve the call, and must not block the later real verdict', () => {
+  it('an ack-shaped API_RESPONSE does not fire fail/complete, does not time out, and the later real success is still delivered', async () => {
+    const { simulatorWc, serviceWc, requestId } = await setup('showToast', { title: 'hi' })
+
+    const ackPayload = { appSessionId: 'demo-app', requestId, ack: true }
+    emitOn(C.API_RESPONSE, simulatorWc, ackPayload)
+
+    let cbs = triggerCallbacks(serviceWc)
+    expect(cbs.find(c => c.id === 'svc-fail'), 'an ack must not resolve the call as a failure').toBeUndefined()
+    expect(cbs.find(c => c.id === 'svc-complete'), 'an ack must not fire complete').toBeUndefined()
+
+    // Advance past the flat 5000ms no-handler watchdog window that would
+    // otherwise apply to a plain (non-network) API like showToast.
+    await vi.advanceTimersByTimeAsync(5_000)
+    cbs = triggerCallbacks(serviceWc)
+    expect(
+      cbs.find(c => c.id === 'svc-fail'),
+      'an acked call must not time out at the original watchdog window',
+    ).toBeUndefined()
+
+    // The real, later verdict must still be deliverable — an ack must not
+    // have torn the pending call down.
+    const resp: ApiResponsePayload = { appSessionId: 'demo-app', requestId, ok: true, result: { errMsg: 'showToast:ok' } }
+    emitOn(C.API_RESPONSE, simulatorWc, resp)
+    cbs = triggerCallbacks(serviceWc)
+    const successFire = cbs.find(c => c.id === 'svc-success')
+    expect(successFire, 'the real verdict following an ack must still be delivered to the service').toBeDefined()
+  })
+})

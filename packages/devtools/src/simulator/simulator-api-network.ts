@@ -7,14 +7,16 @@
 
 import type { MiniAppContext } from './types'
 import { bindCallbacks } from './simulator-api-helpers'
+import { resolveTimeoutBudgetMs } from '../shared/request-core'
 import { createTempFilePath, getTempFileName, resolveTempFilePath } from './temp-files'
 
 export function downloadFile(
 	this: MiniAppContext,
-	{ url, header = {}, filePath, success, fail, complete }: {
+	{ url, header = {}, filePath, timeout, success, fail, complete }: {
 		url: string
 		header?: Record<string, string>
 		filePath?: string
+		timeout?: number
 		success?: unknown
 		fail?: unknown
 		complete?: unknown
@@ -22,12 +24,45 @@ export function downloadFile(
 ) {
 	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
 
-	fetch(url, { headers: header })
+	// The handler owns its own deadline: the bridge's no-handler watchdog is
+	// disarmed by the handler-received ack, so a stalled network must be
+	// bounded here (wx budget semantics, same authority as `request`). First
+	// verdict wins — a late fetch settlement after the timeout fired must not
+	// resurrect success or double-fire complete.
+	let settled = false
+	const settleFail = (errMsg: string) => {
+		if (settled) return
+		settled = true
+		clearTimeout(timer)
+		onFail?.({ errMsg })
+		onComplete?.()
+	}
+	const settleOk = (result: Record<string, unknown>) => {
+		if (settled) return
+		settled = true
+		clearTimeout(timer)
+		onSuccess?.(result)
+		onComplete?.()
+	}
+	const controller = new AbortController()
+	const timer = setTimeout(() => {
+		settleFail('downloadFile:fail timeout')
+		controller.abort()
+	}, resolveTimeoutBudgetMs(timeout))
+
+	fetch(url, { headers: header, signal: controller.signal })
 		.then(async (response) => {
-			if (!response.ok) throw new Error(response.statusText)
+			if (!response.ok) {
+				// statusText is frequently empty (HTTP/2 has none) — the status
+				// code is the reliable part of the failure reason.
+				settleFail(
+					`downloadFile:fail HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ''}`,
+				)
+				return
+			}
 			const blob = await response.blob()
 			const tempFilePath = createTempFilePath(blob)
-			onSuccess?.({
+			settleOk({
 				tempFilePath,
 				filePath: filePath || tempFilePath,
 				statusCode: response.status,
@@ -35,10 +70,7 @@ export function downloadFile(
 			})
 		})
 		.catch((error: Error) => {
-			onFail?.({ errMsg: `downloadFile:fail ${error.message}` })
-		})
-		.finally(() => {
-			onComplete?.()
+			settleFail(`downloadFile:fail ${error.message}`)
 		})
 }
 

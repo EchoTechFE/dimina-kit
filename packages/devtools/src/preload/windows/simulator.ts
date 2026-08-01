@@ -6,6 +6,7 @@
 // because webview sandbox cannot resolve require() for separate modules.
 import { installSimulatorBridge } from '../runtime/bridge.js'
 import { installCustomApisBridge } from '../runtime/custom-apis.js'
+import { installNodeBindings } from '../runtime/node-bindings.js'
 import { installTempFileBridge } from '../runtime/temp-files.js'
 import { installConsoleInstrumentation } from '../instrumentation/console.js'
 import { createAppDataSource } from '../instrumentation/app-data.js'
@@ -21,6 +22,9 @@ import { installClipboardBridge } from '../runtime/clipboard.js'
 // it always runs in the actual simulator document (`simulator.html`) — never a
 // per-page render-host (`pageFrame.html`) or service-host (`service.html`)
 // frame, which carry their own dedicated preloads.
+// First: the simulator document's vpath resolver + FileSystemManager
+// backends capture these bindings at module evaluation.
+installNodeBindings()
 setupApiCompatHook()
 installSimulatorBridge()
 installCustomApisBridge()

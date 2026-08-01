@@ -20,12 +20,19 @@
  *     `_Tmp/`, etc. fall through to the user-data namespace.
  */
 
-// Main-process (Node ESM) resolves these natively. Simulator (vite browser
-// bundle) externalizes node builtins as no-op stubs — that's safe here only
-// because the simulator never enters the `store`/`usr` branches below
-// (renderer-side FSM forwards disk-backed reads/writes to main via IPC).
-import os from 'node:os'
-import path from 'node:path'
+// Main-process (Node ESM) resolves these natively. The simulator document's
+// vite bundle stubs them with truthy-but-empty objects, and its renderer DOES
+// enter the `store`/`usr` branches (the FileSystemManager backends run
+// there) — so probe a required function on the static import and fall back to
+// the preload-published node bindings (see ./node-bindings.ts).
+import osStatic from 'node:os'
+import pathStatic from 'node:path'
+import { getNodeBindings } from './node-bindings.js'
+
+const os: typeof import('os') =
+	typeof osStatic?.homedir === 'function' ? osStatic : (getNodeBindings().os ?? osStatic)
+const path: typeof import('path') =
+	typeof pathStatic?.join === 'function' ? pathStatic : (getNodeBindings().path ?? pathStatic)
 
 export type VPathKind = 'tmp' | 'store' | 'usr'
 

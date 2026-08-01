@@ -1,141 +1,92 @@
 /**
- * https://developers.weixin.qq.com/miniprogram/dev/api/file/wx.getFileSystemManager.html
+ * Devtools overlay of the upstream service-layer FileSystemManager module
+ * (https://developers.weixin.qq.com/miniprogram/dev/api/file/wx.getFileSystemManager.html).
  *
- * Parity with the dimina runtime: every `FileSystemManager` method short-
- * circuits to `fail` / `throw` because no dimina client (iOS / Android /
- * Harmony) has wired the FSM backends yet. The simulator deliberately mirrors
- * that gap so a mini-program that "works in devtools" does not break on a
- * real device.
+ * At container build time (`build-container.js`) this file replaces
+ * `service/src/api/core/file/index.js`, and the upstream original is
+ * preserved next to it as `./upstream-impl.js`. The async surface below
+ * delegates to that original, so upstream's invokeFileAPI protocol
+ * (`FileSystemManager.*` wire names + base64 ArrayBuffer sentinels) stays
+ * the single source of truth for how the service thread talks to the
+ * container; the container-side backends live in
+ * `simulator/simulator-api-fsm.ts`.
  *
- * The lower-level `difile://` plumbing — vpath resolver, _tmp Blob store, main
- * protocol handler, disk reader, fs-channels IPC — still exists in the
- * codebase. Re-enabling FSM is a single edit: switch each method below back
- * to the previous `invokeAPI('fs<Api>', opts)` form. Upstream dimina has
- * since landed a real File API (invokeFileAPI in service, 057330d); wiring
- * the simulator to it is a separate task — until then the surface stays
- * inert here.
+ * What this overlay changes, and why:
  *
- * `USER_DATA_PATH` is exported unchanged because `wx.env.USER_DATA_PATH` is
- * an env value, not an FSM API; concatenating it to build a path is fine
- * even when the actual reads/writes would fail.
+ *   - Synchronous methods (`*Sync`) throw. The devtools service thread runs
+ *     in a Web Worker whose container bridge is an asynchronous postMessage
+ *     (`service/src/core/message.js`) — a synchronous return value is
+ *     structurally impossible there, and the unmodified upstream methods
+ *     would silently answer `undefined`, corrupting caller state.
+ *   - Async methods with no container backend in the simulator (unzip, the
+ *     fd ops open/close/read/write/fstat/ftruncate, readCompressedFile,
+ *     readZipEntry) fail loudly through their `fail` callback.
+ *   - `fileSystemManagerAPINames` — which upstream `base/index.js` maps into
+ *     `wx.canIUse('FileSystemManager.*')` — lists ONLY the methods that
+ *     actually work, so canIUse answers match reality.
+ *
+ * Maintenance note: keep `fileSystemManagerAPINames` written out as quoted
+ * string literals — the vitest contract suite reads this file both by import
+ * (against the sibling test stand-in for `./upstream-impl.js`) and, as a
+ * fallback, by scanning the source text for that literal list.
  */
 
+import { getFileSystemManager as getUpstreamFileSystemManager } from './upstream-impl.js'
+
 const USER_DATA_PATH = 'difile://'
-const UNSUPPORTED_ERRMSG = 'not supported by the dimina runtime'
 
-class Stats {
-	constructor(info) {
-		this.size = info.size || 0
-		this.mode = info.mode || 0o666
-		this.lastAccessedTime = info.lastAccessedTime || 0
-		this.lastModifiedTime = info.lastModifiedTime || 0
-		this._isFile = info.isFile !== undefined ? info.isFile : true
-		this._isDirectory = info.isDirectory !== undefined ? info.isDirectory : false
+/** Async methods with a working container backend in the devtools simulator. */
+export const fileSystemManagerAPINames = [
+	'access',
+	'stat',
+	'readFile',
+	'writeFile',
+	'appendFile',
+	'copyFile',
+	'rename',
+	'unlink',
+	'mkdir',
+	'rmdir',
+	'readdir',
+	'getFileInfo',
+	'saveFile',
+	'getSavedFileList',
+	'removeSavedFile',
+	'truncate',
+]
+
+const SYNC_UNSUPPORTED_REASON
+	= 'is not supported by the devtools simulator: the service thread talks to the container over an asynchronous postMessage bridge, so a synchronous return value is impossible — use the async variant'
+const ASYNC_UNSUPPORTED_REASON = 'not supported by the devtools simulator (no container backend)'
+
+function makeSyncThrow(name) {
+	return function () {
+		throw new Error(`FileSystemManager.${name} ${SYNC_UNSUPPORTED_REASON}`)
 	}
+}
 
-	isFile() {
-		return this._isFile
+function makeAsyncFail(name) {
+	return function (opts = {}) {
+		opts.fail?.({ errMsg: `${name}:fail ${ASYNC_UNSUPPORTED_REASON}` })
+		opts.complete?.()
 	}
+}
 
-	isDirectory() {
-		return this._isDirectory
+function withUnsupportedSurfaceReplaced(fsm) {
+	const proto = Object.getPrototypeOf(fsm)
+	const supported = new Set(fileSystemManagerAPINames)
+	for (const name of Object.getOwnPropertyNames(proto)) {
+		if (name === 'constructor' || supported.has(name)) continue
+		proto[name] = name.endsWith('Sync') ? makeSyncThrow(name) : makeAsyncFail(name)
 	}
+	return fsm
 }
-
-function throwUnsupported(apiName) {
-	throw new Error(`FileSystemManager.${apiName} ${UNSUPPORTED_ERRMSG}`)
-}
-
-function failUnsupported(apiName, opts = {}) {
-	const { fail, complete } = opts
-	fail?.({ errMsg: `${apiName}:fail ${UNSUPPORTED_ERRMSG}` })
-	complete?.()
-}
-
-class FileSystemManager {
-	access(opts) { failUnsupported('access', opts) }
-	accessSync() { throwUnsupported('accessSync') }
-
-	stat(opts) { failUnsupported('stat', opts) }
-	statSync() { throwUnsupported('statSync') }
-
-	readFile(opts) { failUnsupported('readFile', opts) }
-	readFileSync() { throwUnsupported('readFileSync') }
-
-	writeFile(opts) { failUnsupported('writeFile', opts) }
-	writeFileSync() { throwUnsupported('writeFileSync') }
-
-	appendFile(opts) { failUnsupported('appendFile', opts) }
-	appendFileSync() { throwUnsupported('appendFileSync') }
-
-	copyFile(opts) { failUnsupported('copyFile', opts) }
-	copyFileSync() { throwUnsupported('copyFileSync') }
-
-	rename(opts) { failUnsupported('rename', opts) }
-	renameSync() { throwUnsupported('renameSync') }
-
-	unlink(opts) { failUnsupported('unlink', opts) }
-	unlinkSync() { throwUnsupported('unlinkSync') }
-
-	mkdir(opts) { failUnsupported('mkdir', opts) }
-	mkdirSync() { throwUnsupported('mkdirSync') }
-
-	rmdir(opts) { failUnsupported('rmdir', opts) }
-	rmdirSync() { throwUnsupported('rmdirSync') }
-
-	readdir(opts) { failUnsupported('readdir', opts) }
-	readdirSync() { throwUnsupported('readdirSync') }
-
-	getFileInfo(opts) { failUnsupported('getFileInfo', opts) }
-
-	saveFile(opts) { failUnsupported('saveFile', opts) }
-	saveFileSync() { throwUnsupported('saveFileSync') }
-
-	getSavedFileList(opts) { failUnsupported('getSavedFileList', opts) }
-	removeSavedFile(opts) { failUnsupported('removeSavedFile', opts) }
-
-	truncate(opts) { failUnsupported('truncate', opts) }
-	truncateSync() { throwUnsupported('truncateSync') }
-
-	unzip(opts) { failUnsupported('unzip', opts) }
-
-	// File descriptor operations.
-	open(opts) { failUnsupported('open', opts) }
-	openSync() { throwUnsupported('openSync') }
-	close(opts) { failUnsupported('close', opts) }
-	closeSync() { throwUnsupported('closeSync') }
-	read(opts) { failUnsupported('read', opts) }
-	readSync() { throwUnsupported('readSync') }
-	write(opts) { failUnsupported('write', opts) }
-	writeSync() { throwUnsupported('writeSync') }
-	fstat(opts) { failUnsupported('fstat', opts) }
-	fstatSync() { throwUnsupported('fstatSync') }
-	ftruncate(opts) { failUnsupported('ftruncate', opts) }
-	ftruncateSync() { throwUnsupported('ftruncateSync') }
-
-	// Compression.
-	readCompressedFile(opts) { failUnsupported('readCompressedFile', opts) }
-	readCompressedFileSync() { throwUnsupported('readCompressedFileSync') }
-	readZipEntry(opts) { failUnsupported('readZipEntry', opts) }
-}
-
-// Stats is kept exported via this module's structuredClone-shaped output so
-// consumers that detect `instanceof Stats` (e.g. the previous wrapStats path)
-// still see a class identity; left in the module purely as a forward-compat
-// affordance.
-void Stats
-
-// Upstream base/index.js derives its canIUse list from this export; mirror
-// the upstream shape (method names off the FSM prototype).
-export const fileSystemManagerAPINames = Object
-	.getOwnPropertyNames(FileSystemManager.prototype)
-	.filter(name => name !== 'constructor')
 
 let instance
 
 export function getFileSystemManager() {
 	if (!instance) {
-		instance = new FileSystemManager()
+		instance = withUnsupportedSurfaceReplaced(getUpstreamFileSystemManager())
 	}
 	return instance
 }

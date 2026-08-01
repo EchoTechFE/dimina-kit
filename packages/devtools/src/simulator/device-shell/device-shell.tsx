@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { SIMULATOR_EVENTS as E } from '../../shared/bridge-channels'
 import type {
-  ApiCallPayload,
   NavActionPayload,
   TabActionPayload,
 } from '../../shared/bridge-channels'
 import type { SimulatorMiniApp } from '../simulator-mini-app'
 import type { DeviceShellProps } from './device-shell-types'
-import { runApiAsync } from '../run-api-async'
+import { attachApiCallForwarding } from '../api-call-forwarding'
 import { NavigationBar } from './navigation-bar'
 import { StatusBar } from './status-bar'
 import type { NativeDeviceInfo } from '../../shared/ipc-channels'
@@ -175,30 +174,8 @@ export function DeviceShell(
     return miniApp.onSessionEvent(E.NAV_ACTION, listener)
   }, [performNavAction, miniApp])
 
-  // ── invokeAPI fallback (main → simulator) ──────────────────────────────────
-  // Main forwards any invokeAPI name that is not registered in its
-  // ctx.simulatorApis registry to us. The simulator-resident MiniApp owns the
-  // wx.* handler (it can read DOM, open file pickers, …); we run it via
-  // runApiAsync (which captures the handler's success/fail callback) and
-  // echo the verdict back so main can fire the original service-side
-  // callbacks against their service-host ids.
-  useEffect(() => {
-    const listener = (payload: ApiCallPayload) => {
-      // `emit` fires once for one-shot APIs and on every subsequent success
-      // for persistent (`keep: true`) subscriptions like audioListen, so each
-      // container audio event reaches the service-side dispatcher.
-      void runApiAsync(miniApp, payload.name, payload.params, (verdict) => {
-        miniApp.notifyApiResponse({
-          requestId: payload.requestId,
-          ok: verdict.ok,
-          result: verdict.result,
-          errMsg: verdict.errMsg,
-          keep: verdict.keep,
-        })
-      })
-    }
-    return miniApp.onSessionEvent(E.API_CALL, listener)
-  }, [miniApp])
+  // ── invokeAPI fallback (main → simulator) — see api-call-forwarding.ts ─────
+  useEffect(() => attachApiCallForwarding(miniApp), [miniApp])
 
   // ── Click handlers (back arrow + tab item) ────────────────────────────────
   const handleBack = useCallback(() => {
