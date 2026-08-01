@@ -10,7 +10,7 @@
  *     `simulator.html` (matched by `evalInSimulator`). It mounts
  *     `.device-shell-root` and one `.device-shell__webview` per in-app page.
  *   - Each PAGE is a nested cross-process render-host `<webview>` guest loading
- *     `pageFrame.html?…&pagePath=pages%2F…`.
+ *     `__frame__.html?…&pagePath=pages%2F…`.
  *
  * So the old "view is alive" readiness probes (`win.contentView.children >= 2`
  * counted renderer `<webview>`s; `getType()==='webview'` found the single
@@ -18,7 +18,7 @@
  * them with the DISCRIMINATING native signals used by the native-host-*.spec.ts
  * references: DeviceShell mounted (`.device-shell-root`) with at least one
  * render-host page webview (`.device-shell__webview`), and — for crash/url
- * checks — reading the render-host guests (`pageFrame.html`) directly in main.
+ * checks — reading the render-host guests (`__frame__.html`) directly in main.
  */
 import fs from 'fs'
 import path from 'path'
@@ -29,6 +29,7 @@ import {
   closeProject,
   pollUntil,
   evalInSimulator,
+  RENDER_GUEST_URL_MARKER,
 } from './helpers'
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -87,7 +88,7 @@ function guestPagePath(url: string): string {
 }
 
 /**
- * Inspect the native render-host page guests (`pageFrame.html`) directly in the
+ * Inspect the native render-host page guests (`__frame__.html`) directly in the
  * main process. Returns each guest's decoded `pagePath` + crash state, plus
  * whether the simulator shell WCV (`simulator.html`) itself is crashed.
  *
@@ -97,16 +98,16 @@ function guestPagePath(url: string): string {
  * key off the URLs instead.
  */
 async function getNativePageInfo(electronApp: import('@playwright/test').ElectronApplication) {
-  return electronApp.evaluate(({ webContents }) => {
+  return electronApp.evaluate(({ webContents }, marker) => {
     const all = webContents.getAllWebContents().filter((wc) => !wc.isDestroyed())
     const shell = all.find((wc) => wc.getURL().includes('simulator.html'))
-    const guests = all.filter((wc) => wc.getURL().includes('pageFrame.html'))
+    const guests = all.filter((wc) => wc.getURL().includes(marker))
     return {
       shellFound: !!shell,
       shellCrashed: shell ? shell.isCrashed() : false,
       guests: guests.map((wc) => ({ url: wc.getURL(), crashed: wc.isCrashed() })),
     }
-  })
+  }, RENDER_GUEST_URL_MARKER)
 }
 
 /**

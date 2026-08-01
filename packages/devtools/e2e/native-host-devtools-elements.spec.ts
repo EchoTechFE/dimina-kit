@@ -1,11 +1,11 @@
 /**
  * E2E: the right-panel Chrome DevTools Elements panel reflects the ACTIVE RENDER
- * GUEST's live DOM tree (pageFrame.html), NOT the service-host document
+ * GUEST's live DOM tree (__frame__.html), NOT the service-host document
  * (service.html / "Dimina Service Host").
  *
  * In native-host mode (DIMINA_NATIVE_HOST=1) there are two WebContents layers:
  *   - Service Host (logic layer): URL contains `service.html`, title is "Dimina Service Host".
- *   - Render guest (view layer): URL contains `pageFrame.html`.
+ *   - Render guest (view layer): URL contains `__frame__.html`.
  *
  * The right-panel DevTools front-end (devtools://) natively inspects the service
  * host, but the `elements-forward` feature intercepts DOM./CSS./Overlay. commands
@@ -18,7 +18,7 @@
  *      `InspectorFrontendHost.__diminaElementsWrapped === true`.
  *   2. A `DOM.getDocument` call dispatched via the wrapped
  *      `InspectorFrontendHost.sendMessageToBackend` returns a root document whose
- *      `documentURL` points to a `pageFrame.html` URL, never to `service.html` /
+ *      `documentURL` points to a `__frame__.html` URL, never to `service.html` /
  *      "Dimina Service Host". This is the definitive signal that Elements is wired
  *      to the render guest, not the service host.
  *
@@ -38,6 +38,7 @@ import {
   ipcInvoke,
   pollUntil,
   evalInWebContentsByUrl,
+  RENDER_GUEST_URL_MARKER,
 } from './helpers'
 import { AutomationChannel, SimulatorWxmlChannel } from '../src/shared/ipc-channels'
 
@@ -90,14 +91,14 @@ async function bootApp(): Promise<AppHandle> {
   await openProjectInUI(win, FIXTURE_DIR, { waitMs: 20000 })
   await waitForSimulatorWebview(app)
 
-  // Wait for at least one render guest (pageFrame.html) to exist — the
+  // Wait for at least one render guest (__frame__.html) to exist — the
   // elements-forward hook requires an active render guest to route into.
   await pollUntil(
-    () => app.evaluate(({ webContents }) =>
+    () => app.evaluate(({ webContents }, marker) =>
       webContents.getAllWebContents().some(
-        (wc) => !wc.isDestroyed() && wc.getURL().includes('pageFrame.html'),
+        (wc) => !wc.isDestroyed() && wc.getURL().includes(marker),
       ),
-    ),
+    RENDER_GUEST_URL_MARKER),
     (present) => present === true,
     25000,
     300,
@@ -242,7 +243,7 @@ test.describe('native-host DevTools Elements panel reflects the render guest DOM
     ).toBe(true)
   })
 
-  test('DOM.getDocument via the front-end hook returns the render guest document (pageFrame.html), not the service host', async () => {
+  test('DOM.getDocument via the front-end hook returns the render guest document (__frame__.html), not the service host', async () => {
     const { app } = handle!
 
     // Wait until the hook is installed before probing (may have already settled
@@ -285,16 +286,16 @@ test.describe('native-host DevTools Elements panel reflects the render guest DOM
     ).toBeTruthy()
 
     // The discriminating assertion: the root document URL must point to the render
-    // guest (pageFrame.html). When elements-forward is absent or broken, this URL
+    // guest (__frame__.html). When elements-forward is absent or broken, this URL
     // resolves to the service host's own document (containing "service.html" or
     // having title "Dimina Service Host").
     const docUrl: string = String(root?.documentURL ?? root?.baseURL ?? '')
 
     expect(
       docUrl,
-      `DOM.getDocument root.documentURL should point to the render guest (pageFrame.html) ` +
+      `DOM.getDocument root.documentURL should point to the render guest (__frame__.html) ` +
       `but got: "${docUrl}". This means Elements is inspecting the service host instead of the render guest.`,
-    ).toContain('pageFrame.html')
+    ).toContain(RENDER_GUEST_URL_MARKER)
 
     expect(
       docUrl,

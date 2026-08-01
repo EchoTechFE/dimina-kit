@@ -1,5 +1,6 @@
 import { access, readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
+import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 
 function printUsage() {
@@ -39,28 +40,50 @@ async function exists(p) {
 
 // package.json only records the declared semver *range* (e.g. "^3.5.39");
 // for a dep whose major is >=1 that range also matches later minors
-// installed independently on each side. Find the installed package directory
-// by walking node_modules/<name>/package.json upward from the anchor — the
-// same directory order Node's resolver uses. Deliberately NOT
-// createRequire().resolve(): version comparison only needs the package
-// directory, not a loadable entry point, and an ESM-only exports map (no
-// `require` condition — e.g. oxc-walker@1.1.x) makes require-resolution
-// throw ERR_PACKAGE_PATH_NOT_EXPORTED for a perfectly installed package.
+// installed independently on each side. Walk the actual node_modules
+// resolution each side's own package.json would use, and climb to the
+// nearest package.json whose name matches (not just the first package.json
+// found, which could belong to a nested dependency).
 //
 // requiredPrefix guards the upstream (dimina/fe) side specifically: dimina/fe
 // is nested inside this repo, so if its own node_modules isn't installed,
-// the walk climbs up past it and can silently land in kit's own hoisted
-// node_modules — "resolved" would then just be comparing kit against
+// Node's resolution walks up past it and can silently land in kit's own
+// hoisted node_modules — "resolved" would then just be comparing kit against
 // itself and reporting false alignment. Reject any resolution that doesn't
 // land under dimina/fe instead of treating it as a valid answer.
 async function resolveInstalledVersion(anchorPackageJsonPath, depName, requiredPrefix) {
-  let dir = path.dirname(anchorPackageJsonPath)
+  // Real ESM resolution (`import.meta.resolve`), not CJS `require.resolve`:
+  // an ESM-only dep whose `exports` map lists only an `import` condition (no
+  // `require`/`default` fallback) throws ERR_PACKAGE_PATH_NOT_EXPORTED under
+  // CJS resolution — a real, correctly-installed package then gets
+  // misreported as "unresolved" on BOTH sides, regardless of whether the two
+  // sides actually agree on a version.
+  //
+  // `import.meta.resolve`'s second (parent) argument is NOT honored by
+  // Node's node_modules directory search here — it silently resolves
+  // relative to THIS script's own location no matter what parent URL is
+  // passed, which would make every call below resolve from this script's
+  // directory instead of the intended anchor. Spawning a child process with
+  // `cwd` set to the anchor's own directory sidesteps that: single-arg
+  // `import.meta.resolve(specifier)` correctly walks up from `cwd`.
+  let entry
+  try {
+    const out = execFileSync(
+      process.execPath,
+      ['--input-type=module', '-e', `console.log(import.meta.resolve(${JSON.stringify(depName)}))`],
+      { cwd: path.dirname(anchorPackageJsonPath), encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+    )
+    entry = fileURLToPath(out.trim())
+  } catch {
+    return null
+  }
+  if (requiredPrefix && !entry.startsWith(requiredPrefix + path.sep)) {
+    return null
+  }
+  let dir = path.dirname(entry)
   for (let hop = 0; hop < 16; hop++) {
-    const candidate = path.join(dir, 'node_modules', ...depName.split('/'), 'package.json')
+    const candidate = path.join(dir, 'package.json')
     if (await exists(candidate)) {
-      if (requiredPrefix && !candidate.startsWith(requiredPrefix + path.sep)) {
-        return null
-      }
       const pkg = await readJson(candidate)
       if (pkg.name === depName) return pkg.version
     }

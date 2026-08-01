@@ -1,7 +1,7 @@
 /**
  * Page — represents a mini program page in the simulator.
  *
- * The actual page content renders inside an iframe (pageFrame.html) within the
+ * The actual page content renders inside an iframe (__frame__.html) within the
  * simulator webview. All DOM queries and interactions target the iframe's document.
  *
  * Page data is not directly accessible (no getCurrentPages). Instead we inspect

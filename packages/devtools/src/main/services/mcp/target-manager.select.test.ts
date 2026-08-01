@@ -16,13 +16,17 @@ type Target = { url?: string; type?: string }
 // 真实形态的 target 列表片段，复用于多条规则。
 const shell: Target = { type: 'page', url: 'http://localhost:7788/simulator.html' }
 const workbench: Target = { type: 'page', url: 'file:///app/dist/entries/main/index.html' }
+// __frame__.html is the reserved render-host document name (target-manager.ts's
+// RENDER_GUEST_PATTERN imports DMB_PAGEFRAME_DOC_NAME) — these fixture URLs stand
+// in for the real dmb-resource://<bridge>/<appId>/<root>/<pageDir>/__frame__.html
+// shape closely enough for the substring match under test.
 const guestB1: Target = {
   type: 'webview',
-  url: 'file:///app/dist/render-host/pageFrame.html?appId=x&bridgeId=b1',
+  url: 'file:///app/dist/render-host/__frame__.html?appId=x&bridgeId=b1',
 }
 const guestB2: Target = {
   type: 'webview',
-  url: 'file:///app/dist/render-host/pageFrame.html?appId=x&bridgeId=b2',
+  url: 'file:///app/dist/render-host/__frame__.html?appId=x&bridgeId=b2',
 }
 const noUrl: Target = { type: 'other' } // 故意缺 url，用于验证跳过不抛错
 

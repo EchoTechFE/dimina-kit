@@ -4,6 +4,7 @@ import os from 'os'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { ProjectsChannel, ProjectChannel, SimulatorChannel } from '../src/shared/ipc-channels'
+import { DMB_PAGEFRAME_DOC_NAME } from '../src/shared/dmb-resource-url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -59,6 +60,21 @@ function readDemoProjectName(projectDir: string): string {
 /** Source demo mini-app for compilation tests. */
 export const DEMO_APP_DIR = resolveDemoAppDir()
 export const DEMO_APP_NAME = readDemoProjectName(DEMO_APP_DIR)
+
+// ── URL markers ────────────────────────────────────────────────────────
+
+/**
+ * Substring that identifies a render-host guest's `webContents.getURL()`
+ * (matched against, filtered on, or passed to `evalInWebContentsByUrl`
+ * across specs). Re-exports the same reserved document name the render
+ * host itself navigates to (`buildRenderHostDocumentUrl` in
+ * `dmb-resource-url.ts`) so specs never hardcode the literal — a previous
+ * fix moved the render-host document off the old fixed `pageFrame.html`
+ * path and every spec that had inlined that string silently stopped
+ * matching anything, turning negative assertions (`.filter(...).length`
+ * should be 0) into no-ops instead of failures.
+ */
+export const RENDER_GUEST_URL_MARKER = DMB_PAGEFRAME_DOC_NAME
 
 // ── IPC helpers ────────────────────────────────────────────────────────
 
@@ -195,7 +211,7 @@ export async function openProjectInUI(
  * The simulator's document loads `simulator.html` regardless of arch, so we
  * match on that URL — works for BOTH the default renderer `<webview>` AND the
  * native-host top-level WebContentsView (whose `getType()` is `'window'`, not
- * `'webview'`). The nested render-host page frames load `pageFrame.html`, so
+ * `'webview'`). The nested render-host page frames load `__frame__.html`, so
  * they're never mistaken for the simulator. Falls back to the legacy
  * `getType()==='webview'` match if no `simulator.html` content is found.
  */

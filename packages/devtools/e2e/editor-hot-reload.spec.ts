@@ -16,7 +16,7 @@
  *
  * DOM probing: screenshots can't capture nested webview content, so we read
  * `document.body.innerText` of every render-host page guest
- * (`pageFrame.html`) directly in the main process — same probe the
+ * (`__frame__.html`) directly in the main process — same probe the
  * .repro/editor-refresh-spike investigation validated.
  *
  * File hygiene: demo-app sources are mutated; both tests restore the original
@@ -33,6 +33,7 @@ import {
   closeProject,
   pollUntil,
   ipcInvoke,
+  RENDER_GUEST_URL_MARKER,
 } from './helpers'
 import { ProjectFsChannel } from '../src/shared/ipc-channels'
 
@@ -46,10 +47,10 @@ async function readRenderText(
   electronApp: import('@playwright/test').ElectronApplication,
 ): Promise<string> {
   try {
-    return await electronApp.evaluate(async ({ webContents }) => {
+    return await electronApp.evaluate(async ({ webContents }, marker) => {
       const frames = webContents
         .getAllWebContents()
-        .filter((wc) => !wc.isDestroyed() && wc.getURL().includes('pageFrame.html'))
+        .filter((wc) => !wc.isDestroyed() && wc.getURL().includes(marker))
       const texts: string[] = []
       for (const f of frames) {
         try {
@@ -59,7 +60,7 @@ async function readRenderText(
         }
       }
       return texts.join('\n---FRAME---\n')
-    })
+    }, RENDER_GUEST_URL_MARKER)
   } catch {
     return ''
   }

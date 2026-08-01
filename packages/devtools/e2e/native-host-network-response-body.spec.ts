@@ -46,6 +46,7 @@ import {
   pollUntil,
   evalInSimulator,
   evalInWebContentsByUrl,
+  RENDER_GUEST_URL_MARKER,
 } from './helpers'
 
 // NOTE: scope DIMINA_NATIVE_HOST to THIS spec's electron launch, never
@@ -384,12 +385,12 @@ test.describe('native-host DevTools Network panel loads a wx.request response bo
     const imgToken = `img-body-${Date.now()}`
     const imgUrl = `${baseUrl}/img?marker=${imgToken}`
 
-    // Load the image from inside the render-host guest realm (pageFrame.html —
+    // Load the image from inside the render-host guest realm (__frame__.html —
     // the mini-app page frame), NOT the simulator or service host: this is the
     // leg the render-guest capture wiring covers.
     const loadPromise = evalInWebContentsByUrl<boolean>(
       app,
-      'pageFrame.html',
+      RENDER_GUEST_URL_MARKER,
       `new Promise((resolve) => {
         const img = new Image()
         img.onload = () => resolve(true)
