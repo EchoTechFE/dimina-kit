@@ -35,7 +35,7 @@ interface NativeHostBridge {
   notifyApiResponse(payload: ApiResponsePayload): void
   notifyActivePage(payload: ActivePagePayload): void
   notifyPageStack(payload: PageStackPayload): void
-  createRenderHostUrl(opts: { bridgeId: string; appId: string; pagePath: string; isTab?: boolean; backgroundColor?: string }): string
+  createRenderHostUrl(opts: { bridgeId: string; appId: string; root: string; pagePath: string; isTab?: boolean; backgroundColor?: string }): string
   renderPreloadUrl: string
   device?: NativeDeviceInfo
   onSimulatorEvent<T = unknown>(channel: string, listener: (payload: T) => void): () => void
@@ -79,6 +79,8 @@ export class SimulatorMiniApp {
   appSessionId: string | null = null
   bridgeId: string | null = null
   resourceBaseUrl: string | null = null
+  /** The page's resource root inside the mini-app package (e.g. `'main'`); set from `SpawnResult.root` — see `createRenderHostUrl`. */
+  root: string | null = null
   serviceWcId: number | null = null
   manifest: AppManifest | null = null
   rootWindowConfig: PageWindowConfig | null = null
@@ -144,6 +146,7 @@ export class SimulatorMiniApp {
     this.appSessionId = result.appSessionId
     this.bridgeId = result.bridgeId
     this.resourceBaseUrl = result.resourceBaseUrl
+    this.root = result.root
     this.serviceWcId = result.serviceWcId
     this.manifest = result.manifest
     this.rootWindowConfig = result.rootWindowConfig
@@ -164,6 +167,7 @@ export class SimulatorMiniApp {
     this.appSessionId = null
     this.bridgeId = null
     this.resourceBaseUrl = null
+    this.root = null
     this.serviceWcId = null
     this.manifest = null
     this.rootWindowConfig = null
@@ -306,6 +310,10 @@ export class SimulatorMiniApp {
     return getNativeHost().createRenderHostUrl({
       bridgeId,
       appId: this.appId,
+      // Session-level, not per-call: root is resolved server-side (spawn()
+      // response), not requested per page. Falls back to 'main' to match the
+      // server-side default (`opts.root || 'main'`) if called before spawn().
+      root: this.root ?? 'main',
       pagePath: pagePath ?? this.pagePath,
       isTab,
       backgroundColor,

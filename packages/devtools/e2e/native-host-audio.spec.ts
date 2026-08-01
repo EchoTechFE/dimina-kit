@@ -70,6 +70,7 @@ import {
   ipcInvoke,
   pollUntil,
   evalInSimulator,
+  RENDER_GUEST_URL_MARKER,
 } from './helpers'
 import { AutomationChannel } from '../src/shared/ipc-channels'
 
@@ -309,12 +310,12 @@ test.describe('native-host audio event bridge e2e', () => {
  * swallowed by the caller.
  */
 async function evalInActivePage(expression: string): Promise<unknown> {
-  return electronApp.evaluate(async ({ webContents }, expr) => {
+  return electronApp.evaluate(async ({ webContents }, payload) => {
     const all = webContents.getAllWebContents()
-    // Active page frames load pageFrame.html; pick the last (top-of-stack) one.
-    const pages = all.filter((wc) => wc.getURL().includes('pageFrame.html'))
+    // Active page frames load __frame__.html; pick the last (top-of-stack) one.
+    const pages = all.filter((wc) => wc.getURL().includes(payload.marker))
     const target = pages[pages.length - 1] ?? all.find((wc) => wc.getType() === 'webview')
     if (!target) return false
-    return target.executeJavaScript(expr)
-  }, expression)
+    return target.executeJavaScript(payload.expr)
+  }, { expr: expression, marker: RENDER_GUEST_URL_MARKER })
 }

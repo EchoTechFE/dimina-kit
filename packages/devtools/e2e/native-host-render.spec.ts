@@ -23,6 +23,7 @@ import {
   pollUntil,
   evalInSimulator,
   evalInWebContentsByUrl,
+  RENDER_GUEST_URL_MARKER,
 } from './helpers'
 import {
   AutomationChannel,
@@ -154,8 +155,14 @@ test.describe('native-host render path e2e', () => {
       electronApp,
       `(() => { const w = document.querySelector('.device-shell__webview'); return w ? (w.getAttribute('src') || '') : '' })()`,
     )
-    expect(src).toContain('render-host')
-    expect(src).toContain('pageFrame.html')
+    // Modifying: this used to assert the literal substring 'render-host',
+    // true only because the OLD fixed document path was
+    // `/__sdk__/render-host/pageFrame.html`. The document now lives directly
+    // under the page's own package path (no `render-host` path segment at
+    // all — see dmb-resource-url.ts), so the real invariant is the protocol
+    // (dmb-resource://, not file://) plus the reserved document marker.
+    expect(src).toMatch(/^dmb-resource:\/\//)
+    expect(src).toContain(RENDER_GUEST_URL_MARKER)
     expect(src).toContain('bridgeId=')
   })
 
@@ -328,9 +335,9 @@ test.describe('native-host render path e2e', () => {
     // Let the server register this client before emitting.
     await new Promise((r) => setTimeout(r, 300))
 
-    // Fire console.log inside the active render-host guest (pageFrame.html). Its
+    // Fire console.log inside the active render-host guest (__frame__.html). Its
     // preload monkeypatches console → bridge-router → ctx.guestConsole → broadcast.
-    await evalInWebContentsByUrl(electronApp, 'pageFrame.html', `console.log(${JSON.stringify(marker)}); 1`)
+    await evalInWebContentsByUrl(electronApp, RENDER_GUEST_URL_MARKER, `console.log(${JSON.stringify(marker)}); 1`)
 
     const found = await pollUntil(
       async () => logs.some((p) => JSON.stringify(p.args ?? []).includes(marker)),

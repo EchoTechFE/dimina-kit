@@ -17,7 +17,7 @@
  * reads the spawn context's host-env snapshot, so it reflects exactly what the
  * mini-app's own code observes — strictly more behaviour-level than measuring a
  * DOM rect. As a secondary pin we ALSO read `window.innerWidth/innerHeight`
- * inside the active render-host guest (`pageFrame.html`, option b): the real
+ * inside the active render-host guest (`__frame__.html`, option b): the real
  * rendered viewport. Under correct device sizing BOTH equal the device's
  * logical size and BOTH stay fixed across zoom.
  *
@@ -40,6 +40,7 @@ import {
   ipcInvoke,
   pollUntil,
   evalInSimulator,
+  RENDER_GUEST_URL_MARKER,
 } from './helpers'
 import { AutomationChannel } from '../src/shared/ipc-channels'
 import { DEVICES, ZOOM_OPTIONS } from '../src/renderer/shared/constants'
@@ -113,15 +114,15 @@ async function readServiceSystemInfo(app: ElectronApplication): Promise<Reported
 
 /**
  * Secondary pin: the actual rendered viewport of the active render-host guest
- * (`pageFrame.html`). This is the page the mini-app paints into; its
+ * (`__frame__.html`). This is the page the mini-app paints into; its
  * innerWidth/innerHeight is what layout actually gets. Returns null if no
  * render guest is reachable (so the test can degrade to the service-host
  * assertion only rather than hard-error on a harness gap).
  */
 async function readActiveGuestViewport(app: ElectronApplication): Promise<{ width: number; height: number } | null> {
-  return app.evaluate(async ({ webContents }) => {
+  return app.evaluate(async ({ webContents }, marker) => {
     const guests = webContents.getAllWebContents().filter(
-      (wc) => !wc.isDestroyed() && wc.getURL().includes('pageFrame.html'),
+      (wc) => !wc.isDestroyed() && wc.getURL().includes(marker),
     )
     if (guests.length === 0) return null
     // Prefer a guest that is actually laid out (innerWidth > 0).
@@ -132,7 +133,7 @@ async function readActiveGuestViewport(app: ElectronApplication): Promise<{ widt
       } catch { /* try next */ }
     }
     return null
-  }).catch(() => null)
+  }, RENDER_GUEST_URL_MARKER).catch(() => null)
 }
 
 /** Drive the real device dropdown in the renderer main window. */

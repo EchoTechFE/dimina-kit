@@ -1,7 +1,7 @@
 /**
  * Element — represents a DOM element in the mini program page iframe.
  *
- * All queries and interactions happen inside the page iframe (pageFrame.html),
+ * All queries and interactions happen inside the page iframe (__frame__.html),
  * not the simulator top window.
  */
 

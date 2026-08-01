@@ -18,7 +18,7 @@ import path from 'path'
 import fs from 'fs'
 import { fileURLToPath } from 'url'
 import { _electron, test, expect, type ElectronApplication, type Page } from '@playwright/test'
-import { openProjectInUI, pollUntil, ipcInvoke } from './helpers'
+import { openProjectInUI, pollUntil, ipcInvoke, RENDER_GUEST_URL_MARKER } from './helpers'
 import { ViewChannel } from '../src/shared/ipc-channels'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -28,31 +28,31 @@ const dataBase = (process.env.DIMINA_DEVTOOLS_DATA_DIR
   ?? (fs.existsSync('/Volumes/jdisk') ? '/Volumes/jdisk/electron-data/dimina-devtools-e2e' : null))
   ?? path.resolve(__dirname, '..', 'node_modules', '.cache', 'devtools-e2e')
 
-/** Concatenated visible text of every render-host page guest (pageFrame.html). */
+/** Concatenated visible text of every render-host page guest (__frame__.html). */
 async function readRenderText(app: ElectronApplication): Promise<string> {
   try {
-    return await app.evaluate(async ({ webContents }) => {
+    return await app.evaluate(async ({ webContents }, urlMarker) => {
       const frames = webContents.getAllWebContents()
-        .filter((wc) => !wc.isDestroyed() && wc.getURL().includes('pageFrame.html'))
+        .filter((wc) => !wc.isDestroyed() && wc.getURL().includes(urlMarker))
       const out: string[] = []
       for (const f of frames) {
         try { out.push((await f.executeJavaScript('document.body.innerText')) as string) } catch {}
       }
       return out.join('\n---\n')
-    })
+    }, RENDER_GUEST_URL_MARKER)
   } catch { return '' }
 }
 
 /** Computed style of the element whose text is exactly `marker`, read in the render guest. */
 async function readStyledMarker(app: ElectronApplication, marker: string): Promise<{ found: boolean; color?: string; fontWeight?: string }> {
-  return app.evaluate(async ({ webContents }, m) => {
+  return app.evaluate(async ({ webContents }, payload) => {
     const frames = webContents.getAllWebContents()
-      .filter((wc) => !wc.isDestroyed() && wc.getURL().includes('pageFrame.html'))
+      .filter((wc) => !wc.isDestroyed() && wc.getURL().includes(payload.urlMarker))
     for (const f of frames) {
       try {
         const r = await f.executeJavaScript(`(() => {
           const all = Array.from(document.querySelectorAll('*'));
-          const el = all.find(e => e.children.length === 0 && (e.textContent||'').trim() === ${JSON.stringify(m)});
+          const el = all.find(e => e.children.length === 0 && (e.textContent||'').trim() === ${JSON.stringify(payload.m)});
           if (!el) return { found: false };
           const c = getComputedStyle(el);
           return { found: true, color: c.color, fontWeight: c.fontWeight };
@@ -61,7 +61,7 @@ async function readStyledMarker(app: ElectronApplication, marker: string): Promi
       } catch {}
     }
     return { found: false }
-  }, marker)
+  }, { m: marker, urlMarker: RENDER_GUEST_URL_MARKER })
 }
 
 /** Probe the workbench WCV: classify the custom files + run a wxml completion. */

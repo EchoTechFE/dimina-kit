@@ -140,10 +140,15 @@ for (const rel of ASSETS) {
       .replaceAll('../../../../dimina/fe/packages/service/dist/', '../native-host/service/')
     writeFileSync(dest, html)
   } else if (rel === 'src/render-host/pageFrame.html') {
+    // Root-absolute `/__sdk__/native-host/…`, not page-relative `../native-host/…`:
+    // this same document is now served at a per-page path
+    // (`/<appId>/<root>/<pageDir>/__frame__.html`, see dmb-resource-url.ts)
+    // whose depth varies per page, so a page-relative reference to these
+    // sibling SDK assets would resolve to the wrong place.
     const html = readFileSync(src, 'utf8')
-      .replaceAll('../../../../dimina/fe/packages/common/dist/', '../native-host/common/')
-      .replaceAll('../../../../dimina/fe/packages/render/dist/', '../native-host/render/')
-      .replaceAll('../../../../dimina/fe/packages/container/dist/assets/', '../native-host/container/')
+      .replaceAll('../../../../dimina/fe/packages/common/dist/', '/__sdk__/native-host/common/')
+      .replaceAll('../../../../dimina/fe/packages/render/dist/', '/__sdk__/native-host/render/')
+      .replaceAll('../../../../dimina/fe/packages/container/dist/assets/', '/__sdk__/native-host/container/')
     writeFileSync(dest, html)
   } else {
     cpSync(src, dest)

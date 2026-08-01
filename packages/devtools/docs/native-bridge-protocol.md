@@ -195,7 +195,7 @@ bridge-router 的 session 数据结构（字段全集）：
 
 所有资源（render bundle、service `logic.js`、`app-config.json`、页面样式）都 resolve against `resourceBaseUrl`：默认是 simulator 页面的 dev-server origin（`http://localhost:<port>/`，静态服务 `<appId>/<root>/…` 编译产物）。当调用方未提供 `resourceBaseUrl`（单测）时，bridge-router 起一个本地 `DiminaResourceServer`（rooted at `pkgRoot/root`）作为 nullable fallback，其 baseUrl 写入 `resourceBaseUrl`（`handleSpawn` 的 resource base resolution）。
 
-`dmb-resource://` 协议（`installResourceProtocolHandlers`，注册到默认 protocol、共享 fallback session，以及经 configurator 注册到每个 per-project `persist:miniapp-<key>` session）把 `dmb-resource://<bridgeId>/<path>` 的请求按 hostname 解析出 AppSession，再 `fetch` 到该 session 的 `resourceBaseUrl`。
+`dmb-resource://` 协议（`installResourceProtocolHandlers`，注册到默认 protocol、共享 fallback session，以及经 configurator 注册到每个 per-project `persist:miniapp-<key>` session）先按 hostname（bridgeId）解析出 AppSession，解析不到 → 404（对任何路径都是，含 SDK/文档路径——已 dispose 或从未存在的 bridge 拿不到任何内容，stale-guest 检测靠这个）；解析到之后按路径分两段路由（`handleDmbResourceRequest`，`dmb-resource/handle-request.ts`）：`/__sdk__/*` 直接读本地 runtime dist（render-host/native-host 文件）；其余路径里，**最后一段是保留文件名 `__frame__.html`** 的（形如 `/<appId>/<root>/<页面目录>/__frame__.html`，render-host `<webview>` 实际导航到的文档 URL，见 `dmb-resource-url.ts` 的 `buildRenderHostDocumentUrl`）同样直接读同一份 SDK pageFrame.html，不管 appId/root/页面目录是什么，**没有单独的虚拟前缀**——直接挂在页面自己的包路径下，靠 `__frame__.html` 这个双下划线保留名（和 `/__sdk__/` 同一套约定）避免和真实编译产物同名；不满足这条的路径都 `fetch` 到该 session 的 `resourceBaseUrl`。文档 URL 把 appId/root/页面目录编进 path 而不只是 query string，是为了让浏览器对页面里手写相对路径资源引用（如 `<image src="../../static/x.png">`）的原生解析天然落在正确的包路径下，而不是 SDK 或 origin 相对路径。
 
 `logic.js` 走两条互补路径：
 

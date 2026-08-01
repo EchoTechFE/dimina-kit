@@ -28,6 +28,7 @@ import {
   ipcInvoke,
   pollUntil,
   evalInWebContentsByUrl,
+  RENDER_GUEST_URL_MARKER,
 } from './helpers'
 import { AutomationChannel } from '../src/shared/ipc-channels'
 
@@ -42,7 +43,7 @@ const MARKER_A = 'Go A'
 const MARKER_B = 'Go Detail'
 
 /**
- * Read the innerText of the first live render-host page guest (pageFrame.html).
+ * Read the innerText of the first live render-host page guest (__frame__.html).
  * Returns null while no live guest exists (between projects or before first mount).
  */
 async function readRenderGuestText(
@@ -50,7 +51,7 @@ async function readRenderGuestText(
 ): Promise<string | null> {
   return evalInWebContentsByUrl<string>(
     electronApp,
-    'pageFrame.html',
+    RENDER_GUEST_URL_MARKER,
     '(document.body ? document.body.innerText : "")',
   ).catch(() => null)
 }
@@ -60,12 +61,12 @@ async function readRenderGuestText(
  * Used to confirm all guests from the previous project are gone after the switch.
  */
 function liveGuestCount(electronApp: ElectronApplication): Promise<number> {
-  return electronApp.evaluate(({ webContents }) =>
+  return electronApp.evaluate(({ webContents }, marker) =>
     webContents
       .getAllWebContents()
-      .filter((wc) => !wc.isDestroyed() && wc.getURL().includes('pageFrame.html'))
+      .filter((wc) => !wc.isDestroyed() && wc.getURL().includes(marker))
       .length,
-  )
+  RENDER_GUEST_URL_MARKER)
 }
 
 test.describe('native-host switch project via back-button path disposes old guests and renders new project', () => {
@@ -192,27 +193,27 @@ test.describe('native-host switch project via back-button path disposes old gues
       300,
     ).catch(() => {})
 
-    // The canonical stale-guest check: after switching to B, no pageFrame.html
+    // The canonical stale-guest check: after switching to B, no __frame__.html
     // WebContents that are both live AND serve A's content should exist.
     const staleAGuestExists = await electronApp.evaluate(
-      async ({ webContents }, markerA) => {
+      async ({ webContents }, payload) => {
         const all = webContents.getAllWebContents()
         const liveGuests = all.filter(
-          (wc) => !wc.isDestroyed() && wc.getURL().includes('pageFrame.html'),
+          (wc) => !wc.isDestroyed() && wc.getURL().includes(payload.urlMarker),
         )
         for (const wc of liveGuests) {
           try {
             const text = await wc.executeJavaScript(
               '(document.body ? document.body.innerText : "")',
             ) as string
-            if (text.includes(markerA)) return true
+            if (text.includes(payload.markerA)) return true
           } catch {
             // destroyed mid-check — not a stale guest problem
           }
         }
         return false
       },
-      MARKER_A,
+      { markerA: MARKER_A, urlMarker: RENDER_GUEST_URL_MARKER },
     )
 
     expect(

@@ -31,6 +31,7 @@ import {
   pollUntil,
   waitForSimulatorWebview,
   waitSimulatorReady,
+  RENDER_GUEST_URL_MARKER,
 } from './helpers'
 import { settleBridgeCensus } from './resource-guards'
 
@@ -54,12 +55,12 @@ function homeWxmlContent(marker: string, attempt: number): string {
 /** Concatenated `document.body.innerText` of every render-host guest. */
 async function readRenderText(app: ElectronApplication): Promise<string> {
   try {
-    return await app.evaluate(async ({ webContents }) => {
+    return await app.evaluate(async ({ webContents }, marker) => {
       const frames = webContents
         .getAllWebContents()
         // Skip loading frames: executeJavaScript on a loading wc queues one
         // did-stop-loading waiter per poll (MaxListeners pile-up under churn).
-        .filter((wc) => !wc.isDestroyed() && !wc.isLoading() && wc.getURL().includes('pageFrame.html'))
+        .filter((wc) => !wc.isDestroyed() && !wc.isLoading() && wc.getURL().includes(marker))
       const texts: string[] = []
       for (const f of frames) {
         try {
@@ -69,7 +70,7 @@ async function readRenderText(app: ElectronApplication): Promise<string> {
         }
       }
       return texts.join('\n---FRAME---\n')
-    })
+    }, RENDER_GUEST_URL_MARKER)
   } catch {
     return ''
   }

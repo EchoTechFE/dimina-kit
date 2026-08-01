@@ -1,12 +1,12 @@
 /**
  * E2E (native-host only): ProjectChannel.CaptureThumbnail captures the
- * render guest (pageFrame.html) content, not the outer simulator
+ * render guest (__frame__.html) content, not the outer simulator
  * WebContentsView (DeviceShell chrome).
  *
  * Under native-host the simulator panel WebContentsView (simulator.html)
  * hosts the DeviceShell HTML — phone bezels, gray "desk" background and the
  * phone chrome. The actual mini-app content lives in a SEPARATE WebContents
- * (`pageFrame.html`) hosted as a nested <webview> inside the DeviceShell.
+ * (`__frame__.html`) hosted as a nested <webview> inside the DeviceShell.
  *
  * The discriminating observable is image pixel dimensions:
  *   - The outer simulator WVC captures the full DeviceShell page, which
@@ -39,6 +39,7 @@ import {
   closeProject,
   ipcInvoke,
   pollUntil,
+  RENDER_GUEST_URL_MARKER,
 } from './helpers'
 import { ProjectChannel, AutomationChannel } from '../src/shared/ipc-channels'
 
@@ -119,15 +120,15 @@ test.describe('native-host captureThumbnail targets the render guest, not the si
     await openProjectInUI(mainWindow, FIXTURE_DIR, { waitMs: 20000 })
     await waitForSimulatorWebview(electronApp)
 
-    // Wait until the render guest (pageFrame.html) is mounted and has a URL —
+    // Wait until the render guest (__frame__.html) is mounted and has a URL —
     // captureThumbnail falls back to the outer WVC when the guest is absent,
     // so the test must call it only after the guest is live.
     await pollUntil(
-      () => electronApp.evaluate(({ webContents }) =>
+      () => electronApp.evaluate(({ webContents }, marker) =>
         webContents.getAllWebContents().some(
-          (wc) => !wc.isDestroyed() && wc.getURL().includes('pageFrame.html'),
+          (wc) => !wc.isDestroyed() && wc.getURL().includes(marker),
         ),
-      ),
+      RENDER_GUEST_URL_MARKER),
       (present) => present === true,
       30000,
       300,
@@ -141,15 +142,15 @@ test.describe('native-host captureThumbnail targets the render guest, not the si
 
   test('thumbnail PNG dimensions match the render guest, not the outer simulator WVC', async () => {
     // Measure the pixel dimensions of the outer simulator WVC (simulator.html)
-    // and the render guest (pageFrame.html) via PNG header in the main process.
+    // and the render guest (__frame__.html) via PNG header in the main process.
     // Both captures happen before the IPC call so the timing is deterministic.
-    const wcSizes = await electronApp.evaluate(async ({ webContents }) => {
+    const wcSizes = await electronApp.evaluate(async ({ webContents }, marker) => {
       const all = webContents.getAllWebContents()
       const simWc = all.find(
         (wc) => wc.getURL().includes('simulator.html') && !wc.isDestroyed(),
       )
       const guestWc = all.find(
-        (wc) => wc.getURL().includes('pageFrame.html') && !wc.isDestroyed(),
+        (wc) => wc.getURL().includes(marker) && !wc.isDestroyed(),
       )
       if (!simWc || !guestWc) return null
 
@@ -172,7 +173,7 @@ test.describe('native-host captureThumbnail targets the render guest, not the si
           height: guestPng.readUInt32BE(20),
         },
       }
-    })
+    }, RENDER_GUEST_URL_MARKER)
 
     expect(wcSizes, 'both simulator WVC and render guest must be capturable').toBeTruthy()
 

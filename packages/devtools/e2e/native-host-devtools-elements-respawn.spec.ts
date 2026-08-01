@@ -1,7 +1,7 @@
 /**
  * E2E regression guard: after a hot-reload respawn (source edit → watcher rebuild →
  * DeviceShell respawn), the embedded Chrome DevTools Elements panel must remain
- * pointed at the RENDER GUEST (pageFrame.html), not regress to the Service Host
+ * pointed at the RENDER GUEST (__frame__.html), not regress to the Service Host
  * (service.html / "Dimina Service Host").
  *
  * The elements-forward feature intercepts DOM./CSS./Overlay. commands in the
@@ -13,7 +13,7 @@
  *
  * Invariant: for every hot-reload cycle, DOM.getDocument dispatched via the
  * (possibly wrapped) InspectorFrontendHost must return a root whose documentURL
- * contains "pageFrame.html" and does not contain "service.html",
+ * contains "__frame__.html" and does not contain "service.html",
  * "index.html?theme", or service-host system-info markers
  * ("statusBarHeight", '"theme":"light"').
  *
@@ -35,6 +35,7 @@ import {
   ipcInvoke,
   pollUntil,
   evalInWebContentsByUrl,
+  RENDER_GUEST_URL_MARKER,
 } from './helpers'
 import { AutomationChannel, ProjectFsChannel } from '../src/shared/ipc-channels'
 
@@ -98,10 +99,10 @@ async function bootApp(): Promise<AppHandle> {
  */
 async function readRenderText(app: ElectronApplication): Promise<string> {
   try {
-    return await app.evaluate(async ({ webContents }) => {
+    return await app.evaluate(async ({ webContents }, marker) => {
       const frames = webContents
         .getAllWebContents()
-        .filter((wc) => !wc.isDestroyed() && wc.getURL().includes('pageFrame.html'))
+        .filter((wc) => !wc.isDestroyed() && wc.getURL().includes(marker))
       const texts: string[] = []
       for (const f of frames) {
         try {
@@ -111,7 +112,7 @@ async function readRenderText(app: ElectronApplication): Promise<string> {
         }
       }
       return texts.join('\n')
-    })
+    }, RENDER_GUEST_URL_MARKER)
   } catch {
     return ''
   }
@@ -356,9 +357,9 @@ test.describe('native-host Elements panel stays pointed at the render guest afte
         expect(
           docUrl,
           `cycle ${cycle}: DOM.getDocument root.documentURL must point to the render guest ` +
-          `(pageFrame.html) after respawn, but got: "${docUrl}". ` +
+          `(__frame__.html) after respawn, but got: "${docUrl}". ` +
           'Elements has latched onto the service host or device shell.',
-        ).toContain('pageFrame.html')
+        ).toContain(RENDER_GUEST_URL_MARKER)
 
         expect(
           isServiceHostUrl(docUrl),

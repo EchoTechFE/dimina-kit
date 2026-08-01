@@ -15,7 +15,7 @@
  * The two apps share the same home page label ("HOME PAGE") but differ in
  * their navigation buttons. "Go Detail" is exclusive to A; "Go A" is
  * exclusive to B. Reading document.body.innerText from the active
- * pageFrame.html render-host guest captures both positive and negative
+ * __frame__.html render-host guest captures both positive and negative
  * evidence with zero dependency on appId internals.
  */
 import { test, expect } from './fixtures'
@@ -27,6 +27,7 @@ import {
   pollUntil,
   evalInWebContentsByUrl,
   waitForSimulatorWebview,
+  RENDER_GUEST_URL_MARKER,
 } from './helpers'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -40,10 +41,10 @@ const MARKER_A = 'Go Detail'
 const MARKER_B = 'Go A'
 
 /**
- * Read the innerText of the first live render-host page guest (pageFrame.html).
+ * Read the innerText of the first live render-host page guest (__frame__.html).
  * Returns null while no live guest exists (between projects or before first mount).
  *
- * pageFrame.html is the exclusive URL pattern for the native-host render-host
+ * __frame__.html is the exclusive URL pattern for the native-host render-host
  * <webview> guests; evalInWebContentsByUrl finds the first matching live WC
  * and executes JS in its main world. body.innerText includes all text rendered
  * by Vue into the WXML slot tree.
@@ -53,7 +54,7 @@ async function readRenderGuestText(
 ): Promise<string | null> {
   return evalInWebContentsByUrl<string>(
     electronApp,
-    'pageFrame.html',
+    RENDER_GUEST_URL_MARKER,
     '(document.body ? document.body.innerText : "")',
   ).catch(() => null)
 }
@@ -67,12 +68,12 @@ async function readRenderGuestText(
 async function liveGuestCount(
   electronApp: import('@playwright/test').ElectronApplication,
 ): Promise<number> {
-  return electronApp.evaluate(({ webContents }) =>
+  return electronApp.evaluate(({ webContents }, marker) =>
     webContents
       .getAllWebContents()
-      .filter((wc) => !wc.isDestroyed() && wc.getURL().includes('pageFrame.html'))
+      .filter((wc) => !wc.isDestroyed() && wc.getURL().includes(marker))
       .length,
-  )
+  RENDER_GUEST_URL_MARKER)
 }
 
 test.describe('simulator content after close-reopen with a different project', () => {

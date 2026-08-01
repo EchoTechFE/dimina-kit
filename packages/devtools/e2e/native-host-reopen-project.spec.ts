@@ -4,14 +4,14 @@
  * from the closed project alive in the main process.
  *
  * Under native-host each project session spawns render-host WebContents
- * (pageFrame.html webviews inside the DeviceShell). Closing a project must
+ * (__frame__.html webviews inside the DeviceShell). Closing a project must
  * destroy those WebContents; re-opening (or opening a different project)
  * must create new ones. If old guests survive close, the simulator can
  * render stale content from the closed project while the new project's
  * guests also attempt to mount — producing a blank or stale simulator view.
  *
  * The discriminating observable is the `bridgeId` query parameter embedded
- * in the render-host guest URL (e.g. `pageFrame.html?bridgeId=<n>`).
+ * in the render-host guest URL (e.g. `__frame__.html?bridgeId=<n>`).
  * Each session allocates a fresh bridgeId, so:
  *
  *   1. After opening project A, the DeviceShell's <webview> src contains
@@ -21,7 +21,7 @@
  *      proving a new session was allocated.
  *   3. No live WebContents whose URL still contains bridgeId_A must survive:
  *      getAllWebContents() must not include any non-destroyed wc whose URL
- *      contains both `pageFrame.html` and bridgeId_A. This is the direct
+ *      contains both `__frame__.html` and bridgeId_A. This is the direct
  *      assertion that old guests were torn down.
  *
  * Fixture pair:
@@ -43,6 +43,7 @@ import {
   ipcInvoke,
   pollUntil,
   evalInSimulator,
+  RENDER_GUEST_URL_MARKER,
 } from './helpers'
 import { AutomationChannel } from '../src/shared/ipc-channels'
 
@@ -72,34 +73,35 @@ async function getActiveBridgeId(electronApp: ElectronApplication): Promise<stri
 }
 
 /**
- * Count live render guest WebContents (pageFrame.html) in the main process.
- * A guest is "live" when it is not destroyed and its URL contains 'pageFrame.html'.
+ * Count live render guest WebContents (__frame__.html) in the main process.
+ * A guest is "live" when it is not destroyed and its URL contains the render
+ * guest URL marker.
  */
 function countLiveGuests(electronApp: ElectronApplication): Promise<number> {
-  return electronApp.evaluate(({ webContents }) =>
+  return electronApp.evaluate(({ webContents }, marker) =>
     webContents
       .getAllWebContents()
-      .filter((wc) => !wc.isDestroyed() && wc.getURL().includes('pageFrame.html'))
+      .filter((wc) => !wc.isDestroyed() && wc.getURL().includes(marker))
       .length,
-  )
+  RENDER_GUEST_URL_MARKER)
 }
 
 /**
  * Return true if any non-destroyed WebContents URL includes both
- * `pageFrame.html` and the supplied bridgeId string.
+ * `__frame__.html` and the supplied bridgeId string.
  */
 function bridgeIdStillLive(electronApp: ElectronApplication, bridgeId: string): Promise<boolean> {
   return electronApp.evaluate(
-    ({ webContents }, id) =>
+    ({ webContents }, payload) =>
       webContents
         .getAllWebContents()
         .some(
           (wc) =>
             !wc.isDestroyed() &&
-            wc.getURL().includes('pageFrame.html') &&
-            wc.getURL().includes(id),
+            wc.getURL().includes(payload.marker) &&
+            wc.getURL().includes(payload.id),
         ),
-    bridgeId,
+    { id: bridgeId, marker: RENDER_GUEST_URL_MARKER },
   )
 }
 
