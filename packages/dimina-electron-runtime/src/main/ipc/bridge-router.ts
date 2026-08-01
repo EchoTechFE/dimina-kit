@@ -2873,7 +2873,7 @@ function installResourceProtocolHandlers(
       sdkRoot,
       resolveSession: (bridgeId) => {
         const ap = resolveAppByBridgeId(state, bridgeId)
-        return ap ? { resourceBaseUrl: ap.resourceBaseUrl } : null
+        return ap ? { resourceBaseUrl: ap.resourceBaseUrl, appId: ap.appId, root: ap.root } : null
       },
     })
   }

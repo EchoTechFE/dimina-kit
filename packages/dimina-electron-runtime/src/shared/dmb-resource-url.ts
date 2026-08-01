@@ -59,13 +59,20 @@ export function buildRenderHostDocumentUrl(opts: RenderHostDocumentUrlOptions): 
   // keep correct). '.'/'..' get normalized away by `new URL(...)` itself,
   // which would silently eat into that same depth — so page-directory
   // segments get the same check as appId/root, not just a '/' check.
+  // '\' gets the same treatment as '/': mini-app page paths are always
+  // POSIX-style, so a backslash reaching here means either a compiler bug
+  // emitting a native (Windows) separator or the depth invariant is already
+  // broken — either way it must not be split silently, since
+  // `opts.pagePath.split('/')` on a backslash-only path returns a single
+  // element and silently drops every directory segment.
+  const PATH_SEPARATOR_RE = /[/\\]/
   for (const [name, value] of [['appId', opts.appId], ['root', opts.root]] as const) {
-    if (value.includes('/') || value === '.' || value === '..') {
+    if (PATH_SEPARATOR_RE.test(value) || value === '.' || value === '..') {
       throw new Error(`[dmb-resource-url] ${name} must be a single path segment, got ${JSON.stringify(value)}`)
     }
   }
 
-  const pageDirSegments = opts.pagePath.split('/').slice(0, -1).filter(Boolean)
+  const pageDirSegments = opts.pagePath.split(PATH_SEPARATOR_RE).slice(0, -1).filter(Boolean)
   for (const segment of pageDirSegments) {
     if (segment === '.' || segment === '..') {
       throw new Error(`[dmb-resource-url] pagePath must not contain '.'/'..' segments, got ${JSON.stringify(opts.pagePath)}`)

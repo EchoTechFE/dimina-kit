@@ -31,18 +31,30 @@ function newPackageProbe(respond: (url: string) => Response = () => new Response
   }
 }
 
+interface TestSession {
+  resourceBaseUrl: string
+  appId: string
+  root: string
+}
+
+/** Every fixture bridge id here belongs to appId `wx1` / root `main` unless overridden via `sessionForApps`. */
 function sessionFor(bases: Record<string, string>) {
-  return (bridgeId: string): { resourceBaseUrl: string } | null => {
-    const resourceBaseUrl = bases[bridgeId]
-    return resourceBaseUrl ? { resourceBaseUrl } : null
-  }
+  return sessionForApps(
+    Object.fromEntries(
+      Object.entries(bases).map(([bridgeId, resourceBaseUrl]) => [bridgeId, { resourceBaseUrl, appId: 'wx1', root: 'main' }]),
+    ),
+  )
+}
+
+function sessionForApps(sessions: Record<string, TestSession>) {
+  return (bridgeId: string): TestSession | null => sessions[bridgeId] ?? null
 }
 
 function request(
   requestUrl: string,
   overrides: {
     probe?: PackageProbe
-    resolveSession?: (bridgeId: string) => { resourceBaseUrl: string } | null
+    resolveSession?: (bridgeId: string) => TestSession | null
   } = {},
 ): Promise<Response> {
   const probe = overrides.probe ?? newPackageProbe()
@@ -206,11 +218,97 @@ describe('handleDmbResourceRequest package resources', () => {
     // `render-host/pageFrame.html` exists under sdkRoot; without the `/__sdk__/`
     // prefix it is a package path and must go to the resource base, so a
     // mini-app page can never be shadowed by an SDK file of the same name.
+    // Modifying this request URL: it used to omit the appId/root prefix
+    // entirely (`/render-host/pageFrame.html`), which the new app-root
+    // containment check below now correctly rejects with 403 — that's the
+    // fix, not a regression. Keep the same same-name-as-an-SDK-file setup,
+    // just placed under this session's own `wx1/main` tree.
     const probe = newPackageProbe()
-    const response = await request('dmb-resource://b1/render-host/pageFrame.html', { probe })
+    const response = await request('dmb-resource://b1/wx1/main/render-host/pageFrame.html', { probe })
 
-    expect(probe.urls).toEqual(['http://127.0.0.1:5173/render-host/pageFrame.html'])
+    expect(probe.urls).toEqual(['http://127.0.0.1:5173/wx1/main/render-host/pageFrame.html'])
     expect(await response.text()).toBe('package-body')
+  })
+})
+
+describe('handleDmbResourceRequest app-root containment', () => {
+  // session.resourceBaseUrl is a SHARED origin serving every open project's
+  // compiled output side by side (default-adapter.ts's single
+  // `dimina-fe-output` dir) — it is not itself scoped to one app. A
+  // package-relative reference in the mini-app's own WXML resolves, via the
+  // browser's relative-URL algorithm, exactly as validly to a path outside
+  // this session's `<appId>/<root>` tree as to one inside it, so this
+  // session must not be able to read another app's compiled files.
+  it('rejects a request for a different appId under the same bridge session', async () => {
+    const probe = newPackageProbe()
+    const response = await request('dmb-resource://b1/other-app/main/secret.png', { probe })
+
+    expect(response.status).toBe(403)
+    expect(probe.urls).toEqual([])
+  })
+
+  it('rejects a request for the same appId but a different root', async () => {
+    const probe = newPackageProbe()
+    const response = await request('dmb-resource://b1/wx1/other-root/secret.png', { probe })
+
+    expect(response.status).toBe(403)
+    expect(probe.urls).toEqual([])
+  })
+
+  it('rejects an appId that merely starts with this session\'s appId as a string prefix', async () => {
+    // Guards a naive `pathname.startsWith('/wx1')` (no trailing slash)
+    // implementation, which 'wx10' would also satisfy.
+    const probe = newPackageProbe()
+    const response = await request('dmb-resource://b1/wx10/main/secret.png', { probe })
+
+    expect(response.status).toBe(403)
+    expect(probe.urls).toEqual([])
+  })
+
+  it('does not let a doubly-encoded dot-segment escape the app root via a second URL parse', async () => {
+    // A single decode of `%252e%252e` yields the literal text `%2e%2e`, which
+    // the FIRST (already-happened, browser-side) URL parse never treats as a
+    // dot segment. Forwarding still uses the raw, once-encoded pathname, so
+    // it stays inert instead of collapsing into `..` on a second parse.
+    const probe = newPackageProbe()
+    const response = await request(
+      'dmb-resource://b1/wx1/main/static/%252e%252e/%252e%252e/other-app/secret.png',
+      { probe },
+    )
+
+    expect(response.status).toBe(200)
+    expect(probe.urls).toEqual([
+      'http://127.0.0.1:5173/wx1/main/static/%252e%252e/%252e%252e/other-app/secret.png',
+    ])
+  })
+})
+
+describe('handleDmbResourceRequest package proxy target construction', () => {
+  // handle-request.ts decodes `url.pathname` once for string matching
+  // (SDK-prefix / frame-document / app-root checks) but must forward the
+  // ORIGINAL, still percent-encoded pathname to the second `new URL()` call
+  // that builds the proxied target — feeding the decoded copy back in would
+  // let a literal '#'/'?' regain URL syntax on that second parse and
+  // silently truncate the path into a fragment/query.
+  it('does not truncate a package path whose filename contains an encoded "#"', async () => {
+    const probe = newPackageProbe()
+    const response = await request('dmb-resource://b1/wx1/main/static/a%23b.png', { probe })
+
+    expect(response.status).toBe(200)
+    expect(probe.urls).toEqual(['http://127.0.0.1:5173/wx1/main/static/a%23b.png'])
+    const target = new URL(probe.urls[0])
+    expect(target.hash).toBe('')
+    expect(decodeURIComponent(target.pathname)).toBe('/wx1/main/static/a#b.png')
+  })
+
+  it('does not turn an encoded "?" in the filename into a query separator', async () => {
+    const probe = newPackageProbe()
+    const response = await request('dmb-resource://b1/wx1/main/static/a%3Fb.png', { probe })
+
+    expect(response.status).toBe(200)
+    const target = new URL(probe.urls[0])
+    expect(target.search).toBe('')
+    expect(decodeURIComponent(target.pathname)).toBe('/wx1/main/static/a?b.png')
   })
 })
 

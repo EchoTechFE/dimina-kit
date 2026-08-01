@@ -87,6 +87,25 @@ describe('buildRenderHostDocumentUrl segment validation', () => {
     expect(() => buildRenderHostDocumentUrl({ ...baseOptions, pagePath: 'pages/../home' })).toThrow()
     expect(() => buildRenderHostDocumentUrl({ ...baseOptions, pagePath: 'pages/./home' })).toThrow()
   })
+
+  it('rejects an appId or root containing a literal "\\"', () => {
+    // Mini-app page paths are always POSIX-style ('/'); a backslash reaching
+    // here means the depth invariant is already broken upstream and must
+    // fail loudly rather than silently produce a wrong URL.
+    expect(() => buildRenderHostDocumentUrl({ ...baseOptions, appId: 'a\\b' })).toThrow()
+    expect(() => buildRenderHostDocumentUrl({ ...baseOptions, root: 'a\\b' })).toThrow()
+  })
+
+  it('splits a page directory on "\\" as well as "/", instead of silently dropping it', () => {
+    // A pagePath using Windows-style separators throughout (no '/' at all)
+    // used to make `pagePath.split('/')` return a single element, whose
+    // `.slice(0, -1)` then drops it — every directory segment silently
+    // vanished, and the document landed one level too shallow (the exact
+    // depth-mismatch bug this fix addresses).
+    const url = new URL(buildRenderHostDocumentUrl({ ...baseOptions, pagePath: 'pages\\detail\\index' }))
+
+    expect(url.pathname).toBe('/wx1/main/pages/detail/__frame__.html')
+  })
 })
 
 describe('buildRenderHostDocumentUrl query string', () => {
