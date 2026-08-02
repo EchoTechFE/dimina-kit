@@ -161,7 +161,7 @@ jobs:
             dimina/fe/packages/render/dist
             dimina/fe/packages/common/dist
             dimina/fe/packages/container/dist
-          key: dimina-container-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.dimina.outputs.sha }}-${{ hashFiles('packages/devtools/build-container.js', 'packages/devtools/vite.config.api.js', 'packages/devtools/container-runtime.js', 'packages/devtools/src/simulator/service-apis/**') }}
+          key: dimina-container-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.dimina.outputs.sha }}-${{ hashFiles('packages/devtools/build-container.js', 'packages/devtools/vite.config.api.js', 'packages/devtools/container-runtime.js', 'packages/devtools/src/simulator/service-apis/**', 'packages/devtools/src/simulator/dimina-components/**') }}
 
       - name: Install workspace deps
         run: pnpm install --frozen-lockfile --prefer-offline

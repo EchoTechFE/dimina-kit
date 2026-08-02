@@ -21,17 +21,25 @@ const DIMINA_FE = join(ROOT, 'dimina/fe')
 const DIMINA_ROOT = join(ROOT, 'dimina')
 const CONTAINER_SRC = join(DIMINA_FE, 'packages/container')
 const SERVICE_SRC = join(DIMINA_FE, 'packages/service')
+const COMPONENTS_SRC = join(DIMINA_FE, 'packages/components')
 const CONTAINER_DIST = join(CONTAINER_SRC, 'dist')
 const TARGET_DIST = join(ROOT, 'packages/devkit/fe/dimina-fe-container')
 const SIMULATOR_DIR = join(__dirname, 'src/simulator')
 
-// Devtools-specific API files to inject into dimina source before building.
-// These files are maintained in simulator/service-apis/ instead of upstream dimina.
+// Files overlaid onto dimina source before building, restored right after.
+// Two kinds live here:
+//   - simulator/service-apis/: devtools-specific API implementations that
+//     deliberately stay out of upstream dimina.
+//   - simulator/dimina-components/: fixes to upstream components awaiting an
+//     upstream PR. Drop the entry once the fix lands upstream.
 const INJECTED_FILES = [
   { src: join(SIMULATOR_DIR, 'service-apis/file/index.js'), dest: join(SERVICE_SRC, 'src/api/core/file/index.js') },
   { src: join(SIMULATOR_DIR, 'service-apis/audio/index.js'), dest: join(SERVICE_SRC, 'src/api/core/media/audio/index.js') },
   { src: join(SIMULATOR_DIR, 'service-apis/network/upload/index.js'), dest: join(SERVICE_SRC, 'src/api/core/network/upload/index.js') },
   { src: join(SIMULATOR_DIR, 'service-apis/network/websocket/index.js'), dest: join(SERVICE_SRC, 'src/api/core/network/websocket/index.js') },
+  // slider 上报事件时把根元素充当 currentTarget，逻辑层才能靠 data-sid 反查到节点，
+  // 否则 bindchange / bindchanging 会被静默丢弃。
+  { src: join(SIMULATOR_DIR, 'dimina-components/slider/Slider.vue'), dest: join(COMPONENTS_SRC, 'src/component/slider/Slider.vue') },
 ]
 
 const injectedFileBackups = new Map()
@@ -58,7 +66,7 @@ function cleanupInjectedFiles() {
     rmSync(dest, { force: true })
     // Remove empty parent directories (for genuinely-new injected files only)
     let dir = dirname(dest)
-    while (dir !== SERVICE_SRC && dir !== CONTAINER_SRC) {
+    while (dir !== SERVICE_SRC && dir !== CONTAINER_SRC && dir !== COMPONENTS_SRC) {
       try { rmSync(dir, { recursive: false }); dir = dirname(dir) } catch { break }
     }
   }
@@ -83,7 +91,8 @@ function getDiminaGitHash() {
 //   - dimina working-tree dirtiness (git status + diff, so uncommitted
 //     upstream edits invalidate the cache even at the same SHA)
 //   - build-container.js
-//   - every file under src/simulator/service-apis/ (injected into dimina)
+//   - every file under src/simulator/service-apis/ and
+//     src/simulator/dimina-components/ (both injected into dimina)
 // Kept in sync with the CI actions/cache key in .github/workflows/release.yml.
 function walkAndHash(root, hash) {
   if (!existsSync(root)) return
@@ -137,6 +146,7 @@ function getInputFingerprint() {
     hash.update('\0')
   }
   walkAndHash(join(SIMULATOR_DIR, 'service-apis'), hash)
+  walkAndHash(join(SIMULATOR_DIR, 'dimina-components'), hash)
   return hash.digest('hex')
 }
 
