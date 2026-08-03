@@ -1,0 +1,24 @@
+{
+  "pages": [
+    "pages/home/home",
+    "pages/cart/cart",
+    "pages/me/me",
+    "pages/detail/detail"
+  ],
+  "window": {
+    "navigationBarTitleText": "TabBar Fixture",
+    "navigationBarBackgroundColor": "#ffffff",
+    "navigationBarTextStyle": "black"
+  },
+  "tabBar": {
+    "color": "#999999",
+    "selectedColor": "#1890ff",
+    "backgroundColor": "#ffffff",
+    "borderStyle": "black",
+    "list": [
+      { "pagePath": "pages/home/home", "text": "Home" },
+      { "pagePath": "pages/cart/cart", "text": "Cart" },
+      { "pagePath": "pages/me/me", "text": "Me" }
+    ]
+  }
+}

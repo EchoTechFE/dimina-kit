@@ -440,7 +440,7 @@ BridgeRouter dispose 链路：ctx.registry.add(() => disposeAppSession(...))
 ## 8. 测试覆盖
 
 - 单元测试随各模块 `*.test.ts`（如 `view-manager.test.ts` / `workspace-*.test.ts` / `close-with-active-session.test.ts`）。
-- 端到端测试见 `e2e/`：`native-host-render.spec.ts`、`native-host-device.spec.ts`、`native-host-page-stack.spec.ts`、`native-host-wx-method.spec.ts`、`native-host-current-page.spec.ts`、`prewarm-pool.spec.ts` 等。
+- 端到端测试：`packages/dimina-electron-runtime/e2e/`（`native-host-render.spec.ts`、`native-host-device.spec.ts`、`native-host-page-stack.spec.ts`、`prewarm-pool.spec.ts` 等，测的是 runtime/simulator 自身行为）、devtools 自己的 `e2e/`（`native-host-render.spec.ts`——WXML/AppData/Storage 面板部分、`native-host-wx-method.spec.ts`、`native-host-current-page.spec.ts` 等，测的是 devtools 面板/自动化服务本身）。
 
 ## 9. 延伸阅读
 

@@ -1,18 +1,10 @@
 import type { ElectronApplication } from '@playwright/test'
-import type { BridgeResourceCensus } from '../src/main/ipc/bridge-router'
-import { pollUntil } from './helpers'
 
 /**
- * Resource-leak guards for e2e runs. Coarse memory sampling (RSS trend) only
- * catches catastrophic leaks; the guards here watch the two precise signals:
- *
- * - `armMaxListenersGuard` — Node prints MaxListenersExceededWarning to stderr
- *   when an emitter accumulates dead listeners (one-leaked-hook-per-cycle
- *   class). Any such line during a test is a hard failure, not log noise.
- * - `readBridgeCensus` / `settleBridgeCensus` — the bridge router's exact
- *   resource ledger (sessions / wc bindings / pending API calls / teardown
- *   hooks), exposed by the NODE_ENV=test global `__diminaResourceCensus`.
- *   Churn specs assert the ledger returns EXACTLY to baseline.
+ * Resource-leak guard for e2e runs: `armMaxListenersGuard` — Node prints
+ * MaxListenersExceededWarning to stderr when an emitter accumulates dead
+ * listeners (one-leaked-hook-per-cycle class). Any such line during a test is
+ * a hard failure, not log noise.
  */
 
 export interface MaxListenersGuard {
@@ -41,44 +33,4 @@ export function armMaxListenersGuard(electronApp: ElectronApplication): MaxListe
     }
   })
   return { warnings: () => hits }
-}
-
-/** Read the bridge router's resource ledger from the main process. */
-export async function readBridgeCensus(electronApp: ElectronApplication): Promise<BridgeResourceCensus> {
-  const census = await electronApp.evaluate(() => {
-    const probe = (globalThis as Record<string, unknown>).__diminaResourceCensus
-    return typeof probe === 'function' ? (probe as () => unknown)() : null
-  })
-  if (!census) {
-    throw new Error('__diminaResourceCensus probe not registered (NODE_ENV=test main process only)')
-  }
-  return census as BridgeResourceCensus
-}
-
-/**
- * Wait until the ledger is STABLE (two consecutive reads `intervalMs` apart are
- * identical) and satisfies `predicate`. Session teardown finishes on async
- * tails (pool release / resource-server close), so a churn step must settle
- * before exact-equality assertions.
- */
-export async function settleBridgeCensus(
-  electronApp: ElectronApplication,
-  predicate: (census: BridgeResourceCensus) => boolean,
-  timeoutMs = 10_000,
-  intervalMs = 250,
-): Promise<BridgeResourceCensus> {
-  let previous = ''
-  const final = await pollUntil(
-    async () => {
-      const census = await readBridgeCensus(electronApp)
-      const key = JSON.stringify(census)
-      const stable = key === previous && predicate(census)
-      previous = key
-      return { census, stable }
-    },
-    (result) => result.stable,
-    timeoutMs,
-    intervalMs,
-  )
-  return final.census
 }

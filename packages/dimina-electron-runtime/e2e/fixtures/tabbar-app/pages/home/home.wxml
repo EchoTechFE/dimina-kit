@@ -1,0 +1,2 @@
+<view class="page-marker page-home">HOME PAGE</view>
+<button class="btn nav-detail-btn" bindtap="goDetail" data-path="/pages/detail/detail">Go Detail</button>

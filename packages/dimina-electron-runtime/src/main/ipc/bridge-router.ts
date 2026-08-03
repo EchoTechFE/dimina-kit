@@ -854,6 +854,16 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
         delete globalState.__diminaResourceCensus
       }
     })
+    // e2e bridge introspection: this package's own e2e harness has no
+    // automation-server layer to proxy `getPageStack`/`getActiveRenderWc`/etc
+    // over — it drives the SAME process directly via electronApp.evaluate(),
+    // so it just needs the handle itself. Same pattern as the census probe above.
+    globalState.__diminaBridgeHandle = bridgeHandle
+    ctx.registry.add(() => {
+      if (globalState.__diminaBridgeHandle === bridgeHandle) {
+        delete globalState.__diminaBridgeHandle
+      }
+    })
   }
 
   // Always-on guest console fan-out. Owns `ctx.guestConsole` (the sink the
