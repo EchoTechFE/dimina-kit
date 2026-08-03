@@ -168,26 +168,23 @@ export async function getCurrentPage(
   }, appId)
 }
 
-const NAV_METHODS_WITH_URL_TARGET = new Set(['navigateTo', 'redirectTo', 'reLaunch', 'switchTab'])
-
 /**
  * Under sustained load (a long sequential run launching many dedicated
  * Electron processes back to back — see the full-suite run, not any single
  * spec in isolation) the main-process CDP evaluate channel can occasionally
  * fail a single round-trip with a generic "Script failed to execute" error
- * that carries no further detail — ambiguous about whether `wx.<method>(...)`
- * already dispatched before the failure.
+ * that carries no further detail.
  *
- * A blind retry here is unsafe: `method` can be a NAV method, and re-issuing
- * `wx.navigateTo`/`switchTab` a second time after it already actually ran
- * would push/switch pages twice (a prior version of this function retried
- * unconditionally; that was wrong). Instead: on failure, if `method` is a nav
- * method carrying an explicit target `url`, check whether the active page
- * ALREADY matches that target — if so, the original dispatch evidently
- * succeeded and only the confirmation round-trip failed, so report success
- * without re-dispatching. Only re-dispatch when the target demonstrably
- * hasn't been reached yet. `navigateBack` and non-nav generic `wx.*` calls
- * have no such no-op-checkable target, so they still fail straight through.
+ * This does NOT retry: `method` here can be a NAV method (navigateTo/
+ * redirectTo/reLaunch/switchTab/navigateBack), and a retry from this side of
+ * the CDP boundary can't tell whether `wx.<method>(...)` already dispatched
+ * before the failure — re-issuing it could push/switch a page a second time.
+ * Any idempotency-safe retry for the nav path lives in `runNativeHostNav`
+ * inside electron-entry.js instead, where the pre-dispatch `bridgeId` and the
+ * `waitForActivePage` signal it's compared against are both already in scope
+ * (a path-string comparison attempted here previously was unsound — it both
+ * false-matched unrelated routes and raced the same signal, so don't
+ * reintroduce that; see electron-entry.js's comment for the actual fix).
  */
 export async function callWxMethod(
   electronApp: ElectronApplication,
@@ -195,28 +192,12 @@ export async function callWxMethod(
   args: unknown[] = [],
   appId?: string,
 ): Promise<{ result: unknown }> {
-  const dispatch = (): Promise<{ result: unknown }> =>
-    electronApp.evaluate((_electron, payload) => {
-      const hooks = (globalThis as Record<string, unknown>).__diminaE2eHooks as {
-        callWxMethod: (method: string, args?: unknown[], appId?: string) => Promise<{ result: unknown }>
-      }
-      return hooks.callWxMethod(payload.method, payload.args, payload.appId)
-    }, { method, args, appId })
-
-  try {
-    return await dispatch()
-  } catch (err) {
-    const target = (args[0] as { url?: string } | undefined)?.url
-    if (!NAV_METHODS_WITH_URL_TARGET.has(method) || !target) throw err
-    const targetPath = target.replace(/^\//, '').split('?')[0]
-    const current = await getCurrentPage(electronApp, appId).catch(() => null)
-    if (current?.path && current.path.includes(targetPath)) {
-      // Already on the target page — the original dispatch succeeded; only
-      // the confirmation round-trip back to Playwright failed.
-      return { result: undefined }
+  return electronApp.evaluate((_electron, payload) => {
+    const hooks = (globalThis as Record<string, unknown>).__diminaE2eHooks as {
+      callWxMethod: (method: string, args?: unknown[], appId?: string) => Promise<{ result: unknown }>
     }
-    return dispatch()
-  }
+    return hooks.callWxMethod(payload.method, payload.args, payload.appId)
+  }, { method, args, appId })
 }
 
 export async function getPageData(

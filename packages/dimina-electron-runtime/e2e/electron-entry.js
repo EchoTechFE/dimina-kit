@@ -192,11 +192,37 @@ function waitForActivePage(bridge, { since, timeoutMs }) {
   })
 }
 
+/**
+ * Under sustained load the `executeJavaScript` dispatch below can occasionally
+ * reject with a generic, detail-free error (observed: "Script failed to
+ * execute") that doesn't say whether `wx.<method>(...)` actually ran in the
+ * renderer before the round-trip back here broke. A blind retry would risk
+ * double-firing a real navigation; a Playwright-side compensation check
+ * (matching the target path via a later `getCurrentPage` call) was tried and
+ * proved unsound — both a false-positive substring match against unrelated
+ * routes AND a race against this exact signal, since it read state
+ * immediately instead of waiting for it (see helpers.ts's callWxMethod).
+ *
+ * The safe version lives here instead, using the SAME signal the happy path
+ * already trusts: `since` (the bridge id captured before dispatch) and
+ * `waitForActivePage`. On a dispatch failure, wait that same window for the
+ * active bridge to move off `since` — if it does, the original dispatch
+ * evidently took effect and only this round-trip failed, so report success
+ * without redispatching; if it doesn't, nothing happened within the window
+ * the happy path itself would also have tolerated, so a single retry is safe.
+ */
 async function runNativeHostNav(bridge, serviceWc, method, args) {
   const arg = method === 'navigateBack' ? (args[0] ?? { delta: 1 }) : (args[0] ?? {})
-  const since = bridge.getActiveBridgeId()
-  await serviceWc.executeJavaScript(`wx.${method}(${JSON.stringify(arg)})`)
+  const script = `wx.${method}(${JSON.stringify(arg)})`
   const timeoutMs = method === 'navigateBack' ? 1500 : 2000
+  const since = bridge.getActiveBridgeId()
+  try {
+    await serviceWc.executeJavaScript(script)
+  } catch {
+    await waitForActivePage(bridge, { since, timeoutMs })
+    if (bridge.getActiveBridgeId() !== since) return { result: undefined }
+    await serviceWc.executeJavaScript(script)
+  }
   await waitForActivePage(bridge, { since, timeoutMs })
   return { result: undefined }
 }
