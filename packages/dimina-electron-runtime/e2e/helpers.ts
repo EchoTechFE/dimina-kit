@@ -179,12 +179,13 @@ export async function getCurrentPage(
  * redirectTo/reLaunch/switchTab/navigateBack), and a retry from this side of
  * the CDP boundary can't tell whether `wx.<method>(...)` already dispatched
  * before the failure — re-issuing it could push/switch a page a second time.
- * Any idempotency-safe retry for the nav path lives in `runNativeHostNav`
- * inside electron-entry.js instead, where the pre-dispatch `bridgeId` and the
- * `waitForActivePage` signal it's compared against are both already in scope
- * (a path-string comparison attempted here previously was unsound — it both
- * false-matched unrelated routes and raced the same signal, so don't
- * reintroduce that; see electron-entry.js's comment for the actual fix).
+ * Neither does `runNativeHostNav` in electron-entry.js on the other side of
+ * this call: two attempts at a safe retry there (a Playwright-side path
+ * comparison, then a pre-dispatch bridge-id comparison) were both shown
+ * unsound on review — an in-band signal can't establish per-invocation
+ * causality here. A genuinely safe retry needs a correlation token threaded
+ * through the actual nav protocol; don't reintroduce a signal-comparison
+ * retry as a substitute (see electron-entry.js's comment on the same issue).
  */
 export async function callWxMethod(
   electronApp: ElectronApplication,

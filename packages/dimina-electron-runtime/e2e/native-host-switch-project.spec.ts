@@ -1,16 +1,18 @@
 /**
- * E2E (native-host only): switching to a second project via the UI back-button
- * path (without closeProject) renders the new project's content and tears down
- * the previous project's render guests.
+ * E2E (native-host only): opening a second project directly via
+ * `runtime.openProject()` WITHOUT calling `closeProject` first renders the new
+ * project's content and tears down the previous project's render guests.
  *
- * The distinguishing scenario from native-host-reopen-project.spec.ts and
- * reopen-different-project.spec.ts: the user navigates back to the project
- * list without calling closeProject (the back button only emits
- * window:navigateBack in the renderer — it does NOT invoke ProjectChannel.Close
- * in the main process). When the user then opens project B, workspace-service
- * reaches the `currentSession !== null` branch of openProject and must
- * synchronously call detachWorkbench() + detachSimulator() before spinning up
- * the new session.
+ * This harness has no project-list UI, so it can't drive the real UI
+ * back-button path (`window:navigateBack` without `ProjectChannel.Close`)
+ * devtools itself exercises — it goes straight at the underlying condition
+ * that path also produces: `openProject(B)` firing while a session for A is
+ * still alive (no intervening `closeProject`). That's the distinguishing
+ * scenario from native-host-reopen-project.spec.ts and
+ * reopen-different-project.spec.ts, whatever UI action would trigger it. When
+ * this happens, workspace-service reaches the `currentSession !== null`
+ * branch of openProject and must synchronously call detachWorkbench() +
+ * detachSimulator() before spinning up the new session.
  *
  * Guards:
  *  - simulator shows B's home page content (positive)
@@ -67,7 +69,7 @@ function liveGuestCount(electronApp: ElectronApplication): Promise<number> {
   RENDER_GUEST_URL_MARKER)
 }
 
-test.describe('native-host switch project via back-button path disposes old guests and renders new project', () => {
+test.describe('native-host switch project without closeProject disposes old guests and renders new project', () => {
   test.describe.configure({ mode: 'serial' })
   test.setTimeout(180_000)
 
