@@ -1,10 +1,18 @@
 import type { ElectronApplication } from '@playwright/test'
+import type { BridgeResourceCensus } from '../src/main/ipc/bridge-router'
+import { pollUntil } from './helpers'
 
 /**
- * Resource-leak guard for e2e runs: `armMaxListenersGuard` — Node prints
- * MaxListenersExceededWarning to stderr when an emitter accumulates dead
- * listeners (one-leaked-hook-per-cycle class). Any such line during a test is
- * a hard failure, not log noise.
+ * Resource-leak guards for e2e runs. Coarse memory sampling (RSS trend) only
+ * catches catastrophic leaks; the guards here watch the two precise signals:
+ *
+ * - `armMaxListenersGuard` — Node prints MaxListenersExceededWarning to stderr
+ *   when an emitter accumulates dead listeners (one-leaked-hook-per-cycle
+ *   class). Any such line during a test is a hard failure, not log noise.
+ * - `readBridgeCensus` / `settleBridgeCensus` — the bridge router's exact
+ *   resource ledger (sessions / wc bindings / pending API calls / teardown
+ *   hooks), exposed by the NODE_ENV=test global `__diminaResourceCensus`.
+ *   Churn specs assert the ledger returns EXACTLY to baseline.
  */
 
 export interface MaxListenersGuard {

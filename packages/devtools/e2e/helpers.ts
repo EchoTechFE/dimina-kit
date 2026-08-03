@@ -47,19 +47,8 @@ function resolveDemoAppDir(): string {
   return copy
 }
 
-function readDemoProjectName(projectDir: string): string {
-  try {
-    const configPath = path.join(projectDir, 'project.config.json')
-    const config = JSON.parse(fs.readFileSync(configPath, 'utf8')) as { projectname?: string; appid?: string }
-    return config.projectname || config.appid || path.basename(projectDir)
-  } catch {
-    return path.basename(projectDir)
-  }
-}
-
 /** Source demo mini-app for compilation tests. */
 export const DEMO_APP_DIR = resolveDemoAppDir()
-export const DEMO_APP_NAME = readDemoProjectName(DEMO_APP_DIR)
 
 // ── URL markers ────────────────────────────────────────────────────────
 
@@ -95,26 +84,6 @@ export async function ipcInvoke<T = unknown>(
     },
     { channel, args }
   ) as Promise<T>
-}
-
-/**
- * Fire-and-forget IPC send (mirrors `ipcRenderer.send`). Used for channels
- * registered with `ipcMain.on` (e.g. `dmb:dispose`, `dmb:page:close`) where
- * the main side does not return a value.
- */
-export async function ipcSend(
-  mainWindow: Page,
-  channel: string,
-  ...args: unknown[]
-): Promise<void> {
-  await mainWindow.evaluate(
-    ({ channel, args }) => {
-      const ipc = (window as unknown as { devtools?: { ipc?: { send?: (c: string, ...a: unknown[]) => void } } }).devtools?.ipc
-      if (!ipc?.send) throw new Error('[e2e] window.devtools.ipc.send unavailable')
-      ipc.send(channel, ...args)
-    },
-    { channel, args }
-  )
 }
 
 // ── Project lifecycle ──────────────────────────────────────────────────

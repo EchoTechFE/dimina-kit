@@ -332,12 +332,21 @@ importers:
         specifier: ^8.20.0
         version: 8.20.0
     devDependencies:
+      '@dimina-kit/devkit':
+        specifier: workspace:*
+        version: link:../devkit
       '@dimina-kit/eslint-config':
         specifier: workspace:*
         version: link:../eslint-config
+      '@dimina-kit/inspect':
+        specifier: workspace:*
+        version: link:../inspect
       '@dimina-kit/typescript-config':
         specifier: workspace:*
         version: link:../typescript-config
+      '@playwright/test':
+        specifier: ^1.59.1
+        version: 1.59.1
       '@types/node':
         specifier: ^22.15.3
         version: 22.19.17
@@ -1655,7 +1664,6 @@ packages:
   '@oxc-parser/binding-wasm32-wasi@0.140.0':
     resolution: {integrity: sha512-vFiC1hqys+hkX1GnQkIoiTQJNiUm43Z0lO35ETKXTw0YtpW7+cN58YRRXFAQQ+TgpkIi3lrhcxdlnqz+Oi3ptQ==}
     engines: {node: ^20.19.0 || >=22.12.0}
-    cpu: [wasm32]
 
   '@oxc-parser/binding-win32-arm64-msvc@0.140.0':
     resolution: {integrity: sha512-fGSQldwEYKhM+H8uLt76Op8hh5+FYaR6lvvQ1Txw3Mhn86DyQXLcI0fi1EkFlTK7F+46OCk/j0AJMzZQm6g5Xg==}

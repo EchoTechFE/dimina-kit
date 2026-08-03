@@ -1,14 +1,16 @@
 /**
- * E2E: the simulator RENDERER actually runs the native-host path (DeviceShell +
- * render-host <webview>s) under DIMINA_NATIVE_HOST=1, not the default dimina-fe
- * container.
+ * E2E: devtools' own PANEL + automation-server infrastructure against the
+ * native-host render path (DeviceShell + render-host <webview>s) — the WXML
+ * tree panel, the AppData panel, the Storage panel, element inspection, and
+ * console-forward-to-automation-WS. These are devtools-registered IPC
+ * channels / WS protocol surface, not part of dimina-electron-runtime's own
+ * bridge, so they stay here even though the underlying render path they
+ * exercise is runtime-owned.
  *
- * The render-host page content lives in a nested, cross-process <webview> whose
- * inner document the simulator context can't read, so we assert the reachable,
- * DISCRIMINATING facts: DeviceShell's `.device-shell-root` mounts and at least
- * one `.device-shell__webview` (a class the default dimina-fe path never emits)
- * is created with a render-host `src`. That proves the preload installed the
- * native-host bridge, SimulatorMiniApp.spawn() resolved, and DeviceShell painted.
+ * The genuinely runtime-owned behaviour this file used to also cover
+ * (DeviceShell mount + render-host webview src, Page.getData via the AppData
+ * accumulator, App.getCurrentPage/callWxMethod switchTab) moved to
+ * packages/dimina-electron-runtime/e2e/native-host-render.spec.ts.
  */
 import { test, expect, _electron, type ElectronApplication, type Page as PwPage } from '@playwright/test'
 import path from 'path'
@@ -21,7 +23,6 @@ import {
   closeProject,
   ipcInvoke,
   pollUntil,
-  evalInSimulator,
   evalInWebContentsByUrl,
   RENDER_GUEST_URL_MARKER,
 } from './helpers'
@@ -122,50 +123,6 @@ test.describe('native-host render path e2e', () => {
     await electronApp?.close().catch(() => {})
   })
 
-  test('renderer boots DeviceShell + render-host webviews under native-host', async () => {
-    // DeviceShell mounts only after SimulatorMiniApp.spawn() resolves (IPC:
-    // service host + resource server spin up first), so poll generously.
-    const shellMounted = await pollUntil(
-      () => evalInSimulator<boolean>(
-        electronApp,
-        `(() => !!document.querySelector('.device-shell-root'))()`,
-      ).catch(() => false),
-      (ok) => ok === true,
-      25000,
-      300,
-    )
-    expect(shellMounted, 'DeviceShell .device-shell-root should mount under DIMINA_NATIVE_HOST=1').toBe(true)
-
-    // `.device-shell__webview` is exclusive to the native render path — the
-    // default dimina-fe container never emits it. Load-bearing discriminator.
-    const webviewCount = await pollUntil(
-      () => evalInSimulator<number>(
-        electronApp,
-        `(() => document.querySelectorAll('.device-shell__webview').length)()`,
-      ).catch(() => 0),
-      (n) => n >= 1,
-      25000,
-      300,
-    )
-    expect(webviewCount, 'at least one render-host <webview> should exist').toBeGreaterThanOrEqual(1)
-
-    // The webview points at the render host with a spawn-allocated bridgeId,
-    // proving SimulatorMiniApp.spawn() + createRenderHostUrl ran.
-    const src = await evalInSimulator<string>(
-      electronApp,
-      `(() => { const w = document.querySelector('.device-shell__webview'); return w ? (w.getAttribute('src') || '') : '' })()`,
-    )
-    // Modifying: this used to assert the literal substring 'render-host',
-    // true only because the OLD fixed document path was
-    // `/__sdk__/render-host/pageFrame.html`. The document now lives directly
-    // under the page's own package path (no `render-host` path segment at
-    // all — see dmb-resource-url.ts), so the real invariant is the protocol
-    // (dmb-resource://, not file://) plus the reserved document marker.
-    expect(src).toMatch(/^dmb-resource:\/\//)
-    expect(src).toContain(RENDER_GUEST_URL_MARKER)
-    expect(src).toContain('bridgeId=')
-  })
-
   // ── Right-panel + storage parity under native-host ──────────────────────────
   // These drive the SAME main-process IPC the renderer panels consume, so they
   // validate the whole native-host data pipeline end-to-end in real Electron:
@@ -227,30 +184,6 @@ test.describe('native-host render path e2e', () => {
   // AppData + console pipelines work against the real rendered page, not the
   // default dimina-fe iframe (which native-host doesn't use).
 
-  test('Page.getData returns the active page reactive data via the central accumulator', async () => {
-    // The home fixture page declares `data: { pageName, counter, profile }`. Under
-    // native-host this flows service→render and is tapped into the AppData
-    // accumulator; Page.getData reads it back (the old stub always returned {}).
-    const full = await pollUntil(
-      () => wsCall<{ data?: Record<string, unknown> }>('Page.getData', {}).catch(() => null),
-      (r) => !!r && !!r.data && typeof r.data === 'object' && Object.keys(r.data).length > 0,
-      30000,
-      500,
-    )
-    expect(full?.data, 'Page.getData should return the home page reactive data').toBeTruthy()
-    expect(full!.data!.pageName).toBe('home')
-    expect(full!.data!.counter).toBe(7)
-
-    // Path traversal mirrors the default branch: nested + bracket paths resolve,
-    // a missing key resolves to undefined (no throw).
-    const nick = await wsCall<{ data?: unknown }>('Page.getData', { path: 'profile.nick' })
-    expect(nick.data).toBe('tester')
-    const counter = await wsCall<{ data?: unknown }>('Page.getData', { path: 'counter' })
-    expect(counter.data).toBe(7)
-    const bogus = await wsCall<{ data?: unknown }>('Page.getData', { path: '__definitely_missing_key__' })
-    expect(bogus.data).toBeUndefined()
-  })
-
   test('element inspection resolves a real element rect from the active render guest', async () => {
     // The render inspector (render-inspect IIFE in the guest main world) backs
     // both the WXML tree and element highlight. Walk the tree for sids, then
@@ -300,22 +233,6 @@ test.describe('native-host render path e2e', () => {
 
     // Element.tap round-trips through evalInElement → renderWc (no throw).
     await wsCall('Element.tap', { elementId: el.elementId })
-  })
-
-  test('App.callWxMethod switchTab navigates the active page (service-host wx.*)', async () => {
-    const start = await wsCall<{ path?: string }>('App.getCurrentPage')
-    const target = (start.path ?? '').includes('cart') ? 'pages/home/home' : 'pages/cart/cart'
-    const marker = target.split('/')[1] // 'cart' or 'home'
-
-    await wsCall('App.callWxMethod', { method: 'switchTab', args: [{ url: '/' + target }] })
-
-    const after = await pollUntil(
-      () => wsCall<{ path?: string }>('App.getCurrentPage').catch(() => null),
-      (r) => !!r && typeof r.path === 'string' && r.path.includes(marker),
-      15000,
-      500,
-    )
-    expect(after?.path, `switchTab should move the active page to ${target}`).toContain(marker)
   })
 
   test('render-guest console.log is forwarded to the automation WS as App.logAdded', async () => {
