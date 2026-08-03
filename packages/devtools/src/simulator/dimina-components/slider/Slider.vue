@@ -114,37 +114,59 @@ const props = defineProps({
 		default: false,
 		required: false,
 	},
+	autoFill: {
+		type: String,
+		default: '',
+	},
 })
 
+const info = useInfo()
+
+const DEFAULT_ACTIVE_COLOR = '#1aad19'
+const DEFAULT_BACK_COLOR = '#e9e9e9'
+
+// 微信语义（_getActiveColor）：activeColor 与默认值相同视为未设置，回退到
+// selectedColor；两者都未设置用默认绿。按值比较而不是真值判断——真值判断
+// 下显式传的默认值会遮蔽另一颜色。
 const valColor = computed(() => {
-	return props.activeColor || props.selectedColor
+	const { activeColor, selectedColor } = props
+	if (activeColor !== DEFAULT_ACTIVE_COLOR) return activeColor
+	if (selectedColor !== DEFAULT_ACTIVE_COLOR) return selectedColor
+	return DEFAULT_ACTIVE_COLOR
 })
 
+// 微信语义（_getBackgroundColor）：backgroundColor 与默认值相同视为未设置，
+// 回退到 color；都未设置用默认灰。props 默认值与微信基础库默认值一致，
+// 因此「未显式传」与「显式传默认值」在值比较下等价。
 const backColor = computed(() => {
-	return {
-		backgroundColor: props.backgroundColor || props.color,
-	}
+	const { backgroundColor, color } = props
+	if (backgroundColor !== DEFAULT_BACK_COLOR) return { backgroundColor }
+	if (color !== DEFAULT_BACK_COLOR) return { backgroundColor: color }
+	return { backgroundColor: DEFAULT_BACK_COLOR }
 })
 
-// blockSize / blockColor 只有落到内联样式上才生效：样式表里
-// .dd-slider-handle / .dd-slider-thumb 的尺寸和底色都是写死的。
-const blockStyle = computed(() => ({
-	backgroundColor: props.blockColor,
-	height: `${props.blockSize}px`,
-	marginLeft: `${-props.blockSize / 2}px`,
-	marginTop: `${-props.blockSize / 2}px`,
-	width: `${props.blockSize}px`,
-}))
+function decimalPlaces(value) {
+	const num = Number(value)
+	if (Number.isInteger(num)) return 0
+	const str = num.toString()
+	const dotIndex = str.indexOf('.')
+	if (dotIndex >= 0) return str.length - dotIndex - 1
+	// 极小值会走科学计数法，如 1e-7
+	const expIndex = str.indexOf('e-')
+	return expIndex >= 0 ? Number(str.slice(expIndex + 2)) : 0
+}
 
 function roundToStep(value) {
 	const min = Number(props.min)
 	const max = Number(props.max)
-	const step = Number(props.step)
+	const step = Math.max(Number(props.step) || 1, Number.EPSILON)
 
 	// Clamps a number between a minimum and maximum value.
 	const clamp = Math.min(Math.max(value, min), max)
-	// Rounds a number to the nearest multiple of a given step size.
-	return Math.round(clamp / step) * step
+	const raw = min + Math.round((clamp - min) / step) * step
+	// 小数步长按最大小数位截断，消除二进制浮点尾差（对齐微信基础库 _revalicateRange）
+	const decimals = Math.max(decimalPlaces(min), decimalPlaces(max), decimalPlaces(step))
+	return decimals > 0 ? Number(raw.toFixed(decimals)) : raw
 }
 
 const sliderHandle = ref(null)
@@ -157,25 +179,64 @@ const disValue = ref(roundToStep(Number(props.value)))
 
 // 注入父组件提供的方法
 const collectFormValue = inject('collectFormValue', undefined)
+const registerFormControl = inject('registerFormControl', undefined)
 collectFormValue?.(props.name, disValue.value)
 
 const range = computed(() => Number(props.max) - Number(props.min))
 
 // 计算百分比
 const percent = computed(() => {
-	return ((disValue.value - Number(props.min)) / range.value) * 100
+	return range.value > 0 ? ((disValue.value - Number(props.min)) / range.value) * 100 : 0
+})
+
+// 滑块尺寸与微信基础库一致地夹在 [12, 28]：blockSize 超出范围不生效而是被截断
+const blockSize = computed(() => {
+	const raw = Number(props.blockSize) || 28
+	return Math.min(Math.max(raw, 12), 28)
+})
+
+// 显示值宽度按「max 整数位 + 最大小数位」计算（对齐微信基础库 _getValueTextWidth），
+// 避免固定 3ch 在长数值（如 0.5 步长的 0.5/12.5/99.5）下折行
+const valueTextWidth = computed(() => {
+	const intDigits = String(Math.round(Number(props.max))).length
+	const decimals = Math.max(decimalPlaces(props.min), decimalPlaces(props.max), decimalPlaces(props.step))
+	return `${intDigits + decimals}ch`
 })
 
 let isDragging = false
+// 拖动起始值：结束位置与起点同值时不触发 change（微信基础库 _startValue 语义）
+let dragStartValue = null
 
 function startDrag() {
 	if (props.disabled) {
 		return
 	}
 	isDragging = true
+	dragStartValue = disValue.value
 }
 
-const info = useInfo()
+watch(() => props.value, value => {
+	disValue.value = roundToStep(Number(value))
+	collectFormValue?.(props.name, disValue.value)
+})
+
+const unregisterFormControl = registerFormControl?.({
+	getName: () => props.name,
+	getValue: () => disValue.value,
+	reset: () => {
+		disValue.value = Number(props.min)
+		collectFormValue?.(props.name, disValue.value)
+	},
+})
+onBeforeUnmount(() => unregisterFormControl?.())
+
+const blockStyle = computed(() => ({
+	backgroundColor: props.blockColor,
+	height: `${blockSize.value}px`,
+	marginLeft: `${-blockSize.value / 2}px`,
+	marginTop: `${-blockSize.value / 2}px`,
+	width: `${blockSize.value}px`,
+}))
 
 /**
  * 把根元素充当事件的 currentTarget 后再交给 triggerEvent。
@@ -211,20 +272,31 @@ function drag(event) {
 	updateValue(event)
 }
 
-function updateValue(event, eventType = 'changing') {
+// 按事件位置计算校正后的值并同步 disValue，返回该值；轨道尺寸未就绪时返回 null
+function applyValue(event) {
 	const clientX = event.touches ? event.touches[0].clientX : event.clientX
 	const rect = sliderHandle.value?.getBoundingClientRect()
 	if (!rect?.width) {
-		return
+		return null
 	}
 	const delta = clientX - rect.left
 	const position = (delta / rect.width) * range.value + Number(props.min)
 	const disV = roundToStep(position)
-	disValue.value = disV
 
-	collectFormValue?.(props.name, disV)
+	if (disV !== disValue.value) {
+		disValue.value = disV
+		collectFormValue?.(props.name, disV)
+	}
+	return disV
+}
 
-	// 拖动过程中触发的事件
+function updateValue(event, eventType = 'changing') {
+	const disV = applyValue(event)
+	if (disV === null) {
+		return
+	}
+
+	// 拖动过程中触发的事件（值未变化也照常上报，对齐微信 _onTrack 语义）
 	triggerEvent(eventType, {
 		event: bridgeEvent(event),
 		info,
@@ -240,15 +312,15 @@ function endDrag(event) {
 	}
 
 	isDragging = false
+	// 拖回起点：值相对起点未变化，change 不触发
+	if (disValue.value === dragStartValue) {
+		dragStartValue = null
+		return
+	}
+	dragStartValue = null
 
 	// 完成一次拖动后触发的事件
-	triggerEvent('change', {
-		event: bridgeEvent(event),
-		info,
-		detail: {
-			value: disValue.value,
-		},
-	})
+	updateValue(event, 'change')
 }
 
 function handleClick(event) {
@@ -260,7 +332,19 @@ function handleClick(event) {
 	if (props.disabled) {
 		return
 	}
-	updateValue(event, 'change')
+	const previousValue = disValue.value
+	const disV = applyValue(event)
+	// 点击落点与当前值相同：change 不重复触发
+	if (disV === null || disV === previousValue) {
+		return
+	}
+	triggerEvent('change', {
+		event: bridgeEvent(event),
+		info,
+		detail: {
+			value: disV,
+		},
+	})
 }
 
 onMounted(() => {
@@ -281,14 +365,16 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-	<div :id="id" ref="sliderRoot" v-bind="$attrs" class="dd-slider">
+	<div
+		:id="id" ref="sliderRoot" v-bind="$attrs" class="dd-slider" role="slider" :aria-valuemin="min" :aria-valuemax="max"
+		:aria-valuenow="disValue" :aria-disabled="disabled" :class="{ 'dd-slider-disabled': disabled }"
+	>
 		<div class="dd-slider-wrapper">
 			<div ref="sliderHandle" class="dd-slider-tap-area" @click="handleClick">
 				<div class="dd-slider-handle-wrapper" :style="backColor">
 					<div
-						class="dd-slider-handle"
-						:style="{ ...blockStyle, left: `${percent}%`, backgroundColor: 'transparent' }"
-						@touchstart="startDrag" @mousedown="startDrag"
+						class="dd-slider-handle" :style="{ ...blockStyle, left: `${percent}%`, backgroundColor: 'transparent' }" @touchstart="startDrag"
+						@mousedown="startDrag"
 					/>
 					<div class="dd-slider-thumb" :style="{ ...blockStyle, left: `${percent}%` }" />
 					<div class="dd-slider-track" :style="{ width: `${percent}%`, backgroundColor: valColor }" />
@@ -296,7 +382,7 @@ onBeforeUnmount(() => {
 				</div>
 			</div>
 			<span class="dd-slider-value" :hidden="!showValue">
-				<p parse-text-content style="width: 3ch">{{ disValue }}</p>
+				<p parse-text-content :style="{ width: valueTextWidth }">{{ disValue }}</p>
 			</span>
 		</div>
 	</div>
@@ -309,7 +395,7 @@ onBeforeUnmount(() => {
 	display: block;
 
 	&[hidden] {
-		display: block;
+		display: none;
 	}
 }
 
