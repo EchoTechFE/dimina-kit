@@ -4,7 +4,10 @@ import { config } from '@dimina-kit/eslint-config/base'
 export default [
   // e2e/fixtures/ are mini-app source fixtures (wx/Page/getApp globals, same
   // pattern as devtools' own eslint.config.js) — not real package code.
-  { ignores: ['dist/**', 'e2e/fixtures/**'] },
+  // playwright-report/ and test-results/ are `test:e2e` run artifacts (HTML
+  // report, traces, screenshots) — same ignores devtools' own eslint.config.js
+  // already has for the same reason.
+  { ignores: ['dist/**', 'e2e/fixtures/**', 'playwright-report/**', 'test-results/**'] },
   ...config,
   {
     files: ['*.mjs', 'e2e/**/*.{js,cjs,mjs,ts}'],

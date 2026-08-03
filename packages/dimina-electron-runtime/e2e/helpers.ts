@@ -168,23 +168,26 @@ export async function getCurrentPage(
   }, appId)
 }
 
+const NAV_METHODS_WITH_URL_TARGET = new Set(['navigateTo', 'redirectTo', 'reLaunch', 'switchTab'])
+
 /**
  * Under sustained load (a long sequential run launching many dedicated
  * Electron processes back to back — see the full-suite run, not any single
  * spec in isolation) the main-process CDP evaluate channel can occasionally
  * fail a single round-trip with a generic "Script failed to execute" error
- * that carries no further detail.
+ * that carries no further detail — ambiguous about whether `wx.<method>(...)`
+ * already dispatched before the failure.
  *
- * This does NOT retry, unlike `evalInSimulator`'s retry-on-transient pattern
- * in this same file: `method` here can be a NAV method (navigateTo/
- * redirectTo/reLaunch/switchTab/navigateBack), and the underlying hook
- * dispatches `wx.<method>(...)` before awaiting confirmation — if the
- * failure happens after dispatch but before the result round-trips back
- * here, a retry would re-dispatch and could push/switch a second time
- * (a previous version of this function retried unconditionally; that was
- * wrong and is why this comment exists — verified via code trace, not
- * observed in practice, so don't reintroduce it without also making the
- * retry idempotency-aware).
+ * A blind retry here is unsafe: `method` can be a NAV method, and re-issuing
+ * `wx.navigateTo`/`switchTab` a second time after it already actually ran
+ * would push/switch pages twice (a prior version of this function retried
+ * unconditionally; that was wrong). Instead: on failure, if `method` is a nav
+ * method carrying an explicit target `url`, check whether the active page
+ * ALREADY matches that target — if so, the original dispatch evidently
+ * succeeded and only the confirmation round-trip failed, so report success
+ * without re-dispatching. Only re-dispatch when the target demonstrably
+ * hasn't been reached yet. `navigateBack` and non-nav generic `wx.*` calls
+ * have no such no-op-checkable target, so they still fail straight through.
  */
 export async function callWxMethod(
   electronApp: ElectronApplication,
@@ -192,13 +195,28 @@ export async function callWxMethod(
   args: unknown[] = [],
   appId?: string,
 ): Promise<{ result: unknown }> {
-  return electronApp.evaluate((_electron, payload) => {
-    const hooks = (globalThis as Record<string, unknown>).__diminaE2eHooks as {
-      callWxMethod: (method: string, args?: unknown[], appId?: string) => Promise<{ result: unknown }>
+  const dispatch = (): Promise<{ result: unknown }> =>
+    electronApp.evaluate((_electron, payload) => {
+      const hooks = (globalThis as Record<string, unknown>).__diminaE2eHooks as {
+        callWxMethod: (method: string, args?: unknown[], appId?: string) => Promise<{ result: unknown }>
+      }
+      return hooks.callWxMethod(payload.method, payload.args, payload.appId)
+    }, { method, args, appId })
+
+  try {
+    return await dispatch()
+  } catch (err) {
+    const target = (args[0] as { url?: string } | undefined)?.url
+    if (!NAV_METHODS_WITH_URL_TARGET.has(method) || !target) throw err
+    const targetPath = target.replace(/^\//, '').split('?')[0]
+    const current = await getCurrentPage(electronApp, appId).catch(() => null)
+    if (current?.path && current.path.includes(targetPath)) {
+      // Already on the target page — the original dispatch succeeded; only
+      // the confirmation round-trip back to Playwright failed.
+      return { result: undefined }
     }
-    return hooks.callWxMethod(payload.method, payload.args, payload.appId)
-  }, { method, args, appId })
-  throw lastErr
+    return dispatch()
+  }
 }
 
 export async function getPageData(
@@ -221,6 +239,16 @@ export async function getPageData(
 /**
  * Execute JavaScript inside the simulator's webContents via the main process.
  * Retries up to 3 times if it is not yet available.
+ *
+ * Only retries on the two PRE-DISPATCH conditions below ("No webview found" /
+ * "simulator wc is loading") — both are thrown before `expr` ever runs, so a
+ * retry can't double-execute it. Deliberately does NOT retry on a generic
+ * "Script failed to execute" (Playwright's wrapper for when `expr` itself
+ * threw) — `expr` can be a non-idempotent operation at some call sites (e.g.
+ * clicking a nav button, invoking a custom API), and that error is ambiguous
+ * about whether `expr` already ran (a prior version of `callWxMethod` in this
+ * same file retried on exactly this ambiguous case and could double-fire a
+ * real `wx.navigateTo`; don't reintroduce that bug here).
  */
 export async function evalInSimulator<T = unknown>(
   electronApp: ElectronApplication,
@@ -242,7 +270,7 @@ export async function evalInSimulator<T = unknown>(
       const message = String(err)
       if (
         message.includes('No webview found')
-        || message.includes('Script failed to execute')
+        || message.includes('simulator wc is loading')
       ) {
         await new Promise((r) => setTimeout(r, 2000))
         continue
