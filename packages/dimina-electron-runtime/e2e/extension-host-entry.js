@@ -83,9 +83,12 @@ async function openProjectHook(projectPath, opts = {}) {
 }
 
 async function closeProjectHook() {
-  if (!currentSession) return
-  await currentSession.dispose()
-  currentSession = null
+  const session = currentSession
+  if (!session) return
+  await session.dispose()
+  // See electron-entry.js's closeProjectHook for why this must be
+  // identity-guarded rather than unconditional.
+  if (currentSession === session) currentSession = null
 }
 
 globalThis.__diminaE2eHooks = {

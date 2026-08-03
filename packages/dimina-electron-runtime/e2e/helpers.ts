@@ -173,10 +173,18 @@ export async function getCurrentPage(
  * Electron processes back to back — see the full-suite run, not any single
  * spec in isolation) the main-process CDP evaluate channel can occasionally
  * fail a single round-trip with a generic "Script failed to execute" error
- * that carries no further detail. Retry a couple of times with a short
- * backoff — mirrors `evalInSimulator`'s existing retry-on-transient pattern
- * in this same file — rather than let a transient IPC hiccup fail a
- * correctly-behaving test.
+ * that carries no further detail.
+ *
+ * This does NOT retry, unlike `evalInSimulator`'s retry-on-transient pattern
+ * in this same file: `method` here can be a NAV method (navigateTo/
+ * redirectTo/reLaunch/switchTab/navigateBack), and the underlying hook
+ * dispatches `wx.<method>(...)` before awaiting confirmation — if the
+ * failure happens after dispatch but before the result round-trips back
+ * here, a retry would re-dispatch and could push/switch a second time
+ * (a previous version of this function retried unconditionally; that was
+ * wrong and is why this comment exists — verified via code trace, not
+ * observed in practice, so don't reintroduce it without also making the
+ * retry idempotency-aware).
  */
 export async function callWxMethod(
   electronApp: ElectronApplication,
@@ -184,20 +192,12 @@ export async function callWxMethod(
   args: unknown[] = [],
   appId?: string,
 ): Promise<{ result: unknown }> {
-  let lastErr: unknown
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      return await electronApp.evaluate((_electron, payload) => {
-        const hooks = (globalThis as Record<string, unknown>).__diminaE2eHooks as {
-          callWxMethod: (method: string, args?: unknown[], appId?: string) => Promise<{ result: unknown }>
-        }
-        return hooks.callWxMethod(payload.method, payload.args, payload.appId)
-      }, { method, args, appId })
-    } catch (err) {
-      lastErr = err
-      await new Promise((r) => setTimeout(r, 500))
+  return electronApp.evaluate((_electron, payload) => {
+    const hooks = (globalThis as Record<string, unknown>).__diminaE2eHooks as {
+      callWxMethod: (method: string, args?: unknown[], appId?: string) => Promise<{ result: unknown }>
     }
-  }
+    return hooks.callWxMethod(payload.method, payload.args, payload.appId)
+  }, { method, args, appId })
   throw lastErr
 }
 

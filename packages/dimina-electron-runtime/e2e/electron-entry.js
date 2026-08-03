@@ -238,9 +238,15 @@ async function openProjectHook(projectPath, opts = {}) {
 }
 
 async function closeProjectHook() {
-  if (!currentSession) return
-  await currentSession.dispose()
-  currentSession = null
+  const session = currentSession
+  if (!session) return
+  await session.dispose()
+  // Only clear the tracked session if nothing replaced it while we were
+  // awaiting dispose() — an overlapping openProject() call in between would
+  // have already made `session` stale (closeActiveSession no-ops on a stale
+  // owner) and installed its own session as `currentSession`; clearing
+  // unconditionally here would forget about that still-live session.
+  if (currentSession === session) currentSession = null
 }
 
 /**
