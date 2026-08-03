@@ -93,12 +93,14 @@ published to e2e as the NODE_ENV=test main-process global
 
 - `src/main/ipc/bridge-router-census.test.ts` — unit: ledger shape + exact
   return-to-baseline across spawn → dispose.
-- `e2e/soft-reload-census.spec.ts` — default suite, real Electron: 5 real
-  recompiles (round-unique marker must render) then the ledger, the shell wc
-  id and the webContents population must return exactly to baseline; closing
-  the project must return the ledger to the pre-open snapshot.
-- `e2e/hot-reload-stress.spec.ts` — manual-only (`HOT_RELOAD_STRESS=1`):
-  30-round memory-trend + webContents-count backstop for what counting can't
+- `packages/dimina-electron-runtime/e2e/soft-reload-census.spec.ts` — default
+  suite, real Electron: 5 real recompiles (round-unique marker must render)
+  then the ledger, the shell wc id and the webContents population must return
+  exactly to baseline; closing the project must return the ledger to the
+  pre-open snapshot.
+- `packages/dimina-electron-runtime/e2e/hot-reload-stress.spec.ts` —
+  manual-only (`HOT_RELOAD_STRESS=1`): 30-round memory-trend +
+  webContents-count backstop for what counting can't
   price (heap growth).
 
 Independently, the fixtures' auto `_maxListenersGate` fails any fixture-based

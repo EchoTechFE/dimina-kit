@@ -321,7 +321,7 @@ switchTab(targetTab):
 ## 8. 测试入口
 
 - 单测：`packages/devtools/src/simulator/device-shell/page-stack-controller.test.ts`，43 个 case 覆盖五个 reducer 的纯函数行为（含 lifecycle effects 顺序、tabStacks 同步、reLaunch 全清等）。
-- e2e：`packages/devtools/e2e/native-host-page-stack.spec.ts`（5 API + 生命周期 + 深度限制）、`native-host-current-page.spec.ts`（`App.getCurrentPage` / `getPageStack` 上报）。
+- e2e：`packages/dimina-electron-runtime/e2e/native-host-page-stack.spec.ts`（5 API + 生命周期 + 深度限制）、`packages/devtools/e2e/native-host-current-page.spec.ts`（`App.getCurrentPage` / `getPageStack` 上报）。
 
 ## 9. 延伸阅读
 

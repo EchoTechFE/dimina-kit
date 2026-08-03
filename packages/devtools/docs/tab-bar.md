@@ -254,7 +254,7 @@ miniprogram-automator 的 `App.callWxMethod(name, …args)` 经 ws 到 main 进�
 ### 5.2 测试覆盖
 
 - e2e：`e2e/native-host-wx-method.spec.ts`（automator 经 `callWxMethod` 驱动 tab-bar / 路由）、
-  `e2e/native-host-device.spec.ts`（含 tab-bar 渲染、点击切换、badge / redDot / show-hide）。
+  `packages/dimina-electron-runtime/e2e/native-host-device.spec.ts`（含 tab-bar 渲染、点击切换、badge / redDot / show-hide）。
 - 单测：`src/simulator/device-shell/tab-bar-state.test.ts` 30 个 case，
   覆盖 `applyTabAction` 的所有 8 个 API + reset + visibility 分支 +
   index 越界 + 颜色 sanitize + badge/redDot 互斥。
@@ -291,7 +291,7 @@ native-host 的 React 实现里 TabBar 是 `device-shell` 的 flex 兄弟节点�
 | `applyTabAction` reducer | `src/simulator/device-shell/tab-bar-state.ts` |
 | Main 端分发 TAB_ACTION | `src/main/ipc/bridge-router.ts`（`TAB_ACTION_NAMES` / `handleSimulatorApi`） |
 | automator wx 执行（service-host） | `src/main/services/automation/handlers/app.ts`（`App.callWxMethod`） |
-| e2e 用例 | `e2e/native-host-device.spec.ts`、`e2e/native-host-wx-method.spec.ts` |
+| e2e 用例 | `packages/dimina-electron-runtime/e2e/native-host-device.spec.ts`、`e2e/native-host-wx-method.spec.ts` |
 | reducer 单测 | `src/simulator/device-shell/tab-bar-state.test.ts` |
 | WeChat 参考：`switchTab` 流程 | `dimina/fe/.../miniApp.js:767-893`（upstream，非运行时） |
 
