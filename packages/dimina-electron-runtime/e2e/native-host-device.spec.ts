@@ -139,12 +139,26 @@ async function selectDevice(app: ElectronApplication, deviceInfo: NativeDeviceIn
   }, deviceInfo)
 }
 
-/** Drive zoom directly on the simulator WebContents (what devtools' own zoom dropdown calls under the hood). */
+/**
+ * Drive zoom directly on the simulator WebContents (what devtools' own zoom
+ * dropdown calls under the hood). Fails loudly instead of silently no-oping
+ * if the simulator webContents is missing or `setZoomFactor` doesn't actually
+ * apply — req3 below only asserts INVARIANCE of the logical dims across a
+ * zoom change, so a silent no-op here would make it pass without ever
+ * exercising the thing it's meant to guard.
+ */
 async function selectZoom(app: ElectronApplication, zoomPercent: number): Promise<void> {
-  await app.evaluate(({ webContents }, percent) => {
+  const applied = await app.evaluate(({ webContents }, percent) => {
     const sim = webContents.getAllWebContents().find((wc) => wc.getURL().includes('simulator.html'))
-    sim?.setZoomFactor(percent / 100)
+    if (!sim) return null
+    sim.setZoomFactor(percent / 100)
+    return sim.getZoomFactor()
   }, zoomPercent)
+  if (applied === null) throw new Error('[e2e] simulator.html webContents not found for selectZoom')
+  const expected = zoomPercent / 100
+  if (Math.abs(applied - expected) > 0.001) {
+    throw new Error(`[e2e] setZoomFactor(${expected}) did not apply: getZoomFactor() returned ${applied}`)
+  }
 }
 
 test.describe('native-host device sizing e2e', () => {
