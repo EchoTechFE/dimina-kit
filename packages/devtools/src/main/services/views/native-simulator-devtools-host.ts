@@ -7,7 +7,7 @@ import {
 } from '../../../shared/open-in-editor.js'
 import type { RenderEvent, ServiceHostReadyEvent } from '../../ipc/bridge-router.js'
 import { buildCustomizeTabsScript } from './devtools-tabs.js'
-import { buildConsoleFilterScript, buildLiveConsoleFilterScript } from './console-filter.js'
+import { buildInternalLogHideScript } from './console-filter.js'
 import { whenFrontendBootstrapped } from './frontend-bootstrap-gate.js'
 import { installElementsForward } from '../elements-forward/index.js'
 import { installServiceConsoleForward } from '../service-console/index.js'
@@ -202,11 +202,10 @@ export function createDevtoolsHost(
   // framework internal log lines from THIS right-panel Console — the
   // standalone internal DevTools window (native-only, wired elsewhere) shows
   // them unfiltered. Re-applied on every re-point, same policy as
-  // customizeDevtoolsTabs. Runs BOTH the persisted-preference write (for a
-  // not-yet-constructed panel) AND the live-object drive (for a panel that's
-  // already constructed by the time this injection lands, or finishes
-  // constructing shortly after — see console-filter.ts's header comment for
-  // why the persisted write alone cannot cover that case).
+  // customizeDevtoolsTabs (the injected script wraps once and is idempotent
+  // across re-points). Drives the panel's own visibility judge rather than
+  // its text-filter box, so the developer's filter input stays empty and
+  // entirely theirs — see console-filter.ts's header comment.
   // Bootstrap-gated: the live script touches `Console.ConsoleView.instance()`,
   // which — fired before the front-end's own bootstrap completes —
   // constructs IssuesManager early and permanently kills that bootstrap (see
@@ -219,8 +218,7 @@ export function createDevtoolsHost(
         void whenFrontendBootstrapped(devtoolsWc).then((ready) => {
           if (!ready || devtoolsWc.isDestroyed()) return
           try {
-            void devtoolsWc.executeJavaScript(buildConsoleFilterScript()).catch(() => {})
-            void devtoolsWc.executeJavaScript(buildLiveConsoleFilterScript()).catch(() => {})
+            void devtoolsWc.executeJavaScript(buildInternalLogHideScript()).catch(() => {})
           } catch { /* wc torn down mid-call */ }
         })
       }
