@@ -117,6 +117,34 @@ describe('createDiskProvider (overlay disk fallback)', () => {
     expect(seen.length).toBe(0)
   })
 
+  // The mirror deliberately omits the project's real `node_modules`, and
+  // `seedAmbientTypings` then writes a memfs-only `node_modules/@types` tree
+  // there. If the fallback answered for the workspace-root `node_modules`, the
+  // real on-disk dependency tree would leak into the Explorer and a stat hit on
+  // the parent could let the typings injection skip creating the memfs
+  // directory. Descendants were already excluded; the BARE directory itself was
+  // the hole — `relFromWorkspaceUri` only rejected the `node_modules/` form.
+  it.each([
+    [`${WORKSPACE}/node_modules`, 'the bare node_modules directory'],
+    [`${WORKSPACE}/node_modules/@types/dimina/index.d.ts`, 'an injected typings file'],
+    [`${WORKSPACE}/tsconfig.json`, 'a merged tsconfig'],
+    [`${WORKSPACE}/jsconfig.json`, 'a merged jsconfig'],
+  ])('never serves %s from disk (%s)', async (target) => {
+    const { seen, fetchImpl } = makeFetch()
+    vi.stubGlobal('fetch', fetchImpl)
+    const p = createDiskProvider('http://host/')
+    for (const call of [() => p.stat(uri(target)), () => p.readFile(uri(target)), () => p.readdir(uri(target))]) {
+      let code: FileSystemProviderErrorCode | undefined
+      try {
+        await call()
+      } catch (e) {
+        code = (e as { code?: FileSystemProviderErrorCode }).code
+      }
+      expect(code).toBe(FileSystemProviderErrorCode.FileNotFound)
+    }
+    expect(seen).toEqual([])
+  })
+
   it('is read-only: writeFile/mkdir/delete/rename reject', async () => {
     vi.stubGlobal('fetch', (async () => jsonResponse({})) as unknown as typeof fetch)
     const p = createDiskProvider('http://host/')
