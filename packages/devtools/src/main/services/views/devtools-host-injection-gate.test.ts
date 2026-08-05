@@ -6,10 +6,9 @@
  * header comment for the bootstrap-killing failure mode this guards against).
  *
  * Two gated injection points under test:
- * - `applyConsoleFilter` (kind 'console-filter'): both
- *   `buildConsoleFilterScript()` and `buildLiveConsoleFilterScript()` must
- *   stay unapplied until the gate resolves true, and must never apply at all
- *   if it resolves false.
+ * - `applyConsoleFilter` (kind 'console-filter'): `buildInternalLogHideScript()`
+ *   must stay unapplied until the gate resolves true, and must never apply at
+ *   all if it resolves false.
  * - the console-default panel-selection script (kind 'console-default'):
  *   same gating, and its content must drive
  *   `EUI.ViewManager.ViewManager.instance().showView('console')` — never
@@ -18,6 +17,11 @@
  * `customizeDevtoolsTabs` is the one documented pre-gate exception (it only
  * edits the view-extension registry, never touches a singleton) and must
  * keep injecting immediately regardless of gate state.
+ *
+ * A final scan covers the whole injection surface rather than one point:
+ * whatever any of these scripts does, none of them may write a control the
+ * developer owns (Console text filter, Network filter bar / toggles) — see
+ * `DEVELOPER_OWNED_CONTROLS`.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RenderEvent, ServiceHostReadyEvent } from '../../ipc/bridge-router.js'
@@ -260,7 +264,7 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 describe('applyConsoleFilter injection point (kind: console-filter)', () => {
-  it('does not inject either console-filter script before the bootstrap gate resolves', () => {
+  it('does not inject the console-filter script before the bootstrap gate resolves', () => {
     const { ctx, emitServiceHostReady } = makeContext()
     const mgr = createViewManager(ctx)
     const service = makeServiceWc(701)
@@ -270,11 +274,10 @@ describe('applyConsoleFilter injection point (kind: console-filter)', () => {
     emitServiceHostReady({ appId: 'gate', appSessionId: 's1', serviceWcId: service.id })
 
     const scripts = injectedScripts(devtoolsWc)
-    expect(scripts.some((s) => s.includes('console.text-filter'))).toBe(false)
-    expect(scripts.some((s) => s.includes('textFilterUI'))).toBe(false)
+    expect(scripts.some((s) => s.includes('shouldBeVisible'))).toBe(false)
   })
 
-  it('injects both console-filter scripts once the bootstrap gate resolves true', async () => {
+  it('injects the console-filter script once the bootstrap gate resolves true', async () => {
     let resolveGate: (v: boolean) => void = () => {}
     whenFrontendBootstrappedMock.mockImplementation(() => new Promise<boolean>((resolve) => { resolveGate = resolve }))
 
@@ -287,7 +290,7 @@ describe('applyConsoleFilter injection point (kind: console-filter)', () => {
     emitServiceHostReady({ appId: 'gate', appSessionId: 's1', serviceWcId: service.id })
 
     expect(
-      injectedScripts(devtoolsWc).some((s) => s.includes('console.text-filter') || s.includes('textFilterUI')),
+      injectedScripts(devtoolsWc).some((s) => s.includes('shouldBeVisible')),
       'must stay unapplied while the gate promise is still pending',
     ).toBe(false)
 
@@ -295,11 +298,12 @@ describe('applyConsoleFilter injection point (kind: console-filter)', () => {
     await flushMicrotasks()
 
     const scripts = injectedScripts(devtoolsWc)
-    expect(scripts.some((s) => s.includes('console.text-filter'))).toBe(true)
-    expect(scripts.some((s) => s.includes('textFilterUI'))).toBe(true)
+    expect(scripts.some((s) => s.includes('shouldBeVisible'))).toBe(true)
+    // The de-noise must never reach the developer's own filter input.
+    expect(scripts.some((s) => s.includes('textFilterUI'))).toBe(false)
   })
 
-  it('never injects either console-filter script when the bootstrap gate resolves false (silent degradation)', async () => {
+  it('never injects the console-filter script when the bootstrap gate resolves false (silent degradation)', async () => {
     let resolveGate: (v: boolean) => void = () => {}
     whenFrontendBootstrappedMock.mockImplementation(() => new Promise<boolean>((resolve) => { resolveGate = resolve }))
 
@@ -366,5 +370,81 @@ describe('customizeDevtoolsTabs: the one documented pre-gate injection', () => {
 
     const expectedScript = buildCustomizeTabsScript()
     expect(injectedScripts(devtoolsWc).some((s) => s === expectedScript)).toBe(true)
+  })
+})
+
+/**
+ * Controls the DEVELOPER owns in the embedded front-end — the Console text
+ * filter, the Network filter bar, Network's preserve-log / record toggles.
+ * A script that sets one of these hands the developer a value they did not
+ * type, cannot keep cleared (every re-point rewrites it, and "cleared" is
+ * indistinguishable from "never set"), and in the case of the single-slot
+ * text filters cannot use for their own filtering at all.
+ *
+ * Matching is on the front-end identifiers themselves, so it covers both the
+ * live UI objects and the persisted setting names behind them.
+ *
+ * Scope and limits, so this is not read as more than it is:
+ * - It scans what the VIEW MANAGER injects. `network-forward` and
+ *   `elements-forward` also reach this wc, through `ctx.networkForward` /
+ *   their own attach — neither is wired in this harness. Their payloads are
+ *   `DevToolsAPI.dispatchMessage` CDP traffic and an outbound-CDP gate, which
+ *   have no path to a panel control.
+ * - It is a source scan, so it catches the plain call a regression would
+ *   actually be written as, not a deliberately obfuscated one
+ *   (`filter['text' + 'FilterUI']`). The runtime proof that the console
+ *   de-noise leaves the box alone lives in console-filter.test.ts, which
+ *   executes the real script against a spied `setValue`.
+ */
+const DEVELOPER_OWNED_CONTROLS: readonly RegExp[] = [
+  /textFilterUI/,
+  /console\.text-filter/,
+  /network\.text-filter/,
+  /filterBar/,
+  /setFilterValue/,
+  /preserveLogSetting/,
+  /recordLogSetting/,
+]
+
+describe('developer-owned front-end controls', () => {
+  it('no injection this view manager makes at the DevTools front-end host writes into one', async () => {
+    whenFrontendBootstrappedMock.mockImplementation(() => Promise.resolve(true))
+
+    const { ctx, emitServiceHostReady } = makeContext()
+    const mgr = createViewManager(ctx)
+    const service = makeServiceWc(705)
+
+    mgr.attachNativeSimulator(SIM_URL, 375)
+    const devtoolsWc = constructed[1]!.webContents
+    emitServiceHostReady({ appId: 'gate', appSessionId: 's1', serviceWcId: service.id })
+
+    // Let every gated injection land — the whole boot-time burst is under
+    // test here, not one injection point.
+    await flushMicrotasks()
+    vi.advanceTimersByTime(5000)
+    await flushMicrotasks()
+
+    const scripts = injectedScripts(devtoolsWc)
+    // Name the producers rather than counting: a refactor that stops firing one
+    // of them would otherwise quietly shrink what this scan covers.
+    for (const [producer, signature] of [
+      ['tab customization', 'disable-locale-info-bar'],
+      ['console de-noise', 'shouldBeVisible'],
+      ['console default panel', "showView('console')"],
+    ] as const) {
+      expect(
+        scripts.some((s) => s.includes(signature)),
+        `the scan only means something while ${producer} is actually in it`,
+      ).toBe(true)
+    }
+
+    for (const script of scripts) {
+      for (const control of DEVELOPER_OWNED_CONTROLS) {
+        expect(
+          control.test(script),
+          `an injected script writes the developer-owned control ${control.source}: ${script.slice(0, 160)}`,
+        ).toBe(false)
+      }
+    }
   })
 })

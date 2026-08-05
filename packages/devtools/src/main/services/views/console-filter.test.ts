@@ -1,350 +1,287 @@
 /**
- * `DEFAULT_INTERNAL_LOG_FILTER` only needs to cover SERVICE-layer internal
- * log lines (`^\[service\]`) now — the render layer's framework noise
- * (own first arg `'[system]'`, forwarded into the service host's console
- * wrapped as `[视图] [system] ...` by `console-forward/index.ts`'s
- * `buildForwardScript`) is filtered at the source instead:
- * `forwardRenderToServiceHost` now gates on `isInternalLogMessage` and never
- * injects those entries at all, so they never reach the panel regardless of
- * this filter. This front-end filter is what's left for the half that has no
- * other interception point (see console-filter.ts's header comment).
+ * `buildInternalLogHideScript` builds the source that gets injected into the
+ * right-hand Chrome DevTools front-end realm so the runtime's own `[service]`
+ * log lines never show up in the Console panel.
+ *
+ * The contracts these tests guard, once the hook is in place:
+ * - **Prototype, not instance.** The hook lands on
+ *   `ConsoleFilter.prototype.shouldBeVisible`, because `clone()` mints further
+ *   ConsoleFilters that judge the same messages; an instance-level hook would
+ *   cover only the one instance the script happened to reach.
+ * - **Only subtracts.** Internal lines are hidden; every other message gets the
+ *   original filter's verdict passed through verbatim, so a developer's own
+ *   filter rules keep working.
+ * - **Never touches the visible filter box.** `filter.textFilterUI` belongs to
+ *   the developer; hiding internal logs must not write text into it.
+ * - **Installs once.** The script runs again on every re-point, and a second
+ *   run must not stack a second wrapper on the first.
+ *
+ * What the script does when the panel is absent, still constructing, or has
+ * moved on is covered in console-filter-degradation.test.ts.
+ *
+ * Every test drives the real generated script string through
+ * `new Function('globalThis', script)` against fakes shaped like the front-end
+ * objects the script talks to — never a re-implementation of its logic.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { buildConsoleFilterScript, buildLiveConsoleFilterScript, DEFAULT_INTERNAL_LOG_FILTER } from './console-filter.js'
+import { buildInternalLogHideScript, INTERNAL_LOG_HIDDEN_PREFIX } from './console-filter.js'
+import {
+  createConsoleFilterClass,
+  createConsoleView,
+  createGlobalThis,
+  createViewMessage,
+  recordWarnings,
+  run,
+  type FakeViewMessage,
+  type ShouldBeVisible,
+} from './console-filter-test-fixtures.js'
 
-/** Extract the regex source from DevTools' negative-filter syntax `-/regex/`. */
-function extractNegativeFilterRegex(negativeFilter: string): RegExp {
-  const m = /^-\/(.*)\/$/.exec(negativeFilter)
-  if (!m) throw new Error(`unexpected negative-filter format: ${negativeFilter}`)
-  return new RegExp(m[1])
+/** Install the hook into a front end that is ready the moment the script runs. */
+function installIntoReadyPanel(options: {
+  hiddenPrefix?: string
+  verdict?: boolean | ShouldBeVisible
+  initialFilterText?: string
+} = {}) {
+  const filterClass = createConsoleFilterClass(options.verdict)
+  const instance = filterClass.newInstance()
+  const panel = createConsoleView(instance, options.initialFilterText ?? '')
+  const fakeGlobalThis = createGlobalThis(panel.view)
+  const script = buildInternalLogHideScript(options.hiddenPrefix)
+  run(script, fakeGlobalThis)
+  return {
+    ...filterClass,
+    ...panel,
+    instance,
+    /** Re-run the very same script against the very same realm. */
+    rerun: () => run(script, fakeGlobalThis),
+  }
 }
 
-describe('DEFAULT_INTERNAL_LOG_FILTER', () => {
-  const regex = extractNegativeFilterRegex(DEFAULT_INTERNAL_LOG_FILTER)
+beforeEach(() => {
+  vi.useFakeTimers()
+  recordWarnings()
+})
 
-  it('matches a service-layer internal log line ([service] is never wrapped)', () => {
-    expect(regex.test('[service] receive msg: xxx')).toBe(true)
+afterEach(() => {
+  vi.useRealTimers()
+  vi.restoreAllMocks()
+})
+
+describe('INTERNAL_LOG_HIDDEN_PREFIX', () => {
+  it('is the prefix the service layer actually stamps on its internal log lines', () => {
+    expect(INTERNAL_LOG_HIDDEN_PREFIX).toBe('[service]')
   })
 
-  it('does NOT match a render-layer framework log line — that half is filtered at the source (forwardRenderToServiceHost), never reaches this filter\'s job', () => {
-    expect(regex.test('[视图] [system] [render] receive msg: xxx')).toBe(false)
-  })
+  it('is the prefix a no-argument buildInternalLogHideScript() hides', () => {
+    const panel = installIntoReadyPanel()
+    const hook = Object.getPrototypeOf(panel.instance).shouldBeVisible as ShouldBeVisible
 
-  it('does NOT match a render-layer business log that is wrapped in [视图] but has no [system] tag right after it', () => {
-    expect(regex.test('[视图] 用户自己打的业务日志')).toBe(false)
-  })
-
-  it('does NOT match an ordinary business log line with no internal-log prefix at all', () => {
-    expect(regex.test('用户普通业务日志')).toBe(false)
+    expect(hook.call(panel.instance, createViewMessage(`${INTERNAL_LOG_HIDDEN_PREFIX} receive msg`))).toBe(false)
   })
 })
 
 /**
- * Bug: the "only write when unset" logic in `buildConsoleFilterScript`
- * permanently freezes whatever default first got written — even a
- * self-authored default from an old build, once present, blocks every
- * future `DEFAULT_INTERNAL_LOG_FILTER` upgrade from ever taking effect. Fix
- * under test: a companion mark key records the value WE last wrote; the
- * injected script overwrites the main key whenever its current value still
- * equals that mark (our own stale default going out of date), and leaves it
- * alone only when it diverges from the mark (a real user customization).
- *
- * Persistence mechanism: this Global/Synced DevTools setting does NOT live
- * in `window.localStorage` — it is persisted through
- * `InspectorFrontendHost.getPreferences(callback)` (async-callback read) /
- * `InspectorFrontendHost.setPreference(key, jsonValue)` (sync write), backed
- * by the Electron host's own Preferences file. The real setting name is the
- * kebab-case `console.text-filter` (Chromium's M125+ renaming), not
- * `console.textFilter`.
- *
- * These tests execute the actual generated script string (not a
- * reimplementation of its logic) against a fake `InspectorFrontendHost`,
- * the same object the injected script talks to inside the real DevTools
- * front-end page.
+ * `filter.currentFilter` is not the only ConsoleFilter that judges messages —
+ * `clone()` returns a new one, and the sidebar filters through those. Landing
+ * the hook on the shared prototype covers every instance at once, including
+ * ones that do not exist yet when the script runs; a hook on the single
+ * instance the script happened to see would cover none of them.
  */
-describe('buildConsoleFilterScript self-healing default', () => {
-  const KEY = 'console.text-filter'
-  const MARK_KEY = 'console.text-filter.dimina-default'
+describe('hook placement', () => {
+  it('replaces shouldBeVisible on the ConsoleFilter prototype', () => {
+    const panel = installIntoReadyPanel()
 
-  /**
-   * Fake `InspectorFrontendHost`: `getPreferences` invokes its callback
-   * synchronously with a snapshot of the backing store, mirroring the real
-   * host closely enough for these tests — no microtask flushing needed —
-   * while still exercising the injected script's actual callback-style read.
-   */
-  function createFakeInspectorFrontendHost(initialPrefs: Record<string, string>) {
-    const store: Record<string, string> = { ...initialPrefs }
-    return {
-      store,
-      getPreferences(callback: (prefs: Record<string, string>) => void): void {
-        callback({ ...store })
-      },
-      setPreference(key: string, value: string): void {
-        store[key] = value
-      },
-    }
-  }
-
-  /** Run the generated injection script against a fresh fake `InspectorFrontendHost` seeded with `initialPrefs`. */
-  function runScript(script: string, initialPrefs: Record<string, string> = {}): Record<string, string> {
-    const fakeInspectorFrontendHost = createFakeInspectorFrontendHost(initialPrefs)
-    const fakeGlobalThis = { InspectorFrontendHost: fakeInspectorFrontendHost }
-    const run = new Function('globalThis', script)
-    run(fakeGlobalThis)
-    return fakeInspectorFrontendHost.store
-  }
-
-  it('first run: KEY is unset, so it writes the new default to KEY AND records it in the mark key', () => {
-    const store = runScript(buildConsoleFilterScript(), {})
-    expect(store[KEY]).toBe(JSON.stringify(DEFAULT_INTERNAL_LOG_FILTER))
-    expect(store[MARK_KEY]).toBe(JSON.stringify(DEFAULT_INTERNAL_LOG_FILTER))
+    expect(Object.getPrototypeOf(panel.instance).shouldBeVisible).not.toBe(panel.original)
+    expect(panel.prototype.shouldBeVisible).not.toBe(panel.original)
   })
 
-  it('repeat run of a new version: KEY currently equals the mark (our own prior default), so it MUST be overwritten with the new default even though KEY is non-empty', () => {
-    const staleDefault = '-/^\\[service\\]|^\\[视图\\] \\[system\\]/' // simulates an older build's DEFAULT_INTERNAL_LOG_FILTER, before render-layer filtering moved to the source and this regex shrank
-    const newDefault = DEFAULT_INTERNAL_LOG_FILTER // simulates the upgraded regex shipped in this build
-    const initialPrefs = {
-      [KEY]: JSON.stringify(staleDefault),
-      [MARK_KEY]: JSON.stringify(staleDefault),
-    }
+  it('leaves the ConsoleFilter instance itself unshadowed', () => {
+    const panel = installIntoReadyPanel()
 
-    const store = runScript(buildConsoleFilterScript(newDefault), initialPrefs)
-
-    expect(store[KEY]).toBe(JSON.stringify(newDefault))
-    expect(store[KEY]).not.toBe(JSON.stringify(staleDefault))
+    expect(Object.prototype.hasOwnProperty.call(panel.instance, 'shouldBeVisible')).toBe(false)
   })
 
-  it('every successful default write updates the mark key to the value that was just written, so the next same-version run can recognize it', () => {
-    const staleDefault = '-/^\\[service\\]|^\\[视图\\] \\[system\\]/'
-    const newDefault = DEFAULT_INTERNAL_LOG_FILTER
-    const initialPrefs = {
-      [KEY]: JSON.stringify(staleDefault),
-      [MARK_KEY]: JSON.stringify(staleDefault),
-    }
+  it('also hides internal logs for a ConsoleFilter constructed after installation', () => {
+    const panel = installIntoReadyPanel()
+    const laterFilter = panel.newInstance()
 
-    const store = runScript(buildConsoleFilterScript(newDefault), initialPrefs)
-
-    expect(store[MARK_KEY]).toBe(JSON.stringify(newDefault))
-    expect(store[MARK_KEY]).toBe(store[KEY])
+    expect(laterFilter.shouldBeVisible(createViewMessage('[service] receive msg'))).toBe(false)
+    expect(laterFilter.shouldBeVisible(createViewMessage('业务日志'))).toBe(true)
   })
 
-  it('user customization WITH a mark on record: KEY diverges from the mark, so the user value is left untouched', () => {
-    const priorDefault = '-/^\\[service\\]|^\\[视图\\] \\[system\\]/'
-    const userValue = '-/我自己在 DevTools 里手打的过滤规则/'
-    const initialPrefs = {
-      [KEY]: JSON.stringify(userValue),
-      [MARK_KEY]: JSON.stringify(priorDefault),
-    }
+  it('also hides internal logs for a clone of the filter it installed against', () => {
+    const panel = installIntoReadyPanel()
+    // What ConsoleFilter.clone() does: build another instance off the same
+    // prototype rather than copying the object it was called on.
+    const clone = panel.newInstance()
 
-    const store = runScript(buildConsoleFilterScript(), initialPrefs)
-
-    expect(store[KEY]).toBe(JSON.stringify(userValue))
+    expect(clone.shouldBeVisible(createViewMessage('[service] receive msg'))).toBe(false)
   })
 
-  it('user customization with NO mark on record: KEY holds a value that matches none of our known defaults, so it is left untouched (never overwritten, never treated as stale)', () => {
-    const userValue = '-/pre-existing custom filter from before self-healing shipped/'
-    const initialPrefs = {
-      [KEY]: JSON.stringify(userValue),
-    }
+  it('keeps judging through the same instance after its filter fields are mutated in place', () => {
+    // Editing the filter box does not replace `currentFilter`; it rewrites the
+    // existing instance's own fields. The hook must survive that, which it does
+    // precisely because it never lived on the instance.
+    const panel = installIntoReadyPanel()
+    const mutated = panel.instance as unknown as Record<string, unknown>
+    mutated.parsedFilters = [{ key: 'url', text: 'whatever', negative: false }]
+    mutated.levelsMask = { verbose: true, info: true, warning: true, error: true }
 
-    const store = runScript(buildConsoleFilterScript(), initialPrefs)
-
-    expect(store[KEY]).toBe(JSON.stringify(userValue))
-  })
-
-  it('regression: buildConsoleFilterScript() with no argument still seeds DEFAULT_INTERNAL_LOG_FILTER', () => {
-    const store = runScript(buildConsoleFilterScript(), {})
-    expect(store[KEY]).toBe(JSON.stringify(DEFAULT_INTERNAL_LOG_FILTER))
+    expect(panel.instance.shouldBeVisible(createViewMessage('[service] receive msg'))).toBe(false)
   })
 })
 
 /**
- * `buildLiveConsoleFilterScript` — the fix for the gap the persisted
- * preference above cannot close: a Console panel that has ALREADY
- * constructed itself (or finishes constructing shortly after injection) by
- * the time the script runs never re-reads that preference, so its live
- * filter box stays empty and framework `[service]` lines leak straight
- * through unfiltered (real repro this session). The real API this drives —
- * `Console.ConsoleView.instance().filter.textFilterUI.setValue()` +
- * `.updateCurrentFilter()` + `.onFilterChanged()` — was found via a live
- * probe against the actual bundled front-end (not guessed); see
- * console-filter.ts's doc comment.
- *
- * These tests run the actual generated script (via `new Function`) against a
- * fake `Console.ConsoleView` + `filter` object, the same technique the
- * suite above uses for the fake `InspectorFrontendHost`.
+ * The hook may only ever subtract messages: internal lines vanish, everything
+ * else keeps whatever verdict the panel's own filtering produced.
  */
-describe('buildLiveConsoleFilterScript', () => {
-  beforeEach(() => { vi.useFakeTimers() })
-  afterEach(() => { vi.useRealTimers() })
+describe('visibility verdicts', () => {
+  it('hides a message whose text starts with the internal prefix', () => {
+    const panel = installIntoReadyPanel()
 
-  /** A fake `filter.textFilterUI` + `filter` pair mirroring the real
-   * ConsoleViewFilter surface this script actually calls. */
-  function createFakeFilter(initialValue = '') {
-    let value = initialValue
-    const updateCurrentFilter = vi.fn()
-    const onFilterChanged = vi.fn()
-    return {
-      textFilterUI: {
-        value: () => value,
-        setValue: (v: string) => { value = v },
+    expect(panel.instance.shouldBeVisible(createViewMessage('[service] receive msg: xxx'))).toBe(false)
+  })
+
+  it('shows an ordinary message the original filter accepts', () => {
+    const panel = installIntoReadyPanel({ verdict: true })
+
+    expect(panel.instance.shouldBeVisible(createViewMessage('用户普通业务日志'))).toBe(true)
+    expect(panel.original).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps hiding an ordinary message the original filter rejects, so the developer\'s own filter still applies', () => {
+    const panel = installIntoReadyPanel({ verdict: false })
+
+    expect(panel.instance.shouldBeVisible(createViewMessage('被用户过滤规则排除的日志'))).toBe(false)
+    expect(panel.original).toHaveBeenCalledTimes(1)
+  })
+
+  it('treats the prefix as a prefix only — a mid-text occurrence is an ordinary message', () => {
+    const panel = installIntoReadyPanel({ verdict: true })
+
+    expect(panel.instance.shouldBeVisible(createViewMessage('用户日志里提到了 [service] 三个字'))).toBe(true)
+    expect(panel.original).toHaveBeenCalledTimes(1)
+  })
+
+  it('hides a message that is exactly the tag, with the rest of the line in later arguments', () => {
+    const panel = installIntoReadyPanel()
+
+    expect(panel.instance.shouldBeVisible(createViewMessage(INTERNAL_LOG_HIDDEN_PREFIX))).toBe(false)
+  })
+
+  it('shows a business log whose own tag merely begins with the internal one', () => {
+    const panel = installIntoReadyPanel({ verdict: true })
+
+    expect(panel.instance.shouldBeVisible(createViewMessage('[service-worker] started'))).toBe(true)
+    expect(panel.original).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows a business log where the tag is not followed by a space', () => {
+    const panel = installIntoReadyPanel({ verdict: true })
+
+    expect(panel.instance.shouldBeVisible(createViewMessage('[service]业务状态'))).toBe(true)
+    expect(panel.original).toHaveBeenCalledTimes(1)
+  })
+
+  it('delegates with the calling ConsoleFilter as `this` and the untouched view message', () => {
+    const calls: { thisArg: unknown, arg: unknown }[] = []
+    const panel = installIntoReadyPanel({
+      verdict(this: unknown, viewMessage: FakeViewMessage) {
+        calls.push({ thisArg: this, arg: viewMessage })
+        return true
       },
-      updateCurrentFilter,
-      onFilterChanged,
-      get value() { return value },
-    }
-  }
-
-  /** A "bootstrap already finished" EUI stub: the script's in-realm probe
-   * (ShortcutRegistry.instance() not throwing) must pass before it touches
-   * ConsoleView at all — these tests exercise the post-probe filter flow. */
-  function createReadyEui() {
-    return { ShortcutRegistry: { ShortcutRegistry: { instance: () => ({}) } } }
-  }
-
-  function createFakeGlobalThis(filter: ReturnType<typeof createFakeFilter> | null) {
-    return {
-      EUI: createReadyEui(),
-      Console: filter
-        ? { ConsoleView: { instance: () => ({ filter }) } }
-        : undefined,
-    }
-  }
-
-  it('applies the default immediately when the live filter box is unset', () => {
-    const filter = createFakeFilter('')
-    const fakeGlobalThis = createFakeGlobalThis(filter)
-    new Function('globalThis', buildLiveConsoleFilterScript())(fakeGlobalThis)
-
-    expect(filter.value).toBe(DEFAULT_INTERNAL_LOG_FILTER)
-    expect(filter.updateCurrentFilter).toHaveBeenCalledTimes(1)
-    expect(filter.onFilterChanged).toHaveBeenCalledTimes(1)
-  })
-
-  it('re-applies (idempotently) when the live filter box already equals this exact default', () => {
-    const filter = createFakeFilter(DEFAULT_INTERNAL_LOG_FILTER)
-    const fakeGlobalThis = createFakeGlobalThis(filter)
-    new Function('globalThis', buildLiveConsoleFilterScript())(fakeGlobalThis)
-
-    expect(filter.value).toBe(DEFAULT_INTERNAL_LOG_FILTER)
-    expect(filter.updateCurrentFilter).toHaveBeenCalledTimes(1)
-  })
-
-  it('does NOT overwrite a real user customization in the live filter box', () => {
-    const userValue = '-/我自己手打的过滤规则/'
-    const filter = createFakeFilter(userValue)
-    const fakeGlobalThis = createFakeGlobalThis(filter)
-    new Function('globalThis', buildLiveConsoleFilterScript())(fakeGlobalThis)
-
-    expect(filter.value).toBe(userValue)
-    expect(filter.updateCurrentFilter).not.toHaveBeenCalled()
-    expect(filter.onFilterChanged).not.toHaveBeenCalled()
-  })
-
-  it('retries on a bounded interval until Console.ConsoleView becomes available, then applies', () => {
-    let filter: ReturnType<typeof createFakeFilter> | null = null
-    const fakeGlobalThis: { EUI?: unknown; Console?: unknown } = { EUI: createReadyEui() }
-    Object.defineProperty(fakeGlobalThis, 'Console', {
-      get: () => (filter ? { ConsoleView: { instance: () => ({ filter }) } } : undefined),
     })
+    const viewMessage = createViewMessage('业务日志')
 
-    new Function('globalThis', buildLiveConsoleFilterScript())(fakeGlobalThis)
+    panel.instance.shouldBeVisible(viewMessage)
 
-    // Not available yet — no attempt could have applied anything.
-    vi.advanceTimersByTime(300)
-
-    // ConsoleView "finishes constructing" partway through the poll window.
-    filter = createFakeFilter('')
-    vi.advanceTimersByTime(200)
-
-    expect(filter.value).toBe(DEFAULT_INTERNAL_LOG_FILTER)
-    expect(filter.updateCurrentFilter).toHaveBeenCalledTimes(1)
-  })
-
-  it('gives up after the bounded number of attempts if Console.ConsoleView never becomes available', () => {
-    // The generated script schedules retries via the ambient `setTimeout`
-    // (not `globalThis.setTimeout`) — spy on the real (fake-timer-backed)
-    // global to count scheduled attempts.
-    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout')
-    const fakeGlobalThis = createFakeGlobalThis(null)
-
-    new Function('globalThis', buildLiveConsoleFilterScript())(fakeGlobalThis)
-    vi.runAllTimers()
-
-    // Bounded — some finite number of scheduled retries, not an infinite loop.
-    expect(setTimeoutSpy.mock.calls.length).toBeGreaterThan(0)
-    expect(setTimeoutSpy.mock.calls.length).toBeLessThan(200)
+    expect(calls).toHaveLength(1)
+    expect(calls[0].thisArg).toBe(panel.instance)
+    expect(calls[0].arg).toBe(viewMessage)
   })
 })
 
 /**
- * Every poll tick in the generated script must first check front-end
- * bootstrap readiness through the same in-realm probe
- * `frontend-bootstrap-gate.ts` exposes as `FRONTEND_BOOTSTRAP_PROBE_SCRIPT`
- * (`EUI.ShortcutRegistry.ShortcutRegistry.instance()`, wrapped in try/catch).
- * A tick that finds the probe not-yet-ready must schedule its next retry
- * WITHOUT touching `Console.ConsoleView.instance()` — an early construction
- * of that singleton is the exact bootstrap-killing failure mode
- * `frontend-bootstrap-gate.ts`'s header comment documents (an
- * `IssuesManager.instance({ensureFirst: true})` conflict that permanently
- * strands `MainImpl`'s bootstrap with no tabs at all).
+ * The visible text-filter input holds whatever the developer typed. Hiding
+ * internal logs happens behind it and must not rewrite it.
  */
-describe('buildLiveConsoleFilterScript gates every poll tick on the front-end bootstrap probe', () => {
-  beforeEach(() => { vi.useFakeTimers() })
-  afterEach(() => {
-    vi.useRealTimers()
-    delete (globalThis as Record<string, unknown>).EUI
+describe('visible text filter input', () => {
+  it('never writes to filter.textFilterUI while installing', () => {
+    const panel = installIntoReadyPanel({ initialFilterText: '我自己手打的过滤规则' })
+
+    expect(panel.setValue).not.toHaveBeenCalled()
+    expect(panel.filterText()).toBe('我自己手打的过滤规则')
   })
 
-  it('places the ShortcutRegistry bootstrap probe ahead of the ConsoleView.instance reference in the generated script', () => {
-    const script = buildLiveConsoleFilterScript()
-    const probeIndex = script.indexOf('ShortcutRegistry')
-    const consoleViewIndex = script.indexOf('ConsoleView.instance')
+  it('leaves an empty filter box empty', () => {
+    const panel = installIntoReadyPanel({ initialFilterText: '' })
+    panel.instance.shouldBeVisible(createViewMessage('[service] receive msg'))
 
-    expect(probeIndex).toBeGreaterThan(-1)
-    expect(consoleViewIndex).toBeGreaterThan(-1)
-    expect(probeIndex).toBeLessThan(consoleViewIndex)
+    expect(panel.setValue).not.toHaveBeenCalled()
+    expect(panel.filterText()).toBe('')
+  })
+})
+
+/**
+ * Injection runs again on every panel attach, so a second execution must be a
+ * no-op instead of stacking a second wrapper on top of the first.
+ */
+describe('repeated injection', () => {
+  it('leaves the already installed hook in place when the script runs a second time', () => {
+    const panel = installIntoReadyPanel()
+    const installedHook = panel.prototype.shouldBeVisible
+
+    panel.rerun()
+
+    expect(panel.prototype.shouldBeVisible).toBe(installedHook)
   })
 
-  it('never calls Console.ConsoleView.instance() while the bootstrap probe is not ready, and keeps retrying', () => {
-    const consoleViewInstance = vi.fn(() => ({ filter: null }))
-    const fakeGlobalThis = {
-      EUI: { ShortcutRegistry: { ShortcutRegistry: { instance: () => { throw new Error('not ready') } } } },
-      Console: { ConsoleView: { instance: consoleViewInstance } },
-    }
+  it('routes an ordinary message through exactly one original call after two executions', () => {
+    const panel = installIntoReadyPanel({ verdict: true })
+    panel.rerun()
 
-    new Function('globalThis', buildLiveConsoleFilterScript())(fakeGlobalThis)
-    vi.advanceTimersByTime(1000)
+    expect(panel.instance.shouldBeVisible(createViewMessage('业务日志'))).toBe(true)
+    expect(panel.original).toHaveBeenCalledTimes(1)
+  })
+})
 
-    expect(consoleViewInstance).not.toHaveBeenCalled()
+describe('refreshing already displayed messages', () => {
+  it('asks the panel to re-run visibility over the messages it already rendered', () => {
+    const panel = installIntoReadyPanel()
+
+    expect(panel.onFilterChanged).toHaveBeenCalledTimes(1)
   })
 
-  it('applies the filter through the existing ConsoleView flow only after the bootstrap probe reports ready', () => {
-    let euiReady = false
-    let filterValue = ''
-    const updateCurrentFilter = vi.fn()
-    const fakeFilter = {
-      textFilterUI: {
-        value: () => filterValue,
-        setValue: (v: string) => { filterValue = v },
+  it('has the hook in place before asking, so the refresh judges against it and not the original', () => {
+    const filterClass = createConsoleFilterClass()
+    const hookSeenByRefresh: unknown[] = []
+    const view = {
+      filter: {
+        currentFilter: filterClass.newInstance(),
+        textFilterUI: { value: () => '', setValue: vi.fn() },
       },
-      updateCurrentFilter,
-      onFilterChanged: vi.fn(),
+      onFilterChanged: vi.fn(() => { hookSeenByRefresh.push(filterClass.prototype.shouldBeVisible) }),
     }
-    const fakeGlobalThis: Record<string, unknown> = {
-      Console: { ConsoleView: { instance: () => ({ filter: fakeFilter }) } },
-    }
-    Object.defineProperty(fakeGlobalThis, 'EUI', {
-      get: () => (euiReady ? { ShortcutRegistry: { ShortcutRegistry: { instance: () => ({}) } } } : undefined),
-    })
 
-    new Function('globalThis', buildLiveConsoleFilterScript())(fakeGlobalThis)
-    vi.advanceTimersByTime(300)
-    expect(filterValue, 'the bootstrap probe never reported ready yet, so the live filter must stay untouched').toBe('')
+    run(buildInternalLogHideScript(), createGlobalThis(view))
 
-    euiReady = true
-    vi.advanceTimersByTime(200)
-    expect(filterValue).toBe(DEFAULT_INTERNAL_LOG_FILTER)
-    expect(updateCurrentFilter).toHaveBeenCalledTimes(1)
+    expect(hookSeenByRefresh).toHaveLength(1)
+    expect(hookSeenByRefresh[0]).toBe(filterClass.prototype.shouldBeVisible)
+    expect(hookSeenByRefresh[0]).not.toBe(filterClass.original)
+  })
+})
+
+describe('a custom hidden prefix', () => {
+  it('hides lines carrying the custom prefix', () => {
+    const panel = installIntoReadyPanel({ hiddenPrefix: '[custom]' })
+
+    expect(panel.instance.shouldBeVisible(createViewMessage('[custom] internal line'))).toBe(false)
+  })
+
+  it('stops hiding the default prefix once a custom one is given', () => {
+    const panel = installIntoReadyPanel({ hiddenPrefix: '[custom]', verdict: true })
+
+    expect(panel.instance.shouldBeVisible(createViewMessage('[service] receive msg'))).toBe(true)
+    expect(panel.original).toHaveBeenCalledTimes(1)
   })
 })

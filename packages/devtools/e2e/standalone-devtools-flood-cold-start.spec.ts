@@ -4,7 +4,7 @@ import fs from 'fs'
 import { fileURLToPath } from 'url'
 import { addProject, waitForSimulatorWebview, closeProject, ipcInvoke, pollUntil, evalInSimulator } from './helpers'
 import { AutomationChannel } from '../src/shared/ipc-channels'
-import { DEFAULT_INTERNAL_LOG_FILTER } from '../src/main/services/views/console-filter'
+import { INTERNAL_LOG_WRAPPER_MARK } from '../src/main/services/views/console-filter'
 import { FRONTEND_BOOTSTRAP_PROBE_SCRIPT } from '../src/main/services/views/frontend-bootstrap-gate'
 
 /**
@@ -99,11 +99,23 @@ async function countVisibleToken(kind: FrontendKind, token: string): Promise<num
   return evalInFrontend<number>(kind, script)
 }
 
+/** Whether the right panel's internal-log hiding is installed — the mark the
+ *  wrapper stamps on the ConsoleFilter prototype. */
+async function isInternalLogHidingInstalled(): Promise<boolean> {
+  return evalInFrontend<boolean>('right', `(function(){
+    try {
+      var cf = globalThis.Console.ConsoleView.instance().filter.currentFilter;
+      return !!Object.getPrototypeOf(cf)[${JSON.stringify(INTERNAL_LOG_WRAPPER_MARK)}];
+    } catch(e) { return false; }
+  })()`).catch(() => false)
+}
+
+/** The developer-facing filter input, which the de-noise must never write to. */
 async function readRightPanelFilterValue(): Promise<string> {
   return evalInFrontend<string>('right', `(function(){
     try { return globalThis.Console.ConsoleView.instance().filter.textFilterUI.value(); }
-    catch(e) { return ''; }
-  })()`).catch(() => '')
+    catch(e) { return 'READ-FAILED'; }
+  })()`).catch(() => 'READ-FAILED')
 }
 
 async function getServiceWcId(): Promise<number | null> {
@@ -190,12 +202,16 @@ test.describe('Floating internal DevTools window — cold start + log flood', ()
 
     await pollUntil(() => getDevtoolsFrontendWcId('right'), (id) => id !== null, 45000, 500)
     await pollUntil(() => isFrontendBootstrapped('right'), (ok) => ok === true, 45000, 500)
-    const filterValue = await pollUntil(
-      () => readRightPanelFilterValue(),
-      (v) => v === DEFAULT_INTERNAL_LOG_FILTER,
+    const hidingInstalled = await pollUntil(
+      () => isInternalLogHidingInstalled(),
+      (ok) => ok === true,
       45000, 500,
     )
-    expect(filterValue, 'right-panel console filter must still converge to the default de-noise filter').toBe(DEFAULT_INTERNAL_LOG_FILTER)
+    expect(hidingInstalled, 'right-panel internal-log hiding must still install under a cold-start race').toBe(true)
+    expect(
+      await readRightPanelFilterValue(),
+      'and it must install without writing into the developer\'s filter box',
+    ).toBe('')
 
     // And the underlying compile/simulator must have proceeded to completion
     // rather than getting stuck behind the concurrent front-end boot.
