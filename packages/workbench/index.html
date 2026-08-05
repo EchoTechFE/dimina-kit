@@ -7,6 +7,18 @@
       html, body, #workbench { height: 100%; margin: 0; padding: 0; }
       #boot { font: 13px monospace; padding: 8px; color: #888; }
     </style>
+    <script>
+      // Paint the themed backdrop before the bundle loads, so the "booting
+      // workbench…" screen and any resize gap never flash a white strip. The
+      // scheme is handed in via the `?theme=light|dark` query by attachWorkbench;
+      // default to dark to match the app's predominant scheme.
+      (function () {
+        var dark = new URLSearchParams(location.search).get('theme') !== 'light';
+        var bg = dark ? '#1a1a1a' : '#fafafa';
+        document.documentElement.style.backgroundColor = bg;
+        document.body.style.backgroundColor = bg;
+      })();
+    </script>
   </head>
   <body>
     <div id="boot">booting workbench…</div>

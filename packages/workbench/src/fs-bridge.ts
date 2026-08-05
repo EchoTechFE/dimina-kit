@@ -57,6 +57,25 @@ export async function bridgeRead(baseUrl: string, rel: string): Promise<Uint8Arr
   return new Uint8Array(await res.arrayBuffer())
 }
 
+/**
+ * `stat` twin of {@link bridgeRead}/{@link bridgeReaddir}: returns
+ * `[type, size?, mtimeMs?]` — `type` is 1 (file) or 2 (directory). Throws with
+ * `status: 404` when the path does not exist on disk (the COI server maps
+ * ENOENT/EISDIR to 404), so callers can tell a genuine absence from a transient
+ * bridge failure — the disk-fallback file provider must only treat the former
+ * as "not on disk".
+ */
+export async function bridgeStat(
+  baseUrl: string,
+  rel: string,
+): Promise<{ type: number; size?: number; mtimeMs?: number }> {
+  const u = new URL(`${baseUrl}__fs/stat`)
+  u.searchParams.set('p', rel)
+  const res = await fetch(u.toString())
+  if (!res.ok) throw Object.assign(new Error(`stat ${rel}: ${res.status}`), { status: res.status })
+  return (await res.json()) as { type: number; size?: number; mtimeMs?: number }
+}
+
 export async function bridgeWrite(baseUrl: string, rel: string, content: Uint8Array): Promise<void> {
   const u = new URL(`${baseUrl}__fs/write`)
   u.searchParams.set('p', rel)

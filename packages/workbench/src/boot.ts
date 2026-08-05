@@ -49,6 +49,7 @@ import { URI } from '@codingame/monaco-vscode-api/vscode/vs/base/common/uri'
 import { VSBuffer } from '@codingame/monaco-vscode-api/vscode/vs/base/common/buffer'
 
 import { TYPES_ROOT, sweepStaleRestoredEditors } from './file-workspace'
+import { installDiskFallbackFileProvider } from './workspace/disk-fallback-file-provider'
 import { registerWxmlLanguage } from './wxml-language'
 import { WXML_LANGUAGE_CONFIGURATION, WXML_TMGRAMMAR, jsonBlobUrl } from './wxml-grammar'
 import { seedAmbientTypings, type ExtraTyping } from './typings-injection'
@@ -395,6 +396,20 @@ export async function bootWorkbench(options: BootWorkbenchOptions): Promise<Work
     },
   } as never)
   status('service-initialized')
+
+  // Make the `file://` provider authoritative on disk: wrap the in-memory
+  // workspace mirror so a read that misses the (still-populating) memfs falls
+  // back to the COI `/__fs` disk bridge instead of throwing FILE_NOT_FOUND.
+  // This is what lets a file open during the post-switch re-boot or first
+  // compile — before the eager mirror has copied it — without a stuck
+  // "file was not found" placeholder. Disk is the single source of truth; the
+  // memfs stays a cache. Must run after the file services exist and before
+  // any workspace read (populateWorkspace below reads/writes through it).
+  try {
+    await installDiskFallbackFileProvider(await getService(IFileService), location.origin + '/')
+  } catch (e) {
+    console.error('[workbench] disk-fallback file provider install failed', e)
+  }
 
   // Track the host light/dark scheme. Initial value is options.theme; later
   // flips arrive through the returned handle.setTheme.
