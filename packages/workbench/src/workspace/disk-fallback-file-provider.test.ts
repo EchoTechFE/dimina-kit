@@ -1,170 +1,140 @@
 /**
- * Contract tests for `createDiskFallbackFileProvider`: the `file://` provider
- * wrapper that makes disk the single source of truth for workspace files.
+ * Unit tests for the disk-fallback overlay provider. These pin the *correct*
+ * install path (mounted via `registerFileSystemOverlay(-1, …)` — NOT the
+ * throwing `fileService.registerProvider('file', …)`) and the contract that a
+ * genuine disk-miss surfaces as a real `FileNotFound` error so the monaco
+ * `OverlayFileSystemProvider` keeps its fall-through behaviour and VS Code keeps
+ * its "Create File" flow.
  *
- * The editor reads every project file from an in-memory mirror (`file:///workspace`)
- * populated once per workbench boot. That mirror is a cache, and a cache can be
- * empty or partial at the exact moment a file is opened (the post-switch re-boot,
- * or the first-compile window) — VS Code's own open then throws FILE_NOT_FOUND and
- * leaves a stuck "The editor could not be opened because the file was not found."
- * placeholder.
- *
- * This wrapper delegates every read to the wrapped in-memory provider, but on a
- * read-miss for a `file:///workspace/*` URI it fetches the file from disk over the
- * `/__fs` bridge instead of throwing. A genuinely-missing file (bridge 404) still
- * reports not-found; non-workspace reads pass through untouched. These tests pin
- * that contract directly against a fake in-memory provider + a mocked `/__fs` bridge.
+ * TDD note: every read-path assertion below failed red when the provider was a
+ * no-op wrapper (the old `registerProvider` design silently threw at install and
+ * the overlay never fell through), then went green once the provider read from
+ * the bridge and `installDiskFallbackFileProvider` used `registerFileSystemOverlay`.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { IFileSystemProvider } from '@codingame/monaco-vscode-api/vscode/vs/platform/files/common/files'
-import { createDiskFallbackFileProvider } from './disk-fallback-file-provider.js'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createDiskProvider, installDiskFallbackFileProvider } from './disk-fallback-file-provider.js'
+import { FileSystemProviderErrorCode } from '@codingame/monaco-vscode-api/vscode/vs/platform/files/common/files'
+import { registerFileSystemOverlay } from '@codingame/monaco-vscode-files-service-override'
 
-/** A FILE_NOT_FOUND error shaped the way monaco-vscode-api's memfs throws it. */
-function fileNotFound(uri: string): Error {
-  return Object.assign(new Error(`FileNotFound: ${uri}`), {
-    fileOperationResult: 1,
-    code: 'FileNotFound',
-  })
+vi.mock('@codingame/monaco-vscode-files-service-override', () => ({
+  registerFileSystemOverlay: vi.fn(() => ({ dispose() {} })),
+}))
+
+const WORKSPACE = 'file:///workspace'
+
+/** A URI-like good enough for `relFromWorkspaceUri` (which only calls `toString`). */
+const uri = (p: string) => ({ toString: () => p }) as never
+
+const jsonResponse = (data: unknown, status = 200): Response =>
+  ({ ok: status < 400, status, json: async () => data, arrayBuffer: async () => new ArrayBuffer(0) }) as unknown as Response
+
+const bufResponse = (bytes: Uint8Array, status = 200): Response =>
+  ({ ok: status < 400, status, json: async () => ({}), arrayBuffer: async () => bytes.slice().buffer }) as unknown as Response
+
+const notFoundResponse = (): Response =>
+  ({ ok: false, status: 404, json: async () => ({}), arrayBuffer: async () => new ArrayBuffer(0) }) as unknown as Response
+
+const makeFetch = () => {
+  const seen: string[] = []
+  const fetchImpl = (input: RequestInfo | URL) => {
+    const url = typeof input === 'string' ? input : (input as URL).toString()
+    seen.push(url)
+    if (url.includes('/__fs/stat')) return Promise.resolve(jsonResponse({ type: 1, size: 3, mtimeMs: 1 }))
+    if (url.includes('/__fs/readdir')) return Promise.resolve(jsonResponse([['a.js', 1]]))
+    if (url.includes('/__fs/read')) return Promise.resolve(bufResponse(new TextEncoder().encode('// marker\n')))
+    return Promise.resolve(jsonResponse({}))
+  }
+  return { seen, fetchImpl: fetchImpl as unknown as typeof fetch }
 }
 
-/** Minimal in-memory `file://` provider: throws FILE_NOT_FOUND for anything the
- * test flags, otherwise answers trivially. Exercises the wrapper's read-miss path. */
-function makeBase(opts: {
-  readFileThrows?: (uri: string) => Error | null
-  statThrows?: (uri: string) => Error | null
-  readdirThrows?: (uri: string) => Error | null
-} = {}): IFileSystemProvider {
-  return {
-    capabilities: 2,
-    onDidChangeCapabilities: vi.fn(),
-    onDidChangeFile: vi.fn(),
-    watch: vi.fn(),
-    stat: vi.fn().mockImplementation((r: { toString(): string }) => {
-      const e = opts.statThrows?.(r.toString())
-      if (e) throw e
-      return { type: 1, ctime: 0, mtime: 0, size: 0 }
-    }),
-    mkdir: vi.fn(),
-    readdir: vi.fn().mockImplementation((r: { toString(): string }) => {
-      const e = opts.readdirThrows?.(r.toString())
-      if (e) throw e
-      return []
-    }),
-    delete: vi.fn(),
-    rename: vi.fn(),
-    readFile: vi.fn().mockImplementation((r: { toString(): string }) => {
-      const e = opts.readFileThrows?.(r.toString())
-      if (e) throw e
-      return new Uint8Array([1, 2, 3])
-    }),
-    writeFile: vi.fn(),
-  } as unknown as IFileSystemProvider
-}
-
-function jsonResponse(obj: unknown): Response {
-  return new Response(JSON.stringify(obj), { status: 200 })
-}
-function bytesResponse(bytes: Uint8Array): Response {
-  return new Response(bytes, { status: 200 })
-}
-function statusResponse(code: number): Response {
-  return new Response('', { status: code })
-}
-
-const FS_BASE = 'https://workbench.local/'
-
-describe('createDiskFallbackFileProvider', () => {
-  let fetchMock: ReturnType<typeof vi.fn>
-
-  beforeEach(() => {
-    fetchMock = vi.fn()
-    vi.stubGlobal('fetch', fetchMock)
-  })
+describe('createDiskProvider (overlay disk fallback)', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
   })
 
-  it('falls back to disk when the in-memory mirror misses a workspace file', async () => {
-    const base = makeBase({ readFileThrows: () => fileNotFound('file:///workspace/missing.js') })
-    const provider = createDiskFallbackFileProvider(base, FS_BASE)
-
-    const diskBytes = new Uint8Array([0x68, 0x69]) // "hi"
-    fetchMock.mockResolvedValueOnce(bytesResponse(diskBytes))
-
-    const got = await provider.readFile({ toString: () => 'file:///workspace/missing.js' })
-
-    expect(got).toEqual(diskBytes)
-    // The fallback reached the `/__fs/read` bridge for the right relative path.
-    const calledUrl = String(fetchMock.mock.calls[0]?.[0])
-    expect(calledUrl).toContain('__fs/read')
-    expect(calledUrl).toContain('p=missing.js')
+  it('stat hit reads from the disk bridge and maps the stat', async () => {
+    const { seen, fetchImpl } = makeFetch()
+    vi.stubGlobal('fetch', fetchImpl)
+    const p = createDiskProvider('http://host/')
+    const st = await p.stat(uri(`${WORKSPACE}/pages/index/index.js`))
+    expect(st.type).toBe(1)
+    expect(seen.some((u) => u.includes('/__fs/stat'))).toBe(true)
   })
 
-  it('does not fall back for non-workspace URIs and lets the error propagate', async () => {
-    const base = makeBase({ readFileThrows: () => fileNotFound('file:///other/x.js') })
-    const provider = createDiskFallbackFileProvider(base, FS_BASE)
+  it('readFile hit reads from the disk bridge and returns the bytes', async () => {
+    const { seen, fetchImpl } = makeFetch()
+    vi.stubGlobal('fetch', fetchImpl)
+    const p = createDiskProvider('http://host/')
+    const bytes = await p.readFile(uri(`${WORKSPACE}/pages/index/index.js`))
+    expect(new TextDecoder().decode(bytes)).toContain('marker')
+    expect(seen.some((u) => u.includes('/__fs/read'))).toBe(true)
+  })
 
+  it('readdir hit reads from the disk bridge', async () => {
+    const { seen, fetchImpl } = makeFetch()
+    vi.stubGlobal('fetch', fetchImpl)
+    const p = createDiskProvider('http://host/')
+    const entries = await p.readdir(uri(`${WORKSPACE}/pages`))
+    expect(entries).toEqual([['a.js', 1]])
+    expect(seen.some((u) => u.includes('/__fs/readdir'))).toBe(true)
+  })
+
+  it('stat miss on a 404 maps to a real FileNotFound error (not a generic Error)', async () => {
+    vi.stubGlobal('fetch', (async () => notFoundResponse()) as unknown as typeof fetch)
+    const p = createDiskProvider('http://host/')
+    let code: FileSystemProviderErrorCode | undefined
+    try {
+      await p.stat(uri(`${WORKSPACE}/missing.js`))
+    } catch (e) {
+      code = (e as { code?: FileSystemProviderErrorCode }).code
+    }
+    expect(code).toBe(FileSystemProviderErrorCode.FileNotFound)
+  })
+
+  it('readFile miss on a 404 maps to a real FileNotFound error', async () => {
+    vi.stubGlobal('fetch', (async () => notFoundResponse()) as unknown as typeof fetch)
+    const p = createDiskProvider('http://host/')
+    let code: FileSystemProviderErrorCode | undefined
+    try {
+      await p.readFile(uri(`${WORKSPACE}/missing.js`))
+    } catch (e) {
+      code = (e as { code?: FileSystemProviderErrorCode }).code
+    }
+    expect(code).toBe(FileSystemProviderErrorCode.FileNotFound)
+  })
+
+  it('a non-workspace URI never touches the bridge and throws FileNotFound', async () => {
+    const { seen, fetchImpl } = makeFetch()
+    vi.stubGlobal('fetch', fetchImpl)
+    const p = createDiskProvider('http://host/')
+    let code: FileSystemProviderErrorCode | undefined
+    try {
+      await p.readFile(uri('file:///some/other/path.js'))
+    } catch (e) {
+      code = (e as { code?: FileSystemProviderErrorCode }).code
+    }
+    expect(code).toBe(FileSystemProviderErrorCode.FileNotFound)
+    expect(seen.length).toBe(0)
+  })
+
+  it('is read-only: writeFile/mkdir/delete/rename reject', async () => {
+    vi.stubGlobal('fetch', (async () => jsonResponse({})) as unknown as typeof fetch)
+    const p = createDiskProvider('http://host/')
     await expect(
-      provider.readFile({ toString: () => 'file:///other/x.js' }),
-    ).rejects.toThrow(/FileNotFound/)
-    // No bridge call: outside the workspace, the error is the memfs's to own.
-    expect(fetchMock).not.toHaveBeenCalled()
+      p.writeFile(uri(`${WORKSPACE}/x.js`), new Uint8Array(), { create: true, overwrite: true, unlock: false, atomic: false }),
+    ).rejects.toMatchObject({
+      code: FileSystemProviderErrorCode.NoPermissions,
+    })
+    await expect(p.mkdir(uri(`${WORKSPACE}/dir`))).rejects.toMatchObject({
+      code: FileSystemProviderErrorCode.NoPermissions,
+    })
   })
+})
 
-  it('falls back to disk on a stat miss for a workspace directory/file', async () => {
-    const base = makeBase({ statThrows: () => fileNotFound('file:///workspace/dir') })
-    const provider = createDiskFallbackFileProvider(base, FS_BASE)
-
-    fetchMock.mockResolvedValueOnce(jsonResponse({ type: 2, mtimeMs: 1700000000000 }))
-
-    const st = await provider.stat({ toString: () => 'file:///workspace/dir' })
-
-    expect(st.type).toBe(2)
-    expect(st.size).toBe(0)
-    const calledUrl = String(fetchMock.mock.calls[0]?.[0])
-    expect(calledUrl).toContain('__fs/stat')
-    expect(calledUrl).toContain('p=dir')
-  })
-
-  it('falls back to disk on a readdir miss for a workspace directory', async () => {
-    const base = makeBase({ readdirThrows: () => fileNotFound('file:///workspace/dir') })
-    const provider = createDiskFallbackFileProvider(base, FS_BASE)
-
-    fetchMock.mockResolvedValueOnce(jsonResponse([['a.js', 1], ['sub', 2]]))
-
-    const entries = await provider.readdir({ toString: () => 'file:///workspace/dir' })
-
-    expect(entries).toEqual([['a.js', 1], ['sub', 2]])
-    const calledUrl = String(fetchMock.mock.calls[0]?.[0])
-    expect(calledUrl).toContain('__fs/readdir')
-  })
-
-  it('still reports not-found when the disk bridge itself returns 404 (file genuinely absent)', async () => {
-    const base = makeBase({ readFileThrows: () => fileNotFound('file:///workspace/nope.js') })
-    const provider = createDiskFallbackFileProvider(base, FS_BASE)
-
-    fetchMock.mockResolvedValueOnce(statusResponse(404))
-
-    await expect(
-      provider.readFile({ toString: () => 'file:///workspace/nope.js' }),
-    ).rejects.toThrow()
-  })
-
-  it('forwards write/mkdir/delete/rename straight to the wrapped provider', async () => {
-    const base = makeBase()
-    const provider = createDiskFallbackFileProvider(base, FS_BASE)
-    const uri = { toString: () => 'file:///workspace/fresh.js' }
-
-    await provider.writeFile(uri as never, new Uint8Array([9]), {} as never)
-    await provider.mkdir(uri as never, {} as never)
-    await provider.delete(uri as never, {} as never)
-    await provider.rename(uri as never, uri as never, {} as never)
-
-    expect(base.writeFile).toHaveBeenCalled()
-    expect(base.mkdir).toHaveBeenCalled()
-    expect(base.delete).toHaveBeenCalled()
-    expect(base.rename).toHaveBeenCalled()
-    // A write path never touches the read-only bridge.
-    expect(fetchMock).not.toHaveBeenCalled()
+describe('installDiskFallbackFileProvider', () => {
+  it('mounts the disk provider as an overlay at priority -1 (not via registerProvider)', () => {
+    installDiskFallbackFileProvider('http://host/')
+    expect(registerFileSystemOverlay).toHaveBeenCalledTimes(1)
+    expect(registerFileSystemOverlay).toHaveBeenCalledWith(-1, expect.any(Object))
   })
 })

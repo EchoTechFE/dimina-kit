@@ -58,19 +58,9 @@ import { registerDiminaJsonSchemas } from './dimina-json-schemas'
 import { buildFileAssociations, type CustomFileTypes } from './file-type-associations'
 import type { WorkspaceSource } from './workspace/types'
 
-// Force the ext-host worker entry into its OWN chunk. Under rolldown-vite the
-// static `new URL('…extensionHost.worker', import.meta.url)` form gets inlined
-// into the main bundle instead of emitted as a worker, so its bare relative
-// `import '../vscode/…/extensionHostWorkerMain.js'` reaches the iframe blob
-// `import()` with no hierarchical base → it fails to start. The explicit
-// `?worker&url` suffix makes Vite emit a discrete worker asset + give its URL.
-import extHostWorkerUrl from '@codingame/monaco-vscode-api/workers/extensionHost.worker?worker&url'
-// Same rolldown caveat applies to the editor + TextMate workers: their v34 entry
-// points are bare package subpaths, so the `?worker&url` suffix is required for
-// Vite to emit discrete worker assets (otherwise the page tries to resolve a bare
-// specifier at runtime and the worker fails to start).
-import editorWorkerUrl from '@codingame/monaco-vscode-api/workers/editor.worker?worker&url'
-import textmateWorkerUrl from '@codingame/monaco-vscode-textmate-service-override/worker?worker&url'
+// Worker asset URLs + `window.MonacoEnvironment` wiring (a bundler concern with
+// rolldown-vite caveats of its own) live in their own module.
+import { installMonacoEnvironment } from './monaco-environment'
 
 // Built-in extensions (offline-safe; run inside the ext-host worker).
 import '@codingame/monaco-vscode-theme-defaults-default-extension'
@@ -103,7 +93,6 @@ export interface WorkbenchProbe {
 
 declare global {
   interface Window {
-    MonacoEnvironment?: unknown
     __WB_PROBE?: WorkbenchProbe
   }
 }
@@ -148,37 +137,6 @@ export interface WorkbenchHandle {
   setTheme(scheme: 'light' | 'dark'): void
   /** The page-side `vscode` extension API. */
   vscode: typeof import('vscode')
-}
-
-// Worker URL + options per label. The web extension host is created INSIDE the
-// `webWorkerExtensionHostIframe.html` iframe, whose own MonacoEnvironment is
-// distinct from this page's — so the `extensionHostWorkerMain` worker must be
-// wired through the host's iframe bootstrap (EnvironmentOverride), not just
-// here. This page-level map covers the editor + textmate workers.
-const workers: Record<string, { url: URL; options?: WorkerOptions }> = {
-  editorWorkerService: { url: new URL(editorWorkerUrl, import.meta.url), options: { type: 'module' } },
-  extensionHostWorkerMain: { url: new URL(extHostWorkerUrl, import.meta.url), options: { type: 'module' } },
-  TextMateWorker: { url: new URL(textmateWorkerUrl, import.meta.url), options: { type: 'module' } },
-}
-
-function installMonacoEnvironment(): void {
-  // Respect a MonacoEnvironment the host already installed. A SOURCE consumer
-  // (e.g. the web client) bundles this package via `file:`, so its monaco/vscode
-  // worker assets resolve from a different node_modules than this module's
-  // realpath — the `new URL(…, import.meta.url)` worker URLs computed here can
-  // then be wrong for the ext-host iframe. Such a host wires the workers from its
-  // OWN bundle and sets `window.MonacoEnvironment` before calling bootWorkbench;
-  // we must not clobber it. The prebuilt-bundle entry (src/main.ts, devtools)
-  // never sets it, so this stays a no-op change there.
-  if (window.MonacoEnvironment) return
-  window.MonacoEnvironment = {
-    getWorkerUrl(_moduleId: string, label: string): string | undefined {
-      return workers[label]?.url.toString()
-    },
-    getWorkerOptions(_moduleId: string, label: string): WorkerOptions | undefined {
-      return workers[label]?.options
-    },
-  }
 }
 
 // Built-in theme ids contributed by
@@ -397,16 +355,17 @@ export async function bootWorkbench(options: BootWorkbenchOptions): Promise<Work
   } as never)
   status('service-initialized')
 
-  // Make the `file://` provider authoritative on disk: wrap the in-memory
-  // workspace mirror so a read that misses the (still-populating) memfs falls
-  // back to the COI `/__fs` disk bridge instead of throwing FILE_NOT_FOUND.
-  // This is what lets a file open during the post-switch re-boot or first
-  // compile — before the eager mirror has copied it — without a stuck
-  // "file was not found" placeholder. Disk is the single source of truth; the
-  // memfs stays a cache. Must run after the file services exist and before
-  // any workspace read (populateWorkspace below reads/writes through it).
+  // Make the `file://` provider authoritative on disk: mount a disk-reading
+  // overlay delegate (priority -1) below the workspace memfs (priority 0), so a
+  // read that misses the (still-populating) memfs falls back to the COI `/__fs`
+  // disk bridge instead of throwing FILE_NOT_FOUND. This is what lets a file
+  // open during the post-switch re-boot or first compile — before the mirror
+  // has copied it — without a stuck "file was not found" placeholder. Disk is
+  // the single source of truth; the memfs stays a cache. Must run after the
+  // file services exist (the schemes' `OverlayFileSystemProvider` is registered
+  // at initialize) and before any workspace read.
   try {
-    await installDiskFallbackFileProvider(await getService(IFileService), location.origin + '/')
+    installDiskFallbackFileProvider(location.origin + '/')
   } catch (e) {
     console.error('[workbench] disk-fallback file provider install failed', e)
   }

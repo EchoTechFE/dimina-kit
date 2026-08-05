@@ -15,15 +15,16 @@
  *     This is the happy-path the user ends up seeing; it guards that a switch does
  *     not leave the editor pointed at the wrong/empty project.
  *
- *  2. DISK FALLBACK — opens a file that exists on disk but is NOT in the
- *     in-memory mirror (the mirror already ran at boot, so a file created afterward
- *     is exactly the "cache miss" the post-switch gap produces). With the
- *     disk-fallback `file://` provider wired in boot.ts, the open falls back to the
- *     `/__fs` bridge and resolves; without it, the open throws FILE_NOT_FOUND and
- *     the placeholder sticks. This reproduces the reported bug deterministically,
- *     independent of timing.
+ *  2. DISK FALLBACK — empties the mirror entry for a real on-disk file, then
+ *     reads it immediately and asserts the `/__fs/read` bridge was actually hit.
+ *     Proves the bytes came from disk, not from the (now-empty) memfs and not
+ *     from the disk→memfs watcher (a memfs delete is not a disk event, so the
+ *     watcher never re-adds it). Without the fallback installed the read throws
+ *     FILE_NOT_FOUND — so this fails red when the fallback is broken, unlike a
+ *     naive "write to disk then poll" test that the watcher would mask.
+ *     The bridge hit is counted via resource timing rather than by wrapping
+ *     `window.fetch`, which destabilizes the workbench page under CDP.
  */
-import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { test, expect } from './fixtures'
@@ -155,41 +156,68 @@ test.describe('embedded workbench: open a file after switching projects', () => 
     ).toBe(false)
   })
 
-  test('opening a file that is on disk but missing from the in-memory mirror falls back to disk', async ({
+  test('opening a file that is missing from the in-memory mirror falls back to disk', async ({
     mainWindow,
     electronApp,
   }) => {
-    // This reproduces the reported bug deterministically: the in-memory mirror is
-    // populated once at boot, so a file written to disk afterward is exactly the
-    // "cache miss" a post-switch re-boot produces. Without the disk-fallback
-    // provider the open throws FILE_NOT_FOUND; with it, the open reads from the
-    // `/__fs` bridge and resolves.
+    // Reproduces the reported bug deterministically WITHOUT depending on the
+    // disk→memfs watcher (which would mask a broken fallback: a file written to
+    // disk after boot is mirrored into memfs by the watcher, so it would open
+    // even if the fallback were dead). Instead we empty the mirror entry for a
+    // real on-disk file, open it immediately, and assert the `/__fs/read`
+    // bridge was actually hit — proving the open came from disk, not from the
+    // memfs (now empty) and not from the watcher (a memfs delete is not a disk
+    // event, so the watcher never re-adds it).
     await openProjectInUI(mainWindow, DEMO_APP_DIR, { waitMs: 60_000 })
     const status = await attachWorkbenchAndWaitReady(mainWindow, electronApp)
     expect(status, 'workbench must reach a ready status before the disk-fallback open').toMatch(
       /workbench-ready|exthost-alive/,
     )
 
-    const marker = `__E2E_DISK_FALLBACK_MARKER__${Date.now()}`
-    const rel = '__e2e_disk_fallback__.js'
-    const abs = path.join(DEMO_APP_DIR, rel)
-    fs.writeFileSync(abs, `// ${marker}\nPage({ data: {} })\n`)
+    const rel = 'pages/index/index.js'
 
     const OPEN_FALLBACK_EXPR = `
       (async () => {
-        const p = window.__WB_PROBE
-        if (!p) return { opened: false, reason: 'no probe' }
-        const uri = p.URI.parse(${JSON.stringify(`file:///workspace/${rel}`)})
         try {
-          const doc = await p.vscode.workspace.openTextDocument(uri)
-          await p.vscode.window.showTextDocument(doc)
-          const text = doc.getText()
+          const p = window.__WB_PROBE
+          if (!p) return { opened: false, reason: 'no probe' }
+          const uri = p.URI.parse(${JSON.stringify(`file:///workspace/${rel}`)})
+          const fs = await p.getService(p.IFileService)
+          // Sanity: the file is in the in-memory mirror before we empty it.
+          const existedBefore = await fs.exists(uri)
+          // Empty the mirror entry for this file ONLY; the on-disk copy stays.
+          // (The disk→memfs watcher only fires on real disk events, and a memfs
+          // delete is not one, so it will not silently re-add the entry.)
+          try { await fs.del(uri) } catch (e) {}
+          // Timestamp the boundary so we only count bridge traffic caused by the
+          // read below. Resource timing is passive — unlike wrapping window.fetch,
+          // it cannot perturb the page it is measuring.
+          const t0 = performance.now()
+          // Prove the fallback serves the real on-disk content. This exercises
+          // the exact file-service read path openTextDocument uses: the overlay
+          // tries the (now-empty) memfs first, then falls through to our disk
+          // provider at priority -1.
+          // IFileService.readFile resolves an IFileContent whose \`value\` is a
+          // VSBuffer (not a Uint8Array), so decode through its own toString().
+          const content = await fs.readFile(uri)
+          const text = content.value.toString()
+          // The load-bearing assertion: the bytes came over the \`/__fs/read\`
+          // disk bridge just now. Without the fallback this count is 0 and the
+          // readFile above throws FILE_NOT_FOUND instead.
+          const diskReads = performance
+            .getEntriesByType('resource')
+            .filter((e) => e.startTime >= t0 && /__fs\\/read\\?/.test(e.name))
+            .length
+          // Put the mirror entry back (same bytes) so the workbench is not left
+          // with a hole in its workspace — a missing entry keeps tsserver and the
+          // Explorer churning and stalls the app's shutdown during teardown.
+          try { await fs.writeFile(uri, content.value) } catch (e) {}
           return {
             opened: true,
-            activePath: p.vscode.window.activeTextEditor
-              ? p.vscode.window.activeTextEditor.document.uri.path
-              : null,
-            hasMarker: text.includes(${JSON.stringify(marker)}),
+            hasContent: /Page\\(|pageName/.test(text),
+            existedBefore,
+            diskReads,
+            readLen: content.value.byteLength,
           }
         } catch (e) {
           return { opened: false, reason: String((e && e.message) || e) }
@@ -197,33 +225,34 @@ test.describe('embedded workbench: open a file after switching projects', () => 
       })()
     `
 
-    try {
-      const res = await pollUntil(
-        () =>
-          runInWorkbench<{ opened: boolean; activePath?: string | null; hasMarker?: boolean; reason?: string }>(
-            electronApp,
-            OPEN_FALLBACK_EXPR,
-          ).catch(() => ({ opened: false, reason: 'probe failed' })),
-        (r) => r.opened === true,
-        20_000,
-        400,
-      )
-      expect(res.opened, `opening the disk-only file must succeed via fallback; got=${JSON.stringify(res)}`).toBe(true)
-      expect(
-        res.activePath,
-        `the active editor must be /workspace/${rel}; got=${JSON.stringify(res)}`,
-      ).toBe(`/workspace/${rel}`)
-      expect(
-        res.hasMarker,
-        `the opened file must carry the disk marker (served from /__fs, not the mirror); got=${JSON.stringify(res)}`,
-      ).toBe(true)
+    const res = await runInWorkbench<{
+      opened: boolean
+      hasContent?: boolean
+      existedBefore?: boolean
+      diskReads?: number
+      readLen?: number
+      reason?: string
+    }>(electronApp, OPEN_FALLBACK_EXPR).catch(() => ({ opened: false, reason: 'probe failed' }))
 
-      const notFound = await runInWorkbench<boolean>(electronApp, NOT_FOUND_VISIBLE_EXPR)
-      expect(notFound, 'no "file was not found" placeholder should be visible for the disk-only file').toBe(false)
-    } finally {
-      // Remove the disk-only probe file so it cannot leak into the per-worker
-      // project copy or a later run.
-      fs.rmSync(abs, { force: true })
-    }
+    expect(res.opened, `reading the memfs-missing file must fall back to disk; got=${JSON.stringify(res)}`).toBe(true)
+    expect(
+      res.hasContent,
+      `the read must return the real on-disk source (Page(...)), not an error placeholder; got=${JSON.stringify(res)}`,
+    ).toBe(true)
+    expect(
+      res.existedBefore,
+      `the file must have been in the mirror before the test emptied it; got=${JSON.stringify(res)}`,
+    ).toBe(true)
+    expect(
+      res.diskReads ?? 0,
+      `the read must have gone over the /__fs/read disk bridge (proving the disk fallback served it, not the mirror or the watcher); got=${JSON.stringify(res)}`,
+    ).toBeGreaterThan(0)
+    expect(
+      res.readLen ?? 0,
+      `the disk fallback must have returned real file bytes; got=${JSON.stringify(res)}`,
+    ).toBeGreaterThan(0)
+
+    const notFound = await runInWorkbench<boolean>(electronApp, NOT_FOUND_VISIBLE_EXPR)
+    expect(notFound, 'no "file was not found" placeholder should be visible for the disk-fallback read').toBe(false)
   })
 })
