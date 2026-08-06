@@ -3,17 +3,17 @@
  * just re-attach the simulator to whatever was compiled before (微信开发者
  * 工具语义: 重新编译 = 重新编译 + 回到启动页重启).
  *
- * Reproduction: turn "自动编译" off (compile.autoBuild = false) so opening the
- * project never starts a file watcher, open the tabbar-app fixture, edit
- * home.wxml to inject a sentinel, confirm the sentinel does NOT appear on its
- * own (no watcher = no auto-rebuild), then click "重新编译" in the compile
- * popover and confirm the sentinel DOES appear — proof the button actually
- * recompiled instead of only re-mounting the stale build.
+ * Two user-visible contracts are covered:
+ *  - with "自动编译" off, source changes appear only after clicking 重新编译,
+ *    proving the button performs a real compiler rebuild;
+ *  - changing the compile start page from HOME to CART before clicking
+ *    重新编译 relaunches the simulator at CART, matching 微信开发者工具.
  */
 import { test, expect, _electron, type ElectronApplication, type Page as PwPage } from '@playwright/test'
 import path from 'path'
 import fs from 'fs'
 import { fileURLToPath } from 'url'
+import { WebSocket } from 'ws'
 import {
   openProjectInUI,
   closeProject,
@@ -24,7 +24,7 @@ import {
   evalInWebContentsByUrl,
   RENDER_GUEST_URL_MARKER,
 } from './helpers'
-import { WorkbenchSettingsChannel } from '../src/shared/ipc-channels'
+import { AutomationChannel, WorkbenchSettingsChannel } from '../src/shared/ipc-channels'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURE_DIR = path.resolve(__dirname, 'fixtures', 'tabbar-app')
@@ -34,8 +34,37 @@ const SENTINEL = 'RECOMPILE-BUTTON-SENTINEL'
 let electronApp: ElectronApplication
 let mainWindow: PwPage
 let originalWxml = ''
+let autoPort = 0
 
-async function readHomePageText(): Promise<string> {
+function wsCall<T = Record<string, unknown>>(
+  method: string,
+  params: Record<string, unknown> = {},
+  timeoutMs = 12000,
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${autoPort}`)
+    const timer = setTimeout(() => {
+      ws.close()
+      reject(new Error(`wsCall ${method} timed out`))
+    }, timeoutMs)
+    ws.on('open', () => ws.send(JSON.stringify({ id: 'recompile-route', method, params })))
+    ws.on('message', (raw) => {
+      let msg: { id?: string; result?: unknown; error?: { message?: string } }
+      try { msg = JSON.parse(String(raw)) } catch { return }
+      if (msg.id !== 'recompile-route') return
+      clearTimeout(timer)
+      ws.close()
+      if (msg.error) reject(new Error(msg.error.message || 'rpc error'))
+      else resolve(msg.result as T)
+    })
+    ws.on('error', (err) => {
+      clearTimeout(timer)
+      reject(err)
+    })
+  })
+}
+
+async function readActivePageText(): Promise<string> {
   return evalInWebContentsByUrl<string>(
     electronApp,
     RENDER_GUEST_URL_MARKER,
@@ -50,23 +79,53 @@ async function readHomePageText(): Promise<string> {
  * the button must be found and clicked via `electronApp.evaluate` against
  * that WebContents specifically.
  */
-async function clickRecompileInPopover(): Promise<void> {
+async function clickRecompileInPopover(startPage?: string): Promise<void> {
   const compileDropdown = mainWindow.getByRole('button', { name: /普通编译/ })
   await compileDropdown.waitFor({ timeout: 10000 })
   await compileDropdown.click()
 
   await pollUntil(
-    () => electronApp.evaluate(({ webContents }) =>
-      webContents.getAllWebContents().some((wc) => wc.getURL().includes('entries/popover'))),
-    (present) => present === true,
+    () => electronApp.evaluate(async ({ webContents }) => {
+      const popover = webContents.getAllWebContents().find((wc) => wc.getURL().includes('entries/popover'))
+      if (!popover || popover.isLoading()) return false
+      return popover.executeJavaScript(`
+        Array.from(document.querySelectorAll('button'))
+          .some((button) => (button.textContent || '').includes('重新编译'))
+      `).catch(() => false)
+    }),
+    (ready) => ready === true,
     10000,
     200,
   )
 
+  if (startPage) {
+    await electronApp.evaluate(async ({ webContents }, selectedStartPage) => {
+      const popover = webContents.getAllWebContents().find((wc) => wc.getURL().includes('entries/popover'))
+      if (!popover) throw new Error('popover webContents not found')
+      await popover.executeJavaScript(`
+        (() => {
+          const select = document.querySelector('select')
+          if (!select) throw new Error('启动页面 select not found in popover')
+          const startPage = ${JSON.stringify(selectedStartPage)}
+          if (!Array.from(select.options).some((option) => option.value === startPage)) {
+            throw new Error('启动页面 option not found: ' + startPage)
+          }
+          select.value = startPage
+          select.dispatchEvent(new Event('change', { bubbles: true }))
+          return select.value
+        })()
+      `)
+    }, startPage)
+
+    // React applies the controlled Select update asynchronously. Click in a
+    // separate task so handleRelaunch observes the new config, matching a real
+    // user selecting a compile mode before pressing 重新编译.
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+
   await electronApp.evaluate(async ({ webContents }) => {
     const popover = webContents.getAllWebContents().find((wc) => wc.getURL().includes('entries/popover'))
     if (!popover) throw new Error('popover webContents not found')
-    if (popover.isLoading()) throw new Error('popover webContents still loading')
     await popover.executeJavaScript(`
       (() => {
         const buttons = Array.from(document.querySelectorAll('button'))
@@ -78,7 +137,7 @@ async function clickRecompileInPopover(): Promise<void> {
   })
 }
 
-test.describe('popover 重新编译 button recompiles stale source (autoBuild off)', () => {
+test.describe('popover 重新编译 rebuilds and relaunches at the selected start page', () => {
   test.describe.configure({ mode: 'serial' })
   test.setTimeout(180_000)
 
@@ -99,6 +158,13 @@ test.describe('popover 重新编译 button recompiles stale source (autoBuild of
     })
     mainWindow = await electronApp.firstWindow()
     await mainWindow.waitForLoadState('domcontentloaded')
+
+    autoPort = await pollUntil(
+      () => ipcInvoke<number | null>(mainWindow, AutomationChannel.GetPort),
+      (port) => typeof port === 'number' && port > 0,
+      10000,
+      100,
+    ) as number
 
     await electronApp.evaluate(async ({ BrowserWindow }) => {
       const win = BrowserWindow.getAllWindows()[0]
@@ -149,7 +215,7 @@ test.describe('popover 重新编译 button recompiles stale source (autoBuild of
   test('clicking 重新编译 recompiles the edited source and shows it — no auto-rebuild happens first', async () => {
     // ── Sanity: the entry page renders its pre-edit content. ────────────────
     const initial = await pollUntil(
-      () => readHomePageText(),
+      () => readActivePageText(),
       (txt) => txt.includes('HOME PAGE'),
       20000,
       400,
@@ -166,7 +232,7 @@ test.describe('popover 重新编译 button recompiles stale source (autoBuild of
     // ── Confirm the edit does NOT surface on its own within a generous
     // window — proves there is no live auto-compile in this configuration. ──
     await new Promise((resolve) => setTimeout(resolve, 8000))
-    const stillStale = await readHomePageText()
+    const stillStale = await readActivePageText()
     expect(
       stillStale.includes(SENTINEL),
       'autoBuild is off — the sentinel must NOT appear without an explicit recompile',
@@ -177,7 +243,7 @@ test.describe('popover 重新编译 button recompiles stale source (autoBuild of
     await clickRecompileInPopover()
 
     const afterRecompile = await pollUntil(
-      () => readHomePageText(),
+      () => readActivePageText(),
       (txt) => txt.includes(SENTINEL),
       30000,
       500,
@@ -186,5 +252,48 @@ test.describe('popover 重新编译 button recompiles stale source (autoBuild of
       afterRecompile,
       '重新编译 must recompile the edited source and reload onto it — a reattach-only implementation would still show the stale build',
     ).toContain(SENTINEL)
+  })
+
+  test('changing the compile start page then clicking 重新编译 opens that page', async () => {
+    const routeBefore = await pollUntil(
+      () => wsCall<{ path?: string }>('App.getCurrentPage').catch(() => null),
+      (page) => !!page?.path?.includes('pages/home/home'),
+      20000,
+      500,
+    )
+    expect(routeBefore?.path).toContain('pages/home/home')
+
+    const before = await pollUntil(
+      () => readActivePageText(),
+      (txt) => txt.includes('HOME PAGE'),
+      20000,
+      400,
+    )
+    expect(before).toContain('HOME PAGE')
+
+    await clickRecompileInPopover('pages/cart/cart')
+
+    const routeAfter = await pollUntil(
+      () => wsCall<{ path?: string }>('App.getCurrentPage').catch(() => null),
+      (page) => !!page?.path?.includes('pages/cart/cart'),
+      30000,
+      500,
+    )
+    expect(
+      routeAfter?.path,
+      '重新编译后的 active page route must be pages/cart/cart instead of the previous HOME route',
+    ).toContain('pages/cart/cart')
+
+    const afterRecompile = await pollUntil(
+      () => readActivePageText(),
+      (txt) => txt.includes('CART PAGE'),
+      30000,
+      500,
+    )
+    expect(
+      afterRecompile,
+      '首页 → 选择 pages/cart/cart → 重新编译 must relaunch the simulator at CART instead of retaining HOME',
+    ).toContain('CART PAGE')
+    expect(afterRecompile).not.toContain('HOME PAGE')
   })
 })

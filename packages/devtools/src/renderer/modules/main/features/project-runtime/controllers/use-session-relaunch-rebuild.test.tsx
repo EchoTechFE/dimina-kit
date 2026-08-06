@@ -24,8 +24,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
 import type { SessionHookResult } from './use-session'
 
-const { rebuildProjectMock } = vi.hoisted(() => ({
+const { rebuildProjectMock, saveCompileConfigMock } = vi.hoisted(() => ({
   rebuildProjectMock: vi.fn(async (): Promise<unknown> => undefined),
+  saveCompileConfigMock: vi.fn(async () => {}),
 }))
 
 vi.mock('@/shared/api', () => {
@@ -44,7 +45,7 @@ vi.mock('@/shared/api', () => {
       scene: 1011,
       queryParams: [],
     })),
-    saveCompileConfig: vi.fn(async () => {}),
+    saveCompileConfig: saveCompileConfigMock,
     onSessionRuntimeStatus: vi.fn(() => () => {}),
     onProjectStatus: vi.fn(() => () => {}),
     onCompileLog: vi.fn(() => () => {}),
@@ -57,6 +58,7 @@ import { useSession } from './use-session'
 beforeEach(() => {
   rebuildProjectMock.mockClear()
   rebuildProjectMock.mockImplementation(async () => undefined)
+  saveCompileConfigMock.mockClear()
 })
 
 async function renderReadySession() {
@@ -120,6 +122,27 @@ describe('useSession.relaunch(): recompiles through rebuildProject before hard-r
       readNonce(result.current),
       'a failed rebuild must NOT hard-reset the simulator — it keeps its current, still-working session',
     ).toBe(nonceBefore)
+  })
+
+  it('publishes a newly selected startPage before bumping relaunchNonce', async () => {
+    const nextConfig = {
+      startPage: 'pages/cart/cart',
+      scene: 1001,
+      queryParams: [{ key: 'from', value: 'compile-mode' }],
+    }
+    const { result } = await renderReadySession()
+    const nonceBefore = readNonce(result.current)
+
+    await act(async () => {
+      await result.current.relaunch(nextConfig)
+    })
+
+    expect(saveCompileConfigMock).toHaveBeenCalledWith(
+      '/tmp/rebuild-relaunch-project',
+      nextConfig,
+    )
+    expect(result.current.compileConfig).toEqual(nextConfig)
+    expect(readNonce(result.current)).toBe(nonceBefore + 1)
   })
 
   it('rebuildProject resolving { supported: false } degrades to the legacy bump-only relaunch', async () => {

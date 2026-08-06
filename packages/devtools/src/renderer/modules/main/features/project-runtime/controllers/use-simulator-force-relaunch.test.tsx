@@ -172,6 +172,30 @@ describe('useSimulator: relaunchNonce → forced hard re-attach at startPage', (
     expect(route!.current.pagePath).toBe(START_PAGE)
   })
 
+  it('relaunching with a newly selected startPage attaches at the new page, not the previous page', async () => {
+    const base = makeBaseProps()
+    const { rerender } = renderSimulator(base)
+    expect(attachNativeSimulatorMock).toHaveBeenCalledTimes(1)
+    attachNativeSimulatorMock.mockClear()
+
+    await rerenderFlushed(rerender, {
+      ...base,
+      compileConfig: {
+        ...base.compileConfig,
+        startPage: OTHER_PAGE,
+        queryParams: [{ key: 'from', value: 'compile-mode' }],
+      },
+      relaunchNonce: 1,
+    })
+
+    expect(attachNativeSimulatorMock).toHaveBeenCalledTimes(1)
+    const route = parseRoute(lastAttachUrl())
+    expect(route, 're-attach URL must be a parseable simulator route').not.toBeNull()
+    expect(route!.entry.pagePath).toBe(OTHER_PAGE)
+    expect(route!.entry.query).toEqual({ from: 'compile-mode', scene: '1011' })
+    expect(route!.current).toEqual(route!.entry)
+  })
+
   it('a rerender that changes neither relaunchNonce, hotReloadToken, nor simulatorUrl causes zero additional attach calls', () => {
     const base = makeBaseProps()
     const { rerender } = renderSimulator(base)
