@@ -96,9 +96,10 @@ export function useSimulator(props: UseSimulatorProps): SimulatorHookResult {
     hotReloadContextRef.current = { currentPage, compileConfig, appInfo, port }
   })
 
-  // Last token the attach effect has consumed. Seeded with the initial token
-  // so the mount attach is a plain attach, not a hot reload.
+  // Last token/nonce the attach effect has consumed. Seeded with the initial
+  // values so the mount attach is a plain attach, not a hot reload.
   const attachedHotReloadTokenRef = useRef(hotReloadToken)
+  const attachedRelaunchNonceRef = useRef(relaunchNonce)
 
   // ── Mount the simulator as a main-process WebContentsView ───────────────────
   // We ask main to create + load the WCV with the simulatorUrl; main's preload
@@ -113,12 +114,18 @@ export function useSimulator(props: UseSimulatorProps): SimulatorHookResult {
     if (compileStatus.status !== 'ready') return
     if (!simulatorUrl) return
 
-    // An explicit relaunch (relaunchNonce bumped, token unchanged) is NOT a hot
-    // reload: it hard-attaches at `startPage` (the else branch below), resetting
-    // the drifted page — even when `simulatorUrl` is byte-identical, because
-    // `relaunchNonce` is in this effect's deps.
-    const isHotReload = hotReloadToken !== attachedHotReloadTokenRef.current
+    // An explicit relaunch (relaunchNonce bumped) is NOT a hot reload: it
+    // hard-attaches at `startPage` (the else branch below), resetting the
+    // drifted page — even when `simulatorUrl` is byte-identical, because
+    // `relaunchNonce` is in this effect's deps. The explicit signal WINS when
+    // both changed since the last run: a hot-reload token that lands together
+    // with a relaunch nonce (e.g. a broadcast racing the relaunch IPC reply)
+    // must not downgrade the user's requested reset into a soft reload of the
+    // drifted page.
+    const explicitRelaunch = relaunchNonce !== attachedRelaunchNonceRef.current
+    const isHotReload = !explicitRelaunch && hotReloadToken !== attachedHotReloadTokenRef.current
     attachedHotReloadTokenRef.current = hotReloadToken
+    attachedRelaunchNonceRef.current = relaunchNonce
 
     let attachUrl = simulatorUrl
     if (isHotReload) {

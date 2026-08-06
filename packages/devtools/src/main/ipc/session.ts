@@ -44,6 +44,15 @@ export function registerSessionIpc(ctx: Pick<WorkbenchContext, 'workspace' | 'se
     .handle(ProjectChannel.Close, () => {
       return ctx.workspace.closeProject()
     })
+    .handle(ProjectChannel.Rebuild, async () => {
+      const session = ctx.workspace.getSession()
+      if (!session) throw new Error('project:rebuild — no active project session')
+      // A host CompilationAdapter predating session.rebuild must not break:
+      // degrade discernibly so the renderer falls back to reattach-only.
+      if (typeof session.rebuild !== 'function') return { supported: false }
+      await session.rebuild()
+      return { supported: true }
+    })
     .handle(ProjectChannel.CaptureThumbnail, (_, ...args: unknown[]) => {
       const [projectPath] = validate(
         ProjectChannel.CaptureThumbnail,

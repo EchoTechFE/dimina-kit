@@ -8,10 +8,9 @@ import { createRequire } from 'node:module'
 import chokidar from 'chokidar'
 import { WATCH_IGNORE_DIRS } from './watch-ignore.js'
 import { applyEsbuildBinaryPath } from './esbuild-binary-path.js'
-import { createRebuildScheduler } from './rebuild-scheduler.js'
 import { createCompileWorker } from './compile-worker.js'
 import type { CompileLogEntry, CompileWorker } from './compile-worker.js'
-import { composeBuildCompleted, runRebuild } from './rebuild-dispatch.js'
+import { createProjectRebuildController } from './rebuild-dispatch.js'
 import { createCompileWorkerStandby } from './compile-worker-standby.js'
 import type { CompileWorkerStandby, CompileWorkerStandbyOptions } from './compile-worker-standby.js'
 
@@ -116,6 +115,13 @@ export interface AppInfo {
 export interface ProjectSession {
 	appInfo: AppInfo
 	port: number
+	/**
+	 * Run one real recompile through the same coalescing scheduler the file
+	 * watcher uses (never a concurrent build). Resolves once a build covering
+	 * the disk state at call time completes; rejects when that build fails.
+	 * Available regardless of `watch`.
+	 */
+	rebuild: () => Promise<void>
 	close: () => Promise<void>
 }
 
@@ -145,13 +151,17 @@ export interface OpenProjectOptions {
 	 */
 	autoReload?: boolean
 	/**
-	 * Fired after each successful watcher rebuild. `info.changedPaths` are the
-	 * files that triggered it; `info.styleOnly` is true when every one is a
+	 * Fired after each successful rebuild. `info.changedPaths` are the files
+	 * that triggered it; `info.styleOnly` is true when every one is a
 	 * stylesheet (see {@link isStyleOnlyChange}) — the host can then hot-swap
-	 * styles in place instead of a full reload. Both are absent (undefined) for
-	 * the SSE-driven web-preview path; native hosts read them to pick a fast path.
+	 * styles in place instead of a full reload. `info.explicit` is true when
+	 * the run covered a user-requested `session.rebuild()` call (possibly
+	 * coalesced with watcher saves) — the host reflects such a run through its
+	 * own hard re-attach, not the watcher's hot-reload path. All are absent
+	 * (undefined) for the SSE-driven web-preview path; native hosts read them
+	 * to pick a reflection path.
 	 */
-	onRebuild?: (info?: { changedPaths: string[]; styleOnly: boolean }) => void
+	onRebuild?: (info?: { changedPaths: string[]; styleOnly: boolean; explicit?: boolean }) => void
 	onBuildError?: (err: unknown) => void
 	/**
 	 * Per-line dmcc compile log, already filtered through `filterDmccLogLine`
@@ -320,6 +330,18 @@ export async function openProject(opts: OpenProjectOptions): Promise<ProjectSess
 	let reloadStyles: (() => void) | undefined
 	let watcher: { close: () => Promise<void>; ready: Promise<void> } | null = null
 
+	const rebuildController = createProjectRebuildController({
+		compileWorker,
+		buildRequest,
+		sessionApps,
+		autoReload,
+		getReload: () => reload,
+		getReloadStyles: () => reloadStyles,
+		styleExts: fileTypes?.style,
+		onRebuild,
+		onBuildError,
+	})
+
 	try {
 		process.env.DIMINA_NO_OPEN_BROWSER = '1'
 		const fe = await import('../fe/index.js' as string)
@@ -336,32 +358,9 @@ export async function openProject(opts: OpenProjectOptions): Promise<ProjectSess
 		reload = started.reload
 		reloadStyles = started.reloadStyles
 
-		// Watcher events are routed through the scheduler so a save landing while
-		// a build is in flight is never dropped: it coalesces into exactly one
-		// trailing rebuild once the current run settles.
-		const onBuildCompleted = composeBuildCompleted({
-			autoReload,
-			getReload: () => reload,
-			getReloadStyles: () => reloadStyles,
-			styleExts: fileTypes?.style,
-			onRebuild,
-		})
-		// The scheduler coalesces N saves into one trailing rebuild, so the changed
-		// paths accumulate here and are drained (not lost) at the moment that run
-		// actually starts. Draining at run-start — before the build's await — lets
-		// saves landing DURING the build accumulate cleanly for the next trailing
-		// run. An empty set means "changes unknown" → composeBuildCompleted falls
-		// back to a full reload rather than a style-only swap.
-		const pendingChanges = new Set<string>()
-		const rebuildScheduler = createRebuildScheduler(() => {
-			const changed = [...pendingChanges]
-			pendingChanges.clear()
-			return runRebuild(compileWorker, buildRequest, sessionApps, onBuildCompleted, err => onBuildError?.(err), changed)
-		})
 		watcher = watch
 			? createProjectWatcher(projectPath, (changedPath) => {
-				if (changedPath) pendingChanges.add(changedPath)
-				rebuildScheduler.schedule()
+				rebuildController.notifyChanged(changedPath)
 			}, onWatcherError)
 			: null
 		// Don't resolve until the watcher's initial scan is done: a save landing
@@ -385,6 +384,7 @@ export async function openProject(opts: OpenProjectOptions): Promise<ProjectSess
 	return {
 		appInfo: initialAppInfo ?? { appId: 'unknown', name: path.basename(projectPath), path: projectPath },
 		port: resolvedPort,
+		rebuild: rebuildController.rebuild,
 		close: async () => {
 			await watcher?.close()
 			// Kill the long-lived compile worker and WAIT for the child to be

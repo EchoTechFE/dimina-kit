@@ -7,14 +7,16 @@
  * calls `process.chdir` — the worker chdirs in its own process (the root
  * motive of this architecture).
  *
- * Crash handling: an unexpected worker death ('exit', 'close' or a lone
- * 'error' event — Node does NOT guarantee an 'exit' after 'error') rejects
- * the in-flight build (so the rebuild scheduler settles instead of hanging)
- * and the NEXT build lazily re-forks a fresh worker. The death handler is
- * idempotent and generation-guarded: a dead child's late 'exit' can never
- * settle a build that belongs to a fresh worker. `close()` kills, rejects
- * the in-flight build itself, and resolves on the child's first death event
- * ('exit'/'close', or a lone 'error') — it never re-forks
+ * Crash handling: an unexpected worker death ('exit' or 'close') rejects the
+ * in-flight build (so the rebuild scheduler settles instead of hanging) and
+ * the NEXT build lazily re-forks a fresh worker. A pre-spawn 'error' also
+ * counts as death because no process ever existed; an error from an already
+ * spawned child does NOT, because Node also uses that event for failed IPC
+ * sends and failed kill attempts while the process remains alive. The death
+ * handler is idempotent and generation-guarded: a dead child's late event can
+ * never settle a build that belongs to a fresh worker. `close()` kills,
+ * rejects the in-flight build itself, and resolves only after confirmed death
+ * — it never re-forks
  * (refill-on-graceful-close would wedge process teardown).
  */
 import { fork, type ChildProcess } from 'node:child_process'
@@ -45,7 +47,22 @@ export interface CompileWorkerOptions {
 	 * self-forked one — close() kills it, its death rejects in-flight builds.
 	 */
 	adopt?: ChildProcess
+	/**
+	 * Watchdog deadline for one build, in milliseconds (default 120 000). The
+	 * death handlers below only cover a child that DIES; a child that stays
+	 * alive but never replies (a wedged compiler) would otherwise hang the
+	 * in-flight build — and everything awaiting it — forever. On expiry the
+	 * build rejects with a timeout error and the unresponsive child is retired
+	 * (SIGTERM, then SIGKILL after a grace period); only after confirmed death
+	 * may the next build fork a fresh worker.
+	 */
+	buildTimeoutMs?: number
+	/** Grace period before a retiring worker is escalated from SIGTERM to SIGKILL. */
+	killGraceMs?: number
 }
+
+const DEFAULT_BUILD_TIMEOUT_MS = 120_000
+const DEFAULT_KILL_GRACE_MS = 5_000
 
 export interface BuildRequest {
 	projectPath: string
@@ -62,9 +79,9 @@ export interface CompileWorker {
 	 */
 	build: (req: BuildRequest) => Promise<WorkerAppInfo | null>
 	/**
-	 * Kill the worker and resolve once the child actually died — first of
-	 * 'exit'/'close'/'error' (a lone 'error' counts: Node does not guarantee
-	 * an 'exit' after it). An in-flight build is rejected by close() itself
+	 * Kill the worker and resolve once the child actually died — 'exit' or
+	 * 'close' (or a pre-spawn 'error', when no process ever existed). An
+	 * in-flight build is rejected by close() itself
 	 * (not delegated to a child 'exit' that a wedged child may never emit).
 	 * Idempotent; the instance is dead afterwards — no re-fork.
 	 */
@@ -115,15 +132,10 @@ export function createCompileWorker(opts: CompileWorkerOptions = {}): CompileWor
 	let child: ChildProcess | null = null
 	let closed = false
 	let closePromise: Promise<void> | null = null
-	// Pending close() resolver, driven by settleDeath — NOT by a listener on
-	// the child. settleDeath's removeAllListeners() would strip a
-	// once('exit') resolver when the child dies through the 'error' path
-	// first (Node does not guarantee an 'exit' after 'error'), leaving the
-	// closePromise hanging forever. Routing the resolve through settleDeath
-	// makes ANY first death event ('exit', 'close' or a lone 'error') settle
-	// the close, consistent with how it already treats 'error' as death for
-	// builds and child cleanup.
-	let resolveClose: (() => void) | null = null
+	const deathPromises = new WeakMap<ChildProcess, Promise<void>>()
+	// At most one retired worker exists: the serialization chain waits for this
+	// promise before it may fork a replacement.
+	let retiring: { worker: ChildProcess; promise: Promise<void> } | null = null
 	let inFlight: {
 		/** Generation tag: the worker this build was sent to. A dead previous
 		 * child's late death event must never settle a NEWER worker's build. */
@@ -174,12 +186,18 @@ export function createCompileWorker(opts: CompileWorkerOptions = {}): CompileWor
 	// process — the SAME wiring whether the process was self-forked or adopted
 	// from a warm standby (an inline copy for one of the two would drift).
 	function wireWorker(worker: ChildProcess): ChildProcess {
+		// A failed spawn can emit `error` without ever emitting `exit`. Once a
+		// process has spawned, however, `error` is not a death signal: Node also
+		// emits it when send()/kill() fails while the process may still be alive.
+		let spawned = worker.pid !== undefined
+		worker.once('spawn', () => { spawned = true })
+		let resolveDeath!: () => void
+		const deathPromise = new Promise<void>((resolve) => { resolveDeath = resolve })
+		deathPromises.set(worker, deathPromise)
 		attachLineReader(worker.stdout, 'stdout')
 		attachLineReader(worker.stderr, 'stderr')
-		// Shared, idempotent death handler for 'exit' / 'close' / 'error': the
-		// three can fire in any combination ('error' alone on spawn failures,
-		// exit+close on a normal death, error followed by a late exit). Only
-		// the FIRST one acts; all state mutations are guarded by worker
+		// Shared, idempotent confirmed-death handler. exit+close can both fire;
+		// only the FIRST one acts, and every mutation is guarded by worker
 		// identity so a previous generation's death never touches a fresh one.
 		let settled = false
 		const settleDeath = (reason: string): void => {
@@ -194,16 +212,9 @@ export function createCompileWorker(opts: CompileWorkerOptions = {}): CompileWor
 				inFlight = null
 				pending.reject(new Error(reason))
 			}
-			// Resolve a pending close(): this death IS the exit close() was
-			// waiting for. (At most one unsettled worker exists at a time —
-			// `child` only changes hands through settleDeath or close(), and
-			// after close() no re-fork happens — so an old generation can never
-			// race a newer worker's close here.)
-			if (resolveClose) {
-				const settleClose = resolveClose
-				resolveClose = null
-				settleClose()
-			}
+			// Per-worker death completion: an old generation can never resolve a
+			// close/retirement that belongs to its replacement.
+			resolveDeath()
 			// Drop stale listeners on the dead child; the next build re-forks.
 			worker.removeAllListeners()
 		}
@@ -223,7 +234,22 @@ export function createCompileWorker(opts: CompileWorkerOptions = {}): CompileWor
 		})
 		worker.on('exit', () => settleDeath('compile worker exited unexpectedly mid-build'))
 		worker.on('close', () => settleDeath('compile worker exited unexpectedly mid-build'))
-		worker.on('error', (err: Error) => settleDeath(`compile worker errored: ${err.message}`))
+		worker.on('error', (err: Error) => {
+			const reason = `compile worker errored: ${err.message}`
+			if (!spawned) {
+				// No OS process exists, so Node cannot emit an exit event.
+				settleDeath(reason)
+				return
+			}
+			// For a live process the error settles only its request. Retire the
+			// exact worker and wait for exit/close before allowing replacement.
+			if (inFlight && inFlight.worker === worker) {
+				const pending = inFlight
+				inFlight = null
+				pending.reject(new Error(reason))
+			}
+			if (child === worker) void retireWorker(worker)
+		})
 		return worker
 	}
 
@@ -249,15 +275,78 @@ export function createCompileWorker(opts: CompileWorkerOptions = {}): CompileWor
 		child = wireWorker(opts.adopt)
 	}
 
-	function runBuild(req: BuildRequest): Promise<WorkerAppInfo | null> {
+	function retireWorker(worker: ChildProcess): Promise<void> {
+		if (retiring?.worker === worker) return retiring.promise
+		const death = deathPromises.get(worker) ?? Promise.resolve()
+		if (child === worker) child = null
+		const timers: { escalation?: ReturnType<typeof setTimeout> } = {}
+		const promise = death.finally(() => {
+			if (timers.escalation) clearTimeout(timers.escalation)
+			if (retiring?.worker === worker) retiring = null
+		})
+		// Publish retirement BEFORE signalling: a synchronous/mock `error` event
+		// from kill() must observe that this exact worker is already retiring.
+		retiring = { worker, promise }
+		try { worker.kill() }
+		catch {
+			try { worker.kill('SIGKILL') }
+			catch { /* wait for a real exit/close; a kill error is not death */ }
+		}
+		timers.escalation = setTimeout(() => {
+			if (retiring?.worker !== worker) return
+			try { worker.kill('SIGKILL') }
+			catch { /* wait for confirmed death */ }
+		}, opts.killGraceMs ?? DEFAULT_KILL_GRACE_MS)
+		timers.escalation.unref?.()
+		return promise
+	}
+
+	async function runBuild(req: BuildRequest): Promise<WorkerAppInfo | null> {
+		// Never overlap a replacement with a timed-out compiler that may still be
+		// writing the same output directory. SIGKILL escalation bounds this wait.
+		if (retiring) await retiring.promise
 		if (closed) {
 			return Promise.reject(new Error('compile worker is closed'))
 		}
 		if (!child) child = spawnWorker()
 		const worker = child
 		return new Promise<WorkerAppInfo | null>((resolve, reject) => {
-			inFlight = { worker, resolve, reject }
-			worker.send({ cmd: 'build', ...req })
+			// Watchdog: covers the send→settle window. Every settle path
+			// (result message, death, close(), the watchdog itself) funnels
+			// through the wrapped resolve/reject below, so the timer can never
+			// outlive the build it guards.
+			const timeoutMs = opts.buildTimeoutMs ?? DEFAULT_BUILD_TIMEOUT_MS
+			const request = {
+				worker,
+				resolve,
+				reject,
+			}
+			const timer = setTimeout(() => {
+				if (inFlight !== request) return
+				inFlight = null
+				request.reject(new Error(
+					`compile build timed out after ${timeoutMs}ms — the compile worker stopped responding and was killed`,
+				))
+				void retireWorker(worker)
+			}, timeoutMs)
+			timer.unref?.()
+			request.resolve = (appInfo) => {
+				clearTimeout(timer)
+				resolve(appInfo)
+			}
+			request.reject = (err) => {
+				clearTimeout(timer)
+				reject(err)
+			}
+			inFlight = request
+			try {
+				worker.send({ cmd: 'build', ...req })
+			}
+			catch (err) {
+				if (inFlight === request) inFlight = null
+				request.reject(err instanceof Error ? err : new Error(String(err)))
+				void retireWorker(worker)
+			}
 		})
 	}
 
@@ -274,7 +363,6 @@ export function createCompileWorker(opts: CompileWorkerOptions = {}): CompileWor
 			if (closed) return closePromise ?? Promise.resolve()
 			closed = true
 			const worker = child
-			child = null
 			// Reject the in-flight build HERE: a wedged child that ignores
 			// SIGTERM never emits 'exit', and the rebuild scheduler must not
 			// hang at teardown waiting on it.
@@ -284,20 +372,12 @@ export function createCompileWorker(opts: CompileWorkerOptions = {}): CompileWor
 				pending.reject(new Error('compile worker closed'))
 			}
 			if (!worker) {
-				// Never forked, or already dead (death handler cleared `child`).
-				closePromise = Promise.resolve()
+				// A timeout may already be retiring the last child. Closing must wait
+				// until that exact process is reaped, not merely observe child=null.
+				closePromise = retiring?.promise ?? Promise.resolve()
 				return closePromise
 			}
-			closePromise = new Promise<void>((resolve) => {
-				// Handed to settleDeath BEFORE kill so a synchronous exit can't
-				// be missed. No listener is attached to the child here: the
-				// worker's existing 'exit'/'close'/'error' handlers drive
-				// settleDeath, which resolves this on the FIRST death event —
-				// surviving the removeAllListeners() that would strip a
-				// once('exit') resolver when 'error' fires before 'exit'.
-				resolveClose = resolve
-				worker.kill()
-			})
+			closePromise = retireWorker(worker)
 			return closePromise
 		},
 	}
