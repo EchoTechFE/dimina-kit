@@ -9,6 +9,8 @@
  *  - `relaunch` calls the new `rebuildProject()` IPC wrapper (from
  *    `@/shared/api`) BEFORE bumping `relaunchNonce` — the hard re-attach must
  *    reflect a build that actually ran, not race ahead of it.
+ *  - While that rebuild is in flight, `compileStatus` stays non-ready so
+ *    `useSimulator` cannot attach stale or partially written output.
  *  - `rebuildProject()` rejecting (a real compile failure) must turn
  *    `compileStatus` into `{ status: 'error', ... }` and leave
  *    `relaunchNonce` UNCHANGED — the simulator keeps its current (working)
@@ -92,6 +94,10 @@ describe('useSession.relaunch(): recompiles through rebuildProject before hard-r
       readNonce(result.current),
       'the build is still in flight — relaunchNonce must not bump before rebuildProject resolves',
     ).toBe(nonceBefore)
+    expect(
+      result.current.compileStatus.status,
+      'the build is still in flight — simulator must remain gated behind a non-ready status',
+    ).toBe('compiling')
     expect(relaunchDone).toBe(false)
 
     await act(async () => {
