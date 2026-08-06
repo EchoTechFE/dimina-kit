@@ -116,6 +116,11 @@ export function createWorkbenchView(
     ctx.windows.mainWindow.contentView.addChildView(view)
     // Hand the workbench the current devtools scheme as a URL query so its very
     // first paint already matches (the runtime setter only exists post-init).
+    // The project identity deliberately does NOT ride this URL: the attach can
+    // happen before the open commits a session (the gate self-releases after
+    // ATTACH_HOLD_CAP_MS on a slow compile, and the release fires just ahead of
+    // the commit), so the page polls it from the COI server's `/__project`
+    // instead — see workbench-coi-server.ts.
     const loadUrl = `${url}index.html?theme=${workbenchThemeScheme()}`
     await view.webContents.loadURL(loadUrl).catch((err) => {
       console.error('[workbench] attachWorkbench — loadURL failed', err)

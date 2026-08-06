@@ -126,6 +126,15 @@ export interface BootWorkbenchOptions {
    * `files.associations` so brand extensions highlight as wxml/css/javascript.
    */
   fileTypes?: CustomFileTypes
+  /**
+   * Stable identity of the project being opened, used as the VS Code workspace
+   * id. WORKSPACE-scope state (open editors, view state, explorer expansion)
+   * lives in an IndexedDB bucket keyed by it, so hosts that mount several
+   * projects at the same {@link WorkspaceSource.folderUri} MUST pass a distinct
+   * id per project — see the storage override in `bootWorkbench`. Omit it and
+   * that state stays in memory for the session.
+   */
+  workspaceId?: string
   /** Expose `window.__WB_PROBE` for a CDP harness (default false). */
   exposeProbe?: boolean
   /** Lifecycle status callback (`initializing` → `exthost-alive`/error). */
@@ -303,6 +312,9 @@ export async function bootWorkbench(options: BootWorkbenchOptions): Promise<Work
   }
   const status = (s: string) => options.onStatus?.(s)
   void TYPES_ROOT
+  // Empty/blank is "no identity", not a workspace named "" (which would be one
+  // more shared bucket) — see the storage override below.
+  const workspaceId = options.workspaceId?.trim() || undefined
 
   installMonacoEnvironment()
 
@@ -329,17 +341,23 @@ export async function bootWorkbench(options: BootWorkbenchOptions): Promise<Work
     ...getLanguagesServiceOverride(),
     // WORKSPACE-scope state (open editors, view state, explorer expansion) is
     // keyed by the workspace identity, which VS Code derives from the folder
-    // URI. Every project here mounts at the same constant `file:///workspace`
-    // mirror root (file-workspace.ts explains why tsserver needs that), so the
-    // "per-workspace" IndexedDB bucket is really ONE bucket shared by all
-    // projects: project A's `editorpart.state` gets restored into project B,
-    // reopening tabs for files B does not have, each stranded behind the
-    // permanent "file was not found" placeholder. State with no valid identity
-    // must not outlive the session — keep this scope in memory. (APPLICATION and
-    // PROFILE scopes are genuinely global and keep persisting normally.)
-    ...getStorageServiceOverride({
-      databaseFactories: { [StorageScope.WORKSPACE]: () => new InMemoryStorageDatabase() },
-    }),
+    // URI unless it is given one. Every project here mounts at the same constant
+    // `file:///workspace` mirror root (file-workspace.ts explains why tsserver
+    // needs that), so a derived identity makes the "per-workspace" IndexedDB
+    // bucket really ONE bucket shared by all projects: project A's
+    // `editorpart.state` gets restored into project B, reopening tabs for files
+    // B does not have, each stranded behind the permanent "file was not found"
+    // placeholder. `options.workspaceId` supplies the real identity (the host's
+    // project id) and is passed to the workspace provider below, giving each
+    // project its own bucket. With no identity at all, state must not outlive
+    // the session — keep the scope in memory rather than let it fall back to the
+    // shared bucket. (APPLICATION and PROFILE scopes are genuinely global and
+    // keep persisting normally either way.)
+    ...getStorageServiceOverride(
+      workspaceId != null
+        ? undefined
+        : { databaseFactories: { [StorageScope.WORKSPACE]: () => new InMemoryStorageDatabase() } },
+    ),
     ...getQuickAccessServiceOverride(),
     ...getWorkbenchServiceOverride(),
   }
@@ -356,10 +374,13 @@ export async function bootWorkbench(options: BootWorkbenchOptions): Promise<Work
       nameLong: options.product?.nameLong ?? 'Dimina Workbench',
     },
     // Open the project as the single workspace folder so the Explorer renders
-    // the tree and the tsserver treats it as a real file:// project root.
+    // the tree and the tsserver treats it as a real file:// project root. The
+    // optional `id` overrides VS Code's folder-URI-derived workspace identity
+    // (see the storage override above); folder detection only looks at
+    // `folderUri`, so carrying it changes nothing else.
     workspaceProvider: {
       trusted: true,
-      workspace: { folderUri },
+      workspace: workspaceId != null ? { folderUri, id: workspaceId } : { folderUri },
       async open() {
         return false
       },

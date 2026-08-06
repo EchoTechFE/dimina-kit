@@ -780,6 +780,13 @@ export async function createDevtoolsRuntime(
       getProjectRoot: () => context.workspace.getProjectPath(),
       extensionsDir: config.editorViewConfig?.extensionsDir,
       getFileTypes: () => context.fileTypes,
+      // Names the editor's VS Code workspace after the active miniapp, so each
+      // project gets its own open-editors/view-state bucket instead of all of
+      // them sharing the one derived from the constant mirror root.
+      getProjectIdentity: () => ({
+        appId: getActiveAppId(),
+        projectPath: context.workspace.getProjectPath(),
+      }),
     })
     // Return the close promise so the registry awaits server shutdown on dispose
     // instead of fire-and-forgetting it (a dangling http server would keep the

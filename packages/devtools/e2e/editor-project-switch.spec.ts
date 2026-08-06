@@ -1,17 +1,19 @@
 /**
- * Embedded VS Code workbench, project switch: a tab restored from persisted
- * editor state must not strand a "file was not found" placeholder in a project
- * that does not contain that file.
+ * Embedded VS Code workbench, project switch: a tab persisted by one project
+ * must not be restored into the next one, stranding a "file was not found"
+ * placeholder for a file that project does not contain.
  *
- * Why this can happen at all: the workspace identity is the constant
- * `file:///workspace` (boot.ts builds `workspaceProvider.workspace.folderUri`
- * from `workspace.folderUri`, which every project shares). VS Code derives the
- * WORKSPACE-scope storage database name from that identity
- * (`IndexedDBStorageDatabase.createWorkspaceStorage(workspace.id)`), so ALL
- * projects would read and write ONE `editorpart.state` memento — project A's
+ * Why this can happen at all: every project is mirrored at the constant
+ * `file:///workspace` root, and VS Code names the WORKSPACE-scope storage
+ * database after the workspace identity
+ * (`IndexedDBStorageDatabase.createWorkspaceStorage(workspace.id)`), which it
+ * derives by hashing the folder URI unless it is handed one. One constant URI
+ * ⇒ ALL projects read and write ONE `editorpart.state` memento — project A's
  * open tabs restored into project B's workbench, pointing at files B does not
- * have. boot.ts closes that hole by giving the WORKSPACE scope an in-memory
- * storage database, so nothing survives the switch to be restored.
+ * have. The fix names the workspace after the miniapp instead: the devtools
+ * host appends `index.html?workspaceId=<appId key>` to the workbench URL and
+ * boot.ts passes it through as the explicit workspace id, so every project gets
+ * its own bucket.
  *
  * The load-bearing detail this spec exists to get right is TIMING. The memento
  * is only written when the storage service flushes, and
@@ -25,8 +27,14 @@
  * this spec waited 2s against that 5s interval and passed vacuously.) Step 3
  * therefore sits on the flush window before switching.
  *
- * This spec has been verified to FAIL against a build whose WORKSPACE-scope
- * storage persists: the stale tab comes back and step 5 reports
+ * Both halves are asserted, because isolation and amnesia look identical from
+ * the tab list: the outgoing project's editor state really is written (step 3)
+ * and is STILL on disk after the switch (step 6), yet is not restored into the
+ * incoming project (step 5). Isolation comes from the two projects having
+ * different workspace ids (step 4), not from throwing state away.
+ *
+ * This spec has been verified to FAIL against a build whose workspace identity
+ * is the shared folder-URI hash: the stale tab comes back and step 5 reports
  * `observed tabs: ["/workspace/pages/storage-test/storage-test.wxml"]`.
  */
 import path from 'path'
@@ -56,6 +64,21 @@ const NOT_FOUND_VISIBLE_EXPR = `
 `
 
 /**
+ * VS Code's own view of this window's workspace identity — the value it names
+ * the WORKSPACE-scope storage database after
+ * (`vscode-web-state-db-<workspace.id>`). Read from the live workspace service
+ * rather than from whatever the host passed in, so the assertion is about the
+ * identity the editor actually adopted.
+ */
+const WORKSPACE_ID_EXPR = `
+  (async () => {
+    const p = window.__WB_PROBE
+    const svc = await p.getService(p.IWorkspaceContextService)
+    return svc.getWorkspace().id
+  })()
+`
+
+/**
  * How long to sit on the storage flush window before switching projects.
  * 3× BROWSER_DEFAULT_FLUSH_INTERVAL (5s) so a build that persists
  * WORKSPACE-scope state has unambiguously written its memento by then.
@@ -68,17 +91,21 @@ const FLUSH_WINDOW_MS = 15_000
  * `vscode-web-state-db-<workspace.id>` / object store `ItemTable`, key
  * `memento/workbench.parts.editor` (Memento.COMMON_PREFIX + part id).
  *
- * Returns the raw `editorpart.state` JSON, or `null` when nothing is stored.
- * A substring match on that JSON is deliberate: `FileEditorInput` serializes
- * to a nested JSON *string* (fileEditorHandler.js:27), so a structural walk
- * over the grid would step right past the resources. Enumerating databases
- * instead of recomputing the workspace id keeps this honest — it reports what
- * is actually stored.
+ * Returns EVERY stored `editorpart.state` as one JSON array string, or `null`
+ * when no bucket holds one. Every bucket, because after a switch there are two
+ * (one per project) and the question being asked is "is this tab's state stored
+ * anywhere", not "which bucket holds it" — the tab list is what proves the
+ * incoming project does not read it. A substring match on that JSON is
+ * deliberate: `FileEditorInput` serializes to a nested JSON *string*
+ * (fileEditorHandler.js:27), so a structural walk over the grid would step
+ * right past the resources. Enumerating databases instead of recomputing the
+ * workspace id keeps this honest — it reports what is actually stored.
  */
 const READ_PERSISTED_EDITOR_STATE_EXPR = `
   (async () => {
     const dbs = await indexedDB.databases()
     const names = dbs.map((d) => d.name).filter((n) => n && n.startsWith('vscode-web-state-db-'))
+    const states = []
     for (const name of names) {
       const raw = await new Promise((resolve) => {
         const req = indexedDB.open(name)
@@ -95,9 +122,9 @@ const READ_PERSISTED_EDITOR_STATE_EXPR = `
       })
       if (typeof raw !== 'string') continue
       const state = JSON.parse(raw)['editorpart.state']
-      if (state) return JSON.stringify(state)
+      if (state) states.push(state)
     }
-    return null
+    return states.length > 0 ? JSON.stringify(states) : null
   })()
 `
 
@@ -142,30 +169,36 @@ test.describe('embedded workbench: project switch discards stale restored tabs',
       500,
     )
 
-    // 3) Sit on the storage flush window so the switch happens in the world
-    // where persistence WOULD have landed. A build that persists WORKSPACE
-    // state resolves this poll in ~5s (and then reproduces the bug in step 5);
-    // the fixed build keeps that scope in memory, so `null` here is the
-    // expected outcome and we simply wait the window out. Deliberately not an
-    // assertion either way: leftover databases from earlier runs live in the
-    // reused per-worker userData dir, so absence is not directly observable.
+    // 3) Sit on the storage flush window until the demo app's editor state is
+    // actually on disk. This is an assertion, not a wait: if nothing persists,
+    // step 5 can only pass vacuously (an earlier iteration of this spec did
+    // exactly that), and the project would also have lost the per-miniapp
+    // editor restore this fix is supposed to give it.
     const persisted = await pollUntil(
       () => runInWorkbench<string | null>(electronApp, READ_PERSISTED_EDITOR_STATE_EXPR),
       (state) => typeof state === 'string' && state.includes('storage-test'),
       FLUSH_WINDOW_MS,
       1000,
     ).catch(() => null)
-    console.info(`[e2e] workspace editor state persisted before switch: ${persisted !== null}`)
+    expect(
+      persisted,
+      "the demo app's open tab must reach its own WORKSPACE-scope storage — otherwise the switch below proves nothing",
+    ).toContain('storage-test')
 
     // 4) Switch to a project that does NOT contain that file. This destroys the
-    // workbench WebContentsView and boots a fresh one; any persisted editor
-    // state would be restored into it, because the workspace identity is the
-    // shared constant `file:///workspace`.
+    // workbench WebContentsView and boots a fresh one, which restores whatever
+    // its own workspace id points at — a DIFFERENT bucket, because the id is
+    // derived from the miniapp rather than from the shared mirror root.
+    const idBefore = await runInWorkbench<string | null>(electronApp, WORKSPACE_ID_EXPR)
     await openProjectInUI(mainWindow, TABBAR_APP_DIR, { waitMs: 60_000 })
     const status2 = await attachWorkbenchAndWaitReady(mainWindow, electronApp)
     expect(status2, 'workbench must reach a ready status after switching projects').toMatch(
       /workbench-ready|exthost-alive/,
     )
+    const idAfter = await runInWorkbench<string | null>(electronApp, WORKSPACE_ID_EXPR)
+    expect(idBefore, 'the demo app workbench must be given a workspace id').toBeTruthy()
+    expect(idAfter, 'the tabbar app workbench must be given a workspace id').toBeTruthy()
+    expect(idAfter, 'two projects must not share a workspace id').not.toBe(idBefore)
 
     // 5) The restored tab may reappear transiently while the mirror populates,
     // so poll for its absence — only never losing it is a genuine failure.
@@ -180,7 +213,16 @@ test.describe('embedded workbench: project switch discards stale restored tabs',
       `a tab pointing at ${STALE_TAB_PATH} (only present in the previous project) must not survive a switch to tabbar-app; observed tabs: ${JSON.stringify(finalPaths)}`,
     ).not.toContain(STALE_TAB_PATH)
 
-    // 6) The user-visible symptom, independent of how the tab list reads.
+    // 6) …and it stayed absent because the two projects look at different
+    // buckets, not because the state was thrown away: the demo app's memento is
+    // still there for when the user switches back.
+    const stillPersisted = await runInWorkbench<string | null>(electronApp, READ_PERSISTED_EDITOR_STATE_EXPR)
+    expect(
+      stillPersisted,
+      "the previous project's editor state must survive the switch (isolated, not discarded)",
+    ).toContain('storage-test')
+
+    // 7) The user-visible symptom, independent of how the tab list reads.
     const notFound = await runInWorkbench<boolean>(electronApp, NOT_FOUND_VISIBLE_EXPR)
     expect(notFound, 'no "file was not found" placeholder should be visible after the switch').toBe(false)
   })
