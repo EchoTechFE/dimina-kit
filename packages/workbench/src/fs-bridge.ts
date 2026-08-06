@@ -57,25 +57,6 @@ export async function bridgeRead(baseUrl: string, rel: string): Promise<Uint8Arr
   return new Uint8Array(await res.arrayBuffer())
 }
 
-/**
- * `stat` twin of {@link bridgeRead}/{@link bridgeReaddir}: returns
- * `[type, size?, mtimeMs?]` — `type` is 1 (file) or 2 (directory). Throws with
- * `status: 404` when the path does not exist on disk (the COI server maps
- * ENOENT/EISDIR to 404), so callers can tell a genuine absence from a transient
- * bridge failure — the disk-fallback file provider must only treat the former
- * as "not on disk".
- */
-export async function bridgeStat(
-  baseUrl: string,
-  rel: string,
-): Promise<{ type: number; size?: number; mtimeMs?: number }> {
-  const u = new URL(`${baseUrl}__fs/stat`)
-  u.searchParams.set('p', rel)
-  const res = await fetch(u.toString())
-  if (!res.ok) throw Object.assign(new Error(`stat ${rel}: ${res.status}`), { status: res.status })
-  return (await res.json()) as { type: number; size?: number; mtimeMs?: number }
-}
-
 export async function bridgeWrite(baseUrl: string, rel: string, content: Uint8Array): Promise<void> {
   const u = new URL(`${baseUrl}__fs/write`)
   u.searchParams.set('p', rel)
@@ -111,11 +92,9 @@ export function relFromWorkspaceUri(uri: WorkspaceUriLike): string | null {
   const full = uri.toString()
   if (!full.startsWith(prefix)) return null
   const rel = decodeURIComponent(full.slice(prefix.length))
-  // The bare directory must be rejected too, not just its descendants: the
-  // mirror deliberately omits the project's real `node_modules`, so a consumer
-  // that resolved `file:///workspace/node_modules` to disk would expose the real
-  // dependency tree and let a stat hit on the parent stand in for the
-  // memfs-only `node_modules/@types` that seedAmbientTypings creates.
+  // The bare directory must be rejected too, not just its descendants — the
+  // previous `rel === 'node_modules/'` arm was unreachable, since a trailing
+  // slash is already covered by the `startsWith` test.
   if (rel === 'node_modules' || rel.startsWith('node_modules/')) return null
   if (rel === 'jsconfig.json' || rel === 'tsconfig.json') return null
   return rel

@@ -24,7 +24,7 @@ import getModelServiceOverride from '@codingame/monaco-vscode-model-service-over
 import getThemeServiceOverride from '@codingame/monaco-vscode-theme-service-override'
 import getTextmateServiceOverride from '@codingame/monaco-vscode-textmate-service-override'
 import getLanguagesServiceOverride from '@codingame/monaco-vscode-languages-service-override'
-import getStorageServiceOverride from '@codingame/monaco-vscode-storage-service-override'
+import getStorageServiceOverride, { StorageScope } from '@codingame/monaco-vscode-storage-service-override'
 import getLogServiceOverride from '@codingame/monaco-vscode-log-service-override'
 import getFilesServiceOverride from '@codingame/monaco-vscode-files-service-override'
 import getExplorerServiceOverride from '@codingame/monaco-vscode-explorer-service-override'
@@ -47,9 +47,9 @@ import {
 } from '@codingame/monaco-vscode-api'
 import { URI } from '@codingame/monaco-vscode-api/vscode/vs/base/common/uri'
 import { VSBuffer } from '@codingame/monaco-vscode-api/vscode/vs/base/common/buffer'
+import { InMemoryStorageDatabase } from '@codingame/monaco-vscode-api/vscode/vs/base/parts/storage/common/storage'
 
-import { TYPES_ROOT, sweepStaleRestoredEditors } from './file-workspace'
-import { installDiskFallbackFileProvider } from './workspace/disk-fallback-file-provider'
+import { TYPES_ROOT } from './file-workspace'
 import { registerWxmlLanguage } from './wxml-language'
 import { WXML_LANGUAGE_CONFIGURATION, WXML_TMGRAMMAR, jsonBlobUrl } from './wxml-grammar'
 import { seedAmbientTypings, type ExtraTyping } from './typings-injection'
@@ -327,7 +327,19 @@ export async function bootWorkbench(options: BootWorkbenchOptions): Promise<Work
     ...getThemeServiceOverride(),
     ...getTextmateServiceOverride(),
     ...getLanguagesServiceOverride(),
-    ...getStorageServiceOverride(),
+    // WORKSPACE-scope state (open editors, view state, explorer expansion) is
+    // keyed by the workspace identity, which VS Code derives from the folder
+    // URI. Every project here mounts at the same constant `file:///workspace`
+    // mirror root (file-workspace.ts explains why tsserver needs that), so the
+    // "per-workspace" IndexedDB bucket is really ONE bucket shared by all
+    // projects: project A's `editorpart.state` gets restored into project B,
+    // reopening tabs for files B does not have, each stranded behind the
+    // permanent "file was not found" placeholder. State with no valid identity
+    // must not outlive the session — keep this scope in memory. (APPLICATION and
+    // PROFILE scopes are genuinely global and keep persisting normally.)
+    ...getStorageServiceOverride({
+      databaseFactories: { [StorageScope.WORKSPACE]: () => new InMemoryStorageDatabase() },
+    }),
     ...getQuickAccessServiceOverride(),
     ...getWorkbenchServiceOverride(),
   }
@@ -354,21 +366,6 @@ export async function bootWorkbench(options: BootWorkbenchOptions): Promise<Work
     },
   } as never)
   status('service-initialized')
-
-  // Make the `file://` provider authoritative on disk: mount a disk-reading
-  // overlay delegate (priority -1) below the workspace memfs (priority 0), so a
-  // read that misses the (still-populating) memfs falls back to the COI `/__fs`
-  // disk bridge instead of throwing FILE_NOT_FOUND. This is what lets a file
-  // open during the post-switch re-boot or first compile — before the mirror
-  // has copied it — without a stuck "file was not found" placeholder. Disk is
-  // the single source of truth; the memfs stays a cache. Must run after the
-  // file services exist (the schemes' `OverlayFileSystemProvider` is registered
-  // at initialize) and before any workspace read.
-  try {
-    installDiskFallbackFileProvider(location.origin + '/')
-  } catch (e) {
-    console.error('[workbench] disk-fallback file provider install failed', e)
-  }
 
   // Track the host light/dark scheme. Initial value is options.theme; later
   // flips arrive through the returned handle.setTheme.
@@ -457,11 +454,6 @@ export async function bootWorkbench(options: BootWorkbenchOptions): Promise<Work
 
   // Populate the workspace + seed ambient typings, then keep saves flushed back.
   await populateWorkspace(workspace, features.ambientTypings, contributedTypings)
-
-  // Restored tabs can reference files this project's mirror does not contain
-  // (all projects share one persisted editor-state memento) — close them now
-  // that the workspace is populated. See sweepStaleRestoredEditors.
-  await sweepStaleRestoredEditors(vscode, folderUri)
 
   status('workbench-ready')
   installAutoSave(vscode)
