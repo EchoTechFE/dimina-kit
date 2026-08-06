@@ -81,7 +81,7 @@ class FakeChild extends EventEmitter {
 	stderr = new PassThrough()
 	connected = true
 	killed = false
-	pid = 4242
+	pid: number | undefined = 4242
 	/** When true (default), every {cmd:'build'} is answered on a microtask. */
 	autoRespond = true
 	/**
@@ -820,8 +820,15 @@ describe('worker error replies, fork errors, close semantics, trailing line', ()
 		).toHaveLength(0)
 	}, 45_000)
 
-	it("a fork 'error' event with NO accompanying 'exit' settles the in-flight build (bounded) and the next build re-forks a fresh worker", async () => {
+	it("a pre-spawn fork 'error' with NO accompanying 'exit' settles the build and the next build re-forks", async () => {
 		useSilentChildren()
+		mocks.fork.mockImplementationOnce(() => {
+			const child = new FakeChild()
+			child.autoRespond = false
+			child.pid = undefined
+			children.push(child)
+			return child
+		})
 		const worker = devkit.createCompileWorker({})
 		const pending = worker.build(REQUEST)
 		await vi.waitFor(() => {
@@ -829,9 +836,7 @@ describe('worker error replies, fork errors, close semantics, trailing line', ()
 		}, { timeout: 5000 })
 		const first = children[0] as FakeChild
 
-		// Node does NOT guarantee 'exit' after 'error' (spawn/IPC failures can
-		// surface as a lone 'error' event). Swallowing it leaves the in-flight
-		// build pending forever.
+		// A failed spawn has no OS process and therefore no later 'exit'.
 		first.emit('error', new Error('spawn EAGAIN'))
 
 		expect(
@@ -857,6 +862,13 @@ describe('worker error replies, fork errors, close semantics, trailing line', ()
 
 	it("'error' followed by a LATE 'exit' is idempotent — the stale exit must not settle the NEXT build on the fresh worker", async () => {
 		useSilentChildren()
+		mocks.fork.mockImplementationOnce(() => {
+			const child = new FakeChild()
+			child.autoRespond = false
+			child.pid = undefined
+			children.push(child)
+			return child
+		})
 		const worker = devkit.createCompileWorker({})
 		const pending = worker.build(REQUEST)
 		await vi.waitFor(() => {
@@ -944,15 +956,9 @@ describe('worker error replies, fork errors, close semantics, trailing line', ()
 	}, 45_000)
 
 	/**
-	 * `settleDeath`'s `removeAllListeners()` must not strip the
-	 * `once('exit', resolve)` that close() registered on the SAME child: when a
-	 * child dies through the 'error' path while a close() is in flight (kill
-	 * sent, exit not yet emitted), the closePromise must not lose its only
-	 * resolver and hang forever. A child 'error' during an in-flight close is a
-	 * death signal (Node does NOT guarantee an 'exit' after 'error') — the close
-	 * promise must still resolve, whether a late 'exit' follows or never comes.
-	 * The normal-exit-resolves case is pinned above ("close() returns a promise
-	 * that resolves only AFTER the child actually exited").
+	 * A post-spawn `error` must leave the confirmed-death listeners intact: it
+	 * can represent a failed send/kill while the child is still alive. If the
+	 * real `exit` arrives later, close() must still observe it and resolve.
 	 */
 	it("a child 'error' during an in-flight close() must not strip the close resolver — closePromise resolves even though only a LATE 'exit' follows", async () => {
 		const worker = devkit.createCompileWorker({})
@@ -965,21 +971,18 @@ describe('worker error replies, fork errors, close semantics, trailing line', ()
 		const closeResult = worker.close()
 		expect(child.kill).toHaveBeenCalled()
 
-		// The child dies via 'error' first (settleDeath runs and — today —
-		// removeAllListeners() takes close()'s once('exit') resolver with it)…
+		// An error arrives first, but does not itself prove process death…
 		child.emit('error', new Error('EPIPE'))
-		// …then the real-world late 'exit' fires. With the resolver stripped,
-		// nobody is listening and closePromise hangs forever.
+		// …then the real-world late 'exit' provides that proof.
 		child.emit('exit', null, 'SIGTERM')
 
 		expect(
 			await raceSettle(closeResult, 1500),
-			"settleDeath's removeAllListeners must not strip close()'s exit resolver — a child that dies via "
-			+ "'error' mid-close leaves closePromise hanging forever, wedging every awaiter of session.close()",
+			"a post-spawn 'error' must not strip the listener that observes the later confirmed exit",
 		).toBe('resolved')
 	}, 45_000)
 
-	it("a child 'error' during an in-flight close() with NO 'exit' ever resolves the close too — 'error' is a death signal, not a wait-longer signal", async () => {
+	it("a spawned child's 'error' during close() does not resolve close until confirmed exit", async () => {
 		const worker = devkit.createCompileWorker({})
 		await worker.build(REQUEST)
 		const child = children[0] as FakeChild
@@ -988,16 +991,14 @@ describe('worker error replies, fork errors, close semantics, trailing line', ()
 		const closeResult = worker.close()
 		expect(child.kill).toHaveBeenCalled()
 
-		// Node does NOT guarantee an 'exit' after 'error': the lone 'error' must
-		// settle the close as well.
-		child.emit('error', new Error('spawn EAGAIN'))
+		child.emit('error', new Error('kill EPERM'))
 
 		expect(
-			await raceSettle(closeResult, 1500),
-			"a lone child 'error' during close() must resolve the close promise — settleDeath already treats "
-			+ "'error' as death everywhere else (clears the child, rejects builds); close() waiting for an 'exit' "
-			+ 'that Node never guarantees hangs teardown forever',
-		).toBe('resolved')
+			await raceSettle(closeResult, 100),
+			"a kill/send error from a spawned child does not prove the process died",
+		).toBe('hung')
+		child.emit('exit', null, 'SIGKILL')
+		await expect(closeResult).resolves.toBeUndefined()
 	}, 45_000)
 
 	it('a final line WITHOUT a trailing newline is flushed to onLog exactly once when the stream ends', async () => {

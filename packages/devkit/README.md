@@ -48,7 +48,7 @@ await session.close()
 | `outputDir`    | `string`                 | --      | 编译产物输出目录，默认 `<os.tmpdir()>/dimina-kit/<projectPath 哈希前 12 位>`（每个项目独立） |
 | `watch`        | `boolean`                | `true`  | 为 `false` 时跳过 chokidar 文件监听 / 自动重编译循环                                        |
 | `autoReload`   | `boolean`                | `true`  | 为 `false` 时，watch 重编译完成后**不**触发预览 live-reload（`onRebuild` 仍照常回调）——保留当前页面栈 / 表单状态，仅手动刷新。与 `watch` 独立 |
-| `onRebuild`    | `() => void`             | --      | 文件变更触发重新编译后的回调                                                                 |
+| `onRebuild`    | `(info?) => void`        | --      | 每次重编译成功后的回调；`info = { changedPaths, styleOnly, explicit? }`，`explicit` 为 `true` 表示这次构建属于 `session.rebuild()` 的显式事务（可能与文件保存合并），宿主应通过自己的硬刷新反映它，而不是走 watch 的热重载路径；字段可选以兼容旧 adapter |
 | `onBuildError` | `(err: unknown) => void` | --      | watch 重编译出错时的回调；**初次编译失败不走这里，而是直接 reject `openProject` 本身**（见下） |
 | `onLog`        | `(entry) => void`        | --      | 逐行编译日志回调；`entry = { stream: 'stdout' \| 'stderr', text }`，已经过内置噪音过滤（`filterDmccLogLine`） |
 
@@ -58,12 +58,15 @@ await session.close()
 | --------- | --------------------- | ----------------------------------- |
 | `appInfo` | `AppInfo`             | 应用信息（`appId`、`name`、`path`） |
 | `port`    | `number`              | 实际监听的端口                      |
+| `rebuild` | `() => Promise<void>` | 手动触发一次重编译；与 watch 自动重编译共用同一个合并调度器（绝不并发 build），resolve 表示包含调用时磁盘状态的显式事务及其已合并尾部均成功且进入静默态，失败则 reject；`watch: false` 下同样可用 |
 | `close`   | `() => Promise<void>` | 关闭文件监听和预览服务器            |
 
 #### 失败语义
 
 - **初次编译失败 → `openProject` reject**，错误即编译失败原因（`[compiler] stage "…" failed: …`）；不会带着 project.config.json 的兜底 appId 启动一个必然 404 的会话。reject 前编译日志行已全部送达 `onLog`，已启动的编译子进程会被清理。
 - **watch 重编译失败 → `onBuildError(err)`**，会话保持存活，修复文件保存后自动重编译恢复。
+- **`session.rebuild()` 失败 → 该调用 reject**（同一错误也会送 `onBuildError`），会话保持存活；调用方据此决定是否刷新预览。
+- **编译子进程失联（活着但不再回复）→ 该次构建在看门狗超时（默认 120s）后 reject，并以 SIGTERM → SIGKILL 退役且确认死亡**，下一次构建才自动重新 fork；不会让 `session.rebuild()` 无限等待，也不会让新旧编译器并发写同一输出目录。
 - **Electron 打包分发**：编译路径需要 oxc-parser 的运行时绑定实际存在于分发包内（`@oxc-parser/binding-<platform>-<arch>` 或 `@oxc-parser/binding-wasm32-wasi` 之一），它们不是宿主的直接依赖，容易被 electron-builder 依赖收集丢弃——缺失时每次编译都会以 `Cannot find native binding` 失败（错误信息会附带打包提示）。详见 `@dimina-kit/compiler` README 的打包注意一节。
 
 ### enableCompileWorkerStandby（热备胎，可选加速器）

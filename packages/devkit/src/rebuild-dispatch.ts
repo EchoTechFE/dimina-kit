@@ -1,6 +1,7 @@
 import path from 'node:path'
 import type { AppInfo } from './index.js'
 import type { BuildRequest, CompileWorker } from './compile-worker.js'
+import { createRebuildScheduler } from './rebuild-scheduler.js'
 
 /** Insert or replace `rebuilt` in the session's app list, keyed by appId. */
 export function upsertSessionApp(sessionApps: AppInfo[], rebuilt: AppInfo): void {
@@ -54,10 +55,15 @@ export function composeBuildCompleted(opts: {
 	getReload: () => (() => void) | undefined
 	getReloadStyles?: () => (() => void) | undefined
 	styleExts?: string[]
-	onRebuild?: (info?: { changedPaths: string[]; styleOnly: boolean }) => void
-}): (changedPaths?: string[]) => void {
-	return (changedPaths = []) => {
+	onRebuild?: (info?: { changedPaths: string[]; styleOnly: boolean; explicit?: boolean }) => void
+}): (changedPaths?: string[], meta?: { explicit: boolean }) => void {
+	return (changedPaths = [], meta) => {
 		const styleOnly = isStyleOnlyChange(changedPaths, opts.styleExts)
+		// The SSE reflection below stays autoReload-driven regardless of
+		// `meta.explicit`: for a standalone web-preview host the SSE reload is
+		// the ONLY reflection an explicit rebuild has (there is no relaunch
+		// nonce), while the devtools native host has no SSE clients, so the
+		// broadcast is inert there.
 		if (opts.autoReload) {
 			const reloadStyles = opts.getReloadStyles?.()
 			if (reloadStyles && styleOnly) {
@@ -70,7 +76,10 @@ export function composeBuildCompleted(opts: {
 		// Hand the host the same style-only verdict the SSE dispatch used, so a
 		// native host (devtools simulator — no SSE client) can pick its OWN fast
 		// path (in-place stylesheet swap) instead of a full simulator respawn.
-		opts.onRebuild?.({ changedPaths, styleOnly })
+		// `explicit` tells the host this run covered a user-requested
+		// `session.rebuild()` — the host's reflection for it is its own hard
+		// re-attach, never the watcher's hot-reload signal.
+		opts.onRebuild?.({ changedPaths, styleOnly, explicit: meta?.explicit === true })
 	}
 }
 
@@ -93,5 +102,62 @@ export async function runRebuild(
 	}
 	catch (e) {
 		onBuildFailed(e)
+	}
+}
+
+export interface ProjectRebuildController {
+	/** Explicit user rebuild: resolves/rejects with the build covering this call. */
+	rebuild: () => Promise<void>
+	/** Watcher event: records the path and schedules without allocating a waiter. */
+	notifyChanged: (changedPath?: string) => void
+}
+
+/**
+ * Bind watcher saves and explicit session rebuilds to one serialized build
+ * pipeline. Changed paths are drained when a run starts, so edits arriving
+ * during that build are retained for its single trailing run.
+ */
+export function createProjectRebuildController(opts: {
+	compileWorker: CompileWorker
+	buildRequest: BuildRequest
+	sessionApps: AppInfo[]
+	autoReload: boolean
+	getReload: () => (() => void) | undefined
+	getReloadStyles: () => (() => void) | undefined
+	styleExts?: string[]
+	onRebuild?: (info?: { changedPaths: string[]; styleOnly: boolean; explicit?: boolean }) => void
+	onBuildError?: (err: unknown) => void
+}): ProjectRebuildController {
+	const onBuildCompleted = composeBuildCompleted(opts)
+	const pendingChanges = new Set<string>()
+	const scheduler = createRebuildScheduler(async (runInfo) => {
+		const changedPaths = [...pendingChanges]
+		pendingChanges.clear()
+		let failure: { err: unknown } | null = null
+		await runRebuild(
+			opts.compileWorker,
+			opts.buildRequest,
+			opts.sessionApps,
+			// Read at completion, not start: schedule() may promote a watcher run
+			// into an explicit transaction while the compile is in flight.
+			paths => onBuildCompleted(paths, { explicit: runInfo.explicit }),
+			(err) => {
+				failure = { err }
+				opts.onBuildError?.(err)
+			},
+			changedPaths,
+		)
+		if (failure) {
+			const { err } = failure as { err: unknown }
+			throw err instanceof Error ? err : new Error(String(err))
+		}
+	})
+
+	return {
+		rebuild: () => scheduler.schedule(),
+		notifyChanged: (changedPath) => {
+			if (changedPath) pendingChanges.add(changedPath)
+			scheduler.notify()
+		},
 	}
 }

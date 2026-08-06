@@ -99,6 +99,17 @@ export function saveCompileConfig(
 }
 
 /**
+ * Run one real recompile of the active session (the 重新编译 button). Strict:
+ * rejects on build failure so the caller can keep the current session instead
+ * of hard-resetting onto a build that doesn't exist. `{ supported: false }`
+ * means the host adapter has no real rebuild — callers fall back to the
+ * reattach-only relaunch.
+ */
+export function rebuildProject(): Promise<{ supported: boolean } | undefined> {
+  return invokeStrict<{ supported: boolean } | undefined>(ProjectChannel.Rebuild)
+}
+
+/**
  * Subscribe to compile-status broadcasts from the main process. Returns an
  * unsubscribe function matching the removeListener contract.
  */

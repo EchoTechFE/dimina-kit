@@ -48,6 +48,13 @@ export interface ProjectSession {
   close: () => Promise<void>
   port: number
   appInfo: AppInfo
+  /**
+   * Run one real recompile of the session's project. Optional: a host
+   * CompilationAdapter predating this capability may omit it — the rebuild
+   * IPC then degrades to `{ supported: false }` and the renderer falls back
+   * to its reattach-only relaunch.
+   */
+  rebuild?: () => Promise<void>
 }
 
 export interface CompilationAdapter {

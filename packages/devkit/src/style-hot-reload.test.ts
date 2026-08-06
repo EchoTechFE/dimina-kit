@@ -186,7 +186,7 @@ describe('composeBuildCompleted: onRebuild receives the style-only verdict', () 
 
 		fn(changedPaths)
 
-		expect(onRebuild.mock.calls[0]![0]).toEqual({ changedPaths, styleOnly: true })
+		expect(onRebuild.mock.calls[0]![0]).toEqual({ changedPaths, styleOnly: true, explicit: false })
 	})
 
 	it('a mixed .wxss + .js change set reports styleOnly:false', () => {
@@ -229,6 +229,6 @@ describe('composeBuildCompleted: onRebuild receives the style-only verdict', () 
 
 		fn()
 
-		expect(onRebuild.mock.calls[0]![0]).toEqual({ changedPaths: [], styleOnly: false })
+		expect(onRebuild.mock.calls[0]![0]).toEqual({ changedPaths: [], styleOnly: false, explicit: false })
 	})
 })

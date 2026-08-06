@@ -10,6 +10,8 @@
 
 `CompilationAdapter` 返回的 `session.appInfo` 是结构化 `AppInfo`（`appId: string` 必填，`name?/path?/appName?` 可选）。`openProject` 在适配器 resolve 边界做运行时校验：缺少 string `appId` 的 session 会被 `close()` 并以 `{ success: false, error }` 报告（error 文案含 `appId`），不会成为活动 session。
 
+session 可选提供 `rebuild(): Promise<void>`（真实重编译，失败 reject）：工具栏"重新编译"会先经 `project:rebuild` 调它、成功后才把模拟器硬重挂回启动页；session 未提供时该通道返回 `{ supported: false }`，按钮降级为只重挂（此前行为）。
+
 ## 能力
 
 ### 1. 高度广播器常驻

@@ -11,6 +11,7 @@ import {
   onProjectStatus,
   onSessionRuntimeStatus,
   openProject,
+  rebuildProject,
   saveCompileConfig,
 } from '@/shared/api'
 import type { AppInfo, CompileLogEntry, SessionRuntimeStatusPayload } from '@/shared/api'
@@ -268,8 +269,21 @@ export function useSession(props: UseSessionProps): SessionHookResult {
         // attach effect re-runs `attachNativeSimulator(newUrl)`, which tears down
         // the old DeviceShell and respawns it at the new start page.
         isRefreshing.current = true
-        setCompileStatus({ status: 'ready', message: '正在刷新...' })
+        // Keep the simulator attach effect gated until rebuildProject resolves.
+        // In particular, an error-overlay retry starts from `error`; switching
+        // to `ready` here would immediately hard-attach stale/partial output
+        // before the rebuild has had a chance to succeed.
+        setCompileStatus({ status: 'compiling', message: '正在编译...' })
         try {
+          // 重新编译 means a REAL recompile first (WeChat devtools semantics):
+          // with autoBuild off or a dead watcher this is the only way edits
+          // reach the build. The hard re-attach below must reflect a build
+          // that actually ran, so it strictly follows this await. A rejection
+          // (build failure) skips the re-attach entirely — the simulator
+          // keeps its current, still-working session. `{ supported: false }`
+          // (host adapter without a real rebuild) falls through to the
+          // reattach-only behavior.
+          await rebuildProject()
           await saveCompileConfig(projectPath, nextConfig)
           // Triggers the native re-attach effect (simulatorUrl depends on this).
           setCompileConfig(nextConfig)

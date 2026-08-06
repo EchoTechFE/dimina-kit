@@ -178,6 +178,10 @@ export const WorkbenchSettingsChannel = {
 export const ProjectChannel = {
   Open: 'project:open',
   Close: 'project:close',
+  // Renderer → main invoke: run one real recompile of the active session
+  // (the popover 重新编译 button). Resolves `{ supported: boolean }`; rejects
+  // on build failure or when no session is active.
+  Rebuild: 'project:rebuild',
   GetPages: 'project:getPages',
   GetCompileConfig: 'project:getCompileConfig',
   SaveCompileConfig: 'project:saveCompileConfig',
