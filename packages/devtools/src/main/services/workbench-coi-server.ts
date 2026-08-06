@@ -48,6 +48,7 @@ import {
 } from '../ipc/project-fs.js'
 import { handleFsWatchRequest } from './fs-watch-sse.js'
 import { jsonRes } from './http-json.js'
+import { miniappPartitionKey } from './views/miniapp-partition.js'
 
 /** Max `/__fs/write` body; enough to save large source files without OOM. */
 const MAX_FS_WRITE_BYTES = 32 * 1024 * 1024
@@ -337,6 +338,14 @@ export interface WorkbenchCoiServerOptions {
    * for none (built-in `wx*` associations only).
    */
   getFileTypes?: () => unknown
+  /**
+   * Reads the active project's identity — `appId` (null until the open commits
+   * a session) plus its root path — served at `/__project` as the workspace id
+   * the editor names its VS Code workspace after. Read per-request, because the
+   * editor page can load BEFORE the project commits (see `/__project` below).
+   * Omit when the host has no project identity to offer.
+   */
+  getProjectIdentity?: () => { appId: string | null; projectPath: string }
 }
 
 /**
@@ -387,6 +396,21 @@ async function readContributedExtensions(
   return out
 }
 
+/**
+ * The `/__project` workspace id: the miniapp partition key of the active
+ * project, or null when there is no committed project identity yet.
+ *
+ * Reuses `miniappPartitionKey` (the same derivation the per-project Electron
+ * session partition uses) so the editor's storage bucket and the runtime's
+ * storage partition are named off the same project identity: the `appId`,
+ * disambiguated by the project path because `appId` comes from the manifest and
+ * two checkouts can declare the same one.
+ */
+function workspaceIdOf(identity: { appId: string | null; projectPath: string } | undefined): string | null {
+  if (!identity?.appId) return null
+  return miniappPartitionKey(identity.appId, identity.projectPath || null)
+}
+
 export async function startWorkbenchCoiServer(options: WorkbenchCoiServerOptions): Promise<WorkbenchCoiServer> {
   const root = path.resolve(options.rootDir)
   const contribRoot = options.extensionsDir ? path.resolve(options.extensionsDir) : null
@@ -412,6 +436,23 @@ export async function startWorkbenchCoiServer(options: WorkbenchCoiServerOptions
     // empty object when the host configured none.
     if (url.pathname === '/__filetypes') {
       jsonRes(res, 200, options.getFileTypes?.() ?? {})
+      return
+    }
+
+    // Identity of the active project, as the id the editor names its VS Code
+    // workspace after. Every project is mirrored at the same constant
+    // `file:///workspace` root, and VS Code keys WORKSPACE-scope storage (open
+    // editors, view state, explorer expansion) off the workspace identity — so
+    // without a distinct id per project, one project's tabs are restored into
+    // the next, stranded behind "the file was not found".
+    //
+    // Served here rather than baked into the editor's load URL because the
+    // editor view can attach BEFORE the open commits its session (its attach
+    // gate self-releases on a slow compile), when there is no identity to hand
+    // it; `null` then tells the page to keep polling, the same way its disk
+    // mirror already polls `/__fs` for the project root to appear.
+    if (url.pathname === '/__project') {
+      jsonRes(res, 200, { workspaceId: workspaceIdOf(options.getProjectIdentity?.()) })
       return
     }
 

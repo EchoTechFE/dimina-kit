@@ -92,7 +92,10 @@ export function relFromWorkspaceUri(uri: WorkspaceUriLike): string | null {
   const full = uri.toString()
   if (!full.startsWith(prefix)) return null
   const rel = decodeURIComponent(full.slice(prefix.length))
-  if (rel === 'node_modules/' || rel.startsWith('node_modules/')) return null
+  // The bare directory must be rejected too, not just its descendants — the
+  // previous `rel === 'node_modules/'` arm was unreachable, since a trailing
+  // slash is already covered by the `startsWith` test.
+  if (rel === 'node_modules' || rel.startsWith('node_modules/')) return null
   if (rel === 'jsconfig.json' || rel === 'tsconfig.json') return null
   return rel
 }

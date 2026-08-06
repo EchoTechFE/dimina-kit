@@ -51,6 +51,40 @@ function initialThemeScheme(): 'light' | 'dark' {
 }
 
 /**
+ * Wait for the COI server's `/__project` to report the active project's
+ * workspace id — the name this page's VS Code workspace takes, so each miniapp
+ * gets its own open-editors/view-state bucket instead of all of them sharing the
+ * one derived from the constant `file:///workspace` mirror root (see boot.ts).
+ *
+ * Polled, not read once, because this page is loaded as soon as the editor slot
+ * paints, which can be BEFORE the project open commits its session (the host's
+ * attach gate self-releases on a slow compile) — exactly when a cold open would
+ * otherwise get no identity. Same ~30s budget and cadence as the disk mirror's
+ * own wait for the project root to appear (file-workspace.ts), after which we
+ * boot without an id and the editor keeps that state session-local rather than
+ * writing it to a bucket shared with every other project.
+ */
+async function awaitProjectWorkspaceId(): Promise<string | undefined> {
+  // Publish the wait: this is the one phase before `bootWorkbench` owns the
+  // status, and it is also what lets a CDP probe recognize this page.
+  window.__WB_STATUS = 'awaiting-project'
+  for (let attempt = 0; attempt < 60; attempt++) {
+    try {
+      const res = await fetch('/__project')
+      if (res.ok) {
+        const { workspaceId } = (await res.json()) as { workspaceId?: string | null }
+        if (workspaceId) return workspaceId
+      }
+    } catch {
+      // Server not up yet / transient — retried below.
+    }
+    await new Promise((r) => setTimeout(r, 500))
+  }
+  console.warn('[workbench] no project identity from /__project — editor state stays session-local')
+  return undefined
+}
+
+/**
  * Pull the host's custom file types from the COI server's `/__filetypes`
  * endpoint (the same bridge that serves `/__fs` + `/__contrib`). Best-effort:
  * a missing endpoint, non-OK status, or parse error → undefined (built-in
@@ -105,11 +139,18 @@ async function boot(): Promise<void> {
     },
   })
 
+  // Both are host lookups the boot cannot start without (the workspace identity
+  // is fixed when the monaco services initialize, and the associations go into
+  // the very first user config) — run them concurrently so the slow one, not
+  // their sum, gates the editor.
+  const [workspaceId, fileTypes] = await Promise.all([awaitProjectWorkspaceId(), loadFileTypes()])
+
   const handle = await bootWorkbench({
     container,
     workspace,
+    workspaceId,
     theme: initialThemeScheme(),
-    fileTypes: await loadFileTypes(),
+    fileTypes,
     exposeProbe: true,
     onStatus: (s) => {
       window.__WB_STATUS = s

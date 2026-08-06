@@ -1,5 +1,6 @@
 import { nativeTheme, WebContentsView } from 'electron'
 import { handleWindowOpenExternal } from '../../windows/navigation-hardening.js'
+import { themeBg } from '../../utils/theme.js'
 import { VIEW_ID } from '../../../shared/view-ids.js'
 import { destroyChildView } from './destroy-child-view.js'
 import type { PlacementReconciler } from './placement-reconciler.js'
@@ -67,6 +68,12 @@ export function createWorkbenchView(
   function pushWorkbenchTheme(): void {
     if (!workbenchView || workbenchView.webContents.isDestroyed()) return
     const wc = workbenchView.webContents
+    // Keep the WCV surface in sync with the active color scheme: the workbench
+    // page can only recolor its own inner #workbench, never the html/body
+    // backdrop, so the native surface must follow the theme flip too.
+    try {
+      if (typeof workbenchView.setBackgroundColor === 'function') workbenchView.setBackgroundColor(themeBg())
+    } catch { /* view/wc gone mid-flip */ }
     if (typeof wc.executeJavaScript !== 'function') return
     const script = `window.__WB_SET_THEME && window.__WB_SET_THEME(${JSON.stringify(workbenchThemeScheme())})`
     wc.executeJavaScript(script, true).catch(() => { /* workbench not yet ready */ })
@@ -82,6 +89,16 @@ export function createWorkbenchView(
       },
     })
     workbenchView = view
+    // Paint the WCV surface the themed window background (themeBg(): dark
+    // #1a1a1a / light #fafafa) so the boot screen ("booting workbench…") and
+    // any layout gap never flash a mismatched white strip before the workbench
+    // CSS loads. The workbench is a plain WebContentsView (not a BrowserWindow),
+    // so the process-wide installThemeBackgroundSync() never reaches it — match
+    // the main window's own backgroundColor here, and re-sync on every theme
+    // flip below.
+    try {
+      view.setBackgroundColor(themeBg())
+    } catch { /* view not ready for a bg yet */ }
     // Track devtools theme flips for the lifetime of the workbench view only —
     // registered here (not at construction) so test electron mocks that omit
     // `nativeTheme` and never open the editor stay unaffected. Removed in
@@ -99,6 +116,11 @@ export function createWorkbenchView(
     ctx.windows.mainWindow.contentView.addChildView(view)
     // Hand the workbench the current devtools scheme as a URL query so its very
     // first paint already matches (the runtime setter only exists post-init).
+    // The project identity deliberately does NOT ride this URL: the attach can
+    // happen before the open commits a session (the gate self-releases after
+    // ATTACH_HOLD_CAP_MS on a slow compile, and the release fires just ahead of
+    // the commit), so the page polls it from the COI server's `/__project`
+    // instead — see workbench-coi-server.ts.
     const loadUrl = `${url}index.html?theme=${workbenchThemeScheme()}`
     await view.webContents.loadURL(loadUrl).catch((err) => {
       console.error('[workbench] attachWorkbench — loadURL failed', err)

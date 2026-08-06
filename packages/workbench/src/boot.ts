@@ -24,7 +24,7 @@ import getModelServiceOverride from '@codingame/monaco-vscode-model-service-over
 import getThemeServiceOverride from '@codingame/monaco-vscode-theme-service-override'
 import getTextmateServiceOverride from '@codingame/monaco-vscode-textmate-service-override'
 import getLanguagesServiceOverride from '@codingame/monaco-vscode-languages-service-override'
-import getStorageServiceOverride from '@codingame/monaco-vscode-storage-service-override'
+import getStorageServiceOverride, { StorageScope } from '@codingame/monaco-vscode-storage-service-override'
 import getLogServiceOverride from '@codingame/monaco-vscode-log-service-override'
 import getFilesServiceOverride from '@codingame/monaco-vscode-files-service-override'
 import getExplorerServiceOverride from '@codingame/monaco-vscode-explorer-service-override'
@@ -47,8 +47,9 @@ import {
 } from '@codingame/monaco-vscode-api'
 import { URI } from '@codingame/monaco-vscode-api/vscode/vs/base/common/uri'
 import { VSBuffer } from '@codingame/monaco-vscode-api/vscode/vs/base/common/buffer'
+import { InMemoryStorageDatabase } from '@codingame/monaco-vscode-api/vscode/vs/base/parts/storage/common/storage'
 
-import { TYPES_ROOT, sweepStaleRestoredEditors } from './file-workspace'
+import { TYPES_ROOT } from './file-workspace'
 import { registerWxmlLanguage } from './wxml-language'
 import { WXML_LANGUAGE_CONFIGURATION, WXML_TMGRAMMAR, jsonBlobUrl } from './wxml-grammar'
 import { seedAmbientTypings, type ExtraTyping } from './typings-injection'
@@ -57,19 +58,9 @@ import { registerDiminaJsonSchemas } from './dimina-json-schemas'
 import { buildFileAssociations, type CustomFileTypes } from './file-type-associations'
 import type { WorkspaceSource } from './workspace/types'
 
-// Force the ext-host worker entry into its OWN chunk. Under rolldown-vite the
-// static `new URL('…extensionHost.worker', import.meta.url)` form gets inlined
-// into the main bundle instead of emitted as a worker, so its bare relative
-// `import '../vscode/…/extensionHostWorkerMain.js'` reaches the iframe blob
-// `import()` with no hierarchical base → it fails to start. The explicit
-// `?worker&url` suffix makes Vite emit a discrete worker asset + give its URL.
-import extHostWorkerUrl from '@codingame/monaco-vscode-api/workers/extensionHost.worker?worker&url'
-// Same rolldown caveat applies to the editor + TextMate workers: their v34 entry
-// points are bare package subpaths, so the `?worker&url` suffix is required for
-// Vite to emit discrete worker assets (otherwise the page tries to resolve a bare
-// specifier at runtime and the worker fails to start).
-import editorWorkerUrl from '@codingame/monaco-vscode-api/workers/editor.worker?worker&url'
-import textmateWorkerUrl from '@codingame/monaco-vscode-textmate-service-override/worker?worker&url'
+// Worker asset URLs + `window.MonacoEnvironment` wiring (a bundler concern with
+// rolldown-vite caveats of its own) live in their own module.
+import { installMonacoEnvironment } from './monaco-environment'
 
 // Built-in extensions (offline-safe; run inside the ext-host worker).
 import '@codingame/monaco-vscode-theme-defaults-default-extension'
@@ -102,7 +93,6 @@ export interface WorkbenchProbe {
 
 declare global {
   interface Window {
-    MonacoEnvironment?: unknown
     __WB_PROBE?: WorkbenchProbe
   }
 }
@@ -136,6 +126,15 @@ export interface BootWorkbenchOptions {
    * `files.associations` so brand extensions highlight as wxml/css/javascript.
    */
   fileTypes?: CustomFileTypes
+  /**
+   * Stable identity of the project being opened, used as the VS Code workspace
+   * id. WORKSPACE-scope state (open editors, view state, explorer expansion)
+   * lives in an IndexedDB bucket keyed by it, so hosts that mount several
+   * projects at the same {@link WorkspaceSource.folderUri} MUST pass a distinct
+   * id per project — see the storage override in `bootWorkbench`. Omit it and
+   * that state stays in memory for the session.
+   */
+  workspaceId?: string
   /** Expose `window.__WB_PROBE` for a CDP harness (default false). */
   exposeProbe?: boolean
   /** Lifecycle status callback (`initializing` → `exthost-alive`/error). */
@@ -147,37 +146,6 @@ export interface WorkbenchHandle {
   setTheme(scheme: 'light' | 'dark'): void
   /** The page-side `vscode` extension API. */
   vscode: typeof import('vscode')
-}
-
-// Worker URL + options per label. The web extension host is created INSIDE the
-// `webWorkerExtensionHostIframe.html` iframe, whose own MonacoEnvironment is
-// distinct from this page's — so the `extensionHostWorkerMain` worker must be
-// wired through the host's iframe bootstrap (EnvironmentOverride), not just
-// here. This page-level map covers the editor + textmate workers.
-const workers: Record<string, { url: URL; options?: WorkerOptions }> = {
-  editorWorkerService: { url: new URL(editorWorkerUrl, import.meta.url), options: { type: 'module' } },
-  extensionHostWorkerMain: { url: new URL(extHostWorkerUrl, import.meta.url), options: { type: 'module' } },
-  TextMateWorker: { url: new URL(textmateWorkerUrl, import.meta.url), options: { type: 'module' } },
-}
-
-function installMonacoEnvironment(): void {
-  // Respect a MonacoEnvironment the host already installed. A SOURCE consumer
-  // (e.g. the web client) bundles this package via `file:`, so its monaco/vscode
-  // worker assets resolve from a different node_modules than this module's
-  // realpath — the `new URL(…, import.meta.url)` worker URLs computed here can
-  // then be wrong for the ext-host iframe. Such a host wires the workers from its
-  // OWN bundle and sets `window.MonacoEnvironment` before calling bootWorkbench;
-  // we must not clobber it. The prebuilt-bundle entry (src/main.ts, devtools)
-  // never sets it, so this stays a no-op change there.
-  if (window.MonacoEnvironment) return
-  window.MonacoEnvironment = {
-    getWorkerUrl(_moduleId: string, label: string): string | undefined {
-      return workers[label]?.url.toString()
-    },
-    getWorkerOptions(_moduleId: string, label: string): WorkerOptions | undefined {
-      return workers[label]?.options
-    },
-  }
 }
 
 // Built-in theme ids contributed by
@@ -344,6 +312,9 @@ export async function bootWorkbench(options: BootWorkbenchOptions): Promise<Work
   }
   const status = (s: string) => options.onStatus?.(s)
   void TYPES_ROOT
+  // Empty/blank is "no identity", not a workspace named "" (which would be one
+  // more shared bucket) — see the storage override below.
+  const workspaceId = options.workspaceId?.trim() || undefined
 
   installMonacoEnvironment()
 
@@ -368,7 +339,25 @@ export async function bootWorkbench(options: BootWorkbenchOptions): Promise<Work
     ...getThemeServiceOverride(),
     ...getTextmateServiceOverride(),
     ...getLanguagesServiceOverride(),
-    ...getStorageServiceOverride(),
+    // WORKSPACE-scope state (open editors, view state, explorer expansion) is
+    // keyed by the workspace identity, which VS Code derives from the folder
+    // URI unless it is given one. Every project here mounts at the same constant
+    // `file:///workspace` mirror root (file-workspace.ts explains why tsserver
+    // needs that), so a derived identity makes the "per-workspace" IndexedDB
+    // bucket really ONE bucket shared by all projects: project A's
+    // `editorpart.state` gets restored into project B, reopening tabs for files
+    // B does not have, each stranded behind the permanent "file was not found"
+    // placeholder. `options.workspaceId` supplies the real identity (the host's
+    // project id) and is passed to the workspace provider below, giving each
+    // project its own bucket. With no identity at all, state must not outlive
+    // the session — keep the scope in memory rather than let it fall back to the
+    // shared bucket. (APPLICATION and PROFILE scopes are genuinely global and
+    // keep persisting normally either way.)
+    ...getStorageServiceOverride(
+      workspaceId != null
+        ? undefined
+        : { databaseFactories: { [StorageScope.WORKSPACE]: () => new InMemoryStorageDatabase() } },
+    ),
     ...getQuickAccessServiceOverride(),
     ...getWorkbenchServiceOverride(),
   }
@@ -385,10 +374,13 @@ export async function bootWorkbench(options: BootWorkbenchOptions): Promise<Work
       nameLong: options.product?.nameLong ?? 'Dimina Workbench',
     },
     // Open the project as the single workspace folder so the Explorer renders
-    // the tree and the tsserver treats it as a real file:// project root.
+    // the tree and the tsserver treats it as a real file:// project root. The
+    // optional `id` overrides VS Code's folder-URI-derived workspace identity
+    // (see the storage override above); folder detection only looks at
+    // `folderUri`, so carrying it changes nothing else.
     workspaceProvider: {
       trusted: true,
-      workspace: { folderUri },
+      workspace: workspaceId != null ? { folderUri, id: workspaceId } : { folderUri },
       async open() {
         return false
       },
@@ -483,11 +475,6 @@ export async function bootWorkbench(options: BootWorkbenchOptions): Promise<Work
 
   // Populate the workspace + seed ambient typings, then keep saves flushed back.
   await populateWorkspace(workspace, features.ambientTypings, contributedTypings)
-
-  // Restored tabs can reference files this project's mirror does not contain
-  // (all projects share one persisted editor-state memento) — close them now
-  // that the workspace is populated. See sweepStaleRestoredEditors.
-  await sweepStaleRestoredEditors(vscode, folderUri)
 
   status('workbench-ready')
   installAutoSave(vscode)
