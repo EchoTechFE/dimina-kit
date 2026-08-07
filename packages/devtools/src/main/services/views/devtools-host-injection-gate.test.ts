@@ -30,9 +30,23 @@ const { whenFrontendBootstrappedMock } = vi.hoisted(() => ({
   whenFrontendBootstrappedMock: vi.fn(),
 }))
 
+// The production `whenFrontendBootstrapped` is a SHARED gate: every caller
+// receives the same promise that resolves when the front-end bootstraps. The
+// mock must mirror that — caching the FIRST call's promise across subsequent
+// calls within the same override — otherwise a second gated inject (e.g.
+// console-default + clear-console-filter both registered by
+// rebuildDevtoolsHostView) overwrites the first call's `resolveGate` closure
+// and strands it pending forever. `beforeEach` resets the cache.
+let cachedGatePromise: Promise<boolean> | null = null
+
 vi.mock('./frontend-bootstrap-gate.js', () => ({
   FRONTEND_BOOTSTRAP_PROBE_SCRIPT: '(() => false)()',
-  whenFrontendBootstrapped: whenFrontendBootstrappedMock,
+  whenFrontendBootstrapped: (wc: unknown) => {
+    if (!cachedGatePromise) {
+      cachedGatePromise = (whenFrontendBootstrappedMock(wc) as Promise<boolean> | undefined) ?? Promise.resolve(false)
+    }
+    return cachedGatePromise
+  },
 }))
 
 // ── electron stub ───────────────────────────────────────────────────────────
@@ -243,6 +257,7 @@ function injectedScripts(wc: StubWebContents): string[] {
 
 beforeEach(() => {
   constructed.length = 0
+  cachedGatePromise = null
   vi.useFakeTimers()
   // Default: the gate is asked and never answers — every test that cares
   // about a resolved value overrides this with a controllable promise.
@@ -298,9 +313,13 @@ describe('applyConsoleFilter injection point (kind: console-filter)', () => {
     await flushMicrotasks()
 
     const scripts = injectedScripts(devtoolsWc)
-    expect(scripts.some((s) => s.includes('shouldBeVisible'))).toBe(true)
-    // The de-noise must never reach the developer's own filter input.
-    expect(scripts.some((s) => s.includes('textFilterUI'))).toBe(false)
+    const deNoiseScript = scripts.find((s) => s.includes('shouldBeVisible'))
+    expect(deNoiseScript, 'the console de-noise script must eventually be injected').toBeTruthy()
+    // The de-noise must never reach the developer's own filter input. Scoped
+    // to the de-noise script itself — the clear-console-filter script is the
+    // documented exception to that policy (see the developer-owned-controls
+    // scan below) and legitimately contains textFilterUI.
+    expect(deNoiseScript, 'the de-noise script must not mention the filter UI').not.toContain('textFilterUI')
   })
 
   it('never injects the console-filter script when the bootstrap gate resolves false (silent degradation)', async () => {
@@ -431,6 +450,13 @@ describe('developer-owned front-end controls', () => {
       ['tab customization', 'disable-locale-info-bar'],
       ['console de-noise', 'shouldBeVisible'],
       ['console default panel', "showView('console')"],
+      // The clear-console-filter producer is the one intentional exception to
+      // the developer-owned-controls policy below — clearing the STALE Console
+      // filter leftover (the old filter-box implementation wrote a non-empty
+      // value into the box, and DevTools' own setting persists it on disk; the
+      // developer is not typing that value, we are removing it). It only ever
+      // writes the EMPTY value, never a non-empty one.
+      ['console filter stale-clear', "localStorage.removeItem('console.textFilter')"],
     ] as const) {
       expect(
         scripts.some((s) => s.includes(signature)),
@@ -438,7 +464,16 @@ describe('developer-owned front-end controls', () => {
       ).toBe(true)
     }
 
+    // The clear-console-filter script is the documented exception: it removes
+    // the stale persisted Console filter key (DevTools' own setting that the
+    // developer did not type) and resets the visible box to empty. Exclude it
+    // from the developer-owned-controls scan; every OTHER script is still
+    // forbidden from touching these surfaces.
+    const isStaleClearScript = (s: string): boolean =>
+      s.includes("localStorage.removeItem('console.textFilter')")
+
     for (const script of scripts) {
+      if (isStaleClearScript(script)) continue
       for (const control of DEVELOPER_OWNED_CONTROLS) {
         expect(
           control.test(script),

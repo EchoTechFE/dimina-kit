@@ -8,6 +8,7 @@ import {
 import type { RenderEvent, ServiceHostReadyEvent } from '../../ipc/bridge-router.js'
 import { buildCustomizeTabsScript } from './devtools-tabs.js'
 import { buildInternalLogHideScript } from './console-filter.js'
+import { buildClearConsoleFilterScript } from './clear-console-filter.js'
 import { whenFrontendBootstrapped } from './frontend-bootstrap-gate.js'
 import { installElementsForward } from '../elements-forward/index.js'
 import { installServiceConsoleForward } from '../service-console/index.js'
@@ -102,6 +103,14 @@ export function createDevtoolsHost(
   let stopServiceConsole: (() => void) | null = null
   let nativeDevtoolsRetryTimer: ReturnType<typeof setTimeout> | null = null
   let nativeDevtoolsRetryToken = 0
+  // When the NEXT host build happens it is a FRESH PROJECT OPEN, so the stale
+  // Console filter (DevTools' own persisted localStorage setting, possibly
+  // leftover from the old filter-box implementation) must be cleared once.
+  // Armed by `attach()` (the project-open path) and disarmed by every re-point,
+  // so a service-host pool swap (hot-reload respawn) rebuilds the host WITHOUT
+  // wiping a filter the developer typed during the session. See
+  // clear-console-filter.ts.
+  let clearFilterOnNextHostBuild = false
   // Front-end injects re-fire on EVERY re-point; while the host is loading each
   // raw executeJavaScript would queue one did-stop-loading waiter per call.
   // The deferred injector keeps one hook per (wc, kind) with latest-wins.
@@ -277,6 +286,9 @@ export function createDevtoolsHost(
   // webContents (logic layer). Idempotent: if we already inspect this wc, no-op.
   function pointNativeDevtoolsAtServiceWc(next: WebContents): boolean {
     if (!simulatorView || simulatorView.webContents.isDestroyed()) return true
+    // Any host rebuild triggered from a re-point is a service-host swap, NOT a
+    // fresh project open — the stale Console filter must survive it.
+    clearFilterOnNextHostBuild = false
     if (nativeDevtoolsSourceWc?.id === next.id && !nativeDevtoolsSourceWc.isDestroyed()) {
       return true
     }
@@ -539,6 +551,21 @@ export function createDevtoolsHost(
       })
     })
 
+    // Clear the stale Console filter box on a FRESH project open only (armed by
+    // attach(), disarmed by re-points — see clearFilterOnNextHostBuild). The
+    // value is captured at build time so a later swap cannot re-arm/clear this
+    // host; bootstrap-gated the same way as the console-default inject above.
+    const clearStaleFilter = clearFilterOnNextHostBuild
+    injectWhenReady(devtoolsWc, 'clear-console-filter', () => {
+      if (!clearStaleFilter) return
+      void whenFrontendBootstrapped(devtoolsWc).then((ready) => {
+        if (!ready || devtoolsWc.isDestroyed()) return
+        try {
+          void devtoolsWc.executeJavaScript(buildClearConsoleFilterScript()).catch(() => {})
+        } catch { /* wc torn down mid-call */ }
+      })
+    })
+
     // Anchor-only mount: the renderer's published rect is the SOLE authority.
     // If a non-zero rect was already published (it can land before this attach
     // on the project-open ordering), replay it; otherwise the view stays
@@ -555,6 +582,10 @@ export function createDevtoolsHost(
   }
 
   function attachNativeSimulatorDevtoolsHost(): void {
+    // This host build is a FRESH PROJECT OPEN: clear the stale Console filter
+    // once (see clearFilterOnNextHostBuild / clear-console-filter.ts). A later
+    // re-point (service-host pool swap) disarms it before ITS rebuild.
+    clearFilterOnNextHostBuild = true
     stopFollowingNativeServiceHost()
     rebuildDevtoolsHostView()
 

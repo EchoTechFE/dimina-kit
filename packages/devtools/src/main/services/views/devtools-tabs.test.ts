@@ -2,10 +2,13 @@ import { describe, expect, it } from 'vitest'
 import { DEVTOOLS_KEPT_VIEW_IDS, buildCustomizeTabsScript } from './devtools-tabs.js'
 
 describe('DEVTOOLS_KEPT_VIEW_IDS', () => {
-  it('keeps Elements / Console / Network / Sources in the default bar', () => {
+  it('keeps Elements / Console / Sources / Network in the default bar', () => {
     // Sources is kept so a source-link click NOT routed to Monaco (build/runtime
-    // chunks, framework frames) still has a panel to reveal in.
-    expect([...DEVTOOLS_KEPT_VIEW_IDS]).toEqual(['elements', 'console', 'network', 'sources'])
+    // chunks, framework frames) still has a panel to reveal in. Stays in the
+    // DevTools default order (Sources between Console and Network) — never
+    // reordered, because the front-end maps tab clicks to panel ids by the tab
+    // container's child index, and DOM reordering desyncs that mapping.
+    expect([...DEVTOOLS_KEPT_VIEW_IDS]).toEqual(['elements', 'console', 'sources', 'network'])
   })
 })
 
@@ -39,16 +42,16 @@ describe('buildCustomizeTabsScript', () => {
     expect(src).toContain("persistence='transient'")
   })
 
-  it('reorders Sources after Network when Sources is kept', () => {
+  it('keeps non-kept panels reachable by registering them transient, with no DOM reordering', () => {
     const src = buildCustomizeTabsScript()
-    // The Sources-last nudge keys off the Sources + Network display-name sets and
-    // moves the Sources tab to just after Network.
-    expect(src).toContain('WANT_SOURCES_LAST')
-    expect(src).toContain('insertBefore')
-    expect(src).toContain('源代码')
-    // No reorder when Sources is not in the keep-list.
-    const noSources = buildCustomizeTabsScript(['elements', 'console', 'network'])
-    expect(noSources).toContain('WANT_SOURCES_LAST = KEEPID.has(\'sources\')')
+    // Sources is kept and stays in the DevTools default order — the script
+    // must NOT carry any reorder/drag logic (insertBefore or CSS order) that
+    // mis-maps clicks to the wrong panel.
+    expect(src).not.toContain('insertBefore')
+    expect(src).not.toContain('style.order')
+    expect(src).not.toContain('WANT_SOURCES_LAST')
+    expect(src).toContain("persistence='transient'")
+    expect(src).toContain('Sources')
   })
 
   it('suppresses the locale infobar via the official host preference', () => {
