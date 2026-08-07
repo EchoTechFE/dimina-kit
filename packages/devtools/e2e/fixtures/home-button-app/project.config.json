@@ -1,0 +1,5 @@
+{
+  "appid": "devtools_home_button_fixture",
+  "projectname": "devtools-home-button-fixture",
+  "description": "Fixture mini-app for e2e nav-bar home-button tests (no tabBar)"
+}

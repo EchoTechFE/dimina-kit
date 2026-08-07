@@ -1,0 +1,12 @@
+{
+  "pages": [
+    "pages/home/home",
+    "pages/inner/inner",
+    "pages/forced/forced"
+  ],
+  "window": {
+    "navigationBarTitleText": "Home Button Fixture",
+    "navigationBarBackgroundColor": "#ffffff",
+    "navigationBarTextStyle": "black"
+  }
+}

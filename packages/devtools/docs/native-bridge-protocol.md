@@ -257,7 +257,7 @@ simulator 的 NavigationBar 按微信 MiniProgram 规范实现；胶囊（capsul
 
 - status bar 高度：iOS 44、Android 24。DeviceShell 的视觉布局直接取平台常量 `STATUS_BAR_HEIGHT_IOS = 44` / `STATUS_BAR_HEIGHT_ANDROID = 24`（`device-shell.tsx`，按 `platform` 选用）；同一组值另由 `hostEnvSnapshot`（`simulator-mini-app.ts`，`statusBarHeight = ios?44:24`）在 spawn 时下发给 service-host 的 sync 实现（getSystemInfo / 胶囊 geometry）。nav bar 高度 44（`NavigationBarProps.navBarHeight`）
 - 标题对齐：iOS center / Android left（`titleAlign`）
-- 返回箭头（`stackDepth > 1`）/ 返回首页按钮（`homeButtonVisible`）
+- 返回箭头（`stackDepth > 1`）/ 返回首页按钮（`homeButtonVisible`，两者可并存）。返回首页按钮按微信规则显示（判据函数 `shouldShowHomeButton`，`page-stack-controller.ts`）：非应用首页（manifest `entryPagePath`，缺省 `pages[0]`）+ 非 tabBar 页（页面配置 `homeButton: true` 也不能突破这两条排除），且「页面栈栈底（自动规则）或页面配置 `homeButton: true`（此时与返回箭头并存显示）」；`wx.hideHomeButton()` 隐藏调用页自己的按钮。点击返回首页：首页是 tabBar 页走 switchTab（保留其它 tab 状态并露出 tabBar，自带清非 tab 栈），首页非 tab 时栈底走 redirectTo 原地替换、非栈底走 reLaunch 清整栈——路由判定收敛在 `resolveHomeNavAction`（`page-stack-controller.ts`，对应各端 native 的 `navigateHome` 原语），`DeviceShell.handleHome` 只负责分发
 - loading 转圈（show/hideNavigationBarLoading → `state.loading`）
 - 颜色动画（`wx.setNavigationBarColor.animation` → CSS transition，`TIMING_FUNC_MAP` 4 种 timingFunc）
 - `navigationStyle: custom`：整条 bar 隐藏，胶囊保留（`isCustom`）

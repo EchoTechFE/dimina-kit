@@ -329,21 +329,24 @@ export function enumerateMounted(state: ShellState): MountedEntry[] {
 export function pageBackgroundColor(config: PageWindowConfig): string {
   return (config.backgroundColor as string | undefined) ?? '#ffffff'
 }
-
 /**
  * Build the initial NavigationBar state from a page's merged window config
  * (app-config.json `window` ∪ page-level overrides). The fallback title is
  * used when `navigationBarTitleText` is unset (typically the appId).
+ * `opts.homeButtonVisible` sets the home button verbatim — callers that know
+ * the page's stack position pass the `shouldShowHomeButton` verdict here so
+ * the home/tab exclusions apply. Without it only the page config speaks.
  */
 export function navBarFromConfig(
   config: PageWindowConfig,
   fallbackTitle: string,
+  opts?: { homeButtonVisible?: boolean },
 ): NavigationBarState {
   const background = (config.navigationBarBackgroundColor as string | undefined) ?? '#ffffff'
   const text = (config.navigationBarTextStyle as 'black' | 'white' | undefined) ?? 'black'
   const style = (config.navigationStyle as 'default' | 'custom' | undefined) ?? 'default'
   const title = (config.navigationBarTitleText as string | undefined) ?? fallbackTitle
-  const homeButtonVisible = config.homeButton === true
+  const homeButtonVisible = opts?.homeButtonVisible ?? (config.homeButton === true)
   return makeDefaultNavigationBarState({
     title,
     backgroundColor: background,

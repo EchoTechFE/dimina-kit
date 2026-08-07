@@ -2801,8 +2801,13 @@ async function loadAppConfig(
 }
 
 function buildAppManifest(appConfig: RawAppConfig, fallbackEntry: string): AppManifest {
-  const entry = appConfig.app?.entryPagePath || fallbackEntry
   const hasCompiledPages = !!appConfig.app?.pages?.length
+  // `entryPagePath` is the APP's own home page — the nav-bar home button's
+  // target and the page its visibility rule compares against. A compiled app
+  // always has one of its own (declared `entryPagePath`, else `pages[0]`), so
+  // the requested launch page may only fill in for a 'fallback' manifest:
+  // launching into an inner page must not make that page masquerade as home.
+  const entry = appConfig.app?.entryPagePath || appConfig.app?.pages?.[0] || fallbackEntry
   const pages = hasCompiledPages ? appConfig.app!.pages! : [entry]
   const tabBar = appConfig.app?.tabBar && Array.isArray(appConfig.app.tabBar.list) && appConfig.app.tabBar.list.length > 0
     ? appConfig.app.tabBar
