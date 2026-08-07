@@ -238,6 +238,22 @@ export class SimulatorMiniApp {
   }
 
   /**
+   * The app's own home page — both the target of the nav-bar home button and
+   * the page its visibility rule compares the current page against. Only a
+   * compiled manifest knows it: `entryPagePath`, else `pages[0]`. A 'fallback'
+   * manifest is built from the spawn request itself, so its entry is whichever
+   * page this session happened to launch into — reading it would let a
+   * deep-linked inner page masquerade as home. That case and the no-manifest
+   * case both return '', which turns the home-button rule off rather than
+   * guessing a page.
+   */
+  getHomePagePath(): string {
+    const manifest = this.manifest
+    if (!manifest || manifest.source !== 'app-config') return ''
+    return manifest.entryPagePath || manifest.pages?.[0] || ''
+  }
+
+  /**
    * The device selected when this simulator booted (delivered by main on the
    * native-host bridge config — the renderer pushes SetDeviceInfo before
    * AttachNative). DeviceShell uses it as the initial bezel size + notch; live

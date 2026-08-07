@@ -1,0 +1,2 @@
+<view class="page-marker page-inner">INNER PAGE</view>
+<button class="btn go-forced-btn" bindtap="goForced">Go Forced</button>
