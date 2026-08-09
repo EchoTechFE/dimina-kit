@@ -92,7 +92,7 @@ export interface ShellState {
 | `reduceNavigateBack`   | `page-stack-controller.ts`  | clamp `delta` 到 `stack.length - 1`，发 `pageUnload + closePage` |
 | `reduceRedirectTo`     | `page-stack-controller.ts`  | 替换栈顶，旧顶发 `pageUnload + closePage`             |
 | `reduceReLaunch`       | `page-stack-controller.ts`  | 全员 `pageUnload + closePage`，重置 `tabStacks`        |
-| `reduceSwitchTab`      | `page-stack-controller.ts`  | snapshot 当前 stack → 还原 / 懒建目标 tab，**不发 closePage** |
+| `reduceSwitchTab`      | `page-stack-controller.ts`  | snapshot 当前 stack → 还原 / 懒建目标 tab；子栈里的页面一律不销毁，迁移后不属于任何子栈的页面发 `pageUnload + closePage` |
 
 副作用通过 `SideEffect` 联合表达，host 层负责执行：
 
@@ -181,14 +181,14 @@ switchTab /pages/home/home（命中池）
 | `navigateBack(δ>1)`| —                   | `pageShow`                          | 每个被弹页一次 `pageUnload` + `closePage` | —                       |
 | `redirectTo`     | —                     | 新页 mount → `pageShow`              | 旧 top：`pageUnload` + `closePage` | —                              |
 | `reLaunch`       | —                     | 新页 mount → `pageShow`              | 当前可见栈 + 全部 tab 子栈全员 `pageUnload` + `closePage` | 同左            |
-| `switchTab` (restore) | `pageHide`       | `pageShow`（还原子栈栈顶）           | —（沿途页都活在子栈里）          | 子栈整段快照保留，**不发 closePage** |
-| `switchTab` (lazy)| `pageHide`           | 新页 mount → `pageShow`              | —                               | 子栈整段快照保留，**不发 closePage** |
+| `switchTab` (restore) | `pageHide`       | `pageShow`（还原子栈栈顶）           | 迁移后不属于任何子栈的页面：`pageUnload` + `closePage` | 子栈整段快照保留，其中的页面不销毁 |
+| `switchTab` (lazy)| `pageHide`           | 新页 mount → `pageShow`              | 迁移后不属于任何子栈的页面：`pageUnload` + `closePage` | 子栈整段快照保留，其中的页面不销毁 |
 
 ### 4.2 容易踩坑的点
 
 - **`navigateBack(delta)` 越界**：`reduceNavigateBack` 显式 clamp：`Math.min(Math.max(1, delta), stack.length - 1)`（`page-stack-controller.ts`）。`delta` 超过深度直接弹到栈底，不抛错。
 - **`reLaunch` 对栈底 entry 也发 `pageUnload`**：是——`reduceReLaunch` 把当前可见栈 + 全部 tab 子栈全员 unload + closePage。
-- **`switchTab` 对子栈页只切显隐、不发 closePage**：离开的 tab 子栈整段快照进 `tabStacks`，页面 `<webview>` 不卸载；切回时整段还原。
+- **`switchTab` 对子栈页只切显隐、不发 closePage**：离开的 tab 子栈整段快照进 `tabStacks`，页面 `<webview>` 不卸载；切回时整段还原。但**不属于任何子栈的页面例外**：没有活动 tab 时的可见页（深链启动到非 tab 页，或 `redirectTo` 把某 tab 根页换成非 tab 页之后的那一页）在切 tab 后既不在可见栈也不在任何子栈里，必须 `pageUnload + closePage`，否则它的 render host 会留在 main 的页面账本里。
 - **同名 bridgeId 在 reLaunch 中的防御**：`reduceReLaunch` 显式从 unload 集合里删去 `newEntry.bridgeId`（`page-stack-controller.ts`），防止"新页面和旧页面 ID 撞车导致新页被错卸"。
 
 ## 5. URL 同步与自动化读取
@@ -285,7 +285,7 @@ switchTab(targetTab):
     │      prevTop ≠ newTop  → pageHide(prevTop)                │
     │      cached restore     → pageShow(newTop)                 │
     │      lazy create       → 由 renderer init path 自己触发    │
-    │      ❗ 永不发 closePage：所有子栈都活着                      │
+    │      ❗ 子栈里的页面永不 closePage；不属于任何子栈的页面才销毁 │
     └─────────────────────────────────────────────────────────┘
 ```
 

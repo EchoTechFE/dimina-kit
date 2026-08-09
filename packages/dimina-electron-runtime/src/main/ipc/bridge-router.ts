@@ -737,8 +737,11 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
     getActiveBridgeId: (appId) => {
       const ap = resolveCurrentApp(state, ctx, appId)
       if (!ap) return null
-      // Fall back to the root page (= appSessionId) before the first signal.
-      return ap.activeBridgeId ?? ap.appSessionId
+      if (ap.activeBridgeId) return ap.activeBridgeId
+      // Fall back to the root page (= appSessionId) before the first signal —
+      // but only while that page is still alive: navigation can close the root
+      // and then the fallback would name a page that no longer exists.
+      return ap.pages.has(ap.appSessionId) ? ap.appSessionId : null
     },
     getPageStack: (appId) => {
       const ap = resolveCurrentApp(state, ctx, appId)
@@ -1482,12 +1485,17 @@ async function handlePageOpen(
 function handlePageClose(state: RouterState, sender: WebContents, payload: PageClosePayload): void {
   const page = state.pageSessions.get(payload.bridgeId)
   if (!page) return
-  if (page.isRoot) {
-    console.warn('[bridge-router] PAGE_CLOSE refused on root page; use DISPOSE')
-    return
-  }
   const ap = state.appSessions.get(page.appSessionId)
   if (!ap) return
+  // Once navigation has replaced the launch page it is a page like any other,
+  // and refusing to close it strands a dead render host in the session ledger
+  // for the rest of the session — the "back to home" button hits this on every
+  // deep-linked launch. It stays uncloseable only while it is the session's
+  // sole page: emptying a session of pages is DISPOSE's job, not PAGE_CLOSE's.
+  if (page.isRoot && ap.pages.size <= 1) {
+    console.warn('[bridge-router] PAGE_CLOSE refused on the session\'s only page; use DISPOSE')
+    return
+  }
   if (!senderBoundToSession(state, sender, ap)) {
     console.warn('[bridge-router] PAGE_CLOSE rejected: caller not bound to app session')
     return
@@ -2621,6 +2629,16 @@ function disposePageSession(state: RouterState, ap: AppSession, page: PageSessio
   }
   ap.pages.delete(page.bridgeId)
   state.pageSessions.delete(page.bridgeId)
+  // A page is closed before the shell has re-rendered and reported its new top,
+  // so these two would go on naming a page that no longer exists — and callers
+  // read them meanwhile (panels resolving a target, automation reading the
+  // stack). Clear them and let the shell's next ACTIVE_PAGE / PAGE_STACK fill
+  // them in. `getActiveBridgeId`'s own root fallback is guarded on the root
+  // page still being in `ap.pages`, which this delete has already settled.
+  if (ap.activeBridgeId === page.bridgeId) {
+    ap.activeBridgeId = null
+  }
+  ap.pageStack = undefined
 }
 
 // Drain any pending API calls owned by this app session. One-shot calls
@@ -2801,14 +2819,21 @@ async function loadAppConfig(
 }
 
 function buildAppManifest(appConfig: RawAppConfig, fallbackEntry: string): AppManifest {
-  const hasCompiledPages = !!appConfig.app?.pages?.length
+  const compiledPages = appConfig.app?.pages ?? []
+  const hasCompiledPages = compiledPages.length > 0
   // `entryPagePath` is the APP's own home page — the nav-bar home button's
   // target and the page its visibility rule compares against. A compiled app
   // always has one of its own (declared `entryPagePath`, else `pages[0]`), so
   // the requested launch page may only fill in for a 'fallback' manifest:
   // launching into an inner page must not make that page masquerade as home.
-  const entry = appConfig.app?.entryPagePath || appConfig.app?.pages?.[0] || fallbackEntry
-  const pages = hasCompiledPages ? appConfig.app!.pages! : [entry]
+  // A declared entry outside `pages` is unmountable (most often a page deleted
+  // without updating app.json), so it loses to `pages[0]` — the same rule
+  // `resolveRootPagePath` applies to a launch request.
+  const declaredEntry = appConfig.app?.entryPagePath
+  const entryIsMember = !!declaredEntry
+    && compiledPages.some(page => normalizePagePath(page) === normalizePagePath(declaredEntry))
+  const entry = entryIsMember ? declaredEntry! : (compiledPages[0] || fallbackEntry)
+  const pages = hasCompiledPages ? compiledPages : [entry]
   const tabBar = appConfig.app?.tabBar && Array.isArray(appConfig.app.tabBar.list) && appConfig.app.tabBar.list.length > 0
     ? appConfig.app.tabBar
     : undefined

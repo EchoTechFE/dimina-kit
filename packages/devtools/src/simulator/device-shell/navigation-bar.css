@@ -83,6 +83,10 @@
   padding-left: 48px; /* leave room for back arrow */
 }
 
+.nav-bar__title--leading-pair {
+  padding-left: 86px; /* 8px offset + two 32px buttons + 6px gap */
+}
+
 .nav-bar__title-text {
   max-width: 60%;
   overflow: hidden;

@@ -3,18 +3,24 @@
  * bridge plus the probes those suites read the shell's behavior through.
  *
  * The bridge is a ledger, not just a stub — it records every page the shell
- * asked to open and every page it asked to close, so a suite can assert that
- * no render host is dropped from state without being torn down. `gateOpenPage`
- * holds `openPage` unresolved to reproduce the IPC round-trip window a user can
- * click through.
+ * asked to open, every page it asked to close and every lifecycle it pushed, in
+ * the order the host received them. A suite can therefore assert both that no
+ * render host is dropped from state without being torn down AND that the
+ * lifecycle the service layer needs actually reached the bridge, not merely
+ * that the reducer produced the right effect list. `calls` is the same ledger
+ * with every kind interleaved, which is what an assertion about the ORDER of
+ * two different calls needs. `gateOpenPage` holds `openPage` unresolved to
+ * reproduce the IPC round-trip window a user can click through.
  */
 import React from 'react'
 import { act, render } from '@testing-library/react'
 import { SIMULATOR_EVENTS as E } from '../../../shared/bridge-channels'
 import type {
+  ActivePagePayload,
   AppManifest,
   NavActionPayload,
   NavCallbackPayload,
+  PageLifecycleEvent,
   PageOpenResult,
   PageStackPayload,
   PageWindowConfig,
@@ -54,6 +60,23 @@ export interface OpenedPage {
   bridgeId: string
 }
 
+export interface LifecycleRecord {
+  bridgeId: string
+  event: PageLifecycleEvent
+}
+
+/**
+ * One call the shell made on the bridge. Relative order between two different
+ * kinds of call is only assertable from a single ordered log — per-kind arrays
+ * cannot express "the stack was reported before the active page was".
+ */
+export type HostCall =
+  | { kind: 'activePage'; bridgeId: string }
+  | { kind: 'pageStack'; stack: string[] }
+  | { kind: 'lifecycle'; bridgeId: string; event: PageLifecycleEvent }
+  | { kind: 'closePage'; bridgeId: string }
+  | { kind: 'openPage'; pagePath: string; bridgeId: string }
+
 export interface HostRecorder {
   navCallbacks: NavCallbackPayload[]
   pageStacks: PageStackPayload[]
@@ -62,6 +85,15 @@ export interface HostRecorder {
   openedEntries: OpenedPage[]
   /** Every bridgeId the shell asked main to tear down. */
   closedPages: string[]
+  /**
+   * Every lifecycle the shell pushed over the bridge, in arrival order. The
+   * service layer only ever learns a page hid, showed or unloaded through this
+   * call, so a shell that computes the right effects but never delivers them is
+   * indistinguishable from a correct one without reading this ledger.
+   */
+  lifecycles: LifecycleRecord[]
+  /** Every bridge call above, interleaved in the order the host received them. */
+  calls: HostCall[]
   /** Pushes a main→simulator event exactly the way the preload bridge does. */
   fire(channel: string, payload: unknown): void
   /** Holds every subsequent `openPage` unresolved until the returned fn runs. */
@@ -77,6 +109,8 @@ export function installNativeHostMock(rootPagePath: string): HostRecorder {
     openedPages: [],
     openedEntries: [],
     closedPages: [],
+    lifecycles: [],
+    calls: [],
     fire(channel, payload) {
       for (const fn of [...(listeners.get(channel) ?? [])]) fn(payload)
     },
@@ -120,14 +154,26 @@ export function installNativeHostMock(rootPagePath: string): HostRecorder {
         isTab: isTab(opts.pagePath),
       }
       recorder.openedEntries.push({ pagePath: opened.pagePath, bridgeId: opened.bridgeId })
+      recorder.calls.push({ kind: 'openPage', pagePath: opened.pagePath, bridgeId: opened.bridgeId })
       return opened
     },
-    closePage: (bridgeId: string) => { recorder.closedPages.push(bridgeId) },
-    notifyLifecycle: () => {},
+    closePage: (bridgeId: string) => {
+      recorder.closedPages.push(bridgeId)
+      recorder.calls.push({ kind: 'closePage', bridgeId })
+    },
+    notifyLifecycle: (payload: { bridgeId: string; event: PageLifecycleEvent }) => {
+      recorder.lifecycles.push({ bridgeId: payload.bridgeId, event: payload.event })
+      recorder.calls.push({ kind: 'lifecycle', bridgeId: payload.bridgeId, event: payload.event })
+    },
     notifyNavCallback: (payload: NavCallbackPayload) => { recorder.navCallbacks.push(payload) },
     notifyApiResponse: () => {},
-    notifyActivePage: () => {},
-    notifyPageStack: (payload: PageStackPayload) => { recorder.pageStacks.push(payload) },
+    notifyActivePage: (payload: ActivePagePayload) => {
+      recorder.calls.push({ kind: 'activePage', bridgeId: payload.bridgeId })
+    },
+    notifyPageStack: (payload: PageStackPayload) => {
+      recorder.pageStacks.push(payload)
+      recorder.calls.push({ kind: 'pageStack', stack: payload.stack.map((e) => e.pagePath) })
+    },
     // The page path rides the fragment so a test can read which page a mounted
     // render host is actually showing.
     createRenderHostUrl: (opts: { pagePath: string }) => `about:blank#${opts.pagePath}`,

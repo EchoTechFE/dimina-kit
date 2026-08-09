@@ -51,6 +51,27 @@ export type Ack = (ok: boolean, errMsg: string) => void
 export type ApplySideEffects = (effects: SideEffect[]) => void
 
 /**
+ * The single commit point for shell state. `stateRef` is the snapshot every
+ * routing operation reduces from, so it must carry an action's result the
+ * instant that action finishes — not one React commit later. The nav queue
+ * hands the next action a microtask while React commits on a scheduler task,
+ * so a ref refreshed only by a passive effect still holds the pre-action stack
+ * when the next action reads it: two navigateBacks in one tick would then both
+ * reduce from the same three-page stack, pop the same page twice and close its
+ * render host twice. Writing the ref here keeps it in step with the fact.
+ */
+export function commitShell(ref: StateRef, setState: SetState, next: ShellState): void {
+  ref.current = { ...ref.current, shell: next }
+  setState(prev => ({ ...prev, shell: next }))
+}
+
+/** The tabBar half of the same contract — see `commitShell`. */
+export function commitTabBar(ref: StateRef, setState: SetState, next: TabBarState): void {
+  ref.current = { ...ref.current, tabBar: next }
+  setState(prev => ({ ...prev, tabBar: next }))
+}
+
+/**
  * Build the PageEntry for a page the host just opened, with its home button
  * resolved against the app's home page and the stack position the caller knows
  * this page is landing at.
@@ -102,7 +123,7 @@ export async function doNavigateTo(
   // when the page config opts in, and then coexists with the back arrow.
   const newEntry = makePageEntry(miniApp, opened, query, false)
   const { next, effects } = reduceNavigateTo(ref.current.shell, newEntry)
-  setState(prev => ({ ...prev, shell: next }))
+  commitShell(ref, setState, next)
   applySideEffects(effects)
   ack(true, 'navigateTo:ok')
 }
@@ -121,7 +142,7 @@ export function doNavigateBack(
     ack(false, `navigateBack:fail ${result.error}`)
     return
   }
-  setState(prev => ({ ...prev, shell: result.next }))
+  commitShell(ref, setState, result.next)
   applySideEffects(result.effects)
   ack(true, 'navigateBack:ok')
 }
@@ -149,7 +170,7 @@ export async function doRedirectTo(
   // wx.hideHomeButton does not carry over — this entry's nav bar is fresh.
   const newEntry = makePageEntry(miniApp, opened, query, ref.current.shell.stack.length <= 1)
   const { next, effects } = reduceRedirectTo(ref.current.shell, newEntry)
-  setState(prev => ({ ...prev, shell: next }))
+  commitShell(ref, setState, next)
   applySideEffects(effects)
   ack(true, 'redirectTo:ok')
 }
@@ -171,7 +192,7 @@ export async function doReLaunch(
   // reLaunch clears the whole stack, so its target is always the new bottom.
   const newEntry = makePageEntry(miniApp, opened, query, true)
   const { next, effects } = reduceReLaunch(ref.current.shell, newEntry)
-  setState(prev => ({ ...prev, shell: next }))
+  commitShell(ref, setState, next)
   applySideEffects(effects)
   ack(true, 'reLaunch:ok')
 }
@@ -205,9 +226,21 @@ export async function doSwitchTab(
   }
 
   const { next, effects } = reduceSwitchTab(ref.current.shell, pagePath, freshEntry)
-  setState(prev => ({ ...prev, shell: next }))
+  commitShell(ref, setState, next)
   applySideEffects(effects)
   ack(true, 'switchTab:ok')
+}
+
+/**
+ * Whether the shell already sits on the terminal state "back to home" produces:
+ * the home page alone in the stack, and — when it is a tabBar page — with its
+ * own tab active.
+ */
+function isAtHome(shell: ShellState, home: string): boolean {
+  if (shell.stack.length !== 1) return false
+  const only = shell.stack[0]
+  if (!only || normalizePath(only.pagePath) !== home) return false
+  return !only.isTab || shell.currentTabPath === home
 }
 
 /**
@@ -234,6 +267,14 @@ export async function doNavigateHome(
     ack(false, 'navigateHome:fail unknown home page')
     return
   }
+  // Already at the terminal state this action aims for. A second press queued
+  // while the first was still opening its page arrives here: re-running any
+  // branch would reopen and tear down the very page just landed on, or re-show
+  // a page that never left the screen.
+  if (isAtHome(ref.current.shell, normalizePath(action.url))) {
+    ack(true, `${action.name}:ok`)
+    return
+  }
   const forwarded: NavActionPayload = { ...payload, name: action.name, params: { url: action.url } }
   if (action.name === 'redirectTo') {
     await doRedirectTo(miniApp, ref, setState, applySideEffects, forwarded, ack)
@@ -252,7 +293,7 @@ export async function doNavigateHome(
     freshEntry = makePageEntry(miniApp, { ...opened, isTab: true }, {}, true)
   }
   const { next, effects } = reduceNavigateHomeToTab(ref.current.shell, homeTabPath, freshEntry)
-  setState(prev => ({ ...prev, shell: next }))
+  commitShell(ref, setState, next)
   applySideEffects(effects)
   ack(true, 'switchTab:ok')
 }

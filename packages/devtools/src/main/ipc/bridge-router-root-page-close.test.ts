@@ -1,17 +1,13 @@
 /**
- * `AppManifest.entryPagePath` must name the APP's own home page, never the
- * page a particular spawn happened to request.
+ * The launch page is a page like any other once navigation replaces it.
+ * `reLaunch` / `redirectTo` / "back to home" drop it from the shell's stack and
+ * ask main to tear it down, so a blanket refusal of `PAGE_CLOSE` on the root
+ * page keeps a PageSession (and its render guest) in the router's ledger for
+ * the rest of the session's life.
  *
- * The dimina compiler's `app-config.json` carries `app.pages` but frequently
- * omits `app.entryPagePath`. When the manifest falls back to the spawn's
- * requested page in that case, launching straight into an inner page makes
- * "current page === home page" trivially true, so anything keyed on the entry
- * page (the navigation bar's back-to-home rule) is dead for that session.
- *
- * The contract: whenever the compiled page list is present, the entry page is
- * `app.entryPagePath` if declared and `pages[0]` otherwise. Only a fallback
- * manifest — built when app-config.json is unreachable and there is no
- * compiled page list at all — may name the requested page.
+ * The refusal is only right when the root page is the session's LAST page —
+ * there `DISPOSE` owns the teardown, and closing the page alone would leave a
+ * session with no pages at all.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -22,6 +18,7 @@ const stubs = vi.hoisted(() => {
   type EventBag = Record<string, Set<AnyFn>>
 
   const invokeHandlers = new Map<string, AnyFn>()
+  const eventHandlers = new Map<string, AnyFn>()
 
   function makeEmitter() {
     const listeners: EventBag = {}
@@ -34,6 +31,7 @@ const stubs = vi.hoisted(() => {
       },
       off(event: string, fn: AnyFn) { listeners[event]?.delete(fn); return api },
       removeListener(event: string, fn: AnyFn) { listeners[event]?.delete(fn); return api },
+      listenerCount(event: string) { return listeners[event]?.size ?? 0 },
       emit(event: string, ...a: unknown[]) { for (const fn of [...(listeners[event] ?? [])]) fn(...a) },
     }
     return api
@@ -69,18 +67,19 @@ const stubs = vi.hoisted(() => {
 
   function reset() {
     invokeHandlers.clear()
+    eventHandlers.clear()
     nextWcId = 9000
   }
 
-  return { invokeHandlers, makeWebContents, makeBrowserWindow, reset }
+  return { invokeHandlers, eventHandlers, makeWebContents, makeBrowserWindow, reset }
 })
 
 vi.mock('electron', () => {
   type AnyFn = (...args: unknown[]) => unknown
 
   const ipcMain = {
-    on: vi.fn(),
-    removeListener: vi.fn(),
+    on: vi.fn((channel: string, fn: AnyFn) => { stubs.eventHandlers.set(channel, fn) }),
+    removeListener: vi.fn((channel: string) => { stubs.eventHandlers.delete(channel) }),
     handle: vi.fn((channel: string, fn: AnyFn) => { stubs.invokeHandlers.set(channel, fn) }),
     removeHandler: vi.fn((channel: string) => { stubs.invokeHandlers.delete(channel) }),
   }
@@ -116,16 +115,16 @@ vi.mock('@dimina-kit/electron-runtime/main/service-host-window', () => ({
 }))
 
 import { BRIDGE_CHANNELS as C } from '../../shared/bridge-channels.js'
-import type { PageWindowConfig, SpawnRequest, SpawnResult, TabBarConfig } from '../../shared/bridge-channels.js'
+import type { PageOpenResult, SpawnRequest, SpawnResult } from '../../shared/bridge-channels.js'
+import type { BridgeRouterHandle } from './bridge-router.js'
 import type { WorkbenchContext } from '../services/workbench-context.js'
 
 type AnyFn = (...args: unknown[]) => unknown
 type MockWc = ReturnType<typeof stubs.makeWebContents>
 
 const APP_ID = 'test-app'
-const ENTRY_PAGE = 'pages/index/index'
+const ROOT_PAGE = 'pages/index/index'
 const SECOND_PAGE = 'pages/second/second'
-const INNER_PAGE = 'pages/detail/detail'
 
 let installBridgeRouter: typeof import('./bridge-router.js').installBridgeRouter
 let originalFetch: typeof globalThis.fetch
@@ -134,6 +133,7 @@ beforeEach(async () => {
   vi.resetModules()
   stubs.reset()
   originalFetch = globalThis.fetch
+  installFetchMock()
   ;({ installBridgeRouter } = await import('./bridge-router.js'))
 })
 
@@ -141,31 +141,14 @@ afterEach(() => {
   globalThis.fetch = originalFetch
 })
 
-interface AppConfigFixture {
-  entryPagePath?: string
-  pages?: string[]
-  tabBar?: TabBarConfig
-  window?: Partial<PageWindowConfig>
-}
-
-/** Serves `fixture` as app-config.json, or a 404 when it is null. */
-function installFetchMock(fixture: AppConfigFixture | null): void {
+/** Serves a compiled app-config listing both pages. */
+function installFetchMock(): void {
   globalThis.fetch = vi.fn((input: string | URL | Request) => {
     const href = typeof input === 'string' ? input
       : input instanceof URL ? input.href
       : (input as Request).url
     if (href.includes('app-config.json')) {
-      if (!fixture) {
-        return Promise.resolve({ ok: false, status: 404, json: async () => ({}), text: async () => '' } as unknown as Response)
-      }
-      const body = {
-        app: {
-          entryPagePath: fixture.entryPagePath,
-          pages: fixture.pages,
-          tabBar: fixture.tabBar,
-          window: fixture.window,
-        },
-      }
+      const body = { app: { entryPagePath: ROOT_PAGE, pages: [ROOT_PAGE, SECOND_PAGE] } }
       return Promise.resolve({
         ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body),
       } as unknown as Response)
@@ -174,7 +157,13 @@ function installFetchMock(fixture: AppConfigFixture | null): void {
   }) as unknown as typeof fetch
 }
 
-function makeCtx(): { ctx: WorkbenchContext; simulatorWc: MockWc } {
+interface Harness {
+  ctx: WorkbenchContext
+  bridge: BridgeRouterHandle
+  simulatorWc: MockWc
+}
+
+function makeHarness(): Harness {
   const simulatorWc = stubs.makeWebContents()
   const ctx = {
     registry: { add: (_fn: AnyFn) => {} },
@@ -183,7 +172,9 @@ function makeCtx(): { ctx: WorkbenchContext; simulatorWc: MockWc } {
     workspace: { getSession: () => undefined, getProjectPath: () => '/tmp/dimina-project', isClosing: () => false },
     connections: createConnectionRegistry(),
   } as unknown as WorkbenchContext
-  return { ctx, simulatorWc }
+  installBridgeRouter(ctx)
+  const bridge = (ctx as unknown as { bridge: BridgeRouterHandle }).bridge
+  return { ctx, bridge, simulatorWc }
 }
 
 async function spawnSession(simulatorWc: MockWc, pagePath: string): Promise<SpawnResult> {
@@ -193,72 +184,55 @@ async function spawnSession(simulatorWc: MockWc, pagePath: string): Promise<Spaw
   return (await (handle as AnyFn)({ sender: simulatorWc }, req)) as SpawnResult
 }
 
-describe('buildAppManifest — entryPagePath is the app home page, not the launch request', () => {
-  it('keeps the declared entryPagePath when the launch request is a different page', async () => {
-    installFetchMock({ entryPagePath: ENTRY_PAGE, pages: [ENTRY_PAGE, SECOND_PAGE, INNER_PAGE] })
-    const { ctx, simulatorWc } = makeCtx()
-    installBridgeRouter(ctx)
+async function openPage(
+  simulatorWc: MockWc,
+  appSessionId: string,
+  pagePath: string,
+): Promise<PageOpenResult> {
+  const handle = stubs.invokeHandlers.get(C.PAGE_OPEN)
+  if (!handle) throw new Error('PAGE_OPEN handler not registered')
+  return (await (handle as AnyFn)({ sender: simulatorWc }, { appSessionId, pagePath })) as PageOpenResult
+}
 
-    const result = await spawnSession(simulatorWc, INNER_PAGE)
+function closePage(simulatorWc: MockWc, bridgeId: string): void {
+  const handle = stubs.eventHandlers.get(C.PAGE_CLOSE)
+  if (!handle) throw new Error('PAGE_CLOSE handler not registered')
+  ;(handle as AnyFn)({ sender: simulatorWc }, { bridgeId })
+}
 
-    expect(result.manifest.entryPagePath).toBe(ENTRY_PAGE)
+function pageCount(bridge: BridgeRouterHandle): number {
+  return bridge.census!().pageSessions
+}
+
+/** Whether the router still tracks a page under this bridgeId. */
+function isTracked(bridge: BridgeRouterHandle, bridgeId: string): boolean {
+  return bridge.getServiceWcForBridge(bridgeId) !== null
+}
+
+describe('PAGE_CLOSE — the launch page after navigation replaced it', () => {
+  it('tears down the retired launch page while the rest of the session lives on', async () => {
+    const { bridge, simulatorWc } = makeHarness()
+    const spawned = await spawnSession(simulatorWc, ROOT_PAGE)
+    const second = await openPage(simulatorWc, spawned.appSessionId, SECOND_PAGE)
+    expect(pageCount(bridge)).toBe(2)
+
+    closePage(simulatorWc, spawned.bridgeId)
+
+    expect(isTracked(bridge, spawned.bridgeId)).toBe(false)
+    expect(isTracked(bridge, second.bridgeId)).toBe(true)
+    expect(pageCount(bridge)).toBe(1)
+    expect(bridge.census!().appSessions).toBe(1)
   })
 
-  it('uses pages[0] when app-config.json declares a page list but no entryPagePath', async () => {
-    // The compiler's app-config.json commonly carries only pages/window/tabBar.
-    installFetchMock({ pages: [ENTRY_PAGE, SECOND_PAGE, INNER_PAGE] })
-    const { ctx, simulatorWc } = makeCtx()
-    installBridgeRouter(ctx)
+  it('keeps the launch page when it is the session\'s only page', async () => {
+    const { bridge, simulatorWc } = makeHarness()
+    const spawned = await spawnSession(simulatorWc, ROOT_PAGE)
+    expect(pageCount(bridge)).toBe(1)
 
-    const result = await spawnSession(simulatorWc, INNER_PAGE)
+    closePage(simulatorWc, spawned.bridgeId)
 
-    expect(result.manifest.entryPagePath).toBe(ENTRY_PAGE)
-    expect(result.manifest.entryPagePath).not.toBe(INNER_PAGE)
-  })
-
-  it('normalizes a pages[0] that carries a leading slash', async () => {
-    installFetchMock({ pages: [`/${ENTRY_PAGE}`, SECOND_PAGE] })
-    const { ctx, simulatorWc } = makeCtx()
-    installBridgeRouter(ctx)
-
-    const result = await spawnSession(simulatorWc, SECOND_PAGE)
-
-    expect(result.manifest.entryPagePath).toBe(ENTRY_PAGE)
-  })
-
-  it('reports the same entry page no matter which page the session launched into', async () => {
-    installFetchMock({ pages: [ENTRY_PAGE, SECOND_PAGE, INNER_PAGE] })
-    const { ctx, simulatorWc } = makeCtx()
-    installBridgeRouter(ctx)
-
-    const fromEntry = await spawnSession(simulatorWc, ENTRY_PAGE)
-    const fromInner = await spawnSession(simulatorWc, INNER_PAGE)
-    const fromSecond = await spawnSession(simulatorWc, SECOND_PAGE)
-
-    expect(fromInner.manifest.entryPagePath).toBe(fromEntry.manifest.entryPagePath)
-    expect(fromSecond.manifest.entryPagePath).toBe(fromEntry.manifest.entryPagePath)
-  })
-
-  it('falls back to pages[0] when the declared entryPagePath is not one of the pages', async () => {
-    // A page deleted without updating app.json leaves entryPagePath pointing at
-    // nothing the session can ever load.
-    installFetchMock({ entryPagePath: 'pages/gone/gone', pages: [ENTRY_PAGE, INNER_PAGE] })
-    const { ctx, simulatorWc } = makeCtx()
-    installBridgeRouter(ctx)
-
-    const result = await spawnSession(simulatorWc, ENTRY_PAGE)
-
-    expect(result.manifest.entryPagePath).toBe(ENTRY_PAGE)
-  })
-
-  it('names the requested page only for a fallback manifest with no compiled page list', async () => {
-    installFetchMock(null)
-    const { ctx, simulatorWc } = makeCtx()
-    installBridgeRouter(ctx)
-
-    const result = await spawnSession(simulatorWc, INNER_PAGE)
-
-    expect(result.manifest.source).toBe('fallback')
-    expect(result.manifest.entryPagePath).toBe(INNER_PAGE)
+    expect(isTracked(bridge, spawned.bridgeId)).toBe(true)
+    expect(pageCount(bridge)).toBe(1)
+    expect(bridge.census!().appSessions).toBe(1)
   })
 })

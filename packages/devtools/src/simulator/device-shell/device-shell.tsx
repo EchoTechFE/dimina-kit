@@ -32,6 +32,8 @@ import {
 } from './page-stack-controller'
 import { shouldShowHomeButton } from './navigate-home'
 import {
+  commitShell,
+  commitTabBar,
   doNavigateBack,
   doNavigateHome,
   doNavigateTo,
@@ -100,10 +102,13 @@ export function DeviceShell(
     tabBar: makeInitialTabBarState(tabBarConfig),
   }))
 
-  // Ref mirror of state so async controllers can read current value without
-  // closing over a stale snapshot.
+  // Authoritative state for the bridge-event handlers and the async routing
+  // controllers. Written SYNCHRONOUSLY by commitShell/commitTabBar, never by a
+  // passive effect: bridge events arrive outside React's batching, so an
+  // effect-synced mirror lags one commit behind and would drag this ref back to
+  // the pre-event snapshot — the next event then reduces from stale state and
+  // overwrites the one before it. React state is only the render mirror.
   const stateRef = useRef<DeviceShellState>({ shell, tabBar })
-  useEffect(() => { stateRef.current = { shell, tabBar } }, [shell, tabBar])
 
   const applySideEffects = useCallback((effects: SideEffect[]) => {
     for (const effect of effects) {
@@ -120,12 +125,13 @@ export function DeviceShell(
     const listener = (
       payload: { bridgeId: string; name: string; params: Record<string, unknown> },
     ) => {
-      setState(prev => ({
-        ...prev,
-        shell: mutatePageNavBar(prev.shell, payload.bridgeId, navBar =>
+      commitShell(
+        stateRef,
+        setState,
+        mutatePageNavBar(stateRef.current.shell, payload.bridgeId, navBar =>
           reduceNavBar(navBar, payload.name, payload.params),
         ),
-      }))
+      )
     }
     return miniApp.onSimulatorEvent(E.NAV_BAR, listener)
   }, [miniApp])
@@ -138,7 +144,7 @@ export function DeviceShell(
         name: payload.name,
         params: payload.params,
       })
-      setState(prev => ({ ...prev, tabBar: next.state }))
+      commitTabBar(stateRef, setState, next.state)
       miniApp.notifyNavCallback({
         ok: next.ok,
         errMsg: next.errMsg,
@@ -157,6 +163,13 @@ export function DeviceShell(
   // single gate every entry point (service NAV_ACTION and the nav-bar buttons)
   // goes through. A failing action never blocks the next one.
   const navQueueRef = useRef<Promise<void>>(Promise.resolve())
+  // Monotonic stamp that retires the whole queue when this shell goes away. A
+  // queued action can still be waiting on its PAGE_OPEN when a soft reload
+  // swaps in a new shell and disposes this session; resuming it afterwards
+  // would commit into an unmounted tree and reduce from a stack nobody owns.
+  // Each action captures the stamp and re-checks it after every await.
+  const navEpochRef = useRef(0)
+  useEffect(() => () => { navEpochRef.current += 1 }, [])
 
   const runNavAction = useCallback(
     async (payload: ShellNavPayload) => {
@@ -193,7 +206,15 @@ export function DeviceShell(
 
   const performNavAction = useCallback(
     (payload: ShellNavPayload): Promise<void> => {
-      const queued = navQueueRef.current.then(() => runNavAction(payload))
+      const epoch = navEpochRef.current
+      const queued = navQueueRef.current.then(() => {
+        // Retired while this one waited its turn — the shell it would act on is
+        // gone. An action already past this point when the shell went away
+        // still finishes, but every outbound call it makes is dropped by
+        // SimulatorMiniApp's own cleared-session guards.
+        if (navEpochRef.current !== epoch) return
+        return runNavAction(payload)
+      })
       navQueueRef.current = queued.catch(() => {})
       return queued
     },
@@ -256,6 +277,21 @@ export function DeviceShell(
     dispatchSimulatorCapsuleMore(miniApp.appId, top.navBar.title, top.pagePath)
   }, [miniApp.appId, top.navBar.title, top.pagePath])
 
+  // Report the full ordered stack (bottom→top) on every stack change so
+  // automation's App.getPageStack can return a multi-page stack — main only
+  // tracks the active bridgeId on its own.
+  //
+  // Declared BEFORE the active-page report on purpose, and the two must stay in
+  // this order: ACTIVE_PAGE is what releases automation's wait-for-navigation,
+  // and main drops its stored stack the moment a page closes, so an active-page
+  // signal arriving first lets App.getPageStack answer from its single-page
+  // fallback while the real stack is still in flight. A top change always comes
+  // with a new stack array (`top` is derived from it), so both effects run in
+  // the same commit and React fires them in declaration order.
+  useEffect(() => {
+    miniApp.notifyPageStack(shell.stack.map((e) => ({ pagePath: e.pagePath, query: e.query })))
+  }, [miniApp, shell.stack])
+
   // Tell main which page is the visible top-of-stack so main-side panels
   // (WXML/element-inspect) and automation can target the active render
   // webContents — main has no z-order concept of its own. Fires on every
@@ -263,13 +299,6 @@ export function DeviceShell(
   useEffect(() => {
     miniApp.notifyActivePage(top.bridgeId)
   }, [miniApp, top.bridgeId])
-
-  // Report the full ordered stack (bottom→top) on every stack change so
-  // automation's App.getPageStack can return a multi-page stack — main only
-  // tracks the active bridgeId on its own.
-  useEffect(() => {
-    miniApp.notifyPageStack(shell.stack.map((e) => ({ pagePath: e.pagePath, query: e.query })))
-  }, [miniApp, shell.stack])
 
   return (
     <main className={`device-shell-root${embedded ? ' device-shell-root--embedded' : ''}`}>

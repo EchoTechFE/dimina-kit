@@ -101,6 +101,47 @@ function snapshotCurrentTabStack(state: ShellState): Record<string, PageEntry[]>
   return { ...state.tabStacks, [state.currentTabPath]: [...state.stack] }
 }
 
+/** Every page a state keeps alive: the visible stack plus every tab substack. */
+export function collectAlivePages(state: ShellState): Set<string> {
+  const alive = new Set<string>()
+  for (const entry of state.stack) alive.add(entry.bridgeId)
+  for (const entries of Object.values(state.tabStacks)) {
+    for (const entry of entries) alive.add(entry.bridgeId)
+  }
+  return alive
+}
+
+/**
+ * Tear-down effects for every page a transition drops from state. A page that
+ * survives in the visible stack or in any tab substack is untouched; one that
+ * appears in neither no longer exists anywhere, and dropping it without a
+ * closePage would strand its render host in main's page ledger.
+ */
+function teardownDropped(before: ShellState, after: ShellState): SideEffect[] {
+  const alive = collectAlivePages(after)
+  const effects: SideEffect[] = []
+  for (const bridgeId of collectAlivePages(before)) {
+    if (alive.has(bridgeId)) continue
+    effects.push({ kind: 'lifecycle', bridgeId, event: 'pageUnload' })
+    effects.push({ kind: 'closePage', bridgeId })
+  }
+  return effects
+}
+
+/** Mirror a redirect into the tab caches: normally the active tab tracks the
+ *  new stack, but a tab that just lost its root page drops out entirely. */
+function tabStacksAfterRedirect(
+  state: ShellState,
+  newStack: PageEntry[],
+  losesTabRoot: boolean,
+): Record<string, PageEntry[]> {
+  if (!state.currentTabPath) return state.tabStacks
+  if (!losesTabRoot) return { ...state.tabStacks, [state.currentTabPath]: newStack }
+  const remaining = { ...state.tabStacks }
+  delete remaining[state.currentTabPath]
+  return remaining
+}
+
 // ── Pure operations ─────────────────────────────────────────────────────
 
 export function reduceNavigateTo(
@@ -168,12 +209,17 @@ export function reduceRedirectTo(
 ): ReduceResult {
   const prevTop = state.stack[state.stack.length - 1]
   const newStack = [...state.stack.slice(0, state.stack.length - 1), newEntry]
+  // Redirecting off the bottom of a tab's substack destroys that tab's root
+  // page, so the substack must not go on pointing at it: a cache whose [0] is a
+  // non-tab page gets restored later as if it were the tab itself, and "back to
+  // home" lands on it instead of the home page. The tab is left with no cache —
+  // switching to it opens it fresh, which is what its destroyed root requires.
+  const losesTabRoot = !!state.currentTabPath && state.stack.length <= 1 && !newEntry.isTab
   const next: ShellState = {
     ...state,
     stack: newStack,
-    tabStacks: state.currentTabPath
-      ? { ...state.tabStacks, [state.currentTabPath]: newStack }
-      : state.tabStacks,
+    tabStacks: tabStacksAfterRedirect(state, newStack, losesTabRoot),
+    currentTabPath: losesTabRoot ? null : state.currentTabPath,
   }
   const effects: SideEffect[] = []
   if (prevTop) {
@@ -224,7 +270,9 @@ export function reduceReLaunch(
  *      visible stack. Otherwise build a fresh single-page stack with the
  *      newly-opened tab entry passed in by the caller.
  *   3. Lifecycle: pageHide prev top, pageShow restored top.
- *      No closePage is ever issued — every substack survives.
+ *   4. Every substack survives, so a page held by any tab is never torn down.
+ *      A page held by none — the visible page of a session with no active tab —
+ *      belongs to nothing the switch preserves and gets pageUnload + closePage.
  */
 export function reduceSwitchTab(
   state: ShellState,
@@ -264,6 +312,12 @@ export function reduceSwitchTab(
   if (prevTop && prevTop.bridgeId !== newTop.bridgeId) {
     effects.push({ kind: 'lifecycle', bridgeId: prevTop.bridgeId, event: 'pageHide' })
   }
+  // A page the switch leaves in no stack at all is gone for good — the visible
+  // page of a session with no active tab (a deep-linked non-tab launch page, or
+  // one a redirect took out of the tab caches) belongs to nothing that switchTab
+  // preserves. Pages still held by a tab substack survive untouched: keeping
+  // them is the per-tab cache semantics this shell mirrors from iOS/Harmony.
+  effects.push(...teardownDropped(state, next))
   if (!freshlyOpenedEntry) {
     // Restored from cache — emit pageShow. (Newly-opened pages get their
     // own lifecycle from the renderer init path.)

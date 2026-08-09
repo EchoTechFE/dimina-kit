@@ -6,6 +6,7 @@
  */
 import type { TabBarConfig } from '../../shared/bridge-channels'
 import {
+  collectAlivePages,
   normalizePath,
   type PageEntry,
   type ReduceResult,
@@ -55,16 +56,6 @@ export function resolveHomeNavAction(
   const isTab = !!tabBar?.list.some(item => normalizePath(item.pagePath) === home)
   const name = isTab ? 'switchTab' : stackDepth <= 1 ? 'redirectTo' : 'reLaunch'
   return { name, url: `/${home}` }
-}
-
-/** Every page currently alive: the visible stack plus every tab substack. */
-function collectAlivePages(state: ShellState): Set<string> {
-  const alive = new Set<string>()
-  for (const entry of state.stack) alive.add(entry.bridgeId)
-  for (const entries of Object.values(state.tabStacks)) {
-    for (const entry of entries) alive.add(entry.bridgeId)
-  }
-  return alive
 }
 
 /**

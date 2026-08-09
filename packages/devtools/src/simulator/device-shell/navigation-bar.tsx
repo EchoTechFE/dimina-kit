@@ -145,7 +145,7 @@ export function NavigationBar({
             </div>
           )}
           <div
-            className={`nav-bar__title nav-bar__title--${titleAlign}`}
+            className={`nav-bar__title nav-bar__title--${titleAlign}${showBack && showHome ? ' nav-bar__title--leading-pair' : ''}`}
             style={{ color: state.textStyle === 'white' ? '#ffffff' : '#000000' }}
           >
             {state.loading && (

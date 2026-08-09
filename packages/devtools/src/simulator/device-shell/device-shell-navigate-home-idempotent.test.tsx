@@ -1,0 +1,71 @@
+/**
+ * `navigateHome` is a terminal-state action: once the stack holds nothing but
+ * the app's home page, running it again must be a no-op. Re-opening the page,
+ * tearing it down and rebuilding it, or replaying its `pageShow` all hand the
+ * user (and the service layer) a lifecycle that never happened.
+ */
+import { act, fireEvent, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { SIMULATOR_EVENTS as E } from '../../shared/bridge-channels'
+import {
+  APP_SESSION_ID,
+  bootShell,
+  clearBrowserGlobals,
+  homeButton,
+  HOME_PAGE,
+  INNER_PAGE,
+  installBrowserGlobals,
+  ROOT_BRIDGE_ID,
+  visiblePagePath,
+  type HostRecorder,
+} from './__test-stubs__/device-shell-harness'
+
+function dispatchNavigateHome(recorder: HostRecorder): void {
+  recorder.fire(E.NAV_ACTION, {
+    appSessionId: APP_SESSION_ID,
+    bridgeId: ROOT_BRIDGE_ID,
+    name: 'navigateHome',
+    params: {},
+    callbacks: {},
+  })
+}
+
+beforeEach(() => {
+  installBrowserGlobals()
+})
+
+afterEach(() => {
+  clearBrowserGlobals()
+})
+
+describe('DeviceShell — navigateHome runs again on the home page', () => {
+  it('keeps the home page it already reached, opening and closing nothing', async () => {
+    const { container, recorder } = await bootShell(INNER_PAGE)
+
+    await act(async () => {
+      fireEvent.click(homeButton(container)!)
+    })
+    await waitFor(() => {
+      expect(visiblePagePath(container)).toBe(HOME_PAGE)
+    })
+
+    // The trip to home tears down the launch page and says so over the bridge.
+    expect(recorder.lifecycles).toEqual([
+      { bridgeId: ROOT_BRIDGE_ID, event: 'pageUnload' },
+    ])
+    const openedBefore = recorder.openedPages.length
+    const closedBefore = recorder.closedPages.length
+    const lifecycleBefore = recorder.lifecycles.length
+
+    await act(async () => {
+      dispatchNavigateHome(recorder)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(recorder.openedPages.length).toBe(openedBefore)
+    expect(recorder.closedPages.length).toBe(closedBefore)
+    expect(visiblePagePath(container)).toBe(HOME_PAGE)
+    expect(recorder.lifecycles.slice(lifecycleBefore)).toEqual([])
+  })
+})
