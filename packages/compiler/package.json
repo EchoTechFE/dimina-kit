@@ -66,7 +66,7 @@
     "buffer": "^6.0.3",
     "cheerio": "^1.2.0",
     "cssnano": "^8.0.4",
-    "esbuild": "^0.28.1",
+    "esbuild": "^0.28.2",
     "estree-walker": "^3.0.3",
     "events": "^3.3.0",
     "htmlparser2": "^12.0.0",
@@ -77,7 +77,7 @@
     "oxc-walker": "^1.1.1",
     "path-browserify": "^1.0.1",
     "postcss": "^8.5.26",
-    "postcss-selector-parser": "^7.1.4",
+    "postcss-selector-parser": "^7.1.5",
     "sass": "^1.102.0",
     "source-map-js": "^1.2.1",
     "stream-browserify": "^3.0.0",
@@ -96,6 +96,6 @@
     }
   },
   "devDependencies": {
-    "esbuild-wasm": "^0.28.1"
+    "esbuild-wasm": "^0.28.2"
   }
 }
