@@ -4,7 +4,6 @@ import type {
   NavActionPayload,
   TabActionPayload,
 } from '../../shared/bridge-channels'
-import type { SimulatorMiniApp } from '../simulator-mini-app'
 import type { DeviceShellProps } from './device-shell-types'
 import { attachApiCallForwarding } from '../api-call-forwarding'
 import { NavigationBar } from './navigation-bar'
@@ -19,7 +18,6 @@ import {
 import {
   applyTabAction,
   makeInitialTabBarState,
-  type TabBarState,
 } from './tab-bar-state'
 import {
   enumerateMounted,
@@ -28,17 +26,23 @@ import {
   navBarFromConfig,
   normalizePath,
   pageBackgroundColor,
-  parseUrl,
   reduceNavBar,
-  reduceNavigateBack,
-  reduceNavigateTo,
-  reduceReLaunch,
-  reduceRedirectTo,
-  reduceSwitchTab,
   type PageEntry,
-  type ShellState,
   type SideEffect,
 } from './page-stack-controller'
+import { shouldShowHomeButton } from './navigate-home'
+import {
+  commitShell,
+  commitTabBar,
+  doNavigateBack,
+  doNavigateHome,
+  doNavigateTo,
+  doReLaunch,
+  doRedirectTo,
+  doSwitchTab,
+  type DeviceShellState,
+  type ShellNavPayload,
+} from './device-shell-routing'
 import './device-shell.css'
 
 export type { DeviceShellProps } from './device-shell-types'
@@ -46,11 +50,6 @@ export type { DeviceShellProps } from './device-shell-types'
 const STATUS_BAR_HEIGHT_IOS = 44
 const STATUS_BAR_HEIGHT_ANDROID = 24
 const NAV_BAR_HEIGHT = 44
-
-interface DeviceShellState {
-  shell: ShellState
-  tabBar: TabBarState
-}
 
 export function DeviceShell(
   { miniApp, bridgeId, platform = 'ios', active = true }: DeviceShellProps,
@@ -72,26 +71,44 @@ export function DeviceShell(
   const preload = useMemo(() => miniApp.getRenderPreloadUrl(), [miniApp])
   const tabBarConfig = useMemo(() => miniApp.getTabBarConfig(), [miniApp])
 
-  const initialEntry = useMemo<PageEntry>(() => ({
-    bridgeId,
-    pagePath: normalizePath(miniApp.pagePath),
-    query: { ...miniApp.query },
-    isTab: !!miniApp.getTabBarConfig()?.list.some(
-      item => normalizePath(item.pagePath) === normalizePath(miniApp.pagePath),
-    ),
-    windowConfig: miniApp.rootWindowConfig ?? {},
-    navBar: navBarFromConfig(miniApp.rootWindowConfig ?? {}, miniApp.appId),
-  }), [miniApp, bridgeId])
+  const initialEntry = useMemo<PageEntry>(() => {
+    const pagePath = normalizePath(miniApp.pagePath)
+    const windowConfig = miniApp.rootWindowConfig ?? {}
+    const isTab = !!miniApp.getTabBarConfig()?.list.some(
+      item => normalizePath(item.pagePath) === pagePath,
+    )
+    return {
+      bridgeId,
+      pagePath,
+      query: { ...miniApp.query },
+      isTab,
+      windowConfig,
+      // The launch page is the stack bottom, so a non-home, non-tab launch
+      // page gets the home button by the automatic rule.
+      navBar: navBarFromConfig(windowConfig, miniApp.appId, {
+        homeButtonVisible: shouldShowHomeButton({
+          pagePath,
+          homePagePath: miniApp.getHomePagePath(),
+          isTab,
+          isStackBottom: true,
+          forcedByConfig: windowConfig.homeButton === true,
+        }),
+      }),
+    }
+  }, [miniApp, bridgeId])
 
   const [{ shell, tabBar }, setState] = useState<DeviceShellState>(() => ({
     shell: makeInitialShellState(initialEntry),
     tabBar: makeInitialTabBarState(tabBarConfig),
   }))
 
-  // Ref mirror of state so async controllers can read current value without
-  // closing over a stale snapshot.
+  // Authoritative state for the bridge-event handlers and the async routing
+  // controllers. Written SYNCHRONOUSLY by commitShell/commitTabBar, never by a
+  // passive effect: bridge events arrive outside React's batching, so an
+  // effect-synced mirror lags one commit behind and would drag this ref back to
+  // the pre-event snapshot — the next event then reduces from stale state and
+  // overwrites the one before it. React state is only the render mirror.
   const stateRef = useRef<DeviceShellState>({ shell, tabBar })
-  useEffect(() => { stateRef.current = { shell, tabBar } }, [shell, tabBar])
 
   const applySideEffects = useCallback((effects: SideEffect[]) => {
     for (const effect of effects) {
@@ -108,12 +125,13 @@ export function DeviceShell(
     const listener = (
       payload: { bridgeId: string; name: string; params: Record<string, unknown> },
     ) => {
-      setState(prev => ({
-        ...prev,
-        shell: mutatePageNavBar(prev.shell, payload.bridgeId, navBar =>
+      commitShell(
+        stateRef,
+        setState,
+        mutatePageNavBar(stateRef.current.shell, payload.bridgeId, navBar =>
           reduceNavBar(navBar, payload.name, payload.params),
         ),
-      }))
+      )
     }
     return miniApp.onSimulatorEvent(E.NAV_BAR, listener)
   }, [miniApp])
@@ -126,7 +144,7 @@ export function DeviceShell(
         name: payload.name,
         params: payload.params,
       })
-      setState(prev => ({ ...prev, tabBar: next.state }))
+      commitTabBar(stateRef, setState, next.state)
       miniApp.notifyNavCallback({
         ok: next.ok,
         errMsg: next.errMsg,
@@ -136,9 +154,25 @@ export function DeviceShell(
     return miniApp.onSessionEvent(E.TAB_ACTION, listener)
   }, [miniApp])
 
-  // ── Routing controller (navigateTo / Back / redirectTo / reLaunch / switchTab) ─
-  const performNavAction = useCallback(
-    async (payload: NavActionPayload) => {
+  // ── Routing controller (navigateTo / Back / redirectTo / reLaunch / switchTab / Home) ─
+  // Every routing operation opens its page asynchronously and only then reads
+  // `stateRef` to compute the next stack, so two overlapping actions would both
+  // decide from the same pre-action snapshot: the loser's freshly-opened page
+  // survives in neither the visible stack nor any tab substack and is never
+  // closed. Actions therefore run one at a time — a tail-chained promise is the
+  // single gate every entry point (service NAV_ACTION and the nav-bar buttons)
+  // goes through. A failing action never blocks the next one.
+  const navQueueRef = useRef<Promise<void>>(Promise.resolve())
+  // Monotonic stamp that retires the whole queue when this shell goes away. A
+  // queued action can still be waiting on its PAGE_OPEN when a soft reload
+  // swaps in a new shell and disposes this session; resuming it afterwards
+  // would commit into an unmounted tree and reduce from a stack nobody owns.
+  // Each action captures the stamp and re-checks it after every await.
+  const navEpochRef = useRef(0)
+  useEffect(() => () => { navEpochRef.current += 1 }, [])
+
+  const runNavAction = useCallback(
+    async (payload: ShellNavPayload) => {
       const ack = (ok: boolean, errMsg: string): void =>
         miniApp.notifyNavCallback({ ok, errMsg, callbacks: payload.callbacks })
 
@@ -159,12 +193,32 @@ export function DeviceShell(
           case 'switchTab':
             await doSwitchTab(miniApp, stateRef, setState, applySideEffects, payload, ack)
             break
+          case 'navigateHome':
+            await doNavigateHome(miniApp, stateRef, setState, applySideEffects, payload, ack)
+            break
         }
       } catch (err) {
         ack(false, `${payload.name}:fail ${err instanceof Error ? err.message : String(err)}`)
       }
     },
     [miniApp, applySideEffects],
+  )
+
+  const performNavAction = useCallback(
+    (payload: ShellNavPayload): Promise<void> => {
+      const epoch = navEpochRef.current
+      const queued = navQueueRef.current.then(() => {
+        // Retired while this one waited its turn — the shell it would act on is
+        // gone. An action already past this point when the shell went away
+        // still finishes, but every outbound call it makes is dropped by
+        // SimulatorMiniApp's own cleared-session guards.
+        if (navEpochRef.current !== epoch) return
+        return runNavAction(payload)
+      })
+      navQueueRef.current = queued.catch(() => {})
+      return queued
+    },
+    [runNavAction],
   )
 
   useEffect(() => {
@@ -190,6 +244,20 @@ export function DeviceShell(
     })
   }, [miniApp, performNavAction])
 
+  // The home button only dispatches; `navigateHome` (device-shell-routing) is
+  // the single authority that picks the routing verb, mirroring each native
+  // platform's navigateHome primitive.
+  const handleHome = useCallback(() => {
+    const stack = stateRef.current.shell.stack
+    void performNavAction({
+      appSessionId: miniApp.appSessionId ?? '',
+      bridgeId: stack[stack.length - 1].bridgeId,
+      name: 'navigateHome',
+      params: {},
+      callbacks: {},
+    })
+  }, [miniApp, performNavAction])
+
   const handleTabClick = useCallback((pagePath: string) => {
     const sh = stateRef.current.shell
     if (pagePath === sh.currentTabPath && sh.stack.length === 1) return
@@ -209,6 +277,21 @@ export function DeviceShell(
     dispatchSimulatorCapsuleMore(miniApp.appId, top.navBar.title, top.pagePath)
   }, [miniApp.appId, top.navBar.title, top.pagePath])
 
+  // Report the full ordered stack (bottom→top) on every stack change so
+  // automation's App.getPageStack can return a multi-page stack — main only
+  // tracks the active bridgeId on its own.
+  //
+  // Declared BEFORE the active-page report on purpose, and the two must stay in
+  // this order: ACTIVE_PAGE is what releases automation's wait-for-navigation,
+  // and main drops its stored stack the moment a page closes, so an active-page
+  // signal arriving first lets App.getPageStack answer from its single-page
+  // fallback while the real stack is still in flight. A top change always comes
+  // with a new stack array (`top` is derived from it), so both effects run in
+  // the same commit and React fires them in declaration order.
+  useEffect(() => {
+    miniApp.notifyPageStack(shell.stack.map((e) => ({ pagePath: e.pagePath, query: e.query })))
+  }, [miniApp, shell.stack])
+
   // Tell main which page is the visible top-of-stack so main-side panels
   // (WXML/element-inspect) and automation can target the active render
   // webContents — main has no z-order concept of its own. Fires on every
@@ -216,13 +299,6 @@ export function DeviceShell(
   useEffect(() => {
     miniApp.notifyActivePage(top.bridgeId)
   }, [miniApp, top.bridgeId])
-
-  // Report the full ordered stack (bottom→top) on every stack change so
-  // automation's App.getPageStack can return a multi-page stack — main only
-  // tracks the active bridgeId on its own.
-  useEffect(() => {
-    miniApp.notifyPageStack(shell.stack.map((e) => ({ pagePath: e.pagePath, query: e.query })))
-  }, [miniApp, shell.stack])
 
   return (
     <main className={`device-shell-root${embedded ? ' device-shell-root--embedded' : ''}`}>
@@ -261,6 +337,7 @@ export function DeviceShell(
           statusBarHeight={statusBarHeight}
           navBarHeight={NAV_BAR_HEIGHT}
           onBack={handleBack}
+          onHome={handleHome}
           onMore={handleMore}
         />
         <div className="device-shell__viewport">
@@ -316,161 +393,4 @@ export function DeviceShell(
       </section>
     </main>
   )
-}
-
-// ─── Routing operations ─────────────────────────────────────────────────────
-
-type StateRef = React.MutableRefObject<DeviceShellState>
-type SetState = React.Dispatch<React.SetStateAction<DeviceShellState>>
-type Ack = (ok: boolean, errMsg: string) => void
-
-async function doNavigateTo(
-  miniApp: SimulatorMiniApp,
-  ref: StateRef,
-  setState: SetState,
-  applySideEffects: (effects: SideEffect[]) => void,
-  payload: NavActionPayload,
-  ack: Ack,
-): Promise<void> {
-  const { pagePath, query } = parseUrl(payload.params.url)
-  if (!pagePath) {
-    ack(false, 'navigateTo:fail invalid url')
-    return
-  }
-  if (miniApp.getTabBarConfig()?.list.some(item => normalizePath(item.pagePath) === pagePath)) {
-    ack(false, 'navigateTo:fail can not navigateTo a tabbar page')
-    return
-  }
-
-  const opened = await miniApp.openPage(pagePath, query)
-  const newEntry: PageEntry = {
-    bridgeId: opened.bridgeId,
-    pagePath: opened.pagePath,
-    query,
-    isTab: opened.isTab,
-    windowConfig: opened.windowConfig,
-    navBar: navBarFromConfig(opened.windowConfig, miniApp.appId),
-  }
-  const { next, effects } = reduceNavigateTo(ref.current.shell, newEntry)
-  setState(prev => ({ ...prev, shell: next }))
-  applySideEffects(effects)
-  ack(true, 'navigateTo:ok')
-}
-
-function doNavigateBack(
-  ref: StateRef,
-  setState: SetState,
-  applySideEffects: (effects: SideEffect[]) => void,
-  payload: NavActionPayload,
-  ack: Ack,
-): void {
-  const rawDelta = payload.params.delta
-  const delta = Number.isFinite(Number(rawDelta)) ? Number(rawDelta) : 1
-  const result = reduceNavigateBack(ref.current.shell, delta)
-  if ('error' in result) {
-    ack(false, `navigateBack:fail ${result.error}`)
-    return
-  }
-  setState(prev => ({ ...prev, shell: result.next }))
-  applySideEffects(result.effects)
-  ack(true, 'navigateBack:ok')
-}
-
-async function doRedirectTo(
-  miniApp: SimulatorMiniApp,
-  ref: StateRef,
-  setState: SetState,
-  applySideEffects: (effects: SideEffect[]) => void,
-  payload: NavActionPayload,
-  ack: Ack,
-): Promise<void> {
-  const { pagePath, query } = parseUrl(payload.params.url)
-  if (!pagePath) {
-    ack(false, 'redirectTo:fail invalid url')
-    return
-  }
-  if (miniApp.getTabBarConfig()?.list.some(item => normalizePath(item.pagePath) === pagePath)) {
-    ack(false, 'redirectTo:fail can not redirectTo a tabbar page')
-    return
-  }
-  const opened = await miniApp.openPage(pagePath, query)
-  const newEntry: PageEntry = {
-    bridgeId: opened.bridgeId,
-    pagePath: opened.pagePath,
-    query,
-    isTab: opened.isTab,
-    windowConfig: opened.windowConfig,
-    navBar: navBarFromConfig(opened.windowConfig, miniApp.appId),
-  }
-  const { next, effects } = reduceRedirectTo(ref.current.shell, newEntry)
-  setState(prev => ({ ...prev, shell: next }))
-  applySideEffects(effects)
-  ack(true, 'redirectTo:ok')
-}
-
-async function doReLaunch(
-  miniApp: SimulatorMiniApp,
-  ref: StateRef,
-  setState: SetState,
-  applySideEffects: (effects: SideEffect[]) => void,
-  payload: NavActionPayload,
-  ack: Ack,
-): Promise<void> {
-  const { pagePath, query } = parseUrl(payload.params.url)
-  if (!pagePath) {
-    ack(false, 'reLaunch:fail invalid url')
-    return
-  }
-  const opened = await miniApp.openPage(pagePath, query)
-  const newEntry: PageEntry = {
-    bridgeId: opened.bridgeId,
-    pagePath: opened.pagePath,
-    query,
-    isTab: opened.isTab,
-    windowConfig: opened.windowConfig,
-    navBar: navBarFromConfig(opened.windowConfig, miniApp.appId),
-  }
-  const { next, effects } = reduceReLaunch(ref.current.shell, newEntry)
-  setState(prev => ({ ...prev, shell: next }))
-  applySideEffects(effects)
-  ack(true, 'reLaunch:ok')
-}
-
-async function doSwitchTab(
-  miniApp: SimulatorMiniApp,
-  ref: StateRef,
-  setState: SetState,
-  applySideEffects: (effects: SideEffect[]) => void,
-  payload: NavActionPayload,
-  ack: Ack,
-): Promise<void> {
-  const { pagePath } = parseUrl(payload.params.url)
-  if (!pagePath) {
-    ack(false, 'switchTab:fail invalid url')
-    return
-  }
-  if (!miniApp.getTabBarConfig()?.list.some(item => normalizePath(item.pagePath) === pagePath)) {
-    ack(false, `switchTab:fail not a tabBar page: ${pagePath}`)
-    return
-  }
-
-  const before = ref.current.shell
-  const cached = before.tabStacks[pagePath]
-  let freshEntry: PageEntry | null = null
-  if (!cached || cached.length === 0) {
-    const opened = await miniApp.openPage(pagePath, {})
-    freshEntry = {
-      bridgeId: opened.bridgeId,
-      pagePath: opened.pagePath,
-      query: {},
-      isTab: true,
-      windowConfig: opened.windowConfig,
-      navBar: navBarFromConfig(opened.windowConfig, miniApp.appId),
-    }
-  }
-
-  const { next, effects } = reduceSwitchTab(ref.current.shell, pagePath, freshEntry)
-  setState(prev => ({ ...prev, shell: next }))
-  applySideEffects(effects)
-  ack(true, 'switchTab:ok')
 }

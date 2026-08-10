@@ -61,7 +61,8 @@ const BACK_ARROW_PATH: Record<NavBarPlatform, string> = {
  *
  * - `style: custom` hides the bar entirely, capsule stays.
  * - Title default-center on iOS, default-left on Android (per official guidance).
- * - Back arrow appears when stackDepth > 1; otherwise home button when configured.
+ * - Back arrow appears when stackDepth > 1; the home button follows
+ *   `homeButtonVisible` independently and can coexist with the arrow.
  * - `textStyle` drives both title color AND status bar foreground (handled by parent).
  * - Color transitions follow `wx.setNavigationBarColor.animation` semantics.
  */
@@ -83,7 +84,10 @@ export function NavigationBar({
 
   const isCustom = state.style === 'custom'
   const showBack = stackDepth > 1
-  const showHome = !showBack && state.homeButtonVisible
+  // Back arrow and home button coexist: an opted-in (`homeButton: true`) inner
+  // page shows both, matching real WeChat. The visibility exclusions live in
+  // shouldShowHomeButton, not here.
+  const showHome = state.homeButtonVisible
   const titleAlign = platform === 'ios' ? 'center' : 'left'
   // Native back-arrow icon size differs per platform: iOS's arrow-back
   // SVG asset renders at its 24pt viewBox; Android's
@@ -131,15 +135,17 @@ export function NavigationBar({
                   aria-label="Home"
                   onClick={onHome}
                 >
-                  <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-                    <path d="M3 12l9-9 9 9M5 10v10h14V10" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                  {/* Material Icons `home` — the icon family dimina's back
+                      arrows already come from on every platform */}
+                  <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+                    <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z" fill="currentColor" />
                   </svg>
                 </button>
               )}
             </div>
           )}
           <div
-            className={`nav-bar__title nav-bar__title--${titleAlign}`}
+            className={`nav-bar__title nav-bar__title--${titleAlign}${showBack && showHome ? ' nav-bar__title--leading-pair' : ''}`}
             style={{ color: state.textStyle === 'white' ? '#ffffff' : '#000000' }}
           >
             {state.loading && (
