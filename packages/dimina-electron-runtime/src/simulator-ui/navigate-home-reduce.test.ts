@@ -18,14 +18,14 @@
  * suites assert the full effect sets rather than membership.
  */
 import { describe, expect, it } from 'vitest'
-import type { PageWindowConfig } from '../../shared/bridge-channels'
-import { makeDefaultNavigationBarState } from './navigation-bar'
+import type { PageWindowConfig } from '../shared/bridge-channels.js'
+import { makeDefaultNavigationBarState } from './navigation-bar.js'
 import {
   type PageEntry,
   type ShellState,
   type SideEffect,
-} from './page-stack-controller'
-import { reduceNavigateHomeToTab } from './navigate-home'
+} from './page-stack-controller.js'
+import { reduceNavigateHomeToTab } from './navigate-home.js'
 
 const TAB_A = 'pages/home/home'
 const TAB_B = 'pages/mine/mine'

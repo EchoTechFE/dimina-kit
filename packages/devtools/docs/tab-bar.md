@@ -4,8 +4,8 @@
 >
 > 配套文档：Bridge Envelope 协议见 [`./native-bridge-protocol.md`](./native-bridge-protocol.md)；per-tab 子栈语义见 [`./page-stack.md`](./page-stack.md)。
 >
-> 关联代码：`src/shared/bridge-channels.ts`、`src/simulator/device-shell/tab-bar.tsx`、
-> `src/simulator/device-shell/tab-bar-state.ts`、`src/main/ipc/bridge-router.ts`
+> 关联代码：`src/shared/bridge-channels.ts`、`packages/dimina-electron-runtime/src/simulator-ui/tab-bar.tsx`、
+> `packages/dimina-electron-runtime/src/simulator-ui/tab-bar-state.ts`、`src/main/ipc/bridge-router.ts`
 
 ## 摘要（TL;DR）
 
@@ -92,14 +92,14 @@ export interface TabBarConfig {
 
 ### 2.1 组件与 reducer
 
-- `src/simulator/device-shell/tab-bar.tsx` —— React 组件，从 `state` + props 渲染。
-- `src/simulator/device-shell/tab-bar-state.ts` —— 纯函数 reducer
+- `packages/dimina-electron-runtime/src/simulator-ui/tab-bar.tsx` —— React 组件，从 `state` + props 渲染。
+- `packages/dimina-electron-runtime/src/simulator-ui/tab-bar-state.ts` —— 纯函数 reducer
   `applyTabAction(prev, action)`，输入旧 state + action，返回新 state +
   `{ ok, errMsg }`，DeviceShell 拿到 ack 后回灌 `notifyNavCallback`。
 - 接入点在 `src/simulator/device-shell/device-shell.tsx`：监听
   `SIMULATOR_EVENTS.TAB_ACTION` → `applyTabAction` → `setState` →
   React 自然重渲染。
-- CSS class（`src/simulator/device-shell/tab-bar.css`）：`.dmb-tab-bar`
+- CSS class（`packages/dimina-electron-runtime/src/simulator-ui/tab-bar.css`）：`.dmb-tab-bar`
   / `__item` / `__icon-slot` / `__text` / `__badge` / `__red-dot`（一套 BEM）。
 
 ### 2.2 关键实现点
@@ -206,7 +206,7 @@ currentTabPath = string | null
 native-host 的 React 实现保留了每个 tab 各自的**完整子栈**，对齐 iOS / Harmony 行为，
 而不是 WeChat 那样切走即销毁非顶页。
 
-定义在 `src/simulator/device-shell/page-stack-controller.ts`：
+定义在 `packages/dimina-electron-runtime/src/simulator-ui/page-stack-controller.ts`：
 
 ```ts
 export interface ShellState {
@@ -255,7 +255,7 @@ miniprogram-automator 的 `App.callWxMethod(name, …args)` 经 ws 到 main 进�
 
 - e2e：`e2e/native-host-wx-method.spec.ts`（automator 经 `callWxMethod` 驱动 tab-bar / 路由）、
   `packages/dimina-electron-runtime/e2e/native-host-device.spec.ts`（含 tab-bar 渲染、点击切换、badge / redDot / show-hide）。
-- 单测：`src/simulator/device-shell/tab-bar-state.test.ts` 30 个 case，
+- 单测：`packages/dimina-electron-runtime/src/simulator-ui/tab-bar-state.test.ts` 30 个 case，
   覆盖 `applyTabAction` 的所有 8 个 API + reset + visibility 分支 +
   index 越界 + 颜色 sanitize + badge/redDot 互斥。
 
@@ -287,12 +287,12 @@ native-host 的 React 实现里 TabBar 是 `device-shell` 的 flex 兄弟节点�
 | --- | --- |
 | `TabBarConfig` / `TabBarItem` 类型 | `src/shared/bridge-channels.ts` |
 | `TabActionPayload` 协议 | `src/shared/bridge-channels.ts` |
-| TabBar React 组件 | `src/simulator/device-shell/tab-bar.tsx` |
-| `applyTabAction` reducer | `src/simulator/device-shell/tab-bar-state.ts` |
+| TabBar React 组件 | `packages/dimina-electron-runtime/src/simulator-ui/tab-bar.tsx` |
+| `applyTabAction` reducer | `packages/dimina-electron-runtime/src/simulator-ui/tab-bar-state.ts` |
 | Main 端分发 TAB_ACTION | `src/main/ipc/bridge-router.ts`（`TAB_ACTION_NAMES` / `handleSimulatorApi`） |
 | automator wx 执行（service-host） | `src/main/services/automation/handlers/app.ts`（`App.callWxMethod`） |
 | e2e 用例 | `packages/dimina-electron-runtime/e2e/native-host-device.spec.ts`、`e2e/native-host-wx-method.spec.ts` |
-| reducer 单测 | `src/simulator/device-shell/tab-bar-state.test.ts` |
+| reducer 单测 | `packages/dimina-electron-runtime/src/simulator-ui/tab-bar-state.test.ts` |
 | WeChat 参考：`switchTab` 流程 | `dimina/fe/.../miniApp.js:767-893`（upstream，非运行时） |
 
 > Bridge Envelope 协议见 [`native-bridge-protocol.md`](./native-bridge-protocol.md)；per-tab 子栈语义见 [`page-stack.md`](./page-stack.md)。

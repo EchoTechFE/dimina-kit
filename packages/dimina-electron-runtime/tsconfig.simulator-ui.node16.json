@@ -1,0 +1,12 @@
+{
+  // The `simulator-ui` subpath export ships TypeScript source, so a consumer
+  // type-checks these files under THEIR resolution mode, not ours. Node16 is
+  // the strict one: it rejects an extensionless relative import that the
+  // bundler config happily accepts, and nothing else in this package would
+  // catch that — the main Node16 build excludes `src/simulator-ui` entirely.
+  "extends": "./tsconfig.simulator-ui.json",
+  "compilerOptions": {
+    "module": "Node16",
+    "moduleResolution": "Node16"
+  }
+}

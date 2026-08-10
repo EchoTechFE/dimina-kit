@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { MenuCapsule } from './menu-capsule'
+import { MenuCapsule } from './menu-capsule.js'
 import './navigation-bar.css'
 
 export type NavigationBarTextStyle = 'white' | 'black'

@@ -16,8 +16,8 @@ import {
   reduceSwitchTab,
   type PageEntry,
   type ShellState,
-} from './page-stack-controller'
-import { makeDefaultNavigationBarState, type NavigationBarState } from './navigation-bar'
+} from './page-stack-controller.js'
+import { makeDefaultNavigationBarState, type NavigationBarState } from './navigation-bar.js'
 
 function makeNavBar(overrides: Partial<NavigationBarState> = {}): NavigationBarState {
   return makeDefaultNavigationBarState({

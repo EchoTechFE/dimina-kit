@@ -19,11 +19,11 @@ import {
   visiblePagePath,
 } from './__test-stubs__/device-shell-harness'
 import {
+  makeDefaultNavigationBarState,
   reduceSwitchTab,
   type PageEntry,
   type ShellState,
-} from './page-stack-controller'
-import { makeDefaultNavigationBarState } from './navigation-bar'
+} from '@dimina-kit/electron-runtime/simulator-ui'
 
 beforeEach(() => { installBrowserGlobals() })
 afterEach(() => { clearBrowserGlobals() })

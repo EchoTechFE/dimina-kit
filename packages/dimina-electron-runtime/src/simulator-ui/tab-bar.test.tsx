@@ -8,7 +8,7 @@
  * a blank tab icon.
  */
 import { describe, it, expect } from 'vitest'
-import { resolveIcon } from './tab-bar'
+import { resolveIcon } from './tab-bar.js'
 
 const APP_ID = 'wxfca8a42caa0f8c5a'
 const BASE = 'http://localhost:62698/'

@@ -16,7 +16,7 @@
  * Chosen method + assertion (see report): `setNavigationBarTitle` with
  * `{ title: 'C5-PROBE' }`, asserting the DeviceShell nav-bar title text
  * (`.nav-bar__title-text` in the simulator WebContentsView DOM, see
- * `src/simulator/device-shell/navigation-bar.tsx`) changes from the entry
+ * `packages/dimina-electron-runtime/src/simulator-ui/navigation-bar.tsx`) changes from the entry
  * page's configured "Home" title to "C5-PROBE".
  *
  * Why the side-effect contract and NOT `getSystemInfoSync`: the simulator

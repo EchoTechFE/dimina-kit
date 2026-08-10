@@ -4,7 +4,7 @@
  * reduction for the tabBar branch. Mirrors each native platform's
  * `navigateHome` primitive; DeviceShell only dispatches.
  */
-import type { TabBarConfig } from '../../shared/bridge-channels'
+import type { TabBarConfig } from '../shared/bridge-channels.js'
 import {
   collectAlivePages,
   normalizePath,
@@ -12,7 +12,7 @@ import {
   type ReduceResult,
   type ShellState,
   type SideEffect,
-} from './page-stack-controller'
+} from './page-stack-controller.js'
 
 /**
  * WeChat's back-to-home button visibility rule (calibrated against real

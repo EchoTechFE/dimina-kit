@@ -1,3 +1,4 @@
+/** @vitest-environment jsdom */
 /**
  * Regression coverage for MenuCapsule's close icon and NavigationBar's back
  * icon, matching dimina's native containers:
@@ -16,8 +17,8 @@
 import React from 'react'
 import { render } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import { MenuCapsule } from './menu-capsule'
-import { NavigationBar, makeDefaultNavigationBarState } from './navigation-bar'
+import { MenuCapsule } from './menu-capsule.js'
+import { NavigationBar, makeDefaultNavigationBarState } from './navigation-bar.js'
 
 describe('MenuCapsule close icon', () => {
   it('renders a ring + center dot, not an X cross path', () => {

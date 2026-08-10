@@ -1,15 +1,15 @@
 import './menu-capsule.css'
-import type { NavBarPlatform } from './navigation-bar'
+import type { NavBarPlatform } from './navigation-bar.js'
 import {
   MENU_CAPSULE_HEIGHT,
   MENU_CAPSULE_TRAILING_SPACING,
   MENU_CAPSULE_WIDTH,
   getMenuCapsuleTopOffset,
-} from './menu-button-geometry'
+} from '../shared/menu-button-geometry.js'
 
-// Geometry helpers live in menu-button-geometry.ts so the service-host sync
-// impl (no React) and this component share one source of truth.
-export { getMenuCapsuleRect, type MenuButtonRect as MenuCapsuleRect } from './menu-button-geometry'
+// Geometry helpers live in shared/menu-button-geometry.ts so the service-host
+// sync impl (no React) and this component share one source of truth.
+export { getMenuCapsuleRect, type MenuButtonRect as MenuCapsuleRect } from '../shared/menu-button-geometry.js'
 
 export interface MenuCapsuleProps {
   platform: NavBarPlatform

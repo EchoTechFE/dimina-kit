@@ -6,10 +6,8 @@ import type {
 } from '../../shared/bridge-channels'
 import type { DeviceShellProps } from './device-shell-types'
 import { attachApiCallForwarding } from '../api-call-forwarding'
-import { NavigationBar } from './navigation-bar'
 import { StatusBar } from './status-bar'
 import type { NativeDeviceInfo } from '../../shared/ipc-channels'
-import { TabBar } from './tab-bar'
 import { UiOverlay } from './ui-overlay'
 import {
   dispatchSimulatorCapsuleMore,
@@ -17,20 +15,20 @@ import {
 } from './simulator-ui-extension-layer'
 import {
   applyTabAction,
-  makeInitialTabBarState,
-} from './tab-bar-state'
-import {
   enumerateMounted,
   makeInitialShellState,
+  makeInitialTabBarState,
   mutatePageNavBar,
   navBarFromConfig,
+  NavigationBar,
   normalizePath,
   pageBackgroundColor,
   reduceNavBar,
+  shouldShowHomeButton,
+  TabBar,
   type PageEntry,
   type SideEffect,
-} from './page-stack-controller'
-import { shouldShowHomeButton } from './navigate-home'
+} from '@dimina-kit/electron-runtime/simulator-ui'
 import {
   commitShell,
   commitTabBar,

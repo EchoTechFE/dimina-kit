@@ -25,9 +25,9 @@
  * `pages/a/a` name the same page.
  */
 import { describe, expect, it } from 'vitest'
-import type { PageWindowConfig, TabBarConfig } from '../../shared/bridge-channels'
-import { navBarFromConfig } from './page-stack-controller'
-import { resolveHomeNavAction, shouldShowHomeButton } from './navigate-home'
+import type { PageWindowConfig, TabBarConfig } from '../shared/bridge-channels.js'
+import { navBarFromConfig } from './page-stack-controller.js'
+import { resolveHomeNavAction, shouldShowHomeButton } from './navigate-home.js'
 
 const HOME = 'pages/home/home'
 const OTHER_TAB = 'pages/mine/mine'

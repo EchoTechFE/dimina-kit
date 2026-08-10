@@ -1,5 +1,5 @@
 import './tab-bar.css'
-import type { TabBarState } from './tab-bar-state'
+import type { TabBarState } from './tab-bar-state.js'
 
 export interface TabBarProps {
   state: TabBarState

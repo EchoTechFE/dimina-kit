@@ -1,4 +1,4 @@
-import type { TabBarConfig, TabActionPayload } from '../../shared/bridge-channels'
+import type { TabBarConfig, TabActionPayload } from '../shared/bridge-channels.js'
 
 export interface TabBarState {
   config: TabBarConfig | null

@@ -10,7 +10,7 @@
  *   - `wx.navigateBack` shrinks the stack back (length 3 → 2).
  *
  * This contract is satisfied (GREEN): DeviceShell tracks the per-tab full stack
- * (src/simulator/device-shell/page-stack-controller.ts) and reports it over the
+ * (packages/dimina-electron-runtime/src/simulator-ui/page-stack-controller.ts) and reports it over the
  * PAGE_STACK channel; the bridge stores it (bridge-router.ts `ap.pageStack`) and
  * `getPageStack`/`callWxMethod` (electron-entry.js's `__diminaE2eHooks`, a
  * direct in-process port of devtools' automation handlers) read/drive it
@@ -114,8 +114,14 @@ test.describe('native-host App.getPageStack tracks full in-app navigation stack'
 
   test('two navigateTo pushes grow the stack to 3 (bottom→top), navigateBack shrinks to 2', async () => {
     // ── Entry: the active page is the entry route, stack has exactly 1 entry. ──
+    // These queries only read main's ledger, and `pollUntil` already swallows a
+    // failed round-trip and polls again — which is what absorbs the occasional
+    // CDP "Script failed to execute" a full-suite run produces (see helpers.ts
+    // on why the NAV calls must NOT be retried the same way). Catching here
+    // instead would hand the predicate a fabricated value and consume the very
+    // attempt the retry exists for.
     const cur = await pollUntil(
-      () => getCurrentPage(electronApp).catch(() => null),
+      () => getCurrentPage(electronApp),
       (r) => !!r && typeof r.path === 'string' && r.path.includes('pages/'),
       20000,
       500,
@@ -123,7 +129,7 @@ test.describe('native-host App.getPageStack tracks full in-app navigation stack'
     expect(cur?.path, 'entry active page should be the fixture entry route').toContain(ENTRY_ROUTE)
 
     const entryStack = await pollUntil(
-      () => getPageStack(electronApp).catch(() => [] as PageStackEntry[]),
+      () => getPageStack(electronApp),
       (s) => s.length >= 1,
       20000,
       500,
@@ -135,7 +141,7 @@ test.describe('native-host App.getPageStack tracks full in-app navigation stack'
     await callWxMethod(electronApp, 'navigateTo', [{ url: '/' + NAV_TARGET }])
 
     const afterPush1 = await pollUntil(
-      () => getPageStack(electronApp).catch(() => [] as PageStackEntry[]),
+      () => getPageStack(electronApp),
       (s) => topPath(s).includes(NAV_TARGET),
       15000,
       500,
@@ -149,7 +155,7 @@ test.describe('native-host App.getPageStack tracks full in-app navigation stack'
     await callWxMethod(electronApp, 'navigateTo', [{ url: '/' + NAV_TARGET }])
 
     const afterPush2 = await pollUntil(
-      () => getPageStack(electronApp).catch(() => [] as PageStackEntry[]),
+      () => getPageStack(electronApp),
       (s) => s.length >= 3,
       15000,
       500,
@@ -166,9 +172,13 @@ test.describe('native-host App.getPageStack tracks full in-app navigation stack'
     // ── navigateBack → stack length 2 ──────────────────────────────────────────
     await callWxMethod(electronApp, 'navigateBack', [{ delta: 1 }])
 
+    // `=== 2`, not `<= 2`: the stack starts at 3 and only shrinking to exactly
+    // 2 is the state under test, so a shorter reading is never the answer —
+    // it means something went wrong, and waiting it out reports that as a
+    // timeout carrying the real error instead of as a bogus assertion value.
     const afterBack = await pollUntil(
-      () => getPageStack(electronApp).catch(() => [] as PageStackEntry[]),
-      (s) => s.length <= 2,
+      () => getPageStack(electronApp),
+      (s) => s.length === 2,
       15000,
       500,
     )

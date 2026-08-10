@@ -1,6 +1,6 @@
 # 页面栈（Page Stack）
 
-> 页面栈承载小程序的导航语义。devtools simulator 只有一套实现——native-host 的 `src/simulator/device-shell/page-stack-controller.ts`（纯 reducer），规范、生命周期、URL 同步、降级行为统一收敛在本页。upstream dimina-fe 的 `MiniApp`（`miniApp.js`）是 WeChat 语义的参考实现，本文在对照"规范期望 vs native-host 行为"时引用它，但它不是 devtools 的运行时。
+> 页面栈承载小程序的导航语义。devtools simulator 只有一套实现——native-host 的 `packages/dimina-electron-runtime/src/simulator-ui/page-stack-controller.ts`（纯 reducer），规范、生命周期、URL 同步、降级行为统一收敛在本页。upstream dimina-fe 的 `MiniApp`（`miniApp.js`）是 WeChat 语义的参考实现，本文在对照"规范期望 vs native-host 行为"时引用它，但它不是 devtools 的运行时。
 >
 > tab-bar 的视觉 / 配置细节由 [`./tab-bar.md`](./tab-bar.md) 承载；本文聚焦 `navigateTo` / `navigateBack` / `redirectTo` / `reLaunch` 这 4 个 API 与多 tab 子栈的交互。
 
@@ -74,7 +74,7 @@ WeChat 定义的 5 个回调：
 
 ### 2.1 reducer
 
-文件：`packages/devtools/src/simulator/device-shell/page-stack-controller.ts`。这是一个**纯 reducer**：所有路由变换都接收 `ShellState` 返回 `{ next, effects }`，没有副作用，方便单测。
+文件：`packages/dimina-electron-runtime/src/simulator-ui/page-stack-controller.ts`。这是一个**纯 reducer**：所有路由变换都接收 `ShellState` 返回 `{ next, effects }`，没有副作用，方便单测。
 
 ```ts
 export interface ShellState {
@@ -320,7 +320,7 @@ switchTab(targetTab):
 
 ## 8. 测试入口
 
-- 单测：`packages/devtools/src/simulator/device-shell/page-stack-controller.test.ts`，43 个 case 覆盖五个 reducer 的纯函数行为（含 lifecycle effects 顺序、tabStacks 同步、reLaunch 全清等）。
+- 单测：`packages/dimina-electron-runtime/src/simulator-ui/page-stack-controller.test.ts`，43 个 case 覆盖五个 reducer 的纯函数行为（含 lifecycle effects 顺序、tabStacks 同步、reLaunch 全清等）。
 - e2e：`packages/dimina-electron-runtime/e2e/native-host-page-stack.spec.ts`（5 API + 生命周期 + 深度限制）、`packages/devtools/e2e/native-host-current-page.spec.ts`（`App.getCurrentPage` / `getPageStack` 上报）。
 
 ## 9. 延伸阅读

@@ -10,13 +10,13 @@
  */
 import { act, fireEvent, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { makeDefaultNavigationBarState } from './navigation-bar'
 import {
+  makeDefaultNavigationBarState,
   normalizePath,
   reduceRedirectTo,
   type PageEntry,
   type ShellState,
-} from './page-stack-controller'
+} from '@dimina-kit/electron-runtime/simulator-ui'
 import {
   bootShell,
   clearBrowserGlobals,

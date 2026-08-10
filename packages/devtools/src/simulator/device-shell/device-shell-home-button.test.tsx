@@ -33,7 +33,7 @@ import {
   makeDefaultNavigationBarState,
   NavigationBar,
   type NavigationBarState,
-} from './navigation-bar'
+} from '@dimina-kit/electron-runtime/simulator-ui'
 
 /** Material Icons `home` (filled) — google/material-design-icons 24px glyph. */
 const HOME_ICON_PATH = 'M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z'

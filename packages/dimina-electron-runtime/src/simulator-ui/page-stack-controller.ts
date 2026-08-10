@@ -11,8 +11,8 @@
  * the bridge caller). Keeping the routing logic side-effect-free lets us
  * unit-test it without faking React / IPC.
  */
-import type { PageWindowConfig } from '../../shared/bridge-channels'
-import { makeDefaultNavigationBarState, type NavigationBarState } from './navigation-bar'
+import type { PageWindowConfig } from '../shared/bridge-channels.js'
+import { makeDefaultNavigationBarState, type NavigationBarState } from './navigation-bar.js'
 
 export interface PageEntry {
   bridgeId: string

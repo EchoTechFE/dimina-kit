@@ -7,5 +7,7 @@
     "outDir": "dist"
   },
   "include": ["src"],
-  "exclude": ["node_modules", "dist", "**/*.test.ts"]
+  // `src/simulator-ui` is browser code for a bundler, not Node16 main-process
+  // ESM — it type-checks through tsconfig.simulator-ui.json instead.
+  "exclude": ["node_modules", "dist", "**/*.test.ts", "src/simulator-ui"]
 }

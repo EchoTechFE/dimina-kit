@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest'
 import {
   makeInitialTabBarState,
   applyTabAction,
-} from './tab-bar-state'
-import type { TabBarConfig } from '../../shared/bridge-channels'
+} from './tab-bar-state.js'
+import type { TabBarConfig } from '../shared/bridge-channels.js'
 
 // ---- helpers ----------------------------------------------------------------
 

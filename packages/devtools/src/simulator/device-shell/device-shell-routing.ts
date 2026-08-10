@@ -11,25 +11,23 @@
  */
 import type { NavActionPayload } from '../../shared/bridge-channels'
 import type { SimulatorMiniApp } from '../simulator-mini-app'
-import type { TabBarState } from './tab-bar-state'
 import {
   navBarFromConfig,
   normalizePath,
   parseUrl,
   reduceNavigateBack,
+  reduceNavigateHomeToTab,
   reduceNavigateTo,
   reduceReLaunch,
   reduceRedirectTo,
   reduceSwitchTab,
+  resolveHomeNavAction,
+  shouldShowHomeButton,
   type PageEntry,
   type ShellState,
   type SideEffect,
-} from './page-stack-controller'
-import {
-  reduceNavigateHomeToTab,
-  resolveHomeNavAction,
-  shouldShowHomeButton,
-} from './navigate-home'
+  type TabBarState,
+} from '@dimina-kit/electron-runtime/simulator-ui'
 
 export interface DeviceShellState {
   shell: ShellState

@@ -1,3 +1,4 @@
+/** @vitest-environment jsdom */
 /**
  * Android draws the nav-bar title left-aligned, so its start has to clear the
  * leading area. That area grows when the home button joins the back arrow, and
@@ -26,7 +27,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { render } from '@testing-library/react'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { makeDefaultNavigationBarState, NavigationBar } from './navigation-bar'
+import { makeDefaultNavigationBarState, NavigationBar } from './navigation-bar.js'
 
 const CSS_PATH = join(dirname(fileURLToPath(import.meta.url)), 'navigation-bar.css')
 const CSS = readFileSync(CSS_PATH, 'utf8')
