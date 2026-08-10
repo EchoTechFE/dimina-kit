@@ -1,9 +1,13 @@
 /**
  * Service-realm SocketTask facade.
  *
- * The service host owns the JavaScript object and callback/listener semantics;
- * the actual WebSocket is constructed and driven by the developer tool's
- * simulator/container Native API layer.
+ * The service host owns the JavaScript object, the parameter contract and the
+ * listener semantics; the actual WebSocket is constructed and driven by the
+ * developer tool's simulator/container Native API layer.
+ *
+ * Every named export here is collected onto `wx`, so the export set is itself
+ * the API surface: `wx` has a socket entry point exactly when this module
+ * exports it.
  */
 
 import { invokeAPI } from '../../../common'
@@ -13,334 +17,418 @@ const OPEN = 1
 const CLOSING = 2
 const CLOSED = 3
 
+const MAX_WEBSOCKET_CONNECT = 5
+const NATIVE_EVENT_ID = 'websocket_native_events'
+const WEBSOCKET_URL = /^(ws|wss):\/\/.*/i
+/** Connection options forwarded only when the caller actually supplied them. */
+const PASS_THROUGH_OPTIONS = ['protocols', 'tcpNoDelay', 'perMessageDeflate', 'forceCellularNetwork']
+const SETTLER_KEYS = ['success', 'fail', 'complete']
+
 let nextSocketId = 1
-// Global legacy APIs (wx.sendSocketMessage / wx.onSocketMessage / …) bind to a
-// single task: the first connection that is still alive. Rebinding happens
-// only at the next connectSocket call once the bound task is CLOSED — a close
-// event alone never moves the binding to a younger connection (WeChat base
-// library contract).
-let boundSocketTask = null
-let nativeListenerInstalled = false
-const tasks = new Map()
+let boundTask = null
+let openConnectionCount = 0
+let nativeBridgeInstalled = false
+
+/**
+ * Connections the container has been asked to dial that have not reached a
+ * terminal event yet, keyed by the bridge id. Iteration order is creation
+ * order, which is the order `wx.closeSocket` sweeps them in.
+ */
+const startedTasks = new Map()
+
+/**
+ * Per-connection bookkeeping, kept off the instance: a SocketTask exposes only
+ * its six methods, `readyState` and the four state constants.
+ */
+const taskInternals = new WeakMap()
+
+/** `wx.onSocket*` hold one slot per event. */
+const globalListeners = { open: null, message: null, error: null, close: null }
 
 function isFunction(value) {
 	return typeof value === 'function'
 }
 
-function invokeCallback(fn, payload) {
+function objectTag(value) {
+	return Object.prototype.toString.apply(value)
+}
+
+function typeName(value) {
+	return objectTag(value).slice(8, -1)
+}
+
+function optionsOf(opts) {
+	return opts && typeof opts === 'object' ? opts : {}
+}
+
+function invokeCallback(fn, result) {
 	if (!isFunction(fn)) return
 	try {
-		fn(payload)
-	} catch (error) {
+		fn(result)
+	}
+	catch (error) {
 		queueMicrotask(() => { throw error })
 	}
 }
 
-function callbackResult(opts, kind, payload) {
-	invokeCallback(kind === 'success' ? opts.success : opts.fail, payload)
-	invokeCallback(opts.complete, payload)
+function settle(opts, kind, result) {
+	const options = optionsOf(opts)
+	invokeCallback(kind === 'success' ? options.success : options.fail, result)
+	invokeCallback(options.complete, result)
 }
 
-function createListenerStore() {
-	let listeners = []
-	return {
-		add(listener) {
-			if (!isFunction(listener) || listeners.includes(listener)) return
-			listeners.push(listener)
-		},
-		remove(listener) {
-			listeners = isFunction(listener)
-				? listeners.filter(item => item !== listener)
-				: []
-		},
-		dispatch(payload) {
-			for (const listener of listeners.slice()) invokeCallback(listener, payload)
-		},
+function pickSettlers(opts) {
+	const settlers = {}
+	for (const key of SETTLER_KEYS) {
+		if (isFunction(opts[key])) settlers[key] = opts[key]
 	}
+	return settlers
 }
 
-// Global wx.onSocket* are single-slot setters: a later registration overwrites
-// the earlier one ("仅最后一次生效"). SocketTask.on* stay listener-mode.
-const globalSlots = {
-	open: null,
-	message: null,
-	error: null,
-	close: null,
-}
-
-function setGlobalSlot(type, listener) {
-	if (isFunction(listener)) globalSlots[type] = listener
-}
-
-function clearGlobalSlot(type, listener) {
-	if (listener === undefined || globalSlots[type] === listener) {
-		globalSlots[type] = null
+/**
+ * `wx.sendSocketMessage` / `wx.closeSocket` return a Promise only when the
+ * caller passed none of the success/fail/complete keys. The presence of the
+ * key decides, not whether the value under it is callable.
+ */
+function withSettlers(opts, run) {
+	const options = optionsOf(opts)
+	if (SETTLER_KEYS.some(key => Object.prototype.hasOwnProperty.call(options, key))) {
+		run(options)
+		return undefined
 	}
-}
-
-function nativeEvent(payload) {
-	if (!payload || typeof payload !== 'object') return
-	const task = tasks.get(payload.socketId)
-	if (!task) return
-	task._dispatchNative(payload)
-}
-
-function ensureNativeListener() {
-	if (nativeListenerInstalled) return
-	nativeListenerInstalled = true
-	invokeAPI('socketListen', {
-		evtId: 'websocket_native_events',
-		keep: true,
-		success: nativeEvent,
+	return new Promise((resolve, reject) => {
+		run({ ...options, success: resolve, fail: reject })
 	})
 }
 
+/**
+ * Header values reach the container as strings: strings stay, numbers become
+ * their decimal text, everything else becomes its object tag. Names are not
+ * folded, so entries differing only in case stay separate.
+ */
+function normalizeHeaderValues(header) {
+	return Object.keys(header).reduce((result, name) => {
+		const value = header[name]
+		if (typeof value === 'string') result[name] = value
+		else if (typeof value === 'number') result[name] = `${value}`
+		else result[name] = objectTag(value)
+		return result
+	}, {})
+}
+
+/**
+ * The script layer never invents a value the caller left out — an option the
+ * caller omitted must stay distinguishable from one they set to a default.
+ * `timeout` is the exception the base library makes: a non-finite value
+ * becomes 0 and is always forwarded, leaving the fallback to the container.
+ */
+function connectParams(opts) {
+	const params = { url: opts.url }
+	if (typeof opts.header === 'object') {
+		params.header = opts.header ? normalizeHeaderValues(opts.header) : {}
+	}
+	for (const key of PASS_THROUGH_OPTIONS) {
+		if (opts[key] !== undefined) params[key] = opts[key]
+	}
+	params.timeout = typeof opts.timeout === 'number' && Number.isFinite(opts.timeout) ? opts.timeout : 0
+	return params
+}
+
 class SocketTask {
-	constructor(socketId, opts) {
-		this.socketId = socketId
-		this.socketTaskId = socketId
+	constructor() {
 		this.CONNECTING = CONNECTING
 		this.OPEN = OPEN
 		this.CLOSING = CLOSING
 		this.CLOSED = CLOSED
-		this._readyState = CONNECTING
-		this._opts = opts
-		this._opened = false
-		this._started = false
-		this._connectSettled = false
-		this._terminal = false
-		this._listeners = {
-			open: createListenerStore(),
-			message: createListenerStore(),
-			error: createListenerStore(),
-			close: createListenerStore(),
-		}
-	}
-
-	get readyState() {
-		return this._readyState
-	}
-
-	_dispatch(type, payload) {
-		this._listeners[type].dispatch(payload)
-		if (this === boundSocketTask && globalSlots[type]) {
-			invokeCallback(globalSlots[type], payload)
-		}
-	}
-
-	_settleConnect(kind, payload) {
-		if (this._connectSettled) return
-		this._connectSettled = true
-		callbackResult(this._opts, kind, payload)
-	}
-
-	_cleanup() {
-		tasks.delete(this.socketId)
-	}
-
-	_failConnect(payload) {
-		if (this._terminal) return
-		this._terminal = true
-		this._readyState = CLOSED
-		this._settleConnect('fail', payload)
-		this._dispatch('error', payload)
-		this._cleanup()
-	}
-
-	_start() {
-		// A task closed before its start microtask ran must never touch the
-		// network — otherwise the native open would resurrect a dead task.
-		if (this._terminal) return
-		this._started = true
-		try {
-			ensureNativeListener()
-			invokeAPI('connectSocket', {
-				...this._opts,
-				socketId: this.socketId,
-				success: result => this._settleConnect('success', result),
-				fail: result => this._failConnect(result),
-				complete: undefined,
-			})
-		} catch (error) {
-			this._failConnect({
-				errMsg: `connectSocket:fail ${error && error.message ? error.message : error}`,
-			})
-		}
-	}
-
-	_dispatchNative(payload) {
-		const { event } = payload
-		if (event === 'open') {
-			if (this._terminal) return
-			this._opened = true
-			this._readyState = OPEN
-			this._dispatch('open', {
-				header: payload.header || {},
-				profile: payload.profile,
-			})
-			return
-		}
-		if (event === 'message') {
-			if (this._terminal) return
-			this._dispatch('message', { data: payload.data })
-			return
-		}
-		if (event === 'error') {
-			if (this._terminal) return
-			this._readyState = CLOSED
-			this._dispatch('error', {
-				errMsg: payload.errMsg || 'connectSocket:fail WebSocket connection failed',
-			})
-			// A connection that never opened is terminal on error alone — no
-			// close event follows (real-device contract), so release it here.
-			if (!this._opened) {
-				this._terminal = true
-				this._cleanup()
-			}
-			return
-		}
-		if (event === 'close') {
-			if (this._terminal) return
-			this._terminal = true
-			this._readyState = CLOSED
-			this._dispatch('close', {
-				code: Number(payload.code) || 0,
-				reason: payload.reason || '',
-			})
-			this._cleanup()
-		}
-	}
-
-	send(opts = {}) {
-		const payload = opts && typeof opts === 'object' ? opts : {}
-		if (this._readyState !== OPEN) {
-			callbackResult(payload, 'fail', {
-				errMsg: 'SocketTask.send:fail SocketTask.readyState is not OPEN',
-			})
-			return
-		}
-		const data = payload.data
-		if (
-			typeof data !== 'string'
-			&& !(data instanceof ArrayBuffer)
-			&& !ArrayBuffer.isView(data)
-		) {
-			callbackResult(payload, 'fail', {
-				errMsg: 'sendSocketMessage:fail data must be string or ArrayBuffer',
-			})
-			return
-		}
-		invokeAPI('sendSocketMessage', { ...payload, socketId: this.socketId })
-	}
-
-	close(opts = {}) {
-		const payload = opts && typeof opts === 'object' ? opts : {}
-		if (this._readyState === CLOSED) {
-			callbackResult(payload, 'fail', {
-				errMsg: 'closeSocket:fail WebSocket is not connected',
-			})
-			return
-		}
-		if (
-			payload.reason !== undefined
-			&& (
-				typeof payload.reason !== 'string'
-				|| new TextEncoder().encode(payload.reason).byteLength > 123
-			)
-		) {
-			callbackResult(payload, 'fail', {
-				errMsg: 'closeSocket:fail reason must not exceed 123 UTF-8 bytes',
-			})
-			return
-		}
-		const previousReadyState = this._readyState
-		this._readyState = CLOSING
-		if (!this._started) {
-			// Closed before the start microtask ran: no native entry exists, so
-			// finalize locally — connect settles as ok (the API was invoked),
-			// one close event answers the caller's close, nothing reaches IPC.
-			this._terminal = true
-			this._readyState = CLOSED
-			const code = typeof payload.code === 'number' ? payload.code : 1000
-			const reason = typeof payload.reason === 'string' ? payload.reason : ''
-			this._settleConnect('success', { errMsg: 'connectSocket:ok' })
-			callbackResult(payload, 'success', { errMsg: 'closeSocket:ok' })
-			queueMicrotask(() => {
-				this._dispatch('close', { code, reason })
-			})
-			this._cleanup()
-			return
-		}
-		invokeAPI('closeSocket', {
-			...payload,
-			socketId: this.socketId,
-			fail: result => {
-				if (!this._terminal) this._readyState = previousReadyState
-				invokeCallback(payload.fail, result)
-			},
+		let readyState = CONNECTING
+		// readyState is a writable accessor: the base library assigns it, and so
+		// may mini-app code.
+		Object.defineProperty(this, 'readyState', {
+			get: () => readyState,
+			set: (value) => { readyState = value },
+			enumerable: true,
+			configurable: true,
 		})
 	}
 
-	onOpen(listener) { this._listeners.open.add(listener) }
-	offOpen(listener) { this._listeners.open.remove(listener) }
-	onMessage(listener) { this._listeners.message.add(listener) }
-	offMessage(listener) { this._listeners.message.remove(listener) }
-	onError(listener) { this._listeners.error.add(listener) }
-	offError(listener) { this._listeners.error.remove(listener) }
-	onClose(listener) { this._listeners.close.add(listener) }
-	offClose(listener) { this._listeners.close.remove(listener) }
+	send(opts) {
+		sendOnTask(this, opts)
+	}
+
+	close(opts) {
+		closeOnTask(this, opts)
+	}
+
+	onOpen(listener) {
+		addTaskListener(this, 'open', listener)
+	}
+
+	onMessage(listener) {
+		addTaskListener(this, 'message', listener)
+	}
+
+	onError(listener) {
+		addTaskListener(this, 'error', listener)
+	}
+
+	onClose(listener) {
+		addTaskListener(this, 'close', listener)
+	}
 }
 
-SocketTask.CONNECTING = CONNECTING
-SocketTask.OPEN = OPEN
-SocketTask.CLOSING = CLOSING
-SocketTask.CLOSED = CLOSED
+function addTaskListener(task, type, listener) {
+	if (!isFunction(listener)) return
+	const state = taskInternals.get(task)
+	// A Set keeps several distinct listeners per event and collapses a repeated
+	// registration of the same function into one.
+	if (state) state.listeners[type].add(listener)
+}
 
-export function connectSocket(opts = {}) {
-	const socketId = `socket_${Date.now()}_${nextSocketId++}`
-	const task = new SocketTask(socketId, opts && typeof opts === 'object' ? opts : {})
-	tasks.set(socketId, task)
-	if (!boundSocketTask || boundSocketTask.readyState === CLOSED) {
-		boundSocketTask = task
+function dispatchTaskEvent(task, type, taskResult, globalResult) {
+	const state = taskInternals.get(task)
+	if (!state) return
+	for (const listener of [...state.listeners[type]]) invokeCallback(listener, taskResult)
+	// Global listeners only observe the bound connection; events of any other
+	// live connection are dropped.
+	if (task === boundTask) {
+		invokeCallback(globalListeners[type], globalResult === undefined ? taskResult : globalResult)
 	}
-	queueMicrotask(() => task._start())
+}
+
+/** A connection occupies one of the five slots only while it is open. */
+function releaseSlot(state) {
+	if (!state.counted) return
+	state.counted = false
+	openConnectionCount -= 1
+}
+
+function terminateTask(task, state) {
+	state.terminal = true
+	startedTasks.delete(state.socketId)
+}
+
+function handleOpenEvent(task, state, event) {
+	state.opened = true
+	if (!state.counted) {
+		state.counted = true
+		openConnectionCount += 1
+	}
+	task.readyState = OPEN
+	dispatchTaskEvent(task, 'open', { header: event.header, profile: event.profile }, { header: event.header })
+}
+
+function handleErrorEvent(task, state, event) {
+	releaseSlot(state)
+	task.readyState = CLOSED
+	const result = { errMsg: event.errMsg }
+	// Errors are delivered asynchronously so that listeners registered right
+	// after connectSocket returned still see them.
+	setTimeout(() => { dispatchTaskEvent(task, 'error', result) }, 0)
+	// A connection that opened still gets its close event; one that never
+	// opened has nothing further to deliver.
+	if (!state.opened) terminateTask(task, state)
+}
+
+function handleCloseEvent(task, state, event) {
+	releaseSlot(state)
+	terminateTask(task, state)
+	task.readyState = CLOSED
+	dispatchTaskEvent(task, 'close', { code: event.code, reason: event.reason })
+}
+
+function handleNativeEvent(event) {
+	if (!event || typeof event !== 'object') return
+	const task = startedTasks.get(event.socketId)
+	if (!task) return
+	const state = taskInternals.get(task)
+	if (!state || state.terminal) return
+	if (event.event === 'open') handleOpenEvent(task, state, event)
+	else if (event.event === 'message') dispatchTaskEvent(task, 'message', { data: event.data })
+	else if (event.event === 'error') handleErrorEvent(task, state, event)
+	else if (event.event === 'close') handleCloseEvent(task, state, event)
+}
+
+function ensureNativeBridge() {
+	if (nativeBridgeInstalled) return
+	invokeAPI('socketListen', { evtId: NATIVE_EVENT_ID, keep: true, success: handleNativeEvent })
+	nativeBridgeInstalled = true
+}
+
+function sendOnTask(task, opts) {
+	const options = optionsOf(opts)
+	// Being OPEN is the only precondition; the payload itself is the
+	// container's to accept or reject.
+	if (task.readyState !== OPEN) {
+		settle(options, 'fail', { errMsg: 'SocketTask.send:fail SocketTask.readyState is not OPEN' })
+		return
+	}
+	const state = taskInternals.get(task)
+	invokeAPI('sendSocketMessage', {
+		...pickSettlers(options),
+		socketId: state.socketId,
+		data: options.data,
+	})
+}
+
+function closeOnTask(task, opts) {
+	const options = optionsOf(opts)
+	const state = taskInternals.get(task)
+	const params = {
+		...pickSettlers(options),
+		socketId: state.socketId,
+		code: typeof options.code === 'number' && Number.isFinite(options.code) ? options.code : 1000,
+	}
+	// `reason` is passed through exactly as given: no default, no length rule,
+	// no coercion.
+	if (options.reason !== undefined) params.reason = options.reason
+	invokeAPI('closeSocket', params)
+}
+
+/**
+ * `wx.closeSocket` marks a connection closed the moment it asks the container
+ * to close it. If the container refuses and no terminal event has arrived, the
+ * connection is still live, so the optimistic state is put back.
+ */
+function closeFromGlobal(task, options) {
+	const previousReadyState = task.readyState
+	task.readyState = CLOSED
+	closeOnTask(task, {
+		...options,
+		fail: (result) => {
+			const state = taskInternals.get(task)
+			if (state && !state.terminal) task.readyState = previousReadyState
+			invokeCallback(options.fail, result)
+		},
+	})
+}
+
+function createTask() {
+	const task = new SocketTask()
+	taskInternals.set(task, {
+		socketId: `socket_${Date.now()}_${nextSocketId++}`,
+		opened: false,
+		counted: false,
+		terminal: false,
+		listeners: { open: new Set(), message: new Set(), error: new Set(), close: new Set() },
+	})
 	return task
 }
 
-export function sendSocketMessage(opts = {}) {
-	if (!boundSocketTask || boundSocketTask.readyState !== OPEN) {
-		callbackResult(opts, 'fail', {
-			errMsg: 'sendSocketMessage:fail WebSocket is not connected',
+function rejectConnect(opts) {
+	if (typeof opts.url !== 'string') {
+		settle(opts, 'fail', {
+			errMsg: `connectSocket:fail parameter error: parameter.url should be String instead of ${typeName(opts.url)};`,
+			errno: 1001,
 		})
-		return
+		return true
 	}
-	return boundSocketTask.send(opts)
+	if (!WEBSOCKET_URL.test(opts.url)) {
+		// Protocol is the only url rule the script layer applies; everything
+		// else about the address is the container's judgement.
+		settle(opts, 'fail', { errMsg: `connectSocket:fail invalid url "${opts.url}"` })
+		return true
+	}
+	return false
 }
 
-export function closeSocket(opts = {}) {
-	// The base library closes every live connection of the app even when the
-	// bound task is already CLOSED — the fail callback fires, then the sweep
-	// below still runs. Non-bound tasks are closed bare.
-	const boundUsable = boundSocketTask && boundSocketTask.readyState !== CLOSED
-	if (!boundUsable) {
-		callbackResult(opts, 'fail', {
-			errMsg: 'closeSocket:fail WebSocket is not connected',
+export function connectSocket(opts) {
+	// Without an options object there is no fail channel to report through.
+	if (!opts || typeof opts !== 'object') return undefined
+	if (rejectConnect(opts)) return undefined
+
+	const task = createTask()
+	const state = taskInternals.get(task)
+	// The global APIs stay on the earliest connection that had not closed by
+	// the time this call ran; a connection closing later never moves them.
+	const previousBound = boundTask
+	if (!previousBound || previousBound.readyState === CLOSED) boundTask = task
+
+	if (openConnectionCount >= MAX_WEBSOCKET_CONNECT) {
+		// The ceiling is reached after the task exists, so the caller still
+		// receives one — already closed, and never dialled.
+		state.terminal = true
+		task.readyState = CLOSED
+		settle(opts, 'fail', {
+			errMsg: `connectSocket:fail fail reach max websocket connect count ${MAX_WEBSOCKET_CONNECT}`,
 		})
-	} else {
-		boundSocketTask.close(opts)
+		return task
 	}
-	for (const task of tasks.values()) {
-		if (task !== boundSocketTask && task.readyState !== CLOSED) {
-			task.close({})
+
+	startedTasks.set(state.socketId, task)
+	try {
+		ensureNativeBridge()
+		invokeAPI('connectSocket', {
+			...connectParams(opts),
+			socketId: state.socketId,
+			success: result => invokeCallback(opts.success, result),
+			fail: (result) => {
+				releaseSlot(state)
+				terminateTask(task, state)
+				task.readyState = CLOSED
+				invokeCallback(opts.fail, result)
+			},
+			complete: result => invokeCallback(opts.complete, result),
+		})
+	}
+	catch (error) {
+		startedTasks.delete(state.socketId)
+		if (boundTask === task) boundTask = previousBound
+		state.terminal = true
+		task.readyState = CLOSED
+		settle(opts, 'fail', {
+			errMsg: `connectSocket:fail ${error && error.message ? error.message : error}`,
+		})
+		return undefined
+	}
+	return task
+}
+
+export function sendSocketMessage(opts) {
+	return withSettlers(opts, (options) => {
+		if (!boundTask || boundTask.readyState !== OPEN) {
+			settle(options, 'fail', { errMsg: 'sendSocketMessage:fail WebSocket is not connected' })
+			return
 		}
-	}
+		sendOnTask(boundTask, options)
+	})
 }
 
-export function onSocketOpen(listener) { setGlobalSlot('open', listener) }
-export function offSocketOpen(listener) { clearGlobalSlot('open', listener) }
-export function onSocketMessage(listener) { setGlobalSlot('message', listener) }
-export function offSocketMessage(listener) { clearGlobalSlot('message', listener) }
-export function onSocketError(listener) { setGlobalSlot('error', listener) }
-export function offSocketError(listener) { clearGlobalSlot('error', listener) }
-export function onSocketClose(listener) { setGlobalSlot('close', listener) }
-export function offSocketClose(listener) { clearGlobalSlot('close', listener) }
+export function closeSocket(opts) {
+	return withSettlers(opts, (options) => {
+		const current = boundTask
+		if (current && current.readyState !== CLOSED) {
+			closeFromGlobal(current, options)
+		}
+		else {
+			settle(options, 'fail', { errMsg: 'closeSocket:fail WebSocket is not connected' })
+		}
+		// Whichever branch ran, every other connection this app started and
+		// that has not reached a terminal event is closed too, bare.
+		for (const task of [...startedTasks.values()]) {
+			if (task === current) continue
+			closeFromGlobal(task, {})
+		}
+	})
+}
+
+function setGlobalListener(type, listener) {
+	// One slot per event: a later registration replaces the earlier one, and a
+	// non-function argument registers nothing and leaves the slot alone.
+	if (isFunction(listener)) globalListeners[type] = listener
+}
+
+export function onSocketOpen(listener) {
+	setGlobalListener('open', listener)
+}
+
+export function onSocketMessage(listener) {
+	setGlobalListener('message', listener)
+}
+
+export function onSocketError(listener) {
+	setGlobalListener('error', listener)
+}
+
+export function onSocketClose(listener) {
+	setGlobalListener('close', listener)
+}

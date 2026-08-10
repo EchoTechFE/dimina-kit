@@ -163,9 +163,8 @@ async function pickRefusedPort(): Promise<number> {
 const JS_CLEANUP = `(() => {
   var g = globalThis;
   if (!g.__wsPolicy) return true;
-  for (var i = 0; i < g.__wsPolicy.globalFns.length; i++) {
-    try { wx.offSocketMessage(g.__wsPolicy.globalFns[i]); } catch (e) {}
-  }
+  // wx.onSocketMessage holds a single slot, so the next registration replaces
+  // whatever this run left behind; there is no wx.offSocketMessage to call.
   g.__wsPolicy.globalFns = [];
   for (var j = 0; j < g.__wsPolicy.reg.length; j++) {
     try { g.__wsPolicy.reg[j].close({ fail: function () {} }); } catch (e) {}
