@@ -1,3 +1,4 @@
+/** @vitest-environment jsdom */
 /**
  * `redirectTo` replaces the stack top in place, and when that top is a tab's
  * ROOT the replacement is not a tab page at all. The tab cache must not keep
@@ -9,25 +10,23 @@
  * either the cache goes or `currentTabPath` does.
  */
 import { act, fireEvent, waitFor } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import {
   makeDefaultNavigationBarState,
   normalizePath,
   reduceRedirectTo,
   type PageEntry,
   type ShellState,
-} from '@dimina-kit/electron-runtime/simulator-ui'
+} from './index.js'
 import {
   bootShell,
-  clearBrowserGlobals,
   FORCED_PAGE,
   homeButton,
   HOME_PAGE,
   INNER_PAGE,
-  installBrowserGlobals,
   serviceNav,
   visiblePagePath,
-} from './__test-stubs__/device-shell-harness'
+} from './__test-stubs__/miniapp-frame-harness.js'
 
 function makeEntry(pagePath: string, bridgeId: string, isTab: boolean): PageEntry {
   return {
@@ -89,15 +88,7 @@ describe('reduceRedirectTo — a tab root is replaced by a non-tab page', () => 
   })
 })
 
-describe('DeviceShell — the home tab root redirects to an inner page', () => {
-  beforeEach(() => {
-    installBrowserGlobals()
-  })
-
-  afterEach(() => {
-    clearBrowserGlobals()
-  })
-
+describe('MiniAppFrame — the home tab root redirects to an inner page', () => {
   it('offers the home button on the page that replaced the home tab root', async () => {
     const { container, recorder } = await bootShell(HOME_PAGE)
 

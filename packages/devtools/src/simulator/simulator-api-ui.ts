@@ -14,7 +14,7 @@
 
 import type { MiniAppContext } from './types'
 import { bindCallbacks } from './simulator-api-helpers'
-import { uiOverlayBus } from './ui-overlay-bus'
+import { uiOverlayBus } from '@dimina-kit/electron-runtime/simulator-ui'
 
 interface ToastOpts {
   title?: string

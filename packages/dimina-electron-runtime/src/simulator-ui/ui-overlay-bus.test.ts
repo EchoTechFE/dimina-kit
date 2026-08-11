@@ -4,7 +4,7 @@ import {
   type ModalDialogState,
   type ToastState,
   uiOverlayBus,
-} from './ui-overlay-bus'
+} from './ui-overlay-bus.js'
 
 // Reset singleton between tests.
 beforeEach(() => {

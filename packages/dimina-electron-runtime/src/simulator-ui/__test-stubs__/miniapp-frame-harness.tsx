@@ -1,32 +1,31 @@
 /**
- * Shared fixtures for the DeviceShell component suites: a fake native-host
- * bridge plus the probes those suites read the shell's behavior through.
+ * Shared fixtures for the MiniAppFrame suites: a fake host plus the probes
+ * those suites read the frame's behavior through.
  *
- * The bridge is a ledger, not just a stub — it records every page the shell
- * asked to open, every page it asked to close and every lifecycle it pushed, in
- * the order the host received them. A suite can therefore assert both that no
+ * The host is a ledger, not just a stub — it records every page the frame asked
+ * to open, every page it asked to close and every lifecycle it pushed, in the
+ * order the host received them. A suite can therefore assert both that no
  * render host is dropped from state without being torn down AND that the
- * lifecycle the service layer needs actually reached the bridge, not merely
- * that the reducer produced the right effect list. `calls` is the same ledger
- * with every kind interleaved, which is what an assertion about the ORDER of
- * two different calls needs. `gateOpenPage` holds `openPage` unresolved to
+ * lifecycle the service layer needs actually reached the host, not merely that
+ * the reducer produced the right effect list. `calls` is the same ledger with
+ * every kind interleaved, which is what an assertion about the ORDER of two
+ * different calls needs. `gateOpenPage` holds `openPage` unresolved to
  * reproduce the IPC round-trip window a user can click through.
  */
 import React from 'react'
 import { act, render } from '@testing-library/react'
-import { SIMULATOR_EVENTS as E } from '../../../shared/bridge-channels'
+import { SIMULATOR_EVENTS as E } from '../../shared/bridge-channels.js'
 import type {
-  ActivePagePayload,
   AppManifest,
   NavActionPayload,
   NavCallbackPayload,
   PageLifecycleEvent,
   PageOpenResult,
-  PageStackPayload,
+  PageStackEntry,
   PageWindowConfig,
-} from '../../../shared/bridge-channels'
-import { SimulatorMiniApp } from '../../simulator-mini-app'
-import { DeviceShell } from '../device-shell'
+} from '../../shared/bridge-channels.js'
+import type { MiniAppHost } from '../miniapp-host.js'
+import { MiniAppFrame } from '../miniapp-frame.js'
 
 export const APP_ID = 'test-app'
 export const HOME_PAGE = 'pages/home/home'
@@ -34,7 +33,7 @@ export const OTHER_TAB_PAGE = 'pages/mine/mine'
 export const INNER_PAGE = 'pages/detail/detail'
 /** A non-tab page whose `homeButton: true` lifts the stack-bottom requirement. */
 export const FORCED_PAGE = 'pages/promo/promo'
-/** The bridgeId main hands back for the page a spawn mounts. */
+/** The bridgeId the host hands back for the page a spawn mounts. */
 export const ROOT_BRIDGE_ID = 'root-bridge'
 export const APP_SESSION_ID = 'session-1'
 
@@ -66,7 +65,7 @@ export interface LifecycleRecord {
 }
 
 /**
- * One call the shell made on the bridge. Relative order between two different
+ * One call the frame made on the host. Relative order between two different
  * kinds of call is only assertable from a single ordered log — per-kind arrays
  * cannot express "the stack was reported before the active page was".
  */
@@ -79,20 +78,20 @@ export type HostCall =
 
 export interface HostRecorder {
   navCallbacks: NavCallbackPayload[]
-  pageStacks: PageStackPayload[]
+  pageStacks: Array<{ stack: PageStackEntry[] }>
   openedPages: string[]
-  /** Every page the shell asked main to open, with the bridgeId it received. */
+  /** Every page the frame asked the host to open, with the bridgeId it received. */
   openedEntries: OpenedPage[]
-  /** Every bridgeId the shell asked main to tear down. */
+  /** Every bridgeId the frame asked the host to tear down. */
   closedPages: string[]
   /**
-   * Every lifecycle the shell pushed over the bridge, in arrival order. The
-   * service layer only ever learns a page hid, showed or unloaded through this
-   * call, so a shell that computes the right effects but never delivers them is
+   * Every lifecycle the frame pushed to the host, in arrival order. The service
+   * layer only ever learns a page hid, showed or unloaded through this call, so
+   * a frame that computes the right effects but never delivers them is
    * indistinguishable from a correct one without reading this ledger.
    */
   lifecycles: LifecycleRecord[]
-  /** Every bridge call above, interleaved in the order the host received them. */
+  /** Every host call above, interleaved in the order the host received them. */
   calls: HostCall[]
   /** Pushes a main→simulator event exactly the way the preload bridge does. */
   fire(channel: string, payload: unknown): void
@@ -100,7 +99,17 @@ export interface HostRecorder {
   gateOpenPage(): () => void
 }
 
-export function installNativeHostMock(rootPagePath: string): HostRecorder {
+export interface FakeHost {
+  host: MiniAppHost
+  recorder: HostRecorder
+}
+
+/**
+ * A host that answers exactly what MANIFEST describes and logs everything the
+ * frame does to it. Nothing here touches a global: the frame reaches its host
+ * through the prop, so a suite can hold two independent hosts at once.
+ */
+export function createFakeHost(rootPagePath: string): FakeHost {
   const listeners = new Map<string, Set<Listener>>()
   let gate: Promise<void> | null = null
   const recorder: HostRecorder = {
@@ -127,66 +136,74 @@ export function installNativeHostMock(rootPagePath: string): HostRecorder {
   const isTab = (pagePath: string): boolean =>
     MANIFEST.tabBar!.list.some((item) => item.pagePath === pagePath)
 
-  const host = {
-    enabled: true,
-    device: undefined,
-    spawn: async () => ({
-      appSessionId: APP_SESSION_ID,
-      bridgeId: ROOT_BRIDGE_ID,
-      pagePath: rootPagePath,
-      resolvedPagePath: rootPagePath,
-      pageFallbackApplied: false,
-      serviceWcId: 1,
-      resourceBaseUrl: 'http://localhost:1234/',
-      root: 'main',
-      manifest: MANIFEST,
-      rootWindowConfig: windowConfigFor(rootPagePath),
-    }),
-    dispose: () => {},
-    openPage: async (opts: { pagePath: string }): Promise<PageOpenResult> => {
-      recorder.openedPages.push(opts.pagePath)
+  const onSimulatorEvent = <T,>(channel: string, listener: (payload: T) => void): (() => void) => {
+    let set = listeners.get(channel)
+    if (!set) { set = new Set(); listeners.set(channel, set) }
+    const fn = listener as Listener
+    set.add(fn)
+    return () => { set.delete(fn) }
+  }
+
+  const host: MiniAppHost = {
+    appId: APP_ID,
+    pagePath: rootPagePath,
+    query: {},
+    rootWindowConfig: windowConfigFor(rootPagePath),
+    resourceBaseUrl: 'http://localhost:1234/',
+    appSessionId: APP_SESSION_ID,
+
+    getTabBarConfig: () => MANIFEST.tabBar ?? null,
+    getHomePagePath: () => MANIFEST.entryPagePath ?? '',
+    getRenderPreloadUrl: () => 'about:blank',
+    // The page path rides the fragment so a test can read which page a mounted
+    // render host is actually showing.
+    createRenderHostUrl: (_bridgeId, pagePath) => `about:blank#${pagePath ?? rootPagePath}`,
+
+    openPage: async (pagePath): Promise<PageOpenResult> => {
+      recorder.openedPages.push(pagePath)
       if (gate) await gate
       nextPageId += 1
       const opened: PageOpenResult = {
         bridgeId: `page-${nextPageId}`,
-        pagePath: opts.pagePath,
-        windowConfig: windowConfigFor(opts.pagePath),
-        isTab: isTab(opts.pagePath),
+        pagePath,
+        windowConfig: windowConfigFor(pagePath),
+        isTab: isTab(pagePath),
       }
       recorder.openedEntries.push({ pagePath: opened.pagePath, bridgeId: opened.bridgeId })
       recorder.calls.push({ kind: 'openPage', pagePath: opened.pagePath, bridgeId: opened.bridgeId })
       return opened
     },
-    closePage: (bridgeId: string) => {
+    closePage: (bridgeId) => {
       recorder.closedPages.push(bridgeId)
       recorder.calls.push({ kind: 'closePage', bridgeId })
     },
-    notifyLifecycle: (payload: { bridgeId: string; event: PageLifecycleEvent }) => {
-      recorder.lifecycles.push({ bridgeId: payload.bridgeId, event: payload.event })
-      recorder.calls.push({ kind: 'lifecycle', bridgeId: payload.bridgeId, event: payload.event })
+    notifyLifecycle: (bridgeId, event) => {
+      recorder.lifecycles.push({ bridgeId, event })
+      recorder.calls.push({ kind: 'lifecycle', bridgeId, event })
     },
-    notifyNavCallback: (payload: NavCallbackPayload) => { recorder.navCallbacks.push(payload) },
-    notifyApiResponse: () => {},
-    notifyActivePage: (payload: ActivePagePayload) => {
-      recorder.calls.push({ kind: 'activePage', bridgeId: payload.bridgeId })
+    notifyNavCallback: (payload) => {
+      recorder.navCallbacks.push({ appSessionId: APP_SESSION_ID, ...payload })
     },
-    notifyPageStack: (payload: PageStackPayload) => {
-      recorder.pageStacks.push(payload)
-      recorder.calls.push({ kind: 'pageStack', stack: payload.stack.map((e) => e.pagePath) })
+    notifyActivePage: (bridgeId) => {
+      recorder.calls.push({ kind: 'activePage', bridgeId })
     },
-    // The page path rides the fragment so a test can read which page a mounted
-    // render host is actually showing.
-    createRenderHostUrl: (opts: { pagePath: string }) => `about:blank#${opts.pagePath}`,
-    renderPreloadUrl: 'about:blank',
-    onSimulatorEvent: (channel: string, listener: Listener) => {
-      let set = listeners.get(channel)
-      if (!set) { set = new Set(); listeners.set(channel, set) }
-      set.add(listener)
-      return () => { set!.delete(listener) }
+    notifyPageStack: (stack) => {
+      recorder.pageStacks.push({ stack })
+      recorder.calls.push({ kind: 'pageStack', stack: stack.map((e) => e.pagePath) })
     },
+
+    onSimulatorEvent,
+    // The session filter the real hosts apply: a payload naming a different
+    // session belongs to the other frame alive during a soft reload.
+    onSessionEvent: <T,>(channel: string, listener: (payload: T) => void) =>
+      onSimulatorEvent<T>(channel, (payload) => {
+        const sid = (payload as { appSessionId?: unknown } | null | undefined)?.appSessionId
+        if (typeof sid === 'string' && sid !== APP_SESSION_ID) return
+        listener(payload)
+      }),
   }
-  window.__diminaNativeHost = host as unknown as Window['__diminaNativeHost']
-  return recorder
+
+  return { host, recorder }
 }
 
 export interface BootedShell {
@@ -196,23 +213,12 @@ export interface BootedShell {
 }
 
 export async function bootShell(rootPagePath: string): Promise<BootedShell> {
-  const recorder = installNativeHostMock(rootPagePath)
-  const miniApp = new SimulatorMiniApp({ appId: APP_ID, scene: 1001, pagePath: rootPagePath })
-  const bridgeId = await miniApp.spawn()
+  const { host, recorder } = createFakeHost(rootPagePath)
   let container!: HTMLElement
   await act(async () => {
-    container = render(<DeviceShell miniApp={miniApp} bridgeId={bridgeId} />).container
+    container = render(<MiniAppFrame host={host} bridgeId={ROOT_BRIDGE_ID} />).container
   })
-  return { container, recorder, bridgeId }
-}
-
-export function installBrowserGlobals(): void {
-  window.__diminaCustomApis = { list: async () => [], invoke: async () => undefined }
-}
-
-export function clearBrowserGlobals(): void {
-  delete (window as { __diminaNativeHost?: unknown }).__diminaNativeHost
-  delete (window as { __diminaCustomApis?: unknown }).__diminaCustomApis
+  return { container, recorder, bridgeId: ROOT_BRIDGE_ID }
 }
 
 export function homeButton(container: HTMLElement): Element | null {

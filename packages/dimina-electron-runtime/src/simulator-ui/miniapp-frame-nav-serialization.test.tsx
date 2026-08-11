@@ -1,3 +1,4 @@
+/** @vitest-environment jsdom */
 /**
  * The shell's nav queue has to serialize STATE, not merely promises: two
  * routing actions dispatched inside one tick must each reduce from the stack
@@ -14,36 +15,32 @@
  */
 import { fireEvent } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { SIMULATOR_EVENTS as E } from '../../shared/bridge-channels'
+import { SIMULATOR_EVENTS as E } from '../shared/bridge-channels.js'
 import {
   APP_SESSION_ID,
   bootShell,
-  clearBrowserGlobals,
   FORCED_PAGE,
   homeButton,
   HOME_PAGE,
   INNER_PAGE,
-  installBrowserGlobals,
   latestStack,
   mountedPageCount,
   ROOT_BRIDGE_ID,
   serviceNav,
   visiblePagePath,
   type HostRecorder,
-} from './__test-stubs__/device-shell-harness'
+} from './__test-stubs__/miniapp-frame-harness.js'
 
 type ActFlag = { IS_REACT_ACT_ENVIRONMENT?: boolean }
 
 let actEnvironment: boolean | undefined
 
 beforeEach(() => {
-  installBrowserGlobals()
   actEnvironment = (globalThis as ActFlag).IS_REACT_ACT_ENVIRONMENT
 })
 
 afterEach(() => {
   ;(globalThis as ActFlag).IS_REACT_ACT_ENVIRONMENT = actEnvironment
-  clearBrowserGlobals()
 })
 
 /** Hands React the real scheduler so queued work spans commits. */
@@ -66,7 +63,7 @@ function dispatchBack(recorder: HostRecorder): void {
   })
 }
 
-describe('DeviceShell — two navigateBack actions land in the same tick', () => {
+describe('MiniAppFrame — two navigateBack actions land in the same tick', () => {
   it('tears down both popped pages, each exactly once, newest first', async () => {
     const { container, recorder } = await bootShell(HOME_PAGE)
     await serviceNav(recorder, 'navigateTo', INNER_PAGE)
@@ -99,7 +96,7 @@ describe('DeviceShell — two navigateBack actions land in the same tick', () =>
   })
 })
 
-describe('DeviceShell — the home button is clicked twice inside one tick', () => {
+describe('MiniAppFrame — the home button is clicked twice inside one tick', () => {
   it('lands on the home page alone and closes the page it left, once', async () => {
     const { container, recorder } = await bootShell(INNER_PAGE)
     const release = recorder.gateOpenPage()

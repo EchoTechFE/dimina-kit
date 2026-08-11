@@ -1,3 +1,4 @@
+/** @vitest-environment jsdom */
 /**
  * `navigateHome` is a terminal-state action: once the stack holds nothing but
  * the app's home page, running it again must be a no-op. Re-opening the page,
@@ -5,20 +6,18 @@
  * user (and the service layer) a lifecycle that never happened.
  */
 import { act, fireEvent, waitFor } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { SIMULATOR_EVENTS as E } from '../../shared/bridge-channels'
+import { describe, expect, it } from 'vitest'
+import { SIMULATOR_EVENTS as E } from '../shared/bridge-channels.js'
 import {
   APP_SESSION_ID,
   bootShell,
-  clearBrowserGlobals,
   homeButton,
   HOME_PAGE,
   INNER_PAGE,
-  installBrowserGlobals,
   ROOT_BRIDGE_ID,
   visiblePagePath,
   type HostRecorder,
-} from './__test-stubs__/device-shell-harness'
+} from './__test-stubs__/miniapp-frame-harness.js'
 
 function dispatchNavigateHome(recorder: HostRecorder): void {
   recorder.fire(E.NAV_ACTION, {
@@ -30,15 +29,7 @@ function dispatchNavigateHome(recorder: HostRecorder): void {
   })
 }
 
-beforeEach(() => {
-  installBrowserGlobals()
-})
-
-afterEach(() => {
-  clearBrowserGlobals()
-})
-
-describe('DeviceShell — navigateHome runs again on the home page', () => {
+describe('MiniAppFrame — navigateHome runs again on the home page', () => {
   it('keeps the home page it already reached, opening and closing nothing', async () => {
     const { container, recorder } = await bootShell(INNER_PAGE)
 

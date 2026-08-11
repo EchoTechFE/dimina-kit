@@ -1,35 +1,38 @@
 /**
- * Routing operations for DeviceShell (navigateTo / navigateBack / redirectTo /
- * reLaunch / switchTab): each opens pages through the SimulatorMiniApp, feeds
- * the pure reducers in page-stack-controller, commits the new ShellState via
- * the host's setState and applies the returned side effects. Kept out of
- * device-shell.tsx so that file stays presentational glue.
+ * Routing operations for MiniAppFrame (navigateTo / navigateBack / redirectTo /
+ * reLaunch / switchTab): each opens pages through the MiniAppHost, feeds the
+ * pure reducers in page-stack-controller, commits the new ShellState via the
+ * frame's setState and applies the returned side effects. Kept out of
+ * miniapp-frame.tsx so that file stays presentational glue.
  *
  * Every operation that mints a PageEntry also decides that page's home-button
  * visibility here, because the verdict depends on where the new page lands in
  * the stack — knowledge the reducers and the page config alone do not have.
  */
-import type { NavActionPayload } from '../../shared/bridge-channels'
-import type { SimulatorMiniApp } from '../simulator-mini-app'
+import type { Dispatch, MutableRefObject, SetStateAction } from 'react'
+import type { NavActionPayload } from '../shared/bridge-channels.js'
+import type { MiniAppHost } from './miniapp-host.js'
 import {
   navBarFromConfig,
   normalizePath,
   parseUrl,
   reduceNavigateBack,
-  reduceNavigateHomeToTab,
   reduceNavigateTo,
   reduceReLaunch,
   reduceRedirectTo,
   reduceSwitchTab,
-  resolveHomeNavAction,
-  shouldShowHomeButton,
   type PageEntry,
   type ShellState,
   type SideEffect,
-  type TabBarState,
-} from '@dimina-kit/electron-runtime/simulator-ui'
+} from './page-stack-controller.js'
+import {
+  reduceNavigateHomeToTab,
+  resolveHomeNavAction,
+  shouldShowHomeButton,
+} from './navigate-home.js'
+import type { TabBarState } from './tab-bar-state.js'
 
-export interface DeviceShellState {
+export interface MiniAppFrameState {
   shell: ShellState
   tabBar: TabBarState
 }
@@ -43,8 +46,8 @@ export type ShellNavPayload =
   | NavActionPayload
   | (Omit<NavActionPayload, 'name'> & { name: 'navigateHome' })
 
-export type StateRef = React.MutableRefObject<DeviceShellState>
-export type SetState = React.Dispatch<React.SetStateAction<DeviceShellState>>
+export type StateRef = MutableRefObject<MiniAppFrameState>
+export type SetState = Dispatch<SetStateAction<MiniAppFrameState>>
 export type Ack = (ok: boolean, errMsg: string) => void
 export type ApplySideEffects = (effects: SideEffect[]) => void
 
@@ -75,7 +78,7 @@ export function commitTabBar(ref: StateRef, setState: SetState, next: TabBarStat
  * this page is landing at.
  */
 function makePageEntry(
-  miniApp: SimulatorMiniApp,
+  host: MiniAppHost,
   opened: { bridgeId: string; pagePath: string; isTab: boolean; windowConfig: PageEntry['windowConfig'] },
   query: Record<string, unknown>,
   isStackBottom: boolean,
@@ -86,10 +89,10 @@ function makePageEntry(
     query,
     isTab: opened.isTab,
     windowConfig: opened.windowConfig,
-    navBar: navBarFromConfig(opened.windowConfig, miniApp.appId, {
+    navBar: navBarFromConfig(opened.windowConfig, host.appId, {
       homeButtonVisible: shouldShowHomeButton({
         pagePath: opened.pagePath,
-        homePagePath: miniApp.getHomePagePath(),
+        homePagePath: host.getHomePagePath(),
         isTab: opened.isTab,
         isStackBottom,
         forcedByConfig: opened.windowConfig.homeButton === true,
@@ -99,7 +102,7 @@ function makePageEntry(
 }
 
 export async function doNavigateTo(
-  miniApp: SimulatorMiniApp,
+  host: MiniAppHost,
   ref: StateRef,
   setState: SetState,
   applySideEffects: ApplySideEffects,
@@ -111,15 +114,15 @@ export async function doNavigateTo(
     ack(false, 'navigateTo:fail invalid url')
     return
   }
-  if (miniApp.getTabBarConfig()?.list.some(item => normalizePath(item.pagePath) === pagePath)) {
+  if (host.getTabBarConfig()?.list.some(item => normalizePath(item.pagePath) === pagePath)) {
     ack(false, 'navigateTo:fail can not navigateTo a tabbar page')
     return
   }
 
-  const opened = await miniApp.openPage(pagePath, query)
+  const opened = await host.openPage(pagePath, query)
   // A pushed page is never the stack bottom: the home button shows here only
   // when the page config opts in, and then coexists with the back arrow.
-  const newEntry = makePageEntry(miniApp, opened, query, false)
+  const newEntry = makePageEntry(host, opened, query, false)
   const { next, effects } = reduceNavigateTo(ref.current.shell, newEntry)
   commitShell(ref, setState, next)
   applySideEffects(effects)
@@ -146,7 +149,7 @@ export function doNavigateBack(
 }
 
 export async function doRedirectTo(
-  miniApp: SimulatorMiniApp,
+  host: MiniAppHost,
   ref: StateRef,
   setState: SetState,
   applySideEffects: ApplySideEffects,
@@ -158,15 +161,15 @@ export async function doRedirectTo(
     ack(false, 'redirectTo:fail invalid url')
     return
   }
-  if (miniApp.getTabBarConfig()?.list.some(item => normalizePath(item.pagePath) === pagePath)) {
+  if (host.getTabBarConfig()?.list.some(item => normalizePath(item.pagePath) === pagePath)) {
     ack(false, 'redirectTo:fail can not redirectTo a tabbar page')
     return
   }
-  const opened = await miniApp.openPage(pagePath, query)
+  const opened = await host.openPage(pagePath, query)
   // A redirect replaces the stack top in place, so the replacement page is the
   // stack bottom exactly when the page it replaced was. The old page's
   // wx.hideHomeButton does not carry over — this entry's nav bar is fresh.
-  const newEntry = makePageEntry(miniApp, opened, query, ref.current.shell.stack.length <= 1)
+  const newEntry = makePageEntry(host, opened, query, ref.current.shell.stack.length <= 1)
   const { next, effects } = reduceRedirectTo(ref.current.shell, newEntry)
   commitShell(ref, setState, next)
   applySideEffects(effects)
@@ -174,7 +177,7 @@ export async function doRedirectTo(
 }
 
 export async function doReLaunch(
-  miniApp: SimulatorMiniApp,
+  host: MiniAppHost,
   ref: StateRef,
   setState: SetState,
   applySideEffects: ApplySideEffects,
@@ -186,9 +189,9 @@ export async function doReLaunch(
     ack(false, 'reLaunch:fail invalid url')
     return
   }
-  const opened = await miniApp.openPage(pagePath, query)
+  const opened = await host.openPage(pagePath, query)
   // reLaunch clears the whole stack, so its target is always the new bottom.
-  const newEntry = makePageEntry(miniApp, opened, query, true)
+  const newEntry = makePageEntry(host, opened, query, true)
   const { next, effects } = reduceReLaunch(ref.current.shell, newEntry)
   commitShell(ref, setState, next)
   applySideEffects(effects)
@@ -196,7 +199,7 @@ export async function doReLaunch(
 }
 
 export async function doSwitchTab(
-  miniApp: SimulatorMiniApp,
+  host: MiniAppHost,
   ref: StateRef,
   setState: SetState,
   applySideEffects: ApplySideEffects,
@@ -208,7 +211,7 @@ export async function doSwitchTab(
     ack(false, 'switchTab:fail invalid url')
     return
   }
-  if (!miniApp.getTabBarConfig()?.list.some(item => normalizePath(item.pagePath) === pagePath)) {
+  if (!host.getTabBarConfig()?.list.some(item => normalizePath(item.pagePath) === pagePath)) {
     ack(false, `switchTab:fail not a tabBar page: ${pagePath}`)
     return
   }
@@ -217,10 +220,10 @@ export async function doSwitchTab(
   const cached = before.tabStacks[pagePath]
   let freshEntry: PageEntry | null = null
   if (!cached || cached.length === 0) {
-    const opened = await miniApp.openPage(pagePath, {})
+    const opened = await host.openPage(pagePath, {})
     // A tabBar page never shows the home button, so its stack position is
     // immaterial to the verdict; it lands as its tab substack's bottom.
-    freshEntry = makePageEntry(miniApp, { ...opened, isTab: true }, {}, true)
+    freshEntry = makePageEntry(host, { ...opened, isTab: true }, {}, true)
   }
 
   const { next, effects } = reduceSwitchTab(ref.current.shell, pagePath, freshEntry)
@@ -249,7 +252,7 @@ function isAtHome(shell: ShellState, home: string): boolean {
  * home page is unknown.
  */
 export async function doNavigateHome(
-  miniApp: SimulatorMiniApp,
+  host: MiniAppHost,
   ref: StateRef,
   setState: SetState,
   applySideEffects: ApplySideEffects,
@@ -257,8 +260,8 @@ export async function doNavigateHome(
   ack: Ack,
 ): Promise<void> {
   const action = resolveHomeNavAction(
-    miniApp.getHomePagePath(),
-    miniApp.getTabBarConfig(),
+    host.getHomePagePath(),
+    host.getTabBarConfig(),
     ref.current.shell.stack.length,
   )
   if (!action) {
@@ -275,11 +278,11 @@ export async function doNavigateHome(
   }
   const forwarded: NavActionPayload = { ...payload, name: action.name, params: { url: action.url } }
   if (action.name === 'redirectTo') {
-    await doRedirectTo(miniApp, ref, setState, applySideEffects, forwarded, ack)
+    await doRedirectTo(host, ref, setState, applySideEffects, forwarded, ack)
     return
   }
   if (action.name === 'reLaunch') {
-    await doReLaunch(miniApp, ref, setState, applySideEffects, forwarded, ack)
+    await doReLaunch(host, ref, setState, applySideEffects, forwarded, ack)
     return
   }
 
@@ -287,8 +290,8 @@ export async function doNavigateHome(
   const cached = ref.current.shell.tabStacks[homeTabPath]
   let freshEntry: PageEntry | null = null
   if (!cached || cached.length === 0) {
-    const opened = await miniApp.openPage(homeTabPath, {})
-    freshEntry = makePageEntry(miniApp, { ...opened, isTab: true }, {}, true)
+    const opened = await host.openPage(homeTabPath, {})
+    freshEntry = makePageEntry(host, { ...opened, isTab: true }, {}, true)
   }
   const { next, effects } = reduceNavigateHomeToTab(ref.current.shell, homeTabPath, freshEntry)
   commitShell(ref, setState, next)

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MiniAppContext } from './types'
-import { type ActionSheetDialogState, type ModalDialogState, uiOverlayBus } from './ui-overlay-bus'
+import { type ActionSheetDialogState, type ModalDialogState, uiOverlayBus } from '@dimina-kit/electron-runtime/simulator-ui'
 import {
   hideLoading,
   hideToast,

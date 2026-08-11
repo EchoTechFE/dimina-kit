@@ -130,12 +130,12 @@
     },
     "test-report": {
       "direction": "higher-is-better",
-      "value": 5088,
+      "value": 5093,
       "unit": "passed tests",
       "breakdown": {
         "devkit": 211,
-        "devtools": 2956,
-        "dimina-electron-runtime": 250,
+        "devtools": 2890,
+        "dimina-electron-runtime": 321,
         "electron-deck": 1059,
         "electron-deck/dock-react": 96,
         "fs-core": 133,

@@ -235,7 +235,8 @@ safe-area doc for the CDP wiring.)
 | file | role |
 |---|---|
 | `src/renderer/.../project-runtime/components/simulator-panel.tsx` | z2 panel: toolbar / placeholder / path-bar; owns the simulator `createPlacementAnchor` |
-| `src/simulator/device-shell/device-shell.tsx` + `device-shell.css` | DeviceShell: draws the whole phone inside the WCV; hosts render-host `<webview>` guests |
+| `src/simulator/device-shell/device-shell.tsx` + `device-shell.css` | DeviceShell: draws the phone (bezel, status bar, notch, home indicator) inside the WCV and hands the mini-app its metrics |
+| `packages/dimina-electron-runtime/src/simulator-ui/miniapp-frame.tsx` | MiniAppFrame: the mini-app itself — nav bar, page stack, tabBar, native overlays; hosts the render-host `<webview>` guests |
 | `src/simulator/ui-extension-runtime.ts` | renderer-side extension registry, active-root handoff, invoke routing, and semantic chrome actions |
 | `src/main/services/simulator/ui-extensions.ts` | per-context trusted bundle registry that follows the native simulator WCV |
 | `src/main/services/views/native-simulator-view.ts` | native-simulator domain module: `attachNativeSimulator`, `softReloadNativeSimulator`, bounds/zoom application (`view-manager.ts` is the composition root wiring the per-domain view modules) |

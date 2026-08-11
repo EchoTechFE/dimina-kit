@@ -1,3 +1,4 @@
+/** @vitest-environment jsdom */
 /**
  * switchTab replaces the visible stack with the target tab's substack. A page
  * that the replacement leaves in NO stack — neither visible nor cached under
@@ -6,27 +7,23 @@
  * the opposite case: they survive the switch (per-tab caching) and destroying
  * them would lose the user's position inside that tab.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import {
   bootShell,
-  clearBrowserGlobals,
   HOME_PAGE,
   INNER_PAGE,
-  installBrowserGlobals,
   OTHER_TAB_PAGE,
   ROOT_BRIDGE_ID,
   serviceNav,
   visiblePagePath,
-} from './__test-stubs__/device-shell-harness'
+} from './__test-stubs__/miniapp-frame-harness.js'
 import {
   makeDefaultNavigationBarState,
   reduceSwitchTab,
   type PageEntry,
   type ShellState,
-} from '@dimina-kit/electron-runtime/simulator-ui'
+} from './index.js'
 
-beforeEach(() => { installBrowserGlobals() })
-afterEach(() => { clearBrowserGlobals() })
 
 function makeEntry(pagePath: string, bridgeId: string, isTab: boolean): PageEntry {
   return {
@@ -80,7 +77,7 @@ describe('reduceSwitchTab — the visible page belongs to no tab substack', () =
   })
 })
 
-describe('DeviceShell — a deep-linked non-tab launch page is left behind by switchTab', () => {
+describe('MiniAppFrame — a deep-linked non-tab launch page is left behind by switchTab', () => {
   it('closes the launch page once the switch drops it from every stack', async () => {
     const { recorder } = await bootShell(INNER_PAGE)
 
@@ -96,7 +93,7 @@ describe('DeviceShell — a deep-linked non-tab launch page is left behind by sw
   })
 })
 
-describe('DeviceShell — a redirect took a tab root out of the tab caches', () => {
+describe('MiniAppFrame — a redirect took a tab root out of the tab caches', () => {
   it('closes the redirected page once the next switchTab drops it', async () => {
     const { recorder } = await bootShell(HOME_PAGE)
 
@@ -110,7 +107,7 @@ describe('DeviceShell — a redirect took a tab root out of the tab caches', () 
   })
 })
 
-describe('DeviceShell — a pushed page still belongs to the tab it was opened from', () => {
+describe('MiniAppFrame — a pushed page still belongs to the tab it was opened from', () => {
   it('survives a switch to another tab and is restored on the way back', async () => {
     const { container, recorder } = await bootShell(HOME_PAGE)
 

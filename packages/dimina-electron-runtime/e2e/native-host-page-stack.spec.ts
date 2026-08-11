@@ -9,7 +9,7 @@
  *     matches the most-recently-navigated route.
  *   - `wx.navigateBack` shrinks the stack back (length 3 → 2).
  *
- * This contract is satisfied (GREEN): DeviceShell tracks the per-tab full stack
+ * This contract is satisfied (GREEN): MiniAppFrame tracks the per-tab full stack
  * (packages/dimina-electron-runtime/src/simulator-ui/page-stack-controller.ts) and reports it over the
  * PAGE_STACK channel; the bridge stores it (bridge-router.ts `ap.pageStack`) and
  * `getPageStack`/`callWxMethod` (electron-entry.js's `__diminaE2eHooks`, a

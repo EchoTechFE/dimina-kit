@@ -1,5 +1,6 @@
+/** @vitest-environment jsdom */
 /**
- * The shell keeps a mirror of its committed state for the bridge listeners to
+ * The frame keeps a mirror of its committed state for the bridge listeners to
  * reduce from, because bridge events arrive outside React's rendering. The
  * mirror's contract has two halves, and each half needs its own kind of test:
  *
@@ -18,20 +19,16 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { act } from '@testing-library/react'
 import ts from 'typescript'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { SIMULATOR_EVENTS as E } from '../../shared/bridge-channels'
+import { describe, expect, it } from 'vitest'
+import { SIMULATOR_EVENTS as E } from '../shared/bridge-channels.js'
 import {
   APP_SESSION_ID,
   bootShell,
-  clearBrowserGlobals,
   HOME_PAGE,
-  installBrowserGlobals,
   ROOT_BRIDGE_ID,
   type HostRecorder,
-} from './__test-stubs__/device-shell-harness'
+} from './__test-stubs__/miniapp-frame-harness.js'
 
-beforeEach(() => { installBrowserGlobals() })
-afterEach(() => { clearBrowserGlobals() })
 
 function fireNavBar(
   recorder: HostRecorder,
@@ -76,7 +73,7 @@ function tabBarPresent(container: HTMLElement): boolean {
   return !!container.querySelector('.dmb-tab-bar')
 }
 
-describe('DeviceShell — two navigation-bar updates arrive in one tick', () => {
+describe('MiniAppFrame — two navigation-bar updates arrive in one tick', () => {
   it('reduces the second update from the state the first synchronously committed', async () => {
     const { container, recorder } = await bootShell(HOME_PAGE)
 
@@ -90,7 +87,7 @@ describe('DeviceShell — two navigation-bar updates arrive in one tick', () => 
   })
 })
 
-describe('DeviceShell — a navigation-bar update precedes a full React flush', () => {
+describe('MiniAppFrame — a navigation-bar update precedes a full React flush', () => {
   it('carries its committed state into the next update', async () => {
     const { container, recorder } = await bootShell(HOME_PAGE)
 
@@ -104,7 +101,7 @@ describe('DeviceShell — a navigation-bar update precedes a full React flush', 
   })
 })
 
-describe('DeviceShell — two tabBar actions arrive in one tick', () => {
+describe('MiniAppFrame — two tabBar actions arrive in one tick', () => {
   it('reduces the second action from the state the first synchronously committed', async () => {
     const { container, recorder } = await bootShell(HOME_PAGE)
 
@@ -122,7 +119,7 @@ describe('DeviceShell — two tabBar actions arrive in one tick', () => {
   })
 })
 
-describe('DeviceShell — a tabBar action precedes a full React flush', () => {
+describe('MiniAppFrame — a tabBar action precedes a full React flush', () => {
   it('carries its committed state into the next action', async () => {
     const { container, recorder } = await bootShell(HOME_PAGE)
 
@@ -140,7 +137,7 @@ describe('DeviceShell — a tabBar action precedes a full React flush', () => {
 
 const SHELL_SOURCE_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
-  'device-shell.tsx',
+  'miniapp-frame.tsx',
 )
 
 function isAssignmentOperator(kind: ts.SyntaxKind): boolean {
@@ -185,7 +182,7 @@ function writesStateRef(target: ts.Expression): boolean {
 
 function parseShellSource(): ts.SourceFile {
   return ts.createSourceFile(
-    'device-shell.tsx',
+    'miniapp-frame.tsx',
     readFileSync(SHELL_SOURCE_PATH, 'utf8'),
     ts.ScriptTarget.Latest,
     true,
@@ -204,7 +201,7 @@ function collect(file: ts.SourceFile, pick: (node: ts.Node) => string | null): s
   return found
 }
 
-describe('device-shell.tsx — the state mirror has no writer outside its commit points', () => {
+describe('miniapp-frame.tsx — the state mirror has no writer outside its commit points', () => {
   it('declares the mirror under the name this guard matches on', () => {
     const file = parseShellSource()
     const declarations = collect(file, (node) =>

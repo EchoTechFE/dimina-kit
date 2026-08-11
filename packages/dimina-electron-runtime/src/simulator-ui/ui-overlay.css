@@ -1,7 +1,8 @@
 /*
- * Native interaction overlays (toast / loading / modal / action sheet) drawn
- * inside the device frame. The `.dmui-overlay` fills `.device-shell` and sits
- * above the page <webview> (z 100) and tabBar, matching WeChat's chrome.
+ * Native interaction overlays (toast / loading / modal / action sheet).
+ * `.dmui-overlay` fills the nearest positioned ancestor — the box the host
+ * draws around the mini-app — and sits above the page <webview> (z 100) and the
+ * tabBar, matching WeChat's chrome.
  */
 .dmui-overlay {
   position: absolute;

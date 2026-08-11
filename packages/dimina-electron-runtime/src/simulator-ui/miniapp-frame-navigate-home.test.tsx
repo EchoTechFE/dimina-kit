@@ -1,5 +1,6 @@
+/** @vitest-environment jsdom */
 /**
- * DeviceShell's "back to home" journeys that only show up on the second
+ * MiniAppFrame's "back to home" journeys that only show up on the second
  * transfer — a cached tab substack under the home page, and a second click
  * landing inside the first click's open-page round trip.
  *
@@ -9,15 +10,13 @@
  * page still mounted) instead of only checking what is on screen.
  */
 import { act, fireEvent, waitFor } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import {
   bootShell,
-  clearBrowserGlobals,
   FORCED_PAGE,
   homeButton,
   HOME_PAGE,
   INNER_PAGE,
-  installBrowserGlobals,
   latestStack,
   mountedPageCount,
   OTHER_TAB_PAGE,
@@ -25,17 +24,9 @@ import {
   serviceNav,
   visiblePagePath,
   type HostRecorder,
-} from './__test-stubs__/device-shell-harness'
+} from './__test-stubs__/miniapp-frame-harness.js'
 
-beforeEach(() => {
-  installBrowserGlobals()
-})
-
-afterEach(() => {
-  clearBrowserGlobals()
-})
-
-describe('DeviceShell — home tab already carries a cached substack', () => {
+describe('MiniAppFrame — home tab already carries a cached substack', () => {
   /**
    * Launch on the home tab, push an inner page onto it, switch to the other
    * tab, then push the opted-in page that shows the home button. Restoring the
@@ -104,7 +95,7 @@ describe('DeviceShell — home tab already carries a cached substack', () => {
   })
 })
 
-describe('DeviceShell — the home button is clicked twice in the open-page window', () => {
+describe('MiniAppFrame — the home button is clicked twice in the open-page window', () => {
   it('opens the home page once and leaves no page unaccounted for', async () => {
     const { container, recorder } = await bootShell(INNER_PAGE)
     const release = recorder.gateOpenPage()

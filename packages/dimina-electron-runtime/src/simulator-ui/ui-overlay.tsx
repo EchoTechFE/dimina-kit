@@ -5,16 +5,16 @@ import {
   type ModalDialogState,
   type ToastState,
   type UiOverlayState,
-} from '../ui-overlay-bus'
+} from './ui-overlay-bus.js'
 import './ui-overlay.css'
 
 /**
- * Renders the native interaction overlays (toast / loading / modal /
- * action sheet) inside the device frame. Subscribes to `uiOverlayBus`, which
- * the simulator-resident wx.* handlers in `simulator-api-ui.ts` push into.
+ * Renders the native interaction overlays (toast / loading / modal / action
+ * sheet). Subscribes to `uiOverlayBus`, which the wx.* handlers running in the
+ * same document push into — they cannot touch React state directly.
  *
- * Mounted as the last child of `.device-shell` so it layers above the page
- * <webview> (same approach as the status/nav bar) and is clipped to the bezel.
+ * MiniAppFrame mounts this after the page and the tabBar, so it layers above
+ * both and is clipped to whatever box the host draws around the mini-app.
  */
 export function UiOverlay() {
   const [{ toast, dialog }, setState] = useState<UiOverlayState>(() => uiOverlayBus.getState())

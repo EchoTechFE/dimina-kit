@@ -1,3 +1,4 @@
+/** @vitest-environment jsdom */
 /**
  * Rendering and wiring contract for the navigation bar's "back to home"
  * button.
@@ -8,32 +9,30 @@
  * neither control renders. The glyph is the filled Material `home` path, the
  * same icon family the back arrow already comes from.
  *
- * Wiring: DeviceShell decides visibility from the live page (tab membership,
+ * Wiring: MiniAppFrame decides visibility from the live page (tab membership,
  * entry-page identity, stack position) rather than from the page config alone,
  * and a click routes to the app's entry page with the verb that leaves the
  * stack holding nothing but that page.
  */
 import React from 'react'
 import { act, fireEvent, render, waitFor } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { SIMULATOR_EVENTS as E } from '../../shared/bridge-channels'
+import { describe, expect, it } from 'vitest'
+import { SIMULATOR_EVENTS as E } from '../shared/bridge-channels.js'
 import {
   bootShell,
-  clearBrowserGlobals,
   homeButton,
   HOME_PAGE,
   INNER_PAGE,
-  installBrowserGlobals,
   latestStack,
   mountedPageCount,
   OTHER_TAB_PAGE,
   ROOT_BRIDGE_ID,
-} from './__test-stubs__/device-shell-harness'
+} from './__test-stubs__/miniapp-frame-harness.js'
 import {
   makeDefaultNavigationBarState,
   NavigationBar,
   type NavigationBarState,
-} from '@dimina-kit/electron-runtime/simulator-ui'
+} from './index.js'
 
 /** Material Icons `home` (filled) — google/material-design-icons 24px glyph. */
 const HOME_ICON_PATH = 'M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z'
@@ -105,17 +104,9 @@ describe('NavigationBar — home button coexists with the back arrow', () => {
   })
 })
 
-// ── DeviceShell integration ───────────────────────────────────────────────
+// ── MiniAppFrame integration ───────────────────────────────────────────────
 
-beforeEach(() => {
-  installBrowserGlobals()
-})
-
-afterEach(() => {
-  clearBrowserGlobals()
-})
-
-describe('DeviceShell — where the home button appears', () => {
+describe('MiniAppFrame — where the home button appears', () => {
   it('shows it when the session starts on a non-tab page that is not the entry page', async () => {
     const { container } = await bootShell(INNER_PAGE)
     expect(homeButton(container)).not.toBeNull()
@@ -132,7 +123,7 @@ describe('DeviceShell — where the home button appears', () => {
   })
 })
 
-describe('DeviceShell — wx.hideHomeButton', () => {
+describe('MiniAppFrame — wx.hideHomeButton', () => {
   it('removes the button from the calling page and keeps it removed across re-renders', async () => {
     const { container, recorder, bridgeId } = await bootShell(INNER_PAGE)
     expect(homeButton(container)).not.toBeNull()
@@ -156,7 +147,7 @@ describe('DeviceShell — wx.hideHomeButton', () => {
   })
 })
 
-describe('DeviceShell — clicking the home button', () => {
+describe('MiniAppFrame — clicking the home button', () => {
   it('switches to the entry page when that page is a tabBar page', async () => {
     const { container, recorder } = await bootShell(INNER_PAGE)
 

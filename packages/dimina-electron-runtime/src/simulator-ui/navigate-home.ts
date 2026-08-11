@@ -2,7 +2,7 @@
  * The simulator's "back to home" authority — the nav-bar home button's
  * visibility rule, the routing verb it dispatches, and the terminal-state
  * reduction for the tabBar branch. Mirrors each native platform's
- * `navigateHome` primitive; DeviceShell only dispatches.
+ * `navigateHome` primitive; MiniAppFrame only dispatches.
  */
 import type { TabBarConfig } from '../shared/bridge-channels.js'
 import {

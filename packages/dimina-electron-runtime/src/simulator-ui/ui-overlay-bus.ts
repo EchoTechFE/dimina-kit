@@ -4,7 +4,7 @@
  *
  * The wx.* UI handlers in `simulator-api-ui.ts` run inside the simulator
  * renderer (via runApiAsync) but cannot touch React state directly. They push
- * the desired overlay into this singleton; the `DeviceShell`-resident
+ * the desired overlay into this singleton; the `MiniAppFrame`-resident
  * `<UiOverlay>` subscribes and renders it inside the device frame (above the
  * page <webview>, clipped to the bezel — the same layering the status/nav bar
  * already use). User interaction (modal confirm/cancel, action-sheet tap) is

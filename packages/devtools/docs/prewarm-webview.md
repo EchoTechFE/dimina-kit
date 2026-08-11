@@ -368,7 +368,7 @@ pool 在 `acquire(spec)` 时按 `preloadPath` 校验 entry 是否匹配（`match
 
 ## 5. 已知限制
 
-**render 侧 `<webview>` 无法预热**：mini-app 页面用 `<webview>` tag 承载（`src/simulator/device-shell/device-shell.tsx` 的 `<webview>`，**不带静态 partition**——主进程的 `will-attach-webview` 把它钉到该项目的 per-project `persist:miniapp-<key>` partition）。Electron **没有把预热 `WebContents` reparent 到 `<webview>` 元素的 API**，所以 render 侧 pool 受此硬限制阻塞。当前 service 侧已做成 BrowserWindow（已 pool），render 侧仍是 `<webview>`，该限制未解除。render 侧 pool 只有在 render 也改成 BrowserWindow / WebContentsView 之后才可能。
+**render 侧 `<webview>` 无法预热**：mini-app 页面用 `<webview>` tag 承载（`packages/dimina-electron-runtime/src/simulator-ui/miniapp-frame.tsx` 的 `<webview>`，**不带静态 partition**——主进程的 `will-attach-webview` 把它钉到该项目的 per-project `persist:miniapp-<key>` partition）。Electron **没有把预热 `WebContents` reparent 到 `<webview>` 元素的 API**，所以 render 侧 pool 受此硬限制阻塞。当前 service 侧已做成 BrowserWindow（已 pool），render 侧仍是 `<webview>`，该限制未解除。render 侧 pool 只有在 render 也改成 BrowserWindow / WebContentsView 之后才可能。
 
 **预热省不掉 service 业务初始化**：预热只能省 §1.1 的 A + B（fork + preload + parse）一次。service 的业务初始化（§1.1 D）跟 V8 isolate 绑定，每个新 spawn 都得跑一遍 — 这是物理上限，pool 不能省。
 

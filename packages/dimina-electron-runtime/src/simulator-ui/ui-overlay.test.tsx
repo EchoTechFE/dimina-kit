@@ -1,3 +1,4 @@
+/** @vitest-environment jsdom */
 /**
  * Characterization tests for `<UiOverlay>`: the React component that renders
  * toasts, modals and action sheets inside the device frame, driven by
@@ -17,9 +18,9 @@
 import React from 'react'
 import { act, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { UiOverlay } from './ui-overlay'
-import { uiOverlayBus } from '../ui-overlay-bus'
-import type { ToastState } from '../ui-overlay-bus'
+import { UiOverlay } from './ui-overlay.js'
+import { uiOverlayBus } from './ui-overlay-bus.js'
+import type { ToastState } from './ui-overlay-bus.js'
 
 beforeEach(() => {
   vi.useFakeTimers()

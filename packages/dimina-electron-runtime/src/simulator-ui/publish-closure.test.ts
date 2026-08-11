@@ -148,11 +148,13 @@ describe('simulator-ui publish closure', () => {
     expect(missing).toEqual([])
   })
 
-  it('reaches the CSS module declaration through the entry reference directive', () => {
+  it('reaches the ambient declarations through the entry reference directives', () => {
     const closure = importClosure(ENTRY).map(file => relative(PACKAGE_ROOT, file).split(sep).join('/'))
 
-    expect(closure).toContain('src/simulator-ui/css.d.ts')
-    expect(isPublished(manifest.files, 'src/simulator-ui/css.d.ts')).toBe(true)
+    for (const declaration of ['src/simulator-ui/css.d.ts', 'src/simulator-ui/webview.d.ts']) {
+      expect(closure).toContain(declaration)
+      expect(isPublished(manifest.files, declaration)).toBe(true)
+    }
   })
 
   it('reads files patterns as POSIX only, which is what the closure normalises for', () => {
@@ -163,5 +165,13 @@ describe('simulator-ui publish closure', () => {
   it('keeps test files out of the tarball while keeping their subjects in', () => {
     expect(isPublished(manifest.files, 'src/simulator-ui/tab-bar.test.tsx')).toBe(false)
     expect(isPublished(manifest.files, 'src/simulator-ui/tab-bar.tsx')).toBe(true)
+  })
+
+  it('keeps test fixtures out of the tarball', () => {
+    // A fixture is not named `*.test.*`, so the exclusion above does not catch
+    // it — and it imports devDependencies, which a consumer cannot resolve.
+    expect(
+      isPublished(manifest.files, 'src/simulator-ui/__test-stubs__/miniapp-frame-harness.tsx'),
+    ).toBe(false)
   })
 })

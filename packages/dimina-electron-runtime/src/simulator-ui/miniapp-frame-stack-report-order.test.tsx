@@ -1,3 +1,4 @@
+/** @vitest-environment jsdom */
 /**
  * A stack change reaches main as two separate bridge calls — the full ordered
  * stack and the new active page — and the order between them is a contract,
@@ -13,23 +14,19 @@
  * whoever is waiting on it.
  */
 import { act } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { SIMULATOR_EVENTS as E } from '../../shared/bridge-channels'
+import { describe, expect, it } from 'vitest'
+import { SIMULATOR_EVENTS as E } from '../shared/bridge-channels.js'
 import {
   APP_SESSION_ID,
   bootShell,
-  clearBrowserGlobals,
   FORCED_PAGE,
   HOME_PAGE,
   INNER_PAGE,
-  installBrowserGlobals,
   ROOT_BRIDGE_ID,
   serviceNav,
   type HostRecorder,
-} from './__test-stubs__/device-shell-harness'
+} from './__test-stubs__/miniapp-frame-harness.js'
 
-beforeEach(() => { installBrowserGlobals() })
-afterEach(() => { clearBrowserGlobals() })
 
 /** Drives one `navigateBack` the way the service host issues it. */
 async function navigateBack(recorder: HostRecorder): Promise<void> {
@@ -46,7 +43,7 @@ async function navigateBack(recorder: HostRecorder): Promise<void> {
   })
 }
 
-describe('DeviceShell — navigateBack pops a page off a three-page stack', () => {
+describe('MiniAppFrame — navigateBack pops a page off a three-page stack', () => {
   it('reports the new stack to main before it reports the new active page', async () => {
     const { recorder } = await bootShell(HOME_PAGE)
     await serviceNav(recorder, 'navigateTo', INNER_PAGE)

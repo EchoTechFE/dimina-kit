@@ -14,5 +14,10 @@ export default defineConfig({
     // Main-process modules run on Node. The simulator-ui component tests that
     // need a DOM opt in per file with a `@vitest-environment jsdom` docblock.
     environment: 'node',
+    // @testing-library/react unmounts each render in an `afterEach` it
+    // registers itself, and it only does so when a global `afterEach` exists.
+    // Without this a component suite leaves its trees in the document and the
+    // next `screen.getBy*` finds several matches instead of one.
+    globals: true,
   },
 })

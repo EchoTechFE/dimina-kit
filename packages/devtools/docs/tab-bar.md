@@ -95,8 +95,8 @@ export interface TabBarConfig {
 - `packages/dimina-electron-runtime/src/simulator-ui/tab-bar.tsx` —— React 组件，从 `state` + props 渲染。
 - `packages/dimina-electron-runtime/src/simulator-ui/tab-bar-state.ts` —— 纯函数 reducer
   `applyTabAction(prev, action)`，输入旧 state + action，返回新 state +
-  `{ ok, errMsg }`，DeviceShell 拿到 ack 后回灌 `notifyNavCallback`。
-- 接入点在 `src/simulator/device-shell/device-shell.tsx`：监听
+  `{ ok, errMsg }`，MiniAppFrame 拿到 ack 后回灌 `notifyNavCallback`。
+- 接入点在 `packages/dimina-electron-runtime/src/simulator-ui/miniapp-frame.tsx`：监听
   `SIMULATOR_EVENTS.TAB_ACTION` → `applyTabAction` → `setState` →
   React 自然重渲染。
 - CSS class（`packages/dimina-electron-runtime/src/simulator-ui/tab-bar.css`）：`.dmb-tab-bar`
