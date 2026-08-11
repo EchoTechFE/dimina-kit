@@ -1,0 +1,58 @@
+import './menu-capsule.css'
+import type { NavBarPlatform } from './navigation-bar.js'
+import {
+  MENU_CAPSULE_HEIGHT,
+  MENU_CAPSULE_TRAILING_SPACING,
+  MENU_CAPSULE_WIDTH,
+  getMenuCapsuleTopOffset,
+} from '../shared/menu-button-geometry.js'
+
+// Geometry helpers live in shared/menu-button-geometry.ts so the service-host
+// sync impl (no React) and this component share one source of truth.
+export { getMenuCapsuleRect, type MenuButtonRect as MenuCapsuleRect } from '../shared/menu-button-geometry.js'
+
+export interface MenuCapsuleProps {
+  platform: NavBarPlatform
+  statusBarHeight: number
+  onMore?: () => void
+}
+
+/**
+ * Capsule bar (more / close) rendered in the navigation-bar area. The generic
+ * simulator emits a semantic action; product-specific menus remain downstream.
+ *
+ * Native containers render the capsule as an opaque white pill with dark
+ * icons regardless of the nav bar's textStyle (see MenuButtonGeometry.kt /
+ * MenuAPI.swift), so this does not theme off navBar textStyle either.
+ */
+export function MenuCapsule({ platform, statusBarHeight, onMore }: MenuCapsuleProps) {
+  const top = statusBarHeight + getMenuCapsuleTopOffset(platform)
+
+  return (
+    <div
+      className="menu-capsule"
+      style={{ width: MENU_CAPSULE_WIDTH, height: MENU_CAPSULE_HEIGHT, top, right: MENU_CAPSULE_TRAILING_SPACING }}
+    >
+      <button
+        type="button"
+        className="menu-capsule__more"
+        aria-label="More"
+        onClick={onMore}
+      >
+        <span className="menu-capsule__dot menu-capsule__dot--side" />
+        <span className="menu-capsule__dot menu-capsule__dot--mid" />
+        <span className="menu-capsule__dot menu-capsule__dot--side" />
+      </button>
+      <div className="menu-capsule__divider" />
+      <div className="menu-capsule__close">
+        {/* Native draws a hollow ring + filled center dot, not an "X" — see
+            DiminaActivity.kt#MiniProgramCapsuleButton / DMPPageController.swift#makeCapsuleCloseImage
+            (both: 22x22 canvas, ring r=7.8 stroke=2.4, center dot r=3.1). */}
+        <svg viewBox="0 0 22 22" width="22" height="22" aria-hidden="true">
+          <circle cx="11" cy="11" r="7.8" fill="none" stroke="currentColor" strokeWidth="2.4" />
+          <circle cx="11" cy="11" r="3.1" fill="currentColor" />
+        </svg>
+      </div>
+    </div>
+  )
+}

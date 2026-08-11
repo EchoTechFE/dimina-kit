@@ -6,17 +6,3 @@ interface Window {
     ipcRenderer: import('electron').IpcRenderer
   }
 }
-
-declare namespace JSX {
-  interface IntrinsicElements {
-    webview: React.DetailedHTMLProps<
-      React.HTMLAttributes<HTMLElement> & {
-        src?: string
-        preload?: string
-        partition?: string
-        allowpopups?: string
-      },
-      HTMLElement
-    > & { ref?: React.Ref<HTMLElement | null> }
-  }
-}

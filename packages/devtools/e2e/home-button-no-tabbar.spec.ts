@@ -21,7 +21,7 @@
  *     `homeButton: true` in its own page config.
  *
  * DOM contract: home button `.nav-bar__home`, back arrow `.nav-bar__back`
- * (see src/simulator/device-shell/navigation-bar.tsx), both inside the
+ * (see packages/dimina-electron-runtime/src/simulator-ui/navigation-bar.tsx), both inside the
  * native-host device shell (`.device-shell-root`, DIMINA_NATIVE_HOST=1 only).
  */
 import { test, expect, _electron, type ElectronApplication, type Page as PwPage } from '@playwright/test'

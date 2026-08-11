@@ -1,4 +1,4 @@
-import { getMenuCapsuleRect, type MenuButtonRect, type MenuPlatform } from '../../simulator/device-shell/menu-button-geometry.js'
+import { getMenuCapsuleRect, type MenuButtonRect, type MenuPlatform } from '@dimina-kit/electron-runtime/shared/menu-button-geometry'
 
 interface SpawnContext {
   hostEnvSnapshot?: {

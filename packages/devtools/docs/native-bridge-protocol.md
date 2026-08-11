@@ -253,7 +253,7 @@ SIMULATOR_EVENTS = {
 
 simulator 的 NavigationBar 按微信 MiniProgram 规范实现；胶囊（capsule）的尺寸/位置/视觉则对齐 dimina 各端 native 的实际渲染（见下），而非独立于 native 的一套数值。
 
-**视觉**（`src/simulator/device-shell/navigation-bar.tsx`、`menu-capsule.tsx`、`navigation-bar.css`、`menu-capsule.css`）：
+**视觉**（`packages/dimina-electron-runtime/src/simulator-ui/navigation-bar.tsx`、`menu-capsule.tsx`、`navigation-bar.css`、`menu-capsule.css`）：
 
 - status bar 高度：iOS 44、Android 24。DeviceShell 的视觉布局直接取平台常量 `STATUS_BAR_HEIGHT_IOS = 44` / `STATUS_BAR_HEIGHT_ANDROID = 24`（`device-shell.tsx`，按 `platform` 选用）；同一组值另由 `hostEnvSnapshot`（`simulator-mini-app.ts`，`statusBarHeight = ios?44:24`）在 spawn 时下发给 service-host 的 sync 实现（getSystemInfo / 胶囊 geometry）。nav bar 高度 44（`NavigationBarProps.navBarHeight`）
 - 标题对齐：iOS center / Android left（`titleAlign`）
@@ -262,7 +262,7 @@ simulator 的 NavigationBar 按微信 MiniProgram 规范实现；胶囊（capsul
 - 颜色动画（`wx.setNavigationBarColor.animation` → CSS transition，`TIMING_FUNC_MAP` 4 种 timingFunc）
 - `navigationStyle: custom`：整条 bar 隐藏，胶囊保留（`isCustom`）
 
-**胶囊** geometry（`src/simulator/device-shell/menu-button-geometry.ts` `getMenuCapsuleRect`）：
+**胶囊** geometry（`packages/dimina-electron-runtime/src/shared/menu-button-geometry.ts` `getMenuCapsuleRect`）：
 
 - 尺寸/间距对齐 native（iOS `MenuAPI.swift` `DMPMenuButtonLayout` / Android `MenuButtonGeometry.kt`）：两端胶囊都是 87×32，trailing spacing 都是 10；两端的差异只在 nav bar content height 不同（iOS 44、Android 64），所以 top 偏移不同：iOS = statusBarHeight + 6，Android = statusBarHeight + 16
 - `right`/`left` 是绝对像素坐标（`right = windowWidth - 10`），不是到边缘的 margin——这与 `wx.getMenuButtonBoundingClientRect()` 的真实返回契约一致
@@ -299,7 +299,7 @@ TabBar 同样由 DeviceShell 渲染（`tab-bar.tsx` + `tab-bar-state.ts`），�
 | `src/service-host/sync-api-patch.ts` | service.js 之后把 `*Sync` API patch 成 `sync-impls/` 本地实现 |
 | `src/shared/bridge-channels.ts` | `BridgeMessageType` / `BRIDGE_CHANNELS` / `SIMULATOR_EVENTS` / `TabBarConfig` 等协议常量 |
 | `src/main/ipc/bridge-router.ts` | 主进程 BridgeRouter：两级 session、`resourceLoaded` 聚合、`invokeAPI` 路由、生命周期转发、logic.js 注入 |
-| `src/simulator/device-shell/navigation-bar.tsx` | NavigationBar 视觉实现（标题对齐 / 返回按钮 / loading / 颜色动画 / custom 隐藏） |
-| `src/simulator/device-shell/page-stack-controller.ts` | 页面栈纯 reducer（`navigateTo`/`Back`/`redirectTo`/`reLaunch`/`switchTab` → lifecycle/closePage effect） |
+| `packages/dimina-electron-runtime/src/simulator-ui/navigation-bar.tsx` | NavigationBar 视觉实现（标题对齐 / 返回按钮 / loading / 颜色动画 / custom 隐藏） |
+| `packages/dimina-electron-runtime/src/simulator-ui/page-stack-controller.ts` | 页面栈纯 reducer（`navigateTo`/`Back`/`redirectTo`/`reLaunch`/`switchTab` → lifecycle/closePage effect） |
 
 > 容器拓扑与 Session 细节见 [`./electron-container.md`](./electron-container.md)；页面栈与 TabBar 见 [`./page-stack.md`](./page-stack.md) 与 [`./tab-bar.md`](./tab-bar.md)；panel / toolbar 抽象见 [`./workbench-model.md`](./workbench-model.md)。
