@@ -127,26 +127,20 @@
       "default": "./dist/shared/menu-button-geometry.js"
     },
     "./simulator-ui": {
-      "types": "./src/simulator-ui/index.ts",
-      "default": "./src/simulator-ui/index.ts"
+      "types": "./dist/simulator-ui/index.d.ts",
+      "default": "./dist/simulator-ui/index.js"
     }
   },
   "files": [
     "dist",
     "!dist/**/*.js.map",
     "!dist/**/*.d.ts.map",
-    "src/simulator-ui",
-    "!src/simulator-ui/**/*.test.*",
-    "!src/simulator-ui/__test-stubs__",
-    "src/shared/bridge-channels.ts",
-    "src/shared/menu-button-geometry.ts",
-    "src/shared/runtime-types.ts",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "build:code": "tsc -p tsconfig.build.json",
+    "build": "pnpm run build:code",
+    "build:code": "tsc -p tsconfig.build.json && tsc -p tsconfig.simulator-ui.build.json && node build-simulator-ui-css.mjs",
     "build:assets": "node build-assets.mjs",
     "build:package": "pnpm --filter @dimina-kit/electron-deck build && pnpm run build:code && pnpm run build:assets",
     "check-types": "tsc --noEmit && tsc -p tsconfig.simulator-ui.json && tsc -p tsconfig.simulator-ui.node16.json",

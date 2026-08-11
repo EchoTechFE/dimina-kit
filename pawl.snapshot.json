@@ -130,12 +130,12 @@
     },
     "test-report": {
       "direction": "higher-is-better",
-      "value": 5093,
+      "value": 5094,
       "unit": "passed tests",
       "breakdown": {
         "devkit": 211,
         "devtools": 2890,
-        "dimina-electron-runtime": 321,
+        "dimina-electron-runtime": 322,
         "electron-deck": 1059,
         "electron-deck/dock-react": 96,
         "fs-core": 133,
@@ -151,7 +151,7 @@
       "breakdown": {
         "devkit": 99.91,
         "devtools": 99.76,
-        "dimina-electron-runtime": 99.79,
+        "dimina-electron-runtime": 99.84,
         "electron-deck": 99.72,
         "fs-core": 99.97,
         "inspect": 99.99,

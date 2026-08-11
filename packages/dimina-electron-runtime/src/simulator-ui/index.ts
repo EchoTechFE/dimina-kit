@@ -11,19 +11,12 @@
  * lives in `shared/menu-button-geometry` so the React-free service host can
  * measure the capsule without pulling React in.
  *
- * The `css.d.ts` and `webview.d.ts` references are what put those ambient
- * declarations into a consumer's type graph. Nothing imports either file, so a
- * consumer building from this entry would otherwise never load them and would
- * see the components' stylesheet imports as unresolved modules and `<webview>`
- * as an unknown element.
+ * This subpath ships as compiled JavaScript and declarations, so `css.d.ts` and
+ * `webview.d.ts` serve this package's own compile only — both sit inside the
+ * compiled directory and load with it. A consumer never sees them, and never
+ * needs to: it resolves stylesheets through its own bundler and gets `<webview>`
+ * already type-checked.
  */
-// These hold nothing but ambient declarations, so there is no binding to import
-// and no import that would pull them in — a reference directive is how a
-// declaration-only file joins the program.
-/* eslint-disable @typescript-eslint/triple-slash-reference */
-/// <reference path="./css.d.ts" />
-/// <reference path="./webview.d.ts" />
-/* eslint-enable @typescript-eslint/triple-slash-reference */
 export * from './miniapp-frame.js'
 export * from './miniapp-host.js'
 export * from './miniapp-routing.js'

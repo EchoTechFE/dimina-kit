@@ -1,14 +1,15 @@
 /**
- * The `simulator-ui` subpath export points at TypeScript source, not `dist`,
- * because a bundler consumes it. That makes the published tarball responsible
- * for carrying every file the entry transitively reaches by a relative import —
- * including the ones outside `src/simulator-ui`, which `files` has to name one
- * by one. A consumer installing the package resolves those imports against the
- * tarball, so a file left out is an unresolvable import at their build time,
- * invisible from inside this workspace where the file still exists.
+ * The `simulator-ui` subpath ships compiled output, so `tsc` is what guarantees
+ * every `.ts`/`.tsx` the entry reaches ends up in `dist`. Stylesheets are the
+ * hole in that guarantee: the components import them for their side effect and
+ * `tsc` keeps the import in the emitted JavaScript while copying nothing, so a
+ * separate script (build-simulator-ui-css.mjs) carries them over — and it reads
+ * one flat directory. A stylesheet added in a subdirectory would compile,
+ * publish, and then fail to resolve in a consumer's bundler.
  *
- * This walks the real import graph from the entry and asserts `files` covers
- * all of it.
+ * This walks the real import graph from the entry and asserts the shape the
+ * copy step can actually cover, plus that the manifest exports compiled output
+ * rather than implementation source.
  */
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { dirname, join, relative, resolve, sep } from 'node:path'
@@ -19,22 +20,14 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const PACKAGE_ROOT = resolve(HERE, '../..')
 const ENTRY = join(HERE, 'index.ts')
 
-/**
- * Extensionless bundler specifiers resolve through these, in order. A
- * stylesheet is always imported with its `.css` spelled out, so the empty
- * suffix already covers it — guessing `.css` for an extensionless specifier
- * would accept an import Vite itself does not resolve.
- */
-const RESOLUTION_ORDER = ['', '.ts', '.tsx', '/index.ts', '/index.tsx']
-
 function candidatePaths(base: string): string[] {
-  // `src/shared` is Node16 ESM, where a relative import spells the EMITTED
-  // `.js` while the file on disk is `.ts`.
+  // Relative specifiers spell the EMITTED `.js` while the file on disk is
+  // `.ts`/`.tsx`; a stylesheet is imported with its own extension.
   if (base.endsWith('.js')) {
     const stem = base.slice(0, -'.js'.length)
     return [`${stem}.ts`, `${stem}.tsx`, base]
   }
-  return RESOLUTION_ORDER.map(suffix => base + suffix)
+  return [base]
 }
 
 function resolveSpecifier(fromFile: string, specifier: string): string | null {
@@ -47,15 +40,12 @@ function resolveSpecifier(fromFile: string, specifier: string): string | null {
 
 /**
  * Every relative specifier in a source file: `from '...'`, bare side-effect
- * `import '...'`, dynamic `import('...')`, and `/// <reference path="...">`.
- * A dynamic import reaches a file at runtime just as a static one does, and a
- * reference directive pulls a declaration file into the consumer's program, so
- * leaving either out would let an unpublished file through.
+ * `import '...'`, and dynamic `import('...')`. A dynamic import reaches a file
+ * at runtime just as a static one does.
  *
  * A specifier written inside a comment counts too. That direction is safe: it
- * can only add a file to the closure, so at worst this asks `files` to publish
- * something already on disk, and the failure names the specifier. Missing a
- * real import would instead pass while the tarball is broken.
+ * can only add a file to the closure, and the failure names the specifier.
+ * Missing a real import would instead pass while the tarball is broken.
  */
 function relativeSpecifiers(source: string): string[] {
   const found = new Set<string>()
@@ -63,7 +53,6 @@ function relativeSpecifiers(source: string): string[] {
     /\bfrom\s+['"](\.[^'"]+)['"]/g,
     /\bimport\s+['"](\.[^'"]+)['"]/g,
     /\bimport\s*\(\s*['"](\.[^'"]+)['"]\s*\)/g,
-    /\/\/\/\s*<reference\s+path\s*=\s*['"](\.[^'"]+)['"]/g,
   ]
   for (const pattern of patterns) {
     for (const match of source.matchAll(pattern)) found.add(match[1]!)
@@ -92,6 +81,7 @@ function importClosure(entry: string): string[] {
 
 interface PackageManifest {
   files: string[]
+  exports: Record<string, { types: string, default: string }>
 }
 
 const GLOB_TOKEN = /\/\*\*\/|\*\*|\*|[.+^${}()|[\]\\]/g
@@ -137,41 +127,49 @@ describe('simulator-ui publish closure', () => {
   const manifest = JSON.parse(
     readFileSync(join(PACKAGE_ROOT, 'package.json'), 'utf8'),
   ) as PackageManifest
+  const subpath = manifest.exports['./simulator-ui']!
 
-  it('publishes every file the entry reaches by a relative import', () => {
-    const missing = importClosure(ENTRY)
-      // `files` patterns are POSIX-style whatever the host platform is.
-      .map(file => relative(PACKAGE_ROOT, file).split(sep).join('/'))
-      .filter(packageRelativePath => !isPublished(manifest.files, packageRelativePath))
-      .sort()
-
-    expect(missing).toEqual([])
+  it('exports compiled output, so a consumer never compiles this implementation', () => {
+    expect(subpath.types).toMatch(/^\.\/dist\//)
+    expect(subpath.default).toMatch(/^\.\/dist\//)
   })
 
-  it('reaches the ambient declarations through the entry reference directives', () => {
-    const closure = importClosure(ENTRY).map(file => relative(PACKAGE_ROOT, file).split(sep).join('/'))
+  it('publishes the compiled entry and keeps the source out of the tarball', () => {
+    expect(isPublished(manifest.files, 'dist/simulator-ui/index.js')).toBe(true)
+    expect(isPublished(manifest.files, 'dist/simulator-ui/index.d.ts')).toBe(true)
+    expect(isPublished(manifest.files, 'dist/simulator-ui/miniapp-frame.css')).toBe(true)
+    expect(isPublished(manifest.files, 'src/simulator-ui/miniapp-frame.tsx')).toBe(false)
+  })
 
-    for (const declaration of ['src/simulator-ui/css.d.ts', 'src/simulator-ui/webview.d.ts']) {
-      expect(closure).toContain(declaration)
-      expect(isPublished(manifest.files, declaration)).toBe(true)
+  it('keeps every stylesheet where the copy step looks for it', () => {
+    const stylesheets = importClosure(ENTRY).filter(file => file.endsWith('.css'))
+
+    // Not an incidental assertion: an empty result would make this vacuous, and
+    // the components do import their stylesheets.
+    expect(stylesheets.length).toBeGreaterThan(0)
+    for (const stylesheet of stylesheets) {
+      expect(dirname(stylesheet), `${stylesheet} is outside the copied directory`).toBe(HERE)
     }
   })
 
   it('reads files patterns as POSIX only, which is what the closure normalises for', () => {
-    expect(isPublished(manifest.files, 'src\\simulator-ui\\index.ts')).toBe(false)
-    expect(isPublished(manifest.files, 'src/simulator-ui/index.ts')).toBe(true)
+    expect(isPublished(manifest.files, 'dist\\simulator-ui\\index.js')).toBe(false)
+    expect(isPublished(manifest.files, 'dist/simulator-ui/index.js')).toBe(true)
   })
 
-  it('keeps test files out of the tarball while keeping their subjects in', () => {
-    expect(isPublished(manifest.files, 'src/simulator-ui/tab-bar.test.tsx')).toBe(false)
-    expect(isPublished(manifest.files, 'src/simulator-ui/tab-bar.tsx')).toBe(true)
+  it('keeps declaration maps out of the tarball while keeping declarations in', () => {
+    expect(isPublished(manifest.files, 'dist/simulator-ui/index.d.ts.map')).toBe(false)
+    expect(isPublished(manifest.files, 'dist/simulator-ui/index.d.ts')).toBe(true)
   })
+})
 
-  it('keeps test fixtures out of the tarball', () => {
-    // A fixture is not named `*.test.*`, so the exclusion above does not catch
-    // it — and it imports devDependencies, which a consumer cannot resolve.
-    expect(
-      isPublished(manifest.files, 'src/simulator-ui/__test-stubs__/miniapp-frame-harness.tsx'),
-    ).toBe(false)
+/**
+ * `relative`/`sep` are the POSIX normalisation the manifest patterns assume.
+ * Kept as an explicit check so the helper above is exercised on this platform.
+ */
+describe('package-relative paths', () => {
+  it('normalises to POSIX separators', () => {
+    const posix = relative(PACKAGE_ROOT, ENTRY).split(sep).join('/')
+    expect(posix).toBe('src/simulator-ui/index.ts')
   })
 })
