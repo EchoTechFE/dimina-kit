@@ -15,7 +15,7 @@
  * coexistence case need an app whose home page is NOT a tab, so those live
  * in home-button-no-tabbar.spec.ts against a dedicated fixture.
  *
- * DOM contract (see src/simulator/device-shell/navigation-bar.tsx and
+ * DOM contract (see packages/dimina-electron-runtime/src/simulator-ui/navigation-bar.tsx and
  * tab-bar.tsx): home button is `.nav-bar__home`, back arrow is
  * `.nav-bar__back`, the tabBar is `.dmb-tab-bar`. All three live inside the
  * native-host device shell (`.device-shell-root`), which only mounts under

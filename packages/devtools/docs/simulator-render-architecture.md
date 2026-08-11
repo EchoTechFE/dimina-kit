@@ -202,15 +202,19 @@ See `project-window-layout.md` §3 for the anchor semantics.
 `wx.getSystemInfoSync()` must return a full object (incl. `safeArea`) in the
 service host. Two things keep it working:
 
-1. **Build order.** The service-host `sync-api-patch` imports the sync impls; one
-   (`menu-button.ts`) imports the shared
-   `simulator/device-shell/menu-button-geometry.js`, tsc-emitted into
-   `dist/simulator/…` by `build:native-host`. `build:simulator` (vite,
-   `emptyOutDir`) WIPES `dist/simulator`, so `build:native-host` MUST run AFTER
-   `build:simulator` (the full `pnpm build` orders it this way — see the order
-   note in `build-native-host.mjs`). A partial rebuild that runs `build:simulator`
-   alone leaves a 404 → `sync-api-patch` fails to load → none of the sync APIs are
-   patched → `getSystemInfoSync` falls through to dimina's async path → undefined.
+1. **A self-contained module graph.** The service-host `sync-api-patch` imports
+   the sync impls; one (`menu-button.ts`) imports the capsule geometry from
+   `@dimina-kit/electron-runtime/shared/menu-button-geometry` — the same module
+   the simulator UI measures the capsule with, so both agree on one geometry.
+   `service.html` loads the emitted files as plain browser ES modules with no
+   import map, where that bare specifier would 404 and take the whole
+   `sync-api-patch` graph with it → none of the sync APIs are patched →
+   `getSystemInfoSync` falls through to dimina's async path → undefined. So
+   `build:native-host` copies the runtime's compiled geometry module in beside
+   the emitted sync impls and rewrites the specifier to a relative path (step 1a
+   there). This requires the runtime package to be built first, which the script
+   checks before it compiles anything — otherwise the missing module would only
+   surface as an unresolved-import error from tsc.
 2. **Nested host-env snapshot (belt-and-braces).** dimina's runtime reads
    `hostEnv.systemInfo`; `bridge-router.ts makeLoadResource` sends it nested as
    `hostEnv: { systemInfo, menuRect }` so dimina's own path also resolves it if
@@ -231,7 +235,8 @@ safe-area doc for the CDP wiring.)
 | file | role |
 |---|---|
 | `src/renderer/.../project-runtime/components/simulator-panel.tsx` | z2 panel: toolbar / placeholder / path-bar; owns the simulator `createPlacementAnchor` |
-| `src/simulator/device-shell/device-shell.tsx` + `device-shell.css` | DeviceShell: draws the whole phone inside the WCV; hosts render-host `<webview>` guests |
+| `src/simulator/device-shell/device-shell.tsx` + `device-shell.css` | DeviceShell: draws the phone (bezel, status bar, notch, home indicator) inside the WCV and hands the mini-app its metrics |
+| `packages/dimina-electron-runtime/src/simulator-ui/miniapp-frame.tsx` | MiniAppFrame: the mini-app itself — nav bar, page stack, tabBar, native overlays; hosts the render-host `<webview>` guests |
 | `src/simulator/ui-extension-runtime.ts` | renderer-side extension registry, active-root handoff, invoke routing, and semantic chrome actions |
 | `src/main/services/simulator/ui-extensions.ts` | per-context trusted bundle registry that follows the native simulator WCV |
 | `src/main/services/views/native-simulator-view.ts` | native-simulator domain module: `attachNativeSimulator`, `softReloadNativeSimulator`, bounds/zoom application (`view-manager.ts` is the composition root wiring the per-domain view modules) |

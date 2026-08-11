@@ -1,0 +1,29 @@
+{
+  // Emits the `simulator-ui` subpath export. The subpath ships compiled
+  // JavaScript and declarations rather than source: a consumer's own compiler
+  // options would otherwise apply to these implementation files, and options
+  // this package does not enable — `noUncheckedIndexedAccess` is the one that
+  // bites first — would fail their build on code that is correct here.
+  // `skipLibCheck` does not exempt source, only declarations.
+  //
+  // Node16 modules, same as the rest of the package: the source already spells
+  // the emitted `.js` in every relative specifier, which is what
+  // tsconfig.simulator-ui.node16.json guards.
+  "extends": "./tsconfig.simulator-ui.node16.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": ["src/simulator-ui"],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "src/simulator-ui/**/*.test.ts",
+    "src/simulator-ui/**/*.test.tsx",
+    "src/simulator-ui/__test-stubs__"
+  ]
+}

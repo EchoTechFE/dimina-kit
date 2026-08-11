@@ -1,0 +1,20 @@
+{
+  "extends": "@dimina-kit/typescript-config/react-library.json",
+  "compilerOptions": {
+    // The rest of this package compiles to Node16 ESM for the Electron main
+    // process. `src/simulator-ui` is browser code a bundler consumes instead,
+    // so it resolves through the bundler (CSS side-effect imports, `.js`
+    // specifiers mapped onto `.ts`/`.tsx`) and emits nothing of its own.
+    //
+    // Relative specifiers still spell the emitted `.js`, because this subpath
+    // exports source that a consumer may type-check under Node16 — see
+    // tsconfig.simulator-ui.node16.json, which is what holds that line.
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "noUncheckedIndexedAccess": false,
+    "types": ["node"]
+  },
+  "include": ["src/simulator-ui"],
+  "exclude": ["node_modules", "dist"]
+}

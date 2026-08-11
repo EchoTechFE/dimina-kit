@@ -1,5 +1,5 @@
 import type { NotchType } from '../../shared/ipc-channels'
-import type { NavigationBarTextStyle } from './navigation-bar'
+import type { NavigationBarTextStyle } from '@dimina-kit/electron-runtime/simulator-ui'
 import './status-bar.css'
 
 export interface StatusBarProps {

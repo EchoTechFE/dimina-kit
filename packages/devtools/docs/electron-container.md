@@ -275,7 +275,7 @@ ctx.simulatorApis.has(name)  ───► main 进程直接执行（registerSimu
   - 路由方法（navigateTo / redirectTo / reLaunch / switchTab / navigateBack）：`ctx.bridge.getServiceWc().executeJavaScript('wx.<method>(...)')`（`app.ts`），让导航走运行中 mini-app 同一条路径，再由 DeviceShell 驱动页面栈；
   - 非路由方法（setNavigationBarTitle / getSystemInfoSync / tabBar API / …）：同样在 service-host `wx` 上调用并取其（同步）返回值（`app.ts`）。
 
-延伸阅读：tab-bar 与 page-stack 这两块的下层细节见 [`./tab-bar.md`](./tab-bar.md) 与 [`./page-stack.md`](./page-stack.md)（相关源码 `simulator/device-shell/tab-bar-state.ts`、`simulator/device-shell/page-stack-controller.ts`）。
+延伸阅读：tab-bar 与 page-stack 这两块的下层细节见 [`./tab-bar.md`](./tab-bar.md) 与 [`./page-stack.md`](./page-stack.md)（相关源码 `packages/dimina-electron-runtime/src/simulator-ui/tab-bar-state.ts`、`packages/dimina-electron-runtime/src/simulator-ui/page-stack-controller.ts`）。
 
 ## 5. native-host 运行时
 

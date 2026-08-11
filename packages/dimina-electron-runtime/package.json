@@ -121,6 +121,14 @@
     "./main/temp-files/*": {
       "types": "./dist/main/services/simulator-temp-files/*.d.ts",
       "default": "./dist/main/services/simulator-temp-files/*.js"
+    },
+    "./shared/menu-button-geometry": {
+      "types": "./dist/shared/menu-button-geometry.d.ts",
+      "default": "./dist/shared/menu-button-geometry.js"
+    },
+    "./simulator-ui": {
+      "types": "./dist/simulator-ui/index.d.ts",
+      "default": "./dist/simulator-ui/index.js"
     }
   },
   "files": [
@@ -131,11 +139,11 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "build:code": "tsc -p tsconfig.build.json",
+    "build": "pnpm run build:code",
+    "build:code": "tsc -p tsconfig.build.json && tsc -p tsconfig.simulator-ui.build.json && node build-simulator-ui-css.mjs",
     "build:assets": "node build-assets.mjs",
     "build:package": "pnpm --filter @dimina-kit/electron-deck build && pnpm run build:code && pnpm run build:assets",
-    "check-types": "tsc --noEmit",
+    "check-types": "tsc --noEmit && tsc -p tsconfig.simulator-ui.json && tsc -p tsconfig.simulator-ui.node16.json",
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run --reporter=default --reporter=json --outputFile.json=test-report.json --coverage.enabled --coverage.reporter=json-summary --coverage.reportsDirectory=coverage",
     "test:e2e": "playwright test",
@@ -152,16 +160,29 @@
     "@dimina-kit/devkit": "workspace:*",
     "@dimina-kit/inspect": "workspace:*",
     "@playwright/test": "^1.59.1",
+    "@testing-library/react": "^16.3.2",
     "@types/node": "^22.15.3",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
     "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^6.0.1",
     "@vitest/coverage-v8": "^4.1.4",
     "electron": "^43.2.0",
     "eslint": "^10.2.1",
+    "jsdom": "^29.0.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
     "typescript": "5.9.2",
     "vitest": "^4.1.4"
   },
   "peerDependencies": {
-    "electron": "^43.2.0"
+    "electron": "^43.2.0",
+    "react": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
   },
   "publishConfig": {
     "access": "public"
