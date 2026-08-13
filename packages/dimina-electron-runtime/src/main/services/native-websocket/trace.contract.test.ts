@@ -147,11 +147,12 @@ describe('Native WebSocket trace stream contract', () => {
     })
 
     const echoed = probe.waitFor(
-      event => event.socketId === 'binary' && event.event === 'message' && event.data instanceof ArrayBuffer,
+      event => event.socketId === 'binary' && event.event === 'message' && event.isBuffer === true,
     )
     expect((await service.send('owner-binary', {
       socketId: 'binary',
-      data: Uint8Array.from([1, 2, 3, 4]).buffer,
+      data: Buffer.from([1, 2, 3, 4]).toString('base64'),
+      isBuffer: true,
     })).errMsg).toBe('sendSocketMessage:ok')
     await echoed
 

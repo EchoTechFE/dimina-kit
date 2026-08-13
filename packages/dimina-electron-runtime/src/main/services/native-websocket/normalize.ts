@@ -79,26 +79,30 @@ export function normalizeHeaders(raw: unknown): Record<string, string> {
     if (/[\r\n]/.test(normalizedValue)) {
       throw apiError('connectSocket', 'invalid header')
     }
-    result[normalizedName] = normalizedValue
+    const existingName = Object.keys(result).find(name => name.toLowerCase() === lowerName)
+    if (existingName) result[existingName] = `${result[existingName]}, ${normalizedValue}`
+    else result[normalizedName] = normalizedValue
   }
   return result
 }
 
-export function ensureSocketOrigin(headers: Record<string, string>, socketUrl: string): void {
-  if (Object.keys(headers).some(name => name.toLowerCase() === 'origin')) return
-  const origin = new URL(socketUrl)
-  origin.protocol = origin.protocol === 'wss:' ? 'https:' : 'http:'
-  origin.pathname = '/'
-  origin.search = ''
-  origin.hash = ''
-  headers.Origin = origin.origin
+function decodeBase64(data: unknown): Buffer | undefined {
+  if (
+    typeof data !== 'string'
+    || data.length % 4 !== 0
+    || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(data)
+  ) {
+    return undefined
+  }
+  return Buffer.from(data, 'base64')
 }
 
-export function normalizeSendData(data: unknown): string | Buffer {
-  if (typeof data === 'string') return data
-  if (data instanceof ArrayBuffer) return Buffer.from(data)
-  if (ArrayBuffer.isView(data)) {
-    return Buffer.from(data.buffer, data.byteOffset, data.byteLength)
+export function normalizeSendData(data: unknown, isBuffer: boolean): string | Buffer {
+  if (isBuffer) {
+    const decoded = decodeBase64(data)
+    if (decoded) return decoded
+  } else if (typeof data === 'string') {
+    return data
   }
   throw apiError('sendSocketMessage', 'data must be string or ArrayBuffer')
 }

@@ -22,7 +22,8 @@ export interface ConnectOptions {
 
 export interface SendOptions {
   socketId: string
-  data: string | ArrayBuffer | ArrayBufferView
+  data: string
+  isBuffer?: boolean
 }
 
 export interface CloseOptions {
@@ -52,7 +53,8 @@ export interface NativeSocketEvent {
   event: 'open' | 'message' | 'error' | 'close'
   header?: Record<string, unknown>
   profile?: SocketProfile
-  data?: string | ArrayBuffer
+  data?: string
+  isBuffer?: true
   code?: number
   reason?: string
   errMsg?: string
@@ -64,6 +66,17 @@ interface ApiResult {
 
 export interface NativeWebSocketService {
   listen(ownerId: string, listener: (event: NativeSocketEvent) => void): unknown
+  onSocketEvent(
+    ownerId: string,
+    event: 'open' | 'message' | 'error' | 'close',
+    subscription: { socketId: string; callback: unknown },
+    emitter: (callbackId: unknown, payload: Record<string, unknown>) => void,
+  ): unknown
+  offSocketEvent(
+    ownerId: string,
+    event: 'open' | 'message' | 'error' | 'close',
+    subscription: { socketId: string; callback: unknown },
+  ): unknown
   connect(ownerId: string, options: ConnectOptions): ApiResult | Promise<ApiResult>
   send(ownerId: string, options: SendOptions): ApiResult | Promise<ApiResult>
   close(ownerId: string, options: CloseOptions): ApiResult | Promise<ApiResult>

@@ -1,10 +1,10 @@
 import type { ClientRequest } from 'node:http'
 import type { Socket } from 'node:net'
 import { WebSocket } from 'ws'
+import { NativeWebSocketEventRegistry } from './event-registry.js'
 import {
   apiError,
   apiFailureResult,
-  ensureSocketOrigin,
   MAX_SOCKET_TASKS,
   normalizeHeaders,
   normalizeProtocols,
@@ -25,6 +25,7 @@ import {
 import { createSocketTracer, type NativeWebSocketTracer, type SocketTracer } from './trace.js'
 import type {
   NativeWebSocketEvent,
+  NativeWebSocketEventName,
   NativeWebSocketResult,
   NativeWebSocketService,
   NativeWebSocketServiceOptions,
@@ -37,7 +38,10 @@ export type {
   NativeCloseSocketOptions,
   NativeConnectSocketOptions,
   NativeSendSocketMessageOptions,
+  NativeWebSocketCallbackEmitter,
   NativeWebSocketEvent,
+  NativeWebSocketEventName,
+  NativeWebSocketEventSubscription,
   NativeWebSocketResult,
   NativeWebSocketService,
   NativeWebSocketServiceOptions,
@@ -90,6 +94,7 @@ export function createNativeWebSocketService(
   options: NativeWebSocketServiceOptions = {},
 ): NativeWebSocketService {
   const owners = new Map<string, OwnerSockets>()
+  const eventRegistry = new NativeWebSocketEventRegistry()
   const idleTimeoutMs = positiveMs(options.idleTimeoutMs)
   const backgroundGraceMs = positiveMs(options.backgroundGraceMs) || DEFAULT_BACKGROUND_GRACE_MS
   let backgrounded = false
@@ -105,8 +110,14 @@ export function createNativeWebSocketService(
     return sockets
   }
 
-  const emit = (ownerId: string, event: NativeWebSocketEvent): void => {
+  const emit = (
+    ownerId: string,
+    event: NativeWebSocketEvent,
+    options: { detach?: boolean; replayTerminal?: boolean } = {},
+  ): void => {
     owners.get(ownerId)?.listener?.(event)
+    const { socketId, event: eventName, ...payload } = event
+    eventRegistry.dispatch(ownerId, socketId, eventName as NativeWebSocketEventName, payload, options)
   }
 
   const releaseOwnerIfIdle = (ownerId: string, current: OwnerSockets): void => {
@@ -148,7 +159,8 @@ export function createNativeWebSocketService(
     } catch {
       // Best-effort teardown; the entry is already detached from the registry.
     }
-    if (event) emit(ownerId, event)
+    if (event) emit(ownerId, event, { detach: true, replayTerminal: true })
+    else eventRegistry.detachSocket(ownerId, socketId)
     releaseOwnerIfIdle(ownerId, current)
   }
 
@@ -200,6 +212,7 @@ export function createNativeWebSocketService(
   }
 
   const disposeOwner = (ownerId: string): void => {
+    eventRegistry.disposeOwner(ownerId)
     const current = owners.get(ownerId)
     if (!current) return
     owners.delete(ownerId)
@@ -225,6 +238,14 @@ export function createNativeWebSocketService(
       owner(ownerId).listener = listener
     },
 
+    onSocketEvent(ownerId, event, subscription, emitter) {
+      eventRegistry.on(ownerId, event, subscription, emitter)
+    },
+
+    offSocketEvent(ownerId, event, subscription) {
+      eventRegistry.off(ownerId, event, subscription)
+    },
+
     connect(ownerId, options) {
       try {
         if (backgrounded) throw apiError('connectSocket', INTERRUPTED_ERRMSG_SUFFIX)
@@ -240,7 +261,7 @@ export function createNativeWebSocketService(
         const protocols = normalizeProtocols(options.protocols)
         const timeout = normalizeTimeout(options.timeout)
         const header = normalizeHeaders(options.header)
-        ensureSocketOrigin(header, url)
+        if (options.containerReferer) header.Referer = options.containerReferer
         const tcpNoDelay = options.tcpNoDelay === true
         const profile: ProfileRecorder = {
           fetchStart: now(),
@@ -277,12 +298,12 @@ export function createNativeWebSocketService(
           timer: setTimeout(() => {
             if (socket.readyState !== WebSocket.CONNECTING) return
             entry.errorEmitted = true
-            socketTracer.frameError('connectSocket:fail timed out')
+            socketTracer.frameError('connectSocket:fail timeout')
             emit(ownerId, {
               socketId: options.socketId,
               event: 'error',
-              errMsg: 'connectSocket:fail timed out',
-            })
+              errMsg: 'connectSocket:fail timeout',
+            }, { detach: true, replayTerminal: true })
             entry.transportHandles.request?.destroy()
             entry.transportHandles.socket?.destroy()
             socket.terminate()
@@ -293,6 +314,7 @@ export function createNativeWebSocketService(
           transportHandles,
         }
         current.sockets.set(options.socketId, entry)
+        eventRegistry.beginSocket(ownerId, options.socketId)
 
         socket.once('upgrade', (response) => {
           entry.responseHeader = responseHeaders(response)
@@ -314,11 +336,18 @@ export function createNativeWebSocketService(
         })
         socket.on('message', (data, isBinary) => {
           socketTracer.frameReceived(data, isBinary)
-          emit(ownerId, {
-            socketId: options.socketId,
-            event: 'message',
-            data: isBinary ? binaryMessage(data) : data.toString(),
-          })
+          emit(ownerId, isBinary
+            ? {
+                socketId: options.socketId,
+                event: 'message',
+                data: binaryMessage(data),
+                isBuffer: true,
+              }
+            : {
+                socketId: options.socketId,
+                event: 'message',
+                data: data.toString(),
+              })
           armIdleTimer(ownerId, options.socketId)
         })
         socket.on('ping', () => {
@@ -333,12 +362,13 @@ export function createNativeWebSocketService(
           if (entry.errorEmitted) return
           entry.errorEmitted = true
           socketTracer.frameError(errorMessage(error))
+          const connecting = socket.readyState === WebSocket.CONNECTING
           emit(ownerId, {
             socketId: options.socketId,
             event: 'error',
             errMsg: errorMessage(error),
-          })
-          if (socket.readyState === WebSocket.CONNECTING) {
+          }, { detach: connecting, replayTerminal: true })
+          if (connecting) {
             entry.transportHandles.socket?.destroy()
             socket.terminate()
           }
@@ -355,7 +385,9 @@ export function createNativeWebSocketService(
               event: 'close',
               code,
               reason: reason.toString(),
-            })
+            }, { detach: true, replayTerminal: true })
+          } else {
+            eventRegistry.detachSocket(ownerId, options.socketId)
           }
           releaseOwnerIfIdle(ownerId, current)
         })
@@ -379,7 +411,7 @@ export function createNativeWebSocketService(
       }
       let data: string | Buffer
       try {
-        data = normalizeSendData(options.data)
+        data = normalizeSendData(options.data, options.isBuffer === true)
       } catch (error) {
         return Promise.resolve(apiFailureResult('sendSocketMessage', error))
       }
@@ -405,7 +437,12 @@ export function createNativeWebSocketService(
         if (backgrounded) throw apiError('closeSocket', INTERRUPTED_ERRMSG_SUFFIX)
         const current = owners.get(ownerId)
         const entry = current?.sockets.get(options.socketId)
-        if (!current || !entry || entry.socket.readyState === WebSocket.CLOSED) {
+        if (
+          !current
+          || !entry
+          || entry.socket.readyState === WebSocket.CLOSING
+          || entry.socket.readyState === WebSocket.CLOSED
+        ) {
           throw apiError('closeSocket', 'WebSocket is not connected')
         }
         const { code, reason } = validateClose(options.code, options.reason)
@@ -452,6 +489,7 @@ export function createNativeWebSocketService(
         backgroundTimer = undefined
       }
       for (const ownerId of Array.from(owners.keys())) disposeOwner(ownerId)
+      eventRegistry.dispose()
     },
   }
 }

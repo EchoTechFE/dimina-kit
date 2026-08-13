@@ -64,15 +64,20 @@ describe('Native WebSocket transport contract', () => {
       header: {
         Authorization: 'Bearer native-secret',
         'X-Request-Trace': 'request-trace',
+        'X-Case-Variant': 'upper',
+        'x-case-variant': 'lower',
         Referer: 'https://must-not-be-forwarded.invalid/',
       },
+      containerReferer: 'https://servicedimina.com/test-app/0/page-frame.html',
       protocols: ['chat.v1', 'chat.v2'],
     })
 
     expect(peer.requests).toHaveLength(1)
     expect(peer.requests[0]?.headers.authorization).toBe('Bearer native-secret')
     expect(peer.requests[0]?.headers['x-request-trace']).toBe('request-trace')
-    expect(peer.requests[0]?.headers.referer).toBeUndefined()
+    expect(peer.requests[0]?.headers['x-case-variant']).toBe('upper, lower')
+    expect(peer.requests[0]?.headers.referer).toBe('https://servicedimina.com/test-app/0/page-frame.html')
+    expect(peer.requests[0]?.headers.origin).toBeUndefined()
     expect(peer.requests[0]?.protocol).toBe('chat.v2')
 
     expect(headerValue(open.header, 'x-native-handshake')).toBe('accepted')
@@ -103,7 +108,7 @@ describe('Native WebSocket transport contract', () => {
     probe.dispose()
   })
 
-  it('round-trips text and exposes binary messages as ArrayBuffer', async () => {
+  it('round-trips text and carries binary bridge messages as base64 plus isBuffer', async () => {
     const peer = await startEchoPeer()
     const service = newService()
     const probe = new EventProbe()
@@ -122,18 +127,31 @@ describe('Native WebSocket transport contract', () => {
     })).errMsg).toBe('sendSocketMessage:ok')
     await textMessage
 
-    const payload = Uint8Array.from([0, 1, 2, 127, 128, 255]).buffer
+    const payload = Buffer.from([0, 1, 2, 127, 128, 255]).toString('base64')
     const binaryMessage = probe.waitFor(
-      event => event.socketId === 'data' && event.event === 'message' && event.data instanceof ArrayBuffer,
+      event => event.socketId === 'data' && event.event === 'message' && event.isBuffer === true,
     )
     expect((await service.send('owner-data', {
       socketId: 'data',
       data: payload,
+      isBuffer: true,
     })).errMsg).toBe('sendSocketMessage:ok')
     const binary = await binaryMessage
-    expect(binary.data).toBeInstanceOf(ArrayBuffer)
-    expect(Array.from(new Uint8Array(binary.data as ArrayBuffer))).toEqual([0, 1, 2, 127, 128, 255])
+    expect(binary.data).toBe(payload)
+    expect(binary.isBuffer).toBe(true)
     probe.dispose()
+  })
+
+  it('rejects a connect timeout above the documented signed 32-bit range before dialing', async () => {
+    const peer = await startEchoPeer()
+    const service = newService()
+
+    expect((await service.connect('owner-timeout-range', {
+      socketId: 'timeout-range',
+      url: peer.url,
+      timeout: 0x8000_0000,
+    })).errMsg).toBe('connectSocket:fail invalid timeout')
+    expect(peer.requests).toEqual([])
   })
 
   it('times out a stalled HTTP upgrade and destroys the underlying connection', async () => {

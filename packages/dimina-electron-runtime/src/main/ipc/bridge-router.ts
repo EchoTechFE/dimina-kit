@@ -59,6 +59,7 @@ import {
   type NativeCloseSocketOptions,
   type NativeConnectSocketOptions,
   type NativeSendSocketMessageOptions,
+  type NativeWebSocketEventName,
   type NativeWebSocketService,
   type NativeWebSocketTrace,
 } from '../services/native-websocket/index.js'
@@ -173,7 +174,13 @@ function summarizeBridgeMsg(payload: unknown): string | undefined {
 }
 
 interface RawAppConfig {
-  app?: { window?: PageWindowConfig; tabBar?: TabBarConfig; entryPagePath?: string; pages?: string[] }
+  app?: {
+    window?: PageWindowConfig
+    tabBar?: TabBarConfig
+    entryPagePath?: string
+    pages?: string[]
+    networkTimeout?: { connectSocket?: number }
+  }
   // The compiler's actual `app-config.json` shape has each page's window-config
   // fields FLAT on `modules[path]` (no `.window` wrapper) — confirmed against a
   // live compiled fixture. `root` is carried alongside for the page's asset root.
@@ -2157,12 +2164,38 @@ async function invokeSimulatorApiAndCallback(
   }
 }
 
+const NATIVE_WEBSOCKET_ON_EVENTS = new Map<string, NativeWebSocketEventName>([
+  ['onSocketOpen', 'open'],
+  ['onSocketMessage', 'message'],
+  ['onSocketError', 'error'],
+  ['onSocketClose', 'close'],
+])
+const NATIVE_WEBSOCKET_OFF_EVENTS = new Map<string, NativeWebSocketEventName>([
+  ['offSocketOpen', 'open'],
+  ['offSocketMessage', 'message'],
+  ['offSocketError', 'error'],
+  ['offSocketClose', 'close'],
+])
+const DEVTOOLS_APP_VERSION = '0'
+
 const NATIVE_WEBSOCKET_API_NAMES = new Set([
-  'socketListen',
   'connectSocket',
   'sendSocketMessage',
   'closeSocket',
+  ...NATIVE_WEBSOCKET_ON_EVENTS.keys(),
+  ...NATIVE_WEBSOCKET_OFF_EVENTS.keys(),
 ])
+
+function socketConnectTimeout(ap: AppSession, rawTimeout: unknown): number | undefined {
+  if (typeof rawTimeout === 'number' && rawTimeout >= 1) return rawTimeout
+  const configured = ap.appConfig.app?.networkTimeout?.connectSocket
+  return typeof configured === 'number'
+    && Number.isFinite(configured)
+    && configured >= 1
+    && configured <= 0x7fff_ffff
+    ? configured
+    : undefined
+}
 
 async function handleNativeWebSocketApi(
   state: RouterState,
@@ -2170,12 +2203,25 @@ async function handleNativeWebSocketApi(
   name: string,
   params: Record<string, unknown>,
 ): Promise<void> {
-  if (name === 'socketListen') {
-    const callbackId = params.success
-    state.nativeWebSocket.listen(ap.appSessionId, (event) => {
-      // disposeAppSession removes the owner/listener before dropping the app
-      // session, so no Native event can bleed into a pooled service window.
-      sendCallback(ap, callbackId, event)
+  const onEvent = NATIVE_WEBSOCKET_ON_EVENTS.get(name)
+  if (onEvent) {
+    state.nativeWebSocket.onSocketEvent(
+      ap.appSessionId,
+      onEvent,
+      {
+        socketId: typeof params.socketId === 'string' ? params.socketId : '',
+        callback: params.callback,
+      },
+      (callbackId, payload) => sendCallback(ap, callbackId, payload),
+    )
+    return
+  }
+
+  const offEvent = NATIVE_WEBSOCKET_OFF_EVENTS.get(name)
+  if (offEvent) {
+    state.nativeWebSocket.offSocketEvent(ap.appSessionId, offEvent, {
+      socketId: typeof params.socketId === 'string' ? params.socketId : '',
+      callback: params.callback,
     })
     return
   }
@@ -2186,10 +2232,13 @@ async function handleNativeWebSocketApi(
       url: typeof params.url === 'string' ? params.url : '',
       header: params.header as Record<string, unknown> | undefined,
       protocols: params.protocols as string[] | undefined,
-      timeout: params.timeout as number | undefined,
+      timeout: socketConnectTimeout(ap, params.timeout),
       perMessageDeflate: params.perMessageDeflate as boolean | undefined,
       tcpNoDelay: params.tcpNoDelay as boolean | undefined,
       forceCellularNetwork: params.forceCellularNetwork as boolean | undefined,
+      // Compiler sessions do not carry a publish version; native hosts use 0
+      // for the same development-build fallback.
+      containerReferer: `https://servicedimina.com/${ap.appId}/${DEVTOOLS_APP_VERSION}/page-frame.html`,
     }
     await invokeSimulatorApiAndCallback(
       ap,
@@ -2204,6 +2253,7 @@ async function handleNativeWebSocketApi(
     const options: NativeSendSocketMessageOptions = {
       socketId: typeof params.socketId === 'string' ? params.socketId : '',
       data: params.data,
+      isBuffer: params.isBuffer === true,
     }
     await invokeSimulatorApiAndCallback(
       ap,

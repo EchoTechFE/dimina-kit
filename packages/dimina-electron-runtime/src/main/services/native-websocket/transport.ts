@@ -37,19 +37,10 @@ export function responseHeaders(response: IncomingMessage): Record<string, strin
   return result
 }
 
-function arrayBufferFromBuffer(buffer: Buffer): ArrayBuffer {
-  // Copy through this realm's Uint8Array. Buffer's backing ArrayBuffer can
-  // originate in Node's realm while the service-host callback is observed from
-  // another V8 realm; returning it directly breaks `instanceof ArrayBuffer`.
-  const bytes = new Uint8Array(buffer.byteLength)
-  bytes.set(buffer)
-  return bytes.buffer
-}
-
-export function binaryMessage(data: WebSocket.RawData): ArrayBuffer {
-  if (data instanceof ArrayBuffer) return data
-  if (Array.isArray(data)) return arrayBufferFromBuffer(Buffer.concat(data))
-  return arrayBufferFromBuffer(data)
+export function binaryMessage(data: WebSocket.RawData): string {
+  if (data instanceof ArrayBuffer) return Buffer.from(data).toString('base64')
+  if (Array.isArray(data)) return Buffer.concat(data).toString('base64')
+  return data.toString('base64')
 }
 
 export function attachSocketProfile(

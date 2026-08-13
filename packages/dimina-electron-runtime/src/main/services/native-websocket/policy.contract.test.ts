@@ -184,7 +184,7 @@ describe('Native WebSocket failure event policy', () => {
     const error = await probe.waitFor(
       event => event.socketId === 'timed-out' && event.event === 'error',
     )
-    expect(error.errMsg).toBe('connectSocket:fail timed out')
+    expect(error.errMsg).toBe('connectSocket:fail timeout')
     await delay(100)
     expect(probe.events.some(event => event.socketId === 'timed-out' && event.event === 'close')).toBe(false)
     probe.dispose()

@@ -16,6 +16,12 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import { WebSocketServer } from 'ws'
 import {
+  closeSecureWebSocketTestServer,
+  createSecureWebSocketTestServer,
+  secureWebSocketTestUrl,
+  WEBSOCKET_TEST_CA_PATH,
+} from './fixtures/websocket-tls'
+import {
   closeProject,
   evalInWebContentsByUrl,
   openProject,
@@ -73,6 +79,11 @@ interface SocketOutcome {
   text: string | null
   binary: number[] | null
   close: { code: number; reason: string } | null
+  publicSurface: {
+    wxPrivateTypes: string[]
+    taskOwnProperties: string[]
+    taskPrototypeProperties: string[]
+  }
   errMsg?: string
 }
 
@@ -95,9 +106,7 @@ test.beforeAll(async () => {
   serverObservation = new Promise<ServerObservation>((resolve) => {
     resolveServerObservation = resolve
   })
-  wss = new WebSocketServer({
-    host: '127.0.0.1',
-    port: 0,
+  wss = createSecureWebSocketTestServer({
     handleProtocols(protocols) {
       return protocols.has('chat') ? 'chat' : false
     },
@@ -111,7 +120,7 @@ test.beforeAll(async () => {
     wss.once('error', reject)
   })
   const { port } = wss.address() as AddressInfo
-  socketUrl = `ws://127.0.0.1:${port}/socket`
+  socketUrl = secureWebSocketTestUrl(port)
 
   wss.on('connection', (socket, request) => {
     let clientMessage = ''
@@ -136,7 +145,7 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
   for (const socket of wss.clients) socket.terminate()
-  await new Promise<void>((resolve) => wss.close(() => resolve()))
+  await closeSecureWebSocketTestServer(wss)
 })
 
 async function bootApp(): Promise<AppHandle> {
@@ -154,6 +163,7 @@ async function bootApp(): Promise<AppHandle> {
     env: {
       ...process.env,
       NODE_ENV: 'test',
+      NODE_EXTRA_CA_CERTS: WEBSOCKET_TEST_CA_PATH,
       DIMINA_E2E_USER_DATA_DIR: userDataDir,
     },
   })
@@ -243,6 +253,7 @@ function socketExpression(url: string, trace: string): string {
       text: null,
       binary: null,
       close: null,
+      publicSurface: null,
     };
     var finish = function(result) {
       if (settled) return;
@@ -261,6 +272,12 @@ function socketExpression(url: string, trace: string): string {
       success: function() { outcome.connectSuccess = true; },
       fail: function(error) { finish({ path: 'error', errMsg: error && error.errMsg }); },
     });
+    outcome.publicSurface = {
+      wxPrivateTypes: ['SocketTask', 'readyState', 'offSocketOpen', 'offSocketMessage', 'offSocketError', 'offSocketClose']
+        .map(function(name) { return typeof wx[name]; }),
+      taskOwnProperties: Object.getOwnPropertyNames(task).sort(),
+      taskPrototypeProperties: Object.getOwnPropertyNames(Object.getPrototypeOf(task)).sort(),
+    };
     var maybeClose = function() {
       if (outcome.text !== null && outcome.binary !== null) {
         task.close({ code: 4001, reason: 'e2e-done' });
@@ -321,6 +338,16 @@ test.describe('native-host wx.connectSocket through Main/Native transport', () =
   })
 
   test('connects through SocketTask with full handshake metadata, frames, and close metadata', async () => {
+    await handle!.app.evaluate(() => {
+      const main = globalThis as typeof globalThis & {
+        __diminaBridgeHandle?: { onNativeWebSocketTrace?: (listener: (ownerId: string, event: unknown) => void) => void }
+        __e2eWebSocketTraces?: unknown[]
+      }
+      main.__e2eWebSocketTraces = []
+      main.__diminaBridgeHandle?.onNativeWebSocketTrace?.((_ownerId, event) => {
+        main.__e2eWebSocketTraces?.push(event)
+      })
+    })
     const trace = `ws-e2e-${Date.now()}`
     const clientPromise = evalInWebContentsByUrl<SocketOutcome>(
       handle!.app,
@@ -330,9 +357,26 @@ test.describe('native-host wx.connectSocket through Main/Native transport', () =
 
     const client = await clientPromise
 
-    expect(client.path, `client outcome: ${JSON.stringify(client)}`).toBe('close')
+    const traces = await handle!.app.evaluate(() => (
+      globalThis as typeof globalThis & { __e2eWebSocketTraces?: unknown[] }
+    ).__e2eWebSocketTraces ?? [])
+    expect(
+      client.path,
+      `client outcome: ${JSON.stringify(client)}, serverClients=${wss.clients.size}, traces=${JSON.stringify(traces)}`,
+    ).toBe('close')
     expect(client.connectSuccess).toBe(true)
     expect(client.sendSuccess).toBe(true)
+    expect(client.publicSurface.wxPrivateTypes).toEqual(Array(6).fill('undefined'))
+    expect(client.publicSurface.taskOwnProperties).toEqual([])
+    expect(client.publicSurface.taskPrototypeProperties).toEqual([
+      'close',
+      'constructor',
+      'onClose',
+      'onError',
+      'onMessage',
+      'onOpen',
+      'send',
+    ])
     expect(client.open).not.toBeNull()
     expect(responseHeader(client.open!.header, 'upgrade')).toBe('websocket')
     expect(String(responseHeader(client.open!.header, 'connection')).toLowerCase()).toContain('upgrade')
@@ -373,7 +417,7 @@ test.describe('native-host wx.connectSocket through Main/Native transport', () =
     ])
     expect(server.authorization).toBe('Bearer websocket-e2e')
     expect(server.trace).toBe(trace)
-    expect(server.origin).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/)
+    expect(server.origin).toBe('')
     expect(server.protocol).toBe('chat')
     expect(server.clientMessage).toBe('client:hello')
     expect(server.closeCode).toBe(4001)

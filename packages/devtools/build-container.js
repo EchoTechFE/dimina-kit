@@ -38,7 +38,6 @@ const INJECTED_FILES = [
   },
   { src: join(SIMULATOR_DIR, 'service-apis/audio/index.js'), dest: join(SERVICE_SRC, 'src/api/core/media/audio/index.js') },
   { src: join(SIMULATOR_DIR, 'service-apis/network/upload/index.js'), dest: join(SERVICE_SRC, 'src/api/core/network/upload/index.js') },
-  { src: join(SIMULATOR_DIR, 'service-apis/network/websocket/index.js'), dest: join(SERVICE_SRC, 'src/api/core/network/websocket/index.js') },
 ]
 
 // Transaction journal for the injected-file overlay: one entry per path this
@@ -83,7 +82,7 @@ function cleanupInjectedFiles() {
     }
     // Restore the exact pre-build bytes rather than `git checkout`: a feature
     // worktree may intentionally have uncommitted edits in an upstream file
-    // that devtools temporarily overlays (notably websocket/index.js).
+    // that devtools temporarily overlays.
     if (backup !== null) {
       writeFileSync(dest, backup)
       continue

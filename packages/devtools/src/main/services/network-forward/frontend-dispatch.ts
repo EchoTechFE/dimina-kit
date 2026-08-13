@@ -148,7 +148,8 @@ export function drainOutboundBatch<T extends { method: unknown }>(
   handle: (cmd: T) => void,
 ): void {
   if (!Array.isArray(batch)) return
-  for (const raw of batch) {
+  const entries: unknown[] = batch
+  for (const raw of entries) {
     if (!raw || typeof raw !== 'object') continue
     const cmd = raw as T
     if (typeof cmd.method !== 'string') continue
