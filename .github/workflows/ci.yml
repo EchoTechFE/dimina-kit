@@ -31,6 +31,9 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Check generated agent policy
+        run: python3 .agents/generate-claude.py --check
+
       # Two past incidents (a bad merge-conflict resolution, then an
       # incomplete follow-up bump) silently walked the dimina pointer
       # backwards in history, dropping upstream fixes for ~11 days without
