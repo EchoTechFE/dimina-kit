@@ -13,11 +13,11 @@ description: 在 dimina-kit 的 git worktree/沙箱中准备 submodule、双 pnp
 
 ```bash
 git -C <worktree> submodule update --init dimina
-pnpm -C <worktree>/dimina/fe install
+pnpm -C <worktree>/dimina/fe install --no-frozen-lockfile
 pnpm -C <worktree> install
 ```
 
-记录：主仓库 HEAD、`dimina` submodule HEAD、两份 lockfile hash、Node/pnpm 版本。缺一项时不要把后续红灯直接归因于代码。
+记录：主仓库 HEAD、`dimina` submodule HEAD、根 lockfile hash、Node/pnpm 版本。`dimina/fe/pnpm-lock.yaml` 被上游 gitignore，不是可用于 frozen install 的提交工件；若本次安装生成了它，可把 hash 记为环境事实，但不能当作仓库 provenance。缺少必要事实时不要把后续红灯直接归因于代码。
 
 ## 按改动面构建
 
