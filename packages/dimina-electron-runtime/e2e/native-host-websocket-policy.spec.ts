@@ -18,6 +18,12 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import { WebSocketServer, type WebSocket } from 'ws'
 import {
+  closeSecureWebSocketTestServer,
+  createSecureWebSocketTestServer,
+  secureWebSocketTestUrl,
+  WEBSOCKET_TEST_CA_PATH,
+} from './fixtures/websocket-tls'
+import {
   closeProject,
   evalInWebContentsByUrl,
   openProject,
@@ -56,13 +62,13 @@ const serverConns: ServerConn[] = []
 let bootSeq = 0
 
 test.beforeAll(async () => {
-  wss = new WebSocketServer({ host: '127.0.0.1', port: 0 })
+  wss = createSecureWebSocketTestServer()
   await new Promise<void>((resolve, reject) => {
     wss.once('listening', resolve)
     wss.once('error', reject)
   })
   const { port } = wss.address() as AddressInfo
-  socketUrl = `ws://127.0.0.1:${port}/socket`
+  socketUrl = secureWebSocketTestUrl(port)
   wss.on('connection', (socket) => {
     const conn: ServerConn = { messages: [], closed: false, closeCode: null, closeReason: '', socket }
     serverConns.push(conn)
@@ -83,7 +89,7 @@ test.afterAll(async () => {
   for (const conn of serverConns) {
     if (!conn.closed) conn.socket.terminate()
   }
-  await new Promise<void>((resolve) => wss.close(() => resolve()))
+  await closeSecureWebSocketTestServer(wss)
 })
 
 async function bootApp(extraEnv: Record<string, string> = {}): Promise<AppHandle> {
@@ -101,6 +107,7 @@ async function bootApp(extraEnv: Record<string, string> = {}): Promise<AppHandle
     env: {
       ...process.env,
       NODE_ENV: 'test',
+      NODE_EXTRA_CA_CERTS: WEBSOCKET_TEST_CA_PATH,
       DIMINA_E2E_USER_DATA_DIR: userDataDir,
       ...extraEnv,
     },

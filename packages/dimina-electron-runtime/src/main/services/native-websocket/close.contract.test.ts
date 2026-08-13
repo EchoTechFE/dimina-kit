@@ -130,6 +130,40 @@ describe('Native WebSocket close policy', () => {
     probe.dispose()
   })
 
+  it('rejects a second close while the first close handshake is in flight', async () => {
+    const peer = await startEchoPeer()
+    const service = newService()
+    const probe = new EventProbe()
+    service.listen('owner-double-close', probe.listener)
+    await connectAndWait(service, 'owner-double-close', probe, {
+      socketId: 'double-close',
+      url: peer.url,
+    })
+
+    const closed = probe.waitFor(
+      event => event.socketId === 'double-close' && event.event === 'close',
+    )
+    expect((await service.close('owner-double-close', {
+      socketId: 'double-close',
+      code: 4001,
+      reason: 'first',
+    })).errMsg).toBe('closeSocket:ok')
+    expect((await service.close('owner-double-close', {
+      socketId: 'double-close',
+      code: 4002,
+      reason: 'second',
+    })).errMsg).toBe('closeSocket:fail WebSocket is not connected')
+
+    await closed
+    await waitUntil(
+      () => peer.closeFrames.length === 1,
+      'peer did not receive the first close frame',
+    )
+    expect(peer.closeFrames).toEqual([{ code: 4001, reason: 'first' }])
+    expect(probe.events.filter(event => event.event === 'close')).toHaveLength(1)
+    probe.dispose()
+  })
+
   it('still performs a real handshake close for open connections', async () => {
     const peer = await startEchoPeer()
     const service = newService()

@@ -19,6 +19,12 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import { WebSocketServer, type WebSocket } from 'ws'
 import {
+  closeSecureWebSocketTestServer,
+  createSecureWebSocketTestServer,
+  secureWebSocketTestUrl,
+  WEBSOCKET_TEST_CA_PATH,
+} from './fixtures/websocket-tls'
+import {
   closeProject,
   evalInWebContentsByUrl,
   openProject,
@@ -54,13 +60,13 @@ let socketUrl: string
 const serverConns: ServerConn[] = []
 
 test.beforeAll(async () => {
-  wss = new WebSocketServer({ host: '127.0.0.1', port: 0 })
+  wss = createSecureWebSocketTestServer()
   await new Promise<void>((resolve, reject) => {
     wss.once('listening', resolve)
     wss.once('error', reject)
   })
   const { port } = wss.address() as AddressInfo
-  socketUrl = `ws://127.0.0.1:${port}/socket`
+  socketUrl = secureWebSocketTestUrl(port)
   wss.on('connection', (socket) => {
     const conn: ServerConn = { messages: [], closed: false, socket }
     serverConns.push(conn)
@@ -79,7 +85,7 @@ test.afterAll(async () => {
   for (const conn of serverConns) {
     if (!conn.closed) conn.socket.terminate()
   }
-  await new Promise<void>((resolve) => wss.close(() => resolve()))
+  await closeSecureWebSocketTestServer(wss)
 })
 
 async function bootApp(): Promise<AppHandle> {
@@ -97,6 +103,7 @@ async function bootApp(): Promise<AppHandle> {
     env: {
       ...process.env,
       NODE_ENV: 'test',
+      NODE_EXTRA_CA_CERTS: WEBSOCKET_TEST_CA_PATH,
       DIMINA_E2E_USER_DATA_DIR: userDataDir,
     },
   })
@@ -163,10 +170,6 @@ async function pickRefusedPort(): Promise<number> {
 const JS_CLEANUP = `(() => {
   var g = globalThis;
   if (!g.__wsPolicy) return true;
-  for (var i = 0; i < g.__wsPolicy.globalFns.length; i++) {
-    try { wx.offSocketMessage(g.__wsPolicy.globalFns[i]); } catch (e) {}
-  }
-  g.__wsPolicy.globalFns = [];
   for (var j = 0; j < g.__wsPolicy.reg.length; j++) {
     try { g.__wsPolicy.reg[j].close({ fail: function () {} }); } catch (e) {}
   }
@@ -178,7 +181,7 @@ const JS_CLEANUP = `(() => {
 function jsConnect(url: string, name: string): string {
   return `(() => {
     var g = globalThis;
-    g.__wsPolicy = g.__wsPolicy || { conns: {}, reg: [], globalFns: [], globalMsgs: {} };
+    g.__wsPolicy = g.__wsPolicy || { conns: {}, reg: [], globalMsgs: {} };
     var cap = { success: false, fail: null, open: false, messages: [], errors: [], closes: [] };
     var task = wx.connectSocket({
       url: ${JSON.stringify(url)},
@@ -227,12 +230,11 @@ function jsGlobalClose(): string {
 function jsOnSocketMessage(slot: string): string {
   return `(() => {
     var g = globalThis;
-    g.__wsPolicy = g.__wsPolicy || { conns: {}, reg: [], globalFns: [], globalMsgs: {} };
+    g.__wsPolicy = g.__wsPolicy || { conns: {}, reg: [], globalMsgs: {} };
     g.__wsPolicy.globalMsgs[${JSON.stringify(slot)}] = [];
     var fn = function (e) {
       g.__wsPolicy.globalMsgs[${JSON.stringify(slot)}].push(typeof e.data === 'string' ? e.data : '[binary]');
     };
-    g.__wsPolicy.globalFns.push(fn);
     wx.onSocketMessage(fn);
     return true;
   })()`
@@ -246,6 +248,13 @@ async function expectOpen(app: ElectronApplication, name: string, connIndex: num
   expect(
     await pollUntil(() => Promise.resolve(serverConns.length > connIndex), (v) => v, 5_000, 100),
     'server must accept the connection',
+  ).toBe(true)
+}
+
+async function expectServerClosed(connIndex: number): Promise<void> {
+  expect(
+    await pollUntil(() => Promise.resolve(serverConns[connIndex]?.closed ?? false), (v) => v, 5_000, 100),
+    `server must observe connection ${connIndex} closing`,
   ).toBe(true)
 }
 
@@ -333,7 +342,7 @@ test.describe('native-host wx socket legacy global-interface policy', () => {
     ).toBe(true)
   })
 
-  test('wx.closeSocket closes every open connection', async () => {
+  test('wx.closeSocket closes only the open global binding', async () => {
     const app = handle!.app
     const connA = serverConns.length
     await evalService(app, jsConnect(socketUrl, 'A'))
@@ -343,15 +352,11 @@ test.describe('native-host wx socket legacy global-interface policy', () => {
     await expectOpen(app, 'B', connB)
 
     await evalService(app, jsGlobalClose())
-    expect(
-      await pollUntil(
-        () => Promise.resolve((serverConns[connA]?.closed ?? false) && (serverConns[connB]?.closed ?? false)),
-        (v) => v,
-        5_000,
-        100,
-      ),
-      `server must observe both connections closing: ${JSON.stringify(serverConns.map((c) => c.closed))}`,
-    ).toBe(true)
+    await expectServerClosed(connA)
+    await waitMs(300)
+    expect(serverConns[connB]?.closed, 'the non-bound SocketTask must remain open').toBe(false)
+    await evalService(app, jsTaskClose('B'))
+    await expectServerClosed(connB)
   })
 
   test('wx.onSocketMessage replaces the previous registration with a single slot', async () => {
@@ -374,7 +379,7 @@ test.describe('native-host wx socket legacy global-interface policy', () => {
   test('reports onError without onClose for a refused connection while the connectSocket call succeeds', async () => {
     const app = handle!.app
     const port = await pickRefusedPort()
-    await evalService(app, jsConnect(`ws://127.0.0.1:${port}/socket`, 'refused'))
+    await evalService(app, jsConnect(secureWebSocketTestUrl(port), 'refused'))
 
     const cap = await pollUntil(() => readCap(app, 'refused'), (c) => c.errors.length > 0, 15_000, 250)
     expect(cap.errors.length, `capture: ${JSON.stringify(cap)}`).toBeGreaterThan(0)

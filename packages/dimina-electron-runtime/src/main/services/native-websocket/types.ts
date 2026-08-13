@@ -1,6 +1,14 @@
 import type { NativeSocketProfile } from './transport.js'
 import type { NativeWebSocketTracer } from './trace.js'
 
+export type NativeWebSocketEventName = 'open' | 'message' | 'error' | 'close'
+export type NativeWebSocketCallbackEmitter = (callbackId: unknown, payload: Record<string, unknown>) => void
+
+export interface NativeWebSocketEventSubscription {
+  socketId: string
+  callback: unknown
+}
+
 export type NativeWebSocketEvent =
   | {
       socketId: string
@@ -11,7 +19,8 @@ export type NativeWebSocketEvent =
   | {
       socketId: string
       event: 'message'
-      data: string | ArrayBuffer
+      data: string
+      isBuffer?: true
     }
   | {
       socketId: string
@@ -38,11 +47,14 @@ export interface NativeConnectSocketOptions {
    * cannot select a cellular interface, so true is an explicit no-op.
    */
   forceCellularNetwork?: boolean
+  /** Container-owned Referer added after caller headers are filtered. */
+  containerReferer?: string
 }
 
 export interface NativeSendSocketMessageOptions {
   socketId: string
   data: unknown
+  isBuffer?: boolean
 }
 
 export interface NativeCloseSocketOptions {
@@ -67,7 +79,19 @@ export interface NativeWebSocketServiceOptions {
 }
 
 export interface NativeWebSocketService {
+  /** Diagnostic observer used by transport contract tests; bridge delivery uses onSocketEvent. */
   listen(ownerId: string, listener: (event: NativeWebSocketEvent) => void): void
+  onSocketEvent(
+    ownerId: string,
+    event: NativeWebSocketEventName,
+    subscription: NativeWebSocketEventSubscription,
+    emitter: NativeWebSocketCallbackEmitter,
+  ): void
+  offSocketEvent(
+    ownerId: string,
+    event: NativeWebSocketEventName,
+    subscription: NativeWebSocketEventSubscription,
+  ): void
   connect(ownerId: string, options: NativeConnectSocketOptions): NativeWebSocketResult
   send(ownerId: string, options: NativeSendSocketMessageOptions): Promise<NativeWebSocketResult>
   close(ownerId: string, options: NativeCloseSocketOptions): NativeWebSocketResult

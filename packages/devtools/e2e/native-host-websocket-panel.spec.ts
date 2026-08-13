@@ -24,6 +24,12 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import { WebSocketServer } from 'ws'
 import {
+  closeSecureWebSocketTestServer,
+  createSecureWebSocketTestServer,
+  secureWebSocketTestUrl,
+  WEBSOCKET_TEST_CA_PATH,
+} from '../../dimina-electron-runtime/e2e/fixtures/websocket-tls'
+import {
   closeProject,
   evalInWebContentsByUrl,
   openProjectInUI,
@@ -74,13 +80,13 @@ let wss: WebSocketServer
 let socketUrl: string
 
 test.beforeAll(async () => {
-  wss = new WebSocketServer({ host: '127.0.0.1', port: 0 })
+  wss = createSecureWebSocketTestServer()
   await new Promise<void>((resolve, reject) => {
     wss.once('listening', resolve)
     wss.once('error', reject)
   })
   const { port } = wss.address() as AddressInfo
-  socketUrl = `ws://127.0.0.1:${port}/socket`
+  socketUrl = secureWebSocketTestUrl(port)
   wss.on('connection', (socket) => {
     socket.on('message', (data, isBinary) => {
       socket.send(data, { binary: isBinary })
@@ -90,7 +96,7 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
   for (const socket of wss.clients) socket.terminate()
-  await new Promise<void>((resolve) => wss.close(() => resolve()))
+  await closeSecureWebSocketTestServer(wss)
 })
 
 async function bootApp(): Promise<AppHandle> {
@@ -108,6 +114,7 @@ async function bootApp(): Promise<AppHandle> {
     env: {
       ...process.env,
       NODE_ENV: 'test',
+      NODE_EXTRA_CA_CERTS: WEBSOCKET_TEST_CA_PATH,
       DIMINA_NATIVE_HOST: '1',
       DIMINA_E2E_USER_DATA_DIR: userDataDir,
     },

@@ -2,19 +2,13 @@
  * E2E (native-host): close-race semantics of wx.connectSocket / SocketTask.close
  * driven from the service realm against a recording echo server.
  *
- * R1: a close issued in the same tick as connectSocket settles locally — the
- * close reports 'closeSocket:ok', onClose carries the caller's code/reason,
- * onOpen/onError never fire, and no connection ever reaches the server.
+ * A close issued before open settles through the native bridge with exactly
+ * one onClose carrying the caller's code/reason and no onOpen/onError. A
+ * delaying TCP relay makes the in-flight-handshake case deterministic.
  *
- * R2: a close issued while the handshake is in flight still settles cleanly —
- * exactly one onClose (code 1000 or the caller's code), no onError, close
- * reports 'closeSocket:ok', the server observes the connection come and go,
- * and no further events follow. A delaying TCP relay holds the upgrade
- * request so the close deterministically lands mid-handshake.
- *
- * R3: wx.closeSocket with an already-dead bound connection reports
- * 'closeSocket:fail WebSocket is not connected' yet still closes every
- * remaining live connection.
+ * wx.closeSocket with an already-dead bound connection reports
+ * 'closeSocket:fail WebSocket is not connected' and leaves other SocketTask
+ * connections untouched.
  */
 import { test, expect, _electron, type ElectronApplication, type Page as PwPage } from '@playwright/test'
 import fs from 'fs'
@@ -22,6 +16,12 @@ import net, { type AddressInfo } from 'net'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { WebSocketServer, type WebSocket } from 'ws'
+import {
+  closeSecureWebSocketTestServer,
+  createSecureWebSocketTestServer,
+  secureWebSocketTestUrl,
+  WEBSOCKET_TEST_CA_PATH,
+} from './fixtures/websocket-tls'
 import {
   closeProject,
   evalInWebContentsByUrl,
@@ -65,13 +65,13 @@ let socketUrl: string
 const serverConns: ServerConn[] = []
 
 test.beforeAll(async () => {
-  wss = new WebSocketServer({ host: '127.0.0.1', port: 0 })
+  wss = createSecureWebSocketTestServer()
   await new Promise<void>((resolve, reject) => {
     wss.once('listening', resolve)
     wss.once('error', reject)
   })
   const { port } = wss.address() as AddressInfo
-  socketUrl = `ws://127.0.0.1:${port}/socket`
+  socketUrl = secureWebSocketTestUrl(port)
   wss.on('connection', (socket) => {
     const conn: ServerConn = { messages: [], closed: false, socket }
     serverConns.push(conn)
@@ -90,7 +90,7 @@ test.afterAll(async () => {
   for (const conn of serverConns) {
     if (!conn.closed) conn.socket.terminate()
   }
-  await new Promise<void>((resolve) => wss.close(() => resolve()))
+  await closeSecureWebSocketTestServer(wss)
 })
 
 async function bootApp(): Promise<AppHandle> {
@@ -108,6 +108,7 @@ async function bootApp(): Promise<AppHandle> {
     env: {
       ...process.env,
       NODE_ENV: 'test',
+      NODE_EXTRA_CA_CERTS: WEBSOCKET_TEST_CA_PATH,
       DIMINA_E2E_USER_DATA_DIR: userDataDir,
     },
   })
@@ -278,6 +279,29 @@ function jsTaskClose(name: string, code?: number, reason?: string): string {
   })`
 }
 
+function jsDoubleTaskClose(name: string): string {
+  return `new Promise((resolve) => {
+    var task = globalThis.__wsPolicy.conns[${JSON.stringify(name)}].task;
+    var results = [];
+    var settle = function (label, ok, response) {
+      results.push({ label: label, ok: ok, errMsg: (response && response.errMsg) || String(response) });
+      if (results.length === 2) resolve(results);
+    };
+    task.close({
+      code: 4001,
+      reason: 'first',
+      success: function (r) { settle('first', true, r); },
+      fail: function (e) { settle('first', false, e); },
+    });
+    task.close({
+      code: 4002,
+      reason: 'second',
+      success: function (r) { settle('second', true, r); },
+      fail: function (e) { settle('second', false, e); },
+    });
+  })`
+}
+
 function jsGlobalClose(): string {
   return `new Promise((resolve) => {
     wx.closeSocket({
@@ -326,7 +350,7 @@ test.describe('native-host wx.connectSocket close-race policy', () => {
     await handle.win.waitForTimeout(300)
   })
 
-  test('settles a same-tick connect-then-close locally without ever hitting the network', async () => {
+  test('settles a same-tick connect-then-close without ever hitting the network', async () => {
     const app = handle!.app
     const connBase = serverConns.length
     await evalService(app, jsConnectThenCloseSync(socketUrl, 'sync', 4001, 'bye'))
@@ -351,7 +375,7 @@ test.describe('native-host wx.connectSocket close-race policy', () => {
     const app = handle!.app
     const wsPort = new URL(socketUrl).port
     const relay = await startHandshakeDelayRelay(Number(wsPort), 300)
-    const relayUrl = `ws://127.0.0.1:${relay.port}/socket`
+    const relayUrl = secureWebSocketTestUrl(relay.port)
     const connBase = serverConns.length
     try {
       await evalService(app, jsConnect(relayUrl, 'hs'))
@@ -364,11 +388,8 @@ test.describe('native-host wx.connectSocket close-race policy', () => {
       expect([1000, 4001], `close code: ${JSON.stringify(cap.closes)}`).toContain(cap.closes[0]!.code)
       expect(cap.errors, `onError must not fire: ${JSON.stringify(cap.errors)}`).toEqual([])
 
-      expect(
-        await pollUntil(() => Promise.resolve(serverConns.length > connBase), (v) => v, 5_000, 100),
-        'server must accept the connection',
-      ).toBe(true)
-      await expectServerClosed(connBase, 'the handshaking connection')
+      await waitMs(500)
+      expect(serverConns.length, 'a cancelled handshake must not reach the WebSocket server').toBe(connBase)
 
       const quiescent = await readCap(app, 'hs')
       await waitMs(300)
@@ -383,7 +404,23 @@ test.describe('native-host wx.connectSocket close-race policy', () => {
     }
   })
 
-  test('wx.closeSocket with a dead bound connection reports failure yet still closes the remaining live connections', async () => {
+  test('a second SocketTask.close during the close handshake fails without a second close event', async () => {
+    const app = handle!.app
+    const conn = serverConns.length
+    await evalService(app, jsConnect(socketUrl, 'double'))
+    await expectOpen(app, 'double', conn)
+
+    const results = await evalService<Array<CloseResult & { label: string }>>(app, jsDoubleTaskClose('double'))
+    expect(results.sort((left, right) => left.label.localeCompare(right.label))).toEqual([
+      { label: 'first', ok: true, errMsg: 'closeSocket:ok' },
+      { label: 'second', ok: false, errMsg: 'closeSocket:fail WebSocket is not connected' },
+    ])
+    await expectServerClosed(conn, 'the first close handshake')
+    const cap = await readCap(app, 'double')
+    expect(cap.closes).toEqual([{ code: 4001, reason: 'first' }])
+  })
+
+  test('wx.closeSocket with a dead bound connection reports failure and leaves other tasks open', async () => {
     const app = handle!.app
     const connA = serverConns.length
     await evalService(app, jsConnect(socketUrl, 'A'))
@@ -400,6 +437,9 @@ test.describe('native-host wx.connectSocket close-race policy', () => {
     const result = await evalService<CloseResult>(app, jsGlobalClose())
     expect(result.ok, `wx.closeSocket with a dead bound connection: ${JSON.stringify(result)}`).toBe(false)
     expect(result.errMsg).toBe('closeSocket:fail WebSocket is not connected')
+    await waitMs(300)
+    expect(serverConns[connB]?.closed, 'B remains owned by its SocketTask').toBe(false)
+    await evalService(app, jsTaskClose('B'))
     await expectServerClosed(connB, 'B')
   })
 })

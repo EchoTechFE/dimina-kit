@@ -58,6 +58,14 @@ describe('build-container.js: process.exit() never appears inside the build try/
 	})
 })
 
+describe('build-container.js: upstream WebSocket service remains the authority', () => {
+	it('does not inject a downstream websocket/index.js over the submodule implementation', () => {
+		const text = readSource()
+		expect(text).not.toContain("service-apis/network/websocket/index.js")
+		expect(text).not.toContain("src/api/core/network/websocket/index.js')")
+	})
+})
+
 describe('build-container.js: injectFiles() refuses to clobber an existing preserveOriginalAs backup', () => {
 	it('injectFiles() checks existsSync(preserveOriginalAs) and throws before overwriting it', () => {
 		const text = readSource()
