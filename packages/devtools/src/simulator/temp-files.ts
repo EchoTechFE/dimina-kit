@@ -17,6 +17,7 @@
 
 export interface TempFileSink {
 	write(path: string, blob: Blob): void
+	writeAndWait?(path: string, blob: Blob): Promise<void>
 	revoke(path: string): void
 	revokeAll(): void
 }
@@ -34,10 +35,30 @@ function cryptoRandomId(): string {
 	return `${Date.now()}-${Math.random().toString(36).slice(2)}`
 }
 
-export function createTempFilePath(blob: Blob): string {
+function allocateTempFilePath(blob: Blob): string {
 	const path = `difile://_tmp/${cryptoRandomId()}`
 	tempFiles.set(path, blob)
+	return path
+}
+
+export function createTempFilePath(blob: Blob): string {
+	const path = allocateTempFilePath(blob)
 	activeSink?.write(path, blob)
+	return path
+}
+
+/**
+ * 返回路径前等待主进程确认字节已经登记。需要“成功回调后路径立即可读”的 API 使用此入口；
+ * 旧的同步创建入口保持不变，避免改变 chooseImage 等现有 API 的签名。
+ */
+export async function createTempFilePathAsync(blob: Blob): Promise<string> {
+	const path = allocateTempFilePath(blob)
+	if (activeSink?.writeAndWait) {
+		await activeSink.writeAndWait(path, blob)
+	}
+	else {
+		activeSink?.write(path, blob)
+	}
 	return path
 }
 

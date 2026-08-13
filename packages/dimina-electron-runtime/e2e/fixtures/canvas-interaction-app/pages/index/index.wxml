@@ -1,0 +1,15 @@
+<view class="wrap">
+  <view class="outer" bindtouchend="onOuterTouchEnd" bindtap="onOuterTap">
+    <canvas
+      canvas-id="hitCanvas"
+      class="hit-canvas"
+      bindtouchstart="onCanvasTouchStart"
+      bindtouchend="onCanvasTouchEnd"
+      bindcanceltap="onCanvasCancelTap"
+      bindlongpress="onCanvasLongPress"
+      bindtap="onCanvasTap"
+    ></canvas>
+  </view>
+
+  <button class="btn" data-action="reset" bindtap="onReset">reset</button>
+</view>

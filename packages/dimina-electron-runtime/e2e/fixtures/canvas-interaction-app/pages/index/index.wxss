@@ -1,0 +1,12 @@
+.outer {
+  padding: 20px;
+}
+
+.hit-canvas {
+  width: 200px;
+  height: 120px;
+}
+
+.btn {
+  display: block;
+}

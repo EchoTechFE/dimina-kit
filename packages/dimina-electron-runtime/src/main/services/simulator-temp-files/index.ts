@@ -86,16 +86,27 @@ export function setupSimulatorTempFiles(simSession: Session): Disposable {
 
 	const registry = new RuntimeIpcRegistry(simulatorOnlyPolicy)
 
-	registry.on('simulator:temp-file:write', (_event, payload) => {
-		if (disposed) return
-		const { path, mime, bytes } = payload as {
-			path: string
-			mime: string
-			bytes: ArrayBuffer | Uint8Array | Buffer
-		}
-		registerTempFile(store, path, mime, bytes as ArrayBuffer | Buffer)
+	type TempFileWritePayload = {
+		path: string
+		mime: string
+		bytes: ArrayBuffer | Buffer
+	}
+
+	function writeTempFile(payload: TempFileWritePayload): void {
+		if (disposed) throw new Error('simulator temp-file service is disposed')
+		const { path, mime, bytes } = payload
+		registerTempFile(store, path, mime, bytes)
 		enforceStoreCap(store)
 		drainWaiters(path)
+	}
+
+	registry.on('simulator:temp-file:write', (_event, payload: TempFileWritePayload) => {
+		if (disposed) return
+		writeTempFile(payload)
+	})
+
+	registry.handle('simulator:temp-file:write-confirmed', (_event, payload: TempFileWritePayload) => {
+		writeTempFile(payload)
 	})
 
 	registry.on('simulator:temp-file:revoke', (_event, payload) => {

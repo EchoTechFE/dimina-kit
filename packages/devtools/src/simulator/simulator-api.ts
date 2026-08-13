@@ -38,6 +38,7 @@ import {
 	previewImage,
 	compressImage,
 	saveImageToPhotosAlbum,
+	saveCanvasTempFile,
 	getImageInfo,
 	chooseMedia,
 	chooseVideo,
@@ -260,6 +261,7 @@ export const simulatorApis: Record<string, (this: MiniAppContext, opts: never) =
 	previewImage,
 	compressImage,
 	saveImageToPhotosAlbum,
+	saveCanvasTempFile,
 	getImageInfo,
 	// Media: Video
 	chooseMedia,

@@ -10,7 +10,7 @@ import type { MiniAppContext } from './types'
 import { bindDomEvents, type EventBridgeDisposer } from './event-bridge'
 import { bindCallbacks } from './simulator-api-helpers'
 import { readVPathBytesSync } from './simulator-api-fs'
-import { createTempFilePath, resolveTempFilePath } from './temp-files'
+import { createTempFilePath, createTempFilePathAsync, resolveTempFilePath } from './temp-files'
 
 // ─── shared file-picker scaffolding ───────────────────────────────────────
 //
@@ -178,6 +178,46 @@ export function compressImage(
 		onComplete?.()
 	}
 	img.src = src
+}
+
+export async function saveCanvasTempFile(
+	this: MiniAppContext,
+	{ dataURL, fileType = 'png', success, fail, complete }: { dataURL: string; fileType?: string; success?: unknown; fail?: unknown; complete?: unknown },
+) {
+	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
+
+	if (!dataURL || typeof dataURL !== 'string') {
+		const result = { errMsg: 'canvasToTempFilePath:fail dataURL is required' }
+		onFail?.(result)
+		onComplete?.(result)
+		return
+	}
+	if (fileType !== 'png' && fileType !== 'jpg') {
+		const result = { errMsg: 'canvasToTempFilePath:fail invalid file type' }
+		onFail?.(result)
+		onComplete?.(result)
+		return
+	}
+
+	try {
+		const base64Data = dataURL.includes(';base64,') ? dataURL.split(';base64,')[1] : dataURL
+		const byteChars = atob(base64Data)
+		const bytes = new Uint8Array(byteChars.length)
+		for (let i = 0; i < byteChars.length; i++) {
+			bytes[i] = byteChars.charCodeAt(i)
+		}
+
+		const mimeType = fileType === 'jpg' ? 'image/jpeg' : 'image/png'
+		const blob = new Blob([bytes.buffer], { type: mimeType })
+		const tempFilePath = await createTempFilePathAsync(blob)
+		const result = { tempFilePath, errMsg: 'canvasToTempFilePath:ok' }
+		onSuccess?.(result)
+		onComplete?.(result)
+	} catch (error) {
+		const result = { errMsg: `canvasToTempFilePath:fail ${(error as Error).message}` }
+		onFail?.(result)
+		onComplete?.(result)
+	}
 }
 
 export function saveImageToPhotosAlbum(

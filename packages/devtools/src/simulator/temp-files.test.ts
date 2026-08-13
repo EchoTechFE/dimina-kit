@@ -3,6 +3,7 @@ import * as tempFilesModule from './temp-files'
 
 const {
 	createTempFilePath,
+	createTempFilePathAsync,
 	registerTempFilePath,
 	resolveTempFilePath,
 	revokeTempFilePath,
@@ -21,6 +22,7 @@ const setTempFileSink = (
 
 interface TempFileSink {
 	write(path: string, blob: Blob): void
+	writeAndWait?(path: string, blob: Blob): Promise<void>
 	revoke(path: string): void
 	revokeAll(): void
 }
@@ -94,6 +96,32 @@ describe('temp-files difile:// path generation', () => {
 
 		expect(path).toMatch(DIFILE_RE)
 		expect(createSpy).not.toHaveBeenCalled()
+	})
+
+	it('createTempFilePathAsync waits until the sink confirms bytes are readable', async () => {
+		let confirm: (() => void) | undefined
+		const writeAndWait = vi.fn(() => new Promise<void>((resolve) => {
+			confirm = resolve
+		}))
+		setTempFileSink({
+			write: vi.fn(),
+			writeAndWait,
+			revoke: vi.fn(),
+			revokeAll: vi.fn(),
+		})
+
+		let settled = false
+		const pending = createTempFilePathAsync(new Blob(['ready'])).then((path) => {
+			settled = true
+			return path
+		})
+		await Promise.resolve()
+		expect(writeAndWait).toHaveBeenCalledTimes(1)
+		expect(settled).toBe(false)
+
+		confirm?.()
+		await expect(pending).resolves.toMatch(DIFILE_RE)
+		expect(settled).toBe(true)
 	})
 
 	it('createTempFilePath emits unique paths across calls', () => {
