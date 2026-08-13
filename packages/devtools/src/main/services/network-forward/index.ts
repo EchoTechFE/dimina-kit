@@ -548,7 +548,7 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
     const release = (): void => { if (!released) { released = true; pendingPrefetchCount-- } }
     const started = cache.prime(id, () => fetch().then(
       (v) => { release(); return v },
-      (err) => { release(); throw err },
+      (err: unknown) => { release(); throw err },
     ))
     if (!started) release()
   }
@@ -899,7 +899,7 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
     // not-ready answer can re-queue the in-flight batch ahead of it in order.
     dispatchQueue = remaining
     if (remaining.length > 0) scheduleFlush()
-    wc.executeJavaScript(script, true).then((ok) => {
+    wc.executeJavaScript(script, true).then((ok: unknown) => {
       if (ok === true) {
         if (sink !== 'ready') markReady()
         return
@@ -1344,7 +1344,7 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
       lease.dispose()
     })
 
-    void lease.send('Network.enable').catch((err) => {
+    void lease.send('Network.enable').catch((err: unknown) => {
       console.warn('[network-forward] guest Network.enable failed:', err instanceof Error ? err.message : err)
     })
   }
@@ -1393,7 +1393,7 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
     })
     attach.add(() => detachSub.dispose())
 
-    void lease.send('Network.enable').catch((err) => {
+    void lease.send('Network.enable').catch((err: unknown) => {
       console.warn('[network-forward] Network.enable failed:', err instanceof Error ? err.message : err)
     })
   }
