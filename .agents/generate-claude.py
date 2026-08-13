@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate Claude context and skill copies from project Agent Skills sources."""
+"""Generate Claude context and thin skill shims from project Agent Skills sources."""
 
 from __future__ import annotations
 
@@ -27,9 +27,16 @@ def render_skill(source: Path) -> bytes:
     if not text.startswith("---\n") or end < 0:
         raise ValueError(f"invalid skill frontmatter: {source}")
     digest = hashlib.sha256(text.encode()).hexdigest()[:16]
-    insert_at = end + len("\n---\n")
-    marker = f"\n<!-- {MARKER}; source-sha256: {digest} -->\n"
-    return (text[:insert_at] + marker + text[insert_at:]).encode()
+    frontmatter = text[: end + len("\n---\n")]
+    canonical = f".agents/skills/{source.parent.name}/SKILL.md"
+    shim = (
+        f"\n<!-- {MARKER}; source-sha256: {digest} -->\n\n"
+        "# Canonical skill\n\n"
+        f"Use the Read tool to load `{canonical}` from the repository root completely, "
+        "then follow it as the authoritative instructions for this skill. Resolve relative "
+        "references from that canonical skill directory.\n"
+    )
+    return (frontmatter + shim).encode()
 
 
 def render_context() -> str:
@@ -45,12 +52,7 @@ def render_context() -> str:
 def source_skills() -> dict[str, dict[Path, bytes]]:
     skills: dict[str, dict[Path, bytes]] = {}
     for skill_file in sorted(SOURCE_ROOT.glob("*/SKILL.md")):
-        source_dir = skill_file.parent
-        files: dict[Path, bytes] = {}
-        for source in sorted(path for path in source_dir.rglob("*") if path.is_file()):
-            relative = source.relative_to(source_dir)
-            files[relative] = render_skill(source) if relative == Path("SKILL.md") else source.read_bytes()
-        skills[source_dir.name] = files
+        skills[skill_file.parent.name] = {Path("SKILL.md"): render_skill(skill_file)}
     return skills
 
 

@@ -3,11 +3,12 @@
 - `../AGENTS.md`：Pi、Codex 和其他支持 AGENTS.md 的 harness 读取的项目规则唯一来源。
 - `claude-adapter.md`：只包含 Claude 特有路由。
 - `skills/*/SKILL.md`：项目 Agent Skills 唯一来源；Codex 已确认从 `.agents/skills` 发现，Pi 已确认能加载 `dimina-gate` 正文但未区分发现源。
-- `generate-claude.py`：生成 `../CLAUDE.md` 和 `../.claude/skills/*`，供 Claude 使用。
+- `generate-claude.py`：生成 `../CLAUDE.md` 和 `../.claude/skills/*` 薄入口。Claude 入口只保留发现所需 frontmatter，并在调用时读取 `.agents/skills` 的权威正文；不复制正文和附件。
 
 修改 AGENTS、Claude adapter 或 skill 后运行：
 
 ```bash
+python3 .agents/test_generate_claude.py
 ./.agents/generate-claude.py
 ./.agents/generate-claude.py --check
 ```
