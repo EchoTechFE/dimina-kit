@@ -34,6 +34,8 @@ const EMPTY = {
   canvasLongPress: null,
   outerTouchEnd: null,
   outerTap: null,
+  catchButtonTap: null,
+  catchOuterTap: null,
 }
 
 Page({
@@ -71,5 +73,11 @@ Page({
   },
   onOuterTap(e) {
     this.record('outer:tap', e, 'outerTap')
+  },
+  onCatchButtonTap(e) {
+    this.record('catch:button', e, 'catchButtonTap')
+  },
+  onCatchOuterTap(e) {
+    this.record('catch:outer', e, 'catchOuterTap')
   },
 })

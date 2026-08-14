@@ -193,6 +193,49 @@ Page({
     })
   },
 
+  onExportDefaults() {
+    const pixelRatio = wx.getWindowInfo().pixelRatio
+    const exportAttempt = (this.data.exportAttempt || 0) + 1
+    this.setData({
+      exportAttempt,
+      exportDone: false,
+      exportBytesBase64: null,
+      exportError: null,
+      exportCompleteErrMsg: null,
+    })
+    wx.canvasToTempFilePath({
+      canvasId: 'mainCanvas',
+      x: 0,
+      y: 0,
+      width: 50,
+      height: 25,
+      success: (result) => {
+        this.setData({
+          exportPixelRatio: pixelRatio,
+          exportTempFilePath: result.tempFilePath,
+          exportSuccessReceived: true,
+        })
+        const fsm = wx.getFileSystemManager()
+        fsm.readFile({
+          filePath: result.tempFilePath,
+          encoding: 'base64',
+          success: (fileResult) => {
+            this.setData({ exportBytesBase64: fileResult.data, exportCompletedAttempt: exportAttempt, exportDone: true })
+          },
+          fail: (error) => {
+            this.setData({ exportError: error.errMsg, exportDone: true })
+          },
+        })
+      },
+      fail: (error) => {
+        this.setData({ exportError: error.errMsg, exportDone: true })
+      },
+      complete: (result) => {
+        this.setData({ exportCompleteAttempt: exportAttempt, exportCompleteErrMsg: result.errMsg, exportCompleteResult: result })
+      },
+    }, this)
+  },
+
   onPixelRoundTrip() {
     this.setData({ pixelRoundTripStarted: true })
     try {

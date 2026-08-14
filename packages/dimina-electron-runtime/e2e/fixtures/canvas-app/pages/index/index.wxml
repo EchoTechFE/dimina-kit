@@ -12,6 +12,7 @@
   <button class="btn" data-action="serial-draw" bindtap="onSerialDraw">serial-draw</button>
   <button class="btn" data-action="path-snapshot-transform" bindtap="onPathSnapshotTransform">path-snapshot-transform</button>
   <button class="btn" data-action="save-restore" bindtap="onSaveRestore">save-restore</button>
+  <button class="btn" data-action="export-defaults" bindtap="onExportDefaults">export-defaults</button>
   <button class="btn" data-action="pixel-round-trip" bindtap="onPixelRoundTrip">pixel-round-trip</button>
   <button class="btn" data-action="clip-lock-batch-a" bindtap="onClipLockBatchA">clip-lock-batch-a</button>
   <button class="btn" data-action="clip-lock-batch-b-no-clip" bindtap="onClipLockBatchBNoClip">clip-lock-batch-b-no-clip</button>

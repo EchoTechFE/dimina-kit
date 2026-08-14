@@ -294,6 +294,34 @@ test.describe('native-host legacy CanvasContext e2e', () => {
     expect(savedSpot, `the save()-scoped fillRect should have painted purple at (70,70), got ${JSON.stringify(savedSpot)}`).toEqual([128, 0, 128, 255])
   })
 
+  test('canvas export defaults use the device pixel ratio and return a reusable temp path', async () => {
+    const exportedPaths: string[] = []
+    for (const attempt of [1, 2]) {
+      expect(await clickAction('export-defaults')).toBe(true)
+      await pollUntil(
+        () => getPageData(electronApp, APP_ID).catch(() => undefined),
+        (value) => {
+          const data = value as Record<string, unknown> | undefined
+          return data?.exportCompletedAttempt === attempt && data.exportCompleteAttempt === attempt
+        },
+        5000,
+        200,
+      )
+      const pageData = await getPageData(electronApp, APP_ID) as Record<string, unknown>
+
+      expect(pageData.exportError, `canvas export failed: ${JSON.stringify(pageData)}`).toBeFalsy()
+      expect(pageData.exportCompleteErrMsg).toBe('canvasToTempFilePath:ok')
+      expect(pageData.exportTempFilePath).toMatch(/^difile:\/\/_tmp\//)
+      expect(typeof pageData.exportBytesBase64, `export page data: ${JSON.stringify(pageData)}`).toBe('string')
+      const png = Buffer.from(pageData.exportBytesBase64 as string, 'base64')
+      expect(png.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+      expect(png.readUInt32BE(16)).toBe(50 * Number(pageData.exportPixelRatio))
+      expect(png.readUInt32BE(20)).toBe(25 * Number(pageData.exportPixelRatio))
+      exportedPaths.push(pageData.exportTempFilePath as string)
+    }
+    expect(new Set(exportedPaths).size).toBe(2)
+  })
+
   test('pixel API callbacks cross the real service/render bridge as result objects', async () => {
     expect(await clickAction('pixel-round-trip')).toBe(true)
     await waitForFlag('pixelRoundTripStarted')

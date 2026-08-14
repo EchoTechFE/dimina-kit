@@ -50,17 +50,21 @@ interface Rect { x: number, y: number, width: number, height: number }
 
 /** Geometry of the canvas inside the render-host guest, in that guest's own
  * viewport coordinates — the space `sendPointer` dispatches into. */
-async function canvasRect(): Promise<Rect> {
+async function elementRect(selector: string): Promise<Rect> {
   return evalInWebContentsByUrl<Rect>(
     electronApp,
     RENDER_GUEST_URL_MARKER,
     `(() => {
-      const canvas = document.querySelector('canvas[canvas-id="hitCanvas"]')
-      if (!canvas) throw new Error('hitCanvas not found in render-host guest')
-      const r = canvas.getBoundingClientRect()
+      const element = document.querySelector(${JSON.stringify(selector)})
+      if (!element) throw new Error(${JSON.stringify(`${selector} not found in render-host guest`)})
+      const r = element.getBoundingClientRect()
       return { x: r.x, y: r.y, width: r.width, height: r.height }
     })()`,
   )
+}
+
+async function canvasRect(): Promise<Rect> {
+  return elementRect('canvas[canvas-id="hitCanvas"]')
 }
 
 /** Dispatch a synthesized `PointerEvent` inside the render-host guest — see
@@ -255,6 +259,53 @@ test.describe('native-host canvas gesture e2e', () => {
       'canvas:tap',
       'outer:tap',
     ])
+  })
+
+  test('a button catchtap blocks its ancestor during the same pointer sequence', async () => {
+    await resetLog()
+    const rect = await elementRect('.catch-button')
+    const px = rect.x + rect.width / 2
+    const py = rect.y + rect.height / 2
+
+    await sendPointer('pointerdown', px, py)
+    await sendPointer('pointerup', px, py)
+
+    const log = await waitForLogEntry('catch:button')
+    expect(log).not.toContain('catch:outer')
+  })
+
+  test('disable-scroll prevents the bare canvas touchmove default', async () => {
+    const defaultPrevented = await evalInWebContentsByUrl<boolean>(
+      electronApp,
+      RENDER_GUEST_URL_MARKER,
+      `(() => {
+        const canvas = document.querySelector('canvas[canvas-id="hitCanvas"]')
+        const point = {
+          identifier: 1,
+          clientX: 20,
+          clientY: 20,
+          pageX: 20,
+          pageY: 20,
+          screenX: 20,
+          screenY: 20,
+          force: 1,
+        }
+        const start = new Event('touchstart', { bubbles: true, cancelable: true, composed: true })
+        Object.assign(start, { touches: [point], changedTouches: [point], targetTouches: [point] })
+        canvas.dispatchEvent(start)
+        const moved = { ...point, clientX: 40, pageX: 40, screenX: 40 }
+        const move = new Event('touchmove', { bubbles: true, cancelable: true, composed: true })
+        Object.assign(move, { touches: [moved], changedTouches: [moved], targetTouches: [moved] })
+        canvas.dispatchEvent(move)
+        const defaultPrevented = move.defaultPrevented
+        const end = new Event('touchend', { bubbles: true, cancelable: true, composed: true })
+        Object.assign(end, { touches: [], changedTouches: [moved], targetTouches: [] })
+        canvas.dispatchEvent(end)
+        return defaultPrevented
+      })()`,
+    )
+
+    expect(defaultPrevented).toBe(true)
   })
 
   test('dragging past the move threshold sends canceltap instead of tap', async () => {

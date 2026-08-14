@@ -3,12 +3,17 @@
     <canvas
       canvas-id="hitCanvas"
       class="hit-canvas"
+      disable-scroll
       bindtouchstart="onCanvasTouchStart"
       bindtouchend="onCanvasTouchEnd"
       bindcanceltap="onCanvasCancelTap"
       bindlongpress="onCanvasLongPress"
       bindtap="onCanvasTap"
     ></canvas>
+  </view>
+
+  <view class="catch-outer" bindtap="onCatchOuterTap">
+    <button class="catch-button" catchtap="onCatchButtonTap">catch tap</button>
   </view>
 
   <button class="btn" data-action="reset" bindtap="onReset">reset</button>
