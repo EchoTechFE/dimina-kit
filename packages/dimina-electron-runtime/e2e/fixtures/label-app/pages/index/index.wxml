@@ -1,0 +1,49 @@
+<view class="page">
+
+  <!-- A 嵌套：点文字，label 与祖先 view 各应恰好一次 tap，控件只 change 不 tap -->
+  <view class="case" bindtap="onTap" data-name="viewA">
+    <text class="hit hit-a" bindtap="onTap" data-name="textA">TEXT A</text>
+    <label class="lab" bindtap="onTap" data-name="labelA">
+      <text class="lab-txt lab-txt-a">LABEL A</text>
+      <switch class="sw" checked="{{switchA}}" bindtap="onTap" bindchange="onChange" data-name="switchA" />
+    </label>
+  </view>
+
+  <!-- B for= 远程：远程控件被激活，但它和它的祖先都不应收到 tap -->
+  <view class="case">
+    <label class="lab" for="swB" bindtap="onTap" data-name="labelB">
+      <text class="lab-txt lab-txt-b">LABEL B</text>
+    </label>
+    <view class="remote" bindtap="onTap" data-name="viewB">
+      <switch class="sw" id="swB" checked="{{switchB}}" bindtap="onTap" bindchange="onChange" data-name="switchB" />
+    </view>
+  </view>
+
+  <!-- D 内嵌原生输入框：点文字应聚焦输入框，且不产生第二次 tap -->
+  <view class="case">
+    <label class="lab" bindtap="onTap" data-name="labelD">
+      <text class="lab-txt lab-txt-d">LABEL D</text>
+      <input class="inp" placeholder="input" bindfocus="onFocus" data-name="inputD" />
+    </label>
+  </view>
+
+  <!-- G label 包 button：button 与勾选类控件不同，激活时派发自己的 tap 且会冒泡，
+       label 与祖先 view 各收到两次（补发的一次 + 原始触摸序列的一次） -->
+  <view class="case" bindtap="onTap" data-name="viewG">
+    <label class="lab" bindtap="onTap" data-name="labelG">
+      <text class="lab-txt lab-txt-g">LABEL G</text>
+      <button class="btn" bindtap="onTap" data-name="buttonG">BTN G</button>
+    </label>
+  </view>
+
+  <!-- H for= 远程 button：补发的 tap 冒泡的是远程按钮自己那条祖先链，不是 label 那条 -->
+  <view class="case">
+    <label class="lab" for="btnH" bindtap="onTap" data-name="labelH">
+      <text class="lab-txt lab-txt-h">LABEL H</text>
+    </label>
+    <view class="remote" bindtap="onTap" data-name="viewH">
+      <button class="btn" id="btnH" bindtap="onTap" data-name="buttonH">BTN H</button>
+    </view>
+  </view>
+
+</view>

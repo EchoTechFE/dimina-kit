@@ -1,0 +1,5 @@
+{
+  "appid": "devtools_label_fixture",
+  "projectname": "devtools-label-fixture",
+  "description": "Fixture mini-app for e2e label activation tests"
+}

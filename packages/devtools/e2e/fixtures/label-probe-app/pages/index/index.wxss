@@ -1,0 +1,131 @@
+.page {
+	padding: 16rpx;
+	font-size: 26rpx;
+}
+
+.panel {
+	position: sticky;
+	top: 0;
+	z-index: 10;
+	background: #fffbe6;
+	border: 2rpx solid #f0c36d;
+	border-radius: 8rpx;
+	padding: 12rpx;
+	margin-bottom: 16rpx;
+}
+
+.panel-title {
+	font-weight: bold;
+	margin: 8rpx 0;
+}
+
+.empty {
+	color: #999;
+}
+
+.count-row {
+	display: flex;
+	justify-content: space-between;
+	border-bottom: 1rpx solid #eee;
+	padding: 4rpx 0;
+}
+
+.count-key {
+	font-family: monospace;
+}
+
+.count-n {
+	font-weight: bold;
+}
+
+.log-row {
+	font-family: monospace;
+	color: #555;
+	font-size: 22rpx;
+}
+
+.reset {
+	margin-top: 12rpx;
+}
+
+.case {
+	border: 2rpx solid #888;
+	border-radius: 8rpx;
+	padding: 12rpx;
+	margin-bottom: 20rpx;
+}
+
+.case-title {
+	font-weight: bold;
+	margin-bottom: 8rpx;
+	color: #333;
+}
+
+.lab {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	border: 2rpx dashed #4a90d9;
+	border-radius: 8rpx;
+	padding: 16rpx;
+}
+
+.remote {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	border: 2rpx solid #d94a4a;
+	border-radius: 8rpx;
+	padding: 16rpx;
+	margin-top: 12rpx;
+}
+
+.txt {
+	padding: 8rpx;
+	background: #eef4fb;
+}
+
+.txt-small {
+	color: #999;
+	font-size: 22rpx;
+}
+
+.inp {
+	border: 1rpx solid #ccc;
+	padding: 6rpx;
+	width: 180rpx;
+}
+
+.ta {
+	border: 1rpx solid #ccc;
+	padding: 6rpx;
+	width: 240rpx;
+	height: 60rpx;
+}
+
+/* T 用例：文档序第一个控件被隐藏，看激活搜索会不会跳过它 */
+.hidden-ctl {
+	display: none;
+}
+
+/* U 用例：外层 label 自己也直接放了一个控件，排在内层 label 前面 */
+.lab-outer {
+	border-color: #d94ad9;
+	gap: 12rpx;
+}
+
+/* W 用例：slider 排在可激活控件前面，给它固定宽度免得撑满整行 */
+.sl {
+	width: 200rpx;
+}
+
+/* Y 用例：picker-view 需要显式高度，行高与列项一致才能按行数算滚动距离 */
+.pv {
+	width: 300rpx;
+	height: 150rpx;
+}
+
+.pv-item {
+	line-height: 50px;
+	text-align: center;
+}

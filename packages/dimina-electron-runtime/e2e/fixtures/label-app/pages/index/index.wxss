@@ -1,0 +1,42 @@
+/* 每个用例都必须整块落在设备视口内：点击走 sendInputEvent 打真实坐标，
+   落到折叠线以下的元素点不到，表现是计数一直不动。间距按此从紧。 */
+.page {
+  padding: 8px;
+}
+
+.case {
+  margin-bottom: 10px;
+  padding: 6px;
+  border: 1px solid #ddd;
+}
+
+.hit,
+.lab-txt {
+  display: block;
+  height: 32px;
+  line-height: 32px;
+  background: #f2f2f2;
+}
+
+.lab {
+  display: block;
+  margin-top: 6px;
+}
+
+.sw,
+.inp,
+.btn {
+  display: block;
+  margin-top: 6px;
+}
+
+.inp {
+  height: 32px;
+  border: 1px solid #ccc;
+}
+
+.remote {
+  margin-top: 6px;
+  padding: 6px;
+  border: 1px dashed #999;
+}
