@@ -2,9 +2,21 @@ import { app, BrowserWindow, ipcMain, protocol, session as electronSession, webC
 import type { IpcMainEvent, IpcMainInvokeEvent, WebContents } from 'electron'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { BRIDGE_CHANNELS as C, SIMULATOR_EVENTS as E, deviceInfoToHostEnv } from '../../shared/bridge-channels.js'
+import { BRIDGE_CHANNELS as C, SERVICE_HOST_CHANNELS, SIMULATOR_EVENTS as E, deviceInfoToHostEnv } from '../../shared/bridge-channels.js'
+import { pageResizeHostEnv } from '../../shared/page-resize-host-env.js'
 import type { NativeDeviceInfo, SyncStorageChange } from '../../shared/runtime-types.js'
 import { apiCallWatchdogMs, isPersistentSimulatorApi } from '../../shared/simulator-api-metadata.js'
+import {
+  effectiveOrientation,
+  isPageOrientationConfig,
+  resolvePageOrientationState,
+  withPageWindowSize,
+} from '../../shared/page-orientation.js'
+import type {
+  Orientation,
+  PageResizePayload,
+} from '../../shared/page-orientation.js'
+import { routeContainerPage, stalePageApiErrMsg } from './container-routing.js'
 import { resolveRuntimeAssetPaths } from '../utils/paths.js'
 import { createSessionListenerBag } from './session-listener-bag.js'
 import type { SessionListenerBag } from './session-listener-bag.js'
@@ -25,6 +37,7 @@ import type {
   PageOpenResult,
   PageStackEntry,
   PageStackPayload,
+  SessionActivePayload,
   PageWindowConfig,
   RenderInvokePayload,
   RenderPublishPayload,
@@ -74,6 +87,8 @@ import {
   type AppLifecycleController,
   type AppLifecycleEvent,
 } from './app-lifecycle.js'
+import { createWindowResizeController, type WindowResizeController } from './window-resize.js'
+import type { PageClosedEvent, SessionOrientationEvent } from '../runtime-events.js'
 
 // The compiled `logic.js` ships a RELATIVE `//# sourceMappingURL=logic.js.map`.
 // `injectLogicBundle` loads it via `executeJavaScript`, which gives the injected
@@ -332,6 +347,11 @@ interface RouterState {
   simulatorWcIdToAppSessionIds: Map<number, Set<string>>
   /** renderWc → bridgeId. */
   wcIdToBridgeId: Map<number, string>
+  /**
+   * The app session the simulator declared as the one on screen (`SESSION_ACTIVE`), or null when nothing has claimed it.
+   * Only that session's `'session-orientation'` broadcasts are marked `active`, so a soft-reload session booting behind the visible one — and the outgoing one's later teardown — cannot move the renderer's panel geometry.
+   */
+  activeAppSessionId: string | null
   /** requestId → pending API_CALL forwarded to a simulator window. */
   pendingApiCalls: Map<string, PendingApiCall>
   /** Pre-warm pool for service-host windows; null when pooling is disabled. */
@@ -368,6 +388,11 @@ interface RouterState {
    * appSessionId. Fired on main-window foreground/background and service errors.
    */
   appLifecycle: AppLifecycleController
+  /**
+   * Per-session `wx.onWindowResize` listener registry (keep subscriptions — see `window-resize.ts`).
+   * Fired on every dispatchable PAGE_RESIZE.
+   */
+  windowResize: WindowResizeController
   /** Main-process WebSocket transport. Uses Node net/tls through `ws`, never Chromium. */
   nativeWebSocket: NativeWebSocketService
   /**
@@ -379,6 +404,16 @@ interface RouterState {
    * with ghost AppData tabs after a respawn.
    */
   evictAppDataBridges: (ap: AppSession) => void
+  /**
+   * Broadcasts the orientation an app session currently forces (or `null` on teardown).
+   * Indirected through state (like `evictAppDataBridges`) so `disposeAppSession` — which only takes `state` — can reach `ctx.events` without threading `ctx` through the whole dispose chain.
+   */
+  emitSessionOrientation: (event: SessionOrientationEvent) => void
+  /**
+   * Announces one page's end, so main-process consumers holding per-page state keyed by `bridgeId` release it.
+   * Indirected through state for the same reason as `emitSessionOrientation`.
+   */
+  emitPageClosed: (event: PageClosedEvent) => void
 }
 
 /** Default timeout for a simulator-forwarded API call. */
@@ -450,6 +485,8 @@ export interface BridgeResourceCensus {
   simulatorWcBindings: number
   renderWcBindings: number
   pendingApiCalls: number
+  /** Total `wx.onWindowResize` listener ids held across every live session. */
+  windowResizeListeners: number
   /**
    * `listenerCount('destroyed')` per unique live simulator wc (keyed by wc id).
    * One teardown hook per live session — a count above the hosted-session count
@@ -599,6 +636,7 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
     serviceWcIdToAppSessionId: new Map(),
     simulatorWcIdToAppSessionIds: new Map(),
     wcIdToBridgeId: new Map(),
+    activeAppSessionId: null,
     pendingApiCalls: new Map(),
     pool: null,
     emitRenderEvent: () => {},
@@ -607,6 +645,7 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
     connections: ctx.connections,
     debugTap: createDebugTap({ enabled: resolveDebugTapEnabled() }),
     appLifecycle: createAppLifecycleController(),
+    windowResize: createWindowResizeController(),
     nativeWebSocket: createNativeWebSocketService({
       idleTimeoutMs: socketIdleTimeoutMsFromEnv(),
     }),
@@ -615,6 +654,8 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
         ctx.events.emit('app-data-evict', { appId: ap.appId, bridgeId: page.bridgeId })
       }
     },
+    emitSessionOrientation: (event) => { ctx.events.emit('session-orientation', event) },
+    emitPageClosed: (event) => { ctx.events.emit('page-closed', event) },
   }
   ctx.registry.add(() => state.nativeWebSocket.dispose())
 
@@ -846,6 +887,7 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
         simulatorWcBindings,
         renderWcBindings: state.wcIdToBridgeId.size,
         pendingApiCalls: state.pendingApiCalls.size,
+        windowResizeListeners: state.windowResize.count(),
         simulatorDestroyedListeners,
       }
     },
@@ -934,6 +976,17 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
   ipcMain.on(C.PAGE_STACK, onPageStack)
   ctx.registry.add(() => { ipcMain.removeListener(C.PAGE_STACK, onPageStack) })
 
+  // DeviceShell → main: the session whose shell is on screen.
+  // Recorded rather than inferred — during a soft reload both sessions publish geometry, and "whoever reported last" would hand the screen to the invisible one.
+  const onSessionActive = (event: IpcMainEvent, payload: SessionActivePayload): void => {
+    const ap = state.appSessions.get(payload.appSessionId)
+    if (!ap) return
+    if (!senderBoundToSession(state, event.sender, ap)) return
+    state.activeAppSessionId = payload.appSessionId
+  }
+  ipcMain.on(C.SESSION_ACTIVE, onSessionActive)
+  ctx.registry.add(() => { ipcMain.removeListener(C.SESSION_ACTIVE, onSessionActive) })
+
   ipcMain.handle(C.SPAWN, async (event, opts: SpawnRequest): Promise<SpawnResult> => {
     return handleSpawn(state, ctx, event, opts)
   })
@@ -963,6 +1016,14 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
   }
   ipcMain.on(C.PAGE_LIFECYCLE, onPageLifecycle)
   ctx.registry.add(() => { ipcMain.removeListener(C.PAGE_LIFECYCLE, onPageLifecycle) })
+
+  // DeviceShell → main: orientation/size changed.
+  // DeviceShell owns the dispatch gate (payload.dispatchWindow / payload.dispatchPage) and the current device; main only mirrors the geometry into the session's host-env snapshot and, per channel, fires the service-side pageResize message and/or every registered wx.onWindowResize listener.
+  const onPageResize = (event: IpcMainEvent, payload: PageResizePayload): void => {
+    handlePageResize(state, event.sender, currentDevice, payload)
+  }
+  ipcMain.on(C.PAGE_RESIZE, onPageResize)
+  ctx.registry.add(() => { ipcMain.removeListener(C.PAGE_RESIZE, onPageResize) })
 
   const onNavCallback = (event: IpcMainEvent, payload: NavCallbackPayload): void => {
     handleNavCallback(state, event.sender, payload)
@@ -1007,7 +1068,7 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
     tapIn(C.SERVICE_INVOKE, event.sender, payload)
     const ap = appByWc(state, event.sender)
     if (!ap) return
-    const page = state.pageSessions.get(payload.bridgeId) ?? state.pageSessions.get(ap.appSessionId)
+    const page = serviceSenderPage(state, ap, payload.bridgeId)
     if (!page) return
     routeFromService(state, ap, page, payload.msg, ctx)
   }
@@ -1177,19 +1238,6 @@ async function handleSpawn(
     resourceServer = await startDiminaResourceServer(path.resolve(pkgRoot, root))
     resourceBaseUrl = resourceServer.baseUrl
   }
-  // The selected device (renderer toolbar) is the authoritative source for the
-  // logical dims a spawn must report. The simulator-supplied `hostEnvSnapshot`
-  // is derived from the device baked into the simulator at BOOT time, so on a
-  // RESPAWN after a live device change it still carries the boot device. Layer
-  // the live `currentDevice` on top so every spawn/respawn reports the selected
-  // device — matching what the live `SetDeviceInfo` HostEnvUpdate pushes to an
-  // already-running service host. Pre-selection (null) → simulator snapshot wins.
-  const selectedDevice = ctx.bridge?.getDevice?.() ?? null
-  const hostEnv = makeHostEnv({
-    ...opts.hostEnvSnapshot,
-    ...(selectedDevice ? deviceInfoToHostEnv(selectedDevice) : {}),
-  })
-
   // app-config.json lives at `<base><appId>/<root>/app-config.json` on the dev
   // server, or at the local server root for the fallback path.
   const appConfig = await loadAppConfig(
@@ -1210,6 +1258,31 @@ async function handleSpawn(
   }
   const rootWindowConfig = resolvePageWindowConfig(appConfig, resolvedPagePath)
   const isTab = isTabPage(appConfig, resolvedPagePath)
+
+  // The selected device (renderer toolbar) is the authoritative source for the logical dims a spawn must report.
+  // The simulator-supplied `hostEnvSnapshot` is derived from the device baked into the simulator at BOOT time, so on a RESPAWN after a live device change it still carries the boot device.
+  // Layer the live `currentDevice` on top so every spawn/respawn reports the selected device — matching what the live `SetDeviceInfo` HostEnvUpdate pushes to an already-running service host.
+  // Pre-selection (null) → simulator snapshot wins.
+  const selectedDevice = ctx.bridge?.getDevice?.() ?? null
+  // Seed with the ROOT PAGE's EFFECTIVE orientation, not the raw device orientation: DeviceShell mounts and sends the first PAGE_RESIZE only AFTER spawn resolves, so a page pinned to a non-auto pageOrientation must already report its effective geometry here — a synchronous wx.getSystemInfoSync() from App.onLaunch / the root page's onLoad would otherwise read the device's orientation instead of the page's.
+  // Reuses the SAME pure functions DeviceShell itself resolves orientation with (resolvePageOrientationState → effectiveOrientation) so main's seed and DeviceShell's later authoritative PAGE_RESIZE value can never disagree — one policy, two callers.
+  const bootDeviceOrientation: Orientation = selectedDevice?.deviceOrientation ?? 'portrait'
+  const rootOrientationState = resolvePageOrientationState(rootWindowConfig.pageOrientation)
+  const effectiveRootOrientation = effectiveOrientation(rootOrientationState, bootDeviceOrientation)
+  const orientedHostEnv = makeHostEnv({
+    ...opts.hostEnvSnapshot,
+    ...(selectedDevice
+      ? deviceInfoToHostEnv({ ...selectedDevice, deviceOrientation: effectiveRootOrientation })
+      : {}),
+  })
+  // `deviceInfoToHostEnv` only knows the device, so its `windowHeight` is the screen minus the status bar.
+  // The window a page actually gets is the screen minus the chrome that page keeps in flow, which is what the shell reports in its first PAGE_RESIZE.
+  // Apply the same `pageWindowSize` formula to the seed with the ROOT PAGE's chrome, so `App.onLaunch` and the root page's `onLoad` read the height the page ends up with instead of a taller one that silently shrinks on the first frame.
+  const hostEnv = withPageWindowSize(orientedHostEnv, {
+    navigationStyle: rootWindowConfig.navigationStyle,
+    isTab,
+    bottomInset: orientedHostEnv.safeAreaInsets?.bottom ?? 0,
+  })
 
   // Acquire a pre-warmed service-host window when pooling is enabled; otherwise
   // construct one fresh (default). A pooled/fallback window is warmed on
@@ -1522,6 +1595,59 @@ function handlePageLifecycle(state: RouterState, sender: WebContents, payload: P
   })
 }
 
+function handlePageResize(
+  state: RouterState,
+  sender: WebContents,
+  device: NativeDeviceInfo | null,
+  payload: PageResizePayload,
+): void {
+  const ap = state.appSessions.get(payload.appSessionId)
+  if (!ap) return
+  if (!senderBoundToSession(state, sender, ap)) return
+  // A late resize for a page that already closed (or was never a member of this session) must not resurrect stale geometry into a live session's hostEnv. `ap.pages` is the same closed-page ledger PAGE_CLOSE/disposePageSession maintain — no separate liveness tracking needed. bridgeIds are never reused (newBridgeId is timestamp+random), so this alone also rules out a stale payload landing on a DIFFERENT page that reused the same id.
+  if (!ap.pages.has(payload.bridgeId)) return
+  applyPageResize(state, ap, device, payload)
+}
+
+/**
+ * Refresh `ap.hostEnv` unconditionally and broadcast the session's forced orientation; the two resize channels then fire independently — `payload.dispatchPage` gates the service-side `pageResize` message (drives `Page.onResize` / component `resize`), `payload.dispatchWindow` gates every `wx.onWindowResize` listener registered for this session.
+ */
+function applyPageResize(
+  state: RouterState,
+  ap: AppSession,
+  device: NativeDeviceInfo | null,
+  payload: PageResizePayload,
+): void {
+  const patch = pageResizeHostEnv(payload, device)
+  ap.hostEnv = { ...ap.hostEnv, ...patch }
+  // Mirrors the web container's own theme-change push (miniApp.js): the service host's `core/host-env.js` already listens for this message type and replaces `snapshot.systemInfo` wholesale with the given object.
+  forwardToService(ap, { type: 'hostEnvUpdate', target: 'service', body: { systemInfo: ap.hostEnv } })
+  // The synchronous host APIs (`wx.getSystemInfoSync` and friends) read the spawn context's `hostEnvSnapshot`, which only this direct IPC channel patches — the bus message above feeds dimina's own store and never reaches it, so a page pinned to landscape would keep reporting portrait metrics.
+  if (!ap.serviceWc.isDestroyed()) {
+    ap.serviceWc.send(SERVICE_HOST_CHANNELS.HostEnvUpdate, patch)
+  }
+
+  state.emitSessionOrientation({
+    appSessionId: ap.appSessionId,
+    bridgeId: payload.bridgeId,
+    orientation: payload.deviceOrientation,
+    canRotate: payload.canRotate,
+    active: state.activeAppSessionId === ap.appSessionId,
+  })
+
+  if (payload.dispatchPage) {
+    forwardToService(ap, {
+      type: 'pageResize',
+      target: 'service',
+      body: { bridgeId: payload.bridgeId, size: payload.size, deviceOrientation: payload.deviceOrientation },
+    })
+  }
+  if (!payload.dispatchWindow) return
+  for (const id of state.windowResize.listeners(ap.appSessionId)) {
+    sendCallback(ap, id, { size: payload.size, deviceOrientation: payload.deviceOrientation })
+  }
+}
+
 function handleNavCallback(state: RouterState, sender: WebContents, payload: NavCallbackPayload): void {
   const ap = state.appSessions.get(payload.appSessionId)
   if (!ap) return
@@ -1741,6 +1867,27 @@ function maybeSendResourceLoaded(ap: AppSession, page: PageSession): void {
 
 // ── Message routing ──────────────────────────────────────────────────────────
 
+/**
+ * The page a service→container message is handled against before the message's own `body.bridgeId` refines it (`routeContainerPage`).
+ *
+ * The envelope's bridgeId is the service host's SPAWN id — the root page — and it never changes for the life of the window, so it stops resolving the moment navigation retires the launch page (`redirectTo`/`reLaunch`/"back to home" off it, which PAGE_CLOSE allows precisely because the session lives on).
+ * Dropping the message there would kill the session's whole service→container direction: every `wx.*` call the service makes travels this way, so the mini-app would go on running with every API call silently unanswered.
+ * The session's active page is the honest stand-in; a page the session still holds is better than none.
+ */
+function serviceSenderPage(
+  state: RouterState,
+  ap: AppSession,
+  senderBridgeId: string,
+): PageSession | undefined {
+  const named = state.pageSessions.get(senderBridgeId)
+  if (named) return named
+  const active = ap.activeBridgeId ? ap.pages.get(ap.activeBridgeId) : undefined
+  if (active) return active
+  let last: PageSession | undefined
+  for (const page of ap.pages.values()) last = page
+  return last
+}
+
 function routeFromService(
   state: RouterState,
   ap: AppSession,
@@ -1757,8 +1904,19 @@ function routeFromService(
     return
   }
   if (msg.target === 'container') {
-    const page = pageFromMsg(state, ap, msg) ?? defaultPage
-    handleContainerMsg(ap, page, msg, ctx, state)
+    const routing = routeContainerPage(ap.pages, readBridgeId(msg), defaultPage)
+    if (routing.staleBridgeId !== null && msg.type === 'invokeAPI') {
+      const body = msg.body as { name?: unknown, params?: unknown } | undefined
+      const name = String(body?.name ?? '')
+      const errMsg = stalePageApiErrMsg(name)
+      if (errMsg) {
+        // The calling page closed before its own call reached main.
+        // Answering the caller here is the only honest outcome: the substituted page is somebody else's, and reporting `ok` for it would hide that the requested page is gone.
+        failActionCallback(ap, normalizeParams(body?.params), errMsg)
+        return
+      }
+    }
+    handleContainerMsg(ap, routing.page, msg, ctx, state)
   }
 }
 
@@ -2119,6 +2277,26 @@ function handleAppLifecycleToggle(
   return false
 }
 
+// wx.onWindowResize / offWindowResize (keep subscription).
+// The service encodes the listener as a keep callback id in `params.success` for both register and unregister, matching handleAppLifecycleToggle's pattern.
+// Returns true when `name` matched (fully handled), false to fall through.
+function handleWindowResizeToggle(
+  state: RouterState,
+  ap: AppSession,
+  name: string,
+  params: Record<string, unknown>,
+): boolean {
+  if (name === 'onWindowResize') {
+    state.windowResize.register(ap.appSessionId, params.success)
+    return true
+  }
+  if (name === 'offWindowResize') {
+    state.windowResize.unregister(ap.appSessionId, params.success)
+    return true
+  }
+  return false
+}
+
 // pageScrollTo acts on the page's render guest (scroll its document), which
 // only the main process can reach — run the scroll script in the invoking
 // page's render webContents rather than forwarding to the simulator.
@@ -2304,6 +2482,8 @@ async function handleSimulatorApi(
 
   if (handleAppLifecycleToggle(state, ap, name, params)) return
 
+  if (handleWindowResizeToggle(state, ap, name, params)) return
+
   if (name === 'pageScrollTo') {
     handlePageScrollApi(ap, page, params)
     return
@@ -2373,16 +2553,12 @@ function forwardApiCallToSimulator(
   const keep = params.keep === true || isPersistentSimulatorApi(name)
   const timer = keep
     ? undefined
-    : setTimeout(() => {
-        const pending = state.pendingApiCalls.get(requestId)
-        if (!pending) return
-        state.pendingApiCalls.delete(requestId)
-        const target = state.appSessions.get(pending.appSessionId)
-        if (!target) return
-        const fail = { errMsg: `${pending.name}:fail no handler (timeout)` }
-        sendCallback(target, pending.callbacks.fail, fail)
-        sendCallback(target, pending.callbacks.complete, fail)
-      }, apiCallWatchdogMs(name, params))
+    : armApiCallWatchdog(
+        state,
+        requestId,
+        apiName => `${apiName}:fail no handler (timeout)`,
+        apiCallWatchdogMs(name, params),
+      )
 
   state.pendingApiCalls.set(requestId, {
     appSessionId: ap.appSessionId,
@@ -2519,6 +2695,28 @@ function sendCallback(ap: AppSession, id: unknown, args: unknown): void {
   })
 }
 
+/**
+ * Arm the deadline a pending API call dies on.
+ * Whoever wins the race — the ack or this timer — the record is removed exactly once, so the caller's `fail` and `complete` fire at most once. `reason` builds the errMsg from the call's own recorded name, which outlives the local variable the caller used.
+ */
+function armApiCallWatchdog(
+  state: RouterState,
+  requestId: string,
+  reason: (apiName: string) => string,
+  timeoutMs: number,
+): ReturnType<typeof setTimeout> {
+  return setTimeout(() => {
+    const pending = state.pendingApiCalls.get(requestId)
+    if (!pending) return
+    state.pendingApiCalls.delete(requestId)
+    const target = state.appSessions.get(pending.appSessionId)
+    if (!target) return
+    const fail = { errMsg: reason(pending.name) }
+    sendCallback(target, pending.callbacks.fail, fail)
+    sendCallback(target, pending.callbacks.complete, fail)
+  }, timeoutMs)
+}
+
 // ── Resource helpers ────────────────────────────────────────────────────────
 
 function makeLoadResource(ap: AppSession, page: PageSession, target: 'service' | 'render'): MessageEnvelope {
@@ -2586,13 +2784,6 @@ function ensureRenderBound(state: RouterState, sender: WebContents, bridgeId: st
       if (state.wcIdToBridgeId.get(sender.id) === bridgeId) state.wcIdToBridgeId.delete(sender.id)
     })
   }
-  return page
-}
-
-function pageFromMsg(state: RouterState, ap: AppSession, msg: MessageEnvelope): PageSession | undefined {
-  const target = readBridgeId(msg)
-  if (!target) return undefined
-  const page = ap.pages.get(target)
   return page
 }
 
@@ -2679,16 +2870,13 @@ function disposePageSession(state: RouterState, ap: AppSession, page: PageSessio
   }
   ap.pages.delete(page.bridgeId)
   state.pageSessions.delete(page.bridgeId)
-  // A page is closed before the shell has re-rendered and reported its new top,
-  // so these two would go on naming a page that no longer exists — and callers
-  // read them meanwhile (panels resolving a target, automation reading the
-  // stack). Clear them and let the shell's next ACTIVE_PAGE / PAGE_STACK fill
-  // them in. `getActiveBridgeId`'s own root fallback is guarded on the root
-  // page still being in `ap.pages`, which this delete has already settled.
+  // A closed page cannot remain either the targeting authority or the owner of pending API work.
+  // The frame republishes the new top immediately afterwards.
   if (ap.activeBridgeId === page.bridgeId) {
     ap.activeBridgeId = null
   }
   ap.pageStack = undefined
+  state.emitPageClosed({ appSessionId: ap.appSessionId, bridgeId: page.bridgeId })
 }
 
 // Drain any pending API calls owned by this app session. One-shot calls
@@ -2719,6 +2907,8 @@ function closeSessionPages(state: RouterState, ap: AppSession): void {
       try { page.renderWc.close() } catch { /* guest already gone */ }
     }
     state.pageSessions.delete(page.bridgeId)
+    // Session teardown ends every page it owns, and consumers keyed by bridgeId have no other way to learn that: the session-level 'session-orientation' teardown carries no page identity.
+    state.emitPageClosed({ appSessionId: ap.appSessionId, bridgeId: page.bridgeId })
   }
 }
 
@@ -2802,7 +2992,20 @@ async function disposeAppSession(
   ap.registryHandle = null
   void registryHandle?.dispose()
   state.appLifecycle.dispose(appSessionId)
+  state.windowResize.dispose(appSessionId)
   state.nativeWebSocket.disposeOwner(appSessionId)
+  // No mini-app forces an orientation anymore — the renderer's host-env mirror falls back to the device orientation, so closing a session restores the phone's own orientation; the user may always rotate freely once no session constrains the top page.
+  // Only true for the session that actually held the screen: a soft reload disposes the OUTGOING session after the incoming one was promoted, and that teardown must leave the promoted session's mirror alone.
+  // The claim dies here with the session that made it.
+  const wasOnScreen = state.activeAppSessionId === appSessionId
+  if (wasOnScreen) state.activeAppSessionId = null
+  state.emitSessionOrientation({
+    appSessionId,
+    bridgeId: null,
+    orientation: null,
+    canRotate: true,
+    active: wasOnScreen,
+  })
 
   // Evict AppData bridges FIRST — eviction enumerates `ap.pages`, which the
   // page teardown below progressively empties (and finally clears).
@@ -2926,7 +3129,14 @@ function resolvePageWindowConfig(appConfig: RawAppConfig, pagePath: string): Pag
   const normalized = normalizePagePath(pagePath)
   const appWindow = appConfig.app?.window ?? {}
   const pageWindow = appConfig.modules?.[normalized] ?? {}
+  // Untyped JSON in, so a garbage `pageOrientation` (bad compiler output, hand- edited config) is filtered out rather than trusted at the PageWindowConfig type — an invalid value is treated as unconfigured (falls through to the next source, ultimately DEFAULT_PAGE_ORIENTATION in resolvePageOrientationState).
+  const pageOrientation = isPageOrientationConfig(pageWindow.pageOrientation)
+    ? pageWindow.pageOrientation
+    : isPageOrientationConfig(appWindow.pageOrientation)
+      ? appWindow.pageOrientation
+      : undefined
   return {
+    pageOrientation,
     navigationBarTitleText:
       pageWindow.navigationBarTitleText ?? appWindow.navigationBarTitleText ?? '',
     navigationBarBackgroundColor:

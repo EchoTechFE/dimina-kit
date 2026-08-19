@@ -7,12 +7,16 @@ import {
   type RuntimeEvents,
 } from '@dimina-kit/electron-runtime/main/runtime-context'
 import type { SessionRuntimeStatus, SyncStorageChange } from '@dimina-kit/electron-runtime'
+import type { SessionOrientationPayload } from '../services/notifications/renderer-notifier.js'
 import type { MessageEnvelope } from '../../shared/bridge-channels.js'
 import { runtimeAssetPaths } from '../utils/paths.js'
 
 type DevtoolsBridgeContext = Omit<RuntimeContext, 'events'> & {
   events?: RuntimeEvents
-  notify?: { sessionRuntimeStatus(payload: SessionRuntimeStatus): void }
+  notify?: {
+    sessionRuntimeStatus(payload: SessionRuntimeStatus): void
+    sessionOrientationChanged(payload: SessionOrientationPayload): void
+  }
   appData?: {
     evictBridge(appId: string, bridgeId: string): void
     onServiceToRender(appId: string, message: MessageEnvelope): void
@@ -36,6 +40,7 @@ export function installBridgeRouter(ctx: DevtoolsBridgeContext): void {
     const events = createRuntimeEvents()
     ctx.events = events
     events.on('session-status', (payload) => ctx.notify?.sessionRuntimeStatus(payload))
+    events.on('session-orientation', (payload) => ctx.notify?.sessionOrientationChanged(payload))
     events.on('app-data-evict', ({ appId, bridgeId }) => {
       ctx.appData?.evictBridge(appId, bridgeId)
     })

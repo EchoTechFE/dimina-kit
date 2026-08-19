@@ -27,6 +27,16 @@ function cloneConfig(config: TabBarConfig): TabBarConfig {
   }
 }
 
+/**
+ * Whether moving from `prev` to `next` changes the geometry the shell reports for the top page.
+ * Only the bar's presence takes layout space away from the page viewport — `wx.hideTabBar` hands that height to the page and `wx.showTabBar` takes it back, while text / icon / style / badge edits leave the layout alone.
+ *
+ * The shell asks this instead of listing the API names that move geometry, so a future action cannot be forgotten at the call site.
+ */
+export function changesReportedGeometry(prev: TabBarState, next: TabBarState): boolean {
+  return prev.visible !== next.visible
+}
+
 export type TabBarAction =
   | { kind: 'reset'; config: TabBarConfig | null }
   | { kind: 'visibility'; visible: boolean }

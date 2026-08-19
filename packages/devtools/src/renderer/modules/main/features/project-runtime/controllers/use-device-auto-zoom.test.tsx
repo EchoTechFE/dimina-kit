@@ -4,10 +4,19 @@
  * string value to the right branch (AUTO_ZOOM stays the sentinel, everything
  * else becomes a number).
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import type React from 'react'
 import { AUTO_ZOOM, DEVICES } from '@/shared/constants'
+
+// useDevice mounts a session-orientation subscription, reads back main's cached device orientation, and can push device info over the preload IPC bridge — none of which exist in this bridge-free unit test.
+// Stub all three so mounting the hook doesn't throw; getNativeDeviceInfo resolves null (no cached device) so the gate opens immediately with the portrait default.
+vi.mock('@/shared/api', () => ({
+  setNativeDeviceInfo: vi.fn(async () => {}),
+  getNativeDeviceInfo: vi.fn(async () => null),
+  onSessionOrientationChanged: vi.fn(() => () => {}),
+}))
+
 import { useDevice } from './use-device'
 
 function changeEvent(value: string): React.ChangeEvent<HTMLSelectElement> {

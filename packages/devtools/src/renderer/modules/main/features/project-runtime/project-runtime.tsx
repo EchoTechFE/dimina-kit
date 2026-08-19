@@ -221,10 +221,12 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
     if (panelId === 'simulator') {
       return (
         <SimulatorPanel
-          device={device.device}
+          device={device.orientedDevice}
           zoom={device.zoom}
           onDeviceChange={device.handleDeviceChange}
           onZoomChange={device.handleZoomChange}
+          canRotateDevice={device.canRotate}
+          onRotateDevice={device.handleRotateDevice}
           compileStatus={session.compileStatus}
           currentPage={simulator.currentPage}
           copied={copied}

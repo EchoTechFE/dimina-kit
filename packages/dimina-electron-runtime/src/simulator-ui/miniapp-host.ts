@@ -13,6 +13,7 @@
  * not by importing anything from the runtime.
  */
 import type {
+  ApiResponsePayload,
   NavCallbackPayload,
   PageLifecycleEvent,
   PageOpenResult,
@@ -20,6 +21,7 @@ import type {
   PageWindowConfig,
   TabBarConfig,
 } from '../shared/bridge-channels.js'
+import type { PageResizePayload } from '../shared/page-orientation.js'
 
 export interface MiniAppHost {
   readonly appId: string
@@ -55,6 +57,9 @@ export interface MiniAppHost {
   closePage(bridgeId: string): void
   notifyLifecycle(bridgeId: string, event: PageLifecycleEvent): void
   notifyNavCallback(payload: Omit<NavCallbackPayload, 'appSessionId'>): void
+  notifyApiResponse?(payload: Omit<ApiResponsePayload, 'appSessionId'>): void
+  /** Publish the visible top page's authoritative window geometry. */
+  notifyResize?(payload: PageResizePayload): void
   /** Which page is the visible top of stack — panels and automation target it. */
   notifyActivePage(bridgeId: string): void
   /** The full ordered stack, bottom→top, on every stack change. */

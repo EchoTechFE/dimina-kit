@@ -12,8 +12,8 @@
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react'
 import type { NavActionPayload } from '../shared/bridge-channels.js'
 import type { MiniAppHost } from './miniapp-host.js'
+import { navBarFromConfig } from './navigation-bar-config.js'
 import {
-  navBarFromConfig,
   normalizePath,
   parseUrl,
   reduceNavigateBack,
@@ -99,6 +99,20 @@ function makePageEntry(
       }),
     }),
   }
+}
+
+/**
+ * The launch page's PageEntry: the stack bottom the host already spawned before MiniAppFrame mounted.
+ * Exported because the embedding device host has to seed its own mirror of the frame's layout from the same values — it publishes the page's window geometry, and `navigationStyle` decides whether a navigation bar is reserved out of that window.
+ * A second hand-written seed drifts.
+ */
+export function makeLaunchPageEntry(host: MiniAppHost, bridgeId: string): PageEntry {
+  const pagePath = normalizePath(host.pagePath)
+  const windowConfig = host.rootWindowConfig ?? {}
+  const isTab = !!host.getTabBarConfig()?.list.some(
+    item => normalizePath(item.pagePath) === pagePath,
+  )
+  return makePageEntry(host, { bridgeId, pagePath, isTab, windowConfig }, { ...host.query }, true)
 }
 
 export async function doNavigateTo(

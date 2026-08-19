@@ -1,0 +1,14 @@
+{
+  "pages": [
+    "pages/entry/entry",
+    "pages/autopage/autopage",
+    "pages/portraitpage/portraitpage",
+    "pages/mid/mid"
+  ],
+  "window": {
+    "navigationBarTitleText": "Orientation App Landscape Fixture",
+    "navigationBarBackgroundColor": "#ffffff",
+    "navigationBarTextStyle": "black",
+    "pageOrientation": "landscape"
+  }
+}

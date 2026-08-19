@@ -1,0 +1,5 @@
+<view class="top-strip tab2-top-strip">TAB2 CUSTOM NAV — TOP EDGE</view>
+<view class="page-marker page-tab2">TAB2 CUSTOM NAV</view>
+<view class="probe probe-geometry">{{geometryText}}</view>
+<view class="probe probe-resize" data-count="{{resizeCount}}">{{resizeText}}</view>
+<view class="bottom-sentinel tab2-bottom">TAB2 BOTTOM SENTINEL</view>

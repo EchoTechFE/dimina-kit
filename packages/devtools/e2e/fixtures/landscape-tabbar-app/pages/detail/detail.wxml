@@ -1,0 +1,6 @@
+<view class="page-marker page-detail">DETAIL LANDSCAPE PAGE</view>
+<view class="probe probe-geometry">{{geometryText}}</view>
+<view class="probe probe-resize" data-count="{{resizeCount}}">{{resizeText}}</view>
+<view class="probe-env"></view>
+<button class="btn detail-back-btn" bindtap="goBack">Go Back</button>
+<view class="bottom-sentinel detail-bottom">DETAIL BOTTOM SENTINEL</view>

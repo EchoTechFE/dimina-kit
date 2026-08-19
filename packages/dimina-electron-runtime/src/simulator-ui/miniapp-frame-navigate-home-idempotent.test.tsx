@@ -40,9 +40,12 @@ describe('MiniAppFrame — navigateHome runs again on the home page', () => {
       expect(visiblePagePath(container)).toBe(HOME_PAGE)
     })
 
-    // The trip to home tears down the launch page and says so over the bridge.
+    // The trip to home tears down the launch page and says so over the bridge, and the home page it lands on is announced as the new visible top.
+    const home = recorder.openedEntries.find((page) => page.pagePath === HOME_PAGE)!
     expect(recorder.lifecycles).toEqual([
+      { bridgeId: ROOT_BRIDGE_ID, event: 'pageShow' },
       { bridgeId: ROOT_BRIDGE_ID, event: 'pageUnload' },
+      { bridgeId: home.bridgeId, event: 'pageShow' },
     ])
     const openedBefore = recorder.openedPages.length
     const closedBefore = recorder.closedPages.length

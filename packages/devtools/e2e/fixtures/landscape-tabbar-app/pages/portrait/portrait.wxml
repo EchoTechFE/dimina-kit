@@ -1,0 +1,2 @@
+<view class="page-marker page-portrait">PORTRAIT FIXED PAGE</view>
+<view class="probe probe-geometry">{{geometryText}}</view>

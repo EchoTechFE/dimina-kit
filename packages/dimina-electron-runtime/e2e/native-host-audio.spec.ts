@@ -72,6 +72,7 @@ import {
   getPageData,
   callWxMethod,
   RENDER_GUEST_URL_MARKER,
+  waitForServicePageReady,
 } from './helpers'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -159,6 +160,9 @@ test.describe('native-host audio event bridge e2e', () => {
       25000,
       300,
     )
+    // The route APIs resolve against the SERVICE host's own page stack, which is still empty for a few hundred ms after the render guest mounts.
+    // Navigating inside that window throws in the mini-app framework.
+    await waitForServicePageReady(electronApp)
   })
 
   test.afterAll(async () => {

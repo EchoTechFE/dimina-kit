@@ -1,5 +1,6 @@
 import type { WebContents } from 'electron'
 import type { NativeDeviceInfo } from '../../../shared/ipc-channels.js'
+import type { Orientation } from '@dimina-kit/electron-runtime/shared/page-orientation'
 // eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
 import { type WorkbenchContext } from '../workbench-context.js'
 import type { HostToolbarMessageSubscription } from './host-toolbar-port-channel.js'
@@ -218,6 +219,18 @@ export interface ViewManager {
    * pick it up automatically when they attach (`did-attach-webview`).
    */
   reapplySafeArea(device: NativeDeviceInfo | null): void
+  /**
+   * NATIVE-HOST ONLY.
+   * Re-resolve ONE page's CSS `env(safe-area-inset-*)` override against the orientation that page now shows, so it keeps agreeing with the `safeArea` its own `wx.getSystemInfoSync()` reports.
+   * Routed by `bridgeId`: a tab substack keeps hidden pages mounted at their own orientation, which the top page's must not overwrite.
+   */
+  setPageSafeAreaOrientation(bridgeId: string, orientation: Orientation): void
+  /**
+   * NATIVE-HOST ONLY.
+   * Release a closed page's recorded safe-area orientation.
+   * Driven by the page's own end (PAGE_CLOSE / session teardown), never by its render guest being destroyed — a page can be handed a replacement guest and must keep the orientation it reported.
+   */
+  forgetPageSafeAreaOrientation(bridgeId: string): void
   /**
    * Window-resize entry point. Re-applies the settings overlay's bounds only.
    * Simulator + DevTools overlay geometry is anchor-published (the renderer's
@@ -449,6 +462,10 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     refreshSimulatorStyles: nativeSimulator.refreshSimulatorStyles,
     detachSimulator: nativeSimulator.detachSimulator,
     reapplySafeArea: (device) => safeArea.reapplyAll(device),
+    setPageSafeAreaOrientation: (bridgeId, orientation) => {
+      safeArea.recordPageOrientation(bridgeId, orientation, ctx.bridge?.getDevice() ?? null)
+    },
+    forgetPageSafeAreaOrientation: (bridgeId) => safeArea.forgetPageOrientation(bridgeId),
     showSettings: overlayPanels.showSettings,
     hideSettings: overlayPanels.hideSettings,
     showPopover: overlayPanels.showPopover,

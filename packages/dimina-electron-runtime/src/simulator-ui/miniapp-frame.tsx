@@ -31,14 +31,11 @@ import {
   enumerateMounted,
   makeInitialShellState,
   mutatePageNavBar,
-  navBarFromConfig,
-  normalizePath,
   pageBackgroundColor,
-  reduceNavBar,
   type PageEntry,
   type SideEffect,
 } from './page-stack-controller.js'
-import { shouldShowHomeButton } from './navigate-home.js'
+import { reduceNavBar } from './navigation-bar-config.js'
 import {
   commitShell,
   commitTabBar,
@@ -48,6 +45,7 @@ import {
   doReLaunch,
   doRedirectTo,
   doSwitchTab,
+  makeLaunchPageEntry,
   type MiniAppFrameState,
   type ShellNavPayload,
 } from './miniapp-routing.js'
@@ -71,6 +69,12 @@ export interface CapsuleMoreContext {
  */
 export interface FrameChromeState {
   textStyle: NavigationBarTextStyle
+}
+
+export interface MiniAppFrameLayoutState {
+  top: PageEntry
+  mounted: ReturnType<typeof enumerateMounted>
+  tabBarVisible: boolean
 }
 
 export interface MiniAppFrameProps {
@@ -100,6 +104,10 @@ export interface MiniAppFrameProps {
   statusBar?: (chrome: FrameChromeState) => ReactNode
   /** Host chrome drawn above everything — extension layers, a home indicator. */
   deviceOverlay?: ReactNode
+  /** Host-owned geometry authority can observe the committed page/layout state. */
+  onLayoutState?: (state: MiniAppFrameLayoutState) => void
+  /** Publishes geometry synchronously before a tab-bar API is acknowledged. */
+  onLayoutCommit?: (state: MiniAppFrameLayoutState) => void
 }
 
 export function MiniAppFrame({
@@ -111,35 +119,16 @@ export function MiniAppFrame({
   onMore,
   statusBar,
   deviceOverlay,
+  onLayoutState,
+  onLayoutCommit,
 }: MiniAppFrameProps) {
   const preload = useMemo(() => host.getRenderPreloadUrl(), [host])
   const tabBarConfig = useMemo(() => host.getTabBarConfig(), [host])
 
-  const initialEntry = useMemo<PageEntry>(() => {
-    const pagePath = normalizePath(host.pagePath)
-    const windowConfig = host.rootWindowConfig ?? {}
-    const isTab = !!host.getTabBarConfig()?.list.some(
-      item => normalizePath(item.pagePath) === pagePath,
-    )
-    return {
-      bridgeId,
-      pagePath,
-      query: { ...host.query },
-      isTab,
-      windowConfig,
-      // The launch page is the stack bottom, so a non-home, non-tab launch
-      // page gets the home button by the automatic rule.
-      navBar: navBarFromConfig(windowConfig, host.appId, {
-        homeButtonVisible: shouldShowHomeButton({
-          pagePath,
-          homePagePath: host.getHomePagePath(),
-          isTab,
-          isStackBottom: true,
-          forcedByConfig: windowConfig.homeButton === true,
-        }),
-      }),
-    }
-  }, [host, bridgeId])
+  const initialEntry = useMemo<PageEntry>(
+    () => makeLaunchPageEntry(host, bridgeId),
+    [host, bridgeId],
+  )
 
   const [{ shell, tabBar }, setState] = useState<MiniAppFrameState>(() => ({
     shell: makeInitialShellState(initialEntry),
@@ -155,6 +144,16 @@ export function MiniAppFrame({
   const stateRef = useRef<MiniAppFrameState>({ shell, tabBar })
 
   const applySideEffects = useCallback((effects: SideEffect[]) => {
+    // 几何要先于 pageShow 到达主进程：模拟器里 `getSystemInfoSync` 读的是主进程缓存的 hostEnv 快照，`onShow` 里同步读到的必须已经是落地页自己的尺寸。
+    // 三端 native 不需要这一步，它们的同步接口每次都现读窗口。
+    //
+    // 这条上报因此排在 pageShow 之前，而 service 的 pageResize 不能因为「这一页还没 show」就把它丢掉——收件人在 16ms 合并窗结算时才定，那时 pageShow 早已送达（见 fe/packages/service/src/core/runtime.js 的 pageResize/settleResize）。
+    const currentShell = stateRef.current.shell
+    onLayoutCommit?.({
+      top: currentShell.stack[currentShell.stack.length - 1],
+      mounted: enumerateMounted(currentShell),
+      tabBarVisible: stateRef.current.tabBar.visible,
+    })
     for (const effect of effects) {
       if (effect.kind === 'lifecycle') {
         host.notifyLifecycle(effect.bridgeId, effect.event)
@@ -162,7 +161,7 @@ export function MiniAppFrame({
         host.closePage(effect.bridgeId)
       }
     }
-  }, [host])
+  }, [host, onLayoutCommit])
 
   // ── NavigationBar dynamic updates ──────────────────────────────────────────
   useEffect(() => {
@@ -183,12 +182,21 @@ export function MiniAppFrame({
   // ── TabBar dynamic API ────────────────────────────────────────────────────
   useEffect(() => {
     const listener = (payload: TabActionPayload) => {
-      const next = applyTabAction(stateRef.current.tabBar, {
+      const previous = stateRef.current.tabBar
+      const next = applyTabAction(previous, {
         kind: 'apply',
         name: payload.name,
         params: payload.params,
       })
       commitTabBar(stateRef, setState, next.state)
+      if (previous.visible !== next.state.visible) {
+        const currentShell = stateRef.current.shell
+        onLayoutCommit?.({
+          top: currentShell.stack[currentShell.stack.length - 1],
+          mounted: enumerateMounted(currentShell),
+          tabBarVisible: next.state.visible,
+        })
+      }
       host.notifyNavCallback({
         ok: next.ok,
         errMsg: next.errMsg,
@@ -196,7 +204,7 @@ export function MiniAppFrame({
       })
     }
     return host.onSessionEvent(E.TAB_ACTION, listener)
-  }, [host])
+  }, [host, onLayoutCommit])
 
   // ── Routing controller (navigateTo / Back / redirectTo / reLaunch / switchTab / Home) ─
   // Every routing operation opens its page asynchronously and only then reads
@@ -314,6 +322,9 @@ export function MiniAppFrame({
   // ── Rendering ─────────────────────────────────────────────────────────────
   const top = shell.stack[shell.stack.length - 1]
   const mounted = enumerateMounted(shell)
+  useEffect(() => {
+    onLayoutState?.({ top, mounted, tabBarVisible: tabBar.visible })
+  }, [mounted, onLayoutState, tabBar.visible, top])
   const handleMore = useCallback(() => {
     onMore?.({
       appId: host.appId,
@@ -344,6 +355,12 @@ export function MiniAppFrame({
   useEffect(() => {
     host.notifyActivePage(top.bridgeId)
   }, [host, top.bridgeId])
+
+  // The launch page is the one page no routing reduction ever installs, so it is also the one page nothing else would announce as visible — every other top gets its pageShow from the reducers (see showTop in page-stack-controller).
+  // Declared after the layout effects above so the page's geometry is published before its onShow runs, same order routing transitions get from applySideEffects.
+  useEffect(() => {
+    host.notifyLifecycle(initialEntry.bridgeId, 'pageShow')
+  }, [host, initialEntry.bridgeId])
 
   return (
     <>

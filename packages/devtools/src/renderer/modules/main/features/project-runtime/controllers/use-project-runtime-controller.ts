@@ -1,14 +1,13 @@
-import type React from 'react'
 import { useEffect, useRef } from 'react'
 import type { RefObject } from 'react'
-import { DEVICES, SIM_PANEL_PADDING, type ZoomSetting } from '@/shared/constants'
+import { DEVICES, SIM_PANEL_PADDING } from '@/shared/constants'
 import type { AppInfo, ProjectStatus, SessionRuntimeStatusPayload } from '@/shared/api'
 import type { CompileConfig } from '@/shared/types'
 import type { AppDataPanelSource, StoragePanelSource, WxmlPanelSource } from '@dimina-kit/inspect'
 import { DEFAULT_RIGHT_PANE_STATE } from '../types'
 import type { RightPaneState, RightPaneTabId } from '../types'
 
-import { useDevice } from './use-device'
+import { useDevice, type DeviceHookResult } from './use-device'
 import { useSession } from './use-session'
 import type { CompileEvent, CompileLogEntry } from './use-session'
 import { useSimulator } from './use-simulator'
@@ -47,16 +46,11 @@ interface SessionSlice {
   watcherDead: boolean
 }
 
-interface DeviceSlice {
-  device: DeviceType
-  zoom: ZoomSetting
-  simPanelWidth: number
-  setSimPanelWidth: (width: number) => void
-  handleDeviceChange: (e: React.ChangeEvent<HTMLSelectElement>) => void
-  handleZoomChange: (e: React.ChangeEvent<HTMLSelectElement>) => void
-  handleSplitterDrag: (e: React.MouseEvent) => void
-  sendDeviceInfo: (device: DeviceType) => void
-}
+/**
+ * What the controller republishes from the device hook: everything the hook returns except its internal refs, which exist for the hook's own callers.
+ * Derived rather than re-declared so a field added to the hook cannot silently go missing here.
+ */
+type DeviceSlice = Omit<DeviceHookResult, 'simPanelWidthRef' | 'deviceRef'>
 
 interface SimulatorSlice {
   simulatorRef: RefObject<HTMLElement | null>
@@ -120,20 +114,20 @@ export function useProjectRuntimeController(
 
   // ── Compose sub-hooks ────────────────────────────────────────────────────
 
-  const deviceHook = useDevice({ initialDevice })
-
   const sessionHook = useSession({
     projectPath,
   })
 
-  // Sync simulator panel width when device changes — separate from the
-  // openProject effect so device switches don't re-open the project.
+  const deviceHook = useDevice({ initialDevice })
+
+  // Sync simulator panel width when the device or its displayed orientation changes — separate from the openProject effect so these don't re-open the project.
+  // Sized at orientedDevice.width, not the device's raw portrait width, so a landscape session keeps a landscape-wide panel.
   useEffect(() => {
     if (sessionHook.compileStatus.status === 'ready') {
-      deviceHook.setSimPanelWidth(deviceHook.device.width + SIM_PANEL_PADDING * 2)
+      deviceHook.setSimPanelWidth(deviceHook.orientedDevice.width + SIM_PANEL_PADDING * 2)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deviceHook.device.width, sessionHook.compileStatus.status, deviceHook.setSimPanelWidth])
+  }, [deviceHook.orientedDevice.width, sessionHook.compileStatus.status, deviceHook.setSimPanelWidth])
 
   const simulatorHook = useSimulator({
     compileStatus: sessionHook.compileStatus,
@@ -187,6 +181,10 @@ export function useProjectRuntimeController(
     device: {
       device: deviceHook.device,
       zoom: deviceHook.zoom,
+      deviceOrientation: deviceHook.deviceOrientation,
+      handleRotateDevice: deviceHook.handleRotateDevice,
+      canRotate: deviceHook.canRotate,
+      orientedDevice: deviceHook.orientedDevice,
       simPanelWidth: deviceHook.simPanelWidth,
       setSimPanelWidth: deviceHook.setSimPanelWidth,
       handleDeviceChange: deviceHook.handleDeviceChange,

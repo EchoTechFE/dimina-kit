@@ -1,3 +1,4 @@
+import { expect } from '@playwright/test'
 import type { Page, ElectronApplication } from '@playwright/test'
 import fs from 'fs'
 import os from 'os'
@@ -174,6 +175,7 @@ export async function getCurrentPage(
  * spec in isolation) the main-process CDP evaluate channel can occasionally
  * fail a single round-trip with a generic "Script failed to execute" error
  * that carries no further detail.
+ * That wording is Electron's fixed text for ANY renderer-side throw, so it is not by itself evidence of a load flake: a `wx.<method>()` that throws inside the service host is reported here with its real message and stack, because `runNativeHostNav` in electron-entry.js returns the failure rather than letting it throw across that boundary.
  *
  * This does NOT retry: `method` here can be a NAV method (navigateTo/
  * redirectTo/reLaunch/switchTab/navigateBack), and a retry from this side of
@@ -199,6 +201,53 @@ export async function callWxMethod(
     }
     return hooks.callWxMethod(payload.method, payload.args, payload.appId)
   }, { method, args, appId })
+}
+
+/**
+ * Routes held by the SERVICE host's own page stack (`getCurrentPages()`), for the session that owns `appId`.
+ *
+ * This is the readiness fact `callWxMethod(…, 'navigateTo' | 'redirectTo' | 'switchTab' | 'reLaunch')` depends on, and it is NOT the same fact `getCurrentPage` reports: that one reads `pagePath` off the render guest's URL, which is fixed when the guest is created — before the service host has booted its bundle and instantiated the root `Page`.
+ * Those route APIs resolve their `url` against `router.getPageInfo().route` in the service host, so calling one while this list is still empty makes the mini-app framework dereference an undefined base route and throw.
+ *
+ * Poll this to an entry containing the expected page before the first nav of a freshly opened (or reopened) session.
+ */
+export async function getServicePageRoutes(
+  electronApp: ElectronApplication,
+  appId?: string,
+): Promise<string[]> {
+  return electronApp.evaluate((_electron, appId) => {
+    const hooks = (globalThis as Record<string, unknown>).__diminaE2eHooks as {
+      getServicePageRoutes: (appId?: string) => Promise<string[]>
+    }
+    return hooks.getServicePageRoutes(appId)
+  }, appId)
+}
+
+/**
+ * Block until the session that owns `appId` can actually be navigated.
+ *
+ * A freshly opened (or reopened) project reaches "the DeviceShell is mounted and a render guest exists" several hundred ms before the SERVICE host has booted its bundle and instantiated the root `Page`.
+ * Every route API resolves its `url` against `router.getPageInfo().route` in the service host, so a nav issued in that window makes the mini-app framework dereference an undefined base route and throw — a failure that only shows up under load, and lands on whichever spec happens to be running.
+ *
+ * Call this after opening a project and before the first nav of that session.
+ */
+export async function waitForServicePageReady(
+  electronApp: ElectronApplication,
+  appId?: string,
+  timeoutMs = 20000,
+): Promise<string[]> {
+  const routes = await pollUntil(
+    () => getServicePageRoutes(electronApp, appId).catch(() => [] as string[]),
+    (r) => r.some((route) => route.includes('pages/')),
+    timeoutMs,
+    250,
+  )
+  // `pollUntil` returns its last attempt on timeout rather than throwing, so assert here: a session whose service host never instantiates a page must fail on that fact, not further downstream on the nav it breaks.
+  expect(
+    routes.some((route) => route.includes('pages/')),
+    `the service host must hold a page before any nav call; saw ${JSON.stringify(routes)}`,
+  ).toBe(true)
+  return routes
 }
 
 export async function getPageData(

@@ -119,6 +119,39 @@ describe('sync-api-patch — SYNC storage write notify', () => {
     })
   })
 
+  it('patches getWindowInfo onto every namespace so its safeArea comes from the same snapshot as getSystemInfoSync', async () => {
+    vi.resetModules()
+    ;(globalThis as unknown as { __diminaSpawnContext: unknown }).__diminaSpawnContext = {
+      appId: 'wxAPP',
+      hostEnvSnapshot: {
+        screenWidth: 390,
+        screenHeight: 844,
+        windowWidth: 390,
+        windowHeight: 753,
+        statusBarHeight: 47,
+        deviceOrientation: 'portrait',
+        safeAreaInsets: { top: 47, right: 0, bottom: 34, left: 0 },
+      },
+    }
+    ;(globalThis as unknown as { wx: unknown }).wx = {}
+    await import('./sync-api-patch.js')
+
+    const wx = (globalThis as unknown as {
+      wx: { getWindowInfo: () => { safeArea?: unknown; windowHeight?: number } }
+    }).wx
+    expect(typeof wx.getWindowInfo).toBe('function')
+    const info = wx.getWindowInfo()
+    expect(info.windowHeight).toBe(753)
+    expect(info.safeArea).toEqual({
+      left: 0,
+      top: 47,
+      right: 390,
+      bottom: 810,
+      width: 390,
+      height: 763,
+    })
+  })
+
   it('does NOT throw when DiminaServiceBridge is absent (pool-warming stub / non-native runtime) — the sync write still lands', async () => {
     const wx = await loadPatchedWx(undefined)
 

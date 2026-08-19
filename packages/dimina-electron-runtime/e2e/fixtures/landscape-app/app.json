@@ -1,0 +1,12 @@
+{
+  "pages": [
+    "pages/home/home",
+    "pages/landscape-page/landscape-page",
+    "pages/auto-page/auto-page"
+  ],
+  "window": {
+    "navigationBarTitleText": "Landscape Fixture",
+    "navigationBarBackgroundColor": "#ffffff",
+    "navigationBarTextStyle": "black"
+  }
+}

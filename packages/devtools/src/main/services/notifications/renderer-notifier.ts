@@ -60,6 +60,17 @@ export interface SessionRuntimeStatusPayload {
 }
 
 /**
+ * Payload for the `session:orientationChanged` push — main's translation of device-shell's `PAGE_RESIZE.canRotate` (see the runtime's `'session-orientation'` event). `orientation: null` means no session is forcing anything (no session, or `disposeAppSession` just tore it down).
+ */
+export interface SessionOrientationPayload {
+  appSessionId: string
+  orientation: 'portrait' | 'landscape' | null
+  canRotate: boolean
+  /** Whether the reporting session is the one the simulator declared on screen. */
+  active: boolean
+}
+
+/**
  * Payload for the `project:compileLog` push — one filtered dmcc log line.
  * `at` is stamped in the main process when the line is captured.
  */
@@ -104,6 +115,8 @@ export interface RendererNotifier {
   projectStatus(payload: ProjectStatusPayload): void
   /** Broadcast a session's post-compile runtime lifecycle to the main renderer. */
   sessionRuntimeStatus(payload: SessionRuntimeStatusPayload): void
+  /** Broadcast a session's forced-orientation change to the main renderer. */
+  sessionOrientationChanged(payload: SessionOrientationPayload): void
   /** Push one per-line dmcc compile-log entry to the main renderer. */
   compileLog(payload: CompileLogPayload): void
   /** Ask the main renderer to navigate back to its landing screen. */
@@ -180,6 +193,9 @@ export function createRendererNotifier(ctx: NotifierContext): RendererNotifier {
     },
     sessionRuntimeStatus(payload) {
       sendToMain(SessionChannel.RuntimeStatus, payload)
+    },
+    sessionOrientationChanged(payload) {
+      sendToMain(SessionChannel.OrientationChanged, payload)
     },
     compileLog(payload) {
       sendToMain(ProjectChannel.CompileLog, payload)

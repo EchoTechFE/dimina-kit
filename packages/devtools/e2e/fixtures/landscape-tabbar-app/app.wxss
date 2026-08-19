@@ -1,0 +1,57 @@
+page {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 24rpx;
+  color: #333;
+  background-color: #f5f5f5;
+}
+
+.page-marker {
+  font-size: 40rpx;
+  font-weight: 700;
+  padding: 20rpx 30rpx;
+  color: #1a1a1a;
+}
+
+/* Probes carry JSON the spec parses; kept visible (not display:none) so the
+   screenshots double as human-readable evidence of the reported geometry. */
+.probe {
+  font-size: 18rpx;
+  line-height: 1.5;
+  padding: 6rpx 30rpx;
+  color: #555;
+  word-break: break-all;
+}
+
+.btn {
+  display: inline-block;
+  margin: 12rpx 30rpx;
+  padding: 0 30rpx;
+  height: 64rpx;
+  line-height: 64rpx;
+  text-align: center;
+  background: #1890ff;
+  color: #fff;
+  border-radius: 12rpx;
+  font-size: 24rpx;
+}
+
+/* Full-bleed strip a `navigationStyle: custom` page paints at the very top of
+   the screen — a visual check that nothing (status bar / nav bar) is reserved
+   above it. */
+.top-strip {
+  height: 60rpx;
+  line-height: 60rpx;
+  background: #d4380d;
+  color: #fff;
+  font-size: 22rpx;
+  padding-left: 30rpx;
+}
+
+/* Marks the last row of a page so a spec (and a screenshot) can tell whether
+   the tab bar overlaps the page's own content. */
+.bottom-sentinel {
+  background: #52c41a;
+  color: #fff;
+  font-size: 22rpx;
+  padding: 8rpx 30rpx;
+}
