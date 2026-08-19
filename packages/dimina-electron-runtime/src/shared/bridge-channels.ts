@@ -1,4 +1,8 @@
-import type { NativeDeviceInfo } from './runtime-types.js'
+import type { NativeDeviceInfo, SafeAreaInsets } from './runtime-types.js'
+import type { Orientation, PageOrientationConfig } from './page-orientation.js'
+import { orientedDeviceMetrics, orientedSafeAreaInsets } from './page-orientation.js'
+
+export { SERVICE_HOST_CHANNELS } from './service-host-channels.js'
 
 export const BRIDGE_CHANNELS = {
   SPAWN: 'dmb:spawn',
@@ -6,6 +10,11 @@ export const BRIDGE_CHANNELS = {
   PAGE_OPEN: 'dmb:page:open',
   PAGE_CLOSE: 'dmb:page:close',
   PAGE_LIFECYCLE: 'dmb:page:lifecycle',
+  /**
+   * simulator (DeviceShell) → main: the page window changed orientation/size.
+   * Payload is `PageResizePayload` (shared/page-orientation).
+   */
+  PAGE_RESIZE: 'dmb:page:resize',
   NAV_CALLBACK: 'dmb:nav:callback',
   SERVICE_INVOKE: 'dmb:service:invoke',
   SERVICE_PUBLISH: 'dmb:service:publish',
@@ -36,6 +45,10 @@ export const BRIDGE_CHANNELS = {
    * this to report multi-page stacks. Fire-and-forget.
    */
   PAGE_STACK: 'dmb:page-stack',
+  /** simulator (DeviceShell) → main: the app session whose shell is on screen.
+   * Soft reload has two sessions reporting at once, so main cannot infer it from who published last.
+   * Fire-and-forget; the claim dies with the session. */
+  SESSION_ACTIVE: 'dmb:session-active',
 } as const
 
 export const SIMULATOR_EVENTS = {
@@ -69,35 +82,19 @@ export const SimulatorCustomApiBridgeChannel = {
   Response: 'simulator:custom-apis:bridge-response',
 } as const
 
-/**
- * `simulator:relaunch` payload. `url` is a full simulator URL (same format as
- * the simulator page's own location / AttachNative), carrying the appId and
- * the page route the new session must boot at.
- */
+/** `simulator:relaunch` payload: a full simulator URL (same format as the simulator page's own location / AttachNative) carrying the appId + page route the new session must boot at. */
 export interface RelaunchPayload {
   url: string
 }
 
 export const CHANNELS = BRIDGE_CHANNELS
 
-/**
- * Reply to a `NATIVE_HOST_ENABLED` sendSync. Main supplies render-host asset
- * URLs (preload still needs a `file://` path for the guest preload script).
- * The pageFrame document itself is built per-bridge as `dmb-resource://…`
- * via `buildRenderHostDocumentUrl` — `renderHostHtmlUrl` is only a legacy
- * placeholder kept for the config shape.
- */
+/** Reply to a `NATIVE_HOST_ENABLED` sendSync. Main supplies render-host asset URLs (preload still needs a `file://` path for the guest preload script); the pageFrame document itself is built per-bridge as `dmb-resource://…` via `buildRenderHostDocumentUrl` — `renderHostHtmlUrl` is only a legacy placeholder kept for the config shape. */
 export interface NativeHostConfig {
   enabled: boolean
   renderHostHtmlUrl: string
   renderPreloadUrl: string
-  /**
-   * The currently-selected device, if the renderer already pushed it before the
-   * simulator WCV's preload installed (it does — SetDeviceInfo precedes
-   * AttachNative). DeviceShell reads this as its initial device so it never
-   * mounts with the wrong bezel size while waiting for the first DEVICE_CHANGE.
-   * Absent only on the pre-spawn default path.
-   */
+  /** The currently-selected device, if the renderer already pushed it before the simulator WCV's preload installed (it does — SetDeviceInfo precedes AttachNative); DeviceShell reads this as its initial device so it never mounts with the wrong bezel size while waiting for the first DEVICE_CHANGE. Absent only on the pre-spawn default path. */
   device?: NativeDeviceInfo
 }
 
@@ -159,6 +156,10 @@ export interface HostEnvSnapshot {
   statusBarHeight: number
   language: string
   theme: string
+  /** Orientation the mini-app window currently shows. */
+  deviceOrientation?: Orientation
+  /** Safe-area insets for the orientation currently on screen (see `orientedSafeAreaInsets`). */
+  safeAreaInsets?: SafeAreaInsets
   [key: string]: unknown
 }
 
@@ -176,17 +177,24 @@ export interface HostEnvSnapshot {
  * update pushed — otherwise a respawn would silently revert to the boot device.
  */
 export function deviceInfoToHostEnv(d: NativeDeviceInfo): Partial<HostEnvSnapshot> {
+  const deviceOrientation: Orientation = d.deviceOrientation ?? 'portrait'
+  const m = orientedDeviceMetrics(d, deviceOrientation)
   return {
     brand: d.brand,
     model: d.model,
     system: d.system,
     platform: d.platform,
     pixelRatio: d.pixelRatio,
-    screenWidth: d.screenWidth,
-    screenHeight: d.screenHeight,
-    windowWidth: d.screenWidth,
-    windowHeight: Math.max(0, d.screenHeight - d.statusBarHeight),
-    statusBarHeight: d.statusBarHeight,
+    screenWidth: m.screenWidth,
+    screenHeight: m.screenHeight,
+    windowWidth: m.screenWidth,
+    windowHeight: Math.max(0, m.screenHeight - m.statusBarHeight),
+    statusBarHeight: m.statusBarHeight,
+    deviceOrientation,
+    safeAreaInsets: orientedSafeAreaInsets(
+      { statusBarHeight: d.statusBarHeight, hasNotch: d.notchType !== 'none', safeAreaInsets: d.safeAreaInsets },
+      deviceOrientation,
+    ),
   }
 }
 
@@ -199,6 +207,7 @@ export function deviceInfoToHostEnv(d: NativeDeviceInfo): Partial<HostEnvSnapsho
  * page-level keys override app-level.
  */
 export interface PageWindowConfig {
+  pageOrientation?: PageOrientationConfig
   navigationBarTitleText?: string
   navigationBarBackgroundColor?: string
   navigationBarTextStyle?: 'black' | 'white'
@@ -374,6 +383,11 @@ export interface PageStackEntry {
 export interface PageStackPayload {
   appSessionId: string
   stack: PageStackEntry[]
+}
+
+/** `dmb:session-active` — the app session whose shell the user is looking at. */
+export interface SessionActivePayload {
+  appSessionId: string
 }
 
 export interface RenderInvokePayload {

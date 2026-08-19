@@ -84,11 +84,13 @@ describe('MiniAppFrame — a deep-linked non-tab launch page is left behind by s
     await serviceNav(recorder, 'switchTab', HOME_PAGE)
 
     expect(countClosed(recorder.closedPages, ROOT_BRIDGE_ID)).toBe(1)
-    // The service layer hears about the page leaving the screen and dying only
-    // through these bridge calls, so the delivered sequence is the assertion.
+    // The service layer hears about a page reaching the screen, leaving it and dying only through these bridge calls, so the delivered sequence is the assertion.
+    const tab = recorder.openedEntries.find((page) => page.pagePath === HOME_PAGE)!
     expect(recorder.lifecycles).toEqual([
+      { bridgeId: ROOT_BRIDGE_ID, event: 'pageShow' },
       { bridgeId: ROOT_BRIDGE_ID, event: 'pageHide' },
       { bridgeId: ROOT_BRIDGE_ID, event: 'pageUnload' },
+      { bridgeId: tab.bridgeId, event: 'pageShow' },
     ])
   })
 })

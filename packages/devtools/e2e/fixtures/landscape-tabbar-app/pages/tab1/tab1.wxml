@@ -1,0 +1,10 @@
+<view class="page-marker page-tab1">TAB1 DEFAULT NAV</view>
+<view class="probe probe-geometry">{{geometryText}}</view>
+<view class="probe probe-resize" data-count="{{resizeCount}}">{{resizeText}}</view>
+<view class="probe probe-win-resize" data-count="{{winResizeCount}}">{{winResizeText}}</view>
+<view class="probe probe-tabbar-toggle">{{tabBarToggleText}}</view>
+<button class="btn hide-tabbar-btn" bindtap="hideTabBar">Hide TabBar</button>
+<button class="btn show-tabbar-btn" bindtap="showTabBar">Show TabBar</button>
+<button class="btn goto-detail-btn" bindtap="goDetail">Go Landscape Detail</button>
+<button class="btn goto-portrait-btn" bindtap="goPortrait">Go Fixed Portrait</button>
+<view class="bottom-sentinel tab1-bottom">TAB1 BOTTOM SENTINEL</view>

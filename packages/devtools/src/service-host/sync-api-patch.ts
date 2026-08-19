@@ -1,4 +1,4 @@
-import { getAccountInfoSync, getSystemInfoSync } from './sync-impls/system-info.js'
+import { getAccountInfoSync, getSystemInfoSync, getWindowInfo } from './sync-impls/system-info.js'
 import {
   clearStorageSync,
   getStorageInfoSync,
@@ -62,6 +62,8 @@ function patchNamespace(ns: ApiNamespace | undefined): void {
   }
   ns.getStorageInfoSync = () => getStorageInfoSync.call(spawnContext)
   ns.getSystemInfoSync = () => getSystemInfoSync.call(spawnContext)
+  // Same snapshot as getSystemInfoSync, so `getWindowInfo().safeArea` reports the same rect instead of the field the service's own resolver drops (see sync-impls/system-info.ts `getWindowInfo`).
+  ns.getWindowInfo = () => getWindowInfo.call(spawnContext)
   ns.getAccountInfoSync = () => getAccountInfoSync.call(spawnContext)
   ns.getMenuButtonBoundingClientRect = () => getMenuButtonBoundingClientRect.call(spawnContext)
 }

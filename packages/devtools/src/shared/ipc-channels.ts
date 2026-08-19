@@ -18,6 +18,11 @@ export const SimulatorChannel = {
   // window — the authoritative `wx.getSystemInfoSync()` source — so the
   // mini-app sees the selected device without a relaunch.
   SetDeviceInfo: 'simulator:set-device-info',
+  /**
+   * Read back the device main already holds (including its orientation).
+   * A remounting project window restores from this instead of pushing its own default, so the simulated device's orientation survives closing and reopening a project — the mini-app never owns that state.
+   */
+  GetDeviceInfo: 'simulator:get-device-info',
   // Ask main to soft-reload the LIVE simulator WCV after a watcher rebuild:
   // main forwards a SIMULATOR_EVENTS.RELAUNCH into the shell (which boots a
   // new app session and swaps when ready) instead of destroying the view.
@@ -31,6 +36,8 @@ export const SimulatorChannel = {
   // string (same bare format as `getCurrentPagePath`), or '' when unknown.
   CurrentPage: 'simulator:current-page',
 } as const
+
+import { SERVICE_HOST_CHANNELS } from '@dimina-kit/electron-runtime/shared/bridge-channels'
 
 /** iPhone bezel cutout family driving the device-shell notch visual. */
 export type {
@@ -47,8 +54,9 @@ export const ServiceHostChannel = {
    * (device metrics) so subsequent `wx.getSystemInfoSync()` reflects a device
    * change without a relaunch. The service-host preload mutates
    * `__diminaSpawnContext.hostEnvSnapshot` in place (see `service-host/preload.cjs`).
+   * Shared with the runtime's own writers (orientation changes push through the same channel), so the name lives in one place.
    */
-  HostEnvUpdate: 'service-host:host-env:update',
+  HostEnvUpdate: SERVICE_HOST_CHANNELS.HostEnvUpdate,
   /**
    * NATIVE-HOST ONLY. Deliver an AppData-panel edit (`{bridgeId, data}`) into
    * the service-host window. The preload resolves the page instance via
@@ -203,6 +211,10 @@ export const ProjectChannel = {
 
 export const SessionChannel = {
   RuntimeStatus: 'session:runtimeStatus',
+  /**
+   * Main → renderer push of the active mini-app session's forced screen orientation (device-shell's `PAGE_RESIZE.canRotate` translated by main — see orientation-controller.ts). `orientation: null` means no session is forcing anything (no session, or it just tore down) — the renderer panel geometry falls back to the user-controlled device orientation.
+   */
+  OrientationChanged: 'session:orientationChanged',
 } as const
 
 // ── Project file system (sandboxed to active project root) ────────────────

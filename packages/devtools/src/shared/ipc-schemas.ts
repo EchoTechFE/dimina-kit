@@ -109,6 +109,9 @@ export const SimulatorSetDeviceInfoSchema = z.tuple([
       bottom: z.number().finite().min(0).max(400),
       left: z.number().finite().min(0).max(400),
     }),
+    // The user-controlled device orientation the rotate button pushes.
+    // Absent in this list, zod strips it and main caches a device that never rotates.
+    deviceOrientation: z.enum(['portrait', 'landscape']).optional(),
   }),
 ])
 

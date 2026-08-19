@@ -163,7 +163,16 @@ vi.mock('@dimina-kit/electron-runtime/main/service-host-window', () => ({
 }))
 
 import { BRIDGE_CHANNELS as C } from '../../shared/bridge-channels.js'
-import type { DisposePayload, ActivePagePayload, PageLifecyclePayload, SpawnRequest, SpawnResult } from '../../shared/bridge-channels.js'
+import type {
+  ActivePagePayload,
+  DisposePayload,
+  PageLifecyclePayload,
+  SessionActivePayload,
+  SpawnRequest,
+  SpawnResult,
+} from '../../shared/bridge-channels.js'
+import type { PageResizePayload } from '@dimina-kit/electron-runtime/shared/page-orientation'
+import type { SessionOrientationPayload } from '../services/notifications/renderer-notifier.js'
 import type { WorkbenchContext } from '../services/workbench-context.js'
 
 type AnyFn = (...args: unknown[]) => unknown
@@ -204,16 +213,26 @@ afterEach(() => {
   globalThis.fetch = originalFetch
 })
 
-function makeCtx(): { ctx: WorkbenchContext; simulatorWc: MockWc } {
+function makeCtx(): {
+  ctx: WorkbenchContext
+  simulatorWc: MockWc
+  /** Every `session:orientationChanged` push main made, oldest first. */
+  orientationPushes: SessionOrientationPayload[]
+} {
   const simulatorWc = stubs.makeWebContents()
+  const orientationPushes: SessionOrientationPayload[] = []
   const ctx = {
     registry: { add: (_fn: AnyFn) => {} },
     simulatorApis: { has: (_name: string) => false, invoke: async () => ({}) },
     windows: { mainWindow: { webContents: simulatorWc } },
     workspace: { getSession: () => undefined },
     connections: createConnectionRegistry(),
+    notify: {
+      sessionRuntimeStatus: () => {},
+      sessionOrientationChanged: (payload: SessionOrientationPayload) => { orientationPushes.push(payload) },
+    },
   } as unknown as WorkbenchContext
-  return { ctx, simulatorWc }
+  return { ctx, simulatorWc, orientationPushes }
 }
 
 async function spawnSession(
@@ -243,28 +262,116 @@ async function openSecondPage(simulatorWc: MockWc, appSessionId: string, pagePat
   return res.bridgeId
 }
 
-function emitDispose(simulatorWc: MockWc, payload: DisposePayload): void {
-  const listeners = stubs.onListeners.get(C.DISPOSE)
-  if (!listeners) throw new Error('DISPOSE handler not registered')
+function emitOn(channel: string, simulatorWc: MockWc, payload: unknown): void {
+  const listeners = stubs.onListeners.get(channel)
+  if (!listeners) throw new Error(`no ipcMain.on listener for ${channel}`)
   for (const fn of [...listeners]) (fn as AnyFn)({ sender: simulatorWc }, payload)
+}
+
+function emitDispose(simulatorWc: MockWc, payload: DisposePayload): void {
+  emitOn(C.DISPOSE, simulatorWc, payload)
 }
 
 function emitActivePage(simulatorWc: MockWc, payload: ActivePagePayload): void {
-  const listeners = stubs.onListeners.get(C.ACTIVE_PAGE)
-  if (!listeners) throw new Error('ACTIVE_PAGE handler not registered')
-  for (const fn of [...listeners]) (fn as AnyFn)({ sender: simulatorWc }, payload)
+  emitOn(C.ACTIVE_PAGE, simulatorWc, payload)
 }
 
 function emitPageLifecycle(simulatorWc: MockWc, payload: PageLifecyclePayload): void {
-  const listeners = stubs.onListeners.get(C.PAGE_LIFECYCLE)
-  if (!listeners) throw new Error('PAGE_LIFECYCLE handler not registered')
-  for (const fn of [...listeners]) (fn as AnyFn)({ sender: simulatorWc }, payload)
+  emitOn(C.PAGE_LIFECYCLE, simulatorWc, payload)
 }
 
 /** Flush the microtask queue so any fire-and-forget dispose tail settles. */
 async function flush(n = 10): Promise<void> {
   for (let i = 0; i < n; i++) await Promise.resolve()
 }
+
+/** The shell on screen declaring itself, as DeviceShell does when it turns active. */
+function emitSessionActive(simulatorWc: MockWc, appSessionId: string): void {
+  emitOn(C.SESSION_ACTIVE, simulatorWc, { appSessionId } satisfies SessionActivePayload)
+}
+
+function emitPageResize(simulatorWc: MockWc, appSessionId: string, bridgeId: string): void {
+  emitOn(C.PAGE_RESIZE, simulatorWc, {
+    appSessionId,
+    bridgeId,
+    size: { screenWidth: 390, screenHeight: 844, windowWidth: 390, windowHeight: 700 },
+    deviceOrientation: 'landscape',
+    dispatchWindow: false, dispatchPage: false,
+    canRotate: false,
+  } satisfies PageResizePayload)
+}
+
+function lastPushFor(pushes: SessionOrientationPayload[], appSessionId: string): SessionOrientationPayload {
+  const found = [...pushes].reverse().find(p => p.appSessionId === appSessionId)
+  if (!found) throw new Error(`no session:orientationChanged push for ${appSessionId}`)
+  return found
+}
+
+/**
+ * The outgoing session keeps reporting geometry after the incoming one has taken the screen, and its teardown arrives last of all — so "who reported last" cannot stand in for "who is visible".
+ * The shell that owns the screen declares itself; main marks every broadcast accordingly, and the renderer's panel mirror honors nothing else.
+ */
+describe('bridge-router — which session is on screen is declared, not inferred', () => {
+  it('marks only the declared session\'s report as the visible one', async () => {
+    const { ctx, simulatorWc, orientationPushes } = makeCtx()
+    installBridgeRouter(ctx)
+    const A = await spawnSession(simulatorWc, { pagePath: ROOT_A })
+    emitSessionActive(simulatorWc, A.result.appSessionId)
+    // B boots invisibly behind A and publishes its own geometry straight away.
+    const B = await spawnSession(simulatorWc, { pagePath: ROOT_B })
+    emitPageResize(simulatorWc, A.result.appSessionId, A.result.bridgeId)
+    emitPageResize(simulatorWc, B.result.appSessionId, B.result.bridgeId)
+
+    expect(lastPushFor(orientationPushes, A.result.appSessionId).active).toBe(true)
+    expect(
+      lastPushFor(orientationPushes, B.result.appSessionId).active,
+      'a still-booting session must not be able to move the panel under the one on screen',
+    ).toBe(false)
+  })
+
+  it('hands the screen to the promoted session, and the replaced one stays invisible through its teardown', async () => {
+    const { ctx, simulatorWc, orientationPushes } = makeCtx()
+    installBridgeRouter(ctx)
+    const A = await spawnSession(simulatorWc, { pagePath: ROOT_A })
+    emitSessionActive(simulatorWc, A.result.appSessionId)
+    const B = await spawnSession(simulatorWc, { pagePath: ROOT_B })
+    emitSessionActive(simulatorWc, B.result.appSessionId)
+    emitPageResize(simulatorWc, B.result.appSessionId, B.result.bridgeId)
+    emitPageResize(simulatorWc, A.result.appSessionId, A.result.bridgeId)
+    expect(lastPushFor(orientationPushes, B.result.appSessionId).active).toBe(true)
+    expect(
+      lastPushFor(orientationPushes, A.result.appSessionId).active,
+      'the replaced session goes on reporting for a while — none of it may reach the panel',
+    ).toBe(false)
+
+    emitDispose(simulatorWc, { bridgeId: A.result.appSessionId })
+    await flush()
+    const teardown = lastPushFor(orientationPushes, A.result.appSessionId)
+    expect(teardown.orientation).toBeNull()
+    expect(
+      teardown.active,
+      'the outgoing session\'s teardown must not release the screen the promoted session just took',
+    ).toBe(false)
+  })
+
+  it('reports the visible session\'s own teardown as visible, releasing the screen', async () => {
+    const { ctx, simulatorWc, orientationPushes } = makeCtx()
+    installBridgeRouter(ctx)
+    const A = await spawnSession(simulatorWc, { pagePath: ROOT_A })
+    emitSessionActive(simulatorWc, A.result.appSessionId)
+    emitDispose(simulatorWc, { bridgeId: A.result.appSessionId })
+    await flush()
+
+    const teardown = lastPushFor(orientationPushes, A.result.appSessionId)
+    expect(teardown.orientation).toBeNull()
+    expect(teardown.active, 'closing the project must let the panel fall back to the device').toBe(true)
+
+    // The claim dies with the session: a later spawn that has not claimed the screen must not inherit it.
+    const B = await spawnSession(simulatorWc, { pagePath: ROOT_B })
+    emitPageResize(simulatorWc, B.result.appSessionId, B.result.bridgeId)
+    expect(lastPushFor(orientationPushes, B.result.appSessionId).active).toBe(false)
+  })
+})
 
 describe('bridge-router — overlapping app sessions on one simulator webContents (soft reload)', () => {
   it('disposes the OLDER session (A) via DISPOSE even after a NEWER session (B) spawned on the same wc', async () => {

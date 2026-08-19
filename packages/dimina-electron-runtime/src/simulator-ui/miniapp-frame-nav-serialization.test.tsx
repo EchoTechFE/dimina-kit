@@ -114,8 +114,11 @@ describe('MiniAppFrame — the home button is clicked twice inside one tick', ()
     expect(latestStack(recorder)).toEqual([HOME_PAGE])
     expect(visiblePagePath(container)).toBe(HOME_PAGE)
     expect(recorder.closedPages).toEqual([ROOT_BRIDGE_ID])
+    const home = recorder.openedEntries.find((page) => page.pagePath === HOME_PAGE)!
     expect(recorder.lifecycles).toEqual([
+      { bridgeId: ROOT_BRIDGE_ID, event: 'pageShow' },
       { bridgeId: ROOT_BRIDGE_ID, event: 'pageUnload' },
+      { bridgeId: home.bridgeId, event: 'pageShow' },
     ])
     // Ledger: an opened page is either still mounted or was handed back to the
     // host for teardown. Anything else is a render host nobody owns.

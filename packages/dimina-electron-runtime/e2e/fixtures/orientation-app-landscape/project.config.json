@@ -1,0 +1,5 @@
+{
+  "appid": "devtools_orientation_app_landscape_fixture",
+  "projectname": "devtools-orientation-app-landscape-fixture",
+  "description": "Fixture mini-app for e2e app-level window.pageOrientation:landscape resolution and cold-start/exit-recovery tests"
+}

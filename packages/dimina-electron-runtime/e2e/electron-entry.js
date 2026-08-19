@@ -163,6 +163,24 @@ function getPageStack(appId) {
   }))
 }
 
+/**
+ * The routes the SERVICE host's own page stack currently holds (`getCurrentPages()`), resolved through the bridge so it always reads the session that owns `appId` — never a not-yet-destroyed service window from a just-closed session.
+ *
+ * `getCurrentPage` above answers a different question: it reads `pagePath` off the RENDER guest's URL, which is fixed at guest-creation time, long before the service host has booted its bundle and instantiated the root `Page`.
+ * The route APIs (`navigateTo`/`redirectTo`/`switchTab`/`reLaunch`) resolve their `url` against `router.getPageInfo().route` in the service host, so they need THIS fact, not the render guest's URL.
+ *
+ * Returns `[]` when no service host is connected yet.
+ */
+async function getServicePageRoutes(appId) {
+  const bridge = getBridge()
+  const serviceWc = bridge.getServiceWc(appId)
+  if (!serviceWc || serviceWc.isDestroyed() || serviceWc.isLoading()) return []
+  return serviceWc.executeJavaScript(`(() => {
+    if (typeof getCurrentPages !== 'function') return []
+    return getCurrentPages().map((p) => (p && p.route) || '')
+  })()`).catch(() => [])
+}
+
 function getPageData(appId, path) {
   const bridge = getBridge()
   const bridgeId = bridge.getActiveBridgeId(appId)
@@ -216,7 +234,28 @@ function waitForActivePage(bridge, { since, timeoutMs }) {
 async function runNativeHostNav(bridge, serviceWc, method, args) {
   const arg = method === 'navigateBack' ? (args[0] ?? { delta: 1 }) : (args[0] ?? {})
   const since = bridge.getActiveBridgeId()
-  await serviceWc.executeJavaScript(`wx.${method}(${JSON.stringify(arg)})`)
+  // `executeJavaScript` does not marshal a thrown renderer error back here: any exception inside the dispatched script surfaces as Electron's fixed, detail-free "Script failed to execute" string, with the real message and stack reachable only from the service host's own console.
+  // So the script RETURNS its outcome instead of throwing, and main re-raises it with the renderer's message/stack attached.
+  // Promise semantics are preserved: the script still resolves through whatever `wx.<method>()` returns, so a rejected nav still fails this call — just with a readable reason.
+  const outcome = await serviceWc.executeJavaScript(`(() => {
+    const describe = (e) => ({ msg: String((e && e.message) || e), stack: String((e && e.stack) || '') })
+    try {
+      if (typeof wx === 'undefined') return { ok: false, phase: 'no-wx' }
+      if (typeof wx.${method} !== 'function') return { ok: false, phase: 'no-method' }
+      return Promise.resolve(wx.${method}(${JSON.stringify(arg)})).then(
+        () => ({ ok: true }),
+        (e) => ({ ok: false, phase: 'rejected', ...describe(e) }),
+      )
+    } catch (e) {
+      return { ok: false, phase: 'threw', ...describe(e) }
+    }
+  })()`)
+  if (!outcome.ok) {
+    throw new Error(
+      `[e2e] wx.${method}(${JSON.stringify(arg)}) ${outcome.phase} in the service host`
+      + `${outcome.msg ? `: ${outcome.msg}` : ''}${outcome.stack ? `\n${outcome.stack}` : ''}`,
+    )
+  }
   const timeoutMs = method === 'navigateBack' ? 1500 : 2000
   await waitForActivePage(bridge, { since, timeoutMs })
   return { result: undefined }
@@ -293,14 +332,27 @@ function setDeviceHook(device) {
   }
 }
 
+/**
+ * Simulate the user rotating the physical device: broadcasts DEVICE_CHANGE to every mounted DeviceShell via the runtime's public `setDevice()`, WITHOUT the direct `service-host:host-env:update` push `setDeviceHook` also does.
+ *
+ * That direct push (see setDeviceHook above) writes `deviceInfoToHostEnv(device)` straight into the running service host's snapshot — a raw overwrite that is page-orientation-UNAWARE (it derives windowWidth/windowHeight purely from the device's own orientation) and fires no dispatch/event at all.
+ * That is fine for device-SIZE e2e (native-host-device.spec.ts, which never depends on per-page orientation), but wrong for page-orientation e2e: it would stomp a fixed-orientation page's snapshot with the naive device-only geometry, and it can never be the signal that gates `Page.onResize` / `wx.onWindowResize` dispatch because it never goes through DeviceShell's own dispatch-gated PAGE_RESIZE pipeline.
+ * Orientation e2e needs the real wire: DEVICE_CHANGE -> DeviceShell recomputes effectiveOrientation from device + page state -> notifyResize -> main.
+ */
+function rotateDeviceHook(device) {
+  runtime.setDevice(device)
+}
+
 globalThis.__diminaE2eHooks = {
   openProject: openProjectHook,
   closeProject: closeProjectHook,
   getCurrentPage,
   getPageStack,
+  getServicePageRoutes,
   getPageData,
   callWxMethod,
   setDevice: setDeviceHook,
+  rotateDevice: rotateDeviceHook,
 }
 
 })()

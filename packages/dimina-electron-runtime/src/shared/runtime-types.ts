@@ -1,3 +1,5 @@
+import type { Orientation } from './page-orientation.js'
+
 export type NotchType = 'none' | 'notch' | 'dynamic-island'
 
 export interface SafeAreaInsets {
@@ -19,6 +21,10 @@ export interface NativeDeviceInfo {
   statusBarHeight: number
   notchType: NotchType
   safeAreaInsets: SafeAreaInsets
+  /**
+   * Orientation of the simulated device itself, which the user controls and which survives across mini-app sessions. `screenWidth`/`screenHeight` stay portrait-baseline regardless; consumers derive the rotated metrics through `orientedDeviceMetrics`.
+   */
+  deviceOrientation?: Orientation
 }
 
 /** Change emitted by synchronous storage APIs running in the service host. */

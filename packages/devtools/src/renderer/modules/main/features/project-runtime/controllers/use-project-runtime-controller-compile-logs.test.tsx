@@ -32,6 +32,10 @@ vi.mock('./use-session', () => ({
 vi.mock('./use-device', () => ({
   useDevice: vi.fn(() => ({
     device: { name: 'fake-device', width: 375, height: 812 },
+    orientedDevice: { name: 'fake-device', width: 375, height: 812 },
+    deviceOrientation: 'portrait',
+    canRotate: true,
+    handleRotateDevice: vi.fn(),
     zoom: 100,
     simPanelWidth: 400,
     simPanelWidthRef: { current: 400 },

@@ -10,10 +10,12 @@ import type {
   PageStackEntry,
   PageStackPayload,
   PageWindowConfig,
+  SessionActivePayload,
   SpawnRequest,
   SpawnResult,
   TabBarConfig,
 } from '../shared/bridge-channels'
+import type { PageResizePayload } from '@dimina-kit/electron-runtime/shared/page-orientation'
 import type { NativeDeviceInfo } from '../shared/ipc-channels'
 import type { DeviceMetrics } from './types'
 
@@ -35,6 +37,8 @@ interface NativeHostBridge {
   notifyApiResponse(payload: ApiResponsePayload): void
   notifyActivePage(payload: ActivePagePayload): void
   notifyPageStack(payload: PageStackPayload): void
+  notifyResize(payload: PageResizePayload): void
+  notifySessionActive(payload: SessionActivePayload): void
   createRenderHostUrl(opts: { bridgeId: string; appId: string; root: string; pagePath: string; isTab?: boolean; backgroundColor?: string }): string
   renderPreloadUrl: string
   device?: NativeDeviceInfo
@@ -88,10 +92,8 @@ export class SimulatorMiniApp {
   private readonly apiNamespaces: string[]
   /**
    * Latest device delivered over SIMULATOR_EVENTS.DEVICE_CHANGE (live toolbar
-   * switches). Cleared on dispose(): main's sticky device selection reaches a
-   * fresh spawn through its boot config (getInitialDevice), which is always
-   * re-delivered with the latest selection — a live value held across dispose
-   * would shadow a newer boot config with a stale device.
+   * switches); `getInitialDevice()` prefers it over the boot config, which is a snapshot frozen at preload-install time.
+   * Cleared on dispose() along with the subscription — the next spawn re-subscribes before it requests the session, so every change from then on is observed.
    */
   private currentDevice: NativeDeviceInfo | null = null
   private unsubscribeDeviceChange: (() => void) | null = null
@@ -233,19 +235,32 @@ export class SimulatorMiniApp {
     getNativeHost().notifyPageStack({ appSessionId, stack })
   }
 
+  /**
+   * Report the visible top page's window geometry (PAGE_RESIZE).
+   * Main always refreshes the host-env snapshot from this; it also dispatches `pageResize` to the service host when `payload.dispatchPage` is true and fires `wx.onWindowResize` listeners when `payload.dispatchWindow` is true (DeviceShell already applied WeChat's gating — see orientation-controller.ts).
+   */
+  notifyResize(payload: PageResizePayload): void {
+    if (!this.appSessionId) return
+    getNativeHost().notifyResize(payload)
+  }
+
+  /**
+   * Claim the screen for this session.
+   * DeviceShell calls it the moment it becomes the visible shell — during a soft reload two shells are mounted and both report geometry, so main only learns which one the user sees because the visible one says so.
+   */
+  notifySessionActive(): void {
+    const appSessionId = this.appSessionId
+    if (!appSessionId) return
+    getNativeHost().notifySessionActive({ appSessionId })
+  }
+
   getTabBarConfig(): TabBarConfig | null {
     return this.manifest?.tabBar ?? null
   }
 
   /**
-   * The app's own home page — both the target of the nav-bar home button and
-   * the page its visibility rule compares the current page against. Only a
-   * compiled manifest knows it: `entryPagePath`, else `pages[0]`. A 'fallback'
-   * manifest is built from the spawn request itself, so its entry is whichever
-   * page this session happened to launch into — reading it would let a
-   * deep-linked inner page masquerade as home. That case and the no-manifest
-   * case both return '', which turns the home-button rule off rather than
-   * guessing a page.
+   * The app's own home page.
+   * A fallback manifest reflects the launch request, not the compiled home page, so it deliberately disables the home rule.
    */
   getHomePagePath(): string {
     const manifest = this.manifest
@@ -254,25 +269,18 @@ export class SimulatorMiniApp {
   }
 
   /**
-   * The device selected when this simulator booted (delivered by main on the
-   * native-host bridge config — the renderer pushes SetDeviceInfo before
-   * AttachNative). DeviceShell uses it as the initial bezel size + notch; live
-   * changes arrive over SIMULATOR_EVENTS.DEVICE_CHANGE. Null on the pre-spawn
-   * default path.
+   * The newest live device selection, falling back to the boot-time bridge snapshot before DEVICE_CHANGE has been observed.
    */
   getInitialDevice(): NativeDeviceInfo | null {
-    return getNativeHost().device ?? null
+    return this.currentDevice ?? getNativeHost().device ?? null
   }
 
   /**
    * Metric fallbacks for the simulator-resident wx.* API handlers
-   * (readWindowMetrics in simulator-api.ts): the CURRENT device — a live
-   * DEVICE_CHANGE wins over the boot config device — or, when no device was
-   * ever selected, the host-env snapshot defaults (the same source the sync
-   * service-host wx.getSystemInfoSync reports).
+   * (readWindowMetrics in simulator-api.ts): the current device, or — when no device was ever selected — the host-env snapshot defaults (the same source the sync service-host wx.getSystemInfoSync reports).
    */
   getDeviceMetrics(): DeviceMetrics {
-    const device = this.currentDevice ?? this.getInitialDevice()
+    const device = this.getInitialDevice()
     if (device) {
       return {
         pixelRatio: device.pixelRatio,
@@ -280,6 +288,8 @@ export class SimulatorMiniApp {
         screenHeight: device.screenHeight,
         statusBarHeight: device.statusBarHeight,
         safeAreaInsets: device.safeAreaInsets,
+        hasNotch: device.notchType !== 'none',
+        deviceOrientation: device.deviceOrientation ?? 'portrait',
       }
     }
     const snap = this.getHostEnvSnapshot()
@@ -289,6 +299,8 @@ export class SimulatorMiniApp {
       screenHeight: snap.screenHeight,
       statusBarHeight: snap.statusBarHeight,
       safeAreaInsets: { top: 0, right: 0, bottom: 0, left: 0 },
+      hasNotch: false,
+      deviceOrientation: snap.deviceOrientation ?? 'portrait',
     }
   }
 
@@ -319,6 +331,7 @@ export class SimulatorMiniApp {
       statusBarHeight,
       language,
       theme: prefersDarkMode() ? 'dark' : 'light',
+      deviceOrientation: device?.deviceOrientation ?? 'portrait',
     }
   }
 

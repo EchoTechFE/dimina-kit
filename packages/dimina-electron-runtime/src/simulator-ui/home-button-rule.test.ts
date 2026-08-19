@@ -26,7 +26,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { PageWindowConfig, TabBarConfig } from '../shared/bridge-channels.js'
-import { navBarFromConfig } from './page-stack-controller.js'
+import { navBarFromConfig } from './navigation-bar-config.js'
 import { resolveHomeNavAction, shouldShowHomeButton } from './navigate-home.js'
 
 const HOME = 'pages/home/home'

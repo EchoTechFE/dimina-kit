@@ -1,0 +1,3 @@
+<view class="page-marker page-home">HOME PAGE</view>
+<button class="btn home-goto-landscape-btn" bindtap="goLandscape" data-path="/pages/landscape-page/landscape-page">Go Landscape</button>
+<button class="btn home-goto-auto-btn" bindtap="goAuto" data-path="/pages/auto-page/auto-page">Go Auto</button>

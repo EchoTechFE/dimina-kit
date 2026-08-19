@@ -1,6 +1,7 @@
 import { ipcRenderer } from 'electron'
 import { BRIDGE_CHANNELS as C } from '../../shared/bridge-channels.js'
 import type { NativeDeviceInfo } from '../../shared/ipc-channels.js'
+import type { PageResizePayload } from '@dimina-kit/electron-runtime/shared/page-orientation'
 // (extension required: preload tsconfig is moduleResolution node16)
 import type {
   ActivePagePayload,
@@ -13,6 +14,7 @@ import type {
   PageOpenRequest,
   PageOpenResult,
   PageStackPayload,
+  SessionActivePayload,
   SpawnRequest,
   SpawnResult,
 } from '../../shared/bridge-channels.js'
@@ -51,6 +53,13 @@ export interface DiminaNativeHostBridge {
   notifyActivePage(payload: ActivePagePayload): void
   /** Tell main the full ordered page stack (for automation's App.getPageStack). */
   notifyPageStack(payload: PageStackPayload): void
+  /** Tell main the visible top page's window geometry changed (PAGE_RESIZE). */
+  notifyResize(payload: PageResizePayload): void
+  /**
+   * Tell main this app session's shell is the one on screen.
+   * Soft reload mounts two shells at once, so main cannot infer visibility from who published geometry last — the shell that owns the screen declares it.
+   */
+  notifySessionActive(payload: SessionActivePayload): void
   createRenderHostUrl(opts: RenderHostUrlOptions): string
   renderPreloadUrl: string
   /**
@@ -115,6 +124,12 @@ function buildBridge(cfg: NativeHostConfig): DiminaNativeHostBridge {
     },
     notifyPageStack(payload) {
       ipcRenderer.send(C.PAGE_STACK, payload)
+    },
+    notifyResize(payload) {
+      ipcRenderer.send(C.PAGE_RESIZE, payload)
+    },
+    notifySessionActive(payload) {
+      ipcRenderer.send(C.SESSION_ACTIVE, payload)
     },
     createRenderHostUrl(opts) {
       // Same-origin document on `dmb-resource://<bridgeId>/<appId>/<root>/<page directory>/__frame__.html`

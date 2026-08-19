@@ -12,7 +12,7 @@
  * unit-test it without faking React / IPC.
  */
 import type { PageWindowConfig } from '../shared/bridge-channels.js'
-import { makeDefaultNavigationBarState, type NavigationBarState } from './navigation-bar.js'
+import type { NavigationBarState } from './navigation-bar.js'
 
 export interface PageEntry {
   bridgeId: string
@@ -37,6 +37,17 @@ export interface ShellState {
 export type SideEffect =
   | { kind: 'lifecycle'; bridgeId: string; event: 'pageShow' | 'pageHide' | 'pageUnload' }
   | { kind: 'closePage'; bridgeId: string }
+
+/**
+ * Whoever becomes the visible top gets `pageShow` — a page opened for this very transition included.
+ * Nothing else in this container announces a page's visibility: the render host reports resources and readiness, never that its page is on screen, and the service treats a page as hidden until a `pageShow` says otherwise (`Runtime.pageStates[bridgeId].shown`).
+ * Without one the page's `onShow` never runs and everything the service gates on visibility — `Page.onResize` among them — is dropped for the life of that page.
+ *
+ * Re-announcing a page that is already shown is inert (the service's `pageShow` returns early when `shown`), so callers do not have to know whether the top they are installing is fresh or restored from a tab cache.
+ */
+function showTop(bridgeId: string): SideEffect {
+  return { kind: 'lifecycle', bridgeId, event: 'pageShow' }
+}
 
 export interface UrlParts {
   pagePath: string
@@ -159,12 +170,12 @@ export function reduceNavigateTo(
       ? { ...state.tabStacks, [state.currentTabPath]: nextStack }
       : state.tabStacks,
   }
-  return {
-    next,
-    effects: prevTop
-      ? [{ kind: 'lifecycle', bridgeId: prevTop.bridgeId, event: 'pageHide' }]
-      : [],
+  const effects: SideEffect[] = []
+  if (prevTop) {
+    effects.push({ kind: 'lifecycle', bridgeId: prevTop.bridgeId, event: 'pageHide' })
   }
+  effects.push(showTop(newEntry.bridgeId))
+  return { next, effects }
 }
 
 export function reduceNavigateBack(
@@ -226,6 +237,7 @@ export function reduceRedirectTo(
     effects.push({ kind: 'lifecycle', bridgeId: prevTop.bridgeId, event: 'pageUnload' })
     effects.push({ kind: 'closePage', bridgeId: prevTop.bridgeId })
   }
+  effects.push(showTop(newEntry.bridgeId))
   return { next, effects }
 }
 
@@ -259,6 +271,7 @@ export function reduceReLaunch(
     effects.push({ kind: 'lifecycle', bridgeId, event: 'pageUnload' })
     effects.push({ kind: 'closePage', bridgeId })
   }
+  effects.push(showTop(newEntry.bridgeId))
   return { next, effects }
 }
 
@@ -269,7 +282,7 @@ export function reduceReLaunch(
  *   2. If the target tab already has a saved substack, restore it as the
  *      visible stack. Otherwise build a fresh single-page stack with the
  *      newly-opened tab entry passed in by the caller.
- *   3. Lifecycle: pageHide prev top, pageShow restored top.
+ *   3. Lifecycle: pageHide prev top, pageShow the new top (restored or fresh).
  *   4. Every substack survives, so a page held by any tab is never torn down.
  *      A page held by none — the visible page of a session with no active tab —
  *      belongs to nothing the switch preserves and gets pageUnload + closePage.
@@ -318,10 +331,8 @@ export function reduceSwitchTab(
   // preserves. Pages still held by a tab substack survive untouched: keeping
   // them is the per-tab cache semantics this shell mirrors from iOS/Harmony.
   effects.push(...teardownDropped(state, next))
-  if (!freshlyOpenedEntry) {
-    // Restored from cache — emit pageShow. (Newly-opened pages get their
-    // own lifecycle from the renderer init path.)
-    effects.push({ kind: 'lifecycle', bridgeId: newTop.bridgeId, event: 'pageShow' })
+  if (!prevTop || prevTop.bridgeId !== newTop.bridgeId) {
+    effects.push(showTop(newTop.bridgeId))
   }
   return { next, effects }
 }
@@ -369,7 +380,7 @@ export function enumerateMounted(state: ShellState): MountedEntry[] {
   return Array.from(byBridgeId.values())
 }
 
-// ── NavigationBar derivations ───────────────────────────────────────────
+// ── Page surface derivations ────────────────────────────────────────────
 
 /**
  * The page's own body background — WeChat/Android/Harmony parity: primes the
@@ -383,98 +394,6 @@ export function enumerateMounted(state: ShellState): MountedEntry[] {
 export function pageBackgroundColor(config: PageWindowConfig): string {
   return (config.backgroundColor as string | undefined) ?? '#ffffff'
 }
-/**
- * Build the initial NavigationBar state from a page's merged window config
- * (app-config.json `window` ∪ page-level overrides). The fallback title is
- * used when `navigationBarTitleText` is unset (typically the appId).
- * `opts.homeButtonVisible` sets the home button verbatim — callers that know
- * the page's stack position pass the `shouldShowHomeButton` verdict here so
- * the home/tab exclusions apply. Without it only the page config speaks.
- */
-export function navBarFromConfig(
-  config: PageWindowConfig,
-  fallbackTitle: string,
-  opts?: { homeButtonVisible?: boolean },
-): NavigationBarState {
-  const background = (config.navigationBarBackgroundColor as string | undefined) ?? '#ffffff'
-  const text = (config.navigationBarTextStyle as 'black' | 'white' | undefined) ?? 'black'
-  const style = (config.navigationStyle as 'default' | 'custom' | undefined) ?? 'default'
-  const title = (config.navigationBarTitleText as string | undefined) ?? fallbackTitle
-  const homeButtonVisible = opts?.homeButtonVisible ?? (config.homeButton === true)
-  return makeDefaultNavigationBarState({
-    title,
-    backgroundColor: background,
-    textStyle: text,
-    style,
-    homeButtonVisible,
-  })
-}
-
-/**
- * Reduce one of the dynamic NavigationBar APIs (setNavigationBarTitle /
- * setNavigationBarColor / show|hideNavigationBarLoading / hideHomeButton)
- * over a page's nav-bar state. Unknown names fall through to `prev`.
- */
-export function reduceNavBar(
-  prev: NavigationBarState,
-  name: string,
-  params: Record<string, unknown>,
-): NavigationBarState {
-  switch (name) {
-    case 'setNavigationBarTitle':
-      return { ...prev, title: typeof params.title === 'string' ? params.title : prev.title }
-    case 'setNavigationBarColor':
-      return applyColorMutation(prev, params)
-    case 'showNavigationBarLoading':
-      return { ...prev, loading: true }
-    case 'hideNavigationBarLoading':
-      return { ...prev, loading: false }
-    case 'hideHomeButton':
-      return { ...prev, homeButtonVisible: false }
-    default:
-      return prev
-  }
-}
-
-const ALLOWED_TIMING_FUNCS = ['linear', 'easeIn', 'easeOut', 'easeInOut'] as const
-type TimingFunc = typeof ALLOWED_TIMING_FUNCS[number]
-
-/**
- * Apply `wx.setNavigationBarColor` to a navBar state:
- * - frontColor must be `#ffffff` or `#000000` (WeChat constraint); other
- *   values are ignored and previous textStyle is preserved.
- * - backgroundColor passes through if it's a string.
- * - animation `{ duration, timingFunc }` is normalized to ms + a whitelisted
- *   timingFunc, defaulting to 0ms / linear when missing or invalid.
- */
-export function applyColorMutation(
-  prev: NavigationBarState,
-  params: Record<string, unknown>,
-): NavigationBarState {
-  const front = typeof params.frontColor === 'string' ? params.frontColor.toLowerCase() : undefined
-  const textStyle = front === '#ffffff' ? 'white' : front === '#000000' ? 'black' : prev.textStyle
-  const background = typeof params.backgroundColor === 'string' ? params.backgroundColor : prev.backgroundColor
-
-  const animation = (() => {
-    const raw = params.animation
-    if (!raw || typeof raw !== 'object') return undefined
-    const obj = raw as Record<string, unknown>
-    const duration = typeof obj.duration === 'number' && Number.isFinite(obj.duration) ? Math.max(0, obj.duration) : 0
-    const timing = typeof obj.timingFunc === 'string' ? obj.timingFunc : 'linear'
-    const timingFunc: TimingFunc = (ALLOWED_TIMING_FUNCS as readonly string[]).includes(timing)
-      ? (timing as TimingFunc)
-      : 'linear'
-    return { durationMs: duration, timingFunc }
-  })()
-
-  return {
-    ...prev,
-    textStyle,
-    backgroundColor: background,
-    colorAnimation: animation,
-  }
-}
-
 // ── NavigationBar mutator (shared by IPC handler) ───────────────────────
 
 /**

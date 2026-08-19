@@ -1,0 +1,5 @@
+{
+  "appid": "devtools_landscape_tabbar_fixture",
+  "projectname": "devtools-landscape-tabbar-fixture",
+  "description": "Fixture mini-app for e2e landscape navigationBar / tabBar layout tests"
+}

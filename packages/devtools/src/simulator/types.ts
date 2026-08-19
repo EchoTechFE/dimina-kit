@@ -1,3 +1,5 @@
+import type { Orientation } from '@dimina-kit/electron-runtime/shared/page-orientation'
+
 /** Callback type used by API functions */
 export type Callback = (...args: unknown[]) => void
 
@@ -16,6 +18,11 @@ export interface DeviceMetrics {
   /** Per-edge safe-area insets (portrait). Single source of truth for the
    *  bottom inset — there is no separate `safeAreaBottom` field. */
   safeAreaInsets: { top: number; right: number; bottom: number; left: number }
+  /** Whether the screen has a notch/dynamic island: in landscape it moves to
+   *  both side edges, which is the only thing the portrait insets cannot say. */
+  hasNotch: boolean
+  /** The simulated device's own orientation (user-controlled, not the mini-app's effective one). */
+  deviceOrientation?: Orientation
 }
 
 /**

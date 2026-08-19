@@ -59,6 +59,16 @@ export function setNativeDeviceInfo(device: NativeDeviceInfo): Promise<void> {
   return invoke<void>(SimulatorChannel.SetDeviceInfo, device)
 }
 
+/**
+ * NATIVE-HOST ONLY.
+ * Read back the device main already holds.
+ * A project window that remounts restores the simulated device's orientation from this rather than pushing its own default, so the orientation survives closing and reopening a project.
+ * Null before any device has been pushed.
+ */
+export function getNativeDeviceInfo(): Promise<NativeDeviceInfo | null> {
+  return invoke<NativeDeviceInfo | null>(SimulatorChannel.GetDeviceInfo)
+}
+
 /** Show the compile-popover overlay anchored below `top`/`left`. */
 export function showPopover(payload: PopoverShowPayload): Promise<void> {
   return invoke<void>(PopoverChannel.Show, payload)

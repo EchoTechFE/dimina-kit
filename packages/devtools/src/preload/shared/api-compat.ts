@@ -1,3 +1,4 @@
+import { normalizeDeviceOrientation } from '@dimina-kit/electron-runtime/shared/page-orientation'
 import { performRequest } from '../../shared/request-core.js'
 
 type Callback<T = unknown> = ((payload: T) => void) | undefined
@@ -53,11 +54,13 @@ function ensureWxApi(wx: Record<string, unknown>): void {
 
   if (typeof wx.getSystemSetting !== 'function') {
     wx.getSystemSetting = (opts: { success?: Callback<unknown>; complete?: Callback<void> } = {}) => {
+      // No device snapshot available on this fallback (browser-only) path — derive from the window dimensions, matching WeChat's own guidance to trust the reported size over a device-reported orientation.
+      const { windowWidth, windowHeight } = buildWindowInfo()
       const info = {
         bluetoothEnabled: false,
         locationEnabled: true,
         wifiEnabled: true,
-        deviceOrientation: 'portrait',
+        deviceOrientation: normalizeDeviceOrientation({ windowWidth, windowHeight }),
       }
       call(opts.success, info)
       call(opts.complete, undefined)

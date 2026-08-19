@@ -151,9 +151,9 @@ describe('reduceNavigateHomeToTab — deep link into a non-tab page, no tab visi
     expect(closedIds(effects)).toEqual(['d'])
   })
 
-  it('emits no pageShow for a freshly opened root, whose renderer reports its own', () => {
+  it('shows the freshly opened root: nothing else tells the service it is visible', () => {
     const { effects } = reduceNavigateHomeToTab(state, TAB_A, tabA)
-    expect(lifecycleIds(effects, 'pageShow')).toEqual([])
+    expect(lifecycleIds(effects, 'pageShow')).toEqual(['a-root'])
   })
 })
 

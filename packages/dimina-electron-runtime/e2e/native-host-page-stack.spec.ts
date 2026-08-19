@@ -38,6 +38,7 @@ import {
   getPageStack,
   getCurrentPage,
   callWxMethod,
+  waitForServicePageReady,
   type PageStackEntry,
 } from './helpers'
 
@@ -105,6 +106,9 @@ test.describe('native-host App.getPageStack tracks full in-app navigation stack'
       25000,
       300,
     )
+    // A mounted render guest is not a navigable session: the guest's URL carries its pagePath from creation, while the route APIs resolve against the SERVICE host's own page stack, which is still empty for a few hundred more ms.
+    // Navigating inside that window throws in the mini-app framework.
+    await waitForServicePageReady(electronApp)
   })
 
   test.afterAll(async () => {

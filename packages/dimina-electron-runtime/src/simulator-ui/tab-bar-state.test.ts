@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  changesReportedGeometry,
   makeInitialTabBarState,
   applyTabAction,
 } from './tab-bar-state.js'
@@ -513,5 +514,55 @@ describe('applyTabAction — immutability', () => {
       params: { index: 0, text: 'new' },
     })
     expect(prev).toEqual(snapshot)
+  })
+})
+
+// ---- changesReportedGeometry ------------------------------------------------
+
+/**
+ * The shell republishes the top page's geometry — and delays the caller's ack until it has — exactly when this predicate says the change moves it.
+ * The judgement lives here rather than in a list of action names at the call site, so a new action can never be forgotten.
+ */
+describe('changesReportedGeometry', () => {
+  const base = makeInitialTabBarState(makeConfig(3))
+
+  it('is true when the bar leaves the layout flow', () => {
+    const hidden = applyTabAction(base, { kind: 'apply', name: 'hideTabBar', params: {} }).state
+    expect(changesReportedGeometry(base, hidden)).toBe(true)
+  })
+
+  it('is true when the bar comes back into the layout flow', () => {
+    const hidden = applyTabAction(base, { kind: 'apply', name: 'hideTabBar', params: {} }).state
+    const shown = applyTabAction(hidden, { kind: 'apply', name: 'showTabBar', params: {} }).state
+    expect(changesReportedGeometry(hidden, shown)).toBe(true)
+  })
+
+  it('is false for text, icon, style, badge and red-dot edits', () => {
+    const edits: Array<[string, Record<string, unknown>]> = [
+      ['setTabBarItem', { index: 0, text: 'renamed' }],
+      ['setTabBarStyle', { color: '#123456' }],
+      ['setTabBarBadge', { index: 1, text: '9' }],
+      ['removeTabBarBadge', { index: 1 }],
+      ['showTabBarRedDot', { index: 2 }],
+      ['hideTabBarRedDot', { index: 2 }],
+    ]
+    for (const [name, params] of edits) {
+      const next = applyTabAction(base, {
+        kind: 'apply',
+        name: name as 'setTabBarItem',
+        params,
+      }).state
+      expect(changesReportedGeometry(base, next), `${name} keeps the bar in flow`).toBe(false)
+    }
+  })
+
+  it('is false for a rejected action, which leaves the state untouched', () => {
+    const rejected = applyTabAction(base, {
+      kind: 'apply',
+      name: 'hideTabBarRedDot',
+      params: { index: 99 },
+    })
+    expect(rejected.ok).toBe(false)
+    expect(changesReportedGeometry(base, rejected.state)).toBe(false)
   })
 })

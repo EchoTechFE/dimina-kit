@@ -1,6 +1,13 @@
+interface SafeAreaInsets {
+  top: number
+  right: number
+  bottom: number
+  left: number
+}
+
 interface SpawnContext {
   appId?: string
-  hostEnvSnapshot?: Partial<SystemInfo>
+  hostEnvSnapshot?: Partial<SystemInfo> & { safeAreaInsets?: SafeAreaInsets }
 }
 
 export interface SystemInfo {
@@ -37,7 +44,7 @@ export function getSystemInfoSync(this: SpawnContext): SystemInfo {
   const windowWidth = numberOr(snapshot.windowWidth, globalThis.innerWidth, screenWidth)
   const windowHeight = numberOr(snapshot.windowHeight, globalThis.innerHeight, screenHeight)
   const statusBarHeight = numberOr(snapshot.statusBarHeight, 0)
-  const safeAreaBottom = windowHeight
+  const deviceOrientation = stringOr(snapshot.deviceOrientation, 'portrait')
 
   return {
     brand: stringOr(snapshot.brand, 'devtools'),
@@ -54,16 +61,57 @@ export function getSystemInfoSync(this: SpawnContext): SystemInfo {
     platform: stringOr(snapshot.platform, navigator.platform || 'ios'),
     fontSizeSetting: 16,
     SDKVersion: stringOr(snapshot.SDKVersion, '3.0.0'),
-    deviceOrientation: 'portrait',
+    deviceOrientation,
     theme: stringOr(snapshot.theme, globalThis.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'),
-    safeArea: {
-      width: windowWidth,
-      height: windowHeight - statusBarHeight,
-      top: statusBarHeight,
-      bottom: safeAreaBottom,
-      left: 0,
-      right: windowWidth,
-    },
+    // The insets main resolved (`HostEnvSnapshot.safeAreaInsets`, via `orientedSafeAreaInsets`) already describe the orientation on screen — in landscape the notch sits on the sides, not the top — so the rect is measured against the equally-oriented `screenWidth`/`screenHeight`.
+    // Pairing oriented insets with un-swapped portrait dimensions would place the edges on the wrong axis entirely.
+    safeArea: safeAreaRect(
+      screenWidth,
+      screenHeight,
+      snapshot.safeAreaInsets ?? { top: statusBarHeight, right: 0, bottom: 0, left: 0 },
+    ),
+  }
+}
+
+/** The window subset `wx.getWindowInfo()` reports. */
+export interface WindowInfo {
+  pixelRatio: number
+  screenWidth: number
+  screenHeight: number
+  windowWidth: number
+  windowHeight: number
+  statusBarHeight: number
+  safeArea: SystemInfo['safeArea']
+}
+
+/**
+ * `wx.getWindowInfo()` — the window fields of `getSystemInfoSync()`, derived from that same call so both APIs report one geometry.
+ *
+ * The service's own resolver (`api/common/index.js` `hostEnvResolvers`) picks these keys off the raw `hostEnv.systemInfo` object main pushes, which carries `safeAreaInsets` but no computed `safeArea` rect — so `safeArea` would be missing there.
+ * Deriving from `getSystemInfoSync` keeps the rect (and its portrait-baseline definition) identical across both APIs.
+ */
+export function getWindowInfo(this: SpawnContext): WindowInfo {
+  const info = getSystemInfoSync.call(this)
+  return {
+    pixelRatio: info.pixelRatio,
+    screenWidth: info.screenWidth,
+    screenHeight: info.screenHeight,
+    windowWidth: info.windowWidth,
+    windowHeight: info.windowHeight,
+    statusBarHeight: info.statusBarHeight,
+    safeArea: info.safeArea,
+  }
+}
+
+/** A safe-area rect from a screen and the insets describing that same screen's orientation. */
+function safeAreaRect(screenWidth: number, screenHeight: number, insets: SafeAreaInsets) {
+  return {
+    left: insets.left,
+    top: insets.top,
+    right: screenWidth - insets.right,
+    bottom: screenHeight - insets.bottom,
+    width: screenWidth - insets.left - insets.right,
+    height: screenHeight - insets.top - insets.bottom,
   }
 }
 

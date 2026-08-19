@@ -17,6 +17,7 @@ import { fileURLToPath } from 'url'
 import {
   openProject, waitForSimulatorWebview, closeProject, pollUntil,
   evalInSimulator, evalInWebContentsByUrl, getCurrentPage, callWxMethod,
+  waitForServicePageReady,
 } from './helpers'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -76,6 +77,9 @@ test.describe('native-host switchTab keeps rendered content on return', () => {
     await waitForSimulatorWebview(electronApp)
     await pollUntil(() => evalInSimulator<number>(electronApp,
       `(() => document.querySelectorAll('.device-shell__webview').length)()`).catch(() => 0), (n) => n >= 1, 30000, 400)
+    // The route APIs resolve against the SERVICE host's own page stack, which is still empty for a few hundred ms after the render guest mounts.
+    // Navigating inside that window throws in the mini-app framework.
+    await waitForServicePageReady(electronApp)
     await waitActive('pages/home/home')
   })
   test.afterAll(async () => { await closeProject(electronApp).catch(() => {}); await electronApp?.close().catch(() => {}) })

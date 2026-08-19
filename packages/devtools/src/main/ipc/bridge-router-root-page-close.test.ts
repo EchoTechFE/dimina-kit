@@ -8,6 +8,8 @@
  * The refusal is only right when the root page is the session's LAST page —
  * there `DISPOSE` owns the teardown, and closing the page alone would leave a
  * session with no pages at all.
+ *
+ * Retiring that page must not cost the session its service→container direction: the service host stamps every message with the bridgeId it was spawned under (the root page's), so a router that can only answer for THAT page stops answering at all once it is closed — every `wx.*` call the mini-app makes afterwards would hang unanswered.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -114,7 +116,7 @@ vi.mock('@dimina-kit/electron-runtime/main/service-host-window', () => ({
   constructServiceHostWindow: vi.fn(() => stubs.makeBrowserWindow()),
 }))
 
-import { BRIDGE_CHANNELS as C } from '../../shared/bridge-channels.js'
+import { BRIDGE_CHANNELS as C, SIMULATOR_EVENTS as E } from '../../shared/bridge-channels.js'
 import type { PageOpenResult, SpawnRequest, SpawnResult } from '../../shared/bridge-channels.js'
 import type { BridgeRouterHandle } from './bridge-router.js'
 import type { WorkbenchContext } from '../services/workbench-context.js'
@@ -200,6 +202,13 @@ function closePage(simulatorWc: MockWc, bridgeId: string): void {
   ;(handle as AnyFn)({ sender: simulatorWc }, { bridgeId })
 }
 
+/** One service→container message, exactly as the service-host preload sends it. */
+function serviceInvoke(sender: unknown, bridgeId: string, msg: unknown): void {
+  const handle = stubs.eventHandlers.get(C.SERVICE_INVOKE)
+  if (!handle) throw new Error('SERVICE_INVOKE handler not registered')
+  ;(handle as AnyFn)({ sender }, { bridgeId, msg })
+}
+
 function pageCount(bridge: BridgeRouterHandle): number {
   return bridge.census!().pageSessions
 }
@@ -222,6 +231,24 @@ describe('PAGE_CLOSE — the launch page after navigation replaced it', () => {
     expect(isTracked(bridge, second.bridgeId)).toBe(true)
     expect(pageCount(bridge)).toBe(1)
     expect(bridge.census!().appSessions).toBe(1)
+  })
+
+  it('still routes the service host\'s messages once its spawn page is gone', async () => {
+    const { bridge, simulatorWc } = makeHarness()
+    const spawned = await spawnSession(simulatorWc, ROOT_PAGE)
+    const second = await openPage(simulatorWc, spawned.appSessionId, SECOND_PAGE)
+    const serviceWc = bridge.getServiceWcForBridge(second.bridgeId)
+    closePage(simulatorWc, spawned.bridgeId)
+    simulatorWc.send.mockClear()
+
+    // The envelope carries the spawn (root) bridgeId — the service host has no other id to stamp — while the body names the page actually calling.
+    serviceInvoke(serviceWc, spawned.bridgeId, {
+      type: 'invokeAPI',
+      target: 'container',
+      body: { name: 'navigateTo', bridgeId: second.bridgeId, params: { url: `/${SECOND_PAGE}` } },
+    })
+
+    expect(simulatorWc.send.mock.calls.map(([channel]) => channel)).toContain(E.NAV_ACTION)
   })
 
   it('keeps the launch page when it is the session\'s only page', async () => {

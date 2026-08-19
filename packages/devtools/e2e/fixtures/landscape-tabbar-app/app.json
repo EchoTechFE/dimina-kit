@@ -1,0 +1,24 @@
+{
+  "pages": [
+    "pages/tab1/tab1",
+    "pages/tab2/tab2",
+    "pages/detail/detail",
+    "pages/portrait/portrait"
+  ],
+  "window": {
+    "navigationBarTitleText": "Landscape TabBar",
+    "navigationBarBackgroundColor": "#ffffff",
+    "navigationBarTextStyle": "black",
+    "pageOrientation": "auto"
+  },
+  "tabBar": {
+    "color": "#999999",
+    "selectedColor": "#1890ff",
+    "backgroundColor": "#ffffff",
+    "borderStyle": "black",
+    "list": [
+      { "pagePath": "pages/tab1/tab1", "text": "Tab1" },
+      { "pagePath": "pages/tab2/tab2", "text": "Tab2" }
+    ]
+  }
+}

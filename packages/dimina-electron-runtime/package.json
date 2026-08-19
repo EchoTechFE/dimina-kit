@@ -30,6 +30,10 @@
       "types": "./dist/shared/bridge-channels.d.ts",
       "default": "./dist/shared/bridge-channels.js"
     },
+    "./shared/page-orientation": {
+      "types": "./dist/shared/page-orientation.d.ts",
+      "default": "./dist/shared/page-orientation.js"
+    },
     "./shared/simulator-api-metadata": {
       "types": "./dist/shared/simulator-api-metadata.d.ts",
       "default": "./dist/shared/simulator-api-metadata.js"

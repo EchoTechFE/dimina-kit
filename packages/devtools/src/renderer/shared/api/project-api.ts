@@ -43,6 +43,20 @@ export interface SessionRuntimeStatusPayload {
   code?: string
 }
 
+/**
+ * The active session's forced screen orientation (mirrors main's `SessionOrientationPayload`). `orientation: null` means no session is forcing anything — the simulator panel geometry falls back to the device's own orientation. `canRotate` gates the toolbar rotate button and is `true` when there's no session to disable it.
+ */
+export interface SessionOrientationPayload {
+  appSessionId: string
+  orientation: 'portrait' | 'landscape' | null
+  canRotate: boolean
+  /**
+   * Whether this report comes from the session the simulator declared as the one on screen.
+   * A soft reload has two sessions reporting at once, and the outgoing one goes on reporting — and finally tears down — after the incoming one took the screen, so this is the only thing that says which report the panel may follow.
+   */
+  active: boolean
+}
+
 // The per-line dmcc compile-log entry shape lives in @dimina-kit/inspect
 // (shared with CompilePanel); re-exported here so existing importers keep
 // their `from '.../project-api'` path. Pushed by the main process on
@@ -137,6 +151,16 @@ export function onSessionRuntimeStatus(
   handler: (status: SessionRuntimeStatusPayload) => void,
 ): () => void {
   return on<[SessionRuntimeStatusPayload]>(SessionChannel.RuntimeStatus, (status) => handler(status))
+}
+
+/**
+ * Subscribe to the active session's forced-orientation broadcasts (mirrors `onSessionRuntimeStatus`).
+ * Returns the transport unsubscribe function.
+ */
+export function onSessionOrientationChanged(
+  handler: (payload: SessionOrientationPayload) => void,
+): () => void {
+  return on<[SessionOrientationPayload]>(SessionChannel.OrientationChanged, (payload) => handler(payload))
 }
 
 /** Capture a screenshot of the simulator and save it as a thumbnail. */

@@ -341,6 +341,19 @@ export function createWorkbenchContext(opts: CreateContextOptions): WorkbenchCon
   ctx.registry.add(ctx.events.on('session-status', (payload) => {
     ctx.notify?.sessionRuntimeStatus(payload)
   }))
+  ctx.registry.add(ctx.events.on('session-orientation', (payload) => {
+    ctx.notify?.sessionOrientationChanged(payload)
+    // The reporting page's render guest resolves its CSS env(safe-area-inset-*) against this same orientation, so the insets keep agreeing with the `safeArea` that page's own `wx.getSystemInfoSync()` returns.
+    // Routed by bridgeId — hidden tab-substack guests hold their own orientation.
+    if (payload.bridgeId !== null && payload.orientation !== null) {
+      ctx.views.setPageSafeAreaOrientation(payload.bridgeId, payload.orientation)
+    }
+  }))
+  ctx.registry.add(ctx.events.on('page-closed', ({ bridgeId }) => {
+    // The page is what owns its recorded safe-area orientation.
+    // Releasing it here rather than off the render guest's destruction is what lets a page survive a render-host swap with its orientation intact, and what stops a page whose guest never attached from leaving an entry behind.
+    ctx.views.forgetPageSafeAreaOrientation(bridgeId)
+  }))
   ctx.registry.add(ctx.events.on('app-data-evict', ({ appId, bridgeId }) => {
     ctx.appData?.evictBridge(appId, bridgeId)
   }))

@@ -40,6 +40,9 @@ interface SimulatorPanelProps {
   zoom: ZoomSetting;
   onDeviceChange: (e: React.ChangeEvent<HTMLSelectElement>) => void;
   onZoomChange: (e: React.ChangeEvent<HTMLSelectElement>) => void;
+  /** Whether the rotate button is enabled — false while the active session pins the top page to a fixed orientation. Defaults to true (no session wired). */
+  canRotateDevice?: boolean;
+  onRotateDevice?: () => void;
   compileStatus: { status: string; message: string };
   currentPage: string;
   copied: boolean;
@@ -86,6 +89,8 @@ export function SimulatorPanel({
   zoom,
   onDeviceChange,
   onZoomChange,
+  canRotateDevice = true,
+  onRotateDevice = () => {},
   compileStatus,
   currentPage,
   copied,
@@ -287,6 +292,33 @@ export function SimulatorPanel({
           ))}
           <option value={AUTO_ZOOM}>自适应</option>
         </Select>
+        {/* Rotates the simulated device. Disabled while the active session
+            pins the top page to a fixed orientation (canRotateDevice=false) —
+            WeChat parity: only an `auto` page follows a manual rotation. */}
+        <button
+          type="button"
+          className="shrink-0 flex items-center justify-center w-6 h-6 rounded text-text-dim hover:text-text transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-text-dim"
+          onClick={onRotateDevice}
+          disabled={!canRotateDevice}
+          title="旋转设备"
+          data-testid="sim-rotate-device"
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+            <path
+              d="M13.5 8A5.5 5.5 0 1 1 8 2.5"
+              stroke="currentColor"
+              strokeWidth="1.3"
+              strokeLinecap="round"
+            />
+            <path
+              d="M13.5 3.5v3.2h-3.2"
+              stroke="currentColor"
+              strokeWidth="1.3"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
       </div>
 
       {/* Persistent, never covers the device region below (contract: "不遮内容"). */}
