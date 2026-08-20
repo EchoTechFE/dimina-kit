@@ -2,7 +2,6 @@ import { nativeTheme, WebContentsView } from 'electron'
 import { handleWindowOpenExternal } from '../../windows/navigation-hardening.js'
 import { themeBg } from '../../utils/theme.js'
 import { VIEW_ID } from '../../../shared/view-ids.js'
-import { destroyChildView } from './destroy-child-view.js'
 import type { PlacementReconciler } from './placement-reconciler.js'
 import type { ViewManagerContext } from './view-manager.js'
 
@@ -113,7 +112,6 @@ export function createWorkbenchView(
     try {
       view.webContents.setWindowOpenHandler(({ url: target }) => handleWindowOpenExternal(target))
     } catch { /* stub may lack it */ }
-    ctx.windows.mainWindow.contentView.addChildView(view)
     // Hand the workbench the current devtools scheme as a URL query so its very
     // first paint already matches (the runtime setter only exists post-init).
     // The project identity deliberately does NOT ride this URL: the attach can
@@ -186,16 +184,9 @@ export function createWorkbenchView(
       nativeTheme.removeListener('updated', pushWorkbenchTheme)
       workbenchThemeSyncBound = false
     }
-    destroyChildView(ctx.windows.mainWindow, workbenchView)
+    reconciler.destroyView(VIEW_ID.workbench, workbenchView)
     workbenchView = null
-    if (attachHeld) {
-      // A held detach is a project-switch teardown: the renderer published the
-      // incoming project's placement before the open started, so that desired
-      // is the ONLY thing the release replay can rebuild the view from — keep
-      // it (gateHidden hides it while held) and just forget the destroyed
-      // instance so the rebuilt view is treated as a fresh attach.
-      reconciler.forgetActual(VIEW_ID.workbench)
-    } else {
+    if (!attachHeld) {
       reconciler.deleteBaseDesired(VIEW_ID.workbench)
     }
     reconciler.reconcileNow()
@@ -277,14 +268,6 @@ export function createWorkbenchView(
   reconciler.registerView(VIEW_ID.workbench, {
     getView: () => workbenchView,
     gateHidden: () => !workbenchView && (!workbenchUrl || attachHeld),
-    beforeAttach: () => {
-      if (!workbenchView && workbenchUrl && !attachHeld) {
-        // Lazy-load the workbench; attachWorkbench adds it to the contentView.
-        void attachWorkbench(workbenchUrl)
-        return true
-      }
-      return false
-    },
     ensureLazy: (desired) => {
       if (desired?.placement.visible && !workbenchView && workbenchUrl && !attachHeld) void attachWorkbench(workbenchUrl)
     },

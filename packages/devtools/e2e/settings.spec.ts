@@ -17,7 +17,7 @@ import { ProjectChannel, ProjectsChannel } from '../src/shared/ipc-channels'
  * even while the overlay was unreachable from the actual UI.
  */
 async function openSettingsViaUI(mainWindow: Page, electronApp: ElectronApplication): Promise<void> {
-  const settingsButton = mainWindow.getByTitle('设置')
+  const settingsButton = mainWindow.getByRole('button', { name: '设置' })
   await expect(settingsButton).toBeVisible({ timeout: 15_000 })
   await settingsButton.click()
   // The click is fire-and-forget from Playwright's perspective: it drives
@@ -58,7 +58,15 @@ test.describe('Settings', () => {
     await evalInWebContentsByUrl(
       electronApp,
       'entries/settings',
-      `Array.from(document.querySelectorAll('button')).find((btn) => btn.textContent?.includes('项目配置'))?.click()`
+      `(() => {
+        const btn = Array.from(document.querySelectorAll('button')).find((el) => el.textContent?.includes('项目配置'))
+        if (!btn) return false
+        btn.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerType: 'mouse' }))
+        btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }))
+        btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }))
+        btn.click()
+        return true
+      })()`
     )
 
     const text = await pollUntil(

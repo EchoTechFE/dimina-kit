@@ -1,23 +1,42 @@
-import { useEffect, useState } from 'react'
-import { onTooltipInit } from '@/shared/api'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import {
+  notifyOverlayReady,
+  onTooltipInit,
+  reportTooltipMeasured,
+  type TooltipRenderPayload,
+} from '@/shared/api'
 
-/**
- * The tooltip overlay's own renderer. Main computes the WCV's absolute
- * bounds (see `computeTooltipBounds`) — this page just fills that box and
- * renders whatever label it was last pushed via `tooltip:init`. See
- * `TooltipChannel`'s doc-comment (ipc-channels.ts) for why this exists as a
- * separate WebContentsView instead of DOM/native tooltip UI in the main
- * window.
- */
+/** Renderer for the top-tier native tooltip surface. */
 export default function Tooltip() {
-  const [text, setText] = useState('')
+  const [request, setRequest] = useState<TooltipRenderPayload | null>(null)
+  const surfaceRef = useRef<HTMLDivElement>(null)
 
-  useEffect(() => onTooltipInit((payload) => setText(payload.text)), [])
+  useEffect(() => {
+    const off = onTooltipInit(setRequest)
+    notifyOverlayReady()
+    return off
+  }, [])
+
+  useLayoutEffect(() => {
+    const surface = surfaceRef.current
+    if (!surface || !request) return
+    const rect = surface.getBoundingClientRect()
+    if (rect.width <= 0 || rect.height <= 0) return
+    reportTooltipMeasured({
+      requestId: request.requestId,
+      width: Math.ceil(rect.width),
+      height: Math.ceil(rect.height),
+    })
+  }, [request])
 
   return (
-    <div className="flex size-full items-center justify-center p-1">
-      <div className="max-w-full truncate rounded-[var(--qd-radius-md)] bg-[var(--qd-foreground)] px-3 py-1.5 text-xs text-[color:var(--qd-background)] shadow-[var(--qd-shadow-md)]">
-        {text}
+    <div
+      ref={surfaceRef}
+      className="inline-flex w-max p-1"
+      style={{ maxWidth: request?.maxWidth }}
+    >
+      <div className="max-w-full whitespace-normal break-words rounded-[var(--qd-radius-md)] bg-[var(--qd-foreground)] px-3 py-1.5 text-xs text-[color:var(--qd-background)] shadow-[var(--qd-shadow-md)]">
+        {request?.text ?? ''}
       </div>
     </div>
   )

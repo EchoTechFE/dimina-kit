@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Bug, Code2, PanelLeft, PanelRight, Smartphone } from 'lucide-react'
 import { Button } from '@/shared/components/ui/button'
-import { cn } from '@/shared/lib/utils'
 import { useOverlayTooltip } from '@/shared/lib/use-overlay-tooltip'
 import { closePanel, closePanelForUser } from '@dimina-kit/electron-deck/layout'
 import type { LayoutModel, PanelRegistry } from '@dimina-kit/electron-deck/layout'
@@ -30,18 +29,11 @@ interface LayoutControlsProps {
  * whole region via the raw `closePanel` mutation. The last visible region can't be
  * hidden (closing the sole panel is an engine no-op, so the UI would desync).
  *
- * Active state: `ghost` variant (full-contrast --qd-foreground icon) plus an
- * explicit --color-surface-active chip. `primary-soft` was tried first but its
- * icon/chip contrast sits right at the WCAG 3:1 UI-component floor, which
- * washes out a 2px-stroke icon in dark mode; `secondary` was tried next but
- * --qd-secondary is IDENTICAL to this toolbar's own --color-surface-2 chrome
- * tone in light mode (both #f7f7f9) — the chip became invisible, silently
- * dropping the selected-state affordance (caught via a live light-mode
- * screenshot showing all three toggles looking unselected). --color-surface-active
- * is devtools-owned specifically so it can't collide with either theme's chrome
- * tone. Inactive → de-emphasised (60% opacity). Icons are plain lucide glyphs —
- * the chip alone carries the on/off affordance, so no separate filled/outline
- * icon variant is needed.
+ * `Button`'s toolbar variant owns these controls' interaction surfaces: the
+ * chrome-specific hover token remains visible against the toolbar itself, while
+ * `data-active` selects the quieter active chip. Inactive icons use the normal
+ * muted foreground rather than whole-button opacity, which would also wash out
+ * the hover surface. Icons are plain lucide glyphs; the chip carries the state.
  *
  * Tooltips in this toolbar (here and in LayoutAlignmentToggle /
  * LayoutDevtoolsPositionToggles) use `useOverlayTooltip` (a dedicated tooltip
@@ -152,7 +144,7 @@ export function LayoutAlignmentToggle({ model, layout, simPanelWidth }: PresetCo
   const tooltip = useOverlayTooltip(label)
   return (
     <Button
-      variant="icon"
+      variant="toolbar"
       size="icon"
       onClick={flip}
       aria-label={label}
@@ -216,7 +208,7 @@ function ToggleButton({
   const tooltip = useOverlayTooltip(label)
   return (
     <Button
-      variant="ghost"
+      variant="toolbar"
       size="icon"
       onClick={onClick}
       disabled={disabled}
@@ -224,9 +216,6 @@ function ToggleButton({
       aria-pressed={active}
       data-testid={testId}
       data-active={active ? 'true' : 'false'}
-      className={cn(
-        active ? 'bg-[var(--color-surface-active)]' : 'opacity-60',
-      )}
       {...tooltip}
     >
       {icon}

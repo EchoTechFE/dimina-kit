@@ -72,6 +72,14 @@ export const TooltipShowSchema = z.tuple([
   }),
 ])
 
+export const TooltipMeasuredSchema = z.tuple([
+  z.object({
+    requestId: z.number().int().positive(),
+    width: z.number().finite().positive(),
+    height: z.number().finite().positive(),
+  }),
+])
+
 /**
  * Reasonable simulator width range. Window width is clamped UI-side, but
  * we still reject obvious garbage (negative, zero, absurdly large).

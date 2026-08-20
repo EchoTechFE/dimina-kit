@@ -361,10 +361,16 @@ export const PopoverChannel = {
 // boundary. A trigger reports its anchor rect + label; main computes the
 // tooltip's screen bounds and shows/repositions/hides this overlay.
 
+export const OverlayChannel = {
+  Ready: 'overlay:ready',
+} as const
+
 export const TooltipChannel = {
+  Prepare: 'tooltip:prepare',
   Show: 'tooltip:show',
   Hide: 'tooltip:hide',
   Init: 'tooltip:init',
+  Measured: 'tooltip:measured',
 } as const
 
 // ── Window ───────────────────────────────────────────────────────────────

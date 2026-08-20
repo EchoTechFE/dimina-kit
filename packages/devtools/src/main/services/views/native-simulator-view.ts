@@ -56,7 +56,6 @@ export function createNativeSimulatorView(
   const { safeArea, devtoolsHost, overlayPanels } = deps
 
   let nativeSimulatorView: WebContentsView | null = null
-  let nativeSimulatorViewAdded = false
   let nativeSimulatorProjectPath: string | null = null
   let settleNativeSimulatorReady: (() => void) | null = null
   // Whether the CURRENT simulator view's shell finished its first boot (first
@@ -113,33 +112,18 @@ export function createNativeSimulatorView(
    * double-dispose. `label` only tags the diagnostic on the async-tail failure.
    */
   function tearDownNativeSimulatorView(label: string): void {
-    if (!nativeSimulatorView) return
-    ctx.simulatorUiExtensions?.detach(nativeSimulatorView.webContents)
-    if (nativeSimulatorViewAdded && !ctx.windows.mainWindow.isDestroyed()) {
-      try {
-        ctx.windows.mainWindow.contentView.removeChildView(nativeSimulatorView)
-      } catch { /* already removed */ }
-    }
+    const view = nativeSimulatorView
+    if (!view) return
+    ctx.simulatorUiExtensions?.detach(view.webContents)
     try {
-      if (!nativeSimulatorView.webContents.isDestroyed()) {
-        ctx.bridge?.disposeSessionsForSimulator?.(nativeSimulatorView.webContents.id)
+      if (!view.webContents.isDestroyed()) {
+        ctx.bridge?.disposeSessionsForSimulator?.(view.webContents.id)
           ?.catch((err) => console.warn(`[view-manager] dispose sessions (${label}) failed:`, err))
-        nativeSimulatorView.webContents.close()
       }
     } catch { /* ignore */ }
+    reconciler.destroyView(VIEW_ID.simulator, view)
     nativeSimulatorView = null
-    nativeSimulatorViewAdded = false
     nativeSimulatorShellReady = false
-    // The instance is being replaced/destroyed — forget its reconciled mount
-    // state so the NEXT rebuilt view is treated as a fresh attach. Without this,
-    // the level-triggered reconciler still records `simulator` as `attached`
-    // (the manual removeChildView above bypasses it), so the next reconcile
-    // classifies the freshly-built WebContentsView as already-attached, never
-    // emits the `attach` op, and the new view is never addChildView'd — a sticky
-    // 100%-invisible simulator after every recompile. Mirrors the hostToolbar
-    // instance-replacement handling in ensureHostToolbarView.
-    reconciler.forgetActual(VIEW_ID.simulator)
-    // The view is gone: gateReadiness now hides it, so reconcile detaches it.
     reconciler.reconcileNow()
   }
 
@@ -479,7 +463,6 @@ export function createNativeSimulatorView(
 
   reconciler.registerView(VIEW_ID.simulator, {
     getView: () => nativeSimulatorView,
-    setAdded: (added) => { nativeSimulatorViewAdded = added },
     gateHidden: () => !nativeSimulatorView,
     applyBounds: (view, bounds, extra) => applyNativeSimulatorBounds(view, bounds, extra?.zoom ?? 1),
   })

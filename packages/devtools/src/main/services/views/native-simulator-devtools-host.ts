@@ -14,7 +14,6 @@ import { installElementsForward } from '../elements-forward/index.js'
 import { installServiceConsoleForward } from '../service-console/index.js'
 import { VIEW_ID } from '../../../shared/view-ids.js'
 import { resolveProjectEditorTarget } from './resolve-project-editor-target.js'
-import { destroyChildView } from './destroy-child-view.js'
 import { createLoadDeferredInjector } from './inject-when-ready.js'
 import type { PlacementReconciler } from './placement-reconciler.js'
 import type { ViewManagerContext } from './view-manager.js'
@@ -75,7 +74,6 @@ export function createDevtoolsHost(
   // The right-panel Chrome DevTools front-end HOST WebContentsView. Created by
   // rebuildDevtoolsHostView; positioned by the renderer's simulatorDevtools anchor.
   let simulatorView: WebContentsView | null = null
-  let simulatorViewAdded = false
   // The webContents the right-panel Chrome DevTools front-end currently inspects.
   // We point it at the SERVICE HOST (logic layer) — the hidden BrowserWindow
   // where the mini-app's page code runs (`console.log`, `wx.request`,
@@ -458,14 +456,9 @@ export function createDevtoolsHost(
   // service-host pool swap must repoint onto a fresh host, not reuse the
   // already-navigated one).
   function rebuildDevtoolsHostView(): void {
-    // Destroy old simulatorView to prevent WebContentsView leak
+    // Destroy the previous host through the native-tree owner before replacing it.
     if (simulatorView) {
-      removeSimulatorDevtoolsView()
-      try {
-        if (!simulatorView.webContents.isDestroyed()) {
-          simulatorView.webContents.close()
-        }
-      } catch { /* ignore */ }
+      reconciler.destroyView(VIEW_ID.simulatorDevtools, simulatorView)
       simulatorView = null
     }
 
@@ -596,32 +589,8 @@ export function createDevtoolsHost(
     }
   }
 
-  // Remove (but do not destroy) the DevTools overlay from the contentView.
-  // Internal teardown helper for re-attach; user-facing visibility is the
-  // anchor 0×0 single path (`setSimulatorDevtoolsBounds`).
-  function removeSimulatorDevtoolsView(): void {
-    if (simulatorView && simulatorViewAdded) {
-      try {
-        ctx.windows.mainWindow.contentView.removeChildView(simulatorView)
-      } catch (e) {
-        console.error('[workbench] removeSimulatorDevtoolsView error', e)
-      }
-      simulatorViewAdded = false
-    }
-    // The instance is being replaced/destroyed — forget its reconciled mount
-    // state so the next rebuilt host is treated as a fresh attach. Without this,
-    // the level-triggered reconciler still records `simulatorDevtools` as
-    // `attached` (the manual removeChildView above bypasses it), so it never
-    // emits the `attach` op for the rebuilt view and the new host is never
-    // addChildView'd — embedded but invisible. Mirrors the hostToolbar /
-    // simulator instance-replacement handling (ensureHostToolbarView /
-    // tearDownNativeSimulatorView).
-    reconciler.forgetActual(VIEW_ID.simulatorDevtools)
-  }
-
   reconciler.registerView(VIEW_ID.simulatorDevtools, {
     getView: () => simulatorView,
-    setAdded: (added) => { simulatorViewAdded = added },
     gateHidden: () => !simulatorView,
   })
 
@@ -637,14 +606,8 @@ export function createDevtoolsHost(
       stopElementsForward = null
     },
     destroyHostView: () => {
-      destroyChildView(ctx.windows.mainWindow, simulatorView)
+      reconciler.destroyView(VIEW_ID.simulatorDevtools, simulatorView)
       simulatorView = null
-      simulatorViewAdded = false
-      // destroyChildView bypasses the reconciler (raw removeChildView) — forget
-      // the reconciled mount state, same reasoning as removeSimulatorDevtoolsView
-      // above, so a future rebuild's mount() isn't a no-op against stale
-      // bookkeeping.
-      reconciler.forgetActual(VIEW_ID.simulatorDevtools)
     },
   }
 }

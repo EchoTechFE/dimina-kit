@@ -161,8 +161,8 @@
     --color-bg-panel:         var(--qd-secondary);
     --color-surface:          var(--qd-muted);
     --color-surface-2:        var(--qd-muted);  /* light chrome IS an exact --qd-muted match (verified against Figma node 25:5, both #f7f7f9) — only dark diverges, see dark-mode block above */
-    --color-surface-3:        hsl(200  3%  85%);
-    --color-surface-active:   hsl(210  3%  56%);  /* ~3:1 against --color-surface-2 (#f7f7f9) — 80% lightness measured ~1.57:1, imperceptible as an active chip */
+    --color-surface-3:        hsl(200  3%  90%);  /* toolbar hover: visible without reading as selected */
+    --color-surface-active:   hsl(210  3%  82%);  /* selected toolbar chip: distinct from hover without the previous heavy fill */
     --color-surface-input:    hsl(  0  0% 100%);
     --color-surface-selected: hsl(  0  0%  86%);
     --color-surface-thumb:    hsl(  0  0%  72%);

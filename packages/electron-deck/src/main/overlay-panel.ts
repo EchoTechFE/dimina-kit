@@ -1,27 +1,12 @@
 /**
- * `OverlayPanel` — the lazy-create/reuse/destroy lifecycle every main-owned
- * `WebContentsView` overlay (a settings sheet, a popover, a tooltip — anything
- * a host wants to load once and show/hide/reposition many times) was
- * hand-rolling per call site before this existed: construct with fixed
- * `webPreferences`, apply the host's own navigation policy, force a
- * transparent background, `loadFile` the overlay's renderer entry, and only
- * push data into it once that load actually lands (`did-finish-load`) — vs.
- * immediately, on every later `show()` while the same instance survives.
- *
- * This module owns ONLY that native-view lifecycle. It deliberately does NOT
- * own z-order or placement — a host with its own reconciler (zones/layers,
- * desired-state diffing) keeps that authority; folding it in here would give
- * two independent systems (this one and the host's) authority over the same
- * `contentView`, which is how views go missing or fight for top. `setDesired`
- * is the injected seam: the host translates "here are the bounds" (or "hide")
- * into whatever its own placement system does with that.
- *
- * Reuse model: a panel that wants "fresh instance every open" (no state
- * carried between opens) calls `destroy()` immediately before its next
- * `show()` — two calls, no separate mode flag on this API.
+ * Lazy overlay renderer lifecycle with explicit readiness and latest-value
+ * delivery. Creation/loading stays here; native-tree placement and destruction
+ * are delegated to the host so one controller remains authoritative for the
+ * window's child views. Manual readiness keeps a panel hidden until its
+ * renderer has installed inbound subscriptions.
  */
 import path from 'node:path'
-import type { BrowserWindow, WebContents, WebContentsView as ElectronWebContentsView } from 'electron'
+import type { WebContents, WebContentsView as ElectronWebContentsView } from 'electron'
 
 export interface OverlayPanelWebPreferences {
   preload: string
@@ -59,18 +44,20 @@ export interface OverlayPanelDeps<TShowData> {
   hardenNavigation?(webContents: WebContents): void
   /** CSS color string; defaults to fully transparent (`#00000000`). */
   backgroundColor?: string
-  /** Translate "these bounds" / `null` ("hidden") into the host's own
-   *  placement system (mount + setBounds, or unmount). Called on every
-   *  `show()`/`reposition()`/`hide()`. */
+  /** Translate bounds / hidden into the host's placement system. */
   setDesired(bounds: OverlayPanelBounds | null): void
   /** Register this panel's (possibly not-yet-created) view with the host's
    *  reconciler exactly once, at construction. */
   registerView(getView: () => ElectronWebContentsView | null): void
-  /** Push `data` into the overlay's own renderer: on first creation, once its
-   *  `did-finish-load` actually lands (an IPC sent before that would be lost);
-   *  on every later `show()` while the same instance is reused, immediately
-   *  (the renderer is already alive and already subscribed). */
+  /** Prepare a detached renderer viewport before loading, when intrinsic layout needs it. */
+  prepareView?(view: ElectronWebContentsView): void
+  /** Detach and close through the host's single native-view owner. */
+  destroyView(view: ElectronWebContentsView): void
+  /** Push the latest `data` into the overlay renderer after it is ready. */
   pushData?(view: ElectronWebContentsView, data: TShowData): void
+  /** `load` is sufficient for simple documents. `manual` requires the renderer
+   *  to acknowledge that its subscriptions are installed via `markReady()`. */
+  readyMode?: 'load' | 'manual'
 }
 
 export interface OverlayPanelBounds {
@@ -81,8 +68,11 @@ export interface OverlayPanelBounds {
 }
 
 export interface OverlayPanel<TShowData = void> {
-  /** Lazy-create (or reuse the live instance) and show at `bounds`. */
-  show(data: TShowData, bounds: OverlayPanelBounds): void
+  /** Create the renderer without making it visible, so transient UI can warm up. */
+  prepare(): void
+  /** Lazy-create (or reuse the live instance) and publish its desired bounds.
+   *  `null` updates its data while keeping it hidden. */
+  show(data: TShowData, bounds: OverlayPanelBounds | null): void
   /** Move/resize the already-shown panel (no-op if not currently shown). */
   reposition(bounds: OverlayPanelBounds): void
   /** Withdraw from the host's placement (`setDesired(null)`); the native view
@@ -91,45 +81,92 @@ export interface OverlayPanel<TShowData = void> {
   isPresent(): boolean
   getWebContents(): WebContents | null
   getWebContentsId(): number | null
-  /** Hard teardown: detach from `mainWindow` and close the native view. The
-   *  next `show()` creates a brand-new instance (fresh load, no state). */
-  destroy(mainWindow: BrowserWindow): void
+  /** Resolve once the current renderer has installed its subscriptions. */
+  whenReady(): Promise<void>
+  /** Accept a ready acknowledgement only from the current WebContents. */
+  markReady(webContentsId: number): void
+  /** Hard teardown through the host owner. The next `show()` creates a fresh instance. */
+  destroy(): void
 }
 
 export function createOverlayPanel<TShowData = void>(
   deps: OverlayPanelDeps<TShowData>,
 ): OverlayPanel<TShowData> {
   let view: ElectronWebContentsView | null = null
+  let ready = false
+  let hasPendingData = false
+  let latestData: TShowData
+  let readyWaiters: Array<() => void> = []
+  let instanceEpoch = 0
+  let pendingBounds: OverlayPanelBounds | null = null
+  let wantsVisible = false
 
   deps.registerView(() => view)
 
-  function ensureView(): { view: ElectronWebContentsView; freshlyCreated: boolean } {
-    if (view) return { view, freshlyCreated: false }
+  function resolveReadyWaiters(): void {
+    const waiters = readyWaiters
+    readyWaiters = []
+    for (const resolve of waiters) resolve()
+  }
+
+  function markCurrentReady(current: ElectronWebContentsView, epoch: number): void {
+    if (view !== current || epoch !== instanceEpoch || current.webContents.isDestroyed()) return
+    ready = true
+    if (deps.pushData && hasPendingData) {
+      hasPendingData = false
+      deps.pushData(current, latestData)
+    }
+    if (deps.readyMode === 'manual' && wantsVisible && pendingBounds) deps.setDesired(pendingBounds)
+    resolveReadyWaiters()
+  }
+
+  function ensureView(): ElectronWebContentsView {
+    if (view && !view.webContents.isDestroyed()) return view
+    if (view) deps.destroyView(view)
+    view = null
+    ready = false
     const created = deps.electron.createWebContentsView({ webPreferences: deps.webPreferences })
+    const epoch = ++instanceEpoch
     deps.hardenNavigation?.(created.webContents)
     created.setBackgroundColor(deps.backgroundColor ?? '#00000000')
     view = created
-    created.webContents.loadFile(path.join(deps.rendererDir, deps.entry))
-    return { view: created, freshlyCreated: true }
+    deps.prepareView?.(created)
+    if ((deps.readyMode ?? 'load') === 'load') {
+      created.webContents.once('did-finish-load', () => markCurrentReady(created, epoch))
+    }
+    void created.webContents.loadFile(path.join(deps.rendererDir, deps.entry))
+    return created
   }
 
   return {
+    prepare() {
+      ensureView()
+    },
     show(data, bounds) {
-      const { view: v, freshlyCreated } = ensureView()
-      deps.setDesired(bounds)
+      const v = ensureView()
+      pendingBounds = bounds
+      wantsVisible = bounds !== null
+      if ((deps.readyMode ?? 'load') === 'load' || ready || bounds === null) {
+        deps.setDesired(bounds)
+      }
       if (!deps.pushData) return
-      if (freshlyCreated) {
-        v.webContents.once('did-finish-load', () => deps.pushData?.(v, data))
-      } else {
+      latestData = data
+      if (ready) {
         deps.pushData(v, data)
+      } else {
+        hasPendingData = true
       }
     },
     reposition(bounds) {
       if (!view) return
-      deps.setDesired(bounds)
+      pendingBounds = bounds
+      wantsVisible = true
+      if ((deps.readyMode ?? 'load') === 'load' || ready) deps.setDesired(bounds)
     },
     hide() {
       if (!view) return
+      pendingBounds = null
+      wantsVisible = false
       deps.setDesired(null)
     },
     isPresent() {
@@ -143,18 +180,26 @@ export function createOverlayPanel<TShowData = void>(
       if (!view || view.webContents.isDestroyed()) return null
       return view.webContents.id
     },
-    destroy(mainWindow) {
+    whenReady() {
+      if (ready && view && !view.webContents.isDestroyed()) return Promise.resolve()
+      return new Promise<void>((resolve) => readyWaiters.push(resolve))
+    },
+    markReady(webContentsId) {
+      const current = view
+      if (!current || current.webContents.id !== webContentsId) return
+      markCurrentReady(current, instanceEpoch)
+    },
+    destroy() {
       const v = view
       if (!v) return
       view = null
-      if (!mainWindow.isDestroyed()) {
-        try {
-          mainWindow.contentView.removeChildView(v)
-        } catch { /* already removed */ }
-      }
-      try {
-        if (!v.webContents.isDestroyed()) v.webContents.close()
-      } catch { /* ignore */ }
+      ready = false
+      hasPendingData = false
+      pendingBounds = null
+      wantsVisible = false
+      instanceEpoch++
+      resolveReadyWaiters()
+      deps.destroyView(v)
     },
   }
 }

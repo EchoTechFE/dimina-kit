@@ -5,7 +5,9 @@ import { fileURLToPath } from 'node:url'
 import {
   DEMO_APP_DIR,
   closeProject,
+  evalInWebContentsByUrl,
   openProjectInUI,
+  pollUntil,
   waitForEditorReady,
 } from './helpers'
 
@@ -57,15 +59,28 @@ test('toolbar: refactored visual layout (no right-pane tabs, compile-mode dropdo
   // 3. Section visibility toggles live in a labelled toolbar group.
   const visibilityGroup = mainWindow.getByRole('group', { name: '面板可见性' })
   await expect(visibilityGroup).toBeVisible()
-  await expect(visibilityGroup.locator('button[title="隐藏模拟器"], button[title="显示模拟器"]')).toBeVisible()
-  await expect(visibilityGroup.locator('button[title="隐藏编辑器"], button[title="显示编辑器"]')).toBeVisible()
+  await expect(visibilityGroup.getByRole('button', { name: /^(隐藏|显示)模拟器$/ })).toBeVisible()
+  await expect(visibilityGroup.getByRole('button', { name: /^(隐藏|显示)编辑器$/ })).toBeVisible()
   // The debug region toggle is decoupled from each panel's per-tab `closable`
   // capability: even though the debug panels are `closable:false` (no per-tab ×),
   // the region toggle still hides/shows the whole region as a unit. With the
   // region visible at startup the toggle reads "隐藏调试器"; it is only disabled
   // when debug is the LAST visible region (not the case in the default layout).
-  const debugToggle = visibilityGroup.locator('button[title="隐藏调试器"], button[title="显示调试器"]')
+  const debugToggle = visibilityGroup.getByRole('button', { name: /^(隐藏|显示)调试器$/ })
   await expect(debugToggle).toBeVisible()
+
+  // Toolbar controls need their own interaction surfaces: --qd-muted is the
+  // same color as the light toolbar chrome, so the generic ghost hover is
+  // invisible here. Verify the settled hover paint differs from the row.
+  const alignmentToggle = mainWindow.getByTestId('layout-toolbar-alignment-toggle')
+  const toolbarColor = await alignmentToggle.evaluate((node) =>
+    getComputedStyle(node.closest('.bg-surface-2')!).backgroundColor,
+  )
+  await alignmentToggle.hover()
+  await expect.poll(() => alignmentToggle.evaluate((node) =>
+    getComputedStyle(node).backgroundColor,
+  )).not.toBe(toolbarColor)
+  await mainWindow.mouse.move(1, 1)
 
   // Screenshot — resolve test-results relative to THIS spec file so the
   // output lands inside packages/devtools/test-results regardless of cwd.
@@ -73,6 +88,51 @@ test('toolbar: refactored visual layout (no right-pane tabs, compile-mode dropdo
   const outDir = path.resolve(here, '..', 'test-results')
   if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true })
   await mainWindow.screenshot({ path: path.join(outDir, 'toolbar-final.png') })
+})
+
+test('toolbar: native tooltip measures content and survives a second hover', async ({ mainWindow, electronApp }) => {
+  await openProjectInUI(mainWindow, DEMO_APP_DIR)
+  await waitForEditorReady(mainWindow)
+
+  const surfaceState = () => electronApp.evaluate(({ BrowserWindow }) => {
+    const win = BrowserWindow.getAllWindows().find((candidate) =>
+      candidate.webContents.getURL().includes('entries/main'),
+    )
+    if (!win) return null
+    for (const child of win.contentView.children) {
+      const view = child as unknown as {
+        webContents?: { getURL(): string }
+        getBounds(): { x: number; y: number; width: number; height: number }
+      }
+      if (view.webContents?.getURL().includes('entries/tooltip')) return view.getBounds()
+    }
+    return null
+  })
+
+  await mainWindow.getByRole('button', { name: '重新编译' }).hover()
+  const firstText = await pollUntil(
+    () => evalInWebContentsByUrl<string>(electronApp, 'entries/tooltip', 'document.body.innerText'),
+    (text) => text.trim() === '重新编译',
+    10_000,
+  )
+  const firstBounds = await pollUntil(surfaceState, (bounds) => bounds !== null, 10_000)
+  expect(firstBounds, 'the measured tooltip must attach to the main window').not.toBeNull()
+  expect(firstText.trim()).toBe('重新编译')
+  expect(firstBounds!.width).toBeGreaterThan(20)
+  expect(firstBounds!.width).toBeLessThan(160)
+
+  await mainWindow.getByRole('button', { name: '设置' }).hover()
+  const secondText = await pollUntil(
+    () => evalInWebContentsByUrl<string>(electronApp, 'entries/tooltip', 'document.body.innerText'),
+    (text) => text.trim() === '设置',
+    10_000,
+  )
+  const secondBounds = await pollUntil(surfaceState, (bounds) => bounds !== null, 10_000)
+  expect(secondText.trim()).toBe('设置')
+  expect(secondBounds!.width).toBeLessThan(firstBounds!.width)
+
+  await mainWindow.mouse.move(1, 1)
+  await pollUntil(surfaceState, (bounds) => bounds === null, 10_000)
 })
 
 test.afterEach(async ({ mainWindow }) => {

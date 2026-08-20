@@ -8,8 +8,9 @@ import { cn } from '@/shared/lib/utils'
 // Base = Cornetto @cornetto-react/button (three-slot: --btn-bg face /
 // --btn-fg text+icon / --btn-border frame — override the slots to reskin
 // without touching the component). `icon`/`danger`/`xs`/`icon-sm` are local
-// additions Cornetto doesn't ship (devtools' toolbar density needs a
-// tighter scale than Cornetto's --qd-btn-h baseline); `tab`/`tab-active`
+// additions Cornetto doesn't ship (`toolbar` owns the chrome-specific hover
+// and selected surfaces; devtools' toolbar density also needs a tighter scale
+// than Cornetto's --qd-btn-h baseline); `tab`/`tab-active`
 // are carried over unused from the pre-Cornetto button — no call site
 // references them, kept only to avoid a silent behavior change for any
 // caller found later.
@@ -27,6 +28,7 @@ export const buttonVariants = cva(
         link:        '[--btn-fg:var(--qd-primary)] [--btn-bg:transparent] [--btn-border:transparent] underline-offset-4 hover:underline',
         // devtools-local — no Cornetto equivalent
         icon:        'rounded [--btn-fg:var(--qd-muted-foreground)] [--btn-bg:transparent] [--btn-border:transparent] hover:[background-color:var(--qd-muted)] hover:[--btn-fg:var(--qd-foreground)]',
+        toolbar:     'rounded [--btn-fg:var(--qd-muted-foreground)] [--btn-bg:transparent] [--btn-border:transparent] hover:[--btn-bg:var(--color-surface-3)] hover:[--btn-fg:var(--qd-foreground)] data-[active=true]:[--btn-bg:var(--color-surface-active)] data-[active=true]:[--btn-fg:var(--qd-foreground)]',
         danger:      'rounded-full [--btn-fg:var(--qd-muted-foreground)] [--btn-bg:transparent] [--btn-border:transparent] hover:[--btn-fg:var(--qd-destructive)] hover:[background-color:var(--qd-destructive-soft)]',
         // dead: no call site references these (pre-Cornetto leftover)
         tab:         'rounded text-text-muted hover:text-text hover:bg-surface-3',

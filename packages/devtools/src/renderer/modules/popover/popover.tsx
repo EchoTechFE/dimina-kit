@@ -4,7 +4,7 @@ import { Input } from '@/shared/components/ui/input'
 import { Select } from '@/shared/components/ui/select'
 import { DEFAULT_SCENE } from '../../../shared/constants'
 import { POPOVER_WIDTH_PX, POPOVER_MARGIN_PX } from '../../shared/constants'
-import { emitPopoverRelaunch, hidePopover, onPopoverInit } from '@/shared/api'
+import { emitPopoverRelaunch, hidePopover, notifyOverlayReady, onPopoverInit } from '@/shared/api'
 import type { CompileConfig } from '../../shared/types'
 
 export default function Popover() {
@@ -17,12 +17,14 @@ export default function Popover() {
   const [pages, setPages] = useState<string[]>([])
 
   useEffect(() => {
-    return onPopoverInit((data) => {
+    const off = onPopoverInit((data) => {
       setPages(data.pages)
       setConfig(data.config)
       const maxLeft = window.innerWidth - POPOVER_WIDTH_PX - POPOVER_MARGIN_PX
       setPosition({ top: data.top, left: Math.min(data.left, maxLeft) })
     })
+    notifyOverlayReady()
+    return off
   }, [])
 
   function handleOverlayClick() {

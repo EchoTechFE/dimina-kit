@@ -11,7 +11,7 @@ import type { SenderPolicy } from './ipc-registry.js'
  * - the main window's renderer
  * - the optional workbench settings BrowserWindow's renderer (when open)
  * - the settings overlay view (when open)
- * - the popover overlay view (when open)
+ * - the popover and tooltip overlay views (when open)
  *
  * The simulator webview is intentionally NOT on this list. Anything it
  * needs from main (currently just the custom-apis bridge — see
@@ -55,6 +55,11 @@ export function createWorkbenchSenderPolicy(
     // Popover overlay view
     const popoverViewId = ctx.views.getPopoverWebContentsId()
     if (popoverViewId != null && sender.id === popoverViewId) return true
+
+    // Tooltip overlay view. It loads only the bundled local renderer and needs
+    // the shared overlay-ready + intrinsic-measurement channels.
+    const tooltipViewId = ctx.views.getTooltipWebContentsId()
+    if (tooltipViewId != null && sender.id === tooltipViewId) return true
 
     // The host-toolbar overlay is DELIBERATELY NOT trusted here. The host loads
     // arbitrary content into it, so granting it the global white-list would open

@@ -7,7 +7,7 @@
  * reused instance), and `destroy()` teardown safety.
  */
 import { describe, it, expect, vi } from 'vitest'
-import type { BrowserWindow, WebContents, WebContentsView as ElectronWebContentsView } from 'electron'
+import type { WebContents, WebContentsView as ElectronWebContentsView } from 'electron'
 import {
   createOverlayPanel,
   type OverlayPanelDeps,
@@ -64,10 +64,13 @@ function makeElectron(): { electron: OverlayPanelElectron; created: ReturnType<t
 
 function baseDeps<TShowData>(
   overrides: Partial<OverlayPanelDeps<TShowData>> = {},
-): { deps: OverlayPanelDeps<TShowData>; electron: OverlayPanelElectron; created: ReturnType<typeof fakeView>[]; setDesired: ReturnType<typeof vi.fn>; registerView: ReturnType<typeof vi.fn> } {
+): { deps: OverlayPanelDeps<TShowData>; electron: OverlayPanelElectron; created: ReturnType<typeof fakeView>[]; setDesired: ReturnType<typeof vi.fn>; registerView: ReturnType<typeof vi.fn>; destroyView: ReturnType<typeof vi.fn> } {
   const { electron, created } = makeElectron()
   const setDesired = vi.fn()
   const registerView = vi.fn()
+  const destroyView = vi.fn((view: ElectronWebContentsView) => {
+    if (!view.webContents.isDestroyed()) view.webContents.close()
+  })
   const deps: OverlayPanelDeps<TShowData> = {
     electron,
     rendererDir: '/app/dist/renderer',
@@ -75,9 +78,10 @@ function baseDeps<TShowData>(
     webPreferences: { preload: '/app/preload.js' },
     setDesired,
     registerView,
+    destroyView,
     ...overrides,
   }
-  return { deps, electron, created, setDesired, registerView }
+  return { deps, electron, created, setDesired, registerView, destroyView }
 }
 
 describe('createOverlayPanel', () => {
@@ -151,7 +155,21 @@ describe('createOverlayPanel', () => {
       expect(pushData).toHaveBeenCalledWith(created[0], { msg: 'hello' })
     })
 
-    it('pushes data immediately (no did-finish-load wait) on a reused instance', () => {
+    it('delivers only the latest data when show() is called again before the renderer is ready', () => {
+      const pushData = vi.fn()
+      const { deps, created } = baseDeps<{ msg: string }>({ pushData })
+      const panel = createOverlayPanel(deps)
+
+      panel.show({ msg: 'first' }, { x: 0, y: 0, width: 1, height: 1 })
+      panel.show({ msg: 'second' }, { x: 5, y: 5, width: 1, height: 1 })
+      expect(pushData).not.toHaveBeenCalled()
+
+      ;(created[0]!.webContents as unknown as FakeWebContents)._fireDidFinishLoad()
+      expect(pushData).toHaveBeenCalledTimes(1)
+      expect(pushData).toHaveBeenCalledWith(created[0], { msg: 'second' })
+    })
+
+    it('pushes data immediately (no did-finish-load wait) on a ready reused instance', () => {
       const pushData = vi.fn()
       const { deps, created } = baseDeps<{ msg: string }>({ pushData })
       const panel = createOverlayPanel(deps)
@@ -163,6 +181,38 @@ describe('createOverlayPanel', () => {
       panel.show({ msg: 'second' }, { x: 0, y: 0, width: 1, height: 1 })
       expect(pushData).toHaveBeenCalledTimes(1)
       expect(pushData).toHaveBeenCalledWith(created[0], { msg: 'second' })
+    })
+
+    it('replaces an externally destroyed instance on the next show()', () => {
+      const { deps, electron, created } = baseDeps()
+      const panel = createOverlayPanel(deps)
+
+      panel.show(undefined, { x: 0, y: 0, width: 1, height: 1 })
+      ;(created[0]!.webContents as unknown as FakeWebContents).close()
+      panel.show(undefined, { x: 1, y: 1, width: 2, height: 2 })
+
+      expect(electron.createWebContentsView).toHaveBeenCalledTimes(2)
+      expect(created[1]).not.toBe(created[0])
+    })
+
+    it('waits for an explicit renderer acknowledgement in manual ready mode', async () => {
+      const pushData = vi.fn()
+      const { deps, created, setDesired } = baseDeps<{ msg: string }>({
+        pushData,
+        readyMode: 'manual',
+      })
+      const panel = createOverlayPanel(deps)
+      const ready = panel.whenReady()
+
+      panel.show({ msg: 'latest' }, { x: 1, y: 2, width: 3, height: 4 })
+      ;(created[0]!.webContents as unknown as FakeWebContents)._fireDidFinishLoad()
+      expect(pushData).not.toHaveBeenCalled()
+      expect(setDesired).not.toHaveBeenCalled()
+
+      panel.markReady((created[0]!.webContents as unknown as FakeWebContents).id)
+      await ready
+      expect(pushData).toHaveBeenCalledWith(created[0], { msg: 'latest' })
+      expect(setDesired).toHaveBeenCalledWith({ x: 1, y: 2, width: 3, height: 4 })
     })
 
     it('does not throw when pushData is not provided', () => {
@@ -244,80 +294,30 @@ describe('createOverlayPanel', () => {
   })
 
   describe('destroy()', () => {
-    function fakeMainWindow(destroyed = false) {
-      const removeChildView = vi.fn()
-      const raw = {
-        isDestroyed: () => destroyed,
-        contentView: { removeChildView },
-      }
-      return { mainWindow: raw as unknown as BrowserWindow, removeChildView }
-    }
-
     it('is a no-op if the view was never shown', () => {
-      const { deps } = baseDeps()
+      const { deps, destroyView } = baseDeps()
       const panel = createOverlayPanel(deps)
-      const { mainWindow, removeChildView } = fakeMainWindow()
-      expect(() => panel.destroy(mainWindow)).not.toThrow()
-      expect(removeChildView).not.toHaveBeenCalled()
+      expect(() => panel.destroy()).not.toThrow()
+      expect(destroyView).not.toHaveBeenCalled()
     })
 
-    it('removes the child view and closes webContents, then isPresent() is false', () => {
-      const { deps, created } = baseDeps()
+    it('delegates teardown to the host owner and clears presence', () => {
+      const { deps, created, destroyView } = baseDeps()
       const panel = createOverlayPanel(deps)
       panel.show(undefined, { x: 0, y: 0, width: 1, height: 1 })
-      const { mainWindow, removeChildView } = fakeMainWindow()
 
-      panel.destroy(mainWindow)
+      panel.destroy()
 
-      expect(removeChildView).toHaveBeenCalledWith(created[0])
+      expect(destroyView).toHaveBeenCalledWith(created[0])
       expect((created[0]!.webContents as unknown as FakeWebContents).close).toHaveBeenCalledTimes(1)
       expect(panel.isPresent()).toBe(false)
     })
 
-    it('skips removeChildView when mainWindow is already destroyed, but still closes webContents', () => {
-      const { deps, created } = baseDeps()
-      const panel = createOverlayPanel(deps)
-      panel.show(undefined, { x: 0, y: 0, width: 1, height: 1 })
-      const { mainWindow, removeChildView } = fakeMainWindow(true)
-
-      panel.destroy(mainWindow)
-
-      expect(removeChildView).not.toHaveBeenCalled()
-      expect((created[0]!.webContents as unknown as FakeWebContents).close).toHaveBeenCalledTimes(1)
-    })
-
-    it('swallows a removeChildView throw (view already removed elsewhere)', () => {
-      const { deps, created } = baseDeps()
-      const panel = createOverlayPanel(deps)
-      panel.show(undefined, { x: 0, y: 0, width: 1, height: 1 })
-      const { mainWindow, removeChildView } = fakeMainWindow()
-      removeChildView.mockImplementation(() => {
-        throw new Error('already removed')
-      })
-
-      expect(() => panel.destroy(mainWindow)).not.toThrow()
-      expect((created[0]!.webContents as unknown as FakeWebContents).close).toHaveBeenCalledTimes(1)
-    })
-
-    it('does not call close() again if webContents is already destroyed', () => {
-      const { deps, created } = baseDeps()
-      const panel = createOverlayPanel(deps)
-      panel.show(undefined, { x: 0, y: 0, width: 1, height: 1 })
-      ;(created[0]!.webContents as unknown as FakeWebContents).close()
-      const closeSpy = (created[0]!.webContents as unknown as FakeWebContents).close
-      closeSpy.mockClear()
-      const { mainWindow } = fakeMainWindow()
-
-      panel.destroy(mainWindow)
-
-      expect(closeSpy).not.toHaveBeenCalled()
-    })
-
-    it('lets the next show() create a brand-new instance (fresh load, no state)', () => {
+    it('lets the next show() create a brand-new instance', () => {
       const { deps, electron, created } = baseDeps()
       const panel = createOverlayPanel(deps)
       panel.show(undefined, { x: 0, y: 0, width: 1, height: 1 })
-      panel.destroy(fakeMainWindow().mainWindow)
+      panel.destroy()
 
       panel.show(undefined, { x: 0, y: 0, width: 1, height: 1 })
 

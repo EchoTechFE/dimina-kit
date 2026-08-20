@@ -258,7 +258,7 @@ test.fixme(
     // The ROOT split holds [g-sim (fixed-px) | col-main (flexible)]. A re-pin of
     // the fixed sim leaf re-measures the root → a spontaneous `onLayoutChanged`
     // whose flexible ratios are unchanged, so v3 SKIPS its write-back.
-    const split = 'root'
+    const split = 'dock-root'
 
     const rootBefore = await panelSizes(mainWindow, split)
     expect(rootBefore, 'the root split must render').not.toBeNull()
@@ -268,7 +268,7 @@ test.fixme(
 
     // Locate the root split's DIRECT resize handle and its midpoint.
     const handleBox = await mainWindow.evaluate(() => {
-      const splitEl = document.querySelector('[data-deck-split="root"]')
+      const splitEl = document.querySelector('[data-deck-split="dock-root"]')
       if (!splitEl) return null
       const handle = splitEl.querySelector('[data-deck-resize-handle]') as HTMLElement | null
       if (!handle || handle.closest('[data-deck-split]') !== splitEl) return null

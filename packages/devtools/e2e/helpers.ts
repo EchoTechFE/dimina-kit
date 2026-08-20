@@ -325,7 +325,7 @@ export async function waitForSimulatorWebview(
       // `'webview'` type check for safety.
       return all.some((wc) => wc.getURL().includes('simulator.html'))
         || all.some((wc) => wc.getType() === 'webview')
-    }),
+    }).catch(() => false),
     (present) => present === true,
     timeout,
     500

@@ -2,6 +2,21 @@ import { useEffect, useRef } from 'react'
 import { hideTooltip, showTooltip } from '@/shared/api'
 
 const SHOW_DELAY_MS = 400
+let visibleOwner: symbol | null = null
+
+function showFor(owner: symbol, label: string, anchor: DOMRect): void {
+  visibleOwner = owner
+  showTooltip({
+    anchor: { x: anchor.x, y: anchor.y, width: anchor.width, height: anchor.height },
+    text: label,
+  })
+}
+
+function hideFor(owner: symbol): void {
+  if (visibleOwner !== owner) return
+  visibleOwner = null
+  hideTooltip()
+}
 
 /**
  * Hover-triggered label for a toolbar trigger, backed by the tooltip overlay
@@ -19,31 +34,20 @@ const SHOW_DELAY_MS = 400
 export function useOverlayTooltip(label: string) {
   const ref = useRef<HTMLButtonElement>(null)
   const timerRef = useRef<number | undefined>(undefined)
-  // Tracks whether a showTooltip actually went out (not just scheduled) —
-  // hide() only needs to fire (and unmount only needs to clean up) when
-  // that's true. A trigger that renders/unmounts without ever being hovered
-  // (most components, most of the time) then sends no IPC at all.
-  const shownRef = useRef(false)
+  const ownerRef = useRef(Symbol('overlay-tooltip-owner'))
 
   function handleMouseEnter() {
     window.clearTimeout(timerRef.current)
     timerRef.current = window.setTimeout(() => {
       const el = ref.current
       if (!el) return
-      const r = el.getBoundingClientRect()
-      shownRef.current = true
-      showTooltip({
-        anchor: { x: r.x, y: r.y, width: r.width, height: r.height },
-        text: label,
-      })
+      showFor(ownerRef.current, label, el.getBoundingClientRect())
     }, SHOW_DELAY_MS)
   }
 
   function handleMouseLeave() {
     window.clearTimeout(timerRef.current)
-    if (!shownRef.current) return
-    shownRef.current = false
-    hideTooltip()
+    hideFor(ownerRef.current)
   }
 
   // Unmounting mid-hover (e.g. the toggle it labels disappears from the dock)

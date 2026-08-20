@@ -29,6 +29,15 @@ function renderControls() {
 }
 
 describe('LayoutVisibilityToggles decouples debug region visibility from per-panel closable', () => {
+  it('uses distinct toolbar surfaces for hover and selected states', () => {
+    const { getByTestId } = renderControls()
+    const selected = getByTestId('layout-toolbar-toggle-simulator')
+
+    expect(selected.className).toContain('hover:[--btn-bg:var(--color-surface-3)]')
+    expect(selected.className).toContain('data-[active=true]:[--btn-bg:var(--color-surface-active)]')
+    expect(selected.className).not.toContain('opacity-60')
+  })
+
   it('hides the whole debug region in one click even though every debug panel is closable:false', () => {
     const { getByTestId, model } = renderControls()
     const toggle = getByTestId('layout-toolbar-toggle-debug')

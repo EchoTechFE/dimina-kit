@@ -2,10 +2,9 @@ import React from 'react'
 import { ChevronDown, RotateCcw, Settings } from 'lucide-react'
 import { Button } from '@/shared/components/ui/button'
 import { StatusDot } from '@/shared/components/status-dot'
-import { cn } from '@/shared/lib/utils'
 import { useOverlayTooltip } from '@/shared/lib/use-overlay-tooltip'
 import { HEADER_H } from '@/shared/constants'
-import { setSettingsVisible } from '@/shared/api'
+import { prepareTooltip, setSettingsVisible } from '@/shared/api'
 import type { LayoutModel, PanelRegistry } from '@dimina-kit/electron-deck/layout'
 import {
   LayoutVisibilityToggles,
@@ -59,6 +58,10 @@ export function ProjectToolbar({
   layout,
   simPanelWidth,
 }: ProjectToolbarProps) {
+  React.useEffect(() => {
+    prepareTooltip()
+  }, [])
+
   const compileModeTooltip = useOverlayTooltip('编译模式')
   const relaunchTooltip = useOverlayTooltip('重新编译')
   const settingsTooltip = useOverlayTooltip('设置')
@@ -75,12 +78,10 @@ export function ProjectToolbar({
             scene-value, launch-page and launch-args inputs. */}
         <div ref={compileDropdownRef as React.Ref<HTMLDivElement>}>
           <Button
-            variant="ghost"
+            variant="toolbar"
             onClick={onToggleCompilePanel}
-            className={cn(
-              'h-7 gap-0.5 pl-2 pr-1.5 text-[13px] text-text-secondary',
-              showCompilePanel && 'bg-[var(--qd-muted)]',
-            )}
+            data-active={showCompilePanel ? 'true' : 'false'}
+            className="h-7 gap-0.5 pl-2 pr-1.5 text-[13px] text-text-secondary"
             {...compileModeTooltip}
           >
             普通编译 <ChevronDown className="size-3.5" />
@@ -92,7 +93,7 @@ export function ProjectToolbar({
         {/* Cluster 2: Primary compile actions. Keep just the icon-button
             cluster compact. */}
         <Button
-          variant="icon"
+          variant="toolbar"
           size="icon"
           className="size-7 rounded-[var(--qd-radius-md)]"
           onClick={() => {
@@ -137,7 +138,7 @@ export function ProjectToolbar({
             always sends `true` (a toggle could not observe the overlay's
             real state and would desync). */}
         <Button
-          variant="icon"
+          variant="toolbar"
           size="icon"
           className="size-7 rounded-[var(--qd-radius-md)]"
           onClick={() => {

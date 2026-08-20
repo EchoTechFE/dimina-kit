@@ -36,6 +36,7 @@ const apiMocks = vi.hoisted(() => ({
   onToolbarActionsChanged: vi.fn(() => () => {}),
   // The contract under test.
   setSettingsVisible: vi.fn(() => Promise.resolve()),
+  prepareTooltip: vi.fn(),
 }))
 
 vi.mock('@/shared/api', () => apiMocks)

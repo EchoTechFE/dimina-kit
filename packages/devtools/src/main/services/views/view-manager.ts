@@ -10,7 +10,11 @@ import { createPlacementReconciler } from './placement-reconciler.js'
 import { createWorkbenchView } from './workbench-view.js'
 import { createDevtoolsHost } from './native-simulator-devtools-host.js'
 import { createHostToolbarView } from './host-toolbar-view.js'
-import { createOverlayPanelsView, type TooltipShowPayload } from './overlay-panels-view.js'
+import {
+  createOverlayPanelsView,
+  type OverlayPanelsView,
+  type TooltipShowPayload,
+} from './overlay-panels-view.js'
 
 export type { TooltipShowPayload }
 import { createNativeSimulatorView } from './native-simulator-view.js'
@@ -105,7 +109,18 @@ export interface ViewManagerContext {
  * panels) and shares a single injected placement reconciler; this file wires
  * them together and exposes their combined method surface.
  */
-export interface ViewManager {
+export interface ViewManager extends Pick<
+  OverlayPanelsView,
+  | 'showSettings'
+  | 'hideSettings'
+  | 'showPopover'
+  | 'hidePopover'
+  | 'prepareTooltip'
+  | 'showTooltip'
+  | 'hideTooltip'
+  | 'markOverlayReady'
+  | 'applyTooltipMeasurement'
+> {
   // ── DevTools ───────────────────────────────────────────────────────────
   /**
    * NATIVE-HOST ONLY. Create the simulator itself as a top-level
@@ -149,26 +164,6 @@ export interface ViewManager {
    * `windows/views.ts` module, which every detach call relied on.
    */
   detachSimulator(): void
-
-  // ── Settings (overlay panel on the right) ──────────────────────────────
-  /** Lazy-create and show the settings overlay view. */
-  showSettings(): Promise<void>
-  /** Remove the settings overlay view (kept around for next open). */
-  hideSettings(): void
-
-  // ── Popover ────────────────────────────────────────────────────────────
-  /** Create and show the popover overlay with the given init payload. */
-  showPopover(data: unknown): void
-  /** Destroy the popover overlay and notify the renderer. */
-  hidePopover(): void
-
-  // ── Tooltip ────────────────────────────────────────────────────────────
-  /** Show (or reposition + retext, if already shown) the tooltip overlay
-   *  anchored to `data.anchor`. See `TooltipChannel`'s doc-comment for why
-   *  this is a WCV rather than a DOM/native tooltip. */
-  showTooltip(data: TooltipShowPayload): void
-  /** Withdraw the tooltip overlay (the native view is kept alive for reuse). */
-  hideTooltip(): void
 
   // ── Aggregate ──────────────────────────────────────────────────────────
   /** Re-apply layout for every currently visible overlay (on window resize). */
@@ -465,8 +460,11 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     hideSettings: overlayPanels.hideSettings,
     showPopover: overlayPanels.showPopover,
     hidePopover: overlayPanels.hidePopover,
+    prepareTooltip: overlayPanels.prepareTooltip,
     showTooltip: overlayPanels.showTooltip,
     hideTooltip: overlayPanels.hideTooltip,
+    markOverlayReady: overlayPanels.markOverlayReady,
+    applyTooltipMeasurement: overlayPanels.applyTooltipMeasurement,
     repositionAll: () => overlayPanels.reapplyPresentOverlays(),
     disposeProjectViews,
     disposeAll,

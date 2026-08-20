@@ -140,7 +140,7 @@ async function waitForStatus(
 }
 
 async function clickRelaunchButton(mainWindow: import('@playwright/test').Page) {
-  await mainWindow.locator('button[title="重新编译"]').click()
+  await mainWindow.getByRole('button', { name: '重新编译' }).click()
 }
 
 async function relaunchViaPopover(
@@ -164,19 +164,36 @@ async function relaunchViaPopover(
   )
   if (!popoverWcId) throw new Error('Popover not found')
 
+  await pollUntil(
+    () => electronApp.evaluate(async ({ webContents }, { wcId, pg }) => {
+      const wc = webContents.fromId(wcId)
+      if (!wc) return false
+      const page = JSON.stringify(pg)
+      return wc.executeJavaScript(`(() => {
+        const sel = document.querySelector('select')
+        return !!sel && Array.from(sel.options).some((option) => option.value.includes(${page}))
+      })()`)
+    }, { wcId: popoverWcId, pg: targetPage }),
+    (ready) => ready,
+    8_000,
+    100,
+  )
+
   await electronApp.evaluate(
     async ({ webContents }, { wcId, pg }) => {
       const wc = webContents.fromId(wcId)
       if (!wc) return
-      await wc.executeJavaScript(`(function() {
-        var sel = document.querySelector('select');
-        var opt = Array.from(sel.options).find(function(o) { return o.value.includes('${pg}'); });
-        if (opt) { sel.value = opt.value; sel.dispatchEvent(new Event('change', { bubbles: true })); }
-      })()`)
+      const page = JSON.stringify(pg)
+      await wc.executeJavaScript(`new Promise((resolve) => {
+        const sel = document.querySelector('select')
+        const opt = Array.from(sel.options).find((option) => option.value.includes(${page}))
+        sel.value = opt.value
+        sel.dispatchEvent(new Event('change', { bubbles: true }))
+        requestAnimationFrame(() => resolve(true))
+      })`)
     },
     { wcId: popoverWcId, pg: targetPage },
   )
-  await mainWindow.waitForTimeout(200)
 
   await electronApp.evaluate(async ({ webContents }, wcId) => {
     const wc = webContents.fromId(wcId)

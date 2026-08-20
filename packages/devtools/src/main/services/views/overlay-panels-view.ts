@@ -14,6 +14,12 @@ export interface TooltipShowPayload {
   text: string
 }
 
+interface TooltipRenderPayload {
+  requestId: number
+  text: string
+  maxWidth: number
+}
+
 /**
  * The main-owned overlay panels: the settings sheet (right-side panel over a
  * transparent backdrop), the transient compile-mode popover, and the tooltip.
@@ -29,8 +35,14 @@ export interface OverlayPanelsView {
   hideSettings(): void
   showPopover(data: unknown): void
   hidePopover(): void
+  prepareTooltip(): void
   showTooltip(data: TooltipShowPayload): void
   hideTooltip(): void
+  markOverlayReady(webContentsId: number): void
+  applyTooltipMeasurement(
+    webContentsId: number,
+    measurement: { requestId: number; width: number; height: number },
+  ): void
   /** Re-apply whichever of settings/popover is currently present (window resize / toolbar height change). Tooltip excluded — it re-anchors on its own next show, a stale position while hidden doesn't matter. */
   reapplyPresentOverlays(): void
   /** Re-apply the settings overlay only (the resize entry point re-applies settings, not popover). */
@@ -83,6 +95,8 @@ export function createOverlayPanelsView(
     hardenNavigation: (wc) => applyNavigationHardening(wc, ctx.rendererDir),
     setDesired: overlayDesiredSetter(VIEW_ID.settings, VIEW_LAYER.settings),
     registerView: (getView) => reconciler.registerView(VIEW_ID.settings, { getView }),
+    destroyView: (view) => reconciler.destroyView(VIEW_ID.settings, view),
+    readyMode: 'manual',
   })
 
   const popoverPanel: OverlayPanel<unknown> = createOverlayPanel<unknown>({
@@ -98,10 +112,12 @@ export function createOverlayPanelsView(
     hardenNavigation: (wc) => applyNavigationHardening(wc, ctx.rendererDir),
     setDesired: overlayDesiredSetter(VIEW_ID.popover, VIEW_LAYER.popover),
     registerView: (getView) => reconciler.registerView(VIEW_ID.popover, { getView }),
+    destroyView: (view) => reconciler.destroyView(VIEW_ID.popover, view),
     pushData: (view, data) => ctx.notify.popoverInit(view, data),
+    readyMode: 'manual',
   })
 
-  const tooltipPanel: OverlayPanel<TooltipShowPayload> = createOverlayPanel<TooltipShowPayload>({
+  const tooltipPanel: OverlayPanel<TooltipRenderPayload> = createOverlayPanel<TooltipRenderPayload>({
     electron: { createWebContentsView: (opts) => new WebContentsView(opts) },
     rendererDir: ctx.rendererDir,
     entry: 'entries/tooltip/index.html',
@@ -114,12 +130,27 @@ export function createOverlayPanelsView(
     hardenNavigation: (wc) => applyNavigationHardening(wc, ctx.rendererDir),
     setDesired: overlayDesiredSetter(VIEW_ID.tooltip, VIEW_LAYER.tooltip),
     registerView: (getView) => reconciler.registerView(VIEW_ID.tooltip, { getView }),
+    prepareView: (view) => {
+      const [width = 0, height = 0] = ctx.windows.mainWindow.getContentSize()
+      reconciler.prepareView(VIEW_ID.tooltip, view, {
+        x: 0,
+        y: 0,
+        width: Math.max(1, width),
+        height: Math.max(1, height),
+      })
+    },
+    destroyView: (view) => reconciler.destroyView(VIEW_ID.tooltip, view),
     pushData: (view, data) => ctx.notify.tooltipInit(view, data),
+    readyMode: 'manual',
   })
+
+  let tooltipRequestId = 0
+  let activeTooltip: { requestId: number; anchor: TooltipShowPayload['anchor'] } | null = null
 
   async function showSettings(): Promise<void> {
     const [w = 0, h = 0] = ctx.windows.mainWindow.getContentSize()
     settingsPanel.show(undefined, layout.computeSettingsBounds(w, h, overlayHeaderHeight()))
+    await settingsPanel.whenReady()
   }
 
   function hideSettings(): void {
@@ -137,21 +168,47 @@ export function createOverlayPanelsView(
 
   function hidePopover(): void {
     if (!popoverPanel.isPresent()) return
-    popoverPanel.destroy(ctx.windows.mainWindow)
-    reconciler.forgetActual(VIEW_ID.popover)
+    popoverPanel.destroy()
     reconciler.deleteOverlayDesired(VIEW_ID.popover)
     reconciler.reconcileNow()
     ctx.notify.popoverClosed()
   }
 
+  function prepareTooltip(): void {
+    tooltipPanel.prepare()
+  }
+
   function showTooltip(data: TooltipShowPayload): void {
-    const [w = 0, h = 0] = ctx.windows.mainWindow.getContentSize()
-    const bounds = layout.computeTooltipBounds(data.anchor, w, h)
-    tooltipPanel.show(data, bounds)
+    const requestId = ++tooltipRequestId
+    activeTooltip = { requestId, anchor: data.anchor }
+    const [contentWidth = 0] = ctx.windows.mainWindow.getContentSize()
+    tooltipPanel.show({
+      requestId,
+      text: data.text,
+      maxWidth: layout.computeTooltipMaxWidth(contentWidth),
+    }, null)
   }
 
   function hideTooltip(): void {
+    activeTooltip = null
     tooltipPanel.hide()
+  }
+
+  function markOverlayReady(webContentsId: number): void {
+    settingsPanel.markReady(webContentsId)
+    popoverPanel.markReady(webContentsId)
+    tooltipPanel.markReady(webContentsId)
+  }
+
+  function applyTooltipMeasurement(
+    webContentsId: number,
+    measurement: { requestId: number; width: number; height: number },
+  ): void {
+    const active = activeTooltip
+    if (!active || active.requestId !== measurement.requestId) return
+    if (tooltipPanel.getWebContentsId() !== webContentsId) return
+    const [w = 0, h = 0] = ctx.windows.mainWindow.getContentSize()
+    tooltipPanel.reposition(layout.computeTooltipBounds(active.anchor, w, h, measurement))
   }
 
   function reapplyPresentOverlays(): void {
@@ -167,14 +224,9 @@ export function createOverlayPanelsView(
   }
 
   function destroySettings(): void {
-    settingsPanel.destroy(ctx.windows.mainWindow)
-    tooltipPanel.destroy(ctx.windows.mainWindow)
-    // Both destroy() calls above bypass the reconciler (raw removeChildView) —
-    // forget their reconciled state so a future mount() of a rebuilt instance
-    // isn't a silent no-op against stale bookkeeping (see placement-reconciler
-    // .ts's forgetActual doc-comment).
-    reconciler.forgetActual(VIEW_ID.settings)
-    reconciler.forgetActual(VIEW_ID.tooltip)
+    activeTooltip = null
+    settingsPanel.destroy()
+    tooltipPanel.destroy()
   }
 
   return {
@@ -182,8 +234,11 @@ export function createOverlayPanelsView(
     hideSettings,
     showPopover,
     hidePopover,
+    prepareTooltip,
     showTooltip,
     hideTooltip,
+    markOverlayReady,
+    applyTooltipMeasurement,
     reapplyPresentOverlays,
     applySettingsBoundsIfPresent,
     destroySettings,

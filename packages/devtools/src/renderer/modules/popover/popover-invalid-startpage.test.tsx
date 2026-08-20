@@ -44,6 +44,7 @@ vi.mock('@/shared/api', () => ({
   }),
   emitPopoverRelaunch: vi.fn(),
   hidePopover: vi.fn(async () => {}),
+  notifyOverlayReady: vi.fn(),
 }))
 
 import Popover from './popover'

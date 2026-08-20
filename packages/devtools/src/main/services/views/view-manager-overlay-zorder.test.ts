@@ -94,7 +94,12 @@ vi.mock('../../utils/paths.js', () => ({
 
 // Import AFTER mocks so view-manager picks up the stubs.
 import { createViewManager } from './view-manager.js'
-import { simulatorDevtoolsBounds, simulatorBounds } from './placement-test-driver.js'
+import {
+  showPopoverReady,
+  showSettingsReady,
+  simulatorDevtoolsBounds,
+  simulatorBounds,
+} from './placement-test-driver.js'
 import { createConnectionRegistry } from '@dimina-kit/electron-deck/main'
 
 function makeContext() {
@@ -155,7 +160,7 @@ describe('ViewManager overlay z-order: top tier (settings/popover) stays above b
     const addsAfterAttach = addChildView.mock.calls.length
 
     // Settings opens on top.
-    await mgr.showSettings()
+    await showSettingsReady(mgr)
     const settingsView = lastAdded(addChildView)
 
     // The console/DevTools overlay bounds republish re-adds the base view —
@@ -174,7 +179,7 @@ describe('ViewManager overlay z-order: top tier (settings/popover) stays above b
 
     mgr.attachNativeSimulator(SIM_URL, 375)
 
-    await mgr.showSettings()
+    await showSettingsReady(mgr)
     const settingsView = lastAdded(addChildView)
 
     // Publishing a VISIBLE native-simulator rect adds nativeSimulatorView (base
@@ -190,7 +195,7 @@ describe('ViewManager overlay z-order: top tier (settings/popover) stays above b
 
     mgr.attachNativeSimulator(SIM_URL, 375)
 
-    mgr.showPopover({ z: 1 })
+    showPopoverReady(mgr, { z: 1 })
     const popoverView = lastAdded(addChildView)
 
     simulatorDevtoolsBounds(mgr,VISIBLE_RECT)
@@ -204,7 +209,7 @@ describe('ViewManager overlay z-order: top tier (settings/popover) stays above b
 
     mgr.attachNativeSimulator(SIM_URL, 375)
 
-    mgr.showPopover({ z: 1 })
+    showPopoverReady(mgr, { z: 1 })
     const popoverView = lastAdded(addChildView)
 
     simulatorBounds(mgr,VISIBLE_SIM)
@@ -218,9 +223,9 @@ describe('ViewManager overlay z-order: top tier (settings/popover) stays above b
 
     mgr.attachNativeSimulator(SIM_URL, 375)
 
-    await mgr.showSettings()
+    await showSettingsReady(mgr)
     const settingsView = lastAdded(addChildView)
-    mgr.showPopover({ z: 1 })
+    showPopoverReady(mgr, { z: 1 })
     const popoverView = lastAdded(addChildView)
 
     // Re-add a base overlay (console/DevTools host) while both top-tier

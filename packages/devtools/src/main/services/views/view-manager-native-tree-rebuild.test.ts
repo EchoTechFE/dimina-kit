@@ -1,33 +1,7 @@
 /**
- * Regression tests for the Compositor-mediated detach change
- * (placement-reconciler.ts) and the two `forgetActual` gaps it required
- * fixing:
- *
- *   - `overlay-panels-view.ts`'s `destroySettings()` raw-removes the
- *     settings + tooltip views but never told the reconciler, so its
- *     `actual` map kept thinking they were still attached — a rebuild after
- *     teardown silently never re-emitted the attach op (a permanently
- *     invisible view, no error).
- *   - `native-simulator-devtools-host.ts`'s `destroyHostView()` had the same
- *     gap for the DevTools host view.
- *
- * Each rebuild case below re-shows ONLY the one overlay it's testing, with
- * no OTHER reconciler-touching call in between `detachSimulator()` and the
- * re-show. That restriction is deliberate, not incidental: any other
- * reconcileNow() landing in that window — a second overlay's own show(),
- * `attachNativeSimulator()`'s internal reconcile, `workbench.detachWorkbench()`
- * inside the fuller `disposeProjectViews()` — hits a separate, PRE-EXISTING
- * reconcile-core quirk (confirmed present with or without this change's
- * `forgetActual` fix, same end state either way): `classifyView` optimistically
- * marks a still-desired, still-unattached id `attached: true` the moment
- * ANY reconcile runs, with no native call backing it (the view is still
- * null); a later `show()` with identical bounds then looks like a no-op
- * change to the core and never re-attaches. That means today, re-opening
- * MORE THAN ONE of settings/tooltip/devtools-host after a project
- * close→reopen only reliably recovers the first one shown — a real bug in
- * the reopen-after-close path, but orthogonal to the Compositor-detach
- * change this file verifies, so intentionally left unfixed and untested
- * here (flagged separately).
+ * Native child-tree lifecycle regressions. Hard teardown, lazy recreation and
+ * renderer readiness all converge through the reconciler's applied-state
+ * ledger, so several rebuilt views can attach after the same project close.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -106,7 +80,12 @@ vi.mock('../../utils/paths.js', () => ({
 
 // Import AFTER mocks so view-manager picks up the stubs.
 import { createViewManager } from './view-manager.js'
-import { simulatorDevtoolsBounds, simulatorBounds } from './placement-test-driver.js'
+import {
+  showSettingsReady,
+  showTooltipReady,
+  simulatorDevtoolsBounds,
+  simulatorBounds,
+} from './placement-test-driver.js'
 import { createConnectionRegistry } from '@dimina-kit/electron-deck/main'
 
 function makeContext() {
@@ -143,7 +122,7 @@ function makeContext() {
   }
 }
 
-const SIM_URL = 'http://localhost:7788/simulator.html?appId=compositor-rebuild'
+const SIM_URL = 'http://localhost:7788/simulator.html?appId=native-tree-rebuild'
 const VISIBLE_RECT = { x: 0, y: 0, width: 320, height: 640 }
 const VISIBLE_SIM = { x: 0, y: 0, width: 300, height: 600, zoom: 100 }
 const TOOLTIP_PAYLOAD = { anchor: { x: 0, y: 0, width: 10, height: 10 }, text: 'hi' }
@@ -152,30 +131,26 @@ beforeEach(() => {
   constructed.length = 0
 })
 
-describe('ViewManager rebuild after detachSimulator: previously-missing forgetActual calls', () => {
+describe('ViewManager rebuild after detachSimulator', () => {
   it('re-attaches a fresh settings instance, not a silent no-op', async () => {
     const { addChildView, ctx } = makeContext()
     const mgr = createViewManager(ctx)
 
     mgr.attachNativeSimulator(SIM_URL, 375)
-    await mgr.showSettings()
+    await showSettingsReady(mgr)
     const oldSettingsId = mgr.getSettingsWebContentsId()
     expect(oldSettingsId).not.toBeNull()
 
-    // detachSimulator() aggregates tearDownNativeSimulatorView() +
-    // overlayPanels.destroySettings() (settings + tooltip) +
-    // devtoolsHost.destroyHostView() — the previously-unpaired raw
-    // removeChildView sites this change fixed.
+    // Aggregate teardown destroys simulator, settings, tooltip and DevTools
+    // host through the same native-tree owner.
     mgr.detachSimulator()
     expect(mgr.getSettingsWebContentsId()).toBeNull()
 
     const addsBefore = addChildView.mock.calls.length
-    await mgr.showSettings()
+    await showSettingsReady(mgr)
 
-    // Without the forgetActual fix, the reconciler's stale `actual` map
-    // treats settings as already-attached and never re-emits the attach op
-    // — the view would silently never rejoin the contentView (a
-    // permanently invisible overlay, no thrown error).
+    // A recreated instance must generate a real native attach, not inherit the
+    // destroyed instance's applied state.
     expect(addChildView.mock.calls.length).toBeGreaterThan(addsBefore)
     expect(mgr.getSettingsWebContentsId()).not.toBeNull()
     expect(mgr.getSettingsWebContentsId()).not.toBe(oldSettingsId)
@@ -188,7 +163,7 @@ describe('ViewManager rebuild after detachSimulator: previously-missing forgetAc
     const mgr = createViewManager(ctx)
 
     mgr.attachNativeSimulator(SIM_URL, 375)
-    mgr.showTooltip(TOOLTIP_PAYLOAD)
+    showTooltipReady(mgr, TOOLTIP_PAYLOAD)
     const oldTooltipId = mgr.getTooltipWebContentsId()
     expect(oldTooltipId).not.toBeNull()
 
@@ -196,7 +171,7 @@ describe('ViewManager rebuild after detachSimulator: previously-missing forgetAc
     expect(mgr.getTooltipWebContentsId()).toBeNull()
 
     const addsBefore = addChildView.mock.calls.length
-    mgr.showTooltip(TOOLTIP_PAYLOAD)
+    showTooltipReady(mgr, TOOLTIP_PAYLOAD)
 
     expect(addChildView.mock.calls.length).toBeGreaterThan(addsBefore)
     expect(mgr.getTooltipWebContentsId()).not.toBeNull()
@@ -221,7 +196,7 @@ describe('ViewManager rebuild after detachSimulator: previously-missing forgetAc
     const constructedBefore = constructed.length
     const addsBefore = addChildView.mock.calls.length
 
-    // Rebuild: a fresh attach + re-publish the devtools bounds.
+    // Rebuild with a fresh attach and republished DevTools bounds.
     mgr.attachNativeSimulator(SIM_URL, 375)
     const newDevtoolsView = constructed[constructedBefore + 1]!
     simulatorDevtoolsBounds(mgr, VISIBLE_RECT)
@@ -231,7 +206,96 @@ describe('ViewManager rebuild after detachSimulator: previously-missing forgetAc
   })
 })
 
-describe('ViewManager batched detach: multiple same-tick removals go through one compositor.commit()', () => {
+describe('ViewManager rebuild after project close', () => {
+  it('reattaches every rebuilt view when one reconcile lands before the overlays reopen', async () => {
+    const { addChildView, ctx } = makeContext()
+    const mgr = createViewManager(ctx)
+
+    mgr.attachNativeSimulator(SIM_URL, 375)
+    simulatorDevtoolsBounds(mgr, VISIBLE_RECT)
+    await showSettingsReady(mgr)
+    showTooltipReady(mgr, TOOLTIP_PAYLOAD)
+
+    mgr.detachSimulator()
+    const constructedBeforeReopen = constructed.length
+    mgr.attachNativeSimulator(SIM_URL, 375)
+    simulatorDevtoolsBounds(mgr, VISIBLE_RECT)
+    await showSettingsReady(mgr)
+    showTooltipReady(mgr, TOOLTIP_PAYLOAD)
+
+    const rebuilt = constructed.slice(constructedBeforeReopen)
+    const added = addChildView.mock.calls.map((call) => call[0])
+    const settings = rebuilt.find((view) => view.webContents.id === mgr.getSettingsWebContentsId())
+    const tooltip = rebuilt.find((view) => view.webContents.id === mgr.getTooltipWebContentsId())
+    const devtoolsHost = rebuilt[1]
+
+    expect(settings).toBeDefined()
+    expect(tooltip).toBeDefined()
+    expect(devtoolsHost).toBeDefined()
+    expect(added).toEqual(expect.arrayContaining([settings, tooltip, devtoolsHost]))
+  })
+})
+
+describe('Overlay renderer readiness and tooltip measurement', () => {
+  it('keeps settings hidden until its renderer subscriptions are ready', async () => {
+    const { addChildView, ctx } = makeContext()
+    const mgr = createViewManager(ctx)
+    let settled = false
+
+    const shown = mgr.showSettings().then(() => { settled = true })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    expect(addChildView).not.toHaveBeenCalled()
+
+    const webContentsId = mgr.getSettingsWebContentsId()
+    expect(webContentsId).not.toBeNull()
+    mgr.markOverlayReady(webContentsId!)
+    await shown
+
+    expect(settled).toBe(true)
+    expect(addChildView).toHaveBeenCalledTimes(1)
+  })
+
+  it('measures and shows only the latest tooltip request', () => {
+    const { addChildView, notify, ctx } = makeContext()
+    const mgr = createViewManager(ctx)
+    mgr.prepareTooltip()
+    const tooltipId = mgr.getTooltipWebContentsId()!
+
+    mgr.showTooltip({ anchor: { x: 20, y: 10, width: 20, height: 20 }, text: 'first' })
+    mgr.showTooltip({ anchor: { x: 100, y: 40, width: 20, height: 20 }, text: 'second' })
+    expect(notify.tooltipInit).not.toHaveBeenCalled()
+    expect(addChildView).not.toHaveBeenCalled()
+
+    mgr.markOverlayReady(tooltipId)
+    expect(notify.tooltipInit).toHaveBeenCalledTimes(1)
+    expect(notify.tooltipInit.mock.calls[0]![1]).toEqual({
+      requestId: 2,
+      text: 'second',
+      maxWidth: 1272,
+    })
+
+    mgr.applyTooltipMeasurement(tooltipId, { requestId: 1, width: 200, height: 40 })
+    expect(addChildView).not.toHaveBeenCalled()
+
+    mgr.applyTooltipMeasurement(tooltipId, { requestId: 2, width: 90, height: 28 })
+    expect(addChildView).toHaveBeenCalledTimes(1)
+    const tooltipView = constructed.find((view) => view.webContents.id === tooltipId)!
+    expect(tooltipView.setBounds).toHaveBeenLastCalledWith({
+      x: 65,
+      y: 66,
+      width: 90,
+      height: 28,
+    })
+
+    mgr.hideTooltip()
+    const addsAfterHide = addChildView.mock.calls.length
+    mgr.applyTooltipMeasurement(tooltipId, { requestId: 2, width: 120, height: 30 })
+    expect(addChildView).toHaveBeenCalledTimes(addsAfterHide)
+  })
+})
+
+describe('ViewManager detach: multiple same-tick removals share the native-tree owner', () => {
   it('removes both views when they drop out of a single placement snapshot publish', () => {
     const { addChildView, removeChildView, ctx } = makeContext()
     const mgr = createViewManager(ctx)

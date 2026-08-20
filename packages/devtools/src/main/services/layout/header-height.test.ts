@@ -87,3 +87,36 @@ describe('Requirement B: layout functions take an explicit headerHeight', () => 
     ).toBeUndefined()
   })
 })
+
+describe('tooltip bounds use the measured surface', () => {
+  type ComputeTooltipBounds = (
+    anchor: { x: number; y: number; width: number; height: number },
+    contentWidth: number,
+    contentHeight: number,
+    measured: { width: number; height: number },
+  ) => { x: number; y: number; width: number; height: number }
+
+  it('centers the measured footprint and flips above near the bottom edge', async () => {
+    const layout = await loadLayout()
+    const compute = layout.computeTooltipBounds as ComputeTooltipBounds
+
+    expect(compute(
+      { x: 100, y: 170, width: 20, height: 20 },
+      300,
+      200,
+      { width: 90.2, height: 28.1 },
+    )).toEqual({ x: 64.5, y: 135, width: 91, height: 29 })
+  })
+
+  it('clamps the measured width to the available content area', async () => {
+    const layout = await loadLayout()
+    const compute = layout.computeTooltipBounds as ComputeTooltipBounds
+
+    expect(compute(
+      { x: 2, y: 10, width: 10, height: 10 },
+      80,
+      100,
+      { width: 200, height: 24 },
+    )).toEqual({ x: 4, y: 26, width: 72, height: 24 })
+  })
+})

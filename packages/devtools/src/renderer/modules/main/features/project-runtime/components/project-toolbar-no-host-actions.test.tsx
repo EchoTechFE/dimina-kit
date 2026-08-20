@@ -36,6 +36,7 @@ const apiMocks = vi.hoisted(() => ({
   // The settings entry point the toolbar uses; present so the component's
   // import resolves. Not asserted here.
   setSettingsVisible: vi.fn(() => Promise.resolve()),
+  prepareTooltip: vi.fn(),
 }))
 
 vi.mock('@/shared/api', () => apiMocks)

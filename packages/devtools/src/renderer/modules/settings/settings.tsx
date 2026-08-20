@@ -6,6 +6,7 @@ import {
   emitProjectSettingsChanged,
   emitSettingsConfigChanged,
   onSettingsInit,
+  notifyOverlayReady,
   setSettingsVisible,
 } from '@/shared/api'
 
@@ -35,13 +36,15 @@ export default function Settings() {
   })
 
   useEffect(() => {
-    return onSettingsInit((data) => {
+    const off = onSettingsInit((data) => {
       setProjectPath(data.projectPath)
       setConfig(data.config)
       setProjectSettings({
         uploadWithSourceMap: !!data.projectSettings?.uploadWithSourceMap,
       })
     })
+    notifyOverlayReady()
+    return off
   }, [])
 
   function updateConfig(patch: Partial<CompileConfig>) {

@@ -112,6 +112,7 @@ vi.mock('../../utils/paths.js', () => ({
 
 // Import AFTER mocks so view-manager picks up the stubs.
 import { createViewManager, resolveProjectEditorTarget } from './view-manager.js'
+import { showPopoverReady, showSettingsReady } from './placement-test-driver.js'
 import { createConnectionRegistry } from '@dimina-kit/electron-deck/main'
 import { createCdpSessionBroker } from '../cdp-session/index.js'
 
@@ -210,7 +211,7 @@ describe('ViewManager: repeated show/hide cycles do not leak', () => {
 
     const N = 10
     for (let i = 0; i < N; i++) {
-      await mgr.showSettings()
+      await showSettingsReady(mgr)
       mgr.hideSettings()
     }
 
@@ -235,9 +236,9 @@ describe('ViewManager: repeated show/hide cycles do not leak', () => {
     const { addChildView, removeChildView, ctx } = makeContext()
     const mgr = createViewManager(ctx)
 
-    await mgr.showSettings()
-    await mgr.showSettings()
-    await mgr.showSettings()
+    await showSettingsReady(mgr)
+    await showSettingsReady(mgr)
+    await showSettingsReady(mgr)
     expect(addChildView).toHaveBeenCalledTimes(1)
     expect(removeChildView).not.toHaveBeenCalled()
 
@@ -252,7 +253,7 @@ describe('ViewManager: repeated show/hide cycles do not leak', () => {
 
     const N = 5
     for (let i = 0; i < N; i++) {
-      mgr.showPopover({ i })
+      showPopoverReady(mgr, { i })
       mgr.hidePopover()
     }
 
@@ -285,9 +286,9 @@ describe('ViewManager: repeated show/hide cycles do not leak', () => {
     const { addChildView, removeChildView, notify, ctx } = makeContext()
     const mgr = createViewManager(ctx)
 
-    mgr.showPopover({ i: 1 })
-    mgr.showPopover({ i: 2 })
-    mgr.showPopover({ i: 3 })
+    showPopoverReady(mgr, { i: 1 })
+    showPopoverReady(mgr, { i: 2 })
+    showPopoverReady(mgr, { i: 3 })
 
     // 3 created, but only 2 prior ones torn down so far; final still attached.
     expect(constructed.length).toBe(3)

@@ -20,11 +20,26 @@ interface SnapshotSink {
   }): void
 }
 
+interface OverlaySink {
+  showSettings(): Promise<void>
+  showPopover(data: unknown): void
+  showTooltip(data: { anchor: Rect; text: string }): void
+  getSettingsWebContentsId(): number | null
+  getPopoverWebContentsId(): number | null
+  getTooltipWebContentsId(): number | null
+  markOverlayReady(webContentsId: number): void
+  applyTooltipMeasurement(
+    webContentsId: number,
+    measurement: { requestId: number; width: number; height: number },
+  ): void
+}
+
 // Monotonic across every push in a test file (vitest isolates module state per
 // file), so a fresh manager (lastEpoch -1) accepts the first push and repeated
 // pushes on one manager never look stale.
 let globalEpoch = 0
 const desiredByMgr = new WeakMap<SnapshotSink, Map<string, DesiredView<DevtoolsExtra>>>()
+const tooltipRequestByMgr = new WeakMap<OverlaySink, number>()
 
 function toPlacement(r: Rect): DesiredView<DevtoolsExtra>['placement'] {
   return r.width > 0 && r.height > 0 ? { visible: true, bounds: r } : { visible: false }
@@ -47,6 +62,35 @@ export function simulatorDevtoolsBounds(mgr: SnapshotSink, rect: Rect): void {
 
 export function workbenchBounds(mgr: SnapshotSink, rect: Rect): void {
   pushView(mgr, { viewId: VIEW_ID.workbench, placement: toPlacement(rect), layer: VIEW_LAYER.base })
+}
+
+export async function showSettingsReady(mgr: OverlaySink): Promise<void> {
+  const shown = mgr.showSettings()
+  const webContentsId = mgr.getSettingsWebContentsId()
+  if (webContentsId === null) throw new Error('settings view was not created')
+  mgr.markOverlayReady(webContentsId)
+  await shown
+}
+
+export function showPopoverReady(mgr: OverlaySink, data: unknown): void {
+  mgr.showPopover(data)
+  const webContentsId = mgr.getPopoverWebContentsId()
+  if (webContentsId === null) throw new Error('popover view was not created')
+  mgr.markOverlayReady(webContentsId)
+}
+
+export function showTooltipReady(
+  mgr: OverlaySink,
+  data: { anchor: Rect; text: string },
+  size: { width: number; height: number } = { width: 80, height: 28 },
+): void {
+  mgr.showTooltip(data)
+  const webContentsId = mgr.getTooltipWebContentsId()
+  if (webContentsId === null) throw new Error('tooltip view was not created')
+  mgr.markOverlayReady(webContentsId)
+  const requestId = (tooltipRequestByMgr.get(mgr) ?? 0) + 1
+  tooltipRequestByMgr.set(mgr, requestId)
+  mgr.applyTooltipMeasurement(webContentsId, { requestId, ...size })
 }
 
 export function simulatorBounds(mgr: SnapshotSink, params: Rect & { zoom: number }): void {

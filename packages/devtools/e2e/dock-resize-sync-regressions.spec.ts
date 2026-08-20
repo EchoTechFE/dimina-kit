@@ -256,7 +256,7 @@ test('[needs-real-electron] R2: a fixed-px split does NOT corrupt the flexible c
   // ratio-preserving spontaneous re-measure) is SKIPPED ⇒ the raw seed weight 1
   // is never overwritten.
   const root = await mainWindow.evaluate(() => {
-    const s = document.querySelector('[data-deck-split="root"]')
+    const s = document.querySelector('[data-deck-split="dock-root"]')
     if (!s) return null
     return {
       sizesAttr: s.getAttribute('data-deck-sizes'),

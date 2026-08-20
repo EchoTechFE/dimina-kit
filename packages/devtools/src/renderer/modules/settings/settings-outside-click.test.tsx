@@ -36,6 +36,7 @@ const apiMocks = vi.hoisted(() => ({
   onSettingsInit: vi.fn((_cb: (payload: unknown) => void) => () => {}),
   emitProjectSettingsChanged: vi.fn(),
   emitSettingsConfigChanged: vi.fn(),
+  notifyOverlayReady: vi.fn(),
 }))
 
 vi.mock('@/shared/api', () => apiMocks)

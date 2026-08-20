@@ -8,7 +8,6 @@ import {
   releaseHostToolbarSessionRuntime,
 } from './host-toolbar-session-runtime.js'
 import { createHostToolbarPortChannel } from './host-toolbar-port-channel.js'
-import { destroyChildView } from './destroy-child-view.js'
 import type { PlacementReconciler } from './placement-reconciler.js'
 import type {
   HostToolbarControl,
@@ -41,7 +40,6 @@ export function createHostToolbarView(
 ): HostToolbarView {
   let hostToolbarView: WebContentsView | null = null
   let hostToolbarPreloadOverride: string | null = null
-  let hostToolbarViewAdded = false
   // Whether THIS manager holds a reference on the shared defaultSession
   // registration of the toolbar-runtime preload (see
   // host-toolbar-session-runtime.ts). Acquired on first toolbar need,
@@ -84,19 +82,11 @@ export function createHostToolbarView(
     if (hostToolbarView && liveHostToolbarWebContents()) {
       return hostToolbarView
     }
-    // Rebuilding after the host destroyed the underlying webContents: detach the
-    // dead view from the contentView and reset the added-flag so the new view
-    // gets re-mounted (otherwise the `hostToolbarViewAdded` guard would skip the
-    // addChildView and the toolbar would silently disappear).
-    if (hostToolbarView && hostToolbarViewAdded) {
-      try {
-        ctx.windows.mainWindow.contentView.removeChildView(hostToolbarView)
-      } catch { /* already removed */ }
-      hostToolbarViewAdded = false
+    // Rebuilding after the host destroyed the underlying webContents first
+    // retires the concrete instance from the native-tree ledger.
+    if (hostToolbarView) {
+      reconciler.destroyView(VIEW_ID.hostToolbar, hostToolbarView)
     }
-    // The instance is being replaced — forget its reconciled mount state so the
-    // rebuilt view is treated as a fresh attach (not skipped as already-attached).
-    reconciler.forgetActual(VIEW_ID.hostToolbar)
     // The framework's height-advertiser runtime is SESSION-resident: register
     // it on session.defaultSession (ref-counted across coexisting managers)
     // BEFORE the view exists, so the very first load already runs it. The
@@ -248,7 +238,6 @@ export function createHostToolbarView(
   reconciler.registerView(VIEW_ID.hostToolbar, {
     getView: () => hostToolbarView,
     ensureView: () => ensureHostToolbarView(),
-    setAdded: (added) => { hostToolbarViewAdded = added },
     ensureLazy: (desired) => {
       if (desired?.placement.visible && !liveHostToolbarWebContents()) ensureHostToolbarView()
     },
@@ -261,9 +250,8 @@ export function createHostToolbarView(
     hostToolbarPort.dispose()
     // Host-controllable toolbar view: removed from the contentView + its
     // WebContents closed (the host's loaded content is torn down on app exit).
-    destroyChildView(ctx.windows.mainWindow, hostToolbarView)
+    reconciler.destroyView(VIEW_ID.hostToolbar, hostToolbarView)
     hostToolbarView = null
-    hostToolbarViewAdded = false
     // Release this manager's reference on the shared defaultSession
     // toolbar-runtime registration (only if it ever acquired one — a manager
     // that never used the toolbar must not drive the shared count to zero).
