@@ -351,6 +351,22 @@ export const PopoverChannel = {
   Init: 'popover:init',
 } as const
 
+// ── Tooltip ──────────────────────────────────────────────────────────────
+//
+// A top-tier overlay WebContentsView (VIEW_LAYER.tooltip — see view-ids.ts),
+// NOT a DOM tooltip in the main renderer: any DOM-portaled floating UI (Radix
+// Tooltip) or the browser-native `title` attribute lives in the main
+// renderer's own paint surface, which every other WCV (simulator, editor,
+// settings, popover) renders on top of — CSS cannot reach across that
+// boundary. A trigger reports its anchor rect + label; main computes the
+// tooltip's screen bounds and shows/repositions/hides this overlay.
+
+export const TooltipChannel = {
+  Show: 'tooltip:show',
+  Hide: 'tooltip:hide',
+  Init: 'tooltip:init',
+} as const
+
 // ── Window ───────────────────────────────────────────────────────────────
 
 export const WindowChannel = {

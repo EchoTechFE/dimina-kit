@@ -1,5 +1,5 @@
 /**
- * The "新建项目" card is rendered as the first item of the project
+ * The "新建小程序" card is rendered as the first item of the project
  * list. It must:
  *  - render a dashed-border placeholder card with a Chinese label,
  *  - invoke its `onClick` prop exactly once when the user clicks anywhere
@@ -16,15 +16,15 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import { ProjectCreateCard } from './project-create-card'
 
 describe('ProjectCreateCard', () => {
-  it('renders the Chinese label "新建项目"', () => {
+  it('renders the Chinese label "新建小程序"', () => {
     render(<ProjectCreateCard onClick={() => {}} />)
-    expect(screen.getByText('新建项目')).toBeInTheDocument()
+    expect(screen.getByText('新建小程序')).toBeInTheDocument()
   })
 
   it('calls onClick when the card is clicked', () => {
     const onClick = vi.fn()
     render(<ProjectCreateCard onClick={onClick} />)
-    fireEvent.click(screen.getByText('新建项目'))
+    fireEvent.click(screen.getByText('新建小程序'))
     expect(onClick).toHaveBeenCalledTimes(1)
   })
 
@@ -32,8 +32,8 @@ describe('ProjectCreateCard', () => {
     render(<ProjectCreateCard onClick={() => {}} />)
     // Either a real <button>, or any element advertising role="button".
     const el =
-      screen.queryByRole('button', { name: '新建项目' }) ??
-      screen.queryByLabelText('新建项目')
+      screen.queryByRole('button', { name: '新建小程序' }) ??
+      screen.queryByLabelText('新建小程序')
     expect(el).not.toBeNull()
   })
 })

@@ -1,4 +1,5 @@
 import React from 'react'
+import { Button } from '@/shared/components/ui/button'
 
 /**
  * Runtime-lifecycle shape SimulatorPanel and its overlays consume. Declared
@@ -35,20 +36,22 @@ export function RuntimeErrorOverlay({ phase, code, reason, onRelaunch }: Runtime
   return (
     <div
       data-testid="sim-runtime-error"
-      className="absolute inset-0 flex flex-col items-center justify-center bg-black/70 z-10"
+      className="absolute inset-0 flex flex-col items-center justify-center bg-[var(--color-overlay-heavy)] z-10"
     >
       <div className="text-center p-4">
         <div className="text-status-error text-[14px] font-medium mb-2">{title}</div>
         <div className="text-status-error text-[11px] max-w-[280px] break-words mb-3">
           {detail}
         </div>
-        <button
+        <Button
           type="button"
+          variant="outline"
+          size="xs"
           onClick={onRelaunch}
-          className="text-[11px] px-3 py-1 rounded border border-status-error text-status-error hover:bg-status-error/10"
+          className="border-status-error text-status-error hover:bg-status-error/10"
         >
           重新启动
-        </button>
+        </Button>
       </div>
     </div>
   )

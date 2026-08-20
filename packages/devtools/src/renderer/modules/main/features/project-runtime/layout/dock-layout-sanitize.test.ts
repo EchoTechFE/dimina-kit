@@ -57,7 +57,7 @@ function defaultTreeWithZeroedMainColumn(): LayoutTree {
   const t = JSON.parse(JSON.stringify(buildDefaultDockTree(W))) as LayoutTree
   const root = t.root as Extract<LayoutNode, { kind: 'split' }>
   // sanity: the structure we depend on is what we think it is.
-  if (root.kind !== 'split' || root.id !== 'root') {
+  if (root.kind !== 'split' || root.id !== 'dock-root') {
     throw new Error('default tree root is not the expected row split')
   }
   ;(root.sizes as number[])[1] = 0 // collapse the flexible main column.
@@ -74,16 +74,16 @@ describe('buildDockModel — heals 0-weight flexible panes on restore', () => {
     // references only the 7 known ids — so restore reaches the heal point and
     // does NOT bail to the default. (A 0 weight is a finite size, hence legal.)
     expect(validateTree(bad, KNOWN_7)).toEqual([])
-    expect(weightOf(bad, 'root', 1)).toBe(0)
+    expect(weightOf(bad, 'dock-root', 1)).toBe(0)
 
     const serialized = serializeLayout(bad)
     const model = buildDockModel(serialized, W, KNOWN_7)
     const restored = model.get()
 
     // The flexible main column is healed to a positive weight...
-    expect(weightOf(restored, 'root', 1)).toBeGreaterThan(0)
+    expect(weightOf(restored, 'dock-root', 1)).toBeGreaterThan(0)
     // ...the px-sized simulator child weight is untouched (out of heal scope)...
-    expect(weightOf(restored, 'root', 0)).toBe(weightOf(bad, 'root', 0))
+    expect(weightOf(restored, 'dock-root', 0)).toBe(weightOf(bad, 'dock-root', 0))
     // ...and the healed tree is still valid.
     expect(validateTree(restored, KNOWN_7)).toEqual([])
   })

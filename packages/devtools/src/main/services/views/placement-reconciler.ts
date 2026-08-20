@@ -5,7 +5,9 @@ import type {
   DesiredView,
   PlacementSnapshot,
 } from '@dimina-kit/electron-deck/layout'
+import { createCompositor } from '@dimina-kit/electron-deck/main'
 import { applyViewOps, type ViewOpTarget } from './apply-view-ops.js'
+import { createReconcilerContentViewHost } from './content-view-host.js'
 import type { DevtoolsExtra } from '../../../shared/view-ids.js'
 import type { ViewManagerContext } from './view-manager.js'
 
@@ -89,6 +91,19 @@ export function createPlacementReconciler(ctx: ViewManagerContext): PlacementRec
   const overlayDesired = new Map<string, DesiredView<DevtoolsExtra>>()
   const slots = new Map<string, ViewSlot>()
 
+  // The native attach/detach authority (see content-view-host.ts's doc-comment).
+  // Only `detach` is routed through it (mount()/unmount() bookkeeping plus one
+  // batched commit() per reconcileNow tick) — attach/reorder keep today's
+  // proven-correct immediate-addChildView behavior unchanged. See
+  // packages/devtools/docs/deck-adoption-decision.md for why this is scoped
+  // narrower than adopting electron-deck's high-level view API.
+  const contentViewHost = createReconcilerContentViewHost(ctx, slots)
+  const compositor = createCompositor(contentViewHost)
+
+  function layerOf(viewId: string): number {
+    return baseDesired.get(viewId)?.layer ?? overlayDesired.get(viewId)?.layer ?? 0
+  }
+
   function gateReadiness(v: DesiredView<DevtoolsExtra>): DesiredView<DevtoolsExtra> {
     const slot = slots.get(v.viewId)
     if (slot?.gateHidden?.()) return { ...v, placement: { visible: false } }
@@ -103,15 +118,19 @@ export function createPlacementReconciler(ctx: ViewManagerContext): PlacementRec
       if (slot.beforeAttach?.()) return
       const view = slot.ensureView ? slot.ensureView() : slot.getView()
       if (!view) return
-      ctx.windows.mainWindow.contentView.addChildView(view)
+      // Bookkeeping only (no commit) — keeps the compositor's intent state
+      // truthful for the batched detach below; the actual native effect is
+      // still the immediate addChildView via contentViewHost right after.
+      compositor.mount({ id: viewId }, { zone: layerOf(viewId) })
+      contentViewHost.addChildView({ id: viewId })
       slot.setAdded?.(true)
     },
     detach(viewId): void {
       const slot = slots.get(viewId)
-      const view = slot?.getView() ?? null
-      if (view && !ctx.windows.mainWindow.isDestroyed()) {
-        try { ctx.windows.mainWindow.contentView.removeChildView(view) } catch { /* already removed */ }
-      }
+      // Native removeChildView is deferred to the single compositor.commit()
+      // at the end of reconcileNow() (see below) — this call only records
+      // intent so commit() can plan the minimal, rollback-safe removal batch.
+      compositor.unmount(viewId)
       slot?.setAdded?.(false)
     },
     setBounds(viewId, bounds, extra): void {
@@ -132,13 +151,7 @@ export function createPlacementReconciler(ctx: ViewManagerContext): PlacementRec
     reorder(order): void {
       // A single attached view is already in place — nothing to reorder.
       if (order.length <= 1 || ctx.windows.mainWindow.isDestroyed()) return
-      const cv = ctx.windows.mainWindow.contentView
-      for (const viewId of order) {
-        const view = slots.get(viewId)?.getView() ?? null
-        if (view) {
-          try { cv.addChildView(view) } catch { /* already attached */ }
-        }
-      }
+      for (const viewId of order) contentViewHost.addChildView({ id: viewId })
     },
   }
 
@@ -163,6 +176,17 @@ export function createPlacementReconciler(ctx: ViewManagerContext): PlacementRec
     })
     placementState = result.state
     applyViewOps(result.ops, viewTarget)
+    // One batched native removal pass per tick for this tick's detach()
+    // intents (compositor.mount()/unmount() above only update in-memory
+    // intent). Swallow-and-log to preserve reconcileNow()'s existing "a
+    // detach failure is tolerated silently" posture — a CommitError here is a
+    // new failure mode Compositor introduces (the raw try/catch it replaced
+    // never threw), not something reconcileNow() should start propagating.
+    try {
+      compositor.commit()
+    } catch (err) {
+      console.error('[placement-reconciler] compositor commit failed', err)
+    }
   }
 
   function setPlacementSnapshot(snapshot: PlacementSnapshot<DevtoolsExtra>): void {
@@ -176,7 +200,15 @@ export function createPlacementReconciler(ctx: ViewManagerContext): PlacementRec
     registerView: (viewId, slot) => { slots.set(viewId, slot) },
     reconcileNow,
     setPlacementSnapshot,
-    forgetActual: (viewId) => { placementState.actual.delete(viewId) },
+    forgetActual: (viewId) => {
+      placementState.actual.delete(viewId)
+      // Drop the compositor's stale bookkeeping too — otherwise a future
+      // mount() for this id is a silent no-op against a ref that already left
+      // the contentView via a raw (non-compositor) removal elsewhere, and a
+      // later commit() can plan an addChildView against a destroyed view.
+      compositor.unmount(viewId)
+      contentViewHost.forget(viewId)
+    },
     setBaseDesired: (viewId, desired) => { baseDesired.set(viewId, desired) },
     deleteBaseDesired: (viewId) => { baseDesired.delete(viewId) },
     setOverlayDesired: (viewId, desired) => { overlayDesired.set(viewId, desired) },

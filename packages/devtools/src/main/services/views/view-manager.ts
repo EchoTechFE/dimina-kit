@@ -10,7 +10,9 @@ import { createPlacementReconciler } from './placement-reconciler.js'
 import { createWorkbenchView } from './workbench-view.js'
 import { createDevtoolsHost } from './native-simulator-devtools-host.js'
 import { createHostToolbarView } from './host-toolbar-view.js'
-import { createOverlayPanelsView } from './overlay-panels-view.js'
+import { createOverlayPanelsView, type TooltipShowPayload } from './overlay-panels-view.js'
+
+export type { TooltipShowPayload }
 import { createNativeSimulatorView } from './native-simulator-view.js'
 
 export {
@@ -160,6 +162,14 @@ export interface ViewManager {
   /** Destroy the popover overlay and notify the renderer. */
   hidePopover(): void
 
+  // ── Tooltip ────────────────────────────────────────────────────────────
+  /** Show (or reposition + retext, if already shown) the tooltip overlay
+   *  anchored to `data.anchor`. See `TooltipChannel`'s doc-comment for why
+   *  this is a WCV rather than a DOM/native tooltip. */
+  showTooltip(data: TooltipShowPayload): void
+  /** Withdraw the tooltip overlay (the native view is kept alive for reuse). */
+  hideTooltip(): void
+
   // ── Aggregate ──────────────────────────────────────────────────────────
   /** Re-apply layout for every currently visible overlay (on window resize). */
   repositionAll(): void
@@ -193,6 +203,8 @@ export interface ViewManager {
   getSettingsWebContentsId(): number | null
   /** Return the webContents ID of the popover overlay if alive, else null. */
   getPopoverWebContentsId(): number | null
+  /** Return the webContents ID of the tooltip overlay if alive, else null. */
+  getTooltipWebContentsId(): number | null
   /**
    * Return the webContents ID of the host-toolbar overlay if alive, else null.
    * The host-toolbar WCV is the one overlay whose OWN renderer drives an IPC
@@ -453,6 +465,8 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     hideSettings: overlayPanels.hideSettings,
     showPopover: overlayPanels.showPopover,
     hidePopover: overlayPanels.hidePopover,
+    showTooltip: overlayPanels.showTooltip,
+    hideTooltip: overlayPanels.hideTooltip,
     repositionAll: () => overlayPanels.reapplyPresentOverlays(),
     disposeProjectViews,
     disposeAll,
@@ -462,6 +476,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     getSettingsWebContents: overlayPanels.getSettingsWebContents,
     getSettingsWebContentsId: overlayPanels.getSettingsWebContentsId,
     getPopoverWebContentsId: overlayPanels.getPopoverWebContentsId,
+    getTooltipWebContentsId: overlayPanels.getTooltipWebContentsId,
     getHostToolbarWebContentsId: hostToolbar.getHostToolbarWebContentsId,
     getHostToolbarHeight: hostToolbar.getHostToolbarHeight,
     resize: () => overlayPanels.applySettingsBoundsIfPresent(),

@@ -20,8 +20,13 @@ export function themeBg(): string {
  * the desk is a neutral grey kept a touch off the window so the light-colored
  * phone keeps contrast against it in BOTH schemes.
  *
- * Dark:  hsl(0 0% 7%)  ≈ #121212  (the long-standing desk color — unchanged)
- * Light: hsl(0 0% 91%) ≈ #e8e8e8  (neutral grey; the white phone reads on it)
+ * Dark: #282828 | Light: #f7f7f9 — both match the renderer's --color-surface-2
+ * chrome tone (design.css). Dark is devtools-owned rather than a Cornetto
+ * --qd-muted alias: pixel-verified against Figma node 66:1729 at rgb(40,40,40),
+ * which doesn't match any Cornetto dark token (--qd-muted is #383838, off by
+ * 16 units — confirmed too light against the app's own dark-mode screenshots).
+ * Light's #f7f7f9 IS an exact --qd-muted match (verified against node 25:5),
+ * so only dark diverges from the Cornetto alias.
  *
  * MUST stay equal to the renderer's `--color-sim-bg` (design.css) and the
  * simulator page's `.device-shell-root` background (device-shell.css): the WCV,
@@ -29,7 +34,7 @@ export function themeBg(): string {
  * never flashes a mismatched strip. Update all three together.
  */
 export function simDeskBg(): string {
-  return nativeTheme.shouldUseDarkColors ? '#121212' : '#e8e8e8'
+  return nativeTheme.shouldUseDarkColors ? '#282828' : '#f7f7f9'
 }
 
 /**

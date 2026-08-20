@@ -640,6 +640,11 @@ export function createDevtoolsHost(
       destroyChildView(ctx.windows.mainWindow, simulatorView)
       simulatorView = null
       simulatorViewAdded = false
+      // destroyChildView bypasses the reconciler (raw removeChildView) — forget
+      // the reconciled mount state, same reasoning as removeSimulatorDevtoolsView
+      // above, so a future rebuild's mount() isn't a no-op against stale
+      // bookkeeping.
+      reconciler.forgetActual(VIEW_ID.simulatorDevtools)
     },
   }
 }

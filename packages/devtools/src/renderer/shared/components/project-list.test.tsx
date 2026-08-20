@@ -18,8 +18,8 @@ describe('ProjectList', () => {
       />
     )
     // The legacy "暂无项目" empty state was removed in favor of the
-    // always-present "新建项目" card seeded at the head of the grid.
-    expect(screen.getByText('新建项目')).toBeInTheDocument()
+    // always-present "新建小程序" card seeded at the head of the grid.
+    expect(screen.getByText('新建小程序')).toBeInTheDocument()
   })
 
   it('renders project cards when projects exist', () => {

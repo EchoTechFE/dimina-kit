@@ -1,4 +1,7 @@
 import type { ReactNode } from 'react'
+import { Button } from '@/shared/components/ui/button'
+import { Input } from '@/shared/components/ui/input'
+import { Switch } from '@/shared/components/ui/switch'
 import type { McpStatus, WorkbenchSettingsValue } from '@/shared/api'
 
 const MCP_SERVER_NAME = 'dimina'
@@ -35,13 +38,16 @@ export function computeMcpNeedsRestart(
   return mcp.enabled && mcpStatus.running && mcp.port !== mcpStatus.activePort
 }
 
-function StatusRow({ color, children }: { color: string; children: ReactNode }) {
+const STATUS_ROW_TONE_CLASS = {
+  dim: 'bg-text-dim',
+  success: 'bg-status-success',
+  error: 'bg-status-error',
+} as const
+
+function StatusRow({ tone, children }: { tone: keyof typeof STATUS_ROW_TONE_CLASS; children: ReactNode }) {
   return (
     <div className="flex items-center gap-2">
-      <span
-        className="inline-block w-2 h-2 rounded-full"
-        style={{ background: color }}
-      />
+      <span className={`inline-block w-2 h-2 rounded-full ${STATUS_ROW_TONE_CLASS[tone]}`} />
       <span className="text-[12px] text-text-secondary">{children}</span>
     </div>
   )
@@ -58,13 +64,13 @@ function McpStatusPanel({
     <div className="rounded p-3 space-y-2 border border-border bg-surface">
       <div className="text-[11px] font-medium text-text-secondary">当前状态</div>
       {!mcpEnabled ? (
-        <StatusRow color="var(--color-text-dim)">MCP 未启用</StatusRow>
+        <StatusRow tone="dim">MCP 未启用</StatusRow>
       ) : mcpStatus?.running ? (
-        <StatusRow color="var(--color-status-success)">
+        <StatusRow tone="success">
           MCP 已运行 - 端口 {mcpStatus.activePort}
         </StatusRow>
       ) : (
-        <StatusRow color="var(--color-status-error, #e54d4d)">
+        <StatusRow tone="error">
           MCP 未运行
           {mcpStatus?.error === 'port-in-use'
             ? `（端口 ${mcpStatus.configuredPort} 已被占用）`
@@ -114,30 +120,19 @@ export function McpTab({
 
       <div className="flex items-center justify-between">
         <span className="text-[12px] text-text-secondary">启用 MCP 服务</span>
-        <button
-          type="button"
-          onClick={onToggleMcp}
-          className="relative inline-flex h-5 w-9 shrink-0 rounded-full transition-colors"
-          style={{ background: mcpEnabled ? 'var(--color-accent)' : 'var(--color-surface-3)' }}
-        >
-          <span
-            className="inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform"
-            style={{ marginTop: 3, transform: mcpEnabled ? 'translateX(18px)' : 'translateX(3px)' }}
-          />
-        </button>
+        <Switch checked={mcpEnabled} onCheckedChange={onToggleMcp} />
       </div>
 
       <div className="flex items-center gap-3">
         <label className="text-[12px] shrink-0 w-16 text-text-secondary">SSE 端口</label>
-        <input
+        <Input
           type="number"
           min={1024}
           max={65535}
           value={mcpPortInput}
           onChange={(e) => onMcpPortInputChange(e.target.value)}
           disabled={!mcpEnabled}
-          className="w-24 h-7 px-2 rounded text-[12px] outline-none bg-surface border border-border text-text"
-          style={{ opacity: mcpEnabled ? 1 : 0.4 }}
+          className="w-24 h-7 px-2 text-[12px]"
         />
         <span className="text-[11px] text-text-dim">默认 7789</span>
       </div>
@@ -147,12 +142,9 @@ export function McpTab({
       {needsRestart && (
         <div className="rounded px-3 py-2 text-[12px] border bg-warn-bg text-[var(--color-status-warn)] flex items-center justify-between gap-3">
           <span>配置已变更，需要重启应用后生效</span>
-          <button
-            onClick={onRestart}
-            className="h-7 px-3 rounded text-[12px] font-medium text-white bg-accent hover:bg-accent-hover shrink-0"
-          >
+          <Button size="xs" onClick={onRestart} className="shrink-0">
             保存并重启
-          </button>
+          </Button>
         </div>
       )}
 
@@ -176,12 +168,9 @@ export function McpTab({
       </div>
 
       <div className="flex items-center gap-3">
-        <button
-          onClick={onSave}
-          className="h-7 px-4 rounded text-[13px] font-medium text-white bg-accent hover:bg-accent-hover"
-        >
+        <Button size="sm" onClick={onSave}>
           保存
-        </button>
+        </Button>
         {saved && <span className="text-[11px] text-status-success">已保存</span>}
       </div>
     </section>

@@ -1,18 +1,26 @@
 import type { WebContents } from 'electron'
 import { WebContentsView } from 'electron'
-import path from 'path'
+import { createOverlayPanel, type OverlayPanel } from '@dimina-kit/electron-deck/main'
 import { mainPreloadPath } from '../../utils/paths.js'
 import { applyNavigationHardening } from '../../windows/navigation-hardening.js'
 import * as layout from '../layout/index.js'
 import { HEADER_H } from '../../../shared/constants.js'
 import { VIEW_ID, VIEW_LAYER } from '../../../shared/view-ids.js'
-import { destroyChildView } from './destroy-child-view.js'
 import type { PlacementReconciler } from './placement-reconciler.js'
 import type { ViewManagerContext } from './view-manager.js'
 
+export interface TooltipShowPayload {
+  anchor: { x: number; y: number; width: number; height: number }
+  text: string
+}
+
 /**
- * The two main-owned overlay panels: the settings sheet (right-side panel over
- * a transparent backdrop) and the transient popover. Their bounds are
+ * The main-owned overlay panels: the settings sheet (right-side panel over a
+ * transparent backdrop), the transient compile-mode popover, and the tooltip.
+ * Each is an `OverlayPanel` (`@dimina-kit/electron-deck/main`) — the shared
+ * lazy-create/reuse/destroy WebContentsView lifecycle — wired into THIS
+ * module's own placement reconciler (the panel factory owns no z-order/bounds
+ * authority itself; see overlay-panel.ts's doc-comment). Bounds are
  * main-computed and published into the reconciler's `overlayDesired` (top-tier
  * layers, so a reorder keeps them above every base overlay).
  */
@@ -21,15 +29,18 @@ export interface OverlayPanelsView {
   hideSettings(): void
   showPopover(data: unknown): void
   hidePopover(): void
-  /** Re-apply whichever of settings/popover is currently present (window resize / toolbar height change). */
+  showTooltip(data: TooltipShowPayload): void
+  hideTooltip(): void
+  /** Re-apply whichever of settings/popover is currently present (window resize / toolbar height change). Tooltip excluded — it re-anchors on its own next show, a stale position while hidden doesn't matter. */
   reapplyPresentOverlays(): void
   /** Re-apply the settings overlay only (the resize entry point re-applies settings, not popover). */
   applySettingsBoundsIfPresent(): void
-  /** Destroy the cached settings view (aggregate simulator detach). */
+  /** Destroy the cached settings + tooltip views (aggregate simulator detach). */
   destroySettings(): void
   getSettingsWebContents(): WebContents | null
   getSettingsWebContentsId(): number | null
   getPopoverWebContentsId(): number | null
+  getTooltipWebContentsId(): number | null
 }
 
 export function createOverlayPanelsView(
@@ -40,147 +51,145 @@ export function createOverlayPanelsView(
     getHostToolbarHeight(): number
   },
 ): OverlayPanelsView {
-  let settingsView: WebContentsView | null = null
-  let popoverView: WebContentsView | null = null
-
   function overlayHeaderHeight(): number {
     return HEADER_H + deps.getHostToolbarHeight()
   }
 
-  // settings/popover bounds are main-computed; publish them into overlayDesired
-  // and let the reconciler place them (they are top-tier layers, so a reorder
-  // keeps them above every base overlay — the old raiseTopOverlays is gone).
-  function applySettingsBounds(): void {
-    if (!settingsView || ctx.windows.mainWindow.isDestroyed()) return
-    const [w = 0, h = 0] = ctx.windows.mainWindow.getContentSize()
-    reconciler.setOverlayDesired(VIEW_ID.settings, {
-      viewId: VIEW_ID.settings,
-      placement: {
-        visible: true,
-        bounds: layout.computeSettingsBounds(w, h, overlayHeaderHeight()),
-      },
-      layer: VIEW_LAYER.settings,
-    })
-    reconciler.reconcileNow()
+  function overlayDesiredSetter(viewId: string, layer: number) {
+    return (bounds: layout.Bounds | null): void => {
+      if (bounds === null) {
+        reconciler.deleteOverlayDesired(viewId)
+      } else {
+        reconciler.setOverlayDesired(viewId, {
+          viewId,
+          placement: { visible: true, bounds },
+          layer,
+        })
+      }
+      reconciler.reconcileNow()
+    }
   }
 
-  function applyPopoverBounds(): void {
-    if (!popoverView || ctx.windows.mainWindow.isDestroyed()) return
-    const [w = 0, h = 0] = ctx.windows.mainWindow.getContentSize()
-    reconciler.setOverlayDesired(VIEW_ID.popover, {
-      viewId: VIEW_ID.popover,
-      placement: {
-        visible: true,
-        bounds: layout.computePopoverBounds(w, h, overlayHeaderHeight()),
-      },
-      layer: VIEW_LAYER.popover,
-    })
-    reconciler.reconcileNow()
-  }
+  const settingsPanel: OverlayPanel = createOverlayPanel({
+    electron: { createWebContentsView: (opts) => new WebContentsView(opts) },
+    rendererDir: ctx.rendererDir,
+    entry: 'entries/settings/index.html',
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: false,
+      preload: mainPreloadPath,
+    },
+    hardenNavigation: (wc) => applyNavigationHardening(wc, ctx.rendererDir),
+    setDesired: overlayDesiredSetter(VIEW_ID.settings, VIEW_LAYER.settings),
+    registerView: (getView) => reconciler.registerView(VIEW_ID.settings, { getView }),
+  })
+
+  const popoverPanel: OverlayPanel<unknown> = createOverlayPanel<unknown>({
+    electron: { createWebContentsView: (opts) => new WebContentsView(opts) },
+    rendererDir: ctx.rendererDir,
+    entry: 'entries/popover/index.html',
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: false,
+      preload: mainPreloadPath,
+    },
+    hardenNavigation: (wc) => applyNavigationHardening(wc, ctx.rendererDir),
+    setDesired: overlayDesiredSetter(VIEW_ID.popover, VIEW_LAYER.popover),
+    registerView: (getView) => reconciler.registerView(VIEW_ID.popover, { getView }),
+    pushData: (view, data) => ctx.notify.popoverInit(view, data),
+  })
+
+  const tooltipPanel: OverlayPanel<TooltipShowPayload> = createOverlayPanel<TooltipShowPayload>({
+    electron: { createWebContentsView: (opts) => new WebContentsView(opts) },
+    rendererDir: ctx.rendererDir,
+    entry: 'entries/tooltip/index.html',
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: false,
+      preload: mainPreloadPath,
+    },
+    hardenNavigation: (wc) => applyNavigationHardening(wc, ctx.rendererDir),
+    setDesired: overlayDesiredSetter(VIEW_ID.tooltip, VIEW_LAYER.tooltip),
+    registerView: (getView) => reconciler.registerView(VIEW_ID.tooltip, { getView }),
+    pushData: (view, data) => ctx.notify.tooltipInit(view, data),
+  })
 
   async function showSettings(): Promise<void> {
-    if (!settingsView) {
-      settingsView = new WebContentsView({
-        webPreferences: {
-          nodeIntegration: false,
-          contextIsolation: true,
-          sandbox: false,
-          preload: mainPreloadPath,
-        },
-      })
-      // Overlay loads mainPreloadPath, so the same navigation rules as the
-      // main window apply — see navigation-hardening.ts.
-      applyNavigationHardening(settingsView.webContents, ctx.rendererDir)
-      // Transparent backing: the settings view now spans the whole content area
-      // (computeSettingsBounds) and its renderer paints a transparent backdrop +
-      // an opaque right-side panel, so the underlying editor/simulator show
-      // through and a backdrop click closes the overlay (mirrors the popover).
-      settingsView.setBackgroundColor('#00000000')
-      await settingsView.webContents.loadFile(
-        path.join(ctx.rendererDir, 'entries/settings/index.html'),
-      )
-    }
-    applySettingsBounds()
+    const [w = 0, h = 0] = ctx.windows.mainWindow.getContentSize()
+    settingsPanel.show(undefined, layout.computeSettingsBounds(w, h, overlayHeaderHeight()))
   }
 
   function hideSettings(): void {
-    reconciler.deleteOverlayDesired(VIEW_ID.settings)
-    reconciler.reconcileNow()
+    settingsPanel.hide()
   }
 
   function showPopover(data: unknown): void {
+    // Popover carries no state across opens (always fresh init data) — force a
+    // brand-new instance rather than reusing/repositioning a live one (and
+    // notify like any other close, via the shared hidePopover()).
     hidePopover()
-    const popover = new WebContentsView({
-      webPreferences: {
-        nodeIntegration: false,
-        contextIsolation: true,
-        sandbox: false,
-        preload: mainPreloadPath,
-      },
-    })
-    // Popover overlay loads mainPreloadPath — same navigation rules apply.
-    applyNavigationHardening(popover.webContents, ctx.rendererDir)
-    popoverView = popover
-    popover.setBackgroundColor('#00000000')
-    applyPopoverBounds()
-    popover.webContents.once('did-finish-load', () => {
-      ctx.notify.popoverInit(popover, data)
-    })
-    popover.webContents.loadFile(
-      path.join(ctx.rendererDir, 'entries/popover/index.html'),
-    )
+    const [w = 0, h = 0] = ctx.windows.mainWindow.getContentSize()
+    popoverPanel.show(data, layout.computePopoverBounds(w, h, overlayHeaderHeight()))
   }
 
   function hidePopover(): void {
-    if (!popoverView) return
+    if (!popoverPanel.isPresent()) return
+    popoverPanel.destroy(ctx.windows.mainWindow)
+    reconciler.forgetActual(VIEW_ID.popover)
     reconciler.deleteOverlayDesired(VIEW_ID.popover)
-    // Destroy the WCV first (removeChildView + close), THEN reconcile: the detach
-    // op then finds the view already gone and does not double-removeChildView.
-    destroyChildView(ctx.windows.mainWindow, popoverView)
-    popoverView = null
     reconciler.reconcileNow()
     ctx.notify.popoverClosed()
   }
 
+  function showTooltip(data: TooltipShowPayload): void {
+    const [w = 0, h = 0] = ctx.windows.mainWindow.getContentSize()
+    const bounds = layout.computeTooltipBounds(data.anchor, w, h)
+    tooltipPanel.show(data, bounds)
+  }
+
+  function hideTooltip(): void {
+    tooltipPanel.hide()
+  }
+
   function reapplyPresentOverlays(): void {
-    if (reconciler.hasOverlayDesired(VIEW_ID.settings)) applySettingsBounds()
-    if (reconciler.hasOverlayDesired(VIEW_ID.popover)) applyPopoverBounds()
+    if (settingsPanel.isPresent() && reconciler.hasOverlayDesired(VIEW_ID.settings)) void showSettings()
+    if (popoverPanel.isPresent() && reconciler.hasOverlayDesired(VIEW_ID.popover)) {
+      const [w = 0, h = 0] = ctx.windows.mainWindow.getContentSize()
+      popoverPanel.reposition(layout.computePopoverBounds(w, h, overlayHeaderHeight()))
+    }
   }
 
   function applySettingsBoundsIfPresent(): void {
-    if (reconciler.hasOverlayDesired(VIEW_ID.settings)) applySettingsBounds()
+    if (settingsPanel.isPresent() && reconciler.hasOverlayDesired(VIEW_ID.settings)) void showSettings()
   }
 
   function destroySettings(): void {
-    destroyChildView(ctx.windows.mainWindow, settingsView)
-    settingsView = null
+    settingsPanel.destroy(ctx.windows.mainWindow)
+    tooltipPanel.destroy(ctx.windows.mainWindow)
+    // Both destroy() calls above bypass the reconciler (raw removeChildView) —
+    // forget their reconciled state so a future mount() of a rebuilt instance
+    // isn't a silent no-op against stale bookkeeping (see placement-reconciler
+    // .ts's forgetActual doc-comment).
+    reconciler.forgetActual(VIEW_ID.settings)
+    reconciler.forgetActual(VIEW_ID.tooltip)
   }
-
-  reconciler.registerView(VIEW_ID.settings, { getView: () => settingsView })
-  reconciler.registerView(VIEW_ID.popover, { getView: () => popoverView })
 
   return {
     showSettings,
     hideSettings,
     showPopover,
     hidePopover,
+    showTooltip,
+    hideTooltip,
     reapplyPresentOverlays,
     applySettingsBoundsIfPresent,
     destroySettings,
-    getSettingsWebContents: () => {
-      if (!settingsView) return null
-      if (settingsView.webContents.isDestroyed()) return null
-      return settingsView.webContents
-    },
-    getSettingsWebContentsId: () => {
-      if (!settingsView) return null
-      if (settingsView.webContents.isDestroyed()) return null
-      return settingsView.webContents.id
-    },
-    getPopoverWebContentsId: () => {
-      if (!popoverView) return null
-      if (popoverView.webContents.isDestroyed()) return null
-      return popoverView.webContents.id
-    },
+    getSettingsWebContents: () => settingsPanel.getWebContents(),
+    getSettingsWebContentsId: () => settingsPanel.getWebContentsId(),
+    getPopoverWebContentsId: () => popoverPanel.getWebContentsId(),
+    getTooltipWebContentsId: () => tooltipPanel.getWebContentsId(),
   }
 }

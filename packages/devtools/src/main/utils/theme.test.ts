@@ -233,9 +233,9 @@ describe('simDeskBg', () => {
     const simDeskBg = (mod as Record<string, unknown>)['simDeskBg'] as () => string
 
     stubs.nativeTheme.shouldUseDarkColors = true
-    expect(simDeskBg()).toBe('#121212')
+    expect(simDeskBg()).toBe('#282828')
 
     stubs.nativeTheme.shouldUseDarkColors = false
-    expect(simDeskBg()).toBe('#e8e8e8')
+    expect(simDeskBg()).toBe('#f7f7f9')
   })
 })

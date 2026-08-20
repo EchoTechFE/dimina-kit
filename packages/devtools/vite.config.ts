@@ -37,6 +37,7 @@ export default defineConfig({
         index: resolve(rendererRoot, 'entries/main/index.html'),
         popover: resolve(rendererRoot, 'entries/popover/index.html'),
         settings: resolve(rendererRoot, 'entries/settings/index.html'),
+        tooltip: resolve(rendererRoot, 'entries/tooltip/index.html'),
         workbenchSettings: resolve(rendererRoot, 'entries/workbench-settings/index.html'),
       },
     },

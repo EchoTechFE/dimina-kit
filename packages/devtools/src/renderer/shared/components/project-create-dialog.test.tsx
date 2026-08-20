@@ -1,5 +1,5 @@
 /**
- * The built-in "新建项目" dialog (suggestion mode).
+ * The built-in "新建小程序" dialog (suggestion mode).
  *
  * Contract for name ↔ path coupling:
  *   - On open the path is suggested from `<defaultBaseDir>/<slug(name)>`.

@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
+import { Bug, Code2, PanelLeft, PanelRight, Smartphone } from 'lucide-react'
 import { Button } from '@/shared/components/ui/button'
 import { cn } from '@/shared/lib/utils'
+import { useOverlayTooltip } from '@/shared/lib/use-overlay-tooltip'
 import { closePanel, closePanelForUser } from '@dimina-kit/electron-deck/layout'
 import type { LayoutModel, PanelRegistry } from '@dimina-kit/electron-deck/layout'
 import { buildPresetDockTree, DEFAULT_DEBUG_PANELS, listPanelVisibility, reopenPanel } from '../layout/dock-layout'
@@ -28,8 +30,36 @@ interface LayoutControlsProps {
  * whole region via the raw `closePanel` mutation. The last visible region can't be
  * hidden (closing the sole panel is an engine no-op, so the UI would desync).
  *
- * Active state design (matching the historical control): active → filled icon +
- * `bg-surface-active` chip + accent ring; inactive → outline icon, de-emphasised.
+ * Active state: `ghost` variant (full-contrast --qd-foreground icon) plus an
+ * explicit --color-surface-active chip. `primary-soft` was tried first but its
+ * icon/chip contrast sits right at the WCAG 3:1 UI-component floor, which
+ * washes out a 2px-stroke icon in dark mode; `secondary` was tried next but
+ * --qd-secondary is IDENTICAL to this toolbar's own --color-surface-2 chrome
+ * tone in light mode (both #f7f7f9) — the chip became invisible, silently
+ * dropping the selected-state affordance (caught via a live light-mode
+ * screenshot showing all three toggles looking unselected). --color-surface-active
+ * is devtools-owned specifically so it can't collide with either theme's chrome
+ * tone. Inactive → de-emphasised (60% opacity). Icons are plain lucide glyphs —
+ * the chip alone carries the on/off affordance, so no separate filled/outline
+ * icon variant is needed.
+ *
+ * Tooltips in this toolbar (here and in LayoutAlignmentToggle /
+ * LayoutDevtoolsPositionToggles) use `useOverlayTooltip` (a dedicated tooltip
+ * overlay WebContentsView), NOT the `ui/tooltip` Radix component and NOT the
+ * native `title` attribute — DO NOT "upgrade" this to either. This row sits
+ * directly above the Simulator/Editor native WebContentsViews; Electron
+ * composites those as separate surfaces above ALL of the host window's own
+ * web content (including its browser-drawn `title` tooltip, which lives in
+ * that same paint surface), so anything that pops toward those regions
+ * renders BEHIND the WCV — invisible, no CSS z-index or OS tooltip layer can
+ * reach above a native view from inside the main window's own renderer.
+ * Confirmed live twice: first a Radix Tooltip migration, then a `title`
+ * fallback, both silently broke every tooltip in this row (user-reported,
+ * unreproducible via CDP screenshot since Page.captureScreenshot doesn't
+ * composite WCVs either — real mouse hover in the actual app was needed to
+ * see it). `useOverlayTooltip` renders in its OWN top-tier WebContentsView
+ * (VIEW_LAYER.tooltip, above even settings/popover), the same placement
+ * mechanism that already keeps those two above the simulator/editor.
  */
 export function LayoutVisibilityToggles({ model, registry, simPanelWidth }: LayoutControlsProps) {
   // Re-render on every model emission so the toggles track live visibility (a
@@ -75,25 +105,25 @@ export function LayoutVisibilityToggles({ model, registry, simPanelWidth }: Layo
         active={simulatorVisible}
         disabled={simulatorVisible && visibleRegions === 1}
         onClick={() => toggleSingle('simulator', simulatorVisible)}
-        title={simulatorVisible ? '隐藏模拟器' : '显示模拟器'}
+        label={simulatorVisible ? '隐藏模拟器' : '显示模拟器'}
         testId="layout-toolbar-toggle-simulator"
-        icon={<SimulatorIcon filled={simulatorVisible} />}
+        icon={<Smartphone className="size-3.5" />}
       />
       <ToggleButton
         active={editorVisible}
         disabled={editorVisible && visibleRegions === 1}
         onClick={() => toggleSingle('editor', editorVisible)}
-        title={editorVisible ? '隐藏编辑器' : '显示编辑器'}
+        label={editorVisible ? '隐藏编辑器' : '显示编辑器'}
         testId="layout-toolbar-toggle-editor"
-        icon={<EditorIcon filled={editorVisible} />}
+        icon={<Code2 className="size-3.5" />}
       />
       <ToggleButton
         active={debugVisible}
         disabled={debugVisible && visibleRegions === 1}
         onClick={toggleDebug}
-        title={debugVisible ? '隐藏调试器' : '显示调试器'}
+        label={debugVisible ? '隐藏调试器' : '显示调试器'}
         testId="layout-toolbar-toggle-debug"
-        icon={<DebugIcon filled={debugVisible} />}
+        icon={<Bug className="size-3.5" />}
       />
     </div>
   )
@@ -118,17 +148,19 @@ export function LayoutAlignmentToggle({ model, layout, simPanelWidth }: PresetCo
     layout.setSimulatorAlignment(next)
     model.apply(() => buildPresetDockTree(simPanelWidth, next, devtoolsPosition))
   }
+  const label = isLeft ? '模拟器位置：左侧（点击切换到右侧）' : '模拟器位置：右侧（点击切换到左侧）'
+  const tooltip = useOverlayTooltip(label)
   return (
     <Button
       variant="icon"
       size="icon"
       onClick={flip}
-      title={isLeft ? '模拟器位置：左侧（点击切换到右侧）' : '模拟器位置：右侧（点击切换到左侧）'}
+      aria-label={label}
       data-testid="layout-toolbar-alignment-toggle"
       data-alignment={simulatorAlignment}
-      className="text-text-muted hover:text-text hover:bg-surface-3"
+      {...tooltip}
     >
-      <AlignmentIcon side={simulatorAlignment} />
+      {isLeft ? <PanelLeft className="size-3.5" /> : <PanelRight className="size-3.5" />}
     </Button>
   )
 }
@@ -145,10 +177,10 @@ export function LayoutDevtoolsPositionToggles({ model, layout, simPanelWidth }: 
     layout.setDevtoolsPosition(position)
     model.apply(() => buildPresetDockTree(simPanelWidth, simulatorAlignment, position))
   }
-  const presets: { id: DevtoolsPosition; title: string }[] = [
-    { id: 'inEditor', title: '调试器位置：在编辑器面板中' },
-    { id: 'belowSimulator', title: '调试器位置：在模拟器下方' },
-    { id: 'rightOfSimulator', title: '调试器位置：在模拟器右侧' },
+  const presets: { id: DevtoolsPosition; label: string }[] = [
+    { id: 'inEditor', label: '调试器位置：在编辑器面板中' },
+    { id: 'belowSimulator', label: '调试器位置：在模拟器下方' },
+    { id: 'rightOfSimulator', label: '调试器位置：在模拟器右侧' },
   ]
   return (
     <div className="flex items-center gap-0.5" role="group" aria-label="调试器位置">
@@ -157,7 +189,7 @@ export function LayoutDevtoolsPositionToggles({ model, layout, simPanelWidth }: 
           key={p.id}
           active={devtoolsPosition === p.id}
           onClick={() => apply(p.id)}
-          title={p.title}
+          label={p.label}
           testId={`layout-toolbar-devtools-${p.id}`}
           icon={<DevtoolsPositionIcon variant={p.id} />}
         />
@@ -170,130 +202,68 @@ function ToggleButton({
   active,
   disabled,
   onClick,
-  title,
+  label,
   testId,
   icon,
 }: {
   active: boolean
   disabled?: boolean
   onClick: () => void
-  title: string
+  label: string
   testId: string
   icon: React.ReactNode
 }) {
+  const tooltip = useOverlayTooltip(label)
   return (
     <Button
-      variant="icon"
+      variant="ghost"
       size="icon"
       onClick={onClick}
       disabled={disabled}
-      title={title}
+      aria-label={label}
       aria-pressed={active}
       data-testid={testId}
       data-active={active ? 'true' : 'false'}
       className={cn(
-        'text-text-muted/45 hover:text-text-muted hover:bg-surface-3',
-        active && 'bg-surface-active text-text ring-1 ring-accent/50 hover:bg-surface-active hover:text-text',
+        active ? 'bg-[var(--color-surface-active)]' : 'opacity-60',
       )}
+      {...tooltip}
     >
       {icon}
     </Button>
   )
 }
 
-// Icons take `filled`: when true the body is painted (`fill="currentColor"`),
-// otherwise the outline variant — the shape delta is the primary "this panel is
-// on" affordance (restored verbatim from the pre-dockable toolbar).
-
-function SimulatorIcon({ filled }: { filled: boolean }) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      {filled ? (
-        <>
-          <rect x="4" y="1.5" width="8" height="13" rx="1.5" fill="currentColor" stroke="currentColor" />
-          <line x1="6.5" y1="12.5" x2="9.5" y2="12.5" stroke="var(--color-surface-2)" strokeWidth="1.2" />
-        </>
-      ) : (
-        <>
-          <rect x="4" y="1.5" width="8" height="13" rx="1.5" />
-          <line x1="6.5" y1="12.5" x2="9.5" y2="12.5" />
-        </>
-      )}
-    </svg>
-  )
-}
-
-function EditorIcon({ filled }: { filled: boolean }) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={filled ? 2 : 1.6} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <polyline points="5,4 1.5,8 5,12" />
-      <polyline points="11,4 14.5,8 11,12" />
-      <line x1="9.5" y1="3" x2="6.5" y2="13" />
-    </svg>
-  )
-}
-
-function DebugIcon({ filled }: { filled: boolean }) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      {filled ? (
-        <ellipse cx="8" cy="9" rx="3.5" ry="4.5" fill="currentColor" stroke="currentColor" />
-      ) : (
-        <ellipse cx="8" cy="9" rx="3.5" ry="4.5" />
-      )}
-      <line x1="6" y1="3.5" x2="5" y2="2" />
-      <line x1="10" y1="3.5" x2="11" y2="2" />
-      <line x1="4.5" y1="7.5" x2="2" y2="6.5" />
-      <line x1="4.5" y1="9.5" x2="2" y2="9.5" />
-      <line x1="4.5" y1="11.5" x2="2" y2="12.5" />
-      <line x1="11.5" y1="7.5" x2="14" y2="6.5" />
-      <line x1="11.5" y1="9.5" x2="14" y2="9.5" />
-      <line x1="11.5" y1="11.5" x2="14" y2="12.5" />
-    </svg>
-  )
-}
-
-/** Two-pane miniature with the simulator's current side filled in. */
-function AlignmentIcon({ side }: { side: SimulatorAlignment }) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <rect x="2" y="3" width="12" height="10" rx="1.5" />
-      {side === 'left' ? (
-        <rect x="2.6" y="3.6" width="4.8" height="8.8" rx="0.8" fill="currentColor" stroke="none" />
-      ) : (
-        <rect x="8.6" y="3.6" width="4.8" height="8.8" rx="0.8" fill="currentColor" stroke="none" />
-      )}
-    </svg>
-  )
-}
-
-/** 16×16 miniatures of the three devtools-position presets (the devtools
- * sub-region is the filled block). */
+/** 24×24-grid miniatures of the three devtools-position presets (the devtools
+ * sub-region is the filled block), drawn in lucide's stroke convention so
+ * they sit consistently alongside the imported icons in this toolbar. */
 function DevtoolsPositionIcon({ variant }: { variant: DevtoolsPosition }) {
   if (variant === 'inEditor') {
     return (
-      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" aria-hidden="true">
-        <rect x="2" y="3" width="12" height="10" rx="1.5" />
-        <line x1="6.5" y1="3" x2="6.5" y2="13" />
-        <rect x="7.1" y="8.5" width="6.3" height="4" rx="0.6" fill="currentColor" stroke="none" />
+      <svg className="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <rect x="3" y="3" width="18" height="18" rx="2" />
+        <line x1="9" y1="3" x2="9" y2="21" />
+        <path d="M9 15h12" />
+        <rect x="9" y="15" width="12" height="6" fill="currentColor" stroke="none" />
       </svg>
     )
   }
   if (variant === 'belowSimulator') {
     return (
-      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" aria-hidden="true">
-        <rect x="2" y="3" width="12" height="10" rx="1.5" />
-        <line x1="8" y1="3" x2="8" y2="13" />
-        <rect x="2.6" y="8.5" width="4.8" height="4" rx="0.6" fill="currentColor" stroke="none" />
+      <svg className="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <rect x="3" y="3" width="18" height="18" rx="2" />
+        <line x1="12" y1="3" x2="12" y2="21" />
+        <path d="M3 15h9" />
+        <rect x="3" y="15" width="9" height="6" fill="currentColor" stroke="none" />
       </svg>
     )
   }
   return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" aria-hidden="true">
-      <rect x="2" y="3" width="12" height="10" rx="1.5" />
-      <line x1="6" y1="3" x2="6" y2="13" />
-      <line x1="9.5" y1="3" x2="9.5" y2="13" />
-      <rect x="6.3" y="3.6" width="3" height="8.8" rx="0.6" fill="currentColor" stroke="none" />
+    <svg className="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <line x1="9" y1="3" x2="9" y2="21" />
+      <line x1="15" y1="3" x2="15" y2="21" />
+      <rect x="9" y="3" width="6" height="18" fill="currentColor" stroke="none" />
     </svg>
   )
 }

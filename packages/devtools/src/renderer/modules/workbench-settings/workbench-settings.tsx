@@ -1,5 +1,9 @@
 import React, { useEffect, useState } from 'react'
 import { DEFAULT_CDP_PORT } from '../../../shared/constants'
+import { Button } from '@/shared/components/ui/button'
+import { Input } from '@/shared/components/ui/input'
+import { Switch } from '@/shared/components/ui/switch'
+import { Tabs, TabsList, TabsTrigger } from '@/shared/components/ui/tabs'
 import {
   getCdpStatus,
   getMcpStatus,
@@ -32,69 +36,26 @@ export const THEME_LABELS: Record<ThemeSource, string> = {
   light: '浅色',
 }
 
-function ToggleSwitch({
-  checked,
-  onClick,
-}: {
-  checked: boolean
-  onClick: () => void
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="relative inline-flex h-5 w-9 shrink-0 rounded-full transition-colors"
-      style={{ background: checked ? 'var(--color-accent)' : 'var(--color-surface-3)' }}
-    >
-      <span
-        className="inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform"
-        style={{ marginTop: 3, transform: checked ? 'translateX(18px)' : 'translateX(3px)' }}
-      />
-    </button>
-  )
-}
-
-function TabBar({ activeTab, onSelect }: { activeTab: TabId, onSelect: (id: TabId) => void }) {
-  return (
-    <div className="flex items-center border-b border-border shrink-0">
-      {TABS.map((tab) => (
-        <button
-          key={tab.id}
-          className={`flex-1 py-2.5 text-[12px] text-center transition-colors ${
-            activeTab === tab.id
-              ? 'text-accent border-b-2 border-accent'
-              : 'text-text-secondary hover:text-text'
-          }`}
-          onClick={() => onSelect(tab.id)}
-        >
-          {tab.label}
-        </button>
-      ))}
-    </div>
-  )
-}
-
+/**
+ * Active state: Cornetto `Button` `secondary` variant (neutral chip + near-
+ * white/black text) rather than `soft` (primary-soft bg + primary text) —
+ * `soft`'s text contrast sits under WCAG AA 4.5:1 for normal text in dark
+ * mode (~3:1, same primary-on-primary-soft pairing flagged for icon strokes
+ * in LayoutVisibilityToggles). `secondary` matches that fix's approach.
+ */
 function ThemeModeSelector({ theme, onSelect }: { theme: ThemeSource, onSelect: (theme: ThemeSource) => void }) {
   return (
-    <div className="flex rounded overflow-hidden border border-border text-[11px]">
-      {(['system', 'dark', 'light'] as ThemeSource[]).map((mode, i) => {
-        const active = theme === mode
-        return (
-          <button
-            key={mode}
-            onClick={() => onSelect(mode)}
-            className={[
-              'px-3 py-1 transition-colors',
-              i > 0 ? 'border-l border-border' : '',
-              active
-                ? 'bg-accent text-white'
-                : 'text-text-secondary hover:text-text hover:bg-surface-3',
-            ].join(' ')}
-          >
-            {THEME_LABELS[mode]}
-          </button>
-        )
-      })}
+    <div className="flex gap-1">
+      {(['system', 'dark', 'light'] as ThemeSource[]).map((mode) => (
+        <Button
+          key={mode}
+          variant={theme === mode ? 'secondary' : 'ghost'}
+          size="xs"
+          onClick={() => onSelect(mode)}
+        >
+          {THEME_LABELS[mode]}
+        </Button>
+      ))}
     </div>
   )
 }
@@ -125,11 +86,11 @@ function GeneralTab({
         </div>
         <div className="flex items-center justify-between">
           <span className="text-[12px] text-text-secondary">监听文件变化自动编译</span>
-          <ToggleSwitch checked={autoBuildEnabled} onClick={() => onAutoBuildChange(!autoBuildEnabled)} />
+          <Switch checked={autoBuildEnabled} onCheckedChange={onAutoBuildChange} />
         </div>
         <div className="flex items-center justify-between">
           <span className="text-[12px] text-text-secondary">编译完成后自动刷新模拟器</span>
-          <ToggleSwitch checked={autoReloadEnabled} onClick={() => onAutoReloadChange(!autoReloadEnabled)} />
+          <Switch checked={autoReloadEnabled} onCheckedChange={onAutoReloadChange} />
         </div>
       </section>
 
@@ -156,8 +117,7 @@ function CdpStatusPanel({ cdpStatus }: { cdpStatus: CdpStatus | null }) {
       <div className="text-[11px] font-medium text-text-secondary">当前状态</div>
       <div className="flex items-center gap-2">
         <span
-          className="inline-block w-2 h-2 rounded-full"
-          style={{ background: cdpStatus?.active ? 'var(--color-status-success)' : 'var(--color-text-dim)' }}
+          className={`inline-block w-2 h-2 rounded-full ${cdpStatus?.active ? 'bg-status-success' : 'bg-text-dim'}`}
         />
         <span className="text-[12px] text-text-secondary">
           {cdpStatus?.active
@@ -220,20 +180,19 @@ function DebugTab({
 
       <div className="flex items-center justify-between">
         <span className="text-[12px] text-text-secondary">启用 DevTools Protocol</span>
-        <ToggleSwitch checked={cdpEnabled} onClick={onToggleCdp} />
+        <Switch checked={cdpEnabled} onCheckedChange={onToggleCdp} />
       </div>
 
       <div className="flex items-center gap-3">
         <label className="text-[12px] shrink-0 w-16 text-text-secondary">调试端口</label>
-        <input
+        <Input
           type="number"
           min={1024}
           max={65535}
           value={portInput}
           onChange={(e) => onPortInputChange(e.target.value)}
           disabled={!cdpEnabled}
-          className="w-24 h-7 px-2 rounded text-[12px] outline-none bg-surface border border-border text-text"
-          style={{ opacity: cdpEnabled ? 1 : 0.4 }}
+          className="w-24 h-7 px-2 text-[12px]"
         />
         <span className="text-[11px] text-text-dim">默认 {DEFAULT_CDP_PORT}</span>
       </div>
@@ -247,12 +206,9 @@ function DebugTab({
       )}
 
       <div className="flex items-center gap-3">
-        <button
-          onClick={onSave}
-          className="h-7 px-4 rounded text-[13px] font-medium text-white bg-accent hover:bg-accent-hover"
-        >
+        <Button size="sm" onClick={onSave}>
           保存
-        </button>
+        </Button>
         {saved && <span className="text-[11px] text-status-success">已保存</span>}
       </div>
     </section>
@@ -359,7 +315,15 @@ export default function WorkbenchSettings() {
 
   return (
     <div className="flex flex-col h-screen bg-surface text-text">
-      <TabBar activeTab={activeTab} onSelect={setActiveTab} />
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as TabId)} className="shrink-0 gap-0">
+        <TabsList className="w-full">
+          {TABS.map((tab) => (
+            <TabsTrigger key={tab.id} value={tab.id} className="flex-1 justify-center">
+              {tab.label}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </Tabs>
 
       <div className="flex-1 overflow-y-auto p-4">
         {activeTab === 'general' && (

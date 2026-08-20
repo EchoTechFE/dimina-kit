@@ -2,9 +2,9 @@
  * Settings entry point in the toolbar.
  *
  * CONTRACT:
- *  - ProjectToolbar renders a STATELESS settings button with `title="设置"`
- *    (title is how every icon button in this toolbar exposes its accessible
- *    name — cf. the 重新编译 button).
+ *  - ProjectToolbar renders a STATELESS settings button with `aria-label="设置"`
+ *    (aria-label + a Cornetto Tooltip is how every icon button in this
+ *    toolbar exposes its accessible name — cf. the 重新编译 button).
  *  - Clicking it calls the renderer wrapper `setSettingsVisible(true)`
  *    from `@/shared/api` (settings-api.ts), which drives the
  *    'settings:setVisible' main handler → views.showSettings() +
@@ -68,7 +68,7 @@ async function renderToolbar() {
 describe('settings entry point: ProjectToolbar gains a 设置 button', () => {
   it('renders a button titled 设置', async () => {
     const { container } = await renderToolbar()
-    const button = container.querySelector('button[title="设置"]')
+    const button = container.querySelector('button[aria-label="设置"]')
     expect(
       button,
       'the toolbar must expose a settings entry point — without it the embedded project-settings overlay is unreachable from the UI (only raw IPC could open it)',
@@ -77,7 +77,7 @@ describe('settings entry point: ProjectToolbar gains a 设置 button', () => {
 
   it('clicking it opens the embedded settings overlay via setSettingsVisible(true)', async () => {
     const { container } = await renderToolbar()
-    const button = container.querySelector<HTMLButtonElement>('button[title="设置"]')
+    const button = container.querySelector<HTMLButtonElement>('button[aria-label="设置"]')
     expect(button, 'settings button must exist (see previous test)').not.toBeNull()
 
     apiMocks.setSettingsVisible.mockClear()
@@ -98,7 +98,7 @@ describe('settings entry point: ProjectToolbar gains a 设置 button', () => {
 
   it('the button is stateless open-only: a second click opens again (no toggle-to-close)', async () => {
     const { container } = await renderToolbar()
-    const button = container.querySelector<HTMLButtonElement>('button[title="设置"]')
+    const button = container.querySelector<HTMLButtonElement>('button[aria-label="设置"]')
     expect(button).not.toBeNull()
 
     apiMocks.setSettingsVisible.mockClear()

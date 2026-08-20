@@ -73,7 +73,7 @@ export default function Popover() {
             启动页面
           </label>
           <Select
-            className="flex-1 min-w-0 bg-surface-input border-text-dim text-text text-[12px] py-0.5"
+            className="flex-1 min-w-0 text-[12px] py-0.5"
             value={config.startPage}
             onChange={(e) =>
               setConfig((c) => ({ ...c, startPage: e.target.value }))
@@ -98,7 +98,7 @@ export default function Popover() {
           </label>
           <Input
             type="number"
-            className="w-20 bg-surface-input border-text-dim text-text text-[12px]"
+            className="w-20 text-[12px]"
             value={config.scene}
             onChange={(e) =>
               setConfig((c) => ({
@@ -117,13 +117,13 @@ export default function Popover() {
             {config.queryParams.map((p, i) => (
               <div key={i} className="flex gap-1.5 items-center">
                 <Input
-                  className="w-24 bg-surface-input border-text-dim text-text text-[12px]"
+                  className="w-24 text-[12px]"
                   value={p.key}
                   placeholder="参数名"
                   onChange={(e) => updateParam(i, 'key', e.target.value)}
                 />
                 <Input
-                  className="w-24 bg-surface-input border-text-dim text-text text-[12px]"
+                  className="w-24 text-[12px]"
                   value={p.value}
                   placeholder="参数值"
                   onChange={(e) => updateParam(i, 'value', e.target.value)}

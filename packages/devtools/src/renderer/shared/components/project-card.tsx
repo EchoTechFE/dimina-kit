@@ -3,6 +3,13 @@ import { Button } from '@/shared/components/ui/button'
 import { formatLastOpened } from '@/shared/lib/utils'
 import type { Project } from '../types'
 
+/** First grapheme of the project name, upper-cased for Latin script — used as
+ * a text-logo fallback when the project has no real icon/thumbnail. */
+function initialOf(name: string): string {
+  const first = Array.from(name.trim())[0]
+  return first ? first.toUpperCase() : '?'
+}
+
 export function ProjectCard({
   project: p,
   onOpen,
@@ -17,30 +24,42 @@ export function ProjectCard({
   const [hovered, setHovered] = useState(false)
   return (
     <div
-      className="relative bg-surface border border-border rounded-lg overflow-hidden cursor-pointer transition-all duration-150 hover:border-accent hover:-translate-y-0.5"
+      className="relative flex flex-col min-w-[240px] w-full bg-surface border border-border rounded-[var(--qd-radius-xl)] overflow-hidden cursor-pointer transition-all duration-150 hover:border-[var(--qd-primary)] hover:shadow-[var(--qd-shadow-md)]"
       onClick={() => onOpen(p)}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
       {thumbnail ? (
-        <img src={thumbnail} className="h-28 w-full object-cover object-top" alt="" />
+        <img
+          src={thumbnail}
+          className="aspect-square w-full object-cover object-top mb-[-24px] bg-bg"
+          alt=""
+        />
       ) : (
-        <div className="h-28 bg-surface-thumb" />
+        <div className="aspect-square w-full mb-[-24px] bg-bg" />
       )}
-      <div className="p-3">
+      <div className="relative flex flex-col gap-3 px-4 pb-4 shrink-0">
         <div
-          className="text-sm font-medium text-text-white mb-1 truncate"
-          title={p.name}
+          className="size-12 shrink-0 rounded-[var(--qd-radius-md)] bg-[var(--qd-primary)] flex items-center justify-center text-[20px] font-medium leading-none text-[color:var(--qd-on-solid)]"
+          aria-hidden="true"
         >
-          {p.name}
+          {initialOf(p.name)}
         </div>
-        <div
-          className="text-[11px] text-text-secondary truncate"
-          title={p.path}
-        >
-          {p.path}
+        <div className="flex flex-col gap-1">
+          <div
+            className="text-[15px] font-medium leading-[22px] text-text truncate"
+            title={p.name}
+          >
+            {p.name}
+          </div>
+          <div
+            className="text-[12px] leading-4 text-text-secondary truncate"
+            title={p.path}
+          >
+            {p.path}
+          </div>
         </div>
-        <div className="text-[11px] text-text-dim mt-1.5">
+        <div className="text-[12px] leading-4 text-text-secondary">
           {formatLastOpened(p.lastOpened)}
         </div>
       </div>

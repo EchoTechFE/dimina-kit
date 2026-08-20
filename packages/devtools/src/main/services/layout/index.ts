@@ -73,3 +73,37 @@ export function computePopoverBounds(
     height: contentHeight - headerHeight,
   }
 }
+
+/** Single-line tooltip footprint. Fixed rather than measured from the
+ * renderer's actual content: measuring would mean create → load → self-report
+ * → resize before the tooltip can appear, adding a round trip to a UI that
+ * needs to feel instant. 300×32 fits every label in this app's toolbars today
+ * (longest is 17 CJK chars, ~254px at 13px) with margin; the renderer's own
+ * CSS still `overflow:hidden` + `text-overflow:ellipsis`s as a safety net if a
+ * future label runs longer. */
+export const TOOLTIP_W = 300
+export const TOOLTIP_H = 32
+const TOOLTIP_GAP = 6
+const TOOLTIP_EDGE_MARGIN = 4
+
+/**
+ * Position the tooltip overlay relative to its trigger's own bounding rect
+ * (both in main-window content coordinates). Prefers directly below the
+ * anchor, flips above when there isn't room; always clamped horizontally
+ * inside the content area.
+ */
+export function computeTooltipBounds(
+  anchor: Bounds,
+  contentWidth: number,
+  contentHeight: number,
+): Bounds {
+  const below = anchor.y + anchor.height + TOOLTIP_GAP
+  const fitsBelow = below + TOOLTIP_H <= contentHeight
+  const y = fitsBelow ? below : Math.max(0, anchor.y - TOOLTIP_GAP - TOOLTIP_H)
+
+  const centeredX = anchor.x + anchor.width / 2 - TOOLTIP_W / 2
+  const maxX = Math.max(TOOLTIP_EDGE_MARGIN, contentWidth - TOOLTIP_W - TOOLTIP_EDGE_MARGIN)
+  const x = Math.min(maxX, Math.max(TOOLTIP_EDGE_MARGIN, centeredX))
+
+  return { x, y, width: TOOLTIP_W, height: TOOLTIP_H }
+}

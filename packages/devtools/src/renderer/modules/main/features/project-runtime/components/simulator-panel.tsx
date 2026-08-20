@@ -311,7 +311,7 @@ export function SimulatorPanel({
         {compileStatus.status === "compiling" && !hasBeenReady && (
           <div
             data-testid="sim-compiling-overlay"
-            className="absolute inset-0 flex items-center justify-center bg-black/50 z-10"
+            className="absolute inset-0 flex items-center justify-center bg-[var(--color-overlay)] z-10"
           >
             <div className="text-text-dim text-[13px]">正在编译中...</div>
           </div>
@@ -326,7 +326,7 @@ export function SimulatorPanel({
           </div>
         )}
         {compileStatus.status === "error" && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/70 z-10">
+          <div className="absolute inset-0 flex items-center justify-center bg-[var(--color-overlay-heavy)] z-10">
             <div className="text-center p-4">
               <div className="text-status-error text-[14px] font-medium mb-2">
                 编译失败

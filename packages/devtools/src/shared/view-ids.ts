@@ -11,6 +11,7 @@ export const VIEW_ID = {
   hostToolbar: 'host-toolbar',
   settings: 'settings',
   popover: 'popover',
+  tooltip: 'tooltip',
 } as const
 
 export type DevtoolsViewId = (typeof VIEW_ID)[keyof typeof VIEW_ID]
@@ -26,9 +27,19 @@ export interface DevtoolsExtra {
 // the embedded workbench occupy disjoint dock regions). The host-toolbar strip
 // sits above the base row; settings and popover are the top tier (settings below
 // a simultaneously-open popover), replacing the imperative raiseTopOverlays.
+// tooltip sits above ALL of them — it must never be occluded by a popover/
+// settings sheet either, and it's the reason this layer exists at all: a
+// DOM-portaled (Radix) tooltip rendered by the main window's OWN renderer, or
+// even the browser-native `title` attribute, is part of that renderer's paint
+// surface and renders BEHIND every other WCV mounted on top of it (simulator,
+// editor, settings, popover) — CSS z-index cannot reach across that boundary.
+// Routing the tooltip through this same reconciler (a real WCV of its own,
+// placed via `setOverlayDesired`) is what actually fixes that; see
+// `overlay-panels-view.ts`'s tooltip functions.
 export const VIEW_LAYER = {
   base: 0,
   hostToolbar: 5,
   settings: 10,
   popover: 20,
+  tooltip: 30,
 } as const
