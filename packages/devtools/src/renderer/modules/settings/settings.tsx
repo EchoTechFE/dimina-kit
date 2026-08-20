@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { Input } from '@/shared/components/ui/input'
 import { Switch } from '@/shared/components/ui/switch'
-import { Tabs, TabsList, TabsTrigger } from '@/shared/components/ui/tabs'
+import { SettingsTabBar } from '@/shared/components/settings-tab-bar'
 import {
   emitProjectSettingsChanged,
   emitSettingsConfigChanged,
@@ -83,15 +83,7 @@ export default function Settings() {
       className="fixed top-0 right-0 h-full w-[320px] flex flex-col bg-surface text-text border-l border-border shadow-[0_8px_24px_var(--color-overlay-heavy)]"
       onClick={(e) => e.stopPropagation()}
     >
-      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as TabId)} className="shrink-0 gap-0">
-        <TabsList className="w-full">
-          {TABS.map((tab) => (
-            <TabsTrigger key={tab.id} value={tab.id} className="flex-1 justify-center">
-              {tab.label}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-      </Tabs>
+      <SettingsTabBar tabs={TABS} activeTab={activeTab} onTabChange={setActiveTab} />
 
       <div className="flex-1 overflow-y-auto p-4">
         {activeTab === 'local' && (

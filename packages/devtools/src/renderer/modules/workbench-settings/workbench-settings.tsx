@@ -3,7 +3,7 @@ import { DEFAULT_CDP_PORT } from '../../../shared/constants'
 import { Button } from '@/shared/components/ui/button'
 import { Input } from '@/shared/components/ui/input'
 import { Switch } from '@/shared/components/ui/switch'
-import { Tabs, TabsList, TabsTrigger } from '@/shared/components/ui/tabs'
+import { SettingsTabBar } from '@/shared/components/settings-tab-bar'
 import {
   getCdpStatus,
   getMcpStatus,
@@ -315,15 +315,7 @@ export default function WorkbenchSettings() {
 
   return (
     <div className="flex flex-col h-screen bg-surface text-text">
-      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as TabId)} className="shrink-0 gap-0">
-        <TabsList className="w-full">
-          {TABS.map((tab) => (
-            <TabsTrigger key={tab.id} value={tab.id} className="flex-1 justify-center">
-              {tab.label}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-      </Tabs>
+      <SettingsTabBar tabs={TABS} activeTab={activeTab} onTabChange={setActiveTab} />
 
       <div className="flex-1 overflow-y-auto p-4">
         {activeTab === 'general' && (
