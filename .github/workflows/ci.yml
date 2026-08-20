@@ -179,10 +179,10 @@ jobs:
           pnpm exec tsc -p tools/pawl
           node --test ".github/scripts/*.test.js" "tools/pawl/*.test.ts"
 
-      # setup-pawl installs the binary, runs `check`, and (comment defaults on)
-      # upserts one sticky baseline-vs-current comment on the PR rendered from
-      # the --format json verdict, then enforces the gate exit code. The install
-      # leaves pawl on PATH, so baseline-guard below reuses it.
+      # setup-pawl runs `check` and (comment defaults on) upserts one sticky
+      # baseline-vs-current PR comment, then enforces the gate exit code. The
+      # guard below deliberately uses the repository-pinned CLI: the action's
+      # PATH binary may expose a newer command vocabulary than the lockfile.
       - name: Anti-regression gate
         uses: tiangong-dev/pawl@v0.4.0
         with:
@@ -192,4 +192,4 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           git fetch --depth=1 origin "$GITHUB_BASE_REF"
-          pawl baseline-guard FETCH_HEAD
+          pnpm exec pawl baseline-guard FETCH_HEAD
