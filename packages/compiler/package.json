@@ -33,6 +33,7 @@
   ],
   "scripts": {
     "check:wasm-alignment": "node scripts/check-wasm-alignment.js",
+    "snapshot:upstream-versions": "node scripts/snapshot-upstream-versions.js",
     "build:node": "node scripts/build-compiler.js node",
     "build:browser": "node scripts/build-compiler.js browser",
     "build": "pnpm run build:node && pnpm run build:browser",
@@ -65,7 +66,7 @@
     "autoprefixer": "^10.5.3",
     "buffer": "^6.0.3",
     "cheerio": "^1.2.0",
-    "cssnano": "^8.0.6",
+    "cssnano": "^8.0.7",
     "esbuild": "^0.28.2",
     "estree-walker": "^3.0.3",
     "events": "^3.3.0",

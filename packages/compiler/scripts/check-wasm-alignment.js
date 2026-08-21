@@ -1,16 +1,22 @@
-import { access, readFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
 import path from 'node:path'
+import { resolveInstalledVersion } from './resolve-installed-version.js'
 
 function printUsage() {
   console.log(
     'Usage: node scripts/check-wasm-alignment.js\n\n' +
-      'Fails if packages/compiler and upstream @dimina/compiler (dimina submodule,\n' +
-      'dimina/fe/packages/compiler) resolve any shared dependency — or the wasm/native\n' +
-      'build pairs oxc-parser/@oxc-parser/binding-wasm32-wasi and esbuild/esbuild-wasm —\n' +
-      'to a different installed version. Requires both workspaces to be installed\n' +
-      '(pnpm install, pnpm -C dimina/fe install).',
+      'Fails if packages/compiler resolves any shared dependency to a version that\n' +
+      'differs from upstream-lockfile-snapshot.json — a frozen record of what upstream\n' +
+      '@dimina/compiler (dimina submodule) resolved at the commit the snapshot was taken\n' +
+      'at — or if the submodule has since moved to a different commit than the snapshot\n' +
+      'records. Also checks the wasm/native build pairs\n' +
+      'oxc-parser/@oxc-parser/binding-wasm32-wasi and esbuild/esbuild-wasm.\n' +
+      'Requires packages/compiler to be installed (pnpm install); does not need\n' +
+      "dimina/fe's own workspace installed. Run scripts/snapshot-upstream-versions.js to\n" +
+      'refresh the snapshot after bumping the dimina submodule pointer or upgrading a\n' +
+      'packages/compiler dependency upstream also shares.',
   )
 }
 
@@ -22,90 +28,47 @@ if (process.argv.includes('--help') || process.argv.includes('-h')) {
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(__dirname, '..')
 const kitPkgPath = path.join(root, 'package.json')
-const diminaFeRoot = path.resolve(root, '../../dimina/fe')
-const upstreamPkgPath = path.join(diminaFeRoot, 'packages/compiler/package.json')
+const diminaRoot = path.resolve(root, '../../dimina')
+const snapshotPath = path.join(root, 'upstream-lockfile-snapshot.json')
 
 async function readJson(p) {
   return JSON.parse(await readFile(p, 'utf8'))
 }
 
-async function exists(p) {
-  try {
-    await access(p)
-    return true
-  } catch {
-    return false
-  }
-}
-
-// package.json only records the declared semver *range* (e.g. "^3.5.39");
-// for a dep whose major is >=1 that range also matches later minors
-// installed independently on each side. Walk the actual node_modules
-// resolution each side's own package.json would use, and climb to the
-// nearest package.json whose name matches (not just the first package.json
-// found, which could belong to a nested dependency).
-//
-// requiredPrefix guards the upstream (dimina/fe) side specifically: dimina/fe
-// is nested inside this repo, so if its own node_modules isn't installed,
-// Node's resolution walks up past it and can silently land in kit's own
-// hoisted node_modules — "resolved" would then just be comparing kit against
-// itself and reporting false alignment. Reject any resolution that doesn't
-// land under dimina/fe instead of treating it as a valid answer.
-async function resolveInstalledVersion(anchorPackageJsonPath, depName, requiredPrefix) {
-  // Real ESM resolution (`import.meta.resolve`), not CJS `require.resolve`:
-  // an ESM-only dep whose `exports` map lists only an `import` condition (no
-  // `require`/`default` fallback) throws ERR_PACKAGE_PATH_NOT_EXPORTED under
-  // CJS resolution — a real, correctly-installed package then gets
-  // misreported as "unresolved" on BOTH sides, regardless of whether the two
-  // sides actually agree on a version.
-  //
-  // `import.meta.resolve`'s second (parent) argument is NOT honored by
-  // Node's node_modules directory search here — it silently resolves
-  // relative to THIS script's own location no matter what parent URL is
-  // passed, which would make every call below resolve from this script's
-  // directory instead of the intended anchor. Spawning a child process with
-  // `cwd` set to the anchor's own directory sidesteps that: single-arg
-  // `import.meta.resolve(specifier)` correctly walks up from `cwd`.
-  let entry
-  try {
-    const out = execFileSync(
-      process.execPath,
-      ['--input-type=module', '-e', `console.log(import.meta.resolve(${JSON.stringify(depName)}))`],
-      { cwd: path.dirname(anchorPackageJsonPath), encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
-    )
-    entry = fileURLToPath(out.trim())
-  } catch {
-    return null
-  }
-  if (requiredPrefix && !entry.startsWith(requiredPrefix + path.sep)) {
-    return null
-  }
-  let dir = path.dirname(entry)
-  for (let hop = 0; hop < 16; hop++) {
-    const candidate = path.join(dir, 'package.json')
-    if (await exists(candidate)) {
-      const pkg = await readJson(candidate)
-      if (pkg.name === depName) return pkg.version
-    }
-    const parent = path.dirname(dir)
-    if (parent === dir) break
-    dir = parent
-  }
-  return null
-}
-
-// This package's node/browser bundles are esbuild-driven mirrors of
-// @dimina/compiler (upstream, in the dimina submodule) — same compiler
-// logic against a caller-injected fs. Compare live, not a hardcoded dep
-// list, so a newly-shared dependency is picked up automatically.
 const kitPkg = await readJson(kitPkgPath)
-let upstreamPkg
+
+let snapshot
 try {
-  upstreamPkg = await readJson(upstreamPkgPath)
+  snapshot = await readJson(snapshotPath)
 } catch (err) {
   console.error(
-    `check-wasm-alignment: could not read upstream package.json at ${upstreamPkgPath} (${err.message})\n` +
-      'The dimina submodule looks uninitialized. Run: git submodule update --init dimina',
+    `check-wasm-alignment: could not read ${snapshotPath} (${err.message})\n` +
+      'Run: node scripts/snapshot-upstream-versions.js',
+  )
+  process.exit(2)
+}
+
+let diminaCommit
+try {
+  diminaCommit = execFileSync('git', ['-C', diminaRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
+} catch (err) {
+  console.error(
+    `check-wasm-alignment: could not read dimina submodule HEAD (${err.message})\n` +
+      'Run: git submodule update --init dimina',
+  )
+  process.exit(2)
+}
+
+// The snapshot is only valid for the exact submodule commit it was taken at:
+// upstream's own package.json (and therefore which deps it resolves) can
+// change between commits. A pointer bump that doesn't come with a refreshed
+// snapshot is a stale-data problem, not a real version mismatch — surface it
+// as its own failure so it isn't confused with an actual drift.
+if (diminaCommit !== snapshot.diminaCommit) {
+  console.error(
+    `check-wasm-alignment: upstream-lockfile-snapshot.json was captured at dimina@${snapshot.diminaCommit}, ` +
+      `but the submodule is now pinned to dimina@${diminaCommit}.\n` +
+      'Run: node scripts/snapshot-upstream-versions.js, then commit the refreshed snapshot.',
   )
   process.exit(2)
 }
@@ -118,7 +81,6 @@ try {
 // install by construction. Drift is only possible for deps kit resolves on
 // its own — i.e. the ones it declares here.
 const kitDeps = { ...kitPkg.dependencies, ...kitPkg.devDependencies }
-const upstreamDeps = { ...upstreamPkg.dependencies }
 
 const mismatches = []
 const unresolved = []
@@ -127,21 +89,17 @@ const unresolved = []
 // @vue/compiler-sfc's compileStyle/compileTemplate drive CSS scope-hash and
 // template codegen — not a cosmetic tool), so all of them get the same
 // resolved-version check as the wasm toolchain, not just oxc-parser/esbuild.
-// dimina/fe doesn't commit a lockfile (gitignored upstream), so its resolved
-// version can drift from kit's pinned lockfile purely from the passage of
-// time — that drift is exactly what this check exists to catch, not noise
-// to suppress by only comparing the declared specifier string.
 for (const name of Object.keys(kitDeps)) {
-  if (!(name in upstreamDeps)) continue
+  if (!(name in snapshot.versions)) continue
 
   const kitVersion = await resolveInstalledVersion(kitPkgPath, name)
-  const upstreamVersion = await resolveInstalledVersion(upstreamPkgPath, name, diminaFeRoot)
-  if (!kitVersion || !upstreamVersion) {
-    unresolved.push(`  ${name}: kit=${kitVersion ?? 'unresolved'} upstream=${upstreamVersion ?? 'unresolved'}`)
+  const upstreamVersion = snapshot.versions[name]
+  if (!kitVersion) {
+    unresolved.push(`  ${name}: kit=unresolved upstream(snapshot)=${upstreamVersion}`)
     continue
   }
   if (kitVersion !== upstreamVersion) {
-    mismatches.push(`  ${name}: kit resolves ${kitVersion}, upstream(@dimina/compiler) resolves ${upstreamVersion}`)
+    mismatches.push(`  ${name}: kit resolves ${kitVersion}, upstream snapshot resolves ${upstreamVersion}`)
   }
 }
 
@@ -173,15 +131,15 @@ if (unresolved.length > 0) {
     'check-wasm-alignment: could not resolve installed versions for some shared deps — ' +
       'this proves nothing either way, so treat it as a setup failure, not a pass:\n' +
       unresolved.join('\n') +
-      '\nRun: pnpm install && pnpm -C dimina/fe install',
+      '\nRun: pnpm install',
   )
   process.exit(2)
 }
 
 if (mismatches.length > 0) {
   console.error(
-    'check-wasm-alignment: drift between packages/compiler and upstream @dimina/compiler ' +
-      '(dimina submodule) — this package re-implements dmcc against the same toolchain:\n' +
+    'check-wasm-alignment: drift between packages/compiler and the upstream @dimina/compiler ' +
+      'snapshot (dimina submodule) — this package re-implements dmcc against the same toolchain:\n' +
       mismatches.join('\n') +
       '\nRealign the drifted side (bump/pin in package.json, then pnpm install) and rebuild ' +
       '(pnpm --filter @dimina-kit/compiler build).',
@@ -189,4 +147,4 @@ if (mismatches.length > 0) {
   process.exit(1)
 }
 
-console.log('check-wasm-alignment: packages/compiler deps aligned with upstream @dimina/compiler')
+console.log('check-wasm-alignment: packages/compiler deps aligned with upstream @dimina/compiler snapshot')
