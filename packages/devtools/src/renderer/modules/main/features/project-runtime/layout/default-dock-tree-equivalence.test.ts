@@ -88,7 +88,10 @@ function topLevelRowRegions(tree: LayoutTree): Set<string>[] {
 /** The five debug-tab panels, in pinned WeChat-DevTools order (legacy strip). */
 const DEBUG_PANELS = ['wxml', 'appdata', 'storage', 'console', 'compile'] as const
 
-/** The seven — and only seven — dock panels of the canonical default. */
+/** The canonical default dock panels: the editor is intentionally absent. */
+const KNOWN_6 = new Set<string>(['simulator', ...DEBUG_PANELS])
+
+/** The full registry of dock panels (incl. the hidden-by-default editor). */
 const KNOWN_7 = new Set<string>(['simulator', 'editor', ...DEBUG_PANELS])
 
 const W = 375
@@ -96,19 +99,22 @@ const W = 375
 // ── #1. The default tree is the SOLE, canonical default ───────────────────
 
 describe('default dock tree — the one and only default (post-consolidation)', () => {
-  it('contains EXACTLY the 7 known panels, once each, validating clean against the 7-id set', () => {
+  it('contains EXACTLY the 6 default panels (editor absent), once each, validating clean against the 7-id set', () => {
     // catches: consolidation drops a panel from the default, smuggles an extra
     // panel (e.g. a leftover legacy id) into the default, or duplicates a panel
     // across two groups — any of which means the lone DockView default is NOT
-    // the canonical 7-panel arrangement the product shipped before the cut.
+    // the canonical arrangement the product ships on a fresh install. The
+    // workbench editor is deliberately NOT among them (debugger-first default;
+    // it returns via the toolbar toggle / in-editor preset).
     const tree = buildDefaultDockTree(W)
 
     const occurrences = listPanelOccurrences(tree.root)
-    // exactly 7 occurrences, no duplicates → exactly the 7 known ids, once each.
-    expect(occurrences).toHaveLength(7)
-    expect(new Set(occurrences)).toEqual(KNOWN_7)
+    // exactly 6 occurrences, no duplicates → exactly the 6 known ids, once each.
+    expect(occurrences).toHaveLength(6)
+    expect(new Set(occurrences)).toEqual(KNOWN_6)
+    expect(occurrences).not.toContain('editor')
 
-    // and the engine accepts it against EXACTLY the 7-id known set (no orphans,
+    // and the engine accepts it against the full 7-id known set (no orphans,
     // no all-fixed split). This is what `buildDockModel` restores against.
     expect(validateTree(tree, KNOWN_7)).toEqual([])
   })
@@ -117,28 +123,26 @@ describe('default dock tree — the one and only default (post-consolidation)', 
 // ── #2. Equivalence to the legacy default arrangement ─────────────────────
 
 describe('default dock tree — equivalent to the legacy FrameTree default arrangement', () => {
-  it('is simulator-left, editor present, single 5-tab debug strip [wxml,appdata,storage,console,compile] active=wxml, sim pinned to W', () => {
+  it('is simulator-left with the editor hidden, single 5-tab debug strip [wxml,appdata,storage,console,compile] active=wxml, sim pinned to W', () => {
     // catches: consolidation un-pins the simulator width (phone region
     // stretches), reorders the row so the simulator is no longer leading/left,
-    // makes the editor disappear from the default, scatters the debug strip
+    // LETS THE EDITOR BACK INTO the default, scatters the debug strip
     // into multiple groups, reorders the 5-tab strip, or changes the initially
-    // active debug tab away from WXML — i.e. ANY drift from the legacy default
-    // UX. (Overlaps the split test on the strip-order + fixedPx facts; kept as
-    // ONE consolidated equivalence assertion so the legacy arrangement reads
-    // end-to-end.)
+    // active debug tab away from WXML — i.e. ANY drift from the default
+    // debugger-first UX. (Overlaps the split test on the strip-order + fixedPx
+    // facts; kept as ONE consolidated equivalence assertion so the default
+    // arrangement reads end-to-end.)
     const tree = buildDefaultDockTree(W)
 
-    // -- ROW ORDER: simulator region is LEADING (left of editor & debug). --
+    // -- ROW ORDER: simulator region is LEADING (left of debug). --
     // This horizontal ordering is the value-add the split test never asserts.
     const regions = topLevelRowRegions(tree)
     expect(regions.length).toBeGreaterThanOrEqual(2)
     const simRegionIdx = regions.findIndex((r) => r.has('simulator'))
-    const editorRegionIdx = regions.findIndex((r) => r.has('editor'))
     const debugRegionIdx = regions.findIndex((r) =>
       DEBUG_PANELS.some((id) => r.has(id)),
     )
     expect(simRegionIdx).toBe(0)
-    expect(simRegionIdx).toBeLessThan(editorRegionIdx)
     expect(simRegionIdx).toBeLessThan(debugRegionIdx)
     // simulator sits ALONE on the leading edge (its own region), not co-mingled.
     expect(regions[0]).toEqual(new Set(['simulator']))
@@ -156,9 +160,10 @@ describe('default dock tree — equivalent to the legacy FrameTree default arran
       root.constraints?.some((c, i) => i !== simChildIdx && c === null),
     ).toBe(true)
 
-    // -- EDITOR present in the default. --
+    // -- EDITOR hidden in the default (debugger-first; returns via toolbar
+    //    toggle / in-editor preset). --
     const allIds = new Set(listPanelOccurrences(tree.root))
-    expect(allIds.has('editor')).toBe(true)
+    expect(allIds.has('editor')).toBe(false)
 
     // -- The 5 debug panels co-located in ONE tab group, pinned order, wxml. --
     const groups = collectTabGroups(tree.root)

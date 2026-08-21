@@ -101,6 +101,8 @@ const DEBUG_PANELS = ['wxml', 'appdata', 'storage', 'console', 'compile'] as con
 
 /** All seven dock panels after the split. */
 const KNOWN_7 = new Set<string>(['simulator', 'editor', ...DEBUG_PANELS])
+/** The canonical default set — the editor is hidden by default. */
+const DEFAULT_6 = new Set<string>(['simulator', ...DEBUG_PANELS])
 
 // ── B1. buildDockRegistry: 5 fine panels replace coarse `debug` ──────────
 
@@ -190,9 +192,10 @@ describe('buildDefaultDockTree — 5 debug panels grouped on the right', () => {
     expect(validateTree(tree, KNOWN_7)).toEqual([])
   })
 
-  it('references exactly the 7 panels and all appear', () => {
+  it('references exactly the 6 default panels (editor hidden) and all appear', () => {
     const tree = buildDefaultDockTree(375)
-    expect(collectPanelIds(tree.root)).toEqual(KNOWN_7)
+    expect(collectPanelIds(tree.root)).toEqual(DEFAULT_6)
+    expect(collectPanelIds(tree.root).has('editor')).toBe(false)
   })
 
   it('co-locates the 5 debug panels in ONE tab group, in pinned order, active=wxml', () => {
@@ -236,11 +239,12 @@ describe('buildDefaultDockTree — 5 debug panels grouped on the right', () => {
 // ── B3. buildDockModel restore is fallback-safe with the NEW id set ───────
 
 describe('buildDockModel — fallback safety under the new known-panel set', () => {
-  it('serialized=null → builds the default 7-panel tree', () => {
+  it('serialized=null → builds the default 6-panel tree (editor hidden)', () => {
     const model = buildDockModel(null, 375, KNOWN_7)
     const tree = model.get()
     expect(validateTree(tree, KNOWN_7)).toEqual([])
-    expect(collectPanelIds(tree.root)).toEqual(KNOWN_7)
+    expect(collectPanelIds(tree.root)).toEqual(DEFAULT_6)
+    expect(collectPanelIds(tree.root).has('editor')).toBe(false)
   })
 
   it('a tree referencing all 5 new debug ids restores verbatim (round-trip)', () => {
@@ -254,7 +258,7 @@ describe('buildDockModel — fallback safety under the new known-panel set', () 
     const restored = model.get()
 
     expect(restored).toEqual(original)
-    expect(collectPanelIds(restored.root)).toEqual(KNOWN_7)
+    expect(collectPanelIds(restored.root)).toEqual(DEFAULT_6)
     const fixedPxValues = collectConstraints(restored.root).map((c) => c.minPx)
     expect(fixedPxValues).toContain(W)
     expect(fixedPxValues).not.toContain(375)
@@ -298,7 +302,7 @@ describe('buildDockModel — fallback safety under the new known-panel set', () 
     const tree = model.get()
 
     expect(collectPanelIds(tree.root).has('debug')).toBe(false)
-    expect(collectPanelIds(tree.root)).toEqual(KNOWN_7)
+    expect(collectPanelIds(tree.root)).toEqual(DEFAULT_6)
     expect(validateTree(tree, KNOWN_7)).toEqual([])
   })
 
@@ -310,6 +314,6 @@ describe('buildDockModel — fallback safety under the new known-panel set', () 
 
     const tree = model!.get()
     expect(validateTree(tree, KNOWN_7)).toEqual([])
-    expect(collectPanelIds(tree.root)).toEqual(KNOWN_7)
+    expect(collectPanelIds(tree.root)).toEqual(DEFAULT_6)
   })
 })
