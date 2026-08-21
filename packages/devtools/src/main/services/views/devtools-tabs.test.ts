@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEVTOOLS_KEPT_VIEW_IDS, buildCustomizeTabsScript } from './devtools-tabs.js'
+import { DEVTOOLS_KEPT_VIEW_IDS, buildCustomizeTabsScript, buildDevtoolsSoftMenuScript } from './devtools-tabs.js'
 
 describe('DEVTOOLS_KEPT_VIEW_IDS', () => {
   it('keeps Elements / Console / Sources / Network in the default bar', () => {
@@ -64,5 +64,23 @@ describe('buildCustomizeTabsScript', () => {
     const src = buildCustomizeTabsScript()
     expect(src).toContain('clearInterval')
     expect(src).toContain('tr>120')
+  })
+})
+
+describe('buildDevtoolsSoftMenuScript', () => {
+  it('forces ContextMenu#show to render page menus (useSoftMenu = true)', () => {
+    const src = buildDevtoolsSoftMenuScript()
+    expect(src).toContain('useSoftMenu = true')
+    expect(src).toContain('prototype.show')
+    expect(src).toContain('ContextMenu.ContextMenu')
+  })
+
+  it('is a self-contained IIFE that cannot throw when EUI is absent', () => {
+    const src = buildDevtoolsSoftMenuScript()
+    expect(src).toContain('typeof C.prototype.show')
+    expect(src).toContain('catch (_)')
+    // Must NOT flip the host-wide isHostedMode flag — that breaks the
+    // front-end's target data flow (Console/Network panels go empty).
+    expect(src).not.toContain('isHostedMode')
   })
 })
