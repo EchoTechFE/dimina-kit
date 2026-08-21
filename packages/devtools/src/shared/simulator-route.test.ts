@@ -8,6 +8,7 @@ import {
   encodePageSpec,
   encodeRouteValue,
   getCurrentPagePath,
+  getCurrentPageRoute,
   parseLocationRoute,
   parseRoute,
 } from './simulator-route'
@@ -237,6 +238,37 @@ describe('getCurrentPagePath', () => {
 
   it('returns empty string for unparseable input', () => {
     expect(getCurrentPagePath('')).toBe('')
+  })
+})
+
+describe('getCurrentPageRoute', () => {
+  it('returns the current page as pagePath?k=v with the query intact', () => {
+    expect(
+      getCurrentPageRoute('http://x:1/simulator.html?appId=wx&entry=pages/a/a&page=pages/b/b%3Fid%3D42%26tag%3Dhot'),
+    ).toBe('pages/b/b?id=42&tag=hot')
+  })
+
+  it('returns a bare path when the current page has no query', () => {
+    expect(
+      getCurrentPageRoute('http://x:1/simulator.html?appId=wx&entry=pages/a/a&page=pages/b/b'),
+    ).toBe('pages/b/b')
+  })
+
+  it('strips the internal scene bookkeeping param (matches what onLoad received)', () => {
+    expect(
+      getCurrentPageRoute('http://x:1/simulator.html?appId=wx&entry=pages/a/a%3Fscene%3D1001&page=pages/b/b%3Fid%3D42%26scene%3D1001'),
+    ).toBe('pages/b/b?id=42')
+  })
+
+  it('round-trips through decodePageSpec so a recompile can rebuild the URL', () => {
+    const route = getCurrentPageRoute(
+      'http://x:1/simulator.html?appId=wx&entry=pages/a/a&page=pages/b/b%3Fid%3D42%26scene%3D1001',
+    )
+    expect(decodePageSpec(route)).toEqual({ pagePath: 'pages/b/b', query: { id: '42' } })
+  })
+
+  it('returns empty string for unparseable input', () => {
+    expect(getCurrentPageRoute('')).toBe('')
   })
 })
 

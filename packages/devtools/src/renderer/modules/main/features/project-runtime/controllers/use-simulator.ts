@@ -14,7 +14,8 @@ import {
 import type { AppInfo } from '@/shared/api'
 import {
   buildSimulatorUrl,
-  getCurrentPagePath,
+  decodePageSpec,
+  getCurrentPageRoute,
 } from '../../../../../../shared/simulator-route'
 import type { CompileConfig } from '@/shared/types'
 import type { CompileStatus, DeviceType } from './use-project-runtime-controller'
@@ -45,7 +46,13 @@ export interface UseSimulatorProps {
 
 export interface SimulatorHookResult {
   simulatorUrl: string
+  /** Bare page path of the visible top-of-stack page (no query). Kept query-free
+   * so AppData's bridge auto-follow (`activePagePath`) keeps matching. */
   currentPage: string
+  /** `pagePath?k=v&…` route of the visible page, query included. Shown in the
+   * simulator's page-path bar (WeChat DevTools parity) and used to restore the
+   * current page's params on a watcher hot reload. */
+  currentRoute: string
 }
 
 export function useSimulator(props: UseSimulatorProps): SimulatorHookResult {
@@ -67,21 +74,26 @@ export function useSimulator(props: UseSimulatorProps): SimulatorHookResult {
     return buildSimulatorUrl(appInfo.appId, compileConfig, port)
   }, [appInfo, compileConfig, port])
 
-  const [currentPage, setCurrentPage] = useState(() =>
-    getCurrentPagePath(simulatorUrl),
+  const [currentRoute, setCurrentRoute] = useState(() =>
+    getCurrentPageRoute(simulatorUrl),
+  )
+
+  const currentPage = useMemo(
+    () => decodePageSpec(currentRoute).pagePath,
+    [currentRoute],
   )
 
   useEffect(() => {
-    setCurrentPage(getCurrentPagePath(simulatorUrl))
+    setCurrentRoute(getCurrentPageRoute(simulatorUrl))
   }, [simulatorUrl])
 
   // The page stack lives in the DeviceShell WebContentsView, so in-app
   // navigation never reaches a renderer `<webview>`'s did-navigate events.
   // Subscribe to main's active-page push so the toolbar route stays in sync.
-  // Empty path = unknown → keep the URL-seeded value.
+  // Empty route = unknown → keep the URL-seeded value.
   useEffect(() => {
-    return onSimulatorCurrentPage((pagePath) => {
-      if (pagePath) setCurrentPage(pagePath)
+    return onSimulatorCurrentPage((route) => {
+      if (route) setCurrentRoute(route)
     })
   }, [])
 
@@ -91,9 +103,9 @@ export function useSimulator(props: UseSimulatorProps): SimulatorHookResult {
   // reads them through this render-synced ref instead. The sync effect has no
   // dep array (runs every render) and is declared BEFORE the attach effect so
   // the context is always fresh when the attach effect reads it.
-  const hotReloadContextRef = useRef({ currentPage, compileConfig, appInfo, port })
+  const hotReloadContextRef = useRef({ currentPage, currentRoute, compileConfig, appInfo, port })
   useEffect(() => {
-    hotReloadContextRef.current = { currentPage, compileConfig, appInfo, port }
+    hotReloadContextRef.current = { currentPage, currentRoute, compileConfig, appInfo, port }
   })
 
   // Last token/nonce the attach effect has consumed. Seeded with the initial
@@ -131,16 +143,23 @@ export function useSimulator(props: UseSimulatorProps): SimulatorHookResult {
     if (isHotReload) {
       // Reload at the page the user is looking at (the onSimulatorCurrentPage
       // mirror), not the configured startPage — the native equivalent of the
-      // old `collapseRouteToTopPage` semantics. The startPage's queryParams
-      // belong to the startPage only and must not leak onto another page.
+      // old `collapseRouteToTopPage` semantics, with the page's own query
+      // restored. The startPage's configured queryParams only apply while the
+      // user is on the startPage; anywhere else the CURRENT page's params are
+      // what must survive the recompile (WeChat DevTools keeps the page stack's
+      // route+query across incremental compiles). scene is re-added by
+      // `buildSimulatorUrl` from `compileConfig.scene`.
       const ctx = hotReloadContextRef.current
       if (ctx.appInfo && ctx.port) {
-        const reloadPage = ctx.currentPage || ctx.compileConfig.startPage
+        const spec = decodePageSpec(ctx.currentRoute)
+        const reloadPage = spec.pagePath || ctx.compileConfig.startPage
         attachUrl = buildSimulatorUrl(
           ctx.appInfo.appId,
-          reloadPage === ctx.compileConfig.startPage
-            ? ctx.compileConfig
-            : { ...ctx.compileConfig, startPage: reloadPage, queryParams: [] },
+          {
+            ...ctx.compileConfig,
+            startPage: reloadPage,
+            queryParams: Object.entries(spec.query).map(([key, value]) => ({ key, value })),
+          },
           ctx.port,
         )
       }
@@ -215,5 +234,6 @@ export function useSimulator(props: UseSimulatorProps): SimulatorHookResult {
   return {
     simulatorUrl,
     currentPage,
+    currentRoute,
   }
 }

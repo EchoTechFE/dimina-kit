@@ -12,9 +12,11 @@
  *  - The re-attach URL keeps the user on their CURRENT page (the
  *    `onSimulatorCurrentPage` mirror), not the original startPage — the
  *    native equivalent of the old `collapseRouteToTopPage` semantics.
- *  - When the current page differs from the configured startPage, the
- *    startPage's `queryParams` must NOT leak onto the new entry (those params
- *    belong to the startPage only).
+ *  - The current page's OWN query params survive the recompile (WeChat
+ *    DevTools keeps the page stack's route+query across incremental
+ *    compiles): if the user navigated to `pages/x/x?id=5`, the reload boots
+ *    AT that page WITH `id=5`. A bare path is reloaded without params, so
+ *    the startPage's configured `queryParams` never leak onto another page.
  *  - Rerenders WITHOUT a token change must cause ZERO additional attach calls
  *    (no attach storms — rebuilds before/after leave status 'ready' and the
  *    simulatorUrl unchanged, so today the effect never re-runs; after the fix
@@ -188,7 +190,31 @@ describe('useSimulator: hotReloadToken → native re-attach (resurrected hot-rel
     // semantics: respawn boots at the page they were looking at).
     expect(route!.entry.pagePath).toBe(OTHER_PAGE)
     expect(route!.current.pagePath).toBe(OTHER_PAGE)
-    // The startPage-specific queryParams must not leak onto another page.
+    // The startPage-specific queryParams must not leak onto another page; the
+    // page itself carries no query, so the re-attach URL has none either.
+    expect(route!.entry.query).not.toHaveProperty('foo')
+  })
+
+  it('a token bump after navigating to a page WITH params re-attaches at that page with ITS query intact', async () => {
+    const base = makeBaseProps()
+    const { rerender } = renderSimulator(base)
+    attachNativeSimulatorMock.mockClear()
+
+    // User navigated in-app to a page that received params (navigateTo with
+    // a query). Main pushes the full route (path + query).
+    act(() => {
+      emitCurrentPage('pages/detail/detail?id=42&tag=hot')
+    })
+
+    await rerenderWithToken(rerender, { ...base, hotReloadToken: 1 })
+
+    expect(attachNativeSimulatorMock).toHaveBeenCalledTimes(1)
+    const route = parseRoute(lastAttachUrl())
+    expect(route, 're-attach URL must be a parseable simulator route').not.toBeNull()
+    // The page and its params survive the recompile — the regression this
+    // guard is about: a bare path re-attach used to drop the page's query.
+    expect(route!.entry.pagePath).toBe('pages/detail/detail')
+    expect(route!.entry.query).toMatchObject({ id: '42', tag: 'hot' })
     expect(route!.entry.query).not.toHaveProperty('foo')
   })
 

@@ -27,8 +27,11 @@ export const SimulatorChannel = {
   Detach: 'simulator:detach',
   Console: 'simulator:console',
   // Main → renderer push of the visible top-of-stack page route whenever the
-  // mini-app navigates (navigateTo / switchTab / back). Payload: the page path
-  // string (same bare format as `getCurrentPagePath`), or '' when unknown.
+  // mini-app navigates (navigateTo / switchTab / back). Payload: the page
+  // route string (`pagePath` + `?k=v&…` query, same format as
+  // `encodePageSpec`/`decodePageSpec`), or '' when unknown. The query lets the
+  // page-path bar show params (WeChat DevTools parity) and a recompile restore
+  // the current page's params.
   CurrentPage: 'simulator:current-page',
 } as const
 

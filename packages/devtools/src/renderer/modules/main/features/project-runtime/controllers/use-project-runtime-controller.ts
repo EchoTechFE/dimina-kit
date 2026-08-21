@@ -61,7 +61,10 @@ interface DeviceSlice {
 interface SimulatorSlice {
   simulatorRef: RefObject<HTMLElement | null>
   simulatorUrl: string
+  /** Bare page path — AppData's bridge auto-follow matches on it. */
   currentPage: string
+  /** Visible page as `pagePath?k=v&…` — the page-path bar shows/copies this. */
+  currentRoute: string
 }
 
 interface PanelDataSlice {
@@ -198,6 +201,7 @@ export function useProjectRuntimeController(
       simulatorRef,
       simulatorUrl: simulatorHook.simulatorUrl,
       currentPage: simulatorHook.currentPage,
+      currentRoute: simulatorHook.currentRoute,
     },
     panelData: {
       wxmlSource: panelDataHook.wxmlSource,

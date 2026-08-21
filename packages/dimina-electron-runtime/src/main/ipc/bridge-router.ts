@@ -404,6 +404,11 @@ export interface RenderEvent {
   /** activePage only: the now-visible page's route (bare pagePath), if known.
    * Lets the current-page panel push the route without a separate lookup. */
   pagePath?: string
+  /** activePage only: the now-visible page's launch query (the URL spec's
+   * query params, `scene` already stripped by the simulator boot). Carried
+   * alongside `pagePath` so the current-page panel can show and restore the
+   * page's params across recompiles — bare `pagePath` alone loses them. */
+  query?: Record<string, unknown>
 }
 
 /**
@@ -915,8 +920,14 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
     if (!senderBoundToSession(state, event.sender, ap)) return
     if (ap.pages.has(payload.bridgeId)) {
       ap.activeBridgeId = payload.bridgeId
-      const pagePath = state.pageSessions.get(payload.bridgeId)?.pagePath
-      emitRenderEvent({ kind: 'activePage', appId: ap.appId, bridgeId: payload.bridgeId, pagePath })
+      const page = state.pageSessions.get(payload.bridgeId)
+      emitRenderEvent({
+        kind: 'activePage',
+        appId: ap.appId,
+        bridgeId: payload.bridgeId,
+        pagePath: page?.pagePath,
+        query: page?.query,
+      })
     }
   }
   ipcMain.on(C.ACTIVE_PAGE, onActivePage)

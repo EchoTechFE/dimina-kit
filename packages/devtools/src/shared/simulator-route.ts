@@ -172,6 +172,21 @@ export function getCurrentPagePath(url: string): string {
 }
 
 /**
+ * Return the current page as a `pagePath?k=v&…` route string (WeChat DevTools
+ * page-path format), with the internal `scene` bookkeeping param stripped so
+ * the displayed route matches what the page actually received in `onLoad`.
+ * Returns `''` if unparseable. Symmetric with `encodePageSpec`/`decodePageSpec`
+ * and with the `SimulatorChannel.CurrentPage` payload.
+ */
+export function getCurrentPageRoute(url: string): string {
+  const route = parseRoute(url)
+  if (!route) return ''
+  const query: Record<string, string> = { ...route.current.query }
+  delete query['scene']
+  return encodePageSpec({ pagePath: route.current.pagePath, query })
+}
+
+/**
  * Rewrite the URL so `entry === current`. Used before a hot-reload so the
  * container boots at just the top page — avoids merged-bundle requests for a
  * multi-page stack that the incremental compiler never emits.

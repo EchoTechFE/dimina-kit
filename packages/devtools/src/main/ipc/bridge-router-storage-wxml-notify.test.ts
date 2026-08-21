@@ -285,3 +285,76 @@ describe('bridge-router — wxmlChanged container message', () => {
     expect(domMutated[0]!.bridgeId).not.toBe('__proto__')
   })
 })
+
+describe('bridge-router — activePage RenderEvent', () => {
+  it('emits the active page route with its launch query', async () => {
+    const { ctx, simulatorWc } = makeCtx()
+    installBridgeRouter(ctx)
+    const events: RenderEvent[] = []
+    ctx.bridge!.onRenderEvent((e) => events.push(e))
+
+    const handle = stubs.invokeHandlers.get(C.SPAWN)
+    if (!handle) throw new Error('SPAWN handler not registered')
+    const req: SpawnRequest = {
+      appId: APP_ID,
+      pagePath: 'pages/index/index',
+      query: { id: '42', tag: 'hot' },
+      resourceBaseUrl: 'http://127.0.0.1:1/',
+    }
+    const result = (await (handle as AnyFn)({ sender: simulatorWc }, req)) as SpawnResult
+
+    // DeviceShell reports the root page visible; the page session's query must
+    // ride along so the current-page panel can show/restore the params.
+    emitOn(C.ACTIVE_PAGE, simulatorWc, {
+      appSessionId: result.appSessionId,
+      bridgeId: result.bridgeId,
+    })
+
+    const hit = events.find((e) => e.kind === 'activePage')
+    expect(hit, 'an activePage RenderEvent must have been emitted').toBeDefined()
+    expect(hit).toEqual({
+      kind: 'activePage',
+      appId: APP_ID,
+      bridgeId: result.bridgeId,
+      pagePath: 'pages/index/index',
+      query: { id: '42', tag: 'hot' },
+    })
+  })
+
+  it('emits an empty query when the spawn carried none', async () => {
+    const { ctx, simulatorWc } = makeCtx()
+    installBridgeRouter(ctx)
+    const events: RenderEvent[] = []
+    ctx.bridge!.onRenderEvent((e) => events.push(e))
+
+    const { result } = await spawnSession(simulatorWc)
+    emitOn(C.ACTIVE_PAGE, simulatorWc, {
+      appSessionId: result.appSessionId,
+      bridgeId: result.bridgeId,
+    })
+
+    const hit = events.find((e) => e.kind === 'activePage')
+    expect(hit).toEqual({
+      kind: 'activePage',
+      appId: APP_ID,
+      bridgeId: result.bridgeId,
+      pagePath: 'pages/index/index',
+      query: {},
+    })
+  })
+
+  it('drops activePage events for unknown bridge ids (no route, no query)', async () => {
+    const { ctx, simulatorWc } = makeCtx()
+    installBridgeRouter(ctx)
+    const events: RenderEvent[] = []
+    ctx.bridge!.onRenderEvent((e) => events.push(e))
+
+    const { result } = await spawnSession(simulatorWc)
+    emitOn(C.ACTIVE_PAGE, simulatorWc, {
+      appSessionId: result.appSessionId,
+      bridgeId: 'no-such-page',
+    })
+
+    expect(events.filter((e) => e.kind === 'activePage')).toHaveLength(0)
+  })
+})
