@@ -65,7 +65,7 @@ importers:
         specifier: ^8.0.6
         version: 8.0.6(postcss@8.5.26)
       esbuild:
-        specifier: ^0.28.2
+        specifier: ^0.28.1
         version: 0.28.2
       estree-walker:
         specifier: ^3.0.3
@@ -114,7 +114,7 @@ importers:
         version: 0.12.5
     devDependencies:
       esbuild-wasm:
-        specifier: ^0.28.2
+        specifier: ^0.28.1
         version: 0.28.2
 
   packages/devkit:
@@ -281,7 +281,7 @@ importers:
         specifier: ^26.8.1
         version: 26.8.1(electron-builder-squirrel-windows@26.8.1)
       esbuild:
-        specifier: ^0.28.2
+        specifier: ^0.28.1
         version: 0.28.2
       eslint:
         specifier: ^10.2.1
@@ -499,7 +499,7 @@ importers:
         specifier: ^4.1.4
         version: 4.1.4(vitest@4.1.4)
       esbuild:
-        specifier: ^0.28.2
+        specifier: ^0.28.1
         version: 0.28.2
       eslint:
         specifier: ^10.2.1
@@ -574,7 +574,7 @@ importers:
         specifier: ^4.1.4
         version: 4.1.4(vitest@4.1.4)
       esbuild:
-        specifier: ^0.28.2
+        specifier: ^0.28.1
         version: 0.28.2
       eslint:
         specifier: ^10.2.1
@@ -8353,7 +8353,7 @@ snapshots:
       obug: 2.1.1
       std-env: 4.1.0
       tinyrainbow: 3.1.0
-      vitest: 4.1.4(@types/node@22.19.17)(@vitest/coverage-v8@4.1.4)(jsdom@26.1.0)(vite@8.0.8(@types/node@22.19.17)(esbuild@0.28.2)(jiti@1.21.7)(less@4.9.0)(sass@1.103.1)(yaml@2.9.0))
+      vitest: 4.1.4(@types/node@22.19.17)(@vitest/coverage-v8@4.1.4)(jsdom@26.1.0)(vite@8.0.16(@types/node@22.19.17)(esbuild@0.28.2)(jiti@2.7.0)(less@4.9.0)(sass@1.103.1)(yaml@2.9.0))
 
   '@vitest/expect@4.1.4':
     dependencies:
