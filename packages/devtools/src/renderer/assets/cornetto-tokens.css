@@ -1,0 +1,87 @@
+/* cornetto token —— 自动生成，请勿手改本注释上方逻辑；改色改 packages/tokens/tokens.css。
+ * 默认值 = 千岛色板。外部项目想换色：直接改下面的语义值即可（看不到 ramp）。
+ * 暗色 = 给 <html> 加 .dark。 */
+
+:root {
+  --qd-background: #ffffff;
+  --qd-secondary: #f7f7f9;
+  --qd-secondary-foreground: #000000;
+  --qd-muted: #f7f7f9;
+  --qd-foreground: #000000;
+  --qd-muted-foreground: #000000a3;
+  --qd-border: #0000001f;
+  --qd-primary: #7c66ff;
+  --qd-primary-soft: #f2f0ff;
+  --qd-destructive: #d94a4e;
+  --qd-destructive-soft: #ffebe9;
+  --qd-success: #379e45;
+  --qd-success-soft: #e2f7e3;
+  --qd-warning: #e8920c;
+  --qd-warning-soft: #fff4e0;
+  --qd-info: #2f6fed;
+  --qd-info-soft: #e8f0ff;
+  --qd-on-solid: #ffffff;
+  --qd-font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --qd-text-xs: 12px;
+  --qd-leading-xs: 16px;
+  --qd-text-sm: 14px;
+  --qd-leading-sm: 20px;
+  --qd-text-base: 16px;
+  --qd-leading-base: 24px;
+  --qd-text-lg: 18px;
+  --qd-leading-lg: 28px;
+  --qd-text-xl: 20px;
+  --qd-leading-xl: 28px;
+  --qd-text-2xl: 24px;
+  --qd-leading-2xl: 32px;
+  --qd-radius: 10px;
+  --qd-radius-sm: calc(var(--qd-radius) * 0.6);
+  --qd-radius-md: calc(var(--qd-radius) * 0.8);
+  --qd-radius-lg: var(--qd-radius);
+  --qd-radius-xl: calc(var(--qd-radius) * 1.4);
+  --qd-radius-2xl: calc(var(--qd-radius) * 1.8);
+  --qd-radius-3xl: calc(var(--qd-radius) * 2.2);
+  --qd-btn-h: 32px;
+  --qd-control-h: 32px;
+  --qd-chip-h: 32px;
+  --qd-border-width: 1px;
+  --qd-shadow-control: none;
+  --qd-shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.06);
+  --qd-shadow-md: 0 4px 12px -2px rgb(0 0 0 / 0.12), 0 2px 4px -2px rgb(0 0 0 / 0.08);
+  --qd-shadow-lg: 0 12px 32px -8px rgb(0 0 0 / 0.18), 0 4px 8px -4px rgb(0 0 0 / 0.1);
+  --qd-icon-stroke: 2;
+  --qd-icon-size: 16px;
+}
+
+.dark {
+  --qd-background: #1f1f1f;
+  --qd-secondary: #404040;
+  --qd-secondary-foreground: #ffffffe0;
+  --qd-muted: #383838;
+  --qd-foreground: #ffffffe0;
+  --qd-muted-foreground: #ffffffa3;
+  --qd-border: #ffffff3d;
+  --qd-primary-soft: #28238c;
+  --qd-destructive-soft: #7a2230;
+  --qd-success-soft: #1c4a26;
+  --qd-warning-soft: #5e3a05;
+  --qd-info-soft: #16306e;
+  --qd-shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.3);
+  --qd-shadow-md: 0 4px 12px -2px rgb(0 0 0 / 0.45), 0 2px 4px -2px rgb(0 0 0 / 0.35);
+  --qd-shadow-lg: 0 12px 32px -8px rgb(0 0 0 / 0.6), 0 4px 8px -4px rgb(0 0 0 / 0.4);
+}
+
+.cornetto-root,
+.cornetto-root *,
+.cornetto-root *::before,
+.cornetto-root *::after {
+  box-sizing: border-box;
+}
+
+.qd-icon {
+  display: block;
+  width: var(--qd-icon-size);
+  height: var(--qd-icon-size);
+  stroke-width: var(--qd-icon-stroke);
+  flex-shrink: 0;
+}

@@ -133,8 +133,10 @@ describe('buildDockModel — heals a partially-emptied debug tab group on restor
     const editorGroup = findTabsById(restored, 'g-editor')
     expect(editorGroup).toEqual({ kind: 'tabs', id: 'g-editor', panels: ['editor'], active: 'editor' })
 
-    // root sizes/constraints (the pinned simulator column) survive the heal untouched.
-    const root = findSplitById(restored.root, 'root') as SplitNode
+    // root sizes/constraints (the pinned simulator column) survive the heal
+    // untouched. The restored root's id is healed from the fixture's legacy
+    // `'root'` (collision-prone — see `DOCK_ROOT_ID`'s doc comment) to `'dock-root'`.
+    const root = findSplitById(restored.root, 'dock-root') as SplitNode
     expect(root.sizes).toEqual([1, 6])
     expect(root.constraints).toEqual([{ minPx: 423 }, null])
 
@@ -246,6 +248,33 @@ describe('buildDockModel — the heal never reinstates a panel outside its own s
     for (const id of DEBUG_PANELS) {
       expect(collectPanelIds(restored.root).has(id)).toBe(true)
     }
+  })
+})
+
+describe('buildDockModel — heals a split node still carrying the collision-prone literal `root` id', () => {
+  it('renames a persisted split id of `root` to `dock-root`', () => {
+    // Real bug: the app's `<div id="root">` mount point carries a global
+    // `#root { position: fixed; inset: 0 }` rule. A dock split sharing that
+    // literal DOM id becomes a SECOND match for the id selector and inherits
+    // `position: fixed`, escaping the flex layout — it renders pinned to the
+    // full viewport instead of confined below ProjectToolbar, visually
+    // covering the toolbar. `split-view.tsx`'s re-dock wrapping preserves a
+    // node's original id on the inner node (only the new outer wrapper gets a
+    // derived id), so a tree re-docked before `DOCK_ROOT_ID` existed carries
+    // this literal `'root'` id forever unless healed on restore.
+    const restored = buildDockModel(BUGGY_PERSISTED_JSON, W, KNOWN_7).get()
+
+    expect(findSplitById(restored.root, 'root')).toBeNull()
+    expect(findSplitById(restored.root, 'dock-root')).not.toBeNull()
+  })
+
+  it('is a no-op for a tree whose root already uses the safe id', () => {
+    const original = buildDefaultDockTree(W)
+    const serialized = serializeLayout(original)
+
+    const restored = buildDockModel(serialized, W, KNOWN_7).get()
+
+    expect(serializeLayout(restored)).toBe(serialized)
   })
 })
 

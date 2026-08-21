@@ -1,9 +1,10 @@
 import React from 'react'
+import { ChevronDown, RotateCcw, Settings } from 'lucide-react'
 import { Button } from '@/shared/components/ui/button'
 import { StatusDot } from '@/shared/components/status-dot'
-import { cn } from '@/shared/lib/utils'
+import { useOverlayTooltip } from '@/shared/lib/use-overlay-tooltip'
 import { HEADER_H } from '@/shared/constants'
-import { setSettingsVisible } from '@/shared/api'
+import { prepareTooltip, setSettingsVisible } from '@/shared/api'
 import type { LayoutModel, PanelRegistry } from '@dimina-kit/electron-deck/layout'
 import {
   LayoutVisibilityToggles,
@@ -36,6 +37,16 @@ function ToolbarDivider() {
   return <div className="w-px h-4 bg-border mx-1" aria-hidden="true" />
 }
 
+/**
+ * All button tooltips in this toolbar (here and in `layout-controls.tsx`) use
+ * `useOverlayTooltip` (a dedicated tooltip overlay WebContentsView), not the
+ * `ui/tooltip` Radix component and not the native `title` attribute — this
+ * row sits directly above the Simulator/Editor native WebContentsViews, and
+ * BOTH of those render inside the main window's own paint surface, which
+ * every WCV mounted on top of it occludes (confirmed live: each was tried
+ * and each silently broke every tooltip in this row). Do not re-migrate this
+ * row to either.
+ */
 export function ProjectToolbar({
   compileDropdownRef,
   showCompilePanel,
@@ -47,6 +58,13 @@ export function ProjectToolbar({
   layout,
   simPanelWidth,
 }: ProjectToolbarProps) {
+  React.useEffect(() => {
+    prepareTooltip()
+  }, [])
+
+  const compileModeTooltip = useOverlayTooltip('编译模式')
+  const relaunchTooltip = useOverlayTooltip('重新编译')
+  const settingsTooltip = useOverlayTooltip('设置')
   return (
     <div className="flex flex-col shrink-0">
       <div
@@ -60,13 +78,13 @@ export function ProjectToolbar({
             scene-value, launch-page and launch-args inputs. */}
         <div ref={compileDropdownRef as React.Ref<HTMLDivElement>}>
           <Button
-            variant="outline"
-            size="sm"
+            variant="toolbar"
             onClick={onToggleCompilePanel}
-            className={cn(showCompilePanel && 'border-accent')}
-            title="编译模式"
+            data-active={showCompilePanel ? 'true' : 'false'}
+            className="h-7 gap-0.5 pl-2 pr-1.5 text-[13px] text-text-secondary"
+            {...compileModeTooltip}
           >
-            普通编译 <span className="text-[10px] text-text-secondary">▾</span>
+            普通编译 <ChevronDown className="size-3.5" />
           </Button>
         </div>
 
@@ -75,20 +93,22 @@ export function ProjectToolbar({
         {/* Cluster 2: Primary compile actions. Keep just the icon-button
             cluster compact. */}
         <Button
-          variant="icon"
+          variant="toolbar"
           size="icon"
+          className="size-7 rounded-[var(--qd-radius-md)]"
           onClick={() => {
             void onRelaunch()
           }}
           disabled={compileStatus.status === 'compiling'}
-          title="重新编译"
+          aria-label="重新编译"
+          {...relaunchTooltip}
         >
-          ↺
+          <RotateCcw className="size-3.5" />
         </Button>
 
         <div className="flex items-center gap-1.5 px-1.5 shrink-0">
           <StatusDot status={compileStatus.status} />
-          <span className="text-[11px] text-text-muted max-w-28 truncate">
+          <span className="text-[12px] text-text-secondary max-w-28 truncate">
             {compileStatus.message}
           </span>
         </div>
@@ -118,14 +138,16 @@ export function ProjectToolbar({
             always sends `true` (a toggle could not observe the overlay's
             real state and would desync). */}
         <Button
-          variant="icon"
+          variant="toolbar"
           size="icon"
+          className="size-7 rounded-[var(--qd-radius-md)]"
           onClick={() => {
             void setSettingsVisible(true)
           }}
-          title="设置"
+          aria-label="设置"
+          {...settingsTooltip}
         >
-          ⚙
+          <Settings className="size-3.5" />
         </Button>
       </div>
     </div>

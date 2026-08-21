@@ -14,7 +14,7 @@ const Select = React.forwardRef<
     ref={ref}
     className={cn(
       'bg-surface border border-border text-text-secondary',
-      'px-1.5 py-0.5 rounded text-[11px] cursor-pointer',
+      'h-7 px-2 rounded-[var(--qd-radius-md)] text-[13px] font-medium cursor-pointer',
       'focus:outline-none focus:border-accent',
       className
     )}

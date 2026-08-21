@@ -244,7 +244,7 @@ test('[needs-real-electron] M1-fixed-px: a programmatic setSizes on flexible wei
   // changes the FLEXIBLE sibling's weight; the fixed sim slot weight is carried
   // through unchanged by setSizes. We pass a full-length weights array.
   const rootInfo = await mainWindow.evaluate(() => {
-    const split = document.querySelector('[data-deck-split="root"]')
+    const split = document.querySelector('[data-deck-split="dock-root"]')
     return split ? { sizes: split.getAttribute('data-deck-sizes') } : null
   })
   expect(rootInfo, 'the root split must render').not.toBeNull()
@@ -252,7 +252,7 @@ test('[needs-real-electron] M1-fixed-px: a programmatic setSizes on flexible wei
   expect(rootWeights.length, 'root split has two children (sim | main)').toBe(2)
 
   // Keep child0 (sim) weight, change child1 (main) weight.
-  const applied = await applyLayout(mainWindow, 'root', [rootWeights[0]!, rootWeights[1]! * 2])
+  const applied = await applyLayout(mainWindow, 'dock-root', [rootWeights[0]!, rootWeights[1]! * 2])
   expect(applied).toBe(true)
   await mainWindow.waitForTimeout(400)
 

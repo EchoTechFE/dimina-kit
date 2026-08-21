@@ -27,6 +27,7 @@ import { installAppMenu } from '../menu/index.js'
 import {
   registerAppIpc,
   registerInternalDevtoolsIpc,
+  registerTooltipIpc,
   popoverModule,
   projectsModule,
   sessionModule,
@@ -473,6 +474,10 @@ export async function createDevtoolsRuntime(
   // Unconditional (not a toggleable BUILTIN_MODULES entry): it's core dev
   // tooling, not a host-configurable feature.
   context.registry.add(registerInternalDevtoolsIpc(context))
+  // Unconditional (not a toggleable BUILTIN_MODULES entry): the tooltip
+  // overlay is core UI chrome (every toolbar in this app relies on it), not a
+  // host-configurable feature.
+  context.registry.add(registerTooltipIpc(context))
   // Referer/CORS webRequest policy for the simulator runtime's sessions (shared
   // fallback + every per-project partition). Registered into the context
   // registry so its configurator + per-session listeners are torn down with the

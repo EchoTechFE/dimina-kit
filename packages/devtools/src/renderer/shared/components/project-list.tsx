@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react'
 import { Button } from '@/shared/components/ui/button'
 import { Input } from '@/shared/components/ui/input'
-import { Search } from 'lucide-react'
+import { FolderInput, Search } from 'lucide-react'
 import { ProjectCard } from './project-card'
 import { ProjectCreateCard } from './project-create-card'
 import type { Project } from '../types'
@@ -17,7 +17,7 @@ export function ProjectList({
   projects: Project[]
   onAdd: () => void
   /**
-   * Invoked when the always-present "新建项目" card is clicked. The card is
+   * Invoked when the always-present "新建小程序" card is clicked. The card is
    * rendered as the first item of the grid and is shown even when the
    * project list is empty.
    */
@@ -42,27 +42,26 @@ export function ProjectList({
 
   return (
     <div className="flex flex-col h-screen bg-bg">
-      <div className="flex-1 overflow-y-auto p-6">
-        <div className="flex items-center justify-between mb-6 gap-4">
-          <div className="flex items-center flex-1 max-w-xs min-w-0">
-            <div className="relative w-full">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-secondary pointer-events-none" />
-              <Input
-                placeholder="搜索"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="w-full h-8 pl-8 pr-3 rounded-md text-sm"
-              />
-            </div>
-          </div>
+      <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-4">
+        <div className="flex items-center justify-between w-full shrink-0">
+          <h1 className="text-2xl font-medium leading-8 text-text">小程序</h1>
           <Button
-            variant="ghost"
-            size="sm"
+            variant="outline"
             onClick={onAdd}
-            className="shrink-0 text-accent hover:text-accent-hover hover:bg-transparent"
+            className="h-9 gap-2 px-2.5 text-[15px]"
           >
+            <FolderInput className="size-4" />
             导入
           </Button>
+        </div>
+        <div className="flex items-center gap-2 h-8 px-3 rounded-[8px] bg-surface w-[300px] shrink-0">
+          <Search className="size-4 text-text-secondary shrink-0" />
+          <Input
+            placeholder="搜索"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="flex-1 min-w-0 h-auto border-0 shadow-none bg-transparent px-0 py-0 text-[13px]"
+          />
         </div>
         {noMatch ? (
           <div className="flex flex-col items-center justify-center h-72 text-text-dim gap-3">
@@ -71,8 +70,8 @@ export function ProjectList({
           </div>
         ) : (
           <div
-            className="grid gap-4"
-            style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))' }}
+            className="grid gap-4 w-full"
+            style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))' }}
           >
             {/*
               The create card is always the first item (even when projects

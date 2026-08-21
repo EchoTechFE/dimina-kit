@@ -352,7 +352,7 @@ describe('ViewManager: disposeAll tears down the host-toolbar view', () => {
 // exists only to feed that raw per-id gate.
 import { createWorkbenchSenderPolicy } from '../../utils/sender-policy.js'
 
-function makeSenderPolicyCtx(hostToolbarId: number | null) {
+function makeSenderPolicyCtx(hostToolbarId: number | null, tooltipId: number | null = null) {
   return {
     windows: {
       isMainSender: () => false,
@@ -362,6 +362,7 @@ function makeSenderPolicyCtx(hostToolbarId: number | null) {
     views: {
       getSettingsWebContentsId: () => null,
       getPopoverWebContentsId: () => null,
+      getTooltipWebContentsId: () => tooltipId,
       getHostToolbarWebContentsId: () => hostToolbarId,
     } as unknown as import('../workbench-context.js').WorkbenchContext['views'],
   }
@@ -383,6 +384,11 @@ describe('createWorkbenchSenderPolicy: host-toolbar WCV is NOT globally trusted'
   it('rejects a random other sender id', () => {
     const policy = createWorkbenchSenderPolicy(makeSenderPolicyCtx(99))
     expect(policy(makeSender(12345))).toBe(false)
+  })
+
+  it('trusts the bundled tooltip renderer for ready and measurement IPC', () => {
+    const policy = createWorkbenchSenderPolicy(makeSenderPolicyCtx(null, 77))
+    expect(policy(makeSender(77))).toBe(true)
   })
 
   it('getHostToolbarWebContentsId returns the live WCV id (the per-id gate input)', () => {

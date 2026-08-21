@@ -2,10 +2,12 @@ import type { WebContentsView } from 'electron'
 import * as layout from '../layout/index.js'
 import { reconcile, createInitialState } from '@dimina-kit/electron-deck/layout'
 import type {
+  ActualView,
   DesiredView,
   PlacementSnapshot,
 } from '@dimina-kit/electron-deck/layout'
 import { applyViewOps, type ViewOpTarget } from './apply-view-ops.js'
+import { createNativeViewTreeHost } from './native-view-tree.js'
 import type { DevtoolsExtra } from '../../../shared/view-ids.js'
 import type { ViewManagerContext } from './view-manager.js'
 
@@ -18,8 +20,6 @@ import type { ViewManagerContext } from './view-manager.js'
 export interface ViewSlot {
   /** The live WebContentsView for this slot, or null when not yet created. */
   getView(): WebContentsView | null
-  /** Record whether the view is currently added to the contentView. */
-  setAdded?(added: boolean): void
   /**
    * When true, force the desired placement to hidden — the view-creation site
    * has not produced the WCV yet, so the reconciler must never record an attach
@@ -27,12 +27,6 @@ export interface ViewSlot {
    * to re-open the gate.
    */
   gateHidden?(): boolean
-  /**
-   * Run before the generic attach. Return true when the slot fully handled the
-   * attach itself (e.g. a lazy async load that adds the view on completion), so
-   * the reconciler must NOT addChildView here.
-   */
-  beforeAttach?(): boolean
   /** Lazily create the view on attach (host-toolbar); used instead of getView. */
   ensureView?(): WebContentsView | null
   /** Domain-specific setBounds (simulator zoom rides here). */
@@ -66,14 +60,10 @@ export interface PlacementReconciler {
    * truth for every managed native view's bounds/visibility/z-order.
    */
   setPlacementSnapshot(snapshot: PlacementSnapshot<DevtoolsExtra>): void
-  /**
-   * Forget a view's reconciled mount state so the NEXT rebuilt view is treated
-   * as a fresh attach. Required wherever a view instance is replaced/destroyed
-   * via a manual removeChildView that bypasses the reconciler (otherwise the
-   * level-triggered core still records the old instance as attached and never
-   * emits the attach op for the replacement — a sticky invisible view).
-   */
-  forgetActual(viewId: string): void
+  /** Size a detached view for renderer-side intrinsic measurement. */
+  prepareView(viewId: string, view: WebContentsView, bounds: layout.Bounds): void
+  /** Detach and close one concrete view instance through the native-tree owner. */
+  destroyView(viewId: string, view: WebContentsView | null): void
   setBaseDesired(viewId: string, desired: DesiredView<DevtoolsExtra>): void
   deleteBaseDesired(viewId: string): void
   setOverlayDesired(viewId: string, desired: DesiredView<DevtoolsExtra>): void
@@ -85,9 +75,14 @@ export function createPlacementReconciler(ctx: ViewManagerContext): PlacementRec
   let placementState = createInitialState<DevtoolsExtra>()
   let epochCounter = 0
   let rendererGeneration = 0
+  const appliedActual = new Map<string, ActualView<DevtoolsExtra>>()
   const baseDesired = new Map<string, DesiredView<DevtoolsExtra>>()
   const overlayDesired = new Map<string, DesiredView<DevtoolsExtra>>()
   const slots = new Map<string, ViewSlot>()
+
+  // Sole owner of the main window's native child tree. Every attach, detach,
+  // reorder and hard destroy passes through this ledger-backed adapter.
+  const contentViewHost = createNativeViewTreeHost(ctx, slots)
 
   function gateReadiness(v: DesiredView<DevtoolsExtra>): DesiredView<DevtoolsExtra> {
     const slot = slots.get(v.viewId)
@@ -100,45 +95,51 @@ export function createPlacementReconciler(ctx: ViewManagerContext): PlacementRec
       if (ctx.windows.mainWindow.isDestroyed()) return
       const slot = slots.get(viewId)
       if (!slot) return
-      if (slot.beforeAttach?.()) return
       const view = slot.ensureView ? slot.ensureView() : slot.getView()
       if (!view) return
-      ctx.windows.mainWindow.contentView.addChildView(view)
-      slot.setAdded?.(true)
+      if (!contentViewHost.addChildView({ id: viewId })) return
+      const previous = appliedActual.get(viewId)
+      appliedActual.set(viewId, {
+        attached: true,
+        visible: true,
+        bounds: previous?.bounds,
+        extra: previous?.extra,
+      })
     },
     detach(viewId): void {
-      const slot = slots.get(viewId)
-      const view = slot?.getView() ?? null
-      if (view && !ctx.windows.mainWindow.isDestroyed()) {
-        try { ctx.windows.mainWindow.contentView.removeChildView(view) } catch { /* already removed */ }
-      }
-      slot?.setAdded?.(false)
+      if (!contentViewHost.removeChildView({ id: viewId })) return
+      appliedActual.delete(viewId)
     },
     setBounds(viewId, bounds, extra): void {
       const slot = slots.get(viewId)
       const view = slot?.getView() ?? null
       if (!view || view.webContents.isDestroyed()) return
-      if (slot?.applyBounds) {
-        slot.applyBounds(view, bounds, extra)
+      try {
+        if (slot?.applyBounds) slot.applyBounds(view, bounds, extra)
+        else view.setBounds(bounds)
+      } catch {
         return
       }
-      view.setBounds(bounds)
+      const previous = appliedActual.get(viewId)
+      appliedActual.set(viewId, {
+        attached: previous?.attached ?? false,
+        visible: previous?.visible ?? false,
+        bounds,
+        extra,
+      })
     },
     setVisible(viewId, visible): void {
       const view = slots.get(viewId)?.getView() ?? null
-      if (!view) return
-      try { view.setVisible(visible) } catch { /* stub may lack setVisible */ }
+      if (!view || view.webContents.isDestroyed()) return
+      try { view.setVisible(visible) } catch { return }
+      const previous = appliedActual.get(viewId)
+      if (!previous) return
+      appliedActual.set(viewId, { ...previous, visible })
     },
     reorder(order): void {
       // A single attached view is already in place — nothing to reorder.
       if (order.length <= 1 || ctx.windows.mainWindow.isDestroyed()) return
-      const cv = ctx.windows.mainWindow.contentView
-      for (const viewId of order) {
-        const view = slots.get(viewId)?.getView() ?? null
-        if (view) {
-          try { cv.addChildView(view) } catch { /* already attached */ }
-        }
-      }
+      for (const viewId of order) contentViewHost.addChildView({ id: viewId })
     },
   }
 
@@ -151,11 +152,16 @@ export function createPlacementReconciler(ctx: ViewManagerContext): PlacementRec
     }
   }
 
+  function cloneAppliedActual(): Map<string, ActualView<DevtoolsExtra>> {
+    return new Map([...appliedActual].map(([viewId, actual]) => [viewId, { ...actual }]))
+  }
+
   function reconcileNow(): void {
     ensureLazyViews()
     const views: DesiredView<DevtoolsExtra>[] = []
     for (const v of baseDesired.values()) views.push(gateReadiness(v))
     for (const v of overlayDesired.values()) views.push(v)
+    placementState = { ...placementState, actual: cloneAppliedActual() }
     const result = reconcile(placementState, {
       generation: rendererGeneration,
       epoch: ++epochCounter,
@@ -163,6 +169,9 @@ export function createPlacementReconciler(ctx: ViewManagerContext): PlacementRec
     })
     placementState = result.state
     applyViewOps(result.ops, viewTarget)
+    // The planner's next state is optimistic. Keep only desired/epoch metadata;
+    // appliedActual is updated by successful native effects above.
+    placementState = { ...placementState, actual: cloneAppliedActual() }
   }
 
   function setPlacementSnapshot(snapshot: PlacementSnapshot<DevtoolsExtra>): void {
@@ -176,7 +185,16 @@ export function createPlacementReconciler(ctx: ViewManagerContext): PlacementRec
     registerView: (viewId, slot) => { slots.set(viewId, slot) },
     reconcileNow,
     setPlacementSnapshot,
-    forgetActual: (viewId) => { placementState.actual.delete(viewId) },
+    prepareView: (viewId, view, bounds) => {
+      if (slots.get(viewId)?.getView() !== view || view.webContents.isDestroyed()) return
+      try { view.setBounds(bounds) } catch { return }
+      appliedActual.set(viewId, { attached: false, visible: false, bounds })
+    },
+    destroyView: (viewId, view) => {
+      contentViewHost.destroyView(viewId, view)
+      appliedActual.delete(viewId)
+      placementState.actual.delete(viewId)
+    },
     setBaseDesired: (viewId, desired) => { baseDesired.set(viewId, desired) },
     deleteBaseDesired: (viewId) => { baseDesired.delete(viewId) },
     setOverlayDesired: (viewId, desired) => { overlayDesired.set(viewId, desired) },

@@ -1,6 +1,7 @@
 import React, { useMemo, useState, useCallback } from 'react'
 import JsonView from '@uiw/react-json-view'
 import { darkTheme } from '@uiw/react-json-view/dark'
+import { Input } from '@/shared/components/ui/input'
 import { cn } from '@/shared/lib/utils'
 
 export interface JsonViewerProps {
@@ -146,17 +147,12 @@ export function JsonViewer({
             </span>
           )}
           {searchable && (
-            <input
+            <Input
               type="text"
               value={query}
               onChange={handleQueryChange}
               placeholder="Filter..."
-              className={cn(
-                'flex-1 min-w-0',
-                'bg-surface border border-border text-text placeholder-text-dim',
-                'px-1.5 py-0.5 rounded text-[11px] font-mono',
-                'focus:outline-none focus:border-accent'
-              )}
+              className="flex-1 min-w-0 h-auto bg-surface px-1.5 py-0.5 text-[11px] font-mono"
             />
           )}
         </div>

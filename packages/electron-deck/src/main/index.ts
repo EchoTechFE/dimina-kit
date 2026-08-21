@@ -46,3 +46,11 @@ export {
   type DebugTapEntry,
   type DebugTapOptions,
 } from './debug-tap.js'
+export {
+  createOverlayPanel,
+  type OverlayPanel,
+  type OverlayPanelBounds,
+  type OverlayPanelDeps,
+  type OverlayPanelElectron,
+  type OverlayPanelWebPreferences,
+} from './overlay-panel.js'

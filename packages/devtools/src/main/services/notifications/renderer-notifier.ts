@@ -6,6 +6,7 @@ import {
   WindowChannel,
   SettingsChannel,
   PopoverChannel,
+  TooltipChannel,
   WorkbenchSettingsChannel,
   EditorChannel,
   ViewChannel,
@@ -136,6 +137,8 @@ export interface RendererNotifier {
   popoverInit(popoverView: WebContentsView, payload: unknown): void
   /** Initialise the currently shown settings overlay (no-op if hidden). */
   settingsInit(payload: SettingsInitPayload): void
+  /** Push the label text (+ anchor) into the tooltip overlay's own renderer. */
+  tooltipInit(tooltipView: WebContentsView, payload: unknown): void
 
   // ── Standalone windows ───────────────────────────────────────────────────
   /** Initialise the standalone workbench-settings window. */
@@ -207,6 +210,11 @@ export function createRendererNotifier(ctx: NotifierContext): RendererNotifier {
       const wc = liveWebContents(popoverView.webContents)
       if (!wc) return
       wc.send(PopoverChannel.Init, payload)
+    },
+    tooltipInit(tooltipView, payload) {
+      const wc = liveWebContents(tooltipView.webContents)
+      if (!wc) return
+      wc.send(TooltipChannel.Init, payload)
     },
     settingsInit(payload) {
       const wc = liveWebContents(ctx.views.getSettingsWebContents())

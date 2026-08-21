@@ -42,6 +42,18 @@ import type {
 import type { DevtoolsPosition, SimulatorAlignment } from '../controllers/use-layout-store'
 
 /**
+ * The top-level split node's id. MUST NOT be the literal string `'root'` —
+ * the app's real `<div id="root">` (the React mount point) carries a global
+ * `#root { position: fixed; inset: 0 }` rule (see the entry HTML) that pins it
+ * to the full window for WCV-overlay placement math. A dock node sharing that
+ * literal id becomes a SECOND element the id selector matches, inheriting
+ * `position: fixed` and escaping the flex layout entirely — it renders pinned
+ * to the viewport instead of confined below `ProjectToolbar`. `restoreTreeOrDefault`
+ * heals any already-persisted tree still carrying the old literal id.
+ */
+const DOCK_ROOT_ID = 'dock-root'
+
+/**
  * Register the seven dock panels: DOM simulator + DOM editor + native console +
  * the four React-content debug tabs (wxml/appdata/storage/compile).
  *
@@ -104,7 +116,7 @@ export function buildDefaultDockTree(simPanelWidth: number): LayoutTree {
     version: 1,
     root: {
       kind: 'split',
-      id: 'root',
+      id: DOCK_ROOT_ID,
       orientation: 'row',
       // The simulator column is `minPx`-floored (flexible, never below the device
       // width) — a SMALL weight so it starts clamped at the device width while the
@@ -163,7 +175,7 @@ function presetRow(children: LayoutNode[], minIndex: number, simPanelWidth: numb
     version: 1,
     root: {
       kind: 'split',
-      id: 'root',
+      id: DOCK_ROOT_ID,
       orientation: 'row',
       sizes: children.map((_, i) => weights[i] ?? 1),
       constraints: children.map((_, i) => (i === minIndex ? { minPx: simPanelWidth } : null)),
@@ -252,7 +264,7 @@ function restoreTreeOrDefault(
       // minimum positive value. Px children are untouched. The force-persist of
       // a healed tree lives in `DockableLayout` (it re-serializes the model and
       // overwrites the stale localStorage value when it differs).
-      return healMissingDebugPanels(sanitizeFlexibleWeights(parsed), simPanelWidth)
+      return healMissingDebugPanels(sanitizeFlexibleWeights(healRootIdCollision(parsed)), simPanelWidth)
     }
   } catch {
     // malformed JSON / structurally-illegal tree — fall through to default.
@@ -280,6 +292,30 @@ function healMissingDebugPanels(tree: LayoutTree, simPanelWidth: number): Layout
     (t, p) => (present.has(p) ? t : reopenPanel(t, p, simPanelWidth)),
     tree,
   )
+}
+
+/**
+ * Rename any SPLIT node still carrying the collision-prone literal id `'root'`
+ * (residue from before `DOCK_ROOT_ID` existed — see its doc comment) to the
+ * safe id. `split-view.tsx`'s re-dock wrapping preserves a node's original id
+ * on the INNER node while giving the new outer wrapper a derived
+ * `${id}__wrap` id, so a tree re-docked before this fix keeps the literal
+ * `'root'` id on an inner split forever unless healed here. Only split ids are
+ * checked: a tab group can never end up named `'root'` (`presetSimGroup` /
+ * `presetEditorGroup` / `PRESET_DEBUG_GROUP` / `buildDefaultDockTree`'s leaves
+ * all use distinct `g-*` ids).
+ */
+function healRootIdCollision(tree: LayoutTree): LayoutTree {
+  return { ...tree, root: renameSplitId(tree.root, 'root', DOCK_ROOT_ID) }
+}
+
+function renameSplitId(node: LayoutNode, fromId: string, toId: string): LayoutNode {
+  if (node.kind === 'tabs') return node
+  return {
+    ...node,
+    id: node.id === fromId ? toId : node.id,
+    children: node.children.map((child) => renameSplitId(child, fromId, toId)),
+  }
 }
 
 // ── Panel visibility (reopen / list) ─────────────────────────────────────────

@@ -56,6 +56,31 @@ export const ProjectSaveCompileConfigSchema = z.tuple([
 export const PopoverShowSchema = z.tuple([z.looseObject({})])
 
 /**
+ * tooltip:show — the trigger's own bounding rect (CSS px, main-window content
+ * coordinates — same space `getBoundingClientRect()` reports, no conversion,
+ * mirrors the base-view placement snapshot's Bounds) plus the label text.
+ */
+export const TooltipShowSchema = z.tuple([
+  z.object({
+    anchor: z.object({
+      x: z.number().finite(),
+      y: z.number().finite(),
+      width: z.number().finite().nonnegative(),
+      height: z.number().finite().nonnegative(),
+    }),
+    text: z.string().min(1).max(200),
+  }),
+])
+
+export const TooltipMeasuredSchema = z.tuple([
+  z.object({
+    requestId: z.number().int().positive(),
+    width: z.number().finite().positive(),
+    height: z.number().finite().positive(),
+  }),
+])
+
+/**
  * Reasonable simulator width range. Window width is clamped UI-side, but
  * we still reject obvious garbage (negative, zero, absurdly large).
  */

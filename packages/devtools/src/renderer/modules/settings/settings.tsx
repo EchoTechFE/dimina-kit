@@ -1,9 +1,12 @@
 import React, { useState, useEffect } from 'react'
 import { Input } from '@/shared/components/ui/input'
+import { Switch } from '@/shared/components/ui/switch'
+import { SettingsTabBar } from '@/shared/components/settings-tab-bar'
 import {
   emitProjectSettingsChanged,
   emitSettingsConfigChanged,
   onSettingsInit,
+  notifyOverlayReady,
   setSettingsVisible,
 } from '@/shared/api'
 
@@ -33,13 +36,15 @@ export default function Settings() {
   })
 
   useEffect(() => {
-    return onSettingsInit((data) => {
+    const off = onSettingsInit((data) => {
       setProjectPath(data.projectPath)
       setConfig(data.config)
       setProjectSettings({
         uploadWithSourceMap: !!data.projectSettings?.uploadWithSourceMap,
       })
     })
+    notifyOverlayReady()
+    return off
   }, [])
 
   function updateConfig(patch: Partial<CompileConfig>) {
@@ -60,22 +65,10 @@ export default function Settings() {
     onChange: (checked: boolean) => void
   ) {
     return (
-      <button
-        type="button"
-        onClick={() => onChange(!checked)}
-        className="w-full flex items-center gap-3 px-3 py-2.5 rounded-md border border-border bg-bg hover:bg-surface-3 transition-colors text-left"
-      >
-        <span
-          className={`h-4 w-4 rounded-sm border flex items-center justify-center text-[11px] ${
-            checked
-              ? 'bg-accent border-accent text-white'
-              : 'border-border bg-surface text-transparent'
-          }`}
-        >
-          ✓
-        </span>
+      <label className="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-[var(--qd-radius-md)] border border-border bg-bg cursor-pointer">
         <span className="text-[12px] text-text">{label}</span>
-      </button>
+        <Switch checked={checked} onCheckedChange={onChange} />
+      </label>
     )
   }
 
@@ -93,21 +86,7 @@ export default function Settings() {
       className="fixed top-0 right-0 h-full w-[320px] flex flex-col bg-surface text-text border-l border-border shadow-[0_8px_24px_var(--color-overlay-heavy)]"
       onClick={(e) => e.stopPropagation()}
     >
-      <div className="flex items-center border-b border-border shrink-0">
-        {TABS.map((tab) => (
-          <button
-            key={tab.id}
-            className={`flex-1 py-2.5 text-[12px] text-center transition-colors ${
-              activeTab === tab.id
-                ? 'text-accent border-b-2 border-accent'
-                : 'text-text-secondary hover:text-text'
-            }`}
-            onClick={() => setActiveTab(tab.id)}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
+      <SettingsTabBar tabs={TABS} activeTab={activeTab} onTabChange={setActiveTab} />
 
       <div className="flex-1 overflow-y-auto p-4">
         {activeTab === 'local' && (

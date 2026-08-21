@@ -36,7 +36,7 @@ describe('ProjectList with create card', () => {
         onRemove={() => {}}
       />,
     )
-    expect(screen.getByText('新建项目')).toBeInTheDocument()
+    expect(screen.getByText('新建小程序')).toBeInTheDocument()
   })
 
   it('renders the create card as the first item BEFORE any existing project', () => {
@@ -50,7 +50,7 @@ describe('ProjectList with create card', () => {
       />,
     )
     // Both the create-card label and the first project must be on the page.
-    const create = screen.getByText('新建项目')
+    const create = screen.getByText('新建小程序')
     const firstProject = screen.getByText('P0')
     expect(create).toBeInTheDocument()
     expect(firstProject).toBeInTheDocument()
@@ -73,7 +73,7 @@ describe('ProjectList with create card', () => {
         onRemove={() => {}}
       />,
     )
-    fireEvent.click(screen.getByText('新建项目'))
+    fireEvent.click(screen.getByText('新建小程序'))
     expect(onCreate).toHaveBeenCalledTimes(1)
     expect(onAdd).not.toHaveBeenCalled()
   })

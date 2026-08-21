@@ -73,3 +73,36 @@ export function computePopoverBounds(
     height: contentHeight - headerHeight,
   }
 }
+
+const TOOLTIP_GAP = 6
+const TOOLTIP_EDGE_MARGIN = 4
+
+export function computeTooltipMaxWidth(contentWidth: number): number {
+  return Math.max(1, contentWidth - TOOLTIP_EDGE_MARGIN * 2)
+}
+
+/**
+ * Position the tooltip overlay relative to its trigger's own bounding rect
+ * (both in main-window content coordinates). Prefers directly below the
+ * anchor, flips above when there isn't room; always clamped horizontally
+ * inside the content area.
+ */
+export function computeTooltipBounds(
+  anchor: Bounds,
+  contentWidth: number,
+  contentHeight: number,
+  measured: { width: number; height: number },
+): Bounds {
+  const availableWidth = computeTooltipMaxWidth(contentWidth)
+  const width = Math.min(availableWidth, Math.max(1, Math.ceil(measured.width)))
+  const height = Math.max(1, Math.ceil(measured.height))
+  const below = anchor.y + anchor.height + TOOLTIP_GAP
+  const fitsBelow = below + height <= contentHeight
+  const y = fitsBelow ? below : Math.max(0, anchor.y - TOOLTIP_GAP - height)
+
+  const centeredX = anchor.x + anchor.width / 2 - width / 2
+  const maxX = Math.max(TOOLTIP_EDGE_MARGIN, contentWidth - width - TOOLTIP_EDGE_MARGIN)
+  const x = Math.min(maxX, Math.max(TOOLTIP_EDGE_MARGIN, centeredX))
+
+  return { x, y, width, height }
+}

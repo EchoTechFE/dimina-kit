@@ -1,5 +1,5 @@
 /**
- * Built-in "新建项目" dialog. Two independent inputs (项目名 + 目录) plus a
+ * Built-in "新建小程序" dialog. Two independent inputs (项目名 + 目录) plus a
  * template-card grid. Renders nothing when `open` is false so the parent
  * can mount it unconditionally.
  *
@@ -10,6 +10,15 @@
  */
 import * as React from 'react'
 import { useEffect, useRef, useState } from 'react'
+import { Button } from '@/shared/components/ui/button'
+import { Input } from '@/shared/components/ui/input'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@/shared/components/ui/dialog'
 
 export interface ProjectTemplateInfo {
   id: string
@@ -88,8 +97,6 @@ export function ProjectCreateDialog(
     }
   }, [open])
 
-  if (!open) return null
-
   const canSubmit = name.trim().length > 0 && path.trim().length > 0
 
   function handleNameChange(next: string) {
@@ -119,52 +126,49 @@ export function ProjectCreateDialog(
   }
 
   return (
-    <div
-      role="dialog"
-      aria-label="新建项目"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-    >
-      <div className="bg-surface rounded-lg shadow-lg w-[560px] max-w-[90vw] p-6">
-        <h2 className="text-base font-semibold text-text-white mb-4">新建项目</h2>
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onCancel() }}>
+      <DialogContent className="w-[560px] max-w-[90vw]">
+        <DialogHeader>
+          <DialogTitle>新建小程序</DialogTitle>
+        </DialogHeader>
 
-        <div className="flex flex-col gap-3">
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="text-text-secondary">项目名</span>
-            <input
+        <div className="flex flex-col gap-[29px]">
+          <label className="flex flex-col gap-2 text-[13px]">
+            <span className="font-medium text-text">项目名</span>
+            <Input
               aria-label="项目名"
-              type="text"
               value={name}
               onChange={(e) => handleNameChange(e.target.value)}
               placeholder="My App"
-              className="h-8 px-2 rounded-md border border-border bg-bg text-sm text-text-white"
+              className="h-8"
             />
           </label>
 
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="text-text-secondary">目录</span>
+          <label className="flex flex-col gap-2 text-[13px]">
+            <span className="font-medium text-text">目录</span>
             <div className="flex gap-2">
-              <input
+              <Input
                 aria-label="目录"
-                type="text"
                 value={path}
                 onChange={(e) => handlePathChange(e.target.value)}
                 placeholder="/absolute/path/to/dir"
-                className="flex-1 h-8 px-2 rounded-md border border-border bg-bg text-sm text-text-white"
+                className="flex-1 h-8"
               />
-              <button
+              <Button
                 type="button"
+                variant="outline"
                 onClick={handleBrowse}
-                className="px-3 h-8 rounded-md border border-border text-sm text-text-secondary hover:text-text-white"
+                className="h-8 px-2.5 text-[13px]"
               >
                 浏览
-              </button>
+              </Button>
             </div>
           </label>
 
-          <div className="flex flex-col gap-1 text-sm">
-            <span className="text-text-secondary">模板</span>
+          <div className="flex flex-col gap-2 text-[13px]">
+            <span className="font-medium text-text">模板</span>
             <div
-              className="grid gap-2"
+              className="grid gap-3"
               style={{
                 gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
               }}
@@ -177,16 +181,16 @@ export function ProjectCreateDialog(
                     type="button"
                     onClick={() => setTemplateId(t.id)}
                     className={[
-                      'text-left p-3 rounded-md border',
+                      'text-left px-3 py-4 rounded-[var(--qd-radius-md)] border flex flex-col gap-2',
                       active
-                        ? 'border-accent text-text-white bg-accent/10'
-                        : 'border-border text-text-secondary hover:border-accent',
+                        ? 'border-[var(--qd-primary)] bg-[var(--qd-primary-soft)]'
+                        : 'border-border bg-surface hover:border-[var(--qd-primary)]',
                     ].join(' ')}
                     aria-pressed={active}
                   >
-                    <div className="text-sm font-medium">{t.name}</div>
+                    <div className="text-[13px] font-medium text-text">{t.name}</div>
                     {t.description ? (
-                      <div className="text-[11px] mt-1 text-text-dim">
+                      <div className="text-[12px] leading-4 text-text-secondary">
                         {t.description}
                       </div>
                     ) : null}
@@ -197,24 +201,26 @@ export function ProjectCreateDialog(
           </div>
         </div>
 
-        <div className="flex justify-end gap-2 mt-6">
-          <button
+        <DialogFooter>
+          <Button
             type="button"
+            variant="outline"
             onClick={onCancel}
-            className="px-3 h-8 rounded-md border border-border text-sm text-text-secondary hover:text-text-white"
+            className="h-9 px-2.5 text-[15px]"
           >
             取消
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            variant="default"
             onClick={handleSubmit}
             disabled={!canSubmit}
-            className="px-3 h-8 rounded-md text-sm bg-accent text-white disabled:opacity-40 disabled:cursor-not-allowed"
+            className="h-9 px-2.5 text-[15px]"
           >
-            创建
-          </button>
-        </div>
-      </div>
-    </div>
+            创建并打开
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

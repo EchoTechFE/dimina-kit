@@ -18,6 +18,7 @@
  * runtime preload).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { showSettingsReady } from './placement-test-driver.js'
 
 type StubWebContents = {
   destroyed: boolean
@@ -202,7 +203,7 @@ describe('ViewManager.disposeProjectViews: tears down project-scoped views, leav
     // "keeps attach pending" case) — the simulator webContents id is already
     // assigned synchronously before that point, which is all this test needs.
     mgr.attachNativeSimulator(SIM_URL, 375)
-    await mgr.showSettings()
+    await showSettingsReady(mgr)
     await mgr.attachWorkbench(COI_URL)
 
     // Sanity: the simulator id is resolvable before teardown.

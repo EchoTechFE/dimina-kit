@@ -23,7 +23,7 @@
   height: 100vh;
   overflow: auto;
   display: flex;
-  background: hsl(0 0% 7%);
+  background: #282828; /* devtools-owned chrome tone (matches --color-surface-2 dark) — matches simDeskBg() dark + --color-sim-bg dark, pixel-verified against Figma node 66:1729 */
   color: #101418;
   box-sizing: border-box;
   padding: 24px;
@@ -37,7 +37,7 @@
 
 @media (prefers-color-scheme: light) {
   .device-shell-root {
-    background: hsl(0 0% 91%); /* #e8e8e8 — matches simDeskBg() light + --color-sim-bg light */
+    background: #f7f7f9; /* --qd-muted — matches simDeskBg() light + --color-sim-bg light */
   }
 }
 

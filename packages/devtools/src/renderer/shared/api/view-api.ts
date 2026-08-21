@@ -3,11 +3,13 @@ import type { NativeDeviceInfo } from '../../../shared/ipc-channels'
 import {
   SimulatorChannel,
   PopoverChannel,
+  OverlayChannel,
+  TooltipChannel,
   WindowChannel,
   ViewChannel,
 } from '../../../shared/ipc-channels'
 import type { PlacementSnapshot } from '@dimina-kit/electron-deck/layout'
-import { invoke, on } from './ipc-transport'
+import { invoke, on, send } from './ipc-transport'
 
 export interface PopoverInitPayload {
   top: number
@@ -67,6 +69,58 @@ export function showPopover(payload: PopoverShowPayload): Promise<void> {
 /** Hide the compile-popover overlay. */
 export function hidePopover(): Promise<void> {
   return invoke<void>(PopoverChannel.Hide)
+}
+
+export interface TooltipShowPayload {
+  anchor: { x: number; y: number; width: number; height: number }
+  text: string
+}
+
+export interface TooltipRenderPayload {
+  requestId: number
+  text: string
+  maxWidth: number
+}
+
+/** Warm the hidden tooltip renderer for the project toolbar. */
+export function prepareTooltip(): void {
+  send(TooltipChannel.Prepare)
+}
+
+/**
+ * Show (or reposition + retext, if already shown) the tooltip overlay
+ * anchored to `anchor`. Fire-and-forget (`send`, not `invoke`) — a tooltip
+ * needs to feel instant on hover, and nothing here needs a reply. See
+ * `TooltipChannel`'s doc-comment (shared/ipc-channels.ts) for why this is a
+ * WebContentsView overlay rather than the `ui/tooltip` Radix component or the
+ * native `title` attribute.
+ */
+export function showTooltip(payload: TooltipShowPayload): void {
+  send(TooltipChannel.Show, payload)
+}
+
+/** Hide the tooltip overlay. */
+export function hideTooltip(): void {
+  send(TooltipChannel.Hide)
+}
+
+/** Announce that an overlay renderer has installed all inbound listeners. */
+export function notifyOverlayReady(): void {
+  send(OverlayChannel.Ready)
+}
+
+/** Subscribe to the latest render request for the tooltip overlay. */
+export function onTooltipInit(handler: (payload: TooltipRenderPayload) => void): () => void {
+  return on<[TooltipRenderPayload]>(TooltipChannel.Init, (payload) => handler(payload))
+}
+
+/** Report the tooltip's intrinsic painted footprint for the current request. */
+export function reportTooltipMeasured(payload: {
+  requestId: number
+  width: number
+  height: number
+}): void {
+  send(TooltipChannel.Measured, payload)
 }
 
 // ── Event subscriptions ─────────────────────────────────────────────────────

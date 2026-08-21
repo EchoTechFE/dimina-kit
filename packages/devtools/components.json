@@ -1,21 +1,23 @@
 {
   "$schema": "https://ui.shadcn.com/schema.json",
-  "style": "default",
+  "style": "new-york",
   "rsc": false,
   "tsx": true,
+  "iconLibrary": "iconpark",
   "tailwind": {
-    "config": "tailwind.config.cjs",
-    "css": "src/renderer/design.css",
+    "config": "",
+    "css": "src/renderer/assets/cornetto-tokens.css",
     "baseColor": "neutral",
-    "cssVariables": true,
-    "prefix": ""
+    "cssVariables": true
   },
   "aliases": {
-    "components": "@/components",
-    "utils": "@/lib/utils",
-    "ui": "@/components/ui",
-    "hooks": "@/hooks",
-    "lib": "@/lib"
+    "components": "@/shared/components",
+    "utils": "@/shared/lib/utils",
+    "ui": "@/shared/components/ui",
+    "lib": "@/shared/lib",
+    "hooks": "@/shared/hooks"
   },
-  "iconLibrary": "lucide"
+  "registries": {
+    "@cornetto-react": "https://cornetto.echo.tech/r-react/{name}.json"
+  }
 }
