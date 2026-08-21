@@ -6,7 +6,7 @@ import {
   projectSourceContextFromServiceHostUrl,
 } from '../../../shared/open-in-editor.js'
 import type { RenderEvent, ServiceHostReadyEvent } from '../../ipc/bridge-router.js'
-import { buildCustomizeTabsScript } from './devtools-tabs.js'
+import { buildCustomizeTabsScript, buildDevtoolsSoftMenuScript } from './devtools-tabs.js'
 import { buildInternalLogHideScript } from './console-filter.js'
 import { buildClearConsoleFilterScript } from './clear-console-filter.js'
 import { whenFrontendBootstrapped } from './frontend-bootstrap-gate.js'
@@ -484,6 +484,26 @@ export function createDevtoolsHost(
     // queue a pending `did-stop-loading` waiter while the front-end is still
     // loading (see raiseExecuteJavaScriptListenerCeiling).
     raiseExecuteJavaScriptListenerCeiling(devtoolsWc)
+    // The embedded Chrome DevTools front-end renders its context menus ONLY
+    // when the host reports “hosted mode” (page-rendered soft menus — the
+    // VS Code / Web-embedding path). Electron's own devtools:// host injection
+    // leaves `isHostedMode()` false and does not handle
+    // `showContextMenuAtPoint()` for a SELF-BUILT WebContentsView, so
+    // right-click menus (复制为 cURL / Copy / …) never appear — the front-end
+    // asks the host for a menu and nobody answers. Force hosted mode so the
+    // front-end draws its native page menus itself. Re-injected on every
+    // The embedded DevTools front-end asks the host for its context menus via
+    // `showContextMenuAtPoint()` (Electron leaves it unhandled on a self-built
+    // WCV), so right-click menus never appear. Force page-rendered soft menus
+    // via a narrow ContextMenu#show patch (NOT the host-wide isHostedMode()
+    // flag — that one breaks the front-end's target data flow, emptying the
+    // Console/Network panels). Needs the front-end bootstrap for EUI to exist.
+    injectWhenReady(devtoolsWc, 'soft-menu', () => {
+      void whenFrontendBootstrapped(devtoolsWc).then((ready) => {
+        if (!ready || devtoolsWc.isDestroyed()) return
+        devtoolsWc.executeJavaScript(buildDevtoolsSoftMenuScript()).catch(() => {})
+      })
+    })
     // Hand the network forwarder THIS front-end host wc — it injects the
     // simulator WCV's Network.* CDP events into `window.DevToolsAPI.dispatchMessage`
     // here so the native Network tab renders them (falls back to the service-host

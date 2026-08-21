@@ -173,9 +173,11 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
   }, [])
 
   async function copyPagePath() {
-    if (!simulator.currentPage) return
+    if (!simulator.currentRoute) return
     try {
-      await navigator.clipboard.writeText(simulator.currentPage)
+      // Copy the displayed route (page + params) so a shared/traced route
+      // reproduces the page's launch state, matching what the bar shows.
+      await navigator.clipboard.writeText(simulator.currentRoute)
       setCopied(true)
       if (copyTimerRef.current !== null) {
         window.clearTimeout(copyTimerRef.current)
@@ -226,7 +228,7 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
           onDeviceChange={device.handleDeviceChange}
           onZoomChange={device.handleZoomChange}
           compileStatus={session.compileStatus}
-          currentPage={simulator.currentPage}
+          currentPage={simulator.currentRoute}
           copied={copied}
           onCopyPagePath={copyPagePath}
           runtimeStatus={session.runtimeStatus}

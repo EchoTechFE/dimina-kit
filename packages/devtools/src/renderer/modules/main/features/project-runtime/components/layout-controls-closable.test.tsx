@@ -1,7 +1,8 @@
 import { fireEvent, render } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import type { LayoutNode, LayoutTree } from '@dimina-kit/electron-deck/layout'
-import { buildDockModel, buildDockRegistry } from '../layout/dock-layout'
+import { serializeLayout } from '@dimina-kit/electron-deck/layout'
+import { buildDockModel, buildDockRegistry, buildPresetDockTree } from '../layout/dock-layout'
 import { LayoutVisibilityToggles } from './layout-controls'
 
 const DEBUG_PANELS = ['wxml', 'appdata', 'storage', 'console', 'compile'] as const
@@ -20,7 +21,23 @@ function panelIds(tree: LayoutTree): Set<string> {
 }
 
 function renderControls() {
-  const model = buildDockModel(null, 375, new Set())
+  // Seed the in-editor preset (all 7 panels visible) rather than the canonical
+  // default tree, which now ships the editor hidden — these toggles exercise
+  // the three-region arrangement (simulator / editor / debug) as a whole.
+  const KNOWN_7 = new Set([
+    'simulator',
+    'editor',
+    'wxml',
+    'appdata',
+    'storage',
+    'console',
+    'compile',
+  ])
+  const model = buildDockModel(
+    serializeLayout(buildPresetDockTree(375, 'left', 'inEditor')),
+    375,
+    KNOWN_7,
+  )
   const registry = buildDockRegistry()
   const rendered = render(
     <LayoutVisibilityToggles model={model} registry={registry} simPanelWidth={375} />,

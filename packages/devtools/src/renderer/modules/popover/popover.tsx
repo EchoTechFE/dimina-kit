@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { Button } from '@/shared/components/ui/button'
 import { Input } from '@/shared/components/ui/input'
 import { Select } from '@/shared/components/ui/select'
@@ -16,15 +16,37 @@ export default function Popover() {
   })
   const [pages, setPages] = useState<string[]>([])
 
+  // Latest anchor from the init payload, kept for re-clamping. The overlay
+  // view's bounds are applied only AFTER main's markReady (readyMode manual),
+  // so the first `onPopoverInit` can arrive while `window.innerWidth` is still
+  // 0 — `maxLeft` then goes negative and the panel is clamped off-screen. When
+  // the view gains its size the resize event fires; re-apply the same anchor
+  // against the real viewport instead of leaving the panel stranded.
+  const initRef = useRef<{ top: number; left: number } | null>(null)
+
   useEffect(() => {
+    function applyPosition(data: { top: number; left: number }): void {
+      const maxLeft = window.innerWidth - POPOVER_WIDTH_PX - POPOVER_MARGIN_PX
+      setPosition({ top: data.top, left: Math.min(data.left, maxLeft) })
+    }
+
     const off = onPopoverInit((data) => {
       setPages(data.pages)
       setConfig(data.config)
-      const maxLeft = window.innerWidth - POPOVER_WIDTH_PX - POPOVER_MARGIN_PX
-      setPosition({ top: data.top, left: Math.min(data.left, maxLeft) })
+      initRef.current = { top: data.top, left: data.left }
+      applyPosition(initRef.current)
     })
+
+    const onResize = (): void => {
+      if (initRef.current) applyPosition(initRef.current)
+    }
+    window.addEventListener('resize', onResize)
+
     notifyOverlayReady()
-    return off
+    return () => {
+      off()
+      window.removeEventListener('resize', onResize)
+    }
   }, [])
 
   function handleOverlayClick() {

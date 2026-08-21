@@ -104,3 +104,33 @@ export function buildCustomizeTabsScript(
       var tr=0,t=setInterval(function(){tr++;try{apply();}catch(_){}if(tr>120)clearInterval(t);},60); try{apply();}catch(_){} }
   }catch(_){}})()`
 }
+
+/**
+ * Build the `executeJavaScript` source that forces the DevTools front-end to
+ * render its context menus as PAGE menus (soft menus) instead of asking the
+ * host via `showContextMenuAtPoint()`.
+ *
+ * The embedded DevTools front-end decides per-menu in `ContextMenu#show()`:
+ * `this.useSoftMenu || InspectorFrontendHostInstance.isHostedMode()`. On a
+ * self-built WebContentsView Electron leaves both false and does not answer
+ * `showContextMenuAtPoint()`, so right-click menus (复制为 cURL / Copy / …)
+ * never appear. Forcing the host-wide `isHostedMode()` true instead breaks the
+ * front-end's target data flow (Console/Network panels go empty), so we take
+ * the narrow path: patch the ContextMenu prototype so every menu shows as a
+ * page-rendered soft menu — same rendering the VS Code embedding uses, without
+ * touching the host-mode flag or any other front-end behaviour.
+ */
+export function buildDevtoolsSoftMenuScript(): string {
+  return `(function(){
+    try {
+      var C = globalThis.EUI && globalThis.EUI.ContextMenu && globalThis.EUI.ContextMenu.ContextMenu;
+      if (C && C.prototype && typeof C.prototype.show === 'function') {
+        var origShow = C.prototype.show;
+        C.prototype.show = function() {
+          this.useSoftMenu = true;
+          return origShow.apply(this, arguments);
+        };
+      }
+    } catch (_) {}
+  })()`
+}

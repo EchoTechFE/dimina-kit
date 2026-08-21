@@ -39,8 +39,9 @@ import {
   ipcInvoke,
   pollUntil,
   evalInSimulator,
+  RENDER_GUEST_URL_MARKER,
 } from './helpers'
-import { AutomationChannel } from '../src/shared/ipc-channels'
+import { AutomationChannel, ProjectFsChannel } from '../src/shared/ipc-channels'
 
 // NOTE: scope DIMINA_NATIVE_HOST to THIS spec's electron launch (below), never
 // `process.env` — a module-top mutation poisons the shared --workers=1 runner,
@@ -220,5 +221,109 @@ test.describe('native-host current-page toolbar e2e', () => {
       after.includes(ENTRY_ROUTE),
       `toolbar should no longer show the entry route ${ENTRY_ROUTE} after navigation (got "${after}")`,
     ).toBe(false)
+  })
+
+  test('toolbar shows the page route WITH its query after a param\'d navigateTo', async () => {
+    const QUERIED = 'pages/detail/detail?from=nav&id=7'
+
+    // navigateTo with a query string — the page's onLoad receives these params.
+    await wsCall('App.callWxMethod', { method: 'navigateTo', args: [{ url: '/pages/detail/detail?from=nav&id=7' }] })
+
+    // The toolbar must show the FULL route (path + params), like WeChat
+    // DevTools' simulator page-path bar — a bare path would hide the params.
+    const shown = await pollUntil(
+      () => readToolbarCurrentPage(mainWindow),
+      (txt) => txt.includes('pages/detail/detail?from=nav&id=7'),
+      15000,
+      400,
+    )
+    expect(
+      shown,
+      `toolbar should show the route with its query (${QUERIED})`,
+    ).toContain('pages/detail/detail?from=nav&id=7')
+  })
+
+  test('a watcher rebuild keeps the current page route WITH its query', async () => {
+    // Precondition: the previous (serial) test navigated to the queried detail
+    // route and the toolbar shows it.
+    const QUERIED = 'pages/detail/detail?from=nav&id=7'
+    await pollUntil(
+      () => readToolbarCurrentPage(mainWindow),
+      (txt) => txt.includes('pages/detail/detail?from=nav'),
+      15000,
+      400,
+    )
+
+    // Trigger a watcher rebuild the way a real edit does: save a visible-text
+    // change to the CURRENT page (detail.wxml) through the Monaco write path
+    // (`ProjectFsChannel.WriteFile` — the same IPC the editor uses, see
+    // editor-hot-reload.spec.ts). The rebuild must re-attach the simulator at
+    // the CURRENT page with its params intact (WeChat DevTools keeps the page
+    // stack's route+query across incremental compiles) — a bare-path
+    // re-attach would drop the query.
+    const detailWxml = path.join(FIXTURE_DIR, 'pages', 'detail', 'detail.wxml')
+    const original = fs.readFileSync(detailWxml, 'utf8')
+    const marker = `DETAIL ${Date.now()}`
+
+    // Wait for the rendered page text so the rebuild-completion signal is the
+    // simulator actually repainting the new content (not just the toolbar).
+    const readRenderText = async (): Promise<string> => {
+      try {
+        return await electronApp.evaluate(async ({ webContents }, urlMarker) => {
+          const frames = webContents
+            .getAllWebContents()
+            .filter((wc) => !wc.isDestroyed() && wc.getURL().includes(urlMarker))
+          const texts: string[] = []
+          for (const f of frames) {
+            try {
+              texts.push((await f.executeJavaScript('document.body.innerText')) as string)
+            } catch {
+              // guest navigating / not ready — skip
+            }
+          }
+          return texts.join('\n---FRAME---\n')
+        }, RENDER_GUEST_URL_MARKER)
+      } catch {
+        return ''
+      }
+    }
+
+    try {
+      await ipcInvoke(
+        mainWindow,
+        ProjectFsChannel.WriteFile,
+        detailWxml,
+        original.replace('DETAIL PAGE', marker),
+      )
+      // Rebuild + respawn + repaint of the new text proves the recompile ran
+      // end-to-end; only then is the toolbar assertion meaningful.
+      const rendered = await pollUntil(
+        readRenderText,
+        (t) => t.includes(marker),
+        25000,
+        1000,
+      )
+      expect(rendered, 'saved detail.wxml text must appear after the watcher rebuild').toContain(marker)
+    } finally {
+      await ipcInvoke(mainWindow, ProjectFsChannel.WriteFile, detailWxml, original).catch(() => {})
+      // Let the restore-triggered rebuild settle so the next spec opens a
+      // clean project (mirrors editor-hot-reload.spec.ts's restore wait).
+      await pollUntil(
+        readRenderText,
+        (t) => t.includes('DETAIL PAGE') && !t.includes(marker),
+        25000,
+        1000,
+      ).catch(() => {})
+    }
+
+    // After the rebuild cycle the toolbar must STILL show the queried route —
+    // the page AND its params survive the recompile.
+    const after = await pollUntil(
+      () => readToolbarCurrentPage(mainWindow),
+      (txt) => txt.includes('pages/detail/detail?from=nav&id=7'),
+      15000,
+      400,
+    )
+    expect(after).toContain(QUERIED)
   })
 })

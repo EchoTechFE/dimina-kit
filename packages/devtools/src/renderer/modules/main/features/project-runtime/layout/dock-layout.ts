@@ -105,11 +105,14 @@ export function buildDockRegistry(): PanelRegistry {
 
 /**
  * The default dock tree: a row split with the simulator pinned to
- * `simPanelWidth` px on the leading edge and a flexible column (editor over a
- * single tab strip holding the five debug panels) filling the rest. The five
- * debug panels (wxml/appdata/storage/console/compile) are co-located in ONE tab
- * group in pinned WeChat-DevTools order with WXML active, mirroring the legacy
- * BottomDebugPanel tab strip. Validates clean against the seven known ids.
+ * `simPanelWidth` px on the leading edge and a single tab strip holding the
+ * five debug panels (wxml/appdata/storage/console/compile) filling the rest.
+ * The workbench `editor` is intentionally NOT in the default: the project
+ * window is a debugger first, so a fresh install opens with the debug panels
+ * full-width; the editor is one click away via the toolbar's 编辑器 visibility
+ * toggle (which re-inserts it at the legacy spot) or the in-editor layout
+ * preset. A PERSISTED tree is restored verbatim — this default only ships for
+ * fresh installs / resets.
  */
 export function buildDefaultDockTree(simPanelWidth: number): LayoutTree {
   return {
@@ -126,19 +129,10 @@ export function buildDefaultDockTree(simPanelWidth: number): LayoutTree {
       children: [
         { kind: 'tabs', id: 'g-sim', panels: ['simulator'], active: 'simulator' },
         {
-          kind: 'split',
-          id: 'col-main',
-          orientation: 'column',
-          sizes: [70, 30],
-          children: [
-            { kind: 'tabs', id: 'g-editor', panels: ['editor'], active: 'editor' },
-            {
-              kind: 'tabs',
-              id: 'g-debug',
-              panels: ['wxml', 'appdata', 'storage', 'console', 'compile'],
-              active: 'wxml',
-            },
-          ],
+          kind: 'tabs',
+          id: 'g-debug',
+          panels: ['wxml', 'appdata', 'storage', 'console', 'compile'],
+          active: 'wxml',
         },
       ],
     },

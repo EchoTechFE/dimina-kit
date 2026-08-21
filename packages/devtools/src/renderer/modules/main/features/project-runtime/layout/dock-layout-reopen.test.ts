@@ -33,6 +33,7 @@ import type { LayoutNode, LayoutTree } from '@dimina-kit/electron-deck/layout'
 import {
   buildDefaultDockTree,
   buildDockRegistry,
+  buildPresetDockTree,
   listPanelVisibility,
   reopenPanel,
 } from './dock-layout'
@@ -150,7 +151,10 @@ describe('reopenPanel — re-insert a closed panel at a default-aligned spot', (
   })
 
   it('A3: reopening `editor` after it was closed → present again, validates', () => {
-    const closed = closePanel(buildDefaultDockTree(W), 'editor')
+    // The canonical default tree has NO editor (debugger-first); the editor
+    // hides via the toolbar toggle and reopens here, so base the close on the
+    // in-editor preset (the arrangement that DOES carry the editor).
+    const closed = closePanel(buildPresetDockTree(W, 'left', 'inEditor'), 'editor')
     expect(collectPanelIds(closed.root).has('editor')).toBe(false)
 
     const reopened = reopenPanel(closed, 'editor', W)
@@ -165,7 +169,7 @@ describe('reopenPanel — re-insert a closed panel at a default-aligned spot', (
     // debug panels must still share the SAME tab group afterward — not have
     // wxml peeled off into its own group beside editor while
     // appdata/storage/console/compile are left behind in the original group.
-    const closed = closePanel(buildDefaultDockTree(W), 'editor')
+    const closed = closePanel(buildPresetDockTree(W, 'left', 'inEditor'), 'editor')
     const debugGroupIdBefore = groupIdOf(closed, 'wxml')
     expect(debugGroupIdBefore).not.toBeNull()
 
@@ -256,7 +260,10 @@ describe('reopenPanel — re-insert a closed panel at a default-aligned spot', (
 
   it('A7: the result always validates clean against the 7 known ids', () => {
     for (const id of [...KNOWN_7]) {
-      const closed = closePanel(buildDefaultDockTree(W), id)
+      // The canonical default tree carries 6 panels (editor hidden); base the
+      // editor close on the in-editor preset, which does carry it.
+      const base = id === 'editor' ? buildPresetDockTree(W, 'left', 'inEditor') : buildDefaultDockTree(W)
+      const closed = closePanel(base, id)
       const reopened = reopenPanel(closed, id, W)
       expect(
         validateTree(reopened, KNOWN_7),
@@ -271,9 +278,11 @@ describe('reopenPanel — re-insert a closed panel at a default-aligned spot', (
 // ──────────────────────────────────────────────────────────────────────────
 
 describe('listPanelVisibility — one entry per registered panel, open iff present', () => {
-  it('B1: full default tree → all 7 open, titles match the registry, in registry order', () => {
+  it('B1: full 7-panel preset tree → all 7 open, titles match the registry, in registry order', () => {
     const registry = buildDockRegistry()
-    const tree = buildDefaultDockTree(W)
+    // The in-editor preset carries all 7 (incl. the editor, which the
+    // canonical default tree hides) — the full-open visibility snapshot.
+    const tree = buildPresetDockTree(W, 'left', 'inEditor')
 
     const list = listPanelVisibility(tree, registry)
 
@@ -288,9 +297,23 @@ describe('listPanelVisibility — one entry per registered panel, open iff prese
     ])
   })
 
+  it('B1b: the canonical default tree ships the editor closed', () => {
+    const registry = buildDockRegistry()
+    const list = listPanelVisibility(buildDefaultDockTree(W), registry)
+    const editor = list.find((e) => e.id === 'editor')
+    expect(editor).toEqual({ id: 'editor', title: 'Editor', open: false })
+    // the five debug panels + simulator all stay open.
+    for (const entry of list) {
+      if (entry.id !== 'editor') expect(entry.open).toBe(true)
+    }
+  })
+
   it('B2: after closing `storage` → its entry is open:false, all others open:true', () => {
     const registry = buildDockRegistry()
-    const tree = closePanel(buildDefaultDockTree(W), 'storage')
+    // Base the close on the in-editor preset (editor open, debug strip present)
+    // so the assertion is about the closed panel alone, not the default's
+    // editor-hidden state.
+    const tree = closePanel(buildPresetDockTree(W, 'left', 'inEditor'), 'storage')
 
     const list = listPanelVisibility(tree, registry)
 

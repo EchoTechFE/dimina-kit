@@ -41,6 +41,8 @@ interface SimulatorPanelProps {
   onDeviceChange: (e: React.ChangeEvent<HTMLSelectElement>) => void;
   onZoomChange: (e: React.ChangeEvent<HTMLSelectElement>) => void;
   compileStatus: { status: string; message: string };
+  /** Visible page as `pagePath?k=v&…`, shown in the page-path bar with params
+   * (WeChat DevTools shows the route the same way). Empty when unknown. */
   currentPage: string;
   copied: boolean;
   onCopyPagePath: () => void;
@@ -353,7 +355,10 @@ export function SimulatorPanel({
 
       <div className="flex items-center px-2.5 bg-sim-bottom border-t border-border-subtle shrink-0 h-[30px] min-w-0">
         <div className="flex items-center gap-1 min-w-0">
-          <span className="text-[11px] text-text-dim truncate min-w-0">
+          <span
+            className="text-[11px] text-text-dim truncate min-w-0"
+            title={currentPage || undefined}
+          >
             {currentPage || "—"}
           </span>
           {currentPage && (
