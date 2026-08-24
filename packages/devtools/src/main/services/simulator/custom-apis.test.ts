@@ -196,3 +196,20 @@ describe('createSimulatorApiRegistry — clear', () => {
     await expect(reg.invoke('new', null)).resolves.toBe('new')
   })
 })
+
+describe('createSimulatorApiRegistry — name validation', () => {
+  it('throws when the name contains a comma (catches: a name that would silently split into two entries when CSV-joined for the service-host spawn URL)', () => {
+    const reg = createSimulatorApiRegistry()
+    expect(() => reg.register('foo,bar', () => 0)).toThrowError(/comma/)
+  })
+
+  it('throws when the name contains whitespace (catches: a name that would mismatch after the spawn URL round-trip trims it)', () => {
+    const reg = createSimulatorApiRegistry()
+    expect(() => reg.register('foo bar', () => 0)).toThrowError(/whitespace/)
+  })
+
+  it('throws when the name is empty', () => {
+    const reg = createSimulatorApiRegistry()
+    expect(() => reg.register('', () => 0)).toThrow()
+  })
+})

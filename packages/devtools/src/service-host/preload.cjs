@@ -63,6 +63,16 @@ globalThis.__diminaApiNamespaces = apiNamespacesRaw
   ? apiNamespacesRaw.split(',').map((name) => name.trim()).filter(Boolean)
   : []
 
+// Host-registered custom API names (`ElectronRuntime.registerApi('joinIsland', ...)`
+// etc.). service.js's `registerEnumerableApiNames()` installs these as real
+// own-enumerable forwarding functions on `wx`/`dd` — its Proxy `get` trap
+// deliberately returns `undefined` for anything not registered this way, so
+// without this the names are silently unusable from mini-program logic.
+const registeredApisRaw = params.get('registeredApis')
+globalThis.__diminaRegisteredApis = registeredApisRaw
+  ? registeredApisRaw.split(',').map((name) => name.trim()).filter(Boolean)
+  : []
+
 // Live host-env updates (native-host device dropdown). The binding above is
 // non-configurable, but the inner object's properties are writable — merge the
 // pushed metrics into `hostEnvSnapshot` in place. `sync-impls/system-info.ts`

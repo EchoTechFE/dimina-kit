@@ -1,7 +1,11 @@
 /**
- * Guards that handleSpawn forwards ctx.apiNamespaces to createServiceHostWindow
- * so the service-host URL can encode the namespaces as a query param and the
- * preload installs the correct global namespace objects before service.js runs.
+ * Guards that handleSpawn forwards ctx.simulatorApis.list() to
+ * createServiceHostWindow/buildServiceHostSpawnUrl as `registeredApis` so the
+ * service-host preload can install `globalThis.__diminaRegisteredApis` before
+ * service.js evaluates. Without this, `registerEnumerableApiNames()` runs with
+ * an empty list and every host-registered custom API name (e.g. `joinIsland`)
+ * stays `undefined` on `wx`/`dd` — the Proxy's `get` trap no longer forwards
+ * unregistered property access.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createConnectionRegistry } from '@dimina-kit/electron-deck/main'
@@ -70,7 +74,7 @@ const stubs = vi.hoisted(() => {
   // Opts captured from each buildServiceHostSpawnUrl call. The pooled spawn
   // branch builds the spawn URL itself (the fresh-window branch goes through
   // createServiceHostWindow instead), so this is how the pooled path's
-  // apiNamespaces forwarding is observed.
+  // registeredApis forwarding is observed.
   const spawnUrlOpts: Array<Record<string, unknown>> = []
 
   function createWindowForSpawn(opts?: Record<string, unknown>) {
@@ -145,7 +149,7 @@ vi.mock('electron', () => {
 
 // The fresh-window path goes through createServiceHostWindow; the pooled path
 // builds the spawn URL via buildServiceHostSpawnUrl. The latter is a capturing
-// vi.fn so the pooled branch's opts (including apiNamespaces) are observable.
+// vi.fn so the pooled branch's opts (including registeredApis) are observable.
 vi.mock('@dimina-kit/electron-runtime/main/service-host-window', () => ({
   serviceHostSpec: () => ({}),
   serviceHostPreloadPath: '/tmp/preload.cjs',
@@ -218,15 +222,19 @@ afterEach(() => {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function makeCtx(apiNamespaces: string[] = []): { ctx: WorkbenchContext; simulatorWc: MockWc } {
+function makeCtx(registeredApiNames: string[] = []): { ctx: WorkbenchContext; simulatorWc: MockWc } {
   const simulatorWc = stubs.makeWebContents()
   const ctx = {
     registry: { add: (_fn: AnyFn) => {} },
-    simulatorApis: { has: (_name: string) => false, invoke: async () => ({}), list: () => [] },
+    simulatorApis: {
+      has: (_name: string) => false,
+      invoke: async () => ({}),
+      list: () => registeredApiNames,
+    },
     windows: { mainWindow: { webContents: simulatorWc } },
     workspace: { getSession: () => undefined },
     connections: createConnectionRegistry(),
-    apiNamespaces,
+    apiNamespaces: [],
   } as unknown as WorkbenchContext
   return { ctx, simulatorWc }
 }
@@ -248,38 +256,37 @@ async function flush(n = 10): Promise<void> {
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
-describe('bridge-router — ctx.apiNamespaces forwarded to service host window', () => {
-  it('passes ctx.apiNamespaces to createServiceHostWindow opts so the spawn URL can encode the namespace globals', async () => {
-    const { ctx, simulatorWc } = makeCtx(['qd'])
+describe('bridge-router — ctx.simulatorApis.list() forwarded to service host window', () => {
+  it('passes registered custom API names to createServiceHostWindow opts so the spawn URL can encode them', async () => {
+    const { ctx, simulatorWc } = makeCtx(['joinIsland', 'share'])
     installBridgeRouter(ctx)
     await spawnSession(simulatorWc)
     await flush()
 
     expect(stubs.createWindowCallOpts).toHaveLength(1)
-    expect(stubs.createWindowCallOpts[0]).toMatchObject({ apiNamespaces: ['qd'] })
+    expect(stubs.createWindowCallOpts[0]).toMatchObject({ registeredApis: ['joinIsland', 'share'] })
   })
 
-  it('passes an empty apiNamespaces array to createServiceHostWindow when ctx.apiNamespaces is empty', async () => {
+  it('passes an empty registeredApis array to createServiceHostWindow when nothing is registered', async () => {
     const { ctx, simulatorWc } = makeCtx([])
     installBridgeRouter(ctx)
     await spawnSession(simulatorWc)
     await flush()
 
     expect(stubs.createWindowCallOpts).toHaveLength(1)
-    const val = stubs.createWindowCallOpts[0]?.apiNamespaces
+    const val = stubs.createWindowCallOpts[0]?.registeredApis
     expect(Array.isArray(val) ? val : undefined).toEqual([])
   })
 })
 
-describe('bridge-router — ctx.apiNamespaces forwarded on the pooled spawn path', () => {
-  it('threads ctx.apiNamespaces into buildServiceHostSpawnUrl when a warmed pool window serves the spawn', async () => {
+describe('bridge-router — ctx.simulatorApis.list() forwarded on the pooled spawn path', () => {
+  it('threads registered custom API names into buildServiceHostSpawnUrl when a warmed pool window serves the spawn', async () => {
     // Enable the pre-warm pool BEFORE installBridgeRouter reads the env, so
     // state.pool is non-null and the spawn takes the pooled (acquire) branch
-    // instead of constructing a fresh window. (The fresh-path tests above delete
-    // this env to force the other branch; this is the inverse.)
+    // instead of constructing a fresh window.
     process.env.DIMINA_PREWARM_POOL_SIZE = '1'
 
-    const { ctx, simulatorWc } = makeCtx(['qd'])
+    const { ctx, simulatorWc } = makeCtx(['joinIsland'])
     installBridgeRouter(ctx)
     await spawnSession(simulatorWc)
     await flush()
@@ -288,6 +295,6 @@ describe('bridge-router — ctx.apiNamespaces forwarded on the pooled spawn path
     // never called on this path.
     expect(stubs.createWindowCallOpts).toHaveLength(0)
     expect(stubs.spawnUrlOpts).toHaveLength(1)
-    expect(stubs.spawnUrlOpts[0]).toMatchObject({ apiNamespaces: ['qd'] })
+    expect(stubs.spawnUrlOpts[0]).toMatchObject({ registeredApis: ['joinIsland'] })
   })
 })

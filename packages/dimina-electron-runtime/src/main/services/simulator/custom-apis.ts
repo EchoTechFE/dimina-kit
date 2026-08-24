@@ -50,6 +50,12 @@ export function createSimulatorApiRegistry(): SimulatorApiRegistry {
   const handlers = new Map<string, SimulatorApiHandler>()
   return {
     register(name, handler) {
+      if (!name || /[,\s]/.test(name)) {
+        // Registered names are threaded to the service host as a comma-joined
+        // list (see bridge-router.ts's `registeredApis` spawn param); a comma
+        // or whitespace in the name would corrupt that CSV round-trip.
+        throw new Error(`Invalid simulator API name "${name}": must be non-empty and contain no commas or whitespace`)
+      }
       handlers.set(name, handler)
       return () => {
         if (handlers.get(name) === handler) handlers.delete(name)

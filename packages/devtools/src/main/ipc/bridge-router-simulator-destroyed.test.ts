@@ -251,7 +251,7 @@ function makeCtx(): {
   )
   const ctx = {
     registry: { add: (_fn: AnyFn) => {} },
-    simulatorApis: { has: (_name: string) => false, invoke: async () => ({}) },
+    simulatorApis: { has: (_name: string) => false, invoke: async () => ({}), list: () => [] },
     windows: { mainWindow: { webContents: simulatorWc } },
     workspace: { getSession: () => undefined },
     connections: createConnectionRegistry(),
