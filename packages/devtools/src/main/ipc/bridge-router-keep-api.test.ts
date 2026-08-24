@@ -197,7 +197,7 @@ function makeCtx(): { ctx: WorkbenchContext; simulatorWc: MockWc } {
     // (see foundation.md); a real registry satisfies that without affecting
     // these keep-API assertions.
     connections: createConnectionRegistry(),
-    simulatorApis: { has: (_name: string) => false, invoke: async () => ({}) },
+    simulatorApis: { has: (_name: string) => false, invoke: async () => ({}), list: () => [] },
     windows: { mainWindow: { webContents: simulatorWc } },
     workspace: { getSession: () => undefined },
   } as unknown as WorkbenchContext

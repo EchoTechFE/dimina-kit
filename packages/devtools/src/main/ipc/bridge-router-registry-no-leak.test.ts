@@ -181,7 +181,7 @@ function makeCtx(): { ctx: WorkbenchContext; registry: DisposableRegistry; simul
   const registry = new DisposableRegistry()
   const ctx = {
     registry,
-    simulatorApis: { has: (_name: string) => false, invoke: async () => ({}) },
+    simulatorApis: { has: (_name: string) => false, invoke: async () => ({}), list: () => [] },
     windows: { mainWindow: { webContents: simulatorWc } },
     workspace: { getSession: () => undefined },
     connections: createConnectionRegistry(),

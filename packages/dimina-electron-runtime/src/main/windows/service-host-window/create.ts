@@ -34,6 +34,15 @@ export interface ServiceHostWindowOptions {
    * which page logic referencing `qd.*` throws `ReferenceError: qd is not defined`.
    */
   apiNamespaces?: string[]
+  /**
+   * Host-registered custom API names (`ElectronRuntime.registerApi('joinIsland', ...)`).
+   * Encoded into the spawn URL so the preload can install
+   * `globalThis.__diminaRegisteredApis` before service.js evaluates — without
+   * which `registerEnumerableApiNames()` runs with an empty list and every
+   * custom API name stays `undefined` on `wx`/`dd` (the Proxy's `get` trap no
+   * longer forwards unregistered property access).
+   */
+  registeredApis?: string[]
   /** Runtime asset paths resolved by the owning integration. */
   assets?: RuntimeAssetPaths
   /**
@@ -103,6 +112,11 @@ export function buildServiceHostSpawnUrl(opts: ServiceHostWindowOptions): string
     // CSV of namespace names; the preload reads this back into
     // `globalThis.__diminaApiNamespaces`. URLSearchParams round-trips the comma.
     url.searchParams.set('apiNamespaces', opts.apiNamespaces.join(','))
+  }
+  if (opts.registeredApis && opts.registeredApis.length > 0) {
+    // CSV of host-registered custom API names; the preload reads this back into
+    // `globalThis.__diminaRegisteredApis`.
+    url.searchParams.set('registeredApis', opts.registeredApis.join(','))
   }
   return url.toString()
 }

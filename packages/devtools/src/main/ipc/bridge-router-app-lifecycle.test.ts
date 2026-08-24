@@ -171,7 +171,7 @@ function makeCtx(): { ctx: WorkbenchContext; simulatorWc: MockWc; mainWindow: Re
   const ctx = {
     registry: { add: (_fn: AnyFn) => {} },
     connections: createConnectionRegistry(),
-    simulatorApis: { has: (_name: string) => false, invoke: async () => ({}) },
+    simulatorApis: { has: (_name: string) => false, invoke: async () => ({}), list: () => [] },
     windows: { mainWindow },
     workspace: { getSession: () => undefined },
   } as unknown as WorkbenchContext

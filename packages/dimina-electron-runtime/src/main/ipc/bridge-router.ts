@@ -1174,6 +1174,11 @@ async function handleSpawn(
   // namespace globals; the simulator-supplied `opts.apiNamespaces` is derived
   // from the same host config and is not authoritative here.
   const apiNamespaces = ctx.apiNamespaces ?? []
+  // Host-registered custom API names (`ElectronRuntime.registerApi(...)`), read
+  // fresh at spawn time since a host can register APIs any time before a spawn.
+  // Threaded into the spawn URL so the preload can install
+  // `globalThis.__diminaRegisteredApis` before service.js evaluates.
+  const registeredApis = ctx.simulatorApis.list()
 
   // Resource base resolution. Preferred: the simulator-supplied dev-server
   // origin, which statically serves the compiled `<appId>/<root>/…` tree (same
@@ -1273,6 +1278,7 @@ async function handleSpawn(
       resourceBaseUrl,
       hostEnvSnapshot: hostEnv,
       apiNamespaces,
+      registeredApis,
       assets: runtimeAssets,
     }
     serviceWindow = createServiceHostWindow({
@@ -1405,6 +1411,7 @@ async function handleSpawn(
       resourceBaseUrl,
       hostEnvSnapshot: hostEnv,
       apiNamespaces,
+      registeredApis,
       assets: runtimeAssets,
     })
     void navigateServiceHost(serviceWindow, spawnUrl, {
