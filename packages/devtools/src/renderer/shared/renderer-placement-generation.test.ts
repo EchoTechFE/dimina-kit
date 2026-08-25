@@ -22,11 +22,21 @@
  * life. The fix seeds from main instead (`allocatePlacementGeneration`,
  * derived from main's own high-water mark), resolved once via
  * `ensurePlacementGenerationSeeded()` before the renderer's first render.
+ *
+ * A third regression (this file's retry/no-fallback tests): the seeding
+ * IPC call can genuinely fail — the main window's `loadFile()` fires before
+ * main finishes registering the `AllocatePlacementGeneration` handler (see
+ * this module's header comment) — and the seed guard used to swallow that
+ * into a local-only counter starting at 0, reproducing the exact
+ * high-water-mark bug above via a boot-order race instead of the clock.
+ * The fix retries a bounded number of times and rejects all the way out on
+ * exhaustion; the renderer entry point must not render on that rejection
+ * (see entries/main/main.test.ts for that half).
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 const viewApi = vi.hoisted(() => ({
-  allocatePlacementGeneration: vi.fn(() => Promise.resolve<number | undefined>(undefined)),
+  allocatePlacementGeneration: vi.fn(() => Promise.reject<number>(new Error('unset mock'))),
 }))
 
 vi.mock('./api/view-api.js', () => viewApi)
@@ -34,7 +44,7 @@ vi.mock('./api/view-api.js', () => viewApi)
 beforeEach(() => {
   vi.resetModules()
   viewApi.allocatePlacementGeneration.mockReset()
-  viewApi.allocatePlacementGeneration.mockImplementation(() => Promise.resolve<number | undefined>(undefined))
+  viewApi.allocatePlacementGeneration.mockImplementation(() => Promise.reject<number>(new Error('unset mock')))
 })
 
 describe('nextPlacementGeneration: one strictly increasing sequence shared across every screen', () => {
@@ -99,17 +109,79 @@ describe('ensurePlacementGenerationSeeded: main-assigned seed, not wall-clock', 
     expect(nextPlacementGeneration()).toBe(12)
   })
 
-  it('falls back to a local-only sequence from 0 when main swallows a failure into undefined', async () => {
-    // `invoke()` (ipc-transport.ts) never rejects — it swallows a main-side
-    // failure into `undefined`. The seed guard must check the resolved
-    // value's type, not rely on try/catch around a rejection that never
-    // happens.
-    viewApi.allocatePlacementGeneration.mockResolvedValue(undefined)
+})
+
+describe('ensurePlacementGenerationSeeded: retries a failing allocation, never falls back to a local sequence', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('retries a transient rejection and seeds from the eventual valid response, not a local-only counter', async () => {
+    // The seed IPC can genuinely fail — main's `loadFile()` fires before
+    // `registerBuiltinModules()` registers the handler (see this module's
+    // header) — so the first attempts here simulate that boot-order race.
+    viewApi.allocatePlacementGeneration
+      .mockRejectedValueOnce(new Error('no handler registered for allocate-placement-generation'))
+      .mockRejectedValueOnce(new Error('no handler registered for allocate-placement-generation'))
+      .mockResolvedValueOnce(500)
     const { ensurePlacementGenerationSeeded, nextPlacementGeneration } =
       await import('./renderer-placement-generation.js')
 
-    await ensurePlacementGenerationSeeded()
+    const seeding = ensurePlacementGenerationSeeded()
+    await vi.runAllTimersAsync()
+    await seeding
 
-    expect(nextPlacementGeneration()).toBe(1)
+    expect(viewApi.allocatePlacementGeneration).toHaveBeenCalledTimes(3)
+    expect(nextPlacementGeneration()).toBe(501)
+  })
+
+  it('treats a non-integer resolved value as a failed attempt and retries rather than seeding from it', async () => {
+    // `invokeStrict` still resolves whatever main sends back verbatim; a
+    // malformed/undefined response must not be trusted as a real seed.
+    viewApi.allocatePlacementGeneration
+      .mockResolvedValueOnce(undefined as unknown as number)
+      .mockResolvedValueOnce(10)
+    const { ensurePlacementGenerationSeeded, nextPlacementGeneration } =
+      await import('./renderer-placement-generation.js')
+
+    const seeding = ensurePlacementGenerationSeeded()
+    await vi.runAllTimersAsync()
+    await seeding
+
+    expect(viewApi.allocatePlacementGeneration).toHaveBeenCalledTimes(2)
+    expect(nextPlacementGeneration()).toBe(11)
+  })
+
+  it('rejects after exhausting every retry, and does NOT mark itself seeded — a later call can still recover', async () => {
+    viewApi.allocatePlacementGeneration.mockRejectedValue(new Error('main never responded'))
+    const { ensurePlacementGenerationSeeded, nextPlacementGeneration } =
+      await import('./renderer-placement-generation.js')
+
+    // Attach the rejection assertion BEFORE advancing timers — awaiting the
+    // promise only after runAllTimersAsync would let it reject unobserved in
+    // between and flag as an unhandled rejection.
+    const seeding = ensurePlacementGenerationSeeded()
+    const assertion = expect(seeding).rejects.toThrow(/failed to allocate a generation seed/)
+    await vi.runAllTimersAsync()
+    await assertion
+
+    const attemptsWhenExhausted = viewApi.allocatePlacementGeneration.mock.calls.length
+    expect(attemptsWhenExhausted).toBeGreaterThan(1)
+
+    // The renderer entry point must never have proceeded past this
+    // rejection to render on a local-only counter — this call, standing in
+    // for a caller-driven retry (e.g. a restart), proves `seeded` was never
+    // wrongly latched true by the failed attempt above.
+    viewApi.allocatePlacementGeneration.mockReset()
+    viewApi.allocatePlacementGeneration.mockResolvedValueOnce(500)
+    const retry = ensurePlacementGenerationSeeded()
+    await vi.runAllTimersAsync()
+    await retry
+
+    expect(nextPlacementGeneration()).toBe(501)
   })
 })

@@ -30,10 +30,30 @@
 // seed from its own `rendererGeneration` high-water mark
 // (placement-reconciler.ts's `allocateGeneration`), so it is guaranteed to
 // exceed anything main has ever accepted, independent of wall-clock time.
+//
+// Getting that seed is a real IPC round-trip, and it can genuinely fail: the
+// main window's `loadFile()` fires synchronously during window construction
+// (windows/main-window/create.ts), well before `registerBuiltinModules()`
+// registers the `AllocatePlacementGeneration` handler (app.ts) — the
+// renderer's first invoke can race ahead of that registration and come back
+// rejected ("no handler registered"). A silent local-only fallback on that
+// failure would reproduce the exact high-water-mark bug this module exists
+// to fix, just triggered by a boot-order race instead of the clock. So a
+// failure here is retried a bounded number of times (the registration race
+// resolves within a handful of main-process ticks) and, if every attempt
+// fails, rejected all the way out — the renderer entry point must not
+// render the app on that rejection (see entries/main/main.tsx).
 import { allocatePlacementGeneration } from './api/view-api.js'
 
 let placementGeneration = 0
 let seeded = false
+
+const ALLOCATE_SEED_ATTEMPTS = 5
+const ALLOCATE_SEED_RETRY_DELAY_MS = 50
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
 
 /**
  * Resolve this renderer session's generation seed from main. Callers must
@@ -41,20 +61,34 @@ let seeded = false
  * renderer entry point does this before its first render (see
  * entries/main/main.tsx), so every screen downstream can keep calling
  * `nextPlacementGeneration()` synchronously from a `useState` initializer.
- * Idempotent: a second call is a no-op (this module's lifetime is one
- * renderer session; there is only ever one bootstrap to seed).
+ * Idempotent: a second call after a successful seed is a no-op.
+ *
+ * Rejects if every retry attempt fails (main never returns a valid seed) —
+ * never resolves into a local-only fallback. Callers must not catch this and
+ * proceed as if seeded; the whole point is that a from-zero local sequence
+ * is unsafe once main has ever accepted a snapshot from a previous session.
  */
 export async function ensurePlacementGenerationSeeded(): Promise<void> {
   if (seeded) return
-  seeded = true
-  // `allocatePlacementGeneration` rides the lenient `invoke` helper, which
-  // swallows a main-side failure into `undefined` rather than rejecting —
-  // guard explicitly rather than try/catch. Staying on the local-only
-  // fallback (counts up from 0) is safe on a fresh main process (whose own
-  // high-water mark also starts at 0); a stale main-process reload racing
-  // this is not a real scenario since main itself did not respond.
-  const seed = await allocatePlacementGeneration()
-  if (typeof seed === 'number') placementGeneration = seed
+  let lastError: unknown
+  for (let attempt = 0; attempt < ALLOCATE_SEED_ATTEMPTS; attempt++) {
+    try {
+      const seed = await allocatePlacementGeneration()
+      if (!Number.isSafeInteger(seed)) {
+        throw new Error(`main returned a non-integer placement-generation seed: ${String(seed)}`)
+      }
+      placementGeneration = seed
+      seeded = true
+      return
+    } catch (err) {
+      lastError = err
+      if (attempt < ALLOCATE_SEED_ATTEMPTS - 1) await delay(ALLOCATE_SEED_RETRY_DELAY_MS)
+    }
+  }
+  throw new Error(
+    `[placement-generation] failed to allocate a generation seed from main after ${ALLOCATE_SEED_ATTEMPTS} attempts`,
+    { cause: lastError },
+  )
 }
 
 export function nextPlacementGeneration(): number {
