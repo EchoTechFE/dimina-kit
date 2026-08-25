@@ -174,6 +174,58 @@ export interface MiniappHostToolbar {
 }
 
 /**
+ * Host-facing control surface for the sidebar WebContentsView. Shape
+ * identical to `MiniappHostToolbar` except the axis-specific mode setter —
+ * see that interface for member semantics.
+ */
+export interface MiniappHostSidebar {
+  setPreloadPath: (path: string | null) => void
+  loadFile: (path: string) => Promise<void>
+  loadURL: (url: string) => Promise<void>
+  send: (channel: string, payload: unknown) => boolean
+  onMessage: (
+    channel: string,
+    handler: (payload: unknown) => void,
+  ) => { dispose: () => void }
+  onReady: (handler: () => void) => { dispose: () => void }
+  /**
+   * Pin (`{ fixed }`) or unpin (`'auto'`) the sidebar strip width. `'auto'`
+   * (default) lets the in-page width advertiser drive the placeholder.
+   * `{ fixed }` values must be finite and non-negative — anything else throws
+   * a `TypeError` synchronously and leaves the standing mode untouched.
+   */
+  setWidthMode: (mode: 'auto' | { fixed: number }) => void
+}
+
+/**
+ * Host-facing control surface for the by-demand, dual-axis-autosized dialog
+ * WebContentsView. Unlike the persistent toolbar/sidebar strips, the dialog
+ * is shown/hidden explicitly — there is no extent-mode setter (both axes
+ * always self-size from the page's own measured content).
+ */
+export interface MiniappHostDialog {
+  setPreloadPath: (path: string | null) => void
+  loadFile: (path: string) => Promise<void>
+  loadURL: (url: string) => Promise<void>
+  send: (channel: string, payload: unknown) => boolean
+  onMessage: (
+    channel: string,
+    handler: (payload: unknown) => void,
+  ) => { dispose: () => void }
+  onReady: (handler: () => void) => { dispose: () => void }
+  /**
+   * Show the dialog, centered in the main window using its self-advertised
+   * size on both axes. Creates the view's placement if needed; does not
+   * (re)load content — the host must `loadURL`/`loadFile` first.
+   */
+  show: () => void
+  /** Hide the dialog (kept alive, content preserved) without destroying the view. */
+  hide: () => void
+  /** Whether the dialog is currently shown. */
+  isVisible: () => boolean
+}
+
+/**
  * The audited workspace surface: project list membership, session lifecycle,
  * and minimal session state. Thumbnails / per-project settings / providers
  * stay internal.
@@ -210,8 +262,12 @@ export interface MiniappWorkspace {
  * plumbing is a deliberate semver decision, not an accident of projection.
  */
 export interface MiniappRuntime {
-  /** View layer — only the host-owned toolbar control is public. */
-  views: { readonly hostToolbar: MiniappHostToolbar }
+  /** View layer — only the host-owned slot controls are public. */
+  views: {
+    readonly hostToolbar: MiniappHostToolbar
+    readonly hostSidebar: MiniappHostSidebar
+    readonly hostDialog: MiniappHostDialog
+  }
   /** Project + session workspace (see {@link MiniappWorkspace}). */
   workspace: MiniappWorkspace
   /** Main → renderer notifier — only the compile-status broadcast is public. */

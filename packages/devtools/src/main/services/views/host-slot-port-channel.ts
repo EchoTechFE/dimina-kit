@@ -152,7 +152,20 @@ export function createHostSlotPortChannel(opts: {
     if (typeof channel !== 'string') return
     // Snapshot so a handler that (un)subscribes mid-dispatch can't skew iteration.
     for (const entry of [...handlers]) {
-      if (entry.channel === channel) entry.handler(payload)
+      // Exception isolation, same posture as `invokeReadyHandler`: these are
+      // arbitrary host-registered handlers running inside a `MessagePortMain`
+      // 'message' listener — an uncaught throw here escapes straight to
+      // process-level `uncaughtException`, and would also starve every
+      // sibling handler still due to run for this message. Report-and-continue.
+      if (entry.channel === channel) invokeMessageHandler(entry.handler, payload)
+    }
+  }
+
+  function invokeMessageHandler(handler: (payload: unknown) => void, payload: unknown): void {
+    try {
+      handler(payload)
+    } catch (err) {
+      console.error(`${opts.logPrefix} onMessage handler threw:`, err)
     }
   }
 

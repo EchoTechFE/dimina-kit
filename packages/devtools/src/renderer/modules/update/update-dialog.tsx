@@ -39,13 +39,12 @@ export function UpdateDialog() {
   // and the Retry button's target action stay correct for whichever failed.
   const [failedAction, setFailedAction] = useState<'download' | 'install'>('download')
 
-  // Announce readiness once on mount so main's manual-readyMode overlay
-  // panel knows this WCV finished installing its listeners and can attach
-  // the pending show() (see createOverlayPanel's markReady gate).
-  useEffect(() => {
-    notifyOverlayReady()
-  }, [])
-
+  // These two subscriptions must be registered BEFORE notifyOverlayReady()
+  // fires below — main can respond to the ready notification by pushing a
+  // pending Available synchronously, and React runs effects in declaration
+  // order on mount, so a notifyOverlayReady() effect declared first could
+  // win that race and permanently leave `info` null (dialog invisible, but
+  // its WCV still consuming input) for a case that raced.
   useEffect(() => {
     return ipcOn<[UpdateInfo]>(UpdateChannel.Available, (updateInfo) => {
       setInfo(updateInfo)
@@ -60,6 +59,13 @@ export function UpdateDialog() {
     return ipcOn<[{ percent: number }]>(UpdateChannel.DownloadProgress, (data) => {
       setProgress(Math.round(data.percent))
     })
+  }, [])
+
+  // Announce readiness once on mount so main's manual-readyMode overlay
+  // panel knows this WCV finished installing its listeners and can attach
+  // the pending show() (see createOverlayPanel's markReady gate).
+  useEffect(() => {
+    notifyOverlayReady()
   }, [])
 
   const handleDownload = useCallback(async () => {

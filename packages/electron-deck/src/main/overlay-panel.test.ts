@@ -17,19 +17,28 @@ import {
 interface FakeWebContents {
   loadFile: ReturnType<typeof vi.fn<(path: string) => void>>
   once: ReturnType<typeof vi.fn<(event: string, handler: () => void) => void>>
+  on: ReturnType<typeof vi.fn<(event: string, handler: (...args: never[]) => void) => void>>
   isDestroyed: ReturnType<typeof vi.fn<() => boolean>>
   close: ReturnType<typeof vi.fn<() => void>>
   id: number
   _fireDidFinishLoad(): void
+  _fireDidFailLoad(errorCode: number, isMainFrame: boolean): void
+  _fireRenderProcessGone(reason: string): void
 }
 
 function fakeWebContents(id: number): FakeWebContents {
   let didFinishLoadHandler: (() => void) | undefined
+  let didFailLoadHandler: ((event: unknown, errorCode: number, errorDescription: string, validatedURL: string, isMainFrame: boolean) => void) | undefined
+  let renderProcessGoneHandler: ((event: unknown, details: { reason: string }) => void) | undefined
   let destroyed = false
   return {
     loadFile: vi.fn(),
     once: vi.fn((event: string, handler: () => void) => {
       if (event === 'did-finish-load') didFinishLoadHandler = handler
+    }),
+    on: vi.fn((event: string, handler: (...args: never[]) => void) => {
+      if (event === 'did-fail-load') didFailLoadHandler = handler as typeof didFailLoadHandler
+      if (event === 'render-process-gone') renderProcessGoneHandler = handler as typeof renderProcessGoneHandler
     }),
     isDestroyed: vi.fn(() => destroyed),
     close: vi.fn(() => {
@@ -38,6 +47,12 @@ function fakeWebContents(id: number): FakeWebContents {
     id,
     _fireDidFinishLoad() {
       didFinishLoadHandler?.()
+    },
+    _fireDidFailLoad(errorCode, isMainFrame) {
+      didFailLoadHandler?.(undefined, errorCode, 'failed', 'file:///x', isMainFrame)
+    },
+    _fireRenderProcessGone(reason) {
+      renderProcessGoneHandler?.(undefined, { reason })
     },
   }
 }
@@ -324,6 +339,91 @@ describe('createOverlayPanel', () => {
       expect(electron.createWebContentsView).toHaveBeenCalledTimes(2)
       expect(created).toHaveLength(2)
       expect(created[1]).not.toBe(created[0])
+    })
+  })
+
+  describe('crash/failed-load recovery', () => {
+    // BUG CAUGHT: `ensureView()`'s reuse check only asks
+    // `!webContents.isDestroyed()` — a renderer crash or a failed navigation
+    // leaves `webContents` non-destroyed but blank/unresponsive, so without
+    // this recovery path the SAME broken view would be handed back to every
+    // future show() forever, especially fatal for a `readyMode: 'manual'`
+    // panel (ProjectCreateDialog/UpdateDialog) whose only unblock signal is a
+    // renderer-sent markReady() that can now never arrive.
+
+    it('render-process-gone destroys the view and lets the next show() build a fresh instance', () => {
+      const { deps, electron, created, destroyView } = baseDeps()
+      const panel = createOverlayPanel(deps)
+      panel.show(undefined, { x: 0, y: 0, width: 1, height: 1 })
+
+      ;(created[0]!.webContents as unknown as FakeWebContents)._fireRenderProcessGone('crashed')
+
+      expect(destroyView).toHaveBeenCalledWith(created[0])
+      expect(panel.isPresent()).toBe(false)
+
+      panel.show(undefined, { x: 0, y: 0, width: 1, height: 1 })
+      expect(electron.createWebContentsView).toHaveBeenCalledTimes(2)
+      expect(created[1]).not.toBe(created[0])
+    })
+
+    it('a main-frame did-fail-load with a real error code destroys the view and lets the next show() build a fresh instance', () => {
+      const { deps, electron, created, destroyView } = baseDeps()
+      const panel = createOverlayPanel(deps)
+      panel.show(undefined, { x: 0, y: 0, width: 1, height: 1 })
+
+      ;(created[0]!.webContents as unknown as FakeWebContents)._fireDidFailLoad(-6, true)
+
+      expect(destroyView).toHaveBeenCalledWith(created[0])
+      expect(panel.isPresent()).toBe(false)
+
+      panel.show(undefined, { x: 0, y: 0, width: 1, height: 1 })
+      expect(electron.createWebContentsView).toHaveBeenCalledTimes(2)
+    })
+
+    it('ignores ERR_ABORTED (-3) — a fresh loadFile/loadURL superseding this one is routine, not a crash', () => {
+      const { deps, created, destroyView } = baseDeps()
+      const panel = createOverlayPanel(deps)
+      panel.show(undefined, { x: 0, y: 0, width: 1, height: 1 })
+
+      ;(created[0]!.webContents as unknown as FakeWebContents)._fireDidFailLoad(-3, true)
+
+      expect(destroyView).not.toHaveBeenCalled()
+      expect(panel.isPresent()).toBe(true)
+    })
+
+    it('ignores a did-fail-load on a subframe', () => {
+      const { deps, created, destroyView } = baseDeps()
+      const panel = createOverlayPanel(deps)
+      panel.show(undefined, { x: 0, y: 0, width: 1, height: 1 })
+
+      ;(created[0]!.webContents as unknown as FakeWebContents)._fireDidFailLoad(-6, false)
+
+      expect(destroyView).not.toHaveBeenCalled()
+      expect(panel.isPresent()).toBe(true)
+    })
+
+    it('resolves a pending whenReady() instead of hanging forever when a manual-readyMode view crashes before markReady()', async () => {
+      const { deps, created } = baseDeps({ readyMode: 'manual' })
+      const panel = createOverlayPanel(deps)
+      panel.show(undefined, { x: 0, y: 0, width: 1, height: 1 })
+      const ready = panel.whenReady()
+
+      ;(created[0]!.webContents as unknown as FakeWebContents)._fireRenderProcessGone('crashed')
+
+      await expect(ready).resolves.toBeUndefined()
+    })
+
+    it('a crash event on an already-destroy()ed instance is a no-op (stale-epoch guard)', () => {
+      const { deps, created, destroyView } = baseDeps()
+      const panel = createOverlayPanel(deps)
+      panel.show(undefined, { x: 0, y: 0, width: 1, height: 1 })
+      const firstView = created[0]!
+      panel.destroy()
+      destroyView.mockClear()
+
+      ;(firstView.webContents as unknown as FakeWebContents)._fireRenderProcessGone('late crash')
+
+      expect(destroyView).not.toHaveBeenCalled()
     })
   })
 })

@@ -17,6 +17,18 @@ import type * as Barrel from './api.js'
 type MiniappRuntimeFromBarrel = Barrel.MiniappRuntime
 const _barrelTypePin: MiniappRuntimeFromBarrel | undefined = undefined
 
+// Same guard for the three page-bridge types — a downstream host's sidebar/
+// dialog page needs these to type `window.diminaHostSidebar`/`diminaHostDialog`
+// without importing the internal runtime module directly.
+type ToolbarBridgeFromBarrel = Barrel.DiminaHostToolbarPageBridge
+type SidebarBridgeFromBarrel = Barrel.DiminaHostSidebarPageBridge
+type DialogBridgeFromBarrel = Barrel.DiminaHostDialogPageBridge
+const _bridgeTypePins: [
+  ToolbarBridgeFromBarrel | undefined,
+  SidebarBridgeFromBarrel | undefined,
+  DialogBridgeFromBarrel | undefined,
+] = [undefined, undefined, undefined]
+
 // api.ts transitively touches electron at module scope (launch/app wiring).
 // Stub it so the barrel loads outside Electron — same stub as the existing
 // barrel-export test.
@@ -71,5 +83,12 @@ describe('R3: api.ts re-exports the MiniappRuntime contract', () => {
     // of this file; this `it` exists so the contract surfaces in the test
     // report and the pin stays consumed.
     expect(_barrelTypePin).toBeUndefined()
+  })
+
+  it('also re-exports the toolbar/sidebar/dialog page-bridge types [inverse marker — see header]', () => {
+    // The real assertion is the three `Barrel.DiminaHost*PageBridge` type
+    // aliases above; this `it` exists so the contract surfaces in the test
+    // report and the pins stay consumed.
+    expect(_bridgeTypePins).toEqual([undefined, undefined, undefined])
   })
 })

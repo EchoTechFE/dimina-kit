@@ -1,22 +1,26 @@
 /**
- * Regression: `setPlacementSnapshot` used to assign
- * `rendererGeneration = snapshot.generation` unconditionally. Two independent
- * per-screen renderer counters (ProjectListScreen, ProjectRuntime — see
- * project-list-screen.tsx / project-runtime.tsx) can report generations out
- * of the order main already accepted (e.g. a project screen has already sent
- * generation 3 while a lagging list-screen mount reports generation 1). Once
- * that lower value lands in `rendererGeneration`, the reconcile core's
- * generation-regression guard (placement-reconcile.ts: `snapshot.generation <
- * prev.generation`) rejects it on the spot — but because a rejection leaves
- * `prev.generation` untouched, every SUBSEQUENT call built from that same
- * depressed `rendererGeneration` keeps failing the same check, forever,
- * regardless of how legitimate that later call actually is. No native view
- * ever reconciles again until the lagging counter happens to climb back
- * above the frozen high-water mark.
+ * Regression: `setPlacementSnapshot` used to clamp `rendererGeneration` to
+ * never regress, but then unconditionally applied the incoming snapshot's
+ * CONTENT into `baseDesired` and reconciled it under the clamped (i.e.
+ * current) generation — regardless of whether the snapshot itself was
+ * actually behind. That let a stale/dead source's late snapshot (e.g. a
+ * screen's `dispose()` empty-snapshot flush, delivered after a successor
+ * screen already advanced the generation) silently overwrite the currently
+ * active screen's real views, because the reconcile core's own
+ * generation-regression guard (placement-reconcile.ts: `snapshot.generation
+ * < prev.generation`) never got to see the snapshot's real, lower
+ * generation — only the clamped one.
  *
- * This drives `createPlacementReconciler` directly (no ViewManager/Electron
- * needed — its own runtime imports never touch `electron`) to pin that a
- * lower-generation snapshot must not drag `rendererGeneration` backward.
+ * Every screen now draws its generation from one shared, strictly
+ * increasing sequence (renderer-placement-generation.ts), so a legitimately
+ * later mount is always numerically later than anything already accepted —
+ * a lower-generation snapshot arriving after a higher one can therefore only
+ * be a late arrival from an already-superseded source, never a legitimate
+ * later update. `setPlacementSnapshot` hard-rejects it: no `baseDesired`
+ * mutation, no reconcile call, `rendererGeneration` untouched.
+ *
+ * Drives `createPlacementReconciler` directly (no ViewManager/Electron
+ * needed — its own runtime imports never touch `electron`).
  */
 import { describe, it, expect, vi } from 'vitest'
 import { createPlacementReconciler } from './placement-reconciler.js'
@@ -51,9 +55,9 @@ function makeView() {
 
 const VISIBLE_BOUNDS = { x: 0, y: 0, width: 320, height: 800 }
 
-describe('placement-reconciler: a lower-generation snapshot must not permanently freeze reconciliation', () => {
-  it('a later, still-lower-than-peak generation update from the SAME lagging screen keeps applying afterwards', () => {
-    const { addChildView, ctx } = makeCtx()
+describe('placement-reconciler: a lower-generation snapshot must be a complete no-op', () => {
+  it('a stale/dead source\'s late, lower-generation snapshot does not touch the state a newer generation already established', () => {
+    const { addChildView, removeChildView, ctx } = makeCtx()
     const reconciler = createPlacementReconciler(ctx)
     const view = makeView()
     reconciler.registerView(VIEW_ID.hostSidebar, { getView: () => view as never })
@@ -64,25 +68,31 @@ describe('placement-reconciler: a lower-generation snapshot must not permanently
       layer: VIEW_LAYER.hostSidebar,
     }]
 
-    // High-generation screen (e.g. a project mount) places the sidebar.
-    reconciler.setPlacementSnapshot({ generation: 3, epoch: 1, views: sidebarVisible })
+    // A newer screen (higher generation, per the shared monotonic sequence)
+    // has already placed the sidebar.
+    reconciler.setPlacementSnapshot({ generation: 5, epoch: 1, views: sidebarVisible })
     expect(addChildView).toHaveBeenCalledTimes(1)
 
-    // A lagging screen's own, independently-numbered generation (1) — behind
-    // the high-water mark another screen already pushed past it.
-    reconciler.setPlacementSnapshot({ generation: 1, epoch: 2, views: [] })
-
-    // That SAME lagging screen's very next, organically-incremented update
-    // (generation 2, still below the already-accepted high-water mark of 3)
-    // showing the sidebar again. This MUST still reconcile: if the previous
-    // call had dragged `rendererGeneration` down to 1, this generation-2
-    // snapshot would ALSO compare as `< prev.generation(3)` and be silently
-    // dropped — the exact permanent freeze this guards against, where no
-    // further update from the lagging screen ever reaches the screen again.
-    reconciler.setPlacementSnapshot({ generation: 2, epoch: 3, views: sidebarVisible })
+    // An older, already-superseded source's late snapshot arrives — e.g. a
+    // previous screen's delayed `dispose()` flush (empty views, lower
+    // generation). This must be dropped entirely: no detach of the sidebar
+    // that generation 5 placed, and no further reconcile side effects at
+    // all.
+    reconciler.setPlacementSnapshot({ generation: 3, epoch: 2, views: [] })
+    expect(
+      removeChildView,
+      'a stale snapshot must not remove a view a newer generation already placed',
+    ).not.toHaveBeenCalled()
     expect(
       addChildView,
-      'a later legitimate update from the lagging screen must still reconcile — otherwise every native view is frozen at its last-accepted placement forever',
-    ).toHaveBeenCalledTimes(2)
+      'a rejected stale snapshot must not trigger any reconcile pass at all',
+    ).toHaveBeenCalledTimes(1)
+
+    // The high-water mark itself must also be untouched by the rejected
+    // snapshot: a still-later, genuinely new generation-6 update reconciles
+    // normally afterwards (proves `rendererGeneration` was not corrupted by
+    // the rejected generation-3 call in either direction).
+    reconciler.setPlacementSnapshot({ generation: 6, epoch: 3, views: sidebarVisible })
+    expect(addChildView).toHaveBeenCalledTimes(2)
   })
 })

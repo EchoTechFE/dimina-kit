@@ -47,6 +47,14 @@ export class UpdateManager {
   private timer: ReturnType<typeof setInterval> | null = null
   private initialTimer: ReturnType<typeof setTimeout> | null = null
   private ipc: IpcRegistry
+  /**
+   * Set by `dispose()`. Clearing the timers only stops FUTURE ticks — an
+   * in-flight `checkAndNotify()` invocation (already past its `await
+   * this.check()`) has no timer left to cancel it, and would otherwise call
+   * `showUpdatePanel` after dispose has torn down the overlay panel that
+   * owns (e.g. `views.disposeAll()` destroying its WebContentsView).
+   */
+  private disposed = false
 
   constructor(opts: UpdateManagerOptions) {
     this.checker = opts.checker
@@ -138,6 +146,7 @@ export class UpdateManager {
    * the timer clears + handler removals are scheduled synchronously.
    */
   dispose(): Promise<void> {
+    this.disposed = true
     if (this.timer) {
       clearInterval(this.timer)
       this.timer = null
@@ -156,6 +165,10 @@ export class UpdateManager {
 
   private async checkAndNotify(): Promise<void> {
     const result = await this.check()
+    // dispose() only cancels the timers that SCHEDULE future ticks — a tick
+    // already in flight (past this await) has nothing left to cancel it, and
+    // must not call into a torn-down panel/registry after the fact.
+    if (this.disposed) return
     if (!result.hasUpdate || !result.info) return
     if (this.hasNotified) return
     this.hasNotified = true

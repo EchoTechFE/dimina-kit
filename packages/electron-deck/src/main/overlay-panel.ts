@@ -109,6 +109,41 @@ export function createOverlayPanel<TShowData = void>(
     for (const resolve of waiters) resolve()
   }
 
+  /**
+   * Shared teardown body for both `destroy()` and a broken-view recovery
+   * (`did-fail-load` / `render-process-gone`) — same state reset, same
+   * "resolve pending whenReady() rather than leave it hanging forever"
+   * choice, same delegation to the host for the actual native destroy.
+   */
+  function teardown(current: ElectronWebContentsView): void {
+    view = null
+    ready = false
+    hasPendingData = false
+    pendingBounds = null
+    wantsVisible = false
+    instanceEpoch++
+    resolveReadyWaiters()
+    deps.destroyView(current)
+  }
+
+  /**
+   * `ensureView()`'s reuse check (`!view.webContents.isDestroyed()`) does not
+   * detect "alive but broken" — a failed navigation or a crashed renderer
+   * process leaves `webContents` non-destroyed but blank/unresponsive, so
+   * without this the same broken view would be handed back to every future
+   * `show()` forever. Tearing down here makes the NEXT `ensureView()` call
+   * build a fresh view instead.
+   */
+  function handleViewBroken(
+    current: ElectronWebContentsView,
+    epoch: number,
+    detail: string,
+  ): void {
+    if (view !== current || epoch !== instanceEpoch) return
+    console.error(`[overlay-panel] ${detail} — destroying so the next show()/prepare() rebuilds`)
+    teardown(current)
+  }
+
   function markCurrentReady(current: ElectronWebContentsView, epoch: number): void {
     if (view !== current || epoch !== instanceEpoch || current.webContents.isDestroyed()) return
     ready = true
@@ -134,6 +169,15 @@ export function createOverlayPanel<TShowData = void>(
     if ((deps.readyMode ?? 'load') === 'load') {
       created.webContents.once('did-finish-load', () => markCurrentReady(created, epoch))
     }
+    created.webContents.on('did-fail-load', (_event, errorCode, _errorDescription, _validatedURL, isMainFrame) => {
+      // -3 is ERR_ABORTED, which fires on every routine superseded navigation
+      // (e.g. a fresh loadFile/loadURL cancelling this one) — not a real failure.
+      if (!isMainFrame || errorCode === -3) return
+      handleViewBroken(created, epoch, `did-fail-load (code ${errorCode})`)
+    })
+    created.webContents.on('render-process-gone', (_event, details) => {
+      handleViewBroken(created, epoch, `render-process-gone (${details.reason})`)
+    })
     void created.webContents.loadFile(path.join(deps.rendererDir, deps.entry))
     return created
   }
@@ -192,14 +236,7 @@ export function createOverlayPanel<TShowData = void>(
     destroy() {
       const v = view
       if (!v) return
-      view = null
-      ready = false
-      hasPendingData = false
-      pendingBounds = null
-      wantsVisible = false
-      instanceEpoch++
-      resolveReadyWaiters()
-      deps.destroyView(v)
+      teardown(v)
     },
   }
 }

@@ -285,6 +285,30 @@ describe('ViewManager: hostDialog content swap resets the advertised size', () =
     const lastBounds = view.setBounds.mock.calls[view.setBounds.mock.calls.length - 1]![0]
     expect(lastBounds).toEqual(centeredBounds(DEFAULT_WIDTH, DEFAULT_HEIGHT))
   })
+
+  it('while already visible, loadFile() re-presents the default bounds immediately — WITHOUT a follow-up show()', async () => {
+    // BUG CAUGHT: resetMeasuredExtent() used to only reset the closure's
+    // width/height variables, never push them to the screen. A dialog
+    // already open when the host re-purposes it for different content (the
+    // documented use case — HostDialogControl.loadURL/loadFile do not
+    // require the caller to call show() again) would keep displaying the
+    // PREVIOUS document's exact bounds — forever, if the new document never
+    // reports its own size (e.g. missing [data-host-dialog-root]) — instead
+    // of falling back to the default the moment the swap happens.
+    const { ctx } = makeContext()
+    const mgr = createViewManager(ctx)
+
+    mgr.reportHostDialogMeasuredExtent('inline', 640)
+    mgr.reportHostDialogMeasuredExtent('block', 400)
+    mgr.hostDialog.show()
+    const view = constructed[0]!
+    expect(view.setBounds.mock.calls[0]![0]).toEqual(centeredBounds(640, 400))
+
+    await mgr.hostDialog.loadFile('/other-content.html')
+
+    const lastBounds = view.setBounds.mock.calls[view.setBounds.mock.calls.length - 1]![0]
+    expect(lastBounds).toEqual(centeredBounds(DEFAULT_WIDTH, DEFAULT_HEIGHT))
+  })
 })
 
 describe('ViewManager: hostDialog re-centers on repositionAll (main-window resize entry point)', () => {

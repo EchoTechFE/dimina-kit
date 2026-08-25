@@ -150,6 +150,40 @@ describe('UpdateManager lifecycle', () => {
     expect(checker.checkForUpdates).not.toHaveBeenCalled()
   })
 
+  it('dispose() while a checkAndNotify() tick is already in flight stops it from calling showUpdatePanel', async () => {
+    // clearInterval/clearTimeout only stop FUTURE ticks; a tick whose timer
+    // callback already fired (and is now suspended on `await this.check()`)
+    // has no timer left to cancel it. dispose() must still be able to
+    // silence that in-flight tick's continuation.
+    let resolveCheck: (info: UpdateInfo | null) => void = () => {}
+    const pending = new Promise<UpdateInfo | null>((resolve) => {
+      resolveCheck = resolve
+    })
+    const checker: UpdateChecker = {
+      checkForUpdates: vi.fn(() => pending),
+      downloadUpdate: vi.fn(async () => '/tmp/fake.dmg'),
+    }
+    const deps = makePanelDeps()
+    const m = new UpdateManager({
+      checker,
+      ...deps,
+      checkInterval: 10_000,
+      initialDelay: 500,
+    })
+
+    await vi.advanceTimersByTimeAsync(500)
+    expect(checker.checkForUpdates).toHaveBeenCalledTimes(1)
+
+    // The timer fired and checkAndNotify() is now suspended awaiting the
+    // checker — dispose it before that await settles.
+    await m.dispose()
+
+    resolveCheck({ version: '2.0.0', downloadUrl: 'https://example.com/2.0.0.dmg' })
+    for (let k = 0; k < 5; k++) await Promise.resolve()
+
+    expect(deps.showUpdatePanel).not.toHaveBeenCalled()
+  })
+
 })
 
 describe('UpdateManager: UpdateChannel.Close forwards to hideUpdatePanel', () => {

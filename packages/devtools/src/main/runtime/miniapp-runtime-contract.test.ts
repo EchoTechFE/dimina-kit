@@ -91,6 +91,14 @@ staticAssert<Not<HasKey<MiniappRuntime['views'], 'getHostToolbarWebContentsId'>>
 // downstream hosts migrated to the send/onMessage message channel).
 staticAssert<Not<HasKey<MiniappRuntime['views']['hostToolbar'], 'webContents'>>>()
 
+// `views` also exposes the sidebar and dialog slot controls (added alongside
+// hostToolbar — see host-sidebar-view.ts / host-dialog-view.ts) — neither
+// exposes `webContents` either, same Electron-type-leak guard as hostToolbar.
+staticAssert<HasKey<MiniappRuntime['views'], 'hostSidebar'>>()
+staticAssert<HasKey<MiniappRuntime['views'], 'hostDialog'>>()
+staticAssert<Not<HasKey<MiniappRuntime['views']['hostSidebar'], 'webContents'>>>()
+staticAssert<Not<HasKey<MiniappRuntime['views']['hostDialog'], 'webContents'>>>()
+
 // (`windows` itself is gone from the contract — designed change, see §1 —
 // so its old "opaque, no mainWindow re-exposure" pin is superseded by the
 // stronger Not<HasKey<MiniappRuntime, 'windows'>> pin above.)
@@ -179,6 +187,28 @@ function _downstreamConsumptionPin(rt: MiniappRuntime): void {
   rt.views.hostToolbar.setHeightMode('auto')
   rt.views.hostToolbar.setHeightMode({ fixed: 40 })
 
+  // views.hostSidebar — same shape as hostToolbar, axis-specific mode setter
+  rt.views.hostSidebar.setPreloadPath('/downstream/sidebar-preload.cjs')
+  const sidebarSent: boolean = rt.views.hostSidebar.send('downstream:state', { connected: true })
+  const sidebarSub: { dispose: () => void } = rt.views.hostSidebar.onMessage(
+    'downstream:action',
+    (payload: unknown) => {
+      void payload
+    },
+  )
+  sidebarSub.dispose()
+  rt.views.hostSidebar.setWidthMode('auto')
+  rt.views.hostSidebar.setWidthMode({ fixed: 240 })
+
+  // views.hostDialog — by-demand, show/hide/isVisible instead of an extent mode
+  rt.views.hostDialog.setPreloadPath(null)
+  const dialogSent: boolean = rt.views.hostDialog.send('downstream:submit', { ok: true })
+  const dialogSub: { dispose: () => void } = rt.views.hostDialog.onReady(() => {})
+  dialogSub.dispose()
+  rt.views.hostDialog.show()
+  rt.views.hostDialog.hide()
+  const dialogVisible: boolean = rt.views.hostDialog.isVisible()
+
   // notify — status broadcast with a downstream host's structural payload
   rt.notify.projectStatus({ status: 'ready', message: '编译完成' })
 
@@ -191,6 +221,9 @@ function _downstreamConsumptionPin(rt: MiniappRuntime): void {
   void loadedFile
   void loadedUrl
   void sent
+  void sidebarSent
+  void dialogSent
+  void dialogVisible
 }
 void _downstreamConsumptionPin
 

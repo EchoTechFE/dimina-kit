@@ -179,10 +179,18 @@ export function createHostDialogView(
   // this factory's own closure state, seeded once from the DEFAULT_*
   // constants and only ever mutated by reportMeasuredExtent, so without a
   // reset here a fresh, unmeasured document would inherit the PREVIOUS
-  // document's size until it happens to report its own.
+  // document's size until it happens to report its own. And while the
+  // dialog is currently VISIBLE, resetting the closure state alone doesn't
+  // reach the screen — the on-screen bounds only change via `present()` —
+  // so without the same `if (visible) present()` `reportMeasuredExtent`
+  // already does, the OLD document's bounds would stay displayed
+  // indefinitely (forever, if the new document never reports at all, e.g. a
+  // fixture missing `[data-host-dialog-root]`) instead of falling back to
+  // the default the moment the swap happens.
   function resetMeasuredExtent(): void {
     width = DEFAULT_WIDTH
     height = DEFAULT_HEIGHT
+    if (visible) present()
   }
 
   const control: HostDialogControl = {
