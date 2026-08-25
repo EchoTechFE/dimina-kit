@@ -308,7 +308,12 @@ export function createOverlayPanelsView(
   }
 
   function reapplyPresentOverlays(): void {
-    if (settingsPanel.isPresent() && reconciler.hasOverlayDesired(VIEW_ID.settings)) void showSettings()
+    // Fire-and-forget re-trigger — a crash between this call and the panel
+    // becoming ready now rejects whenReady() (see overlay-panel.ts teardown);
+    // handleViewBroken() already logs it, nothing more to do here.
+    if (settingsPanel.isPresent() && reconciler.hasOverlayDesired(VIEW_ID.settings)) {
+      showSettings().catch(() => {})
+    }
     if (popoverPanel.isPresent() && reconciler.hasOverlayDesired(VIEW_ID.popover)) {
       const [w = 0, h = 0] = ctx.windows.mainWindow.getContentSize()
       popoverPanel.reposition(layout.computePopoverBounds(w, h, overlayHeaderHeight()))
@@ -322,7 +327,10 @@ export function createOverlayPanelsView(
   }
 
   function applySettingsBoundsIfPresent(): void {
-    if (settingsPanel.isPresent() && reconciler.hasOverlayDesired(VIEW_ID.settings)) void showSettings()
+    // See reapplyPresentOverlays() above for why this swallows a rejection.
+    if (settingsPanel.isPresent() && reconciler.hasOverlayDesired(VIEW_ID.settings)) {
+      showSettings().catch(() => {})
+    }
   }
 
   function destroySettings(): void {

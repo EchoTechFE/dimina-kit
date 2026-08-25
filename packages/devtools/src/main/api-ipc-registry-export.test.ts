@@ -39,14 +39,19 @@ vi.mock('electron', () => {
   return { ipcMain, default: { ipcMain } }
 })
 
-async function loadBarrel(): Promise<Record<string, unknown>> {
-  return (await import('./api.js')) as unknown as Record<string, unknown>
-}
+// Static, module-scope import rather than a per-test dynamic `import()`:
+// api.ts's module graph is heavy enough (transitively touches electron at
+// module scope) that first evaluation can exceed vitest's default 5s
+// per-test timeout under load. A static import pays that cost once during
+// test collection, outside any single test's timer, instead of charging it
+// against whichever test happens to run the import first.
+import * as apiBarrel from './api.js'
+import * as internalIpcRegistry from './utils/ipc-registry.js'
+
+const api = apiBarrel as unknown as Record<string, unknown>
 
 describe('Requirement A: api.ts re-exports IpcRegistry', () => {
-  it('exposes a constructible `IpcRegistry` from the package root barrel', async () => {
-    const api = await loadBarrel()
-
+  it('exposes a constructible `IpcRegistry` from the package root barrel', () => {
     // Catches "export was never added / was removed from api.ts".
     expect(
       api.IpcRegistry,
@@ -55,16 +60,12 @@ describe('Requirement A: api.ts re-exports IpcRegistry', () => {
     expect(typeof api.IpcRegistry).toBe('function')
   })
 
-  it('the re-exported `IpcRegistry` is the same class as the internal one', async () => {
-    const api = await loadBarrel()
-    const internal = await import('./utils/ipc-registry.js')
-
+  it('the re-exported `IpcRegistry` is the same class as the internal one', () => {
     // Catches "api.ts exports a *different* IpcRegistry symbol by accident".
-    expect(api.IpcRegistry).toBe(internal.IpcRegistry)
+    expect(api.IpcRegistry).toBe(internalIpcRegistry.IpcRegistry)
   })
 
-  it('an instance built from the barrel export has a working `.handle(channel, fn)`', async () => {
-    const api = await loadBarrel()
+  it('an instance built from the barrel export has a working `.handle(channel, fn)`', () => {
     const Ctor = api.IpcRegistry as new () => { handle: (c: string, f: () => unknown) => unknown }
 
     // `expect.toBeDefined` above already guards this; assert it explicitly so

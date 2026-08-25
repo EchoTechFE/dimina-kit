@@ -293,3 +293,14 @@ export function onHostSidebarWidthChanged(handler: (width: number) => void): () 
 export function getHostSidebarWidth(): Promise<number | undefined> {
   return invoke<number | undefined>(ViewChannel.HostSidebarGetWidth)
 }
+
+/**
+ * Allocate this renderer session's placement-generation seed from main. See
+ * `renderer-placement-generation.ts` for why the seed is main-assigned
+ * rather than derived from `Date.now()`. Resolves `undefined` when the
+ * lenient invoke swallowed a main-side failure; the caller falls back to a
+ * local-only sequence in that case.
+ */
+export function allocatePlacementGeneration(): Promise<number | undefined> {
+  return invoke<number | undefined>(ViewChannel.AllocatePlacementGeneration)
+}

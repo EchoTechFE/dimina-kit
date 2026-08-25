@@ -42,16 +42,22 @@ vi.mock('electron', () => {
   return { ipcMain, default: { ipcMain } }
 })
 
-async function loadBarrel(): Promise<Record<string, unknown>> {
-  return (await import('./api.js')) as unknown as Record<string, unknown>
-}
+// Static, module-scope import rather than a per-test dynamic `import()`:
+// api.ts's module graph is heavy enough (transitively touches electron at
+// module scope) that first evaluation can exceed vitest's default 5s
+// per-test timeout under load. A static import pays that cost once during
+// test collection, outside any single test's timer, instead of charging it
+// against whichever test happens to run the import first.
+import * as apiBarrel from './api.js'
+import * as internalRuntime from './runtime/miniapp-runtime.js'
+
+const api = apiBarrel as unknown as Record<string, unknown>
 
 describe('R3: api.ts re-exports the MiniappRuntime contract', () => {
-  it('exposes `asMiniappRuntime` from the package root barrel', async () => {
+  it('exposes `asMiniappRuntime` from the package root barrel', () => {
     // Real bug: the contract module exists but stays internal — downstream
     // hosts can't adopt it without deep-importing dist paths, so they keep
     // depending on `/context` and the contract never actually decouples them.
-    const api = await loadBarrel()
     expect(
       api.asMiniappRuntime,
       'expected `asMiniappRuntime` to be re-exported from src/main/api.ts (the `.` package entry)',
@@ -59,19 +65,16 @@ describe('R3: api.ts re-exports the MiniappRuntime contract', () => {
     expect(typeof api.asMiniappRuntime).toBe('function')
   })
 
-  it('the barrel `asMiniappRuntime` is the SAME function as the internal one', async () => {
+  it('the barrel `asMiniappRuntime` is the SAME function as the internal one', () => {
     // Real bug: api.ts grows a second, divergent helper (e.g. a projection
     // copy) instead of re-exporting the sentinel-bearing original — the
     // assignment-compat sentinel then no longer guards what hosts call.
-    const api = await loadBarrel()
-    const internal = await import('./runtime/miniapp-runtime.js')
-    expect(api.asMiniappRuntime).toBe(internal.asMiniappRuntime)
+    expect(api.asMiniappRuntime).toBe(internalRuntime.asMiniappRuntime)
   })
 
-  it('the barrel `asMiniappRuntime` is an identity return', async () => {
+  it('the barrel `asMiniappRuntime` is an identity return', () => {
     // Real bug: a wrapper/projection return breaks a downstream host's monkey-patch of
     // workspace.openProject (it would patch a dead copy).
-    const api = await loadBarrel()
     const fn = api.asMiniappRuntime as ((ctx: unknown) => unknown) | undefined
     expect(fn, 'asMiniappRuntime must be exported before identity can be checked').toBeDefined()
     const fake = { tag: 'fake-context' }

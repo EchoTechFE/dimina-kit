@@ -10,13 +10,11 @@
     },
     "code-duplication": {
       "direction": "lower-is-better",
-      "value": 358,
+      "value": 286,
       "unit": "duplicated lines",
       "breakdown": {
         "packages/devtools/src/main/ipc/project-fs.ts:177↔packages/devtools/src/main/ipc/project-fs.ts:471": 12,
         "packages/devtools/src/main/ipc/project-fs.ts:264↔packages/devtools/src/main/ipc/project-fs.ts:490": 18,
-        "packages/devtools/src/main/runtime/miniapp-runtime.ts:130↔packages/devtools/src/main/runtime/miniapp-runtime.ts:181": 37,
-        "packages/devtools/src/main/runtime/miniapp-runtime.ts:130↔packages/devtools/src/main/runtime/miniapp-runtime.ts:206": 37,
         "packages/devtools/src/main/services/mcp/tools/context-tools.ts:189↔packages/devtools/src/main/services/mcp/tools/context-tools.ts:272": 11,
         "packages/devtools/src/main/services/mcp/tools/context-tools.ts:243↔packages/devtools/src/main/services/mcp/tools/context-tools.ts:301": 10,
         "packages/devtools/src/main/services/simulator-storage/index.ts:359↔packages/devtools/src/main/services/simulator-storage/index.ts:377": 8,
@@ -119,9 +117,9 @@
       "unit": "% lines",
       "breakdown": {
         "devkit": 94.17,
-        "devtools": 75.36,
+        "devtools": 75.34,
         "dimina-electron-runtime": 83.68,
-        "electron-deck": 95.33,
+        "electron-deck": 95.34,
         "electron-deck/dock-react": 78.6,
         "fs-core": 99.19,
         "inspect": 77.51,
@@ -132,13 +130,13 @@
     },
     "test-report": {
       "direction": "higher-is-better",
-      "value": 5241,
+      "value": 5242,
       "unit": "passed tests",
       "breakdown": {
         "devkit": 211,
         "devtools": 2992,
         "dimina-electron-runtime": 338,
-        "electron-deck": 1088,
+        "electron-deck": 1089,
         "electron-deck/dock-react": 96,
         "fs-core": 133,
         "inspect": 207,

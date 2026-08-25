@@ -250,6 +250,12 @@ export interface ViewManager extends Pick<
    * view tree.
    */
   setPlacementSnapshot(snapshot: PlacementSnapshot<DevtoolsExtra>): void
+  /**
+   * Hand out a fresh generation seed for a renderer bootstrap. See
+   * `PlacementReconciler.allocateGeneration`'s doc-comment for why this
+   * replaces a wall-clock (`Date.now()`) seed.
+   */
+  allocatePlacementGeneration(): number
 
   // ── Embedded workbench editor WebContentsView ──────────────────────
   /**
@@ -431,6 +437,7 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     getHostToolbarHeight: hostToolbar.getHostToolbarHeight,
     resize: () => overlayPanels.applySettingsBoundsIfPresent(),
     setPlacementSnapshot: reconciler.setPlacementSnapshot,
+    allocatePlacementGeneration: reconciler.allocateGeneration,
     attachWorkbench: workbench.attachWorkbench,
     setWorkbenchSource: workbench.setWorkbenchSource,
     detachWorkbench: workbench.detachWorkbench,

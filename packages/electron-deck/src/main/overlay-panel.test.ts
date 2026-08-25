@@ -402,7 +402,10 @@ describe('createOverlayPanel', () => {
       expect(panel.isPresent()).toBe(true)
     })
 
-    it('resolves a pending whenReady() instead of hanging forever when a manual-readyMode view crashes before markReady()', async () => {
+    it('rejects a pending whenReady() instead of resolving it when a manual-readyMode view crashes before markReady()', async () => {
+      // A crash means this instance never became ready — resolving whenReady()
+      // as if it had would tell a caller "ready" when the truth is "gone",
+      // making them proceed against a native view that no longer exists.
       const { deps, created } = baseDeps({ readyMode: 'manual' })
       const panel = createOverlayPanel(deps)
       panel.show(undefined, { x: 0, y: 0, width: 1, height: 1 })
@@ -410,7 +413,34 @@ describe('createOverlayPanel', () => {
 
       ;(created[0]!.webContents as unknown as FakeWebContents)._fireRenderProcessGone('crashed')
 
-      await expect(ready).resolves.toBeUndefined()
+      await expect(ready).rejects.toThrow()
+    })
+
+    it('withdraws the stale desired placement on crash teardown, and does not re-apply it to the replacement instance before its own markReady()', () => {
+      // BUG CAUGHT: teardown used to leave the crashed instance's desired
+      // bounds live. A freshly-created replacement WebContentsView could then
+      // get mounted by the reconciler as a blank click-catching layer before
+      // its OWN markReady() ever fires.
+      const { deps, created, setDesired } = baseDeps({ readyMode: 'manual' })
+      const panel = createOverlayPanel(deps)
+      const bounds = { x: 1, y: 2, width: 3, height: 4 }
+
+      panel.show(undefined, bounds)
+      panel.markReady((created[0]!.webContents as unknown as FakeWebContents).id)
+      expect(setDesired).toHaveBeenCalledWith(bounds)
+      setDesired.mockClear()
+
+      ;(created[0]!.webContents as unknown as FakeWebContents)._fireRenderProcessGone('crashed')
+      expect(setDesired).toHaveBeenCalledWith(null)
+      setDesired.mockClear()
+
+      // Retry: show() rebuilds a fresh instance. It must NOT be handed the
+      // old bounds until it sends its own markReady().
+      panel.show(undefined, bounds)
+      expect(setDesired).not.toHaveBeenCalled()
+
+      panel.markReady((created[1]!.webContents as unknown as FakeWebContents).id)
+      expect(setDesired).toHaveBeenCalledWith(bounds)
     })
 
     it('a crash event on an already-destroy()ed instance is a no-op (stale-epoch guard)', () => {

@@ -123,33 +123,35 @@ declare global {
 }
 
 /**
- * Host-facing control surface for the toolbar WebContentsView — a
- * message-channel surface (`send`/`onMessage`), with no `webContents` escape
- * hatch (that would put Electron types on the contract).
+ * Shared message-channel surface for every downstream-controllable host slot
+ * (toolbar/sidebar/dialog) — `send`/`onMessage`/`onReady` plus preload and
+ * content loading, with no `webContents` escape hatch (that would put
+ * Electron types on the contract). Each slot extends this with its own
+ * extent/visibility members.
  */
-export interface MiniappHostToolbar {
+export interface MiniappHostSlotChannel {
   /**
-   * The host's own `webPreferences.preload` for the toolbar view (purely
-   * additive — never replaces the framework's session-resident height
+   * The host's own `webPreferences.preload` for this slot's view (purely
+   * additive — never replaces the framework's session-resident size
    * advertiser). Must be set before the view is (re)created; `null` (default)
    * means "no host preload".
    */
   setPreloadPath: (path: string | null) => void
-  /** Load a local file into the toolbar view (lazy-creates the view). */
+  /** Load a local file into the slot's view (lazy-creates the view). */
   loadFile: (path: string) => Promise<void>
-  /** Load a URL into the toolbar view (lazy-creates the view). */
+  /** Load a URL into the slot's view (lazy-creates the view). */
   loadURL: (url: string) => Promise<void>
   /**
-   * Post `{ channel, payload }` to the toolbar page. Gated and non-queueing:
+   * Post `{ channel, payload }` to the slot's page. Gated and non-queueing:
    * returns false (delivering nothing, creating no view) while there is no
-   * live toolbar webContents or the current load's MessagePort handshake
-   * hasn't completed; true once the envelope went out.
+   * live webContents or the current load's MessagePort handshake hasn't
+   * completed; true once the envelope went out.
    */
   send: (channel: string, payload: unknown) => boolean
   /**
-   * Register a host-side handler for messages the toolbar page sends via
-   * `window.diminaHostToolbar.send(channel, payload)`. May be called before
-   * the view exists; survives page reloads. `dispose()` detaches (idempotent).
+   * Register a host-side handler for messages the slot's page sends via
+   * `window.dimina*.send(channel, payload)`. May be called before the view
+   * exists; survives page reloads. `dispose()` detaches (idempotent).
    */
   onMessage: (
     channel: string,
@@ -157,13 +159,17 @@ export interface MiniappHostToolbar {
   ) => { dispose: () => void }
   /**
    * Observe handshake readiness. Fires the handler once per load generation,
-   * exactly when the toolbar page's MessagePort handshake completes (i.e.
-   * when `send` flips to true). Registering while the channel is already
-   * ready fires once asynchronously on a microtask (missed-signal guard);
-   * a reload / re-handshake fires registered handlers again. `dispose()`
+   * exactly when the slot page's MessagePort handshake completes (i.e. when
+   * `send` flips to true). Registering while the channel is already ready
+   * fires once asynchronously on a microtask (missed-signal guard); a
+   * reload / re-handshake fires registered handlers again. `dispose()`
    * detaches (idempotent).
    */
   onReady: (handler: () => void) => { dispose: () => void }
+}
+
+/** Host-facing control surface for the toolbar WebContentsView. */
+export interface MiniappHostToolbar extends MiniappHostSlotChannel {
   /**
    * Pin (`{ fixed }`) or unpin (`'auto'`) the toolbar strip height. `'auto'`
    * (default) lets the in-page height advertiser drive the placeholder.
@@ -173,21 +179,8 @@ export interface MiniappHostToolbar {
   setHeightMode: (mode: 'auto' | { fixed: number }) => void
 }
 
-/**
- * Host-facing control surface for the sidebar WebContentsView. Shape
- * identical to `MiniappHostToolbar` except the axis-specific mode setter —
- * see that interface for member semantics.
- */
-export interface MiniappHostSidebar {
-  setPreloadPath: (path: string | null) => void
-  loadFile: (path: string) => Promise<void>
-  loadURL: (url: string) => Promise<void>
-  send: (channel: string, payload: unknown) => boolean
-  onMessage: (
-    channel: string,
-    handler: (payload: unknown) => void,
-  ) => { dispose: () => void }
-  onReady: (handler: () => void) => { dispose: () => void }
+/** Host-facing control surface for the sidebar WebContentsView. */
+export interface MiniappHostSidebar extends MiniappHostSlotChannel {
   /**
    * Pin (`{ fixed }`) or unpin (`'auto'`) the sidebar strip width. `'auto'`
    * (default) lets the in-page width advertiser drive the placeholder.
@@ -203,16 +196,7 @@ export interface MiniappHostSidebar {
  * is shown/hidden explicitly — there is no extent-mode setter (both axes
  * always self-size from the page's own measured content).
  */
-export interface MiniappHostDialog {
-  setPreloadPath: (path: string | null) => void
-  loadFile: (path: string) => Promise<void>
-  loadURL: (url: string) => Promise<void>
-  send: (channel: string, payload: unknown) => boolean
-  onMessage: (
-    channel: string,
-    handler: (payload: unknown) => void,
-  ) => { dispose: () => void }
-  onReady: (handler: () => void) => { dispose: () => void }
+export interface MiniappHostDialog extends MiniappHostSlotChannel {
   /**
    * Show the dialog, centered in the main window using its self-advertised
    * size on both axes. Creates the view's placement if needed; does not

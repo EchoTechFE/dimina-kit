@@ -102,6 +102,15 @@ export const ViewChannel = {
    * invoke.
    */
   PlacementSnapshot: 'view:placement-snapshot',
+  /**
+   * main ← main-window renderer (invoke): allocate a fresh placement
+   * generation seed for this renderer bootstrap. See
+   * renderer-placement-generation.ts for why the seed comes from main
+   * (a wall-clock `Date.now()` seed is not guaranteed to exceed main's
+   * still-standing high-water mark across two reloads that happen faster
+   * than the clock's resolution). No payload; resolves a number.
+   */
+  AllocatePlacementGeneration: 'view:allocate-placement-generation',
 } as const
 
 export interface ViewBounds {

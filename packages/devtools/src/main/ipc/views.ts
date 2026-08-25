@@ -56,6 +56,9 @@ export function registerViewsIpc(
     // Same mount-time replay role as HostToolbarGetHeight, on the sidebar's
     // inline (width) axis.
     .handle(ViewChannel.HostSidebarGetWidth, () => ctx.views.getHostSidebarWidth())
+    // Renderer bootstrap: allocate this session's placement-generation seed.
+    // See renderer-placement-generation.ts / PlacementReconciler.allocateGeneration.
+    .handle(ViewChannel.AllocatePlacementGeneration, () => ctx.views.allocatePlacementGeneration())
 
   // Reverse size-advertiser: the toolbar WCV's OWN renderer sends this, and the
   // host loads ARBITRARY content into that WCV. We DELIBERATELY do NOT add the

@@ -71,12 +71,23 @@ export interface PlacementReconciler {
   setOverlayDesired(viewId: string, desired: DesiredView<DevtoolsExtra>): void
   deleteOverlayDesired(viewId: string): void
   hasOverlayDesired(viewId: string): boolean
+  /**
+   * Hand out a fresh generation seed for a renderer bootstrap (see
+   * renderer-placement-generation.ts). Strictly exceeds both the current
+   * high-water mark (`rendererGeneration`, which a full renderer reload does
+   * NOT reset — this reconciler lives in the long-lived main process) and
+   * every previously allocated seed, so a reload that races ahead of its own
+   * previous session's accepted snapshots can never be handed a value that
+   * `setPlacementSnapshot` would reject as stale.
+   */
+  allocateGeneration(): number
 }
 
 export function createPlacementReconciler(ctx: ViewManagerContext): PlacementReconciler {
   let placementState = createInitialState<DevtoolsExtra>()
   let epochCounter = 0
   let rendererGeneration = 0
+  let allocatedGeneration = 0
   const appliedActual = new Map<string, ActualView<DevtoolsExtra>>()
   const baseDesired = new Map<string, DesiredView<DevtoolsExtra>>()
   const overlayDesired = new Map<string, DesiredView<DevtoolsExtra>>()
@@ -226,5 +237,9 @@ export function createPlacementReconciler(ctx: ViewManagerContext): PlacementRec
     setOverlayDesired: (viewId, desired) => { overlayDesired.set(viewId, desired) },
     deleteOverlayDesired: (viewId) => { overlayDesired.delete(viewId) },
     hasOverlayDesired: (viewId) => overlayDesired.has(viewId),
+    allocateGeneration: () => {
+      allocatedGeneration = Math.max(allocatedGeneration, rendererGeneration) + 1
+      return allocatedGeneration
+    },
   }
 }
