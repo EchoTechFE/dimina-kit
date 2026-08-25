@@ -61,6 +61,16 @@ export function createWorkbenchSenderPolicy(
     const tooltipViewId = ctx.views.getTooltipWebContentsId()
     if (tooltipViewId != null && sender.id === tooltipViewId) return true
 
+    // Project-create-dialog overlay view. Devtools-owned bundled renderer
+    // (the WCV that replaced the Radix DOM-portal dialog), same trust level
+    // as settings/popover/tooltip.
+    const projectCreateDialogViewId = ctx.views.getProjectCreateDialogWebContentsId()
+    if (projectCreateDialogViewId != null && sender.id === projectCreateDialogViewId) return true
+
+    // Update-available overlay view. Same devtools-owned trust level.
+    const updateDialogViewId = ctx.views.getUpdateDialogWebContentsId()
+    if (updateDialogViewId != null && sender.id === updateDialogViewId) return true
+
     // The host-toolbar overlay is DELIBERATELY NOT trusted here. The host loads
     // arbitrary content into it, so granting it the global white-list would open
     // all ~72 IpcRegistry channels to that content. Its one channel (the reverse

@@ -24,6 +24,8 @@ const stub = vi.hoisted(() => {
     removeHandler: vi.fn((channel: string) => {
       ipcHandlers.delete(channel)
     }),
+    on: vi.fn(),
+    removeListener: vi.fn(),
   }
   const appStub = {
     getVersion: vi.fn(() => '1.0.0'),
@@ -47,10 +49,8 @@ vi.mock('electron', () => ({
 import type { UpdateChecker, UpdateInfo } from '../../../shared/types.js'
 import { UpdateManager } from './update-manager.js'
 
-function makeMainWindow() {
-  return {
-    webContents: { send: vi.fn(), isDestroyed: () => false },
-  } as unknown as Electron.BrowserWindow
+function makePanelDeps() {
+  return { showUpdatePanel: vi.fn(), notifyDownloadProgress: vi.fn(), hideUpdatePanel: vi.fn() }
 }
 
 function makeChecker(sequence: Array<UpdateInfo | null>, downloadPath = '/tmp/fake-update.dmg'): UpdateChecker {
@@ -77,7 +77,7 @@ afterEach(() => {
 
 describe('UpdateManager.install()', () => {
   it('returns success:false without touching shell when nothing was downloaded', async () => {
-    const m = new UpdateManager({ checker: makeChecker([null]), mainWindow: makeMainWindow() })
+    const m = new UpdateManager({ checker: makeChecker([null]), ...makePanelDeps() })
 
     const result = await m.install()
 
@@ -90,7 +90,7 @@ describe('UpdateManager.install()', () => {
   it('quits the app only after shell.openPath resolves success (empty string)', async () => {
     const info: UpdateInfo = { version: '2.0.0', downloadUrl: 'https://example.com/2.0.0.dmg' }
     const checker = makeChecker([info])
-    const m = new UpdateManager({ checker, mainWindow: makeMainWindow() })
+    const m = new UpdateManager({ checker, ...makePanelDeps() })
     await m.check()
     await m.download()
     stub.shellStub.openPath.mockResolvedValueOnce('')
@@ -106,7 +106,7 @@ describe('UpdateManager.install()', () => {
   it('does NOT quit and surfaces the failure when shell.openPath resolves an error message', async () => {
     const info: UpdateInfo = { version: '2.0.0', downloadUrl: 'https://example.com/2.0.0.dmg' }
     const checker = makeChecker([info])
-    const m = new UpdateManager({ checker, mainWindow: makeMainWindow() })
+    const m = new UpdateManager({ checker, ...makePanelDeps() })
     await m.check()
     await m.download()
     stub.shellStub.openPath.mockResolvedValueOnce('no application associated with this file')
@@ -123,7 +123,7 @@ describe('UpdateManager: downloadedPath survives a same-identity re-check, clear
   it('a periodic re-check reporting the identical update (same version + downloadUrl) preserves the completed download', async () => {
     const info: UpdateInfo = { version: '2.0.0', downloadUrl: 'https://example.com/2.0.0.dmg' }
     const checker = makeChecker([info, info]) // two checks, same identity
-    const m = new UpdateManager({ checker, mainWindow: makeMainWindow() })
+    const m = new UpdateManager({ checker, ...makePanelDeps() })
 
     await m.check()
     await m.download()
@@ -140,7 +140,7 @@ describe('UpdateManager: downloadedPath survives a same-identity re-check, clear
     const first: UpdateInfo = { version: '2.0.0', downloadUrl: 'https://example.com/2.0.0-a.dmg' }
     const replaced: UpdateInfo = { version: '2.0.0', downloadUrl: 'https://example.com/2.0.0-b.dmg' }
     const checker = makeChecker([first, replaced])
-    const m = new UpdateManager({ checker, mainWindow: makeMainWindow() })
+    const m = new UpdateManager({ checker, ...makePanelDeps() })
 
     await m.check()
     await m.download()

@@ -9,9 +9,13 @@ export const VIEW_ID = {
   simulatorDevtools: 'simulator-devtools',
   workbench: 'workbench',
   hostToolbar: 'host-toolbar',
+  hostSidebar: 'host-sidebar',
+  hostDialog: 'host-dialog',
   settings: 'settings',
   popover: 'popover',
   tooltip: 'tooltip',
+  projectCreateDialog: 'project-create-dialog',
+  updateDialog: 'update-dialog',
 } as const
 
 export type DevtoolsViewId = (typeof VIEW_ID)[keyof typeof VIEW_ID]
@@ -39,7 +43,13 @@ export interface DevtoolsExtra {
 export const VIEW_LAYER = {
   base: 0,
   hostToolbar: 5,
+  hostSidebar: 5,
   settings: 10,
   popover: 20,
   tooltip: 30,
+  // devtools' own ProjectCreateDialog/UpdateDialog panels (createOverlayPanel).
+  dialog: 40,
+  // Host-controlled fully-custom dialog (loadURL-level takeover); sits above
+  // devtools' own dialog layer so host content is never occluded by it.
+  hostDialog: 45,
 } as const

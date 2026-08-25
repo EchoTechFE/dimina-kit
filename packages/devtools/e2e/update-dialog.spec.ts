@@ -1,8 +1,14 @@
 import { test, expect, _electron, type ElectronApplication, type Page } from '@playwright/test'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import { evalInWebContentsByUrl, pollUntil } from './helpers'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+
+/** Read the update-dialog's own document (`entries/update-dialog`), not the main window — the dialog moved into its own WCV to fix the native-overlay occlusion bug (see `view-manager-dialog-zorder.test.ts`). */
+function updateDialogBodyText(electronApp: ElectronApplication): Promise<string> {
+  return evalInWebContentsByUrl<string>(electronApp, 'entries/update-dialog', 'document.body.innerText')
+}
 
 /**
  * Drives the real GitHub Releases API for EchoTechFE/dimina-kit with
@@ -40,17 +46,31 @@ test.describe('Update dialog flow (real GitHub)', () => {
     // repo with no releases, no update resolves — SKIP rather than hard-fail
     // (this is a "real GitHub" integration test, not a deterministic unit). With
     // GITHUB_TOKEN + network + a release present (CI), it runs and asserts.
-    const appeared = await mainWindow
-      .getByText('Update Available')
-      .waitFor({ timeout: 15_000 })
-      .then(() => true)
-      .catch(() => false)
+    //
+    // The dialog itself lives in its own `entries/update-dialog` WCV, not the
+    // main window's renderer — until that WCV exists (only once `showUpdatePanel`
+    // has actually fired), `evalInWebContentsByUrl` throws "No webContents
+    // found", which `pollUntil` swallows on every attempt but the retry loop's
+    // timeout.
+    const appeared = await pollUntil(
+      () => updateDialogBodyText(electronApp),
+      (text) => text.includes('Update Available'),
+      15_000,
+      500,
+    ).then((text) => text.includes('Update Available')).catch(() => false)
     test.skip(!appeared, 'GitHub Releases did not resolve a newer release in this environment (no network / rate-limited / no releases) — update flow not exercisable')
 
-    await expect(mainWindow.getByText('Update Available')).toBeVisible()
+    const bodyText = await updateDialogBodyText(electronApp)
+    expect(bodyText).toContain('Update Available')
     // Version text comes from the real tag trailing number (e.g. release-…-1 → "1").
-    await expect(mainWindow.getByText(/New version \d+ is available\./)).toBeVisible()
-    await expect(mainWindow.getByRole('button', { name: 'Download' })).toBeVisible()
-    await expect(mainWindow.getByRole('button', { name: 'Later' })).toBeVisible()
+    expect(bodyText).toMatch(/New version \d+ is available\./)
+
+    const buttonTexts = await evalInWebContentsByUrl<string[]>(
+      electronApp,
+      'entries/update-dialog',
+      `Array.from(document.querySelectorAll('button')).map((b) => b.textContent || '')`,
+    )
+    expect(buttonTexts.some((t) => t.includes('Download'))).toBe(true)
+    expect(buttonTexts.some((t) => t.includes('Later'))).toBe(true)
   })
 })

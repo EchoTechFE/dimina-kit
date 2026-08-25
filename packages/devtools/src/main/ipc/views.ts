@@ -1,9 +1,11 @@
 import type { IpcMainEvent } from 'electron'
 import { ipcMain } from 'electron'
-import { ViewChannel } from '../../shared/ipc-channels.js'
+import { ViewChannel } from '../../shared/ipc-channels-overlays.js'
 import {
   PlacementSnapshotSchema,
   HostToolbarAdvertiseHeightSchema,
+  HostSidebarAdvertiseWidthSchema,
+  HostDialogAdvertiseSizeSchema,
 } from '../../shared/ipc-schemas.js'
 // eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
 import type { WorkbenchContext } from '../services/workbench-context.js'
@@ -51,6 +53,9 @@ export function registerViewsIpc(
     // arbitrary host content must not reach this — only the trusted main
     // renderer pulls. Live delegation, not a registration-time snapshot.
     .handle(ViewChannel.HostToolbarGetHeight, () => ctx.views.getHostToolbarHeight())
+    // Same mount-time replay role as HostToolbarGetHeight, on the sidebar's
+    // inline (width) axis.
+    .handle(ViewChannel.HostSidebarGetWidth, () => ctx.views.getHostSidebarWidth())
 
   // Reverse size-advertiser: the toolbar WCV's OWN renderer sends this, and the
   // host loads ARBITRARY content into that WCV. We DELIBERATELY do NOT add the
@@ -78,10 +83,51 @@ export function registerViewsIpc(
   }
   ipcMain.on(ViewChannel.HostToolbarAdvertiseHeight, onAdvertiseHeight)
 
+  // Same precise-sender-id trust model as onAdvertiseHeight, on the
+  // sidebar's inline (width) axis.
+  const onAdvertiseWidth = (event: IpcMainEvent, ...args: unknown[]): void => {
+    if (event.sender.id !== ctx.views.getHostSidebarWebContentsId()) return
+    let extent: number
+    try {
+      ;[{ extent }] = validate(
+        ViewChannel.HostSidebarAdvertiseWidth,
+        HostSidebarAdvertiseWidthSchema,
+        args,
+      )
+    } catch {
+      return // malformed payload from the host's own content — drop it
+    }
+    ctx.views.setHostSidebarWidth(extent)
+  }
+  ipcMain.on(ViewChannel.HostSidebarAdvertiseWidth, onAdvertiseWidth)
+
+  // Same precise-sender-id trust model as onAdvertiseHeight/onAdvertiseWidth,
+  // but the dialog is a single by-demand overlay rather than a persistent
+  // slot: either axis may arrive, and the view manager re-centers using
+  // whichever axes it has measured so far.
+  const onAdvertiseDialogSize = (event: IpcMainEvent, ...args: unknown[]): void => {
+    if (event.sender.id !== ctx.views.getHostDialogWebContentsId()) return
+    let axis: 'block' | 'inline'
+    let extent: number
+    try {
+      ;[{ axis, extent }] = validate(
+        ViewChannel.HostDialogAdvertiseSize,
+        HostDialogAdvertiseSizeSchema,
+        args,
+      )
+    } catch {
+      return // malformed payload from the host's own content — drop it
+    }
+    ctx.views.reportHostDialogMeasuredExtent(axis, extent)
+  }
+  ipcMain.on(ViewChannel.HostDialogAdvertiseSize, onAdvertiseDialogSize)
+
   return {
     dispose() {
       void registry.dispose()
       ipcMain.removeListener(ViewChannel.HostToolbarAdvertiseHeight, onAdvertiseHeight)
+      ipcMain.removeListener(ViewChannel.HostSidebarAdvertiseWidth, onAdvertiseWidth)
+      ipcMain.removeListener(ViewChannel.HostDialogAdvertiseSize, onAdvertiseDialogSize)
     },
   }
 }

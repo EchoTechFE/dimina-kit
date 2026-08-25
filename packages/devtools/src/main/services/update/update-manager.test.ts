@@ -18,6 +18,8 @@ const stub = vi.hoisted(() => {
     removeHandler: vi.fn((channel: string) => {
       ipcHandlers.delete(channel)
     }),
+    on: vi.fn(),
+    removeListener: vi.fn(),
   }
   const appStub = {
     getVersion: vi.fn(() => '1.0.0'),
@@ -41,15 +43,13 @@ vi.mock('electron', () => ({
 }))
 
 import type { UpdateChecker, UpdateInfo } from '../../../shared/types.js'
-import { UpdateChannel } from '../../../shared/ipc-channels.js'
+import { UpdateChannel } from '../../../shared/ipc-channels-overlays.js'
 import { UpdateManager } from './update-manager.js'
 
 const CHANNELS = [UpdateChannel.Check, UpdateChannel.Download, UpdateChannel.Install]
 
-function makeMainWindow() {
-  return {
-    webContents: { send: vi.fn(), isDestroyed: () => false },
-  } as unknown as Electron.BrowserWindow
+function makePanelDeps() {
+  return { showUpdatePanel: vi.fn(), notifyDownloadProgress: vi.fn(), hideUpdatePanel: vi.fn() }
 }
 
 function makeChecker(info: UpdateInfo | null = null): UpdateChecker {
@@ -73,7 +73,7 @@ afterEach(() => {
 
 describe('UpdateManager lifecycle', () => {
   it('registers three ipcMain handlers on construct', async () => {
-    const m = new UpdateManager({ checker: makeChecker(), mainWindow: makeMainWindow() })
+    const m = new UpdateManager({ checker: makeChecker(), ...makePanelDeps() })
     for (const ch of CHANNELS) {
       expect(ipcHandlers.has(ch)).toBe(true)
     }
@@ -84,7 +84,7 @@ describe('UpdateManager lifecycle', () => {
   it('schedules an initial timeout and a periodic interval', async () => {
     const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout')
     const setIntervalSpy = vi.spyOn(globalThis, 'setInterval')
-    const m = new UpdateManager({ checker: makeChecker(), mainWindow: makeMainWindow() })
+    const m = new UpdateManager({ checker: makeChecker(), ...makePanelDeps() })
 
     expect(setTimeoutSpy).toHaveBeenCalledTimes(1)
     expect(setIntervalSpy).toHaveBeenCalledTimes(1)
@@ -94,7 +94,7 @@ describe('UpdateManager lifecycle', () => {
   })
 
   it('dispose() removes all three handlers', async () => {
-    const m = new UpdateManager({ checker: makeChecker(), mainWindow: makeMainWindow() })
+    const m = new UpdateManager({ checker: makeChecker(), ...makePanelDeps() })
     await m.dispose()
 
     for (const ch of CHANNELS) {
@@ -110,7 +110,7 @@ describe('UpdateManager lifecycle', () => {
     const checker = makeChecker()
     const m = new UpdateManager({
       checker,
-      mainWindow: makeMainWindow(),
+      ...makePanelDeps(),
       checkInterval: 10_000,
       initialDelay: 1_000,
     })
@@ -128,7 +128,7 @@ describe('UpdateManager lifecycle', () => {
 
   it('supports construct → dispose → construct → dispose cycles', async () => {
     for (let i = 0; i < 2; i++) {
-      const m = new UpdateManager({ checker: makeChecker(), mainWindow: makeMainWindow() })
+      const m = new UpdateManager({ checker: makeChecker(), ...makePanelDeps() })
       expect(ipcHandlers.size).toBe(3)
       await m.dispose()
       expect(ipcHandlers.size).toBe(0)
@@ -141,7 +141,7 @@ describe('UpdateManager lifecycle', () => {
     const checker = makeChecker()
     const m = new UpdateManager({
       checker,
-      mainWindow: makeMainWindow(),
+      ...makePanelDeps(),
       checkInterval: 5_000,
       initialDelay: 500,
     })
@@ -150,4 +150,19 @@ describe('UpdateManager lifecycle', () => {
     expect(checker.checkForUpdates).not.toHaveBeenCalled()
   })
 
+})
+
+describe('UpdateManager: UpdateChannel.Close forwards to hideUpdatePanel', () => {
+  it('registers an ipcMain listener that calls hideUpdatePanel — without it, a closed dialog stays presented forever', async () => {
+    const deps = makePanelDeps()
+    const m = new UpdateManager({ checker: makeChecker(), ...deps })
+
+    const closeHandler = ipcMainStub.on.mock.calls.find(([ch]) => ch === UpdateChannel.Close)?.[1]
+    expect(closeHandler, 'UpdateChannel.Close must be registered via ipcMain.on').toBeDefined()
+
+    closeHandler!()
+
+    expect(deps.hideUpdatePanel).toHaveBeenCalledTimes(1)
+    await m.dispose()
+  })
 })

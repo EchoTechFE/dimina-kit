@@ -69,6 +69,18 @@ export const hostToolbarRuntimePreloadPath = path.join(
   'dist/preload/windows/host-toolbar-runtime.cjs',
 )
 
+/** Session-registered sidebar-runtime preload bundle, mirroring {@link hostToolbarRuntimePreloadPath}. */
+export const hostSidebarRuntimePreloadPath = path.join(
+  devtoolsPackageRoot,
+  'dist/preload/windows/host-sidebar-runtime.cjs',
+)
+
+/** Session-registered dialog-runtime preload bundle, mirroring {@link hostToolbarRuntimePreloadPath}. */
+export const hostDialogRuntimePreloadPath = path.join(
+  devtoolsPackageRoot,
+  'dist/preload/windows/host-dialog-runtime.cjs',
+)
+
 export const simulatorDir = path.join(devtoolsPackageRoot, 'dist/simulator')
 
 /**

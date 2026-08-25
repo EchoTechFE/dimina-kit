@@ -12,7 +12,7 @@ import {
   type Placement,
   type PlacementAnchorHandle,
 } from "@dimina-kit/view-anchor";
-import { usePlacementPublisher } from "../placement-publisher-context";
+import { usePlacementPublisher } from '@/shared/placement-publisher-context';
 import { VIEW_ID, VIEW_LAYER } from "../../../../../../shared/view-ids";
 import { useDockLayoutEpoch } from "@dimina-kit/electron-deck/dock-react";
 import { cn } from "@/shared/lib/utils";

@@ -102,7 +102,9 @@ vi.mock('electron', () => {
 
 vi.mock('../../utils/paths.js', () => ({
   mainPreloadPath: '/stub/preload.js',
-  hostToolbarPreloadPath: '/stub/host-toolbar-preload.js',
+  hostToolbarRuntimePreloadPath: '/stub/host-toolbar-preload.js',
+  hostSidebarRuntimePreloadPath: '/stub/host-sidebar-preload.js',
+  hostDialogRuntimePreloadPath: '/stub/host-dialog-preload.js',
   // attachNativeSimulator hands the WCV the `.cjs` sibling of the preload.
   cjsSiblingPreloadPath: (p: string) => p.replace(/\.js$/, '.cjs'),
   // workbench-context transitively imports builtin-templates.ts which reads

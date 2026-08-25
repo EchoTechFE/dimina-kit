@@ -115,6 +115,10 @@ vi.mock('../../utils/paths.js', () => ({
   // R1 contract: the session-registered toolbar-runtime preload bundle,
   // resolved by the paths layer (so packaged/ASAR installs resolve correctly).
   hostToolbarRuntimePreloadPath: STUB_RUNTIME_PRELOAD,
+  // view-manager also wires the sidebar/dialog slots unconditionally now —
+  // their session-runtime modules read these at import time.
+  hostSidebarRuntimePreloadPath: '/stub/host-sidebar-runtime-preload.cjs',
+  hostDialogRuntimePreloadPath: '/stub/host-dialog-runtime-preload.cjs',
   cjsSiblingPreloadPath: (p: string) => p,
   devtoolsPackageRoot: '/stub/devtools-pkg-root',
 }))

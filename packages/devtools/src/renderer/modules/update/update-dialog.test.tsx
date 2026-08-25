@@ -23,9 +23,10 @@ const { invokeStrictMock, onMock, listeners } = vi.hoisted(() => {
 vi.mock('@/shared/api/ipc-transport', () => ({
   invokeStrict: invokeStrictMock,
   on: onMock,
+  send: vi.fn(),
 }))
 
-import { UpdateChannel } from '../../../shared/ipc-channels.js'
+import { UpdateChannel } from '../../../shared/ipc-channels-overlays.js'
 import { UpdateDialog } from './update-dialog'
 
 const UPDATE_INFO = { version: '2.0.0', downloadUrl: 'https://example.com/2.0.0.dmg' }

@@ -275,9 +275,9 @@ vi.mock('@dimina-kit/devkit', () => ({
 
 import {
   ProjectsChannel,
-  SettingsChannel,
   WorkbenchSettingsChannel,
 } from '../../shared/ipc-channels.js'
+import { SettingsChannel } from '../../shared/ipc-channels-overlays.js'
 
 let createDevtoolsRuntime: typeof import('./app.js').createDevtoolsRuntime
 

@@ -78,6 +78,27 @@ export interface DiminaHostToolbarPageBridge {
   onMessage: (channel: string, handler: (payload: unknown) => void) => () => void
 }
 
+/**
+ * The page-side bridge injected into the host-sidebar WCV as
+ * `window.diminaHostSidebar` (see src/preload/runtime/host-sidebar-port.ts).
+ * Shape identical to `DiminaHostToolbarPageBridge` — the port-channel
+ * envelope and queueing/guard behaviour don't vary by slot.
+ */
+export interface DiminaHostSidebarPageBridge {
+  send: (channel: string, payload: unknown) => void
+  onMessage: (channel: string, handler: (payload: unknown) => void) => () => void
+}
+
+/**
+ * The page-side bridge injected into the host-dialog WCV as
+ * `window.diminaHostDialog` (see src/preload/runtime/host-dialog-port.ts).
+ * Shape identical to `DiminaHostToolbarPageBridge`.
+ */
+export interface DiminaHostDialogPageBridge {
+  send: (channel: string, payload: unknown) => void
+  onMessage: (channel: string, handler: (payload: unknown) => void) => () => void
+}
+
 declare global {
   interface Window {
     /**
@@ -86,6 +107,18 @@ declare global {
      * else, so page code must runtime-guard before use.
      */
     diminaHostToolbar?: DiminaHostToolbarPageBridge
+    /**
+     * Present ONLY inside the host-sidebar WebContentsView's main frame
+     * (guarded injection — see host-sidebar-runtime.ts); optional everywhere
+     * else, so page code must runtime-guard before use.
+     */
+    diminaHostSidebar?: DiminaHostSidebarPageBridge
+    /**
+     * Present ONLY inside the host-dialog WebContentsView's main frame
+     * (guarded injection — see host-dialog-runtime.ts); optional everywhere
+     * else, so page code must runtime-guard before use.
+     */
+    diminaHostDialog?: DiminaHostDialogPageBridge
   }
 }
 

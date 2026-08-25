@@ -1,11 +1,16 @@
-import { app, BrowserWindow, shell } from 'electron'
+import { app, shell } from 'electron'
 import type { UpdateChecker, UpdateInfo } from '../../../shared/types.js'
-import { UpdateChannel } from '../../../shared/ipc-channels.js'
+import { UpdateChannel } from '../../../shared/ipc-channels-overlays.js'
 import { IpcRegistry, type SenderPolicy } from '../../utils/ipc-registry.js'
 
 export interface UpdateManagerOptions {
   checker: UpdateChecker
-  mainWindow: BrowserWindow
+  /** Show the update-available overlay panel, fed the discovered update's info. */
+  showUpdatePanel: (info: UpdateInfo) => void
+  /** Forward a download-progress tick into the (already-shown) update overlay. */
+  notifyDownloadProgress: (percent: number) => void
+  /** Hide the update overlay panel — the renderer's close (any path) forwards here. */
+  hideUpdatePanel: () => void
   /** Check interval in milliseconds. Default: 1 hour */
   checkInterval?: number
   /** Delay before the first check after startup in ms. Default: 5000 */
@@ -23,7 +28,9 @@ export interface UpdateManagerOptions {
 
 export class UpdateManager {
   private checker: UpdateChecker
-  private mainWindow: BrowserWindow
+  private showUpdatePanel: (info: UpdateInfo) => void
+  private notifyDownloadProgress: (percent: number) => void
+  private hideUpdatePanel: () => void
   private getCurrentVersion: () => string
   private latestUpdate: UpdateInfo | null = null
   private downloadedPath: string | null = null
@@ -43,7 +50,9 @@ export class UpdateManager {
 
   constructor(opts: UpdateManagerOptions) {
     this.checker = opts.checker
-    this.mainWindow = opts.mainWindow
+    this.showUpdatePanel = opts.showUpdatePanel
+    this.notifyDownloadProgress = opts.notifyDownloadProgress
+    this.hideUpdatePanel = opts.hideUpdatePanel
     this.getCurrentVersion = opts.getCurrentVersion ?? (() => app.getVersion())
     this.ipc = new IpcRegistry(opts.senderPolicy)
     this.registerIpc()
@@ -55,6 +64,7 @@ export class UpdateManager {
       .handle(UpdateChannel.Check, async () => this.check())
       .handle(UpdateChannel.Download, async () => this.download())
       .handle(UpdateChannel.Install, async () => this.install())
+      .on(UpdateChannel.Close, () => this.hideUpdatePanel())
   }
 
   async check(): Promise<{ hasUpdate: boolean; info?: UpdateInfo }> {
@@ -92,7 +102,7 @@ export class UpdateManager {
     }
     try {
       const filePath = await this.checker.downloadUpdate(this.latestUpdate, (percent) => {
-        this.mainWindow.webContents.send(UpdateChannel.DownloadProgress, { percent })
+        this.notifyDownloadProgress(percent)
       })
       this.downloadedPath = filePath
       return { success: true, filePath }
@@ -149,6 +159,6 @@ export class UpdateManager {
     if (!result.hasUpdate || !result.info) return
     if (this.hasNotified) return
     this.hasNotified = true
-    this.mainWindow.webContents.send(UpdateChannel.Available, result.info)
+    this.showUpdatePanel(result.info)
   }
 }

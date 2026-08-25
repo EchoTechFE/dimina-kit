@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>e2e host dialog (fixed)</title>
+    <style>
+      html, body { margin: 0; background: #1e1e1e; color: #ddd; font: 13px sans-serif; }
+    </style>
+  </head>
+  <body>
+    <!--
+      [data-host-dialog-root] must be shrink-to-fit on BOTH axes (see
+      host-dialog-advertiser.ts footgun note): `display: inline-block` keeps
+      the root's width from stretching to the view's full width the way a
+      default block-level div would; height is already content-driven.
+    -->
+    <div data-host-dialog-root style="display: inline-block;">
+      <div style="width: 300px; height: 200px; display: flex; align-items: center; justify-content: center;">
+        e2e host dialog — fixed 300x200
+      </div>
+    </div>
+  </body>
+</html>

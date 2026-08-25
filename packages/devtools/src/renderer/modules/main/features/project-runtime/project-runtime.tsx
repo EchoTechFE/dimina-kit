@@ -20,7 +20,8 @@ import type { Placement, PlacementAnchorHandle } from '@dimina-kit/view-anchor'
 import { createPlacementPublisher, type PlacementPublisher } from '@dimina-kit/electron-deck/client'
 import { VIEW_ID, VIEW_LAYER } from '../../../../../shared/view-ids'
 import type { DevtoolsExtra } from '../../../../../shared/view-ids'
-import { PlacementPublisherContext, usePlacementPublisher } from './placement-publisher-context'
+import { PlacementPublisherContext, usePlacementPublisher } from '@/shared/placement-publisher-context'
+import { nextPlacementGeneration } from '@/shared/renderer-placement-generation'
 import { DockView } from '@dimina-kit/electron-deck/dock-react'
 import { serializeLayout, setConstraint, closePanelForUser } from '@dimina-kit/electron-deck/layout'
 import type { LayoutModel, LayoutNode, PanelRegistry } from '@dimina-kit/electron-deck/layout'
@@ -28,10 +29,6 @@ import {
   buildDockModel,
   buildDockRegistry,
 } from './layout/dock-layout'
-
-// Bumped per ProjectRuntime mount (each project open) so the main reconciler
-// resets its actual-view table for the fresh renderer generation.
-let placementGeneration = 0
 
 // The seven dock panels after splitting the coarse `debug` into five fine ones.
 // `console` is the only native overlay; the rest are DOM panels (simulator +
@@ -89,8 +86,13 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
   // anchor writes its desired placement here; the publisher coalesces one
   // window-level snapshot per frame and forwards it to main's reconciler. A
   // fresh generation per mount makes the reconciler drop the previous project's
-  // actual-view table.
-  const [generation] = useState(() => ++placementGeneration)
+  // actual-view table. Drawn from the shared cross-screen sequence (see
+  // renderer-placement-generation.ts) so a later mount here always compares
+  // as later than any generation ProjectListScreen already sent, and vice
+  // versa — otherwise the two screens' own independent counters can send
+  // main a generation lower than one it already accepted, which the
+  // reconciler treats as permanently stale.
+  const [generation] = useState(() => nextPlacementGeneration())
   const publisher = useMemo<PlacementPublisher<DevtoolsExtra>>(
     () => createPlacementPublisher<DevtoolsExtra>({
       generation,

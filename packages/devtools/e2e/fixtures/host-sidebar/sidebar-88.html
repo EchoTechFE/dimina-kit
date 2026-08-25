@@ -1,0 +1,20 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>e2e host sidebar (custom host preload)</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #1e1e1e; color: #ddd; font: 13px sans-serif; }
+    </style>
+  </head>
+  <body>
+    <!-- Distinct 88px content width so the spec can prove a FRESH advertise
+         happened after the custom-preload rebuild (64 → 88), not a stale
+         placeholder left over from the previous load. -->
+    <div data-host-sidebar-root style="display: inline-block; height: 100%;">
+      <div style="width: 88px; height: 100%; display: flex; align-items: center; padding: 8px 0; writing-mode: vertical-rl;">
+        e2e host sidebar — custom host preload set via setPreloadPath
+      </div>
+    </div>
+  </body>
+</html>

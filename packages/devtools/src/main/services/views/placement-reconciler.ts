@@ -175,7 +175,24 @@ export function createPlacementReconciler(ctx: ViewManagerContext): PlacementRec
   }
 
   function setPlacementSnapshot(snapshot: PlacementSnapshot<DevtoolsExtra>): void {
-    rendererGeneration = snapshot.generation
+    // Defense-in-depth: `rendererGeneration` must never move backward. The
+    // renderer is supposed to hand out one shared, strictly monotonic
+    // sequence across every screen (see renderer-placement-generation.ts),
+    // but if that invariant is ever violated, letting a lower value land
+    // here would be worse than a no-op — the reconcile core's stale-
+    // generation guard (placement-reconcile.ts) leaves `placementState`
+    // untouched on rejection, so once `rendererGeneration` drops below the
+    // already-accepted high-water mark, EVERY later snapshot compares as a
+    // regression too and gets rejected forever, regardless of how current
+    // it actually is. Clamping here keeps the high-water mark intact so a
+    // lagging screen's own later, legitimately-newer snapshots still land.
+    if (snapshot.generation >= rendererGeneration) {
+      rendererGeneration = snapshot.generation
+    } else {
+      console.warn(
+        `[placement-reconciler] snapshot generation ${snapshot.generation} is behind the current ${rendererGeneration}; ignoring the regression instead of adopting it`,
+      )
+    }
     baseDesired.clear()
     for (const v of snapshot.views) baseDesired.set(v.viewId, v)
     reconcileNow()

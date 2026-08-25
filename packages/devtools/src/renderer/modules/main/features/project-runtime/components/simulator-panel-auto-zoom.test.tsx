@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, cleanup } from '@testing-library/react'
 import type { Placement } from '@dimina-kit/view-anchor'
 import type { PlacementPublisher } from '@dimina-kit/electron-deck/client'
-import { PlacementPublisherContext } from '../placement-publisher-context'
+import { PlacementPublisherContext } from '@/shared/placement-publisher-context'
 import { AUTO_ZOOM, type ZoomSetting } from '@/shared/constants'
 
 interface AnchorHandle {

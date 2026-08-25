@@ -16,7 +16,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, cleanup } from '@testing-library/react'
 import type { PlacementPublisher } from '@dimina-kit/electron-deck/client'
-import { PlacementPublisherContext } from '../placement-publisher-context'
+import { PlacementPublisherContext } from '@/shared/placement-publisher-context'
 
 // Same view-anchor mock harness as simulator-panel-collapse-on-deactivate.test.tsx:
 // SimulatorPanel binds an imperative placement anchor on mount, which is not

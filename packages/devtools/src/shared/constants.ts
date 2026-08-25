@@ -25,3 +25,15 @@ export const HEADER_H = 40
  * both guard wings are required).
  */
 export const HOST_TOOLBAR_RUNTIME_MARKER = '--dimina-host-toolbar'
+
+/**
+ * Same guard-marker contract as {@link HOST_TOOLBAR_RUNTIME_MARKER}, for the
+ * host-sidebar WebContentsView (`src/preload/runtime/host-sidebar-runtime.ts`).
+ */
+export const HOST_SIDEBAR_RUNTIME_MARKER = '--dimina-host-sidebar'
+
+/**
+ * Same guard-marker contract as {@link HOST_TOOLBAR_RUNTIME_MARKER}, for the
+ * host-dialog WebContentsView (`src/preload/runtime/host-dialog-runtime.ts`).
+ */
+export const HOST_DIALOG_RUNTIME_MARKER = '--dimina-host-dialog'

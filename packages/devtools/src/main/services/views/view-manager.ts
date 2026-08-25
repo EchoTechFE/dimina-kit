@@ -2,14 +2,15 @@ import type { WebContents } from 'electron'
 import type { NativeDeviceInfo } from '../../../shared/ipc-channels.js'
 // eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
 import { type WorkbenchContext } from '../workbench-context.js'
-import type { HostToolbarMessageSubscription } from './host-toolbar-port-channel.js'
 import type { PlacementSnapshot } from '@dimina-kit/electron-deck/layout'
 import type { DevtoolsExtra } from '../../../shared/view-ids.js'
 import { createSafeAreaController } from '../safe-area/index.js'
 import { createPlacementReconciler } from './placement-reconciler.js'
 import { createWorkbenchView } from './workbench-view.js'
 import { createDevtoolsHost } from './native-simulator-devtools-host.js'
-import { createHostToolbarView } from './host-toolbar-view.js'
+import { createHostToolbarView, type HostToolbarControl } from './host-toolbar-view.js'
+import { createHostSidebarView, type HostSidebarViewManagerMembers } from './host-sidebar-view.js'
+import { createHostDialogView, type HostDialogViewManagerMembers } from './host-dialog-view.js'
 import {
   createOverlayPanelsView,
   type OverlayPanelsView,
@@ -120,7 +121,16 @@ export interface ViewManager extends Pick<
   | 'hideTooltip'
   | 'markOverlayReady'
   | 'applyTooltipMeasurement'
-> {
+  | 'showProjectCreateDialog'
+  | 'hideProjectCreateDialog'
+  | 'showUpdateDialog'
+  | 'hideUpdateDialog'
+  | 'notifyUpdateDownloadProgress'
+  | 'getProjectCreateDialogWebContentsId'
+  | 'getUpdateDialogWebContentsId'
+>,
+  HostSidebarViewManagerMembers,
+  HostDialogViewManagerMembers {
   // ── DevTools ───────────────────────────────────────────────────────────
   /**
    * NATIVE-HOST ONLY. Create the simulator itself as a top-level
@@ -305,85 +315,6 @@ export interface ViewManager extends Pick<
 }
 
 /**
- * Height mode for the host-toolbar placeholder strip. `'auto'` (default): the
- * session-resident advertiser's reports drive the height. `{ fixed }`: the
- * host pins the height; advertiser reports are ignored until `'auto'` again.
- */
-export type HostToolbarHeightMode = 'auto' | { fixed: number }
-
-/**
- * The control object the downstream host uses to own the toolbar
- * WebContentsView. Lazily backed by the view-manager's `hostToolbarView`.
- */
-export interface HostToolbarControl {
-  /** Load a URL into the toolbar view (lazy-creates the view). */
-  loadURL(url: string): Promise<void>
-  /** Load a local file into the toolbar view (lazy-creates the view). */
-  loadFile(path: string): Promise<void>
-  /** The toolbar view's live WebContents, or null if not yet created/destroyed. */
-  readonly webContents: WebContents | null
-  /** Remove the toolbar view from the contentView and reset it (kept alive). */
-  hide(): void
-  /**
-   * The HOST's own `webPreferences.preload` for the toolbar view (purely
-   * additive). The framework's height-advertiser runtime does NOT ride
-   * `webPreferences.preload` — it is session-resident (registered on
-   * `session.defaultSession`, self-guarded by the `--dimina-host-toolbar`
-   * marker + `isMainFrame`), so a host preload set here coexists with it and
-   * never replaces it. Must be set before the view is (re)created (first
-   * `loadURL`/`loadFile`, or the next one after the host closed the
-   * webContents); `null` (default) means "no host preload" — it does not and
-   * cannot restore any built-in preload.
-   */
-  setPreloadPath(path: string | null): void
-  /**
-   * Register a host-side handler for messages the toolbar PAGE sends via
-   * `window.diminaHostToolbar.send(channel, payload)`. Control-level: may be
-   * called before the view exists and survives page reloads / wc rebuilds
-   * (each per-load MessagePort handshake re-attaches the registry to the new
-   * port). Throws on an empty / non-string channel. `dispose()` detaches
-   * (idempotent).
-   */
-  onMessage(
-    channel: string,
-    handler: (payload: unknown) => void,
-  ): HostToolbarMessageSubscription
-  /**
-   * Observe handshake readiness — the push counterpart to polling `send()`
-   * for `true`. Fires the handler once per load generation, exactly when
-   * that load's MessagePort handshake completes; registering while the
-   * channel is ALREADY ready fires once asynchronously on a microtask
-   * (missed-signal race guard, re-validated at fire time). A reload /
-   * re-handshake fires registered handlers again; a host-initiated
-   * `loadURL`/`loadFile` invalidates readiness at initiation, so handlers
-   * registered in that window wait for the NEW document's handshake.
-   * `dispose()` detaches (idempotent); `disposeAll` sweeps everything.
-   */
-  onReady(handler: () => void): HostToolbarMessageSubscription
-  /**
-   * Post `{ channel, payload }` to the toolbar page (received via
-   * `window.diminaHostToolbar.onMessage(channel, handler)`). Gated and
-   * non-queueing: returns false — delivering nothing, creating no view —
-   * while there is no live toolbar webContents, the current load's
-   * MessagePort handshake hasn't completed, or a document-replacing
-   * navigation is in flight (`loadURL`/`loadFile` was issued, or the page
-   * itself started a main-frame cross-document navigation, and the new
-   * document hasn't handshaked yet); true once the envelope went out.
-   * No manual `getHostToolbarWebContentsId` gating needed: the false/true
-   * result IS the readiness signal.
-   */
-  send(channel: string, payload: unknown): boolean
-  /**
-   * Pin or unpin the toolbar strip height. `{ fixed }` notifies the renderer
-   * placeholder with that height immediately (so a preload-less/static toolbar
-   * is visible without any advertiser report) and ignores subsequent advertiser
-   * reports. `'auto'` (default) re-enables advertiser-driven height starting
-   * from the NEXT report — it does not synthesize/replay a stale height.
-   */
-  setHeightMode(mode: HostToolbarHeightMode): void
-}
-
-/**
  * Build a ViewManager bound to the given context. The returned object is the
  * only component allowed to instantiate or add/remove overlay WebContentsViews.
  *
@@ -413,6 +344,11 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
   const hostToolbar = createHostToolbarView(ctx, reconciler, {
     reapplyPresentOverlays: () => reapplyToolbarDependentOverlays(),
   })
+  // Sidebar and dialog are host-scoped like the toolbar (survive project
+  // close/reopen) but carry no height-cycle dependency on the overlay panels,
+  // so unlike hostToolbar they need no thunk into this scope.
+  const hostSidebar = createHostSidebarView(ctx, reconciler)
+  const hostDialog = createHostDialogView(ctx, reconciler)
   const overlayPanels = createOverlayPanelsView(ctx, reconciler, {
     getHostToolbarHeight: hostToolbar.getHostToolbarHeight,
   })
@@ -445,9 +381,15 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     // a release/cap replay to rebuild.
     workbench.cancelWorkbenchAttachHold()
     disposeProjectViews()
-    // Host-scoped teardown: the toolbar view, its port channel, and the
-    // ref-counted session-runtime preload registration.
+    // Host-scoped teardown: the toolbar/sidebar/dialog views, their port
+    // channels, and their ref-counted session-runtime preload registrations.
     hostToolbar.dispose()
+    hostSidebar.dispose()
+    hostDialog.dispose()
+    // Devtools-owned overlay-panel dialogs (project-create/update) — never
+    // torn down by disposeProjectViews(), they'd otherwise outlive every
+    // other view once the app tears down.
+    overlayPanels.destroyDialogs()
   }
 
   return {
@@ -465,7 +407,17 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     hideTooltip: overlayPanels.hideTooltip,
     markOverlayReady: overlayPanels.markOverlayReady,
     applyTooltipMeasurement: overlayPanels.applyTooltipMeasurement,
-    repositionAll: () => overlayPanels.reapplyPresentOverlays(),
+    showProjectCreateDialog: overlayPanels.showProjectCreateDialog,
+    hideProjectCreateDialog: overlayPanels.hideProjectCreateDialog,
+    showUpdateDialog: overlayPanels.showUpdateDialog,
+    hideUpdateDialog: overlayPanels.hideUpdateDialog,
+    notifyUpdateDownloadProgress: overlayPanels.notifyUpdateDownloadProgress,
+    getProjectCreateDialogWebContentsId: overlayPanels.getProjectCreateDialogWebContentsId,
+    getUpdateDialogWebContentsId: overlayPanels.getUpdateDialogWebContentsId,
+    repositionAll: () => {
+      overlayPanels.reapplyPresentOverlays()
+      hostDialog.reposition()
+    },
     disposeProjectViews,
     disposeAll,
     getSimulatorWebContentsId: nativeSimulator.getSimulatorWebContentsId,
@@ -487,5 +439,12 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     cancelWorkbenchAttachHold: workbench.cancelWorkbenchAttachHold,
     setHostToolbarHeight: hostToolbar.setHostToolbarHeight,
     hostToolbar: hostToolbar.control,
+    getHostSidebarWebContentsId: hostSidebar.getHostSidebarWebContentsId,
+    getHostSidebarWidth: hostSidebar.getHostSidebarWidth,
+    setHostSidebarWidth: hostSidebar.setHostSidebarWidth,
+    hostSidebar: hostSidebar.control,
+    getHostDialogWebContentsId: hostDialog.getHostDialogWebContentsId,
+    reportHostDialogMeasuredExtent: hostDialog.reportMeasuredExtent,
+    hostDialog: hostDialog.control,
   }
 }

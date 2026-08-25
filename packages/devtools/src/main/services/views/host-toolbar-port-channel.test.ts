@@ -25,7 +25,7 @@
  *
  * IMPLEMENTATION SEAMS PINNED BY THIS FILE:
  *  - handshake channel literal: 'view:host-toolbar:port' (add as
- *    `ViewChannel.HostToolbarPort` in src/shared/ipc-channels.ts).
+ *    `ViewChannel.HostToolbarPort` in src/shared/ipc-channels-overlays.ts).
  *  - did-finish-load and destroyed hooks registered via `wc.on(...)` (the
  *    stub records `on`/`once`; the event-firing helper replays both).
  *
@@ -157,6 +157,10 @@ vi.mock('electron', () => {
 vi.mock('../../utils/paths.js', () => ({
   mainPreloadPath: '/stub/preload.js',
   hostToolbarRuntimePreloadPath: '/stub/host-toolbar-runtime-preload.cjs',
+  // view-manager also wires the sidebar/dialog slots unconditionally now —
+  // their session-runtime modules read these at import time.
+  hostSidebarRuntimePreloadPath: '/stub/host-sidebar-runtime-preload.cjs',
+  hostDialogRuntimePreloadPath: '/stub/host-dialog-runtime-preload.cjs',
   cjsSiblingPreloadPath: (p: string) => p,
   devtoolsPackageRoot: '/stub/devtools-pkg-root',
 }))

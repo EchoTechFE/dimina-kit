@@ -4,16 +4,21 @@ import {
   ProjectChannel,
   SessionChannel,
   WindowChannel,
+  WorkbenchSettingsChannel,
+  EditorChannel,
+  type EditorOpenFilePayload,
+} from '../../../shared/ipc-channels.js'
+import {
   SettingsChannel,
   PopoverChannel,
   TooltipChannel,
-  WorkbenchSettingsChannel,
-  EditorChannel,
+  ProjectCreateChannel,
+  UpdateChannel,
   ViewChannel,
-  type EditorOpenFilePayload,
-} from '../../../shared/ipc-channels.js'
+} from '../../../shared/ipc-channels-overlays.js'
 import type { WorkbenchSettings } from '../settings/index.js'
 import type { ProjectSettings } from '../projects/project-repository.js'
+import type { UpdateInfo } from '../../../shared/types.js'
 
 /**
  * Payload for the `project:status` event sent whenever compile status changes.
@@ -127,10 +132,26 @@ export interface RendererNotifier {
    */
   hostToolbarHeightChanged(height: number): void
   /**
+   * Push the reserved host-sidebar width to the main renderer so its sidebar
+   * placeholder div resizes, mirroring `hostToolbarHeightChanged` on the
+   * inline axis.
+   */
+  hostSidebarWidthChanged(width: number): void
+  /**
    * Ask the main renderer's Monaco editor to open a project file at a position.
    * Drives the "click a console file link → open in editor" pipeline.
    */
   editorOpenFile(payload: EditorOpenFilePayload): void
+  /**
+   * Relay a project-create-dialog submission from the overlay panel back to
+   * the main renderer, which owns the scaffold flow (createProject + list
+   * refresh) — the panel only collects the form and hands it off.
+   */
+  projectCreateSubmitted(payload: {
+    name: string
+    path: string
+    templateId: string
+  }): void
 
   // ── Embedded overlays ────────────────────────────────────────────────────
   /** Initialise the currently shown compile popover overlay. */
@@ -139,6 +160,13 @@ export interface RendererNotifier {
   settingsInit(payload: SettingsInitPayload): void
   /** Push the label text (+ anchor) into the tooltip overlay's own renderer. */
   tooltipInit(tooltipView: WebContentsView, payload: unknown): void
+  /** Push the template catalog + base-dir defaults into the project-create overlay. */
+  projectCreateInit(
+    dialogView: WebContentsView,
+    payload: { templates: unknown[]; defaultBaseDir: string },
+  ): void
+  /** Push a discovered update's info into the update overlay. */
+  updateAvailable(dialogView: WebContentsView, payload: UpdateInfo): void
 
   // ── Standalone windows ───────────────────────────────────────────────────
   /** Initialise the standalone workbench-settings window. */
@@ -202,8 +230,14 @@ export function createRendererNotifier(ctx: NotifierContext): RendererNotifier {
     hostToolbarHeightChanged(height) {
       sendToMain(ViewChannel.HostToolbarHeightChanged, height)
     },
+    hostSidebarWidthChanged(width) {
+      sendToMain(ViewChannel.HostSidebarWidthChanged, width)
+    },
     editorOpenFile(payload) {
       sendToMain(EditorChannel.OpenFile, payload)
+    },
+    projectCreateSubmitted(payload) {
+      sendToMain(ProjectCreateChannel.Submitted, payload)
     },
 
     popoverInit(popoverView, payload) {
@@ -215,6 +249,16 @@ export function createRendererNotifier(ctx: NotifierContext): RendererNotifier {
       const wc = liveWebContents(tooltipView.webContents)
       if (!wc) return
       wc.send(TooltipChannel.Init, payload)
+    },
+    projectCreateInit(dialogView, payload) {
+      const wc = liveWebContents(dialogView.webContents)
+      if (!wc) return
+      wc.send(ProjectCreateChannel.Init, payload)
+    },
+    updateAvailable(dialogView, payload) {
+      const wc = liveWebContents(dialogView.webContents)
+      if (!wc) return
+      wc.send(UpdateChannel.Available, payload)
     },
     settingsInit(payload) {
       const wc = liveWebContents(ctx.views.getSettingsWebContents())

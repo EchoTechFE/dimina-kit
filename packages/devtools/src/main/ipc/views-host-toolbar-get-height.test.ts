@@ -64,7 +64,7 @@ vi.mock('electron', () => ({
 }))
 
 import { registerViewsIpc } from './views.js'
-import { ViewChannel } from '../../shared/ipc-channels.js'
+import { ViewChannel } from '../../shared/ipc-channels-overlays.js'
 
 // Future wire name, asserted literally on purpose (see header).
 const GET_HEIGHT_CHANNEL = 'view:host-toolbar:get-height'

@@ -19,7 +19,7 @@ import fs from 'fs'
 import { fileURLToPath } from 'url'
 import { _electron, test, expect, type ElectronApplication, type Page } from '@playwright/test'
 import { openProjectInUI, pollUntil, ipcInvoke, RENDER_GUEST_URL_MARKER } from './helpers'
-import { ViewChannel } from '../src/shared/ipc-channels'
+import { ViewChannel } from '../src/shared/ipc-channels-overlays'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURE = path.resolve(__dirname, 'fixtures', 'qdml-app')

@@ -28,6 +28,7 @@ import {
   registerAppIpc,
   registerInternalDevtoolsIpc,
   registerTooltipIpc,
+  registerProjectCreateIpc,
   popoverModule,
   projectsModule,
   sessionModule,
@@ -478,6 +479,9 @@ export async function createDevtoolsRuntime(
   // overlay is core UI chrome (every toolbar in this app relies on it), not a
   // host-configurable feature.
   context.registry.add(registerTooltipIpc(context))
+  // Unconditional: the project-create dialog is core UI chrome (the built-in
+  // "新建项目" flow every host falls back to), not a host-configurable feature.
+  context.registry.add(registerProjectCreateIpc(context))
   // Referer/CORS webRequest policy for the simulator runtime's sessions (shared
   // fallback + every per-project partition). Registered into the context
   // registry so its configurator + per-session listeners are torn down with the
@@ -589,7 +593,9 @@ export async function createDevtoolsRuntime(
   if (config.updateChecker) {
     instance.updateManager = new UpdateManager({
       checker: config.updateChecker,
-      mainWindow,
+      showUpdatePanel: (info) => context.views.showUpdateDialog(info),
+      notifyDownloadProgress: (percent) => context.views.notifyUpdateDownloadProgress(percent),
+      hideUpdatePanel: () => context.views.hideUpdateDialog(),
       senderPolicy: context.senderPolicy,
       checkInterval: config.updateOptions?.checkInterval,
       initialDelay: config.updateOptions?.initialDelay,

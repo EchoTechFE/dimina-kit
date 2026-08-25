@@ -81,6 +81,28 @@ export const TooltipMeasuredSchema = z.tuple([
 ])
 
 /**
+ * projectCreate:show — the merged template catalog + suggested base dir
+ * main.tsx already resolved before asking main to show the overlay panel.
+ * Templates are re-validated loosely (they only round-trip back into the
+ * panel's own render, never interpreted main-side).
+ */
+export const ProjectCreateShowSchema = z.tuple([
+  z.object({
+    templates: z.array(z.looseObject({})),
+    defaultBaseDir: z.string(),
+  }),
+])
+
+/** projectCreate:submit — the collected create-project form. */
+export const ProjectCreateSubmitSchema = z.tuple([
+  z.object({
+    name: z.string().min(1),
+    path: AbsolutePath,
+    templateId: z.string().min(1),
+  }),
+])
+
+/**
  * Reasonable simulator width range. Window width is clamped UI-side, but
  * we still reject obvious garbage (negative, zero, absurdly large).
  */
@@ -186,6 +208,29 @@ export const PlacementSnapshotSchema = z.tuple([
 export const HostToolbarAdvertiseHeightSchema = z.tuple([
   z.object({
     axis: z.literal('block'),
+    extent: NonNegInt,
+  }),
+])
+
+/**
+ * host-sidebar reverse size-advertiser payload — mirrors
+ * `HostToolbarAdvertiseHeightSchema` on the inline (width) axis.
+ */
+export const HostSidebarAdvertiseWidthSchema = z.tuple([
+  z.object({
+    axis: z.literal('inline'),
+    extent: NonNegInt,
+  }),
+])
+
+/**
+ * host-dialog reverse size-advertiser payload. Unlike the single-axis
+ * toolbar/sidebar, the dialog's content advertises BOTH axes over the same
+ * channel — `axis` distinguishes which report this is.
+ */
+export const HostDialogAdvertiseSizeSchema = z.tuple([
+  z.object({
+    axis: z.union([z.literal('block'), z.literal('inline')]),
     extent: NonNegInt,
   }),
 ])

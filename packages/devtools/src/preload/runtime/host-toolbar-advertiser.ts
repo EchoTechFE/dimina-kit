@@ -10,7 +10,7 @@
 
 import { ipcRenderer } from 'electron'
 import { createSizeAdvertiser } from '@dimina-kit/view-anchor'
-import { ViewChannel } from '../../shared/ipc-channels.js'
+import { ViewChannel } from '../../shared/ipc-channels-overlays.js'
 
 /**
  * Attach the advertiser to the toolbar content's shrink-to-fit root

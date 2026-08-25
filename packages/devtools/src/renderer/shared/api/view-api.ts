@@ -2,14 +2,18 @@ import type { CompileConfig } from '@/shared/types'
 import type { NativeDeviceInfo } from '../../../shared/ipc-channels'
 import {
   SimulatorChannel,
+  WindowChannel,
+} from '../../../shared/ipc-channels'
+import {
   PopoverChannel,
   OverlayChannel,
   TooltipChannel,
-  WindowChannel,
+  ProjectCreateChannel,
   ViewChannel,
-} from '../../../shared/ipc-channels'
+} from '../../../shared/ipc-channels-overlays'
 import type { PlacementSnapshot } from '@dimina-kit/electron-deck/layout'
 import { invoke, on, send } from './ipc-transport'
+import type { ProjectTemplateInfo } from './project-api'
 
 export interface PopoverInitPayload {
   top: number
@@ -123,6 +127,51 @@ export function reportTooltipMeasured(payload: {
   send(TooltipChannel.Measured, payload)
 }
 
+export interface ProjectCreateShowPayload {
+  templates: ProjectTemplateInfo[]
+  defaultBaseDir: string
+}
+
+export interface ProjectCreateSubmitPayload {
+  name: string
+  path: string
+  templateId: string
+}
+
+/**
+ * Ask main to show the project-create overlay panel (VIEW_LAYER.dialog), fed
+ * the already-resolved template catalog + suggested base dir. Replaces the
+ * old `fixed inset-0` Radix portal, which paints inside the main window's own
+ * renderer and is occluded by any native WebContentsView mounted on top.
+ */
+export function showProjectCreateDialog(payload: ProjectCreateShowPayload): void {
+  send(ProjectCreateChannel.Show, payload)
+}
+
+/** Hide the project-create overlay panel without submitting. */
+export function cancelProjectCreate(): void {
+  send(ProjectCreateChannel.Cancel)
+}
+
+/** Submit the collected create-project form from the overlay panel. */
+export function submitProjectCreate(input: ProjectCreateSubmitPayload): void {
+  send(ProjectCreateChannel.Submit, input)
+}
+
+/** Subscribe to the render request pushed into the project-create overlay panel. */
+export function onProjectCreateInit(
+  handler: (payload: ProjectCreateShowPayload) => void,
+): () => void {
+  return on<[ProjectCreateShowPayload]>(ProjectCreateChannel.Init, (payload) => handler(payload))
+}
+
+/** Subscribe to the relayed create-project submission (received by main.tsx, not the panel itself). */
+export function onProjectCreateSubmitted(
+  handler: (input: ProjectCreateSubmitPayload) => void,
+): () => void {
+  return on<[ProjectCreateSubmitPayload]>(ProjectCreateChannel.Submitted, (input) => handler(input))
+}
+
 // ── Event subscriptions ─────────────────────────────────────────────────────
 
 /** Listen for popover-closed broadcasts emitted by the main process. */
@@ -224,4 +273,23 @@ export function onHostToolbarHeightChanged(handler: (height: number) => void): (
  */
 export function getHostToolbarHeight(): Promise<number | undefined> {
   return invoke<number | undefined>(ViewChannel.HostToolbarGetHeight)
+}
+
+/**
+ * Subscribe to the reserved host-sidebar width pushed by the main process after
+ * the sidebar WCV's own renderer advertises its intrinsic content width. Mirrors
+ * {@link onHostToolbarHeightChanged} on the inline axis.
+ */
+export function onHostSidebarWidthChanged(handler: (width: number) => void): () => void {
+  return on<[number]>(ViewChannel.HostSidebarWidthChanged, (width) => handler(width))
+}
+
+/**
+ * Pull the last host-sidebar width main notified (retained main-side). Replay
+ * companion to {@link onHostSidebarWidthChanged} — mirrors {@link getHostToolbarHeight}
+ * on the inline axis; see that function's doc-comment for the mount-time-replay
+ * race it guards against.
+ */
+export function getHostSidebarWidth(): Promise<number | undefined> {
+  return invoke<number | undefined>(ViewChannel.HostSidebarGetWidth)
 }

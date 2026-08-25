@@ -86,6 +86,10 @@ vi.mock('../../utils/paths.js', () => ({
   // R1 mock adaptation: the session-registered toolbar-runtime preload path
   // (replaces the legacy webPreferences-delivered advertiser bundle).
   hostToolbarRuntimePreloadPath: '/stub/host-toolbar-runtime-preload.cjs',
+  // view-manager also wires the sidebar/dialog slots unconditionally now —
+  // their session-runtime modules read these at import time.
+  hostSidebarRuntimePreloadPath: '/stub/host-sidebar-runtime-preload.cjs',
+  hostDialogRuntimePreloadPath: '/stub/host-dialog-runtime-preload.cjs',
   cjsSiblingPreloadPath: (p: string) => p,
   devtoolsPackageRoot: '/stub/devtools-pkg-root',
 }))
@@ -363,6 +367,8 @@ function makeSenderPolicyCtx(hostToolbarId: number | null, tooltipId: number | n
       getSettingsWebContentsId: () => null,
       getPopoverWebContentsId: () => null,
       getTooltipWebContentsId: () => tooltipId,
+      getProjectCreateDialogWebContentsId: () => null,
+      getUpdateDialogWebContentsId: () => null,
       getHostToolbarWebContentsId: () => hostToolbarId,
     } as unknown as import('../workbench-context.js').WorkbenchContext['views'],
   }

@@ -136,7 +136,9 @@ vi.mock('electron', () => {
 
 vi.mock('../../utils/paths.js', () => ({
   mainPreloadPath: '/stub/preload.js',
-  hostToolbarPreloadPath: '/stub/host-toolbar-preload.js',
+  hostToolbarRuntimePreloadPath: '/stub/host-toolbar-preload.js',
+  hostSidebarRuntimePreloadPath: '/stub/host-sidebar-preload.js',
+  hostDialogRuntimePreloadPath: '/stub/host-dialog-preload.js',
   devtoolsPackageRoot: '/stub/devtools-pkg-root',
   // Native simulator hands the WCV the `.cjs` sibling; the partition logic is
   // independent of this, so an identity-ish stub is fine.

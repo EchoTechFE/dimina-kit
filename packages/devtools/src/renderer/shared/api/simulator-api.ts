@@ -1,5 +1,5 @@
 import type { CompileConfig } from '@/shared/types'
-import { PopoverChannel } from '../../../shared/ipc-channels'
+import { PopoverChannel } from '../../../shared/ipc-channels-overlays'
 import { send } from './ipc-transport'
 
 /**
