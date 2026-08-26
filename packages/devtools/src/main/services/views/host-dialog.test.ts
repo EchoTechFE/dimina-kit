@@ -287,14 +287,14 @@ describe('ViewManager: hostDialog content swap resets the advertised size', () =
   })
 
   it('while already visible, loadFile() re-presents the default bounds immediately — WITHOUT a follow-up show()', async () => {
-    // BUG CAUGHT: resetMeasuredExtent() used to only reset the closure's
-    // width/height variables, never push them to the screen. A dialog
-    // already open when the host re-purposes it for different content (the
+    // resetMeasuredExtent() must reset both the closure's width/height
+    // variables AND push the fallback bounds to the screen. A dialog already
+    // open when the host re-purposes it for different content (the
     // documented use case — HostDialogControl.loadURL/loadFile do not
-    // require the caller to call show() again) would keep displaying the
-    // PREVIOUS document's exact bounds — forever, if the new document never
-    // reports its own size (e.g. missing [data-host-dialog-root]) — instead
-    // of falling back to the default the moment the swap happens.
+    // require the caller to call show() again) must not keep displaying the
+    // PREVIOUS document's exact bounds if the new document never reports its
+    // own size (e.g. missing [data-host-dialog-root]) — it must fall back to
+    // the default the moment the swap happens.
     const { ctx } = makeContext()
     const mgr = createViewManager(ctx)
 

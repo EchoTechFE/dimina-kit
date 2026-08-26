@@ -14,7 +14,8 @@ import { validate } from '../utils/ipc-schema.js'
 import { IpcRegistry } from '../utils/ipc-registry.js'
 
 /**
- * Renderer-driven overlay bounds.
+ * Renderer-driven overlay bounds, plus the renderer bootstrap's
+ * placement-generation seed pull.
  *
  * The main window's React layout is the source of truth for where the
  * editor view and the simulator's Chromium DevTools overlay live on
@@ -27,11 +28,27 @@ import { IpcRegistry } from '../utils/ipc-registry.js'
  * panel is collapsed or the tab is not selected. The view manager removes
  * the child view from the contentView but keeps the WebContents alive so
  * subsequent re-shows skip the OpenSumi DI bootstrap.
+ *
+ * Registered UNCONDITIONALLY by app.ts — NOT gated behind `modules.simulator`
+ * (`WorkbenchAppConfig.modules`). None of `ctx.views` (`ViewManager`) is
+ * itself conditional on that toggle — it's constructed unconditionally in
+ * `createContext` and used unconditionally elsewhere (onResize, the
+ * update-dialog panel, workbench detach) — and host-sidebar in particular
+ * lives on the project-list page, wholly unrelated to the mini-program
+ * simulator webview a disabled `modules.simulator` would actually skip. Every
+ * renderer entry point also blocks its first render on
+ * `AllocatePlacementGeneration` (see renderer-placement-generation.ts) —
+ * gating any of this behind the simulator toggle would strand a host that
+ * disables it on the fatal boot-failure page, or leave placement silently
+ * non-functional. See disabled-module.test.ts for the end-to-end guard.
  */
 export function registerViewsIpc(
   ctx: Pick<WorkbenchContext, 'views' | 'senderPolicy'>,
 ): Disposable {
   const registry = new IpcRegistry(ctx.senderPolicy)
+    // Renderer bootstrap: allocate this session's placement-generation seed
+    // (see renderer-placement-generation.ts / PlacementReconciler.allocateGeneration).
+    .handle(ViewChannel.AllocatePlacementGeneration, () => ctx.views.allocatePlacementGeneration())
     // Window-level placement snapshot: the single source of truth for every
     // managed native view's bounds/visibility/z-order. The renderer's central
     // publisher coalesces one snapshot per frame; the reconciler diffs it
@@ -56,9 +73,6 @@ export function registerViewsIpc(
     // Same mount-time replay role as HostToolbarGetHeight, on the sidebar's
     // inline (width) axis.
     .handle(ViewChannel.HostSidebarGetWidth, () => ctx.views.getHostSidebarWidth())
-    // Renderer bootstrap: allocate this session's placement-generation seed.
-    // See renderer-placement-generation.ts / PlacementReconciler.allocateGeneration.
-    .handle(ViewChannel.AllocatePlacementGeneration, () => ctx.views.allocatePlacementGeneration())
 
   // Reverse size-advertiser: the toolbar WCV's OWN renderer sends this, and the
   // host loads ARBITRARY content into that WCV. We DELIBERATELY do NOT add the

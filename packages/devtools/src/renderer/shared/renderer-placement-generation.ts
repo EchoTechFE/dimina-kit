@@ -1,18 +1,13 @@
 // Single shared counter behind every screen's placement-publisher generation
 // (ProjectListScreen, ProjectRuntime — see project-list-screen.tsx /
-// project-runtime.tsx). Each screen used to keep its own independent
-// module-level counter; that let a project screen mounted (and bumped)
-// several times outnumber the list screen's own counter, so navigating back
-// to the list screen after two project opens sent main a LOWER generation
-// than one it had already accepted. Main's reconciler took that lower value
-// as authoritative and permanently rejected every subsequent snapshot as
-// stale — freezing native-view placement for the rest of the session. Every
-// screen now draws from the same strictly-increasing sequence, so a later
-// mount is always numerically later regardless of which screen it is, and
-// main's reconciler (placement-reconciler.ts's `setPlacementSnapshot`) hard-
-// rejects anything behind its own high-water mark as a genuinely stale,
-// already-superseded source rather than treating it as defense-in-depth
-// noise.
+// project-runtime.tsx). Every screen draws from the same strictly-increasing
+// sequence, so a later mount is always numerically later regardless of which
+// screen it is: main's reconciler (placement-reconciler.ts's
+// `setPlacementSnapshot`) hard-rejects any snapshot behind its own
+// high-water mark as a genuinely stale, already-superseded source, and two
+// screens with independent counters could otherwise both legitimately claim
+// the same or a decreasing generation, permanently freezing native-view
+// placement for the rest of the session.
 //
 // Seeded from main (`allocatePlacementGeneration`, resolved once via
 // `ensurePlacementGenerationSeeded()` before the renderer's first render —
@@ -24,8 +19,7 @@
 // mark — two reloads close enough together (faster than the clock's
 // resolution, or a clock that jumps backward) can hand out the same or a
 // lower seed, and every one of the fresh session's snapshots would then be
-// rejected as stale, permanently freezing placement for that session —
-// reproducing the exact bug above via a different trigger.
+// rejected as stale, permanently freezing placement for that session.
 // `allocatePlacementGeneration` fixes this at the source: main derives the
 // seed from its own `rendererGeneration` high-water mark
 // (placement-reconciler.ts's `allocateGeneration`), so it is guaranteed to
@@ -33,16 +27,15 @@
 //
 // Getting that seed is a real IPC round-trip, and it can genuinely fail: the
 // main window's `loadFile()` fires synchronously during window construction
-// (windows/main-window/create.ts), well before `registerBuiltinModules()`
-// registers the `AllocatePlacementGeneration` handler (app.ts) — the
-// renderer's first invoke can race ahead of that registration and come back
-// rejected ("no handler registered"). A silent local-only fallback on that
-// failure would reproduce the exact high-water-mark bug this module exists
-// to fix, just triggered by a boot-order race instead of the clock. So a
-// failure here is retried a bounded number of times (the registration race
-// resolves within a handful of main-process ticks) and, if every attempt
-// fails, rejected all the way out — the renderer entry point must not
-// render the app on that rejection (see entries/main/main.tsx).
+// (windows/main-window/create.ts), potentially racing ahead of main
+// registering the `AllocatePlacementGeneration` handler (app.ts) — the
+// renderer's first invoke can come back rejected ("no handler registered").
+// A silent local-only fallback on that failure would reproduce the same
+// high-water-mark hazard this module exists to avoid, just triggered by a
+// boot-order race instead of the clock. So a failure here is retried a
+// bounded number of times and, if every attempt fails, rejected all the way
+// out — the renderer entry point must not render the app on that rejection
+// (see entries/main/main.tsx).
 import { allocatePlacementGeneration } from './api/view-api.js'
 
 let placementGeneration = 0

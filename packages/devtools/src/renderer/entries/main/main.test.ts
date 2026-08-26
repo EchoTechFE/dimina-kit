@@ -1,11 +1,10 @@
 /**
- * Regression: main.tsx used to `.finally()` its placement-generation seed
- * IPC call, so a rejected `ensurePlacementGenerationSeeded()` (main never
- * answered the seed request — see renderer-placement-generation.ts's header
- * for the boot-order race that can cause this) still mounted the app,
- * silently proceeding on an un-seeded generation counter that would collide
- * with main's high-water mark. The fix branches on success/failure — the
- * app must only mount once a real, main-issued seed is in hand.
+ * The app must only mount once a real, main-issued placement-generation
+ * seed is in hand — a rejected `ensurePlacementGenerationSeeded()` (main
+ * never answered the seed request; see renderer-placement-generation.ts for
+ * the boot-order race that can cause this) must render the fatal-error
+ * fallback instead of proceeding on an un-seeded generation counter that
+ * would collide with main's high-water mark.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 

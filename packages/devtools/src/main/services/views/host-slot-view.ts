@@ -137,6 +137,14 @@ export function createHostSlotView(
 ): HostSlotView {
   let extentMode: HostSlotExtentMode = 'auto'
   let lastExtent = 0
+  // The real current size the advertiser last reported, independent of
+  // `extentMode` — tracked separately from `lastExtent` (the last value we
+  // actually NOTIFIED) because `setExtent` still no-ops while fixed. Needed
+  // to reapply the true current size immediately when switching back to
+  // 'auto': the advertiser (measure-loop.ts) dedupes against its own last-
+  // EMITTED value, so if content stayed exactly the size it was before the
+  // switch to fixed, it will never re-report that value on its own.
+  let lastAdvertisedExtent: number | null = null
   const port = config.portChannel
   const managed = createManagedWebContentsView({
     reconciler,
@@ -153,6 +161,7 @@ export function createHostSlotView(
   }
 
   function setExtent(extent: number): void {
+    lastAdvertisedExtent = extent
     if (extentMode !== 'auto') return
     // Push the reserved extent back to the main-window renderer so its
     // placeholder div resizes (closing the dynamic-size loop). The notified
@@ -176,6 +185,12 @@ export function createHostSlotView(
     // Through the funnel so the retained value follows to 0 — a renderer
     // mounting after the hide must replay 0, not the stale pre-hide extent.
     notifyExtent(0)
+    // Also clear the advertised-size memory: a hidden strip's pre-hide size is
+    // stale content state, not a value a later `setExtentMode('auto')` should
+    // resurrect (see the `lastAdvertisedExtent`-reapply branch below) — the
+    // advertiser (still mounted, unaware of the hide) reports the real size
+    // again on its own once content changes, or immediately on next mount.
+    lastAdvertisedExtent = null
   }
 
   const control: HostSlotControl = {
@@ -203,12 +218,14 @@ export function createHostSlotView(
         // Pin immediately: a preload-less/static slot never advertises, so
         // waiting for the next report would leave the strip at extent 0.
         notifyExtent(mode.fixed)
+      } else if (lastAdvertisedExtent !== null && lastAdvertisedExtent !== lastExtent) {
+        // Reapply the real current advertised size immediately rather than
+        // waiting for the next report — see `lastAdvertisedExtent`'s
+        // doc-comment above for why that report may never come. No-op when
+        // nothing has ever been advertised, or the advertised value already
+        // matches what's notified (avoids a spurious flash/duplicate push).
+        notifyExtent(lastAdvertisedExtent)
       }
-      // Switching back to 'auto' deliberately does NOT synthesize a notify —
-      // replaying a stale cached extent would flash the old size; the NEXT
-      // advertiser report drives the placeholder again. The RETAINED value
-      // survives the switch though: a freshly-mounting renderer still needs
-      // the pinned extent until that next report lands.
     },
     onMessage(channel, handler) {
       return port.onMessage(channel, handler)

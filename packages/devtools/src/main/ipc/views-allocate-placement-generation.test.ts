@@ -8,6 +8,10 @@
  *  - it rides the SAME senderPolicy-gated IpcRegistry as PlacementSnapshot /
  *    HostToolbarGetHeight — only the trusted main renderer may seed itself.
  *
+ * `registerViewsIpc` (this handler included) is registered unconditionally by
+ * app.ts, not gated behind `modules.simulator` — see views.ts's doc comment
+ * and disabled-module.test.ts for the end-to-end module-toggle guard.
+ *
  * Electron stub: same handle-capturing pattern as
  * views-host-toolbar-get-height.test.ts.
  */
@@ -47,9 +51,6 @@ beforeEach(() => {
 
 function makeViews(seed = 1) {
   return {
-    setPlacementSnapshot: vi.fn(),
-    getHostToolbarHeight: vi.fn(() => 0),
-    getHostSidebarWidth: vi.fn(() => 0),
     allocatePlacementGeneration: vi.fn(() => seed),
   }
 }

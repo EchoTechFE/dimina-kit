@@ -7,15 +7,14 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const TOOLBAR_FIXTURES = path.resolve(__dirname, 'fixtures', 'host-toolbar')
 
 /**
- * Real-Electron regression for the occlusion bug `view-manager-dialog-zorder.test.ts`
- * covers with a mocked `addChildView` spy: a native WebContentsView (the
- * simulator, the host-toolbar strip) mounted on top of the main window's own
- * renderer used to paint OVER the update/project-create dialogs, because those
- * dialogs were `fixed inset-0` DOM portals living inside that same occluded
- * renderer. Both dialogs now render in their own overlay WCV at
- * `VIEW_LAYER.dialog` (40) — above `hostToolbar`/`hostSidebar` (5) and the
- * simulator's base layer (0). This spec proves the ordering holds in a real
- * `win.contentView.children` tree, not just against a mock.
+ * Real-Electron companion to `view-manager-dialog-zorder.test.ts`'s mocked
+ * `addChildView` spy: a native WebContentsView (the simulator, the
+ * host-toolbar strip) mounted on top of the main window's own renderer would
+ * paint OVER any dialog living as a `fixed inset-0` DOM portal inside that
+ * same occluded renderer. Both dialogs render in their own overlay WCV at
+ * `VIEW_LAYER.dialog` (40) instead — above `hostToolbar`/`hostSidebar` (5) and
+ * the simulator's base layer (0). This spec proves the ordering holds in a
+ * real `win.contentView.children` tree, not just against a mock.
  *
  * Electron e2e; runs on local macOS without extra setup (NODE_ENV=test,
  * off-screen windows).

@@ -29,6 +29,7 @@ import {
   registerInternalDevtoolsIpc,
   registerTooltipIpc,
   registerProjectCreateIpc,
+  registerViewsIpc,
   popoverModule,
   projectsModule,
   sessionModule,
@@ -482,6 +483,16 @@ export async function createDevtoolsRuntime(
   // Unconditional: the project-create dialog is core UI chrome (the built-in
   // "新建项目" flow every host falls back to), not a host-configurable feature.
   context.registry.add(registerProjectCreateIpc(context))
+  // Unconditional (not a toggleable BUILTIN_MODULES entry): placement/host-
+  // slot IPC has no real dependency on the simulator module — `ctx.views`
+  // (ViewManager) is constructed unconditionally regardless of
+  // `modules.simulator`, and host-sidebar in particular lives on the
+  // project-list page, unrelated to the simulator webview. Every renderer
+  // entry point also blocks its first render on `AllocatePlacementGeneration`
+  // (see renderer-placement-generation.ts) — gating any of this behind the
+  // simulator toggle would strand a host that disables it on the fatal
+  // boot-failure page, or leave placement silently non-functional.
+  context.registry.add(registerViewsIpc(context))
   // Referer/CORS webRequest policy for the simulator runtime's sessions (shared
   // fallback + every per-project partition). Registered into the context
   // registry so its configurator + per-session listeners are torn down with the

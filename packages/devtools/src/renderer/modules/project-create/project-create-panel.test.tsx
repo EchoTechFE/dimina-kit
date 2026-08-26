@@ -1,10 +1,10 @@
 /**
- * Regression: `ProjectCreateDialog` only clears its internal 项目名/目录
- * fields on an `[open]` transition (see project-create-dialog.tsx), but this
- * panel always passes a literal `open` — the prop never toggles, so that
- * reset effect only ever fires on the panel's first mount. Cancelling (or
- * submitting) an in-flight create must therefore drop `request` back to
- * null, which unmounts `ProjectCreateDialog` — the only way a subsequent
+ * `ProjectCreateDialog` only clears its internal 项目名/目录 fields on an
+ * `[open]` transition (see project-create-dialog.tsx), but this panel always
+ * passes a literal `open` — the prop never toggles, so that reset effect only
+ * ever fires on the panel's first mount. Cancelling (or submitting) an
+ * in-flight create must therefore drop `request` back to null, which
+ * unmounts `ProjectCreateDialog` — the only way a subsequent
  * `showProjectCreateDialog()` for a DIFFERENT session gets a fresh instance
  * instead of one still carrying the previous session's typed name/path.
  */

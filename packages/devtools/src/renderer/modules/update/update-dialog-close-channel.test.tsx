@@ -1,8 +1,8 @@
 /**
- * Regression: closing the update dialog (either the "Later"/"Close" button
- * or Escape/backdrop) only ever called `setOpen(false)` — this renderer's
- * own DOM state — and never told main to hide the WebContentsView overlay
- * panel it's presented in. main never sees a close, so the panel (a
+ * Closing the update dialog (either the "Later"/"Close" button or
+ * Escape/backdrop) must tell main to hide the WebContentsView overlay panel
+ * it's presented in, not just call `setOpen(false)` on this renderer's own
+ * DOM state — otherwise main never sees the close and the panel (a
  * full-window, click-eating overlay) stays presented forever after the
  * renderer has visually "closed".
  */

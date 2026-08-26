@@ -1,10 +1,10 @@
 /**
- * Regression: `ViewManager.hideUpdateDialog()` is the main-side half of the
- * update dialog's close path (see `update-manager.ts`'s `UpdateChannel.Close`
- * handler). Before this fix, nothing ever called it on close — the renderer
- * only unmounted its own DOM, so main kept the update-dialog WebContentsView
- * presented (added to `contentView`) forever, an invisible click-eating
- * overlay sitting above every other view at the `dialog` layer.
+ * `ViewManager.hideUpdateDialog()` is the main-side half of the update
+ * dialog's close path (see `update-manager.ts`'s `UpdateChannel.Close`
+ * handler): the renderer only unmounts its own DOM on close, so main must
+ * itself detach the update-dialog WebContentsView on `hideUpdateDialog()`, or
+ * it stays presented (added to `contentView`) forever — an invisible
+ * click-eating overlay sitting above every other view at the `dialog` layer.
  *
  * This pins the ViewManager-level half of that chain: once the panel is
  * actually placed (shown + marked ready, which is what makes the reconciler

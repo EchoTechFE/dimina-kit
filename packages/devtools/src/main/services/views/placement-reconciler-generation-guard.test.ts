@@ -1,17 +1,18 @@
 /**
- * Regression: `setPlacementSnapshot` used to clamp `rendererGeneration` to
- * never regress, but then unconditionally applied the incoming snapshot's
- * CONTENT into `baseDesired` and reconciled it under the clamped (i.e.
- * current) generation — regardless of whether the snapshot itself was
- * actually behind. That let a stale/dead source's late snapshot (e.g. a
+ * `setPlacementSnapshot` must reject a snapshot whose generation is behind
+ * its own high-water mark outright — it must not clamp `rendererGeneration`
+ * to the current value and then still apply the incoming snapshot's CONTENT
+ * into `baseDesired`/reconcile it under that clamped generation, regardless
+ * of whether the snapshot itself was actually behind. Applying under the
+ * clamped generation would let a stale/dead source's late snapshot (e.g. a
  * screen's `dispose()` empty-snapshot flush, delivered after a successor
  * screen already advanced the generation) silently overwrite the currently
  * active screen's real views, because the reconcile core's own
  * generation-regression guard (placement-reconcile.ts: `snapshot.generation
- * < prev.generation`) never got to see the snapshot's real, lower
+ * < prev.generation`) would never see the snapshot's real, lower
  * generation — only the clamped one.
  *
- * Every screen now draws its generation from one shared, strictly
+ * Every screen draws its generation from one shared, strictly
  * increasing sequence (renderer-placement-generation.ts), so a legitimately
  * later mount is always numerically later than anything already accepted —
  * a lower-generation snapshot arriving after a higher one can therefore only
@@ -91,8 +92,14 @@ describe('placement-reconciler: a lower-generation snapshot must be a complete n
     // The high-water mark itself must also be untouched by the rejected
     // snapshot: a still-later, genuinely new generation-6 update reconciles
     // normally afterwards (proves `rendererGeneration` was not corrupted by
-    // the rejected generation-3 call in either direction).
+    // the rejected generation-3 call in either direction). The sidebar was
+    // never actually detached, so re-declaring the same view at generation 6
+    // must NOT force a redundant detach+reattach — `addChildView` stays at
+    // its generation-5 count of 1 (see placement-reconcile.ts: the reconcile
+    // core carries `actual` forward across a generation bump instead of
+    // wiping it, precisely so a continuously-desired view isn't spuriously
+    // torn down and rebuilt on every renderer reload).
     reconciler.setPlacementSnapshot({ generation: 6, epoch: 3, views: sidebarVisible })
-    expect(addChildView).toHaveBeenCalledTimes(2)
+    expect(addChildView).toHaveBeenCalledTimes(1)
   })
 })

@@ -146,4 +146,40 @@ describe('hostSidebar.setWidthMode legal values keep working', () => {
     mgr.setHostSidebarWidth(180)
     expect(notify.hostSidebarWidthChanged).toHaveBeenCalledExactlyOnceWith(180)
   })
+
+  it("fixed → 'auto' immediately reapplies the real advertised width when the advertiser never re-reports a value it already sent (constant content size)", () => {
+    // Mirrors host-toolbar-height-retention.test.ts's equivalent case on the
+    // block axis: createHostSlotView is the single shared implementation
+    // behind both slots, so this failure mode (content width never actually
+    // changes, so the advertiser's own dedupe never re-emits it) applies
+    // identically here.
+    const { mgr, notify } = makeManager()
+    mgr.setHostSidebarWidth(240) // real content width, reported once, before pinning
+    mgr.hostSidebar.setWidthMode({ fixed: 320 })
+    notify.hostSidebarWidthChanged.mockClear()
+
+    mgr.hostSidebar.setWidthMode('auto')
+
+    expect(notify.hostSidebarWidthChanged).toHaveBeenCalledExactlyOnceWith(240)
+  })
+})
+
+describe('hostSidebar.hide()', () => {
+  it("hide() then setWidthMode('auto') does not resurrect the pre-hide advertised width", () => {
+    // Mirrors host-toolbar-height-retention.test.ts's equivalent case: the
+    // 'auto' switch's replay branch reapplies the last-advertised extent
+    // when the advertiser hasn't re-reported since. hide() must clear that
+    // memory too, or a redundant setWidthMode('auto') call after hide()
+    // replays the stale pre-hide width and visually resurrects the hidden
+    // strip.
+    const { mgr, notify } = makeManager()
+    mgr.setHostSidebarWidth(240)
+
+    mgr.hostSidebar.hide()
+    notify.hostSidebarWidthChanged.mockClear()
+
+    mgr.hostSidebar.setWidthMode('auto')
+
+    expect(notify.hostSidebarWidthChanged).not.toHaveBeenCalled()
+  })
 })

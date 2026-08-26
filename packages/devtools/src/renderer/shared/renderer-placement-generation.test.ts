@@ -1,37 +1,29 @@
 /**
- * Regression: ProjectListScreen and ProjectRuntime each used to keep their
- * own independent `let placementGeneration = 0` module-level counter. A
- * project screen mounted (and bumped) twice, then navigating back to the
- * list screen, sent main a generation LOWER than one it had already
- * accepted from the project screen — main's reconciler treats a lower
- * generation as stale and rejects it, permanently freezing native-view
- * placement (see placement-reconciler.test.ts's guard coverage for the
- * main-side half of this).
+ * `nextPlacementGeneration()` is a single sequence shared by every screen
+ * (ProjectListScreen, ProjectRuntime), so calls interleaved across screens
+ * still come out strictly increasing — a later mount, regardless of which
+ * screen, must always be numerically later than any generation main has
+ * already accepted, or main's reconciler rejects it as stale and freezes
+ * native-view placement for the rest of the session (see
+ * placement-reconciler.test.ts's guard coverage for the main-side half of
+ * this invariant).
  *
- * `nextPlacementGeneration()` is the fix: one shared sequence, so calls
- * interleaved across "screens" still come out strictly increasing.
+ * The sequence seeds from main (`allocatePlacementGeneration`, derived from
+ * main's own high-water mark), not from `Date.now()`: a renderer reload
+ * resets this module's counter but not main's long-lived high-water mark,
+ * and wall-clock time is not guaranteed to exceed it — two reloads close
+ * together, or a clock that jumps backward, can hand out a seed at or below
+ * an already-accepted value. `ensurePlacementGenerationSeeded()` resolves
+ * this once before the renderer's first render.
  *
- * A second regression (this file's seeding tests): the sequence used to
- * seed itself from `Date.now()` so a fresh renderer session's numbers would
- * "virtually certainly" exceed a previous session's still-standing
- * high-water mark in main. Wall-clock time is not a reliable ordering
- * source — two reloads close enough together (or a clock that jumps
- * backward) can hand out a seed at or below a value main already accepted,
- * permanently freezing every mount's flush thereafter with no way to
- * recover, since each mount's own captured generation is fixed for its
- * life. The fix seeds from main instead (`allocatePlacementGeneration`,
- * derived from main's own high-water mark), resolved once via
- * `ensurePlacementGenerationSeeded()` before the renderer's first render.
- *
- * A third regression (this file's retry/no-fallback tests): the seeding
- * IPC call can genuinely fail — the main window's `loadFile()` fires before
- * main finishes registering the `AllocatePlacementGeneration` handler (see
- * this module's header comment) — and the seed guard used to swallow that
- * into a local-only counter starting at 0, reproducing the exact
- * high-water-mark bug above via a boot-order race instead of the clock.
- * The fix retries a bounded number of times and rejects all the way out on
- * exhaustion; the renderer entry point must not render on that rejection
- * (see entries/main/main.test.ts for that half).
+ * The seeding IPC call can genuinely fail — the main window's `loadFile()`
+ * fires before main finishes registering the `AllocatePlacementGeneration`
+ * handler (see this module's header comment) — so seeding retries a bounded
+ * number of times and rejects all the way out on exhaustion rather than
+ * falling back to a local-only counter, which would reproduce the same
+ * high-water-mark hazard via a boot-order race instead of the clock. The
+ * renderer entry point must not render on that rejection (see
+ * entries/main/main.test.ts for that half).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
