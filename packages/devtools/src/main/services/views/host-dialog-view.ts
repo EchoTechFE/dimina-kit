@@ -125,6 +125,10 @@ export function createHostDialogView(
     isCurrent: (wc) => managed.liveWebContents()?.id === wc.id,
   })
 
+  let visible = false
+  let width = DEFAULT_WIDTH
+  let height = DEFAULT_HEIGHT
+
   const managed = createManagedWebContentsView({
     reconciler,
     viewId: VIEW_ID.hostDialog,
@@ -134,11 +138,14 @@ export function createHostDialogView(
       release: releaseHostDialogSessionRuntime,
     },
     port,
+    onBroken: () => {
+      // Same "withdraw the stale desired placement" contract as hide(): a
+      // crashed dialog must not resurrect as a blank, content-less modal the
+      // next time something calls reposition() (e.g. a window resize).
+      visible = false
+      reconciler.deleteOverlayDesired(VIEW_ID.hostDialog)
+    },
   })
-
-  let visible = false
-  let width = DEFAULT_WIDTH
-  let height = DEFAULT_HEIGHT
 
   function computeBounds(): { x: number; y: number; width: number; height: number } {
     const [winW = 0, winH = 0] = ctx.windows.mainWindow.getContentSize()

@@ -12,6 +12,17 @@ export interface ManagedWebContentsViewOptions {
   sessionRuntime: { acquire(): void; release(): void }
   /** The per-load handshake channel; shares this view's lazy-create/liveness/dispose lifecycle. */
   port: HostSlotPortChannel
+  /**
+   * Fires after a crashed/failed view has been torn down (see `ensureView`'s
+   * `render-process-gone`/`did-fail-load` handling below). The base slots
+   * (host-toolbar/host-sidebar) don't need this — their `ensureLazy` already
+   * rebuilds a fresh view on the next reconcile pass once `liveWebContents()`
+   * correctly reports the crash. host-dialog does: its on-demand placement
+   * (`visible` flag, `overlayDesired`) isn't reconciler-driven the same way,
+   * so without this a stale `visible: true` would resurrect a blank,
+   * content-less modal on the next reposition (e.g. a window resize).
+   */
+  onBroken?(): void
 }
 
 /**
@@ -47,6 +58,22 @@ export function createManagedWebContentsView(
     return wc
   }
 
+  // `liveWebContents()`'s `!wc.isDestroyed()` alone cannot tell "alive" from
+  // "alive but broken" — a crashed renderer process or a failed main-frame
+  // load leaves `webContents` non-destroyed but blank/unresponsive, so
+  // without this the same dead view (still fielding clicks if it's an
+  // on-screen slot) would be handed back to every future `ensureView()`
+  // forever, and the host's own `webContents` getter would keep reporting it
+  // as live. Guarded by `view !== current` so a listener from an already-
+  // superseded instance can't tear down the CURRENT one.
+  function teardown(current: WebContentsView, detail: string): void {
+    if (view !== current) return
+    console.error(`[${opts.viewId}] ${detail} — destroying so the next ensureView() rebuilds`)
+    view = null
+    opts.reconciler.destroyView(opts.viewId, current)
+    opts.onBroken?.()
+  }
+
   function ensureView(): WebContentsView {
     if (view && liveWebContents()) {
       return view
@@ -80,6 +107,15 @@ export function createManagedWebContentsView(
     } catch {
       /* stub may lack it */
     }
+    next.webContents.on('did-fail-load', (_event, errorCode, _errorDescription, _validatedURL, isMainFrame) => {
+      // -3 is ERR_ABORTED, which fires on every routine superseded navigation
+      // (e.g. a fresh loadURL/loadFile cancelling this one) — not a real failure.
+      if (!isMainFrame || errorCode === -3) return
+      teardown(next, `did-fail-load (code ${errorCode})`)
+    })
+    next.webContents.on('render-process-gone', (_event, details) => {
+      teardown(next, `render-process-gone (${details.reason})`)
+    })
     return next
   }
 

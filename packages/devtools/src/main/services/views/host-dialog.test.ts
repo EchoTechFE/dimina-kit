@@ -27,6 +27,7 @@ type StubWebContents = {
   on: ReturnType<typeof vi.fn>
   once: ReturnType<typeof vi.fn>
   setWindowOpenHandler: ReturnType<typeof vi.fn>
+  _fireRenderProcessGone(reason: string): void
 }
 type StubView = {
   webContents: StubWebContents
@@ -48,6 +49,7 @@ vi.mock('electron', () => {
     setVisible = vi.fn()
     constructor() {
       const id = nextId++
+      let renderProcessGoneHandler: ((event: unknown, details: { reason: string }) => void) | undefined
       this.webContents = {
         destroyed: false,
         id,
@@ -55,9 +57,16 @@ vi.mock('electron', () => {
         close: vi.fn(function (this: StubWebContents) { this.destroyed = true }),
         loadFile: vi.fn(() => Promise.resolve()),
         loadURL: vi.fn(() => Promise.resolve()),
-        on: vi.fn(),
+        on: vi.fn((event: string, handler: (...args: never[]) => void) => {
+          if (event === 'render-process-gone') {
+            renderProcessGoneHandler = handler as unknown as (event: unknown, details: { reason: string }) => void
+          }
+        }),
         once: vi.fn(),
         setWindowOpenHandler: vi.fn(),
+        _fireRenderProcessGone(reason: string) {
+          renderProcessGoneHandler?.(undefined, { reason })
+        },
       }
       constructed.push(this as unknown as StubView)
     }
@@ -345,6 +354,34 @@ describe('ViewManager: hostDialog re-centers on repositionAll (main-window resiz
     mgr.repositionAll()
 
     expect(constructed.length).toBe(0)
+  })
+})
+
+describe('ViewManager: hostDialog crash recovery', () => {
+  it('a crashed dialog withdraws its stale desired placement instead of resurrecting as a blank centered modal on the next reposition', () => {
+    // Unlike host-toolbar/host-sidebar (self-healing via ensureLazy on the
+    // next reconcile pass), the dialog's on-demand `visible` flag +
+    // `overlayDesired` entry are not reconciler-driven — without the
+    // onBroken wiring in host-dialog-view.ts, a render-process-gone would
+    // leave `visible: true` and the stale overlayDesired entry in place, so
+    // a later reposition() (e.g. a window resize) would re-show a blank,
+    // content-less view.
+    const { removeChildView, ctx } = makeContext()
+    const mgr = createViewManager(ctx)
+    mgr.hostDialog.show()
+    const view = constructed[0]!
+    expect(mgr.hostDialog.isVisible()).toBe(true)
+
+    view.webContents._fireRenderProcessGone('crashed')
+
+    expect(mgr.hostDialog.isVisible()).toBe(false)
+
+    // reposition() (the resize entry point) must be a no-op now — nothing
+    // desired to reapply, and certainly no resurrection of the dead view.
+    removeChildView.mockClear()
+    view.setBounds.mockClear()
+    mgr.repositionAll()
+    expect(view.setBounds).not.toHaveBeenCalled()
   })
 })
 
