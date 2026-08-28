@@ -1,4 +1,4 @@
-import type { CompileConfig } from '@/shared/types'
+import type { CompileConfig, ProjectType } from '@/shared/types'
 import type { NativeDeviceInfo } from '../../../shared/ipc-channels'
 import {
   SimulatorChannel,
@@ -292,6 +292,16 @@ export function onHostSidebarWidthChanged(handler: (width: number) => void): () 
  */
 export function getHostSidebarWidth(): Promise<number | undefined> {
   return invoke<number | undefined>(ViewChannel.HostSidebarGetWidth)
+}
+
+/**
+ * Subscribe to the project category selected in the host-sidebar's content —
+ * devtools' own default icon rail, or any downstream replacement sending on
+ * the same channel. Push-only; see `ViewChannel.HostSidebarCategorySelected`
+ * for why no pull/replay companion is needed.
+ */
+export function onHostSidebarCategorySelected(handler: (category: ProjectType) => void): () => void {
+  return on<[ProjectType]>(ViewChannel.HostSidebarCategorySelected, (category) => handler(category))
 }
 
 /**

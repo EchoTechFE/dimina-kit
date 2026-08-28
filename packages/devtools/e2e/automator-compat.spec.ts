@@ -20,6 +20,7 @@ import {
   ipcInvoke,
   pollUntil,
   evalInSimulator,
+  findMainWindow,
 } from './helpers'
 import { AutomationChannel } from '../src/shared/ipc-channels'
 
@@ -74,7 +75,7 @@ test.beforeAll(async () => {
     env: { ...process.env, NODE_ENV: 'test', DIMINA_E2E_USER_DATA_DIR: userDataDir },
   })
 
-  mainWindow = await electronApp.firstWindow()
+  mainWindow = await findMainWindow(electronApp)
   await mainWindow.waitForLoadState('domcontentloaded')
 
   await electronApp.evaluate(async ({ BrowserWindow }) => {
@@ -254,7 +255,7 @@ test.describe('npm miniprogram-automator package', () => {
       env: { ...process.env, NODE_ENV: 'test', DIMINA_E2E_USER_DATA_DIR: smokeUserDataDir },
     })
 
-    smokeMainWindow = await smokeElectronApp.firstWindow()
+    smokeMainWindow = await findMainWindow(smokeElectronApp)
     await smokeMainWindow.waitForLoadState('domcontentloaded')
     await smokeElectronApp.evaluate(async ({ BrowserWindow }) => {
       const win = BrowserWindow.getAllWindows()[0]

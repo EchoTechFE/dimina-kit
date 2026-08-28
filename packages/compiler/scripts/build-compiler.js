@@ -123,6 +123,8 @@ if (MODE === 'node') {
     'node:worker_threads': shim('worker_threads.js'),
     'node:crypto': shim('crypto.js'),
     'crypto': shim('crypto.js'),
+    'node:async_hooks': shim('async_hooks.js'),
+    'async_hooks': shim('async_hooks.js'),
     'node:path': 'path-browserify',
     'path': 'path-browserify',
     'node:events': 'events',

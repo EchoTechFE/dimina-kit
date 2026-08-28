@@ -1,7 +1,7 @@
 import { test, expect, _electron, type ElectronApplication, type Page } from '@playwright/test'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { DEMO_APP_DIR, openProjectInUI, pollUntil } from './helpers'
+import { DEMO_APP_DIR, openProjectInUI, pollUntil, findMainWindow } from './helpers'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const TOOLBAR_FIXTURES = path.resolve(__dirname, 'fixtures', 'host-toolbar')
@@ -32,7 +32,7 @@ test.describe('Dialog overlay z-order (real Electron): update dialog stays above
       args: [entryPath],
       env: { ...process.env, NODE_ENV: 'test' },
     })
-    mainWindow = await electronApp.firstWindow()
+    mainWindow = await findMainWindow(electronApp)
     await mainWindow.waitForLoadState('domcontentloaded')
     await openProjectInUI(mainWindow, DEMO_APP_DIR, { waitMs: 20_000 })
 

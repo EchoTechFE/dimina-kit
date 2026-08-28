@@ -180,6 +180,8 @@ interface RawAppConfig {
     entryPagePath?: string
     pages?: string[]
     networkTimeout?: { connectSocket?: number }
+    /** Compiler-emitted (`env.js` MINI_GAME_RUNTIME_TYPE): `'game'` for a mini-game, absent/anything else for a mini-program. */
+    runtimeType?: string
   }
   // The compiler's actual `app-config.json` shape has each page's window-config
   // fields FLAT on `modules[path]` (no `.window` wrapper) — confirmed against a
@@ -276,6 +278,16 @@ interface AppSession {
    * silently drop it while the renderer's fallback banner is still showing it.
    */
   pageFallback: { requested: string; resolved: string } | null
+  /**
+   * A mini-game's service `loadResource` is held by `bootServiceHost` until the
+   * root render guest reports `renderHostReady`. The game runtime runs game.js
+   * synchronously inside that handler and its top-level `wx.createCanvas()`
+   * messages render immediately — a render guest that is not listening yet
+   * drops the canvas, and every later draw flush then warns `canvas node <id>
+   * not found` against a permanently blank screen. Released by
+   * `releaseDeferredServiceLoad`.
+   */
+  serviceLoadDeferred: boolean
 }
 
 interface PageSession {
@@ -299,6 +311,10 @@ interface PageSession {
    * already-settled case.
    */
   renderLoadPending: boolean
+  /** The render `loadResource` for this page actually went out on the wire —
+   * i.e. the render guest exists and is listening. A game session's service
+   * `loadResource` gates on the root page's flag (see `serviceLoadDeferred`). */
+  renderLoadSent: boolean
   windowConfig: PageWindowConfig
 }
 
@@ -1312,6 +1328,7 @@ async function handleSpawn(
     running: false,
     launchTimer: null,
     pageFallback: pageFallbackApplied ? { requested: pagePath, resolved: resolvedPagePath } : null,
+    serviceLoadDeferred: false,
   }
 
   const rootPage: PageSession = {
@@ -1325,6 +1342,7 @@ async function handleSpawn(
     renderLoaded: false,
     resourceLoadedSent: false,
     renderLoadPending: false,
+    renderLoadSent: false,
     windowConfig: rootWindowConfig,
   }
 
@@ -1499,6 +1517,7 @@ async function handlePageOpen(
     renderLoaded: false,
     resourceLoadedSent: false,
     renderLoadPending: false,
+    renderLoadSent: false,
     windowConfig,
   }
   state.pageSessions.set(bridgeId, page)
@@ -1598,21 +1617,50 @@ async function bootServiceHost(state: RouterState, ap: AppSession, ctx: RuntimeC
   const rootMissing = !!rootPage && !pageInManifest(ap, rootPage.pagePath)
   if (rootMissing) {
     reportPageNotFound(ctx, ap.appSessionId, rootPage.pagePath)
-  } else if (rootPage) {
-    // serviceLoaded is flipped only when service responds with
-    // `serviceResourceLoaded`; see handleContainerMsg. Setting it here would
-    // race a per-page `resourceLoaded` ahead of the service-side handler.
-    forwardToService(ap, makeLoadResource(ap, rootPage, 'service'))
   }
   // Flush any render `loadResource` that arrived (renderHostReady) while
   // injection was in-flight — now that the bundle is confirmed present.
   // `sendRenderLoadResource` refuses a page absent from the manifest, so a
-  // missing root never reaches the throwing render `modRequire`.
+  // missing root never reaches the throwing render `modRequire`. This runs
+  // BEFORE the service send below so render is loaded first, matching
+  // upstream's own container (`Bridge.start` posts the webview's
+  // `loadResource` ahead of the jscore's).
   for (const page of ap.pages.values()) {
     if (!page.renderLoadPending) continue
     page.renderLoadPending = false
     sendRenderLoadResource(ap, page)
   }
+  if (rootMissing || !rootPage) return
+  // A game's service `loadResource` synchronously `modRequire`s game.js, whose
+  // top-level `wx.createCanvas()` messages render right away. Nothing buffers
+  // that message, so a render guest that has not reported `renderHostReady`
+  // yet never creates the canvas — and every later draw flush warns
+  // `canvas node <id> not found` against a blank screen for the rest of the
+  // session. Hold the send; `releaseDeferredServiceLoad` issues it the moment
+  // the root render guest is listening.
+  if (isGameSession(ap) && !rootPage.renderLoadSent) {
+    ap.serviceLoadDeferred = true
+    return
+  }
+  // serviceLoaded is flipped only when service responds with
+  // `serviceResourceLoaded`; see handleContainerMsg. Setting it here would
+  // race a per-page `resourceLoaded` ahead of the service-side handler.
+  forwardToService(ap, makeLoadResource(ap, rootPage, 'service'))
+}
+
+/** Whether this session runs a compiled mini-game bundle (`runtimeType: 'game'`). */
+function isGameSession(ap: AppSession): boolean {
+  return ap.appConfig.app?.runtimeType === 'game'
+}
+
+/**
+ * Issue the game service `loadResource` that `bootServiceHost` held back until
+ * the root render guest was listening (see `AppSession.serviceLoadDeferred`).
+ */
+function releaseDeferredServiceLoad(ap: AppSession, page: PageSession): void {
+  if (!ap.serviceLoadDeferred || !page.isRoot || !page.renderLoadSent) return
+  ap.serviceLoadDeferred = false
+  forwardToService(ap, makeLoadResource(ap, page, 'service'))
 }
 
 function sendRenderLoadResource(ap: AppSession, page: PageSession): void {
@@ -1625,6 +1673,7 @@ function sendRenderLoadResource(ap: AppSession, page: PageSession): void {
   // hot-reloaded to). bootServiceHost surfaces the one-shot diagnostic.
   if (!pageInManifest(ap, page.pagePath)) return
   page.renderWc.send(C.TO_RENDER, { msg: makeLoadResource(ap, page, 'render') })
+  page.renderLoadSent = true
 }
 
 /** The compiled logic.js URL `injectLogicBundle` fetches (mode-dependent). */
@@ -1727,7 +1776,7 @@ function reportPageNotFound(
   ctx.guestConsole?.emit({ source: 'service', level: 'error', args: [message] })
 }
 
-function maybeSendResourceLoaded(ap: AppSession, page: PageSession): void {
+function maybeSendResourceLoaded(ctx: RuntimeContext, ap: AppSession, page: PageSession): void {
   if (page.resourceLoadedSent || !ap.serviceLoaded || !page.renderLoaded) return
   page.resourceLoadedSent = true
   // Non-root pages (navigateTo / redirectTo / reLaunch / non-cached switchTab)
@@ -1755,6 +1804,17 @@ function maybeSendResourceLoaded(ap: AppSession, page: PageSession): void {
       stackId: STACK_ID,
     },
   })
+
+  // Mini-games have no page-mount `domReady` — service's game runtime
+  // (`isMiniGame()`) skips page-instance creation and never sends render a
+  // `firstRender`, so `markSessionRunning`'s usual trigger never fires. Both
+  // sides finishing `loadResource` (this function's own gate, just above) is
+  // the earliest point either side signals anything back, and it's the same
+  // moment upstream's own service runtime calls `gameLaunch()` — so treat it
+  // as the game equivalent of `domReady` for clearing the launch watchdog.
+  if (isGameSession(ap)) {
+    markSessionRunning(ctx, ap, page)
+  }
 }
 
 // ── Message routing ──────────────────────────────────────────────────────────
@@ -1802,6 +1862,7 @@ function routeFromRender(
       return
     }
     sendRenderLoadResource(ap, page)
+    releaseDeferredServiceLoad(ap, page)
     return
   }
 
@@ -1842,13 +1903,13 @@ function handleContainerMsg(
   switch (msg.type) {
     case 'serviceResourceLoaded':
       ap.serviceLoaded = true
-      for (const p of ap.pages.values()) maybeSendResourceLoaded(ap, p)
+      for (const p of ap.pages.values()) maybeSendResourceLoaded(ctx, ap, p)
       break
     case 'renderResourceLoaded': {
       const target = readBridgeId(msg)
       const p = (target && ap.pages.get(target)) || page
       p.renderLoaded = true
-      maybeSendResourceLoaded(ap, p)
+      maybeSendResourceLoaded(ctx, ap, p)
       break
     }
     case 'domReady':
@@ -2550,6 +2611,14 @@ function makeLoadResource(ap: AppSession, page: PageSession, target: 'service' |
       root: ap.root,
       baseUrl: ap.resourceBaseUrl,
       resourceBaseUrl: ap.resourceBaseUrl,
+      // Both render's loader (skip page CSS/JS, defer to the game canvas) and
+      // service's runtime (skip page-instance creation, call gameLaunch()
+      // instead) branch on this. Omitting it made every mini-game session get
+      // routed down the mini-program page path on both sides, which dead-ends
+      // in service's `resourceLoaded` handler ("module not found") and never
+      // reaches render's `firstRender` → `domReady` — the launch watchdog then
+      // always timed out at LAUNCH_TIMEOUT_MS.
+      runtimeType: isGameSession(ap) ? 'game' : 'miniProgram',
       // dimina's service runtime reads hostEnv as `{ systemInfo, menuRect }`
       // (core/host-env.js init → getSystemInfo/getMenuRect; invokeAPI resolves
       // getSystemInfoSync/getWindowInfo/getDeviceInfo from hostEnv.systemInfo).

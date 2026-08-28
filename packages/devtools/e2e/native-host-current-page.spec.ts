@@ -40,6 +40,7 @@ import {
   pollUntil,
   evalInSimulator,
   RENDER_GUEST_URL_MARKER,
+  findMainWindow,
 } from './helpers'
 import { AutomationChannel, ProjectFsChannel } from '../src/shared/ipc-channels'
 
@@ -123,7 +124,7 @@ test.describe('native-host current-page toolbar e2e', () => {
       env: { ...process.env, NODE_ENV: 'test', DIMINA_NATIVE_HOST: '1', DIMINA_E2E_USER_DATA_DIR: userDataDir },
     })
 
-    mainWindow = await electronApp.firstWindow()
+    mainWindow = await findMainWindow(electronApp)
     await mainWindow.waitForLoadState('domcontentloaded')
 
     await electronApp.evaluate(async ({ BrowserWindow }) => {

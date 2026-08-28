@@ -11,54 +11,30 @@
 import { ipcRenderer } from 'electron'
 import { createSizeAdvertiser } from '@dimina-kit/view-anchor'
 import { ViewChannel } from '../../shared/ipc-channels-overlays.js'
+import { whenSlotRootReady } from './wait-for-slot-root.js'
 
 /**
  * Attach the advertiser to the sidebar content's shrink-to-fit root
- * (`[data-host-sidebar-root]`). That element MUST be shrink-to-fit on the inline
- * axis — its width must reflect the content, not the host-applied view width,
- * or the cross-process loop never converges (`createSizeAdvertiser`'s footgun).
- * If the element is missing we warn and no-op rather than measure `<body>`,
- * whose inline size IS the view size and would advertise nonsense.
- *
- * Returns a disposer that tears the advertiser down.
- */
-export function installHostSidebarAdvertiser(): () => void {
-  const root = document.querySelector<HTMLElement>('[data-host-sidebar-root]')
-  if (!root) {
-    console.warn(
-      '[host-sidebar-advertiser] no `[data-host-sidebar-root]` element found — ' +
-        'not advertising a width. The sidebar content must wrap itself in a ' +
-        'shrink-to-fit `[data-host-sidebar-root]` element so its inline size is ' +
-        'the content width, not the host-given view size.',
-    )
-    return () => {}
-  }
-
-  const advertiser = createSizeAdvertiser(root, {
-    axis: 'inline',
-    publish: (size) => {
-      ipcRenderer.send(ViewChannel.HostSidebarAdvertiseWidth, size)
-    },
-  })
-
-  return () => advertiser.dispose()
-}
-
-/**
- * Install once the DOM is ready (the root element must exist before we query).
- * Self-gating: if the document is already past `loading`, install synchronously;
- * otherwise wait for `DOMContentLoaded`.
+ * (`[data-host-sidebar-root]`), waiting for it if necessary — the root may be
+ * mounted asynchronously by a framework (e.g. React) rather than present in
+ * the initial HTML. That element MUST be shrink-to-fit on the inline axis —
+ * its width must reflect the content, not the host-applied view width, or the
+ * cross-process loop never converges (`createSizeAdvertiser`'s footgun).
  */
 export function installHostSidebarAdvertiserWhenReady(): void {
-  if (document.readyState === 'loading') {
-    document.addEventListener(
-      'DOMContentLoaded',
-      () => {
-        installHostSidebarAdvertiser()
-      },
-      { once: true },
-    )
-  } else {
-    installHostSidebarAdvertiser()
-  }
+  whenSlotRootReady(
+    '[data-host-sidebar-root]',
+    '[host-sidebar-advertiser] no `[data-host-sidebar-root]` element found — ' +
+      'not advertising a width yet. The sidebar content must wrap itself in a ' +
+      'shrink-to-fit `[data-host-sidebar-root]` element so its inline size is ' +
+      'the content width, not the host-given view size.',
+    (root) => {
+      createSizeAdvertiser(root, {
+        axis: 'inline',
+        publish: (size) => {
+          ipcRenderer.send(ViewChannel.HostSidebarAdvertiseWidth, size)
+        },
+      })
+    },
+  )
 }

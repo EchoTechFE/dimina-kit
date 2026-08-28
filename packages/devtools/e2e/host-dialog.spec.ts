@@ -1,7 +1,7 @@
 import { test, expect, _electron, type ElectronApplication, type Page } from '@playwright/test'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { pollUntil } from './helpers'
+import { pollUntil, findMainWindow } from './helpers'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURES = path.resolve(__dirname, 'fixtures', 'host-dialog')
@@ -32,7 +32,7 @@ test.describe('Host dialog: by-demand, dual-axis, main-centered overlay', () => 
         NODE_ENV: 'test',
       },
     })
-    mainWindow = await electronApp.firstWindow()
+    mainWindow = await findMainWindow(electronApp)
     await mainWindow.waitForLoadState('domcontentloaded')
   })
 

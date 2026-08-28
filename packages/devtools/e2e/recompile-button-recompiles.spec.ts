@@ -23,6 +23,7 @@ import {
   evalInSimulator,
   evalInWebContentsByUrl,
   RENDER_GUEST_URL_MARKER,
+  findMainWindow,
 } from './helpers'
 import { AutomationChannel, WorkbenchSettingsChannel } from '../src/shared/ipc-channels'
 
@@ -156,7 +157,7 @@ test.describe('popover 重新编译 rebuilds and relaunches at the selected star
       args: [appPath, 'auto', '--auto-port', '0', `--user-data-dir=${userDataDir}`],
       env: { ...process.env, NODE_ENV: 'test', DIMINA_NATIVE_HOST: '1', DIMINA_E2E_USER_DATA_DIR: userDataDir },
     })
-    mainWindow = await electronApp.firstWindow()
+    mainWindow = await findMainWindow(electronApp)
     await mainWindow.waitForLoadState('domcontentloaded')
 
     autoPort = await pollUntil(

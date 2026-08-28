@@ -74,6 +74,16 @@ export const ViewChannel = {
    */
   HostSidebarGetWidth: 'view:host-sidebar:get-width',
   /**
+   * main → main-window renderer: push the project category (`Project.type`)
+   * selected in the host-sidebar's content — devtools' own default icon rail,
+   * or any downstream replacement that sends on the same channel. No
+   * pull/replay companion like `HostSidebarGetWidth`: the default category is
+   * a stable initial value regardless of load-order, and nothing is ever sent
+   * before the main-window renderer (and thus `ProjectListScreen`) is already
+   * mounted.
+   */
+  HostSidebarCategorySelected: 'view:host-sidebar:category-selected',
+  /**
    * Reverse size-advertiser for the host-dialog WCV. Unlike the toolbar/sidebar
    * (single-axis, `setBaseDesired`-placed strips), the dialog is a BOTH-AXES
    * overlay positioned by `setOverlayDesired` — main centers it in the main

@@ -39,6 +39,7 @@ import {
   pollUntil,
   evalInWebContentsByUrl,
   RENDER_GUEST_URL_MARKER,
+  findMainWindow,
 } from './helpers'
 import { AutomationChannel, SimulatorWxmlChannel } from '../src/shared/ipc-channels'
 
@@ -64,7 +65,7 @@ async function bootApp(): Promise<AppHandle> {
     env: { ...process.env, NODE_ENV: 'test', DIMINA_NATIVE_HOST: '1', DIMINA_E2E_USER_DATA_DIR: userDataDir },
   })
 
-  const win = await app.firstWindow()
+  const win = await findMainWindow(app)
   await win.waitForLoadState('domcontentloaded')
 
   await app.evaluate(async ({ BrowserWindow }) => {

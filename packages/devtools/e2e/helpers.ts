@@ -65,6 +65,97 @@ export const DEMO_APP_DIR = resolveDemoAppDir()
  */
 export const RENDER_GUEST_URL_MARKER = DMB_PAGEFRAME_DOC_NAME
 
+// ── Window resolution ──────────────────────────────────────────────────
+
+/**
+ * Matches the main renderer entry regardless of which `*-entry.js` booted
+ * the app — `createConfiguredMainWindow` in app.ts always points the main
+ * `BrowserWindow` at `entries/main/index.html`.
+ */
+const MAIN_WINDOW_URL_PATTERN = /entries\/main\//
+const HOST_SIDEBAR_DEFAULT_URL_PATTERN = /entries\/host-sidebar-default\//
+
+/**
+ * Resolve a specific app window by matching its URL, instead of trusting
+ * `electronApp.firstWindow()` / `electronApp.windows()[0]` (which does not
+ * reliably correlate with BrowserWindow creation order — see
+ * `findMainWindow`'s doc comment).
+ */
+async function findWindowByUrlPattern(
+  electronApp: ElectronApplication,
+  pattern: RegExp,
+  label: string,
+  timeoutMs: number,
+): Promise<Page> {
+  const immediate = electronApp.windows().find((win) => pattern.test(win.url()))
+  if (immediate) return immediate
+
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    await electronApp
+      .waitForEvent('window', { timeout: Math.max(0, deadline - Date.now()) })
+      .catch(() => undefined)
+    const match = electronApp.windows().find((win) => pattern.test(win.url()))
+    if (match) return match
+  }
+
+  throw new Error(
+    `${label}: no window matching ${pattern} within ${timeoutMs}ms `
+    + `(open windows: ${electronApp.windows().map((win) => win.url()).join(', ') || 'none'})`,
+  )
+}
+
+/**
+ * Resolve the app's actual main window instead of trusting
+ * `electronApp.firstWindow()` / `electronApp.windows()[0]`.
+ *
+ * devtools auto-loads a host-sidebar default-content page
+ * (`entries/host-sidebar-default/index.html`) into a second WebContentsView
+ * very early during every boot, before any host `onSetup` callback runs.
+ * That second page is small and finishes navigating fast enough that
+ * Playwright's "first window" bookkeeping does not reliably correlate with
+ * BrowserWindow creation order — it has been observed to hand back the
+ * sidebar's page instead of the main app's page. Every window lookup in
+ * this suite must therefore disambiguate by URL.
+ */
+export async function findMainWindow(electronApp: ElectronApplication, timeoutMs = 30_000): Promise<Page> {
+  return findWindowByUrlPattern(electronApp, MAIN_WINDOW_URL_PATTERN, 'findMainWindow', timeoutMs)
+}
+
+/**
+ * Drive devtools' own project-list category rail (the host-sidebar default
+ * content) exactly as a user would: locate its WebContentsView page and
+ * activate the icon button for `category`. Real projects are filtered by
+ * `Project.type` against the selected category (default 'miniprogram'), so
+ * opening a mini-game project through the UI requires this switch first.
+ *
+ * Dispatches a native DOM `click()` inside the sidebar page rather than
+ * Playwright's mouse-coordinate-driven `locator(...).click()`: this WCV is a
+ * secondary, layered contentView (not its own top-level BrowserWindow), and
+ * its real on-screen bounds only settle once the forward view-anchor loop
+ * (advertise → main → placeholder resize → anchor reposition) has converged
+ * — before that Playwright's actionability check reports the element as
+ * "outside the viewport" even though it is already laid out in the DOM. A
+ * programmatic click fires the same React `onClick` handler without
+ * depending on that geometry.
+ */
+export async function selectProjectCategoryInUI(
+  electronApp: ElectronApplication,
+  category: 'miniprogram' | 'minigame',
+): Promise<void> {
+  const sidebar = await findWindowByUrlPattern(
+    electronApp,
+    HOST_SIDEBAR_DEFAULT_URL_PATTERN,
+    'selectProjectCategoryInUI',
+    30_000,
+  )
+  const label = category === 'miniprogram' ? '小程序' : '小游戏'
+  await sidebar.waitForSelector(`[aria-label="${label}"]`)
+  await sidebar.evaluate((selector) => {
+    document.querySelector<HTMLButtonElement>(selector)?.click()
+  }, `[aria-label="${label}"]`)
+}
+
 // ── IPC helpers ────────────────────────────────────────────────────────
 
 /**
@@ -103,6 +194,19 @@ export async function addProject(mainWindow: Page, projectDir: string): Promise<
 }
 
 /**
+ * `Main`'s `projectList` state only refetches on mount and on the
+ * `window:navigateBack` event (see `main.tsx`) — a project added via raw IPC
+ * (`addProject`) does not push a live update, so the list screen won't show
+ * it until this fires.
+ */
+export async function refreshProjectList(mainWindow: Page): Promise<void> {
+  await mainWindow.evaluate(() => {
+    const testIpc = (window as unknown as { __testIpc?: { emit: (c: string) => void } }).__testIpc
+    testIpc?.emit('window:navigateBack')
+  })
+}
+
+/**
  * Close the current project session via IPC and navigate back to the project list.
  * Safe to call when no project is open.
  */
@@ -110,10 +214,7 @@ export async function closeProject(mainWindow: Page): Promise<void> {
   await ipcInvoke(mainWindow, SimulatorChannel.Detach).catch(() => {})
   await ipcInvoke(mainWindow, ProjectChannel.Close).catch(() => {})
   // Trigger the navigate-back handler in the renderer (same event handleWindowClose sends)
-  await mainWindow.evaluate(() => {
-    const testIpc = (window as unknown as { __testIpc?: { emit: (c: string) => void } }).__testIpc
-    testIpc?.emit('window:navigateBack')
-  }).catch(() => {})
+  await refreshProjectList(mainWindow).catch(() => {})
   // Wait for the project list view to be visible again (the project card title=projectDir
   // disappears once we leave the project view; project list shows project cards / empty state).
   // We can't know the path from here, so poll for the absence of the toolbar text "普通编译".
@@ -138,10 +239,7 @@ export async function openProjectInUI(
   { waitMs = 15000 }: { waitMs?: number } = {}
 ): Promise<void> {
   await addProject(mainWindow, projectDir)
-  await mainWindow.evaluate(() => {
-    const testIpc = (window as unknown as { __testIpc?: { emit: (c: string) => void } }).__testIpc
-    testIpc?.emit('window:navigateBack')
-  })
+  await refreshProjectList(mainWindow)
   const projectPathLabel = mainWindow.locator(`[title="${projectDir}"]`).first()
   await projectPathLabel.waitFor()
   await projectPathLabel.locator('..').click()

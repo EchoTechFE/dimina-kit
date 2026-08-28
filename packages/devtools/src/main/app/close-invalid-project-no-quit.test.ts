@@ -211,6 +211,8 @@ vi.mock('electron', () => {
     })),
     defaultSession: {
       protocol: { handle: vi.fn(), unhandle: vi.fn() },
+      registerPreloadScript: vi.fn(() => 'stub-preload-script-id'),
+      unregisterPreloadScript: vi.fn(),
     },
   }
 
@@ -280,6 +282,10 @@ vi.mock('fs', async () => {
     if (s.endsWith('/app.json') || s.endsWith('\\app.json')) {
       const dir = s.replace(/[\\/]app\.json$/, '')
       return stubs.projectsWithAppJson.has(dir)
+    }
+    // Mini-game detection files never exist in these mini-program-only fixtures.
+    if (/[\\/](game\.json|game\.js|game\.ts|project\.config\.json|project\.private\.config\.json)$/.test(s)) {
+      return false
     }
     return true
   }

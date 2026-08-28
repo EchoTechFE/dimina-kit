@@ -8,11 +8,12 @@
  * project) is permanently lost unless the mount pulls the main-retained
  * value. Locked contract: subscribe BEFORE pulling; a push landing while the
  * pull is in flight wins over the stale pull result; an `undefined` pull
- * (swallowed ipc-transport error) keeps the placeholder at 0 without
- * throwing.
+ * (swallowed ipc-transport error) keeps the placeholder at its seeded
+ * default width without throwing.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, act, waitFor } from '@testing-library/react'
+import { HOST_SIDEBAR_DEFAULT_WIDTH } from '@/shared/constants'
 
 const api = vi.hoisted(() => {
   const widthListeners: Array<(width: number) => void> = []
@@ -27,6 +28,7 @@ const api = vi.hoisted(() => {
       }
     }),
     getHostSidebarWidth: vi.fn((): Promise<number | undefined> => Promise.resolve(0)),
+    onHostSidebarCategorySelected: vi.fn(() => () => {}),
   }
 })
 
@@ -34,6 +36,7 @@ vi.mock('@/shared/api', () => ({
   publishPlacementSnapshot: api.publishPlacementSnapshot,
   onHostSidebarWidthChanged: api.onHostSidebarWidthChanged,
   getHostSidebarWidth: api.getHostSidebarWidth,
+  onHostSidebarCategorySelected: api.onHostSidebarCategorySelected,
 }))
 
 // ProjectList itself is presentational and unrelated to the placeholder
@@ -78,7 +81,7 @@ describe('ProjectListScreen: host-sidebar width replay on mount', () => {
   it('a live push after mount drives the placeholder', async () => {
     const { container } = renderScreen()
 
-    expect(placeholderWidth(container)).toBe('0px')
+    expect(placeholderWidth(container)).toBe(`${HOST_SIDEBAR_DEFAULT_WIDTH}px`)
     await waitFor(() => expect(api.onHostSidebarWidthChanged).toHaveBeenCalled())
 
     act(() => pushWidth(240))
@@ -137,14 +140,14 @@ describe('ProjectListScreen: host-sidebar width replay on mount', () => {
     expect(placeholderWidth(container)).toBe('280px')
   })
 
-  it('a pull that resolves undefined (swallowed ipc error) keeps 0 and pushes still work', async () => {
+  it('a pull that resolves undefined (swallowed ipc error) keeps the seeded default and pushes still work', async () => {
     api.getHostSidebarWidth.mockImplementation(() => Promise.resolve(undefined))
 
     const { container } = renderScreen()
 
     await waitFor(() => expect(api.getHostSidebarWidth).toHaveBeenCalled())
     await act(async () => { await Promise.resolve() })
-    expect(placeholderWidth(container)).toBe('0px')
+    expect(placeholderWidth(container)).toBe(`${HOST_SIDEBAR_DEFAULT_WIDTH}px`)
 
     act(() => pushWidth(200))
     await waitFor(() => expect(placeholderWidth(container)).toBe('200px'))

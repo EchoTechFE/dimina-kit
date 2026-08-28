@@ -41,6 +41,7 @@ export default defineConfig({
         projectCreateDialog: resolve(rendererRoot, 'entries/project-create-dialog/index.html'),
         updateDialog: resolve(rendererRoot, 'entries/update-dialog/index.html'),
         workbenchSettings: resolve(rendererRoot, 'entries/workbench-settings/index.html'),
+        hostSidebarDefault: resolve(rendererRoot, 'entries/host-sidebar-default/index.html'),
       },
     },
   },

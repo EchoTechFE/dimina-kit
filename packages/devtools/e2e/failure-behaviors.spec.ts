@@ -55,6 +55,7 @@ import {
   evalInWebContentsByUrl,
   waitSimulatorReady,
   pollUntil,
+  findMainWindow,
 } from './helpers'
 import { ProjectChannel } from '../src/shared/ipc-channels'
 
@@ -81,7 +82,7 @@ test.beforeAll(async () => {
     args: [appPath, `--user-data-dir=${userDataDir}`],
     env: { ...process.env, NODE_ENV: 'test' },
   })
-  mainWindow = await electronApp.firstWindow()
+  mainWindow = await findMainWindow(electronApp)
   await mainWindow.waitForLoadState('domcontentloaded')
   await installConsoleCollector(electronApp)
   // Offscreen + blur so this suite never steals focus.

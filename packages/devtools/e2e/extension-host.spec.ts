@@ -1,7 +1,7 @@
 import { test, expect, _electron, type ElectronApplication, type Page } from '@playwright/test'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { DEMO_APP_DIR, openProjectInUI, closeProject, pollUntil, evalInSimulator, ipcInvoke } from './helpers'
+import { DEMO_APP_DIR, openProjectInUI, closeProject, pollUntil, evalInSimulator, ipcInvoke, findMainWindow } from './helpers'
 import { SimulatorCustomApiChannel } from '../src/shared/ipc-channels'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -40,7 +40,7 @@ test.describe('Extension host (createWorkbenchApp onSetup)', () => {
         NODE_ENV: 'test',
       },
     })
-    mainWindow = await electronApp.firstWindow()
+    mainWindow = await findMainWindow(electronApp)
     await mainWindow.waitForLoadState('domcontentloaded')
 
     // The toolbar only renders once a project is open.

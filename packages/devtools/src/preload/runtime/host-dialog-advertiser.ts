@@ -14,57 +14,30 @@
 import { ipcRenderer } from 'electron'
 import { createSizeAdvertiser } from '@dimina-kit/view-anchor'
 import { ViewChannel } from '../../shared/ipc-channels-overlays.js'
+import { whenSlotRootReady } from './wait-for-slot-root.js'
 
 /**
  * Attach both axis advertisers to the dialog content's shrink-to-fit root
- * (`[data-host-dialog-root]`). That element MUST be shrink-to-fit on BOTH
- * axes — same footgun as the toolbar/sidebar (`createSizeAdvertiser`'s
- * single-axis-ownership requirement), just doubled. If the element is
- * missing we warn and no-op rather than measure `<body>`, whose size IS the
- * view size and would advertise nonsense.
- *
- * Returns a disposer that tears both advertisers down.
- */
-export function installHostDialogAdvertiser(): () => void {
-  const root = document.querySelector<HTMLElement>('[data-host-dialog-root]')
-  if (!root) {
-    console.warn(
-      '[host-dialog-advertiser] no `[data-host-dialog-root]` element found — ' +
-        'not advertising a size. The dialog content must wrap itself in a ' +
-        'shrink-to-fit `[data-host-dialog-root]` element so its size is the ' +
-        'content size, not the host-given view size.',
-    )
-    return () => {}
-  }
-
-  const publish = (size: { axis: 'block' | 'inline'; extent: number }): void => {
-    ipcRenderer.send(ViewChannel.HostDialogAdvertiseSize, size)
-  }
-
-  const blockAdvertiser = createSizeAdvertiser(root, { axis: 'block', publish })
-  const inlineAdvertiser = createSizeAdvertiser(root, { axis: 'inline', publish })
-
-  return () => {
-    blockAdvertiser.dispose()
-    inlineAdvertiser.dispose()
-  }
-}
-
-/**
- * Install once the DOM is ready (the root element must exist before we query).
- * Self-gating: if the document is already past `loading`, install synchronously;
- * otherwise wait for `DOMContentLoaded`.
+ * (`[data-host-dialog-root]`), waiting for it if necessary — the root may be
+ * mounted asynchronously by a framework rather than present in the initial
+ * HTML. That element MUST be shrink-to-fit on BOTH axes — same footgun as
+ * the toolbar/sidebar (`createSizeAdvertiser`'s single-axis-ownership
+ * requirement), just doubled.
  */
 export function installHostDialogAdvertiserWhenReady(): void {
-  if (document.readyState === 'loading') {
-    document.addEventListener(
-      'DOMContentLoaded',
-      () => {
-        installHostDialogAdvertiser()
-      },
-      { once: true },
-    )
-  } else {
-    installHostDialogAdvertiser()
-  }
+  whenSlotRootReady(
+    '[data-host-dialog-root]',
+    '[host-dialog-advertiser] no `[data-host-dialog-root]` element found — ' +
+      'not advertising a size yet. The dialog content must wrap itself in a ' +
+      'shrink-to-fit `[data-host-dialog-root]` element so its size is the ' +
+      'content size, not the host-given view size.',
+    (root) => {
+      const publish = (size: { axis: 'block' | 'inline'; extent: number }): void => {
+        ipcRenderer.send(ViewChannel.HostDialogAdvertiseSize, size)
+      }
+
+      createSizeAdvertiser(root, { axis: 'block', publish })
+      createSizeAdvertiser(root, { axis: 'inline', publish })
+    },
+  )
 }

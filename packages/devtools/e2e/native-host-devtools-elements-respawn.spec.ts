@@ -36,6 +36,7 @@ import {
   pollUntil,
   evalInWebContentsByUrl,
   RENDER_GUEST_URL_MARKER,
+  findMainWindow,
 } from './helpers'
 import { AutomationChannel, ProjectFsChannel } from '../src/shared/ipc-channels'
 
@@ -60,7 +61,7 @@ async function bootApp(): Promise<AppHandle> {
     env: { ...process.env, NODE_ENV: 'test', DIMINA_NATIVE_HOST: '1', DIMINA_E2E_USER_DATA_DIR: userDataDir },
   })
 
-  const win = await app.firstWindow()
+  const win = await findMainWindow(app)
   await win.waitForLoadState('domcontentloaded')
 
   // Move off-screen so the window doesn't interfere with other UI tests running

@@ -38,6 +38,25 @@ const stubs = vi.hoisted(() => {
   let projectsJsonContent: string | null = null
   /** Set of project directories whose `app.json` should report as existing. */
   const projectsWithAppJson = new Set<string>()
+  /**
+   * Set of project directories whose mini-game entry files (`game.json` +
+   * `game.js`) should report as existing, with `app.json` absent — the
+   * fallback half of `detectRuntimeType` (no explicit `compileType`).
+   */
+  const projectsWithMinigameFiles = new Set<string>()
+
+  /** Electron `MessagePortMain` stand-in: spy methods + a real tiny emitter. */
+  function makePortMain() {
+    const em = makeEmitter()
+    return {
+      ...em,
+      postMessage: vi.fn(),
+      start: vi.fn(),
+      close: vi.fn(),
+    }
+  }
+  /** Every `MessageChannelMain` the host-slot port channel constructed, in order. */
+  const messageChannels: Array<{ port1: ReturnType<typeof makePortMain>; port2: ReturnType<typeof makePortMain> }> = []
 
   function makeEmitter() {
     const listeners: EventBag = {}
@@ -77,6 +96,8 @@ const stubs = vi.hoisted(() => {
     removeListenerCalls.length = 0
     projectsJsonContent = null
     projectsWithAppJson.clear()
+    projectsWithMinigameFiles.clear()
+    messageChannels.length = 0
   }
 
   return {
@@ -99,6 +120,9 @@ const stubs = vi.hoisted(() => {
       return projectsJsonContent
     },
     projectsWithAppJson,
+    projectsWithMinigameFiles,
+    makePortMain,
+    messageChannels,
     makeEmitter,
     reset,
   }
@@ -157,6 +181,7 @@ vi.mock('electron', () => {
     removeListener = this.em.removeListener.bind(this.em)
     emit = this.em.emit.bind(this.em)
     send = vi.fn()
+    postMessage = vi.fn()
     isDestroyed = () => this.destroyed
     openDevTools = vi.fn()
     closeDevTools = vi.fn()
@@ -233,7 +258,11 @@ vi.mock('electron', () => {
       registerPreloadScript: vi.fn(),
       protocol: { handle: vi.fn(), unhandle: vi.fn() },
     })),
-    defaultSession: { protocol: { handle: vi.fn(), unhandle: vi.fn() } },
+    defaultSession: {
+      protocol: { handle: vi.fn(), unhandle: vi.fn() },
+      registerPreloadScript: vi.fn(() => 'stub-preload-script-id'),
+      unregisterPreloadScript: vi.fn(),
+    },
   }
 
   const dialog = {
@@ -274,6 +303,17 @@ vi.mock('electron', () => {
 
   const Tray = vi.fn()
 
+  // Host-slot port channel (host-sidebar/host-toolbar) handshake: main
+  // constructs one of these per `did-finish-load`, transfers `port2` to the
+  // slot's document, and keeps `port1` to deliver `hostSidebar.send(...)`.
+  class MessageChannelMain {
+    port1 = stubs.makePortMain()
+    port2 = stubs.makePortMain()
+    constructor() {
+      stubs.messageChannels.push(this)
+    }
+  }
+
   return {
     app,
     ipcMain,
@@ -281,6 +321,7 @@ vi.mock('electron', () => {
     WebContentsView,
     BrowserView: WebContentsView,
     View,
+    MessageChannelMain,
     webContents: webContentsStatic,
     session: sessionStub,
     protocol: { registerSchemesAsPrivileged: vi.fn(), handle: vi.fn(), unhandle: vi.fn() },
@@ -307,6 +348,18 @@ vi.mock('fs', async () => {
     if (s.endsWith('/app.json') || s.endsWith('\\app.json')) {
       const dir = s.replace(/[\\/]app\.json$/, '')
       return stubs.projectsWithAppJson.has(dir)
+    }
+    // Mini-game entry files (`detectRuntimeType`'s fallback path: game.json +
+    // game.js/.ts with no app.json) — only present for dirs opted into
+    // `stubs.projectsWithMinigameFiles`; everywhere else they don't exist.
+    if (/[\\/](game\.json|game\.js)$/.test(s)) {
+      const dir = s.replace(/[\\/](game\.json|game\.js)$/, '')
+      return stubs.projectsWithMinigameFiles.has(dir)
+    }
+    // game.ts and the compileType-override config files are never exercised
+    // by these fixtures.
+    if (/[\\/](game\.ts|project\.config\.json|project\.private\.config\.json)$/.test(s)) {
+      return false
     }
     // userData dir, etc.
     return true
@@ -369,6 +422,7 @@ vi.mock('@dimina-kit/devkit', () => ({
 
 // ── Lazy imports (after vi.mock('electron') is set up) ──────────────────
 import { ProjectsChannel } from '../../shared/ipc-channels.js'
+import { ViewChannel } from '../../shared/ipc-channels-overlays.js'
 let createDevtoolsRuntime: typeof import('../app/app.js').createDevtoolsRuntime
 
 beforeEach(async () => {
@@ -406,11 +460,15 @@ describe('projects:add — duplicate detection dialog', () => {
       isDestroyed: () => boolean
     }
 
-    const result = (await invokeHandler(sender, ProjectsChannel.Add, dir)) as { path: string }
+    const result = (await invokeHandler(sender, ProjectsChannel.Add, dir)) as { path: string; type?: string }
 
     expect(result).toBeDefined()
     expect(result.path).toBe(dir)
     expect(vi.mocked(dialog.showMessageBox)).not.toHaveBeenCalled()
+    // Importing a project whose detected type already matches the sidebar's
+    // default category (miniprogram) must not throw or otherwise misbehave
+    // just because the handler now always pushes a category-forced signal.
+    expect(result.type).toBe('miniprogram')
 
     // List grew to 1.
     const persisted = JSON.parse(stubs.getProjectsJson() ?? '[]') as Array<{ path: string }>
@@ -504,6 +562,69 @@ describe('projects:add — duplicate detection dialog', () => {
     // Persisted list is unchanged.
     const list = JSON.parse(stubs.getProjectsJson() ?? '[]') as Array<{ path: string }>
     expect(list.filter((p) => p.path === dir)).toHaveLength(0)
+
+    await instance.dispose()
+  })
+})
+
+describe('projects:add — cross-category import forces sidebar + list category', () => {
+  it('importing a mini-game project pushes "minigame" through both the list-filter notify and the sidebar rail channel', async () => {
+    const dir = '/tmp/projGame'
+    // game.json + game.js present, app.json absent → detectRuntimeType's
+    // fallback path classifies this as a mini-game.
+    stubs.projectsWithMinigameFiles.add(dir)
+    stubs.setProjectsJson(JSON.stringify([]))
+
+    const instance = await createDevtoolsRuntime({})
+    const sender = instance.mainWindow.webContents as unknown as {
+      id: number
+      isDestroyed: () => boolean
+    }
+
+    // The sidebar's default content already started loading during runtime
+    // setup (`context.views.hostSidebar.loadFile(...)` in app.ts), but
+    // `hostSidebar.send(...)` gates on a completed `did-finish-load`
+    // handshake — replay that event on the sidebar's own webContents so the
+    // real MessagePort channel goes live, the same way Chromium would once
+    // the page actually finishes loading.
+    const sidebarWc = instance.context.views.hostSidebar.webContents as unknown as {
+      emit: (event: string) => void
+    } | null
+    expect(sidebarWc).toBeTruthy()
+    sidebarWc!.emit('did-finish-load')
+    expect(stubs.messageChannels).toHaveLength(1)
+
+    const result = (await invokeHandler(sender, ProjectsChannel.Add, dir)) as {
+      path: string
+      type?: string
+    }
+
+    // Confirm the detection path itself before trusting the two forced-category
+    // assertions below.
+    expect(result.path).toBe(dir)
+    expect(result.type).toBe('minigame')
+
+    // 1) Main-window list filter: `ctx.notify.hostSidebarCategorySelected('minigame')`
+    // ultimately does `mainWindow.webContents.send(ViewChannel.HostSidebarCategorySelected, 'minigame')`.
+    const mainSendCalls = vi.mocked(instance.mainWindow.webContents.send).mock.calls
+    const categoryCall = mainSendCalls.find(
+      (call) => call[0] === ViewChannel.HostSidebarCategorySelected,
+    )
+    expect(categoryCall?.[1]).toBe('minigame')
+
+    // 2) Sidebar rail highlight: `ctx.views.hostSidebar.send('project-category-forced', …)`
+    // delivers `{ channel, payload }` over the live MessagePortMain (port1).
+    const port1 = stubs.messageChannels[0]!.port1
+    const forcedCalls = vi
+      .mocked(port1.postMessage)
+      .mock.calls.filter(
+        (call) => (call[0] as { channel?: string } | undefined)?.channel === 'project-category-forced',
+      )
+    expect(forcedCalls).toHaveLength(1)
+    expect(forcedCalls[0]![0]).toEqual({
+      channel: 'project-category-forced',
+      payload: { category: 'minigame' },
+    })
 
     await instance.dispose()
   })

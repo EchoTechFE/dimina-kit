@@ -17,7 +17,7 @@ import {
   ViewChannel,
 } from '../../../shared/ipc-channels-overlays.js'
 import type { WorkbenchSettings } from '../settings/index.js'
-import type { ProjectSettings } from '../projects/project-repository.js'
+import type { ProjectSettings, ProjectType } from '../projects/project-repository.js'
 import type { UpdateInfo } from '../../../shared/types.js'
 
 /**
@@ -138,6 +138,11 @@ export interface RendererNotifier {
    */
   hostSidebarWidthChanged(width: number): void
   /**
+   * Push the project category selected in the host-sidebar's content to the
+   * main renderer so `ProjectListScreen` filters `ProjectList` accordingly.
+   */
+  hostSidebarCategorySelected(category: ProjectType): void
+  /**
    * Ask the main renderer's Monaco editor to open a project file at a position.
    * Drives the "click a console file link → open in editor" pipeline.
    */
@@ -232,6 +237,9 @@ export function createRendererNotifier(ctx: NotifierContext): RendererNotifier {
     },
     hostSidebarWidthChanged(width) {
       sendToMain(ViewChannel.HostSidebarWidthChanged, width)
+    },
+    hostSidebarCategorySelected(category) {
+      sendToMain(ViewChannel.HostSidebarCategorySelected, category)
     },
     editorOpenFile(payload) {
       sendToMain(EditorChannel.OpenFile, payload)

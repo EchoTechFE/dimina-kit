@@ -27,6 +27,8 @@ type ProjectsIpcCtx = Pick<
   | 'projectsProvider'
   | 'projectTemplates'
   | 'customCreateProjectDialog'
+  | 'notify'
+  | 'views'
 >
 
 export function registerProjectsIpc(ctx: ProjectsIpcCtx): Disposable {
@@ -65,6 +67,17 @@ export function registerProjectsIpc(ctx: ProjectsIpcCtx): Disposable {
           buttons: ['确定'],
         })
       }
+      // Imported project's own detected type wins over whatever category the
+      // sidebar happened to be showing — the list would otherwise stay on
+      // the old category and hide the project that was just added. Drives
+      // both halves: the main-window list filter (existing notify channel,
+      // same one the sidebar's own click uses) and the sidebar rail's own
+      // highlight (a push down through its narrow bridge — the rail has no
+      // other way to learn about a selection that didn't originate from its
+      // own click).
+      const importedCategory = project.type ?? 'miniprogram'
+      ctx.notify.hostSidebarCategorySelected(importedCategory)
+      ctx.views.hostSidebar.send('project-category-forced', { category: importedCategory })
       return project
     })
     .handle(ProjectsChannel.Remove, (_event, ...args: unknown[]) => {

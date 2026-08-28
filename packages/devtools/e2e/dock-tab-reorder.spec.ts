@@ -28,6 +28,7 @@ import {
   DEMO_APP_DIR,
   installConsoleCollector,
   readConsoleErrors,
+  findMainWindow,
 } from './helpers'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -47,7 +48,7 @@ test.beforeAll(async () => {
     args: [appPath, `--user-data-dir=${userDataDir}`],
     env: { ...process.env, NODE_ENV: 'test' },
   })
-  mainWindow = await electronApp.firstWindow()
+  mainWindow = await findMainWindow(electronApp)
   await mainWindow.waitForLoadState('domcontentloaded')
   await installConsoleCollector(electronApp)
   await electronApp.evaluate(async ({ BrowserWindow }) => {

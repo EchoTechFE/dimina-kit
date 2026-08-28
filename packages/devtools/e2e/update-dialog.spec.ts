@@ -1,7 +1,7 @@
 import { test, expect, _electron, type ElectronApplication, type Page } from '@playwright/test'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { evalInWebContentsByUrl, pollUntil } from './helpers'
+import { evalInWebContentsByUrl, pollUntil, findMainWindow } from './helpers'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -31,7 +31,7 @@ test.describe('Update dialog flow (real GitHub)', () => {
         NODE_ENV: 'test',
       },
     })
-    mainWindow = await electronApp.firstWindow()
+    mainWindow = await findMainWindow(electronApp)
     await mainWindow.waitForLoadState('domcontentloaded')
   })
 

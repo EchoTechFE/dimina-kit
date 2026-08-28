@@ -1,17 +1,23 @@
 import { app } from 'electron'
 import path from 'path'
 import fs from 'fs'
-import type { CompileConfig } from '../../../shared/types.js'
+import type { CompileConfig, ProjectType } from '../../../shared/types.js'
 import { DEFAULT_SCENE } from '../../../shared/constants.js'
 import { createLogger } from '../../utils/logger.js'
 
 const log = createLogger('projects')
+
+// Re-exported so main-side importers keep taking it from the module that owns
+// project records, while the definition stays cross-process (shared/types.ts).
+export type { ProjectType }
 
 export interface Project {
   name: string
   path: string
   lastOpened?: string | null
   compileConfig?: CompileConfig
+  /** Absent on projects added before mini-game support — treat as 'miniprogram'. */
+  type?: ProjectType
 }
 
 export interface ProjectPages {
@@ -21,6 +27,41 @@ export interface ProjectPages {
 
 export interface ProjectSettings {
   uploadWithSourceMap: boolean
+}
+
+/**
+ * Merge project.config.json + project.private.config.json (private wins),
+ * mirroring `dimina/fe/packages/compiler/src/env.js`'s `storeInfo`.
+ */
+function readProjectConfig(dirPath: string): Record<string, unknown> {
+  let merged: Record<string, unknown> = {}
+  for (const fileName of ['project.config.json', 'project.private.config.json']) {
+    const configPath = path.join(dirPath, fileName)
+    if (!fs.existsSync(configPath)) continue
+    try {
+      merged = { ...merged, ...JSON.parse(fs.readFileSync(configPath, 'utf-8')) }
+    } catch (err) {
+      log.warn(`Failed to parse ${configPath}`, err)
+    }
+  }
+  return merged
+}
+
+/**
+ * Mirrors `dimina/fe/packages/compiler/src/env.js`'s `detectRuntimeType` —
+ * an explicit `compileType` wins, else a mini-game is inferred from
+ * game.json + game.js/.ts with no app.json present.
+ */
+function detectRuntimeType(dirPath: string): ProjectType {
+  const compileType = readProjectConfig(dirPath).compileType
+  if (compileType === 'game') return 'minigame'
+  if (compileType === 'miniprogram') return 'miniprogram'
+  const hasMiniProgramConfig = fs.existsSync(path.join(dirPath, 'app.json'))
+  const hasMiniGameConfig = fs.existsSync(path.join(dirPath, 'game.json'))
+  const hasMiniGameEntry = ['game.js', 'game.ts']
+    .some((fileName) => fs.existsSync(path.join(dirPath, fileName)))
+  if (!hasMiniProgramConfig && hasMiniGameConfig && hasMiniGameEntry) return 'minigame'
+  return 'miniprogram'
 }
 
 function getProjectsFile(): string {
@@ -49,6 +90,12 @@ export function validateProjectDir(dirPath: string): string | null {
   }
   if (!fs.existsSync(dirPath)) {
     return `小程序目录不存在：${dirPath}`
+  }
+  if (detectRuntimeType(dirPath) === 'minigame') {
+    if (!fs.existsSync(path.join(dirPath, 'game.json'))) {
+      return '该目录缺少 game.json，请选择包含小游戏源码的目录'
+    }
+    return null
   }
   if (!fs.existsSync(path.join(dirPath, 'app.json'))) {
     const configPath = path.join(dirPath, 'project.config.json')
@@ -85,10 +132,11 @@ export function addProject(dirPath: string): Project {
     log.warn('Failed to read project name from config', err)
   }
 
-  const project: Project = { name, path: dirPath, lastOpened: null }
+  const type = detectRuntimeType(dirPath)
+  const project: Project = { name, path: dirPath, lastOpened: null, type }
   const idx = projects.findIndex((p) => p.path === dirPath)
   if (idx >= 0) {
-    projects[idx] = { ...projects[idx], name } as Project
+    projects[idx] = { ...projects[idx], name, type } as Project
   } else {
     projects.unshift(project)
   }
@@ -112,16 +160,26 @@ export function updateLastOpened(dirPath: string): void {
 export function getCompileConfig(dirPath: string): CompileConfig {
   const projects = load()
   const project = projects.find((p) => p.path === dirPath)
-  return (
-    project?.compileConfig ?? {
-      startPage: '',
-      scene: DEFAULT_SCENE,
-      queryParams: [],
-    }
-  )
+  if (project?.compileConfig) return project.compileConfig
+  // Default startPage to the project's real entry page (mirrors
+  // getProjectPages: 'game' for mini-games, app.json's entryPagePath for
+  // mini-programs) rather than a mini-program-only literal — the simulator
+  // URL builders' own 'pages/index/index' fallback only fires when this is
+  // still empty (unreadable/malformed manifest).
+  return {
+    startPage: getProjectPages(dirPath).entryPagePath,
+    scene: DEFAULT_SCENE,
+    queryParams: [],
+  }
 }
 
 export function getProjectPages(dirPath: string): ProjectPages {
+  if (detectRuntimeType(dirPath) === 'minigame') {
+    // Mini-games have no page router — the compiler always emits a single
+    // synthetic 'game' entry (dimina/fe/packages/compiler/src/env.js
+    // storeAppConfig), mirrored here rather than reading a nonexistent app.json.
+    return { pages: ['game'], entryPagePath: 'game' }
+  }
   const appJsonPath = path.join(dirPath, 'app.json')
   try {
     const appJson = JSON.parse(

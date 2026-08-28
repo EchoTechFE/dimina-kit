@@ -116,6 +116,17 @@ export interface CompileConfig {
   queryParams: { key: string; value: string }[]
 }
 
+/**
+ * A project's runtime kind, detected from its source layout (see
+ * `detectRuntimeType` in main's `project-repository.ts`). Lives here because
+ * the value crosses the process boundary — main detects it and pushes it to
+ * the renderer over `ViewChannel.HostSidebarCategorySelected`, and the
+ * renderer's `Project.type` carries it back in the project list. Two
+ * structurally identical unions declared on either side would type-check
+ * against each other today and silently diverge the moment one gains a member.
+ */
+export type ProjectType = 'miniprogram' | 'minigame'
+
 export interface IpcResult<T = unknown> {
   success: boolean
   data?: T

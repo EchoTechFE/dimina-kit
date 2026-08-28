@@ -18,7 +18,7 @@ import path from 'path'
 import fs from 'fs'
 import { fileURLToPath } from 'url'
 import { _electron, test, expect, type ElectronApplication, type Page } from '@playwright/test'
-import { openProjectInUI, pollUntil, ipcInvoke, RENDER_GUEST_URL_MARKER } from './helpers'
+import { openProjectInUI, pollUntil, ipcInvoke, RENDER_GUEST_URL_MARKER, findMainWindow } from './helpers'
 import { ViewChannel } from '../src/shared/ipc-channels-overlays'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -122,7 +122,7 @@ test.describe('Custom file types (.qdml/.qdss/.qds) — render + editor', () => 
       args: [path.resolve(__dirname, 'qdml-verify-entry.js'), `--user-data-dir=${userDataDir}`],
       env: { ...process.env, NODE_ENV: 'test' },
     })
-    mainWindow = await app.firstWindow()
+    mainWindow = await findMainWindow(app)
     await mainWindow.waitForLoadState('domcontentloaded')
     await app.evaluate(async ({ BrowserWindow }) => {
       const w = BrowserWindow.getAllWindows()[0]

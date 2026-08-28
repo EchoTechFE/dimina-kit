@@ -1,7 +1,7 @@
 import { test, expect, _electron, type ElectronApplication, type Page } from '@playwright/test'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { DEMO_APP_DIR, openProjectInUI, closeProject, pollUntil } from './helpers'
+import { DEMO_APP_DIR, openProjectInUI, closeProject, pollUntil, findMainWindow } from './helpers'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURES = path.resolve(__dirname, 'fixtures', 'host-toolbar')
@@ -74,7 +74,7 @@ test.describe('Host toolbar height replay: close project → reopen (determinist
 
   test.beforeAll(async () => {
     electronApp = await launchApp()
-    mainWindow = await electronApp.firstWindow()
+    mainWindow = await findMainWindow(electronApp)
     await mainWindow.waitForLoadState('domcontentloaded')
     await openProjectInUI(mainWindow, DEMO_APP_DIR, { waitMs: 20_000 })
   })
@@ -125,7 +125,7 @@ test.describe('Host toolbar height replay: cold start (advertise before any proj
 
   test.beforeAll(async () => {
     electronApp = await launchApp()
-    mainWindow = await electronApp.firstWindow()
+    mainWindow = await findMainWindow(electronApp)
     await mainWindow.waitForLoadState('domcontentloaded')
     // Deliberately NO project open here — the advertise must land while the
     // main window still shows the project list (no placeholder, no listener).

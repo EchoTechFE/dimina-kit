@@ -1,14 +1,20 @@
 import { useEffect, useMemo, useState, type ComponentProps } from 'react'
-import { onHostSidebarWidthChanged, getHostSidebarWidth, publishPlacementSnapshot } from '@/shared/api'
+import {
+  onHostSidebarWidthChanged,
+  getHostSidebarWidth,
+  onHostSidebarCategorySelected,
+} from '@/shared/api'
 import { PlacementPublisherContext } from '@/shared/placement-publisher-context'
-import { nextPlacementGeneration } from '@/shared/renderer-placement-generation'
+import { useHostSlotExtent, useScreenPlacementPublisher } from '@/shared/host-slot-hooks'
 import { ProjectList } from '@/shared/components/project-list'
+import { HOST_SIDEBAR_DEFAULT_WIDTH } from '@/shared/constants'
 import { useViewAnchor } from '@dimina-kit/view-anchor'
-import { createPlacementPublisher, type PlacementPublisher } from '@dimina-kit/electron-deck/client'
 import { VIEW_ID, VIEW_LAYER } from '../../../../../shared/view-ids'
-import type { DevtoolsExtra } from '../../../../../shared/view-ids'
+import type { ProjectType } from '@/shared/types'
 
-type ProjectListProps = ComponentProps<typeof ProjectList>
+// `category` is owned by this screen (derived from the sidebar selection
+// below), not by callers — excluded from the external prop surface.
+type ProjectListProps = Omit<ComponentProps<typeof ProjectList>, 'category'>
 
 /**
  * Wraps the (purely presentational) `ProjectList` with the host-controllable
@@ -20,33 +26,32 @@ type ProjectListProps = ComponentProps<typeof ProjectList>
  * anchor re-measures → main re-overlays the WCV.
  */
 export function ProjectListScreen(props: ProjectListProps) {
-  const [generation] = useState(() => nextPlacementGeneration())
-  const publisher = useMemo<PlacementPublisher<DevtoolsExtra>>(
-    () => createPlacementPublisher<DevtoolsExtra>({
-      generation,
-      publish: (snapshot) => { void publishPlacementSnapshot(snapshot) },
-    }),
-    [generation],
-  )
-  useEffect(() => () => publisher.dispose(), [publisher])
+  const publisher = useScreenPlacementPublisher()
 
-  const [hostSidebarWidth, setHostSidebarWidth] = useState(0)
-  useEffect(() => {
-    // Mount-time REPLAY — same TOCTOU-guarded subscribe-then-pull pattern as
-    // ProjectRuntime's host-toolbar height effect: subscribe FIRST so a push
-    // landing between pull and subscribe isn't lost, then pull the
-    // main-retained width in case it was pushed before this screen mounted.
-    let pushReceived = false
-    const unsubscribe = onHostSidebarWidthChanged((width) => {
-      pushReceived = true
-      setHostSidebarWidth(width)
-    })
-    void getHostSidebarWidth().then((width) => {
-      if (pushReceived) return
-      if (typeof width === 'number') setHostSidebarWidth(width)
-    })
-    return unsubscribe
-  }, [])
+  // Seeded with the default rail's own known width, NOT 0 — main always loads
+  // that rail into the slot itself (app.ts), and a 0 seed here would be a
+  // structural deadlock rather than a slower-resolving initial value. See
+  // `useHostSlotExtent` for the cycle. Any real width (this rail's own later
+  // report, or a downstream replacement's) still arrives and overwrites it.
+  const hostSidebarWidth = useHostSlotExtent(
+    HOST_SIDEBAR_DEFAULT_WIDTH,
+    onHostSidebarWidthChanged,
+    getHostSidebarWidth,
+  )
+
+  // Category selected in the host-sidebar's content (devtools' own default
+  // icon rail, or a downstream replacement sending on the same channel).
+  // Push-only — see `onHostSidebarCategorySelected`'s doc-comment for why no
+  // mount-time replay is needed, unlike the width channel above.
+  const [selectedCategory, setSelectedCategory] = useState<ProjectType>('miniprogram')
+  useEffect(() => onHostSidebarCategorySelected(setSelectedCategory), [])
+
+  // Absent `type` predates mini-game support — treat as 'miniprogram' (see
+  // `Project.type`'s doc-comment in shared/types.ts).
+  const filteredProjects = useMemo(
+    () => props.projects.filter((p) => (p.type ?? 'miniprogram') === selectedCategory),
+    [props.projects, selectedCategory],
+  )
 
   const hostSidebarAnchorRef = useViewAnchor({
     present: hostSidebarWidth > 0,
@@ -77,7 +82,7 @@ export function ProjectListScreen(props: ProjectListProps) {
           data-area="host-sidebar"
         />
         <div className="flex-1 min-w-0">
-          <ProjectList {...props} />
+          <ProjectList {...props} projects={filteredProjects} category={selectedCategory} />
         </div>
       </div>
     </PlacementPublisherContext.Provider>

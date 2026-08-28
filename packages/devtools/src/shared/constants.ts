@@ -37,3 +37,16 @@ export const HOST_SIDEBAR_RUNTIME_MARKER = '--dimina-host-sidebar'
  * host-dialog WebContentsView (`src/preload/runtime/host-dialog-runtime.ts`).
  */
 export const HOST_DIALOG_RUNTIME_MARKER = '--dimina-host-dialog'
+
+/**
+ * Intrinsic width (px) of devtools' own default host-sidebar content (the
+ * project-category icon rail). Single source of truth shared by the renderer
+ * (`host-sidebar-default.tsx`, which gives its `[data-host-sidebar-root]` this
+ * exact width so the width advertiser reports it) and anything in main that
+ * needs to reason about the default rail's size. The slot is NOT left pinned
+ * at this width: main pushes it once as a seed and immediately returns the
+ * slot to 'auto' (see `createDevtoolsRuntime`), so the rail — and any
+ * downstream `loadURL`/`loadFile` content that replaces it — advertises its
+ * own width from then on, exactly like any other host-sidebar content.
+ */
+export const HOST_SIDEBAR_DEFAULT_WIDTH = 56

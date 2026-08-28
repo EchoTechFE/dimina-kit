@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObjec
 import { COPY_FEEDBACK_TIMEOUT_MS } from '@/shared/constants'
 import {
   getBranding,
-  publishPlacementSnapshot,
   onHostToolbarHeightChanged,
   getHostToolbarHeight,
   openInternalDevtools,
@@ -17,11 +16,9 @@ import { DebugTabContent } from '../bottom-debug-panel/bottom-debug-panel'
 import type { BottomDebugPanelProps, DebugTabContentId } from '../bottom-debug-panel/bottom-debug-panel'
 import { useViewAnchor, createPlacementAnchor } from '@dimina-kit/view-anchor'
 import type { Placement, PlacementAnchorHandle } from '@dimina-kit/view-anchor'
-import { createPlacementPublisher, type PlacementPublisher } from '@dimina-kit/electron-deck/client'
 import { VIEW_ID, VIEW_LAYER } from '../../../../../shared/view-ids'
-import type { DevtoolsExtra } from '../../../../../shared/view-ids'
 import { PlacementPublisherContext, usePlacementPublisher } from '@/shared/placement-publisher-context'
-import { nextPlacementGeneration } from '@/shared/renderer-placement-generation'
+import { useHostSlotExtent, useScreenPlacementPublisher } from '@/shared/host-slot-hooks'
 import { DockView } from '@dimina-kit/electron-deck/dock-react'
 import { serializeLayout, setConstraint, closePanelForUser } from '@dimina-kit/electron-deck/layout'
 import type { LayoutModel, LayoutNode, PanelRegistry } from '@dimina-kit/electron-deck/layout'
@@ -82,25 +79,7 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
   // WCV anchor); the registry never changes across the component's life.
   const dockRegistry = useMemo(() => buildDockRegistry(), [])
 
-  // The single placement publisher for this project window. Each native-view
-  // anchor writes its desired placement here; the publisher coalesces one
-  // window-level snapshot per frame and forwards it to main's reconciler. A
-  // fresh generation per mount makes the reconciler drop the previous project's
-  // actual-view table. Drawn from the shared cross-screen sequence (see
-  // renderer-placement-generation.ts) so a later mount here always compares
-  // as later than any generation ProjectListScreen already sent, and vice
-  // versa — otherwise the two screens' own independent counters can send
-  // main a generation lower than one it already accepted, which the
-  // reconciler treats as permanently stale.
-  const [generation] = useState(() => nextPlacementGeneration())
-  const publisher = useMemo<PlacementPublisher<DevtoolsExtra>>(
-    () => createPlacementPublisher<DevtoolsExtra>({
-      generation,
-      publish: (snapshot) => { void publishPlacementSnapshot(snapshot) },
-    }),
-    [generation],
-  )
-  useEffect(() => () => publisher.dispose(), [publisher])
+  const publisher = useScreenPlacementPublisher()
 
   // Host-controllable toolbar WCV (sits above ProjectToolbar). Dynamic-height
   // loop: the toolbar WCV's own renderer advertises its intrinsic content
@@ -109,31 +88,14 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
   // forward anchor re-measures → main re-overlays the WCV. `present` is
   // height > 0 (a height of 0 means the host registered no toolbar, so we emit
   // ZERO and the WCV is collapsed). `deps` carries the height so the anchor
-  // re-publishes when the placeholder's rect changes.
-  const [hostToolbarHeight, setHostToolbarHeight] = useState(0)
-  useEffect(() => {
-    // Mount-time REPLAY: the height chain is push-based and the toolbar's
-    // size-advertiser deduplicates (a height already reported is never
-    // re-sent), so any push that fired before this component mounted is lost —
-    // cold start on the project list races it; close-project → reopen hits it
-    // deterministically (this component is rebuilt at 0). Main retains the
-    // last notified height; subscribe FIRST (a push landing between pull and
-    // subscribe would be lost exactly like the original bug), then pull it.
-    let pushReceived = false
-    const unsubscribe = onHostToolbarHeightChanged((height) => {
-      pushReceived = true
-      setHostToolbarHeight(height)
-    })
-    void getHostToolbarHeight().then((height) => {
-      // TOCTOU guard: a fresher push won the race while the pull was in
-      // flight — applying the stale pull result would snap the strip back.
-      if (pushReceived) return
-      // The lenient invoke resolves undefined on main-side failure: keep the
-      // placeholder collapsed at 0 and let live pushes drive it.
-      if (typeof height === 'number') setHostToolbarHeight(height)
-    })
-    return unsubscribe
-  }, [])
+  // re-publishes when the placeholder's rect changes. Seeded at 0: unlike the
+  // sidebar, nothing loads default content into this slot, so "absent until a
+  // host fills it" is the truth.
+  const hostToolbarHeight = useHostSlotExtent(
+    0,
+    onHostToolbarHeightChanged,
+    getHostToolbarHeight,
+  )
   // Forward anchor for the host-toolbar strip. useViewAnchor publishes a Bounds
   // (ZERO when absent); map it to a discriminated Placement written to the
   // central publisher (host-toolbar sits above the base row via its layer).

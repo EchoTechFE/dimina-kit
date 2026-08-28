@@ -1,7 +1,7 @@
 import { test, expect, _electron, type ElectronApplication, type Page } from '@playwright/test'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { DEMO_APP_DIR, openProjectInUI, closeProject, pollUntil } from './helpers'
+import { DEMO_APP_DIR, openProjectInUI, closeProject, pollUntil, findMainWindow } from './helpers'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURES = path.resolve(__dirname, 'fixtures', 'host-sidebar')
@@ -37,7 +37,7 @@ test.describe('Host sidebar: session-resident width advertiser (R1, inline axis)
         NODE_ENV: 'test',
       },
     })
-    mainWindow = await electronApp.firstWindow()
+    mainWindow = await findMainWindow(electronApp)
     await mainWindow.waitForLoadState('domcontentloaded')
     // No openProjectInUI here: unlike the toolbar, the sidebar placeholder is
     // already mounted on the boot screen (project list).

@@ -1,7 +1,73 @@
-import { useState } from 'react'
+import { type ReactNode, useState } from 'react'
 import { Button } from '@/shared/components/ui/button'
 import { formatLastOpened } from '@/shared/lib/utils'
 import type { Project } from '../types'
+
+/**
+ * The square preview area a card opens with. Exported because a card's height
+ * is `media + footer`, and the create card has to reach that same height on
+ * its own: it is the only item in an empty list, so there is no sibling row
+ * for the grid to stretch it against.
+ *
+ * Metrics are multiples of `--qd-card-u` (see design.css) rather than fixed
+ * pixels, so the whole card scales with its column width instead of drifting
+ * in aspect ratio as the elastic grid widens it.
+ */
+export function ProjectCardMedia({ children }: { children?: ReactNode }) {
+  return (
+    <div className="aspect-square w-full mb-[calc(-24*var(--qd-card-u))] overflow-hidden">
+      {children}
+    </div>
+  )
+}
+
+/**
+ * The metadata block under the preview — the other half of a card's height.
+ * Every slot is optional: omitted rows keep their line box (a non-breaking
+ * space) so a card with no metadata to show still measures the same as one
+ * that has it. See `ProjectCardMedia` for why that matters.
+ */
+export function ProjectCardFooter({
+  icon,
+  name,
+  path,
+  meta,
+}: {
+  icon?: ReactNode
+  name?: string
+  path?: string
+  meta?: ReactNode
+}) {
+  return (
+    <div className="relative flex flex-col gap-[calc(12*var(--qd-card-u))] px-[calc(16*var(--qd-card-u))] pb-[calc(16*var(--qd-card-u))] shrink-0">
+      <div
+        className={`size-[calc(48*var(--qd-card-u))] shrink-0 rounded-[var(--qd-radius-md)] flex items-center justify-center text-[calc(20*var(--qd-card-u))] font-medium leading-none ${
+          icon ? 'bg-[var(--qd-primary)] text-[color:var(--qd-on-solid)]' : ''
+        }`}
+        aria-hidden="true"
+      >
+        {icon}
+      </div>
+      <div className="flex flex-col gap-[calc(4*var(--qd-card-u))]">
+        <div
+          className="text-[calc(15*var(--qd-card-u))] font-medium leading-[calc(22*var(--qd-card-u))] text-text truncate"
+          title={name}
+        >
+          {name ?? ' '}
+        </div>
+        <div
+          className="text-[calc(12*var(--qd-card-u))] leading-[calc(16*var(--qd-card-u))] text-text-secondary truncate"
+          title={path}
+        >
+          {path ?? ' '}
+        </div>
+      </div>
+      <div className="text-[calc(12*var(--qd-card-u))] leading-[calc(16*var(--qd-card-u))] text-text-secondary">
+        {meta ?? ' '}
+      </div>
+    </div>
+  )
+}
 
 /** First grapheme of the project name, upper-cased for Latin script — used as
  * a text-logo fallback when the project has no real icon/thumbnail. */
@@ -24,45 +90,25 @@ export function ProjectCard({
   const [hovered, setHovered] = useState(false)
   return (
     <div
-      className="relative flex flex-col min-w-[240px] w-full bg-surface border border-border rounded-[var(--qd-radius-xl)] overflow-hidden cursor-pointer transition-all duration-150 hover:border-[var(--qd-primary)] hover:shadow-[var(--qd-shadow-md)]"
+      data-qd-card
+      className="relative flex flex-col min-w-[calc(var(--qd-card-w-ref)*1px)] w-full bg-surface border border-border rounded-[var(--qd-radius-xl)] overflow-hidden cursor-pointer transition-all duration-150 hover:border-[var(--qd-primary)] hover:shadow-[var(--qd-shadow-md)]"
       onClick={() => onOpen(p)}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      {thumbnail ? (
-        <img
-          src={thumbnail}
-          className="aspect-square w-full object-cover object-top mb-[-24px] bg-bg"
-          alt=""
-        />
-      ) : (
-        <div className="aspect-square w-full mb-[-24px] bg-bg" />
-      )}
-      <div className="relative flex flex-col gap-3 px-4 pb-4 shrink-0">
-        <div
-          className="size-12 shrink-0 rounded-[var(--qd-radius-md)] bg-[var(--qd-primary)] flex items-center justify-center text-[20px] font-medium leading-none text-[color:var(--qd-on-solid)]"
-          aria-hidden="true"
-        >
-          {initialOf(p.name)}
-        </div>
-        <div className="flex flex-col gap-1">
-          <div
-            className="text-[15px] font-medium leading-[22px] text-text truncate"
-            title={p.name}
-          >
-            {p.name}
-          </div>
-          <div
-            className="text-[12px] leading-4 text-text-secondary truncate"
-            title={p.path}
-          >
-            {p.path}
-          </div>
-        </div>
-        <div className="text-[12px] leading-4 text-text-secondary">
-          {formatLastOpened(p.lastOpened)}
-        </div>
-      </div>
+      <ProjectCardMedia>
+        {thumbnail ? (
+          <img src={thumbnail} className="size-full object-cover object-top bg-bg" alt="" />
+        ) : (
+          <div className="size-full bg-bg" />
+        )}
+      </ProjectCardMedia>
+      <ProjectCardFooter
+        icon={initialOf(p.name)}
+        name={p.name}
+        path={p.path}
+        meta={formatLastOpened(p.lastOpened)}
+      />
       {hovered && (
         <Button
           variant="danger"

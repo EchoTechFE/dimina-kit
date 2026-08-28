@@ -36,7 +36,6 @@ vi.mock('electron', () => ({
 }))
 
 vi.mock('./host-toolbar-advertiser.js', () => ({
-  installHostToolbarAdvertiser: vi.fn(() => () => {}),
   installHostToolbarAdvertiserWhenReady: vi.fn(),
 }))
 
