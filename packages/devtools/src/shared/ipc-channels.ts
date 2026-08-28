@@ -267,6 +267,8 @@ export const ProjectsChannel = {
   ListTemplates: 'projects:listTemplates',
   /** Host-supplied create-project dialog hook (returns input or null). */
   OpenCreateDialog: 'projects:openCreateDialog',
+  /** Host-supplied edit-project dialog hook; `null` means no hook is configured. */
+  OpenEditDialog: 'projects:openEditDialog',
   /** Server-side scaffold + register (delegates to create-project-service). */
   Create: 'projects:create',
   /** Default values used to pre-fill the create-project dialog (baseDir). */

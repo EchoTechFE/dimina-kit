@@ -15,6 +15,7 @@ import {
   onWindowNavigateBack,
   onWindowOpenProject,
   openCreateProjectDialog,
+  openEditProjectDialog,
   removeProject,
   showProjectCreateDialog,
   updateProject,
@@ -172,6 +173,37 @@ export default function Main() {
     await loadProjects()
   }
 
+  // First try the host-supplied dialog. `reply === null` means no hook is
+  // configured, so fall back to the built-in dialog. A configured hook
+  // always resolves `{ result }`, even when the user cancelled it
+  // (`result: null`) — that case must NOT fall through to the built-in
+  // dialog, unlike the create flow's collapsed-to-null wire shape.
+  async function handleEdit(p: Project) {
+    let reply: Awaited<ReturnType<typeof openEditProjectDialog>>
+    try {
+      reply = await openEditProjectDialog(p.path)
+    } catch {
+      reply = null
+    }
+    if (!reply) {
+      setEditingProject(p)
+      return
+    }
+    const result = reply.result
+    if (!result) return
+    if ('updated' in result) {
+      await loadProjects()
+      return
+    }
+    try {
+      await updateProject(p.path, result)
+    } catch (err) {
+      console.warn('[projects] failed to update project', err)
+      return
+    }
+    await loadProjects()
+  }
+
   async function handleEditSubmit(patch: ProjectPatch) {
     const target = editingProject
     if (!target) return
@@ -200,7 +232,7 @@ export default function Main() {
           onAdd={handleAdd}
           onCreate={handleCreate}
           onOpen={handleOpen}
-          onEdit={setEditingProject}
+          onEdit={handleEdit}
           onRemove={handleRemove}
           thumbnails={thumbnails}
         />

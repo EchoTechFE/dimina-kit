@@ -268,6 +268,9 @@ export const ProjectsUpdateSchema = z.tuple([
 /** projects:remove — absolute project directory path. */
 export const ProjectsRemoveSchema = z.tuple([AbsolutePath])
 
+/** projects:openEditDialog — absolute project directory path. */
+export const ProjectsOpenEditDialogSchema = z.tuple([AbsolutePath])
+
 /**
  * workbenchSettings:save — full WorkbenchSettings object.
  *

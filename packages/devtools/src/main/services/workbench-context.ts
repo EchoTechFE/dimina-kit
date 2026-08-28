@@ -54,10 +54,14 @@ import {
 import { resolveTemplates, sanitizeTemplates } from './projects/templates.js'
 import { BUILTIN_TEMPLATES } from './projects/builtin-templates.js'
 import type {
+  Project,
   ProjectsProvider,
   ProjectTemplate,
 } from './projects/types.js'
-import type { CustomCreateProjectDialogResult } from '../../shared/types.js'
+import type {
+  CustomCreateProjectDialogResult,
+  CustomEditProjectDialogResult,
+} from '../../shared/types.js'
 import { runtimeAssetPaths } from '../utils/paths.js'
 
 /**
@@ -143,6 +147,18 @@ export interface WorkbenchContext extends RuntimeContext {
     parentWindow: BrowserWindow
     templates: ProjectTemplate[]
   }) => Promise<CustomCreateProjectDialogResult>
+
+  /**
+   * Optional host hook for the "编辑项目" dialog. When present, the
+   * `projects:openEditDialog` IPC runs it and wraps whatever it resolves to
+   * as `{ result }`; when absent, the IPC returns `null` and the renderer
+   * shows the built-in dialog. `project` comes from `workspace.listProjects`,
+   * not the renderer's IPC args.
+   */
+  customEditProjectDialog?: (ctx: {
+    parentWindow: BrowserWindow
+    project: Project
+  }) => Promise<CustomEditProjectDialogResult>
 
   /**
    * Host permission gate consulted by `workspace.openProject` BEFORE any side
@@ -303,8 +319,9 @@ export interface WorkbenchContext extends RuntimeContext {
  * because their shapes intentionally differ from the config:
  *  - `preloadPath` / `rendererDir` are REQUIRED here (the caller resolves the
  *    defaults before constructing the context) but optional in the config;
- *  - `projectsProvider` / `projectTemplates` / `customCreateProjectDialog` use
- *    the main-process types, not the structural mirrors in `shared/types`.
+ *  - `projectsProvider` / `projectTemplates` / `customCreateProjectDialog` /
+ *    `customEditProjectDialog` use the main-process types, not the structural
+ *    mirrors in `shared/types`.
  */
 export interface CreateContextOptions
   extends Pick<WorkbenchConfig, 'adapter' | 'apiNamespaces' | 'appName' | 'fileTypes'> {
@@ -320,6 +337,8 @@ export interface CreateContextOptions
   builtinTemplates?: 'all' | 'none' | readonly string[]
   /** Host-supplied "新建项目" dialog hook. */
   customCreateProjectDialog?: WorkbenchContext['customCreateProjectDialog']
+  /** Host-supplied "编辑项目" dialog hook. */
+  customEditProjectDialog?: WorkbenchContext['customEditProjectDialog']
   /** Host permission gate run before a project opens (throw to veto). */
   onBeforeOpenProject?: WorkbenchContext['onBeforeOpenProject']
 }
@@ -390,6 +409,7 @@ export function createWorkbenchContext(opts: CreateContextOptions): WorkbenchCon
     opts.builtinTemplates ?? 'all',
   )
   ctx.customCreateProjectDialog = opts.customCreateProjectDialog
+  ctx.customEditProjectDialog = opts.customEditProjectDialog
   ctx.onBeforeOpenProject = opts.onBeforeOpenProject
   ctx.workspace = createWorkspaceService(ctx)
   ctx.senderPolicy = createWorkbenchSenderPolicy(ctx)

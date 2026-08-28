@@ -374,6 +374,32 @@ export interface WorkbenchAppConfig extends WorkbenchConfig {
     parentWindow: import('electron').BrowserWindow
     templates: ProjectTemplate[]
   }) => Promise<CustomCreateProjectDialogResult>
+  /**
+   * Host-supplied "编辑项目" dialog. When provided, the renderer routes the
+   * project card's edit action through IPC into this main-process hook
+   * instead of showing the built-in dialog. `project` is read from the
+   * current project-list record (not whatever the renderer happened to have
+   * in state), so the host always sees devtools' own authoritative record.
+   *
+   * Return either:
+   *  - `null` — user cancelled; devtools does nothing.
+   *  - `{ name?, iconUrl? }` — the host collected an edit; devtools applies
+   *    it via `workspace.updateProject`, the same path the built-in dialog's
+   *    submit uses.
+   *  - `{ updated: EditableProject }` — the host has ALREADY persisted the
+   *    change itself; devtools just refreshes the list.
+   *
+   * Unlike `customCreateProjectDialog`, "no hook configured" and "user
+   * cancelled" are NOT both collapsed to `null` on the wire: the create flow
+   * does that and it means a cancelled host dialog falls through into the
+   * built-in one right after. The `projects:openEditDialog` IPC instead
+   * returns `null` only when no hook is configured, and wraps the hook's
+   * result as `{ result }` otherwise — see `OpenEditProjectDialogReply`.
+   */
+  customEditProjectDialog?: (ctx: {
+    parentWindow: import('electron').BrowserWindow
+    project: EditableProject
+  }) => Promise<CustomEditProjectDialogResult>
 }
 
 /**
@@ -395,3 +421,36 @@ export type CustomCreateProjectDialogResult =
       }
     }
   | CreateProjectInput
+
+/**
+ * Structural minimum devtools needs to render a project-list card, passed to
+ * `customEditProjectDialog` and returned as its `updated` variant. Mirrors
+ * `Project` in `./projects-provider`.
+ */
+export interface EditableProject {
+  name: string
+  path: string
+  iconUrl?: string
+  lastOpened?: string | null
+}
+
+/**
+ * Discriminated return of `customEditProjectDialog`. `null` = cancelled.
+ * `{ updated }` = the host already persisted the edit; devtools just
+ * refreshes. Otherwise a `{ name?, iconUrl? }` patch devtools applies via
+ * `workspace.updateProject`.
+ */
+export type CustomEditProjectDialogResult =
+  | null
+  | { updated: EditableProject }
+  | { name?: string; iconUrl?: string }
+
+/**
+ * Wire reply for `projects:openEditDialog`. `null` means the host configured
+ * no `customEditProjectDialog` hook at all — the renderer should show the
+ * built-in dialog. When a hook IS configured, the IPC always resolves
+ * `{ result }` even if `result` is `null` (user cancelled the host dialog),
+ * so the renderer can tell "no hook" apart from "hook ran, user cancelled"
+ * and skip the built-in fallback in the latter case.
+ */
+export type OpenEditProjectDialogReply = null | { result: CustomEditProjectDialogResult }
