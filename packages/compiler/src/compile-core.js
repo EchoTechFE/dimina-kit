@@ -2,6 +2,8 @@
 // worker_threads) against a caller-injected fs. web-compiler owns NO fs
 // implementation — the host passes a node:fs replacement (e.g. memfs) already
 // seeded with the project source under workPath.
+import os from 'node:os'
+import process from 'node:process'
 import { setFs, resetFs } from './shims/fs.js'
 
 // The compiler source lives in dimina-kit's `dimina` submodule. This package
@@ -10,6 +12,7 @@ import { setFs, resetFs } from './shims/fs.js'
 // bundle time (see scripts/build-compiler.js).
 import {
   storeInfo, resetStoreInfo, getPages, getAppId, getAppName, getWorkPath, getTargetPath,
+  getAppStyleScopeId,
 } from '../../../dimina/fe/packages/compiler/src/env.js'
 import { createDist } from '../../../dimina/fe/packages/compiler/src/common/publish.js'
 import { compileConfig } from '../../../dimina/fe/packages/compiler/src/core/index.js'
@@ -36,7 +39,7 @@ import { __resetAssets } from '../../../dimina/fe/packages/compiler/src/common/u
 // The per-stage export surfaces (compileJS/writeCompileRes/__reset*/__setEnableSourcemap
 // are partly appended at bundle time — see build-compiler.js exportAppend):
 //   logic: compileJS, writeCompileRes, __resetLogicState, __setEnableSourcemap
-//   view:  compileML, __resetViewState
+//   view:  compileML, __resetViewState, __setEnableSourcemap
 //   style: compileSS, __resetStyleState
 const STAGE_IMPORTERS = {
   logic: () => import('../../../dimina/fe/packages/compiler/src/core/logic-compiler.js'),
@@ -308,13 +311,13 @@ async function runViewStage(pages, progress) {
   }
 }
 
-async function runStyleStage(pages, progress) {
+async function runStyleStage(pages, progress, { sourcemap = false } = {}) {
   const { compileSS } = await loadStageModule('style')
   // app.css is prepended for the main package, matching the original ordering.
-  const styleMain = [{ path: 'app', id: '' }, ...pages.mainPages]
-  await compileSS(styleMain, null, progress)
+  const styleMain = [{ path: 'app', id: getAppStyleScopeId() }, ...pages.mainPages]
+  await compileSS(styleMain, null, progress, { sourcemap })
   for (const [root, sub] of Object.entries(pages.subPages)) {
-    await compileSS(sub.info, root, progress)
+    await compileSS(sub.info, root, progress, { sourcemap })
   }
 }
 
@@ -331,8 +334,9 @@ export const STAGE_NAMES = Object.keys(STAGES)
  * Run ONE stage's compile functions against whatever fs backend is already active
  * (the fs shim for the memfs path, or native node:fs when this module is bundled
  * without the fs alias for the Node disk pool). Assumes the env singletons are
- * already restored (caller does `resetStoreInfo`). Threads `sourcemap` into the
- * logic stage (view/style have no sourcemap — a dmcc limitation, not ours). Kept
+ * already restored (caller does `resetStoreInfo`). Threads `sourcemap` into all
+ * three stages: logic and view read a module-level flag (dmcc sets it from its
+ * worker message, which this path never sends), style takes it per call. Kept
  * separate from `compileStage` so the Node stage worker can drive it directly with
  * native fs, no shim.
  * @param {'logic'|'view'|'style'} stage
@@ -342,10 +346,23 @@ export const STAGE_NAMES = Object.keys(STAGES)
 export async function runStage(stage, pages, { sourcemap = false } = {}) {
   const run = STAGES[stage]
   if (!run) throw new Error(`[compiler] unknown compile stage "${stage}" (expected ${STAGE_NAMES.join('/')})`)
-  // Only the logic compiler owns a sourcemap switch (view/style never read it), so the
-  // flag lives on the lazily-loaded logic module and is set right before its stage runs.
-  if (stage === 'logic') (await loadStageModule('logic')).__setEnableSourcemap(!!sourcemap)
-  await run(pages, makeProgress())
+  if (stage === 'logic' || stage === 'view') {
+    (await loadStageModule(stage)).__setEnableSourcemap(!!sourcemap)
+  }
+  await run(pages, makeProgress(), { sourcemap })
+}
+
+/**
+ * `storeInfo` allocates the staging dir with `fs.mkdtempSync` under
+ * `GITHUB_WORKSPACE || os.tmpdir()`. That root exists on a real disk but not in
+ * an injected in-memory fs, where mkdtemp then fails with ENOENT. Create it in
+ * the injected fs first. This module is bundled with the same `node:os` /
+ * `node:process` aliases as the compiler's own env.js, so both sides resolve the
+ * same root (real tmpdir in the node build, '/tmp' in the browser build).
+ */
+function ensureStagingRoot(fs) {
+  const root = process.env.GITHUB_WORKSPACE || os.tmpdir()
+  fs.mkdirSync(root, { recursive: true })
 }
 
 /**
@@ -365,6 +382,7 @@ export async function setupCompile({ fs, workPath = '/work', options = {}, npmSc
   assertFs(fs)
   // Guarantee a usable appId regardless of whether the project declared one.
   ensureAppIdFs(fs, `${workPath}/project.config.json`)
+  ensureStagingRoot(fs)
   setFs(fs)
   try {
     const store = storeInfo(workPath, options)

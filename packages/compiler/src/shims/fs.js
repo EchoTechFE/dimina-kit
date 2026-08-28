@@ -26,6 +26,7 @@ export const existsSync = call('existsSync')
 export const readFileSync = call('readFileSync')
 export const writeFileSync = call('writeFileSync')
 export const mkdirSync = call('mkdirSync')
+export const mkdtempSync = call('mkdtempSync')
 export const rmSync = call('rmSync')
 export const rmdirSync = call('rmdirSync')
 export const readdirSync = call('readdirSync')
@@ -52,7 +53,7 @@ export const promises = new Proxy({}, {
 })
 
 const fs = {
-  existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, rmdirSync,
+  existsSync, readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync, rmdirSync,
   readdirSync, copyFileSync, statSync, lstatSync, unlinkSync, renameSync,
   appendFileSync, realpathSync, accessSync, readlinkSync, watch, promises,
 }

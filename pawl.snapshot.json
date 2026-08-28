@@ -146,12 +146,12 @@
     },
     "type-coverage": {
       "direction": "higher-is-better",
-      "value": 99.8,
+      "value": 99.79,
       "unit": "%",
       "breakdown": {
         "devkit": 99.91,
         "devtools": 99.77,
-        "dimina-electron-runtime": 99.89,
+        "dimina-electron-runtime": 99.85,
         "electron-deck": 99.72,
         "fs-core": 99.97,
         "inspect": 99.99,

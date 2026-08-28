@@ -8,7 +8,10 @@
 //   - the logic worker loads esbuild + oxc-parser, never sass/cssnano/less/
 //     @vue/compiler-sfc.
 //   - the view worker loads @vue/compiler-sfc, never sass/cssnano/less.
-//   - the style worker loads sass, never esbuild/oxc-parser.
+//   - the style worker loads sass, never esbuild. oxc-parser is NOT part of that
+//     boundary: env.js (imported by every stage) parses component scripts with
+//     `parseSync` to read their styleIsolation, so its native binding is present
+//     in every realm regardless of stage.
 //
 // The probe reads each realm's CJS require cache, so only packages with a CJS
 // footprint are observable: cheerio resolves pure-ESM and never appears there
@@ -93,7 +96,6 @@ isLoaded('view', '@vue/compiler-sfc')
 
 isLoaded('style', 'sass')
 notLoaded('style', 'esbuild')
-notLoaded('style', 'oxc-parser')
 
 // --- condition 4: a freshly spawned pool preloads by stage identity, before any build ---
 const coldPool = makePool()
