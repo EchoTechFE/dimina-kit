@@ -97,6 +97,67 @@ describe('workspace-service ↔ ProjectsProvider injection', () => {
     expect(injected.validateProjectDir).toHaveBeenCalledWith('/proj/mock')
   })
 
+  it('delegates updateProject to the injected provider', async () => {
+    const sampleProject: Project = {
+      name: 'mock-app',
+      path: '/proj/mock',
+      lastOpened: null,
+    }
+    const injected = {
+      listProjects: vi.fn(() => [sampleProject]),
+      addProject: vi.fn((p: string) => ({ ...sampleProject, path: p })),
+      removeProject: vi.fn(),
+      updateProject: vi.fn((p: string, patch: { name?: string }) => ({
+        ...sampleProject,
+        path: p,
+        name: patch.name ?? sampleProject.name,
+      })),
+    }
+
+    const ctx = createWorkbenchContext({
+      mainWindow: fakeMainWindow(),
+      preloadPath: '/fake/preload.js',
+      rendererDir: '/fake/renderer',
+      projectsProvider: injected,
+    })
+
+    const updated = await ctx.workspace.updateProject('/proj/mock', { name: 'renamed' })
+    expect(injected.updateProject).toHaveBeenCalledWith('/proj/mock', { name: 'renamed' })
+    expect(updated.name).toBe('renamed')
+  })
+
+  // `updateProject` is optional on ProjectsProvider. A host that omits it must
+  // still get a resolved record back — the renderer refreshes the list from
+  // that call, so throwing (or returning a locally-patched copy the next
+  // listProjects contradicts) would leave the UI showing an edit that was
+  // never stored.
+  it('updateProject is optional: absence returns the record unchanged, unknown paths still throw', async () => {
+    const sampleProject: Project = {
+      name: 'mock-app',
+      path: '/proj/mock',
+      lastOpened: null,
+    }
+    const injected = {
+      listProjects: vi.fn(() => [sampleProject]),
+      addProject: vi.fn((p: string) => ({ ...sampleProject, path: p })),
+      removeProject: vi.fn(),
+    }
+
+    const ctx = createWorkbenchContext({
+      mainWindow: fakeMainWindow(),
+      preloadPath: '/fake/preload.js',
+      rendererDir: '/fake/renderer',
+      projectsProvider: injected,
+    })
+
+    expect(await ctx.workspace.updateProject('/proj/mock', { name: 'renamed' })).toEqual(
+      sampleProject,
+    )
+    await expect(
+      ctx.workspace.updateProject('/proj/gone', { name: 'renamed' }),
+    ).rejects.toThrow()
+  })
+
   it('hasProject is derived from the injected provider listProjects (no separate hasProject call required)', async () => {
     const injected = {
       listProjects: vi.fn(() => [

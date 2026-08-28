@@ -12,6 +12,7 @@ export function ProjectList({
   onAdd,
   onCreate,
   onOpen,
+  onEdit,
   onRemove,
   thumbnails,
 }: {
@@ -26,6 +27,8 @@ export function ProjectList({
    */
   onCreate?: () => void
   onOpen: (p: Project) => void
+  /** Omitted by hosts that don't expose the edit dialog — the pencil is then hidden. */
+  onEdit?: (p: Project) => void
   onRemove: (p: Project) => void
   thumbnails?: Record<string, string | null>
 }) {
@@ -92,6 +95,7 @@ export function ProjectList({
                 key={p.path}
                 project={p}
                 onOpen={onOpen}
+                onEdit={onEdit}
                 onRemove={onRemove}
                 thumbnail={thumbnails?.[p.path]}
               />

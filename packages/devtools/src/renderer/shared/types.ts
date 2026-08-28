@@ -16,4 +16,17 @@ export interface Project {
   lastOpened?: string | null
   /** Absent on projects added before mini-game support — treat as 'miniprogram'. */
   type?: ProjectType
+  /**
+   * User-supplied icon for the project card. Absent means the card falls back
+   * to the first character of `name`.
+   */
+  iconUrl?: string
+}
+
+/** The subset of a project record the edit dialog may change — `path` is the
+ * record's identity and stays read-only there. */
+export interface ProjectPatch {
+  name?: string
+  /** Empty string clears the icon and restores the name-initial fallback. */
+  iconUrl?: string
 }

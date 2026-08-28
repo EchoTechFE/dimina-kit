@@ -9,7 +9,7 @@ import type {
   ProjectPages,
   ProjectSettings,
 } from '../projects/project-repository.js'
-import type { ProjectsProvider } from '../projects/types.js'
+import type { ProjectPatch, ProjectsProvider } from '../projects/types.js'
 import { DEFAULT_COMPILE_CONFIG } from '../projects/types.js'
 import {
   clearSimulatorServicewechatReferer,
@@ -52,6 +52,7 @@ export interface WorkspaceService {
   listProjects(): Promise<Project[]>
   addProject(dirPath: string): Promise<Project>
   removeProject(dirPath: string): Promise<void>
+  updateProject(dirPath: string, patch: ProjectPatch): Promise<Project>
   hasProject(dirPath: string): Promise<boolean>
   validateProjectDir(dirPath: string): Promise<string | null>
 
@@ -262,6 +263,16 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
     addProject: async (dirPath) => provider.addProject(dirPath),
     removeProject: async (dirPath) => {
       await provider.removeProject(dirPath)
+    },
+    updateProject: async (dirPath, patch) => {
+      // A provider without `updateProject` cannot persist the edit; return the
+      // record as it stands rather than inventing a patched copy the next
+      // `listProjects` would contradict.
+      const projects = await provider.listProjects()
+      const existing = projects.find((p) => p.path === dirPath)
+      if (!existing) throw new Error(`No such project: ${dirPath}`)
+      if (!provider.updateProject) return existing
+      return provider.updateProject(dirPath, patch)
     },
     hasProject: async (dirPath) => {
       const projects = await provider.listProjects()

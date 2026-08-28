@@ -1,4 +1,4 @@
-import type { CompileConfig, Project } from '@/shared/types'
+import type { CompileConfig, Project, ProjectPatch } from '@/shared/types'
 import type { CustomCreateProjectDialogResult } from '../../../shared/types'
 import type { ProjectCreateDefaults } from '../../../shared/ipc-channels'
 import { ProjectsChannel, DialogChannel, ProjectChannel, SessionChannel } from '../../../shared/ipc-channels'
@@ -68,6 +68,18 @@ export function addProject(dirPath: string): Promise<Project> {
 /** Remove a project (by its root path) from the workspace store. */
 export function removeProject(projectPath: string): Promise<void> {
   return invoke<void>(ProjectsChannel.Remove, projectPath)
+}
+
+/**
+ * Apply an edit (name / icon) to an existing project record. Strict: the
+ * caller shows the failure instead of silently keeping the old values on
+ * screen. `projectPath` identifies the record and is not itself editable.
+ */
+export function updateProject(
+  projectPath: string,
+  patch: ProjectPatch,
+): Promise<Project> {
+  return invokeStrict<Project>(ProjectsChannel.Update, projectPath, patch)
 }
 
 /** Start a compile session for the given project. */

@@ -4,6 +4,7 @@ import { ProjectsChannel, DialogChannel } from '../../shared/ipc-channels.js'
 import {
   ProjectsAddSchema,
   ProjectsRemoveSchema,
+  ProjectsUpdateSchema,
 } from '../../shared/ipc-schemas.js'
 // eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
 import type { WorkbenchContext } from '../services/workbench-context.js'
@@ -83,6 +84,14 @@ export function registerProjectsIpc(ctx: ProjectsIpcCtx): Disposable {
     .handle(ProjectsChannel.Remove, (_event, ...args: unknown[]) => {
       const [dirPath] = validate(ProjectsChannel.Remove, ProjectsRemoveSchema, args)
       return ctx.workspace.removeProject(dirPath)
+    })
+    .handle(ProjectsChannel.Update, (_event, ...args: unknown[]) => {
+      const [dirPath, patch] = validate(
+        ProjectsChannel.Update,
+        ProjectsUpdateSchema,
+        args,
+      )
+      return ctx.workspace.updateProject(dirPath, patch)
     })
     // ── template catalog + create flow ──
     .handle(ProjectsChannel.ListTemplates, () => {

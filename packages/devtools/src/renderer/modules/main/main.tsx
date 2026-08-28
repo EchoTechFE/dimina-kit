@@ -17,8 +17,10 @@ import {
   openCreateProjectDialog,
   removeProject,
   showProjectCreateDialog,
+  updateProject,
 } from '@/shared/api'
-import type { Project } from '@/shared/types'
+import { ProjectEditDialog } from '@/shared/components/project-edit-dialog'
+import type { Project, ProjectPatch } from '@/shared/types'
 
 const DEFAULT_APP_NAME = 'Dimina DevTools'
 
@@ -27,6 +29,7 @@ export default function Main() {
   const [currentProject, setCurrentProject] = useState<Project | null>(null)
   const [projectList, setProjectList] = useState<Project[]>([])
   const [thumbnails, setThumbnails] = useState<Record<string, string | null>>({})
+  const [editingProject, setEditingProject] = useState<Project | null>(null)
   const [appName, setAppName] = useState(DEFAULT_APP_NAME)
 
   async function loadProjects() {
@@ -169,6 +172,21 @@ export default function Main() {
     await loadProjects()
   }
 
+  async function handleEditSubmit(patch: ProjectPatch) {
+    const target = editingProject
+    if (!target) return
+    try {
+      await updateProject(target.path, patch)
+    } catch (err) {
+      // Keep the dialog open with the user's input so a rejected edit (empty
+      // name, record gone) can be corrected instead of silently discarded.
+      console.warn('[projects] failed to update project', err)
+      return
+    }
+    setEditingProject(null)
+    await loadProjects()
+  }
+
   function handleOpen(p: Project) {
     setCurrentProject(p)
     setPage('project')
@@ -176,14 +194,23 @@ export default function Main() {
 
   if (page === 'list') {
     return (
-      <ProjectListScreen
-        projects={projectList}
-        onAdd={handleAdd}
-        onCreate={handleCreate}
-        onOpen={handleOpen}
-        onRemove={handleRemove}
-        thumbnails={thumbnails}
-      />
+      <>
+        <ProjectListScreen
+          projects={projectList}
+          onAdd={handleAdd}
+          onCreate={handleCreate}
+          onOpen={handleOpen}
+          onEdit={setEditingProject}
+          onRemove={handleRemove}
+          thumbnails={thumbnails}
+        />
+        <ProjectEditDialog
+          open={editingProject !== null}
+          project={editingProject}
+          onSubmit={handleEditSubmit}
+          onCancel={() => setEditingProject(null)}
+        />
+      </>
     )
   }
 

@@ -235,6 +235,7 @@ export interface ProjectsProvider {
   validateProjectDir?(dirPath: string): string | null
   addProject(dirPath: string): unknown
   removeProject(dirPath: string): void | Promise<void>
+  updateProject?(dirPath: string, patch: unknown): unknown
   updateLastOpened?(dirPath: string): void | Promise<void>
   getCompileConfig?(dirPath: string): unknown
   saveCompileConfig?(dirPath: string, cfg: unknown): void | Promise<void>

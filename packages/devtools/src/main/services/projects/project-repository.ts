@@ -18,6 +18,23 @@ export interface Project {
   compileConfig?: CompileConfig
   /** Absent on projects added before mini-game support — treat as 'miniprogram'. */
   type?: ProjectType
+  /**
+   * User-supplied icon for the project card. Absent means the card falls back
+   * to the first character of `name`.
+   */
+  iconUrl?: string
+}
+
+/**
+ * The subset of a project record the user may edit after import. `path` is the
+ * record's identity (it keys every other per-project store — compile config,
+ * thumbnail, watcher) and is deliberately not patchable: pointing an existing
+ * record at another directory is an import, not an edit.
+ */
+export interface ProjectPatch {
+  name?: string
+  /** Empty string clears the icon and restores the name-initial fallback. */
+  iconUrl?: string
 }
 
 export interface ProjectPages {
@@ -45,6 +62,56 @@ function readProjectConfig(dirPath: string): Record<string, unknown> {
     }
   }
   return merged
+}
+
+/**
+ * The project's display name as the project itself carries it.
+ *
+ * `projectname` lives in the merged config with the private file winning, and
+ * is URL-encoded when it leaves ASCII — WeChat DevTools 36.6.0 writes
+ * `"projectname": "%E6%BD%AE%E7%8E%A9%E6%97%8F"` and its own project list only
+ * mirrors that value. ASCII names encode to themselves, so plain values that
+ * were written by hand round-trip unchanged.
+ *
+ * Returns null when the config carries no usable name, leaving the caller to
+ * fall back to the directory name.
+ */
+function readProjectName(dirPath: string): string | null {
+  const raw = readProjectConfig(dirPath).projectname
+  if (typeof raw !== 'string' || !raw.trim()) return null
+  try {
+    return decodeURIComponent(raw)
+  } catch {
+    // A literal '%' that isn't a valid escape — keep the author's text.
+    return raw
+  }
+}
+
+/**
+ * Persist the display name into `project.private.config.json`, the per-
+ * developer half of the project config (WeChat DevTools writes the name there
+ * too, leaving the shared `project.config.json` alone).
+ *
+ * This is what makes the config — not our list file — the single owner of the
+ * name: `addProject` re-reads it, so re-importing a directory restores the
+ * user's rename instead of resetting it.
+ */
+function writeProjectName(dirPath: string, name: string): void {
+  const configPath = path.join(dirPath, 'project.private.config.json')
+  let config: Record<string, unknown> = {}
+  if (fs.existsSync(configPath)) {
+    try {
+      config = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
+    } catch {
+      // Refuse rather than overwrite: this file also holds the user's IDE
+      // settings and compile conditions, which a blind rewrite would drop.
+      throw new Error(`无法重命名：${configPath} 不是合法 JSON`)
+    }
+  }
+  fs.writeFileSync(
+    configPath,
+    JSON.stringify({ ...config, projectname: encodeURIComponent(name) }, null, 2),
+  )
 }
 
 /**
@@ -121,16 +188,9 @@ export function hasProject(dirPath: string): boolean {
 
 export function addProject(dirPath: string): Project {
   const projects = load()
-  let name = path.basename(dirPath)
-  try {
-    const configPath = path.join(dirPath, 'project.config.json')
-    if (fs.existsSync(configPath)) {
-      const cfg = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
-      if (cfg.projectname) name = cfg.projectname
-    }
-  } catch (err) {
-    log.warn('Failed to read project name from config', err)
-  }
+  // The config is the name's owner, so re-adding a directory picks up a rename
+  // the user made here rather than reverting it.
+  const name = readProjectName(dirPath) ?? path.basename(dirPath)
 
   const type = detectRuntimeType(dirPath)
   const project: Project = { name, path: dirPath, lastOpened: null, type }
@@ -146,6 +206,42 @@ export function addProject(dirPath: string): Project {
 
 export function removeProject(dirPath: string): void {
   save(load().filter((p) => p.path !== dirPath))
+}
+
+/**
+ * Apply a user edit to the record at `dirPath`. Returns the updated record, or
+ * `null` when no record matches — callers decide whether a missing project is
+ * an error (the IPC path) or a no-op.
+ *
+ * A name change is written through to the project's own config (see
+ * `writeProjectName`); the icon lives only in our list.
+ */
+export function updateProject(dirPath: string, patch: ProjectPatch): Project | null {
+  const projects = load()
+  const idx = projects.findIndex((p) => p.path === dirPath)
+  if (idx < 0) return null
+
+  const next: Project = { ...projects[idx] }
+  if (patch.name !== undefined) {
+    const name = patch.name.trim()
+    if (!name) throw new Error('Project name cannot be empty')
+    next.name = name
+  }
+  if (patch.iconUrl !== undefined) {
+    const iconUrl = patch.iconUrl.trim()
+    if (iconUrl) next.iconUrl = iconUrl
+    else delete next.iconUrl
+  }
+
+  // The config write comes first and is allowed to throw: a rename that only
+  // reached our list would look applied until the next re-import silently
+  // reverted it. The icon has no counterpart in the project config — it is
+  // ours alone — so it never touches the project directory.
+  if (next.name !== projects[idx].name) writeProjectName(dirPath, next.name)
+
+  projects[idx] = next
+  save(projects)
+  return next
 }
 
 export function updateLastOpened(dirPath: string): void {
