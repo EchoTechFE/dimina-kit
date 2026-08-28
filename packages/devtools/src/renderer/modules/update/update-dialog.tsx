@@ -8,8 +8,9 @@ import {
   DialogFooter,
 } from '@/shared/components/ui/dialog'
 import { Button } from '@/shared/components/ui/button'
-import { invokeStrict, on as ipcOn } from '@/shared/api/ipc-transport'
-import { UpdateChannel } from '../../../shared/ipc-channels.js'
+import { invokeStrict, on as ipcOn, send } from '@/shared/api/ipc-transport'
+import { notifyOverlayReady } from '@/shared/api'
+import { UpdateChannel } from '../../../shared/ipc-channels-overlays.js'
 
 // Update dialog uses `invokeStrict` (rejects on error) so a failed download
 // surfaces as an "error" stage instead of being silently swallowed by the
@@ -38,6 +39,12 @@ export function UpdateDialog() {
   // and the Retry button's target action stay correct for whichever failed.
   const [failedAction, setFailedAction] = useState<'download' | 'install'>('download')
 
+  // These two subscriptions must be registered BEFORE notifyOverlayReady()
+  // fires below — main can respond to the ready notification by pushing a
+  // pending Available synchronously, and React runs effects in declaration
+  // order on mount, so a notifyOverlayReady() effect declared first could
+  // win that race and permanently leave `info` null (dialog invisible, but
+  // its WCV still consuming input) for a case that raced.
   useEffect(() => {
     return ipcOn<[UpdateInfo]>(UpdateChannel.Available, (updateInfo) => {
       setInfo(updateInfo)
@@ -52,6 +59,13 @@ export function UpdateDialog() {
     return ipcOn<[{ percent: number }]>(UpdateChannel.DownloadProgress, (data) => {
       setProgress(Math.round(data.percent))
     })
+  }, [])
+
+  // Announce readiness once on mount so main's manual-readyMode overlay
+  // panel knows this WCV finished installing its listeners and can attach
+  // the pending show() (see createOverlayPanel's markReady gate).
+  useEffect(() => {
+    notifyOverlayReady()
   }, [])
 
   const handleDownload = useCallback(async () => {
@@ -93,9 +107,14 @@ export function UpdateDialog() {
     }
   }, [])
 
+  // Closing (either path below) must tell main to hide the overlay panel —
+  // `setOpen(false)` only unmounts this renderer's own DOM, it never touches
+  // the WebContentsView main keeps presented, which otherwise stays up
+  // forever as an invisible click-eating overlay.
   const handleClose = useCallback(() => {
     if (info?.mandatory && stage !== 'ready') return
     setOpen(false)
+    send(UpdateChannel.Close)
   }, [info, stage])
 
   if (!info) return null
@@ -106,6 +125,7 @@ export function UpdateDialog() {
       onOpenChange={(v) => {
         if (!v && info?.mandatory && stage !== 'ready') return
         setOpen(v)
+        if (!v) send(UpdateChannel.Close)
       }}
     >
       <DialogContent className="max-w-md">

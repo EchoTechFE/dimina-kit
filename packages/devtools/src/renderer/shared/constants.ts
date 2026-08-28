@@ -26,6 +26,9 @@ export type ZoomSetting = typeof ZOOM_OPTIONS[number] | typeof AUTO_ZOOM
 // Fixed toolbar header height — re-exported from the cross-process shared
 // module so main (view layout) and renderer (toolbar/popover) can't drift.
 export { HEADER_H } from '../../shared/constants'
+// Fixed host-sidebar default-content width — re-exported so the rail
+// component and main (which no longer pins width mode) share one value.
+export { HOST_SIDEBAR_DEFAULT_WIDTH } from '../../shared/constants'
 export const SIM_PANEL_PADDING = 24
 
 /** Timeout for save/action feedback messages. */

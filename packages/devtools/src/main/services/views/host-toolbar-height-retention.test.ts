@@ -84,6 +84,10 @@ vi.mock('electron', () => {
 vi.mock('../../utils/paths.js', () => ({
   mainPreloadPath: '/stub/preload.js',
   hostToolbarRuntimePreloadPath: '/stub/host-toolbar-runtime-preload.cjs',
+  // view-manager also wires the sidebar/dialog slots unconditionally now —
+  // their session-runtime modules read these at import time.
+  hostSidebarRuntimePreloadPath: '/stub/host-sidebar-runtime-preload.cjs',
+  hostDialogRuntimePreloadPath: '/stub/host-dialog-runtime-preload.cjs',
   cjsSiblingPreloadPath: (p: string) => p,
   devtoolsPackageRoot: '/stub/devtools-pkg-root',
 }))
@@ -219,6 +223,24 @@ describe('height retention: fixed mode interactions', () => {
     expect(readRetainedHeight(mgr)).toBe(32)
   })
 
+  it("fixed → 'auto' immediately reapplies the real advertised height when the advertiser never re-reports a value it already sent (constant content size)", () => {
+    // The advertiser (view-anchor measure-loop.ts) dedupes against its own
+    // last-EMITTED value: if the toolbar's content height never actually
+    // changes across an auto → fixed → auto cycle, it will never re-report
+    // that height on its own. Without reapplying the real current advertised
+    // value on the switch back to 'auto', the strip would stay pinned at the
+    // fixed value forever.
+    const { mgr, notify } = makeManager()
+    mgr.setHostToolbarHeight(64) // real content height, reported once, before pinning
+    mgr.hostToolbar.setHeightMode({ fixed: 88 })
+    notify.hostToolbarHeightChanged.mockClear()
+
+    mgr.hostToolbar.setHeightMode('auto')
+
+    expect(notify.hostToolbarHeightChanged).toHaveBeenCalledExactlyOnceWith(64)
+    expect(readRetainedHeight(mgr)).toBe(64)
+  })
+
   it('a setHeightMode validation reject does not clobber the retained value', () => {
     // Companion to the fail-closed pins in
     // host-toolbar-height-mode-validation.test.ts: the throw path must leave
@@ -243,6 +265,24 @@ describe('height retention: hide()', () => {
     mgr.hostToolbar.hide()
 
     expect(notify.hostToolbarHeightChanged).toHaveBeenCalledExactlyOnceWith(0)
+    expect(readRetainedHeight(mgr)).toBe(0)
+  })
+
+  it('hide() then setHeightMode(\'auto\') does not resurrect the pre-hide advertised height', () => {
+    // The 'auto' switch's replay branch reapplies the last-advertised height
+    // when the advertiser hasn't re-reported since (see the "fixed → 'auto'
+    // immediately reapplies" pin above). hide() must clear that memory too —
+    // otherwise a redundant setHeightMode('auto') call after hide() replays
+    // the stale pre-hide height and visually resurrects the hidden strip.
+    const { mgr, notify } = makeManager()
+    mgr.setHostToolbarHeight(48)
+
+    mgr.hostToolbar.hide()
+    notify.hostToolbarHeightChanged.mockClear()
+
+    mgr.hostToolbar.setHeightMode('auto')
+
+    expect(notify.hostToolbarHeightChanged).not.toHaveBeenCalled()
     expect(readRetainedHeight(mgr)).toBe(0)
   })
 })

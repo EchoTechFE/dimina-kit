@@ -6,6 +6,8 @@ import { applyNavigationHardening } from '../../windows/navigation-hardening.js'
 import * as layout from '../layout/index.js'
 import { HEADER_H } from '../../../shared/constants.js'
 import { VIEW_ID, VIEW_LAYER } from '../../../shared/view-ids.js'
+import { UpdateChannel } from '../../../shared/ipc-channels-overlays.js'
+import type { UpdateInfo } from '../../../shared/types.js'
 import type { PlacementReconciler } from './placement-reconciler.js'
 import type { ViewManagerContext } from './view-manager.js'
 
@@ -18,6 +20,12 @@ interface TooltipRenderPayload {
   requestId: number
   text: string
   maxWidth: number
+}
+
+/** Payload shown by the project-create-dialog overlay panel (`projectCreate:show`). */
+export interface ProjectCreateShowPayload {
+  templates: unknown[]
+  defaultBaseDir: string
 }
 
 /**
@@ -49,10 +57,27 @@ export interface OverlayPanelsView {
   applySettingsBoundsIfPresent(): void
   /** Destroy the cached settings + tooltip views (aggregate simulator detach). */
   destroySettings(): void
+  /** Destroy the project-create/update dialog panel views (app-level teardown). */
+  destroyDialogs(): void
   getSettingsWebContents(): WebContents | null
   getSettingsWebContentsId(): number | null
   getPopoverWebContentsId(): number | null
   getTooltipWebContentsId(): number | null
+  /**
+   * Show the project-create-dialog overlay panel (VIEW_LAYER.dialog) — the
+   * real WebContentsView that replaced the Radix `fixed inset-0` DOM portal
+   * (see view-ids.ts's VIEW_LAYER doc-comment for why a DOM overlay can't
+   * paint above the simulator/host-toolbar/host-sidebar WCVs).
+   */
+  showProjectCreateDialog(data: ProjectCreateShowPayload): void
+  hideProjectCreateDialog(): void
+  /** Show the update-available overlay panel, fed the discovered update's info. */
+  showUpdateDialog(data: UpdateInfo): void
+  hideUpdateDialog(): void
+  /** Forward a download-progress tick into the (already-shown) update overlay. */
+  notifyUpdateDownloadProgress(percent: number): void
+  getProjectCreateDialogWebContentsId(): number | null
+  getUpdateDialogWebContentsId(): number | null
 }
 
 export function createOverlayPanelsView(
@@ -144,6 +169,53 @@ export function createOverlayPanelsView(
     readyMode: 'manual',
   })
 
+  /**
+   * Both devtools-owned dialog panels occupy the full main-window content
+   * rect (they render their own centered card + backdrop), so unlike
+   * settings/popover/tooltip they need no anchor-derived bounds computation —
+   * just the window's current content size, recomputed on every show/resize.
+   */
+  function fullWindowBounds(): layout.Bounds {
+    const [width = 0, height = 0] = ctx.windows.mainWindow.getContentSize()
+    return { x: 0, y: 0, width: Math.max(1, width), height: Math.max(1, height) }
+  }
+
+  const projectCreateDialogPanel: OverlayPanel<ProjectCreateShowPayload> = createOverlayPanel<ProjectCreateShowPayload>({
+    electron: { createWebContentsView: (opts) => new WebContentsView(opts) },
+    rendererDir: ctx.rendererDir,
+    entry: 'entries/project-create-dialog/index.html',
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: false,
+      preload: mainPreloadPath,
+    },
+    hardenNavigation: (wc) => applyNavigationHardening(wc, ctx.rendererDir),
+    setDesired: overlayDesiredSetter(VIEW_ID.projectCreateDialog, VIEW_LAYER.dialog),
+    registerView: (getView) => reconciler.registerView(VIEW_ID.projectCreateDialog, { getView }),
+    destroyView: (view) => reconciler.destroyView(VIEW_ID.projectCreateDialog, view),
+    pushData: (view, data) => ctx.notify.projectCreateInit(view, data),
+    readyMode: 'manual',
+  })
+
+  const updateDialogPanel: OverlayPanel<UpdateInfo> = createOverlayPanel<UpdateInfo>({
+    electron: { createWebContentsView: (opts) => new WebContentsView(opts) },
+    rendererDir: ctx.rendererDir,
+    entry: 'entries/update-dialog/index.html',
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: false,
+      preload: mainPreloadPath,
+    },
+    hardenNavigation: (wc) => applyNavigationHardening(wc, ctx.rendererDir),
+    setDesired: overlayDesiredSetter(VIEW_ID.updateDialog, VIEW_LAYER.dialog),
+    registerView: (getView) => reconciler.registerView(VIEW_ID.updateDialog, { getView }),
+    destroyView: (view) => reconciler.destroyView(VIEW_ID.updateDialog, view),
+    pushData: (view, data) => ctx.notify.updateAvailable(view, data),
+    readyMode: 'manual',
+  })
+
   let tooltipRequestId = 0
   let activeTooltip: { requestId: number; anchor: TooltipShowPayload['anchor'] } | null = null
 
@@ -194,10 +266,34 @@ export function createOverlayPanelsView(
     tooltipPanel.hide()
   }
 
+  function showProjectCreateDialog(data: ProjectCreateShowPayload): void {
+    projectCreateDialogPanel.show(data, fullWindowBounds())
+  }
+
+  function hideProjectCreateDialog(): void {
+    projectCreateDialogPanel.hide()
+  }
+
+  function showUpdateDialog(data: UpdateInfo): void {
+    updateDialogPanel.show(data, fullWindowBounds())
+  }
+
+  function hideUpdateDialog(): void {
+    updateDialogPanel.hide()
+  }
+
+  function notifyUpdateDownloadProgress(percent: number): void {
+    const wc = updateDialogPanel.getWebContents()
+    if (!wc) return
+    wc.send(UpdateChannel.DownloadProgress, { percent })
+  }
+
   function markOverlayReady(webContentsId: number): void {
     settingsPanel.markReady(webContentsId)
     popoverPanel.markReady(webContentsId)
     tooltipPanel.markReady(webContentsId)
+    projectCreateDialogPanel.markReady(webContentsId)
+    updateDialogPanel.markReady(webContentsId)
   }
 
   function applyTooltipMeasurement(
@@ -212,21 +308,40 @@ export function createOverlayPanelsView(
   }
 
   function reapplyPresentOverlays(): void {
-    if (settingsPanel.isPresent() && reconciler.hasOverlayDesired(VIEW_ID.settings)) void showSettings()
+    // Fire-and-forget re-trigger — a crash between this call and the panel
+    // becoming ready now rejects whenReady() (see overlay-panel.ts teardown);
+    // handleViewBroken() already logs it, nothing more to do here.
+    if (settingsPanel.isPresent() && reconciler.hasOverlayDesired(VIEW_ID.settings)) {
+      showSettings().catch(() => {})
+    }
     if (popoverPanel.isPresent() && reconciler.hasOverlayDesired(VIEW_ID.popover)) {
       const [w = 0, h = 0] = ctx.windows.mainWindow.getContentSize()
       popoverPanel.reposition(layout.computePopoverBounds(w, h, overlayHeaderHeight()))
     }
+    if (projectCreateDialogPanel.isPresent() && reconciler.hasOverlayDesired(VIEW_ID.projectCreateDialog)) {
+      projectCreateDialogPanel.reposition(fullWindowBounds())
+    }
+    if (updateDialogPanel.isPresent() && reconciler.hasOverlayDesired(VIEW_ID.updateDialog)) {
+      updateDialogPanel.reposition(fullWindowBounds())
+    }
   }
 
   function applySettingsBoundsIfPresent(): void {
-    if (settingsPanel.isPresent() && reconciler.hasOverlayDesired(VIEW_ID.settings)) void showSettings()
+    // See reapplyPresentOverlays() above for why this swallows a rejection.
+    if (settingsPanel.isPresent() && reconciler.hasOverlayDesired(VIEW_ID.settings)) {
+      showSettings().catch(() => {})
+    }
   }
 
   function destroySettings(): void {
     activeTooltip = null
     settingsPanel.destroy()
     tooltipPanel.destroy()
+  }
+
+  function destroyDialogs(): void {
+    projectCreateDialogPanel.destroy()
+    updateDialogPanel.destroy()
   }
 
   return {
@@ -239,12 +354,20 @@ export function createOverlayPanelsView(
     hideTooltip,
     markOverlayReady,
     applyTooltipMeasurement,
+    showProjectCreateDialog,
+    hideProjectCreateDialog,
+    showUpdateDialog,
+    hideUpdateDialog,
+    notifyUpdateDownloadProgress,
     reapplyPresentOverlays,
     applySettingsBoundsIfPresent,
     destroySettings,
+    destroyDialogs,
     getSettingsWebContents: () => settingsPanel.getWebContents(),
     getSettingsWebContentsId: () => settingsPanel.getWebContentsId(),
     getPopoverWebContentsId: () => popoverPanel.getWebContentsId(),
     getTooltipWebContentsId: () => tooltipPanel.getWebContentsId(),
+    getProjectCreateDialogWebContentsId: () => projectCreateDialogPanel.getWebContentsId(),
+    getUpdateDialogWebContentsId: () => updateDialogPanel.getWebContentsId(),
   }
 }

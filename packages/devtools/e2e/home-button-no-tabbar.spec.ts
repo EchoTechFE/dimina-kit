@@ -37,6 +37,7 @@ import {
   ipcInvoke,
   pollUntil,
   evalInSimulator,
+  findMainWindow,
 } from './helpers'
 import { AutomationChannel, ProjectChannel } from '../src/shared/ipc-channels'
 import { DEFAULT_SCENE } from '../src/shared/constants'
@@ -174,7 +175,7 @@ test.describe('native-host nav-bar home button (redirectTo/reLaunch branches)', 
       env: { ...process.env, NODE_ENV: 'test', DIMINA_NATIVE_HOST: '1', DIMINA_E2E_USER_DATA_DIR: userDataDir },
     })
 
-    mainWindow = await electronApp.firstWindow()
+    mainWindow = await findMainWindow(electronApp)
     await mainWindow.waitForLoadState('domcontentloaded')
 
     await electronApp.evaluate(async ({ BrowserWindow }) => {

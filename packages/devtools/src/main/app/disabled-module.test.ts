@@ -275,9 +275,9 @@ vi.mock('@dimina-kit/devkit', () => ({
 
 import {
   ProjectsChannel,
-  SettingsChannel,
   WorkbenchSettingsChannel,
 } from '../../shared/ipc-channels.js'
+import { SettingsChannel, ViewChannel } from '../../shared/ipc-channels-overlays.js'
 
 let createDevtoolsRuntime: typeof import('./app.js').createDevtoolsRuntime
 
@@ -329,6 +329,26 @@ describe('disabled module → no IPC registration', () => {
     const handled = new Set(stubs.handleCalls)
     expect(handled.has(ProjectsChannel.List)).toBe(true)
     expect(handled.has(WorkbenchSettingsChannel.Get)).toBe(true)
+    await instance.dispose()
+  })
+
+  it('modules.simulator=false still registers the full placement/host-slot IPC surface — none of it actually depends on the simulator module', async () => {
+    const instance = await createDevtoolsRuntime({ modules: { simulator: false } })
+    const handled = new Set(stubs.handleCalls)
+    const on = new Set(stubs.onCalls)
+    expect(
+      handled.has(ViewChannel.AllocatePlacementGeneration),
+      'the placement-generation seed handler must stay registered even when the simulator module is disabled, or every renderer stalls on the fatal boot-failure page',
+    ).toBe(true)
+    expect(
+      handled.has(ViewChannel.PlacementSnapshot),
+      'PlacementSnapshot must stay registered — ViewManager (ctx.views) is constructed unconditionally and host-sidebar in particular lives on the project-list page, unrelated to the simulator module',
+    ).toBe(true)
+    expect(handled.has(ViewChannel.HostToolbarGetHeight)).toBe(true)
+    expect(handled.has(ViewChannel.HostSidebarGetWidth)).toBe(true)
+    expect(on.has(ViewChannel.HostToolbarAdvertiseHeight)).toBe(true)
+    expect(on.has(ViewChannel.HostSidebarAdvertiseWidth)).toBe(true)
+    expect(on.has(ViewChannel.HostDialogAdvertiseSize)).toBe(true)
     await instance.dispose()
   })
 })

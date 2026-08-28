@@ -56,6 +56,10 @@ export function hostToolbarBounds(mgr: SnapshotSink, rect: Rect): void {
   pushView(mgr, { viewId: VIEW_ID.hostToolbar, placement: toPlacement(rect), layer: VIEW_LAYER.hostToolbar })
 }
 
+export function hostSidebarBounds(mgr: SnapshotSink, rect: Rect): void {
+  pushView(mgr, { viewId: VIEW_ID.hostSidebar, placement: toPlacement(rect), layer: VIEW_LAYER.hostSidebar })
+}
+
 export function simulatorDevtoolsBounds(mgr: SnapshotSink, rect: Rect): void {
   pushView(mgr, { viewId: VIEW_ID.simulatorDevtools, placement: toPlacement(rect), layer: VIEW_LAYER.base })
 }

@@ -2,7 +2,7 @@
 import type { WorkbenchContext } from '../services/workbench-context.js'
 import type { WorkbenchModule } from '../services/module.js'
 import type { CompileConfig } from '../../shared/types.js'
-import { PopoverChannel } from '../../shared/ipc-channels.js'
+import { PopoverChannel } from '../../shared/ipc-channels-overlays.js'
 import {
   PopoverShowSchema,
   PopoverRelaunchSchema,

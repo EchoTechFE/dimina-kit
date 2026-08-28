@@ -223,6 +223,8 @@ vi.mock('electron', () => {
     // (dmieditor:// scheme handler) during workbench setup.
     defaultSession: {
       protocol: { handle: vi.fn(), unhandle: vi.fn() },
+      registerPreloadScript: vi.fn(() => 'stub-preload-script-id'),
+      unregisterPreloadScript: vi.fn(),
     },
   }
 

@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>e2e host sidebar (default)</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #1e1e1e; color: #ddd; font: 13px sans-serif; }
+    </style>
+  </head>
+  <body>
+    <!--
+      [data-host-sidebar-root] must be shrink-to-fit on the INLINE axis: its
+      width comes from the 64px content column, NOT from the host-applied
+      view width (see host-sidebar-advertiser.ts footgun note). A default
+      block-level div stretches to the parent's full width, so `display:
+      inline-block` is needed here — the toolbar's block-axis fixtures don't
+      need the analogous override because height is already content-driven.
+    -->
+    <div data-host-sidebar-root style="display: inline-block; height: 100%;">
+      <div style="width: 64px; height: 100%; display: flex; align-items: center; padding: 8px 0; writing-mode: vertical-rl;">
+        e2e host sidebar — default (framework) preload path
+      </div>
+    </div>
+  </body>
+</html>

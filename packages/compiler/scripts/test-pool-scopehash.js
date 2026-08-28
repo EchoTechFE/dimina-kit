@@ -61,6 +61,9 @@ const clean = (m) => { for (const k of Object.keys(m)) if (m[k] == null) delete 
 
 // CSS carries the scope hash as `[data-v-<id>]`; the compiled render carries the SAME
 // id bare in each `Module({ …, id:"<id>", … })` (the runtime prepends `data-v-`).
+// app.wxss is scoped too, and its id reaches the render as each page module's
+// `appStyleScopeId` — the render runtime applies it to the page root alongside the
+// page's own id — so both keys count as "present in the render output".
 // Extract each with its own pattern so we compare the cross-file linkage the runtime
 // actually relies on.
 function hashesIn(files, pred, re) {
@@ -79,7 +82,7 @@ function hashesIn(files, pred, re) {
 // Keeping an open lower bound of 5 still matches a regressed random 5-char id, so a
 // revert to per-realm random ids makes MODEL A orphan again instead of matching nothing.
 const CSS_RE = /data-v-([a-z0-9]{5,})/g
-const RENDER_RE = /\bid:\s*["']([a-z0-9]{5,})["']/g
+const RENDER_RE = /(?:\bid|appStyleScopeId):\s*["']([a-z0-9]{5,})["']/g
 const isCss = (k) => k.endsWith('.css')
 const isRender = (k) => k.endsWith('.js') && k !== 'main/logic.js' && !k.endsWith('/logic.js')
 

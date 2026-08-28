@@ -25,7 +25,7 @@
  *
  * IMPLEMENTATION SEAMS PINNED BY THIS FILE:
  *  - handshake channel literal: 'view:host-toolbar:port' (add as
- *    `ViewChannel.HostToolbarPort` in src/shared/ipc-channels.ts).
+ *    `ViewChannel.HostToolbarPort` in src/shared/ipc-channels-overlays.ts).
  *  - did-finish-load and destroyed hooks registered via `wc.on(...)` (the
  *    stub records `on`/`once`; the event-firing helper replays both).
  *
@@ -157,6 +157,10 @@ vi.mock('electron', () => {
 vi.mock('../../utils/paths.js', () => ({
   mainPreloadPath: '/stub/preload.js',
   hostToolbarRuntimePreloadPath: '/stub/host-toolbar-runtime-preload.cjs',
+  // view-manager also wires the sidebar/dialog slots unconditionally now —
+  // their session-runtime modules read these at import time.
+  hostSidebarRuntimePreloadPath: '/stub/host-sidebar-runtime-preload.cjs',
+  hostDialogRuntimePreloadPath: '/stub/host-dialog-runtime-preload.cjs',
   cjsSiblingPreloadPath: (p: string) => p,
   devtoolsPackageRoot: '/stub/devtools-pkg-root',
 }))
@@ -406,6 +410,28 @@ describe('R2 inbound: port1 message envelopes → control-level onMessage regist
 
     expect(h1).toHaveBeenCalledExactlyOnceWith(1)
     expect(h2).toHaveBeenCalledExactlyOnceWith(1)
+  })
+
+  it('a throwing handler is isolated: it does not stop sibling handlers and does not escape the port message listener', async () => {
+    // BUG CAUGHT: dispatch() invoked handlers with no try/catch, unlike this
+    // same file's onReady path (invokeReadyHandler) — a throwing onMessage
+    // handler would abort the dispatch loop for later-registered siblings
+    // AND escape straight out of the MessagePortMain 'message' listener
+    // (process-level uncaughtException territory for arbitrary host content).
+    const { ctx } = makeContext()
+    const mgr = createViewManager(ctx)
+    const bad = vi.fn(() => { throw new Error('boom') })
+    const good = vi.fn()
+    portApi(mgr).onMessage('evt', bad)
+    portApi(mgr).onMessage('evt', good)
+    const view = await loadToolbar(mgr)
+    fireWcEvent(view, 'did-finish-load')
+    const port1 = channels[0]!.port1
+
+    expect(() => port1.emit('message', { data: { channel: 'evt', payload: 1 } })).not.toThrow()
+
+    expect(bad).toHaveBeenCalledExactlyOnceWith(1)
+    expect(good).toHaveBeenCalledExactlyOnceWith(1)
   })
 
   it('Disposable.dispose() detaches the handler (idempotent)', async () => {

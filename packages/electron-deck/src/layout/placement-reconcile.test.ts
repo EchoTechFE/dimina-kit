@@ -113,6 +113,19 @@ describe('reconcile — generation reset (renderer restart rebuilds the table)',
     const { ops } = reconcile(prev(), snap(1, 0, [dv('C', visible(B(0, 0, 20, 20)), 0)]))
     expect(at(ops, 'attach', 'C')).toBeGreaterThanOrEqual(0)
   })
+
+  it('emits detach ops for ids that were really attached but the new generation never redeclares — a generation bump must not just forget them', () => {
+    // A and B are genuinely attached native views (per `prev()`'s actual
+    // table) that the new generation's first snapshot doesn't mention at
+    // all — e.g. a renderer crash/reload whose first frame is empty or
+    // hasn't gotten around to redeclaring them yet. Silently dropping them
+    // from `actual` here (instead of diffing them out) would leave the old
+    // views attached and visible forever, since nothing else ever asks
+    // about an id no reconcile call is told about again.
+    const { ops } = reconcile(prev(), snap(1, 0, [dv('C', visible(B(0, 0, 20, 20)), 0)]))
+    expect(at(ops, 'detach', 'A')).toBeGreaterThanOrEqual(0)
+    expect(at(ops, 'detach', 'B')).toBeGreaterThanOrEqual(0)
+  })
 })
 
 describe('reconcile — diff-only (a stable declaration produces no work)', () => {

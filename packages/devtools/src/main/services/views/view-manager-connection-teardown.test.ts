@@ -150,6 +150,9 @@ vi.mock('electron', () => {
 vi.mock('../../utils/paths.js', () => ({
   mainPreloadPath: '/stub/preload.js',
   devtoolsPackageRoot: '/stub/devtools-pkg-root',
+  hostToolbarRuntimePreloadPath: '/stub/host-toolbar-preload.js',
+  hostSidebarRuntimePreloadPath: '/stub/host-sidebar-preload.js',
+  hostDialogRuntimePreloadPath: '/stub/host-dialog-preload.js',
   // attachNativeSimulator resolves the simulator preload through this pure
   // string helper; keep the real `.js`→`.cjs` swap behaviour.
   cjsSiblingPreloadPath: (p: string) => (p.endsWith('.js') ? p.slice(0, -'.js'.length) + '.cjs' : p),

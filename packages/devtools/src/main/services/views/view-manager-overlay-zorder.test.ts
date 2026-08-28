@@ -87,7 +87,9 @@ vi.mock('electron', () => {
 
 vi.mock('../../utils/paths.js', () => ({
   mainPreloadPath: '/stub/preload.js',
-  hostToolbarPreloadPath: '/stub/host-toolbar-preload.js',
+  hostToolbarRuntimePreloadPath: '/stub/host-toolbar-preload.js',
+  hostSidebarRuntimePreloadPath: '/stub/host-sidebar-preload.js',
+  hostDialogRuntimePreloadPath: '/stub/host-dialog-preload.js',
   cjsSiblingPreloadPath: (p: string) => p.replace(/\.js$/, '.cjs'),
   devtoolsPackageRoot: '/stub/devtools-pkg-root',
 }))

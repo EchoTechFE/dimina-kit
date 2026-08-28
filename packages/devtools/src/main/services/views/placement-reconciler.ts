@@ -49,8 +49,10 @@ export interface ViewSlot {
  * settings/popover are main-owned and live in `overlayDesired`. Any change
  * merges the two, runs the pure reconcile core, and applies the ordered ops
  * through `viewTarget`. `epochCounter` is a single monotonic tick — main is the
- * only (serial) reconcile caller, so the core's stale guard passes by
- * construction; `rendererGeneration` still drives the reset on renderer restart.
+ * only (serial) reconcile caller, so the core's stale-epoch guard passes by
+ * construction; `rendererGeneration` is the high-water mark that drives both
+ * the reset on a genuinely newer generation and the hard rejection of a
+ * snapshot from behind it (see `setPlacementSnapshot`).
  */
 export interface PlacementReconciler {
   registerView(viewId: string, slot: ViewSlot): void
@@ -69,12 +71,23 @@ export interface PlacementReconciler {
   setOverlayDesired(viewId: string, desired: DesiredView<DevtoolsExtra>): void
   deleteOverlayDesired(viewId: string): void
   hasOverlayDesired(viewId: string): boolean
+  /**
+   * Hand out a fresh generation seed for a renderer bootstrap (see
+   * renderer-placement-generation.ts). Strictly exceeds both the current
+   * high-water mark (`rendererGeneration`, which a full renderer reload does
+   * NOT reset — this reconciler lives in the long-lived main process) and
+   * every previously allocated seed, so a reload that races ahead of its own
+   * previous session's accepted snapshots can never be handed a value that
+   * `setPlacementSnapshot` would reject as stale.
+   */
+  allocateGeneration(): number
 }
 
 export function createPlacementReconciler(ctx: ViewManagerContext): PlacementReconciler {
   let placementState = createInitialState<DevtoolsExtra>()
   let epochCounter = 0
   let rendererGeneration = 0
+  let allocatedGeneration = 0
   const appliedActual = new Map<string, ActualView<DevtoolsExtra>>()
   const baseDesired = new Map<string, DesiredView<DevtoolsExtra>>()
   const overlayDesired = new Map<string, DesiredView<DevtoolsExtra>>()
@@ -175,6 +188,30 @@ export function createPlacementReconciler(ctx: ViewManagerContext): PlacementRec
   }
 
   function setPlacementSnapshot(snapshot: PlacementSnapshot<DevtoolsExtra>): void {
+    // Hard reject a snapshot from BEHIND the current high-water mark — a
+    // complete no-op, touching neither `rendererGeneration` nor
+    // `baseDesired`. The renderer hands out one shared, strictly monotonic
+    // sequence across every screen (see renderer-placement-generation.ts),
+    // so under normal operation a lower generation can only be a LATE
+    // arrival from an already-superseded source (e.g. a dead screen's
+    // delayed `dispose()` empty-snapshot flush racing a successor screen's
+    // mount). The previous version of this guard clamped
+    // `rendererGeneration` to never regress but still unconditionally
+    // applied the stale snapshot's CONTENT into `baseDesired` under the
+    // clamped (i.e. current) generation number — which defeated the
+    // reconcile core's own generation-regression guard
+    // (placement-reconcile.ts: `snapshot.generation < prev.generation`) by
+    // never letting it see the snapshot's real, lower generation. That let a
+    // dead screen's stale/empty view list silently overwrite a currently
+    // active screen's real views. Dropping it here, before it ever reaches
+    // `baseDesired`, is what actually gives the stale snapshot zero side
+    // effects.
+    if (snapshot.generation < rendererGeneration) {
+      console.warn(
+        `[placement-reconciler] snapshot generation ${snapshot.generation} is behind the current ${rendererGeneration}; dropping without applying its content`,
+      )
+      return
+    }
     rendererGeneration = snapshot.generation
     baseDesired.clear()
     for (const v of snapshot.views) baseDesired.set(v.viewId, v)
@@ -200,5 +237,9 @@ export function createPlacementReconciler(ctx: ViewManagerContext): PlacementRec
     setOverlayDesired: (viewId, desired) => { overlayDesired.set(viewId, desired) },
     deleteOverlayDesired: (viewId) => { overlayDesired.delete(viewId) },
     hasOverlayDesired: (viewId) => overlayDesired.has(viewId),
+    allocateGeneration: () => {
+      allocatedGeneration = Math.max(allocatedGeneration, rendererGeneration) + 1
+      return allocatedGeneration
+    },
   }
 }

@@ -9,7 +9,8 @@ import {
   type WorkbenchSettings,
   type ThemeSource,
 } from '../services/settings/index.js'
-import { WorkbenchSettingsChannel, SettingsChannel } from '../../shared/ipc-channels.js'
+import { WorkbenchSettingsChannel } from '../../shared/ipc-channels.js'
+import { SettingsChannel } from '../../shared/ipc-channels-overlays.js'
 import { DEFAULT_CDP_PORT } from '../../shared/constants.js'
 import { getMcpStatus } from '../services/mcp/status.js'
 import {

@@ -2,7 +2,7 @@ import { test, expect, _electron, type ElectronApplication, type Page as PwPage 
 import path from 'path'
 import fs from 'fs'
 import { fileURLToPath } from 'url'
-import { addProject, waitForSimulatorWebview, closeProject, ipcInvoke, pollUntil, evalInSimulator } from './helpers'
+import { addProject, waitForSimulatorWebview, closeProject, ipcInvoke, pollUntil, evalInSimulator, findMainWindow } from './helpers'
 import { AutomationChannel } from '../src/shared/ipc-channels'
 import { INTERNAL_LOG_WRAPPER_MARK } from '../src/main/services/views/console-filter'
 import { FRONTEND_BOOTSTRAP_PROBE_SCRIPT } from '../src/main/services/views/frontend-bootstrap-gate'
@@ -149,7 +149,7 @@ test.describe('Floating internal DevTools window — cold start + log flood', ()
       env: { ...process.env, NODE_ENV: 'test', DIMINA_E2E_USER_DATA_DIR: userDataDir },
     })
 
-    mainWindow = await electronApp.firstWindow()
+    mainWindow = await findMainWindow(electronApp)
     await mainWindow.waitForLoadState('domcontentloaded')
 
     await electronApp.evaluate(async ({ BrowserWindow }) => {

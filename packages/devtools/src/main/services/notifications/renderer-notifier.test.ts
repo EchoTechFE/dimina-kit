@@ -14,11 +14,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   WindowChannel,
-  PopoverChannel,
   ProjectChannel,
-  SettingsChannel,
   EditorChannel,
 } from '../../../shared/ipc-channels.js'
+import { PopoverChannel, SettingsChannel } from '../../../shared/ipc-channels-overlays.js'
 import { createRendererNotifier } from './renderer-notifier.js'
 
 function makeWebContents() {

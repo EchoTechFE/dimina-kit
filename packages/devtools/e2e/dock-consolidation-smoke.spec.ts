@@ -11,7 +11,7 @@
 import { test, expect, _electron, type ElectronApplication, type Page as PwPage } from '@playwright/test'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { openProjectInUI, closeProject, DEMO_APP_DIR } from './helpers'
+import { openProjectInUI, closeProject, DEMO_APP_DIR, findMainWindow } from './helpers'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -29,7 +29,7 @@ test.beforeAll(async () => {
     args: [appPath, `--user-data-dir=${userDataDir}`],
     env: { ...process.env, NODE_ENV: 'test' },
   })
-  mainWindow = await electronApp.firstWindow()
+  mainWindow = await findMainWindow(electronApp)
   await mainWindow.waitForLoadState('domcontentloaded')
   // Offscreen + blur so the smoke never steals focus.
   await electronApp.evaluate(async ({ BrowserWindow }) => {

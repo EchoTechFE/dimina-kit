@@ -4,10 +4,11 @@ import { Input } from '@/shared/components/ui/input'
 import { FolderInput, Search } from 'lucide-react'
 import { ProjectCard } from './project-card'
 import { ProjectCreateCard } from './project-create-card'
-import type { Project } from '../types'
+import { PROJECT_TYPE_LABEL, type Project, type ProjectType } from '../types'
 
 export function ProjectList({
   projects,
+  category,
   onAdd,
   onCreate,
   onOpen,
@@ -15,6 +16,8 @@ export function ProjectList({
   thumbnails,
 }: {
   projects: Project[]
+  /** Currently selected sidebar category — drives the page title and create-card label. */
+  category: ProjectType
   onAdd: () => void
   /**
    * Invoked when the always-present "新建小程序" card is clicked. The card is
@@ -44,7 +47,7 @@ export function ProjectList({
     <div className="flex flex-col h-screen bg-bg">
       <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-4">
         <div className="flex items-center justify-between w-full shrink-0">
-          <h1 className="text-2xl font-medium leading-8 text-text">小程序</h1>
+          <h1 className="text-2xl font-medium leading-8 text-text">{PROJECT_TYPE_LABEL[category]}</h1>
           <Button
             variant="outline"
             onClick={onAdd}
@@ -71,14 +74,19 @@ export function ProjectList({
         ) : (
           <div
             className="grid gap-4 w-full"
-            style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))' }}
+            style={{
+              // Column floor comes from the same reference width the cards
+              // scale their own metrics against (--qd-card-w-ref, design.css).
+              gridTemplateColumns:
+                'repeat(auto-fill, minmax(calc(var(--qd-card-w-ref) * 1px), 1fr))',
+            }}
           >
             {/*
               The create card is always the first item (even when projects
               is empty) so first-time users have an obvious next step.
               Search doesn't filter the create card — it's not a project.
             */}
-            <ProjectCreateCard onClick={handleCreate} />
+            <ProjectCreateCard onClick={handleCreate} category={category} />
             {filtered.map((p) => (
               <ProjectCard
                 key={p.path}

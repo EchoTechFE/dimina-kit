@@ -14,7 +14,7 @@
  */
 import type { Page, ElectronApplication } from '@playwright/test'
 import { pollUntil, ipcInvoke } from './helpers'
-import { ViewChannel } from '../src/shared/ipc-channels'
+import { ViewChannel } from '../src/shared/ipc-channels-overlays'
 
 /** Run `expr` inside the embedded workbench's WebContentsView. */
 export async function runInWorkbench<T>(app: ElectronApplication, expr: string): Promise<T> {

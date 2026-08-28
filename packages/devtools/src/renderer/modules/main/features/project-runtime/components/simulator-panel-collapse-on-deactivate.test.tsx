@@ -22,7 +22,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, cleanup } from '@testing-library/react'
 import type { Placement } from '@dimina-kit/view-anchor'
 import type { PlacementPublisher } from '@dimina-kit/electron-deck/client'
-import { PlacementPublisherContext } from '../placement-publisher-context'
+import { PlacementPublisherContext } from '@/shared/placement-publisher-context'
 import { VIEW_ID } from '../../../../../../shared/view-ids'
 
 // view-anchor mock: capture every createPlacementAnchor call so we can inspect

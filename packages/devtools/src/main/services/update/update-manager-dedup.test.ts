@@ -21,6 +21,8 @@ const stub = vi.hoisted(() => {
     removeHandler: vi.fn((channel: string) => {
       ipcHandlers.delete(channel)
     }),
+    on: vi.fn(),
+    removeListener: vi.fn(),
   }
   const appStub = {
     getVersion: vi.fn(() => '1.0.0'),
@@ -44,18 +46,13 @@ vi.mock('electron', () => ({
 }))
 
 import type { UpdateChecker, UpdateInfo } from '../../../shared/types.js'
-import { UpdateChannel } from '../../../shared/ipc-channels.js'
 import { UpdateManager } from './update-manager.js'
 
 const INITIAL_DELAY = 1_000
 const CHECK_INTERVAL = 10_000
 
-function makeMainWindow() {
-  return {
-    webContents: { send: vi.fn(), isDestroyed: () => false },
-  } as unknown as Electron.BrowserWindow & {
-    webContents: { send: ReturnType<typeof vi.fn> }
-  }
+function makePanelDeps() {
+  return { showUpdatePanel: vi.fn(), notifyDownloadProgress: vi.fn(), hideUpdatePanel: vi.fn() }
 }
 
 function info(version: string): UpdateInfo {
@@ -79,18 +76,14 @@ function makeSequencedChecker(responses: Array<UpdateInfo | null>): UpdateChecke
   }
 }
 
-/** Get every `webContents.send` call targeting UpdateChannel.Available. */
-function availableCalls(
-  mw: ReturnType<typeof makeMainWindow>,
-): unknown[][] {
-  return mw.webContents.send.mock.calls.filter(
-    (c: unknown[]) => c[0] === UpdateChannel.Available,
-  )
+/** Every `showUpdatePanel(info)` invocation, one array entry per call. */
+function availableCalls(deps: ReturnType<typeof makePanelDeps>): UpdateInfo[][] {
+  return deps.showUpdatePanel.mock.calls as UpdateInfo[][]
 }
 
 /**
  * Run one check tick (initial or subsequent) and flush the async work
- * spawned inside the timer callback so `webContents.send` settles.
+ * spawned inside the timer callback so `showUpdatePanel` settles.
  */
 async function runTick(ms: number) {
   await vi.advanceTimersByTimeAsync(ms)
@@ -113,41 +106,41 @@ afterEach(() => {
 
 describe('UpdateManager Available-channel dedup contract', () => {
   it('first detection of version X sends UpdateChannel.Available exactly once', async () => {
-    const mw = makeMainWindow()
+    const deps = makePanelDeps()
     const x = info('2.0.0')
     const checker = makeSequencedChecker([x])
 
     const m = new UpdateManager({
       checker,
-      mainWindow: mw,
+      ...deps,
       checkInterval: CHECK_INTERVAL,
       initialDelay: INITIAL_DELAY,
     })
 
     await runTick(INITIAL_DELAY)
 
-    const calls = availableCalls(mw)
+    const calls = availableCalls(deps)
     expect(calls).toHaveLength(1)
-    expect(calls[0]).toEqual([UpdateChannel.Available, x])
+    expect(calls[0]).toEqual([x])
 
     await m.dispose()
   })
 
   it('does not re-send Available on subsequent ticks while version stays X', async () => {
-    const mw = makeMainWindow()
+    const deps = makePanelDeps()
     const x = info('2.0.0')
     // Every check returns the same X.
     const checker = makeSequencedChecker([x])
 
     const m = new UpdateManager({
       checker,
-      mainWindow: mw,
+      ...deps,
       checkInterval: CHECK_INTERVAL,
       initialDelay: INITIAL_DELAY,
     })
 
     await runTick(INITIAL_DELAY)
-    expect(availableCalls(mw)).toHaveLength(1)
+    expect(availableCalls(deps)).toHaveLength(1)
 
     // Three more periodic ticks, same X each time.
     await runTick(CHECK_INTERVAL)
@@ -157,20 +150,20 @@ describe('UpdateManager Available-channel dedup contract', () => {
     // The checker did get called every tick…
     expect(checker.checkForUpdates).toHaveBeenCalledTimes(4)
     // …but Available was only announced once.
-    expect(availableCalls(mw)).toHaveLength(1)
+    expect(availableCalls(deps)).toHaveLength(1)
 
     await m.dispose()
   })
 
   it('does not re-send Available even when the version changes (X → Y); session is single-shot', async () => {
-    const mw = makeMainWindow()
+    const deps = makePanelDeps()
     const x = info('2.0.0')
     const y = info('2.1.0')
     const checker = makeSequencedChecker([x, x, y, y])
 
     const m = new UpdateManager({
       checker,
-      mainWindow: mw,
+      ...deps,
       checkInterval: CHECK_INTERVAL,
       initialDelay: INITIAL_DELAY,
     })
@@ -180,16 +173,16 @@ describe('UpdateManager Available-channel dedup contract', () => {
     await runTick(CHECK_INTERVAL) // -> y  (must NOT send — instance already announced)
     await runTick(CHECK_INTERVAL) // -> y  (no send)
 
-    const calls = availableCalls(mw)
+    const calls = availableCalls(deps)
     // Total Available count across the whole session is exactly 1, and it's X.
     expect(calls).toHaveLength(1)
-    expect(calls[0]).toEqual([UpdateChannel.Available, x])
+    expect(calls[0]).toEqual([x])
 
     await m.dispose()
   })
 
   it('after the single initial send, no further Available events fire regardless of subsequent checker outputs (X, null, Y, X again)', async () => {
-    const mw = makeMainWindow()
+    const deps = makePanelDeps()
     const x = info('2.0.0')
     const y = info('2.1.0')
     // First positive result sends; everything after — null, a different
@@ -198,7 +191,7 @@ describe('UpdateManager Available-channel dedup contract', () => {
 
     const m = new UpdateManager({
       checker,
-      mainWindow: mw,
+      ...deps,
       checkInterval: CHECK_INTERVAL,
       initialDelay: INITIAL_DELAY,
     })
@@ -211,37 +204,37 @@ describe('UpdateManager Available-channel dedup contract', () => {
     await runTick(CHECK_INTERVAL) // null
 
     // Total Available calls across the whole session: exactly 1.
-    expect(availableCalls(mw)).toHaveLength(1)
-    expect(availableCalls(mw)[0]).toEqual([UpdateChannel.Available, x])
+    expect(availableCalls(deps)).toHaveLength(1)
+    expect(availableCalls(deps)[0]).toEqual([x])
 
     await m.dispose()
   })
 
   it('dispose + reconstruct resets the already-notified version set', async () => {
-    const mw1 = makeMainWindow()
+    const deps1 = makePanelDeps()
     const x = info('2.0.0')
     const m1 = new UpdateManager({
       checker: makeSequencedChecker([x]),
-      mainWindow: mw1,
+      ...deps1,
       checkInterval: CHECK_INTERVAL,
       initialDelay: INITIAL_DELAY,
     })
     await runTick(INITIAL_DELAY)
-    expect(availableCalls(mw1)).toHaveLength(1)
+    expect(availableCalls(deps1)).toHaveLength(1)
     await m1.dispose()
 
-    // Fresh instance, fresh main window, same X — must announce again
-    // because dedup state lives on the instance, not globally.
-    const mw2 = makeMainWindow()
+    // Fresh instance, fresh deps, same X — must announce again because
+    // dedup state lives on the instance, not globally.
+    const deps2 = makePanelDeps()
     const m2 = new UpdateManager({
       checker: makeSequencedChecker([x]),
-      mainWindow: mw2,
+      ...deps2,
       checkInterval: CHECK_INTERVAL,
       initialDelay: INITIAL_DELAY,
     })
     await runTick(INITIAL_DELAY)
-    expect(availableCalls(mw2)).toHaveLength(1)
-    expect(availableCalls(mw2)[0]).toEqual([UpdateChannel.Available, x])
+    expect(availableCalls(deps2)).toHaveLength(1)
+    expect(availableCalls(deps2)[0]).toEqual([x])
     await m2.dispose()
   })
 })

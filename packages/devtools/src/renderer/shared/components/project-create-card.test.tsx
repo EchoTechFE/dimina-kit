@@ -17,19 +17,19 @@ import { ProjectCreateCard } from './project-create-card'
 
 describe('ProjectCreateCard', () => {
   it('renders the Chinese label "新建小程序"', () => {
-    render(<ProjectCreateCard onClick={() => {}} />)
+    render(<ProjectCreateCard onClick={() => {}} category="miniprogram" />)
     expect(screen.getByText('新建小程序')).toBeInTheDocument()
   })
 
   it('calls onClick when the card is clicked', () => {
     const onClick = vi.fn()
-    render(<ProjectCreateCard onClick={onClick} />)
+    render(<ProjectCreateCard onClick={onClick} category="miniprogram" />)
     fireEvent.click(screen.getByText('新建小程序'))
     expect(onClick).toHaveBeenCalledTimes(1)
   })
 
   it('exposes role="button" or keyboard affordance for accessibility', () => {
-    render(<ProjectCreateCard onClick={() => {}} />)
+    render(<ProjectCreateCard onClick={() => {}} category="miniprogram" />)
     // Either a real <button>, or any element advertising role="button".
     const el =
       screen.queryByRole('button', { name: '新建小程序' }) ??

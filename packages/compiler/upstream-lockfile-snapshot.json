@@ -1,15 +1,15 @@
 {
-  "diminaCommit": "1cbde0ea07e8916b83e70f0450e636b298555ed1",
+  "diminaCommit": "8c79345c7b27cbf00e6e3c684ddcba093e419b00",
   "versions": {
     "@vue/compiler-sfc": "3.5.41",
     "autoprefixer": "10.5.4",
     "cheerio": "1.2.0",
-    "cssnano": "8.0.7",
+    "cssnano": "8.0.8",
     "esbuild": "0.28.2",
     "htmlparser2": "12.0.0",
     "less": "4.9.0",
     "magic-string": "0.30.21",
-    "oxc-parser": "0.142.0",
+    "oxc-parser": "0.145.0",
     "oxc-walker": "1.1.1",
     "postcss": "8.5.26",
     "postcss-selector-parser": "7.1.5",

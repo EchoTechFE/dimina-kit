@@ -29,6 +29,7 @@ describe('ProjectList with create card', () => {
     const onCreate = vi.fn()
     render(
       <ProjectList
+        category="miniprogram"
         projects={[]}
         onAdd={() => {}}
         onCreate={onCreate}
@@ -42,6 +43,7 @@ describe('ProjectList with create card', () => {
   it('renders the create card as the first item BEFORE any existing project', () => {
     render(
       <ProjectList
+        category="miniprogram"
         projects={MANY}
         onAdd={() => {}}
         onCreate={() => {}}
@@ -66,6 +68,7 @@ describe('ProjectList with create card', () => {
     const onAdd = vi.fn()
     render(
       <ProjectList
+        category="miniprogram"
         projects={MANY}
         onAdd={onAdd}
         onCreate={onCreate}
@@ -82,6 +85,7 @@ describe('ProjectList with create card', () => {
     const onAdd = vi.fn()
     render(
       <ProjectList
+        category="miniprogram"
         projects={MANY}
         onAdd={onAdd}
         onCreate={() => {}}

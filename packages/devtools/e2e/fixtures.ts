@@ -3,7 +3,7 @@ import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { ProjectsChannel } from '../src/shared/ipc-channels'
-import { ipcInvoke, openProjectInUI, closeProject, resetSimulatorState } from './helpers'
+import { ipcInvoke, openProjectInUI, closeProject, resetSimulatorState, findMainWindow } from './helpers'
 import { armMaxListenersGuard, type MaxListenersGuard } from './resource-guards'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -82,7 +82,7 @@ async function launchElectron(userDataDir: string): Promise<ElectronApplication>
     },
   })
 
-  const mainWindow = await electronApp.firstWindow()
+  const mainWindow = await findMainWindow(electronApp)
   await mainWindow.waitForLoadState('domcontentloaded')
 
   // Move off-screen + blur so the test windows don't steal focus.
@@ -155,10 +155,10 @@ export const test = base.extend<ElectronFixtures, ElectronWorkerFixtures>({
   },
 
   mainWindow: async ({ _workerElectron }, use) => {
-    let win = await _workerElectron.app.firstWindow()
+    let win = await findMainWindow(_workerElectron.app)
     if (!(await isHealthy(_workerElectron.app, win))) {
       await _workerElectron.relaunch()
-      win = await _workerElectron.app.firstWindow()
+      win = await findMainWindow(_workerElectron.app)
       await win.waitForLoadState('domcontentloaded')
     }
     await use(win)
@@ -177,23 +177,6 @@ export const test = base.extend<ElectronFixtures, ElectronWorkerFixtures>({
     { auto: true },
   ],
 })
-
-/**
- * Find a window by matching its URL against a pattern.
- */
-export async function findWindowByUrl(
-  electronApp: ElectronApplication,
-  urlPattern: RegExp,
-): Promise<Page | undefined> {
-  const windows = electronApp.windows()
-  for (const win of windows) {
-    const url = win.url()
-    if (urlPattern.test(url)) {
-      return win
-    }
-  }
-  return undefined
-}
 
 /**
  * Share one opened project across every test in the calling spec file.
@@ -249,7 +232,7 @@ export function useSharedProject(
   // _workerElectron and grab the firstWindow ourselves.
   testObj.beforeAll(async ({ _workerElectron }) => {
     if (openTimeoutMs !== undefined) testObj.setTimeout(openTimeoutMs)
-    const win = await _workerElectron.app.firstWindow()
+    const win = await findMainWindow(_workerElectron.app)
     await openProjectInUI(win, projectDir, openOptions)
   })
 
@@ -258,7 +241,7 @@ export function useSharedProject(
   })
 
   testObj.afterAll(async ({ _workerElectron }) => {
-    const win = await _workerElectron.app.firstWindow().catch(() => undefined)
+    const win = await findMainWindow(_workerElectron.app).catch(() => undefined)
     if (win && !win.isClosed()) {
       await closeProject(win).catch(() => {})
     }

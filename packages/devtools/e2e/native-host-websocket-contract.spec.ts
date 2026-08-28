@@ -24,6 +24,7 @@ import {
   openProjectInUI,
   pollUntil,
   waitForSimulatorWebview,
+  findMainWindow,
 } from './helpers'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -185,7 +186,7 @@ async function bootApp(projectDir: string, userDataDir: string): Promise<AppHand
       DIMINA_E2E_USER_DATA_DIR: userDataDir,
     },
   })
-  const win = await app.firstWindow()
+  const win = await findMainWindow(app)
   await win.waitForLoadState('domcontentloaded')
   await openProjectInUI(win, projectDir, { waitMs: 20_000 })
   await waitForSimulatorWebview(app)

@@ -11,6 +11,7 @@ describe('ProjectList', () => {
   it('renders the create card when no projects exist', () => {
     render(
       <ProjectList
+        category="miniprogram"
         projects={[]}
         onAdd={() => {}}
         onOpen={() => {}}
@@ -22,9 +23,25 @@ describe('ProjectList', () => {
     expect(screen.getByText('新建小程序')).toBeInTheDocument()
   })
 
+  it('renders 小游戏 copy when category is minigame', () => {
+    render(
+      <ProjectList
+        category="minigame"
+        projects={[]}
+        onAdd={() => {}}
+        onOpen={() => {}}
+        onRemove={() => {}}
+      />
+    )
+    expect(screen.getByRole('heading', { name: '小游戏' })).toBeInTheDocument()
+    expect(screen.getByText('新建小游戏')).toBeInTheDocument()
+    expect(screen.queryByText('小程序')).not.toBeInTheDocument()
+  })
+
   it('renders project cards when projects exist', () => {
     render(
       <ProjectList
+        category="miniprogram"
         projects={mockProjects}
         onAdd={() => {}}
         onOpen={() => {}}
@@ -38,6 +55,7 @@ describe('ProjectList', () => {
   it('filters projects by search', () => {
     render(
       <ProjectList
+        category="miniprogram"
         projects={mockProjects}
         onAdd={() => {}}
         onOpen={() => {}}
@@ -53,6 +71,7 @@ describe('ProjectList', () => {
   it('shows no match when search has no results', () => {
     render(
       <ProjectList
+        category="miniprogram"
         projects={mockProjects}
         onAdd={() => {}}
         onOpen={() => {}}
@@ -68,6 +87,7 @@ describe('ProjectList', () => {
     const onOpen = vi.fn()
     render(
       <ProjectList
+        category="miniprogram"
         projects={mockProjects}
         onAdd={() => {}}
         onOpen={onOpen}

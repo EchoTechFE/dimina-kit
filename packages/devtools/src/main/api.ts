@@ -18,6 +18,8 @@ export type {
   MiniappRuntime,
   MiniappSessionAppInfo,
   DiminaHostToolbarPageBridge,
+  DiminaHostSidebarPageBridge,
+  DiminaHostDialogPageBridge,
 } from './runtime/miniapp-runtime.js'
 
 // ── Context & views (for module-assembly consumers) ──────────────────────

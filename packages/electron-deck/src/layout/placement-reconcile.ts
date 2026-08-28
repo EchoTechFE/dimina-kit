@@ -26,7 +26,11 @@ export interface DesiredView<Extra = unknown> {
 }
 
 export interface PlacementSnapshot<Extra = unknown> {
-  // Renderer lifetime id; a higher generation resets the whole table.
+  // Renderer lifetime id. A snapshot behind the last-accepted generation is
+  // rejected outright; a higher generation's snapshot still diffs against the
+  // carried-forward actual table (see reconcile()'s generation-bump handling
+  // below) so a view the new generation doesn't redeclare gets detached, not
+  // silently forgotten.
   generation: number
   // Window-level monotonic tick; all views in one commit share one epoch.
   epoch: number
@@ -210,13 +214,16 @@ export function reconcile<Extra = unknown>(
     return { state: { ...prev }, ops: [] }
   }
 
-  // A higher generation is a fresh renderer: forget the old actual entirely so
-  // stale ids can't linger, then rebuild from the snapshot.
-  const resetGeneration = snapshot.generation > prev.generation
+  // `prev.actual` reflects REAL applied native-view state (main re-injects its
+  // own applied-view ledger before every call — see PlacementReconciler), and
+  // must carry forward across a generation bump too: a fresh renderer's first
+  // snapshot may omit (or not yet redeclare) a view the previous renderer
+  // lifetime actually attached — a crash, a full reload, or simply a snapshot
+  // that hasn't gotten around to redeclaring it yet. `scanDetached` below can
+  // only emit a `detach` op for an id it can still see in `actual`; wiping the
+  // map here would silently strand that view attached forever.
   const actual = new Map<string, ActualView<Extra>>()
-  if (!resetGeneration) {
-    for (const [id, a] of prev.actual) actual.set(id, { ...a })
-  }
+  for (const [id, a] of prev.actual) actual.set(id, { ...a })
 
   const desired = new Map<string, DesiredView<Extra>>()
   for (const v of snapshot.views) desired.set(v.viewId, v)

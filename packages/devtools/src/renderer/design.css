@@ -396,3 +396,24 @@ html, body {
   color: var(--color-text);
   background: var(--color-surface-3);
 }
+
+/* ── Project card geometry ──────────────────────────────────────────────────
+   A project card is one design unit that scales with its own column width.
+   The grid column is elastic, so a card whose preview area is proportional
+   (aspect-square) but whose info row is a fixed pixel height changes aspect
+   ratio as the column grows. Every metric inside a card is therefore a
+   multiple of --qd-card-u, and the grid's column floor derives from the same
+   reference width, so the two cannot drift apart.
+ ──────────────────────────────────────────────────────────────────────────── */
+:root {
+  /* Card width the design's metrics are expressed at. Unitless so it can seed
+     both a length (the grid column floor) and a divisor (--qd-card-u). */
+  --qd-card-w-ref: 240;
+}
+
+[data-qd-card] {
+  container-type: inline-size;
+  /* One design pixel. Only descendants may use it: container units resolve
+     against the nearest ancestor container, which for them is this card. */
+  --qd-card-u: calc(100cqw / var(--qd-card-w-ref));
+}

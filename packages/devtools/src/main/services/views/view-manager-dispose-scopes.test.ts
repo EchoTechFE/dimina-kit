@@ -123,6 +123,10 @@ vi.mock('electron', () => {
 vi.mock('../../utils/paths.js', () => ({
   mainPreloadPath: '/stub/preload.js',
   hostToolbarRuntimePreloadPath: '/stub/host-toolbar-runtime-preload.cjs',
+  // view-manager also wires the sidebar/dialog slots unconditionally now —
+  // their session-runtime modules read these at import time.
+  hostSidebarRuntimePreloadPath: '/stub/host-sidebar-runtime-preload.cjs',
+  hostDialogRuntimePreloadPath: '/stub/host-dialog-runtime-preload.cjs',
   cjsSiblingPreloadPath: (p: string) => p.replace(/\.js$/, '.cjs'),
   devtoolsPackageRoot: '/stub/devtools-pkg-root',
 }))
@@ -230,6 +234,37 @@ describe('ViewManager.disposeProjectViews: tears down project-scoped views, leav
     ).toBe(toolbarView.webContents.id)
     expect(toolbarView.webContents.destroyed).toBe(false)
     expect(toolbarView.webContents.close).not.toHaveBeenCalled()
+  })
+})
+
+describe('ViewManager.disposeAll: tears down the project-create/update dialog panels too', () => {
+  it('destroys both dialog panel views, no lingering webContents after disposeAll', async () => {
+    const createViewManager = await loadCreateViewManager()
+    const { ctx } = makeContext()
+    const mgr = createViewManager(ctx)
+
+    mgr.showProjectCreateDialog({ templates: [], defaultBaseDir: '/tmp' })
+    const projectCreateView = h.constructed[h.constructed.length - 1]!
+    expect(mgr.getProjectCreateDialogWebContentsId()).toBe(projectCreateView.webContents.id)
+
+    mgr.showUpdateDialog({ version: '1.2.0', downloadUrl: 'https://example.com/update.zip' })
+    const updateView = h.constructed[h.constructed.length - 1]!
+    expect(mgr.getUpdateDialogWebContentsId()).toBe(updateView.webContents.id)
+
+    mgr.disposeAll()
+
+    expect(
+      mgr.getProjectCreateDialogWebContentsId(),
+      'project-create dialog panel must be destroyed by disposeAll, not left dangling',
+    ).toBeNull()
+    expect(
+      mgr.getUpdateDialogWebContentsId(),
+      'update dialog panel must be destroyed by disposeAll, not left dangling',
+    ).toBeNull()
+    expect(projectCreateView.webContents.close).toHaveBeenCalledTimes(1)
+    expect(projectCreateView.webContents.destroyed).toBe(true)
+    expect(updateView.webContents.close).toHaveBeenCalledTimes(1)
+    expect(updateView.webContents.destroyed).toBe(true)
   })
 })
 

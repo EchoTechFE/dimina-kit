@@ -101,6 +101,10 @@ vi.mock('../../utils/paths.js', () => ({
   // R1 mock adaptation: session-registered toolbar-runtime preload path
   // (replaces the legacy hostToolbarPreloadPath advertiser bundle).
   hostToolbarRuntimePreloadPath: '/stub/host-toolbar-runtime-preload.cjs',
+  // view-manager also wires the sidebar/dialog slots unconditionally now —
+  // their session-runtime modules read these at import time.
+  hostSidebarRuntimePreloadPath: '/stub/host-sidebar-runtime-preload.cjs',
+  hostDialogRuntimePreloadPath: '/stub/host-dialog-runtime-preload.cjs',
   cjsSiblingPreloadPath: (p: string) => (p.endsWith('.js') ? p.slice(0, -'.js'.length) + '.cjs' : p),
 }))
 

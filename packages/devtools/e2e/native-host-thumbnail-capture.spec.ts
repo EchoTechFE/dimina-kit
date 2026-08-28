@@ -40,6 +40,7 @@ import {
   ipcInvoke,
   pollUntil,
   RENDER_GUEST_URL_MARKER,
+  findMainWindow,
 } from './helpers'
 import { ProjectChannel, AutomationChannel } from '../src/shared/ipc-channels'
 
@@ -93,7 +94,7 @@ test.describe('native-host captureThumbnail targets the render guest, not the si
       },
     })
 
-    mainWindow = await electronApp.firstWindow()
+    mainWindow = await findMainWindow(electronApp)
     await mainWindow.waitForLoadState('domcontentloaded')
 
     await electronApp.evaluate(async ({ BrowserWindow }) => {

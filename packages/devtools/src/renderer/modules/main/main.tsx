@@ -1,9 +1,6 @@
 import { useState, useEffect } from 'react'
-import { ProjectList } from '@/shared/components/project-list'
-import { ProjectCreateDialog } from '@/shared/components/project-create-dialog'
-import type { ProjectTemplateInfo } from '@/shared/components/project-create-dialog'
+import { ProjectListScreen } from '@/modules/main/features/project-list/project-list-screen'
 import { ProjectRuntime } from '@/modules/main/features/project-runtime/project-runtime'
-import { UpdateDialog } from '@/modules/update/update-dialog'
 import {
   addProject,
   chooseProjectDirectory,
@@ -14,10 +11,12 @@ import {
   listProjects,
   listTemplates,
   notifyWindowScreen,
+  onProjectCreateSubmitted,
   onWindowNavigateBack,
   onWindowOpenProject,
   openCreateProjectDialog,
   removeProject,
+  showProjectCreateDialog,
 } from '@/shared/api'
 import type { Project } from '@/shared/types'
 
@@ -29,13 +28,6 @@ export default function Main() {
   const [projectList, setProjectList] = useState<Project[]>([])
   const [thumbnails, setThumbnails] = useState<Record<string, string | null>>({})
   const [appName, setAppName] = useState(DEFAULT_APP_NAME)
-
-  // Local "新建项目" dialog state. Used only when the host did
-  // not supply a customCreateProjectDialog hook (openCreateProjectDialog
-  // returns null in that case).
-  const [createOpen, setCreateOpen] = useState(false)
-  const [createTemplates, setCreateTemplates] = useState<ProjectTemplateInfo[]>([])
-  const [createBaseDir, setCreateBaseDir] = useState<string>('')
 
   async function loadProjects() {
     setProjectList(await listProjects())
@@ -88,6 +80,14 @@ export default function Main() {
     })
   }, [])
 
+  // The overlay panel already hides itself (main-side) before relaying the
+  // submission — see project-create.ts's Submit handler — so this only needs
+  // to run the existing scaffold flow, not manage any open/closed state.
+  useEffect(() => {
+    return onProjectCreateSubmitted(handleCreateSubmit)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   async function handleAdd() {
     const dirPath = await chooseProjectDirectory()
     if (!dirPath) return
@@ -137,18 +137,15 @@ export default function Main() {
     }
 
     // Built-in path: fetch the merged catalog and the suggested base dir
-    // in parallel, then open the local dialog.
+    // in parallel, then ask main to show the overlay-panel dialog.
     const [tplsResult, defaultsResult] = await Promise.allSettled([
       listTemplates(),
       getCreateProjectDefaults(),
     ])
-    setCreateTemplates(
-      tplsResult.status === 'fulfilled' ? tplsResult.value : [],
-    )
-    setCreateBaseDir(
-      defaultsResult.status === 'fulfilled' ? defaultsResult.value.baseDir : '',
-    )
-    setCreateOpen(true)
+    showProjectCreateDialog({
+      templates: tplsResult.status === 'fulfilled' ? tplsResult.value : [],
+      defaultBaseDir: defaultsResult.status === 'fulfilled' ? defaultsResult.value.baseDir : '',
+    })
   }
 
   async function handleCreateSubmit(input: {
@@ -156,7 +153,6 @@ export default function Main() {
     path: string
     templateId: string
   }) {
-    setCreateOpen(false)
     let project: Project
     try {
       // Errors surfaced via native dialog from the main process; bail quietly.
@@ -180,32 +176,18 @@ export default function Main() {
 
   if (page === 'list') {
     return (
-      <>
-        <UpdateDialog />
-        <ProjectList
-          projects={projectList}
-          onAdd={handleAdd}
-          onCreate={handleCreate}
-          onOpen={handleOpen}
-          onRemove={handleRemove}
-          thumbnails={thumbnails}
-        />
-        <ProjectCreateDialog
-          open={createOpen}
-          templates={createTemplates}
-          defaultBaseDir={createBaseDir}
-          onSubmit={handleCreateSubmit}
-          onCancel={() => setCreateOpen(false)}
-          onBrowse={chooseProjectDirectory}
-        />
-      </>
+      <ProjectListScreen
+        projects={projectList}
+        onAdd={handleAdd}
+        onCreate={handleCreate}
+        onOpen={handleOpen}
+        onRemove={handleRemove}
+        thumbnails={thumbnails}
+      />
     )
   }
 
   return (
-    <>
-      <UpdateDialog />
-      <ProjectRuntime key={currentProject?.path} project={currentProject!} />
-    </>
+    <ProjectRuntime key={currentProject?.path} project={currentProject!} />
   )
 }

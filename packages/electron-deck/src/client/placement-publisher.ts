@@ -13,7 +13,8 @@ import type { DesiredView, PlacementSnapshot } from '../layout/index.js'
 
 export interface PlacementPublisherDeps<Extra = unknown> {
   // Renderer lifetime id stamped on every snapshot; a fresh renderer uses a
-  // higher generation so the main reconciler resets its table. A function is
+  // higher generation than the last one main accepted, so main's
+  // lower-generation guard doesn't reject its snapshots. A function is
   // re-read on EVERY flush, so a host whose generation is assigned by main (via a
   // grant that can arrive after the publisher is created) can hand a getter and
   // have later snapshots pick up the newer value.

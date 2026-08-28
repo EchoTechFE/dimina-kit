@@ -1,6 +1,6 @@
 import type { WorkbenchModule } from '../services/module.js'
 import type { ViewManager } from '../services/views/view-manager.js'
-import { OverlayChannel, TooltipChannel } from '../../shared/ipc-channels.js'
+import { OverlayChannel, TooltipChannel } from '../../shared/ipc-channels-overlays.js'
 import { TooltipMeasuredSchema, TooltipShowSchema } from '../../shared/ipc-schemas.js'
 import type { Disposable } from '@dimina-kit/electron-deck/main'
 import { validate } from '../utils/ipc-schema.js'

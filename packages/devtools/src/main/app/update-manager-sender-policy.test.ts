@@ -190,7 +190,7 @@ vi.mock('@dimina-kit/devkit', () => ({
   openProject: vi.fn(() => Promise.resolve({ port: 0, appInfo: {}, close: () => Promise.resolve() })),
 }))
 
-import { UpdateChannel } from '../../shared/ipc-channels.js'
+import { UpdateChannel } from '../../shared/ipc-channels-overlays.js'
 import type { UpdateChecker } from '../../shared/types.js'
 
 let createDevtoolsRuntime: typeof import('./app.js').createDevtoolsRuntime

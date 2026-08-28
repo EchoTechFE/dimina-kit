@@ -81,7 +81,10 @@ export interface OverlayPanel<TShowData = void> {
   isPresent(): boolean
   getWebContents(): WebContents | null
   getWebContentsId(): number | null
-  /** Resolve once the current renderer has installed its subscriptions. */
+  /** Resolve once the current renderer has installed its subscriptions.
+   *  Rejects if the current instance is torn down (destroyed, crashed, or
+   *  failed to load) before it ever became ready — a caller can then tell
+   *  "ready" apart from "never will be, this instance is gone". */
   whenReady(): Promise<void>
   /** Accept a ready acknowledgement only from the current WebContents. */
   markReady(webContentsId: number): void
@@ -96,7 +99,7 @@ export function createOverlayPanel<TShowData = void>(
   let ready = false
   let hasPendingData = false
   let latestData: TShowData
-  let readyWaiters: Array<() => void> = []
+  let readyWaiters: Array<{ resolve: () => void, reject: (reason: Error) => void }> = []
   let instanceEpoch = 0
   let pendingBounds: OverlayPanelBounds | null = null
   let wantsVisible = false
@@ -106,7 +109,59 @@ export function createOverlayPanel<TShowData = void>(
   function resolveReadyWaiters(): void {
     const waiters = readyWaiters
     readyWaiters = []
-    for (const resolve of waiters) resolve()
+    for (const waiter of waiters) waiter.resolve()
+  }
+
+  /** A crash/teardown means this instance will never become ready — reject
+   *  rather than resolve, so a caller can distinguish "ready" from "gone". */
+  function rejectReadyWaiters(reason: Error): void {
+    const waiters = readyWaiters
+    readyWaiters = []
+    for (const waiter of waiters) waiter.reject(reason)
+  }
+
+  /**
+   * Shared teardown body for both `destroy()` and a broken-view recovery
+   * (`did-fail-load` / `render-process-gone`) — same state reset, same
+   * delegation to the host for the actual native destroy. `destroyView`
+   * runs before `setDesired(null)`: the host's destroy path already detaches
+   * the native view and clears its own "actual" bookkeeping synchronously,
+   * so by the time `setDesired(null)` triggers its own reconcile, there is
+   * nothing left to detach — reconciling first would diff against a still-
+   * mounted actual state and produce a redundant detach op. Withdraws from
+   * the host's placement so a stale desired-bounds entry from this instance
+   * can't let the NEXT instance get mounted as a blank click-catching layer
+   * before its own `markReady()` fires. Rejects pending `whenReady()`
+   * waiters — this instance is gone, not ready.
+   */
+  function teardown(current: ElectronWebContentsView): void {
+    view = null
+    ready = false
+    hasPendingData = false
+    pendingBounds = null
+    wantsVisible = false
+    instanceEpoch++
+    deps.destroyView(current)
+    deps.setDesired(null)
+    rejectReadyWaiters(new Error('overlay panel instance torn down before it became ready'))
+  }
+
+  /**
+   * `ensureView()`'s reuse check (`!view.webContents.isDestroyed()`) does not
+   * detect "alive but broken" — a failed navigation or a crashed renderer
+   * process leaves `webContents` non-destroyed but blank/unresponsive, so
+   * without this the same broken view would be handed back to every future
+   * `show()` forever. Tearing down here makes the NEXT `ensureView()` call
+   * build a fresh view instead.
+   */
+  function handleViewBroken(
+    current: ElectronWebContentsView,
+    epoch: number,
+    detail: string,
+  ): void {
+    if (view !== current || epoch !== instanceEpoch) return
+    console.error(`[overlay-panel] ${detail} — destroying so the next show()/prepare() rebuilds`)
+    teardown(current)
   }
 
   function markCurrentReady(current: ElectronWebContentsView, epoch: number): void {
@@ -134,6 +189,15 @@ export function createOverlayPanel<TShowData = void>(
     if ((deps.readyMode ?? 'load') === 'load') {
       created.webContents.once('did-finish-load', () => markCurrentReady(created, epoch))
     }
+    created.webContents.on('did-fail-load', (_event, errorCode, _errorDescription, _validatedURL, isMainFrame) => {
+      // -3 is ERR_ABORTED, which fires on every routine superseded navigation
+      // (e.g. a fresh loadFile/loadURL cancelling this one) — not a real failure.
+      if (!isMainFrame || errorCode === -3) return
+      handleViewBroken(created, epoch, `did-fail-load (code ${errorCode})`)
+    })
+    created.webContents.on('render-process-gone', (_event, details) => {
+      handleViewBroken(created, epoch, `render-process-gone (${details.reason})`)
+    })
     void created.webContents.loadFile(path.join(deps.rendererDir, deps.entry))
     return created
   }
@@ -182,7 +246,7 @@ export function createOverlayPanel<TShowData = void>(
     },
     whenReady() {
       if (ready && view && !view.webContents.isDestroyed()) return Promise.resolve()
-      return new Promise<void>((resolve) => readyWaiters.push(resolve))
+      return new Promise<void>((resolve, reject) => readyWaiters.push({ resolve, reject }))
     },
     markReady(webContentsId) {
       const current = view
@@ -192,14 +256,7 @@ export function createOverlayPanel<TShowData = void>(
     destroy() {
       const v = view
       if (!v) return
-      view = null
-      ready = false
-      hasPendingData = false
-      pendingBounds = null
-      wantsVisible = false
-      instanceEpoch++
-      resolveReadyWaiters()
-      deps.destroyView(v)
+      teardown(v)
     },
   }
 }

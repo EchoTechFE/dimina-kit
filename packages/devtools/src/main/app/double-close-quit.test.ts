@@ -216,6 +216,8 @@ vi.mock('electron', () => {
     })),
     defaultSession: {
       protocol: { handle: vi.fn(), unhandle: vi.fn() },
+      registerPreloadScript: vi.fn(() => 'stub-preload-script-id'),
+      unregisterPreloadScript: vi.fn(),
     },
   }
 

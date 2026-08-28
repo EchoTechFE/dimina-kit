@@ -39,7 +39,7 @@ const exportAppend = {
     const appends = {
       'logic-compiler.js': '\nexport { writeCompileRes }\nexport function __resetLogicState() { processedModules.clear() }\nexport function __setEnableSourcemap(v) { enableSourcemap = !!v }\n',
       'style-compiler.js': '\nexport function __resetStyleState() { compileRes.clear() }\n',
-      'view-compiler.js': '\nexport function __resetViewState() { compileResCache.clear(); wxsModuleRegistry.clear(); wxsFilePathMap.clear() }\n',
+      'view-compiler.js': '\nexport function __resetViewState() { compileResCache.clear(); wxsModuleRegistry.clear(); wxsFilePathMap.clear() }\nexport function __setEnableSourcemap(v) { enableSourcemap = !!v }\n',
       'utils.js': '\nexport function __resetAssets() { for (const k of Object.keys(assetsMap)) delete assetsMap[k] }\n',
     }
     build.onLoad({ filter: /(core[\\/](logic|style|view)-compiler|common[\\/]utils)\.js$/ }, async (args) => {
@@ -123,6 +123,8 @@ if (MODE === 'node') {
     'node:worker_threads': shim('worker_threads.js'),
     'node:crypto': shim('crypto.js'),
     'crypto': shim('crypto.js'),
+    'node:async_hooks': shim('async_hooks.js'),
+    'async_hooks': shim('async_hooks.js'),
     'node:path': 'path-browserify',
     'path': 'path-browserify',
     'node:events': 'events',

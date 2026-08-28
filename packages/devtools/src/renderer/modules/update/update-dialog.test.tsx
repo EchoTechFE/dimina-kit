@@ -8,7 +8,7 @@
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { invokeStrictMock, onMock, listeners } = vi.hoisted(() => {
+const { invokeStrictMock, onMock, sendMock, listeners } = vi.hoisted(() => {
   const listeners = new Map<string, (...args: unknown[]) => void>()
   return {
     invokeStrictMock: vi.fn(),
@@ -16,6 +16,7 @@ const { invokeStrictMock, onMock, listeners } = vi.hoisted(() => {
       listeners.set(channel, cb)
       return () => listeners.delete(channel)
     }),
+    sendMock: vi.fn(),
     listeners,
   }
 })
@@ -23,15 +24,17 @@ const { invokeStrictMock, onMock, listeners } = vi.hoisted(() => {
 vi.mock('@/shared/api/ipc-transport', () => ({
   invokeStrict: invokeStrictMock,
   on: onMock,
+  send: sendMock,
 }))
 
-import { UpdateChannel } from '../../../shared/ipc-channels.js'
+import { UpdateChannel, OverlayChannel } from '../../../shared/ipc-channels-overlays.js'
 import { UpdateDialog } from './update-dialog'
 
 const UPDATE_INFO = { version: '2.0.0', downloadUrl: 'https://example.com/2.0.0.dmg' }
 
 beforeEach(() => {
   invokeStrictMock.mockReset()
+  sendMock.mockReset()
   listeners.clear()
 })
 
@@ -90,5 +93,24 @@ describe('UpdateDialog: install failure feedback', () => {
     await waitFor(() => {
       expect(invokeStrictMock).toHaveBeenCalledWith(UpdateChannel.Download)
     })
+  })
+})
+
+describe('UpdateDialog: Available subscription must be live before notifyOverlayReady() fires', () => {
+  it('does not miss an Available event main pushes synchronously in response to the ready notification', async () => {
+    // Simulate main responding to OverlayChannel.Ready by synchronously
+    // delivering a pending Available — this only reaches the dialog's own
+    // listener if that listener's effect ran BEFORE the notifyOverlayReady()
+    // effect. With the buggy declaration order this leaves `info` null
+    // forever (component renders nothing, WCV stays an invisible overlay).
+    sendMock.mockImplementation((channel: string) => {
+      if (channel === OverlayChannel.Ready) {
+        listeners.get(UpdateChannel.Available)?.(UPDATE_INFO)
+      }
+    })
+
+    render(<UpdateDialog />)
+
+    expect(await screen.findByText('New version 2.0.0 is available.')).toBeInTheDocument()
   })
 })

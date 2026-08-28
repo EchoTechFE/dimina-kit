@@ -1,5 +1,6 @@
 import type { CompileConfig } from '@/shared/types'
-import { SettingsChannel, WorkbenchSettingsChannel } from '../../../shared/ipc-channels'
+import { WorkbenchSettingsChannel } from '../../../shared/ipc-channels'
+import { SettingsChannel } from '../../../shared/ipc-channels-overlays'
 import { invoke, invokeStrict, on, send } from './ipc-transport'
 
 export type ThemeSource = 'system' | 'dark' | 'light'

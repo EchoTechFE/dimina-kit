@@ -8,7 +8,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { cleanup, render } from '@testing-library/react'
 import type { PlacementPublisher } from '@dimina-kit/electron-deck/client'
-import { PlacementPublisherContext } from '../placement-publisher-context'
+import { PlacementPublisherContext } from '@/shared/placement-publisher-context'
 
 vi.mock('@dimina-kit/view-anchor', () => ({
   createPlacementAnchor: () => ({ update: vi.fn(), dispose: vi.fn(), pulse: vi.fn() }),

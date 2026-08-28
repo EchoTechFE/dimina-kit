@@ -2,6 +2,7 @@ import { _electron, expect, test, type ElectronApplication } from '@playwright/t
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import { findMainWindow } from './helpers'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -33,7 +34,7 @@ test.describe('launch() + RuntimeBackend (v2 framework orchestration)', () => {
   })
 
   test('framework+backend boots a visible devtools main window', async () => {
-    const win = await app.firstWindow()
+    const win = await findMainWindow(app)
     await win.waitForLoadState('domcontentloaded')
     // Poll: the main window `show()`s slightly after domcontentloaded, and under
     // full-suite load that gap widens — retry rather than sample once.
@@ -48,7 +49,7 @@ test.describe('launch() + RuntimeBackend (v2 framework orchestration)', () => {
   })
 
   test('full devtools runtime assembled (renderer mounts content)', async () => {
-    const win = await app.firstWindow()
+    const win = await findMainWindow(app)
     await win.waitForSelector('body', { state: 'visible' })
     const hasContent = await win.evaluate(() =>
       document.body.innerText.length > 0 || document.body.children.length > 0)
