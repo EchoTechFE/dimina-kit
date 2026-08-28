@@ -3,7 +3,9 @@ import path from 'path'
 import { ProjectsChannel, DialogChannel } from '../../shared/ipc-channels.js'
 import {
   ProjectsAddSchema,
+  ProjectsOpenEditDialogSchema,
   ProjectsRemoveSchema,
+  ProjectsUpdateSchema,
 } from '../../shared/ipc-schemas.js'
 // eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
 import type { WorkbenchContext } from '../services/workbench-context.js'
@@ -27,6 +29,7 @@ type ProjectsIpcCtx = Pick<
   | 'projectsProvider'
   | 'projectTemplates'
   | 'customCreateProjectDialog'
+  | 'customEditProjectDialog'
   | 'notify'
   | 'views'
 >
@@ -84,6 +87,14 @@ export function registerProjectsIpc(ctx: ProjectsIpcCtx): Disposable {
       const [dirPath] = validate(ProjectsChannel.Remove, ProjectsRemoveSchema, args)
       return ctx.workspace.removeProject(dirPath)
     })
+    .handle(ProjectsChannel.Update, (_event, ...args: unknown[]) => {
+      const [dirPath, patch] = validate(
+        ProjectsChannel.Update,
+        ProjectsUpdateSchema,
+        args,
+      )
+      return ctx.workspace.updateProject(dirPath, patch)
+    })
     // ── template catalog + create flow ──
     .handle(ProjectsChannel.ListTemplates, () => {
       // Sanitize at the IPC boundary: `generate` is a function and the
@@ -98,6 +109,28 @@ export function registerProjectsIpc(ctx: ProjectsIpcCtx): Disposable {
         parentWindow: ctx.windows.mainWindow,
         templates: sanitized,
       })
+    })
+    .handle(ProjectsChannel.OpenEditDialog, async (_event, ...args: unknown[]) => {
+      if (!ctx.customEditProjectDialog) return null
+      const [dirPath] = validate(
+        ProjectsChannel.OpenEditDialog,
+        ProjectsOpenEditDialogSchema,
+        args,
+      )
+      // Read from the workspace, not the renderer's args — the host sees
+      // devtools' own authoritative record, never a client-supplied one.
+      const project = (await ctx.workspace.listProjects()).find((p) => p.path === dirPath)
+      if (!project) throw new Error(`No such project: ${dirPath}`)
+      const result = await ctx.customEditProjectDialog({
+        parentWindow: ctx.windows.mainWindow,
+        project,
+      })
+      // Wrapped in `{ result }` so `null` on the wire means ONLY "no hook
+      // configured" (renderer falls back to the built-in dialog). A hook that
+      // ran and was cancelled resolves `result: null`, which the renderer
+      // must treat as "do nothing" — otherwise a cancelled host dialog would
+      // fall through into the built-in one right behind it.
+      return { result }
     })
     .handle(ProjectsChannel.Create, async (_event, ...args: unknown[]) => {
       // We deliberately don't run this through zod yet — the input shape is

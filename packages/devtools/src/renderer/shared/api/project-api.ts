@@ -1,5 +1,8 @@
-import type { CompileConfig, Project } from '@/shared/types'
-import type { CustomCreateProjectDialogResult } from '../../../shared/types'
+import type { CompileConfig, Project, ProjectPatch } from '@/shared/types'
+import type {
+  CustomCreateProjectDialogResult,
+  OpenEditProjectDialogReply,
+} from '../../../shared/types'
 import type { ProjectCreateDefaults } from '../../../shared/ipc-channels'
 import { ProjectsChannel, DialogChannel, ProjectChannel, SessionChannel } from '../../../shared/ipc-channels'
 import { invoke, invokeStrict, on } from './ipc-transport'
@@ -68,6 +71,18 @@ export function addProject(dirPath: string): Promise<Project> {
 /** Remove a project (by its root path) from the workspace store. */
 export function removeProject(projectPath: string): Promise<void> {
   return invoke<void>(ProjectsChannel.Remove, projectPath)
+}
+
+/**
+ * Apply an edit (name / icon) to an existing project record. Strict: the
+ * caller shows the failure instead of silently keeping the old values on
+ * screen. `projectPath` identifies the record and is not itself editable.
+ */
+export function updateProject(
+  projectPath: string,
+  patch: ProjectPatch,
+): Promise<Project> {
+  return invokeStrict<Project>(ProjectsChannel.Update, projectPath, patch)
 }
 
 /** Start a compile session for the given project. */
@@ -184,6 +199,18 @@ export function listTemplates(): Promise<ProjectTemplateInfo[]> {
  */
 export function openCreateProjectDialog(): Promise<CustomCreateProjectDialogResult> {
   return invoke<CustomCreateProjectDialogResult>(ProjectsChannel.OpenCreateDialog)
+}
+
+/**
+ * Ask main to open the host-supplied "编辑项目" dialog hook for `projectPath`.
+ * Resolves to:
+ *  - `null` — no hook configured; renderer should show the built-in dialog.
+ *  - `{ result: null }` — hook ran, user cancelled; renderer does nothing.
+ *  - `{ result: { updated } }` — host already persisted the edit; refresh the list.
+ *  - `{ result: { name?, iconUrl? } }` — host collected a patch; apply it via `updateProject`.
+ */
+export function openEditProjectDialog(projectPath: string): Promise<OpenEditProjectDialogReply> {
+  return invoke<OpenEditProjectDialogReply>(ProjectsChannel.OpenEditDialog, projectPath)
 }
 
 /** Scaffold and register a new project. Returns the created Project. */

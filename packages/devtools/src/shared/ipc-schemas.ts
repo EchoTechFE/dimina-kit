@@ -252,8 +252,24 @@ export const ProjectGetPagesSchema = z.tuple([AbsolutePath])
 /** project:getCompileConfig — absolute project path. */
 export const ProjectGetCompileConfigSchema = z.tuple([AbsolutePath])
 
+/**
+ * projects:update — absolute project directory path + the editable subset of
+ * its record. The path is the identity of the record being edited, never a
+ * field of the patch.
+ */
+export const ProjectsUpdateSchema = z.tuple([
+  AbsolutePath,
+  z.object({
+    name: z.string().min(1).max(200).optional(),
+    iconUrl: z.string().max(2048).optional(),
+  }),
+])
+
 /** projects:remove — absolute project directory path. */
 export const ProjectsRemoveSchema = z.tuple([AbsolutePath])
+
+/** projects:openEditDialog — absolute project directory path. */
+export const ProjectsOpenEditDialogSchema = z.tuple([AbsolutePath])
 
 /**
  * workbenchSettings:save — full WorkbenchSettings object.

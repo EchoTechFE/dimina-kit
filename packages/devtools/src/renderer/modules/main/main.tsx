@@ -15,10 +15,13 @@ import {
   onWindowNavigateBack,
   onWindowOpenProject,
   openCreateProjectDialog,
+  openEditProjectDialog,
   removeProject,
   showProjectCreateDialog,
+  updateProject,
 } from '@/shared/api'
-import type { Project } from '@/shared/types'
+import { ProjectEditDialog } from '@/shared/components/project-edit-dialog'
+import type { Project, ProjectPatch } from '@/shared/types'
 
 const DEFAULT_APP_NAME = 'Dimina DevTools'
 
@@ -27,6 +30,9 @@ export default function Main() {
   const [currentProject, setCurrentProject] = useState<Project | null>(null)
   const [projectList, setProjectList] = useState<Project[]>([])
   const [thumbnails, setThumbnails] = useState<Record<string, string | null>>({})
+  const [editingProject, setEditingProject] = useState<Project | null>(null)
+  const [savingEdit, setSavingEdit] = useState(false)
+  const [editError, setEditError] = useState<string | null>(null)
   const [appName, setAppName] = useState(DEFAULT_APP_NAME)
 
   async function loadProjects() {
@@ -169,6 +175,81 @@ export default function Main() {
     await loadProjects()
   }
 
+  // First try the host-supplied dialog. `reply === null` means no hook is
+  // configured, so fall back to the built-in dialog. A configured hook
+  // always resolves `{ result }`, even when the user cancelled it
+  // (`result: null`) — that case must NOT fall through to the built-in
+  // dialog, unlike the create flow's collapsed-to-null wire shape.
+  async function handleEdit(p: Project) {
+    let reply: Awaited<ReturnType<typeof openEditProjectDialog>>
+    try {
+      reply = await openEditProjectDialog(p.path)
+    } catch {
+      reply = null
+    }
+    if (!reply) {
+      setEditError(null)
+      setSavingEdit(false)
+      setEditingProject(p)
+      return
+    }
+    const result = reply.result
+    if (!result) return
+    if ('updated' in result) {
+      await loadProjects()
+      return
+    }
+    try {
+      await updateProject(p.path, result)
+    } catch (err) {
+      console.warn('[projects] failed to update project', err)
+      return
+    }
+    await loadProjects()
+  }
+
+  async function handleEditSubmit(patch: ProjectPatch) {
+    const target = editingProject
+    if (!target || savingEdit) return
+    // No field actually changed (dialog re-submitted the seeded values) —
+    // nothing to send, just close.
+    if (Object.keys(patch).length === 0) {
+      setEditingProject(null)
+      return
+    }
+    setSavingEdit(true)
+    setEditError(null)
+    let updated: Project
+    try {
+      updated = await updateProject(target.path, patch)
+    } catch (err) {
+      // Keep the dialog open with the user's input so a rejected edit (empty
+      // name, record gone, provider doesn't support editing) can be
+      // corrected instead of silently discarded.
+      setEditError(err instanceof Error ? err.message : String(err))
+      setSavingEdit(false)
+      return
+    }
+    // Apply the provider's returned record to the list directly instead of
+    // waiting on the next loadProjects(): a remote provider that is only
+    // eventually consistent could still answer that reload with the
+    // pre-edit record, which would look like the edit got reverted right
+    // after it was saved.
+    setProjectList((prev) => prev.map((p) => (p.path === target.path ? updated : p)))
+    setSavingEdit(false)
+    setEditingProject(null)
+    // Reconciling with the backend is a separate concern from closing the
+    // dialog — its failure must not resurrect a dialog the user already saw
+    // close successfully.
+    loadProjects().catch((err) => console.warn('[projects] failed to reload after edit', err))
+  }
+
+  function handleEditCancel() {
+    setEditError(null)
+    setSavingEdit(false)
+    setEditingProject(null)
+  }
+
   function handleOpen(p: Project) {
     setCurrentProject(p)
     setPage('project')
@@ -176,14 +257,25 @@ export default function Main() {
 
   if (page === 'list') {
     return (
-      <ProjectListScreen
-        projects={projectList}
-        onAdd={handleAdd}
-        onCreate={handleCreate}
-        onOpen={handleOpen}
-        onRemove={handleRemove}
-        thumbnails={thumbnails}
-      />
+      <>
+        <ProjectListScreen
+          projects={projectList}
+          onAdd={handleAdd}
+          onCreate={handleCreate}
+          onOpen={handleOpen}
+          onEdit={handleEdit}
+          onRemove={handleRemove}
+          thumbnails={thumbnails}
+        />
+        <ProjectEditDialog
+          open={editingProject !== null}
+          project={editingProject}
+          error={editError}
+          submitting={savingEdit}
+          onSubmit={handleEditSubmit}
+          onCancel={handleEditCancel}
+        />
+      </>
     )
   }
 

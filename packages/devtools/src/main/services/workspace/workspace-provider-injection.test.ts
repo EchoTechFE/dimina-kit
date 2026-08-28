@@ -97,6 +97,68 @@ describe('workspace-service ↔ ProjectsProvider injection', () => {
     expect(injected.validateProjectDir).toHaveBeenCalledWith('/proj/mock')
   })
 
+  it('delegates updateProject to the injected provider', async () => {
+    const sampleProject: Project = {
+      name: 'mock-app',
+      path: '/proj/mock',
+      lastOpened: null,
+    }
+    const injected = {
+      listProjects: vi.fn(() => [sampleProject]),
+      addProject: vi.fn((p: string) => ({ ...sampleProject, path: p })),
+      removeProject: vi.fn(),
+      updateProject: vi.fn((p: string, patch: { name?: string }) => ({
+        ...sampleProject,
+        path: p,
+        name: patch.name ?? sampleProject.name,
+      })),
+    }
+
+    const ctx = createWorkbenchContext({
+      mainWindow: fakeMainWindow(),
+      preloadPath: '/fake/preload.js',
+      rendererDir: '/fake/renderer',
+      projectsProvider: injected,
+    })
+
+    const updated = await ctx.workspace.updateProject('/proj/mock', { name: 'renamed' })
+    expect(injected.updateProject).toHaveBeenCalledWith('/proj/mock', { name: 'renamed' })
+    expect(updated.name).toBe('renamed')
+  })
+
+  // `updateProject` is optional on ProjectsProvider. A host that omits it
+  // cannot persist the edit, so returning the record unchanged would look
+  // like a successful save to the renderer (dialog closes, list reloads)
+  // while silently discarding the user's input. Existence is still checked
+  // first, so an unknown path throws its own error rather than the
+  // capability error.
+  it('updateProject is optional: absence throws, unknown paths still throw their own error', async () => {
+    const sampleProject: Project = {
+      name: 'mock-app',
+      path: '/proj/mock',
+      lastOpened: null,
+    }
+    const injected = {
+      listProjects: vi.fn(() => [sampleProject]),
+      addProject: vi.fn((p: string) => ({ ...sampleProject, path: p })),
+      removeProject: vi.fn(),
+    }
+
+    const ctx = createWorkbenchContext({
+      mainWindow: fakeMainWindow(),
+      preloadPath: '/fake/preload.js',
+      rendererDir: '/fake/renderer',
+      projectsProvider: injected,
+    })
+
+    await expect(
+      ctx.workspace.updateProject('/proj/mock', { name: 'renamed' }),
+    ).rejects.toThrow('当前宿主不支持编辑项目')
+    await expect(
+      ctx.workspace.updateProject('/proj/gone', { name: 'renamed' }),
+    ).rejects.toThrow('No such project: /proj/gone')
+  })
+
   it('hasProject is derived from the injected provider listProjects (no separate hasProject call required)', async () => {
     const injected = {
       listProjects: vi.fn(() => [

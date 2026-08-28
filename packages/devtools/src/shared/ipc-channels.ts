@@ -261,10 +261,14 @@ export const ProjectsChannel = {
   List: 'projects:list',
   Add: 'projects:add',
   Remove: 'projects:remove',
+  /** Edit an existing record's name / icon; its path stays the identity. */
+  Update: 'projects:update',
   /** Merged + sanitized template catalog for the create-project dialog. */
   ListTemplates: 'projects:listTemplates',
   /** Host-supplied create-project dialog hook (returns input or null). */
   OpenCreateDialog: 'projects:openCreateDialog',
+  /** Host-supplied edit-project dialog hook; `null` means no hook is configured. */
+  OpenEditDialog: 'projects:openEditDialog',
   /** Server-side scaffold + register (delegates to create-project-service). */
   Create: 'projects:create',
   /** Default values used to pre-fill the create-project dialog (baseDir). */

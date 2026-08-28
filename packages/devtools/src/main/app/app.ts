@@ -226,6 +226,10 @@ function createContext(config: WorkbenchAppConfig, mainWindow: BrowserWindow, re
       // eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
       | import('../services/workbench-context.js').WorkbenchContext['customCreateProjectDialog']
       | undefined,
+    // No cast needed here: the hook receives the project record, so the
+    // main-process `Project` the context hands it satisfies the structural
+    // `EditableProject` the config declares.
+    customEditProjectDialog: config.customEditProjectDialog,
     onBeforeOpenProject: config.onBeforeOpenProject,
   })
 }

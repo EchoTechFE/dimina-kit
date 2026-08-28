@@ -1,4 +1,5 @@
-import { type ReactNode, useState } from 'react'
+import { type ReactNode, useEffect, useState } from 'react'
+import { Pencil } from 'lucide-react'
 import { Button } from '@/shared/components/ui/button'
 import { formatLastOpened } from '@/shared/lib/utils'
 import type { Project } from '../types'
@@ -29,25 +30,21 @@ export function ProjectCardMedia({ children }: { children?: ReactNode }) {
  */
 export function ProjectCardFooter({
   icon,
+  iconUrl,
   name,
   path,
   meta,
 }: {
   icon?: ReactNode
+  /** When set, the icon tile shows this image instead of `icon`. */
+  iconUrl?: string
   name?: string
   path?: string
   meta?: ReactNode
 }) {
   return (
     <div className="relative flex flex-col gap-[calc(12*var(--qd-card-u))] px-[calc(16*var(--qd-card-u))] pb-[calc(16*var(--qd-card-u))] shrink-0">
-      <div
-        className={`size-[calc(48*var(--qd-card-u))] shrink-0 rounded-[var(--qd-radius-md)] flex items-center justify-center text-[calc(20*var(--qd-card-u))] font-medium leading-none ${
-          icon ? 'bg-[var(--qd-primary)] text-[color:var(--qd-on-solid)]' : ''
-        }`}
-        aria-hidden="true"
-      >
-        {icon}
-      </div>
+      <ProjectCardIcon iconUrl={iconUrl} fallback={icon} />
       <div className="flex flex-col gap-[calc(4*var(--qd-card-u))]">
         <div
           className="text-[calc(15*var(--qd-card-u))] font-medium leading-[calc(22*var(--qd-card-u))] text-text truncate"
@@ -69,6 +66,53 @@ export function ProjectCardFooter({
   )
 }
 
+/**
+ * The square icon tile in a card's footer. With an `iconUrl` it shows that
+ * image; otherwise (and after the image fails to load) it shows `fallback` —
+ * the name-initial text logo — on the solid brand tile.
+ *
+ * The tile keeps its size and shape in both modes so a card does not reflow
+ * when a project gains or loses an icon. The load-failure fallback matters
+ * because the URL is user-typed and points at a remote host: without it a
+ * typo or an offline host leaves a blank square with no way to tell it apart
+ * from a project that simply has no icon.
+ */
+function ProjectCardIcon({
+  iconUrl,
+  fallback,
+}: {
+  iconUrl?: string
+  fallback?: ReactNode
+}) {
+  const [failed, setFailed] = useState(false)
+  useEffect(() => setFailed(false), [iconUrl])
+  const showImage = !!iconUrl && !failed
+
+  return (
+    <div
+      className={`size-[calc(48*var(--qd-card-u))] shrink-0 rounded-[var(--qd-radius-md)] overflow-hidden flex items-center justify-center text-[calc(20*var(--qd-card-u))] font-medium leading-none ${
+        showImage
+          ? 'bg-bg'
+          : fallback
+            ? 'bg-[var(--qd-primary)] text-[color:var(--qd-on-solid)]'
+            : ''
+      }`}
+      aria-hidden="true"
+    >
+      {showImage ? (
+        <img
+          src={iconUrl}
+          alt=""
+          className="size-full object-cover"
+          onError={() => setFailed(true)}
+        />
+      ) : (
+        fallback
+      )}
+    </div>
+  )
+}
+
 /** First grapheme of the project name, upper-cased for Latin script — used as
  * a text-logo fallback when the project has no real icon/thumbnail. */
 function initialOf(name: string): string {
@@ -79,22 +123,22 @@ function initialOf(name: string): string {
 export function ProjectCard({
   project: p,
   onOpen,
+  onEdit,
   onRemove,
   thumbnail,
 }: {
   project: Project
   onOpen: (p: Project) => void
+  /** Omitted by hosts that don't expose the edit dialog — the pencil is then hidden. */
+  onEdit?: (p: Project) => void
   onRemove: (p: Project) => void
   thumbnail?: string | null
 }) {
-  const [hovered, setHovered] = useState(false)
   return (
     <div
       data-qd-card
-      className="relative flex flex-col min-w-[calc(var(--qd-card-w-ref)*1px)] w-full bg-surface border border-border rounded-[var(--qd-radius-xl)] overflow-hidden cursor-pointer transition-all duration-150 hover:border-[var(--qd-primary)] hover:shadow-[var(--qd-shadow-md)]"
+      className="group relative flex flex-col min-w-[calc(var(--qd-card-w-ref)*1px)] w-full bg-surface border border-border rounded-[var(--qd-radius-xl)] overflow-hidden cursor-pointer transition-all duration-150 hover:border-[var(--qd-primary)] hover:shadow-[var(--qd-shadow-md)]"
       onClick={() => onOpen(p)}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
     >
       <ProjectCardMedia>
         {thumbnail ? (
@@ -105,15 +149,35 @@ export function ProjectCard({
       </ProjectCardMedia>
       <ProjectCardFooter
         icon={initialOf(p.name)}
+        iconUrl={p.iconUrl}
         name={p.name}
         path={p.path}
         meta={formatLastOpened(p.lastOpened)}
       />
-      {hovered && (
+      {/* Stays in the DOM at all times — keyboard focus (Tab) has to reach
+          these buttons, which a hover-gated mount would block. Visibility is
+          CSS-only: opacity-0 by default, revealed by group-hover for pointer
+          users and focus-within so a tabbed-into button doesn't disappear
+          once the mouse isn't over the card. */}
+      <div className="absolute top-1.5 right-1.5 flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+        {onEdit && (
+          <Button
+            size="icon-sm"
+            className="w-5 h-5 rounded-full bg-overlay text-text-secondary leading-none hover:text-[var(--qd-primary)]"
+            onClick={(e) => {
+              e.stopPropagation()
+              onEdit(p)
+            }}
+            title="编辑"
+            aria-label={`编辑 ${p.name}`}
+          >
+            <Pencil className="size-3" aria-hidden="true" />
+          </Button>
+        )}
         <Button
           variant="danger"
           size="icon-sm"
-          className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-overlay text-text-secondary leading-none hover:text-status-error hover:bg-danger-bg"
+          className="w-5 h-5 rounded-full bg-overlay text-text-secondary leading-none hover:text-status-error hover:bg-danger-bg"
           onClick={(e) => {
             e.stopPropagation()
             onRemove(p)
@@ -122,7 +186,7 @@ export function ProjectCard({
         >
           ×
         </Button>
-      )}
+      </div>
     </div>
   )
 }

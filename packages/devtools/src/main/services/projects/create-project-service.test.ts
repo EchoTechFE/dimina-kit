@@ -185,7 +185,7 @@ describe('createProject — happy path', () => {
     )
   })
 
-  it("rewrites project.config.json projectname to the user-supplied input.name", async () => {
+  it("rewrites project.config.json projectname to the URL-encoded user-supplied input.name", async () => {
     const target = path.join(makeTmpDir(), 'new')
     const fixture = makeFixtureTemplate()
     const ctx = makeCtx({
@@ -204,7 +204,9 @@ describe('createProject — happy path', () => {
     const cfg = JSON.parse(
       fs.readFileSync(path.join(target, 'project.config.json'), 'utf-8'),
     ) as { projectname?: string }
-    expect(cfg.projectname).toBe('我的小程序')
+    // Same encoding as the rename path (project-repository's writeProjectName)
+    // so a name round-trips the same way regardless of which path wrote it.
+    expect(cfg.projectname).toBe(encodeURIComponent('我的小程序'))
   })
 
   it("calls ctx.projectsProvider.addProject(target) so the new project shows up in the list", async () => {

@@ -199,6 +199,107 @@ describe('LocalProjectsProvider — ProjectsProvider contract', () => {
     expect(() => new Date(after.lastOpened!).toISOString()).not.toThrow()
   })
 
+  // ── updateProject: the project-edit dialog's persistence path ──────────
+  //
+  //  - the rename must survive a reload (a provider that only mutated its
+  //    in-memory copy would pass a same-instance assertion and lose the edit
+  //    on the next app start).
+  //  - an empty iconUrl must REMOVE the field, not store '': the card treats
+  //    any non-empty string as an image URL, so a stored '' would render a
+  //    broken <img> where the name-initial fallback belongs.
+  //  - path is the record's identity — an edit must never move it, or every
+  //    other per-project store (compile config, thumbnail) is orphaned.
+  it('updateProject renames the matching record and the rename survives a reload', async () => {
+    const dir = '/projects/rename-me'
+    fsState.dirs.add(dir)
+    fsState.files.set(`${dir}/app.json`, '{}')
+
+    const provider = createLocalProjectsProvider()
+    await provider.addProject(dir)
+
+    if (!provider.updateProject) {
+      throw new Error('LocalProjectsProvider must implement updateProject')
+    }
+    const updated = await provider.updateProject(dir, { name: '  改名后的项目  ' })
+    expect(updated.name).toBe('改名后的项目')
+    expect(updated.path).toBe(dir)
+
+    const reread = (await createLocalProjectsProvider().listProjects())[0]!
+    expect(reread.name).toBe('改名后的项目')
+    expect(reread.path).toBe(dir)
+  })
+
+  it('updateProject stores iconUrl, and an empty iconUrl removes the field', async () => {
+    const dir = '/projects/iconic'
+    fsState.dirs.add(dir)
+    fsState.files.set(`${dir}/app.json`, '{}')
+
+    const provider = createLocalProjectsProvider()
+    await provider.addProject(dir)
+    if (!provider.updateProject) {
+      throw new Error('LocalProjectsProvider must implement updateProject')
+    }
+
+    await provider.updateProject(dir, { iconUrl: 'https://cdn.example.com/icon.png' })
+    expect((await provider.listProjects())[0]!.iconUrl).toBe(
+      'https://cdn.example.com/icon.png',
+    )
+
+    await provider.updateProject(dir, { iconUrl: '   ' })
+    const cleared = (await createLocalProjectsProvider().listProjects())[0]!
+    expect('iconUrl' in cleared).toBe(false)
+  })
+
+  it('updateProject leaves untouched fields (and other records) alone', async () => {
+    const dirA = '/projects/a'
+    const dirB = '/projects/b'
+    for (const d of [dirA, dirB]) {
+      fsState.dirs.add(d)
+      fsState.files.set(`${d}/app.json`, '{}')
+    }
+
+    const provider = createLocalProjectsProvider()
+    await provider.addProject(dirA)
+    await provider.addProject(dirB)
+    await provider.updateLastOpened!(dirA)
+    const beforeA = (await provider.listProjects()).find((p) => p.path === dirA)!
+
+    await provider.updateProject!(dirA, { name: 'A renamed' })
+
+    const after = await provider.listProjects()
+    const afterA = after.find((p) => p.path === dirA)!
+    const afterB = after.find((p) => p.path === dirB)!
+    expect(afterA.name).toBe('A renamed')
+    expect(afterA.lastOpened).toBe(beforeA.lastOpened)
+    expect(afterA.type).toBe(beforeA.type)
+    expect(afterB.name).toBe('b')
+  })
+
+  it('updateProject rejects an empty name instead of storing it', async () => {
+    const dir = '/projects/keep-name'
+    fsState.dirs.add(dir)
+    fsState.files.set(`${dir}/app.json`, '{}')
+
+    const provider = createLocalProjectsProvider()
+    const created = await provider.addProject(dir)
+
+    // `.then(...)` so the assertion holds for both a sync throw (the local
+    // provider) and a rejected promise (the async return the interface allows).
+    await expect(
+      Promise.resolve().then(() => provider.updateProject!(dir, { name: '   ' })),
+    ).rejects.toThrow()
+    expect((await provider.listProjects())[0]!.name).toBe(created.name)
+  })
+
+  it('updateProject throws for a path that is not in the list', async () => {
+    const provider = createLocalProjectsProvider()
+    await expect(
+      Promise.resolve().then(() =>
+        provider.updateProject!('/projects/never-imported', { name: 'x' }),
+      ),
+    ).rejects.toThrow()
+  })
+
   it('getCompileConfig returns defaults for unknown paths and persisted config for known ones', async () => {
     const dir = '/projects/a'
     fsState.dirs.add(dir)
@@ -256,5 +357,120 @@ describe('LocalProjectsProvider — ProjectsProvider contract', () => {
     const missing = await provider.validateProjectDir?.('/projects/does-not-exist')
     expect(typeof missing).toBe('string')
     expect(missing!).toContain('/projects/does-not-exist')
+  })
+
+  // ── Who owns the display name ──────────────────────────────────────────
+  // The project's own config owns it; our list file only mirrors it. Same
+  // arrangement as WeChat DevTools 36.6.0, which stores `projectname` in
+  // project.private.config.json (URL-encoded past ASCII) and holds a copy in
+  // its project list. Two owners is what makes a rename silently revert.
+
+  it('addProject prefers projectname from project.private.config.json over project.config.json', async () => {
+    const dir = '/projects/private-name'
+    fsState.dirs.add(dir)
+    fsState.files.set(`${dir}/app.json`, '{}')
+    fsState.files.set(
+      `${dir}/project.config.json`,
+      JSON.stringify({ projectname: 'shared-name' }),
+    )
+    fsState.files.set(
+      `${dir}/project.private.config.json`,
+      JSON.stringify({ projectname: 'my-local-name' }),
+    )
+
+    const provider = createLocalProjectsProvider()
+    expect((await provider.addProject(dir)).name).toBe('my-local-name')
+  })
+
+  it('addProject decodes a URL-encoded projectname', async () => {
+    const dir = '/projects/encoded'
+    fsState.dirs.add(dir)
+    fsState.files.set(`${dir}/app.json`, '{}')
+    fsState.files.set(
+      `${dir}/project.config.json`,
+      JSON.stringify({ projectname: '%E6%BD%AE%E7%8E%A9%E6%97%8F' }),
+    )
+
+    const provider = createLocalProjectsProvider()
+    expect((await provider.addProject(dir)).name).toBe('潮玩族')
+  })
+
+  it('renaming writes projectname into project.private.config.json without dropping its other keys', async () => {
+    const dir = '/projects/rename'
+    const privatePath = `${dir}/project.private.config.json`
+    fsState.dirs.add(dir)
+    fsState.files.set(`${dir}/app.json`, '{}')
+    fsState.files.set(
+      privatePath,
+      JSON.stringify({ libVersion: '3.16.2', setting: { urlCheck: true } }),
+    )
+
+    const provider = createLocalProjectsProvider()
+    await provider.addProject(dir)
+    await provider.updateProject!(dir, { name: '我的新名字' })
+
+    const written = JSON.parse(fsState.files.get(privatePath)!)
+    expect(written.projectname).toBe(encodeURIComponent('我的新名字'))
+    expect(written.libVersion).toBe('3.16.2')
+    expect(written.setting).toEqual({ urlCheck: true })
+  })
+
+  it('a renamed project keeps its new name when the same directory is imported again', async () => {
+    // The regression: with the name owned only by our list file, re-importing
+    // a directory refreshed it from project.config.json and threw the user's
+    // rename away.
+    const dir = '/projects/reimport'
+    fsState.dirs.add(dir)
+    fsState.files.set(`${dir}/app.json`, '{}')
+    fsState.files.set(
+      `${dir}/project.config.json`,
+      JSON.stringify({ projectname: 'original' }),
+    )
+
+    const provider = createLocalProjectsProvider()
+    await provider.addProject(dir)
+    await provider.updateProject!(dir, { name: '改名后' })
+
+    expect((await provider.addProject(dir)).name).toBe('改名后')
+    const list = await createLocalProjectsProvider().listProjects()
+    expect(list.filter((p) => p.path === dir).map((p) => p.name)).toEqual(['改名后'])
+  })
+
+  it('editing only the icon leaves the project directory untouched', async () => {
+    const dir = '/projects/icon-only'
+    fsState.dirs.add(dir)
+    fsState.files.set(`${dir}/app.json`, '{}')
+
+    const provider = createLocalProjectsProvider()
+    await provider.addProject(dir)
+    const before = [...fsState.files.keys()].filter((p) => p.startsWith(`${dir}/`)).sort()
+
+    const updated = await provider.updateProject!(dir, {
+      iconUrl: 'https://cdn.example.com/a.png',
+    })
+    expect(updated.iconUrl).toBe('https://cdn.example.com/a.png')
+
+    const after = [...fsState.files.keys()].filter((p) => p.startsWith(`${dir}/`)).sort()
+    expect(after).toEqual(before)
+  })
+
+  it('renaming refuses to overwrite a malformed project.private.config.json', async () => {
+    // That file also carries the user's IDE settings and compile conditions;
+    // rewriting it from `{}` because it failed to parse would drop them.
+    const dir = '/projects/broken-private'
+    const privatePath = `${dir}/project.private.config.json`
+    fsState.dirs.add(dir)
+    fsState.files.set(`${dir}/app.json`, '{}')
+    fsState.files.set(privatePath, '{ "setting": { broken')
+
+    const provider = createLocalProjectsProvider()
+    await provider.addProject(dir)
+    await expect(
+      Promise.resolve().then(() => provider.updateProject!(dir, { name: 'nope' })),
+    ).rejects.toThrow()
+
+    expect(fsState.files.get(privatePath)).toBe('{ "setting": { broken')
+    const list = await provider.listProjects()
+    expect(list.find((p) => p.path === dir)!.name).not.toBe('nope')
   })
 })

@@ -16,6 +16,11 @@ export function createLocalProjectsProvider(): ProjectsProvider {
     listProjects: () => repo.listProjects(),
     addProject: (dirPath) => repo.addProject(dirPath),
     removeProject: (dirPath) => repo.removeProject(dirPath),
+    updateProject: (dirPath, patch) => {
+      const updated = repo.updateProject(dirPath, patch)
+      if (!updated) throw new Error(`No such project: ${dirPath}`)
+      return updated
+    },
     validateProjectDir: (dirPath) => repo.validateProjectDir(dirPath),
     updateLastOpened: (dirPath) => repo.updateLastOpened(dirPath),
     getCompileConfig: (dirPath) => repo.getCompileConfig(dirPath),
