@@ -28,6 +28,10 @@ export interface ProjectEditDialogProps {
   open: boolean
   /** The record being edited; `null` while the dialog is closed. */
   project: Project | null
+  /** Message from the last failed submit, shown above the footer. */
+  error?: string | null
+  /** True while a submit is in flight — disables the save button. */
+  submitting?: boolean
   onSubmit: (patch: ProjectPatch) => void
   onCancel: () => void
 }
@@ -35,7 +39,7 @@ export interface ProjectEditDialogProps {
 export function ProjectEditDialog(
   props: ProjectEditDialogProps,
 ): React.ReactElement | null {
-  const { open, project, onSubmit, onCancel } = props
+  const { open, project, error, submitting, onSubmit, onCancel } = props
   const [name, setName] = useState('')
   const [iconUrl, setIconUrl] = useState('')
 
@@ -56,13 +60,25 @@ export function ProjectEditDialog(
   }, [open, projectPath, projectName, projectIconUrl])
 
   if (!open || !project) return null
+  // Rebind to a const so `handleSubmit` (a nested closure) keeps the
+  // non-null narrowing — TS does not carry the guard above into it.
+  const currentProject = project
 
   const trimmedName = name.trim()
-  const canSubmit = trimmedName.length > 0
+  const canSubmit = trimmedName.length > 0 && !submitting
 
   function handleSubmit() {
     if (!canSubmit) return
-    onSubmit({ name: trimmedName, iconUrl: iconUrl.trim() })
+    // Only send fields the user actually changed. An unconditional
+    // `{ name, iconUrl }` would resend an untouched name that predates
+    // ProjectsUpdateSchema's 200-char cap and get an icon-only edit rejected
+    // by the schema; it would also hand a remote provider a spurious rename
+    // it did nothing to deserve.
+    const patch: ProjectPatch = {}
+    if (trimmedName !== currentProject.name) patch.name = trimmedName
+    const nextIconUrl = iconUrl.trim()
+    if (nextIconUrl !== (currentProject.iconUrl ?? '')) patch.iconUrl = nextIconUrl
+    onSubmit(patch)
   }
 
   return (
@@ -83,6 +99,10 @@ export function ProjectEditDialog(
                 autoFocus
                 onChange={(e) => setName(e.target.value)}
                 onKeyDown={(e) => {
+                  // Confirming an IME candidate also fires a synthetic Enter
+                  // keydown; without this guard it submits the half-typed
+                  // composition instead of letting the IME finish it.
+                  if (e.nativeEvent.isComposing) return
                   if (e.key === 'Enter') handleSubmit()
                 }}
               />
@@ -99,6 +119,7 @@ export function ProjectEditDialog(
               placeholder="https://… ，留空则显示项目名首字母"
               onChange={(e) => setIconUrl(e.target.value)}
               onKeyDown={(e) => {
+                if (e.nativeEvent.isComposing) return
                 if (e.key === 'Enter') handleSubmit()
               }}
             />
@@ -119,6 +140,8 @@ export function ProjectEditDialog(
               目录不可修改。要换目录请重新导入。
             </span>
           </div>
+
+          {error && <span className="text-sm text-status-error">{error}</span>}
         </div>
 
         <DialogFooter>

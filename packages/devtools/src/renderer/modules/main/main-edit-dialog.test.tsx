@@ -113,4 +113,43 @@ describe('Main.handleEdit', () => {
       expect(api.listProjects.mock.calls.length).toBeGreaterThan(callsBefore),
     )
   })
+
+  it('keeps the built-in dialog open and shows the error when updateProject rejects', async () => {
+    api.openEditProjectDialog.mockResolvedValue(null)
+    api.updateProject.mockRejectedValue(new Error('当前宿主不支持编辑项目'))
+    await renderMainWithProject()
+
+    openEditForAlpha()
+    await screen.findByLabelText('项目名称')
+    fireEvent.change(screen.getByLabelText('项目名称'), { target: { value: 'Renamed' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+
+    await screen.findByText('当前宿主不支持编辑项目')
+    expect(screen.getByLabelText('项目名称')).toBeInTheDocument()
+  })
+
+  it('reflects the updated record on the card immediately, without waiting for the post-save reload', async () => {
+    api.openEditProjectDialog.mockResolvedValue(null)
+    api.updateProject.mockResolvedValue({ ...project, name: 'Renamed' })
+    // The reload that handleEditSubmit fires after closing the dialog is
+    // held open here and kept resolving the stale record, simulating a
+    // provider that is only eventually consistent — the card must already
+    // show the new name before that reload ever settles.
+    let resolveReload: (projects: Project[]) => void = () => {}
+    const reloadPromise = new Promise<Project[]>((resolve) => {
+      resolveReload = resolve
+    })
+    api.listProjects.mockResolvedValueOnce([project]).mockImplementation(() => reloadPromise)
+    await renderMainWithProject()
+
+    openEditForAlpha()
+    await screen.findByLabelText('项目名称')
+    fireEvent.change(screen.getByLabelText('项目名称'), { target: { value: 'Renamed' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+
+    await screen.findByText('Renamed')
+    expect(screen.queryByText('Alpha')).not.toBeInTheDocument()
+
+    resolveReload([project])
+  })
 })

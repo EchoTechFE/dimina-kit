@@ -126,12 +126,13 @@ describe('workspace-service ↔ ProjectsProvider injection', () => {
     expect(updated.name).toBe('renamed')
   })
 
-  // `updateProject` is optional on ProjectsProvider. A host that omits it must
-  // still get a resolved record back — the renderer refreshes the list from
-  // that call, so throwing (or returning a locally-patched copy the next
-  // listProjects contradicts) would leave the UI showing an edit that was
-  // never stored.
-  it('updateProject is optional: absence returns the record unchanged, unknown paths still throw', async () => {
+  // `updateProject` is optional on ProjectsProvider. A host that omits it
+  // cannot persist the edit, so returning the record unchanged would look
+  // like a successful save to the renderer (dialog closes, list reloads)
+  // while silently discarding the user's input. Existence is still checked
+  // first, so an unknown path throws its own error rather than the
+  // capability error.
+  it('updateProject is optional: absence throws, unknown paths still throw their own error', async () => {
     const sampleProject: Project = {
       name: 'mock-app',
       path: '/proj/mock',
@@ -150,12 +151,12 @@ describe('workspace-service ↔ ProjectsProvider injection', () => {
       projectsProvider: injected,
     })
 
-    expect(await ctx.workspace.updateProject('/proj/mock', { name: 'renamed' })).toEqual(
-      sampleProject,
-    )
+    await expect(
+      ctx.workspace.updateProject('/proj/mock', { name: 'renamed' }),
+    ).rejects.toThrow('当前宿主不支持编辑项目')
     await expect(
       ctx.workspace.updateProject('/proj/gone', { name: 'renamed' }),
-    ).rejects.toThrow()
+    ).rejects.toThrow('No such project: /proj/gone')
   })
 
   it('hasProject is derived from the injected provider listProjects (no separate hasProject call required)', async () => {

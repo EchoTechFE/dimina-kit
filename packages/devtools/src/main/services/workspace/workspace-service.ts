@@ -265,13 +265,16 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
       await provider.removeProject(dirPath)
     },
     updateProject: async (dirPath, patch) => {
-      // A provider without `updateProject` cannot persist the edit; return the
-      // record as it stands rather than inventing a patched copy the next
-      // `listProjects` would contradict.
       const projects = await provider.listProjects()
       const existing = projects.find((p) => p.path === dirPath)
       if (!existing) throw new Error(`No such project: ${dirPath}`)
-      if (!provider.updateProject) return existing
+      // A provider without `updateProject` cannot persist the edit. Returning
+      // the record unchanged would look like a successful save to the
+      // renderer (dialog closes, list reloads) while silently discarding the
+      // user's input, so this must fail loudly instead.
+      if (!provider.updateProject) {
+        throw new Error('当前宿主不支持编辑项目')
+      }
       return provider.updateProject(dirPath, patch)
     },
     hasProject: async (dirPath) => {

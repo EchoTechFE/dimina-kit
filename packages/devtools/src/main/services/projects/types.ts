@@ -56,8 +56,10 @@ export interface ProjectsProvider {
    * Apply a user edit (name / icon) to an existing record. `dirPath` is the
    * record's identity, so it is never part of the patch — see `ProjectPatch`.
    *
-   * Default when omitted: silently no-ops and the caller gets the record
-   * unchanged, so the renderer's edit does not survive a reload. Implement
+   * Default when omitted: throws, and the renderer shows that error in the
+   * edit dialog. A silent no-op would report success (dialog closes, list
+   * reloads) while discarding the user's input, since the caller has no way
+   * to tell "saved" apart from "provider doesn't support this". Implement
    * this if your UI exposes the project-edit dialog.
    */
   updateProject?(dirPath: string, patch: ProjectPatch): Project | Promise<Project>

@@ -105,7 +105,9 @@ describe('ProjectEditDialog', () => {
     fireEvent.change(iconInput(), { target: { value: '' } })
     fireEvent.click(screen.getByRole('button', { name: '保存' }))
 
-    expect(onSubmit).toHaveBeenCalledWith({ name: 'Alpha', iconUrl: '' })
+    // name is untouched, so it is left out of the patch — only the field
+    // the user actually changed goes out.
+    expect(onSubmit).toHaveBeenCalledWith({ iconUrl: '' })
   })
 
   it('blocks saving a blank name', () => {
@@ -123,6 +125,81 @@ describe('ProjectEditDialog', () => {
     expect(save).toBeDisabled()
     fireEvent.click(save)
     expect(onSubmit).not.toHaveBeenCalled()
+  })
+
+  it('omits name from the patch when only the icon changed', () => {
+    const onSubmit = vi.fn()
+    render(
+      <ProjectEditDialog
+        open
+        project={alpha}
+        onSubmit={onSubmit}
+        onCancel={() => {}}
+      />,
+    )
+    // nameInput is seeded with 'Alpha' (project.name) — leave it untouched.
+    fireEvent.change(iconInput(), { target: { value: 'https://cdn.example.com/c.png' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+
+    expect(onSubmit).toHaveBeenCalledWith({ iconUrl: 'https://cdn.example.com/c.png' })
+    expect('name' in onSubmit.mock.calls[0][0]).toBe(false)
+  })
+
+  it('submits an empty patch when nothing changed', () => {
+    const onSubmit = vi.fn()
+    render(
+      <ProjectEditDialog
+        open
+        project={alpha}
+        onSubmit={onSubmit}
+        onCancel={() => {}}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+
+    expect(onSubmit).toHaveBeenCalledWith({})
+  })
+
+  it('does not submit on Enter while an IME composition is in progress, but does once it ends', () => {
+    const onSubmit = vi.fn()
+    render(
+      <ProjectEditDialog
+        open
+        project={alpha}
+        onSubmit={onSubmit}
+        onCancel={() => {}}
+      />,
+    )
+    const input = nameInput()
+    // fireEvent.keyDown's event-init argument does not reliably surface as
+    // e.nativeEvent.isComposing (React reads the property off the native
+    // event, and testing-library's synthetic init does not always forward
+    // it) — dispatch a real KeyboardEvent so the guard reads the same
+    // property production code reads.
+    input.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true, cancelable: true }),
+    )
+    expect(onSubmit).not.toHaveBeenCalled()
+
+    input.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', isComposing: false, bubbles: true, cancelable: true }),
+    )
+    expect(onSubmit).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows the submit error and disables saving while a submit is in flight', () => {
+    render(
+      <ProjectEditDialog
+        open
+        project={alpha}
+        error="当前宿主不支持编辑项目"
+        submitting
+        onSubmit={() => {}}
+        onCancel={() => {}}
+      />,
+    )
+    expect(screen.getByText('当前宿主不支持编辑项目')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '保存' })).toBeDisabled()
   })
 
   it('re-seeds when it reopens on a different project', () => {

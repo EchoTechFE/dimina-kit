@@ -134,14 +134,11 @@ export function ProjectCard({
   onRemove: (p: Project) => void
   thumbnail?: string | null
 }) {
-  const [hovered, setHovered] = useState(false)
   return (
     <div
       data-qd-card
-      className="relative flex flex-col min-w-[calc(var(--qd-card-w-ref)*1px)] w-full bg-surface border border-border rounded-[var(--qd-radius-xl)] overflow-hidden cursor-pointer transition-all duration-150 hover:border-[var(--qd-primary)] hover:shadow-[var(--qd-shadow-md)]"
+      className="group relative flex flex-col min-w-[calc(var(--qd-card-w-ref)*1px)] w-full bg-surface border border-border rounded-[var(--qd-radius-xl)] overflow-hidden cursor-pointer transition-all duration-150 hover:border-[var(--qd-primary)] hover:shadow-[var(--qd-shadow-md)]"
       onClick={() => onOpen(p)}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
     >
       <ProjectCardMedia>
         {thumbnail ? (
@@ -157,36 +154,39 @@ export function ProjectCard({
         path={p.path}
         meta={formatLastOpened(p.lastOpened)}
       />
-      {hovered && (
-        <div className="absolute top-1.5 right-1.5 flex items-center gap-1">
-          {onEdit && (
-            <Button
-              size="icon-sm"
-              className="w-5 h-5 rounded-full bg-overlay text-text-secondary leading-none hover:text-[var(--qd-primary)]"
-              onClick={(e) => {
-                e.stopPropagation()
-                onEdit(p)
-              }}
-              title="编辑"
-              aria-label={`编辑 ${p.name}`}
-            >
-              <Pencil className="size-3" aria-hidden="true" />
-            </Button>
-          )}
+      {/* Stays in the DOM at all times — keyboard focus (Tab) has to reach
+          these buttons, which a hover-gated mount would block. Visibility is
+          CSS-only: opacity-0 by default, revealed by group-hover for pointer
+          users and focus-within so a tabbed-into button doesn't disappear
+          once the mouse isn't over the card. */}
+      <div className="absolute top-1.5 right-1.5 flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+        {onEdit && (
           <Button
-            variant="danger"
             size="icon-sm"
-            className="w-5 h-5 rounded-full bg-overlay text-text-secondary leading-none hover:text-status-error hover:bg-danger-bg"
+            className="w-5 h-5 rounded-full bg-overlay text-text-secondary leading-none hover:text-[var(--qd-primary)]"
             onClick={(e) => {
               e.stopPropagation()
-              onRemove(p)
+              onEdit(p)
             }}
-            title="移除"
+            title="编辑"
+            aria-label={`编辑 ${p.name}`}
           >
-            ×
+            <Pencil className="size-3" aria-hidden="true" />
           </Button>
-        </div>
-      )}
+        )}
+        <Button
+          variant="danger"
+          size="icon-sm"
+          className="w-5 h-5 rounded-full bg-overlay text-text-secondary leading-none hover:text-status-error hover:bg-danger-bg"
+          onClick={(e) => {
+            e.stopPropagation()
+            onRemove(p)
+          }}
+          title="移除"
+        >
+          ×
+        </Button>
+      </div>
     </div>
   )
 }

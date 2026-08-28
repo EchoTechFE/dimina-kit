@@ -31,6 +31,8 @@ export default function Main() {
   const [projectList, setProjectList] = useState<Project[]>([])
   const [thumbnails, setThumbnails] = useState<Record<string, string | null>>({})
   const [editingProject, setEditingProject] = useState<Project | null>(null)
+  const [savingEdit, setSavingEdit] = useState(false)
+  const [editError, setEditError] = useState<string | null>(null)
   const [appName, setAppName] = useState(DEFAULT_APP_NAME)
 
   async function loadProjects() {
@@ -186,6 +188,8 @@ export default function Main() {
       reply = null
     }
     if (!reply) {
+      setEditError(null)
+      setSavingEdit(false)
       setEditingProject(p)
       return
     }
@@ -206,17 +210,44 @@ export default function Main() {
 
   async function handleEditSubmit(patch: ProjectPatch) {
     const target = editingProject
-    if (!target) return
-    try {
-      await updateProject(target.path, patch)
-    } catch (err) {
-      // Keep the dialog open with the user's input so a rejected edit (empty
-      // name, record gone) can be corrected instead of silently discarded.
-      console.warn('[projects] failed to update project', err)
+    if (!target || savingEdit) return
+    // No field actually changed (dialog re-submitted the seeded values) —
+    // nothing to send, just close.
+    if (Object.keys(patch).length === 0) {
+      setEditingProject(null)
       return
     }
+    setSavingEdit(true)
+    setEditError(null)
+    let updated: Project
+    try {
+      updated = await updateProject(target.path, patch)
+    } catch (err) {
+      // Keep the dialog open with the user's input so a rejected edit (empty
+      // name, record gone, provider doesn't support editing) can be
+      // corrected instead of silently discarded.
+      setEditError(err instanceof Error ? err.message : String(err))
+      setSavingEdit(false)
+      return
+    }
+    // Apply the provider's returned record to the list directly instead of
+    // waiting on the next loadProjects(): a remote provider that is only
+    // eventually consistent could still answer that reload with the
+    // pre-edit record, which would look like the edit got reverted right
+    // after it was saved.
+    setProjectList((prev) => prev.map((p) => (p.path === target.path ? updated : p)))
+    setSavingEdit(false)
     setEditingProject(null)
-    await loadProjects()
+    // Reconciling with the backend is a separate concern from closing the
+    // dialog — its failure must not resurrect a dialog the user already saw
+    // close successfully.
+    loadProjects().catch((err) => console.warn('[projects] failed to reload after edit', err))
+  }
+
+  function handleEditCancel() {
+    setEditError(null)
+    setSavingEdit(false)
+    setEditingProject(null)
   }
 
   function handleOpen(p: Project) {
@@ -239,8 +270,10 @@ export default function Main() {
         <ProjectEditDialog
           open={editingProject !== null}
           project={editingProject}
+          error={editError}
+          submitting={savingEdit}
           onSubmit={handleEditSubmit}
-          onCancel={() => setEditingProject(null)}
+          onCancel={handleEditCancel}
         />
       </>
     )

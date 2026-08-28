@@ -8,7 +8,8 @@
  *  3. copies the template `source` directory into `input.path`, or invokes
  *     `template.generate(input.path, { name })` for programmatic templates.
  *  4. rewrites `<input.path>/project.config.json`'s `projectname` to
- *     `input.name`.
+ *     `encodeURIComponent(input.name)` — same encoding project-repository's
+ *     `readProjectName`/`writeProjectName` use for the edit path.
  *  5. registers the project with `ctx.projectsProvider.addProject(input.path)`
  *     and returns the resulting Project.
  */
@@ -109,6 +110,12 @@ async function materializeTemplate(
  * Rewrite `<target>/project.config.json`'s `projectname` (best-effort: create
  * the file if the template didn't ship one — gives the user a working
  * starting point even for tiny generators).
+ *
+ * Encodes with `encodeURIComponent`, the same convention project-repository's
+ * `readProjectName`/`writeProjectName` use (aligned with WeChat DevTools:
+ * non-ASCII names go through URL encoding). Writing the raw name here would
+ * make this the one path that disagrees with the rename path, so a name with
+ * `%` or non-ASCII characters would come back different after an edit.
  */
 function writeProjectConfig(target: string, name: string): void {
   const cfgPath = path.join(target, 'project.config.json')
@@ -123,7 +130,7 @@ function writeProjectConfig(target: string, name: string): void {
       cfg = {}
     }
   }
-  cfg.projectname = name
+  cfg.projectname = encodeURIComponent(name)
   fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2))
 }
 
