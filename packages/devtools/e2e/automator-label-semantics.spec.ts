@@ -24,6 +24,7 @@ import {
   openProjectInUI,
   waitForSimulatorWebview,
   closeProject,
+  findMainWindow,
   ipcInvoke,
   pollUntil,
   RENDER_GUEST_URL_MARKER,
@@ -230,7 +231,10 @@ test.beforeAll(async () => {
     env: { ...process.env, NODE_ENV: 'test', DIMINA_E2E_USER_DATA_DIR: userDataDir },
   })
 
-  mainWindow = await electronApp.firstWindow()
+  // The workbench is not necessarily the first window Electron reports — the
+  // host layout slots open their own contents — so match it by URL rather
+  // than by creation order; only this one carries the `window.devtools` bridge.
+  mainWindow = await findMainWindow(electronApp)
   await mainWindow.waitForLoadState('domcontentloaded')
   await electronApp.evaluate(async ({ BrowserWindow }) => {
     const win = BrowserWindow.getAllWindows()[0]
