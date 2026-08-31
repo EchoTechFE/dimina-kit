@@ -236,14 +236,15 @@ for (const stage of ['logic', 'view']) {
     `logic compile-subset after warmup does not fail as un-warmed — got ${JSON.stringify(compileReply && (compileReply.type === 'error' ? String(compileReply.error).slice(0, 100) : compileReply.type))}`)
 }
 
-// --- H: a worker reconfigured with a DIFFERENT toolchainSetupURL mid-lifetime must
-// import the new module (not just keep serving the first one it ever loaded), and a
-// later message that repeats the same new URL must not re-import it a second time.
-// This is the regression `ensureToolchain`'s URL-keyed cache (vs. the old
-// "imported at all yes/no" boolean) exists to close.
+// --- H: a worker is BOUND to the first toolchainSetupURL it ever loads. ESM caches
+// modules per URL, so a second `import()` of the same URL cannot re-run a different
+// module's install side effects — "switch to a new toolchain mid-lifetime" is not
+// something a worker can actually do. A message carrying a different URL must be
+// rejected (the caller's fix is to route that toolchain to a fresh worker instead),
+// and the rejection must not have imported the new module at all.
 {
-  const markerA = '__stageToolchainMark_switchA'
-  const markerB = '__stageToolchainMark_switchB'
+  const markerA = '__stageToolchainMark_boundA'
+  const markerB = '__stageToolchainMark_boundB'
   const worker = await loadWorkerInstance()
 
   const warmupReply = await worker.send({
@@ -251,31 +252,37 @@ for (const stage of ['logic', 'view']) {
     toolchainSetupURL: cssToolchainURL(markerA),
     stages: ['style'],
   })
-  chk(warmupReply && warmupReply.type === 'ready', 'switch-URL worker warmup with toolchain A succeeds')
+  chk(warmupReply && warmupReply.type === 'ready', 'bound-URL worker warmup with toolchain A succeeds')
   chk(globalThis[markerA] === 1, `toolchain A imported once at warmup (count=${globalThis[markerA] || 0})`)
 
-  const compileReplyB1 = await worker.send({
+  const urlA = cssToolchainURL(markerA)
+  const urlB = cssToolchainURL(markerB)
+  const compileReplyB = await worker.send({
     type: 'compile-subset',
     files: FIXTURE_FILES,
     workPath: WORK_PATH,
     stages: ['style'],
-    toolchainSetupURL: cssToolchainURL(markerB),
+    toolchainSetupURL: urlB,
   })
-  chk(compileReplyB1 && compileReplyB1.type === 'done',
-    `compile-subset that switches to a new toolchainSetupURL (B) succeeds — got ${JSON.stringify(compileReplyB1 && compileReplyB1.type === 'error' ? compileReplyB1.error : compileReplyB1.type)}`)
-  chk(globalThis[markerB] === 1, `switching to toolchain B imports it exactly once (count=${globalThis[markerB] || 0})`)
-  chk(globalThis[markerA] === 1, `toolchain A's import count is unaffected by the switch to B (count=${globalThis[markerA]})`)
+  chk(compileReplyB && compileReplyB.type === 'error',
+    `compile-subset carrying a different toolchainSetupURL (B) is rejected instead of switching — got ${JSON.stringify(compileReplyB && compileReplyB.type)}`)
+  const rejectionMsg = compileReplyB && compileReplyB.type === 'error' ? String(compileReplyB.error) : ''
+  chk(rejectionMsg.includes(urlA) && rejectionMsg.includes(urlB),
+    `the rejection names both the bound URL (A) and the offending one (B) — got ${JSON.stringify(rejectionMsg.slice(0, 200))}`)
+  chk(!(markerB in globalThis),
+    `toolchain B was never imported by the rejected message (count=${globalThis[markerB] || 0})`)
+  chk(globalThis[markerA] === 1, `toolchain A's import count is unaffected by the rejected switch attempt (count=${globalThis[markerA]})`)
 
-  const compileReplyB2 = await worker.send({
+  const compileReplyA2 = await worker.send({
     type: 'compile-subset',
     files: FIXTURE_FILES,
     workPath: WORK_PATH,
     stages: ['style'],
-    toolchainSetupURL: cssToolchainURL(markerB),
+    toolchainSetupURL: urlA,
   })
-  chk(compileReplyB2 && compileReplyB2.type === 'done',
-    `a second compile-subset still requesting toolchain B succeeds — got ${JSON.stringify(compileReplyB2 && compileReplyB2.type === 'error' ? compileReplyB2.error : compileReplyB2.type)}`)
-  chk(globalThis[markerB] === 1, `toolchain B stays imported once total, not once per message (count=${globalThis[markerB]})`)
+  chk(compileReplyA2 && compileReplyA2.type === 'done',
+    `a later compile-subset that repeats the bound URL (A) still succeeds — got ${JSON.stringify(compileReplyA2 && compileReplyA2.type === 'error' ? compileReplyA2.error : compileReplyA2.type)}`)
+  chk(globalThis[markerA] === 1, `toolchain A stays imported once total, not once per message (count=${globalThis[markerA]})`)
 }
 
 // --- F: createCompilerPool tells each resident worker its own stage identity ---
