@@ -325,7 +325,7 @@ interface UseViewAnchorOptions extends ViewAnchorOptions {
 ### `electron-deck` 侧（host 胶水，不进 view-anchor）
 
 - split 的每个叶子占位 div 用 Placement 锚开 `followScroll` / `followGeometry` / `guardDisplayNone`。
-- splitter 组件在 `pointerdown` 时通知其管辖叶子的锚 `pulse()`（或锚自身的 capture `pointerdown` 命中 `[role="separator"]` 自动开窗——倾向后者更自治，真机定）。
+- splitter 开窗机制已定案并实现为锚自身的 capture `pointerdown` 命中 `[role="separator"]` 自动开窗（更自治，不需要 splitter 显式调 `pulse()`）：`packages/view-anchor/src/view-anchor.ts:391-396`。
 - tab 容器切换时对非活动成员发意图 `present:false`，对活动成员 `present:true`。
 
 ---
@@ -358,4 +358,4 @@ interface UseViewAnchorOptions extends ViewAnchorOptions {
 2. **拖动 2 帧滞后是否可见**：可见则需评估对位移维度做主进程外推 vs 接受滞后（§9）。
 3. **哨兵关窗 N 帧阈值**（N=2~3）：手指悬停误关 vs 松手空转的平衡（§9）。
 4. **capture scroll 在深嵌套滚动容器是否不丢帧**（§9）。
-5. **splitter 开窗机制**：锚自身 capture `pointerdown` 命中 `[role="separator"]` 自动开窗 vs splitter 显式 `pulse()`——哪个更不漏触发，真机定（§10）。
+5. ~~splitter 开窗机制~~（已定案，不再是开放问题）：锚自身 capture `pointerdown` 命中 `[role="separator"]` 自动开窗，已实现于 `view-anchor.ts:391-396`（§10）。

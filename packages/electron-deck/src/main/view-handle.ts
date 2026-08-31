@@ -120,7 +120,7 @@ export interface ViewHandleDeps {
    *  close cascade OR explicit dispose). The deck-app uses it to drop the view
    *  from its keepAlive group — a window-close cascades the viewScope directly
    *  (NOT via the host wrapper's dispose), so group cleanup must hang off the
-   *  scope to fire on that path too (KA-2). Any order — it is pure bookkeeping. */
+   *  scope to fire on that path too. Any order — it is pure bookkeeping. */
   onDispose?(): void
 }
 

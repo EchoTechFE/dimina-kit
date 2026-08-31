@@ -164,7 +164,7 @@ pool 的 API 本身很小，但**浏览器/bundler/包管理器环境**有几个
 
 Node 宿主（Electron devtools、CLI watch 服务等）用这个导出替代直接依赖 dmcc（`@dimina/compiler`）。它复刻 dmcc 的磁盘编译流程——主线程准备（配置/产物目录/npm 包）→ 3 个 stage worker 并发写共享 staging → 发布到 `outputDir/{appId}`——**产物与 dmcc 逐字节等价**（含 sourcemap 与自定义 `fileTypes`），区别只有一个：**worker 常驻**。
 
-dmcc 每次 `build()` 都新建 3 个 worker_threads、编完销毁，每次重编都要重新加载 sass/postcss/esbuild/oxc 并重启 esbuild 服务进程；本 pool 只在第一次付这笔钱。实测 watch 热重编（`dimina/fe/example` 全部 5 个 demo）比 dmcc 快 1.6–4×（base 826→207ms、weui 2716→763ms）；冷启动略慢于 dmcc（3 个 worker 首次加载 bundle），"打开一次、保存无数次"的 devtools 场景下净赚。数据与方法见 [`docs/compile-fs-experiments.md`](./docs/compile-fs-experiments.md)。
+dmcc 每次 `build()` 都为 view / logic / style 各新建一个 worker_thread，编完立刻 `terminate()`（`dimina/fe/packages/compiler/src/index.js` 的 :105 / :114 / :132 三处调用，:190 新建、:205 与 :228 销毁；它的 `workerPool` 只是个并发限流器——数活跃线程 + 排队，每次仍调 `workerCreator()` 造新线程，不复用），所以每次重编都要重新加载 sass / postcss / esbuild / oxc 并重启 esbuild 的服务进程。本 pool 的 worker 常驻，这笔钱只在第一次付，watch 场景下每次保存都直接复用已热的 realm、只做真正的编译；代价是冷启动略慢（3 个 worker 首次都要各自加载一遍工具链），在"打开一次、保存无数次"的 devtools 场景下净赚。
 
 **dmcc drop-in（默认导出）**——签名、成功返回值、日志面貌与 dmcc `build()` 一致，宿主原有的日志抓取（`✔ 输出编译产物` / `✖ <stage>` / `<workPath> 编译出错:`）不用改。**错误路径与 dmcc 刻意分歧：编译失败会 reject**（dmcc 吞错 resolve undefined，失败编译与"无 app 信息"从此不可区分，宿主会带着兜底 appId 启动一个只能 404 的会话）——失败时先照旧把 `✖ <stage>` + `编译出错:` 打到 stderr，再把错误抛给调用方：
 
@@ -201,6 +201,9 @@ try {
 几个值得知道的行为：
 
 - **写真实磁盘**（不经 `files` map），二进制静态资源完好——不受浏览器 `collectOutputs` utf8 限制。
+- **fs 用原生、`worker_threads` 仍 shim**：Node 构建不给 `node:fs` 挂 shim（产物/二进制资源走真实磁盘）；但 `worker_threads` 依旧 shim 掉，为的是关掉 dmcc 编译器自带的 worker 消息处理——pool/stage worker 自己改用 `createRequire('node:worker_threads')` 拿到真实的 `Worker`/`parentPort`。
+- **sourcemap 开关走导出而非 worker message**：dmcc 的 logic/view stage 编译器原生只从 worker 的 `parentPort` message 里读 sourcemap 开关，而这条路径已经被上面那条 `worker_threads` shim 短路——构建时给这两个 stage 追加 `__setEnableSourcemap` 导出，`runStage` 前显式调用来代替。
+- **`build()` 里的 `path` 与 dmcc 语义等价、算法不同**：dmcc 读 `mainPages[1]` 是因为它的 style task 用 `unshift` 把 `app` 塞进了共享数组（`[1]` 才是原本的第一页）；本包的 style stage 不改变原数组，等价写法就是 `mainPages[0]`。
 - **build 全局串行**：编译经过 dmcc 的进程级全局状态,所以同进程内所有 pool 实例的 build 共用一条串行链（并发调用会排队,不会互相污染产物）。
 - **worker 卡死/崩溃自愈**：与浏览器 pool 同一套监管（`src/worker-slot.js`）——卡死但没退出的 worker 在连续 `sendTimeoutMs`（默认 120s）无任何消息（worker 工作时每 2s 发心跳）后判死并**立即 terminate**；意外退出/超时导致的 build 失败默认**透明重试一次**（respawn 前先等旧 worker `terminate()` 结算,staging 目录由 setupCompile 重建,失败的那次不会污染重试产物）,重试仍失败才 reject（错误带 `.code` 与 `.stage`）。`retryOnWorkerDeath: false` 恢复"第一次死就报错"的单次语义。任何情况下后续 build 都不会永久挂起。
 - **工具链 service 死亡同样自愈**：esbuild 靠常驻的二进制子进程（service）干活,它死掉后（打包环境 spawn ENOENT、被 OOM/杀毒杀掉）该 worker realm 内的每次 esbuild 调用都永久报 `The service is no longer running: write EPIPE`——worker 线程还活着但已不可用。pool 把这类 stage 报错（`The service was stopped` / `is no longer running`）归类为 `.code === 'compiler-toolchain-dead'` 而非普通编译错误：命中的 worker 当场回收,享受与 worker 死亡相同的透明重试;环境修好后（如二进制就位）下一次 build 在新 realm 上自动恢复,不会带着死 service 永远失败。
