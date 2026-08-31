@@ -180,27 +180,63 @@ export function compressImage(
 	img.src = src
 }
 
+// Same ceiling the three native containers enforce on a canvas export (32MB of
+// decoded bytes, expressed in base64 characters — see android ImageApi.kt), so an
+// export that a device would reject does not quietly succeed in the simulator.
+export const MAX_CANVAS_BASE64_CHARS = Math.floor(32 * 1024 * 1024 * 4 / 3) + 8
+
+// The render layer strips the data-URL prefix before it invokes the container, so a
+// prefix reaching here comes from a hand-built payload; the native containers accept
+// it only for the image types canvas can produce.
+const CANVAS_DATA_URL_PREFIX = /^data:image\/(png|jpeg|jpg);base64,/
+const STRICT_BASE64 = /^[A-Za-z0-9+/]*={0,2}$/
+
 export async function saveCanvasTempFile(
 	this: MiniAppContext,
 	{ dataURL, fileType = 'png', success, fail, complete }: { dataURL: string; fileType?: string; success?: unknown; fail?: unknown; complete?: unknown },
 ) {
 	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
 
-	if (!dataURL || typeof dataURL !== 'string') {
-		const result = { errMsg: 'canvasToTempFilePath:fail dataURL is required' }
+	// Reasons and their order mirror the native containers (android ImageApi.kt,
+	// iOS ImageAPI.swift, harmony DMPContainerBridgesModule+Canvas.ets): the
+	// errMsg is what a mini program branches on, so it must not differ per host.
+	const failWith = (reason: string) => {
+		const result = { errMsg: `canvasToTempFilePath:fail ${reason}` }
 		onFail?.(result)
 		onComplete?.(result)
+	}
+
+	if (!dataURL || typeof dataURL !== 'string') {
+		failWith('dataURL is required')
 		return
 	}
 	if (fileType !== 'png' && fileType !== 'jpg') {
-		const result = { errMsg: 'canvasToTempFilePath:fail invalid file type' }
-		onFail?.(result)
-		onComplete?.(result)
+		failWith('invalid file type')
 		return
 	}
 
+	const prefix = CANVAS_DATA_URL_PREFIX.exec(dataURL)
+	if (dataURL.startsWith('data:') && !prefix) {
+		failWith('invalid dataURL')
+		return
+	}
+	const declaredType = prefix?.[1]
+	if (declaredType && declaredType !== fileType && !(declaredType === 'jpeg' && fileType === 'jpg')) {
+		failWith('file type mismatch')
+		return
+	}
+
+	const base64Data = prefix ? dataURL.slice(prefix[0].length) : dataURL
+	if (base64Data.length > MAX_CANVAS_BASE64_CHARS) {
+		failWith('data too large')
+		return
+	}
+
+	let blob: Blob
 	try {
-		const base64Data = dataURL.includes(';base64,') ? dataURL.split(';base64,')[1] : dataURL
+		if (!base64Data || base64Data.length % 4 !== 0 || !STRICT_BASE64.test(base64Data)) {
+			throw new Error('malformed base64 payload')
+		}
 		const byteChars = atob(base64Data)
 		const bytes = new Uint8Array(byteChars.length)
 		for (let i = 0; i < byteChars.length; i++) {
@@ -208,15 +244,23 @@ export async function saveCanvasTempFile(
 		}
 
 		const mimeType = fileType === 'jpg' ? 'image/jpeg' : 'image/png'
-		const blob = new Blob([bytes.buffer], { type: mimeType })
+		blob = new Blob([bytes.buffer], { type: mimeType })
+	} catch {
+		failWith('base64 decode failed')
+		return
+	}
+
+	try {
 		const tempFilePath = await createTempFilePathAsync(blob)
 		const result = { tempFilePath, errMsg: 'canvasToTempFilePath:ok' }
 		onSuccess?.(result)
 		onComplete?.(result)
 	} catch (error) {
-		const result = { errMsg: `canvasToTempFilePath:fail ${(error as Error).message}` }
-		onFail?.(result)
-		onComplete?.(result)
+		// The store's own error text (a disposed runtime, a rejected IPC) says nothing
+		// to a mini program, and native reports every write failure the same way — keep
+		// the cause in the devtools console instead of in errMsg.
+		console.warn('[simulator] canvas temp file write failed', error)
+		failWith('write failed')
 	}
 }
 
