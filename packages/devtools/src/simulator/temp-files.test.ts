@@ -226,6 +226,37 @@ describe('temp-files in-memory behaviour (no sink)', () => {
 	})
 })
 
+describe('temp-files renderer cache FIFO eviction', () => {
+	it('an entry pushed past the 200-entry cap by newer inserts falls back to fetch, while the newest entry still resolves from memory', async () => {
+		const blobs: Blob[] = []
+		const paths: string[] = []
+		for (let i = 0; i < 201; i++) {
+			const blob = new Blob([`entry-${i}`])
+			blobs.push(blob)
+			paths.push(createTempFilePath(blob))
+		}
+
+		const fetched = new Blob(['from-network'])
+		const fetchSpy = vi.fn().mockResolvedValue({
+			ok: true,
+			blob: () => Promise.resolve(fetched),
+		})
+		vi.stubGlobal('fetch', fetchSpy)
+
+		const oldest = await resolveTempFilePath(paths[0]!)
+		expect(fetchSpy).toHaveBeenCalledTimes(1)
+		expect(fetchSpy).toHaveBeenCalledWith(paths[0])
+		expect(oldest).toBe(fetched)
+
+		fetchSpy.mockClear()
+		const newest = await resolveTempFilePath(paths[200]!)
+		expect(fetchSpy).not.toHaveBeenCalled()
+		expect(newest).toBe(blobs[200])
+
+		vi.unstubAllGlobals()
+	})
+})
+
 describe('temp-files sink wiring (setTempFileSink)', () => {
 	it('when sink installed, createTempFilePath calls sink.write exactly once with returned path and blob', () => {
 		const sink = makeSink()
@@ -318,6 +349,55 @@ describe('temp-files sink wiring (setTempFileSink)', () => {
 		expect(second.revokeMock).toHaveBeenCalledTimes(1)
 		expect(second.revokeMock).toHaveBeenCalledWith(path)
 		expect(second.revokeAllMock).toHaveBeenCalledTimes(1)
+	})
+
+	it('a failed writeAndWait removes the path from the renderer cache instead of leaving an orphaned entry', async () => {
+		let capturedPath: string | undefined
+		setTempFileSink({
+			write: vi.fn(),
+			writeAndWait: vi.fn((path: string) => {
+				capturedPath = path
+				return Promise.reject(new Error('store disposed'))
+			}),
+			revoke: vi.fn(),
+			revokeAll: vi.fn(),
+		})
+
+		await expect(createTempFilePathAsync(new Blob(['boom']))).rejects.toThrow('store disposed')
+		expect(capturedPath).toMatch(DIFILE_RE)
+
+		// If the cache entry survived the failure, resolveTempFilePath would return
+		// it straight from memory and never touch fetch — that's the observable
+		// difference between "rolled back" and "leaked".
+		const fetchSpy = vi.fn().mockResolvedValue({ ok: false })
+		vi.stubGlobal('fetch', fetchSpy)
+		await expect(resolveTempFilePath(capturedPath!)).rejects.toThrow()
+		expect(fetchSpy).toHaveBeenCalledWith(capturedPath)
+		vi.unstubAllGlobals()
+	})
+
+	it('control: a successful writeAndWait leaves the path resolvable from memory, never touching fetch', async () => {
+		const blob = new Blob(['ok'], { type: 'text/plain' })
+		let capturedPath: string | undefined
+		setTempFileSink({
+			write: vi.fn(),
+			writeAndWait: vi.fn((path: string) => {
+				capturedPath = path
+				return Promise.resolve()
+			}),
+			revoke: vi.fn(),
+			revokeAll: vi.fn(),
+		})
+
+		const path = await createTempFilePathAsync(blob)
+		expect(path).toBe(capturedPath)
+
+		const fetchSpy = vi.fn()
+		vi.stubGlobal('fetch', fetchSpy)
+		const resolved = await resolveTempFilePath(path)
+		expect(resolved).toBe(blob)
+		expect(fetchSpy).not.toHaveBeenCalled()
+		vi.unstubAllGlobals()
 	})
 
 	it('URL.revokeObjectURL is never called by any of these APIs (with or without sink)', () => {

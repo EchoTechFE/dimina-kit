@@ -180,10 +180,24 @@ export function compressImage(
 	img.src = src
 }
 
-// Same ceiling the three native containers enforce on a canvas export (32MB of
-// decoded bytes, expressed in base64 characters — see android ImageApi.kt), so an
-// export that a device would reject does not quietly succeed in the simulator.
-export const MAX_CANVAS_BASE64_CHARS = Math.floor(32 * 1024 * 1024 * 4 / 3) + 8
+// Same ceiling the three native containers enforce on a canvas export (android
+// ImageApi.kt, iOS ImageAPI.swift, harmony DMPContainerBridgesModule+Canvas.ets), so
+// an export that a device would reject does not quietly succeed in the simulator.
+// The base64 form is only a cheap pre-filter: base64 runs a third longer than the
+// bytes it carries, so a payload can pass it and still decode past the byte ceiling.
+export const MAX_CANVAS_IMAGE_BYTES = 32 * 1024 * 1024
+export const MAX_CANVAS_BASE64_CHARS = Math.floor(MAX_CANVAS_IMAGE_BYTES * 4 / 3) + 8
+
+// A file named .png that is not a PNG is useless to whoever reads the temp file back,
+// so the native containers check the signature before writing and report the payload
+// as invalid rather than minting a broken file.
+const PNG_SIGNATURE = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+function matchesImageType(bytes: Uint8Array, fileType: 'png' | 'jpg'): boolean {
+	if (fileType === 'png') {
+		return bytes.length >= PNG_SIGNATURE.length && PNG_SIGNATURE.every((byte, i) => bytes[i] === byte)
+	}
+	return bytes.length >= 3 && bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF
+}
 
 // The render layer strips the data-URL prefix before it invokes the container, so a
 // prefix reaching here comes from a hand-built payload; the native containers accept
@@ -191,66 +205,96 @@ export const MAX_CANVAS_BASE64_CHARS = Math.floor(32 * 1024 * 1024 * 4 / 3) + 8
 const CANVAS_DATA_URL_PREFIX = /^data:image\/(png|jpeg|jpg);base64,/
 const STRICT_BASE64 = /^[A-Za-z0-9+/]*={0,2}$/
 
+// The three containers put the appId straight into a sandbox path, so they reject one
+// that could climb out of it. The simulator names temp files by uuid and never builds a
+// path from the appId, but a mini program branches on errMsg, so an appId the containers
+// refuse must be refused here too rather than exporting fine only in the simulator.
+const SAFE_CANVAS_APP_ID = /^[A-Za-z0-9._-]+$/
+function isValidCanvasAppId(appId: unknown): boolean {
+	return typeof appId === 'string' && SAFE_CANVAS_APP_ID.test(appId) && appId !== '.' && appId !== '..'
+}
+
+// Rejects a payload whose declared shape can't have come out of a canvas, and hands
+// back the base64 body once it can.
+function readCanvasDataURL(
+	dataURL: string,
+	fileType: string,
+	appId: unknown,
+): { reason: string } | { base64Data: string; fileType: 'png' | 'jpg' } {
+	if (!dataURL || typeof dataURL !== 'string') return { reason: 'dataURL is required' }
+	if (fileType !== 'png' && fileType !== 'jpg') return { reason: 'invalid file type' }
+	if (!isValidCanvasAppId(appId)) return { reason: 'invalid appId' }
+
+	const prefix = CANVAS_DATA_URL_PREFIX.exec(dataURL)
+	if (dataURL.startsWith('data:') && !prefix) return { reason: 'invalid dataURL' }
+	const declaredType = prefix?.[1]
+	if (declaredType && declaredType !== fileType && !(declaredType === 'jpeg' && fileType === 'jpg')) {
+		return { reason: 'file type mismatch' }
+	}
+
+	return { base64Data: prefix ? dataURL.slice(prefix[0].length) : dataURL, fileType }
+}
+
+// Node/browser `atob` follows WHATWG forgiving-base64: a payload whose length leaves a
+// remainder of 2 or 3 still decodes. The native decoders reject it, so the length and
+// the alphabet are checked here rather than left to a throw. Returns null for anything
+// the containers would call undecodable.
+function decodeStrictBase64(base64Data: string): Uint8Array<ArrayBuffer> | null {
+	if (!base64Data || base64Data.length % 4 !== 0 || !STRICT_BASE64.test(base64Data)) return null
+	let byteChars: string
+	try {
+		byteChars = atob(base64Data)
+	} catch {
+		return null
+	}
+	const bytes = new Uint8Array(byteChars.length)
+	for (let i = 0; i < byteChars.length; i++) {
+		bytes[i] = byteChars.charCodeAt(i)
+	}
+	return bytes
+}
+
+// Turns the payload a mini program passed to canvasToTempFilePath into the blob that
+// gets written, or into the reason it was rejected. Checks and their order mirror the
+// native containers (android ImageApi.kt, iOS ImageAPI.swift, harmony
+// DMPContainerBridgesModule+Canvas.ets): the errMsg is what a mini program branches
+// on, so it must not differ per host.
+function decodeCanvasPayload(dataURL: string, declaredFileType: string, appId: unknown): { reason: string } | { blob: Blob } {
+	const head = readCanvasDataURL(dataURL, declaredFileType, appId)
+	if ('reason' in head) return head
+	const { base64Data, fileType } = head
+
+	if (base64Data.length > MAX_CANVAS_BASE64_CHARS) return { reason: 'data too large' }
+	const bytes = decodeStrictBase64(base64Data)
+	if (!bytes) return { reason: 'base64 decode failed' }
+
+	// The base64 ceiling above is only a pre-filter; these two run on the real bytes.
+	if (bytes.length > MAX_CANVAS_IMAGE_BYTES) return { reason: 'data too large' }
+	if (!matchesImageType(bytes, fileType)) return { reason: 'invalid image data' }
+
+	return { blob: new Blob([bytes], { type: fileType === 'jpg' ? 'image/jpeg' : 'image/png' }) }
+}
+
 export async function saveCanvasTempFile(
 	this: MiniAppContext,
 	{ dataURL, fileType = 'png', success, fail, complete }: { dataURL: string; fileType?: string; success?: unknown; fail?: unknown; complete?: unknown },
 ) {
 	const { onSuccess, onFail, onComplete } = bindCallbacks(this, { success, fail, complete })
 
-	// Reasons and their order mirror the native containers (android ImageApi.kt,
-	// iOS ImageAPI.swift, harmony DMPContainerBridgesModule+Canvas.ets): the
-	// errMsg is what a mini program branches on, so it must not differ per host.
 	const failWith = (reason: string) => {
 		const result = { errMsg: `canvasToTempFilePath:fail ${reason}` }
 		onFail?.(result)
 		onComplete?.(result)
 	}
 
-	if (!dataURL || typeof dataURL !== 'string') {
-		failWith('dataURL is required')
-		return
-	}
-	if (fileType !== 'png' && fileType !== 'jpg') {
-		failWith('invalid file type')
-		return
-	}
-
-	const prefix = CANVAS_DATA_URL_PREFIX.exec(dataURL)
-	if (dataURL.startsWith('data:') && !prefix) {
-		failWith('invalid dataURL')
-		return
-	}
-	const declaredType = prefix?.[1]
-	if (declaredType && declaredType !== fileType && !(declaredType === 'jpeg' && fileType === 'jpg')) {
-		failWith('file type mismatch')
-		return
-	}
-
-	const base64Data = prefix ? dataURL.slice(prefix[0].length) : dataURL
-	if (base64Data.length > MAX_CANVAS_BASE64_CHARS) {
-		failWith('data too large')
-		return
-	}
-
-	let blob: Blob
-	try {
-		if (!base64Data || base64Data.length % 4 !== 0 || !STRICT_BASE64.test(base64Data)) {
-			throw new Error('malformed base64 payload')
-		}
-		const byteChars = atob(base64Data)
-		const bytes = new Uint8Array(byteChars.length)
-		for (let i = 0; i < byteChars.length; i++) {
-			bytes[i] = byteChars.charCodeAt(i)
-		}
-
-		const mimeType = fileType === 'jpg' ? 'image/jpeg' : 'image/png'
-		blob = new Blob([bytes.buffer], { type: mimeType })
-	} catch {
-		failWith('base64 decode failed')
+	const decoded = decodeCanvasPayload(dataURL, fileType, this.appId)
+	if ('reason' in decoded) {
+		failWith(decoded.reason)
 		return
 	}
 
 	try {
+		const blob = decoded.blob
 		const tempFilePath = await createTempFilePathAsync(blob)
 		const result = { tempFilePath, errMsg: 'canvasToTempFilePath:ok' }
 		onSuccess?.(result)
