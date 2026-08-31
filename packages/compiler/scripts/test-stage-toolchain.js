@@ -236,6 +236,48 @@ for (const stage of ['logic', 'view']) {
     `logic compile-subset after warmup does not fail as un-warmed — got ${JSON.stringify(compileReply && (compileReply.type === 'error' ? String(compileReply.error).slice(0, 100) : compileReply.type))}`)
 }
 
+// --- H: a worker reconfigured with a DIFFERENT toolchainSetupURL mid-lifetime must
+// import the new module (not just keep serving the first one it ever loaded), and a
+// later message that repeats the same new URL must not re-import it a second time.
+// This is the regression `ensureToolchain`'s URL-keyed cache (vs. the old
+// "imported at all yes/no" boolean) exists to close.
+{
+  const markerA = '__stageToolchainMark_switchA'
+  const markerB = '__stageToolchainMark_switchB'
+  const worker = await loadWorkerInstance()
+
+  const warmupReply = await worker.send({
+    type: 'warmup',
+    toolchainSetupURL: cssToolchainURL(markerA),
+    stages: ['style'],
+  })
+  chk(warmupReply && warmupReply.type === 'ready', 'switch-URL worker warmup with toolchain A succeeds')
+  chk(globalThis[markerA] === 1, `toolchain A imported once at warmup (count=${globalThis[markerA] || 0})`)
+
+  const compileReplyB1 = await worker.send({
+    type: 'compile-subset',
+    files: FIXTURE_FILES,
+    workPath: WORK_PATH,
+    stages: ['style'],
+    toolchainSetupURL: cssToolchainURL(markerB),
+  })
+  chk(compileReplyB1 && compileReplyB1.type === 'done',
+    `compile-subset that switches to a new toolchainSetupURL (B) succeeds — got ${JSON.stringify(compileReplyB1 && compileReplyB1.type === 'error' ? compileReplyB1.error : compileReplyB1.type)}`)
+  chk(globalThis[markerB] === 1, `switching to toolchain B imports it exactly once (count=${globalThis[markerB] || 0})`)
+  chk(globalThis[markerA] === 1, `toolchain A's import count is unaffected by the switch to B (count=${globalThis[markerA]})`)
+
+  const compileReplyB2 = await worker.send({
+    type: 'compile-subset',
+    files: FIXTURE_FILES,
+    workPath: WORK_PATH,
+    stages: ['style'],
+    toolchainSetupURL: cssToolchainURL(markerB),
+  })
+  chk(compileReplyB2 && compileReplyB2.type === 'done',
+    `a second compile-subset still requesting toolchain B succeeds — got ${JSON.stringify(compileReplyB2 && compileReplyB2.type === 'error' ? compileReplyB2.error : compileReplyB2.type)}`)
+  chk(globalThis[markerB] === 1, `toolchain B stays imported once total, not once per message (count=${globalThis[markerB]})`)
+}
+
 // --- F: createCompilerPool tells each resident worker its own stage identity ---
 {
   const { createCompilerPool } = await import(POOL_MODULE)
@@ -268,5 +310,5 @@ for (const stage of ['logic', 'view']) {
   }
 }
 
-rawLog(failed ? `\n❌ ${failed} stage-toolchain assertion(s) failed.` : '\n✅ style stage skips the wasm toolchain; logic/view/custom/legacy stay conservative; pool announces worker stage identity.')
+rawLog(failed ? `\n❌ ${failed} stage-toolchain assertion(s) failed.` : '\n✅ every stage loads the wasm toolchain, the load is memoized per setup URL, and the pool announces worker stage identity.')
 realProcessExit(failed ? 1 : 0)

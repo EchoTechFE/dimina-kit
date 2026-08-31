@@ -130,7 +130,7 @@ await installEsbuildFromURL('/esbuild-browser.mjs', '/esbuild.wasm')   // 见下
 - **`installOxc(oxcModule)`**：把 `await import('oxc-parser')`（你的 bundler 才能解析它 + 取它的 wasm）装成 `__oxcParseSync`。
 - **`installEsbuildFromURL(moduleURL, wasmURL)`**：从**静态资源 URL** 加载 esbuild-wasm 浏览器 ESM 并 `initialize`，装成 `__esbuildTransform`。
 
-> **不是每个 worker 都会加载它：** style stage 的编译链路不调用这两个 wasm 钩子（CSS 工具链已内联，见下），所以 **style worker 在 warmup/compile 时会直接跳过 `import(toolchainSetupURL)`**——省掉一份 esbuild.wasm（~13MB）+ oxc 的加载与常驻内存。因此 **setup 模块只应安装这两个钩子**，不要在里面夹带编译所依赖的其他全局（style worker 看不到它们）；未知的自定义 stage 会保守照旧加载。
+> **每个 worker 都会加载它：** 包括 style。CSS 工具链虽然内联（见下），但编译器压缩不带 sourcemap 的 CSS 走的是 esbuild 的 `transform`（cssnano 只用在 sourcemap 那条分支），所以 style stage 同样会调 `__esbuildTransform`。warmup 时无法预知之后的编译走哪条分支，因此三类消息（warmup / setup / compile-subset）都会先 `import(toolchainSetupURL)`。**setup 模块只应安装这两个钩子**，不要在里面夹带编译所依赖的其他全局。
 >
 > **为什么是 URL 而不是 `import`：** esbuild-wasm 的浏览器构建通常只能当**静态资源**托管（把它的 Go 运行时打包会坏），而 bundler（Vite/Webpack/Rollup）**不允许** `import()` 一个静态资源目录里的 JS——`installEsbuildFromURL` 内部用 `fetch + Blob URL` 绕过 bundler 的模块图,替你把这个坑填了。若你的 esbuild-wasm 是 npm 依赖（bundler 能解析），也可以自己 `import * as esbuild from 'esbuild-wasm'` + `esbuild.initialize({ wasmURL })` + 设 `globalThis.__esbuildTransform`,不必用这个助手。
 >

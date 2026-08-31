@@ -40,12 +40,21 @@ let toolchainReady = null
 let toolchainURL = null
 function ensureToolchain(url) {
   if (url) toolchainURL = url
-  if (!toolchainReady) {
-    if (!toolchainURL) return Promise.reject(new Error('[compiler] stage worker not warmed up: no toolchainSetupURL (call pool.warmup first)'))
-    toolchainReady = import(/* @vite-ignore */ toolchainURL)
-      .catch((err) => { toolchainReady = null; throw new Error(`[compiler] toolchain setup failed importing ${toolchainURL}: ${(err && err.message) || err}`) })
+  if (!toolchainURL) return Promise.reject(new Error('[compiler] stage worker not warmed up: no toolchainSetupURL (call pool.warmup first)'))
+  // Keyed by URL, not just "loaded once": a caller that reconfigures this worker with a
+  // different setup module must get that module's hooks, not the first one's. `pending`
+  // is captured per attempt so a failure reports the URL it actually imported and only
+  // clears the cache if a newer attempt has not already replaced it.
+  if (!toolchainReady || toolchainReady.url !== toolchainURL) {
+    const pending = toolchainURL
+    const promise = import(/* @vite-ignore */ pending)
+      .catch((err) => {
+        if (toolchainReady && toolchainReady.url === pending) toolchainReady = null
+        throw new Error(`[compiler] toolchain setup failed importing ${pending}: ${(err && err.message) || err}`)
+      })
+    toolchainReady = { url: pending, promise }
   }
-  return toolchainReady
+  return toolchainReady.promise
 }
 
 function freshFs(files, workPath) {

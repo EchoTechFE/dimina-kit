@@ -136,8 +136,9 @@ export function createCompilerPool(options = {}) {
     await slot.ensureAlive()
     if (!entry.warmed || entry.warmedGen !== slot.generation) {
       entry.warmedGen = slot.generation
-      // stages tells the worker its stage identity so toolchain-free stages (style)
-      // can skip importing toolchainSetupURL at warmup.
+      // stages tells the worker which stage it owns; it reports that identity back in
+      // logs and errors. Every stage loads the toolchain (style minifies through
+      // esbuild too), so this is no longer what decides whether the import happens.
       entry.warmed = requestChecked(
         entry,
         { type: 'warmup', toolchainSetupURL, stages: [entry.stage], wantHeartbeat: true },
