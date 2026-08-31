@@ -19,17 +19,29 @@ if (!bridgeId) {
 }
 
 // WeChat parity: prime the page's OWN document with its configured
-// `window.backgroundColor` before pageFrame.css / @dimina/render load — mirrors
-// the real dimina/fe container's `webview.js` (`applyPageStyle()` sets
-// `root.style.backgroundColor` before the inner iframe navigates). Without
+// `window.backgroundColor` before pageFrame.css / @dimina/render load. Without
 // this the guest's document background is UA-default white until the page's
 // own CSS paints, which is the white flash on every page transition. Applied
 // as early as the preload can reach `document.documentElement` and again on
 // DOMContentLoaded in case the element wasn't attached yet.
+//
+// `documentElement` only — never `body`. `body` carries the `.dd-page` class
+// that `installPageFrameStyleScopes` (dimina/fe render runtime) gates the page's
+// own `data-v-*` scope attributes on, which makes `body` the element that
+// `page { ... }` rules from the app's wxss compile down to. An inline
+// background-color there outranks any stylesheet rule, so it would silently
+// override the app's own `page { background-color: ... }` with this
+// window-config default.
+//
+// Upstream's `applyPageStyle()` (container-sdk webview.ts) is NOT a precedent
+// for touching the guest's body: the `root` it colors is
+// `.dimina-native-webview__root`, the container element OUTSIDE the guest
+// iframe. Our equivalent of that layer is the host-side `<webview>` element's
+// own CSS (see miniapp-frame.tsx), which stays as the first white-flash
+// primer; this `documentElement` write is the second.
 if (bgColor) {
   const applyBackgroundColor = () => {
     if (document.documentElement) document.documentElement.style.backgroundColor = bgColor
-    if (document.body) document.body.style.backgroundColor = bgColor
   }
   applyBackgroundColor()
   globalThis.addEventListener('DOMContentLoaded', applyBackgroundColor)
