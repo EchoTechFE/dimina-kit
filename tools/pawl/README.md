@@ -34,7 +34,7 @@ every local import must carry an explicit `.ts`/`.js` extension.
 pnpm pawl:record          # measure every dimension and (over)write the baseline
 pnpm pawl:check           # measure + compare; exit 1 on any regression — the CI gate
 pnpm pawl:diff            # measure + compare, print the table, never fail
-pnpm exec pawl baseline-guard <git-ref>
+pnpm exec pawl guard <git-ref>
                              # compare the working tree's pawl.snapshot.json against
                              # the version committed at <ref> — the PR-vs-base-branch gate
 ```
@@ -88,7 +88,7 @@ scalar total (file A improves while file B worsens, total flat):
 
 A dimension may also declare a `tolerance` — absolute slack (same unit as the
 value) granted in the worse direction, applied to the total, the per-key checks,
-and `baseline-guard` alike (the snapshot records it so the guard sees it without
+and `guard` alike (the snapshot records it so the guard sees it without
 loading adapters). Exact-count dimensions omit it; `test-coverage` declares
 `tolerance: 1` (one percentage point) because runtime coverage carries inherent
 measurement noise that a strict comparison would surface as false regressions. A
@@ -101,7 +101,7 @@ pawl protects the gate itself, not just the dimensions it measures:
 - **Cannot-measure is exit 2, never a silent zero.** If an adapter crashes,
   times out, or prints non-JSON, pawl aborts with exit 2 rather than reading the
   failure as "measured zero" — a missing measurement can't pass the gate.
-- **`baseline-guard <ref>`.** Compares the working tree's `pawl.snapshot.json`
+- **`guard <ref>`.** Compares the working tree's `pawl.snapshot.json`
   against the version committed at `<ref>` (in CI: the PR's base branch, via a
   `git fetch --depth=1` + `FETCH_HEAD`). This is what actually stops a
   hand-edited snapshot from faking a pass — `check` alone only verifies internal

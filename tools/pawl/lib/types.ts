@@ -39,7 +39,7 @@ export type Adapter = {
 
 // A measurement as stored in snapshot.json / returned by measureAll: fully
 // normalized. `tolerance` is the one optional field — recorded only when the
-// adapter declares it, so baseline-guard (which sees snapshots, not adapters)
+// adapter declares it, so guard (which sees snapshots, not adapters)
 // can honor the same slack the gate does.
 export type Metric = {
   direction: Direction;
