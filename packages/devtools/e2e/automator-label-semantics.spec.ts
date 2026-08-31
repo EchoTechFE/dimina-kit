@@ -115,11 +115,27 @@ async function resetCounters(): Promise<void> {
   )
 }
 
+/**
+ * The finger's landing point, read once. Omitting the points lets the protocol
+ * fall back to the element's centre, but it re-reads live layout on every event
+ * — and the probe page grows a log row per event, so the same finger would come
+ * back at a different coordinate and read as a drag. A real finger keeps its
+ * screen position while the page reflows under it.
+ */
+async function fingerPoint(el: AutomatorElement) {
+  const { left, top } = await el.offset()
+  const { width, height } = await el.size()
+  const x = Math.round(left + width / 2)
+  const y = Math.round(top + height / 2)
+  return { identifier: 0, pageX: x, pageY: y, clientX: x, clientY: y }
+}
+
 async function tap(selector: string): Promise<string[]> {
   await resetCounters()
   const el = await element(selector)
-  await el.touchstart()
-  await el.touchend()
+  const point = await fingerPoint(el)
+  await el.touchstart({ touches: [point], changeTouches: [point] })
+  await el.touchend({ touches: [], changeTouches: [point] })
   return settledLog()
 }
 
@@ -131,11 +147,7 @@ async function tap(selector: string): Promise<string[]> {
 async function touchTapCentre(selector: string): Promise<string[]> {
   await resetCounters()
   const el = await element(selector)
-  const { left, top } = await el.offset()
-  const { width, height } = await el.size()
-  const x = Math.round(left + width / 2)
-  const y = Math.round(top + height / 2)
-  const point = { identifier: 0, pageX: x, pageY: y, clientX: x, clientY: y }
+  const point = await fingerPoint(el)
   await el.touchstart({ touches: [point], changeTouches: [point] })
   await sleep(60)
   await el.touchend({ touches: [], changeTouches: [point] })
@@ -197,9 +209,10 @@ async function trustedClick(selector: string): Promise<string> {
 async function hold(selector: string): Promise<string[]> {
   await resetCounters()
   const el = await element(selector)
-  await el.touchstart()
+  const point = await fingerPoint(el)
+  await el.touchstart({ touches: [point], changeTouches: [point] })
   await sleep(HOLD_MS)
-  await el.touchend()
+  await el.touchend({ touches: [], changeTouches: [point] })
   return settledLog()
 }
 
