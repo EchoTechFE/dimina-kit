@@ -8,8 +8,9 @@
  *      (device-shell.tsx) — painted by the HOST compositor, ahead of the
  *      guest's first composited frame.
  *   2. The guest's own document background (render-host/preload.cjs sets
- *      `document.documentElement`/`body` style before pageFrame.css or
- *      @dimina/render load).
+ *      `document.documentElement` style before pageFrame.css or @dimina/render
+ *      load — `body` is deliberately left alone so the app's own
+ *      `page { background-color }` can win; see page-scope-vars.spec.ts).
  *
  * Also guards a real bug this fix surfaced along the way:
  * `resolvePageWindowConfig` was reading `modules[path].window`, but the

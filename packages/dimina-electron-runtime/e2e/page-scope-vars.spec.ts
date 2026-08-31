@@ -64,22 +64,35 @@ test.describe('page {} global styles reach the render guest', () => {
     expect(tokenValue).toBe(PROBE_TOKEN_VALUE)
 
     // 2) pages/home/home.json sets window.backgroundColor (#ff00ff) — the
-    // render-host preload primes the guest document with it for the
-    // white-flash fix. app.wxss also sets `page { background-color: #00aa55 }`.
-    // The app's own wxss must win once the page finishes rendering: the
-    // preload's primer only writes `document.documentElement`, so a
-    // `.dd-page[data-v-*]` rule on `<body>` is never shadowed by an inline
-    // style the way it would be if the preload still wrote `body.style` too.
-    const bodyBg = await pollUntil(
+    // render-host preload primes the guest's `documentElement` with it for the
+    // white-flash fix. app.wxss also sets `page { background-color: #00aa55 }`,
+    // which compiles to `.dd-page[data-v-*]` and lands on `<body>`.
+    //
+    // Both are read in the SAME evaluation, and both are asserted: `<body>`
+    // green alone would still pass if the window-config primer chain broke
+    // entirely, because then nothing was ever there for the app's wxss to beat.
+    // Pinning `<html>` at the window-config colour in the same instant is what
+    // makes this a real "green won over magenta" assertion rather than just
+    // "body is green".
+    const backgrounds = await pollUntil(
       () => evalInWebContentsByUrl<string>(
         electronApp,
         RENDER_GUEST_URL_MARKER,
-        `(getComputedStyle(document.body).backgroundColor)`,
+        `(() => JSON.stringify({
+          html: getComputedStyle(document.documentElement).backgroundColor,
+          body: getComputedStyle(document.body).backgroundColor,
+        }))()`,
       ).catch(() => ''),
-      (val) => val === WXSS_BG_RGB,
+      (val) => {
+        if (!val) return false
+        const parsed = JSON.parse(val)
+        return parsed.html === WINDOW_CONFIG_BG_RGB && parsed.body === WXSS_BG_RGB
+      },
       15000,
       300,
     )
-    expect(bodyBg, `expected page{}'s ${WXSS_BG_RGB} to win over window.backgroundColor's ${WINDOW_CONFIG_BG_RGB}`).toBe(WXSS_BG_RGB)
+    const { html: htmlBg, body: bodyBg } = JSON.parse(backgrounds || '{}')
+    expect(htmlBg, `expected the preload's window.backgroundColor primer to still hold ${WINDOW_CONFIG_BG_RGB} on <html>`).toBe(WINDOW_CONFIG_BG_RGB)
+    expect(bodyBg, `expected page{}'s ${WXSS_BG_RGB} to win over window.backgroundColor's ${WINDOW_CONFIG_BG_RGB} on <body>`).toBe(WXSS_BG_RGB)
   })
 })
