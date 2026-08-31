@@ -187,16 +187,21 @@ zone 的某相对位置）与**应用**（`commit()` 算出把 host 当前子序
 取 X 与其前驱的中点，O(1) 且不扰动其他 view 的 key；中点精度耗尽时**整 zone 重编号**（rebalance，
 对可见顺序无感）。
 
-**LIS commit**：把一批意图折叠成**最终目标态**（last-state，不是写日志回放），再 diff host 当前
-子序与目标。host 只能 `addChildView` 到顶（append/raise），所以保留「当前∩目标里已就位的最长前缀」
-（LIS），其余共享 view + 全部新 view 在一个同步 pass 里 remove+add 重排——**最小 host churn、
-零 renderer reload**。
+**前缀保序 commit**：把一批意图折叠成**最终目标态**（last-state，不是写日志回放），再 diff host
+当前子序与目标。host 只能 `addChildView` 到顶（append/raise），所以保留「目标顺序里位置已递增的
+最长前缀」，其余共享 view + 全部新 view 在一个同步 pass 里 remove+add 重排——**零 renderer
+reload**。
+
+> 前缀不等于 LIS，因此**不保证最小 host churn**：`computeKeepIds` 遇到第一个乱序元素即 `break`
+> （`src/main/compositor.ts`）。反例——当前 `[A,B,C]` 目标 `[C,A,B]`：前缀只保住 `{C}` 要 2 次
+> add，真 LIS 保住 `{A,B}` 只要 1 次。这是刻意的简化（append-to-top 原语下实现更短），不是缺陷；
+> churn 的代价上限是「共享 view 数」，且 addChildView 已挂载子 view 只提顶不 reload。
 
 > 为什么需要它而 dockview 没有：见决定 1。原生 view 的 z 是 Electron 物理约束下主进程独有的一层，
 > DOM 库管不到。
 
 - 文件：`src/main/compositor.ts`（接口 `Compositor`；reorder/fractional key（含 `keyBefore`）；
-  LIS commit 均在此）。host 观察到的 Electron z 语义（spike 实证）记在 `compositor.ts` 的头注释。
+  前缀保序 commit 均在此）。host 观察到的 Electron z 语义（spike 实证）记在 `compositor.ts` 的头注释。
 
 ### 2.4 ControlBus —— IPC + trust 薄 facade
 **职责**：三个动词的薄门面，**自己不加任何新 gating**：
@@ -325,7 +330,7 @@ const deck = createDeckLayoutClient({ bridge: window.__electronDeckLayoutBridge 
 |---|---|---|
 | **Scope** | 嵌套寿命 + 完成栅栏 + adopt | `src/main/scope.ts` |
 | **Layout/Placement** | DOM rect ↔ native bounds，显式 `Placement{visible}` 判别式 | `packages/view-anchor/src/` |
-| **Compositor** | per-window 原生 z 叠放，fractional indexing + LIS commit | `src/main/compositor.ts` |
+| **Compositor** | per-window 原生 z 叠放，fractional indexing + 前缀保序 commit | `src/main/compositor.ts` |
 | **ControlBus** | IPC + trust 薄 facade，真接 WireTransport | `src/host/control-bus.ts` + `src/internal/wire-transport.ts` + `src/internal/trust-set.ts` |
 | **ViewHandle / `runtime.view`** | 薄 per-view 编排：`placeIn/applyPlacement/moveTo` + `bounds()/capturePage()/webContents` | `src/main/view-handle.ts` + `src/internal/deck-app.ts` |
 | **capability / grants** | 授权层：grant 闸 + senderId 横切 + per-wc Scope + 导航撤权 | `src/host/capability.ts` + `src/internal/deck-app.ts` |
@@ -343,7 +348,7 @@ const deck = createDeckLayoutClient({ bridge: window.__electronDeckLayoutBridge 
 | `src/layout/` | layout-as-data 引擎（纯 TS）：`types.ts` 树/节点/registry/model 类型、`mutations.ts` 树→树纯函数、`serialize.ts` 往返+`validateTree`、`model.ts` 单写者可观察模型、`registry.ts` panel registry；公开面在 `index.ts` |
 | `src/dock-react/` | `<DockView>` React 渲染器（`dock-view.tsx`）+ 纯几何 drag-to-redock（`drag-redock.ts`）；公开面在 `index.ts` |
 | `src/main/scope.ts` | Scope 嵌套寿命原语：`own/child/reset/close/on/adopt`，完成栅栏单飞状态机 |
-| `src/main/compositor.ts` | Compositor：`(zone,orderKey,viewId)` 全序、fractional indexing、LIS commit |
+| `src/main/compositor.ts` | Compositor：`(zone,orderKey,viewId)` 全序、fractional indexing、前缀保序 commit |
 | `src/host/control-bus.ts` | ControlBus 薄 facade：`command/event/trust/dispatch/declaredEvents` |
 | `src/internal/wire-transport.ts` | 真 Electron wire：`ipcMain.handle` 路由 + trust/main-frame gate + event fanout |
 | `src/internal/trust-set.ts` | TrustSet：refcount 信任成员（`add/isTrusted/snapshot/deleteEntry`） |

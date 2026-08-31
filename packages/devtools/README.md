@@ -1,8 +1,31 @@
 # Dimina DevTools
 
-基于 Electron 的小程序开发者工具。提供模拟器、Chrome DevTools 面板、WXML/AppData/Storage/编译 面板、编译配置等功能。
+> 调试 [Dimina](https://github.com/didi/dimina) 小程序的桌面工具：在模拟器里把小程序跑起来，用 Chrome DevTools 调它，外加一组专为小程序做的面板。
 
-下游 host 通过 `launch(config)` 集成并定制 devtools（零配置直接 `launch()`，配置驱动 `launch({...})`；见下方「两种用法」）。两种用法都经领域中立的 [`@dimina-kit/electron-deck`](../electron-deck) 框架编排——框架接管 Electron 进程生命周期（whenReady / will-quit）、wire/trust 原语，devtools 作为 `RuntimeBackend` 注入完整运行时（见 [`electron-deck 架构`](../electron-deck/docs/architecture.md)）。
+![Dimina DevTools](../../docs/devtools.png)
+
+## 能做什么
+
+- **模拟器**——选设备型号运行小程序，页面栈、TabBar、导航、安全区都按真机行为模拟
+- **Chrome DevTools**——直接调试小程序页面的 DOM、样式、网络和断点
+- **专用面板**——WXML 组件树、AppData（页面 `setData` 状态，可编辑回写）、Storage、编译日志
+- **内嵌编辑器**——一个 VS Code 工作台，带 WXML 语言特性和 dimina 配置文件的 JSON Schema
+- **自动化接口**——内置 MCP server（默认关闭）和自动化 WebSocket 服务
+
+## 运行
+
+打好的 macOS / Windows / Linux 版本在 [Releases](https://github.com/EchoTechFE/dimina-kit/releases)；从源码跑的步骤见[仓库根 README 的快速开始](../../README.md#快速开始)。
+
+## 作为库集成
+
+你也可以把 devtools 当库用——套上自己的品牌、换掉编译后端、加自己的面板和 API，做成一个新工具。下面「两种用法」讲的就是这件事。
+
+```bash
+pnpm add @dimina-kit/devtools
+```
+
+
+集成的编排由领域中立的 [`@dimina-kit/electron-deck`](../electron-deck) 完成：框架接管 Electron 进程生命周期（whenReady / will-quit）和 wire/trust 原语，devtools 作为 `RuntimeBackend` 注入完整运行时（见 [electron-deck 架构](../electron-deck/docs/architecture.md)）。
 
 ---
 
@@ -77,7 +100,7 @@ launch({
 
 ---
 
-## 目录结构
+## 代码结构（贡献者向，使用者可跳过）
 
 ```
 src/
@@ -764,3 +787,9 @@ pnpm test:e2e           # 运行 Playwright e2e 测试
 `workbench_evaluate` 已从 MCP 工具集中移除，workbench 只暴露只读诊断工具（截屏、console 日志、DOM、网络日志等）。`simulator_evaluate` 仍然保留，但小程序页面跑在 render-host `<webview>` guest 里（`nodeIntegration=false`），其 `evaluate` 仅在页面 JS 上下文执行，不具备 Node API 访问能力。
 
 仅在连接到可信的本机 MCP 客户端或被信任的 AI 工具时启用该功能；不要在公共 WiFi、共享机器或存在远程 SSH 端口转发的场景下开启，以免监听端口被非预期的客户端访问。
+
+---
+
+## License
+
+[MIT](../../LICENSE) © EchoTechFE

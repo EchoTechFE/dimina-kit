@@ -5,7 +5,14 @@
 
 ## 摘要（TL;DR）
 
-devtools 容器是一个 BrowserWindow（workbench 主舞台）+ 若干 WebContentsView 覆盖层（simulator DevTools / settings / popover）。mini-program 跑在 native-host 运行时上：simulator 自身是主进程顶层 `WebContentsView`（承载 React DeviceShell），每个页面是一个子 `<webview>`（由主进程钉到该项目的 `persist:miniapp-<key>` partition，见 §3.1），service 逻辑跑在一个隐藏的 ServiceHost BrowserWindow。所有 mini-program runtime 消息经 main 进程的 BridgeRouter（`src/main/ipc/bridge-router.ts`）这条总线编排 service ↔ simulator ↔ render 的两级 session（AppSession / PageSession）。
+devtools 容器是一个 BrowserWindow（主舞台）+ 若干 WebContentsView（simulator、VS Code
+workbench、Chromium DevTools、host slots、settings、popover）。mini-program 跑在
+native-host 运行时上：simulator 自身是主进程顶层 `WebContentsView`（承载 React
+DeviceShell），每个页面是一个子 `<webview>`（由主进程钉到该项目的
+`persist:miniapp-<key>` partition，见 §3.1），service 逻辑跑在一个隐藏的
+ServiceHost BrowserWindow。所有 mini-program runtime 消息经 main 进程的 BridgeRouter
+（`src/main/ipc/bridge-router.ts`）编排 service ↔ simulator ↔ render 的两级
+session（AppSession / PageSession）。
 
 ## 1. 窗口拓扑全景图
 
@@ -16,10 +23,11 @@ devtools 容器是一个 BrowserWindow（workbench 主舞台）+ 若干 WebConte
 | 进程类别 | 数量 | 备注 |
 |---|---|---|
 | Electron main | 1 | 唯一可触达 fs/net/Electron API 的进程 |
-| Renderer（workbench main） | 1 | React workbench UI（内嵌 Monaco 编辑器，见 [`editor-integration.md`](./editor-integration.md)） |
+| Renderer（main） | 1 | React devtools UI；editor 槽只提供 VS Code WCV 的 placement anchor，见 [`editor-integration.md`](./editor-integration.md) |
 | Renderer（settings 独立窗口） | 0..1 | 用户打开「开发工具设置」时按需创建，见 `windows/settings-window/create.ts` |
 | Overlay renderer（settings overlay / popover） | 0..n | 跑在 WebContentsView 里，附在 main window 上 |
 | WebContentsView（simulator DeviceShell） | 1 per project | 主进程顶层 WebContentsView，跑 React DeviceShell，partition = 该项目的 `persist:miniapp-<key>`（appId 派生，见 §3.1 / §5） |
+| WebContentsView（VS Code workbench） | 0..1 | editor 槽首次可见时懒建，内容来自本机 COI server |
 | Renderer（page `<webview>`） | n | 每个 mini-program 页面一个子 `<webview>`，挂在 simulator WebContentsView 里 |
 | BrowserWindow（service-host） | 0..1 | 跑 mini-program service 逻辑的隐藏窗口；`constructServiceHostWindow` 建窗在 `windows/service-host-window/create.ts` |
 
@@ -32,7 +40,7 @@ Electron app
     └── contentView (V)                            ← 通过 new View() 包了一层
         ├── mainWebView (主 renderer)              ← workbench React UI
         ├── nativeSimulatorView : WebContentsView  ← simulator DeviceShell（顶层，托管子 webview）
-        │   ← view-manager.ts 的 attachNativeSimulator 创建
+        │   ← native-simulator-view.ts 的 attachNativeSimulator 创建
         │   preload = cjsSiblingPreloadPath(ctx.preloadPath)（webPreferences.preload）
         │   partition = persist:miniapp-<key>（key 由 appId + 项目路径 派生，attachNativeSimulator 从 simulator URL 的 ?appId= 解析 appId、从 workspace.getProjectPath() 取路径；同 appId 不同路径项目互相隔离）
         │   └── DeviceShell（React，device-shell.tsx）
@@ -40,7 +48,8 @@ Electron app
         │           由 will-attach-webview 钉到宿主 WCV 同一 per-project partition
         │           preload = dist/render-host/preload.cjs       ← 跑 @dimina/render bundle
         ├── simulatorView : WebContentsView        ← DevTools 面板（Chrome DevTools 实例本身）
-        │   ← view-manager.ts 的 attachNativeSimulatorDevtoolsHost 创建，绑到 bridge 报告的活跃 service-host wc
+        │   ← native-simulator-devtools-host.ts 创建，绑到 bridge 报告的活跃 service-host wc
+        ├── workbenchView : WebContentsView        ← VS Code 编辑器，贴到 editor 槽
         ├── settingsView : WebContentsView         ← 「设置」覆盖层
         └── popoverView  : WebContentsView         ← 通用悬浮层
 
@@ -61,7 +70,15 @@ Electron app
 ### 1.3 关键放置约束
 
 - DevTools 面板（`simulatorView`）是 Chromium 自己的 DevTools UI，挂在主窗口上做 overlay；它通过 `wc.setDevToolsWebContents(simulatorView.webContents)` 绑定到逻辑层 service-host wc（Console/Network/Sources 都在那跑），并由 bridge 的 render 事件在页面切换时重指向，见 `view-manager.ts` 的 `pointNativeDevtoolsAtServiceWc`。Elements 面板的 DOM 另经 elements-forward 路由到活跃 render-host guest。
-- WXML / AppData / Storage 三个右侧 panel 的数据**不是**独立 WebContentsView，是 React 组件读 IPC 数据后画的（见 `renderer/controllers/use-panel-data.ts`）。容器层只负责 simulator / settings / popover 三种 overlay 的生命周期。
+- WXML / AppData / Storage 三个右侧 panel 的数据**不是**独立 WebContentsView，是 React
+  组件消费主进程 IPC source 后绘制（`use-panel-data.ts:27-51`）。ViewManager 还编排
+  workbench、Chromium DevTools、host toolbar/sidebar/dialog 等 WCV；不要把容器职责缩成
+  simulator / settings / popover 三种 overlay
+  （`src/main/services/views/view-manager.ts:93-105`）。
+- 主窗口 renderer 在构造期成为 child #0；此后 WCV 的 add/remove/reorder 只由
+  `native-view-tree.ts` 执行
+  （`src/main/windows/main-window/create.ts:68-72`、
+  `src/main/services/views/native-view-tree.ts:20-80`）。
 
 ## 2. 进程间通信 (IPC)
 
@@ -76,15 +93,15 @@ Electron app
 | `simulator:attach-native` / `set-native-bounds` / `set-device-info` / `detach` / `console` / `current-page` | `SimulatorChannel` | simulator overlay 生命周期 + 设备信息 + 当前页推送 |
 | `service-host:host-env:update` | `ServiceHostChannel` | main → service-host 窗 live-update host-env 快照（设备切换不重启）|
 | `simulator:custom-apis:invoke` | `SimulatorCustomApiChannel` | main-window renderer 直接调下游注册的 custom API |
-| `simulator:custom-apis:bridge-request` / `bridge-response` | `SimulatorCustomApiBridgeChannel` | simulator WCV 的 custom-apis 桥：preload `ipcRenderer.send` Request → 绑定该 simWc 的 `ipcMain.on` 派发器（`view-manager.ts` `attachNativeCustomApiBridge`）→ `simWc.send` 回 Response（不经 main renderer 代理）|
+| `simulator:custom-apis:bridge-request` / `bridge-response` | `SimulatorCustomApiBridgeChannel` | simulator WCV 的 custom-apis 桥：preload `ipcRenderer.send` Request → 绑定该 simWc 的 `ipcMain.on` 派发器（`native-simulator-view.ts:146-207`）→ `simWc.send` 回 Response（不经 main renderer 代理）|
 | `simulator:storage:*` | `SimulatorStorageChannel` | CDP-backed storage 面板 |
 | `simulator:element:*` | `SimulatorElementChannel` | CDP-backed 元素审查 |
 | `simulator:wxml:*` | `SimulatorWxmlChannel` | main 推 WXML 树（seed `GetSnapshot` + push `Event`）|
 | `simulator:appdata:*` | `SimulatorAppDataChannel` | main 推 AppData 快照（seed `GetSnapshot` + push `Event`）|
 | `workbenchSettings:*` | `WorkbenchSettingsChannel` | 全局开发工具设置 + 主题 |
 | `project:*` | `ProjectChannel` | 当前 project 会话（open / close / status / compile / thumbnail）|
-| `project:fs:*` | `ProjectFsChannel` | 项目文件系统沙箱（Monaco 编辑器读写）|
-| `editor:openFile` | `EditorChannel` | main → renderer 在 Monaco 打开文件到 line:col |
+| `project:fs:*` | `ProjectFsChannel` | 项目文件系统沙箱；VS Code COI 文件 bridge 复用其校验与同步写 |
+| `editor:openFile` | `EditorChannel` | open-in-editor 的 renderer 兼容回退；主路径直接驱动 VS Code workbench WCV |
 | `projects:*` | `ProjectsChannel` | project 列表 / 模板 / 创建 |
 | `dialog:*` | `DialogChannel` | OS dialog |
 | `view:*` | `ViewChannel` | renderer → main 报告 simulator DevTools / host-toolbar overlay 的 bounds + 高度协商 |
@@ -115,7 +132,7 @@ src/main/ipc/
 ├── app.ts                ← AppChannel（branding）
 ├── bridge-router.ts      ← dmb:* + simulator:* 推送（重头戏，见 §4.3）
 ├── popover.ts            ← PopoverChannel
-├── project-fs.ts         ← ProjectFsChannel（Monaco 文件系统沙箱）
+├── project-fs.ts         ← ProjectFsChannel（工作台文件 bridge 复用的沙箱）
 ├── projects.ts           ← ProjectsChannel
 ├── session.ts            ← ProjectChannel（open / close / status / compile 等）
 ├── settings.ts           ← SettingsChannel + WorkbenchSettingsChannel
@@ -150,7 +167,7 @@ src/main/ipc/
 | 文件（源）| 输出（dist）| 注入方式 |
 |---|---|---|
 | `src/preload/windows/main.ts` | `dist/preload/windows/main.cjs` | 通过 `webPreferences.preload` 显式挂在 main window / settings window / overlay view 上 |
-| `src/preload/windows/simulator.ts` | `dist/preload/windows/simulator.js`（取其 `.cjs` sibling）| 通过 `webPreferences.preload = cjsSiblingPreloadPath(ctx.preloadPath)` 显式挂在 simulator WebContentsView 上（`view-manager.ts` `attachNativeSimulator`）|
+| `src/preload/windows/simulator.ts` | `dist/preload/windows/simulator.js`（取其 `.cjs` sibling）| 通过 `webPreferences.preload = cjsSiblingPreloadPath(ctx.preloadPath)` 显式挂在 simulator WebContentsView 上（`native-simulator-view.ts:233-264`）|
 | `src/service-host/preload.cjs` | （直接以 cjs 提供）| `webPreferences.preload` 挂在 service-host BrowserWindow |
 | `src/render-host/preload.cjs` | （直接以 cjs 提供）| 作为每页 render-host 子 `<webview>` 的 `preload` 属性传入（`getRenderPreloadUrl()`），见 `device-shell.tsx` |
 
@@ -162,8 +179,8 @@ src/main/ipc/
 | settings window | `true` | `false` | `false` | — | `settings-window/create.ts` |
 | settings overlay view | `true` | `false` | `false` | — | `view-manager.ts` |
 | popover overlay view | `true` | `false` | `false` | — | `view-manager.ts` |
-| simulator DeviceShell WebContentsView | **`false`** | `false` | `false` | `true` | `view-manager.ts`（`attachNativeSimulator`）；`webviewTag:true` 落在这个**顶层 WCV**（不是主 window）上——才能托管每页 render-host 子 `<webview>` guest；isolation 关掉因为 dimina runtime 与 user 代码共享同一 JS realm |
-| 每页 render-host `<webview>` | **`false`** | `false` | — | — | `device-shell.tsx`；contextIsolation/sandbox 由主进程 `will-attach-webview`（`view-manager.ts`）钉成 false；跑 `@dimina/render` bundle，与 render bridge 共享 realm |
+| simulator DeviceShell WebContentsView | **`false`** | `false` | `false` | `true` | `native-simulator-view.ts:233-264`；`webviewTag:true` 落在这个**顶层 WCV**（不是主 window）上——才能托管每页 render-host 子 `<webview>` guest；isolation 关掉因为 dimina runtime 与 user 代码共享同一 JS realm |
+| 每页 render-host `<webview>` | **`false`** | `false` | — | — | `device-shell.tsx`；contextIsolation/sandbox 由主进程 `will-attach-webview`（`native-simulator-view.ts:293-316`）钉成 false；跑 `@dimina/render` bundle，与 render bridge 共享 realm |
 | service-host BrowserWindow | `false` | `false` | `false` | — | `service-host-window/create.ts`，需要直接挂全局的 jsbridge |
 
 ### 3.4 expose 的 fallback 模式
@@ -193,7 +210,12 @@ provider 注入：远程 host（如下游宿主的云 workspace）通过 `Projec
 
 ### 4.2 ViewManager — `src/main/services/views/view-manager.ts`
 
-唯一被允许 `new WebContentsView` / `addChildView` / `removeChildView` 的组件。状态都在闭包里，对外只暴露动作。
+ViewManager 是各 view domain 的 composition root。具体 WCV 由
+`native-simulator-view.ts`、`workbench-view.ts`、overlay/host-slot 模块创建；
+对主窗口 native child tree 的 `addChildView` / `removeChildView` /
+reorder 则统一收敛到 `native-view-tree.ts`
+（`src/main/services/views/view-manager.ts:93-105`、
+`src/main/services/views/native-view-tree.ts:20-80`）。
 
 ```
 attachNativeSimulator(simulatorUrl, _simWidth) ← simulator mount 入口：把 simulator 本身建成顶层 WebContentsView
@@ -201,7 +223,7 @@ attachNativeSimulatorDevtoolsHost()            ← 建右栏 DevTools 面板 WCV
 pointNativeDevtoolsAtServiceWc(wc)             ← 把 DevTools 前端重指向给定 service-host wc
 pointNativeDevtoolsAtActiveServiceHost(appId)  ← 解析活跃 service-host 并重指向（页面切换时跟随）
 attachNativeCustomApiBridge(simWc)             ← 给 simulator WCV 装 custom-apis 桥的 ipcMain.on 派发器
-setNativeSimulatorViewBounds(...)              ← 设备外框 rect + zoom 下发到嵌套 guest
+setPlacementSnapshot(...)                      ← 窗口级期望 placement，统一驱动 bounds/显隐/layer
 showSettings / hideSettings                    ← settings overlay 显隐
 showPopover / hidePopover                       ← popover overlay 显隐
 detachSimulator()                              ← 关 / 切换 project 时统一销毁（含同步清桥 session）

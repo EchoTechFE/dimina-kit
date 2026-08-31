@@ -5,7 +5,8 @@
 > 机制见 [`electron-deck 架构`](../../electron-deck/docs/architecture.md)。
 >
 > 本文是 host 集成参考：config 字段 / Runtime 门面 / 不变量 —— 怎么用 + API + 必知约束。
-> 面板数据同步（preload 为唯一真相源）见 [`miniapp-snapshot.md`](./miniapp-snapshot.md)。
+> native-host 面板数据的主进程快照路径见
+> [`miniapp-snapshot.md`](./miniapp-snapshot.md)。
 
 ## 两条必知坑（先读）
 
@@ -204,6 +205,7 @@ export interface Runtime {
 
   readonly windows: {
     create(opts: WindowCreateOptions): DeckWindow
+    adopt(win: BrowserWindow, opts?: { ownership?: 'transfer' | 'observe' }): Disposable
     get(id: string): BrowserWindow | undefined   // 查 declaredWindows（config.windows 装配的命名窗口）
     all(): BrowserWindow[]
     readonly main: DeckWindow | null
@@ -217,7 +219,7 @@ export interface Runtime {
 ```
 
 可用且实装的：`electron`、`mainWindow`、`toolbarView`、`ipc`、`rawIpcMain`、
-`call.simulator`、`call.host`、`windows.create / get / all / main / trust`、
+`call.simulator`、`call.host`、`windows.create / adopt / get / all / main / trust`、
 `on(FrameworkEvents)`、`add`，以及 `context.theme` / `context.settings`。
 
 **已实装但行为有约束**：
@@ -225,6 +227,7 @@ export interface Runtime {
 | 字段 | 现状 |
 |---|---|
 | `toolbarView` | `config.toolbar` 装配后返回真实的 toolbar `WebContentsView`；未配置 toolbar 时为 `null` |
+| `windows.adopt(win, opts)` | 接入外部 `BrowserWindow`；`ownership` 支持 `transfer` / `observe`，返回的 Disposable 解除 adopt。实现见 `packages/electron-deck/src/types.ts:406-441` 与 `packages/electron-deck/src/internal/deck-app.ts:1462-1566` |
 | `windows.get(id)` | 查 `declaredWindows`（`config.windows` 装配的命名窗口）；命中返回该 `BrowserWindow`，否则 `undefined`。`windows.create` 走的是另一条命令式路径，不入此表 |
 | `on(...)`（FrameworkEvents） | framework 真 emit `window-created` / `window-closed` / `load-failed`；setup 期注册的首个 listener 会重放 baseline `window-created` 与早到的 `load-failed`（D1 buffer） |
 | `context.theme` / `context.settings` | 真实 `'light' \| 'dark'` 值，当前为固定 `'light'` 快照（devtools 暂无顶层 live theme 源） |
@@ -233,6 +236,13 @@ export interface Runtime {
 自取）。`runtime.rawIpcMain` 是显式 escape：用它即绕过 framework 保证、不进 registry，
 host 自负 dispose / 错误处理。`runtime.context` 上的 `_registry` / `_senderPolicy`
 是 `@internal` escape，使用即破坏 framework 保证。
+
+`windows.adopt()` 会为目标窗口创建 deck 自己的 substrate / compositor，并直接管理
+其 `contentView` 子树（`packages/electron-deck/src/internal/deck-app.ts:889-936`、
+`packages/electron-deck/src/internal/deck-app.ts:1502`）。因此它不能直接用于已经由
+devtools placement reconciler 管理的主窗口；两套 owner 会各自维护私有顺序。这个限制是
+按窗口的，不表示 `adopt()` 未实现。见
+[`deck-adoption-decision.md`](./deck-adoption-decision.md)。
 
 **启动 / 失败行为**：
 

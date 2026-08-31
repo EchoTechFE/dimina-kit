@@ -4,7 +4,13 @@
 
 真正干活的是 `dimina` 子模块 fe workspace 里的 `@dimina/compiler`（通篇 `import fs from 'node:fs'` + `fs.xxx`）。本包把 `node:fs` 换成一个**无后端的转发 shim**，并且**自己不带任何 fs 实现**——由下游注入一个 `node:fs` 替代品（`compileMiniApp({ fs })`），compiler 一行不改就跑在你的 fs 上；项目目录（`workPath`）也由下游指定。最省事的 fs 就是 [memfs](https://github.com/streamich/memfs)。
 
-**三种接入，按需选择：**
+## 安装
+
+```bash
+pnpm add @dimina-kit/compiler
+```
+
+## 三种接入，按需选择
 
 | 导出 | 用途 | 编排（并行/复用/合并）由谁做 |
 | --- | --- | --- |
@@ -392,3 +398,7 @@ pnpm --filter @dimina-kit/compiler test:stage-load-retry           # stage 工�
 - `src/shims/*` — 其余 node 内置与原生依赖的浏览器替身（oxc/esbuild/less/`os.homedir`/…）。
 - `scripts/build-compiler.js` — esbuild 打包。onLoad 给 logic/view/style-compiler 与 utils 追加 `__reset*` 导出（喂 `resetCompilerState`，不改子模块源码）；浏览器分支内联真实 `cssnano`+`autoprefixer`（autoprefixer pin 到 node 运行时解析的同一份，避免 esbuild 解析到多加 `-ms-` 前缀的另一版本）；browser 模式产出 core / stage-worker / pool 三个单文件 bundle；node 模式开 `splitting`（stage 编译器成为运行时 chunk——单文件会把 chunk 的 external `import 'sass'` 提升回入口顶层，懒加载会静默失效）。
 - `scripts/{register-kit,kit-resolve-hook}.js` — node 用的 ESM resolve hook（默认解析优先、从 dimina-kit workspace 根兜底解析 bare 依赖）。
+
+## License
+
+[MIT](../../LICENSE) © EchoTechFE

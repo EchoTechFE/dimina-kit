@@ -77,6 +77,10 @@ renderer SPAWN IPC
 
 ## 2. Native 端的参考实现
 
+> 未验证：本 worktree 的 `dimina/` submodule 未初始化，无法重新读取本文引用的
+> Android / iOS / HarmonyOS 上游文件。以下跨端参数与行号保留，但没有用当前
+> submodule HEAD `8c79345c7b27cbf00e6e3c684ddcba093e419b00` 复核。
+
 三端在工程模型上高度一致：都是"预创建空 webview → acquire 命中 → release 前清理 → 超容量销毁 → 内存压力收缩"。下面三张表逐端记录关键参数与设计取舍，便于跟 §3 的 Electron 实现对照。
 
 ### 2.1 iOS：`DMPWebViewPool.swift`

@@ -1,8 +1,23 @@
 # @dimina-kit/electron-runtime
 
-Embed a Dimina mini-app in an existing Electron application. The host owns
-Electron's `app`, `BrowserWindow`, layout, and shutdown lifecycle; this package
-owns compilation-session wiring, the mini-app bridge, and its `WebContentsView`.
+> Run a [Dimina](https://github.com/didi/dimina) mini-app inside an Electron app
+> you already have.
+
+The host keeps ownership of Electron's `app`, `BrowserWindow`, layout, and
+shutdown lifecycle. This package owns the rest: compilation-session wiring, the
+mini-app bridge, and the `WebContentsView` the mini-app renders into.
+
+## Install
+
+```bash
+pnpm add @dimina-kit/electron-runtime @dimina-kit/devkit
+```
+
+`electron` (`^43.2.0`) is a required peer dependency; `react` is optional.
+`@dimina-kit/devkit` supplies the `openProject` compiler adapter used below —
+substitute your own adapter if you compile mini-apps some other way.
+
+## Quick start
 
 ```ts
 import { app, BrowserWindow } from 'electron'
@@ -70,3 +85,7 @@ directory rather than selecting individual files: the service and render host
 HTML files load JavaScript and CSS from `native-host/`. Runtime creation
 validates these files before installing process-global IPC handlers, so a
 packaging error fails without leaving a partial integration behind.
+
+## License
+
+[MIT](../../LICENSE) © EchoTechFE

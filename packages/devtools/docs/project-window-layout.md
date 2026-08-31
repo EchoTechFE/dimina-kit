@@ -18,21 +18,23 @@
   窗口内容区。引擎是领域中立的 `@dimina-kit/electron-deck/layout`，devtools 侧只提供 **panel
   registry + 默认树种子 + fallback-safe 恢复**（`layout/dock-layout.ts`）。
 - **`<DockView>` 是唯一布局渲染器**。它读 `LayoutModel`（单写者可观察模型）渲染 docking UI，处理
-  拖拽 re-dock / tab / 分隔条 resize。没有第二条布局路径、没有 mode、没有 preset 工具栏。
+  拖拽 re-dock / tab / 分隔条 resize。工具栏的 layout preset 也是重建同一棵树，不是第二条布局路径
+  （`layout/dock-layout.ts:142-212`）。
 - **七个 dock 面板**：`simulator` / `editor` / `wxml` / `appdata` / `storage` / `console` /
   `compile`。其中 `wxml`/`appdata`/`storage`/`compile` 是各自独立的 dock 面板，每个经
   `DebugTabContent` 渲染单 tab 内容。
 - **面板分两类**：
   - **DOM 面板**（editor / wxml / appdata / storage / compile，以及 **simulator**）——经
-    `renderDomPanel(panelId)` 渲染 React 内容。
+    `renderDomPanel(panelId)` 渲染 React 内容。editor 的 DOM 内容只是 WCV anchor。
   - **原生面板**（**console**）——主进程 `WebContentsView`，经 `<DockView>` 的 NativeSlot 暴露一个
     空 DOM 槽，再由一个 `view-anchor` 锚点把 WCV 贴到该槽。
-  - **simulator 比较特殊**：它在引擎里登记为 **DOM 面板**（这样 `SimulatorPanel` 能渲染设备/缩放
+  - **simulator 与 editor 比较特殊**：它们在引擎里登记为 **DOM 面板**（这样 `SimulatorPanel` 能渲染设备/缩放
     chrome——裸 NativeSlot 不画 chrome），但 `SimulatorPanel` **自己**持有 simulator WCV 的
-    `view-anchor` 锚点，把设备区 WCV 贴到它内部的空占位 div。所以实际仍有**两个**主进程 overlay
-    （simulator + console），各自的 bounds 由一个 anchor 跟随各自的空 DOM 槽。
-- **editor 不是 overlay**：renderer 内 `<MonacoEditor/>`，由 React 自挂载/卸载，不发 bounds、不经
-  view-manager。
+    `view-anchor` 锚点，把设备区 WCV 贴到它内部的空占位 div。`EditorPanel` 同样是
+    空 DOM 槽，由自己的 anchor 放置 VS Code workbench WCV。所以项目布局里有**三个**主进程 overlay：
+    simulator、workbench、console
+    （`components/editor-panel.tsx:7-95`、
+    `project-runtime.tsx:382-455`）。
 - **simulator 列宽 minPx 下限**：引擎的 **per-child `minPx` `constraint`** 把 simulator leaf 下限设到设备
   像素宽，分隔条拖拽与权重缩放都不改它；切设备时在模型里 `setConstraint` 重新 pin。
 - **序列化 / 恢复**：DockView 的每次布局 mutation 经 `serializeLayout` 持久化成不透明字符串
@@ -111,8 +113,11 @@ devtools 不实现任何分栏/resize/拖拽逻辑——那些全在引擎与 `<
 新装/无持久化时的初始布局：一个 `row` split——
 
 - 前缘是 simulator 标签组，用 `constraints[0] = { minPx: simPanelWidth }` + 小权重，初始 clamp 到设备宽、可拖大；
-- 其余是一个 flex 列：editor 在上、一个标签组在下，该标签组按微信开发者工具的固定顺序并排
-  `wxml` / `appdata` / `storage` / `console` / `compile` 五个 debug 面板，默认 active `wxml`。
+- 其余是按固定顺序并排的 `wxml` / `appdata` / `storage` /
+  `console` / `compile` 五个 debug 面板，默认 active `wxml`。
+- `editor` **不在 fresh/default tree 中**；通过工具栏“编辑器”开关或包含 editor 的 preset
+  插入。持久化树仍按保存内容恢复
+  （`layout/dock-layout.ts:106-139`）。
 
 simulator 子是 minPx 柔性下限（也算柔性）、sibling 是权重（`null`）——引擎只拒绝「全 fixedPx」的 split（`validateTree`），
 所以必须留至少一个权重子。
@@ -142,7 +147,8 @@ fallback 到 `buildDefaultDockTree(simPanelWidth)`。
 - `<DockableLayout>` 收到 `dockModel` / `dockRegistry` 作为 prop，渲染
   `<DockView model registry renderDomPanel bindNativeSlot/>`。
 - `renderDomPanel(panelId, { active })`：`simulator` → `<SimulatorPanel/>`（设备/缩放 chrome +
-  自有 WCV anchor）；`editor` → `<MonacoEditor/>`；四个 React debug tab → `<DockDebugTab active=…/>`
+  自有 WCV anchor）；`editor` → `<EditorPanel/>`（VS Code workbench WCV anchor）；
+  四个 React debug tab → `<DockDebugTab active=…/>`
   （包一层 `DebugTabContent`，在 `active` 的 false→true 边沿触发该 tab 的数据 refresh）；`console`
   不走这里（由 DockView 路由到 NativeSlot）。所有 DOM 面板由 DockView **keepalive**（切 tab 不
   卸载、非 active 用 `display:none` 隐藏），故 refresh 改由 `active` 边沿驱动而非挂载——切走再
@@ -183,8 +189,8 @@ dock 模型里「隐藏」一个面板就是 `closePanel`（tab 上的 ×，或�
 ## 3. 原生 overlay 的 bounds 同步（view-anchor）
 
 bounds 同步由引擎无关原语 `@dimina-kit/view-anchor` 提供（core 零 React / 零 Electron，把「DOM rect
-→ 主进程 view bounds」的跨进程桥独立出来；DOM 布局库——含 dockview——刻意不提供这道桥）。两个原生
-overlay 各注册一个锚点。
+→ 主进程 view bounds」的跨进程桥独立出来；DOM 布局库——含 dockview——刻意不提供这道桥）。simulator、
+workbench 与 console 三个原生 overlay 各注册一个锚点，并写进同一个窗口级 placement publisher。
 
 **simulator overlay**（在 `<SimulatorPanel>` 自身）：panel 只画 toolbar + 一个空 flex:1 占位 div
 （`data-area="native-simulator"`）+ 路径 bar，**不画手机框、不渲染 `<webview>`**。占位 rect（带
@@ -205,7 +211,11 @@ DockView 把 console 渲染成一个空 DOM 槽（NativeSlot），`bindNativeSlo
 - `followGeometry: true` — 拖拽 re-dock 可能**平移**槽而不改尺寸（ResizeObserver 看不到纯 translate），
   几何哨兵据此重发 rect。
 
-**editor** 是 renderer 内 Monaco，不是 overlay，无锚点。整套 layout 共两个锚点（simulator + console）。
+**editor overlay**（在 `<EditorPanel>`）：DOM body 是一个全尺寸空 div。
+`createPlacementAnchor` 把它的 placement 写成 `VIEW_ID.workbench`；
+主进程按首次非零 placement 懒建 VS Code workbench WCV
+（`components/editor-panel.tsx:7-95`、
+`src/main/services/views/workbench-view.ts:30-55`）。
 
 ### 3.1 Placement / detach 语义
 
@@ -213,9 +223,9 @@ DockView 把 console 渲染成一个空 DOM 槽（NativeSlot），`bindNativeSlo
 
 - **可见 + 槽挂载**：发真实 `getBoundingClientRect()`，并挂 ResizeObserver / scroll / 几何哨兵，后续
   几何变化经合帧重发。
-- **不可见 / 槽 `display:none` / 槽卸载**：发一次 ZERO `{0,0,0,0}` 收起 WCV——主进程
-  `setSimulatorDevtoolsBounds` / `setNativeSimulatorViewBounds` 见零面积 ⇒ `removeChildView`，**保留
-  WebContents 存活**（detach-but-keep-alive），下次 re-attach 即秒变。
+- **不可见 / 槽 `display:none` / 槽卸载**：发布 `{ visible:false }`。主进程
+  reconciler 隐藏 WCV、保留 WebContents；生命周期销毁才 detach
+  （`src/main/services/views/placement-reconciler.ts:100-156`）。
 
 ## 4. simulator 列宽：minPx 下限（可拖、保设备宽）
 
@@ -269,20 +279,20 @@ WCV 内由 DeviceShell 居中（列变宽 = 灰边变多，WCV 经 `followGeomet
 
 ### 6.2 与主进程 view-manager 的接口
 
-只有原生面板走这条接口，当前两个：**simulator**（native-host WebContentsView，bounds 带 `zoom`，
-经 `setNativeSimulatorViewBounds`）和 **console**（Console DevTools，经 `setSimulatorDevtoolsBounds`）。
-两者都按「零面积 ⇒ `removeChildView` 保活、非零 ⇒ `addChildView` + `setBounds`」处理；simulator 额外
-把 `zoom/100` 当 WCV 的 `zoomFactor`。**editor 不在这条接口上**——renderer 内 `<MonacoEditor/>`，
-React 自挂载/卸载，不发 bounds。
+原生内容当前包括 simulator、workbench 与 console；三者的 anchor 都写入窗口级
+`PlacementSnapshot`。simulator 的 `extra.zoom` 由 slot-specific `applyBounds`
+换算为 WCV/guest 的 `zoomFactor`。隐藏用显式 `Placement`，不再从零面积推导
+（`src/main/services/views/placement-reconciler.ts:100-156`）。
 
-**原生 overlay 的 z 叠放**：`addChildView` 按插入序叠放（后插者在上），simulator / console 属「基层」、
-settings / popover 属「顶层」。基层 overlay 因 tab 切换 / 几何重发而**重新 `addChildView`** 时会跳到栈顶、
-盖住已打开的设置/popover——故 view-manager 在每次基层 add 后调 `raiseTopOverlays()` 把仍打开的
-settings / popover 重新 append 回顶层（两者都没开时是 no-op）。这样设置面板始终压在 simulator 之上。
+**原生 overlay 的 z 叠放**由 placement layer + reconciler 的全量 reorder 统一处理。
+`native-view-tree.ts` 是主窗口构造完成后的唯一 native child-tree writer；
+settings / popover 不再靠散落的 `raiseTopOverlays()` 调用维持层级
+（`src/main/services/views/native-view-tree.ts:20-80`、
+`src/main/services/views/placement-reconciler.ts:152-156`）。
 
 ### 6.3 与布局引擎 / DockView 的边界
 
-devtools 只提供 panel registry + 默认树 + 恢复策略 + 两个原生 overlay 的 anchor wiring。所有
+devtools 只提供 panel registry + 默认树 + 恢复策略 + 三个原生 overlay 的 anchor wiring。所有
 **分栏 / 嵌套 / resize / 拖拽 re-dock / tab / 序列化**逻辑都是引擎与 DockView 的职责，devtools 不
 碰。引擎不 import electron/react（`boundary.test.ts` 钉死），原生面板只引用不透明 `NativeHandleRef`。
 
@@ -306,8 +316,8 @@ devtools 只提供 panel registry + 默认树 + 恢复策略 + 两个原生 over
 2. `project-runtime.tsx` — `DOCK_PANEL_IDS` 加 id；`bindNativeSlot(panelId, el)` 加分支，用
    `createPlacementAnchor` 把该 view 的 bounds 发到一条新 IPC（参考 console 分支的 `guardDisplayNone`
    / `followScroll` / `followGeometry` 选项）。
-3. **主进程** — 加 IPC channel + handler + view-manager 的 `set<Name>Bounds`（零面积 ⇒
-   removeChildView 保活）+ `view-api.ts` 的 publish wrapper（参考 `setSimulatorDevtoolsBounds`）。
+3. **主进程** — 为该 view id 注册 reconciler slot（`getView/ensureView/applyBounds`），
+   让窗口级 snapshot 统一处理显示、bounds 与 layer；不要新增独立 bounds IPC。
 
 ### 7.3 加一个 fixed-px 保真约束（像 simulator 那样锁某个 leaf 的尺寸）
 
@@ -315,12 +325,11 @@ devtools 只提供 panel registry + 默认树 + 恢复策略 + 两个原生 over
 （`validateTree` 拒绝全 fixed）。若该尺寸会动态变（像设备宽），在串联组件里加一个 effect 用
 `setConstraint` 重新 pin（参考 §4 的 simulator re-pin）。
 
-## 8. 已知限制 + Backlog
+## 8. 已知限制
 
 | # | 限制 | 说明 |
 |---|---|---|
-| 1 | reload project 后原生 overlay 不重新 attach | 属 view-manager 的 reload-state 管理；本层只在切项目时（remount）重新种子 + 重新发 bounds，若主进程把 view destroy 了再发 bounds 也无效。editor 由 `<MonacoEditor/>` 自己重读文件列表处理。 |
-| 2 | 序列化树是不透明字符串 | 只作持久化 round-trip，不当 diff key、不在外部解读结构。 |
+| 1 | 序列化树是不透明字符串 | 只作持久化 round-trip，不当 diff key、不在外部解读结构。 |
 
 ## 9. 文件清单
 
@@ -334,8 +343,10 @@ devtools 只提供 panel registry + 默认树 + 恢复策略 + 两个原生 over
 | `src/renderer/modules/main/features/project-runtime/controllers/use-layout-store.ts` | `dockTree` 不透明持久化（`state.dockTree` + `setDockTree`） |
 | `src/renderer/modules/main/features/project-runtime/components/simulator-panel.tsx` | simulator DOM 面板：toolbar + flex:1 占位 + 路径 bar，自带 anchor 把占位 rect（带 zoom）发给 simulator WCV |
 | `src/renderer/modules/main/features/bottom-debug-panel/bottom-debug-panel.tsx` | `DebugTabContent`（单 tab 内容渲染器，被四个 DOM debug 面板 wxml/appdata/storage/compile 复用；console 是原生 WCV 不走它）+ `BottomDebugPanelProps` / `DebugTabContentId` 类型 |
-| `src/renderer/modules/main/features/monaco-editor/` | editor DOM 面板的 renderer 内 Monaco 实现（细节见 `editor-integration.md`） |
-| `src/main/services/views/view-manager.ts` | `setNativeSimulatorViewBounds`（simulator WCV）+ `setSimulatorDevtoolsBounds`（Console DevTools），均零面积 ⇒ removeChildView 保活 |
-| `src/main/ipc/views.ts` | IPC handler → view-manager |
-| `src/renderer/shared/api/view-api.ts` | `setNativeSimulatorBounds` + `publishSimulatorDevtoolsBounds` IPC wrapper |
+| `src/renderer/modules/main/features/project-runtime/components/editor-panel.tsx` | editor DOM 槽与 workbench placement anchor |
+| `src/main/services/views/workbench-view.ts` | VS Code workbench WCV 生命周期 |
+| `src/main/services/views/placement-reconciler.ts` | 窗口级 placement 对账与 layer reorder |
+| `src/main/services/views/native-view-tree.ts` | 主窗口 native child tree 唯一运行时 writer |
+| `src/main/ipc/views.ts` | placement snapshot IPC handler → view-manager |
+| `src/renderer/shared/api/view-api.ts` | 窗口级 placement publisher |
 | `src/main/ipc/project-fs.ts` | editor 文件读写的沙盒 IPC（`project:fs:*`） |

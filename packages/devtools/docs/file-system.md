@@ -9,7 +9,10 @@
 - ✅ `wx.uploadFile`、`wx.previewImage`：直接吃 `difile://` 路径
 - ✅ `wx.saveImageToPhotosAlbum`：只接受 `difile://` 本地路径（含 `difile://_tmp/` 临时文件）；dataURL / http(s) / `blob:` 会 `fail invalid file path`——与真机（Android/iOS/Harmony 都只吃本地文件路径）一致
 - ✅ `wx.getFileSystemManager()` 的全部 16 个异步方法：`access` / `stat` / `readFile` / `writeFile` / `appendFile` / `copyFile` / `rename` / `unlink` / `mkdir` / `rmdir` / `readdir` / `getFileInfo` / `saveFile` / `getSavedFileList` / `removeSavedFile` / `truncate`
-- ❌ 同步 API（`*Sync`）：直接 throw——service 线程跑在 Web Worker 里，与容器之间只有异步 postMessage 桥，同步返回值结构上不可能
+- ❌ 同步 API（`*Sync`）：直接 throw。native-host 只为 storage、system-info 和
+  menu-button 提供 service-window 本地同步实现；FileSystemManager 仍只有异步容器后端
+  （`packages/devtools/src/service-host/sync-impls/:1`、
+  `packages/devtools/src/simulator/service-apis/file/index.js:41-82`）。
 - ❌ 无容器后端的异步方法（`unzip`、fd 系列 `open`/`close`/`read`/`write`/`fstat`/`ftruncate`、`readCompressedFile`/`readZipEntry`）：`fail not supported by the devtools simulator (no container backend)`
 
 `wx.canIUse('FileSystemManager.<name>')` 的答案与上面的支持面一一对应（名单由 `service-apis/file/index.js` 的 `fileSystemManagerAPINames` 驱动）。
@@ -140,7 +143,11 @@ simulator 在文件这块**主动选择对齐上游 dimina，而不是 wx 真机
 
 - `wx.env.USER_DATA_PATH` 字面值是 `'difile://usr'`（dimina 上游契约），不是 wx 真机的 `'wxfile://usr'`。开发者代码拼 `${USER_DATA_PATH}/foo` 仍然可移植；只是直接 `console.log` 看到的字面值不同。
 - 保留段用**路径段**（`_tmp/` `_store/`）而不是 wx 的命名前缀（`tmp_` `store_`）。dimina 一致采用路径段风格，下划线前缀也避开了开发者真实文件命名。
-- 同步 API（`*Sync`）不实现（service 线程与容器之间是异步 postMessage 桥，同步返回值结构上不可能），会 throw；fd 系列（open / close / read / write / fstat / ftruncate）、`readZipEntry` / `readCompressedFile` / `unzip` 无容器后端，会 fail。`wx.canIUse` 对这些一律答 `false`。
+- 同步 API（`*Sync`）没有 FileSystemManager 本地后端，会 throw；fd 系列
+  （open / close / read / write / fstat / ftruncate）、`readZipEntry` /
+  `readCompressedFile` / `unzip` 无容器后端，会 fail。`wx.canIUse`
+  对这些一律答 `false`
+  （`packages/devtools/src/simulator/service-apis/file/index.js:41-82`）。
 
 ## 排查 difile 请求时看哪里
 
@@ -199,11 +206,19 @@ simulator 在文件这块**主动选择对齐上游 dimina，而不是 wx 真机
 
 实现层面（一般你不需要操心）：
 
-- `difile://` 协议只在 `persist:simulator` session 内有效，外部 webContents 拿不到资源。
+- `difile://` 协议安装在共享 `persist:simulator` session 和每个已配置的
+  per-project miniapp partition；其它 session 的 webContents 拿不到资源
+  （`packages/dimina-electron-runtime/src/main/services/simulator-temp-files/index.ts:79-87`、
+  `packages/dimina-electron-runtime/src/main/services/simulator-temp-files/index.ts:158-195`）。
 - `416` 响应不带 ETag / Cache-Control（其他 200/206 路径都带）；`_tmp` 条目无 ETag（bytes 在内存里，没有 mtime 可签）。
 - FSM IO 留在 renderer 端（直接调 Node `fs`），未走 main 端 IPC——把 simulator 视为可信代码的现状如果改了，需要把这条路径下沉。
 
 ## 关联参考
 
-- 上游真机：[`dimina/iOS/.../DMPFileUtil.swift`](../../../dimina/iOS/dimina/DiminaKit/Utils/DMPFileUtil.swift)、[`dimina/harmony/.../DMPFileUrlConvertor.ets`](../../../dimina/harmony/dimina/src/main/ets/Bundle/Util/DMPFileUrlConvertor.ets)、[`dimina/iOS/.../DifileURLSchemeHandler.swift`](../../../dimina/iOS/dimina/DiminaKit/Render/DifileURLSchemeHandler.swift)
+- 上游真机参考路径：`dimina/iOS/dimina/DiminaKit/Utils/DMPFileUtil.swift`、
+  `dimina/harmony/dimina/src/main/ets/Bundle/Util/DMPFileUrlConvertor.ets`、
+  `dimina/iOS/dimina/DiminaKit/Render/DifileURLSchemeHandler.swift`。
+  > 未验证：当前 worktree 的 `dimina/` submodule 未初始化，无法确认这三个目标在
+  > submodule HEAD `8c79345c7b27cbf00e6e3c684ddcba093e419b00` 中是否仍存在，
+  > 因而不保留会解析成 404 的 Markdown 链接。
 - WeChat 官方：[文件系统](https://developers.weixin.qq.com/miniprogram/dev/framework/ability/file-system.html) / [FileSystemManager](https://developers.weixin.qq.com/miniprogram/dev/api/file/FileSystemManager.html)

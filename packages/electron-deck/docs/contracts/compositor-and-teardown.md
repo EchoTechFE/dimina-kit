@@ -5,7 +5,7 @@
 > teardown 的确切顺序及其用 `Scope.own()` LIFO 的编码方式。
 >
 > 关键文件：
-> - `src/main/compositor.ts` — `mount/unmount/reorder/commit/detachAll` + LIS diff + `CommitError`
+> - `src/main/compositor.ts` — `mount/unmount/reorder/commit/detachAll` + 前缀保序 diff + `CommitError`
 > - `src/main/view-handle.ts` — `moveTo` 状态机 + `migrationLock`
 > - `src/main/scope.ts` — `own/close/adopt` + 完成栅栏（completion fence）+ LIFO
 > - `src/main/disposable.ts` — `DisposableRegistry.disposeAll()` LIFO + AggregateError
