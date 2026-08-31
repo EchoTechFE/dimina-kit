@@ -237,38 +237,54 @@ function readCanvasDataURL(
 
 // Node/browser `atob` follows WHATWG forgiving-base64: a payload whose length leaves a
 // remainder of 2 or 3 still decodes. The native decoders reject it, so the length and
-// the alphabet are checked here rather than left to a throw. Returns null for anything
-// the containers would call undecodable.
-function decodeStrictBase64(base64Data: string): Uint8Array<ArrayBuffer> | null {
-	if (!base64Data || base64Data.length % 4 !== 0 || !STRICT_BASE64.test(base64Data)) return null
-	let byteChars: string
-	try {
-		byteChars = atob(base64Data)
-	} catch {
-		return null
-	}
-	const bytes = new Uint8Array(byteChars.length)
-	for (let i = 0; i < byteChars.length; i++) {
-		bytes[i] = byteChars.charCodeAt(i)
-	}
-	return bytes
+// the alphabet are checked here rather than left to a throw.
+function isStrictBase64(base64Data: string): boolean {
+	return !!base64Data && base64Data.length % 4 === 0 && STRICT_BASE64.test(base64Data)
 }
 
-// Turns the payload a mini program passed to canvasToTempFilePath into the blob that
-// gets written, or into the reason it was rejected. Checks and their order mirror the
-// native containers (android ImageApi.kt, iOS ImageAPI.swift, harmony
-// DMPContainerBridgesModule+Canvas.ets): the errMsg is what a mini program branches
-// on, so it must not differ per host.
-function decodeCanvasPayload(dataURL: string, declaredFileType: string, appId: unknown): { reason: string } | { blob: Blob } {
-	const head = readCanvasDataURL(dataURL, declaredFileType, appId)
-	if ('reason' in head) return head
-	const { base64Data, fileType } = head
+// Same in-flight budget the three containers apply per appId (android
+// MAX_IN_FLIGHT_CANVAS_EXPORTS / MAX_PENDING_CANVAS_BASE64_CHARS, iOS
+// maxInFlightCanvasExports, harmony CanvasExportJobRegistry): one export writing while a
+// second waits is fine, past that it is just piling up. Each waiting export still holds
+// its own copy of the payload, so the budget counts base64 characters, not just calls,
+// and it is claimed before anything else takes a reference to the bytes.
+const MAX_IN_FLIGHT_CANVAS_EXPORTS = 2
+const MAX_PENDING_CANVAS_BASE64_CHARS = MAX_IN_FLIGHT_CANVAS_EXPORTS * MAX_CANVAS_BASE64_CHARS
+const pendingCanvasExports = new Map<string, { count: number; chars: number }>()
 
-	if (base64Data.length > MAX_CANVAS_BASE64_CHARS) return { reason: 'data too large' }
-	const bytes = decodeStrictBase64(base64Data)
-	if (!bytes) return { reason: 'base64 decode failed' }
+function reserveCanvasExport(appId: string, chars: number): boolean {
+	const state = pendingCanvasExports.get(appId) ?? { count: 0, chars: 0 }
+	if (state.count >= MAX_IN_FLIGHT_CANVAS_EXPORTS) return false
+	if (state.chars + chars > MAX_PENDING_CANVAS_BASE64_CHARS) return false
+	state.count += 1
+	state.chars += chars
+	pendingCanvasExports.set(appId, state)
+	return true
+}
 
-	// The base64 ceiling above is only a pre-filter; these two run on the real bytes.
+function releaseCanvasExport(appId: string, chars: number): void {
+	const state = pendingCanvasExports.get(appId)
+	if (!state) return
+	state.count -= 1
+	state.chars -= chars
+	if (state.count <= 0) pendingCanvasExports.delete(appId)
+}
+
+// Decodes the reserved payload and holds it to the same content rules as the containers:
+// the base64 ceiling is only a pre-filter, so the byte count and the file signature are
+// checked on the real bytes.
+function decodeCanvasBytes(base64Data: string, fileType: 'png' | 'jpg'): { reason: string } | { blob: Blob } {
+	let bytes: Uint8Array<ArrayBuffer>
+	try {
+		const byteChars = atob(base64Data)
+		bytes = new Uint8Array(byteChars.length)
+		for (let i = 0; i < byteChars.length; i++) {
+			bytes[i] = byteChars.charCodeAt(i)
+		}
+	} catch {
+		return { reason: 'base64 decode failed' }
+	}
+
 	if (bytes.length > MAX_CANVAS_IMAGE_BYTES) return { reason: 'data too large' }
 	if (!matchesImageType(bytes, fileType)) return { reason: 'invalid image data' }
 
@@ -287,15 +303,37 @@ export async function saveCanvasTempFile(
 		onComplete?.(result)
 	}
 
-	const decoded = decodeCanvasPayload(dataURL, fileType, this.appId)
-	if ('reason' in decoded) {
-		failWith(decoded.reason)
+	// Order and wording of every rejection mirror the native containers (android
+	// ImageApi.kt, iOS ImageAPI.swift, harmony DMPContainerBridgesModule+Canvas.ets):
+	// the errMsg is what a mini program branches on, so it must not differ per host.
+	const head = readCanvasDataURL(dataURL, fileType, this.appId)
+	if ('reason' in head) {
+		failWith(head.reason)
+		return
+	}
+	const { base64Data, fileType: imageType } = head
+
+	if (base64Data.length > MAX_CANVAS_BASE64_CHARS) {
+		failWith('data too large')
+		return
+	}
+	if (!isStrictBase64(base64Data)) {
+		failWith('base64 decode failed')
+		return
+	}
+	// Claimed before the decode allocates anything, so a rejected export costs nothing.
+	if (!reserveCanvasExport(this.appId, base64Data.length)) {
+		failWith('too many pending exports')
 		return
 	}
 
 	try {
-		const blob = decoded.blob
-		const tempFilePath = await createTempFilePathAsync(blob)
+		const decoded = decodeCanvasBytes(base64Data, imageType)
+		if ('reason' in decoded) {
+			failWith(decoded.reason)
+			return
+		}
+		const tempFilePath = await createTempFilePathAsync(decoded.blob)
 		const result = { tempFilePath, errMsg: 'canvasToTempFilePath:ok' }
 		onSuccess?.(result)
 		onComplete?.(result)
@@ -305,6 +343,8 @@ export async function saveCanvasTempFile(
 		// the cause in the devtools console instead of in errMsg.
 		console.warn('[simulator] canvas temp file write failed', error)
 		failWith('write failed')
+	} finally {
+		releaseCanvasExport(this.appId, base64Data.length)
 	}
 }
 

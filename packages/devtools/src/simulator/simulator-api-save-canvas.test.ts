@@ -336,4 +336,114 @@ describe('saveCanvasTempFile', () => {
 		expect(complete).toHaveBeenCalledWith(result)
 		expect(warn).toHaveBeenCalled()
 	})
+
+	describe('in-flight export backpressure', () => {
+		it('rejects a third concurrent export while two are still pending, per appId', async () => {
+			vi.spyOn(console, 'warn').mockImplementation(() => {})
+			const resolvers: Array<() => void> = []
+			const writeAndWait = vi.fn(() => new Promise<void>((resolve) => { resolvers.push(resolve) }))
+			setTempFileSink({ write: vi.fn(), writeAndWait, revoke: vi.fn(), revokeAll: vi.fn() })
+			const app = { ...context(), appId: 'canvas-backpressure-reject' }
+
+			// Both calls run synchronously up to their first await (createTempFilePathAsync),
+			// so the slot reservation for each has already happened by the time this line
+			// returns — no need to yield a tick before sending the third.
+			const first = saveCanvasTempFile.call(app, { dataURL: pngBase64(), fileType: 'png', success: vi.fn(), complete: vi.fn() })
+			const second = saveCanvasTempFile.call(app, { dataURL: pngBase64(), fileType: 'png', success: vi.fn(), complete: vi.fn() })
+
+			const fail = vi.fn()
+			const complete = vi.fn()
+			await saveCanvasTempFile.call(app, { dataURL: pngBase64(), fileType: 'png', fail, complete })
+
+			const result = { errMsg: 'canvasToTempFilePath:fail too many pending exports' }
+			expect(fail).toHaveBeenCalledWith(result)
+			expect(complete).toHaveBeenCalledWith(result)
+			expect(writeAndWait).toHaveBeenCalledTimes(2)
+
+			// Drain the two held exports so their slots don't leak into a later test.
+			resolvers.forEach(resolve => resolve())
+			await Promise.all([first, second])
+		})
+
+		it('frees a slot once a pending export settles, letting the next one through', async () => {
+			vi.spyOn(console, 'warn').mockImplementation(() => {})
+			const resolvers: Array<() => void> = []
+			// Only the first two exports (the ones that fill the budget) need to stay
+			// pending on demand — the third one, tested below, must resolve on its own so
+			// its success proves the freed slot rather than getting stuck itself.
+			const writeAndWait = vi.fn()
+				.mockImplementationOnce(() => new Promise<void>((resolve) => { resolvers.push(resolve) }))
+				.mockImplementationOnce(() => new Promise<void>((resolve) => { resolvers.push(resolve) }))
+				.mockImplementation(() => Promise.resolve())
+			setTempFileSink({ write: vi.fn(), writeAndWait, revoke: vi.fn(), revokeAll: vi.fn() })
+			const app = { ...context(), appId: 'canvas-backpressure-free' }
+
+			const firstSuccess = vi.fn()
+			const first = saveCanvasTempFile.call(app, { dataURL: pngBase64(), fileType: 'png', success: firstSuccess, complete: vi.fn() })
+			const second = saveCanvasTempFile.call(app, { dataURL: pngBase64(), fileType: 'png', success: vi.fn(), complete: vi.fn() })
+
+			resolvers[0]?.()
+			await first
+			expect(firstSuccess).toHaveBeenCalledWith(expect.objectContaining({ errMsg: 'canvasToTempFilePath:ok' }))
+
+			const success = vi.fn()
+			const complete = vi.fn()
+			await saveCanvasTempFile.call(app, { dataURL: pngBase64(), fileType: 'png', success, complete })
+
+			expect(success).toHaveBeenCalledWith(expect.objectContaining({ errMsg: 'canvasToTempFilePath:ok' }))
+			expect(complete).toHaveBeenCalledWith(success.mock.calls[0][0])
+
+			resolvers[1]?.()
+			await second
+		})
+
+		it('frees a slot on a failed export too, not just a successful one', async () => {
+			vi.spyOn(console, 'warn').mockImplementation(() => {})
+			const writeAndWait = vi.fn(() => Promise.reject(new Error('store disposed')))
+			setTempFileSink({ write: vi.fn(), writeAndWait, revoke: vi.fn(), revokeAll: vi.fn() })
+			const app = { ...context(), appId: 'canvas-backpressure-fail-frees' }
+
+			const firstFail = vi.fn()
+			await saveCanvasTempFile.call(app, { dataURL: pngBase64(), fileType: 'png', fail: firstFail, complete: vi.fn() })
+			expect(firstFail).toHaveBeenCalledWith({ errMsg: 'canvasToTempFilePath:fail write failed' })
+
+			// Two more exports in a row must still find room — the failed export above
+			// must have given its slot back, not left it stuck occupied.
+			const secondFail = vi.fn()
+			await saveCanvasTempFile.call(app, { dataURL: pngBase64(), fileType: 'png', fail: secondFail, complete: vi.fn() })
+			expect(secondFail).toHaveBeenCalledWith({ errMsg: 'canvasToTempFilePath:fail write failed' })
+
+			const thirdFail = vi.fn()
+			await saveCanvasTempFile.call(app, { dataURL: pngBase64(), fileType: 'png', fail: thirdFail, complete: vi.fn() })
+			expect(thirdFail).toHaveBeenCalledWith({ errMsg: 'canvasToTempFilePath:fail write failed' })
+		})
+
+		it('tracks in-flight exports per appId, so one app cannot exhaust another app\'s budget', async () => {
+			vi.spyOn(console, 'warn').mockImplementation(() => {})
+			const resolvers: Array<() => void> = []
+			const writeAndWait = vi.fn(() => new Promise<void>((resolve) => { resolvers.push(resolve) }))
+			setTempFileSink({ write: vi.fn(), writeAndWait, revoke: vi.fn(), revokeAll: vi.fn() })
+
+			const appA = { ...context(), appId: 'canvas-backpressure-app-a' }
+			const appB = { ...context(), appId: 'canvas-backpressure-app-b' }
+
+			const a1 = saveCanvasTempFile.call(appA, { dataURL: pngBase64(), fileType: 'png', success: vi.fn(), complete: vi.fn() })
+			const a2 = saveCanvasTempFile.call(appA, { dataURL: pngBase64(), fileType: 'png', success: vi.fn(), complete: vi.fn() })
+
+			const fail = vi.fn()
+			const complete = vi.fn()
+			await saveCanvasTempFile.call(appA, { dataURL: pngBase64(), fileType: 'png', fail, complete })
+			expect(fail).toHaveBeenCalledWith({ errMsg: 'canvasToTempFilePath:fail too many pending exports' })
+
+			// appB has spent none of its own budget yet, so its first export still reserves a
+			// slot even though appA is pinned at its ceiling.
+			const bSuccess = vi.fn()
+			const b1 = saveCanvasTempFile.call(appB, { dataURL: pngBase64(), fileType: 'png', success: bSuccess, complete: vi.fn() })
+			expect(writeAndWait).toHaveBeenCalledTimes(3)
+
+			resolvers.forEach(resolve => resolve())
+			await Promise.all([a1, a2, b1])
+			expect(bSuccess).toHaveBeenCalledWith(expect.objectContaining({ errMsg: 'canvasToTempFilePath:ok' }))
+		})
+	})
 })
