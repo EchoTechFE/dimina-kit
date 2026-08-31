@@ -125,7 +125,6 @@ jobs:
 
     permissions:
       contents: read
-      pull-requests: write
 
     steps:
       - name: Rewrite submodule SSH URL to HTTPS
@@ -175,17 +174,19 @@ jobs:
           pnpm exec tsc -p tools/pawl
           node --test ".github/scripts/*.test.js" "tools/pawl/*.test.ts"
 
-      # setup-pawl runs `check` and (comment defaults on) upserts one sticky
-      # baseline-vs-current PR comment, then enforces the gate exit code. The
-      # guard below deliberately uses the repository-pinned CLI: the action's
-      # PATH binary may expose a newer command vocabulary than the lockfile.
+      # setup-pawl installs the binary and runs `check`; comments are disabled
+      # because this workflow grants read-only repository permissions, so a
+      # sticky PR comment would fail to upsert. The install leaves pawl on
+      # PATH, so the baseline guard below reuses it.
       - name: Anti-regression gate
-        uses: tiangong-dev/pawl@v0.4.0
+        uses: tiangong-dev/pawl@v0.8.1
         with:
+          version: v0.8.1
           command: check
+          comment: 'false'
 
       - name: Anti-regression baseline guard
         if: github.event_name == 'pull_request'
         run: |
           git fetch --depth=1 origin "$GITHUB_BASE_REF"
-          pnpm exec pawl baseline-guard FETCH_HEAD
+          pawl guard FETCH_HEAD
