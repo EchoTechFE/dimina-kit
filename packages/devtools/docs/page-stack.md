@@ -1,6 +1,10 @@
 # 页面栈（Page Stack）
 
 > 页面栈承载小程序的导航语义。devtools simulator 只有一套实现——native-host 的 `packages/dimina-electron-runtime/src/simulator-ui/page-stack-controller.ts`（纯 reducer），规范、生命周期、URL 同步、降级行为统一收敛在本页。upstream dimina-fe 的 `MiniApp`（`miniApp.js`）是 WeChat 语义的参考实现，本文在对照"规范期望 vs native-host 行为"时引用它，但它不是 devtools 的运行时。
+
+> 未验证：本 worktree 的 `dimina/` submodule 未初始化，也没有本轮微信开发者工具的
+> 观察记录。本文引用的 upstream/微信行为及 iOS/Harmony 设计来源未重新验证；
+> native-host reducer 与自动化读取链路已按当前 kit 代码核对。
 >
 > tab-bar 的视觉 / 配置细节由 [`./tab-bar.md`](./tab-bar.md) 承载；本文聚焦 `navigateTo` / `navigateBack` / `redirectTo` / `reLaunch` 这 4 个 API 与多 tab 子栈的交互。
 
@@ -193,11 +197,13 @@ switchTab /pages/home/home（命中池）
 
 ## 5. URL 同步与自动化读取
 
-> native-host 不做 URL 同步——页面栈是 DeviceShell 的内部状态。§5.1 描述的 HashRouter URL 编码是 upstream dimina-fe 的机制，仅作参考；自动化在 native-host 下改读 render guest 自身的 `location.search`（§5.2）。
+> native-host 不做 URL 同步——页面栈是 DeviceShell 的内部状态。§5.1 描述的 HashRouter URL 编码是 upstream dimina-fe 的机制，仅作参考；自动化的当前页读 active render guest 的 `location.search`，完整栈优先读 DeviceShell 经 bridge 上报的 `PAGE_STACK`（§5.2）。
 
 ### 5.1 upstream 参考：HashRouter.syncStack
 
 实现：`dimina/fe/packages/container/src/utils/hashRouter.js:90-93`
+
+> 未验证：上述文件在未初始化的 submodule 中，本轮无法确认行号和行为仍与本文一致。
 
 ```js
 static syncStack(appId, stack) {
@@ -215,7 +221,9 @@ static syncStack(appId, stack) {
 
 ### 5.2 读：App.getCurrentPage / App.getPageStack
 
-实现：`packages/devtools/src/main/services/automation/handlers/app.ts`。native-host 下两个 handler 都读 render guest 自身的状态：
+实现：`packages/devtools/src/main/services/automation/handlers/app.ts`。native-host 下
+`App.getCurrentPage` 读 render guest；`App.getPageStack` 优先读 bridge 保存的完整栈，
+仅在完整栈尚未上报时回退到 guest：
 
 ```ts
 appHandlers['App.getCurrentPage'] = async (ctx) => {
@@ -320,7 +328,7 @@ switchTab(targetTab):
 
 ## 8. 测试入口
 
-- 单测：`packages/dimina-electron-runtime/src/simulator-ui/page-stack-controller.test.ts`，43 个 case 覆盖五个 reducer 的纯函数行为（含 lifecycle effects 顺序、tabStacks 同步、reLaunch 全清等）。
+- 单测：`packages/dimina-electron-runtime/src/simulator-ui/page-stack-controller.test.ts`，46 个 case 覆盖 reducer 与相关纯函数行为（含 lifecycle effects 顺序、tabStacks 同步、reLaunch 全清等）。
 - e2e：`packages/dimina-electron-runtime/e2e/native-host-page-stack.spec.ts`（5 API + 生命周期 + 深度限制）、`packages/devtools/e2e/native-host-current-page.spec.ts`（`App.getCurrentPage` / `getPageStack` 上报）。
 
 ## 9. 延伸阅读

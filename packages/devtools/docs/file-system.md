@@ -11,7 +11,9 @@
 - ✅ `wx.getFileSystemManager()` 的全部 16 个异步方法：`access` / `stat` / `readFile` / `writeFile` / `appendFile` / `copyFile` / `rename` / `unlink` / `mkdir` / `rmdir` / `readdir` / `getFileInfo` / `saveFile` / `getSavedFileList` / `removeSavedFile` / `truncate`
 - ❌ 同步 API（`*Sync`）：直接 throw。native-host 只为 storage、system-info 和
   menu-button 提供 service-window 本地同步实现；FileSystemManager 仍只有异步容器后端
-  （`packages/devtools/src/service-host/sync-impls/:1`、
+  （`packages/devtools/src/service-host/sync-impls/storage.ts:1`、
+  `packages/devtools/src/service-host/sync-impls/system-info.ts:1`、
+  `packages/devtools/src/service-host/sync-impls/menu-button.ts:1`、
   `packages/devtools/src/simulator/service-apis/file/index.js:41-82`）。
 - ❌ 无容器后端的异步方法（`unzip`、fd 系列 `open`/`close`/`read`/`write`/`fstat`/`ftruncate`、`readCompressedFile`/`readZipEntry`）：`fail not supported by the devtools simulator (no container backend)`
 

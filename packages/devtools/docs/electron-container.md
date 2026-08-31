@@ -11,7 +11,8 @@ native-host 运行时上：simulator 自身是主进程顶层 `WebContentsView`�
 DeviceShell），每个页面是一个子 `<webview>`（由主进程钉到该项目的
 `persist:miniapp-<key>` partition，见 §3.1），service 逻辑跑在一个隐藏的
 ServiceHost BrowserWindow。所有 mini-program runtime 消息经 main 进程的 BridgeRouter
-（`src/main/ipc/bridge-router.ts`）编排 service ↔ simulator ↔ render 的两级
+（`packages/dimina-electron-runtime/src/main/ipc/bridge-router.ts`；devtools 的
+`src/main/ipc/bridge-router.ts` 只做适配装配）编排 service ↔ simulator ↔ render 的两级
 session（AppSession / PageSession）。
 
 ## 1. 窗口拓扑全景图
@@ -93,7 +94,7 @@ Electron app
 | `simulator:attach-native` / `set-native-bounds` / `set-device-info` / `detach` / `console` / `current-page` | `SimulatorChannel` | simulator overlay 生命周期 + 设备信息 + 当前页推送 |
 | `service-host:host-env:update` | `ServiceHostChannel` | main → service-host 窗 live-update host-env 快照（设备切换不重启）|
 | `simulator:custom-apis:invoke` | `SimulatorCustomApiChannel` | main-window renderer 直接调下游注册的 custom API |
-| `simulator:custom-apis:bridge-request` / `bridge-response` | `SimulatorCustomApiBridgeChannel` | simulator WCV 的 custom-apis 桥：preload `ipcRenderer.send` Request → 绑定该 simWc 的 `ipcMain.on` 派发器（`native-simulator-view.ts:146-207`）→ `simWc.send` 回 Response（不经 main renderer 代理）|
+| `simulator:custom-apis:bridge-request` / `bridge-response` | `SimulatorCustomApiBridgeChannel` | simulator WCV 的 custom-apis 桥：preload `ipcRenderer.send` Request → 绑定该 simWc 的 `ipcMain.on` 派发器（`native-simulator-view.ts:161`）→ `simWc.send` 回 Response（不经 main renderer 代理）|
 | `simulator:storage:*` | `SimulatorStorageChannel` | CDP-backed storage 面板 |
 | `simulator:element:*` | `SimulatorElementChannel` | CDP-backed 元素审查 |
 | `simulator:wxml:*` | `SimulatorWxmlChannel` | main 推 WXML 树（seed `GetSnapshot` + push `Event`）|
@@ -231,13 +232,13 @@ detachSimulator()                              ← 关 / 切换 project 时统�
 
 simulator 的 mount 入口是 `attachNativeSimulator`（renderer 经 `SimulatorChannel.AttachNative` 触发，`main/ipc/simulator.ts`）。注意：ViewManager **没有** 一个独立的 `attachSimulator(simWcId, simWidth)` 方法——native-host 是唯一 runtime，右栏 DevTools 面板由 `attachNativeSimulatorDevtoolsHost` 建立，并通过 `pointNativeDevtoolsAtServiceWc` / `pointNativeDevtoolsAtActiveServiceHost` 在页面切换时跟随活跃 service-host wc（详见 §5.2）。（代码里另有一个 `networkForward.attachSimulator(simWc)` 是 network-forward 服务挂 CDP 调试器，跟 view 生命周期无关，不要混淆。）
 
-`attachNativeSimulator`（`view-manager.ts`）把 simulator 自己建成一个顶层 `WebContentsView`（不是 renderer 的 `<webview>` guest），用 `cjsSiblingPreloadPath` 的 `.cjs` preload + `webviewTag:true / contextIsolation:false / sandbox:false` + 该项目的 `persist:miniapp-<key>` partition（从 simulator URL 的 `?appId=` 派生并先 `configureMiniappSession`）——顶层 WebContentsView 不是 guest，能托管 DeviceShell 的每页 render-host `<webview>`（见 §5）。它还顺手装上 custom-apis 桥的 `ipcMain.on` 派发器（`attachNativeCustomApiBridge`）。`setNativeSimulatorViewBounds`（`view-manager.ts`）把 renderer 量出来的设备外框内屏 rect + zoom 应用上去，并把 `zoomFactor` 传播到已挂载的嵌套 render-host guest。
+`attachNativeSimulator`（`src/main/services/views/native-simulator-view.ts:193`）把 simulator 自己建成一个顶层 `WebContentsView`（不是 renderer 的 `<webview>` guest），用 `cjsSiblingPreloadPath` 的 `.cjs` preload + `webviewTag:true / contextIsolation:false / sandbox:false` + 该项目的 `persist:miniapp-<key>` partition（从 simulator URL 的 `?appId=` 派生并先 `configureMiniappSession`）——顶层 WebContentsView 不是 guest，能托管 DeviceShell 的每页 render-host `<webview>`（见 §5）。它还装上 custom-apis 桥的 `ipcMain.on` 派发器（`attachNativeCustomApiBridge`）；bounds 与 zoom 也由同一 domain module 应用。`view-manager.ts` 只把该模块组合进公共 facade。
 
 `detachSimulator`（`view-manager.ts`）销毁 simulator view，同时顺手销毁 native simulator view、hide popover、销毁 settings view、摘除 custom-apis 桥派发器。在对 WCV 发起异步 `close()` **之前**，它先 `ctx.bridge.disposeSessionsForSimulator(simWcId)` **同步**清掉该 simulator 名下的 bridge app session、关闭其 render-host guest 与 service-host 窗——否则旧 session 的 `renderWc` 会残活到下个项目，`resolveCurrentApp` / `captureThumbnail` 仍能解析到它、共享的 `persist:miniapp-<appId>` partition 又让新项目复用旧 guest，导致重开后渲染上一个项目。除 `closeProject` 外，`openProject` 在已有 session 时的切换分支也会调 `detachSimulator`（回项目列表的返回按钮不走 closeProject，切换是唯一拆除时机）。`disposeSessionsForSimulator` 返回可 await 的 `Promise`：同步前缀清 map + close guest/service 窗后，其异步尾部（pool.release / resourceServer.close）的完成与失败可被观测——同步拆除站点（`detachSimulator`）只 `.catch` 记录尾部失败，map 已即时干净;`resolveCurrentApp` 在无 appId、无 workspace session 时仅当所有存活 session 同属一个 appId 才回退到最新 spawn（同 app respawn），多个不同 appId 残留则返 null,不再无条件取最后一个。另外 `closeProject` 拆除期间 `workspace.isClosing()` 为 true（`disposeSession` 先把 currentSession 置 null、bridge app session 要到之后的 `disposeAll` 才清,中间有窗口）,`resolveCurrentApp` 见到 isClosing 直接返 undefined,避免把濒死项目的 guest 解析出去。
 
 native simulator WCV 的拆除走**单一路径** `tearDownNativeSimulatorView()`：relaunch（`attachNativeSimulator` 替换旧 view）与项目关闭（`detachSimulator`）共用它,内部 removeChildView + 同步 `disposeSessionsForSimulator` + `close()`。设计上**生命周期所有者主动 eager 拆除**(切项目/关项目时由 workspace 链路驱动),而不是依赖渲染层下次 `attachNativeSimulator` 的幂等替换来拆——后者会让拆除时机依赖渲染层 attach 时序,与 lease「所有者掌控拆除」相悖。`attachNativeSimulator` 的幂等替换与 bridge 的 `simulatorWc.once('destroyed')` 钩子都保留为**幂等兜底**(disposeSessionsForSimulator 在 session 已销毁时早退,故 eager 拆除与兜底永不重复拆)。
 
-### 4.3 BridgeRouter — `src/main/ipc/bridge-router.ts` (重头戏)
+### 4.3 BridgeRouter — `packages/dimina-electron-runtime/src/main/ipc/bridge-router.ts`
 
 这是 main 进程承担 mini-program runtime 编排的核心。建议把它当成一个状态机：
 
@@ -315,7 +316,7 @@ service-host BrowserWindow（独立 top-level window，hidden）
     injectLogicBundle → serviceWc.executeJavaScript 注入（bridge-router.ts）
 
 simulator WebContentsView（主进程顶层，跑 React DeviceShell）
-  ← view-manager.ts:attachNativeSimulator
+  ← native-simulator-view.ts:attachNativeSimulator
   └── DeviceShell（device-shell.tsx）
        └── pages: <webview> ×N，preload=renderHostPreload；partition 由宿主 WCV 的
             will-attach-webview 钉成同一 per-project persist:miniapp-<key>
@@ -326,7 +327,7 @@ simulator WebContentsView（主进程顶层，跑 React DeviceShell）
 
 （`dmb-resource://` 是 render/simulator 侧的资源代理协议，service-host 不用它取 logic.js。）
 
-**simulator 为什么是主进程的 `WebContentsView`**：Electron **不支持 webview 套 webview**（`webviewTag` 在 webview guest 里被强制 false），所以若 simulator 本身是个 `<webview>`，DeviceShell 的每页 render-host `<webview>` 挂在里面永远 attach 不上。因此 simulator 是主进程的顶层 `WebContentsView`（`view-manager.ts:attachNativeSimulator`，`webviewTag:true / contextIsolation:false / sandbox:false` + `cjsSiblingPreloadPath` 的 `.cjs` preload + per-project `persist:miniapp-<key>` partition）——顶层 WebContentsView 不是 guest，能托管子 `<webview>`。资源不由 main 起 `DiminaResourceServer`，而是 render/service 宿主从 dev server 同源取（spawn 传 `resourceBaseUrl`，本地 server 仅作 nullable fallback）。
+**simulator 为什么是主进程的 `WebContentsView`**：Electron **不支持 webview 套 webview**（`webviewTag` 在 webview guest 里被强制 false），所以若 simulator 本身是个 `<webview>`，DeviceShell 的每页 render-host `<webview>` 挂在里面永远 attach 不上。因此 simulator 是主进程的顶层 `WebContentsView`（`src/main/services/views/native-simulator-view.ts:193`，`webviewTag:true / contextIsolation:false / sandbox:false` + `cjsSiblingPreloadPath` 的 `.cjs` preload + per-project `persist:miniapp-<key>` partition）——顶层 WebContentsView 不是 guest，能托管子 `<webview>`。资源不由 main 起 `DiminaResourceServer`，而是 render/service 宿主从 dev server 同源取（spawn 传 `resourceBaseUrl`，本地 server 仅作 nullable fallback）。
 
 ### 5.2 各子系统落点
 
@@ -369,7 +370,7 @@ simulator WebContentsView（主进程顶层，跑 React DeviceShell）
 
 被这个 hardening 包住的 webContents：main window renderer（`main-window/create.ts`）、settings overlay（`view-manager.ts`）、popover overlay（`view-manager.ts`）、settings 独立窗（`settings-window/create.ts`）。
 
-native-host simulator 走另一套，且不在 renderer 里——它是顶层 `WebContentsView`（DeviceShell）外加每页嵌套的 render-host `<webview>` guests，navigation hardening 直接装在主进程的 `attachNativeSimulator`（`will-attach-webview` 钉 guest 的 partition / contextIsolation、guest 与 WCV 自身各自的 `setWindowOpenHandler` / `will-navigate`，均在 `view-manager.ts`）—— 允许 about:blank + localhost + file://，其他外链 shell.openExternal、其余直接 preventDefault。这条路径不经过 `main-window/create.ts`，因为没有 renderer `<webview>` simulator 可挂。
+native-host simulator 走另一套，且不在 renderer 里——它是顶层 `WebContentsView`（DeviceShell）外加每页嵌套的 render-host `<webview>` guests，navigation hardening 直接装在主进程的 `attachNativeSimulator`（`will-attach-webview` 钉 guest 的 partition / contextIsolation、guest 与 WCV 自身各自的 `setWindowOpenHandler` / `will-navigate`，均在 `src/main/services/views/native-simulator-view.ts`）—— 允许 about:blank + localhost + file://，其他外链 shell.openExternal、其余直接 preventDefault。这条路径不经过 `main-window/create.ts`，因为没有 renderer `<webview>` simulator 可挂。
 
 ### 6.3 资源协议 `dmb-resource://`
 
@@ -429,7 +430,7 @@ sequenceDiagram
   App->>Ctx: workspace.openProject() → 读 manifest、起 provider
   R->>App: simulator:attach-native(simulatorUrl, simWidth)
   App->>App: views.attachNativeSimulator → 顶层 WebContentsView 跑 DeviceShell（partition: persist:miniapp-<key>，从 simulatorUrl 的 appId 派生）
-  App->>App: attachNativeSimulatorDevtoolsHost → 主进程内把 DevTools 绑到 bridge 报告的可见 render-host <webview> guest（无 renderer IPC——没有可按 id attach 的 renderer <webview>）
+  App->>App: attachNativeSimulatorDevtoolsHost → 主进程内把 DevTools 前端绑到活跃 service-host wc；Elements 数据另从可见 render-host guest 转发
 ```
 
 ### 7.2 关闭项目（保留 workbench）

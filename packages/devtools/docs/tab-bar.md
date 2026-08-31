@@ -3,9 +3,13 @@
 > TabBar 是小程序底部（或顶部）的多 tab 切换栏。devtools simulator 只有一套渲染实现——native-host 的 `DeviceShell`（React + 纯函数 reducer）。upstream dimina-fe 的 `MiniApp`（`miniApp.js`，DOM 渲染）是 WeChat 语义的参考实现，本文在对照行为时引用它，但它不是 devtools 的运行时。
 >
 > 配套文档：Bridge Envelope 协议见 [`./native-bridge-protocol.md`](./native-bridge-protocol.md)；per-tab 子栈语义见 [`./page-stack.md`](./page-stack.md)。
+
+> 未验证：本 worktree 的 `dimina/` submodule 未初始化，也没有本轮微信开发者工具的
+> 观察记录。本文引用的 upstream/微信行为及 iOS/Harmony 对齐结论未重新验证；
+> native-host 的配置、reducer、bridge 与测试入口已按当前 kit 代码核对。
 >
 > 关联代码：`src/shared/bridge-channels.ts`、`packages/dimina-electron-runtime/src/simulator-ui/tab-bar.tsx`、
-> `packages/dimina-electron-runtime/src/simulator-ui/tab-bar-state.ts`、`src/main/ipc/bridge-router.ts`
+> `packages/dimina-electron-runtime/src/simulator-ui/tab-bar-state.ts`、`packages/dimina-electron-runtime/src/main/ipc/bridge-router.ts`
 
 ## 摘要（TL;DR）
 
@@ -135,7 +139,7 @@ export interface TabBarConfig {
 
 ### 3.2 入口位置
 
-service runtime 发出的 `dmb:simulator-api` 在 `src/main/ipc/bridge-router.ts` 的
+service runtime 发出的 `dmb:simulator-api` 在 `packages/dimina-electron-runtime/src/main/ipc/bridge-router.ts` 的
 `handleSimulatorApi` 被分类，命中 `TAB_ACTION_NAMES` 后包成 `TabActionPayload`
 发到 simulator window；simulator 端 `device-shell.tsx` 收到后调 `applyTabAction`，
 最终走 `tab-bar-state.ts` 的 switch。
@@ -289,7 +293,7 @@ native-host 的 React 实现里 TabBar 是 `device-shell` 的 flex 兄弟节点�
 | `TabActionPayload` 协议 | `src/shared/bridge-channels.ts` |
 | TabBar React 组件 | `packages/dimina-electron-runtime/src/simulator-ui/tab-bar.tsx` |
 | `applyTabAction` reducer | `packages/dimina-electron-runtime/src/simulator-ui/tab-bar-state.ts` |
-| Main 端分发 TAB_ACTION | `src/main/ipc/bridge-router.ts`（`TAB_ACTION_NAMES` / `handleSimulatorApi`） |
+| Main 端分发 TAB_ACTION | `packages/dimina-electron-runtime/src/main/ipc/bridge-router.ts`（`TAB_ACTION_NAMES` / `handleSimulatorApi`） |
 | automator wx 执行（service-host） | `src/main/services/automation/handlers/app.ts`（`App.callWxMethod`） |
 | e2e 用例 | `packages/dimina-electron-runtime/e2e/native-host-device.spec.ts`、`e2e/native-host-wx-method.spec.ts` |
 | reducer 单测 | `packages/dimina-electron-runtime/src/simulator-ui/tab-bar-state.test.ts` |

@@ -21,6 +21,11 @@ dimina 在每个平台上都把 service 跑在一个**与 render 物理隔离、
 
 dimina-fe 侧的关键锚点（`dimina/` submodule，只读）：
 
+> 未验证：本 worktree 的 `dimina/` submodule 未初始化，以下 dimina-fe 与
+> iOS/Android native 锚点未用当前 submodule HEAD
+> `8c79345c7b27cbf00e6e3c684ddcba093e419b00` 复核；Electron 侧实现已按本文列出的
+> `packages/devtools` / `packages/dimina-electron-runtime` 文件核对。
+
 - Service 端 `wx` 注册：`service/src/core/env.js` `globalThis[name] = globalApi`（`['dd','wx',...apiNamespaces]`，globalApi 是 Proxy）。其中 `apiNamespaces` 由 service 端读 `globalThis.__diminaApiNamespaces` 得到；native-host 路径里这个全局由 `service-host/preload.cjs` 从 spawn URL 的 `apiNamespaces` query 参数解出（host 配置 `WorkbenchContext.apiNamespaces` → `bridge-router.handleSpawn` → `buildServiceHostSpawnUrl`）。缺这一步时只有内置 `dd`/`wx` 生效，配置的命名空间（如 `qd`）拿不到全局，page 逻辑引用即抛 `ReferenceError`。
 - 环境检测：`common/src/core/utils.js` `isWebWorker` —— native-host 的 `@dimina/service` bundle 走这条 Worker-form 检测（loader 的 `importScripts` 路径，见 §5），由 `service-host/preload.cjs` 的 `importScripts` shim 满足。
 
@@ -177,7 +182,7 @@ Workbench BrowserWindow (workbench renderer + main process)
         ← Chrome DevTools console 可直调 wx.*，Sources 可 step into
 
 Main Process
-  └── BridgeRouter (src/main/ipc/bridge-router.ts)
+  └── BridgeRouter (packages/dimina-electron-runtime/src/main/ipc/bridge-router.ts)
         两级 AppSession / PageSession，按 bridgeId 路由 service ↔ render
         聚合 resourceLoaded、处理 invokeAPI、转发生命周期
 ```
@@ -251,6 +256,9 @@ SIMULATOR_EVENTS = {
 
 ## 7. NavigationBar 微信对齐
 
+> 未验证：本轮没有可用的微信开发者工具实机观察记录，且 `dimina/` submodule 未初始化；
+> 本节的 Electron 当前实现已核对，但“与微信/各 native 端一致”的比较结论未重新验证。
+
 simulator 的 NavigationBar 按微信 MiniProgram 规范实现；胶囊（capsule）的尺寸/位置/视觉则对齐 dimina 各端 native 的实际渲染（见下），而非独立于 native 的一套数值。
 
 **视觉**（`packages/dimina-electron-runtime/src/simulator-ui/navigation-bar.tsx`、`menu-capsule.tsx`、`navigation-bar.css`、`menu-capsule.css`）：
@@ -288,6 +296,9 @@ TabBar 同样由 DeviceShell 渲染（`tab-bar.tsx` + `tab-bar-state.ts`），�
 
 ## 9. 已知缺口
 
+> 未验证：`dimina/fe/packages/service/dist/service.js` 当前是否仍不带 sourcemap，因
+> submodule 未初始化无法检查。
+
 - `@dimina/service` dist 不带 sourcemap（`dimina/fe/packages/service/dist/service.js` 无 `sourceMappingURL`）。service window 自动打开 detached DevTools，console 里可直接调 `wx.*`、可在 bundle 上下断点 step into，但 Sources 面板看到的是已 bundle 的代码。
 
 ## 10. 文件清单
@@ -298,7 +309,7 @@ TabBar 同样由 DeviceShell 渲染（`tab-bar.tsx` + `tab-bar-state.ts`），�
 | `src/render-host/preload.cjs` | render-host webview preload：注入 `window.DiminaRenderBridge`、`renderHostReady` 上报 |
 | `src/service-host/sync-api-patch.ts` | service.js 之后把 `*Sync` API patch 成 `sync-impls/` 本地实现 |
 | `src/shared/bridge-channels.ts` | `BridgeMessageType` / `BRIDGE_CHANNELS` / `SIMULATOR_EVENTS` / `TabBarConfig` 等协议常量 |
-| `src/main/ipc/bridge-router.ts` | 主进程 BridgeRouter：两级 session、`resourceLoaded` 聚合、`invokeAPI` 路由、生命周期转发、logic.js 注入 |
+| `packages/dimina-electron-runtime/src/main/ipc/bridge-router.ts` | 主进程 BridgeRouter：两级 session、`resourceLoaded` 聚合、`invokeAPI` 路由、生命周期转发、logic.js 注入；devtools 同名文件负责适配装配 |
 | `packages/dimina-electron-runtime/src/simulator-ui/navigation-bar.tsx` | NavigationBar 视觉实现（标题对齐 / 返回按钮 / loading / 颜色动画 / custom 隐藏） |
 | `packages/dimina-electron-runtime/src/simulator-ui/page-stack-controller.ts` | 页面栈纯 reducer（`navigateTo`/`Back`/`redirectTo`/`reLaunch`/`switchTab` → lifecycle/closePage effect） |
 

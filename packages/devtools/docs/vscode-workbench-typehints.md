@@ -74,6 +74,34 @@ workbench 构建在 prebuild 阶段运行 patch，devtools 的 `build:workbench`
 （`packages/workbench/package.json:47-55`、
 `packages/devtools/build-workbench.mjs:15-23`）。
 
+patch 为什么必要、以及为什么改的是能力检查而不是去满足 `crossOriginIsolated`，
+写在脚本自己的文件头里（`packages/workbench/scripts/patch-ts-ext.mjs:1-16`）：
+扩展把项目级 IntelliSense 门控在 `globalThis.crossOriginIsolated` 上，而 Electron
+即使发齐 COOP/COEP 也翻不动这个值；它真正依赖的是 SharedArrayBuffer + Atomics，
+那个 Electron 用启动开关单独提供。要判断这个 patch 还需不需要，读那段文件头。
+
+## 为什么类型走真实文件，而不是 tsserver plugin
+
+这条不写在任何代码里，但决定了上面整套接线的形状，所以记在这里，避免重走。
+
+写真实 `@types` 文件的唯一代价，是 memfs 里多一个隐藏的 `node_modules/@types/`。
+曾评估过用 tsserver plugin 做纯虚拟注入（连隐藏文件都不要），结论是**技术可行但
+不采用**：
+
+- 可行性当时实测通过——plugin 能加载进 web tsserver，用内部 API 能让虚拟 `.d.ts`
+  真进 `getProgram().getSourceFiles()`，补全和 hover 都通。
+- 否决理由有三条。一是那套 API 全是 `@internal`，随 TypeScript / monaco-vscode-api
+  版本可能改名或删除，一旦失效表现是**类型提示静默全失**，每次升级都得回归。二是它
+  还需要 patch 那份 5.8MB 的 minified vendored `tsserver.web.js`。三是 `getExternalFiles`
+  这条半公开的路喂不出全局 ambient，没有中间档——想要零文件就只能落到最深的内部 API。
+- `addExtraLib` 对 web tsserver by-design 无效（monaco-vscode-api 维护者的明确说法），
+  官方且唯一推荐的就是「真实文件 + tsconfig / `@types` 引用」这条路。
+
+所以采用 `@types` 真实文件：只依赖稳定的文件机制，版本升级不会静默失效。
+
+> 未验证：上面的实测结论来自当初那轮调研的记录，本轮没有重跑 plugin 注入实验。
+> 「当前实现」各节的 `file:line` 是按当前代码核对过的。
+
 ## 相关能力
 
 WXML completion/hover 与 dimina JSON schemas 在工作台启动时独立注册；其中一个失败

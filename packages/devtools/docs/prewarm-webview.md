@@ -7,7 +7,7 @@
 
 打开一个 dimina mini-program 项目时，"点击 → 首屏可见" 这段延迟里有一大块是**进程 fork + preload 注入 + page-frame 解析**的固定开销 — 跟你的小程序本身的代码量几乎无关。三家 Native 端（iOS / Android / Harmony）都把这块固定开销砍掉了，做法是**预先 new 出 webview 实例放进池子里**。
 
-dimina-kit Electron 容器里对等的实现是 `ServiceHostPool`（`src/main/services/service-host-pool/pool.ts`）：pool 在 Electron `ready` 之后空闲时预热出 service-host `BrowserWindow`，在用户点"打开项目"时 `acquire()` 出已 warm 的 `WebContents`，省掉同步 `new BrowserWindow`。pool **默认 OFF，opt-in**（`DIMINA_PREWARM_POOL_SIZE`，见 §6）。
+dimina-kit Electron 容器里对等的实现是 `ServiceHostPool`（`packages/dimina-electron-runtime/src/main/services/service-host-pool/pool.ts`）：pool 在 Electron `ready` 之后空闲时预热出 service-host `BrowserWindow`，在用户点"打开项目"时 `acquire()` 出已 warm 的 `WebContents`，省掉同步 `new BrowserWindow`。pool **默认 OFF，opt-in**（`DIMINA_PREWARM_POOL_SIZE`，见 §6）。devtools 的同名模块只做 package re-export。
 
 适用范围与边界：
 
@@ -37,8 +37,8 @@ dimina-kit Electron 容器里对等的实现是 `ServiceHostPool`（`src/main/se
 
 ```
 renderer SPAWN IPC
-  → bridge-router.handleSpawn   // src/main/ipc/bridge-router.ts
-    → createServiceHostWindow   // src/main/windows/service-host-window/create.ts
+  → bridge-router.handleSpawn   // packages/dimina-electron-runtime/src/main/ipc/bridge-router.ts
+    → createServiceHostWindow   // packages/dimina-electron-runtime/src/main/windows/service-host-window/create.ts
       → new BrowserWindow({ partition: miniappPartition(opts.appId), preload:serviceHostPreloadPath, ... })
       → loadURL(file://.../service.html?bridgeId=...)
     → did-finish-load → bootServiceHost
@@ -63,6 +63,9 @@ renderer SPAWN IPC
 | 每页 render-host `<webview>` | DeviceShell 渲染（`device-shell.tsx`） | 主进程 `will-attach-webview` 钉到该项目 partition 的同一 frame tree；不在 pool 影响域（见 §5） |
 
 ### 1.4 目标 / 非目标
+
+> 未验证：本节的 `< 10 ms` 目标和本文其它耗时/RSS 数值没有随当前提交附带的
+> benchmark 工件；它们是容量估算，不是本轮实测结果。
 
 **目标**：
 
@@ -162,7 +165,7 @@ renderer SPAWN IPC
 
 ## 3. Electron container 的预启动设计
 
-`ServiceHostPool`（`src/main/services/service-host-pool/pool.ts`）是 main 进程内的单例 pool。导出 surface：`ServiceHostPool` 类 + 类型 `ServiceHostSpec` / `ServiceHostPoolStats` / `ServiceHostPoolInitOptions` / `EntryState`。bridge-router 在 `installBridgeRouter` 里 opt-in 构造它，在 `handleSpawn` `acquire`，在 `disposeAppSession` `release` 或 `releaseDestroyed`。
+`ServiceHostPool`（`packages/dimina-electron-runtime/src/main/services/service-host-pool/pool.ts`）是 main 进程内由 bridge-router 按配置创建的 pool。导出 surface：`ServiceHostPool` 类 + 类型 `ServiceHostSpec` / `ServiceHostPoolStats` / `ServiceHostPoolInitOptions` / `EntryState`。`packages/dimina-electron-runtime/src/main/ipc/bridge-router.ts:644-665` 在 `installBridgeRouter` 里 opt-in 构造它，在 `handleSpawn` `acquire`，在 `disposeAppSession` `release` 或 `releaseDestroyed`。
 
 ### 3.1 不变量
 
@@ -362,10 +365,10 @@ release(entryId, win):  // pool.ts
 
 | 调用方 | preload 注入方式 | 注入位置 |
 |---|---|---|
-| native simulator WebContentsView（唯一 simulator 宿主） | window-level (`webPreferences.preload`，cjs sibling) | `views/view-manager.ts`（`attachNativeSimulator`） |
+| native simulator WebContentsView（唯一 simulator 宿主） | window-level (`webPreferences.preload`，cjs sibling) | `packages/devtools/src/main/services/views/native-simulator-view.ts`（`attachNativeSimulator`） |
 | per-project `persist:miniapp-<key>` session 内的 render-host 页面 `<webview>` guests | `<webview preload>` 属性（`getRenderPreloadUrl()`），**无静态 partition**——主进程 `will-attach-webview` 钉 per-project partition | `device-shell.tsx` |
 | service-host BrowserWindow | window-level (`webPreferences.preload`) | `service-host-window/create.ts` |
-| settings / popover WebContentsView | window-level (`webPreferences.preload`) | `views/view-manager.ts` |
+| settings / popover WebContentsView | window-level (`webPreferences.preload`) | `packages/devtools/src/main/services/views/overlay-panels-view.ts` |
 | main window | window-level (`webPreferences.preload`) | `main-window/create.ts` |
 
 pool 在 `acquire(spec)` 时按 `preloadPath` 校验 entry 是否匹配（`matches`）— 不匹配就 tear down pooled entries 重建。当前只有单一 spec（service-host）进池。
@@ -389,9 +392,9 @@ pool **默认 OFF**，仅当 `DIMINA_PREWARM_POOL_SIZE` 为正整数且 `DIMINA_
 
 | 文件 | 角色 |
 |---|---|
-| `src/main/services/service-host-pool/pool.ts` | `ServiceHostPool` 单例 + `EntryState` 状态机 + acquire/release/reset/reclaim |
-| `src/main/ipc/bridge-router.ts` | opt-in 构造 pool（`installBridgeRouter`）+ `handleSpawn` acquire + `disposeAppSession` release/releaseDestroyed + `DIMINA_PREWARM_*` 解析 |
-| `src/main/windows/service-host-window/create.ts` | `createServiceHostWindow` fallback 路径 + `serviceHostSpec()`（`clearStorageOnReset:false`，共享 `persist:simulator`） |
+| `packages/dimina-electron-runtime/src/main/services/service-host-pool/pool.ts` | `ServiceHostPool` + `EntryState` 状态机 + acquire/release/reset/reclaim |
+| `packages/dimina-electron-runtime/src/main/ipc/bridge-router.ts` | opt-in 构造 pool（`installBridgeRouter`）+ `handleSpawn` acquire + `disposeAppSession` release/releaseDestroyed + `DIMINA_PREWARM_*` 解析 |
+| `packages/dimina-electron-runtime/src/main/windows/service-host-window/create.ts` | `createServiceHostWindow` fallback 路径 + `serviceHostSpec()`（`clearStorageOnReset:false`，共享 `persist:simulator`） |
 
 ## 8. 延伸阅读
 
