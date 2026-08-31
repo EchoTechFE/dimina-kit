@@ -1,0 +1,3 @@
+<view class="wrap">
+  <text class="probe" data-testid="probe-text">page-scope-vars</text>
+</view>

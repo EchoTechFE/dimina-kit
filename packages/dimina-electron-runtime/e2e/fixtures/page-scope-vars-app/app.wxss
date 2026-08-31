@@ -1,0 +1,4 @@
+page {
+  --probe-token: 16px;
+  background-color: #00aa55;
+}

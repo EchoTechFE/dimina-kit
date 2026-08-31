@@ -26,10 +26,17 @@ if (!bridgeId) {
 // own CSS paints, which is the white flash on every page transition. Applied
 // as early as the preload can reach `document.documentElement` and again on
 // DOMContentLoaded in case the element wasn't attached yet.
+// Only `documentElement` is primed here — `body` carries the `.dd-page` class
+// that `installPageFrameStyleScopes` (dimina/fe render runtime) gates the page's
+// own `data-v-*` scope attributes on. Writing an inline background-color to body
+// would out-prioritize a `page { background-color: ... }` rule from the app's own
+// wxss once those scope attributes land, silently overriding the app's choice
+// with this window-config default. `documentElement` alone is enough to prevent
+// the white flash — mirrors upstream's `applyPageStyle()`, which also only
+// touches root.
 if (bgColor) {
   const applyBackgroundColor = () => {
     if (document.documentElement) document.documentElement.style.backgroundColor = bgColor
-    if (document.body) document.body.style.backgroundColor = bgColor
   }
   applyBackgroundColor()
   globalThis.addEventListener('DOMContentLoaded', applyBackgroundColor)
