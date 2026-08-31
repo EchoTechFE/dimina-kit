@@ -220,7 +220,4 @@ simulator 在文件这块**主动选择对齐上游 dimina，而不是 wx 真机
 - 上游真机参考路径：`dimina/iOS/dimina/DiminaKit/Utils/DMPFileUtil.swift`、
   `dimina/harmony/dimina/src/main/ets/Bundle/Util/DMPFileUrlConvertor.ets`、
   `dimina/iOS/dimina/DiminaKit/Render/DifileURLSchemeHandler.swift`。
-  > 未验证：当前 worktree 的 `dimina/` submodule 未初始化，无法确认这三个目标在
-  > submodule HEAD `8c79345c7b27cbf00e6e3c684ddcba093e419b00` 中是否仍存在，
-  > 因而不保留会解析成 404 的 Markdown 链接。
 - WeChat 官方：[文件系统](https://developers.weixin.qq.com/miniprogram/dev/framework/ability/file-system.html) / [FileSystemManager](https://developers.weixin.qq.com/miniprogram/dev/api/file/FileSystemManager.html)

@@ -51,7 +51,7 @@ CDP DOMStorage ──> simulator-storage -> SimulatorStorageChannel -> Connected
 Storage 由主进程通过 CDP `DOMStorage` 读取，不依赖 simulator preload。
 renderer source 使用 `SimulatorStorageChannel` 完成 seed、订阅和写操作。
 入口见
-`packages/devtools/src/renderer/modules/main/features/right-panel/storage-source.ts:1-120`
+`packages/devtools/src/renderer/modules/main/features/right-panel/storage-source.ts:1-41`
 与
 `packages/devtools/src/main/services/simulator-storage/index.ts:1-220`。
 

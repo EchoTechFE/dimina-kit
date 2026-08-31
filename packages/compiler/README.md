@@ -142,8 +142,6 @@ await installEsbuildFromURL('/esbuild-browser.mjs', '/esbuild.wasm')   // 见下
 >
 > **cross-origin isolation：** oxc 的 wasm32-wasi 绑定用到 SharedArrayBuffer，页面与 worker 需开 COOP/COEP（`Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp`）。**CSS 工具链不用宿主管**：浏览器 bundle 已内联真实 `cssnano` + `autoprefixer`（autoprefixer pin 到 node 版 `compile-core.node.js` 运行时解析的同一份，当前 10.5.2），CSS 产物与 node 版逐字节一致。宿主只需提供 esbuild + oxc 两个 wasm 钩子。
 
-参考实现与验证：`dimina-web-client` 的 `demo/toolchain-setup.js`（用上面两个助手）+ `demo/pool-test.html`，`npm run test:pool`（三项目产物与单线程逐结构一致，并演示 `onLog`）。
-
 ### 故障排查（接入环境）
 
 pool 的 API 本身很小，但**浏览器/bundler/包管理器环境**有几个已知坑，报错往往指向别处、很难一眼看出是环境问题。按现象对号入座：

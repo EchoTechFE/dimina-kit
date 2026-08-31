@@ -87,7 +87,7 @@ Electron app
 
 ### 2.1 channel 前缀地图
 
-> channel 常量全部导出自 `src/shared/ipc-channels.ts`（bridge 协议另在 `src/shared/bridge-channels.ts`）。下表按业务域列出真实导出的 `*Channel` 常量。
+> channel 常量全部导出自 `src/shared/ipc-channels.ts`；bridge 协议权威定义在 `packages/dimina-electron-runtime/src/shared/bridge-channels.ts`，devtools 的同名文件只负责重导出。下表按业务域列出真实导出的 `*Channel` 常量。
 
 | 前缀 | 常量 | 域 |
 |---|---|---|

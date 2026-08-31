@@ -19,7 +19,7 @@ pnpm -C dimina/fe install
 
 - 从 `main` 切分支，命名 `<type>/<summary>`（如 `fix/devtools-console-denoise`、`feat/host-layout-slots`）。
 - 提交信息遵循 Conventional Commits：`<type>(<scope>): <说明>`，`type` 用 `feat`/`fix`/`chore`/`docs`/`refactor`/`style`/`test`/`ci` 等，`scope` 可选（通常是包名，如 `devtools`、`compiler`），说明可以用中文。
-- 支持 AI 辅助生成代码，但 AI 辅助生成的 commit 必须带 `Co-authored-by` 字段，提交者对代码负责。
+- 本仓库接受 AI 辅助生成的代码。惯例是给这类提交加 `Co-authored-by` 尾注（近 200 次提交中约八成带），CI 不强制。用不用工具都不改变提交者对代码和验证结果的责任。
 
 ## 提交 PR 前
 
@@ -29,7 +29,7 @@ pnpm -C dimina/fe install
 ./scripts/gate.sh
 ```
 
-它按 `lint → typecheck → test → pawl:check` 顺序跑完根 `package.json` 里的对应脚本，任一步失败就停在那一步并打印日志路径。也可以单独跑其中一步（`pnpm lint`、`pnpm check-types`、`pnpm test`、`pnpm test:coverage`）。
+它依次执行 `pnpm run lint`、`pnpm exec turbo run check-types --force`、`pnpm run test` 和 `pnpm run pawl:check`；任一步失败就停止并打印日志路径。也可以单独运行根脚本（`pnpm lint`、`pnpm check-types`、`pnpm test`）。`pnpm test:coverage` 是额外的覆盖率检查，不属于 `gate.sh`。
 
 `pawl:check` 是防劣化关卡：新增或扩写 `packages/*/src/**/*.{ts,tsx}` 时，文件长度（阈值 500 行）、类型逃逸、认知复杂度等维度只能持平或变好，用法见 [`tools/pawl`](./tools/pawl/README.md)。
 

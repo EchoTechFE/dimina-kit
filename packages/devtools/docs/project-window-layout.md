@@ -43,7 +43,7 @@
 
 ## 1. 数据模型（来自布局引擎）
 
-完整类型在 `@dimina-kit/electron-deck/layout`（`src/layout/types.ts`，纯 TS、不 import electron/react）。
+完整类型在 `@dimina-kit/electron-deck/layout`（`packages/electron-deck/src/layout/types.ts`，纯 TS、不 import electron/react）。
 核心 shape：
 
 ```ts

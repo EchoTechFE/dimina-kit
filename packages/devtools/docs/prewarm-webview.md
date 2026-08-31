@@ -5,7 +5,7 @@
 
 ## 摘要（TL;DR）
 
-打开一个 dimina mini-program 项目时，"点击 → 首屏可见" 这段延迟里有一大块是**进程 fork + preload 注入 + page-frame 解析**的固定开销 — 跟你的小程序本身的代码量几乎无关。三家 Native 端（iOS / Android / Harmony）都把这块固定开销砍掉了，做法是**预先 new 出 webview 实例放进池子里**。
+打开一个 dimina mini-program 项目时，service-host `BrowserWindow` 和 renderer 进程的创建是固定开销。iOS、Android、HarmonyOS 都有预先创建 WebView 再复用的池实现；Electron 侧只把同样的思路用于 service-host 窗口。
 
 dimina-kit Electron 容器里对等的实现是 `ServiceHostPool`（`packages/dimina-electron-runtime/src/main/services/service-host-pool/pool.ts`）：pool 在 Electron `ready` 之后空闲时预热出 service-host `BrowserWindow`，在用户点"打开项目"时 `acquire()` 出已 warm 的 `WebContents`，省掉同步 `new BrowserWindow`。pool **默认 OFF，opt-in**（`DIMINA_PREWARM_POOL_SIZE`，见 §6）。devtools 的同名模块只做 package re-export。
 
@@ -22,14 +22,12 @@ dimina-kit Electron 容器里对等的实现是 `ServiceHostPool`（`packages/di
 
 打开一个 dimina mini-program 项目，从 renderer IPC 发起到首屏 paint，至少跨四个阶段：
 
-| 阶段 | 主要消耗 | 类型 | 量级估算 |
-|---|---|---|---|
-| A. 进程/内核 | `BrowserWindow` / `WebContentsView` / `<webview>` 创建（renderer process fork、IPC 通道建立） | 系统调用 | 60–150 ms（冷） |
-| B. preload 注入 | preload bundle 在每个 frame attach 时同步执行（service-host preload / render-host preload） | JS parse + execute | 30–80 ms |
-| C. 页面骨架 | 加载 service.html / pageFrame.html、CSS 解析、runtime 初始化 | 网络/磁盘 + parse | 50–120 ms |
-| D. service 业务 | service-host boot：`injectLogicBundle` → `loadResource` → 创建 App + Page 实例 | 业务路径 | 100–400 ms（取决于 app） |
-
-> 上面是按 Electron 43 在 M1 / 16GB 上的典型量级估算，不是 e2e 实测。
+| 阶段 | 主要消耗 | 类型 |
+|---|---|---|
+| A. 进程/内核 | `BrowserWindow` / `WebContentsView` / `<webview>` 创建（renderer process fork、IPC 通道建立） | 系统调用 |
+| B. preload 注入 | preload bundle 在每个 frame attach 时同步执行（service-host preload / render-host preload） | JS parse + execute |
+| C. 页面骨架 | 加载 service.html / pageFrame.html、CSS 解析、runtime 初始化 | 网络/磁盘 + parse |
+| D. service 业务 | service-host boot：`injectLogicBundle` → `loadResource` → 创建 App + Page 实例 | 业务路径 |
 
 ### 1.2 具体路径
 
@@ -48,7 +46,7 @@ renderer SPAWN IPC
 
 > **partition 注意**：非池（default）路径 `createServiceHostWindow` 用 `miniappPartition(opts.appId)` 把 service-host 钉到**该项目的** per-project `persist:miniapp-<key>` partition（与该项目的 simulator/render 共享存储、跨项目隔离）。只有**池的默认 spec**（`serviceHostSpec()` 不带 appId）才回落共享 `persist:simulator`（= `SERVICE_HOST_PARTITION`）——池在项目未知时预热，故意不做隔离，见 [§3.4](#34-reset-契约release--ready)。
 
-这条路径里 `createServiceHostWindow` 是同步 `new BrowserWindow`，每次开项目都跑一次。**这是预热最直接的目标**：window 启动 + preload (`dist/service-host/preload.cjs`) 注入 + service.html load 全部可以摊到空闲期。
+这条路径里 `createServiceHostWindow` 会同步 `new BrowserWindow`。pool 把造窗和第一次 `about:blank` 导航移到空闲期；真正 acquire 后仍要导航到 `service.html?bridgeId=…`，service-host preload 也会在这次真实导航重新执行。
 
 #### 1.2.2 dmb:page:open 多页打开
 
@@ -62,17 +60,13 @@ renderer SPAWN IPC
 | `dimina-resource-server` | `bridge-router.ts`（`startDiminaResourceServer`） 每个 fallback appSession 起一个 fastify 端口 | 不在固定开销里，跟 app 强相关 |
 | 每页 render-host `<webview>` | DeviceShell 渲染（`device-shell.tsx`） | 主进程 `will-attach-webview` 钉到该项目 partition 的同一 frame tree；不在 pool 影响域（见 §5） |
 
-### 1.4 目标 / 非目标
+### 1.4 范围
 
-> 未验证：本节的 `< 10 ms` 目标和本文其它耗时/RSS 数值没有随当前提交附带的
-> benchmark 工件；它们是容量估算，不是本轮实测结果。
+池只把 service-host 的造窗和空白页 ready 移到打开项目之前：`acquire` 有 ready entry
+时直接返回已经完成 `about:blank` `did-finish-load` 的窗口。真实 `service.html` 导航、
+preload 初始化和业务 boot 仍发生在 acquire 之后。池大小由宿主显式配置，默认关闭。
 
-**目标**：
-
-- 把 §1.1 表里的 A + B 阶段在用户感知到的"打开项目"那一刻**降到 < 10 ms**（直接 `acquire` 已 ready 的 wc）。
-- 给下游 host 一个可选项：用户机器是高端机的 host 可以把池开到 ≥ 2，启动延迟接近 0。
-
-**非目标**：
+不在本机制范围内的内容：
 
 - 不优化 §1.1 D — 那是 app 自己的代码量，不在容器责任内（预热在物理上也省不掉 service 业务初始化）。
 - 不做"跨进程 service worker 缓存"或 page-frame 资源 prefetch。
@@ -80,30 +74,26 @@ renderer SPAWN IPC
 
 ## 2. Native 端的参考实现
 
-> 未验证：本 worktree 的 `dimina/` submodule 未初始化，无法重新读取本文引用的
-> Android / iOS / HarmonyOS 上游文件。以下跨端参数与行号保留，但没有用当前
-> submodule HEAD `8c79345c7b27cbf00e6e3c684ddcba093e419b00` 复核。
-
-三端在工程模型上高度一致：都是"预创建空 webview → acquire 命中 → release 前清理 → 超容量销毁 → 内存压力收缩"。下面三张表逐端记录关键参数与设计取舍，便于跟 §3 的 Electron 实现对照。
+三端都提供预创建、acquire 和 release 复用，但容量、补池时机和内存压力处理并不相同。下面三张表逐端记录当前参数，便于跟 §3 的 Electron 实现对照。
 
 ### 2.1 iOS：`DMPWebViewPool.swift`
 
 来源：`dimina/iOS/dimina/DiminaKit/Render/DMPWebViewPool.swift`
 
-| 属性 | 取值 | 行号 |
-|---|---|---|
-| 单例 | `DMPWebViewPool.shared` | :17 |
-| 池容量 | `maxPoolSize = 4`, `minPoolSize = 1` | :21-22 |
-| 共享 `WKProcessPool` | `static let sharedProcessPool` — 所有 WebView 共享 cookie 进程 | :25-31 |
-| 预热触发 | `init()` 里 `Task { await preloadWebViews() }`，首次启动同步预创建 1 个 | :34-40 |
-| 复用进入前清理 | `prepareForReuse()`：removeAllUserScripts、removeAllScriptMessageHandlers、`loadHTMLString` 到空 HTML、清除 `DiminaRenderBridge`/`DiminaServiceBridge` 全局符号 | :407-488 |
-| 释放路径 | `releaseWebView(wc)` 异步置 `.reseting` → 100ms delay → 检查池容量，超容量直接销毁 | :139-185 |
-| 内存预警 | `applicationDidReceiveMemoryWarning` → 只保留 `minPoolSize` 个可用，多出全部销毁 | :373-391 |
-| 前/后台 | `applicationWillEnterForeground` → `warmUp()` 重新填充；后台不主动清理 | :367-371 |
+| 属性 | 取值 |
+|---|---|
+| 单例 | `DMPWebViewPool.shared` |
+| 池容量 | `maxPoolSize = 4`, `minPoolSize = 1` |
+| 共享 `WKProcessPool` | `static let sharedProcessPool`；创建和优化路径都把它交给 WebView configuration |
+| 预热触发 | 首次 `acquireWebView` 后异步补足 `minPoolSize`；进入前台时 `warmUp()` |
+| 复用进入前清理 | `prepareForReuse()`：removeAllUserScripts、removeAllScriptMessageHandlers、`loadHTMLString` 到空 HTML、清除 `DiminaRenderBridge`/`DiminaServiceBridge` 全局符号 |
+| 释放路径 | `releaseWebView(wc)` 异步置 `.reseting` → 100ms delay → 检查池容量，超容量直接销毁 |
+| 内存预警 | `applicationDidReceiveMemoryWarning` → 只保留 `minPoolSize` 个可用，多出全部销毁 |
+| 前/后台 | `applicationWillEnterForeground` → `warmUp()` 重新填充；后台不主动清理 |
 
 **关键工程点**：
 
-1. **共享 WKProcessPool** — iOS 上多个 `WKWebView` 共享一个进程池，cookies / NSURLCache 一份。Electron 没有完全对应物，但 `session.fromPartition('persist:simulator')` 已达成同等"共享 cookie + cache"语义。
+1. **共享 WKProcessPool** — pool 创建和 optimizer 路径都把 `DMPWebViewPool.sharedProcessPool` 放进 WebView configuration。Electron 侧对应的复用边界是 `session.fromPartition('persist:simulator')`。
 2. **预热和复用都在主线程**（assert `Thread.isMainThread`）— webview 创建本身是 UI thread bound，Electron 一样（main process 同步）。
 3. **释放后 navigate 到 inline 空 HTML** 比 navigate to `about:blank` 多走一步：iOS 在 `<script>` 里显式 `delete window.DiminaRenderBridge / DiminaServiceBridge`。dimina-kit 没照搬这一步 — 它只导航回 `about:blank`，靠跨 document 导航销毁整个 JS realm 来达成同等隔离（见 §3.4）。
 
@@ -111,18 +101,18 @@ renderer SPAWN IPC
 
 来源：`dimina/android/dimina/src/main/kotlin/com/didi/dimina/ui/view/WebViewCacheManager.kt`
 
-| 属性 | 取值 | 行号 |
-|---|---|---|
-| 单例 | `object WebViewCacheManager` | :56 |
-| 最大缓存 | `MAX_CACHE_SIZE = 3` | :58 |
-| 预创建 | `PRE_CREATE_SIZE = 1` | :59 |
-| 过期 | `CACHE_EXPIRE_TIME = 5 * 60 * 1000L`（5 min） | :60 |
-| 三池模型 | `activeWebViews`（in-use）、`idleWebViews`（LRU 队列）、`preCreatedWebViews`（预热队列） | :63-69 |
-| 预热触发 | `initialize(context)` 注册 `ComponentCallbacks2` + 启动定时清理（每 60s） + 同步预创建 1 个 | :105-123 |
-| 复用进入前清理 | `resetWebView`：`stopLoading()` + `clearHistory()` + `clearCache(true)` + 替换 `WebViewClient` | :267-284 |
-| 释放清理 | `cleanWebView`：`stopLoading()` + `loadUrl("about:blank")` + `clearHistory()` + `removeJavascriptInterface("DiminaRenderBridge")` + `removeJavascriptInterface("DiminaNativeComponentBridge")` | :289-298 |
-| 内存压力分级 | `onTrimMemory()` 4 级响应：UI_HIDDEN/BACKGROUND → clearIdle；MODERATE → clearExpiredAndIdle/2；COMPLETE → clearAllNonActive | :403-420 |
-| 后台清理 | `TRIM_MEMORY_UI_HIDDEN` 触发 `clearIdleWebViews()` | :406-409 |
+| 属性 | 取值 |
+|---|---|
+| 单例 | `object WebViewCacheManager` |
+| 最大缓存 | `MAX_CACHE_SIZE = 3` |
+| 预创建 | `PRE_CREATE_SIZE = 1` |
+| 过期 | `CACHE_EXPIRE_TIME = 5 * 60 * 1000L`（5 min） |
+| 三池模型 | `activeWebViews`（in-use）、`idleWebViews`（LRU 队列）、`preCreatedWebViews`（预热队列） |
+| 预热触发 | `initialize(context)` 注册 `ComponentCallbacks2` + 启动定时清理（每 60s） + 预创建 1 个 |
+| 复用进入前清理 | `resetWebView`：`stopLoading()` + `clearHistory()` + `clearCache(true)` + 替换 `WebViewClient` |
+| 释放清理 | `cleanWebView`：`stopLoading()` + `loadUrl("about:blank")` + `clearHistory()` + 删除两个 JavascriptInterface |
+| 内存压力分级 | `onTrimMemory()` 按系统等级清理 idle / expired / non-active WebView |
+| 后台清理 | `TRIM_MEMORY_UI_HIDDEN` 触发 `clearIdleWebViews()` |
 
 **关键工程点**：
 
@@ -134,21 +124,21 @@ renderer SPAWN IPC
 
 来源：`dimina/harmony/dimina/src/main/ets/HybridContainer/DMPWebViewCachePool.ets`
 
-| 属性 | 取值 | 行号 |
-|---|---|---|
-| 类 | `class DMPWebViewCachePool`（owned by `DMPApp` 实例，不是全局单例） | :14 |
-| 三池模型 | `generalCachePool: Array`（通用空 wc）、`lightCachePool: Map<pagePath,...>`（轻量缓存）、`fullCachePool: Map<pagePath,...>`（带页面已加载的预测命中缓存） | :17-21 |
-| 初始大小 | `cacheCount = 1` | :23 |
-| 扩容增量 | `increaseCount = 2`（每次扩 2 个） | :25 |
-| 预热触发 | `DMPApp` 启动序列 `init()` 阶段调用 `webViewCachePool.init()` | `DMPApp.ets:416-418` |
-| 命中策略 | `getWebViewNodeController(pagePath, query)`：先查 fullCachePool（带 query 比对），再 pop generalCachePool；池空则同步扩容（`preLoadWebView`） + 1.5s setTimeout 再补 `increaseCount - 1` 个 | :37-77 |
-| 全量预加载 | `preLoadFullWebView(pagePath, query)`：连页面 resource 都先加载好，等用户真打开就直接命中 | :91-111 |
+| 属性 | 取值 |
+|---|---|
+| 类 | `class DMPWebViewCachePool`（owned by `DMPApp` 实例，不是全局单例） |
+| 三池模型 | `generalCachePool: Array`（通用空 wc）、`lightCachePool: Map<pagePath,...>`（轻量缓存）、`fullCachePool: Map<pagePath,...>`（带页面已加载的预测命中缓存） |
+| 初始大小 | `cacheCount = 1` |
+| 扩容增量 | `increaseCount = 2`（每次扩 2 个） |
+| 预热触发 | `DMPApp` 启动序列调用 `webViewCachePool.init()` |
+| 命中策略 | `getWebViewNodeController(pagePath, query)`：先查 fullCachePool（带 query 比对），再 pop generalCachePool；池空则同步补一个，1.5s 后再补 `increaseCount - 1` 个 |
+| 全量预加载 | `preLoadFullWebView(pagePath, query)`：连页面 resource 都提前加载 |
 
 **关键工程点 / 跟 iOS Android 的差异**：
 
-1. **owned by app instance**：Harmony 没用全局单例，而是每个 mini-program app 一个 pool — 因为 Harmony container model 里同时只有一个 mini-program 实例。dimina-kit 同理（一次只开一个项目）。
+1. **owned by app instance**：Harmony 没用全局单例；`DMPApp` 持有并初始化自己的 pool。
 2. **`fullCachePool` — 预测命中**：用户即将打开的 page 路径如果提前知道（比如 tab pages），可以提前 load resource 进 pool。这是三端里最激进的 — iOS/Android 都只预创建空 wc。dimina-kit service-host 启动时不知道 appId / pagePath，未做预测命中。
-3. **没有内存压力监听** — Harmony 设备一般内存充裕，这块缺失是合理的；Electron 实现也省略。
+3. **没有内存压力监听** — 当前 Harmony pool 文件未注册此类 listener；Electron 实现也没有对应 listener。
 
 ### 2.4 三端 pool 对照表
 
@@ -156,7 +146,7 @@ renderer SPAWN IPC
 |---|---|---|---|---|
 | 池容量上限 | 4 | 3 | 无显式 max（动态扩容） | 默认 3，硬上限 4（`HARD_MAX_POOL_SIZE`） |
 | 预热数 | 1（min） | 1（preCreate） | 1 | `DIMINA_PREWARM_POOL_SIZE`（opt-in，默认 0=OFF） |
-| 预热时机 | `DMPWebViewPool.init()` (singleton init) | `WebViewCacheManager.initialize()` (DiminaWebView 首次实例化时) | `DMPApp.launch()` 流程内 | install 后延迟 500ms 才 `pool.init`（不抢冷启动） |
+| 预热时机 | 首次 acquire 后异步补池；进入前台 `warmUp()` | `WebViewCacheManager.initialize()` | `DMPApp` 启动流程内 | install 后延迟 500ms 才 `pool.init` |
 | 复用前重置 | `prepareForReuse`：removeAllUserScripts + loadHTMLString 空 HTML + delete 全局桥 | `resetWebView`：stopLoading + clearHistory + clearCache + 新 WebViewClient | 文件中未见显式 reset — 通用池里的 wc 由 `DMPWebViewNodeController.initWeb` 重新初始化 | navigate 回 `about:blank` 销毁 JS realm；共享 session 下不清 storage（见 §3.4） |
 | 内存压力响应 | `applicationDidReceiveMemoryWarning` 收缩到 min | `ComponentCallbacks2.onTrimMemory` 4 级响应 | 无显式 | 无内存压力监听；崩溃恢复订阅 `render-process-gone` |
 | 多页预测命中 | 无 | 无 | `fullCachePool` 按 pagePath + query 命中 | 无（多页通过 PAGE_OPEN 复用 simulator wc，见 §1.2.3） |
@@ -169,7 +159,7 @@ renderer SPAWN IPC
 
 ### 3.1 不变量
 
-- **acquire 路径 < 10 ms**：有 ready entry 时直接 pop（`acquire` 同步命中 ready 分支）；用户点"打开项目"瞬间拿到的 `WebContents` 已 `did-finish-load`。
+- **ready acquire 不再造窗**：有 ready entry 时直接 pop（`acquire` 同步命中 ready 分支），返回的 `WebContents` 已完成 `did-finish-load`。
 - **不抢冷启动**：install 后 `setTimeout(…, 500)` 才 `pool.init` — workbench 主窗口先就位，避免 warm 与主窗 firstWindow 竞争。
 - **降级安全**：池空 / spec 不匹配 → 同步 fallback `new BrowserWindow`（`acquire` 末尾），返回 `entryId === null`，**绝不阻塞 acquire**。
 - **状态泄漏零容忍**：每次 release → reset navigate 回 `about:blank` 销毁旧 JS realm；带独立 session 的 spec 还会清 storage（见 §3.4）。
@@ -340,20 +330,9 @@ release(entryId, win):  // pool.ts
 
 ### 4.1 内存占用
 
-| 状态 | 估算 RSS / wc | 备注 |
-|---|---|---|
-| 刚 `new BrowserWindow({show:false})`，未 loadURL | 30–50 MB | 进程已 fork，V8 isolate 初始化 |
-| `loadURL('about:blank')` 完成 | 50–80 MB | preload 已注入并执行 |
-| `loadURL(spawnUrl)` 完成（service.html + service.js） | 100–150 MB | dimina service runtime 完整加载 |
-| 复用前 reset / `loadURL('about:blank')` | 60–100 MB | V8 内部 retain |
-
-> 量级估算，不是 e2e 实测；准确值取决于 service.js bundle 大小（约 800KB minified）。
-
-**取舍**：
-
-- `poolSize=1` 在 8 GB 机器上代价 < 2% — 完全可接受。
-- `poolSize=3` 在 8 GB 机器上代价约 5%，仍可接受；硬上限 4（`HARD_MAX_POOL_SIZE`），> 4 的请求被 clamp。
-- **预热时机要避开冷启动峰值** — Electron 启动头 500 ms 内还在跑 main-window v8 init，加 pool 会把 cold start P95 拉长一截。所以 warm-up 延迟 500ms（§3.1）。
+每个 ready entry 都持有一个隐藏的 `BrowserWindow` 和 renderer 进程资源，因此 pool
+默认关闭，配置值被 clamp 到硬上限 4。warm-up 在 install 后延迟 500ms，避免与主窗口
+初始化同时造窗；定时器在 teardown 时取消。
 
 ### 4.2 重置完备性
 

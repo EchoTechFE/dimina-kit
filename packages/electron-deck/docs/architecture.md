@@ -201,7 +201,7 @@ reload**。
 > DOM 库管不到。
 
 - 文件：`src/main/compositor.ts`（接口 `Compositor`；reorder/fractional key（含 `keyBefore`）；
-  前缀保序 commit 均在此）。host 观察到的 Electron z 语义（spike 实证）记在 `compositor.ts` 的头注释。
+  前缀保序 commit 均在此）。host 调用序列由 `compositor.test.ts` 覆盖。
 
 ### 2.4 ControlBus —— IPC + trust 薄 facade
 **职责**：三个动词的薄门面，**自己不加任何新 gating**：
@@ -250,11 +250,11 @@ API 形态（见第 4 节）：`runtime.view(...)` → `DeckViewHandle`，带 `p
 
 | # | 决定 | 理由 |
 |---|---|---|
-| 1 | **混合合成需要一个主进程原生 z 层（Compositor）** | Electron 物理约束：原生 `WebContentsView` 永远盖在 DOM 之上、原生 view 之间不能与 DOM z 穿插。所以「同一区域多块原生 view 谁前谁后」「浮层浮在原生 DevTools 上」只能在主进程排——dockview 这类纯 DOM 库结构上做不到。Compositor 就是这层（基于 spike 实证的 Electron z 语义，见 `compositor.ts` 头注释）。 |
+| 1 | **混合合成需要一个主进程原生 z 层（Compositor）** | 原生 `WebContentsView` 与 renderer DOM 不在同一棵布局树里；同一区域多个 native view 的 child order 只能由主进程控制。Compositor 负责这层顺序，调用序列由 `compositor.test.ts` 覆盖。 |
 | 2 | **权威分层** | **窗口内 DOM 布局**（split/grid/tab）真相源在 **renderer 控制层**（可以直接用真 dockview / CSS）；**跨窗口 + 原生 view 编排 + 生命周期** 真相源在**主进程**。两边各自是各自领域的唯一权威，不互相镜像状态。 |
 | 3 | **split 分工裁决：host 主进程零布局原语** | DOM 分栏整套交给 renderer。框架只做两件事：① 原生 view 经 view-anchor 跟随任意 slot 的几何；② Compositor 管同区多原生 view 的 z。所以「支持 split」对框架而言**就等于**「拖 splitter 时原生 view 跟随」——这正是 view-anchor 的本职，框架不需要任何 split/grid 原语。与 dockview **分工不替代**（view-anchor = dockview `OverlayRenderContainer` 的跨进程版，见 `view-anchor/src/types.ts`）。 |
-| 4 | **placement ≠ lifetime** | 「view 显示在哪个窗口」（placement）与「归哪个 scope 管寿命」（lifetime）**正交**。`moveTo` 默认只移**显示**（Compositor 跨窗 mount），寿命不动；要让 view 比原 session 活得久，必须显式 `rehomeTo` 才走 `Scope.adopt` 迁寿命。混淆这两者会导致「搬个面板顺手改了它的释放归属」之类的 bug。 |
-| 5 | **popout = live-migrate** | 跨窗口移动**同一块** `WebContentsView` **不重载、不丢 CDP**（结论出自真机 spike：曾用 `.repro/electron-deck-spikes/gate2.js` 验证跨双窗口迁移含 setInterval tick + 嵌套 webview guest、`gate2b.js` 钉死 setInterval 连续性 + 关窗后 view 寿命，但 `.repro/` 被 `.gitignore` 排除，仓库内当前没有这两个脚本可复现；仓库内现存的相关物是 `packages/devtools/spike/popout/`——`harness.mjs`/`host.html`/`view.html`）。底层 = `Scope.adopt`（迁寿命）+ Compositor 跨窗 mount（迁显示），全程**原子单父**（view 任一时刻只挂在一个父片段上）。 |
+| 4 | **placement ≠ lifetime** | 「view 显示在哪个窗口」（placement）与「归哪个 scope 管寿命」（lifetime）**正交**。`moveTo` 默认只移**显示**（Compositor 跨窗 mount），寿命不动；要让 view 比原 session 活得久，必须显式调用 `moveTo(dest, { rehome: true })` 才走 `Scope.adopt` 迁寿命。混淆这两者会导致「搬个面板顺手改了它的释放归属」之类的 bug。 |
+| 5 | **popout = live-migrate** | `moveTo` 在两个 Compositor 之间迁移现有 view 的 token 和同一个 native view 引用，不创建新的 `WebContentsView`；`rehome:true` 再用 `Scope.adopt` 迁寿命。迁移状态机确保 native view 任一时刻只挂在一个窗口上，dest 挂载失败时回滚到 src。 |
 | 6 | **host-facing 干净 API** | 对 host 暴露的是领域中立的少量动词：`runtime.windows.create → Window`、`runtime.view().placeIn / moveTo`、`window.onClose`、`runtime.grants.issue`、以及受限的 `window.compositor`（reorder/commit/batch）。目标是「最简 devtools ~30 行」（见 `docs/layout-architecture-demo.md`）。 |
 
 ---

@@ -77,9 +77,4 @@ workbench listener 只在 WCV 存活期间注册，并在 `detachWorkbench` 中�
 
 ## 平台限制
 
-应用内显式切换由 `nativeTheme.themeSource` 驱动，代码路径在各平台相同。
-
-> 未验证：Electron issue
-> [#48736](https://github.com/electron/electron/issues/48736) 所述的部分 Linux
-> compositor 系统主题跟随问题是否仍存在。仓库代码只能确认应用内切换路径，不能证明
-> 当前 Electron/Chromium 上游状态。
+应用内显式切换由 `nativeTheme.themeSource` 驱动，代码路径在各平台相同。系统主题跟随的最终表现仍受 Electron 和平台 compositor 影响；仓库只保证上述应用内同步路径。

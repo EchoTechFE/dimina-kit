@@ -93,10 +93,9 @@ export interface ViewHandle {
    *
    * On success the compositor token moves to `dest` (later `applyPlacement`
    * drives the dest host). With `rehome:true`, the viewScope is re-parented under
-   * dest's `windowScope` (lifetime follows display). moveTo 迁移显示而非寿命: moveTo moves DISPLAY
-   * (and, with rehome, LIFETIME) — it does NOT carry capability grants; the dest
-   * window's own control layer issues its own grant. Terminal (Promise<void>, not
-   * chainable).
+   * dest's `windowScope` (lifetime follows display). `moveTo` never carries
+   * capability grants; the dest window's own control layer issues its own grant.
+   * Terminal (Promise<void>, not chainable).
    */
   moveTo(dest: PlaceTarget, opts: { zone?: number; rehome?: boolean }): Promise<void>
   /** Tear down this placement: run the viewScope's A4 owns (sink-disable then

@@ -56,9 +56,9 @@ handle + 工厂 + `placeIn` 接 Compositor（mount→commit）+ Scope（viewScop
 
 ### moveTo 跨窗迁移
 
-状态机 + migrationLock + `Scope.adopt`：per-view 异步互斥锁（`Map<viewId,Promise>` 链）；状态机 `AT_SRC→DETACHED→AT_DEST|ROLLBACK→AT_SRC|CLOSED` 消费 `CommitError`，回滚动作恒为「src 重挂」（与 dest 失败种类解耦）；`rehome:true` 经 `srcWindowScope.adopt(viewScope,destWindowScope)` 移寿命（默认仅移显示）。每个临界区只持一把 per-view 锁、不取第二把，故无死锁。
+状态机 + migrationLock + `Scope.adopt`：per-view 异步互斥锁（`Map<viewId,Promise>` 链）；状态机 `AT_SRC→DETACHED→AT_DEST|ROLLBACK→AT_SRC|CLOSED` 消费 `CommitError`，回滚动作恒为「src 重挂」（与 dest 失败种类解耦）；`rehome:true` 以 viewScope 当前实际的 lifetime owner 为 donor，调用 `adopt(viewScope, destWindowScope)` 移寿命（默认仅移显示）。每个临界区只持一把 per-view 锁、不取第二把，故无死锁。
 
-**迁的是显示，不是授权。** grant 按 control-wc 的 `senderId` 键（`Grant.senderId`，`src/host/capability.ts:22-34`），存在 capability registry 自己的表里，与 scope 的所有权图无关；`Scope.adopt` 只移 viewScope 的资源所有权，不碰 grant。dest 窗有自己的 control shell、发自己的 grant（popout 建新窗自带 control），所以 `moveTo` 不需要搬 grant，src 窗关闭时 `capability.revokeBySenderId(srcControlWc.id)`（`src/internal/deck-app.ts:622`）撤掉 src 的 grant 是正确且互不影响的。`adopt` 的 fence-wait 在 src 侧 reject 时，要当作「src 走 CLOSED / AT_DEST-without-rehome」处理，不能让它变成未捕获异常。
+**迁的是显示，不是授权。** grant 按 control-wc 的 `senderId` 键（`Grant.senderId`，`src/host/capability.ts:22-34`），存在 capability registry 自己的表里，与 scope 的所有权图无关；`Scope.adopt` 只移 viewScope 的资源所有权，不碰 grant。dest 窗有自己的 control shell、发自己的 grant（popout 建新窗自带 control），所以 `moveTo` 不需要搬 grant，src 窗关闭时 `capability.revokeBySenderId(srcControlWc.id)`（`src/internal/deck-app.ts:622`）撤掉 src 的 grant 是正确且互不影响的。若 `adopt` 失败，`moveTo` 会撤销 dest 挂载并把 native view 恢复到 src；只有 src 恢复也失败时才进入 `CLOSED`。
 
 ### slot-token 握手
 

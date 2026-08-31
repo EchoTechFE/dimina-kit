@@ -171,8 +171,8 @@ onSetup(instance) {
 - `installConsoleInstrumentation`
 - `createAppDataSource`
 - `setupApiCompatHook`
-- `createWxmlSource`（已废弃，计划在 0.5.0 删除）
-- `createMiniappSnapshotHost`（已废弃，计划在 0.5.0 删除）
+- `createWxmlSource`（兼容导出，已废弃）
+- `createMiniappSnapshotHost`（兼容导出，已废弃）
 
 这些 API 用于组合 simulator preload，不包含 main window 的 `contextBridge`。native-host 下的面板数据路径见[面板快照文档](./miniapp-snapshot.md)，不要在新代码中依赖两个已废弃的 snapshot/WXML preload 入口。
 

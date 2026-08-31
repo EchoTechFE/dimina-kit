@@ -148,7 +148,7 @@ function routeByDomain(method): 'render' | 'service' {
 - **入站**：render 的响应/事件、simulator 的 Network 事件，都经 `window.DevToolsAPI.dispatchMessage` 推送回前端（大 payload 走 `dispatchMessageChunk` 分片）。
 - **三个后端**：`service-host` 是**隐式默认**（不拦、透传即得）；`render`（elements-forward）认领 DOM / CSS / Overlay / DOMSnapshot / DOMDebugger；`simulator`（network-forward）认领 Network。
 
-> 这两条路径是 `installElementsForward` 与 `createNetworkForwarder` 两个独立服务，由 view-manager 各自接线，`routeByDomain` 等小工具各自内联。把它们收敛成单一 owner（绑在 devtoolsWc 上、pool-swap 重指向时统一 rebind、各后端按 domain 注册成 provider）的收益见本节末「为什么要收敛成这层」，但当前两服务并存已满足需求。
+> 这两条路径是 `installElementsForward` 与 `createNetworkForwarder` 两个独立服务，由 view-manager 各自接线；出站命令统一经过 elements-forward 安装的 `routeOutboundCommand` 闸口。
 
 ### 整体 domain 路由表
 
@@ -171,20 +171,10 @@ function routeByDomain(method): 'render' | 'service' {
   <b style={{ color: 'hsl(0 75% 70%)' }}>Emulation 红线是结构性保证</b>：<code>routeByDomain</code> 的默认分支是「透传给 service-host」，只有它显式认领的 render / Network domain 才被偷走。Emulation 不在认领名单里 → 前端发来的 Emulation 命令永远落在 service-host 路径，<b>绝不</b>触及 render guest 的 <code>setSafeAreaInsetsOverride</code>。<b>安全是默认值，不靠"记得加判断"。</b>
 </div>
 
-### 为什么要收敛成这层（vs 维持两套各自打补丁）
-
-1. **消双 hook 冲突（已按此原则落地）**：`sendMessageToBackend` 只有 elements-forward 安装的**唯一**包装器；Network 的 `getResponseBody`/`getRequestPostData` 拦截没有另起 monkey-patch，而是并入同一闸口的路由表（`routeOutboundCommand`），主进程 drain 时按 route 标签分派给 render guest 或 network 预取缓存。两处各自 monkey-patch 会互相覆盖——唯一包装器是安全的结构保证。
-2. **去重**：chunk / dispatch / 轮询这套样板，现在 network-forward 和 elements-forward **各写了一份**，收敛后只需一份。
-3. **单 lifecycle owner**：pool-swap 重指向、frontend re-ready 时统一 rebind。当前各服务自管：`installElementsForward` 持续监听 devtoolsWc 的 `dom-ready`，每次前端（重）加载都幂等重装 hook（前端重载 / pool-swap 重开 DevTools 会清空 `globalThis.__diminaElementsHookInstalled`，单次 `once` 会让 Elements 回落到 service-host DOM）；network-forward 经 `setDevtoolsHost` 重 arm。收敛的收益是把这套 re-ready 重绑交给一个 owner，而非两个服务各自监听。
-
-> open-in-editor（捕获阶段拦截源链接点击 → `InspectorFrontendHost.openInNewTab`）和 tab 定制（DevTools view registry + `setPreference`）**不碰 embedder 的 CDP 协议边界**（不 hook `sendMessageToBackend`、不 `dispatchMessage`），所以即便将来有了 router 也不并进去（KISS）。
-
----
-
 ## 5. Elements 路由的两个关键约束
 
 - **DOM re-pull 是主机制，不是兜底**：DevTools 前端在 bootstrap 阶段就 eager 发 `DOM.enable` + `DOM.getDocument`（不等用户点 Elements），首拉打到的是 service-host。所以 active render guest 一旦就绪/切换，靠 `DOM.documentUpdated` 触发前端重拉、把 DOM 树换成 render 的真身。
-- **经共享 `CdpSessionBroker` 拿 render guest 会话**（`services/cdp-session/`）：safe-area、elements-forward、render-inspect、network-forward 四个消费者都从同一个 broker `acquire(wc)` 拿 lease，而不是各自维护"复用已 attach 的、没人 attach 我才自己 attach"的记账——这套模式曾各写一份，谁先 detach 就误杀别人正在用的会话（已修复的真实 bug）。broker 是"谁 attach、谁能 detach"的唯一权威：一个 consumer 释放 lease 从不强制物理 detach，只有 broker 自己的顶层 `dispose()`（应用生命周期）才会 detach 它自己 attach 过的会话；外部 detach（真实 Chrome DevTools 抢占）或 wc 销毁会经 `lease.onDetach` 通知，consumer 借此自愈重新 acquire。
+- **经共享 `CdpSessionBroker` 拿 render guest 会话**（`services/cdp-session/`）：safe-area、elements-forward、render-inspect、network-forward、console-forward 的 CDP injection 和 simulator-storage 六个消费者都从同一个 broker `acquire(wc)` 拿 lease。broker 是"谁 attach、谁能 detach"的唯一权威：一个 consumer 释放 lease 从不强制物理 detach，只有 broker 自己的顶层 `dispose()`（应用生命周期）才会 detach 它自己 attach 过的会话；外部 detach（真实 Chrome DevTools 抢占）或 wc 销毁会经 `lease.onDetach` 通知，consumer 借此自愈重新 acquire。`service-console` 监听的是 service-host，使用独立的直接 attach 路径。
 
 ---
 
@@ -194,18 +184,18 @@ function routeByDomain(method): 'render' | 'service' {
 
 <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'system-ui, sans-serif', fontSize: '13px' }}>
   <thead><tr style={{ background: 'hsl(0 0% 14%)' }}>
-    <th style={{ padding: '7px', textAlign: 'left', border: '1px solid hsl(0 0% 28%)' }}>✅ 一期能做</th>
-    <th style={{ padding: '7px', textAlign: 'left', border: '1px solid hsl(0 0% 28%)' }}>🚧 结构性做不到（需策略 B：child-target）</th>
+    <th style={{ padding: '7px', textAlign: 'left', border: '1px solid hsl(0 0% 28%)' }}>当前支持</th>
+    <th style={{ padding: '7px', textAlign: 'left', border: '1px solid hsl(0 0% 28%)' }}>当前结构不支持</th>
   </tr></thead>
   <tbody>
     <tr>
       <td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)', verticalAlign: 'top' }}>看 render DOM 树 / 改不了的只读浏览<br/>matched / computed styles（只读）<br/>选取高亮（inspect element）<br/>Network 请求列表 / headers / timing / Response body / 请求 payload（预取缓存回答）</td>
-      <td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)', verticalAlign: 'top' }}>Console <code>$0</code> 求值（Runtime 落 service，拿不到 render 节点）<br/>Elements → Sources 跳转<br/>Network initiator 栈跳源<br/>样式编辑回写（二期）</td>
+      <td style={{ padding: '8px', border: '1px solid hsl(0 0% 24%)', verticalAlign: 'top' }}>Console <code>$0</code> 求值（Runtime 落 service，拿不到 render 节点）<br/>Elements → Sources 跳转<br/>Network initiator 栈跳源<br/>样式编辑回写</td>
     </tr>
   </tbody>
 </table>
 
-> 策略 B（`Target.attachedToTarget` + 每后端 sessionId）能解锁上述，但要实现完整虚拟后端、复杂度暴涨，故定为 **later，非永久否决**。
+> 支持右栏能力需要 `Target.attachedToTarget`、每后端 `sessionId` 和一套完整的 child-target 虚拟后端；这些都不在当前实现中。
 
 ---
 
@@ -223,7 +213,7 @@ function routeByDomain(method): 'render' | 'service' {
 | 默认 Console + 关 locale infobar | `view-manager`（localStorage `panel-selectedTab`）/ `devtools-tabs.ts` | localStorage + 官方 `InspectorFrontendHost.setPreference('disable-locale-info-bar','true')` |
 
 > **Elements 路由两个要点**：
-> 1. **复用、不抢占**：经共享 `CdpSessionBroker` 拿 render guest 的 debugger session lease（safe-area / render-inspect / network-forward 用同一个 broker 实例），broker 内部决定复用已 attach 的还是自己 attach——consumer 自己从不直接 `attach`/`detach`，也就没人能误杀别人正在用的会话。
+> 1. **复用、不抢占**：safe-area、elements-forward、render-inspect、network-forward、console-forward CDP injection 和 simulator-storage 经同一个 `CdpSessionBroker` 拿 debugger session lease；broker 内部决定复用已 attach 的还是自己 attach。consumer 不直接 `attach`/`detach`，不会释放其他 consumer 正在使用的会话。
 > 2. **实时判陈旧，而非快照**：一条事件/响应是否已过期，是按「它来自的那个 wc **此刻是否仍是 active render guest**」当场判定的（代码里的 `isActiveWcId`），没有用任何 generation 计数快照。好处是 `switchTab` / `navigateBack` 切回旧页后，旧 guest 的 DOM 增量事件能**自动恢复**转发——快照式实现会把它永久 strand 在过期态。
 
 ---

@@ -57,7 +57,9 @@ README 不再复制随实现变化很快的调用链。按问题进入对应文�
 | native simulator、DeviceShell、render-host 与 soft reload | [模拟器渲染架构](./simulator-render-architecture.md) |
 | Chrome DevTools 的 Console、Network、Elements 和 open-in-editor | [DevTools CDP 路由](./devtools-cdp-routing.mdx) |
 | VS Code 工作台启动、文件镜像、保存与扩展 | [编辑器集成](./editor-integration.md) |
+| 工作台在 shipping devtools 里的实际接线 | [VS Code 工作台生产集成](./vscode-workbench-integration.md) |
 | dd/wx 类型如何进入 web tsserver | [VS Code 工作台类型提示](./vscode-workbench-typehints.md) |
+| 刘海 / 灵动岛、`env(safe-area-inset-*)` 与 JS `safeArea` | [iOS 安全区与刘海](./ios-safe-area-and-notch.md) |
 | dock tree、panel 可见性和原生 view bounds | [项目窗口布局](./project-window-layout.md) 与 [Placement 对账](./view-placement-reconciler.md) |
 | 页面栈和 TabBar | [页面栈](./page-stack.md) 与 [TabBar](./tab-bar.md) |
 | service-host 预热和 reset | [服务宿主预热池](./prewarm-webview.md) |

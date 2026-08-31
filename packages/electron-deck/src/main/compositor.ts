@@ -1,13 +1,13 @@
 /**
  * `Compositor` — engine-agnostic z-order planner for a window's native child
- * views (foundation: the spikes in `.repro/electron-deck-spikes/`).
+ * views. The observable host semantics below are covered by compositor tests.
  *
  * It separates INTENT (mount / unmount / reorder a view into a zone, at a
  * relative position) from APPLICATION (`commit()` computes the minimal sequence
  * of host add/remove calls that transforms the host's current child order into
  * the target order).
  *
- * The host's observable z-semantics this planner is built on (from the spikes):
+ * The host's observable z-semantics this planner is built on:
  *   - `addChildView` of an ALREADY-mounted child raises it to the top WITHOUT a
  *     remove first and WITHOUT reloading it.
  *   - `addChildView` of a NEW child appends it to the end (= topmost).

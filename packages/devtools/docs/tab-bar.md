@@ -1,26 +1,23 @@
 # TabBar
 
-> TabBar 是小程序底部（或顶部）的多 tab 切换栏。devtools simulator 只有一套渲染实现——native-host 的 `DeviceShell`（React + 纯函数 reducer）。upstream dimina-fe 的 `MiniApp`（`miniApp.js`，DOM 渲染）是 WeChat 语义的参考实现，本文在对照行为时引用它，但它不是 devtools 的运行时。
+> TabBar 是小程序底部（或顶部）的多 tab 切换栏。devtools simulator 只有一套渲染实现——native-host 的 `DeviceShell`（React + 纯函数 reducer）。
 >
 > 配套文档：Bridge Envelope 协议见 [`./native-bridge-protocol.md`](./native-bridge-protocol.md)；per-tab 子栈语义见 [`./page-stack.md`](./page-stack.md)。
 
-> 未验证：本 worktree 的 `dimina/` submodule 未初始化，也没有本轮微信开发者工具的
-> 观察记录。本文引用的 upstream/微信行为及 iOS/Harmony 对齐结论未重新验证；
-> native-host 的配置、reducer、bridge 与测试入口已按当前 kit 代码核对。
 >
-> 关联代码：`src/shared/bridge-channels.ts`、`packages/dimina-electron-runtime/src/simulator-ui/tab-bar.tsx`、
+> 关联代码：`packages/dimina-electron-runtime/src/shared/bridge-channels.ts`、`packages/dimina-electron-runtime/src/simulator-ui/tab-bar.tsx`、
 > `packages/dimina-electron-runtime/src/simulator-ui/tab-bar-state.ts`、`packages/dimina-electron-runtime/src/main/ipc/bridge-router.ts`
 
 ## 摘要（TL;DR）
 
-devtools 的 TabBar 渲染走 native-host 的 `DeviceShell`：React + 纯函数 reducer（`tab-bar.tsx` / `tab-bar-state.ts`）。配置来自编译期 `app.json` 的 `tabBar` 搬进 `app-config.json`，运行时读出，契约类型是 `TabBarConfig` / `TabBarItem`（定义在 `bridge-channels.ts`）。动态 API（8 个 + `switchTab`）的 errMsg 字符串与 WeChat 规范、与 upstream dimina-fe 保持一致，便于同一份断言复用。switchTab 用 `tabStacks` 保留每个 tab 的完整子栈（对齐 iOS / Harmony，与 WeChat "切走即销毁非顶页" 不同）。动态 API 走 `bridge-router.ts` 的 `handleSimulatorApi` → `TAB_ACTION` → `applyTabAction` → `setState` 这条链路，再回灌 `notifyNavCallback`。自动化测试经 `App.callWxMethod` 进入：native-host 下权威的 `wx.*` 跑在隐藏的 service-host 窗口，由 `automation/handlers/app.ts` 用 `serviceWc.executeJavaScript('wx.<method>(...)')` 驱动（`app.ts` 的 native-host 分支），不存在 simulator top-window 的 `wx` mirror。
+devtools 的 TabBar 渲染走 native-host 的 `DeviceShell`：React + 纯函数 reducer（`tab-bar.tsx` / `tab-bar-state.ts`）。配置来自编译期 `app.json` 的 `tabBar` 搬进 `app-config.json`，运行时读出，契约类型是 `TabBarConfig` / `TabBarItem`（定义在 `bridge-channels.ts`）。`switchTab` 用 `tabStacks` 保留每个 tab 的完整子栈（upstream web 容器会卸掉非 tab 页，差异见 §4.1）。动态 API 走 `bridge-router.ts` 的 `handleSimulatorApi` → `TAB_ACTION` → `applyTabAction` → `setState` 这条链路，再回灌 `notifyNavCallback`。自动化测试经 `App.callWxMethod` 进入：native-host 下权威的 `wx.*` 跑在隐藏的 service-host 窗口，由 `automation/handlers/app.ts` 用 `serviceWc.executeJavaScript('wx.<method>(...)')` 驱动（`app.ts` 的 native-host 分支），不存在 simulator top-window 的 `wx` mirror。
 
 ## 这个文档解决什么
 
 本文梳理 native-host TabBar：
 
 1. 配置如何从源码进到运行时；
-2. React + reducer 的渲染路径，与 WeChat 参考语义的差异；
+2. React + reducer 的渲染路径；
 3. 8 个动态 API + `switchTab` 怎么被驱动、谁负责副作用；
 4. 自动化测试通过哪条 wx 表面进入；
 5. 已知的样式 / 行为对齐 gap。
@@ -51,7 +48,7 @@ devtools 的 TabBar 渲染走 native-host 的 `DeviceShell`：React + 纯函数 
 
 ### 1.2 类型
 
-`TabBarConfig` 与 `TabBarItem` 定义在 `src/shared/bridge-channels.ts`，
+`TabBarConfig` 与 `TabBarItem` 定义在 `packages/dimina-electron-runtime/src/shared/bridge-channels.ts`，
 是 main / simulator / preload 之间唯一的契约：
 
 ```ts
@@ -118,8 +115,7 @@ export interface TabBarConfig {
 
 ## 3. 8 个动态 API
 
-> 一句话：8 个动态 API 的 errMsg 字符串与 WeChat 规范一致，所以同一份 e2e
-> 用例可以跨两条实现跑。
+> 一句话：8 个动态 API 都由 `applyTabAction` 返回 success/fail 结果，再由 bridge-router 回调 service。
 
 ### 3.1 API 总览
 
@@ -180,35 +176,11 @@ wx.setTabBarBadge({…})
 
 ## 4. switchTab 与页面栈交互
 
-> 一句话：WeChat 规范要求 `switchTab` 在跳到 tabBar 页前 pop 掉所有非 tabBar 页；
-> native-host 用 per-tab 子栈把每个 tab 的非顶页保留下来（对齐 iOS / Harmony）。
+> 一句话：native-host 用 per-tab 子栈保留每个 tab 的完整页面栈。
 
-### 4.1 WeChat 参考语义（upstream dimina-fe）
+### 4.1 native-host 的 per-tab 子栈
 
-行为定义在 `miniApp.js:767-893`，参考字段说明在 `miniApp.js:46-50`：
-
-```
-tabBarBridges = Map<pagePath, Bridge>   // 懒加载、持久缓存的 tab 池
-bridgeList = Bridge[]                   // 当前栈：栈顶可见、栈底通常是当前 tab 页
-currentTabPath = string | null
-```
-
-`switchTab` 流程（`miniApp.js:799-885`）：
-
-1. 从栈顶往下 `pop` 并销毁所有非 tabBar 页面（`miniApp.js:810-819`）；
-2. 旧 tab bridge 调 `pageHide`，DOM `display:none`，从 `bridgeList` 拿出来
-   但**仍保留在 `tabBarBridges` 中**（`miniApp.js:822-836`）；
-3. 目标 tab：命中 `tabBarBridges` ⇒ 复用；未命中 ⇒ `createBridge` 懒加载 ⇒
-   存入 `tabBarBridges`（`miniApp.js:839-858`）；
-4. 入栈 + `pageShow` + `_setTabBarVisible(true)` + `_updateTabBarSelection`。
-
-注意：**所有非顶 tab 的非顶页面在 `switchTab` 期间被销毁** —— 用户在 tab A 上
-`navigateTo` 出去的页面，切到 tab B 再切回 A 时已经不在了。
-
-### 4.2 native-host 的 per-tab 子栈
-
-native-host 的 React 实现保留了每个 tab 各自的**完整子栈**，对齐 iOS / Harmony 行为，
-而不是 WeChat 那样切走即销毁非顶页。
+native-host 的 React 实现保留每个 tab 各自的**完整子栈**。
 
 定义在 `packages/dimina-electron-runtime/src/simulator-ui/page-stack-controller.ts`：
 
@@ -224,15 +196,13 @@ export interface ShellState {
 快照进 `tabStacks[currentTabPath]`，再用 `tabStacks[targetTabPath]` 整段恢复 ——
 **包括目标 tab 之前 navigateTo 出去那一摞**。
 
-| 维度 | WeChat 参考（upstream dimina-fe） | native-host |
-| --- | --- | --- |
-| 切走非顶 tab | 复用，但只保留 tab 页 bridge | 整段子栈快照保留 |
-| 切回 tab A | A 是干净的 tab 页 | A 恢复到离开时的栈顶（可能在某个详情页上） |
-| 内存模型 | 一条 `bridgeList` + `tabBarBridges` Map | `stack` + `tabStacks` 字典 |
+这里和 upstream 的 web 容器不一样，排查「同一份小程序在 simulator 和网页里表现不同」时先看这条：
+upstream `MiniApp.switchTab` 会「隐藏 / 卸载非 tab 页面（从栈顶往下，遇到 tab 页停止）」
+（`dimina/fe/packages/container-sdk/src/pages/miniApp/miniApp.ts:1558` 起），
+用户在 tab A 上 `navigateTo` 出去的页面，切到 B 再切回 A 就没了；native-host 会把它整段还回来。
+微信真机的行为本文未验证，不要拿这两条任何一条当微信语义用。
 
-更多页栈语义见 [`./page-stack.md`](./page-stack.md)。
-
-### 4.3 选中态切换
+### 4.2 选中态切换
 
 native-host 在 React 里靠 props 派生选中态（`tab-bar.tsx`），无独立函数：
 选中项文字取 `selectedColor`，未选中取 `color`；图标按 selected 取
@@ -280,23 +250,23 @@ native-host 的 React 实现里 TabBar 是 `device-shell` 的 flex 兄弟节点�
 
 | Gap | 现状 | 影响 |
 | --- | --- | --- |
-| `setTabBarStyle({ position })` | 未实现 `position: 'top'`（WeChat 旧字段） | 真机能切顶部，simulator 不能；本地极少用到 |
+| `setTabBarStyle({ position })` | 未处理 `position` | simulator 运行时不能动态切换顶部/底部 |
 | hover / press 反馈 | React 端没接 `:active` / hover 样式 | 自动化测试无感，肉眼可察 |
-| `custom: true`（自定义 tabBar 组件） | 不支持 | 业务想自渲染 tabBar 时只能改 submodule |
+| `custom: true`（自定义 tabBar 组件） | 不支持 | simulator 不会挂载业务自定义 TabBar |
 | native-host 子栈缓存策略 | 当前无上限，长会话会持有所有 tab 的所有子栈 | 内存压力；如果 simulator 长跑做演示要注意 |
 
 ## 参考索引（grep 友好）
 
 | 主题 | 文件 |
 | --- | --- |
-| `TabBarConfig` / `TabBarItem` 类型 | `src/shared/bridge-channels.ts` |
-| `TabActionPayload` 协议 | `src/shared/bridge-channels.ts` |
+| `TabBarConfig` / `TabBarItem` 类型 | `packages/dimina-electron-runtime/src/shared/bridge-channels.ts` |
+| `TabActionPayload` 协议 | `packages/dimina-electron-runtime/src/shared/bridge-channels.ts` |
 | TabBar React 组件 | `packages/dimina-electron-runtime/src/simulator-ui/tab-bar.tsx` |
 | `applyTabAction` reducer | `packages/dimina-electron-runtime/src/simulator-ui/tab-bar-state.ts` |
 | Main 端分发 TAB_ACTION | `packages/dimina-electron-runtime/src/main/ipc/bridge-router.ts`（`TAB_ACTION_NAMES` / `handleSimulatorApi`） |
 | automator wx 执行（service-host） | `src/main/services/automation/handlers/app.ts`（`App.callWxMethod`） |
 | e2e 用例 | `packages/dimina-electron-runtime/e2e/native-host-device.spec.ts`、`e2e/native-host-wx-method.spec.ts` |
 | reducer 单测 | `packages/dimina-electron-runtime/src/simulator-ui/tab-bar-state.test.ts` |
-| WeChat 参考：`switchTab` 流程 | `dimina/fe/.../miniApp.js:767-893`（upstream，非运行时） |
+| upstream `switchTab`（非运行时，仅作行为对照） | `dimina/fe/packages/container-sdk/src/pages/miniApp/miniApp.ts` |
 
 > Bridge Envelope 协议见 [`native-bridge-protocol.md`](./native-bridge-protocol.md)；per-tab 子栈语义见 [`page-stack.md`](./page-stack.md)。

@@ -37,13 +37,11 @@ devtools 启动时：
 - 用 `index.html?theme=<light|dark>` 传首屏主题；
 - 把外部弹窗和跨源导航交给系统浏览器。
 
-依据：`packages/devtools/src/main/services/views/workbench-view.ts:82-128`、
-`packages/devtools/src/main/services/views/workbench-view.ts:268-281`。
+依据：`packages/devtools/src/main/services/views/workbench-view.ts:82-128`。
 
 ## 构建归属
 
-工作台源码位于 `packages/workbench/`，不是
-`packages/devtools/spike/vscode-workbench/`。devtools 的
+工作台源码位于 `packages/workbench/`。devtools 的
 `build:workbench` 调 `@dimina-kit/workbench` 的 `build:app`，
 并把产物写入 `packages/devtools/dist/vscode-workbench`
 （`packages/devtools/build-workbench.mjs:3-24`、
