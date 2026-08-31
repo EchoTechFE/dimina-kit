@@ -86,17 +86,26 @@ in `status-bar.tsx` so visual + safe-area stay consistent.
 
 `env(safe-area-inset-*)` is UA-defined and cannot be overridden by an author
 stylesheet, so the inset comes from CDP. `src/main/services/safe-area/index.ts`
-attaches `wc.debugger` per render-host `<webview>` guest and sends
-`Emulation.setSafeAreaInsetsOverride`, driven off the simulator WCV's
-**`did-attach-webview`** event — the earliest point each guest `WebContents` is
-available, before the page paints.
+sends `Emulation.setSafeAreaInsetsOverride` per render-host `<webview>` guest,
+driven off the simulator WCV's **`did-attach-webview`** event — the earliest
+point each guest `WebContents` is available, before the page paints.
 
-- Per guest: `guestWc.debugger.attach('1.3')` →
-  `sendCommand('Emulation.setSafeAreaInsetsOverride', { insets })`. `insets`
+- The `wc.debugger` session itself is not owned by safe-area: it goes through
+  the shared `CdpSessionBroker` (`src/main/services/cdp-session/index.ts`),
+  which every CDP consumer in `src/main/services` shares (elements-forward,
+  render-inspect, network-forward, console-forward, simulator-storage and
+  others). `wc.debugger` is a single-owner API, so without the broker any two
+  of them attaching independently would steal/detach each other's session on
+  the same guest. Per guest: `broker.acquire(wc)`
+  returns a `CdpSessionLease`; safe-area calls
+  `lease.send('Emulation.setSafeAreaInsetsOverride', { insets })` on it. `insets`
   carries **all 8 fields** (`top/topMax/right/rightMax/bottom/bottomMax/left/
   leftMax`, base == max) — omitting `*Max` leaves `env(safe-area-max-inset-*)`
-  at 0. Track `Map<WebContents, 'attached'|'detached'>`; clear on guest
-  `destroyed`.
+  at 0. Safe-area tracks each guest's page type in its own `Map<WebContents, boolean>`
+  (`isTabPage`, independent of the lease), and drops it on the guest's
+  `destroyed` event; the lease itself is dropped on the broker's `onDetach`
+  (an external tool stealing the session, or the wc dying) so the next
+  `override` re-acquires instead of sending through a dead lease.
 - **Re-apply triggers:** (1) guest attach (new page in the stack), (2) device
   change (reapply to all attached guests).
 - **Inject only what the webview actually borders**, so the page's own `env()`
@@ -137,21 +146,41 @@ Because the DeviceShell already reserves the bottom, the page's
 `env(safe-area-inset-bottom)` is overridden to 0 on tab pages — the page's own
 `env(bottom)` must not double-count.
 
-## JS `safeArea` parity
+## JS `safeArea` parity — top is real, bottom is not
 
-`simulator-api.ts` computes `safeArea` from `window.__deviceInfo`. The full
-`safeAreaInsets` object is carried end-to-end (`device:change` payload →
-`window.__deviceInfo` AND the service-host host-env) and
-`getWindowInfo` / `getSystemInfoSync` prefer it. Three places must agree:
+There are **three** `safeArea` producers, and business code reaches the two
+that get the bottom edge wrong.
 
-- `simulator-api.ts` (`safeArea` from `window.__deviceInfo`).
-- `service-host/sync-impls/system-info.ts` (`getSystemInfoSync`).
-- `deviceInfoToHostEnv` (`src/shared/bridge-channels.ts`), sent from
-  `main/ipc/simulator.ts` to the service host.
+| Producer | Runs in | `safeArea.bottom` | Reached by business code via |
+| --- | --- | --- | --- |
+| `service-host/sync-impls/system-info.ts:63` | service host | `windowHeight` ❌ | `wx.getSystemInfoSync()` |
+| `simulator/simulator-api.ts:98` (`getWindowInfo`) | simulator | `wb.height` ❌ | `wx.getWindowInfo({success})` over invokeAPI |
+| `simulator/simulator-api.ts:168` (`buildSystemInfo`) | simulator | `wb.height - bottomInset` ✅ | nothing — see below |
 
-JS `safeArea` reports the FULL device insets (canonical device truth); CSS
-`env()` reports only what the webview borders (above) — different consumers, both
-correct.
+`safeArea.bottom` is a coordinate, not an inset: on a device with a home
+indicator it should sit one bottom inset above the window's bottom edge. Only
+`buildSystemInfo` does that, sourcing the inset from `safeAreaInsets.bottom`
+(`simulator-api.ts:149-150`). The other two pin it to the window's full height,
+which reports a zero bottom inset on every device however deep the real one is
+(34 for every notched / Dynamic-Island device in the table above).
+
+The correct one is unreachable from business code. `simulatorApis` keys are
+invokeAPI wire names (`simulator-api-fsm.ts:209`), so a bridged
+`getSystemInfoSync` call would land on `buildSystemInfo` — but business code
+never makes one: `sync-api-patch.ts:63` assigns the service host's own
+`getSystemInfoSync` straight onto the `wx`/`dd`/`qd` globals, so a sync call
+resolves locally and never crosses the bridge. `getWindowInfo` does cross it,
+and lands on the sibling that forgot the inset.
+
+The service host could not compute it anyway: its input is the
+`HostEnvSnapshot` from `deviceInfoToHostEnv` (`src/shared/bridge-channels.ts:178`),
+which forwards only `statusBarHeight` — **`safeAreaInsets` never reaches the
+service host at all**.
+
+`safeArea.top` is correct in all three (`= statusBarHeight`, mirroring
+`safeAreaInsets.top` per the single-source-of-truth note above). CSS
+`env(safe-area-inset-bottom)` is also unaffected — it comes from the CDP
+override, not from these snapshots.
 
 ## Key files
 
