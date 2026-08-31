@@ -475,6 +475,5 @@ BridgeRouter dispose 链路：ctx.registry.add(() => disposeAppSession(...))
 | `docs/file-system.md` | 资源协议、temp-files、difile:// 细节 |
 | `docs/miniapp-snapshot.md` | AppData / WXML 通用 snapshot 框架 |
 | `docs/theme-background-sync.md` | 跨窗口主题色同步 |
-| `docs/project-page-layers.html` | 项目页层级可视图 |
 | [`docs/tab-bar.md`](./tab-bar.md) / [`docs/page-stack.md`](./page-stack.md) | simulator 路由 / TabBar 细节 |
 | [`docs/prewarm-webview.md`](./prewarm-webview.md) | 服务宿主预热池（service 侧 opt-in 已实现；render 侧受 `<webview>` 限制未做） |

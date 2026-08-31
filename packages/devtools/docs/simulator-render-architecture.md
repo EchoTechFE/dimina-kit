@@ -141,8 +141,8 @@ render-host <webview>  the page (one guest per mounted page, z-ordered by visibi
   `zIndex` on visibility. These are LIVE — they are the page WebContents.
 
 This is the **DeviceShell-draws-the-phone** model: the renderer panel draws no
-bezel. It matches `docs/simulator-render-stack.html` (z3 = the WCV = the flex:1
-region; the phone is fixed-size CSS inside it).
+bezel; the WCV fills the `flex:1` region, and the phone remains fixed-size CSS
+inside it.
 
 ## WCV bounds — single authority
 
