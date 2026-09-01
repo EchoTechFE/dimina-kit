@@ -26,29 +26,70 @@ elementHandlers['Element.triggerEvent'] = async (ctx, params) => {
   return {}
 }
 
-elementHandlers['Element.touchstart'] = async (ctx, params) => {
-  const ref = getElementRef(params)
-  await evalInElement(ctx, ref, `
-    if (el) el.dispatchEvent(new TouchEvent('touchstart', { bubbles: true }))
-  `)
-  return {}
+interface TouchPoint {
+  identifier?: number
+  pageX?: number
+  pageY?: number
+  clientX?: number
+  clientY?: number
 }
 
-elementHandlers['Element.touchmove'] = async (ctx, params) => {
-  const ref = getElementRef(params)
-  await evalInElement(ctx, ref, `
-    if (el) el.dispatchEvent(new TouchEvent('touchmove', { bubbles: true }))
-  `)
-  return {}
+/**
+ * Touch events must carry real touch points: the gesture layer reads coordinates
+ * off `touches` / `changedTouches` to decide tap vs. move-cancel, so an event with
+ * empty lists reaches it as a touch that happened nowhere. The protocol lets the
+ * caller omit points entirely (`touchstart()` with no args), in which case the
+ * element's centre — read from live layout, not a fixed offset — stands in for
+ * where a finger would land.
+ */
+function touchHandler(type: 'touchstart' | 'touchmove' | 'touchend'): Handler {
+  // A finished touch is no longer among the active `touches`, only in `changedTouches`.
+  const fallbackTouches = type === 'touchend' ? '[]' : '[{}]'
+  return async (ctx, params) => {
+    const ref = getElementRef(params)
+    const touches = (params.touches as TouchPoint[] | undefined) ?? null
+    // The protocol spells it `changeTouches`; the DOM event field is `changedTouches`.
+    const changed = (params.changeTouches as TouchPoint[] | undefined) ?? null
+    await evalInElement(ctx, ref, `
+      if (!el) throw new Error('Element not found')
+      const rect = el.getBoundingClientRect()
+      const centreX = rect.left + rect.width / 2
+      const centreY = rect.top + rect.height / 2
+      const make = (p, i) => {
+        const clientX = p.clientX != null ? p.clientX : (p.pageX != null ? p.pageX - scrollX : centreX)
+        const clientY = p.clientY != null ? p.clientY : (p.pageY != null ? p.pageY - scrollY : centreY)
+        return new Touch({
+          identifier: p.identifier != null ? p.identifier : i,
+          target: el,
+          clientX,
+          clientY,
+          pageX: p.pageX != null ? p.pageX : clientX + scrollX,
+          pageY: p.pageY != null ? p.pageY : clientY + scrollY,
+          screenX: clientX,
+          screenY: clientY,
+          force: 1,
+        })
+      }
+      const raw = ${JSON.stringify(touches)}
+      const rawChanged = ${JSON.stringify(changed)}
+      const active = (raw || ${fallbackTouches}).map(make)
+      const changedList = (rawChanged || raw || [{}]).map(make)
+      el.dispatchEvent(new TouchEvent('${type}', {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        touches: active,
+        targetTouches: active,
+        changedTouches: changedList,
+      }))
+    `)
+    return {}
+  }
 }
 
-elementHandlers['Element.touchend'] = async (ctx, params) => {
-  const ref = getElementRef(params)
-  await evalInElement(ctx, ref, `
-    if (el) el.dispatchEvent(new TouchEvent('touchend', { bubbles: true }))
-  `)
-  return {}
-}
+elementHandlers['Element.touchstart'] = touchHandler('touchstart')
+elementHandlers['Element.touchmove'] = touchHandler('touchmove')
+elementHandlers['Element.touchend'] = touchHandler('touchend')
 
 elementHandlers['Element.getDOMProperties'] = async (ctx, params) => {
   const ref = getElementRef(params)

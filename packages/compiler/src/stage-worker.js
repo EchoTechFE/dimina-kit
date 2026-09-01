@@ -29,29 +29,41 @@ for (const level of ['log', 'warn', 'error']) {
   }
 }
 
-// Load the host's wasm toolchain exactly once. Memoized on the setup URL; a failed
-// load clears the cache so a later message can retry instead of replaying the reject.
+// Load the host's wasm toolchain exactly once.
+//
+// A worker is BOUND to the first setup URL it is given, and a message carrying a
+// different one is rejected. The hooks are installed as an import side effect, and ESM
+// caches a module by URL: re-importing one that already ran does not run it again. So a
+// worker cannot honestly switch toolchains — going A -> B -> A would leave B's hooks
+// installed while the worker reports A as ready, and two overlapping imports would leave
+// whichever finished last installed regardless of which was asked for. A caller that
+// needs a different toolchain needs a different worker.
+//
+// A failed load clears the memo so a later message can retry the same URL instead of
+// replaying the reject.
+//
+// Every stage loads it. The style stage used to skip it — its CSS pipeline (postcss +
+// cssnano + autoprefixer) is inlined in this bundle — but the upstream compiler now
+// minifies non-sourcemap builds through esbuild's `transform` (cssnano only on the
+// sourcemap path), so style compiles call __esbuildTransform too, and a warmup can't
+// know which path a later compile-subset will take.
 let toolchainReady = null
 let toolchainURL = null
 function ensureToolchain(url) {
-  if (url) toolchainURL = url
+  if (url && !toolchainURL) toolchainURL = url
+  if (!toolchainURL) return Promise.reject(new Error('[compiler] stage worker not warmed up: no toolchainSetupURL (call pool.warmup first)'))
+  if (url && url !== toolchainURL) {
+    return Promise.reject(new Error(`[compiler] stage worker is already bound to toolchainSetupURL ${toolchainURL}; a different toolchain needs a new worker (got ${url})`))
+  }
   if (!toolchainReady) {
-    if (!toolchainURL) return Promise.reject(new Error('[compiler] stage worker not warmed up: no toolchainSetupURL (call pool.warmup first)'))
-    toolchainReady = import(/* @vite-ignore */ toolchainURL)
-      .catch((err) => { toolchainReady = null; throw new Error(`[compiler] toolchain setup failed importing ${toolchainURL}: ${(err && err.message) || err}`) })
+    const pending = toolchainURL
+    toolchainReady = import(/* @vite-ignore */ pending)
+      .catch((err) => {
+        toolchainReady = null
+        throw new Error(`[compiler] toolchain setup failed importing ${pending}: ${(err && err.message) || err}`)
+      })
   }
   return toolchainReady
-}
-
-// Stages whose compile path never calls the wasm hooks (__esbuildTransform /
-// __oxcParseSync). The CSS pipeline (postcss + cssnano + autoprefixer) is inlined
-// in this bundle, so a style-only worker skips importing toolchainSetupURL entirely
-// (~13MB esbuild.wasm + oxc WASI it would never call). Unknown/custom stages and
-// messages without stage identity conservatively load the toolchain.
-const TOOLCHAIN_FREE_STAGES = new Set(['style'])
-function needsToolchain(stages) {
-  if (!Array.isArray(stages) || stages.length === 0) return true
-  return stages.some((s) => !TOOLCHAIN_FREE_STAGES.has(s))
 }
 
 function freshFs(files, workPath) {
@@ -143,11 +155,9 @@ self.onmessage = async (e) => {
   try {
     if (type === 'warmup') {
       const t0 = performance.now()
-      // Remember the URL even when this worker's stages skip the load, so a later
-      // compile-subset that DOES need the toolchain (protocol allows any stages)
-      // can still resolve it without re-sending the URL.
-      if (e.data.toolchainSetupURL) toolchainURL = e.data.toolchainSetupURL
-      if (needsToolchain(e.data.stages)) await ensureToolchain()
+      // The URL is remembered here so a later compile-subset can resolve it without
+      // re-sending it.
+      await ensureToolchain(e.data.toolchainSetupURL)
       self.postMessage({ type: 'ready', ms: Math.round(performance.now() - t0) })
       return
     }
@@ -156,8 +166,7 @@ self.onmessage = async (e) => {
       // ids and builds miniprogram_npm once. setupCompile's npm build can invoke the
       // wasm toolchain, so ensure it's loaded regardless of this worker's own stage.
       const { files, workPath = '/work', options, toolchainSetupURL } = e.data
-      if (toolchainSetupURL) toolchainURL = toolchainSetupURL
-      await ensureToolchain()
+      await ensureToolchain(toolchainSetupURL)
       const t = performance.now()
       const { bundle, scaffold } = await runSetup(files, workPath, options)
       self.postMessage({ type: 'setup-done', bundle, scaffold, ms: Math.round(performance.now() - t) })
@@ -165,8 +174,7 @@ self.onmessage = async (e) => {
     }
     if (type === 'compile-subset') {
       const { files, workPath = '/work', stages = ['logic', 'view', 'style'], bundle, options, toolchainSetupURL } = e.data
-      if (toolchainSetupURL) toolchainURL = toolchainSetupURL
-      if (needsToolchain(stages)) await ensureToolchain()
+      await ensureToolchain(toolchainSetupURL)
       const warm = !!toolchainReady
       const t = performance.now()
       const result = await compileSubset(files, workPath, stages, bundle, options)

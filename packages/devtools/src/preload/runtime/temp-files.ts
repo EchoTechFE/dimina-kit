@@ -21,9 +21,16 @@ export function installTempFileBridge(): void {
 					})
 				})
 				.catch(() => {
-					// best effort: blob read failures cannot be surfaced through the
-					// sink contract (`write` is sync void), so we swallow them.
+					// 旧的同步创建入口只能 best effort；要求立即可读的调用走 writeAndWait。
 				})
+		},
+		async writeAndWait(path, blob) {
+			const bytes = await blob.arrayBuffer()
+			await ipcRenderer.invoke('simulator:temp-file:write-confirmed', {
+				path,
+				mime: blob.type,
+				bytes,
+			})
 		},
 		revoke(path) {
 			ipcRenderer.send('simulator:temp-file:revoke', { path })

@@ -1,0 +1,286 @@
+<view class="page">
+
+	<view class="panel">
+		<view class="panel-title">计数（操作前先清零）</view>
+		<view wx:if="{{rows.length === 0}}" class="empty">还没有事件</view>
+		<view wx:for="{{rows}}" wx:key="key" class="count-row">
+			<text class="count-key">{{item.key}}</text>
+			<text class="count-n">{{item.n}}</text>
+		</view>
+		<view class="panel-title">顺序</view>
+		<view wx:for="{{log}}" wx:key="*this" class="log-row">{{item}}</view>
+		<button class="reset" size="mini" bindtap="reset">清零</button>
+	</view>
+
+	<!-- A：嵌套。分别点「文字」和「开关本体」，两次操作之间清零 -->
+	<view class="case" bindtap="onTap" data-name="viewA">
+		<view class="case-title">A 嵌套 · 操作1：点文字；操作2：点开关本体</view>
+		<label class="lab" bindtap="onTap" data-name="labelA">
+			<text class="txt t-a">label 文字（点这里）</text>
+			<switch class="t-a-switch" checked="{{switchA}}" bindtap="onTap" bindchange="onChange" data-name="switchA" />
+		</label>
+	</view>
+
+	<!-- B：for= 远程激活。观察远程开关的祖先 view 会不会收到 tap -->
+	<view class="case">
+		<view class="case-title">B for= 远程 · 操作：点下面这行 label 文字</view>
+		<label class="lab" for="swB" bindtap="onTap" data-name="labelB">
+			<text class="txt t-b">远程 label 文字（点这里）</text>
+		</label>
+		<view class="remote" bindtap="onTap" data-name="viewB">
+			<text class="txt-small">远程开关的祖先 view</text>
+			<switch id="swB" checked="{{switchB}}" bindtap="onTap" bindchange="onChange" data-name="switchB" />
+		</view>
+	</view>
+
+	<!-- C：一个 label 里有多个控件，看激活的是哪一个 -->
+	<view class="case">
+		<view class="case-title">C 多控件 · 操作：点文字（开关在前，输入框在后）</view>
+		<label class="lab" bindtap="onTap" data-name="labelC">
+			<text class="txt t-c">label 文字（点这里）</text>
+			<switch checked="{{switchC}}" bindchange="onChange" data-name="switchC" />
+			<input class="inp t-c-input" placeholder="输入框" bindfocus="onFocus" data-name="inputC" />
+		</label>
+	</view>
+
+	<!-- D：label 里只有输入框，看点文字会不会聚焦 -->
+	<view class="case">
+		<view class="case-title">D 只有输入框 · 操作：点文字</view>
+		<label class="lab" bindtap="onTap" data-name="labelD">
+			<text class="txt t-d">label 文字（点这里）</text>
+			<input class="inp t-d-input" placeholder="输入框" bindfocus="onFocus" data-name="inputD" />
+		</label>
+	</view>
+
+	<!-- E：长按 label 文字，看长按是否仍然激活控件。带全套原始事件，"没反应"也能诊断 -->
+	<view class="case">
+		<view class="case-title">E 长按 · 操作：在文字上按住 1 秒再松开（尽量别移动）</view>
+		<label
+			class="lab" data-name="labelE"
+			bindtouchstart="onRaw" bindtouchend="onRaw" bindtouchcancel="onRaw"
+			bindlongtap="onRaw" bindlongpress="onRaw" bindcanceltap="onRaw" bindtap="onTap"
+		>
+			<text class="txt t-e">label 文字（长按这里）</text>
+			<switch checked="{{switchE}}" bindchange="onChange" data-name="switchE" />
+		</label>
+	</view>
+
+	<!-- F：按下后拖开再松手，看移动取消后是否还激活 -->
+	<view class="case case-f">
+		<view class="case-title">F 拖动取消 · 操作：在文字上按住并拖出这块区域再松手</view>
+		<label
+			class="lab" data-name="labelF"
+			bindtouchstart="onRaw" bindtouchend="onRaw" bindtouchcancel="onRaw"
+			bindlongtap="onRaw" bindlongpress="onRaw" bindcanceltap="onRaw" bindtap="onTap"
+		>
+			<text class="txt t-f">label 文字（按住拖走）</text>
+			<switch checked="{{switchF}}" bindchange="onChange" data-name="switchF" />
+		</label>
+	</view>
+
+	<!-- G：label 包 button。button 与勾选类控件不同，激活时会派发自己的 tap，
+	     这里看那次 tap 会不会再冒泡一遍，让 label / 外层 view 收到第二次 -->
+	<view class="case" bindtap="onTap" data-name="viewG">
+		<view class="case-title">G label 包 button · 操作：点文字（不要点按钮本体）</view>
+		<label class="lab" bindtap="onTap" data-name="labelG">
+			<text class="txt t-g">label 文字（点这里）</text>
+			<button size="mini" bindtap="onTap" data-name="buttonG">按钮</button>
+		</label>
+	</view>
+
+	<!-- H：for= 远程 button。同 G，但看会不会波及远程按钮的祖先 -->
+	<view class="case">
+		<view class="case-title">H for= 远程 button · 操作：点下面这行 label 文字</view>
+		<label class="lab" for="btnH" bindtap="onTap" data-name="labelH">
+			<text class="txt t-h">远程 label 文字（点这里）</text>
+		</label>
+		<view class="remote" bindtap="onTap" data-name="viewH">
+			<text class="txt-small">远程按钮的祖先 view</text>
+			<button id="btnH" size="mini" bindtap="onTap" data-name="buttonH">按钮</button>
+		</view>
+	</view>
+
+	<!-- I：label 里第一个控件是 disabled 的，后面跟一个可用的输入框。
+	     看 disabled 控件会不会被跳过，以及 label 自己的 tap 还发不发 -->
+	<view class="case" bindtap="onTap" data-name="viewI">
+		<view class="case-title">I disabled 控件 · 操作：点文字</view>
+		<label class="lab" bindtap="onTap" data-name="labelI">
+			<text class="txt t-i">label 文字（点这里）</text>
+			<switch disabled checked="{{switchI}}" bindchange="onChange" data-name="switchI" />
+			<input class="inp" placeholder="输入框" bindfocus="onFocus" data-name="inputI" />
+		</label>
+	</view>
+
+	<!-- J：只绑 longtap 不绑 longpress。解包源码显示只有 longpress 才抑制 tap，
+	     E 用例两个都绑了区分不出来，这条专门区分 -->
+	<view class="case">
+		<view class="case-title">J 只绑 longtap · 操作：在文字上按住 1 秒再松开</view>
+		<label
+			class="lab" data-name="labelJ"
+			bindlongtap="onRaw" bindtap="onTap"
+		>
+			<text class="txt t-j">label 文字（长按这里）</text>
+			<switch checked="{{switchJ}}" bindchange="onChange" data-name="switchJ" />
+		</label>
+	</view>
+
+	<!-- K：直接点 label 里的 button 本体，看 label 会不会再激活一次
+	     （对比 G：那边点的是文字） -->
+	<view class="case" bindtap="onTap" data-name="viewK">
+		<view class="case-title">K 点 button 本体 · 操作：点下面这个按钮</view>
+		<label class="lab" bindtap="onTap" data-name="labelK">
+			<text class="txt-small">label 文字（别点这里）</text>
+			<button class="t-k-button" size="mini" bindtap="onTap" data-name="buttonK">点这个按钮</button>
+		</label>
+	</view>
+
+	<!-- L：label 上用 catchtap。button 被激活时补发的那次 tap 会冒泡（见 G），
+	     这里看它是不是走普通冒泡规则、被 catch 拦在 label 上 -->
+	<view class="case" bindtap="onTap" data-name="viewL">
+		<view class="case-title">L catchtap 拦截 · 操作：点文字（不要点按钮本体）</view>
+		<label class="lab" catchtap="onTap" data-name="labelL">
+			<text class="txt t-l">label 文字（点这里）</text>
+			<button size="mini" bindtap="onTap" data-name="buttonL">按钮</button>
+		</label>
+	</view>
+
+	<!-- M：同 G，但按钮这次记录 tap 的载荷。补发的 tap 有没有 touches 和 detail 坐标，
+	     决定补发时该不该把 label 那次触摸的数据原样带下去 -->
+	<view class="case">
+		<view class="case-title">M 补发 tap 的载荷 · 操作：点文字（不要点按钮本体）</view>
+		<label class="lab" bindtap="onTapPayload" data-name="labelM">
+			<text class="txt t-m">label 文字（点这里）</text>
+			<button size="mini" bindtap="onTapPayload" data-name="buttonM">按钮</button>
+		</label>
+	</view>
+
+	<!-- O：radio。button 被激活时补发自己的 tap 并冒泡，switch 不补发；radio 属于哪一类没测过 -->
+	<view class="case" bindtap="onTap" data-name="viewO">
+		<view class="case-title">O label 包 radio · 操作：点文字（别点圆点）</view>
+		<radio-group bindchange="onChange" data-name="groupO">
+			<label class="lab" bindtap="onTap" data-name="labelO">
+				<text class="txt t-o">label 文字（点这里）</text>
+				<radio class="t-o-radio" value="o1" bindtap="onTap" data-name="radioO" />
+			</label>
+		</radio-group>
+	</view>
+
+	<!-- P：checkbox，同 O -->
+	<view class="case" bindtap="onTap" data-name="viewP">
+		<view class="case-title">P label 包 checkbox · 操作：点文字（别点方块）</view>
+		<checkbox-group bindchange="onChange" data-name="groupP">
+			<label class="lab" bindtap="onTap" data-name="labelP">
+				<text class="txt t-p">label 文字（点这里）</text>
+				<checkbox class="t-p-checkbox" value="p1" bindtap="onTap" data-name="checkboxP" />
+			</label>
+		</checkbox-group>
+	</view>
+
+	<!-- Q：textarea。D 只测了 input，多行输入框是否同样被激活聚焦没测过 -->
+	<view class="case" bindtap="onTap" data-name="viewQ">
+		<view class="case-title">Q label 包 textarea · 操作：点文字</view>
+		<label class="lab" bindtap="onTap" data-name="labelQ">
+			<text class="txt t-q">label 文字（点这里）</text>
+			<textarea class="ta t-q-textarea" placeholder="多行输入框" bindfocus="onFocus" data-name="textareaQ" />
+		</label>
+	</view>
+
+	<!-- R：for= 和内部控件同时存在。"for 优先于内部控件"只有文档说法，没有实测 -->
+	<view class="case">
+		<view class="case-title">R for= 与内部控件冲突 · 操作：点下面这行 label 文字</view>
+		<label class="lab" for="swR" bindtap="onTap" data-name="labelR">
+			<text class="txt t-r">label 文字（点这里）</text>
+			<switch checked="{{switchInnerR}}" bindchange="onChange" data-name="switchInnerR" />
+		</label>
+		<view class="remote" bindtap="onTap" data-name="viewR">
+			<text class="txt-small">远程开关</text>
+			<switch id="swR" checked="{{switchRemoteR}}" bindchange="onChange" data-name="switchRemoteR" />
+		</view>
+	</view>
+
+	<!-- S：for= 指向不存在的 id，内部还有一个可用控件。找不到时会不会回退到内部控件 -->
+	<view class="case" bindtap="onTap" data-name="viewS">
+		<view class="case-title">S for= 指向不存在的 id · 操作：点文字</view>
+		<label class="lab" for="no-such-control" bindtap="onTap" data-name="labelS">
+			<text class="txt t-s">label 文字（点这里）</text>
+			<switch checked="{{switchS}}" bindchange="onChange" data-name="switchS" />
+		</label>
+	</view>
+
+	<!-- T：文档序第一个控件被隐藏。I 证明了 disabled 会挡住搜索，隐藏是不是也一样没测 -->
+	<view class="case" bindtap="onTap" data-name="viewT">
+		<view class="case-title">T 第一个控件被隐藏 · 操作：点文字</view>
+		<label class="lab" bindtap="onTap" data-name="labelT">
+			<text class="txt t-t">label 文字（点这里）</text>
+			<switch class="hidden-ctl" checked="{{switchHiddenT}}" bindchange="onChange" data-name="switchHiddenT" />
+			<input class="inp" placeholder="输入框" bindfocus="onFocus" data-name="inputT" />
+		</label>
+	</view>
+
+	<!-- U：label 套 label。点内层文字时，外层会不会把它自己那个控件也激活一次 -->
+	<view class="case" bindtap="onTap" data-name="viewU">
+		<view class="case-title">U label 套 label · 操作：点内层文字</view>
+		<label class="lab lab-outer" bindtap="onTap" data-name="labelOuterU">
+			<switch checked="{{switchOuterU}}" bindchange="onChange" data-name="switchOuterU" />
+			<label class="lab" bindtap="onTap" data-name="labelInnerU">
+				<text class="txt t-u">内层文字（点这里）</text>
+				<switch checked="{{switchInnerU}}" bindchange="onChange" data-name="switchInnerU" />
+			</label>
+		</label>
+	</view>
+
+	<!-- V：textarea 排在可激活控件前面。Q 只说明 textarea 自己没被激活，
+	     这里要分清是「跳过它继续找」还是「找到它就停」，另外点它本体时守卫认不认它 -->
+	<view class="case" bindtap="onTap" data-name="viewV">
+		<view class="case-title">V textarea 在前 switch 在后 · 操作：①点文字 ②（清零后）点多行输入框本体</view>
+		<label class="lab" bindtap="onTap" data-name="labelV">
+			<text class="txt t-v">label 文字（点这里）</text>
+			<textarea class="ta t-v-textarea" placeholder="多行输入框" bindfocus="onFocus" data-name="textareaV" />
+			<switch class="t-v-switch" checked="{{switchV}}" bindchange="onChange" data-name="switchV" />
+		</label>
+	</view>
+
+	<!-- W：slider 排在可激活控件前面，同 V -->
+	<view class="case" bindtap="onTap" data-name="viewW">
+		<view class="case-title">W slider 在前 switch 在后 · 操作：点文字</view>
+		<label class="lab" bindtap="onTap" data-name="labelW">
+			<text class="txt t-w">label 文字（点这里）</text>
+			<slider class="sl t-w-slider" value="30" bindchange="onChange" data-name="sliderW" />
+			<switch class="t-w-switch" checked="{{switchW}}" bindchange="onChange" data-name="switchW" />
+		</label>
+	</view>
+
+	<!-- X：submit 绑在 form 上，触发它的是里面的 button。事件该记在谁名下 -->
+	<view class="case">
+		<view class="case-title">X form submit · 操作：点「提交」</view>
+		<form bindsubmit="onRaw" bindreset="onRaw" data-name="formX">
+			<input class="inp" name="fieldX" value="x1" data-name="inputX" />
+			<button class="btn t-x-submit" form-type="submit" bindtap="onTap" data-name="buttonSubmitX">提交</button>
+		</form>
+	</view>
+
+	<!-- Y：change 绑在 picker-view 上，触发它的是里面的 column，同 X -->
+	<view class="case">
+		<view class="case-title">Y picker-view change · 操作：把这一列拨到「二」</view>
+		<picker-view class="pv t-y" value="{{pickerY}}" bindchange="onRaw" data-name="pickerY">
+			<picker-view-column class="t-y-col">
+				<view class="pv-item t-y-item0">一</view>
+				<view class="pv-item t-y-item1">二</view>
+				<view class="pv-item t-y-item2">三</view>
+			</picker-view-column>
+		</picker-view>
+	</view>
+
+	<!-- Z：button 包 label。守卫是「点到了可激活控件」，微信这条链只从被点节点走到 label 为止，
+	     不看 label 外面；我们用的 closest 会一路往上，这条用例区分两者 -->
+	<view class="case" bindtap="onTap" data-name="viewZ">
+		<view class="case-title">Z button 包 label · 操作：点内层文字</view>
+		<button class="btn" bindtap="onTap" data-name="buttonZ">
+			<label class="lab" bindtap="onTap" data-name="labelZ">
+				<text class="txt t-z">内层文字（点这里）</text>
+				<switch class="t-z-switch" checked="{{switchZ}}" bindchange="onChange" data-name="switchZ" />
+			</label>
+		</button>
+	</view>
+
+</view>

@@ -1,11 +1,9 @@
-// Per-stage toolchain skip: dist/stage-worker.browser.js currently `import()`s the
-// host's wasm toolchainSetupURL (esbuild-wasm + oxc) on EVERY warmup and
-// compile-subset call, regardless of which stage the worker actually runs. The
-// style stage's compile path (postcss/cssnano/autoprefixer) is bundled in and never
-// touches `__esbuildTransform`/`__oxcParseSync`, so a style-only worker paying that
-// import cost is pure waste — and, observably, it means a style worker can't warm up
-// at all if the host's toolchainSetupURL is broken/unreachable, even though style
-// never needed it.
+// Toolchain wiring of dist/stage-worker.browser.js: the worker `import()`s the host's
+// wasm toolchainSetupURL (esbuild-wasm + oxc) once per worker and remembers the URL
+// across messages. Every stage needs it — including style, whose CSS pipeline is
+// bundled in but whose minify step runs through esbuild's `transform` on non-sourcemap
+// builds. A style worker that skipped the import compiled no CSS at all; it failed with
+// "[esbuild] globalThis.__esbuildTransform not installed by host".
 //
 // This drives the raw worker message protocol directly (no bundler / real Worker):
 // dist/stage-worker.browser.js is a self-contained ESM (browser platform, memfs +
@@ -57,6 +55,15 @@ const UNREACHABLE_TOOLCHAIN_URL = 'file:///no/such/path/toolchain-setup-nonexist
 // "imported once" even if the code path runs twice, so every assertion below uses
 // its own marker name.
 const sideEffectURL = (markerName) => `data:text/javascript,globalThis.${markerName}=(globalThis.${markerName}||0)%2B1`
+
+// Same counter, plus stand-in toolchain hooks so a stage that actually calls them
+// (style's minify step) can complete. `__esbuildTransform` echoes its input, which is
+// enough for the CSS product assertions below.
+const cssToolchainURL = (markerName) => 'data:text/javascript,' + encodeURIComponent(
+  `globalThis.${markerName}=(globalThis.${markerName}||0)+1;`
+  + 'globalThis.__esbuildTransform=async(code)=>({code});'
+  + 'globalThis.__oxcParseSync=()=>{throw new Error("stand-in oxc hook")};',
+)
 
 // --- fake `self` (Worker global scope) + message round-trip -------------------
 function makeFakeSelf() {
@@ -120,30 +127,41 @@ function findCompiledCss(files) {
   return Object.entries(files || {}).find(([k, v]) => k.endsWith('.css') && typeof v === 'string' && v.includes('color:red'))
 }
 
-// --- A + B: style-only worker never needs the wasm toolchain ------------------
+// --- A + B: the style stage loads the host toolchain and really minifies CSS ----
+// The stand-in hook returns its input unchanged, so a compile that reaches the
+// minify step still yields CSS carrying the fixture's declaration.
 {
-  const styleWorker = await loadWorkerInstance()
-  const warmupReply = await styleWorker.send({
+  const marker = '__stageToolchainMark_styleWarmup'
+  const worker = await loadWorkerInstance()
+  const warmupReply = await worker.send({
     type: 'warmup',
-    toolchainSetupURL: UNREACHABLE_TOOLCHAIN_URL,
+    toolchainSetupURL: cssToolchainURL(marker),
     stages: ['style'],
   })
   chk(warmupReply && warmupReply.type === 'ready',
-    `style-only worker warmup succeeds with an unreachable toolchainSetupURL (skips the wasm import) — got ${JSON.stringify(warmupReply)}`)
+    `style-only worker warmup succeeds — got ${JSON.stringify(warmupReply)}`)
+  chk(globalThis[marker] === 1,
+    `style-only warmup imports toolchainSetupURL exactly once (count=${globalThis[marker] || 0})`)
 }
 {
-  // Fresh instance, no prior warmup at all — isolates compile-subset's OWN skip
-  // decision from warmup's memoized toolchainReady state.
+  // Fresh instance, no prior warmup at all — compile-subset must resolve the
+  // toolchain from the URL it carries. Every simulated worker shares this process's
+  // globalThis, so hooks installed by an earlier setup module have to be cleared
+  // first; otherwise a worker that never imported its toolchain would still find
+  // them and the assertion would pass on borrowed state.
+  delete globalThis.__esbuildTransform
+  delete globalThis.__oxcParseSync
+  const marker = '__stageToolchainMark_styleCompile'
   const styleWorker = await loadWorkerInstance()
   const compileReply = await styleWorker.send({
     type: 'compile-subset',
     files: FIXTURE_FILES,
     workPath: WORK_PATH,
     stages: ['style'],
-    toolchainSetupURL: UNREACHABLE_TOOLCHAIN_URL,
+    toolchainSetupURL: cssToolchainURL(marker),
   })
   chk(compileReply && compileReply.type === 'done',
-    `style-only compile-subset succeeds with an unreachable toolchainSetupURL — got ${JSON.stringify(compileReply && compileReply.type === 'error' ? compileReply.error : compileReply)}`)
+    `style-only compile-subset succeeds — got ${JSON.stringify(compileReply && compileReply.type === 'error' ? compileReply.error : compileReply)}`)
   const css = compileReply && compileReply.type === 'done' ? findCompiledCss(compileReply.result.files) : null
   chk(!!css, `style-only compile-subset produced a real compiled CSS product (found "${css && css[0]}": ${css && JSON.stringify(css[1])})`)
 }
@@ -189,31 +207,22 @@ for (const stage of ['logic', 'view']) {
   chk(globalThis[marker] === 1, `legacy warmup without a stages field still imports toolchainSetupURL (count=${globalThis[marker]})`)
 }
 
-// --- G: a worker that skipped the import at warmup must still REMEMBER the
-// warmup URL — a later compile-subset that needs the toolchain (logic stage) and
-// carries no toolchainSetupURL of its own must import the remembered URL instead
-// of failing "no toolchainSetupURL / not warmed up" ------------------------------
+// --- G: the warmup URL carries over to a later compile-subset that carries none,
+// and the toolchain is imported once per worker, not once per message --------------
 {
-  const marker = '__stageToolchainMark_deferred'
-  // Besides counting the import, install stand-in toolchain hooks so the logic
-  // compile has SOMETHING to call if it gets that far. The compile outcome itself
-  // is not the guarded contract (stand-in hooks may not satisfy the full logic
-  // pipeline) — what must hold is that the remembered URL gets imported and the
-  // failure mode is NOT the "no toolchainSetupURL" warmup error.
-  const setupURL = 'data:text/javascript,' + encodeURIComponent(
-    `globalThis.${marker}=(globalThis.${marker}||0)+1;`
-    + 'globalThis.__esbuildTransform=async(code)=>({code});'
-    + 'globalThis.__oxcParseSync=()=>{throw new Error("stand-in oxc hook")};',
-  )
+  const marker = '__stageToolchainMark_remembered'
   const worker = await loadWorkerInstance()
   const warmupReply = await worker.send({
     type: 'warmup',
-    toolchainSetupURL: setupURL,
+    toolchainSetupURL: cssToolchainURL(marker),
     stages: ['style'],
   })
   chk(warmupReply && warmupReply.type === 'ready', 'style-declared worker warmup succeeds with a working setup module')
-  chk((globalThis[marker] || 0) === 0,
-    `style-declared warmup defers the setup-module import (count=${globalThis[marker] || 0})`)
+  chk(globalThis[marker] === 1,
+    `style-declared warmup imports the setup module once (count=${globalThis[marker] || 0})`)
+  // The stand-in oxc hook throws, so this logic compile cannot succeed. What must
+  // hold is that it resolves the toolchain from the warmup URL instead of failing
+  // "no toolchainSetupURL", and that it does not import the module a second time.
   const compileReply = await worker.send({
     type: 'compile-subset',
     files: FIXTURE_FILES,
@@ -222,9 +231,58 @@ for (const stage of ['logic', 'view']) {
     // no toolchainSetupURL — the worker must fall back to the URL remembered at warmup
   })
   chk(globalThis[marker] === 1,
-    `logic compile-subset without its own toolchainSetupURL imports the URL remembered at warmup (count=${globalThis[marker]})`)
+    `logic compile-subset reuses the already-loaded toolchain instead of re-importing it (count=${globalThis[marker]})`)
   chk(!!compileReply && !(compileReply.type === 'error' && /no toolchainSetupURL|not warmed up/.test(String(compileReply.error))),
-    `logic compile-subset after a deferred warmup does not fail as un-warmed — got ${JSON.stringify(compileReply && (compileReply.type === 'error' ? String(compileReply.error).slice(0, 100) : compileReply.type))}`)
+    `logic compile-subset after warmup does not fail as un-warmed — got ${JSON.stringify(compileReply && (compileReply.type === 'error' ? String(compileReply.error).slice(0, 100) : compileReply.type))}`)
+}
+
+// --- H: a worker is BOUND to the first toolchainSetupURL it ever loads. ESM caches
+// modules per URL, so a second `import()` of the same URL cannot re-run a different
+// module's install side effects — "switch to a new toolchain mid-lifetime" is not
+// something a worker can actually do. A message carrying a different URL must be
+// rejected (the caller's fix is to route that toolchain to a fresh worker instead),
+// and the rejection must not have imported the new module at all.
+{
+  const markerA = '__stageToolchainMark_boundA'
+  const markerB = '__stageToolchainMark_boundB'
+  const worker = await loadWorkerInstance()
+
+  const warmupReply = await worker.send({
+    type: 'warmup',
+    toolchainSetupURL: cssToolchainURL(markerA),
+    stages: ['style'],
+  })
+  chk(warmupReply && warmupReply.type === 'ready', 'bound-URL worker warmup with toolchain A succeeds')
+  chk(globalThis[markerA] === 1, `toolchain A imported once at warmup (count=${globalThis[markerA] || 0})`)
+
+  const urlA = cssToolchainURL(markerA)
+  const urlB = cssToolchainURL(markerB)
+  const compileReplyB = await worker.send({
+    type: 'compile-subset',
+    files: FIXTURE_FILES,
+    workPath: WORK_PATH,
+    stages: ['style'],
+    toolchainSetupURL: urlB,
+  })
+  chk(compileReplyB && compileReplyB.type === 'error',
+    `compile-subset carrying a different toolchainSetupURL (B) is rejected instead of switching — got ${JSON.stringify(compileReplyB && compileReplyB.type)}`)
+  const rejectionMsg = compileReplyB && compileReplyB.type === 'error' ? String(compileReplyB.error) : ''
+  chk(rejectionMsg.includes(urlA) && rejectionMsg.includes(urlB),
+    `the rejection names both the bound URL (A) and the offending one (B) — got ${JSON.stringify(rejectionMsg.slice(0, 200))}`)
+  chk(!(markerB in globalThis),
+    `toolchain B was never imported by the rejected message (count=${globalThis[markerB] || 0})`)
+  chk(globalThis[markerA] === 1, `toolchain A's import count is unaffected by the rejected switch attempt (count=${globalThis[markerA]})`)
+
+  const compileReplyA2 = await worker.send({
+    type: 'compile-subset',
+    files: FIXTURE_FILES,
+    workPath: WORK_PATH,
+    stages: ['style'],
+    toolchainSetupURL: urlA,
+  })
+  chk(compileReplyA2 && compileReplyA2.type === 'done',
+    `a later compile-subset that repeats the bound URL (A) still succeeds — got ${JSON.stringify(compileReplyA2 && compileReplyA2.type === 'error' ? compileReplyA2.error : compileReplyA2.type)}`)
+  chk(globalThis[markerA] === 1, `toolchain A stays imported once total, not once per message (count=${globalThis[markerA]})`)
 }
 
 // --- F: createCompilerPool tells each resident worker its own stage identity ---
@@ -259,5 +317,5 @@ for (const stage of ['logic', 'view']) {
   }
 }
 
-rawLog(failed ? `\n❌ ${failed} stage-toolchain assertion(s) failed.` : '\n✅ style stage skips the wasm toolchain; logic/view/custom/legacy stay conservative; pool announces worker stage identity.')
+rawLog(failed ? `\n❌ ${failed} stage-toolchain assertion(s) failed.` : '\n✅ every stage loads the wasm toolchain, the load is memoized per setup URL, and the pool announces worker stage identity.')
 realProcessExit(failed ? 1 : 0)
