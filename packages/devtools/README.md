@@ -28,20 +28,28 @@ pnpm add @dimina-kit/devtools electron@^43.2.0
 ```ts
 import { launch } from '@dimina-kit/devtools'
 
-await launch()
+launch().catch((err) => {
+  console.error(err)
+  process.exit(1)
+})
 ```
+
+别在 main 模块顶层 `await launch()`：它内部等 `app.whenReady()`，而 Electron 要等 main 模块求值完成才触发 ready，顶层 await 会死锁。
 
 带宿主配置的最小形状：
 
 ```ts
 import { launch } from '@dimina-kit/devtools'
 
-await launch({
+launch({
   appName: 'My Miniapp Studio',
   adapter: myCompilationAdapter,
   onSetup(instance) {
     instance.registerSimulatorApi('login', params => login(params))
   },
+}).catch((err) => {
+  console.error(err)
+  process.exit(1)
 })
 ```
 

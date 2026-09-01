@@ -1,8 +1,7 @@
 # devtools 是否采纳 electron-deck 高层 host API — 当前决策
 
-> 详细重估见 [electron-deck 高层面重估](../../../.claude/plans/electron-deck-high-level-reassessment.md)。
 > 当前结论：保留 `ownsWindows:true` 和既有低层集成；不要在 devtools 主窗口上叠加
-> deck 自己的 window substrate / compositor。
+> deck 自己的 window substrate / compositor。理由见下文各节。
 
 ## 范围
 

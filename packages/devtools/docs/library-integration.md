@@ -13,8 +13,13 @@ pnpm add @dimina-kit/devtools electron@^43.2.0
 ```ts
 import { launch } from '@dimina-kit/devtools'
 
-await launch()
+launch().catch((err) => {
+  console.error(err)
+  process.exit(1)
+})
 ```
+
+**不要在 main 模块顶层 `await launch()`**。`launch()` 内部等的是 `app.whenReady()`，而 Electron 要等 main 模块求值完成才会触发 ready，顶层 await 会让两边互相等，应用永远起不来。用 `.catch(...)` 收尾即可。
 
 `launch()` 返回 `Promise<void>`，并通过 `@dimina-kit/electron-deck` 接管 Electron 的 ready、启动和退出流程。一个进程只应选择一条应用启动入口。
 
@@ -25,7 +30,7 @@ import { launch, suppressEpipe } from '@dimina-kit/devtools'
 
 suppressEpipe()
 
-await launch({
+launch({
   appName: 'My Miniapp Studio',
   adapter: myCompilationAdapter,
   apiNamespaces: ['my'],
@@ -36,6 +41,9 @@ await launch({
   onSetup(instance) {
     instance.registerSimulatorApi('login', params => login(params))
   },
+}).catch((err) => {
+  console.error(err)
+  process.exit(1)
 })
 ```
 
@@ -118,7 +126,10 @@ const projectsProvider: ProjectsProvider = {
 
 `customCreateProjectDialog` 的结果有三种：
 
-- `null`：用户取消；
+- `null`：回退到 devtools 内置的创建对话框。注意这里**不是**「用户取消」——
+  renderer 把「宿主返回 null」和「没配这个 hook」当成同一件事，都会接着弹内置对话框
+  （`renderer/modules/main/main.tsx` 的 `if (result) { … return }` 分支）。宿主自己的
+  对话框被取消时若不想再弹一个，就别走这条 hook；
 - `CreateProjectInput`：devtools 按模板在本地创建项目，再调用 provider；
 - `{ ready: Project }`：宿主已经创建完成，devtools 只刷新列表。
 

@@ -69,9 +69,9 @@ const WHITELIST: ReadonlyArray<{ file: string; reason: string }> = [
 const WHITELIST_FILES = new Set(WHITELIST.map((w) => w.file))
 
 /** Matches `contentView.addChildView(` / `contentView.removeChildView(`, keyed on the `contentView` qualifier so `contentViewHost.addChildView(` (the owner's own wrapper API) is left alone. */
-const CONTENT_VIEW_MUTATION_RE = /\bcontentView\.(addChildView|removeChildView)\(/
+const CONTENT_VIEW_MUTATION_RE = /\bcontentView\s*\.\s*(addChildView|removeChildView)\s*\(/
 /** The legacy BrowserView attach/detach API — same single-owner concern, distinct method names. */
-const BROWSER_VIEW_MUTATION_RE = /\.(addBrowserView|setBrowserView)\(/
+const BROWSER_VIEW_MUTATION_RE = /\.\s*(addBrowserView|setBrowserView)\s*\(/
 
 interface Hit {
   relFile: string
@@ -92,17 +92,26 @@ function listProductionFiles(dir: string): string[] {
   return out
 }
 
-/** Scans one file's text and returns every mutating-call hit, by line. */
+/**
+ * Scans one file's text and returns every mutating-call hit, by line.
+ *
+ * Scans the whole text rather than each line on its own: a formatter may put
+ * the receiver and the call on separate lines (`…contentView` then
+ * `.addChildView(view)`), and a per-line scan would never see either half as a
+ * match. The patterns allow whitespace — newlines included — around the dot and
+ * the opening paren for the same reason.
+ */
 function scanFileText(relFile: string, text: string): Hit[] {
-  const hits: Hit[] = []
   const lines = text.split('\n')
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!
-    if (CONTENT_VIEW_MUTATION_RE.test(line) || BROWSER_VIEW_MUTATION_RE.test(line)) {
-      hits.push({ relFile, line: i + 1, text: line.trim() })
+  const hits: Hit[] = []
+  for (const re of [CONTENT_VIEW_MUTATION_RE, BROWSER_VIEW_MUTATION_RE]) {
+    for (const match of text.matchAll(new RegExp(re.source, 'g'))) {
+      // 1-based line of the match start; the reported text is that whole line.
+      const line = text.slice(0, match.index).split('\n').length
+      hits.push({ relFile, line, text: lines[line - 1]!.trim() })
     }
   }
-  return hits
+  return hits.sort((a, b) => a.line - b.line)
 }
 
 /** Scans the real repository tree under `src/`. */
@@ -140,6 +149,19 @@ describe('main window native child-tree: single-owner scan', () => {
   it('regex matches the legacy BrowserView API on any receiver', () => {
     expect(BROWSER_VIEW_MUTATION_RE.test('mainWindow.addBrowserView(view)')).toBe(true)
     expect(BROWSER_VIEW_MUTATION_RE.test('mainWindow.setBrowserView(view)')).toBe(true)
+  })
+
+  it('a mutation broken across lines by a formatter is still flagged', () => {
+    // Prettier-style wrapping puts the receiver and the call on separate
+    // lines. A scan that restarts at every newline sees neither half and lets
+    // a real new owner through.
+    const wrapped = 'const v = ctx.windows.mainWindow.contentView\n  .addChildView(view)\n'
+    const hits = scanFileText('probe.ts', wrapped)
+    expect(hits.length).toBe(1)
+    expect(hits[0]!.line).toBe(1)
+
+    const wrappedBrowserView = 'mainWindow\n  .addBrowserView(view)\n'
+    expect(scanFileText('probe.ts', wrappedBrowserView).length).toBe(1)
   })
 
   it('the construction-site exemption is keyed on file path, so it survives an equivalent direct-call refactor', () => {
