@@ -27,18 +27,32 @@ import {
 } from '@dimina-kit/electron-runtime'
 import { openProject } from '@dimina-kit/devkit'
 
+// 必须在 app ready 之前、模块顶层调用。
 registerElectronRuntimeSchemes()
-await app.whenReady()
-const window = new BrowserWindow()
-const runtime = await createElectronRuntime({
-  hostWindow: window,
-  adapter: { openProject },
+
+async function start() {
+  await app.whenReady()
+  const window = new BrowserWindow()
+  const runtime = await createElectronRuntime({
+    hostWindow: window,
+    adapter: { openProject },
+  })
+  const session = await runtime.openProject({ projectPath: '/absolute/miniapp' })
+  window.contentView.addChildView(session.view)
+  session.setBounds({ x: 0, y: 0, width: 390, height: 844 })
+  await session.ready
+}
+
+start().catch((err) => {
+  console.error(err)
+  app.quit()
 })
-const session = await runtime.openProject({ projectPath: '/absolute/miniapp' })
-window.contentView.addChildView(session.view)
-session.setBounds({ x: 0, y: 0, width: 390, height: 844 })
-await session.ready
 ```
+
+> **别在 main 模块顶层 `await app.whenReady()`**。Electron 要等 main 模块求值
+> 完成才触发 ready，顶层 await 会让两边互相等待，应用永远起不来（Electron
+> 43.2.0 实测：进程挂住，顶层 await 之后的代码一行都不执行）。把启动逻辑放进
+> 上面这样的 async 函数，或用 `app.whenReady().then(...)`。
 
 Call `session.dispose()` before removing a project, and `runtime.dispose()` when
 the host tears down the integration. One runtime may be active per Electron
