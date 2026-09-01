@@ -75,6 +75,7 @@ console.log(`预览地址: http://localhost:${session.port}`)
 | [`@dimina-kit/workbench`](./packages/workbench) | 内嵌式 VS Code 编辑器（`@codingame/monaco-vscode-api`），带 WXML 语言特性与 dimina 配置的 JSON Schema |
 | [`@dimina-kit/inspect`](./packages/inspect) | 与宿主无关的 WXML 树提取与检查：Vue 运行时遍历、稳定 id、DOM 变更观察 |
 | [`@dimina-kit/view-anchor`](./packages/view-anchor) | 让主进程的原生视图（Electron `WebContentsView`）持续对齐某个 DOM 元素的几何位置 |
+| [`@dimina-kit/design`](./packages/design) | devtools 那套外观：CSS 变量、基础样式、electron-deck 皮肤、Tailwind preset |
 | [`@dimina-kit/fs-core`](./packages/fs-core) | 零依赖的 OPFS WAL 文件系统内核，供 Web 端使用 |
 
 仓库内部使用、不发布：`@dimina-kit/eslint-config`、`@dimina-kit/typescript-config`，以及防劣化工具 [`tools/pawl`](./tools/pawl)。

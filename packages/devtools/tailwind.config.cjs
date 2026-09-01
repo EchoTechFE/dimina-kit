@@ -1,56 +1,28 @@
+const path = require('node:path')
+
+/* @dimina-kit/inspect ships React panels that use this app's token aliases
+ * (bg-surface-2, text-code-keyword, …) and no stylesheet of its own — the host
+ * that renders them is what generates their classes. Resolve it through node
+ * rather than a relative path so this line keeps working from a published
+ * install, not just from inside the monorepo. */
+const inspectDir = path.dirname(require.resolve('@dimina-kit/inspect/package.json'))
+
 /** @type {import('tailwindcss').Config} */
 module.exports = {
-  content: ['./src/renderer/**/*.{html,js,jsx,ts,tsx}', '../inspect/src/**/*.tsx'],
+  presets: [require('@dimina-kit/design/tailwind-preset')],
+  content: [
+    './src/renderer/**/*.{html,js,jsx,ts,tsx}',
+    path.join(inspectDir, 'src/**/*.tsx'),
+  ],
   theme: {
     extend: {
       colors: {
-        accent: 'var(--color-accent)',
-        'accent-hover': 'var(--color-accent-hover)',
-        bg: 'var(--color-bg)',
-        'bg-panel': 'var(--color-bg-panel)',
-        surface: 'var(--color-surface)',
-        'surface-2': 'var(--color-surface-2)',
-        'surface-3': 'var(--color-surface-3)',
-        'surface-active': 'var(--color-surface-active)',
-        'surface-input': 'var(--color-surface-input)',
-        'surface-selected': 'var(--color-surface-selected)',
-        'surface-thumb': 'var(--color-surface-thumb)',
-        'surface-splitter': 'var(--color-surface-splitter)',
-        border: 'var(--color-border)',
-        'border-subtle': 'var(--color-border-subtle)',
-        'border-strong': 'var(--color-border-strong)',
-        ring: 'var(--color-ring)',
-        text: 'var(--color-text)',
-        'text-secondary': 'var(--color-text-secondary)',
-        'text-muted': 'var(--color-text-muted)',
-        'text-dim': 'var(--color-text-dim)',
-        'code-blue': 'var(--color-code-blue)',
-        'code-orange': 'var(--color-code-orange)',
-        'code-label': 'var(--color-code-label)',
-        'code-number': 'var(--color-code-number)',
-        'code-keyword': 'var(--color-code-keyword)',
-        'status-warn': 'var(--color-status-warn)',
-        'status-error': 'var(--color-status-error)',
-        'status-success': 'var(--color-status-success)',
-        'danger-bg': 'var(--color-danger-bg)',
-        'warn-bg': 'var(--color-warn-bg)',
-        'warn-border': 'var(--color-warn-border)',
-        overlay: 'var(--color-overlay)',
-        'overlay-heavy': 'var(--color-overlay-heavy)',
+        /* Simulator hardware chrome — devtools-owned, defined in design.css. */
         'sim-bg': 'var(--color-sim-bg)',
         'sim-bottom': 'var(--color-sim-bottom)',
         'sim-screen': 'var(--color-sim-screen)',
         'phone-shell': 'var(--color-phone-shell)',
         'phone-border': 'var(--color-phone-border)',
-      },
-      fontFamily: {
-        sans: ['var(--font-family)'],
-        mono: ['var(--font-family-mono)'],
-      },
-      borderRadius: {
-        DEFAULT: 'var(--radius)',
-        md: 'var(--radius-md)',
-        lg: 'var(--radius-lg)',
       },
     },
   },

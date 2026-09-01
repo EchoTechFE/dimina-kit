@@ -261,8 +261,9 @@ WCV 内由 DeviceShell 居中（列变宽 = 灰边变多，WCV 经 `followGeomet
   覆盖（jsdom 几何为 0 测不了）。
 - **tab**：同一标签组内切 active（`setActive`），或拖出/拖入面板。
 - **分屏 resize**：拖分隔条 → `setSizes` 改权重（fixed-px 子不受影响）。分隔条（rrp `Separator`，
-  `[data-deck-resize-handle]`）和 tab 一样是**引擎无样式**的，宿主必须给它尺寸/抓取区——`design.css`
-  补了 10px 命中区 + 1px 线 + ring 高亮；缺这套皮肤时分隔条塌成 0px、根本抓不动（只有程序化
+  `[data-deck-resize-handle]`）和 tab 一样是**引擎无样式**的，宿主必须给它尺寸/抓取区——
+  `@dimina-kit/design` 的 `css/deck.css` 补了 10px 命中区 + 1px 线 + ring 高亮；缺这套皮肤时
+  分隔条塌成 0px、根本抓不动（只有程序化
   `__deckApplyLayout` seam 能改，故旧 e2e 没暴露）。真机指针拖拽由 `e2e/dock-separator-drag.spec.ts` 覆盖。
 - **序列化 / 恢复**：每次 mutation 触发模型订阅 → `serializeLayout` 回写持久化；下次开项目按 §2.3
   恢复。

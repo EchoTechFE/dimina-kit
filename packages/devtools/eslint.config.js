@@ -32,6 +32,18 @@ export default [
     },
   },
   {
+    // Tailwind and PostCSS load their config files with `require()`, so these
+    // stay CommonJS and legitimately use `require` to pull in a preset or
+    // resolve a dependency's location.
+    files: ["*.config.cjs"],
+    languageOptions: {
+      sourceType: "commonjs",
+    },
+    rules: {
+      "@typescript-eslint/no-require-imports": "off",
+    },
+  },
+  {
     files: ["e2e/**/*.{ts,js}"],
     rules: {
       "react-hooks/rules-of-hooks": "off",

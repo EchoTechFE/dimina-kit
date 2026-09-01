@@ -109,6 +109,7 @@
     "spike:popout": "electron spike/popout/harness.mjs"
   },
   "dependencies": {
+    "@dimina-kit/design": "workspace:*",
     "@dimina-kit/devkit": "workspace:*",
     "@dimina-kit/electron-deck": "workspace:*",
     "@dimina-kit/electron-runtime": "workspace:*",

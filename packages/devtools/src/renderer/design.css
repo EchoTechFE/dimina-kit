@@ -1,104 +1,26 @@
-@import './assets/cornetto-tokens.css';
+@import '@dimina-kit/design/css/index.css';
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* ── Design Tokens ──────────────────────────────────────────────────────────
-   Color values are aliases onto Cornetto's --qd-* semantic tokens
-   (assets/cornetto-tokens.css) — that file is the single source of truth for
-   color; do not hardcode a color value here again. Tokens with no Cornetto
-   counterpart (fine-grained surface states, syntax-highlight colors,
-   simulator hardware chrome) stay devtools-owned, marked below.
-   Use these CSS variables directly or via Tailwind aliases (bg-accent, etc.)
+/* ── devtools-owned tokens ──────────────────────────────────────────────────
+   The shared palette, base element styles and the electron-deck dock skin all
+   live in @dimina-kit/design (imported above). What stays here is specific to
+   this app: the simulator's hardware chrome, the window layout metrics, and
+   the project-card geometry. Anything reusable belongs upstream in that
+   package instead.
  ──────────────────────────────────────────────────────────────────────────── */
 
-/* ── Dark mode (default) ────────────────────────────────────────────────── */
 :root {
-  /* cornetto-tokens.css defaults --qd-* to LIGHT on :root and gates dark via
-     a `.dark` class. This app switches theme on prefers-color-scheme instead
-     of a class, so the --qd-* values that have a dark variant are
-     re-declared here (dark baseline) and reset back under the light media
-     query below — instead of relying on cornetto's own `.dark` selector. */
-  --qd-background: #1f1f1f;
-  --qd-secondary: #404040;
-  --qd-secondary-foreground: #ffffffe0;
-  --qd-muted: #383838;
-  --qd-foreground: #ffffffe0;
-  --qd-muted-foreground: #ffffffa3;
-  --qd-border: #ffffff3d;
-  --qd-primary-soft: #28238c;
-  --qd-destructive-soft: #7a2230;
-  --qd-success-soft: #1c4a26;
-  --qd-warning-soft: #5e3a05;
-  --qd-info-soft: #16306e;
-  --qd-shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.3);
-  --qd-shadow-md: 0 4px 12px -2px rgb(0 0 0 / 0.45), 0 2px 4px -2px rgb(0 0 0 / 0.35);
-  --qd-shadow-lg: 0 12px 32px -8px rgb(0 0 0 / 0.6), 0 4px 8px -4px rgb(0 0 0 / 0.4);
-
-  /* Brand / Accent */
-  --color-accent:       var(--qd-primary);
-  --color-accent-hover: hsl(249  79%  63%);  /* no Cornetto hover-shade token; devtools-owned */
-
-  /* Backgrounds */
-  --color-bg:               var(--qd-background);
-  --color-bg-panel:         var(--qd-secondary);
-  --color-surface:          var(--qd-muted);
-  --color-surface-2:        #282828;  /* toolbar/raised-panel chrome — pixel-verified against Figma node 66:1729 (fileKey Ptsx2ERDMvYmRYf21SlfOD), sampled rgb(40,40,40) at 7 independent chrome regions (title bar/sidebar/tab strip/panel body). Does NOT match any Cornetto dark token (--qd-background #1f1f1f, --qd-secondary #404040, --qd-muted #383838 are all off by 9-24 units) — devtools-owned like the other --color-surface-* tiers. Light mode's equivalent chrome IS an exact --qd-muted match (verified against node 25:5, both #f7f7f9), so only dark diverges. */
-  --color-surface-3:        hsl(200  3%  22%);  /* hover state — devtools-owned */
-  --color-surface-active:   hsl(210  3%  26%);  /* active/selected state — devtools-owned */
-  --color-surface-input:    hsl(  0  0%  24%);  /* form input background — devtools-owned */
-  --color-surface-selected: hsl(  0  0%  20%);  /* selected item — devtools-owned */
-  --color-surface-thumb:    hsl(  0  0%  29%);  /* placeholder / thumbnail — devtools-owned */
-  --color-surface-splitter: hsl(  0  0%  13%);  /* panel splitter — devtools-owned */
-  /* Figma IDE chrome's flat "hover"/selected overlay (#00000012 on white) —
-     not a Cornetto token; derived from --qd-foreground so it flips polarity
-     with theme instead of needing a separate light/dark literal. */
-  --color-chrome-hover:     color-mix(in srgb, var(--qd-foreground) 7%, transparent);
-
-  /* Borders */
-  --color-border:        var(--qd-border);
-  --color-border-subtle: hsl(  0  0%  18%);  /* no Cornetto tier below --qd-border; devtools-owned */
-  --color-border-strong: hsl(  0  0%  27%);  /* elevated surfaces (popover, modal) — devtools-owned */
-  --color-ring:          var(--color-accent);  /* splitter hover / focus highlight */
-
-  /* Text */
-  --color-text:           var(--qd-foreground);
-  --color-text-secondary: var(--qd-muted-foreground);
-  --color-text-muted:     hsl(  0  0%  40%);  /* status / timestamps — no Cornetto tier this fine, devtools-owned */
-  --color-text-dim:       hsl(  0  0%  33%);  /* placeholders — devtools-owned */
-  --color-text-white:     var(--qd-on-solid);
-
-  /* Code colors (VS Code dark+ palette) — no Cornetto syntax-highlight tokens, devtools-owned */
-  --color-code-blue:    hsl(201  98%  80%);  /* property names */
-  --color-code-orange:  hsl( 17  47%  64%);  /* strings */
-  --color-code-label:   hsl(  0   0%  52%);  /* labels */
-  --color-code-number:  hsl(100  28%  73%);  /* numeric literals */
-  --color-code-keyword: hsl(207  61%  59%);  /* booleans / null / keywords */
-
-  /* Status indicators */
-  --color-status-warn:    var(--qd-warning);
-  --color-status-error:   var(--qd-destructive);
-  --color-status-success: var(--qd-success);
-  --color-status-ready:   var(--color-accent);  /* same as accent */
-
-  /* Semantic backgrounds */
-  --color-danger-bg:   var(--qd-destructive-soft);
-  --color-warn-bg:     var(--qd-warning-soft);
-  --color-warn-border: hsl( 41 100%  47% / 30%);  /* no Cornetto soft-border variant, devtools-owned */
-
-  /* Overlays — plain scrim, no brand color involved, devtools-owned */
-  --color-overlay:       hsl(0 0% 0% / 45%);
-  --color-overlay-heavy: hsl(0 0% 0% / 70%);
-
   /* Simulator chrome — the toolbar rows and WCV-placeholder desk AROUND the
-     phone. Shares --color-surface-2's chrome tone (see above) — Figma paints
-     the simulator toolbars and the rest of the app chrome as one flat tone,
-     verified against node 66:1729 in both this file's chrome regions and the
-     Simulator/Preview toolbar rows specifically.
+     phone. Shares --color-surface-2's chrome tone: Figma paints the simulator
+     toolbars and the rest of the app chrome as one flat tone, verified against
+     node 66:1729 in both the app's chrome regions and the Simulator/Preview
+     toolbar rows specifically.
      --color-sim-bg MUST stay equal to simDeskBg() (main/utils/theme.ts) and
-     .device-shell-root (device-shell.css) — see those sites. Only the
-     PHONE ITSELF stays hardware-dark regardless of theme: --color-sim-screen
-     (the physical device screen, behind the mini-app's own content),
+     .device-shell-root (device-shell.css) — see those sites. Only the PHONE
+     ITSELF stays hardware-dark regardless of theme: --color-sim-screen (the
+     physical device screen, behind the mini-app's own content),
      --color-phone-shell, --color-phone-border. */
   --color-sim-bg:       var(--color-surface-2);
   --color-sim-bottom:   var(--color-surface-2);
@@ -106,122 +28,26 @@
   --color-phone-shell:  hsl(240  1%  11%);
   --color-phone-border: hsl(240  1%  18%);
 
-  /* Typography — font family follows Cornetto; type scale/radius stay
-     devtools-owned for now (a full scale remap is a separate, visually-
-     reviewed change, not bundled into this token wiring). */
-  --font-family:      var(--qd-font-sans);
-  --font-family-mono: 'Menlo', 'Consolas', monospace;
-  --font-size-xs:   11px;
-  --font-size-sm:   12px;
-  --font-size-base: 13px;
-  --font-size-md:   14px;
-  --font-size-lg:   16px;
-
-  /* Border radii */
-  --radius:    4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
-
-  /* Scrollbar */
-  --scrollbar-size:  6px;
-  --scrollbar-thumb: hsl(0 0% 27%);
-
   /* Layout */
   --header-h:   40px;
   --splitter-w: 4px;
 }
 
-/* ── Light mode ─────────────────────────────────────────────────────────── */
 @media (prefers-color-scheme: light) {
   :root {
-    /* Reset the --qd-* tokens that carry a dark override in the block above
-       back to cornetto-tokens.css's own light :root defaults. */
-    --qd-background: #ffffff;
-    --qd-secondary: #f7f7f9;
-    --qd-secondary-foreground: #000000;
-    --qd-muted: #f7f7f9;
-    --qd-foreground: #000000;
-    --qd-muted-foreground: #000000a3;
-    --qd-border: #0000001f;
-    --qd-primary-soft: #f2f0ff;
-    --qd-destructive-soft: #ffebe9;
-    --qd-success-soft: #e2f7e3;
-    --qd-warning-soft: #fff4e0;
-    --qd-info-soft: #e8f0ff;
-    --qd-shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.06);
-    --qd-shadow-md: 0 4px 12px -2px rgb(0 0 0 / 0.12), 0 2px 4px -2px rgb(0 0 0 / 0.08);
-    --qd-shadow-lg: 0 12px 32px -8px rgb(0 0 0 / 0.18), 0 4px 8px -4px rgb(0 0 0 / 0.1);
-
-    /* Brand / Accent — darker for sufficient contrast on light bg */
-    --color-accent:       var(--qd-primary);
-    --color-accent-hover: hsl(249  79%  63%);
-
-    /* Backgrounds */
-    --color-bg:               var(--qd-background);
-    --color-bg-panel:         var(--qd-secondary);
-    --color-surface:          var(--qd-muted);
-    --color-surface-2:        var(--qd-muted);  /* light chrome IS an exact --qd-muted match (verified against Figma node 25:5, both #f7f7f9) — only dark diverges, see dark-mode block above */
-    --color-surface-3:        hsl(200  3%  90%);  /* toolbar hover: visible without reading as selected */
-    --color-surface-active:   hsl(210  3%  82%);  /* selected toolbar chip: distinct from hover without the previous heavy fill */
-    --color-surface-input:    hsl(  0  0% 100%);
-    --color-surface-selected: hsl(  0  0%  86%);
-    --color-surface-thumb:    hsl(  0  0%  72%);
-    --color-surface-splitter: hsl(  0  0%  88%);
-
-    /* Borders */
-    --color-border:        var(--qd-border);
-    --color-border-subtle: hsl(  0  0%  87%);
-    --color-border-strong: hsl(  0  0%  74%);
-
-    /* Text — all pass WCAG AA on hsl(0 0% 98%) */
-    --color-text:           var(--qd-foreground);
-    --color-text-secondary: var(--qd-muted-foreground);
-    --color-text-muted:     hsl(  0  0%  42%);  /*  4.9:1 ✓ */
-    --color-text-dim:       hsl(  0  0%  50%);  /* 3.2:1 on surface — decorative */
-    --color-text-white:     var(--qd-on-solid);
-
-    /* Code colors (VS Code light+ palette) */
-    --color-code-blue:    hsl(207 100%  30%);  /* property names  #0074b5 */
-    --color-code-orange:  hsl(  0  72%  35%);  /* strings         #a31515 */
-    --color-code-label:   hsl(  0   0%  42%);  /* labels */
-    --color-code-number:  hsl(100  73%  28%);  /* numeric literals #098658 */
-    --color-code-keyword: hsl(240 100%  40%);  /* booleans / null  #0000cc */
-
-    /* Status indicators — darkened for text on light bg */
-    --color-status-warn:    var(--qd-warning);
-    --color-status-error:   var(--qd-destructive);
-    --color-status-success: var(--qd-success);
-    --color-status-ready:   var(--color-accent);
-
-    /* Semantic backgrounds */
-    --color-danger-bg:   var(--qd-destructive-soft);
-    --color-warn-bg:     var(--qd-warning-soft);
-    --color-warn-border: hsl( 41 100%  47% / 35%);
-
-    /* Overlays */
-    --color-overlay:       hsl(0 0% 0% / 30%);
-    --color-overlay-heavy: hsl(0 0% 0% / 60%);
-
-    /* Scrollbar */
-    --scrollbar-thumb: hsl(0 0% 70%);
-
-    /* Simulator chrome — see the dark-mode block above. --color-sim-bg MUST
-       stay equal to simDeskBg() (main/utils/theme.ts) and .device-shell-root
+    /* Simulator chrome — see the block above. --color-sim-bg MUST stay equal
+       to simDeskBg() (main/utils/theme.ts) and .device-shell-root
        (device-shell.css). */
     --color-sim-bg:     var(--color-surface-2);
     --color-sim-bottom: var(--color-surface-2);
   }
 }
 
-/* ── Base ───────────────────────────────────────────────────────────────── */
-*, *::before, *::after { box-sizing: border-box; }
-
+/* ── Application shell ──────────────────────────────────────────────────────
+   @dimina-kit/design's base.css deliberately leaves the page unsized so a
+   scrolling document keeps working. This is a fixed-viewport desktop app, so
+   pin it here. */
 html, body {
-  margin: 0;
-  padding: 0;
-  font-family: var(--font-family);
-  background: var(--color-bg);
-  color: var(--color-text);
   height: 100vh;
   overflow: hidden;
 }
@@ -231,170 +57,6 @@ html, body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-}
-
-/* ── Splitters / resize handles ───────────────────────────────────────────
- * Every workbench divider — the manual sim-column `Splitter` AND every
- * `react-resizable-panels` `<Separator>` — renders `role="separator"` and is
- * focusable (the library gives its handle a `tabIndex`). On mousedown the
- * browser focuses it and paints its DEFAULT focus outline (a bright yellow/gold
- * bar) on top of our 1px divider. The divider's own affordance is the
- * `--color-ring` hover/active highlight (see `splitter-styles.ts`), never a UA
- * outline. Suppress that outline HERE, once, on the role — so it can't reappear
- * each time a new divider or a layout refactor forgets a per-component
- * `focus:outline-none` (it had regressed repeatedly that way). This is the
- * single source of truth; do not re-add scattered outline resets on splitters. */
-[role="separator"]:focus,
-[role="separator"]:focus-visible {
-  outline: none;
-}
-
-/* ── Scrollbar ──────────────────────────────────────────────────────────── */
-::-webkit-scrollbar        { width: var(--scrollbar-size); height: var(--scrollbar-size); }
-::-webkit-scrollbar-track  { background: transparent; }
-::-webkit-scrollbar-thumb  { background: var(--scrollbar-thumb); border-radius: 3px; }
-
-/* ── Animations ─────────────────────────────────────────────────────────── */
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50%       { opacity: 0.3; }
-}
-
-/* ── Dockable layout (electron-deck DockView) tab skin ───────────────────────
- * electron-deck renders an intentionally UNSTYLED tab strip: a semantic
- * `<div role="tablist">` of `<button role="tab" data-deck-tab>` plus a
- * `<span data-deck-tab-close>` ×. The engine defers ALL visuals to the host;
- * Tailwind preflight then strips the UA button look, so without this skin the
- * tabs render as bare oversized text (the #51 dockable rewrite shipped the
- * engine without the host skin). Mirror the legacy BottomDebugPanel strip.
- * Everything is scoped under `[data-deck-group]` so it can never leak onto
- * another `role="tab"` usage elsewhere in the app. */
-[data-deck-group] > [role="tablist"] {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 40px;
-  padding: 0 8px;
-  flex-shrink: 0;
-  border-bottom: 1px solid var(--qd-border);
-  background: var(--color-surface-2);
-  overflow-x: auto;
-  overflow-y: hidden;
-}
-
-/* The Figma IDE reference paints the WHOLE debug-panel group (tab strip AND
-   the body beneath it — WXML tree, AppData, Storage, etc.) as one uniform
-   chrome tone, not a lighter strip over a darker fallthrough body — confirmed
-   against a live dark-mode screenshot where the body was falling through to
-   `body`'s --color-bg (darker) with no explicit bg of its own, seaming
-   visibly against the tablist above it. Uses --color-surface-2 (not
-   --qd-muted directly) so dark mode gets the pixel-verified #282828 chrome
-   tone rather than Cornetto's --qd-muted #383838, which doesn't match Figma
-   here (see --color-surface-2's definition above). `:has([role="tablist"])`
-   scopes this to groups that actually show tabs (the debug panels) — the
-   simulator and editor groups render no tablist (`hideTab: true`) and keep
-   setting their own background per Figma's separate "Editor content" /
-   "Simulator" tokens. */
-[data-deck-group]:has(> [role="tablist"]) {
-  background: var(--color-surface-2);
-}
-
-[data-deck-group] > [role="tablist"] [data-deck-tab] {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 28px;
-  padding: 0 8px;
-  font-size: var(--font-size-base);
-  line-height: 1;
-  color: var(--qd-muted-foreground);
-  background: transparent;
-  border: none;
-  border-radius: var(--qd-radius-md);
-  cursor: pointer;
-  white-space: nowrap;
-  user-select: none;
-  transition: color 0.12s, background 0.12s;
-}
-
-[data-deck-group] > [role="tablist"] [data-deck-tab]:hover {
-  color: var(--qd-foreground);
-  background: var(--color-chrome-hover);
-}
-
-[data-deck-group] > [role="tablist"] [data-deck-tab][data-active="true"] {
-  color: var(--qd-foreground);
-  background: var(--color-chrome-hover);
-}
-
-/* ── Dockable resize handles (electron-deck DockView `Separator`) ─────────────
- * Like the tab strip, electron-deck renders the react-resizable-panels resize
- * handle UNSTYLED — a bare `[data-deck-resize-handle]` div with NO size, so it
- * collapses to 0px and is impossible to grab (the #51 dockable rewrite shipped
- * the engine without this host skin; only the programmatic setSizes seam ever
- * exercised resize, so the dead grab-area went unnoticed). Give it the same
- * affordance the legacy FrameTree splitter used (see `splitter-styles.ts`): a
- * generous 10px transparent hit zone with a 1px visible line (a `::before`),
- * elevated to the ring token on hover / active drag. `aria-orientation` is the
- * orientation of the VISIBLE line: `vertical` → a column boundary you drag
- * horizontally; `horizontal` → a row boundary you drag vertically. */
-[data-deck-resize-handle] {
-  position: relative;
-  flex-shrink: 0;
-  background: transparent;
-  z-index: 1;
-}
-[data-deck-resize-handle][aria-orientation="vertical"] {
-  width: 10px;
-  cursor: col-resize;
-}
-[data-deck-resize-handle][aria-orientation="horizontal"] {
-  height: 10px;
-  cursor: row-resize;
-}
-[data-deck-resize-handle]::before {
-  content: "";
-  position: absolute;
-  background: var(--color-border);
-  transition: background 0.12s;
-}
-[data-deck-resize-handle][aria-orientation="vertical"]::before {
-  top: 0;
-  bottom: 0;
-  left: 50%;
-  width: 1px;
-  transform: translateX(-0.5px);
-}
-[data-deck-resize-handle][aria-orientation="horizontal"]::before {
-  left: 0;
-  right: 0;
-  top: 50%;
-  height: 1px;
-  transform: translateY(-0.5px);
-}
-[data-deck-resize-handle]:hover::before,
-[data-deck-resize-handle][data-resize-handle-active]::before {
-  background: var(--color-ring);
-}
-
-/* Close affordance (×). A `role="button"` span nested in the tab button. */
-[data-deck-tab-close] {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 14px;
-  height: 14px;
-  margin-left: 2px;
-  border-radius: 3px;
-  color: var(--color-text-muted);
-  font-size: 12px;
-  line-height: 1;
-  cursor: pointer;
-}
-
-[data-deck-tab-close]:hover {
-  color: var(--color-text);
-  background: var(--color-surface-3);
 }
 
 /* ── Project card geometry ──────────────────────────────────────────────────

@@ -1,0 +1,138 @@
+/* ── @dimina-kit/electron-deck DockView skin ─────────────────────────────────
+ * electron-deck renders an intentionally UNSTYLED dock: a semantic
+ * `<div role="tablist">` of `<button role="tab" data-deck-tab>` plus a
+ * `<span data-deck-tab-close>` ×, and a bare `[data-deck-resize-handle]` div.
+ * The engine defers ALL visuals to the host, and its React source contains no
+ * className at all — so without this skin the tabs render as bare oversized
+ * text and the resize handle collapses to 0px and cannot be grabbed. Both are
+ * how the dockable rewrite originally shipped, engine without host skin.
+ *
+ * Requires tokens.css. A CSS reset that strips the UA button look (Tailwind's
+ * preflight, or any normalize) makes the tab rules below load-bearing rather
+ * than cosmetic.
+ *
+ * Everything is scoped under `[data-deck-group]` / `[data-deck-*]` so it can
+ * never leak onto another `role="tab"` usage elsewhere in the host app.
+ ──────────────────────────────────────────────────────────────────────────── */
+[data-deck-group] > [role="tablist"] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 8px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--qd-border);
+  background: var(--color-surface-2);
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* The Figma IDE reference paints the WHOLE panel group (tab strip AND the body
+   beneath it) as one uniform chrome tone, not a lighter strip over a darker
+   fallthrough body — confirmed against a live dark-mode screenshot where the
+   body was falling through to `body`'s --color-bg (darker) with no explicit bg
+   of its own, seaming visibly against the tablist above it. Uses
+   --color-surface-2 (not --qd-muted directly) so dark mode gets the
+   pixel-verified #282828 chrome tone rather than Cornetto's --qd-muted
+   #383838, which doesn't match Figma here (see --color-surface-2's definition
+   in tokens.css). `:has([role="tablist"])` scopes this to groups that actually
+   show tabs — a group created with `hideTab: true` renders no tablist and
+   keeps setting its own background. */
+[data-deck-group]:has(> [role="tablist"]) {
+  background: var(--color-surface-2);
+}
+
+[data-deck-group] > [role="tablist"] [data-deck-tab] {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 8px;
+  font-size: var(--font-size-base);
+  line-height: 1;
+  color: var(--qd-muted-foreground);
+  background: transparent;
+  border: none;
+  border-radius: var(--qd-radius-md);
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  transition: color 0.12s, background 0.12s;
+}
+
+[data-deck-group] > [role="tablist"] [data-deck-tab]:hover {
+  color: var(--qd-foreground);
+  background: var(--color-chrome-hover);
+}
+
+[data-deck-group] > [role="tablist"] [data-deck-tab][data-active="true"] {
+  color: var(--qd-foreground);
+  background: var(--color-chrome-hover);
+}
+
+/* ── Resize handles (electron-deck DockView `Separator`) ──────────────────────
+ * The react-resizable-panels resize handle arrives as a bare
+ * `[data-deck-resize-handle]` div with NO size, so it collapses to 0px and is
+ * impossible to grab. Give it a generous 10px transparent hit zone with a 1px
+ * visible line (a `::before`), elevated to the ring token on hover / active
+ * drag. `aria-orientation` is the orientation of the VISIBLE line: `vertical`
+ * → a column boundary you drag horizontally; `horizontal` → a row boundary you
+ * drag vertically. */
+[data-deck-resize-handle] {
+  position: relative;
+  flex-shrink: 0;
+  background: transparent;
+  z-index: 1;
+}
+[data-deck-resize-handle][aria-orientation="vertical"] {
+  width: 10px;
+  cursor: col-resize;
+}
+[data-deck-resize-handle][aria-orientation="horizontal"] {
+  height: 10px;
+  cursor: row-resize;
+}
+[data-deck-resize-handle]::before {
+  content: "";
+  position: absolute;
+  background: var(--color-border);
+  transition: background 0.12s;
+}
+[data-deck-resize-handle][aria-orientation="vertical"]::before {
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-0.5px);
+}
+[data-deck-resize-handle][aria-orientation="horizontal"]::before {
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  transform: translateY(-0.5px);
+}
+[data-deck-resize-handle]:hover::before,
+[data-deck-resize-handle][data-resize-handle-active]::before {
+  background: var(--color-ring);
+}
+
+/* Close affordance (×). A `role="button"` span nested in the tab button. */
+[data-deck-tab-close] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-left: 2px;
+  border-radius: 3px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+[data-deck-tab-close]:hover {
+  color: var(--color-text);
+  background: var(--color-surface-3);
+}

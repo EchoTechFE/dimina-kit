@@ -1,0 +1,193 @@
+@import './cornetto-tokens.css';
+
+/* ── Design Tokens ──────────────────────────────────────────────────────────
+   Color values are aliases onto Cornetto's --qd-* semantic tokens
+   (cornetto-tokens.css) — that file is the single source of truth for color;
+   do not hardcode a color value here again. Tokens with no Cornetto
+   counterpart (fine-grained surface states, syntax-highlight colors) are
+   owned by this package and marked below.
+   Use these CSS variables directly, or via the Tailwind aliases that
+   tailwind-preset.cjs maps onto them (bg-accent, text-code-blue, …).
+   Every alias the preset declares must resolve to a variable defined here —
+   tailwind-preset.test.ts checks that.
+ ──────────────────────────────────────────────────────────────────────────── */
+
+/* ── Dark mode (default) ────────────────────────────────────────────────── */
+:root {
+  /* cornetto-tokens.css defaults --qd-* to LIGHT on :root and gates dark via
+     a `.dark` class. These tokens switch theme on prefers-color-scheme
+     instead of a class, so the --qd-* values that have a dark variant are
+     re-declared here (dark baseline) and reset back under the light media
+     query below — instead of relying on cornetto's own `.dark` selector.
+     `.dark` on <html> still forces dark: the light block below is skipped for
+     it, so the dark values here stay in effect whatever the system says.
+     There is no matching `.light` — that would need a second copy of every
+     package-owned --color-* light value, since those are real values here and
+     not resets of a --qd-* token. */
+  --qd-background: #1f1f1f;
+  --qd-secondary: #404040;
+  --qd-secondary-foreground: #ffffffe0;
+  --qd-muted: #383838;
+  --qd-foreground: #ffffffe0;
+  --qd-muted-foreground: #ffffffa3;
+  --qd-border: #ffffff3d;
+  --qd-primary-soft: #28238c;
+  --qd-destructive-soft: #7a2230;
+  --qd-success-soft: #1c4a26;
+  --qd-warning-soft: #5e3a05;
+  --qd-info-soft: #16306e;
+  --qd-shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.3);
+  --qd-shadow-md: 0 4px 12px -2px rgb(0 0 0 / 0.45), 0 2px 4px -2px rgb(0 0 0 / 0.35);
+  --qd-shadow-lg: 0 12px 32px -8px rgb(0 0 0 / 0.6), 0 4px 8px -4px rgb(0 0 0 / 0.4);
+
+  /* Brand / Accent */
+  --color-accent:       var(--qd-primary);
+  --color-accent-hover: hsl(249  79%  63%);  /* no Cornetto hover-shade token; package-owned */
+
+  /* Backgrounds */
+  --color-bg:               var(--qd-background);
+  --color-bg-panel:         var(--qd-secondary);
+  --color-surface:          var(--qd-muted);
+  --color-surface-2:        #282828;  /* toolbar/raised-panel chrome — pixel-verified against Figma node 66:1729 (fileKey Ptsx2ERDMvYmRYf21SlfOD), sampled rgb(40,40,40) at 7 independent chrome regions (title bar/sidebar/tab strip/panel body). Does NOT match any Cornetto dark token (--qd-background #1f1f1f, --qd-secondary #404040, --qd-muted #383838 are all off by 9-24 units) — package-owned like the other --color-surface-* tiers. Light mode's equivalent chrome IS an exact --qd-muted match (verified against node 25:5, both #f7f7f9), so only dark diverges. */
+  --color-surface-3:        hsl(200  3%  22%);  /* hover state — package-owned */
+  --color-surface-active:   hsl(210  3%  26%);  /* active/selected state — package-owned */
+  --color-surface-input:    hsl(  0  0%  24%);  /* form input background — package-owned */
+  --color-surface-selected: hsl(  0  0%  20%);  /* selected item — package-owned */
+  --color-surface-thumb:    hsl(  0  0%  29%);  /* placeholder / thumbnail — package-owned */
+  --color-surface-splitter: hsl(  0  0%  13%);  /* panel splitter — package-owned */
+  /* Figma IDE chrome's flat "hover"/selected overlay (#00000012 on white) —
+     not a Cornetto token; derived from --qd-foreground so it flips polarity
+     with theme instead of needing a separate light/dark literal. */
+  --color-chrome-hover:     color-mix(in srgb, var(--qd-foreground) 7%, transparent);
+
+  /* Borders */
+  --color-border:        var(--qd-border);
+  --color-border-subtle: hsl(  0  0%  18%);  /* no Cornetto tier below --qd-border; package-owned */
+  --color-border-strong: hsl(  0  0%  27%);  /* elevated surfaces (popover, modal) — package-owned */
+  --color-ring:          var(--color-accent);  /* splitter hover / focus highlight */
+
+  /* Text */
+  --color-text:           var(--qd-foreground);
+  --color-text-secondary: var(--qd-muted-foreground);
+  --color-text-muted:     hsl(  0  0%  40%);  /* status / timestamps — no Cornetto tier this fine, package-owned */
+  --color-text-dim:       hsl(  0  0%  33%);  /* placeholders — package-owned */
+  --color-text-white:     var(--qd-on-solid);
+
+  /* Code colors (VS Code dark+ palette) — no Cornetto syntax-highlight tokens, package-owned */
+  --color-code-blue:    hsl(201  98%  80%);  /* property names */
+  --color-code-orange:  hsl( 17  47%  64%);  /* strings */
+  --color-code-label:   hsl(  0   0%  52%);  /* labels */
+  --color-code-number:  hsl(100  28%  73%);  /* numeric literals */
+  --color-code-keyword: hsl(207  61%  59%);  /* booleans / null / keywords */
+
+  /* Status indicators */
+  --color-status-warn:    var(--qd-warning);
+  --color-status-error:   var(--qd-destructive);
+  --color-status-success: var(--qd-success);
+  --color-status-ready:   var(--color-accent);  /* same as accent */
+
+  /* Semantic backgrounds */
+  --color-danger-bg:   var(--qd-destructive-soft);
+  --color-warn-bg:     var(--qd-warning-soft);
+  --color-warn-border: hsl( 41 100%  47% / 30%);  /* no Cornetto soft-border variant, package-owned */
+
+  /* Overlays — plain scrim, no brand color involved, package-owned */
+  --color-overlay:       hsl(0 0% 0% / 45%);
+  --color-overlay-heavy: hsl(0 0% 0% / 70%);
+
+  /* Typography — font family follows Cornetto; type scale and radius stay
+     package-owned for now (a full scale remap onto Cornetto's --qd-text-* /
+     --qd-radius-* is a separate, visually-reviewed change). */
+  --font-family:      var(--qd-font-sans);
+  --font-family-mono: 'Menlo', 'Consolas', monospace;
+  --font-size-xs:   11px;
+  --font-size-sm:   12px;
+  --font-size-base: 13px;
+  --font-size-md:   14px;
+  --font-size-lg:   16px;
+
+  /* Border radii */
+  --radius:    4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+
+  /* Scrollbar */
+  --scrollbar-size:  6px;
+  --scrollbar-thumb: hsl(0 0% 27%);
+}
+
+/* ── Light mode ─────────────────────────────────────────────────────────── */
+@media (prefers-color-scheme: light) {
+  :root:not(.dark) {
+    /* Reset the --qd-* tokens that carry a dark override in the block above
+       back to cornetto-tokens.css's own light :root defaults. */
+    --qd-background: #ffffff;
+    --qd-secondary: #f7f7f9;
+    --qd-secondary-foreground: #000000;
+    --qd-muted: #f7f7f9;
+    --qd-foreground: #000000;
+    --qd-muted-foreground: #000000a3;
+    --qd-border: #0000001f;
+    --qd-primary-soft: #f2f0ff;
+    --qd-destructive-soft: #ffebe9;
+    --qd-success-soft: #e2f7e3;
+    --qd-warning-soft: #fff4e0;
+    --qd-info-soft: #e8f0ff;
+    --qd-shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.06);
+    --qd-shadow-md: 0 4px 12px -2px rgb(0 0 0 / 0.12), 0 2px 4px -2px rgb(0 0 0 / 0.08);
+    --qd-shadow-lg: 0 12px 32px -8px rgb(0 0 0 / 0.18), 0 4px 8px -4px rgb(0 0 0 / 0.1);
+
+    /* Brand / Accent — darker for sufficient contrast on light bg */
+    --color-accent:       var(--qd-primary);
+    --color-accent-hover: hsl(249  79%  63%);
+
+    /* Backgrounds */
+    --color-bg:               var(--qd-background);
+    --color-bg-panel:         var(--qd-secondary);
+    --color-surface:          var(--qd-muted);
+    --color-surface-2:        var(--qd-muted);  /* light chrome IS an exact --qd-muted match (verified against Figma node 25:5, both #f7f7f9) — only dark diverges, see dark-mode block above */
+    --color-surface-3:        hsl(200  3%  90%);  /* toolbar hover: visible without reading as selected */
+    --color-surface-active:   hsl(210  3%  82%);  /* selected toolbar chip: distinct from hover without the previous heavy fill */
+    --color-surface-input:    hsl(  0  0% 100%);
+    --color-surface-selected: hsl(  0  0%  86%);
+    --color-surface-thumb:    hsl(  0  0%  72%);
+    --color-surface-splitter: hsl(  0  0%  88%);
+
+    /* Borders */
+    --color-border:        var(--qd-border);
+    --color-border-subtle: hsl(  0  0%  87%);
+    --color-border-strong: hsl(  0  0%  74%);
+
+    /* Text — all pass WCAG AA on hsl(0 0% 98%) */
+    --color-text:           var(--qd-foreground);
+    --color-text-secondary: var(--qd-muted-foreground);
+    --color-text-muted:     hsl(  0  0%  42%);  /*  4.9:1 ✓ */
+    --color-text-dim:       hsl(  0  0%  50%);  /* 3.2:1 on surface — decorative */
+    --color-text-white:     var(--qd-on-solid);
+
+    /* Code colors (VS Code light+ palette) */
+    --color-code-blue:    hsl(207 100%  30%);  /* property names  #0074b5 */
+    --color-code-orange:  hsl(  0  72%  35%);  /* strings         #a31515 */
+    --color-code-label:   hsl(  0   0%  42%);  /* labels */
+    --color-code-number:  hsl(100  73%  28%);  /* numeric literals #098658 */
+    --color-code-keyword: hsl(240 100%  40%);  /* booleans / null  #0000cc */
+
+    /* Status indicators — darkened for text on light bg */
+    --color-status-warn:    var(--qd-warning);
+    --color-status-error:   var(--qd-destructive);
+    --color-status-success: var(--qd-success);
+    --color-status-ready:   var(--color-accent);
+
+    /* Semantic backgrounds */
+    --color-danger-bg:   var(--qd-destructive-soft);
+    --color-warn-bg:     var(--qd-warning-soft);
+    --color-warn-border: hsl( 41 100%  47% / 35%);
+
+    /* Overlays */
+    --color-overlay:       hsl(0 0% 0% / 30%);
+    --color-overlay-heavy: hsl(0 0% 0% / 60%);
+
+    /* Scrollbar */
+    --scrollbar-thumb: hsl(0 0% 70%);
+  }
+}

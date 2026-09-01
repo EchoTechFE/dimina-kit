@@ -1,0 +1,14 @@
+/* Everything this package styles, in dependency order.
+ *
+ * Import the parts instead if you want less:
+ *   tokens.css  — the CSS variables (pulls in cornetto-tokens.css itself)
+ *   base.css    — element defaults built on those variables
+ *   deck.css    — the @dimina-kit/electron-deck dock skin
+ *
+ * Pair this with tailwind-preset.cjs if you use the Tailwind aliases
+ * (bg-surface-2, text-code-blue, …); the CSS alone defines the variables but
+ * not the utility classes that reference them.
+ */
+@import './tokens.css';
+@import './base.css';
+@import './deck.css';
