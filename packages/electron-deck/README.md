@@ -1,17 +1,22 @@
 # @dimina-kit/electron-deck
 
-领域中立的 Electron host-shell 框架。它把跨窗口编排、原生 `WebContentsView` 的 z 叠放与几何跟随、嵌套寿命管理抽成一组正交原语，让任意 Electron 多窗口应用用极少的 host 代码拼出「窗口 + 原生 view + 浮层 + popout」。同时提供 host-shell 的跨进程 transport（声明式 + typed 双向 IPC）、信任边界、确定性资源生命周期，以及 webview 侧的 preload / client。
+> 给 Electron 应用用的窗口与视图编排框架：把「多窗口、原生 `WebContentsView` 的层叠与几何跟随、浮层与 popout、跨进程 IPC」做成一组正交原语，让宿主用很少的代码拼出一套 host-shell。
 
-本包有两个**生产消费面**：
+它和小程序无关，是领域中立的。`@dimina-kit/devtools` 是它目前最大的使用者。
 
-1. **`backend` 装配**（下面「入口」一节）——领域方实现 `RuntimeBackend`，把 `electronDeck({ backend })` 当唯一入口，自己建窗口、自己接线 IPC。`@dimina-kit/devtools` 就是这样接入的。
-2. **`/layout` + `/dock-react`**（下面「浏览器消费面」一节）——纯窗口内 docking 布局引擎，Electron devtools 和纯浏览器 web 项目都在用。
+## 安装
 
-框架自身的声明式装配面（`startElectronDeck` 顶层配置 `hostServices` / `simulatorApis` / `events` / `toolbar`，`runtime.windows` / `runtime.view` 等 host-shell 高层 API）目前**没有生产消费者**，见文末「实验性面」一节。
+```bash
+pnpm add @dimina-kit/electron-deck
+```
 
-## 入口：`backend` 装配（生产路径）
+`electron`（`^43.2.0`）是可选 peer——只用 `/layout` + `/dock-react` 的纯浏览器项目不需要它。React 面（`/dock-react`）需要 React ≥ 18。
 
-领域方实现一份 `RuntimeBackend`（`assemble(runtime)` 建窗口、接域内 IPC；`ownsWindows: true` 让框架把主窗口装配完全让给 backend），把它交给 `electronDeck`：
+## 你多半是这两种用法之一
+
+### 一、接管整个 Electron 应用的装配
+
+实现一份 `RuntimeBackend`（在 `assemble(runtime)` 里建窗口、接自己的 IPC），把它交给 `electronDeck()`：
 
 ```ts
 // main.ts
@@ -24,15 +29,21 @@ electronDeck({ backend: myBackend }).catch((err) => {
 })
 ```
 
-框架接管 process 生命周期 gate（`app.whenReady()`）、wire transport、信任边界；backend 只负责领域装配（真实 context、主窗口内容、projects/simulator/views、IPC 模块）。`@dimina-kit/devtools` 的 `launch(config)` 就是「预置 devtools backend + 调 `electronDeck({ backend })`」的薄封装——集成 devtools 时直接用它，见 [`../devtools/docs/workbench-model.md`](../devtools/docs/workbench-model.md)。
+框架负责等 `app.whenReady()`、接线 transport、划信任边界；你只负责领域内的装配（真实 context、主窗口内容、各种 view、IPC 模块）。设 `ownsWindows: true` 表示主窗口完全由 backend 自己建。
 
-`electronDeck()` 不要在 main 模块顶层 `await`（electron 在 main 模块求值完成前不触发 `whenReady`，顶层 await 会死锁）——用 `.catch(...)` 收尾，或改用 `startElectronDeck()`（见「实验性面」一节，内部已对 `whenReady` 做 gating，可在顶层直接调用）。
+`@dimina-kit/devtools` 的 `launch(config)` 就是「预置一个 devtools backend + 调 `electronDeck({ backend })`」的薄封装，集成 devtools 时直接用它就行，见 [`../devtools/docs/workbench-model.md`](../devtools/docs/workbench-model.md)。
 
-## 浏览器消费面：`/layout` + `/dock-react`
+> **别在 main 模块顶层 `await electronDeck()`**。Electron 要等 main 模块求值完成才触发 `whenReady`，顶层 await 会死锁。用 `.catch(...)` 收尾，或改用 `startElectronDeck()`（它内部已对 `whenReady` 做了 gating）。
 
-`@dimina-kit/electron-deck/layout`（纯 TS 的 layout-as-data 引擎：`SplitNode`/`TabGroupNode` 树、`movePanel`/`splitPanel`/`closePanel`/`insertPanel`/`setActive`/`setSizes`/`setConstraint` mutation、`serializeLayout`/`parseLayout`/`validateTree`、`createLayoutModel` 单写者可观察模型、panel registry）和 `@dimina-kit/electron-deck/dock-react`（`<DockView>` React 渲染器）是**双端消费面**：Electron devtools（IDE-dockable 布局）和纯浏览器的 web 项目都直接消费。
+### 二、只要窗口内的 docking 布局
 
-因此这两个子路径（及其传递依赖）**禁止引入 `electron` / `node` 依赖**——`/layout` 连 `react` 都不许 import（`src/layout/boundary.test.ts` 钉死这条边界），`/dock-react` 的运行时依赖仅限 `react` / `react-dom` / `react-resizable-panels`（`src/dock-react/boundary.test.ts` 钉死）。split 子节点可带 `SizeConstraint`：`fixedPx` 锁死到 N px；`minPx` 同样是 px-sized（有最小像素下限、不参与弹性权重池），但用户仍可把它拖宽。descriptor 可带 `PanelCapabilities`：`draggable`/`dropPolicy`/`closable`/`hideTab`，`<DockView>` 按它约束拖拽/关闭交互；`computeReorderIndex` 是配套的纯几何函数。
+`@dimina-kit/electron-deck/layout` 是纯 TypeScript 的 layout-as-data 引擎，`@dimina-kit/electron-deck/dock-react` 是配套的 `<DockView>` React 渲染器。Electron devtools 的 IDE 式可停靠布局和纯浏览器的 web 项目都直接用这两个子路径。
+
+- 布局是一棵可序列化的 `SplitNode` / `TabGroupNode` 树；`movePanel` / `splitPanel` / `closePanel` / `insertPanel` / `setActive` / `setSizes` / `setConstraint` 是它的 mutation，`serializeLayout` / `parseLayout` / `validateTree` 负责持久化与校验，`createLayoutModel` 是单写者的可观察模型。
+- split 子节点可以带 `SizeConstraint`：`fixedPx` 锁死到 N px；`minPx` 同样按像素定尺（有下限、不参与弹性权重分配），但用户仍可拖宽。
+- panel descriptor 可以带 `PanelCapabilities`（`draggable` / `dropPolicy` / `closable` / `hideTab`），`<DockView>` 据此约束拖拽和关闭；`computeReorderIndex` 是配套的纯几何函数。
+
+这两个子路径（含其传递依赖）**不允许引入 `electron` 或 `node` 依赖**：`/layout` 连 `react` 都不能 import，`/dock-react` 的运行时依赖只有 `react` / `react-dom` / `react-resizable-panels`。两条边界分别由 `src/layout/boundary.test.ts` 和 `src/dock-react/boundary.test.ts` 钉死。
 
 ## 导出
 
@@ -43,15 +54,14 @@ electronDeck({ backend: myBackend }).catch((err) => {
 | host 侧 control-bus / capability / trust 原语 | `@dimina-kit/electron-deck/host` |
 | preload bridge `exposeDeckBridge()` | `@dimina-kit/electron-deck/preload` |
 | renderer client `createDeckClient<HS, EV>()` | `@dimina-kit/electron-deck/client`（`/client/browser` 是同一产物的别名） |
-| layout-as-data 引擎 + panel registry（见上「浏览器消费面」） | `@dimina-kit/electron-deck/layout` |
-| `<DockView>` React 渲染器 + `computeReorderIndex`（见上「浏览器消费面」） | `@dimina-kit/electron-deck/dock-react` |
+| layout-as-data 引擎 + panel registry | `@dimina-kit/electron-deck/layout` |
+| `<DockView>` + `computeReorderIndex` | `@dimina-kit/electron-deck/dock-react` |
 
-## 实验性面（无生产消费者）
+## 实验性：声明式装配面
 
-以下声明式装配教程和 host-shell 高层 API 目前只有本包自己的 `examples/` / `spike/` 在用——devtools 等下游都走上面的 `backend` 装配路径，从不触达这套面。在第二个真实消费者采纳之前，把它们当 `@experimental`：签名可能变化，未经非 demo 工作负载验证。
+除上面两条路径外，本包还有一套声明式装配面——`startElectronDeck()` 的顶层配置（`hostServices` / `simulatorApis` / `events` / `toolbar`）和 `runtime.windows` / `runtime.view` / `runtime.scopes` / `runtime.grants` 等高层 API：
 
 ```ts
-// main.ts
 import { startElectronDeck, defineEvent } from '@dimina-kit/electron-deck'
 
 const authChanged = defineEvent<{ user: { id: string } | null }>('authChanged')
@@ -63,11 +73,19 @@ startElectronDeck({
 })
 ```
 
-`startElectronDeck()` 内部已对 `app.whenReady()` 做 gating，可在 main 模块顶层直接调用——这是它相对 `electronDeck()` 的唯一优势；装配面本身（`hostServices`/`simulatorApis`/`events`/`toolbar`、`runtime.windows`/`runtime.view`/`runtime.scopes`/`runtime.grants`/`runtime.layout` 等 host-shell 高层 API）仍是实验性的。判定「实现是否已上生产」以谁在调 `assemble`/`backend` 为准，不是这份教程。
+目前的调用者只有本包的 [`examples/layout-demo`](./examples/layout-demo)、[`examples/dockable-demo`](./examples/dockable-demo) 和 devtools 的 popout spike（`../devtools/spike/popout/harness.mjs`），没有生产消费者，请当作 `@experimental`：签名可能变化，也没有经过非 demo 的工作负载验证。判断某个实现是否已上生产，看谁在调 `assemble` / `backend`，不要以这段教程为准。
+
+值得说明的是 devtools 为什么没用这套面：它不是「还没排上」，而是有一处结构性冲突——`runtime.windows.adopt()` 会无条件给被接管的窗口建一套自己的原生子视图 owner（私有顺序表 + 自己的 compositor，直接写 `win.contentView`），而 devtools 的主窗口已经有一个独占 owner 在写同一棵树。冲突是**按窗口**发生的，不是某个 API 的问题。详见 [`../devtools/docs/deck-adoption-decision.md`](../devtools/docs/deck-adoption-decision.md)。
+
+`startElectronDeck()` 相对 `electronDeck()` 唯一确定的好处是它内部已对 `app.whenReady()` 做了 gating，可以在 main 模块顶层直接调用。
 
 ## 文档
 
-- 架构总览（四个布局/多窗口原语、注入式 `RuntimeBackend`、信任边界、生命周期）：[`docs/architecture.md`](./docs/architecture.md)
-- 连接层（`Connection` / 资源归属 / debugTap）：[`docs/foundation.md`](./docs/foundation.md)
-- 横切契约：[`docs/contracts/`](./docs/contracts/)
-- host 集成（以 devtools 为例）：[`../devtools/docs/workbench-model.md`](../devtools/docs/workbench-model.md)
+- [架构总览](./docs/architecture.md)——四个布局 / 多窗口原语、注入式 `RuntimeBackend`、信任边界、生命周期
+- [连接层](./docs/foundation.md)——`Connection`、资源归属、debugTap
+- [横切契约](./docs/contracts/)
+- [宿主集成实例（devtools）](../devtools/docs/workbench-model.md)
+
+## License
+
+[MIT](../../LICENSE) © EchoTechFE

@@ -15,21 +15,23 @@ import { BrowserWindow } from 'electron'
  *   warming   — BrowserWindow constructed, page loading
  *   ready     — load settled; can be handed to a caller immediately
  *   in-use    — acquired by a caller (caller owns the window until release)
- *   resetting — released; navigated back to a blank page, then storage cleared
+ *   resetting — released; navigated back to a blank page, and storage cleared
+ *               only if the spec opts in (see constraint 1 below)
  *   disposing — being torn down; removed from the pool
  *
- * ── Phase-3 blockers, both RESOLVED in the wiring (kept here for context) ──
- * 1. Shared-session storage wipe — the service host shares the
- *    `persist:simulator` partition with live projects, so clearing it on reset
- *    would wipe other projects. Resolved by `ServiceHostSpec.clearStorageOnReset`:
- *    `serviceHostSpec()` sets it `false`, so reset only navigates the
- *    window to blank (resetting the JS realm) and never clears the shared
- *    session; cross-spawn isolation rides on appId-namespacing + fresh nav,
- *    matching the already-shared simulator `<webview>` behavior.
- * 2. Warming vs preload contract — warming loads `about:blank` (no bridgeId).
- *    `src/service-host/preload.cjs` now idles (early `return`) when `bridgeId`
- *    is absent instead of throwing, so a warmed window survives until the real
- *    spawn navigation re-runs the preload with a bridgeId.
+ * ── Two constraints the reset path must keep ───────────────────────────────
+ * 1. Reset must not clear storage. The service host shares the
+ *    `persist:simulator` partition with live projects, so wiping it on reset
+ *    would wipe those projects too. `serviceHostSpec()` therefore sets
+ *    `ServiceHostSpec.clearStorageOnReset: false`, and reset only navigates the
+ *    window to blank (resetting the JS realm). Cross-spawn isolation rides on
+ *    appId-namespacing + fresh nav instead, matching what the shared simulator
+ *    `<webview>` already did.
+ * 2. The preload must tolerate a bridgeId-less load. Warming loads
+ *    `about:blank`, so the host-supplied preload
+ *    (`assets.serviceHostPreloadPath`) must idle rather than throw when
+ *    `bridgeId` is absent, or a warmed window dies before it is ever handed
+ *    out. The real spawn navigation re-runs the preload with a bridgeId.
  *
  * ── Window-death observation ───────────────────────────────────────────────
  * A pooled/in-use window can die three ways: a render crash

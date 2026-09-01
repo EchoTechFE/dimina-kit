@@ -9,8 +9,8 @@ so that:
    `env(safe-area-inset-top|right|bottom|left)` to the device's real insets, so
    pinned headers / tabBars / action sheets avoid the notch and home indicator
    exactly as on-device.
-3. `wx.getSystemInfoSync().safeArea` / `getWindowInfo()` report the same insets
-   (JS and CSS agree).
+3. CSS insets follow the selected device profile. The public JS APIs currently
+   take different paths and do not all return the same `safeArea`; see below.
 
 ## Single source of truth: device profile
 
@@ -38,28 +38,32 @@ back-compat; `safeAreaInsets.top` is the canonical value. Seeded data:
 
 ## Device-info flow (native-host)
 
-The device profile reaches three consumers, all live-updatable when the user
-switches device:
+The selected device reaches the simulator UI/API state, the render-host CDP
+override, and the service-host snapshot. All three update when the user switches
+device:
 
 ```
 toolbar device picker (renderer)
   → SimulatorChannel.SetDeviceInfo (src/main/ipc/simulator.ts)
-  → main caches on the bridge (ctx.bridge.setDevice) + relays DEVICE_CHANGE
-  → simulator WCV / DeviceShell (resize + render notch/status bar + window.__deviceInfo)
-  → CDP inset override on each render-host webview
+    ├→ bridge caches device + DEVICE_CHANGE
+    │   → simulator WCV / DeviceShell visual state
+    │   → SimulatorMiniApp.currentDevice for async system-info handlers
+    ├→ safe-area service re-applies CDP override to each render-host webview
+    └→ HostEnvUpdate → service-host hostEnvSnapshot for sync handlers
 ```
 
 - **Transport renderer → simulator.** The simulator is a top-level
   `WebContentsView` (not a `<webview>` of the main window), so device changes go
   via IPC, not `webview.send`. The toolbar picker drives
   `SimulatorChannel.SetDeviceInfo`; main caches it on the bridge and relays
-  `DEVICE_CHANGE` to the live `simulatorWc`; a listener in `simulator/main.tsx`
-  lifts it into React state + `window.__deviceInfo`. The initial device is the
-  first `device:change` — one code path.
+  `DEVICE_CHANGE` to the live `simulatorWc`. `SimulatorMiniApp` records the
+  event for simulator-resident API handlers, while DeviceShell subscribes and
+  re-renders. Before the first live event, the initial device comes from the
+  `NATIVE_HOST_ENABLED` boot config cached by the bridge.
 - **DeviceShell device prop = single `device` object** (dims + platform +
-  notchType + safeAreaInsets), held in `SimulatorApp` state and updated on
-  `device:change`. DeviceShell re-renders; the WCV bounds track the bezel rect
-  via the layout pipeline.
+  notchType + safeAreaInsets), initialized from `miniApp.getInitialDevice()` and
+  updated from `SIMULATOR_EVENTS.DEVICE_CHANGE`. DeviceShell re-renders; the WCV
+  bounds track the bezel rect via the layout pipeline.
 
 ## Visual: status bar + notch / Dynamic Island
 
@@ -86,17 +90,27 @@ in `status-bar.tsx` so visual + safe-area stay consistent.
 
 `env(safe-area-inset-*)` is UA-defined and cannot be overridden by an author
 stylesheet, so the inset comes from CDP. `src/main/services/safe-area/index.ts`
-attaches `wc.debugger` per render-host `<webview>` guest and sends
-`Emulation.setSafeAreaInsetsOverride`, driven off the simulator WCV's
-**`did-attach-webview`** event — the earliest point each guest `WebContents` is
-available, before the page paints.
+sends `Emulation.setSafeAreaInsetsOverride` per render-host `<webview>` guest,
+driven off the simulator WCV's **`did-attach-webview`** event — the earliest
+point each guest `WebContents` is available, before the page paints.
 
-- Per guest: `guestWc.debugger.attach('1.3')` →
-  `sendCommand('Emulation.setSafeAreaInsetsOverride', { insets })`. `insets`
+- The `wc.debugger` session itself is not owned by safe-area: it goes through
+  the shared `CdpSessionBroker` (`src/main/services/cdp-session/index.ts`). Its
+  six service consumers are safe-area, elements-forward, render-inspect,
+  network-forward, console-forward's CDP injection, and simulator-storage.
+  (`service-console` attaches to service-host separately.) `wc.debugger` is a
+  single-owner API, so without the broker any two
+  of them attaching independently would steal/detach each other's session on
+  the same guest. Per guest: `broker.acquire(wc)`
+  returns a `CdpSessionLease`; safe-area calls
+  `lease.send('Emulation.setSafeAreaInsetsOverride', { insets })` on it. `insets`
   carries **all 8 fields** (`top/topMax/right/rightMax/bottom/bottomMax/left/
   leftMax`, base == max) — omitting `*Max` leaves `env(safe-area-max-inset-*)`
-  at 0. Track `Map<WebContents, 'attached'|'detached'>`; clear on guest
-  `destroyed`.
+  at 0. Safe-area tracks each guest's page type in its own `Map<WebContents, boolean>`
+  (`isTabPage`, independent of the lease), and drops it on the guest's
+  `destroyed` event; the lease itself is dropped on the broker's `onDetach`
+  (an external tool stealing the session, or the wc dying) so the next
+  `override` re-acquires instead of sending through a dead lease.
 - **Re-apply triggers:** (1) guest attach (new page in the stack), (2) device
   change (reapply to all attached guests).
 - **Inject only what the webview actually borders**, so the page's own `env()`
@@ -114,8 +128,8 @@ available, before the page paints.
       (`guestWc.getURL()` is empty at `did-attach`) and stored per guest so a
       device-change reapply reuses it.
   - `left` / `right` = `0` (portrait).
-  This keeps JS `safeArea` (full device insets) and CSS `env()` (what the page
-  webview borders) each correct for their consumer.
+  This keeps CSS `env()` aligned with the unsafe region actually bordering the
+  page webview. JS `safeArea` follows separate paths described below.
 - **`webContents.debugger` is exclusive.** If an external tool
   (`--remote-debugging-port`) is attached to the render-host guest, `attach()`
   throws and we cannot take over its session — log a warning and leave insets at
@@ -137,21 +151,30 @@ Because the DeviceShell already reserves the bottom, the page's
 `env(safe-area-inset-bottom)` is overridden to 0 on tab pages — the page's own
 `env(bottom)` must not double-count.
 
-## JS `safeArea` parity
+## JS `safeArea`: the public APIs currently diverge
 
-`simulator-api.ts` computes `safeArea` from `window.__deviceInfo`. The full
-`safeAreaInsets` object is carried end-to-end (`device:change` payload →
-`window.__deviceInfo` AND the service-host host-env) and
-`getWindowInfo` / `getSystemInfoSync` prefer it. Three places must agree:
+`safeArea.bottom` is a coordinate, not an inset. On a device with a home
+indicator it should equal `windowHeight - safeAreaInsets.bottom`. The current
+public paths are:
 
-- `simulator-api.ts` (`safeArea` from `window.__deviceInfo`).
-- `service-host/sync-impls/system-info.ts` (`getSystemInfoSync`).
-- `deviceInfoToHostEnv` (`src/shared/bridge-channels.ts`), sent from
-  `main/ipc/simulator.ts` to the service host.
+| Public API | Resolution path | Current result |
+| --- | --- | --- |
+| `wx.getSystemInfoSync()` | `sync-api-patch.ts` → service-host `sync-impls/system-info.ts` | includes `safeArea`, but sets `bottom = windowHeight` |
+| `wx.getWindowInfo()` | upstream service `hostEnvResolvers.getWindowInfo` reads the service-host `HostEnvSnapshot` locally | does not include `safeArea`, because the snapshot has no such field |
+| `wx.getSystemInfo()` / `wx.getSystemInfoAsync()` | bridge `invokeAPI` → simulator `buildSystemInfo()` | includes the device bottom inset and sets `bottom = windowHeight - bottomInset` |
 
-JS `safeArea` reports the FULL device insets (canonical device truth); CSS
-`env()` reports only what the webview borders (above) — different consumers, both
-correct.
+The simulator also exposes a local `getWindowInfo` handler whose
+`safeArea.bottom` is `windowBounds.height`, but a normal business call does not
+reach it: upstream service intercepts `getWindowInfo` in `hostEnvResolvers`
+before bridge dispatch. In contrast, the async system-info APIs are not local
+host-env resolvers and do reach `buildSystemInfo()`.
+
+The initial snapshot and later `HostEnvUpdate` payload are built by `deviceInfoToHostEnv` in
+`packages/dimina-electron-runtime/src/shared/bridge-channels.ts`; it carries
+`statusBarHeight` but neither `safeAreaInsets` nor `safeArea`. The similarly
+named devtools file only re-exports that runtime module. CSS
+`env(safe-area-inset-bottom)` is independent of these JS paths and comes from
+the CDP override.
 
 ## Key files
 
@@ -159,7 +182,7 @@ correct.
 |---|---|
 | `src/renderer/shared/constants.ts` | `DEVICES` profile (notchType + safeAreaInsets) |
 | `src/main/ipc/simulator.ts` | `SimulatorChannel.SetDeviceInfo` → bridge cache → `DEVICE_CHANGE`; sends `deviceInfoToHostEnv` |
-| `src/shared/bridge-channels.ts` | `deviceInfoToHostEnv` (device profile → service-host host-env) |
+| `packages/dimina-electron-runtime/src/shared/bridge-channels.ts` | `deviceInfoToHostEnv` (device profile → service-host host-env) |
 | `src/main/services/safe-area/index.ts` | per-guest `Emulation.setSafeAreaInsetsOverride` (driven off `did-attach-webview`) |
 | `src/simulator/device-shell/status-bar.tsx` | status bar + notch / Dynamic Island visual |
 | `src/service-host/sync-impls/system-info.ts` | `getSystemInfoSync().safeArea` |

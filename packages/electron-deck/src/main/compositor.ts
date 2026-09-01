@@ -1,13 +1,13 @@
 /**
  * `Compositor` — engine-agnostic z-order planner for a window's native child
- * views (foundation: the spikes in `.repro/electron-deck-spikes/`).
+ * views. The observable host semantics below are covered by compositor tests.
  *
  * It separates INTENT (mount / unmount / reorder a view into a zone, at a
  * relative position) from APPLICATION (`commit()` computes the minimal sequence
  * of host add/remove calls that transforms the host's current child order into
  * the target order).
  *
- * The host's observable z-semantics this planner is built on (from the spikes):
+ * The host's observable z-semantics this planner is built on:
  *   - `addChildView` of an ALREADY-mounted child raises it to the top WITHOUT a
  *     remove first and WITHOUT reloading it.
  *   - `addChildView` of a NEW child appends it to the end (= topmost).
@@ -33,9 +33,9 @@
  *
  * commit. We fold the batch of intents into the FINAL target state (last-state,
  * not a write-log replay), then diff the host's current children against that
- * target. The longest increasing subsequence (LIS) of views already in correct
- * relative order — computed over the current∩target intersection — is left
- * untouched; every other shared view is `removeChildView` + `addChildView`, and
+ * target. The longest PREFIX of the target order whose views are already in
+ * ascending host positions is left untouched; every other shared view is
+ * `removeChildView` + `addChildView`, and
  * each brand-new view gets one explicit `addChildView`. All in one synchronous
  * pass. On failure `commit()` throws a typed {@link CommitError}: a destroyed
  * host with additions pending throws `host-destroyed` BEFORE touching native
@@ -102,8 +102,9 @@ export interface Compositor {
    * (unknown / unmounted id, or one whose zone conflicts with an explicit
    * `zone`) throws SYNCHRONOUSLY. */
   reorder(viewId: string, opts: { zone?: number; before?: string | null }): void
-  /** Apply the folded target state to the host with the minimal add/remove
-   * sequence (LIS-preserving). Returns void on success. Throws a typed
+  /** Apply the folded target state to the host, preserving the longest
+   * already-in-order PREFIX of the target order (not a minimal-churn LIS —
+   * see {@link computeKeepIds}). Returns void on success. Throws a typed
    * {@link CommitError} on failure: `kind:'host-destroyed'` (applied:false) when
    * the host is destroyed and there are ADDITIONS to apply — thrown BEFORE
    * touching native; `kind:'apply-failed'` (applied:'partial') when a native
@@ -189,8 +190,8 @@ function planAdditions(
 }
 
 /**
- * Plan the minimal host removals/additions that realize `target` (see
- * {@link Compositor.commit}'s doc-comment for the LIS-preserving strategy).
+ * Plan the host removals/additions that realize `target` (see
+ * {@link Compositor.commit}'s doc-comment for the prefix-preserving strategy).
  * Pure planning — never touches the host.
  */
 function planCommit(

@@ -5,7 +5,7 @@
  * Electron (the `publish` callback owns the IPC → `setBounds`), nothing
  * about React (the core is imperative; see `react.ts` for the adapter),
  * and nothing about the host layout engine (the `target` element may come
- * from our own `compile`/`FrameTree`, or — later — a dockview panel's
+ * from our own `compile`/`FrameTree`, or a dockview panel's
  * `content.element`; the mechanism is identical).
  *
  * It is the modern, alive replacement for the archived

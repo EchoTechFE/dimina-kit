@@ -10,8 +10,8 @@
 > [`architecture.md`](./architecture.md) §4。
 >
 > ⚠️ 这套高层 surface（`runtime.windows` / `runtime.view` / `runtime.scopes` / `runtime.grants`
-> / `runtime.layout`）`@experimental`：已实装并接线，但当前唯一调用者是 `examples/layout-demo`
-> 与 `spike/popout`，签名未 API 稳定。devtools 等下游宿主走 `RuntimeBackend` + `ownsWindows:true`，
+> / `runtime.layout`）`@experimental`：已实装并接线，但当前调用者只有 `examples/layout-demo`
+> 与 devtools 的 popout spike（`../../devtools/spike/popout/harness.mjs`），签名未 API 稳定。devtools 等下游宿主走 `RuntimeBackend` + `ownsWindows:true`，
 > 不碰这层（理由见 [`../../devtools/docs/deck-adoption-decision.md`](../../devtools/docs/deck-adoption-decision.md)）。
 
 ## 架构一句话

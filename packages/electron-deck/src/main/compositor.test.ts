@@ -10,16 +10,14 @@
  * add/remove calls that transforms the host's current child order into the
  * target order).
  *
- * The spikes in `.repro/electron-deck-spikes/` established the host's observable
- * z-semantics that this planner is built on:
+ * The fake host below models the observable z-semantics that this planner is
+ * built on:
  *   - `addChildView` of an ALREADY-mounted child raises it to the top WITHOUT a
- *     remove first and WITHOUT reloading it (gate1: "bare add(MIDDLE)" → MIDDLE
- *     to top, no reload).
+ *     remove first.
  *   - `addChildView` of a NEW child appends it to the end (= topmost).
- *   - A batch of remove/add in ONE synchronous tick re-lands at the target order
- *     with zero renderer reloads (gate1 batch block).
+ *   - A batch of remove/add in ONE synchronous tick re-lands at the target order.
  *   - `addChildView` into a destroyed window/contentView throws synchronously
- *     (gate2 "add-to-destroyed-window").
+ *     in the host model.
  *
  * Contract being pinned (target file `./compositor.ts`):
  *
@@ -83,8 +81,8 @@ beforeAll(async () => {
 
 // ── Fake ContentViewHost ─────────────────────────────────────────────────────
 //
-// Faithful to the spike-established semantics so the planner's minimality
-// claims are observable:
+// Models the host semantics required to make the planner's minimality claims
+// observable:
 //   - addChildView(known)  → move that ref to the END of `children` (raise).
 //   - addChildView(new)    → append to the END of `children`.
 //   - removeChildView(v)   → drop it from `children` (no-op if absent).
@@ -444,9 +442,8 @@ describe('commit — minimal steps via LIS; new views are explicitly added', () 
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 8. commit into a destroyed host → synchronous throw
-// When host.isDestroyed === true at commit time, commit() throws
-// synchronously (the spike showed addChildView into a destroyed contentView
-// throws synchronously — the planner must surface that, not swallow it).
+// When host.isDestroyed === true at commit time, commit() throws synchronously;
+// the planner must surface that host failure rather than swallow it.
 // ─────────────────────────────────────────────────────────────────────────────
 describe('commit — destroyed host throws synchronously', () => {
   it('commit() throws when the host is destroyed and there is pending work', () => {

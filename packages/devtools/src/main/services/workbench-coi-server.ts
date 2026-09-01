@@ -47,6 +47,8 @@ import {
   SKIP_DIRS,
 } from '../ipc/project-fs.js'
 import { handleFsWatchRequest } from './fs-watch-sse.js'
+import { FS_TYPE_DIR, FS_TYPE_FILE, toFsBridgeEntry } from './fs-bridge-protocol.js'
+import type { FsBridgeStat } from './fs-bridge-protocol.js'
 import { jsonRes } from './http-json.js'
 import { miniappPartitionKey } from './views/miniapp-partition.js'
 
@@ -207,7 +209,13 @@ interface FsActionContext {
 
 async function fsStat(ctx: FsActionContext): Promise<void> {
   const st = await statWithin(ctx.projectRoot, ctx.rel)
-  jsonRes(ctx.res, 200, { type: st.isDirectory() ? 2 : 1, size: st.size, ctime: st.ctimeMs, mtime: st.mtimeMs })
+  const payload: FsBridgeStat = {
+    type: st.isDirectory() ? FS_TYPE_DIR : FS_TYPE_FILE,
+    size: st.size,
+    ctime: st.ctimeMs,
+    mtime: st.mtimeMs,
+  }
+  jsonRes(ctx.res, 200, payload)
 }
 
 async function fsReaddir(ctx: FsActionContext): Promise<void> {
@@ -217,18 +225,8 @@ async function fsReaddir(ctx: FsActionContext): Promise<void> {
   // this returns, so listing them would pull entire dependency trees into the
   // editor memfs and the OPFS ledger. Same-named FILES stay visible.
   const visible = entries.filter((e) => !(e.isDirectory && SKIP_DIRS.has(e.name)))
-  // Wire shape: `[name, type]` for a directory, `[name, type, size, mtimeMs]`
-  // for a file — the sync engine's watch-batch stat-diffing
-  // (@dimina-kit/fs-core/sync/watch-expander) needs size+mtimeMs to tell a stat-unchanged
-  // survivor from an actually-modified file without re-reading its content.
-  // `size`/`mtimeMs` are simply absent (not `null`) for a stat-less entry
-  // (readdirWithin's readdir/stat race) — the client side then always
-  // treats it as changed.
-  jsonRes(
-    ctx.res,
-    200,
-    visible.map((e) => (e.isDirectory ? [e.name, 2] : [e.name, 1, e.size, e.mtimeMs])),
-  )
+  // Wire shape and why it carries stats: see fs-bridge-protocol.ts.
+  jsonRes(ctx.res, 200, visible.map(toFsBridgeEntry))
 }
 
 async function fsRead(ctx: FsActionContext): Promise<void> {

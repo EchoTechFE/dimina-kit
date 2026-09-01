@@ -1,150 +1,114 @@
-# devtools 内置编辑器集成（Monaco）
+# devtools 内置编辑器集成（VS Code 工作台）
 
-> 编辑器是 **renderer 内嵌的 Monaco 组件**，作为项目窗口 dockable 布局里的一个 DOM 面板。
-> 配套文档：[`project-window-layout.md`](./project-window-layout.md) —— editor 是 `<DockView>` 渲染的七个 dock 面板之一（simulator / **editor** / wxml / appdata / storage / console / compile）。
+> 编辑器是主进程 `WebContentsView` 中运行的 VS Code 工作台。renderer 的
+> `editor` dock 面板只提供 DOM 占位和 placement anchor。
 
-## 摘要（TL;DR）
+## 当前结构
 
-dimina-kit devtools 的代码编辑器是 **Monaco**（VS Code 的编辑器组件），作为一个普通 React 组件直接挂在主 renderer 里，是 dockable 布局里的一个 DOM 面板（用户可拖拽 re-dock）。它读写当前活跃 dimina 项目的文件（经沙盒化的 `project:fs:*` IPC），提供 wxml/wxss 语法高亮 + wxml 补全/悬浮 + 主题同步 + 自动保存（debounce）与保存状态指示。
+`EditorViewConfig` 只允许覆盖工作台 bundle 目录或提供下游 web 扩展目录；
+编辑器始终启用，没有 Monaco fallback
+（`packages/devtools/src/shared/types.ts:273-293`、
+`packages/devtools/src/shared/types.ts:325-332`）。
 
-Monaco 由 vite 和其余 renderer 代码一起打包：没有独立 `WebContentsView` overlay、没有自定义 protocol、没有 Web Worker 扩展宿主。devtools 定位是**可被 host 嵌入的、以 simulator+调试为中心的轻量 SDK**，编辑器只需"好用的代码编辑 + wxml 智能"，Monaco 正是这个尺寸的原语。
+`editor` 在 dock registry 中仍登记为结构性 DOM 面板，但它渲染的是空的
+`EditorPanel`。`EditorPanel` 用 `createPlacementAnchor` 把槽位的
+`Placement` 写进窗口级 publisher；真正内容由主进程 WCV 绘制
+（`packages/devtools/src/renderer/modules/main/features/project-runtime/layout/dock-layout.ts:83-102`、
+`packages/devtools/src/renderer/modules/main/features/project-runtime/components/editor-panel.tsx:7-95`）。
 
-## 1. 架构总览
+## 启动与放置
 
-```
-┌──────────────────── Electron 主进程 ────────────────────────────────┐
-│  app/app.ts setup():                                                │
-│    registerProjectFsIpc(ctx)   ← project:fs:* 沙盒 IPC（读写活跃项目） │
-│  services/views/view-manager.ts                                     │
-│    setSimulatorDevtoolsBounds  ← Console DevTools overlay（仍是 overlay）│
-│    （editor 已不在这里——它是 renderer 组件，非 overlay）             │
-└────────────────────────────────────────────────────────────────────┘
-        ▲ project:fs:readFile/writeFile/listFiles/getRoot（invoke）
-        │  ctx.senderPolicy（主窗口可信）+ enforceWithinProjectRoot 沙盒
-┌──────────────────── 主 renderer（React）────────────────────────────┐
-│  project-runtime.tsx → <DockView> → editor DOM 面板渲染：            │
-│    renderDomPanel('editor') → <MonacoEditor projectPath={...} />    │
-│  features/monaco-editor/                                            │
-│    components/MonacoEditor.tsx   文件树 + 编辑器 split，开/存文件     │
-│    components/FileTree.tsx       由扁平路径列表构建的折叠树           │
-│    hooks/useMonacoEditor.ts      editor 实例生命周期 + per-file model │
-│    monaco-env.ts                 vite `?worker` 接 monaco 语言 worker │
-│    language/register.ts          注册 wxml(Monarch) + wxss→css        │
-│    language/wxml-monarch.ts      wxml Monarch tokenizer + 语言配置    │
-│    language/wxml-lsp.ts          wxml completion/hover providers      │
-│    language/wxml-data.ts         tag/attr/枚举值 元数据               │
-│    theme.ts                      dimina light/dark → monaco setTheme  │
-│    services/file-service.ts      project:fs:* 的 renderer 封装        │
-└────────────────────────────────────────────────────────────────────┘
-```
+devtools 启动时：
 
-编辑器不涉及：自定义 protocol、独立窗口 / WebContentsView overlay、Web Worker 扩展宿主、editor preload bridge、单独的静态产物、webpack 构建。Monaco 由 vite 和其余 renderer 代码一起打包。
+1. 默认从 `packages/devtools/dist/vscode-workbench` 取 bundle；可由
+   `editorViewConfig.bundleDir` 覆盖。
+2. bundle 中没有 `index.html` 时跳过工作台服务并记录警告。
+3. bundle 存在时启动仅监听本机的 HTTP 服务，并设置 COOP/COEP/CORP 头。
+4. `workbench-view.ts` 保存服务 URL，直到 editor 槽第一次发布非零 placement 才创建 WCV。
 
-## 2. 编辑器组件（`features/monaco-editor/`）
+依据：`packages/devtools/src/main/app/app.ts:821-857`、
+`packages/devtools/src/main/services/workbench-coi-server.ts:72-76`、
+`packages/devtools/src/main/services/views/workbench-view.ts:30-55`。
 
-### 2.1 MonacoEditor.tsx
-editor cell 的内容：左侧 `FileTree`(上方一行显示项目名 / hover 全路径 / 保存状态)+ 右侧 Monaco 编辑器。根 div 带 `data-area="editor"`（布局/测试据此定位）。
+创建 WCV 时，`attachWorkbench`：
 
-- root 直接用 `projectPath` prop(renderer 已知活跃项目),**不走 `project:fs:getRoot` IPC**——后者在主进程刚打开项目、活跃路径未注册的窗口里会瞬时返回 `''`,导致文件树永久空(已修)。`listFiles` 带重试(≤12 次×300ms)骑过同一窗口(沙盒在 `ENOACTIVE` 时被 `listProjectFiles` 吞成 `[]`)。
-- 点击文件 → `readFile` → `useMonacoEditor.openModel(absPath, content, language)`,切文件前先 `flushPendingSave` 把待存改动落盘。
-- 编辑内容 → debounce 500ms → `writeFile` 持久化（`SAVE_DEBOUNCE_MS = 500`）。切文件 / 组件卸载会 flush 未到点的 pending 写；**项目关闭/切换**瞬间的 flush 也不丢——主进程 `writeFile` 用 last-closed root 兜底（见 §3）。窗口整体关闭/应用退出再挂 `beforeunload` flush，且走**同步**写 `writeProjectFileSync`（`project:fs:writeFileSync`，`sendSync` 阻塞页面销毁直到字节落盘）——硬退出时不再丢失防抖窗口内的最后一笔编辑。（常见路径仍走上面的异步卸载 flush，renderer 存活、无需阻塞。）
-- 进项目自动打开入口文件（`app.json` / `app.js` / `app.ts` / `app.wxss` 优先，否则第一个文件）；自动打开走的 `readFile` 带重试(`OPEN_RETRY_ATTEMPTS=12` × `OPEN_RETRY_DELAY_MS=300`),**只重试瞬态的 `ENOACTIVE`**(活跃项目尚未注册)——`ENOENT`/`EACCES`/`EINVAL` 立即抛出,所以手动点缺失/禁止的文件不会卡;读到内容立即返回,故正常点文件无延迟。随后在 Monaco 实例 `ready()` 前再等(同 budget),骑过冷启动竞态。重试期间若 `openSeq` 或 root 变化即放弃(见 `services/retry.ts`)。
+- 使用 `contextIsolation:true`、`nodeIntegration:false`；
+- 把 WCV 注册进 placement reconciler，而不是直接由 renderer 管 bounds；
+- 用 `index.html?theme=<light|dark>` 传首屏主题；
+- 把外部弹窗和跨源导航交给系统浏览器。
 
-> 注:`project:fs:getRoot` 通道仍保留(见 §3,可独立查活跃 root),只是 MonacoEditor 取 root 改用 prop。
+依据：`packages/devtools/src/main/services/views/workbench-view.ts:82-128`。
 
-#### 保存状态指示器
-自动保存对用户不可见,所以 `MonacoEditor` 维护一个 `SaveStatus`(`idle | dirty | saving | saved | error`)并在文件树头部右侧渲染(`data-testid="save-status"`):
+## 构建归属
 
-| 状态 | 文案 | 触发 |
-|---|---|---|
-| `dirty` | 编辑中… | 内容改动,debounce 计时中 |
-| `saving` | 保存中… | `writeFile` in-flight |
-| `saved` | 已保存 | 写成功 |
-| `error` | 保存失败 | 写失败(同时 `console.warn`) |
+工作台源码位于 `packages/workbench/`。devtools 的
+`build:workbench` 调 `@dimina-kit/workbench` 的 `build:app`，
+并把产物写入 `packages/devtools/dist/vscode-workbench`
+（`packages/devtools/build-workbench.mjs:3-24`、
+`packages/devtools/package.json:89-93`）。
 
-指示器**只观测、不改写保存时序**;且状态更新经 `setStatusFor(rel, ...)` 守卫——只有当描述的文件仍是当前打开文件时才落地,避免切文件后迟到的 success/error 把"已保存"盖到新文件上。
+`SharedArrayBuffer` 是 web TypeScript 扩展宿主的运行条件。devtools 在创建 app
+前加入 Chromium feature switch；工作台 HTTP 服务给文档设置隔离头
+（`packages/devtools/src/main/app/app.ts:425-429`、
+`packages/devtools/src/main/services/workbench-coi-server.ts:72-76`）。
 
-### 2.2 useMonacoEditor.ts
-绑定一个 Monaco 实例到容器 ref：mount 时 `installMonacoEnvironment()` + `ensureDiminaLanguages()` + `applyMonacoTheme()` + `monaco.editor.create`；per-file model 缓存（`monaco.Uri.file(absPath)`），切文件复用 model 保留 undo/视图状态；unmount 释放 editor + models。
+## 项目文件与保存
 
-### 2.3 monaco-env.ts（vite worker 接线，关键）
-Monaco 把语言服务（css/json/ts/html 校验+补全）放在 web worker。`self.MonacoEnvironment.getWorker` 必须在 `monaco.editor.create` 前设置；用 vite 的 `?worker` import（`monaco-editor/esm/vs/.../*.worker?worker`）把每个 worker 编译成独立 chunk（Electron file:// 下可用，因 vite 产出真实 worker chunk 而非 CDN 引用）。构建验证：`dist/renderer/assets/{editor,css,json,ts,html}.worker-*.js` 均产出。
-> 顶部 `/// <reference types="vite/client" />` 声明 `*?worker` 模块，保证 `tsc` 通过。
+工作台把活动项目镜像到固定的 `file:///workspace` 内存文件系统，再通过同源
+`/__fs/*` bridge 读写磁盘。bridge 复用 `project-fs.ts` 的路径校验和
+symlink 防护，而不是由 renderer 直接调用 `project:fs:*`
+（`packages/workbench/src/workspace/disk-workspace-source.ts:1-18`、
+`packages/devtools/src/main/services/workbench-coi-server.ts:291-315`）。
 
-## 3. 文件访问：`project:fs:*`（沙盒）
+`ProjectFsChannel` 仍保留，包括 beforeunload 所需的同步写通道；它也是
+COI 文件 bridge 的沙盒实现来源，不代表 Monaco 仍存在
+（`packages/devtools/src/main/ipc/project-fs.ts:41-45`、
+`packages/devtools/src/main/ipc/project-fs.ts:626-637`）。
 
-`src/main/ipc/project-fs.ts`：
+项目切换时工作台 WCV 会销毁并按新项目重新创建，避免固定
+`file:///workspace` 指向旧项目。工作区身份由 COI 服务的 `/__project`
+按请求读取活动项目，而不是写进首次 attach URL
+（`packages/devtools/src/main/services/views/workbench-view.ts:118-123`、
+`packages/devtools/src/main/services/workbench-coi-server.ts:342-348`）。
 
-| Channel | 入参 | 出参 |
-|---|---|---|
-| `project:fs:getRoot` | `()` | 活跃项目绝对路径，无项目时 `''` |
-| `project:fs:readFile` | `[absPath]` | utf-8 内容 |
-| `project:fs:writeFile` | `[absPath, content]` | void（父目录自动 mkdir -p）|
-| `project:fs:writeFileSync` | `[absPath, content]` | `{ ok, code?, message? }`（同步阻塞写，**同一沙盒**；仅 editor beforeunload flush 用，经 `IpcRegistry.handleSync` + `sendSync`）|
-| `project:fs:listFiles` | `[rootAbsPath]` | POSIX 相对路径数组（跳过 node_modules/.git/dist…，cap 5000）|
+## 语言能力与扩展
 
-- **沙盒（多道关，含 symlink 加固）**：
-  - **词法关** `enforceWithinProjectRoot(abs, root)` —— 双侧 `path.resolve` + 容器检查（`root + path.sep` 防 `/foo/bar` ⊂ `/foo/bar2`）；无项目抛 `ENOACTIVE`、空路径 / 含 NUL 字节抛 `EINVAL`、词法越界（`..`）抛 `EACCES`。这是不碰 fs 的廉价首关。
-  - **realpath 关** `resolveWithinProjectRoot` —— 词法关通过后，对 root 与目标**双侧 `fs.realpath`** 再查一次容器关系，堵死 symlink 逃逸（root 内一个指向外部的软链 `proj/link -> ../secret` 解析后落在 root 外 → `EACCES`）。目标尚不存在（首次写）时改 realpath 其父目录再拼 basename。
-  - **写前祖先关** `assertWritableAncestor` —— 写入在 `mkdir` **之前**，从写目标向上找到最深的已存在祖先目录、`fs.realpath` 后校验仍在 root 内。这堵死 `mkdir -p` 副作用泄漏：若 `proj/escape -> /outside`，仅靠词法关会让 `mkdir -p proj/escape/new` 跟着软链在沙盒外建目录、再被事后检查拒绝；先校验最深祖先则零 mkdir 直接拒。合法深写（`proj/a/b/c.txt`，`a`/`b` 未建）向上走到 root 本身、通过，照常 `mkdir -p` 建 in-root 中间目录。
-  - **TOCTOU 关（两层纵深防御）**：
-    - **`O_NOFOLLOW`（最终组件）** —— `readFile`/`writeFile` 对已 realpath 解析的路径以 `fs.open(..., O_NOFOLLOW)` 打开、并对返回的 `FileHandle` 读写（不再按路径名二次打开、`finally` 必 close）。挡住"realpath 校验 → open 之间，**最终组件**被换成 symlink"的竞态；对**已存在**的 symlink 无行为影响（realpath 在 open 前已解析，in-root symlink 仍被跟随，out-of-root 已在 realpath 关被拒）。
-    - **open 后复检（中段组件）** —— open 之后、返回字节(读)/写入(写)**之前**，对解析路径再 `fs.realpath` + 容器复检（`assertOpenedWithinRoot`）。`O_NOFOLLOW` 只保护最终组件,中段父目录在同一窗口被换成 symlink 仍会被跟随——复检捕获它并拒（`EACCES`）。`writeFile` 据此以 `O_CREAT` 但**不带 `O_TRUNC`** 打开,复检通过后才 `write@0 + truncate`,故被检出的 race 绝不写入越界内容(最坏在越界位置留一个 `O_CREAT` 建的零字节文件)。
-    - **残留**：仅"软链只在 open 期间在位、复检前又换回"的完美时序 double-swap 能规避;可证明地关闭它需 `openat`/`F_GETPATH` 级逐段解析(可移植 Node 无),dev-tool 威胁模型下已接受(主窗口本就可信、无对手竞速本地 FS)。
-  - 活跃 root 每次调用从 `ctx.workspace.getProjectPath()` 现取（项目切换即时生效）。**`writeFile` 例外**：额外接受"刚关闭项目的 root"——`pickWriteRoot(absPath, { current, lastClosed })` 在 current / `workspace.lastClosedProjectPath`（关项目时记录、开下一项目时清零，永不累积）中选包含该路径的 root、优先 current。这样项目**关闭/切换的瞬间**、组件卸载时 flush 的 in-flight 写（其路径属刚关项目，而 current root 已被 `closeProject` 清空）不会丢失。选中 last-closed 后仍走上面全部沙盒关（`..`/symlink/`mkdir` 侧信道照拒），边界不放松；`readFile`/`listFiles` 不扩展，读取面只认 current。
-  - **同步写镜像** `writeFileSync`（+ `resolveWithinProjectRootSync` / `assertWritableAncestorSync` / `assertOpenedWithinRootSync`）—— 为 editor 的 `beforeunload` 同步 flush 提供与异步 `writeFile` **逐行等价**的沙盒(复用同一批纯词法 helper,只 fs 调用换 sync)。两条路径必须保持锁步,任何偏差都会重开同步路径上的逃逸口(已有 async≡sync 的 parity 测试钉死)。
-- **sender policy**：用标准 `ctx.senderPolicy`（主窗口可信）。Monaco 在主 renderer，无需独立 view 的 allow-list。同步通道经 `IpcRegistry.handleSync` 同样受 policy 把关，且**任何**路径(policy 拒绝 / policy 自身抛 / handler 抛)都必落一个 `{ ok:false }` 哨兵到 `event.returnValue`——否则被阻塞的 renderer 会永久挂起。
-- renderer 侧封装：`features/monaco-editor/services/file-service.ts`（经 `@/shared/api/ipc-transport` 的 `invoke`/`invokeStrict`/`sendSync` 透传，preload 暴露 `sendSync`）。
+`packages/workbench/src/boot.ts` 注册 WXML 语言支持、dimina JSON schemas、
+TypeScript/CSS/JSON 等工作台扩展，并在填充 workspace 后启动自动保存
+（`packages/workbench/src/boot.ts:430-484`）。
 
-## 4. WXML / WXSS 语言支持
+dd/wx ambient 类型以真实 memfs 文件写到
+`file:///workspace/node_modules/@types/dimina/`。若存在
+`tsconfig.json` 或 `jsconfig.json`，只修改 memfs 副本中的
+`compilerOptions.types`；不写回用户磁盘
+（`packages/workbench/src/typings-injection.ts:1-20`、
+`packages/workbench/src/typings-injection.ts:101-132`）。
 
-`language/register.ts` 的 `ensureDiminaLanguages()`（幂等）：
+宿主可通过 `EditorViewConfig.extensionsDir` 提供 VS Code web 扩展。COI 服务从
+`/__contrib/` 发布清单和文件，工作台在启动时注册扩展并收集其声明的 ambient typings
+（`packages/devtools/src/shared/types.ts:283-292`、
+`packages/workbench/src/boot.ts:463-477`）。
 
-- **WXSS**：`.wxss` 注册到 Monaco 内置 `css` 语言（tokenizer + worker 校验/补全随 monaco-editor 自带），对齐微信开发者工具把 `.wxss` 当 CSS。`languageForPath('.wxss')` → `'css'`。
-- **WXML**：注册 `wxml` 语言 + `setMonarchTokensProvider(wxmlMonarchLanguage)` + 语言配置。
-  - **Monarch（非 TextMate）**：纯 Monaco 不原生吃 TextMate（要 Oniguruma WASM），wxml 是 HTML-like + `{{}}` 插值 + `wx:` 指令 + `bind*/catch*` 事件，用 Monarch 表达足够且零 WASM 成本（`language/wxml-monarch.ts`）。
-  - **wxml LSP**（`language/wxml-lsp.ts`，纯 `monaco.languages.register*` API）：`registerCompletionItemProvider`（标签名/属性名/属性枚举值/`wx:`指令/事件）+ `registerHoverProvider`（组件与属性文档）。元数据在 `language/wxml-data.ts`。
+## open-in-editor 与主题
 
-## 5. 主题
+`openFileInWorkbench(relPath, line, column)` 把项目相对路径编码成
+`file:///workspace/<rel>`，再通过工作台暴露的 VS Code API 打开文档；输入坐标是
+1-based，`vscode.Position` 使用 0-based
+（`packages/devtools/src/main/services/views/workbench-view.ts:195-257`）。
 
-`theme.ts`：`defineDiminaThemes()` 基于 monaco `vs`/`vs-dark` 定义 `dimina-light`/`dimina-dark`；`applyMonacoTheme(isDark)` 在 mount 时按当前模式 setTheme。`isDarkMode()` 读 `documentElement` 的 dark class / `prefers-color-scheme`。
+首次主题由 URL query 传入。运行时主题变化由 `workbench-view.ts` 监听
+`nativeTheme.updated`，同步 WCV 背景并调用 `window.__WB_SET_THEME`；
+工作台在启动完成后安装该 setter
+（`packages/devtools/src/main/services/views/workbench-view.ts:57-79`、
+`packages/workbench/src/main.ts:148-160`）。
 
-## 6. 与 ProjectWindowLayout 的关系
-
-editor 是 dockable 布局里的 `editor` DOM 面板：普通 React 子节点，由 React 自行挂载/卸载，**不是 overlay、不发 bounds、不经 view-manager**。`<DockView>` 经 `renderDomPanel('editor')` 直接渲染 `<MonacoEditor/>`，不挂任何 native anchor。整套布局里仍是主进程 overlay 的只有两个原生面板——simulator（设备 WCV）与 console（Console DevTools，`view:simulator:devtools-bounds` + `setSimulatorDevtoolsBounds`），各由一个 `view-anchor`（`@dimina-kit/view-anchor`）锚点同步 bounds——与 editor 无关。布局拓扑/拖拽 re-dock/序列化逻辑见 `project-window-layout.md`。
-
-## 7. 构建
-
-Monaco 由 vite 随 renderer 一起打包（`pnpm build:renderer`）；语言 worker 经 `?worker` 产出独立 chunk。没有单独的 editor 构建步骤、没有 editor preload。
-
-## 8. 已知限制 / 后续
-
-| # | 限制 | 说明 |
-|---|---|---|
-| 1 | 无文件监听 | 外部改同一文件编辑器看不到；后续可加 watch + 重载 model |
-| 2 | 无多 tab / 搜索 / 命令面板 / 设置 UI | MVP 范围只做 file tree + 单编辑区 + wxml/wxss + 主题；这些是后续增量（dimina 自建壳逐步补） |
-| 3 | `listFiles` cap 5000 | 巨型项目截断；后续可 lazy load tree |
-| 4 | wxml LSP 无专测 | `wxml-lsp.ts` 是纯 `monaco.languages.register*` API，可补一个能在 vitest 跑的 provider 单测做回归网 |
-| 5 | wxml Monarch | 覆盖常见语法；若需更精细高亮可后续升级到 vscode-textmate |
-
-## 9. 文件清单
+## 关键文件
 
 | 文件 | 角色 |
 |---|---|
-| `src/renderer/modules/main/features/monaco-editor/components/MonacoEditor.tsx` | editor cell：文件树 + Monaco，开/存文件 |
-| `.../monaco-editor/components/FileTree.tsx` | 扁平路径 → 折叠树 |
-| `.../monaco-editor/hooks/useMonacoEditor.ts` | editor 实例 + per-file model 生命周期 |
-| `.../monaco-editor/monaco-env.ts` | vite `?worker` MonacoEnvironment |
-| `.../monaco-editor/language/register.ts` | 注册 wxml/wxss + `languageForPath` |
-| `.../monaco-editor/language/wxml-monarch.ts` | wxml Monarch tokenizer + 配置 |
-| `.../monaco-editor/language/wxml-lsp.ts` | wxml completion/hover |
-| `.../monaco-editor/language/wxml-data.ts` | wxml tag/attr/枚举值元数据 |
-| `.../monaco-editor/theme.ts` | dimina ↔ monaco 主题 |
-| `.../monaco-editor/services/file-service.ts` | `project:fs:*` renderer 封装 |
-| `.../monaco-editor/services/retry.ts` | 冷启动 `ENOACTIVE` 瞬态错误的 bounded retry（`readWithRetry`）|
-| `src/main/ipc/project-fs.ts` | 沙盒化项目文件 IPC（symlink 加固：双侧 realpath + 写前祖先校验 + NUL 拒绝）|
-| `src/shared/ipc-channels.ts` | `ProjectFsChannel` |
-| `src/renderer/.../project-runtime/layout/dock-layout.ts` | editor 在 panel registry 登记为 DOM 面板、出现在默认 dock 树里 |
-| `src/renderer/.../project-runtime.tsx` | `renderDomPanel('editor') → <MonacoEditor/>`（DOM 面板，无 native anchor）|
-
-> editor 在 dockable 布局里的拖拽 re-dock/序列化不在本文 —— 见 [`project-window-layout.md`](./project-window-layout.md)。
+| `packages/devtools/src/main/services/views/workbench-view.ts` | WCV 生命周期、主题、open-in-editor |
+| `packages/devtools/src/main/services/workbench-coi-server.ts` | bundle、`/__fs`、`/__contrib`、`/__project` |
+| `packages/devtools/src/renderer/modules/main/features/project-runtime/components/editor-panel.tsx` | editor 槽 placement anchor |
+| `packages/workbench/src/boot.ts` | VS Code 工作台初始化与语言能力 |
+| `packages/workbench/src/typings-injection.ts` | dd/wx 与下游 ambient typings |
+| `packages/devtools/src/main/ipc/project-fs.ts` | 文件沙盒与同步写通道 |

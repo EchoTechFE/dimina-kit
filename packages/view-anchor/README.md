@@ -89,3 +89,7 @@ handle.dispose()       // 停止观察；此后不再上报
 | `UseViewAnchorOptions` / `ViewAnchorRef` | 类型 | 正向适配层的选项与 ref 回调形状。 |
 | `AdvertisedAxis` / `AdvertisedSize` | 类型 | 反向的轴（`'block'\|'inline'`）与帧载荷 `{ axis, extent }`。 |
 | `SizeAdvertiserOptions` / `SizeAdvertiserHandle` | 类型 | 反向核心的选项与句柄形状。 |
+
+## License
+
+[MIT](../../LICENSE) © EchoTechFE

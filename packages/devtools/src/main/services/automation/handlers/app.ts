@@ -24,10 +24,10 @@ async function readRoute(ctx: Parameters<Handler>[0]) {
 
 /**
  * Native-host: derive the visible page's `{ pagePath, query }` from the active
- * render guest. The page-stack depth isn't surfaced by the bridge handle, so the
- * native page stack is reported as the single active page (see App.getPageStack).
- * Reads the guest's own `location.search` — the render-host preload encodes
- * `pagePath` (+ per-page query) there.
+ * render guest. This is the source for `App.getCurrentPage` and the fallback for
+ * `App.getPageStack` before DeviceShell reports its full ordered stack through
+ * the bridge. The render-host preload encodes `pagePath` (+ per-page query) in
+ * the guest's own `location.search`.
  */
 async function readNativeActivePage(ctx: Parameters<Handler>[0]) {
   const renderWc = getActivePageWc(ctx)

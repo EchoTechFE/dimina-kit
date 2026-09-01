@@ -141,25 +141,29 @@ render-host <webview>  the page (one guest per mounted page, z-ordered by visibi
   `zIndex` on visibility. These are LIVE — they are the page WebContents.
 
 This is the **DeviceShell-draws-the-phone** model: the renderer panel draws no
-bezel. It matches `docs/simulator-render-stack.html` (z3 = the WCV = the flex:1
-region; the phone is fixed-size CSS inside it).
+bezel; the WCV fills the `flex:1` region, and the phone remains fixed-size CSS
+inside it.
 
 ## WCV bounds — single authority
 
 The WCV bounds come from a **single authority**: the renderer's `createPlacementAnchor`
 in `simulator-panel.tsx` measures the placeholder region's
-`getBoundingClientRect()` and publishes it (plus `zoom`) over
-`simulator:set-native-bounds` → `setNativeSimulatorViewBounds`
-(`view-manager.ts`). There is no second, coarse panel-width path competing with
-it.
+`getBoundingClientRect()` and writes `VIEW_ID.simulator`（including
+`extra.zoom`）into the window-level placement publisher. The publisher sends a
+complete `PlacementSnapshot`; main applies it through the placement reconciler
+（`simulator-panel.tsx:183-235`、
+`src/renderer/shared/api/view-api.ts:248-253`、
+`src/main/services/views/placement-reconciler.ts:172-218`）。
 
-- **Zero-area ⇒ detach-but-keep-alive.** `{ width:0, height:0 }` removes the WCV
-  from the contentView but keeps its WebContents, so re-showing is cheap (same
-  policy as the DevTools overlay).
-- **Pre-attach caching.** A report can land before `attachNativeSimulator` (the
-  project-open ordering); `view-manager` caches the last rect and replays it on
-  attach (`setNativeSimulatorViewBounds(lastRendererRect)`), adding + sizing the
-  WCV. If the cached rect is zero, the WCV stays unattached until the next report.
+- **Hidden is explicit.** An inactive/unmounted slot publishes
+  `{ visible:false }`; main hides the WCV and keeps its WebContents. Lifecycle
+  teardown is the detach boundary.
+- **Pre-attach desired state is retained.** A snapshot can arrive before
+  `attachNativeSimulator`. The reconciler keeps `baseDesired` and replays
+  after view registration/creation; it does not infer visibility from a cached
+  zero rect
+  （`src/main/services/views/placement-reconciler.ts:93-106`、
+  `src/main/services/views/placement-reconciler.ts:159-188`）。
 - **Region rect, not inner-screen.** The renderer publishes the placeholder
   REGION rect (the flex:1 slot). The WCV fills that region as a plain rectangle;
   DeviceShell draws + scrolls the phone inside. There is no renderer bezel to
@@ -234,12 +238,12 @@ safe-area doc for the CDP wiring.)
 
 | file | role |
 |---|---|
-| `src/renderer/.../project-runtime/components/simulator-panel.tsx` | z2 panel: toolbar / placeholder / path-bar; owns the simulator `createPlacementAnchor` |
+| `src/renderer/modules/main/features/project-runtime/components/simulator-panel.tsx` | z2 panel: toolbar / placeholder / path-bar; owns the simulator `createPlacementAnchor` |
 | `src/simulator/device-shell/device-shell.tsx` + `device-shell.css` | DeviceShell: draws the phone (bezel, status bar, notch, home indicator) inside the WCV and hands the mini-app its metrics |
 | `packages/dimina-electron-runtime/src/simulator-ui/miniapp-frame.tsx` | MiniAppFrame: the mini-app itself — nav bar, page stack, tabBar, native overlays; hosts the render-host `<webview>` guests |
 | `src/simulator/ui-extension-runtime.ts` | renderer-side extension registry, active-root handoff, invoke routing, and semantic chrome actions |
 | `src/main/services/simulator/ui-extensions.ts` | per-context trusted bundle registry that follows the native simulator WCV |
 | `src/main/services/views/native-simulator-view.ts` | native-simulator domain module: `attachNativeSimulator`, `softReloadNativeSimulator`, bounds/zoom application (`view-manager.ts` is the composition root wiring the per-domain view modules) |
 | `src/main/services/layout/index.ts` | `computeNativeSimulatorViewParams` |
-| `src/renderer/shared/api/view-api.ts` | `setNativeSimulatorBounds` IPC wrapper (`simulator:set-native-bounds`) |
+| `src/renderer/shared/api/view-api.ts` | `publishPlacementSnapshot` 窗口级 placement IPC |
 | `src/service-host/sync-impls/menu-button.ts` | sync `getSystemInfoSync` path (build-order sensitive) |
