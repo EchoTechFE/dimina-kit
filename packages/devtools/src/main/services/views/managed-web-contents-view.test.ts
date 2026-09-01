@@ -79,8 +79,15 @@ const created = (electronMock as unknown as { __created: FakeWebContents[] }).__
 function makeOpts(overrides: { onBroken?: () => void } = {}) {
   const destroyView = vi.fn()
   const reconciler = { destroyView } as unknown as Parameters<typeof createManagedWebContentsView>[0]['reconciler']
+  // One attachment handle per attached wc, in creation order — the manager is
+  // supposed to release each one when it lets go of that wc.
+  const attachments: Array<{ dispose: ReturnType<typeof vi.fn> }> = []
   const port = {
-    attach: vi.fn(),
+    attach: vi.fn(() => {
+      const handle = { dispose: vi.fn() }
+      attachments.push(handle)
+      return handle
+    }),
     invalidate: vi.fn(),
     dispose: vi.fn(),
     onMessage: vi.fn(),
@@ -96,8 +103,40 @@ function makeOpts(overrides: { onBroken?: () => void } = {}) {
     port,
     ...overrides,
   })
-  return { managed, destroyView, sessionRuntime }
+  return { managed, destroyView, sessionRuntime, attachments }
 }
+
+describe('createManagedWebContentsView: the channel follows the wc this manager owns', () => {
+  it('a crash-and-rebuild releases the dead wc attachment and attaches the replacement', () => {
+    const { managed, attachments } = makeOpts()
+    managed.ensureView()
+    const firstWc = created[created.length - 1]!
+    expect(attachments).toHaveLength(1)
+
+    firstWc._fireRenderProcessGone('crashed')
+    expect(attachments[0]!.dispose).toHaveBeenCalledTimes(1)
+
+    managed.ensureView()
+    expect(attachments).toHaveLength(2)
+    // Releasing the dead one must not touch the live one.
+    expect(attachments[1]!.dispose).not.toHaveBeenCalled()
+  })
+
+  it('dispose() releases the current attachment', () => {
+    const { managed, attachments } = makeOpts()
+    managed.ensureView()
+
+    managed.dispose()
+
+    expect(attachments[0]!.dispose).toHaveBeenCalledTimes(1)
+  })
+
+  it('a manager that never built a view has nothing to release', () => {
+    const { managed, attachments } = makeOpts()
+    managed.dispose()
+    expect(attachments).toHaveLength(0)
+  })
+})
 
 describe('createManagedWebContentsView: crash/failed-load recovery', () => {
   it('render-process-gone destroys the view and lets the next ensureView() build a fresh instance', () => {

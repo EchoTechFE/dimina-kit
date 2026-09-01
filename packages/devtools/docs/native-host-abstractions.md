@@ -33,7 +33,13 @@ host 经 `onSetup` / `registerSimulatorApi` 注册的 `wx.<customApi>` 在 nativ
 
 simulator 文档内 `window.__diminaCustomApis`（`installCustomApisBridge`，`src/preload/runtime/custom-apis.ts`）的 `list()` / `invoke()` 用 `ipcRenderer.send(SimulatorCustomApiBridgeChannel.Request)`，Response 落在 `ipcRenderer.on(Response)` 按 id 关联。
 
-main 侧 `attachNativeCustomApiBridge`（`view-manager.ts`，由 `attachNativeSimulator` 在拿到 `simWc` 后调用）装一个 `ipcMain.on(Request)` 派发器：按 `event.sender.id === simWcId` 精确网关，调 `ctx.simulatorApis` 注册表，再 `simWc.send(Response, …)` 回桥。它与 simulator 同生命周期，`detachSimulator` / 重 attach 时由 `detachNativeCustomApiBridge` 摘除。
+main 侧 `attachNativeCustomApiBridge` 位于
+`src/main/services/views/native-simulator-view.ts:146-207`，由
+`attachNativeSimulator` 在拿到 `simWc` 后调用。它装一个
+`ipcMain.on(Request)` 派发器：按 `event.sender.id === simWcId` 精确网关，
+调 `ctx.simulatorApis` 注册表，再 `simWc.send(Response, …)` 回桥。listener
+由该 webContents 的 connection 持有，detach / 重 attach 时移除
+（`src/main/services/views/native-simulator-view.ts:177-207`）。
 
 **关键约束**：simulator 是主进程顶层 `WebContentsView`、**无 embedder renderer**，preload 的 `sendToHost` 不会在它自己身上回弹成 `ipc-message-host`。因此 custom-api 不能走 `ipc-message-host`，必须走 `ipcRenderer.send` + `ipcMain.on` 这条精确 sender-id 网关。simulator 也不进 `sender-policy` 白名单（它被明确排除），靠 `attachNativeSimulator` 拿到的精确 `simWc` 引用校验发送方。
 

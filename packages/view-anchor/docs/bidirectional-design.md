@@ -7,9 +7,9 @@ view-anchor 是一座**双向几何桥**，引擎无关、传输注入：
 
 适用场景：toolbar 这类「**交给下游控制**」的 WebContentsView，尺寸的事实来源在下游一侧（典型：宽由宿主主导、高由下游内容主导），占位映射是动态的。
 
-范围之外：不是同层渲染（合成器层面、另一套机制）；包里不提供 React 反向适配、不提供宿主决策 `decide`（见 §4/§7）。
+范围之外：不是同层渲染（合成器层面、另一套机制）；包里不提供 React 反向适配、不提供宿主决策 `decide`（见 §3/§6）。
 
-## 2. 正反向不共享发射核心——两个方向最优时机不同
+## 1. 正反向不共享发射核心——两个方向最优时机不同
 
 正反向的最优发射时机本就不同，所以它们**不共享发射核心**，采取**正向同步、反向 RAF** 的刻意不对称。
 
@@ -27,7 +27,7 @@ function createMeasureLoop<T>(cfg: {
 
 **为什么不对称是对的**：正向是单向跟随者，少一帧直接消除可见拖尾；反向是反馈环，多一帧阻尼更稳。把两者塞进一个核心要么逼出 `if(direction)` flag，要么把正向也拖进 RAF（带回拖尾）。所以**正向内联同步、反向用 RAF 引擎**，各取所需。
 
-## 3. 反向原语契约
+## 2. 反向原语契约
 
 ```ts
 export type AdvertisedAxis = 'block' | 'inline'
@@ -56,12 +56,12 @@ export function createSizeAdvertiser(target: HTMLElement, opts: SizeAdvertiserOp
 - **没有 `present`**：反向「停止上报」无指令语义（塌缩还是保持是宿主策略），停就 `dispose`、恢复就重建。不给不可信下游一个隐式控宿主的布尔旁路。
 - 双轴需求 = **两个独立 advertiser 各管一轴**，不是一个 payload 塞两轴（后者把两条单向流伪装成一条双向流，使 DAG 退化成有环图）。
 
-## 4. 单轴所有权（收敛性地基，不可协商）
+## 3. 单轴所有权（收敛性地基，不可协商）
 
 - 一个 advertiser 只测量并只上报**它主导的那条轴**；另一条轴由宿主经 `setBounds` 单向灌入、对下游**只读**。
 - 为什么收敛：宽 = 宿主输入（无回边）；高 = block layout 的**输出**而非输入（无回边）→ 整条尺寸传播是单向 DAG，**一步收敛**。违反单轴 = 跨进程双 RAF 乒乓，是抖动/极限环根因。去环靠**拓扑**（单轴 + 类型不可拼写），不靠 epsilon 死区/低通滤波。
 
-## 5. 信任边界（精确划线）
+## 4. 信任边界（精确划线）
 
 > 反向把「尺寸控制权」交给一个**下游控制**（半信任/不可信）的视图。上报值是攻击者输入，不是测量结果。
 
@@ -82,9 +82,9 @@ export function createSizeAdvertiser(target: HTMLElement, opts: SizeAdvertiserOp
 
 - **一条构造期廉价守卫**：`target` 是 `<body>`/`<html>` 时 `console.warn`——这是「stable-but-wrong」（占位永远撑成视图高、不缩到内容）最常见的成因，一次性、零每帧成本。
 - **其余靠文档**：JSDoc 与本节把「target 必须主导轴 shrink-to-fit、不被宿主灌入的尺寸反向决定」讲清。
-- **明确不做**：每帧的 2-cycle / 单调发散检测器（复杂度与「非灾难性、RAF 封顶」的故障不成正比）、运行时熔断（会把可见症状盖成静默失效）、向宿主回传灌入值做对比（会亲手造出 §4 要消灭的反馈边）。发散的真正兜底是宿主侧 `clamp(max)`。
+- **明确不做**：每帧的 2-cycle / 单调发散检测器（复杂度与「非灾难性、RAF 封顶」的故障不成正比）、运行时熔断（会把可见症状盖成静默失效）、向宿主回传灌入值做对比（会亲手造出 §3 要消灭的反馈边）。发散的真正兜底是宿主侧 `clamp(max)`。
 
-## 6. 两个原语如何「锚」到一起
+## 5. 两个原语如何「锚」到一起
 
 正向与反向**不直接相互调用**——各自只有一个注入的 `publish` 往 IPC 上发。把两端串到一起的是宿主里的**占位 div** + 宿主的 `decide` 函数。占位 div 是会合点（join point）：
 
@@ -126,15 +126,15 @@ export function createSizeAdvertiser(target: HTMLElement, opts: SizeAdvertiserOp
 | `decide`（把 size 写进占位 div 的高）+ 两条 IPC 通道 | **宿主（workbench）** | ❌（刻意，属宿主胶水） |
 | 占位 div、shrink-to-fit wrapper | 调用方的 DOM | ❌ |
 
-- 收敛逻辑收进宿主一个**纯函数** `decide(...)`（可单测、无跨进程协议）。`decide` 住宿主侧，**不进 view-anchor**——包只出两个单向原语，不出收敛策略，否则就从原语滑向框架（§8）。
+- 收敛逻辑收进宿主一个**纯函数** `decide(...)`（可单测、无跨进程协议）。`decide` 住宿主侧，**不进 view-anchor**——包只出两个单向原语，不出收敛策略，否则就从原语滑向框架（§7）。
 - 连续交互（拖窗改宽）走宿主**单向**路径，不进闭环；反向只服务下游内容的**离散**尺寸变化。
 
-## 7. 与 Electron preferred-size 的关系（宿主侧可选数据源，非替代）
+## 6. 与 Electron preferred-size 的关系（宿主侧可选数据源，非替代）
 
 宿主若在 Electron 且能接受零下游代码，可用 `enablePreferredSizeMode` + `preferred-size-changed` 作为反向「**源**」喂给同一个 `decide`，省掉下游注入。但它是 Electron 私有，且依赖两个前提：① 在 `WebContentsView` 上触发且上报值吸收 zoom；② `setBounds.height` 不回灌 layout（否则正反馈震荡）。
 
-view-anchor 的反向原语是**引擎无关/可移植**那条路（非 Electron / iframe 宿主、需选子 target 的场景）。两者并存：preferred-size 是 Electron 捷径，advertiser 是可移植机制，`decide` + §5 安全红线是二者共用的公共底座。这也是反向逻辑留在 view-anchor、而非写死成 Electron 事件的理由——宿主选哪个**源**不改变反向原语本身。
+view-anchor 的反向原语是**引擎无关/可移植**那条路（非 Electron / iframe 宿主、需选子 target 的场景）。两者并存：preferred-size 是 Electron 捷径，advertiser 是可移植机制，`decide` + §4 安全红线是二者共用的公共底座。这也是反向逻辑留在 view-anchor、而非写死成 Electron 事件的理由——宿主选哪个**源**不改变反向原语本身。
 
-## 8. 包定位守恒（一个原语，不是框架）
+## 7. 包定位守恒（一个原语，不是框架）
 
-view-anchor 是「DOM 几何 ↔ 跨进程视图」的**单一职责双向桥**。守住四条即不滑向框架：① 导出面只含 `createViewAnchor` / `createPlacementAnchor` / `createSizeAdvertiser` + 其类型；② `createMeasureLoop` 不导出；③ 不提供 React 反向适配（下游不保证是 React）；④ `decide` 留宿主、不进包。
+view-anchor 是「DOM 几何 ↔ 跨进程视图」的**单一职责双向桥**。守住四条即不滑向框架：① 导出面只含 `createViewAnchor` / `createPlacementAnchor` / `createSizeAdvertiser` / `measurePlacement` / `useViewAnchor` + 其类型；② `createMeasureLoop` 不导出；③ 不提供 React 反向适配（下游不保证是 React）；④ `decide` 留宿主、不进包。

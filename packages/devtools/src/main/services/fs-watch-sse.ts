@@ -20,6 +20,7 @@ import type http from 'node:http'
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { SKIP_DIRS } from '../ipc/project-fs.js'
+import { fsWatchFrame } from './fs-bridge-protocol.js'
 import { jsonRes } from './http-json.js'
 
 /** Debounce window for batching change notifications (ms). */
@@ -81,7 +82,7 @@ export function handleFsWatchRequest(
     if (closed || pending.size === 0) return
     const paths = [...pending]
     pending = new Set<string>()
-    res.write(`data: ${JSON.stringify({ paths })}\n\n`)
+    res.write(fsWatchFrame({ paths }))
   }
 
   function onChange(_event: string, filename: string | Buffer | null): void {
@@ -101,7 +102,7 @@ export function handleFsWatchRequest(
 
   watcher.on('error', () => {
     if (closed) return
-    res.write(`data: ${JSON.stringify({ watcherDead: true })}\n\n`)
+    res.write(fsWatchFrame({ watcherDead: true }))
     cleanup()
     res.end()
   })
@@ -115,7 +116,7 @@ export function handleFsWatchRequest(
   liveCheck = setInterval(() => {
     if (closed) return
     if (getProjectRoot() !== watchedRoot) {
-      res.write(`data: ${JSON.stringify({ watcherDead: true })}\n\n`)
+      res.write(fsWatchFrame({ watcherDead: true }))
       cleanup()
       res.end()
     }

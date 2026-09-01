@@ -1,5 +1,5 @@
 /*
- * CONFIRMED MODEL (docs/simulator-render-stack.html): the simulator WCV is the
+ * CONFIRMED MODEL (docs/simulator-render-architecture.md): the simulator WCV is the
  * flex:1 region of the main renderer (it draws NO phone). Inside the WCV,
  * DeviceShell draws the WHOLE phone at FIXED device-logical size on a gray
  * "desk" that fills the WCV and SCROLLS NATIVELY when the phone overflows the

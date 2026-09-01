@@ -1,209 +1,85 @@
-# pawl — dimina-kit's anti-regression adapters
+# pawl 质量门禁
 
-The anti-regression gate is [**pawl**](https://github.com/tiangong-dev/pawl), a
-language-agnostic quality gate: it snapshots one number per dimension and
-fails CI when any dimension regresses. Generic measurements use pawl's native
-builtins directly: `file-length` uses the filesystem builtin, while
-`type-escapes` and `cognitive-complexity` use the ESLint builtin with the
-isolated [`eslint-gate.config.mjs`](./eslint-gate.config.mjs).
+本目录保存 dimina-kit 对 [pawl](https://github.com/tiangong-dev/pawl) 的项目配置和自定义指标适配器。pawl 会把每个质量指标记录到 `pawl.snapshot.json`，以后只要某项变差，`pawl check` 就返回失败。
 
-This directory keeps custom TypeScript adapters only for dimina-kit-specific
-measurements such as monorepo-wide type/test coverage and circular dependency
-resolution. For those dimensions, [`pawl-adapter.ts`](./pawl-adapter.ts) imports
-the matching [`adapters/<id>.ts`](./adapters), runs `measure()`, and prints the
-`{ value, unit, breakdown }` JSON pawl consumes.
+它是仓库工具，不是可发布的 npm 包。CLI 由根 `package.json` 中的 `@pawl-tools/cli` 提供，指标配置在根目录的 `pawl.yaml`。
 
-The engine, builtins, gate modes, tolerance, and baseline guards live in pawl,
-configured by [`../../pawl.yaml`](../../pawl.yaml); the recorded baseline is
-[`../../pawl.snapshot.json`](../../pawl.snapshot.json). Everything runs locally
-with no online services.
+## 常用命令
 
-The adapters and `pawl-adapter.ts` are TypeScript run directly by Node's native
-type stripping (no `tsx`/`ts-node`). That constrains the syntax to what's
-erasable — no `enum`, `namespace`, or constructor parameter properties — and
-every local import must carry an explicit `.ts`/`.js` extension.
-`tools/pawl/tsconfig.json` typechecks the directory in isolation
-(`pnpm exec tsc -p tools/pawl`); it is not part of any package's
-`check-types` task.
-
-[exec adapter]: https://github.com/tiangong-dev/pawl#custom-adapters
-
-## Commands
+在仓库根目录运行：
 
 ```bash
-pnpm pawl:record          # measure every dimension and (over)write the baseline
-pnpm pawl:check           # measure + compare; exit 1 on any regression — the CI gate
-pnpm pawl:diff            # measure + compare, print the table, never fail
+pnpm pawl:check          # 重新测量并与快照比较；退化时退出 1
+pnpm pawl:diff           # 显示差异，但不因退化而失败
+pnpm pawl:record         # 用当前测量结果重写 pawl.snapshot.json
 pnpm exec pawl guard <git-ref>
-                             # compare the working tree's pawl.snapshot.json against
-                             # the version committed at <ref> — the PR-vs-base-branch gate
+                         # 比较当前快照与指定 git ref 中的快照
 ```
 
-The `pawl:*` scripts are thin aliases for `pawl {check,record,diff}` (pawl is
-pinned as `@pawl-tools/cli` in the root `devDependencies`). Record establishes
-the baseline and locks in improvements after cleanup. After a verified cleanup,
-`diff` shows the gain (e.g. `type-escapes 11 → 10 🎉 better`) and `record` writes
-it back so the win can't be undone.
+只有在确认改进来自真实代码变化后才运行 `pawl:record`。缺少报告、适配器崩溃或输出无法解析时，结果是“无法测量”，不应记录成新的基线。
 
-## Dimensions
+## 当前指标
 
-| id | tool | metric | direction | gate |
-|----|------|--------|-----------|------|
-| `cognitive-complexity` | pawl ESLint builtin + [eslint-plugin-sonarjs] | functions over cognitive complexity 15 | lower | per-file-count |
-| `type-escapes` | pawl ESLint builtin + [typescript-eslint] | explicit `any` + `@ts-*` suppressions | lower | per-file-count |
-| `type-coverage` | [type-coverage] | overall share of non-`any` identifiers | higher | per-key-value |
-| `file-length` | pawl filesystem builtin | files over 500 lines | lower | total |
-| `code-duplication` | [jscpd] | duplicated lines across clone pairs (≥50 tokens) | lower | total |
-| `circular-deps` | self-implemented | import cycles among production files | lower | total |
-| `test-report` | vitest JSON reports | tests that actually passed | higher | per-key-value |
-| `test-coverage` | vitest v8 coverage summaries | lines covered by tests (all src in denominator) | higher | per-key-value |
+下表直接对应 `pawl.yaml`：
 
-Scope is production source (`packages/*/src`, excluding `*.test`/`*.spec`/`*.d.ts`).
-Test files legitimately bend these rules around fixtures — except for `file-length`,
-which counts test files too: a giant test burns the AI context window just like a
-giant source file does.
+| ID | 测量内容 | 趋势 | 比较方式 |
+| --- | --- | --- | --- |
+| `file-length` | 超过 500 行的包内 `.ts`、`.tsx` 源文件数 | 越低越好 | 总数 |
+| `type-escapes` | `any` 和 `@ts-*` 抑制 | 越低越好 | 每个文件的数量 |
+| `cognitive-complexity` | 认知复杂度超过 15 的函数 | 越低越好 | 每个文件的数量 |
+| `code-duplication` | jscpd 发现的重复代码行 | 越低越好 | 总数 |
+| `circular-deps` | 单个包内生产源码的循环依赖 | 越低越好 | 总数 |
+| `type-coverage` | 各包非 `any` 标识符占比 | 越高越好 | 每个键的值 |
+| `test-coverage` | 各测试套件覆盖的源代码行比例 | 越高越好 | 每个键的值，允许 1 个百分点波动 |
+| `test-report` | Vitest JSON 报告中真正通过的测试数 | 越高越好 | 每个键的值 |
 
-The isolated ESLint gate config sets `noInlineConfig`, so an `// eslint-disable`
-comment cannot hide a violation from the gate — the baseline measures the real
-escape surface, and the gate can't be bypassed by suppressing. Pawl owns ESLint
-JSON parsing, rule filtering, path normalization, and exit-code semantics.
+`file-length`、`type-escapes` 和 `cognitive-complexity` 使用 pawl 内置能力。其余项目特有的汇总由 `tools/pawl/adapters/*.ts` 计算，再经 `pawl-adapter.ts` 输出 pawl 读取的 JSON。
 
-### Gate strictness
+## 运行前准备
 
-Each dimension's `gate` (declared in `pawl.yaml`) tells pawl how `check` compares
-against the snapshot, so a localized regression can't hide behind an unchanged
-scalar total (file A improves while file B worsens, total flat):
+`test-report` 和 `test-coverage` 不会主动运行测试。它们读取各包 `test` 脚本生成的 `test-report*.json` 与 `coverage-summary.json`。本地检查前应先运行与 CI 相同的测试任务；报告不存在时，适配器会失败，而不是把结果当作 0。
 
-- **`total`** — scalar only. For `file-length`, where the metric is "how many
-  files cross the limit"; growing an already-long file shouldn't fail CI, only a
-  new file crossing it (which moves the total) should. Also for `code-duplication`
-  and `circular-deps`: a refactor legitimately moves clone boundaries or import
-  edges around, so per-file accounting would flag innocent moves — only a net
-  increase in the total fails.
-- **`per-file-count`** — no file may gain offenders. Counting offenders *per file*
-  (not per line) keeps it robust: moving code around a file doesn't trip it, but
-  adding an `any` / a complex function to any file does.
-- **`per-key-value`** — no individual key may worsen. For `type-coverage`, every
-  package's coverage must hold or rise, not just the overall percentage.
+这组 TypeScript 文件由 Node 的原生类型擦除直接执行，没有 `tsx` 或 `ts-node`。因此只使用可擦除的 TypeScript 语法，本地 import 也必须带 `.ts` 或 `.js` 扩展名。单独检查这个目录可运行：
 
-A dimension may also declare a `tolerance` — absolute slack (same unit as the
-value) granted in the worse direction, applied to the total, the per-key checks,
-and `guard` alike (the snapshot records it so the guard sees it without
-loading adapters). Exact-count dimensions omit it; `test-coverage` declares
-`tolerance: 1` (one percentage point) because runtime coverage carries inherent
-measurement noise that a strict comparison would surface as false regressions. A
-drop inside the slack prints `✅ within tolerance` and does not fail the gate.
+```bash
+pnpm exec tsc -p tools/pawl
+```
 
-## Guards beyond the per-dimension gate
+## 添加项目指标
 
-pawl protects the gate itself, not just the dimensions it measures:
+先确认 pawl 内置指标无法表达需求。确实需要自定义测量时：
 
-- **Cannot-measure is exit 2, never a silent zero.** If an adapter crashes,
-  times out, or prints non-JSON, pawl aborts with exit 2 rather than reading the
-  failure as "measured zero" — a missing measurement can't pass the gate.
-- **`guard <ref>`.** Compares the working tree's `pawl.snapshot.json`
-  against the version committed at `<ref>` (in CI: the PR's base branch, via a
-  `git fetch --depth=1` + `FETCH_HEAD`). This is what actually stops a
-  hand-edited snapshot from faking a pass — `check` alone only verifies internal
-  consistency between the file on disk and a fresh measurement of the current
-  code, not that the file's history is honest.
-- **Improvement notice.** When `check` runs on CI (`GITHUB_ACTIONS` set) and at
-  least one dimension improved since the snapshot, pawl prints a `::notice::`
-  naming the improved dimensions and pointing at `pnpm pawl:record` — so an
-  unrecorded win surfaces on the PR itself.
+1. 在 `tools/pawl/adapters/` 新建一个默认导出 `Adapter` 的文件。
+2. 在 `pawl.yaml` 增加 `command: "node tools/pawl/pawl-adapter.ts <id>"`。
+3. 为适配器补测试。
+4. 运行测试和 `pnpm pawl:diff`，确认测量值正确后再运行 `pnpm pawl:record`。
 
-## Notes & known limits
+```ts
+import type { Adapter } from '../lib/types.ts'
 
-- **cognitive-complexity** uses the canonical SonarJS rule through pawl's ESLint
-  builtin; the algorithm is not reimplemented. oxlint cannot replace it —
-  SonarJS-class rules are type-aware ([oxc#4863]).
-- **code-duplication** runs the jscpd CLI (a local Rust binary; jscpd ≥5 ships no
-  JS API) with `--min-tokens 50` pinned, token-level matching, so renamed-identifier
-  copies still count as clones. Cognitive complexity measures how tangled one
-  function is; this dimension catches the opposite failure mode — logic that stays
-  simple per copy but is pasted across files.
-- **circular-deps** is self-implemented (a regex over import/export-from
-  specifiers and dynamic `import()` calls, resolved the way Node/TS would —
-  including a package's own tsconfig `paths` aliases (e.g. `@/*`) — fed into
-  Tarjan's SCC algorithm) rather than built on madge/dpdm — a single
-  regex-and-graph pass didn't justify a new dependency. Import-shaped text
-  inside comments or string literals is masked out before matching, so it
-  can't fabricate an edge. Scope is deliberately narrow: only relative and
-  same-package-alias imports are followed, so a detected cycle is always
-  contained within one package's `src` — a cycle formed through two packages'
-  published entry points (`@scope/pkg-a` importing `@scope/pkg-b` importing
-  back) is out of this dimension's reach and would need a package-graph-level
-  tool instead.
-- **test-report** does not run any tests itself — it reads the vitest JSON
-  reports (`test-report*.json`, gitignored) that each package's `test` script
-  emits via `--outputFile.json=…`, and counts `numPassedTests`. Reading the run
-  report instead of grepping source for `it(` means every way a test can stop
-  counting — deleted, `.skip`ped, excluded from the config, or newly failing —
-  lowers the number and fails the gate. The `test` script text is the single
-  source of truth for which reports must exist: a script that runs vitest
-  without declaring an `--outputFile.json` is an error, and a declared report
-  missing from disk fails with "run `pnpm test` first" rather than counting as
-  zero. In CI the test step runs before `pawl:check`, so reports are always
-  fresh; locally, a stale report is possible if you measure without re-running
-  tests. The reports are declared as turbo outputs of the `test` task, so a
-  turbo cache hit restores them instead of leaving them missing.
-- **test-coverage** rides the same artifact pipeline: each `test` script also
-  passes `--coverage.enabled --coverage.reporter=json-summary
-  --coverage.reportsDirectory=<dir>`, and the adapter reads
-  `<dir>/coverage-summary.json` per suite (the i-th `--outputFile.json` names
-  the i-th suite, the i-th `--coverage.reportsDirectory` locates its summary; a
-  count mismatch fails loud). The CLI `--coverage.reporter=json-summary`
-  overrides the config's reporter list, so plain `pnpm test` writes only the
-  summary — the html/text reporters still run under `pnpm test:coverage`. The
-  vitest configs pin `coverage.include` to all of `src/**`, so untested files
-  count toward the denominator: without that, vitest only reports files loaded
-  during the run and a new untested file would not move the number. The gate is
-  per-suite lines %; the scalar is aggregated over real line counts, not an
-  average of percentages.
-- **No dead-code dimension.** A knip-based unused-exports gate was tried and
-  removed. The devtools packages expose extension APIs for downstream secondary
-  development, so *any* export may have an out-of-repo consumer that static
-  analysis cannot see — "unused" never means "deletable", and gating it would
-  red-flag every legitimate new public API. knip's file- and dependency-level
-  signals are likewise dominated by false positives here (Vite/electron entry
-  points, the devkit server's runtime deps) without an exhaustive entry map.
-  Reintroducing it would require declaring every public entry point in a knip
-  config first, and even then export-level detection stays unusable.
+const adapter: Adapter = {
+  id: 'my-metric',
+  title: 'My metric',
+  direction: 'lower-is-better',
+  async measure() {
+    return {
+      value: 42,
+      unit: 'items',
+      breakdown: { 'file.ts': 42 },
+    }
+  },
+}
 
-## Adding a custom exec dimension
+export default adapter
+```
 
-Prefer a pawl builtin when one already matches the metric. Add a custom exec
-adapter only for project-specific aggregation or semantics that the builtins do
-not express:
+`pawl-adapter.ts` 会把缺省 `unit` 设成 `count`，把空的 `breakdown` 转成 `null`。加载失败、适配器形状错误和顶层异常返回退出码 2；`measure()` 自身抛错返回退出码 1。
 
-1. Drop a `*.ts` in [`adapters/`](./adapters) with a default export shaped like
-   `Adapter` (see [`lib/types.ts`](./lib/types.ts)):
+## 相关文件
 
-   ```ts
-   import type { Adapter } from '../lib/types.ts';
-
-   const adapter: Adapter = {
-     id: 'my-metric',
-     title: 'Human readable title',
-     direction: 'lower-is-better', // or 'higher-is-better'
-     async measure() {
-       return { value: 42, unit: 'things', breakdown: { 'file.ts': 42 } };
-     },
-   };
-
-   export default adapter;
-   ```
-
-2. Add a dimension to [`../../pawl.yaml`](../../pawl.yaml) with
-   `command: "node tools/pawl/pawl-adapter.ts my-metric"` and the matching
-   `direction` / `gate` / `tolerance`.
-3. `pnpm pawl:record` to add it to the baseline.
-
-Keep the adapter's `measure()` as the only place the number is computed — that's
-what guarantees the value the gate reads is the value your tests exercise.
-
-[eslint-plugin-sonarjs]: https://github.com/SonarSource/eslint-plugin-sonarjs
-[typescript-eslint]: https://typescript-eslint.io/
-[type-coverage]: https://github.com/plantain-00/type-coverage
-[jscpd]: https://github.com/kucherenko/jscpd
-[oxc#4863]: https://github.com/oxc-project/oxc/discussions/4863
+- [`../../pawl.yaml`](../../pawl.yaml)：指标、方向、比较方式和超时
+- [`../../pawl.snapshot.json`](../../pawl.snapshot.json)：当前基线
+- [`pawl-adapter.ts`](./pawl-adapter.ts)：自定义适配器入口
+- [`adapters/`](./adapters)：项目特有测量
+- [`eslint-gate.config.mjs`](./eslint-gate.config.mjs)：两项 ESLint 指标的独立配置
+- [`lib/types.ts`](./lib/types.ts)：适配器类型

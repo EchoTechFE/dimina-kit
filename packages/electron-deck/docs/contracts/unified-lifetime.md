@@ -14,7 +14,7 @@
 
 - **统一记录 = 一窗多 wc 的两层结构**：每窗口一条 `WindowRecord{ windowScope }`；窗口可关联**多个 wc**（主控制 renderer + 可能的 toolbar/overlay renderer），每个 wc 一条 `WcRecord{ wcScope, leases: Set<Lease> }`，**都挂在该窗口的 windowScope 之下**（互为兄弟）。全局 `Map<WebContents, WcRecord>` 以 **wc 对象身份**为键（§9）。一个窗口可 trust 多个 wc（主 renderer + toolbar wc 同窗），故 `WcRecord.leases` 是 Set。
 - **trustSet 保留**为 `isTrusted` / fanout 的底层成员表，但**写入它的寿命**（何时 admit、何时移除）由 wcScope `own()` 托管，不再手工增删。
-- **Connection 与 wcScope 并存**：`Connection`（connection.ts）是 `@dimina-kit/electron-deck/main` 的已发布 API，是扁平的 per-wc registry（`acquire(wc)` 返回绑了 webContents 的段寿命门面），被 devtools **14 个 `.acquire()` 调用点（9 文件）**消费（复核：`rg '\.acquire\(' packages/devtools/src/main --glob '!*.test.ts'`）。wcScope 是框架的嵌套寿命原语（§1 树）。二者是并存的两套 per-wc 寿命机制：Connection 扁平、按 `wc.id` 索引、`wc.once('destroyed')` 自动 close；wcScope 嵌套、随 windowScope 级联（§5）。
+- **Connection 与 wcScope 并存**：`Connection`（connection.ts）是 `@dimina-kit/electron-deck/main` 的已发布 API，是扁平的 per-wc registry（`acquire(wc)` 返回绑了 webContents 的段寿命门面），被 devtools **29 个 `.acquire()` 调用点（17 文件）**消费（复核：`rg '\.acquire\(' packages/devtools/src/main --glob '!*.test.ts'`）。wcScope 是框架的嵌套寿命原语（§1 树）。二者是并存的两套 per-wc 寿命机制：Connection 扁平、按 `wc.id` 索引、`wc.once('destroyed')` 自动 close；wcScope 嵌套、随 windowScope 级联（§5）。
 
 ---
 
@@ -28,12 +28,12 @@ rootScope                       ← 进程级（app 寿命）；deck-app 持有�
 │       「框架自持」那一份（见 §4）
 │
 ├── windowScope (主窗口)          ← 每个 BrowserWindow 一条 WindowRecord.windowScope
-│   │  own: () => win.destroy()  （teardown 契约：最先 own ⇒ LIFO 最后跑 = STEP4）
+│   │  own: () => win.destroy()  （teardown 契约：最先 own ⇒ LIFO 最后跑）
 │   │
 │   ├── wcScope (主控制 renderer)─┐  ← win.webContents 的寿命；WcRecord{ wcScope, leases }
 │   │   │                        │    与 toolbar wcScope / viewScope 都是**兄弟**
 │   │   │  own: leases (Set)      │    （不同 webContents；§2 论证 sibling）
-│   │   │  own: () => wire.dispose()（teardown 契约：STEP2）
+│   │   │  own: () => wire.dispose()（teardown 契约）
 │   │   │  on('reset'|'closed')   │  ← capability 契约的 grant 挂这里自动撤（§7）
 │   │   │
 │   │   └── (导航软复用 = wcScope.reset()：换段，wcScope 对象存活，generation++)
@@ -45,8 +45,8 @@ rootScope                       ← 进程级（app 寿命）；deck-app 持有�
 │   │
 │   ├── viewScope*  ────────────────  ← 每个原生 WebContentsView 一条（可多个）
 │   │   │                              与各 wcScope **兄弟**（独立 webContents、
-│   │   │  own: () => compositor.detach(viewId)（teardown 契约：STEP1）
-│   │   │  own: () => anchorSink.dispose()（teardown 契约：STEP0，最后 own ⇒ 最先跑）
+│   │   │  own: () => compositor.detach(viewId)（teardown 契约）
+│   │   │  own: () => anchorSink.dispose()（teardown 契约：最后 own ⇒ 最先跑）
 │   │   │  own: nativeView 持有 / keep-alive 的 WebContents（capability 契约「保活寿命归 Scope、淘汰策略归 host」）
 │   │   └── 随窗口死（windowScope.close 级联），也可单独 close（关一个 view）
 │   │
@@ -102,8 +102,8 @@ wcScope（控制 renderer 的寿命）与 viewScope（原生 view 的寿命）�
    兄弟拓扑让两条 generation 线**正交**。
 
 > **反例校验**：是否存在「view 必须先于 wc 死」的依赖，逼成父子？没有。view 的
-> 原生 detach（teardown 契约 STEP1）需要 `win.contentView` 活，而 win 由 windowScope
-> 持有、在两个兄弟都拆完后才 destroy（STEP4）——所以「先拆 view 再 destroy win」由
+> 原生 detach（teardown 契约）需要 `win.contentView` 活，而 win 由 windowScope
+> 持有、在两个兄弟都拆完后才 destroy——所以「先拆 view 再 destroy win」由
 > **windowScope 内的 LIFO 注册序**保证（teardown 契约），不需要 viewScope 当 wcScope 的
 > 子来强加顺序。兄弟拓扑 + windowScope LIFO 已足够。
 
@@ -205,11 +205,11 @@ export interface TrustSet extends TrustIndex {
 
 ## 5. Connection 与 wcScope
 
-### 5.1 Connection 是已发布 API、被 14 处真实消费
+### 5.1 Connection 是已发布 API、被 29 处真实消费
 
 `@dimina-kit/electron-deck/main` 导出 `createConnectionRegistry` /
 `Connection` / `ConnectionRegistry`（`src/main/index.ts`）。devtools 主进程
-**14 个 `.acquire(...)` 调用点（9 文件）**消费它，关键消费者：
+**29 个 `.acquire(...)` 调用点（17 文件）**消费它，关键消费者：
 
 - `services/safe-area/index.ts` `connections.acquire(wc).own(...)`
 - `services/network-forward/index.ts` `reg.acquire(wc).own(...)`
@@ -268,7 +268,7 @@ rootScope.own(() => appLevelRegistry.disposeAll())   // 最先 own ⇒ 最后跑
 // 按「children 先于 resources」LIFO ⇒ 所有 windowScope 先拆，app-级 registry 后拆。
 ```
 
-- `compositor-and-teardown.md` 规定**单窗口内**的序（STEP0 anchor→STEP1 detach→STEP2 wire→STEP4 destroy）由 windowScope 的 own LIFO 编码。本文补的是**跨窗口 + app 级**的序：rootScope 的「children（所有 windowScope）先于 resources（app registry）」复刻「窗口先于 registry」，且每窗内部还有单窗 STEP 序。
+- `compositor-and-teardown.md` 规定**单窗口内**的序（anchor dispose → detach → wire dispose → win.destroy）由 windowScope 的 own LIFO 编码。本文补的是**跨窗口 + app 级**的序：rootScope 的「children（所有 windowScope）先于 resources（app registry）」复刻「窗口先于 registry」，且每窗内部还有单窗内序。
 - `beforeClose` 必须在**任何**拆除前跑（host 的「我要存盘」钩子），所以它不进 rootScope.own（那是 LIFO 拆除项），而是在 `await rootScope.close()` **之前** await：`doShutdown = await beforeClose(timeout) → await rootScope.close() → app.quit()`。
 
 > **`beforeClose` 的位置细节**：beforeClose 必须在**任何**拆除前跑（它是 host 的
@@ -334,9 +334,12 @@ wc.id 复用不继承。本文把「sender 寿命 Scope」**钉死为 wcScope**�
    原地复活旧 view——这与 §7「wc.id 复用建新 wcScope、不继承旧 generation」同构，
    实现上只有「整窗重建」一条路径，没有「半死窗口续命」的特例。
 
-**触发点**：connection.ts 现在只听 `wc.once('destroyed')`（硬销毁）。
-control-loss 还需覆盖**崩溃**——监听 `render-process-gone`（控制 wc 的 webContents）
-→ 触发该 wc 所属窗口的 `windowScope.close()`（与正常关窗同一条级联，§6）。
+**触发点（裁决，尚未实现）**：connection.ts 现在只听 `wc.once('destroyed')`（硬销毁）。
+control-loss 要覆盖**崩溃**，需要监听 `render-process-gone`（控制 wc 的 webContents）
+→ 触发该 wc 所属窗口的 `windowScope.close()`（与正常关窗同一条级联，§6）——**这条监听
+目前在生产代码里不存在**。仓库内唯一的 `render-process-gone` 监听在
+`src/main/overlay-panel.ts`，处理的是坏掉的 overlay 视图本身，不是本节讨论的
+windowScope 级联，不能当作本裁决已落地的依据。
 > **注意区分**：`destroyed` 是 wcScope 自己的终端钩子；`render-process-gone`
 > 是**控制层崩溃**，要上抛到 **windowScope.close**（拆整窗），不是只 close 该 wcScope
 > （只 close wcScope 会留下被冻结的兄弟 viewScope —— 正是 (A) 的僵尸态，已被否决）。
@@ -353,9 +356,10 @@ grant 的 scope 边界拆成两个字段，因为「能动谁」与「grant 绑�
 ```ts
 export interface Grant {
   readonly senderId: number
-  /** ① 授权目标：grant 能驱动哪棵 Scope 子树下的 view（B3/popout rehome 以此判边界）。
-   *  这是「能动谁」——通常是某 windowScope / sessionScope / viewScope 子树。 */
-  readonly targetScope: Scope
+  /** ① 授权目标：grant 能驱动哪棵 Scope 子树下的 view（popout rehome 以此判边界）。
+   *  这是「能动谁」——通常是某 windowScope / sessionScope / viewScope 子树。可选：
+   *  当前未被 dispatch 闸消费（见下方说明），host 可以不传。 */
+  readonly targetScope?: Scope
   /** ② sender 寿命：grant 绑谁的命、随谁的 reset/closed 自动撤（§7）。
    *  这是 control wc 的 wcScope——「grant 活多久」。 */
   readonly senderScope: Scope          // = controlWc 的 wcScope
@@ -375,7 +379,7 @@ export interface Grant {
 
 ---
 
-## 9. 统一 `WindowRecord`（吞掉 `trackedWindows`）
+## 9. 统一 `WindowRecord`（`trackedWindows` 的镜像 shadow map）
 
 ### 9.1 TS 数据结构
 
@@ -391,7 +395,7 @@ type Lease = Disposable
  *  renderer），它们的 wcScope 都挂在同一窗口的 windowScope 下、互为兄弟（§2）。 */
 interface WcRecord {
   /** 该 wc 的寿命：windowScope.child()。与同窗其它 wcScope / viewScope 兄弟（§2）。
-   *  own: leases（§4）+ wire dispose（teardown 契约 STEP2）。导航软复用 = wcScope.reset()。
+   *  own: leases（§4）+ wire dispose（teardown 契约）。导航软复用 = wcScope.reset()。
    *  grant 绑其 on('reset'|'closed')（§7）。 */
   readonly wcScope: Scope
   /** 该 wc 进信任集的全部 lease（≥1）；都由 wcScope own（§4.2）。窗死 =
@@ -401,7 +405,8 @@ interface WcRecord {
   readonly leases: Set<Lease>
 }
 
-/** 每个窗口一条。吞掉 deck-app 的 `trackedWindows: Set<MinimalBrowserWindow>`。
+/** 每个窗口一条。`deck-app.ts` 的 `trackedWindows: Set<MinimalBrowserWindow>` 仍然存在
+ *  （现有代码路径依赖它），本结构是它的**镜像** shadow map、与其保持 lock-step，不是替代。
  *  它**不直接持** wcScope——窗口的各 wc 是 WcRegistry 里挂在 windowScope 下的兄弟。 */
 interface WindowRecord {
   /** 该窗口的根寿命：rootScope.child()。close() 级联拆整窗（含其下全部 wcScope /
@@ -420,7 +425,7 @@ type WcRegistry = Map<MinimalWebContents, WcRecord>
 
 /** 窗口 → WindowRecord。键同样用 wc 对象身份（该窗的「主控制 wc」是天然键）。 */
 type WindowRegistry = Map<MinimalWebContents, WindowRecord>
-//   ↑ 吞掉 `trackedWindows: Set<MinimalBrowserWindow>`（deck-app.ts）
+//   ↑ 与 `trackedWindows: Set<MinimalBrowserWindow>`（deck-app.ts）保持 lock-step 的镜像，非替代
 ```
 
 > **键选 `MinimalWebContents` 还是 `windowId`**：选 **wc 对象身份**。理由：(1)
@@ -459,5 +464,5 @@ type WindowRegistry = Map<MinimalWebContents, WindowRecord>
 
 ### 与兄弟契约的接口
 
-- **compositor-and-teardown.md**：windowScope / viewScope 就是其 window-scope，其 STEP0→STEP4 own() LIFO 编码落在它们上；本文补「跨窗 + app 级」序 = rootScope children-first（§6.1）。
+- **compositor-and-teardown.md**：windowScope / viewScope 就是其 window-scope，其 own() LIFO 编码（anchor dispose → detach → wire dispose → win.destroy）落在它们上；本文补「跨窗 + app 级」序 = rootScope children-first（§6.1）。
 - **capability-and-lifecycle.md**：wcScope = 其「control wc 的 Scope」；grant 绑其 `on('reset'|'closed')`（§7）；`Grant` 的 targetScope/senderScope 拆分（§8）；isTrusted 闸读 trustSet（§4.4）。

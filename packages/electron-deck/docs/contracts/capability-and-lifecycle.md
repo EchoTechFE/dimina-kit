@@ -334,7 +334,7 @@ LRU 作为一行 opt-in。不内建 TTL / 其它策略，避免 helper 变策略
 
 ## 附：实现时易错点
 1. **per-wc Scope 地基**：grant 绑定依赖「每个 control wc 有一个会随其销毁而 closed 的 wcScope」。
-   这块地基与 ViewHandle / B3 共用，统一寿命见 `unified-lifetime.md`。
+   这块地基与 ViewHandle 共用，统一寿命见 `unified-lifetime.md`。
 2. **两条 invoke 路由的边界**：grant 闸只在 `ControlBus.dispatch`。布局/特权 command 必须走
    ControlBus，禁止注册进默认路由的 `InMemoryTypedIpcRegistry`（声明式 hostServices），否则闸被
    绕过（见「两条 invoke 路由的硬边界」+ `architecture.md` 中 ControlBus 必经路由的硬约束）。边界在接线处写死。

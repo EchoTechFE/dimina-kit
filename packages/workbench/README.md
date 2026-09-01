@@ -1,8 +1,18 @@
 # @dimina-kit/workbench
 
-Dimina 的内嵌式 VS Code 工作台编辑器，基于 [`@codingame/monaco-vscode-api`](https://github.com/CodinGame/monaco-vscode-api)（v34）。在 devtools 与 web 客户端之间共用同一套编辑器：WXML 语言特性、`dd`/`wx` 类型提示、dimina 配置文件（app.json / 页面 *.json / project.config.json）的 JSON Schema、自动保存。
+> 一个能嵌进你自己页面的 VS Code 编辑器，专门配好了写 dimina 小程序需要的东西。
 
-宿主之间唯一的差异是**工作区文件源**，通过 `WorkspaceSource` 注入；其余（服务装配、worker 接线、用户配置、主题）都在包内。
+基于 [`@codingame/monaco-vscode-api`](https://github.com/CodinGame/monaco-vscode-api)（v34）。开箱带 WXML 语言特性、`dd` / `wx` 类型提示、dimina 配置文件（`app.json`、页面 `*.json`、`project.config.json`）的 JSON Schema，以及自动保存。devtools 桌面端和 web 客户端用的是同一套。
+
+宿主之间唯一的差异是**工作区文件从哪来**，通过 `WorkspaceSource` 注入；其余（服务装配、worker 接线、用户配置、主题）都在包内，宿主不用管。
+
+## 安装
+
+```bash
+pnpm add @dimina-kit/workbench
+```
+
+只在浏览器 + Vite 环境可用，见下面第一种形态的注意事项。
 
 ## 两种消费形态
 

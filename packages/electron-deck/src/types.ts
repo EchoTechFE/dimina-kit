@@ -361,8 +361,10 @@ export interface ViewCreateOptions {
  */
 export interface DeckViewHandle {
 	/** Mount the native view into `window`'s content view at the given zone.
-	 *  `anchor` is accepted + stored for the future slot-token step (unused in
-	 *  slice 1). Chainable. */
+	 *  A non-empty `anchor` names a DOM slot in the control wc: the host mints a
+	 *  slot-token for it and pushes a slot-grant so the renderer can drive
+	 *  `place` on this view. Omitting it mounts without a renderer credential.
+	 *  Chainable. */
 	placeIn(window: BrowserWindow, opts: { zone?: number; anchor?: string }): DeckViewHandle
 	/** Drive the native view's visibility + bounds. `visible:true` (re)mounts and
 	 *  sets bounds directly; `visible:false` detaches but keeps the view alive.

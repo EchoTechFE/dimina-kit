@@ -77,7 +77,7 @@ interface DiminaRenderBridge {
 
 ### 2.3 消息 envelope 与 type 一览
 
-`BridgeMessageType`（`src/shared/bridge-channels.ts`）以具名字面量列出主要 type，并以 `| string` 收尾——是开放联合，留给路由型扩展消息（`consoleLog` 即属此类：未具名于 `BridgeMessageType`，但由 `handleContainerMsg` 路由、由 preload 发出）。下表按发送方/接收方分类（含未具名的扩展消息）：
+`BridgeMessageType`（`packages/dimina-electron-runtime/src/shared/bridge-channels.ts`）以具名字面量列出主要 type，并以 `| string` 收尾——是开放联合，留给路由型扩展消息（`consoleLog` 即属此类：未具名于 `BridgeMessageType`，但由 `handleContainerMsg` 路由、由 preload 发出）。下表按发送方/接收方分类（含未具名的扩展消息）：
 
 | Type | 方向 | 含义 | container 角色 |
 |---|---|---|---|
@@ -177,7 +177,7 @@ Workbench BrowserWindow (workbench renderer + main process)
         ← Chrome DevTools console 可直调 wx.*，Sources 可 step into
 
 Main Process
-  └── BridgeRouter (src/main/ipc/bridge-router.ts)
+  └── BridgeRouter (packages/dimina-electron-runtime/src/main/ipc/bridge-router.ts)
         两级 AppSession / PageSession，按 bridgeId 路由 service ↔ render
         聚合 resourceLoaded、处理 invokeAPI、转发生命周期
 ```
@@ -235,7 +235,7 @@ container → service 的 lifecycle 消息（`PAGE_LIFECYCLE` channel → `handl
 | stackShow / stackHide | 声明保留（`PageLifecycleEvent` / `BridgeMessageType` 含此二项；reducer 与 main 不触发） |
 | appShow / appHide | DeviceShell reducer 不产出；改由主进程 `installAppLifecycleDriver` 按主窗口可见性直接 `forwardToService`（不走 `PAGE_LIFECYCLE`） |
 
-main ↔ simulator 的 `SIMULATOR_EVENTS`（`src/shared/bridge-channels.ts`）：
+main ↔ simulator 的 `SIMULATOR_EVENTS`（`packages/dimina-electron-runtime/src/shared/bridge-channels.ts`）：
 
 ```ts
 SIMULATOR_EVENTS = {
@@ -249,15 +249,15 @@ SIMULATOR_EVENTS = {
 
 `API_CALL` 的响应走 `BRIDGE_CHANNELS.API_RESPONSE`（`dmb:api:response`，sim → main，`handleApiResponse` 据 requestId 回原始 service 端 success/fail/complete）。
 
-## 7. NavigationBar 微信对齐
+## 7. NavigationBar 当前实现
 
-simulator 的 NavigationBar 按微信 MiniProgram 规范实现；胶囊（capsule）的尺寸/位置/视觉则对齐 dimina 各端 native 的实际渲染（见下），而非独立于 native 的一套数值。
+simulator 的 NavigationBar 由 DeviceShell 渲染；胶囊（capsule）的尺寸、位置和视觉复用 dimina 当前 iOS / Android 实现中的几何值。
 
 **视觉**（`packages/dimina-electron-runtime/src/simulator-ui/navigation-bar.tsx`、`menu-capsule.tsx`、`navigation-bar.css`、`menu-capsule.css`）：
 
 - status bar 高度：iOS 44、Android 24。DeviceShell 的视觉布局直接取平台常量 `STATUS_BAR_HEIGHT_IOS = 44` / `STATUS_BAR_HEIGHT_ANDROID = 24`（`device-shell.tsx`，按 `platform` 选用）；同一组值另由 `hostEnvSnapshot`（`simulator-mini-app.ts`，`statusBarHeight = ios?44:24`）在 spawn 时下发给 service-host 的 sync 实现（getSystemInfo / 胶囊 geometry）。nav bar 高度 44（`NavigationBarProps.navBarHeight`）
 - 标题对齐：iOS center / Android left（`titleAlign`）
-- 返回箭头（`stackDepth > 1`）/ 返回首页按钮（`homeButtonVisible`，两者可并存）。返回首页按钮按微信规则显示（判据函数 `shouldShowHomeButton`，`navigate-home.ts`）：非应用首页（manifest `entryPagePath`，缺省 `pages[0]`）+ 非 tabBar 页（页面配置 `homeButton: true` 也不能突破这两条排除），且「页面栈栈底（自动规则）或页面配置 `homeButton: true`（此时与返回箭头并存显示）」；`wx.hideHomeButton()` 隐藏调用页自己的按钮。点击返回首页：首页是 tabBar 页走 switchTab（保留其它 tab 状态并露出 tabBar，自带清非 tab 栈），首页非 tab 时栈底走 redirectTo 原地替换、非栈底走 reLaunch 清整栈——路由判定收敛在 `resolveHomeNavAction`（`navigate-home.ts`，对应各端 native 的 `navigateHome` 原语），`DeviceShell.handleHome` 只负责分发。注意 tab 分支回给调用方的动词虽是 `switchTab`，终态归约走的却是 `reduceNavigateHomeToTab` 而非普通 `reduceSwitchTab`——后者会还原目标 tab 的缓存子栈（可能落在子栈栈顶的内页），前者落 tab 根页、把每个 tab 裁到根、并销毁所有非 tab 页。已经在首页时整个动作幂等短路（`isAtHome`），不重开也不发多余生命周期
+- 返回箭头（`stackDepth > 1`）/ 返回首页按钮（`homeButtonVisible`，两者可并存）。返回首页按钮的判据收敛在 `shouldShowHomeButton`（`navigate-home.ts`）：非应用首页（manifest `entryPagePath`，缺省 `pages[0]`）+ 非 tabBar 页（页面配置 `homeButton: true` 也不能突破这两条排除），且「页面栈栈底（自动规则）或页面配置 `homeButton: true`（此时与返回箭头并存显示）」；`wx.hideHomeButton()` 隐藏调用页自己的按钮。点击返回首页：首页是 tabBar 页走 switchTab（保留其它 tab 状态并露出 tabBar，自带清非 tab 栈），首页非 tab 时栈底走 redirectTo 原地替换、非栈底走 reLaunch 清整栈——路由判定收敛在 `resolveHomeNavAction`，`DeviceShell.handleHome` 只负责分发。注意 tab 分支回给调用方的动词虽是 `switchTab`，终态归约走的却是 `reduceNavigateHomeToTab` 而非普通 `reduceSwitchTab`——后者会还原目标 tab 的缓存子栈（可能落在子栈栈顶的内页），前者落 tab 根页、把每个 tab 裁到根、并销毁所有非 tab 页。已经在首页时整个动作幂等短路（`isAtHome`），不重开也不发多余生命周期
 - loading 转圈（show/hideNavigationBarLoading → `state.loading`）
 - 颜色动画（`wx.setNavigationBarColor.animation` → CSS transition，`TIMING_FUNC_MAP` 4 种 timingFunc）
 - `navigationStyle: custom`：整条 bar 隐藏，胶囊保留（`isCustom`）
@@ -265,14 +265,14 @@ simulator 的 NavigationBar 按微信 MiniProgram 规范实现；胶囊（capsul
 **胶囊** geometry（`packages/dimina-electron-runtime/src/shared/menu-button-geometry.ts` `getMenuCapsuleRect`）：
 
 - 尺寸/间距对齐 native（iOS `MenuAPI.swift` `DMPMenuButtonLayout` / Android `MenuButtonGeometry.kt`）：两端胶囊都是 87×32，trailing spacing 都是 10；两端的差异只在 nav bar content height 不同（iOS 44、Android 64），所以 top 偏移不同：iOS = statusBarHeight + 6，Android = statusBarHeight + 16
-- `right`/`left` 是绝对像素坐标（`right = windowWidth - 10`），不是到边缘的 margin——这与 `wx.getMenuButtonBoundingClientRect()` 的真实返回契约一致
+- `right`/`left` 是绝对像素坐标（`right = windowWidth - 10`），不是到边缘的 margin；service-host sync impl 与 React 组件都返回这份共享 geometry
 - 纯函数 geometry，service-host sync impl 与 React 组件共享同一份常量/函数（此前 React 组件曾各自硬编码一套数值，与 geometry 模块和 native 都不一致，已改为直接复用）
 - 视觉上胶囊始终是不透明白底 + 深色（`#1F1F1F`）图标，不随 `navigationBarTextStyle` 切换主题——这也是对齐 native（两端 native 实现均未做胶囊主题联动）
 
 **API 路由**（`NAV_BAR_API_NAMES`，见 §6）：
 
 - 5 个 navigation-bar API 走 `E.NAV_BAR`，路径 `service.invokeAPI → handleSimulatorApi → simulatorWc.send → DeviceShell → setState`
-- callback fire-and-forget 立即返回 `{ errMsg: '<name>:ok' }`（UI 更新异步，与微信行为对齐）
+- callback fire-and-forget 立即返回 `{ errMsg: '<name>:ok' }`，UI 更新异步
 - `wx.getMenuButtonBoundingClientRect()` 走 sync 本地实现（`src/service-host/sync-impls/menu-button.ts`），从 spawn-time `hostEnvSnapshot` 派生
 
 **约束**：
@@ -286,19 +286,15 @@ simulator 的 NavigationBar 按微信 MiniProgram 规范实现；胶囊（capsul
 
 TabBar 同样由 DeviceShell 渲染（`tab-bar.tsx` + `tab-bar-state.ts`），配置来自 `app-config.json` 的 `app.tabBar`（`TabBarConfig`，`bridge-channels.ts`）。8 个动态 API 走 `applyTabAction` reducer（颜色经 `sanitizeColor` 过滤），图标路径在 `tab-bar.tsx` `resolveIcon` 内解析：`http(s):` / `data:` / `blob:` / `//` 前缀原值返回；无 base 时返回 null；否则去掉 `/`、`./` 前缀，编译器已把 iconPath 改写成从 server 根起的绝对路径 `/<appId>/main/static/…`（`resourceBaseUrl` 就是该 server 根 origin），故剩余路径以 `${appId}/` 开头时**保留** `<appId>` 段直接 `joinUrl(resourceBaseUrl, local)`（剥掉会丢段 → 404）；未被编译器改写的裸相对路径则补上包根 `<appId>/main/`。完整 TabBar API 与样式 gap 见 [`./tab-bar.md`](./tab-bar.md)。
 
-## 9. 已知缺口
-
-- `@dimina/service` dist 不带 sourcemap（`dimina/fe/packages/service/dist/service.js` 无 `sourceMappingURL`）。service window 自动打开 detached DevTools，console 里可直接调 `wx.*`、可在 bundle 上下断点 step into，但 Sources 面板看到的是已 bundle 的代码。
-
-## 10. 文件清单
+## 9. 文件清单
 
 | 文件 | 角色 |
 |---|---|
 | `src/service-host/preload.cjs` | service 窗口 preload：注入 `globalThis.DiminaServiceBridge`、`importScripts` shim、guest console 捕获、从 spawn URL 解 `apiNamespaces` 写 `globalThis.__diminaApiNamespaces` |
 | `src/render-host/preload.cjs` | render-host webview preload：注入 `window.DiminaRenderBridge`、`renderHostReady` 上报 |
 | `src/service-host/sync-api-patch.ts` | service.js 之后把 `*Sync` API patch 成 `sync-impls/` 本地实现 |
-| `src/shared/bridge-channels.ts` | `BridgeMessageType` / `BRIDGE_CHANNELS` / `SIMULATOR_EVENTS` / `TabBarConfig` 等协议常量 |
-| `src/main/ipc/bridge-router.ts` | 主进程 BridgeRouter：两级 session、`resourceLoaded` 聚合、`invokeAPI` 路由、生命周期转发、logic.js 注入 |
+| `packages/dimina-electron-runtime/src/shared/bridge-channels.ts` | `BridgeMessageType` / `BRIDGE_CHANNELS` / `SIMULATOR_EVENTS` / `TabBarConfig` 等协议常量；devtools 同名文件仅重导出 |
+| `packages/dimina-electron-runtime/src/main/ipc/bridge-router.ts` | 主进程 BridgeRouter：两级 session、`resourceLoaded` 聚合、`invokeAPI` 路由、生命周期转发、logic.js 注入；devtools 同名文件负责适配装配 |
 | `packages/dimina-electron-runtime/src/simulator-ui/navigation-bar.tsx` | NavigationBar 视觉实现（标题对齐 / 返回按钮 / loading / 颜色动画 / custom 隐藏） |
 | `packages/dimina-electron-runtime/src/simulator-ui/page-stack-controller.ts` | 页面栈纯 reducer（`navigateTo`/`Back`/`redirectTo`/`reLaunch`/`switchTab` → lifecycle/closePage effect） |
 

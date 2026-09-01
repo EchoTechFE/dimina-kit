@@ -57,6 +57,8 @@ interface ConnectionRegistry {
 
 `createConnectionRegistry()` 产出一个 registry。devtools 把它作为 `DeckContext.connections` 字段，由真实接线点（app 启动、view-manager、bridge-router、各 CDP service）按需 `acquire`。
 
+本页后面举的例子来自这两个包，读代码时按这里找：bridge-router 在 `packages/dimina-electron-runtime/src/main/ipc/bridge-router.ts`（会话寿命 `own()` 在 :1366，软复用 reset 在 :2828，debugTap 在 :629）；open-in-editor 在 `packages/devtools/src/main/services/views/native-simulator-devtools-host.ts:277`。
+
 ---
 
 ## 3. 关键语义：`own()` vs `on('closed')` —— 最容易踩错的点

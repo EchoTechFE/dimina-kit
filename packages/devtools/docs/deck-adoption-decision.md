@@ -1,63 +1,91 @@
-# devtools 是否采纳 electron-deck 高层 host API — 决策记录
+# devtools 是否采纳 electron-deck 高层 host API — 当前决策
 
-> **结论**：devtools 维持 `ownsWindows:true` 旁路集成，**不**采纳 electron-deck 的高层
-> host-shell API（`runtime.view` / `runtime.windows` / `runtime.grants` / Window facade /
-> Compositor）。本文固化这个决策的依据与重启条件。
+> 当前结论：保留 `ownsWindows:true` 和既有低层集成；不要在 devtools 主窗口上叠加
+> deck 自己的 window substrate / compositor。理由见下文各节。
 
 ## 范围
 
-本决策只针对 deck 的**高层 host-shell API**——`runtime.view` / `runtime.windows` /
-`runtime.grants` / Window facade / Compositor 那一面。
+本文只讨论 `runtime.view`、`runtime.windows`、`runtime.grants`、
+Window facade 与 Compositor 这一组高层 host API。
 
-deck 另起的 **layout-as-data 引擎（`@dimina-kit/electron-deck/layout`）+ `<DockView>`
-（`/dock-react`）是一个正交 surface**——它不 import electron、不碰 Scope / Compositor /
-ControlBus。这个 surface **已被 devtools 采纳**：项目窗口布局是单一 `<DockView>`（IDE-dockable
-拖拽 re-dock / tab / 分屏 / 序列化）。两件事针对 deck 的两个不同对外面，结论不矛盾。详见
-[`project-window-layout.md`](./project-window-layout.md) 与
-`../../electron-deck/docs/architecture.md §0.5`。
+devtools 已使用 deck 的低层原语和 layout-as-data：
+`@dimina-kit/electron-deck/main`、`/layout`、`/dock-react` 与
+`/client`。项目布局由 `<DockView>` 渲染，见
+[`project-window-layout.md`](./project-window-layout.md)。
 
-## 集成现状
+## 当前阻断：主窗口存在两个 native child-tree owner
 
-devtools 与下游宿主都经 `RuntimeBackend` 生命周期路径、以 `ownsWindows:true` 集成，不触碰高层面：
+`runtime.windows.adopt()` 有完整实现，也明确支持观察或接管外部窗口；
+`ownsWindows:true` 本身不会让这组 API 结构性不可用
+（`packages/electron-deck/src/internal/deck-app.ts:1462-1566`）。
 
-- `devtools-backend.ts` 设 `ownsWindows:true`。
-- `view-manager.ts` 全程裸 `addChildView` / `setBounds` 管理原生 overlay。
-- `workbench-context.ts` 只用 `/main` 低层原语。
+问题发生在 adopt 的下一层：
 
-deck 的高层 host API 全部已建并接线，但唯一消费者是 `examples/layout-demo` 与 `spike/popout`。
+- `adoptWindow` 无条件创建 window substrate
+  （`packages/electron-deck/src/internal/deck-app.ts:1502`）。
+- substrate 维护私有 `order`，创建自己的 compositor，并直接调用
+  `win.contentView.addChildView/removeChildView`
+  （`packages/electron-deck/src/internal/deck-app.ts:889-936`）。
+- devtools 的 `createNativeViewTreeHost` 也维护自己的 `order` /
+  `mounted`，写同一个 `mainWindow.contentView`
+  （`packages/devtools/src/main/services/views/native-view-tree.ts:20-80`）。
 
-## NO-GO 矩阵（每项 + 依据）
+两边的私有顺序都看不到对方的写入，因此没有组件拥有全局 z-order。这个阻断是
+**按窗口**的：devtools 主窗口不能同时接两套 owner；没有 devtools reconciler 的独立窗口
+仍可单独评估 `runtime.windows.adopt()`。
 
-| 候选采纳 | 判决 | 依据 |
-|---|---|---|
-| 弃 ownsWindows → Window facade（windows.main + DeckWindow.onClose + newSession） | **NO-GO** | 零用户可见收益。`ownsWindows:true` 下 `runtime.windows.main === null`，DeckSession 只能管 `runtime.view` 创建的视图，替代不了 devtools 的 IPC registry 与 workspace teardown。close→back 已硬化（仅 teardown session、绝不 dispose registry）。 |
-| ViewManager → runtime.view + Compositor | **NO-GO** | ViewManager 是最 load-bearing 子系统，成本极高。Compositor 只折叠 mount/unmount/z，`applyPlacement` 仍逐 view `setBounds`，**无跨 view 原子 bounds commit**。`runtime.view` 只接 URL/file，**无法表达 simulator 的 preload/partition/webviewTag，也接不了 `setDevToolsWebContents` 装载的 Chromium DevTools**。 |
-| slot-token / createDeckLayoutClient 取代 view-anchor 直连 | **NO-GO** | 横向平移。anchor 同步发布 + rect 去重已可用；anti-spoof token 只在 untrusted renderer 驱动布局时有意义，devtools renderer 受信。 |
-| grants / ControlBus 取代 senderPolicy + wc.id trust | **NO-GO** | 解决 devtools 没有的问题。grants 只保护 `layout.*` ControlBus 命令，替代不了领域 IPC；devtools 无委托布局控制需求。 |
-| DeckSession.reset 用于 close→back | **NO-GO** | DeckSession 无注册任意 devtools 资源的入口。 |
-| popout（新功能）via windows.create + moveTo({rehome}) | **NO-GO** | renderer 零 popout 需求信号。`spike/popout` 证明 deck **自建**的普通 WCV 可 live-migrate（同一 `WebContents` 跨窗迁移、不 reload），但 simulator / DevTools WCV 的构造方式 `runtime.view` 表达不了——要先把 overlay 所有权迁到 `runtime.view` handle 才谈得上 moveTo。封存为未来产品想法。 |
+## 次级契约缺口
 
-## 已固化的事实（防止基于错误前提重提）
+`ViewCreateOptions` 仍只有 `source`、`scope?`、`keepAlive?`，
+表达不了 simulator 所需的 `preload`、`partition`、`webviewTag`，
+也不能接管通过 `setDevToolsWebContents` 装载的 Chromium DevTools
+（`packages/electron-deck/src/types.ts:330-350`）。
 
-- **simulator bar 不被原生 WCV 盖**：simulator WCV 只覆盖两个 toolbar 之间的 placeholder
-  区域（simulator-panel.tsx 的 `useViewAnchor` 锚到 placeholder rect）。这不是未解痛点。
-- **renderer DOM 可提顶**：约束是 renderer 内 DOM 不能与兄弟原生 View 做元素级 z 交错；但主
-  renderer 本身是 container 第一个子 View，Electron 允许 re-add View 提顶。
-- **Compositor 不批量提交 bounds**：它不解决拖 splitter 掉帧——那是结构性存在但 Compositor 之外的问题。
-- **settings/popover 用原生 WCV overlay 是 UX 取舍**：改真模态是更简单的非-deck 方案，但模态会盖住
-  下方的原生 DevTools。要求 overlay 下方的原生 DevTools 继续可见可交互时，原生 overlay 才是正解
-  （透明背景不给命中穿透；`setIgnoreMouseEvents` 只在 BrowserWindow 上、View 没有）。这是产品 UX
-  决定，与 deck 无关。
+这会阻止 devtools 把现有 WCV 直接改写成 `runtime.view`，但不是采用
+`adopt()` 的根本阻断；根本阻断仍是同一 native 子树有两个 owner。
 
-## 重启条件（满足任一才重新评估对应项）
+## devtools 主窗口的 owner 边界
 
-- 出现**第二个真实外部消费者**需要 Window facade / runtime.view（框架面经真实负载验证后，可作独立
-  评估）。
-- 产品确认接受 settings **模态化** UX（下方 DevTools 不再可见）→ 在 devtools 侧实现纯 DOM 弹层路径，
-  不碰任何 deck 高层 API。
-- devtools 出现真实 **popout** 需求，且届时面板已是独立 `runtime.view` WebContents（先决条件）。
+生产代码对 `mainWindow.contentView` 的写入分两段：
 
-## 对 electron-deck 侧的连带结论
+1. 创建窗口时，把工作台 renderer 包进新 `View`，作为 child #0
+   （`packages/devtools/src/main/windows/main-window/create.ts:68-72`）。
+2. 此后由 `createNativeViewTreeHost` 独占 add/remove/reorder
+   （`packages/devtools/src/main/services/views/native-view-tree.ts:20-80`）。
 
-高层 host 面在 `types.ts` 标 `@experimental`（无生产消费者、未 API 稳定）；`grants.issue` 的
-`targetScope` 标为 **INERT**（dispatch 不读取）。在第二个真实消费者出现前不再继续加高层糖。
+child #0 不在 reconciler ledger 中。reconciler 的全量重贴会把受控 WCV 抬到工作台
+renderer 之上，这是预期层级
+（`packages/devtools/src/main/services/views/placement-reconciler.ts:152-156`）。
+`internal-devtools-window` 的包装作用于另一个窗口，不属于主窗口 owner
+（`packages/devtools/src/main/windows/internal-devtools-window/index.ts:128-131`）。
+
+## 已确认仍有效的取舍
+
+- simulator WCV 只覆盖 renderer 的设备占位区，顶部工具条不会被原生 WCV 盖住
+  （`packages/devtools/src/renderer/modules/main/features/project-runtime/components/simulator-panel.tsx:183-235`）。
+- renderer 本身是 child #0；原生 WCV 与 renderer DOM 不能做元素级 z 交错，但整块 renderer
+  可以通过重加 child 改层级（`packages/devtools/src/main/windows/main-window/create.ts:68-72`）。
+- deck compositor 不批量提交 bounds；`applyPlacement` 仍逐 view 调
+  `setBounds`（`packages/electron-deck/src/main/view-handle.ts:371-380`）。
+- settings / popover 保持原生 overlay 是 UX 选择：需要覆盖其它原生 WCV 时，纯 DOM 弹层不够。
+
+## 重新评估条件
+
+只有满足对应前提才重开：
+
+- 采用 `adopt() + runtime.view`：先给出一套同时接管 z-order 和 bounds 的单 owner
+  方案；只注入 compositor 不够。
+- 把 devtools 的 MessagePort 插槽机制移进 deck：先出现第二个不经过 devtools、
+  直接需要同一 document-scoped port 协议的生产消费者。
+- 删除 deck 实验性高层面：先完成仓库外消费者审计和版本兼容决策。
+- devtools 出现 popout：可对不受主窗口 reconciler 管理的目标窗口单独评估 adopt。
+
+## 不要据此误判 compositor
+
+devtools 的 reorder 会按目标顺序把已挂载 view 全量重新 `addChildView`
+（`packages/devtools/src/main/services/views/placement-reconciler.ts:152-156`）。
+Electron 对已挂载 child 的再次添加只会提顶，不会 reload；同一 tick 的批处理因此是零重载的正确实现。
+
+deck 的 `computeKeepIds` 算最长有序**前缀**，遇到第一个乱序元素即停止，
+不是 LIS，也不保证最少 host churn
+（`packages/electron-deck/src/main/compositor.ts:142-171`）。
