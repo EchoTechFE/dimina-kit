@@ -81,4 +81,23 @@ describe('light mode overrides', () => {
     const orphans = [...declared(lightBlock)].filter(v => !darkVars.has(v))
     expect(orphans).toEqual([])
   })
+
+  it('lets a host force dark with the .dark class', () => {
+    // In a light system the light block is what wins, so it has to opt out of
+    // `.dark` — drop that guard and `.dark` silently becomes a no-op.
+    expect(tokens).toMatch(
+      /@media \(prefers-color-scheme: light\)\s*\{\s*:root:not\(\.dark\)\s*\{/,
+    )
+  })
+})
+
+describe('separator focus', () => {
+  it('keeps a visible keyboard-focus ring', () => {
+    // The `:focus` reset removes the outline the browser paints on a pointer
+    // drag. Without a `:focus-visible` replacement a keyboard user cannot see
+    // which divider they are on.
+    const rule = base.match(/\[role="separator"\]:focus-visible\s*\{([^}]*)\}/)?.[1] ?? ''
+    expect(rule).toMatch(/outline:\s*(?!none)\S/)
+    expect([...referenced(rule)]).toContain('--color-ring')
+  })
 })

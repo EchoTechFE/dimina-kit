@@ -30,6 +30,14 @@ module.exports = {
 
 只引 CSS 不接 preset，变量有了但工具类不会生成；只接 preset 不引 CSS，类名生成了但取到的变量是空的、画出来什么都没有。两个一起用。
 
+没有打包器也能用。`css/` 下的文件之间是相对路径 `@import`，浏览器自己就能解析，所以独立的 HTML 页面（Electron 里另开的 `WebContentsView`、弹窗窗口）可以直接 link 过去：
+
+```html
+<link rel="stylesheet" href="./vendor/design/tokens.css" />
+```
+
+把 `node_modules/@dimina-kit/design/css/` 整个目录拷进你的静态产物即可，别只拷 `tokens.css`——它 `@import` 了同目录的 `cornetto-tokens.css`。
+
 **三、拼类名**：
 
 ```ts
@@ -56,7 +64,11 @@ cn('p-2', props.className)  // 调用方的 p-4 能盖掉默认的 p-2
 
 底层色板是 Cornetto（`css/cornetto-tokens.css`，自动生成，别手改）。它默认浅色，深色靠给 `<html>` 加 `.dark` 类。
 
-`tokens.css` 改成了跟随系统：深色是默认值，`prefers-color-scheme: light` 时再复原成浅色。想要类名切换的话，只引 `cornetto-tokens.css`，别引 `tokens.css`。
+`tokens.css` 默认跟随系统：深色是基准值，`prefers-color-scheme: light` 时复原成浅色。给 `<html>` 加 `.dark` 可以强制深色，系统是浅色也不变——浅色那段带了 `:not(.dark)`。
+
+没有对应的 `.light`。`--color-surface-3`、`--color-text-muted`、几个代码高亮色这些是这个包自己定的值，不是 `--qd-*` 的别名，强制浅色要把它们整份再写一遍，所以暂时不做。真要类名切换到浅色，自己在 `.light` 里覆盖那批值。
+
+别为了类名切换只引 `cornetto-tokens.css`：那样只有 `--qd-*`，`--color-*`、字体、圆角、滚动条全是空的，`base.css` / `deck.css` / preset 会大面积取不到值。
 
 ## 换配色
 

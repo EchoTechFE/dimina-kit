@@ -24,10 +24,18 @@ html, body {
  * outline HERE, once, on the role — so it can't reappear each time a new
  * divider or a layout refactor forgets a per-component `focus:outline-none`
  * (it had regressed repeatedly that way). This is the single source of truth;
- * do not re-add scattered outline resets on splitters. */
-[role="separator"]:focus,
-[role="separator"]:focus-visible {
+ * do not re-add scattered outline resets on splitters.
+ *
+ * Keyboard focus is the one case that still needs a mark, and it gets the
+ * divider's own ring colour instead of the UA outline. `:focus-visible` does
+ * not match a pointer drag, so this cannot bring the gold bar back. */
+[role="separator"]:focus {
   outline: none;
+}
+
+[role="separator"]:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: -1px;
 }
 
 /* ── Scrollbar ──────────────────────────────────────────────────────────── */

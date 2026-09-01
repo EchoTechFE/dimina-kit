@@ -19,8 +19,11 @@
      instead of a class, so the --qd-* values that have a dark variant are
      re-declared here (dark baseline) and reset back under the light media
      query below — instead of relying on cornetto's own `.dark` selector.
-     A host that wants class-based switching should import cornetto-tokens.css
-     alone and skip this file. */
+     `.dark` on <html> still forces dark: the light block below is skipped for
+     it, so the dark values here stay in effect whatever the system says.
+     There is no matching `.light` — that would need a second copy of every
+     package-owned --color-* light value, since those are real values here and
+     not resets of a --qd-* token. */
   --qd-background: #1f1f1f;
   --qd-secondary: #404040;
   --qd-secondary-foreground: #ffffffe0;
@@ -115,7 +118,7 @@
 
 /* ── Light mode ─────────────────────────────────────────────────────────── */
 @media (prefers-color-scheme: light) {
-  :root {
+  :root:not(.dark) {
     /* Reset the --qd-* tokens that carry a dark override in the block above
        back to cornetto-tokens.css's own light :root defaults. */
     --qd-background: #ffffff;
