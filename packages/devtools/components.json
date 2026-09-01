@@ -6,7 +6,7 @@
   "iconLibrary": "iconpark",
   "tailwind": {
     "config": "",
-    "css": "src/renderer/assets/cornetto-tokens.css",
+    "css": "src/renderer/design.css",
     "baseColor": "neutral",
     "cssVariables": true
   },

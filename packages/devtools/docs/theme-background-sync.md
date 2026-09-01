@@ -30,7 +30,7 @@ WebContents 之间的接缝。主题切换后：
 
 ## 为什么 CSS 不够
 
-渲染层主题完全由 CSS `@media (prefers-color-scheme)` 驱动（见 `src/renderer/design.css`）。
+渲染层主题完全由 CSS `@media (prefers-color-scheme)` 驱动（见 `@dimina-kit/design` 的 `css/tokens.css`，由 `src/renderer/design.css` 引入）。
 `nativeTheme.themeSource` 一变，Chromium 会同步刷新该媒体查询，网页内容立即重绘。
 
 但 `prefers-color-scheme` **只管网页内容，管不到原生窗口的 `backgroundColor`**。

@@ -1,9 +1,7 @@
-import { clsx } from 'clsx'
-import { twMerge } from 'tailwind-merge'
-
-export function cn(...inputs: Parameters<typeof clsx>) {
-  return twMerge(clsx(inputs))
-}
+/* `cn` lives in @dimina-kit/design alongside the tokens its classes reference.
+   Re-exported here so the shadcn-generated components keep their conventional
+   `@/shared/lib/utils` import. */
+export { cn } from '@dimina-kit/design'
 
 /** Generate a consistent accent color for a project based on its name. */
 export function projectColor(name: string): string {

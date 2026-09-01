@@ -1,0 +1,42 @@
+/* ── Base ───────────────────────────────────────────────────────────────────
+   Element defaults that carry the design tokens onto the page. Requires
+   tokens.css. Deliberately does NOT size the page: `height: 100vh` /
+   `overflow: hidden` / `#root` are an application-shell decision, not a design
+   one, so a host that wants a scrolling document keeps working.
+ ──────────────────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-family);
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+/* ── Splitters / resize handles ───────────────────────────────────────────
+ * Every workbench divider — a manually built `Splitter` AND every
+ * `react-resizable-panels` `<Separator>` — renders `role="separator"` and is
+ * focusable (the library gives its handle a `tabIndex`). On mousedown the
+ * browser focuses it and paints its DEFAULT focus outline (a bright yellow/gold
+ * bar) on top of the 1px divider. The divider's own affordance is the
+ * `--color-ring` hover/active highlight, never a UA outline. Suppress that
+ * outline HERE, once, on the role — so it can't reappear each time a new
+ * divider or a layout refactor forgets a per-component `focus:outline-none`
+ * (it had regressed repeatedly that way). This is the single source of truth;
+ * do not re-add scattered outline resets on splitters. */
+[role="separator"]:focus,
+[role="separator"]:focus-visible {
+  outline: none;
+}
+
+/* ── Scrollbar ──────────────────────────────────────────────────────────── */
+::-webkit-scrollbar        { width: var(--scrollbar-size); height: var(--scrollbar-size); }
+::-webkit-scrollbar-track  { background: transparent; }
+::-webkit-scrollbar-thumb  { background: var(--scrollbar-thumb); border-radius: 3px; }
+
+/* ── Animations ─────────────────────────────────────────────────────────── */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.3; }
+}

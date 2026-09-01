@@ -21,7 +21,8 @@ export function themeBg(): string {
  * phone keeps contrast against it in BOTH schemes.
  *
  * Dark: #282828 | Light: #f7f7f9 — both match the renderer's --color-surface-2
- * chrome tone (design.css). Dark is devtools-owned rather than a Cornetto
+ * chrome tone (@dimina-kit/design, css/tokens.css). Dark is a package-owned
+ * value rather than a Cornetto
  * --qd-muted alias: pixel-verified against Figma node 66:1729 at rgb(40,40,40),
  * which doesn't match any Cornetto dark token (--qd-muted is #383838, off by
  * 16 units — confirmed too light against the app's own dark-mode screenshots).

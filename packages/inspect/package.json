@@ -32,7 +32,8 @@
     "./panel": {
       "types": "./src/panel.tsx",
       "default": "./dist/panel.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist",
