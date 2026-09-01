@@ -55,6 +55,22 @@ export interface HostSlotMessageSubscription {
 }
 
 /**
+ * Handle returned by `attach`, scoped to the ONE webContents it was made for.
+ * `dispose()` removes the listeners that `attach` installed on that wc and, if
+ * that wc still owns the live port, closes it. Idempotent, and never touches a
+ * successor's attachment: releasing a superseded wc leaves the current one
+ * delivering.
+ *
+ * The owner calls this when it replaces or destroys that wc, so the channel
+ * holds no main-side state for a webContents its owner has let go — the
+ * channel does not have to be the wc's sole owner for its listeners to be
+ * released on time.
+ */
+export interface HostSlotAttachment {
+  dispose(): void
+}
+
+/**
  * Internal channel lifecycle, named. Exactly one is current at any time:
  *  - `absent`            — no live port and no document-replacing navigation
  *                          in flight (initial; wc destroyed; renderer port
@@ -71,10 +87,12 @@ type ChannelState = 'absent' | 'awaitingHandshake' | 'ready' | 'disposed'
 export interface HostSlotPortChannel {
   /**
    * Hook a freshly created slot webContents: registers the `did-finish-load`
-   * (per-load handshake) and `destroyed` (drop the live port) listeners via
-   * `wc.on(...)`. Call exactly once per wc, right after the view is created.
+   * (per-load handshake), `did-start-navigation` (document-replacing
+   * navigation) and `destroyed` (drop the live port) listeners via
+   * `wc.on(...)`. Call exactly once per wc, right after the view is created,
+   * and `dispose()` the returned handle when that wc is replaced or destroyed.
    */
-  attach(wc: WebContents): void
+  attach(wc: WebContents): HostSlotAttachment
   /**
    * Drop the live port NOW (close + clear): the document it belongs to is
    * being replaced. Called synchronously when the HOST initiates a
@@ -239,8 +257,8 @@ export function createHostSlotPortChannel(opts: {
   }
 
   return {
-    attach(wc: WebContents): void {
-      wc.on('did-finish-load', () => handshake(wc))
+    attach(wc: WebContents): HostSlotAttachment {
+      const onDidFinishLoad = (): void => handshake(wc)
       // Page-initiated navigation (location.href / reload): the document the
       // port lives in is being replaced — invalidate so send() reports false
       // through the navigation window instead of confirming delivery into a
@@ -253,25 +271,53 @@ export function createHostSlotPortChannel(opts: {
       //  - main frame only: an <iframe> navigating keeps the main document.
       // Reads the details object (electron >= 12 shape); falls back to the
       // deprecated positional args (`isInPlace` === details.isSameDocument).
-      wc.on(
-        'did-start-navigation',
-        (details, _url, isInPlace, isMainFramePositional) => {
-          if (activeWc !== wc) return
-          const isSameDocument =
-            typeof details?.isSameDocument === 'boolean'
-              ? details.isSameDocument
-              : isInPlace
-          const isMainFrame =
-            typeof details?.isMainFrame === 'boolean'
-              ? details.isMainFrame
-              : isMainFramePositional
-          if (isSameDocument || !isMainFrame) return
-          dropActivePort(true, 'awaitingHandshake')
-        },
-      )
-      wc.on('destroyed', () => {
+      const onDidStartNavigation = (
+        details: Electron.Event<Electron.WebContentsDidStartNavigationEventParams>,
+        _url: string,
+        isInPlace: boolean,
+        isMainFramePositional: boolean,
+      ): void => {
+        if (activeWc !== wc) return
+        const isSameDocument =
+          typeof details?.isSameDocument === 'boolean'
+            ? details.isSameDocument
+            : isInPlace
+        const isMainFrame =
+          typeof details?.isMainFrame === 'boolean'
+            ? details.isMainFrame
+            : isMainFramePositional
+        if (isSameDocument || !isMainFrame) return
+        dropActivePort(true, 'awaitingHandshake')
+      }
+      const onDestroyed = (): void => {
         if (activeWc === wc) dropActivePort(true, 'absent')
-      })
+      }
+      wc.on('did-finish-load', onDidFinishLoad)
+      wc.on('did-start-navigation', onDidStartNavigation)
+      wc.on('destroyed', onDestroyed)
+
+      let released = false
+      return {
+        dispose(): void {
+          if (released) return
+          released = true
+          // This wc is going away: if it still owns the live port, the
+          // document that port belongs to is going with it, so close it and
+          // let send() report false. A superseded wc owns nothing — the
+          // successor's port is untouched.
+          if (activeWc === wc) dropActivePort(true, 'absent')
+          // A destroyed webContents still carries its JS-side emitter, so the
+          // removals below are meaningful on both live and dead wcs; the
+          // try/catch only covers hosts that reject the call outright.
+          try {
+            wc.off('did-finish-load', onDidFinishLoad)
+            wc.off('did-start-navigation', onDidStartNavigation)
+            wc.off('destroyed', onDestroyed)
+          } catch {
+            /* wc already gone; its listeners went with it */
+          }
+        },
+      }
     },
 
     invalidate(): void {

@@ -2,7 +2,7 @@ import type { WebContents } from 'electron'
 import { WebContentsView } from 'electron'
 import { handleWindowOpenExternal } from '../../windows/navigation-hardening.js'
 import type { PlacementReconciler } from './placement-reconciler.js'
-import type { HostSlotPortChannel } from './host-slot-port-channel.js'
+import type { HostSlotAttachment, HostSlotPortChannel } from './host-slot-port-channel.js'
 
 export interface ManagedWebContentsViewOptions {
   reconciler: PlacementReconciler
@@ -51,6 +51,19 @@ export function createManagedWebContentsView(
   let view: WebContentsView | null = null
   let preloadOverride: string | null = null
   let runtimeAcquired = false
+  /** The channel attachment for the CURRENT wc; released when that wc is replaced or destroyed. */
+  let attachment: HostSlotAttachment | null = null
+
+  /**
+   * Hand the channel back the wc this manager is done with. This manager owns
+   * the wc's whole life, so it is the only thing that knows the wc is gone;
+   * without this the channel would keep listeners on a webContents nobody can
+   * reach any more.
+   */
+  function releaseAttachment(): void {
+    attachment?.dispose()
+    attachment = null
+  }
 
   function liveWebContents(): WebContents | null {
     const wc = view?.webContents as WebContents | undefined
@@ -69,6 +82,7 @@ export function createManagedWebContentsView(
   function teardown(current: WebContentsView, detail: string): void {
     if (view !== current) return
     console.error(`[${opts.viewId}] ${detail} — destroying so the next ensureView() rebuilds`)
+    releaseAttachment()
     view = null
     opts.reconciler.destroyView(opts.viewId, current)
     opts.onBroken?.()
@@ -78,6 +92,10 @@ export function createManagedWebContentsView(
     if (view && liveWebContents()) {
       return view
     }
+    // The outgoing wc (if any) is about to be destroyed, so its attachment
+    // goes first — a wc this manager no longer owns must not keep the channel
+    // wired to it.
+    releaseAttachment()
     if (view) {
       opts.reconciler.destroyView(opts.viewId, view)
     }
@@ -96,7 +114,7 @@ export function createManagedWebContentsView(
     }
     const next = new WebContentsView({ webPreferences })
     view = next
-    opts.port.attach(next.webContents)
+    attachment = opts.port.attach(next.webContents)
     try {
       next.setBackgroundColor('#121212')
     } catch {
@@ -151,6 +169,9 @@ export function createManagedWebContentsView(
       // registry, so a send() racing teardown reports false instead of posting
       // into a wc that is about to be closed.
       opts.port.dispose()
+      // Then hand back the wc itself, so no listener rests on a webContents
+      // this manager is about to close.
+      releaseAttachment()
       // Host-controllable slot view: removed from the contentView + its
       // WebContents closed (the host's loaded content is torn down on app exit).
       opts.reconciler.destroyView(opts.viewId, view)

@@ -3,17 +3,17 @@
  * webContents listeners and MessagePort pairs a slot channel creates, and
  * what releases them.
  *
- * `attach()` installs its listeners with `wc.on(...)` and nothing ever
- * removes them; `dispose()` only closes the live port. That is not a leak
- * because attach and teardown share one owner: a slot wc is attached the
- * moment it is created, and that same owner destroys the wc when it disposes
- * the channel — no listener outlives the webContents it sits on, and no
- * main-held port outlives the document it belongs to. These tests pin that
- * coupling as counted state (listeners resting on a LIVE wc, and main-held
- * ports still open, both back at the pre-create baseline) together with the
- * per-document guarantees that rest on it: a superseded wc cannot take the
- * channel back, only cross-document main-frame navigation invalidates, and a
- * replacement document handshakes onto a port of its own.
+ * `attach()` installs listeners on one webContents and returns the handle that
+ * takes them back off it; `dispose()` closes the live port and sweeps the
+ * handler registry. The two together are what keeps the accounting closed: no
+ * listener outlives the webContents it sits on, and no main-held port outlives
+ * the document it belongs to. These tests pin that as counted state (listeners
+ * resting on a LIVE wc, and main-held ports still open, both back at the
+ * pre-create baseline) together with the per-document guarantees that rest on
+ * it: releasing one wc's attachment does not disturb its successor, a
+ * superseded wc cannot take the channel back, only cross-document main-frame
+ * navigation invalidates, and a replacement document handshakes onto a port of
+ * its own.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { WebContents } from 'electron'
@@ -71,6 +71,7 @@ vi.mock('electron', () => {
 })
 
 import { createHostSlotPortChannel } from './host-slot-port-channel.js'
+import type { HostSlotAttachment } from './host-slot-port-channel.js'
 import * as electronMock from 'electron'
 
 const ports = (electronMock as unknown as { __ports: FakePort[] }).__ports
@@ -96,6 +97,7 @@ interface FakeWebContents {
   transfers: Array<{ channel: string; ports: FakePort[] }>
   listenerCount(): number
   on(event: string, handler: (...args: never[]) => void): FakeWebContents
+  off(event: string, handler: (...args: never[]) => void): FakeWebContents
   postMessage(channel: string, message: unknown, transfer?: unknown[]): void
   emit(event: string, ...args: unknown[]): void
   /** What the owning view does on rebuild/teardown. */
@@ -118,6 +120,13 @@ function fakeWebContents(): FakeWebContents {
     on(event, handler): FakeWebContents {
       const list = handlers.get(event) ?? []
       list.push(handler)
+      handlers.set(event, list)
+      return wc
+    },
+    off(event, handler): FakeWebContents {
+      const list = handlers.get(event) ?? []
+      const i = list.indexOf(handler)
+      if (i >= 0) list.splice(i, 1)
       handlers.set(event, list)
       return wc
     },
@@ -152,6 +161,7 @@ function liveListenerCount(wcs: FakeWebContents[]): number {
 
 function makeHarness() {
   const wcs: FakeWebContents[] = []
+  const attachments: HostSlotAttachment[] = []
   let current: FakeWebContents | null = null
   const channel = createHostSlotPortChannel({
     isCurrent: (wc) => current !== null && (wc as unknown as FakeWebContents) === current,
@@ -163,10 +173,10 @@ function makeHarness() {
     const wc = fakeWebContents()
     wcs.push(wc)
     current = wc
-    channel.attach(asWebContents(wc))
+    attachments.push(channel.attach(asWebContents(wc)))
     return wc
   }
-  return { channel, wcs, createWc }
+  return { channel, wcs, createWc, attachments }
 }
 
 /** Electron >= 12 details object; the positional args carry the same verdict. */
@@ -231,6 +241,48 @@ describe('host-slot port channel: main-side resources return to baseline', () =>
     expect(mainHeldPorts().every((port) => port.closed && port.started)).toBe(true)
     expect(wc.transfers.map((t) => t.ports.length)).toEqual([1, 1])
     expect(unaccountedPorts()).toHaveLength(0)
+  })
+})
+
+describe('host-slot port channel: an attachment releases the webContents it was made for', () => {
+  it('releasing takes the listeners off a LIVE wc, closes its port, and ignores its later loads', () => {
+    const h = makeHarness()
+    const wc = h.createWc()
+    wc.emit('did-finish-load')
+    expect(openMainHeldPorts()).toHaveLength(1)
+    expect(wc.listenerCount()).toBeGreaterThan(0)
+
+    h.attachments[0]!.dispose()
+
+    // The wc is still alive: this is the case shared ownership cannot cover.
+    // Nothing destroys it here, so only an explicit release can get the
+    // listeners off it — which is what lets an owner hand a wc back without
+    // also being the thing that closes it.
+    expect(wc.destroyed).toBe(false)
+    expect(liveListenerCount([wc])).toBe(0)
+    expect(openMainHeldPorts()).toHaveLength(0)
+    expect(h.channel.send('c', 1)).toBe(false)
+
+    const portsBefore = ports.length
+    wc.emit('did-finish-load')
+    expect(ports).toHaveLength(portsBefore)
+  })
+
+  it('releasing a superseded attachment leaves the current document delivering, and repeats are no-ops', () => {
+    const h = makeHarness()
+    const first = h.createWc()
+    first.emit('did-finish-load')
+    const second = h.createWc()
+    second.emit('did-finish-load')
+    expect(h.channel.send('c', 1)).toBe(true)
+
+    h.attachments[0]!.dispose()
+    h.attachments[0]!.dispose()
+
+    expect(liveListenerCount([first])).toBe(0)
+    expect(second.listenerCount()).toBeGreaterThan(0)
+    expect(openMainHeldPorts()).toHaveLength(1)
+    expect(h.channel.send('c', 2)).toBe(true)
   })
 })
 
