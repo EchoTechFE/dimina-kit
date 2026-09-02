@@ -174,11 +174,14 @@ jobs:
           pnpm exec tsc -p tools/pawl
           node --test ".github/scripts/*.test.js" "tools/pawl/*.test.ts"
 
-      # Runs after the test job's builds so every package's dist exists: the
-      # check reads each package's real `npm pack` listing, and a missing dist
-      # would report entry points as unpublished.
+      # `npm pack` 只看磁盘上现在有什么，所以这一步得自己保证每个被检查的包都构建
+      # 过。上面的 `turbo run test` 不够：test 只依赖 `^build`，也就是只构建被别人
+      # 依赖的包。仓库里没有任何包依赖 @dimina-kit/devtools，它的 dist 于是始终是
+      # 空的，检查会把它声明的每一个入口都报成"没进 tarball"。
       - name: Check publish contract
-        run: node .github/scripts/check-publish-contract.js
+        run: |
+          pnpm turbo run build --cache-dir=.turbo
+          node .github/scripts/check-publish-contract.js
 
       # setup-pawl installs the binary and runs `check`; comments are disabled
       # because this workflow grants read-only repository permissions, so a
