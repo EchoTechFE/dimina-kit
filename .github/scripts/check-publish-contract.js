@@ -12,7 +12,7 @@
 // 猜。--ignore-scripts：只要清单，不重跑各包的 prepack 构建。
 
 import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { NPM_PACKAGES } from './npm-packages.js'
@@ -49,9 +49,12 @@ function collectTypesVersionTargets(node, out) {
 // 和 view-anchor 就靠这个：源码里 main 指向 ./src/index.ts，发到 npm 上指向
 // ./dist/index.js。安装方看到的是覆盖之后的清单，所以核对也必须按覆盖后的来，否则
 // 恰恰是这两个最需要检查的包被按源码字段放行了。
-// （publishConfig 里也能覆盖 files，但本仓没有包这么做；真出现时打包清单来自
-// `npm pack`，它只认源码里的 files，这里会跟着错。）
-const OVERLAID_FIELDS = ['main', 'types', 'typings', 'exports', 'bin', 'imports', 'typesVersions']
+const OVERLAID_FIELDS = ['main', 'browser', 'types', 'typings', 'exports', 'bin', 'imports', 'typesVersions']
+
+// publishConfig 还能覆盖 files、改发布根目录（directory）。这两个 pnpm 认、`npm pack`
+// 不认，打包清单会跟真正发出去的 tarball 对不上——而这个检查全靠打包清单。本仓现在
+// 没有包这么写；真有人加了，宁可在这里明确报错，也不要给出一个悄悄失真的结论。
+const UNMODELLED_PUBLISH_CONFIG = ['files', 'directory']
 
 export function publishedManifest(pkgJson) {
   const published = { ...pkgJson }
@@ -59,6 +62,15 @@ export function publishedManifest(pkgJson) {
     if (pkgJson.publishConfig && field in pkgJson.publishConfig) published[field] = pkgJson.publishConfig[field]
   }
   return published
+}
+
+/**
+ * 这个包的 publishConfig 里有没有本脚本模型不了的字段。
+ * @param {Record<string, any>} pkgJson
+ * @returns {string[]}
+ */
+export function unmodelledPublishConfig(pkgJson) {
+  return UNMODELLED_PUBLISH_CONFIG.filter((field) => pkgJson.publishConfig && field in pkgJson.publishConfig)
 }
 
 /**
@@ -74,6 +86,10 @@ export function entryTargets(sourcePkgJson) {
   // 值可能是外部包名（不带 './'），collectTargets 已经把这类滤掉了。
   collectTargets(pkgJson.imports, targets)
   if (typeof pkgJson.main === 'string') targets.push(normalize(pkgJson.main))
+  // browser 的字符串形式是入口；对象形式是"把 A 换成 B"的替换表，只有本地相对路径的
+  // 那一侧需要真的发出去，值写成 false（禁用某个模块）或包名的都不是本包的文件。
+  if (typeof pkgJson.browser === 'string') targets.push(normalize(pkgJson.browser))
+  else if (pkgJson.browser && typeof pkgJson.browser === 'object') collectTargets(pkgJson.browser, targets)
   if (typeof pkgJson.types === 'string') targets.push(normalize(pkgJson.types))
   if (typeof pkgJson.typings === 'string') targets.push(normalize(pkgJson.typings))
   collectTypesVersionTargets(pkgJson.typesVersions, targets)
@@ -94,7 +110,7 @@ function patternToRegExp(target) {
 // 这种以 test- 打头的脚本（packages/compiler 的 scripts/ 里有二十来个）。最后一种
 // 有例外——包可能故意把测试辅助工具当 API 发出去，所以下面对"被声明为入口"的文件
 // 放行。
-const TEST_FILE = /(^|\/)(__tests__|__mocks__|fixtures|test-fixtures|types-fixture)\/|(^|\/)test-[^/]*\.[cm]?[jt]sx?$|\.(test|spec)\.[^/]+$/
+const TEST_FILE = /(^|\/)(test|tests|__tests__|__mocks__|__snapshots__|fixture|fixtures|test-fixtures|types-fixture)\/|(^|\/)test-[^/]*\.[cm]?[jt]sx?$|\.(test|spec)\.[^/]+$/
 
 /**
  * 核对一个包的 package.json 与它真实的打包清单。
@@ -132,6 +148,22 @@ export function checkPackedFiles(pkgJson, packedPaths) {
   return problems
 }
 
+/**
+ * 声明为入口、但磁盘上找不到的文件。空数组就是"构建产物齐了"，可以按 tarball 核对；
+ * 非空说明这个包没构建（或构建没产出全），此时 tarball 里当然什么都没有，直接按 tarball
+ * 报会刷出一长串"没进 tarball"，把"你忘了构建"埋在噪音里。subpath pattern 匹配的是一组
+ * 文件，不在这里判断。
+ *
+ * @param {Record<string, any>} pkgJson
+ * @param {string} pkgDir 包目录的绝对路径
+ * @returns {string[]}
+ */
+export function missingEntryFiles(pkgJson, pkgDir) {
+  return entryTargets(pkgJson)
+    .filter((target) => !target.includes('*'))
+    .filter((target) => !existsSync(join(pkgDir, target.replace(/^\.\//, ''))))
+}
+
 function packedPathsOf(dir) {
   // prepack 之类的脚本会往 stdout 写构建日志，混在 --json 前面。
   const raw = execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
@@ -152,7 +184,22 @@ const entryPath = process.argv[1] ? resolve(process.argv[1]) : ''
 if (fileURLToPath(import.meta.url) === entryPath) {
   let failed = false
   for (const { name, dir } of NPM_PACKAGES) {
-    const pkgJson = JSON.parse(readFileSync(join(process.cwd(), dir, 'package.json'), 'utf8'))
+    const abs = join(process.cwd(), dir)
+    const pkgJson = JSON.parse(readFileSync(join(abs, 'package.json'), 'utf8'))
+    const unmodelled = unmodelledPublishConfig(pkgJson)
+    if (unmodelled.length > 0) {
+      failed = true
+      console.error(`❌ ${name}`)
+      console.error(`   publishConfig 里的 ${unmodelled.join('、')} 只有 pnpm 认，\`npm pack\` 不认，本检查的打包清单会跟真正发出去的 tarball 对不上。要么别这么写，要么先把本脚本改成读 pnpm 打出来的真 tarball。`)
+      continue
+    }
+    const missing = missingEntryFiles(pkgJson, abs)
+    if (missing.length > 0) {
+      failed = true
+      console.error(`❌ ${name}`)
+      console.error(`   这些入口文件不在磁盘上，说明这个包没构建或构建产物不全，先构建再跑本检查：${missing.join(', ')}`)
+      continue
+    }
     const problems = checkPackedFiles(pkgJson, packedPathsOf(dir))
     if (problems.length === 0) {
       console.log(`✅ ${name}`)
