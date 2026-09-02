@@ -19,7 +19,10 @@
 //     (esbuild.wasm / oxc wasm are host-hosted assets)
 //   - the source itself (a { relPath: content } map). OPFS is intentionally NOT here:
 //     it's an optional zero-copy source-distribution the downstream can layer on.
+import { COMPILER_ERROR_CODES, WORKER_DEATH_CODES } from './error-codes.js'
 import { createWorkerSlot, settleAll } from './worker-slot.js'
+
+export { COMPILER_ERROR_CODES, INFRASTRUCTURE_ERROR_CODES, isInfrastructureError } from './error-codes.js'
 
 const DEFAULT_STAGES = ['logic', 'view', 'style']
 
@@ -35,8 +38,6 @@ const DEFAULT_SEND_TIMEOUT_MS = 30000
 // legitimately dwarf a compile step, but a hung toolchain import must STILL reject
 // eventually — an unguarded warmup would wedge the serial compile chain forever.
 const DEFAULT_WARMUP_TIMEOUT_MS = 120000
-
-const WORKER_DEATH_CODES = new Set(['compiler-worker-timeout', 'compiler-worker-crashed', 'compiler-worker-dead'])
 
 /**
  * @param {{
@@ -123,9 +124,12 @@ export function createCompilerPool(options) {
     if (!r || r.type === 'error') {
       // Stable classification for downstream: worker-reported compile/setup errors get
       // their own code, distinct from the worker-death codes that gate the retry.
+      // A worker that classified its own failure (toolchain setup, which is machinery
+      // rather than the user's project) sends its code along — keep it, since only the
+      // worker can tell those apart.
       throw Object.assign(
         new Error(r && r.error ? r.error : `[compiler] ${description} failed in stage '${entry.stage}' worker`),
-        { code: 'compiler-stage-error', stage: entry.stage },
+        { code: (r && r.code) || COMPILER_ERROR_CODES.stageError, stage: entry.stage },
       )
     }
     return r
@@ -215,7 +219,7 @@ export function createCompilerPool(options) {
   function compile(input = {}) {
     const run = chain.then(async () => {
       if (disposed) {
-        throw Object.assign(new Error('[compiler] pool has been disposed'), { code: 'compiler-pool-disposed' })
+        throw Object.assign(new Error('[compiler] pool has been disposed'), { code: COMPILER_ERROR_CODES.poolDisposed })
       }
       const files = input.files || input
       if (!files || typeof files !== 'object' || !Object.keys(files).length) {

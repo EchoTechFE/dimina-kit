@@ -26,9 +26,12 @@ import nodeFs from 'node:fs'
 import nodePath from 'node:path'
 import process from 'node:process'
 import { setupCompile, resetCompilerState, STAGE_NAMES } from './compile-core.js'
+import { COMPILER_ERROR_CODES, WORKER_DEATH_CODES as BROWSER_WORKER_DEATH_CODES } from './error-codes.js'
 import { createWorkerSlot, settleAll } from './worker-slot.js'
 import { publishToDist } from '../../../dimina/fe/packages/compiler/src/common/publish.js'
 import { getAppConfigInfo, getAppId, getAppName } from '../../../dimina/fe/packages/compiler/src/env.js'
+
+export { COMPILER_ERROR_CODES, INFRASTRUCTURE_ERROR_CODES, isInfrastructureError } from './error-codes.js'
 
 const { Worker } = createRequire(import.meta.url)('node:worker_threads')
 
@@ -41,7 +44,7 @@ const DEFAULT_SEND_TIMEOUT_MS = 120000
 // 'compiler-toolchain-dead' belongs here even though the worker THREAD is alive: the
 // realm's esbuild service child process is gone, so the realm is just as unusable as a
 // crashed worker — the same one-retry-on-fresh-workers policy applies.
-const WORKER_DEATH_CODES = new Set(['compiler-worker-timeout', 'compiler-worker-crashed', 'compiler-worker-dead', 'compiler-toolchain-dead'])
+const WORKER_DEATH_CODES = new Set([...BROWSER_WORKER_DEATH_CODES, COMPILER_ERROR_CODES.toolchainDead])
 
 // esbuild's node lib drives a spawned long-lived binary child (its "service"). When that
 // child dies (spawn ENOENT in a packaged app, OOM kill, AV kill), esbuild reports every
@@ -200,10 +203,10 @@ export function createNodeCompilerPool({
         // the worker so the next attempt (the transparent retry, or the next build once
         // the environment is healed) respawns a fresh realm with a fresh service.
         // shrink() is safe here: settleAll above guarantees no request is in flight.
-        err.code = 'compiler-toolchain-dead'
+        err.code = COMPILER_ERROR_CODES.toolchainDead
         workers[i].slot.shrink()
       } else {
-        err.code = 'compiler-stage-error' // worker-reported compile error — never retried
+        err.code = COMPILER_ERROR_CODES.stageError // worker-reported compile error — never retried
       }
       if (!firstErr) firstErr = err
     }
@@ -224,7 +227,7 @@ export function createNodeCompilerPool({
 
   function build(outputDir, workPath, useAppIdDir = true, options = {}) {
     if (disposed) {
-      return Promise.reject(Object.assign(new Error('[compiler] pool has been disposed'), { code: 'compiler-pool-disposed' }))
+      return Promise.reject(Object.assign(new Error('[compiler] pool has been disposed'), { code: COMPILER_ERROR_CODES.poolDisposed }))
     }
     // New activity: a pending shrink is off the table until this pool drains again.
     cancelIdleShrink()

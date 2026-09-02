@@ -381,6 +381,35 @@ async function filesFromDir(dir, prefix = '') {           // 只读递来的 han
 - **`targetPath` 来自环境。** compiler 产物目录取 `process.env.TARGET_PATH`，否则 `os.tmpdir()/dimina-fe-dist-<时间戳>`（浏览器 os shim 下通常 `/tmp/...`）。`setupCompile` 会先 `rmSync` 清空它——别把 `TARGET_PATH` 指到源码目录或共享目录。用 `setupCompile` 返回的 `targetPath` 喂 `collectOutputs`。
 - **不是全 fail-fast。** 缺 fs 方法、坏 appid、坏 `project.config.json`、miniprogram_npm 构建失败会 **reject**；但**样式预处理器失败（如当前浏览器构建暂不支持 `.less`）会被吞掉、降级用原始 CSS**，PostCSS 解析失败返回空串，资源拷贝失败只 `console.log`，logic esbuild 压缩失败回退未压缩代码。**用 pool 时把这些拿出来的办法是 `createCompilerPool({ onLog })`**——它把 worker 内编译器的 `console.*` 诊断（带 stage 标签）转发给你；也可在产物为空/缺失时二次校验。
 
+### 错误码：怎么判断该重试还是该把错误给用户看
+
+两个 pool（`./pool` 与 `./pool-node`）reject 的每个错误都带 `err.code`，取值就是 `COMPILER_ERROR_CODES` 这张表；两个 pool 都把它连同判定函数一起再导出，宿主不用抄字符串：
+
+```js
+import { COMPILER_ERROR_CODES, isInfrastructureError } from '@dimina-kit/compiler/pool'
+
+try {
+  await pool.compile({ files })
+} catch (err) {
+  if (isInfrastructureError(err)) fallbackToAnotherCompilePath(err)  // 机器坏了，换条路还有戏
+  else showToUser(err.message)                                      // 项目本身编不过，重试没用
+}
+```
+
+| code | 含义 | 算基础设施故障 |
+| --- | --- | --- |
+| `compiler-stage-error` | 编译器拒绝了这个项目：源码或配置要用户自己改 | 否 |
+| `compiler-toolchain-setup-failed` | stage worker `import(toolchainSetupURL)` 失败：模块 404、断网、wasm 拿不到 | 是 |
+| `compiler-worker-timeout` | worker 静默超过不活动窗口（卡死的 wasm 循环连心跳都发不出） | 是 |
+| `compiler-worker-crashed` | worker 挂了：`error` 事件、`postMessage` 抛错、异常退出 | 是 |
+| `compiler-worker-dead` | 请求打到了已判死、还没重建的 slot | 是 |
+| `compiler-toolchain-dead` | 仅 Node：esbuild 常驻服务进程没了，该 realm 之后每次调用都失败 | 是 |
+| `compiler-pool-disposed` | 池已回收，不会再编译任何东西 | 否 |
+
+`isInfrastructureError` 之外还有一层：worker 死亡类的三个码（timeout / crashed / dead，Node 上再加 toolchain-dead）由 pool 自己用来做那一次透明重试，宿主一般不用关心。
+
+工具链导入失败的码是 **worker 自己打的**——只有它能区分「宿主的 wasm 资源没加载上」和「用户项目编不过」，两者到 pool 手里都是同一种 `{ type:'error' }` 回复。pool 原样转发这个码，其余没带码的一律记为 `compiler-stage-error`。
+
 ## 依赖前置
 
 编译器实体源码在 `dimina` 子模块里，dart-sass 等在其 fe workspace。构建前确保子模块已初始化、依赖已装：
@@ -401,7 +430,7 @@ pnpm --filter @dimina-kit/compiler build:types    # 仅 dist/types/*.d.ts
 
 ## 测试
 
-`pnpm --filter @dimina-kit/compiler test`（也就是 `turbo run test` 会跑到的那份）只包含不需要构建的静态资源契约测试；下面这些各自要先构建，按需单跑。
+`pnpm --filter @dimina-kit/compiler test`（也就是 `turbo run test` 会跑到的那份）只包含不需要构建的两份契约测试——静态资源清单（`test:browser-assets`）和错误码（`test:error-codes`）；下面这些各自要先构建，按需单跑。
 
 测试里用 memfs 扮演「下游 fs」：
 
@@ -417,6 +446,8 @@ pnpm --filter @dimina-kit/compiler test:idle-shrink    # idle 收缩:超时终�
 pnpm --filter @dimina-kit/compiler test:stage-worker-message-order # stage worker 回复严格按请求到达序串行(build 在途时 introspect 不抢 FIFO 配对)
 pnpm --filter @dimina-kit/compiler test:stage-load-retry           # stage 工具链加载失败不缓存,chunk 恢复后 preloadStage 可重试成功
 pnpm --filter @dimina-kit/compiler test:browser-assets             # 静态资源清单:改名/新 chunk/出现静态 import 都会被构建期检查拦下
+pnpm --filter @dimina-kit/compiler test:error-codes                # 错误码:worker 自己判定的失败(工具链导入)带着码原样传到调用方,其余记为 compiler-stage-error
+pnpm --filter @dimina-kit/compiler test:stage-toolchain            # 真实 stage worker bundle:每个 stage 都加载工具链、按 URL 记忆、导入失败带错误码
 ```
 
 `pool` 的浏览器端到端验证在 `dimina-web-client`（`npm run test:pool`，Playwright 驱动，产物与单线程逐结构一致）。`pool-node` 的宿主端验证在 `@dimina-kit/devkit` 测试套件（真实 fork + `openProject`）。
@@ -431,6 +462,7 @@ pnpm --filter @dimina-kit/compiler test:browser-assets             # 静态资�
 - `src/stage-worker-node.js` — Node 常驻 stage worker：spawn 时按 workerData 里的 stage 身份预热本 stage 工具链，恢复 storeInfo → `runStage(stage, { sourcemap })` 写共享 staging 目录；应答 `{ type: 'introspect' }` 报告本 realm 已加载的重依赖。
 - `src/toolchain.js` — 写 `toolchainSetupURL` 模块的可选助手（`installOxc` / `installEsbuildFromURL`，后者内置 esbuild-wasm 静态资源的 Blob-URL 兜底）。导出为 `@dimina-kit/compiler/toolchain`。
 - `src/browser-assets.js` — 浏览器静态资源清单与契约（`COMPILER_BROWSER_ASSETS` / `resolveBrowserAssets`，见上文），构建期检查也用它。导出为 `@dimina-kit/compiler/browser-assets`。
+- `src/error-codes.js` — 两个 pool 共用的错误码表 `COMPILER_ERROR_CODES` 与判定 `isInfrastructureError`（见上文），经 `./pool` 与 `./pool-node` 再导出。
 - `src/shims/fs.js` — **无后端的 fs 转发层**（`setFs`/`resetFs`/`getFs`）；compiler 所有 `fs.xxx` 走它，未注入即抛错。
 - `src/shims/*` — 其余 node 内置与原生依赖的浏览器替身（oxc/esbuild/less/`os.homedir`/…）。
 - `scripts/build-compiler.js` — esbuild 打包。onLoad 给 logic/view/style-compiler 与 utils 追加 `__reset*` 导出（喂 `resetCompilerState`，不改子模块源码）；浏览器分支内联真实 `cssnano`+`autoprefixer`（autoprefixer pin 到 node 运行时解析的同一份，避免 esbuild 解析到多加 `-ms-` 前缀的另一版本）；browser 模式产出 core / stage-worker / pool 三个单文件 bundle，并按 metafile 对 `src/browser-assets.js` 的清单自检（漏产物、多产物、静态资源出现静态 import 都直接失败）；node 模式开 `splitting`（stage 编译器成为运行时 chunk——单文件会把 chunk 的 external `import 'sass'` 提升回入口顶层，懒加载会静默失效）。

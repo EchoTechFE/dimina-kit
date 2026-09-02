@@ -16,6 +16,7 @@
   },
   "include": [
     "src/compile-core.js",
+    "src/error-codes.js",
     "src/browser-entry.js",
     "src/pool.js",
     "src/pool-node.js",

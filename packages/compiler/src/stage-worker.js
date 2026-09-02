@@ -16,6 +16,7 @@
 // layer it on top (hydrate OPFS -> a files map before calling the pool).
 import { Volume, createFsFromVolume } from 'memfs'
 import { setupCompile, compileStage, collectOutputs, resetCompilerState } from './compile-core.js'
+import { COMPILER_ERROR_CODES } from './error-codes.js'
 
 // The compiler logs diagnostics (missing components, unsupported wx APIs, style
 // preprocessor fallbacks, asset-copy failures, …) via console.* inside this worker,
@@ -60,7 +61,13 @@ function ensureToolchain(url) {
     toolchainReady = import(/* @vite-ignore */ pending)
       .catch((err) => {
         toolchainReady = null
-        throw new Error(`[compiler] toolchain setup failed importing ${pending}: ${(err && err.message) || err}`)
+        // Coded, because only this worker can tell "the host's wasm assets didn't load"
+        // apart from "the project doesn't compile". The pool forwards the code, and the
+        // host uses it to retry or fall back instead of matching the message text.
+        throw Object.assign(
+          new Error(`[compiler] toolchain setup failed importing ${pending}: ${(err && err.message) || err}`),
+          { code: COMPILER_ERROR_CODES.toolchainSetupFailed },
+        )
       })
   }
   return toolchainReady
@@ -182,7 +189,9 @@ self.onmessage = async (e) => {
       return
     }
   } catch (err) {
-    self.postMessage({ type: 'error', error: String((err && err.stack) || err) })
+    // `code` only when this worker classified the failure itself; the pool defaults the
+    // rest to compiler-stage-error.
+    self.postMessage({ type: 'error', error: String((err && err.stack) || err), code: (err && err.code) || undefined })
   } finally {
     if (beacon) clearInterval(beacon)
   }
