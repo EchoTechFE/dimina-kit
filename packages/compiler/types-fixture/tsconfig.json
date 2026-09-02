@@ -2,7 +2,10 @@
   "compilerOptions": {
     "noEmit": true,
     "strict": true,
-    "skipLibCheck": true,
+    // 本包发出去的 .d.ts 正是这个 fixture 要检查的东西，skipLibCheck 会把它们内部
+    // 的错误全部跳过——JSDoc 少写一个字段、解构出一个类型上不存在的属性，都会被
+    // 咽掉，下游装上包才报出来。所以这里必须是 false。
+    "skipLibCheck": false,
     "module": "esnext",
     "moduleResolution": "bundler",
     "target": "es2022",

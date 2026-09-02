@@ -416,7 +416,7 @@ export async function setupCompile({ fs, workPath = '/work', options = {}, npmSc
  * from `setupCompile`. Self-contained: it points the fs shim at `fs` and restores
  * the compiler env from the bundle, so it can run in a fresh worker realm.
  * Products are written into `fs`.
- * @param {{ stage: 'logic'|'view'|'style', pages: object, storeInfo: object, fs: object }} opts
+ * @param {{ stage: 'logic'|'view'|'style', pages: object, storeInfo: object, fs: object, sourcemap?: boolean }} opts
  */
 export async function compileStage({ stage, pages, storeInfo: bundle, fs, sourcemap = false } = {}) {
   assertFs(fs)

@@ -32,17 +32,23 @@ const pool = createCompilerPool({
   createWorker: () => new Worker('/stage-worker.browser.js', { type: 'module' }),
   toolchainSetupURL: '/toolchain-setup.mjs',
   onLog: (entry) => {
-    const line: string = `[${entry.stage}] ${entry.level}: ${entry.message}`
+    // The level is one of the three console methods the stage worker patches —
+    // a widened `string` here would let a downstream switch miss cases silently.
+    const level: 'log' | 'warn' | 'error' = entry.level
+    const line: string = `[${entry.stage}] ${level}: ${entry.message}`
     void line
   },
 })
 // @ts-expect-error createWorker is required
 createCompilerPool({ toolchainSetupURL: '/toolchain-setup.mjs' })
+// @ts-expect-error both required options live in the (required) options object
+createCompilerPool()
 // @ts-expect-error toolchainSetupURL is a URL string
 createCompilerPool({ createWorker: () => new Worker('/w.js'), toolchainSetupURL: 42 })
 
 export async function compileOnce(): Promise<string> {
-  await pool.warmup()
+  const warm: Promise<void> = pool.warmup()
+  await warm
   const result = await pool.compile({ files: { 'app.json': '{}' } })
   const appId: string = result.appId
   // @ts-expect-error the compile result carries appId/name/files only

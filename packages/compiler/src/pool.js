@@ -44,13 +44,16 @@ const WORKER_DEATH_CODES = new Set(['compiler-worker-timeout', 'compiler-worker-
  *   toolchainSetupURL: string,      // required: ESM URL that installs __esbuildTransform/__oxcParseSync in the worker
  *   stages?: string[],              // default ['logic','view','style']
  *   workPath?: string,              // default '/work'
- *   onLog?: (entry: { level: string, message: string, stage: string }) => void,  // worker console diagnostics, tagged with the stage worker that emitted them
+ *   onLog?: (entry: { level: 'log'|'warn'|'error', message: string, stage: string }) => void,  // worker console diagnostics, tagged with the stage worker that emitted them; level is whichever console.* the compiler called (stage-worker.js patches exactly these three)
  *   sendTimeoutMs?: number,         // default 30000 — inactivity window per setup/compile-subset round trip
  *   warmupTimeoutMs?: number,       // default 120000 — inactivity window for the warmup round trip
  *   retryOnWorkerDeath?: boolean,   // default true — one transparent whole-attempt retry after a worker death
  * }} options
  */
-export function createCompilerPool(options = {}) {
+// options 没有默认值是有意的：createWorker 和 toolchainSetupURL 都必填，参数整体
+// 也就必填，生成的 .d.ts 才不会让 TypeScript 下游写出能过类型检查、一运行就抛的
+// createCompilerPool()。函数体里的 `|| {}` 只是让那种调用仍然拿到下面这句人话报错。
+export function createCompilerPool(options) {
   const {
     createWorker,
     toolchainSetupURL,
@@ -60,7 +63,7 @@ export function createCompilerPool(options = {}) {
     sendTimeoutMs = DEFAULT_SEND_TIMEOUT_MS,
     warmupTimeoutMs = DEFAULT_WARMUP_TIMEOUT_MS,
     retryOnWorkerDeath = true,
-  } = options
+  } = options || {}
   if (typeof createWorker !== 'function') {
     throw new Error('[compiler] createCompilerPool: options.createWorker (() => Worker) is required')
   }
@@ -153,8 +156,10 @@ export function createCompilerPool(options = {}) {
     return entry.warmed
   }
 
-  function warmup() {
-    return settleAll(workers.map(ensureWarm))
+  // 返回值刻意丢掉：settleAll 的数组是内部记账，暴露出去下游会以为那是每个 stage
+  // 的结果。await 之后什么都拿不到，正好对应 README 里写的 Promise<void>。
+  async function warmup() {
+    await settleAll(workers.map(ensureWarm))
   }
 
   // One full compile attempt against the resident realms. Ends quiescent: settleAll
