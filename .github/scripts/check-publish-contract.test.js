@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 import { test } from 'node:test'
-import { checkPackedFiles, entryTargets } from './check-publish-contract.js'
+import { checkPackedFiles, entryTargets, missingEntryFiles, unmodelledPublishConfig } from './check-publish-contract.js'
 
 test('入口收集覆盖 exports 条件对象、main、types 与 bin', () => {
   assert.deepEqual(
@@ -126,4 +129,65 @@ test('imports、typings 和 typesVersions 指向的文件也要在 tarball 里',
   const problems = checkPackedFiles({ imports: { '#internal': './dist/internal.js' } }, ['dist/index.js'])
   assert.equal(problems.length, 1)
   assert.match(problems[0], /\.\/dist\/internal\.js/)
+})
+
+test('browser 入口也要在 tarball 里', () => {
+  // 字符串形式就是一个入口
+  assert.deepEqual(entryTargets({ browser: './dist/browser.js' }), ['./dist/browser.js'])
+
+  // 对象形式是替换表：只有指向本包文件的那一侧要发出去，false（禁用某个模块）和包名不是
+  assert.deepEqual(
+    entryTargets({ browser: { './dist/node.js': './dist/browser.js', 'node:fs': false, path: 'path-browserify' } }),
+    ['./dist/browser.js'],
+  )
+
+  // publishConfig 同样能覆盖它
+  assert.deepEqual(
+    entryTargets({ browser: './src/browser.ts', publishConfig: { browser: './dist/browser.js' } }),
+    ['./dist/browser.js'],
+  )
+
+  const problems = checkPackedFiles({ browser: './dist/browser.js' }, ['dist/index.js'])
+  assert.equal(problems.length, 1)
+  assert.match(problems[0], /\.\/dist\/browser\.js/)
+})
+
+test('test 和 tests 目录下的普通文件也算测试文件', () => {
+  const problems = checkPackedFiles({}, ['package.json', 'test/helper.js', 'tests/integration.js', 'dist/__snapshots__/a.snap'])
+  assert.equal(problems.length, 1)
+  assert.match(problems[0], /3 个测试文件/)
+
+  // 名字里含 test 的正常源文件不受影响
+  assert.deepEqual(checkPackedFiles({}, ['dist/latest.js', 'dist/contest/index.js']), [])
+})
+
+test('publishConfig 里出现 npm pack 不认的字段时明确报错', () => {
+  assert.deepEqual(unmodelledPublishConfig({ publishConfig: { access: 'public' } }), [])
+  assert.deepEqual(unmodelledPublishConfig({ publishConfig: { files: ['dist'] } }), ['files'])
+  assert.deepEqual(unmodelledPublishConfig({ publishConfig: { files: ['dist'], directory: 'dist' } }), ['files', 'directory'])
+})
+
+test('入口文件不在磁盘上时，报的是"没构建"而不是一串没进 tarball', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'publish-contract-'))
+  const touch = (rel) => {
+    mkdirSync(join(dir, dirname(rel)), { recursive: true })
+    writeFileSync(join(dir, rel), '')
+  }
+  const pkgJson = {
+    exports: { '.': './dist/index.js', './sub/*': './dist/sub/*.js' },
+    types: 'dist/index.d.ts',
+    bin: { demo: './bin/cli.js' },
+  }
+
+  assert.deepEqual(missingEntryFiles(pkgJson, dir), ['./dist/index.js', './dist/index.d.ts', './bin/cli.js'])
+
+  // 只产出了一部分仍然算没齐——`files` 少写目录不会让文件从磁盘上消失，所以这里剩下的
+  // 就是构建自己的问题，不该被当成构建齐了去跟 tarball 比。
+  touch('dist/index.js')
+  assert.deepEqual(missingEntryFiles(pkgJson, dir), ['./dist/index.d.ts', './bin/cli.js'])
+
+  // subpath pattern 匹配一组文件，不参与这里的存在性判断
+  touch('dist/index.d.ts')
+  touch('bin/cli.js')
+  assert.deepEqual(missingEntryFiles(pkgJson, dir), [])
 })

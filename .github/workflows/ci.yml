@@ -178,9 +178,18 @@ jobs:
       # 过。上面的 `turbo run test` 不够：test 只依赖 `^build`，也就是只构建被别人
       # 依赖的包。仓库里没有任何包依赖 @dimina-kit/devtools，它的 dist 于是始终是
       # 空的，检查会把它声明的每一个入口都报成"没进 tarball"。
+      #
+      # devtools 的整包 build 在这里跑不起来：第一步 build:container 要构建
+      # dimina/fe 里的容器，而 dimina/fe 是另一个独立的 pnpm workspace，本 job 只装了
+      # 仓库根，构建会直接报 `Cannot find package '@vitejs/plugin-vue'`。所以把它从
+      # turbo 那一轮排除，单独跑 build:main 和 build:preload——devtools 声明出去的
+      # 22 个入口全部出自这两步，都不碰 dimina/fe。容器和 native-host 不在入口里，
+      # 少了它们不影响这个检查要核对的东西。
       - name: Check publish contract
         run: |
-          pnpm turbo run build --cache-dir=.turbo
+          pnpm turbo run build --filter='!@dimina-kit/devtools' --cache-dir=.turbo
+          pnpm --filter @dimina-kit/devtools run build:main
+          pnpm --filter @dimina-kit/devtools run build:preload
           node .github/scripts/check-publish-contract.js
 
       # setup-pawl installs the binary and runs `check`; comments are disabled
