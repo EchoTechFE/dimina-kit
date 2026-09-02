@@ -49,7 +49,9 @@
         "fe/dimina-fe-server/index.js",
         "fe/dimina-fe-server/THIRD_PARTY_NOTICES.md",
         "README.md",
-        "LICENSE"
+        "LICENSE",
+        "!**/*.test.*",
+        "!**/*.spec.*"
     ],
     "scripts": {
         "build": "tsc",
