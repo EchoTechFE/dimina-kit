@@ -41,7 +41,9 @@
     "css",
     "tailwind-preset.cjs",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "!**/*.test.*",
+    "!**/*.spec.*"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

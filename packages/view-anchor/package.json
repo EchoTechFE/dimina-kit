@@ -35,7 +35,9 @@
     "src",
     "docs",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "!**/*.test.*",
+    "!**/*.spec.*"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json && pnpm run build:docs",
