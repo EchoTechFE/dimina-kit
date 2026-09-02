@@ -29,7 +29,8 @@
   "files": [
     "dist",
     "src",
-    "scripts"
+    "scripts",
+    "!scripts/test-*.js"
   ],
   "scripts": {
     "check:wasm-alignment": "node scripts/check-wasm-alignment.js",
