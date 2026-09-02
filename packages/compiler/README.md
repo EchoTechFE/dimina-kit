@@ -404,11 +404,14 @@ try {
 | `compiler-worker-crashed` | worker 挂了：`error` 事件、`postMessage` 抛错、异常退出 | 是 |
 | `compiler-worker-dead` | 请求打到了已判死、还没重建的 slot | 是 |
 | `compiler-toolchain-dead` | 仅 Node：esbuild 常驻服务进程没了，该 realm 之后每次调用都失败 | 是 |
+| `compiler-toolchain-unavailable` | 仅 Node：工具链根本没被打进宿主应用——oxc-parser 在这个平台上找不到运行时绑定，或 esbuild 二进制被塞在 app.asar 里 spawn 不出来。要改的是宿主的打包配置；换个新 worker 没用，但换一条编译路径（比如另装的 dmcc）还有戏 | 是 |
+| `compiler-output-write-failed` | 仅 Node：项目编译成功了，把暂存目录拷到 `outputDir` 失败（权限、磁盘满） | 否 |
+| `compiler-invalid-input` | 调用本身就错了，比如 `compile()` 没给文件。是调用方的 bug，不是项目的 | 否 |
 | `compiler-pool-disposed` | 池已回收，不会再编译任何东西 | 否 |
 
-`isInfrastructureError` 之外还有一层：worker 死亡类的三个码（timeout / crashed / dead，Node 上再加 toolchain-dead）由 pool 自己用来做那一次透明重试，宿主一般不用关心。
+`isInfrastructureError` 之外还有一层：worker 死亡类的三个码（timeout / crashed / dead，Node 上再加 toolchain-dead）由 pool 自己用来做那一次透明重试，宿主一般不用关心。这两组码通过 `INFRASTRUCTURE_ERROR_CODES` 和 `WORKER_DEATH_CODES` 导出，都是只读的 Set：`.add()` / `.delete()` / `.clear()` 直接抛错，免得宿主改一下就悄悄改掉了本包自己的重试行为（`Object.freeze` 对 Set 拦不住这些方法）。
 
-工具链导入失败的码是 **worker 自己打的**——只有它能区分「宿主的 wasm 资源没加载上」和「用户项目编不过」，两者到 pool 手里都是同一种 `{ type:'error' }` 回复。pool 原样转发这个码，其余没带码的一律记为 `compiler-stage-error`。
+工具链导入失败的码是 **worker 自己打的**——只有它能区分「宿主的 wasm 资源没加载上」和「用户项目编不过」，两者到 pool 手里都是同一种 `{ type:'error' }` 回复。pool 原样转发这个码，但只认表里这些值：worker 回复里带的是别的东西（比如 memfs 抛的 `ENOENT`）就按 `compiler-stage-error` 记，宿主不会拿到一个自己分支里没有的码；没带码的同样记为 `compiler-stage-error`。
 
 ## 依赖前置
 
@@ -463,6 +466,7 @@ pnpm --filter @dimina-kit/compiler test:stage-toolchain            # 真实 stag
 - `src/toolchain.js` — 写 `toolchainSetupURL` 模块的可选助手（`installOxc` / `installEsbuildFromURL`，后者内置 esbuild-wasm 静态资源的 Blob-URL 兜底）。导出为 `@dimina-kit/compiler/toolchain`。
 - `src/browser-assets.js` — 浏览器静态资源清单与契约（`COMPILER_BROWSER_ASSETS` / `resolveBrowserAssets`，见上文），构建期检查也用它。导出为 `@dimina-kit/compiler/browser-assets`。
 - `src/error-codes.js` — 两个 pool 共用的错误码表 `COMPILER_ERROR_CODES` 与判定 `isInfrastructureError`（见上文），经 `./pool` 与 `./pool-node` 再导出。
+- `src/failure-hints.js` — Node 侧「一条原始报错文字该记哪个码」的判定（`errorCodeForMessage` / `tagFailure`），以及 oxc 绑定缺失、esbuild 二进制被封在 app.asar 这两种打包问题的中文提示（`oxcNativeBindingHint` / `esbuildAsarSpawnHint`，经 `./pool-node` 再导出）。单独成文件是为了让它不牵连 `worker_threads` 和编译器实体，`test:error-codes` 能直接驱动。
 - `src/shims/fs.js` — **无后端的 fs 转发层**（`setFs`/`resetFs`/`getFs`）；compiler 所有 `fs.xxx` 走它，未注入即抛错。
 - `src/shims/*` — 其余 node 内置与原生依赖的浏览器替身（oxc/esbuild/less/`os.homedir`/…）。
 - `scripts/build-compiler.js` — esbuild 打包。onLoad 给 logic/view/style-compiler 与 utils 追加 `__reset*` 导出（喂 `resetCompilerState`，不改子模块源码）；浏览器分支内联真实 `cssnano`+`autoprefixer`（autoprefixer pin 到 node 运行时解析的同一份，避免 esbuild 解析到多加 `-ms-` 前缀的另一版本）；browser 模式产出 core / stage-worker / pool 三个单文件 bundle，并按 metafile 对 `src/browser-assets.js` 的清单自检（漏产物、多产物、静态资源出现静态 import 都直接失败）；node 模式开 `splitting`（stage 编译器成为运行时 chunk——单文件会把 chunk 的 external `import 'sass'` 提升回入口顶层，懒加载会静默失效）。

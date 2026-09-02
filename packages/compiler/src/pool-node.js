@@ -27,11 +27,15 @@ import nodePath from 'node:path'
 import process from 'node:process'
 import { setupCompile, resetCompilerState, STAGE_NAMES } from './compile-core.js'
 import { COMPILER_ERROR_CODES, WORKER_DEATH_CODES as BROWSER_WORKER_DEATH_CODES } from './error-codes.js'
+import { errorCodeForMessage, esbuildAsarSpawnHint, oxcNativeBindingHint, tagFailure } from './failure-hints.js'
 import { createWorkerSlot, settleAll } from './worker-slot.js'
 import { publishToDist } from '../../../dimina/fe/packages/compiler/src/common/publish.js'
 import { getAppConfigInfo, getAppId, getAppName } from '../../../dimina/fe/packages/compiler/src/env.js'
 
 export { COMPILER_ERROR_CODES, INFRASTRUCTURE_ERROR_CODES, isInfrastructureError } from './error-codes.js'
+// The packaging hints stay part of this entry's published surface: a Node host that
+// catches a compile failure reads them from `@dimina-kit/compiler/pool-node`.
+export { esbuildAsarSpawnHint, oxcNativeBindingHint } from './failure-hints.js'
 
 const { Worker } = createRequire(import.meta.url)('node:worker_threads')
 
@@ -45,14 +49,6 @@ const DEFAULT_SEND_TIMEOUT_MS = 120000
 // realm's esbuild service child process is gone, so the realm is just as unusable as a
 // crashed worker — the same one-retry-on-fresh-workers policy applies.
 const WORKER_DEATH_CODES = new Set([...BROWSER_WORKER_DEATH_CODES, COMPILER_ERROR_CODES.toolchainDead])
-
-// esbuild's node lib drives a spawned long-lived binary child (its "service"). When that
-// child dies (spawn ENOENT in a packaged app, OOM kill, AV kill), esbuild reports every
-// call with one of these two phrases — and the service NEVER restarts inside that realm,
-// so the warm worker is permanently broken and must be recycled, not kept.
-function isDeadToolchainServiceError(message) {
-  return /The service (was stopped|is no longer running)/.test(String(message))
-}
 
 // Default idle window before the pool shrinks (terminates its resident stage workers to
 // release their memory — a warm worker set holds hundreds of MB of toolchain + compile
@@ -164,12 +160,20 @@ export function createNodeCompilerPool({
     // outputDir resolved exactly like publishToDist resolves it (against cwd), so
     // when it sits inside the project the npm scan skips the published output —
     // a previous build's copies must never become the next build's input.
-    const ctx = await setupCompile({
-      fs: nodeFs,
-      workPath,
-      options: { fileTypes },
-      npmScanExclude: [nodePath.resolve(process.cwd(), outputDir)],
-    })
+    // Setup runs on the main thread, so its failures never pass through the stage-result
+    // normalization below — code them here, or a bad app.json (and an unpackaged oxc
+    // binding, which setup hits first) would reject with no code at all.
+    let ctx
+    try {
+      ctx = await setupCompile({
+        fs: nodeFs,
+        workPath,
+        options: { fileTypes },
+        npmScanExclude: [nodePath.resolve(process.cwd(), outputDir)],
+      })
+    } catch (err) {
+      throw tagFailure(err, 'setup')
+    }
     const { storeInfo, pages } = ctx
 
     // 2) Fan out to the resident stage workers. They restore the same storeInfo (so their
@@ -198,22 +202,26 @@ export function createNodeCompilerPool({
       const err = new Error(`[compiler] stage "${r && r.stage}" failed: ${cause}${hint ? ` — ${hint}` : ''}`)
       if (info && info.stack) err.stack = info.stack
       err.stage = r && r.stage
-      if (isDeadToolchainServiceError(cause)) {
+      err.code = errorCodeForMessage(cause)
+      if (err.code === COMPILER_ERROR_CODES.toolchainDead) {
         // The realm's toolchain service child is dead and never comes back — terminate
         // the worker so the next attempt (the transparent retry, or the next build once
         // the environment is healed) respawns a fresh realm with a fresh service.
         // shrink() is safe here: settleAll above guarantees no request is in flight.
-        err.code = COMPILER_ERROR_CODES.toolchainDead
         workers[i].slot.shrink()
-      } else {
-        err.code = COMPILER_ERROR_CODES.stageError // worker-reported compile error — never retried
       }
       if (!firstErr) firstErr = err
     }
     if (firstErr) throw firstErr
 
     // 3) Publish the staging dir to the caller's outputDir (dmcc-identical layout).
-    publishToDist(outputDir, useAppIdDir)
+    //    Everything compiled; only the copy can still fail here (permissions, full disk),
+    //    which is neither the project's fault nor a reason to retry on a fresh worker.
+    try {
+      publishToDist(outputDir, useAppIdDir)
+    } catch (err) {
+      throw tagFailure(err, null, COMPILER_ERROR_CODES.outputWriteFailed)
+    }
 
     return {
       appId: getAppId(),
@@ -268,43 +276,6 @@ export function createNodeCompilerPool({
 // dmcc listr2 stage titles — reproduced so the drop-in build() surfaces the same
 // user-facing compile-log lines a host (e.g. devkit/devtools' log panel) already scrapes.
 const STAGE_TITLES = { logic: '编译页面逻辑', view: '编译页面文件', style: '编译样式文件' }
-
-/**
- * Map a failure message to an actionable packaging hint when it is esbuild failing to
- * spawn its native binary from inside an Electron app.asar archive. Electron patches
- * child_process.execFile for asar paths but NOT child_process.spawn (which esbuild
- * uses), so an in-archive binary path always ENOENTs at spawn even though fs sees the
- * file — the raw message points at a path that plainly exists, which is why it needs
- * a hint. Returns null for every other message.
- * @param {string} message
- * @returns {string | null}
- */
-export function esbuildAsarSpawnHint(message) {
-  const msg = String(message)
-  if (!/app\.asar/.test(msg) || !/esbuild/i.test(msg) || !/ENOENT/.test(msg)) return null
-  return 'esbuild 的原生二进制无法从 app.asar 内 spawn（Electron 只为 execFile 打 asar 补丁）：'
-    + "打包配置需 asarUnpack '**/node_modules/esbuild/**' 与 '**/node_modules/@esbuild/**'，"
-    + '并确保 ESBUILD_BINARY_PATH 指向 app.asar.unpacked 下的真实二进制（@dimina-kit/devkit 在 asar 内运行时会自动设置）'
-}
-
-/**
- * Map a failure message to an actionable packaging hint when it is oxc-parser's
- * "missing runtime binding" error (thrown when NEITHER the platform-native
- * `@oxc-parser/binding-<platform>` package NOR the `@oxc-parser/binding-wasm32-wasi`
- * fallback resolves at runtime). Neither package is a direct dependency of a
- * typical host, so app bundlers (e.g. electron-builder's dependency collection)
- * silently drop them — and the raw oxc message says nothing about packaging.
- * Returns null for every other message.
- * @param {string} message
- * @returns {string | null}
- */
-export function oxcNativeBindingHint(message) {
-  if (!/Cannot find native binding/i.test(String(message))) return null
-  return 'oxc-parser 的运行时绑定没有被打进宿主应用：@dimina-kit/compiler 的 Node 编译路径需要 '
-    + `@oxc-parser/binding-${process.platform}-${process.arch}（平台原生绑定）或 `
-    + '@oxc-parser/binding-wasm32-wasi（wasm 兜底）二者之一实际存在于包内。'
-    + '打包分发（如 electron-builder）时请把其中一个显式声明为宿主依赖，避免依赖收集时被丢弃'
-}
 
 // Lazy singleton pool — a DROP-IN replacement for dmcc's `build(targetPath, workPath,
 // useAppIdDir, options)` with ONE deliberate divergence on the error path:

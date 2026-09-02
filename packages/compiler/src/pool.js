@@ -19,7 +19,7 @@
 //     (esbuild.wasm / oxc wasm are host-hosted assets)
 //   - the source itself (a { relPath: content } map). OPFS is intentionally NOT here:
 //     it's an optional zero-copy source-distribution the downstream can layer on.
-import { COMPILER_ERROR_CODES, WORKER_DEATH_CODES } from './error-codes.js'
+import { COMPILER_ERROR_CODES, WORKER_DEATH_CODES, isCompilerErrorCode } from './error-codes.js'
 import { createWorkerSlot, settleAll } from './worker-slot.js'
 
 export { COMPILER_ERROR_CODES, INFRASTRUCTURE_ERROR_CODES, isInfrastructureError } from './error-codes.js'
@@ -126,10 +126,13 @@ export function createCompilerPool(options) {
       // their own code, distinct from the worker-death codes that gate the retry.
       // A worker that classified its own failure (toolchain setup, which is machinery
       // rather than the user's project) sends its code along — keep it, since only the
-      // worker can tell those apart.
+      // worker can tell those apart, but only if it is one of the published codes. A
+      // runtime code that happens to ride along on the reply (a memfs `ENOENT`) is not
+      // something a host can branch on, so it lands in the compile-error bucket.
+      const workerCode = r && isCompilerErrorCode(r.code) ? r.code : null
       throw Object.assign(
         new Error(r && r.error ? r.error : `[compiler] ${description} failed in stage '${entry.stage}' worker`),
-        { code: (r && r.code) || COMPILER_ERROR_CODES.stageError, stage: entry.stage },
+        { code: workerCode || COMPILER_ERROR_CODES.stageError, stage: entry.stage },
       )
     }
     return r
@@ -223,7 +226,10 @@ export function createCompilerPool(options) {
       }
       const files = input.files || input
       if (!files || typeof files !== 'object' || !Object.keys(files).length) {
-        throw new Error('[compiler] pool.compile expects { files: { relPath: content }, workPath?, options? } (or a non-empty files map)')
+        throw Object.assign(
+          new Error('[compiler] pool.compile expects { files: { relPath: content }, workPath?, options? } (or a non-empty files map)'),
+          { code: COMPILER_ERROR_CODES.invalidInput },
+        )
       }
       const workPath = input.workPath || defaultWorkPath
       const options = input.options || {}

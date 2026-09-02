@@ -166,9 +166,9 @@ function findCompiledCss(files) {
   chk(!!css, `style-only compile-subset produced a real compiled CSS product (found "${css && css[0]}": ${css && JSON.stringify(css[1])})`)
 }
 
-// --- B2: a toolchain the worker cannot import is reported with a code, not just a
-// message. The pool forwards that code untouched, so a host decides "the wasm assets
-// didn't load, fall back" without matching the message text (see src/error-codes.js).
+// --- a toolchain URL the worker cannot import fails with a code, not just a message.
+// The pool forwards that code untouched, so a host decides "the wasm assets didn't
+// load, fall back" without matching the message text (see src/error-codes.js).
 {
   const worker = await loadWorkerInstance()
   const reply = await worker.send({
