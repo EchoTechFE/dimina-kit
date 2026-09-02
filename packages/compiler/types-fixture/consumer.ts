@@ -22,8 +22,11 @@ void assetDir
 // @ts-expect-error resolveBrowserAssets takes the resolved entry path, not the asset list
 resolveBrowserAssets(COMPILER_BROWSER_ASSETS)
 
-const outputs: Record<string, string> = collectOutputs({ fs: {}, targetPath: '/dist' })
+const outputs: Record<string, string | Uint8Array> = collectOutputs({ fs: {}, targetPath: '/dist' })
 void outputs
+// @ts-expect-error products are text OR bytes; a downstream must narrow before treating one as a string
+const textOnly: Record<string, string> = collectOutputs({ fs: {}, targetPath: '/dist' })
+void textOnly
 // @ts-expect-error targetPath is required
 collectOutputs({ fs: {} })
 

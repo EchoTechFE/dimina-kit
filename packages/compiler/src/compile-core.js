@@ -126,6 +126,24 @@ function ensureAppIdFs(fs, configPath) {
   }
 }
 
+// Products are read as BYTES and only turned into a string when they really are
+// UTF-8 text. Reading a PNG with 'utf8' replaces every invalid byte with U+FFFD and
+// nothing can undo that — the images the compiler copies into `main/static` used to
+// come back corrupted, so callers had to go read the fs themselves to get real
+// assets. Strict decoding is exact in both directions: text is byte-identical to
+// before, and anything that isn't valid UTF-8 stays raw bytes.
+const utf8Strict = new TextDecoder('utf-8', { fatal: true })
+function decodeProduct(bytes) {
+  // A fs backend that ignores the missing encoding and hands back a string is taken
+  // at its word — same as before this function existed.
+  if (typeof bytes === 'string') return bytes
+  try {
+    return utf8Strict.decode(bytes)
+  } catch {
+    return bytes
+  }
+}
+
 // Walk the injected fs under targetPath and collect { relPath: content }. Uses
 // only readdirSync({withFileTypes}) + readFileSync — inside the fs contract.
 // Fail-fast: a missing target dir, an unreadable product, or a fs that ignores
@@ -148,7 +166,7 @@ function readOutputs(fs, target) {
       }
       const full = `${dir}/${e.name}`
       if (e.isDirectory()) walk(full)
-      else out[full.slice(prefix.length)] = fs.readFileSync(full, 'utf8')
+      else out[full.slice(prefix.length)] = decodeProduct(fs.readFileSync(full))
     }
   }
   walk(prefix.slice(0, -1))
@@ -432,8 +450,10 @@ export async function compileStage({ stage, pages, storeInfo: bundle, fs, source
 /**
  * Collect the compiled products from the injected fs under `targetPath` into a
  * `{ relPath: content }` map. Uses `fs` directly (no shim), so no setup needed.
+ * UTF-8 text comes back as a string; anything else (images and other binary assets
+ * the compiler copies into `main/static`) comes back as raw bytes.
  * @param {{ fs: object, targetPath: string }} opts
- * @returns {Record<string,string>}
+ * @returns {Record<string, string | Uint8Array>}
  */
 export function collectOutputs({ fs, targetPath } = {}) {
   return readOutputs(fs, targetPath)
@@ -483,7 +503,7 @@ let compileChain = Promise.resolve()
  *   options:  forwarded to `setupCompile` -> dmcc's `storeInfo` (custom file-type
  *             dialect, e.g. { fileTypes: { template: ['qdml'], style: ['qdss'],
  *             viewScript: ['qds'] } }).
- * @returns {Promise<{ appId: string, name: string, files: Record<string,string> }>}
+ * @returns {Promise<{ appId: string, name: string, files: Record<string, string | Uint8Array> }>}
  */
 export function compileMiniApp(opts = {}) {
   const result = compileChain.then(() => runCompile(opts))

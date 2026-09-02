@@ -104,7 +104,7 @@ const pool = createCompilerPool({
 
 await pool.warmup()                                 // 起 3 个常驻 stage worker;每个各自初始化一次 wasm,之后 compile 复用
 const { appId, name, files } = await pool.compile({ files: source, workPath: '/project' })
-// 入参 source 与返回 files 都是文本 map:{ 相对路径: 文本内容 };二进制资源不能靠返回 files,见「已知限制」
+// 入参 source 与返回 files 都是 { 相对路径: 内容 };内容是文本就给 string,图片等二进制给 Uint8Array
 pool.dispose()                                       // 用完终止 worker
 ```
 
@@ -229,7 +229,7 @@ try {
 
 几个值得知道的行为：
 
-- **写真实磁盘**（不经 `files` map），二进制静态资源完好——不受浏览器 `collectOutputs` utf8 限制。
+- **写真实磁盘**（不经 `files` map），产物直接落盘，不用先读回内存再交给你。
 - **fs 用原生、`worker_threads` 仍 shim**：Node 构建不给 `node:fs` 挂 shim（产物/二进制资源走真实磁盘）；但 `worker_threads` 依旧 shim 掉，为的是关掉 dmcc 编译器自带的 worker 消息处理——pool/stage worker 自己改用 `createRequire('node:worker_threads')` 拿到真实的 `Worker`/`parentPort`。
 - **sourcemap 开关走导出而非 worker message**：dmcc 的 logic/view stage 编译器原生只从 worker 的 `parentPort` message 里读 sourcemap 开关，而这条路径已经被上面那条 `worker_threads` shim 短路——构建时给这两个 stage 追加 `__setEnableSourcemap` 导出，`runStage` 前显式调用来代替。
 - **`build()` 里的 `path` 与 dmcc 语义等价、算法不同**：dmcc 读 `mainPages[1]` 是因为它的 style task 用 `unshift` 把 `app` 塞进了共享数组（`[1]` 才是原本的第一页）；本包的 style stage 不改变原数组，等价写法就是 `mainPages[0]`。
@@ -248,7 +248,7 @@ pool 覆盖不了的场景才用 core。它导出 `compileMiniApp`（单线程�
 compileMiniApp({ fs, workPath? }): Promise<{ appId, name, files }>    // = setup + 三 stage + collect 的单-realm 组合
 setupCompile({ fs, workPath?, options? }): Promise<{ storeInfo, pages, appId, name, targetPath, workPath }>
 compileStage({ stage, pages, storeInfo, fs }): Promise<void>          // stage: 'logic'|'view'|'style';产物写回 fs
-collectOutputs({ fs, targetPath }): Record<string,string>            // 遍历 fs 收 targetPath 前缀下产物
+collectOutputs({ fs, targetPath }): Record<string,string|Uint8Array> // 遍历 fs 收 targetPath 前缀下产物(文本给 string,二进制给字节)
 resetCompilerState(): void                                           // 清模块级缓存;常驻 realm 复用前必调
 STAGE_NAMES: string[]                                                // ['logic','view','style']
 initToolchain(): Promise<void>                                       // no-op,占位保 API 稳定
@@ -361,7 +361,7 @@ async function filesFromDir(dir, prefix = '') {           // 只读递来的 han
 }
 ```
 
-> OPFS 只是**源码分发的真相源**（一次写、多 worker 独立读、零克隆），编译仍在 memfs 上；不需要 SharedArrayBuffer（但上面 oxc wasm 钩子仍需 COOP/COEP）。示例只处理**文本** fixture——真实图片/svg 资源要保留二进制（见「已知限制」）。
+> OPFS 只是**源码分发的真相源**（一次写、多 worker 独立读、零克隆），编译仍在 memfs 上；不需要 SharedArrayBuffer（但上面 oxc wasm 钩子仍需 COOP/COEP）。示例只处理**文本** fixture——真实图片/svg 资源读成 `Uint8Array` 放进同一个 map 即可。
 
 ## fs 契约与约定
 
@@ -372,12 +372,13 @@ async function filesFromDir(dir, prefix = '') {           // 只读递来的 han
 - **产物写回同一个 fs。** compiler `writeFileSync` 把产物写进你的 fs，所以传入的 fs 必须**可写**。产物目录 `targetPath` 见下。
 - **编译会修改你的 fs。** 缺 `project.config.json`/appid 时，会往 `${workPath}/project.config.json` 写入一个 appid（`dmlocalpreview`）——传入的 fs 不能当成只读快照。
 - **同步契约，不需要 `fs.promises`。** `DiminaFs` 只要求同步方法（`existsSync`/`readFileSync`/`readdirSync{withFileTypes}`/`statSync`/`writeFileSync`/`mkdirSync{recursive}`/`copyFileSync`/`rmSync`）——编译路径不碰 async fs。纯异步后端（只有 Promise 版读写）没法当 fs 用。
+- **`readFileSync` 不带编码参数时必须返回字节。** `collectOutputs` 靠这个来区分文本产物和图片：先按严格 UTF-8 解码，解不出来就原样把字节交给调用方。后端若无视编码参数一律返回字符串，二进制产物就会在这一步坏掉。
 
 `@dimina/compiler` 自己并不知道 fs 被换掉了。
 
 ## 已知限制与错误处理
 
-- **`files` 目前只可靠承载文本产物。** `collectOutputs` 用 utf8 读回 `targetPath` 下所有产物；图片/svg 等二进制静态资源（compiler `copyFileSync` 到 `main/static`）会被按 utf8 读坏。纯文本项目/fixture 无碍；要用真实二进制资源，需下游自行从注入的 fs 读 `main/static` 的字节，别依赖返回的 `files`。
+- **`files` 里的一条产物可能是字符串，也可能是 `Uint8Array`。** `collectOutputs` 对每条产物先按严格 UTF-8 解码，能解出来就是字符串（JS/CSS/JSON 等），解不出来（图片、字体等 compiler `copyFileSync` 到 `main/static` 的资源）就原样给字节。下游拿到一条产物当字符串用之前要先判类型——`typeof v === 'string'`。入参方向同理：源码里的图片直接以 `Uint8Array` 放进 `files` 即可，pool 会把它当文件写进 worker 的 memfs。
 - **`targetPath` 来自环境。** compiler 产物目录取 `process.env.TARGET_PATH`，否则 `os.tmpdir()/dimina-fe-dist-<时间戳>`（浏览器 os shim 下通常 `/tmp/...`）。`setupCompile` 会先 `rmSync` 清空它——别把 `TARGET_PATH` 指到源码目录或共享目录。用 `setupCompile` 返回的 `targetPath` 喂 `collectOutputs`。
 - **不是全 fail-fast。** 缺 fs 方法、坏 appid、坏 `project.config.json`、miniprogram_npm 构建失败会 **reject**；但**样式预处理器失败（如当前浏览器构建暂不支持 `.less`）会被吞掉、降级用原始 CSS**，PostCSS 解析失败返回空串，资源拷贝失败只 `console.log`，logic esbuild 压缩失败回退未压缩代码。**用 pool 时把这些拿出来的办法是 `createCompilerPool({ onLog })`**——它把 worker 内编译器的 `console.*` 诊断（带 stage 标签）转发给你；也可在产物为空/缺失时二次校验。
 
@@ -435,7 +436,7 @@ pnpm --filter @dimina-kit/compiler build:types    # 仅 dist/types/*.d.ts
 
 ## 测试
 
-`pnpm --filter @dimina-kit/compiler test`（也就是 `turbo run test` 会跑到的那份）只包含不需要构建的两份契约测试——静态资源清单（`test:browser-assets`）和错误码（`test:error-codes`）；下面这些各自要先构建，按需单跑。
+`pnpm --filter @dimina-kit/compiler test`（也就是 `turbo run test` 会跑到的那份）只包含不需要构建的三份契约测试——静态资源清单（`test:browser-assets`）、错误码（`test:error-codes`）和二进制入参播种（`test:binary-seed`）；下面这些各自要先构建，按需单跑。
 
 测试里用 memfs 扮演「下游 fs」：
 
@@ -453,6 +454,8 @@ pnpm --filter @dimina-kit/compiler test:stage-load-retry           # stage 工�
 pnpm --filter @dimina-kit/compiler test:browser-assets             # 静态资源清单:改名/新 chunk/出现静态 import 都会被构建期检查拦下
 pnpm --filter @dimina-kit/compiler test:error-codes                # 错误码:worker 自己判定的失败(工具链导入)带着码原样传到调用方,其余记为 compiler-stage-error
 pnpm --filter @dimina-kit/compiler test:stage-toolchain            # 真实 stage worker bundle:每个 stage 都加载工具链、按 URL 记忆、导入失败带错误码
+pnpm --filter @dimina-kit/compiler test:binary-seed                # 入参里的 Uint8Array 播种成文件(memfs 自己的 fromJSON 会把它变成目录)
+pnpm --filter @dimina-kit/compiler test:binary-outputs             # 页面引用的图片走完整编译后逐字节相同,文本产物仍是字符串
 ```
 
 `pool` 的浏览器端到端验证在 `dimina-web-client`（`npm run test:pool`，Playwright 驱动，产物与单线程逐结构一致）。`pool-node` 的宿主端验证在 `@dimina-kit/devkit` 测试套件（真实 fork + `openProject`）。
@@ -461,6 +464,7 @@ pnpm --filter @dimina-kit/compiler test:stage-toolchain            # 真实 stag
 
 - `src/compile-core.js` — 内联编排 dmcc 的 compile 函数；导出 `compileMiniApp` 与四个接缝 `setupCompile`/`compileStage`/`collectOutputs`/`resetCompilerState`（+ `STAGE_NAMES`、`preloadStage`）。相对路径引用 `dimina` 子模块的 compiler 源码；三个 stage 编译器经动态 import 懒加载（`resetCompilerState` 只清已加载的 stage），node bundle 借 esbuild splitting 把它们编成运行时 chunk。
 - `src/browser-entry.js` — 浏览器 core 入口，导出上述接缝 + `initToolchain()`（no-op）。
+- `src/seed-memfs.js` — 把 `files` map 播种成一个 memfs 卷。文本走 `Volume.fromJSON`，`Uint8Array` 单独 `writeFileSync` 写入——`fromJSON` 见到 `Uint8Array` 会当成目录，不报错。
 - `src/pool.js` — **浏览器编排池** `createCompilerPool`：常驻 stage worker 池、并行派发、并集合并、realm 复用；不含编译器（轻量，~3KB）。
 - `src/stage-worker.js` — **包自带的常驻 stage worker**（内联 core + memfs）：warmup 时 `import(toolchainSetupURL)` 装 wasm 钩子，每次编译 seed 私有 memfs → `setupCompile` + 指定 stage → `collectOutputs`；并把编译器 `console.*` 诊断转发给 pool 的 `onLog`。
 - `src/pool-node.js` — **Node 编排池** `createNodeCompilerPool` + dmcc drop-in 默认导出 `build()`：常驻 worker_threads、真实磁盘、全局 build 串行、死 worker 懒复活、idle 自动收缩（`idleShrinkMs`）。

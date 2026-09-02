@@ -210,14 +210,19 @@ export function createCompilerPool(options) {
    * Single argument, no ambiguity: pass { files, workPath, options }. A bare
    * { relPath: content } map is also accepted (uses the default workPath, no options).
    * @param {{
-   *   files: Record<string,string>,
+   *   files: Record<string, string | Uint8Array>,
    *   workPath?: string,
    *   options?: { fileTypes?: { template?: string[], style?: string[], viewScript?: string[] } },
-   * } | Record<string,string>} input
+   * } | Record<string, string | Uint8Array>} input
+   *   Source files are text or raw bytes: an image belongs in the map as a Uint8Array,
+   *   not as a decoded string (postMessage carries it as bytes, and the stage worker
+   *   seeds it into its memfs as a file).
    *   options.fileTypes lets a caller register a custom template/style/view-script
    *   dialect (e.g. { template: ['qdml'], style: ['qdss'], viewScript: ['qds'] }) —
    *   forwarded to the setup worker's `setupCompile` (dmcc's storeInfo).
-   * @returns {Promise<{ appId: string, name: string, files: Record<string,string> }>}
+   * @returns {Promise<{ appId: string, name: string, files: Record<string, string | Uint8Array> }>}
+   *   Compiled products: UTF-8 text as strings, binary assets (images copied into
+   *   `main/static`) as raw bytes.
    */
   function compile(input = {}) {
     const run = chain.then(async () => {

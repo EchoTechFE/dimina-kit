@@ -14,9 +14,9 @@
 // Source distribution is deliberately OPFS-free: the pool posts the source map and we
 // seed it into our own memfs. A downstream that wants zero-copy OPFS distribution can
 // layer it on top (hydrate OPFS -> a files map before calling the pool).
-import { Volume, createFsFromVolume } from 'memfs'
 import { setupCompile, compileStage, collectOutputs, resetCompilerState } from './compile-core.js'
 import { COMPILER_ERROR_CODES } from './error-codes.js'
+import { seedMemfs } from './seed-memfs.js'
 
 // The compiler logs diagnostics (missing components, unsupported wx APIs, style
 // preprocessor fallbacks, asset-copy failures, …) via console.* inside this worker,
@@ -74,7 +74,7 @@ function ensureToolchain(url) {
 }
 
 function freshFs(files, workPath) {
-  return createFsFromVolume(Volume.fromJSON(files, workPath))
+  return seedMemfs(files, workPath)
 }
 
 // Run setupCompile ONCE for a compile: parse config, build the scaffold
