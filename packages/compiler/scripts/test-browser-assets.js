@@ -11,6 +11,7 @@ import {
   BUNDLER_ONLY_BROWSER_OUTPUTS,
   COMPILER_BROWSER_ASSETS,
   browserOutputsFromMetafile,
+  checkAssetsAgainstExports,
   checkBrowserAssetContract,
   resolveBrowserAssets,
 } from '../src/browser-assets.js'
@@ -22,8 +23,8 @@ const chk = (cond, msg) => { if (!cond) { failed = true; console.error(`❌ ${ms
 
 const assetNames = COMPILER_BROWSER_ASSETS.map((asset) => asset.name)
 const healthy = [
-  ...assetNames.map((name) => ({ name, staticImports: [] })),
-  ...BUNDLER_ONLY_BROWSER_OUTPUTS.map((name) => ({ name, staticImports: [] })),
+  ...assetNames.map((name) => ({ name, imports: [] })),
+  ...BUNDLER_ONLY_BROWSER_OUTPUTS.map((name) => ({ name, imports: [] })),
 ]
 
 chk(checkBrowserAssetContract(healthy).length === 0, 'a build that emits exactly the listed outputs passes')
@@ -48,37 +49,63 @@ chk(
 )
 
 chk(
-  checkBrowserAssetContract([...healthy, { name: 'compile-core.browser-chunk.js', staticImports: [] }])
+  checkBrowserAssetContract([...healthy, { name: 'compile-core.browser-chunk.js', imports: [] }])
     .some((line) => line.includes('new browser output')),
   'a newly split chunk is reported until it is classified',
 )
 
-chk(
-  checkBrowserAssetContract(
-    healthy.map((output) => (output.name === 'stage-worker.browser.js'
-      ? { ...output, staticImports: ['./chunk-ABC.js'] }
-      : output)),
-  ).some((line) => line.includes('statically imports ./chunk-ABC.js')),
-  'an asset that stopped being self-contained is reported',
-)
+// An asset only works when it is one file with nothing to fetch alongside it, so
+// every import kind breaks it — not just `import … from`. An externalized CJS
+// dependency shows up as require-call, a lazily pulled chunk as dynamic-import.
+for (const kind of ['import-statement', 'require-call', 'dynamic-import']) {
+  chk(
+    checkBrowserAssetContract(
+      healthy.map((output) => (output.name === 'stage-worker.browser.js'
+        ? { ...output, imports: [{ path: './chunk-ABC.js', kind }] }
+        : output)),
+    ).some((line) => line.includes('not self-contained') && line.includes(`./chunk-ABC.js (${kind})`)),
+    `an asset that imports something (${kind}) is reported`,
+  )
+}
 
-// What the build actually feeds the check: esbuild's metafile, keyed by path,
-// carrying both import kinds plus sourcemap entries.
+// An output emitted into a subdirectory is NOT the dist-root file a host copies,
+// so it must not pass as one.
+const nested = checkBrowserAssetContract([
+  ...healthy.filter((output) => output.name !== 'pool.browser.js'),
+  { name: 'assets/pool.browser.js', imports: [] },
+])
+chk(nested.some((line) => line.includes('dist/pool.browser.js') && line.includes('did not emit it')), 'an asset moved into a subdirectory is reported as missing from dist')
+chk(nested.some((line) => line.includes('dist/assets/pool.browser.js') && line.includes('new browser output')), 'the subdirectory copy is reported under its full path')
+
+// What the build actually feeds the check: esbuild's metafile, keyed by paths
+// relative to the working directory, plus sourcemap entries.
 const shaped = browserOutputsFromMetafile({
   outputs: {
-    'dist/stage-worker.browser.js': {
-      imports: [
-        { path: 'toolchainSetupURL', kind: 'dynamic-import' },
-        { path: './chunk-XYZ.js', kind: 'import-statement' },
-      ],
-    },
+    'dist/stage-worker.browser.js': { imports: [{ path: './chunk-XYZ.js', kind: 'import-statement' }] },
+    'dist/assets/pool.browser.js': { imports: [] },
     'dist/stage-worker.browser.js.map': { imports: [] },
   },
 })
-chk(shaped.length === 1 && shaped[0].name === 'stage-worker.browser.js', 'metafile paths are reduced to file names, sourcemaps dropped')
 chk(
-  shaped[0].staticImports.length === 1 && shaped[0].staticImports[0] === './chunk-XYZ.js',
-  'a dynamic import (the host toolchain setup URL) is not counted; a static one is',
+  shaped.map((output) => output.name).join('|') === 'stage-worker.browser.js|assets/pool.browser.js',
+  'metafile paths keep the directory below dist, sourcemaps dropped',
+)
+chk(
+  shaped[0].imports.length === 1 && shaped[0].imports[0].kind === 'import-statement',
+  'each import is carried through with its kind',
+)
+
+// The manifest and the exports map name the same files; a rename has to land in both.
+chk(checkAssetsAgainstExports(pkg.exports).length === 0, "this package's own exports map agrees with the manifest")
+chk(
+  checkAssetsAgainstExports({ './pool': { default: './dist/pool-v2.browser.js' } })
+    .some((line) => line.includes('pool-v2.browser.js') && line.includes('does not list')),
+  'an export pointing at an unlisted browser bundle is reported',
+)
+chk(
+  checkAssetsAgainstExports({ './pool': { default: './dist/pool-v2.browser.js' } })
+    .some((line) => line.includes('pool.browser.js') && line.includes('one half of a rename')),
+  'a listed asset no export points at is reported',
 )
 
 // resolveBrowserAssets is the path every consumer derives from the ./browser entry.

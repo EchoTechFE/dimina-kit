@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import path from 'node:path'
-import { COMPILER_BROWSER_ASSETS, browserOutputsFromMetafile, checkBrowserAssetContract } from '../src/browser-assets.js'
+import { COMPILER_BROWSER_ASSETS, browserOutputsFromMetafile, checkAssetsAgainstExports, checkBrowserAssetContract } from '../src/browser-assets.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(__dirname, '..')
@@ -258,15 +258,22 @@ for (const [format, outfile] of [['esm', 'browser-assets.js'], ['cjs', 'browser-
 }
 console.log('✅ built dist/browser-assets.js + dist/browser-assets.cjs')
 
-// The browser bundles double as static assets a host copies and serves. Their names
-// and the "no static imports" rule are stated once in src/browser-assets.js, and
-// enforced here so a rename or a newly split chunk fails the build instead of
-// 404-ing (or half-loading) inside a host months later.
+// The browser bundles double as static files a host copies and serves. Their names
+// and the "self-contained, imports nothing" rule are stated once in
+// src/browser-assets.js, and enforced here so a rename or a newly split chunk fails
+// the build instead of 404-ing (or half-loading) inside a host months later.
 if (MODE === 'browser') {
-  const problems = checkBrowserAssetContract(browserOutputsFromMetafile({ outputs: browserMetafileOutputs }))
+  // esbuild keys the metafile by paths relative to the working directory, so the
+  // asset check sees the same `dist/…` prefix a host would copy from — and an
+  // output that lands in a subdirectory keeps that subdirectory in its name.
+  const outdirPrefix = `${path.relative(process.cwd(), path.join(root, 'dist')).split(path.sep).join('/')}/`
+  const problems = [
+    ...checkBrowserAssetContract(browserOutputsFromMetafile({ outputs: browserMetafileOutputs }, outdirPrefix)),
+    ...checkAssetsAgainstExports(JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).exports),
+  ]
   if (problems.length > 0) {
     console.error(problems.map((line) => `  ✗ ${line}`).join('\n'))
     process.exit(1)
   }
-  console.log(`✅ browser static-asset contract holds (${COMPILER_BROWSER_ASSETS.length} assets, no static imports)`)
+  console.log(`✅ browser static-asset contract holds (${COMPILER_BROWSER_ASSETS.length} assets, self-contained, names match the exports map)`)
 }

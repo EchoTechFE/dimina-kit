@@ -39,11 +39,15 @@ import { createCompilerPool } from '@dimina-kit/compiler/pool'
 | `dist/stage-worker.browser.js` | 浏览器 Worker | 常驻 stage worker（已内联 core + memfs），pool 用它做并行 |
 | `dist/pool.browser.js` | 浏览器主线程 | 编排池 `createCompilerPool` |
 
-### 浏览器静态资源：哪三个文件必须原样托管
+### 浏览器静态资源：自己按 URL 托管这三个文件时的规矩
 
-上表里带 `.browser.js` 的三个产物，宿主要**原样拷贝、原样托管**，不能再过一遍自己的打包器。stage worker 只被 `new Worker(url)` 引用，另外两个只被 fetch 下来从 Blob URL import——没有一处是打包器能看见的静态 import，所以打包器要么整个漏掉这些文件，要么把它们改写坏，两种情况都不报错，只在运行时 404 或行为异常。
+上表里带 `.browser.js` 的三个产物都是自包含的单文件 ESM，本身不 import 任何东西。
 
-文件名由本包给出，不要在宿主里手抄：
+**宿主自己按 URL 托管它们时**（拷进 `public/` 再 `new Worker('/stage-worker.browser.js')`，或 fetch 下来从 Blob URL import），要**原样拷贝、按这些文件名托管**，不要再过一遍自己的打包器：宿主源码里没有一处是打包器能看见的静态引用，打包器根本不知道这些文件存在，既不会拷也不会改写，缺失只在运行时表现为 404。
+
+**宿主通过包名引用它们时**（`import { createCompilerPool } from '@dimina-kit/compiler/pool'`，或 `new Worker(new URL('@dimina-kit/compiler/stage-worker', import.meta.url))`，见下面的接入示例），打包器看得见这条引用、会自己处理，这一节整节都用不上。
+
+按 URL 托管的话，文件名由本包给出，不要在宿主里手抄：
 
 ```js
 const { resolveBrowserAssets } = require('@dimina-kit/compiler/browser-assets')
@@ -54,7 +58,7 @@ for (const file of files) fs.copyFileSync(file, path.join(publicDir, path.basena
 
 `./browser-assets` 同时发 ESM 和 CJS（走 `require` 条件），只做字符串拼接，不依赖 `node:path`。
 
-每次浏览器构建都会拿 esbuild 的 metafile 对着这份清单自检：产物改了名、被拆出新 chunk、或某个静态资源开始带静态 import（不再是自包含的单文件），构建当场失败，而不是几个月后在某个宿主那里 404。`toolchain.browser.js` 不在清单里——它由宿主用自己的打包器 import（`@dimina-kit/compiler/toolchain`），拷过去也没人 fetch。
+每次浏览器构建都会拿 esbuild 的 metafile 对着这份清单自检：产物改了名、被挪进子目录、被拆出新 chunk、或某个资源开始 import 别的文件（`import` / `require` / 动态 import 都算，一带上就不再是自包含的单文件），以及清单里的文件名和 `package.json` 的 exports 对不上（改名只改了一边），构建当场失败，而不是几个月后在某个宿主那里 404。`toolchain.browser.js` 不在清单里——它由宿主用自己的打包器 import（`@dimina-kit/compiler/toolchain`），拷过去也没人 fetch。
 
 ## 架构
 
