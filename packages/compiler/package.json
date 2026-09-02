@@ -47,6 +47,11 @@
       "require": "./dist/browser-assets.cjs",
       "default": "./dist/browser-assets.js"
     },
+    "./file-types": {
+      "types": "./dist/types/file-types.d.ts",
+      "require": "./dist/file-types.cjs",
+      "default": "./dist/file-types.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -69,7 +74,8 @@
     "test:realm-reuse": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-realm-reuse.js",
     "test:pool-node": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-pool-node.js",
     "test:pool-scopehash": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-pool-scopehash.js",
-    "test": "pnpm run test:browser-assets && pnpm run test:error-codes && pnpm run test:binary-seed && pnpm run test:binary-outputs:prebuilt",
+    "test": "pnpm run test:browser-assets && pnpm run test:error-codes && pnpm run test:binary-seed && pnpm run test:binary-outputs:prebuilt && pnpm run test:file-types && pnpm run test:pool-filetypes:prebuilt",
+    "test:file-types": "node scripts/test-file-types.js",
     "test:binary-seed": "node scripts/test-binary-seed.js",
     "test:binary-outputs": "node scripts/build-compiler.js node && node scripts/build-compiler.js browser && pnpm run test:binary-outputs:prebuilt",
     "test:binary-outputs:prebuilt": "node --import ./scripts/register-kit.js scripts/test-binary-outputs.js",
@@ -88,7 +94,8 @@
     "test:stage-toolchain": "node scripts/build-compiler.js browser && node scripts/test-stage-toolchain.js",
     "test:stage-worker-message-order": "node scripts/build-compiler.js node && node scripts/test-stage-worker-message-order.js",
     "test:stage-load-retry": "node scripts/build-compiler.js node && node scripts/test-stage-load-retry.js",
-    "test:pool-filetypes": "node scripts/build-compiler.js node && node scripts/build-compiler.js browser && node scripts/test-pool-filetypes.js"
+    "test:pool-filetypes": "node scripts/build-compiler.js node && node scripts/build-compiler.js browser && pnpm run test:pool-filetypes:prebuilt",
+    "test:pool-filetypes:prebuilt": "node scripts/test-pool-filetypes.js"
   },
   "dependencies": {
     "@babel/parser": "^7.29.7",

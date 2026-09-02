@@ -246,17 +246,20 @@ for (const b of builds) {
 // The static-asset manifest itself: dependency-free string code, emitted in both
 // modes (either build alone leaves a usable dist) and in both formats, because the
 // hosts that copy these files are as often CommonJS build scripts as ESM ones.
-for (const [format, outfile] of [['esm', 'browser-assets.js'], ['cjs', 'browser-assets.cjs']]) {
-  await esbuild.build({
-    entryPoints: [path.join(root, 'src/browser-assets.js')],
-    outfile: path.join(root, 'dist', outfile),
-    bundle: true,
-    format,
-    target: ['es2022'],
-    logLevel: 'warning',
-  })
+// src/file-types.js（方言扩展名）走同一条路：宿主的编辑器配置和文件分类也常常在 CJS 里。
+for (const name of ['browser-assets', 'file-types']) {
+  for (const [format, ext] of [['esm', 'js'], ['cjs', 'cjs']]) {
+    await esbuild.build({
+      entryPoints: [path.join(root, `src/${name}.js`)],
+      outfile: path.join(root, 'dist', `${name}.${ext}`),
+      bundle: true,
+      format,
+      target: ['es2022'],
+      logLevel: 'warning',
+    })
+  }
+  console.log(`✅ built dist/${name}.js + dist/${name}.cjs`)
 }
-console.log('✅ built dist/browser-assets.js + dist/browser-assets.cjs')
 
 // The browser bundles double as static files a host copies and serves. Their names
 // and the "self-contained, imports nothing" rule are stated once in

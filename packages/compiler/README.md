@@ -60,6 +60,24 @@ for (const file of files) fs.copyFileSync(file, path.join(publicDir, path.basena
 
 每次浏览器构建都会拿 esbuild 的 metafile 对着这份清单自检：产物改了名、被挪进子目录、被拆出新 chunk、或某个资源开始 import 别的文件（`import` / `require` / 动态 import 都算，一带上就不再是自包含的单文件），以及清单里的文件名和 `package.json` 的 exports 对不上（改名只改了一边），构建当场失败，而不是几个月后在某个宿主那里 404。`toolchain.browser.js` 不在清单里——它由宿主用自己的打包器 import（`@dimina-kit/compiler/toolchain`），拷过去也没人 fetch。
 
+### 自定义文件类型（方言）：声明一次，编译器和宿主用同一份
+
+`options.fileTypes` 让工程用自己的扩展名，比如千岛（qd）方言的 `.qdml`/`.qdss`/`.qds` 对应 `.wxml`/`.wxss`/`.wxs`。麻烦的是这份配置不止编译器要用：编辑器的语言映射、模板校验、预览时找页面模板，宿主自己也要按同一套规则判断文件角色。各处手写 `/\.(wxml|qdml)$/` 的结果是漏掉内置的 `.ddml`，而且同一个方言在几个仓库里各抄一份，谁改了另一边不会知道。
+
+`@dimina-kit/compiler/file-types` 就是那一份（同时发 ESM 和 CJS，无依赖）：
+
+```js
+import { QD_FILE_TYPES, resolveFileTypes, hasExt } from '@dimina-kit/compiler/file-types'
+
+await pool.compile({ files, workPath, options: { fileTypes: QD_FILE_TYPES } })
+
+const { templateExts, styleExts, viewScriptExts, viewScriptTags } = resolveFileTypes(QD_FILE_TYPES)
+// templateExts: ['.wxml', '.ddml', '.qdml']  ← 内置在前，自定义在后，顺序即查找优先级
+hasExt('pages/index/index.QDML', templateExts)  // true，大小写不敏感
+```
+
+`resolveFileTypes()` 算的是**编译器这次实际会认的**扩展名和内联标签：合并内置项、规范化（去空白、转小写、补一个前导点）、去重，并丢掉占用其他角色或 `.js`/`.ts`/`.json` 的项——`template: ['js']` 会把页面逻辑当模板解析，所以直接不接受。规则是照编译器 `env.js` 的 `normalizeFileTypes` 写的（直接 import 它会把 `node:fs` 和整个配置解析一起拉进来），`test:file-types` 读 env.js 源码比对内置列表和两条校验正则，上游一改这里就红。
+
 ## 架构
 
 本包是**编译器与文件系统之间的一层适配**，再往上叠一层**编排**。真正的编译逻辑在 `dimina` 子模块的 `@dimina/compiler`，本包用一个**无后端的 fs 转发 shim** 把它每一次 `fs.xxx` 指向下游注入的 fs；`pool` 则在上面替下游管好 worker 池与并行——下游不再手写任何 worker/合并逻辑。
@@ -437,7 +455,7 @@ pnpm --filter @dimina-kit/compiler build:types    # 仅 dist/types/*.d.ts
 
 ## 测试
 
-`pnpm --filter @dimina-kit/compiler test`（也就是 `turbo run test` 会跑到的那份）包含四份契约测试——静态资源清单（`test:browser-assets`）、错误码（`test:error-codes`）、二进制入参播种（`test:binary-seed`）和二进制产物保真（`test:binary-outputs`）。最后一份要拿 `dist` 里的真实 bundle 跑，但它自己不构建：turbo 里 `@dimina-kit/compiler#test` 依赖本包的 `build`，构建只发生一次，测试期间没有人再往 `dist` 写。脱离 turbo 单跑时用带构建的 `test:binary-outputs`（`test:binary-outputs:prebuilt` 是不构建的那个入口）。下面这些各自要先构建，按需单跑。
+`pnpm --filter @dimina-kit/compiler test`（也就是 `turbo run test` 会跑到的那份）包含六份契约测试——静态资源清单（`test:browser-assets`）、错误码（`test:error-codes`）、二进制入参播种（`test:binary-seed`）、二进制产物保真（`test:binary-outputs`）、方言扩展名（`test:file-types`）和方言穿过编译池（`test:pool-filetypes`）。后两类里要拿 `dist` 真实 bundle 跑的那几份自己不构建：turbo 里 `@dimina-kit/compiler#test` 依赖本包的 `build`，构建只发生一次，测试期间没有人再往 `dist` 写。脱离 turbo 单跑时用带构建的 `test:binary-outputs` / `test:pool-filetypes`（带 `:prebuilt` 后缀的是不构建的那个入口）。下面这些各自要先构建，按需单跑。
 
 测试里用 memfs 扮演「下游 fs」：
 
@@ -455,6 +473,7 @@ pnpm --filter @dimina-kit/compiler test:stage-load-retry           # stage 工�
 pnpm --filter @dimina-kit/compiler test:browser-assets             # 静态资源清单:改名/新 chunk/出现静态 import 都会被构建期检查拦下
 pnpm --filter @dimina-kit/compiler test:error-codes                # 错误码:worker 自己判定的失败(工具链导入)带着码原样传到调用方,其余记为 compiler-stage-error
 pnpm --filter @dimina-kit/compiler test:stage-toolchain            # 真实 stage worker bundle:每个 stage 都加载工具链、按 URL 记忆、导入失败带错误码
+pnpm --filter @dimina-kit/compiler test:file-types                 # 方言扩展名:合并/规范化行为,以及内置列表与校验正则和编译器 env.js 逐字一致
 pnpm --filter @dimina-kit/compiler test:binary-seed                # 入参里的 Uint8Array 播种成文件(memfs 自己的 fromJSON 会把它变成目录)
 pnpm --filter @dimina-kit/compiler test:binary-outputs             # 页面引用的图片走完整编译后逐字节相同,文本产物仍是字符串
 ```
@@ -471,6 +490,7 @@ pnpm --filter @dimina-kit/compiler test:binary-outputs             # 页面引�
 - `src/pool-node.js` — **Node 编排池** `createNodeCompilerPool` + dmcc drop-in 默认导出 `build()`：常驻 worker_threads、真实磁盘、全局 build 串行、死 worker 懒复活、idle 自动收缩（`idleShrinkMs`）。
 - `src/stage-worker-node.js` — Node 常驻 stage worker：spawn 时按 workerData 里的 stage 身份预热本 stage 工具链，恢复 storeInfo → `runStage(stage, { sourcemap })` 写共享 staging 目录；应答 `{ type: 'introspect' }` 报告本 realm 已加载的重依赖。
 - `src/toolchain.js` — 写 `toolchainSetupURL` 模块的可选助手（`installOxc` / `installEsbuildFromURL`，后者内置 esbuild-wasm 静态资源的 Blob-URL 兜底）。导出为 `@dimina-kit/compiler/toolchain`。
+- `src/file-types.js` — 自定义文件类型（方言）的权威声明：内置扩展名、合并规则 `resolveFileTypes`、qd 方言常量 `QD_FILE_TYPES`。导出为 `@dimina-kit/compiler/file-types`（ESM + CJS）。
 - `src/browser-assets.js` — 浏览器静态资源清单与契约（`COMPILER_BROWSER_ASSETS` / `resolveBrowserAssets`，见上文），构建期检查也用它。导出为 `@dimina-kit/compiler/browser-assets`。
 - `src/error-codes.js` — 两个 pool 共用的错误码表 `COMPILER_ERROR_CODES` 与判定 `isInfrastructureError`（见上文），经 `./pool` 与 `./pool-node` 再导出。
 - `src/failure-hints.js` — Node 侧「一条原始报错文字该记哪个码」的判定（`errorCodeForMessage` / `tagFailure`），以及 oxc 绑定缺失、esbuild 二进制被封在 app.asar 这两种打包问题的中文提示（`oxcNativeBindingHint` / `esbuildAsarSpawnHint`，经 `./pool-node` 再导出）。单独成文件是为了让它不牵连 `worker_threads` 和编译器实体，`test:error-codes` 能直接驱动。

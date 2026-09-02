@@ -4,9 +4,10 @@
 // degrades to `any`), the deliberately wrong call stops erroring and tsc fails
 // this file with "unused '@ts-expect-error' directive".
 
-import { collectOutputs, STAGE_NAMES } from '@dimina-kit/compiler'
+import { collectOutputs, compileMiniApp, STAGE_NAMES } from '@dimina-kit/compiler'
 import { COMPILER_BROWSER_ASSETS, resolveBrowserAssets } from '@dimina-kit/compiler/browser-assets'
 import { initToolchain } from '@dimina-kit/compiler/browser'
+import { QD_FILE_TYPES, hasExt, resolveFileTypes } from '@dimina-kit/compiler/file-types'
 import { createCompilerPool } from '@dimina-kit/compiler/pool'
 import { createNodeCompilerPool } from '@dimina-kit/compiler/pool-node'
 import '@dimina-kit/compiler/stage-worker'
@@ -23,6 +24,16 @@ void assetDir
 resolveBrowserAssets(COMPILER_BROWSER_ASSETS)
 
 const outputs: Record<string, string | Uint8Array> = collectOutputs({ fs: {}, targetPath: '/dist' })
+
+const { templateExts } = resolveFileTypes(QD_FILE_TYPES)
+const isTemplate: boolean = hasExt('pages/index/index.qdml', templateExts)
+void isTemplate
+// The published dialect is frozen at runtime, so the declarations have to say so —
+// otherwise "just add one more extension" type-checks and throws in the browser.
+// @ts-expect-error QD_FILE_TYPES' lists are readonly
+QD_FILE_TYPES.template?.push('qdx')
+// @ts-expect-error hasExt takes the extension list, not a single extension
+hasExt('pages/index/index.qdml', '.qdml')
 void outputs
 // @ts-expect-error products are text OR bytes; a downstream must narrow before treating one as a string
 const textOnly: Record<string, string> = collectOutputs({ fs: {}, targetPath: '/dist' })
@@ -70,5 +81,13 @@ export async function compileOnce(): Promise<string> {
 
 const nodePool = createNodeCompilerPool({ stages: ['logic'] })
 void nodePool
+
+// The published dialect must go into the compile entries exactly as the README shows
+// it. Its lists are frozen, so an entry still asking for mutable `string[]` rejects
+// it with TS2322 — a downstream would have to copy the arrays to get past its own
+// type-check, which is how each host ends up with its own drifting copy again.
+void pool.compile({ files: { 'app.json': '{}' }, workPath: '/project', options: { fileTypes: QD_FILE_TYPES } })
+void compileMiniApp({ fs: {}, workPath: '/project', options: { fileTypes: QD_FILE_TYPES } })
+void nodePool.build('/out', '/project', true, { fileTypes: QD_FILE_TYPES })
 // @ts-expect-error stages is a list of stage names
 createNodeCompilerPool({ stages: 'logic' })

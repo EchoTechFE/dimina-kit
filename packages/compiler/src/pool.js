@@ -212,7 +212,7 @@ export function createCompilerPool(options) {
    * @param {{
    *   files: Record<string, string | Uint8Array>,
    *   workPath?: string,
-   *   options?: { fileTypes?: { template?: string[], style?: string[], viewScript?: string[] } },
+   *   options?: { fileTypes?: { template?: readonly string[], style?: readonly string[], viewScript?: readonly string[] } },
    * } | Record<string, string | Uint8Array>} input
    *   Source files are text or raw bytes: an image belongs in the map as a Uint8Array,
    *   not as a decoded string (postMessage carries it as bytes, and the stage worker

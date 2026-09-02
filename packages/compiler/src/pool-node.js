@@ -65,7 +65,7 @@ const DEFAULT_IDLE_SHRINK_MS = 300000
 let chain = Promise.resolve()
 
 /**
- * @typedef {{ template?: string[], style?: string[], viewScript?: string[] }} FileTypes
+ * @typedef {{ template?: readonly string[], style?: readonly string[], viewScript?: readonly string[] }} FileTypes
  * @typedef {{ sourcemap?: boolean, fileTypes?: FileTypes }} BuildOptions
  * @typedef {{ appId: string, name: string, path: string }} BuildResult
  */

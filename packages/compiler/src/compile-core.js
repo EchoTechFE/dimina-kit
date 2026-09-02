@@ -516,7 +516,7 @@ let compileChain = Promise.resolve()
  * Compile a mini-program against a caller-injected fs. Calls are serialized per
  * realm (see the singleton note above). Convenience wrapper that runs
  * `setupCompile` + all stages + `collectOutputs` in one realm.
- * @param {{ fs: object, workPath?: string, options?: { fileTypes?: { template?: string[], style?: string[], viewScript?: string[] } } }} opts
+ * @param {{ fs: object, workPath?: string, options?: { fileTypes?: { template?: readonly string[], style?: readonly string[], viewScript?: readonly string[] } } }} opts
  *   fs:       a node:fs replacement (sync subset: existsSync/readFileSync/
  *             readdirSync{withFileTypes}/statSync/writeFileSync/mkdirSync{recursive}/
  *             copyFileSync/rmSync), already seeded with the project source under

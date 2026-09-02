@@ -23,6 +23,7 @@
     "src/pool-node.js",
     "src/stage-worker.js",
     "src/toolchain.js",
-    "src/browser-assets.js"
+    "src/browser-assets.js",
+    "src/file-types.js"
   ]
 }
