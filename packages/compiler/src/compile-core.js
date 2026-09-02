@@ -136,10 +136,27 @@ function ensureAppIdFs(fs, configPath) {
 // TextDecoder strips it, so a BOM-prefixed file would come out three bytes shorter
 // than it went in — exactly the kind of silent rewrite this function exists to avoid.
 const utf8Strict = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
-function decodeProduct(bytes) {
+
+// "Does it decode as UTF-8" catches PNGs and fonts, but it is not a reliable test for
+// "is this text": short binary files can be valid UTF-8 by accident. The smallest legal
+// .wasm module is its 8-byte header (00 61 73 6D 01 00 00 00) — every byte decodes, so
+// it would come back as a string and blow up in WebAssembly.instantiate(), which takes
+// bytes only. For file types that are binary by definition, skip the decode entirely.
+// Extension-only, so a text product can never be pushed onto this list by its contents.
+const BINARY_EXTS = new Set([
+  '.wasm',
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif', '.bmp', '.ico', '.tif', '.tiff',
+  '.ttf', '.otf', '.woff', '.woff2', '.eot',
+  '.mp3', '.wav', '.ogg', '.m4a', '.mp4', '.webm', '.mov',
+  '.pdf', '.zip', '.gz', '.br',
+])
+
+function decodeProduct(bytes, relPath) {
   // A fs backend that ignores the missing encoding and hands back a string is taken
   // at its word — same as before this function existed.
   if (typeof bytes === 'string') return bytes
+  const dot = relPath.lastIndexOf('.')
+  if (dot > relPath.lastIndexOf('/') && BINARY_EXTS.has(relPath.slice(dot).toLowerCase())) return bytes
   try {
     return utf8Strict.decode(bytes)
   } catch {
@@ -169,7 +186,10 @@ function readOutputs(fs, target) {
       }
       const full = `${dir}/${e.name}`
       if (e.isDirectory()) walk(full)
-      else out[full.slice(prefix.length)] = decodeProduct(fs.readFileSync(full))
+      else {
+        const rel = full.slice(prefix.length)
+        out[rel] = decodeProduct(fs.readFileSync(full), rel)
+      }
     }
   }
   walk(prefix.slice(0, -1))

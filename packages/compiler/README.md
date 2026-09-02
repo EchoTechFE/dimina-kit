@@ -373,13 +373,13 @@ async function filesFromDir(dir, prefix = '') {           // 只读递来的 han
 - **产物写回同一个 fs。** compiler `writeFileSync` 把产物写进你的 fs，所以传入的 fs 必须**可写**。产物目录 `targetPath` 见下。
 - **编译会修改你的 fs。** 缺 `project.config.json`/appid 时，会往 `${workPath}/project.config.json` 写入一个 appid（`dmlocalpreview`）——传入的 fs 不能当成只读快照。
 - **同步契约，不需要 `fs.promises`。** `DiminaFs` 只要求同步方法（`existsSync`/`readFileSync`/`readdirSync{withFileTypes}`/`statSync`/`writeFileSync`/`mkdirSync{recursive}`/`copyFileSync`/`rmSync`）——编译路径不碰 async fs。纯异步后端（只有 Promise 版读写）没法当 fs 用。
-- **`readFileSync` 不带编码参数时必须返回字节。** `collectOutputs` 靠这个来区分文本产物和图片：先按严格 UTF-8 解码，解不出来就原样把字节交给调用方。后端若无视编码参数一律返回字符串，二进制产物就会在这一步坏掉。
+- **`readFileSync` 不带编码参数时必须返回字节。** `collectOutputs` 靠这个来区分文本产物和图片：扩展名摆明是二进制的直接给字节，其余按严格 UTF-8 解码，解不出来就原样把字节交给调用方。后端若无视编码参数一律返回字符串，二进制产物就会在这一步坏掉。
 
 `@dimina/compiler` 自己并不知道 fs 被换掉了。
 
 ## 已知限制与错误处理
 
-- **`files` 里的一条产物可能是字符串，也可能是 `Uint8Array`。** `collectOutputs` 对每条产物先按严格 UTF-8 解码，能解出来就是字符串（JS/CSS/JSON 等），解不出来（图片、字体等 compiler `copyFileSync` 到 `main/static` 的资源）就原样给字节。下游拿到一条产物当字符串用之前要先判类型——`typeof v === 'string'`。入参方向同理：源码里的图片直接以 `Uint8Array` 放进 `files` 即可，pool 会把它当文件写进 worker 的 memfs。
+- **`files` 里的一条产物可能是字符串，也可能是 `Uint8Array`。** `collectOutputs` 先看扩展名：`.wasm`、图片、字体、音视频、压缩包这些天生是二进制的，一律原样给字节，不解码——最小的合法 `.wasm` 只有 8 个字节的头，整份都是合法 UTF-8，光看内容判会把它当成文本交出去，宿主拿去喂 `WebAssembly.instantiate()` 直接类型错误。其余产物按严格 UTF-8 解码，能解出来就是字符串（JS/CSS/JSON 等），解不出来就原样给字节。下游拿到一条产物当字符串用之前要先判类型——`typeof v === 'string'`。入参方向同理：源码里的图片直接以 `Uint8Array` 放进 `files` 即可，pool 会把它当文件写进 worker 的 memfs。
 - **`targetPath` 来自环境。** compiler 产物目录取 `process.env.TARGET_PATH`，否则 `os.tmpdir()/dimina-fe-dist-<时间戳>`（浏览器 os shim 下通常 `/tmp/...`）。`setupCompile` 会先 `rmSync` 清空它——别把 `TARGET_PATH` 指到源码目录或共享目录。用 `setupCompile` 返回的 `targetPath` 喂 `collectOutputs`。
 - **不是全 fail-fast。** 缺 fs 方法、坏 appid、坏 `project.config.json`、miniprogram_npm 构建失败会 **reject**；但**样式预处理器失败（如当前浏览器构建暂不支持 `.less`）会被吞掉、降级用原始 CSS**，PostCSS 解析失败返回空串，资源拷贝失败只 `console.log`，logic esbuild 压缩失败回退未压缩代码。**用 pool 时把这些拿出来的办法是 `createCompilerPool({ onLog })`**——它把 worker 内编译器的 `console.*` 诊断（带 stage 标签）转发给你；也可在产物为空/缺失时二次校验。
 
@@ -437,7 +437,7 @@ pnpm --filter @dimina-kit/compiler build:types    # 仅 dist/types/*.d.ts
 
 ## 测试
 
-`pnpm --filter @dimina-kit/compiler test`（也就是 `turbo run test` 会跑到的那份）只包含不需要构建的三份契约测试——静态资源清单（`test:browser-assets`）、错误码（`test:error-codes`）和二进制入参播种（`test:binary-seed`）；下面这些各自要先构建，按需单跑。
+`pnpm --filter @dimina-kit/compiler test`（也就是 `turbo run test` 会跑到的那份）包含四份契约测试——静态资源清单（`test:browser-assets`）、错误码（`test:error-codes`）、二进制入参播种（`test:binary-seed`）和二进制产物保真（`test:binary-outputs`）。最后一份要拿 `dist` 里的真实 bundle 跑，但它自己不构建：turbo 里 `@dimina-kit/compiler#test` 依赖本包的 `build`，构建只发生一次，测试期间没有人再往 `dist` 写。脱离 turbo 单跑时用带构建的 `test:binary-outputs`（`test:binary-outputs:prebuilt` 是不构建的那个入口）。下面这些各自要先构建，按需单跑。
 
 测试里用 memfs 扮演「下游 fs」：
 

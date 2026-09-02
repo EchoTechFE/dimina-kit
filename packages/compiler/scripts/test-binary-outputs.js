@@ -201,5 +201,17 @@ chk(mojibake.length === 0, `no product came back with replacement characters (${
     `a BOM-prefixed product survives byte-identical (${bomBytes.length} bytes in, ${roundTripped ? roundTripped.length : 'nothing'} out)`)
 }
 
-console.log(failed ? `\n❌ ${failed} binary-output assertion(s) failed.` : '\n✅ referenced assets survive the compile byte-identical, through the pool and through the seams; text products are unchanged.')
+// A .wasm module must come back as bytes even though it decodes cleanly as UTF-8. The
+// 8-byte header below is a complete, legal module, and every one of its bytes is valid
+// UTF-8 — decoding by content alone hands the host a string, and WebAssembly.instantiate()
+// takes bytes only.
+{
+  const wasmBytes = new Uint8Array([0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00])
+  fs.writeFileSync(`${ctx.targetPath}/tiny.wasm`, wasmBytes)
+  const collected = collectOutputs({ fs, targetPath: ctx.targetPath })['tiny.wasm']
+  chk(collected instanceof Uint8Array && sameBytes(collected, wasmBytes),
+    `a .wasm product stays bytes even though it is valid UTF-8 (got ${collected instanceof Uint8Array ? `bytes(${collected.length})` : typeof collected})`)
+}
+
+console.log(failed ? `\n❌ ${failed} binary-output assertion(s) failed.` :'\n✅ referenced assets survive the compile byte-identical, through the pool and through the seams; text products are unchanged.')
 process.exit(failed ? 1 : 0)

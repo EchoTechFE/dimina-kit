@@ -45,6 +45,16 @@
       "cache": true,
       "outputs": ["test-report*.json", "coverage/**"]
     },
+    // 全局的 test 只依赖 ^build（上游包），compiler 自己的 dist 不在其中。而 compiler
+    // 的几份契约测试要拿 dist 里的真实 bundle 来跑：它们自己 build 的话，就会跟
+    // devkit#test 触发的 compiler#build 同时往同一个 dist 写——那份 build 会先删 chunk
+    // 目录再重写，正在读产物的另一个测试就会撞上缺文件。所以这里让 compiler#test 依赖
+    // 自己的 build，由 turbo 保证先构建、且只构建一次，测试脚本本身不再构建。
+    "@dimina-kit/compiler#test": {
+      "dependsOn": ["^build", "build"],
+      "cache": true,
+      "outputs": ["test-report*.json", "coverage/**"]
+    },
     "test:coverage": {
       "dependsOn": ["^build"],
       "cache": true,
