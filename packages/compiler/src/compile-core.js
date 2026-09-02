@@ -132,7 +132,10 @@ function ensureAppIdFs(fs, configPath) {
 // come back corrupted, so callers had to go read the fs themselves to get real
 // assets. Strict decoding is exact in both directions: text is byte-identical to
 // before, and anything that isn't valid UTF-8 stays raw bytes.
-const utf8Strict = new TextDecoder('utf-8', { fatal: true })
+// ignoreBOM keeps a leading U+FEFF in the string instead of eating it: by default
+// TextDecoder strips it, so a BOM-prefixed file would come out three bytes shorter
+// than it went in — exactly the kind of silent rewrite this function exists to avoid.
+const utf8Strict = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
 function decodeProduct(bytes) {
   // A fs backend that ignores the missing encoding and hands back a string is taken
   // at its word — same as before this function existed.

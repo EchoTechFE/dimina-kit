@@ -127,8 +127,9 @@ createCompilerPool(options: {
   retryOnWorkerDeath?: boolean    // 默认 true:worker 死亡导致的编译失败,整次透明重试一次
 }): {
   warmup(): Promise<void>
-  compile(input: { files: Record<string,string>, workPath?: string })
-    : Promise<{ appId: string, name: string, files: Record<string,string> }>
+  // 两个 files 的值:文本给 string,图片等二进制给 Uint8Array(原样穿过,不做编解码)
+  compile(input: { files: Record<string, string | Uint8Array>, workPath?: string })
+    : Promise<{ appId: string, name: string, files: Record<string, string | Uint8Array> }>
   dispose(): Promise<void>
   stages: string[]
 }

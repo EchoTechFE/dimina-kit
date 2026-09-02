@@ -71,7 +71,7 @@
     "test:pool-scopehash": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-pool-scopehash.js",
     "test": "pnpm run test:browser-assets && pnpm run test:error-codes && pnpm run test:binary-seed",
     "test:binary-seed": "node scripts/test-binary-seed.js",
-    "test:binary-outputs": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-binary-outputs.js",
+    "test:binary-outputs": "node scripts/build-compiler.js node && node scripts/build-compiler.js browser && node --import ./scripts/register-kit.js scripts/test-binary-outputs.js",
     "test:error-codes": "node scripts/test-error-codes.js",
     "test:browser-assets": "node scripts/test-browser-assets.js",
     "test:crypto-shim": "node scripts/test-crypto-shim.js",
