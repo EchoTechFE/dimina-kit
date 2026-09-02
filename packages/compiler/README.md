@@ -413,6 +413,8 @@ try {
 
 工具链导入失败的码是 **worker 自己打的**——只有它能区分「宿主的 wasm 资源没加载上」和「用户项目编不过」，两者到 pool 手里都是同一种 `{ type:'error' }` 回复。pool 原样转发这个码，但只认表里这些值：worker 回复里带的是别的东西（比如 memfs 抛的 `ENOENT`）就按 `compiler-stage-error` 记，宿主不会拿到一个自己分支里没有的码；没带码的同样记为 `compiler-stage-error`。
 
+主线程上抛出来的失败同样只会带表里的码。这条路上最常见的来源是 `node:fs`，而它的错误天生带着 `EACCES`、`ENOSPC` 这类 libc 名字：往 `outputDir` 拷产物失败一律记 `compiler-output-write-failed`，其余的按报错文字重新分类，libc 名字不会漏出来。
+
 ## 依赖前置
 
 编译器实体源码在 `dimina` 子模块里，dart-sass 等在其 fe workspace。构建前确保子模块已初始化、依赖已装：

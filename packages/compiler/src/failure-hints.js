@@ -5,7 +5,7 @@
 // this classification is pure string work anyone — including scripts/test-error-codes.js
 // — can import and drive directly.
 import process from 'node:process'
-import { COMPILER_ERROR_CODES } from './error-codes.js'
+import { COMPILER_ERROR_CODES, isCompilerErrorCode } from './error-codes.js'
 
 // esbuild's node lib drives a spawned long-lived binary child (its "service"). When that
 // child dies (spawn ENOENT in a packaged app, OOM kill, AV kill), esbuild reports every
@@ -69,8 +69,12 @@ export function errorCodeForMessage(message) {
 
 /**
  * Give a raw main-thread failure the same treatment a stage reply gets: a published code,
- * the packaging hint its message earned, and the stage it came from. An error that already
- * carries a code keeps it — a code set closer to the failure knows more than this does.
+ * the packaging hint its message earned, and the stage it came from.
+ *
+ * Only a code from the published table survives. A code set closer to the failure does know
+ * more, but most failures here come out of node:fs, and those arrive with .code already set
+ * to a libc name — leaving it alone would publish 'EACCES' or 'ENOSPC' out of the pool, and
+ * the host switches on the table, so an unknown code reads as "no category at all".
  *
  * @param {unknown} err
  * @param {string | null} [stage] the stage to record when the error does not name one
@@ -80,10 +84,12 @@ export function errorCodeForMessage(message) {
  */
 export function tagFailure(err, stage, forcedCode) {
   const e = err instanceof Error ? err : new Error(`[compiler] ${String(err)}`)
-  if (!e.code) {
+  if (forcedCode) {
+    e.code = forcedCode
+  } else if (!isCompilerErrorCode(e.code)) {
     const hint = oxcNativeBindingHint(e.message) || esbuildAsarSpawnHint(e.message)
     if (hint) e.message = `${e.message} — ${hint}`
-    e.code = forcedCode || errorCodeForMessage(e.message)
+    e.code = errorCodeForMessage(e.message)
   }
   if (stage && !e.stage) e.stage = stage
   return e

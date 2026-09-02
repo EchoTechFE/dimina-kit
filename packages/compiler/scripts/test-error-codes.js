@@ -151,6 +151,18 @@ async function main() {
     chk(tagFailure(new Error('EACCES: permission denied'), null, COMPILER_ERROR_CODES.outputWriteFailed).code
       === COMPILER_ERROR_CODES.outputWriteFailed,
     'a caller that already knows the category (copying to outputDir failed) passes it in')
+
+    // The real failures this path sees come from node:fs, and those errors arrive with
+    // .code already set to a libc name. Letting an existing .code win would publish
+    // 'EACCES'/'ENOSPC' out of the pool — codes that are in no table the host switches on.
+    const fsDenied = Object.assign(new Error('EACCES: permission denied, rename ...'), { code: 'EACCES' })
+    chk(tagFailure(fsDenied, null, COMPILER_ERROR_CODES.outputWriteFailed).code === COMPILER_ERROR_CODES.outputWriteFailed,
+      'a node:fs error that already carries EACCES still comes out as compiler-output-write-failed')
+    const fsFull = Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' })
+    chk(tagFailure(fsFull, 'setup').code === COMPILER_ERROR_CODES.stageError,
+      'and with no forced code it gets reclassified, not passed through')
+    chk(tagFailure(fsFull, 'setup').stage === 'setup',
+      'reclassifying the code leaves the stage alone')
   }
 
   // --- a call the host got wrong is not the project's fault ----------------------
