@@ -44,7 +44,7 @@ const WORKER_DEATH_CODES = new Set(['compiler-worker-timeout', 'compiler-worker-
  *   toolchainSetupURL: string,      // required: ESM URL that installs __esbuildTransform/__oxcParseSync in the worker
  *   stages?: string[],              // default ['logic','view','style']
  *   workPath?: string,              // default '/work'
- *   onLog?: (entry: { level: string, message: string }) => void,  // worker console diagnostics
+ *   onLog?: (entry: { level: string, message: string, stage: string }) => void,  // worker console diagnostics, tagged with the stage worker that emitted them
  *   sendTimeoutMs?: number,         // default 30000 — inactivity window per setup/compile-subset round trip
  *   warmupTimeoutMs?: number,       // default 120000 — inactivity window for the warmup round trip
  *   retryOnWorkerDeath?: boolean,   // default true — one transparent whole-attempt retry after a worker death

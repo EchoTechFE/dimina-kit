@@ -18,12 +18,30 @@
   },
   "main": "./dist/compile-core.node.js",
   "exports": {
-    ".": "./dist/compile-core.node.js",
-    "./browser": "./dist/compile-core.browser.js",
-    "./pool-node": "./dist/pool.node.js",
-    "./pool": "./dist/pool.browser.js",
-    "./stage-worker": "./dist/stage-worker.browser.js",
-    "./toolchain": "./dist/toolchain.browser.js",
+    ".": {
+      "types": "./dist/types/compile-core.d.ts",
+      "default": "./dist/compile-core.node.js"
+    },
+    "./browser": {
+      "types": "./dist/types/browser-entry.d.ts",
+      "default": "./dist/compile-core.browser.js"
+    },
+    "./pool-node": {
+      "types": "./dist/types/pool-node.d.ts",
+      "default": "./dist/pool.node.js"
+    },
+    "./pool": {
+      "types": "./dist/types/pool.d.ts",
+      "default": "./dist/pool.browser.js"
+    },
+    "./stage-worker": {
+      "types": "./dist/types/stage-worker.d.ts",
+      "default": "./dist/stage-worker.browser.js"
+    },
+    "./toolchain": {
+      "types": "./dist/types/toolchain.d.ts",
+      "default": "./dist/toolchain.browser.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -36,7 +54,9 @@
     "snapshot:upstream-versions": "node scripts/snapshot-upstream-versions.js",
     "build:node": "node scripts/build-compiler.js node",
     "build:browser": "node scripts/build-compiler.js browser",
-    "build": "pnpm run build:node && pnpm run build:browser",
+    "build:types": "tsc -p tsconfig.types.json",
+    "build": "pnpm run build:node && pnpm run build:browser && pnpm run build:types",
+    "check-types": "pnpm run build:types && node scripts/test-types.js",
     "test:node": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-node.js",
     "test:appid": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-appid-fallback.js",
     "test:hardening": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-hardening.js",
@@ -97,6 +117,7 @@
     }
   },
   "devDependencies": {
-    "esbuild-wasm": "^0.28.1"
+    "esbuild-wasm": "^0.28.1",
+    "typescript": "5.9.2"
   }
 }

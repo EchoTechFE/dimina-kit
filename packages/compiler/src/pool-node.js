@@ -58,6 +58,19 @@ function isDeadToolchainServiceError(message) {
 // rapid edit-compile loops warm while an IDE left idle overnight stops holding the memory.
 const DEFAULT_IDLE_SHRINK_MS = 300000
 
+// ALL Node disk-pool builds serialize through this single module-level chain, not a
+// per-instance one: setupCompile/publishToDist go through dmcc's process-global env
+// singletons (storeInfo / getTargetPath / getAppId), so builds from two DIFFERENT
+// pool instances would corrupt each other just as surely as two builds in one pool
+// (one pool publishing the other's staging dir under the other's appId).
+let chain = Promise.resolve()
+
+/**
+ * @typedef {{ template?: string[], style?: string[], viewScript?: string[] }} FileTypes
+ * @typedef {{ sourcemap?: boolean, fileTypes?: FileTypes }} BuildOptions
+ * @typedef {{ appId: string, name: string, path: string }} BuildResult
+ */
+
 /**
  * Create a resident Node stage-worker pool.
  * @param {{
@@ -66,15 +79,8 @@ const DEFAULT_IDLE_SHRINK_MS = 300000
  *   retryOnWorkerDeath?: boolean,  // default true — one transparent whole-build retry after a worker death
  *   idleShrinkMs?: number|false,   // default 300000 — idle ms before workers are shrunk; 0/false/Infinity disables
  * }} [opts]
- * @returns {{ build: (outputDir:string, workPath:string, useAppIdDir?:boolean, options?:object)=>Promise<{appId:string,name:string,path:string}>, dispose: ()=>Promise<void>, stages: string[] }}
+ * @returns {{ build: (outputDir: string, workPath: string, useAppIdDir?: boolean, options?: BuildOptions) => Promise<BuildResult>, dispose: () => Promise<void>, stages: string[] }}
  */
-// ALL Node disk-pool builds serialize through this single module-level chain, not a
-// per-instance one: setupCompile/publishToDist go through dmcc's process-global env
-// singletons (storeInfo / getTargetPath / getAppId), so builds from two DIFFERENT
-// pool instances would corrupt each other just as surely as two builds in one pool
-// (one pool publishing the other's staging dir under the other's appId).
-let chain = Promise.resolve()
-
 export function createNodeCompilerPool({
   stages = STAGE_NAMES,
   sendTimeoutMs = DEFAULT_SEND_TIMEOUT_MS,
@@ -313,6 +319,13 @@ export function oxcNativeBindingHint(message) {
 // Callers that want structured errors (`.stage`/`.code`) + explicit teardown should
 // use createNodeCompilerPool() directly instead.
 let singleton = null
+/**
+ * @param {string} outputDir
+ * @param {string} workPath
+ * @param {boolean} [useAppIdDir]
+ * @param {BuildOptions} [options]
+ * @returns {Promise<BuildResult>}
+ */
 export default async function build(outputDir, workPath, useAppIdDir = true, options = {}) {
   if (!singleton) singleton = createNodeCompilerPool()
   try {

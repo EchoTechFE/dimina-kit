@@ -10,6 +10,16 @@
 pnpm add @dimina-kit/compiler
 ```
 
+## 类型声明
+
+包自带 `.d.ts`（从源码 JSDoc 生成），六个导出子路径都带 `types` 条件，TypeScript 下游直接 import 就有补全和参数校验，不用自己维护一份 ambient 声明：
+
+```ts
+import { createCompilerPool } from '@dimina-kit/compiler/pool'
+```
+
+声明由 `build:types` 生成到 `dist/types/`（`build` 已经包含这一步）。`check-types` 会校验每个子路径都有 `types` 条件、指向的文件确实存在，再用 `types-fixture/consumer.ts` 按下游视角完整类型检查一遍：声明缺失或退化成 `any` 时，fixture 里那些故意写错的调用不再报错，tsc 就会因为「未使用的 `@ts-expect-error`」失败。
+
 ## 三种接入，按需选择
 
 | 导出 | 用途 | 编排（并行/复用/合并）由谁做 |
@@ -362,9 +372,10 @@ pnpm install
 ## 构建
 
 ```bash
-pnpm --filter @dimina-kit/compiler build          # node + 三个 browser bundle
+pnpm --filter @dimina-kit/compiler build          # node + 三个 browser bundle + 类型声明
 pnpm --filter @dimina-kit/compiler build:browser  # 仅 browser(core + stage-worker + pool)
 pnpm --filter @dimina-kit/compiler build:node     # 仅 node
+pnpm --filter @dimina-kit/compiler build:types    # 仅 dist/types/*.d.ts
 ```
 
 ## 测试
