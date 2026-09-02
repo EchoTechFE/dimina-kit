@@ -39,6 +39,23 @@ import { createCompilerPool } from '@dimina-kit/compiler/pool'
 | `dist/stage-worker.browser.js` | 浏览器 Worker | 常驻 stage worker（已内联 core + memfs），pool 用它做并行 |
 | `dist/pool.browser.js` | 浏览器主线程 | 编排池 `createCompilerPool` |
 
+### 浏览器静态资源：哪三个文件必须原样托管
+
+上表里带 `.browser.js` 的三个产物，宿主要**原样拷贝、原样托管**，不能再过一遍自己的打包器。stage worker 只被 `new Worker(url)` 引用，另外两个只被 fetch 下来从 Blob URL import——没有一处是打包器能看见的静态 import，所以打包器要么整个漏掉这些文件，要么把它们改写坏，两种情况都不报错，只在运行时 404 或行为异常。
+
+文件名由本包给出，不要在宿主里手抄：
+
+```js
+const { resolveBrowserAssets } = require('@dimina-kit/compiler/browser-assets')
+const { files } = resolveBrowserAssets(require.resolve('@dimina-kit/compiler/browser'))
+// files:dist 里那三个 .browser.js 的绝对路径，按清单顺序
+for (const file of files) fs.copyFileSync(file, path.join(publicDir, path.basename(file)))
+```
+
+`./browser-assets` 同时发 ESM 和 CJS（走 `require` 条件），只做字符串拼接，不依赖 `node:path`。
+
+每次浏览器构建都会拿 esbuild 的 metafile 对着这份清单自检：产物改了名、被拆出新 chunk、或某个静态资源开始带静态 import（不再是自包含的单文件），构建当场失败，而不是几个月后在某个宿主那里 404。`toolchain.browser.js` 不在清单里——它由宿主用自己的打包器 import（`@dimina-kit/compiler/toolchain`），拷过去也没人 fetch。
+
 ## 架构
 
 本包是**编译器与文件系统之间的一层适配**，再往上叠一层**编排**。真正的编译逻辑在 `dimina` 子模块的 `@dimina/compiler`，本包用一个**无后端的 fs 转发 shim** 把它每一次 `fs.xxx` 指向下游注入的 fs；`pool` 则在上面替下游管好 worker 池与并行——下游不再手写任何 worker/合并逻辑。
@@ -380,6 +397,8 @@ pnpm --filter @dimina-kit/compiler build:types    # 仅 dist/types/*.d.ts
 
 ## 测试
 
+`pnpm --filter @dimina-kit/compiler test`（也就是 `turbo run test` 会跑到的那份）只包含不需要构建的静态资源契约测试；下面这些各自要先构建，按需单跑。
+
 测试里用 memfs 扮演「下游 fs」：
 
 ```bash
@@ -393,6 +412,7 @@ pnpm --filter @dimina-kit/compiler test:lazy-toolchain # 按 stage 懒加载边�
 pnpm --filter @dimina-kit/compiler test:idle-shrink    # idle 收缩:超时终止 worker、下次 build 透明复活、活动取消、进程可自然退出
 pnpm --filter @dimina-kit/compiler test:stage-worker-message-order # stage worker 回复严格按请求到达序串行(build 在途时 introspect 不抢 FIFO 配对)
 pnpm --filter @dimina-kit/compiler test:stage-load-retry           # stage 工具链加载失败不缓存,chunk 恢复后 preloadStage 可重试成功
+pnpm --filter @dimina-kit/compiler test:browser-assets             # 静态资源清单:改名/新 chunk/出现静态 import 都会被构建期检查拦下
 ```
 
 `pool` 的浏览器端到端验证在 `dimina-web-client`（`npm run test:pool`，Playwright 驱动，产物与单线程逐结构一致）。`pool-node` 的宿主端验证在 `@dimina-kit/devkit` 测试套件（真实 fork + `openProject`）。
@@ -406,9 +426,10 @@ pnpm --filter @dimina-kit/compiler test:stage-load-retry           # stage 工�
 - `src/pool-node.js` — **Node 编排池** `createNodeCompilerPool` + dmcc drop-in 默认导出 `build()`：常驻 worker_threads、真实磁盘、全局 build 串行、死 worker 懒复活、idle 自动收缩（`idleShrinkMs`）。
 - `src/stage-worker-node.js` — Node 常驻 stage worker：spawn 时按 workerData 里的 stage 身份预热本 stage 工具链，恢复 storeInfo → `runStage(stage, { sourcemap })` 写共享 staging 目录；应答 `{ type: 'introspect' }` 报告本 realm 已加载的重依赖。
 - `src/toolchain.js` — 写 `toolchainSetupURL` 模块的可选助手（`installOxc` / `installEsbuildFromURL`，后者内置 esbuild-wasm 静态资源的 Blob-URL 兜底）。导出为 `@dimina-kit/compiler/toolchain`。
+- `src/browser-assets.js` — 浏览器静态资源清单与契约（`COMPILER_BROWSER_ASSETS` / `resolveBrowserAssets`，见上文），构建期检查也用它。导出为 `@dimina-kit/compiler/browser-assets`。
 - `src/shims/fs.js` — **无后端的 fs 转发层**（`setFs`/`resetFs`/`getFs`）；compiler 所有 `fs.xxx` 走它，未注入即抛错。
 - `src/shims/*` — 其余 node 内置与原生依赖的浏览器替身（oxc/esbuild/less/`os.homedir`/…）。
-- `scripts/build-compiler.js` — esbuild 打包。onLoad 给 logic/view/style-compiler 与 utils 追加 `__reset*` 导出（喂 `resetCompilerState`，不改子模块源码）；浏览器分支内联真实 `cssnano`+`autoprefixer`（autoprefixer pin 到 node 运行时解析的同一份，避免 esbuild 解析到多加 `-ms-` 前缀的另一版本）；browser 模式产出 core / stage-worker / pool 三个单文件 bundle；node 模式开 `splitting`（stage 编译器成为运行时 chunk——单文件会把 chunk 的 external `import 'sass'` 提升回入口顶层，懒加载会静默失效）。
+- `scripts/build-compiler.js` — esbuild 打包。onLoad 给 logic/view/style-compiler 与 utils 追加 `__reset*` 导出（喂 `resetCompilerState`，不改子模块源码）；浏览器分支内联真实 `cssnano`+`autoprefixer`（autoprefixer pin 到 node 运行时解析的同一份，避免 esbuild 解析到多加 `-ms-` 前缀的另一版本）；browser 模式产出 core / stage-worker / pool 三个单文件 bundle，并按 metafile 对 `src/browser-assets.js` 的清单自检（漏产物、多产物、静态资源出现静态 import 都直接失败）；node 模式开 `splitting`（stage 编译器成为运行时 chunk——单文件会把 chunk 的 external `import 'sass'` 提升回入口顶层，懒加载会静默失效）。
 - `scripts/{register-kit,kit-resolve-hook}.js` — node 用的 ESM resolve hook（默认解析优先、从 dimina-kit workspace 根兜底解析 bare 依赖）。
 
 ## License

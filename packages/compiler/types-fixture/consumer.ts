@@ -5,6 +5,7 @@
 // this file with "unused '@ts-expect-error' directive".
 
 import { collectOutputs, STAGE_NAMES } from '@dimina-kit/compiler'
+import { COMPILER_BROWSER_ASSETS, resolveBrowserAssets } from '@dimina-kit/compiler/browser-assets'
 import { initToolchain } from '@dimina-kit/compiler/browser'
 import { createCompilerPool } from '@dimina-kit/compiler/pool'
 import { createNodeCompilerPool } from '@dimina-kit/compiler/pool-node'
@@ -13,6 +14,13 @@ import { installOxc } from '@dimina-kit/compiler/toolchain'
 
 const stages: string[] = STAGE_NAMES
 void stages
+
+const assetNames: string[] = COMPILER_BROWSER_ASSETS.map(asset => asset.name)
+void assetNames
+const assetDir: string = resolveBrowserAssets('/pkg/dist/compile-core.browser.js').dir
+void assetDir
+// @ts-expect-error resolveBrowserAssets takes the resolved entry path, not the asset list
+resolveBrowserAssets(COMPILER_BROWSER_ASSETS)
 
 const outputs: Record<string, string> = collectOutputs({ fs: {}, targetPath: '/dist' })
 void outputs
