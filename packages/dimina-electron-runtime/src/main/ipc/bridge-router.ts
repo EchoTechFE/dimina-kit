@@ -1074,10 +1074,13 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
     const ap = appByWc(state, event.sender)
     if (!ap) return
     // One service host serves the session's whole page stack, so the sender
-    // names no page (see `ServiceInvokePayload`): the default is the live
-    // top-of-stack page, and a message about a specific page names it itself —
-    // `routeFromService` prefers `pageFromMsg` over this default.
-    const page = activePageOf(state, ap)
+    // names no page (see `ServiceInvokePayload`). Resolve in the message's own
+    // order of authority: the page the message names, then the session's live
+    // top-of-stack page. Naming has to come first — a `reLaunch` closes the
+    // launch page (clearing `activeBridgeId`, with no root left to fall back
+    // to) before the shell reports the new top, and a call arriving in that
+    // gap names a page that is already open and must not be dropped.
+    const page = pageFromMsg(state, ap, payload.msg) ?? activePageOf(state, ap)
     if (!page) return
     routeFromService(state, ap, page, payload.msg, ctx)
   }

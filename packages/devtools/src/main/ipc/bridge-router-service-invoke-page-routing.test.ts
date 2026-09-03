@@ -211,9 +211,22 @@ function closePage(simulatorWc: MockWc, bridgeId: string): void {
   emitOn(C.PAGE_CLOSE, simulatorWc, payload)
 }
 
-/** Send an `invokeAPI` SERVICE_INVOKE that names no page — the common case (button taps, timers, ...). */
+/**
+ * Send an `invokeAPI` SERVICE_INVOKE that names no page — the fallback shape
+ * used only when routing has to fall through to the session's active page.
+ * Production `invokeMessage` always writes `bridgeId` (see
+ * `dimina/fe/packages/service/src/api/common/index.js`); this omits it to
+ * exercise that fallback path in isolation.
+ */
 function invokeApiFromServiceHost(serviceWc: MockWc, name: string): void {
   const msg: MessageEnvelope = { type: 'invokeAPI', target: 'container', body: { name, params: {} } }
+  const payload: ServiceInvokePayload = { msg }
+  emitOn(C.SERVICE_INVOKE, serviceWc, payload)
+}
+
+/** Send an `invokeAPI` SERVICE_INVOKE naming a specific page via `msg.body.bridgeId` — the production shape. */
+function invokeApiFromServiceHostFor(serviceWc: MockWc, name: string, bridgeId: string): void {
+  const msg: MessageEnvelope = { type: 'invokeAPI', target: 'container', body: { name, bridgeId, params: {} } }
   const payload: ServiceInvokePayload = { msg }
   emitOn(C.SERVICE_INVOKE, serviceWc, payload)
 }
@@ -283,5 +296,31 @@ describe('bridge-router — SERVICE_INVOKE page routing', () => {
 
     const navActionSends = simulatorWc.sentMessages.filter(m => m.channel === E.NAV_ACTION)
     expect(navActionSends).toHaveLength(0)
+  })
+
+  it('routes a call naming the new page even before it has been elected active (reLaunch window)', async () => {
+    const { ctx, simulatorWc } = makeCtx()
+    installBridgeRouter(ctx)
+
+    const { result: root, serviceWc } = await spawnSession(simulatorWc)
+
+    // Mirrors doReLaunch: open the new page first, but don't elect it active
+    // yet — ACTIVE_PAGE only fires from a React effect after the frame mounts.
+    const detail = await openPage(simulatorWc, root.appSessionId, 'pages/detail/detail')
+
+    // Then the old (root) page is torn down, clearing activeBridgeId with no
+    // root fallback left either — the session has no `activePageOf` result,
+    // even though `detail` is alive and named right in the message.
+    closePage(simulatorWc, root.bridgeId)
+
+    invokeApiFromServiceHostFor(serviceWc, 'navigateTo', detail.bridgeId)
+
+    const navActionSends = simulatorWc.sentMessages.filter(m => m.channel === E.NAV_ACTION)
+    expect(navActionSends).toHaveLength(1)
+    expect(navActionSends[0]!.payload).toMatchObject({
+      appSessionId: root.appSessionId,
+      bridgeId: detail.bridgeId,
+      name: 'navigateTo',
+    })
   })
 })
