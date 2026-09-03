@@ -89,11 +89,13 @@ function reportError(stage, error) {
   const message = error && error.stack ? error.stack : String(error)
   console.error(`[service-host] ${stage}`, error)
   ipcRenderer.send(CHANNELS.SERVICE_INVOKE, {
-    bridgeId,
     msg: {
       type: 'serviceHostError',
       target: 'container',
-      body: { stage, message },
+      // The spawn page goes in the body, where main reads page ids from
+      // (`readBridgeId`) — an error raised while it is still up is attributed
+      // to it, and one raised after it is gone falls back to the active page.
+      body: { stage, message, bridgeId },
     },
   })
 }
@@ -130,12 +132,16 @@ Object.defineProperty(globalThis, 'DiminaServiceBridge', {
       onMessageFn = typeof handler === 'function' ? handler : null
       scheduleDrain()
     },
+    // Neither send stamps this window's spawn bridgeId: it names the page this
+    // service host was STARTED for, which a reLaunch/redirectTo can close while
+    // the host keeps serving the session. Main routes by the sending
+    // webContents plus the page id the message itself carries.
     invoke(msg) {
-      ipcRenderer.send(CHANNELS.SERVICE_INVOKE, { bridgeId, msg })
+      ipcRenderer.send(CHANNELS.SERVICE_INVOKE, { msg })
       return undefined
     },
     publish(targetBridgeId, msg) {
-      ipcRenderer.send(CHANNELS.SERVICE_PUBLISH, { bridgeId, targetBridgeId, msg })
+      ipcRenderer.send(CHANNELS.SERVICE_PUBLISH, { targetBridgeId, msg })
     },
   },
   writable: false,

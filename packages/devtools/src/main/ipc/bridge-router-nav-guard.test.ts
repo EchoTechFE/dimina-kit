@@ -220,9 +220,9 @@ function emitOn(channel: string, sender: unknown, payload: unknown): void {
 }
 
 /** Forwards a wx.* nav/tab API invocation from the service host through the router. */
-function invokeApi(serviceWc: MockWc, bridgeId: string, name: string, params: Record<string, unknown>): void {
+function invokeApi(serviceWc: MockWc, name: string, params: Record<string, unknown>): void {
   const msg: MessageEnvelope = { type: 'invokeAPI', target: 'container', body: { name, params } }
-  const payload: ServiceInvokePayload = { bridgeId, msg }
+  const payload: ServiceInvokePayload = { msg }
   emitOn(C.SERVICE_INVOKE, serviceWc, payload)
 }
 
@@ -250,9 +250,9 @@ describe('bridge-router — navigateTo/redirectTo/reLaunch gate against the comp
       installFetchMock({ entryPagePath: ENTRY_PAGE, pages: [ENTRY_PAGE, OTHER_PAGE] })
       const { ctx, simulatorWc } = makeCtx()
       installBridgeRouter(ctx)
-      const { result, serviceWc } = await spawnSession(simulatorWc, ENTRY_PAGE)
+      const { serviceWc } = await spawnSession(simulatorWc, ENTRY_PAGE)
 
-      invokeApi(serviceWc, result.bridgeId, api, { url: `/${BAD_PAGE}`, success: 'ok-cb', fail: 'fail-cb', complete: 'complete-cb' })
+      invokeApi(serviceWc, api, { url: `/${BAD_PAGE}`, success: 'ok-cb', fail: 'fail-cb', complete: 'complete-cb' })
 
       expect(navActionMessages(simulatorWc), `${api} must NOT reach the simulator for a missing page`).toHaveLength(0)
 
@@ -271,9 +271,9 @@ describe('bridge-router — navigateTo/redirectTo/reLaunch gate against the comp
       installFetchMock({ entryPagePath: ENTRY_PAGE, pages: [ENTRY_PAGE, OTHER_PAGE] })
       const { ctx, simulatorWc } = makeCtx()
       installBridgeRouter(ctx)
-      const { result, serviceWc } = await spawnSession(simulatorWc, ENTRY_PAGE)
+      const { serviceWc } = await spawnSession(simulatorWc, ENTRY_PAGE)
 
-      invokeApi(serviceWc, result.bridgeId, api, { url: `/${OTHER_PAGE}?foo=1`, success: 'ok-cb', fail: 'fail-cb', complete: 'complete-cb' })
+      invokeApi(serviceWc, api, { url: `/${OTHER_PAGE}?foo=1`, success: 'ok-cb', fail: 'fail-cb', complete: 'complete-cb' })
 
       expect(navActionMessages(simulatorWc), `${api} to a valid page must still reach the simulator`).toHaveLength(1)
       expect(triggerCallbacks(serviceWc).find(c => c.id === 'fail-cb')).toBeUndefined()
@@ -284,9 +284,9 @@ describe('bridge-router — navigateTo/redirectTo/reLaunch gate against the comp
     installFetchMock({ entryPagePath: ENTRY_PAGE, pages: [ENTRY_PAGE, OTHER_PAGE] })
     const { ctx, simulatorWc } = makeCtx()
     installBridgeRouter(ctx)
-    const { result, serviceWc } = await spawnSession(simulatorWc, ENTRY_PAGE)
+    const { serviceWc } = await spawnSession(simulatorWc, ENTRY_PAGE)
 
-    invokeApi(serviceWc, result.bridgeId, 'navigateBack', { delta: 1, success: 'ok-cb', complete: 'complete-cb' })
+    invokeApi(serviceWc, 'navigateBack', { delta: 1, success: 'ok-cb', complete: 'complete-cb' })
 
     expect(navActionMessages(simulatorWc)).toHaveLength(1)
     expect(triggerCallbacks(serviceWc).find(c => c.id === 'fail-cb')).toBeUndefined()
@@ -298,9 +298,9 @@ describe('bridge-router — navigateTo/redirectTo/reLaunch gate against the comp
     installBridgeRouter(ctx)
     const diagnostics: Array<{ severity: string; code: string; message: string }> = []
     ctx.diagnostics?.subscribe((d) => { diagnostics.push(d) }, { replay: false })
-    const { result, serviceWc } = await spawnSession(simulatorWc, ENTRY_PAGE)
+    const { serviceWc } = await spawnSession(simulatorWc, ENTRY_PAGE)
 
-    invokeApi(serviceWc, result.bridgeId, 'navigateTo', { url: `/${BAD_PAGE}`, fail: 'fail-cb' })
+    invokeApi(serviceWc, 'navigateTo', { url: `/${BAD_PAGE}`, fail: 'fail-cb' })
 
     const entry = diagnostics.find(d => d.code === 'page-not-found')
     expect(entry, `expected a page-not-found diagnostic; got: ${JSON.stringify(diagnostics)}`).toBeDefined()
@@ -316,9 +316,9 @@ describe('bridge-router — switchTab gate against manifest.pages AND tabBar.lis
     installFetchMock({ entryPagePath: ENTRY_PAGE, pages: [ENTRY_PAGE, TAB_PAGE], tabBar })
     const { ctx, simulatorWc } = makeCtx()
     installBridgeRouter(ctx)
-    const { result, serviceWc } = await spawnSession(simulatorWc, ENTRY_PAGE)
+    const { serviceWc } = await spawnSession(simulatorWc, ENTRY_PAGE)
 
-    invokeApi(serviceWc, result.bridgeId, 'switchTab', { url: `/${BAD_PAGE}`, fail: 'fail-cb', complete: 'complete-cb' })
+    invokeApi(serviceWc, 'switchTab', { url: `/${BAD_PAGE}`, fail: 'fail-cb', complete: 'complete-cb' })
 
     expect(navActionMessages(simulatorWc)).toHaveLength(0)
     const fail = triggerCallbacks(serviceWc).find(c => c.id === 'fail-cb')
@@ -330,9 +330,9 @@ describe('bridge-router — switchTab gate against manifest.pages AND tabBar.lis
     installFetchMock({ entryPagePath: ENTRY_PAGE, pages: [ENTRY_PAGE, OTHER_PAGE, TAB_PAGE], tabBar })
     const { ctx, simulatorWc } = makeCtx()
     installBridgeRouter(ctx)
-    const { result, serviceWc } = await spawnSession(simulatorWc, ENTRY_PAGE)
+    const { serviceWc } = await spawnSession(simulatorWc, ENTRY_PAGE)
 
-    invokeApi(serviceWc, result.bridgeId, 'switchTab', { url: `/${OTHER_PAGE}`, fail: 'fail-cb', complete: 'complete-cb' })
+    invokeApi(serviceWc, 'switchTab', { url: `/${OTHER_PAGE}`, fail: 'fail-cb', complete: 'complete-cb' })
 
     expect(navActionMessages(simulatorWc)).toHaveLength(0)
     const fail = triggerCallbacks(serviceWc).find(c => c.id === 'fail-cb')
@@ -344,9 +344,9 @@ describe('bridge-router — switchTab gate against manifest.pages AND tabBar.lis
     installFetchMock({ entryPagePath: ENTRY_PAGE, pages: [ENTRY_PAGE, TAB_PAGE], tabBar })
     const { ctx, simulatorWc } = makeCtx()
     installBridgeRouter(ctx)
-    const { result, serviceWc } = await spawnSession(simulatorWc, ENTRY_PAGE)
+    const { serviceWc } = await spawnSession(simulatorWc, ENTRY_PAGE)
 
-    invokeApi(serviceWc, result.bridgeId, 'switchTab', { url: `/${TAB_PAGE}`, fail: 'fail-cb' })
+    invokeApi(serviceWc, 'switchTab', { url: `/${TAB_PAGE}`, fail: 'fail-cb' })
 
     expect(navActionMessages(simulatorWc)).toHaveLength(1)
     expect(triggerCallbacks(serviceWc).find(c => c.id === 'fail-cb')).toBeUndefined()
@@ -358,9 +358,9 @@ describe('bridge-router — nav/tab gates are skipped for a "fallback" (unreacha
     installFetchMock(null)
     const { ctx, simulatorWc } = makeCtx()
     installBridgeRouter(ctx)
-    const { result, serviceWc } = await spawnSession(simulatorWc, ENTRY_PAGE)
+    const { serviceWc } = await spawnSession(simulatorWc, ENTRY_PAGE)
 
-    invokeApi(serviceWc, result.bridgeId, 'navigateTo', { url: `/${BAD_PAGE}`, fail: 'fail-cb' })
+    invokeApi(serviceWc, 'navigateTo', { url: `/${BAD_PAGE}`, fail: 'fail-cb' })
 
     expect(navActionMessages(simulatorWc), 'a fallback manifest cannot validate membership, so the gate must not block').toHaveLength(1)
     expect(triggerCallbacks(serviceWc).find(c => c.id === 'fail-cb')).toBeUndefined()

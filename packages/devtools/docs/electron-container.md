@@ -265,7 +265,7 @@ native simulator WCV 的拆除走**单一路径** `tearDownNativeSimulatorView()
 | `dmb:api:response` | `bridge-router.ts` | simulator 回 `API_CALL` 的 ack，main 据此调原始 service 端 success/fail |
 | `dmb:active-page` | `bridge-router.ts`（`ACTIVE_PAGE`）| DeviceShell → main，记录可见 top-of-stack 页的 bridgeId（main 自己没有 z-order 概念）；panel / automation 据此解析「当前页」的 render webContents |
 
-`bridge-router` 还把一个 `BridgeRouterHandle`（`bridge-router.ts` 定义，`install` 里挂到 `ctx.bridge`）暴露给其它 main 服务（simulator-storage / automation / appdata），用 `isNativeHost()` / `getServiceWc()` / `getActiveRenderWc()` / `getActiveBridgeId()` / `resolveRenderWc(bridgeId)` / `onRenderEvent(...)` 解析当前活的 service/render WebContents——getter 每次都重新解析（预热池可能在 respawn 时换窗，缓存句柄会过期）。
+`bridge-router` 还把一个 `BridgeRouterHandle`（`bridge-router.ts` 定义，`install` 里挂到 `ctx.bridge`）暴露给其它 main 服务（simulator-storage / automation / appdata），用 `isNativeHost()` / `getServiceWc()` / `getActiveRenderWc()` / `getActiveBridgeId()` / `resolveRenderWc(bridgeId)` / `onRenderEvent(...)` 解析当前活的 service/render WebContents——getter 每次都重新解析（预热池可能在 respawn 时换窗，缓存句柄会过期）。`onRenderEvent` 的 `activePage` 在两种时机发出：DeviceShell 上报顶层页变化，以及活动页的 render guest 完成绑定。页面会先成为活动页、guest 之后才存在，所以 shell 上报的那次事件里 `getActiveRenderWc()` 可能仍为 null；guest 绑定后保证再发一次可解析的事件，监听者对单次事件要容忍 null，但不必区分是哪种触发。
 
 **simulator-resident API 派发优先级**（`bridge-router.ts` 的 `handleSimulatorApi`）：
 
