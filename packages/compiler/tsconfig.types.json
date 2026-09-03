@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": false,
+    "noCheck": true,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "skipLibCheck": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "target": "es2022",
+    "lib": ["es2022", "dom"],
+    "types": [],
+    "rootDir": "src",
+    "outDir": "dist/types"
+  },
+  "include": [
+    "src/compile-core.js",
+    "src/error-codes.js",
+    "src/seed-memfs.js",
+    "src/browser-entry.js",
+    "src/pool.js",
+    "src/pool-node.js",
+    "src/stage-worker.js",
+    "src/toolchain.js",
+    "src/browser-assets.js",
+    "src/file-types.js"
+  ]
+}

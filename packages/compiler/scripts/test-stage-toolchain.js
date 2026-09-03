@@ -166,6 +166,23 @@ function findCompiledCss(files) {
   chk(!!css, `style-only compile-subset produced a real compiled CSS product (found "${css && css[0]}": ${css && JSON.stringify(css[1])})`)
 }
 
+// --- a toolchain URL the worker cannot import fails with a code, not just a message.
+// The pool forwards that code untouched, so a host decides "the wasm assets didn't
+// load, fall back" without matching the message text (see src/error-codes.js).
+{
+  const worker = await loadWorkerInstance()
+  const reply = await worker.send({
+    type: 'warmup',
+    toolchainSetupURL: UNREACHABLE_TOOLCHAIN_URL,
+    stages: ['logic'],
+  })
+  chk(reply && reply.type === 'error', `an unimportable toolchainSetupURL fails warmup — got ${JSON.stringify(reply && reply.type)}`)
+  chk(reply && reply.code === 'compiler-toolchain-setup-failed',
+    `the failure reply carries code compiler-toolchain-setup-failed (got ${JSON.stringify(reply && reply.code)})`)
+  chk(reply && /toolchain setup failed importing/.test(String(reply.error)),
+    'the reply still explains which URL could not be imported')
+}
+
 // --- C: logic / view stage worker behavior is unchanged — still imports the
 // toolchain exactly once per warmup ---------------------------------------------
 for (const stage of ['logic', 'view']) {

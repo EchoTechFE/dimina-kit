@@ -20,6 +20,7 @@
     "lint": "turbo run lint",
     "dev": "turbo run dev",
     "check:electron-peer-sync": "node scripts/check-electron-peer-sync.mjs",
+    "check:publish-contract": "node .github/scripts/check-publish-contract.js",
     "pawl:check": "pawl check",
     "pawl:record": "pawl record",
     "pawl:diff": "pawl diff"

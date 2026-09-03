@@ -126,6 +126,44 @@ function ensureAppIdFs(fs, configPath) {
   }
 }
 
+// Products are read as BYTES and only turned into a string when they really are
+// UTF-8 text. Reading a PNG with 'utf8' replaces every invalid byte with U+FFFD and
+// nothing can undo that — the images the compiler copies into `main/static` used to
+// come back corrupted, so callers had to go read the fs themselves to get real
+// assets. Strict decoding is exact in both directions: text is byte-identical to
+// before, and anything that isn't valid UTF-8 stays raw bytes.
+// ignoreBOM keeps a leading U+FEFF in the string instead of eating it: by default
+// TextDecoder strips it, so a BOM-prefixed file would come out three bytes shorter
+// than it went in — exactly the kind of silent rewrite this function exists to avoid.
+const utf8Strict = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
+
+// "Does it decode as UTF-8" catches PNGs and fonts, but it is not a reliable test for
+// "is this text": short binary files can be valid UTF-8 by accident. The smallest legal
+// .wasm module is its 8-byte header (00 61 73 6D 01 00 00 00) — every byte decodes, so
+// it would come back as a string and blow up in WebAssembly.instantiate(), which takes
+// bytes only. For file types that are binary by definition, skip the decode entirely.
+// Extension-only, so a text product can never be pushed onto this list by its contents.
+const BINARY_EXTS = new Set([
+  '.wasm',
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif', '.bmp', '.ico', '.tif', '.tiff',
+  '.ttf', '.otf', '.woff', '.woff2', '.eot',
+  '.mp3', '.wav', '.ogg', '.m4a', '.mp4', '.webm', '.mov',
+  '.pdf', '.zip', '.gz', '.br',
+])
+
+function decodeProduct(bytes, relPath) {
+  // A fs backend that ignores the missing encoding and hands back a string is taken
+  // at its word — same as before this function existed.
+  if (typeof bytes === 'string') return bytes
+  const dot = relPath.lastIndexOf('.')
+  if (dot > relPath.lastIndexOf('/') && BINARY_EXTS.has(relPath.slice(dot).toLowerCase())) return bytes
+  try {
+    return utf8Strict.decode(bytes)
+  } catch {
+    return bytes
+  }
+}
+
 // Walk the injected fs under targetPath and collect { relPath: content }. Uses
 // only readdirSync({withFileTypes}) + readFileSync — inside the fs contract.
 // Fail-fast: a missing target dir, an unreadable product, or a fs that ignores
@@ -148,7 +186,10 @@ function readOutputs(fs, target) {
       }
       const full = `${dir}/${e.name}`
       if (e.isDirectory()) walk(full)
-      else out[full.slice(prefix.length)] = fs.readFileSync(full, 'utf8')
+      else {
+        const rel = full.slice(prefix.length)
+        out[rel] = decodeProduct(fs.readFileSync(full), rel)
+      }
     }
   }
   walk(prefix.slice(0, -1))
@@ -416,7 +457,7 @@ export async function setupCompile({ fs, workPath = '/work', options = {}, npmSc
  * from `setupCompile`. Self-contained: it points the fs shim at `fs` and restores
  * the compiler env from the bundle, so it can run in a fresh worker realm.
  * Products are written into `fs`.
- * @param {{ stage: 'logic'|'view'|'style', pages: object, storeInfo: object, fs: object }} opts
+ * @param {{ stage: 'logic'|'view'|'style', pages: object, storeInfo: object, fs: object, sourcemap?: boolean }} opts
  */
 export async function compileStage({ stage, pages, storeInfo: bundle, fs, sourcemap = false } = {}) {
   assertFs(fs)
@@ -432,8 +473,10 @@ export async function compileStage({ stage, pages, storeInfo: bundle, fs, source
 /**
  * Collect the compiled products from the injected fs under `targetPath` into a
  * `{ relPath: content }` map. Uses `fs` directly (no shim), so no setup needed.
+ * UTF-8 text comes back as a string; anything else (images and other binary assets
+ * the compiler copies into `main/static`) comes back as raw bytes.
  * @param {{ fs: object, targetPath: string }} opts
- * @returns {Record<string,string>}
+ * @returns {Record<string, string | Uint8Array>}
  */
 export function collectOutputs({ fs, targetPath } = {}) {
   return readOutputs(fs, targetPath)
@@ -473,7 +516,7 @@ let compileChain = Promise.resolve()
  * Compile a mini-program against a caller-injected fs. Calls are serialized per
  * realm (see the singleton note above). Convenience wrapper that runs
  * `setupCompile` + all stages + `collectOutputs` in one realm.
- * @param {{ fs: object, workPath?: string, options?: { fileTypes?: { template?: string[], style?: string[], viewScript?: string[] } } }} opts
+ * @param {{ fs: object, workPath?: string, options?: { fileTypes?: { template?: readonly string[], style?: readonly string[], viewScript?: readonly string[] } } }} opts
  *   fs:       a node:fs replacement (sync subset: existsSync/readFileSync/
  *             readdirSync{withFileTypes}/statSync/writeFileSync/mkdirSync{recursive}/
  *             copyFileSync/rmSync), already seeded with the project source under
@@ -483,7 +526,7 @@ let compileChain = Promise.resolve()
  *   options:  forwarded to `setupCompile` -> dmcc's `storeInfo` (custom file-type
  *             dialect, e.g. { fileTypes: { template: ['qdml'], style: ['qdss'],
  *             viewScript: ['qds'] } }).
- * @returns {Promise<{ appId: string, name: string, files: Record<string,string> }>}
+ * @returns {Promise<{ appId: string, name: string, files: Record<string, string | Uint8Array> }>}
  */
 export function compileMiniApp(opts = {}) {
   const result = compileChain.then(() => runCompile(opts))
