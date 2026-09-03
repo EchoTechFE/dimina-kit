@@ -254,8 +254,8 @@ function emitOn(channel: string, sender: unknown, payload: unknown): void {
 }
 
 function sendDomReady(serviceWc: MockWc, bridgeId: string): void {
-  const msg: MessageEnvelope = { type: 'domReady', target: 'container', body: {} }
-  const payload: ServiceInvokePayload = { bridgeId, msg }
+  const msg: MessageEnvelope = { type: 'domReady', target: 'container', body: { bridgeId } }
+  const payload: ServiceInvokePayload = { msg }
   emitOn(C.SERVICE_INVOKE, serviceWc, payload)
 }
 
@@ -324,10 +324,10 @@ describe('session runtime status — "running" pushed on the ROOT page\'s first 
     installBridgeRouter(ctx)
 
     const { result, serviceWc } = await spawnSession(simulatorWc, ENTRY_PAGE)
-    const nonRoot = await openNonRootPage(result.appSessionId, simulatorWc, OTHER_PAGE)
+    const other = await openNonRootPage(result.appSessionId, simulatorWc, OTHER_PAGE)
     notify.sessionRuntimeStatus.mockClear()
 
-    sendDomReady(serviceWc, nonRoot.bridgeId)
+    sendDomReady(serviceWc, other.bridgeId)
     await flush()
 
     const calls = runtimeStatusCalls(notify)

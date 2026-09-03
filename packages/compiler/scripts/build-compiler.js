@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import path from 'node:path'
+import { COMPILER_BROWSER_ASSETS, browserOutputsFromMetafile, checkAssetsAgainstExports, checkBrowserAssetContract } from '../src/browser-assets.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(__dirname, '..')
@@ -219,6 +220,7 @@ const builds = MODE === 'node'
     ]
 
 const { rm } = await import('node:fs/promises')
+const browserMetafileOutputs = {}
 for (const b of builds) {
   const built = {
     ...opts,
@@ -228,10 +230,53 @@ for (const b of builds) {
     ...(b.chunkDir
       ? { splitting: true, chunkNames: `${b.chunkDir}/[name]-[hash]` }
       : {}),
+    // Browser mode: the metafile is what the static-asset contract is checked
+    // against below — esbuild's own record of what it emitted and what each
+    // output still imports, rather than a re-scan of the bytes.
+    ...(MODE === 'browser' ? { metafile: true } : {}),
   }
   // Chunk names embed content hashes; stale ones from earlier builds would pile up in
   // dist (and ship in the npm package), so each build owns and clears its chunk dir.
   if (b.chunkDir) await rm(path.join(root, 'dist', b.chunkDir), { recursive: true, force: true })
-  await esbuild.build(built)
+  const result = await esbuild.build(built)
+  if (result.metafile) Object.assign(browserMetafileOutputs, result.metafile.outputs)
   console.log(`✅ built MODE=${MODE} USE_WASM=${USE_WASM ? 1 : 0} -> ${b.entries.map((e) => `dist/${e.out}.js`).join(', ')}`)
+}
+
+// The static-asset manifest itself: dependency-free string code, emitted in both
+// modes (either build alone leaves a usable dist) and in both formats, because the
+// hosts that copy these files are as often CommonJS build scripts as ESM ones.
+// src/file-types.js（方言扩展名）走同一条路：宿主的编辑器配置和文件分类也常常在 CJS 里。
+for (const name of ['browser-assets', 'file-types']) {
+  for (const [format, ext] of [['esm', 'js'], ['cjs', 'cjs']]) {
+    await esbuild.build({
+      entryPoints: [path.join(root, `src/${name}.js`)],
+      outfile: path.join(root, 'dist', `${name}.${ext}`),
+      bundle: true,
+      format,
+      target: ['es2022'],
+      logLevel: 'warning',
+    })
+  }
+  console.log(`✅ built dist/${name}.js + dist/${name}.cjs`)
+}
+
+// The browser bundles double as static files a host copies and serves. Their names
+// and the "self-contained, imports nothing" rule are stated once in
+// src/browser-assets.js, and enforced here so a rename or a newly split chunk fails
+// the build instead of 404-ing (or half-loading) inside a host months later.
+if (MODE === 'browser') {
+  // esbuild keys the metafile by paths relative to the working directory, so the
+  // asset check sees the same `dist/…` prefix a host would copy from — and an
+  // output that lands in a subdirectory keeps that subdirectory in its name.
+  const outdirPrefix = `${path.relative(process.cwd(), path.join(root, 'dist')).split(path.sep).join('/')}/`
+  const problems = [
+    ...checkBrowserAssetContract(browserOutputsFromMetafile({ outputs: browserMetafileOutputs }, outdirPrefix)),
+    ...checkAssetsAgainstExports(JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).exports),
+  ]
+  if (problems.length > 0) {
+    console.error(problems.map((line) => `  ✗ ${line}`).join('\n'))
+    process.exit(1)
+  }
+  console.log(`✅ browser static-asset contract holds (${COMPILER_BROWSER_ASSETS.length} assets, self-contained, names match the exports map)`)
 }

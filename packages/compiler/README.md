@@ -10,6 +10,16 @@
 pnpm add @dimina-kit/compiler
 ```
 
+## 类型声明
+
+包自带 `.d.ts`（从源码 JSDoc 生成），六个导出子路径都带 `types` 条件，TypeScript 下游直接 import 就有补全和参数校验，不用自己维护一份 ambient 声明：
+
+```ts
+import { createCompilerPool } from '@dimina-kit/compiler/pool'
+```
+
+声明由 `build:types` 生成到 `dist/types/`（`build` 已经包含这一步）。`check-types` 会校验每个子路径都有 `types` 条件、指向的文件确实存在，再用 `types-fixture/consumer.ts` 按下游视角完整类型检查一遍：声明缺失或退化成 `any` 时，fixture 里那些故意写错的调用不再报错，tsc 就会因为「未使用的 `@ts-expect-error`」失败。
+
 ## 三种接入，按需选择
 
 | 导出 | 用途 | 编排（并行/复用/合并）由谁做 |
@@ -28,6 +38,45 @@ pnpm add @dimina-kit/compiler
 | `dist/compile-core.browser.js` | 浏览器 / Worker | core；wasm 工具链不打包，由宿主注入 |
 | `dist/stage-worker.browser.js` | 浏览器 Worker | 常驻 stage worker（已内联 core + memfs），pool 用它做并行 |
 | `dist/pool.browser.js` | 浏览器主线程 | 编排池 `createCompilerPool` |
+
+### 浏览器静态资源：自己按 URL 托管这三个文件时的规矩
+
+上表里带 `.browser.js` 的三个产物都是自包含的单文件 ESM，本身不 import 任何东西。
+
+**宿主自己按 URL 托管它们时**（拷进 `public/` 再 `new Worker('/stage-worker.browser.js')`，或 fetch 下来从 Blob URL import），要**原样拷贝、按这些文件名托管**，不要再过一遍自己的打包器：宿主源码里没有一处是打包器能看见的静态引用，打包器根本不知道这些文件存在，既不会拷也不会改写，缺失只在运行时表现为 404。
+
+**宿主通过包名引用它们时**（`import { createCompilerPool } from '@dimina-kit/compiler/pool'`，或 `new Worker(new URL('@dimina-kit/compiler/stage-worker', import.meta.url))`，见下面的接入示例），打包器看得见这条引用、会自己处理，这一节整节都用不上。
+
+按 URL 托管的话，文件名由本包给出，不要在宿主里手抄：
+
+```js
+const { resolveBrowserAssets } = require('@dimina-kit/compiler/browser-assets')
+const { files } = resolveBrowserAssets(require.resolve('@dimina-kit/compiler/browser'))
+// files:dist 里那三个 .browser.js 的绝对路径，按清单顺序
+for (const file of files) fs.copyFileSync(file, path.join(publicDir, path.basename(file)))
+```
+
+`./browser-assets` 同时发 ESM 和 CJS（走 `require` 条件），只做字符串拼接，不依赖 `node:path`。
+
+每次浏览器构建都会拿 esbuild 的 metafile 对着这份清单自检：产物改了名、被挪进子目录、被拆出新 chunk、或某个资源开始 import 别的文件（`import` / `require` / 动态 import 都算，一带上就不再是自包含的单文件），以及清单里的文件名和 `package.json` 的 exports 对不上（改名只改了一边），构建当场失败，而不是几个月后在某个宿主那里 404。`toolchain.browser.js` 不在清单里——它由宿主用自己的打包器 import（`@dimina-kit/compiler/toolchain`），拷过去也没人 fetch。
+
+### 自定义文件类型（方言）：声明一次，编译器和宿主用同一份
+
+`options.fileTypes` 让工程用自己的扩展名，比如千岛（qd）方言的 `.qdml`/`.qdss`/`.qds` 对应 `.wxml`/`.wxss`/`.wxs`。麻烦的是这份配置不止编译器要用：编辑器的语言映射、模板校验、预览时找页面模板，宿主自己也要按同一套规则判断文件角色。各处手写 `/\.(wxml|qdml)$/` 的结果是漏掉内置的 `.ddml`，而且同一个方言在几个仓库里各抄一份，谁改了另一边不会知道。
+
+`@dimina-kit/compiler/file-types` 就是那一份（同时发 ESM 和 CJS，无依赖）：
+
+```js
+import { QD_FILE_TYPES, resolveFileTypes, hasExt } from '@dimina-kit/compiler/file-types'
+
+await pool.compile({ files, workPath, options: { fileTypes: QD_FILE_TYPES } })
+
+const { templateExts, styleExts, viewScriptExts, viewScriptTags } = resolveFileTypes(QD_FILE_TYPES)
+// templateExts: ['.wxml', '.ddml', '.qdml']  ← 内置在前，自定义在后，顺序即查找优先级
+hasExt('pages/index/index.QDML', templateExts)  // true，大小写不敏感
+```
+
+`resolveFileTypes()` 算的是**编译器这次实际会认的**扩展名和内联标签：合并内置项、规范化（去空白、转小写、补一个前导点）、去重，并丢掉占用其他角色或 `.js`/`.ts`/`.json` 的项——`template: ['js']` 会把页面逻辑当模板解析，所以直接不接受。规则是照编译器 `env.js` 的 `normalizeFileTypes` 写的（直接 import 它会把 `node:fs` 和整个配置解析一起拉进来），`test:file-types` 读 env.js 源码比对内置列表和两条校验正则，上游一改这里就红。
 
 ## 架构
 
@@ -73,7 +122,7 @@ const pool = createCompilerPool({
 
 await pool.warmup()                                 // 起 3 个常驻 stage worker;每个各自初始化一次 wasm,之后 compile 复用
 const { appId, name, files } = await pool.compile({ files: source, workPath: '/project' })
-// 入参 source 与返回 files 都是文本 map:{ 相对路径: 文本内容 };二进制资源不能靠返回 files,见「已知限制」
+// 入参 source 与返回 files 都是 { 相对路径: 内容 };内容是文本就给 string,图片等二进制给 Uint8Array
 pool.dispose()                                       // 用完终止 worker
 ```
 
@@ -96,8 +145,9 @@ createCompilerPool(options: {
   retryOnWorkerDeath?: boolean    // 默认 true:worker 死亡导致的编译失败,整次透明重试一次
 }): {
   warmup(): Promise<void>
-  compile(input: { files: Record<string,string>, workPath?: string })
-    : Promise<{ appId: string, name: string, files: Record<string,string> }>
+  // 两个 files 的值:文本给 string,图片等二进制给 Uint8Array(原样穿过,不做编解码)
+  compile(input: { files: Record<string, string | Uint8Array>, workPath?: string })
+    : Promise<{ appId: string, name: string, files: Record<string, string | Uint8Array> }>
   dispose(): Promise<void>
   stages: string[]
 }
@@ -198,7 +248,7 @@ try {
 
 几个值得知道的行为：
 
-- **写真实磁盘**（不经 `files` map），二进制静态资源完好——不受浏览器 `collectOutputs` utf8 限制。
+- **写真实磁盘**（不经 `files` map），产物直接落盘，不用先读回内存再交给你。
 - **fs 用原生、`worker_threads` 仍 shim**：Node 构建不给 `node:fs` 挂 shim（产物/二进制资源走真实磁盘）；但 `worker_threads` 依旧 shim 掉，为的是关掉 dmcc 编译器自带的 worker 消息处理——pool/stage worker 自己改用 `createRequire('node:worker_threads')` 拿到真实的 `Worker`/`parentPort`。
 - **sourcemap 开关走导出而非 worker message**：dmcc 的 logic/view stage 编译器原生只从 worker 的 `parentPort` message 里读 sourcemap 开关，而这条路径已经被上面那条 `worker_threads` shim 短路——构建时给这两个 stage 追加 `__setEnableSourcemap` 导出，`runStage` 前显式调用来代替。
 - **`build()` 里的 `path` 与 dmcc 语义等价、算法不同**：dmcc 读 `mainPages[1]` 是因为它的 style task 用 `unshift` 把 `app` 塞进了共享数组（`[1]` 才是原本的第一页）；本包的 style stage 不改变原数组，等价写法就是 `mainPages[0]`。
@@ -217,7 +267,7 @@ pool 覆盖不了的场景才用 core。它导出 `compileMiniApp`（单线程�
 compileMiniApp({ fs, workPath? }): Promise<{ appId, name, files }>    // = setup + 三 stage + collect 的单-realm 组合
 setupCompile({ fs, workPath?, options? }): Promise<{ storeInfo, pages, appId, name, targetPath, workPath }>
 compileStage({ stage, pages, storeInfo, fs }): Promise<void>          // stage: 'logic'|'view'|'style';产物写回 fs
-collectOutputs({ fs, targetPath }): Record<string,string>            // 遍历 fs 收 targetPath 前缀下产物
+collectOutputs({ fs, targetPath }): Record<string,string|Uint8Array> // 遍历 fs 收 targetPath 前缀下产物(文本给 string,二进制给字节)
 resetCompilerState(): void                                           // 清模块级缓存;常驻 realm 复用前必调
 STAGE_NAMES: string[]                                                // ['logic','view','style']
 initToolchain(): Promise<void>                                       // no-op,占位保 API 稳定
@@ -330,7 +380,7 @@ async function filesFromDir(dir, prefix = '') {           // 只读递来的 han
 }
 ```
 
-> OPFS 只是**源码分发的真相源**（一次写、多 worker 独立读、零克隆），编译仍在 memfs 上；不需要 SharedArrayBuffer（但上面 oxc wasm 钩子仍需 COOP/COEP）。示例只处理**文本** fixture——真实图片/svg 资源要保留二进制（见「已知限制」）。
+> OPFS 只是**源码分发的真相源**（一次写、多 worker 独立读、零克隆），编译仍在 memfs 上；不需要 SharedArrayBuffer（但上面 oxc wasm 钩子仍需 COOP/COEP）。示例只处理**文本** fixture——真实图片/svg 资源读成 `Uint8Array` 放进同一个 map 即可。
 
 ## fs 契约与约定
 
@@ -341,14 +391,49 @@ async function filesFromDir(dir, prefix = '') {           // 只读递来的 han
 - **产物写回同一个 fs。** compiler `writeFileSync` 把产物写进你的 fs，所以传入的 fs 必须**可写**。产物目录 `targetPath` 见下。
 - **编译会修改你的 fs。** 缺 `project.config.json`/appid 时，会往 `${workPath}/project.config.json` 写入一个 appid（`dmlocalpreview`）——传入的 fs 不能当成只读快照。
 - **同步契约，不需要 `fs.promises`。** `DiminaFs` 只要求同步方法（`existsSync`/`readFileSync`/`readdirSync{withFileTypes}`/`statSync`/`writeFileSync`/`mkdirSync{recursive}`/`copyFileSync`/`rmSync`）——编译路径不碰 async fs。纯异步后端（只有 Promise 版读写）没法当 fs 用。
+- **`readFileSync` 不带编码参数时必须返回字节。** `collectOutputs` 靠这个来区分文本产物和图片：扩展名摆明是二进制的直接给字节，其余按严格 UTF-8 解码，解不出来就原样把字节交给调用方。后端若无视编码参数一律返回字符串，二进制产物就会在这一步坏掉。
 
 `@dimina/compiler` 自己并不知道 fs 被换掉了。
 
 ## 已知限制与错误处理
 
-- **`files` 目前只可靠承载文本产物。** `collectOutputs` 用 utf8 读回 `targetPath` 下所有产物；图片/svg 等二进制静态资源（compiler `copyFileSync` 到 `main/static`）会被按 utf8 读坏。纯文本项目/fixture 无碍；要用真实二进制资源，需下游自行从注入的 fs 读 `main/static` 的字节，别依赖返回的 `files`。
+- **`files` 里的一条产物可能是字符串，也可能是 `Uint8Array`。** `collectOutputs` 先看扩展名：`.wasm`、图片、字体、音视频、压缩包这些天生是二进制的，一律原样给字节，不解码——最小的合法 `.wasm` 只有 8 个字节的头，整份都是合法 UTF-8，光看内容判会把它当成文本交出去，宿主拿去喂 `WebAssembly.instantiate()` 直接类型错误。其余产物按严格 UTF-8 解码，能解出来就是字符串（JS/CSS/JSON 等），解不出来就原样给字节。下游拿到一条产物当字符串用之前要先判类型——`typeof v === 'string'`。入参方向同理：源码里的图片直接以 `Uint8Array` 放进 `files` 即可，pool 会把它当文件写进 worker 的 memfs。
 - **`targetPath` 来自环境。** compiler 产物目录取 `process.env.TARGET_PATH`，否则 `os.tmpdir()/dimina-fe-dist-<时间戳>`（浏览器 os shim 下通常 `/tmp/...`）。`setupCompile` 会先 `rmSync` 清空它——别把 `TARGET_PATH` 指到源码目录或共享目录。用 `setupCompile` 返回的 `targetPath` 喂 `collectOutputs`。
 - **不是全 fail-fast。** 缺 fs 方法、坏 appid、坏 `project.config.json`、miniprogram_npm 构建失败会 **reject**；但**样式预处理器失败（如当前浏览器构建暂不支持 `.less`）会被吞掉、降级用原始 CSS**，PostCSS 解析失败返回空串，资源拷贝失败只 `console.log`，logic esbuild 压缩失败回退未压缩代码。**用 pool 时把这些拿出来的办法是 `createCompilerPool({ onLog })`**——它把 worker 内编译器的 `console.*` 诊断（带 stage 标签）转发给你；也可在产物为空/缺失时二次校验。
+
+### 错误码：怎么判断该重试还是该把错误给用户看
+
+两个 pool（`./pool` 与 `./pool-node`）reject 的每个错误都带 `err.code`，取值就是 `COMPILER_ERROR_CODES` 这张表；两个 pool 都把它连同判定函数一起再导出，宿主不用抄字符串：
+
+```js
+import { COMPILER_ERROR_CODES, isInfrastructureError } from '@dimina-kit/compiler/pool'
+
+try {
+  await pool.compile({ files })
+} catch (err) {
+  if (isInfrastructureError(err)) fallbackToAnotherCompilePath(err)  // 机器坏了，换条路还有戏
+  else showToUser(err.message)                                      // 项目本身编不过，重试没用
+}
+```
+
+| code | 含义 | 算基础设施故障 |
+| --- | --- | --- |
+| `compiler-stage-error` | 编译器拒绝了这个项目：源码或配置要用户自己改 | 否 |
+| `compiler-toolchain-setup-failed` | stage worker `import(toolchainSetupURL)` 失败：模块 404、断网、wasm 拿不到 | 是 |
+| `compiler-worker-timeout` | worker 静默超过不活动窗口（卡死的 wasm 循环连心跳都发不出） | 是 |
+| `compiler-worker-crashed` | worker 挂了：`error` 事件、`postMessage` 抛错、异常退出 | 是 |
+| `compiler-worker-dead` | 请求打到了已判死、还没重建的 slot | 是 |
+| `compiler-toolchain-dead` | 仅 Node：esbuild 常驻服务进程没了，该 realm 之后每次调用都失败 | 是 |
+| `compiler-toolchain-unavailable` | 仅 Node：工具链根本没被打进宿主应用——oxc-parser 在这个平台上找不到运行时绑定，或 esbuild 二进制被塞在 app.asar 里 spawn 不出来。要改的是宿主的打包配置；换个新 worker 没用，但换一条编译路径（比如另装的 dmcc）还有戏 | 是 |
+| `compiler-output-write-failed` | 仅 Node：项目编译成功了，把暂存目录拷到 `outputDir` 失败（权限、磁盘满） | 否 |
+| `compiler-invalid-input` | 调用本身就错了，比如 `compile()` 没给文件。是调用方的 bug，不是项目的 | 否 |
+| `compiler-pool-disposed` | 池已回收，不会再编译任何东西 | 否 |
+
+`isInfrastructureError` 之外还有一层：worker 死亡类的三个码（timeout / crashed / dead，Node 上再加 toolchain-dead）由 pool 自己用来做那一次透明重试，宿主一般不用关心。这两组码通过 `INFRASTRUCTURE_ERROR_CODES` 和 `WORKER_DEATH_CODES` 导出，都是只读的 Set：`.add()` / `.delete()` / `.clear()` 直接抛错，免得宿主改一下就悄悄改掉了本包自己的重试行为（`Object.freeze` 对 Set 拦不住这些方法）。
+
+工具链导入失败的码是 **worker 自己打的**——只有它能区分「宿主的 wasm 资源没加载上」和「用户项目编不过」，两者到 pool 手里都是同一种 `{ type:'error' }` 回复。pool 原样转发这个码，但只认表里这些值：worker 回复里带的是别的东西（比如 memfs 抛的 `ENOENT`）就按 `compiler-stage-error` 记，宿主不会拿到一个自己分支里没有的码；没带码的同样记为 `compiler-stage-error`。
+
+主线程上抛出来的失败同样只会带表里的码。这条路上最常见的来源是 `node:fs`，而它的错误天生带着 `EACCES`、`ENOSPC` 这类 libc 名字：往 `outputDir` 拷产物失败一律记 `compiler-output-write-failed`，其余的按报错文字重新分类，libc 名字不会漏出来。
 
 ## 依赖前置
 
@@ -362,12 +447,15 @@ pnpm install
 ## 构建
 
 ```bash
-pnpm --filter @dimina-kit/compiler build          # node + 三个 browser bundle
+pnpm --filter @dimina-kit/compiler build          # node + 三个 browser bundle + 类型声明
 pnpm --filter @dimina-kit/compiler build:browser  # 仅 browser(core + stage-worker + pool)
 pnpm --filter @dimina-kit/compiler build:node     # 仅 node
+pnpm --filter @dimina-kit/compiler build:types    # 仅 dist/types/*.d.ts
 ```
 
 ## 测试
+
+`pnpm --filter @dimina-kit/compiler test`（也就是 `turbo run test` 会跑到的那份）包含六份契约测试——静态资源清单（`test:browser-assets`）、错误码（`test:error-codes`）、二进制入参播种（`test:binary-seed`）、二进制产物保真（`test:binary-outputs`）、方言扩展名（`test:file-types`）和方言穿过编译池（`test:pool-filetypes`）。后两类里要拿 `dist` 真实 bundle 跑的那几份自己不构建：turbo 里 `@dimina-kit/compiler#test` 依赖本包的 `build`，构建只发生一次，测试期间没有人再往 `dist` 写。脱离 turbo 单跑时用带构建的 `test:binary-outputs` / `test:pool-filetypes`（带 `:prebuilt` 后缀的是不构建的那个入口）。下面这些各自要先构建，按需单跑。
 
 测试里用 memfs 扮演「下游 fs」：
 
@@ -382,6 +470,12 @@ pnpm --filter @dimina-kit/compiler test:lazy-toolchain # 按 stage 懒加载边�
 pnpm --filter @dimina-kit/compiler test:idle-shrink    # idle 收缩:超时终止 worker、下次 build 透明复活、活动取消、进程可自然退出
 pnpm --filter @dimina-kit/compiler test:stage-worker-message-order # stage worker 回复严格按请求到达序串行(build 在途时 introspect 不抢 FIFO 配对)
 pnpm --filter @dimina-kit/compiler test:stage-load-retry           # stage 工具链加载失败不缓存,chunk 恢复后 preloadStage 可重试成功
+pnpm --filter @dimina-kit/compiler test:browser-assets             # 静态资源清单:改名/新 chunk/出现静态 import 都会被构建期检查拦下
+pnpm --filter @dimina-kit/compiler test:error-codes                # 错误码:worker 自己判定的失败(工具链导入)带着码原样传到调用方,其余记为 compiler-stage-error
+pnpm --filter @dimina-kit/compiler test:stage-toolchain            # 真实 stage worker bundle:每个 stage 都加载工具链、按 URL 记忆、导入失败带错误码
+pnpm --filter @dimina-kit/compiler test:file-types                 # 方言扩展名:合并/规范化行为,以及内置列表与校验正则和编译器 env.js 逐字一致
+pnpm --filter @dimina-kit/compiler test:binary-seed                # 入参里的 Uint8Array 播种成文件(memfs 自己的 fromJSON 会把它变成目录)
+pnpm --filter @dimina-kit/compiler test:binary-outputs             # 页面引用的图片走完整编译后逐字节相同,文本产物仍是字符串
 ```
 
 `pool` 的浏览器端到端验证在 `dimina-web-client`（`npm run test:pool`，Playwright 驱动，产物与单线程逐结构一致）。`pool-node` 的宿主端验证在 `@dimina-kit/devkit` 测试套件（真实 fork + `openProject`）。
@@ -390,14 +484,19 @@ pnpm --filter @dimina-kit/compiler test:stage-load-retry           # stage 工�
 
 - `src/compile-core.js` — 内联编排 dmcc 的 compile 函数；导出 `compileMiniApp` 与四个接缝 `setupCompile`/`compileStage`/`collectOutputs`/`resetCompilerState`（+ `STAGE_NAMES`、`preloadStage`）。相对路径引用 `dimina` 子模块的 compiler 源码；三个 stage 编译器经动态 import 懒加载（`resetCompilerState` 只清已加载的 stage），node bundle 借 esbuild splitting 把它们编成运行时 chunk。
 - `src/browser-entry.js` — 浏览器 core 入口，导出上述接缝 + `initToolchain()`（no-op）。
+- `src/seed-memfs.js` — 把 `files` map 播种成一个 memfs 卷。文本走 `Volume.fromJSON`，`Uint8Array` 单独 `writeFileSync` 写入——`fromJSON` 见到 `Uint8Array` 会当成目录，不报错。
 - `src/pool.js` — **浏览器编排池** `createCompilerPool`：常驻 stage worker 池、并行派发、并集合并、realm 复用；不含编译器（轻量，~3KB）。
 - `src/stage-worker.js` — **包自带的常驻 stage worker**（内联 core + memfs）：warmup 时 `import(toolchainSetupURL)` 装 wasm 钩子，每次编译 seed 私有 memfs → `setupCompile` + 指定 stage → `collectOutputs`；并把编译器 `console.*` 诊断转发给 pool 的 `onLog`。
 - `src/pool-node.js` — **Node 编排池** `createNodeCompilerPool` + dmcc drop-in 默认导出 `build()`：常驻 worker_threads、真实磁盘、全局 build 串行、死 worker 懒复活、idle 自动收缩（`idleShrinkMs`）。
 - `src/stage-worker-node.js` — Node 常驻 stage worker：spawn 时按 workerData 里的 stage 身份预热本 stage 工具链，恢复 storeInfo → `runStage(stage, { sourcemap })` 写共享 staging 目录；应答 `{ type: 'introspect' }` 报告本 realm 已加载的重依赖。
 - `src/toolchain.js` — 写 `toolchainSetupURL` 模块的可选助手（`installOxc` / `installEsbuildFromURL`，后者内置 esbuild-wasm 静态资源的 Blob-URL 兜底）。导出为 `@dimina-kit/compiler/toolchain`。
+- `src/file-types.js` — 自定义文件类型（方言）的权威声明：内置扩展名、合并规则 `resolveFileTypes`、qd 方言常量 `QD_FILE_TYPES`。导出为 `@dimina-kit/compiler/file-types`（ESM + CJS）。
+- `src/browser-assets.js` — 浏览器静态资源清单与契约（`COMPILER_BROWSER_ASSETS` / `resolveBrowserAssets`，见上文），构建期检查也用它。导出为 `@dimina-kit/compiler/browser-assets`。
+- `src/error-codes.js` — 两个 pool 共用的错误码表 `COMPILER_ERROR_CODES` 与判定 `isInfrastructureError`（见上文），经 `./pool` 与 `./pool-node` 再导出。
+- `src/failure-hints.js` — Node 侧「一条原始报错文字该记哪个码」的判定（`errorCodeForMessage` / `tagFailure`），以及 oxc 绑定缺失、esbuild 二进制被封在 app.asar 这两种打包问题的中文提示（`oxcNativeBindingHint` / `esbuildAsarSpawnHint`，经 `./pool-node` 再导出）。单独成文件是为了让它不牵连 `worker_threads` 和编译器实体，`test:error-codes` 能直接驱动。
 - `src/shims/fs.js` — **无后端的 fs 转发层**（`setFs`/`resetFs`/`getFs`）；compiler 所有 `fs.xxx` 走它，未注入即抛错。
 - `src/shims/*` — 其余 node 内置与原生依赖的浏览器替身（oxc/esbuild/less/`os.homedir`/…）。
-- `scripts/build-compiler.js` — esbuild 打包。onLoad 给 logic/view/style-compiler 与 utils 追加 `__reset*` 导出（喂 `resetCompilerState`，不改子模块源码）；浏览器分支内联真实 `cssnano`+`autoprefixer`（autoprefixer pin 到 node 运行时解析的同一份，避免 esbuild 解析到多加 `-ms-` 前缀的另一版本）；browser 模式产出 core / stage-worker / pool 三个单文件 bundle；node 模式开 `splitting`（stage 编译器成为运行时 chunk——单文件会把 chunk 的 external `import 'sass'` 提升回入口顶层，懒加载会静默失效）。
+- `scripts/build-compiler.js` — esbuild 打包。onLoad 给 logic/view/style-compiler 与 utils 追加 `__reset*` 导出（喂 `resetCompilerState`，不改子模块源码）；浏览器分支内联真实 `cssnano`+`autoprefixer`（autoprefixer pin 到 node 运行时解析的同一份，避免 esbuild 解析到多加 `-ms-` 前缀的另一版本）；browser 模式产出 core / stage-worker / pool 三个单文件 bundle，并按 metafile 对 `src/browser-assets.js` 的清单自检（漏产物、多产物、静态资源出现静态 import 都直接失败）；node 模式开 `splitting`（stage 编译器成为运行时 chunk——单文件会把 chunk 的 external `import 'sass'` 提升回入口顶层，懒加载会静默失效）。
 - `scripts/{register-kit,kit-resolve-hook}.js` — node 用的 ESM resolve hook（默认解析优先、从 dimina-kit workspace 根兜底解析 bare 依赖）。
 
 ## License

@@ -11,8 +11,7 @@
 // options-threading fix and passes (green) with it — no reimplementation of the
 // protocol handlers under test.
 //
-// Fixture mirrors qdmp's e2e "qd-app" (see
-// ~/code/qdmp/main/packages/qdmp-devtools/e2e/qd-app): a page using .qdml/.qdss/.qds
+// Fixture is a minimal qd-dialect app: a page using .qdml/.qdss/.qds
 // instead of .wxml/.wxss/.wxs, with a <wxs src="./index.qds" module="m" /> view
 // script and a `{{ m.shout(title) }}` mustache expression — so a correct compile
 // must recognize the custom template AND the custom view-script extension.
@@ -26,6 +25,7 @@
 // must run first.
 import { transform } from 'esbuild'
 import 'oxc-parser'
+import { QD_FILE_TYPES } from '../src/file-types.js'
 
 await transform('const __warm = 1', {})
 
@@ -53,7 +53,9 @@ const FIXTURE_FILES = {
   'pages/index/index.json': JSON.stringify({ navigationBarTitleText: 'QD Ext Index' }),
   'pages/index/index.qds': "function shout(text) {\n  return text + '!'\n}\n\nmodule.exports = {\n  shout: shout,\n}\n",
 }
-const FILE_TYPES_OPTIONS = { fileTypes: { template: ['qdml'], style: ['qdss'], viewScript: ['qds'] } }
+// 用导出的常量本身，而不是再抄一份字面量：这样这个测试同时证明 QD_FILE_TYPES 就是能让
+// .qdml/.qdss/.qds 工程编出来的那份配置。
+const FILE_TYPES_OPTIONS = { fileTypes: QD_FILE_TYPES }
 
 let failed = false
 const chk = (cond, msg) => { if (!cond) { failed = true; console.error(`❌ ${msg}`) } else console.log(`✅ ${msg}`) }

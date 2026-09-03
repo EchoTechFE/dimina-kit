@@ -227,7 +227,7 @@ async function spawnSession(simulatorWc: MockWc): Promise<{ result: SpawnResult;
 }
 
 /** Forward an `audioListen` invokeAPI from the service through the router. */
-function forwardAudioListen(serviceWc: MockWc, bridgeId: string, callbacks: {
+function forwardAudioListen(serviceWc: MockWc, callbacks: {
   success?: unknown; complete?: unknown; fail?: unknown
 }): void {
   const msg: MessageEnvelope = {
@@ -240,7 +240,7 @@ function forwardAudioListen(serviceWc: MockWc, bridgeId: string, callbacks: {
       params: { audioId: 7, ...callbacks },
     },
   }
-  const payload: ServiceInvokePayload = { bridgeId, msg }
+  const payload: ServiceInvokePayload = { msg }
   emitOn(C.SERVICE_INVOKE, serviceWc, payload)
 }
 
@@ -269,9 +269,9 @@ describe('bridge-router — persistent (audioListen) subscriptions', () => {
   it('does NOT arm the 5s one-shot timeout for audioListen (no params.keep)', async () => {
     const { ctx, simulatorWc } = makeCtx()
     installBridgeRouter(ctx)
-    const { result, serviceWc } = await spawnSession(simulatorWc)
+    const { serviceWc } = await spawnSession(simulatorWc)
 
-    forwardAudioListen(serviceWc, result.bridgeId, { success: 'svc-success', complete: 'svc-complete', fail: 'svc-fail' })
+    forwardAudioListen(serviceWc, { success: 'svc-success', complete: 'svc-complete', fail: 'svc-fail' })
 
     // Advance well past the 5s no-handler window. For a persistent subscription
     // the router must NOT fire the "no handler (timeout)" fail/complete.
@@ -295,9 +295,9 @@ describe('bridge-router — persistent (audioListen) subscriptions', () => {
     // event is dropped.
     const { ctx, simulatorWc } = makeCtx()
     installBridgeRouter(ctx)
-    const { result, serviceWc } = await spawnSession(simulatorWc)
+    const { serviceWc } = await spawnSession(simulatorWc)
 
-    forwardAudioListen(serviceWc, result.bridgeId, { success: 'svc-success', complete: 'svc-complete', fail: 'svc-fail' })
+    forwardAudioListen(serviceWc, { success: 'svc-success', complete: 'svc-complete', fail: 'svc-fail' })
 
     // Recover the requestId the router assigned: it is echoed in the API_CALL it
     // sent to the simulator window.

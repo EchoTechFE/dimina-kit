@@ -19,7 +19,10 @@
 //     (esbuild.wasm / oxc wasm are host-hosted assets)
 //   - the source itself (a { relPath: content } map). OPFS is intentionally NOT here:
 //     it's an optional zero-copy source-distribution the downstream can layer on.
+import { COMPILER_ERROR_CODES, WORKER_DEATH_CODES, isCompilerErrorCode } from './error-codes.js'
 import { createWorkerSlot, settleAll } from './worker-slot.js'
+
+export { COMPILER_ERROR_CODES, INFRASTRUCTURE_ERROR_CODES, isInfrastructureError } from './error-codes.js'
 
 const DEFAULT_STAGES = ['logic', 'view', 'style']
 
@@ -36,21 +39,22 @@ const DEFAULT_SEND_TIMEOUT_MS = 30000
 // eventually — an unguarded warmup would wedge the serial compile chain forever.
 const DEFAULT_WARMUP_TIMEOUT_MS = 120000
 
-const WORKER_DEATH_CODES = new Set(['compiler-worker-timeout', 'compiler-worker-crashed', 'compiler-worker-dead'])
-
 /**
  * @param {{
  *   createWorker: () => Worker,     // required: spawn a module worker running dist/stage-worker.browser.js
  *   toolchainSetupURL: string,      // required: ESM URL that installs __esbuildTransform/__oxcParseSync in the worker
  *   stages?: string[],              // default ['logic','view','style']
  *   workPath?: string,              // default '/work'
- *   onLog?: (entry: { level: string, message: string }) => void,  // worker console diagnostics
+ *   onLog?: (entry: { level: 'log'|'warn'|'error', message: string, stage: string }) => void,  // worker console diagnostics, tagged with the stage worker that emitted them; level is whichever console.* the compiler called (stage-worker.js patches exactly these three)
  *   sendTimeoutMs?: number,         // default 30000 — inactivity window per setup/compile-subset round trip
  *   warmupTimeoutMs?: number,       // default 120000 — inactivity window for the warmup round trip
  *   retryOnWorkerDeath?: boolean,   // default true — one transparent whole-attempt retry after a worker death
  * }} options
  */
-export function createCompilerPool(options = {}) {
+// options 没有默认值是有意的：createWorker 和 toolchainSetupURL 都必填，参数整体
+// 也就必填，生成的 .d.ts 才不会让 TypeScript 下游写出能过类型检查、一运行就抛的
+// createCompilerPool()。函数体里的 `|| {}` 只是让那种调用仍然拿到下面这句人话报错。
+export function createCompilerPool(options) {
   const {
     createWorker,
     toolchainSetupURL,
@@ -60,7 +64,7 @@ export function createCompilerPool(options = {}) {
     sendTimeoutMs = DEFAULT_SEND_TIMEOUT_MS,
     warmupTimeoutMs = DEFAULT_WARMUP_TIMEOUT_MS,
     retryOnWorkerDeath = true,
-  } = options
+  } = options || {}
   if (typeof createWorker !== 'function') {
     throw new Error('[compiler] createCompilerPool: options.createWorker (() => Worker) is required')
   }
@@ -120,9 +124,15 @@ export function createCompilerPool(options = {}) {
     if (!r || r.type === 'error') {
       // Stable classification for downstream: worker-reported compile/setup errors get
       // their own code, distinct from the worker-death codes that gate the retry.
+      // A worker that classified its own failure (toolchain setup, which is machinery
+      // rather than the user's project) sends its code along — keep it, since only the
+      // worker can tell those apart, but only if it is one of the published codes. A
+      // runtime code that happens to ride along on the reply (a memfs `ENOENT`) is not
+      // something a host can branch on, so it lands in the compile-error bucket.
+      const workerCode = r && isCompilerErrorCode(r.code) ? r.code : null
       throw Object.assign(
         new Error(r && r.error ? r.error : `[compiler] ${description} failed in stage '${entry.stage}' worker`),
-        { code: 'compiler-stage-error', stage: entry.stage },
+        { code: workerCode || COMPILER_ERROR_CODES.stageError, stage: entry.stage },
       )
     }
     return r
@@ -153,8 +163,10 @@ export function createCompilerPool(options = {}) {
     return entry.warmed
   }
 
-  function warmup() {
-    return settleAll(workers.map(ensureWarm))
+  // 返回值刻意丢掉：settleAll 的数组是内部记账，暴露出去下游会以为那是每个 stage
+  // 的结果。await 之后什么都拿不到，正好对应 README 里写的 Promise<void>。
+  async function warmup() {
+    await settleAll(workers.map(ensureWarm))
   }
 
   // One full compile attempt against the resident realms. Ends quiescent: settleAll
@@ -198,23 +210,31 @@ export function createCompilerPool(options = {}) {
    * Single argument, no ambiguity: pass { files, workPath, options }. A bare
    * { relPath: content } map is also accepted (uses the default workPath, no options).
    * @param {{
-   *   files: Record<string,string>,
+   *   files: Record<string, string | Uint8Array>,
    *   workPath?: string,
-   *   options?: { fileTypes?: { template?: string[], style?: string[], viewScript?: string[] } },
-   * } | Record<string,string>} input
+   *   options?: { fileTypes?: { template?: readonly string[], style?: readonly string[], viewScript?: readonly string[] } },
+   * } | Record<string, string | Uint8Array>} input
+   *   Source files are text or raw bytes: an image belongs in the map as a Uint8Array,
+   *   not as a decoded string (postMessage carries it as bytes, and the stage worker
+   *   seeds it into its memfs as a file).
    *   options.fileTypes lets a caller register a custom template/style/view-script
    *   dialect (e.g. { template: ['qdml'], style: ['qdss'], viewScript: ['qds'] }) —
    *   forwarded to the setup worker's `setupCompile` (dmcc's storeInfo).
-   * @returns {Promise<{ appId: string, name: string, files: Record<string,string> }>}
+   * @returns {Promise<{ appId: string, name: string, files: Record<string, string | Uint8Array> }>}
+   *   Compiled products: UTF-8 text as strings, binary assets (images copied into
+   *   `main/static`) as raw bytes.
    */
   function compile(input = {}) {
     const run = chain.then(async () => {
       if (disposed) {
-        throw Object.assign(new Error('[compiler] pool has been disposed'), { code: 'compiler-pool-disposed' })
+        throw Object.assign(new Error('[compiler] pool has been disposed'), { code: COMPILER_ERROR_CODES.poolDisposed })
       }
       const files = input.files || input
       if (!files || typeof files !== 'object' || !Object.keys(files).length) {
-        throw new Error('[compiler] pool.compile expects { files: { relPath: content }, workPath?, options? } (or a non-empty files map)')
+        throw Object.assign(
+          new Error('[compiler] pool.compile expects { files: { relPath: content }, workPath?, options? } (or a non-empty files map)'),
+          { code: COMPILER_ERROR_CODES.invalidInput },
+        )
       }
       const workPath = input.workPath || defaultWorkPath
       const options = input.options || {}

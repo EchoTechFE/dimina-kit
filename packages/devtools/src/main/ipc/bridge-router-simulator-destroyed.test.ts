@@ -289,7 +289,6 @@ async function spawnSession(simulatorWc: MockWc): Promise<{
  *  `ctx.appData.evictBridge(appId, page.bridgeId)`. */
 function seedAppData(serviceWc: MockWc, bridgeId: string): void {
   const payload: ServicePublishPayload = {
-    bridgeId,
     msg: {
       type: `page_${bridgeId}`,
       target: 'render',

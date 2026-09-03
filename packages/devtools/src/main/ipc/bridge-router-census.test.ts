@@ -225,7 +225,7 @@ function emitOn(channel: string, sender: unknown, payload: unknown): void {
 }
 
 /** Forward an `audioListen` invokeAPI so a pending API call exists. */
-function forwardAudioListen(serviceWcId: number, bridgeId: string): void {
+function forwardAudioListen(serviceWcId: number): void {
   const serviceWc = stubs.wcById.get(serviceWcId)
   if (!serviceWc) throw new Error(`no service wc ${serviceWcId}`)
   const msg: MessageEnvelope = {
@@ -233,7 +233,7 @@ function forwardAudioListen(serviceWcId: number, bridgeId: string): void {
     target: 'container',
     body: { name: 'audioListen', params: { audioId: 7, success: 11 } },
   }
-  const payload: ServiceInvokePayload = { bridgeId, msg }
+  const payload: ServiceInvokePayload = { msg }
   emitOn(C.SERVICE_INVOKE, serviceWc, payload)
 }
 
@@ -274,7 +274,7 @@ describe('bridge-router resource census', () => {
     expect(census.simulatorDestroyedListeners).toEqual({ [simulatorWc.id]: 2 })
     expect(census.pendingApiCalls).toBe(0)
 
-    forwardAudioListen(a.serviceWcId, a.bridgeId)
+    forwardAudioListen(a.serviceWcId)
     expect(readCensus().pendingApiCalls).toBe(1)
     void b
   })
@@ -286,7 +286,7 @@ describe('bridge-router resource census', () => {
 
     const a = await spawnSession(simulatorWc, ROOT_A)
     const b = await spawnSession(simulatorWc, ROOT_B)
-    forwardAudioListen(a.serviceWcId, a.bridgeId)
+    forwardAudioListen(a.serviceWcId)
     expect(readCensus().appSessions).toBe(2)
 
     emitOn(C.DISPOSE, simulatorWc, { bridgeId: a.bridgeId, appSessionId: a.appSessionId } as DisposePayload)

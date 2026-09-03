@@ -73,7 +73,9 @@
   "files": [
     "dist",
     "src",
-    "sync"
+    "sync",
+    "!**/*.test.*",
+    "!**/*.spec.*"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.worker-lib.build.json && tsc -p tsconfig.build.json && tsc -p tsconfig.sync.build.json && node build-workers.js",

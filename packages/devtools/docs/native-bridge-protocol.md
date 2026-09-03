@@ -145,8 +145,8 @@ dimina-fe **没有 `invokeSync` 方法**——真机端同步 API 依赖宿主 J
 
 | 操作 | iOS（Swift） | Android（Kotlin） | native-host（Electron） |
 |---|---|---|---|
-| `DiminaServiceBridge.invoke` 注入 | `JSContext.setObject(..., "invoke")` | `QuickJSEngine.setInvokeCallback` | `preload.cjs`: `invoke(msg) => ipcRenderer.send('dmb:service:invoke', { bridgeId, msg })` |
-| `DiminaServiceBridge.publish` 注入 | `JSContext.setObject(..., "publish")` | `QuickJSEngine.setPublishCallback` | `preload.cjs`: `publish(targetBridgeId, msg) => ipcRenderer.send('dmb:service:publish', { bridgeId, targetBridgeId, msg })` |
+| `DiminaServiceBridge.invoke` 注入 | `JSContext.setObject(..., "invoke")` | `QuickJSEngine.setInvokeCallback` | `preload.cjs`: `invoke(msg) => ipcRenderer.send('dmb:service:invoke', { msg })`（不带来源页 id——一个 service host 服务整个页面栈，消息若涉及具体页面自己在 `msg.body` 里带） |
+| `DiminaServiceBridge.publish` 注入 | `JSContext.setObject(..., "publish")` | `QuickJSEngine.setPublishCallback` | `preload.cjs`: `publish(targetBridgeId, msg) => ipcRenderer.send('dmb:service:publish', { targetBridgeId, msg })` |
 | Native → Service onMessage | `evaluateScript("DiminaServiceBridge.onMessage(...)")` | `evaluateJavaScript("...")` | `preload.cjs`: `ipcRenderer.on('dmb:to-service', (_e, { msg }) => onMessageFn?.(msg))` |
 | `DiminaRenderBridge.invoke` 注入 | `WKScriptMessageHandler` | `JavascriptInterface` | `render-host/preload.cjs`: `invoke(s) => ipcRenderer.send('dmb:render:invoke', …)` |
 | `DiminaRenderBridge.publish` 注入 | — | — | `render-host/preload.cjs`: `publish(s) => ipcRenderer.send('dmb:render:publish', …)` |

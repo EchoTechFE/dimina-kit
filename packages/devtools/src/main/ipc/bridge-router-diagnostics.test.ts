@@ -270,13 +270,13 @@ function emitOn(channel: string, sender: unknown, payload: unknown): void {
   for (const fn of [...fns]) fn({ sender }, payload)
 }
 
-function sendServiceInvoke(serviceWc: MockWc, bridgeId: string, msg: MessageEnvelope): void {
-  const payload: ServiceInvokePayload = { bridgeId, msg }
+function sendServiceInvoke(serviceWc: MockWc, msg: MessageEnvelope): void {
+  const payload: ServiceInvokePayload = { msg }
   emitOn(C.SERVICE_INVOKE, serviceWc, payload)
 }
 
-function sendInvokeAPI(serviceWc: MockWc, bridgeId: string, name: string, params: Record<string, unknown>): void {
-  sendServiceInvoke(serviceWc, bridgeId, { type: 'invokeAPI', target: 'container', body: { name, params } })
+function sendInvokeAPI(serviceWc: MockWc, name: string, params: Record<string, unknown>): void {
+  sendServiceInvoke(serviceWc, { type: 'invokeAPI', target: 'container', body: { name, params } })
 }
 
 function triggerCallbacks(serviceWc: MockWc): Array<{ id: unknown; args: unknown }> {
@@ -400,11 +400,11 @@ describe('bridge-router — service-host-error diagnostic (coexists with wx.onEr
     installBridgeRouter(ctx)
     const captured = captureDiagnostics(ctx)
 
-    const { result, serviceWc } = await spawnSession(simulatorWc, ENTRY_PAGE)
-    sendInvokeAPI(serviceWc, result.bridgeId, 'onError', { success: 'errCb' })
+    const { serviceWc } = await spawnSession(simulatorWc, ENTRY_PAGE)
+    sendInvokeAPI(serviceWc, 'onError', { success: 'errCb' })
     serviceWc.sentMessages.length = 0
 
-    sendServiceInvoke(serviceWc, result.bridgeId, { type: 'serviceHostError', target: 'container', body: { message: 'boom' } })
+    sendServiceInvoke(serviceWc, { type: 'serviceHostError', target: 'container', body: { message: 'boom' } })
     await flush()
 
     const entry = captured.find(d => d.code === 'service-host-error')
@@ -425,9 +425,9 @@ describe('bridge-router — service-uncaught-error diagnostic (coexists with gue
     const guestConsoleEntries: unknown[] = []
     ;(ctx.guestConsole as { subscribe(sink: (e: unknown) => void): void } | undefined)?.subscribe((e) => { guestConsoleEntries.push(e) })
 
-    const { result, serviceWc } = await spawnSession(simulatorWc, ENTRY_PAGE)
+    const { serviceWc } = await spawnSession(simulatorWc, ENTRY_PAGE)
     const errorBody = { source: 'service', level: 'error', args: [{ message: 'Unhandled Promise Rejection', reason: 'boom' }] }
-    sendServiceInvoke(serviceWc, result.bridgeId, { type: 'consoleLog', target: 'container', body: errorBody })
+    sendServiceInvoke(serviceWc, { type: 'consoleLog', target: 'container', body: errorBody })
     await flush()
 
     const entry = captured.find(d => d.code === 'service-uncaught-error')

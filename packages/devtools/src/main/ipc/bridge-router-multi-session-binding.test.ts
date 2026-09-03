@@ -260,7 +260,7 @@ function emitPageLifecycle(simulatorWc: MockWc, payload: PageLifecyclePayload): 
 }
 
 /** Forward an `audioListen` invokeAPI from the service through the router. */
-function forwardAudioListen(serviceWc: MockWc, bridgeId: string, callbacks: {
+function forwardAudioListen(serviceWc: MockWc, callbacks: {
   success?: unknown; complete?: unknown; fail?: unknown
 }): void {
   const msg: MessageEnvelope = {
@@ -273,7 +273,7 @@ function forwardAudioListen(serviceWc: MockWc, bridgeId: string, callbacks: {
       params: { audioId: 7, ...callbacks },
     },
   }
-  const payload: ServiceInvokePayload = { bridgeId, msg }
+  const payload: ServiceInvokePayload = { msg }
   emitOn(C.SERVICE_INVOKE, serviceWc, payload)
 }
 
@@ -345,9 +345,9 @@ describe('bridge-router — many-to-many binding of one simulator webContents to
     const A = await spawnSession(simulatorWc, { pagePath: ROOT_A })
     const B = await spawnSession(simulatorWc, { pagePath: ROOT_B })
 
-    forwardAudioListen(A.serviceWc, A.result.bridgeId, { success: 'a-success', complete: 'a-complete', fail: 'a-fail' })
+    forwardAudioListen(A.serviceWc, { success: 'a-success', complete: 'a-complete', fail: 'a-fail' })
     const aRequestId = latestApiCallRequestId(simulatorWc)
-    forwardAudioListen(B.serviceWc, B.result.bridgeId, { success: 'b-success', complete: 'b-complete', fail: 'b-fail' })
+    forwardAudioListen(B.serviceWc, { success: 'b-success', complete: 'b-complete', fail: 'b-fail' })
     const bRequestId = latestApiCallRequestId(simulatorWc)
 
     drainSent(A.serviceWc)
@@ -372,7 +372,7 @@ describe('bridge-router — many-to-many binding of one simulator webContents to
     void ctx
 
     const A = await spawnSession(simulatorWc, { pagePath: ROOT_A })
-    forwardAudioListen(A.serviceWc, A.result.bridgeId, { success: 'a-success', complete: 'a-complete', fail: 'a-fail' })
+    forwardAudioListen(A.serviceWc, { success: 'a-success', complete: 'a-complete', fail: 'a-fail' })
     const aRequestId = latestApiCallRequestId(simulatorWc)
 
     // B spawns on the SAME wc while A's audioListen subscription is still live.
@@ -403,7 +403,7 @@ describe('bridge-router — many-to-many binding of one simulator webContents to
     const simWc2 = stubs.makeWebContents()
     await spawnSession(simWc2, { pagePath: ROOT_C })
 
-    forwardAudioListen(A.serviceWc, A.result.bridgeId, { success: 'a-success', complete: 'a-complete', fail: 'a-fail' })
+    forwardAudioListen(A.serviceWc, { success: 'a-success', complete: 'a-complete', fail: 'a-fail' })
     const aRequestId = latestApiCallRequestId(simWc1)
 
     drainSent(A.serviceWc)
@@ -430,7 +430,7 @@ describe('bridge-router — many-to-many binding of one simulator webContents to
     const A = await spawnSession(simulatorWc, { pagePath: ROOT_A })
     const B = await spawnSession(simulatorWc, { pagePath: ROOT_B })
 
-    forwardAudioListen(A.serviceWc, A.result.bridgeId, { success: 'a-success', complete: 'a-complete', fail: 'a-fail' })
+    forwardAudioListen(A.serviceWc, { success: 'a-success', complete: 'a-complete', fail: 'a-fail' })
     const aRequestId = latestApiCallRequestId(simulatorWc)
 
     // Dispose the LATEST session (B) — A stays alive with its pending intact.
@@ -454,7 +454,7 @@ describe('bridge-router — many-to-many binding of one simulator webContents to
     const A = await spawnSession(simulatorWc, { pagePath: ROOT_A })
     const B = await spawnSession(simulatorWc, { pagePath: ROOT_B })
 
-    forwardAudioListen(B.serviceWc, B.result.bridgeId, { success: 'b-success', complete: 'b-complete', fail: 'b-fail' })
+    forwardAudioListen(B.serviceWc, { success: 'b-success', complete: 'b-complete', fail: 'b-fail' })
     const bRequestId = latestApiCallRequestId(simulatorWc)
 
     emitDispose(simulatorWc, { bridgeId: A.result.appSessionId })
@@ -485,7 +485,7 @@ describe('bridge-router — many-to-many binding of one simulator webContents to
     await flush()
 
     const Cs = await spawnSession(simulatorWc, { pagePath: ROOT_C })
-    forwardAudioListen(Cs.serviceWc, Cs.result.bridgeId, { success: 'c-success', complete: 'c-complete', fail: 'c-fail' })
+    forwardAudioListen(Cs.serviceWc, { success: 'c-success', complete: 'c-complete', fail: 'c-fail' })
     const cRequestId = latestApiCallRequestId(simulatorWc)
 
     drainSent(Cs.serviceWc)

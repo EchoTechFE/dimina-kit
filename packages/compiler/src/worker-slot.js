@@ -18,6 +18,7 @@
 // dead transport's terminate() settlement (worker_threads returns a Promise — until it
 // resolves the old worker may still be writing shared disk), then spawns the next
 // generation. Messages from a superseded generation are dropped, never FIFO-paired.
+import { COMPILER_ERROR_CODES } from './error-codes.js'
 
 // Await every promise (so no request is left in flight across an attempt boundary —
 // a retry must never overlap the previous attempt's traffic), then surface the first
@@ -47,7 +48,7 @@ export function createWorkerSlot({ name, spawnTransport, onEvent }) {
   let reviving = null        // in-flight ensureAlive(), so concurrent callers share one respawn
 
   const codedError = (message, code) => Object.assign(new Error(message), { code })
-  const disposedError = () => codedError(`${name}: pool has been disposed`, 'compiler-pool-disposed')
+  const disposedError = () => codedError(`${name}: pool has been disposed`, COMPILER_ERROR_CODES.poolDisposed)
 
   function armTimer(entry) {
     if (!(entry.timeoutMs < Infinity)) return
@@ -57,7 +58,7 @@ export function createWorkerSlot({ name, spawnTransport, onEvent }) {
     entry.timer = setTimeout(() => {
       judgeDead(
         `${name} timed out after ${entry.timeoutMs}ms waiting for a reply to '${entry.description}'`,
-        'compiler-worker-timeout',
+        COMPILER_ERROR_CODES.workerTimeout,
       )
     }, entry.timeoutMs)
   }
@@ -103,7 +104,7 @@ export function createWorkerSlot({ name, spawnTransport, onEvent }) {
 
   function handleCrash(gen, message) {
     if (disposed || dead || gen !== generation) return
-    judgeDead(message, 'compiler-worker-crashed')
+    judgeDead(message, COMPILER_ERROR_CODES.workerCrashed)
   }
 
   function ensureAlive() {
@@ -137,7 +138,7 @@ export function createWorkerSlot({ name, spawnTransport, onEvent }) {
       if (dead) {
         return reject(codedError(
           `${name} is dead — ensureAlive() must run before request()`,
-          'compiler-worker-dead',
+          COMPILER_ERROR_CODES.workerDead,
         ))
       }
       const entry = { resolve, reject, timeoutMs, description, timer: null }
@@ -146,7 +147,7 @@ export function createWorkerSlot({ name, spawnTransport, onEvent }) {
       try {
         transport.postMessage(msg)
       } catch (err) {
-        judgeDead(`${name} postMessage failed: ${(err && err.message) || err}`, 'compiler-worker-crashed')
+        judgeDead(`${name} postMessage failed: ${(err && err.message) || err}`, COMPILER_ERROR_CODES.workerCrashed)
       }
     })
   }

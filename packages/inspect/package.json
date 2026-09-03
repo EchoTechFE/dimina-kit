@@ -37,7 +37,9 @@
   },
   "files": [
     "dist",
-    "src"
+    "src",
+    "!**/*.test.*",
+    "!**/*.spec.*"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

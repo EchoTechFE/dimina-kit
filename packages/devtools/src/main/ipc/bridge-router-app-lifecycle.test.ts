@@ -195,9 +195,9 @@ async function spawnSession(simulatorWc: MockWc): Promise<{ result: SpawnResult;
   return { result, serviceWc: serviceWc as unknown as MockWc }
 }
 
-function sendInvokeAPI(serviceWc: MockWc, bridgeId: string, name: string, params: Record<string, unknown>): void {
+function sendInvokeAPI(serviceWc: MockWc, name: string, params: Record<string, unknown>): void {
   const msg: MessageEnvelope = { type: 'invokeAPI', target: 'container', body: { name, params } }
-  const payload: ServiceInvokePayload = { bridgeId, msg }
+  const payload: ServiceInvokePayload = { msg }
   emitOn(C.SERVICE_INVOKE, serviceWc, payload)
 }
 
@@ -239,15 +239,15 @@ describe('bridge-router — onError / offError lifecycle', () => {
   it('fires triggerCallback for the registered onError id when serviceHostError arrives', async () => {
     const { ctx, simulatorWc } = makeCtx()
     installBridgeRouter(ctx)
-    const { result, serviceWc } = await spawnSession(simulatorWc)
+    const { serviceWc } = await spawnSession(simulatorWc)
 
     // Register an onError listener
-    sendInvokeAPI(serviceWc, result.bridgeId, 'onError', { success: 'errCb' })
+    sendInvokeAPI(serviceWc, 'onError', { success: 'errCb' })
     drainSent(serviceWc)
 
     // Deliver a serviceHostError from the service webContents
     const errMsg: MessageEnvelope = { type: 'serviceHostError', target: 'container', body: { message: 'boom' } }
-    emitOn(C.SERVICE_INVOKE, serviceWc, { bridgeId: result.bridgeId, msg: errMsg })
+    emitOn(C.SERVICE_INVOKE, serviceWc, { msg: errMsg })
 
     const cbs = triggerCallbacks(serviceWc)
     const fired = cbs.find(c => c.id === 'errCb')
@@ -260,16 +260,16 @@ describe('bridge-router — onError / offError lifecycle', () => {
   it('does NOT fire the callback after offError deregisters the listener', async () => {
     const { ctx, simulatorWc } = makeCtx()
     installBridgeRouter(ctx)
-    const { result, serviceWc } = await spawnSession(simulatorWc)
+    const { serviceWc } = await spawnSession(simulatorWc)
 
     // Register then immediately unregister
-    sendInvokeAPI(serviceWc, result.bridgeId, 'onError', { success: 'errCb' })
-    sendInvokeAPI(serviceWc, result.bridgeId, 'offError', { success: 'errCb' })
+    sendInvokeAPI(serviceWc, 'onError', { success: 'errCb' })
+    sendInvokeAPI(serviceWc, 'offError', { success: 'errCb' })
     drainSent(serviceWc)
 
     // Another serviceHostError after the listener was removed
     const errMsg: MessageEnvelope = { type: 'serviceHostError', target: 'container', body: { message: 'second error' } }
-    emitOn(C.SERVICE_INVOKE, serviceWc, { bridgeId: result.bridgeId, msg: errMsg })
+    emitOn(C.SERVICE_INVOKE, serviceWc, { msg: errMsg })
 
     const cbs = triggerCallbacks(serviceWc)
     expect(cbs.find(c => c.id === 'errCb')).toBeUndefined()
@@ -291,7 +291,7 @@ describe('bridge-router — pageScrollTo', () => {
     drainSent(serviceWc)
 
     // Send pageScrollTo from the service
-    sendInvokeAPI(serviceWc, result.bridgeId, 'pageScrollTo', {
+    sendInvokeAPI(serviceWc, 'pageScrollTo', {
       scrollTop: 120,
       duration: 300,
       success: 'okCb',
@@ -313,12 +313,12 @@ describe('bridge-router — pageScrollTo', () => {
   it('still fires success/complete even when no renderWc is attached (page not loaded)', async () => {
     const { ctx, simulatorWc } = makeCtx()
     installBridgeRouter(ctx)
-    const { result, serviceWc } = await spawnSession(simulatorWc)
+    const { serviceWc } = await spawnSession(simulatorWc)
 
     drainSent(serviceWc)
 
     // No render wc bound — page.renderWc is null
-    sendInvokeAPI(serviceWc, result.bridgeId, 'pageScrollTo', {
+    sendInvokeAPI(serviceWc, 'pageScrollTo', {
       scrollTop: 50,
       success: 'okCb2',
       complete: 'doneCb2',
@@ -336,10 +336,10 @@ describe('bridge-router — installAppLifecycleDriver (window events)', () => {
   it('sends appHide service message and fires onAppHide callbacks on mainWindow minimize', async () => {
     const { ctx, simulatorWc, mainWindow } = makeCtx()
     installBridgeRouter(ctx)
-    const { result, serviceWc } = await spawnSession(simulatorWc)
+    const { serviceWc } = await spawnSession(simulatorWc)
 
     // Register an onAppHide listener
-    sendInvokeAPI(serviceWc, result.bridgeId, 'onAppHide', { success: 'hideCb' })
+    sendInvokeAPI(serviceWc, 'onAppHide', { success: 'hideCb' })
     drainSent(serviceWc)
 
     // Emit 'minimize' on the mainWindow
@@ -357,10 +357,10 @@ describe('bridge-router — installAppLifecycleDriver (window events)', () => {
   it('sends appShow service message and fires onAppShow callbacks on mainWindow restore', async () => {
     const { ctx, simulatorWc, mainWindow } = makeCtx()
     installBridgeRouter(ctx)
-    const { result, serviceWc } = await spawnSession(simulatorWc)
+    const { serviceWc } = await spawnSession(simulatorWc)
 
     // Register an onAppShow listener
-    sendInvokeAPI(serviceWc, result.bridgeId, 'onAppShow', { success: 'showCb' })
+    sendInvokeAPI(serviceWc, 'onAppShow', { success: 'showCb' })
     drainSent(serviceWc)
 
     // Emit 'restore' on the mainWindow
@@ -376,10 +376,10 @@ describe('bridge-router — installAppLifecycleDriver (window events)', () => {
   it('sends appHide on hide event and appShow on show event', async () => {
     const { ctx, simulatorWc, mainWindow } = makeCtx()
     installBridgeRouter(ctx)
-    const { result, serviceWc } = await spawnSession(simulatorWc)
+    const { serviceWc } = await spawnSession(simulatorWc)
 
-    sendInvokeAPI(serviceWc, result.bridgeId, 'onAppHide', { success: 'hideCb2' })
-    sendInvokeAPI(serviceWc, result.bridgeId, 'onAppShow', { success: 'showCb2' })
+    sendInvokeAPI(serviceWc, 'onAppHide', { success: 'hideCb2' })
+    sendInvokeAPI(serviceWc, 'onAppShow', { success: 'showCb2' })
     drainSent(serviceWc)
 
     mainWindow.emit('hide')
