@@ -230,13 +230,13 @@ async function spawnSession(simulatorWc: MockWc): Promise<{ result: SpawnResult;
 /** Drive a SERVICE_INVOKE (invokeAPI) from the service-host wc through the
  *  router — this hits the `tapIn(C.SERVICE_INVOKE, …)` recorder at the top of
  *  the SERVICE_INVOKE handler. */
-function driveServiceInvoke(serviceWc: MockWc, bridgeId: string): void {
+function driveServiceInvoke(serviceWc: MockWc): void {
   const msg: MessageEnvelope = {
     type: 'invokeAPI',
     target: 'container',
     body: { name: 'getSystemInfo', params: {} },
   }
-  const payload: ServiceInvokePayload = { bridgeId, msg }
+  const payload: ServiceInvokePayload = { msg }
   emitOn(C.SERVICE_INVOKE, serviceWc, payload)
 }
 
@@ -260,7 +260,7 @@ describe('bridge-router — debugTap records the bridge message stream (flag-gat
     const before = tap!.entries().length
 
     // (2) Drive a real SERVICE_INVOKE from the service-host wc.
-    driveServiceInvoke(serviceWc, result.bridgeId)
+    driveServiceInvoke(serviceWc)
 
     const entries = tap!.entries()
     expect(entries.length, 'driving SERVICE_INVOKE must record at least one entry').toBeGreaterThan(before)
@@ -281,7 +281,7 @@ describe('bridge-router — debugTap records the bridge message stream (flag-gat
 
     const { ctx, simulatorWc } = makeCtx()
     installBridgeRouter(ctx)
-    const { result, serviceWc } = await spawnSession(simulatorWc)
+    const { serviceWc } = await spawnSession(simulatorWc)
 
     expect(ctx.bridge, 'ctx.bridge must be wired by installBridgeRouter').toBeDefined()
     const tap = ctx.bridge!.debugTap
@@ -291,7 +291,7 @@ describe('bridge-router — debugTap records the bridge message stream (flag-gat
 
     // Drive the SAME message that the ON case recorded — the disabled recorder
     // must not append anything.
-    driveServiceInvoke(serviceWc, result.bridgeId)
+    driveServiceInvoke(serviceWc)
 
     expect(
       tap!.entries(),

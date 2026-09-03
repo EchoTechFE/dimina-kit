@@ -207,7 +207,7 @@ describe('bridge-router — storageChanged container message', () => {
   it('calls ctx.onServiceStorageChanged with the SENDER-resolved appId, ignoring an appId embedded in the body', async () => {
     const { ctx, simulatorWc } = makeCtx()
     installBridgeRouter(ctx)
-    const { result, serviceWc } = await spawnSession(simulatorWc)
+    const { serviceWc } = await spawnSession(simulatorWc)
 
     const change = { op: 'set', key: `${APP_ID}_k`, value: 'v' } as SyncStorageChange
     const msg: MessageEnvelope = {
@@ -215,7 +215,7 @@ describe('bridge-router — storageChanged container message', () => {
       target: 'container',
       body: { ...change, appId: 'NOT-THE-REAL-APP-ID' },
     }
-    emitOn(C.SERVICE_INVOKE, serviceWc, { bridgeId: result.bridgeId, msg })
+    emitOn(C.SERVICE_INVOKE, serviceWc, { msg })
 
     expect(ctx.onServiceStorageChanged).toHaveBeenCalledTimes(1)
     expect(ctx.onServiceStorageChanged).toHaveBeenCalledWith(
@@ -228,7 +228,7 @@ describe('bridge-router — storageChanged container message', () => {
     const { ctx, simulatorWc } = makeCtx()
     delete (ctx as { onServiceStorageChanged?: unknown }).onServiceStorageChanged
     installBridgeRouter(ctx)
-    const { result, serviceWc } = await spawnSession(simulatorWc)
+    const { serviceWc } = await spawnSession(simulatorWc)
 
     const msg: MessageEnvelope = {
       type: 'storageChanged',
@@ -236,7 +236,7 @@ describe('bridge-router — storageChanged container message', () => {
       body: { op: 'clear' },
     }
     expect(() => {
-      emitOn(C.SERVICE_INVOKE, serviceWc, { bridgeId: result.bridgeId, msg })
+      emitOn(C.SERVICE_INVOKE, serviceWc, { msg })
     }).not.toThrow()
   })
 })

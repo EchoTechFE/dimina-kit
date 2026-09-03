@@ -191,7 +191,6 @@ async function spawnSession(simulatorWc: MockWc): Promise<{ result: SpawnResult;
 /** Forward an arbitrary one-shot `invokeAPI` call from the service through the router. */
 function forwardApiCall(
   serviceWc: MockWc,
-  bridgeId: string,
   name: string,
   params: Record<string, unknown>,
   callbacks: { success?: unknown; complete?: unknown; fail?: unknown },
@@ -201,7 +200,7 @@ function forwardApiCall(
     target: 'container',
     body: { name, params: { ...params, ...callbacks } },
   }
-  const payload: ServiceInvokePayload = { bridgeId, msg }
+  const payload: ServiceInvokePayload = { msg }
   emitOn(C.SERVICE_INVOKE, serviceWc, payload)
 }
 
@@ -226,8 +225,8 @@ async function setup(
 ): Promise<{ ctx: WorkbenchContext; simulatorWc: MockWc; serviceWc: MockWc; requestId: string }> {
   const { ctx, simulatorWc } = makeCtx()
   installBridgeRouter(ctx)
-  const { result, serviceWc } = await spawnSession(simulatorWc)
-  forwardApiCall(serviceWc, result.bridgeId, name, params, { success: 'svc-success', complete: 'svc-complete', fail: 'svc-fail' })
+  const { serviceWc } = await spawnSession(simulatorWc)
+  forwardApiCall(serviceWc, name, params, { success: 'svc-success', complete: 'svc-complete', fail: 'svc-fail' })
   const requestId = forwardedRequestId(simulatorWc)
   return { ctx, simulatorWc, serviceWc, requestId }
 }

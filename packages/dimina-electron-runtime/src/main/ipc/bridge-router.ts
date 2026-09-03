@@ -229,7 +229,10 @@ interface AppSession {
   /** Visible top-of-stack page bridgeId reported by DeviceShell (ACTIVE_PAGE).
    * Null until the first signal — callers fall back to the root bridgeId
    * (= appSessionId). Main has no z-order concept of its own; this mirrors the
-   * DeviceShell ShellState so panels/automation can target the current page. */
+   * DeviceShell ShellState so panels/automation can target the current page.
+   * Read through `resolveActiveBridgeId`, which applies the root fallback —
+   * both the public accessors and `ensureRenderBound`'s re-emit check share
+   * that one definition of "active" rather than re-deriving it. */
   activeBridgeId: string | null
   /** Full ordered page stack (bottom→top) last reported by DeviceShell
    * (PAGE_STACK). Undefined until the first signal; automation's
@@ -316,6 +319,15 @@ interface PageSession {
    * `loadResource` gates on the root page's flag (see `serviceLoadDeferred`). */
   renderLoadSent: boolean
   windowConfig: PageWindowConfig
+  /**
+   * webContents ids that were once bound as this page's `renderWc` and were
+   * then replaced by a newer guest (see `ensureRenderBound`'s swap branch). A
+   * late RENDER_INVOKE/RENDER_PUBLISH arriving from one of these — the old
+   * guest was never destroyed, just superseded — must not reclaim `renderWc`
+   * or re-emit `activePage` on its behalf. Entries are released when that
+   * webContents is actually destroyed (see the `own()` cleanup below).
+   */
+  supersededRenderWcIds: Set<number>
 }
 
 type ProtocolHandler = (request: GlobalRequest) => Promise<Response>
@@ -408,10 +420,21 @@ interface RouterState {
  */
 /**
  * Render-side activity worth re-reading panel data on: a page's DOM mounted
- * (`domReady`), the visible page changed (`activePage`), or the active page's
- * DOM mutated in place (`domMutated`, from the render-guest MutationObserver).
- * Panels that pull from the active render guest (WXML/element-inspect) subscribe
- * via `BridgeRouterHandle.onRenderEvent` so they can refresh without polling.
+ * (`domReady`), the resolvable active render guest changed (`activePage`), or
+ * the active page's DOM mutated in place (`domMutated`, from the render-guest
+ * MutationObserver). Panels that pull from the active render guest (WXML/
+ * element-inspect) subscribe via `BridgeRouterHandle.onRenderEvent` so they
+ * can refresh without polling.
+ *
+ * `activePage` fires on either of two triggers: DeviceShell reporting a new
+ * top-of-stack page (ACTIVE_PAGE), or that active page's render guest
+ * completing its bind. A page can become active before its guest exists
+ * (SPAWN/PAGE_OPEN don't know the guest webContents up front), so on the
+ * shell-reported event `getActiveRenderWc()` may still be null; the bind
+ * event then follows once the guest is resolvable. Subscribers must tolerate
+ * a null guest on any single event, but never need to special-case which
+ * trigger fired: after the last event, `getActiveRenderWc()` reflects the
+ * current state.
  */
 export interface RenderEvent {
   kind: 'domReady' | 'activePage' | 'domMutated'
@@ -552,6 +575,26 @@ export interface BridgeRouterHandle {
    * partial `BridgeRouterHandle` test mocks don't each have to stub it.
    */
   debugTap?: DebugTap
+}
+
+/**
+ * The session's current active-page bridgeId per the same rule `getActiveBridgeId`
+ * and `getActiveRenderWc` expose to consumers: prefer the explicit ACTIVE_PAGE
+ * signal, else fall back to the root page (= appSessionId) — but only while
+ * that page is still alive, since navigation can close the root and then the
+ * fallback would name a page that no longer exists. Shared so `ensureRenderBound`
+ * can recognize "this bind is for the active page" using the identical
+ * definition of "active" the accessors use.
+ */
+function resolveActiveBridgeId(ap: AppSession): string | null {
+  if (ap.activeBridgeId) return ap.activeBridgeId
+  return ap.pages.has(ap.appSessionId) ? ap.appSessionId : null
+}
+
+/** The session's live top-of-stack page, or undefined when it has none. */
+function activePageOf(state: RouterState, ap: AppSession): PageSession | undefined {
+  const bridgeId = resolveActiveBridgeId(ap)
+  return bridgeId ? state.pageSessions.get(bridgeId) : undefined
 }
 
 // Same-appId matches prefer the MOST RECENT spawn (Maps preserve insertion
@@ -764,12 +807,7 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
     },
     getActiveBridgeId: (appId) => {
       const ap = resolveCurrentApp(state, ctx, appId)
-      if (!ap) return null
-      if (ap.activeBridgeId) return ap.activeBridgeId
-      // Fall back to the root page (= appSessionId) before the first signal —
-      // but only while that page is still alive: navigation can close the root
-      // and then the fallback would name a page that no longer exists.
-      return ap.pages.has(ap.appSessionId) ? ap.appSessionId : null
+      return ap ? resolveActiveBridgeId(ap) : null
     },
     getPageStack: (appId) => {
       const ap = resolveCurrentApp(state, ctx, appId)
@@ -782,7 +820,8 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
     getActiveRenderWc: (appId) => {
       const ap = resolveCurrentApp(state, ctx, appId)
       if (!ap) return null
-      const page = state.pageSessions.get(ap.activeBridgeId ?? ap.appSessionId)
+      const bridgeId = resolveActiveBridgeId(ap)
+      const page = bridgeId ? state.pageSessions.get(bridgeId) : undefined
       return page?.renderWc && !page.renderWc.isDestroyed() ? page.renderWc : null
     },
     onRenderEvent: (listener) => {
@@ -1034,7 +1073,11 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
     tapIn(C.SERVICE_INVOKE, event.sender, payload)
     const ap = appByWc(state, event.sender)
     if (!ap) return
-    const page = state.pageSessions.get(payload.bridgeId) ?? state.pageSessions.get(ap.appSessionId)
+    // One service host serves the session's whole page stack, so the sender
+    // names no page (see `ServiceInvokePayload`): the default is the live
+    // top-of-stack page, and a message about a specific page names it itself —
+    // `routeFromService` prefers `pageFromMsg` over this default.
+    const page = activePageOf(state, ap)
     if (!page) return
     routeFromService(state, ap, page, payload.msg, ctx)
   }
@@ -1344,6 +1387,7 @@ async function handleSpawn(
     renderLoadPending: false,
     renderLoadSent: false,
     windowConfig: rootWindowConfig,
+    supersededRenderWcIds: new Set(),
   }
 
   state.appSessions.set(appSessionId, appSession)
@@ -1519,6 +1563,7 @@ async function handlePageOpen(
     renderLoadPending: false,
     renderLoadSent: false,
     windowConfig,
+    supersededRenderWcIds: new Set(),
   }
   state.pageSessions.set(bridgeId, page)
   ap.pages.set(bridgeId, page)
@@ -2656,9 +2701,25 @@ function forwardToRender(ap: AppSession, msg: MessageEnvelope, targetBridgeId?: 
 function ensureRenderBound(state: RouterState, sender: WebContents, bridgeId: string): PageSession | undefined {
   const page = state.pageSessions.get(bridgeId)
   if (!page) return undefined
+  // A destroyed sender is never a valid owner, even when it's still the
+  // recorded `renderWc` (e.g. a message queued before teardown lands after):
+  // reject before any state mutation so a dead webContents can't re-arm
+  // bookkeeping that its own destroy handler (below) is about to tear down.
+  if (sender.isDestroyed()) return undefined
   if (page.renderWc !== sender) {
+    // A superseded guest is never resurrected: it was replaced by a newer
+    // bind below (renderWc is monotonic — the current owner only moves
+    // forward), so a message it sends after losing ownership is discarded
+    // rather than reclaiming `renderWc` or re-emitting `activePage` on its
+    // behalf. Cleared once that webContents is actually destroyed (below).
+    if (page.supersededRenderWcIds.has(sender.id)) return undefined
     if (page.renderWc && page.renderWc !== sender && !page.renderWc.isDestroyed()) {
       console.warn(`[bridge-router] page ${bridgeId} render webview swap (wc ${page.renderWc.id} → ${sender.id})`)
+      page.supersededRenderWcIds.add(page.renderWc.id)
+      // The replaced guest loses both ownership and the reverse lookup in the
+      // same step, so census-style bindings counts reflect the swap
+      // immediately instead of waiting for the old guest's own destroy to fire.
+      if (state.wcIdToBridgeId.get(page.renderWc.id) === bridgeId) state.wcIdToBridgeId.delete(page.renderWc.id)
     }
     page.renderWc = sender
     state.wcIdToBridgeId.set(sender.id, bridgeId)
@@ -2670,8 +2731,30 @@ function ensureRenderBound(state: RouterState, sender: WebContents, bridgeId: st
     state.connections.acquire(sender).own(() => {
       const p = state.pageSessions.get(bridgeId)
       if (p && p.renderWc === sender) p.renderWc = null
+      if (p) p.supersededRenderWcIds.delete(sender.id)
       if (state.wcIdToBridgeId.get(sender.id) === bridgeId) state.wcIdToBridgeId.delete(sender.id)
     })
+    // The active page's guest binds AFTER `onActivePage` already fired (SPAWN/
+    // PAGE_OPEN never know the guest webContents up front) — re-emit `activePage`
+    // now so a subscriber that reads `getActiveRenderWc()` on that signal (e.g.
+    // elements-forward priming a fresh DOM snapshot) doesn't permanently miss a
+    // page's first activation. Only for the active page — and only while its
+    // AppSession is still the one `findAppSessionByAppId` resolves to for this
+    // appId: a same-appId respawn/reopen supersedes the old session (see
+    // `findAppSessionByAppId`), and a bind landing on that stale session must
+    // not surface as if it were the app's current active page. A background
+    // page binding its guest is likewise not an activity a panel needs to
+    // react to.
+    const ap = state.appSessions.get(page.appSessionId)
+    if (ap && resolveActiveBridgeId(ap) === bridgeId && findAppSessionByAppId(state, ap.appId) === ap) {
+      state.emitRenderEvent({
+        kind: 'activePage',
+        appId: ap.appId,
+        bridgeId,
+        pagePath: page.pagePath,
+        query: page.query,
+      })
+    }
   }
   return page
 }

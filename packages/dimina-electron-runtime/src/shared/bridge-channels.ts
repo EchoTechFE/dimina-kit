@@ -341,13 +341,24 @@ export interface NavCallbackPayload {
   callbacks: { success?: unknown; fail?: unknown; complete?: unknown }
 }
 
+/**
+ * `dmb:service:invoke` — service host → main.
+ *
+ * Carries no source page id on purpose. One service host serves a session's
+ * whole page stack and outlives any single page in it, so it has no page
+ * identity to stamp; the sending webContents identifies the app session, and a
+ * message that concerns one page names it in `msg.body.bridgeId`.
+ */
 export interface ServiceInvokePayload {
-  bridgeId: string
   msg: MessageEnvelope
 }
 
+/**
+ * `dmb:service:publish` — service host → main, forwarded to a render guest.
+ * `targetBridgeId` names the destination page. No source page id, for the same
+ * reason as `ServiceInvokePayload`.
+ */
 export interface ServicePublishPayload {
-  bridgeId: string
   targetBridgeId?: string
   msg: MessageEnvelope
 }
