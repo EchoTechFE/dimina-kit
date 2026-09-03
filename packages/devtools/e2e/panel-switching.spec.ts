@@ -6,21 +6,21 @@ test.describe('Right panel switching', () => {
 
   useSharedProject(test, DEMO_APP_DIR)
 
-  test('selecting each panel renders the correct panel in the main window', async ({
-    mainWindow,
+  test('selecting each panel renders the correct panel in the workbench window', async ({
+    workbench,
   }) => {
     // UI-driven: click the real tab buttons (the only switching path a user
     // has). The raw PanelChannel.Select/SelectSimulator IPC channels this
     // test used to drive are being decommissioned.
     for (const name of ['WXML', 'AppData', 'Storage']) {
-      const tab = mainWindow.getByRole('tab', { name })
+      const tab = workbench.getByRole('tab', { name })
       await tab.click()
       // The dock marks the selected tab with `data-active`; that flip IS the
       // switch-complete signal, so the assertion's own wait replaces a sleep.
       await expect(tab).toHaveAttribute('data-active', 'true')
     }
     // Selecting Console should show the devtools overlay (chrome devtools)
-    const consoleTab = mainWindow.getByRole('tab', { name: 'Console' })
+    const consoleTab = workbench.getByRole('tab', { name: 'Console' })
     await consoleTab.click()
     await expect(consoleTab).toHaveAttribute('data-active', 'true')
 
@@ -32,21 +32,21 @@ test.describe('Right panel switching', () => {
     // open project" — the initial compiling/ready projectStatus emissions race
     // the renderer's subscription mount, so right after open the log may
     // legitimately be empty. The hook unit tests own the event semantics.
-    const compileTab = mainWindow.getByRole('tab', { name: '编译' })
+    const compileTab = workbench.getByRole('tab', { name: '编译' })
     await compileTab.click()
     await expect(compileTab).toHaveAttribute('data-active', 'true')
     // The dock keeps every panel body mounted; the active one's
     // `data-deck-panel-body` wrapper flips to display:flex (visible).
-    await expect(mainWindow.locator('[data-deck-panel-body="compile"]')).toBeVisible()
+    await expect(workbench.locator('[data-deck-panel-body="compile"]')).toBeVisible()
   })
 
-  test('selecting WXML tab shows WXML panel content in main window', async ({ mainWindow }) => {
-    await mainWindow.getByRole('tab', { name: 'WXML' }).click()
+  test('selecting WXML tab shows WXML panel content in the workbench window', async ({ workbench }) => {
+    await workbench.getByRole('tab', { name: 'WXML' }).click()
 
     // The WXML panel has no manual refresh button (it's live). Poll for the
     // panel container instead of a fixed sleep — it mounts once the tab is
     // selected.
-    await expect(mainWindow.getByTestId('wxml-panel')).toBeVisible({ timeout: 5000 })
+    await expect(workbench.getByTestId('wxml-panel')).toBeVisible({ timeout: 5000 })
   })
 
   test('closing project does not leave orphan right-panel views', async ({ electronApp }) => {

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, protocol, session as electronSession, webContents } from 'electron'
+import { app, BrowserWindow, ipcMain, webContents } from 'electron'
 import type { IpcMainEvent, IpcMainInvokeEvent, WebContents } from 'electron'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -6,6 +6,8 @@ import { BRIDGE_CHANNELS as C, SIMULATOR_EVENTS as E, deviceInfoToHostEnv } from
 import type { NativeDeviceInfo, SyncStorageChange } from '../../shared/runtime-types.js'
 import { apiCallWatchdogMs, isPersistentSimulatorApi } from '../../shared/simulator-api-metadata.js'
 import { resolveRuntimeAssetPaths } from '../utils/paths.js'
+import { addMuxedInvokeHandler, addMuxedSyncListener, routerOwnsSender } from './bridge-router-ipc-mux.js'
+import { addMuxedDmbResourceHandler } from './bridge-router-protocol-mux.js'
 import { createSessionListenerBag } from './session-listener-bag.js'
 import type { SessionListenerBag } from './session-listener-bag.js'
 import type {
@@ -40,6 +42,7 @@ import type { ConnectionRegistry, DebugTap, Disposable } from '@dimina-kit/elect
 import { createDebugTap } from '@dimina-kit/electron-deck/main'
 import { startDiminaResourceServer, type DiminaResourceServer } from '../services/dimina-resource-server.js'
 import { handleDmbResourceRequest } from '../services/dmb-resource/handle-request.js'
+import type { DmbResourceSession } from '../services/dmb-resource/handle-request.js'
 import { buildRenderHostDocumentUrl } from '../services/dmb-resource/render-host-url.js'
 import {
   buildServiceHostSpawnUrl,
@@ -48,10 +51,6 @@ import {
   serviceHostSpec,
 } from '../windows/service-host-window/create.js'
 import { ServiceHostPool } from '../services/service-host-pool/pool.js'
-import {
-  registerMiniappSessionConfigurator,
-  SHARED_MINIAPP_PARTITION,
-} from '../services/views/miniapp-partition.js'
 import { createConsoleForwarder, type GuestConsoleEntry } from '../services/console-forward/index.js'
 import { createDiagnosticsBus } from '../services/diagnostics/index.js'
 import {
@@ -317,9 +316,6 @@ interface PageSession {
   renderLoadSent: boolean
   windowConfig: PageWindowConfig
 }
-
-type ProtocolHandler = (request: GlobalRequest) => Promise<Response>
-type GlobalRequest = Parameters<typeof protocol.handle>[1] extends (request: infer T) => unknown ? T : Request
 
 interface PendingApiCall {
   appSessionId: string
@@ -674,6 +670,12 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
   // safe-area service can read it when a render-host guest attaches.
   let currentDevice: NativeDeviceInfo | null = null
 
+  // Every window runs its own router, so the process-wide ipcMain channels are
+  // muxed (see bridge-router-ipc-mux.ts) and each message goes to the router
+  // that owns its sender.
+  const ownsSender = (event: IpcMainEvent | IpcMainInvokeEvent): boolean =>
+    routerOwnsSender(state, ctx.windows?.mainWindow, event.sender)
+
   // Native-host enablement query. The simulator webview's preload can't read the
   // launch `process.env` (and additionalArguments don't reach webview guests),
   // nor can it compute file paths (no node:path/url in the guest preload), so it
@@ -699,8 +701,10 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
     }
     event.returnValue = reply
   }
-  ipcMain.on(C.NATIVE_HOST_ENABLED, onNativeHostQuery)
-  ctx.registry.add(() => { ipcMain.removeListener(C.NATIVE_HOST_ENABLED, onNativeHostQuery) })
+  ctx.registry.add(addMuxedSyncListener(C.NATIVE_HOST_ENABLED, {
+    claims: ownsSender,
+    handle: onNativeHostQuery,
+  }))
 
   // Subscribers to render-side activity (domReady / active-page). Panels that
   // pull from the active render guest (WXML) re-read on these.
@@ -961,15 +965,15 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
   ipcMain.on(C.PAGE_STACK, onPageStack)
   ctx.registry.add(() => { ipcMain.removeListener(C.PAGE_STACK, onPageStack) })
 
-  ipcMain.handle(C.SPAWN, async (event, opts: SpawnRequest): Promise<SpawnResult> => {
-    return handleSpawn(state, ctx, event, opts)
-  })
-  ctx.registry.add(() => { ipcMain.removeHandler(C.SPAWN) })
+  ctx.registry.add(addMuxedInvokeHandler(C.SPAWN, {
+    claims: ownsSender,
+    handle: (event, opts): Promise<SpawnResult> => handleSpawn(state, ctx, event, opts as SpawnRequest),
+  }))
 
-  ipcMain.handle(C.PAGE_OPEN, async (event, opts: PageOpenRequest): Promise<PageOpenResult> => {
-    return handlePageOpen(state, event, opts)
-  })
-  ctx.registry.add(() => { ipcMain.removeHandler(C.PAGE_OPEN) })
+  ctx.registry.add(addMuxedInvokeHandler(C.PAGE_OPEN, {
+    claims: ownsSender,
+    handle: (event, opts): Promise<PageOpenResult> => handlePageOpen(state, event, opts as PageOpenRequest),
+  }))
 
   const onPageClose = (event: IpcMainEvent, payload: PageClosePayload): void => {
     handlePageClose(state, event.sender, payload)
@@ -1034,7 +1038,7 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
     tapIn(C.SERVICE_INVOKE, event.sender, payload)
     const ap = appByWc(state, event.sender)
     if (!ap) return
-    const page = state.pageSessions.get(payload.bridgeId) ?? state.pageSessions.get(ap.appSessionId)
+    const page = resolveServiceDefaultPage(state, ap, payload.bridgeId)
     if (!page) return
     routeFromService(state, ap, page, payload.msg, ctx)
   }
@@ -1076,10 +1080,13 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
   ipcMain.on(C.RENDER_PUBLISH, onRenderPublish)
   ctx.registry.add(() => { ipcMain.removeListener(C.RENDER_PUBLISH, onRenderPublish) })
 
-  ipcMain.handle(C.SIMULATOR_API, async (_event, payload: { name: string; params: unknown }) => {
-    return ctx.simulatorApis.invoke(payload.name, payload.params)
-  })
-  ctx.registry.add(() => { ipcMain.removeHandler(C.SIMULATOR_API) })
+  ctx.registry.add(addMuxedInvokeHandler(C.SIMULATOR_API, {
+    claims: ownsSender,
+    handle: (_event, payload) => {
+      const call = payload as { name: string; params: unknown }
+      return ctx.simulatorApis.invoke(call.name, call.params)
+    },
+  }))
 
   const onApiResponse = (event: IpcMainEvent, payload: ApiResponsePayload): void => {
     tapIn(C.API_RESPONSE, event.sender, payload)
@@ -2683,6 +2690,33 @@ function pageFromMsg(state: RouterState, ap: AppSession, msg: MessageEnvelope): 
   return page
 }
 
+/**
+ * The page a service→container message acts on when the message itself names
+ * none.
+ *
+ * The service preload sends ONE fixed bridgeId for its window's whole life —
+ * the session's root page, which is also its `appSessionId`. Any navigation
+ * that closes the root (reLaunch, redirectTo, a switchTab that drops it) leaves
+ * that id naming nothing, and from then on every service-originated container
+ * API — navigateTo, getSystemInfo, the async storage family — would resolve to
+ * no page and be dropped with no callback, no fail and no diagnostic. The
+ * session, not that one page, is what the message belongs to: fall back to its
+ * reported active page, else to the newest page still open.
+ */
+export function resolveServiceDefaultPage(
+  state: Pick<RouterState, 'pageSessions'>,
+  ap: Pick<AppSession, 'activeBridgeId' | 'pages'>,
+  bridgeId: string,
+): PageSession | undefined {
+  const named = state.pageSessions.get(bridgeId)
+  if (named) return named
+  const active = ap.activeBridgeId ? state.pageSessions.get(ap.activeBridgeId) : undefined
+  if (active) return active
+  let newest: PageSession | undefined
+  for (const page of ap.pages.values()) newest = page
+  return newest
+}
+
 function appByWc(state: RouterState, wc: WebContents): AppSession | undefined {
   if (wc.isDestroyed()) return undefined
   const appSessionId = state.serviceWcIdToAppSessionId.get(wc.id)
@@ -3056,42 +3090,22 @@ function installResourceProtocolHandlers(
   // buildRenderHostDocumentUrl places directly under the page's own package
   // path — see dmb-resource-url.ts) also serves from the runtime dist.
   // Everything else proxies to the session's resourceBaseUrl.
-  const handler: ProtocolHandler = async (request) => {
-    return handleDmbResourceRequest({
-      requestUrl: request.url,
-      sdkRoot,
-      resolveSession: (bridgeId) => {
-        const ap = resolveAppByBridgeId(state, bridgeId)
-        return ap ? { resourceBaseUrl: ap.resourceBaseUrl, appId: ap.appId, root: ap.root } : null
-      },
-    })
+  const resolveSession = (bridgeId: string): DmbResourceSession | null => {
+    const ap = resolveAppByBridgeId(state, bridgeId)
+    return ap ? { resourceBaseUrl: ap.resourceBaseUrl, appId: ap.appId, root: ap.root } : null
   }
 
-  const simulatorSession = electronSession.fromPartition(SHARED_MINIAPP_PARTITION)
-  try { protocol.unhandle('dmb-resource') } catch {}
-  try { simulatorSession.protocol.unhandle('dmb-resource') } catch {}
-  protocol.handle('dmb-resource', handler)
-  simulatorSession.protocol.handle('dmb-resource', handler)
-
-  // Per-project partition sessions need the SAME resource handler so each
-  // project's render/service can load `dmb-resource://…`. Install on every
-  // miniapp partition (current + future); track installed sessions for teardown.
-  const perProjectSessions = new Set<Electron.Session>()
-  const unregisterConfigurator = registerMiniappSessionConfigurator((sess) => {
-    if (perProjectSessions.has(sess)) return
-    perProjectSessions.add(sess)
-    try { sess.protocol.unhandle('dmb-resource') } catch {}
-    sess.protocol.handle('dmb-resource', handler)
-  })
-
-  ctx.registry.add(() => {
-    unregisterConfigurator()
-    try { protocol.unhandle('dmb-resource') } catch {}
-    try { simulatorSession.protocol.unhandle('dmb-resource') } catch {}
-    for (const sess of perProjectSessions) {
-      try { sess.protocol.unhandle('dmb-resource') } catch {}
-    }
-  })
+  // The registrars this scheme lives on are process-wide, so the handler is
+  // muxed (see bridge-router-protocol-mux.ts). The request's bridgeId names the
+  // session, and only the router that owns that session can resolve it.
+  ctx.registry.add(addMuxedDmbResourceHandler({
+    claims: (requestUrl) => {
+      let bridgeId: string
+      try { bridgeId = new URL(requestUrl).hostname } catch { return false }
+      return resolveSession(bridgeId) !== null
+    },
+    handle: (request) => handleDmbResourceRequest({ requestUrl: request.url, sdkRoot, resolveSession }),
+  }))
 }
 
 function makeHostEnv(snapshot: Partial<HostEnvSnapshot> | undefined): HostEnvSnapshot {

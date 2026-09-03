@@ -3,6 +3,7 @@ import type { WorkbenchAppConfig } from '../../shared/types.js'
 import { runDevtoolsBootstrap, createDevtoolsRuntime } from '../app/app.js'
 import type { WorkbenchAppInstance } from '../app/app.js'
 import { isAppQuitting, registerAppLifecycle } from '../app/lifecycle.js'
+import { closeAllCoiHosts } from '../services/workbench-coi-host.js'
 
 /**
  * Adapts the devtools runtime into a {@link RuntimeBackend} the framework
@@ -65,7 +66,7 @@ export function createDevtoolsBackend(config: WorkbenchAppConfig = {}): RuntimeB
       // handler closing an already-torn-down MessagePort segfaults natively.
       // Safe to run again from `onShutdown`'s `instance.dispose()` afterwards
       // — `views.disposeAll()` and its constituents are dispose-idempotent.
-      registerAppLifecycle(() => instance?.context.views.disposeAll())
+      registerAppLifecycle(() => instance?.disposeViews())
       // `onInstanceCreated` (not the return value) is what assigns `instance`:
       // `createDevtoolsRuntime` awaits the host's `config.onSetup(instance)`
       // — which may run arbitrarily long and can itself load the host toolbar
@@ -77,7 +78,7 @@ export function createDevtoolsBackend(config: WorkbenchAppConfig = {}): RuntimeB
         // Quit may have already started (before-quit already fired) before
         // this instance existed, so the hook above ran with nothing to
         // dispose. Self-heal: run the same teardown now that there is.
-        if (isAppQuitting()) instance.context.views.disposeAll()
+        if (isAppQuitting()) instance.disposeViews()
       }).then(() => {})
       await assembling
     },
@@ -97,7 +98,16 @@ export function createDevtoolsBackend(config: WorkbenchAppConfig = {}): RuntimeB
     // not a reason to skip disposing whatever DID get constructed.
     onShutdown: async () => {
       await assembling?.catch(() => {})
-      await instance?.dispose()
+      // The workbench COI listener is deliberately kept alive across project
+      // windows (its port IS the workbench origin, see workbench-coi-host.ts),
+      // so no window teardown ever closes it. Process shutdown is the one place
+      // that must — after the windows above have released their routes, and
+      // even if one of their disposers threw on the way.
+      try {
+        await instance?.dispose()
+      } finally {
+        await closeAllCoiHosts()
+      }
     },
   }
 }

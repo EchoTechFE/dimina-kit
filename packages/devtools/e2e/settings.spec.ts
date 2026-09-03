@@ -16,8 +16,8 @@ import { ProjectChannel, ProjectsChannel } from '../src/shared/ipc-channels'
  * raw `ipcInvoke('settings:setVisible', true)` backdoor, which kept passing
  * even while the overlay was unreachable from the actual UI.
  */
-async function openSettingsViaUI(mainWindow: Page, electronApp: ElectronApplication): Promise<void> {
-  const settingsButton = mainWindow.getByRole('button', { name: '设置' })
+async function openSettingsViaUI(workbench: Page, electronApp: ElectronApplication): Promise<void> {
+  const settingsButton = workbench.getByRole('button', { name: '设置' })
   await expect(settingsButton).toBeVisible({ timeout: 15_000 })
   await settingsButton.click()
   // The click is fire-and-forget from Playwright's perspective: it drives
@@ -32,17 +32,17 @@ async function openSettingsViaUI(mainWindow: Page, electronApp: ElectronApplicat
 }
 
 test.describe('Settings', () => {
-  test.beforeEach(async ({ mainWindow }) => {
-    await openProjectInUI(mainWindow, DEMO_APP_DIR)
+  test.beforeEach(async ({ electronApp }) => {
+    await openProjectInUI(electronApp, DEMO_APP_DIR)
   })
 
-  test.afterEach(async ({ mainWindow }) => {
-    await closeProject(mainWindow)
+  test.afterEach(async ({ mainWindow, electronApp }) => {
+    await closeProject(electronApp)
     await ipcInvoke(mainWindow, ProjectsChannel.Remove, DEMO_APP_DIR).catch(() => {})
   })
 
-  test('settings view opens from the toolbar 设置 button', async ({ mainWindow, electronApp }) => {
-    await openSettingsViaUI(mainWindow, electronApp)
+  test('settings view opens from the toolbar 设置 button', async ({ workbench, electronApp }) => {
+    await openSettingsViaUI(workbench, electronApp)
 
     const text = await pollUntil(
       () => evalInWebContentsByUrl<string>(electronApp, 'entries/settings', `document.body.innerText`),
@@ -53,8 +53,8 @@ test.describe('Settings', () => {
     expect(text).toContain('本地设置')
   })
 
-  test('settings view receives current project path', async ({ mainWindow, electronApp }) => {
-    await openSettingsViaUI(mainWindow, electronApp)
+  test('settings view receives current project path', async ({ workbench, electronApp }) => {
+    await openSettingsViaUI(workbench, electronApp)
     await evalInWebContentsByUrl(
       electronApp,
       'entries/settings',
@@ -79,7 +79,7 @@ test.describe('Settings', () => {
     expect(text).toContain(DEMO_APP_DIR)
   })
 
-  test('settings configChanged persists compile config', async ({ mainWindow, electronApp }) => {
+  test('settings configChanged persists compile config', async ({ mainWindow, workbench, electronApp }) => {
     const original = await ipcInvoke<{
       startPage: string
       scene: number
@@ -92,7 +92,7 @@ test.describe('Settings', () => {
       queryParams: [{ key: 'from', value: 'e2e' }],
     }
 
-    await openSettingsViaUI(mainWindow, electronApp)
+    await openSettingsViaUI(workbench, electronApp)
     await evalInWebContentsByUrl(
       electronApp,
       'entries/settings',

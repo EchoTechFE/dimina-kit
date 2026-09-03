@@ -12,6 +12,14 @@ export interface WindowOptions {
   minHeight?: number
   indexHtml: string
   /**
+   * Query string appended to the loaded `file://` URL. This is how a window
+   * receives its own bootstrap identity (the workbench window reads the project
+   * it belongs to from here), so the renderer entry knows what to mount without
+   * a round-trip. Survives navigation-hardening: that check matches on the
+   * `file://` prefix only and ignores the query (see navigation-hardening.ts).
+   */
+  query?: Record<string, string>
+  /**
    * Auto-show the window on `ready-to-show` in non-test envs. Defaults to
    * `true`. `false` lets a login-gating host keep the window hidden and call
    * `show()` itself. The test env always uses `showInactive()` regardless.
@@ -64,7 +72,7 @@ export function createMainWindow(opts: WindowOptions): BrowserWindow {
   // route every popup through the OS browser. See navigation-hardening.ts.
   applyNavigationHardening(mainWindow.webContents, rendererDir)
 
-  mainWindow.loadFile(opts.indexHtml)
+  mainWindow.loadFile(opts.indexHtml, opts.query ? { query: opts.query } : undefined)
 
   const container = new View()
   const mainWebView = mainWindow.contentView as WebContentsView

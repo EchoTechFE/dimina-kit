@@ -7,18 +7,18 @@ test.describe('AppData Panel Edit Write-Back', () => {
 
   useSharedProject(test, DEMO_APP_DIR)
 
-  test('editing a value in the tree round-trips through service→render setData and re-renders from the pushed snapshot', async ({ mainWindow }) => {
-    await mainWindow.getByRole('tab', { name: 'AppData' }).click()
+  test('editing a value in the tree round-trips through service→render setData and re-renders from the pushed snapshot', async ({ workbench }) => {
+    await workbench.getByRole('tab', { name: 'AppData' }).click()
 
     // Pages sidebar lists the running page; the demo app's first page is
     // pages/index/index and its bridge auto-activates (useActiveBridgeId
     // follows the simulator's active page path), so the data tree for it is
     // already the visible one once data arrives.
-    const pages = mainWindow.getByTestId('appdata-pages')
+    const pages = workbench.getByTestId('appdata-pages')
     await expect(pages).toBeVisible({ timeout: 30_000 })
     await expect(pages).toContainText('pages/index/index', { timeout: 30_000 })
 
-    const tree = mainWindow.getByTestId('appdata-tree')
+    const tree = workbench.getByTestId('appdata-tree')
     await expect(tree).toBeVisible({ timeout: 30_000 })
 
     // The root row starts expanded but its children start collapsed; open

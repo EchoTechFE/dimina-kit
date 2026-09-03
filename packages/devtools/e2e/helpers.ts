@@ -3,7 +3,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { ProjectsChannel, ProjectChannel, SimulatorChannel } from '../src/shared/ipc-channels'
+import { ProjectsChannel, SimulatorChannel } from '../src/shared/ipc-channels'
 import { DMB_PAGEFRAME_DOC_NAME } from '../src/shared/dmb-resource-url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -76,18 +76,27 @@ const MAIN_WINDOW_URL_PATTERN = /entries\/main\//
 const HOST_SIDEBAR_DEFAULT_URL_PATTERN = /entries\/host-sidebar-default\//
 
 /**
+ * Matches a workbench window — the window a project opens into. Each open
+ * project gets its own, and the project-list window stays alive alongside
+ * them, so "the app's window" is never a single thing: a spec must say which
+ * one it means.
+ */
+const WORKBENCH_WINDOW_URL_PATTERN = /entries\/workbench\//
+
+/**
  * Resolve a specific app window by matching its URL, instead of trusting
  * `electronApp.firstWindow()` / `electronApp.windows()[0]` (which does not
  * reliably correlate with BrowserWindow creation order — see
  * `findMainWindow`'s doc comment).
  */
-async function findWindowByUrlPattern(
+async function findWindowBy(
   electronApp: ElectronApplication,
-  pattern: RegExp,
+  accepts: (win: Page) => boolean,
   label: string,
+  wanted: string,
   timeoutMs: number,
 ): Promise<Page> {
-  const immediate = electronApp.windows().find((win) => pattern.test(win.url()))
+  const immediate = electronApp.windows().find(accepts)
   if (immediate) return immediate
 
   const deadline = Date.now() + timeoutMs
@@ -95,14 +104,64 @@ async function findWindowByUrlPattern(
     await electronApp
       .waitForEvent('window', { timeout: Math.max(0, deadline - Date.now()) })
       .catch(() => undefined)
-    const match = electronApp.windows().find((win) => pattern.test(win.url()))
+    const match = electronApp.windows().find(accepts)
     if (match) return match
   }
 
   throw new Error(
-    `${label}: no window matching ${pattern} within ${timeoutMs}ms `
+    `${label}: no window matching ${wanted} within ${timeoutMs}ms `
     + `(open windows: ${electronApp.windows().map((win) => win.url()).join(', ') || 'none'})`,
   )
+}
+
+async function findWindowByUrlPattern(
+  electronApp: ElectronApplication,
+  pattern: RegExp,
+  label: string,
+  timeoutMs: number,
+): Promise<Page> {
+  return findWindowBy(electronApp, (win) => pattern.test(win.url()), label, String(pattern), timeoutMs)
+}
+
+/** The `path` a workbench window was booted with, or null for any other window. */
+function workbenchProjectDir(win: Page): string | null {
+  const url = win.url()
+  if (!WORKBENCH_WINDOW_URL_PATTERN.test(url)) return null
+  try {
+    return new URL(url).searchParams.get('path')
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Resolve the window a project is open in.
+ *
+ * Pass `projectDir` whenever the spec knows which project it means — several
+ * workbench windows can be open at once, and matching on the entry URL alone
+ * would hand back whichever one Playwright happens to list first. The window
+ * carries its project in the `path` query `openProjectWindow` boots it with.
+ */
+export async function findWorkbenchWindow(
+  electronApp: ElectronApplication,
+  { projectDir, timeoutMs = 30_000 }: { projectDir?: string; timeoutMs?: number } = {},
+): Promise<Page> {
+  return findWindowBy(
+    electronApp,
+    (win) => {
+      const dir = workbenchProjectDir(win)
+      if (dir === null) return false
+      return projectDir === undefined || dir === projectDir
+    },
+    'findWorkbenchWindow',
+    projectDir === undefined ? String(WORKBENCH_WINDOW_URL_PATTERN) : `a workbench window for ${projectDir}`,
+    timeoutMs,
+  )
+}
+
+/** Every workbench window currently open, in Playwright's listing order. */
+export function listWorkbenchWindows(electronApp: ElectronApplication): Page[] {
+  return electronApp.windows().filter((win) => workbenchProjectDir(win) !== null)
 }
 
 /**
@@ -207,55 +266,104 @@ export async function refreshProjectList(mainWindow: Page): Promise<void> {
 }
 
 /**
- * Close the current project session via IPC and navigate back to the project list.
- * Safe to call when no project is open.
+ * Close an open project by closing the window it lives in — the user-driven
+ * path, and the one that proves the window teardown really disposes the
+ * session. Safe to call when no project is open.
+ *
+ * Without `projectDir` this closes every open workbench window, which is what
+ * a spec-level cleanup wants: whatever this file opened, leave nothing behind
+ * for the next spec sharing the worker's Electron process.
  */
-export async function closeProject(mainWindow: Page): Promise<void> {
-  await ipcInvoke(mainWindow, SimulatorChannel.Detach).catch(() => {})
-  await ipcInvoke(mainWindow, ProjectChannel.Close).catch(() => {})
-  // Trigger the navigate-back handler in the renderer (same event handleWindowClose sends)
-  await refreshProjectList(mainWindow).catch(() => {})
-  // Wait for the project list view to be visible again (the project card title=projectDir
-  // disappears once we leave the project view; project list shows project cards / empty state).
-  // We can't know the path from here, so poll for the absence of the toolbar text "普通编译".
-  await pollUntil(
-    () => mainWindow.evaluate(() => !document.body.innerText.includes('普通编译')),
-    (gone) => gone === true,
-    5000,
+export async function closeProject(
+  electronApp: ElectronApplication,
+  { projectDir }: { projectDir?: string } = {},
+): Promise<void> {
+  const targets = listWorkbenchWindows(electronApp)
+    .filter((win) => projectDir === undefined || workbenchProjectDir(win) === projectDir)
+  for (const win of targets) {
+    // The renderer detaches on its own as the window tears down; asking for it
+    // first keeps the simulator WCV from being torn off mid-frame. A window
+    // with no simulator attached rejects this, which is not a close failure.
+    await ipcInvoke(win, SimulatorChannel.Detach).catch(() => {})
+    // `BrowserWindow.close()`, not Playwright's `page.close()`: the app hangs
+    // every project teardown (session, editor server, IPC registrations, the
+    // floating DevTools window) off the window's `close` event, and
+    // `page.close()` closes the CDP target — Chromium destroys the window
+    // outright, emitting no `close`, so nothing is ever disposed. The window
+    // then vanishes from the page list exactly as if it had been closed
+    // properly, which makes the difference invisible from the test side.
+    await electronApp.evaluate(({ BrowserWindow }, url) => {
+      // A window that is already gone is fine and closes nothing; a main
+      // process that cannot be reached at all is a failure and propagates.
+      const target = BrowserWindow.getAllWindows()
+        .find((candidate) => candidate.webContents.getURL() === url)
+      target?.close()
+    }, win.url())
+  }
+  const stuck = await pollUntil(
+    async () => listWorkbenchWindows(electronApp).filter((win) => targets.includes(win)),
+    (remaining) => remaining.length === 0,
+    // Teardown now runs for real before the window goes away (compile session,
+    // editor http server, views), so this waits on work, not on a destroy.
+    30_000,
     100,
-  ).catch(() => {})
+  )
+  // `pollUntil` resolves with the last value instead of throwing on timeout,
+  // so the count has to be asserted here. A window still listed means teardown
+  // hung or the close was refused — the exact regression the close/reopen
+  // specs exist to catch, and silently tolerating it lets them pass against a
+  // project that never closed.
+  if (stuck.length > 0) {
+    const names = stuck.map((win) => workbenchProjectDir(win) ?? win.url()).join(', ')
+    throw new Error(`closeProject: ${stuck.length} workbench window(s) still open after 30s: ${names}`)
+  }
 }
 
 /**
- * Add a project and click its card to navigate to the project view.
+ * Add a project and click its card, then resolve the workbench window it
+ * opened into.
+ *
+ * Takes the app rather than a page because a project no longer opens *inside*
+ * the window that was clicked: the project list stays where it is and the
+ * project gets a window of its own. The returned page is that window — every
+ * assertion about the simulator, the panels, the editor or the toolbar belongs
+ * to it, not to the list window.
+ *
  * Waits for the simulator webview to attach AND first-page DOM to be ready
  * (compile complete signal) instead of a fixed timer.
  *
  * @param waitMs - hard cap on total wait time (default 15000).
  */
 export async function openProjectInUI(
-  mainWindow: Page,
+  electronApp: ElectronApplication,
   projectDir: string,
   { waitMs = 15000 }: { waitMs?: number } = {}
-): Promise<void> {
-  await addProject(mainWindow, projectDir)
-  await refreshProjectList(mainWindow)
-  const projectPathLabel = mainWindow.locator(`[title="${projectDir}"]`).first()
+): Promise<Page> {
+  const listWindow = await findMainWindow(electronApp)
+  await addProject(listWindow, projectDir)
+  await refreshProjectList(listWindow)
+  const projectPathLabel = listWindow.locator(`[title="${projectDir}"]`).first()
   await projectPathLabel.waitFor()
   await projectPathLabel.locator('..').click()
-  await mainWindow.waitForSelector('text=普通编译')
 
   const deadline = Date.now() + waitMs
 
+  const workbench = await findWorkbenchWindow(electronApp, {
+    projectDir,
+    timeoutMs: Math.max(1000, deadline - Date.now()),
+  })
+  await workbench.waitForLoadState('domcontentloaded')
+  await workbench.waitForSelector('text=普通编译')
+
   // 1) Wait for the simulator webview to attach.
-  await mainWindow.waitForSelector('webview', { timeout: Math.max(1000, deadline - Date.now()) })
+  await workbench.waitForSelector('webview', { timeout: Math.max(1000, deadline - Date.now()) })
     .catch(() => {})
 
   // 2) Wait for the renderer to report compile complete or the toolbar to leave the
   //    "正在刷新..." / "正在编译..." state. The status text lives in a `.truncate` span
   //    bound to setCompileStatus messages: '编译完成', '编译完成，已热更新', '刷新完成'.
   await pollUntil(
-    () => mainWindow.evaluate(() => {
+    () => workbench.evaluate(() => {
       const els = document.querySelectorAll('[class*="truncate"]')
       for (const el of els) {
         const t = el.textContent || ''
@@ -267,6 +375,8 @@ export async function openProjectInUI(
     Math.max(1000, deadline - Date.now()),
     300,
   ).catch(() => {})
+
+  return workbench
 }
 
 // ── Simulator helpers ──────────────────────────────────────────────────

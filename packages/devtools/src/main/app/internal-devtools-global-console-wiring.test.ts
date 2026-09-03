@@ -9,13 +9,16 @@
  * (already implemented+tested) and internal-devtools-window/index.ts's `open()`
  * (which builds the host view attached via `target.webContents.setDevToolsWebContents`).
  *
- * `context.consoleForwarder` is assembled by the simulator module's
- * `installBridgeRouter` inside `registerBuiltinModules` (see app.ts around the
- * `if (context.consoleForwarder)` wiring block) — this suite first proves it
- * is actually truthy under the default `createDevtoolsRuntime({})` boot path
- * (a precondition for the wiring below to matter at all: if it were
- * `undefined`, the whole block would be a no-op and every test in this file
- * would trivially observe no forwarding).
+ * All of this is per-workbench-window wiring: the console forwarder is
+ * assembled by the simulator module's `installBridgeRouter`, which only runs
+ * for a window that hosts a mini app, and the internal DevTools window debugs
+ * that window's own renderer. The launcher window has neither. So every test
+ * here opens a project window first and drives ITS context (see
+ * `installGlobalMirrors`' `if (context.consoleForwarder)` block) — the suite
+ * first proves that forwarder is actually truthy there (a precondition for
+ * the wiring below to matter at all: if it were `undefined`, the whole block
+ * would be a no-op and every test in this file would trivially observe no
+ * forwarding).
  *
  * Electron mock: copied verbatim from internal-devtools-global-network-wiring.test.ts
  * (this package's convention: main-process suites vi.mock('electron') per file
@@ -261,20 +264,46 @@ function currentHostWc(): StubExecuteJavaScript {
   return lastBrowserWindow().contentView.children[0].webContents
 }
 
+type Instance = Awaited<ReturnType<typeof createDevtoolsRuntime>>
+
+interface OpenedWorkbench {
+  ctx: ConsoleForwardWiringContext
+  /**
+   * The workbench window's own renderer — the target the internal DevTools
+   * window inspects, and therefore the console mirror's destination.
+   */
+  targetWc: Electron.WebContents
+}
+
+/**
+ * Boots the app and opens one workbench window, returning its context — only a
+ * workbench window runs a simulator, so only its context carries a
+ * `consoleForwarder` and its own internal-DevTools window.
+ */
+async function openWorkbench(instance: Instance): Promise<OpenedWorkbench> {
+  await instance.openProjectWindow({ path: '/tmp/projConsoleForward' })
+  const [projectWindow] = instance.projectWindows()
+  expect(projectWindow, 'openProjectWindow must publish the window it opened').toBeTruthy()
+  return {
+    ctx: projectWindow!.context as unknown as ConsoleForwardWiringContext,
+    targetWc: projectWindow!.window.webContents,
+  }
+}
+
 describe('main-process wiring: internalDevtoolsWindow host changes drive the global console mirror', () => {
-  it('context.consoleForwarder IS assembled under the default createDevtoolsRuntime({}) boot (empirical baseline for the tests below)', async () => {
+  it('a workbench window\'s context.consoleForwarder IS assembled under the default boot (empirical baseline for the tests below)', async () => {
     const instance = await createDevtoolsRuntime({})
     try {
-      const ctx = instance.context as unknown as ConsoleForwardWiringContext
+      const { ctx } = await openWorkbench(instance)
 
-      // Empirical finding this suite locks in (verified by actually running
-      // createDevtoolsRuntime({}), not assumed): registerBuiltinModules's
-      // simulator installBridgeRouter assembles context.consoleForwarder by
-      // default, so the `if (context.consoleForwarder)` wiring block in
-      // app.ts is live (not a no-op) for this config. If this assertion ever
-      // fails, the mirror wiring below never installed a subscription at all
-      // and the remaining tests in this file would need re-checking against
-      // whatever boot path makes consoleForwarder undefined.
+      // Empirical finding this suite locks in (verified by actually opening a
+      // workbench window, not assumed): the window's simulator module runs
+      // installBridgeRouter, which assembles context.consoleForwarder, so the
+      // `if (context.consoleForwarder)` block in installGlobalMirrors is live
+      // (not a no-op) for this config. If this assertion ever fails, the
+      // mirror wiring below never installed a subscription at all and the
+      // remaining tests in this file would need re-checking against whatever
+      // boot path makes consoleForwarder undefined.
       expect(ctx.consoleForwarder).toBeTruthy()
       expect(typeof ctx.consoleForwarder!.emit).toBe('function')
       expect(typeof ctx.consoleForwarder!.subscribe).toBe('function')
@@ -297,7 +326,7 @@ describe('main-process wiring: internalDevtoolsWindow host changes drive the glo
   it('does not throw when consoleForwarder emits before the internal devtools window has ever been opened', async () => {
     const instance = await createDevtoolsRuntime({})
     try {
-      const ctx = instance.context as unknown as ConsoleForwardWiringContext
+      const { ctx } = await openWorkbench(instance)
 
       // No open() call yet — getTargetWc() must resolve to null and the
       // mirror must no-op rather than throw.
@@ -317,20 +346,21 @@ describe('main-process wiring: internalDevtoolsWindow host changes drive the glo
   // once ... disposed" further down, so this vacuous test is removed rather
   // than kept alongside it.
 
-  // Bug A: the mirror's target must be the INSPECTED side (mainWindow.webContents
-  // — see internal-devtools-window/index.ts's `target.webContents.setDevToolsWebContents(hostView.webContents)`),
+  // Bug A: the mirror's target must be the INSPECTED side (the workbench
+  // window's own webContents — see internal-devtools-window/index.ts's
+  // `target.webContents.setDevToolsWebContents(hostView.webContents)`),
   // never the independent window's own front-end host wc. A console.log executed
   // inside the front-end host's own JS realm only reaches that realm's own
   // (unwatched) console — never the Console panel it itself renders — so wiring
   // getTargetWc to follow `hostWc` makes the whole mirror invisible in practice.
-  it('mirrors console entries into mainWindow.webContents (the inspected target), not the independent host wc', async () => {
+  it('mirrors console entries into the workbench window\'s webContents (the inspected target), not the independent host wc', async () => {
     const instance = await createDevtoolsRuntime({})
     try {
-      const ctx = instance.context as unknown as ConsoleForwardWiringContext
+      const { ctx, targetWc } = await openWorkbench(instance)
       ctx.internalDevtoolsWindow!.open()
 
       const hostWc = currentHostWc()
-      const mainWc = instance.mainWindow.webContents
+      const mainWc = targetWc
       // The mirror's transport is CDP Runtime.evaluate over the debugger
       // broker (never executeJavaScript — see global-console-mirror.ts's
       // inject() doc), so the observable is the wc's debugger channel.
@@ -357,15 +387,15 @@ describe('main-process wiring: internalDevtoolsWindow host changes drive the glo
   })
 
   // Bug A, window-open-state variant: getTargetWc must go null when the window is
-  // CLOSED (onHostChanged(null)) even though mainWindow.webContents itself is very
-  // much alive and open — the mirror is gated on "is the standalone window open",
-  // not on mainWindow's own lifecycle.
-  it('stops mirroring into mainWindow.webContents once the internal devtools window is disposed (closed), even though mainWindow itself stays alive', async () => {
+  // CLOSED (onHostChanged(null)) even though the workbench window's webContents
+  // itself is very much alive and open — the mirror is gated on "is the
+  // standalone window open", not on the workbench window's own lifecycle.
+  it('stops mirroring into the workbench window\'s webContents once the internal devtools window is disposed (closed), even though the window itself stays alive', async () => {
     const instance = await createDevtoolsRuntime({})
     try {
-      const ctx = instance.context as unknown as ConsoleForwardWiringContext
+      const { ctx, targetWc } = await openWorkbench(instance)
       ctx.internalDevtoolsWindow!.open()
-      const mainWc = instance.mainWindow.webContents
+      const mainWc = targetWc
       type Dbg = { debugger: { sendCommand: ReturnType<typeof vi.fn> } }
       const mainSend = vi.spyOn((mainWc as unknown as Dbg).debugger, 'sendCommand')
 

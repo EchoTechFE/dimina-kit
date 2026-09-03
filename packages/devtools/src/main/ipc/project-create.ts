@@ -6,6 +6,7 @@ import { ProjectCreateShowSchema, ProjectCreateSubmitSchema } from '../../shared
 import type { Disposable } from '@dimina-kit/electron-deck/main'
 import { validate } from '../utils/ipc-schema.js'
 import { IpcRegistry, type SenderPolicy } from '../utils/ipc-registry.js'
+import { toIpcContextSource, type IpcInput } from '../utils/ipc-context-source.js'
 
 /** Module-local narrow deps — deliberately NOT `Pick<WorkbenchContext, ...>`
  * (the gate in eslint.config.* is shrink-only; see its message). */
@@ -15,16 +16,16 @@ export interface ProjectCreateIpcDeps {
   senderPolicy?: SenderPolicy
 }
 
-export function registerProjectCreateIpc(ctx: ProjectCreateIpcDeps): Disposable {
-  return new IpcRegistry(ctx.senderPolicy)
-    .on(ProjectCreateChannel.Show, (_event, ...args: unknown[]) => {
+export function registerProjectCreateIpc(input: IpcInput<ProjectCreateIpcDeps>): Disposable {
+  return new IpcRegistry(toIpcContextSource(input))
+    .onRouted(ProjectCreateChannel.Show, (ctx, _event, ...args: unknown[]) => {
       const [data] = validate(ProjectCreateChannel.Show, ProjectCreateShowSchema, args)
       ctx.views.showProjectCreateDialog(data)
     })
-    .on(ProjectCreateChannel.Cancel, () => {
+    .onRouted(ProjectCreateChannel.Cancel, (ctx) => {
       ctx.views.hideProjectCreateDialog()
     })
-    .on(ProjectCreateChannel.Submit, (_event, ...args: unknown[]) => {
+    .onRouted(ProjectCreateChannel.Submit, (ctx, _event, ...args: unknown[]) => {
       const [input] = validate(ProjectCreateChannel.Submit, ProjectCreateSubmitSchema, args)
       ctx.views.hideProjectCreateDialog()
       ctx.notify.projectCreateSubmitted(input)

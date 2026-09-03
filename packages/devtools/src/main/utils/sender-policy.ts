@@ -36,6 +36,27 @@ import type { SenderPolicy } from './ipc-registry.js'
 export function createWorkbenchSenderPolicy(
   ctx: Pick<WorkbenchContext, 'windows' | 'views' | 'trustedWindowSenderIds'>,
 ): SenderPolicy {
+  const ownsSender = createWorkbenchOwnedSenderCheck(ctx)
+  return (sender: WebContents) => {
+    if (ownsSender(sender)) return true
+    if (sender.isDestroyed()) return false
+    // Host-registered trusted windows (registerTrustedWindow). The map is
+    // app-wide, so this is the one accepted sender no single context owns.
+    return ctx.trustedWindowSenderIds.has(sender.id)
+  }
+}
+
+/**
+ * The senders this context structurally OWNS: its own main-window renderer,
+ * its own settings window and the overlay views mounted inside it. Deliberately
+ * excludes `trustedWindowSenderIds` — that map is shared by the whole app, so
+ * every context would claim the same host window and ownership would stop being
+ * unique. `createWindowContextRouter` routes on this check first for exactly
+ * that reason.
+ */
+export function createWorkbenchOwnedSenderCheck(
+  ctx: Pick<WorkbenchContext, 'windows' | 'views'>,
+): SenderPolicy {
   return (sender: WebContents) => {
     if (sender.isDestroyed()) return false
 
@@ -44,9 +65,6 @@ export function createWorkbenchSenderPolicy(
 
     // Standalone settings BrowserWindow renderer
     if (ctx.windows.isSettingsWindowSender(sender.id)) return true
-
-    // Host-registered trusted windows (registerTrustedWindow)
-    if (ctx.trustedWindowSenderIds.has(sender.id)) return true
 
     // Settings overlay view (mounted inside the main window)
     const settingsViewId = ctx.views.getSettingsWebContentsId()

@@ -109,7 +109,7 @@ async function probeEditor(app: ElectronApplication): Promise<{
 test.describe('Custom file types (.qdml/.qdss/.qds) — render + editor', () => {
   test.setTimeout(180_000)
   let app: ElectronApplication
-  let mainWindow: Page
+  let workbench: Page
 
   test.beforeAll(async () => {
     // Launch + addProject + first compile easily exceeds Playwright's default
@@ -122,13 +122,13 @@ test.describe('Custom file types (.qdml/.qdss/.qds) — render + editor', () => 
       args: [path.resolve(__dirname, 'qdml-verify-entry.js'), `--user-data-dir=${userDataDir}`],
       env: { ...process.env, NODE_ENV: 'test' },
     })
-    mainWindow = await findMainWindow(app)
+    const mainWindow = await findMainWindow(app)
     await mainWindow.waitForLoadState('domcontentloaded')
     await app.evaluate(async ({ BrowserWindow }) => {
       const w = BrowserWindow.getAllWindows()[0]
       if (w) { w.setPosition(-2000, -2000); w.blur() }
     })
-    await openProjectInUI(mainWindow, FIXTURE, { waitMs: 60_000 })
+    workbench = await openProjectInUI(app, FIXTURE, { waitMs: 60_000 })
   })
 
   test.afterAll(async () => { await app?.close() })
@@ -151,7 +151,7 @@ test.describe('Custom file types (.qdml/.qdss/.qds) — render + editor', () => 
     // Force the lazily-attached workbench WCV to load by feeding the editor dock
     // slot a non-zero rect (the renderer's ViewAnchor would do this when the
     // panel is visible; in this off-screen harness we drive the IPC directly).
-    await ipcInvoke(mainWindow, ViewChannel.WorkbenchBounds, { x: 0, y: 0, width: 900, height: 700 }).catch(() => {})
+    await ipcInvoke(workbench, ViewChannel.WorkbenchBounds, { x: 0, y: 0, width: 900, height: 700 }).catch(() => {})
 
     const probe = await pollUntil(
       () => probeEditor(app),

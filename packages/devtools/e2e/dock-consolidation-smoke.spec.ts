@@ -11,12 +11,12 @@
 import { test, expect, _electron, type ElectronApplication, type Page as PwPage } from '@playwright/test'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { openProjectInUI, closeProject, DEMO_APP_DIR, findMainWindow } from './helpers'
+import { openProjectInUI, closeProject, DEMO_APP_DIR } from './helpers'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 let electronApp: ElectronApplication
-let mainWindow: PwPage
+let workbench: PwPage
 
 test.beforeAll(async () => {
   const appPath = path.resolve(__dirname, 'electron-entry.js')
@@ -29,30 +29,28 @@ test.beforeAll(async () => {
     args: [appPath, `--user-data-dir=${userDataDir}`],
     env: { ...process.env, NODE_ENV: 'test' },
   })
-  mainWindow = await findMainWindow(electronApp)
-  await mainWindow.waitForLoadState('domcontentloaded')
   // Offscreen + blur so the smoke never steals focus.
   await electronApp.evaluate(async ({ BrowserWindow }) => {
     const win = BrowserWindow.getAllWindows()[0]
     if (win) { win.setPosition(-2000, -2000); win.blur() }
   })
-  await openProjectInUI(mainWindow, DEMO_APP_DIR)
+  workbench = await openProjectInUI(electronApp, DEMO_APP_DIR)
 })
 
 test.afterAll(async () => {
-  try { await closeProject(mainWindow) } catch { /* best effort */ }
+  try { await closeProject(electronApp) } catch { /* best effort */ }
   await electronApp.close()
 })
 
 test('the sole dock layout renders (no flag, no FrameTree)', async () => {
   // DockView groups exist; the legacy FrameTree sim splitter does NOT.
-  await mainWindow.waitForSelector('[data-deck-group]', { timeout: 15000 })
-  const groupCount = await mainWindow.locator('[data-deck-group]').count()
+  await workbench.waitForSelector('[data-deck-group]', { timeout: 15000 })
+  const groupCount = await workbench.locator('[data-deck-group]').count()
   expect(groupCount, 'at least one dock group must render').toBeGreaterThanOrEqual(1)
 
   // No legacy FrameTree markers (the old path is deleted).
-  expect(await mainWindow.locator('[data-splitter="sim"]').count()).toBe(0)
-  expect(await mainWindow.locator('[data-area="native-simulator"]').count()).toBeGreaterThanOrEqual(0)
+  expect(await workbench.locator('[data-splitter="sim"]').count()).toBe(0)
+  expect(await workbench.locator('[data-area="native-simulator"]').count()).toBeGreaterThanOrEqual(0)
 })
 
 test('the five debug tabs surface as deck tabs; simulator + editor are tabless structural panels', async () => {
@@ -61,7 +59,7 @@ test('the five debug tabs surface as deck tabs; simulator + editor are tabless s
   // STRUCTURAL panels (`hideTab:true`): they own their own region and draw their
   // own chrome, so the dock renders NO tab for them — they are present as
   // tabless `[data-deck-panel-body]` bodies instead.
-  const tabIds = await mainWindow.evaluate(() =>
+  const tabIds = await workbench.evaluate(() =>
     Array.from(document.querySelectorAll('[data-deck-tab]')).map(
       (el) => el.getAttribute('data-deck-tab'),
     ),
@@ -71,7 +69,7 @@ test('the five debug tabs surface as deck tabs; simulator + editor are tabless s
   }
   for (const id of ['simulator', 'editor']) {
     expect(tabIds, `structural panel '${id}' must NOT render a deck tab (hideTab)`).not.toContain(id)
-    const bodyCount = await mainWindow.locator(`[data-deck-panel-body="${id}"]`).count()
+    const bodyCount = await workbench.locator(`[data-deck-panel-body="${id}"]`).count()
     expect(bodyCount, `structural panel '${id}' must be mounted as a tabless dock body`).toBeGreaterThanOrEqual(1)
   }
 })
@@ -82,15 +80,15 @@ test('simulator chrome (device picker + page-path bar) renders in the dock — n
   // `[data-area="native-simulator"]` (the WCV anchor) AND the chrome around it.
   // The simulator panel is the active leaf in the default tree, so its body is
   // mounted.
-  await mainWindow.waitForSelector('[data-deck-panel-body="simulator"]', { timeout: 10000 })
-  const region = mainWindow.locator('[data-area="native-simulator"]')
+  await workbench.waitForSelector('[data-deck-panel-body="simulator"]', { timeout: 10000 })
+  const region = workbench.locator('[data-area="native-simulator"]')
   expect(await region.count(), 'the simulator WCV anchor region must render').toBeGreaterThanOrEqual(1)
 })
 
 test('the simulator native WCV follows its slot (non-zero live bounds)', async () => {
   // The simulator slot must publish a non-zero rect to main, and the simulator
   // WebContentsView must be live (it loads simulator.html).
-  const slotRect = await mainWindow.evaluate(() => {
+  const slotRect = await workbench.evaluate(() => {
     const el = document.querySelector('[data-area="native-simulator"]')
     if (!el) return null
     const r = el.getBoundingClientRect()
@@ -114,16 +112,16 @@ test('the simulator native WCV follows its slot (non-zero live bounds)', async (
 test('switching a debug tab keeps the dock alive and mounts the new body (data refresh seam)', async () => {
   // Activate the WXML tab, then the Storage tab. Each activation mounts that
   // panel body (DockDebugTab fires the per-tab refresh on activation — M3).
-  const wxmlTab = mainWindow.locator('[data-deck-tab="wxml"]').first()
+  const wxmlTab = workbench.locator('[data-deck-tab="wxml"]').first()
   await wxmlTab.click()
-  await mainWindow.waitForSelector('[data-deck-panel-body="wxml"]', { timeout: 8000 })
+  await workbench.waitForSelector('[data-deck-panel-body="wxml"]', { timeout: 8000 })
 
-  const storageTab = mainWindow.locator('[data-deck-tab="storage"]').first()
+  const storageTab = workbench.locator('[data-deck-tab="storage"]').first()
   await storageTab.click()
-  await mainWindow.waitForSelector('[data-deck-panel-body="storage"]', { timeout: 8000 })
+  await workbench.waitForSelector('[data-deck-panel-body="storage"]', { timeout: 8000 })
 
   // The dock is still mounted after the switches.
-  expect(await mainWindow.locator('[data-deck-group]').count()).toBeGreaterThanOrEqual(1)
+  expect(await workbench.locator('[data-deck-group]').count()).toBeGreaterThanOrEqual(1)
 })
 
 test('changing the device re-pins the simulator width live (device-width fidelity)', async () => {
@@ -131,14 +129,14 @@ test('changing the device re-pins the simulator width live (device-width fidelit
   // width only at mount, so DockableLayout re-pins via setConstraint on a device
   // change. Switch the device <select> in SimulatorPanel's chrome and assert the
   // simulator region width tracks the new device width.
-  const before = await mainWindow.evaluate(() => {
+  const before = await workbench.evaluate(() => {
     const el = document.querySelector('[data-area="native-simulator"]')
     return el ? el.getBoundingClientRect().width : 0
   })
   expect(before, 'simulator region must have a width before the device change').toBeGreaterThan(0)
 
   // Pick a different device option in the first <select> inside the simulator body.
-  const changed = await mainWindow.evaluate(() => {
+  const changed = await workbench.evaluate(() => {
     const body = document.querySelector('[data-deck-panel-body="simulator"]')
     const select = body?.querySelector('select') as HTMLSelectElement | null
     if (!select || select.options.length < 2) return null
@@ -153,8 +151,8 @@ test('changing the device re-pins the simulator width live (device-width fidelit
   // The region width must settle to a (different) positive value — the constraint
   // re-pin flowed through. We assert it stays positive and finite; an exact px
   // match depends on device metadata, so we assert it changed OR stayed valid.
-  await mainWindow.waitForTimeout(500)
-  const after = await mainWindow.evaluate(() => {
+  await workbench.waitForTimeout(500)
+  const after = await workbench.evaluate(() => {
     const el = document.querySelector('[data-area="native-simulator"]')
     return el ? el.getBoundingClientRect().width : 0
   })
@@ -169,7 +167,7 @@ test('the drop seam rejects re-docking a structural panel — no-op, no tree mut
   // within-group tab reordering is covered by dock-tab-reorder.spec.ts.)
 
   // Snapshot editor's enclosing group id + the total group count BEFORE the drop.
-  const before = await mainWindow.evaluate(() => ({
+  const before = await workbench.evaluate(() => ({
     editorGroupId: document
       .querySelector('[data-deck-panel-body="editor"]')
       ?.closest('[data-deck-group]')
@@ -178,7 +176,7 @@ test('the drop seam rejects re-docking a structural panel — no-op, no tree mut
   }))
   expect(before.editorGroupId, 'editor must start mounted inside a dock group').not.toBeNull()
 
-  const seamReached = await mainWindow.evaluate(() => {
+  const seamReached = await workbench.evaluate(() => {
     const groups = Array.from(document.querySelectorAll('[data-deck-group]')) as Array<
       HTMLElement & { __deckHandleDrop?: (panelId: string, zone: string) => void }
     >
@@ -188,11 +186,11 @@ test('the drop seam rejects re-docking a structural panel — no-op, no tree mut
     return true
   })
   expect(seamReached, 'the __deckHandleDrop seam must be reachable on a group').toBe(true)
-  await mainWindow.waitForSelector('[data-deck-group]', { timeout: 5000 })
+  await workbench.waitForSelector('[data-deck-group]', { timeout: 5000 })
 
   // The rejected drop changed NOTHING: editor sits in the same group and the
   // group count is unchanged (no split spawned a new group).
-  const after = await mainWindow.evaluate(() => ({
+  const after = await workbench.evaluate(() => ({
     editorGroupId: document
       .querySelector('[data-deck-panel-body="editor"]')
       ?.closest('[data-deck-group]')

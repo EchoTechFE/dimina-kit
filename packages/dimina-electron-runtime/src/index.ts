@@ -261,13 +261,18 @@ export async function createElectronRuntime(
     closing = true
     const viewSession = embeddedSession
     const compileSession = compilerSession
+    // Capture the outgoing project's identity before the fields below reset —
+    // clearing needs THIS project's appId+path to target its own partition
+    // entry, not whatever the next project happens to be.
+    const closingAppId = compileSession?.appInfo.appId
+    const closingProjectPath = projectPath
     readyStatusOff?.()
     readyStatusOff = null
     miniappSession = null
     embeddedSession = null
     compilerSession = null
     projectPath = ''
-    clearSimulatorServicewechatReferer()
+    clearSimulatorServicewechatReferer(closingAppId, closingProjectPath)
     try {
       const errors: unknown[] = []
       if (viewSession) {
@@ -340,7 +345,7 @@ export async function createElectronRuntime(
           throw new Error('compiler adapter returned a session without appInfo.appId')
         }
         compilerSession = session
-        setSimulatorServicewechatReferer(session.appInfo.appId)
+        setSimulatorServicewechatReferer(session.appInfo.appId, undefined, projectPath)
         latestUrl = buildSimulatorUrl(
           session.port,
           session.appInfo.appId,

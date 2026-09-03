@@ -89,7 +89,7 @@ function makeCtx(opts: {
     projectTemplates: [],
     customCreateProjectDialog: undefined,
     customEditProjectDialog: opts.customEditProjectDialog,
-  } as unknown as Parameters<typeof registerProjectsIpc>[0]
+  } as unknown as import('./projects.js').ProjectsIpcCtx
 }
 
 describe('ProjectsChannel.OpenEditDialog', () => {

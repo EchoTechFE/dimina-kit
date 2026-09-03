@@ -72,11 +72,10 @@ test.describe('embedded workbench: no white flash on startup', () => {
   test.setTimeout(180_000)
 
   test('the served workbench page paints a themed backdrop before the bundle loads', async ({
-    mainWindow,
     electronApp,
   }) => {
-    await openProjectInUI(mainWindow, DEMO_APP_DIR, { waitMs: 60_000 })
-    const status = await attachWorkbenchAndWaitReady(mainWindow, electronApp)
+    const workbench = await openProjectInUI(electronApp, DEMO_APP_DIR, { waitMs: 60_000 })
+    const status = await attachWorkbenchAndWaitReady(workbench, electronApp)
     expect(status, 'workbench must reach a ready status').toMatch(/workbench-ready|exthost-alive/)
 
     // Fetch the workbench page the runtime actually serves and confirm it

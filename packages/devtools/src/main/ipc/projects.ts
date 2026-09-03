@@ -13,6 +13,7 @@ import type { WorkbenchModule } from '../services/module.js'
 import type { Disposable } from '@dimina-kit/electron-deck/main'
 import { validate } from '../utils/ipc-schema.js'
 import { IpcRegistry } from '../utils/ipc-registry.js'
+import { toIpcContextSource, type IpcInput } from '../utils/ipc-context-source.js'
 import { sanitizeTemplates } from '../services/projects/templates.js'
 import { createProject } from '../services/projects/create-project-service.js'
 import type { CreateProjectInput } from '../services/projects/types.js'
@@ -21,7 +22,7 @@ import {
   saveWorkbenchSettings,
 } from '../services/settings/index.js'
 
-type ProjectsIpcCtx = Pick<
+export type ProjectsIpcCtx = Pick<
   WorkbenchContext,
   | 'workspace'
   | 'windows'
@@ -34,19 +35,19 @@ type ProjectsIpcCtx = Pick<
   | 'views'
 >
 
-export function registerProjectsIpc(ctx: ProjectsIpcCtx): Disposable {
-  return new IpcRegistry(ctx.senderPolicy)
-    .handle(ProjectsChannel.List, () => {
+export function registerProjectsIpc(input: IpcInput<ProjectsIpcCtx>): Disposable {
+  return new IpcRegistry(toIpcContextSource(input))
+    .handleRouted(ProjectsChannel.List, (ctx) => {
       return ctx.workspace.listProjects()
     })
-    .handle(DialogChannel.OpenDirectory, async () => {
+    .handleRouted(DialogChannel.OpenDirectory, async (ctx) => {
       const result = await dialog.showOpenDialog(ctx.windows.mainWindow, {
         properties: ['openDirectory'],
         title: '选择小程序项目目录',
       })
       return result.canceled ? null : result.filePaths[0]
     })
-    .handle(ProjectsChannel.Add, async (_event, ...args: unknown[]) => {
+    .handleRouted(ProjectsChannel.Add, async (ctx, _event, ...args: unknown[]) => {
       const [dirPath] = validate(ProjectsChannel.Add, ProjectsAddSchema, args)
       const dirError = await ctx.workspace.validateProjectDir(dirPath)
       if (dirError) {
@@ -83,11 +84,11 @@ export function registerProjectsIpc(ctx: ProjectsIpcCtx): Disposable {
       ctx.views.hostSidebar.send('project-category-forced', { category: importedCategory })
       return project
     })
-    .handle(ProjectsChannel.Remove, (_event, ...args: unknown[]) => {
+    .handleRouted(ProjectsChannel.Remove, (ctx, _event, ...args: unknown[]) => {
       const [dirPath] = validate(ProjectsChannel.Remove, ProjectsRemoveSchema, args)
       return ctx.workspace.removeProject(dirPath)
     })
-    .handle(ProjectsChannel.Update, (_event, ...args: unknown[]) => {
+    .handleRouted(ProjectsChannel.Update, (ctx, _event, ...args: unknown[]) => {
       const [dirPath, patch] = validate(
         ProjectsChannel.Update,
         ProjectsUpdateSchema,
@@ -96,13 +97,13 @@ export function registerProjectsIpc(ctx: ProjectsIpcCtx): Disposable {
       return ctx.workspace.updateProject(dirPath, patch)
     })
     // ── template catalog + create flow ──
-    .handle(ProjectsChannel.ListTemplates, () => {
+    .handleRouted(ProjectsChannel.ListTemplates, (ctx) => {
       // Sanitize at the IPC boundary: `generate` is a function and the
       // structured-clone algorithm Electron uses for invoke would otherwise
       // throw "could not be cloned" before the renderer ever sees it.
       return sanitizeTemplates(ctx.projectTemplates ?? [])
     })
-    .handle(ProjectsChannel.OpenCreateDialog, async () => {
+    .handleRouted(ProjectsChannel.OpenCreateDialog, async (ctx) => {
       if (!ctx.customCreateProjectDialog) return null
       const sanitized = sanitizeTemplates(ctx.projectTemplates ?? [])
       return await ctx.customCreateProjectDialog({
@@ -110,7 +111,7 @@ export function registerProjectsIpc(ctx: ProjectsIpcCtx): Disposable {
         templates: sanitized,
       })
     })
-    .handle(ProjectsChannel.OpenEditDialog, async (_event, ...args: unknown[]) => {
+    .handleRouted(ProjectsChannel.OpenEditDialog, async (ctx, _event, ...args: unknown[]) => {
       if (!ctx.customEditProjectDialog) return null
       const [dirPath] = validate(
         ProjectsChannel.OpenEditDialog,
@@ -132,7 +133,7 @@ export function registerProjectsIpc(ctx: ProjectsIpcCtx): Disposable {
       // fall through into the built-in one right behind it.
       return { result }
     })
-    .handle(ProjectsChannel.Create, async (_event, ...args: unknown[]) => {
+    .handleRouted(ProjectsChannel.Create, async (ctx, _event, ...args: unknown[]) => {
       // We deliberately don't run this through zod yet — the input shape is
       // wide (any template can stash arbitrary `extra` fields) and the
       // service does its own per-field validation. Bound size to keep this
@@ -175,7 +176,7 @@ export function registerProjectsIpc(ctx: ProjectsIpcCtx): Disposable {
       }
       return project
     })
-    .handle(ProjectsChannel.GetCreateDefaults, () => {
+    .handleRouted(ProjectsChannel.GetCreateDefaults, () => {
       // Fallback chain: persisted last parent → user's Documents → home.
       // Documents covers the common "我把项目都放在 Documents/ 下" case for
       // first-time users on macOS; home is just a safe final fallback.

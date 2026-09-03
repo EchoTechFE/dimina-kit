@@ -40,15 +40,22 @@ function shouldReportWatchPath(rel: string): boolean {
 
 export const __testing = { shouldReportWatchPath }
 
+/**
+ * Returns the call that ends this stream from the server side, or `null` when
+ * the request was answered with an error instead of a stream. Nothing else can
+ * end it: the client is the only party that ever disconnects, so the server
+ * that outlives the request needs a handle to close the channel when IT is the
+ * one going away.
+ */
 export function handleFsWatchRequest(
   req: http.IncomingMessage,
   res: http.ServerResponse,
   getProjectRoot: () => string,
-): void {
+): (() => void) | null {
   const watchedRoot = getProjectRoot()
   if (!watchedRoot) {
     jsonRes(res, 409, { error: 'No active project', code: 'ENOACTIVE' })
-    return
+    return null
   }
 
   let watcher: nodeFs.FSWatcher
@@ -56,7 +63,7 @@ export function handleFsWatchRequest(
     watcher = nodeFs.watch(watchedRoot, { recursive: true }, onChange)
   } catch (e) {
     jsonRes(res, 500, { error: String(e) })
-    return
+    return null
   }
 
   res.writeHead(200, {
@@ -123,4 +130,10 @@ export function handleFsWatchRequest(
   }, WATCH_DEBOUNCE_MS)
 
   req.on('close', cleanup)
+
+  return function endStream(): void {
+    if (closed) return
+    cleanup()
+    res.end()
+  }
 }

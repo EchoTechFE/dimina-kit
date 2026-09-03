@@ -19,12 +19,12 @@ import {
 import path from 'path'
 import { rmSync } from 'fs'
 import { fileURLToPath } from 'url'
-import { openProjectInUI, closeProject, DEMO_APP_DIR, findMainWindow } from './helpers'
+import { openProjectInUI, closeProject, DEMO_APP_DIR } from './helpers'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 let electronApp: ElectronApplication
-let mainWindow: PwPage
+let workbench: PwPage
 
 test.beforeAll(async () => {
   const appPath = path.resolve(__dirname, 'electron-entry.js')
@@ -42,18 +42,16 @@ test.beforeAll(async () => {
     args: [appPath, `--user-data-dir=${userDataDir}`],
     env: { ...process.env, NODE_ENV: 'test' },
   })
-  mainWindow = await findMainWindow(electronApp)
-  await mainWindow.waitForLoadState('domcontentloaded')
   await electronApp.evaluate(async ({ BrowserWindow }) => {
     const win = BrowserWindow.getAllWindows()[0]
     if (win) { win.setPosition(-2000, -2000); win.blur() }
   })
-  await openProjectInUI(mainWindow, DEMO_APP_DIR)
-  await mainWindow.waitForSelector('[data-deck-resize-handle]', { timeout: 15000 })
+  workbench = await openProjectInUI(electronApp, DEMO_APP_DIR)
+  await workbench.waitForSelector('[data-deck-resize-handle]', { timeout: 15000 })
 })
 
 test.afterAll(async () => {
-  try { await closeProject(mainWindow) } catch { /* best effort */ }
+  try { await closeProject(electronApp) } catch { /* best effort */ }
   await electronApp.close()
 })
 
@@ -73,7 +71,7 @@ async function groupRectOf(page: PwPage, panelId: string): Promise<{ x: number; 
 }
 
 test('the resize handle has a real grab area (not 0px)', async () => {
-  const handles = await mainWindow.evaluate(() =>
+  const handles = await workbench.evaluate(() =>
     Array.from(document.querySelectorAll('[data-deck-resize-handle]')).map((s) => {
       const r = s.getBoundingClientRect()
       return { w: Math.round(r.width), h: Math.round(r.height), aria: s.getAttribute('aria-orientation') }
@@ -91,21 +89,21 @@ test('dragging the editor/debug separator resizes the split (real pointer)', asy
   // The horizontal separator splits editor (top) and debug (bottom) — both
   // flexible, no native overlay over the handle.
   const hHandleCenter = (): Promise<{ cx: number; cy: number } | null> =>
-    mainWindow.evaluate(() => {
+    workbench.evaluate(() => {
       const h = document.querySelector('[data-deck-resize-handle][aria-orientation="horizontal"]') as HTMLElement | null
       if (!h) return null
       const r = h.getBoundingClientRect()
       return { cx: r.left + r.width / 2, cy: r.top + r.height / 2 }
     })
-  const editorH = async (): Promise<number> => (await groupRectOf(mainWindow, 'editor'))!.h
+  const editorH = async (): Promise<number> => (await groupRectOf(workbench, 'editor'))!.h
   const drag = async (dy: number): Promise<void> => {
     const h = await hHandleCenter()
     expect(h, 'a horizontal editor/debug separator must exist').not.toBeNull()
-    await mainWindow.mouse.move(h!.cx, h!.cy)
-    await mainWindow.mouse.down()
-    await mainWindow.mouse.move(h!.cx, h!.cy + dy, { steps: 10 })
-    await mainWindow.mouse.up()
-    await mainWindow.waitForTimeout(300)
+    await workbench.mouse.move(h!.cx, h!.cy)
+    await workbench.mouse.down()
+    await workbench.mouse.move(h!.cx, h!.cy + dy, { steps: 10 })
+    await workbench.mouse.up()
+    await workbench.waitForTimeout(300)
   }
 
   // Position-INDEPENDENT (the e2e userDataDir persists the prior run's split):
@@ -125,13 +123,13 @@ test('dragging the editor/debug separator resizes the split (real pointer)', asy
 test('the simulator column resizes via its left/right separator and floors at the device width (minPx)', async () => {
   // Width of the group containing the (tabless) simulator panel.
   const simWidth = (): Promise<number | null> =>
-    mainWindow.evaluate(() => {
+    workbench.evaluate(() => {
       const body = document.querySelector('[data-deck-panel-body="simulator"]')
       const g = body?.closest('[data-deck-group]') as HTMLElement | null
       return g ? Math.round(g.getBoundingClientRect().width) : null
     })
   const vHandleCenter = (): Promise<{ cx: number; cy: number } | null> =>
-    mainWindow.evaluate(() => {
+    workbench.evaluate(() => {
       const h = document.querySelector('[data-deck-resize-handle][aria-orientation="vertical"]') as HTMLElement | null
       if (!h) return null
       const r = h.getBoundingClientRect()
@@ -145,22 +143,22 @@ test('the simulator column resizes via its left/right separator and floors at th
   // Drag the vertical separator RIGHT → the simulator column grows.
   const h1 = await vHandleCenter()
   expect(h1, 'a vertical simulator│right separator must exist').not.toBeNull()
-  await mainWindow.mouse.move(h1!.cx, h1!.cy)
-  await mainWindow.mouse.down()
-  await mainWindow.mouse.move(h1!.cx + 160, h1!.cy, { steps: 10 })
-  await mainWindow.mouse.up()
-  await mainWindow.waitForTimeout(300)
+  await workbench.mouse.move(h1!.cx, h1!.cy)
+  await workbench.mouse.down()
+  await workbench.mouse.move(h1!.cx + 160, h1!.cy, { steps: 10 })
+  await workbench.mouse.up()
+  await workbench.waitForTimeout(300)
   const wider = await simWidth()
   expect(wider!, `column should widen (start ${start}, wider ${wider})`).toBeGreaterThan(start! + 60)
 
   // Drag the separator FAR LEFT → the column shrinks but FLOORS at the device
   // width (the minPx constraint); it must not collapse toward 0.
   const h2 = await vHandleCenter()
-  await mainWindow.mouse.move(h2!.cx, h2!.cy)
-  await mainWindow.mouse.down()
-  await mainWindow.mouse.move(h2!.cx - 700, h2!.cy, { steps: 14 })
-  await mainWindow.mouse.up()
-  await mainWindow.waitForTimeout(300)
+  await workbench.mouse.move(h2!.cx, h2!.cy)
+  await workbench.mouse.down()
+  await workbench.mouse.move(h2!.cx - 700, h2!.cy, { steps: 14 })
+  await workbench.mouse.up()
+  await workbench.waitForTimeout(300)
   const floored = await simWidth()
   // It shrank from the widened state (draggable narrower)…
   expect(floored!, `column shrank from the widened state (wider ${wider}, floored ${floored})`).toBeLessThan(wider! - 40)

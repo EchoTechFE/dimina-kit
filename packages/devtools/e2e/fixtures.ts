@@ -3,7 +3,7 @@ import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { ProjectsChannel } from '../src/shared/ipc-channels'
-import { ipcInvoke, openProjectInUI, closeProject, resetSimulatorState, findMainWindow } from './helpers'
+import { ipcInvoke, openProjectInUI, closeProject, resetSimulatorState, findMainWindow, findWorkbenchWindow } from './helpers'
 import { armMaxListenersGuard, type MaxListenersGuard } from './resource-guards'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -27,6 +27,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 export interface ElectronFixtures {
   electronApp: ElectronApplication
   mainWindow: Page
+  /**
+   * The window an open project lives in. Resolved lazily — only a spec that
+   * destructures it waits for one — so it pairs with `useSharedProject`,
+   * which opens the project in `beforeAll` and is what identifies the window:
+   * a project window an earlier spec left open is also a workbench window, so
+   * listing order alone would hand this spec the wrong project. A spec that
+   * opens its own project should use `openProjectInUI`'s return value.
+   */
+  workbench: Page
   /**
    * Auto fixture (leak gate): fails any test during which the Electron app's
    * stderr printed a MaxListenersExceededWarning — a leaked-listener class that
@@ -117,6 +126,15 @@ async function isHealthy(app: ElectronApplication, win: Page | undefined): Promi
   }
 }
 
+/**
+ * The project {@link useSharedProject} opened for the running describe block,
+ * or `null` outside one. The `workbench` fixture resolves its window by this
+ * path rather than by listing order: several project windows can be open at
+ * once and an earlier spec may still own one, so "the first workbench window"
+ * is not necessarily this spec's.
+ */
+let sharedProjectDir: string | null = null
+
 export const test = base.extend<ElectronFixtures, ElectronWorkerFixtures>({
   _workerElectron: [
     // eslint-disable-next-line no-empty-pattern
@@ -164,6 +182,15 @@ export const test = base.extend<ElectronFixtures, ElectronWorkerFixtures>({
     await use(win)
   },
 
+  workbench: async ({ _workerElectron }, use) => {
+    const win = await findWorkbenchWindow(
+      _workerElectron.app,
+      sharedProjectDir === null ? {} : { projectDir: sharedProjectDir },
+    )
+    await win.waitForLoadState('domcontentloaded')
+    await use(win)
+  },
+
   _maxListenersGate: [
     async ({ _workerElectron }, use) => {
       const seenBefore = _workerElectron.guard.warnings().length
@@ -183,8 +210,9 @@ export const test = base.extend<ElectronFixtures, ElectronWorkerFixtures>({
  *
  * Call this at the top of a `test.describe` block (or top-level of the file).
  * It registers `beforeAll`/`afterAll`/`afterEach` hooks against the passed
- * `test` object. Inside each test you can keep using the standard
- * `mainWindow` / `electronApp` fixtures — the project is already open.
+ * `test` object. Inside each test, use the `workbench` fixture for anything
+ * about the open project (simulator, panels, editor, toolbar) and `mainWindow`
+ * only for the project list itself — they are two different windows now.
  *
  * Between tests it clears `wx` storage and navigates the simulator back to
  * the configured home page. This is best-effort: a test that leaves the
@@ -201,8 +229,8 @@ export const test = base.extend<ElectronFixtures, ElectronWorkerFixtures>({
  * test.describe('My feature', () => {
  *   useSharedProject(test, DEMO_APP_DIR)
  *
- *   test('does a thing', async ({ mainWindow, electronApp }) => {
- *     // project is already open; just exercise it.
+ *   test('does a thing', async ({ workbench, electronApp }) => {
+ *     // project is already open in `workbench`; just exercise it.
  *   })
  * })
  * ```
@@ -229,11 +257,11 @@ export function useSharedProject(
   const { openOptions, openTimeoutMs } = options
 
   // beforeAll/afterAll only receive worker-scoped fixtures, so we rely on
-  // _workerElectron and grab the firstWindow ourselves.
+  // _workerElectron and resolve windows ourselves.
   testObj.beforeAll(async ({ _workerElectron }) => {
     if (openTimeoutMs !== undefined) testObj.setTimeout(openTimeoutMs)
-    const win = await findMainWindow(_workerElectron.app)
-    await openProjectInUI(win, projectDir, openOptions)
+    sharedProjectDir = projectDir
+    await openProjectInUI(_workerElectron.app, projectDir, openOptions)
   })
 
   testObj.afterEach(async ({ electronApp }) => {
@@ -241,10 +269,8 @@ export function useSharedProject(
   })
 
   testObj.afterAll(async ({ _workerElectron }) => {
-    const win = await findMainWindow(_workerElectron.app).catch(() => undefined)
-    if (win && !win.isClosed()) {
-      await closeProject(win).catch(() => {})
-    }
+    sharedProjectDir = null
+    await closeProject(_workerElectron.app, { projectDir }).catch(() => {})
   })
 }
 

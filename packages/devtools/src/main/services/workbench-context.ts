@@ -20,7 +20,11 @@ import {
   type ConnectionRegistry,
 } from '@dimina-kit/electron-deck/main'
 import type { SenderPolicy } from '../utils/ipc-registry.js'
-import { createWorkbenchSenderPolicy } from '../utils/sender-policy.js'
+import {
+  createWorkbenchOwnedSenderCheck,
+  createWorkbenchSenderPolicy,
+} from '../utils/sender-policy.js'
+import type { AppServices } from './app-services.js'
 import { defaultAdapter } from './default-adapter.js'
 import {
   createRendererNotifier,
@@ -176,6 +180,15 @@ export interface WorkbenchContext extends RuntimeContext {
   senderPolicy: SenderPolicy
 
   /**
+   * The subset of `senderPolicy` this context structurally OWNS — its own
+   * window's renderer, its settings window and the overlay views mounted
+   * inside it. Excludes the app-wide trusted-window map, which no single
+   * context can claim. `createWindowContextRouter` uses it to decide which
+   * window a message actually came from.
+   */
+  ownsSender: SenderPolicy
+
+  /**
    * Reference-counted map of `webContents.id` → live registration count for
    * host-owned BrowserWindows registered as trusted senders via
    * `instance.registerTrustedWindow`. A window stays trusted while its count
@@ -183,13 +196,21 @@ export interface WorkbenchContext extends RuntimeContext {
    * single `closed` event, which zeroes the count outright) to un-trust it.
    * Consulted by `createWorkbenchSenderPolicy` in addition to the static
    * main-window / overlay checks.
+   *
+   * Supplied by {@link AppServices} when the caller has one: the host
+   * registers its window against the application, so the same map backs every
+   * context.
    */
   trustedWindowSenderIds: Map<number, number>
 
   /**
-   * Per-context registry of host-registered simulator custom APIs. Populated
-   * via `instance.registerSimulatorApi`; read by the simulator IPC handlers.
-   * One registry per context — no process-global crosstalk.
+   * Registry of host-registered simulator custom APIs. Populated via
+   * `instance.registerSimulatorApi`; read by the simulator IPC handlers.
+   *
+   * Supplied by {@link AppServices} when the caller has one, and therefore
+   * shared across contexts: the host registers each handler once, so a window
+   * opened afterwards must still answer those `wx.*` calls. A context built
+   * without app services (focused unit tests) gets its own registry.
    */
   simulatorApis: SimulatorApiRegistry
 
@@ -328,6 +349,13 @@ export interface CreateContextOptions
   mainWindow: BrowserWindow
   preloadPath: string
   rendererDir: string
+  /**
+   * Services owned by the application rather than by this window. When
+   * present their instances are adopted instead of constructing per-context
+   * ones, so every window shares the host's single registration. Optional so
+   * focused unit tests can still build a stand-alone context.
+   */
+  appServices?: AppServices
   brandingProvider?: WorkbenchContext['brandingProvider']
   /** Host-supplied project list backend. Defaults to LocalProjectsProvider. */
   projectsProvider?: ProjectsProvider
@@ -377,8 +405,9 @@ export function createWorkbenchContext(opts: CreateContextOptions): WorkbenchCon
   ctx.connections = createConnectionRegistry()
   ctx.cdpSessionBroker = createCdpSessionBroker({ connections: ctx.connections })
   ctx.registry.add(() => ctx.cdpSessionBroker.dispose())
-  ctx.trustedWindowSenderIds = new Map<number, number>()
-  ctx.simulatorApis = createSimulatorApiRegistry()
+  ctx.trustedWindowSenderIds =
+    opts.appServices?.trustedWindowSenderIds ?? new Map<number, number>()
+  ctx.simulatorApis = opts.appServices?.simulatorApis ?? createSimulatorApiRegistry()
   ctx.simulatorUiExtensions = createSimulatorUiExtensionRegistry()
   ctx.registry.add(() => ctx.simulatorUiExtensions.clear())
   ctx.windows = createWindowService(opts.mainWindow)
@@ -402,16 +431,16 @@ export function createWorkbenchContext(opts: CreateContextOptions): WorkbenchCon
   // at call time through the live context, which structurally satisfies the
   // helper's narrow OpenSettingsWindowDeps.
   ctx.openSettings = () => openSettingsWindow(ctx)
-  ctx.projectsProvider = opts.projectsProvider ?? createLocalProjectsProvider()
-  ctx.projectTemplates = resolveTemplates(
-    BUILTIN_TEMPLATES,
-    opts.projectTemplates ?? [],
-    opts.builtinTemplates ?? 'all',
-  )
+  ctx.projectsProvider =
+    opts.appServices?.projectsProvider ?? opts.projectsProvider ?? createLocalProjectsProvider()
+  ctx.projectTemplates =
+    opts.appServices?.projectTemplates ??
+    resolveTemplates(BUILTIN_TEMPLATES, opts.projectTemplates ?? [], opts.builtinTemplates ?? 'all')
   ctx.customCreateProjectDialog = opts.customCreateProjectDialog
   ctx.customEditProjectDialog = opts.customEditProjectDialog
   ctx.onBeforeOpenProject = opts.onBeforeOpenProject
   ctx.workspace = createWorkspaceService(ctx)
+  ctx.ownsSender = createWorkbenchOwnedSenderCheck(ctx)
   ctx.senderPolicy = createWorkbenchSenderPolicy(ctx)
   return ctx
 }

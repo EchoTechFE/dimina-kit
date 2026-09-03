@@ -117,7 +117,9 @@ test.describe('miniprogram-automator protocol compatibility', () => {
   // The following tests open a project first
   test.describe('with project open', () => {
     test.beforeAll(async () => {
-      await openProjectInUI(mainWindow, DEMO_APP_DIR, { waitMs: 8000 })
+      // Return value not captured — the rest of this block drives the app
+      // purely over the automation-protocol WebSocket, never a Page object.
+      await openProjectInUI(electronApp, DEMO_APP_DIR, { waitMs: 8000 })
       await waitForSimulatorWebview(electronApp)
 
       // NATIVE-HOST readiness gate. The page DOM is no longer in a same-document
@@ -149,7 +151,7 @@ test.describe('miniprogram-automator protocol compatibility', () => {
     })
 
     test.afterAll(async () => {
-      await closeProject(mainWindow).catch(() => {})
+      await closeProject(electronApp).catch(() => {})
     })
 
     test('App.getPageStack returns stack', async () => {
@@ -269,7 +271,10 @@ test.describe('npm miniprogram-automator package', () => {
       100,
     ) as number
 
-    await openProjectInUI(smokeMainWindow, DEMO_APP_DIR, { waitMs: 8000 })
+    // Return value not captured — this block hands off to the npm
+    // `miniprogram-automator` package's own `automator.connect(wsEndpoint)`,
+    // never a Page object of ours.
+    await openProjectInUI(smokeElectronApp, DEMO_APP_DIR, { waitMs: 8000 })
     await waitForSimulatorWebview(smokeElectronApp)
     await new Promise((r) => setTimeout(r, 2000))
 
@@ -282,7 +287,7 @@ test.describe('npm miniprogram-automator package', () => {
     if (miniProgram) {
       miniProgram.disconnect()
     }
-    await closeProject(smokeMainWindow).catch(() => {})
+    await closeProject(smokeElectronApp).catch(() => {})
     await smokeElectronApp?.close().catch(() => {})
   })
 

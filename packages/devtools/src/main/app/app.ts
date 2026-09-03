@@ -1,30 +1,20 @@
 import { setupCdpPort, registerDifileScheme, suppressInsecureCspWarnings } from './bootstrap.js'
 import { installMaxListenersWarningDiagnostic } from './max-listeners-diagnostic.js'
-import { registerProjectFsIpc } from '../ipc/project-fs.js'
 
-import { app, BrowserWindow, nativeImage, session } from 'electron'
-import fs from 'fs'
-import path from 'path'
-import type { BuiltinModuleId, MenuContext, WorkbenchAppConfig } from '../../shared/types.js'
-import { HOST_SIDEBAR_DEFAULT_WIDTH } from '../../shared/constants.js'
+import { app, BrowserWindow, session } from 'electron'
+import type { BuiltinModuleId, WorkbenchAppConfig } from '../../shared/types.js'
 import type {
   SimulatorUiExtensionHandle,
   SimulatorUiExtensionRegistration,
 } from '../../shared/simulator-ui.js'
 import type { SimulatorApiHandler } from '../services/simulator/custom-apis.js'
-import { rendererDir as defaultRendererDir, defaultPreloadPath, devtoolsPackageRoot } from '../utils/paths.js'
-import { installThemeBackgroundSync } from '../utils/theme.js'
-import { createMainWindow, wireMainWindowEvents } from '../windows/main-window/index.js'
-import { createInternalDevtoolsWindow } from '../windows/internal-devtools-window/index.js'
-import { createGlobalConsoleMirror } from '../services/console-forward/global-console-mirror.js'
-import { createGlobalDiagnosticsMirror } from '../services/console-forward/global-diagnostics-mirror.js'
-import { isAppQuitting } from './lifecycle.js'
-import { resolveNativeAppDataKeys, resolveNativeStorageOverview } from './native-overview.js'
+import { rendererDir as defaultRendererDir } from '../utils/paths.js'
 // eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
-import { createWorkbenchContext, type WorkbenchContext } from '../services/workbench-context.js'
-import { setupCompileWorkerStandby } from '../services/compile-standby.js'
-import { loadWorkbenchSettings, applyTheme } from '../services/settings/index.js'
-import { installAppMenu } from '../menu/index.js'
+import type { WorkbenchContext } from '../services/workbench-context.js'
+import { createAppServices, registerTrustedWindow } from '../services/app-services.js'
+import { createWindowContextRouter, type WindowContextRouter } from '../services/window-contexts/context-router.js'
+import type { WorkbenchModule } from '../services/module.js'
+import { createInternalDevtoolsWindow } from '../windows/internal-devtools-window/index.js'
 import {
   registerAppIpc,
   registerInternalDevtoolsIpc,
@@ -37,27 +27,33 @@ import {
   settingsModule,
   simulatorModule,
 } from '../ipc/index.js'
-import type { WorkbenchModule } from '../services/module.js'
-import { startAutomationServer, type AutomationServer } from '../services/automation/index.js'
-import {
-  startMcpServer,
-  setNativeHost,
-  setActiveBridgeId,
-  setNativeOverviewProvider,
-} from '../services/mcp/index.js'
-import { setupSimulatorStorage } from '../services/simulator-storage/index.js'
-import { createNetworkForwarder } from '../services/network-forward/index.js'
-import { setupSimulatorWxml } from '../services/simulator-wxml/index.js'
-import { setupSimulatorAppData } from '../services/simulator-appdata/index.js'
-import { setupSimulatorCurrentPage } from '../services/simulator-current-page/index.js'
-import { createRenderInspector } from '../services/render-inspect/index.js'
-import { setupSimulatorTempFiles } from '../services/simulator-temp-files/index.js'
-import { SHARED_MINIAPP_PARTITION } from '../services/views/miniapp-partition.js'
+import { registerProjectFsIpc } from '../ipc/project-fs.js'
 import { setupSimulatorSessionPolicy } from '../services/views/simulator-session-policy.js'
-import { startWorkbenchCoiServer } from '../services/workbench-coi-server.js'
+import { setupCompileWorkerStandby } from '../services/compile-standby.js'
+import { installThemeBackgroundSync } from '../utils/theme.js'
+import { isAppQuitting } from './lifecycle.js'
+import { loadWorkbenchSettings, applyTheme } from '../services/settings/index.js'
+import type { AutomationServer } from '../services/automation/index.js'
+import { SHARED_MINIAPP_PARTITION } from '../services/views/miniapp-partition.js'
+import { setupSimulatorTempFiles } from '../services/simulator-temp-files/index.js'
 import { UpdateManager } from '../services/update/index.js'
-import { toDisposable, type Disposable } from '@dimina-kit/electron-deck/main'
+import { toDisposable, DisposableRegistry, type Disposable } from '@dimina-kit/electron-deck/main'
 import { IpcRegistry } from '../utils/ipc-registry.js'
+import { createLauncherWindow, type ProjectRef, type ProjectWindow } from './project-window.js'
+import { createWorkbenchWindowManager } from './workbench-window.js'
+import { createUiExtensionTargets } from './ui-extension-targets.js'
+import { installGlobalMirrors } from './global-mirrors.js'
+import { installHostSidebarDefault } from './host-sidebar-default.js'
+import { installMenu } from './menu-setup.js'
+import {
+  createCloseForMcp,
+  createOpenForMcp,
+  noteActiveMcpWindowChanged,
+  setActiveMcpWindowResolver,
+} from '../services/mcp/index.js'
+import { setupAutomation, setupMcp } from './servers.js'
+import { enableDevRendererAutoReload, revealWindow } from './window-events.js'
+import { wireMainWindowEvents } from '../windows/main-window/index.js'
 import { WindowChannel } from '../../shared/ipc-channels.js'
 
 const DEFAULT_MODULES: Record<BuiltinModuleId, boolean> = {
@@ -76,10 +72,132 @@ const BUILTIN_MODULES: Record<BuiltinModuleId, WorkbenchModule> = {
   settings: settingsModule,
 }
 
+function resolveModules(config: WorkbenchAppConfig): Record<BuiltinModuleId, boolean> {
+  return {
+    ...DEFAULT_MODULES,
+    ...config.modules,
+  }
+}
+
+/**
+ * The IPC half of the built-in modules: registered ONCE for the application.
+ * Each handler answers whichever window a message came from (it takes the
+ * router), so a second window needs no second registration — and must not make
+ * one, since `ipcMain.handle` is a process-wide singleton per channel.
+ */
+function registerModuleIpc(
+  config: WorkbenchAppConfig,
+  router: WindowContextRouter<WorkbenchContext>,
+  appRegistry: DisposableRegistry,
+): void {
+  const modules = resolveModules(config)
+  ;(Object.keys(modules) as BuiltinModuleId[]).forEach((moduleId) => {
+    if (!modules[moduleId]) return
+    appRegistry.add(BUILTIN_MODULES[moduleId].setup(router))
+  })
+}
+
+/**
+ * The per-window half: wiring that mutates one concrete context (the
+ * simulator's bridge router assigning `ctx.bridge` / `ctx.consoleForwarder`).
+ * Runs once per window and is parked on that window's own registry.
+ */
+export function setupWindowModules(
+  config: WorkbenchAppConfig,
+  context: WorkbenchContext,
+): void {
+  const modules = resolveModules(config)
+  ;(Object.keys(modules) as BuiltinModuleId[]).forEach((moduleId) => {
+    if (!modules[moduleId]) return
+    const module = BUILTIN_MODULES[moduleId]
+    if (module.setupWindow) context.registry.add(module.setupWindow(context))
+  })
+}
+
+/**
+ * Registers the workbench's IPC surface against the router, so each message is
+ * answered with the context of the window it came from.
+ */
+function registerWorkbenchIpc(
+  config: WorkbenchAppConfig,
+  router: WindowContextRouter<WorkbenchContext>,
+  context: WorkbenchContext,
+  mainWindow: BrowserWindow,
+  appRegistry: DisposableRegistry,
+): void {
+  appRegistry.add(registerAppIpc(router))
+  // Sandboxed project file-system IPC (the renderer-side project:fs:* surface).
+  appRegistry.add(registerProjectFsIpc(router))
+  // Standalone internal (app-wide) DevTools debug window controller — the
+  // independent floating CDP panel that debugs the whole Electron app (as
+  // opposed to the right-panel CDP, which inspects only the user's
+  // mini-program). Assembled before the IPC handler below so a request
+  // arriving right after boot always finds it.
+  // `isAppQuitting` lets the controller stop intercepting 'close' during a
+  // real quit — its habitual preventDefault()+hide() would otherwise cancel
+  // the quit itself and strand the process with a hidden window.
+  // One per window (each debugs its own renderer), so it is parked on the
+  // window's context registry, not the app's.
+  context.internalDevtoolsWindow = createInternalDevtoolsWindow(mainWindow, { isAppQuitting })
+  context.registry.add(toDisposable(() => context.internalDevtoolsWindow?.dispose()))
+  // Unconditional (not a toggleable BUILTIN_MODULES entry): it's core dev
+  // tooling, not a host-configurable feature.
+  appRegistry.add(registerInternalDevtoolsIpc(router))
+  // Unconditional (not a toggleable BUILTIN_MODULES entry): the tooltip
+  // overlay is core UI chrome (every toolbar in this app relies on it), not a
+  // host-configurable feature.
+  appRegistry.add(registerTooltipIpc(router))
+  // Unconditional: the project-create dialog is core UI chrome (the built-in
+  // "新建项目" flow every host falls back to), not a host-configurable feature.
+  appRegistry.add(registerProjectCreateIpc(router))
+  // Unconditional (not a toggleable BUILTIN_MODULES entry): placement/host-
+  // slot IPC has no real dependency on the simulator module — `ctx.views`
+  // (ViewManager) is constructed unconditionally regardless of
+  // `modules.simulator`, and host-sidebar in particular lives on the
+  // project-list page, unrelated to the simulator webview. Every renderer
+  // entry point also blocks its first render on `AllocatePlacementGeneration`
+  // (see renderer-placement-generation.ts) — gating any of this behind the
+  // simulator toggle would strand a host that disables it on the fatal
+  // boot-failure page, or leave placement silently non-functional.
+  appRegistry.add(registerViewsIpc(router))
+  // Referer/CORS webRequest policy for the simulator runtime's sessions (shared
+  // fallback + every per-project partition). Registered into the app registry so
+  // its configurator + per-session listeners are torn down with the app —
+  // re-creating the app never leaks a duplicate configurator, and a window
+  // closing must not strip the policy off the sessions other windows still use.
+  appRegistry.add(setupSimulatorSessionPolicy())
+  // One process-wide listener that re-syncs every window's native
+  // backgroundColor on theme change — windows otherwise keep the stale
+  // creation-time color (see installThemeBackgroundSync).
+  appRegistry.add(installThemeBackgroundSync())
+  // Warm-standby compile worker: only meaningful for the devkit-backed
+  // default adapter (a host-injected adapter has no devkit fork to adopt the
+  // spare). Registered into the registry so the spare dies with the app.
+  if (!config.adapter) appRegistry.add(setupCompileWorkerStandby(context))
+  registerModuleIpc(config, router, appRegistry)
+}
+
 export interface WorkbenchAppInstance {
+  /** The project-list window. It stays open for the whole session. */
   mainWindow: BrowserWindow
+  /** The project-list window's context. Workbench windows have their own. */
   context: WorkbenchContext
-  /** Gated custom-IPC registration surface bound to `context.senderPolicy`. */
+  /**
+   * Open `project` in its own workbench window, or focus the window already
+   * showing it. This is the only way a project is opened: the list window never
+   * turns into a workbench.
+   */
+  openProjectWindow: (project: ProjectRef) => Promise<BrowserWindow>
+  /** Every open workbench window, in the order they were opened. */
+  projectWindows: () => ProjectWindow[]
+  /**
+   * Dispose every live window's WebContentsViews. Called at `before-quit`,
+   * while the main loop is still healthy, so no view survives into Chromium's
+   * native shutdown. Idempotent, and covers every window — a workbench window's
+   * views hold the MessagePorts that segfault if torn down natively.
+   */
+  disposeViews: () => void
+  /** Gated custom-IPC registration surface; admits every workbench window. */
   readonly ipc: IpcRegistry
   /** Adds a host-owned BrowserWindow to the trusted-sender set. */
   registerTrustedWindow: (win: BrowserWindow) => Disposable
@@ -92,315 +210,6 @@ export interface WorkbenchAppInstance {
   automationServer?: AutomationServer
   updateManager?: UpdateManager
   dispose: () => Promise<void>
-}
-
-/**
- * Adds `win.webContents` to the context's trusted-sender set and returns a
- * Disposable that removes it again.
- *
- * Trust is reference-counted: registering the SAME window N times keeps it
- * trusted until every one of the N returned Disposables has been disposed.
- * `trustedWindowSenderIds` is a `Map<webContents.id, refCount>`; each register
- * bumps the count, each dispose decrements it, and the window is un-trusted
- * only when the count reaches zero.
- *
- * The window's `closed` event short-circuits the ref-count: it deletes the
- * map entry outright (the window is dead, so it must be un-trusted
- * immediately regardless of how many Disposables are still outstanding).
- * After `closed`, disposing any leftover Disposable is a safe no-op — the
- * map entry is already gone, so the decrement finds `undefined` and bails
- * without driving the count negative or resurrecting trust.
- *
- * Each returned Disposable is itself idempotent (`removed` flag), and its
- * `closed` listener removes itself once fired so a long-lived context
- * doesn't accumulate dead listeners on closed windows.
- */
-function registerTrustedWindow(context: WorkbenchContext, win: BrowserWindow): Disposable {
-  const senderId = win.webContents.id
-  const counts = context.trustedWindowSenderIds
-  counts.set(senderId, (counts.get(senderId) ?? 0) + 1)
-
-  let removed = false
-  const onClosed = () => {
-    // The window is gone: zero the ref-count for this sender id outright,
-    // regardless of any other outstanding registrations for the same window.
-    counts.delete(senderId)
-    win.removeListener('closed', onClosed)
-  }
-
-  function remove() {
-    if (removed) return
-    removed = true
-    win.removeListener('closed', onClosed)
-    const count = counts.get(senderId)
-    // `undefined` → the entry was already cleared (e.g. by `closed` or by a
-    // prior sibling's decrement that hit zero). Nothing to do — never go
-    // negative, never resurrect trust.
-    if (count === undefined) return
-    if (count <= 1) counts.delete(senderId)
-    else counts.set(senderId, count - 1)
-  }
-
-  win.once('closed', onClosed)
-  return toDisposable(remove)
-}
-
-/** Parse --auto, --auto-port, --project from process.argv. */
-function parseAutoArgs(): { auto: boolean; autoPort: number; projectPath: string } {
-  const argv = process.argv
-  let auto = false
-  let autoPort = 9420
-  let projectPath = ''
-
-  for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === 'auto' || argv[i] === '--auto') auto = true
-    if ((argv[i] === '--auto-port' || argv[i] === '--auto_port') && argv[i + 1]) {
-      const parsed = parseInt(argv[i + 1]!, 10)
-      // 0 → OS-assigned free port (used by parallel e2e workers)
-      if (Number.isFinite(parsed) && parsed >= 0) autoPort = parsed
-    }
-    if (argv[i] === '--project' && argv[i + 1]) {
-      projectPath = argv[i + 1]!
-    }
-  }
-
-  return { auto, autoPort, projectPath }
-}
-
-function resolveModules(config: WorkbenchAppConfig): Record<BuiltinModuleId, boolean> {
-  return {
-    ...DEFAULT_MODULES,
-    ...config.modules,
-  }
-}
-
-async function disposeContext(ctx: WorkbenchContext): Promise<void> {
-  await ctx.workspace.closeProject()
-  await ctx.registry.dispose().catch((err) => {
-    console.warn('[workbench] dispose registry encountered errors:', err)
-  })
-}
-
-function createConfiguredMainWindow(config: WorkbenchAppConfig, rendererDir: string): BrowserWindow {
-  const mainWindow = createMainWindow({
-    title: config.appName ?? 'Dimina DevTools',
-    indexHtml: path.join(rendererDir, 'entries/main/index.html'),
-    width: config.window?.width,
-    height: config.window?.height,
-    minWidth: config.window?.minWidth,
-    minHeight: config.window?.minHeight,
-    autoShow: config.window?.autoShow,
-  })
-
-  // Set window/taskbar icon if provided (Linux/Windows; macOS uses app bundle icon)
-  if (config.icon) {
-    const icon = nativeImage.createFromPath(config.icon)
-    if (!icon.isEmpty()) mainWindow.setIcon(icon)
-  }
-
-  return mainWindow
-}
-
-function createContext(config: WorkbenchAppConfig, mainWindow: BrowserWindow, rendererDir: string): WorkbenchContext {
-  return createWorkbenchContext({
-    mainWindow,
-    adapter: config.adapter,
-    preloadPath: config.preloadPath ?? defaultPreloadPath,
-    rendererDir,
-    appName: config.appName,
-    apiNamespaces: config.apiNamespaces,
-    fileTypes: config.fileTypes,
-    brandingProvider: config.brandingProvider,
-    // The host-supplied ProjectsProvider / template types in `shared/types`
-    // are structurally compatible with the main-process equivalents —
-    // these casts are safe; we re-narrow at the workspace-service /
-    // create-project-service boundary.
-    projectsProvider: config.projectsProvider as
-      | import('../services/projects/types.js').ProjectsProvider
-      | undefined,
-    projectTemplates: config.projectTemplates as
-      | import('../services/projects/types.js').ProjectTemplate[]
-      | undefined,
-    builtinTemplates: config.builtinTemplates,
-    customCreateProjectDialog: config.customCreateProjectDialog as
-      // eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
-      | import('../services/workbench-context.js').WorkbenchContext['customCreateProjectDialog']
-      | undefined,
-    // No cast needed here: the hook receives the project record, so the
-    // main-process `Project` the context hands it satisfies the structural
-    // `EditableProject` the config declares.
-    customEditProjectDialog: config.customEditProjectDialog,
-    onBeforeOpenProject: config.onBeforeOpenProject,
-  })
-}
-
-function registerBuiltinModules(config: WorkbenchAppConfig, context: WorkbenchContext): void {
-  const modules = resolveModules(config)
-  ;(Object.keys(modules) as BuiltinModuleId[]).forEach((moduleId) => {
-    if (modules[moduleId]) context.registry.add(BUILTIN_MODULES[moduleId].setup(context))
-  })
-}
-
-/**
- * Build the hand-written narrow `MenuContext` a host menu builder receives —
- * explicit construction (not clone+delete), so the runtime object carries
- * EXACTLY the contract members and nothing else. Every member is a lazy
- * closure over the live context: a host monkey-patch of
- * `context.workspace.openProject` (the documented permission-gate pattern)
- * still intercepts calls made through this menu surface.
- */
-function toMenuContext(context: WorkbenchContext): MenuContext {
-  return {
-    appName: context.appName,
-    workspace: {
-      hasActiveSession: () => context.workspace.hasActiveSession(),
-      getProjectPath: () => context.workspace.getProjectPath(),
-      openProject: (projectPath) => context.workspace.openProject(projectPath),
-      closeProject: () => context.workspace.closeProject(),
-      getSession: () => context.workspace.getSession(),
-    },
-    openSettings: () => context.openSettings(),
-    notify: {
-      projectStatus: (payload) => context.notify.projectStatus(payload),
-      windowNavigateBack: () => context.notify.windowNavigateBack(),
-    },
-  }
-}
-
-function installMenu(config: WorkbenchAppConfig, mainWindow: BrowserWindow, context: WorkbenchContext): void {
-  // Menu: use host-provided builder or fall back to default
-  if (config.menuBuilder) {
-    config.menuBuilder(mainWindow, toMenuContext(context))
-  } else {
-    installAppMenu(context)
-  }
-}
-
-async function setupAutomation(instance: WorkbenchAppInstance): Promise<void> {
-  // Start automation server if --auto flag is present
-  const autoArgs = parseAutoArgs()
-  if (autoArgs.auto) {
-    const server = await startAutomationServer(instance.context, autoArgs.autoPort)
-    instance.automationServer = server
-    instance.context.registry.add(() => server.close())
-    // Stable, parseable line for e2e harnesses that scrape stdout.
-    console.log(`[automation] listening on ws://127.0.0.1:${server.port}`)
-  }
-}
-
-function setupMcp(context: WorkbenchContext): Disposable | null {
-  const settings = loadWorkbenchSettings()
-  if (!settings.mcp.enabled) return null
-
-  const cdpPortSwitch = app.commandLine.getSwitchValue('remote-debugging-port')
-  const cdpPort = cdpPortSwitch ? parseInt(cdpPortSwitch, 10) : settings.cdp.port
-  return startMcpServer(cdpPort, settings.mcp.port, {
-    workspace: context.workspace,
-    sessionStatus: context.sessionStatus,
-    compileLogs: context.compileLogBuffer,
-    // The renderer owns the open path (mounting ProjectRuntime compiles and
-    // attaches the simulator), so project_open pushes it there.
-    requestOpenInUi: (p) => context.notify.windowOpenProject(p),
-    requestNavigateBack: () => context.notify.windowNavigateBack(),
-  })
-}
-
-function wireAppWindowEvents(
-  config: WorkbenchAppConfig,
-  instance: WorkbenchAppInstance,
-  isOnProjectScreen: () => boolean,
-): Disposable {
-  const { mainWindow, context } = instance
-  // In-flight guard: `closeProject()` is async, and the window stays open
-  // (preventDefault'd) while it runs — a second close click during that window
-  // would re-enter and tear the same session down twice. Swallow re-entrancy.
-  let closing = false
-  return wireMainWindowEvents(mainWindow, {
-    context,
-    onResize: () => context.views.repositionAll(),
-    onClose: async (e) => {
-      // A real application quit (⌘Q / menu "Quit" / app.quit()) fires
-      // `before-quit` first, then this window's `close`. Let it through so the
-      // app actually exits — do NOT convert it into "close the project".
-      // Without this, `hasActiveSession()` would be true and the quit gets
-      // swallowed into closeProject(), so the app can never be quit while a
-      // project is open.
-      if (isAppQuitting()) return
-
-      // A close arriving while a project teardown is already in flight (the
-      // user rapid-double-clicked the close button) MUST keep the window open.
-      // This guard runs BEFORE hasActiveSession() on purpose: `closeProject()`
-      // → `disposeSession()` synchronously nulls the active session before it
-      // finishes awaiting `session.close()`, so by the time the second close
-      // arrives `hasActiveSession()` is already false. With the old guard order
-      // that second close fell straight through the hasActiveSession() check
-      // WITHOUT `preventDefault()`, so Electron destroyed the last window →
-      // `window-all-closed` → `app.quit()`, quitting the whole app on a
-      // double-click. Swallow the re-entrant close and keep the window.
-      if (closing) {
-        e.preventDefault()
-        return
-      }
-
-      // Keep the app alive on close whenever EITHER a live compiled session
-      // exists OR the renderer reports it is on a project screen. The renderer
-      // enters the project screen (and reports it) before openProject resolves,
-      // so a FAILED open — invalid/non-existent project, no session ever
-      // created — still parks the renderer there showing the compile-failed
-      // overlay. Keying off `hasActiveSession()` alone let that close fall
-      // through with no preventDefault → the last window is destroyed →
-      // `window-all-closed` → `app.quit()`, quitting the whole app instead of
-      // returning to the list. The two signals answer one question ("is the
-      // user inside a project, so close means back-to-list?"); the renderer's
-      // screen is the authority and hasActiveSession is a resource-safety belt
-      // (never destroy the window while a live session runs behind it).
-      if (!context.workspace.hasActiveSession() && !isOnProjectScreen()) return
-
-      // Close button while inside a project: stay in the workbench and surface
-      // the project list. Tear down only the session — do NOT dispose
-      // `context.registry`, which owns every IPC handler (projects, dialog,
-      // settings…). Disposing it would leave the renderer alive but unable to
-      // invoke anything, so subsequent clicks on Import/etc. would raise
-      // `No handler registered for ...`.
-      e.preventDefault()
-      closing = true
-      try {
-        if (config.onBeforeClose) {
-          await config.onBeforeClose(instance)
-        }
-        await context.workspace.closeProject()
-        context.notify.windowNavigateBack()
-      }
-      finally {
-        closing = false
-      }
-    },
-  })
-}
-
-function enableDevRendererAutoReload(rendererDir: string): Disposable {
-  // Auto-reload renderer windows when dist files change during development
-  if (app.isPackaged) {
-    return toDisposable(() => {})
-  }
-
-  let reloadTimer: ReturnType<typeof setTimeout> | null = null
-  const watcher = fs.watch(rendererDir, { recursive: true }, () => {
-    if (reloadTimer) clearTimeout(reloadTimer)
-    reloadTimer = setTimeout(() => {
-      for (const win of BrowserWindow.getAllWindows()) {
-        win.webContents.reload()
-      }
-    }, 300)
-  })
-
-  return toDisposable(() => {
-    if (reloadTimer) {
-      clearTimeout(reloadTimer)
-      reloadTimer = null
-    }
-    watcher.close()
-  })
 }
 
 /**
@@ -430,10 +239,11 @@ export function runDevtoolsBootstrap(config: WorkbenchAppConfig = {}): void {
 }
 
 /**
- * Domain runtime assembly — the post-whenReady body. Builds the main window +
- * context, registers IPC modules, stands up simulator/storage/CDP/native-host
- * services, and returns the fat {@link WorkbenchAppInstance}. Extracted so the
- * v2 `RuntimeBackend.assemble` reuses the exact same body (parity by shared
+ * Domain runtime assembly — the post-whenReady body. Builds the app-wide
+ * services and the context router, opens the project window, registers IPC
+ * against the router, stands up simulator/storage/CDP/native-host services, and
+ * returns the fat {@link WorkbenchAppInstance}. Extracted so the v2
+ * `RuntimeBackend.assemble` reuses the exact same body (parity by shared
  * implementation, not behavioural re-creation).
  */
 export async function createDevtoolsRuntime(
@@ -457,103 +267,43 @@ export async function createDevtoolsRuntime(
   applyTheme(loadWorkbenchSettings().theme)
 
   const rendererDir = config.rendererDir ?? defaultRendererDir
-  const mainWindow = createConfiguredMainWindow(config, rendererDir)
-  const context = createContext(config, mainWindow, rendererDir)
 
-  // Anchor the main window's renderer as the first Connection. Resources
-  // scoped to the main webContents (acquired by later wiring) tear down with
-  // it; see packages/electron-deck/docs/foundation.md (teardown paths).
-  context.connections.acquire(mainWindow.webContents)
+  // App-wide, built once: the project list, the templates, the trusted-sender
+  // ledger and the host's simulator APIs are properties of the application, not
+  // of any single window.
+  const appServices = createAppServices({
+    // The host-supplied ProjectsProvider / template types in `shared/types`
+    // are structurally compatible with the main-process equivalents —
+    // these casts are safe; we re-narrow at the workspace-service /
+    // create-project-service boundary.
+    projectsProvider: config.projectsProvider as
+      | import('../services/projects/types.js').ProjectsProvider
+      | undefined,
+    projectTemplates: config.projectTemplates as
+      | import('../services/projects/types.js').ProjectTemplate[]
+      | undefined,
+    builtinTemplates: config.builtinTemplates,
+  })
+  const router = createWindowContextRouter<WorkbenchContext>()
 
-  context.registry.add(registerAppIpc(context))
-  // Sandboxed project file-system IPC (the renderer-side project:fs:* surface).
-  context.registry.add(registerProjectFsIpc(context))
-  // Standalone internal (app-wide) DevTools debug window controller — the
-  // independent floating CDP panel that debugs the whole Electron app (as
-  // opposed to the right-panel CDP, which inspects only the user's
-  // mini-program). Assembled before the IPC handler below so a request
-  // arriving right after boot always finds it.
-  // `isAppQuitting` lets the controller stop intercepting 'close' during a
-  // real quit — its habitual preventDefault()+hide() would otherwise cancel
-  // the quit itself and strand the process with a hidden window.
-  context.internalDevtoolsWindow = createInternalDevtoolsWindow(mainWindow, { isAppQuitting })
-  context.registry.add(toDisposable(() => context.internalDevtoolsWindow?.dispose()))
-  // Unconditional (not a toggleable BUILTIN_MODULES entry): it's core dev
-  // tooling, not a host-configurable feature.
-  context.registry.add(registerInternalDevtoolsIpc(context))
-  // Unconditional (not a toggleable BUILTIN_MODULES entry): the tooltip
-  // overlay is core UI chrome (every toolbar in this app relies on it), not a
-  // host-configurable feature.
-  context.registry.add(registerTooltipIpc(context))
-  // Unconditional: the project-create dialog is core UI chrome (the built-in
-  // "新建项目" flow every host falls back to), not a host-configurable feature.
-  context.registry.add(registerProjectCreateIpc(context))
-  // Unconditional (not a toggleable BUILTIN_MODULES entry): placement/host-
-  // slot IPC has no real dependency on the simulator module — `ctx.views`
-  // (ViewManager) is constructed unconditionally regardless of
-  // `modules.simulator`, and host-sidebar in particular lives on the
-  // project-list page, unrelated to the simulator webview. Every renderer
-  // entry point also blocks its first render on `AllocatePlacementGeneration`
-  // (see renderer-placement-generation.ts) — gating any of this behind the
-  // simulator toggle would strand a host that disables it on the fatal
-  // boot-failure page, or leave placement silently non-functional.
-  context.registry.add(registerViewsIpc(context))
-  // Referer/CORS webRequest policy for the simulator runtime's sessions (shared
-  // fallback + every per-project partition). Registered into the context
-  // registry so its configurator + per-session listeners are torn down with the
-  // context — re-creating the app never leaks a duplicate configurator.
-  context.registry.add(setupSimulatorSessionPolicy())
-  // One process-wide listener that re-syncs every window's native
-  // backgroundColor on theme change — windows otherwise keep the stale
-  // creation-time color (see installThemeBackgroundSync).
-  context.registry.add(installThemeBackgroundSync())
-  // Warm-standby compile worker: only meaningful for the devkit-backed
-  // default adapter (a host-injected adapter has no devkit fork to adopt the
-  // spare). Registered into the registry so the spare dies with the context.
-  if (!config.adapter) context.registry.add(setupCompileWorkerStandby(context))
-  registerBuiltinModules(config, context)
+  // App-lifetime registry. `ipcMain.handle` is a process-wide singleton per
+  // channel, so the IPC surface is registered exactly once and answers
+  // whichever window a message came from. Keeping it OFF the launcher
+  // context's registry is what lets the user close the project list without
+  // stripping every handler out from under the workbench windows still open.
+  const appRegistry = new DisposableRegistry()
 
-  // Global console mirror: while the standalone
-  // internal DevTools window is open, mirror every guest console entry
-  // (service + render, UNFILTERED — see global-console-mirror.ts) into it —
-  // each open replays the forwarder's current history buffer first (see that
-  // module's doc comment for why the subscribe lifecycle is gated on
-  // onHostChanged rather than subscribed once at construction time).
-  // `context.consoleForwarder` is assembled by the simulator module's
-  // installBridgeRouter just above; absent only when that builtin module was
-  // disabled via config. The Console panel shows the INSPECTED target's own
-  // console (mainWindow, per internal-devtools-window.ts's
-  // setDevToolsWebContents relationship) — NOT the front-end host page's
-  // console, so `target` is always mainWindow.webContents, never the hostWc
-  // onHostChanged hands the mirror.
-  if (context.consoleForwarder && context.internalDevtoolsWindow) {
-    const consoleMirror = createGlobalConsoleMirror(
-      context.consoleForwarder,
-      mainWindow.webContents,
-      context.internalDevtoolsWindow.onHostChanged,
-      // CDP transport (never executeJavaScript) — see the mirror's inject()
-      // doc for the setDevToolsWebContents + external-CDP double-attach hang.
-      { broker: context.cdpSessionBroker },
-    )
-    context.registry.add(toDisposable(() => consoleMirror.dispose()))
-  }
+  const launcher = createLauncherWindow({ config, rendererDir, appServices, router })
+  const { window: mainWindow, context } = launcher
 
-  // Global diagnostics mirror (same wiring, same INSPECTED-side
-  // target rationale as the console mirror above): every diagnostic —
-  // including `audience:'internal'` ones console-forward's own service-host
-  // injection now skips (see compile-standby.ts / index.ts's handleDiagnostic
-  // gate) — surfaces here instead of vanishing. `context.diagnostics` is
-  // assembled alongside `context.consoleForwarder` by the same
-  // installBridgeRouter call.
-  if (context.diagnostics && context.internalDevtoolsWindow) {
-    const diagnosticsMirror = createGlobalDiagnosticsMirror(
-      context.diagnostics,
-      mainWindow.webContents,
-      context.internalDevtoolsWindow.onHostChanged,
-      { broker: context.cdpSessionBroker },
-    )
-    context.registry.add(toDisposable(() => diagnosticsMirror.dispose()))
-  }
+  registerWorkbenchIpc(config, router, context, mainWindow, appRegistry)
+  // No `setupWindowModules` here: the only per-window module is the simulator's
+  // bridge router, and the project list runs no mini-app — it has no simulator,
+  // no service host and no page stack. Installing one here would also claim the
+  // process-global `dmb:*` invoke channels before the first workbench window
+  // could. `installGlobalMirrors` skips the console/diagnostics mirrors when the
+  // router never ran, so the list window keeps its own internal DevTools.
+  installGlobalMirrors(context, mainWindow)
 
   // Wire the simulator-side difile:// protocol handler + temp-file IPC
   // before host onSetup so any host-driven simulator boot sees the
@@ -561,37 +311,110 @@ export async function createDevtoolsRuntime(
   // (simulator-session-only) — see file header — because the default
   // workbench policy intentionally rejects the simulator <webview>.
   const simSession = session.fromPartition(SHARED_MINIAPP_PARTITION)
-  context.registry.add(setupSimulatorTempFiles(simSession))
+  appRegistry.add(setupSimulatorTempFiles(simSession))
 
-  installMenu(config, mainWindow, context)
+  // Gated custom-IPC surface for the host. Admits any sender the router places
+  // in a live window, so a host channel invoked from a workbench window is
+  // answered the same as one invoked from the list — binding it to the
+  // launcher's own policy would reject every workbench renderer.
+  const hostIpc = new IpcRegistry((sender) => router.resolve(sender) !== null)
+  appRegistry.add(hostIpc)
 
-  // Gated custom-IPC surface for the host. Bound to ctx.senderPolicy so
-  // host channels go through the same gateway as built-in IPC, and
-  // registered into ctx.registry so its handlers are torn down with the
-  // context.
-  const hostIpc = new IpcRegistry(context.senderPolicy)
-  context.registry.add(hostIpc)
+  // Host-registered simulator UI extensions are app-level, but an extension can
+  // only live in a project window, so the ledger keeps one copy per window.
+  const uiExtensions = createUiExtensionTargets<WorkbenchContext>({
+    projectWindows: () => workbenchWindows.list().map((pw) => pw.context),
+    activeWindow: () => workbenchWindows.activeContext(),
+  })
+
+  const workbenchWindows = createWorkbenchWindowManager({
+    config,
+    rendererDir,
+    appServices,
+    router,
+    setupWindowModules: (ctx) => {
+      setupWindowModules(config, ctx)
+      uiExtensions.attachTo(ctx)
+    },
+    // MCP's CDP connections are aimed at the active project window and have to
+    // follow it when the user moves.
+    onActiveContextChanged: noteActiveMcpWindowChanged,
+    onBeforeClose: async (closing, project) => {
+      try {
+        await config.onBeforeClose?.(instance, {
+          path: project.path,
+          name: project.name,
+          window: closing.window,
+          context: closing.context,
+        })
+      } catch (err) {
+        // The host gets to react to the close, not to cancel it: revealing the
+        // list window below is what keeps something on screen, and it must not
+        // be skipped because host code threw.
+        console.error('[workbench] host onBeforeClose hook failed:', err)
+      }
+      // The closing window keeps its place in the manager's list until its
+      // teardown finishes, so "the last project" means no OTHER window is
+      // open. The list window may be hidden behind it (see the close handler
+      // below) — leaving it hidden strands the user with a running app and
+      // nothing on screen.
+      if (workbenchWindows.list().every((pw) => pw === closing)) revealWindow(mainWindow)
+    },
+  })
+
+  // Menu, automation and MCP drive whatever project the user is working in, so
+  // they read the active WORKBENCH context, resolved per call — never the list
+  // window, which owns no session. With no project open they fall back to the
+  // launcher context, whose `hasActiveSession()` is false, while MCP's CDP
+  // targets and native-host state live in the window itself: null instead.
+  const activeProjectContext = (): WorkbenchContext => workbenchWindows.activeContext() ?? context
+  setActiveMcpWindowResolver(() => workbenchWindows.activeContext())
+  appRegistry.add(toDisposable(() => setActiveMcpWindowResolver(() => null)))
+  installMenu(config, mainWindow, activeProjectContext)
+
+  // Opening a project from the list — and from MCP's project_open, which the
+  // list renderer forwards here — always means "give it its own window".
+  const windowIpc = new IpcRegistry(router)
+  windowIpc.handleRouted(
+    WindowChannel.OpenProjectWindow,
+    async (_ctx, _event, ...args: unknown[]) => {
+      const project = args[0] as ProjectRef | undefined
+      if (!project?.path) throw new Error('openProjectWindow requires a project path')
+      await workbenchWindows.open({ path: project.path, name: project.name })
+    },
+  )
+  appRegistry.add(windowIpc)
 
   const instance: WorkbenchAppInstance = {
     mainWindow,
     context,
     ipc: hostIpc,
+    openProjectWindow: (project: ProjectRef) => workbenchWindows.open(project),
+    projectWindows: () => workbenchWindows.list(),
+    disposeViews: () => {
+      for (const ctx of router.list()) ctx.views.disposeAll()
+    },
     // Return the registry wrapper, not the raw disposable: disposing the
     // wrapper splices the registry entry out AND drives the underlying
     // teardown, so a single dispose leaves no dead entry behind.
+    // App-level: the trusted-sender ledger and the simulator API map are
+    // shared by every window, so they outlive any one of them.
     registerTrustedWindow: (win: BrowserWindow) =>
-      context.registry.add(registerTrustedWindow(context, win)),
+      appRegistry.add(registerTrustedWindow(appServices, win)),
+    // Simulator APIs live in the ONE registry AppServices owns, which every
+    // window's context points at, so a single registration serves every
+    // window — including windows opened later, since the service host reads
+    // the registered names off it when it spawns. The disposer therefore
+    // belongs to the app: parking it on a window would let that window's close
+    // delete the handler out from under every other open window.
     registerSimulatorApi: (name: string, handler: SimulatorApiHandler) =>
-      context.registry.add(toDisposable(context.simulatorApis.register(name, handler))),
-    registerSimulatorUiExtension: (registration: SimulatorUiExtensionRegistration) => {
-      const extension = context.simulatorUiExtensions.register(registration)
-      const owned = context.registry.add(extension)
-      return {
-        dispose: () => owned.dispose(),
-        invoke: (method, params) => extension.invoke(method, params),
-      }
+      appRegistry.add(toDisposable(appServices.simulatorApis.register(name, handler))),
+    registerSimulatorUiExtension: (registration) => uiExtensions.register(registration),
+    dispose: async () => {
+      await workbenchWindows.disposeAll()
+      await launcher.dispose()
+      await appRegistry.dispose()
     },
-    dispose: () => disposeContext(context),
   }
   onInstanceCreated?.(instance)
 
@@ -602,44 +425,7 @@ export async function createDevtoolsRuntime(
     return 'hello'
   })
 
-  // devtools' own default content for the host-sidebar slot: a narrow icon
-  // rail (logo + 小程序/小游戏 toggle) filtering the project-list grid by
-  // `Project.type`. Loaded BEFORE `config.onSetup` runs below, so any
-  // downstream `loadURL`/`loadFile` call inside onSetup necessarily happens
-  // later and naturally supersedes this default via plain chronological
-  // ordering — no override flag needed.
-  context.registry.add(
-    context.views.hostSidebar.onMessage('project-category-selected', (payload) => {
-      const category = (payload as { category?: unknown } | null)?.category
-      if (category !== 'miniprogram' && category !== 'minigame') return
-      context.notify.hostSidebarCategorySelected(category)
-    }),
-  )
-  context.views.hostSidebar
-    .loadFile(path.join(rendererDir, 'entries/host-sidebar-default/index.html'))
-    .catch((err) => {
-      console.warn('[workbench] failed to load host-sidebar default content:', err)
-    })
-  // Seed the notified width with the rail's own known intrinsic width
-  // (`HOST_SIDEBAR_DEFAULT_WIDTH`) instead of leaving it at 0 until the
-  // rail's in-page advertiser reports back. That report can never arrive on
-  // its own: the placeholder above only becomes "desired visible" once a
-  // nonzero width is known (project-list-screen.tsx), attach only happens
-  // for a "desired visible" view (placement-reconciler.ts), and the rail's
-  // advertiser (view-anchor's measure-loop.ts) only ever fires via
-  // `requestAnimationFrame`, which Chromium never schedules for a
-  // WebContentsView that was never attached — a structural deadlock, not a
-  // slow-to-resolve race. `setWidthMode({fixed})` pushes the seed
-  // synchronously (no attach/rAF dependency) and, critically, retains it in
-  // `getHostSidebarWidth()` too, so a renderer that mounts and pulls before
-  // any push replays the real seed instead of a stale 0. Flipping back to
-  // 'auto' immediately after, before anything has attached or advertised, is
-  // a same-tick no-op past the seed (`setExtentMode`'s reapply branch only
-  // fires once something has actually been advertised) — it leaves the slot
-  // in 'auto' for whichever content ends up loaded (this rail's own later
-  // report, or a downstream replacement's), not pinned.
-  context.views.hostSidebar.setWidthMode({ fixed: HOST_SIDEBAR_DEFAULT_WIDTH })
-  context.views.hostSidebar.setWidthMode('auto')
+  installHostSidebarDefault(context, rendererDir)
 
   if (config.onSetup) {
     await config.onSetup(instance)
@@ -656,243 +442,56 @@ export async function createDevtoolsRuntime(
       initialDelay: config.updateOptions?.initialDelay,
       getCurrentVersion: config.updateOptions?.getCurrentVersion,
     })
-    context.registry.add(() => instance.updateManager!.dispose())
+    appRegistry.add(() => instance.updateManager!.dispose())
   }
 
-  await setupAutomation(instance)
-  const mcp = setupMcp(context)
-  if (mcp) context.registry.add(mcp)
+  const automation = await setupAutomation(instance, activeProjectContext, router)
+  if (automation) appRegistry.add(automation)
+  const mcp = setupMcp(activeProjectContext, createOpenForMcp(workbenchWindows), createCloseForMcp({
+    list: () => workbenchWindows.list(),
+    activeContext: activeProjectContext,
+    // `close()` (not `destroy()`) so the window's own close handling runs the
+    // same teardown a user-driven close does.
+    close: (window) => { if (!window.isDestroyed()) window.close() },
+  }))
+  if (mcp) appRegistry.add(mcp)
 
-  // Resolve the active project's appId. Shared by the storage panel filter
-  // and the native-host WXML/element-inspect services (which scope the
-  // active render guest by appId).
-  const getActiveAppId = (): string | null => {
-    const session = context.workspace.getSession()
-    const appInfo = session?.appInfo as { appId?: string } | undefined
-    return appInfo?.appId ?? null
-  }
-
-  // Native-host: the real mini-app page runs in a nested render-host
-  // <webview> guest, not the localhost:7788 shell. Point the MCP
-  // `simulator` CDP target at the active render guest and keep it following
-  // the visible page across navigation/tab switches. Only wired under
-  // native-host so the default path stays byte-identical.
-  if (context.bridge?.isNativeHost()) {
-    setNativeHost(true)
-    setNativeOverviewProvider(async () => {
-      const appId = getActiveAppId()
-      const stack = context.bridge?.getPageStack?.(appId ?? undefined) ?? []
-      const top = stack[stack.length - 1]
-      const overview = {
-        currentRoute: top?.pagePath ?? null,
-        pageStackDepth: stack.length,
-        storageKeys: [] as string[],
-        storageCount: 0,
-        appDataKeys: [] as string[],
+  // The list window opens no project, so its close needs none of the workbench
+  // teardown: just unregister its context, or a recycled `webContents.id`
+  // could later resolve to a destroyed window.
+  context.registry.add(wireMainWindowEvents(mainWindow, {
+    context,
+    onResize: () => context.views.repositionAll(),
+    onClose: (e) => {
+      if (isAppQuitting()) return
+      // With projects still open, this window must survive its own close
+      // button: it is the only way back to the project list, and the
+      // app-level IPC it registered cannot be registered again on a
+      // replacement window. Hide it — every path back calls `revealWindow`,
+      // including the last project window closing.
+      if (workbenchWindows.list().length > 0) {
+        e.preventDefault()
+        mainWindow.hide()
+        return
       }
+      void launcher.dispose()
+    },
+  }))
 
-      if (appId) {
-        const storage = await resolveNativeStorageOverview(context, appId)
-        overview.storageKeys = storage.storageKeys
-        overview.storageCount = storage.storageCount
-        overview.appDataKeys = resolveNativeAppDataKeys(context, appId)
-      }
-
-      return overview
-    })
-    const off = context.bridge.onRenderEvent((ev) => setActiveBridgeId(ev.bridgeId))
-    context.registry.add(off)
-    context.registry.add(() => setNativeHost(false))
-    context.registry.add(() => setNativeOverviewProvider(null))
+  // macOS keeps the app running with no window on screen. Clicking the dock
+  // icon then has to bring something back, and the project list is the app's
+  // home — a workbench window only exists for a project the user already
+  // chose.
+  const onActivate = (): void => {
+    if (mainWindow.isDestroyed()) return
+    if (mainWindow.isVisible()) return
+    if (workbenchWindows.list().some((pw) => !pw.window.isDestroyed() && pw.window.isVisible())) return
+    revealWindow(mainWindow)
   }
+  app.on('activate', onActivate)
+  appRegistry.add(toDisposable(() => { app.removeListener('activate', onActivate) }))
 
-  // Native-host inspector: injects the render-guest IIFE and drives WXML /
-  // element-highlight against the active render-host <webview>. Reused by
-  // the storage panel (element inspect) and the WXML panel service.
-  const renderInspector = createRenderInspector({ connections: context.connections, broker: context.cdpSessionBroker })
-
-  const storage = setupSimulatorStorage(mainWindow.webContents, {
-    senderPolicy: context.senderPolicy,
-    connections: context.connections,
-    broker: context.cdpSessionBroker,
-    // Per-project filter for the simulator-storage panel: the simulator
-    // uses a fixed `persist:simulator` partition + a fixed simulator.html
-    // origin, so localStorage is shared across every project that has
-    // ever opened. The dimina runtime isolates writes with `${appId}_`
-    // prefixes; this callback lets the storage panel filter the CDP
-    // snapshot/event stream to the active appId.
-    getActiveAppId,
-    // Native-host: route element inspection to the active render guest, and
-    // read/write storage from the service-host window's file:// store.
-    bridge: context.bridge,
-    renderInspector,
-  })
-  context.registry.add(storage)
-  // Native-host: expose the async-storage runtime hook so bridge-router
-  // routes async wx.setStorage/etc. to the unified service-host store.
-  if (storage.storageApi) {
-    context.storageApi = storage.storageApi
-    context.registry.add(() => { context.storageApi = undefined })
-    // SYNC wx storage writes bypass main (they hit the service-host localStorage
-    // directly); the service-host posts `storageChanged` and bridge-router routes
-    // it here so the Storage panel stays live without a manual reload.
-    context.onServiceStorageChanged = storage.onSyncStorageChange
-    context.registry.add(() => { context.onServiceStorageChanged = undefined })
-  }
-
-  // Native-host WXML + AppData panels: main sources the data (WXML pulled
-  // from the active render guest; AppData tapped from the service→render
-  // setData stream in bridge-router) and pushes it to the renderer. Inert on
-  // the default dimina-fe path (which sources both from the simulator
-  // miniappSnapshot transport), so only wire them when native-host is on.
-  if (context.bridge?.isNativeHost()) {
-    // Native-host: surface the simulator WCV's network (wx.request/download/
-    // upload run there, not in the service host) in the embedded DevTools by
-    // injecting its raw Network.* CDP events into the DevTools front-end so the
-    // native Network tab renders them (service-host console line is the
-    // fallback). The ViewManager calls the forwarder's attachSimulator +
-    // setDevtoolsHost from attachNativeSimulator once the simulator WCV +
-    // DevTools host exist; getServiceWc here is the fallback sink target.
-    const networkForward = createNetworkForwarder({
-      getServiceWc: (appId) => context.bridge?.getServiceWc(appId) ?? null,
-      getResourceServerBaseUrl: () => context.bridge?.getResourceBaseUrl?.() ?? null,
-      // The simulator shell's own static-asset server (serves simulator.html
-      // + its JS/CSS, independent from the resource server above — see
-      // NetworkForwarderBridge.getSimulatorServerBaseUrl's doc). Host is
-      // always 'localhost' — see shared/simulator-route.ts's
-      // buildSimulatorUrlFromSpec default. Absent (null port) when no
-      // project is open.
-      getSimulatorServerBaseUrl: () => {
-        const port = context.workspace?.getSession()?.port
-        return typeof port === 'number' ? `http://localhost:${port}/` : null
-      },
-      connections: context.connections,
-      broker: context.cdpSessionBroker,
-    })
-    context.networkForward = networkForward
-    context.registry.add(networkForward)
-    context.registry.add(() => { context.networkForward = undefined })
-    // Global mirror: once the standalone internal
-    // DevTools window builds its own front-end host, mirror the full
-    // unfiltered Network stream into it. Attached AFTER context.networkForward
-    // is assigned above — the callback re-reads the mutable field on every
-    // fire, so ordering only matters for readability here, not correctness.
-    context.registry.add(toDisposable(
-      context.internalDevtoolsWindow?.onHostChanged((hostWc) => {
-        context.networkForward?.setGlobalDevtoolsHost(hostWc)
-      }) ?? (() => {}),
-    ))
-
-    // Main-process WebSocket traffic (wx.connectSocket runs on the Node `ws`
-    // transport, invisible to any webContents debugger): bridge-router fans
-    // the trace stream out here, and the forwarder synthesizes it into
-    // Network.webSocket* CDP events for the same Network panel sinks.
-    context.registry.add(toDisposable(
-      context.bridge?.onNativeWebSocketTrace?.((ownerId, event) => {
-        context.networkForward?.reportWebSocketTrace(ownerId, event)
-      }) ?? (() => {}),
-    ))
-
-    context.registry.add(setupSimulatorWxml(mainWindow.webContents, {
-      senderPolicy: context.senderPolicy,
-      bridge: context.bridge,
-      inspector: renderInspector,
-      getActiveAppId,
-    }))
-    const appDataService = setupSimulatorAppData(mainWindow.webContents, {
-      senderPolicy: context.senderPolicy,
-      getActiveAppId,
-      // AppData-panel edit write-back target: the service-host window owning
-      // the edited page bridge.
-      bridge: context.bridge,
-    })
-    // bridge-router feeds this via ctx.appData (service→render tap + evict).
-    context.appData = appDataService
-    context.registry.add(appDataService)
-    context.registry.add(() => { context.appData = undefined })
-    // Push the visible page route to the toolbar on every navigation (the
-    // page stack lives in the DeviceShell WCV, invisible to renderer
-    // <webview> nav events).
-    context.registry.add(setupSimulatorCurrentPage(mainWindow.webContents, {
-      bridge: context.bridge,
-    }))
-  }
-  // Embedded workbench editor — the sole devtools editor. Stand up the COI
-  // http server that serves the workbench bundle with the SharedArrayBuffer
-  // isolation headers and bridges `/__fs/*` onto the active project, then hand its
-  // base URL to the view manager so the 'editor' dock slot mounts the workbench
-  // WebContentsView. Both the server and the WCV tear down with the context
-  // registry.
-  //
-  // Default the bundle dir to the devtools package's OWN `dist/vscode-workbench`
-  // (resolved from the package root), NOT relative to the caller's rendererDir:
-  // a host that overrides `rendererDir` but omits `editorViewConfig.bundleDir`
-  // would otherwise compute a path next to ITS renderer, where no workbench
-  // bundle exists → 404 / blank editor.
-  const bundleDir =
-    config.editorViewConfig?.bundleDir ?? path.join(devtoolsPackageRoot, 'dist/vscode-workbench')
-  // Skip the entire editor assembly when the bundle is missing. Starting the COI
-  // server and attaching the WCV against a non-existent bundle yields a silent
-  // blank editor (the WCV loads index.html → 404); a launchable app with no
-  // editor is strictly better. The view manager never gets a source, so the
-  // 'editor' slot's lazy attach is a no-op.
-  if (!fs.existsSync(path.join(bundleDir, 'index.html'))) {
-    console.warn(
-      `[workbench] editor bundle not found at ${bundleDir} — skipping embedded editor assembly`,
-    )
-  } else {
-    const coiServer = await startWorkbenchCoiServer({
-      rootDir: bundleDir,
-      getProjectRoot: () => context.workspace.getProjectPath(),
-      extensionsDir: config.editorViewConfig?.extensionsDir,
-      getFileTypes: () => context.fileTypes,
-      // Names the editor's VS Code workspace after the active miniapp, so each
-      // project gets its own open-editors/view-state bucket instead of all of
-      // them sharing the one derived from the constant mirror root.
-      getProjectIdentity: () => ({
-        appId: getActiveAppId(),
-        projectPath: context.workspace.getProjectPath(),
-      }),
-    })
-    // Return the close promise so the registry awaits server shutdown on dispose
-    // instead of fire-and-forgetting it (a dangling http server would keep the
-    // port + event loop alive past teardown).
-    context.registry.add(() => coiServer.close())
-    // The registry disposes LIFO, so this runs BEFORE the context-level
-    // disposeAll: void any in-flight open's attach hold here too, or a stale
-    // release / cap firing could rebuild the workbench during the awaited
-    // coiServer.close() above, before disposeAll's own cancel runs.
-    context.registry.add(() => {
-      context.views.cancelWorkbenchAttachHold()
-      context.views.detachWorkbench()
-    })
-    // Only HAND the view manager the COI URL — do NOT load yet. The heavy
-    // WebContentsView load (10MB bundle + ext-host) is deferred to the first time
-    // the 'editor' dock slot becomes visible (first non-zero bounds), so it never
-    // sits on the app boot critical path. Loading it eagerly here delayed
-    // preload/window-ready enough to trip the e2e launch health check.
-    context.views.setWorkbenchSource(coiServer.baseUrl)
-  }
-
-  // Main's mirror of the renderer's top-level screen. The renderer's `page`
-  // state is the single authority; it pushes every change over
-  // WindowChannel.ScreenState. Main reads this mirror in the window-close
-  // decision so a close while the renderer is parked on a project screen (even
-  // a failed open with no session) returns to the list instead of quitting.
-  let rendererScreen: 'list' | 'project' = 'list'
-  context.registry.add(
-    new IpcRegistry(context.senderPolicy).handle(
-      WindowChannel.ScreenState,
-      (_e, screen) => {
-        rendererScreen = screen === 'project' ? 'project' : 'list'
-      },
-    ),
-  )
-
-  context.registry.add(
-    wireAppWindowEvents(config, instance, () => rendererScreen === 'project'),
-  )
-  context.registry.add(enableDevRendererAutoReload(rendererDir))
+  appRegistry.add(enableDevRendererAutoReload(rendererDir))
 
   return instance
 }

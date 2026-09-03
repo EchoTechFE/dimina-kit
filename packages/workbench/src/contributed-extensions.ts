@@ -14,6 +14,7 @@
  */
 import { registerExtension, ExtensionHostKind } from '@codingame/monaco-vscode-api/extensions'
 import type { ExtraTyping } from './typings-injection'
+import { HOST_BASE_URL } from './host-base-url.js'
 
 interface ContributedExtension {
   dir: string
@@ -56,7 +57,7 @@ function mimeFor(file: string): string {
 export async function registerContributedExtensions(): Promise<ContributedExtensionsResult> {
   let list: ContributedExtension[]
   try {
-    const res = await fetch('/__contrib/index.json')
+    const res = await fetch(`${HOST_BASE_URL}__contrib/index.json`)
     if (!res.ok) return { count: 0, typings: [] }
     list = (await res.json()) as ContributedExtension[]
   } catch {
@@ -72,8 +73,8 @@ export async function registerContributedExtensions(): Promise<ContributedExtens
           // package.json is consumed by registerExtension itself, not as a file.
           if (file === 'package.json') continue
           // Absolute, same-origin URL — the worker ext-host fetches the entry and
-          // a root-relative path would resolve against the wrong base there.
-          const url = new URL(`/__contrib/${ext.dir}/${file}`, location.origin).toString()
+          // a relative path would resolve against the wrong base there.
+          const url = new URL(`__contrib/${ext.dir}/${file}`, HOST_BASE_URL).toString()
           reg.registerFileUrl('./' + file, url, { mimeType: mimeFor(file) })
         }
       }
@@ -111,7 +112,7 @@ async function collectTypings(ext: ContributedExtension): Promise<ExtraTyping[]>
       continue
     }
     try {
-      const res = await fetch(new URL(`/__contrib/${ext.dir}/${p}`, location.origin).toString())
+      const res = await fetch(new URL(`__contrib/${ext.dir}/${p}`, HOST_BASE_URL).toString())
       if (!res.ok) continue
       parts.push(await res.text())
     } catch (e) {

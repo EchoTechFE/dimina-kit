@@ -173,7 +173,7 @@ function makeCtx(): { ctx: WorkbenchContext; simulatorWc: MockWc } {
     registry: { add: (_fn: AnyFn) => {} },
     connections: createConnectionRegistry(),
     simulatorApis: { has: (_name: string) => false, invoke: async () => ({}), list: () => [] },
-    windows: { mainWindow: { webContents: simulatorWc } },
+    windows: { mainWindow: { webContents: simulatorWc, isDestroyed: () => false } },
     workspace: { getSession: () => undefined },
   } as unknown as WorkbenchContext
   return { ctx, simulatorWc }

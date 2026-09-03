@@ -47,13 +47,12 @@ import {
   DEMO_APP_DIR,
   installConsoleCollector,
   readConsoleErrors,
-  findMainWindow,
 } from './helpers'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 let electronApp: ElectronApplication
-let mainWindow: PwPage
+let workbench: PwPage
 
 test.beforeAll(async () => {
   const appPath = path.resolve(__dirname, 'electron-entry.js')
@@ -67,20 +66,18 @@ test.beforeAll(async () => {
     args: [appPath, `--user-data-dir=${userDataDir}`],
     env: { ...process.env, NODE_ENV: 'test' },
   })
-  mainWindow = await findMainWindow(electronApp)
-  await mainWindow.waitForLoadState('domcontentloaded')
   await installConsoleCollector(electronApp)
   // Offscreen + blur so the drag test never steals focus.
   await electronApp.evaluate(async ({ BrowserWindow }) => {
     const win = BrowserWindow.getAllWindows()[0]
     if (win) { win.setPosition(-2000, -2000); win.blur() }
   })
-  await openProjectInUI(mainWindow, DEMO_APP_DIR)
-  await mainWindow.waitForSelector('[data-deck-group]', { timeout: 15000 })
+  workbench = await openProjectInUI(electronApp, DEMO_APP_DIR)
+  await workbench.waitForSelector('[data-deck-group]', { timeout: 15000 })
 })
 
 test.afterAll(async () => {
-  try { await closeProject(mainWindow) } catch { /* best effort */ }
+  try { await closeProject(electronApp) } catch { /* best effort */ }
   await electronApp.close()
 })
 
@@ -282,14 +279,14 @@ test('CENTER over a locked editor group: indicator shows center, but a reorder-o
   // of wxml onto the editor group must be REJECTED (no churn), even though the
   // geometry-driven hover indicator still paints `center` (the gate is at drop
   // time, not hover time). Drives both PanelCapabilities gates with real geometry.
-  const before = await dockFingerprint(mainWindow)
+  const before = await dockFingerprint(workbench)
   const wxmlGroupBefore = before.groupOf['wxml']
   const editorGroupBefore = before.groupOf['editor']
   expect(wxmlGroupBefore, 'wxml must be docked before the drag').toBeTruthy()
   expect(editorGroupBefore, 'editor must be docked before the drag').toBeTruthy()
   expect(wxmlGroupBefore, 'wxml and editor start in DIFFERENT groups').not.toBe(editorGroupBefore)
 
-  const r = await realDragTab(mainWindow, 'wxml', 'editor', 0.5, 0.5)
+  const r = await realDragTab(workbench, 'wxml', 'editor', 0.5, 0.5)
   expect(r.error, `drag must not throw: ${r.error}`).toBeNull()
   expect(r.ok, 'drag sequence must run').toBe(true)
   // The live indicator paints `center` while hovering the interior (presentation
@@ -297,8 +294,8 @@ test('CENTER over a locked editor group: indicator shows center, but a reorder-o
   expect(r.indicatorSeen, 'a drop-zone indicator must appear during dragover').toBe(true)
   expect(r.zoneAtHover, 'interior hover must compute the center zone').toBe('center')
 
-  await mainWindow.waitForTimeout(300)
-  const after = await dockFingerprint(mainWindow)
+  await workbench.waitForTimeout(300)
+  const after = await dockFingerprint(workbench)
 
   // The drop is rejected on BOTH gates: wxml stays in its own group, never joins
   // editor, and the overall group membership is unchanged.
@@ -313,20 +310,20 @@ test('LEFT band over a locked editor group: indicator shows left, but a reorder-
   // draggable:false). So an edge (far-left band) drop of console onto the editor
   // group is REJECTED: no new split, console stays put. The hover indicator still
   // paints `left` (geometry-only presentation).
-  const before = await dockFingerprint(mainWindow)
+  const before = await dockFingerprint(workbench)
   const consoleGroupBefore = before.groupOf['console']
   expect(consoleGroupBefore, 'console must be docked before the drag').toBeTruthy()
   const splitsBefore = before.splits.length
 
   // Drop console onto the far-left 5% band of the group that owns editor.
-  const r = await realDragTab(mainWindow, 'console', 'editor', 0.05, 0.5)
+  const r = await realDragTab(workbench, 'console', 'editor', 0.05, 0.5)
   expect(r.error, `drag must not throw: ${r.error}`).toBeNull()
   // The indicator paints `left` over the left band (presentation is geometry-only).
   expect(r.indicatorSeen, 'a drop-zone indicator must appear during dragover').toBe(true)
   expect(r.zoneAtHover, 'far-left hover must compute the left zone').toBe('left')
 
-  await mainWindow.waitForTimeout(300)
-  const after = await dockFingerprint(mainWindow)
+  await workbench.waitForTimeout(300)
+  const after = await dockFingerprint(workbench)
 
   // The edge drop is rejected: no split is introduced and console stays in its
   // original group (it never tears out toward the editor region).
@@ -337,7 +334,7 @@ test('LEFT band over a locked editor group: indicator shows left, but a reorder-
 })
 
 test('self-drop center of a reorder-only debug tab stays WITHIN its own group (never leaves, never crashes)', async () => {
-  const before = await dockFingerprint(mainWindow)
+  const before = await dockFingerprint(workbench)
   // Pick a real DRAGGABLE source: a debug tab (the source must own a
   // `[data-deck-tab]`). The structural simulator/editor panels are tabless
   // (hideTab) and draggable:false, so they can never be a drag source.
@@ -349,11 +346,11 @@ test('self-drop center of a reorder-only debug tab stays WITHIN its own group (n
   // A center drop onto its OWN group is the one motion `reorder-only` permits — it
   // REORDERS within the group (it never leaves). The exact resulting index is
   // pointer-derived; the invariant is: same group, same membership set, no crash.
-  const r = await realDragTab(mainWindow, selfPanel, selfPanel, 0.5, 0.5)
+  const r = await realDragTab(workbench, selfPanel, selfPanel, 0.5, 0.5)
   expect(r.error, `self-drop must not throw: ${r.error}`).toBeNull()
 
-  await mainWindow.waitForTimeout(200)
-  const after = await dockFingerprint(mainWindow)
+  await workbench.waitForTimeout(200)
+  const after = await dockFingerprint(workbench)
   // The panel stays in its own group (reorder-only never tears out).
   expect(after.groupOf[selfPanel], 'self-center drop keeps the panel in its own group').toBe(selfGroupBefore)
   // Group membership (as a SET) is unchanged — only the within-group ORDER may shift.
@@ -373,19 +370,19 @@ test('native anchor: the simulator (draggable:false) cannot be torn out — a dr
   // its live WCV bounds are unchanged.
   const beforeBounds = await simulatorBounds(electronApp)
   expect(beforeBounds, 'simulator WCV must have live bounds').not.toBeNull()
-  const before = await dockFingerprint(mainWindow)
+  const before = await dockFingerprint(workbench)
   const simGroupBefore = before.groupOf['simulator']
   expect(simGroupBefore, 'simulator must be docked').toBeTruthy()
 
   // The simulator has no `[data-deck-tab]`, so realDragTab cannot pick it up — the
   // gesture fails to even start, which IS the contract (a draggable:false panel
   // can never be lifted).
-  const r = await realDragTab(mainWindow, 'simulator', 'editor', 0.5, 0.95)
+  const r = await realDragTab(workbench, 'simulator', 'editor', 0.5, 0.95)
   expect(r.ok, 'a draggable:false panel cannot start a drag (no source tab)').toBe(false)
   expect(r.error, 'the absent tab is the reason the drag never starts').toMatch(/no source tab simulator/)
 
-  await mainWindow.waitForTimeout(300)
-  const after = await dockFingerprint(mainWindow)
+  await workbench.waitForTimeout(300)
+  const after = await dockFingerprint(workbench)
   // The simulator stays in its group and the tree is unchanged.
   expect(after.groupOf['simulator'], 'simulator never leaves its group').toBe(simGroupBefore)
   expect(after.groupOf, 'a failed simulator drag must not churn the tree').toEqual(before.groupOf)

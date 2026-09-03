@@ -13,14 +13,14 @@ test.describe('Internal (app-wide) DevTools window', () => {
 
   useSharedProject(test, DEMO_APP_DIR)
 
-  test('debug button is visible in the simulator bottom bar', async ({ mainWindow }) => {
-    await expect(mainWindow.getByTestId('sim-open-internal-devtools')).toBeVisible()
+  test('debug button is visible in the simulator bottom bar', async ({ workbench }) => {
+    await expect(workbench.getByTestId('sim-open-internal-devtools')).toBeVisible()
   })
 
-  test('clicking it opens exactly one new BrowserWindow, titled for whole-app debugging', async ({ mainWindow, electronApp }) => {
+  test('clicking it opens exactly one new BrowserWindow, titled for whole-app debugging', async ({ workbench, electronApp }) => {
     const before = await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)
 
-    await mainWindow.getByTestId('sim-open-internal-devtools').click()
+    await workbench.getByTestId('sim-open-internal-devtools').click()
 
     await expect.poll(
       async () => electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length),
@@ -31,18 +31,18 @@ test.describe('Internal (app-wide) DevTools window', () => {
     expect(titles.some((t) => t.includes('调试'))).toBe(true)
   })
 
-  test('clicking it again reuses the same window (no second BrowserWindow)', async ({ mainWindow, electronApp }) => {
+  test('clicking it again reuses the same window (no second BrowserWindow)', async ({ workbench, electronApp }) => {
     const countAfterFirstOpen = await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)
 
-    await mainWindow.getByTestId('sim-open-internal-devtools').click()
+    await workbench.getByTestId('sim-open-internal-devtools').click()
     // Give main a beat to process the (idempotent) IPC round trip.
-    await mainWindow.waitForTimeout(300)
+    await workbench.waitForTimeout(300)
 
     const countAfterSecondClick = await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)
     expect(countAfterSecondClick).toBe(countAfterFirstOpen)
   })
 
-  test('closing it hides rather than destroys — reopening reuses the SAME window', async ({ mainWindow, electronApp }) => {
+  test('closing it hides rather than destroys — reopening reuses the SAME window', async ({ workbench, electronApp }) => {
     // Baseline BEFORE closing — the app also carries a permanently-hidden
     // "Dimina Service Host" BrowserWindow (id:2 in a real run, always
     // present, unrelated to this feature), so an ABSOLUTE window count
@@ -78,7 +78,7 @@ test.describe('Internal (app-wide) DevTools window', () => {
     const countAfterClose = await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)
     expect(countAfterClose, 'closing the internal devtools window must not destroy it').toBe(countBeforeClose)
 
-    await mainWindow.getByTestId('sim-open-internal-devtools').click()
+    await workbench.getByTestId('sim-open-internal-devtools').click()
 
     await expect.poll(
       async () => electronApp.evaluate(({ BrowserWindow }) => {

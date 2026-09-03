@@ -144,7 +144,7 @@ async function bootApp(): Promise<AppHandle> {
     }
   })
 
-  await openProjectInUI(win, FIXTURE_DIR, { waitMs: 20000 })
+  await openProjectInUI(app, FIXTURE_DIR, { waitMs: 20000 })
   await waitForSimulatorWebview(app)
 
   // The simulator's CDP Network tracking hangs off the DeviceShell target; gate
@@ -177,7 +177,7 @@ async function bootApp(): Promise<AppHandle> {
 
 async function shutdownApp(handle: AppHandle | undefined): Promise<void> {
   if (!handle) return
-  await closeProject(handle.win).catch(() => {})
+  await closeProject(handle.app).catch(() => {})
   await handle.app.close().catch(() => {})
 }
 

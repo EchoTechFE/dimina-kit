@@ -1,5 +1,5 @@
 import type { WorkbenchModule } from '../services/module.js'
-import { DisposableRegistry } from '@dimina-kit/electron-deck/main'
+import { toDisposable } from '@dimina-kit/electron-deck/main'
 import { registerSimulatorIpc } from './simulator.js'
 import { installBridgeRouter } from './bridge-router.js'
 
@@ -14,12 +14,16 @@ import { installBridgeRouter } from './bridge-router.js'
  * window decides whether to actually call dmb:* channels, but the main-side
  * handlers must always be ready or `ipcRenderer.invoke('dmb:spawn')` fails
  * with `No handler registered`.
+ *
+ * The router installs onto a concrete context (it assigns `ctx.bridge`,
+ * `ctx.consoleForwarder` and `ctx.diagnostics`, which the window assembly
+ * reads straight afterwards), so it is per-window wiring rather than
+ * app-level registration.
  */
 export const simulatorModule: WorkbenchModule = {
-  setup: (ctx) => {
-    const reg = new DisposableRegistry()
-    reg.add(registerSimulatorIpc(ctx))
+  setup: (source) => registerSimulatorIpc(source),
+  setupWindow: (ctx) => {
     installBridgeRouter(ctx)
-    return reg
+    return toDisposable(() => {})
   },
 }

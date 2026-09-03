@@ -11,21 +11,27 @@ import type { WorkbenchContext } from '../services/workbench-context.js'
 import type { Disposable } from '@dimina-kit/electron-deck/main'
 import { validate } from '../utils/ipc-schema.js'
 import { IpcRegistry } from '../utils/ipc-registry.js'
+import { toIpcContextSource, type IpcInput } from '../utils/ipc-context-source.js'
 
-export function registerSimulatorIpc(ctx: Pick<WorkbenchContext, 'views' | 'notify' | 'senderPolicy' | 'simulatorApis' | 'bridge'>): Disposable {
-  return new IpcRegistry(ctx.senderPolicy)
-    .handle(SimulatorChannel.AttachNative, (_, ...args: unknown[]) => {
+type SimulatorIpcCtx = Pick<
+  WorkbenchContext,
+  'views' | 'notify' | 'senderPolicy' | 'simulatorApis' | 'bridge'
+>
+
+export function registerSimulatorIpc(input: IpcInput<SimulatorIpcCtx>): Disposable {
+  return new IpcRegistry(toIpcContextSource(input))
+    .handleRouted(SimulatorChannel.AttachNative, (ctx, _e, ...args: unknown[]) => {
       const [simulatorUrl, simWidth] = validate(SimulatorChannel.AttachNative, SimulatorAttachNativeSchema, args)
       return ctx.views.attachNativeSimulator(simulatorUrl, simWidth)
     })
-    .handle(SimulatorChannel.SoftReload, (_, ...args: unknown[]) => {
+    .handleRouted(SimulatorChannel.SoftReload, (ctx, _e, ...args: unknown[]) => {
       const [simulatorUrl] = validate(SimulatorChannel.SoftReload, SimulatorSoftReloadSchema, args)
       return ctx.views.softReloadNativeSimulator(simulatorUrl)
     })
-    .handle(SimulatorChannel.Detach, () => {
+    .handleRouted(SimulatorChannel.Detach, (ctx) => {
       ctx.views.detachSimulator()
     })
-    .handle(SimulatorChannel.SetDeviceInfo, (_, ...args: unknown[]) => {
+    .handleRouted(SimulatorChannel.SetDeviceInfo, (ctx, _e, ...args: unknown[]) => {
       const [device] = validate(SimulatorChannel.SetDeviceInfo, SimulatorSetDeviceInfoSchema, args)
       // Cache the selection (rides the next NATIVE_HOST_ENABLED reply for a
       // race-free DeviceShell init) and push DEVICE_CHANGE to the live simulator
@@ -44,7 +50,7 @@ export function registerSimulatorIpc(ctx: Pick<WorkbenchContext, 'views' | 'noti
         serviceWc.send(ServiceHostChannel.HostEnvUpdate, deviceInfoToHostEnv(device))
       }
     })
-    .handle(SimulatorCustomApiChannel.Invoke, (_, ...args: unknown[]) => {
+    .handleRouted(SimulatorCustomApiChannel.Invoke, (ctx, _e, ...args: unknown[]) => {
       const [name, params] = validate(SimulatorCustomApiChannel.Invoke, SimulatorCustomApiInvokeSchema, args)
       return ctx.simulatorApis.invoke(name, params)
     })

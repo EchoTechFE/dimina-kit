@@ -5,6 +5,7 @@ import { TooltipMeasuredSchema, TooltipShowSchema } from '../../shared/ipc-schem
 import type { Disposable } from '@dimina-kit/electron-deck/main'
 import { validate } from '../utils/ipc-schema.js'
 import { IpcRegistry, type SenderPolicy } from '../utils/ipc-registry.js'
+import { toIpcContextSource, type IpcInput } from '../utils/ipc-context-source.js'
 
 /** Module-local narrow deps — deliberately NOT `Pick<WorkbenchContext, ...>`
  * (the gate in eslint.config.* is shrink-only; see its message). */
@@ -20,22 +21,22 @@ export interface TooltipIpcDeps {
   senderPolicy?: SenderPolicy
 }
 
-export function registerTooltipIpc(ctx: TooltipIpcDeps): Disposable {
-  return new IpcRegistry(ctx.senderPolicy)
-    .on(TooltipChannel.Prepare, () => {
+export function registerTooltipIpc(input: IpcInput<TooltipIpcDeps>): Disposable {
+  return new IpcRegistry(toIpcContextSource(input))
+    .onRouted(TooltipChannel.Prepare, (ctx) => {
       ctx.views.prepareTooltip()
     })
-    .on(TooltipChannel.Show, (_event, ...args: unknown[]) => {
+    .onRouted(TooltipChannel.Show, (ctx, _event, ...args: unknown[]) => {
       const [data] = validate(TooltipChannel.Show, TooltipShowSchema, args)
       ctx.views.showTooltip(data)
     })
-    .on(TooltipChannel.Hide, () => {
+    .onRouted(TooltipChannel.Hide, (ctx) => {
       ctx.views.hideTooltip()
     })
-    .on(OverlayChannel.Ready, (event) => {
+    .onRouted(OverlayChannel.Ready, (ctx, event) => {
       ctx.views.markOverlayReady(event.sender.id)
     })
-    .on(TooltipChannel.Measured, (event, ...args: unknown[]) => {
+    .onRouted(TooltipChannel.Measured, (ctx, event, ...args: unknown[]) => {
       const [measurement] = validate(
         TooltipChannel.Measured,
         TooltipMeasuredSchema,

@@ -195,7 +195,7 @@ function createProjectHost(): McpProjectHost {
     sessionStatus: createSessionStatusStore(),
     compileLogs: createCompileLogBuffer(),
     requestOpenInUi: vi.fn(),
-    requestNavigateBack: vi.fn(),
+    pinActiveProjectWindow: vi.fn(() => null),
   }
 }
 

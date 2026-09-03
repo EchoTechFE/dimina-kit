@@ -231,7 +231,7 @@ function makeCtx(registeredApiNames: string[] = []): { ctx: WorkbenchContext; si
       invoke: async () => ({}),
       list: () => registeredApiNames,
     },
-    windows: { mainWindow: { webContents: simulatorWc } },
+    windows: { mainWindow: { webContents: simulatorWc, isDestroyed: () => false } },
     workspace: { getSession: () => undefined },
     connections: createConnectionRegistry(),
     apiNamespaces: [],

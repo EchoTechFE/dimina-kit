@@ -535,7 +535,8 @@ describe('⑦ WorkbenchContext gate — round 4: grandfather inventory ceiling',
     ).toBe(21)
     expect(distribution).toEqual([
       'src/main/api.ts ×1',
-      'src/main/app/app.ts ×2',
+      'src/main/app/app.ts ×1',
+      'src/main/app/project-window.ts ×1',
       'src/main/ipc/app.ts ×1',
       'src/main/ipc/popover.ts ×1',
       'src/main/ipc/project-fs.ts ×1',

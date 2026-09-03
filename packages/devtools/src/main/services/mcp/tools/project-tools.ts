@@ -18,6 +18,7 @@ import type {
   SessionStatusSnapshot,
   SessionStatusStore,
 } from '../../workspace/session-status-store.js'
+import type { McpOpenedProject, McpProjectStatusSource } from '../opened-project.js'
 
 /**
  * Narrow structural slice of WorkspaceService the project tools need.
@@ -39,10 +40,23 @@ export interface McpProjectHost {
   workspace: McpProjectWorkspace
   sessionStatus: SessionStatusStore
   compileLogs: CompileLogBuffer
-  /** Push the renderer to open the project (the user-click-equivalent path). */
-  requestOpenInUi(project: { name: string; path: string }): void
-  /** Push the renderer back to the project list after a close. */
-  requestNavigateBack(): void
+  /**
+   * Push the renderer to open the project (the user-click-equivalent path) and
+   * resolve with the window it landed in. A project lives in its own window
+   * with its own status store, so the caller can only await the right compile
+   * by holding that window — the window active when the call arrived is a
+   * different project.
+   */
+  requestOpenInUi(project: { name: string; path: string }): Promise<McpOpenedProject>
+  /**
+   * Pin the project window that is active right now and hand back its closer,
+   * or null when no project window is open. A project lives in its own window,
+   * so returning to the project list means that window goes away and the
+   * always-present list window is what remains — but which window that is has
+   * to be settled before the session teardown is awaited, or the close lands
+   * on whatever window the user focused meanwhile.
+   */
+  pinActiveProjectWindow(): (() => void) | null
 }
 
 const DEFAULT_OPEN_TIMEOUT_MS = 180_000
@@ -70,13 +84,14 @@ function publicPhase(
   return snapshot.phase
 }
 
-function statusPayload(host: McpProjectHost) {
-  const snapshot = host.sessionStatus.get()
-  const sessionActive = host.workspace.hasActiveSession()
+/** Reads one window's own status: the host for a query, the opened window for an open. */
+function statusPayload(source: McpProjectStatusSource) {
+  const snapshot = source.sessionStatus.get()
+  const sessionActive = source.workspace.hasActiveSession()
   return {
     phase: publicPhase(snapshot, sessionActive),
     message: snapshot.message,
-    projectPath: host.workspace.getProjectPath(),
+    projectPath: source.workspace.getProjectPath(),
     sessionActive,
     watcherAlive: snapshot.watcherAlive,
     updatedAt: snapshot.updatedAt,
@@ -115,14 +130,17 @@ export function registerProjectTools(server: McpServer, host: McpProjectHost): v
         project = await host.workspace.addProject(dir)
       }
 
-      // Snapshot the generation BEFORE the trigger so a previous session's
-      // settled state can never be mistaken for this open's result.
-      const afterGeneration = host.sessionStatus.get().generation
-      host.requestOpenInUi({ name: project.name, path: project.path })
-
+      // The open hands back the window it landed in; that window's store is the
+      // only place this compile is reported, and its `afterGeneration` keeps a
+      // state that predates the open from being read as this open's result.
+      let opened: McpOpenedProject
       let settled: SessionStatusSnapshot
       try {
-        settled = await host.sessionStatus.waitForSettled({ afterGeneration, timeoutMs })
+        opened = await host.requestOpenInUi({ name: project.name, path: project.path })
+        settled = await opened.sessionStatus.waitForSettled({
+          afterGeneration: opened.afterGeneration,
+          timeoutMs,
+        })
       } catch (err) {
         return errorText(err instanceof Error ? err.message : String(err))
       }
@@ -132,7 +150,7 @@ export function registerProjectTools(server: McpServer, host: McpProjectHost): v
           `compile failed: ${settled.message} — call compile_logs (stream: "stderr") for details`,
         )
       }
-      return text(statusPayload(host))
+      return text(statusPayload(opened))
     },
   )
 
@@ -144,8 +162,11 @@ export function registerProjectTools(server: McpServer, host: McpProjectHost): v
       if (!host.workspace.getProjectPath() && !host.workspace.hasActiveSession()) {
         return text({ closed: false, note: 'no project is open' })
       }
+      // Pinned before the await: `closeProject()` yields, and a window the user
+      // focuses while it runs must not become the window this close takes down.
+      const closeWindow = host.pinActiveProjectWindow()
       await host.workspace.closeProject()
-      host.requestNavigateBack()
+      closeWindow?.()
       return text({ closed: true })
     },
   )

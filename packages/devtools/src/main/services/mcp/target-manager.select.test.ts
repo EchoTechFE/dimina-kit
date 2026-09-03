@@ -1,15 +1,12 @@
 import { describe, it, expect } from 'vitest'
 
-// Pins the pure helpers `selectSimulatorTarget` / `setNativeHost` / `setActiveBridgeId`
-// exported by target-manager.ts.
+// Pins the pure helper `selectSimulatorTarget` exported by target-manager.ts.
+// 每个窗口自己的 native-host 状态与 workbench target 选择见
+// `window-scoped-state.test.ts`。
 //
 // `target-manager.ts` 在模块顶层 import 了 `chrome-remote-interface`(CDP)，
-// vitest 下加载它不会真正建立连接，所以可以直接静态 import 这些纯函数/setter。
-import {
-  selectSimulatorTarget,
-  setNativeHost,
-  setActiveBridgeId,
-} from './target-manager.js'
+// vitest 下加载它不会真正建立连接，所以可以直接静态 import 这些纯函数。
+import { selectSimulatorTarget } from './target-manager.js'
 
 type Target = { url?: string; type?: string }
 
@@ -131,16 +128,5 @@ describe('selectSimulatorTarget — 双形态 simulator target 解析', () => {
   it('边界: 空 targets 列表，两种模式都返回 undefined', () => {
     expect(selectSimulatorTarget([], { nativeHost: false, activeBridgeId: null })).toBeUndefined()
     expect(selectSimulatorTarget([], { nativeHost: true, activeBridgeId: 'b2' })).toBeUndefined()
-  })
-})
-
-describe('target-manager setters 存在性', () => {
-  // 仅断言 setter 被导出且为函数；其连接副作用依赖 CDP，不在单测范围内。
-  it('setNativeHost 被导出且为函数', () => {
-    expect(typeof setNativeHost).toBe('function')
-  })
-
-  it('setActiveBridgeId 被导出且为函数', () => {
-    expect(typeof setActiveBridgeId).toBe('function')
   })
 })

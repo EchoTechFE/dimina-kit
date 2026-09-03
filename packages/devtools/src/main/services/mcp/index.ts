@@ -14,11 +14,15 @@
 
 export { startMcpServer } from './server.js'
 export { getMcpStatus, type McpRuntimeStatus } from './status.js'
-// Native-host: let app.ts point the `simulator` CDP target at the active
-// render-host guest as the visible page changes.
+// Every project window owns its own native-host state and its own renderer, so
+// each registers its facts and MCP resolves the active window on every use.
 export {
-  setNativeHost,
-  setActiveBridgeId,
-  setNativeOverviewProvider,
+  registerMcpWindow,
+  setActiveMcpWindowResolver,
+  noteActiveBridgeId,
+  noteActiveMcpWindowChanged,
+  activeMcpWindow,
   getNativeOverviewProvider,
+  type McpWindowFacts,
 } from './target-manager.js'
+export { createCloseForMcp, createOpenForMcp, type McpOpenedProject } from './opened-project.js'

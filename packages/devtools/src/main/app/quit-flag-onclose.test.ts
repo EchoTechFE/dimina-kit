@@ -1,7 +1,7 @@
 /**
  * ⌘Q QUIT-FLAG CONTRACT (host-shell extensibility) — lifecycle + onClose.
  *
- * Bug guarded against: with a project open, pressing ⌘Q fires the main
+ * Bug guarded against: with a project open, pressing ⌘Q fires the workbench
  * window's `close` event, the onClose handler unconditionally
  * `preventDefault()`s + `closeProject()`s, and the application never quits —
  * the quit is swallowed and turned into "close the project".
@@ -10,14 +10,15 @@
  *  - `lifecycle.isAppQuitting()` starts `false`.
  *  - `registerAppLifecycle()` wires `app.on('before-quit', …)`; once that
  *    handler runs, `isAppQuitting()` returns `true`.
- *  - The main-window onClose consults it: when quitting, it must NOT
- *    `preventDefault()` and must NOT tear the project down (let the real
- *    quit proceed). When NOT quitting and a session is active, it keeps the
- *    original behaviour (preventDefault + closeProject + navigateBack).
+ *  - The workbench window's onClose consults it: when quitting, it must NOT
+ *    `preventDefault()`, must NOT tear the project down and must NOT destroy
+ *    the window itself (let the real quit proceed). When NOT quitting it keeps
+ *    the normal behaviour: preventDefault, tear the project down, then destroy
+ *    that one window.
  *
  * Two layers are pinned:
  *  1. lifecycle.ts: the flag flips after before-quit.
- *  2. app.ts createDevtoolsRuntime: the wired onClose honours the flag.
+ *  2. workbench-window.ts: the wired onClose honours the flag.
  *
  * Harness for layer 2 lifted from `close-with-active-session.test.ts`
  * (electron + fs + devkit mocks, real createDevtoolsRuntime).
@@ -174,6 +175,8 @@ vi.mock('electron', () => {
   class BrowserWindow {
     private em = stubs.makeEmitter()
     destroyed = false
+    visible = true
+    minimized = false
     webContents = new WebContents()
     contentView: View | WebContentsView = new WebContentsView()
     on = this.em.on.bind(this.em)
@@ -185,9 +188,14 @@ vi.mock('electron', () => {
     getContentSize = () => [1280, 980]
     setIcon = vi.fn()
     setTitle = vi.fn()
-    show = vi.fn()
+    show = vi.fn(() => { this.visible = true })
     showInactive = vi.fn()
     focus = vi.fn()
+    hide = vi.fn(() => { this.visible = false })
+    isVisible = () => this.visible
+    minimize = vi.fn(() => { this.minimized = true })
+    isMinimized = () => this.minimized
+    restore = vi.fn(() => { this.minimized = false })
     close = vi.fn()
     destroy = vi.fn(() => {
       this.destroyed = true
@@ -325,10 +333,8 @@ vi.mock('@dimina-kit/devkit', () => ({
   ),
 }))
 
-import { WindowChannel } from '../../shared/ipc-channels.js'
 let createDevtoolsRuntime: typeof import('./app.js').createDevtoolsRuntime
 let registerAppLifecycle: typeof import('./lifecycle.js').registerAppLifecycle
-// Will only exist once the fix lands; referencing it red-flags the contract.
 let isAppQuitting: typeof import('./lifecycle.js').isAppQuitting
 let electron: typeof import('electron')
 
@@ -365,20 +371,30 @@ describe('lifecycle: app-quit flag', () => {
   })
 })
 
-describe('mainWindow onClose honours the app-quit flag', () => {
-  async function openProject() {
+describe('workbench window onClose honours the app-quit flag', () => {
+  type Instance = Awaited<ReturnType<typeof createDevtoolsRuntime>>
+  type ProjectWindow = ReturnType<Instance['projectWindows']>[number]
+
+  async function openProject(): Promise<{ instance: Instance; projectWindow: ProjectWindow }> {
     const projectDir = '/tmp/projQuitFlag'
     stubs.projectsWithAppJson.add(projectDir)
     stubs.setProjectsJson(JSON.stringify([]))
     const instance = await createDevtoolsRuntime({})
-    const openResult = await instance.context.workspace.openProject(projectDir)
+    await instance.openProjectWindow({ path: projectDir })
+    const [projectWindow] = instance.projectWindows()
+    expect(projectWindow, 'openProjectWindow must publish the window it opened').toBeTruthy()
+    const openResult = await projectWindow!.context.workspace.openProject(projectDir)
     expect(openResult.success).toBe(true)
-    expect(instance.context.workspace.hasActiveSession()).toBe(true)
-    return instance
+    expect(projectWindow!.context.workspace.hasActiveSession()).toBe(true)
+    return { instance, projectWindow: projectWindow! }
   }
 
-  it('when quitting (before-quit fired): does NOT preventDefault and does NOT close the project', async () => {
-    const instance = await openProject()
+  function emitClose(win: unknown, fakeEvent: unknown) {
+    ;(win as { emit: (event: string, ...args: unknown[]) => void }).emit('close', fakeEvent)
+  }
+
+  it('when quitting (before-quit fired): does NOT preventDefault, does NOT close the project and does NOT destroy the window', async () => {
+    const { instance, projectWindow } = await openProject()
 
     // Simulate the real ⌘Q ordering: Electron emits before-quit, then the
     // window close event for each open window.
@@ -388,14 +404,12 @@ describe('mainWindow onClose honours the app-quit flag', () => {
     }).emit('before-quit', { preventDefault: () => {} })
     expect(isAppQuitting()).toBe(true)
 
-    const sendSpy = vi.mocked(instance.mainWindow.webContents.send)
-    sendSpy.mockClear()
+    const destroySpy = vi.mocked(projectWindow.window.destroy)
+    destroySpy.mockClear()
 
     let prevented = 0
     const fakeEvent = { preventDefault: () => { prevented += 1 } }
-    ;(instance.mainWindow as unknown as {
-      emit: (event: string, ...args: unknown[]) => void
-    }).emit('close', fakeEvent)
+    emitClose(projectWindow.window, fakeEvent)
 
     // Drain a macrotask so any (incorrect) async closeProject would run.
     await new Promise((r) => setTimeout(r, 0))
@@ -406,42 +420,38 @@ describe('mainWindow onClose honours the app-quit flag', () => {
       + 'into "close the project" and the app never exits',
     ).toBe(0)
     expect(
-      instance.context.workspace.hasActiveSession(),
+      projectWindow.context.workspace.hasActiveSession(),
       'quitting must not tear the project down via the close handler — the app is exiting whole',
     ).toBe(true)
-    const navBack = sendSpy.mock.calls.filter((c) => c[0] === WindowChannel.NavigateBack)
     expect(
-      navBack,
-      'a real quit must not push the renderer back to the project list',
-    ).toHaveLength(0)
+      destroySpy,
+      'during a real quit Electron destroys the window itself; the handler must keep its hands off',
+    ).not.toHaveBeenCalled()
 
     await instance.dispose()
   })
 
-  it('when NOT quitting and a session is active: keeps original behaviour (preventDefault + closeProject + navigateBack)', async () => {
-    const instance = await openProject()
+  it('when NOT quitting and a session is active: preventDefault, tear the project down, then destroy that window', async () => {
+    const { instance, projectWindow } = await openProject()
     // before-quit NOT fired → isAppQuitting() stays false.
     expect(isAppQuitting()).toBe(false)
 
-    const sendSpy = vi.mocked(instance.mainWindow.webContents.send)
-    sendSpy.mockClear()
+    const destroySpy = vi.mocked(projectWindow.window.destroy)
+    destroySpy.mockClear()
 
     let prevented = 0
     const fakeEvent = { preventDefault: () => { prevented += 1 } }
-    ;(instance.mainWindow as unknown as {
-      emit: (event: string, ...args: unknown[]) => void
-    }).emit('close', fakeEvent)
+    emitClose(projectWindow.window, fakeEvent)
 
     await vi.waitFor(
       () => {
-        expect(instance.context.workspace.hasActiveSession()).toBe(false)
-        const calls = sendSpy.mock.calls.filter((c) => c[0] === WindowChannel.NavigateBack)
-        expect(calls.length).toBeGreaterThanOrEqual(1)
+        expect(projectWindow.context.workspace.hasActiveSession()).toBe(false)
+        expect(destroySpy).toHaveBeenCalledTimes(1)
       },
       { timeout: 2000 },
     )
 
-    expect(prevented, 'a plain close-while-open stays in the workbench').toBe(1)
+    expect(prevented, 'the close is held back exactly once, until teardown finishes').toBe(1)
 
     await instance.dispose()
   })

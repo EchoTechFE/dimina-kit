@@ -34,6 +34,7 @@ const SENTINEL = 'RECOMPILE-BUTTON-SENTINEL'
 
 let electronApp: ElectronApplication
 let mainWindow: PwPage
+let workbench: PwPage
 let originalWxml = ''
 let autoPort = 0
 
@@ -81,7 +82,7 @@ async function readActivePageText(): Promise<string> {
  * that WebContents specifically.
  */
 async function clickRecompileInPopover(startPage?: string): Promise<void> {
-  const compileDropdown = mainWindow.getByRole('button', { name: /普通编译/ })
+  const compileDropdown = workbench.getByRole('button', { name: /普通编译/ })
   await compileDropdown.waitFor({ timeout: 10000 })
   await compileDropdown.click()
 
@@ -193,7 +194,7 @@ test.describe('popover 重新编译 rebuilds and relaunches at the selected star
       compile: { ...settings.compile, autoBuild: false },
     })
 
-    await openProjectInUI(mainWindow, FIXTURE_DIR, { waitMs: 20000 })
+    workbench = await openProjectInUI(electronApp, FIXTURE_DIR, { waitMs: 20000 })
     await waitForSimulatorWebview(electronApp)
 
     await pollUntil(
@@ -209,7 +210,7 @@ test.describe('popover 重新编译 rebuilds and relaunches at the selected star
 
   test.afterAll(async () => {
     fs.writeFileSync(HOME_WXML, originalWxml)
-    await closeProject(mainWindow).catch(() => {})
+    await closeProject(electronApp).catch(() => {})
     await electronApp?.close().catch(() => {})
   })
 

@@ -63,7 +63,7 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
   const controller = useProjectRuntimeController({ projectPath: project.path })
   const { session, device, simulator, panelData, rightPane, popover } = controller
 
-  const layout = useLayoutStore()
+  const layout = useLayoutStore(project.path)
   const { state: layoutState } = layout
 
   // Dock model + registry are owned HERE (lifted out of DockableLayout) so the

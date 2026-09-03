@@ -30,7 +30,7 @@ export interface MenuContext {
   notify: {
     /** Broadcast compile-status transitions to the main renderer. */
     projectStatus: (payload: { status: string; message: string; hotReload?: boolean }) => void
-    /** Ask the main renderer to navigate back to its landing screen (打开项目). */
+    /** Bring the project-list window forward and refresh it (打开项目). */
     windowNavigateBack: () => void
   }
 }
@@ -200,10 +200,11 @@ export interface WorkbenchHostInstance {
   ): import('@dimina-kit/electron-deck/main').Disposable
 
   /**
-   * Registers a simulator custom API into THIS context's registry, callable
-   * from mini-program code as `wx.<name>(params)`. The registration joins
-   * `context.registry`, so it is released when the context is disposed.
-   * The returned Disposable removes only the registration it created.
+   * Registers a simulator custom API, callable from mini-program code as
+   * `wx.<name>(params)`. The registry is app-level: one registration serves
+   * every project window, including windows opened afterwards, and no window
+   * closing revokes it. It lives until the app is disposed or the returned
+   * Disposable revokes it — which removes only the registration it created.
    */
   registerSimulatorApi(
     name: string,
@@ -219,6 +220,25 @@ export interface WorkbenchHostInstance {
   registerSimulatorUiExtension(
     registration: import('./simulator-ui.js').SimulatorUiExtensionRegistration,
   ): import('./simulator-ui.js').SimulatorUiExtensionHandle
+}
+
+/**
+ * The project window being closed, handed to
+ * {@link WorkbenchAppConfig.onBeforeClose} alongside the app instance.
+ */
+export interface ClosingProjectWindow {
+  /** Absolute path of the project this window was opened for. */
+  path: string
+  /** Display name the open supplied, when it supplied one. */
+  name?: string
+  /** The BrowserWindow that is closing. */
+  window: import('electron').BrowserWindow
+  /**
+   * This window's own context — the one holding its session and views. Same
+   * type as {@link WorkbenchHostInstance.context}, borrowed from there rather
+   * than named again so this file keeps its single WorkbenchContext reference.
+   */
+  context: WorkbenchHostInstance['context']
 }
 
 /**
@@ -305,8 +325,20 @@ export interface WorkbenchAppConfig extends WorkbenchConfig {
   menuBuilder?: (mainWindow: import('electron').BrowserWindow, menuContext: MenuContext) => void
   /** Called after window and context are created but before start() resolves. Use to register custom IPC handlers. */
   onSetup?: (instance: WorkbenchHostInstance) => void | Promise<void>
-  /** Called before window close when a session is active. Session disposal happens automatically after this hook. */
-  onBeforeClose?: (instance: WorkbenchHostInstance) => void | Promise<void>
+  /**
+   * Called when a project window is closing, before the framework disposes it.
+   * `closing` says WHICH project is going away and carries that window's own
+   * context — `instance.context` is always the project list's, which owns no
+   * session, so with several windows open it cannot tell them apart. A hook
+   * that only declares `instance` still type-checks.
+   *
+   * Awaited, but not a veto: a rejection is logged and the window is disposed
+   * regardless.
+   */
+  onBeforeClose?: (
+    instance: WorkbenchHostInstance,
+    closing: ClosingProjectWindow,
+  ) => void | Promise<void>
   /**
    * Called before a project is opened, BEFORE any side effect (session
    * teardown, compile, dev-server). Use to gate the open on login/permission

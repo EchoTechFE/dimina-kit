@@ -12,6 +12,9 @@ import type { WorkbenchContext } from '../services/workbench-context.js'
 import type { Disposable } from '@dimina-kit/electron-deck/main'
 import { validate } from '../utils/ipc-schema.js'
 import { IpcRegistry } from '../utils/ipc-registry.js'
+import { toIpcContextSource, type IpcInput } from '../utils/ipc-context-source.js'
+
+type ViewsIpcCtx = Pick<WorkbenchContext, 'views' | 'senderPolicy'>
 
 /**
  * Renderer-driven overlay bounds, plus the renderer bootstrap's
@@ -42,18 +45,29 @@ import { IpcRegistry } from '../utils/ipc-registry.js'
  * disables it on the fatal boot-failure page, or leave placement silently
  * non-functional. See disabled-module.test.ts for the end-to-end guard.
  */
-export function registerViewsIpc(
-  ctx: Pick<WorkbenchContext, 'views' | 'senderPolicy'>,
-): Disposable {
-  const registry = new IpcRegistry(ctx.senderPolicy)
+export function registerViewsIpc(input: IpcInput<ViewsIpcCtx>): Disposable {
+  const source = toIpcContextSource(input)
+
+  // The raw listeners below trust an exact wc id, and each window mounts its
+  // own host slots — so the id itself names the owning window. Scanning the
+  // live contexts for the one whose slot holds this sender is both the trust
+  // gate and the routing decision; no match means the message came from
+  // somewhere that is not a host slot at all, and is dropped.
+  const ownerOfSlot = (
+    event: IpcMainEvent,
+    slotWebContentsId: (ctx: ViewsIpcCtx) => number | null,
+  ): ViewsIpcCtx | null =>
+    source.list().find((ctx) => slotWebContentsId(ctx) === event.sender.id) ?? null
+
+  const registry = new IpcRegistry(source)
     // Renderer bootstrap: allocate this session's placement-generation seed
     // (see renderer-placement-generation.ts / PlacementReconciler.allocateGeneration).
-    .handle(ViewChannel.AllocatePlacementGeneration, () => ctx.views.allocatePlacementGeneration())
+    .handleRouted(ViewChannel.AllocatePlacementGeneration, (ctx) => ctx.views.allocatePlacementGeneration())
     // Window-level placement snapshot: the single source of truth for every
     // managed native view's bounds/visibility/z-order. The renderer's central
     // publisher coalesces one snapshot per frame; the reconciler diffs it
     // against the actual view tree. Supersedes the per-view bounds channels.
-    .handle(ViewChannel.PlacementSnapshot, (_event, ...args: unknown[]) => {
+    .handleRouted(ViewChannel.PlacementSnapshot, (ctx, _event, ...args: unknown[]) => {
       const [snapshot] = validate(
         ViewChannel.PlacementSnapshot,
         PlacementSnapshotSchema,
@@ -69,10 +83,10 @@ export function registerViewsIpc(
     // senderPolicy-gated registry as HostToolbarBounds: the toolbar WCV's
     // arbitrary host content must not reach this — only the trusted main
     // renderer pulls. Live delegation, not a registration-time snapshot.
-    .handle(ViewChannel.HostToolbarGetHeight, () => ctx.views.getHostToolbarHeight())
+    .handleRouted(ViewChannel.HostToolbarGetHeight, (ctx) => ctx.views.getHostToolbarHeight())
     // Same mount-time replay role as HostToolbarGetHeight, on the sidebar's
     // inline (width) axis.
-    .handle(ViewChannel.HostSidebarGetWidth, () => ctx.views.getHostSidebarWidth())
+    .handleRouted(ViewChannel.HostSidebarGetWidth, (ctx) => ctx.views.getHostSidebarWidth())
 
   // Reverse size-advertiser: the toolbar WCV's OWN renderer sends this, and the
   // host loads ARBITRARY content into that WCV. We DELIBERATELY do NOT add the
@@ -85,7 +99,8 @@ export function registerViewsIpc(
   // The host content can reach ONLY this one channel, carrying only a
   // non-negative integer height.
   const onAdvertiseHeight = (event: IpcMainEvent, ...args: unknown[]): void => {
-    if (event.sender.id !== ctx.views.getHostToolbarWebContentsId()) return
+    const ctx = ownerOfSlot(event, (c) => c.views.getHostToolbarWebContentsId())
+    if (!ctx) return
     let extent: number
     try {
       ;[{ extent }] = validate(
@@ -103,7 +118,8 @@ export function registerViewsIpc(
   // Same precise-sender-id trust model as onAdvertiseHeight, on the
   // sidebar's inline (width) axis.
   const onAdvertiseWidth = (event: IpcMainEvent, ...args: unknown[]): void => {
-    if (event.sender.id !== ctx.views.getHostSidebarWebContentsId()) return
+    const ctx = ownerOfSlot(event, (c) => c.views.getHostSidebarWebContentsId())
+    if (!ctx) return
     let extent: number
     try {
       ;[{ extent }] = validate(
@@ -123,7 +139,8 @@ export function registerViewsIpc(
   // slot: either axis may arrive, and the view manager re-centers using
   // whichever axes it has measured so far.
   const onAdvertiseDialogSize = (event: IpcMainEvent, ...args: unknown[]): void => {
-    if (event.sender.id !== ctx.views.getHostDialogWebContentsId()) return
+    const ctx = ownerOfSlot(event, (c) => c.views.getHostDialogWebContentsId())
+    if (!ctx) return
     let axis: 'block' | 'inline'
     let extent: number
     try {

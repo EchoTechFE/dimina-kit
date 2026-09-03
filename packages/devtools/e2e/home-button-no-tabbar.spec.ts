@@ -133,14 +133,14 @@ async function pageStackLength(): Promise<number> {
  * leaks into the shared worker-scoped Electron instance other specs use.
  */
 async function openFixtureAt(startPage: string): Promise<void> {
-  await closeProject(mainWindow).catch(() => {})
+  await closeProject(electronApp).catch(() => {})
   await addProject(mainWindow, FIXTURE_DIR)
   await ipcInvoke(mainWindow, ProjectChannel.SaveCompileConfig, FIXTURE_DIR, {
     startPage,
     scene: DEFAULT_SCENE,
     queryParams: [],
   })
-  await openProjectInUI(mainWindow, FIXTURE_DIR, { waitMs: 20000 })
+  await openProjectInUI(electronApp, FIXTURE_DIR, { waitMs: 20000 })
   await waitForSimulatorWebview(electronApp)
   await pollUntil(
     () => evalInSimulator<boolean>(electronApp, `(() => !!document.querySelector('.device-shell-root'))()`).catch(() => false),
@@ -201,7 +201,7 @@ test.describe('native-host nav-bar home button (redirectTo/reLaunch branches)', 
   })
 
   test.afterAll(async () => {
-    await closeProject(mainWindow).catch(() => {})
+    await closeProject(electronApp).catch(() => {})
     await electronApp?.close().catch(() => {})
   })
 

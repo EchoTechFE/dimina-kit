@@ -33,6 +33,24 @@ export interface SimulatorUiExtensionRegistryOptions {
 
 const EXTENSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 
+/**
+ * The rules a registration has to satisfy on its own, with no window and no
+ * renderer involved: the id is a lookup key on both sides of the bridge, and
+ * the script is read straight from disk with no base to resolve against. They
+ * hold wherever a registration is accepted, so whoever accepts one first is
+ * where a host learns it is unusable.
+ */
+export function assertSimulatorUiExtensionShape(
+  registration: SimulatorUiExtensionRegistration,
+): void {
+  if (!EXTENSION_ID_RE.test(registration.id)) {
+    throw new Error(`Invalid simulator UI extension id: "${registration.id}"`)
+  }
+  if (!isAbsolute(registration.rendererScriptPath)) {
+    throw new Error('Simulator UI extension rendererScriptPath must be absolute')
+  }
+}
+
 export function createSimulatorUiExtensionRegistry(
   options: SimulatorUiExtensionRegistryOptions = {},
 ): SimulatorUiExtensionRegistry {
@@ -41,12 +59,7 @@ export function createSimulatorUiExtensionRegistry(
   let active: ActiveSimulator | null = null
 
   function assertRegistration(registration: SimulatorUiExtensionRegistration): void {
-    if (!EXTENSION_ID_RE.test(registration.id)) {
-      throw new Error(`Invalid simulator UI extension id: "${registration.id}"`)
-    }
-    if (!isAbsolute(registration.rendererScriptPath)) {
-      throw new Error('Simulator UI extension rendererScriptPath must be absolute')
-    }
+    assertSimulatorUiExtensionShape(registration)
     if (entries.has(registration.id)) {
       throw new Error(`Simulator UI extension "${registration.id}" is already registered`)
     }

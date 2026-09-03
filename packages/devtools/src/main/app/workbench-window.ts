@@ -1,0 +1,266 @@
+import type { BrowserWindow } from 'electron'
+import { toDisposable, type Disposable } from '@dimina-kit/electron-deck/main'
+import type { WorkbenchAppConfig } from '../../shared/types.js'
+import type { AppServices } from '../services/app-services.js'
+import type { WindowContextRouter } from '../services/window-contexts/context-router.js'
+import { createInternalDevtoolsWindow } from '../windows/internal-devtools-window/index.js'
+import { wireMainWindowEvents } from '../windows/main-window/index.js'
+import { isAppQuitting } from './lifecycle.js'
+import { installGlobalMirrors } from './global-mirrors.js'
+import { setupEditorView } from './editor-view.js'
+import { createActiveAppIdResolver, setupWindowRuntimeServices } from './window-runtime-services.js'
+import { createWorkbenchWindow, type ProjectRef, type ProjectWindow } from './project-window.js'
+
+/**
+ * The window context type, taken from `ProjectWindow` so this module doesn't
+ * import `WorkbenchContext` directly (see eslint-workbench-context-gate).
+ */
+type WindowContext = ProjectWindow['context']
+
+export interface WorkbenchWindowDeps {
+  config: WorkbenchAppConfig
+  rendererDir: string
+  appServices: AppServices
+  router: WindowContextRouter<WindowContext>
+  /**
+   * Per-window module wiring — the `setupWindow` half of the built-in modules
+   * (notably the simulator's `installBridgeRouter`, which assigns `ctx.bridge`
+   * / `ctx.consoleForwarder` / `ctx.diagnostics`). The IPC half is registered
+   * once against the router and is NOT repeated here.
+   */
+  setupWindowModules: (ctx: WindowContext) => void
+  /**
+   * Told whenever `activeContext()` can have changed — a window opened, took
+   * focus, or was torn down. App-level services that hold something aimed at
+   * the active project window (the MCP CDP connections) re-aim on it.
+   */
+  onActiveContextChanged?: () => void
+  /**
+   * Host hook, awaited before a window tears its project down, and told which
+   * project that is. A rejection is logged and swallowed: the hook runs on the
+   * way out, so it can react but never cancel the teardown behind it.
+   */
+  onBeforeClose?: (win: ProjectWindow, project: ProjectRef) => Promise<void> | void
+}
+
+export interface WorkbenchWindowManager {
+  /**
+   * Open `project` in its own window, or focus the window already showing it.
+   * Resolves once the window exists and its per-window services are wired.
+   * Opens and closes of the same project are serialized, so a call arriving
+   * while that project's window is still closing waits it out and then opens a
+   * fresh window — never a second one alongside it. Rejects if the window
+   * cannot be brought up, leaving nothing behind.
+   */
+  open: (project: ProjectRef) => Promise<BrowserWindow>
+  list: () => ProjectWindow[]
+  /**
+   * The workbench context the user is working in — the focused one, or the
+   * most recently opened when focus sits on the project list. Null until the
+   * first project window opens.
+   */
+  activeContext: () => WindowContext | null
+  /** Tear every workbench window down (app quit / runtime disposal). */
+  disposeAll: () => Promise<void>
+}
+
+/**
+ * Close semantics for a workbench window. Unlike the old single-window app —
+ * where closing meant "return this window to the project list" — closing a
+ * workbench window means the window itself goes away, so teardown must finish
+ * BEFORE the window is destroyed.
+ *
+ * Three guards, each covering a failure this app has actually shipped:
+ *
+ * 1. A real application quit (⌘Q / menu Quit / app.quit()) fires `before-quit`
+ *    first. Let it through: converting a quit into a project close swallows the
+ *    quit and the app can never exit with a project open.
+ * 2. A close arriving while teardown is already in flight (the user
+ *    rapid-double-clicked) MUST keep the window. This runs BEFORE any
+ *    session check on purpose: `closeProject()` → `disposeSession()`
+ *    synchronously nulls the active session before it finishes awaiting
+ *    `session.close()`, so a session-presence check would already read false
+ *    by the time the second close arrives, fall through with no
+ *    `preventDefault()`, and let Chromium destroy the window out from under a
+ *    live teardown.
+ * 3. Teardown is UNCONDITIONAL — deliberately not gated on
+ *    `hasActiveSession()`. A failed open (invalid/non-existent project) never
+ *    creates a session, yet the window still owns views, an editor server and
+ *    IPC registrations. Gating on session presence let that case skip teardown
+ *    entirely, which is how closing an invalid project used to take the whole
+ *    app down with it.
+ */
+function wireWorkbenchWindowEvents(
+  win: BrowserWindow,
+  ctx: WindowContext,
+  teardown: () => Promise<void>,
+): Disposable {
+  let closing = false
+  let torndown = false
+  return wireMainWindowEvents(win, {
+    context: ctx,
+    onResize: () => ctx.views.repositionAll(),
+    onClose: async (e) => {
+      if (isAppQuitting()) return
+      if (closing) {
+        e.preventDefault()
+        return
+      }
+      // Safety net for a `close()` that arrives after teardown finished (this
+      // module destroys the window itself, which emits no `close`).
+      if (torndown) return
+
+      e.preventDefault()
+      closing = true
+      try {
+        await teardown()
+      } catch (err) {
+        console.error('[workbench] workbench window teardown failed:', err)
+      } finally {
+        closing = false
+        torndown = true
+      }
+      if (!win.isDestroyed()) win.destroy()
+    },
+  })
+}
+
+export function createWorkbenchWindowManager(
+  deps: WorkbenchWindowDeps,
+): WorkbenchWindowManager {
+  const { config, rendererDir, appServices, router } = deps
+  // Keyed by project path: one window per project, so a second open of the
+  // same project focuses the existing window instead of racing two sessions
+  // (and two compile workers) over the same directory.
+  const windows = new Map<string, ProjectWindow>()
+  // Serializes every open and close of one project path. The map alone cannot
+  // carry "one window per project": an open has awaits in it, and a close
+  // awaits host code, so overlapping requests (a re-click on the project list,
+  // MCP's project_open) must queue rather than each find "no window" and build
+  // one. Entries are dropped once a path goes idle.
+  const pathQueues = new Map<string, Promise<unknown>>()
+
+  function enqueue<T>(path: string, task: () => Promise<T>): Promise<T> {
+    const previous = pathQueues.get(path) ?? Promise.resolve()
+    // Same task on either outcome: a failed open or close must not wedge the
+    // queue for its path.
+    const result = previous.then(task, task)
+    const settled = result.then(() => {}, () => {})
+    pathQueues.set(path, settled)
+    void settled.then(() => {
+      if (pathQueues.get(path) === settled) pathQueues.delete(path)
+    })
+    return result
+  }
+
+  async function openWindow(project: ProjectRef): Promise<BrowserWindow> {
+    const existing = windows.get(project.path)
+    if (existing && !existing.window.isDestroyed()) {
+      if (existing.window.isMinimized()) existing.window.restore()
+      existing.window.focus()
+      router.setActive(existing.context)
+      deps.onActiveContextChanged?.()
+      return existing.window
+    }
+
+    const projectWindow = createWorkbenchWindow(
+      { config, rendererDir, appServices, router },
+      project,
+    )
+    const { window, context } = projectWindow
+    windows.set(project.path, projectWindow)
+
+    const teardown = async () => {
+      try {
+        await deps.onBeforeClose?.(projectWindow, project)
+      } catch (err) {
+        // The hook is the host's chance to react, not a veto: everything below
+        // (compile session, bridge router, editor server, IPC and app-level
+        // listeners) has to go, and the map entry with it, or the window's
+        // resources outlive a window nothing can reach any more.
+        console.error('[workbench] host onBeforeClose hook failed:', err)
+      }
+      try {
+        await projectWindow.dispose()
+      } finally {
+        // Dropped LAST: while teardown is in flight this project still has a
+        // window, and an open arriving mid-close must queue behind it (see
+        // `enqueue`) instead of finding an empty map and building a second one.
+        if (windows.get(project.path) === projectWindow) windows.delete(project.path)
+      }
+      // After the map entry is gone, so listeners read the window that is left.
+      deps.onActiveContextChanged?.()
+    }
+
+    try {
+      // The standalone internal DevTools window debugs THIS window's renderer,
+      // so it is per-window wiring. `isAppQuitting` lets the controller stop
+      // intercepting 'close' during a real quit.
+      context.internalDevtoolsWindow = createInternalDevtoolsWindow(window, { isAppQuitting })
+      context.registry.add(toDisposable(() => context.internalDevtoolsWindow?.dispose()))
+
+      // Wired before the awaited steps below: the window is already on screen
+      // and closable, so it must never exist without the close handling that
+      // disposes it.
+      context.registry.add(wireWorkbenchWindowEvents(window, context, () =>
+        enqueue(project.path, teardown)))
+
+      // Whichever workbench window the user is looking at answers the IPC that
+      // no single window owns (menus, app-level host windows).
+      const onFocus = () => {
+        router.setActive(context)
+        deps.onActiveContextChanged?.()
+      }
+      window.on('focus', onFocus)
+      context.registry.add(toDisposable(() => {
+        if (!window.isDestroyed()) window.removeListener('focus', onFocus)
+      }))
+
+      // Order matters: the bridge router assigns ctx.bridge / ctx.consoleForwarder
+      // / ctx.diagnostics, which both the mirrors and the runtime services read.
+      deps.setupWindowModules(context)
+      installGlobalMirrors(context, window)
+
+      const getActiveAppId = createActiveAppIdResolver(context)
+      setupWindowRuntimeServices(context, window, getActiveAppId)
+      await setupEditorView(config, context, getActiveAppId)
+    } catch (err) {
+      // A half-built window (the editor's http server can fail to bind) leaves
+      // live services behind and keeps the project counted as open — which is
+      // what the list window reads to decide whether to stay hidden. Undo the
+      // whole thing before handing the failure back.
+      windows.delete(project.path)
+      await projectWindow.dispose().catch((disposeErr) => {
+        console.warn('[workbench] failed to dispose a partially opened window:', disposeErr)
+      })
+      if (!window.isDestroyed()) window.destroy()
+      throw err
+    }
+
+    deps.onActiveContextChanged?.()
+    return window
+  }
+
+  return {
+    open: (project) => enqueue(project.path, () => openWindow(project)),
+    list: () => [...windows.values()],
+    activeContext: () => {
+      const active = router.active()
+      const all = [...windows.values()]
+      if (all.some((pw) => pw.context === active)) return active
+      return all.length > 0 ? all[all.length - 1]!.context : null
+    },
+    disposeAll: async () => {
+      const all = [...windows.values()]
+      windows.clear()
+      // Serial: each teardown closes a devkit session and an http server, and
+      // a parallel storm during quit is exactly when those races bite.
+      for (const projectWindow of all) {
+        await projectWindow.dispose().catch((err) => {
+          console.warn('[workbench] failed to tear down workbench window:', err)
+        })
+        if (!projectWindow.window.isDestroyed()) projectWindow.window.destroy()
+      }
+    },
+  }
+}

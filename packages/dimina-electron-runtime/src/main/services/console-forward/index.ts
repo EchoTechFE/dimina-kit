@@ -97,8 +97,8 @@ export interface ConsoleForwarder extends Disposable {
    * `false`, UNLIKE `DiagnosticsBus` whose default is `true`) opts a new
    * subscriber into draining that buffer, in order, before receiving live
    * entries. Default stays non-replaying because the existing automation
-   * subscriber (`services/automation/index.ts`) wants only entries from the
-   * moment it subscribes — a history dump on an existing WS connection would
+   * subscriber (`services/automation/console-bridge.ts`) wants only entries
+   * from the moment it subscribes — a history dump on an existing WS would
    * be a surprise duplicate broadcast. `{replay:true}` exists for the global
    * console mirror, whose whole point is to catch up a standalone debug
    * window opened well after boot.

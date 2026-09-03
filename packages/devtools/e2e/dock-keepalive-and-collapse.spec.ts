@@ -32,12 +32,12 @@ import {
 } from '@playwright/test'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { openProjectInUI, closeProject, DEMO_APP_DIR, findMainWindow } from './helpers'
+import { openProjectInUI, closeProject, DEMO_APP_DIR } from './helpers'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 let electronApp: ElectronApplication
-let mainWindow: PwPage
+let workbench: PwPage
 
 test.beforeAll(async () => {
   const appPath = path.resolve(__dirname, 'electron-entry.js')
@@ -51,19 +51,17 @@ test.beforeAll(async () => {
     args: [appPath, `--user-data-dir=${userDataDir}`],
     env: { ...process.env, NODE_ENV: 'test' },
   })
-  mainWindow = await findMainWindow(electronApp)
-  await mainWindow.waitForLoadState('domcontentloaded')
   // Offscreen + blur so the spec never steals focus.
   await electronApp.evaluate(async ({ BrowserWindow }) => {
     const win = BrowserWindow.getAllWindows()[0]
     if (win) { win.setPosition(-2000, -2000); win.blur() }
   })
-  await openProjectInUI(mainWindow, DEMO_APP_DIR)
-  await mainWindow.waitForSelector('[data-deck-group]', { timeout: 15000 })
+  workbench = await openProjectInUI(electronApp, DEMO_APP_DIR)
+  await workbench.waitForSelector('[data-deck-group]', { timeout: 15000 })
 })
 
 test.afterAll(async () => {
-  try { await closeProject(mainWindow) } catch { /* best effort */ }
+  try { await closeProject(electronApp) } catch { /* best effort */ }
   await electronApp.close()
 })
 
@@ -134,10 +132,10 @@ test('A3: a kept-alive debug body is NOT remounted across a tab switch (DOM iden
   // build a brand-new element and lose the imperatively-set attribute; (2) a
   // scrollTop on the first scrollable descendant. Both must survive A→B→A iff
   // the body was kept alive (display:none) rather than unmounted.
-  await activateTab(mainWindow, 'wxml')
+  await activateTab(workbench, 'wxml')
 
   const stamp = `keepalive-${Date.now()}`
-  const stamped = await mainWindow.evaluate((mark) => {
+  const stamped = await workbench.evaluate((mark) => {
     const body = document.querySelector('[data-deck-panel-body="wxml"]') as HTMLElement | null
     if (!body) return { ok: false, reason: 'no wxml body' }
 
@@ -174,8 +172,8 @@ test('A3: a kept-alive debug body is NOT remounted across a tab switch (DOM iden
 
   // Switch AWAY to storage, then assert wxml stayed MOUNTED but hidden (the
   // keepalive contract: inactive body is display:none, NOT removed).
-  await activateTab(mainWindow, 'storage')
-  const wxmlHiddenButMounted = await mainWindow.evaluate(() => {
+  await activateTab(workbench, 'storage')
+  const wxmlHiddenButMounted = await workbench.evaluate(() => {
     const body = document.querySelector('[data-deck-panel-body="wxml"]') as HTMLElement | null
     if (!body) return { mounted: false, display: null as string | null }
     return { mounted: true, display: getComputedStyle(body).display }
@@ -185,8 +183,8 @@ test('A3: a kept-alive debug body is NOT remounted across a tab switch (DOM iden
 
   // Switch BACK to wxml and assert the stamped element + scroll survived — i.e.
   // the body was the SAME instance, never remounted.
-  await activateTab(mainWindow, 'wxml')
-  const survived = await mainWindow.evaluate((mark) => {
+  await activateTab(workbench, 'wxml')
+  const survived = await workbench.evaluate((mark) => {
     const body = document.querySelector('[data-deck-panel-body="wxml"]') as HTMLElement | null
     if (!body) return { ok: false, markFound: false, scrollTop: null as number | null, hadScrollProbe: false }
     const marked = body.querySelector(`[data-e2e-keepalive-mark="${mark}"]`)
@@ -225,10 +223,10 @@ test('B1: the simulator native WCV collapses (detaches, kept alive) when the sim
   // main maps the zero-area rect to COLLAPSE, `removeChildView`-ing the WCV from
   // the contentView tree (detach) while keeping its WebContents alive. So the
   // collapse is observed as `alive && bounds === null`.
-  const toggle = mainWindow.locator('[data-testid="layout-toolbar-toggle-simulator"]')
+  const toggle = workbench.locator('[data-testid="layout-toolbar-toggle-simulator"]')
 
   // Baseline: the simulator WCV is attached with live, non-zero bounds.
-  await mainWindow.waitForTimeout(500)
+  await workbench.waitForTimeout(500)
   const active = await simulatorView(electronApp)
   expect(active.alive, 'simulator WebContents must be alive while shown').toBe(true)
   expect(active.bounds, 'shown simulator WCV must be ATTACHED with live bounds').not.toBeNull()
@@ -239,7 +237,7 @@ test('B1: the simulator native WCV collapses (detaches, kept alive) when the sim
 
   // Hide the simulator via the real toolbar toggle → detach-but-keep-alive.
   await toggle.click()
-  await mainWindow.waitForTimeout(800)
+  await workbench.waitForTimeout(800)
 
   const collapsed = await simulatorView(electronApp)
   expect(
@@ -254,7 +252,7 @@ test('B1: the simulator native WCV collapses (detaches, kept alive) when the sim
   // Show the simulator again → the slot re-mounts → the anchor re-publishes a
   // non-zero rect → main re-attaches the WCV and restores its bounds.
   await toggle.click()
-  await mainWindow.waitForTimeout(800)
+  await workbench.waitForTimeout(800)
 
   const restored = await simulatorView(electronApp)
   expect(restored.alive, 'simulator WebContents must still be alive after being shown again').toBe(true)
