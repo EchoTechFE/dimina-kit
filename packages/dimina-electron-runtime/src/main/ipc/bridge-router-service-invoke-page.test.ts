@@ -252,47 +252,25 @@ async function bootTwoPageSession(): Promise<Session> {
   const { ctx, simulatorWc } = makeCtx()
   installBridgeRouter(ctx)
 
-  const spawn = await invokeHandler(C.SPAWN, simulatorWc, {
-    appId: 'app-1',
-    pagePath: ROOT_PAGE,
-    resourceBaseUrl: 'http://127.0.0.1:65535/',
-  }) as SpawnResult
-  const serviceWc = fakes.windows[fakes.windows.length - 1]!.webContents
+  const { serviceWc, rootBridgeId, rootRenderWc, appSessionId, newBridgeId, newRenderWc } =
+    await spawnRootAndOpenSecond(simulatorWc, 'app-1')
 
-  const opened = await invokeHandler(C.PAGE_OPEN, simulatorWc, {
-    appSessionId: spawn.appSessionId,
-    pagePath: DETAIL_PAGE,
-  }) as PageOpenResult
+  emitSync(C.ACTIVE_PAGE, simulatorWc, { appSessionId, bridgeId: newBridgeId })
 
-  // Each render guest announces itself on its own channel, which is what binds
-  // its webContents to the page session.
-  const rootRenderWc = fakes.makeWc()
-  const detailRenderWc = fakes.makeWc()
-  for (const [wc, bridgeId] of [[rootRenderWc, spawn.bridgeId], [detailRenderWc, opened.bridgeId]] as const) {
-    emitSync(C.RENDER_INVOKE, wc, {
-      bridgeId,
-      msg: { type: 'renderHostReady', target: 'container', body: { bridgeId } },
-    })
-  }
-
-  emitSync(C.ACTIVE_PAGE, simulatorWc, {
-    appSessionId: spawn.appSessionId,
-    bridgeId: opened.bridgeId,
-  })
-
-  return {
-    simulatorWc,
-    serviceWc,
-    rootBridgeId: spawn.bridgeId,
-    rootRenderWc,
-    detailBridgeId: opened.bridgeId,
-    detailRenderWc,
-  }
+  return { simulatorWc, serviceWc, rootBridgeId, rootRenderWc, detailBridgeId: newBridgeId, detailRenderWc: newRenderWc }
 }
 
 /** Close the session's root page through the simulator's own PAGE_CLOSE — the teardown reLaunch/redirectTo/switchTab reach. */
 function closeRootPage(s: Session): void {
   emitSync(C.PAGE_CLOSE, s.simulatorWc, { bridgeId: s.rootBridgeId })
+}
+
+/** The render guest's self-announcement that binds its webContents to a page session. */
+function announceRenderGuest(wc: FakeWc, bridgeId: string): void {
+  emitSync(C.RENDER_INVOKE, wc, {
+    bridgeId,
+    msg: { type: 'renderHostReady', target: 'container', body: { bridgeId } },
+  })
 }
 
 interface RootOnlySession {
@@ -302,50 +280,75 @@ interface RootOnlySession {
   rootRenderWc: FakeWc
 }
 
-/** A fresh session with only its root page, root render guest bound, no navigation and no ACTIVE_PAGE report yet. */
-async function bootRootOnlySession(appId = 'app-1'): Promise<RootOnlySession> {
-  const { ctx, simulatorWc } = makeCtx()
-  installBridgeRouter(ctx)
-
+/** Spawns appId's root page on an already-installed router, with its render guest bound. */
+async function spawnRoot(simulatorWc: FakeWc, appId: string): Promise<Omit<RootOnlySession, 'simulatorWc'> & { appSessionId: string }> {
   const spawn = await invokeHandler(C.SPAWN, simulatorWc, {
     appId,
     pagePath: ROOT_PAGE,
     resourceBaseUrl: 'http://127.0.0.1:65535/',
   }) as SpawnResult
   const serviceWc = fakes.windows[fakes.windows.length - 1]!.webContents
-
   const rootRenderWc = fakes.makeWc()
-  emitSync(C.RENDER_INVOKE, rootRenderWc, {
-    bridgeId: spawn.bridgeId,
-    msg: { type: 'renderHostReady', target: 'container', body: { bridgeId: spawn.bridgeId } },
-  })
+  announceRenderGuest(rootRenderWc, spawn.bridgeId)
+  return { serviceWc, rootBridgeId: spawn.bridgeId, rootRenderWc, appSessionId: spawn.appSessionId }
+}
 
-  return { simulatorWc, serviceWc, rootBridgeId: spawn.bridgeId, rootRenderWc }
+/** spawnRoot, then navigates to a second page with its own render guest bound — no ACTIVE_PAGE report yet. */
+async function spawnRootAndOpenSecond(
+  simulatorWc: FakeWc,
+  appId: string,
+): Promise<Omit<RootOnlySession, 'simulatorWc'> & { appSessionId: string; newBridgeId: string; newRenderWc: FakeWc }> {
+  const root = await spawnRoot(simulatorWc, appId)
+  const opened = await invokeHandler(C.PAGE_OPEN, simulatorWc, {
+    appSessionId: root.appSessionId,
+    pagePath: DETAIL_PAGE,
+  }) as PageOpenResult
+  const newRenderWc = fakes.makeWc()
+  announceRenderGuest(newRenderWc, opened.bridgeId)
+  return { ...root, newBridgeId: opened.bridgeId, newRenderWc }
+}
+
+/** A fresh session with only its root page, root render guest bound, no navigation and no ACTIVE_PAGE report yet. */
+async function bootRootOnlySession(appId = 'app-1'): Promise<RootOnlySession> {
+  const { ctx, simulatorWc } = makeCtx()
+  installBridgeRouter(ctx)
+  return { simulatorWc, ...await spawnRoot(simulatorWc, appId) }
 }
 
 /** Two independent app sessions sharing one simulator webview, each with only its root page. */
 async function bootTwoIndependentSessions(): Promise<{ a: RootOnlySession; b: RootOnlySession }> {
   const { ctx, simulatorWc } = makeCtx()
   installBridgeRouter(ctx)
-
-  const spawnOne = async (appId: string): Promise<RootOnlySession> => {
-    const spawn = await invokeHandler(C.SPAWN, simulatorWc, {
-      appId,
-      pagePath: ROOT_PAGE,
-      resourceBaseUrl: 'http://127.0.0.1:65535/',
-    }) as SpawnResult
-    const serviceWc = fakes.windows[fakes.windows.length - 1]!.webContents
-    const rootRenderWc = fakes.makeWc()
-    emitSync(C.RENDER_INVOKE, rootRenderWc, {
-      bridgeId: spawn.bridgeId,
-      msg: { type: 'renderHostReady', target: 'container', body: { bridgeId: spawn.bridgeId } },
-    })
-    return { simulatorWc, serviceWc, rootBridgeId: spawn.bridgeId, rootRenderWc }
-  }
-
-  const a = await spawnOne('app-1')
-  const b = await spawnOne('app-2')
+  const a = { simulatorWc, ...await spawnRoot(simulatorWc, 'app-1') }
+  const b = { simulatorWc, ...await spawnRoot(simulatorWc, 'app-2') }
   return { a, b }
+}
+
+interface ReLaunchGapSession {
+  serviceWc: FakeWc
+  rootRenderWc: FakeWc
+  newBridgeId: string
+  newRenderWc: FakeWc
+}
+
+/**
+ * A session mid-reLaunch: the old root and a newly opened page both have live
+ * render guests, but root has just closed and the shell has not yet reported
+ * the new page as ACTIVE_PAGE. PAGE_CLOSE refuses to close a session's sole
+ * page (that is DISPOSE's job), so this gap only exists once a second page is
+ * already open to close root against — the same shape reLaunch produces
+ * before the shell catches up.
+ */
+async function bootReLaunchGapSession(): Promise<ReLaunchGapSession> {
+  const { ctx, simulatorWc } = makeCtx()
+  installBridgeRouter(ctx)
+
+  const { serviceWc, rootBridgeId, rootRenderWc, newBridgeId, newRenderWc } =
+    await spawnRootAndOpenSecond(simulatorWc, 'app-1')
+
+  emitSync(C.PAGE_CLOSE, simulatorWc, { bridgeId: rootBridgeId })
+
+  return { serviceWc, rootRenderWc, newBridgeId, newRenderWc }
 }
 
 beforeEach(() => {
@@ -423,15 +426,19 @@ describe('service→container messages after the session root page is gone', () 
   })
 })
 
+// Every case below drives the same pageScrollTo call; only who it should
+// reach (or whether it should reach anyone) varies.
+const SCROLL_PARAMS = { scrollTop: 40, success: 'cb-success', complete: 'cb-complete' }
+const SCROLL_OK_CALLBACKS = [
+  { id: 'cb-success', args: { errMsg: 'pageScrollTo:ok' } },
+  { id: 'cb-complete', args: { errMsg: 'pageScrollTo:ok' } },
+]
+
 describe('service→container routing: msg.body.bridgeId vs. the session’s reported top of stack', () => {
   it('routes to the page msg.body.bridgeId names even when another page is the reported top', async () => {
     const s = await bootTwoPageSession() // ACTIVE_PAGE already reports detail as top
 
-    serviceInvokeApi(s.serviceWc, {
-      bridgeId: s.rootBridgeId,
-      name: 'pageScrollTo',
-      params: { scrollTop: 40, success: 'cb-success', complete: 'cb-complete' },
-    })
+    serviceInvokeApi(s.serviceWc, { bridgeId: s.rootBridgeId, name: 'pageScrollTo', params: SCROLL_PARAMS })
 
     expect(s.rootRenderWc.executeJavaScript).toHaveBeenCalledTimes(1)
     expect(s.detailRenderWc.executeJavaScript).not.toHaveBeenCalled()
@@ -441,119 +448,48 @@ describe('service→container routing: msg.body.bridgeId vs. the session’s rep
     const s = await bootTwoPageSession()
     closeRootPage(s) // root is gone; ACTIVE_PAGE already named detail as top
 
-    serviceInvokeApi(s.serviceWc, {
-      bridgeId: s.rootBridgeId, // stale: this page no longer exists
-      name: 'pageScrollTo',
-      params: { scrollTop: 40, success: 'cb-success', complete: 'cb-complete' },
-    })
+    // bridgeId names a page that no longer exists.
+    serviceInvokeApi(s.serviceWc, { bridgeId: s.rootBridgeId, name: 'pageScrollTo', params: SCROLL_PARAMS })
 
     expect(s.detailRenderWc.executeJavaScript).toHaveBeenCalledTimes(1)
-    expect(serviceCallbacks(s.serviceWc)).toEqual([
-      { id: 'cb-success', args: { errMsg: 'pageScrollTo:ok' } },
-      { id: 'cb-complete', args: { errMsg: 'pageScrollTo:ok' } },
-    ])
+    expect(serviceCallbacks(s.serviceWc)).toEqual(SCROLL_OK_CALLBACKS)
   })
 
   it('routes an unnamed call to the root page while the shell has never reported ACTIVE_PAGE', async () => {
     const s = await bootRootOnlySession()
 
-    serviceInvokeApi(s.serviceWc, {
-      name: 'pageScrollTo',
-      params: { scrollTop: 40, success: 'cb-success', complete: 'cb-complete' },
-    })
+    serviceInvokeApi(s.serviceWc, { name: 'pageScrollTo', params: SCROLL_PARAMS })
 
     expect(s.rootRenderWc.executeJavaScript).toHaveBeenCalledTimes(1)
-    expect(serviceCallbacks(s.serviceWc)).toEqual([
-      { id: 'cb-success', args: { errMsg: 'pageScrollTo:ok' } },
-      { id: 'cb-complete', args: { errMsg: 'pageScrollTo:ok' } },
-    ])
+    expect(serviceCallbacks(s.serviceWc)).toEqual(SCROLL_OK_CALLBACKS)
   })
 
   it('drops an unnamed call without throwing once the root is gone and no new top has been reported', async () => {
-    // PAGE_CLOSE refuses to close a session's sole page (that is DISPOSE's
-    // job), so this gap only exists once a second page exists to close root
-    // against — the same shape reLaunch produces before the shell catches up.
-    const { ctx, simulatorWc } = makeCtx()
-    installBridgeRouter(ctx)
+    const s = await bootReLaunchGapSession()
 
-    const spawn = await invokeHandler(C.SPAWN, simulatorWc, {
-      appId: 'app-1',
-      pagePath: ROOT_PAGE,
-      resourceBaseUrl: 'http://127.0.0.1:65535/',
-    }) as SpawnResult
-    const serviceWc = fakes.windows[fakes.windows.length - 1]!.webContents
+    expect(() => serviceInvokeApi(s.serviceWc, { name: 'pageScrollTo', params: SCROLL_PARAMS })).not.toThrow()
 
-    await invokeHandler(C.PAGE_OPEN, simulatorWc, {
-      appSessionId: spawn.appSessionId,
-      pagePath: DETAIL_PAGE,
-    })
-
-    const rootRenderWc = fakes.makeWc()
-    emitSync(C.RENDER_INVOKE, rootRenderWc, {
-      bridgeId: spawn.bridgeId,
-      msg: { type: 'renderHostReady', target: 'container', body: { bridgeId: spawn.bridgeId } },
-    })
-
-    // Root closes; the shell never reported the new page as ACTIVE_PAGE.
-    emitSync(C.PAGE_CLOSE, simulatorWc, { bridgeId: spawn.bridgeId })
-
-    expect(() => serviceInvokeApi(serviceWc, {
-      name: 'pageScrollTo',
-      params: { scrollTop: 40, success: 'cb-success', complete: 'cb-complete' },
-    })).not.toThrow()
-
-    expect(rootRenderWc.executeJavaScript).not.toHaveBeenCalled()
-    expect(serviceCallbacks(serviceWc)).toEqual([])
+    expect(s.rootRenderWc.executeJavaScript).not.toHaveBeenCalled()
+    expect(s.newRenderWc.executeJavaScript).not.toHaveBeenCalled()
+    expect(serviceCallbacks(s.serviceWc)).toEqual([])
   })
 
   it('routes to a page already open but not yet reported active, in the reLaunch gap after the old root closes', async () => {
-    const { ctx, simulatorWc } = makeCtx()
-    installBridgeRouter(ctx)
+    const s = await bootReLaunchGapSession()
 
-    const spawn = await invokeHandler(C.SPAWN, simulatorWc, {
-      appId: 'app-1',
-      pagePath: ROOT_PAGE,
-      resourceBaseUrl: 'http://127.0.0.1:65535/',
-    }) as SpawnResult
-    const serviceWc = fakes.windows[fakes.windows.length - 1]!.webContents
+    // An unnamed call would have nothing to fall back to here (see previous
+    // test) — naming the new page directly must still land.
+    serviceInvokeApi(s.serviceWc, { bridgeId: s.newBridgeId, name: 'pageScrollTo', params: SCROLL_PARAMS })
 
-    const opened = await invokeHandler(C.PAGE_OPEN, simulatorWc, {
-      appSessionId: spawn.appSessionId,
-      pagePath: DETAIL_PAGE,
-    }) as PageOpenResult
-
-    const newRenderWc = fakes.makeWc()
-    emitSync(C.RENDER_INVOKE, newRenderWc, {
-      bridgeId: opened.bridgeId,
-      msg: { type: 'renderHostReady', target: 'container', body: { bridgeId: opened.bridgeId } },
-    })
-
-    // reLaunch closes the launch page before the shell reports the new top —
-    // an unnamed call would have nothing to fall back to, but a call naming
-    // the new page directly must still land.
-    emitSync(C.PAGE_CLOSE, simulatorWc, { bridgeId: spawn.bridgeId })
-
-    serviceInvokeApi(serviceWc, {
-      bridgeId: opened.bridgeId,
-      name: 'pageScrollTo',
-      params: { scrollTop: 40, success: 'cb-success', complete: 'cb-complete' },
-    })
-
-    expect(newRenderWc.executeJavaScript).toHaveBeenCalledTimes(1)
-    expect(serviceCallbacks(serviceWc)).toEqual([
-      { id: 'cb-success', args: { errMsg: 'pageScrollTo:ok' } },
-      { id: 'cb-complete', args: { errMsg: 'pageScrollTo:ok' } },
-    ])
+    expect(s.newRenderWc.executeJavaScript).toHaveBeenCalledTimes(1)
+    expect(serviceCallbacks(s.serviceWc)).toEqual(SCROLL_OK_CALLBACKS)
   })
 
   it('does not resolve a bridgeId that belongs to another app session', async () => {
     const { a, b } = await bootTwoIndependentSessions()
 
-    serviceInvokeApi(a.serviceWc, {
-      bridgeId: b.rootBridgeId, // names a real page, but in the other session
-      name: 'pageScrollTo',
-      params: { scrollTop: 40, success: 'cb-success', complete: 'cb-complete' },
-    })
+    // b.rootBridgeId names a real page, but in the other session.
+    serviceInvokeApi(a.serviceWc, { bridgeId: b.rootBridgeId, name: 'pageScrollTo', params: SCROLL_PARAMS })
 
     expect(a.rootRenderWc.executeJavaScript).toHaveBeenCalledTimes(1)
     expect(b.rootRenderWc.executeJavaScript).not.toHaveBeenCalled()
