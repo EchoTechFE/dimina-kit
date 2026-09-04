@@ -1,4 +1,4 @@
-import type { CompileConfig, Project, ProjectType } from '@/shared/types'
+import type { CompileModes, Project, ProjectType } from '@/shared/types'
 import type { NativeDeviceInfo } from '../../../shared/ipc-channels'
 import {
   SimulatorChannel,
@@ -18,16 +18,24 @@ import type { ProjectTemplateInfo } from './project-api'
 export interface PopoverInitPayload {
   top: number
   left: number
-  config: CompileConfig
+  /** The project's compile modes and which one is selected. */
+  modes: CompileModes
+  /** Every page path in the project, for the 启动页面 picker. */
   pages: string[]
+  /**
+   * What 普通编译 launches — shown as its subtitle so the fixed entry is not
+   * an unexplained label, and used as the default start page for a new mode.
+   */
+  entryPagePath: string
+  /**
+   * The simulator's currently visible route (`pagePath?query`), or `''` when
+   * nothing is running. Backs 以当前页面新建编译模式.
+   */
+  currentRoute: string
 }
 
-export interface PopoverShowPayload {
-  top: number
-  left: number
-  config: CompileConfig
-  pages: string[]
-}
+/** The popover is fed the same payload whether it is created or re-shown. */
+export type PopoverShowPayload = PopoverInitPayload
 
 /**
  * Ask main to create the simulator as a top-level WebContentsView loading
@@ -189,11 +197,14 @@ export function onPopoverInit(
   return on<[PopoverInitPayload]>(PopoverChannel.Init, (payload) => handler(payload))
 }
 
-/** Listen for popover-relaunch broadcasts emitted by the main process. */
-export function onPopoverRelaunch(
-  handler: (config: CompileConfig) => void,
+/** Listen for compile-mode edits the popover applied, forwarded by main. */
+export function onPopoverApply(
+  handler: (payload: { modes: CompileModes; relaunch: boolean }) => void,
 ): () => void {
-  return on<[CompileConfig]>(PopoverChannel.Relaunch, (config) => handler(config))
+  return on<[{ modes: CompileModes; relaunch: boolean }]>(
+    PopoverChannel.Apply,
+    (payload) => handler(payload),
+  )
 }
 
 /** Listen for the back-to-project-list navigation event from the app menu. */

@@ -3,7 +3,8 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { ProjectsChannel, SimulatorChannel } from '../src/shared/ipc-channels'
+import { ProjectsChannel, ProjectChannel, SimulatorChannel } from '../src/shared/ipc-channels'
+import { PopoverChannel } from '../src/shared/ipc-channels-overlays'
 import { DMB_PAGEFRAME_DOC_NAME } from '../src/shared/dmb-resource-url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -690,4 +691,281 @@ export async function resetSimulatorState(
   } catch {
     // Best-effort reset must never block the next test.
   }
+}
+
+// ── Compile-mode popover helpers ───────────────────────────────────────
+//
+// The compile-mode popover is a SEPARATE top-level WebContents (see
+// overlay-panels-view.ts, loads `entries/popover/index.html`) — not part of
+// the main window DOM, so every interaction below runs script inside that
+// WebContents via `electronApp.evaluate`, following the same
+// `getAllWebContents()` + `executeJavaScript` range already used by
+// `recompile-button-recompiles.spec.ts` / `relaunch-resilience.spec.ts`.
+
+/** Resolve the popover WebContents id once it exists and has finished loading. */
+export async function findPopoverWebContentsId(
+  electronApp: ElectronApplication,
+  timeout = 10000,
+): Promise<number> {
+  const id = await pollUntil(
+    () => electronApp.evaluate(({ webContents }) => {
+      const wc = webContents.getAllWebContents().find((w) => w.getURL().includes('entries/popover'))
+      return wc && !wc.isLoading() ? wc.id : 0
+    }),
+    (v) => v > 0,
+    timeout,
+    200,
+  )
+  if (!id) throw new Error('compile-mode popover webContents not found')
+  return id
+}
+
+/** Run `expression` inside the (already-open) compile-mode popover. */
+export async function evalInPopover<T = unknown>(
+  electronApp: ElectronApplication,
+  expression: string,
+): Promise<T> {
+  const wcId = await findPopoverWebContentsId(electronApp)
+  return electronApp.evaluate(async ({ webContents }, args) => {
+    const wc = webContents.fromId(args.wcId)
+    if (!wc) throw new Error('popover webContents vanished mid-interaction')
+    return wc.executeJavaScript(args.expression)
+  }, { wcId, expression }) as Promise<T>
+}
+
+/**
+ * Click the toolbar button that opens the compile-mode popover (it shows the
+ * selected mode's own name, so the pattern must match whatever is currently
+ * selected — default is 普通编译) and wait for the popover WCV to mount.
+ */
+export async function openCompileModePopover(
+  workbench: Page,
+  electronApp: ElectronApplication,
+  labelPattern: RegExp = /普通编译/,
+): Promise<void> {
+  await workbench.getByRole('button', { name: labelPattern }).click()
+  await findPopoverWebContentsId(electronApp)
+}
+
+/** Close the popover without applying anything (same channel the backdrop click uses). */
+export async function closeCompileModePopover(workbench: Page): Promise<void> {
+  await ipcInvoke(workbench, PopoverChannel.Hide)
+}
+
+/**
+ * The compile-mode toolbar button. Its accessible name is whichever mode is
+ * selected, so it can't be located by a fixed name; `data-active` is shared
+ * by every toggle in `layout-controls.tsx` plus the dock tabs and would trip
+ * strict mode. `[data-testid]` is the stable handle.
+ */
+export function compileModeToolbarButton(workbench: Page) {
+  return workbench.getByTestId('compile-mode-button')
+}
+
+/** Read the toolbar's compile-mode button text (its label reflects the selected mode). */
+export async function readCompileModeToolbarLabel(workbench: Page): Promise<string> {
+  return compileModeToolbarButton(workbench).innerText()
+}
+
+/**
+ * Native-setter trick so a React-controlled `<input>` observes the write:
+ * assigning `.value` directly skips the tracker React installs on the
+ * element's own value setter, so `onChange` never fires without it.
+ */
+const SET_NATIVE_VALUE_JS = `
+  function __dkSetNativeValue(el, value) {
+    const proto = Object.getPrototypeOf(el)
+    const desc = Object.getOwnPropertyDescriptor(proto, 'value')
+    if (desc && desc.set) { desc.set.call(el, value) } else { el.value = value }
+    el.dispatchEvent(new Event('input', { bubbles: true }))
+  }
+`
+
+/**
+ * Press a control the way a mouse does: pointer/mouse down, up, then click.
+ *
+ * `el.click()` fires the click event ALONE. That is enough for a plain
+ * `<button onClick>`, but design-system controls act on the earlier events —
+ * Radix's tab trigger switches on `mousedown` (and on focus) and never looks at
+ * `click` — so a bare `.click()` silently does nothing and the failure surfaces
+ * later as "the field is still in the other view".
+ */
+const PRESS_JS = `
+  function __dkPress(el) {
+    const opts = { bubbles: true, cancelable: true, button: 0, composed: true }
+    el.dispatchEvent(new PointerEvent('pointerdown', opts))
+    el.dispatchEvent(new MouseEvent('mousedown', opts))
+    if (typeof el.focus === 'function') el.focus()
+    el.dispatchEvent(new PointerEvent('pointerup', opts))
+    el.dispatchEvent(new MouseEvent('mouseup', opts))
+    el.click()
+  }
+`
+
+/**
+ * Locate a compile-mode editor field by its `data-field` key rather than its
+ * caption or its layout classes — the caption is user-facing copy and the
+ * layout is design-system markup, so both change without the contract changing.
+ */
+const FIELD_BY_LABEL_JS = `
+  function __dkField(fieldKey) {
+    const field = document.querySelector('[data-testid="compile-mode-field"][data-field="' + fieldKey + '"]')
+    if (!field) throw new Error('compile-mode field not found: ' + fieldKey)
+    return field
+  }
+`
+
+/** Click a menu row's own SELECTING button (not its pencil) by the row's visible label. */
+export async function clickCompileModeMenuRow(electronApp: ElectronApplication, label: string): Promise<void> {
+  await evalInPopover(electronApp, `${PRESS_JS}(() => {
+    const target = document.querySelector('[data-testid="compile-mode-row"][data-mode-label=${JSON.stringify(label)}]')
+    if (!target) throw new Error('menu row not found: ' + ${JSON.stringify(label)})
+    __dkPress(target)
+  })()`)
+}
+
+/** Click a custom mode's pencil (edit) button by the row's visible label. */
+export async function clickCompileModeMenuEdit(electronApp: ElectronApplication, label: string): Promise<void> {
+  await evalInPopover(electronApp, `${PRESS_JS}(() => {
+    const target = document.querySelector('button[aria-label=${JSON.stringify(`编辑 ${label}`)}]')
+    if (!target) throw new Error('edit button not found for: ' + ${JSON.stringify(label)})
+    __dkPress(target)
+  })()`)
+}
+
+/** Click "添加编译模式" or "以当前页面新建" in the menu. */
+export async function clickCompileModeMenuAction(
+  electronApp: ElectronApplication,
+  label: '添加编译模式' | '以当前页面新建',
+): Promise<void> {
+  await evalInPopover(electronApp, `${PRESS_JS}(() => {
+    const buttons = Array.from(document.querySelectorAll('button'))
+    const target = buttons.find((b) => (b.textContent || '').trim() === ${JSON.stringify(label)})
+    if (!target) throw new Error('action row not found: ' + ${JSON.stringify(label)})
+    if (target.disabled) throw new Error('action row is disabled: ' + ${JSON.stringify(label)})
+    __dkPress(target)
+  })()`)
+}
+
+/** Read every mode row's visible label currently listed in the menu (普通编译 excluded). */
+export async function readCompileModeMenuLabels(electronApp: ElectronApplication): Promise<string[]> {
+  return evalInPopover(electronApp, `(() => {
+    return Array.from(document.querySelectorAll('button[aria-label^="编辑 "]'))
+      .map((b) => b.getAttribute('aria-label').slice('编辑 '.length))
+  })()`)
+}
+
+export interface CompileModeFormFill {
+  name?: string
+  pathName?: string
+  scene?: number | null
+}
+
+/** Fill the plain fields of an already-open compile-mode form. Only provided fields are touched. */
+export async function fillCompileModeForm(electronApp: ElectronApplication, fill: CompileModeFormFill): Promise<void> {
+  if (fill.name !== undefined) {
+    await evalInPopover(electronApp, `${SET_NATIVE_VALUE_JS}${FIELD_BY_LABEL_JS}
+      __dkSetNativeValue(__dkField('name').querySelector('input'), ${JSON.stringify(fill.name)})
+    `)
+  }
+  if (fill.pathName !== undefined) {
+    await evalInPopover(electronApp, `${FIELD_BY_LABEL_JS}(() => {
+      const select = __dkField('pathName').querySelector('select')
+      const value = ${JSON.stringify(fill.pathName)}
+      if (!Array.from(select.options).some((o) => o.value === value)) {
+        throw new Error('启动页面 option not found: ' + value)
+      }
+      select.value = value
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })()`)
+  }
+  if (fill.scene !== undefined) {
+    const raw = fill.scene === null ? '' : String(fill.scene)
+    await evalInPopover(electronApp, `${SET_NATIVE_VALUE_JS}${FIELD_BY_LABEL_JS}
+      __dkSetNativeValue(__dkField('scene').querySelector('input'), ${JSON.stringify(raw)})
+    `)
+  }
+}
+
+/** Read the compile-mode editor's current 启动页面 select value. */
+export async function readCompileModeFormPathName(electronApp: ElectronApplication): Promise<string> {
+  return evalInPopover(electronApp, `${FIELD_BY_LABEL_JS}
+    __dkField('pathName').querySelector('select').value
+  `)
+}
+
+/** Switch the 启动参数 field between 逐条 (rows) and 原始串 (raw) view. */
+export async function setCompileModeParamView(
+  electronApp: ElectronApplication,
+  view: '逐条' | '原始串',
+): Promise<void> {
+  await evalInPopover(electronApp, `${PRESS_JS}${FIELD_BY_LABEL_JS}(() => {
+    const field = __dkField('params')
+    const btn = Array.from(field.querySelectorAll('button')).find((b) => b.textContent.trim() === ${JSON.stringify(view)})
+    if (!btn) throw new Error('${view} toggle not found')
+    __dkPress(btn)
+  })()`)
+}
+
+/** Read the 原始串 input's current value — the field must already be in 原始串 view. */
+export async function readCompileModeQueryRaw(electronApp: ElectronApplication): Promise<string> {
+  return evalInPopover(electronApp, `${FIELD_BY_LABEL_JS}(() => {
+    const input = __dkField('params').querySelector('input')
+    if (!input) throw new Error('启动参数 raw input not found — field may be in 逐条 view')
+    return input.value
+  })()`)
+}
+
+/** Set the 原始串 input's value directly — the field must already be in 原始串 view. */
+export async function setCompileModeQueryRaw(electronApp: ElectronApplication, value: string): Promise<void> {
+  await evalInPopover(electronApp, `${SET_NATIVE_VALUE_JS}${FIELD_BY_LABEL_JS}(() => {
+    const input = __dkField('params').querySelector('input')
+    if (!input) throw new Error('启动参数 raw input not found — field may be in 逐条 view')
+    __dkSetNativeValue(input, ${JSON.stringify(value)})
+  })()`)
+}
+
+/** Edit one row's key or value input in the 逐条 view — the field must already be in that view. */
+export async function editCompileModeParamRow(
+  electronApp: ElectronApplication,
+  rowIndex: number,
+  field: 'key' | 'value',
+  value: string,
+): Promise<void> {
+  await evalInPopover(electronApp, `${SET_NATIVE_VALUE_JS}${FIELD_BY_LABEL_JS}(() => {
+    const rows = __dkField('params').querySelectorAll('[data-testid="compile-mode-param-row"]')
+    const row = rows[${rowIndex}]
+    if (!row) throw new Error('参数行 not found at index ${rowIndex}')
+    const inputs = row.querySelectorAll('input')
+    const input = ${field === 'key' ? 'inputs[0]' : 'inputs[1]'}
+    if (!input) throw new Error('参数行 ${field} input not found at index ${rowIndex}')
+    __dkSetNativeValue(input, ${JSON.stringify(value)})
+  })()`)
+}
+
+/** Click 保存 in the compile-mode editor. */
+export async function submitCompileModeForm(electronApp: ElectronApplication): Promise<void> {
+  await evalInPopover(electronApp, `${PRESS_JS}(() => {
+    const target = Array.from(document.querySelectorAll('button')).find((b) => b.textContent.trim() === '保存')
+    if (!target) throw new Error('保存 button not found')
+    __dkPress(target)
+  })()`)
+}
+
+/** Click 取消 in the compile-mode editor — returns to the menu without applying. */
+export async function cancelCompileModeForm(electronApp: ElectronApplication): Promise<void> {
+  await evalInPopover(electronApp, `${PRESS_JS}(() => {
+    const target = Array.from(document.querySelectorAll('button')).find((b) => b.textContent.trim() === '取消')
+    if (!target) throw new Error('取消 button not found')
+    __dkPress(target)
+  })()`)
+}
+
+/** Click 删除模式 in the compile-mode editor (present only when editing an existing mode). */
+export async function deleteCompileModeForm(electronApp: ElectronApplication): Promise<void> {
+  await evalInPopover(electronApp, `${PRESS_JS}(() => {
+    const target = Array.from(document.querySelectorAll('button')).find((b) => b.textContent.trim() === '删除模式')
+    if (!target) throw new Error('删除模式 button not found')
+    __dkPress(target)
+  })()`)
 }

@@ -24,18 +24,29 @@ import {
   evalInWebContentsByUrl,
   RENDER_GUEST_URL_MARKER,
   findMainWindow,
+  openCompileModePopover,
+  clickCompileModeMenuRow,
+  clickCompileModeMenuAction,
+  fillCompileModeForm,
+  submitCompileModeForm,
 } from './helpers'
 import { AutomationChannel, WorkbenchSettingsChannel } from '../src/shared/ipc-channels'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURE_DIR = path.resolve(__dirname, 'fixtures', 'tabbar-app')
 const HOME_WXML = path.join(FIXTURE_DIR, 'pages', 'home', 'home.wxml')
+const PROJECT_CONFIG_PATH = path.join(FIXTURE_DIR, 'project.config.json')
 const SENTINEL = 'RECOMPILE-BUTTON-SENTINEL'
 
 let electronApp: ElectronApplication
 let mainWindow: PwPage
 let workbench: PwPage
 let originalWxml = ''
+// The popover now persists compile modes to project.config.json on every
+// apply — even reselecting 普通编译 writes an (empty) modes list — so this
+// git-tracked fixture (unlike the per-worker DEMO_APP_DIR) needs the same
+// snapshot/restore hygiene as the wxml sentinel edit below.
+let originalProjectConfig = ''
 let autoPort = 0
 
 function wsCall<T = Record<string, unknown>>(
@@ -75,68 +86,29 @@ async function readActivePageText(): Promise<string> {
 }
 
 /**
- * Open the compile popover and click "重新编译" inside it. The popover is a
- * SEPARATE top-level WebContents (see overlay-panels-view.ts, loads
- * `entries/popover/index.html`) — it is not part of the main window DOM, so
- * the button must be found and clicked via `electronApp.evaluate` against
- * that WebContents specifically.
+ * Reproduce "unchanged start page, force a real recompile" — the popover no
+ * longer has an inline 重新编译 button; instead `handleSelect` in popover.tsx
+ * always sends `relaunch: true`, even when reselecting the row that is
+ * already current. Re-clicking 普通编译 while it is selected therefore
+ * triggers the same recompile+relaunch-at-entry-page contract the old
+ * button did, without creating any custom mode.
  */
-async function clickRecompileInPopover(startPage?: string): Promise<void> {
-  const compileDropdown = workbench.getByRole('button', { name: /普通编译/ })
-  await compileDropdown.waitFor({ timeout: 10000 })
-  await compileDropdown.click()
+async function reselectNormalCompileInPopover(): Promise<void> {
+  await openCompileModePopover(workbench, electronApp)
+  await clickCompileModeMenuRow(electronApp, '普通编译')
+}
 
-  await pollUntil(
-    () => electronApp.evaluate(async ({ webContents }) => {
-      const popover = webContents.getAllWebContents().find((wc) => wc.getURL().includes('entries/popover'))
-      if (!popover || popover.isLoading()) return false
-      return popover.executeJavaScript(`
-        Array.from(document.querySelectorAll('button'))
-          .some((button) => (button.textContent || '').includes('重新编译'))
-      `).catch(() => false)
-    }),
-    (ready) => ready === true,
-    10000,
-    200,
-  )
-
-  if (startPage) {
-    await electronApp.evaluate(async ({ webContents }, selectedStartPage) => {
-      const popover = webContents.getAllWebContents().find((wc) => wc.getURL().includes('entries/popover'))
-      if (!popover) throw new Error('popover webContents not found')
-      await popover.executeJavaScript(`
-        (() => {
-          const select = document.querySelector('select')
-          if (!select) throw new Error('启动页面 select not found in popover')
-          const startPage = ${JSON.stringify(selectedStartPage)}
-          if (!Array.from(select.options).some((option) => option.value === startPage)) {
-            throw new Error('启动页面 option not found: ' + startPage)
-          }
-          select.value = startPage
-          select.dispatchEvent(new Event('change', { bubbles: true }))
-          return select.value
-        })()
-      `)
-    }, startPage)
-
-    // React applies the controlled Select update asynchronously. Click in a
-    // separate task so handleRelaunch observes the new config, matching a real
-    // user selecting a compile mode before pressing 重新编译.
-    await new Promise((resolve) => setTimeout(resolve, 100))
-  }
-
-  await electronApp.evaluate(async ({ webContents }) => {
-    const popover = webContents.getAllWebContents().find((wc) => wc.getURL().includes('entries/popover'))
-    if (!popover) throw new Error('popover webContents not found')
-    await popover.executeJavaScript(`
-      (() => {
-        const buttons = Array.from(document.querySelectorAll('button'))
-        const target = buttons.find((b) => (b.textContent || '').includes('重新编译'))
-        if (!target) throw new Error('重新编译 button not found in popover')
-        target.click()
-      })()
-    `)
-  })
+/**
+ * Reproduce "pick a different start page, then trigger 重新编译" — the new
+ * popover collapses that into one action: creating a mode always relaunches
+ * (`upsertCompileMode` with `index: null`), so filling and submitting the
+ * "添加编译模式" form both selects the page AND fires the same real recompile.
+ */
+async function createAndLaunchCompileMode(pathName: string): Promise<void> {
+  await openCompileModePopover(workbench, electronApp)
+  await clickCompileModeMenuAction(electronApp, '添加编译模式')
+  await fillCompileModeForm(electronApp, { pathName })
+  await submitCompileModeForm(electronApp)
 }
 
 test.describe('popover 重新编译 rebuilds and relaunches at the selected start page', () => {
@@ -145,6 +117,7 @@ test.describe('popover 重新编译 rebuilds and relaunches at the selected star
 
   test.beforeAll(async () => {
     originalWxml = fs.readFileSync(HOME_WXML, 'utf8')
+    originalProjectConfig = fs.readFileSync(PROJECT_CONFIG_PATH, 'utf8')
     const appPath = path.resolve(__dirname, 'electron-entry.js')
     const userDataDir = path.resolve(
       process.env.DIMINA_DEVTOOLS_DATA_DIR
@@ -210,6 +183,7 @@ test.describe('popover 重新编译 rebuilds and relaunches at the selected star
 
   test.afterAll(async () => {
     fs.writeFileSync(HOME_WXML, originalWxml)
+    fs.writeFileSync(PROJECT_CONFIG_PATH, originalProjectConfig)
     await closeProject(electronApp).catch(() => {})
     await electronApp?.close().catch(() => {})
   })
@@ -240,9 +214,9 @@ test.describe('popover 重新编译 rebuilds and relaunches at the selected star
       'autoBuild is off — the sentinel must NOT appear without an explicit recompile',
     ).toBe(false)
 
-    // ── Click 重新编译 in the popover — this must trigger a REAL recompile,
+    // ── Reselect 普通编译 in the popover — this must trigger a REAL recompile,
     // not just a reattach to the stale build. ────────────────────────────────
-    await clickRecompileInPopover()
+    await reselectNormalCompileInPopover()
 
     const afterRecompile = await pollUntil(
       () => readActivePageText(),
@@ -273,7 +247,7 @@ test.describe('popover 重新编译 rebuilds and relaunches at the selected star
     )
     expect(before).toContain('HOME PAGE')
 
-    await clickRecompileInPopover('pages/cart/cart')
+    await createAndLaunchCompileMode('pages/cart/cart')
 
     const routeAfter = await pollUntil(
       () => wsCall<{ path?: string }>('App.getCurrentPage').catch(() => null),

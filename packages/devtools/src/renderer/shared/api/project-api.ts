@@ -1,4 +1,4 @@
-import type { CompileConfig, Project, ProjectPatch } from '@/shared/types'
+import type { CompileConfig, CompileModes, Project, ProjectPatch } from '@/shared/types'
 import type {
   CustomCreateProjectDialogResult,
   OpenEditProjectDialogReply,
@@ -111,6 +111,19 @@ export function saveCompileConfig(
   config: CompileConfig,
 ): Promise<void> {
   return invokeStrict<void>(ProjectChannel.SaveCompileConfig, projectPath, config)
+}
+
+/** Read the project's compile modes and which one is selected. */
+export function getCompileModes(projectPath: string): Promise<CompileModes> {
+  return invokeStrict<CompileModes>(ProjectChannel.GetCompileModes, projectPath)
+}
+
+/** Persist the project's compile modes and selection. */
+export function saveCompileModes(
+  projectPath: string,
+  modes: CompileModes,
+): Promise<void> {
+  return invokeStrict<void>(ProjectChannel.SaveCompileModes, projectPath, modes)
 }
 
 /**

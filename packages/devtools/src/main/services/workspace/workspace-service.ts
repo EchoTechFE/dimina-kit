@@ -1,4 +1,5 @@
-import type { AppInfo, CompileConfig, ProjectSession } from '../../../shared/types.js'
+import type { AppInfo, CompileConfig, CompileModes, ProjectSession } from '../../../shared/types.js'
+import { createCompileModeAdapter } from './compile-mode-adapter.js'
 import { rejectInvalidAppId, validateProjectDirSafe } from './open-project-guards.js'
 // eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
 import type { WorkbenchContext } from '../workbench-context.js'
@@ -10,7 +11,6 @@ import type {
   ProjectSettings,
 } from '../projects/project-repository.js'
 import type { ProjectPatch, ProjectsProvider } from '../projects/types.js'
-import { DEFAULT_COMPILE_CONFIG } from '../projects/types.js'
 import { applyRefererForSession, clearRefererForSession } from './workspace-referer.js'
 import { loadWorkbenchSettings } from '../settings/index.js'
 import { createOpLock } from './op-lock.js'
@@ -88,6 +88,8 @@ export interface WorkspaceService {
   getProjectPages(projectPath: string): ProjectPages
   getCompileConfig(projectPath: string): Promise<CompileConfig>
   saveCompileConfig(projectPath: string, config: CompileConfig): Promise<void>
+  getCompileModes(projectPath: string): Promise<CompileModes>
+  saveCompileModes(projectPath: string, modes: CompileModes): Promise<void>
   getProjectSettings(projectPath: string): ProjectSettings
   updateProjectSettings(
     projectPath: string,
@@ -467,17 +469,7 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
     // `getProjectPages` reads the project's own `app.json` from disk and is
     // independent of the project registry — it stays on the repo helper.
     getProjectPages: (projectPath) => repo.getProjectPages(projectPath),
-    getCompileConfig: async (projectPath) =>
-      (provider.getCompileConfig
-        ? await provider.getCompileConfig(projectPath)
-        : DEFAULT_COMPILE_CONFIG) as CompileConfig,
-    saveCompileConfig: async (projectPath, config) => {
-      if (provider.saveCompileConfig) {
-        await provider.saveCompileConfig(projectPath, config)
-      }
-      // No persistence when the host opts out; the renderer's edits then
-      // do not survive a reload, matching the documented contract.
-    },
+    ...createCompileModeAdapter(provider),
     // Per-project settings (uploadWithSourceMap etc.) live in the project's
     // own `project.config.json`, not the registry — keep direct repo calls.
     getProjectSettings: (projectPath) => repo.getProjectSettings(projectPath),

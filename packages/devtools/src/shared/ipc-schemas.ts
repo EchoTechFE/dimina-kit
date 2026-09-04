@@ -31,10 +31,9 @@ export const ProjectsAddSchema = z.tuple([AbsolutePath])
 export const ProjectOpenSchema = z.tuple([AbsolutePath])
 
 /**
- * Shared shape for CompileConfig payloads (used by saveCompileConfig,
- * settings:configChanged, and popover:relaunch). Permissive on the outer
- * object so we stay forward-compatible with new fields; the known top-level
- * keys are validated to catch wrong types early.
+ * Shared shape for CompileConfig payloads. Permissive on the outer object so
+ * we stay forward-compatible with new fields; the known top-level keys are
+ * validated to catch wrong types early.
  */
 const CompileConfigShape = z.looseObject({
   startPage: z.string().optional(),
@@ -50,6 +49,44 @@ const CompileConfigShape = z.looseObject({
 export const ProjectSaveCompileConfigSchema = z.tuple([
   AbsolutePath,
   CompileConfigShape,
+])
+
+/**
+ * Shared shape for the stored compile-mode list (`condition.miniprogram` in
+ * project.config.json). Loose because WeChat writes fields we carry through
+ * untouched; `normalizeCompileModes` does the semantic coercion after this
+ * structural check.
+ */
+const CompileModeShape = z.looseObject({
+  name: z.string().optional(),
+  pathName: z.string(),
+  query: z.string().optional(),
+  scene: z.number().nullable().optional(),
+})
+
+const CompileModesShape = z.looseObject({
+  current: z.number().int(),
+  list: z.array(CompileModeShape),
+})
+
+/** project:getCompileModes — absolute project path. */
+export const ProjectGetCompileModesSchema = z.tuple([AbsolutePath])
+
+/** project:saveCompileModes — absolute project path + the full mode list. */
+export const ProjectSaveCompileModesSchema = z.tuple([
+  AbsolutePath,
+  CompileModesShape,
+])
+
+/**
+ * popover:apply — the edited mode list plus whether the running session must
+ * be relaunched to reflect it.
+ */
+export const PopoverApplySchema = z.tuple([
+  z.object({
+    modes: CompileModesShape,
+    relaunch: z.boolean(),
+  }),
 ])
 
 /** popover:show — must be an object (not undefined/null/string). */
@@ -308,11 +345,6 @@ export const WorkbenchSettingsSetThemeSchema = z.tuple([
 /** settings:setVisible — boolean. */
 export const SettingsSetVisibleSchema = z.tuple([z.boolean()])
 
-/** settings:configChanged — full CompileConfig object (see shared/types.ts). */
-export const SettingsConfigChangedSchema = z.tuple([CompileConfigShape])
-
-/** popover:relaunch — full CompileConfig object pushed back to main on relaunch. */
-export const PopoverRelaunchSchema = z.tuple([CompileConfigShape])
 
 /**
  * settings:projectSettingsChanged — Partial<ProjectSettings>.

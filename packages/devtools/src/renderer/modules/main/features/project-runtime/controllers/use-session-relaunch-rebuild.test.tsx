@@ -1,8 +1,7 @@
 /**
- * The popover "重新编译" button drives `useSession().relaunch()`. Today
- * `relaunch` only saves the compile config and bumps `relaunchNonce` — it
- * never asks main to actually recompile, so with autoBuild off (or a dead
- * watcher) the button re-attaches the simulator to whatever was compiled
+ * The toolbar's 重新编译 button drives `useSession().relaunch()`, and picking or
+ * editing a compile mode drives `applyCompileModes()`. A relaunch that only
+ * bumped `relaunchNonce` would re-attach the simulator to whatever was compiled
  * before, silently dropping any edit made since.
  *
  * Contract under test:
@@ -26,9 +25,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
 import type { SessionHookResult } from './use-session'
 
-const { rebuildProjectMock, saveCompileConfigMock } = vi.hoisted(() => ({
+const { rebuildProjectMock, saveCompileModesMock } = vi.hoisted(() => ({
   rebuildProjectMock: vi.fn(async (): Promise<unknown> => undefined),
-  saveCompileConfigMock: vi.fn(async () => {}),
+  saveCompileModesMock: vi.fn(async () => {}),
 }))
 
 vi.mock('@/shared/api', () => {
@@ -42,12 +41,8 @@ vi.mock('@/shared/api', () => {
       pages: ['pages/index/index'],
       entryPagePath: 'pages/index/index',
     })),
-    getCompileConfig: vi.fn(async () => ({
-      startPage: 'pages/index/index',
-      scene: 1011,
-      queryParams: [],
-    })),
-    saveCompileConfig: saveCompileConfigMock,
+    getCompileModes: vi.fn(async () => ({ current: -1, list: [] })),
+    saveCompileModes: saveCompileModesMock,
     onSessionRuntimeStatus: vi.fn(() => () => {}),
     onProjectStatus: vi.fn(() => () => {}),
     onCompileLog: vi.fn(() => () => {}),
@@ -60,7 +55,7 @@ import { useSession } from './use-session'
 beforeEach(() => {
   rebuildProjectMock.mockClear()
   rebuildProjectMock.mockImplementation(async () => undefined)
-  saveCompileConfigMock.mockClear()
+  saveCompileModesMock.mockClear()
 })
 
 async function renderReadySession() {
@@ -130,25 +125,60 @@ describe('useSession.relaunch(): recompiles through rebuildProject before hard-r
     ).toBe(nonceBefore)
   })
 
-  it('publishes a newly selected startPage before bumping relaunchNonce', async () => {
-    const nextConfig = {
-      startPage: 'pages/cart/cart',
-      scene: 1001,
-      queryParams: [{ key: 'from', value: 'compile-mode' }],
+  it('applyCompileModes: persists the modes, republishes the resolved config, then bumps relaunchNonce', async () => {
+    const nextModes = {
+      current: 0,
+      list: [
+        {
+          name: '购物车',
+          pathName: 'pages/cart/cart',
+          query: 'from=compile-mode',
+          scene: 1001,
+        },
+      ],
     }
     const { result } = await renderReadySession()
     const nonceBefore = readNonce(result.current)
 
     await act(async () => {
-      await result.current.relaunch(nextConfig)
+      await result.current.applyCompileModes(nextModes, true)
     })
 
-    expect(saveCompileConfigMock).toHaveBeenCalledWith(
+    expect(saveCompileModesMock).toHaveBeenCalledWith(
       '/tmp/rebuild-relaunch-project',
-      nextConfig,
+      nextModes,
     )
-    expect(result.current.compileConfig).toEqual(nextConfig)
+    expect(
+      result.current.compileConfig,
+      'the launch parameters must be derived from the newly selected mode',
+    ).toEqual({
+      startPage: 'pages/cart/cart',
+      scene: 1001,
+      queryParams: [{ key: 'from', value: 'compile-mode' }],
+    })
     expect(readNonce(result.current)).toBe(nonceBefore + 1)
+  })
+
+  it('applyCompileModes(_, false): saves an edit that does not change what is running, without relaunching', async () => {
+    // Editing a mode that is NOT selected must not restart the simulator —
+    // the user is curating the list, not switching what they are looking at.
+    const nextModes = {
+      current: -1,
+      list: [{ name: '购物车', pathName: 'pages/cart/cart', query: '', scene: null }],
+    }
+    const { result } = await renderReadySession()
+    const nonceBefore = readNonce(result.current)
+
+    await act(async () => {
+      await result.current.applyCompileModes(nextModes, false)
+    })
+
+    expect(saveCompileModesMock).toHaveBeenCalledWith(
+      '/tmp/rebuild-relaunch-project',
+      nextModes,
+    )
+    expect(rebuildProjectMock).not.toHaveBeenCalled()
+    expect(readNonce(result.current)).toBe(nonceBefore)
   })
 
   it('rebuildProject resolving { supported: false } degrades to the legacy bump-only relaunch', async () => {

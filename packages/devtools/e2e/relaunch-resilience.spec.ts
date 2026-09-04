@@ -29,14 +29,23 @@ import {
   closeProject,
   pollUntil,
   evalInSimulator,
+  evalInPopover,
   RENDER_GUEST_URL_MARKER,
+  compileModeToolbarButton,
+  findPopoverWebContentsId,
+  clickCompileModeMenuAction,
+  fillCompileModeForm,
+  submitCompileModeForm,
 } from './helpers'
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 async function getStatus(workbench: import('@playwright/test').Page) {
+  // The compile-mode toolbar button's label span also carries `truncate` (it
+  // shows the selected mode's name, which can be long), so a bare
+  // `[class*="truncate"]` no longer uniquely lands on the compile status text.
   return workbench.evaluate(
-    () => document.querySelector('[class*="truncate"]')?.textContent || '',
+    () => document.querySelector('[data-testid="compile-status-message"]')?.textContent || '',
   )
 }
 
@@ -143,79 +152,69 @@ async function clickRelaunchButton(workbench: import('@playwright/test').Page) {
   await workbench.getByRole('button', { name: '重新编译' }).click()
 }
 
+/**
+ * Relaunch the simulator at `targetPage` via the compile-mode popover.
+ * Selecting a page is now "create a mode pointed at it" — `upsertCompileMode`
+ * with `index: null` always relaunches (popover.tsx `handleCreate` +
+ * `handleSubmit`), so filling and submitting the "添加编译模式" form both picks
+ * the page AND fires the same real relaunch the old inline 重新编译 did.
+ *
+ * Call sites pass short page names (`'storage-test'`) rather than full routes
+ * — resolve against the form's own 启动页面 options (substring match, mirroring
+ * the old popover's `option.value.includes(pg)`) instead of hardcoding the
+ * `pages/…/…` prefix, so this stays correct if a fixture page ever moves.
+ *
+ * Opens the toolbar button by its stable CSS class rather than
+ * `openCompileModePopover`'s default 普通编译 label match — callers use this
+ * repeatedly across a sequence of switches, and after the first switch the
+ * button shows whatever mode was just created, not 普通编译.
+ */
 async function relaunchViaPopover(
   workbench: import('@playwright/test').Page,
   electronApp: import('@playwright/test').ElectronApplication,
   targetPage: string,
 ) {
-  await workbench.getByRole('button', { name: /普通编译/ }).click()
-  // The popover WCV is created asynchronously after the click; poll for it
-  // instead of a fixed sleep (a slow tick leaves the one-shot lookup empty).
-  const popoverWcId = await pollUntil(
-    () => electronApp.evaluate(({ webContents }) => {
-      const wc = webContents.getAllWebContents().find((w) => w.getURL().includes('entries/popover'))
-      // Report the popover only once it can execute JS (loaded) — injecting
-      // into a loading wc queues a did-stop-loading waiter instead.
-      return wc && !wc.isLoading() ? wc.id : 0
-    }),
-    (id) => id > 0,
+  await compileModeToolbarButton(workbench).click()
+  await findPopoverWebContentsId(electronApp)
+  await clickCompileModeMenuAction(electronApp, '添加编译模式')
+
+  const fullPath = await pollUntil(
+    () => evalInPopover<string>(electronApp, `(() => {
+      const select = document.querySelector('select')
+      const opt = select && Array.from(select.options).find((o) => o.value.includes(${JSON.stringify(targetPage)}))
+      return opt ? opt.value : ''
+    })()`),
+    (v) => v !== '',
     8000,
     200,
   )
-  if (!popoverWcId) throw new Error('Popover not found')
+  if (!fullPath) throw new Error(`启动页面 option not found for: ${targetPage}`)
 
-  await pollUntil(
-    () => electronApp.evaluate(async ({ webContents }, { wcId, pg }) => {
-      const wc = webContents.fromId(wcId)
-      if (!wc) return false
-      const page = JSON.stringify(pg)
-      return wc.executeJavaScript(`(() => {
-        const sel = document.querySelector('select')
-        return !!sel && Array.from(sel.options).some((option) => option.value.includes(${page}))
-      })()`)
-    }, { wcId: popoverWcId, pg: targetPage }),
-    (ready) => ready,
-    8_000,
-    100,
-  )
-
-  await electronApp.evaluate(
-    async ({ webContents }, { wcId, pg }) => {
-      const wc = webContents.fromId(wcId)
-      if (!wc) return
-      const page = JSON.stringify(pg)
-      await wc.executeJavaScript(`new Promise((resolve) => {
-        const sel = document.querySelector('select')
-        const opt = Array.from(sel.options).find((option) => option.value.includes(${page}))
-        sel.value = opt.value
-        sel.dispatchEvent(new Event('change', { bubbles: true }))
-        requestAnimationFrame(() => resolve(true))
-      })`)
-    },
-    { wcId: popoverWcId, pg: targetPage },
-  )
-
-  await electronApp.evaluate(async ({ webContents }, wcId) => {
-    const wc = webContents.fromId(wcId)
-    if (!wc) return
-    await wc.executeJavaScript(`(function() {
-      var btns = document.querySelectorAll('button');
-      for (var b of btns) { if (b.textContent.includes('重新编译')) { b.click(); break; } }
-    })()`)
-  }, popoverWcId)
+  await fillCompileModeForm(electronApp, { pathName: fullPath })
+  await submitCompileModeForm(electronApp)
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────
 
+const PROJECT_CONFIG_PATH = path.join(DEMO_APP_DIR, 'project.config.json')
+let originalProjectConfig = ''
+
 test.describe('Relaunch & compile resilience', () => {
   test.setTimeout(120_000)
 
+  // Several tests in this file create real compile modes via the popover,
+  // which persist to project.config.json. DEMO_APP_DIR is only recreated
+  // once per worker, so without a snapshot/restore here a mode (and its
+  // `current` selection) created by one test would leak into the next —
+  // e.g. the toolbar no longer showing 普通编译 at the start of a later test.
   test.beforeEach(async ({ electronApp }) => {
+    originalProjectConfig = fs.readFileSync(PROJECT_CONFIG_PATH, 'utf8')
     await openProjectInUI(electronApp, DEMO_APP_DIR, { waitMs: 10000 })
   })
 
   test.afterEach(async ({ electronApp }) => {
     await closeProject(electronApp)
+    fs.writeFileSync(PROJECT_CONFIG_PATH, originalProjectConfig)
   })
 
   test('↺ button reloads same page successfully', async ({ workbench, electronApp }) => {

@@ -1,8 +1,16 @@
 import { app } from 'electron'
 import path from 'path'
 import fs from 'fs'
-import type { CompileConfig, ProjectType } from '../../../shared/types.js'
-import { DEFAULT_SCENE } from '../../../shared/constants.js'
+import type { CompileConfig, CompileModes, ProjectType } from '../../../shared/types.js'
+import {
+  NORMAL_COMPILE_INDEX,
+  compileConfigToMode,
+  compileConfigToModes,
+  emptyCompileModes,
+  isNormalCompile,
+  normalizeCompileModes,
+  resolveCompileConfig,
+} from '../../../shared/compile-modes.js'
 import { createLogger } from '../../utils/logger.js'
 
 const log = createLogger('projects')
@@ -44,6 +52,10 @@ export interface ProjectPages {
 
 export interface ProjectSettings {
   uploadWithSourceMap: boolean
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 /**
@@ -253,20 +265,105 @@ export function updateLastOpened(dirPath: string): void {
   }
 }
 
-export function getCompileConfig(dirPath: string): CompileConfig {
-  const projects = load()
-  const project = projects.find((p) => p.path === dirPath)
-  if (project?.compileConfig) return project.compileConfig
-  // Default startPage to the project's real entry page (mirrors
-  // getProjectPages: 'game' for mini-games, app.json's entryPagePath for
-  // mini-programs) rather than a mini-program-only literal — the simulator
-  // URL builders' own 'pages/index/index' fallback only fires when this is
-  // still empty (unreadable/malformed manifest).
-  return {
-    startPage: getProjectPages(dirPath).entryPagePath,
-    scene: DEFAULT_SCENE,
-    queryParams: [],
+/**
+ * Read a project's compile modes from `project.config.json`'s
+ * `condition.miniprogram` — WeChat DevTools' own location and shape, so a
+ * project checked into git carries its modes to every machine, and the same
+ * directory opened in that tool shows the same list.
+ *
+ * Projects imported before compile modes existed fall back to migrating the
+ * legacy single config out of the project list file.
+ */
+export function getCompileModes(dirPath: string): CompileModes {
+  if (!dirPath) return emptyCompileModes()
+  const condition = readProjectConfig(dirPath).condition
+  if (isRecord(condition) && condition.miniprogram !== undefined) {
+    return normalizeCompileModes(condition.miniprogram)
   }
+  return migrateLegacyCompileConfig(dirPath)
+}
+
+/**
+ * Which config file owns `condition` for this project — the one a save has to
+ * land in to be read back.
+ *
+ * `readProjectConfig` merges the private file over the public one key by key,
+ * so a private file carrying any `condition` at all (even one that only holds
+ * a mini-game block, with no `miniprogram` in it) replaces the whole merged
+ * `condition`. Writing modes to the public file in that case reports success
+ * and then reads back as if nothing had been saved.
+ *
+ * With no private `condition`, modes stay in the shared public file, where the
+ * team gets them from git.
+ */
+function compileModesConfigPath(dirPath: string): string {
+  const privatePath = path.join(dirPath, 'project.private.config.json')
+  if (fs.existsSync(privatePath)) {
+    try {
+      const privateConfig: unknown = JSON.parse(fs.readFileSync(privatePath, 'utf-8'))
+      if (isRecord(privateConfig) && privateConfig.condition !== undefined) return privatePath
+    } catch {
+      // Unparseable — readProjectConfig skips this file too, so the public one
+      // is what a read actually sees.
+    }
+  }
+  return path.join(dirPath, 'project.config.json')
+}
+
+/**
+ * Persist compile modes, merged so the rest of the target file survives —
+ * including the rest of `condition`, which for a mini-game project holds its
+ * own `condition.game` block.
+ */
+export function saveCompileModes(dirPath: string, modes: CompileModes): void {
+  if (!dirPath) return
+  const configPath = compileModesConfigPath(dirPath)
+  let config: Record<string, unknown> = {}
+  if (fs.existsSync(configPath)) {
+    try {
+      config = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>
+    } catch {
+      // Refuse rather than overwrite: this file also holds the project's
+      // build settings, which a blind rewrite would drop.
+      throw new Error(`无法保存编译模式：${configPath} 不是合法 JSON`)
+    }
+  }
+  const condition = isRecord(config.condition) ? config.condition : {}
+  fs.writeFileSync(
+    configPath,
+    JSON.stringify(
+      { ...config, condition: { ...condition, miniprogram: modes } },
+      null,
+      2,
+    ),
+  )
+}
+
+/**
+ * Projects imported before compile modes existed stored one unnamed compile
+ * config in the project list file. Surface it as a selected mode rather than
+ * silently dropping the user's start page — but only when it asks for
+ * something 普通编译 can't already do, so the common case stays an empty
+ * list. Read-only: nothing is written until the user edits a mode.
+ */
+function migrateLegacyCompileConfig(dirPath: string): CompileModes {
+  const legacy = load().find((p) => p.path === dirPath)?.compileConfig
+  if (!legacy) return emptyCompileModes()
+  return compileConfigToModes(legacy, getProjectPages(dirPath).entryPagePath)
+}
+
+/**
+ * The launch parameters the selected mode resolves to. 普通编译 resolves to
+ * an empty start page; it is filled in here with the project's real entry
+ * page (mirrors getProjectPages: 'game' for mini-games, app.json's
+ * entryPagePath for mini-programs) rather than a mini-program-only literal —
+ * the simulator URL builders' own 'pages/index/index' fallback only fires
+ * when this is still empty (unreadable/malformed manifest).
+ */
+export function getCompileConfig(dirPath: string): CompileConfig {
+  const config = resolveCompileConfig(getCompileModes(dirPath))
+  if (config.startPage) return config
+  return { ...config, startPage: getProjectPages(dirPath).entryPagePath }
 }
 
 export function getProjectPages(dirPath: string): ProjectPages {
@@ -291,16 +388,26 @@ export function getProjectPages(dirPath: string): ProjectPages {
   }
 }
 
-export function saveCompileConfig(
-  dirPath: string,
-  config: CompileConfig
-): void {
-  const projects = load()
-  const idx = projects.findIndex((p) => p.path === dirPath)
-  if (idx >= 0) {
-    projects[idx] = { ...projects[idx], compileConfig: config } as Project
-    save(projects)
+/**
+ * @deprecated Compile modes are the stored form — call `saveCompileModes`.
+ * Kept working for embedding hosts still on the single-config setter: the
+ * config lands on the selected mode, or becomes a new selected mode when
+ * 普通编译 is selected and the config asks for more than it can express.
+ */
+export function saveCompileConfig(dirPath: string, config: CompileConfig): void {
+  const modes = getCompileModes(dirPath)
+  if (modes.current === NORMAL_COMPILE_INDEX) {
+    if (isNormalCompile(config, getProjectPages(dirPath).entryPagePath)) return
+    saveCompileModes(dirPath, {
+      current: modes.list.length,
+      list: [...modes.list, compileConfigToMode(config, '')],
+    })
+    return
   }
+  const list = modes.list.map((mode, i) => (
+    i === modes.current ? { ...mode, ...compileConfigToMode(config, mode.name) } : mode
+  ))
+  saveCompileModes(dirPath, { ...modes, list })
 }
 
 /** Read a subset of `project.config.json` exposed to the settings panel. */

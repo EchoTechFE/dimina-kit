@@ -11,16 +11,20 @@ import {
 } from '@/shared/constants'
 import {
   hidePopover,
+  onPopoverApply,
   onPopoverClosed,
-  onPopoverRelaunch,
   showPopover,
 } from '@/shared/api'
-import type { CompileConfig } from '@/shared/types'
+import type { CompileModes } from '@/shared/types'
 
 export interface UsePopoverProps {
-  relaunch: (nextConfig?: CompileConfig) => Promise<void>
-  compileConfig: CompileConfig
+  applyCompileModes: (modes: CompileModes, relaunch: boolean) => Promise<void>
+  compileModes: CompileModes
   pages: string[]
+  /** What 普通编译 launches — shown in the menu and used for new modes. */
+  entryPagePath: string
+  /** The simulator's visible route, backing 以当前页面新建编译模式. */
+  currentRoute: string
   compileDropdownRef: RefObject<HTMLDivElement | null>
 }
 
@@ -30,35 +34,41 @@ export interface PopoverHookResult {
 }
 
 export function usePopover(props: UsePopoverProps): PopoverHookResult {
-  const { relaunch, compileConfig, pages, compileDropdownRef } = props
+  const {
+    applyCompileModes,
+    compileModes,
+    pages,
+    entryPagePath,
+    currentRoute,
+    compileDropdownRef,
+  } = props
 
   const [showCompilePanel, setShowCompilePanel] = useState(false)
 
-  const relaunchRef = useRef(relaunch)
+  const applyRef = useRef(applyCompileModes)
   useEffect(() => {
-    relaunchRef.current = relaunch
-  }, [relaunch])
+    applyRef.current = applyCompileModes
+  }, [applyCompileModes])
 
   useEffect(() => {
     const offClosed = onPopoverClosed(() => setShowCompilePanel(false))
-    const offRelaunch = onPopoverRelaunch((newConfig) => {
+    const offApply = onPopoverApply(({ modes, relaunch }) => {
       setShowCompilePanel(false)
-      void relaunchRef.current(newConfig)
+      void applyRef.current(modes, relaunch)
     })
     return () => {
       offClosed()
-      offRelaunch()
+      offApply()
     }
   }, [])
 
-  const compileConfigRef = useRef(compileConfig)
-  const pagesRef = useRef(pages)
+  // The popover is a separate view fed a one-shot payload, so the toggle
+  // callback must read the LATEST session state without re-creating itself on
+  // every session change (the toolbar button holds one reference).
+  const payloadRef = useRef({ compileModes, pages, entryPagePath, currentRoute })
   useEffect(() => {
-    compileConfigRef.current = compileConfig
-  }, [compileConfig])
-  useEffect(() => {
-    pagesRef.current = pages
-  }, [pages])
+    payloadRef.current = { compileModes, pages, entryPagePath, currentRoute }
+  }, [compileModes, pages, entryPagePath, currentRoute])
 
   const toggleCompilePanel = useCallback(() => {
     setShowCompilePanel((prev) => {
@@ -72,8 +82,10 @@ export function usePopover(props: UsePopoverProps): PopoverHookResult {
       void showPopover({
         top: Math.round(rect.bottom - HEADER_H + POPOVER_OFFSET_PX),
         left: Math.round(rect.left),
-        config: compileConfigRef.current,
-        pages: pagesRef.current,
+        modes: payloadRef.current.compileModes,
+        pages: payloadRef.current.pages,
+        entryPagePath: payloadRef.current.entryPagePath,
+        currentRoute: payloadRef.current.currentRoute,
       })
       return true
     })

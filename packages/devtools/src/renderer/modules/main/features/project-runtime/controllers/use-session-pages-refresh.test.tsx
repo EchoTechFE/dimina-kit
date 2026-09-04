@@ -42,12 +42,8 @@ vi.mock('@/shared/api', () => {
       pages: ['pages/index/index'],
       entryPagePath: 'pages/index/index',
     })),
-    getCompileConfig: vi.fn(async () => ({
-      startPage: 'pages/index/index',
-      scene: 1011,
-      queryParams: [],
-    })),
-    saveCompileConfig: vi.fn(async () => {}),
+    getCompileModes: vi.fn(async () => ({ current: -1, list: [] })),
+    saveCompileModes: vi.fn(async () => {}),
     onSessionRuntimeStatus: vi.fn(() => () => {}),
     onProjectStatus: vi.fn((handler: (s: unknown) => void) => {
       projectStatusListeners.push(handler)

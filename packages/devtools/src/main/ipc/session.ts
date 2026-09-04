@@ -1,12 +1,14 @@
-import type { CompileConfig } from '../../shared/types.js'
+import type { CompileConfig, CompileModes } from '../../shared/types.js'
 import { ProjectChannel } from '../../shared/ipc-channels.js'
 import {
   ProjectCaptureThumbnailSchema,
   ProjectGetCompileConfigSchema,
+  ProjectGetCompileModesSchema,
   ProjectGetPagesSchema,
   ProjectGetThumbnailSchema,
   ProjectOpenSchema,
   ProjectSaveCompileConfigSchema,
+  ProjectSaveCompileModesSchema,
 } from '../../shared/ipc-schemas.js'
 // eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
 import type { WorkbenchContext } from '../services/workbench-context.js'
@@ -43,6 +45,22 @@ export function registerSessionIpc(input: IpcInput<SessionIpcCtx>): Disposable {
         args,
       )
       return ctx.workspace.saveCompileConfig(projectPath, config as CompileConfig)
+    })
+    .handleRouted(ProjectChannel.GetCompileModes, (ctx, _e, ...args: unknown[]) => {
+      const [projectPath] = validate(
+        ProjectChannel.GetCompileModes,
+        ProjectGetCompileModesSchema,
+        args,
+      )
+      return ctx.workspace.getCompileModes(projectPath)
+    })
+    .handleRouted(ProjectChannel.SaveCompileModes, (ctx, _e, ...args: unknown[]) => {
+      const [projectPath, modes] = validate(
+        ProjectChannel.SaveCompileModes,
+        ProjectSaveCompileModesSchema,
+        args,
+      )
+      return ctx.workspace.saveCompileModes(projectPath, modes as CompileModes)
     })
     .handleRouted(ProjectChannel.Close, (ctx) => {
       return ctx.workspace.closeProject()

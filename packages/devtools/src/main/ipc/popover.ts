@@ -1,11 +1,11 @@
 // eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
 import type { WorkbenchContext } from '../services/workbench-context.js'
 import type { WorkbenchModule } from '../services/module.js'
-import type { CompileConfig } from '../../shared/types.js'
+import type { CompileModes } from '../../shared/types.js'
 import { PopoverChannel } from '../../shared/ipc-channels-overlays.js'
 import {
   PopoverShowSchema,
-  PopoverRelaunchSchema,
+  PopoverApplySchema,
 } from '../../shared/ipc-schemas.js'
 import type { Disposable } from '@dimina-kit/electron-deck/main'
 import { validate } from '../utils/ipc-schema.js'
@@ -23,10 +23,13 @@ export function registerPopoverIpc(input: IpcInput<PopoverIpcCtx>): Disposable {
     .handleRouted(PopoverChannel.Hide, (ctx) => {
       ctx.views.hidePopover()
     })
-    .onRouted(PopoverChannel.Relaunch, (ctx, _event, ...args: unknown[]) => {
-      const [newConfig] = validate(PopoverChannel.Relaunch, PopoverRelaunchSchema, args)
+    .onRouted(PopoverChannel.Apply, (ctx, _event, ...args: unknown[]) => {
+      const [payload] = validate(PopoverChannel.Apply, PopoverApplySchema, args)
       ctx.views.hidePopover()
-      ctx.notify.popoverRelaunch(newConfig as CompileConfig)
+      ctx.notify.popoverApply({
+        modes: payload.modes as CompileModes,
+        relaunch: payload.relaunch,
+      })
     })
 }
 

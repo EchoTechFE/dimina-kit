@@ -1,5 +1,5 @@
 import type { BrowserWindow, WebContents, WebContentsView } from 'electron'
-import type { CompileConfig } from '../../../shared/types.js'
+import type { CompileModes } from '../../../shared/types.js'
 import {
   ProjectChannel,
   SessionChannel,
@@ -81,7 +81,6 @@ export interface CompileLogPayload {
  */
 export interface SettingsInitPayload {
   projectPath: string
-  config: CompileConfig
   projectSettings: ProjectSettings
 }
 
@@ -124,8 +123,12 @@ export interface RendererNotifier {
   windowOpenProject(payload: { name: string; path: string }): void
   /** Tell the main renderer the compile popover has been closed. */
   popoverClosed(): void
-  /** Ask the main renderer to relaunch the simulator with a new config. */
-  popoverRelaunch(config: CompileConfig): void
+  /**
+   * Hand the main renderer the compile modes the user just edited in the
+   * popover. `relaunch` is true when the change affects what is currently
+   * running, so the renderer restarts the simulator with it.
+   */
+  popoverApply(payload: { modes: CompileModes; relaunch: boolean }): void
   /**
    * Push the reserved host-toolbar height to the main renderer so its toolbar
    * placeholder div resizes (closes the host-toolbar dynamic-height loop).
@@ -229,8 +232,8 @@ export function createRendererNotifier(ctx: NotifierContext): RendererNotifier {
     popoverClosed() {
       sendToMain(PopoverChannel.Closed)
     },
-    popoverRelaunch(config) {
-      sendToMain(PopoverChannel.Relaunch, config)
+    popoverApply(payload) {
+      sendToMain(PopoverChannel.Apply, payload)
     },
     hostToolbarHeightChanged(height) {
       sendToMain(ViewChannel.HostToolbarHeightChanged, height)

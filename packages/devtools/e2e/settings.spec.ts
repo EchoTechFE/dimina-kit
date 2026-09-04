@@ -8,7 +8,7 @@ import {
   evalInWebContentsByUrl,
   pollUntil,
 } from './helpers'
-import { ProjectChannel, ProjectsChannel } from '../src/shared/ipc-channels'
+import { ProjectsChannel } from '../src/shared/ipc-channels'
 
 /**
  * UI-driven settings flow. The embedded settings overlay is opened the way a
@@ -77,40 +77,5 @@ test.describe('Settings', () => {
 
     expect(text).toContain('项目配置')
     expect(text).toContain(DEMO_APP_DIR)
-  })
-
-  test('settings configChanged persists compile config', async ({ mainWindow, workbench, electronApp }) => {
-    const original = await ipcInvoke<{
-      startPage: string
-      scene: number
-      queryParams: Array<{ key: string; value: string }>
-    }>(mainWindow, ProjectChannel.GetCompileConfig, DEMO_APP_DIR)
-
-    const nextConfig = {
-      startPage: 'pages/network-test/network-test',
-      scene: 2001,
-      queryParams: [{ key: 'from', value: 'e2e' }],
-    }
-
-    await openSettingsViaUI(workbench, electronApp)
-    await evalInWebContentsByUrl(
-      electronApp,
-      'entries/settings',
-      `window.devtools.ipc.send('settings:configChanged', ${JSON.stringify(nextConfig)})`
-    )
-
-    const saved = await ipcInvoke<{
-      startPage: string
-      scene: number
-      queryParams: Array<{ key: string; value: string }>
-    }>(mainWindow, ProjectChannel.GetCompileConfig, DEMO_APP_DIR)
-
-    expect(saved).toEqual(nextConfig)
-
-    await evalInWebContentsByUrl(
-      electronApp,
-      'entries/settings',
-      `window.devtools.ipc.send('settings:configChanged', ${JSON.stringify(original)})`
-    )
   })
 })

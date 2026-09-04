@@ -188,6 +188,11 @@ export const ProjectChannel = {
   GetPages: 'project:getPages',
   GetCompileConfig: 'project:getCompileConfig',
   SaveCompileConfig: 'project:saveCompileConfig',
+  // The named compile modes and which one is selected — the stored form
+  // behind the toolbar dropdown. `getCompileConfig` is the resolved view of
+  // the same state, kept for hosts that only implement the older setter.
+  GetCompileModes: 'project:getCompileModes',
+  SaveCompileModes: 'project:saveCompileModes',
   Status: 'project:status',
   // Main → renderer push of per-line dmcc compile logs (devkit `onLog`).
   // Dedicated channel: `project:status` keeps its one-event-per-payload
