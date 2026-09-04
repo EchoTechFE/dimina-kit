@@ -24,10 +24,11 @@ import {
 } from "@/shared/constants";
 import { frameOuterSize } from "@devicekit/frame";
 import {
-  CLASSIC_DEVICES,
+  DEVICES,
   type DeviceProfile,
   type Orientation,
 } from "@devicekit/devices";
+import { DevicePicker } from "./device-picker";
 import {
   FallbackBanner,
   RuntimeErrorOverlay,
@@ -35,20 +36,11 @@ import {
   type SimulatorRuntimeStatus,
 } from "./simulator-runtime-banners";
 
-// The toolbar dropdown can't fit the full 171-device table, so it only
-// offers CLASSIC_DEVICES, grouped by platform in the order that list is
-// already sorted in (iOS → Android → HarmonyOS).
-const DEVICE_GROUPS: Array<{ label: string; devices: readonly DeviceProfile[] }> = [
-  { label: "iOS", devices: CLASSIC_DEVICES.filter((d) => d.os === "ios") },
-  { label: "Android", devices: CLASSIC_DEVICES.filter((d) => d.os === "android") },
-  { label: "HarmonyOS", devices: CLASSIC_DEVICES.filter((d) => d.os === "harmony") },
-];
-
 interface SimulatorPanelProps {
   device: DeviceProfile;
   orientation?: Orientation;
   zoom: ZoomSetting;
-  onDeviceChange: (e: React.ChangeEvent<HTMLSelectElement>) => void;
+  onDeviceChange: (name: string) => void;
   onOrientationChange?: (orientation: Orientation) => void;
   onZoomChange: (e: React.ChangeEvent<HTMLSelectElement>) => void;
   compileStatus: { status: string; message: string };
@@ -290,17 +282,7 @@ export function SimulatorPanel({
   return (
     <div className="bg-sim-bg flex flex-col overflow-hidden h-full w-full">
       <div className="flex items-center gap-2 px-5 py-2 shrink-0 border-b border-border-subtle">
-        <Select value={device.name} onChange={onDeviceChange}>
-          {DEVICE_GROUPS.map((group) => (
-            <optgroup key={group.label} label={group.label}>
-              {group.devices.map((d) => (
-                <option key={d.name} value={d.name}>
-                  {d.name}
-                </option>
-              ))}
-            </optgroup>
-          ))}
-        </Select>
+        <DevicePicker device={device} devices={DEVICES} onSelect={onDeviceChange} />
         <Select
           value={orientation}
           onChange={(e) => onOrientationChange(e.target.value as Orientation)}

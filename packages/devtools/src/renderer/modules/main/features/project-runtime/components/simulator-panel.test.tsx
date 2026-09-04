@@ -1,15 +1,17 @@
 /**
  * SimulatorPanel's device/orientation pickers against the @devicekit/devices
- * table: the device <Select> is grouped by platform (iOS/Android/HarmonyOS)
- * and lists only the hand-picked CLASSIC_DEVICES subset (the full table is far
- * too long for a toolbar dropdown), each exactly once; a separate orientation
- * <Select> (portrait/landscape) reports changes via onOrientationChange.
+ * table: the device picker is a button showing the current device name that
+ * opens DevicePicker's searchable panel over the FULL DEVICES table (not
+ * just CLASSIC_DEVICES — DevicePicker owns that distinction now), so
+ * non-classic devices like 'iPad Pro 13' must be reachable from here too. A
+ * separate orientation <Select> (portrait/landscape) reports changes via
+ * onOrientationChange.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, cleanup, fireEvent } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import type { Placement } from '@dimina-kit/view-anchor'
 import type { PlacementPublisher } from '@dimina-kit/electron-deck/client'
-import { CLASSIC_DEVICES, DEFAULT_DEVICE, DEVICES } from '@devicekit/devices'
+import { DEFAULT_DEVICE, DEVICE_NAMES } from '@devicekit/devices'
 import { PlacementPublisherContext } from '@/shared/placement-publisher-context'
 
 interface AnchorHandle {
@@ -51,34 +53,37 @@ function panelElement(onOrientationChange: (o: 'portrait' | 'landscape') => void
   )
 }
 
+// cmdk (inside DevicePicker) measures its list via ResizeObserver, which
+// jsdom does not implement.
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+
 beforeEach(() => {
   cleanup()
+  vi.stubGlobal('ResizeObserver', ResizeObserverStub)
 })
 
-describe('SimulatorPanel: device picker grouped by platform', () => {
-  it('lists three optgroups labelled iOS / Android / HarmonyOS', () => {
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
+describe('SimulatorPanel: device picker trigger', () => {
+  it('renders a button showing the current device name instead of a native <select>', () => {
     const { container } = render(panelElement())
-    const groups = Array.from(container.querySelectorAll('optgroup'))
-    expect(groups.map((g) => g.getAttribute('label')).sort()).toEqual(
-      ['Android', 'HarmonyOS', 'iOS'].sort(),
-    )
+
+    expect(screen.getByRole('button', { name: DEFAULT_DEVICE.name })).toBeInTheDocument()
+    expect(container.querySelector('select option[value="' + DEFAULT_DEVICE.name + '"]')).toBeNull()
   })
 
-  it('lists exactly the classic subset, each once, and not the full table', () => {
-    const { container } = render(panelElement())
-    const options = Array.from(container.querySelectorAll('optgroup option'), (o) => (o as HTMLOptionElement).value)
-    expect(options).toEqual(CLASSIC_DEVICES.map((d) => d.name))
-    expect(options.length).toBeLessThan(DEVICES.length)
-  })
+  it('opens DevicePicker over the full DEVICES table, reaching non-classic devices like iPad Pro 13', async () => {
+    render(panelElement())
 
-  it('puts each classic device under the optgroup of its own platform', () => {
-    const { container } = render(panelElement())
-    for (const group of Array.from(container.querySelectorAll('optgroup'))) {
-      const os = { iOS: 'ios', Android: 'android', HarmonyOS: 'harmony' }[group.getAttribute('label') ?? '']
-      for (const o of Array.from(group.querySelectorAll('option'))) {
-        expect(CLASSIC_DEVICES.find((d) => d.name === o.value)?.os, o.value).toBe(os)
-      }
-    }
+    fireEvent.click(screen.getByRole('button', { name: DEFAULT_DEVICE.name }))
+
+    expect(await screen.findByRole('option', { name: DEVICE_NAMES.iPad_Pro_13 })).toBeInTheDocument()
   })
 })
 

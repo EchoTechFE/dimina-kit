@@ -6,7 +6,7 @@ import { Command as CommandPrimitive } from "cmdk"
 import { Search } from "lucide-react"
 
 import { cn } from "@/shared/lib/utils"
-import { Dialog, DialogContent } from "@/shared/components/ui/dialog"
+import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "@/shared/components/ui/dialog"
 
 const Command = React.forwardRef<
   React.ElementRef<typeof CommandPrimitive>,
@@ -23,11 +23,27 @@ const Command = React.forwardRef<
 ))
 Command.displayName = CommandPrimitive.displayName
 
-const CommandDialog = ({ children, ...props }: DialogProps) => {
+type CommandDialogProps = DialogProps & {
+  /** Accessible name for the dialog (rendered visually hidden) and the cmdk root. */
+  title: string
+  /**
+   * Element that opens the dialog. Rendering it inside the same Dialog root
+   * lets Radix return focus to it on close; a button outside the root would
+   * leave focus on `body` since the modal content refocuses its own
+   * (then empty) trigger ref.
+   */
+  trigger?: React.ReactNode
+  /** Forwarded to the inner cmdk root (e.g. `defaultValue` to pre-highlight a row). */
+  commandProps?: React.ComponentPropsWithoutRef<typeof CommandPrimitive>
+}
+
+const CommandDialog = ({ children, title, trigger, commandProps, ...props }: CommandDialogProps) => {
   return (
     <Dialog {...props}>
+      {trigger ? <DialogTrigger asChild>{trigger}</DialogTrigger> : null}
       <DialogContent className="overflow-hidden p-0 shadow-[var(--qd-shadow-lg)]">
-        <Command className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-text-secondary [&_[cmdk-group]:not([hidden])_~[cmdk-group]]:pt-0 [&_[cmdk-group]]:px-2 [&_[cmdk-input-wrapper]_svg]:h-5 [&_[cmdk-input-wrapper]_svg]:w-5 [&_[cmdk-input]]:h-12 [&_[cmdk-item]]:px-2 [&_[cmdk-item]]:py-3 [&_[cmdk-item]_svg]:h-5 [&_[cmdk-item]_svg]:w-5">
+        <DialogTitle className="sr-only">{title}</DialogTitle>
+        <Command label={title} {...commandProps} className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-text-secondary [&_[cmdk-group]:not([hidden])_~[cmdk-group]]:pt-0 [&_[cmdk-group]]:px-2 [&_[cmdk-input-wrapper]_svg]:h-5 [&_[cmdk-input-wrapper]_svg]:w-5 [&_[cmdk-input]]:h-12 [&_[cmdk-item]]:px-2 [&_[cmdk-item]]:py-3 [&_[cmdk-item]_svg]:h-5 [&_[cmdk-item]_svg]:w-5">
           {children}
         </Command>
       </DialogContent>
