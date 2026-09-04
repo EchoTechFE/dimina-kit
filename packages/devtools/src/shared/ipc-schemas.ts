@@ -57,35 +57,41 @@ export const ProjectSaveCompileConfigSchema = z.tuple([
  * untouched; `normalizeCompileModes` does the semantic coercion after this
  * structural check.
  */
+// `.default('')` (not `.optional()`) so the parsed type matches CompileMode's
+// required `name`/`query` strings — a command's mode is always a complete
+// CompileMode, never a partial patch.
 const CompileModeShape = z.looseObject({
-  name: z.string().optional(),
+  name: z.string().default(''),
   pathName: z.string(),
-  query: z.string().optional(),
-  scene: z.number().nullable().optional(),
+  query: z.string().default(''),
+  scene: z.number().nullable().default(null),
 })
 
-const CompileModesShape = z.looseObject({
-  current: z.number().int(),
-  list: z.array(CompileModeShape),
-})
-
-/** project:getCompileModes — absolute project path. */
-export const ProjectGetCompileModesSchema = z.tuple([AbsolutePath])
-
-/** project:saveCompileModes — absolute project path + the full mode list. */
-export const ProjectSaveCompileModesSchema = z.tuple([
-  AbsolutePath,
-  CompileModesShape,
-])
+/** project:getCompileModeState — absolute project path. */
+export const ProjectGetCompileModeStateSchema = z.tuple([AbsolutePath])
 
 /**
- * popover:apply — the edited mode list plus whether the running session must
- * be relaunched to reflect it.
+ * A compile-mode id: minted by the store, never empty. `select` alone also
+ * allows `null` (普通编译), so it is not part of this shape.
  */
+const CompileModeId = z.string().min(1)
+
+/**
+ * The single command shape the popover sends instead of a whole new list —
+ * main is the only thing that interprets it against the live store. Mirrors
+ * `CompileModeCommand` in `compile-mode-state.ts`.
+ */
+export const CompileModeCommandSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('select'), id: CompileModeId.nullable() }),
+  z.object({ type: z.literal('add'), mode: CompileModeShape }),
+  z.object({ type: z.literal('update'), id: CompileModeId, mode: CompileModeShape }),
+  z.object({ type: z.literal('remove'), id: CompileModeId }),
+])
+
+/** popover:apply — the command to interpret against the open project's store. */
 export const PopoverApplySchema = z.tuple([
   z.object({
-    modes: CompileModesShape,
-    relaunch: z.boolean(),
+    command: CompileModeCommandSchema,
   }),
 ])
 

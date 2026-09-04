@@ -3,7 +3,7 @@ import { useEffect, useRef } from 'react'
 import type { RefObject } from 'react'
 import { DEVICES, SIM_PANEL_PADDING, type ZoomSetting } from '@/shared/constants'
 import type { AppInfo, ProjectStatus, SessionRuntimeStatusPayload } from '@/shared/api'
-import type { CompileConfig, CompileModes } from '@/shared/types'
+import type { CompileConfig, CompileModeState } from '@/shared/types'
 import type { AppDataPanelSource, StoragePanelSource, WxmlPanelSource } from '@dimina-kit/inspect'
 import { DEFAULT_RIGHT_PANE_STATE } from '../types'
 import type { RightPaneState, RightPaneTabId } from '../types'
@@ -36,10 +36,10 @@ interface SessionSlice {
   /** The page 普通编译 launches. */
   entryPagePath: string
   /** Named compile modes + selection — the toolbar label reads from this. */
-  compileModes: CompileModes
+  compileModes: CompileModeState
+  /** Gates the compile-mode button — see `SessionHookResult.compileModesReady`. */
+  compileModesReady: boolean
   compileConfig: CompileConfig
-  /** Persist edited modes, relaunching when they change what is running. */
-  applyCompileModes: (modes: CompileModes, relaunch: boolean) => Promise<void>
   /** 编译 tab event log (useSession passthrough — feeds BottomDebugPanel). */
   compileEvents: CompileEvent[]
   /** 编译 tab per-line dmcc log (useSession passthrough). */
@@ -111,7 +111,7 @@ export interface ProjectRuntimeController {
  * entry point so `project-runtime.tsx` stays declarative.
  *
  * Side-effect ordering preserved from the pre-controller hooks:
- *  1. openProject → getProjectPages / getCompileModes → compileStatus ready
+ *  1. openProject → getProjectPages / getCompileModeState → compileStatus ready
  *  2. compileStatus ready → webview attach + sendDeviceInfo + ipc-message
  *  3. popover:closed → clear showCompilePanel; popover:apply → save + relaunch
  */
@@ -171,8 +171,6 @@ export function useProjectRuntimeController(
   })
 
   const popoverHook = usePopover({
-    applyCompileModes: sessionHook.applyCompileModes,
-    compileModes: sessionHook.compileModes,
     pages: sessionHook.pages,
     entryPagePath: sessionHook.entryPagePath,
     // The page the simulator is actually showing, so 以当前页面新建编译模式
@@ -191,8 +189,8 @@ export function useProjectRuntimeController(
       pages: sessionHook.pages,
       entryPagePath: sessionHook.entryPagePath,
       compileModes: sessionHook.compileModes,
+      compileModesReady: sessionHook.compileModesReady,
       compileConfig: sessionHook.compileConfig,
-      applyCompileModes: sessionHook.applyCompileModes,
       compileEvents: sessionHook.compileEvents,
       compileLogs: sessionHook.compileLogs,
       clearCompileEvents: sessionHook.clearCompileEvents,

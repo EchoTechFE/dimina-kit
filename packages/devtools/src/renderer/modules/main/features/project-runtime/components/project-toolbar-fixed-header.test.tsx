@@ -43,6 +43,7 @@ async function renderToolbar() {
     <ProjectToolbar
       compileDropdownRef={React.createRef<HTMLDivElement>()}
       compileModeLabel="普通编译"
+      compileModesReady
       showCompilePanel={false}
       onToggleCompilePanel={() => {}}
       onRelaunch={() => {}}

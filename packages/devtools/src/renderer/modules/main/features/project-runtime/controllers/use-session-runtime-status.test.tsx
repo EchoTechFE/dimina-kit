@@ -59,8 +59,13 @@ vi.mock('@/shared/api', () => {
       pages: ['pages/index/index'],
       entryPagePath: 'pages/index/index',
     })),
-    getCompileModes: vi.fn(async () => ({ current: -1, list: [] })),
-    saveCompileModes: vi.fn(async () => {}),
+    getCompileModeState: vi.fn(async () => ({
+      revision: 1,
+      state: { selectedId: null, entries: [] },
+      relaunch: false,
+    })),
+    onCompileModesChanged: vi.fn(() => () => {}),
+    onCompileModesApplyFailed: vi.fn(() => () => {}),
     onProjectStatus: vi.fn((handler: (s: unknown) => void) => {
       projectStatusListeners.push(handler)
       return () => {

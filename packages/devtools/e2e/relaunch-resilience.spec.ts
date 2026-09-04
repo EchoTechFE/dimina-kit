@@ -154,9 +154,10 @@ async function clickRelaunchButton(workbench: import('@playwright/test').Page) {
 
 /**
  * Relaunch the simulator at `targetPage` via the compile-mode popover.
- * Selecting a page is now "create a mode pointed at it" — `upsertCompileMode`
- * with `index: null` always relaunches (popover.tsx `handleCreate` +
- * `handleSubmit`), so filling and submitting the "添加编译模式" form both picks
+ * Selecting a page is now "create a mode pointed at it" — the popover sends
+ * an `add` command (popover.tsx `handleCreate` + `handleSubmit`), main's
+ * `CompileModeStore` appends the new entry and selects it, and that always
+ * relaunches, so filling and submitting the "添加编译模式" form both picks
  * the page AND fires the same real relaunch the old inline 重新编译 did.
  *
  * Call sites pass short page names (`'storage-test'`) rather than full routes

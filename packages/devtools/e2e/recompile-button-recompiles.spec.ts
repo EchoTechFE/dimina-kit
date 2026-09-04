@@ -100,9 +100,10 @@ async function reselectNormalCompileInPopover(): Promise<void> {
 
 /**
  * Reproduce "pick a different start page, then trigger 重新编译" — the new
- * popover collapses that into one action: creating a mode always relaunches
- * (`upsertCompileMode` with `index: null`), so filling and submitting the
- * "添加编译模式" form both selects the page AND fires the same real recompile.
+ * popover collapses that into one action: creating a mode sends an `add`
+ * command, main's `CompileModeStore` appends the new entry and selects it,
+ * and that always relaunches, so filling and submitting the "添加编译模式"
+ * form both selects the page AND fires the same real recompile.
  */
 async function createAndLaunchCompileMode(pathName: string): Promise<void> {
   await openCompileModePopover(workbench, electronApp)

@@ -26,11 +26,20 @@
  * The editor only renders once the popover opens it over the menu, so each
  * case drives the popover there first: click a mode's pencil to edit it, or
  * "添加编译模式" to create one.
+ *
+ * Init payload carries the id-based `state: CompileModeState`, not the old
+ * index-based `modes: {current, list}` — the menu's entries are keyed and
+ * edited by id.
  */
 import React from 'react'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { CompileMode } from '../../shared/types'
+
+interface FakeCompileModeState {
+  selectedId: string | null
+  entries: Array<{ id: string; mode: CompileMode }>
+}
 
 const { popoverInitListeners } = vi.hoisted(() => ({
   popoverInitListeners: [] as Array<(payload: unknown) => void>,
@@ -40,7 +49,7 @@ function emitPopoverInit(payload: {
   top: number
   left: number
   pages: string[]
-  modes: { current: number; list: CompileMode[] }
+  state: FakeCompileModeState
   entryPagePath: string
   currentRoute: string
 }): void {
@@ -55,7 +64,7 @@ vi.mock('@/shared/api', () => ({
       if (i >= 0) popoverInitListeners.splice(i, 1)
     }
   }),
-  emitPopoverApply: vi.fn(),
+  applyPopoverCommand: vi.fn(async () => {}),
   hidePopover: vi.fn(async () => {}),
   notifyOverlayReady: vi.fn(),
 }))
@@ -74,9 +83,9 @@ describe('CompileModeDialog — 启动页面 select stays truthful for every pat
         top: 0,
         left: 0,
         pages: ['pages/index/index', 'pages/other/other'],
-        modes: {
-          current: -1,
-          list: [{ name: '已删除页面', pathName: 'pages/deleted/deleted', query: '', scene: null }],
+        state: {
+          selectedId: null,
+          entries: [{ id: 'm1', mode: { name: '已删除页面', pathName: 'pages/deleted/deleted', query: '', scene: null } }],
         },
         entryPagePath: 'pages/index/index',
         currentRoute: '',
@@ -108,9 +117,9 @@ describe('CompileModeDialog — 启动页面 select stays truthful for every pat
         top: 0,
         left: 0,
         pages: ['pages/index/index', 'pages/other/other'],
-        modes: {
-          current: -1,
-          list: [{ name: '其他页面', pathName: 'pages/other/other', query: '', scene: null }],
+        state: {
+          selectedId: null,
+          entries: [{ id: 'm1', mode: { name: '其他页面', pathName: 'pages/other/other', query: '', scene: null } }],
         },
         entryPagePath: 'pages/index/index',
         currentRoute: '',
@@ -135,7 +144,7 @@ describe('CompileModeDialog — 启动页面 select stays truthful for every pat
         top: 0,
         left: 0,
         pages: ['pages/index/index'],
-        modes: { current: -1, list: [] },
+        state: { selectedId: null, entries: [] },
         // Empty entryPagePath is the case that seeds a new mode's pathName
         // with '' — nothing was reported as the app's entry page yet.
         entryPagePath: '',

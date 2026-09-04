@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   NORMAL_COMPILE_INDEX,
+  compileConfigFromMode,
   compileConfigToMode,
   compileModeLabel,
   normalizeCompileModes,
@@ -123,31 +124,51 @@ describe('resolveCompileConfig', () => {
 })
 
 // ── compileModeLabel ─────────────────────────────────────────────────────────
+// Signature changed: the id-based model has no `current`/`list` to index into
+// — the caller already resolved which mode (if any) is selected, so the
+// label function now takes that single mode directly.
 
 describe('compileModeLabel', () => {
-  it('labels normal compile (current -1)', () => {
-    expect(compileModeLabel({ current: NORMAL_COMPILE_INDEX, list: [] })).toBe('普通编译')
+  it('labels normal compile for null (nothing selected)', () => {
+    expect(compileModeLabel(null)).toBe('普通编译')
   })
 
   it('prefers the mode name when present', () => {
-    expect(
-      compileModeLabel({ current: 0, list: [{ name: 'my mode', pathName: 'pages/a/a', query: '', scene: null }] }),
-    ).toBe('my mode')
+    expect(compileModeLabel({ name: 'my mode', pathName: 'pages/a/a', query: '', scene: null })).toBe('my mode')
   })
 
   it('falls back to pathName when name is empty', () => {
-    expect(
-      compileModeLabel({ current: 0, list: [{ name: '', pathName: 'pages/a/a', query: '', scene: null }] }),
-    ).toBe('pages/a/a')
+    expect(compileModeLabel({ name: '', pathName: 'pages/a/a', query: '', scene: null })).toBe('pages/a/a')
   })
 
   // A mode with no name and 启动页面 left on 默认为首页 still carries its own
   // params and scene, so labelling it 普通编译 would tell the user they are
-  // running something they are not — only current === -1 may say 普通编译.
-  it('never says 普通编译 for a selected mode, even with both name and pathName empty', () => {
+  // running something they are not — only a null mode may say 普通编译.
+  it('never says 普通编译 for a non-null mode, even with both name and pathName empty', () => {
+    expect(compileModeLabel({ name: '', pathName: '', query: 'a=1', scene: null })).toBe('未命名模式')
+  })
+})
+
+// ── compileConfigFromMode ────────────────────────────────────────────────────
+// The id-based model's counterpart to resolveCompileConfig: derives the
+// launch config straight from a single (already-selected) mode, or the
+// normal-compile default when nothing is selected.
+
+describe('compileConfigFromMode', () => {
+  it('resolves to the normal-compile default for null', () => {
+    expect(compileConfigFromMode(null)).toEqual({ startPage: '', scene: DEFAULT_SCENE, queryParams: [] })
+  })
+
+  it('derives startPage/scene/queryParams from the given mode', () => {
     expect(
-      compileModeLabel({ current: 0, list: [{ name: '', pathName: '', query: 'a=1', scene: null }] }),
-    ).toBe('未命名模式')
+      compileConfigFromMode({ name: 'foo', pathName: 'pages/a/a', query: 'id=1', scene: 1002 }),
+    ).toEqual({ startPage: 'pages/a/a', scene: 1002, queryParams: [{ key: 'id', value: '1' }] })
+  })
+
+  it('falls back to DEFAULT_SCENE when the mode has scene: null', () => {
+    expect(compileConfigFromMode({ name: 'foo', pathName: 'pages/a/a', query: '', scene: null }).scene).toBe(
+      DEFAULT_SCENE,
+    )
   })
 })
 

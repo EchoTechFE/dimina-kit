@@ -114,7 +114,19 @@ export function stringifyQueryParams(
  * entry page for it, since only the caller knows the project.
  */
 export function resolveCompileConfig(modes: CompileModes): CompileConfig {
-  const mode = selectedMode(modes)
+  const { current, list } = modes
+  const mode = Number.isInteger(current) && current >= 0 && current < list.length
+    ? list[current] ?? null
+    : null
+  return compileConfigFromMode(mode)
+}
+
+/**
+ * The id-based model's counterpart to `resolveCompileConfig`: derives the
+ * launch parameters straight from a single already-selected mode (or the
+ * normal-compile default for `null`) without any index/list to consult.
+ */
+export function compileConfigFromMode(mode: CompileMode | null): CompileConfig {
   if (!mode) {
     return { startPage: '', scene: DEFAULT_SCENE, queryParams: [] }
   }
@@ -128,11 +140,10 @@ export function resolveCompileConfig(modes: CompileModes): CompileConfig {
 /**
  * Text for the toolbar's compile-mode button: the selected mode's name,
  * falling back to its start page when the user left the name blank, so an
- * unnamed mode is still identifiable. Only 普通编译 itself may produce the
- * 普通编译 label — see {@link UNNAMED_MODE_LABEL}.
+ * unnamed mode is still identifiable. Only `null` (nothing selected) may
+ * produce the 普通编译 label — see {@link UNNAMED_MODE_LABEL}.
  */
-export function compileModeLabel(modes: CompileModes): string {
-  const mode = selectedMode(modes)
+export function compileModeLabel(mode: CompileMode | null): string {
   if (!mode) return NORMAL_COMPILE_LABEL
   return mode.name || mode.pathName || UNNAMED_MODE_LABEL
 }
@@ -233,75 +244,6 @@ export function routeToMode(route: string, name: string): CompileMode {
     query: qIdx >= 0 ? route.slice(qIdx + 1) : '',
     scene: null,
   }
-}
-
-/**
- * Select a mode by index, or 普通编译 with {@link NORMAL_COMPILE_INDEX}. An
- * index that isn't in the list falls back to 普通编译 rather than leaving
- * `current` pointing at nothing.
- */
-export function selectCompileMode(modes: CompileModes, index: number): CompileModes {
-  return {
-    current: isSelectable(modes.list, index) ? index : NORMAL_COMPILE_INDEX,
-    list: [...modes.list],
-  }
-}
-
-/**
- * Insert (`index === null`) or replace a mode. A new mode is appended AND
- * selected — the user created it to run it. `relaunch` reports whether the
- * running configuration changed, so editing some other mode doesn't restart
- * the simulator.
- */
-export function upsertCompileMode(
-  modes: CompileModes,
-  index: number | null,
-  mode: CompileMode,
-): { modes: CompileModes; relaunch: boolean } {
-  const list = [...modes.list]
-  if (index === null || !isSelectable(list, index)) {
-    list.push(mode)
-    return { modes: { current: list.length - 1, list }, relaunch: true }
-  }
-  list[index] = mode
-  return {
-    modes: { current: modes.current, list },
-    relaunch: index === modes.current,
-  }
-}
-
-/**
- * Delete a mode, keeping `current` on whatever was selected before: removing
- * an earlier entry shifts it down, removing the selected one falls back to
- * 普通编译 (the only selection that is always valid).
- */
-export function removeCompileMode(
-  modes: CompileModes,
-  index: number,
-): { modes: CompileModes; relaunch: boolean } {
-  if (!isSelectable(modes.list, index)) {
-    return { modes: { current: modes.current, list: [...modes.list] }, relaunch: false }
-  }
-  const list = modes.list.filter((_, i) => i !== index)
-  if (modes.current === index) {
-    return { modes: { current: NORMAL_COMPILE_INDEX, list }, relaunch: true }
-  }
-  return {
-    modes: { current: modes.current > index ? modes.current - 1 : modes.current, list },
-    relaunch: false,
-  }
-}
-
-function isSelectable(list: CompileMode[], index: number): boolean {
-  return Number.isInteger(index) && index >= 0 && index < list.length
-}
-
-function selectedMode(modes: CompileModes): CompileMode | null {
-  const list = modes?.list
-  if (!Array.isArray(list)) return null
-  const current = modes.current
-  if (!Number.isInteger(current) || current < 0 || current >= list.length) return null
-  return list[current] ?? null
 }
 
 /**

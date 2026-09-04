@@ -16,7 +16,11 @@
 import React from 'react'
 import { act, render } from '@testing-library/react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import type { CompileMode } from '../../shared/types'
+
+interface FakeCompileModeState {
+  selectedId: string | null
+  entries: Array<{ id: string; mode: { name: string; pathName: string; query: string; scene: number | null } }>
+}
 
 const { popoverInitListeners } = vi.hoisted(() => ({
   popoverInitListeners: [] as Array<(payload: unknown) => void>,
@@ -26,7 +30,7 @@ function emitPopoverInit(payload: {
   top: number
   left: number
   pages: string[]
-  modes: { current: number; list: CompileMode[] }
+  state: FakeCompileModeState
   entryPagePath: string
   currentRoute: string
 }): void {
@@ -41,7 +45,7 @@ vi.mock('@/shared/api', () => ({
       if (i >= 0) popoverInitListeners.splice(i, 1)
     }
   }),
-  emitPopoverApply: vi.fn(),
+  applyPopoverCommand: vi.fn(async () => {}),
   hidePopover: vi.fn(async () => {}),
   notifyOverlayReady: vi.fn(),
 }))
@@ -69,7 +73,7 @@ describe('Popover — re-clamps the panel when the view gains its size', () => {
         top: 40,
         left: 10,
         pages: ['pages/index/index'],
-        modes: { current: -1, list: [] },
+        state: { selectedId: null, entries: [] },
         entryPagePath: 'pages/index/index',
         currentRoute: '',
       })
@@ -85,7 +89,7 @@ describe('Popover — re-clamps the panel when the view gains its size', () => {
         top: 40,
         left: 10,
         pages: ['pages/index/index'],
-        modes: { current: -1, list: [] },
+        state: { selectedId: null, entries: [] },
         entryPagePath: 'pages/index/index',
         currentRoute: '',
       })
@@ -112,7 +116,7 @@ describe('Popover — re-clamps the panel when the view gains its size', () => {
         top: 40,
         left: 10,
         pages: ['pages/index/index'],
-        modes: { current: -1, list: [] },
+        state: { selectedId: null, entries: [] },
         entryPagePath: 'pages/index/index',
         currentRoute: '',
       })

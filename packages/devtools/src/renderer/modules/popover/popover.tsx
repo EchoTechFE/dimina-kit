@@ -1,26 +1,21 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { POPOVER_WIDTH_PX, POPOVER_MARGIN_PX } from '../../shared/constants'
-import { emitPopoverApply, hidePopover, notifyOverlayReady, onPopoverInit } from '@/shared/api'
-import type { CompileMode, CompileModes } from '../../shared/types'
-import {
-  emptyCompileModes,
-  removeCompileMode,
-  routeToMode,
-  selectCompileMode,
-  upsertCompileMode,
-} from '../../../shared/compile-modes'
+import { applyPopoverCommand, hidePopover, notifyOverlayReady, onPopoverInit } from '@/shared/api'
+import type { CompileMode, CompileModeCommand, CompileModeId, CompileModeState } from '../../shared/types'
+import { routeToMode } from '../../../shared/compile-modes'
+import { emptyCompileModeState } from '../../../shared/compile-mode-state'
 import { CompileModeMenu } from './compile-mode-menu'
 import { CompileModeDialog } from './compile-mode-dialog'
 
 /**
  * The popover is either picking a mode or editing one. Picking is the anchored
  * menu; editing opens a centered dialog over it, so the menu stays as context
- * and the form is free to be as tall as its parameter rows need. `index` is the
- * list position being edited, `null` for a mode that doesn't exist yet.
+ * and the form is free to be as tall as its parameter rows need. `id` is the
+ * entry being edited, `null` for a mode that doesn't exist yet.
  */
 type View =
   | { kind: 'menu' }
-  | { kind: 'form'; title: string; index: number | null; mode: CompileMode }
+  | { kind: 'form'; title: string; id: CompileModeId | null; mode: CompileMode }
 
 /** A new mode starts named after its page, so 确定 is reachable in one click. */
 function defaultModeName(pathName: string): string {
@@ -29,7 +24,7 @@ function defaultModeName(pathName: string): string {
 
 export default function Popover() {
   const [position, setPosition] = useState({ top: 0, left: 0 })
-  const [modes, setModes] = useState<CompileModes>(emptyCompileModes())
+  const [state, setState] = useState<CompileModeState>(emptyCompileModeState())
   const [pages, setPages] = useState<string[]>([])
   const [entryPagePath, setEntryPagePath] = useState('')
   const [currentRoute, setCurrentRoute] = useState('')
@@ -51,7 +46,7 @@ export default function Popover() {
 
     const off = onPopoverInit((data) => {
       setPages(data.pages)
-      setModes(data.modes)
+      setState(data.state)
       setEntryPagePath(data.entryPagePath)
       setCurrentRoute(data.currentRoute)
       // The popover view is reused across openings, so a previous session's
@@ -73,21 +68,32 @@ export default function Popover() {
     }
   }, [])
 
-  function handleSelect(index: number) {
-    emitPopoverApply({ modes: selectCompileMode(modes, index), relaunch: true })
+  // Sole call site of `applyPopoverCommand`. When main's Apply handler
+  // rejects (e.g. a failed persist), it already broadcasts
+  // `compileModesApplyFailed` and the main window shows it — by the time
+  // that happens this popover has already been closed (every command dispatch
+  // is followed by hiding the menu), so there is nowhere here to surface the
+  // error. Swallowing the rejection is deliberate: an unhandled `catch` would
+  // just turn it into an unhandled rejection in the popover's own window.
+  function dispatch(command: CompileModeCommand): void {
+    applyPopoverCommand(command).catch(() => {})
   }
 
-  function handleEdit(index: number) {
-    const mode = modes.list[index]
+  function handleSelect(id: CompileModeId | null) {
+    dispatch({ type: 'select', id })
+  }
+
+  function handleEdit(id: CompileModeId) {
+    const mode = state.entries.find((entry) => entry.id === id)?.mode
     if (!mode) return
-    setView({ kind: 'form', title: '编辑编译模式', index, mode })
+    setView({ kind: 'form', title: '编辑编译模式', id, mode })
   }
 
   function handleCreate() {
     setView({
       kind: 'form',
       title: '添加编译模式',
-      index: null,
+      id: null,
       mode: {
         name: defaultModeName(entryPagePath),
         pathName: entryPagePath,
@@ -102,19 +108,19 @@ export default function Popover() {
     setView({
       kind: 'form',
       title: '以当前页面新建',
-      index: null,
+      id: null,
       mode: { ...seeded, name: defaultModeName(seeded.pathName) },
     })
   }
 
   function handleSubmit(mode: CompileMode) {
     if (view.kind !== 'form') return
-    emitPopoverApply(upsertCompileMode(modes, view.index, mode))
+    dispatch(view.id === null ? { type: 'add', mode } : { type: 'update', id: view.id, mode })
   }
 
   function handleDelete() {
-    if (view.kind !== 'form' || view.index === null) return
-    emitPopoverApply(removeCompileMode(modes, view.index))
+    if (view.kind !== 'form' || view.id === null) return
+    dispatch({ type: 'remove', id: view.id })
   }
 
   return (
@@ -127,7 +133,7 @@ export default function Popover() {
         onClick={(e) => e.stopPropagation()}
       >
         <CompileModeMenu
-          modes={modes}
+          state={state}
           entryPagePath={entryPagePath}
           currentRoute={currentRoute}
           onSelect={handleSelect}
@@ -142,7 +148,7 @@ export default function Popover() {
           title={view.title}
           mode={view.mode}
           pages={pages}
-          canDelete={view.index !== null}
+          canDelete={view.id !== null}
           onSubmit={handleSubmit}
           onCancel={() => setView({ kind: 'menu' })}
           onDelete={handleDelete}

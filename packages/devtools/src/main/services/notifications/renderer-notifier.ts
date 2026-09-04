@@ -1,5 +1,5 @@
 import type { BrowserWindow, WebContents, WebContentsView } from 'electron'
-import type { CompileModes } from '../../../shared/types.js'
+import type { CompileModeChange } from '../workspace/compile-mode-store.js'
 import {
   ProjectChannel,
   SessionChannel,
@@ -124,11 +124,18 @@ export interface RendererNotifier {
   /** Tell the main renderer the compile popover has been closed. */
   popoverClosed(): void
   /**
-   * Hand the main renderer the compile modes the user just edited in the
-   * popover. `relaunch` is true when the change affects what is currently
-   * running, so the renderer restarts the simulator with it.
+   * Push the open project's `CompileModeStore` after it advanced — via the
+   * popover or any other command source. `relaunch` is true when the change
+   * affects what is currently running, so the renderer restarts the
+   * simulator with it.
    */
-  popoverApply(payload: { modes: CompileModes; relaunch: boolean }): void
+  compileModesChanged(change: CompileModeChange): void
+  /**
+   * Push a rejected `applyCompileModeCommand` (e.g. a failed persist). The
+   * renderer surfaces this as a compile-status error without touching its
+   * mirrored `compileModes`.
+   */
+  compileModesApplyFailed(payload: { message: string }): void
   /**
    * Push the reserved host-toolbar height to the main renderer so its toolbar
    * placeholder div resizes (closes the host-toolbar dynamic-height loop).
@@ -232,8 +239,11 @@ export function createRendererNotifier(ctx: NotifierContext): RendererNotifier {
     popoverClosed() {
       sendToMain(PopoverChannel.Closed)
     },
-    popoverApply(payload) {
-      sendToMain(PopoverChannel.Apply, payload)
+    compileModesChanged(change) {
+      sendToMain(ProjectChannel.CompileModesChanged, change)
+    },
+    compileModesApplyFailed(payload) {
+      sendToMain(ProjectChannel.CompileModesApplyFailed, payload)
     },
     hostToolbarHeightChanged(height) {
       sendToMain(ViewChannel.HostToolbarHeightChanged, height)

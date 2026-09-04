@@ -3,20 +3,20 @@ import { Pencil, Plus } from 'lucide-react'
 import { Button } from '@/shared/components/ui/button'
 import { ScrollArea } from '@/shared/components/ui/scroll-area'
 import { Separator } from '@/shared/components/ui/separator'
-import type { CompileModes } from '@/shared/types'
-import { NORMAL_COMPILE_INDEX, UNNAMED_MODE_LABEL } from '../../../shared/compile-modes'
+import type { CompileModeId, CompileModeState } from '@/shared/types'
+import { UNNAMED_MODE_LABEL } from '../../../shared/compile-modes'
 
 /** Custom modes past this many get their own scroll region instead of growing the card. */
 const LIST_MAX_HEIGHT = 'max-h-[280px]'
 
 interface CompileModeMenuProps {
-  modes: CompileModes
+  state: CompileModeState
   /** What 普通编译 launches, shown as its subtitle. */
   entryPagePath: string
   /** The simulator's visible route; empty when nothing is running. */
   currentRoute: string
-  onSelect: (index: number) => void
-  onEdit: (index: number) => void
+  onSelect: (id: CompileModeId | null) => void
+  onEdit: (id: CompileModeId) => void
   onCreate: () => void
   onCreateFromCurrentPage: () => void
 }
@@ -54,6 +54,11 @@ function ModeRow(props: {
         type="button"
         role="menuitemradio"
         aria-checked={selected}
+        // The subtitle (page path) is presentational context, not part of
+        // what identifies the row — an explicit label keeps the accessible
+        // name (and duplicate-name test queries) matching just `label`,
+        // regardless of how much subtitle text sits inside the button.
+        aria-label={label}
         data-testid="compile-mode-row"
         data-mode-label={label}
         className="min-w-0 flex-1 appearance-none border-0 bg-transparent px-2.5 py-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-[var(--qd-primary)] rounded-[var(--qd-radius-md)]"
@@ -111,7 +116,7 @@ function ActionRow(props: {
  */
 export function CompileModeMenu(props: CompileModeMenuProps) {
   const {
-    modes,
+    state,
     entryPagePath,
     currentRoute,
     onSelect,
@@ -125,25 +130,25 @@ export function CompileModeMenu(props: CompileModeMenuProps) {
       <ModeRow
         label="普通编译"
         subtitle={entryPagePath}
-        selected={modes.current === NORMAL_COMPILE_INDEX}
-        onSelect={() => onSelect(NORMAL_COMPILE_INDEX)}
+        selected={state.selectedId === null}
+        onSelect={() => onSelect(null)}
       />
 
-      {modes.list.length > 0 && (
+      {state.entries.length > 0 && (
         <>
           <Separator className="my-0.5" />
           <ScrollArea className={LIST_MAX_HEIGHT}>
             <div className="flex flex-col gap-1 pr-1">
-              {modes.list.map((mode, i) => (
+              {state.entries.map((entry) => (
                 <ModeRow
-                  key={i}
+                  key={entry.id}
                   // The path is already the subtitle, so falling back to it for
                   // the title too would print the same string twice.
-                  label={mode.name || UNNAMED_MODE_LABEL}
-                  subtitle={mode.query ? `${mode.pathName}?${mode.query}` : mode.pathName}
-                  selected={modes.current === i}
-                  onSelect={() => onSelect(i)}
-                  onEdit={() => onEdit(i)}
+                  label={entry.mode.name || UNNAMED_MODE_LABEL}
+                  subtitle={entry.mode.query ? `${entry.mode.pathName}?${entry.mode.query}` : entry.mode.pathName}
+                  selected={state.selectedId === entry.id}
+                  onSelect={() => onSelect(entry.id)}
+                  onEdit={() => onEdit(entry.id)}
                 />
               ))}
             </div>

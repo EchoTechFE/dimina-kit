@@ -19,6 +19,14 @@ interface ProjectToolbarProps {
   onToggleCompilePanel: () => void
   /** Name of the selected compile mode, or 普通编译 when none is selected. */
   compileModeLabel: string
+  /**
+   * Gates the compile-mode button. Before main has opened this window's
+   * project into a `CompileModeStore` (and this window has adopted a
+   * snapshot/push from it), clicking through would surface a main-process
+   * `no compile-mode store open` error instead of a usable menu. Required so
+   * every caller states when the button becomes usable.
+   */
+  compileModesReady: boolean
   onRelaunch: () => void | Promise<void>
   compileStatus: { status: string; message: string }
   /** Dock model + registry powering the panel visibility + layout toggles. */
@@ -54,6 +62,7 @@ export function ProjectToolbar({
   showCompilePanel,
   onToggleCompilePanel,
   compileModeLabel,
+  compileModesReady,
   onRelaunch,
   compileStatus,
   dockModel,
@@ -80,11 +89,15 @@ export function ProjectToolbar({
             owns their editing.
 
             No tooltip: the button already shows the selected mode's name,
-            and a tooltip would only repeat it. */}
+            and a tooltip would only repeat it. Disabled until
+            compileModesReady: before main has opened this project's
+            CompileModeStore, the popover's Show would hit
+            `no compile-mode store open` instead of a usable menu. */}
         <div ref={compileDropdownRef as React.Ref<HTMLDivElement>}>
           <Button
             variant="toolbar"
             onClick={onToggleCompilePanel}
+            disabled={!compileModesReady}
             data-active={showCompilePanel ? 'true' : 'false'}
             // The button's accessible name is the selected mode's own name, so
             // it changes as the user switches modes; this gives it a stable
