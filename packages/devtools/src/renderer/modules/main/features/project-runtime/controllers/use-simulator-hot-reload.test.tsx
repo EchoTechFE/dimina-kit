@@ -64,8 +64,7 @@ vi.mock('@/shared/api', () => {
 import { useSimulator } from './use-simulator'
 import type { UseSimulatorProps } from './use-simulator'
 import { parseRoute } from '../../../../../../shared/simulator-route'
-import { DEVICES } from '@/shared/constants'
-import type { DeviceType } from './use-project-runtime-controller'
+import { DEFAULT_DEVICE, type DeviceProfile } from '@devicekit/devices'
 
 beforeEach(() => {
   currentPageListeners.length = 0
@@ -90,7 +89,7 @@ function makeBaseProps(): UseSimulatorProps & { hotReloadToken: number } {
     compileStatus: { status: 'ready', message: '编译完成' },
     sendDeviceInfo: vi.fn(),
     simPanelWidthRef: { current: 420 } as RefObject<number>,
-    deviceRef: { current: DEVICES[1] as DeviceType } as RefObject<DeviceType>,
+    deviceRef: { current: DEFAULT_DEVICE } as RefObject<DeviceProfile>,
     appInfo: { appId: 'hot-reload-app' },
     compileConfig: {
       startPage: START_PAGE,

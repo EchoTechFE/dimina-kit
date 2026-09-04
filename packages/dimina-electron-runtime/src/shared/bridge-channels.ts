@@ -1,4 +1,7 @@
 import type { NativeDeviceInfo } from './runtime-types.js'
+import type { HostEnvSnapshot } from './host-env.js'
+
+export * from './host-env.js'
 
 export const BRIDGE_CHANNELS = {
   SPAWN: 'dmb:spawn',
@@ -142,52 +145,6 @@ export interface MessageEnvelope<TBody extends Record<string, unknown> = Record<
   type: BridgeMessageType
   target: BridgeTarget
   body: TBody
-}
-
-export interface HostEnvSnapshot {
-  brand: string
-  model: string
-  platform: string
-  system: string
-  version: string
-  SDKVersion: string
-  pixelRatio: number
-  screenWidth: number
-  screenHeight: number
-  windowWidth: number
-  windowHeight: number
-  statusBarHeight: number
-  language: string
-  theme: string
-  [key: string]: unknown
-}
-
-/**
- * Map the renderer's logical device metrics onto the subset of a
- * HostEnvSnapshot the service-host window's `getSystemInfoSync` consumes.
- * `windowHeight` excludes the status bar (the page area); `windowWidth` has no
- * horizontal chrome. Zoom is intentionally absent — it is a display scale, not
- * a logical-size change.
- *
- * Single source of truth for the device→host-env mapping, shared by the live
- * `SetDeviceInfo` IPC path (main/ipc/simulator.ts) and the per-spawn host-env
- * seeding (main/ipc/bridge-router.ts). Keeping them identical guarantees a
- * service-host RESPAWN after a device change reports the same dims the live
- * update pushed — otherwise a respawn would silently revert to the boot device.
- */
-export function deviceInfoToHostEnv(d: NativeDeviceInfo): Partial<HostEnvSnapshot> {
-  return {
-    brand: d.brand,
-    model: d.model,
-    system: d.system,
-    platform: d.platform,
-    pixelRatio: d.pixelRatio,
-    screenWidth: d.screenWidth,
-    screenHeight: d.screenHeight,
-    windowWidth: d.screenWidth,
-    windowHeight: Math.max(0, d.screenHeight - d.statusBarHeight),
-    statusBarHeight: d.statusBarHeight,
-  }
 }
 
 /**

@@ -28,12 +28,13 @@ vi.mock('@dimina-kit/view-anchor', () => ({
 }))
 
 import { SimulatorPanel } from './simulator-panel'
+import { DEVICE_NAMES, findDevice } from '@devicekit/devices'
 
 type PanelPropsWithRuntime = Parameters<typeof SimulatorPanel>[0] & {
   runtimeStatus: SessionRuntimeStatusPayload | null
 }
 
-const DEVICE = { name: 'iPhone X', width: 375, height: 812 }
+const DEVICE = findDevice(DEVICE_NAMES.iPhone_X)!
 const REQUESTED = 'pages/removed/removed'
 const RESOLVED = 'pages/index/index'
 

@@ -36,8 +36,9 @@ vi.mock('@dimina-kit/view-anchor', () => ({
 }))
 
 import { SimulatorPanel } from './simulator-panel'
+import { DEVICE_NAMES, findDevice } from '@devicekit/devices'
 
-const DEVICE = { name: 'iPhone X', width: 375, height: 812 }
+const DEVICE = findDevice(DEVICE_NAMES.iPhone_X)!
 
 const publisher = {
   set: vi.fn(),
@@ -93,13 +94,14 @@ describe('SimulatorPanel: auto-fit zoom', () => {
 
     bind.opts.publish({
       visible: true,
-      bounds: { x: 0, y: 0, width: DEVICE.width, height: DEVICE.height },
+      bounds: { x: 0, y: 0, width: DEVICE.screen.width, height: DEVICE.screen.height },
     })
 
     // The DeviceShell desk contributes 24px padding on both sides and the
-    // handset has a 1px border on both edges. 88% is the largest whole percent
-    // that keeps the complete framed handset inside this 375x812 region.
-    expect(lastZoom()).toBe(88)
+    // frame adds its bezel + border on both edges (frameOuterSize). 85% is the
+    // largest whole percent that keeps the complete framed handset inside this
+    // 375x812 region.
+    expect(lastZoom()).toBe(85)
 
     const zoomSelect = container.querySelectorAll('select')[1]
     expect(zoomSelect?.className).toContain('w-[76px]')
@@ -112,13 +114,13 @@ describe('SimulatorPanel: auto-fit zoom', () => {
     const bind = anchorCalls[0]!
     publisher.set.mockClear()
 
-    // The desk frame leaves a 44% whole-percent fit for a half-size region.
+    // The desk frame leaves a 42% whole-percent fit for a half-size region.
     bind.opts.publish({
       visible: true,
-      bounds: { x: 0, y: 0, width: DEVICE.width / 2, height: DEVICE.height / 2 },
+      bounds: { x: 0, y: 0, width: DEVICE.screen.width / 2, height: DEVICE.screen.height / 2 },
     })
 
-    expect(lastZoom()).toBe(44)
+    expect(lastZoom()).toBe(42)
   })
 
   it('recomputes on every re-measure without any additional listener', () => {
@@ -127,16 +129,16 @@ describe('SimulatorPanel: auto-fit zoom', () => {
 
     bind.opts.publish({
       visible: true,
-      bounds: { x: 0, y: 0, width: DEVICE.width / 2, height: DEVICE.height / 2 },
+      bounds: { x: 0, y: 0, width: DEVICE.screen.width / 2, height: DEVICE.screen.height / 2 },
     })
-    expect(lastZoom()).toBe(44)
+    expect(lastZoom()).toBe(42)
 
     // Panel widened — the SAME publish callback (no new observer) re-derives.
     bind.opts.publish({
       visible: true,
-      bounds: { x: 0, y: 0, width: DEVICE.width, height: DEVICE.height },
+      bounds: { x: 0, y: 0, width: DEVICE.screen.width, height: DEVICE.screen.height },
     })
-    expect(lastZoom()).toBe(88)
+    expect(lastZoom()).toBe(85)
   })
 
   it('caps the computed zoom at 100 even when the box is far larger than the device', () => {
@@ -145,7 +147,7 @@ describe('SimulatorPanel: auto-fit zoom', () => {
 
     bind.opts.publish({
       visible: true,
-      bounds: { x: 0, y: 0, width: DEVICE.width * 3, height: DEVICE.height * 3 },
+      bounds: { x: 0, y: 0, width: DEVICE.screen.width * 3, height: DEVICE.screen.height * 3 },
     })
 
     expect(lastZoom()).toBe(100)
@@ -156,16 +158,16 @@ describe('SimulatorPanel: auto-fit zoom', () => {
     const bind = anchorCalls[0]!
     bind.opts.publish({
       visible: true,
-      bounds: { x: 0, y: 0, width: DEVICE.width / 2, height: DEVICE.height / 2 },
+      bounds: { x: 0, y: 0, width: DEVICE.screen.width / 2, height: DEVICE.screen.height / 2 },
     })
-    expect(lastZoom()).toBe(44)
+    expect(lastZoom()).toBe(42)
 
     rerender(panelElement(75))
 
     // A resize after switching back must NOT recompute — it stays at the fixed 75.
     bind.opts.publish({
       visible: true,
-      bounds: { x: 0, y: 0, width: DEVICE.width * 3, height: DEVICE.height * 3 },
+      bounds: { x: 0, y: 0, width: DEVICE.screen.width * 3, height: DEVICE.screen.height * 3 },
     })
     expect(lastZoom()).toBe(75)
   })
@@ -176,27 +178,27 @@ describe('SimulatorPanel: auto-fit zoom', () => {
 
     bind.opts.publish({
       visible: true,
-      bounds: { x: 0, y: 0, width: DEVICE.width / 2, height: DEVICE.height / 2 },
+      bounds: { x: 0, y: 0, width: DEVICE.screen.width / 2, height: DEVICE.screen.height / 2 },
     })
-    expect(lastZoom()).toBe(44)
+    expect(lastZoom()).toBe(42)
 
     bind.opts.publish({ visible: true, bounds: { x: 0, y: 0, width: 0, height: 0 } })
-    expect(lastZoom()).toBe(44)
+    expect(lastZoom()).toBe(42)
   })
 
   it('recomputes against the new device size after switching devices while auto is selected', () => {
     const { rerender } = render(panelElement(AUTO_ZOOM))
     const bind = anchorCalls[0]!
 
-    // The original device plus its desk frame fits this box at 88%.
+    // The original device plus its desk frame fits this box at 85%.
     bind.opts.publish({
       visible: true,
-      bounds: { x: 0, y: 0, width: DEVICE.width, height: DEVICE.height },
+      bounds: { x: 0, y: 0, width: DEVICE.screen.width, height: DEVICE.screen.height },
     })
-    expect(lastZoom()).toBe(88)
+    expect(lastZoom()).toBe(85)
 
     // Switch to a device twice as wide/tall — the same box now only fits it at 46%.
-    const BIGGER_DEVICE = { name: 'iPhone 16 Pro Max (test double)', width: DEVICE.width * 2, height: DEVICE.height * 2 }
+    const BIGGER_DEVICE = { ...DEVICE, name: 'iPhone 16 Pro Max (test double)', screen: { width: DEVICE.screen.width * 2, height: DEVICE.screen.height * 2 } }
     rerender(
       <PlacementPublisherContext.Provider value={publisher}>
         <SimulatorPanel
@@ -213,7 +215,7 @@ describe('SimulatorPanel: auto-fit zoom', () => {
     )
     bind.opts.publish({
       visible: true,
-      bounds: { x: 0, y: 0, width: DEVICE.width, height: DEVICE.height },
+      bounds: { x: 0, y: 0, width: DEVICE.screen.width, height: DEVICE.screen.height },
     })
     expect(lastZoom()).toBe(46)
   })
@@ -228,7 +230,7 @@ describe('SimulatorPanel: auto-fit zoom', () => {
     // turn into a panel-width change, so the geometry ResizeObserver alone
     // cannot be relied on to trigger a re-measure. The zoom-effect's
     // dependency array must include `device` so update() is still forced.
-    const SAME_WIDTH_SHORTER_DEVICE = { name: 'iPhone SE', width: DEVICE.width, height: 667 }
+    const SAME_WIDTH_SHORTER_DEVICE = { ...DEVICE, name: DEVICE_NAMES.iPhone_SE, screen: { width: DEVICE.screen.width, height: 667 } }
     rerender(panelElement(AUTO_ZOOM, SAME_WIDTH_SHORTER_DEVICE))
 
     expect(anchor.handle.update).toHaveBeenCalled()

@@ -32,6 +32,7 @@ import {
 } from './helpers'
 import { AutomationChannel } from '../src/shared/ipc-channels'
 import { DEVICES } from '../src/renderer/shared/constants'
+import { DEVICE_NAMES } from '@devicekit/devices'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURE_DIR = path.resolve(__dirname, 'fixtures', 'tabbar-app')
@@ -41,9 +42,9 @@ const FIXTURE_DIR = path.resolve(__dirname, 'fixtures', 'tabbar-app')
 // reproducing the transient that used to detach the view.
 const CYCLE = [
   DEVICES[0],
-  DEVICES.find((d) => d.name === 'iPhone 14 Pro'),
-  DEVICES.find((d) => d.name === 'iPhone 16 Pro'),
-  DEVICES.find((d) => d.name === 'iPhone SE') ?? DEVICES[0],
+  DEVICES.find((d) => d.name === DEVICE_NAMES.iPhone_14_Pro),
+  DEVICES.find((d) => d.name === DEVICE_NAMES.iPhone_16_Pro),
+  DEVICES.find((d) => d.name === DEVICE_NAMES.iPhone_SE) ?? DEVICES[0],
 ].filter(Boolean) as { name: string }[]
 
 let electronApp: ElectronApplication

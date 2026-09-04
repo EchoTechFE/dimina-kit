@@ -26,8 +26,9 @@ vi.mock('@dimina-kit/view-anchor', () => ({
 }))
 
 import { SimulatorPanel } from './simulator-panel'
+import { DEVICE_NAMES, findDevice } from '@devicekit/devices'
 
-const DEVICE = { name: 'iPhone X', width: 375, height: 812 }
+const DEVICE = findDevice(DEVICE_NAMES.iPhone_X)!
 
 const publisher = {
   set: vi.fn(),

@@ -1,3 +1,5 @@
+import type { NativeDeviceInfo } from '../shared/ipc-channels.js'
+
 /** Callback type used by API functions */
 export type Callback = (...args: unknown[]) => void
 
@@ -34,4 +36,10 @@ export interface MiniAppContext {
    * or mock contexts without it keep the pre-device fallback behavior).
    */
   getDeviceMetrics?(): DeviceMetrics
+  /**
+   * The full currently-emulated device, when one is selected. Handlers that can
+   * answer from the runtime's single window-metric derivation
+   * (`deviceInfoToHostEnv`) use this instead of assembling their own rect.
+   */
+  getCurrentDevice?(): NativeDeviceInfo | null
 }

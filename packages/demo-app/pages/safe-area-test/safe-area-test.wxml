@@ -1,0 +1,40 @@
+<view class="container safe-area-page">
+  <view class="page-title">安全区域 env()</view>
+  <view class="page-desc">四条彩色探针的尺寸直接绑定 env(safe-area-inset-*)，数值是量出来的，不是算出来的。切换机型或横竖屏会自动重量。</view>
+
+  <view class="section">
+    <view class="section-title">env(safe-area-inset-*) 实测</view>
+    <view class="probe-box">
+      <view id="probe-top" class="probe probe-top"></view>
+      <view class="probe-middle">
+        <view id="probe-left" class="probe probe-left"></view>
+        <view class="probe-center">
+          <text class="probe-hint">彩色边 = env() 撑出的区域</text>
+        </view>
+        <view id="probe-right" class="probe probe-right"></view>
+      </view>
+      <view id="probe-bottom" class="probe probe-bottom"></view>
+    </view>
+    <view class="info-row"><text class="info-label">safe-area-inset-top</text><text class="info-value">{{cssInsets.top}}</text></view>
+    <view class="info-row"><text class="info-label">safe-area-inset-right</text><text class="info-value">{{cssInsets.right}}</text></view>
+    <view class="info-row"><text class="info-label">safe-area-inset-bottom</text><text class="info-value">{{cssInsets.bottom}}</text></view>
+    <view class="info-row"><text class="info-label">safe-area-inset-left</text><text class="info-value">{{cssInsets.left}}</text></view>
+    <view class="desc">带默认导航栏的页面从导航栏下方开始，所以 top 一般为 0；顶部刘海留白请看「取消导航栏」页。</view>
+    <button class="btn btn-primary" bindtap="remeasure">重新测量</button>
+  </view>
+
+  <view class="section">
+    <view class="section-title">wx 侧 safeArea</view>
+    <view class="info-row"><text class="info-label">safeArea.top / bottom</text><text class="info-value">{{safeArea.top}} / {{safeArea.bottom}}</text></view>
+    <view class="info-row"><text class="info-label">safeArea.left / right</text><text class="info-value">{{safeArea.left}} / {{safeArea.right}}</text></view>
+    <view class="info-row"><text class="info-label">safeArea.width × height</text><text class="info-value">{{safeArea.width}} × {{safeArea.height}}</text></view>
+    <view class="info-row"><text class="info-label">statusBarHeight</text><text class="info-value">{{windowInfo.statusBarHeight}}px</text></view>
+    <view class="info-row"><text class="info-label">screen</text><text class="info-value">{{windowInfo.screenWidth}} × {{windowInfo.screenHeight}}</text></view>
+    <view class="info-row"><text class="info-label">window</text><text class="info-value">{{windowInfo.windowWidth}} × {{windowInfo.windowHeight}}</text></view>
+    <view class="info-row"><text class="info-label">deviceOrientation</text><text class="info-value">{{orientation}}</text></view>
+  </view>
+
+  <view class="bottom-bar">
+    <text class="bottom-bar-text">固定底栏：padding-bottom 用了 env(safe-area-inset-bottom)，不会被 Home 指示条压住</text>
+  </view>
+</view>

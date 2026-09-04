@@ -277,7 +277,6 @@ export function SimulatorApp() {
           <DeviceShell
             miniApp={shell.miniApp}
             bridgeId={shell.bridgeId}
-            platform={shell.miniApp.platform}
             active={role === 'current'}
           />
         </div>

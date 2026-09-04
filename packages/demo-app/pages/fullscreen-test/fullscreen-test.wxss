@@ -51,3 +51,10 @@
   color: #666;
   line-height: 1.6;
 }
+
+.env-top-probe {
+  height: env(safe-area-inset-top);
+  background: #ff7875;
+  border-radius: 6rpx;
+  margin-bottom: 12rpx;
+}

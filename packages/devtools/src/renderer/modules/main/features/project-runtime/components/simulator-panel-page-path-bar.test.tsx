@@ -15,6 +15,7 @@ vi.mock('@dimina-kit/view-anchor', () => ({
 }))
 
 import { SimulatorPanel } from './simulator-panel'
+import { DEVICE_NAMES, findDevice } from '@devicekit/devices'
 
 const publisher = {
   set: vi.fn(),
@@ -27,7 +28,7 @@ const publisher = {
 
 function panel(currentPage: string) {
   const props: Parameters<typeof SimulatorPanel>[0] = {
-    device: { name: 'iPhone 15', width: 393, height: 852 },
+    device: findDevice(DEVICE_NAMES.iPhone_15)!,
     zoom: 100,
     onDeviceChange: () => {},
     onZoomChange: () => {},
