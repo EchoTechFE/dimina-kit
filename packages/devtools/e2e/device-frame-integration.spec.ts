@@ -227,6 +227,54 @@ test.describe('device-frame integration e2e', () => {
     expect(Math.round(snap!.screenHeight)).toBe(expectedScreen.height)
   })
 
+  test('1b. the page webview fills the screen and the nav bar starts at the screen top (frame content slot must be immersive/flex, not the default block slot)', async () => {
+    const snap = await evalInSimulator<{
+      screenY: number
+      screenBottom: number
+      webviewY: number | null
+      webviewHeight: number | null
+      webviewBottom: number | null
+      navBarY: number | null
+      navBarBottom: number | null
+      tabBarY: number | null
+    } | null>(electronApp, `(() => {
+      const frame = document.querySelector('device-frame')
+      if (!frame || !frame.shadowRoot) return null
+      const screen = frame.shadowRoot.querySelector('.screen')
+      if (!screen) return null
+      const screenRect = screen.getBoundingClientRect()
+      const webviews = Array.from(document.querySelectorAll('.device-shell__webview'))
+      const visible = webviews.find((el) => getComputedStyle(el).display !== 'none')
+      const webviewRect = visible ? visible.getBoundingClientRect() : null
+      const navBar = document.querySelector('header.nav-bar')
+      const navBarRect = navBar ? navBar.getBoundingClientRect() : null
+      const tabBar = document.querySelector('.dmb-tab-bar')
+      const tabBarRect = tabBar ? tabBar.getBoundingClientRect() : null
+      return {
+        screenY: screenRect.y,
+        screenBottom: screenRect.y + screenRect.height,
+        webviewY: webviewRect ? webviewRect.y : null,
+        webviewHeight: webviewRect ? webviewRect.height : null,
+        webviewBottom: webviewRect ? webviewRect.y + webviewRect.height : null,
+        navBarY: navBarRect ? navBarRect.y : null,
+        navBarBottom: navBarRect ? navBarRect.y + navBarRect.height : null,
+        tabBarY: tabBarRect ? tabBarRect.y : null,
+      }
+    })()`)
+
+    expect(snap, 'device-frame .screen and the page webview should both be present').not.toBeNull()
+    expect(snap!.webviewHeight, 'visible .device-shell__webview height').not.toBeNull()
+    expect(snap!.webviewHeight!).toBeGreaterThan(0)
+    expect(snap!.navBarY, 'header.nav-bar rect').not.toBeNull()
+    // Nav bar starts at the screen top: it covers the status-bar band itself.
+    expect(Math.abs(snap!.navBarY! - snap!.screenY)).toBeLessThanOrEqual(1)
+    // The page fills everything between the nav bar and the tab bar (or the
+    // screen bottom on a page without one) — no gap, no zero-height viewport.
+    expect(Math.abs(snap!.webviewY! - snap!.navBarBottom!)).toBeLessThanOrEqual(1)
+    const pageBottom = snap!.tabBarY ?? snap!.screenBottom
+    expect(Math.abs(snap!.webviewBottom! - pageBottom)).toBeLessThanOrEqual(1)
+  })
+
   test('2. selecting iPhone 15 renders ios-cutout and the service-host wx reports iOS dims', async () => {
     await selectDevice(workbench, DEVICE_NAMES.iPhone_15)
 

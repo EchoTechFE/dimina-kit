@@ -194,11 +194,11 @@ importers:
   packages/devtools:
     dependencies:
       '@devicekit/devices':
-        specifier: ^0.2.1
-        version: 0.2.1
+        specifier: ^0.2.2
+        version: 0.2.2
       '@devicekit/frame':
-        specifier: ^0.2.1
-        version: 0.2.1(@types/react@18.3.28)(react@18.3.1)
+        specifier: ^0.2.2
+        version: 0.2.2(@types/react@18.3.28)(react@18.3.1)
       '@dimina-kit/design':
         specifier: workspace:*
         version: link:../design
@@ -1005,12 +1005,12 @@ packages:
     resolution: {integrity: sha512-0cp4PsWQ/9avqTVMCtZ+GirikIA36ikvjtHweU4/j8yLtgObI0+JUPhYFScgwlteveGB1rt3Cm8UhN04XayDig==}
     engines: {node: '>= 8.9.0'}
 
-  '@devicekit/devices@0.2.1':
-    resolution: {integrity: sha512-r9JwH+qBmF5KcgNjPxjCEZ4LApO2TLcgBCt2/AXDjGlJOQSkUmYg52z+Ho6sE5Rp2cjrfgwrEq+esi5P3OL6DQ==}
+  '@devicekit/devices@0.2.2':
+    resolution: {integrity: sha512-4MJvsEIRFu7f9qrU6VIHczgF6X7pz0UrwbQueiyU2C2Z+W08rZHR3CFxpFK2u8ICqg+3RnWmFlHUJjuuZRW2Sg==}
     engines: {node: '>=20'}
 
-  '@devicekit/frame@0.2.1':
-    resolution: {integrity: sha512-PNffcWFzQRoN8rhO+vQt4jBomEeBi8HM0U1D0xErOCj+JFdUVwO7IVkku7jSfy11sVrFbtylyYQzZaNiMQFlVA==}
+  '@devicekit/frame@0.2.2':
+    resolution: {integrity: sha512-mU8bdJ8VRJ9jvzlYfeopSrF1TzGtf0Pv+IWMrN7jkOVIqRO8PsqFoB63+2/iqIg29uf3pGP9ujFEPVHz9UyZ2w==}
     engines: {node: '>=20'}
     peerDependencies:
       '@types/react': '>=18'
@@ -6757,11 +6757,11 @@ snapshots:
       ajv: 6.14.0
       ajv-keywords: 3.5.2(ajv@6.14.0)
 
-  '@devicekit/devices@0.2.1': {}
+  '@devicekit/devices@0.2.2': {}
 
-  '@devicekit/frame@0.2.1(@types/react@18.3.28)(react@18.3.1)':
+  '@devicekit/frame@0.2.2(@types/react@18.3.28)(react@18.3.1)':
     dependencies:
-      '@devicekit/devices': 0.2.1
+      '@devicekit/devices': 0.2.2
     optionalDependencies:
       '@types/react': 18.3.28
       react: 18.3.1

@@ -57,6 +57,19 @@
   margin: 0;
 }
 
+/* The frame's content area (immersive: the whole screen) is a plain block.
+   MiniAppFrame lays out as nav bar / viewport (flex: 1) / tab bar and needs a
+   flex column to size the viewport, so this fills the content area and
+   supplies it. position: relative makes it the box the extension layer and
+   any other absolute overlay pin to. */
+.device-shell__screen {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+}
+
 /**
  * Stable mount point for trusted downstream simulator UI extensions. Dimina
  * owns the layer and clipping; extensions opt their own children back into

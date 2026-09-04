@@ -8,6 +8,13 @@
  * this file computes from the selected device reaches the frame as two numbers,
  * so a host with no device pretense renders the same mini-app by passing
  * different ones — or none.
+ *
+ * MiniAppFrame draws its own navigation bar (with the status-bar inset padded
+ * in) and reserves the bottom inset itself, so the frame is `immersive`: its
+ * content area runs the full screen from y=0 instead of starting below the
+ * status bar. MiniAppFrame also renders a fragment (nav bar, page viewport,
+ * tab bar) that expects a flex column parent — the frame's slot container is
+ * a plain block, so `.device-shell__screen` supplies that column.
  */
 import { useCallback, useEffect, useState } from 'react'
 import { DeviceFrame } from '@devicekit/frame/react'
@@ -113,22 +120,25 @@ export function DeviceShell(
         deviceProfile={resolvedProfile}
         orientation={device?.orientation ?? 'portrait'}
         embedded={embedded}
+        immersive
         statusBarTextStyle={statusBarTextStyle}
         className={`device-shell${embedded ? ' device-shell--embedded' : ''}`}
         aria-label="Dimina simulator"
       >
-        <MiniAppFrame
-          host={miniApp}
-          bridgeId={bridgeId}
-          platform={navBarPlatform}
-          statusBarHeight={statusBarHeight}
-          bottomInset={bottomInset}
-          onMore={handleMore}
-          statusBar={embedded ? undefined : ({ textStyle }) => (
-            <StatusBarTextStyleBridge textStyle={textStyle} onChange={setStatusBarTextStyle} />
-          )}
-          deviceOverlay={<SimulatorUiExtensionLayer active={active} appId={miniApp.appId} />}
-        />
+        <div className="device-shell__screen">
+          <MiniAppFrame
+            host={miniApp}
+            bridgeId={bridgeId}
+            platform={navBarPlatform}
+            statusBarHeight={statusBarHeight}
+            bottomInset={bottomInset}
+            onMore={handleMore}
+            statusBar={embedded ? undefined : ({ textStyle }) => (
+              <StatusBarTextStyleBridge textStyle={textStyle} onChange={setStatusBarTextStyle} />
+            )}
+            deviceOverlay={<SimulatorUiExtensionLayer active={active} appId={miniApp.appId} />}
+          />
+        </div>
       </DeviceFrame>
     </main>
   )

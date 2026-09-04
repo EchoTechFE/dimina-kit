@@ -205,3 +205,22 @@ describe('DeviceShell: hand-drawn chrome is gone', () => {
     expect(container.querySelector('.device-shell__home-indicator')).toBeNull()
   })
 })
+
+describe('DeviceShell: MiniAppFrame draws its own nav bar and status-bar padding, so the frame must hand it the whole screen as a flex column', () => {
+  it('sets immersive on the frame element instead of using its default block content slot', () => {
+    const miniApp = makeFakeMiniApp({ initialDevice: IPHONE_15 })
+    const { container } = render(<DeviceShell miniApp={miniApp} bridgeId="b1" />)
+
+    expect(frameEl(container)!.hasAttribute('immersive')).toBe(true)
+  })
+
+  it('wraps MiniAppFrame in a .device-shell__screen flex container that is a direct child of the frame', () => {
+    const miniApp = makeFakeMiniApp({ initialDevice: IPHONE_15 })
+    const { container } = render(<DeviceShell miniApp={miniApp} bridgeId="b1" />)
+
+    const miniAppFrameEl = container.querySelector('[data-mock-miniappframe]')!
+    const screen = miniAppFrameEl.parentElement
+    expect(screen?.classList.contains('device-shell__screen')).toBe(true)
+    expect(screen!.parentElement).toBe(frameEl(container))
+  })
+})
