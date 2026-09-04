@@ -92,7 +92,6 @@ Electron app
 | 前缀 | 常量 | 域 |
 |---|---|---|
 | `simulator:attach-native` / `set-native-bounds` / `set-device-info` / `detach` / `console` / `current-page` | `SimulatorChannel` | simulator overlay 生命周期 + 设备信息 + 当前页推送 |
-| `service-host:host-env:update` | `ServiceHostChannel` | main → service-host 窗 live-update host-env 快照（设备切换不重启）|
 | `simulator:custom-apis:invoke` | `SimulatorCustomApiChannel` | main-window renderer 直接调下游注册的 custom API |
 | `simulator:custom-apis:bridge-request` / `bridge-response` | `SimulatorCustomApiBridgeChannel` | simulator WCV 的 custom-apis 桥：preload `ipcRenderer.send` Request → 绑定该 simWc 的 `ipcMain.on` 派发器（`native-simulator-view.ts:161`）→ `simWc.send` 回 Response（不经 main renderer 代理）|
 | `simulator:storage:*` | `SimulatorStorageChannel` | CDP-backed storage 面板 |

@@ -125,6 +125,7 @@ export type BridgeMessageType =
   | 'pageScroll'
   | 'pageResize'
   | 'pageRouteDone'
+  | 'hostEnvUpdate' // Main → service: full HostEnvSnapshot after setDevice(), since hostEnv is otherwise frozen at spawn
   | 'mC'
   | 'mR'
   | 'mU'

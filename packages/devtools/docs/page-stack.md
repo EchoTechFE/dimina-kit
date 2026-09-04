@@ -73,13 +73,13 @@ type SideEffect =
 
 | 路由动作         | 当前页 (top before)   | 目标页 (top after)                  | 被弹 / 被替换页                  | 旧 tab 页（仅 switchTab）          |
 |------------------|-----------------------|-------------------------------------|---------------------------------|-----------------------------------|
-| `navigateTo`     | `pageHide`            | 新页 mount → `pageShow`              | —                               | —                                 |
+| `navigateTo`     | `pageHide`            | `pageShow`（新页）                   | —                               | —                                 |
 | `navigateBack(1)`| —                     | `pageShow`                          | `pageUnload` + `closePage`      | —                                 |
 | `navigateBack(δ>1)`| —                   | `pageShow`                          | 每个被弹页一次 `pageUnload` + `closePage` | —                       |
-| `redirectTo`     | —                     | 新页 mount → `pageShow`              | 旧 top：`pageUnload` + `closePage` | —                              |
-| `reLaunch`       | —                     | 新页 mount → `pageShow`              | 当前可见栈 + 全部 tab 子栈全员 `pageUnload` + `closePage` | 同左            |
+| `redirectTo`     | —                     | `pageShow`（新页）                   | 旧 top：`pageUnload` + `closePage` | —                              |
+| `reLaunch`       | —                     | `pageShow`（新页）                   | 当前可见栈 + 全部 tab 子栈全员 `pageUnload` + `closePage` | 同左            |
 | `switchTab` (restore) | `pageHide`       | `pageShow`（还原子栈栈顶）           | 迁移后不属于任何子栈的页面：`pageUnload` + `closePage` | 子栈整段快照保留，其中的页面不销毁 |
-| `switchTab` (lazy)| `pageHide`           | 新页 mount → `pageShow`              | 迁移后不属于任何子栈的页面：`pageUnload` + `closePage` | 子栈整段快照保留，其中的页面不销毁 |
+| `switchTab` (lazy)| `pageHide`           | `pageShow`（新页）                   | 迁移后不属于任何子栈的页面：`pageUnload` + `closePage` | 子栈整段快照保留，其中的页面不销毁 |
 
 ### 3.2 容易踩坑的点
 
@@ -164,8 +164,7 @@ switchTab(targetTab):
     ├─────────────────────────────────────────────────────────┤
     │ 3. effects:                                               │
     │      prevTop ≠ newTop  → pageHide(prevTop)                │
-    │      cached restore     → pageShow(newTop)                 │
-    │      lazy create       → 由 renderer init path 自己触发    │
+    │      cached restore / lazy create → pageShow(newTop)      │
     │      ❗ 子栈里的页面永不 closePage；不属于任何子栈的页面才销毁 │
     └─────────────────────────────────────────────────────────┘
 ```
