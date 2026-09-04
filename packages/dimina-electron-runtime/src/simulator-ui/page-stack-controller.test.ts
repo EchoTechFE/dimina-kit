@@ -133,7 +133,10 @@ describe('reduceNavigateTo', () => {
 
     expect(bridgeIds(next.stack)).toEqual([tabA.bridgeId, page1.bridgeId])
     expect(bridgeIds(next.tabStacks[tabA.pagePath])).toEqual([tabA.bridgeId, page1.bridgeId])
-    expect(effects).toEqual([{ kind: 'lifecycle', bridgeId: tabA.bridgeId, event: 'pageHide' }])
+    expect(effects).toEqual([
+      { kind: 'lifecycle', bridgeId: tabA.bridgeId, event: 'pageHide' },
+      { kind: 'lifecycle', bridgeId: page1.bridgeId, event: 'pageShow' },
+    ])
   })
 })
 

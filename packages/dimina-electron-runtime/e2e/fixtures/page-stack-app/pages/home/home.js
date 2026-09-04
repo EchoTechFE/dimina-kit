@@ -49,6 +49,17 @@ Page({
   onShow: function () {
     record('home', 'onShow')
   },
+  onReady: function () {
+    record('home', 'onReady')
+  },
+  onResize: function (res) {
+    var info = wx.getSystemInfoSync()
+    record('home', 'onResize', {
+      size: (res && res.size) || null,
+      deviceOrientation: res && res.deviceOrientation,
+      systemInfo: { windowWidth: info.windowWidth, windowHeight: info.windowHeight },
+    })
+  },
   onHide: function () {
     record('home', 'onHide')
   },

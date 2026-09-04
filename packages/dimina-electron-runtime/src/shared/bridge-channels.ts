@@ -122,6 +122,7 @@ export type BridgeMessageType =
   | 'pageScroll'
   | 'pageResize'
   | 'pageRouteDone'
+  | 'hostEnvUpdate' // Main → service: full HostEnvSnapshot after setDevice(), since hostEnv is otherwise frozen at spawn
   | 'mC'
   | 'mR'
   | 'mU'
@@ -188,6 +189,11 @@ export function deviceInfoToHostEnv(d: NativeDeviceInfo): Partial<HostEnvSnapsho
     windowHeight: Math.max(0, d.screenHeight - d.statusBarHeight),
     statusBarHeight: d.statusBarHeight,
   }
+}
+
+/** WeChat's `Page.onResize` `deviceOrientation`: landscape iff the physical screen (not window) is wider than tall. */
+export function deviceOrientationOf(d: NativeDeviceInfo): 'portrait' | 'landscape' {
+  return d.screenWidth > d.screenHeight ? 'landscape' : 'portrait'
 }
 
 /**

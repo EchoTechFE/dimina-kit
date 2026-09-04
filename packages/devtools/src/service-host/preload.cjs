@@ -4,10 +4,6 @@ const CHANNELS = {
   SERVICE_INVOKE: 'dmb:service:invoke',
   SERVICE_PUBLISH: 'dmb:service:publish',
   TO_SERVICE: 'dmb:to-service',
-  // main → this window: live-update the host-env snapshot on a device change so
-  // wx.getSystemInfoSync() reflects the newly-selected device without a
-  // relaunch. Mirrors ServiceHostChannel.HostEnvUpdate in shared/ipc-channels.ts.
-  HOST_ENV_UPDATE: 'service-host:host-env:update',
   // main → this window: AppData-panel edit write-back. Mirrors
   // ServiceHostChannel.AppDataSetData in shared/ipc-channels.ts.
   APPDATA_SET_DATA: 'service-host:appdata:set-data',
@@ -15,9 +11,8 @@ const CHANNELS = {
 
 const params = new URLSearchParams(globalThis.location && globalThis.location.search || '')
 const bridgeId = params.get('bridgeId')
-const pendingMessages = []
-let onMessageFn = null
-let drainScheduled = false
+const { createDeliveryQueue } = require('./service-message-queue.cjs')
+const { applyHostEnvUpdate } = require('./host-env-update.cjs')
 
 if (!bridgeId) {
   // Warming idle: a pre-warm pool loads this preload against about:blank (no
@@ -73,18 +68,6 @@ globalThis.__diminaRegisteredApis = registeredApisRaw
   ? registeredApisRaw.split(',').map((name) => name.trim()).filter(Boolean)
   : []
 
-// Live host-env updates (native-host device dropdown). The binding above is
-// non-configurable, but the inner object's properties are writable — merge the
-// pushed metrics into `hostEnvSnapshot` in place. `sync-impls/system-info.ts`
-// reads `this.hostEnvSnapshot` fresh on every `getSystemInfoSync()`, so the
-// next call (and the mini-app code that invokes it) sees the new device.
-ipcRenderer.on(CHANNELS.HOST_ENV_UPDATE, (_event, snapshot) => {
-  if (!snapshot || typeof snapshot !== 'object') return
-  const ctx = globalThis.__diminaSpawnContext
-  if (!ctx) return
-  ctx.hostEnvSnapshot = { ...(ctx.hostEnvSnapshot || {}), ...snapshot }
-})
-
 function reportError(stage, error) {
   const message = error && error.stack ? error.stack : String(error)
   console.error(`[service-host] ${stage}`, error)
@@ -100,37 +83,20 @@ function reportError(stage, error) {
   })
 }
 
-function deliver(msg) {
-  if (!onMessageFn) {
-    pendingMessages.push(msg)
-    return
-  }
-  try {
-    onMessageFn(msg)
-  } catch (error) {
-    reportError('onMessage', error)
-  }
-}
-
-function scheduleDrain() {
-  if (drainScheduled) return
-  drainScheduled = true
-  queueMicrotask(() => {
-    drainScheduled = false
-    while (onMessageFn && pendingMessages.length > 0) {
-      deliver(pendingMessages.shift())
-    }
-  })
-}
+const queue = createDeliveryQueue({
+  // hostEnvUpdate patches the spawn snapshot right before the service reads the same
+  // message, so a queued pageResize sees the geometry that was current when it was sent.
+  beforeDispatch: (msg) => applyHostEnvUpdate(globalThis.__diminaSpawnContext, msg),
+  onError: reportError,
+})
 
 Object.defineProperty(globalThis, 'DiminaServiceBridge', {
   value: {
     get onMessage() {
-      return onMessageFn
+      return queue.getHandler()
     },
     set onMessage(handler) {
-      onMessageFn = typeof handler === 'function' ? handler : null
-      scheduleDrain()
+      queue.setHandler(handler)
     },
     // Neither send stamps this window's spawn bridgeId: it names the page this
     // service host was STARTED for, which a reLaunch/redirectTo can close while
@@ -218,8 +184,11 @@ if (typeof globalThis.importScripts !== 'function') {
   }
 }
 
+// Device changes ride the ordinary service channel as `hostEnvUpdate`; the queue's
+// beforeDispatch merges them into `__diminaSpawnContext.hostEnvSnapshot` (the object is
+// writable even though the binding is not) in stream order.
 ipcRenderer.on(CHANNELS.TO_SERVICE, (_event, payload) => {
-  deliver(payload && payload.msg)
+  queue.deliver(payload && payload.msg)
 })
 
 // AppData-panel edit write-back. The service runtime evaluates in THIS window's

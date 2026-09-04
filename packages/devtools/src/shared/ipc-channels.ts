@@ -46,13 +46,6 @@ export type {
 
 export const ServiceHostChannel = {
   /**
-   * NATIVE-HOST ONLY. Live-update the service-host window's host-env snapshot
-   * (device metrics) so subsequent `wx.getSystemInfoSync()` reflects a device
-   * change without a relaunch. The service-host preload mutates
-   * `__diminaSpawnContext.hostEnvSnapshot` in place (see `service-host/preload.cjs`).
-   */
-  HostEnvUpdate: 'service-host:host-env:update',
-  /**
    * NATIVE-HOST ONLY. Deliver an AppData-panel edit (`{bridgeId, data}`) into
    * the service-host window. The preload resolves the page instance via
    * `getCurrentPages()` and calls `page.setData(data)`, so the resulting `ub`
