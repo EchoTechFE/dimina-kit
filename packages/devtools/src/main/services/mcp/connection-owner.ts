@@ -10,7 +10,12 @@
 /** The per-window facts that decide which window a target belongs to. */
 export interface TargetIdentityFacts {
   activeBridgeId: string | null
-  getProjectPath: () => string
+  /**
+   * The resolved project path this window opened with. Fixed for the life of
+   * the window: a window names its project from the moment it exists, so
+   * attribution never has to wait for a compile to record anything.
+   */
+  projectPath: string
   getAppId: () => string | null
 }
 
@@ -41,7 +46,7 @@ function workbenchOwner(
   const path = targetQuery(url, 'path')
   if (!path) return null
   for (const [candidate, facts] of windows) {
-    if (facts.getProjectPath() === path) return candidate
+    if (facts.projectPath === path) return candidate
   }
   return null
 }

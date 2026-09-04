@@ -59,15 +59,18 @@ export function setupWindowRuntimeServices(
   context: WindowRuntimeContext,
   mainWindow: BrowserWindow,
   getActiveAppId: () => string | null,
+  projectPath: string,
 ): void {
   // MCP drives whichever project window the user is in, so each window records
   // its own facts and this record dies with the window — other project windows
-  // keep theirs.
+  // keep theirs. The project path is the window's identity, taken from the
+  // project it opened with rather than read back off session state that does
+  // not exist until the first compile.
   const mcpWindow = registerMcpWindow(context, {
     nativeHost: false,
     activeBridgeId: null,
     nativeOverviewProvider: null,
-    getProjectPath: () => context.workspace.getProjectPath(),
+    projectPath,
     getAppId: getActiveAppId,
   })
   context.registry.add(mcpWindow.dispose)

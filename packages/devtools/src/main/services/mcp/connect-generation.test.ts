@@ -90,7 +90,7 @@ async function interleavedNavigation() {
     nativeHost: true,
     activeBridgeId: 'bridge-b1' as string | null,
     nativeOverviewProvider: null,
-    getProjectPath: () => '/proj/b',
+    projectPath: '/proj/b',
     getAppId: () => 'app-b',
   }
   tm.registerMcpWindow(b, facts)
@@ -167,12 +167,12 @@ describe('two MCP connection attempts overlapping', () => {
     const b = {}
     tm.registerMcpWindow(a, {
       nativeHost: true, activeBridgeId: 'bridge-b1', nativeOverviewProvider: null,
-      getProjectPath: () => '/proj/a',
+      projectPath: '/proj/a',
       getAppId: () => 'app-a',
     })
     tm.registerMcpWindow(b, {
       nativeHost: true, activeBridgeId: 'bridge-b2', nativeOverviewProvider: null,
-      getProjectPath: () => '/proj/b',
+      projectPath: '/proj/b',
       getAppId: () => 'app-b',
     })
     let active: object = a

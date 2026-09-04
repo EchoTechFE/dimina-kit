@@ -242,7 +242,7 @@ export function createWorkbenchWindowManager(
       installGlobalMirrors(context, window)
 
       const getActiveAppId = createActiveAppIdResolver(context)
-      setupWindowRuntimeServices(context, window, getActiveAppId)
+      setupWindowRuntimeServices(context, window, getActiveAppId, project.path)
       await setupEditorView(config, context, getActiveAppId)
       // `disposeAll()` can land while this open is parked above. It waits for
       // this task to settle rather than reaching into a half-built window, so

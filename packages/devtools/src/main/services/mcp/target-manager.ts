@@ -62,6 +62,13 @@ export type NativeOverviewProvider = () => Promise<NativeOverview>
 interface TargetState {
   client: CDP.Client | null
   connected: boolean
+  /**
+   * The window this live connection ACTUALLY reached — not the one it was
+   * aimed at, and null when the target names no project window (the project
+   * list). Read on every `getClient`, so a connection left behind by a window
+   * switch is refused instead of answering for the wrong project.
+   */
+  owner: object | null
   timer: ReturnType<typeof setTimeout> | null
   consoleLogs: ConsoleLogEntry[]
   networkRequests: NetworkRequestEntry[]
@@ -87,8 +94,8 @@ export interface McpWindowFacts extends TargetIdentityFacts {
    */
   activeBridgeId: string | null
   nativeOverviewProvider: NativeOverviewProvider | null
-  /** Absolute path of the project open in this window; '' before its session exists. */
-  getProjectPath: () => string
+  /** Absolute path of the project this window opened with; never changes. */
+  projectPath: string
   /** appId of the project open in this window; null before its session exists. */
   getAppId: () => string | null
 }
@@ -165,7 +172,7 @@ export function noteActiveMcpWindowChanged(): void {
     // whichever window replaces it.
     if (owner !== null && !windowFacts.has(owner)) return
     for (const kind of Object.keys(targets) as TargetKind[]) {
-      if (!targets[kind].connected || connectedOwner[kind] === owner) continue
+      if (!targets[kind].connected || targets[kind].owner === owner) continue
       void connectTarget(kind)
     }
   }, ACTIVE_WINDOW_SETTLE_MS)
@@ -177,18 +184,10 @@ export function noteActiveMcpWindowChanged(): void {
 // from `activeMcpWindow()` on every (re)connect, so the pair follows the
 // active window rather than belonging to any one of them.
 const targets: Record<TargetKind, TargetState> = {
-  simulator: { client: null, connected: false, timer: null, consoleLogs: [], networkRequests: [] },
-  workbench:  { client: null, connected: false, timer: null, consoleLogs: [], networkRequests: [] },
+  simulator: { client: null, connected: false, owner: null, timer: null, consoleLogs: [], networkRequests: [] },
+  workbench:  { client: null, connected: false, owner: null, timer: null, consoleLogs: [], networkRequests: [] },
 }
 
-/**
- * The window each live connection ACTUALLY reached — not the one it was aimed
- * at. Target selection degrades to another project's surface when it cannot
- * find the active window's, and recording that as an arrival is what leaves
- * MCP driving the wrong project with nothing to correct it. Null means the
- * target names no project window.
- */
-const connectedOwner: Record<TargetKind, object | null> = { simulator: null, workbench: null }
 /** Monotonic per target: only the newest connect attempt may publish itself. */
 const connectGeneration: Record<TargetKind, number> = { simulator: 0, workbench: 0 }
 let repointTimer: ReturnType<typeof setTimeout> | null = null
@@ -240,9 +239,14 @@ export function selectSimulatorTarget<T extends { url?: string; type?: string }>
 /**
  * Resolve which CDP target the `workbench` MCP tools should drive.
  *
- * `projectPath` is the active project window's path: null when no project
- * window is open (the project list is then the only workbench surface), and
- * '' for a window whose compile has not recorded a path yet.
+ * `projectPath` is the active project window's path, fixed when that window
+ * opened; null when no project window is open, and then the project list is
+ * the only workbench surface.
+ *
+ * A project window names its own renderer from the moment it exists, so the
+ * match is exact or nothing: another project's workbench page, or the project
+ * list standing in for a project that IS open, would leave every workbench
+ * tool answering for the wrong window with nothing to correct it.
  *
  * Matching is on the renderer ENTRY, never on "the URL mentions the project
  * directory" — the service-host window carries the same directory in its own
@@ -255,14 +259,11 @@ export function selectWorkbenchTarget<T extends { url?: string; type?: string }>
   const pages = candidates.filter(
     (t) => t.type === 'page' && !t.url?.includes(SIMULATOR_URL_PATTERN),
   )
-  const projectList = pages.find((t) => t.url?.includes(PROJECT_LIST_ENTRY))
-  if (opts.projectPath === null) return projectList
+  if (opts.projectPath === null) return pages.find((t) => t.url?.includes(PROJECT_LIST_ENTRY))
 
-  const workbenches = pages.filter((t) => t.url?.includes(WORKBENCH_ENTRY))
-  const exact = opts.projectPath
-    ? workbenches.find((t) => targetQuery(t.url, 'path') === opts.projectPath)
-    : undefined
-  return exact ?? workbenches[0] ?? projectList
+  return pages.find(
+    (t) => t.url?.includes(WORKBENCH_ENTRY) && targetQuery(t.url, 'path') === opts.projectPath,
+  )
 }
 
 export function getTargetState(kind: TargetKind): TargetState {
@@ -288,7 +289,7 @@ function findTarget(allTargets: Awaited<ReturnType<typeof CDP.List>>, kind: Targ
     })
   }
   return selectWorkbenchTarget(allTargets, {
-    projectPath: active ? active.getProjectPath() : null,
+    projectPath: active ? active.projectPath : null,
   })
 }
 
@@ -356,30 +357,16 @@ function loseTarget(kind: TargetKind): void {
   const state = targets[kind]
   state.client = null
   state.connected = false
-  connectedOwner[kind] = null
+  state.owner = null
   scheduleReconnect(kind)
 }
 
-/**
- * Publish a connection that survived the race, recording the window it
- * actually reached. The owner is resolved here, not when the attempt started:
- * an attempt that outlived a window switch has to be judged against the window
- * the user is in now.
- */
-function publishConnection(kind: TargetKind, client: CDP.Client, url: string | undefined): void {
+/** Publish a connection that survived the race, on the window it reached. */
+function publishConnection(kind: TargetKind, client: CDP.Client, owner: object | null): void {
   const state = targets[kind]
-  const binding = connectionOwner(kind, url, resolveActiveOwner(), windowFacts)
   state.client = client
   state.connected = true
-  connectedOwner[kind] = binding.owner
-
-  if (!binding.onTarget) {
-    // Usable but not the window the user is in — the exact target may still be
-    // loading, or its project path may not be recorded yet. Keep retrying so
-    // the connection lands there on its own.
-    scheduleReconnect(kind)
-    return
-  }
+  state.owner = owner
   if (state.timer) { clearTimeout(state.timer); state.timer = null }
 }
 
@@ -426,6 +413,22 @@ export async function connectTarget(kind: TargetKind): Promise<void> {
       return
     }
 
+    // Which window this target belongs to is resolved here, not when the
+    // attempt started: an attempt that outlived a window switch has to be
+    // judged against the window the user is in now. MCP exposes ONE client per
+    // kind, so a target belonging to another window leaves nothing behind at
+    // all — buffers wired to it would mix that window's console and network
+    // events into the ones the eventual right connection appends to, and
+    // `connected` would hand it out meanwhile. The retry cadence is the only
+    // thing that carries over: the exact target may still be loading.
+    const binding = connectionOwner(kind, target.url, resolveActiveOwner(), windowFacts)
+    if (!binding.onTarget) {
+      await closeQuietly(client)
+      if (superseded()) return
+      loseTarget(kind)
+      return
+    }
+
     subscribeBuffers(client, state)
 
     client.on('disconnect', () => {
@@ -437,7 +440,7 @@ export async function connectTarget(kind: TargetKind): Promise<void> {
       scheduleReconnect(kind)
     })
 
-    publishConnection(kind, client, target.url)
+    publishConnection(kind, client, binding.owner)
   } catch {
     await closeQuietly(client)
     if (superseded()) return
@@ -456,9 +459,16 @@ function scheduleReconnect(kind: TargetKind): void {
 
 export function getClient(kind: TargetKind) {
   const state = targets[kind]
+  const label = kind === 'simulator' ? '模拟器' : '主窗口'
   if (!state.connected || !state.client) {
-    const label = kind === 'simulator' ? '模拟器' : '主窗口'
     throw new Error(`未连接到${label}。请确保 dimina-devtools 正在以开发模式运行。`)
+  }
+  // A focus change re-aims the live connections only once the burst settles,
+  // and during that gap the client still belongs to the window the user left.
+  // Answering from it would report and drive the wrong project, so the caller
+  // waits for the re-aim instead.
+  if (state.owner !== resolveActiveOwner()) {
+    throw new Error(`${label}连接属于已切换的项目窗口，正在重新连接，请稍后重试。`)
   }
   return state.client
 }

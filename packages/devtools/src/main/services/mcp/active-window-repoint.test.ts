@@ -77,12 +77,12 @@ describe('the MCP simulator target after the active project window changes', () 
     const b = {}
     tm.registerMcpWindow(a, {
       nativeHost: true, activeBridgeId: 'bridge-a', nativeOverviewProvider: null,
-      getProjectPath: () => '/proj/a',
+      projectPath: '/proj/a',
       getAppId: () => 'app-a',
     })
     tm.registerMcpWindow(b, {
       nativeHost: true, activeBridgeId: 'bridge-b', nativeOverviewProvider: null,
-      getProjectPath: () => '/proj/b',
+      projectPath: '/proj/b',
       getAppId: () => 'app-b',
     })
     let active: object = a
@@ -109,12 +109,12 @@ describe('the MCP simulator target after the active project window changes', () 
     const b = {}
     tm.registerMcpWindow(a, {
       nativeHost: true, activeBridgeId: 'bridge-a', nativeOverviewProvider: null,
-      getProjectPath: () => '/proj/a',
+      projectPath: '/proj/a',
       getAppId: () => 'app-a',
     })
     tm.registerMcpWindow(b, {
       nativeHost: true, activeBridgeId: 'bridge-b', nativeOverviewProvider: null,
-      getProjectPath: () => '/proj/b',
+      projectPath: '/proj/b',
       getAppId: () => 'app-b',
     })
     let active: object = a
@@ -141,12 +141,12 @@ describe('the MCP simulator target after the active project window changes', () 
     const b = {}
     tm.registerMcpWindow(a, {
       nativeHost: true, activeBridgeId: 'bridge-a', nativeOverviewProvider: null,
-      getProjectPath: () => '/proj/a',
+      projectPath: '/proj/a',
       getAppId: () => 'app-a',
     })
     const registrationB = tm.registerMcpWindow(b, {
       nativeHost: true, activeBridgeId: 'bridge-b', nativeOverviewProvider: null,
-      getProjectPath: () => '/proj/b',
+      projectPath: '/proj/b',
       getAppId: () => 'app-b',
     })
     let active: object = a

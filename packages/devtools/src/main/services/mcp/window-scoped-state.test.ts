@@ -43,7 +43,7 @@ function openWindow(projectPath: string, nativeHost = true): {
     nativeHost,
     activeBridgeId: null,
     nativeOverviewProvider: nativeHost ? overview : null,
-    getProjectPath: () => projectPath,
+    projectPath,
     getAppId: () => null,
   })
   return { owner, registration, overview }
@@ -156,8 +156,8 @@ describe('selectWorkbenchTarget', () => {
     })
     expect(
       picked,
-      'a service-host window is not a workbench renderer, even with the project dir in its URL',
-    ).toBe(listWindow)
+      'a service-host window is not a workbench renderer, even with the project dir in its URL — and with a project open the list is not a stand-in for it either',
+    ).toBeUndefined()
   })
 
   it('falls back to the project list when no project window is open', () => {
@@ -168,10 +168,10 @@ describe('selectWorkbenchTarget', () => {
   })
 
   it('picks a workbench window whose session has not started yet', () => {
-    const picked = selectWorkbenchTarget([listWindow, workbenchA], { projectPath: '' })
+    const picked = selectWorkbenchTarget([listWindow, workbenchA], { projectPath: '/proj/a' })
     expect(
       picked,
-      'a project window is the target from the moment it exists, before its compile records a path',
+      'a window is matched on the path it opened with, so it is the target from the moment it exists — nothing has to compile first',
     ).toBe(workbenchA)
   })
 

@@ -68,10 +68,13 @@ const BLIND_PROBE = {
   simulatorDataPresent: false,
 }
 
-// A connected fake CDP client whose Runtime.evaluate returns the blind probe.
+// A connected fake CDP client whose Runtime.evaluate returns the blind probe,
+// recorded on the window MCP is driving — a connection bound to any other
+// window is refused by getClient.
 function injectConnectedBlindSimulator() {
   const state = getTargetState('simulator')
   state.connected = true
+  state.owner = activeWindow
   state.client = {
     Runtime: {
       evaluate: async () => ({ result: { value: JSON.stringify(BLIND_PROBE) } }),
@@ -87,6 +90,7 @@ function resetSimulatorState() {
   const state = getTargetState('simulator')
   state.connected = false
   state.client = null
+  state.owner = null
   state.consoleLogs = []
   state.networkRequests = []
 }
@@ -111,7 +115,7 @@ describe('simulator_get_overview — native-host cross-process fields', () => {
       nativeHost: true,
       activeBridgeId: null,
       nativeOverviewProvider: null,
-      getProjectPath: () => '/proj/demo',
+      projectPath: '/proj/demo',
       getAppId: () => 'app-demo',
     })
     setActiveMcpWindowResolver(() => activeWindow)

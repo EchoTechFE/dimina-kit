@@ -1,14 +1,13 @@
 /**
  * A live MCP CDP connection is bound to the window it ACTUALLY reached.
  *
- * Target selection degrades on purpose: a workbench window whose compile has
- * not recorded a project path yet has no exact target, and a page that has not
- * finished loading is not in the CDP list at all. Connecting to another
- * project's surface is better than refusing to connect. What must not happen is
- * recording that degraded connection as if it had reached the window MCP means
- * to drive — nothing then re-aims it, so every MCP tool keeps answering from
- * the other project for as long as the app stays open, no matter where the user
- * clicks.
+ * A target can still be reached that belongs to another window: a page that has
+ * not finished loading is not in the CDP list at all, and a simulator surface
+ * may name a project that is not the one the user is in — or name none. What
+ * must not happen is recording such a connection as if it had reached the
+ * window MCP means to drive: nothing then re-aims it, so every MCP tool keeps
+ * answering from the other project for as long as the app stays open, no
+ * matter where the user clicks.
  *
  * The mirror rule matters just as much: a connection that IS on the right
  * surface must settle, or the connection would be torn down and rebuilt every
@@ -76,36 +75,34 @@ describe('an MCP connection that could not reach the active project window', () 
     const b = {}
     tm.registerMcpWindow(a, {
       nativeHost: true, activeBridgeId: null, nativeOverviewProvider: null,
-      getProjectPath: () => '/proj/a', getAppId: () => 'app-a',
+      projectPath: '/proj/a', getAppId: () => 'app-a',
     })
-    // B is the window the user just opened: its compile has not recorded a
-    // path, so nothing tells target selection which renderer is B's.
-    let pathB = ''
+    // B is the window the user just opened: its renderer has not finished
+    // loading, so the only workbench page in the CDP list is A's.
     tm.registerMcpWindow(b, {
       nativeHost: true, activeBridgeId: null, nativeOverviewProvider: null,
-      getProjectPath: () => pathB, getAppId: () => 'app-b',
+      projectPath: '/proj/b', getAppId: () => 'app-b',
     })
     tm.setActiveMcpWindowResolver(() => b)
     cdp.listed = [
       { type: 'page', url: LIST_URL },
       { type: 'page', url: workbenchUrl('/proj/a') },
-      { type: 'page', url: workbenchUrl('/proj/b') },
     ]
 
     await tm.connectTarget('workbench')
     expect(
       cdp.connectedTo,
-      'with no way to tell which renderer belongs to the new window, connecting to another workbench is the usable answer',
-    ).toEqual([workbenchUrl('/proj/a')])
+      'another project\'s workbench renderer, and the project list, are both the wrong window: neither may stand in for the project the user is in',
+    ).toEqual([])
 
-    // B's compile records its path — from here its own renderer is findable.
-    pathB = '/proj/b'
+    // B's renderer finishes loading and becomes a CDP target.
+    cdp.listed = [...cdp.listed, { type: 'page', url: workbenchUrl('/proj/b') }]
     await vi.advanceTimersByTimeAsync(10_000)
 
     expect(
       cdp.connectedTo,
-      'the connection must find its way to the project the user is working in on its own; a degraded connection recorded as if it had arrived leaves MCP driving the other project forever',
-    ).toEqual([workbenchUrl('/proj/a'), workbenchUrl('/proj/b')])
+      'the connection must find its way to the project the user is working in on its own, without the user having to click anywhere',
+    ).toEqual([workbenchUrl('/proj/b')])
   })
 
   it('keeps trying until the active page of that window is reachable', async () => {
@@ -114,11 +111,11 @@ describe('an MCP connection that could not reach the active project window', () 
     const b = {}
     tm.registerMcpWindow(a, {
       nativeHost: true, activeBridgeId: 'bridge-a', nativeOverviewProvider: null,
-      getProjectPath: () => '/proj/a', getAppId: () => 'app-a',
+      projectPath: '/proj/a', getAppId: () => 'app-a',
     })
     tm.registerMcpWindow(b, {
       nativeHost: true, activeBridgeId: 'bridge-b', nativeOverviewProvider: null,
-      getProjectPath: () => '/proj/b', getAppId: () => 'app-b',
+      projectPath: '/proj/b', getAppId: () => 'app-b',
     })
     tm.setActiveMcpWindowResolver(() => b)
     // B's page is still loading, so its render guest is not a CDP target yet.
@@ -145,11 +142,11 @@ describe('an MCP connection that could not reach the active project window', () 
     const b = {}
     tm.registerMcpWindow(a, {
       nativeHost: true, activeBridgeId: 'bridge-a', nativeOverviewProvider: null,
-      getProjectPath: () => '/proj/a', getAppId: () => 'app-a',
+      projectPath: '/proj/a', getAppId: () => 'app-a',
     })
     tm.registerMcpWindow(b, {
       nativeHost: true, activeBridgeId: 'bridge-b', nativeOverviewProvider: null,
-      getProjectPath: () => '/proj/b', getAppId: () => 'app-b',
+      projectPath: '/proj/b', getAppId: () => 'app-b',
     })
     let active: object = b
     tm.setActiveMcpWindowResolver(() => active)
@@ -178,11 +175,11 @@ describe('an MCP connection that could not reach the active project window', () 
     // belong to whichever window comes to hand would be taken for B's.
     tm.registerMcpWindow(b, {
       nativeHost: true, activeBridgeId: 'bridge-b', nativeOverviewProvider: null,
-      getProjectPath: () => '/proj/b', getAppId: () => 'app-b',
+      projectPath: '/proj/b', getAppId: () => 'app-b',
     })
     tm.registerMcpWindow(a, {
       nativeHost: true, activeBridgeId: null, nativeOverviewProvider: null,
-      getProjectPath: () => '/proj/a', getAppId: () => 'app-a',
+      projectPath: '/proj/a', getAppId: () => 'app-a',
     })
     tm.setActiveMcpWindowResolver(() => b)
     // Neither window has a render guest yet, so the only simulator surface in
@@ -206,7 +203,7 @@ describe('an MCP connection that could not reach the active project window', () 
     const b = {}
     tm.registerMcpWindow(b, {
       nativeHost: true, activeBridgeId: 'bridge-b', nativeOverviewProvider: null,
-      getProjectPath: () => '/proj/b', getAppId: () => 'app-b',
+      projectPath: '/proj/b', getAppId: () => 'app-b',
     })
     tm.setActiveMcpWindowResolver(() => b)
     // The only shell in the list is the one a project window that has just
@@ -230,7 +227,7 @@ describe('an MCP connection that could not reach the active project window', () 
     const b = {}
     tm.registerMcpWindow(b, {
       nativeHost: true, activeBridgeId: 'bridge-b', nativeOverviewProvider: null,
-      getProjectPath: () => '/proj/b', getAppId: () => 'app-b',
+      projectPath: '/proj/b', getAppId: () => 'app-b',
     })
     tm.setActiveMcpWindowResolver(() => b)
     cdp.listed = [{ type: 'page', url: 'http://localhost:7788/simulator.html' }]
@@ -257,11 +254,11 @@ describe('an MCP connection that could not reach the active project window', () 
     // reports the appId would land on B and call it an arrival.
     tm.registerMcpWindow(b, {
       nativeHost: true, activeBridgeId: 'bridge-b', nativeOverviewProvider: null,
-      getProjectPath: () => '/proj/b', getAppId: () => 'app-shared',
+      projectPath: '/proj/b', getAppId: () => 'app-shared',
     })
     tm.registerMcpWindow(a, {
       nativeHost: true, activeBridgeId: null, nativeOverviewProvider: null,
-      getProjectPath: () => '/proj/a', getAppId: () => 'app-shared',
+      projectPath: '/proj/a', getAppId: () => 'app-shared',
     })
     tm.setActiveMcpWindowResolver(() => b)
     cdp.listed = [{ type: 'page', url: shellUrl('app-shared') }]
@@ -299,7 +296,7 @@ describe('an MCP connection that is on the surface it was meant to reach', () =>
     const a = {}
     tm.registerMcpWindow(a, {
       nativeHost: false, activeBridgeId: null, nativeOverviewProvider: null,
-      getProjectPath: () => '/proj/a', getAppId: () => 'app-a',
+      projectPath: '/proj/a', getAppId: () => 'app-a',
     })
     tm.setActiveMcpWindowResolver(() => a)
     cdp.listed = [{ type: 'page', url: shellUrl('app-a') }]
