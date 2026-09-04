@@ -1,13 +1,16 @@
 /**
  * PROJECT-WINDOW VISIBILITY CONTRACT.
  *
- * `config.window.autoShow` and `config.projectWindow.autoShow` are two
- * independent knobs: the former governs the project-LIST window
- * (`createLauncherWindow`), the latter governs a single opened project's own
- * window (`createWorkbenchWindow`). Before this contract both windows read
- * the same `config.window?.autoShow` — a host hiding the list window (e.g.
- * a login gate) also hid every project window it opened, with no way for
- * the host to tell the two apart.
+ * A project window is now ALWAYS created hidden (`autoShow: false` into
+ * `createMainWindow`) — `workbench-window.ts`'s reveal gate is the only thing
+ * that ever shows it, once `setupProjectWindow` has resolved AND the
+ * renderer's own `ready-to-show` has fired. `config.projectWindow.autoShow`
+ * no longer reaches `createMainWindow` at all; the reveal gate reads it
+ * instead (see `workbench-window-show-after-setup-hook.test.ts`).
+ *
+ * The project-LIST window is unaffected: `config.window.autoShow` still goes
+ * straight into `createMainWindow` for `createLauncherWindow`, independent of
+ * anything under `config.projectWindow`.
  */
 import { describe, it, expect, vi } from 'vitest'
 import { registerRuntimeTestLifecycle } from './window-close-reveal.harness.js'
@@ -46,35 +49,34 @@ function lastAutoShow(): boolean | undefined {
 }
 
 describe('project window autoShow visibility', () => {
-  it('does not inherit config.window.autoShow:false for the project window', async () => {
+  it.each([
+    ['no projectWindow config', {} as WorkbenchAppConfig],
+    ['projectWindow.autoShow: true', { projectWindow: { autoShow: true } } as WorkbenchAppConfig],
+    ['projectWindow.autoShow: false', { projectWindow: { autoShow: false } } as WorkbenchAppConfig],
+    ['window.autoShow: false (list-window opt-out)', { window: { autoShow: false } } as WorkbenchAppConfig],
+  ])('creates the project window hidden regardless of config (%s)', async (_label, config) => {
     await state.createDevtoolsRuntime({})
     createMainWindowSpy.mockClear()
     const { createWorkbenchWindow } = await import('./project-window.js')
     const opts = await buildOptions()
-    const config: WorkbenchAppConfig = { window: { autoShow: false } }
 
-    createWorkbenchWindow({ config, ...opts }, { path: '/tmp/autoShowDefault' })
+    createWorkbenchWindow({ config, ...opts }, { path: '/tmp/autoShowAlwaysHidden' })
 
     expect(
       lastAutoShow(),
-      'a project window with no projectWindow config must stay visible even when the list window opts out',
-    ).not.toBe(false)
+      'a project window must always be created hidden — the reveal gate in workbench-window.ts shows it, not createMainWindow',
+    ).toBe(false)
   })
 
-  it('hides only the project window when config.projectWindow.autoShow is false', async () => {
+  it('the list window keeps tracking config.window.autoShow, unaffected by projectWindow', async () => {
     await state.createDevtoolsRuntime({})
     createMainWindowSpy.mockClear()
-    const { createWorkbenchWindow, createLauncherWindow } = await import('./project-window.js')
+    const { createLauncherWindow } = await import('./project-window.js')
     const opts = await buildOptions()
-    const config: WorkbenchAppConfig = { projectWindow: { autoShow: false } }
-
-    createWorkbenchWindow({ config, ...opts }, { path: '/tmp/autoShowProjectOnly' })
-    expect(lastAutoShow(), 'the project window must honor config.projectWindow.autoShow').toBe(false)
+    const config: WorkbenchAppConfig = { projectWindow: { autoShow: false }, window: { autoShow: false } }
 
     createLauncherWindow({ config, ...opts })
-    expect(
-      lastAutoShow(),
-      'the list window must keep tracking config.window.autoShow, unaffected by projectWindow',
-    ).toBeUndefined()
+
+    expect(lastAutoShow(), 'the list window must keep tracking its own config.window.autoShow').toBe(false)
   })
 })

@@ -27,6 +27,18 @@ export interface WindowOptions {
   autoShow?: boolean
 }
 
+/**
+ * Shows `win` the way the current env expects: `showInactive()` in test env
+ * so e2e windows don't steal focus, `show()` otherwise. Shared by this
+ * module's own `ready-to-show` handler and by the workbench window manager's
+ * reveal-after-hook-and-paint gate (`workbench-window.ts`), so the two reveal
+ * paths can never pick different show methods.
+ */
+export function revealMainWindow(win: BrowserWindow): void {
+  if (process.env.NODE_ENV === 'test') win.showInactive()
+  else win.show()
+}
+
 export function createMainWindow(opts: WindowOptions): BrowserWindow {
   const mainWindow = new BrowserWindow({
     width: opts.width ?? 1280,
@@ -50,14 +62,10 @@ export function createMainWindow(opts: WindowOptions): BrowserWindow {
     const isTest = process.env.NODE_ENV === 'test'
     // Visibility is governed by `autoShow` in BOTH envs. A login-gating host
     // opts out via `autoShow: false` and reveals the window itself once auth
-    // passes — don't flash an un-authed window. The env only chooses HOW to
-    // show: test uses showInactive() so e2e windows don't steal focus, prod
-    // uses show(). The framework must never force-show when the host opted
-    // out, in test env either (that would fight the host's own reveal handler).
-    if (opts.autoShow !== false) {
-      if (isTest) mainWindow.showInactive()
-      else mainWindow.show()
-    }
+    // passes — don't flash an un-authed window. The framework must never
+    // force-show when the host opted out, in test env either (that would
+    // fight the host's own reveal handler).
+    if (opts.autoShow !== false) revealMainWindow(mainWindow)
     // Don't auto-open a detached DevTools for the devtools UI shell itself —
     // it's noise for normal use (the mini-app's Console lives in the embedded
     // right-panel DevTools, not here). Opt in via env for debugging the shell.

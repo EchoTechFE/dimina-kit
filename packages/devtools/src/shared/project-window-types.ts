@@ -29,7 +29,12 @@ export type ClosingProjectWindow = ProjectWindowRef
 /** Overrides for the windows opened projects get, not for the project list. */
 export interface ProjectWindowConfig {
   /**
-   * Auto-show a project window on `ready-to-show`. Defaults to `true`.
+   * Whether the framework shows a project window on its own. Defaults to
+   * `true`: once `setupProjectWindow` has resolved AND the window's own
+   * `ready-to-show` has fired (whichever finishes second), the framework
+   * reveals it. `false` is a permanent opt-out — the framework never shows
+   * that window on its own, no matter what the hook does or how many times
+   * `ready-to-show` fires; the host must call `show()` itself.
    *
    * Independent of `window.autoShow`, which governs only the project-list
    * window: a host that keeps the list hidden behind its own startup flow

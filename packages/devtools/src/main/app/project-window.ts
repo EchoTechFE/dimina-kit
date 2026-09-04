@@ -144,10 +144,13 @@ export function createWorkbenchWindow(
     opts,
     'entries/workbench/index.html',
     project.name || opts.config.appName || 'Dimina DevTools',
-    // Deliberately NOT `config.window?.autoShow`: that knob hides the project
-    // list behind a host's own startup flow, and a project window opened after
-    // that flow passed has to appear on its own account.
-    opts.config.projectWindow?.autoShow ?? true,
+    // Always hidden: `workbench-window.ts`'s reveal gate is the sole place
+    // that ever shows a project window, once BOTH `setupProjectWindow` has
+    // resolved and the renderer's own `ready-to-show` has fired. Passing
+    // anything but `false` here would let `createMainWindow`'s own
+    // `ready-to-show` handler show the window itself and race that gate.
+    // `config.projectWindow?.autoShow` is read by the gate instead, not here.
+    false,
     { path: project.path, name: project.name ?? '' },
   )
 }

@@ -5,7 +5,7 @@ import type { WorkbenchAppConfig } from '../../shared/types.js'
 import type { AppServices } from '../services/app-services.js'
 import type { WindowContextRouter } from '../services/window-contexts/context-router.js'
 import { createInternalDevtoolsWindow } from '../windows/internal-devtools-window/index.js'
-import { wireMainWindowEvents } from '../windows/main-window/index.js'
+import { revealMainWindow, wireMainWindowEvents } from '../windows/main-window/index.js'
 import { isAppQuitting } from './lifecycle.js'
 import { installGlobalMirrors } from './global-mirrors.js'
 import { setupEditorView } from './editor-view.js'
@@ -67,8 +67,13 @@ export interface WorkbenchWindowManager {
    * while that project's window is still closing waits it out and then opens a
    * fresh window — never a second one alongside it. Rejects if the window
    * cannot be brought up, leaving nothing behind.
+   *
+   * `awaitReady: false` skips parking on `deps.ready` (still queued behind
+   * other opens/closes of the same path). Only the host's own
+   * `instance.openProjectWindow` uses it — see `app.ts`'s call site for why.
+   * The renderer-facing IPC path always uses the default.
    */
-  open: (project: ProjectRef) => Promise<BrowserWindow>
+  open: (project: ProjectRef, options?: { awaitReady?: boolean }) => Promise<BrowserWindow>
   list: () => ProjectWindow[]
   /**
    * The workbench context the user is working in — the focused one, or the
@@ -205,6 +210,29 @@ export function createWorkbenchWindowManager(
     const { window, context } = projectWindow
     windows.set(project.path, projectWindow)
 
+    // Reveal gate: the window is created hidden (see `createWorkbenchWindow`)
+    // and must stay hidden until BOTH the renderer has painted its first
+    // frame (`ready-to-show`) and `setupProjectWindow` has resolved —
+    // whichever finishes second triggers the reveal, exactly once. Wired
+    // before any `await` below so a renderer that paints before the hook
+    // settles (the common case) is never missed.
+    let rendererReady = false
+    let setupDone = false
+    let revealed = false
+    const revealIfReady = () => {
+      if (revealed || !rendererReady || !setupDone) return
+      if (window.isDestroyed()) return
+      // Permanent opt-out: the framework must never show this window, no
+      // matter how many times the two gates above are satisfied.
+      if (config.projectWindow?.autoShow === false) return
+      revealed = true
+      revealMainWindow(window)
+    }
+    window.once('ready-to-show', () => {
+      rendererReady = true
+      revealIfReady()
+    })
+
     const teardown = async () => {
       try {
         await deps.onBeforeClose?.(projectWindow, project)
@@ -234,9 +262,9 @@ export function createWorkbenchWindowManager(
       context.internalDevtoolsWindow = createInternalDevtoolsWindow(window, { isAppQuitting })
       context.registry.add(toDisposable(() => context.internalDevtoolsWindow?.dispose()))
 
-      // Wired before the awaited steps below: the window is already on screen
-      // and closable, so it must never exist without the close handling that
-      // disposes it.
+      // Wired before the awaited steps below: the window is already closable
+      // even though it's still hidden behind the reveal gate above, so it
+      // must never exist without the close handling that disposes it.
       context.registry.add(wireWorkbenchWindowEvents(window, context, () =>
         enqueue(project.path, teardown)))
 
@@ -268,6 +296,11 @@ export function createWorkbenchWindowManager(
       // views or drives the session needs the window reachable, and a failure
       // path below removes the entry again.
       await deps.setupProjectWindow?.(projectWindow, project)
+      // Does not block `open()` returning: if `ready-to-show` already fired,
+      // this reveals now; otherwise it just marks the gate and the pending
+      // `ready-to-show` listener above reveals once Chromium paints.
+      setupDone = true
+      revealIfReady()
     } catch (err) {
       // A half-built window (the editor's http server can fail to bind) leaves
       // live services behind and keeps the project counted as open — which is
@@ -291,14 +324,15 @@ export function createWorkbenchWindowManager(
     // race two windows (and two compile workers) over one project. Resolving
     // here, before the path reaches `windows`/`pathQueues`/`openWindow`,
     // keeps every downstream lookup keyed on the one canonical spelling.
-    open: (project) => {
+    open: (project, options) => {
       const normalized: ProjectRef = { ...project, path: path.resolve(project.path) }
       // The readiness gate is awaited inside the queued task, not before
       // queuing: opens of one path must keep their arrival order, and a
       // `disposeAll()` landing meanwhile still finds this open in the queue it
       // drains rather than floating loose outside it.
+      const awaitReady = options?.awaitReady ?? true
       return enqueue(normalized.path, async () => {
-        await deps.ready
+        if (awaitReady) await deps.ready
         return openWindow(normalized)
       })
     },

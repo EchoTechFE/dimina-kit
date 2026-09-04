@@ -342,7 +342,14 @@ export async function createDevtoolsRuntime(
     mainWindow,
     context,
     ipc: hostIpc,
-    openProjectWindow: (project: ProjectRef) => workbenchWindows.open(project),
+    // `awaitReady: false`: `ready` only resolves once `config.onSetup` itself
+    // settles (`markReady(setup)` below), so a host that calls
+    // `instance.openProjectWindow` FROM WITHIN its own `onSetup` would
+    // otherwise deadlock — `open()` awaiting `ready` while `ready` awaits the
+    // very `onSetup` call that is awaiting `open()`. The renderer-facing IPC
+    // path (`registerOpenProjectWindowIpc` above) keeps the default: a
+    // renderer racing ahead of `onSetup` still has to park.
+    openProjectWindow: (project: ProjectRef) => workbenchWindows.open(project, { awaitReady: false }),
     projectWindows: () => workbenchWindows.list(),
     disposeViews: () => {
       for (const ctx of router.list()) ctx.views.disposeAll()
