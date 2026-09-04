@@ -41,7 +41,8 @@ await session.close()
 | `fileTypes` | — | 在内置 `wx*`、`dd*` 文件类型之外追加模板、样式和视图脚本扩展名 |
 | `simulatorDir` | — | 提供后启用 `/simulator` 静态资源路由 |
 | `containerDir` | 包内置容器 | 覆盖 H5 容器静态资源目录 |
-| `outputDir` | 系统临时目录中的项目哈希路径 | 覆盖编译产物目录 |
+| `outputDir` | 系统临时目录中的项目哈希路径 | 最终编译产物目录，与 `outputRoot` 互斥 |
+| `outputRoot` | — | 产物目录的父目录；devkit 在其下按 `sha1(resolve(projectPath)).slice(0, 12)` 建子目录，与 `outputDir` 互斥、同传会报错 |
 | `watch` | `true` | 是否监听文件并自动重新编译 |
 | `autoReload` | `true` | watcher 编译成功后是否刷新预览；纯样式改动会走样式热更新 |
 | `onRebuild` | — | 重新编译成功后的回调，参数包含 `changedPaths`、`styleOnly`，显式 `session.rebuild()` 还会带 `explicit: true` |

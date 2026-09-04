@@ -1,3 +1,4 @@
+import path from 'path'
 import type { BrowserWindow } from 'electron'
 import { toDisposable, type Disposable } from '@dimina-kit/electron-deck/main'
 import type { WorkbenchAppConfig } from '../../shared/types.js'
@@ -242,7 +243,15 @@ export function createWorkbenchWindowManager(
   }
 
   return {
-    open: (project) => enqueue(project.path, () => openWindow(project)),
+    // One project window per RESOLVED absolute path: two differently-spelled
+    // strings pointing at the same directory ('/a/b' vs '/a/b/.') must not
+    // race two windows (and two compile workers) over one project. Resolving
+    // here, before the path reaches `windows`/`pathQueues`/`openWindow`,
+    // keeps every downstream lookup keyed on the one canonical spelling.
+    open: (project) => {
+      const normalized: ProjectRef = { ...project, path: path.resolve(project.path) }
+      return enqueue(normalized.path, () => openWindow(normalized))
+    },
     list: () => [...windows.values()],
     activeContext: () => {
       const active = router.active()

@@ -137,7 +137,16 @@ export interface OpenProjectOptions {
 	fileTypes?: { template?: string[]; style?: string[]; viewScript?: string[] }
 	simulatorDir?: string
 	containerDir?: string
+	/** Final artifact directory, verbatim. Mutually exclusive with `outputRoot`. */
 	outputDir?: string
+	/**
+	 * Parent directory for artifacts. devkit derives the actual output
+	 * directory as `outputRoot/sha1(resolve(projectPath)).slice(0, 12)`, keyed
+	 * by the resolved project path — so two different projects never collide
+	 * under the same root even when they report the same appid. Mutually
+	 * exclusive with `outputDir`; passing both is rejected.
+	 */
+	outputRoot?: string
 	/** When false, skip the chokidar file-watcher / auto-rebuild loop. Default true. */
 	watch?: boolean
 	/**
@@ -242,6 +251,7 @@ export async function openProject(opts: OpenProjectOptions): Promise<ProjectSess
 		simulatorDir,
 		containerDir: overrideContainerDir,
 		outputDir,
+		outputRoot,
 		watch = true,
 		autoReload = true,
 		onRebuild,
@@ -252,11 +262,18 @@ export async function openProject(opts: OpenProjectOptions): Promise<ProjectSess
 	const projectPath = path.resolve(rawProjectPath)
 	const buildOptions = { sourcemap, fileTypes }
 
+	if (outputDir !== undefined && outputRoot !== undefined) {
+		throw new Error('[devkit] openProject: pass either "outputDir" or "outputRoot", not both')
+	}
+
 	const resolvedPort = port === 0 ? await getRandomPort() : port
 
 	const containerDir = overrideContainerDir ?? path.join(__dirname, '..', 'fe', 'dimina-fe-container')
 	const resolvedOutputDir = outputDir
-		?? path.join(os.tmpdir(), 'dimina-kit', createHash('sha1').update(projectPath).digest('hex').slice(0, 12))
+		?? path.join(
+			outputRoot ?? path.join(os.tmpdir(), 'dimina-kit'),
+			createHash('sha1').update(projectPath).digest('hex').slice(0, 12),
+		)
 	fs.mkdirSync(resolvedOutputDir, { recursive: true })
 
 	// Compilation runs in a long-lived forked worker — the worker chdirs in

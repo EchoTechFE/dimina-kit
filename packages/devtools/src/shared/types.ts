@@ -58,7 +58,7 @@ export interface ProjectSession {
 }
 
 export interface CompilationAdapter {
-  openProject(opts: Omit<OpenProjectOptions, 'containerDir' | 'outputDir'>): Promise<ProjectSession>
+  openProject(opts: Omit<OpenProjectOptions, 'containerDir' | 'outputDir' | 'outputRoot'>): Promise<ProjectSession>
 }
 
 export type BuiltinPanelId = 'wxml' | 'console' | 'appdata' | 'storage'
