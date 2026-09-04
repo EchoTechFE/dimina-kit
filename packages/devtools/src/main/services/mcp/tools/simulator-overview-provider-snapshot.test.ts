@@ -14,7 +14,7 @@
  * The fix is to snapshot the provider (or the owning window) at the same
  * point `getClient` is read, before any await.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { registerContextTools } from './context-tools.js'
 import {
   getTargetState,
@@ -139,5 +139,59 @@ describe('simulator_get_overview provider snapshot vs. mid-flight window switch'
       'the overview was requested for A (getClient answered for A before the switch); it must not silently report B`s route',
     ).toBe('pages/A')
     expect(payload.currentRoute).not.toBe('pages/B')
+  })
+
+  it('reports A`s console error even when a reconnect clears and re-owns the shared buffer while the native provider is in flight', async () => {
+    setActiveMcpWindowResolver(() => windowA)
+
+    const state = getTargetState('simulator')
+    state.connected = true
+    state.owner = windowA
+    state.bufferOwner = windowA
+    state.consoleLogs = [{ level: 'error', text: 'A boom', timestamp: '2026-01-01T00:00:00.000Z' }]
+    state.networkRequests = []
+    state.client = {
+      Runtime: { evaluate: async () => ({ result: { value: JSON.stringify(BLIND_PROBE) } }) },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any
+
+    let providerCalled = false
+    const providerDeferred = makeDeferred<NativeOverview>()
+    registrationA = registerMcpWindow(windowA, {
+      nativeHost: true, activeBridgeId: null,
+      nativeOverviewProvider: () => { providerCalled = true; return providerDeferred.promise },
+      projectPath: '/proj/a', getAppId: () => 'app-a',
+    })
+
+    const { server, handlers } = makeFakeServer()
+    registerContextTools(server)
+
+    const resultPromise = callOverview(handlers)
+    await vi.waitFor(() => {
+      expect(providerCalled, 'the overview must reach the native provider await before the buffer is mutated below').toBe(true)
+    })
+
+    // A reconnect to B lands while A's native provider is still pending —
+    // target-manager clears the shared console/network buffer and re-owns it
+    // for B before A's own await settles.
+    state.consoleLogs = []
+    state.networkRequests = []
+    state.bufferOwner = windowB
+    state.owner = windowB
+    state.consoleLogs.push({ level: 'error', text: 'B boom', timestamp: '2026-01-01T00:00:01.000Z' })
+    setActiveMcpWindowResolver(() => windowB)
+
+    providerDeferred.resolve(overviewFor('pages/A'))
+
+    const res = await resultPromise
+    const text = res.content.find((c) => c.type === 'text')?.text
+    const payload = JSON.parse(text as string) as Record<string, unknown>
+    const lastError = payload.lastError as { text: string } | null
+
+    expect(
+      lastError?.text,
+      'the console summary must reflect the buffer as it stood when this overview call started, not whatever it was cleared and refilled with while the call was still in flight',
+    ).toBe('A boom')
+    expect(payload.recentErrorCount).toBe(1)
   })
 })

@@ -20,7 +20,7 @@
  * hook does or how many times `ready-to-show` fires.
  */
 import { describe, it, expect, vi } from 'vitest'
-import { registerRuntimeTestLifecycle, stubs } from './window-close-reveal.harness.js'
+import { registerRuntimeTestLifecycle, stubs, makeCloseEvent, emitClose } from './window-close-reveal.harness.js'
 import type { WorkbenchAppConfig } from '../../shared/types.js'
 import type { WorkbenchWindowDeps } from './workbench-window.js'
 
@@ -154,6 +154,68 @@ describe('project window reveal waits on both the setup hook and ready-to-show',
     expect(
       revealCallCount(win),
       'projectWindow.autoShow: false must permanently opt the window out of the framework\'s own reveal',
+    ).toBe(0)
+  })
+})
+
+describe('a close or teardown that lands while the setup hook is pending must win the race', () => {
+  it('a window closed while the hook is still pending must never be revealed once the hook resolves', async () => {
+    await state.createDevtoolsRuntime({})
+    const gate = createGate()
+    const manager = await buildManager({}, async () => { await gate.promise })
+    registerProject('/tmp/closeDuringSetupHook')
+
+    const openPromise = manager.open({ path: '/tmp/closeDuringSetupHook' })
+    await vi.waitFor(() => {
+      expect(manager.list()).toHaveLength(1)
+    })
+    const win = manager.list()[0]!.window as unknown as MockWindow
+
+    win.emit('ready-to-show')
+
+    // The window is asked to close while setupProjectWindow is still pending;
+    // teardown queues behind the still-running open on the same project path.
+    emitClose(win, makeCloseEvent().event)
+
+    gate.resolve()
+    await openPromise
+
+    expect(
+      revealCallCount(win),
+      'a window whose close was already requested must not be revealed just because the hook later resolved',
+    ).toBe(0)
+
+    await vi.waitFor(() => {
+      expect(manager.list()).toHaveLength(0)
+    })
+  })
+
+  it('a manager torn down by disposeAll while the hook is pending must never reveal the window', async () => {
+    await state.createDevtoolsRuntime({})
+    const gate = createGate()
+    const manager = await buildManager({}, async () => { await gate.promise })
+    registerProject('/tmp/disposeAllDuringSetupHook')
+
+    const openPromise = manager.open({ path: '/tmp/disposeAllDuringSetupHook' })
+    await vi.waitFor(() => {
+      expect(manager.list()).toHaveLength(1)
+    })
+    const win = manager.list()[0]!.window as unknown as MockWindow
+
+    win.emit('ready-to-show')
+
+    const disposeAllPromise = manager.disposeAll()
+    gate.resolve()
+
+    await expect(
+      openPromise,
+      'an open whose hook resolved after disposeAll() began must reject, not hand back a window about to be destroyed',
+    ).rejects.toThrow(/disposed/)
+    await disposeAllPromise
+
+    expect(
+      revealCallCount(win),
+      'a window whose manager already started disposeAll() must not be revealed once the hook resolves',
     ).toBe(0)
   })
 })

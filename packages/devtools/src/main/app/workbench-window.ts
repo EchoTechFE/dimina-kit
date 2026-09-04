@@ -219,9 +219,18 @@ export function createWorkbenchWindowManager(
     let rendererReady = false
     let setupDone = false
     let revealed = false
+    // Flipped the moment a close is requested, not when teardown runs: the
+    // close queues behind this open on the same path, so the hook can still
+    // resolve first and would otherwise show a window whose close was
+    // already asked for, only for the queued teardown to destroy it.
+    let closeRequested = false
     const revealIfReady = () => {
       if (revealed || !rendererReady || !setupDone) return
       if (window.isDestroyed()) return
+      // Same for a manager already tearing everything down: `disposeAll()`
+      // waits for this open to settle, and the window must not flash on the
+      // way out.
+      if (closeRequested || disposed) return
       // Permanent opt-out: the framework must never show this window, no
       // matter how many times the two gates above are satisfied.
       if (config.projectWindow?.autoShow === false) return
@@ -265,8 +274,10 @@ export function createWorkbenchWindowManager(
       // Wired before the awaited steps below: the window is already closable
       // even though it's still hidden behind the reveal gate above, so it
       // must never exist without the close handling that disposes it.
-      context.registry.add(wireWorkbenchWindowEvents(window, context, () =>
-        enqueue(project.path, teardown)))
+      context.registry.add(wireWorkbenchWindowEvents(window, context, () => {
+        closeRequested = true
+        return enqueue(project.path, teardown)
+      }))
 
       // Whichever workbench window the user is looking at answers the IPC that
       // no single window owns (menus, app-level host windows).
@@ -296,6 +307,11 @@ export function createWorkbenchWindowManager(
       // views or drives the session needs the window reachable, and a failure
       // path below removes the entry again.
       await deps.setupProjectWindow?.(projectWindow, project)
+      // Re-checked after the hook for the same reason as before it: the hook
+      // is host code of unbounded duration, and an open that lost the race
+      // must reject rather than hand back a window `disposeAll()` is about
+      // to destroy.
+      if (disposed) throw disposedError()
       // Does not block `open()` returning: if `ready-to-show` already fired,
       // this reveals now; otherwise it just marks the gate and the pending
       // `ready-to-show` listener above reveals once Chromium paints.
